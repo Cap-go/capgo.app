@@ -1,6 +1,7 @@
 import type { BrowserLoginSession } from '../../init/browser-login.js'
 import { validateAndSaveKey } from '../../auth/session.js'
 import { beginBrowserLogin, completeBrowserLogin } from '../../init/browser-login.js'
+import { resolveAccountEmail } from '../../user/whoami.js'
 import { createSupabaseClient, findSavedKeySilent, resolveUserIdFromApiKey } from '../../utils.js'
 
 export interface BuilderLoginOptions {
@@ -11,6 +12,7 @@ export interface BuilderLoginOptions {
 export interface BuilderLoginServices {
   browserAvailable: boolean
   validateExisting: (key: string) => Promise<void>
+  getAccountEmail: (key: string) => Promise<string>
   savePasted: (key: string) => Promise<void>
   beginBrowser: (onUrl: (url: string) => void) => Promise<BrowserLoginSession>
   completeBrowser: (session: BrowserLoginSession, key: string) => Promise<void>
@@ -27,6 +29,10 @@ export function createBuilderLoginServices(options: BuilderLoginOptions = {}): B
     validateExisting: async (key) => {
       const client = await createSupabaseClient(key, options.supaHost, options.supaAnon, true)
       await resolveUserIdFromApiKey(client, key, true)
+    },
+    getAccountEmail: async (key) => {
+      const client = await createSupabaseClient(key, options.supaHost, options.supaAnon, true)
+      return resolveAccountEmail(client)
     },
     savePasted: async (key) => {
       await validateAndSaveKey(key, saveOptions)

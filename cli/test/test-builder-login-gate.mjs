@@ -78,12 +78,12 @@ async function stop(ui) {
   await ui.instance.waitUntilExit()
 }
 
-function renderGate({ cols = 100, rows = 50, candidateKey, browserAvailable = true, savePasted = async () => {}, validateExisting = async () => {}, beginBrowser = async () => ({ session: 'test-session', url: 'https://console.capgo.app/login-cli?session=test-session', browserOpened: true }), completeBrowser = async () => {} } = {}) {
+function renderGate({ cols = 100, rows = 50, candidateKey, browserAvailable = true, savePasted = async () => {}, validateExisting = async () => {}, getAccountEmail = async () => 'account@example.com', beginBrowser = async () => ({ session: 'test-session', url: 'https://console.capgo.app/login-cli?session=test-session', browserOpened: true }), completeBrowser = async () => {} } = {}) {
   const stdout = makeStream(cols, rows)
   const stdin = makeStdin()
   const authenticated = []
   let cancelled = false
-  const services = { browserAvailable, savePasted, validateExisting, beginBrowser, completeBrowser }
+  const services = { browserAvailable, savePasted, validateExisting, getAccountEmail, beginBrowser, completeBrowser }
   const instance = render(React.createElement(BuilderLoginGate, {
     candidateKey,
     services,
@@ -119,6 +119,9 @@ function renderGate({ cols = 100, rows = 50, candidateKey, browserAvailable = tr
   ui.stdin.send(key)
   await waitFor(() => ui.stdout.lastFrame.includes('••••'), 'compact masked paste')
   ui.stdin.send('\r')
+  await waitFor(() => ui.stdout.lastFrame.includes('Welcome account@example.com 👋'), 'compact welcome')
+  assert.ok(ui.stdout.lastFrame.split('\n').length <= 11, 'compact welcome must fit the terminal')
+  assert.ok(ui.stdout.lastFrame.split('\n').every(line => stringWidth(line) <= 44), 'compact welcome must fit terminal width')
   await waitFor(() => ui.authenticated.length === 1, 'compact key verification')
   assert.deepEqual(submitted, [key])
   assert.equal(ui.authenticated[0].metadata.method, 'paste')
@@ -130,10 +133,21 @@ console.log('Builder Ink login screen passed')
 
 {
   const ui = renderGate({ candidateKey: 'existing-key' })
+  await waitFor(() => ui.stdout.lastFrame.includes('Welcome account@example.com 👋'), 'existing-key welcome')
+  assert.equal(ui.authenticated.length, 0, 'onboarding must wait for welcome screen')
+  const welcomeShownAt = Date.now()
   await waitFor(() => ui.authenticated.length === 1, 'existing-key verification')
+  assert.ok(Date.now() - welcomeShownAt >= 1350, 'welcome should remain visible for about 1.5 seconds')
   assert.equal(ui.authenticated[0].key, 'existing-key')
   assert.equal(ui.authenticated[0].metadata.method, undefined)
   assert.ok(ui.stdout.frames.every(frame => !frame.includes('How would you like to log in?')))
+  await stop(ui)
+}
+
+{
+  const ui = renderGate({ candidateKey: 'existing-key', getAccountEmail: async () => { throw new Error('email unavailable') } })
+  await waitFor(() => ui.stdout.lastFrame.includes('Welcome to Capgo 👋'), 'generic welcome when email lookup fails')
+  await waitFor(() => ui.authenticated.length === 1, 'login continues without account email')
   await stop(ui)
 }
 
@@ -215,6 +229,7 @@ function renderShellForLogin({ initialPlatform } = {}) {
   const services = {
     browserAvailable: true,
     validateExisting: async () => validation,
+    getAccountEmail: async () => 'account@example.com',
     savePasted: async () => {},
     beginBrowser: async () => { throw new Error('unused') },
     completeBrowser: async () => {},
@@ -241,8 +256,15 @@ function renderShellForLogin({ initialPlatform } = {}) {
 {
   const shell = renderShellForLogin()
   await waitFor(() => shell.stdout.lastFrame.includes('Checking Capgo login'), 'shell login check')
+  const checkingLines = shell.stdout.lastFrame.split('\n')
+  const checkingLine = checkingLines.findIndex(line => line.includes('Checking Capgo login'))
+  assert.ok(checkingLine > 15, 'login progress should be vertically centered')
+  assert.match(checkingLines[checkingLine], /^\s{30,}Checking Capgo login/u, 'login progress text should be horizontally centered')
+  assert.ok(checkingLines[checkingLine - 2].trim(), 'spinner should be above the progress text')
   assert.doesNotMatch(shell.stdout.lastFrame, /Which platform do you want to set up/)
   shell.finishValidation()
+  await waitFor(() => shell.stdout.lastFrame.includes('Welcome account@example.com 👋'), 'shell welcome before platform choice')
+  assert.doesNotMatch(shell.stdout.lastFrame, /Which platform do you want to set up/)
   await waitFor(() => shell.stdout.lastFrame.includes('Which platform do you want to set up'), 'platform picker after authentication')
   await stop(shell)
 }

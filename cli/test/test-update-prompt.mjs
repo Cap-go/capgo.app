@@ -16,6 +16,7 @@ import { exitAfterOnboardingBeforeExit } from '../src/build/onboarding/ui/exit.t
 const loginServices = {
   browserAvailable: true,
   validateExisting: async () => {},
+  getAccountEmail: async () => 'account@example.com',
   savePasted: async () => {},
   beginBrowser: async () => { throw new Error('unused') },
   completeBrowser: async () => {},
@@ -77,7 +78,7 @@ async function renderShellInstance(props) {
 async function renderShell(props) {
   const { instance, stdout } = await renderShellInstance(props)
   if (!props.updateInfo) {
-    const deadline = Date.now() + 2000
+    const deadline = Date.now() + 4000
     while (!/want to set up|iOS|Android/i.test(stdout.lastFrame ?? '') && Date.now() < deadline)
       await new Promise(resolve => setTimeout(resolve, 10))
   }

@@ -3,13 +3,14 @@ import type { BrowserLoginSession } from '../../../init/browser-login.js'
 import type { BuilderLoginServices } from '../login.js'
 import { Select } from '@inkjs/ui'
 import { Box, Text, useInput } from 'ink'
+import Spinner from 'ink-spinner'
 import React, { useEffect, useRef, useState } from 'react'
-import { Header, FilteredTextInput, SpinnerLine } from './components.js'
+import { Header, FilteredTextInput } from './components.js'
 import { pickPlatformLayout } from './frame-fit.js'
 import { CardChooser } from './platform-picker.js'
 
 type LoginMethod = 'browser' | 'paste'
-type LoginView = 'checking' | 'candidate-error' | 'choice' | 'opening' | 'entry' | 'verifying'
+type LoginView = 'checking' | 'candidate-error' | 'choice' | 'opening' | 'entry' | 'verifying' | 'identifying' | 'welcome'
 
 export interface BuilderLoginMetadata {
   method?: LoginMethod
@@ -33,13 +34,42 @@ const BuilderLoginGate: FC<BuilderLoginGateProps> = ({ candidateKey, services, c
   const [session, setSession] = useState<BrowserLoginSession | undefined>()
   const [browserUrl, setBrowserUrl] = useState<string | undefined>()
   const [error, setError] = useState<string | undefined>()
+  const [accountEmail, setAccountEmail] = useState<string | undefined>()
   const [inputRevision, setInputRevision] = useState(0)
   const attempts = useRef(0)
   const shownAt = useRef(Date.now())
   const cancelled = useRef(false)
+  const welcomeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const authenticatedCallback = useRef(onAuthenticated)
   authenticatedCallback.current = onAuthenticated
   const compact = cols < 64 || rows < 18
+
+  const showWelcome = async (key: string, metadata: BuilderLoginMetadata) => {
+    setView('identifying')
+    let lookupTimer: ReturnType<typeof setTimeout> | undefined
+    const email = await Promise.race([
+      services.getAccountEmail(key).catch(() => undefined),
+      new Promise<undefined>((resolve) => {
+        lookupTimer = setTimeout(() => resolve(undefined), 2000)
+      }),
+    ])
+    if (lookupTimer)
+      clearTimeout(lookupTimer)
+    if (cancelled.current)
+      return
+    setAccountEmail(email)
+    setView('welcome')
+    welcomeTimer.current = setTimeout(() => {
+      if (!cancelled.current)
+        authenticatedCallback.current(key, metadata)
+    }, 1500)
+  }
+
+  useEffect(() => () => {
+    cancelled.current = true
+    if (welcomeTimer.current)
+      clearTimeout(welcomeTimer.current)
+  }, [])
 
   useEffect(() => {
     if (!candidateKey)
@@ -47,7 +77,7 @@ const BuilderLoginGate: FC<BuilderLoginGateProps> = ({ candidateKey, services, c
     void services.validateExisting(candidateKey)
       .then(() => {
         if (!cancelled.current)
-          authenticatedCallback.current(candidateKey, { retryCount: 0, durationMs: 0 })
+          void showWelcome(candidateKey, { retryCount: 0, durationMs: 0 })
       })
       .catch(() => {
         if (!cancelled.current) {
@@ -55,7 +85,6 @@ const BuilderLoginGate: FC<BuilderLoginGateProps> = ({ candidateKey, services, c
           setView('candidate-error')
         }
       })
-    return () => { cancelled.current = true }
   }, [candidateKey, services])
 
   const cancel = () => {
@@ -71,7 +100,7 @@ const BuilderLoginGate: FC<BuilderLoginGateProps> = ({ candidateKey, services, c
     void services.validateExisting(candidateKey)
       .then(() => {
         if (!cancelled.current)
-          authenticatedCallback.current(candidateKey, { retryCount: 0, durationMs: 0 })
+          void showWelcome(candidateKey, { retryCount: 0, durationMs: 0 })
       })
       .catch(() => {
         if (!cancelled.current) {
@@ -126,7 +155,7 @@ const BuilderLoginGate: FC<BuilderLoginGateProps> = ({ candidateKey, services, c
     void verify
       .then(() => {
         if (!cancelled.current) {
-          onAuthenticated(key, {
+          void showWelcome(key, {
             method: method ?? 'paste',
             retryCount: attempts.current - 1,
             durationMs: Date.now() - shownAt.current,
@@ -143,7 +172,7 @@ const BuilderLoginGate: FC<BuilderLoginGateProps> = ({ candidateKey, services, c
   }
 
   useInput((_input, key) => {
-    if (key.escape)
+    if (key.escape && view !== 'welcome')
       cancel()
     else if (key.tab && view === 'entry' && services.browserAvailable) {
       setError(undefined)
@@ -156,12 +185,37 @@ const BuilderLoginGate: FC<BuilderLoginGateProps> = ({ candidateKey, services, c
     { value: 'paste', emoji: '📋', name: 'Paste API key', hint: 'Use an existing key' },
   ]
 
+  const statusText = view === 'checking'
+    ? 'Checking Capgo login…'
+    : view === 'opening'
+      ? 'Opening the Capgo Dashboard…'
+      : view === 'verifying'
+        ? 'Checking API key…'
+        : view === 'identifying'
+          ? 'Getting account details…'
+          : undefined
+
   return (
     <Box flexDirection="column" minHeight={rows} padding={1}>
       {compact
         ? <Text bold color="cyan">Capgo Cloud Build · Login</Text>
         : <Header />}
-      {view === 'checking' && <Box marginTop={1}><SpinnerLine text="Checking Capgo login…" /></Box>}
+      {statusText && (
+        <Box flexGrow={1} flexDirection="column" justifyContent="center" alignItems="center">
+          <Text color="cyan"><Spinner type="dots" /></Text>
+          <Box width={cols - 4} marginTop={1} justifyContent="center">
+            <Text wrap="truncate-end">{statusText}</Text>
+          </Box>
+        </Box>
+      )}
+      {view === 'welcome' && (
+        <Box flexGrow={1} flexDirection="column" justifyContent="center" alignItems="center">
+          <Text color="green">✔</Text>
+          <Box width={cols - 4} marginTop={1} justifyContent="center">
+            <Text color="green" bold wrap="truncate-middle">{accountEmail ? `Welcome ${accountEmail} 👋` : 'Welcome to Capgo 👋'}</Text>
+          </Box>
+        </Box>
+      )}
       {view === 'candidate-error' && (compact
         ? (
             <Box flexDirection="column">
@@ -224,8 +278,6 @@ const BuilderLoginGate: FC<BuilderLoginGateProps> = ({ candidateKey, services, c
           footer={compact ? undefined : footer}
           />
       )}
-      {view === 'opening' && <Box marginTop={1}><SpinnerLine text="Opening the Capgo Dashboard…" /></Box>}
-      {view === 'verifying' && <Box marginTop={1}><SpinnerLine text="Checking API key…" /></Box>}
       {view === 'entry' && (
         <Box flexDirection="column" marginTop={compact ? 0 : 2} alignItems={compact ? 'flex-start' : 'center'}>
           <Text bold>Paste the API key from the Capgo Dashboard</Text>
