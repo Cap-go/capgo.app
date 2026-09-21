@@ -225,6 +225,7 @@ appTriggers.route('/cron_stat_app', cron_stat_app)
 appTriggers.route('/cron_stat_org', cron_stat_org)
 appTriggers.route('/cron_sync_sub', cron_sync_sub)
 appTriggers.route('/cron_rollout_auto_pause', cron_rollout_auto_pause)
+// The queue dispatcher sends onboarding refresh batches to this Cloudflare route.
 appTriggers.route('/cron_onboarding_refresh_apps', cron_onboarding_refresh_apps)
 appTriggers.route('/queue_consumer', queue_consumer)
 appTriggers.route('/send_email', send_email)
