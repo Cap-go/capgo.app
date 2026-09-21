@@ -8,6 +8,7 @@ import { trackEvent } from '../analytics/track'
 import { addAppInternal, resolveAppGettingStartedMessage } from '../app/add'
 import { getAppListPath } from '../app/list'
 import { extractApplicationIds } from '../build/onboarding/android/gradle-parser'
+import { collectCordovaAppIdCandidates } from '../cordova/project'
 import { createSupabaseClient, findRoot, findSavedKeySilent, formatError, getAppId, getConfigForWrite, getOrganizationWithPermission, invokeCapgoCliApi, PACKNAME } from '../utils'
 import { writeConfigUpdater } from '../config'
 
@@ -68,6 +69,9 @@ export function collectAppIdCandidates(
       // ignore unreadable gradle file
     }
   }
+
+  for (const cordovaAppId of collectCordovaAppIdCandidates(projectRoot))
+    push(cordovaAppId)
 
   return [...candidates]
 }

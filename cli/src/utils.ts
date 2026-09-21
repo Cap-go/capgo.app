@@ -653,8 +653,10 @@ function isPresentCapacitorConfig(extConfig: ExtConfigPairs | undefined): extCon
   return !!extConfig.path && existsSync(extConfig.path)
 }
 
+export const NO_CAPACITOR_CONFIG_MESSAGE = 'No capacitor config file found, run `cap init` first'
+
 async function getConfigFrom(loader: () => Promise<ExtConfigPairs | undefined>, silent = false): Promise<ExtConfigPairs> {
-  const message = 'No capacitor config file found, run `cap init` first'
+  const message = NO_CAPACITOR_CONFIG_MESSAGE
   try {
     const extConfig = await loader()
     if (!isPresentCapacitorConfig(extConfig)) {

@@ -57,4 +57,8 @@ for (const help of [buildHelp, credentialsHelp, requestHelp, saveHelp, updateHel
   assert.doesNotMatch(help, /npx @capgo\/cli(?!@latest)/)
 }
 
+const bundleUploadHelp = getHelp('bundle', 'upload')
+assert.match(bundleUploadHelp, /--mode <framework>/)
+assert.match(bundleUploadHelp, /cordova/)
+
 console.log('✅ CLI help readability checks passed')
