@@ -47,6 +47,7 @@ import { isAiAnalysisTooTall, resolveAiResultRoute } from '../ai-fit.js'
 import { getWorkflowDiffTelemetry, trackBuildOnboardingWorkflowEvent } from '../analytics.js'
 import { evaluateGate } from '../app-verification.js'
 import { exitAfterOnboardingBeforeExit } from './exit.js'
+import { trackGuidedKeyValidationFailure, trackVerifiedIosKey, verifyIosKeyWithTelemetry } from './ios-credential-action.js'
 import { classifyCertAvailability, computeCertSha1, createCertificate, createProfile, deleteProfile, ensureBundleId, findCertIdBySha1, generateJwt, listApps, listBundleIds, listDistributionCerts, listProfilesForCert, revokeCertificate, verifyApiKey } from '../apple-api.js'
 import { runAscKeyHelper } from '../asc-key/helper.js'
 import { sanitizeBuildLogLines } from '../build-log.js'
@@ -1827,7 +1828,11 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
           // helper window if the user quits the TUI, so the CLI doesn't hang.
           const abort = new AbortController()
           ascHelperAbortRef.current = abort
-          const outcome = await runAscKeyHelper({ apikey, signal: abort.signal })
+          const outcome = await runAscKeyHelper({
+            apikey,
+            signal: abort.signal,
+            onEvent: event => trackGuidedKeyValidationFailure(event.name, journeyId, trackAction, cancelled),
+          })
           if (cancelled)
             return
           if (!outcome.ok) {
@@ -2215,7 +2220,10 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
 
         // ── apple-api (token-adapted) ──
         verifyApiKey: async () => {
-          const r = await verifyApiKey(await getFreshToken())
+          const token = await getFreshToken()
+          const r = await verifyIosKeyWithTelemetry(
+            () => verifyApiKey(token), journeyId, trackAction, () => cancelled,
+          )
           return { teamId: r.teamId }
         },
         createCertificate: async ({ csr }) => createCertificate(await getFreshToken(), csr),
@@ -2325,6 +2333,9 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
           handleErrorRef.current(new Error(t?.error ?? 'Onboarding failed.'), (t?.retryStep as OnboardingStep) ?? step)
           return
         }
+
+        if (step === 'verifying-key')
+          trackVerifiedIosKey(result, journeyId, trackAction)
 
         // ── merge engine transient into the carried ref (threaded into the next
         // effect) AND mirror it into the React render state downstream code reads ──

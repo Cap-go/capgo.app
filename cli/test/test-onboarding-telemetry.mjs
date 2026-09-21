@@ -149,6 +149,46 @@ try {
   }
   console.log('✅ iOS setup question action payloads')
 
+  // ── iOS credential actions carry checklist correlation without secrets ─────
+  for (const { action, step, extraTags } of [
+    { action: 'credential_verified', step: 'verifying-key', extraTags: {} },
+    { action: 'credential_verification_failed', step: 'asc-key-generating', extraTags: { source: 'guided_helper' } },
+    { action: 'credential_verification_failed', step: 'verifying-key', extraTags: { source: 'cli_verifier', error_category: 'apple_api_forbidden' } },
+  ]) {
+    const requests = installFetchMock()
+    await trackBuilderOnboardingAction({
+      action,
+      apikey: 'capgo-key',
+      appId: 'com.example.app',
+      orgId: 'org-id',
+      journeyId: 'bj_ios-credential',
+      replaySessionId: 'build-onboarding-replay-credential',
+      platform: 'ios',
+      step,
+      tags: {
+        credential: 'ios_app_store_connect_api_key',
+        attempt_id: 'bj_ios-credential',
+        ...extraTags,
+      },
+    })
+
+    const body = findEventBody(requests)
+    assert.equal(body.event, 'Builder Onboarding Action')
+    assert.equal(body.org_id, 'org-id')
+    assert.deepEqual(body.tags, {
+      $session_id: 'build-onboarding-replay-credential',
+      action,
+      app_id: 'com.example.app',
+      attempt_id: 'bj_ios-credential',
+      credential: 'ios_app_store_connect_api_key',
+      journey_id: 'bj_ios-credential',
+      platform: 'ios',
+      step,
+      ...extraTags,
+    })
+  }
+  console.log('✅ iOS credential action correlation and safe tags')
+
   // ── Step event carries the journey id ─────────────────────────────────────
   {
     const requests = installFetchMock()
