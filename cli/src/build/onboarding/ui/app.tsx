@@ -809,6 +809,17 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
     },
     [appId, resolvedOrgId, step, journeyId],
   )
+  const setupMethodShownRef = useRef(false)
+  useEffect(() => {
+    if (step !== 'setup-method-select') {
+      setupMethodShownRef.current = false
+      return
+    }
+    if (setupMethodShownRef.current || !terminalFitsOnboarding(terminalCols, terminalRows, 'ios'))
+      return
+    setupMethodShownRef.current = true
+    trackAction('question_shown', { attempt_id: journeyId, question_id: 'ios_setup_method' })
+  }, [step, terminalCols, terminalRows, trackAction, journeyId])
   const [teamId, setTeamId] = useState(initialProgress?.completedSteps.certificateCreated?.teamId || '')
   const [certData, setCertData] = useState<CertificateData | null>(initialProgress?.completedSteps.certificateCreated || null)
   const [profileData, setProfileData] = useState<ProfileData | null>(initialProgress?.completedSteps.profileCreated || null)
@@ -3504,6 +3515,11 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
               p8CreateMethod: value === 'import' ? existing.p8CreateMethod : undefined,
             }
             await saveProgress(appId, reduced)
+            trackAction('question_answered', {
+              attempt_id: journeyId,
+              question_id: 'ios_setup_method',
+              choice: value === 'import' ? 'import-existing' : 'create-new',
+            })
 
             // Keep the React `importMode` mirror in sync (read by the
             // create-new effect driver's verifying-key guard + saving-credentials).

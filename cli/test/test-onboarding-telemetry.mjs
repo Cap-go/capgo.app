@@ -112,6 +112,43 @@ try {
     console.log('✅ Action event carries journey_id')
   }
 
+  // ── iOS setup question uses reusable action payloads ──────────────────────
+  for (const [action, choice] of [
+    ['question_shown', undefined],
+    ['question_answered', 'create-new'],
+    ['question_answered', 'import-existing'],
+  ]) {
+    const requests = installFetchMock()
+    await trackBuilderOnboardingAction({
+      action,
+      apikey: 'capgo-key',
+      appId: 'com.example.app',
+      orgId: 'org-id',
+      journeyId: 'bj_ios-setup',
+      replaySessionId: 'build-onboarding-replay-ios',
+      platform: 'ios',
+      step: 'setup-method-select',
+      tags: { attempt_id: 'bj_ios-setup', question_id: 'ios_setup_method', ...(choice && { choice }) },
+    })
+
+    const body = findEventBody(requests)
+    assert.equal(body.event, 'Builder Onboarding Action')
+    assert.equal(body.org_id, 'org-id')
+    assert.equal(body.tracking_version, 2)
+    assert.deepEqual(body.tags, {
+      $session_id: 'build-onboarding-replay-ios',
+      action,
+      app_id: 'com.example.app',
+      attempt_id: 'bj_ios-setup',
+      ...(choice && { choice }),
+      journey_id: 'bj_ios-setup',
+      platform: 'ios',
+      question_id: 'ios_setup_method',
+      step: 'setup-method-select',
+    })
+  }
+  console.log('✅ iOS setup question action payloads')
+
   // ── Step event carries the journey id ─────────────────────────────────────
   {
     const requests = installFetchMock()
