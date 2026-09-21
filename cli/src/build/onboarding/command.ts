@@ -6,12 +6,13 @@ import { log } from '@clack/prompts'
 import { render } from 'ink'
 import React from 'react'
 import { resolveOwnerOrgId } from '../../analytics/org-resolver.js'
-import { trackEvent } from '../../analytics/track.js'
-import { findSavedKeySilent, getConfig } from '../../utils.js'
+import { flushDeferredCommandInvocation, trackEvent } from '../../analytics/track.js'
+import { getConfig } from '../../utils.js'
 import { getBuilderAppId, getConfiguredBuilderAppId } from '../app-id.js'
 import { appendInternalLog, startInternalLog } from '../../support/internal-log.js'
 import { newBuilderJourneyId } from './journey.js'
-import { trackBuilderOnboardingCancelled } from './telemetry.js'
+import { createBuilderLoginServices, resolveBuilderCandidateKey } from './login.js'
+import { trackBuilderOnboardingCancelled, trackBuilderOnboardingLogin } from './telemetry.js'
 import { isMacOS, probeGuidedHelper } from './asc-key/helper.js'
 import { ASC_KEY_CHANNEL } from './asc-key/protocol.js'
 import { getPlatformDirFromCapacitorConfig } from '../platform-paths.js'
@@ -337,7 +338,10 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
   // handoff each get exactly one.
   const journeyId = newBuilderJourneyId()
   const analyticsEnabled = options.enableSelfUpdate === true && options.analytics !== false
-  const replayApikey = options.apikey?.trim() || findSavedKeySilent()
+  const candidateApiKey = resolveBuilderCandidateKey(options.apikey)
+  const loginServices = createBuilderLoginServices({ supaHost: options.supaHost, supaAnon: options.supaAnon })
+  let authenticatedApiKey: string | undefined
+  const replayApikey = candidateApiKey
   const buildReplayUrl = resolveSupabaseReplayUrl(options.supaHost)
   const buildReplay = startInitReplay({
     analyticsEnabled,
@@ -371,7 +375,8 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
       appflowPackageName,
       iosDir,
       androidDir,
-      apikey: options.apikey,
+      apikey: candidateApiKey,
+      loginServices,
       supaHost: options.supaHost,
       supaAnon: options.supaAnon,
       journeyId,
@@ -389,6 +394,20 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
       },
       onResult: (r: OnboardingResult) => {
         result = r
+      },
+      onAuthenticated: (key, metadata) => {
+        authenticatedApiKey = key
+        flushDeferredCommandInvocation(key)
+        if (metadata.method) {
+          void trackBuilderOnboardingLogin({
+            apikey: key,
+            appId,
+            journeyId,
+            method: metadata.method,
+            retryCount: metadata.retryCount,
+            durationMs: metadata.durationMs,
+          })
+        }
       },
       onBeforeExit: finishBuildReplay,
   })
@@ -455,7 +474,7 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
     // user has already quit. On timeout we abort the org lookup and skip the
     // event — losing one best-effort quit beacon is preferable to a hang.
     if (result.outcome === 'cancelled') {
-      const apikey = options.apikey?.trim() || findSavedKeySilent()
+      const apikey = authenticatedApiKey
       if (apikey) {
         const timeoutMs = 1500
         const controller = new AbortController()

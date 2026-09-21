@@ -1,5 +1,7 @@
 import type { FC } from 'react'
 import type { OnboardingResult, Platform } from '../types.js'
+import type { BuilderLoginServices } from '../login.js'
+import type { BuilderLoginMetadata } from './login-gate.js'
 // src/build/onboarding/ui/shell.tsx
 //
 // Top-level wizard shell, rendered ONCE inside the alt-screen buffer
@@ -32,6 +34,7 @@ import { TerminalTooSmallPrompt } from './min-size-gate.js'
 import { CardChooser, PlatformPicker } from './platform-picker.js'
 import { exitAfterOnboardingBeforeExit } from './exit.js'
 import { UpdatePrompt } from './update-prompt.js'
+import BuilderLoginGate from './login-gate.js'
 import type { OnboardingBeforeExit } from './exit.js'
 
 // Progress shapes derived from the loaders so we don't re-import the type names.
@@ -100,6 +103,7 @@ export interface OnboardingShellProps {
    */
   guidedHelperUsable: boolean
   apikey?: string
+  loginServices: BuilderLoginServices
   supaHost?: string
   /** Custom Supabase anon key for self-hosting (--supa-anon). */
   supaAnon?: string
@@ -127,6 +131,8 @@ export interface OnboardingShellProps {
   onResult?: (result: OnboardingResult) => void
   /** Awaited immediately before Ink exits so replay can capture the alt-screen frame. */
   onBeforeExit?: OnboardingBeforeExit
+  /** Called after the login gate has verified a key. */
+  onAuthenticated?: (key: string, metadata: BuilderLoginMetadata) => void
 }
 
 const AnalyticsNotice: FC = () => (
@@ -135,10 +141,11 @@ const AnalyticsNotice: FC = () => (
   </Box>
 )
 
-const OnboardingShell: FC<OnboardingShellProps> = ({ appId, iosBundleIdInitial, appflowPackageName, iosDir, androidDir, guidedHelperUsable, apikey, supaHost, supaAnon, journeyId, initialPlatform, updateInfo, analyticsNotice, onResolvePlatform, onStep, onResult, onBeforeExit }) => {
+const OnboardingShell: FC<OnboardingShellProps> = ({ appId, iosBundleIdInitial, appflowPackageName, iosDir, androidDir, guidedHelperUsable, apikey, loginServices, supaHost, supaAnon, journeyId, initialPlatform, updateInfo, analyticsNotice, onResolvePlatform, onStep, onResult, onBeforeExit, onAuthenticated }) => {
   const { exit } = useApp()
   const { cols, rows } = useTerminalSize()
   const [ready, setReady] = useState<ReadyApp | null>(null)
+  const [authenticatedKey, setAuthenticatedKey] = useState<string | undefined>()
   // Set when progress loading fails (e.g. corrupt saved-progress JSON). loadProgress
   // throws for non-ENOENT errors, so without a rejection handler `choose` would
   // leave an unhandled promise rejection and the picker stuck with no feedback.
@@ -200,9 +207,9 @@ const OnboardingShell: FC<OnboardingShellProps> = ({ appId, iosBundleIdInitial, 
   useEffect(() => {
     // Hold the auto-load until the update prompt (if any) is answered, so the
     // update offer is the first screen even when --platform pre-resolves.
-    if (initialPlatform && (!updateInfo || updateAnswered))
+    if (authenticatedKey && initialPlatform && (!updateInfo || updateAnswered))
       choose(initialPlatform)
-  }, [initialPlatform, choose, updateInfo, updateAnswered])
+  }, [authenticatedKey, initialPlatform, choose, updateInfo, updateAnswered])
 
   // Progress load failed (corrupt/unreadable saved state) — show why and exit,
   // rather than hanging on a frozen picker. The exit is scheduled in the .catch.
@@ -225,11 +232,11 @@ const OnboardingShell: FC<OnboardingShellProps> = ({ appId, iosBundleIdInitial, 
   // exiting the wizard. The app owns the size decision so a shrink→regrow keeps
   // the user exactly where they were.
   if (ready?.kind === 'ios')
-    return <OnboardingApp appId={appId} iosBundleIdInitial={iosBundleIdInitial} initialProgress={ready.progress} iosDir={iosDir} guidedHelperUsable={guidedHelperUsable} apikey={apikey} supaHost={supaHost} supaAnon={supaAnon} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
+    return <OnboardingApp appId={appId} iosBundleIdInitial={iosBundleIdInitial} initialProgress={ready.progress} iosDir={iosDir} guidedHelperUsable={guidedHelperUsable} apikey={authenticatedKey} supaHost={supaHost} supaAnon={supaAnon} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
   if (ready?.kind === 'android')
-    return <AndroidOnboardingApp appId={appId} initialProgress={ready.progress} androidDir={androidDir} apikey={apikey} supaHost={supaHost} supaAnon={supaAnon} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
+    return <AndroidOnboardingApp appId={appId} initialProgress={ready.progress} androidDir={androidDir} apikey={authenticatedKey} supaHost={supaHost} supaAnon={supaAnon} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
   if (ready?.kind === 'appflow')
-    return <AppflowApp appId={appId} packageName={appflowPackageName ?? appId} scope={ready.scope} apikey={apikey} supaHost={supaHost} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
+    return <AppflowApp appId={appId} packageName={appflowPackageName ?? appId} scope={ready.scope} apikey={authenticatedKey} supaHost={supaHost} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
 
   // Not ready yet: the platform picker (or a brief framed load). The picker is
   // NOT gated to the full 80×49 onboarding floor — it's small and adapts
@@ -269,6 +276,26 @@ const OnboardingShell: FC<OnboardingShellProps> = ({ appId, iosBundleIdInitial, 
           footer={analyticsNotice ? <AnalyticsNotice /> : undefined}
         />
       </Box>
+    )
+  }
+
+  if (!authenticatedKey) {
+    return (
+      <BuilderLoginGate
+        candidateKey={apikey}
+        services={loginServices}
+        cols={cols}
+        rows={rows}
+        footer={analyticsNotice ? <AnalyticsNotice /> : undefined}
+        onAuthenticated={(key, metadata) => {
+          setAuthenticatedKey(key)
+          onAuthenticated?.(key, metadata)
+        }}
+        onCancel={() => {
+          onResult?.({ outcome: 'cancelled' })
+          setTimeout(exitAfterBeforeExit, 50)
+        }}
+      />
     )
   }
 
