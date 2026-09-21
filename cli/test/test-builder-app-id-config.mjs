@@ -66,6 +66,7 @@ try {
     const invalid = configFor()
     invalid.plugins.CapgoBuilder.capgoBuilderAppId = value
     assert.throws(() => getBuilderAppId(undefined, invalid), /plugins\.CapgoBuilder\.capgoBuilderAppId must be a non-empty string/)
+    assert.equal(getBuilderAppId('com.example.explicit', invalid), 'com.example.explicit', 'explicit app IDs bypass invalid Builder config')
   }
   assert.equal(isBuilderInvocation('build request'), true)
   assert.equal(isBuilderInvocation('build credentials save'), true)

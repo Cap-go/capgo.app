@@ -20,10 +20,9 @@ export function getBuilderAppId(
   legacyDefault: 'updater' | 'native' = 'updater',
   explicitMode: 'truthy' | 'defined' = 'truthy',
 ): string | undefined {
-  const configuredAppId = getConfiguredBuilderAppId(config)
-
   if (explicitMode === 'defined' ? explicitAppId !== undefined : Boolean(explicitAppId))
     return explicitAppId
+  const configuredAppId = getConfiguredBuilderAppId(config)
   if (configuredAppId)
     return configuredAppId
   return legacyDefault === 'native' ? config?.appId : getAppId(undefined, config)
