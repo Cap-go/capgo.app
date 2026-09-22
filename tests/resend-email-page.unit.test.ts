@@ -277,6 +277,23 @@ describe('progressive email verification', () => {
     )
   })
 
+  it('marks account-settings deletion requests without changing the return destination', async () => {
+    mocks.route.query = { reason: 'email_not_verified', return_to: '/settings/account', purpose: 'delete_account' }
+    mocks.getSession.mockResolvedValue({ data: { session: { user: { id: 'test-user', email: 'confirmation-test@example.com' } } } })
+    const container = await mountPage()
+    await sendOtp(container)
+    expect(mocks.sendEmailOtpVerification).toHaveBeenCalledWith(
+      expect.anything(),
+      'confirmation-test@example.com',
+      'test-captcha-token',
+      'delete_account',
+    )
+
+    await inputs.get('email_otp')!.input('123456')
+    button(container, messages['validate-email']).click()
+    await vi.waitFor(() => expect(mocks.router.replace).toHaveBeenCalledWith('/settings/account'))
+  })
+
   it('requires a fresh CAPTCHA to resend and preserves the previous code when going back', async () => {
     const container = await mountOtpPage()
     await sendOtp(container)
