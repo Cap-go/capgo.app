@@ -9,7 +9,7 @@ import { sql } from 'drizzle-orm'
 import { buildAppOnboardingStepPosthogEvent } from './app_onboarding_posthog.ts'
 import { gatherTodoEvidence, getTodoEvidenceNeeds, loadTodoEvidenceCandidates } from './app_onboarding_todo_evidence.ts'
 import { appendAppOnboardingStepHistory, applyAppOnboardingPatch, getAppOnboardingStepHistoryChanges, parseAppOnboarding } from './appOnboarding.ts'
-import { cloudlog, cloudlogErr } from './logging.ts'
+import { cloudlogErr } from './logging.ts'
 import { trackPosthogEventBatch } from './posthog.ts'
 import { backgroundTask } from './utils.ts'
 
@@ -51,7 +51,7 @@ export async function refreshAppOnboardingTodoBatch(
 ) {
   const candidates = await loadTodoEvidenceCandidates(database, body.appIds)
   if (!candidates.length)
-    return { updated: 0, steps: 0, cfErrors: 0, cfTruncated: 0 }
+    return { updated: 0, steps: 0, cfErrors: 0 }
 
   // Evidence can involve network requests. Never hold app row locks while
   // waiting for Analytics Engine; recheck the row after acquiring the lock.
@@ -59,12 +59,9 @@ export async function refreshAppOnboardingTodoBatch(
   for (const error of evidence.errors) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'onboarding todo evidence query failed', source: error.source, appIds: error.appIds, error: error.message })
   }
-  if (evidence.truncated.length)
-    cloudlog({ requestId: c.get('requestId'), message: 'onboarding todo evidence query truncated', appIds: evidence.truncated })
-
   const positiveIds = [...new Set([...evidence.channel, ...evidence.device, ...evidence.bundle, ...evidence.update])].sort((a, b) => a.localeCompare(b))
   if (!positiveIds.length)
-    return { updated: 0, steps: 0, cfErrors: evidence.errors.length, cfTruncated: evidence.truncated.length }
+    return { updated: 0, steps: 0, cfErrors: evidence.errors.length }
 
   const events = await database.transaction(async (tx) => {
     await tx.execute(sql`SELECT
@@ -117,5 +114,5 @@ export async function refreshAppOnboardingTodoBatch(
     })))
     await backgroundTask(c, trackPosthogEventBatch(c, payloads))
   }
-  return { updated: events.length, steps: stepCount, cfErrors: evidence.errors.length, cfTruncated: evidence.truncated.length }
+  return { updated: events.length, steps: stepCount, cfErrors: evidence.errors.length }
 }

@@ -27,12 +27,6 @@ function databaseWithRows(rows: Array<{ app_id: string, version_name?: string, p
       return { rows: rows.filter(row => row.version_name === undefined) }
     if (query.includes('FROM pg_catalog.unnest'))
       return { rows: [...new Set(rows.filter(row => row.published).map(row => row.app_id))].map(app_id => ({ app_id })) }
-    if (query.includes('jsonb_to_recordset')) {
-      const pairs = JSON.parse(compiled.params.find(param => typeof param === 'string' && param.startsWith('[{')) as string) as Array<{ app_id: string, version_name: string }>
-      return { rows: [...new Set(pairs.filter(pair => rows.some(row => row.app_id === pair.app_id && row.version_name === pair.version_name)).map(pair => pair.app_id))].map(app_id => ({ app_id })) }
-    }
-    if (query.includes('FROM public.app_versions'))
-      return { rows: rows.filter(row => row.version_name !== undefined) }
     return { rows: [] }
   })
   return { execute }
@@ -91,7 +85,7 @@ describe('batched todo evidence lookup', () => {
     expect(found.update.size).toBe(0)
   })
 
-  it('groups at most five app IDs per query and caps ordinary 25-app work at ten requests', async () => {
+  it('checks all 25 apps with one device query and one set query', async () => {
     const database = databaseWithRows(Array.from({ length: 25 }, (_, i) => ({ app_id: `app-${i}`, version_name: '1.0.0', published: false })))
     const queries: string[] = []
     const runQuery = vi.fn(async (query: string) => {
@@ -100,15 +94,17 @@ describe('batched todo evidence lookup', () => {
     })
     const candidates = Array.from({ length: 25 }, (_, i) => candidate(`app-${i}`, setup(3)))
     await gatherTodoEvidence(c, database as any, candidates, { runQuery, now: new Date('2026-09-22T00:00:00Z') })
-    expect(queries).toHaveLength(10)
-    expect(queries.filter(query => query.includes('FROM device_info'))).toHaveLength(5)
-    expect(queries.filter(query => query.includes('FROM app_log'))).toHaveLength(5)
-    for (const query of queries)
-      expect((query.match(/'app-\d+'/g) ?? []).length).toBeLessThanOrEqual(5)
-    expect(queries.filter(query => query.includes('FROM app_log')).every(query => query.includes('LIMIT 50'))).toBe(true)
+    expect(queries).toHaveLength(2)
+    expect(queries.filter(query => query.includes('FROM device_info'))).toHaveLength(1)
+    expect(queries.filter(query => query.includes('FROM app_log'))).toHaveLength(1)
+    for (const query of queries) {
+      expect((query.match(/'app-\d+'/g) ?? []).length).toBe(25)
+      expect(query).toContain('GROUP BY index1 LIMIT 25')
+    }
+    expect(queries.find(query => query.includes('FROM app_log'))).not.toContain('blob3 AS version_name')
   })
 
-  it('runs no more than four Analytics Engine queries at once', async () => {
+  it('runs the two batched Analytics Engine queries concurrently', async () => {
     const database = databaseWithRows([])
     let active = 0
     let peak = 0
@@ -122,7 +118,7 @@ describe('batched todo evidence lookup', () => {
     })
     const candidates = Array.from({ length: 25 }, (_, i) => candidate(`app-${i}`, setup(3)))
     await gatherTodoEvidence(c, database as any, candidates, { runQuery, now: new Date('2026-09-22T00:00:00Z') })
-    expect(peak).toBe(4)
+    expect(peak).toBe(2)
   })
 
   it('escapes app IDs and bounds device and set scans by Analytics Engine retention', () => {
@@ -137,37 +133,34 @@ describe('batched todo evidence lookup', () => {
       .toContain('timestamp >= toDateTime(\'2026-06-24 00:00:00\')')
   })
 
-  it('matches a set event only to a valid version after app creation', async () => {
-    const database = databaseWithRows([{ app_id: 'app-a', version_name: '1.0.0', published: false }])
+  it('accepts a qualifying set event even when its version no longer exists in Postgres', async () => {
+    const database = databaseWithRows([])
     const runQuery = vi.fn(async (query: string) => query.includes('FROM app_log')
-      ? [
-          { app_id: 'app-a', version_name: 'missing', last_set_at: new Date('2026-09-20T00:00:00Z') },
-          { app_id: 'app-a', version_name: '1.0.0', last_set_at: new Date('2026-08-20T00:00:00Z') },
-        ]
-      : [{ app_id: 'app-a', last_device_at: new Date('2026-09-20T00:00:00Z') }])
+      ? [{ app_id: 'app-a', last_event_at: new Date('2026-09-20T00:00:00Z') }]
+      : [{ app_id: 'app-a', last_event_at: new Date('2026-09-20T00:00:00Z') }])
     const found = await gatherTodoEvidence(c, database as any, [candidate('app-a', setup(3))], { runQuery, now: new Date('2026-09-22T00:00:00Z') })
     expect(found.device.has('app-a')).toBe(true)
-    expect(found.update.has('app-a')).toBe(false)
+    expect(found.update.has('app-a')).toBe(true)
   })
 
-  it('verifies a returned set version through the indexed Postgres lookup', async () => {
-    const database = databaseWithRows([{ app_id: 'app-a', version_name: 'real-version', published: false }])
+  it('does not issue a Postgres version-name lookup for set evidence', async () => {
+    const database = databaseWithRows([])
     const runQuery = vi.fn(async (query: string) => query.includes('FROM app_log')
-      ? [{ app_id: 'app-a', version_name: 'real-version', last_set_at: new Date('2026-09-20T00:00:00Z') }]
+      ? [{ app_id: 'app-a', last_event_at: new Date('2026-09-20T00:00:00Z') }]
       : [])
     const found = await gatherTodoEvidence(c, database as any, [candidate('app-a', setup(3))], { runQuery, now: new Date('2026-09-22T00:00:00Z') })
     expect(found.update.has('app-a')).toBe(true)
     const queries = database.execute.mock.calls.map(call => dialect.sqlToQuery(call[0] as any).sql)
-    expect(queries.filter(query => query.includes('jsonb_to_recordset'))).toHaveLength(1)
+    expect(queries.some(query => query.includes('jsonb_to_recordset'))).toBe(false)
     expect(queries.some(query => query.includes('name AS version_name'))).toBe(false)
   })
 
-  it('does not use a device observation from before this app row was created', async () => {
+  it('does not use Analytics Engine observations from before this app row was created', async () => {
     const database = databaseWithRows([])
-    const onboarding = setup(3, { test_update: { status: 'done' } })
-    const runQuery = vi.fn(async () => [{ app_id: 'app-a', last_device_at: new Date('2026-08-20T00:00:00Z') }])
-    const found = await gatherTodoEvidence(c, database as any, [candidate('app-a', onboarding)], { runQuery, now: new Date('2026-09-22T00:00:00Z') })
+    const runQuery = vi.fn(async () => [{ app_id: 'app-a', last_event_at: new Date('2026-08-20T00:00:00Z') }])
+    const found = await gatherTodoEvidence(c, database as any, [candidate('app-a', setup(3))], { runQuery, now: new Date('2026-09-22T00:00:00Z') })
     expect(found.device.has('app-a')).toBe(false)
+    expect(found.update.has('app-a')).toBe(false)
   })
 
   it('reports Cloudflare failures separately from absent evidence', async () => {
@@ -184,39 +177,4 @@ describe('batched todo evidence lookup', () => {
     ]))
   })
 
-  it('uses at most five exact version lookups when a 50-row set group is saturated', async () => {
-    const database = databaseWithRows(Array.from({ length: 25 }, (_, i) => ({ app_id: `app-${i}`, version_name: 'real-version', published: false })))
-    const queries: string[] = []
-    const runQuery = vi.fn(async (query: string) => {
-      queries.push(query)
-      if (!query.includes('FROM app_log'))
-        return []
-      if (query.includes('index1 IN')) {
-        const firstId = /'app-(\d+)'/.exec(query)?.[1]
-        return Array.from({ length: 50 }, (_, i) => ({ app_id: `app-${firstId}`, version_name: `unmatched-${i}`, last_set_at: new Date('2026-09-20T00:00:00Z') }))
-      }
-      return [{ version_name: 'real-version', last_set_at: new Date('2026-09-20T00:00:00Z') }]
-    })
-    const candidates = Array.from({ length: 25 }, (_, i) => candidate(`app-${i}`, setup(3)))
-    const found = await gatherTodoEvidence(c, database as any, candidates, { runQuery, now: new Date('2026-09-22T00:00:00Z') })
-    expect(queries).toHaveLength(15)
-    expect(queries.filter(query => query.includes('FROM app_log') && query.includes('index1 ='))).toHaveLength(5)
-    expect(found.update.size).toBe(5)
-    expect(found.truncated).toHaveLength(20)
-    expect(found.truncated.every(appId => !found.update.has(appId))).toBe(true)
-  })
-
-  it('does not infer a match from a saturated grouped result if the exact query fails', async () => {
-    const database = databaseWithRows([{ app_id: 'app-a', version_name: 'real-version', published: false }])
-    const runQuery = vi.fn(async (query: string) => {
-      if (query.includes('FROM device_info'))
-        return []
-      if (query.includes('index1 IN'))
-        return Array.from({ length: 50 }, (_, i) => ({ app_id: 'app-a', version_name: `unmatched-${i}`, last_set_at: new Date('2026-09-20T00:00:00Z') }))
-      throw new Error('exact lookup failed')
-    })
-    const found = await gatherTodoEvidence(c, database as any, [candidate('app-a', setup(3))], { runQuery, now: new Date('2026-09-22T00:00:00Z') })
-    expect(found.update.has('app-a')).toBe(false)
-    expect(found.errors).toEqual([expect.objectContaining({ source: 'update', appIds: ['app-a'], message: 'exact lookup failed' })])
-  })
 })
