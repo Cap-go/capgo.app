@@ -12,11 +12,12 @@
 
 ## Boundaries and decisions
 
-- `add_channel`: check any queued app with a supported v1/v2/v3/v4 todo list when that step is not done and the setup outcome is not skipped. Mark done on positive Postgres evidence only; never reopen a completed step when a channel is removed.
-- `run_device`, `upload_bundle`, and `test_update`: check only v3 or v4 OTA v1 apps, only while each respective step is not done and the setup outcome is not skipped. Leave CLI-reported steps alone.
+- `add_channel`: check any queued app with a supported v1/v2/v3/v4 todo list when that step is not done and the setup outcome is neither completed nor skipped. Mark done on positive Postgres evidence only; never reopen a completed step when a channel is removed.
+- `run_device`, `upload_bundle`, and `test_update`: check only v3 or v4 OTA v1 apps, only while each respective step is not done and the setup outcome is neither completed nor skipped. A terminal completed outcome can be declared without every step, and patching one pending step would incorrectly reopen that setup. Leave CLI-reported steps alone.
 - Cloudflare `device_info`: require a nonempty `blob1` device ID for the app. Cloudflare `app_log`: require `blob2 = 'set'`, nonempty `blob1`, and a non-builtin/non-unknown `blob3` version name. Match the returned version name to the same app's non-revert `app_versions` in Postgres and require the event time to be no earlier than app creation.
 - Group at most five app IDs per Analytics Engine query. Run no more than four queries concurrently, so one 25-app message normally uses at most five device queries and five `set` queries. Return at most 50 grouped `set` app/version pairs per group, ordered by most recent event. If a group reaches the cap, use at most five additional exact app-and-valid-version queries for unmatched apps; skip and log any exact query exceeding 8 KB. Thus one message makes at most 15 Analytics Engine requests, and only positive matches may change a step.
 - Analytics Engine samples and retains data for three months. Missing evidence is never proof that a step should be undone. Use a three-month lookback floor to bound scans. Cloudflare query failures must remain distinguishable from empty results; log them and leave the affected steps pending so the next producer cycle can check again, without exhausting the queue's five-attempt retry budget.
+- Give each Analytics Engine request a five-second abort limit, raise this queue handler's HTTP timeout to 90 seconds, and give its `pg_net` caller 100 seconds while keeping its 120-second visibility timeout. The 35-second feature query, four-way Cloudflare batch, final Postgres merge, and one batched PostHog request must fit the same queue delivery budget.
 - Do not hold an app-row lock or a database transaction open across a Cloudflare API request. After gathering evidence, lock selected `apps` rows in app-ID order, re-read current todo state, merge positive observations only, append step history, call `try_complete_pending_onboarding_if_setup_done`, and commit. A duplicate queue delivery remains idempotent.
 - The existing feature refresh may already have advanced `refreshed_at` when todo refresh fails; todo checks must therefore run independently of its stale-message early return. No schema change, new queue, or new cron job.
 
@@ -25,7 +26,8 @@
 - Create `supabase/functions/_backend/utils/app_onboarding_todo_evidence.ts`: candidate selection, batched Postgres evidence, bounded Analytics Engine query builders and reads.
 - Create `supabase/functions/_backend/utils/app_onboarding_todo_refresh.ts`: final row-locking transaction, positive-only merge, history, completion, and system-originated change events.
 - Modify `supabase/functions/_backend/triggers/cron_onboarding_refresh_apps.ts`: invoke the todo refresh after the existing feature refresh, even if the feature refresh returns zero.
-- Modify `supabase/functions/_backend/utils/app_onboarding_posthog.ts`: allow a system-originated step event without attributing it to a human user.
+- Add one migration for the onboarding queue caller timeout, and update the matching consumer timeout; leave other queues unchanged.
+- Modify `supabase/functions/_backend/utils/app_onboarding_posthog.ts` and `posthog.ts`: allow system-originated step events without a human user and send them in one batched telemetry request.
 - Add `tests/app-onboarding-todo-evidence.unit.test.ts` for filtering, SQL shape, bounds, and failures.
 - Add `tests/cron-onboarding-todo-refresh.test.ts` for Postgres parity, locks, replay safety, version handling, and JSON preservation.
 
@@ -94,7 +96,7 @@ Use `escapeSqlString`, `formatDateCF`, and `runQueryToCFA` from `cloudflare.ts`.
 - [ ] Write database tests with dedicated apps for v1, v2, v3, and v4 OTA v1. Set a completed step before the worker writes and assert its `at` and history survive. Assert v4 writes under `setup.steps.ota`, v3 writes under `setup.steps`, arbitrary JSON fields survive, and duplicate messages add no history entry. Simulate a concurrent CLI step report before lock acquisition and assert it survives.
 - [ ] Run `bunx vitest run tests/cron-onboarding-todo-refresh.test.ts`; expect failure while the refresh module does not exist.
 - [ ] Implement `refreshAppOnboardingTodoBatch(c, database, body)`: load candidates and gather Cloudflare/Postgres evidence outside a write transaction; begin one Drizzle transaction; set `lock_timeout = '5s'`; select current `apps` rows `ORDER BY app_id FOR UPDATE`; recompute needs from the locked JSON; create a patch containing only newly observed `status: 'done'` steps; use `applyAppOnboardingPatch` and `appendAppOnboardingStepHistory`; update only changed rows and invoke `public.try_complete_pending_onboarding_if_setup_done(app_id)`. Do not gate this function on `refreshed_at < queuedAt`.
-- [ ] Emit step-history events after commit with a distinct app-scoped system identity and `auth_type: 'system'`, preserving human-authored endpoint events and PostHog insert-ID deduplication.
+- [ ] Emit step-history events after commit in one batch with a distinct app-scoped system identity and `auth_type: 'system'`, preserving human-authored endpoint events and PostHog insert-ID deduplication.
 - [ ] Rerun database tests and the existing `tests/onboarding-progress-endpoint.unit.test.ts`; expect success.
 - [ ] Commit as `feat(onboarding): persist observed todo milestones from queue`.
 

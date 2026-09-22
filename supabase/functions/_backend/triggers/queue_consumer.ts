@@ -279,7 +279,7 @@ function prepareQueueHttpBody(functionName: string, body: Record<string, unknown
 
 function getQueueHttpTimeoutMs(functionName: string): number {
   if (isOnboardingQueue(functionName))
-    return 45_000
+    return 90_000
   if (isVersionQueueFunction(functionName))
     return VERSION_QUEUE_HTTP_TIMEOUT_MS
   return QUEUE_HTTP_TIMEOUT_MS
