@@ -14495,7 +14495,8 @@ BEGIN
       'apisecret', public.get_apikey()
     );
     request_timeout_ms := CASE
-      WHEN queue_name = 'on_manifest_create' OR onboarding_queue THEN 60000
+      WHEN onboarding_queue THEN 100000
+      WHEN queue_name = 'on_manifest_create' THEN 60000
       ELSE 8000
     END;
     url := public.get_db_url() || '/functions/v1/triggers/queue_consumer/sync';
