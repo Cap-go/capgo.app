@@ -190,7 +190,7 @@ onUnmounted(() => {
         <li v-for="channel in merged" :key="channel.id">
           <button
             type="button"
-            class="flex w-full cursor-pointer items-center rounded-md px-2 py-1.5 text-left text-sm text-slate-700 hover:bg-slate-100 hover:text-azure-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500 dark:text-slate-200 dark:hover:bg-slate-800 dark:hover:text-azure-400"
+            class="flex w-full cursor-pointer items-center rounded-md px-2 py-1.5 text-left text-sm font-medium text-azure-600 underline-offset-2 hover:bg-azure-50 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500 dark:text-azure-400 dark:hover:bg-slate-800"
             :data-test="`bundle-row-channel-${channel.id}`"
             @click.stop="goToChannel(channel.id)"
           >
