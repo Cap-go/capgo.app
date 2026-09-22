@@ -87,3 +87,34 @@ export async function unlinkLinkedChannels(unlink: LinkedChannel[]) {
 
   return results.find(({ error }) => error)?.error ?? null
 }
+
+export interface BundleListChannel {
+  id: number
+  name: string
+}
+
+/** Dedupe + stable name sort for bundle-list channel chips. */
+export function mergeBundleListChannels(channels: BundleListChannel[]): BundleListChannel[] {
+  const byId = new Map<number, BundleListChannel>()
+  for (const channel of channels) {
+    if (!channel?.id || !channel.name)
+      continue
+    byId.set(channel.id, { id: channel.id, name: channel.name })
+  }
+  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/**
+ * Compact label for the bundles table Channel column.
+ * One or two channels → full comma list; three+ → `first +N` (full list via title/hover).
+ */
+export function formatBundleListChannels(channels: BundleListChannel[], compactAfter = 2): { label: string, title: string } {
+  const merged = mergeBundleListChannels(channels)
+  if (merged.length === 0)
+    return { label: '', title: '' }
+  const names = merged.map(channel => channel.name)
+  const title = names.join(', ')
+  if (names.length <= compactAfter)
+    return { label: title, title }
+  return { label: `${names[0]} +${names.length - 1}`, title }
+}

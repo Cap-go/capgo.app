@@ -6,13 +6,13 @@ import type { ChannelPromotionTarget } from '~/services/channelPromotion'
 import type { Database } from '~/types/supabase.types'
 import { Capacitor } from '@capacitor/core'
 import { computedAsync, useEventBus } from '@vueuse/core'
-import { computed, ref, watch } from 'vue'
+import { computed, h, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconSettings from '~icons/heroicons/cog-8-tooth'
 import IconTrash from '~icons/heroicons/trash'
-import { fetchLinkedChannelsForVersion, formatLinkedChannel, unlinkLinkedChannels } from '~/services/bundleLinkedChannels'
+import { fetchLinkedChannelsForVersion, formatBundleListChannels, formatLinkedChannel, mergeBundleListChannels, unlinkLinkedChannels } from '~/services/bundleLinkedChannels'
 import { findChannelsWithoutPromotionPermission, formatChannelPromotionTargets } from '~/services/channelPromotion'
 import { formatBytes } from '~/services/conversion'
 import { formatDate } from '~/services/date'
@@ -53,7 +53,7 @@ const filters = ref({
   'deleted': false,
   'encrypted': false,
 })
-const channelCache = ref<Record<number, { name: string, id?: number }>>({})
+const channelCache = ref<Record<number, { id: number, name: string }[]>>({})
 
 const currentVersionsNumber = computed(() => {
   return (currentPage.value - 1) * offset
@@ -286,8 +286,9 @@ async function fetchChannelsForVersions(versions: Element[]) {
   }
   const channelData = [...(stableResult.data ?? []), ...(rolloutResult.data ?? [])]
   versionIds.forEach((id) => {
-    const channel = channelData?.find(c => c.version === id || c.rollout_version === id)
-    channelCache.value[id] = channel ? { name: channel.name, id: channel.id } : { name: '' }
+    const linked = channelData.filter(c => c.version === id || c.rollout_version === id)
+      .map(c => ({ id: c.id, name: c.name }))
+    channelCache.value[id] = mergeBundleListChannels(linked)
   })
 }
 
@@ -415,12 +416,31 @@ columns.value = [
     displayFunction: (elem: Element) => {
       if (elem.deleted)
         return t('deleted')
-      return channelCache.value[elem.id]?.name ?? ''
+      return formatBundleListChannels(channelCache.value[elem.id] ?? []).label
+    },
+    renderFunction: (elem: Element) => {
+      if (elem.deleted)
+        return t('deleted')
+      const channels = channelCache.value[elem.id] ?? []
+      const { label, title } = formatBundleListChannels(channels)
+      if (!label)
+        return ''
+      const single = channels.length === 1
+      return h(single ? 'button' : 'span', {
+        type: single ? 'button' : undefined,
+        class: single ? 'w-full text-left hover:underline' : 'w-full text-left',
+        title: title || undefined,
+        onClick: single
+          ? () => router.push(`/app/${props.appId}/channel/${channels[0].id}`)
+          : undefined,
+      }, label)
     },
     onClick: async (elem: Element) => {
-      if (elem.deleted || !channelCache.value[elem.id] || !channelCache.value[elem.id].id)
+      // Multi-channel rows use renderFunction only (no ambiguous navigation).
+      const channels = channelCache.value[elem.id] ?? []
+      if (elem.deleted || channels.length !== 1)
         return
-      router.push(`/app/${props.appId}/channel/${channelCache.value[elem.id].id}`)
+      router.push(`/app/${props.appId}/channel/${channels[0].id}`)
     },
   },
   {
