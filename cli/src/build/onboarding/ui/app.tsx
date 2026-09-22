@@ -48,6 +48,7 @@ import { getWorkflowDiffTelemetry, trackBuildOnboardingWorkflowEvent } from '../
 import { evaluateGate } from '../app-verification.js'
 import { exitAfterOnboardingBeforeExit } from './exit.js'
 import { trackGuidedKeyValidationFailure, trackVerifiedIosKey, verifyIosKeyWithTelemetry } from './ios-credential-action.js'
+import { trackCreatedIosCertificateResult, trackImportedIosCertificateSaveResult, trackIosCertificateCreationThrow, trackIosKeychainExportResult } from './ios-certificate-action.js'
 import { classifyCertAvailability, computeCertSha1, createCertificate, createProfile, deleteProfile, ensureBundleId, findCertIdBySha1, generateJwt, listApps, listBundleIds, listDistributionCerts, listProfilesForCert, revokeCertificate, verifyApiKey } from '../apple-api.js'
 import { runAscKeyHelper } from '../asc-key/helper.js'
 import { sanitizeBuildLogLines } from '../build-log.js'
@@ -809,6 +810,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
     },
     [appId, resolvedOrgId, step, journeyId],
   )
+  const reportedCertificateSuccessesRef = useRef(new Set<string>())
   const setupMethodShownRef = useRef(false)
   useEffect(() => {
     if (step !== 'setup-method-select') {
@@ -2308,6 +2310,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
         },
       }
 
+      let certificateEffectRunning = false
       try {
         // Run against the freshest persisted progress — the prior input steps
         // persisted p8Path / keyId / issuerId before these auto steps run, so the
@@ -2324,12 +2327,17 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
         // verify-app: surface the step loader while the initial ASC fetch runs.
         if (step === 'verify-app')
           setVerifyAppLoading(true)
+        certificateEffectRunning = step === 'creating-certificate'
         const result = await runIosEffect(step, current, deps)
+        certificateEffectRunning = false
         if (cancelled)
           return
 
         const t: Partial<IosStepCtx> | undefined = result.transient
         const np = result.progress
+
+        if (step === 'creating-certificate')
+          trackCreatedIosCertificateResult(result, journeyId, trackAction, reportedCertificateSuccessesRef.current)
 
         // ── error route: surface through the TUI's handleError so the support
         // bundle + retryCount + telemetry UX is identical to the bespoke catch ──
@@ -2476,8 +2484,11 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
           setStep(advanceTo)
       }
       catch (err) {
-        if (!cancelled)
+        if (!cancelled) {
+          if (certificateEffectRunning)
+            trackIosCertificateCreationThrow(journeyId, trackAction)
           handleErrorRef.current(err, step)
+        }
       }
     })()
 
@@ -2630,6 +2641,9 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
 
         const t: Partial<IosStepCtx> | undefined = result.transient
         const np = result.progress
+
+        if (step === 'import-exporting')
+          trackIosKeychainExportResult(result, journeyId, trackAction)
 
         // ── error route: surface through handleError so the support bundle +
         // retryCount + telemetry UX is identical to the bespoke catch ──
@@ -2933,6 +2947,9 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
 
         const t = result.transient
         const np = result.progress
+
+        if (step === 'saving-credentials')
+          trackImportedIosCertificateSaveResult(result, deps.carried ?? {}, journeyId, trackAction, reportedCertificateSuccessesRef.current)
 
         // ── Mirror engine transient → render state ─────────────────────────────
         if (t?.savedCredentials !== undefined)
