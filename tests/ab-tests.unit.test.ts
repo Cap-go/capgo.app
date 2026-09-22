@@ -41,7 +41,6 @@ const {
     ) => Promise<boolean | undefined>>(async () => true),
   }
 })
-
 vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
   syncBentoSubscriberTags: syncBentoSubscriberTagsMock,
 }))
@@ -155,9 +154,6 @@ function queueBentoSnapshot(user: Record<string, unknown>, writesState = false) 
 
 describe('new-user A/B test assignment', () => {
   beforeEach(async () => {
-    // Existing reconciliation cases explicitly exercise the original experiments.
-    const module = await loadABTestsModule()
-    delete module.AB_TESTS_CONFIG.ota_todo_list_v3
     vi.resetAllMocks()
     pgConnectMock.mockImplementation(async () => ({ query: pgQueryMock, release: pgReleaseMock }))
     getPgClientMock.mockImplementation(() => ({ connect: pgConnectMock }))
@@ -190,7 +186,7 @@ describe('new-user A/B test assignment', () => {
     expect(source).toContain('getPgClient(c, false)')
     expect(source).toContain('drizzle.transaction(async (tx) =>')
     expect(source).toContain('FOR UPDATE')
-    expect(source).toContain("SET LOCAL lock_timeout = '2s'")
+    expect(source).toContain('SET LOCAL lock_timeout = \'2s\'')
     expect(source).toContain('AbortSignal.timeout(BENTO_AB_TEST_SYNC_TIMEOUT_MS)')
   })
 
@@ -1271,19 +1267,5 @@ describe('new-user A/B test assignment', () => {
 
     expect(getPgClientMock).not.toHaveBeenCalled()
     expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
-  })
-})
-
-
-describe('OTA checklist experiment', () => {
-  it.each([0, 0.4999, 0.5, 0.9999])('assigns the OTA checklist treatment at %s without wizard-version changes', async (random) => {
-    const module = await loadABTestsModule()
-    const raw = JSON.parse(await readFile(new URL('../supabase/functions/_backend/utils/ab_tests.json', import.meta.url), 'utf8'))
-    const config = module.validateABTestsConfig({ ota_todo_list_v3: raw.ota_todo_list_v3 })
-    expect(config.ota_todo_list_v3.treatment_percentage).toBe(100)
-    for (const intent of ['ota', 'both', 'builder', 'exploring', 'publish']) {
-      const assignments = module.createABTestAssignments({ created_via_invite: false, intent }, config, () => random, () => FIXED_DATE)
-      expect(assignments).toEqual(intent === 'ota' ? { ota_todo_list_v3: { branch: 'A', assigned_at: FIXED_DATE.toISOString() } } : {})
-    }
   })
 })

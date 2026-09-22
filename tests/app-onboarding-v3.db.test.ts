@@ -6,10 +6,14 @@ import { APP_ONBOARDING_OTA_V1_STEP_IDS, APP_ONBOARDING_V3_STEP_IDS, parseAppOnb
 
 const admin = createClient(env.SUPABASE_URL!, env.SUPABASE_SERVICE_KEY!, { auth: { persistSession: false, autoRefreshToken: false } })
 
-describe('persisted app checklist v3', () => {
+describe('persisted app checklists', () => {
   it.concurrent.each([
-    ['ota', 'A', true, 4], ['ota', 'B', true, 2], ['both', 'A', true, 2], ['builder', 'A', true, 2], ['ota', 'A', false, 2],
-  ])('assigns %s/%s with creator-owned org=%s to version %s only at insert', async (intent, branch, ownOrg, expectedVersion) => {
+    ['ota', 'ota', null, true, 4],
+    ['ota', 'builder', 'B', false, 4],
+    ['both', 'ota', 'A', true, 2],
+    ['builder', 'ota', 'A', true, 2],
+    ['unknown', 'ota', 'A', true, 2],
+  ] as const)('assigns org intent %s, creator intent %s, saved branch %s, creator-owned org %s to version %s', async (orgIntent, creatorIntent, branch, ownOrg, expectedVersion) => {
     const email = `onboarding-v3-${randomUUID()}@example.com`
     const created = await admin.auth.admin.createUser({ email, password: 'v3test-password', email_confirm: true })
     expect(created.error).toBeNull()
@@ -18,16 +22,19 @@ describe('persisted app checklist v3', () => {
     const appIds: string[] = []
     const orgIds: string[] = []
     try {
-      expect((await admin.from('users').upsert({ id: userId, email, onboarding: { intent, abtests: { ota_todo_list_v3: { branch, assigned_at: new Date().toISOString() } } } })).error).toBeNull()
+      expect((await admin.from('users').upsert({ id: userId, email, onboarding: {
+        intent: creatorIntent,
+        abtests: branch ? { ota_todo_list_v3: { branch, assigned_at: new Date().toISOString() } } : {},
+      } })).error).toBeNull()
       if (!ownOrg) {
         const other = await admin.auth.admin.createUser({ email: `onboarding-v3-other-${randomUUID()}@example.com`, password: 'v3test-password', email_confirm: true })
         expect(other.error).toBeNull()
         otherUserId = other.data.user!.id
         expect((await admin.from('users').upsert({ id: otherUserId, email: other.data.user!.email })).error).toBeNull()
       }
-      // Two separate organizations ensure the assignment is not limited to the wizard's first org.
+      // Both apps keep their insert-time versions when intent and assignments change.
       for (let n = 0; n < 2; n++) {
-        const org = await admin.from('orgs').insert({ created_by: otherUserId ?? userId, name: `Checklist v3 ${randomUUID()}`, management_email: email }).select('id').single()
+        const org = await admin.from('orgs').insert({ created_by: otherUserId ?? userId, name: `Checklist v3 ${randomUUID()}`, management_email: email, onboarding: { intent: orgIntent } }).select('id').single()
         expect(org.error).toBeNull()
         orgIds.push(org.data!.id)
         const appId = `com.onboarding.v3.${randomUUID()}`
@@ -46,6 +53,7 @@ describe('persisted app checklist v3', () => {
         }
       }
       expect((await admin.from('users').update({ onboarding: { intent: 'builder', abtests: {} } }).eq('id', userId)).error).toBeNull()
+      expect((await admin.from('orgs').update({ onboarding: { intent: orgIntent === 'ota' ? 'builder' : 'ota' } }).in('id', orgIds)).error).toBeNull()
       expect((await admin.from('apps').update({ name: 'Renamed' }).in('app_id', appIds)).error).toBeNull()
       const apps = await admin.from('apps').select('onboarding').in('app_id', appIds)
       expect(apps.error).toBeNull()
@@ -63,7 +71,33 @@ describe('persisted app checklist v3', () => {
     }
   })
 
-  it.concurrent('SQL merge requires all seven v3 milestones and preserves legacy v2 completion', async () => {
+  it.concurrent('assigns OTA v4 from the organization even without a creator ledger', async () => {
+    const email = `onboarding-org-${randomUUID()}@example.com`
+    const orgId = randomUUID()
+    const appId = `com.onboarding.org.${randomUUID()}`
+    let userId: string | undefined
+    try {
+      const created = await admin.auth.admin.createUser({ email, password: 'v3test-password', email_confirm: true })
+      expect(created.error).toBeNull()
+      userId = created.data.user!.id
+      expect((await admin.from('users').upsert({ id: userId, email, onboarding: { intent: 'builder' } })).error).toBeNull()
+      expect((await admin.from('orgs').insert({ id: orgId, created_by: userId, name: 'OTA organization checklist test', management_email: email, onboarding: { intent: 'ota' } })).error).toBeNull()
+      const app = await admin.from('apps').insert({ app_id: appId, owner_org: orgId, name: 'OTA organization checklist test', icon_url: '' }).select('onboarding').single()
+      expect(app.error).toBeNull()
+      expect((app.data!.onboarding as any).setup.todo_list_version).toBe(4)
+      expect((app.data!.onboarding as any).created_by_user_id).toBeUndefined()
+    }
+    finally {
+      await admin.from('apps').delete().eq('app_id', appId)
+      await admin.from('orgs').delete().eq('id', orgId)
+      if (userId) {
+        await admin.from('users').delete().eq('id', userId)
+        await admin.auth.admin.deleteUser(userId)
+      }
+    }
+  })
+
+  it.concurrent('sql merge requires all seven v3 milestones and preserves legacy v2 completion', async () => {
     const current = { setup: { todo_list_version: 3, steps: {} }, features: { ota: { stage: 'local_only' } } }
     const premature = await admin.rpc('merge_app_onboarding_setup', { p_existing: current, p_patch: { outcome: 'completed', steps: { completion: { status: 'done' } } } })
     expect(premature.error).toBeNull()
@@ -77,7 +111,7 @@ describe('persisted app checklist v3', () => {
     expect(parseAppOnboarding(control.data).outcome).toBe('completed')
   })
 
-  it.concurrent('SQL merge keeps all v4 OTA steps and preserves future path data', async () => {
+  it.concurrent('sql merge keeps all v4 OTA steps and preserves future path data', async () => {
     const current = { setup: { todo_list_version: 4, ota_todo_list_version: '1', paths: ['ota'], selected_path: 'ota', steps: { ota: Object.fromEntries(APP_ONBOARDING_OTA_V1_STEP_IDS.map(id => [id, { status: 'pending' }])), builder: { placeholder: { status: 'pending' } } } }, features: { ota: { stage: 'local_only' } } }
     const premature = await admin.rpc('merge_app_onboarding_setup', { p_existing: current, p_patch: { outcome: 'completed', steps: { ota: { add_code: { status: 'done' } } } } })
     expect(premature.error).toBeNull()
@@ -92,7 +126,7 @@ describe('persisted app checklist v3', () => {
     expect(parseAppOnboarding(completed.data).outcome).toBe('completed')
   })
 
-  it.concurrent('SQL merge leaves unknown and numeric v4 OTA versions untouched', async () => {
+  it.concurrent('sql merge leaves unknown and numeric v4 OTA versions untouched', async () => {
     for (const version of ['2', 1]) {
       const current = { setup: { todo_list_version: 4, ota_todo_list_version: version, steps: { ota: { add_code: { status: 'pending' } } } } }
       const result = await admin.rpc('merge_app_onboarding_setup', { p_existing: current, p_patch: { steps: { add_code: { status: 'done' } }, outcome: 'completed' } })
