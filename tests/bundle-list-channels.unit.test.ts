@@ -37,4 +37,18 @@ describe('bundle list channel labels', () => {
       title: 'alpha, beta, gamma',
     })
   })
+
+  it('preserves explicit channel id 0', () => {
+    expect(mergeBundleListChannels([
+      { id: 0, name: 'zero' },
+      { id: 1, name: 'one' },
+    ])).toEqual([
+      { id: 1, name: 'one' },
+      { id: 0, name: 'zero' },
+    ])
+    expect(formatBundleListChannels([{ id: 0, name: 'zero' }])).toEqual({
+      label: 'zero',
+      title: 'zero',
+    })
+  })
 })

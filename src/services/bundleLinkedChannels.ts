@@ -97,7 +97,7 @@ export interface BundleListChannel {
 export function mergeBundleListChannels(channels: BundleListChannel[]): BundleListChannel[] {
   const byId = new Map<number, BundleListChannel>()
   for (const channel of channels) {
-    if (!channel?.id || !channel.name)
+    if (channel?.id == null || !channel.name)
       continue
     byId.set(channel.id, { id: channel.id, name: channel.name })
   }
