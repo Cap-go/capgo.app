@@ -435,13 +435,6 @@ columns.value = [
           : undefined,
       }, label)
     },
-    onClick: async (elem: Element) => {
-      // Multi-channel rows use renderFunction only (no ambiguous navigation).
-      const channels = channelCache.value[elem.id] ?? []
-      if (elem.deleted || channels.length !== 1)
-        return
-      router.push(`/app/${props.appId}/channel/${channels[0].id}`)
-    },
   },
   {
     label: t('size'),
