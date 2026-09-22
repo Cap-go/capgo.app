@@ -69,6 +69,8 @@ export type BuilderOnboardingAction
     | 'credential_verification_failed'
     | 'certificate_prepared'
     | 'certificate_preparation_failed'
+    | 'keystore_prepared'
+    | 'keystore_preparation_failed'
 
 export interface TrackBuilderOnboardingActionInput {
   apikey: string
