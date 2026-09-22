@@ -331,7 +331,7 @@ export function applyAppOnboardingPatch(
   const rawSteps = isRecord(rawSetup.steps) ? rawSetup.steps : {}
   const isV4 = setup.todo_list_version === 4
   const isOtaV1 = isV4 && setup.ota_todo_list_version === APP_ONBOARDING_OTA_V1_VERSION
-  const rawCurrentSteps = isV4 && isRecord(rawSteps.ota) ? rawSteps.ota : rawSteps
+  const rawCurrentSteps = isOtaV1 && isRecord(rawSteps.ota) ? rawSteps.ota : rawSteps
   for (const id of Object.keys(setup.steps) as AppOnboardingStepId[]) {
     if (isRecord(rawCurrentSteps[id]))
       setup.steps[id] = { ...rawCurrentSteps[id], ...setup.steps[id]! }
@@ -353,7 +353,9 @@ export function applyAppOnboardingPatch(
 function getRawStepRecords(value: unknown): Record<string, unknown> {
   const setup = parseSetupRecord(value)
   const steps = isRecord(setup.steps) ? setup.steps : {}
-  return parseTodoListVersion(setup.todo_list_version) === 4 && isRecord(steps.ota) ? steps.ota : steps
+  if (parseTodoListVersion(setup.todo_list_version) !== 4)
+    return steps
+  return setup.ota_todo_list_version === APP_ONBOARDING_OTA_V1_VERSION && isRecord(steps.ota) ? steps.ota : {}
 }
 
 export function appendAppOnboardingStepHistory(
@@ -365,6 +367,7 @@ export function appendAppOnboardingStepHistory(
   const merged = isRecord(mergedValue) ? { ...mergedValue } : {}
   const mergedSetup = parseSetupRecord(merged)
   const isV4 = parseTodoListVersion(mergedSetup.todo_list_version) === 4
+  const isOtaV4 = isV4 && mergedSetup.ota_todo_list_version === APP_ONBOARDING_OTA_V1_VERSION
   const mergedStepPaths = isRecord(mergedSetup.steps) ? { ...mergedSetup.steps } : {}
   const mergedSteps = { ...getRawStepRecords(merged) }
   const currentStepRecords = getRawStepRecords(currentValue)
@@ -384,7 +387,7 @@ export function appendAppOnboardingStepHistory(
     ...merged,
     setup: {
       ...mergedSetup,
-      steps: isV4 ? { ...mergedStepPaths, ota: mergedSteps } : mergedSteps,
+      steps: isOtaV4 ? { ...mergedStepPaths, ota: mergedSteps } : isV4 ? mergedStepPaths : mergedSteps,
     },
   }
 }

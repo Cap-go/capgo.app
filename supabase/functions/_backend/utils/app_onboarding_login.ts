@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from './hono.ts'
 import { sql } from 'drizzle-orm'
 import { buildAppOnboardingStepPosthogEvent } from './app_onboarding_posthog.ts'
-import { appendAppOnboardingStepHistory, applyAppOnboardingPatch, getAppOnboardingStepHistoryChanges, parseAppOnboarding, pickAppOnboardingSource } from './appOnboarding.ts'
+import { appendAppOnboardingStepHistory, applyAppOnboardingPatch, getAppOnboardingStepHistoryChanges, hasSupportedOtaTodoList, parseAppOnboarding, pickAppOnboardingSource } from './appOnboarding.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
 import { trackPosthogEvent } from './posthog.ts'
@@ -37,14 +37,18 @@ export async function markAppOnboardingLoginFromTracking(
         FROM public.apps
         WHERE onboarding ->> 'created_by_user_id' = ${auth.userId}
           AND onboarding #>> '{setup,todo_list_version}' IN ('2', '3', '4')
+          AND (onboarding #>> '{setup,todo_list_version}' <> '4'
+            OR onboarding #>> '{setup,ota_todo_list_version}' = '1')
         FOR UPDATE
       `)
       const changes = []
       for (const app of result.rows) {
+        const current = parseAppOnboarding(app.onboarding)
+        // A v4 Builder-only app has no OTA login milestone to update.
+        if (current.todo_list_version === 4 && !hasSupportedOtaTodoList(current))
+          continue
         if (!(await checkPermissionPg(c, 'app.read', { appId: app.app_id }, tx, auth.userId, apikey)))
           continue
-
-        const current = parseAppOnboarding(app.onboarding)
         if (current.steps.login_cli_mcp?.status === 'done'
           && pickAppOnboardingSource(current.source, source) === current.source)
           continue

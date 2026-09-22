@@ -281,3 +281,26 @@ describe('OTA checklist v4', () => {
     expect(filterAppOnboardingReportedPatch(current, { steps: { add_code: { status: 'done' }, run_device: { status: 'done' } } }).steps).toEqual({ add_code: { status: 'done' } })
   })
 })
+
+describe('Builder-only checklist v4', () => {
+  it.concurrent('preserves Builder steps without creating an OTA path during legacy progress updates', () => {
+    const current = { setup: {
+      todo_list_version: 4,
+      builder_todo_list_version: '1',
+      paths: ['builder'],
+      selected_path: 'builder',
+      steps: { builder: { ios: { start_setup: { status: 'pending' } }, android: { start_setup: { status: 'pending' } } } },
+    } }
+    const patch = { source: 'cli' as const, steps: { login_cli_mcp: { status: 'done' as const } } }
+    const merged = applyAppOnboardingPatch(current, patch)
+    const withHistory = appendAppOnboardingStepHistory(current, merged, patch)
+    const setup = withHistory.setup as any
+
+    expect(hasSupportedOtaTodoList(parseAppOnboarding(withHistory))).toBe(false)
+    expect(setup.steps).toEqual(current.setup.steps)
+    expect(setup.paths).toEqual(['builder'])
+    expect(setup.selected_path).toBe('builder')
+    expect(setup.outcome).toBe('in_progress')
+    expect(getAppOnboardingStepHistoryChanges(current, withHistory, patch)).toEqual([])
+  })
+})
