@@ -241,27 +241,31 @@ async function stop(ui) {
 
 {
   let resolveFirst
+  let firstRequest
   let opened = 0
   const ui = renderGate({
     openDashboard: () => {
-      if (++opened === 1)
-        return new Promise((resolve) => { resolveFirst = resolve })
+      if (++opened === 1) {
+        firstRequest = new Promise((resolve) => { resolveFirst = resolve })
+        return firstRequest
+      }
       return Promise.resolve(true)
     },
   })
   await waitFor(() => ui.stdout.lastFrame.includes('No apps are visible to this API key'), 'Dashboard race initial picker')
   ui.stdin.send('j')
-  await new Promise(resolve => setTimeout(resolve, 30))
+  await waitFor(() => ui.stdout.lastFrame.includes('❯ Open Dashboard'), 'first Dashboard choice')
   ui.stdin.send('\r')
   await waitFor(() => opened === 1 && ui.stdout.lastFrame.includes('Create the app in your browser'), 'first Dashboard request')
   ui.stdin.send('\x1B')
   await waitFor(() => ui.stdout.lastFrame.includes('No apps are visible to this API key'), 'return from Dashboard')
   ui.stdin.send('j')
-  await new Promise(resolve => setTimeout(resolve, 30))
+  await waitFor(() => ui.stdout.lastFrame.includes('❯ Open Dashboard'), 'second Dashboard choice')
   ui.stdin.send('\r')
   await waitFor(() => opened === 2 && ui.stdout.lastFrame.includes('Create the app in your browser'), 'second Dashboard request')
   resolveFirst(false)
-  await new Promise(resolve => setTimeout(resolve, 50))
+  await firstRequest
+  await new Promise(resolve => setImmediate(resolve))
   assert.doesNotMatch(ui.stdout.lastFrame, /Open this URL in your browser/, 'an older Dashboard result cannot replace the current request')
   await stop(ui)
 }
