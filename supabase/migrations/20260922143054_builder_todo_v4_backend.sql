@@ -12,8 +12,7 @@ Builder v1 uses setup.builder_todo_list_version="1" and
 setup.steps.builder.ios/android. Each path is present only when assigned.
 Manual is the default when setup.source is missing.';
 
--- Fixed, testable initializer. The app-insert trigger does not call it until
--- the Builder experiment assignment is wired in a later migration.
+-- Fixed, testable initializer for manually assigned Builder treatment apps.
 CREATE OR REPLACE FUNCTION public.new_builder_onboarding_setup_v1()
 RETURNS jsonb
 LANGUAGE sql
@@ -50,9 +49,8 @@ ALTER FUNCTION public.new_builder_onboarding_setup_v1() OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.new_builder_onboarding_setup_v1() FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.new_builder_onboarding_setup_v1() TO service_role;
 
--- Existing OTA assignment stays active. Builder assignment is deliberately
--- disabled until builder_todo_list_v4 (Builder-intent, 0% automatic assignment)
--- exists and a later migration replaces FALSE with a branch-A check.
+-- OTA v4 follows the owning organization's intent. Builder v4 is restricted
+-- to a creator-owned organization and a manually assigned treatment branch.
 CREATE OR REPLACE FUNCTION public.assign_app_onboarding_todo_list_version()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -69,16 +67,16 @@ BEGIN
     v_creator := (NEW.onboarding ->> 'created_by_user_id')::uuid;
   END IF;
   IF EXISTS (
-    SELECT 1 FROM public.users AS u
-    JOIN public.orgs AS o ON o.id = NEW.owner_org
-    WHERE u.id = v_creator AND o.created_by = u.id
-      AND u.onboarding ->> 'intent' = 'ota'
-      AND u.onboarding #>> '{abtests,ota_todo_list_v3,branch}' = 'A'
+    SELECT 1 FROM public.orgs AS o
+    WHERE o.id = NEW.owner_org
+      AND o.onboarding ->> 'intent' = 'ota'
   ) THEN
     v_setup := CASE WHEN pg_catalog.jsonb_typeof(NEW.onboarding -> 'setup') = 'object'
       THEN NEW.onboarding -> 'setup' ELSE '{}'::jsonb END;
-    NEW.onboarding := COALESCE(NEW.onboarding, '{}'::jsonb)
-      || pg_catalog.jsonb_build_object('created_by_user_id', v_creator::text);
+    IF v_creator IS NOT NULL THEN
+      NEW.onboarding := COALESCE(NEW.onboarding, '{}'::jsonb)
+        || pg_catalog.jsonb_build_object('created_by_user_id', v_creator::text);
+    END IF;
     NEW.onboarding := pg_catalog.jsonb_set(COALESCE(NEW.onboarding, '{}'::jsonb), '{setup}',
       v_setup || pg_catalog.jsonb_build_object(
         'todo_list_version', 4,
@@ -95,10 +93,13 @@ BEGIN
           'test_update', pg_catalog.jsonb_build_object('status', 'pending')
         ))
       ), true);
-  -- Replace FALSE only after the experiment PR merges. The future predicate
-  -- must verify Builder intent, creator-owned organization, and branch A at
-  -- users.onboarding #>> '{abtests,builder_todo_list_v4,branch}'.
-  ELSIF FALSE THEN
+  ELSIF EXISTS (
+    SELECT 1 FROM public.users AS u
+    JOIN public.orgs AS o ON o.id = NEW.owner_org
+    WHERE u.id = v_creator AND o.created_by = u.id
+      AND u.onboarding ->> 'intent' = 'builder'
+      AND u.onboarding #>> '{abtests,builder_todo_list_v4,branch}' = 'A'
+  ) THEN
     v_setup := CASE WHEN pg_catalog.jsonb_typeof(NEW.onboarding -> 'setup') = 'object'
       THEN NEW.onboarding -> 'setup' ELSE '{}'::jsonb END;
     NEW.onboarding := COALESCE(NEW.onboarding, '{}'::jsonb)
