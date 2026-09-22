@@ -67,6 +67,8 @@ export type BuilderOnboardingAction
     | 'android_sa_validation_result'
     | 'credential_verified'
     | 'credential_verification_failed'
+    | 'certificate_prepared'
+    | 'certificate_preparation_failed'
 
 export interface TrackBuilderOnboardingActionInput {
   apikey: string
