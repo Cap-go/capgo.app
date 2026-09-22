@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { z } from 'zod'
 import type { onboardingRefreshBody } from './app_onboarding_refresh.ts'
+import type { TodoEvidenceResult } from './app_onboarding_todo_evidence.ts'
 import type { AppOnboardingPatch, AppOnboardingStepHistoryChange } from './appOnboarding.ts'
 import type { MiddlewareKeyVariables } from './hono.ts'
 import type { getDrizzleClient } from './pg.ts'
@@ -28,6 +29,20 @@ interface StepEvent {
   changes: AppOnboardingStepHistoryChange[]
 }
 
+function positiveTodoPatch(row: LockedApp, evidence: TodoEvidenceResult, at: string): AppOnboardingPatch {
+  const needs = getTodoEvidenceNeeds(row.onboarding)
+  const patch: AppOnboardingPatch = { steps: {} }
+  if (needs.channel && evidence.channel.has(row.app_id))
+    patch.steps!.add_channel = { status: 'done', at }
+  if (needs.device && evidence.device.has(row.app_id))
+    patch.steps!.run_device = { status: 'done', at }
+  if (needs.bundle && evidence.bundle.has(row.app_id))
+    patch.steps!.upload_bundle = { status: 'done', at }
+  if (needs.update && evidence.update.has(row.app_id))
+    patch.steps!.test_update = { status: 'done', at }
+  return patch
+}
+
 export async function refreshAppOnboardingTodoBatch(
   c: Context<MiddlewareKeyVariables>,
   database: Database,
@@ -47,7 +62,7 @@ export async function refreshAppOnboardingTodoBatch(
   if (evidence.truncated.length)
     cloudlog({ requestId: c.get('requestId'), message: 'onboarding todo evidence query truncated', appIds: evidence.truncated })
 
-  const positiveIds = [...new Set([...evidence.channel, ...evidence.device, ...evidence.bundle, ...evidence.update])].sort()
+  const positiveIds = [...new Set([...evidence.channel, ...evidence.device, ...evidence.bundle, ...evidence.update])].sort((a, b) => a.localeCompare(b))
   if (!positiveIds.length)
     return { updated: 0, steps: 0, cfErrors: evidence.errors.length, cfTruncated: evidence.truncated.length }
 
@@ -64,17 +79,8 @@ export async function refreshAppOnboardingTodoBatch(
     const changed: StepEvent[] = []
     const updates: Array<{ app_id: string, onboarding: Record<string, unknown> }> = []
     for (const row of rows) {
-      const needs = getTodoEvidenceNeeds(row.onboarding)
       const at = new Date().toISOString()
-      const patch: AppOnboardingPatch = { steps: {} }
-      if (needs.channel && evidence.channel.has(row.app_id))
-        patch.steps!.add_channel = { status: 'done', at }
-      if (needs.device && evidence.device.has(row.app_id))
-        patch.steps!.run_device = { status: 'done', at }
-      if (needs.bundle && evidence.bundle.has(row.app_id))
-        patch.steps!.upload_bundle = { status: 'done', at }
-      if (needs.update && evidence.update.has(row.app_id))
-        patch.steps!.test_update = { status: 'done', at }
+      const patch = positiveTodoPatch(row, evidence, at)
       if (!Object.keys(patch.steps!).length)
         continue
 
