@@ -57,6 +57,7 @@ declare module 'vue' {
     BuildTimeCard: typeof import('./components/dashboard/BuildTimeCard.vue')['default']
     BuildTimeChart: typeof import('./components/dashboard/BuildTimeChart.vue')['default']
     BundleAdoptionCard: typeof import('./components/bundle/BundleAdoptionCard.vue')['default']
+    BundleChannelsPopover: typeof import('./components/tables/BundleChannelsPopover.vue')['default']
     BundleCompareSelect: typeof import('./components/bundle/BundleCompareSelect.vue')['default']
     BundleInstallStatsPanel: typeof import('./components/dashboard/BundleInstallStatsPanel.vue')['default']
     BundleMultiFilter: typeof import('./components/tables/BundleMultiFilter.vue')['default']
