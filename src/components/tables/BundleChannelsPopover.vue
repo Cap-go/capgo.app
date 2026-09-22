@@ -67,19 +67,21 @@ function closePanel() {
   isOpen.value = false
 }
 
-async function openPanel() {
+async function openPanel(focusFirstChannel = false) {
   cancelClose()
   updatePopoverPosition()
   isOpen.value = true
   await nextTick()
   updatePopoverPosition()
+  if (focusFirstChannel)
+    popoverRef.value?.querySelector<HTMLButtonElement>('button')?.focus()
 }
 
-function togglePanel() {
+function togglePanel(focusFirstChannel = false) {
   if (isOpen.value)
     closePanel()
   else
-    void openPanel()
+    void openPanel(focusFirstChannel)
 }
 
 function onTriggerClick(event: MouseEvent) {
@@ -90,7 +92,7 @@ function onTriggerClick(event: MouseEvent) {
     return
   }
   if (event.detail === 0) {
-    togglePanel()
+    togglePanel(true)
     return
   }
   if (finePointer.value) {
