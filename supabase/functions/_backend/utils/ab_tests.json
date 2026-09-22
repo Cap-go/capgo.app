@@ -67,5 +67,17 @@
         "label": "Current checklist"
       }
     }
+  },
+  "builder_todo_list_v4": {
+    "audience": "all",
+    "intents": ["builder"],
+    "label": "Builder setup checklist v4",
+    "treatment_percentage": 0,
+    "treatment_branch": "A",
+    "control_branch": "B",
+    "branches": {
+      "A": { "bento_tag": "ab:builder_todo_list_v4", "label": "Builder v1 checklist" },
+      "B": { "bento_tag": "ab:no_builder_todo_list_v4", "label": "Current checklist" }
+    }
   }
 }
