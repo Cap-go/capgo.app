@@ -38,7 +38,8 @@ describe('queued onboarding todo refresh', () => {
           features: { ota: { stage: 'test' } },
           custom: { keep: true },
         }
-        await pool.query('INSERT INTO public.apps(app_id,owner_org,name,icon_url,need_onboarding,onboarding) VALUES ($1,$2,$3,$4,false,$5::jsonb)', [appId, orgId, 'Todo cron fixture', '', JSON.stringify(onboarding)])
+        await pool.query('INSERT INTO public.apps(app_id,owner_org,name,icon_url,need_onboarding) VALUES ($1,$2,$3,$4,false)', [appId, orgId, 'Todo cron fixture', ''])
+        await pool.query('UPDATE public.apps SET onboarding=$2::jsonb WHERE app_id=$1', [appId, JSON.stringify(onboarding)])
       }
 
       const c = { get: (key: string) => key === 'APISecret' ? true : 'test-request', req: { header: () => 'true' } } as any
