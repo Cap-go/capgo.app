@@ -170,12 +170,10 @@ const BuilderAppSelectionGate: FC<BuilderAppSelectionGateProps> = ({ apikey, sug
 
   useInput((input, key) => {
     if (key.escape) {
-      if (view === 'main') {
+      if (view === 'main')
         onCancel()
-      }
-      else if (view === 'error' && apps.length === 0) {
+      else if (view === 'error' && apps.length === 0)
         onCancel()
-      }
       else if (view === 'all' || view === 'dashboard' || view === 'error') {
         setIndex(0)
         setView('main')
@@ -219,83 +217,58 @@ const BuilderAppSelectionGate: FC<BuilderAppSelectionGateProps> = ({ apikey, sug
     return <TerminalTooSmallPrompt cols={cols} rows={rows} minCols={PICKER_MIN_COLS} minRows={PICKER_MIN_ROWS} />
 
   const compact = cols < 64 || rows < 18
-  const framed = cols >= 80 && rows >= 23
-  const panelWidth = Math.min(76, cols - 4)
-  const optionLimit = compact ? Math.max(1, rows - 9) : framed ? Math.max(3, rows - 17) : Math.max(3, rows - 16)
+  const optionLimit = compact ? Math.max(1, rows - 9) : Math.max(3, rows - 16)
   const start = Math.max(0, boundedIndex - optionLimit + 1)
   const visibleChoices = choices.slice(start, start + optionLimit)
   const suggestionLabel = suggestedSource === 'builder' ? 'Your Builder app ID:' : 'Your Capacitor app ID:'
 
   return (
-    <Box flexDirection="column" minHeight={rows} padding={compact || framed ? 0 : 1} justifyContent={framed ? 'center' : undefined}>
-      <Box flexDirection="column" alignSelf={framed ? 'center' : undefined} width={framed ? panelWidth : '100%'} paddingX={framed ? 2 : 0} backgroundColor={framed ? '#262626' : undefined}>
-        {compact ? <Text bold color="cyan">Capgo Cloud Build · Onboarding</Text> : <Header width={framed ? panelWidth - 4 : 44} />}
-        {(view === 'loading' || view === 'verifying') && (
-          <Box flexGrow={1} flexDirection="column" justifyContent="center" alignItems="center">
-            <Text color="cyan"><Spinner type="dots" /></Text>
-            <Text color={framed ? 'white' : undefined}>{view === 'loading' ? 'Checking Capgo apps…' : 'Checking app access…'}</Text>
-          </Box>
-        )}
-        {(view === 'main' || view === 'all') && (
-          <Box flexDirection="column" marginTop={compact ? 0 : 1}>
-            <Text bold color={framed ? 'white' : undefined}>Which Capgo app should Builder use?</Text>
-            <Box>
-              <Text color={framed ? 'white' : undefined} wrap="wrap">
-                {suggestionLabel}
-                {' '}
-                <Text bold>{suggestedId}</Text>
-              </Text>
-            </Box>
-            <Text color="yellow">No app with this ID is available to your API key. It may exist in Capgo, but you or your API key might lack access to it.</Text>
-            {view === 'all'
-              ? <Text dimColor wrap="truncate-end">{`Search visible apps: ${query}█`}</Text>
-              : <Text dimColor>{apps.length === 0 ? 'No apps are visible to this API key.' : apps.length === 1 ? 'App visible to your API key:' : 'Apps visible to your API key (closest IDs first):'}</Text>}
-          </Box>
-        )}
-        {view === 'error' && (
-          <Box flexDirection="column" marginTop={1}>
-            <Text bold color="red">{retryApp ? 'Could not continue with this app' : 'Could not load Capgo apps'}</Text>
-            <Text color="red">{error}</Text>
-          </Box>
-        )}
-        {view === 'dashboard' && (
-          <Box flexDirection="column" marginTop={1}>
-            <Text bold color={framed ? 'white' : undefined}>{`Open Dashboard to create ${suggestedId}`}</Text>
-            <Text color={framed ? 'white' : undefined}>{dashboardOpened ? 'Create the app in your browser, then return here.' : 'Open this URL in your browser:'}</Text>
-            {!dashboardOpened && <Text color="cyan" wrap="wrap">{services.dashboardUrl}</Text>}
-            <Text color="green">❯ I've created it — check again</Text>
-            <Text dimColor>Enter checks again · Esc goes back</Text>
-          </Box>
-        )}
-        {(view === 'main' || view === 'all' || view === 'error') && (
-          <Box flexDirection="column" marginTop={compact || framed ? 0 : 1}>
-            {framed && <Box borderStyle="single" borderColor="gray" borderTop borderBottom={false} borderLeft={false} borderRight={false} />}
-            {view === 'all' && filteredApps.length === 0 && <Text dimColor>No matching apps</Text>}
-            {visibleChoices.map((choice, offset) => {
-              const selected = start + offset === boundedIndex
-              const label = choice.kind === 'app'
-                ? visibleAppLabel(choice.app)
-                : choice.kind === 'all'
-                  ? 'Select a different app…'
-                  : choice.kind === 'login'
-                    ? 'Log in with another API key'
-                    : choice.kind === 'dashboard'
-                      ? `Open Dashboard to create ${suggestedId}`
-                      : choice.kind === 'retry'
-                        ? 'Retry'
-                        : 'Back to suggested apps'
-              return (
-                <Box key={`${choice.kind}-${choice.kind === 'app' ? choice.app.app_id : ''}`} width={framed ? '100%' : undefined} paddingX={framed ? 1 : 0} backgroundColor={framed && selected ? '#345548' : undefined}>
-                  <Text color={selected ? framed ? '#d3f3e3' : 'green' : framed ? 'white' : undefined} bold={selected} wrap="truncate-middle">{`${selected ? '❯' : ' '} ${label}`}</Text>
-                </Box>
-              )
-            })}
-            {compact && choices.length > optionLimit && <Text dimColor>↑ ↓ more choices</Text>}
-            {!compact && <Text dimColor>↑ ↓ choose · Enter select · Esc back</Text>}
-          </Box>
-        )}
-        {!compact && footer}
-      </Box>
+    <Box flexDirection="column" minHeight={rows} padding={compact ? 0 : 1}>
+      {compact ? <Text bold color="cyan">Capgo Cloud Build · Onboarding</Text> : <Header />}
+      {(view === 'loading' || view === 'verifying') && (
+        <Box flexGrow={1} flexDirection="column" justifyContent="center" alignItems="center">
+          <Text color="cyan"><Spinner type="dots" /></Text>
+          <Text>{view === 'loading' ? 'Checking Capgo apps…' : 'Checking app access…'}</Text>
+        </Box>
+      )}
+      {(view === 'main' || view === 'all') && (
+        <Box flexDirection="column" marginTop={compact ? 0 : 1}>
+          <Text bold>Which Capgo app should Builder use?</Text>
+          <Text wrap="truncate-middle">{`${suggestionLabel} ${suggestedId}`}</Text>
+          <Text color="yellow">No app with this ID is available to your API key. It may exist in Capgo, but you or your API key might lack access to it.</Text>
+          {view === 'all'
+            ? <Text dimColor wrap="truncate-end">{`Search visible apps: ${query}█`}</Text>
+            : <Text dimColor>{apps.length === 0 ? 'No apps are visible to this API key.' : apps.length === 1 ? 'App visible to your API key:' : 'Apps visible to your API key (closest IDs first):'}</Text>}
+        </Box>
+      )}
+      {view === 'error' && <Box flexDirection="column" marginTop={1}><Text bold color="red">{retryApp ? 'Could not continue with this app' : 'Could not load Capgo apps'}</Text><Text color="red">{error}</Text></Box>}
+      {view === 'dashboard' && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold>Open Dashboard to create {suggestedId}</Text>
+          <Text>{dashboardOpened ? 'Create the app in your browser, then return here.' : 'Open this URL in your browser:'}</Text>
+          {!dashboardOpened && <Text color="cyan" wrap="wrap">{services.dashboardUrl}</Text>}
+          <Text color="green">❯ I've created it — check again</Text>
+          <Text dimColor>Enter checks again · Esc goes back</Text>
+        </Box>
+      )}
+      {(view === 'main' || view === 'all' || view === 'error') && (
+        <Box flexDirection="column" marginTop={compact ? 0 : 1}>
+          {view === 'all' && filteredApps.length === 0 && <Text dimColor>No matching apps</Text>}
+          {visibleChoices.map((choice, offset) => {
+            const selected = start + offset === boundedIndex
+            const label = choice.kind === 'app' ? visibleAppLabel(choice.app)
+              : choice.kind === 'all' ? 'Select a different app…'
+                : choice.kind === 'login' ? 'Log in with another API key'
+                  : choice.kind === 'dashboard' ? `Open Dashboard to create ${suggestedId}`
+                    : choice.kind === 'retry' ? 'Retry'
+                      : 'Back to suggested apps'
+            return <Text key={`${choice.kind}-${choice.kind === 'app' ? choice.app.app_id : ''}`} color={selected ? 'green' : undefined} bold={selected} wrap="truncate-middle">{`${selected ? '❯' : ' '} ${label}`}</Text>
+          })}
+          {compact && choices.length > optionLimit && <Text dimColor>↑ ↓ more choices</Text>}
+          {!compact && <Text dimColor>↑ ↓ choose · Enter select · Esc back</Text>}
+        </Box>
+      )}
+      {!compact && footer}
     </Box>
   )
 }

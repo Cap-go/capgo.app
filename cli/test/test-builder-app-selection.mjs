@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { Box, render, Text } from 'ink'
+import { render } from 'ink'
 import React from 'react'
 import stringWidth from 'string-width'
 import { AppSelectionError, createBuilderAppSelectionServices, getAppSelectionSuggestion, listVisibleBuilderApps, rankVisibleApps, verifyBuilderApp } from '../src/build/onboarding/app-selection.ts'
@@ -114,7 +114,7 @@ async function waitFor(predicate, label) {
   assert.ok(predicate(), `Timed out waiting for ${label}`)
 }
 
-function renderGate({ visible = [], cols = 100, rows = 50, verify = async () => {}, persist = async () => false, openDashboard = async () => true, footer } = {}) {
+function renderGate({ visible = [], cols = 100, rows = 50, verify = async () => {}, persist = async () => false, openDashboard = async () => true } = {}) {
   const stdout = makeStream(cols, rows)
   const stdin = makeStdin()
   const selected = []
@@ -136,7 +136,6 @@ function renderGate({ visible = [], cols = 100, rows = 50, verify = async () => 
     services,
     cols,
     rows,
-    footer,
     onSelected: id => selected.push(id),
     onSwitchKey: () => { switched++ },
     onCancel: () => {},
@@ -169,24 +168,11 @@ async function stop(ui) {
   assert.match(ui.stdout.lastFrame, /App visible to your API key:/)
   assert.match(ui.stdout.lastFrame, /Weather Preview.*com\.example\.weather\.dev/)
   assert.doesNotMatch(ui.stdout.lastFrame, /Select a different app/)
-  const wideLines = ui.stdout.lastFrame.replace(/\u001B\[[\d;]*m/g, '').split('\n')
-  assert.match(wideLines.find(line => line.includes('Which Capgo app should Builder use?')), /^ {10,}Which Capgo app/, 'wide app screen centers its content with the header')
-  assert.ok(wideLines.every(line => stringWidth(line) <= 100), 'wide app screen fits the terminal width')
   assert.deepEqual(ui.selected, [])
   await new Promise(resolve => setTimeout(resolve, 100))
   ui.stdin.send('\r')
   await waitFor(() => ui.selected.length === 1, 'explicit single app selection')
   assert.deepEqual(ui.selected, ['com.example.weather.dev'])
-  await stop(ui)
-}
-
-{
-  const footer = React.createElement(Box, { marginTop: 1 }, React.createElement(Text, { dimColor: true }, 'Analytics: this onboarding records usage and terminal replay to improve Capgo. Opt out with --no-analytics.'))
-  const ui = renderGate({ visible: apps, cols: 80, rows: 23, footer })
-  await waitFor(() => ui.stdout.lastFrame.includes('Select a different app'), 'framed app screen at its smallest size')
-  const lines = ui.stdout.lastFrame.replace(/\u001B\[[\d;]*m/g, '').split('\n')
-  assert.ok(lines.length <= 23, 'framed app screen fits the terminal height')
-  assert.ok(lines.every(line => stringWidth(line) <= 80), 'framed app screen fits the terminal width')
   await stop(ui)
 }
 
