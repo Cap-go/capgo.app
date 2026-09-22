@@ -1,9 +1,9 @@
 <script setup lang="ts">
+import type { BundleListChannel } from '~/services/bundleLinkedChannels'
 import { onClickOutside, onKeyStroke } from '@vueuse/core'
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import type { BundleListChannel } from '~/services/bundleLinkedChannels'
 import { formatBundleListChannels, mergeBundleListChannels } from '~/services/bundleLinkedChannels'
 
 const props = defineProps<{
