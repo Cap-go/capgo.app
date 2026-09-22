@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import type { BundleListChannel } from '~/services/bundleLinkedChannels'
-import { onClickOutside, onKeyStroke } from '@vueuse/core'
-import { computed, nextTick, onMounted, onUnmounted, ref, useId, useTemplateRef } from 'vue'
+import { computed, useId } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import { useAnchorPopover } from '~/composables/useAnchorPopover'
 import { formatBundleListChannels, mergeBundleListChannels } from '~/services/bundleLinkedChannels'
 
 const props = defineProps<{
@@ -13,76 +13,22 @@ const props = defineProps<{
 
 const { t } = useI18n()
 const router = useRouter()
-const isOpen = ref(false)
-const triggerRef = useTemplateRef<HTMLButtonElement>('triggerRef')
-const popoverRef = useTemplateRef<HTMLElement>('popoverRef')
-const popoverStyle = ref<Record<string, string>>({})
 const titleId = `${useId()}-bundle-channels-title`
 const panelId = `${useId()}-bundle-channels-panel`
-const finePointer = ref(false)
-let closeTimer: ReturnType<typeof setTimeout> | undefined
+
+const {
+  isOpen,
+  popoverStyle,
+  finePointer,
+  cancelClose,
+  closePanel,
+  openPanel,
+  togglePanel,
+  onTriggerLeave,
+} = useAnchorPopover({ defaultWidth: 280, align: 'start' })
 
 const merged = computed(() => mergeBundleListChannels(props.channels))
 const label = computed(() => formatBundleListChannels(merged.value).label)
-
-function updatePopoverPosition() {
-  const anchor = triggerRef.value
-  if (!anchor)
-    return
-  const rect = anchor.getBoundingClientRect()
-  const margin = 12
-  const gap = 8
-  const viewportW = window.innerWidth
-  const viewportH = window.innerHeight
-  const maxHeight = Math.max(160, viewportH - margin * 2)
-  const panel = popoverRef.value
-  const panelWidth = Math.min(panel?.offsetWidth || 280, viewportW - margin * 2)
-  const panelHeight = Math.min(panel?.offsetHeight || 0, maxHeight)
-
-  let left = rect.left
-  left = Math.min(left, viewportW - margin - panelWidth)
-  left = Math.max(margin, left)
-
-  let top = rect.bottom + gap
-  if (panelHeight && top + panelHeight > viewportH - margin)
-    top = rect.top - panelHeight - gap
-  top = Math.min(Math.max(margin, top), viewportH - margin - (panelHeight || 0))
-
-  popoverStyle.value = {
-    top: `${Math.round(top)}px`,
-    left: `${Math.round(left)}px`,
-    maxHeight: `${Math.round(maxHeight)}px`,
-  }
-}
-
-function cancelClose() {
-  if (closeTimer !== undefined) {
-    clearTimeout(closeTimer)
-    closeTimer = undefined
-  }
-}
-
-function closePanel() {
-  cancelClose()
-  isOpen.value = false
-}
-
-async function openPanel(focusFirstChannel = false) {
-  cancelClose()
-  updatePopoverPosition()
-  isOpen.value = true
-  await nextTick()
-  updatePopoverPosition()
-  if (focusFirstChannel)
-    popoverRef.value?.querySelector<HTMLButtonElement>('button')?.focus()
-}
-
-function togglePanel(focusFirstChannel = false) {
-  if (isOpen.value)
-    closePanel()
-  else
-    void openPanel(focusFirstChannel)
-}
 
 function onTriggerClick(event: MouseEvent) {
   event.stopPropagation()
@@ -108,51 +54,10 @@ function onTriggerEnter() {
     void openPanel()
 }
 
-function onTriggerLeave() {
-  if (!finePointer.value)
-    return
-  cancelClose()
-  closeTimer = setTimeout(() => {
-    closePanel()
-  }, 150)
-}
-
-function onViewportChange() {
-  if (isOpen.value)
-    updatePopoverPosition()
-}
-
 function goToChannel(channelId: number) {
   closePanel()
   router.push(`/app/${props.appId}/channel/${channelId}`)
 }
-
-onClickOutside(popoverRef, (event) => {
-  const target = event.target as Node | null
-  if (target && triggerRef.value?.contains(target))
-    return
-  closePanel()
-})
-
-onKeyStroke('Escape', (event) => {
-  if (!isOpen.value)
-    return
-  event.preventDefault()
-  closePanel()
-  triggerRef.value?.focus()
-})
-
-onMounted(() => {
-  finePointer.value = window.matchMedia('(hover: hover) and (pointer: fine)').matches
-  window.addEventListener('resize', onViewportChange)
-  window.addEventListener('scroll', onViewportChange, true)
-})
-
-onUnmounted(() => {
-  cancelClose()
-  window.removeEventListener('resize', onViewportChange)
-  window.removeEventListener('scroll', onViewportChange, true)
-})
 </script>
 
 <template>
@@ -188,7 +93,7 @@ onUnmounted(() => {
       <h3 :id="titleId" class="shrink-0 px-2 pb-2 text-sm font-semibold text-slate-950 dark:text-white">
         {{ t('channels') }}
       </h3>
-      <ul class="min-h-0 flex-1 space-y-0.5 overflow-auto" role="list">
+      <ul class="min-h-0 flex-1 space-y-0.5 overflow-auto">
         <li v-for="channel in merged" :key="channel.id">
           <button
             type="button"
