@@ -218,7 +218,7 @@ const BuilderAppSelectionGate: FC<BuilderAppSelectionGateProps> = ({ apikey, sug
 
   const compact = cols < 64 || rows < 18
   const showDivider = !compact && rows >= 20
-  const optionLimit = compact ? Math.max(1, rows - 9) : Math.max(3, rows - (showDivider ? 17 : 16))
+  const optionLimit = compact ? Math.max(1, rows - 9) : Math.max(3, rows - (showDivider ? 18 : 16))
   const start = Math.max(0, boundedIndex - optionLimit + 1)
   const visibleChoices = choices.slice(start, start + optionLimit)
   const suggestionLabel = suggestedSource === 'builder' ? 'Your Builder app ID:' : 'Your Capacitor app ID:'
@@ -267,7 +267,7 @@ const BuilderAppSelectionGate: FC<BuilderAppSelectionGateProps> = ({ apikey, sug
             return <Text key={`${choice.kind}-${choice.kind === 'app' ? choice.app.app_id : ''}`} color={selected ? 'green' : undefined} bold={selected} wrap="truncate-middle">{`${selected ? '❯' : ' '} ${label}`}</Text>
           })}
           {compact && choices.length > optionLimit && <Text dimColor>↑ ↓ more choices</Text>}
-          {!compact && <Text dimColor>↑ ↓ choose · Enter select · Esc back</Text>}
+          {!compact && <Box marginTop={showDivider ? 1 : 0}><Text dimColor>↑ ↓ choose · Enter select · Esc back</Text></Box>}
         </Box>
       )}
       {!compact && footer}
