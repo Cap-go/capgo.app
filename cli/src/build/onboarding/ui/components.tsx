@@ -1,11 +1,11 @@
 import type { FC } from 'react'
+import type { DiffLine } from '../diff-utils.js'
 import { Box, Text, useInput, useStdout } from 'ink'
 import Spinner from 'ink-spinner'
 // src/build/onboarding/ui/components.tsx
 import React, { useEffect, useRef, useState } from 'react'
 import stringWidth from 'string-width'
 import { computeMaxScrollOffset, pickVisibleLines } from '../ai-fit.js'
-import type { DiffLine } from '../diff-utils.js'
 
 /**
  * Truncate a string to a maximum *terminal display width* (not codepoint
@@ -347,12 +347,12 @@ function applyConstraints(
 // degrade to the one-line variant on short terminals. `compact` is accepted but
 // ignored so existing call sites keep compiling; the prop + its arguments are
 // removed in the dense-cleanup follow-up.
-export const Header: FC<{ compact?: boolean }> = () => {
+export const Header: FC<{ compact?: boolean, width?: number }> = ({ width = 44 }) => {
   return (
     <Box
       borderStyle="double"
       borderColor="cyan"
-      width={44}
+      width={width}
       paddingX={4}
       paddingY={1}
       alignSelf="center"
@@ -702,7 +702,10 @@ export const FullscreenBuildOutput: FC<{
       {onExit
         ? (
             <>
-              <Text wrap="truncate-end"><Text color="red" bold>{`✖ ${title}`}</Text><Text dimColor>{`  ·  ${lines.length} lines${hint}`}</Text></Text>
+              <Text wrap="truncate-end">
+                <Text color="red" bold>{`✖ ${title}`}</Text>
+                <Text dimColor>{`  ·  ${lines.length} lines${hint}`}</Text>
+              </Text>
               <Text color="yellow" bold>Press Esc or Enter to go back.</Text>
             </>
           )

@@ -71,6 +71,10 @@ reads:
 > No app with this ID is available to your API key. It may exist in Capgo, but
 > you or your API key might lack access to it.
 
+On wide terminals, center the header and content together in a bounded panel,
+with a divider and a highlighted selected row. Keep a plain list on small
+terminals so the choices and analytics notice fit without clipping.
+
 If exactly one app is visible, label it **“App visible to your API key:”** and
 show its name (or its ID if unnamed) and full ID as a selectable row. There is
 no “Select a different app” action in this case. If several are visible, label
