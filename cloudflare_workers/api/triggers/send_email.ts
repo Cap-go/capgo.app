@@ -24,7 +24,7 @@ app.post('/', middlewareAPISecret, async (c) => {
   const supabaseUrl = getEnv(c, 'SUPABASE_URL')
   const webappUrl = getEnv(c, 'WEBAPP_URL')
 
-  // Render every message before sending so a bad second email cannot cause a partial delivery.
+  // Render all recipient variants before sending so one invalid template cannot partially deliver the hook.
   const messages = deliveries.map(({ email, payload }) => {
     if (!isAuthEmailAction(payload.email_action_type))
       simpleError('unsupported_email_action', 'Unsupported auth email action')
