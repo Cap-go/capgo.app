@@ -1,27 +1,25 @@
 import type { IosEffectResult, IosStepCtx } from '../ios/flow.js'
-import type { BuilderOnboardingAction } from '../telemetry.js'
 import type { OnboardingStep } from '../types.js'
+import type { PreparationTrackAction } from './preparation-action.js'
+import { emitPreparationAction, emitPreparationSuccessOnce } from './preparation-action.js'
 
-type TrackAction = (action: BuilderOnboardingAction, tags: Record<string, string>, step: OnboardingStep) => void
+type TrackAction = PreparationTrackAction<OnboardingStep>
 
 function emitCertificateAction(
   trackAction: TrackAction,
-  action: BuilderOnboardingAction,
+  action: 'certificate_prepared' | 'certificate_preparation_failed',
   journeyId: string,
   source: 'created' | 'keychain_import',
   step: OnboardingStep,
   reason?: 'create_failed' | 'certificate_limit' | 'export_failed',
 ): void {
-  try {
-    trackAction(action, {
-      attempt_id: journeyId,
-      source,
-      ...(reason ? { reason } : {}),
-    }, step)
-  }
-  catch {
-    // Even a synchronous telemetry failure must not interrupt onboarding.
-  }
+  emitPreparationAction(trackAction, {
+    action,
+    attemptId: journeyId,
+    source,
+    step,
+    tags: reason ? { reason } : undefined,
+  })
 }
 
 export function trackCreatedIosCertificateResult(
@@ -44,10 +42,12 @@ export function trackCreatedIosCertificateResult(
     return
 
   const successKey = `created:${cert.certificateId}`
-  if (reportedSuccesses.has(successKey))
-    return
-  reportedSuccesses.add(successKey)
-  emitCertificateAction(trackAction, 'certificate_prepared', journeyId, 'created', 'creating-certificate')
+  emitPreparationSuccessOnce(reportedSuccesses, successKey, trackAction, {
+    action: 'certificate_prepared',
+    attemptId: journeyId,
+    source: 'created',
+    step: 'creating-certificate',
+  })
 }
 
 export function trackIosCertificateCreationThrow(journeyId: string, trackAction: TrackAction): void {
@@ -70,8 +70,10 @@ export function trackImportedIosCertificateSaveResult(
     return
 
   const successKey = `keychain_import:${carried.chosenIdentity?.sha1 ?? ''}`
-  if (reportedSuccesses.has(successKey))
-    return
-  reportedSuccesses.add(successKey)
-  emitCertificateAction(trackAction, 'certificate_prepared', journeyId, 'keychain_import', 'saving-credentials')
+  emitPreparationSuccessOnce(reportedSuccesses, successKey, trackAction, {
+    action: 'certificate_prepared',
+    attemptId: journeyId,
+    source: 'keychain_import',
+    step: 'saving-credentials',
+  })
 }

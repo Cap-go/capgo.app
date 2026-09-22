@@ -160,6 +160,7 @@ import { deleteAndroidProgress, getAndroidResumeStep, hasAnyOAuthProgress, loadA
 import { ANDROID_STEP_PROGRESS, getAndroidPhaseLabel } from '../types.js'
 import type { AndroidEffectDeps, AndroidInput } from '../flow.js'
 import { applyAndroidInput, runAndroidEffect } from '../flow.js'
+import { trackAndroidKeystorePreparationFailure, trackPreparedAndroidKeystore } from './keystore-action.js'
 
 interface LogEntry { text: string, color?: string }
 
@@ -471,6 +472,7 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
     },
     [appId, resolvedOrgId, step],
   )
+  const reportedKeystoreSuccessesRef = useRef(new Set<string>())
 
   const [retryCount, setRetryCount] = useState(0)
   const [retryStep, setRetryStep] = useState<AndroidOnboardingStep | null>(null)
@@ -1526,6 +1528,7 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
         const keyPw = resolvedKeyPw
         setKeystoreKeyPassword(keyPw)
         addLog('✔ Key password set')
+        let keystorePrepared = false
         try {
           const bytes = await readFile(keystoreExistingPath)
           if (cancelled)
@@ -1537,13 +1540,21 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
             isGenerated: false,
           }
           // _keystoreBase64 / keystoreReady persisted below — no React mirrors (Plan 3.3).
-          await persist((p) => ({
+          const saved = await persist((p) => ({
             ...p,
             keystoreKeyPassword: keyPw,
             _keystoreBase64: base64,
             serviceAccountForkSeen: true,
             completedSteps: { ...p.completedSteps, keystoreReady: ready },
           }))
+          keystorePrepared = trackPreparedAndroidKeystore(
+            saved,
+            'imported',
+            resolution === 'probed-same' ? 'verified' : 'not_checked',
+            journeyId,
+            trackAction,
+            reportedKeystoreSuccessesRef.current,
+          )
           addLog(`✔ Keystore loaded — ${keystoreExistingPath}`)
           // Smart-route: skip phases already complete (e.g. on resume into
           // this step after a legacy progress file already had OAuth steps
@@ -1561,8 +1572,18 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
             setStep('service-account-method-select')
         }
         catch (err) {
-          if (!cancelled)
+          if (!cancelled) {
+            if (!keystorePrepared) {
+              trackAndroidKeystorePreparationFailure(
+                'imported',
+                resolution === 'probed-same' ? 'verified' : 'not_checked',
+                'import_failed',
+                journeyId,
+                trackAction,
+              )
+            }
             handleError(err, 'keystore-existing-path')
+          }
         }
       })()
     }
@@ -1930,6 +1951,7 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
         signal: abort.signal,
       }
 
+      let keystorePrepared = false
       try {
         // Run the engine against the freshest persisted progress. Plan 3.1 made
         // disk progress the source of truth for in-session sequencing; the prior
@@ -1945,6 +1967,17 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
 
         const t = result.transient
         const np = result.progress
+
+        if (step === 'keystore-generating') {
+          keystorePrepared = trackPreparedAndroidKeystore(
+            np,
+            'generated',
+            'generated_with_keystore',
+            journeyId,
+            trackAction,
+            reportedKeystoreSuccessesRef.current,
+          )
+        }
 
         // ── Apply transient runtime data to render state ──────────────────────
         if (t?.detectedPackageIds !== undefined)
@@ -2018,6 +2051,15 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
       catch (err) {
         if (cancelled)
           return
+        if (step === 'keystore-generating' && !keystorePrepared) {
+          trackAndroidKeystorePreparationFailure(
+            'generated',
+            'generated_with_keystore',
+            'generate_failed',
+            journeyId,
+            trackAction,
+          )
+        }
         // MissingScopesError on google-sign-in is handled INSIDE the engine
         // (returns next: 'google-sign-in'); any other throw routes through the
         // same retry/error UX the original effects used.
@@ -2741,6 +2783,7 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
             setKeystoreKeyPassword(keyPw)
             addLog('✔ Key password set')
             ;(async () => {
+              let keystorePrepared = false
               try {
                 const bytes = await readFile(keystoreExistingPath)
                 const base64 = bytes.toString('base64')
@@ -2750,13 +2793,21 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
                   isGenerated: false,
                 }
                 // _keystoreBase64 / keystoreReady persisted below — no React mirrors (Plan 3.3).
-                await persist((p) => ({
+                const saved = await persist((p) => ({
                   ...p,
                   keystoreKeyPassword: keyPw,
                   _keystoreBase64: base64,
                   serviceAccountForkSeen: true,
                   completedSteps: { ...p.completedSteps, keystoreReady: ready },
                 }))
+                keystorePrepared = trackPreparedAndroidKeystore(
+                  saved,
+                  'imported',
+                  'not_checked',
+                  journeyId,
+                  trackAction,
+                  reportedKeystoreSuccessesRef.current,
+                )
                 addLog(`✔ Keystore loaded — ${keystoreExistingPath}`)
                 // Smart-route: same pattern as the auto-probe branch above.
                 // If the user has any OAuth-side progress (legacy resume or
@@ -2770,6 +2821,15 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
                   setStep('service-account-method-select')
               }
               catch (err) {
+                if (!keystorePrepared) {
+                  trackAndroidKeystorePreparationFailure(
+                    'imported',
+                    'not_checked',
+                    'import_failed',
+                    journeyId,
+                    trackAction,
+                  )
+                }
                 handleError(err, 'keystore-existing-path')
               }
             })()
