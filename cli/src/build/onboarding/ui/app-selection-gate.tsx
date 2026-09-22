@@ -153,8 +153,16 @@ const BuilderAppSelectionGate: FC<BuilderAppSelectionGateProps> = ({ apikey, sug
       onSwitchKey()
     }
     else if (choice.kind === 'dashboard') {
+      const requestId = ++request.current
+      setDashboardOpened(true)
       setView('dashboard')
-      void services.openDashboard().then(opened => setDashboardOpened(opened)).catch(() => setDashboardOpened(false))
+      void services.openDashboard().then((opened) => {
+        if (active.current && requestId === request.current)
+          setDashboardOpened(opened)
+      }).catch(() => {
+        if (active.current && requestId === request.current)
+          setDashboardOpened(false)
+      })
     }
     else if (choice.kind === 'retry') {
       if (retrySelection)
@@ -175,6 +183,8 @@ const BuilderAppSelectionGate: FC<BuilderAppSelectionGateProps> = ({ apikey, sug
       else if (view === 'error' && apps.length === 0)
         onCancel()
       else if (view === 'all' || view === 'dashboard' || view === 'error') {
+        if (view === 'dashboard')
+          request.current++
         setIndex(0)
         setView('main')
       }
