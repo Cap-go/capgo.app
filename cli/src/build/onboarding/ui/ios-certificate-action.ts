@@ -30,7 +30,7 @@ export function trackCreatedIosCertificateResult(
   trackAction: TrackAction,
   reportedSuccesses: Set<string>,
 ): void {
-  if (result.next === 'cert-limit-prompt') {
+  if (result.next === 'cert-limit-prompt' || result.transient?.certificateLimitReached) {
     emitCertificateAction(trackAction, 'certificate_preparation_failed', journeyId, 'created', 'creating-certificate', 'certificate_limit')
     return
   }

@@ -67,6 +67,19 @@ assert.deepEqual(actions.splice(0), [{
   step: 'creating-certificate',
 }])
 
+const limitLookupFailed = await runIosEffect('creating-certificate', progress(), {
+  ...createDeps,
+  createCertificate: async () => { throw new CertificateLimitError([]) },
+  listCertificates: async () => { throw new Error('PRIVATE_LOOKUP_EXCEPTION') },
+})
+trackCreatedIosCertificateResult(limitLookupFailed, journeyId, trackAction, reportedSuccesses)
+assert.equal(limitLookupFailed.next, 'error', 'lookup failure keeps the existing onboarding error route')
+assert.deepEqual(actions.splice(0), [{
+  action: 'certificate_preparation_failed',
+  tags: { attempt_id: journeyId, source: 'created', reason: 'certificate_limit' },
+  step: 'creating-certificate',
+}])
+
 // A failed attempt does not reserve the success key; the retry can report success.
 const retrySuccesses = new Set()
 trackCreatedIosCertificateResult(failedCreation, journeyId, trackAction, retrySuccesses)

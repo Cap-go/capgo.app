@@ -175,6 +175,8 @@ export interface IosStepCtx {
   duplicateProfiles?: IosDuplicateProfile[]
   /** Existing Apple certs offered for revocation when the cert limit is hit. */
   existingCerts?: AscDistributionCert[]
+  /** Preserves the limit outcome if the follow-up certificate lookup fails. */
+  certificateLimitReached?: boolean
   /** The user's revoke selection (cert-limit-prompt → revoking-certificate). */
   certToRevoke?: AscDistributionCert
 
@@ -2446,9 +2448,17 @@ export async function runIosEffect(
         if (err instanceof CertificateLimitError) {
           // Offer the existing certs for revocation. Prefer the certs carried on
           // the error; fall back to a fresh list via listCertificates.
-          const existingCerts = err.certificates?.length
-            ? err.certificates
-            : (await deps.listCertificates?.()) ?? []
+          let existingCerts = err.certificates
+          if (!existingCerts?.length) {
+            try {
+              existingCerts = (await deps.listCertificates?.()) ?? []
+            }
+            catch (lookupError) {
+              const msg = lookupError instanceof Error ? lookupError.message : String(lookupError)
+              deps.onLog?.(`✖ ${msg}`, 'red')
+              return iosError(progress, msg, step, { certificateLimitReached: true })
+            }
+          }
           return { progress, next: 'cert-limit-prompt', transient: { existingCerts } }
         }
         deps.onLog?.(`✖ ${err instanceof Error ? err.message : String(err)}`, 'red')
