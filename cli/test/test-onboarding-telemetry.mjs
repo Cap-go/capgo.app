@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
-import { trackBuilderOnboardingAction, trackBuilderOnboardingCancelled, trackBuilderOnboardingLogin, trackBuilderOnboardingStep } from '../src/build/onboarding/telemetry.ts'
+import { trackBuilderOnboardingAction, trackBuilderOnboardingAppSelection, trackBuilderOnboardingCancelled, trackBuilderOnboardingLogin, trackBuilderOnboardingStep } from '../src/build/onboarding/telemetry.ts'
 import { saveImportDistributionAnswer, trackImportDistributionShown } from '../src/build/onboarding/ui/import-distribution-analytics.ts'
 
 
@@ -22,6 +22,7 @@ function installFetchMock() {
       status: 200,
     })
   }
+
   return requests
 }
 
@@ -67,6 +68,30 @@ try {
     assert.equal(JSON.stringify(body).includes('capgo-key'), false)
   }
 
+  {
+    const requests = installFetchMock()
+    await trackBuilderOnboardingAppSelection({
+      apikey: 'capgo-key',
+      appId: 'com.example.app',
+      journeyId: 'bj_app-selection-1',
+      phase: 'resolved',
+      result: 'selected',
+      source: 'closest_list',
+      visibleCount: 4,
+    })
+    const body = findEventBody(requests)
+    assert.equal(body.event, 'Builder Onboarding App Selection')
+    assert.deepEqual(body.tags, {
+      app_id: 'com.example.app',
+      journey_id: 'bj_app-selection-1',
+      phase: 'resolved',
+      result: 'selected',
+      source: 'closest_list',
+      visible_app_count: 4,
+    })
+    assert.equal(JSON.stringify(body).includes('capgo-key'), false)
+  }
+
   // ── Env opt-out prevents direct onboarding telemetry sends ──────────────────
   {
     const requests = installFetchMock()
@@ -80,6 +105,13 @@ try {
         method: 'browser',
         retryCount: 0,
         durationMs: 100,
+      })
+      await trackBuilderOnboardingAppSelection({
+        apikey: 'capgo-key',
+        appId: 'com.example.app',
+        journeyId: 'bj_app-selection-opt-out',
+        phase: 'shown',
+        visibleCount: 1,
       })
       await trackBuilderOnboardingAction({
         action: 'android_sa_method_selected',

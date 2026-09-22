@@ -1,5 +1,6 @@
 import type { AndroidOnboardingErrorCategory, AndroidOnboardingStep } from './android/types.js'
 import type { OnboardingErrorCategory, OnboardingStep, Platform } from './types.js'
+import type { AppSelectionEvent } from './ui/app-selection-gate.js'
 import { trackEvent } from '../../analytics/track.js'
 import { sendEvent } from '../../utils.js'
 import { getActiveCliReplaySessionId } from '../../init/replay.js'
@@ -32,6 +33,22 @@ export function trackBuilderOnboardingLogin(input: TrackBuilderOnboardingLoginIn
       method: input.method,
       retry_count: input.retryCount,
       duration_ms: input.durationMs,
+    },
+  })
+}
+
+export function trackBuilderOnboardingAppSelection(input: AppSelectionEvent & { apikey: string, appId: string, journeyId: string }): Promise<void> {
+  return trackEvent({
+    apikey: input.apikey,
+    appId: input.appId,
+    channel: 'builder-onboarding',
+    event: 'Builder Onboarding App Selection',
+    tags: {
+      journey_id: input.journeyId,
+      phase: input.phase,
+      ...(input.result ? { result: input.result } : {}),
+      ...(input.source ? { source: input.source } : {}),
+      visible_app_count: input.visibleCount,
     },
   })
 }
