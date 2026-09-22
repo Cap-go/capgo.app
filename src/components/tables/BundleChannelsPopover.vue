@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { BundleListChannel } from '~/services/bundleLinkedChannels'
-import { computed, useId } from 'vue'
+import { computed, useId, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAnchorPopover } from '~/composables/useAnchorPopover'
@@ -15,6 +15,8 @@ const { t } = useI18n()
 const router = useRouter()
 const titleId = `${useId()}-bundle-channels-title`
 const panelId = `${useId()}-bundle-channels-panel`
+const triggerRef = useTemplateRef<HTMLButtonElement>('triggerRef')
+const popoverRef = useTemplateRef<HTMLElement>('popoverRef')
 
 const {
   isOpen,
@@ -25,7 +27,7 @@ const {
   openPanel,
   togglePanel,
   onTriggerLeave,
-} = useAnchorPopover({ defaultWidth: 280, align: 'start' })
+} = useAnchorPopover({ triggerRef, popoverRef, defaultWidth: 280, align: 'start' })
 
 const merged = computed(() => mergeBundleListChannels(props.channels))
 const label = computed(() => formatBundleListChannels(merged.value).label)

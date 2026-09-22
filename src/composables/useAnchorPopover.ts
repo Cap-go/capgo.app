@@ -1,7 +1,10 @@
+import type { Ref, ShallowRef } from 'vue'
 import { onClickOutside, onKeyStroke } from '@vueuse/core'
-import { nextTick, onMounted, onUnmounted, ref, useTemplateRef } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref } from 'vue'
 
 export interface UseAnchorPopoverOptions {
+  triggerRef: Readonly<ShallowRef<HTMLButtonElement | null>>
+  popoverRef: Readonly<ShallowRef<HTMLElement | null>>
   /** Fallback panel width before first layout measure. */
   defaultWidth?: number
   /** Horizontal alignment of the panel relative to the trigger. */
@@ -12,13 +15,12 @@ export interface UseAnchorPopoverOptions {
  * Shared floating-panel behavior for table-cell popovers (positioning,
  * hover/click open, outside click, Escape, viewport reposition).
  */
-export function useAnchorPopover(options: UseAnchorPopoverOptions = {}) {
+export function useAnchorPopover(options: UseAnchorPopoverOptions) {
   const defaultWidth = options.defaultWidth ?? 280
   const align = options.align ?? 'start'
+  const { triggerRef, popoverRef } = options
 
   const isOpen = ref(false)
-  const triggerRef = useTemplateRef<HTMLButtonElement>('triggerRef')
-  const popoverRef = useTemplateRef<HTMLElement>('popoverRef')
   const popoverStyle = ref<Record<string, string>>({})
   const finePointer = ref(false)
   let closeTimer: ReturnType<typeof setTimeout> | undefined
@@ -96,7 +98,7 @@ export function useAnchorPopover(options: UseAnchorPopoverOptions = {}) {
       updatePopoverPosition()
   }
 
-  onClickOutside(popoverRef, (event) => {
+  onClickOutside(popoverRef as Ref<HTMLElement | null>, (event) => {
     const target = event.target as Node | null
     if (target && triggerRef.value?.contains(target))
       return
@@ -125,8 +127,6 @@ export function useAnchorPopover(options: UseAnchorPopoverOptions = {}) {
 
   return {
     isOpen,
-    triggerRef,
-    popoverRef,
     popoverStyle,
     finePointer,
     cancelClose,

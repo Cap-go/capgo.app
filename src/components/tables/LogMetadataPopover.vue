@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, useId } from 'vue'
+import { computed, useId, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconClipboard from '~icons/heroicons/clipboard-document'
@@ -13,6 +13,8 @@ const props = defineProps<{
 const { t } = useI18n()
 const titleId = `${useId()}-metadata-title`
 const panelId = `${useId()}-metadata-panel`
+const triggerRef = useTemplateRef<HTMLButtonElement>('triggerRef')
+const popoverRef = useTemplateRef<HTMLElement>('popoverRef')
 
 const {
   isOpen,
@@ -22,7 +24,7 @@ const {
   openPanel,
   togglePanel,
   onTriggerLeave,
-} = useAnchorPopover({ defaultWidth: 448, align: 'end' })
+} = useAnchorPopover({ triggerRef, popoverRef, defaultWidth: 448, align: 'end' })
 
 type JsonTokenKind = 'key' | 'string' | 'number' | 'keyword' | 'punct' | 'space'
 interface JsonToken { kind: JsonTokenKind, text: string }
