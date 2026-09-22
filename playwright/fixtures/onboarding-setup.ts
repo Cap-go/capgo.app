@@ -2,6 +2,7 @@ import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '.
 import { createPinia } from 'pinia'
 import { createApp, defineComponent, h, onMounted, ref } from 'vue'
 import { createRouter, createWebHistory, RouterView } from 'vue-router'
+import AppOnboardingBuilderChecklist from '../../src/components/dashboard/AppOnboardingBuilderChecklist.vue'
 import AppOnboardingCliSteps from '../../src/components/dashboard/AppOnboardingCliSteps.vue'
 import AppOnboardingFlow from '../../src/components/dashboard/AppOnboardingFlow.vue'
 import AppOnboardingSetupChecklist from '../../src/components/dashboard/AppOnboardingSetupChecklist.vue'
@@ -12,6 +13,7 @@ import DialogV2 from '../../src/components/DialogV2.vue'
 import { i18n } from '../../src/modules/i18n'
 import { install as installOnboardingSetupNavigation } from '../../src/modules/onboarding-setup'
 import GettingStartedPage from '../../src/pages/app/[app].getting-started.vue'
+import { BUILDER_STEP_IDS } from '../../src/services/builderOnboardingChecklist'
 import { useSupabase } from '../../src/services/supabase'
 import { useMainStore } from '../../src/stores/main'
 import { useOrganizationStore } from '../../src/stores/organization'
@@ -19,6 +21,8 @@ import '../../src/styles/style.css'
 
 const params = new URLSearchParams(location.search)
 const navigationView = params.get('view') === 'navigation' || location.pathname.startsWith('/app/') || location.pathname === '/onboarding/app'
+const builderComponentView = params.get('view') === 'builder'
+const assignment = params.get('assignment')
 const previewAppId = 'com.example.onboarding-preview'
 const savedChannelStatus = params.get('channelStatus')
 const state = {
@@ -26,6 +30,11 @@ const state = {
   steps: (savedChannelStatus === 'done' || savedChannelStatus === 'skipped'
     ? { add_channel: { status: savedChannelStatus } }
     : {}) as Record<string, { status: 'done' | 'skipped' }>,
+  builderSteps: {
+    ios: Object.fromEntries(BUILDER_STEP_IDS.ios.map(id => [id, { status: 'pending' }])) as Record<string, { status: 'pending' }>,
+    android: Object.fromEntries(BUILDER_STEP_IDS.android.map(id => [id, { status: 'pending' }])) as Record<string, { status: 'pending' }>,
+  },
+  selectedBuilderPlatform: params.get('platform') === 'ios' || params.get('platform') === 'android' ? params.get('platform') : null,
   outcome: 'in_progress',
   error: false,
   requests: 0,
@@ -39,15 +48,45 @@ const state = {
   channelInsertError: false,
   channelInsertDelayMs: 0,
   channelInserts: [] as Record<string, unknown>[],
+  appWrites: [] as Array<{ method: string, body: unknown }>,
 }
 const events: string[] = []
 const channelEvents: Array<{ event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties }> = []
 const preview = { state, events, channelEvents, appId: ref(previewAppId), command: ref('npx @capgo/cli@latest i [API_KEY]'), hiding: ref(false), selectedOrgId: ref('') }
 Object.assign(window, { onboardingSetupPreview: preview })
 
+function previewOnboarding() {
+  const selectedPath = assignment === 'both-ota' || assignment === 'ota-only' ? 'ota' : 'builder'
+  const hasBuilder = builderComponentView || assignment === 'builder-only' || assignment === 'both-builder' || assignment === 'both-ota'
+  const hasOta = assignment === 'ota-only' || assignment === 'both-builder' || assignment === 'both-ota'
+  if (hasBuilder || hasOta) {
+    return { setup: {
+      todo_list_version: 4,
+      ...(hasBuilder ? { builder_todo_list_version: '1' } : {}),
+      ...(hasOta ? { ota_todo_list_version: '1' } : {}),
+      paths: [hasOta ? 'ota' : null, hasBuilder ? 'builder' : null].filter(Boolean),
+      ...(assignment === 'builder-only' ? {} : { selected_path: selectedPath }),
+      ...(state.selectedBuilderPlatform ? { selected_builder_platform: state.selectedBuilderPlatform } : {}),
+      steps: {
+        ...(hasOta ? { ota: {} } : {}),
+        ...(hasBuilder ? { builder: state.builderSteps } : {}),
+      },
+      outcome: state.outcome,
+    } }
+  }
+  return { setup: { todo_list_version: state.version, steps: state.steps, outcome: state.outcome } }
+}
+
 // This isolated component fixture never sends requests to production.
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.origin)
+  const method = init?.method?.toUpperCase() ?? 'GET'
+  if (url.pathname.endsWith('/apps') && method !== 'GET' && method !== 'HEAD') {
+    state.appWrites.push({
+      method,
+      body: init?.body ? JSON.parse(String(init.body)) : undefined,
+    })
+  }
   if (url.pathname.endsWith('/onboarding_progress')) {
     const body = JSON.parse(String(init?.body))
     state.polls.push(body)
@@ -100,8 +139,8 @@ window.fetch = async (input, init) => {
     })
   }
   if (params.get('view') === 'flow' || navigationView) {
-    const app = { id: '00000000-0000-4000-8000-000000000003', app_id: previewAppId, name: 'My Capacitor app', icon_url: '', owner_org: '00000000-0000-4000-8000-000000000002', need_onboarding: true, onboarding: { setup: { todo_list_version: state.version, steps: state.steps, outcome: state.outcome } } }
-    const user = { id: '00000000-0000-4000-8000-000000000001', email: 'preview@example.com', onboarding: { intent: 'ota', status: 'in_progress', step: 'setup', flow: 'app', setup_stage: 'cli', app_id: previewAppId } }
+    const app = { id: '00000000-0000-4000-8000-000000000003', app_id: previewAppId, name: 'My Capacitor app', icon_url: '', owner_org: '00000000-0000-4000-8000-000000000002', need_onboarding: true, onboarding: previewOnboarding() }
+    const user = { id: '00000000-0000-4000-8000-000000000001', email: 'preview@example.com', onboarding: { intent: assignment ? 'builder' : 'ota', status: 'in_progress', step: 'setup', flow: 'app', setup_stage: 'cli', app_id: previewAppId } }
     const rows = url.pathname.endsWith('/apps') ? (!url.searchParams.get('owner_org') || url.searchParams.get('owner_org') === `eq.${app.owner_org}` ? [app] : []) : url.pathname.endsWith('/users') ? [user] : url.pathname.endsWith('/apikeys') ? [{ key: '00000000-0000-4000-8000-000000000004', rbac_id: '00000000-0000-4000-8000-000000000005', expires_at: null }] : url.pathname.endsWith('/role_bindings') ? [{ principal_id: '00000000-0000-4000-8000-000000000005', scope_type: 'org', roles: { name: 'org_super_admin' } }] : []
     const single = new Headers(init?.headers).get('Accept')?.includes('object')
     return new Response(JSON.stringify(single ? rows[0] ?? {} : rows), { headers: { 'Content-Type': 'application/json' } })
@@ -110,7 +149,7 @@ window.fetch = async (input, init) => {
   return new Response(JSON.stringify(state.error
     ? { message: 'Progress unavailable' }
     : [{
-        onboarding: { setup: { todo_list_version: state.version, steps: state.steps, outcome: state.outcome } },
+        onboarding: previewOnboarding(),
       }]), {
     status: state.error ? 503 : 200,
     headers: { 'Content-Type': 'application/json' },
@@ -130,24 +169,34 @@ const app = createApp(defineComponent({
           ? h(RouterView)
           : params.get('view') === 'flow'
             ? h(AppOnboardingFlow, { onboarding: true })
-            : params.get('view') === 'compact'
-              ? h(AppOnboardingCliSteps, { appId: preview.appId.value })
-              : h(AppOnboardingSetupChecklist, {
-                  appId: preview.appId.value,
-                  command: preview.command.value,
+            : builderComponentView
+              ? h(AppOnboardingBuilderChecklist, {
+                  initialOnboarding: previewOnboarding(),
+                  command: 'npx @capgo/cli@latest build init -a [API_KEY]',
                   hiding: preview.hiding.value,
                   leaving: false,
-                  onCopyCommand: async () => {
-                    events.push('copy-command')
-                    await navigator.clipboard.writeText(preview.command.value)
-                  },
-                  onCopyAi: () => events.push('copy-ai'),
+                  onCopyCommand: platform => events.push(`copy-builder-${platform}`),
                   onHide: () => events.push('hide'),
                   onExplore: () => events.push('explore'),
-                  onComplete: () => events.push('complete'),
-                  onInviteOpened: () => events.push('invite-opened'),
-                  onChannelAnalytics: (event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties) => channelEvents.push({ event, properties }),
-                }),
+                })
+              : params.get('view') === 'compact'
+                ? h(AppOnboardingCliSteps, { appId: preview.appId.value })
+                : h(AppOnboardingSetupChecklist, {
+                    appId: preview.appId.value,
+                    command: preview.command.value,
+                    hiding: preview.hiding.value,
+                    leaving: false,
+                    onCopyCommand: async () => {
+                      events.push('copy-command')
+                      await navigator.clipboard.writeText(preview.command.value)
+                    },
+                    onCopyAi: () => events.push('copy-ai'),
+                    onHide: () => events.push('hide'),
+                    onExplore: () => events.push('explore'),
+                    onComplete: () => events.push('complete'),
+                    onInviteOpened: () => events.push('invite-opened'),
+                    onChannelAnalytics: (event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties) => channelEvents.push({ event, properties }),
+                  }),
       ]),
       h(DialogV2),
     ])
@@ -156,7 +205,7 @@ const app = createApp(defineComponent({
 const pinia = createPinia()
 app.use(pinia)
 // Supply identity to the real channel form without starting dashboard store watchers.
-Object.defineProperty(useMainStore(pinia), 'user', { value: { id: '00000000-0000-4000-8000-000000000001', email: 'preview@example.com', onboarding: { intent: 'ota', status: 'in_progress', step: 'setup', flow: 'app', setup_stage: 'cli', app_id: previewAppId } } })
+Object.defineProperty(useMainStore(pinia), 'user', { value: { id: '00000000-0000-4000-8000-000000000001', email: 'preview@example.com', onboarding: { intent: assignment ? 'builder' : 'ota', status: 'in_progress', step: 'setup', flow: 'app', setup_stage: 'cli', app_id: previewAppId } } })
 Object.defineProperty(useMainStore(pinia), 'auth', { value: { id: '00000000-0000-4000-8000-000000000001' } })
 useMainStore(pinia).awaitInitialLoad = async () => true
 const organization = useOrganizationStore(pinia)
@@ -171,7 +220,7 @@ organization.setCurrentOrganization = (orgId) => {
   preview.selectedOrgId.value = selectedOrganization.value.gid
 }
 organization.awaitInitialLoad = async () => true
-organization.getAppsByOrgId = orgId => orgId === previewOrganization.gid ? [{ app_id: previewAppId, owner_org: orgId, name: 'My Capacitor app', icon_url: '', need_onboarding: true, onboarding: { setup: { todo_list_version: state.version, steps: state.steps, outcome: state.outcome } } }] : []
+organization.getAppsByOrgId = orgId => orgId === previewOrganization.gid ? [{ app_id: previewAppId, owner_org: orgId, name: 'My Capacitor app', icon_url: '', need_onboarding: true, onboarding: previewOnboarding() }] : []
 app.use(i18n)
 const router = createRouter({
   history: createWebHistory(),
