@@ -16,7 +16,7 @@ import type {
   OnboardingStepCompletionProperties,
 } from '~/utils/onboardingProgressAnalytics'
 import type { OnboardingPersistOptions, OnboardingPersistResult } from '~/utils/onboardingProgressPersistence'
-import type { UserOnboardingSetupStage, UserOnboardingStatus } from '~/utils/userOnboardingProgress'
+import type { UserOnboardingProgress, UserOnboardingSetupStage, UserOnboardingStatus } from '~/utils/userOnboardingProgress'
 import mime from 'mime'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -973,6 +973,29 @@ function applyDefaultPreOrgDetails() {
   flowStep.value = 'intent'
 }
 
+function recordSkippedChannelResumeDialog(saved: UserOnboardingProgress | null) {
+  const flow = props.preOrg ? 'pre_org' : 'existing_org'
+  if (
+    saved?.status !== 'in_progress'
+    || saved.flow !== flow
+    || resumableOnboardingFlowStep(saved, flow) !== 'channel'
+    || saved.app_id !== createdApp.value?.app_id
+    || flowStep.value !== 'channel'
+    || setupStage.value === 'cli'
+  ) {
+    return false
+  }
+
+  onboardingTelemetry.prepareResumeCandidate({
+    onboardingAttemptId: saved.onboarding_attempt_id,
+    lastRunId: saved.last_run_id,
+    savedStep: 'channel',
+    steps: appOnboardingSteps.value.map(step => step.id),
+  })
+  onboardingTelemetry.recordResumeDialogSkipped(setupStage.value)
+  return true
+}
+
 async function maybeResumeSavedOnboarding() {
   const flow = props.preOrg ? 'pre_org' : 'existing_org'
   const saved = parseUserOnboardingProgress(main.user?.onboarding)
@@ -989,6 +1012,9 @@ async function maybeResumeSavedOnboarding() {
   }
 
   const resumableStep = resumableOnboardingFlowStep(saved, flow)
+  if (resumableStep === 'channel' && saved.app_id && await loadResumeApp(saved.app_id) && recordSkippedChannelResumeDialog(saved))
+    return true
+
   onboardingTelemetry.prepareResumeCandidate({
     onboardingAttemptId: saved.onboarding_attempt_id,
     lastRunId: saved.last_run_id,
@@ -2546,6 +2572,7 @@ onMounted(async () => {
             onboardingProgressPersistence.abort()
             return
           }
+          recordSkippedChannelResumeDialog(parseUserOnboardingProgress(main.user?.onboarding))
           startApiKeyLoading()
           return
         }
@@ -2574,6 +2601,8 @@ onMounted(async () => {
       onboardingProgressPersistence.abort()
       return
     }
+    if (resumed)
+      recordSkippedChannelResumeDialog(parseUserOnboardingProgress(main.user?.onboarding))
 
     startApiKeyLoading()
   }

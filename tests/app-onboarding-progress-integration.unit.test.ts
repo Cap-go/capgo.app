@@ -9,6 +9,11 @@ import { sendOnboardingEvent } from '../src/services/onboardingTracking'
 
 const writerMocks = vi.hoisted(() => ({
   abTestAssignments: {} as Record<string, unknown>,
+  dialog: {
+    lastButtonRole: null,
+    onDialogDismiss: vi.fn(async () => undefined),
+    openDialog: vi.fn(),
+  },
   loadApp: vi.fn(),
   main: {
     auth: { id: 'user-bento-retry' },
@@ -43,6 +48,15 @@ vi.mock('vue-router', () => ({
 vi.mock('vue-sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 vi.mock('../src/components/dashboard/ChannelDefaultRoutingOnboarding.vue', () => ({
   default: { template: '<div />' },
+}))
+vi.mock('../src/components/dashboard/ChannelSelfAssignOnboarding.vue', () => ({
+  default: { template: '<div data-test="resumed-channel-self-assign" />' },
+}))
+vi.mock('../src/components/dashboard/ChannelConsoleAssignOnboarding.vue', () => ({
+  default: { template: '<div data-test="resumed-channel-console-assign" />' },
+}))
+vi.mock('../src/components/dashboard/ChannelCreateOnboarding.vue', () => ({
+  default: { template: '<div data-test="resumed-channel-create" />' },
 }))
 vi.mock('~/services/apikeys', () => ({
   createDefaultApiKey: vi.fn(),
@@ -84,11 +98,7 @@ vi.mock('~/services/userOnboardingWriteQueue', async (importOriginal) => {
 })
 vi.mock('~/stores/dashboardApps', () => ({ useDashboardAppsStore: () => ({ upsertApp: vi.fn() }) }))
 vi.mock('~/stores/dialogv2', () => ({
-  useDialogV2Store: () => ({
-    lastButtonRole: null,
-    onDialogDismiss: vi.fn(async () => undefined),
-    openDialog: vi.fn(),
-  }),
+  useDialogV2Store: () => writerMocks.dialog,
 }))
 vi.mock('~/stores/main', () => ({ useMainStore: () => writerMocks.main }))
 vi.mock('~/stores/organization', () => ({ useOrganizationStore: () => writerMocks.organization }))
@@ -118,6 +128,103 @@ function expectSourceOrder(source: string, markers: string[]) {
 }
 
 describe('app onboarding progress analytics integration', () => {
+  it('automatically resumes the saved channel screen without opening a dialog in both flows', async () => {
+    const previousUser = writerMocks.main.user
+    const previousAuthGeneration = writerMocks.main.authGeneration
+    const previousRouteQuery = writerMocks.route.query
+    const previousOrganization = writerMocks.organization.currentOrganization
+    const matchMediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+    const attemptId = '7e64f484-4171-47b6-86f7-0ef5d49e0ef8'
+    const previousRunId = 'ir_6b735b41-f8ea-45b9-a46e-10c8be795276'
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: vi.fn(() => ({ matches: false })) })
+
+    try {
+      for (const [preOrg, useDirectLink, stage] of [
+        [true, false, 'channel-create'],
+        [true, true, 'channel-self-assign'],
+        [false, true, 'channel-console-assign'],
+      ] as const) {
+        const appId = `com.example.resume.${stage}`
+        writerMocks.route.query = useDirectLink ? { resume: appId, step: preOrg ? 'setup' : 'install' } : {}
+        writerMocks.organization.currentOrganization = { gid: 'test-org', name: 'Test Org' }
+        writerMocks.main.user = {
+          id: 'user-bento-retry',
+          image_url: 'avatar.png',
+          onboarding: {
+            app_id: appId,
+            final_step: preOrg ? 'setup' : 'install',
+            flow: preOrg ? 'pre_org' : 'existing_org',
+            last_run_id: previousRunId,
+            onboarding_attempt_id: attemptId,
+            setup_stage: stage,
+            status: 'in_progress',
+            step: 'channel',
+            updated_at: '2026-09-21T00:00:00.000Z',
+          },
+        }
+        writerMocks.loadApp.mockResolvedValue({
+          data: {
+            android_store_url: null,
+            app_id: appId,
+            existing_app: true,
+            icon_url: null,
+            ios_store_url: null,
+            name: 'Test App',
+            onboarding: { setup: { todo_list_version: 3, steps: {} } },
+            owner_org: 'test-org',
+          },
+          error: null,
+        })
+        writerMocks.replaceUserOnboardingIfUnchanged.mockImplementation(async (_userId, _expectedOnboarding, onboarding) => ({
+          data: { ...writerMocks.main.user, onboarding },
+          error: null,
+        }))
+        writerMocks.dialog.openDialog.mockClear()
+        vi.mocked(sendOnboardingEvent).mockClear()
+        const container = document.createElement('div')
+        const app = createApp(AppOnboardingFlow, { onboarding: true, preOrg })
+        app.config.warnHandler = () => undefined
+        try {
+          app.mount(container)
+          await vi.waitFor(() => expect(container.querySelector(`[data-test="resumed-${stage}"]`), `Expected ${stage} in ${preOrg ? 'pre_org' : 'existing_org'} resume`).not.toBeNull())
+          await vi.waitFor(() => expect(vi.mocked(sendOnboardingEvent).mock.calls.some(call => call[0] === 'onboarding_step_viewed' && call[1]?.step === 'channel')).toBe(true))
+          expect(writerMocks.dialog.openDialog).not.toHaveBeenCalled()
+          const skipped = vi.mocked(sendOnboardingEvent).mock.calls.filter(call => call[0] === 'onboarding_resume_dialog_skipped')
+          expect(skipped).toHaveLength(1)
+          expect(skipped[0]?.[1]).toMatchObject({
+            channel_stage: stage,
+            flow: preOrg ? 'pre_org' : 'existing_org',
+            onboarding_attempt_id: attemptId,
+            resumed_from_run_id: previousRunId,
+            saved_step: 'channel',
+          })
+          const channelView = vi.mocked(sendOnboardingEvent).mock.calls.find(call => call[0] === 'onboarding_step_viewed' && call[1]?.step === 'channel')
+          expect(channelView?.[1]).toMatchObject({
+            onboarding_attempt_id: attemptId,
+            onboarding_run_id: skipped[0]?.[1]?.onboarding_run_id,
+            resumed: true,
+          })
+          expect(vi.mocked(sendOnboardingEvent).mock.calls.some(call => call[0] === 'onboarding_resume_dialog_viewed')).toBe(false)
+        }
+        finally {
+          app.unmount()
+          await new Promise(resolve => setTimeout(resolve, 0))
+        }
+        writerMocks.main.authGeneration += 1
+      }
+    }
+    finally {
+      writerMocks.main.user = previousUser
+      writerMocks.main.authGeneration = previousAuthGeneration
+      writerMocks.route.query = previousRouteQuery
+      writerMocks.organization.currentOrganization = previousOrganization
+      if (matchMediaDescriptor)
+        Object.defineProperty(window, 'matchMedia', matchMediaDescriptor)
+      else
+        Reflect.deleteProperty(window, 'matchMedia')
+    }
+  })
+
   it('records a final setup view only after the saved setup screen renders', async () => {
     const previousUser = writerMocks.main.user
     const previousRouteQuery = writerMocks.route.query

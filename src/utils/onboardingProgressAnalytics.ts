@@ -1,4 +1,4 @@
-import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '~/utils/onboardingChannelAnalytics'
+import type { OnboardingChannelEvent, OnboardingChannelEventProperties, OnboardingChannelStage } from '~/utils/onboardingChannelAnalytics'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 
 export const ONBOARDING_ANALYTICS_VERSION = 4
@@ -222,13 +222,13 @@ export function createOnboardingTelemetryIdentity(options: CreateOnboardingTelem
   }
 
   function recordResumeDialogViewed() {
-    if (recorded.dialog || !candidate)
+    if (recorded.dialog || recorded.decision || !candidate)
       return
     recorded.dialog = true
     safelyCapture('onboarding_resume_dialog_viewed', resumeProperties(candidate))
   }
 
-  function recordDecision(name: string, continueSavedAttempt: boolean) {
+  function recordDecision(name: string, continueSavedAttempt: boolean, details: AnalyticsProperties = {}) {
     if (recorded.decision || !candidate)
       return
     recorded.decision = true
@@ -236,7 +236,7 @@ export function createOnboardingTelemetryIdentity(options: CreateOnboardingTelem
     if (continueSavedAttempt && candidate.onboardingAttemptId)
       activeAttemptId = candidate.onboardingAttemptId
 
-    const properties = resumeProperties(candidate)
+    const properties = { ...resumeProperties(candidate), ...details }
     if (activeAttemptId !== previousAttemptId)
       properties.initial_onboarding_attempt_id = initialAttemptId
     safelyCapture(name, properties)
@@ -250,6 +250,7 @@ export function createOnboardingTelemetryIdentity(options: CreateOnboardingTelem
       candidate = next
     },
     recordResumeContinued: () => recordDecision('onboarding_resume_continued', true),
+    recordResumeDialogSkipped: (channelStage: OnboardingChannelStage) => recordDecision('onboarding_resume_dialog_skipped', true, { channel_stage: channelStage }),
     recordResumeDialogViewed,
     recordResumeRestarted: () => recordDecision('onboarding_resume_restarted', false),
   }
