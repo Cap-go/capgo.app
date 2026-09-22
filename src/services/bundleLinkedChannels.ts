@@ -106,7 +106,8 @@ export function mergeBundleListChannels(channels: BundleListChannel[]): BundleLi
 
 /**
  * Compact label for the bundles table Channel column.
- * One or two channels → full comma list; three+ → `first +N` (full list via title/hover).
+ * One or two channels → full comma list; three+ → `first +N`.
+ * Full clickable list lives in BundleChannelsPopover (metadata-style).
  */
 export function formatBundleListChannels(channels: BundleListChannel[], compactAfter = 2): { label: string, title: string } {
   const merged = mergeBundleListChannels(channels)

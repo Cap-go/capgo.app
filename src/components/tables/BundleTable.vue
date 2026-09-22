@@ -9,6 +9,7 @@ import { computedAsync, useEventBus } from '@vueuse/core'
 import { computed, h, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import BundleChannelsPopover from '~/components/tables/BundleChannelsPopover.vue'
 import { toast } from 'vue-sonner'
 import IconSettings from '~icons/heroicons/cog-8-tooth'
 import IconTrash from '~icons/heroicons/trash'
@@ -422,18 +423,12 @@ columns.value = [
       if (elem.deleted)
         return t('deleted')
       const channels = channelCache.value[elem.id] ?? []
-      const { label, title } = formatBundleListChannels(channels)
-      if (!label)
+      if (!channels.length)
         return ''
-      const single = channels.length === 1
-      return h(single ? 'button' : 'span', {
-        type: single ? 'button' : undefined,
-        class: single ? 'w-full text-left hover:underline' : 'w-full text-left',
-        title: title || undefined,
-        onClick: single
-          ? () => router.push(`/app/${props.appId}/channel/${channels[0].id}`)
-          : undefined,
-      }, label)
+      return h(BundleChannelsPopover, {
+        appId: props.appId,
+        channels,
+      })
     },
   },
   {
