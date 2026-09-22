@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { render } from 'ink'
+import { render, Text } from 'ink'
 import React from 'react'
 import stringWidth from 'string-width'
 import { AppSelectionError, createBuilderAppSelectionServices, getAppSelectionSuggestion, listVisibleBuilderApps, rankVisibleApps, verifyBuilderApp } from '../src/build/onboarding/app-selection.ts'
@@ -114,7 +114,7 @@ async function waitFor(predicate, label) {
   assert.ok(predicate(), `Timed out waiting for ${label}`)
 }
 
-function renderGate({ visible = [], cols = 100, rows = 50, verify = async () => {}, persist = async () => false, openDashboard = async () => true } = {}) {
+function renderGate({ visible = [], cols = 100, rows = 50, footer, verify = async () => {}, persist = async () => false, openDashboard = async () => true } = {}) {
   const stdout = makeStream(cols, rows)
   const stdin = makeStdin()
   const selected = []
@@ -136,6 +136,7 @@ function renderGate({ visible = [], cols = 100, rows = 50, verify = async () => 
     services,
     cols,
     rows,
+    footer,
     onSelected: id => selected.push(id),
     onSwitchKey: () => { switched++ },
     onCancel: () => {},
@@ -175,6 +176,19 @@ async function stop(ui) {
   ui.stdin.send('\r')
   await waitFor(() => ui.selected.length === 1, 'explicit single app selection')
   assert.deepEqual(ui.selected, ['com.example.weather.dev'])
+  await stop(ui)
+}
+
+{
+  const rows = 30
+  const ui = renderGate({
+    visible: [{ app_id: 'com.example.weather.dev', name: 'Weather Preview' }],
+    rows,
+    footer: React.createElement(Text, null, 'Analytics notice'),
+  })
+  await waitFor(() => ui.stdout.lastFrame.includes('Analytics notice'), 'app selection footer')
+  const lines = ui.stdout.lastFrame.split('\n')
+  assert.ok(lines.findIndex(line => line.includes('Analytics notice')) >= rows - 3, 'analytics notice stays near the terminal bottom')
   await stop(ui)
 }
 

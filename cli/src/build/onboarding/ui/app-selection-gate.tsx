@@ -270,6 +270,7 @@ const BuilderAppSelectionGate: FC<BuilderAppSelectionGateProps> = ({ apikey, sug
           {!compact && <Box marginTop={showDivider ? 1 : 0}><Text dimColor>↑ ↓ choose · Enter select · Esc back</Text></Box>}
         </Box>
       )}
+      {!compact && footer && <Box flexGrow={1} />}
       {!compact && footer}
     </Box>
   )
