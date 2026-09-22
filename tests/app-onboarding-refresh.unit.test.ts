@@ -15,7 +15,7 @@ describe('onboarding refresh queue contract', () => {
     const u = __queueConsumerTestUtils__
     expect(u.getQueueBatchSize('cron_onboarding_refresh_apps', 950)).toBe(4)
     expect(u.getQueueHttpConcurrency('cron_onboarding_refresh_apps')).toBe(4)
-    expect(u.getQueueHttpTimeoutMs('cron_onboarding_refresh_apps')).toBe(45_000)
+    expect(u.getQueueHttpTimeoutMs('cron_onboarding_refresh_apps')).toBe(90_000)
     expect(u.getQueueVisibilityTimeout('cron_onboarding_refresh_apps')).toBe(120)
     expect(u.shouldRunQueueSyncInBackground('cron_onboarding_refresh_apps')).toBe(false)
     expect(u.getQueueMaxReads('cron_onboarding_refresh_apps')).toBe(MAX_QUEUE_READS)

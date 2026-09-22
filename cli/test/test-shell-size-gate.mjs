@@ -24,6 +24,13 @@ const loginServices = {
   beginBrowser: async () => { throw new Error('unused') },
   completeBrowser: async () => {},
 }
+const appSelectionServices = {
+  list: async () => [{ app_id: 'com.test.app', name: 'Test App' }],
+  verify: async () => {},
+  persist: async () => false,
+  openDashboard: async () => true,
+  dashboardUrl: 'https://console.capgo.app/app/new',
+}
 
 const watchdog = setTimeout(() => {
   console.error('WATCHDOG 30s')
@@ -61,7 +68,7 @@ function makeStdin() {
 async function renderShellAt(cols, rows) {
   const stdout = makeStdout(cols, rows)
   const instance = render(
-    React.createElement(OnboardingShell, { appId: 'com.test.app', iosDir: 'ios', androidDir: 'android', journeyId: 'bj_test', apikey: 'test-key', loginServices }),
+    React.createElement(OnboardingShell, { appId: 'com.test.app', suggestedSource: 'capacitor', appSelectionServices, iosDir: 'ios', androidDir: 'android', journeyId: 'bj_test', apikey: 'test-key', loginServices }),
     { stdout, stderr: makeStdout(cols, rows), stdin: makeStdin(), debug: true, exitOnCtrlC: false, patchConsole: false },
   )
   const ready = cols < 44 || rows < 11 ? /too small/i : /want to set up|iOS|Android/i

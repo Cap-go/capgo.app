@@ -21,6 +21,13 @@ const loginServices = {
   beginBrowser: async () => { throw new Error('unused') },
   completeBrowser: async () => {},
 }
+const appSelectionServices = {
+  list: async () => [{ app_id: 'com.test.app', name: 'Test App' }],
+  verify: async () => {},
+  persist: async () => false,
+  openDashboard: async () => true,
+  dashboardUrl: 'https://console.capgo.app/app/new',
+}
 
 const watchdog = setTimeout(() => {
   console.error('WATCHDOG 30s')
@@ -68,7 +75,7 @@ async function renderShellInstance(props) {
   const stdout = makeStdout(100, 50)
   const stdin = makeStdin()
   const instance = render(
-    React.createElement(OnboardingShell, { appId: 'com.test.app', iosDir: 'ios', androidDir: 'android', journeyId: 'bj_test', apikey: 'test-key', loginServices, ...props }),
+    React.createElement(OnboardingShell, { appId: 'com.test.app', suggestedSource: 'capacitor', appSelectionServices, iosDir: 'ios', androidDir: 'android', journeyId: 'bj_test', apikey: 'test-key', loginServices, ...props }),
     { stdout, stderr: makeStdout(100, 50), stdin, debug: true, exitOnCtrlC: false, patchConsole: false },
   )
   await waitForFirstFrame(stdout)
