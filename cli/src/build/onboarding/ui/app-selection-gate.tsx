@@ -48,7 +48,7 @@ const BuilderAppSelectionGate: FC<BuilderAppSelectionGateProps> = ({ apikey, sug
   const [index, setIndex] = useState(0)
   const [query, setQuery] = useState('')
   const [error, setError] = useState('')
-  const [retryApp, setRetryApp] = useState<BuilderVisibleApp | undefined>()
+  const [retrySelection, setRetrySelection] = useState<{ app: BuilderVisibleApp, source?: 'closest_list' | 'full_list' } | undefined>()
   const [dashboardOpened, setDashboardOpened] = useState(true)
   const active = useRef(true)
   const request = useRef(0)
@@ -61,7 +61,7 @@ const BuilderAppSelectionGate: FC<BuilderAppSelectionGateProps> = ({ apikey, sug
 
   const verifyAndSelect = useCallback(async (app: BuilderVisibleApp, source?: 'closest_list' | 'full_list', count = 0) => {
     const requestId = ++request.current
-    setRetryApp(app)
+    setRetrySelection({ app, source })
     setView('verifying')
     try {
       await services.verify(apikey, app.app_id)
@@ -99,14 +99,14 @@ const BuilderAppSelectionGate: FC<BuilderAppSelectionGateProps> = ({ apikey, sug
         return
       }
       emit({ phase: 'shown', visibleCount: ranked.length })
-      setRetryApp(undefined)
+      setRetrySelection(undefined)
       setView('main')
     }
     catch (cause) {
       if (!active.current || requestId !== request.current)
         return
       emit({ phase: 'error', result: 'list', visibleCount: 0 })
-      setRetryApp(undefined)
+      setRetrySelection(undefined)
       setError(errorMessage(cause))
       setView('error')
     }
@@ -157,8 +157,8 @@ const BuilderAppSelectionGate: FC<BuilderAppSelectionGateProps> = ({ apikey, sug
       void services.openDashboard().then(opened => setDashboardOpened(opened)).catch(() => setDashboardOpened(false))
     }
     else if (choice.kind === 'retry') {
-      if (retryApp)
-        void verifyAndSelect(retryApp, undefined, apps.length)
+      if (retrySelection)
+        void verifyAndSelect(retrySelection.app, retrySelection.source, apps.length)
       else
         void load()
     }
@@ -217,7 +217,8 @@ const BuilderAppSelectionGate: FC<BuilderAppSelectionGateProps> = ({ apikey, sug
     return <TerminalTooSmallPrompt cols={cols} rows={rows} minCols={PICKER_MIN_COLS} minRows={PICKER_MIN_ROWS} />
 
   const compact = cols < 64 || rows < 18
-  const optionLimit = compact ? Math.max(1, rows - 9) : Math.max(3, rows - 16)
+  const showDivider = !compact && rows >= 20
+  const optionLimit = compact ? Math.max(1, rows - 9) : Math.max(3, rows - (showDivider ? 17 : 16))
   const start = Math.max(0, boundedIndex - optionLimit + 1)
   const visibleChoices = choices.slice(start, start + optionLimit)
   const suggestionLabel = suggestedSource === 'builder' ? 'Your Builder app ID:' : 'Your Capacitor app ID:'
@@ -241,7 +242,7 @@ const BuilderAppSelectionGate: FC<BuilderAppSelectionGateProps> = ({ apikey, sug
             : <Text dimColor>{apps.length === 0 ? 'No apps are visible to this API key.' : apps.length === 1 ? 'App visible to your API key:' : 'Apps visible to your API key (closest IDs first):'}</Text>}
         </Box>
       )}
-      {view === 'error' && <Box flexDirection="column" marginTop={1}><Text bold color="red">{retryApp ? 'Could not continue with this app' : 'Could not load Capgo apps'}</Text><Text color="red">{error}</Text></Box>}
+      {view === 'error' && <Box flexDirection="column" marginTop={1}><Text bold color="red">{retrySelection ? 'Could not continue with this app' : 'Could not load Capgo apps'}</Text><Text color="red">{error}</Text></Box>}
       {view === 'dashboard' && (
         <Box flexDirection="column" marginTop={1}>
           <Text bold>Open Dashboard to create {suggestedId}</Text>
@@ -253,6 +254,7 @@ const BuilderAppSelectionGate: FC<BuilderAppSelectionGateProps> = ({ apikey, sug
       )}
       {(view === 'main' || view === 'all' || view === 'error') && (
         <Box flexDirection="column" marginTop={compact ? 0 : 1}>
+          {showDivider && (view === 'main' || view === 'all') && <Text dimColor>{'─'.repeat(Math.min(76, cols - 2))}</Text>}
           {view === 'all' && filteredApps.length === 0 && <Text dimColor>No matching apps</Text>}
           {visibleChoices.map((choice, offset) => {
             const selected = start + offset === boundedIndex

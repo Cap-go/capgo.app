@@ -166,6 +166,7 @@ async function stop(ui) {
   assert.match(ui.stdout.lastFrame, /Your Capacitor app ID: com\.example\.weather/)
   assert.match(ui.stdout.lastFrame.replace(/\s+/g, ' '), /No app with this ID is available to your API key\. It may exist in Capgo, but you or your API key might lack access to it\./)
   assert.match(ui.stdout.lastFrame, /App visible to your API key:/)
+  assert.match(ui.stdout.lastFrame, /─{20,}/, 'a divider separates the app choices from the explanation')
   assert.match(ui.stdout.lastFrame, /Weather Preview.*com\.example\.weather\.dev/)
   assert.doesNotMatch(ui.stdout.lastFrame, /Select a different app/)
   assert.deepEqual(ui.selected, [])
@@ -238,8 +239,43 @@ async function stop(ui) {
 }
 
 {
+  let attempts = 0
+  const ui = renderGate({
+    visible: [{ app_id: 'com.example.weather.dev', name: 'Weather Preview' }],
+    verify: async () => {
+      if (attempts++ === 0)
+        throw new AppSelectionError('build', 'Temporary permission check failure.')
+    },
+  })
+  await waitFor(() => ui.stdout.lastFrame.includes('Which Capgo app should Builder use?'), 'explicit retry picker')
+  ui.stdin.send('\r')
+  await waitFor(() => ui.stdout.lastFrame.includes('Temporary permission check failure.'), 'explicit retry error')
+  ui.stdin.send('\r')
+  await waitFor(() => ui.selected.length === 1, 'explicit retry success')
+  assert.deepEqual(ui.events.find(event => event.phase === 'resolved'), { phase: 'resolved', result: 'selected', source: 'closest_list', visibleCount: 1 })
+  await stop(ui)
+}
+
+{
+  let attempts = 0
+  const ui = renderGate({
+    visible: [{ app_id: 'com.example.weather', name: 'Weather' }],
+    verify: async () => {
+      if (attempts++ === 0)
+        throw new AppSelectionError('build', 'Temporary permission check failure.')
+    },
+  })
+  await waitFor(() => ui.stdout.lastFrame.includes('Temporary permission check failure.'), 'exact match retry error')
+  ui.stdin.send('\r')
+  await waitFor(() => ui.selected.length === 1, 'exact match retry success')
+  assert.deepEqual(ui.events.find(event => event.phase === 'resolved'), { phase: 'resolved', result: 'exact_match', source: undefined, visibleCount: 1 })
+  await stop(ui)
+}
+
+{
   const ui = renderGate({ visible: [{ app_id: 'com.example.weather.dev', name: 'Weather Preview' }], cols: 44, rows: 11 })
   await waitFor(() => ui.stdout.lastFrame.includes('App visible to your API key'), 'compact app screen')
+  assert.doesNotMatch(ui.stdout.lastFrame, /─{20,}/, 'compact terminals omit the divider')
   assert.ok(ui.stdout.lastFrame.split('\n').length <= 11, 'compact app screen fits the terminal height')
   assert.ok(ui.stdout.lastFrame.split('\n').every(line => stringWidth(line) <= 44), 'compact app screen fits terminal width')
   await stop(ui)
