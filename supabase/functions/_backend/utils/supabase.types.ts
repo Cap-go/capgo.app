@@ -4727,6 +4727,7 @@ export type Database = {
               total_percent: number
             }[]
           }
+      get_public_builder_metrics: { Args: never; Returns: Json }
       get_sso_enforcement_by_domain: {
         Args: { p_domain: string }
         Returns: {
@@ -5046,6 +5047,7 @@ export type Database = {
         Args: { p_existing: Json; p_patch: Json }
         Returns: Json
       }
+      new_builder_onboarding_setup_v1: { Args: never; Returns: Json }
       null_migrated_app_version_manifests: {
         Args: {
           batch_size?: number
