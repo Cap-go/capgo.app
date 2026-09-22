@@ -220,7 +220,7 @@ console.log('Builder browser retry and cancellation passed')
 
 console.log('Builder small-terminal browser fallback passed')
 
-function renderShellForLogin({ initialPlatform } = {}) {
+function renderShellForLogin({ initialPlatform, list = async () => [{ app_id: 'com.example.builderlogin', name: 'Builder Login' }] } = {}) {
   const stdout = makeStream(100, 50)
   const stdin = makeStdin()
   const resolved = []
@@ -243,6 +243,14 @@ function renderShellForLogin({ initialPlatform } = {}) {
     guidedHelperUsable: false,
     apikey: 'existing-test-key',
     loginServices: services,
+    suggestedSource: 'capacitor',
+    appSelectionServices: {
+      list,
+      verify: async () => {},
+      persist: async () => false,
+      openDashboard: async () => true,
+      dashboardUrl: 'https://console.capgo.app/app/new',
+    },
     journeyId: 'bj_login-test',
     initialPlatform,
     onResolvePlatform: (platform) => {
@@ -280,3 +288,17 @@ function renderShellForLogin({ initialPlatform } = {}) {
 }
 
 console.log('Builder shell authenticates before platform choice and auto-load')
+
+{
+  let finishAppList
+  const appList = new Promise(resolve => (finishAppList = resolve))
+  const shell = renderShellForLogin({ initialPlatform: 'ios', list: async () => appList })
+  shell.finishValidation()
+  await waitFor(() => shell.stdout.lastFrame.includes('Checking Capgo apps'), 'app check after login')
+  assert.deepEqual(shell.resolved, [], 'preselected platform must wait for app resolution')
+  finishAppList([{ app_id: 'com.example.builderlogin', name: 'Builder Login' }])
+  await waitFor(() => shell.resolved.length === 1, 'preselected platform after app verification')
+  await stop(shell)
+}
+
+console.log('Builder shell verifies the app before --platform auto-load')

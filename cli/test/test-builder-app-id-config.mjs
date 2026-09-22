@@ -6,6 +6,7 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { getBuilderAppId } from '../src/build/app-id.ts'
+import { persistBuilderAppSelection } from '../src/build/onboarding/app-selection.ts'
 import { loadConfig, writeConfigUpdater } from '../src/config/index.ts'
 import { getAppId } from '../src/utils.ts'
 import { flushAnalytics, isBuilderInvocation, resolveTrackingContext, trackCommandInvoked } from '../src/analytics/track.ts'
@@ -179,6 +180,13 @@ module.exports = config
         assert.deepEqual(errorsFor(path), [], 'Capgo updater writes must keep the TypeScript config valid')
       if (extension === 'js')
         assert.match(readFileSync(path, 'utf8'), /capgoBuilderAppId/)
+      assert.equal(await persistBuilderAppSelection(builderId), false, 'matching Builder ID needs no config write')
+      assert.equal(await persistBuilderAppSelection('com.example.selected'), true)
+      const selectedConfig = await loadConfig()
+      assert.equal(selectedConfig.config.appId, nativeId)
+      assert.equal(selectedConfig.config.plugins.CapacitorUpdater.appId, 'com.example.raw-ota')
+      assert.equal(selectedConfig.config.plugins.CapgoBuilder.capgoBuilderAppId, 'com.example.selected')
+      assert.equal((await loadCapacitorConfig()).app.extConfig.plugins.CapgoBuilder.capgoBuilderAppId, 'com.example.selected')
     }
     finally {
       process.chdir(previousCwd)

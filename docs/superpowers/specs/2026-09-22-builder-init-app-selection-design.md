@@ -99,6 +99,8 @@ authorizes creation there. The CLI does not infer
 `org.create_app` for that session from the current CLI key. If the browser
 opens under a different account, the user can switch the CLI key. An
 unavailable browser leaves a URL the user can open manually.
+With a custom `--supa-host` or `--supa-anon`, hide the hosted Dashboard action,
+because it could create an app in a different Capgo environment.
 
 ## Verification, persistence, and recovery
 
