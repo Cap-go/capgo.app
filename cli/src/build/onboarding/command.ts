@@ -371,6 +371,8 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
   // or a fatal error that exits) — none of which run React cleanup reliably.
   let lastStep: string | undefined
   let appSelectionConfirmed = false
+  let startSetupLookupInFlight = false
+  let startSetupStep: OnboardingStep | AndroidOnboardingStep | undefined
   let startSetupTracked = false
   const onboardingTree = React.createElement(OnboardingShell, {
       appId,
@@ -403,6 +405,7 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
         const apikey = authenticatedApiKey
         if (
           startSetupTracked
+          || startSetupLookupInFlight
           || !analyticsEnabled
           || !appSelectionConfirmed
           || !selectedAppId
@@ -412,10 +415,16 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
         )
           return
 
-        startSetupTracked = true
-        void resolveOwnerOrgId(apikey, selectedAppId).then((orgId) => {
+        const firstSetupStep = startSetupStep ?? (step as OnboardingStep | AndroidOnboardingStep)
+        startSetupStep = firstSetupStep
+        startSetupLookupInFlight = true
+        void resolveOwnerOrgId(apikey, selectedAppId, {
+          supaHost: options.supaHost,
+          supaAnon: options.supaAnon,
+        }).then((orgId) => {
           if (!orgId)
             return
+          startSetupTracked = true
           return trackBuilderOnboardingAction({
             action: 'start_setup',
             apikey,
@@ -423,9 +432,11 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
             journeyId,
             orgId,
             platform,
-            step: step as OnboardingStep | AndroidOnboardingStep,
+            step: firstSetupStep,
             tags: { source: 'cli' },
           })
+        }).finally(() => {
+          startSetupLookupInFlight = false
         })
       },
       onResult: (r: OnboardingResult) => {

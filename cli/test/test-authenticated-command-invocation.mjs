@@ -90,6 +90,9 @@ const builderInitCommandSource = sourceBetween(indexSource, ".command('init')", 
 assert.match(builderInitCommandSource, /enableSelfUpdate: true/)
 assert.match(builderSource, /const analyticsEnabled = options\.enableSelfUpdate === true/)
 assert.match(builderSource, /action: 'start_setup'/)
+assert.match(builderSource, /startSetupLookupInFlight/)
+assert.match(builderSource, /step: firstSetupStep/)
+assert.match(builderSource, /supaHost: options\.supaHost/)
 assert.doesNotMatch(bundleUploadSource, /enableSelfUpdate/)
 assert.doesNotMatch(credentialsManageSource, /enableSelfUpdate/)
 

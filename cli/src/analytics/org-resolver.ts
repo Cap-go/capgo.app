@@ -7,6 +7,8 @@ export interface OrgResolverDeps {
   createClient?: typeof createSupabaseClient
   /** Injectable for tests; defaults to GET app via invokeCapgoCliApi. */
   fetchOwnerOrg?: (apikey: string, appId: string, signal?: AbortSignal) => Promise<string | undefined>
+  supaHost?: string
+  supaAnon?: string
 }
 
 /**
@@ -15,7 +17,7 @@ export interface OrgResolverDeps {
  * Extracted so the analytics layer and onboarding analytics share one path.
  */
 export function resolveOwnerOrgId(apikey: string, appId: string, deps: OrgResolverDeps = {}, signal?: AbortSignal): Promise<string | undefined> {
-  const cacheKey = `${apikey}:${appId}`
+  const cacheKey = `${deps.supaHost ?? ''}:${apikey}:${appId}`
   const cached = ownerOrgCache.get(cacheKey)
   if (cached)
     return cached
@@ -29,7 +31,7 @@ export function resolveOwnerOrgId(apikey: string, appId: string, deps: OrgResolv
 
       // TODO(cli-http): createClient path is legacy test/compat only
       if (deps.createClient) {
-        const supabase = await deps.createClient(apikey, undefined, undefined, true, false)
+        const supabase = await deps.createClient(apikey, deps.supaHost, deps.supaAnon, true, false)
         let query = supabase
           .from('apps')
           .select('owner_org')
@@ -44,6 +46,8 @@ export function resolveOwnerOrgId(apikey: string, appId: string, deps: OrgResolv
         apikey,
         method: 'GET',
         body: undefined,
+        supaHost: deps.supaHost,
+        supaAnon: deps.supaAnon,
         signal,
       })
       if (error || !data?.owner_org)
