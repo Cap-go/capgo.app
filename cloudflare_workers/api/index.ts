@@ -25,6 +25,7 @@ import { app as native_observe_stats } from '../../supabase/functions/_backend/p
 import { app as observe } from '../../supabase/functions/_backend/private/observe.ts'
 import { app as onboarding_ab_tests } from '../../supabase/functions/_backend/private/onboarding_ab_tests.ts'
 import { app as onboarding_progress } from '../../supabase/functions/_backend/private/onboarding_progress.ts'
+import { app as org_billing } from '../../supabase/functions/_backend/private/org_billing.ts'
 import { app as org_notification_stats } from '../../supabase/functions/_backend/private/org_notification_stats.ts'
 import { app as organization_invitation } from '../../supabase/functions/_backend/private/organization_invitation.ts'
 import { app as plans } from '../../supabase/functions/_backend/private/plans.ts'
@@ -169,6 +170,7 @@ appPrivate.route('/onboarding_ab_tests', onboarding_ab_tests)
 appPrivate.route('/onboarding_progress', onboarding_progress)
 appPrivate.route('/org_notification_stats', org_notification_stats)
 appPrivate.route('/organization_invitation', organization_invitation)
+appPrivate.route('/org_billing', org_billing)
 appPrivate.route('/update_delivery_stats', update_delivery_stats)
 appPrivate.route('/bundle_install_stats', bundle_install_stats)
 appPrivate.route('/release_live', release_live)
