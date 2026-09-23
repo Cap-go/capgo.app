@@ -18,6 +18,7 @@
     "@supabase/supabase-js": "npm:@supabase/supabase-js@2.106.2",
     "@std/semver": "jsr:@std/semver@1.0.8",
     "@bradenmacdonald/s3-lite-client": "jsr:@bradenmacdonald/s3-lite-client@0.9.6",
-    "discord-api-types/": "npm:/discord-api-types@^0.38.48/"
+    "discord-api-types/": "npm:/discord-api-types@^0.38.48/",
+    "@openstatus/health": "npm:@openstatus/health@0.1.1"
   }
 }

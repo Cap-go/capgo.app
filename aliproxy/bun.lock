@@ -1,0 +1,15 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "nodejs-express",
+      "dependencies": {
+        "@openstatus/health": "0.1.1",
+      },
+    },
+  },
+  "packages": {
+    "@openstatus/health": ["@openstatus/health@0.1.1", "", {}, "sha512-BjSDIl1WOHF64lmhJipYdcolIt/Ciy4eoaasG8XuvDZJ6ENc6GFw49A0JyN2sZYOuKuTcKAS8B7pjHnsJtk+Lw=="],
+  }
+}

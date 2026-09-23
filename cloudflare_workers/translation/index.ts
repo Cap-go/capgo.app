@@ -1,4 +1,5 @@
 import type { D1Database, ExecutionContext, MessageBatch, Queue } from '@cloudflare/workers-types'
+import { createHealthHandler, probe } from '@openstatus/health'
 import sourceMessageContexts from '../../messages/en.context.json' with { type: 'json' }
 import sourceMessages from '../../messages/en.json' with { type: 'json' }
 
@@ -16,6 +17,18 @@ const TRANSLATION_BATCH_LEASE_SECONDS = 15 * 60
 const TRANSLATION_STORE_TABLE = 'translation_messages_cache'
 const CLAIMED_TRANSLATION_BATCH_INDEX_OFFSET = 1_000_000_000
 const PLACEHOLDER_PATTERN = /\{[\w.]+\}|%\w+%?|\$\d+/g
+
+const translationHealthHandler = createHealthHandler({
+  path: '/health',
+  probes: [
+    probe({
+      name: 'translation_worker',
+      critical: true,
+      run: async () => undefined,
+    }),
+  ],
+  extend: () => ({ worker: 'translation' }),
+})
 
 const SUPPORTED_LANGUAGES = new Set([
   'de',
@@ -1383,6 +1396,9 @@ async function fetchHandler(request: Request, env: TranslationWorkerBindings) {
     return new Response(null, { status: 204, headers: corsHeaders() })
 
   const url = new URL(request.url)
+  if (request.method === 'GET' && (url.pathname === '/health' || url.pathname === '/health/'))
+    return translationHealthHandler(request)
+
   if (request.method === 'POST' && (url.pathname === '/translation/messages' || url.pathname === '/messages'))
     return handleTranslationMessages(request, env)
 
