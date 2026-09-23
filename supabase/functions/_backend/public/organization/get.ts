@@ -13,6 +13,14 @@ const bodySchema = z.object({
   orgId: z.string().optional(),
   page: z.number().optional(),
 })
+const passwordPolicyConfigSchema = z.object({
+  enabled: z.boolean(),
+  min_length: z.number().int(),
+  require_uppercase: z.boolean(),
+  require_number: z.boolean(),
+  require_special: z.boolean(),
+})
+
 const orgSchema = z.object({
   id: z.uuid(),
   created_by: z.uuid(),
@@ -23,6 +31,11 @@ const orgSchema = z.object({
   management_email: z.email(),
   customer_id: z.string().nullable(),
   website: z.string().nullable(),
+  enforcing_2fa: z.boolean(),
+  password_policy_config: passwordPolicyConfigSchema.nullable(),
+  require_apikey_expiration: z.boolean(),
+  max_apikey_expiration_days: z.number().nullable(),
+  enforce_hashed_api_keys: z.boolean(),
 })
 
 const orgsSchema = z.array(orgSchema)

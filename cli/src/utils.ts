@@ -2347,6 +2347,46 @@ export async function fetchOrganizationsV7(
   return data ?? []
 }
 
+export interface CliOrganizationDetails {
+  name: string
+  management_email?: string
+  created_by?: string
+  enforcing_2fa: boolean
+  password_policy_config: {
+    enabled: boolean
+    min_length: number
+    require_uppercase: boolean
+    require_number: boolean
+    require_special: boolean
+  } | null
+  require_apikey_expiration: boolean
+  max_apikey_expiration_days: number | null
+  enforce_hashed_api_keys: boolean
+}
+
+export async function fetchCliOrganization(
+  apikey: string,
+  orgId: string,
+  httpOptions: CliHttpOptions = {},
+): Promise<CliOrganizationDetails> {
+  const { data, error } = await invokeCapgoCliApi<CliOrganizationDetails>(
+    `organization?orgId=${encodeURIComponent(orgId)}`,
+    {
+      apikey,
+      method: 'GET',
+      body: undefined,
+      supaHost: httpOptions.supaHost,
+      supaAnon: httpOptions.supaAnon,
+    },
+  )
+
+  if (error || !data?.name) {
+    throw new Error(`Cannot get organization details: ${formatError(error)}`, { cause: error })
+  }
+
+  return data
+}
+
 export async function getOrganizationListWithPermission(
   supabase: SupabaseClient<Database>,
   apikey: string,

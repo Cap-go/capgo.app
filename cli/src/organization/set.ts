@@ -9,6 +9,7 @@ import {
   createSupabaseClient,
   fetchCliMembers2faStatus,
   fetchCliMembersPasswordPolicyStatus,
+  fetchCliOrganization,
   findSavedKey,
   formatError,
   invokeCapgoCliApi,
@@ -115,14 +116,11 @@ export async function setOrganizationInternal(
 
   await check2FAAccessForOrg(supabase, orgId, silent, httpOptions)
 
-  // TODO(cli-http): GET organization omits enforcing_2fa/password_policy/security fields needed here
-  const { data: orgData, error: orgError } = await supabase
-    .from('orgs')
-    .select('name, management_email, created_by, enforcing_2fa, password_policy_config, require_apikey_expiration, max_apikey_expiration_days, enforce_hashed_api_keys')
-    .eq('id', orgId)
-    .single()
-
-  if (orgError || !orgData) {
+  let orgData: Awaited<ReturnType<typeof fetchCliOrganization>>
+  try {
+    orgData = await fetchCliOrganization(enrichedOptions.apikey!, orgId, httpOptions)
+  }
+  catch (orgError) {
     if (!silent)
       log.error(`Cannot get organization details ${formatError(orgError)}`)
     throw new Error(`Cannot get organization details: ${formatError(orgError)}`)

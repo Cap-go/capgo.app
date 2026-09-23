@@ -1,6 +1,5 @@
 import type { Buffer } from 'node:buffer'
 import type { Options } from '../api/app'
-import type { Database } from '../types/supabase.types'
 import { existsSync, readFileSync } from 'node:fs'
 import { intro, log, outro } from '@clack/prompts'
 import { checkAppExistsAndHasPermissionOrgErr, getAppIconStoragePath, resolveAppSetIconPath } from '../api/app'
@@ -161,6 +160,12 @@ export async function setAppInternal(appId: string, options: Options, silent = f
     putBody.allow_device_custom_id = allowDeviceCustomId
   if (blockProviderInfraRequests != null)
     putBody.block_provider_infra_requests = blockProviderInfraRequests
+  if (preview != null)
+    putBody.allow_preview = preview
+  if (buildTimeoutMinutes != null)
+    putBody.build_timeout_seconds = Math.trunc(Number(buildTimeoutMinutes)) * 60
+  if (defaultUploadChannel != null)
+    putBody.default_upload_channel = defaultUploadChannel
   if (iosStoreUrl !== undefined)
     putBody.ios_store_url = normalizedIosStoreUrl
   if (androidStoreUrl !== undefined)
@@ -178,28 +183,6 @@ export async function setAppInternal(appId: string, options: Options, silent = f
       if (!silent)
         log.error(`Could not set app ${formatError(putError)}`)
       throw new Error(`Could not set app: ${formatError(putError)}`)
-    }
-  }
-
-  // TODO(cli-http): PUT app does not support allow_preview / build_timeout_seconds / default_upload_channel yet
-  const appUpdate: Database['public']['Tables']['apps']['Update'] = {}
-  if (preview != null)
-    appUpdate.allow_preview = preview
-  if (buildTimeoutMinutes != null)
-    appUpdate.build_timeout_seconds = Math.trunc(Number(buildTimeoutMinutes)) * 60
-  if (defaultUploadChannel != null)
-    appUpdate.default_upload_channel = defaultUploadChannel
-
-  if (Object.keys(appUpdate).length > 0) {
-    const { error: dbError } = await supabase
-      .from('apps')
-      .update(appUpdate)
-      .eq('app_id', appId)
-
-    if (dbError) {
-      if (!silent)
-        log.error(`Could not set app ${formatError(dbError)}`)
-      throw new Error(`Could not set app: ${formatError(dbError)}`)
     }
   }
 
