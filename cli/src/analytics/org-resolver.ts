@@ -13,7 +13,7 @@ export interface OrgResolverDeps {
 
 /**
  * Resolves an app's owner organization id (`apps.owner_org`), promise-cached
- * per `(apikey, appId)`. Returns undefined on any error — never throws.
+ * per `(supaHost, apikey, appId)`. Returns undefined on any error — never throws.
  * Extracted so the analytics layer and onboarding analytics share one path.
  */
 export function resolveOwnerOrgId(apikey: string, appId: string, deps: OrgResolverDeps = {}, signal?: AbortSignal): Promise<string | undefined> {
