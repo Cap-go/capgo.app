@@ -1730,6 +1730,7 @@
   "invitation-rescinded": "Invitation rescinded successfully!",
   "invitation-resend-wait": "Please wait {minutes} minutes before resending the invitation.",
   "invite-accepted": "Successfully accepted organization invitation",
+  "invite-name-domain-not-allowed": "Enter a person's name. Domain names such as example.com aren't allowed.",
   "invite-new-user-dialog-description": "Add a few details so we can send the invitation and create their account if needed.",
   "invite-new-user-dialog-header": "Invite New User",
   "invite-new-user-dialog-helper": "We will invite this teammate to the organization. If they do not have an account yet, Capgo will create one from this information.",
