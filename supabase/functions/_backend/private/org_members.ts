@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { canCallerAssignOrgRole } from '../utils/rbac.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
 import { emptySupabase, supabaseClient } from '../utils/supabase.ts'
 import { normalizeInviteRole } from '../public/organization/members/post.ts'
 
@@ -32,6 +33,23 @@ const memberRoleBodySchema = z.object({
   org_id: orgIdSchema,
   user_id: orgIdSchema,
   role_name: rbacOrgRoleSchema,
+})
+
+const acceptBodySchema = z.object({
+  org_id: orgIdSchema,
+})
+
+const declineBodySchema = z.object({
+  org_id: orgIdSchema.optional(),
+  org_ids: z.array(orgIdSchema).min(1).optional(),
+}).superRefine((body, ctx) => {
+  if (!body.org_id && (!body.org_ids || body.org_ids.length === 0)) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'org_id or org_ids is required',
+      path: ['org_id'],
+    })
+  }
 })
 
 const inviteRoleBodySchema = z.object({
@@ -184,6 +202,77 @@ app.patch('/invite-role', middlewareAuth, async (c) => {
 
   if (data !== 'OK')
     throw simpleError('invite_role_error', typeof data === 'string' ? data : 'Unexpected invite role response')
+
+  return c.json({ status: 'ok' })
+})
+
+app.post('/accept', middlewareAuth, async (c) => {
+  const body = await parseBody<unknown>(c)
+  const parsed = acceptBodySchema.safeParse(body)
+  if (!parsed.success)
+    throw simpleError('invalid_body', 'Invalid body', { error: parsed.error.message })
+
+  const supabase = getAuthedSupabase(c)
+  const { data, error } = await supabase.rpc('accept_invitation_to_org', {
+    org_id: parsed.data.org_id,
+  })
+
+  if (error)
+    throw simpleError('accept_error', error.message)
+
+  if (data !== 'OK')
+    throw simpleError('accept_error', typeof data === 'string' ? data : 'Unexpected accept response')
+
+  return c.json({ status: 'ok' })
+})
+
+app.post('/decline', middlewareAuth, async (c) => {
+  const body = await parseBody<unknown>(c)
+  const parsed = declineBodySchema.safeParse(body)
+  if (!parsed.success)
+    throw simpleError('invalid_body', 'Invalid body', { error: parsed.error.message })
+
+  const auth = c.get('auth')
+  const userId = auth?.userId
+  if (!userId)
+    throw simpleError('not_authorized', 'Not authorized')
+
+  const orgIds = parsed.data.org_ids ?? (parsed.data.org_id ? [parsed.data.org_id] : [])
+  const pgPool = getPgClient(c)
+  const dbClient = await pgPool.connect()
+  let transactionOpen = false
+  try {
+    await dbClient.query('BEGIN')
+    transactionOpen = true
+    for (const orgId of orgIds)
+      await dbClient.query('SELECT public.lock_rbac_orgs($1::uuid)', [orgId])
+
+    const deleted = await dbClient.query(
+      `
+        DELETE FROM public.org_users
+        WHERE user_id = $1::uuid
+          AND org_id = ANY($2::uuid[])
+          AND app_id IS NULL
+          AND channel_id IS NULL
+          AND is_invite IS TRUE
+        RETURNING org_id
+      `,
+      [userId, orgIds],
+    )
+    if ((deleted.rowCount ?? 0) < 1)
+      throw simpleError('decline_error', 'NO_INVITE')
+
+    await dbClient.query('COMMIT')
+  }
+  catch (error) {
+    if (transactionOpen)
+      await dbClient.query('ROLLBACK').catch(() => {})
+    throw error
+  }
+  finally {
+    dbClient.release()
+    closeClient(c, pgPool)
+  }
 
   return c.json({ status: 'ok' })
 })

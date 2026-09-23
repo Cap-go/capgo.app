@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Organization, OrganizationApp } from '~/stores/organization'
+import { FunctionsHttpError } from '@supabase/supabase-js'
 import { storeToRefs } from 'pinia'
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -7,10 +8,9 @@ import { toast } from 'vue-sonner'
 import IconSettings from '~icons/lucide/settings'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
+import { acceptOrgInvitation, declineOrgInvitation } from '~/services/orgMembers'
 import { resolveImagePath } from '~/services/storage'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
-import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
 
 type OrganizationInvitationTarget = Pick<Organization, 'gid' | 'name' | 'role' | 'is_invite'>
@@ -27,8 +27,6 @@ const organizationStore = useOrganizationStore()
 const { currentOrganization } = storeToRefs(organizationStore)
 const dialogStore = useDialogV2Store()
 const { t } = useI18n()
-const supabase = useSupabase()
-const main = useMainStore()
 const dropdown = useTemplateRef<HTMLDetailsElement>('dropdown')
 const menu = useTemplateRef<HTMLElement>('orgSwitcherMenu')
 const compactMenuOpen = ref(false)
@@ -186,45 +184,40 @@ async function handleOrganizationInvitation(org: OrganizationInvitationTarget) {
         text: t('button-join'),
         id: 'confirm-button',
         handler: async () => {
-          const { data, error } = await supabase.rpc('accept_invitation_to_org', {
-            org_id: org.gid,
-          })
+          const { error } = await acceptOrgInvitation(org.gid)
 
-          if (!data || error) {
+          if (error) {
             console.log('Error accept: ', error)
+            let acceptCode = ''
+            if (error instanceof FunctionsHttpError && error.context instanceof Response) {
+              try {
+                const payload = await error.context.clone().json<{ message?: string }>()
+                acceptCode = payload.message ?? ''
+              }
+              catch {
+                // Fall back to generic error handling below.
+              }
+            }
+            if (acceptCode === 'NO_INVITE')
+              toast.error(t('alert-no-invite'))
+            else if (acceptCode === 'INVALID_ROLE' || acceptCode === 'ROLE_NOT_FOUND')
+              toast.error(t('alert-not-invited'))
+            else
+              toast.error(t('alert-unknown-error'))
             return
           }
 
-          if (data === 'OK') {
-            invitationHandled = true
-            organizationStore.setCurrentOrganization(org.gid)
-            await organizationStore.fetchOrganizations()
-            toast.success(t('invite-accepted'))
-          }
-          else if (data === 'NO_INVITE') {
-            toast.error(t('alert-no-invite'))
-          }
-          else if (data === 'INVALID_ROLE') {
-            toast.error(t('alert-not-invited'))
-          }
-          else {
-            toast.error(t('alert-unknown-error'))
-          }
+          invitationHandled = true
+          organizationStore.setCurrentOrganization(org.gid)
+          await organizationStore.fetchOrganizations()
+          toast.success(t('invite-accepted'))
         },
       },
       {
         text: t('button-deny-invite'),
         id: 'deny-button',
         handler: async () => {
-          const userId = main.user?.id
-          if (userId === undefined)
-            return
-
-          const { error } = await supabase
-            .from('org_users')
-            .delete()
-            .eq('org_id', org.gid)
-            .eq('user_id', userId)
+          const { error } = await declineOrgInvitation(org.gid)
 
           if (error) {
             console.log('Error delete: ', error)

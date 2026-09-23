@@ -10,7 +10,7 @@ import IconLoader from '~icons/lucide/loader-2'
 import IconUserPlus from '~icons/lucide/user-plus'
 import IconX from '~icons/lucide/x'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
-import { useSupabase } from '~/services/supabase'
+import { acceptOrgInvitation, declineOrgInvitation, declineOrgInvitations } from '~/services/orgMembers'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
@@ -20,7 +20,6 @@ import { validateRedirectPath } from '~/utils/safeRedirect'
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
-const supabase = useSupabase()
 const displayStore = useDisplayStore()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
@@ -102,29 +101,17 @@ async function loadPendingInvitations() {
 }
 
 async function acceptInvitation(invitation: Organization) {
-  const { data, error } = await supabase.rpc('accept_invitation_to_org', {
-    org_id: invitation.gid,
-  })
+  const { error } = await acceptOrgInvitation(invitation.gid)
 
   if (error)
     throw error
-  if (data !== 'OK')
-    throw new Error(typeof data === 'string' ? data : 'failed_to_accept_invitation')
 
   await organizationStore.fetchOrganizations()
   organizationStore.setCurrentOrganization(invitation.gid)
 }
 
 async function declineInvitation(invitation: Organization) {
-  const userId = getCurrentUserId()
-  if (!userId)
-    throw new Error('missing_user')
-
-  const { error } = await supabase
-    .from('org_users')
-    .delete()
-    .eq('org_id', invitation.gid)
-    .eq('user_id', userId)
+  const { error } = await declineOrgInvitation(invitation.gid)
 
   if (error)
     throw error
@@ -172,11 +159,7 @@ async function declineAllInvitations() {
     clearPendingInviteSkip(userId)
 
     const inviteOrgIds = invitations.value.map(invitation => invitation.gid)
-    const { error } = await supabase
-      .from('org_users')
-      .delete()
-      .eq('user_id', userId)
-      .in('org_id', inviteOrgIds)
+    const { error } = await declineOrgInvitations(inviteOrgIds)
     if (error)
       throw error
 
