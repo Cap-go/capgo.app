@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NavigationGuardNext, RouteLocationNormalized } from 'vue-router'
 import type { UserModule } from '~/types'
+import { clearChartDataCache } from '~/services/chartDataService'
 import { isCliLoginPath } from '~/services/cliLogin'
 import { hideLoader } from '~/services/loader'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
@@ -15,6 +16,7 @@ import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/orga
 import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 import { getOnboardingResumeRedirect, isNewOnboardingUser } from '~/utils/onboardingRedirect'
 import { hasPendingInviteSkip } from '~/utils/pendingInviteSkip'
+import { validateRedirectPath } from '~/utils/safeRedirect'
 import { getPlans, isPlatformAdmin } from './../services/supabase'
 
 async function updateUser(
@@ -173,9 +175,7 @@ function getAccountDisabledRedirect(to: RouteLocationNormalized) {
 
 function getPostRestorePath(to: RouteLocationNormalized) {
   const target = typeof to.query.to === 'string' ? to.query.to : ''
-  if (target.startsWith('/') && target !== '/accountDisabled')
-    return target
-  return '/dashboard'
+  return validateRedirectPath(target, '/dashboard', { blockedPrefixes: ['/accountDisabled'] })
 }
 
 async function guard(
@@ -494,8 +494,10 @@ export const install: UserModule = ({ router }) => {
 
   if (typeof supabase.auth.onAuthStateChange === 'function') {
     supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session)
+      if (!session) {
         clearWebsitePaidUserCookie()
+        clearChartDataCache()
+      }
     })
   }
 

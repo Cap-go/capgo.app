@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import { CLI_PROJECT_MODES } from '../framework/mode'
+import { buildCacheKeyOptionSchema, buildCacheOptionSchema } from '../schemas/build'
 import { capacitorConfigOptionSchema, observeOptionsObjectSchema, refineObserveDeviceId } from '../schemas/sdk'
 
 export const mcpAddAppInputSchema = z.object({
@@ -21,6 +23,7 @@ export const mcpDeleteAppInputSchema = z.object({
 export const mcpUploadBundleInputSchema = z.object({
   appId: z.string(),
   path: z.string(),
+  mode: z.enum(CLI_PROJECT_MODES).optional().describe('Project framework mode. Use cordova for Cordova apps without capacitor.config'),
   bundle: z.string().optional(),
   channel: z.string().optional(),
   rollout: z.number().min(0).max(100).optional(),
@@ -32,6 +35,7 @@ export const mcpUploadBundleInputSchema = z.object({
   autoSetBundle: z.boolean().optional(),
   autoBump: z.enum(['major', 'minor', 'patch', 'metadata', 'ai']).optional().describe('Semver part to bump from latest remote version (default minor when set via CLI without value); ai classifies via Capgo Workers AI'),
   encrypt: z.boolean().optional(),
+  acceptIncompatible: z.boolean().optional().describe('Accept native-package incompatibility as handled (still checks and warns, continues, skips the crash-warning email)'),
   capacitorConfig: capacitorConfigOptionSchema.optional(),
 })
 
@@ -102,6 +106,7 @@ export const mcpUpdateChannelInputSchema = z.object({
   autoPauseMinFailures: z.number().int().min(0).nullable().optional(),
   autoPauseAction: z.enum(['pause', 'rollback', 'notify']).optional(),
   autoPauseCooldownMinutes: z.number().int().min(0).max(10080).optional(),
+  acceptIncompatible: z.boolean().optional().describe('Accept native-package incompatibility as handled (still checks and warns, sets the channel instead of failing)'),
 })
 
 export const mcpDeleteChannelInputSchema = z.object({
@@ -143,6 +148,8 @@ export const mcpRequestBuildInputSchema = z.object({
   platform: z.enum(['ios', 'android']),
   path: z.string().optional(),
   nodeModules: z.string().optional(),
+  cache: buildCacheOptionSchema.describe('When false, disables compilation cache for this build. Omit or true to use the default (cache enabled).'),
+  cacheKey: buildCacheKeyOptionSchema.describe('Custom compilation cache key (e.g. rc, prod) to share or isolate cache between environments.'),
 })
 
 export const mcpGenerateEncryptionKeysInputSchema = z.object({

@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import { quickError } from '../../utils/hono.ts'
+import { cloudlog, serializeError } from '../../utils/logging.ts'
 
 export interface FetchStoreMetadataBody {
   url?: string
@@ -14,6 +15,7 @@ interface AppleLookupResult {
   screenshotUrls?: string[]
 }
 
+const APPLE_LOOKUP_TIMEOUT_MS = 5_000
 const ALLOWED_STORE_HOSTS = new Set([
   'apps.apple.com',
   'itunes.apple.com',
@@ -88,23 +90,64 @@ function extractAppleStoreId(url: URL) {
   return match?.[1] ?? null
 }
 
-async function fetchAppleLookupMetadata(storeId: string) {
-  const lookupUrl = new URL('https://itunes.apple.com/lookup')
-  lookupUrl.searchParams.set('id', storeId)
-
-  const response = await fetch(lookupUrl.toString(), {
-    headers: {
-      'user-agent': 'Mozilla/5.0 (compatible; CapgoOnboardingBot/1.0)',
-      'accept-language': 'en-US,en;q=0.9',
-    },
-  })
-
-  if (!response.ok) {
+function extractAppleStoreCountry(url: URL) {
+  if (url.hostname.toLowerCase() !== 'apps.apple.com')
     return null
+
+  const match = /^\/([a-z]{2})(?:\/|$)/i.exec(url.pathname)
+  return match?.[1]?.toLowerCase() ?? null
+}
+
+async function fetchAppleLookupMetadata(c: Context<MiddlewareKeyVariables>, storeId: string, storeCountry: string | null) {
+  const lookupCountries = storeCountry ? [storeCountry, null] : [null]
+
+  for (const country of lookupCountries) {
+    const lookupUrl = new URL('https://itunes.apple.com/lookup')
+    lookupUrl.searchParams.set('id', storeId)
+    if (country)
+      lookupUrl.searchParams.set('country', country)
+
+    try {
+      const response = await fetch(lookupUrl.toString(), {
+        headers: {
+          'user-agent': 'Mozilla/5.0 (compatible; CapgoOnboardingBot/1.0)',
+          'accept-language': 'en-US,en;q=0.9',
+        },
+        signal: AbortSignal.timeout(APPLE_LOOKUP_TIMEOUT_MS),
+      })
+      if (!response.ok) {
+        cloudlog({
+          requestId: c.get('requestId'),
+          message: 'Apple store lookup failed',
+          country: country ?? 'default',
+          status: response.status,
+        })
+        continue
+      }
+
+      const data = await response.json() as { results?: AppleLookupResult[] }
+      const result = data.results?.find(item => item.bundleId?.trim()) ?? null
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'Apple store lookup completed',
+        country: country ?? 'default',
+        resultCount: data.results?.length ?? 0,
+        hasBundleId: Boolean(result),
+      })
+      if (result)
+        return result
+    }
+    catch (error) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'Apple store lookup errored',
+        country: country ?? 'default',
+        error: serializeError(error),
+      })
+    }
   }
 
-  const data = await response.json() as { results?: AppleLookupResult[] }
-  return data.results?.[0] ?? null
+  return null
 }
 
 function extractMetaTag(html: string, name: string) {
@@ -184,7 +227,9 @@ export async function fetchStoreMetadata(c: Context<MiddlewareKeyVariables>, bod
   const scrapedIconUrl = extractMetaTag(html, 'og:image') || extractMetaTag(html, 'twitter:image')
   const android_app_id = extractAndroidAppId(parsedUrl)
   const appleStoreId = extractAppleStoreId(parsedUrl)
-  const appleLookup = appleStoreId ? await fetchAppleLookupMetadata(appleStoreId) : null
+  const appleStoreCountry = extractAppleStoreCountry(parsedUrl)
+  const appleLookup = appleStoreId ? await fetchAppleLookupMetadata(c, appleStoreId, appleStoreCountry) : null
+  const app_id_lookup_failed = Boolean(appleStoreId && !appleLookup)
   const ios_bundle_id = appleLookup?.bundleId?.trim() || null
   const screenshot_url = appleLookup?.screenshotUrls?.[0]?.trim() || null
   const app_id = android_app_id || ios_bundle_id
@@ -199,6 +244,7 @@ export async function fetchStoreMetadata(c: Context<MiddlewareKeyVariables>, bod
     icon_data_url,
     screenshot_url,
     app_id,
+    app_id_lookup_failed,
     android_app_id,
     ios_bundle_id,
     url: parsedUrl.toString(),

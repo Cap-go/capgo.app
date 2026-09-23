@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { CLI_PROJECT_MODES } from '../framework/mode'
 import { optionsBaseSchema } from './base'
 
 // ============================================================================
@@ -6,6 +7,7 @@ import { optionsBaseSchema } from './base'
 // ============================================================================
 
 export const optionsUploadSchema = optionsBaseSchema.extend({
+  mode: z.enum(CLI_PROJECT_MODES).optional(),
   bundle: z.string().optional(),
   path: z.string().optional(),
   channel: z.string().optional(),
@@ -36,6 +38,7 @@ export const optionsUploadSchema = optionsBaseSchema.extend({
   autoBump: z.enum(['major', 'minor', 'patch', 'metadata', 'ai']).optional(),
   ignoreMetadataCheck: z.boolean().optional(),
   failOnIncompatible: z.boolean().optional(),
+  acceptIncompatible: z.boolean().optional(),
   ignoreChecksumCheck: z.boolean().optional(),
   forceCrc32Checksum: z.boolean().optional(),
   timeout: z.number().optional(),

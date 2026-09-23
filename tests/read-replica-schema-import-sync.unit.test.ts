@@ -30,6 +30,13 @@ const safeIndexStatement: ReadReplicaSchemaSyncStatement = {
   sql: 'CREATE INDEX CONCURRENTLY IF NOT EXISTS "read_replica_import_unit_index" ON public."apps" ("app_id")',
 }
 
+const jsonPathIndexStatement: ReadReplicaSchemaSyncStatement = {
+  kind: 'index',
+  table: 'apps',
+  name: 'idx_apps_onboarding_v2_creator',
+  sql: 'CREATE INDEX CONCURRENTLY IF NOT EXISTS "idx_apps_onboarding_v2_creator" ON public."apps" (((onboarding ->> \'created_by_user_id\'::text))) WHERE ((onboarding #>> \'{setup,todo_list_version}\'::text[]) = \'2\'::text)',
+}
+
 const spacedIndexStatement: ReadReplicaSchemaSyncStatement = {
   kind: 'index',
   table: 'orgs',
@@ -72,6 +79,14 @@ describe('read-replica Cloud SQL server-side import', () => {
     expect(() => {
       renderReadReplicaImportTransaction([safeIndexStatement])
     }).toThrow('cannot atomically apply')
+  })
+
+  it.concurrent('imports partial indexes using PostgreSQL JSON path operators', () => {
+    assertGoogleReadReplicaSchemaPlan(plan([jsonPathIndexStatement]))
+
+    expect(renderReadReplicaIndexImport([jsonPathIndexStatement])).toContain(
+      'onboarding #>> \'{setup,todo_list_version}\'::text[]',
+    )
   })
 
   it.concurrent('strips only the leading CONCURRENTLY keyword from index DDL', () => {

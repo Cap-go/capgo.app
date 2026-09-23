@@ -3,6 +3,8 @@ import { isValidAppId } from '~/utils/appId'
 export interface CliAiPromptApp {
   appId: string
   name: string | null
+  todoListVersion?: number
+  otaTodoListVersion?: string
 }
 
 export interface CliAiPromptOrganization {
@@ -18,6 +20,13 @@ export interface CliAiPromptInput {
 }
 
 const APP_PREVIEW_LIMIT = 5
+type AuthenticationDestination = 'ota' | 'builder' | 'choose-first'
+
+const AUTHENTICATION_CONTINUATION: Record<AuthenticationDestination, string> = {
+  'ota': 'After authentication succeeds, continue to Section 2 and recommend the guided `init` flow.',
+  'builder': 'After authentication succeeds, continue to the Capgo MCP installation section. Do not configure Capgo Builder manually.',
+  'choose-first': 'After authentication succeeds, ask which Capgo product I want to configure first. Do not begin either setup before I answer.',
+}
 
 function promptLabel(value: string | null | undefined, fallback: string): string {
   return value?.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim() || fallback
@@ -60,7 +69,7 @@ function formatOrganization(organization: CliAiPromptOrganization): string {
   ].join('\n')
 }
 
-function buildAuthenticationSection(apiKey: string): string {
+function buildAuthenticationSection(apiKey: string, destination: AuthenticationDestination = 'ota'): string {
   return `You are helping me configure Capgo for my mobile app.
 
 ## 1. Mandatory Capgo authentication
@@ -97,8 +106,48 @@ Authentication requirements:
 - Do not repeat or display the key in explanations or your final response.
 - After authentication succeeds, do not include the API key in subsequent commands.
 - For now, only complete authentication. Do not run \`init\` during this stage.
-- After authentication succeeds, continue to Section 2 and recommend the guided \`init\` flow.`
+- ${AUTHENTICATION_CONTINUATION[destination]}`
 }
+
+const BUILDER_MCP_SECTION = `## Install Capgo MCP and start Builder onboarding
+
+Capgo Builder setup must be conducted through Capgo MCP. Do not configure signing, credentials, native builds, or store access manually.
+
+Determine which supported MCP client you are currently running in. Use its install-mcp client identifier:
+
+- Codex: \`codex\`
+- Cursor: \`cursor\`
+- Claude Code: \`claude-code\`
+- Windsurf: \`windsurf\`
+- VS Code: \`vscode\`
+- Zed: \`zed\`
+
+If you cannot identify the current client safely, ask me which client I use and wait for my answer.
+
+Replace \`{MCP_CLIENT}\` with the chosen identifier and install Capgo MCP:
+
+npx install-mcp 'npx @capgo/cli@latest mcp' --client {MCP_CLIENT}
+
+After installation, check whether Capgo MCP tools are available in the current session.
+
+- If the tools are unavailable until restart, tell me to restart the AI client. Do not pretend onboarding has started. Tell me that after restart I can say: “Continue Capgo Builder setup. Verify Capgo MCP is connected, then call start_capgo_builder_onboarding.” Stop and wait for the restart.
+- If the tools are available without restart, continue immediately.
+
+Once Capgo MCP is available, call \`start_capgo_builder_onboarding\` immediately. If I already named iOS or Android, pass that platform; otherwise omit it and let the tool ask.
+
+Follow every result's \`next\` instruction exactly. Use \`capgo_builder_onboarding_next_step\` and \`capgo_builder_onboarding_explain\` only as directed until setup is complete. Do not replace the MCP flow with manual repository inspection or web research, and do not claim success unless the onboarding tools report completion.`
+
+const CHOOSE_FIRST_SECTION = `## Choose what to configure first
+
+Ask me this question exactly and wait for my answer:
+
+“What would you like to configure first: Capgo Live Updates or Capgo Builder?”
+
+Do not start both setup flows concurrently.
+
+- If I choose Capgo Live Updates, follow the complete Live Updates branch below first.
+- If I choose Capgo Builder, follow the complete Builder branch below first.
+- After the selected setup completes, offer to configure the other product. Start it only if I agree.`
 
 const INIT_RECOMMENDATION_SECTION = `## 2. Choose guided init or AI-led setup
 
@@ -507,15 +556,91 @@ The test succeeds when:
 - The application calls \`notifyAppReady()\` without subsequently rolling back.
 - No \`cap sync\`, \`cap copy\`, or equivalent synchronization occurred after the test change was created.`
 
-export function buildCliAiSetupPrompt(input: CliAiPromptInput): string {
+function otaChecklistProtocol(appIds: string[]): string {
+  return `## OTA todo list progress checks
+
+The following Capgo app IDs use Todo list v3 or v4: ${appIds.map(appId => `\`${appId}\``).join(', ')}.
+
+After selecting the Capgo app, run the checklist once with the selected ephemeral runner only if its app ID is in that OTA list. For any other selected app, skip this entire checklist protocol and every checkpoint below:
+
+{CAPGO_CLI_RUNNER} app todo {SELECTED_CAPGO_APP_ID}
+
+Use the checklist checkpoints below only if this command reports \`Todo list v3\` or \`Todo list v4\` for the selected app. If it reports v1 or v2, skip every later checklist checkpoint and follow the normal setup instructions. A mixed organization can contain apps with different todo-list versions; never apply an OTA checkpoint to a v2 app.
+
+At each checkpoint, inspect all statuses, follow the explanation for the next pending step, and tell me what changed. Treat a task as complete only when the CLI reports it done or skipped. The CLI rechecks progress each time it runs; if a local scan or device event has not appeared yet, rerun after that activity finishes instead of claiming success early.
+
+If I choose guided \`init\`, wait for me to finish it, then run the checklist again for the selected OTA app and explain any remaining pending steps.`
+}
+
+function otaChecklistCheckpoint(when: string): string {
+  return `OTA todo list checkpoint: ${when} Run:
+
+{CAPGO_CLI_RUNNER} app todo {SELECTED_CAPGO_APP_ID}`
+}
+
+function withOtaChecklistCheckpoint(section: string, enabled: boolean, when: string): string {
+  return enabled ? `${section}\n\n${otaChecklistCheckpoint(when)}` : section
+}
+
+function otaChecklistAppIds(input: CliAiPromptInput): string[] {
+  return [...new Set(input.organizations.flatMap(organization => getPromptApps(organization)
+    .filter(app => app.todoListVersion === 3 || (app.todoListVersion === 4 && app.otaTodoListVersion === '1'))
+    .map(app => app.appId)))]
+}
+
+function firstUpdateTestSection(withOtaChecklist: boolean): string {
+  if (!withOtaChecklist)
+    return FIRST_UPDATE_TEST_SECTION
+  const beforeTestChange = FIRST_UPDATE_TEST_SECTION.replace(
+    '### Create a recognizable test change',
+    `${otaChecklistCheckpoint('After the original native app first runs on a device or simulator, recheck device registration.')}\n\n### Create a recognizable test change`,
+  )
+  return `${beforeTestChange}\n\n${otaChecklistCheckpoint('After the installed app applies the live update, recheck update delivery.')}`
+}
+
+function otaSections(input: CliAiPromptInput, withOtaChecklist = false): string[] {
   return [
-    buildAuthenticationSection(input.apiKey),
     INIT_RECOMMENDATION_SECTION,
     buildOrganizationSection(input),
-    CHANNEL_SECTION,
-    PLUGIN_SECTION,
-    NOTIFY_APP_READY_SECTION,
-    FIRST_UPLOAD_SECTION,
-    FIRST_UPDATE_TEST_SECTION,
+    withOtaChecklistCheckpoint(CHANNEL_SECTION, withOtaChecklist, 'After the chosen channel is available and configured, recheck channel creation.'),
+    withOtaChecklistCheckpoint(PLUGIN_SECTION, withOtaChecklist, 'After the updater is installed in the selected app project, recheck plugin installation.'),
+    withOtaChecklistCheckpoint(NOTIFY_APP_READY_SECTION, withOtaChecklist, 'After the app-ready call is in the real startup path, recheck the source scan.'),
+    withOtaChecklistCheckpoint(FIRST_UPLOAD_SECTION, withOtaChecklist, 'After the first bundle upload completes, recheck published-bundle progress.'),
+    firstUpdateTestSection(withOtaChecklist),
+  ]
+}
+
+function normalizeCliAiPromptIntent(value: unknown): 'ota' | 'builder' | 'both' | 'exploring' {
+  return value === 'builder' || value === 'both' || value === 'exploring' || value === 'ota'
+    ? value
+    : 'ota'
+}
+
+export function buildCliAiSetupPrompt(input: CliAiPromptInput, rawIntent?: unknown): string {
+  const intent = normalizeCliAiPromptIntent(rawIntent)
+  if (intent === 'builder') {
+    return [
+      buildAuthenticationSection(input.apiKey, 'builder'),
+      BUILDER_MCP_SECTION,
+    ].join('\n\n')
+  }
+
+  if (intent === 'both' || intent === 'exploring') {
+    return [
+      buildAuthenticationSection(input.apiKey, 'choose-first'),
+      CHOOSE_FIRST_SECTION,
+      '# Capgo Live Updates branch',
+      ...otaSections(input),
+      '# Capgo Builder branch',
+      BUILDER_MCP_SECTION,
+    ].join('\n\n')
+  }
+
+  const otaAppIds = rawIntent === 'ota' ? otaChecklistAppIds(input) : []
+  const withOtaChecklist = otaAppIds.length > 0
+  return [
+    buildAuthenticationSection(input.apiKey),
+    ...(withOtaChecklist ? [otaChecklistProtocol(otaAppIds)] : []),
+    ...otaSections(input, withOtaChecklist),
   ].join('\n\n')
 }

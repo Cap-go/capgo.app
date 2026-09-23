@@ -52,6 +52,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/admin/dashboard/ab-tests': RouteRecordInfo<
+      '/admin/dashboard/ab-tests',
+      '/admin/dashboard/ab-tests',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/admin/dashboard/builder': RouteRecordInfo<
       '/admin/dashboard/builder',
       '/admin/dashboard/builder',
@@ -528,6 +535,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/preview/native-kpi': RouteRecordInfo<
+      '/preview/native-kpi',
+      '/preview/native-kpi',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/register': RouteRecordInfo<
       '/register',
       '/register',
@@ -721,6 +735,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/admin/dashboard/index.vue': {
       routes:
         | '/admin/dashboard/'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/admin/dashboard/ab-tests.vue': {
+      routes:
+        | '/admin/dashboard/ab-tests'
       views:
         | never
       pathParamNames:
@@ -1278,6 +1300,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/preview/channel.vue': {
       routes:
         | '/preview/channel'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/preview/native-kpi.vue': {
+      routes:
+        | '/preview/native-kpi'
       views:
         | never
       pathParamNames:

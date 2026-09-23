@@ -1,0 +1,7 @@
+Hi,
+
+A new multi-factor authentication method ({{ factor_type }}) has been added to your Capgo.app account associated with {{ email }}.
+
+If you made this change, no further action is required.
+
+If you did not make this change, please secure your account immediately and contact Capgo support.

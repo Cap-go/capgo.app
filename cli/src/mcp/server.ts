@@ -202,6 +202,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
     async ({
       appId,
       path,
+      mode,
       bundle,
       channel,
       rollout,
@@ -213,11 +214,13 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
       autoSetBundle,
       autoBump,
       encrypt,
+      acceptIncompatible,
       capacitorConfig,
     }) => {
       const result = await sdk.uploadBundle({
         appId,
         path,
+        mode,
         bundle,
         channel,
         rollout,
@@ -229,6 +232,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
         autoSetBundle,
         autoBump,
         encrypt,
+        acceptIncompatible,
         capacitorConfig,
       })
       if (!result.success) {
@@ -435,7 +439,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
       description: 'Update channel settings including linked bundle and targeting options',
       inputSchema: mcpUpdateChannelInputSchema,
     },
-    async ({ appId, channelId, bundle, state, downgrade, ios, android, selfAssign, disableAutoUpdate, dev, emulator, device, prod, rolloutBundle, rolloutPercentage, rolloutPercentageBps, rolloutEnable, rolloutDisable, rolloutPause, rolloutResume, rolloutRollback, rolloutPromote, rolloutCacheTtlSeconds, autoPauseEnabled, autoPauseDisabled, autoPauseWindowMinutes, autoPauseFailureRateBps, autoPauseConfidence, autoPauseMinAttempts, autoPauseMinFailures, autoPauseAction, autoPauseCooldownMinutes }) => {
+    async ({ appId, channelId, bundle, state, downgrade, ios, android, selfAssign, disableAutoUpdate, dev, emulator, device, prod, rolloutBundle, rolloutPercentage, rolloutPercentageBps, rolloutEnable, rolloutDisable, rolloutPause, rolloutResume, rolloutRollback, rolloutPromote, rolloutCacheTtlSeconds, autoPauseEnabled, autoPauseDisabled, autoPauseWindowMinutes, autoPauseFailureRateBps, autoPauseConfidence, autoPauseMinAttempts, autoPauseMinFailures, autoPauseAction, autoPauseCooldownMinutes, acceptIncompatible }) => {
       const payload = parseSchema(updateChannelOptionsSchema, {
         appId,
         channelId,
@@ -469,6 +473,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
         autoPauseMinFailures,
         autoPauseAction,
         autoPauseCooldownMinutes,
+        acceptIncompatible,
       })
       const result = await sdk.updateChannel(payload)
       if (!result.success) {
@@ -671,12 +676,14 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
       description: 'Request a native iOS/Android build from Capgo Cloud',
       inputSchema: mcpRequestBuildInputSchema,
     },
-    async ({ appId, platform, path, nodeModules }) => {
+    async ({ appId, platform, path, nodeModules, cache, cacheKey }) => {
       const result = await sdk.requestBuild({
         appId,
         platform,
         path,
         nodeModules,
+        cache,
+        cacheKey,
         // Credentials should be pre-saved using the CLI
       })
       if (!result.success) {

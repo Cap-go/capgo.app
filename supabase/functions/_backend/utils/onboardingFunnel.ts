@@ -10,6 +10,7 @@ export interface AdminOnboardingActivationCohort {
 export const ADMIN_ONBOARDING_WIZARD_BUCKETS = [
   'not_started',
   'intent',
+  'publish_app_question',
   'details',
   'organization',
   'choice',

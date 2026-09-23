@@ -4,7 +4,10 @@ import { createClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { parseAppOnboardingLedger, shouldShowGettingStartedNav, shouldSkipOnboardingResume } from '../src/utils/appOnboardingProgress.ts'
 import {
+  BASE_URL,
   executeSQL,
+  fetchTestRequest,
+  getAuthHeaders,
   getSupabaseClient,
   ORG_ID,
   SUPABASE_ANON_KEY,
@@ -23,6 +26,7 @@ const APP_TESTFLIGHT = `ob.tf.${randomUUID().slice(0, 8)}`
 const APP_STORE = `ob.st.${randomUUID().slice(0, 8)}`
 const APP_VERIFY = `ob.vf.${randomUUID().slice(0, 8)}`
 const APP_SETUP = `ob.su.${randomUUID().slice(0, 8)}`
+const APP_HISTORY = `ob.hi.${randomUUID().slice(0, 8)}`
 const DEVICE_TF = randomUUID().toLowerCase()
 const DEVICE_STORE = randomUUID().toLowerCase()
 
@@ -106,21 +110,12 @@ async function insertDevice(appId: string, deviceId: string, installSource: stri
     throw error
 }
 
-async function refreshUntil(appId: string) {
-  for (let attempt = 0; attempt < 40; attempt++) {
-    await executeSQL('SELECT public.refresh_app_onboarding_progress(500)')
-    const { data, error } = await serviceRoleSupabase
-      .from('apps')
-      .select('onboarding')
-      .eq('app_id', appId)
-      .single()
-    if (error)
-      throw error
-    const ledger = parseAppOnboardingLedger(data.onboarding)
-    if (ledger.refreshed_at)
-      return ledger
-  }
-  throw new Error(`refresh_app_onboarding_progress never reached ${appId}`)
+async function refreshOne(appId: string) {
+  const rows = await executeSQL<{ onboarding: unknown }>(
+    'SELECT public.refresh_one_app_onboarding_progress($1) AS onboarding',
+    [appId],
+  )
+  return parseAppOnboardingLedger(rows[0]?.onboarding)
 }
 
 beforeAll(async () => {
@@ -129,6 +124,7 @@ beforeAll(async () => {
   await createApp(APP_STORE)
   await createApp(APP_VERIFY, true)
   await createApp(APP_SETUP, true)
+  await createApp(APP_HISTORY, true)
   await insertDevice(APP_TESTFLIGHT, DEVICE_TF, 'testflight')
   await insertDevice(APP_STORE, DEVICE_STORE, 'app_store')
 })
@@ -137,10 +133,48 @@ afterAll(async () => {
   await serviceRoleSupabase.from('devices').delete().eq('app_id', APP_TESTFLIGHT)
   await serviceRoleSupabase.from('devices').delete().eq('app_id', APP_STORE)
   await serviceRoleSupabase.from('app_versions').delete().eq('app_id', APP_VERIFY)
-  await serviceRoleSupabase.from('apps').delete().in('app_id', [APP_RPC, APP_INSERT, APP_TESTFLIGHT, APP_STORE, APP_VERIFY, APP_SETUP])
+  await serviceRoleSupabase.from('apps').delete().in('app_id', [APP_RPC, APP_INSERT, APP_TESTFLIGHT, APP_STORE, APP_VERIFY, APP_SETUP, APP_HISTORY])
 })
 
-describe('app onboarding progress RPCs', () => {
+describe('app onboarding progress', () => {
+  it.concurrent('defaults and preserves the server-owned todo list version', async () => {
+    const rows = await executeSQL<{ default_version: number, preserved_version: number }>(`
+      SELECT
+        (public.merge_app_onboarding_setup('{}'::jsonb, '{}'::jsonb)
+          -> 'setup' ->> 'todo_list_version')::integer AS default_version,
+        (public.merge_app_onboarding_setup(
+          '{"setup":{"todo_list_version":1}}'::jsonb,
+          '{"todo_list_version":99,"source":"cli"}'::jsonb
+        ) -> 'setup' ->> 'todo_list_version')::integer AS preserved_version
+    `)
+
+    expect(rows[0]).toEqual({ default_version: 2, preserved_version: 1 })
+  })
+
+  it.concurrent('merges only steps belonging to the stored todo list version', async () => {
+    const rows = await executeSQL<Record<string, boolean>>(`
+      SELECT
+        public.merge_app_onboarding_setup(
+          '{"setup":{"todo_list_version":1}}'::jsonb,
+          '{"steps":{"add_app":{"status":"done"},"login_cli_mcp":{"status":"done"}}}'::jsonb
+        ) -> 'setup' -> 'steps' ? 'add_app' AS v1_add_app,
+        public.merge_app_onboarding_setup(
+          '{"setup":{"todo_list_version":1}}'::jsonb,
+          '{"steps":{"add_app":{"status":"done"},"login_cli_mcp":{"status":"done"}}}'::jsonb
+        ) -> 'setup' -> 'steps' ? 'login_cli_mcp' AS v1_login,
+        public.merge_app_onboarding_setup(
+          '{"setup":{"todo_list_version":2}}'::jsonb,
+          '{"steps":{"add_app":{"status":"done"},"login_cli_mcp":{"status":"done"}}}'::jsonb
+        ) -> 'setup' -> 'steps' ? 'add_app' AS v2_add_app,
+        public.merge_app_onboarding_setup(
+          '{"setup":{"todo_list_version":2}}'::jsonb,
+          '{"steps":{"add_app":{"status":"done"},"login_cli_mcp":{"status":"done"}}}'::jsonb
+        ) -> 'setup' -> 'steps' ? 'login_cli_mcp' AS v2_login
+    `)
+
+    expect(rows[0]).toEqual({ v1_add_app: true, v1_login: false, v2_add_app: false, v2_login: true })
+  })
+
   it('must reject unauthenticated mark_onboarding_feature_started', async () => {
     const anon = createAuthClient()
     const { error } = await anon.rpc('mark_onboarding_feature_started', {
@@ -254,13 +288,8 @@ describe('app onboarding progress RPCs', () => {
   })
 
   it('keeps TestFlight-only apps off store_live', async () => {
-    const defs = await executeSQL<{ def: string }>(
-      `SELECT pg_get_functiondef('public.refresh_app_onboarding_progress(integer)'::regprocedure) AS def`,
-    )
-    expect(defs[0]?.def).toContain('INNER JOIN batch ON batch.app_id')
-
-    const testflight = await refreshUntil(APP_TESTFLIGHT)
-    const store = await refreshUntil(APP_STORE)
+    const testflight = await refreshOne(APP_TESTFLIGHT)
+    const store = await refreshOne(APP_STORE)
 
     expect(testflight.features?.ota?.stage).toBe('testflight')
     expect(testflight.features?.ota?.stage).not.toBe('store_live')
@@ -313,7 +342,7 @@ describe('app onboarding progress RPCs', () => {
     expect(againError).toBeNull()
     expect(parseAppOnboardingLedger(again).getting_started_dismissed_at).toBe(firstDismissedAt)
 
-    const refreshed = await refreshUntil(APP_RPC)
+    const refreshed = await refreshOne(APP_RPC)
     expect(refreshed.getting_started_dismissed_at).toBe(firstDismissedAt)
     expect(refreshed.features?.cli_install?.started_at).toBeTruthy()
   })
@@ -369,20 +398,16 @@ describe('app onboarding progress RPCs', () => {
   })
 
   it('completes pending onboarding when CLI/AI setup reports completed', async () => {
-    const authClient = createAuthClient()
-    const { error: signInError } = await authClient.auth.signInWithPassword({
-      email: USER_EMAIL,
-      password: USER_PASSWORD,
+    const response = await fetchTestRequest(`${BASE_URL}/app/${APP_SETUP}`, {
+      method: 'PUT',
+      headers: await getAuthHeaders(),
+      body: JSON.stringify({
+        onboarding: { outcome: 'completed' },
+      }),
     })
-    if (signInError)
-      throw signInError
-
-    const { data, error } = await authClient.rpc('report_app_onboarding_setup', {
-      p_app_id: APP_SETUP,
-      p_patch: { outcome: 'completed' },
-    })
-    expect(error).toBeNull()
-    expect(shouldSkipOnboardingResume(data)).toBe(true)
+    const updated = await response.json() as { onboarding?: unknown }
+    expect(response.status, JSON.stringify(updated)).toBe(200)
+    expect(shouldSkipOnboardingResume(updated.onboarding)).toBe(true)
 
     const { data: app, error: readError } = await serviceRoleSupabase
       .from('apps')
@@ -391,6 +416,55 @@ describe('app onboarding progress RPCs', () => {
       .single()
     expect(readError).toBeNull()
     expect(app?.need_onboarding).toBe(false)
+  })
+
+  it('atomically records concurrent step history and rejects forged history', async () => {
+    const { error: seedError } = await serviceRoleSupabase
+      .from('apps')
+      .update({ onboarding: { setup: { todo_list_version: Number.MAX_SAFE_INTEGER } } })
+      .eq('app_id', APP_HISTORY)
+    expect(seedError).toBeNull()
+
+    const headers = await getAuthHeaders()
+    const responses = await Promise.all([
+      fetchTestRequest(`${BASE_URL}/app/${APP_HISTORY}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({
+          onboarding: { steps: { login_cli_mcp: { status: 'done', update_history: [{ forged: true }] } } },
+        }),
+      }),
+      fetchTestRequest(`${BASE_URL}/app/${APP_HISTORY}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({
+          onboarding: { steps: { add_channel: { status: 'done' } } },
+        }),
+      }),
+    ])
+    expect(responses.map(response => response.status)).toEqual([200, 200])
+
+    const { data, error } = await serviceRoleSupabase
+      .from('apps')
+      .select('onboarding')
+      .eq('app_id', APP_HISTORY)
+      .single()
+    expect(error).toBeNull()
+    const onboarding = data?.onboarding as {
+      setup?: {
+        todo_list_version?: number
+        steps?: Record<string, { status?: string, update_history?: Array<Record<string, unknown>> }>
+      }
+    }
+    expect(onboarding.setup?.todo_list_version).toBe(Number.MAX_SAFE_INTEGER)
+    for (const stepId of ['login_cli_mcp', 'add_channel']) {
+      const step = onboarding.setup?.steps?.[stepId]
+      expect(step?.status).toBe('done')
+      expect(step?.update_history).toHaveLength(1)
+      expect(step?.update_history?.[0]?.status).toBe('done')
+      expect(step?.update_history?.[0]?.at).toEqual(expect.any(String))
+    }
+    expect(JSON.stringify(onboarding)).not.toContain('forged')
   })
 
   it('completes pending onboarding when getting started is hidden', async () => {

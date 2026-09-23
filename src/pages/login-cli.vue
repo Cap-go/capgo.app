@@ -13,6 +13,7 @@ import IconInformationCircle from '~icons/heroicons/information-circle'
 import IconKey from '~icons/heroicons/key'
 import IconSparkles from '~icons/heroicons/sparkles'
 import CliLoginSkippedOrganizations from '~/components/CliLoginSkippedOrganizations.vue'
+import { parseAppOnboarding } from '~/services/appOnboarding'
 import { buildCliAiSetupPrompt } from '~/services/cliAiPrompt'
 import {
   createCliLoginKeyDependencies,
@@ -58,7 +59,7 @@ const aiPrompt = computed(() => {
     apiKey: secret.value,
     organizations: aiPromptOrganizations.value,
     skippedOrganizations: aiPromptSkippedOrganizations.value,
-  })
+  }, route.query.intent)
 })
 const revealButtonRef = useTemplateRef<HTMLButtonElement>('revealButtonRef')
 const revealDialogRef = useTemplateRef<HTMLElement>('revealDialogRef')
@@ -152,10 +153,15 @@ async function prepare(): Promise<void> {
       .map(organization => ({
         id: organization.gid,
         name: organization.name,
-        apps: organizationStore.getAppsByOrgId(organization.gid).map(app => ({
-          appId: app.app_id,
-          name: app.name,
-        })),
+        apps: organizationStore.getAppsByOrgId(organization.gid).map((app) => {
+          const onboarding = parseAppOnboarding(app.onboarding)
+          return {
+            appId: app.app_id,
+            name: app.name,
+            todoListVersion: onboarding.todo_list_version,
+            otaTodoListVersion: onboarding.ota_todo_list_version,
+          }
+        }),
       }))
     aiPromptSkippedOrganizations.value = organizationStore.organizations
       .filter(organization => !eligibleIds.has(organization.gid))

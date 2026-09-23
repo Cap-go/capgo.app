@@ -1197,6 +1197,32 @@ You are not allowed to deploy on your own, unless if asked. Same for git you
 never git push on main branch, add or commit unless asked.
 You can do it in others branches
 
+### Release and deployment retry contract
+
+Release generation and production deployment are handled by
+`.github/workflows/bump_version.yml` and `.github/workflows/build_and_deploy.yml`.
+When changing either workflow or the helpers below, preserve this contract:
+
+- The complete post-merge test workflow remains mandatory before any release
+  commit or tag is published.
+- Release scope is cumulative per component: pending work is calculated from the
+  latest successful component tag (`capgo-*`, `cli-*`, `notifications-*`) to the
+  tested commit, not from the push event range.
+- Release publication uses `scripts/publish-release.ts` with an atomic push and
+  compare-and-swap semantics. Do not reintroduce `git pull` merges into generated
+  release output.
+- Failed production deployments recover with GitHub **Re-run all jobs**, not
+  **Re-run failed jobs**. Full reruns re-resolve the newest stable or alpha Capgo
+  tag through `scripts/resolve-deploy-tag.ts` and deploy that immutable target.
+- Design reference: `docs/superpowers/specs/2026-09-09-reliable-release-retries-design.md`
+
+## Frontend security operations
+
+Console CSP, SRI maintenance, sanitization helpers, and redirect validation are
+documented in [docs/frontend-security.md](docs/frontend-security.md). Review
+that checklist when touching `public/_headers`, external scripts, or user-controlled
+HTML/URL rendering.
+
 ## Graphify
 
 The project-scoped Graphify skill lives at `.agents/skills/graphify/SKILL.md`.

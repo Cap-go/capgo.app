@@ -33,7 +33,7 @@ export function buildAiInstructionsCopiedBentoEvent(input: AiInstructionsCopiedI
       org_id: input.orgId,
       ...(typeof context.existing_app === 'boolean' ? { existing_app: context.existing_app } : {}),
       ...(context.flow === 'pre_org' || context.flow === 'existing_org' ? { flow: context.flow } : {}),
-      ...(context.intent === 'ota' || context.intent === 'builder' || context.intent === 'both' || context.intent === 'exploring' ? { intent: context.intent } : {}),
+      ...(context.intent === 'ota' || context.intent === 'builder' || context.intent === 'both' || context.intent === 'exploring' || context.intent === 'publish' ? { intent: context.intent } : {}),
       ...(typeof context.onboarding_version === 'number' ? { onboarding_version: context.onboarding_version } : {}),
       ...(typeof context.resumed === 'boolean' ? { resumed: context.resumed } : {}),
       ...(context.setup_command === 'builder' || context.setup_command === 'ota' ? { setup_command: context.setup_command } : {}),

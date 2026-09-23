@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  NEW_CHANNEL_ANALYTICS_VERSION,
+  NEW_CHANNEL_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION,
+  NEW_CHANNEL_PUBLISH_INTENT_ANALYTICS_VERSION,
   createOnboardingProgressTracker,
   createOnboardingTelemetryIdentity,
   ONBOARDING_ANALYTICS_VERSION,
   resolveOnboardingAppIconSource,
+  WEBNATIVE_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION,
 } from '../src/utils/onboardingProgressAnalytics'
 
 const steps = ['intent', 'details', 'organization', 'setup'] as const
@@ -212,6 +216,50 @@ describe('onboarding progress analytics', () => {
     )
   })
 
+  it.concurrent('reports version 5.C for every qualified treatment lifecycle and progress event', () => {
+    const capture = vi.fn()
+    const ids = [ATTEMPT_A2, RUN_R2_UUID]
+    const onboardingVersion = (): '5.C' => WEBNATIVE_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION
+    const identity = createOnboardingTelemetryIdentity({
+      capture,
+      flow: 'pre_org',
+      idFactory: () => ids.shift()!,
+      onboardingVersion,
+      supaHost: 'https://supabase.capgo.test',
+    })
+    identity.prepareResumeCandidate({
+      savedStep: 'organization',
+      steps,
+    })
+    identity.recordResumeDialogViewed()
+
+    const tracker = createOnboardingProgressTracker({
+      onboardingAttemptId: identity.attemptId,
+      onboardingRunId: identity.runId,
+      onboardingVersion,
+      capture,
+      flow: 'pre_org',
+      resumed: false,
+      steps,
+      supaHost: 'https://supabase.capgo.test',
+    })
+    tracker.viewStep('intent')
+    tracker.trackStepEvent('onboarding_webnative_recommendation_clicked', 'organization', {
+      intent: 'publish',
+      starting_out: true,
+    })
+
+    expect(capture.mock.calls).toHaveLength(3)
+    for (const call of capture.mock.calls)
+      expect(call[2]).toEqual(expect.objectContaining({ onboarding_version: '5.C' }))
+  })
+
+  it.concurrent('exports distinct channel experiment analytics labels', () => {
+    expect(NEW_CHANNEL_ANALYTICS_VERSION).toBe('5.E')
+    expect(NEW_CHANNEL_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION).toBe('5.F')
+    expect(NEW_CHANNEL_PUBLISH_INTENT_ANALYTICS_VERSION).toBe('5.G')
+  })
+
   it.concurrent('tracks a hidden tab and its matching return before setup', () => {
     let now = 1_000
     const capture = vi.fn()
@@ -392,7 +440,12 @@ describe('onboarding progress analytics', () => {
 
     tracker.viewStep('intent')
     now = 1_125.9
-    tracker.completeStep('intent', { appName: 'Acme App', intent: 'ota', nextStep: 'details' })
+    tracker.completeStep('intent', {
+      appName: 'Acme App',
+      developmentEnvironment: 'skipped',
+      intent: 'ota',
+      nextStep: 'details',
+    })
     tracker.viewStep('details', 'intent')
 
     expect(capture.mock.calls.map(call => call[0])).toEqual([
@@ -404,6 +457,7 @@ describe('onboarding progress analytics', () => {
       duration_ms: 125,
       flow: 'pre_org',
       app_name: 'Acme App',
+      development_environment: 'skipped',
       intent: 'ota',
       next_step: 'details',
       onboarding_attempt_id: ATTEMPT_A1,
@@ -425,6 +479,32 @@ describe('onboarding progress analytics', () => {
       step_index: 1,
       total_steps: 4,
     })
+  })
+
+  it.concurrent('serializes hosted_builder development_environment on step completion', () => {
+    const capture = vi.fn()
+    const tracker = createOnboardingProgressTracker({
+      ...trackerIdentity,
+      capture,
+      flow: 'pre_org',
+      resumed: false,
+      steps,
+      supaHost: 'https://supabase.capgo.test',
+    })
+
+    tracker.viewStep('intent')
+    tracker.completeStep('intent', {
+      developmentEnvironment: 'hosted_builder',
+      intent: 'publish',
+      nextStep: 'details',
+    })
+
+    expect(capture.mock.calls[1]?.[2]).toEqual(expect.objectContaining({
+      development_environment: 'hosted_builder',
+      intent: 'publish',
+      next_step: 'details',
+      step: 'intent',
+    }))
   })
 
   it.concurrent('associates app-details interaction events with the active onboarding attempt', () => {
@@ -533,6 +613,33 @@ describe('onboarding progress analytics', () => {
         onboarding_attempt_id: ATTEMPT_A1,
         onboarding_run_id: RUN_R1,
         onboarding_version: ONBOARDING_ANALYTICS_VERSION,
+        step: 'organization',
+      }),
+    )
+  })
+
+  it.concurrent('captures WebNative recommendations with the qualifying intent and user count', () => {
+    const capture = vi.fn()
+    const tracker = createOnboardingProgressTracker({
+      ...trackerIdentity,
+      capture,
+      flow: 'pre_org',
+      resumed: false,
+      steps,
+      supaHost: 'https://supabase.capgo.test',
+    })
+
+    tracker.trackStepEvent('onboarding_webnative_recommendation_clicked', 'organization', {
+      intent: 'publish',
+      starting_out: true,
+    })
+
+    expect(capture).toHaveBeenCalledWith(
+      'onboarding_webnative_recommendation_clicked',
+      'https://supabase.capgo.test',
+      expect.objectContaining({
+        intent: 'publish',
+        starting_out: true,
         step: 'organization',
       }),
     )

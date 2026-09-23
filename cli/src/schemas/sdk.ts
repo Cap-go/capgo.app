@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { buildCredentialsSchema } from './build'
+import { CLI_PROJECT_MODES } from '../framework/mode'
+import { buildCacheKeyOptionSchema, buildCacheOptionSchema, buildCredentialsSchema } from './build'
 import { localizedReleaseNotesSchema, rejectConflictingBooleanGroup } from './common'
 
 export const capacitorConfigOptionSchema = z.string().min(1).describe('Capacitor config source to update')
@@ -77,6 +78,7 @@ export type StarAllRepositoriesOptions = z.infer<typeof starAllRepositoriesOptio
 export const uploadOptionsSchema = z.object({
   appId: z.string(),
   path: z.string(),
+  mode: z.enum(CLI_PROJECT_MODES).optional(),
   bundle: z.string().optional(),
   channel: z.string().optional(),
   rollout: z.number().min(0).max(100).optional(),
@@ -101,9 +103,12 @@ export const uploadOptionsSchema = z.object({
   selfAssign: z.boolean().optional(),
   packageJsonPaths: z.string().optional(),
   ignoreCompatibilityCheck: z.boolean().optional(),
+  acceptIncompatible: z.boolean().optional(),
   disableCodeCheck: z.boolean().optional(),
   useZip: z.boolean().optional(),
   capacitorConfig: capacitorConfigOptionSchema.optional(),
+}).superRefine((value, ctx) => {
+  rejectConflictingBooleanGroup(value, ctx, ['acceptIncompatible', 'ignoreCompatibilityCheck'])
 })
 
 export type UploadOptions = z.infer<typeof uploadOptionsSchema>
@@ -228,6 +233,7 @@ export const updateChannelOptionsBaseSchema = z.object({
   autoPauseMinFailures: z.number().int().min(0).nullable().optional(),
   autoPauseAction: z.enum(['pause', 'rollback', 'notify']).optional(),
   autoPauseCooldownMinutes: z.number().int().min(0).max(10080).optional(),
+  acceptIncompatible: z.boolean().optional(),
   apikey: z.string().optional(),
   supaHost: z.string().optional(),
   supaAnon: z.string().optional(),
@@ -390,6 +396,8 @@ export const requestBuildOptionsSchema = z.object({
   prescanIgnoreFatal: z.boolean().optional(),
   prescanSkip: z.array(z.string()).optional(),
   prescanWarn: z.array(z.string()).optional(),
+  cache: buildCacheOptionSchema,
+  cacheKey: buildCacheKeyOptionSchema,
 })
 
 export type RequestBuildOptions = z.infer<typeof requestBuildOptionsSchema>

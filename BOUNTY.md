@@ -25,8 +25,6 @@
 
 Anyone from the community can review the pull request and leave comments.
 
-Review are rewarded with a tip of $20. On merged pull request.
-
 ## What is a good review?
 
 Check code pattern repetition, and things that can be done better.

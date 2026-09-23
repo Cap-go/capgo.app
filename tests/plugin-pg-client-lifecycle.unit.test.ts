@@ -114,6 +114,39 @@ describe('plugin_runtime Hyperdrive pg Client lifecycle', () => {
     getRuntimeKeyMock.mockReturnValue('workerd')
   })
 
+  it.each(['workerd', 'node'])('serializes %s connection errors without copying the client', async (runtime) => {
+    getRuntimeKeyMock.mockReturnValue(runtime)
+    const { getPgClient } = await import('../supabase/functions/_backend/plugin_runtime/utils/pg.ts')
+    const { cloudlogErr } = await import('../supabase/functions/_backend/plugin_runtime/utils/logging.ts')
+    vi.mocked(cloudlogErr).mockClear()
+    await getPgClient(createContext(), true)
+    const onMock = runtime === 'workerd' ? clientOnMock : poolOnMock
+    const listener = onMock.mock.calls.find(([event]) => event === 'error')?.[1]
+    expect(listener).toBeTypeOf('function')
+    const error = Object.assign(new Error('connection failed'), {
+      retryable: true,
+      client: { password: 'test-db-password' },
+      cause: Object.assign(new Error('connect ETIMEDOUT'), { code: 'ETIMEDOUT' }),
+    })
+
+    listener(error)
+
+    const payload = vi.mocked(cloudlogErr).mock.calls[0][0]
+    expect(payload).toMatchObject({
+      requestId: 'request-id',
+      message: runtime === 'workerd' ? 'PG Client Error' : 'PG Pool Error',
+      databaseSource: expect.any(String),
+      error: {
+        message: 'connection failed',
+        stack: expect.any(String),
+        retryable: true,
+        cause: { message: 'connect ETIMEDOUT', code: 'ETIMEDOUT' },
+      },
+    })
+    expect(JSON.stringify(payload)).not.toContain('test-db-password')
+    expect(payload.error).not.toHaveProperty('client')
+  })
+
   it('uses a fresh connected Client per Hyperdrive request and does not end() it', async () => {
     const { getPgClient, closeClient } = await import('../supabase/functions/_backend/plugin_runtime/utils/pg.ts')
     const c = createContext()

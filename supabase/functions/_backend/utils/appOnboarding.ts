@@ -1,4 +1,4 @@
-export const APP_ONBOARDING_STEP_IDS = [
+export const APP_ONBOARDING_V1_STEP_IDS = [
   'add_app',
   'add_channel',
   'add_updater',
@@ -13,10 +13,37 @@ export const APP_ONBOARDING_STEP_IDS = [
   'completion',
 ] as const
 
-export type AppOnboardingStepId = typeof APP_ONBOARDING_STEP_IDS[number]
+export const APP_ONBOARDING_V2_STEP_IDS = [
+  'login_cli_mcp',
+  'add_channel',
+  'add_updater',
+  'add_code',
+  'add_encryption',
+  'select_platform',
+  'build_project',
+  'run_device',
+  'add_code_change',
+  'upload_bundle',
+  'test_update',
+  'completion',
+] as const
+
+export const APP_ONBOARDING_OTA_V1_VERSION = '1'
+export const APP_ONBOARDING_OTA_V1_STEP_IDS = [
+  'login_cli_mcp', 'add_channel', 'add_updater', 'add_code',
+  'run_device', 'upload_bundle', 'test_update',
+] as const
+
+export const APP_ONBOARDING_V3_STEP_IDS = [...APP_ONBOARDING_OTA_V1_STEP_IDS] as const
+
+export type AppOnboardingStepId
+  = | typeof APP_ONBOARDING_V1_STEP_IDS[number]
+    | typeof APP_ONBOARDING_V2_STEP_IDS[number]
 export type AppOnboardingSource = 'manual' | 'cli' | 'mcp' | 'ai'
 export type AppOnboardingOutcome = 'in_progress' | 'completed' | 'skipped' | 'switched_to_manual'
-export type AppOnboardingStepStatus = 'done' | 'skipped'
+export type AppOnboardingStepStatus = 'pending' | 'done' | 'skipped'
+export const APP_ONBOARDING_STEP_HISTORY_LIMIT = 10
+export const DEFAULT_APP_ONBOARDING_TODO_LIST_VERSION = 2
 
 export interface AppOnboardingStepState {
   status: AppOnboardingStepStatus
@@ -24,6 +51,8 @@ export interface AppOnboardingStepState {
 }
 
 export interface AppOnboardingState {
+  todo_list_version: number
+  ota_todo_list_version?: string
   source: AppOnboardingSource
   outcome: AppOnboardingOutcome
   steps: Partial<Record<AppOnboardingStepId, AppOnboardingStepState>>
@@ -36,6 +65,26 @@ export interface AppOnboardingPatch {
   steps?: Partial<Record<AppOnboardingStepId, AppOnboardingStepState>>
 }
 
+interface AppOnboardingStepHistoryEntry {
+  status: AppOnboardingStepStatus
+  at: string
+}
+
+interface AppOnboardingStepHistoryFullEntry {
+  type: 'update_history_full'
+  at: string
+}
+
+type AppOnboardingStepHistory = Array<AppOnboardingStepHistoryEntry | AppOnboardingStepHistoryFullEntry>
+
+export interface AppOnboardingStepHistoryChange {
+  stepId: AppOnboardingStepId
+  status: AppOnboardingStepStatus
+  at: string
+  historyLength: number
+  historyFull: boolean
+}
+
 const SOURCE_RANK: Record<AppOnboardingSource, number> = {
   manual: 0,
   ai: 1,
@@ -43,17 +92,34 @@ const SOURCE_RANK: Record<AppOnboardingSource, number> = {
   mcp: 3,
 }
 
-const STEP_ID_SET = new Set<string>(APP_ONBOARDING_STEP_IDS)
+const STEP_ID_SET = new Set<string>([...APP_ONBOARDING_V1_STEP_IDS, ...APP_ONBOARDING_V2_STEP_IDS])
 const SOURCE_SET = new Set<string>(['manual', 'cli', 'mcp', 'ai'])
 const OUTCOME_SET = new Set<string>(['in_progress', 'completed', 'skipped', 'switched_to_manual'])
 const STEP_STATUS_SET = new Set<string>(['done', 'skipped'])
 
 export function defaultAppOnboarding(): AppOnboardingState {
   return {
+    todo_list_version: DEFAULT_APP_ONBOARDING_TODO_LIST_VERSION,
     source: 'manual',
     outcome: 'in_progress',
     steps: {},
   }
+}
+
+export function getAppOnboardingStepIds(todoListVersion: number, otaTodoListVersion?: string): readonly AppOnboardingStepId[] {
+  // TODO(2027-03-19): Remove v3 flat-step support after existing rows migrate.
+  if (todoListVersion === 3)
+    return APP_ONBOARDING_V3_STEP_IDS
+  if (todoListVersion === 4)
+    return otaTodoListVersion === APP_ONBOARDING_OTA_V1_VERSION ? APP_ONBOARDING_OTA_V1_STEP_IDS : []
+  if (todoListVersion === 1)
+    return APP_ONBOARDING_V1_STEP_IDS
+  return APP_ONBOARDING_V2_STEP_IDS
+}
+
+export function hasSupportedOtaTodoList(onboarding: Pick<AppOnboardingState, 'todo_list_version' | 'ota_todo_list_version'>): boolean {
+  return onboarding.todo_list_version === 3
+    || (onboarding.todo_list_version === 4 && onboarding.ota_todo_list_version === APP_ONBOARDING_OTA_V1_VERSION)
 }
 
 export function isAppOnboardingSource(value: unknown): value is AppOnboardingSource {
@@ -78,7 +144,13 @@ function parseSetupRecord(value: unknown): Record<string, unknown> {
   return isRecord(value.setup) ? value.setup : value
 }
 
-function parseSteps(value: unknown): AppOnboardingState['steps'] {
+function parseTodoListVersion(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? value
+    : DEFAULT_APP_ONBOARDING_TODO_LIST_VERSION
+}
+
+function parseSteps(value: unknown, includePending = false): AppOnboardingState['steps'] {
   const steps: AppOnboardingState['steps'] = {}
   if (!isRecord(value))
     return steps
@@ -86,7 +158,7 @@ function parseSteps(value: unknown): AppOnboardingState['steps'] {
     if (!isAppOnboardingStepId(key) || !isRecord(stepValue))
       continue
     const status = stepValue.status
-    if (!STEP_STATUS_SET.has(String(status)))
+    if (!STEP_STATUS_SET.has(String(status)) && !(includePending && status === 'pending'))
       continue
     const at = stepValue.at
     steps[key] = {
@@ -97,14 +169,60 @@ function parseSteps(value: unknown): AppOnboardingState['steps'] {
   return steps
 }
 
+function parseStepHistory(value: unknown): AppOnboardingStepHistory {
+  if (!Array.isArray(value))
+    return []
+  const history: AppOnboardingStepHistory = []
+  for (const entry of value) {
+    if (!isRecord(entry) || typeof entry.at !== 'string')
+      continue
+    if (entry.type === 'update_history_full')
+      history.push({ type: entry.type, at: entry.at })
+    else if (STEP_STATUS_SET.has(String(entry.status)))
+      history.push({ status: entry.status as AppOnboardingStepStatus, at: entry.at })
+    if (history.length === APP_ONBOARDING_STEP_HISTORY_LIMIT)
+      break
+  }
+  return history
+}
+
+function appendStepHistory(currentStep: Record<string, unknown>, nextStep: Record<string, unknown>, changedAt: string): AppOnboardingStepHistory {
+  const history = parseStepHistory(currentStep.update_history)
+  if (currentStep.status === nextStep.status && currentStep.at === nextStep.at)
+    return history
+
+  const lastEntry = history.at(-1)
+  if (lastEntry && 'type' in lastEntry && lastEntry.type === 'update_history_full')
+    return history
+  if (history.length < APP_ONBOARDING_STEP_HISTORY_LIMIT)
+    return [...history, { status: nextStep.status as AppOnboardingStepStatus, at: changedAt }]
+  return [...history.slice(0, APP_ONBOARDING_STEP_HISTORY_LIMIT - 1), { type: 'update_history_full', at: changedAt }]
+}
+
 export function parseAppOnboarding(value: unknown): AppOnboardingState {
   const fallback = defaultAppOnboarding()
   const raw = parseSetupRecord(value)
   const source = isAppOnboardingSource(raw.source) ? raw.source : fallback.source
   const outcome = isAppOnboardingOutcome(raw.outcome) ? raw.outcome : fallback.outcome
-  const steps = parseSteps(raw.steps)
+  const todoListVersion = parseTodoListVersion(raw.todo_list_version)
+  const otaTodoListVersion = typeof raw.ota_todo_list_version === 'string' ? raw.ota_todo_list_version : undefined
+  const isOtaV1 = todoListVersion === 4 && otaTodoListVersion === APP_ONBOARDING_OTA_V1_VERSION
+  const rawSteps = isRecord(raw.steps) ? raw.steps : {}
+  const steps = isOtaV1
+    ? parseSteps(rawSteps.ota, true)
+    : todoListVersion === 4 ? {} : parseSteps(rawSteps)
+  if (isOtaV1) {
+    for (const id of Object.keys(steps) as AppOnboardingStepId[]) {
+      if (!(APP_ONBOARDING_OTA_V1_STEP_IDS as readonly string[]).includes(id))
+        delete steps[id]
+    }
+    for (const id of APP_ONBOARDING_OTA_V1_STEP_IDS)
+      steps[id] ??= { status: 'pending' }
+  }
 
   return {
+    todo_list_version: todoListVersion,
+    ...(todoListVersion === 4 && otaTodoListVersion !== undefined ? { ota_todo_list_version: otaTodoListVersion } : {}),
     source,
     outcome,
     steps,
@@ -122,7 +240,8 @@ export function parseAppOnboardingPatch(value: unknown): AppOnboardingPatch | nu
     patch.source = raw.source
   if (isAppOnboardingOutcome(raw.outcome))
     patch.outcome = raw.outcome
-  const steps = parseSteps(raw.steps)
+  const rawSteps = isRecord(raw.steps) ? raw.steps : {}
+  const steps = parseSteps(isRecord(rawSteps.ota) ? rawSteps.ota : rawSteps)
   if (Object.keys(steps).length > 0)
     patch.steps = steps
 
@@ -145,15 +264,19 @@ export function deriveAppOnboardingOutcome(
   steps: AppOnboardingState['steps'],
   current: AppOnboardingOutcome,
   patch?: AppOnboardingOutcome,
+  todoListVersion = DEFAULT_APP_ONBOARDING_TODO_LIST_VERSION,
+  otaTodoListVersion?: string,
 ): AppOnboardingOutcome {
-  const statuses = APP_ONBOARDING_STEP_IDS.map(id => steps[id]?.status)
+  const statuses = getAppOnboardingStepIds(todoListVersion, otaTodoListVersion).map(id => steps[id]?.status)
+  if (todoListVersion === 4 && statuses.length === 0)
+    return patch === 'skipped' || patch === 'switched_to_manual' ? patch : current
   const allPresent = statuses.every(status => status === 'done' || status === 'skipped')
   const anySkipped = statuses.includes('skipped')
 
   if (allPresent)
     return anySkipped ? 'skipped' : 'completed'
 
-  if (patch === 'completed' || patch === 'skipped')
+  if ((patch === 'completed' && todoListVersion !== 3 && todoListVersion !== 4) || patch === 'skipped')
     return patch
 
   if (patch === 'switched_to_manual' || current === 'switched_to_manual')
@@ -169,10 +292,13 @@ export function mergeAppOnboarding(
 ): AppOnboardingState {
   const current = parseAppOnboarding(currentValue)
   const steps: AppOnboardingState['steps'] = { ...current.steps }
+  const stepIds = new Set(getAppOnboardingStepIds(current.todo_list_version, current.ota_todo_list_version))
 
   if (patch.steps) {
     for (const [key, value] of Object.entries(patch.steps) as Array<[AppOnboardingStepId, AppOnboardingStepState | undefined]>) {
-      if (!value)
+      if (!value || !STEP_STATUS_SET.has(value.status))
+        continue
+      if (!stepIds.has(key))
         continue
       const existing = steps[key]
       if (existing?.status === 'done' && value.status === 'skipped')
@@ -185,8 +311,10 @@ export function mergeAppOnboarding(
   }
 
   return {
+    todo_list_version: current.todo_list_version,
+    ...(current.ota_todo_list_version !== undefined ? { ota_todo_list_version: current.ota_todo_list_version } : {}),
     source: pickAppOnboardingSource(current.source, patch.source),
-    outcome: deriveAppOnboardingOutcome(steps, current.outcome, patch.outcome),
+    outcome: deriveAppOnboardingOutcome(steps, current.outcome, patch.outcome, current.todo_list_version, current.ota_todo_list_version),
     steps,
     updated_at: now(),
   }
@@ -199,12 +327,108 @@ export function applyAppOnboardingPatch(
 ): Record<string, unknown> {
   const existing = isRecord(currentValue) ? { ...currentValue } : {}
   const setup = mergeAppOnboarding(existing.setup ?? existing, patch, now)
+  const rawSetup = parseSetupRecord(currentValue)
+  const rawSteps = isRecord(rawSetup.steps) ? rawSetup.steps : {}
+  const isV4 = setup.todo_list_version === 4
+  const isOtaV1 = isV4 && setup.ota_todo_list_version === APP_ONBOARDING_OTA_V1_VERSION
+  const rawCurrentSteps = isOtaV1 && isRecord(rawSteps.ota) ? rawSteps.ota : rawSteps
+  for (const id of Object.keys(setup.steps) as AppOnboardingStepId[]) {
+    if (isRecord(rawCurrentSteps[id]))
+      setup.steps[id] = { ...rawCurrentSteps[id], ...setup.steps[id]! }
+  }
   delete existing.source
   delete existing.outcome
   delete existing.steps
   delete existing.updated_at
+  delete existing.todo_list_version
+  delete existing.ota_todo_list_version
   return {
     ...existing,
-    setup,
+    setup: isV4
+      ? { ...rawSetup, ...setup, ...(isOtaV1 ? { paths: rawSetup.paths ?? ['ota'], selected_path: rawSetup.selected_path ?? 'ota' } : {}), steps: { ...rawSteps, ...(isOtaV1 ? { ota: setup.steps } : {}) } }
+      : setup,
   }
+}
+
+function getRawStepRecords(value: unknown): Record<string, unknown> {
+  const setup = parseSetupRecord(value)
+  const steps = isRecord(setup.steps) ? setup.steps : {}
+  if (parseTodoListVersion(setup.todo_list_version) !== 4)
+    return steps
+  return setup.ota_todo_list_version === APP_ONBOARDING_OTA_V1_VERSION && isRecord(steps.ota) ? steps.ota : {}
+}
+
+export function appendAppOnboardingStepHistory(
+  currentValue: unknown,
+  mergedValue: unknown,
+  patch: AppOnboardingPatch,
+  now = () => new Date().toISOString(),
+): Record<string, unknown> {
+  const merged = isRecord(mergedValue) ? { ...mergedValue } : {}
+  const mergedSetup = parseSetupRecord(merged)
+  const isV4 = parseTodoListVersion(mergedSetup.todo_list_version) === 4
+  const isOtaV4 = isV4 && mergedSetup.ota_todo_list_version === APP_ONBOARDING_OTA_V1_VERSION
+  const mergedStepPaths = isRecord(mergedSetup.steps) ? { ...mergedSetup.steps } : {}
+  const mergedSteps = { ...getRawStepRecords(merged) }
+  const currentStepRecords = getRawStepRecords(currentValue)
+  const changedAt = now()
+
+  for (const stepId of Object.keys(patch.steps ?? {}) as AppOnboardingStepId[]) {
+    const nextStep = mergedSteps[stepId]
+    if (!isRecord(nextStep))
+      continue
+
+    const currentStep = isRecord(currentStepRecords[stepId]) ? currentStepRecords[stepId] : {}
+    const history = appendStepHistory(currentStep, nextStep, changedAt)
+    mergedSteps[stepId] = history.length > 0 ? { ...nextStep, update_history: history } : nextStep
+  }
+
+  return {
+    ...merged,
+    setup: {
+      ...mergedSetup,
+      steps: isOtaV4 ? { ...mergedStepPaths, ota: mergedSteps } : isV4 ? mergedStepPaths : mergedSteps,
+    },
+  }
+}
+
+export function getAppOnboardingStepHistoryChanges(
+  currentValue: unknown,
+  nextValue: unknown,
+  patch: AppOnboardingPatch,
+): AppOnboardingStepHistoryChange[] {
+  const currentSteps = getRawStepRecords(currentValue)
+  const nextSteps = getRawStepRecords(nextValue)
+
+  return (Object.keys(patch.steps ?? {}) as AppOnboardingStepId[]).flatMap((stepId) => {
+    const currentStep = isRecord(currentSteps[stepId]) ? currentSteps[stepId] : {}
+    const nextStep = isRecord(nextSteps[stepId]) ? nextSteps[stepId] : null
+    if (!nextStep || !STEP_STATUS_SET.has(String(nextStep.status)))
+      return []
+
+    const currentHistory = parseStepHistory(currentStep.update_history)
+    const nextHistory = parseStepHistory(nextStep.update_history)
+    const latest = nextHistory.at(-1)
+    if (!latest || JSON.stringify(currentHistory) === JSON.stringify(nextHistory))
+      return []
+
+    return [{
+      stepId,
+      status: nextStep.status as AppOnboardingStepStatus,
+      at: latest.at,
+      historyLength: nextHistory.length,
+      historyFull: 'type' in latest,
+    }]
+  })
+}
+
+// These v3/v4 milestones require observed backend evidence, not init prompt completion.
+export function filterAppOnboardingReportedPatch(current: unknown, patch: AppOnboardingPatch): AppOnboardingPatch {
+  if (!hasSupportedOtaTodoList(parseAppOnboarding(current)))
+    return patch
+  const steps = { ...patch.steps }
+  delete steps.run_device
+  delete steps.upload_bundle
+  delete steps.test_update
+  return { ...patch, steps }
 }

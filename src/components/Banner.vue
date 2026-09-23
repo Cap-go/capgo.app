@@ -103,29 +103,32 @@ const bannerColor = computed(() => {
   <!-- Desktop inline version -->
   <div
     v-if="props.desktop && showBanner"
-    class="flex items-center ml-auto space-x-2 sm:space-x-3"
+    class="flex items-center ml-auto space-x-2 sm:space-x-3 min-w-0 max-w-[50vw] lg:max-w-full overflow-hidden"
     data-test="org-billing-banner"
   >
     <component
       :is="showCta ? 'div' : 'a'"
       v-bind="showCta ? {} : { href: billingCtaHref }"
       :role="showCta ? 'status' : undefined"
-      class="flex items-center gap-2"
-      :class="showCta ? '' : 'rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500'"
+      class="flex items-center gap-2 min-w-0 flex-1 overflow-hidden"
+      :class="showCta ? '' : 'rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500'"
       :aria-label="statusAriaLabel"
+      :title="statusAriaLabel"
     >
       <span
-        class="d-badge d-badge-sm font-semibold"
+        class="d-badge d-badge-sm font-semibold shrink-0 max-w-full truncate"
         :class="badgeClass"
         data-test="org-billing-status"
+        :title="statusLabel"
       >
         {{ statusLabel }}
       </span>
       <span
         v-if="statusDetail"
-        class="text-xs font-semibold sm:text-sm"
+        class="text-xs font-semibold truncate min-w-0 sm:text-sm"
         :class="status.trialDaysLeft <= 7 ? 'text-amber-700 dark:text-amber-300' : 'text-slate-800 dark:text-slate-200'"
         data-test="org-billing-detail"
+        :title="statusDetail"
       >
         {{ statusDetail }}
       </span>
@@ -133,7 +136,7 @@ const bannerColor = computed(() => {
     <a
       v-if="showCta"
       :href="billingCtaHref"
-      class="border-none d-btn d-btn-xs sm:d-btn-sm"
+      class="shrink-0 whitespace-nowrap border-none d-btn d-btn-xs sm:d-btn-sm"
       :class="bannerColor"
       data-test="org-billing-cta"
     >
@@ -144,29 +147,32 @@ const bannerColor = computed(() => {
   <!-- Mobile/original version -->
   <div
     v-else-if="!props.desktop && showBanner"
-    class="flex gap-2 justify-end items-center px-2 bg-gray-200 sm:px-4 min-h-12 sm:min-h-16 dark:bg-gray-800/90"
+    class="flex gap-2 justify-end items-center px-2 bg-gray-200 sm:px-4 min-h-12 sm:min-h-16 dark:bg-gray-800/90 min-w-0 w-full overflow-hidden"
     data-test="org-billing-banner"
   >
     <component
       :is="showCta ? 'div' : 'a'"
       v-bind="showCta ? {} : { href: billingCtaHref }"
       :role="showCta ? 'status' : undefined"
-      class="flex items-center gap-2"
-      :class="showCta ? '' : 'rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500'"
+      class="flex items-center gap-2 min-w-0 flex-1 overflow-hidden"
+      :class="showCta ? '' : 'rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500'"
       :aria-label="statusAriaLabel"
+      :title="statusAriaLabel"
     >
       <span
-        class="d-badge d-badge-sm font-semibold"
+        class="d-badge d-badge-sm font-semibold shrink-0 max-w-full truncate"
         :class="badgeClass"
         data-test="org-billing-status"
+        :title="statusLabel"
       >
         {{ statusLabel }}
       </span>
       <span
         v-if="statusDetail"
-        class="text-xs font-medium sm:text-base"
+        class="text-xs font-medium truncate min-w-0 sm:text-base"
         :class="status.trialDaysLeft <= 7 ? 'text-amber-700 dark:text-amber-300' : 'text-black dark:text-white'"
         data-test="org-billing-detail"
+        :title="statusDetail"
       >
         {{ statusDetail }}
       </span>
@@ -174,7 +180,7 @@ const bannerColor = computed(() => {
     <a
       v-if="showCta"
       :href="billingCtaHref"
-      class="ml-2 whitespace-nowrap border-none d-btn d-btn-xs sm:d-btn-sm"
+      class="ml-2 shrink-0 whitespace-nowrap border-none d-btn d-btn-xs sm:d-btn-sm"
       :class="bannerColor"
       data-test="org-billing-cta"
     >
