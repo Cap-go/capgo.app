@@ -15,6 +15,8 @@ import { greaterOrEqual, parse } from '@std/semver'
 import pack from '../../package.json'
 import { trackEvent } from '../analytics/track'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
+import { fetchChannelCompatibilityContext } from '../api/channels'
+import { upsertAppVersion } from '../api/versions'
 import { calcKeyId, encryptChecksum, encryptChecksumV3, encryptSource, generateSessionKey } from '../api/crypto'
 import { checkAlerts } from '../api/update'
 import { loadSavedCredentials } from '../build/credentials'
@@ -25,7 +27,7 @@ import { showReplicationProgress } from '../replicationProgress'
 import { CliUserError } from '../shared/cli-user-error'
 import { formatTable } from '../terminal-table'
 import { usesAlwaysDirectUpdate } from '../updaterConfig'
-import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, channelUpdatePackageCliError, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getBundleVersion, getCompatibilityDetails, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
+import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, channelUpdatePackageCliError, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getBundleVersion, getCompatibilityDetails, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
 import type { AutoBumpLevel } from '../versionHelpers'
 import { autoBumpVersionBy, getVersionSuggestions, interactiveVersionBump, normalizeAutoBumpInput } from '../versionHelpers'
 import { resolveAutoBumpLevelFromAi } from './auto-bump-ai'
@@ -96,13 +98,17 @@ function uploadCancel(): never {
 export class IncompatibleBundleError extends CliUserError {}
 
 async function persistVersionData(
-  supabase: SupabaseType,
+  apikey: string,
   versionData: Database['public']['Tables']['app_versions']['Insert'],
   action: 'add' | 'update',
+  cliHost?: { apikey?: string, supaHost?: string, supaAnon?: string },
 ) {
-  const { error } = await updateOrCreateVersion(supabase, versionData)
-  if (error)
+  try {
+    await upsertAppVersion(apikey, versionData, { apikey, ...cliHost })
+  }
+  catch (error) {
     uploadFail(`Cannot ${action} bundle ${formatError(error)}`)
+  }
 }
 
 /**
@@ -206,26 +212,29 @@ async function checkNotifyAppReady(options: OptionsUpload, path: string, interac
   }
 }
 
-async function verifyCompatibility(supabase: SupabaseType, pm: pmType, options: OptionsUpload, channel: string, appid: string, bundle: string, orgId: string) {
+async function verifyCompatibility(apikey: string, pm: pmType, options: OptionsUpload, channel: string, appid: string, bundle: string, orgId: string) {
   // Check compatibility here
   const ignoreMetadataCheck = options.ignoreMetadataCheck
   const autoMinUpdateVersion = options.autoMinUpdateVersion
   let minUpdateVersion = options.minUpdateVersion
+  const cliHost = { supaHost: options.supaHost, supaAnon: options.supaAnon }
 
-  const { data: channelData, error: channelError } = await supabase
-    .from('channels')
-    .select('disable_auto_update, version ( id, name, min_update_version, native_packages )')
-    .eq('name', channel)
-    .eq('app_id', appid)
-    .maybeSingle()
-
-  if (channelError)
-    uploadFail(`Cannot load channel ${channel} for compatibility checks ${formatError(channelError)}`)
+  let channelData: Awaited<ReturnType<typeof fetchChannelCompatibilityContext>> | null
+  try {
+    channelData = await fetchChannelCompatibilityContext(
+      { apikey, ...cliHost },
+      appid,
+      channel,
+    )
+  }
+  catch (error) {
+    uploadFail(`Cannot load channel ${channel} for compatibility checks ${formatError(error)}`)
+  }
 
   // The version currently live on the channel — what the new bundle is compared
   // against. Captured here (before the channel is repointed at the new bundle)
   // so the incompatible-bundle Bento signal can report the prior version.
-  const oldVersion = (channelData?.version ?? undefined) as unknown as { id?: number | string, name?: string } | undefined
+  const oldVersion = channelData?.version ?? undefined
 
   const updateMetadataRequired = !!channelData && channelData.disable_auto_update === 'version_number'
 
@@ -233,13 +242,13 @@ async function verifyCompatibility(supabase: SupabaseType, pm: pmType, options: 
   let finalCompatibility: Awaited<ReturnType<typeof checkCompatibilityCloud>>['finalCompatibility'] | undefined
 
   // We only check compatibility IF the channel exists
-  if (!channelError && channelData && channelData.version && (channelData.version as any).native_packages && !ignoreMetadataCheck) {
+  if (channelData?.version && channelData.version.native_packages != null && !ignoreMetadataCheck) {
     const spinner = getUploadReporter().spinner()
     spinner.start(`Checking bundle compatibility with channel ${channel}`)
     const {
       finalCompatibility: finalCompatibilityWithChannel,
       localDependencies: localDependenciesWithChannel,
-    } = await checkCompatibilityCloud(supabase, appid, channel, options.packageJson, options.nodeModules)
+    } = await checkCompatibilityCloud(apikey, appid, channel, options.packageJson, options.nodeModules, cliHost)
 
     finalCompatibility = finalCompatibilityWithChannel
     localDependencies = localDependenciesWithChannel
@@ -260,7 +269,7 @@ async function verifyCompatibility(supabase: SupabaseType, pm: pmType, options: 
     }
     else if (autoMinUpdateVersion) {
       try {
-        const { min_update_version: lastMinUpdateVersion } = channelData.version as any
+        const lastMinUpdateVersion = channelData.version?.min_update_version
         if (!lastMinUpdateVersion || !regexSemver.test(lastMinUpdateVersion))
           uploadFail('Invalid remote min update version, skipping auto setting compatibility')
 
@@ -697,13 +706,14 @@ async function uploadBundleToCapgoCloud(apikey: string, supabase: SupabaseType, 
         log.info(`[Verbose] TUS upload completed, updating database with R2 path...`)
 
       const filePath = `orgs/${orgId}/apps/${appid}/${bundle}.zip`
-      const { error: changeError } = await supabase
-        .from('app_versions')
-        .update({ r2_path: filePath })
-        .eq('name', bundle)
-        .eq('app_id', appid)
-
-      if (changeError) {
+      try {
+        await upsertAppVersion(apikey, {
+          app_id: appid,
+          name: bundle,
+          r2_path: filePath,
+        }, { apikey, supaHost: options.supaHost, supaAnon: options.supaAnon })
+      }
+      catch (changeError) {
         log.error(`Cannot finish TUS upload ${formatError(changeError)}`)
         if (options.verbose)
           log.info(`[Verbose] Database update failed: ${formatError(changeError)}`)
@@ -1613,7 +1623,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
 
   const compatibilityResults = [] as Array<Awaited<ReturnType<typeof verifyCompatibility>> & { channel: string }>
   for (const targetChannel of channelsToAssign) {
-    const compatibilityResult = await verifyCompatibility(supabase, pm, options, targetChannel, appid, bundle, orgId)
+    const compatibilityResult = await verifyCompatibility(apikey, pm, options, targetChannel, appid, bundle, orgId)
     compatibilityResults.push({ channel: targetChannel, ...compatibilityResult })
   }
 
@@ -1833,7 +1843,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] Creating version record in database...`)
 
-  await persistVersionData(supabase, versionData, 'add')
+  await persistVersionData(apikey, versionData, 'add', options)
 
   if (options.verbose)
     log.info(`[Verbose] Version record created successfully`)
@@ -1900,7 +1910,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
       await s3Client.putObject(fileName, Uint8Array.from(zipped))
       versionData.external_url = `${endPoint}/${encodeFileName}`
       versionData.storage_provider = 'external'
-      await persistVersionData(supabase, versionData, 'update')
+      await persistVersionData(apikey, versionData, 'update', options)
     }
     catch (error) {
       try {
@@ -2003,7 +2013,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     if (options.verbose)
       log.info(`[Verbose] Updating version record with storage provider...`)
 
-    await persistVersionData(supabase, versionData, 'update')
+    await persistVersionData(apikey, versionData, 'update', options)
 
     if (options.verbose)
       log.info(`[Verbose] Version record updated successfully`)

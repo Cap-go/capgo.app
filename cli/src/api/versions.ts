@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '../types/supabase.types'
 import { log } from '@clack/prompts'
 import { Table } from '@sauber/table'
-import { formatError, getHumanDate, invokeCapgoCliApi, readCapgoCliApiErrorPayload } from '../utils'
+import { formatError, getHumanDate, invokeCapgoCliApi } from '../utils'
 import { checkVersionNotUsedInChannel } from './channels'
 
 interface VersionOptions {
@@ -25,11 +25,6 @@ interface CapgoHttpOptions {
 
 const BUNDLE_PAGE_SIZE = 50
 
-async function isEmptyBundleListError(error: unknown) {
-  const payload = await readCapgoCliApiErrorPayload(error)
-  return payload?.error === 'cannot_get_bundle' && payload?.message === 'Cannot get bundle'
-}
-
 async function fetchBundlePages(appid: string, options: CapgoHttpOptions) {
   const all: Database['public']['Tables']['app_versions']['Row'][] = []
   let page = 0
@@ -46,8 +41,6 @@ async function fetchBundlePages(appid: string, options: CapgoHttpOptions) {
       },
     )
     if (error) {
-      if (page === 0 && await isEmptyBundleListError(error))
-        return []
       throw error
     }
     const batch = Array.isArray(data) ? data : []
@@ -59,6 +52,41 @@ async function fetchBundlePages(appid: string, options: CapgoHttpOptions) {
     page += 1
   }
   return all
+}
+
+export type UpsertAppVersionInput = Pick<Database['public']['Tables']['app_versions']['Insert'], 'app_id' | 'name'>
+  & Partial<Omit<Database['public']['Tables']['app_versions']['Insert'], 'app_id' | 'name'>>
+
+export async function upsertAppVersion(
+  apikey: string,
+  versionData: UpsertAppVersionInput,
+  options: VersionOptions = {},
+) {
+  const { error } = await invokeCapgoCliApi<Database['public']['Tables']['app_versions']['Row']>('bundle/upsert', {
+    apikey,
+    method: 'POST',
+    body: {
+      app_id: versionData.app_id,
+      name: versionData.name,
+      ...(versionData.session_key !== undefined ? { session_key: versionData.session_key } : {}),
+      ...(versionData.external_url !== undefined ? { external_url: versionData.external_url } : {}),
+      ...(versionData.storage_provider !== undefined ? { storage_provider: versionData.storage_provider } : {}),
+      ...(versionData.min_update_version !== undefined ? { min_update_version: versionData.min_update_version } : {}),
+      ...(versionData.native_packages !== undefined ? { native_packages: versionData.native_packages } : {}),
+      ...(versionData.checksum !== undefined ? { checksum: versionData.checksum } : {}),
+      ...(versionData.link !== undefined ? { link: versionData.link } : {}),
+      ...(versionData.comment !== undefined ? { comment: versionData.comment } : {}),
+      ...(versionData.key_id !== undefined ? { key_id: versionData.key_id } : {}),
+      ...(versionData.cli_version !== undefined ? { cli_version: versionData.cli_version } : {}),
+      ...(versionData.manifest !== undefined ? { manifest: versionData.manifest } : {}),
+      ...(versionData.r2_path !== undefined ? { r2_path: versionData.r2_path } : {}),
+    },
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
+
+  if (error)
+    throw error
 }
 
 export async function deleteAppVersion(

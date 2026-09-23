@@ -8,6 +8,7 @@ import { createBundle } from './create.ts'
 import { deleteBundle } from './delete.ts'
 import { get } from './get.ts'
 import { setChannel } from './set_channel.ts'
+import { upsertBundle } from './upsert.ts'
 import { app as updateMetadataApp } from './update_metadata.ts'
 
 export const app = honoFactory.createApp()
@@ -39,6 +40,12 @@ app.post('/', writeBundleMiddleware, async (c) => {
   const body = await getBodyOrQuery<any>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return createBundle(c, body, apikey)
+})
+
+app.post('/upsert', writeBundleMiddleware, async (c) => {
+  const body = await getBodyOrQuery<any>(c)
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  return upsertBundle(c, body, apikey)
 })
 
 app.post('/ai_bump_level', writeBundleMiddleware, async (c) => {

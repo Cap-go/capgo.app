@@ -15,8 +15,8 @@
 - [x] PUT app fields still missing from HTTP: `allow_preview`, `build_timeout_seconds`, `default_upload_channel`
 - [x] GET organization security fields (`enforcing_2fa`, `password_policy_config`, API-key policy flags)
 - [x] GET channel fields still missing from HTTP response: `ios`, `android`, `owner_org`
-- [ ] Bundle upload finalize / version upsert / encryption field writes (keep existing partial `invokeCapgoCliApi` in upload)
-- [ ] Bundle compatibility `native_packages` dedicated endpoint (today via full GET bundle rows)
+- [x] Bundle upload finalize / version upsert / encryption field writes (`POST /bundle/upsert`)
+- [x] Bundle compatibility `native_packages` via `GET /channel/current-bundle` (channel bundle + metadata payload)
 - [ ] User-scoped storage cleanup path `apps/${appId}/${userId}` on app delete
 
 ## Partial (endpoint exists, CLI still needs more)
@@ -25,16 +25,15 @@
 - [x] GET organization/members — member list migrated; 2FA/password enrichment now HTTP
 - [x] PUT app — preview/timeout/default upload channel migrated; icon storage still SDK
 - [x] GET channel — list/find includes `ios`, `android`, `owner_org`
-- [ ] GET/DELETE bundle — list/delete migrated; empty list currently returns API error that CLI maps to `[]`
+- [x] GET/DELETE bundle — list/delete migrated; empty GET list returns `[]`
 - [ ] POST channel — create/update/set migrated; create no longer sends `created_by`/`owner_org` (server-owned)
 - [ ] DELETE app — DB delete migrated; legacy user storage cleanup still SDK
 
 ## Still on supabase-js (file references)
 
-- `cli/src/utils.ts` — `updateOrCreateChannel` fallback, storage helpers
+- `cli/src/utils.ts` — `updateOrCreateChannel` fallback, storage helpers, `getRemoteChecksums`
 - `cli/src/app/set.ts` — icon storage upload; download-channel helpers
 - `cli/src/app/delete.ts` — user-scoped storage cleanup
 - `cli/src/app/add.ts` — icon storage upload; org permission RPCs
-- `cli/src/bundle/upload.ts` — version upsert / finalize / encryption writes
-- `cli/src/bundle/compatibility.ts` — native package reads when not using HTTP bundle payload
-- `cli/src/channel/set.ts` — `checkCompatibilityNativePackages` still needs supabase client
+- `cli/src/bundle/upload.ts` — version existence RPCs, channel lookups, linked-bundle delete, default upload channel
+- `cli/src/api/channels.ts` — channel link reads for delete/unlink still PostgREST

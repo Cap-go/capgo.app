@@ -34,9 +34,9 @@ export async function get(c: Context<MiddlewareKeyVariables>, body: GetLatest, a
     .eq('deleted', false)
     .range(from, to)
     .order('created_at', { ascending: false })
-  if (dbError || !dataBundles?.length) {
+  if (dbError) {
     throw simpleError('cannot_get_bundle', 'Cannot get bundle', { supabaseError: dbError })
   }
 
-  return c.json(dataBundles as any)
+  return c.json((dataBundles ?? []) as any)
 }
