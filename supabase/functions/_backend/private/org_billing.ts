@@ -8,12 +8,12 @@ import { supabaseClient } from '../utils/supabase.ts'
 
 const DEFAULT_PLAN_NAME = 'Solo'
 
-interface FindBestPlanBody {
-  mau?: number
-  bandwidth: number
-  storage: number
-  build_time_unit?: number
-}
+const findBestPlanBodySchema = z.object({
+  bandwidth: z.number().nonnegative(),
+  storage: z.number().nonnegative(),
+  mau: z.number().nonnegative().optional(),
+  build_time_unit: z.number().nonnegative().optional(),
+})
 
 function parseOrgId(orgId: string | undefined): string {
   const trimmed = orgId?.trim()
@@ -107,15 +107,15 @@ app.get('/credit-deductions', middlewareAuth, async (c) => {
 })
 
 app.post('/find-best-plan', middlewareAuth, async (c) => {
-  const body = await parseBody<FindBestPlanBody>(c)
-  if (body.bandwidth === undefined || body.storage === undefined)
-    throw simpleError('missing_params', 'bandwidth and storage are required')
+  const parsed = findBestPlanBodySchema.safeParse(await parseBody(c))
+  if (!parsed.success)
+    throw simpleError('invalid_body', 'Invalid body')
 
   const planName = await findBestPlan(c, {
-    mau: body.mau ?? 0,
-    bandwidth: body.bandwidth,
-    storage: body.storage,
-    build_time_unit: body.build_time_unit ?? 0,
+    mau: parsed.data.mau ?? 0,
+    bandwidth: parsed.data.bandwidth,
+    storage: parsed.data.storage,
+    build_time_unit: parsed.data.build_time_unit ?? 0,
   })
 
   return c.json({ plan_name: planName })
