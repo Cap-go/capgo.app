@@ -955,10 +955,10 @@ CREATE INDEX idx_channels_rollout_version ON public.channels USING btree (rollou
 
 
 --
--- Name: idx_manifest_app_version_id; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_manifest_app_version_id_file_hash; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_manifest_app_version_id ON public.manifest USING btree (app_version_id);
+CREATE INDEX idx_manifest_app_version_id_file_hash ON public.manifest USING btree (app_version_id, file_hash) INCLUDE (file_size);
 
 
 --

@@ -2421,8 +2421,8 @@
     },
     {
       "constraintOwned": false,
-      "definition": "CREATE INDEX idx_manifest_app_version_id ON public.manifest USING btree (app_version_id)",
-      "name": "idx_manifest_app_version_id",
+      "definition": "CREATE INDEX idx_manifest_app_version_id_file_hash ON public.manifest USING btree (app_version_id, file_hash) INCLUDE (file_size)",
+      "name": "idx_manifest_app_version_id_file_hash",
       "table": "manifest",
       "valid": true
     },
