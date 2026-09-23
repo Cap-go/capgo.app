@@ -2147,9 +2147,7 @@ export async function fetchOrganizationsV7(
   })
 
   if (error) {
-    log.error('Cannot get the list of organizations - exiting')
-    log.error(formatError(error))
-    throw new Error('Cannot get the list of organizations')
+    throw new Error(`Cannot get the list of organizations: ${formatError(error)}`, { cause: error })
   }
 
   return data ?? []
@@ -2161,7 +2159,15 @@ export async function getOrganizationListWithPermission(
   permissionKey: string,
   httpOptions: CliHttpOptions = {},
 ): Promise<{ allOrganizations: Organization[], allowedOrganizations: Organization[] }> {
-  const allOrganizations = await fetchOrganizationsV7(apikey, httpOptions)
+  let allOrganizations: Organization[]
+  try {
+    allOrganizations = await fetchOrganizationsV7(apikey, httpOptions)
+  }
+  catch (error) {
+    log.error('Cannot get the list of organizations - exiting')
+    log.error(formatError(error))
+    throw error
+  }
 
   if (allOrganizations.length === 0) {
     log.error('Could not get organization please create an organization first')

@@ -32,12 +32,13 @@ app.get('/identity', middlewareKey(), async (c) => {
     return quickError(401, 'invalid_apikey', 'Invalid apikey or insufficient permissions')
   }
 
-  const { data: email, error: emailError } = await supabase.rpc('request_actor_email_adress')
+  const [{ data: email, error: emailError }, { data: has2fa, error: has2faError }] = await Promise.all([
+    supabase.rpc('request_actor_email_adress'),
+    supabase.rpc('has_2fa_enabled'),
+  ])
   if (emailError) {
     throw simpleError('cannot_resolve_identity_email', 'Cannot resolve CLI identity email', { error: emailError })
   }
-
-  const { data: has2fa, error: has2faError } = await supabase.rpc('has_2fa_enabled')
   if (has2faError) {
     throw simpleError('cannot_resolve_identity_2fa', 'Cannot resolve CLI identity 2FA status', { error: has2faError })
   }
