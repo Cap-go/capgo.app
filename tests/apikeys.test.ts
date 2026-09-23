@@ -56,6 +56,7 @@ beforeAll(async () => {
   await resetAndSeedAppData(APPNAME)
   await warmEdgeEndpoint('/apikey', { method: 'GET', headers: authHeaders })
   // GET alone does not compile the POST handler; warm create path before concurrent POSTs.
+  await warmEdgeEndpoint('/apikey', { method: 'POST', headers: authHeaders, body: '{}' })
   const warmupResponse = await postApikey(orgKeyBody(`warmup-${id.slice(0, 8)}`))
   expect(warmupResponse.status).toBe(200)
   const warmupData = await warmupResponse.json() as { id: number }
