@@ -95,23 +95,26 @@ describe('[GET] /bundle - Error Cases', () => {
     const emptyAppId = `com.bundle.empty.${randomUUID()}`
     await resetAndSeedAppData(emptyAppId)
 
-    const { error: deleteError } = await getSupabaseClient()
-      .from('app_versions')
-      .delete()
-      .eq('app_id', emptyAppId)
-    if (deleteError)
-      throw deleteError
+    try {
+      const { error: deleteError } = await getSupabaseClient()
+        .from('app_versions')
+        .delete()
+        .eq('app_id', emptyAppId)
+      if (deleteError)
+        throw deleteError
 
-    const response = await fetch(`${BASE_URL}/bundle?app_id=${emptyAppId}`, {
-      method: 'GET',
-      headers,
-    })
+      const response = await fetch(`${BASE_URL}/bundle?app_id=${emptyAppId}`, {
+        method: 'GET',
+        headers,
+      })
 
-    expect(response.status).toBe(200)
-    const data = await response.json()
-    expect(data).toEqual([])
-
-    await resetAppData(emptyAppId)
+      expect(response.status).toBe(200)
+      const data = await response.json()
+      expect(data).toEqual([])
+    }
+    finally {
+      await resetAppData(emptyAppId)
+    }
   })
 
   it('should return empty array for page past the last bundle', async () => {
