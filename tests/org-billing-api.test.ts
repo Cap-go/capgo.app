@@ -13,7 +13,7 @@ describe('org billing HTTP API', () => {
   it.concurrent('rejects unauthenticated plan-name reads', async () => {
     const response = await fetchTestRequest(getEndpointUrl(`/private/org_billing/plan-name?org_id=${ORG_ID}`))
 
-    expect(response.status).toBeGreaterThanOrEqual(400)
+    expect(response.status).toBe(401)
   })
 
   it.concurrent('allows org members to read plan billing endpoints', async () => {
