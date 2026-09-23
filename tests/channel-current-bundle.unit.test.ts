@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  checkPermission: vi.fn(async () => true),
+  checkPermission: vi.fn(),
   rpc: vi.fn(),
   from: vi.fn(),
 }))
@@ -28,6 +28,7 @@ function createContext() {
 describe('channel current bundle endpoint', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.checkPermission.mockResolvedValue(true)
     mocks.from.mockReturnValue({
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),

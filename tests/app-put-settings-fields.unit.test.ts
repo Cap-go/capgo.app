@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  checkPermission: vi.fn(async () => true),
-  deleteAppStatus: vi.fn(async () => undefined),
-  lockOnboardingApp: vi.fn(async () => null),
-  unlockOnboardingApp: vi.fn(async () => undefined),
-  createSignedImageUrl: vi.fn(async () => ''),
+  checkPermission: vi.fn(),
+  deleteAppStatus: vi.fn(),
+  lockOnboardingApp: vi.fn(),
+  unlockOnboardingApp: vi.fn(),
+  createSignedImageUrl: vi.fn(),
   updatePayload: vi.fn(),
   channelSelect: vi.fn(),
 }))
@@ -97,6 +97,11 @@ function createContext() {
 describe('app put settings fields', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.checkPermission.mockResolvedValue(true)
+    mocks.deleteAppStatus.mockResolvedValue(undefined)
+    mocks.lockOnboardingApp.mockResolvedValue(null)
+    mocks.unlockOnboardingApp.mockResolvedValue(undefined)
+    mocks.createSignedImageUrl.mockResolvedValue('')
     mocks.channelSelect.mockResolvedValue({ data: { id: 7 }, error: null })
   })
 

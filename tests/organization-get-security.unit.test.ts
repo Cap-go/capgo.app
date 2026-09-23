@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  checkPermission: vi.fn(async () => true),
-  apikeyHasOrgRightWithPolicy: vi.fn(async () => ({ valid: true })),
-  createSignedImageUrl: vi.fn(async (value: string) => value),
+  checkPermission: vi.fn(),
+  apikeyHasOrgRightWithPolicy: vi.fn(),
+  createSignedImageUrl: vi.fn(),
   from: vi.fn(),
 }))
 
@@ -65,6 +65,9 @@ function mockOrgSelect(data: unknown) {
 describe('organization get security fields', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.checkPermission.mockResolvedValue(true)
+    mocks.apikeyHasOrgRightWithPolicy.mockResolvedValue({ valid: true })
+    mocks.createSignedImageUrl.mockImplementation(async (value: string) => value)
   })
 
   it('returns enforcing_2fa and API key policy fields for a single org', async () => {
