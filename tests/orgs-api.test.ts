@@ -8,8 +8,10 @@ import {
   getEndpointUrl,
   ORG_ID,
   USER_EMAIL_NONMEMBER,
+  USER_EMAIL_ORGS_API_EMPTY,
   USER_ID,
   USER_PASSWORD_NONMEMBER,
+  USER_PASSWORD_ORGS_API_EMPTY,
 } from './test-utils'
 
 describe('orgs HTTP API', () => {
@@ -54,8 +56,8 @@ describe('orgs HTTP API', () => {
       getEndpointUrl('/private/orgs'),
       {
         headers: await getAuthHeadersForCredentials(
-          USER_EMAIL_NONMEMBER,
-          USER_PASSWORD_NONMEMBER,
+          USER_EMAIL_ORGS_API_EMPTY,
+          USER_PASSWORD_ORGS_API_EMPTY,
         ),
       },
     )
@@ -193,31 +195,6 @@ describe('orgs HTTP API', () => {
       `INSERT INTO public.orgs (id, name, management_email, created_by)
        VALUES ($1::uuid, $2, $3, $4::uuid)`,
       [orgId, `Delete test ${orgId}`, `delete-${orgId}@example.com`, USER_ID],
-    )
-    await executeSQL(
-      `INSERT INTO public.org_users (org_id, user_id, rbac_role_name, is_invite)
-       VALUES ($1::uuid, $2::uuid, public.rbac_role_org_super_admin(), false)`,
-      [orgId, USER_ID],
-    )
-    await executeSQL(
-      `INSERT INTO public.role_bindings (
-         principal_type, principal_id, role_id, scope_type, org_id,
-         granted_by, granted_at, reason, is_direct
-       )
-       SELECT
-         public.rbac_principal_user(),
-         $1::uuid,
-         roles.id,
-         public.rbac_scope_org(),
-         $2::uuid,
-         $1::uuid,
-         now(),
-         'Delete test binding',
-         true
-       FROM public.roles
-       WHERE roles.name = public.rbac_role_org_super_admin()
-         AND roles.scope_type = public.rbac_scope_org()`,
-      [USER_ID, orgId],
     )
 
     const response = await fetchTestRequest(
