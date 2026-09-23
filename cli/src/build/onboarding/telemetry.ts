@@ -72,10 +72,11 @@ export interface TrackBuilderOnboardingStepInput {
 }
 
 export type BuilderOnboardingAction
+  = | 'start_setup'
   // Shared (both platforms): which branch the user picked on the resume-prompt
   // fork — `continue` resumes saved progress, `restart` wipes it. Carries a
   // `choice` tag with that value.
-  = | 'resume_prompt_decision'
+    | 'resume_prompt_decision'
     | 'question_shown'
     | 'question_answered'
     | 'question_skipped'
