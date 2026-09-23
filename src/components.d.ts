@@ -35,6 +35,7 @@ declare module 'vue' {
     AppAccess: typeof import('./components/dashboard/AppAccess.vue')['default']
     AppDashboardPage: typeof import('./components/dashboard/AppDashboardPage.vue')['default']
     AppNotFoundModal: typeof import('./components/AppNotFoundModal.vue')['default']
+    AppOnboardingBuilderChecklist: typeof import('./components/dashboard/AppOnboardingBuilderChecklist.vue')['default']
     AppOnboardingCliSteps: typeof import('./components/dashboard/AppOnboardingCliSteps.vue')['default']
     AppOnboardingFlow: typeof import('./components/dashboard/AppOnboardingFlow.vue')['default']
     AppOnboardingIconInput: typeof import('./components/dashboard/AppOnboardingIconInput.vue')['default']
