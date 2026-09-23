@@ -160,6 +160,13 @@ import { deleteAndroidProgress, getAndroidResumeStep, hasAnyOAuthProgress, loadA
 import { ANDROID_STEP_PROGRESS, getAndroidPhaseLabel } from '../types.js'
 import type { AndroidEffectDeps, AndroidInput } from '../flow.js'
 import { applyAndroidInput, runAndroidEffect } from '../flow.js'
+import {
+  trackConnectedGooglePlay,
+  trackGeneratedGooglePlayProvisioningFailure,
+  trackGooglePlayConnectionFailure,
+  trackImportedGooglePlayValidationFailure,
+  trackUnverifiedGooglePlayConnection,
+} from './google-play-action.js'
 import { trackAndroidKeystorePreparationFailure, trackPreparedAndroidKeystore } from './keystore-action.js'
 
 interface LogEntry { text: string, color?: string }
@@ -473,6 +480,7 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
     [appId, resolvedOrgId, step],
   )
   const reportedKeystoreSuccessesRef = useRef(new Set<string>())
+  const reportedGooglePlaySuccessesRef = useRef(new Set<string>())
 
   const [retryCount, setRetryCount] = useState(0)
   const [retryStep, setRetryStep] = useState<AndroidOnboardingStep | null>(null)
@@ -1433,12 +1441,19 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
             // _serviceAccountKeyBase64 persisted below — no React mirror (Plan 3.3).
             setSaValidationResult({ ok: true })
             trackAction('android_sa_validation_result', { result: 'success' }, 'sa-json-validating')
-            await persist((p) => ({
+            const saved = await persist((p) => ({
               ...p,
               _serviceAccountKeyBase64: base64,
               // Clear any stale "skipped" flag from a previous attempt.
               serviceAccountValidationSkipped: false,
             }))
+            trackConnectedGooglePlay(
+              saved,
+              'imported_service_account',
+              journeyId,
+              trackAction,
+              reportedGooglePlaySuccessesRef.current,
+            )
             addLog(`✔ Service account verified — ${result.serviceAccountEmail}`)
             setStep('saving-credentials')
             return
@@ -1453,6 +1468,7 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
             result: 'failure',
             validation_kind: result.kind,
           }, 'sa-json-validating')
+          trackImportedGooglePlayValidationFailure(result.kind, journeyId, trackAction)
           // Emit the immediate action event above, and stash the validation
           // kind so the upcoming `sa-json-validation-failed` step event also
           // carries the same failure category.
@@ -1859,8 +1875,16 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
           oauthCfg = await getCapgoConfig()
         }
         catch (err) {
-          if (!cancelled)
+          if (!cancelled) {
+            trackGooglePlayConnectionFailure(
+              'generated_service_account',
+              'oauth_failed',
+              'google-sign-in-running',
+              journeyId,
+              trackAction,
+            )
             handleError(err, 'google-sign-in')
+          }
           return
         }
         if (cancelled)
@@ -1978,6 +2002,24 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
             reportedKeystoreSuccessesRef.current,
           )
         }
+        else if (step === 'google-sign-in-running' && result.next === 'google-sign-in') {
+          trackGooglePlayConnectionFailure(
+            'generated_service_account',
+            'missing_scopes',
+            'google-sign-in-running',
+            journeyId,
+            trackAction,
+          )
+        }
+        else if (step === 'gcp-setup-running') {
+          trackConnectedGooglePlay(
+            np,
+            'generated_service_account',
+            journeyId,
+            trackAction,
+            reportedGooglePlaySuccessesRef.current,
+          )
+        }
 
         // ── Apply transient runtime data to render state ──────────────────────
         if (t?.detectedPackageIds !== undefined)
@@ -2058,6 +2100,24 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
             'generate_failed',
             journeyId,
             trackAction,
+          )
+        }
+        else if (step === 'google-sign-in-running') {
+          trackGooglePlayConnectionFailure(
+            'generated_service_account',
+            'oauth_failed',
+            'google-sign-in-running',
+            journeyId,
+            trackAction,
+          )
+        }
+        else if (step === 'gcp-setup-running') {
+          const saved = await loadAndroidProgress(appId).catch(() => null)
+          trackGeneratedGooglePlayProvisioningFailure(
+            saved,
+            journeyId,
+            trackAction,
+            reportedGooglePlaySuccessesRef.current,
           )
         }
         // MissingScopesError on google-sign-in is handled INSIDE the engine
@@ -3027,6 +3087,7 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
                     _serviceAccountKeyBase64: base64,
                     serviceAccountValidationSkipped: true,
                   }))
+                  trackUnverifiedGooglePlayConnection(journeyId, trackAction)
                   addLog('⚠ Saved service account without validation — builds may fail if the SA isn\'t invited to your Play Console app.', 'yellow')
                   setStep('saving-credentials')
                 }
