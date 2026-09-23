@@ -551,7 +551,10 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
         try {
           await Promise.race([
             (async () => {
-              const orgId = await resolveOwnerOrgId(apikey, appId, undefined, controller.signal)
+              const orgId = await resolveOwnerOrgId(apikey, appId, {
+                supaHost: options.supaHost,
+                supaAnon: options.supaAnon,
+              }, controller.signal)
               await trackBuilderOnboardingCancelled({
                 apikey,
                 appId,

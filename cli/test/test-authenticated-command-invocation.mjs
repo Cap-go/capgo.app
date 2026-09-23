@@ -93,6 +93,7 @@ assert.match(builderSource, /action: 'start_setup'/)
 assert.match(builderSource, /startSetupLookupInFlight/)
 assert.match(builderSource, /step: firstSetupStep/)
 assert.match(builderSource, /supaHost: options\.supaHost/)
+assert.match(builderSource, /resolveOwnerOrgId\(apikey, appId, \{[\s\S]*?supaHost: options\.supaHost,[\s\S]*?supaAnon: options\.supaAnon,[\s\S]*?\}, controller\.signal\)/)
 assert.doesNotMatch(bundleUploadSource, /enableSelfUpdate/)
 assert.doesNotMatch(credentialsManageSource, /enableSelfUpdate/)
 
