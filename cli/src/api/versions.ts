@@ -10,6 +10,8 @@ interface VersionOptions {
   apikey?: string
   supaHost?: string
   supaAnon?: string
+  /** Injectable for unit tests; defaults to invokeCapgoCliApi. */
+  invoke?: typeof invokeCapgoCliApi
 }
 
 interface DeleteSpecificVersionOptions extends VersionOptions {
@@ -30,12 +32,13 @@ async function isEmptyBundleListError(error: unknown) {
   return payload?.error === 'cannot_get_bundle' && payload?.message === 'Cannot get bundle'
 }
 
-async function fetchBundlePages(appid: string, options: CapgoHttpOptions) {
+async function fetchBundlePages(appid: string, options: CapgoHttpOptions & Pick<VersionOptions, 'invoke'>) {
+  const invoke = options.invoke ?? invokeCapgoCliApi
   const all: Database['public']['Tables']['app_versions']['Row'][] = []
   let page = 0
   while (true) {
     const params = new URLSearchParams({ app_id: appid, page: String(page) })
-    const { data, error } = await invokeCapgoCliApi<Database['public']['Tables']['app_versions']['Row'][]>(
+    const { data, error } = await invoke<Database['public']['Tables']['app_versions']['Row'][]>(
       `bundle?${params.toString()}`,
       {
         apikey: options.apikey,
@@ -46,8 +49,8 @@ async function fetchBundlePages(appid: string, options: CapgoHttpOptions) {
       },
     )
     if (error) {
-      if (page === 0 && await isEmptyBundleListError(error))
-        return []
+      if (await isEmptyBundleListError(error))
+        return all
       throw error
     }
     const batch = Array.isArray(data) ? data : []
@@ -166,6 +169,7 @@ export async function getActiveAppVersions(
       silent,
       supaHost: options.supaHost,
       supaAnon: options.supaAnon,
+      invoke: options.invoke,
     })
   }
   catch (vError) {
