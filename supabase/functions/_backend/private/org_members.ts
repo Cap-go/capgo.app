@@ -1,0 +1,194 @@
+import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import { Hono } from 'hono/tiny'
+import { z } from 'zod'
+import { parseBody, simpleError, useCors } from '../utils/hono.ts'
+import { middlewareAuth } from '../utils/hono_jwt.ts'
+import { emptySupabase, supabaseClient } from '../utils/supabase.ts'
+import { normalizeInviteRole } from '../public/organization/members/post.ts'
+
+const orgIdSchema = z.uuid()
+const rbacOrgRoleSchema = z.enum(['org_member', 'org_billing_admin', 'org_admin', 'org_super_admin'])
+
+const inviteBodySchema = z.object({
+  email: z.email(),
+  org_id: orgIdSchema,
+  role_name: z.string().min(1),
+})
+
+const rescindBodySchema = z.object({
+  email: z.string().min(1),
+  org_id: orgIdSchema,
+})
+
+const memberRoleBodySchema = z.object({
+  org_id: orgIdSchema,
+  user_id: orgIdSchema,
+  role_name: rbacOrgRoleSchema,
+})
+
+const inviteRoleBodySchema = z.object({
+  org_id: orgIdSchema,
+  role_name: rbacOrgRoleSchema,
+  is_tmp: z.boolean(),
+  user_id: orgIdSchema.optional(),
+  email: z.string().min(1).optional(),
+}).superRefine((body, ctx) => {
+  if (body.is_tmp) {
+    if (!body.email) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'email is required for tmp invites',
+        path: ['email'],
+      })
+    }
+    return
+  }
+
+  if (!body.user_id) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'user_id is required for org user invites',
+      path: ['user_id'],
+    })
+  }
+})
+
+function parseOrgId(orgId: string | undefined): string {
+  const trimmed = orgId?.trim()
+  if (!trimmed)
+    throw simpleError('missing_params', 'org_id is required')
+  const parsed = orgIdSchema.safeParse(trimmed)
+  if (!parsed.success)
+    throw simpleError('invalid_body', 'Invalid org_id')
+  return parsed.data
+}
+
+function getAuthedSupabase(c: Parameters<typeof supabaseClient>[0]) {
+  const authorization = c.get('authorization')
+  if (!authorization)
+    throw simpleError('not_authorized', 'Not authorized')
+  return supabaseClient(c, authorization)
+}
+
+export const app = new Hono<MiddlewareKeyVariables>()
+
+app.use('*', useCors)
+
+app.get('/', middlewareAuth, async (c) => {
+  const orgId = parseOrgId(c.req.query('org_id'))
+  const supabase = getAuthedSupabase(c)
+  const { data, error } = await supabase.rpc('get_org_members_rbac', { p_org_id: orgId })
+
+  if (error)
+    throw simpleError('members_list_error', error.message)
+
+  return c.json(data ?? [])
+})
+
+app.post('/invite', middlewareAuth, async (c) => {
+  const body = await parseBody<unknown>(c)
+  const parsed = inviteBodySchema.safeParse(body)
+  if (!parsed.success)
+    throw simpleError('invalid_body', 'Invalid body', { error: parsed.error.message })
+
+  const roleName = normalizeInviteRole(parsed.data.role_name)
+  if (!roleName)
+    throw simpleError('invalid_body', 'Invalid role_name', { role_name: parsed.data.role_name })
+
+  const supabase = getAuthedSupabase(c)
+  const { data, error } = await supabase.rpc('invite_user_to_org_rbac', {
+    email: parsed.data.email,
+    org_id: parsed.data.org_id,
+    role_name: roleName,
+  })
+
+  if (error)
+    throw simpleError('invite_error', error.message)
+
+  return c.json({ code: data ?? '' })
+})
+
+app.post('/rescind', middlewareAuth, async (c) => {
+  const body = await parseBody<unknown>(c)
+  const parsed = rescindBodySchema.safeParse(body)
+  if (!parsed.success)
+    throw simpleError('invalid_body', 'Invalid body', { error: parsed.error.message })
+
+  const supabase = getAuthedSupabase(c)
+  const { data, error } = await supabase.rpc('rescind_invitation', {
+    email: parsed.data.email,
+    org_id: parsed.data.org_id,
+  })
+
+  if (error)
+    throw simpleError('rescind_error', error.message)
+
+  return c.json({ code: data ?? '' })
+})
+
+app.patch('/member-role', middlewareAuth, async (c) => {
+  const body = await parseBody<unknown>(c)
+  const parsed = memberRoleBodySchema.safeParse(body)
+  if (!parsed.success)
+    throw simpleError('invalid_body', 'Invalid body', { error: parsed.error.message })
+
+  const supabase = getAuthedSupabase(c)
+  const { data, error } = await supabase.rpc('update_org_member_role', {
+    p_org_id: parsed.data.org_id,
+    p_user_id: parsed.data.user_id,
+    p_new_role_name: parsed.data.role_name,
+  })
+
+  if (error)
+    throw simpleError('member_role_error', error.message)
+
+  if (data !== 'OK')
+    throw simpleError('member_role_error', typeof data === 'string' ? data : 'Unexpected member role response')
+
+  return c.json({ status: 'ok' })
+})
+
+app.patch('/invite-role', middlewareAuth, async (c) => {
+  const body = await parseBody<unknown>(c)
+  const parsed = inviteRoleBodySchema.safeParse(body)
+  if (!parsed.success)
+    throw simpleError('invalid_body', 'Invalid body', { error: parsed.error.message })
+
+  const supabase = getAuthedSupabase(c)
+  const { data, error } = parsed.data.is_tmp
+    ? await supabase.rpc('update_tmp_invite_role_rbac', {
+        p_org_id: parsed.data.org_id,
+        p_email: parsed.data.email!,
+        p_new_role_name: parsed.data.role_name,
+      })
+    : await supabase.rpc('update_org_invite_role_rbac', {
+        p_org_id: parsed.data.org_id,
+        p_user_id: parsed.data.user_id!,
+        p_new_role_name: parsed.data.role_name,
+      })
+
+  if (error)
+    throw simpleError('invite_role_error', error.message)
+
+  if (data !== 'OK')
+    throw simpleError('invite_role_error', typeof data === 'string' ? data : 'Unexpected invite role response')
+
+  return c.json({ status: 'ok' })
+})
+
+app.get('/magic-invite', async (c) => {
+  const lookup = c.req.query('lookup')?.trim()
+  if (!lookup)
+    throw simpleError('missing_params', 'lookup is required')
+
+  const supabase = emptySupabase(c)
+  const { data, error } = await supabase.rpc('get_invite_by_magic_lookup', { lookup }).maybeSingle()
+
+  if (error)
+    throw simpleError('magic_invite_error', error.message)
+
+  if (!data)
+    return c.json(null, 404)
+
+  return c.json(data)
+})
