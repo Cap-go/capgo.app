@@ -95,6 +95,13 @@ describe('[GET] /bundle - Error Cases', () => {
     const emptyAppId = `com.bundle.empty.${randomUUID()}`
     await resetAndSeedAppData(emptyAppId)
 
+    const { error: deleteError } = await getSupabaseClient()
+      .from('app_versions')
+      .delete()
+      .eq('app_id', emptyAppId)
+    if (deleteError)
+      throw deleteError
+
     const response = await fetch(`${BASE_URL}/bundle?app_id=${emptyAppId}`, {
       method: 'GET',
       headers,
