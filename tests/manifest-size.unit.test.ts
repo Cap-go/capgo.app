@@ -151,6 +151,7 @@ describe('manifest download size helpers', () => {
       { file_hash: 'hash-a', version_id: 42 },
     ])
     expect(lookup?.values[1]).toBe('com.example.app')
+    expect(lookup?.values).toHaveLength(2)
   })
 
   it.concurrent('uses one equality for a fallback version id or name', () => {
@@ -160,13 +161,13 @@ describe('manifest download size helpers', () => {
 
     const byId = buildManifestSizeLookupQuery('com.example.app', '1.2.3', 7, files)
     expect(byId?.text).toContain('av.id = $3')
-    expect(byId?.text).not.toContain('av.name = $4')
-    expect(byId?.values[2]).toBe(7)
+    expect(byId?.text).not.toContain('av.name = $3')
+    expect(byId?.values).toEqual([expect.any(String), 'com.example.app', 7])
 
     const byName = buildManifestSizeLookupQuery('com.example.app', '1.2.3', undefined, files)
-    expect(byName?.text).toContain('av.name = $4')
+    expect(byName?.text).toContain('av.name = $3')
     expect(byName?.text).not.toContain('av.id = $3')
-    expect(byName?.values[3]).toBe('1.2.3')
+    expect(byName?.values).toEqual([expect.any(String), 'com.example.app', '1.2.3'])
   })
 
   it.concurrent('keeps plugin and backend lookup sql identical', () => {

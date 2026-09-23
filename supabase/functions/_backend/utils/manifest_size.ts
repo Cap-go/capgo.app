@@ -142,7 +142,7 @@ export function buildManifestDownloadSizeResult(
 
 export interface ManifestSizeLookupQuery {
   text: string
-  values: [string, string, number | null, string | null]
+  values: Array<string | number | null>
 }
 
 const MANIFEST_SIZE_REQUESTED_CTE = `
@@ -183,7 +183,7 @@ SELECT r.file_hash, av.id AS version_id, MAX(m.file_size) AS file_size
 FROM requested r
 INNER JOIN public.app_versions av
   ON av.app_id = $2
- AND av.name = $4
+ AND av.name = $3
  AND av.deleted = false
 INNER JOIN public.manifest m
   ON m.app_version_id = av.id
@@ -211,14 +211,16 @@ export function buildManifestSizeLookupQuery(
   if (branches.length === 0)
     return null
 
+  const values: Array<string | number | null> = [
+    JSON.stringify(files.map(file => ({ file_hash: file.file_hash, version_id: file.version_id }))),
+    appId,
+  ]
+  if (hasUnscoped && (fallbackId != null || fallbackName != null))
+    values.push(fallbackId ?? fallbackName)
+
   return {
     text: `${MANIFEST_SIZE_REQUESTED_CTE}\n${branches.join('\nUNION ALL\n')}`,
-    values: [
-      JSON.stringify(files.map(file => ({ file_hash: file.file_hash, version_id: file.version_id }))),
-      appId,
-      fallbackId,
-      fallbackName,
-    ],
+    values,
   }
 }
 
