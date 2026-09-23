@@ -21,6 +21,7 @@ import { trackPosthogEvent } from '../../utils/posthog.ts'
 import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { createSignedImageUrl, getStorageAllowedOrigins, resolveWritableImageValue } from '../../utils/storage.ts'
 import { supabaseAdmin, supabaseApikey, supabaseWithAuth } from '../../utils/supabase.ts'
+import { MAX_BUILD_TIMEOUT_SECONDS, MIN_BUILD_TIMEOUT_SECONDS, normalizeBuildTimeoutSeconds } from '../../utils/build_timeout.ts'
 import { backgroundTask, isValidAppId } from '../../utils/utils.ts'
 
 interface UpdateApp {
@@ -29,6 +30,9 @@ interface UpdateApp {
   retention?: number
   expose_metadata?: boolean
   allow_device_custom_id?: boolean
+  allow_preview?: boolean
+  build_timeout_seconds?: number
+  default_upload_channel?: string
   need_onboarding?: boolean
   existing_app?: boolean
   block_provider_infra_requests?: boolean
@@ -38,6 +42,7 @@ interface UpdateApp {
 }
 
 type AppSettings = Pick<Database['public']['Tables']['apps']['Update'], 'name' | 'icon_url' | 'retention' | 'expose_metadata' | 'allow_device_custom_id'
+  | 'allow_preview' | 'build_timeout_seconds' | 'default_upload_channel'
   | 'need_onboarding' | 'existing_app' | 'block_provider_infra_requests'
   | 'ios_store_url' | 'android_store_url'>
 
@@ -187,6 +192,14 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     throw quickError(400, 'retention_to_small', 'Retention cannot be smaller than 0', { retention: body.retention })
   }
 
+  if (body.build_timeout_seconds !== undefined) {
+    const normalizedTimeout = normalizeBuildTimeoutSeconds(body.build_timeout_seconds)
+    if (normalizedTimeout < MIN_BUILD_TIMEOUT_SECONDS || normalizedTimeout > MAX_BUILD_TIMEOUT_SECONDS) {
+      throw quickError(400, 'invalid_build_timeout_seconds', 'Build timeout must be between 5 and 360 minutes', { build_timeout_seconds: body.build_timeout_seconds })
+    }
+    body.build_timeout_seconds = normalizedTimeout
+  }
+
   const onboardingPatch = parseAppOnboardingPatch(body.onboarding)
   const canUpdateSettings = await checkPermission(c, 'app.update_settings', { appId })
   const auth = c.get('auth')
@@ -232,6 +245,9 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     body.retention,
     body.expose_metadata,
     body.allow_device_custom_id,
+    body.allow_preview,
+    body.build_timeout_seconds,
+    body.default_upload_channel,
     body.existing_app,
     body.block_provider_infra_requests,
     body.ios_store_url,
@@ -269,12 +285,30 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     body.need_onboarding,
   ].some(value => value !== undefined)
 
+  if (body.default_upload_channel !== undefined) {
+    const { data: uploadChannel, error: uploadChannelError } = await callerClient
+      .from('channels')
+      .select('id')
+      .eq('app_id', appId)
+      .eq('name', body.default_upload_channel)
+      .maybeSingle()
+    if (uploadChannelError || !uploadChannel) {
+      throw quickError(400, 'invalid_default_upload_channel', 'Default upload channel does not exist for this app', {
+        app_id: appId,
+        default_upload_channel: body.default_upload_channel,
+      })
+    }
+  }
+
   const settingsPayload: AppSettings = {
     name: body.name,
     icon_url: normalizedIcon ?? body.icon,
     retention: body.retention,
     expose_metadata: body.expose_metadata,
     allow_device_custom_id: body.allow_device_custom_id,
+    allow_preview: body.allow_preview,
+    build_timeout_seconds: body.build_timeout_seconds,
+    default_upload_channel: body.default_upload_channel,
     need_onboarding: body.need_onboarding,
     existing_app: body.existing_app,
     block_provider_infra_requests: body.block_provider_infra_requests,

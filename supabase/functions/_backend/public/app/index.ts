@@ -55,6 +55,9 @@ app.put('/:id', middlewareAuth({ preferApiKey: true }), async (c) => {
     need_onboarding?: boolean
     existing_app?: boolean
     block_provider_infra_requests?: boolean
+    allow_preview?: boolean
+    build_timeout_seconds?: number
+    default_upload_channel?: string
     ios_store_url?: string | null
     android_store_url?: string | null
     onboarding?: unknown

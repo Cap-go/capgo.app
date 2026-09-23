@@ -1,25 +1,17 @@
 import type { ChannelCurrentBundleOptions } from '../schemas/channel'
 import { intro, log } from '@clack/prompts'
-import { trackEvent, withSupabaseSource } from '../analytics/track'
+import { trackEvent } from '../analytics/track'
 import { check2FAComplianceForApp } from '../api/app'
 import { CliUserError } from '../shared/cli-user-error'
 import {
   createSupabaseClient,
   findSavedKey,
+  formatError,
   getAppId,
   getConfig,
-  hasCliPermission,
+  invokeCapgoCliApi,
   resolveUserIdFromApiKey,
 } from '../utils'
-
-interface Channel {
-  id: number
-  version: number | null
-}
-
-interface CurrentBundleRow {
-  bundle_name: string | null
-}
 
 export async function currentBundleInternal(channel: string, appId: string, options: ChannelCurrentBundleOptions, silent = false) {
   const { quiet } = options
@@ -53,49 +45,26 @@ export async function currentBundleInternal(channel: string, appId: string, opti
     throw new CliUserError('Channel name missing')
   }
 
-  // TODO(cli-http): channel-scoped RBAC needs channel.read + get_channel_current_bundle_rbac;
-  // GET channel uses app.read_channels and would regress channel-scoped API keys.
-  const { data: supabaseChannel, error } = await withSupabaseSource('channels.currentBundle', () => supabase
-    .from('channels')
-    .select('id, version')
-    .eq('name', channel)
-    .eq('app_id', appId)
-    .limit(1))
+  const params = new URLSearchParams({
+    app_id: appId,
+    channel,
+  })
+  const { data, error } = await invokeCapgoCliApi<{ bundle_name?: string }>(`channel/current-bundle?${params.toString()}`, {
+    apikey: options.apikey,
+    method: 'GET',
+    body: undefined,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
 
-  if (error || !supabaseChannel?.length) {
-    if (!silent)
-      log.error(`Error retrieving channel ${channel} for app ${appId}. Perhaps the channel does not exist?`)
-    throw new CliUserError('Channel not found for app', { appId, channel })
-  }
-
-  const { id: channelId, version } = supabaseChannel[0] as Channel
-  if (!(await hasCliPermission(supabase, options.apikey, 'channel.read', { appId, channelId }))) {
-    if (!silent)
-      log.error(`Insufficient permissions for channel ${channel}. Required RBAC permission for this action: channel.read.`)
-    throw new CliUserError('Insufficient permissions for channel. Required RBAC permission for this action: channel.read.', { appId, channel })
-  }
-
-  void trackEvent({ channel: 'channel', event: 'Channel Current Bundle Viewed', tags: { has_bundle: Boolean(version) } })
-
-  if (!version) {
-    if (!silent)
-      log.error(`Error retrieving channel ${channel} for app ${appId}. Perhaps the channel does not exist?`)
-    throw new CliUserError('Channel does not have a bundle linked', { appId, channel })
-  }
-
-  // TODO(cli-http): keep RBAC RPC until HTTP returns channel-scoped current bundle safely
-  const { data: bundleRows, error: bundleError } = await withSupabaseSource('channels.currentBundleName', () => supabase
-    .rpc('get_channel_current_bundle_rbac' as any, {
-      p_app_id: appId,
-      p_channel_id: channelId,
-    }))
-
-  const bundleName = (bundleRows as CurrentBundleRow[] | null)?.[0]?.bundle_name
-  if (bundleError || !bundleName) {
+  const bundleName = data?.bundle_name
+  if (error || !bundleName) {
     if (!silent)
       log.error(`Error retrieving current bundle for channel ${channel}.`)
-    throw new CliUserError('Channel does not have a readable current bundle', { appId, channel })
+    throw new CliUserError('Channel does not have a readable current bundle', { appId, channel, cause: error ? formatError(error) : undefined })
   }
+
+  void trackEvent({ channel: 'channel', event: 'Channel Current Bundle Viewed', tags: { has_bundle: true } })
 
   if (!silent) {
     if (!quiet)
