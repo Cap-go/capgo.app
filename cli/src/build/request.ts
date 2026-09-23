@@ -67,6 +67,7 @@ import { uploadSupportLogs } from '../support/support-upload.js'
 import { offerSupportUploadBeforeAi } from '../support/support-upload-prompt.js'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { assertCliPermission, canPromptInteractively, createSupabaseClient, findSavedKey, getConfig, getOrganizationId, getRemoteConfig, sendEvent, trimTrailingSlashes, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { getBuilderAppId } from './app-id'
 import { syncAndroidVersion } from './android-version'
 import { createBuildCancellationSignalHandler, requestBuildCancellation } from './cancellation'
 import { mergeCredentials, MIN_OUTPUT_RETENTION_SECONDS, parseAndroidPlayStoreReleaseStatus, parseAndroidPlayStoreTrack, parseInAppUpdatePriority, parseOptionalBoolean, parseOutputRetentionSeconds } from './credentials'
@@ -1466,7 +1467,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
 
     // @capacitor/cli loadConfig() is cwd-based; honor --path for monorepos/workspaces.
     const config = await withCwd(projectDir, () => getConfig())
-    appId = appId || config?.config?.appId
+    appId = getBuilderAppId(appId, config?.config, 'native') || ''
 
     if (!appId) {
       throw new Error('Missing argument, you need to provide a appId, or be in a capacitor project')

@@ -1,5 +1,5 @@
 import type { Context } from 'hono'
-import type { AppFameCandidate } from '../utils/app_fame.ts'
+import type { AppFameCandidate, AppFameDecision } from '../utils/app_fame.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { AiBinding } from '../utils/workers_ai.ts'
 import { sql } from 'drizzle-orm'
@@ -7,6 +7,10 @@ import { Hono } from 'hono/tiny'
 import {
   APP_FAME_BATCH_SIZE,
   APP_FAME_STALE_DAYS,
+  ignoredFameAppIdPredicateSql,
+  ignoredFameDecision,
+  isIgnoredFameAppId,
+  leakedFameCategoryPredicateSql,
   scoreAppsWithAi,
 } from '../utils/app_fame.ts'
 import { BRES, middlewareAPISecret, quickError } from '../utils/hono.ts'
@@ -38,16 +42,26 @@ export async function processAppFameBatch(c: Context<MiddlewareKeyVariables>): P
       FROM public.apps AS a
       JOIN public.orgs AS o ON o.id = a.owner_org
       LEFT JOIN public.app_fame AS f ON f.app_id = a.app_id
-      WHERE a.app_id NOT LIKE 'com.demo.%'
-        AND a.app_id NOT LIKE 'com.capdemo.%'
-        AND (
-          f.app_id IS NULL
-          OR f.checked_at < now() - make_interval(days => ${APP_FAME_STALE_DAYS})
+      WHERE (
+          (
+            NOT ${ignoredFameAppIdPredicateSql}
+            AND (
+              f.app_id IS NULL
+              OR f.checked_at < now() - make_interval(days => ${APP_FAME_STALE_DAYS})
+              OR ${leakedFameCategoryPredicateSql}
+            )
+          )
+          OR (
+            ${ignoredFameAppIdPredicateSql}
+            AND COALESCE(f.fame_score, 0) > 0
+          )
         )
       ORDER BY
         CASE
-          WHEN COALESCE(a.ios_store_url, '') <> '' OR COALESCE(a.android_store_url, '') <> '' THEN 0
-          ELSE 1
+          WHEN ${ignoredFameAppIdPredicateSql} AND COALESCE(f.fame_score, 0) > 0 THEN 0
+          WHEN ${leakedFameCategoryPredicateSql} THEN 1
+          WHEN COALESCE(a.ios_store_url, '') <> '' OR COALESCE(a.android_store_url, '') <> '' THEN 2
+          ELSE 3
         END,
         f.checked_at NULLS FIRST,
         a.created_at ASC
@@ -67,21 +81,11 @@ export async function processAppFameBatch(c: Context<MiddlewareKeyVariables>): P
     if (candidates.length === 0)
       return { scored: 0, skipped: 0 }
 
-    const { decisions, missingAppIds, model } = await scoreAppsWithAi(c, ai, candidates)
-    if (decisions.length === 0) {
-      cloudlogErr({
-        requestId: c.get('requestId'),
-        message: 'cron_app_fame AI returned no usable scores',
-        candidateCount: candidates.length,
-        model,
-      })
-      throw quickError(502, 'ai_invalid_response', 'Workers AI returned no usable app fame scores', {
-        candidateCount: candidates.length,
-        model,
-      })
-    }
+    const ignoredCandidates = candidates.filter(candidate => isIgnoredFameAppId(candidate.app_id))
+    const scoredCandidates = candidates.filter(candidate => !isIgnoredFameAppId(candidate.app_id))
+    const ignoredDecisions = ignoredCandidates.map(candidate => ignoredFameDecision(candidate.app_id))
 
-    for (const decision of decisions) {
+    const persistDecision = async (decision: AppFameDecision, modelName: string) => {
       await drizzleClient.execute(sql`
         INSERT INTO public.app_fame (
           app_id,
@@ -102,7 +106,7 @@ export async function processAppFameBatch(c: Context<MiddlewareKeyVariables>): P
           ${decision.category || null},
           ${decision.known_as || null},
           ${decision.summary},
-          ${model},
+          ${modelName},
           now(),
           now()
         )
@@ -119,16 +123,45 @@ export async function processAppFameBatch(c: Context<MiddlewareKeyVariables>): P
       `)
     }
 
+    for (const decision of ignoredDecisions)
+      await persistDecision(decision, 'ignored')
+
+    let aiDecisions: AppFameDecision[] = []
+    let missingAppIds: string[] = []
+    let model = 'ignored'
+
+    if (scoredCandidates.length > 0) {
+      const scored = await scoreAppsWithAi(c, ai, scoredCandidates)
+      aiDecisions = scored.decisions
+      missingAppIds = scored.missingAppIds
+      model = scored.model
+      if (aiDecisions.length === 0) {
+        cloudlogErr({
+          requestId: c.get('requestId'),
+          message: 'cron_app_fame AI returned no usable scores',
+          candidateCount: scoredCandidates.length,
+          model,
+        })
+        throw quickError(502, 'ai_invalid_response', 'Workers AI returned no usable app fame scores', {
+          candidateCount: scoredCandidates.length,
+          model,
+        })
+      }
+      for (const decision of aiDecisions)
+        await persistDecision(decision, model)
+    }
+
+    const scoredCount = ignoredDecisions.length + aiDecisions.length
     cloudlog({
       requestId: c.get('requestId'),
       message: 'cron_app_fame scored apps',
-      scored: decisions.length,
+      scored: scoredCount,
       skipped: missingAppIds.length,
       omittedAppIds: missingAppIds,
       model,
     })
 
-    return { scored: decisions.length, skipped: missingAppIds.length }
+    return { scored: scoredCount, skipped: missingAppIds.length }
   }
   catch (error) {
     logPgError(c, 'processAppFameBatch', error)

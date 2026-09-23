@@ -1,7 +1,7 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "12.288.1",
+  "version": "12.298.2",
   "private": true,
   "workspaces": [
     "cli",
@@ -411,7 +411,7 @@
     "vue-tsc": "3.3.11",
     "wrangler": "^4.113.0",
     "yaml": "^2.9.0",
-    "zod": "^4.4.3",
+    "zod": "4.5.4",
     "zod-compiler": "^1.15.0"
   },
   "gitmoji": {

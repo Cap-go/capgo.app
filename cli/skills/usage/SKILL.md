@@ -19,6 +19,13 @@ TanStack Intent skills should stay focused and under the validator line limit, s
 
 - Prefer `npx @capgo/cli@latest ...` in user-facing examples in this repo.
 - Many commands can infer `appId` and related config from the current Capacitor project.
+- Commands inside an identifiable Capacitor project can automatically complete the Add Integration Code onboarding task when a source call to `CapacitorUpdater.notifyAppReady()` is detected. Detection is best effort and may be abandoned when the command exits. It does not confirm runtime readiness.
+- A separate background check can complete Install Updater Plugin when `@capgo/capacitor-updater` is declared in the selected app's package.json and installed locally, including hoisted or symlinked workspace dependencies. Missing dependencies leave existing progress untouched; detection may be abandoned when the command exits.
+- After supported interactive app, bundle, channel, organization, and key commands, plus `build request`, `login`, `doctor`, and `get-qr`, finish, pending background checks share a wait of up to five seconds. The CLI prints a waiting message and can exit sooner after the checks finish; pressing Ctrl-C during the wait exits immediately. JSON, output-text, quiet, CI, piped, `init`, `build init`, and MCP runs do not add this wait or message. `account whoami` (and its `account id` alias) and `bundle releaseType` also exit without waiting.
+- With analytics enabled, source scans emit `scan_started` and `scan_ended` events in the `notify-app-ready` channel with a shared `attempt_id`. The ended event includes scan duration, result, and todo-report outcome. An abandoned scan may have no ended event.
+- With analytics enabled, displaying the waiting message emits `background_checks_wait_started` in the `cli-usage` channel. Its event properties include the command path, pending check count, grace period, and pending `scan_attempt_ids`. Telemetry shares the five-second wait budget and respects `CAPGO_DISABLE_TELEMETRY` and `CAPGO_DISABLE_POSTHOG`.
+- Updater installation checks use the same scan events and attempt pairing in the `updater-installed` channel, with a separate attempt ID from the source scan. Telemetry opt-out does not prevent either onboarding check.
+- Background onboarding requests trust the default Capgo API origin. For a custom API, explicitly select the self-host with `--supa-host` and `--supa-anon` where supported, or list trusted URL origins (including scheme and port) in `CAPGO_TRUSTED_API_ORIGINS`, separated by commas. Remote hosts require HTTPS; HTTP is permitted only for trusted loopback origins. Untrusted destinations and redirects are skipped without sending credentials to another host.
 - Shared public flags commonly include `-a, --apikey <apikey>` and `--verbose` on commands that support verbose output.
 - `--capacitor-config <path>` is a global option for dynamic monorepos: Capacitor still loads the active root config, while config-writing commands update the selected app-specific source file. On `mcp`, the target remains active for the server lifetime so config-writing MCP tools use the same source.
 
@@ -40,6 +47,7 @@ TanStack Intent skills should stay focused and under the validator line limit, s
 - `app add [appId]`: create an app in Capgo Cloud.
 - `app list`: list apps under the current account. Pass `--filter-by-org-id <orgId>` to list only apps from one organization, `--show-org` to include organization names, and `--show-org-id` to include organization IDs. The CLI warns that the filter can hide other accessible apps. Use `npx @capgo/cli@latest app list --output-text` for plain status text with an embedded CSV app table and no interactive terminal formatting.
 - `app delete [appId]`: remove an app.
+- `app todo [appId]` (alias: `app todoList`): show the versioned onboarding checklist with done, skipped, and pending tasks, using the same live progress checks as the dashboard. Supports legacy v3 flat steps and v4 OTA steps under `setup.steps.ota` when `setup.ota_todo_list_version` is the string `"1"`. Skipped tasks count toward completed progress. Live checks can refresh saved OTA milestones; a warning means saved progress is shown for checks that failed. Requires `app.read`; additional checks depend on the key's read permissions. Omit the app ID to infer it from the current Capacitor project. Example: `npx @capgo/cli@latest app todo com.example.app`. Supports `-a, --apikey`, `--supa-host`, and `--supa-anon`.
 - `app set [appId]`: update app settings such as name, icon, retention, metadata exposure, and preview access with `--preview` or `--no-preview`.
 - `app setting [path]`: update Capacitor config values programmatically.
 - `app debug [appId]`: listen for live-update debug events, optionally for one device.
@@ -88,7 +96,7 @@ Load `skills/native-builds/SKILL.md` when working with:
 
 Load `skills/organization-management/SKILL.md` when working with:
 
-- `account id`
+- `account whoami` (alias: `account id`)
 - `organization list`, `organization add`, `organization members`, `organization set`, `organization delete`
 - deprecated `organisation` aliases
 

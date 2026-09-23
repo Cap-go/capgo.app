@@ -4,6 +4,7 @@ import type { Database } from '../utils/supabase.types.ts'
 import { z } from 'zod'
 import dayjs from 'dayjs'
 import { Hono } from 'hono/tiny'
+import { containsDomainName } from '../../shared/invite-name.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { trackBentoEvent } from '../utils/bento.ts'
 import { verifyCaptchaToken } from '../utils/captcha.ts'
@@ -56,6 +57,9 @@ async function validateInvite(c: Context, rawBody: any) {
   }
 
   const body = validationResult.data
+  if (containsDomainName(body.first_name) || containsDomainName(body.last_name)) {
+    throw simpleError('invite_name_domain_not_allowed', 'First and last names cannot contain domain names')
+  }
   cloudlog({ requestId: c.get('requestId'), context: 'invite_new_user_to_org validated body', body })
 
   const authorization = c.get('authorization')

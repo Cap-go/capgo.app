@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import type { AppOnboardingStepStatus } from '~/services/appOnboarding'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconCheck from '~icons/lucide/check'
 import IconChevronDown from '~icons/lucide/chevron-down'
 import IconMinus from '~icons/lucide/minus'
-import { getAppOnboardingStepIds, parseAppOnboarding } from '~/services/appOnboarding'
-import { useSupabase } from '~/services/supabase'
+import { useAppOnboardingCliProgress } from '~/composables/useAppOnboardingCliProgress'
+import { getAppOnboardingStepIds } from '~/services/appOnboarding'
 
 const props = defineProps<{
   appId: string
@@ -14,63 +14,21 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
 const isOpen = ref(false)
-const onboarding = ref(parseAppOnboarding(props.initialOnboarding))
-let pollTimer: number | null = null
-let refreshGeneration = 0
+const { onboarding } = useAppOnboardingCliProgress(() => props.appId, () => props.initialOnboarding)
 
-const steps = computed(() => getAppOnboardingStepIds(onboarding.value.todo_list_version).map(id => ({
+const steps = computed(() => getAppOnboardingStepIds(onboarding.value.todo_list_version, onboarding.value.ota_todo_list_version).map(id => ({
   id,
   status: onboarding.value.steps[id]?.status as AppOnboardingStepStatus | undefined,
-  title: t(`app-onboarding-cli-step-${id}`),
+  title: t([3, 4].includes(onboarding.value.todo_list_version) ? `setup-checklist-step-${id}` : `app-onboarding-cli-step-${id}`),
 })))
 
 const doneCount = computed(() => steps.value.filter(step => step.status === 'done' || step.status === 'skipped').length)
-const isTerminal = computed(() => onboarding.value.outcome === 'completed' || onboarding.value.outcome === 'skipped')
-
-watch(() => props.initialOnboarding, (value) => {
-  onboarding.value = parseAppOnboarding(value)
-})
 
 watch(doneCount, (count) => {
   if (count > 0)
     isOpen.value = true
 }, { immediate: true })
-
-function stopPolling() {
-  if (pollTimer !== null) {
-    window.clearInterval(pollTimer)
-    pollTimer = null
-  }
-}
-
-function startPolling() {
-  if (pollTimer !== null)
-    return
-  pollTimer = window.setInterval(() => {
-    void refreshOnboarding()
-  }, 2000)
-}
-
-async function refreshOnboarding() {
-  const generation = ++refreshGeneration
-  const appId = props.appId
-  const { data } = await supabase
-    .from('apps')
-    .select('onboarding')
-    .eq('app_id', appId)
-    .maybeSingle()
-
-  if (generation !== refreshGeneration || appId !== props.appId)
-    return
-
-  if (data)
-    onboarding.value = parseAppOnboarding(data.onboarding)
-
-  if (isTerminal.value)
-    stopPolling()
-}
 
 function statusLabel(status: AppOnboardingStepStatus | undefined) {
   if (status === 'done')
@@ -79,28 +37,11 @@ function statusLabel(status: AppOnboardingStepStatus | undefined) {
     return t('app-onboarding-cli-step-skipped')
   return t('app-onboarding-cli-step-pending')
 }
-
-watch(isTerminal, (terminal) => {
-  if (terminal)
-    stopPolling()
-  else
-    startPolling()
-})
-
-onMounted(() => {
-  void refreshOnboarding()
-  if (!isTerminal.value)
-    startPolling()
-})
-
-onBeforeUnmount(() => {
-  refreshGeneration += 1
-  stopPolling()
-})
 </script>
 
 <template>
   <div
+    v-if="steps.length"
     class="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50/80 dark:border-white/15 dark:bg-slate-950/90"
     data-test="app-onboarding-cli-steps"
   >
@@ -113,7 +54,7 @@ onBeforeUnmount(() => {
     >
       <span class="min-w-0">
         <span class="block text-sm font-medium text-slate-950 dark:text-white">
-          {{ t('app-onboarding-cli-steps-title') }}
+          {{ t([3, 4].includes(onboarding.todo_list_version) ? 'setup-checklist-list-title' : 'app-onboarding-cli-steps-title') }}
         </span>
         <span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">
           {{ t('app-onboarding-cli-steps-progress', { done: doneCount, total: steps.length }) }}
@@ -132,7 +73,7 @@ onBeforeUnmount(() => {
       class="border-t border-slate-200 px-4 py-3 dark:border-white/10"
     >
       <p class="mb-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
-        {{ t('app-onboarding-cli-steps-subtitle') }}
+        {{ t([3, 4].includes(onboarding.todo_list_version) ? 'setup-checklist-list-subtitle' : 'app-onboarding-cli-steps-subtitle') }}
       </p>
       <ol class="space-y-2">
         <li

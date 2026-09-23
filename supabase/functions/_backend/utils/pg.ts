@@ -10,6 +10,7 @@ import { getRuntimeKey } from 'hono/adapter'
 import { Client, Pool } from 'pg'
 import { serializePostgresError } from '../plugin_runtime/utils/postgres_error.ts'
 import { backgroundTask, existInEnv, getEnv } from '../utils/utils.ts'
+import { ignoredFameAppIdPredicateSql, leakedFameCategoryPredicateSql } from './app_fame.ts'
 import { CacheHelper } from './cache.ts'
 import { getChannelSelfOverride, isChannelSelfStoreEnabled } from './channelSelfStore.ts'
 import { getAdminOnboardingTelemetry } from './cloudflare.ts'
@@ -3099,6 +3100,8 @@ export async function getAdminFamousApps(
       JOIN public.apps AS a ON a.app_id = f.app_id
       JOIN public.orgs AS o ON o.id = a.owner_org
       WHERE f.fame_score >= ${minScore}
+        AND NOT ${ignoredFameAppIdPredicateSql}
+        AND NOT ${leakedFameCategoryPredicateSql}
         ${tierFilter}
         ${searchFilter}
       ORDER BY f.fame_score DESC, f.confidence DESC, a.app_id ASC
@@ -3111,6 +3114,8 @@ export async function getAdminFamousApps(
       JOIN public.apps AS a ON a.app_id = f.app_id
       JOIN public.orgs AS o ON o.id = a.owner_org
       WHERE f.fame_score >= ${minScore}
+        AND NOT ${ignoredFameAppIdPredicateSql}
+        AND NOT ${leakedFameCategoryPredicateSql}
         ${tierFilter}
         ${searchFilter}
     `
@@ -3120,14 +3125,16 @@ export async function getAdminFamousApps(
         COUNT(*) FILTER (WHERE f.tier = 'famous')::int AS famous_count,
         COUNT(*) FILTER (WHERE f.tier = 'notable')::int AS notable_count
       FROM public.app_fame AS f
+      JOIN public.apps AS a ON a.app_id = f.app_id
+      WHERE NOT ${ignoredFameAppIdPredicateSql}
+        AND NOT ${leakedFameCategoryPredicateSql}
     `
     const pendingQuery = sql`
       SELECT COUNT(*)::int AS pending_count
       FROM public.apps AS a
       LEFT JOIN public.app_fame AS f ON f.app_id = a.app_id
       WHERE f.app_id IS NULL
-        AND a.app_id NOT LIKE 'com.demo.%'
-        AND a.app_id NOT LIKE 'com.capdemo.%'
+        AND NOT ${ignoredFameAppIdPredicateSql}
     `
 
     const [result, countResult, summaryResult, pendingResult] = await Promise.all([

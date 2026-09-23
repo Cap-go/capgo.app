@@ -1,14 +1,14 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
-import { z } from 'zod'
 import { Hono } from 'hono/tiny'
-// --- Worker logic imports ---
-import { integerLikeSchema, safeParseSchema } from '../utils/schema_validation.ts'
+import { z } from 'zod'
+import { ONBOARDING_MESSAGES_PER_MINUTE } from '../utils/app_onboarding_refresh.ts'
 import { sendDiscordAlert } from '../utils/discord.ts'
 import { BRES, middlewareAPISecret, parseBody, simpleError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
-import { closeClient, getPgClient, type PgClient} from '../utils/pg.ts'
+import { integerLikeSchema, safeParseSchema } from '../utils/schema_validation.ts'
+import { closeClient, getPgClient, type PgClient } from '../utils/pg.ts'
 import { backgroundTask, getEnv, WAIT_FOR_COMPLETION_HEADER } from '../utils/utils.ts'
 import { updateManifestSize } from './on_manifest_create.ts'
 
@@ -277,6 +277,8 @@ function prepareQueueHttpBody(functionName: string, body: Record<string, unknown
 }
 
 function getQueueHttpTimeoutMs(functionName: string): number {
+  if (isOnboardingQueue(functionName))
+    return 90_000
   if (isVersionQueueFunction(functionName))
     return VERSION_QUEUE_HTTP_TIMEOUT_MS
   return QUEUE_HTTP_TIMEOUT_MS
@@ -530,12 +532,16 @@ async function processQueueMessage(c: Context, queueName: string, message: Messa
 }
 
 function getQueueBatchSize(queueName: string, requestedBatchSize: number): number {
+  if (queueName === 'cron_onboarding_refresh_apps')
+    return Math.min(requestedBatchSize, ONBOARDING_MESSAGES_PER_MINUTE)
   if (isVersionQueueFunction(queueName))
     return Math.min(requestedBatchSize, VERSION_QUEUE_BATCH_SIZE)
   return requestedBatchSize
 }
 
 function getQueueHttpConcurrency(queueName: string): number {
+  if (isOnboardingQueue(queueName))
+    return ONBOARDING_MESSAGES_PER_MINUTE
   if (queueName === 'on_manifest_create')
     return MANIFEST_QUEUE_HTTP_CONCURRENCY
   if (isVersionQueueFunction(queueName))
@@ -1019,7 +1025,6 @@ export async function http_post_helper(
   }
 }
 
-
 // Helper function to delete multiple messages from the queue in a single batch
 async function delete_queue_message_batch(c: Context, db: PgClient, queueName: string, msgIds: number[]) {
   try {
@@ -1096,7 +1101,11 @@ async function mass_edit_queue_messages_cf_ids(
 
 // --- Hono app setup ---
 function shouldRunQueueSyncInBackground(queueName: string): boolean {
-  return queueName !== 'on_manifest_create'
+  return queueName !== 'on_manifest_create' && !isOnboardingQueue(queueName)
+}
+
+function isOnboardingQueue(queueName: string): boolean {
+  return queueName === 'cron_onboarding_refresh_apps'
 }
 
 async function runQueueSync(

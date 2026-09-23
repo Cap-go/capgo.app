@@ -57,6 +57,7 @@ export function exitCodeFor(counts: Record<Severity, number>, opts: OutcomeOptio
 
 export interface PrescanExecution {
   report: PrescanReport
+  appId: string
   /** apikey actually used for the scan (flag or saved key); undefined when remote checks were skipped */
   apikey?: string
 }
@@ -89,14 +90,14 @@ export async function executePrescan(appId: string | undefined, options: Prescan
   const overrides = parsePrescanOverrides({ skip: options.skip, warn: options.warn })
   validateOverrideIds(overrides, ALL_CHECK_IDS)
   const report = await runPrescan(ctx, ALL_CHECKS, { overrides })
-  return { report, apikey }
+  return { report, appId: ctx.appId, apikey }
 }
 
 export async function prescanCommand(appId: string | undefined, options: PrescanCommandOptions): Promise<void> {
   validateFlags(options)
   if (!options.json)
     intro('Capgo build prescan')
-  const { report, apikey: apikeyUsedForScan } = await executePrescan(appId, options)
+  const { report, appId: resolvedAppId, apikey: apikeyUsedForScan } = await executePrescan(appId, options)
   if (options.json) {
     console.log(renderJsonReport(report))
   }
@@ -114,7 +115,7 @@ export async function prescanCommand(appId: string | undefined, options: Prescan
       tags: {
         'source': 'standalone',
         'result': enforced.error > 0 ? (options.ignoreFatal ? 'bypassed' : 'blocked') : enforced.warning > 0 ? (options.failOnWarnings ? 'blocked' : 'warned') : informationOnly > 0 ? 'information-only' : 'clean',
-        'app-id': appId ?? 'unknown',
+        'app-id': resolvedAppId,
         'platform': options.platform ?? 'unknown',
         'errors': String(report.counts.error),
         'warnings': String(report.counts.warning),

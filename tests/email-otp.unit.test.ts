@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   getEmailOtpSendErrorMessage,
   parseEmailOtpSendError,
+  sendEmailOtpVerification,
 } from '../src/services/emailOtp.ts'
 
-const t = (key: string, params?: Record<string, unknown>) => {
+function t(key: string, params?: Record<string, unknown>) {
   if (params?.seconds !== undefined)
     return `${key}:${params.seconds}`
   return key
@@ -70,5 +71,36 @@ describe('getEmailOtpSendErrorMessage', () => {
       .toBe('captcha-fail')
     expect(getEmailOtpSendErrorMessage({ kind: 'generic' }, t))
       .toBe('email-otp-send-failed')
+  })
+})
+
+describe('sendEmailOtpVerification', () => {
+  it('passes an account-deletion purpose in the same-site redirect URL', async () => {
+    vi.stubGlobal('location', { origin: 'https://console.capgo.app' })
+    const signInWithOtp = vi.fn().mockResolvedValue({ error: null })
+
+    try {
+      await sendEmailOtpVerification({ auth: { signInWithOtp } } as never, 'user@example.com', 'captcha-token', 'delete_account')
+      expect(signInWithOtp).toHaveBeenCalledWith({
+        email: 'user@example.com',
+        options: {
+          shouldCreateUser: false,
+          captchaToken: 'captcha-token',
+          emailRedirectTo: 'https://console.capgo.app/?reason=delete_account',
+        },
+      })
+    }
+    finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('leaves generic OTP redirects unset', async () => {
+    const signInWithOtp = vi.fn().mockResolvedValue({ error: null })
+    await sendEmailOtpVerification({ auth: { signInWithOtp } } as never, 'user@example.com')
+    expect(signInWithOtp).toHaveBeenCalledWith({
+      email: 'user@example.com',
+      options: { shouldCreateUser: false, captchaToken: undefined },
+    })
   })
 })

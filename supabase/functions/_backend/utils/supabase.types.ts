@@ -4198,6 +4198,10 @@ export type Database = {
       }
       delete_user: { Args: never; Returns: undefined }
       dismiss_getting_started: { Args: { p_app_id: string }; Returns: Json }
+      enqueue_app_onboarding_refreshes: {
+        Args: { p_limit?: number }
+        Returns: number
+      }
       exist_app: { Args: { appid: string }; Returns: boolean }
       exist_app_v2: { Args: { appid: string }; Returns: boolean }
       exist_app_versions:
@@ -4723,6 +4727,7 @@ export type Database = {
               total_percent: number
             }[]
           }
+      get_public_builder_metrics: { Args: never; Returns: Json }
       get_sso_enforcement_by_domain: {
         Args: { p_domain: string }
         Returns: {
@@ -5042,6 +5047,7 @@ export type Database = {
         Args: { p_existing: Json; p_patch: Json }
         Returns: Json
       }
+      new_builder_onboarding_setup_v1: { Args: never; Returns: Json }
       null_migrated_app_version_manifests: {
         Args: {
           batch_size?: number
@@ -5380,10 +5386,6 @@ export type Database = {
         Args: { p_user_id: string }
         Returns: string
       }
-      refresh_app_onboarding_progress: {
-        Args: { p_batch_size?: number }
-        Returns: number
-      }
       refresh_app_rollout_channel_count_for_app: {
         Args: { p_app_id: string }
         Returns: undefined
@@ -5454,6 +5456,7 @@ export type Database = {
         Returns: boolean
       }
       remove_old_jobs: { Args: never; Returns: undefined }
+      request_actor_email_adress: { Args: never; Returns: string }
       request_actor_user_id: { Args: never; Returns: string }
       request_app_chart_refresh: {
         Args: { app_id: string }

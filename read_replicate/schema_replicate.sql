@@ -878,6 +878,13 @@ CREATE INDEX idx_apps_default_upload_channel ON public.apps USING btree (default
 
 
 --
+-- Name: idx_apps_onboarding_login_creator; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_apps_onboarding_login_creator ON public.apps USING btree (((onboarding ->> 'created_by_user_id'::text))) WHERE ((onboarding #>> '{setup,todo_list_version}'::text[]) = ANY (ARRAY['2'::text, '3'::text, '4'::text]));
+
+
+--
 -- Name: idx_apps_onboarding_ota_stage; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -885,17 +892,17 @@ CREATE INDEX idx_apps_onboarding_ota_stage ON public.apps USING btree (((((onboa
 
 
 --
+-- Name: idx_apps_onboarding_queued_refresh_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_apps_onboarding_queued_refresh_at ON public.apps USING btree (COALESCE((onboarding ->> 'queued_refresh_at'::text), ''::text), COALESCE((onboarding ->> 'refreshed_at'::text), ''::text), app_id);
+
+
+--
 -- Name: idx_apps_onboarding_refreshed_at; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_apps_onboarding_refreshed_at ON public.apps USING btree (COALESCE((onboarding ->> 'refreshed_at'::text), ''::text), app_id);
-
-
---
--- Name: idx_apps_onboarding_v2_creator; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_apps_onboarding_v2_creator ON public.apps USING btree (((onboarding ->> 'created_by_user_id'::text))) WHERE ((onboarding #>> '{setup,todo_list_version}'::text[]) = '2'::text);
 
 
 --
@@ -948,10 +955,10 @@ CREATE INDEX idx_channels_rollout_version ON public.channels USING btree (rollou
 
 
 --
--- Name: idx_manifest_app_version_id; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_manifest_app_version_id_file_hash; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_manifest_app_version_id ON public.manifest USING btree (app_version_id);
+CREATE INDEX idx_manifest_app_version_id_file_hash ON public.manifest USING btree (app_version_id, file_hash) INCLUDE (file_size);
 
 
 --

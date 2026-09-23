@@ -3,13 +3,13 @@ import { buildCliAiSetupPrompt } from '../src/services/cliAiPrompt'
 
 const apiKey = 'capgo_test_secret'
 
-function promptInput() {
+function promptInput(todoListVersion?: number, otaTodoListVersion?: string) {
   return {
     apiKey,
     organizations: [{
       id: 'org-1',
       name: 'Acme',
-      apps: [{ appId: 'com.acme.app', name: 'Production App' }],
+      apps: [{ appId: 'com.acme.app', name: 'Production App', todoListVersion, otaTodoListVersion }],
     }],
     skippedOrganizations: [],
   }
@@ -22,6 +22,59 @@ describe('buildCliAiSetupPrompt', () => {
     expect(buildCliAiSetupPrompt(promptInput(), 'ota')).toBe(existing)
     expect(buildCliAiSetupPrompt(promptInput(), 'unknown')).toBe(existing)
     expect(buildCliAiSetupPrompt(promptInput(), ['builder'])).toBe(existing)
+  })
+
+  it.concurrent('checks Todo list v3 after each OTA milestone when intent is explicit', () => {
+    const prompt = buildCliAiSetupPrompt(promptInput(3), 'ota')
+
+    expect(prompt).toContain('## OTA todo list progress checks')
+    expect(prompt.match(/app todo \{SELECTED_CAPGO_APP_ID\}/g)).toHaveLength(7)
+    expect(prompt).toContain('After selecting the Capgo app, run the checklist once')
+    expect(prompt).toContain('After the chosen channel is available')
+    expect(prompt).toContain('After the updater is installed')
+    expect(prompt).toContain('After the app-ready call is in the real startup path')
+    expect(prompt).toContain('After the first bundle upload completes')
+    expect(prompt).toContain('After the original native app first runs')
+    expect(prompt).toContain('After the installed app applies the live update')
+    expect(prompt.indexOf('After the original native app first runs')).toBeLessThan(prompt.indexOf('### Create a recognizable test change'))
+    expect(prompt.indexOf('After the installed app applies the live update')).toBeGreaterThan(prompt.indexOf('The test succeeds when:'))
+    expect(prompt).toContain('Treat a task as complete only when the CLI reports it done or skipped')
+    expect(prompt).toContain('skip every later checklist checkpoint')
+    expect(prompt.match(new RegExp(apiKey, 'g'))).toHaveLength(1)
+  })
+
+  it.concurrent('leaves v1 and v2 OTA prompts without checklist instructions', () => {
+    for (const version of [1, 2, undefined]) {
+      const prompt = buildCliAiSetupPrompt(promptInput(version), 'ota')
+      expect(prompt).not.toContain('app todo {SELECTED_CAPGO_APP_ID}')
+      expect(prompt).not.toContain('OTA todo list progress checks')
+    }
+  })
+
+  it.concurrent('includes v4 OTA apps in the checklist protocol', () => {
+    const prompt = buildCliAiSetupPrompt(promptInput(4, '1'), 'ota')
+    expect(prompt).toContain('## OTA todo list progress checks')
+    expect(prompt).toContain('`Todo list v4`')
+    for (const version of [undefined, '2'])
+      expect(buildCliAiSetupPrompt(promptInput(4, version), 'ota')).not.toContain('## OTA todo list progress checks')
+  })
+
+  it.concurrent('keeps default, Builder, and choose-first prompts free of OTA checklist checks', () => {
+    for (const intent of [undefined, 'builder', 'both', 'exploring', 'unknown'])
+      expect(buildCliAiSetupPrompt(promptInput(3), intent)).not.toContain('app todo {SELECTED_CAPGO_APP_ID}')
+  })
+
+  it.concurrent('guards mixed-version app selection and ignores invalid v3 app IDs', () => {
+    const mixed = promptInput(2)
+    mixed.organizations[0]!.apps.push({ appId: 'com.acme.new', name: 'New App', todoListVersion: 3 })
+    const prompt = buildCliAiSetupPrompt(mixed, 'ota')
+    expect(prompt).toContain('A mixed organization can contain apps with different todo-list versions')
+    expect(prompt).toContain('The following Capgo app IDs use Todo list v3 or v4: `com.acme.new`.')
+    expect(prompt).toContain('only if its app ID is in that OTA list')
+    expect(prompt).toContain('If it reports v1 or v2, skip every later checklist checkpoint')
+
+    mixed.organizations[0]!.apps[1]!.appId = 'invalid-app-id'
+    expect(buildCliAiSetupPrompt(mixed, 'ota')).not.toContain('app todo {SELECTED_CAPGO_APP_ID}')
   })
 
   it.concurrent('builds the MCP-first Builder onboarding prompt', () => {

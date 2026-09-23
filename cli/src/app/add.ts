@@ -18,14 +18,43 @@ import {
   formatError,
   getAppId,
   getCapgoCliHttpStatus,
+  defaultHostWeb,
   getConfig,
   getContentType,
+  getLocalConfig,
   getOrganizationWithPermission,
   invokeCapgoCliApi,
   resolveCapgoPublicApiHost,
   resolveUserIdFromApiKey,
   sendEvent,
 } from '../utils'
+
+function normalizeConsoleHost(hostWeb: string): string {
+  return hostWeb.endsWith('/') ? hostWeb.slice(0, -1) : hostWeb
+}
+
+export function appGettingStartedUrl(appId: string, hostWeb = defaultHostWeb): string {
+  return `${normalizeConsoleHost(hostWeb)}/app/${appId}/getting-started`
+}
+
+export function formatAppGettingStartedMessage(appId: string, hostWeb = defaultHostWeb): string {
+  return `Continue setup at ${appGettingStartedUrl(appId, hostWeb)}`
+}
+
+export function shouldPrintAppGettingStartedUrl(hostWeb: string, usesCustomSupabase: boolean): boolean {
+  return !usesCustomSupabase || normalizeConsoleHost(hostWeb) !== defaultHostWeb
+}
+
+export async function resolveAppGettingStartedMessage(
+  appId: string,
+  options: { supaHost?: string, supaAnon?: string } = {},
+): Promise<string | null> {
+  const localConfig = await getLocalConfig(true)
+  const usesCustomSupabase = Boolean(options.supaHost || localConfig.supaHost)
+  if (!shouldPrintAppGettingStartedUrl(localConfig.hostWeb, usesCustomSupabase))
+    return null
+  return formatAppGettingStartedMessage(appId, localConfig.hostWeb)
+}
 
 export const reverseDomainRegex = /^[a-z0-9]+(\.[\w-]+)+$/i
 
@@ -413,7 +442,7 @@ export async function addAppInternal(
       const message = formatError(ownershipError)
       if (!silent)
         log.error(`Could not add app ${message}`)
-      throw new Error(`Could not add app ${message}`)
+      throw new CliUserError(`Could not add app ${message}`)
     }
 
     if (duplicateOutcome === 'duplicate_owned') {
@@ -423,13 +452,13 @@ export async function addAppInternal(
       const takenMessage = `App ID ${appId} already exists`
       if (!silent)
         log.error(`Could not add app: ${takenMessage}`)
-      throw new Error(`Could not add app: ${takenMessage}`)
+      throw new CliUserError(`Could not add app: ${takenMessage}`)
     }
     else {
       const message = formatError(error)
       if (!silent)
         log.error(`Could not add app ${message}`)
-      throw new Error(`Could not add app ${message}`)
+      throw new CliUserError(`Could not add app ${message}`)
     }
   }
 
@@ -458,8 +487,12 @@ export async function addAppInternal(
   if (!silent) {
     if (appAlreadyExists)
       log.success(`App ${appId} already exists in Capgo`)
-    else
+    else {
       log.success(`App ${appId} added to Capgo`)
+      const gettingStartedMessage = await resolveAppGettingStartedMessage(appId, options)
+      if (gettingStartedMessage)
+        log.info(gettingStartedMessage)
+    }
     log.info(`This app is accessible to all members of your organization based on their permissions`)
     log.info(`Next step: upload a bundle with "npx @capgo/cli bundle upload ${appId}"`)
     outro('Done ✅')
