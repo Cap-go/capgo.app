@@ -31,8 +31,8 @@ const state = {
     ? { add_channel: { status: savedChannelStatus } }
     : {}) as Record<string, { status: 'done' | 'skipped' }>,
   builderSteps: {
-    ios: Object.fromEntries(BUILDER_STEP_IDS.ios.map(id => [id, { status: 'pending' }])) as Record<string, { status: 'pending' }>,
-    android: Object.fromEntries(BUILDER_STEP_IDS.android.map(id => [id, { status: 'pending' }])) as Record<string, { status: 'pending' }>,
+    ios: Object.fromEntries(BUILDER_STEP_IDS.ios.map(id => [id, { status: 'pending' }])) as Record<string, { status: 'pending' | 'done' | 'skipped' }>,
+    android: Object.fromEntries(BUILDER_STEP_IDS.android.map(id => [id, { status: 'pending' }])) as Record<string, { status: 'pending' | 'done' | 'skipped' }>,
   },
   selectedBuilderPlatform: params.get('platform') === 'ios' || params.get('platform') === 'android' ? params.get('platform') : null,
   outcome: 'in_progress',
@@ -145,6 +145,9 @@ window.fetch = async (input, init) => {
     const single = new Headers(init?.headers).get('Accept')?.includes('object')
     return new Response(JSON.stringify(single ? rows[0] ?? {} : rows), { headers: { 'Content-Type': 'application/json' } })
   }
+  if (builderComponentView && url.pathname.endsWith('/apps')) {
+    return new Response(JSON.stringify({ onboarding: previewOnboarding() }), { headers: { 'Content-Type': 'application/json' } })
+  }
   state.requests += 1
   return new Response(JSON.stringify(state.error
     ? { message: 'Progress unavailable' }
@@ -171,6 +174,7 @@ const app = createApp(defineComponent({
             ? h(AppOnboardingFlow, { onboarding: true })
             : builderComponentView
               ? h(AppOnboardingBuilderChecklist, {
+                  appId: preview.appId.value,
                   initialOnboarding: previewOnboarding(),
                   command: 'npx @capgo/cli@latest build init -a [API_KEY]',
                   hiding: preview.hiding.value,
@@ -178,6 +182,7 @@ const app = createApp(defineComponent({
                   onCopyCommand: platform => events.push(`copy-builder-${platform}`),
                   onHide: () => events.push('hide'),
                   onExplore: () => events.push('explore'),
+                  onComplete: () => events.push('complete'),
                 })
               : params.get('view') === 'compact'
                 ? h(AppOnboardingCliSteps, { appId: preview.appId.value })

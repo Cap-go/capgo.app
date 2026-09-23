@@ -19,10 +19,11 @@ export const BUILDER_STEP_IDS = {
 
 export type BuilderPlatform = keyof typeof BUILDER_STEP_IDS
 export type BuilderStepId = typeof BUILDER_STEP_IDS[BuilderPlatform][number]
+export type BuilderStepStatus = 'pending' | 'done' | 'skipped'
 
-export interface BuilderOnboardingChecklist {
+export interface BuilderOnboardingState {
   selectedPlatform: BuilderPlatform | null
-  stepIds: Record<BuilderPlatform, BuilderStepId[]>
+  steps: Record<BuilderPlatform, Partial<Record<BuilderStepId, BuilderStepStatus>>>
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -52,20 +53,23 @@ export function isBuilderTodoListSelected(value: unknown): boolean {
     || (Array.isArray(setup.paths) && setup.paths.length === 1 && setup.paths[0] === 'builder')
 }
 
-export function parseBuilderOnboardingChecklist(value: unknown): BuilderOnboardingChecklist {
+export function parseBuilderOnboarding(value: unknown): BuilderOnboardingState {
   const setup = setupRecord(value)
-  const allSteps = isRecord(setup.steps) ? setup.steps : {}
-  const builderSteps = isRecord(allSteps.builder) ? allSteps.builder : {}
-  const stepIds: BuilderOnboardingChecklist['stepIds'] = { ios: [], android: [] }
+  const rawSteps = isRecord(setup.steps) && isRecord(setup.steps.builder) ? setup.steps.builder : {}
+  const steps: BuilderOnboardingState['steps'] = { ios: {}, android: {} }
 
   for (const platform of ['ios', 'android'] as const) {
-    const configuredSteps = isRecord(builderSteps[platform]) ? builderSteps[platform] : {}
-    stepIds[platform] = BUILDER_STEP_IDS[platform].filter(id => isRecord(configuredSteps[id]))
+    const platformSteps = isRecord(rawSteps[platform]) ? rawSteps[platform] : {}
+    for (const id of BUILDER_STEP_IDS[platform]) {
+      const step = platformSteps[id]
+      if (isRecord(step) && (step.status === 'pending' || step.status === 'done' || step.status === 'skipped'))
+        steps[platform][id] = step.status
+    }
   }
 
   const selectedPlatform = setup.selected_builder_platform
   return {
     selectedPlatform: selectedPlatform === 'ios' || selectedPlatform === 'android' ? selectedPlatform : null,
-    stepIds,
+    steps,
   }
 }
