@@ -89,7 +89,7 @@
     "test:build-cancellation": "bun test/test-build-cancellation.mjs",
     "test:ci-prompts": "bun test/test-ci-prompts.mjs",
     "test:ci-secrets": "bun test/test-ci-secrets.mjs",
-    "test:android-onboarding-progress": "bun test/test-android-onboarding-progress.mjs",
+    "test:android-onboarding-progress": "bun test/test-android-onboarding-progress.mjs && bun test/test-android-select-guard.mjs",
     "test:android-keystore-action": "bun test/test-android-keystore-action.mjs",
     "test:onboarding-telemetry": "bun test/test-onboarding-telemetry.mjs",
     "test:v2-event-migration": "bun test/test-v2-event-migration.mjs",
