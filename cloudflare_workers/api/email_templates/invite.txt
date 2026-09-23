@@ -1,9 +1,0 @@
-Hi,
-
-You have been invited to create a user on {{ site_url }}.
-
-To accept the invitation and complete your account setup, please follow the link below:
-
-{{ confirmation_link }}
-
-If you did not expect this invitation, you can safely ignore this email.

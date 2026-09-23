@@ -18,11 +18,11 @@ import { plistArrayStrings } from './ios-plist-read'
 import { parseProvisioningMap } from './ios-profiles'
 
 function primaryProvisioningProfile(ctx: ScanContext): ReturnType<typeof parseProvisioningMap>[number] | undefined {
-  return parseProvisioningMap(ctx).find(profile => profile.bundleId === (ctx.nativeAppId ?? ctx.appId))
+  return parseProvisioningMap(ctx).find(profile => profile.bundleId === ctx.appId)
 }
 
 const hasPrimaryProfile = (ctx: ScanContext): boolean => primaryProvisioningProfile(ctx) !== undefined
-const hasAppEntitlements = (ctx: ScanContext): boolean => readAppEntitlements(ctx.projectDir, ctx.nativeAppId ?? ctx.appId) !== null
+const hasAppEntitlements = (ctx: ScanContext): boolean => readAppEntitlements(ctx.projectDir, ctx.appId) !== null
 
 /**
  * Independent evidence the app actually uses push: the Info.plist declares the
@@ -143,7 +143,7 @@ export const entitlementsVsProfileCapability: PrescanCheck = {
   platforms: ['ios'],
   appliesTo: ctx => hasPrimaryProfile(ctx) && hasAppEntitlements(ctx),
   async run(ctx): Promise<Finding[]> {
-    const app = readAppEntitlements(ctx.projectDir, ctx.nativeAppId ?? ctx.appId)
+    const app = readAppEntitlements(ctx.projectDir, ctx.appId)
     const profile = primaryProvisioningProfile(ctx)
     if (!app || !profile)
       return []
@@ -196,11 +196,11 @@ export const apsEnvironmentVsMode: PrescanCheck = {
   id: 'ios/entitlements-aps-environment-vs-mode',
   platforms: ['ios'],
   appliesTo: (ctx) => {
-    const app = readAppEntitlements(ctx.projectDir, ctx.nativeAppId ?? ctx.appId)
+    const app = readAppEntitlements(ctx.projectDir, ctx.appId)
     return app !== null && entString(app.raw, 'aps-environment') !== null && Boolean(ctx.distributionMode)
   },
   async run(ctx): Promise<Finding[]> {
-    const app = readAppEntitlements(ctx.projectDir, ctx.nativeAppId ?? ctx.appId)
+    const app = readAppEntitlements(ctx.projectDir, ctx.appId)
     if (!app)
       return []
     const value = entString(app.raw, 'aps-environment')
@@ -265,11 +265,11 @@ export const associatedDomainsFormat: PrescanCheck = {
   id: 'ios/entitlements-associated-domains-format',
   platforms: ['ios'],
   appliesTo: (ctx) => {
-    const app = readAppEntitlements(ctx.projectDir, ctx.nativeAppId ?? ctx.appId)
+    const app = readAppEntitlements(ctx.projectDir, ctx.appId)
     return app !== null && entArray(app.raw, ASSOCIATED_DOMAIN_KEY).length > 0
   },
   async run(ctx): Promise<Finding[]> {
-    const app = readAppEntitlements(ctx.projectDir, ctx.nativeAppId ?? ctx.appId)
+    const app = readAppEntitlements(ctx.projectDir, ctx.appId)
     if (!app)
       return []
     const bad: string[] = []
@@ -300,11 +300,11 @@ export const appGroupsFormat: PrescanCheck = {
   id: 'ios/entitlements-app-groups-format',
   platforms: ['ios'],
   appliesTo: (ctx) => {
-    const app = readAppEntitlements(ctx.projectDir, ctx.nativeAppId ?? ctx.appId)
+    const app = readAppEntitlements(ctx.projectDir, ctx.appId)
     return app !== null && entArray(app.raw, APP_GROUP_KEY).length > 0
   },
   async run(ctx): Promise<Finding[]> {
-    const app = readAppEntitlements(ctx.projectDir, ctx.nativeAppId ?? ctx.appId)
+    const app = readAppEntitlements(ctx.projectDir, ctx.appId)
     if (!app)
       return []
     const bad = entArray(app.raw, APP_GROUP_KEY).filter(g => !APP_GROUP_RE.test(g))
@@ -343,7 +343,7 @@ export const entitlementsDeclaredAgeRange: PrescanCheck = {
   platforms: ['ios'],
   appliesTo: ctx => packageHasDependency(ctx.projectDir, AGE_RANGE_PLUGIN) && willUploadToAppStore(ctx),
   async run(ctx): Promise<Finding[]> {
-    const app = readAppEntitlements(ctx.projectDir, ctx.nativeAppId ?? ctx.appId)
+    const app = readAppEntitlements(ctx.projectDir, ctx.appId)
     if (app !== null && entBool(app.raw, DECLARED_AGE_RANGE_KEY) === true)
       return []
     return [{

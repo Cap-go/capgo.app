@@ -21,8 +21,6 @@ export type OnboardingChannelEvent
     | 'onboarding_channel_create_loaded'
     | 'onboarding_channel_create_submitted'
     | 'onboarding_channel_create_succeeded'
-    | 'onboarding_channel_flow_closed'
-    | 'onboarding_channel_flow_opened'
     | 'onboarding_channel_name_entered'
     | 'onboarding_channel_name_suggestion_selected'
     | 'onboarding_channel_name_validation_failed'
@@ -41,14 +39,12 @@ export interface OnboardingChannelEventProperties {
   animation_trigger?: 'automatic' | 'replay'
   channel_name_length?: number
   channel_name_source?: 'manual' | 'suggestion'
-  channel_flow_origin?: 'onboarding' | 'todo_list'
   channel_stage: OnboardingChannelStage
   created_in_onboarding?: boolean
   exit_action?: 'back' | 'continue' | 'unmounted'
   failure_phase?: 'channel_insert' | 'existing_channel_lookup' | 'initialization'
   failure_reason?: 'initializing' | 'insert_failed' | 'load_failed' | 'missing_identity' | 'name_invalid' | 'name_required' | 'name_taken' | 'permission_denied' | 'request_failed' | 'submitting' | 'timeline_unavailable'
   found_existing_channel?: boolean
-  flow_exit_action?: 'closed' | 'completed'
   had_completed_animation?: boolean
   navigation_direction?: 'backward' | 'forward'
   next_channel_stage?: OnboardingChannelStage | 'cli'
@@ -57,13 +53,6 @@ export interface OnboardingChannelEventProperties {
   replay_count?: number
   selected_suggestion?: 'beta' | 'development' | 'production'
   watch_duration_ms?: number
-}
-
-export function withOnboardingChannelOrigin(
-  properties: OnboardingChannelEventProperties,
-  origin = properties.channel_flow_origin ?? 'onboarding',
-): OnboardingChannelEventProperties {
-  return { ...properties, channel_flow_origin: origin }
 }
 
 interface AnimationProgressSource {

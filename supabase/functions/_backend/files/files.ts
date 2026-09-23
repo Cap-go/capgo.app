@@ -266,25 +266,6 @@ function withFileReadCacheControl(cacheControl: string | null | undefined): stri
   return withNoTransformCacheControl(cacheControl)
 }
 
-function isHeadRequest(c: Context): boolean {
-  return c.req.raw.method === 'HEAD'
-}
-
-function toHeadersOnlyResponse(response: Response): Response {
-  return new Response(null, {
-    headers: response.headers,
-    status: response.status,
-    statusText: response.statusText,
-  })
-}
-
-function notFoundAttachmentResponse(c: Context, isHead: boolean): Response {
-  // HEAD must stay body-less (same HTTP/2 Content-Length trap as 200 hits).
-  if (isHead)
-    return new Response(null, { status: 404 })
-  return c.json({ error: 'not_found', message: 'Not found' }, 404)
-}
-
 function ensureNoTransformResponse(response: Response): Response {
   const cacheControl = withFileReadCacheControl(response.headers.get('cache-control'))
   if (cacheControl === response.headers.get('cache-control')) {
@@ -300,12 +281,12 @@ function ensureNoTransformResponse(response: Response): Response {
   })
 }
 
-function withAttachmentResponseHeaders(response: Response, fileId: string, includeBody = true): Response {
+function withAttachmentResponseHeaders(response: Response, fileId: string): Response {
   const headers = new Headers(response.headers)
   headers.set('cache-control', withFileReadCacheControl(headers.get('cache-control')))
   headers.set('content-disposition', `attachment; filename="${fileId}"`)
 
-  return new Response(includeBody ? response.body : null, {
+  return new Response(response.body, {
     headers,
     status: response.status,
     statusText: response.statusText,
@@ -367,7 +348,6 @@ async function saveBandwidthUsage(c: Context, fileSize: number | null | undefine
 }
 
 async function getSupabaseStorageResponse(c: Context, fileId: string): Promise<Response> {
-  const method = c.req.raw.method === 'HEAD' ? 'HEAD' : 'GET'
   const { data: signedUrlData, error: signedUrlError } = await supabaseAdmin(c).storage.from('capgo').createSignedUrl(fileId, 60)
 
   if (signedUrlError || !signedUrlData?.signedUrl) {
@@ -378,13 +358,14 @@ async function getSupabaseStorageResponse(c: Context, fileId: string): Promise<R
       error: signedUrlError,
     })
     if (signedUrlError?.status === 404) {
-      return notFoundAttachmentResponse(c, method === 'HEAD')
+      return c.json({ error: 'not_found', message: 'Not found' }, 404)
     }
     throw quickError(503, 'upstream_unavailable', 'File storage temporarily unavailable', { fileId }, signedUrlError, { alert: false })
   }
 
   const requestHeaders = new Headers()
   const rangeHeader = c.req.header('range')
+  const method = c.req.raw.method === 'HEAD' ? 'HEAD' : 'GET'
   if (method === 'GET' && rangeHeader) {
     requestHeaders.set('range', rangeHeader)
   }
@@ -412,7 +393,7 @@ async function getSupabaseStorageResponse(c: Context, fileId: string): Promise<R
       responseBody,
     })
     if (response.status === 404 || responseBody.toLowerCase().includes('not found')) {
-      return notFoundAttachmentResponse(c, method === 'HEAD')
+      return c.json({ error: 'not_found', message: 'Not found' }, 404)
     }
     throw quickError(503, 'upstream_unavailable', 'File storage temporarily unavailable', { fileId, status: response.status }, responseBody, { alert: false })
   }
@@ -420,12 +401,11 @@ async function getSupabaseStorageResponse(c: Context, fileId: string): Promise<R
   if (method !== 'HEAD') {
     await saveBandwidthUsage(c, getTransferredBytesFromResponse(response))
   }
-  return withAttachmentResponseHeaders(response, fileId, method !== 'HEAD')
+  return withAttachmentResponseHeaders(response, fileId)
 }
 
 async function getHandler(c: Context): Promise<Response> {
   const fileId = c.get('fileId')
-  const isHead = isHeadRequest(c)
   // File reads stay off the primary DB. A deleted version may still be in the
   // edge cache after R2 trash; check the deleted marker or one indexed r2_path
   // lookup before serving or restoring that cache entry.
@@ -440,7 +420,7 @@ async function getHandler(c: Context): Promise<Response> {
 
   if (bucket == null) {
     cloudlog({ requestId: c.get('requestId'), message: 'getHandler files bucket is null' })
-    return notFoundAttachmentResponse(c, isHead)
+    return c.json({ error: 'not_found', message: 'Not found' }, 404)
   }
 
   const cache = await getFileReadCache()
@@ -451,13 +431,13 @@ async function getHandler(c: Context): Promise<Response> {
   if (response != null) {
     if (await isAttachmentVersionDeleted(c, fileId)) {
       cloudlog({ requestId: c.get('requestId'), message: 'getHandler files cache hit for deleted version', fileId })
-      return notFoundAttachmentResponse(c, isHead)
+      return c.json({ error: 'not_found', message: 'Not found' }, 404)
     }
 
     const cachedResponse = ensureNoTransformResponse(response)
     response = cachedResponse
     cloudlog({ requestId: c.get('requestId'), message: 'getHandler files cache hit' })
-    if (!isHead) {
+    if (c.req.raw.method !== 'HEAD') {
       await saveBandwidthUsage(c, getTransferredBytesFromResponse(cachedResponse))
     }
     // Best-effort restore: if a live file is cached but missing in R2, write it back.
@@ -488,16 +468,16 @@ async function getHandler(c: Context): Promise<Response> {
         cloudlog({ requestId: c.get('requestId'), message: 'Failed to restore cached file to R2', fileId, error: String(err) })
       }
     })
-    return isHead ? toHeadersOnlyResponse(cachedResponse) : cachedResponse
+    return cachedResponse
   }
 
   if (await isAttachmentVersionDeleted(c, fileId)) {
     cloudlog({ requestId: c.get('requestId'), message: 'getHandler files cache miss for deleted version', fileId })
-    return notFoundAttachmentResponse(c, isHead)
+    return c.json({ error: 'not_found', message: 'Not found' }, 404)
   }
 
   const rangeHeaderFromRequest = c.req.header('range')
-  if (rangeHeaderFromRequest && !isHead) {
+  if (rangeHeaderFromRequest) {
     cloudlog({ requestId: c.get('requestId'), message: 'getHandler files range request', range: rangeHeaderFromRequest })
     try {
       const retryBucket = new RetryBucket(bucket, DEFAULT_RETRY_PARAMS)
@@ -510,7 +490,7 @@ async function getHandler(c: Context): Promise<Response> {
           if (rangeStart >= fileSize) {
             const emptyHeaders = new Headers()
             emptyHeaders.set('Content-Range', `bytes */${fileSize}`)
-            return new Response(isHead ? null : new Uint8Array(0), { status: 206, headers: emptyHeaders })
+            return new Response(new Uint8Array(0), { status: 206, headers: emptyHeaders })
           }
         }
       }
@@ -518,41 +498,6 @@ async function getHandler(c: Context): Promise<Response> {
     catch (error) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'getHandler files head failed', fileId, error })
     }
-  }
-
-  if (isHead) {
-    // HEAD must use R2 metadata only (head()), never bucket.get() — streaming a
-    // multi-MB body and stripping it breaks HTTP/2 Content-Length on Workers.
-    let objectInfo: R2Object | null = null
-    try {
-      objectInfo = await headFirstExistingAttachmentCandidate(new RetryBucket(bucket, DEFAULT_RETRY_PARAMS), candidateKeys)
-    }
-    catch (error) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'getHandler files head failed', fileId, error })
-      throw quickError(503, 'upstream_unavailable', 'File storage temporarily unavailable', { fileId }, error, { alert: false })
-    }
-
-    if (objectInfo == null) {
-      cloudlog({ requestId: c.get('requestId'), message: 'getHandler files object is null' })
-      return notFoundAttachmentResponse(c, isHead)
-    }
-
-    const headers = objectHeaders(objectInfo)
-    headers.set('Content-Disposition', `attachment; filename="${objectInfo.key}"`)
-
-    if (rangeHeaderFromRequest) {
-      const parsedRange = parseAttachmentByteRange(rangeHeaderFromRequest, objectInfo.size)
-      if (parsedRange.kind === 'invalid') {
-        return buildInvalidAttachmentRangeResponse(objectInfo.size, false)
-      }
-
-      headers.set('content-length', parsedRange.bytesTransferred.toString())
-      headers.set('content-range', `bytes ${parsedRange.start}-${parsedRange.end}/${objectInfo.size}`)
-      return new Response(null, { headers, status: 206 })
-    }
-
-    headers.set('content-length', objectInfo.size.toString())
-    return new Response(null, { status: 200, headers })
   }
 
   let object: R2ObjectBody | null = null
@@ -571,7 +516,7 @@ async function getHandler(c: Context): Promise<Response> {
   }
   if (object == null) {
     cloudlog({ requestId: c.get('requestId'), message: 'getHandler files object is null' })
-    return notFoundAttachmentResponse(c, isHead)
+    return c.json({ error: 'not_found', message: 'Not found' }, 404)
   }
   const bytesTransferred = calculateBytesTransferred(object.size, object.range)
   await saveBandwidthUsage(c, bytesTransferred)
@@ -645,74 +590,6 @@ export function calculateBytesTransferred(objLen: number, r2Range: R2Range | und
   }
   const bytesTransferred = endIndexInclusive - startIndexInclusive + 1
   return isPositiveFiniteNumber(bytesTransferred) ? bytesTransferred : objLen
-}
-
-type ParsedAttachmentByteRange =
-  | { kind: 'partial', start: number, end: number, bytesTransferred: number }
-  | { kind: 'invalid' }
-
-export function parseAttachmentByteRange(rangeHeader: string, fileSize: number): ParsedAttachmentByteRange {
-  if (!isPositiveFiniteNumber(fileSize)) {
-    return { kind: 'invalid' }
-  }
-
-  const match = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader.trim())
-  if (!match) {
-    return { kind: 'invalid' }
-  }
-
-  const startRaw = match[1]
-  const endRaw = match[2]
-
-  if (startRaw === '' && endRaw !== '') {
-    const suffixLength = Number.parseInt(endRaw, 10)
-    if (!Number.isFinite(suffixLength) || suffixLength <= 0) {
-      return { kind: 'invalid' }
-    }
-
-    if (suffixLength >= fileSize) {
-      return { kind: 'partial', start: 0, end: fileSize - 1, bytesTransferred: fileSize }
-    }
-
-    const start = fileSize - suffixLength
-    return { kind: 'partial', start, end: fileSize - 1, bytesTransferred: suffixLength }
-  }
-
-  if (startRaw === '') {
-    return { kind: 'invalid' }
-  }
-
-  const rangeStart = Number.parseInt(startRaw, 10)
-  if (!Number.isFinite(rangeStart) || rangeStart < 0) {
-    return { kind: 'invalid' }
-  }
-
-  if (rangeStart >= fileSize) {
-    return { kind: 'invalid' }
-  }
-
-  const rangeEnd = endRaw === '' ? fileSize - 1 : Number.parseInt(endRaw, 10)
-  if (!Number.isFinite(rangeEnd) || rangeEnd < 0) {
-    return { kind: 'invalid' }
-  }
-
-  const boundedEnd = Math.min(rangeEnd, fileSize - 1)
-  if (boundedEnd < rangeStart) {
-    return { kind: 'invalid' }
-  }
-
-  return {
-    kind: 'partial',
-    start: rangeStart,
-    end: boundedEnd,
-    bytesTransferred: boundedEnd - rangeStart + 1,
-  }
-}
-
-function buildInvalidAttachmentRangeResponse(fileSize: number, includeBody: boolean): Response {
-  const headers = new Headers()
-  headers.set('Content-Range', `bytes */${fileSize}`)
-  return new Response(includeBody ? new Uint8Array(0) : null, { status: 416, headers })
 }
 
 function optionsHandler(c: Context) {

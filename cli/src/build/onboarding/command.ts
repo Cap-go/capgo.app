@@ -6,13 +6,11 @@ import { log } from '@clack/prompts'
 import { render } from 'ink'
 import React from 'react'
 import { resolveOwnerOrgId } from '../../analytics/org-resolver.js'
-import { flushDeferredCommandInvocation, trackEvent } from '../../analytics/track.js'
-import { getConfig } from '../../utils.js'
-import { createBuilderAppSelectionServices, getAppSelectionSuggestion } from './app-selection.js'
+import { trackEvent } from '../../analytics/track.js'
+import { findSavedKeySilent, getAppId, getConfig } from '../../utils.js'
 import { appendInternalLog, startInternalLog } from '../../support/internal-log.js'
 import { newBuilderJourneyId } from './journey.js'
-import { createBuilderLoginServices, resolveBuilderCandidateKey } from './login.js'
-import { trackBuilderOnboardingAppSelection, trackBuilderOnboardingCancelled, trackBuilderOnboardingLogin } from './telemetry.js'
+import { trackBuilderOnboardingCancelled } from './telemetry.js'
 import { isMacOS, probeGuidedHelper } from './asc-key/helper.js'
 import { ASC_KEY_CHANNEL } from './asc-key/protocol.js'
 import { getPlatformDirFromCapacitorConfig } from '../platform-paths.js'
@@ -25,7 +23,6 @@ import { discoverCapacitorProjects, hasCapacitorConfig } from './project-discove
 import { selectCapacitorProject } from './project-selection.js'
 import type { BuilderProjectPrompts } from './project-selection.js'
 import type { OnboardingResult } from './types.js'
-import type { AppSelectionEvent } from './ui/app-selection-gate.js'
 export interface OnboardingBuilderOptions {
   analytics?: boolean
   apikey?: string
@@ -219,11 +216,11 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
 
   // Detect app ID and platform directories from capacitor.config.ts
   let appId: string | undefined
-  let suggestedSource: 'builder' | 'capacitor' = 'capacitor'
   // `iosBundleIdInitial` is the iOS-side default — the top-level
   // `config.appId` (what `cap sync` writes into PRODUCT_BUNDLE_IDENTIFIER).
-  // This is distinct from `appId` above, which resolves the Capgo Builder key.
-  // The iOS onboarding flow uses these for different purposes —
+  // This is distinct from `appId` above, which `getAppId` resolves to the
+  // CapacitorUpdater plugin override when present (e.g. a Capgo dev-tunnel
+  // suffix). The iOS onboarding flow uses these for different purposes —
   // never collapse them — see the AppProps doc-block in ui/app.tsx.
   let iosBundleIdInitial: string | undefined
   let iosDir = 'ios'
@@ -258,16 +255,7 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
     process.exit(1)
   }
 
-  try {
-    const suggestion = getAppSelectionSuggestion(extConfig.config)
-    appId = suggestion.appId
-    suggestedSource = suggestion.source
-  }
-  catch (error) {
-    await stopInk(projectDiscoveryInk)
-    log.error(error instanceof Error ? error.message : String(error))
-    process.exit(1)
-  }
+  appId = getAppId(undefined, extConfig.config)
   iosBundleIdInitial = extConfig.config.appId
   iosDir = getPlatformDirFromCapacitorConfig(extConfig.config, 'ios')
   androidDir = getPlatformDirFromCapacitorConfig(extConfig.config, 'android')
@@ -289,7 +277,6 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
   // resolved Capgo lookup key. Mismatch detection will still surface the
   // pbxproj/plist values; the user can pick the right one from there.
   const iosBundleIdForOnboarding = iosBundleIdInitial || appId
-  const appflowPackageName = iosBundleIdForOnboarding
 
   const initialPlatform = resolveInitialPlatform(options, iosDir, androidDir)
 
@@ -342,11 +329,7 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
   // handoff each get exactly one.
   const journeyId = newBuilderJourneyId()
   const analyticsEnabled = options.enableSelfUpdate === true && options.analytics !== false
-  const candidateApiKey = resolveBuilderCandidateKey(options.apikey)
-  const loginServices = createBuilderLoginServices({ supaHost: options.supaHost, supaAnon: options.supaAnon })
-  const appSelectionServices = createBuilderAppSelectionServices({ supaHost: options.supaHost, supaAnon: options.supaAnon })
-  let authenticatedApiKey: string | undefined
-  const replayApikey = candidateApiKey
+  const replayApikey = options.apikey?.trim() || findSavedKeySilent()
   const buildReplayUrl = resolveSupabaseReplayUrl(options.supaHost)
   const buildReplay = startInitReplay({
     analyticsEnabled,
@@ -371,16 +354,15 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
   let lastStep: string | undefined
   const onboardingTree = React.createElement(OnboardingShell, {
       appId,
-      suggestedSource,
-      appSelectionServices,
-      // Keep the native iOS bundle ID separate from the Capgo app selected
-      // in the wizard. See the AppProps doc-block in ui/app.tsx for the split.
+      // Threaded through to the iOS OnboardingApp so it can use the iOS
+      // bundle id (config.appId) for Apple-side operations while keeping
+      // `appId` (the Capgo lookup key, which may include a dev-tunnel
+      // suffix via plugins.CapacitorUpdater.appId) for Capgo SaaS calls.
+      // See the AppProps doc-block in ui/app.tsx for the split.
       iosBundleIdInitial: iosBundleIdForOnboarding,
-      appflowPackageName,
       iosDir,
       androidDir,
-      apikey: candidateApiKey,
-      loginServices,
+      apikey: options.apikey,
       supaHost: options.supaHost,
       supaAnon: options.supaAnon,
       journeyId,
@@ -398,35 +380,6 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
       },
       onResult: (r: OnboardingResult) => {
         result = r
-      },
-      onAuthenticated: (key, metadata) => {
-        authenticatedApiKey = key
-        flushDeferredCommandInvocation(key)
-        if (metadata.method) {
-          void trackBuilderOnboardingLogin({
-            apikey: key,
-            appId: appId!,
-            journeyId,
-            method: metadata.method,
-            retryCount: metadata.retryCount,
-            durationMs: metadata.durationMs,
-          })
-        }
-      },
-      onAppSelected: (chosenId: string) => {
-        if (appId !== chosenId)
-          appendInternalLog(`build init: selected Capgo app ${chosenId} instead of ${appId}`)
-        appId = chosenId
-      },
-      onAppSelectionEvent: (event: AppSelectionEvent) => {
-        if (!authenticatedApiKey || options.analytics === false)
-          return
-        void trackBuilderOnboardingAppSelection({
-          apikey: authenticatedApiKey,
-          appId: appId!,
-          journeyId,
-          ...event,
-        })
       },
       onBeforeExit: finishBuildReplay,
   })
@@ -493,7 +446,7 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
     // user has already quit. On timeout we abort the org lookup and skip the
     // event — losing one best-effort quit beacon is preferable to a hang.
     if (result.outcome === 'cancelled') {
-      const apikey = authenticatedApiKey
+      const apikey = options.apikey?.trim() || findSavedKeySilent()
       if (apikey) {
         const timeoutMs = 1500
         const controller = new AbortController()

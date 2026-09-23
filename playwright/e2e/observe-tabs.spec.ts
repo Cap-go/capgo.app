@@ -181,12 +181,8 @@ test.describe('Observe sections', () => {
     const compositeVersion = '2.36.2+8ebc69:assets/index-8ebc69aabbcc.js'
     await expect(longVersionRow.locator('[data-test="log-row-version"]')).toHaveText(longVersion)
     await expect(longVersionRow.locator('[data-test="log-row-version"]')).toHaveAttribute('title', longVersion)
-    await expect(longVersionRow.locator('[data-test="log-row-action-name"]')).toHaveText('Update process failed')
-    await expect(longVersionRow.locator('[data-test="log-row-action-key"]')).toBeHidden()
+    await expect(longVersionRow.locator('[data-test="log-row-action"]')).toHaveText('Update process failed')
     await expect(longVersionRow.locator('[data-test="log-row-metadata"]')).toHaveCount(0)
-    await longVersionRow.locator('[data-test="log-row-action"]').hover()
-    await expect(longVersionRow.locator('[data-test="log-row-action-name"]')).toBeHidden()
-    await expect(longVersionRow.locator('[data-test="log-row-action-key"]')).toHaveText('update_fail')
 
     const versionBox = await longVersionRow.locator('[data-test="log-row-version"]').boundingBox()
     const actionBox = await longVersionRow.locator('[data-test="log-row-action"]').boundingBox()
@@ -210,48 +206,5 @@ test.describe('Observe sections', () => {
     await expect(popover).toBeVisible()
     await expect(popover).toContainText(/"filename"/)
     await expect(popover).toContainText('assets/index-8ebc69aabbcc.js')
-  })
-
-  test('shows original error text under the translated action label', async ({ page }) => {
-    const now = new Date().toISOString()
-    const originalError = 'Uncaught ReferenceError: foo is not defined'
-    await page.route('**/private/stats', async (route) => {
-      if (route.request().method() !== 'POST') {
-        await route.continue()
-        return
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify([
-          {
-            app_id: 'com.demo.app',
-            device_id: '44444444-4444-4444-4444-444444444444',
-            action: 'webview_javascript_error',
-            version_name: '1.0.0',
-            created_at: now,
-            metadata: {
-              error_type: 'javascript_error',
-              message: originalError,
-              href: 'capacitor://localhost/index.html',
-            },
-          },
-        ]),
-      })
-    })
-
-    await page.goto('/app/com.demo.app/observe/logs')
-    const row = page.locator('#custom_table tbody tr', { hasText: '44444444' })
-    const action = row.locator('[data-test="log-row-action"]')
-    await expect(action.locator('[data-test="log-row-action-name"]')).toHaveText('WebView JavaScript error')
-    await expect(action.locator('[data-test="log-row-action-key"]')).toBeHidden()
-    await expect(action).toHaveAttribute('title', 'webview_javascript_error')
-    await expect(row.locator('[data-test="log-row-original-error"]')).toHaveText(originalError)
-    await expect(row.locator('[data-test="log-row-metadata"]')).toHaveCount(1)
-
-    await action.hover()
-    await expect(action.locator('[data-test="log-row-action-name"]')).toBeHidden()
-    await expect(action.locator('[data-test="log-row-action-key"]')).toHaveText('webview_javascript_error')
-    await expect(row.locator('[data-test="log-row-original-error"]')).toHaveText(originalError)
   })
 })

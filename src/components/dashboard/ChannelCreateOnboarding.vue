@@ -330,8 +330,6 @@ function continueOnboarding() {
 onMounted(() => {
   void initialize()
 })
-
-defineExpose({ isSubmitting })
 </script>
 
 <template>

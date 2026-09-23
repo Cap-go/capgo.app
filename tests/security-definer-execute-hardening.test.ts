@@ -87,7 +87,6 @@ const ANON_ALLOWED_PROCS = [
   'public.reject_access_due_to_2fa_for_app(character varying)',
   'public.reject_access_due_to_2fa_for_org(uuid)',
   'public.request_actor_user_id()',
-  'public.request_actor_email_adress()',
   'public.get_user_id(text)',
   'public.update_org_invite_role_rbac(uuid, uuid, text)',
   'public.update_tmp_invite_role_rbac(uuid, text, text)',
@@ -225,20 +224,6 @@ describe('security definer execute hardening', () => {
       expect(state?.anon_exec, proc).toBe(true)
       expect(state?.auth_exec, proc).toBe(true)
     }
-  })
-
-  it.concurrent('keeps account email lookup self-only and search-path hardened', async () => {
-    const result = await pool.query<{
-      prosecdef: boolean
-      pronargs: number
-      proconfig: string[] | null
-    }>(`SELECT prosecdef, pronargs, proconfig
-        FROM pg_proc WHERE oid = 'public.request_actor_email_adress()'::regprocedure`)
-
-    expect(result.rows).toHaveLength(1)
-    expect(result.rows[0].prosecdef).toBe(true)
-    expect(result.rows[0].pronargs).toBe(0)
-    expect(result.rows[0].proconfig?.[0]).toMatch(/^search_path=(?:"")?$/)
   })
 
   it.concurrent('keeps signed-in RPCs inaccessible to anonymous callers', async () => {

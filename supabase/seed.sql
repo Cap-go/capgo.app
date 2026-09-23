@@ -812,9 +812,6 @@ BEGIN
     (NOW(), 'get'::"public"."stats_action", random_uuid, '1.0.0', 'com.demo.app'),
     (NOW(), 'set'::"public"."stats_action", random_uuid, '1.0.0', 'com.demo.app');
 
-  INSERT INTO public.stats (created_at, action, device_id, version_name, app_id, metadata) VALUES
-    (NOW(), 'webview_javascript_error'::"public"."stats_action", '44444444-4444-4444-4444-444444444444', '1.0.0', 'com.demo.app', '{"message":"Uncaught ReferenceError: foo is not defined","error_type":"javascript_error","href":"capacitor://localhost/index.html"}'::jsonb);
-
   -- Seed data for daily_mau, daily_bandwidth, and daily_storage
   curr_date := start_date::DATE;
   WHILE curr_date <= end_date::DATE LOOP

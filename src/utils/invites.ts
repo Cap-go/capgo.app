@@ -21,9 +21,6 @@ export async function resolveInviteNewUserErrorMessage(
     return null
   }
 
-  if (json?.error === 'invite_name_domain_not_allowed')
-    return t('invite-name-domain-not-allowed')
-
   if (json?.error !== 'user_already_invited')
     return null
 

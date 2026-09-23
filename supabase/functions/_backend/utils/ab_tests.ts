@@ -178,7 +178,7 @@ export function createABTestAssignments(
   let assignedAt: string | undefined
 
   for (const [testName, test] of Object.entries(config)) {
-    if (test.treatment_percentage === 0 || !isEligibleForTest(user, test))
+    if (!isEligibleForTest(user, test))
       continue
 
     assignedAt ??= now().toISOString()
@@ -199,8 +199,7 @@ function readExistingAssignments(value: unknown, testNames: string[]) {
     const test = AB_TESTS_CONFIG[testName]
     const assignment = storedAssignments[testName]
     if (assignment === undefined) {
-      if (test.treatment_percentage !== 0)
-        missing.push(testName)
+      missing.push(testName)
       continue
     }
     const branch = isRecord(assignment) ? assignment.branch : undefined
@@ -331,8 +330,6 @@ function buildBentoTagUpdate(user: AssignmentUser) {
     const branch = isRecord(storedAssignment) ? storedAssignment.branch : undefined
     const isCurrentBranch = isABTestBranch(branch)
       && (branch === test.treatment_branch || branch === test.control_branch)
-    if (test.treatment_percentage === 0 && !isCurrentBranch)
-      continue
     if (!isCurrentBranch || !isEligibleForTest(user, test)) {
       deleteSegments.push(
         test.branches[test.treatment_branch].bento_tag,

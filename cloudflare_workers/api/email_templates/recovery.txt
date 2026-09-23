@@ -1,9 +1,0 @@
-Hi,
-
-You have asked to reset your password for the Capgo.app account associated with this email address ({{ email }}).
-
-To reset the password, please click on the following link:
-
-{{ confirmation_link }}
-
-This link will expire in 1 hour for security reasons.

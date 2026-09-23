@@ -175,8 +175,6 @@ export interface IosStepCtx {
   duplicateProfiles?: IosDuplicateProfile[]
   /** Existing Apple certs offered for revocation when the cert limit is hit. */
   existingCerts?: AscDistributionCert[]
-  /** Preserves the limit outcome if the follow-up certificate lookup fails. */
-  certificateLimitReached?: boolean
   /** The user's revoke selection (cert-limit-prompt → revoking-certificate). */
   certToRevoke?: AscDistributionCert
 
@@ -200,10 +198,6 @@ export interface IosStepCtx {
   teamId?: string
   /** Keychain export password (import-exporting). Transient only. */
   importedP12Password?: string
-  /** Set only after a Keychain .p12 export succeeds; consumed after credentials are saved. */
-  keychainP12Exported?: boolean
-  /** Safe outcome flag; export errors themselves never enter action telemetry. */
-  keychainP12ExportFailed?: boolean
 
   // ── .p8 validation buffer (ephemeral during input-p8-path) ───────────────
   /** Buffer of .p8 file content during validation (only the PATH is persisted). */
@@ -2448,17 +2442,9 @@ export async function runIosEffect(
         if (err instanceof CertificateLimitError) {
           // Offer the existing certs for revocation. Prefer the certs carried on
           // the error; fall back to a fresh list via listCertificates.
-          let existingCerts = err.certificates
-          if (!existingCerts?.length) {
-            try {
-              existingCerts = (await deps.listCertificates?.()) ?? []
-            }
-            catch (lookupError) {
-              const msg = lookupError instanceof Error ? lookupError.message : String(lookupError)
-              deps.onLog?.(`✖ ${msg}`, 'red')
-              return iosError(progress, msg, step, { certificateLimitReached: true })
-            }
-          }
+          const existingCerts = err.certificates?.length
+            ? err.certificates
+            : (await deps.listCertificates?.()) ?? []
           return { progress, next: 'cert-limit-prompt', transient: { existingCerts } }
         }
         deps.onLog?.(`✖ ${err instanceof Error ? err.message : String(err)}`, 'red')
@@ -3276,16 +3262,8 @@ export async function runIosEffect(
         // can't help; only Restart/Exit are offered (no retryStep).
         return iosError(progress, msg)
       }
-      let exported: ExportedP12
       try {
-        exported = await deps.exportP12FromKeychain!(chosenIdentity.sha1)
-      }
-      catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        deps.onLog?.(`✖ ${msg}`, 'red')
-        return iosError(progress, msg, 'import-exporting', { keychainP12ExportFailed: true })
-      }
-      try {
+        const exported = await deps.exportP12FromKeychain!(chosenIdentity.sha1)
         // Synthesize a CertificateData record. Apple-API-only fields (certificateId)
         // stay empty for an imported cert (app.tsx:1639); expiry comes from the
         // chosen profile, team id from the identity.
@@ -3318,7 +3296,6 @@ export async function runIosEffect(
             certData,
             profileData,
             importedP12Password: exported.passphrase,
-            keychainP12Exported: true,
             ...(chosenIdentity.teamId ? { teamId: chosenIdentity.teamId } : {}),
           },
         }

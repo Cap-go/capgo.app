@@ -1,9 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-// import veauryVitePlugins from 'veaury/vite/index'
-import type { Plugin } from 'vite'
 import { readdirSync } from 'node:fs'
 import path from 'node:path'
-import process from 'node:process'
 import VueI18n from '@intlify/unplugin-vue-i18n/vite'
 import tailwindcss from '@tailwindcss/vite'
 import Vue from '@vitejs/plugin-vue'
@@ -13,7 +10,8 @@ import IconsResolver from 'unplugin-icons/resolver'
 import Icons from 'unplugin-icons/vite'
 import Components from 'unplugin-vue-components/vite'
 import VueMacros from 'unplugin-vue-macros/vite'
-import { defineConfig } from 'vite'
+// import veauryVitePlugins from 'veaury/vite/index'
+import { defineConfig, type Plugin } from 'vite'
 import devtoolsJson from 'vite-plugin-devtools-json'
 import EnvironmentPlugin from 'vite-plugin-environment'
 import VueDevTools from 'vite-plugin-vue-devtools'
@@ -42,7 +40,7 @@ function getUrl(key: 'api_domain' | 'base_domain' = 'base_domain'): string {
     return `https://${getFrontendKey(key)}`
 }
 
-interface FaviconTheme {
+type FaviconTheme = {
   iconPrefix: string
   maskColor: string
   themeColor: string
@@ -193,18 +191,6 @@ export default defineConfig({
       '~/': `${path.resolve(__dirname, 'src')}/`,
     },
   },
-  // CI serves a built preview; include browser fixtures only in that test build.
-  build: process.env.CAPGO_PLAYWRIGHT_FIXTURES === 'true'
-    ? {
-        rolldownOptions: {
-          input: [
-            path.resolve(__dirname, 'index.html'),
-            path.resolve(__dirname, 'playwright/fixtures/onboarding-setup.html'),
-            path.resolve(__dirname, 'playwright/fixtures/email-verification.html'),
-          ],
-        },
-      }
-    : undefined,
   plugins: [
     wellKnownPasswordManagerPlugin(),
     envFaviconPlugin(),

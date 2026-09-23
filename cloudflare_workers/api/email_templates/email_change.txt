@@ -1,7 +1,0 @@
-Hi,
-
-You have requested to change the email address associated with your Capgo.app account. This request is to update your email from {{ email }} to {{ new_email }}.
-
-To confirm this change, please click on the following link:
-
-{{ confirmation_link }}

@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import apiWorker from '../cloudflare_workers/api/index.ts'
 
 describe('cloudflare api onboarding A/B tests route', () => {
-  it.concurrent.each(['onboarding_ab_tests', 'onboarding_progress'])('rejects unauthenticated private API traffic for %s', async (path) => {
-    const response = await apiWorker.fetch(new Request(`https://api.capgo.app/private/${path}`, {
+  it.concurrent('rejects unauthenticated private API traffic', async () => {
+    const response = await apiWorker.fetch(new Request('https://api.capgo.app/private/onboarding_ab_tests', {
       method: 'POST',
     }))
 

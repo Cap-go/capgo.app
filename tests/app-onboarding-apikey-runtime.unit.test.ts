@@ -34,8 +34,6 @@ const runtimeMocks = vi.hoisted(() => {
       user: { id: 'user-runtime-onboarding', onboarding: {} } as { id: string, onboarding: Record<string, unknown> } | null,
     },
     organizationStore: {
-      getOrgByAppId: vi.fn(),
-      setCurrentOrganization: vi.fn(),
       awaitInitialLoad: vi.fn(async () => undefined),
       currentOrganization: { gid: 'org-runtime-onboarding', name: 'Runtime organization' },
       organizations: [],

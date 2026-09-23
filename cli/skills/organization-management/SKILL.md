@@ -9,11 +9,10 @@ Use this skill for account and organization administration commands.
 
 ## Account command
 
-### `account whoami`
+### `account id`
 
-- Example: `npx @capgo/cli@latest account whoami`
-- Alias: `account id`.
-- Displays the account ID and email associated with the API key.
+- Example: `npx @capgo/cli@latest account id`
+- Use to retrieve an account ID that is safe to share for collaboration or support.
 - Key option:
   - `-a, --apikey <apikey>`
 

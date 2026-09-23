@@ -130,22 +130,6 @@ beforeAll(async () => {
   orgMemberAuthHeaders = await getAuthHeadersForCredentials(USER_EMAIL_NONMEMBER, USER_PASSWORD_NONMEMBER)
 })
 
-describe('[POST] /private/invite_new_user_to_org validation', () => {
-  it.concurrent('rejects domain names in invitee names', async () => {
-    const response = await postInviteNewUserToOrg(authHeaders, {
-      email: `domain-name-${randomUUID()}@capgo.app`,
-      org_id: randomUUID(),
-      invite_type: 'org_member',
-      first_name: 'example.com',
-      last_name: 'Élodie',
-    })
-
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invite_name_domain_not_allowed')
-  })
-})
-
 describe('[POST] /private/invite_new_user_to_org rank guards', () => {
   it.concurrent('returns forbidden when an org_admin invites org_super_admin', async () => {
     const fixture = await createInviteNewUserFixture({

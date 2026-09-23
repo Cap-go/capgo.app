@@ -17,8 +17,7 @@ import {
 } from '../init/prompts'
 import { clearInitLogs, setInitScreen, stopInitInkSession } from '../init/runtime'
 import { trackEvent } from '../analytics/track'
-import { getConfig } from '../utils'
-import { getBuilderAppId, getConfiguredBuilderAppId } from './app-id'
+import { getAppId, getConfig } from '../utils'
 import {
   clearSavedCredentials,
   getGlobalCredentialsPath,
@@ -380,13 +379,12 @@ export async function manageCredentialsCommand(options: ManageCredentialsOptions
       return
     }
 
-    const detected = options.appId ? undefined : await detectAppIdFromCapacitor(entries)
-    const targetAppId = options.appId ?? detected?.appId
+    const targetAppId = options.appId ?? (await detectAppIdFromCapacitor(entries))
     let detectedFromCapacitor = false
     if (targetAppId) {
       const filtered = entries.filter(entry => entry.appId === targetAppId)
-      if (filtered.length === 0 && (options.appId || detected?.configured)) {
-        pCancel(`No credentials found for app ${targetAppId}.`)
+      if (filtered.length === 0 && options.appId) {
+        pCancel(`No credentials found for app ${options.appId}.`)
         return
       }
       if (filtered.length > 0) {
@@ -577,19 +575,16 @@ function describeFieldRow(row: FieldRow): string[] {
   return lines
 }
 
-async function detectAppIdFromCapacitor(entries: AppEntry[]): Promise<{ appId: string | undefined, configured: boolean } | undefined> {
+async function detectAppIdFromCapacitor(entries: AppEntry[]): Promise<string | undefined> {
   if (entries.length === 0)
     return undefined
-  let extConfig: Awaited<ReturnType<typeof getConfig>> | undefined
   try {
-    extConfig = await getConfig()
+    const extConfig = await getConfig()
+    const inferred = getAppId(undefined, extConfig?.config)
+    return inferred || undefined
   }
   catch {
     return undefined
-  }
-  return {
-    appId: getBuilderAppId(undefined, extConfig?.config) || undefined,
-    configured: getConfiguredBuilderAppId(extConfig?.config) !== undefined,
   }
 }
 

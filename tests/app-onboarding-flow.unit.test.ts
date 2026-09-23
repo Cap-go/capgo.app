@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { APP_ONBOARDING_V1_STEP_IDS, APP_ONBOARDING_V2_STEP_IDS } from '../supabase/functions/_backend/utils/appOnboarding.ts'
 
 describe('getting started CLI onboarding accordion', () => {
-  it.concurrent('keeps getting started onboarding integration and legacy CLI translations', async () => {
+  it.concurrent('shows every CLI step in the getting started accordion', async () => {
     const source = await readFile(new URL('../src/components/dashboard/AppOnboardingFlow.vue', import.meta.url), 'utf8')
     const accordion = await readFile(new URL('../src/components/dashboard/AppOnboardingCliSteps.vue', import.meta.url), 'utf8')
     const messages = JSON.parse(await readFile(new URL('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>

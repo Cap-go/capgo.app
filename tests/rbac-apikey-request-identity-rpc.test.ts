@@ -44,20 +44,6 @@ async function requestActorUserId(client: SupabaseClient<Database>) {
   return result!
 }
 
-async function requestActorEmail(client: SupabaseClient<Database>) {
-  let result: Awaited<ReturnType<typeof client.rpc<'request_actor_email_adress'>>>
-
-  for (let attempt = 0; attempt < 3; attempt++) {
-    result = await client.rpc('request_actor_email_adress')
-    if (!isRetryableRpcTransportError(result.error) || attempt === 2)
-      return result
-
-    await new Promise(resolve => setTimeout(resolve, 200 * (attempt + 1)))
-  }
-
-  return result!
-}
-
 async function createAuthenticatedClient() {
   const authHeaders = await getAuthHeadersForCredentials(USER_EMAIL, USER_PASSWORD)
 
@@ -128,46 +114,6 @@ describe('request_actor_user_id RPC permissions', () => {
 
     expect(error).toBeNull()
     expect(data).toBeNull()
-  })
-})
-
-describe('request_actor_email_adress RPC permissions', () => {
-  it.concurrent('returns only the API key owner email to anon callers', async () => {
-    const client = createApiKeyClient(APIKEY_TEST_ORG_SUPER_ADMIN)
-    const { data, error } = await requestActorEmail(client)
-
-    expect(error).toBeNull()
-    expect(data).toBe(USER_EMAIL)
-
-    const directRead = await client.from('users').select('email').eq('id', USER_ID)
-    expect(directRead.error).toBeNull()
-    expect(directRead.data).toEqual([])
-  })
-
-  it.concurrent('returns null without a valid API key or JWT', async () => {
-    const noKey = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY)
-    const invalidKey = createApiKeyClient('00000000-0000-0000-0000-000000000000')
-    const [missing, invalid] = await Promise.all([
-      requestActorEmail(noKey),
-      requestActorEmail(invalidKey),
-    ])
-
-    expect(missing.error).toBeNull()
-    expect(missing.data).toBeNull()
-    expect(invalid.error).toBeNull()
-    expect(invalid.data).toBeNull()
-  })
-
-  it.concurrent('prefers the JWT actor over an invalid API key header', async () => {
-    const authHeaders = await getAuthHeadersForCredentials(USER_EMAIL, USER_PASSWORD)
-    const client = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      global: { headers: { ...authHeaders, capgkey: '00000000-0000-0000-0000-000000000000' } },
-      auth: { persistSession: false },
-    })
-
-    const { data, error } = await requestActorEmail(client)
-    expect(error).toBeNull()
-    expect(data).toBe(USER_EMAIL)
   })
 })
 

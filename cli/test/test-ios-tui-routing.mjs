@@ -64,7 +64,6 @@ import process from 'node:process'
 
 const { applyIosInput, runIosEffect } = await import('../src/build/onboarding/ios/flow.ts')
 const { getIosResumeStep } = await import('../src/build/onboarding/ios/progress.ts')
-const { routeFreshIosSetupMethod } = await import('../src/build/onboarding/ui/setup-method-route.ts')
 
 console.log('🧪 iOS choice/input ROUTING PARITY (applyIosInput → getIosResumeStep / resolver effect)\n')
 
@@ -186,21 +185,6 @@ async function parityEffect({ step, progress, carried, deps: depsOverrides, besp
 // ════════════════════════════════════════════════════════════════════════════
 // setup-method-select  (app.tsx L3081-3103) — the macOS create-vs-import fork
 // ════════════════════════════════════════════════════════════════════════════
-test('fresh setup route · non-macOS skips the question; macOS shows it', () => {
-  const actions = []
-  const trackAction = (...args) => actions.push(args)
-  assertEquals(routeFreshIosSetupMethod(false, 'bj_ios-setup', trackAction), 'api-key-instructions')
-  assertEquals(JSON.stringify(actions), JSON.stringify([['question_skipped', {
-    attempt_id: 'bj_ios-setup',
-    question_id: 'ios_setup_method',
-    choice: 'create-new',
-    reason: 'non_macos_auto_create_new',
-  }, 'setup-method-select']]))
-  actions.length = 0
-  assertEquals(routeFreshIosSetupMethod(true, 'bj_ios-setup', trackAction), 'setup-method-select')
-  assertEquals(actions.length, 0)
-})
-
 // Persists setupMethod. 'create' → getResumeStep (create-new, no .p8) lands on
 // api-key-instructions (MATCH the bespoke). 'import' → the bespoke jumps STRAIGHT
 // to import-scanning (the silent discovery); the engine resume, with no
