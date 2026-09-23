@@ -367,6 +367,7 @@ async function saveBandwidthUsage(c: Context, fileSize: number | null | undefine
 }
 
 async function getSupabaseStorageResponse(c: Context, fileId: string): Promise<Response> {
+  const method = c.req.raw.method === 'HEAD' ? 'HEAD' : 'GET'
   const { data: signedUrlData, error: signedUrlError } = await supabaseAdmin(c).storage.from('capgo').createSignedUrl(fileId, 60)
 
   if (signedUrlError || !signedUrlData?.signedUrl) {
@@ -384,7 +385,6 @@ async function getSupabaseStorageResponse(c: Context, fileId: string): Promise<R
 
   const requestHeaders = new Headers()
   const rangeHeader = c.req.header('range')
-  const method = c.req.raw.method === 'HEAD' ? 'HEAD' : 'GET'
   if (method === 'GET' && rangeHeader) {
     requestHeaders.set('range', rangeHeader)
   }
