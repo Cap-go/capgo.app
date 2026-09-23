@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  checkPermission: vi.fn(async () => true),
-  maybeSingle: vi.fn(async () => ({ data: null, error: null })),
-  order: vi.fn(async () => ({ data: [], error: null })),
+  checkPermission: vi.fn(),
+  maybeSingle: vi.fn(),
+  order: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
@@ -40,6 +40,8 @@ function createContext() {
 describe('bundle get version lookup', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.checkPermission.mockResolvedValue(true)
+    mocks.maybeSingle.mockResolvedValue({ data: null, error: null })
     mocks.order.mockResolvedValue({ data: [], error: null })
   })
 
