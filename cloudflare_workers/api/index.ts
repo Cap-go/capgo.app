@@ -26,10 +26,12 @@ import { app as onboarding_ab_tests } from '../../supabase/functions/_backend/pr
 import { app as onboarding_progress } from '../../supabase/functions/_backend/private/onboarding_progress.ts'
 import { app as org_members } from '../../supabase/functions/_backend/private/org_members.ts'
 import { app as org_notification_stats } from '../../supabase/functions/_backend/private/org_notification_stats.ts'
+import { app as orgs } from '../../supabase/functions/_backend/private/orgs.ts'
 import { app as plans } from '../../supabase/functions/_backend/private/plans.ts'
 import { app as publicStats } from '../../supabase/functions/_backend/private/public_stats.ts'
 import { app as replay } from '../../supabase/functions/_backend/private/replay.ts'
 import { app as role_bindings } from '../../supabase/functions/_backend/private/role_bindings.ts'
+import { app as roles } from '../../supabase/functions/_backend/private/roles.ts'
 import { app as set_manifest } from '../../supabase/functions/_backend/private/set_manifest.ts'
 import { app as set_org_email } from '../../supabase/functions/_backend/private/set_org_email.ts'
 import { app as sso_check_domain } from '../../supabase/functions/_backend/private/sso/check-domain.ts'
@@ -154,6 +156,7 @@ appPrivate.route('/onboarding_ab_tests', onboarding_ab_tests)
 appPrivate.route('/onboarding_progress', onboarding_progress)
 appPrivate.route('/org_members', org_members)
 appPrivate.route('/org_notification_stats', org_notification_stats)
+appPrivate.route('/orgs', orgs)
 appPrivate.route('/update_delivery_stats', update_delivery_stats)
 appPrivate.route('/bundle_install_stats', bundle_install_stats)
 appPrivate.route('/stripe_checkout', stripe_checkout)
@@ -167,6 +170,7 @@ appPrivate.route('/replay', replay)
 appPrivate.route('/events', events)
 appPrivate.route('/groups', groups)
 appPrivate.route('/role_bindings', role_bindings)
+appPrivate.route('/roles', roles)
 appPrivate.route('/website_preview', website_preview)
 appPrivate.route('/sso/check-domain', sso_check_domain)
 appPrivate.route('/sso/check-enforcement', sso_check_enforcement)

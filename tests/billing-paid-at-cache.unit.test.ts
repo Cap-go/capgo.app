@@ -1,20 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 
-const mocks = vi.hoisted(() => {
-  const maybeSingle = vi.fn().mockResolvedValue({ data: { stripe_info: null }, error: null })
-  const eq = vi.fn(() => ({ maybeSingle }))
-  const select = vi.fn(() => ({ eq }))
-  const from = vi.fn(() => ({ select }))
-  return { from, maybeSingle, useSupabase: vi.fn(() => ({ from })) }
-})
+const mocks = vi.hoisted(() => ({
+  fetchOrgBillingPaidAt: vi.fn().mockResolvedValue({ data: { paid_at: null }, error: null }),
+}))
 
-vi.mock('../src/services/supabase', () => ({ useSupabase: mocks.useSupabase }))
+vi.mock('../src/services/organizations', () => ({
+  fetchOrgBillingPaidAt: mocks.fetchOrgBillingPaidAt,
+}))
 
 describe('billing paid-at cache', () => {
   beforeEach(() => {
-    mocks.from.mockClear()
-    mocks.maybeSingle.mockReset().mockResolvedValue({ data: { stripe_info: null }, error: null })
+    mocks.fetchOrgBillingPaidAt.mockClear()
+    mocks.fetchOrgBillingPaidAt.mockResolvedValue({ data: { paid_at: null }, error: null })
   })
 
   afterEach(() => {
@@ -31,7 +29,7 @@ describe('billing paid-at cache', () => {
     const second = useBillingPaidAt(orgId)
     await vi.waitFor(() => expect(second.paidAt.value).toBeNull())
 
-    expect(mocks.from).toHaveBeenCalledTimes(1)
+    expect(mocks.fetchOrgBillingPaidAt).toHaveBeenCalledTimes(1)
   })
 
   it('refreshes the lookup after five minutes', async () => {
@@ -46,12 +44,12 @@ describe('billing paid-at cache', () => {
     const second = useBillingPaidAt(orgId)
     await vi.waitFor(() => expect(second.paidAt.value).toBeNull())
 
-    expect(mocks.from).toHaveBeenCalledTimes(2)
+    expect(mocks.fetchOrgBillingPaidAt).toHaveBeenCalledTimes(2)
   })
 
   it('does not cache failed lookups', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    mocks.maybeSingle.mockResolvedValue({ data: null, error: { message: 'lookup failed' } })
+    mocks.fetchOrgBillingPaidAt.mockResolvedValue({ data: null, error: new Error('lookup failed') })
     const { useBillingPaidAt } = await import('../src/composables/useBillingPaidAt')
     const orgId = ref(crypto.randomUUID())
 
@@ -61,6 +59,6 @@ describe('billing paid-at cache', () => {
     const second = useBillingPaidAt(orgId)
     await vi.waitFor(() => expect(second.billingLookupFailed.value).toBe(true))
 
-    expect(mocks.from).toHaveBeenCalledTimes(2)
+    expect(mocks.fetchOrgBillingPaidAt).toHaveBeenCalledTimes(2)
   })
 })

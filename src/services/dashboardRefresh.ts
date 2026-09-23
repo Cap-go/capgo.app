@@ -1,3 +1,4 @@
+import { fetchOrgChartRefreshState as fetchOrgChartRefreshStateApi } from '~/services/organizations'
 import { useSupabase } from '~/services/supabase'
 
 export const CHART_REFRESH_STALE_MS = 5 * 60 * 1000
@@ -123,11 +124,7 @@ export async function fetchAppChartRefreshState(appId: string): Promise<AppChart
 }
 
 export async function fetchOrgChartRefreshState(orgId: string): Promise<OrgChartRefreshState> {
-  const { data, error } = await useSupabase()
-    .from('orgs')
-    .select('stats_updated_at,stats_refresh_requested_at')
-    .eq('id', orgId)
-    .single()
+  const { data, error } = await fetchOrgChartRefreshStateApi(orgId)
 
   if (error || !data)
     throw error ?? new Error('Org refresh state not found')

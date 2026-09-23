@@ -4,6 +4,7 @@ import type { Database } from '~/types/supabase.types'
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { addUtcDays, normalizeToUtcStartOfDay } from '~/services/date'
+import { deleteOrganization as deleteOrganizationApi, fetchOrganizationsList } from '~/services/organizations'
 import { fetchOrgMembers, fetchOrgMembersPasswordPolicy } from '~/services/orgMembers'
 import { createSignedImageUrl, getImmediateImageUrl, resolveImagePath } from '~/services/storage'
 import { isPlatformAdmin, stripeEnabled, useSupabase } from '~/services/supabase'
@@ -654,10 +655,7 @@ export const useOrganizationStore = defineStore('organization', () => {
       _initialized.value = true
     }
 
-    // We have RLS that ensure that we only select rows where we are member or owner
-    // Using get_orgs_v7 which includes 2FA and password policy fields
-    const { data, error } = await supabase
-      .rpc('get_orgs_v7')
+    const { data, error } = await fetchOrganizationsList()
 
     if (error) {
       console.error('Cannot get orgs!', error)
@@ -666,7 +664,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     }
 
     const logoLoadRun = ++organizationLogoLoadRun
-    const mappedData = data.map((item, id) => {
+    const mappedData = (data ?? []).map((item, id) => {
       const { normalized: logoStoragePath, shouldSign: shouldSignLogo } = resolveImagePath(item.logo)
       return {
         id,
@@ -846,13 +844,11 @@ export const useOrganizationStore = defineStore('organization', () => {
       return { data: null, error: new Error('Insufficient permissions') }
     }
 
-    const { data, error } = await supabase.from('orgs')
-      .delete()
-      .eq('id', orgId)
+    const { data, error } = await deleteOrganizationApi(orgId)
 
     if (error) {
       console.error('Organization deletion failed:', error.message)
-      return { data, error }
+      return { data: null, error }
     }
 
     return { data, error: null }

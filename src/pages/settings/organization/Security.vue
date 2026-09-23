@@ -16,6 +16,7 @@ import IconUser from '~icons/heroicons/user'
 import SsoConfiguration from '~/components/organizations/SsoConfiguration.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
+import { fetchOrgSecuritySettings, updateOrganization } from '~/services/organizations'
 import { fetchOrgMembers, fetchOrgMembers2faStatus, fetchOrgMembersPasswordPolicy } from '~/services/orgMembers'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
@@ -266,11 +267,7 @@ async function loadData() {
 
   try {
     // Load current org's security settings
-    const { data: orgData, error: orgError } = await supabase
-      .from('orgs')
-      .select('enforcing_2fa, enforce_hashed_api_keys, enforce_encrypted_bundles, required_encryption_key')
-      .eq('id', currentOrganization.value.gid)
-      .single()
+    const { data: orgData, error: orgError } = await fetchOrgSecuritySettings(currentOrganization.value.gid)
 
     if (orgError) {
       console.error('Error loading org settings:', orgError)
@@ -896,10 +893,9 @@ async function updatePasswordPolicy() {
     require_special: requireSpecial.value,
   }
 
-  const { error } = await supabase
-    .from('orgs')
-    .update({ password_policy_config: policyConfig })
-    .eq('id', currentOrganization.value.gid)
+  const { error } = await updateOrganization(currentOrganization.value.gid, {
+    password_policy_config: policyConfig,
+  })
 
   isSaving.value = false
 
