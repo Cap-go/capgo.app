@@ -97,7 +97,7 @@ function buildUpsertRow(
   if (body.external_url !== undefined)
     row.external_url = body.external_url
   if (body.storage_provider !== undefined)
-    row.storage_provider = body.storage_provider
+    row.storage_provider = body.storage_provider ?? undefined
   if (body.min_update_version !== undefined)
     row.min_update_version = body.min_update_version
   if (body.native_packages !== undefined)

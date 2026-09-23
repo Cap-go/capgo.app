@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  checkPermission: vi.fn(async () => true),
+  checkPermission: vi.fn(),
   from: vi.fn(),
   adminFrom: vi.fn(),
 }))
@@ -30,6 +30,7 @@ function createContext() {
 describe('bundle upsert endpoint', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.checkPermission.mockResolvedValue(true)
     mocks.adminFrom.mockReturnValue({
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
