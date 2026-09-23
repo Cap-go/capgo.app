@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import VueTurnstile from 'vue-turnstile'
@@ -10,6 +9,8 @@ import IconX from '~icons/lucide/x'
 import { authGhostButtonClass, authInsetCardClass, authPrimaryButtonClass, authSecondaryButtonClass } from '~/components/auth/pageStyles'
 import Toggle from '~/components/Toggle.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import type { MagicInviteLookup } from '~/services/orgMembers'
+import { fetchMagicInviteLookup } from '~/services/orgMembers'
 import { useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { safeResetTurnstile } from '~/utils/turnstile'
@@ -24,7 +25,7 @@ const captchaComponent = ref<InstanceType<typeof VueTurnstile> | null>(null)
 // Form data
 const password = ref('')
 const inviteMagicString = ref('')
-const inviteRow = ref<Database['public']['Functions']['get_invite_by_magic_lookup']['Returns'][0] | null>(null)
+const inviteRow = ref<MagicInviteLookup | null>(null)
 const isLoading = ref(false)
 const isFetchingInvite = ref(true)
 const isError = ref(null) as Ref<string | null>
@@ -86,9 +87,7 @@ onMounted(async () => {
 
   if (route.query.invite_magic_string) {
     inviteMagicString.value = route.query.invite_magic_string as string
-    const { data, error } = await supabase.rpc('get_invite_by_magic_lookup', {
-      lookup: inviteMagicString.value,
-    }).single()
+    const { data, error } = await fetchMagicInviteLookup(inviteMagicString.value)
 
     if (error) {
       safeResetTurnstile(captchaComponent.value)

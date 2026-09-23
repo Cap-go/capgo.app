@@ -17,6 +17,13 @@ import RoleCapabilitiesHint from '~/components/forms/RoleCapabilitiesHint.vue'
 import RoleSelect from '~/components/forms/RoleSelect.vue'
 import SearchInput from '~/components/forms/SearchInput.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import {
+  fetchOrgMembersRbac,
+  inviteUserToOrgRbac,
+  rescindOrgInvitation,
+  updateOrgInviteRole,
+  updateOrgMemberRole,
+} from '~/services/orgMembers'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
@@ -403,10 +410,7 @@ async function reloadData() {
     if (!currentOrganization.value)
       return
 
-    const { data: rbacMembers, error: rbError } = await supabase
-      .rpc('get_org_members_rbac', {
-        p_org_id: currentOrganization.value.gid,
-      })
+    const { data: rbacMembers, error: rbError } = await fetchOrgMembersRbac(currentOrganization.value.gid)
 
     if (rbError) {
       console.error('Error fetching RBAC members:', rbError)
@@ -615,11 +619,7 @@ async function sendInvitation(email: string, type: string): Promise<boolean> {
 
   isLoading.value = true
   try {
-    const { data, error } = await supabase.rpc('invite_user_to_org_rbac', {
-      email,
-      org_id: orgId,
-      role_name: type,
-    })
+    const { data, error } = await inviteUserToOrgRbac(orgId, email, type)
 
     if (error) {
       console.error('Error inviting user:', error)
@@ -627,7 +627,7 @@ async function sendInvitation(email: string, type: string): Promise<boolean> {
       return false
     }
 
-    const success = await handleSendInvitationOutput(data, email, type)
+    const success = await handleSendInvitationOutput(data?.code ?? '', email, type)
     if (success) {
       await reloadData()
     }
@@ -647,7 +647,7 @@ async function handleExistingUserInviteNotification(output: string, email: strin
   if (!orgId || !shouldAttemptExistingUserInviteNotification(output, hasPendingInvite))
     return false
 
-  const notified = await notifyExistingUserInvite(supabase, email, orgId)
+  const notified = await notifyExistingUserInvite(email, orgId)
   if (!notified) {
     console.warn('Failed to send invite email notification')
     toast.warning(t('org-invite-email-notification-failed'))
@@ -707,10 +707,8 @@ async function handleSendInvitationOutput(output: string, email: string, type: s
 }
 
 async function rescindInvitation(email: string) {
-  const { data, error } = await supabase.rpc('rescind_invitation', {
-    email,
-    org_id: currentOrganization.value?.gid ?? '',
-  })
+  const orgId = currentOrganization.value?.gid ?? ''
+  const { data, error } = await rescindOrgInvitation(orgId, email)
 
   if (error) {
     console.error('Error rescinding invitation: ', error)
@@ -719,13 +717,13 @@ async function rescindInvitation(email: string) {
   }
 
   if (!error && data) {
-    // Handle different response codes from the rescind_invitation function
-    if (data === 'OK') {
+    // Handle different response codes from the rescind invitation endpoint
+    if (data.code === 'OK') {
       toast.success(t('invitation-rescinded'))
       await reloadData()
     }
     else {
-      toast.warning(`${t('unexpected-rescind-response')}: ${data}`)
+      toast.warning(`${t('unexpected-rescind-response')}: ${data.code}`)
     }
   }
 
@@ -980,11 +978,11 @@ function handleRbacInviteUpdateError(error: { message?: string }, options: { toa
 }
 
 async function updateRbacMemberRole(member: OrganizationMemberRow, perm: string) {
-  const { data, error } = await supabase.rpc('update_org_member_role', {
-    p_org_id: currentOrganization.value?.gid ?? '',
-    p_user_id: member.uid,
-    p_new_role_name: perm,
-  })
+  const { error } = await updateOrgMemberRole(
+    currentOrganization.value?.gid ?? '',
+    member.uid,
+    perm,
+  )
 
   if (error) {
     console.error('Error updating RBAC role:', error)
@@ -992,10 +990,8 @@ async function updateRbacMemberRole(member: OrganizationMemberRow, perm: string)
     return
   }
 
-  if (data === 'OK') {
-    toast.success(t('permission-changed'))
-    await reloadData()
-  }
+  toast.success(t('permission-changed'))
+  await reloadData()
 }
 
 async function updateRbacInviteRole(member: OrganizationMemberRow, perm: string) {
@@ -1005,17 +1001,13 @@ async function updateRbacInviteRole(member: OrganizationMemberRow, perm: string)
     return
   }
 
-  const { data, error } = member.is_tmp
-    ? await supabase.rpc('update_tmp_invite_role_rbac', {
-        p_org_id: orgId,
-        p_email: member.email,
-        p_new_role_name: perm,
-      })
-    : await supabase.rpc('update_org_invite_role_rbac', {
-        p_org_id: orgId,
-        p_user_id: member.uid,
-        p_new_role_name: perm,
-      })
+  const { error } = await updateOrgInviteRole({
+    orgId,
+    roleName: perm,
+    isTmp: member.is_tmp === true,
+    email: member.email,
+    userId: member.uid,
+  })
 
   if (error) {
     console.error('Error updating RBAC invite role:', error)
@@ -1023,18 +1015,8 @@ async function updateRbacInviteRole(member: OrganizationMemberRow, perm: string)
     return
   }
 
-  if (data === 'OK') {
-    toast.success(t('permission-changed'))
-    await reloadData()
-    return
-  }
-
-  if (data) {
-    const responseMessage = typeof data === 'string' ? data : JSON.stringify(data)
-    console.warn('Unexpected RBAC invite update response:', responseMessage)
-    const toastMessage = handleRbacInviteUpdateError({ message: responseMessage }, { toast: false })
-    toast.error(toastMessage)
-  }
+  toast.success(t('permission-changed'))
+  await reloadData()
 }
 
 async function _changeMemberPermission(member: OrganizationMemberRow, perm: string) {
