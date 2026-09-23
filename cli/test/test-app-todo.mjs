@@ -158,7 +158,7 @@ try {
           writeFileSync(process.env.CAPGO_TODO_TRACKING_FILE, JSON.stringify({ key: init.headers.capgkey, command: event.tags.command_path }))
       }
       if (url.includes('/private/config')) return Response.json({ supaHost: ${JSON.stringify(options.supaHost)}, supaKey: ${JSON.stringify(options.supaAnon)} })
-      if (url.includes('/rpc/reject_access_due_to_2fa_for_app')) return Response.json(scenario === 'two-factor')
+      if (url.includes('/private/cli/2fa/reject-app')) return Response.json({ reject: scenario === 'two-factor' })
       if (scenario?.startsWith('background-updated') && init?.method === 'PUT' && url.endsWith('/app/${appId}')) {
         await new Promise(resolve => setTimeout(resolve, 700))
         const steps = JSON.parse(init.body).onboarding.steps

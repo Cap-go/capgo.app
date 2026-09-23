@@ -50,8 +50,10 @@ export async function deleteOrganizationInternal(
   }
   await assertOrgPermission(supabase, enrichedOptions.apikey, 'org.delete', orgId, `Insufficient permissions to delete organization ${orgId}`, silent, httpOptions)
 
-  // TODO(cli-http): check2FAAccessForOrg still uses reject_access_due_to_2fa RPCs
-  await check2FAAccessForOrg(supabase, orgId, silent)
+  await check2FAAccessForOrg(supabase, orgId, silent, {
+    supaHost: enrichedOptions.supaHost,
+    supaAnon: enrichedOptions.supaAnon,
+  })
 
   const { data: orgData, error: orgError } = await invokeCapgoCliApi<{ name?: string, created_by?: string }>(
     `organization?orgId=${encodeURIComponent(orgId)}`,

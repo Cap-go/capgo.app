@@ -9,7 +9,7 @@ import {
   throwTwoFactorComplianceRpcError,
   warnAndContinueTwoFactorPreflightNetworkFailure,
 } from '../shared/two-factor-compliance'
-import { appAddHintMessage, formatCapgoApiErrorBody, formatCapgoCliInvokeError, getCapgoCliHttpStatus, hasCliPermission, hostOptionsFromSupabase, invokeCapgoCliApi, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
+import { appAddHintMessage, formatCapgoApiErrorBody, formatCapgoCliInvokeError, getCapgoCliHttpStatus, hasCliPermission, hostOptionsFromSupabase, invokeCapgoCliApi, resolveApikeyFromSupabaseClient, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
 
 export async function checkAppExists(
   apikey: string,
@@ -211,13 +211,21 @@ export async function check2FAComplianceForApp(
   supabase: SupabaseClient<Database>,
   appid: string,
   silent = false,
+  httpOptions?: { supaHost?: string, supaAnon?: string },
 ): Promise<void> {
-  // TODO(cli-http): no Capgo HTTP equivalent for reject_access_due_to_2fa_for_app yet
-  // Use the new reject_access_due_to_2fa_for_app function
-  // This handles getting the org, user identity (JWT or API key), and checking 2FA compliance
-  const { data: shouldReject, error: rejectError } = await callTwoFactorComplianceRpcWithRetry(() =>
-    supabase.rpc('reject_access_due_to_2fa_for_app', { app_id: appid }),
+  const { data, error: rejectError } = await callTwoFactorComplianceRpcWithRetry(() =>
+    invokeCapgoCliApi<{ reject?: boolean }>(`private/cli/2fa/reject-app?app_id=${encodeURIComponent(appid)}`, {
+      apikey: resolveApikeyFromSupabaseClient(supabase),
+      method: 'GET',
+      body: undefined,
+      supaHost: httpOptions?.supaHost ?? hostOptionsFromSupabase(supabase)?.supaHost,
+      supaAnon: httpOptions?.supaAnon ?? hostOptionsFromSupabase(supabase)?.supaAnon,
+    }).then(({ data: responseData, error: responseError }) => ({
+      data: responseData?.reject === true,
+      error: responseError,
+    })),
   )
+  const shouldReject = data
 
   if (rejectError) {
     if (!silent && !isTransientNetworkError(rejectError))

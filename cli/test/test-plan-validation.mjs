@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+process.env.CAPGO_DISABLE_POSTHOG = '1'
 
 import { readFileSync } from 'node:fs'
 import process from 'node:process'
@@ -9,12 +10,51 @@ console.log('🧪 Testing app-aware plan validation...\n')
 const utilsSource = readFileSync(new URL('../src/utils.ts', import.meta.url), 'utf8')
 const channelSetSource = readFileSync(new URL('../src/channel/set.ts', import.meta.url), 'utf8')
 
+const httpOptions = {
+  supaHost: 'http://localhost:54321',
+  supaAnon: 'test-anon-key',
+}
+
+function makeSupabase() {
+  return {
+    supabaseUrl: httpOptions.supaHost,
+    supabaseKey: httpOptions.supaAnon,
+    rest: {
+      headers: {
+        get(name) {
+          return name.toLowerCase() === 'capgkey' ? 'test-plan-key' : null
+        },
+      },
+    },
+  }
+}
+
+const originalFetch = globalThis.fetch
+const httpCalls = []
+let fetchHandler = () => new Response(JSON.stringify({ allowed: true }), {
+  status: 200,
+  headers: { 'Content-Type': 'application/json' },
+})
+
+globalThis.fetch = async (input, init) => {
+  const url = String(input)
+  if (!url.includes('/private/cli/billing/'))
+    return originalFetch(input)
+  httpCalls.push({
+    url,
+    method: init?.method ?? 'GET',
+    body: init?.body ? JSON.parse(init.body) : undefined,
+  })
+  return fetchHandler(url, init)
+}
+
 let testsPassed = 0
 let testsFailed = 0
 
 async function test(name, fn) {
   try {
     console.log(`\n🔍 ${name}`)
+    httpCalls.length = 0
     await fn()
     console.log(`✅ PASSED: ${name}`)
     testsPassed++
@@ -39,45 +79,41 @@ function assertEquals(actual, expected, message) {
 await test('checks an app-scoped key through the app-aware plan RPC', async () => {
   assert(typeof utils.isAllowedPlanActions === 'function', 'Expected isAllowedPlanActions to be exported')
 
-  const calls = []
-  const supabase = {
-    rpc: async (name, args) => {
-      calls.push({ name, args })
-      return { data: true, error: null }
-    },
-  }
+  fetchHandler = () => new Response(JSON.stringify({ allowed: true }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  })
 
   const allowed = await utils.isAllowedPlanActions(
-    supabase,
+    makeSupabase(),
     'org-id',
     ['mau', 'storage', 'bandwidth', 'build_time'],
     'com.example.app',
+    httpOptions,
   )
 
   assertEquals(allowed, true)
-  assertEquals(calls, [{
-    name: 'is_allowed_action_org_action',
-    args: {
-      orgid: 'org-id',
-      actions: ['mau', 'storage', 'bandwidth', 'build_time'],
-      appid: 'com.example.app',
-    },
-  }])
+  assertEquals(httpCalls.length, 1)
+  assert(httpCalls[0].url.includes('/private/cli/billing/allowed-actions'))
+  assertEquals(httpCalls[0].method, 'POST')
+  assertEquals(httpCalls[0].body, {
+    org_id: 'org-id',
+    actions: ['mau', 'storage', 'bandwidth', 'build_time'],
+    app_id: 'com.example.app',
+  })
 })
 
 await test('surfaces plan RPC errors instead of reporting an invalid plan', async () => {
   assert(typeof utils.isAllowedPlanActions === 'function', 'Expected isAllowedPlanActions to be exported')
 
-  const supabase = {
-    rpc: async () => ({
-      data: null,
-      error: { message: 'permission lookup failed' },
-    }),
-  }
+  fetchHandler = () => new Response(JSON.stringify({ error: 'permission lookup failed' }), {
+    status: 403,
+    headers: { 'Content-Type': 'application/json' },
+  })
 
   let thrown
   try {
-    await utils.isAllowedPlanActions(supabase, 'org-id', ['storage'], 'com.example.app')
+    await utils.isAllowedPlanActions(makeSupabase(), 'org-id', ['storage'], 'com.example.app', httpOptions)
   }
   catch (error) {
     thrown = error
@@ -88,62 +124,47 @@ await test('surfaces plan RPC errors instead of reporting an invalid plan', asyn
 })
 
 await test('falls back to organization validation when the app-aware RPC is unavailable', async () => {
-  const calls = []
-  const supabase = {
-    rpc: (name, args) => {
-      calls.push({ name, args })
-      if (name === 'is_allowed_action_org_action') {
-        return Promise.resolve({
-          data: null,
-          error: {
-            code: 'PGRST202',
-            message: 'Could not find the function in the schema cache',
-          },
-        })
-      }
-      return {
-        single: async () => ({ data: true, error: null }),
-      }
-    },
+  fetchHandler = (url) => {
+    if (url.includes('/private/cli/billing/allowed-actions')) {
+      return new Response(JSON.stringify({ error: 'not found' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return new Response(JSON.stringify({ allowed: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
   }
 
   const allowed = await utils.isAllowedPlanActions(
-    supabase,
+    makeSupabase(),
     'org-id',
     ['storage'],
     'com.example.app',
+    httpOptions,
   )
 
   assertEquals(allowed, true)
-  assertEquals(calls, [
-    {
-      name: 'is_allowed_action_org_action',
-      args: {
-        orgid: 'org-id',
-        actions: ['storage'],
-        appid: 'com.example.app',
-      },
-    },
-    {
-      name: 'is_allowed_action_org',
-      args: { orgid: 'org-id' },
-    },
-  ])
+  assertEquals(httpCalls.length, 2)
+  assert(httpCalls[0].url.includes('/private/cli/billing/allowed-actions'))
+  assertEquals(httpCalls[0].body, {
+    org_id: 'org-id',
+    actions: ['storage'],
+    app_id: 'com.example.app',
+  })
+  assert(httpCalls[1].url.includes('/private/cli/billing/allowed?org_id=org-id'))
 })
 
 await test('surfaces organization plan RPC errors instead of reporting an invalid plan', async () => {
-  const supabase = {
-    rpc: () => ({
-      single: async () => ({
-        data: null,
-        error: { message: 'organization lookup failed' },
-      }),
-    }),
-  }
+  fetchHandler = () => new Response(JSON.stringify({ error: 'organization lookup failed' }), {
+    status: 403,
+    headers: { 'Content-Type': 'application/json' },
+  })
 
   let thrown
   try {
-    await utils.isAllowedActionOrg(supabase, 'org-id')
+    await utils.isAllowedActionOrg(makeSupabase(), 'org-id', httpOptions)
   }
   catch (error) {
     thrown = error
@@ -154,40 +175,39 @@ await test('surfaces organization plan RPC errors instead of reporting an invali
 })
 
 await test('treats app-scoped RBAC denial as permission_denied when org plan is allowed', async () => {
-  const supabase = {
-    rpc: async (name, args) => {
-      if (name === 'is_allowed_action_org_action' && args.appid)
-        return { data: false, error: null }
-      if (name === 'is_allowed_action_org_action')
-        return { data: true, error: null }
-      throw new Error(`Unexpected RPC ${name}`)
-    },
+  fetchHandler = (_url, init) => {
+    const body = init?.body ? JSON.parse(init.body) : undefined
+    const allowed = body?.app_id ? false : true
+    return new Response(JSON.stringify({ allowed }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
   }
 
   const result = await utils.resolveMeteredPlanAllowed(
-    supabase,
+    makeSupabase(),
     'org-id',
     ['mau', 'storage', 'bandwidth', 'build_time'],
     'com.example.app',
+    httpOptions,
   )
 
   assertEquals(result, 'permission_denied')
 })
 
 await test('checkPlanValid reports permission denial instead of billing upgrade copy', async () => {
-  const supabase = {
-    rpc: async (name, args) => {
-      if (name === 'is_allowed_action_org_action' && args.appid)
-        return { data: false, error: null }
-      if (name === 'is_allowed_action_org_action')
-        return { data: true, error: null }
-      throw new Error(`Unexpected RPC ${name}`)
-    },
+  fetchHandler = (_url, init) => {
+    const body = init?.body ? JSON.parse(init.body) : undefined
+    const allowed = body?.app_id ? false : true
+    return new Response(JSON.stringify({ allowed }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
   }
 
   let thrown
   try {
-    await utils.checkPlanValid(supabase, 'org-id', 'com.example.app', false)
+    await utils.checkPlanValid(makeSupabase(), 'org-id', 'com.example.app', false, httpOptions)
   }
   catch (error) {
     thrown = error
@@ -239,6 +259,8 @@ await test('plan upgrade helpers use guarded openExternalUrl instead of raw impo
 await test('channel set does not run kitchen-sink plan validation', () => {
   assert(!channelSetSource.includes('checkPlanValid'), 'channel set must not call checkPlanValid')
 })
+
+globalThis.fetch = originalFetch
 
 console.log(`\n📊 Results: ${testsPassed} passed, ${testsFailed} failed`)
 if (testsFailed > 0)

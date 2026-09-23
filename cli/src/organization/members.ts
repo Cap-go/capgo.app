@@ -7,6 +7,8 @@ import {
   assertOrgPermission,
   check2FAAccessForOrg,
   createSupabaseClient,
+  fetchCliMembers2faStatus,
+  fetchCliMembersPasswordPolicyStatus,
   findSavedKey,
   formatError,
   invokeCapgoCliApi,
@@ -147,43 +149,38 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
     throw new Error(`Cannot get organization members: ${formatError(membersError)}`)
   }
 
-  // TODO(cli-http): no HTTP equivalent for check_org_members_2fa_enabled
-  // Get 2FA status for all members (only super_admins can call this)
-  const { data: membersStatus, error: statusError } = await supabase
-    .rpc('check_org_members_2fa_enabled', { org_id: orgId })
-
-  if (statusError) {
+  let membersStatus: Array<{ user_id: string, '2fa_enabled': boolean }> | null = null
+  try {
+    membersStatus = await fetchCliMembers2faStatus(enrichedOptions.apikey!, orgId, httpOptions)
+  }
+  catch (statusError) {
     if (!silent) {
-      if (statusError.message?.includes('NO_RIGHTS')) {
+      const message = formatError(statusError)
+      if (message.includes('NO_RIGHTS')) {
         log.warn('You need super_admin rights to view 2FA status of members')
       }
       else {
-        log.error(`Cannot get 2FA status: ${formatError(statusError)}`)
+        log.error(`Cannot get 2FA status: ${message}`)
       }
     }
-    // Continue without 2FA status
   }
 
-  // Get password policy compliance status (only if password policy is enabled)
   let passwordPolicyStatus: Array<{ user_id: string, password_policy_compliant: boolean }> | null = null
   if (hasPasswordPolicy) {
-    // TODO(cli-http): no HTTP equivalent for check_org_members_password_policy
-    const { data: policyStatus, error: policyError } = await supabase
-      .rpc('check_org_members_password_policy', { org_id: orgId })
-
-    if (policyError) {
+    try {
+      const policyStatus = await fetchCliMembersPasswordPolicyStatus(enrichedOptions.apikey!, orgId, httpOptions)
+      passwordPolicyStatus = policyStatus
+    }
+    catch (policyError) {
       if (!silent) {
-        if (policyError.message?.includes('NO_RIGHTS')) {
+        const message = formatError(policyError)
+        if (message.includes('NO_RIGHTS')) {
           log.warn('You need super_admin rights to view password policy compliance status')
         }
         else {
-          log.warn(`Cannot get password policy status: ${formatError(policyError)}`)
+          log.warn(`Cannot get password policy status: ${message}`)
         }
       }
-      // Continue without password policy status
-    }
-    else {
-      passwordPolicyStatus = policyStatus
     }
   }
 
