@@ -196,6 +196,34 @@ describe('auth guard MFA assurance', () => {
     })
   })
 
+  it.concurrent('redirects to login when verify_mfa returns an RPC error', async () => {
+    await withTestContext(async (context) => {
+      context.mockRpc.mockImplementation(async (name: string) => {
+        if (name === 'verify_mfa')
+          return { data: null, error: { message: 'MFA verification failed' } }
+        if (name === 'is_account_disabled')
+          return { data: false, error: null }
+        return { data: null, error: null }
+      })
+
+      const guard = await getGuard()
+      const next = vi.fn()
+
+      await guard(
+        { path: '/dashboard', fullPath: '/dashboard', meta: { middleware: 'auth' }, query: {} },
+        { path: '/login', fullPath: '/login', meta: {}, query: {} },
+        next,
+      )
+
+      expect(next).toHaveBeenCalledWith({
+        path: '/login',
+        query: {
+          to: '/dashboard',
+        },
+      })
+    })
+  })
+
   it.concurrent('allows aal1 when verify_mfa returns true', async () => {
     await withTestContext(async (context) => {
       context.mockRpc.mockImplementation(async (name: string) => {
