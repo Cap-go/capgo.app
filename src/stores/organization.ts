@@ -689,7 +689,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     }
 
     const logoLoadRun = ++organizationLogoLoadRun
-    const mappedData = data.map((item, id) => {
+    const mappedData = (data ?? []).map((item, id) => {
       const { normalized: logoStoragePath, shouldSign: shouldSignLogo } = resolveImagePath(item.logo)
       return {
         id,
