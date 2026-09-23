@@ -2110,6 +2110,30 @@ export interface CliHttpOptions {
   supaAnon?: string
 }
 
+/** Resolve local/self-host Capgo HTTP options from a supabase-js client instance. */
+export function hostOptionsFromSupabase(supabase: SupabaseClient<Database>): CliHttpOptions | undefined {
+  // supabase-js keeps these as protected fields; local/self-host tests still
+  // need the same host when Capgo HTTP checks replace PostgREST RPCs.
+  // Hosted Capgo clients must keep default api.capgo.app resolution — their
+  // supabaseUrl points at PostgREST, not the public Capgo HTTP API.
+  const client = supabase as SupabaseClient<Database> & { supabaseUrl?: string, supabaseKey?: string }
+  const supaHost = typeof client.supabaseUrl === 'string' ? client.supabaseUrl : undefined
+  const supaAnon = typeof client.supabaseKey === 'string' ? client.supabaseKey : undefined
+  if (supaHost && supaAnon && !isCapgoManagedSupabaseHost(supaHost))
+    return { supaHost, supaAnon }
+  return undefined
+}
+
+function resolveCliHttpOptions(
+  supabase: SupabaseClient<Database>,
+  httpOptions: CliHttpOptions = {},
+): CliHttpOptions {
+  return {
+    ...hostOptionsFromSupabase(supabase),
+    ...httpOptions,
+  }
+}
+
 export async function fetchOrganizationsV7(
   apikey: string,
   httpOptions: CliHttpOptions = {},
@@ -2188,17 +2212,18 @@ export async function getOrganizationWithPermission(
 }
 
 export async function resolveUserIdFromApiKey(
-  _supabase: SupabaseClient<Database>,
+  supabase: SupabaseClient<Database>,
   apikey: string,
   silent = false,
   httpOptions: CliHttpOptions = {},
 ) {
+  const resolvedHttpOptions = resolveCliHttpOptions(supabase, httpOptions)
   const { data, error: userIdError } = await invokeCapgoCliApi<{ userId?: string }>('private/cli/identity', {
     apikey,
     method: 'GET',
     body: undefined,
-    supaHost: httpOptions.supaHost,
-    supaAnon: httpOptions.supaAnon,
+    supaHost: resolvedHttpOptions.supaHost,
+    supaAnon: resolvedHttpOptions.supaAnon,
   })
 
   const userId = (data?.userId || '').toString()
@@ -2229,6 +2254,7 @@ export async function hasCliPermission(
   scope: CliPermissionScope = {},
   httpOptions: CliHttpOptions = {},
 ): Promise<boolean> {
+  const resolvedHttpOptions = resolveCliHttpOptions(supabase, httpOptions)
   const { data, error } = await invokeCapgoCliApi<{ allowed?: boolean }>('private/cli/check-permission', {
     apikey,
     method: 'POST',
@@ -2239,8 +2265,8 @@ export async function hasCliPermission(
       app_id: scope.appId ?? null,
       channel_id: scope.channelId ?? null,
     },
-    supaHost: httpOptions.supaHost,
-    supaAnon: httpOptions.supaAnon,
+    supaHost: resolvedHttpOptions.supaHost,
+    supaAnon: resolvedHttpOptions.supaAnon,
   })
 
   if (error) {
