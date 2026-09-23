@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { APIKEY_TEST_ALL, getEndpointUrl, USER_ID } from './test-utils.ts'
+import { APIKEY_TEST_ALL, getEndpointUrl, ORG_ID, USER_ID } from './test-utils.ts'
 
 const CLI_IDENTITY_URL = getEndpointUrl('/private/cli/identity')
 const CLI_PERMISSION_URL = getEndpointUrl('/private/cli/check-permission')
@@ -38,6 +38,7 @@ describe('private/cli HTTP API', () => {
       headers: apiHeaders(APIKEY_TEST_ALL),
       body: JSON.stringify({
         permission_key: 'org.read',
+        org_id: ORG_ID,
       }),
     })
 
