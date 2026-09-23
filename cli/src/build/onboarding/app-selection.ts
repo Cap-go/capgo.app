@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '../../config'
 import open from 'open'
 import { getBuilderAppId, getConfiguredBuilderAppId } from '../app-id.js'
 import { writeConfig } from '../../config/index.js'
-import { consoleWebUrl, createSupabaseClient, formatCapgoCliInvokeError, getCapgoCliHttpStatus, getConfigForWrite, invokeCapgoCliApi } from '../../utils.js'
+import { consoleWebUrl, formatCapgoCliInvokeError, getCapgoCliHttpStatus, getConfigForWrite, invokeCapgoCliApi } from '../../utils.js'
 
 export interface BuilderVisibleApp {
   app_id: string
@@ -94,9 +94,10 @@ export async function verifyBuilderApp(
   apikey: string,
   appId: string,
   options: BuilderAppApiOptions = {},
-  dependencies: { request?: typeof invokeCapgoCliApi, createClient?: typeof createSupabaseClient } = {},
+  dependencies: { request?: typeof invokeCapgoCliApi } = {},
 ): Promise<void> {
-  const { data, error } = await (dependencies.request ?? invokeCapgoCliApi)<BuilderVisibleApp>(`app/${encodeURIComponent(appId)}`, {
+  const request = dependencies.request ?? invokeCapgoCliApi
+  const { data, error } = await request<BuilderVisibleApp>(`app/${encodeURIComponent(appId)}`, {
     apikey,
     method: 'GET',
     body: undefined,
@@ -114,23 +115,22 @@ export async function verifyBuilderApp(
   if (!data || data.app_id !== appId)
     throw new AppSelectionError('missing', `${appId} is no longer available. Check the app list again.`)
 
-  let supabase: Awaited<ReturnType<typeof createSupabaseClient>>
-  try {
-    supabase = await (dependencies.createClient ?? createSupabaseClient)(apikey, options.supaHost, options.supaAnon, true)
-  }
-  catch (error) {
-    throw new AppSelectionError('api', 'Could not connect to Capgo to check build permission. Please retry.', { cause: error })
-  }
-  const { data: canBuild, error: permissionError } = await supabase.rpc('cli_check_permission' as any, {
+  const { data: permissionData, error: permissionError } = await request<{ allowed?: boolean }>('private/cli/check-permission', {
     apikey,
-    permission_key: 'app.build_native',
-    org_id: null,
-    app_id: appId,
-    channel_id: null,
+    method: 'POST',
+    body: {
+      apikey,
+      permission_key: 'app.build_native',
+      org_id: null,
+      app_id: appId,
+      channel_id: null,
+    },
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
   })
   if (permissionError)
     throw new AppSelectionError('permission', 'Could not check app.build_native permission. Please retry.', { cause: permissionError })
-  if (!canBuild)
+  if (permissionData?.allowed !== true)
     throw new AppSelectionError('build', `This API key needs app.build_native permission for ${appId}.`)
 }
 

@@ -2094,27 +2094,79 @@ export async function filterOrgsByPermission(
   apikey: string,
   orgs: Organization[],
   permissionKey: string,
+  httpOptions: CliHttpOptions = {},
 ): Promise<Organization[]> {
   const checks = await Promise.all(
     orgs.map(async (org) => {
-      const allowed = await hasCliPermission(supabase, apikey, permissionKey, { orgId: org.gid })
+      const allowed = await hasCliPermission(supabase, apikey, permissionKey, { orgId: org.gid }, httpOptions)
       return allowed ? org : null
     }),
   )
   return checks.filter((org): org is Organization => org !== null)
 }
 
+export interface CliHttpOptions {
+  supaHost?: string
+  supaAnon?: string
+}
+
+/** Resolve local/self-host Capgo HTTP options from a supabase-js client instance. */
+export function hostOptionsFromSupabase(supabase: SupabaseClient<Database>): CliHttpOptions | undefined {
+  // supabase-js keeps these as protected fields; local/self-host tests still
+  // need the same host when Capgo HTTP checks replace PostgREST RPCs.
+  // Hosted Capgo clients must keep default api.capgo.app resolution — their
+  // supabaseUrl points at PostgREST, not the public Capgo HTTP API.
+  const client = supabase as SupabaseClient<Database> & { supabaseUrl?: string, supabaseKey?: string }
+  const supaHost = typeof client.supabaseUrl === 'string' ? client.supabaseUrl : undefined
+  const supaAnon = typeof client.supabaseKey === 'string' ? client.supabaseKey : undefined
+  if (supaHost && supaAnon && !isCapgoManagedSupabaseHost(supaHost))
+    return { supaHost, supaAnon }
+  return undefined
+}
+
+function resolveCliHttpOptions(
+  supabase: SupabaseClient<Database>,
+  httpOptions: CliHttpOptions = {},
+): CliHttpOptions {
+  return {
+    ...hostOptionsFromSupabase(supabase),
+    ...httpOptions,
+  }
+}
+
+export async function fetchOrganizationsV7(
+  apikey: string,
+  httpOptions: CliHttpOptions = {},
+): Promise<Organization[]> {
+  const { data, error } = await invokeCapgoCliApi<Organization[]>('private/cli/organizations', {
+    apikey,
+    method: 'GET',
+    body: undefined,
+    supaHost: httpOptions.supaHost,
+    supaAnon: httpOptions.supaAnon,
+  })
+
+  if (error) {
+    throw new Error(`Cannot get the list of organizations: ${formatError(error)}`, { cause: error })
+  }
+
+  return data ?? []
+}
+
 export async function getOrganizationListWithPermission(
   supabase: SupabaseClient<Database>,
   apikey: string,
   permissionKey: string,
+  httpOptions: CliHttpOptions = {},
 ): Promise<{ allOrganizations: Organization[], allowedOrganizations: Organization[] }> {
-  const { error: orgError, data: allOrganizations } = await supabase.rpc('get_orgs_v7')
-
-  if (orgError) {
+  let allOrganizations: Organization[]
+  try {
+    allOrganizations = await fetchOrganizationsV7(apikey, httpOptions)
+  }
+  catch (error) {
     log.error('Cannot get the list of organizations - exiting')
-    log.error(formatError(orgError))
-    throw new Error('Cannot get the list of organizations')
+    log.error(formatError(error))
+    throw error
   }
 
   if (allOrganizations.length === 0) {
@@ -2122,7 +2174,7 @@ export async function getOrganizationListWithPermission(
     throw new Error('No organizations available')
   }
 
-  const allowedOrganizations = await filterOrgsByPermission(supabase, apikey, allOrganizations, permissionKey)
+  const allowedOrganizations = await filterOrgsByPermission(supabase, apikey, allOrganizations, permissionKey, httpOptions)
 
   if (allowedOrganizations.length === 0) {
     log.error(`Could not find organization with permission: ${permissionKey}`)
@@ -2165,16 +2217,26 @@ export async function getOrganizationWithPermission(
   return organization
 }
 
-// TODO(cli-http): no Capgo HTTP identity endpoint yet (rpc request_actor_user_id)
-export async function resolveUserIdFromApiKey(supabase: SupabaseClient<Database>, apikey: string, silent = false) {
-  const { data: dataUser, error: userIdError } = await supabase
-    .rpc('request_actor_user_id')
+export async function resolveUserIdFromApiKey(
+  supabase: SupabaseClient<Database>,
+  apikey: string,
+  silent = false,
+  httpOptions: CliHttpOptions = {},
+) {
+  const resolvedHttpOptions = resolveCliHttpOptions(supabase, httpOptions)
+  const { data, error: userIdError } = await invokeCapgoCliApi<{ userId?: string }>('private/cli/identity', {
+    apikey,
+    method: 'GET',
+    body: undefined,
+    supaHost: resolvedHttpOptions.supaHost,
+    supaAnon: resolvedHttpOptions.supaAnon,
+  })
 
-  const userId = (dataUser || '').toString()
+  const userId = (data?.userId || '').toString()
 
   if (userIdError) {
     if (!silent)
-      log.error(userIdError.message)
+      log.error(formatError(userIdError))
     throw userIdError
   }
   if (!userId) {
@@ -2191,19 +2253,26 @@ interface CliPermissionScope {
   channelId?: number | null
 }
 
-// TODO(cli-http): no Capgo HTTP check-permission endpoint yet (rpc cli_check_permission)
 export async function hasCliPermission(
   supabase: SupabaseClient<Database>,
   apikey: string,
   permissionKey: string,
   scope: CliPermissionScope = {},
+  httpOptions: CliHttpOptions = {},
 ): Promise<boolean> {
-  const { data, error } = await supabase.rpc('cli_check_permission' as any, {
+  const resolvedHttpOptions = resolveCliHttpOptions(supabase, httpOptions)
+  const { data, error } = await invokeCapgoCliApi<{ allowed?: boolean }>('private/cli/check-permission', {
     apikey,
-    permission_key: permissionKey,
-    org_id: scope.orgId ?? null,
-    app_id: scope.appId ?? null,
-    channel_id: scope.channelId ?? null,
+    method: 'POST',
+    body: {
+      apikey,
+      permission_key: permissionKey,
+      org_id: scope.orgId ?? null,
+      app_id: scope.appId ?? null,
+      channel_id: scope.channelId ?? null,
+    },
+    supaHost: resolvedHttpOptions.supaHost,
+    supaAnon: resolvedHttpOptions.supaAnon,
   })
 
   if (error) {
@@ -2212,7 +2281,7 @@ export async function hasCliPermission(
     throw new Error(`Cannot check permission ${permissionKey}`)
   }
 
-  return !!data
+  return data?.allowed === true
 }
 
 export async function assertCliPermission(
@@ -2223,9 +2292,10 @@ export async function assertCliPermission(
   options: {
     message?: string
     silent?: boolean
+    httpOptions?: CliHttpOptions
   } = {},
 ): Promise<void> {
-  const allowed = await hasCliPermission(supabase, apikey, permissionKey, scope)
+  const allowed = await hasCliPermission(supabase, apikey, permissionKey, scope, options.httpOptions)
   if (allowed)
     return
 
@@ -2245,9 +2315,10 @@ export async function assertOrgPermission(
   orgId: string,
   message: string,
   silent: boolean,
+  httpOptions: CliHttpOptions = {},
 ): Promise<void> {
-  await resolveUserIdFromApiKey(supabase, apikey, silent)
-  await assertCliPermission(supabase, apikey, permissionKey, { orgId }, { message, silent })
+  await resolveUserIdFromApiKey(supabase, apikey, silent, httpOptions)
+  await assertCliPermission(supabase, apikey, permissionKey, { orgId }, { message, silent, httpOptions })
 }
 
 export async function getOrganizationId(

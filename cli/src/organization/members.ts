@@ -100,7 +100,11 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
     enrichedOptions.supaHost,
     enrichedOptions.supaAnon,
   )
-  await assertOrgPermission(supabase, enrichedOptions.apikey, 'org.read_members', orgId, `Insufficient permissions to list members of organization ${orgId}`, silent)
+  const httpOptions = {
+    supaHost: enrichedOptions.supaHost,
+    supaAnon: enrichedOptions.supaAnon,
+  }
+  await assertOrgPermission(supabase, enrichedOptions.apikey, 'org.read_members', orgId, `Insufficient permissions to list members of organization ${orgId}`, silent, httpOptions)
   await check2FAAccessForOrg(supabase, orgId, silent)
 
   // TODO(cli-http): GET organization omits security settings (enforcing_2fa, password_policy_config, ...)

@@ -5,6 +5,7 @@ import { app as admin_credits } from '../../supabase/functions/_backend/private/
 import { app as admin_org_support_channel } from '../../supabase/functions/_backend/private/admin_org_support_channel.ts'
 import { app as admin_stats } from '../../supabase/functions/_backend/private/admin_stats.ts'
 import { app as bundle_install_stats } from '../../supabase/functions/_backend/private/bundle_install_stats.ts'
+import { app as cli } from '../../supabase/functions/_backend/private/cli/index.ts'
 import { app as channel_device } from '../../supabase/functions/_backend/private/channel_device.ts'
 import { app as channel_stats } from '../../supabase/functions/_backend/private/channel_stats.ts'
 import { app as config } from '../../supabase/functions/_backend/private/config.ts'
@@ -131,6 +132,7 @@ appPrivate.route('/plans', plans)
 appPrivate.route('/credits', credits)
 appPrivate.route('/store_top', storeTop)
 appPrivate.route('/website_stats', publicStats)
+appPrivate.route('/cli', cli)
 appPrivate.route('/config', config)
 appPrivate.route('/config/builder', configBuilder)
 appPrivate.route('/accept_invitation', accept_invitation)

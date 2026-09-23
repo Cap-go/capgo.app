@@ -104,7 +104,11 @@ export async function setOrganizationInternal(
     enrichedOptions.supaAnon,
   )
   const organizationApiHost = await resolveOrganizationUpdateApiHost(enrichedOptions, silent)
-  await assertOrgPermission(supabase, enrichedOptions.apikey, 'org.update_settings', orgId, `Insufficient permissions to update organization ${orgId}`, silent)
+  const httpOptions = {
+    supaHost: enrichedOptions.supaHost,
+    supaAnon: enrichedOptions.supaAnon,
+  }
+  await assertOrgPermission(supabase, enrichedOptions.apikey, 'org.update_settings', orgId, `Insufficient permissions to update organization ${orgId}`, silent, httpOptions)
 
   await check2FAAccessForOrg(supabase, orgId, silent)
 

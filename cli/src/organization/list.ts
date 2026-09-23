@@ -7,6 +7,7 @@ import { checkAlerts } from '../api/update'
 import {
   consoleWebUrl,
   createSupabaseClient,
+  fetchOrganizationsV7,
   findSavedKey,
   formatError,
   resolveUserIdFromApiKey,
@@ -75,20 +76,24 @@ export async function listOrganizationsInternal(options: OptionsBase, silent = f
     enrichedOptions.supaHost,
     enrichedOptions.supaAnon,
   )
-  await resolveUserIdFromApiKey(supabase, enrichedOptions.apikey)
+  const httpOptions = {
+    supaHost: enrichedOptions.supaHost,
+    supaAnon: enrichedOptions.supaAnon,
+  }
+  await resolveUserIdFromApiKey(supabase, enrichedOptions.apikey, false, httpOptions)
 
   if (!silent)
     log.info('Getting organizations from Capgo')
 
-  const { error, data: allOrganizations } = await supabase.rpc('get_orgs_v7')
-
-  if (error) {
+  let organizations: Awaited<ReturnType<typeof fetchOrganizationsV7>>
+  try {
+    organizations = await fetchOrganizationsV7(enrichedOptions.apikey, httpOptions)
+  }
+  catch (error) {
     if (!silent)
       log.error(`Cannot get organizations ${formatError(error)}`)
     throw new Error(`Cannot get organizations: ${formatError(error)}`)
   }
-
-  const organizations = allOrganizations || []
 
   void trackEvent({ channel: 'organization', event: 'Orgs Listed', tags: { org_count: organizations.length } })
 
