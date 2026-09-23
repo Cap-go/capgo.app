@@ -2089,6 +2089,7 @@
   "invitation-rescinded": "Used in Capgo web console areas: pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "invitation-resend-wait": "Used in Capgo web console areas: utils. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "invite-accepted": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "invite-name-domain-not-allowed": "Used in Capgo web console areas: components/dashboard, pages/settings/organization. Role: validation error shown when an invitee name contains a domain. Translate for UI; keep domain examples unchanged.",
   "invite-join-trend": "Used in Capgo web console areas: pages/admin/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "invite-join-trend-description": "Used in Capgo web console areas: pages/admin/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "invite-new-user-dialog-description": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
