@@ -418,10 +418,11 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
         const firstSetupStep = startSetupStep ?? (step as OnboardingStep | AndroidOnboardingStep)
         startSetupStep = firstSetupStep
         startSetupLookupInFlight = true
-        void resolveOwnerOrgId(apikey, selectedAppId, {
+        const resolveOwner = () => resolveOwnerOrgId(apikey, selectedAppId, {
           supaHost: options.supaHost,
           supaAnon: options.supaAnon,
-        }).then((orgId) => {
+        })
+        void resolveOwner().then(async orgId => orgId ?? resolveOwner()).then((orgId) => {
           if (!orgId)
             return
           startSetupTracked = true
