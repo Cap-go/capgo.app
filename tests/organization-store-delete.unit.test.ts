@@ -2,8 +2,6 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 
-const mockEq = vi.fn()
-const mockDelete = vi.fn(() => ({ eq: mockEq }))
 const mockIn = vi.fn()
 const mockSelect = vi.fn(() => ({ in: mockIn }))
 const mockFrom = vi.fn((table: string) => {
@@ -13,12 +11,11 @@ const mockFrom = vi.fn((table: string) => {
     }
   }
 
-  return {
-    delete: mockDelete,
-  }
+  return {}
 })
 const mockRpc = vi.fn()
 const mockFetchOrganizationsList = vi.fn()
+const mockDeleteOrganizationApi = vi.fn()
 const mockIsPlatformAdmin = vi.fn(async () => false)
 const mockCreateSignedImageUrl = vi.fn()
 const mockResolveImagePath = vi.fn((raw?: string | null) => ({
@@ -86,6 +83,7 @@ vi.mock('../src/stores/dashboardApps.ts', () => ({
 }))
 
 vi.mock('../src/services/organizations.ts', () => ({
+  deleteOrganization: mockDeleteOrganizationApi,
   fetchOrganizationsList: mockFetchOrganizationsList,
 }))
 
@@ -96,7 +94,7 @@ describe('organization store deleteOrganization', () => {
     mainStore.auth = { id: 'auth-user-123' }
     mainStore.user = { id: 'user-123' }
     mainStore.isAdmin = false
-    mockEq.mockResolvedValue({ data: null, error: null })
+    mockDeleteOrganizationApi.mockResolvedValue({ data: { status: 'ok' }, error: null })
     mockIn.mockResolvedValue({ data: [], error: null })
     vi.stubGlobal('localStorage', {
       getItem: vi.fn(),
@@ -118,8 +116,7 @@ describe('organization store deleteOrganization', () => {
     const result = await store.deleteOrganization(orgId)
 
     expect(result.error).toBeNull()
-    expect(mockFrom).toHaveBeenCalledWith('orgs')
-    expect(mockEq).toHaveBeenCalledWith('id', orgId)
+    expect(mockDeleteOrganizationApi).toHaveBeenCalledWith(orgId)
   })
 
   it('rejects org deletion for lower org roles', async () => {
@@ -136,7 +133,7 @@ describe('organization store deleteOrganization', () => {
 
     expect(result.error).toBeInstanceOf(Error)
     expect(result.error?.message).toBe('Insufficient permissions')
-    expect(mockFrom).not.toHaveBeenCalled()
+    expect(mockDeleteOrganizationApi).not.toHaveBeenCalled()
   })
 })
 
