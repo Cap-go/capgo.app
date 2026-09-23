@@ -22,6 +22,7 @@ import { app as native_observe_stats } from '../_backend/private/native_observe_
 import { app as observe } from '../_backend/private/observe.ts'
 import { app as onboarding_ab_tests } from '../_backend/private/onboarding_ab_tests.ts'
 import { app as onboarding_progress } from '../_backend/private/onboarding_progress.ts'
+import { app as org_billing } from '../_backend/private/org_billing.ts'
 import { app as org_notification_stats } from '../_backend/private/org_notification_stats.ts'
 import { app as organization_invitation } from '../_backend/private/organization_invitation.ts'
 // Webapps API
@@ -75,6 +76,7 @@ appGlobal.route('/onboarding_ab_tests', onboarding_ab_tests)
 appGlobal.route('/onboarding_progress', onboarding_progress)
 appGlobal.route('/org_notification_stats', org_notification_stats)
 appGlobal.route('/organization_invitation', organization_invitation)
+appGlobal.route('/org_billing', org_billing)
 appGlobal.route('/download_link', download_link)
 appGlobal.route('/log_as', log_as)
 appGlobal.route('/mcp_oauth', mcp_oauth)
