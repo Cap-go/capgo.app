@@ -34,6 +34,23 @@ const memberRoleBodySchema = z.object({
   role_name: rbacOrgRoleSchema,
 })
 
+const acceptBodySchema = z.object({
+  org_id: orgIdSchema,
+})
+
+const declineBodySchema = z.object({
+  org_id: orgIdSchema.optional(),
+  org_ids: z.array(orgIdSchema).min(1).optional(),
+}).superRefine((body, ctx) => {
+  if (!body.org_id && (!body.org_ids || body.org_ids.length === 0)) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'org_id or org_ids is required',
+      path: ['org_id'],
+    })
+  }
+})
+
 const inviteRoleBodySchema = z.object({
   org_id: orgIdSchema,
   role_name: rbacOrgRoleSchema,
@@ -184,6 +201,51 @@ app.patch('/invite-role', middlewareAuth, async (c) => {
 
   if (data !== 'OK')
     throw simpleError('invite_role_error', typeof data === 'string' ? data : 'Unexpected invite role response')
+
+  return c.json({ status: 'ok' })
+})
+
+app.post('/accept', middlewareAuth, async (c) => {
+  const body = await parseBody<unknown>(c)
+  const parsed = acceptBodySchema.safeParse(body)
+  if (!parsed.success)
+    throw simpleError('invalid_body', 'Invalid body', { error: parsed.error.message })
+
+  const supabase = getAuthedSupabase(c)
+  const { data, error } = await supabase.rpc('accept_invitation_to_org', {
+    org_id: parsed.data.org_id,
+  })
+
+  if (error)
+    throw simpleError('accept_error', error.message)
+
+  if (data !== 'OK')
+    throw simpleError('accept_error', typeof data === 'string' ? data : 'Unexpected accept response')
+
+  return c.json({ status: 'ok' })
+})
+
+app.post('/decline', middlewareAuth, async (c) => {
+  const body = await parseBody<unknown>(c)
+  const parsed = declineBodySchema.safeParse(body)
+  if (!parsed.success)
+    throw simpleError('invalid_body', 'Invalid body', { error: parsed.error.message })
+
+  const auth = c.get('auth')
+  const userId = auth?.userId
+  if (!userId)
+    throw simpleError('not_authorized', 'Not authorized')
+
+  const orgIds = parsed.data.org_ids ?? (parsed.data.org_id ? [parsed.data.org_id] : [])
+  const supabase = getAuthedSupabase(c)
+  const { error } = await supabase
+    .from('org_users')
+    .delete()
+    .eq('user_id', userId)
+    .in('org_id', orgIds)
+
+  if (error)
+    throw simpleError('decline_error', error.message)
 
   return c.json({ status: 'ok' })
 })

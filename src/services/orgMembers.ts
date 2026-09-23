@@ -84,3 +84,30 @@ export async function fetchMagicInviteLookup(lookup: string) {
     allowAnonymous: true,
   })
 }
+
+export async function acceptOrgInvitation(orgId: string) {
+  return await invokeCapgoApi<{ status: 'ok' }>('private/org_members/accept', {
+    method: 'POST',
+    body: {
+      org_id: orgId,
+    },
+  })
+}
+
+export async function declineOrgInvitation(orgId: string) {
+  return await invokeCapgoApi<{ status: 'ok' }>('private/org_members/decline', {
+    method: 'POST',
+    body: {
+      org_id: orgId,
+    },
+  })
+}
+
+export async function declineOrgInvitations(orgIds: string[]) {
+  return await invokeCapgoApi<{ status: 'ok' }>('private/org_members/decline', {
+    method: 'POST',
+    body: {
+      org_ids: orgIds,
+    },
+  })
+}
