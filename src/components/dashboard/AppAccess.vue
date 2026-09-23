@@ -14,9 +14,10 @@ import RoleSelect from '~/components/forms/RoleSelect.vue'
 import SearchInput from '~/components/forms/SearchInput.vue'
 import RoleSelectionModal from '~/components/modals/RoleSelectionModal.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { fetchOrgMembersRbac } from '~/services/orgMembers'
 import { formatLocalDate } from '~/services/date'
+import { fetchOrgMembersRbac } from '~/services/orgMembers'
 import { checkPermissions } from '~/services/permissions'
+import { fetchAssignableRolesByScope } from '~/services/roles'
 import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { getErrorMessage } from '~/utils/errors'
@@ -249,12 +250,7 @@ async function fetchAppRoleBindings() {
 
 async function fetchAvailableAppRoles() {
   try {
-    const { data, error } = await supabase
-      .from('roles')
-      .select('id, name, scope_type, description, priority_rank')
-      .eq('scope_type', 'app')
-      .eq('is_assignable', true)
-      .order('priority_rank')
+    const { data, error } = await fetchAssignableRolesByScope('app')
 
     if (error)
       throw error
@@ -474,8 +470,8 @@ onMounted(async () => {
         </p>
       </div>
       <button
-        type="button"
         v-if="canAssignRoles"
+        type="button"
         class="d-btn d-btn-primary"
         @click="openAssignRoleModal"
       >
@@ -531,8 +527,8 @@ onMounted(async () => {
 
       <template #actions="{ row }">
         <button
-          type="button"
           v-if="canAssignRoles"
+          type="button"
           class="d-btn d-btn-sm d-btn-ghost"
           :title="t('edit-role')"
           @click="openEditRoleModal(row)"
@@ -540,8 +536,8 @@ onMounted(async () => {
           <IconWrench class="size-4" />
         </button>
         <button
-          type="button"
           v-if="canAssignRoles"
+          type="button"
           class="d-btn d-btn-sm d-btn-ghost text-error"
           :title="t('remove')"
           @click="removeRoleBinding(row.id)"

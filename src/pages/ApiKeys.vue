@@ -32,7 +32,9 @@ import { invokeCapgoApi } from '~/services/capgoApi'
 import { shouldShowCliLoginGuidance } from '~/services/cliLogin'
 import { formatLocalDate } from '~/services/date'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
+import { fetchOrgNamesByIds } from '~/services/organizations'
 import { checkPermissions } from '~/services/permissions'
+import { fetchAssignableRoles } from '~/services/roles'
 import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
@@ -589,27 +591,20 @@ async function fetchOrgAndAppNames() {
 
   // Fetch organization names in parallel
   if (uncachedOrgIds.length > 0) {
-    const orgPromises = uncachedOrgIds.map(async (orgId) => {
-      try {
-        const { data, error } = await supabase
-          .from('orgs')
-          .select('id, name')
-          .eq('id', orgId)
-          .single()
+    try {
+      const { data, error } = await fetchOrgNamesByIds(uncachedOrgIds)
+      if (error)
+        throw error
 
-        if (error)
-          throw error
-        if (data)
-          orgCache.value.set(orgId, data.name)
-        return { id: orgId, name: data?.name }
-      }
-      catch (err) {
-        console.error(`Error fetching org name for ${orgId}:`, err)
-        return { id: orgId, name: 'Unknown' }
-      }
-    })
-
-    await Promise.all(orgPromises)
+      const namesById = new Map((data ?? []).map(row => [row.id, row.name]))
+      for (const orgId of uncachedOrgIds)
+        orgCache.value.set(orgId, namesById.get(orgId) ?? 'Unknown')
+    }
+    catch (err) {
+      console.error('Error fetching org names:', err)
+      for (const orgId of uncachedOrgIds)
+        orgCache.value.set(orgId, 'Unknown')
+    }
   }
 
   if (uncachedAppIds.length > 0) {
@@ -921,12 +916,7 @@ async function copyCliLoginCommand() {
 }
 
 async function fetchRoles() {
-  const { data, error } = await supabase
-    .from('roles')
-    .select('id, name, scope_type, description, priority_rank')
-    .eq('is_assignable', true)
-    .in('scope_type', ['org', 'app'])
-    .order('priority_rank', { ascending: false })
+  const { data, error } = await fetchAssignableRoles(['org', 'app'])
   if (error) {
     console.error('Error fetching roles:', error)
     return
