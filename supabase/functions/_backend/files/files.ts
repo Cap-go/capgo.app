@@ -278,6 +278,13 @@ function toHeadersOnlyResponse(response: Response): Response {
   })
 }
 
+function notFoundAttachmentResponse(c: Context, isHead: boolean): Response {
+  // HEAD must stay body-less (same HTTP/2 Content-Length trap as 200 hits).
+  if (isHead)
+    return new Response(null, { status: 404 })
+  return c.json({ error: 'not_found', message: 'Not found' }, 404)
+}
+
 function ensureNoTransformResponse(response: Response): Response {
   const cacheControl = withFileReadCacheControl(response.headers.get('cache-control'))
   if (cacheControl === response.headers.get('cache-control')) {
@@ -370,7 +377,7 @@ async function getSupabaseStorageResponse(c: Context, fileId: string): Promise<R
       error: signedUrlError,
     })
     if (signedUrlError?.status === 404) {
-      return c.json({ error: 'not_found', message: 'Not found' }, 404)
+      return notFoundAttachmentResponse(c, method === 'HEAD')
     }
     throw quickError(503, 'upstream_unavailable', 'File storage temporarily unavailable', { fileId }, signedUrlError, { alert: false })
   }
@@ -405,7 +412,7 @@ async function getSupabaseStorageResponse(c: Context, fileId: string): Promise<R
       responseBody,
     })
     if (response.status === 404 || responseBody.toLowerCase().includes('not found')) {
-      return c.json({ error: 'not_found', message: 'Not found' }, 404)
+      return notFoundAttachmentResponse(c, method === 'HEAD')
     }
     throw quickError(503, 'upstream_unavailable', 'File storage temporarily unavailable', { fileId, status: response.status }, responseBody, { alert: false })
   }
@@ -433,7 +440,7 @@ async function getHandler(c: Context): Promise<Response> {
 
   if (bucket == null) {
     cloudlog({ requestId: c.get('requestId'), message: 'getHandler files bucket is null' })
-    return c.json({ error: 'not_found', message: 'Not found' }, 404)
+    return notFoundAttachmentResponse(c, isHead)
   }
 
   const cache = await getFileReadCache()
@@ -444,7 +451,7 @@ async function getHandler(c: Context): Promise<Response> {
   if (response != null) {
     if (await isAttachmentVersionDeleted(c, fileId)) {
       cloudlog({ requestId: c.get('requestId'), message: 'getHandler files cache hit for deleted version', fileId })
-      return c.json({ error: 'not_found', message: 'Not found' }, 404)
+      return notFoundAttachmentResponse(c, isHead)
     }
 
     const cachedResponse = ensureNoTransformResponse(response)
@@ -486,7 +493,7 @@ async function getHandler(c: Context): Promise<Response> {
 
   if (await isAttachmentVersionDeleted(c, fileId)) {
     cloudlog({ requestId: c.get('requestId'), message: 'getHandler files cache miss for deleted version', fileId })
-    return c.json({ error: 'not_found', message: 'Not found' }, 404)
+    return notFoundAttachmentResponse(c, isHead)
   }
 
   const rangeHeaderFromRequest = c.req.header('range')
@@ -527,7 +534,7 @@ async function getHandler(c: Context): Promise<Response> {
 
     if (objectInfo == null) {
       cloudlog({ requestId: c.get('requestId'), message: 'getHandler files object is null' })
-      return c.json({ error: 'not_found', message: 'Not found' }, 404)
+      return notFoundAttachmentResponse(c, isHead)
     }
 
     const headers = objectHeaders(objectInfo)
@@ -564,7 +571,7 @@ async function getHandler(c: Context): Promise<Response> {
   }
   if (object == null) {
     cloudlog({ requestId: c.get('requestId'), message: 'getHandler files object is null' })
-    return c.json({ error: 'not_found', message: 'Not found' }, 404)
+    return notFoundAttachmentResponse(c, isHead)
   }
   const bytesTransferred = calculateBytesTransferred(object.size, object.range)
   await saveBandwidthUsage(c, bytesTransferred)

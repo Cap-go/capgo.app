@@ -147,6 +147,7 @@ describe('files attachment HEAD reads on workerd/R2', () => {
     const response = await fetchHead(appGlobal)
 
     expect(response.status).toBe(404)
+    expect((await response.arrayBuffer()).byteLength).toBe(0)
     expect(retryGetMock).not.toHaveBeenCalled()
   })
 
@@ -284,6 +285,7 @@ describe('files attachment HEAD reads on workerd/R2', () => {
     )
 
     expect(headResponse.status).toBe(404)
+    expect((await headResponse.arrayBuffer()).byteLength).toBe(0)
     expect(getResponse.status).toBe(404)
     expect(await getResponse.json()).toMatchObject({ error: 'not_found' })
     expect(retryGetMock).not.toHaveBeenCalled()
