@@ -68,7 +68,7 @@ describe('onboarding hard-gate direct entry', () => {
   })
 
   it('returns to setup when direct /apikeys entry is canceled during pre-create onboarding', async () => {
-    const { router, committed } = await createRouterWithHardGate()
+    const { router } = await createRouterWithHardGate()
     await router.push('/app/new')
     dialogMocks.onDialogDismiss.mockResolvedValue(true)
 
