@@ -20,13 +20,14 @@ import { cloudlog } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
 import { sendNotifToOrgMembersCached } from './org_email_notifications.ts'
 import { closeClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDrizzleClient, getPgClient, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
+import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
 import { makeDevice } from './plugin_parser.ts'
 import { createStatsBandwidth, createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from './plugin_stats.ts'
 import { getClientIP } from './rate_limit.ts'
 import { s3 } from './s3.ts'
 import { shouldQueuePluginNotifications } from './supabase_write_guard.ts'
 import { isUpdateEnumerationLimited, recordUpdateEnumerationMiss, updateEnumerationLimitedResponse } from './updateOracleGuard.ts'
-import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
+import { canServeUpToDateFromCache, getUpdateReadCache, setUpdateReadCache } from './updateReadCache.ts'
 import { backgroundTask, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, fixSemver, isDeprecatedPluginVersion, isInternalVersionName, isVersionDeleted } from './utils.ts'
 
 const PLAN_LIMIT: Array<'mau' | 'bandwidth' | 'storage'> = ['mau', 'bandwidth']
@@ -566,6 +567,26 @@ export async function updateWithPG(
     return updateError200(c, 'null_channel_data', 'channel data still null')
   }
 
+  if (
+    !channelOverride
+    && !channelSelfOverride
+    && appOwner.plan_valid
+    && (appOwner.channel_device_count ?? 0) === 0
+    && (appOwner.rollout_channel_count ?? 0) === 0
+    && channelData.version?.name
+    && (isInternalVersionName(channelData.version.name) || !isVersionDeleted(channelData.version))
+  ) {
+    void setUpdateReadCache(c, {
+      appId: app_id,
+      platform,
+      defaultChannel: defaultChannel ?? '',
+    }, {
+      ownerOrg: appOwner.owner_org,
+      allowDeviceCustomId: Boolean(appOwner.allow_device_custom_id),
+      versionName: channelData.version.name,
+    })
+  }
+
   const version = channelOverride?.version ?? channelData.version
   let manifestEntries = (channelOverride?.manifestEntries ?? channelData?.manifestEntries ?? []) as Partial<Database['public']['Tables']['manifest']['Row']>[]
   const updatePackage = resolveChannelUpdatePackage(
@@ -909,6 +930,20 @@ export async function update(c: Context, body: AppInfos) {
     const providerBlockedResponse = await providerInfrastructureBlockResponse(c, appStatus.block_provider_infra_requests)
     if (providerBlockedResponse)
       return providerBlockedResponse
+  }
+  if (appStatus.cacheHit && appStatus.status === 'cloud') {
+    const cachedRead = await getUpdateReadCache(c, {
+      appId: body.app_id,
+      platform: body.platform,
+      defaultChannel: body.defaultChannel ?? '',
+    })
+    if (cachedRead && canServeUpToDateFromCache(body, cachedRead, hasChannelSelfStoreBinding(c))) {
+      const device = makeDevice(body, cachedRead.allowDeviceCustomId)
+      await setAppStatus(c, body.app_id, 'cloud', cachedRead.allowDeviceCustomId, appStatus.block_provider_infra_requests)
+      await backgroundTask(c, createStatsMau(c, body.device_id, body.app_id, cachedRead.ownerOrg, body.platform, body.version_build))
+      await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: cachedRead.versionName }])
+      return updateError200(c, 'no_new_version_available', 'No new version available')
+    }
   }
   const startPgClient = performance.now()
   const pgClient = await getPgClient(c, true)

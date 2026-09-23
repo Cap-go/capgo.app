@@ -153,12 +153,23 @@ WITH requested AS MATERIALIZED (
 )`
 
 const MANIFEST_SIZE_FILE_VERSION_BRANCH = `
+, allowed_versions AS MATERIALIZED (
+  SELECT av.id
+  FROM (
+    SELECT DISTINCT version_id
+    FROM requested
+    WHERE version_id IS NOT NULL
+  ) ids
+  INNER JOIN LATERAL (
+    SELECT id, app_id, deleted
+    FROM public.app_versions
+    WHERE id = ids.version_id
+    OFFSET 0
+  ) av ON av.app_id = $2 AND av.deleted = false
+)
 SELECT r.file_hash, av.id AS version_id, MAX(m.file_size) AS file_size
 FROM requested r
-INNER JOIN public.app_versions av
-  ON av.id = r.version_id
- AND av.app_id = $2
- AND av.deleted = false
+INNER JOIN allowed_versions av ON av.id = r.version_id
 INNER JOIN public.manifest m
   ON m.app_version_id = av.id
  AND m.file_hash = r.file_hash
@@ -168,14 +179,18 @@ GROUP BY r.file_hash, av.id`
 const MANIFEST_SIZE_FALLBACK_ID_BRANCH = `
 SELECT r.file_hash, av.id AS version_id, MAX(m.file_size) AS file_size
 FROM requested r
-INNER JOIN public.app_versions av
-  ON av.id = $3
- AND av.app_id = $2
- AND av.deleted = false
+CROSS JOIN (
+  SELECT id, app_id, deleted
+  FROM public.app_versions
+  WHERE id = $3
+  OFFSET 0
+) av
 INNER JOIN public.manifest m
   ON m.app_version_id = av.id
  AND m.file_hash = r.file_hash
 WHERE r.version_id IS NULL
+  AND av.app_id = $2
+  AND av.deleted = false
 GROUP BY r.file_hash, av.id`
 
 const MANIFEST_SIZE_FALLBACK_NAME_BRANCH = `
