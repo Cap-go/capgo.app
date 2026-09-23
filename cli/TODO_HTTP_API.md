@@ -2,9 +2,9 @@
 
 ## Missing endpoints (block full supabase-js removal)
 
-- [ ] GET/POST private/cli identity (`get_user_id` / `request_actor_user_id` + 2FA flags)
-- [ ] POST private/cli/check-permission (`cli_check_permission` / `assertCliPermission` / `hasCliPermission`)
-- [ ] GET organization v7-enriched fields (`get_orgs_v7` / rich org list with plan + warnings)
+- [x] GET private/cli/identity (`request_actor_user_id` + email + 2FA flags)
+- [x] POST private/cli/check-permission (`cli_check_permission` / `assertCliPermission` / `hasCliPermission`)
+- [x] GET private/cli/organizations (`get_orgs_v7` / rich org list with plan + warnings)
 - [ ] Billing/entitlement RPCs (`is_paying_org`, `is_trial_org`, `has_usage_credits_org`, `is_allowed_action_org*`, `checkPlanValid`)
 - [ ] 2FA member/org access RPCs (`reject_access_due_to_2fa_*`, `check_org_members_2fa_enabled`, `has_2fa_enabled`)
 - [ ] Password policy member status RPC (`check_org_members_password_policy`)
@@ -31,13 +31,13 @@
 
 ## Still on supabase-js (file references)
 
-- `cli/src/utils.ts` — `resolveUserIdFromApiKey`, `hasCliPermission` / `assertCliPermission`, `checkPlanValid`, `updateOrCreateChannel` fallback, storage helpers
+- `cli/src/utils.ts` — `checkPlanValid`, `updateOrCreateChannel` fallback, storage helpers
 - `cli/src/api/app.ts` — `check2FAComplianceForApp` (`reject_access_due_to_2fa_for_app`)
 - `cli/src/channel/currentBundle.ts` — channel row + `get_channel_current_bundle_rbac`
 - `cli/src/app/set.ts` — icon storage upload; `allow_preview` / `build_timeout_seconds` / `default_upload_channel`; download-channel helpers
 - `cli/src/app/delete.ts` — user-scoped storage cleanup
 - `cli/src/app/add.ts` — icon storage upload; org permission RPCs
-- `cli/src/organization/set.ts` — org security field reads + 2FA/password RPCs (writes already HTTP)
+- `cli/src/organization/set.ts` — org security field reads + 2FA/password RPCs (writes already HTTP; permission checks now HTTP)
 - `cli/src/organization/members.ts` — org security settings select + 2FA/password RPCs (member list HTTP)
 - `cli/src/bundle/upload.ts` — version upsert / finalize / encryption writes
 - `cli/src/bundle/compatibility.ts` — native package reads when not using HTTP bundle payload

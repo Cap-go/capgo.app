@@ -3,6 +3,7 @@ import { app as admin_credits } from '../_backend/private/admin_credits.ts'
 import { app as admin_org_support_channel } from '../_backend/private/admin_org_support_channel.ts'
 import { app as admin_stats } from '../_backend/private/admin_stats.ts'
 import { app as bundle_install_stats } from '../_backend/private/bundle_install_stats.ts'
+import { app as cli } from '../_backend/private/cli/index.ts'
 import { app as channel_device } from '../_backend/private/channel_device.ts'
 import { app as channel_stats } from '../_backend/private/channel_stats.ts'
 import { app as config } from '../_backend/private/config.ts'
@@ -60,6 +61,7 @@ appGlobal.route('/plans', plans)
 appGlobal.route('/credits', credits)
 appGlobal.route('/store_top', storeTop)
 appGlobal.route('/website_stats', publicStats)
+appGlobal.route('/cli', cli)
 appGlobal.route('/config', config)
 appGlobal.route('/config/builder', configBuilder)
 appGlobal.route('/devices', devices_priv)

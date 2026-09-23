@@ -44,8 +44,11 @@ export async function deleteOrganizationInternal(
     enrichedOptions.supaHost,
     enrichedOptions.supaAnon,
   )
-  // TODO(cli-http): assertOrgPermission still uses rpc(cli_check_permission)
-  await assertOrgPermission(supabase, enrichedOptions.apikey, 'org.delete', orgId, `Insufficient permissions to delete organization ${orgId}`, silent)
+  const httpOptions = {
+    supaHost: enrichedOptions.supaHost,
+    supaAnon: enrichedOptions.supaAnon,
+  }
+  await assertOrgPermission(supabase, enrichedOptions.apikey, 'org.delete', orgId, `Insufficient permissions to delete organization ${orgId}`, silent, httpOptions)
 
   // TODO(cli-http): check2FAAccessForOrg still uses reject_access_due_to_2fa RPCs
   await check2FAAccessForOrg(supabase, orgId, silent)
