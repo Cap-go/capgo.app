@@ -195,7 +195,7 @@ export async function checkPermission(
 
   let pgClient
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
 
     if (auth.authType === 'apikey' && apikey?.rbac_id) {

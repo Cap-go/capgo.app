@@ -71,7 +71,7 @@ export async function getFrontendOnboardingCliChecklistCoverage(
   if (appIds.length === 0)
     return buildCoverages([])
 
-  const pgClient = getPgClient(c, true)
+  const pgClient = await getPgClient(c, true)
   try {
     const rows = await getDrizzleClient(pgClient)
       .select({ appId: schema.apps.app_id, onboarding: schema.apps.onboarding })

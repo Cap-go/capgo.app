@@ -206,7 +206,7 @@ app.post('/', middlewareAPISecret, async (c) => {
 
       // Send failure notification via Bento (webhook already fetched above)
       if (webhook) {
-        const pgClient = getPgClient(c, true)
+        const pgClient = await getPgClient(c, true)
         const drizzleClient = getDrizzleClient(pgClient)
         try {
           await backgroundTask(c, sendNotifOrg(

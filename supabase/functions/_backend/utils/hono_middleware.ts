@@ -5,7 +5,7 @@ import { and, eq, isNull, or, sql } from 'drizzle-orm'
 import { honoFactory, quickError, simpleRateLimit } from './hono.ts'
 import { getClaimsFromJWT } from './hono_jwt.ts'
 import { cloudlog } from './logging.ts'
-import { closeClient, getDrizzleClient, getPgClient, logPgError } from './pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, logPgError} from './pg.ts'
 import * as schema from './postgres_schema.ts'
 import { isAPIKeyRateLimited, isIPRateLimited, recordAPIKeyUsage, recordFailedAuth } from './rate_limit.ts'
 import { buildRateLimitInfo } from './rateLimitInfo.ts'
@@ -236,9 +236,9 @@ async function hasLimitedRbacSubkeyScope(
   if (!subkey.rbac_id)
     return false
 
-  let pgClient: ReturnType<typeof getPgClient> | null = null
+  let pgClient: PgClient | null = null
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const result = await pgClient.query<{ is_limited: boolean }>(
       `
       WITH user_orgs AS (
@@ -390,9 +390,9 @@ async function parentCanDelegateToSubkey(
     return true
   }
 
-  let pgClient: ReturnType<typeof getPgClient> | null = null
+  let pgClient: PgClient | null = null
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const result = await pgClient.query<{ can_delegate: boolean }>(
       `
       WITH RECURSIVE child_direct_bindings AS (
@@ -647,9 +647,9 @@ async function resolveApiKey(
     return checkKey(c, key, supabaseAdmin(c))
   }
 
-  let pgClient: ReturnType<typeof getPgClient> | null = null
+  let pgClient: PgClient | null = null
   try {
-    pgClient = getPgClient(c, readOnly)
+    pgClient = await getPgClient(c, readOnly)
     const drizzleClient = getDrizzleClient(pgClient)
     return await checkKeyPg(c, key, drizzleClient)
   }
@@ -671,9 +671,9 @@ async function resolveSubkey(
     return checkKeyById(c, subkeyId, supabaseAdmin(c), expectedUserId)
   }
 
-  let subkeyPgClient: ReturnType<typeof getPgClient> | null = null
+  let subkeyPgClient: PgClient | null = null
   try {
-    subkeyPgClient = getPgClient(c, readOnly)
+    subkeyPgClient = await getPgClient(c, readOnly)
     const drizzleClient = getDrizzleClient(subkeyPgClient)
     return await checkKeyByIdPg(c, subkeyId, drizzleClient, expectedUserId)
   }

@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { HTTPException } from 'hono/http-exception'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
-import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { closeClient, getPgClient} from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { createSignedImageUrl, getStorageAllowedOrigins, resolveWritableImageValue } from '../../utils/storage.ts'
 import { getStripeCustomerName, isDeterministicStripeCustomerUpdateError, updateCustomerOrganizationName } from '../../utils/stripe.ts'
@@ -271,7 +271,7 @@ async function sanitizeOrgNameForSync(
   name: string,
 ) {
   // Direct SQL avoids Kong/PostgREST upstream flakes under parallel test load.
-  const pgPool = getPgClient(c)
+  const pgPool = await getPgClient(c)
   let client: PgTransactionClient | null = null
   try {
     client = await pgPool.connect() as PgTransactionClient
@@ -320,12 +320,12 @@ async function updateOrg(
   updateFields: OrgUpdateFields,
   options?: { expectedCurrentName?: string, expectedCurrentFields?: OrgUpdateFields },
 ) {
-  let pgPool: ReturnType<typeof getPgClient> | null = null
+  let pgPool: PgClient | null = null
   let dbClient: PgTransactionClient | null = null
   let transactionStarted = false
   let data: OrgRow | undefined
   try {
-    pgPool = getPgClient(c)
+    pgPool = await getPgClient(c)
     dbClient = await pgPool.connect() as PgTransactionClient
     await dbClient.query('BEGIN')
     transactionStarted = true
@@ -395,7 +395,7 @@ async function getOrgForNameSync(
   orgId: string,
 ): Promise<OrgRow> {
   // Direct SQL avoids Kong/PostgREST upstream flakes under parallel test load.
-  const pgPool = getPgClient(c)
+  const pgPool = await getPgClient(c)
   let client: PgTransactionClient | null = null
   try {
     client = await pgPool.connect() as PgTransactionClient

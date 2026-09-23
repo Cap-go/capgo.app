@@ -74,7 +74,7 @@ app.post('/', middlewareAPISecret, async (c) => {
   if (!body.orgId)
     throw simpleError('no_orgId', 'No orgId', { body })
 
-  const pgClient = getPgClient(c, true)
+  const pgClient = await getPgClient(c, true)
   const drizzleClient = getDrizzleClient(pgClient)
   try {
     const { error, attempts } = await syncSubscriptionAndEventsWithRetry(c, body.orgId, drizzleClient)

@@ -252,7 +252,7 @@ async function readAssignmentUser(
   c: Context<MiddlewareKeyVariables>,
   userId: string,
 ): Promise<AssignmentUser | undefined> {
-  const pgPool = getPgClient(c, true)
+  const pgPool = await getPgClient(c, true)
   try {
     const pgClient = await pgPool.connect()
     try {
@@ -283,7 +283,7 @@ async function persistABTestAssignments(
   userId: string,
   candidates: Record<string, ABTestAssignment>,
 ) {
-  const pgPool = getPgClient(c)
+  const pgPool = await getPgClient(c)
   let persisted: unknown
   try {
     const pgClient = await pgPool.connect()
@@ -511,7 +511,7 @@ export async function getOrCreateUserABTests(
       return existing.assignments
   }
 
-  const pgPool = getPgClient(c, false)
+  const pgPool = await getPgClient(c, false)
   let closeInFinally = true
   let result: {
     assignments: Record<string, ABTestAssignment>

@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import { isBentoConfigured, trackBentoEvents } from './bento.ts'
 import { isFrontendOnboardingVersionLabel } from './frontend_onboarding_analytics_model.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
-import { closeClient, getPgClient } from './pg.ts'
+import { closeClient, getPgClient} from './pg.ts'
 import { backgroundTask } from './utils.ts'
 
 export type TelemetryValue = string | number | boolean
@@ -385,9 +385,9 @@ async function persistUserBentoObservation(
   userId: string,
   observation: MappedUserBentoEvent,
 ): Promise<boolean> {
-  let pool: ReturnType<typeof getPgClient> | undefined
+  let pool: PgClient | undefined
   try {
-    pool = getPgClient(c)
+    pool = await getPgClient(c)
     const client = await pool.connect()
     let transactionOpen = false
     let rollbackError: Error | undefined
@@ -465,9 +465,9 @@ export async function deliverPendingUserBentoEvents(
   if (!isBentoConfigured(c))
     return false
 
-  let pool: ReturnType<typeof getPgClient> | undefined
+  let pool: PgClient | undefined
   try {
-    pool = getPgClient(c)
+    pool = await getPgClient(c)
     const client = await pool.connect()
     let transactionOpen = false
     let rollbackError: Error | undefined
@@ -573,11 +573,11 @@ export async function recordUserBentoEvent(
     return
 
   try {
-    let fastPool: ReturnType<typeof getPgClient> | undefined
+    let fastPool: PgClient | undefined
     let fastEmail: string | undefined
     let fastState: StoredUserBentoEvents
     try {
-      fastPool = getPgClient(c)
+      fastPool = await getPgClient(c)
       const result = await fastPool.query<{ email: string, onboarding: unknown }>(FAST_STATE_SQL, [input.userId])
       fastEmail = result.rows[0]?.email
       fastState = parseUserBentoEvents(result.rows[0]?.onboarding)

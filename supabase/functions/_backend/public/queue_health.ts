@@ -1,6 +1,6 @@
 import { honoFactory, useCors } from '../utils/hono.ts'
 import { cloudlogErr } from '../utils/logging.ts'
-import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
+import { closeClient, getPgClient, logPgError} from '../utils/pg.ts'
 import { validatePlatformAdminOrApiSecret } from '../utils/platform_admin_access.ts'
 
 type QueueStatus = 'ok' | 'ko'
@@ -292,7 +292,7 @@ function defaultThresholds(): QueueHealthThresholds {
   }
 }
 
-async function listQueues(client: ReturnType<typeof getPgClient>): Promise<string[]> {
+async function listQueues(client: PgClient): Promise<string[]> {
   const { rows } = await client.query<{ queue_name: string }>(
     'SELECT queue_name FROM pgmq.list_queues() ORDER BY queue_name',
   )
@@ -301,7 +301,7 @@ async function listQueues(client: ReturnType<typeof getPgClient>): Promise<strin
     .filter((name): name is string => typeof name === 'string' && isSafeQueueName(name))
 }
 
-async function loadQueueIntervals(client: ReturnType<typeof getPgClient>): Promise<Map<string, number>> {
+async function loadQueueIntervals(client: PgClient): Promise<Map<string, number>> {
   const { rows } = await client.query<{
     task_type: string
     target: unknown
@@ -329,7 +329,7 @@ async function loadQueueIntervals(client: ReturnType<typeof getPgClient>): Promi
 }
 
 async function fetchQueueMetrics(
-  client: ReturnType<typeof getPgClient>,
+  client: PgClient,
   queueName: string,
   expectedIntervalSeconds: number | null,
   thresholds: QueueHealthThresholds,
@@ -462,7 +462,7 @@ app.get('/', async (c) => {
   })
 
   const thresholds = defaultThresholds()
-  const pgClient = getPgClient(c, false)
+  const pgClient = await getPgClient(c, false)
 
   try {
     const queueNames = await listQueues(pgClient)

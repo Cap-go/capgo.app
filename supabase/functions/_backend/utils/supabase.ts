@@ -153,7 +153,7 @@ async function readDevicesSBSql(c: Context, params: ReadDevicesParams, customIdM
     ? `updated_at ${devicesOrder.ascending ? 'ASC' : 'DESC'}, device_id ASC`
     : 'device_id ASC'
   values.push(limit + 1)
-  const pgClient = getPgClient(c, true)
+  const pgClient = await getPgClient(c, true)
   try {
     const result = await pgClient.query(
       `SELECT * FROM public.devices WHERE ${where} ORDER BY ${orderBy} LIMIT $${values.length}`,
@@ -195,7 +195,7 @@ async function countDevicesSBSql(
     os_version_compare: options?.osVersionCompare,
     version_name_compare: options?.versionNameCompare,
   }, customIdMode)
-  const pgClient = getPgClient(c, true)
+  const pgClient = await getPgClient(c, true)
   try {
     const result = await pgClient.query<{ total: string }>(
       `SELECT COUNT(*)::text AS total FROM public.devices WHERE ${where}`,
@@ -332,7 +332,7 @@ export async function getAppsFromSB(c: Context, referenceDate?: Date): Promise<s
   }
 
   if (createdBeforeIso) {
-    const pgClient = getPgClient(c, false)
+    const pgClient = await getPgClient(c, false)
 
     try {
       page = 0
@@ -461,7 +461,7 @@ export async function apikeyHasOrgRight(c: Context, key: Database['public']['Tab
   if (!key.rbac_id)
     return false
 
-  const pgClient = getPgClient(c)
+  const pgClient = await getPgClient(c)
   try {
     const result = await pgClient.query<{ allowed: boolean }>(
       `
@@ -951,7 +951,7 @@ export async function createApiKey(c: Context, userId: string) {
     return
   }
 
-  const pgPool = getPgClient(c)
+  const pgPool = await getPgClient(c)
   let pgClient: PoolClient | undefined
   let inTransaction = false
   try {
@@ -1607,7 +1607,7 @@ export async function readStatsSB(c: Context, params: ReadStatsParams) {
 }
 
 export async function readStatsInsightsSB(c: Context, params: ReadStatsInsightsParams): Promise<StatsInsightsResult> {
-  const pgClient = getPgClient(c)
+  const pgClient = await getPgClient(c)
   const actionValues = params.actions?.length ? params.actions : []
   const versionName = params.version_name?.trim()
   const values: unknown[] = [params.app_id, params.start_date, params.end_date]

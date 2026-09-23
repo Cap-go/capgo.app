@@ -169,7 +169,7 @@ async function deletePreviewChannelAndBundle(
   apikey: Database['public']['Tables']['apikeys']['Row'],
 ) {
   const effectiveApikey = getEffectiveApikey(c, apikey)
-  const pgClient = getPgClient(c)
+  const pgClient = await getPgClient(c)
   let dbClient: PgQueryClient | null = null
   let transactionStarted = false
 

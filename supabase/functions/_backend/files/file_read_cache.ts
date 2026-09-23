@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import { getRuntimeKey } from 'hono/adapter'
 import { cloudlog } from '../utils/logging.ts'
-import { getDatabaseURL, getPgClient } from '../utils/pg.ts'
+import { getDatabaseURL, getPgClient, type PgClient } from '../utils/pg.ts'
 
 export const FILE_READ_TRACKING_QUERY_PARAMS = ['device_id'] as const
 export const DELETED_FILE_CACHE_HEADER = 'x-capgo-file-deleted'
@@ -119,13 +119,13 @@ export async function markFileDeletedInCache(fileId: string): Promise<void> {
   }))
 }
 
-let sharedDeletedLookupPool: ReturnType<typeof getPgClient> | null = null
+let sharedDeletedLookupPool: PgClient | null = null
 let sharedDeletedLookupPoolUrl: string | null = null
 
-function getDeletedLookupPgClient(c: Context): ReturnType<typeof getPgClient> {
+async function getDeletedLookupPgClient(c: Context): Promise<PgClient> {
   const dbUrl = getDatabaseURL(c, false)
   if (!sharedDeletedLookupPool || sharedDeletedLookupPoolUrl !== dbUrl) {
-    sharedDeletedLookupPool = getPgClient(c, false)
+    sharedDeletedLookupPool = await getPgClient(c, false)
     sharedDeletedLookupPoolUrl = dbUrl
   }
   return sharedDeletedLookupPool
@@ -192,7 +192,7 @@ export async function isAttachmentVersionDeleted(c: Context, fileId: string): Pr
     return false
 
   try {
-    const pgClient = getDeletedLookupPgClient(c)
+    const pgClient = await getDeletedLookupPgClient(c)
     const result = await pgClient.query<{ deleted: boolean | null, deleted_at: string | null }>(
       `
         SELECT deleted, deleted_at

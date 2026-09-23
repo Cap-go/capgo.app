@@ -3,7 +3,7 @@ import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import { createHono, quickError, useCors } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
-import { getPgClient } from '../../utils/pg.ts'
+import { getPgClient} from '../../utils/pg.ts'
 import { supabaseAdmin } from '../../utils/supabase.ts'
 import { version } from '../../utils/version.ts'
 
@@ -36,7 +36,7 @@ export const app = createHono('', version)
 app.use('*', useCors)
 app.use('*', middlewareAuth)
 
-async function findCanonicalAuthUserIdByEmail(pgClient: ReturnType<typeof getPgClient>, email: string, excludedUserId: string, trustedProviders: string[]): Promise<string | null> {
+async function findCanonicalAuthUserIdByEmail(pgClient: PgClient, email: string, excludedUserId: string, trustedProviders: string[]): Promise<string | null> {
   const result = await pgClient.query<{ id: string }>(
     `
       select au.id
@@ -127,7 +127,7 @@ function getAuthorizedSsoProviders(provider: SsoProviderRecord, authenticatedPro
   })
 }
 
-async function transferSsoIdentities(pgClient: ReturnType<typeof getPgClient>, originalUserId: string, duplicateUserId: string, trustedProviders: string[]): Promise<number> {
+async function transferSsoIdentities(pgClient: PgClient, originalUserId: string, duplicateUserId: string, trustedProviders: string[]): Promise<number> {
   const result = await pgClient.query(
     `
       update auth.identities
@@ -142,7 +142,7 @@ async function transferSsoIdentities(pgClient: ReturnType<typeof getPgClient>, o
   return result.rowCount ?? 0
 }
 
-async function setAuthUserSsoOnly(pgClient: ReturnType<typeof getPgClient>, userId: string, authorizedSsoProviders: string[]): Promise<void> {
+async function setAuthUserSsoOnly(pgClient: PgClient, userId: string, authorizedSsoProviders: string[]): Promise<void> {
   const primarySsoProvider = authorizedSsoProviders[0]
   if (!primarySsoProvider) {
     throw new Error('missing_sso_provider')
@@ -192,7 +192,7 @@ function buildPublicUserSeed(userId: string, email: string, userMetadata: Record
 }
 
 async function ensureOrgMembership(
-  pgClient: ReturnType<typeof getPgClient>,
+  pgClient: PgClient,
   requestId: string,
   userId: string,
   orgId: string,
@@ -266,7 +266,7 @@ async function ensurePublicUserRowExists(
 }
 
 async function ensurePublicUserRowExistsInTransaction(
-  pgClient: ReturnType<typeof getPgClient>,
+  pgClient: PgClient,
   requestId: string,
   user: PublicUserSeed,
 ): Promise<void> {
@@ -289,7 +289,7 @@ async function ensurePublicUserRowExistsInTransaction(
 }
 
 async function ensureOrgMembershipInTransaction(
-  pgClient: ReturnType<typeof getPgClient>,
+  pgClient: PgClient,
   requestId: string,
   userId: string,
   orgId: string,
@@ -447,7 +447,7 @@ async function ensureOrgMembershipInTransaction(
 }
 
 async function mergeSsoIdentityWithExistingAccount(
-  pgClient: ReturnType<typeof getPgClient>,
+  pgClient: PgClient,
   requestId: string,
   params: {
     originalUserId: string
@@ -511,9 +511,9 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
   }
 
   const admin = supabaseAdmin(c)
-  let pgClient: ReturnType<typeof getPgClient> | undefined
-  const getSharedPgClient = () => {
-    pgClient ??= getPgClient(c)
+  let pgClient: PgClient | undefined
+  const getSharedPgClient = async () => {
+    pgClient ??= await getPgClient(c)
     return pgClient
   }
 
@@ -563,7 +563,7 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
     // so a pre-signup cannot become the merge target.
     let resolvedExistingUserId: string | null = null
     try {
-      resolvedExistingUserId = await findCanonicalAuthUserIdByEmail(getSharedPgClient(), userEmail, userId, trustedSsoProviders)
+      resolvedExistingUserId = await findCanonicalAuthUserIdByEmail(await getSharedPgClient(), userEmail, userId, trustedSsoProviders)
       if (resolvedExistingUserId) {
         cloudlog({ requestId, message: 'Canonical pre-existing auth account found — will merge SSO identity after provider authorization', userId, originalUserId: resolvedExistingUserId, email: userEmail })
       }
@@ -608,7 +608,7 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
 
       // Step 2: Transfer the SSO identity and provision the merged account atomically.
       try {
-        await mergeSsoIdentityWithExistingAccount(getSharedPgClient(), requestId, {
+        await mergeSsoIdentityWithExistingAccount(await getSharedPgClient(), requestId, {
           originalUserId,
           duplicateUserId: userId,
           publicUser: {
@@ -683,7 +683,7 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
 
     let membershipResult: EnsureOrgMembershipResult
     try {
-      membershipResult = await ensureOrgMembership(getSharedPgClient(), requestId, userId, provider.org_id)
+      membershipResult = await ensureOrgMembership(await getSharedPgClient(), requestId, userId, provider.org_id)
     }
     catch {
       return quickError(500, 'provision_failed', 'Failed to provision user to organization')

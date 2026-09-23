@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../../utils/logging.ts'
-import { closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
+import { closeClient, getPgClient, logPgError} from '../../utils/pg.ts'
 import { sendEventToTracking } from '../../utils/tracking.ts'
 import { getEnv, trimTrailingSlashes } from '../../utils/utils.ts'
 
@@ -211,11 +211,11 @@ export async function assertNativeBuildConcurrencyAvailable(
   c: Context,
   input: { orgId: string, appId: string, userId?: string | null },
 ): Promise<NativeBuildConcurrencyState> {
-  let pgPool: ReturnType<typeof getPgClient> | null = null
+  let pgPool: PgClient | null = null
   let client: PgClient | null = null
 
   try {
-    pgPool = getPgClient(c, true)
+    pgPool = await getPgClient(c, true)
     client = await pgPool.connect() as PgClient
     const { planName, limit } = await readPlanConcurrencyLimit(client, input.orgId)
     const activeBuilds = await countActiveNativeBuilds(client, input.orgId)
@@ -248,11 +248,11 @@ export async function reserveNativeBuildSlot(
 ): Promise<NativeBuildSlotReservation> {
   let planName: string
   let limit: number
-  let pgPool: ReturnType<typeof getPgClient> | null = null
+  let pgPool: PgClient | null = null
   let client: PgClient | null = null
 
   try {
-    pgPool = getPgClient(c)
+    pgPool = await getPgClient(c)
     client = await pgPool.connect() as PgClient
     await client.query('BEGIN')
 

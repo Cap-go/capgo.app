@@ -40,7 +40,7 @@ async function persistAppOnboarding(
   transactionClient?: PoolClient,
   completePendingOnboarding = false,
 ) {
-  const pool = transactionClient ? null : getPgClient(c)
+  const pool = transactionClient ? null : await getPgClient(c)
   try {
     const drizzle = getDrizzleClient(transactionClient ?? pool!)
     return await drizzle.transaction(async (tx) => {

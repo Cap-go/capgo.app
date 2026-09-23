@@ -61,7 +61,7 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
   let pgClient
   let data: Database['public']['Tables']['apps']['Row'] | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const storedCreator = auth.claims?.email
       ? undefined
       : await pgClient.query<{ email: string }>('SELECT email FROM public.users WHERE id = $1 LIMIT 1', [auth.userId])

@@ -91,7 +91,7 @@ export async function getAdminABTestDevelopmentEnvironment(c: Context): Promise<
   hosted_builder_intents: AdminABTestDevelopmentEnvironmentIntent
   development_environment_intents: Record<AdminABTestDevelopmentEnvironmentOutcomeName, AdminABTestDevelopmentEnvironmentIntent>
 }> {
-  const pgClient = getPgClient(c, true)
+  const pgClient = await getPgClient(c, true)
   try {
     const test = AB_TESTS_CONFIG[DEVELOPMENT_ENVIRONMENT_TEST]
     if (!test)

@@ -3,7 +3,7 @@ import type { MiddlewareKeyVariables } from './hono.ts'
 import type { Database } from './supabase.types.ts'
 import { syncBentoSubscriberTags, trackBentoEvent, unsubscribeBento } from './bento.ts'
 import { quickError } from './hono.ts'
-import { closeClient, getPgClient } from './pg.ts'
+import { closeClient, getPgClient} from './pg.ts'
 
 export const BENTO_AWAITING_FIRST_ORG_TAG = 'onboarding:awaiting_first_org'
 // Permanent safety opt-out: never remove this tag. The Bento recovery workflow
@@ -154,7 +154,7 @@ export async function suppressAndUnsubscribeDeletedUserRecovery(
 
 async function reconcileFirstOrgStateAfterBentoMutation(
   c: Context,
-  pgPool: ReturnType<typeof getPgClient>,
+  pgPool: PgClient,
   userId: string,
   email: string,
 ) {
@@ -166,7 +166,7 @@ async function reconcileFirstOrgStateAfterBentoMutation(
 
 async function runBentoMutationWithFirstOrgReconciliation(
   c: Context,
-  pgPool: ReturnType<typeof getPgClient>,
+  pgPool: PgClient,
   userId: string,
   email: string,
   mutate: () => Promise<void>,
@@ -201,7 +201,7 @@ async function runBentoMutationWithFirstOrgReconciliation(
   return state
 }
 
-async function getFirstOrgDatabaseState(pgPool: ReturnType<typeof getPgClient>, userId: string) {
+async function getFirstOrgDatabaseState(pgPool: PgClient, userId: string) {
   const pgClient = await pgPool.connect()
   try {
     const result = await pgClient.query<FirstOrgRegistrationState>(
@@ -246,7 +246,7 @@ export async function prepareNewUserProvisioning(
   user: Database['public']['Tables']['users']['Row'],
 ) {
   const email = normalizeBentoEmail(user.email)
-  const pgPool = getPgClient(c)
+  const pgPool = await getPgClient(c)
   try {
     const state = await getFirstOrgDatabaseState(pgPool, user.id)
     if (!state.user_is_recovery_eligible) {
@@ -265,7 +265,7 @@ export async function syncBentoFirstOrgOnUserCreate(
   user: Database['public']['Tables']['users']['Row'],
 ) {
   const email = normalizeBentoEmail(user.email)
-  const pgPool = getPgClient(c)
+  const pgPool = await getPgClient(c)
   try {
     // Provisioning can overlap account deletion. Read before lifecycle work
     // and reconcile after each terminal mutation so recovery stays fail closed.
@@ -341,7 +341,7 @@ export async function syncBentoFirstOrgOnRoleBindingWrite(
   c: Context<MiddlewareKeyVariables>,
   roleBindingId: string,
 ) {
-  const pgPool = getPgClient(c)
+  const pgPool = await getPgClient(c)
   try {
     let binding: CurrentRoleBinding | undefined
     const pgClient = await pgPool.connect()

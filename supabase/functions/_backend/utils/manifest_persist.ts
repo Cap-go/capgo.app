@@ -85,7 +85,7 @@ export async function persistVersionManifestEntries(
     return { inserted: 0, alreadyPresent: false }
   }
 
-  const pgPool = getPgClient(c, false)
+  const pgPool = await getPgClient(c, false)
   const pgClient = await pgPool.connect()
   try {
     await pgClient.query('BEGIN')

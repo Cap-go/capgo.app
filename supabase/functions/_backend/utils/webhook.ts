@@ -792,7 +792,7 @@ export async function queueWebhookDelivery(
     },
   }
 
-  const db = getPgClient(c)
+  const db = await getPgClient(c)
   try {
     await db.query(
       'SELECT pgmq.send($1, $2::jsonb)',
@@ -835,7 +835,7 @@ export async function queueWebhookDeliveryWithDelay(
     },
   }
 
-  const db = getPgClient(c)
+  const db = await getPgClient(c)
   try {
     // pgmq.send with delay parameter
     await db.query(

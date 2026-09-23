@@ -195,7 +195,7 @@ async function ensureOrgMembership(
   userId: string,
   invitation: any,
 ) {
-  const pgPool = getPgClient(c, false)
+  const pgPool = await getPgClient(c, false)
   let pgClient: PoolClient | null = null
   let transactionStarted = false
 

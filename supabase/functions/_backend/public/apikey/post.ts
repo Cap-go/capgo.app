@@ -7,7 +7,7 @@ import { getErrorStatus } from '../../utils/errors.ts'
 import { honoFactory, parseBody, quickError, simpleError } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_middleware.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
-import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient} from '../../utils/pg.ts'
 import { checkPermissionPg } from '../../utils/rbac.ts'
 import { assertExpirationMatchesOrgPolicies, validateExpirationDate } from '../../utils/supabase.ts'
 import { parseApiKeyGlobalPermissions, replaceApiKeyGlobalPermissions, validateApiKeyGlobalPermissionsForBindings } from './global_permissions.ts'
@@ -140,9 +140,9 @@ app.post('/', middlewareAuth(), async (c) => {
 
   let apikeyData: ApiKeyRow | null = null
 
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzle = getDrizzleClient(pgClient)
     const createdBindings: unknown[] = []
     const callerPrincipalId = auth.userId

@@ -4,7 +4,7 @@ import type { Database } from '../../utils/supabase.types.ts'
 import { HTTPException } from 'hono/http-exception'
 import { throwIfChannelUpdatePackageMismatch } from '../../utils/channel_update_package.ts'
 import { simpleError } from '../../utils/hono.ts'
-import { closeClient, getDrizzleClient, getPgClient, logPgError } from '../../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, logPgError} from '../../utils/pg.ts'
 import { checkPermissionPg } from '../../utils/rbac.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
@@ -98,7 +98,7 @@ export async function assertCanPromoteChannelInTransaction(
   dbClient: PgQueryClient,
   checkAppScope = false,
 ) {
-  const drizzle = getDrizzleClient(dbClient as unknown as ReturnType<typeof getPgClient>) as DrizzleClient
+  const drizzle = getDrizzleClient(dbClient as unknown as PgClient) as DrizzleClient
   const canPromote = await checkPermissionPg(
     c,
     'channel.promote_bundle',
@@ -145,7 +145,7 @@ export async function setChannelInTransaction(
 }
 
 export async function setChannel(c: Context<MiddlewareKeyVariables>, body: SetChannelBody, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
-  const pgClient = getPgClient(c)
+  const pgClient = await getPgClient(c)
   let dbClient: PgQueryClient | null = null
   let transactionStarted = false
   let result: SetChannelResult | null = null

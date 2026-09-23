@@ -72,7 +72,7 @@ export async function getAdminABTestDistribution(c: Context): Promise<AdminABTes
   if (testNames.length === 0)
     return []
 
-  const pgClient = getPgClient(c, true)
+  const pgClient = await getPgClient(c, true)
   try {
     const result = await pgClient.query<AdminABTestDistributionRow>(
       `SELECT

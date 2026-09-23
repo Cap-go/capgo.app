@@ -897,7 +897,7 @@ async function checkWriteAppAccess(c: Context, next: Next) {
   })
 
   // Use Postgres instead of Supabase SDK
-  const pgClient = getPgClient(c, false) // authz + plan gating must read primary
+  const pgClient = await getPgClient(c, false) // authz + plan gating must read primary
   const drizzleClient = getDrizzleClient(pgClient)
 
   try {

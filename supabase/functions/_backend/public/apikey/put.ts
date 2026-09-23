@@ -9,7 +9,7 @@ import { getErrorCode, getErrorStatus } from '../../utils/errors.ts'
 import { honoFactory, parseBody, quickError, simpleError } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_middleware.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
-import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient} from '../../utils/pg.ts'
 import { schema } from '../../utils/postgres_schema.ts'
 import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { supabaseAdmin, supabaseWithAuth, validateExpirationAgainstOrgPolicies, validateExpirationDate } from '../../utils/supabase.ts'
@@ -98,9 +98,9 @@ async function replaceApiKeyBindings(
     }
   }
 
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzle = getDrizzleClient(pgClient)
     if (globalPermissions !== undefined) {
       validateApiKeyGlobalPermissionsForBindings(globalPermissions, bindings, c.get('requestId'))
@@ -219,9 +219,9 @@ async function replaceApiKeyGlobalPermissionsForExistingBindings(
     }
   }
 
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzle = getDrizzleClient(pgClient)
 
     await drizzle.transaction(async (tx) => {

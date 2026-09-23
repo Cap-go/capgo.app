@@ -5,7 +5,7 @@ import { Hono } from 'hono/tiny'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
-import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient} from '../utils/pg.ts'
 import { schema } from '../utils/postgres_schema.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { createStatsDevices } from '../utils/stats.ts'
@@ -43,9 +43,9 @@ app.post('/', middlewareAuth(), async (c) => {
   const normalizedOrgId = safeBody.org_id.toLowerCase()
 
   let appOwnerOrg: string | null = null
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const appResult = await drizzleClient
       .select({ ownerOrg: schema.apps.owner_org })

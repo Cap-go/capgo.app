@@ -179,7 +179,7 @@ describe('plugin Supabase write policy', () => {
   it.concurrent('fails closed instead of falling back from read replica to primary', async () => {
     const { getPgClient } = await import('../supabase/functions/_backend/utils/pg.ts')
 
-    expect(() => getPgClient(createPluginPolicyContext(), true)).toThrow('Read replica is required for this endpoint')
+    await expect(getPgClient(createPluginPolicyContext(), true)).rejects.toThrow('Read replica is required for this endpoint')
   })
 
   it('skips direct Hyperdrive fallback in plugin policy contexts', async () => {

@@ -380,7 +380,7 @@ export async function loadPlansBillingHistories(
   if (orgIds.length === 0)
     return new Map()
 
-  const pool = getPgClient(c, true)
+  const pool = await getPgClient(c, true)
   let client: PoolClient | undefined
 
   try {

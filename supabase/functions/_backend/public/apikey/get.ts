@@ -34,7 +34,7 @@ async function withGlobalPermissions<T extends { rbac_id: string | null }>(
 
   let pgClient
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const { rows } = await pgClient.query<{ apikey_rbac_id: string, permission_key: string }>(
       `SELECT apikey_rbac_id::text, permission_key
        FROM public.apikey_global_permissions

@@ -78,7 +78,7 @@ export async function post(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown,
   // invite_user_to_org_rbac via Postgres (not service-role Supabase SDK) after
   // revoking anon execute. Mirrors organization/post.ts: BEGIN before
   // set_config(..., true) so capgkey survives until the RPC runs.
-  const pgPool = getPgClient(c)
+  const pgPool = await getPgClient(c)
   let dbClient: PgTransactionClient | null = null
   let transactionStarted = false
   try {

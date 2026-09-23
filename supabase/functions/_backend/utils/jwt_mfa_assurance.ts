@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { AuthInfo, JWTClaims, MiddlewareKeyVariables } from './hono.ts'
 import { quickError } from './hono.ts'
-import { closeClient, getPgClient } from './pg.ts'
+import { closeClient, getPgClient} from './pg.ts'
 
 const SESSION_ID_UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -22,9 +22,9 @@ async function userHasVerifiedMfaFactors(
   c: Context<MiddlewareKeyVariables>,
   userId: string,
 ): Promise<boolean> {
-  let pgClient: ReturnType<typeof getPgClient> | null = null
+  let pgClient: PgClient | null = null
   try {
-    pgClient = getPgClient(c, true)
+    pgClient = await getPgClient(c, true)
     const result = await pgClient.query<{ has_verified_mfa: boolean }>(
       `
       SELECT EXISTS (
@@ -54,9 +54,9 @@ async function isActivePlatformImpersonation(
     return false
   }
 
-  let pgClient: ReturnType<typeof getPgClient> | null = null
+  let pgClient: PgClient | null = null
   try {
-    pgClient = getPgClient(c, true)
+    pgClient = await getPgClient(c, true)
     const result = await pgClient.query<{ is_active: boolean }>(
       `
       SELECT EXISTS (

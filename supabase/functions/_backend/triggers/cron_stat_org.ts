@@ -22,7 +22,7 @@ app.post('/', middlewareAPISecret, async (c) => {
   // `checkPlanStatusOnly()` may refresh the org metrics cache through
   // `get_plan_usage_and_fit_uncached()`, so this path must use a write-capable
   // transaction instead of a read-only pool.
-  const pgClient = getPgClient(c, false)
+  const pgClient = await getPgClient(c, false)
   const drizzleClient = getDrizzleClient(pgClient)
   try {
     let planStatusCalculated = false

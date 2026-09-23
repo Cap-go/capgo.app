@@ -551,7 +551,7 @@ async function readBundleInstallStatsSB(
   endInclusive: dayjs.Dayjs,
   versionFilter?: Set<string>,
 ) {
-  const db = getPgClient(c, true)
+  const db = await getPgClient(c, true)
   try {
     const versionNames = versionFilter ? [...versionFilter] : undefined
     const hasVersionFilter = Boolean(versionNames?.length)

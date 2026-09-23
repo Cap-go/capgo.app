@@ -288,7 +288,7 @@ async function runSupabaseResultWithRetry<T>(
 }
 
 async function readVersionMetaStorageRows(c: Parameters<typeof supabaseAdmin>[0], appId: string, calculationEnd: string) {
-  const pgClient = getPgClient(c, false)
+  const pgClient = await getPgClient(c, false)
   try {
     const { rows } = await pgClient.query<VersionMetaStorageRow>(
       `
@@ -409,7 +409,7 @@ async function hasPendingAppStatsRefresh(
   c: Parameters<typeof supabaseAdmin>[0],
   orgId: string,
 ): Promise<boolean> {
-  const pgClient = getPgClient(c)
+  const pgClient = await getPgClient(c)
   const staleCutoff = new Date(Date.now() - APP_STATS_REFRESH_STALE_MS).toISOString()
 
   try {

@@ -77,7 +77,7 @@ export async function queryOnboardingPaymentCohortData(executor: OnboardingPayme
 
 export async function loadOnboardingPaymentCohortData(c: Context, period: OnboardingPaymentCohortPeriod): Promise<OnboardingPaymentCohortData> {
   // auth.users is not replicated: false deliberately selects the primary connection.
-  const pool = getPgClient(c, false)
+  const pool = await getPgClient(c, false)
   let client: PoolClient | undefined
   try {
     client = await pool.connect()

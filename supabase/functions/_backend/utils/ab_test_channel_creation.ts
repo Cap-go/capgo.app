@@ -482,7 +482,7 @@ export async function getAdminABTestChannelCreation(c: Context): Promise<AdminAB
   if (!config)
     throw new Error('Missing new channel A/B test configuration')
 
-  const pgClient = getPgClient(c, true)
+  const pgClient = await getPgClient(c, true)
   try {
     const [outcomeResult, posthog] = await Promise.all([
       pgClient.query<AdminChannelExperimentOutcomeRow>(

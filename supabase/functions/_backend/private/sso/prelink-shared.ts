@@ -108,7 +108,7 @@ async function fallbackDeleteEmailIdentity(
   userId: string,
   identityId: string,
 ): Promise<{ error: string | null }> {
-  const pgClient = getPgClient(c)
+  const pgClient = await getPgClient(c)
 
   try {
     // Local/self-hosted Supabase builds can lack the GoTrue admin identity-delete
@@ -156,7 +156,7 @@ async function getOrgPrelinkCandidates(
   orgId: string,
   domain: string,
 ): Promise<PrelinkCandidate[]> {
-  const pgClient = getPgClient(c)
+  const pgClient = await getPgClient(c)
 
   try {
     const result = await pgClient.query<PrelinkCandidate>(

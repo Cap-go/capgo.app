@@ -29,7 +29,7 @@ export async function isDemoApp(c: Context<MiddlewareKeyVariables>, appId: strin
 }
 
 export async function lockOnboardingApp(c: Context<MiddlewareKeyVariables>, appId: string) {
-  const pool = getPgClient(c)
+  const pool = await getPgClient(c)
   let client: PoolClient | undefined
 
   try {

@@ -6,7 +6,7 @@ import { HTTPException } from 'hono/http-exception'
 import { safeParseSchema } from '../../../utils/schema_validation.ts'
 import { BRES, quickError, simpleError } from '../../../utils/hono.ts'
 import { cloudlog } from '../../../utils/logging.ts'
-import { closeClient, getDrizzleClient, getPgClient } from '../../../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient} from '../../../utils/pg.ts'
 import { checkPermission, checkPermissionPg } from '../../../utils/rbac.ts'
 import { supabaseAdmin } from '../../../utils/supabase.ts'
 
@@ -159,7 +159,7 @@ async function assertMemberRemovalAuthorizedAfterLock(
   targetUserId: string,
   dbClient: PinnedPgClient,
 ): Promise<void> {
-  const pinnedDrizzle = getDrizzleClient(dbClient as unknown as ReturnType<typeof getPgClient>) as DrizzleClient
+  const pinnedDrizzle = getDrizzleClient(dbClient as unknown as PgClient) as DrizzleClient
   const apikeyString = auth.apikey?.key ?? c.get('capgkey') ?? null
   const canManageRoles = await checkPermissionPg(
     c,
@@ -219,7 +219,7 @@ export async function deleteMember(c: Context<MiddlewareKeyVariables>, bodyRaw: 
 
   // Pin the transaction to one connection: rank read, cleanup, and membership deletion
   // must share the organization lock with every RBAC mutation trigger.
-  const pgPool = getPgClient(c)
+  const pgPool = await getPgClient(c)
   let dbClient: PinnedPgClient | undefined
   let transactionOpen = false
   cloudlog({ requestId: c.get('requestId'), message: 'targetUserId', data: targetUserId })

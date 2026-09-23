@@ -165,7 +165,7 @@ app.get('/:org_id', sValidator('param', orgIdParamSchema, invalidOrgIdHook), asy
 
   let pgClient
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzle = getDrizzleClient(pgClient)
 
     // Fetch groups
@@ -224,7 +224,7 @@ app.post(
 
     let pgClient
     try {
-      pgClient = getPgClient(c)
+      pgClient = await getPgClient(c)
       const drizzle = getDrizzleClient(pgClient)
 
       // Create the group
@@ -273,7 +273,7 @@ app.put(
 
     let pgClient
     try {
-      pgClient = getPgClient(c)
+      pgClient = await getPgClient(c)
       const drizzle = getDrizzleClient(pgClient)
       const result = await withLockedGroup(drizzle, groupId, async (txDrizzle, group) => {
         if (group.is_system) {
@@ -344,7 +344,7 @@ app.delete('/:group_id', sValidator('param', groupIdParamSchema, invalidGroupIdH
 
   let pgClient
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzle = getDrizzleClient(pgClient)
     const result = await withLockedGroup(drizzle, groupId, async (txDrizzle, group) => {
       if (group.is_system) {
@@ -414,7 +414,7 @@ app.get('/:group_id/members', sValidator('param', groupIdParamSchema, invalidGro
 
   let pgClient
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzle = getDrizzleClient(pgClient)
 
     // Fetch the group and verify access
@@ -496,7 +496,7 @@ app.post(
     let pgClient
     let targetUserId: string | undefined
     try {
-      pgClient = getPgClient(c)
+      pgClient = await getPgClient(c)
       const drizzle = getDrizzleClient(pgClient)
       const result = await withLockedGroup(drizzle, groupId, async (txDrizzle, group) => {
         if (!(await canManageGroupRoles(c, txDrizzle, group.org_id))) {
@@ -582,7 +582,7 @@ app.delete('/:group_id/members/:user_id', sValidator('param', groupMemberParamSc
 
   let pgClient
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzle = getDrizzleClient(pgClient)
     const result = await withLockedGroup(drizzle, groupId, async (txDrizzle, group) => {
       if (!(await canManageGroupRoles(c, txDrizzle, group.org_id))) {

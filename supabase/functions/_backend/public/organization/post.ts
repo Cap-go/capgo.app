@@ -4,7 +4,7 @@ import type { Database } from '../../utils/supabase.types.ts'
 import { z } from 'zod'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
-import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { closeClient, getPgClient} from '../../utils/pg.ts'
 import { assertJwtMfaAssurance } from '../../utils/jwt_mfa_assurance.ts'
 import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
 import { parseOrgOnboardingDevelopmentEnvironment, parseOrgOnboardingIntent } from '../../utils/org_onboarding_intent.ts'
@@ -90,7 +90,7 @@ async function getOwnerEmail(c: Context<MiddlewareKeyVariables>, auth: AuthInfo)
 
   let pgClient
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const result = await pgClient.query<{ email: string }>(
       'SELECT email FROM public.users WHERE id = $1::uuid LIMIT 1',
       [auth.userId],
@@ -121,7 +121,7 @@ async function ensureApiKeyCanCreateOrganization(c: Context<MiddlewareKeyVariabl
 
   let pgClient
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const result = await pgClient.query<{ allowed: boolean }>(
       'SELECT public.apikey_has_global_permission($1::text, public.rbac_perm_org_create()) AS allowed',
       [apikeyString],
@@ -160,11 +160,11 @@ async function insertOrgForApiKey(
   }
 
   // API-key Supabase clients run as anon, so this checked endpoint owns the write path instead of reopening direct anon RLS inserts.
-  let pgPool: ReturnType<typeof getPgClient> | null = null
+  let pgPool: PgClient | null = null
   let dbClient: PgTransactionClient | null = null
   let transactionStarted = false
   try {
-    pgPool = getPgClient(c)
+    pgPool = await getPgClient(c)
     dbClient = await pgPool.connect() as PgTransactionClient
     const capabilityResult = await dbClient.query<{ allowed: boolean }>(
       'SELECT public.apikey_has_current_org_create_capability($1::uuid) AS allowed',

@@ -5,7 +5,7 @@ import { HTTPException } from 'hono/http-exception'
 import { throwIfChannelUpdatePackageMismatch } from '../../utils/channel_update_package.ts'
 import { BRES, simpleError } from '../../utils/hono.ts'
 import { cloudlogErr } from '../../utils/logging.ts'
-import { closeClient, getDrizzleClient, getPgClient, logPgError } from '../../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, logPgError} from '../../utils/pg.ts'
 import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { supabaseAdmin, updateOrCreateChannel } from '../../utils/supabase.ts'
 import { isInternalVersionName, isValidAppId } from '../../utils/utils.ts'
@@ -273,7 +273,7 @@ async function createAndPromoteChannelInTransaction(
     throw simpleError('cannot_set_bundle_to_channel', 'Cannot set bundle to channel', { error: 'Missing API key context for audit logging' })
   }
 
-  const pgClient = getPgClient(c)
+  const pgClient = await getPgClient(c)
   let dbClient: PgQueryClient | null = null
   let transactionStarted = false
   try {
@@ -285,7 +285,7 @@ async function createAndPromoteChannelInTransaction(
       [JSON.stringify({ capgkey: effectiveApikey })],
     )
 
-    const drizzle = getDrizzleClient(dbClient as unknown as ReturnType<typeof getPgClient>) as DrizzleClient
+    const drizzle = getDrizzleClient(dbClient as unknown as PgClient) as DrizzleClient
     const canCreateChannel = await checkPermissionPg(
       c,
       'app.create_channel',

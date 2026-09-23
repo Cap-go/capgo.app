@@ -11,7 +11,7 @@ import {
 } from '../utils/app_fame.ts'
 import { BRES, middlewareAPISecret, quickError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
-import { closeClient, getDrizzleClient, getPgClient, logPgError } from '../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, logPgError} from '../utils/pg.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -22,9 +22,9 @@ export async function processAppFameBatch(c: Context<MiddlewareKeyVariables>): P
     throw quickError(503, 'ai_unavailable', 'Workers AI binding is not configured')
   }
 
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const candidateResult = await drizzleClient.execute(sql`
       SELECT

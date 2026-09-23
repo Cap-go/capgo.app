@@ -92,7 +92,7 @@ async function getAdminChannelSurfingFromPostgres(
   end_date: string,
   app_id?: string,
 ): Promise<AdminChannelSurfingStats> {
-  const pgClient = getPgClient(c, true)
+  const pgClient = await getPgClient(c, true)
   try {
     const params: unknown[] = [start_date, end_date]
     let appFilter = ''

@@ -98,7 +98,7 @@ async function getUserEmailById(supabaseAdmin: SupabaseAdmin, userId: string): P
 }
 
 async function getUserEmailByAuthEmail(c: Context<MiddlewareKeyVariables>, email: string): Promise<string | null> {
-  const pgClient = getPgClient(c)
+  const pgClient = await getPgClient(c)
 
   try {
     const result = await pgClient.query<{ email: string | null }>(
@@ -124,7 +124,7 @@ async function getUserEmailByAuthEmail(c: Context<MiddlewareKeyVariables>, email
 }
 
 async function getOrgOwner(c: Context<MiddlewareKeyVariables>, orgId: string): Promise<{ userId: string, email: string } | null> {
-  const pgClient = getPgClient(c)
+  const pgClient = await getPgClient(c)
 
   try {
     const result = await pgClient.query<{ user_id: string, email: string }>(
@@ -300,7 +300,7 @@ app.post('/', middlewareAuth, async (c) => {
   // row long enough that support spoof does not lose MFA mid-session.
   const IMPERSONATION_SESSION_TTL_MS = 24 * 60 * 60 * 1000
   const expiresAt = new Date(Math.max(jwtExpMs, Date.now() + IMPERSONATION_SESSION_TTL_MS))
-  const pgClient = getPgClient(c)
+  const pgClient = await getPgClient(c)
   try {
     await pgClient.query(
       `
