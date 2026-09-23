@@ -9,6 +9,8 @@ import invite from './invite.html'
 import inviteText from './invite.txt'
 import magiclink from './magiclink.html'
 import magiclinkText from './magiclink.txt'
+import mfaEmailVerification from './mfa_email_verification.html'
+import mfaEmailVerificationText from './mfa_email_verification.txt'
 import mfaFactorEnrolledNotification from './mfa_factor_enrolled_notification.html'
 import mfaFactorEnrolledNotificationText from './mfa_factor_enrolled_notification.txt'
 import mfaFactorUnenrolledNotification from './mfa_factor_unenrolled_notification.html'
@@ -28,6 +30,7 @@ const templates = {
   email_changed_notification: { subject: 'Your Capgo.app email was changed', html: emailChangedNotification, text: emailChangedNotificationText },
   invite: { subject: 'You\'re invited to Capgo.app', html: invite, text: inviteText },
   magiclink: { subject: 'Your Capgo.app sign-in link', html: magiclink, text: magiclinkText },
+  mfa_email_verification: { subject: 'Your code to continue 2FA setup', html: mfaEmailVerification, text: mfaEmailVerificationText },
   mfa_factor_enrolled_notification: { subject: 'MFA added to your Capgo.app account', html: mfaFactorEnrolledNotification, text: mfaFactorEnrolledNotificationText },
   mfa_factor_unenrolled_notification: { subject: 'MFA removed from your Capgo.app account', html: mfaFactorUnenrolledNotification, text: mfaFactorUnenrolledNotificationText },
   password_changed_notification: { subject: 'Your Capgo.app password was changed', html: passwordChangedNotification, text: passwordChangedNotificationText },
@@ -37,10 +40,13 @@ const templates = {
 } as const
 
 type AuthEmailTemplate = keyof typeof templates
-export type AuthEmailAction = Exclude<AuthEmailTemplate, 'delete_account_verification'>
+type PurposeSpecificAuthEmailTemplate = 'delete_account_verification' | 'mfa_email_verification'
+export type AuthEmailAction = Exclude<AuthEmailTemplate, PurposeSpecificAuthEmailTemplate>
 
 export function isAuthEmailAction(action: string): action is AuthEmailAction {
-  return action !== 'delete_account_verification' && Object.hasOwn(templates, action)
+  return action !== 'delete_account_verification'
+    && action !== 'mfa_email_verification'
+    && Object.hasOwn(templates, action)
 }
 
 export function selectAuthEmailTemplate(action: AuthEmailAction, redirectTo: string, siteUrl: string): AuthEmailTemplate {
@@ -50,8 +56,13 @@ export function selectAuthEmailTemplate(action: AuthEmailAction, redirectTo: str
   try {
     const redirect = new URL(redirectTo)
     const site = new URL(siteUrl)
-    if (redirect.origin === site.origin && redirect.pathname === '/' && redirect.searchParams.get('reason') === 'delete_account')
-      return 'delete_account_verification'
+    if (redirect.origin === site.origin && redirect.pathname === '/') {
+      const reason = redirect.searchParams.get('reason')
+      if (reason === 'delete_account')
+        return 'delete_account_verification'
+      if (reason === 'setup_2fa')
+        return 'mfa_email_verification'
+    }
   }
   catch {
     // Invalid or missing redirect URLs use the normal sign-in template.
