@@ -13,7 +13,7 @@ import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
-import { createOneTimeCheckout, getBillingAccountForCustomer, getCreditCheckoutDetails, getPlanCreditProductId, getStripe, isStripeEmulatorEnabled, planProductIdOrFilter, resolvePlanCreditProductId } from '../utils/stripe.ts'
+import { createOneTimeCheckout, getBillingAccountForCustomer, getCreditCheckoutDetails, getStripe, isStripeEmulatorEnabled, planProductIdOrFilter, resolvePlanCreditProductId } from '../utils/stripe.ts'
 import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
 import { getEnv } from '../utils/utils.ts'
 
@@ -255,7 +255,7 @@ async function getCreditTopUpProductId(c: AppContext, customerId: string, token:
         .single()
       if (error)
         throw error
-      return data ? { credit_id: getPlanCreditProductId(data, billingAccount) } : null
+      return data ? { credit_id: resolvePlanCreditProductId(data, billingAccount) } : null
     })
     return { productId }
   }
@@ -282,7 +282,7 @@ async function getCreditTopUpProductId(c: AppContext, customerId: string, token:
         .single()
       if (error)
         throw error
-      return data ? { credit_id: getPlanCreditProductId(data, billingAccount) } : null
+      return data ? { credit_id: resolvePlanCreditProductId(data, billingAccount) } : null
     })
     return { productId }
   }
@@ -297,7 +297,7 @@ async function getCreditTopUpProductId(c: AppContext, customerId: string, token:
         .single()
       if (error)
         throw error
-      return data ? { credit_id: getPlanCreditProductId(data, billingAccount) } : null
+      return data ? { credit_id: resolvePlanCreditProductId(data, billingAccount) } : null
     })
     return { productId: fallbackProductId }
   }
