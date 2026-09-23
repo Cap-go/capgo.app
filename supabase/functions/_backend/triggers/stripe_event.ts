@@ -19,7 +19,7 @@ import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import * as schema from '../utils/postgres_schema.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import type { BillingAccount } from '../utils/stripe_billing.ts'
-import { ensureCustomerMetadata, getBillingAccountForCustomer, getCreditCheckoutDetails, getPlanCreditProductId, getStripe, isStripeConfiguredForAccount, normalizeBillingAccount, planProductIdOrFilter, syncStripeCustomerCountry } from '../utils/stripe.ts'
+import { ensureCustomerMetadata, getBillingAccountForCustomer, getCreditCheckoutDetails, getStripe, isStripeConfiguredForAccount, normalizeBillingAccount, planProductIdOrFilter, resolvePlanCreditProductId, syncStripeCustomerCountry } from '../utils/stripe.ts'
 import { buildTransferInvoiceFooter, getTransferInvoiceFooterUpdate, isTransferInvoice, normalizeBillingEmail, shouldStampTransferInvoiceFooter, TRANSFER_INVOICE_FOOTER, TRANSFER_INVOICE_FOOTER_MAX_LENGTH } from '../utils/stripe_event.ts'
 import { customerToSegmentOrg, supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
@@ -863,7 +863,7 @@ async function getCreditTopUpProductIdFromCustomer(c: Context, customerId: strin
       .single()
     if (error)
       throw error
-    return data ? { credit_id: getPlanCreditProductId(data, billingAccount) } : null
+    return data ? { credit_id: resolvePlanCreditProductId(data, billingAccount) } : null
   }
   const { data: stripeInfo, error: stripeInfoError } = await supabaseAdmin(c)
     .from('stripe_info')
@@ -923,7 +923,7 @@ async function getCreditTopUpProductIdFromCustomer(c: Context, customerId: strin
     return await getFallbackCreditProductId(c, customerId, fetchFallbackPlan)
   }
 
-  const creditProductId = getPlanCreditProductId(plan, billingAccount)
+  const creditProductId = resolvePlanCreditProductId(plan, billingAccount)
   if (!creditProductId)
     return await getFallbackCreditProductId(c, customerId, fetchFallbackPlan)
 

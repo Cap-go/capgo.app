@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import Stripe from 'stripe'
 import { getFallbackCreditProductId } from './credits.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { getBillingAccountForCustomer, getOneTimePriceId, getPlanCreditProductId, getStripe, isStripeEmulatorEnabled, isStripeConfiguredForAccount, planProductIdOrFilter, resolvePlanCreditProductId } from './stripe.ts'
+import { getBillingAccountForCustomer, getOneTimePriceId, getStripe, isStripeEmulatorEnabled, isStripeConfiguredForAccount, planProductIdOrFilter, resolvePlanCreditProductId } from './stripe.ts'
 import { supabaseAdmin } from './supabase.ts'
 
 export const MIN_AUTO_TOP_UP_THRESHOLD = 10
