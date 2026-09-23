@@ -649,7 +649,7 @@ test.describe('Dashboard exploration and returning to v3 setup', () => {
     await page.reload()
     await expect(page.locator('[data-test="preview-app-dashboard"]')).toBeVisible()
     await expect(page.getByText('Continue exploring or return to setup?', { exact: true })).toHaveCount(0)
-    await page.getByRole('button', { name: 'Continue with setup', exact: true }).click()
+    await page.getByRole('button', { name: 'Continue setup', exact: true }).click()
     await expect(page.locator('[data-test="onboarding-setup-cli"]')).toBeVisible()
   })
 
