@@ -24514,7 +24514,7 @@ CREATE INDEX "idx_id_app_id_app_versions_meta" ON "public"."app_versions_meta" U
 
 
 
-CREATE INDEX "idx_manifest_app_version_id" ON "public"."manifest" USING "btree" ("app_version_id");
+CREATE INDEX "idx_manifest_app_version_id_file_hash" ON "public"."manifest" USING "btree" ("app_version_id", "file_hash") INCLUDE ("file_size");
 
 
 
