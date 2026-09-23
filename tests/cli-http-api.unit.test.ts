@@ -71,9 +71,9 @@ describe('private/cli routes', () => {
     expect(mocks.rpc).toHaveBeenCalledWith('cli_check_permission', {
       apikey: mocks.apikey.key,
       permission_key: 'app.read',
-      org_id: null,
+      org_id: undefined,
       app_id: 'com.example.app',
-      channel_id: null,
+      channel_id: undefined,
     })
   })
 

@@ -64,9 +64,9 @@ app.post('/check-permission', middlewareKey(), async (c) => {
   const { data, error } = await supabase.rpc('cli_check_permission', {
     apikey: body.apikey ?? capgkey,
     permission_key: body.permission_key,
-    org_id: body.org_id ?? null,
-    app_id: body.app_id ?? null,
-    channel_id: body.channel_id ?? null,
+    org_id: body.org_id ?? undefined,
+    app_id: body.app_id ?? undefined,
+    channel_id: body.channel_id ?? undefined,
   })
 
   if (error) {
