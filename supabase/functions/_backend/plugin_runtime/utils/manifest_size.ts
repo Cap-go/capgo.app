@@ -142,7 +142,7 @@ export function buildManifestDownloadSizeResult(
 
 export interface ManifestSizeLookupQuery {
   text: string
-  values: Array<string | number | null>
+  values: [string, string] | [string, string, number | string]
 }
 
 const MANIFEST_SIZE_REQUESTED_CTE = `
@@ -211,12 +211,12 @@ export function buildManifestSizeLookupQuery(
   if (branches.length === 0)
     return null
 
-  const values: Array<string | number | null> = [
-    JSON.stringify(files.map(file => ({ file_hash: file.file_hash, version_id: file.version_id }))),
-    appId,
-  ]
-  if (hasUnscoped && (fallbackId != null || fallbackName != null))
-    values.push(fallbackId ?? fallbackName)
+  const payload = JSON.stringify(files.map(file => ({ file_hash: file.file_hash, version_id: file.version_id })))
+  let values: ManifestSizeLookupQuery['values'] = [payload, appId]
+  if (hasUnscoped && fallbackId != null)
+    values = [payload, appId, fallbackId]
+  else if (hasUnscoped && fallbackName != null)
+    values = [payload, appId, fallbackName]
 
   return {
     text: `${MANIFEST_SIZE_REQUESTED_CTE}\n${branches.join('\nUNION ALL\n')}`,
