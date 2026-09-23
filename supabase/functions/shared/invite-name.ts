@@ -1,6 +1,7 @@
 const DOMAIN_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i
 const DOMAIN_SUFFIX_PATTERN = /^(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})$/i
 const DOMAIN_CANDIDATE_PATTERN = /(?:[\p{L}\p{N}](?:[\p{L}\p{M}\p{N}-]{0,61}[\p{L}\p{M}\p{N}])?\.)+[\p{L}\p{N}](?:[\p{L}\p{M}\p{N}-]{0,61}[\p{L}\p{M}\p{N}])?/giu
+const IDNA_DOT_PATTERN = /[。．｡]/gu
 
 function isDomainCandidate(candidate: string) {
   try {
@@ -17,6 +18,7 @@ function isDomainCandidate(candidate: string) {
 }
 
 export function containsDomainName(value: string) {
-  return Array.from(value.matchAll(DOMAIN_CANDIDATE_PATTERN), ([candidate]) => candidate)
+  const normalizedValue = value.replace(IDNA_DOT_PATTERN, '.')
+  return Array.from(normalizedValue.matchAll(DOMAIN_CANDIDATE_PATTERN), ([candidate]) => candidate)
     .some(isDomainCandidate)
 }

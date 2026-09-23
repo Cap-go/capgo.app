@@ -11,6 +11,9 @@ describe('containsDomainName', () => {
     'Support evil.com',
     'John(evil.com)',
     '例子.测试',
+    'evil。com',
+    'evil．com',
+    'evil｡com',
     'xn--fsqu00a.xn--0zwm56d',
   ])('detects domain names in %s', (name) => {
     expect(containsDomainName(name)).toBe(true)
