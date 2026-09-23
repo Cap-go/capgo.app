@@ -13,6 +13,7 @@ import IconUsers from '~icons/heroicons/users'
 import DataTable from '~/components/DataTable.vue'
 import RoleCapabilitiesHint from '~/components/forms/RoleCapabilitiesHint.vue'
 import SearchInput from '~/components/forms/SearchInput.vue'
+import { fetchOrgMembersRbac } from '~/services/orgMembers'
 import { checkPermissions } from '~/services/permissions'
 import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -346,8 +347,7 @@ async function fetchOrgMembers() {
   if (!orgId)
     return
 
-  const { data, error } = await supabase
-    .rpc('get_org_members_rbac', { p_org_id: orgId })
+  const { data, error } = await fetchOrgMembersRbac(orgId)
 
   if (error)
     throw error

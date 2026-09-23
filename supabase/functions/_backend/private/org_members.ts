@@ -111,6 +111,39 @@ app.get('/', middlewareAuth, async (c) => {
   return c.json(data ?? [])
 })
 
+app.get('/legacy', middlewareAuth, async (c) => {
+  const orgId = parseOrgId(c.req.query('org_id'))
+  const supabase = getAuthedSupabase(c)
+  const { data, error } = await supabase.rpc('get_org_members', { guild_id: orgId })
+
+  if (error)
+    throw simpleError('members_list_error', error.message)
+
+  return c.json(data ?? [])
+})
+
+app.get('/2fa-status', middlewareAuth, async (c) => {
+  const orgId = parseOrgId(c.req.query('org_id'))
+  const supabase = getAuthedSupabase(c)
+  const { data, error } = await supabase.rpc('check_org_members_2fa_enabled', { org_id: orgId })
+
+  if (error)
+    throw simpleError('members_2fa_status_error', error.message)
+
+  return c.json(data ?? [])
+})
+
+app.get('/password-policy', middlewareAuth, async (c) => {
+  const orgId = parseOrgId(c.req.query('org_id'))
+  const supabase = getAuthedSupabase(c)
+  const { data, error } = await supabase.rpc('check_org_members_password_policy', { org_id: orgId })
+
+  if (error)
+    throw simpleError('members_password_policy_error', error.message)
+
+  return c.json(data ?? [])
+})
+
 app.post('/invite', middlewareAuth, async (c) => {
   const body = await parseBody<unknown>(c)
   const parsed = inviteBodySchema.safeParse(body)

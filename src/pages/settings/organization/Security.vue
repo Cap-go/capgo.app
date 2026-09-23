@@ -16,6 +16,7 @@ import IconUser from '~icons/heroicons/user'
 import SsoConfiguration from '~/components/organizations/SsoConfiguration.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
+import { fetchOrgMembers, fetchOrgMembers2faStatus, fetchOrgMembersPasswordPolicy } from '~/services/orgMembers'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { getCurrentPlanNameOrg, useSupabase } from '~/services/supabase'
@@ -318,10 +319,7 @@ async function loadMembersWithMfaStatus() {
 
   try {
     // Get org members
-    const { data: members, error: membersError } = await supabase
-      .rpc('get_org_members', {
-        guild_id: currentOrganization.value.gid,
-      })
+    const { data: members, error: membersError } = await fetchOrgMembers(currentOrganization.value.gid)
 
     if (membersError) {
       console.error('Error loading members:', membersError)
@@ -329,10 +327,7 @@ async function loadMembersWithMfaStatus() {
     }
 
     // Get 2FA status for all members
-    const { data: mfaStatus, error: mfaError } = await supabase
-      .rpc('check_org_members_2fa_enabled', {
-        org_id: currentOrganization.value.gid,
-      })
+    const { data: mfaStatus, error: mfaError } = await fetchOrgMembers2faStatus(currentOrganization.value.gid)
 
     if (mfaError) {
       console.error('Error loading MFA status:', mfaError)
@@ -386,10 +381,7 @@ async function loadMembersWithPasswordPolicyStatus() {
 
   try {
     // Get org members
-    const { data: members, error: membersError } = await supabase
-      .rpc('get_org_members', {
-        guild_id: currentOrganization.value.gid,
-      })
+    const { data: members, error: membersError } = await fetchOrgMembers(currentOrganization.value.gid)
 
     if (membersError) {
       console.error('Error loading members:', membersError)
@@ -397,10 +389,7 @@ async function loadMembersWithPasswordPolicyStatus() {
     }
 
     // Get password policy compliance status for all members
-    const { data: complianceStatus, error: complianceError } = await supabase
-      .rpc('check_org_members_password_policy', {
-        org_id: currentOrganization.value.gid,
-      })
+    const { data: complianceStatus, error: complianceError } = await fetchOrgMembersPasswordPolicy(currentOrganization.value.gid)
 
     if (complianceError) {
       console.error('Error loading password policy compliance status:', complianceError)

@@ -14,6 +14,7 @@ import IconExternalLink from '~icons/lucide/external-link'
 import { comparePackages, hasPlatformChecksumMetadataDrift } from '~/services/bundleCompatibility'
 import { dependencyDiffPath, groupCompatibilityEvents, platformLabel } from '~/services/compatibilityEvents'
 import { formatLocalDateTime } from '~/services/date'
+import { fetchOrgMembers } from '~/services/orgMembers'
 import { checkPermissions } from '~/services/permissions'
 import { pushEvent } from '~/services/posthog'
 import { createSignedImageUrl } from '~/services/storage'
@@ -417,7 +418,7 @@ async function loadMemberEmails() {
   )
   if (!orgId || resolverIds.size === 0)
     return
-  const { data, error } = await supabase.rpc('get_org_members', { guild_id: orgId })
+  const { data, error } = await fetchOrgMembers(orgId)
   if (error) {
     console.error('[Compatibility] Error loading org members:', error)
     return
