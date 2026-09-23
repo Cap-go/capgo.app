@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
   getEnvMock,
-  verifyCaptchaTokenMock,
   rpcMock,
   signUpMock,
   usersUpsertMock,
@@ -14,7 +13,6 @@ const {
       return 'turnstile-secret'
     return ''
   }),
-  verifyCaptchaTokenMock: vi.fn(async () => undefined),
   rpcMock: vi.fn(async () => ({ data: true, error: null })),
   signUpMock: vi.fn(async () => ({
     data: {
@@ -33,10 +31,6 @@ const {
 
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
   getEnv: getEnvMock,
-}))
-
-vi.mock('../supabase/functions/_backend/utils/captcha.ts', () => ({
-  verifyCaptchaToken: verifyCaptchaTokenMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
@@ -97,11 +91,30 @@ describe('POST /auth/register unit', () => {
     expect(response.status).toBe(422)
     const body = await response.json() as { error: string }
     expect(body.error).toBe('captcha_failed')
-    expect(verifyCaptchaTokenMock).not.toHaveBeenCalled()
+    expect(signUpMock).not.toHaveBeenCalled()
   })
 
-  it('returns captcha_failed when verification fails', async () => {
-    verifyCaptchaTokenMock.mockRejectedValueOnce(new Error('invalid captcha'))
+  it('forwards captcha_token to GoTrue signUp without local siteverify', async () => {
+    const response = await postRegister(validBody)
+    expect(response.status).toBe(200)
+    expect(signUpMock).toHaveBeenCalledWith({
+      email: validBody.email,
+      password: validBody.password,
+      options: {
+        captchaToken: validBody.captcha_token,
+        data: {
+          first_name: validBody.first_name,
+          last_name: validBody.last_name,
+        },
+      },
+    })
+  })
+
+  it('returns captcha_failed when GoTrue rejects the captcha token', async () => {
+    signUpMock.mockResolvedValueOnce({
+      data: { user: null, session: null },
+      error: { code: 'captcha_failed', message: 'Captcha verification failed' },
+    })
     const response = await postRegister(validBody)
     expect(response.status).toBe(422)
     const body = await response.json() as { error: string }
