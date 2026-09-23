@@ -97,6 +97,7 @@ vi.mock('~/stores/organization', () => ({ useOrganizationStore: () => writerMock
 const onboardingSource = readFileSync(new NodeUrl('../src/components/dashboard/AppOnboardingFlow.vue', import.meta.url), 'utf8')
 const optionsSource = readFileSync(new NodeUrl('../src/components/dashboard/onboardingDevelopmentEnvironmentOptions.ts', import.meta.url), 'utf8')
 const sidebarSource = readFileSync(new NodeUrl('../src/components/Sidebar.vue', import.meta.url), 'utf8')
+const onboardingExplorationConfirmSource = readFileSync(new NodeUrl('../src/services/onboardingDashboardExplorationConfirm.ts', import.meta.url), 'utf8')
 const englishMessages = JSON.parse(readFileSync(new NodeUrl('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
 function sourceBetween(start: string, end: string) {
@@ -850,9 +851,9 @@ describe('app onboarding progress analytics integration', () => {
     expect(demoExit).toContain('allowOnboardingDashboardExploration')
     expect(demoExit.indexOf('window.dispatchEvent')).toBeLessThan(demoExit.indexOf('allowOnboardingDashboardExploration'))
 
-    const confirmedSidebarExit = sidebarSource.slice(sidebarSource.indexOf('if (requiresOnboardingExplorationConfirmation)'), sidebarSource.indexOf('if (tab.onClick)'))
-    const secondaryGuardIndex = confirmedSidebarExit.indexOf(`lastButtonRole !== 'secondary'`)
-    const exploredEventIndex = confirmedSidebarExit.indexOf('window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))')
+    expect(sidebarSource).toContain('confirmOnboardingDashboardExplorationNavigation')
+    const secondaryGuardIndex = onboardingExplorationConfirmSource.indexOf(`lastButtonRole !== 'secondary'`)
+    const exploredEventIndex = onboardingExplorationConfirmSource.indexOf('window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))')
     expect(secondaryGuardIndex).toBeGreaterThanOrEqual(0)
     expect(exploredEventIndex).toBeGreaterThanOrEqual(0)
     expect(secondaryGuardIndex).toBeLessThan(exploredEventIndex)

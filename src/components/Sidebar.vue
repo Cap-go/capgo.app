@@ -23,12 +23,9 @@ import { isSpoofed, unspoofUser } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import {
-  allowOnboardingDashboardExploration,
-  getOnboardingContinueSetupRoute,
-  getOnboardingResumeAppId,
-  ONBOARDING_DASHBOARD_EXPLORED_EVENT,
-  shouldConfirmOnboardingDashboardExploration,
-} from '~/utils/onboardingRedirect'
+  confirmOnboardingDashboardExplorationNavigation,
+  resolveOnboardingHardGateResumeAppId,
+} from '~/services/onboardingDashboardExplorationConfirm'
 import DropdownProfile from '../components/dashboard/DropdownProfile.vue'
 import GettingStartedNav from '../components/dashboard/GettingStartedNav.vue'
 
@@ -156,54 +153,27 @@ async function openTab(tab: Tab) {
     return
 
   const onboardingUserId = main.user?.id ?? main.auth?.id
-  const resumeQueryAppId = typeof route.query.resume === 'string' ? route.query.resume : null
-  const isPendingOnboardingResume = route.path === '/app/new'
-    && !!resumeQueryAppId
-  const onboardingResumeAppId = isPendingOnboardingResume
-    ? resumeQueryAppId
-    : getOnboardingResumeAppId(onboardingUserId)
   const currentSource = typeof route.query.source === 'string' ? route.query.source : null
-  const requiresOnboardingExplorationConfirmation = shouldConfirmOnboardingDashboardExploration({
+  const onboardingResumeAppId = resolveOnboardingHardGateResumeAppId(
+    route.path,
+    typeof route.query.resume === 'string' ? route.query.resume : null,
+    onboardingUserId,
+  )
+  const confirmationResult = await confirmOnboardingDashboardExplorationNavigation({
     currentPath: route.path,
     currentSource,
+    currentStep: typeof route.query.step === 'string' ? route.query.step : null,
     destination: tab.key,
     resumeAppId: onboardingResumeAppId,
     userId: onboardingUserId,
+    t,
+    dialogStore,
+    router,
   })
 
-  if (requiresOnboardingExplorationConfirmation) {
+  if (confirmationResult === 'cancelled' || confirmationResult === 'handled') {
     emit('closeSidebar')
-    dialogStore.openDialog({
-      title: t('app-onboarding-explore-dashboard-confirm-title'),
-      description: t('app-onboarding-explore-dashboard-confirm-description'),
-      buttons: [
-        { text: t('app-onboarding-continue-setup'), role: 'primary' },
-        { text: t('app-onboarding-explore-dashboard'), role: 'secondary' },
-      ],
-    })
-    const wasCanceled = await dialogStore.onDialogDismiss()
-    if (wasCanceled)
-      return
-    // Primary = stay in setup on an active pre-create route, or return to it
-    // when the dialog fired only because resumeAppId is set on an escape path.
-    if (dialogStore.lastButtonRole === 'primary') {
-      const continueRoute = getOnboardingContinueSetupRoute({
-        currentPath: route.path,
-        currentSource,
-        currentStep: typeof route.query.step === 'string' ? route.query.step : null,
-        resumeAppId: onboardingResumeAppId,
-      })
-      if (continueRoute) {
-        await router.push(continueRoute)
-        emit('closeSidebar')
-      }
-      return
-    }
-    if (dialogStore.lastButtonRole !== 'secondary')
-      return
-
-    window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
-    allowOnboardingDashboardExploration(onboardingUserId, onboardingResumeAppId)
+    return
   }
 
   if (tab.onClick)

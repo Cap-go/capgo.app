@@ -143,6 +143,15 @@ const ONBOARDING_CONSOLE_ESCAPE_DESTINATIONS = new Set([
   '/scan',
 ])
 
+export const ONBOARDING_DIRECT_ENTRY_GUARD_PATHS = new Set([
+  '/apps',
+  '/apikeys',
+])
+
+export function isOnboardingDirectEntryGuardPath(path: string) {
+  return ONBOARDING_DIRECT_ENTRY_GUARD_PATHS.has(path)
+}
+
 export function isPreCreateOnboardingPath(
   path: string | null | undefined,
   options?: { source?: string | null },

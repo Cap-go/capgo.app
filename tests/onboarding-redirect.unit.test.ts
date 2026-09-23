@@ -217,6 +217,15 @@ describe('onboarding dashboard redirect', () => {
   })
 
   // Invitation/set_password are not first-app create paths (allowlist regression).
+  it('flags /apps and /apikeys for direct-entry hard-gate routing', async () => {
+    const module = await import('../src/utils/onboardingRedirect.ts')
+
+    expect(module.isOnboardingDirectEntryGuardPath('/apps')).toBe(true)
+    expect(module.isOnboardingDirectEntryGuardPath('/apikeys')).toBe(true)
+    expect(module.isOnboardingDirectEntryGuardPath('/dashboard')).toBe(false)
+    expect(module.isOnboardingDirectEntryGuardPath('/scan')).toBe(false)
+  })
+
   it('confirms console escapes during pre-create onboarding even without resumeAppId', async () => {
     const module = await import('../src/utils/onboardingRedirect.ts')
 
