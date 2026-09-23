@@ -51,8 +51,10 @@ describe('fetchBundlePages empty-list EOF', () => {
   })
 
   it('still throws when cannot_get_bundle has a different message', async () => {
+    const firstPage = Array.from({ length: 50 }, (_, index) => makeBundleRow(index))
     await expect(getActiveAppVersions('test-key', 'com.test.app', {
       invoke: createInvokeStub({
+        0: async () => ({ data: firstPage, error: null }),
         1: async () => ({ data: null, error: makeCannotGetBundleError('Access denied') }),
       }),
     })).rejects.toThrow(/not found in database/)
