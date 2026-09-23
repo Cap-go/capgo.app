@@ -23,7 +23,7 @@ interface AuthorizedOnboardingMutation {
   stepOverrides?: Partial<Record<LogicalStepId, { permission: Permission, authType: AuthInfo['authType'] }>>
   // This trusted adapter builds a patch only for allowedSteps; logical step IDs
   // and their stored representation belong to the caller, not authorization.
-  buildPatch: (input: { current: AppOnboardingState, allowedSteps: ReadonlySet<LogicalStepId>, at: string }) => AppOnboardingPatch | null
+  buildPatch: (input: { current: AppOnboardingState, currentValue: unknown, allowedSteps: ReadonlySet<LogicalStepId>, at: string }) => AppOnboardingPatch | null
   afterPersist?: (tx: WriteTransaction, result: AppOnboardingMutationResult) => Promise<unknown>
 }
 
@@ -51,7 +51,7 @@ export async function persistLockedAuthorizedOnboardingMutation(
   if (!allowedSteps.size)
     return null
   const at = new Date().toISOString()
-  const patch = mutation.buildPatch({ current: parseAppOnboarding(row.onboarding), allowedSteps, at })
+  const patch = mutation.buildPatch({ current: parseAppOnboarding(row.onboarding), currentValue: row.onboarding, allowedSteps, at })
   if (!patch)
     return null
   const merged = applyAppOnboardingPatch(row.onboarding, patch, () => at)
