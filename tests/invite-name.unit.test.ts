@@ -7,7 +7,9 @@ describe('containsDomainName', () => {
     'www.evil.com',
     'https://evil.com/path',
     'evil.com:443',
+    'evil.com:65536',
     'Support evil.com',
+    'John(evil.com)',
     '例子.测试',
     'xn--fsqu00a.xn--0zwm56d',
   ])('detects domain names in %s', (name) => {
