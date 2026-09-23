@@ -115,7 +115,7 @@ async function getCreditProductIdForCustomer(c: Context, customerId: string): Pr
       .maybeSingle()
     if (error)
       throw error
-    return data ? { credit_id: getPlanCreditProductId(data, billingAccount) } : null
+    return data ? { credit_id: resolvePlanCreditProductId(data, billingAccount) } : null
   }
 
   const { data: stripeInfo, error: stripeInfoError } = await supabaseAdmin(c)
