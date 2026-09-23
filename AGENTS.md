@@ -158,7 +158,7 @@ testing against Cloudflare Workers.
 `/channel_self`, `/updates`, and `/stats` are public plugin endpoints in `plugins/`. They take no API key, JWT, or device secret — the client asserts `device_id`. That is the product.
 
 - Unauthenticated SET on `/channel_self` (POST/DELETE persist, client-controlled `plugin_version`, `device_id` spoof) is **intended behavior**. It is **NOT** a security issue.
-- Do **not** open a security-fix PR or keep a GHSA open for "missing auth on channel_self set". Closed: GHSA-g9h5 / PR #3222. Same class as GHSA-469v (GET `/channel_self` enumeration is already documented as intended).
+- Do **not** open a security-fix PR or keep a GHSA open for "missing auth on channel_self set". Closed in PR #3222. GET `/channel_self` enumeration is also documented as intended.
 - Dashboard/API forced overrides on private channels remain a separate, authenticated path. Do **not** "fix" the public plugin set path.
 
 ## MUST NOT — security advisories and public PRs
