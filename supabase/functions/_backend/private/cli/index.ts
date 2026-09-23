@@ -222,7 +222,8 @@ app.get('/warnings', middlewareKey(), async (c) => {
     throw simpleError('cannot_get_cli_warnings', 'Cannot get CLI warnings', { error })
   }
 
-  return c.json(data ?? [])
+  // Json[] is recursive in generated Supabase types; avoid deep Hono json() inference.
+  return c.json((data ?? []) as unknown)
 })
 
 app.get('/2fa/reject-org', middlewareKey(), async (c) => {
