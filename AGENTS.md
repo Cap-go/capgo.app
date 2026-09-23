@@ -161,6 +161,24 @@ testing against Cloudflare Workers.
 - Do **not** open a security-fix PR or keep a GHSA open for "missing auth on channel_self set". Closed: GHSA-g9h5 / PR #3222. Same class as GHSA-469v (GET `/channel_self` enumeration is already documented as intended).
 - Dashboard/API forced overrides on private channels remain a separate, authenticated path. Do **not** "fix" the public plugin set path.
 
+## MUST NOT — security advisories and public PRs
+
+- Do **not** put GHSA ids in public PR titles, bodies, branch names, commit messages, issues, or changelogs.
+- Do **not** quote unpublished advisory bodies or PoCs into public docs, Issues, or PRs.
+- Embargoed security detail stays need-to-know until Charly/Martin approve disclosure.
+- Private Cap-go/crew-memory may reference GHSA ids when already in play.
+
+## Agent security regressions
+
+Before changing authz, OTA/channel/bundle, CLI zip paths, webhooks, or SECURITY DEFINER SQL, read and follow:
+
+`docs/agent-security-regressions.md`
+
+Known non-vulns (also in org SECURITY.md / https://capgo.app/security/):
+
+- Unauthenticated `channel_self` SET and designed no-API-key `/updates` / `/stats` are intentional (see Plugin endpoint security triage HARD RULE above).
+- Uploader encryption mislabel on `external_url` bundles is not a Capgo vulnerability.
+
 ### Production Scale Guardrails
 
 Capgo production data is large enough that "small queue" designs are
