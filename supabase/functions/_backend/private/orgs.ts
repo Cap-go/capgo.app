@@ -1,4 +1,5 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
 import { BRES, parseBody, simpleError, useCors } from '../utils/hono.ts'
@@ -173,7 +174,7 @@ app.patch('/', middlewareAuth, async (c) => {
     throw simpleError('invalid_body', 'Invalid body', { error: parsed.error.message })
 
   const { org_id: orgId, ...fields } = parsed.data
-  const updateFields: Record<string, unknown> = {}
+  const updateFields: Partial<Database['public']['Tables']['orgs']['Update']> = {}
 
   if (fields.name !== undefined)
     updateFields.name = fields.name
