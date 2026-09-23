@@ -418,7 +418,7 @@ jobs:
           warm_get() {
             local path="$1"
             for attempt in 1 2 3 4 5; do
-              status=$(curl -s -o /tmp/edge-warm.body -w '%{http_code}' "${base_url}${path}" || true)
+              status=$(curl --max-time 10 -s -o /tmp/edge-warm.body -w '%{http_code}' "${base_url}${path}" || true)
               echo "edge warm GET path=${path} attempt=${attempt} status=${status}"
               if [ "${status}" != "502" ] && [ "${status}" != "503" ] && [ "${status}" != "000" ]; then
                 return 0
@@ -430,7 +430,7 @@ jobs:
           warm_post() {
             local path="$1"
             for attempt in 1 2 3 4 5; do
-              status=$(curl -s -o /tmp/edge-warm.body -w '%{http_code}' -X POST "${base_url}${path}" \
+              status=$(curl --max-time 10 -s -o /tmp/edge-warm.body -w '%{http_code}' -X POST "${base_url}${path}" \
                 -H 'Content-Type: application/json' \
                 -H 'apisecret: testsecret' \
                 -d '{}' || true)
@@ -1488,7 +1488,7 @@ jobs:
           warm_get() {
             local path="$1"
             for attempt in 1 2 3 4 5; do
-              status=$(curl -s -o /tmp/edge-warm.body -w '%{http_code}' "${base_url}${path}" || true)
+              status=$(curl --max-time 10 -s -o /tmp/edge-warm.body -w '%{http_code}' "${base_url}${path}" || true)
               echo "edge warm GET path=${path} attempt=${attempt} status=${status}"
               if [ "${status}" != "502" ] && [ "${status}" != "503" ] && [ "${status}" != "000" ]; then
                 return 0
@@ -1500,7 +1500,7 @@ jobs:
           warm_post() {
             local path="$1"
             for attempt in 1 2 3 4 5; do
-              status=$(curl -s -o /tmp/edge-warm.body -w '%{http_code}' -X POST "${base_url}${path}" \
+              status=$(curl --max-time 10 -s -o /tmp/edge-warm.body -w '%{http_code}' -X POST "${base_url}${path}" \
                 -H 'Content-Type: application/json' \
                 -H 'apisecret: testsecret' \
                 -d '{}' || true)

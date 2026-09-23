@@ -3,20 +3,25 @@
 ALTER TABLE public.stripe_info
   ADD COLUMN IF NOT EXISTS billing_account text;
 
-UPDATE public.stripe_info
-SET billing_account = 'ee'
-WHERE billing_account IS NULL;
-
 ALTER TABLE public.stripe_info
-  ALTER COLUMN billing_account SET DEFAULT 'ee',
-  ALTER COLUMN billing_account SET NOT NULL;
+  ALTER COLUMN billing_account SET DEFAULT 'ee';
 
 ALTER TABLE public.stripe_info
   DROP CONSTRAINT IF EXISTS stripe_info_billing_account_check;
 
 ALTER TABLE public.stripe_info
   ADD CONSTRAINT stripe_info_billing_account_check
-  CHECK (billing_account IN ('ee', 'us'));
+  CHECK (billing_account IN ('ee', 'us')) NOT VALID;
+
+UPDATE public.stripe_info
+SET billing_account = 'ee'
+WHERE billing_account IS NULL;
+
+ALTER TABLE public.stripe_info
+  VALIDATE CONSTRAINT stripe_info_billing_account_check;
+
+ALTER TABLE public.stripe_info
+  ALTER COLUMN billing_account SET NOT NULL;
 
 COMMENT ON COLUMN public.stripe_info.billing_account IS
   'Stripe account: ee (Capgo OÜ legacy) or us (CodepushGo LLC).';
