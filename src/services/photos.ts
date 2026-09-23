@@ -5,6 +5,7 @@ import { setErrors } from '@formkit/core'
 import mime from 'mime'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
+import { updateOrganization } from './organizations'
 import { createSignedImageUrl } from './storage'
 import { useSupabase } from './supabase'
 
@@ -155,21 +156,18 @@ async function uploadPhotoOrg(formId: string, data: string, fileName: string, co
       return
     }
 
-    const { data: usr, error: dbError } = await supabase
-      .from('orgs')
-      .update({ logo: storagePath })
-      .eq('id', safeGid)
-      .select('id')
-      .single()
+    const { error: dbError } = await updateOrganization(safeGid, {
+      logo: storagePath,
+    })
 
-    if (!usr || dbError) {
+    if (dbError) {
       setErrors(formId, [wentWrong], {})
       console.error('upload error', dbError)
       return
     }
 
     await organizationStore.fetchOrganizations()
-    organizationStore.setCurrentOrganization(usr.id)
+    organizationStore.setCurrentOrganization(safeGid)
   }
 
   await uploadPhotoShared(data, `org/${safeGid}/logo/${fileName}`, contentType, isLoading, orgCallback)
@@ -195,14 +193,11 @@ export async function uploadOrgLogoFile(orgId: string, file: Blob, fileName?: st
   if (uploadError)
     throw uploadError
 
-  const { data: updatedOrg, error: updateError } = await supabase
-    .from('orgs')
-    .update({ logo: storagePath })
-    .eq('id', safeOrgId)
-    .select('id')
-    .single()
+  const { error: updateError } = await updateOrganization(safeOrgId, {
+    logo: storagePath,
+  })
 
-  if (updateError || !updatedOrg) {
+  if (updateError) {
     const { error: cleanupError } = await supabase.storage
       .from('images')
       .remove([storagePath])
@@ -213,6 +208,7 @@ export async function uploadOrgLogoFile(orgId: string, file: Blob, fileName?: st
 
   try {
     await organizationStore.fetchOrganizations()
+    organizationStore.setCurrentOrganization(safeOrgId)
   }
   catch (error) {
     console.error('Failed to refresh organizations after org logo upload', error)
