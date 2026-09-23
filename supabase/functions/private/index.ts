@@ -26,6 +26,7 @@ import { app as org_billing } from '../_backend/private/org_billing.ts'
 import { app as org_members } from '../_backend/private/org_members.ts'
 import { app as org_notification_stats } from '../_backend/private/org_notification_stats.ts'
 import { app as organization_invitation } from '../_backend/private/organization_invitation.ts'
+import { app as orgs } from '../_backend/private/orgs.ts'
 // Webapps API
 import { app as plans } from '../_backend/private/plans.ts'
 import { app as publicStats } from '../_backend/private/public_stats.ts'
@@ -79,6 +80,7 @@ appGlobal.route('/org_members', org_members)
 appGlobal.route('/org_notification_stats', org_notification_stats)
 appGlobal.route('/organization_invitation', organization_invitation)
 appGlobal.route('/org_billing', org_billing)
+appGlobal.route('/orgs', orgs)
 appGlobal.route('/download_link', download_link)
 appGlobal.route('/log_as', log_as)
 appGlobal.route('/mcp_oauth', mcp_oauth)

@@ -18,6 +18,7 @@ const mockFrom = vi.fn((table: string) => {
   }
 })
 const mockRpc = vi.fn()
+const mockFetchOrganizationsList = vi.fn()
 const mockIsPlatformAdmin = vi.fn(async () => false)
 const mockCreateSignedImageUrl = vi.fn()
 const mockResolveImagePath = vi.fn((raw?: string | null) => ({
@@ -82,6 +83,10 @@ vi.mock('../src/stores/dashboardApps.ts', () => ({
     reset: vi.fn(),
     fetchApps: vi.fn(),
   }),
+}))
+
+vi.mock('../src/services/organizations.ts', () => ({
+  fetchOrganizationsList: mockFetchOrganizationsList,
 }))
 
 describe('organization store deleteOrganization', () => {
@@ -203,7 +208,7 @@ describe('organization store fetchOrganizations', () => {
   it.concurrent('fetches organizations with the auth session when the public profile is unavailable', async () => {
     mainStore.user = undefined
     mockCreateSignedImageUrl.mockResolvedValueOnce('')
-    mockRpc.mockResolvedValueOnce({
+    mockFetchOrganizationsList.mockResolvedValueOnce({
       data: [{
         'gid': 'org-auth-fallback',
         'role': 'org_super_admin',
@@ -227,7 +232,7 @@ describe('organization store fetchOrganizations', () => {
 
     await store.fetchOrganizations()
 
-    expect(mockRpc).toHaveBeenCalledWith('get_orgs_v7')
+    expect(mockFetchOrganizationsList).toHaveBeenCalled()
     expect(store.organizations).toHaveLength(1)
     expect(store.currentOrganization?.gid).toBe('org-auth-fallback')
   })
@@ -253,7 +258,7 @@ describe('organization store fetchOrganizations', () => {
       gid: 'org-b',
       name: 'Organization B',
     }
-    mockRpc
+    mockFetchOrganizationsList
       .mockResolvedValueOnce({ data: [organizationA], error: null })
       .mockResolvedValueOnce({ data: [organizationB], error: null })
 
