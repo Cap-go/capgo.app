@@ -67,6 +67,7 @@ import { uploadSupportLogs } from '../support/support-upload.js'
 import { offerSupportUploadBeforeAi } from '../support/support-upload-prompt.js'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { assertCliPermission, canPromptInteractively, createSupabaseClient, findSavedKey, getConfig, getOrganizationId, getRemoteConfig, sendEvent, trimTrailingSlashes, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { getBuilderAppId } from './app-id'
 import { syncAndroidVersion } from './android-version'
 import { createBuildCancellationSignalHandler, requestBuildCancellation } from './cancellation'
 import { mergeCredentials, MIN_OUTPUT_RETENTION_SECONDS, parseAndroidPlayStoreReleaseStatus, parseAndroidPlayStoreTrack, parseInAppUpdatePriority, parseOptionalBoolean, parseOutputRetentionSeconds } from './credentials'
@@ -365,6 +366,25 @@ export function buildJobCachePayload(input?: BuildJobCachePayloadInput): BuildJo
   }
 
   return payload
+}
+
+export const FAILED_BUILD_CACHE_HINT
+  = 'Tip: if this looks cache-related (stale artifacts between RC/PROD or branches), retry with --cache-key <env> to isolate compilation cache, or --no-cache to skip cache restore.'
+
+/**
+ * Cache isolation tip after a failed native build.
+ * Skip it in caller-handled (Ink onboarding) mode: the TUI streams log.info into
+ * FullscreenBuildOutput, the extra line overflows the golden viewport, and
+ * --cache-key / --no-cache are not how the wizard retries.
+ */
+export function shouldLogFailedBuildCacheHint(options: {
+  cache?: boolean
+  cacheKey?: string
+  aiAnalysisMode?: 'auto-prompt' | 'caller-handled' | 'skip'
+}): boolean {
+  return options.cache !== false
+    && !options.cacheKey?.trim()
+    && options.aiAnalysisMode !== 'caller-handled'
 }
 
 /**
@@ -1447,7 +1467,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
 
     // @capacitor/cli loadConfig() is cwd-based; honor --path for monorepos/workspaces.
     const config = await withCwd(projectDir, () => getConfig())
-    appId = appId || config?.config?.appId
+    appId = getBuilderAppId(appId, config?.config, 'native') || ''
 
     if (!appId) {
       throw new Error('Missing argument, you need to provide a appId, or be in a capacitor project')
@@ -2346,8 +2366,12 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       }
       else if (finalStatus === 'failed') {
         log.error(`Build failed`)
-        if (options.cache !== false && !options.cacheKey?.trim()) {
-          log.info('Tip: if this looks cache-related (stale artifacts between RC/PROD or branches), retry with --cache-key <env> to isolate compilation cache, or --no-cache to skip cache restore.')
+        if (shouldLogFailedBuildCacheHint({
+          cache: options.cache,
+          cacheKey: options.cacheKey,
+          aiAnalysisMode,
+        })) {
+          log.info(FAILED_BUILD_CACHE_HINT)
         }
         // Non-interactive (CI/CD) failure with neither --ai-analytics nor
         // --send-logs: surface the discoverability tip here, INDEPENDENT of log

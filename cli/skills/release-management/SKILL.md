@@ -38,6 +38,7 @@ Use this skill for OTA update workflows in Capgo Cloud.
 
 - Alias: `u`
 - Example: `npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel production,beta`
+- Cordova example: `npx @capgo/cli@latest bundle upload com.example.app --mode cordova --path www --channel production`
 - Progressive rollout example: `npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel production --rollout 10`
 - Advance an existing rollout: `npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel production --rollout-advance`
 - Key behavior:
@@ -52,6 +53,7 @@ Use this skill for OTA update workflows in Capgo Cloud.
   - Use `--qr-preview` to print a terminal QR code for the uploaded bundle after a successful upload. App preview must be enabled first.
   - Use `--send-update-notification` to queue native update-check notifications for channels whose linked bundle changed. Native notifications and push update notifications must be enabled for the app.
 - Important options:
+  - `--mode <framework>` (`cordova` for Cordova apps without `capacitor.config`; webDir defaults to `www`)
   - `-p, --path <path>`
   - `-c, --channel <channel[,channel...]>`
   - `--rollout <percentage>`
@@ -187,6 +189,8 @@ Use this skill for OTA update workflows in Capgo Cloud.
 
 - Alias: `l`
 - Example: `npx @capgo/cli@latest channel list com.example.app`
+- Requires a valid API key with `app.read` and `app.read_channels` permission for the app. Permission failures identify the required permission.
+- Displays Yes/No settings and marks channels without a bundle as Unlinked. Narrow terminals show each channel as a Setting/Value table.
 
 ### `channel delete [channelId] [appId]`
 

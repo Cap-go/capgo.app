@@ -12,6 +12,7 @@ import type { McpRegistrar } from '../../../mcp/registrar.js'
 import { findBuildCommandForProjectType, findProjectType, findSavedKeySilent, getAppId, getConfig, getPackageScripts } from '../../../utils.js'
 import { findPackageManagerType } from '@capgo/find-package-manager'
 import { loadSavedCredentials, updateSavedCredentials } from '../../credentials.js'
+import { getBuilderAppId, getConfiguredBuilderAppId } from '../../app-id.js'
 import { getPlatformDirFromCapacitorConfig } from '../../platform-paths.js'
 import type { AndroidEffectDeps } from '../android/flow.js'
 import type { IosEffectDeps } from '../ios/flow.js'
@@ -218,7 +219,9 @@ function buildIosEffectDeps(cwd: string, getAppIdFn: () => Promise<string | unde
     try {
       const ext = await getConfig(true)
       iosDirCache = getPlatformDirFromCapacitorConfig(ext?.config, 'ios') || 'ios'
-      capacitorAppIdCache = getAppId(undefined, ext?.config) ?? ''
+      capacitorAppIdCache = getConfiguredBuilderAppId(ext?.config)
+        ? ext?.config?.appId ?? ''
+        : getAppId(undefined, ext?.config) ?? ''
     }
     catch {
       // Not a Capacitor project / unreadable config — keep the defaults.
@@ -411,18 +414,29 @@ function buildIosEffectDeps(cwd: string, getAppIdFn: () => Promise<string | unde
 export function buildDeps(getSdk: () => CapgoSDK): EngineDeps {
   const cwd = process.cwd()
   const getAppIdClosure = async (): Promise<string | undefined> => {
+    let ext: Awaited<ReturnType<typeof getConfig>> | undefined
     try {
-      const ext = await getConfig(true)
-      return getAppId(undefined, ext?.config)
+      ext = await getConfig(true)
     }
     catch {
       return undefined
     }
+    return getBuilderAppId(undefined, ext?.config)
   }
   return {
     cwd,
     hasSavedKey: () => Boolean(findSavedKeySilent()),
     getAppId: getAppIdClosure,
+    getNativeAppId: async () => {
+      let ext: Awaited<ReturnType<typeof getConfig>> | undefined
+      try {
+        ext = await getConfig(true)
+      }
+      catch {
+        return undefined
+      }
+      return getConfiguredBuilderAppId(ext?.config) ? ext?.config?.appId : undefined
+    },
     detectPlatforms: async () => {
       const out: Platform[] = []
       try {

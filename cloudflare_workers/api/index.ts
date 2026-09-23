@@ -4,6 +4,7 @@ import { app as accept_invitation } from '../../supabase/functions/_backend/priv
 import { app as admin_credits } from '../../supabase/functions/_backend/private/admin_credits.ts'
 import { app as admin_org_support_channel } from '../../supabase/functions/_backend/private/admin_org_support_channel.ts'
 import { app as admin_stats } from '../../supabase/functions/_backend/private/admin_stats.ts'
+import { app as bundle_install_stats } from '../../supabase/functions/_backend/private/bundle_install_stats.ts'
 import { app as channel_device } from '../../supabase/functions/_backend/private/channel_device.ts'
 import { app as channel_stats } from '../../supabase/functions/_backend/private/channel_stats.ts'
 import { app as config } from '../../supabase/functions/_backend/private/config.ts'
@@ -22,6 +23,7 @@ import { app as log_as } from '../../supabase/functions/_backend/private/log_as.
 import { app as native_observe_stats } from '../../supabase/functions/_backend/private/native_observe_stats.ts'
 import { app as observe } from '../../supabase/functions/_backend/private/observe.ts'
 import { app as onboarding_ab_tests } from '../../supabase/functions/_backend/private/onboarding_ab_tests.ts'
+import { app as onboarding_progress } from '../../supabase/functions/_backend/private/onboarding_progress.ts'
 import { app as org_notification_stats } from '../../supabase/functions/_backend/private/org_notification_stats.ts'
 import { app as plans } from '../../supabase/functions/_backend/private/plans.ts'
 import { app as publicStats } from '../../supabase/functions/_backend/private/public_stats.ts'
@@ -41,7 +43,6 @@ import { app as stats_priv } from '../../supabase/functions/_backend/private/sta
 import { app as storeTop } from '../../supabase/functions/_backend/private/store_top.ts'
 import { app as stripe_checkout } from '../../supabase/functions/_backend/private/stripe_checkout.ts'
 import { app as stripe_portal } from '../../supabase/functions/_backend/private/stripe_portal.ts'
-import { app as bundle_install_stats } from '../../supabase/functions/_backend/private/bundle_install_stats.ts'
 import { app as update_delivery_stats } from '../../supabase/functions/_backend/private/update_delivery_stats.ts'
 import { app as validate_password_compliance } from '../../supabase/functions/_backend/private/validate_password_compliance.ts'
 import { app as verify_email_otp } from '../../supabase/functions/_backend/private/verify_email_otp.ts'
@@ -67,6 +68,7 @@ import { app as cron_app_fame } from '../../supabase/functions/_backend/triggers
 import { app as cron_clean_orphan_images } from '../../supabase/functions/_backend/triggers/cron_clean_orphan_images.ts'
 import { app as cron_clear_versions } from '../../supabase/functions/_backend/triggers/cron_clear_versions.ts'
 import { app as cron_email } from '../../supabase/functions/_backend/triggers/cron_email.ts'
+import { app as cron_onboarding_refresh_apps } from '../../supabase/functions/_backend/triggers/cron_onboarding_refresh_apps.ts'
 import { app as cron_reconcile_build_status } from '../../supabase/functions/_backend/triggers/cron_reconcile_build_status.ts'
 import { app as cron_rollout_auto_pause } from '../../supabase/functions/_backend/triggers/cron_rollout_auto_pause.ts'
 import { app as cron_stat_app } from '../../supabase/functions/_backend/triggers/cron_stat_app.ts'
@@ -91,7 +93,7 @@ import { app as on_version_delete } from '../../supabase/functions/_backend/trig
 import { app as on_version_update } from '../../supabase/functions/_backend/triggers/on_version_update.ts'
 import { app as pluginNotifications } from '../../supabase/functions/_backend/triggers/plugin_notifications.ts'
 import { app as queue_consumer } from '../../supabase/functions/_backend/triggers/queue_consumer.ts'
-import { app as send_email } from '../../supabase/functions/_backend/triggers/send_email.ts'
+import { app as send_email } from './triggers/send_email.ts'
 import { app as stripe_event } from '../../supabase/functions/_backend/triggers/stripe_event.ts'
 import { app as stripe_event_us } from '../../supabase/functions/_backend/triggers/stripe_event_us.ts'
 import { app as webhook_delivery } from '../../supabase/functions/_backend/triggers/webhook_delivery.ts'
@@ -123,7 +125,7 @@ app.route('/check_cpu_usage', check_cpu_usage)
 app.route('/translation', translation)
 app.route('/plugin_regions', pluginRegions)
 
-// Private API
+// Private routes are bundled into this Cloudflare API worker at deploy time.
 const functionNamePrivate = 'private'
 const appPrivate = createHono(functionNamePrivate, version)
 appPrivate.route('/plans', plans)
@@ -149,6 +151,7 @@ appPrivate.route('/channel_stats', channel_stats)
 appPrivate.route('/native_observe_stats', native_observe_stats)
 appPrivate.route('/observe', observe)
 appPrivate.route('/onboarding_ab_tests', onboarding_ab_tests)
+appPrivate.route('/onboarding_progress', onboarding_progress)
 appPrivate.route('/org_notification_stats', org_notification_stats)
 appPrivate.route('/update_delivery_stats', update_delivery_stats)
 appPrivate.route('/bundle_install_stats', bundle_install_stats)
@@ -224,6 +227,8 @@ appTriggers.route('/cron_stat_app', cron_stat_app)
 appTriggers.route('/cron_stat_org', cron_stat_org)
 appTriggers.route('/cron_sync_sub', cron_sync_sub)
 appTriggers.route('/cron_rollout_auto_pause', cron_rollout_auto_pause)
+// The queue dispatcher sends onboarding refresh batches to this Cloudflare route.
+appTriggers.route('/cron_onboarding_refresh_apps', cron_onboarding_refresh_apps)
 appTriggers.route('/queue_consumer', queue_consumer)
 appTriggers.route('/send_email', send_email)
 appTriggers.route('/webhook_delivery', webhook_delivery)

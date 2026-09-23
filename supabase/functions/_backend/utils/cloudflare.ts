@@ -1,9 +1,9 @@
-import type { AnalyticsEngineDataset, D1Database, Hyperdrive, KVNamespace, Queue } from '@cloudflare/workers-types'
+import type { AnalyticsEngineDataset, D1Database, Hyperdrive, KVNamespace, Queue, SendEmail } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
 import type { DeviceComparable } from './deviceComparison.ts'
 import type { StatsInsightRawAction, StatsInsightRawDaily, StatsInsightRawDevice, StatsInsightRawSummary, StatsInsightRawVersion } from './statsInsights.ts'
 import type { Database } from './supabase.types.ts'
-import type { DeviceRes, DeviceWithoutCreatedAt, NativeVersionUsage, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
+import type { DeviceRes, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
 import { CACHE_PUT_TIMEOUT_MS, CacheHelper } from './cache.ts'
 import { hasComparableDeviceChanged, toComparableDevice } from './deviceComparison.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
@@ -63,6 +63,7 @@ export type Bindings = {
   NOTIFICATION_EVENTS?: AnalyticsEngineDataset
   CLI_USAGE?: AnalyticsEngineDataset
   NOTIFICATION_QUEUE?: Queue
+  AUTH_EMAIL?: SendEmail
   DB_STOREAPPS: D1Database
   CHANNEL_SELF_STORE?: KVNamespace
   PLUGIN_NOTIFICATION_QUEUE?: KVNamespace
@@ -451,7 +452,7 @@ function convertDataToJsTypes<T>(apiResponse: AnalyticsApiResponse) {
   })
 }
 
-export async function runQueryToCFA<T>(c: Context, query: string) {
+export async function runQueryToCFA<T>(c: Context, query: string, signal?: AbortSignal) {
   const CF_ANALYTICS_TOKEN = getEnv(c, 'CF_ANALYTICS_TOKEN')
   const CF_ACCOUNT_ID = getEnv(c, 'CF_ACCOUNT_ANALYTICS_ID')
 
@@ -474,6 +475,7 @@ export async function runQueryToCFA<T>(c: Context, query: string) {
       method: 'POST',
       headers,
       body: query,
+      signal,
     })
 
     if (!response.ok) {
@@ -911,6 +913,128 @@ ORDER BY date, platform, version_build`
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native version usage', error: serializeError(e), query })
   }
   return []
+}
+
+export async function readNativeActiveDevicesSummaryCF(
+  c: Context,
+  app_id: string,
+  period_start: string,
+  period_end: string,
+): Promise<NativeActiveDevicesByPlatformRow[]> {
+  if (!c.env.DEVICE_USAGE)
+    return []
+
+  const platformQuery = `SELECT
+  if(blob4 != '', blob4, if(double1 = 1, 'ios', if(double1 = 2, 'electron', if(double1 = 0, 'android', 'unknown')))) AS platform,
+  COUNT(DISTINCT blob1) AS devices
+FROM device_usage
+WHERE
+  index1 = '${escapeSqlString(app_id)}'
+  AND timestamp >= toDateTime('${formatDateCF(period_start)}')
+  AND timestamp < toDateTime('${formatDateCF(period_end)}')
+GROUP BY platform
+ORDER BY platform`
+
+  const totalQuery = `SELECT
+  COUNT(DISTINCT blob1) AS devices
+FROM device_usage
+WHERE
+  index1 = '${escapeSqlString(app_id)}'
+  AND timestamp >= toDateTime('${formatDateCF(period_start)}')
+  AND timestamp < toDateTime('${formatDateCF(period_end)}')`
+
+  cloudlog({ requestId: c.get('requestId'), message: 'readNativeActiveDevicesSummaryCF query', query: platformQuery })
+  try {
+    const [platformRows, totalRows] = await Promise.all([
+      runQueryToCFA<{ platform: string, devices: number | string }>(c, platformQuery),
+      runQueryToCFA<{ devices: number | string }>(c, totalQuery),
+    ])
+
+    const rows = platformRows.map(row => ({
+      platform: row.platform || 'unknown',
+      devices: Math.max(0, Number(row.devices) || 0),
+    }))
+
+    rows.push({
+      platform: 'total',
+      devices: Math.max(0, Number(totalRows[0]?.devices) || 0),
+    })
+
+    return rows
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native active devices summary', error: serializeError(e), query: platformQuery })
+    throw e
+  }
+}
+
+export async function readNativeDailyPlatformActiveCF(
+  c: Context,
+  app_id: string,
+  period_start: string,
+  period_end: string,
+): Promise<Array<{ date: string, platform: string, devices: number }>> {
+  if (!c.env.DEVICE_USAGE)
+    return []
+
+  const whereClause = `index1 = '${escapeSqlString(app_id)}'
+  AND timestamp >= toDateTime('${formatDateCF(period_start)}')
+  AND timestamp < toDateTime('${formatDateCF(period_end)}')`
+
+  const platformQuery = `SELECT
+  formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
+  if(blob4 != '', blob4, if(double1 = 1, 'ios', if(double1 = 2, 'electron', if(double1 = 0, 'android', 'unknown')))) AS platform,
+  COUNT(DISTINCT blob1) AS devices
+FROM device_usage
+WHERE
+  ${whereClause}
+GROUP BY date, platform
+ORDER BY date, platform`
+
+  const totalQuery = `SELECT
+  formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
+  'total' AS platform,
+  COUNT(DISTINCT blob1) AS devices
+FROM device_usage
+WHERE
+  ${whereClause}
+GROUP BY date
+ORDER BY date`
+
+  cloudlog({ requestId: c.get('requestId'), message: 'readNativeDailyPlatformActiveCF query', query: platformQuery })
+  try {
+    const [platformRows, totalRows] = await Promise.all([
+      runQueryToCFA<{ date: string, platform: string, devices: number | string }>(c, platformQuery),
+      runQueryToCFA<{ date: string, platform: string, devices: number | string }>(c, totalQuery),
+    ])
+
+    const rows = [
+      ...platformRows.map(row => ({
+        date: row.date,
+        platform: row.platform || 'unknown',
+        devices: Math.max(0, Number(row.devices) || 0),
+      })),
+      ...totalRows.map(row => ({
+        date: row.date,
+        platform: 'total',
+        devices: Math.max(0, Number(row.devices) || 0),
+      })),
+    ]
+
+    rows.sort((left, right) => {
+      if (left.date !== right.date)
+        return left.date < right.date ? -1 : 1
+      if (left.platform === right.platform)
+        return 0
+      return left.platform < right.platform ? -1 : 1
+    })
+
+    return rows
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native daily platform active', error: serializeError(e), queries: { platformQuery, totalQuery } })
+    throw e
+  }
 }
 
 export async function readDeviceVersionCountsCF(c: Context, app_id: string, channelName?: string): Promise<Record<string, number>> {
@@ -1575,13 +1699,13 @@ export interface ReadUpdateDeliveryTimingEventsCFParams {
   app_ids?: string[]
   /** When set, restrict to these version names (blob3). */
   version_names?: string[]
+  after_cursor?: {
+    created_at: string
+    app_id: string
+    device_id: string
+    action: string
+  }
   limit?: number
-  /**
-   * Platform metadata-only mode: keep AE's 50k row budget on timed completes.
-   * Without this, platform scans fill the limit with download_complete rows that
-   * have no duration and admin delivery latency stays empty.
-   */
-  require_duration?: boolean
 }
 
 export function buildUpdateDeliveryTimingEventsCFQuery(params: ReadUpdateDeliveryTimingEventsCFParams): string {
@@ -1601,9 +1725,25 @@ export function buildUpdateDeliveryTimingEventsCFQuery(params: ReadUpdateDeliver
           : `AND blob3 IN (${params.version_names.map(name => `'${escapeSqlString(name)}'`).join(', ')})`
       )
     : ''
-  // Prefer double1 (written by trackLogsCF) and keep blob4 duration for older rows.
-  const durationFilter = params.require_duration
-    ? `AND (double1 > 0 OR position('duration' IN blob4) > 0)`
+  const cursorFilter = params.after_cursor
+    ? `AND (
+  timestamp > toDateTime('${formatDateCF(params.after_cursor.created_at)}')
+  OR (
+    timestamp = toDateTime('${formatDateCF(params.after_cursor.created_at)}')
+    AND (
+      index1 > '${escapeSqlString(params.after_cursor.app_id)}'
+      OR (
+        index1 = '${escapeSqlString(params.after_cursor.app_id)}'
+        AND blob1 > '${escapeSqlString(params.after_cursor.device_id)}'
+      )
+      OR (
+        index1 = '${escapeSqlString(params.after_cursor.app_id)}'
+        AND blob1 = '${escapeSqlString(params.after_cursor.device_id)}'
+        AND blob2 > '${escapeSqlString(params.after_cursor.action)}'
+      )
+    )
+  )
+)`
     : ''
 
   return `SELECT
@@ -1621,8 +1761,8 @@ WHERE
   AND blob2 IN (${actionsList})
   ${appFilter}
   ${versionFilter}
-  ${durationFilter}
-ORDER BY created_at ASC
+  ${cursorFilter}
+ORDER BY created_at ASC, app_id ASC, device_id ASC, blob2 ASC
 LIMIT ${limit}`
 }
 
@@ -1667,414 +1807,6 @@ export async function readUpdateDeliveryTimingEventsCF(
   }
   catch (e) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading update delivery timing events', error: serializeError(e), query })
-    throw e
-  }
-}
-
-const PLATFORM_DELIVERY_END_ACTIONS_SQL = '\'download_complete\', \'download_zip_complete\''
-const PLATFORM_DELIVERY_START_ACTIONS_SQL = '\'download_0\', \'download_zip_start\', \'download_manifest_start\''
-const PLATFORM_DELIVERY_MAX_MS = 7_200_000
-const PLATFORM_DELIVERY_TS_SENTINEL_SQL = 'toDateTime(\'2100-01-01 00:00:00\')'
-/** Typed Double so if() branches match. Bare 0 is Int and 422s against double1. */
-const PLATFORM_DELIVERY_DURATION_SENTINEL_SQL = '0.0'
-/** Keep each AE scan bounded; admin 90-day windows merge these chunks. */
-export const PLATFORM_DELIVERY_CF_CHUNK_DAYS = 7
-export const PLATFORM_DELIVERY_CF_CHUNK_CONCURRENCY = 4
-const PLATFORM_DELIVERY_PAIRING_LOOKBACK_MS = 2 * 60 * 60 * 1000
-
-export interface PlatformUpdateDeliveryDailyCFRow {
-  day: string
-  samples: number
-  devices: number
-  p50_ms: number | null
-  p75_ms: number | null
-  p95_ms: number | null
-  p99_ms: number | null
-}
-
-export interface PlatformUpdateDeliveryOverviewCFRow {
-  samples: number
-  devices: number
-  p50_ms: number | null
-  p75_ms: number | null
-  p95_ms: number | null
-  p99_ms: number | null
-}
-
-export interface BuildPlatformUpdateDeliveryStatsCFQueryParams {
-  query_start: string
-  period_start: string
-  end_date: string
-}
-
-function platformDeliveryDaySql(value: string): string {
-  return formatDateCF(value).slice(0, 10)
-}
-
-/**
- * Pair start/complete in AE instead of pulling 50k raw rows per day.
- * Prefer double1 (trackLogsCF copies metadata duration there).
- *
- * Analytics Engine if() requires both branches to share a type
- * (https://developers.cloudflare.com/analytics/analytics-engine/sql-reference/conditional-functions/).
- * avgIf/sumIf/countIf rewrite to if(cond, expr, NULL) and 422 with Double vs Null.
- * Use max() + typed 0.0 so a real duration wins; 0 means fall back to
- * first-start/first-complete. Timestamps use a typed DateTime sentinel.
- */
-function buildPlatformUpdateDeliveryDeliveriesSubquery(params: BuildPlatformUpdateDeliveryStatsCFQueryParams): string {
-  const metaDurationSql = `max(if(blob2 IN (${PLATFORM_DELIVERY_END_ACTIONS_SQL}) AND double1 > 0, double1, ${PLATFORM_DELIVERY_DURATION_SENTINEL_SQL}))`
-  const startTsSql = `min(if(blob2 IN (${PLATFORM_DELIVERY_START_ACTIONS_SQL}), timestamp, ${PLATFORM_DELIVERY_TS_SENTINEL_SQL}))`
-  const endTsSql = `min(if(blob2 IN (${PLATFORM_DELIVERY_END_ACTIONS_SQL}), timestamp, ${PLATFORM_DELIVERY_TS_SENTINEL_SQL}))`
-
-  return `SELECT
-  formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS day,
-  format('{}:{}', index1, blob1) AS app_device,
-  1 AS sample_weight,
-  if(
-    ${metaDurationSql} > 0,
-    ${metaDurationSql},
-    (toUnixTimestamp(${endTsSql}) - toUnixTimestamp(${startTsSql})) * 1000.0
-  ) AS duration_ms
-FROM app_log
-WHERE timestamp >= toDateTime('${formatDateCF(params.query_start)}')
-  AND timestamp < toDateTime('${formatDateCF(params.end_date)}')
-  AND blob2 IN (${PLATFORM_DELIVERY_END_ACTIONS_SQL}, ${PLATFORM_DELIVERY_START_ACTIONS_SQL})
-GROUP BY index1, blob1, blob3, day`
-}
-
-export function buildPlatformUpdateDeliveryDailyCFQuery(params: BuildPlatformUpdateDeliveryStatsCFQueryParams): string {
-  return `SELECT
-  day,
-  quantileExactWeighted(0.50)(duration_ms, sample_weight) AS p50_ms,
-  quantileExactWeighted(0.75)(duration_ms, sample_weight) AS p75_ms,
-  quantileExactWeighted(0.95)(duration_ms, sample_weight) AS p95_ms,
-  quantileExactWeighted(0.99)(duration_ms, sample_weight) AS p99_ms,
-  SUM(sample_weight) AS samples,
-  COUNT(DISTINCT app_device) AS devices
-FROM (
-  ${buildPlatformUpdateDeliveryDeliveriesSubquery(params)}
-)
-WHERE duration_ms > 0
-  AND duration_ms <= ${PLATFORM_DELIVERY_MAX_MS}
-  AND day >= '${platformDeliveryDaySql(params.period_start)}'
-GROUP BY day
-ORDER BY day ASC`
-}
-
-export function buildPlatformUpdateDeliveryOverviewCFQuery(params: BuildPlatformUpdateDeliveryStatsCFQueryParams): string {
-  return `SELECT
-  quantileExactWeighted(0.50)(duration_ms, sample_weight) AS p50_ms,
-  quantileExactWeighted(0.75)(duration_ms, sample_weight) AS p75_ms,
-  quantileExactWeighted(0.95)(duration_ms, sample_weight) AS p95_ms,
-  quantileExactWeighted(0.99)(duration_ms, sample_weight) AS p99_ms,
-  SUM(sample_weight) AS samples,
-  COUNT(DISTINCT app_device) AS devices
-FROM (
-  ${buildPlatformUpdateDeliveryDeliveriesSubquery(params)}
-)
-WHERE duration_ms > 0
-  AND duration_ms <= ${PLATFORM_DELIVERY_MAX_MS}
-  AND day >= '${platformDeliveryDaySql(params.period_start)}'`
-}
-
-/** Single-row distinct device count for the full platform window (not chunked). */
-export function buildPlatformUpdateDeliveryDeviceCountCFQuery(params: BuildPlatformUpdateDeliveryStatsCFQueryParams): string {
-  return `SELECT
-  COUNT(DISTINCT app_device) AS devices
-FROM (
-  ${buildPlatformUpdateDeliveryDeliveriesSubquery(params)}
-)
-WHERE duration_ms > 0
-  AND duration_ms <= ${PLATFORM_DELIVERY_MAX_MS}
-  AND day >= '${platformDeliveryDaySql(params.period_start)}'`
-}
-
-function toPlatformDeliveryMetric(value: number | string | null | undefined): number | null {
-  if (value === null || value === undefined || value === '')
-    return null
-  const numeric = Number(value)
-  return Number.isFinite(numeric) ? numeric : null
-}
-
-function toPlatformDeliveryCount(value: number | string | null | undefined): number {
-  const numeric = Number(value ?? 0)
-  return Number.isFinite(numeric) ? Math.max(0, Math.round(numeric)) : 0
-}
-
-function emptyPlatformUpdateDeliveryOverviewRow(): PlatformUpdateDeliveryOverviewCFRow {
-  return { samples: 0, devices: 0, p50_ms: null, p75_ms: null, p95_ms: null, p99_ms: null }
-}
-
-function normalizePlatformUpdateDeliveryDailyRow(row: {
-  day: string
-  samples: number | string
-  devices: number | string
-  p50_ms: number | string | null
-  p75_ms: number | string | null
-  p95_ms: number | string | null
-  p99_ms: number | string | null
-}): PlatformUpdateDeliveryDailyCFRow {
-  return {
-    day: typeof row.day === 'string' ? row.day.slice(0, 10) : String(row.day).slice(0, 10),
-    samples: toPlatformDeliveryCount(row.samples),
-    devices: toPlatformDeliveryCount(row.devices),
-    p50_ms: toPlatformDeliveryMetric(row.p50_ms),
-    p75_ms: toPlatformDeliveryMetric(row.p75_ms),
-    p95_ms: toPlatformDeliveryMetric(row.p95_ms),
-    p99_ms: toPlatformDeliveryMetric(row.p99_ms),
-  }
-}
-
-function normalizePlatformUpdateDeliveryOverviewRow(row: {
-  samples: number | string | null | undefined
-  devices: number | string | null | undefined
-  p50_ms: number | string | null
-  p75_ms: number | string | null
-  p95_ms: number | string | null
-  p99_ms: number | string | null
-} | undefined): PlatformUpdateDeliveryOverviewCFRow {
-  return {
-    samples: toPlatformDeliveryCount(row?.samples),
-    devices: toPlatformDeliveryCount(row?.devices),
-    p50_ms: toPlatformDeliveryMetric(row?.p50_ms),
-    p75_ms: toPlatformDeliveryMetric(row?.p75_ms),
-    p95_ms: toPlatformDeliveryMetric(row?.p95_ms),
-    p99_ms: toPlatformDeliveryMetric(row?.p99_ms),
-  }
-}
-
-type PlatformDeliveryPercentileKey = 'p50_ms' | 'p75_ms' | 'p95_ms' | 'p99_ms'
-
-function mergePlatformDeliveryPercentile(
-  rows: Array<Pick<PlatformUpdateDeliveryOverviewCFRow, PlatformDeliveryPercentileKey | 'samples'>>,
-  key: PlatformDeliveryPercentileKey,
-): number | null {
-  let weightedSum = 0
-  let weight = 0
-  for (const row of rows) {
-    const value = row[key]
-    if (value === null || row.samples <= 0)
-      continue
-    weightedSum += value * row.samples
-    weight += row.samples
-  }
-  return weight > 0 ? weightedSum / weight : null
-}
-
-/** Split long admin windows into bounded AE scans with pairing lookback on each chunk. */
-export function splitPlatformUpdateDeliveryStatsParams(
-  params: BuildPlatformUpdateDeliveryStatsCFQueryParams,
-  chunkDays = PLATFORM_DELIVERY_CF_CHUNK_DAYS,
-): BuildPlatformUpdateDeliveryStatsCFQueryParams[] {
-  const periodStartMs = Date.parse(params.period_start)
-  const endMs = Date.parse(params.end_date)
-  if (!Number.isFinite(periodStartMs) || !Number.isFinite(endMs) || endMs <= periodStartMs)
-    return [params]
-
-  const periodMs = endMs - periodStartMs
-  const chunkMs = chunkDays * 24 * 60 * 60 * 1000
-  if (periodMs <= chunkMs)
-    return [params]
-
-  const chunks: BuildPlatformUpdateDeliveryStatsCFQueryParams[] = []
-  for (let chunkStartMs = periodStartMs; chunkStartMs < endMs; chunkStartMs += chunkMs) {
-    const chunkEndMs = Math.min(chunkStartMs + chunkMs, endMs)
-    chunks.push({
-      query_start: new Date(chunkStartMs - PLATFORM_DELIVERY_PAIRING_LOOKBACK_MS).toISOString(),
-      period_start: new Date(chunkStartMs).toISOString(),
-      end_date: new Date(chunkEndMs).toISOString(),
-    })
-  }
-  return chunks
-}
-
-function mergePlatformDeliveryDailyRow(
-  left: PlatformUpdateDeliveryDailyCFRow,
-  right: PlatformUpdateDeliveryDailyCFRow,
-): PlatformUpdateDeliveryDailyCFRow {
-  const rows = [left, right]
-  const samples = left.samples + right.samples
-  if (samples <= 0)
-    return { ...left, samples: 0, devices: 0, p50_ms: null, p75_ms: null, p95_ms: null, p99_ms: null }
-
-  return {
-    day: left.day,
-    samples,
-    devices: left.devices + right.devices,
-    p50_ms: mergePlatformDeliveryPercentile(rows, 'p50_ms'),
-    p75_ms: mergePlatformDeliveryPercentile(rows, 'p75_ms'),
-    p95_ms: mergePlatformDeliveryPercentile(rows, 'p95_ms'),
-    p99_ms: mergePlatformDeliveryPercentile(rows, 'p99_ms'),
-  }
-}
-
-export function mergePlatformUpdateDeliveryDailyRows(
-  rows: PlatformUpdateDeliveryDailyCFRow[],
-): PlatformUpdateDeliveryDailyCFRow[] {
-  const byDay = new Map<string, PlatformUpdateDeliveryDailyCFRow>()
-  for (const row of rows) {
-    const existing = byDay.get(row.day)
-    byDay.set(row.day, existing ? mergePlatformDeliveryDailyRow(existing, row) : row)
-  }
-  return [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day))
-}
-
-/** Approximate overview percentiles from chunk overviews weighted by sample count. */
-export function mergePlatformUpdateDeliveryOverviewRows(
-  rows: PlatformUpdateDeliveryOverviewCFRow[],
-): PlatformUpdateDeliveryOverviewCFRow {
-  if (rows.length === 0)
-    return emptyPlatformUpdateDeliveryOverviewRow()
-  if (rows.length === 1)
-    return rows[0]!
-
-  const samples = rows.reduce((sum, row) => sum + row.samples, 0)
-  if (samples <= 0)
-    return emptyPlatformUpdateDeliveryOverviewRow()
-
-  return {
-    samples,
-    // Approximate upper bound when callers do not replace devices with a full-window scan.
-    devices: rows.reduce((sum, row) => sum + row.devices, 0),
-    p50_ms: mergePlatformDeliveryPercentile(rows, 'p50_ms'),
-    p75_ms: mergePlatformDeliveryPercentile(rows, 'p75_ms'),
-    p95_ms: mergePlatformDeliveryPercentile(rows, 'p95_ms'),
-    p99_ms: mergePlatformDeliveryPercentile(rows, 'p99_ms'),
-  }
-}
-
-async function queryPlatformUpdateDeliveryDeviceCount(
-  c: Context,
-  params: BuildPlatformUpdateDeliveryStatsCFQueryParams,
-): Promise<number> {
-  const query = buildPlatformUpdateDeliveryDeviceCountCFQuery(params)
-  const result = await runQueryToCFA<{ devices: number | string }>(c, query)
-  return toPlatformDeliveryCount(result[0]?.devices)
-}
-
-async function queryPlatformUpdateDeliveryStatsChunk(
-  c: Context,
-  params: BuildPlatformUpdateDeliveryStatsCFQueryParams,
-): Promise<{
-  dailyRows: PlatformUpdateDeliveryDailyCFRow[]
-  overviewRow: PlatformUpdateDeliveryOverviewCFRow
-}> {
-  const dailyQuery = buildPlatformUpdateDeliveryDailyCFQuery(params)
-  const overviewQuery = buildPlatformUpdateDeliveryOverviewCFQuery(params)
-  const [daily, overview] = await Promise.all([
-    runQueryToCFA<{
-      day: string
-      samples: number | string
-      devices: number | string
-      p50_ms: number | string | null
-      p75_ms: number | string | null
-      p95_ms: number | string | null
-      p99_ms: number | string | null
-    }>(c, dailyQuery),
-    runQueryToCFA<{
-      samples: number | string
-      devices: number | string
-      p50_ms: number | string | null
-      p75_ms: number | string | null
-      p95_ms: number | string | null
-      p99_ms: number | string | null
-    }>(c, overviewQuery),
-  ])
-
-  return {
-    dailyRows: daily.map(normalizePlatformUpdateDeliveryDailyRow),
-    overviewRow: normalizePlatformUpdateDeliveryOverviewRow(overview[0]),
-  }
-}
-
-export async function readPlatformUpdateDeliveryStatsCF(
-  c: Context,
-  params: BuildPlatformUpdateDeliveryStatsCFQueryParams,
-): Promise<{
-  dailyRows: PlatformUpdateDeliveryDailyCFRow[]
-  overviewRow: PlatformUpdateDeliveryOverviewCFRow
-}> {
-  if (!c.env.APP_LOG) {
-    return {
-      dailyRows: [],
-      overviewRow: emptyPlatformUpdateDeliveryOverviewRow(),
-    }
-  }
-
-  const chunks = splitPlatformUpdateDeliveryStatsParams(params)
-  cloudlog({
-    requestId: c.get('requestId'),
-    message: 'readPlatformUpdateDeliveryStatsCF query',
-    chunk_count: chunks.length,
-    period_start: params.period_start,
-    end_date: params.end_date,
-  })
-
-  try {
-    const chunkResults: Array<{
-      dailyRows: PlatformUpdateDeliveryDailyCFRow[]
-      overviewRow: PlatformUpdateDeliveryOverviewCFRow
-    }> = []
-
-    for (let index = 0; index < chunks.length; index += PLATFORM_DELIVERY_CF_CHUNK_CONCURRENCY) {
-      const batch = chunks.slice(index, index + PLATFORM_DELIVERY_CF_CHUNK_CONCURRENCY)
-      const batchResults = await Promise.allSettled(batch.map(chunk => queryPlatformUpdateDeliveryStatsChunk(c, chunk)))
-      batchResults.forEach((result, offset) => {
-        if (result.status === 'fulfilled') {
-          chunkResults.push(result.value)
-          return
-        }
-        cloudlogErr({
-          requestId: c.get('requestId'),
-          message: 'Platform update delivery chunk failed',
-          error: serializeError(result.reason),
-          period_start: batch[offset]?.period_start,
-          end_date: batch[offset]?.end_date,
-        })
-      })
-    }
-
-    if (chunkResults.length === 0) {
-      return {
-        dailyRows: [],
-        overviewRow: emptyPlatformUpdateDeliveryOverviewRow(),
-      }
-    }
-
-    const allChunksSucceeded = chunkResults.length === chunks.length
-    let overviewRow = mergePlatformUpdateDeliveryOverviewRows(chunkResults.map(result => result.overviewRow))
-    if (chunks.length > 1 && allChunksSucceeded) {
-      try {
-        overviewRow = {
-          ...overviewRow,
-          devices: await queryPlatformUpdateDeliveryDeviceCount(c, params),
-        }
-      }
-      catch (error) {
-        cloudlogErr({
-          requestId: c.get('requestId'),
-          message: 'Platform update delivery device count query failed',
-          error: serializeError(error),
-          period_start: params.period_start,
-          end_date: params.end_date,
-        })
-      }
-    }
-
-    return {
-      dailyRows: mergePlatformUpdateDeliveryDailyRows(chunkResults.flatMap(result => result.dailyRows)),
-      overviewRow,
-    }
-  }
-  catch (e) {
-    cloudlogErr({
-      requestId: c.get('requestId'),
-      message: 'Error reading platform update delivery stats',
-      error: serializeError(e),
-      chunk_count: chunks.length,
-      period_start: params.period_start,
-      end_date: params.end_date,
-    })
     throw e
   }
 }
@@ -3576,6 +3308,12 @@ export interface PublicBreakdownMetric {
 
 export interface PublicLiveUpdateMetrics {
   success_rate: number
+  first_try_rate: number | null
+  first_day_rate: number | null
+  first_day_success_rate: number | null
+  rollback_rate: number | null
+  zip_success_rate: number | null
+  delta_success_rate: number | null
   daily: Array<{ date: string, success_rate: number }>
   failures: Array<{ reason: string, share: number }>
   platforms: PublicBreakdownMetric[]
@@ -3595,6 +3333,17 @@ function roundPublicPercent(value: number) {
 function rawShare(part: number, total: number) {
   return total > 0 ? (part / total) * 100 : 0
 }
+
+function rateFromParts(part: number, total: number): number | null {
+  return total > 0 ? roundPublicPercent((part / total) * 100) : null
+}
+
+function rateFromOutcomes(successes: number, failures: number): number | null {
+  return rateFromParts(successes, successes + failures)
+}
+
+const PUBLIC_ZIP_FAIL_ACTIONS = ['unzip_fail', 'download_fail'] as const
+const PUBLIC_DELTA_FAIL_ACTIONS = ['download_manifest_file_fail', 'download_manifest_checksum_fail', 'download_manifest_brotli_fail', 'manifest_path_fail'] as const
 
 function buildBreakdownMetrics(
   shareRows: Array<{ key: string, devices: number }>,
@@ -3667,8 +3416,13 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
   const failureActions = PUBLIC_FAILURE_ACTIONS.map(action => `'${action}'`).join(', ')
   const day = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
   // Device-day outcomes: one success/fail per device per day. Fail-then-set same day counts as success only.
+  const zipFailActions = PUBLIC_ZIP_FAIL_ACTIONS.map(action => `'${action}'`).join(', ')
+  const deltaFailActions = PUBLIC_DELTA_FAIL_ACTIONS.map(action => `'${action}'`).join(', ')
   const outcomeBase = `SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'set', 1, 0)) AS succeeded, max(if(blob2 IN (${failureActions}), 1, 0)) AS failed, argMax(blob5, timestamp) AS platform, argMax(blob6, timestamp) AS country, argMax(blob7, timestamp) AS plugin_version FROM app_log WHERE ${window} AND (blob2 = 'set' OR blob2 IN (${failureActions})) GROUP BY date, app_id, device_id`
-  const outcomesQuery = `SELECT date, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures FROM (${outcomeBase}) GROUP BY date`
+  const outcomesQuery = `SELECT date, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures, sum(if(succeeded = 1 AND failed = 0, 1, 0)) AS first_tries FROM (${outcomeBase}) GROUP BY date`
+  const firstDayQuery = `SELECT sum(first_day_successes) AS first_day_successes, sum(first_day_failures) AS first_day_failures, sum(total_successes) AS total_successes FROM (SELECT app_id, version_name, argMin(successes, date) AS first_day_successes, argMin(failures, date) AS first_day_failures, sum(successes) AS total_successes FROM (SELECT date, app_id, version_name, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, blob3 AS version_name, max(if(blob2 = 'set', 1, 0)) AS succeeded, max(if(blob2 IN (${failureActions}), 1, 0)) AS failed FROM app_log WHERE ${window} AND blob3 != '' AND (blob2 = 'set' OR blob2 IN (${failureActions})) GROUP BY date, app_id, device_id, version_name) GROUP BY date, app_id, version_name) GROUP BY app_id, version_name)`
+  const rollbackQuery = `SELECT sum(has_reset) AS rollbacks, sum(if(has_set + has_reset > 0, 1, 0)) AS outcomes FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'reset', 1, 0)) AS has_reset, max(if(blob2 = 'set', 1, 0)) AS has_set FROM app_log WHERE ${window} AND blob2 IN ('set', 'reset') GROUP BY date, app_id, device_id)`
+  const packageQuery = `SELECT sum(if(zip_ok = 1, 1, 0)) AS zip_successes, sum(if(zip_ok = 0 AND zip_fail = 1, 1, 0)) AS zip_failures, sum(if(delta_ok = 1, 1, 0)) AS delta_successes, sum(if(delta_ok = 0 AND delta_fail = 1, 1, 0)) AS delta_failures FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'download_zip_complete', 1, 0)) AS zip_ok, max(if(blob2 IN (${zipFailActions}), 1, 0)) AS zip_fail, max(if(blob2 = 'download_manifest_complete', 1, 0)) AS delta_ok, max(if(blob2 IN (${deltaFailActions}), 1, 0)) AS delta_fail FROM app_log WHERE ${window} AND blob2 IN ('download_zip_complete', 'download_manifest_complete', ${zipFailActions}, ${deltaFailActions}) GROUP BY date, app_id, device_id)`
   const failuresQuery = `SELECT action, count() AS devices FROM (SELECT ${day} AS date, blob2 AS action, index1 AS app_id, blob1 AS device_id FROM app_log WHERE ${window} AND blob2 IN (${failureActions}) GROUP BY date, action, app_id, device_id) GROUP BY action`
   const platformsShareQuery = `SELECT platform, count() AS devices FROM (SELECT double1 AS platform, index1 AS app_id, blob1 AS device_id FROM device_usage WHERE ${window} AND double1 IN (0.0, 1.0, 2.0) GROUP BY platform, app_id, device_id) GROUP BY platform`
   const platformsOutcomeQuery = `SELECT platform AS key, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures FROM (${outcomeBase}) WHERE platform IN ('ios', 'android', 'electron') GROUP BY platform`
@@ -3683,6 +3437,9 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
   try {
     const [
       outcomeRows,
+      firstDayRows,
+      rollbackRows,
+      packageRows,
       failureRows,
       platformShareRows,
       platformOutcomeRows,
@@ -3694,7 +3451,10 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
       versionOutcomeRows,
       versionFailureRows,
     ] = await Promise.all([
-      runQueryToCFA<{ date: string, successes: number, failures: number }>(c, outcomesQuery),
+      runQueryToCFA<{ date: string, successes: number, failures: number, first_tries: number }>(c, outcomesQuery),
+      runQueryToCFA<{ first_day_successes: number, first_day_failures: number, total_successes: number }>(c, firstDayQuery),
+      runQueryToCFA<{ rollbacks: number, outcomes: number }>(c, rollbackQuery),
+      runQueryToCFA<{ zip_successes: number, zip_failures: number, delta_successes: number, delta_failures: number }>(c, packageQuery),
       runQueryToCFA<{ action: string, devices: number }>(c, failuresQuery),
       runQueryToCFA<{ platform: number, devices: number }>(c, platformsShareQuery),
       runQueryToCFA<{ key: string, successes: number, failures: number }>(c, platformsOutcomeQuery),
@@ -3714,8 +3474,15 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
     }).sort((a, b) => a.date.localeCompare(b.date))
     const totalSuccesses = outcomeRows.reduce((sum, row) => sum + (Number(row.successes) || 0), 0)
     const totalFailures = outcomeRows.reduce((sum, row) => sum + (Number(row.failures) || 0), 0)
+    const totalFirstTries = outcomeRows.reduce((sum, row) => sum + (Number(row.first_tries) || 0), 0)
     const totalOutcomes = totalSuccesses + totalFailures
     const success_rate = totalOutcomes ? roundPublicPercent((totalSuccesses / totalOutcomes) * 100) : 0
+    const firstDay = firstDayRows[0]
+    const firstDaySuccesses = Number(firstDay?.first_day_successes) || 0
+    const firstDayFailures = Number(firstDay?.first_day_failures) || 0
+    const firstDayTotalSuccesses = Number(firstDay?.total_successes) || 0
+    const rollback = rollbackRows[0]
+    const packages = packageRows[0]
     const failureTotal = failureRows.reduce((sum, row) => sum + (Number(row.devices) || 0), 0)
     const failures = [...failureRows]
       .map(row => ({ reason: row.action, devices: Number(row.devices) || 0 }))
@@ -3734,6 +3501,12 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
 
     return {
       success_rate,
+      first_try_rate: rateFromParts(totalFirstTries, totalSuccesses),
+      first_day_rate: rateFromParts(firstDaySuccesses, firstDayTotalSuccesses),
+      first_day_success_rate: rateFromOutcomes(firstDaySuccesses, firstDayFailures),
+      rollback_rate: rateFromParts(Number(rollback?.rollbacks) || 0, Number(rollback?.outcomes) || 0),
+      zip_success_rate: rateFromOutcomes(Number(packages?.zip_successes) || 0, Number(packages?.zip_failures) || 0),
+      delta_success_rate: rateFromOutcomes(Number(packages?.delta_successes) || 0, Number(packages?.delta_failures) || 0),
       daily,
       failures,
       platforms: buildBreakdownMetrics(platformShareMapped, platformOutcomeRows, platformFailureRows, 3),

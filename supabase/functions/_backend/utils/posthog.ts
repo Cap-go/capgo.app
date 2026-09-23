@@ -28,6 +28,18 @@ interface PostHogCapturePayload {
   user_id?: string
 }
 
+function captureProperties(payload: PostHogCapturePayload) {
+  const hasGroups = payload.groups && Object.keys(payload.groups).length > 0
+  return {
+    ...(payload.nonPersonTags || {}),
+    ...(payload.tags || {}),
+    channel: payload.channel,
+    description: payload.description,
+    ...(payload.setPersonProperties === false ? {} : { $set: { ...payload.tags, ...payload.personProperties } }),
+    ...(hasGroups ? { $groups: payload.groups } : {}),
+  }
+}
+
 export async function trackPosthogEvent(c: Context, payload: PostHogCapturePayload) {
   const apiKey = getEnv(c, 'POSTHOG_API_KEY')
   if (!apiKey || !existInEnv(c, 'POSTHOG_API_KEY')) {
@@ -38,20 +50,11 @@ export async function trackPosthogEvent(c: Context, payload: PostHogCapturePaylo
   const host = getEnv(c, 'POSTHOG_API_HOST') || POSTHOG_CAPTURE_URL
   const distinctId = payload.user_id || payload.distinct_id || 'anonymous'
 
-  const hasGroups = payload.groups && Object.keys(payload.groups).length > 0
-
   // `tags` become BOTH event properties and PostHog person properties ($set).
   // `nonPersonTags` are event properties ONLY — never $set — for volatile
   // per-event context (e.g. the CLI's global runtime props) that must not
   // become last-write-wins identity traits on the actor.
-  const properties = {
-    ...(payload.nonPersonTags || {}),
-    ...(payload.tags || {}),
-    channel: payload.channel,
-    description: payload.description,
-    ...(payload.setPersonProperties === false ? {} : { $set: { ...payload.tags, ...payload.personProperties } }),
-    ...(hasGroups ? { $groups: payload.groups } : {}),
-  }
+  const properties = captureProperties(payload)
 
   const body = {
     api_key: apiKey,
@@ -91,6 +94,56 @@ export async function trackPosthogEvent(c: Context, payload: PostHogCapturePaylo
   finally {
     if (timeoutId)
       clearTimeout(timeoutId)
+  }
+}
+
+// Queue batches can complete many steps at once. Send their events in one
+// request so telemetry cannot consume the queue handler's request budget.
+export async function trackPosthogEventBatch(c: Context, payloads: PostHogCapturePayload[]) {
+  if (!payloads.length)
+    return true
+  const apiKey = getEnv(c, 'POSTHOG_API_KEY')
+  if (!apiKey || !existInEnv(c, 'POSTHOG_API_KEY')) {
+    cloudlog({ requestId: c.get('requestId'), message: 'PostHog not configured' })
+    return false
+  }
+  const host = getEnv(c, 'POSTHOG_API_HOST') || POSTHOG_CAPTURE_URL
+  const normalizedHost = stripPostHogEndpoint(trimTrailingSlashes(host))
+  const url = new URL('batch/', normalizedHost.endsWith('/') ? normalizedHost : `${normalizedHost}/`).toString()
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 3000)
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        api_key: apiKey,
+        batch: payloads.map(payload => ({
+          event: payload.event,
+          distinct_id: payload.user_id || payload.distinct_id || 'anonymous',
+          properties: {
+            ...captureProperties(payload),
+            distinct_id: payload.user_id || payload.distinct_id || 'anonymous',
+          },
+          timestamp: payload.timestamp ?? new Date().toISOString(),
+        })),
+        sent_at: new Date().toISOString(),
+      }),
+      signal: controller.signal,
+    })
+    if (!res.ok) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'PostHog batch error', status: res.status, error: (await res.text()).slice(0, 500), count: payloads.length })
+      return false
+    }
+    cloudlog({ requestId: c.get('requestId'), message: 'PostHog batch sent', count: payloads.length })
+    return true
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'PostHog batch fetch failed', error: serializeError(error), count: payloads.length })
+    return false
+  }
+  finally {
+    clearTimeout(timeoutId)
   }
 }
 
@@ -222,6 +275,16 @@ function getPostHogExceptionUrl(host: string) {
   const normalizedHost = trimmedHost.endsWith('/capture') ? `${trimmedHost.slice(0, -'/capture'.length)}/` : trimmedHost
   return new URL('i/v0/e/', normalizedHost.endsWith('/') ? normalizedHost : `${normalizedHost}/`).toString()
 }
+// Cloudflare's "internal error; reference = <id>" carries a random reference id
+// that would otherwise land in the error-tracking issue title and make every
+// occurrence look like a new issue. Drop the id so the class groups under one
+// stable title.
+function stripCloudflareInternalErrorReference(message: string | undefined): string | undefined {
+  if (typeof message !== 'string')
+    return message
+  return message.replace(/(internal error; reference)\s*=\s*\S+/gi, '$1')
+}
+
 function getRequestPath(url: string) {
   try {
     return new URL(url).pathname || '/'
@@ -324,7 +387,7 @@ export async function capturePosthogException(c: Context, payload: {
       distinct_id: distinctId,
       $exception_list: [{
         type: serializedError.name || 'Error',
-        value: serializedError.message,
+        value: stripCloudflareInternalErrorReference(serializedError.message),
         mechanism: {
           handled: true,
           synthetic: false,

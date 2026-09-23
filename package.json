@@ -1,7 +1,7 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "12.272.0",
+  "version": "12.297.2",
   "private": true,
   "workspaces": [
     "cli",
@@ -410,6 +410,7 @@
     "vitest": "^4.1.10",
     "vue-tsc": "3.3.11",
     "wrangler": "^4.113.0",
+    "yaml": "^2.9.0",
     "zod": "^4.4.3",
     "zod-compiler": "^1.15.0"
   },

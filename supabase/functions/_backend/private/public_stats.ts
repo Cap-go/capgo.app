@@ -25,6 +25,12 @@ function sanitizePublicPercent(value: number) {
   return Number(Number(value).toFixed(1))
 }
 
+function sanitizePublicRate(value: number | null | undefined) {
+  if (value === null || value === undefined)
+    return null
+  return sanitizePublicPercent(value)
+}
+
 function sanitizeBreakdown(rows: PublicLiveUpdateMetrics['platforms']) {
   return rows.map(row => ({
     key: row.key,
@@ -45,6 +51,12 @@ function sanitizeBreakdown(rows: PublicLiveUpdateMetrics['platforms']) {
 export function sanitizePublicLiveUpdateMetrics(metrics: PublicLiveUpdateMetrics): PublicLiveUpdateMetrics {
   return {
     success_rate: sanitizePublicPercent(metrics.success_rate),
+    first_try_rate: sanitizePublicRate(metrics.first_try_rate),
+    first_day_rate: sanitizePublicRate(metrics.first_day_rate),
+    first_day_success_rate: sanitizePublicRate(metrics.first_day_success_rate),
+    rollback_rate: sanitizePublicRate(metrics.rollback_rate),
+    zip_success_rate: sanitizePublicRate(metrics.zip_success_rate),
+    delta_success_rate: sanitizePublicRate(metrics.delta_success_rate),
     daily: metrics.daily.map(row => ({
       date: row.date,
       success_rate: sanitizePublicPercent(row.success_rate),

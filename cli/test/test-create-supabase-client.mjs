@@ -17,6 +17,17 @@ const isolatedDir = mkdtempSync(join(tmpdir(), 'capgo-create-supabase-client-'))
 async function assertMissingConfig(fetchImpl, expectedContext, label) {
   globalThis.fetch = fetchImpl
   const controller = new AbortController()
+  const stdoutWrite = process.stdout.write
+  const stderrWrite = process.stderr.write
+  let output = ''
+  process.stdout.write = function (chunk, ...args) {
+    output += String(chunk)
+    return stdoutWrite.call(this, chunk, ...args)
+  }
+  process.stderr.write = function (chunk, ...args) {
+    output += String(chunk)
+    return stderrWrite.call(this, chunk, ...args)
+  }
   let thrown
   try {
     await createSupabaseClient('test-api-key', undefined, undefined, true, false, controller.signal)
@@ -25,8 +36,13 @@ async function assertMissingConfig(fetchImpl, expectedContext, label) {
   catch (error) {
     thrown = error
   }
+  finally {
+    process.stdout.write = stdoutWrite
+    process.stderr.write = stderrWrite
+  }
 
   assert.equal(thrown instanceof CliUserError, true, label)
+  assert.doesNotMatch(output, /Cannot connect to server/, `silent validation must not write outside Ink (${label})`)
   assert.equal(thrown.message, CAPGO_SERVER_CONFIG_MISSING_MESSAGE, label)
   assert.equal(thrown.context?.missingSupaHost, expectedContext.missingSupaHost, label)
   assert.equal(thrown.context?.missingSupaKey, expectedContext.missingSupaKey, label)

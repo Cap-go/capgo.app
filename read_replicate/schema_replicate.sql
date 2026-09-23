@@ -880,10 +880,24 @@ CREATE INDEX idx_apps_default_upload_channel ON public.apps USING btree (default
 
 
 --
+-- Name: idx_apps_onboarding_login_creator; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_apps_onboarding_login_creator ON public.apps USING btree (((onboarding ->> 'created_by_user_id'::text))) WHERE ((onboarding #>> '{setup,todo_list_version}'::text[]) = ANY (ARRAY['2'::text, '3'::text, '4'::text]));
+
+
+--
 -- Name: idx_apps_onboarding_ota_stage; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_apps_onboarding_ota_stage ON public.apps USING btree (((((onboarding -> 'features'::text) -> 'ota'::text) ->> 'stage'::text)));
+
+
+--
+-- Name: idx_apps_onboarding_queued_refresh_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_apps_onboarding_queued_refresh_at ON public.apps USING btree (COALESCE((onboarding ->> 'queued_refresh_at'::text), ''::text), COALESCE((onboarding ->> 'refreshed_at'::text), ''::text), app_id);
 
 
 --

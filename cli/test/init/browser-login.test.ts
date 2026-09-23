@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, mock } from 'bun:test'
-import { loginInitInBrowser, shouldStartInitBrowserLogin } from '../../src/init/browser-login'
+import { beginBrowserLogin, completeBrowserLogin, loginInitInBrowser, shouldStartInitBrowserLogin } from '../../src/init/browser-login'
 import * as loginModule from '../../src/login'
 
 const helperSource = readFileSync(new URL('../../src/init/browser-login.ts', import.meta.url), 'utf8')
@@ -11,6 +11,35 @@ const initRuntimeSource = readFileSync(new URL('../../src/init/runtime.tsx', imp
 const initComponentsSource = readFileSync(new URL('../../src/init/ui/components.tsx', import.meta.url), 'utf8')
 
 describe('init browser login', () => {
+  it('keeps a browser session when opening the browser fails', async () => {
+    const urls: string[] = []
+    const session = await beginBrowserLogin(url => urls.push(url), {
+      createSession: () => 'browser-session',
+      openUrl: async () => { throw new Error('browser unavailable') },
+    })
+
+    expect(session).toEqual({
+      session: 'browser-session',
+      url: 'https://console.capgo.app/login-cli?session=browser-session',
+      browserOpened: false,
+    })
+    expect(urls).toEqual([session.url])
+  })
+
+  it('completes the same session after validating the key', async () => {
+    const order: string[] = []
+    await completeBrowserLogin({
+      session: 'browser-session',
+      url: 'https://console.capgo.app/login-cli?session=browser-session',
+      browserOpened: true,
+    }, 'fake-key', { local: false }, {
+      validateKey: async () => { order.push('validate'); return { userId: 'user-1' } },
+      listOrganizationIds: async () => { order.push('organizations'); return ['org-1'] },
+      sendEvent: async (_key, payload) => { order.push(payload.description) },
+    })
+    expect(order).toEqual(['validate', 'organizations', 'cli-login:browser-session'])
+  })
+
   it('starts only for an interactive init with no resolved key', () => {
     expect(shouldStartInitBrowserLogin('', true)).toBe(true)
     expect(shouldStartInitBrowserLogin('argument-or-saved-key', true)).toBe(false)

@@ -14,6 +14,7 @@ import { getInfo } from './app/info'
 import { listApp } from './app/list'
 import { setApp } from './app/set'
 import { setSetting } from './app/setting'
+import { appTodo } from './app/todo'
 import { clearCredentialsCommand, listCredentialsCommand, migrateCredentialsCommand, saveCredentialsCommand, updateCredentialsCommand } from './build/credentials-command'
 import { exportCredentialsCommand, isCredentialsExportInvocation } from './build/credentials-export-command'
 import { sanitizeCredentialsExportTerminalText, writeCredentialsExportStderr } from './build/credentials-export-terminal'
@@ -53,6 +54,8 @@ import { createKey, deleteOldKey, saveKeyCommand } from './key'
 import { login } from './login'
 import { startMcpServer } from './mcp/server'
 import { setupNotifications } from './notifications/setup'
+import { startOnboardingChecks } from './onboarding/background'
+import { waitForOnboardingChecks } from './onboarding/background-shutdown'
 import { type ObserveCliOptions, observeCommand } from './observe/command'
 import { addOrganization, deleteOrganization, listMembers, listOrganizations, setOrganization } from './organization'
 import { capturePosthogException, getCommandPath, shouldCapturePosthogException } from './posthog'
@@ -61,8 +64,9 @@ import { probe } from './probe'
 import { testRunDeviceCommand } from './run/device'
 import { CliUserError } from './shared/cli-user-error'
 import { TwoFactorComplianceNetworkError } from './shared/two-factor-compliance'
-import { getUserId } from './user/account'
+import { whoami } from './user/whoami'
 import { formatError } from './utils'
+import { CLI_PROJECT_MODES } from './framework/mode'
 import { normalizeAutoBumpInput } from './versionHelpers'
 
 // Common option descriptions used across multiple commands
@@ -75,6 +79,7 @@ const optionDescriptions = {
   capacitorConfig: `Capacitor config source to update (useful with dynamic monorepo configs)`,
   verbose: `Enable verbose output with detailed logging`,
   ignoreNotifyAppReady: `Skip notifyAppReady() check (not recommended — updates may roll back)`,
+  mode: `Project framework mode. Use cordova for Cordova apps without capacitor.config (webDir defaults to www)`,
   acceptIncompatible: `Accept native-package incompatibility as handled (still checks and warns, continues, skips the crash-warning email). Use this when your app already guards missing plugins at runtime.`,
   acceptIncompatibleChannel: `Accept native-package incompatibility as handled (still checks and warns, sets the channel instead of failing). Use this when your app already guards missing plugins at runtime.`,
 }
@@ -95,17 +100,22 @@ program
 enableSupabaseInstrumentation()
 
 let currentCommandPath = 'unknown'
+let currentActionCommand: Command | undefined
 
 program.hook('preAction', (_thisCommand, actionCommand) => {
   setConfigWriteTarget(resolveCapacitorConfigTargetPath(actionCommand.optsWithGlobals().capacitorConfig, cwd(), { logError: true }))
   currentCommandPath = getCommandPath(actionCommand)
+  currentActionCommand = actionCommand
   setCurrentCliCommand(currentCommandPath)
   applyCommandAnalyticsOptOut(currentCommandPath, actionCommand.opts())
+  startOnboardingChecks(actionCommand, currentCommandPath)
   const commandContext = extractCommandContext(actionCommand)
-  if (currentCommandPath === 'login' || currentCommandPath === 'init')
+  if (currentCommandPath === 'login' || currentCommandPath === 'init' || currentCommandPath === 'build init' || currentCommandPath === 'build onboarding')
     deferCommandInvocation(currentCommandPath, commandContext)
-  else
-    trackCommandInvoked(currentCommandPath, commandContext)
+  else {
+    const optionKey = actionCommand.optsWithGlobals().apikey
+    trackCommandInvoked(currentCommandPath, commandContext, typeof optionKey === 'string' ? optionKey : undefined)
+  }
 })
 
 program.hook('postAction', (_thisCommand, actionCommand) => {
@@ -237,10 +247,12 @@ Version must be > 0.0.0 and unique. Deleted versions cannot be reused for securi
 External option: Store only a URL link (useful for apps >200MB or privacy requirements).
 Capgo never inspects external content. Add encryption for trustless security.
 
-Example: npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel production,beta`)
+Example: npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel production,beta
+Cordova example: npx @capgo/cli@latest bundle upload com.example.app --mode cordova --path www --channel production`)
   .action(handleBundleUploadCommand)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('-p, --path <path>', `Path of the folder to upload, if not provided it will use the webDir set in capacitor.config`)
+  .addOption(new Option('--mode <framework>', optionDescriptions.mode).choices([...CLI_PROJECT_MODES]))
+  .option('-p, --path <path>', `Path of the folder to upload, if not provided it will use the webDir set in capacitor.config (or www with --mode cordova)`)
   .option('-c, --channel <channel>', `Channel to link to. Use commas for multiple channels, for example production,beta`)
   .option('--rollout <rollout>', `Set the uploaded bundle as this channel's rollout target at a percentage from 0 to 100`, value => Number.parseFloat(value))
   .option('--rollout-percentage-bps <rolloutPercentageBps>', `Set the uploaded bundle rollout percentage in basis points from 0 to 10000`, value => Number.parseInt(value, 10))
@@ -476,6 +488,19 @@ Example: npx @capgo/cli@latest app list`)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
 
 app
+  .command('todo [appId]')
+  .alias('todoList')
+  .description(`📋 Show your app's onboarding todo list with done, skipped, and pending tasks.
+
+Uses the same live progress checks as the Capgo dashboard. The app ID can be inferred from your Capacitor project.
+
+Example: npx @capgo/cli@latest app todo com.example.app`)
+  .action(appTodo)
+  .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
+  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+
+app
   .command('debug  [appId]')
   .action(debugApp)
   .description(`🐞 Listen for live update events in Capgo Cloud to debug your app.
@@ -693,11 +718,12 @@ const account = program
   .command('account')
   .description(`👤 Manage your Capgo account details and retrieve information for support or collaboration.`)
 
-account.command('id')
-  .description(`🪪 Retrieve your account ID, safe to share for collaboration or support purposes in Discord or other platforms.
+account.command('whoami')
+  .alias('id')
+  .description(`🪪 Retrieve your account ID and email address.
 
-Example: npx @capgo/cli@latest account id`)
-  .action(getUserId)
+Example: npx @capgo/cli@latest account whoami`)
+  .action(whoami)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
 
 const organization = program
@@ -1515,6 +1541,8 @@ void (async () => {
   try {
     await program.parseAsync()
     await flushAnalytics()
+    if (currentActionCommand)
+      await waitForOnboardingChecks(currentActionCommand, currentCommandPath)
   }
   catch (error: unknown) {
     if (typeof error === 'object' && error !== null && 'code' in error) {

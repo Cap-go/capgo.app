@@ -9,7 +9,9 @@ import {
   hogqlOnboardingVersionIn,
   hogqlOnboardingVersionIsV4,
   hogqlOnboardingVersionValue,
+  isFrontendOnboardingVersionLabel,
 } from './frontend_onboarding_analytics_model.ts'
+import { getFrontendOnboardingCliChecklistCoverage } from './frontend_onboarding_cli_checklist.ts'
 import { getFrontendOnboardingDailySetupCliEvents } from './frontend_onboarding_daily_setup_cli_outcomes.ts'
 import {
   buildFrontendOnboardingDailySetupCliAgentUsage,
@@ -69,6 +71,7 @@ const ONBOARDING_INTERACTION_EVENTS = [
 ] as const
 
 const AI_INSTRUCTIONS_COPIED_EVENT = 'onboarding_ai_instructions_copied'
+const ONBOARDING_STEP_COMPLETED_EVENT = 'onboarding_step_completed'
 const DAY_MS = 24 * 60 * 60 * 1000
 const FRONTEND_ONBOARDING_TAB_SWITCH_STEPS = ['welcome', 'intent', 'app_name', 'app_id', 'app_icon', 'organization'] as const
 
@@ -134,8 +137,12 @@ function personId(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function appId(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
 function onboardingVersion(value: unknown): FrontendOnboardingVersion | null {
-  if (value === '5.A' || value === '5.C')
+  if (isFrontendOnboardingVersionLabel(value))
     return 4
 
   return FRONTEND_ONBOARDING_VERSIONS.includes(value as FrontendOnboardingVersion)
@@ -189,6 +196,7 @@ function mapAttempts(rows: Record<string, unknown>[]): FrontendOnboardingAttempt
 
     return [{
       attemptId: id,
+      appId: appId(row.app_id),
       onboardingVersion: version,
       personId: personId(row.person_id),
       intentMs,
@@ -272,7 +280,7 @@ export function buildFrontendOnboardingDailyTabSwitches(
 }
 
 export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: string, followupEndDate: string): string {
-  const eventAllowlist = ['onboarding_step_viewed', AI_INSTRUCTIONS_COPIED_EVENT, ...ONBOARDING_INTERACTION_EVENTS].map(sqlStr).join(', ')
+  const eventAllowlist = ['onboarding_step_viewed', ONBOARDING_STEP_COMPLETED_EVENT, AI_INSTRUCTIONS_COPIED_EVENT, ...ONBOARDING_INTERACTION_EVENTS].map(sqlStr).join(', ')
   const interactionEventAllowlist = ONBOARDING_INTERACTION_EVENTS.map(sqlStr).join(', ')
   return `
     WITH frontend_events AS (
@@ -282,6 +290,7 @@ export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: s
         person_id,
         ${hogqlOnboardingVersionValue()} AS onboarding_version,
         JSONExtractString(toString(properties), 'onboarding_attempt_id') AS attempt_id,
+        JSONExtractString(toString(properties), 'app_id') AS app_id,
         JSONExtractString(toString(properties), 'step') AS step
       FROM events
       WHERE event IN (${eventAllowlist})
@@ -295,6 +304,8 @@ export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: s
         onboarding_version,
         attempt_id,
         toString(argMin(person_id, timestamp)) AS person_id,
+        -- App-name completions carry draft IDs, not the persisted app ID.
+        argMinIf(app_id, timestamp, event = ${sqlStr(ONBOARDING_STEP_COMPLETED_EVENT)} AND step IN ('organization', 'setup') AND app_id != '') AS app_id,
         toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'intent')) AS intent_ms,
         toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step IN ('details', 'app_name'))) AS details_ms,
         toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'app_name')) AS app_name_ms,
@@ -329,6 +340,7 @@ export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: s
       onboarding_version,
       attempt_id,
       onboarding_attempts.person_id AS person_id,
+      app_id,
       count() OVER () AS total_attempts,
       intent_ms,
       details_ms,
@@ -506,7 +518,11 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
       throw error
     }
   }
-  const analytics = buildFrontendOnboardingAnalytics(mapAttempts(posthog.rows), startMs, endMs)
+  const attempts = mapAttempts(posthog.rows)
+  const analytics = buildFrontendOnboardingAnalytics(attempts, startMs, endMs)
+  const v4ChecklistCoverage = await getFrontendOnboardingCliChecklistCoverage(c, attempts
+    .filter(attempt => attempt.onboardingVersion === 4 && attempt.intentMs >= startMs && attempt.intentMs < endMs)
+    .map(attempt => attempt.appId ?? ''))
   const dailySetupCliOutcomes = buildFrontendOnboardingDailySetupCliOutcomes(dailySetupCliEvents, startMs, endMs)
   const dailySetupCliAgentUsage = buildFrontendOnboardingDailySetupCliAgentUsage(dailySetupCliEvents, startMs, endMs)
   const welcomeOutcomes = buildFrontendOnboardingWelcomeOutcomes(mapWelcomeAttempts(welcomePosthog.rows), startMs, endMs)
@@ -533,6 +549,8 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
     daily_setup_cli_outcomes: dailySetupCliOutcomes,
     daily_setup_cli_agent_usage: dailySetupCliAgentUsage,
     daily_tab_switches: dailyTabSwitches,
+    v4_cli_checklist_coverage: v4ChecklistCoverage[1],
+    v4_cli_checklist_coverage_by_version: v4ChecklistCoverage,
     posthog_configured: posthog.configured,
     posthog_connected: posthog.connected,
   }

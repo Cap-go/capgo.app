@@ -13,6 +13,7 @@ const env = {
   ...process.env,
   API_DOMAIN: apiDomain,
   CAPTCHA_KEY: '',
+  CAPGO_PLAYWRIGHT_FIXTURES: 'true',
   ENV: 'local',
   SUPA_ANON: process.env.SUPABASE_ANON_KEY || '',
   SUPA_URL: supabaseUrl,

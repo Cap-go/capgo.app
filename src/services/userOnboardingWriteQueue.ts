@@ -1,6 +1,6 @@
 import type { Json } from '~/types/supabase.types'
 import { useSupabase } from '~/services/supabase'
-import { USER_ONBOARDING_PROGRESS_FIELDS } from '~/utils/userOnboardingProgress'
+import { USER_ONBOARDING_INTENTS, USER_ONBOARDING_PROGRESS_FIELDS } from '~/utils/userOnboardingProgress'
 
 const onboardingWriteChains = new Map<string, Promise<void>>()
 
@@ -12,10 +12,16 @@ function isJsonObject(value: Json | undefined): value is { [key: string]: Json |
 
 export function mergeUserOnboardingProgress(nextProgress: Json, currentOnboarding: Json | undefined): Json {
   const merged = isJsonObject(currentOnboarding) ? { ...currentOnboarding } : {}
+  const currentIntent = USER_ONBOARDING_INTENTS.find(intent => merged.intent === intent)
   for (const key of Object.keys(USER_ONBOARDING_PROGRESS_FIELDS))
     delete merged[key]
 
-  return isJsonObject(nextProgress) ? { ...merged, ...nextProgress } : merged
+  const next = isJsonObject(nextProgress) ? nextProgress : {}
+  return {
+    ...merged,
+    ...(currentIntent && next.intent === undefined ? { intent: currentIntent } : {}),
+    ...next,
+  }
 }
 
 export function serializeUserOnboardingWrite<T>(

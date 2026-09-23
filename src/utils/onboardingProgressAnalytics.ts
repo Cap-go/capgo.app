@@ -1,12 +1,19 @@
+import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '~/utils/onboardingChannelAnalytics'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 
 export const ONBOARDING_ANALYTICS_VERSION = 4
 export const WEBNATIVE_PUBLISH_INTENT_ANALYTICS_VERSION = '5.A'
 export const WEBNATIVE_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION = '5.C'
+export const NEW_CHANNEL_ANALYTICS_VERSION = '5.E'
+export const NEW_CHANNEL_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION = '5.F'
+export const NEW_CHANNEL_PUBLISH_INTENT_ANALYTICS_VERSION = '5.G'
 export type OnboardingAnalyticsVersion
   = | typeof ONBOARDING_ANALYTICS_VERSION
     | typeof WEBNATIVE_PUBLISH_INTENT_ANALYTICS_VERSION
     | typeof WEBNATIVE_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION
+    | typeof NEW_CHANNEL_ANALYTICS_VERSION
+    | typeof NEW_CHANNEL_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION
+    | typeof NEW_CHANNEL_PUBLISH_INTENT_ANALYTICS_VERSION
 
 export type OnboardingAnalyticsFlow = 'pre_org' | 'existing_org'
 export type OnboardingAnalyticsStep = 'welcome' | 'intent' | 'publish_app_question' | 'details' | 'app_name' | 'app_id' | 'app_icon' | 'organization' | 'choice' | 'install' | 'setup'
@@ -14,7 +21,8 @@ export type OnboardingCopyEvent = 'onboarding_ai_instructions_copied' | 'onboard
 export type OnboardingDevelopmentEnvironment = 'hosted_builder' | 'ai_assistant' | 'hand_coded' | 'other' | 'local_project' | 'exploring' | 'skipped'
 export type OnboardingIntent = 'ota' | 'builder' | 'both' | 'exploring' | 'publish'
 export type OnboardingInteractionEvent
-  = | 'onboarding_development_environment_selected'
+  = | OnboardingChannelEvent
+    | 'onboarding_development_environment_selected'
     | 'onboarding_organization_import_opened'
     | 'onboarding_organization_import_submitted'
     | 'onboarding_organization_import_succeeded'
@@ -109,7 +117,7 @@ export function resolveOnboardingAppIconSource(options: {
   return 'none'
 }
 
-export interface OnboardingInteractionProperties {
+export type OnboardingInteractionProperties = Partial<OnboardingChannelEventProperties> & {
   development_environment?: OnboardingDevelopmentEnvironment
   invitation_count?: number
   intent?: OnboardingIntent

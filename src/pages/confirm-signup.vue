@@ -5,8 +5,9 @@ import { useRoute } from 'vue-router'
 import IconLoader from '~icons/lucide/loader-2'
 import IconTriangleAlert from '~icons/lucide/triangle-alert'
 import { authGhostButtonClass, authSecondaryButtonClass } from '~/components/auth/pageStyles'
+import { replaceDocument } from '~/services/documentNavigation'
 import { openSupport } from '~/services/support'
-import { getAllowedConfirmationHosts, isAllowedConfirmationUrl } from '~/utils/safeRedirect'
+import { getAllowedConfirmationHosts, resolveConfirmationUrl } from '~/utils/safeRedirect'
 
 const route = useRoute()
 const { t } = useI18n()
@@ -16,26 +17,17 @@ const invalidConfirmationMessage = 'Invalid confirmation URL. Please check your 
 const redirectErrorMessage = 'Error redirecting to confirmation page. Please try again.'
 const allowedConfirmationHosts = getAllowedConfirmationHosts()
 onMounted(() => {
-  const confirmationUrl = route.query.confirmation_url as string
-
-  if (!confirmationUrl) {
-    isRedirecting.value = false
-    error.value = invalidConfirmationMessage
-    return
-  }
-
   try {
-    // Decode the URL if needed and redirect immediately
-    const decodedUrl = decodeURIComponent(confirmationUrl)
-    if (!isAllowedConfirmationUrl(decodedUrl, {
+    const confirmationUrl = resolveConfirmationUrl(route.query, {
       allowedHosts: allowedConfirmationHosts,
       allowLocalDev: import.meta.env.DEV,
-    })) {
+    })
+    if (!confirmationUrl) {
       isRedirecting.value = false
       error.value = invalidConfirmationMessage
       return
     }
-    window.location.href = decodedUrl
+    replaceDocument(confirmationUrl)
   }
   catch {
     isRedirecting.value = false

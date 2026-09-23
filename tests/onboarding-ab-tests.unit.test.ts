@@ -1,9 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
+  hasNewChannelTreatment,
   hasWebNativeDevelopmentEnvironmentTreatment,
   hasWebNativePublishIntentTreatment,
+  NEW_CHANNEL_AB_TEST,
   parseOnboardingABTestAssignments,
+  reconcileOnboardingABTestAssignments,
   resolveOnboardingAnalyticsVersion,
   shouldShowWebNativePublishIntent,
   shouldShowWebNativeRecommendation,
@@ -31,28 +34,64 @@ function onboardingFor(publishBranch: 'A' | 'B', environmentBranch: 'C' | 'D') {
   }
 }
 
+function onboardingWithNewChannel(
+  publishBranch: 'A' | 'B',
+  environmentBranch: 'C' | 'D',
+  channelBranch: 'A' | 'B',
+) {
+  const onboarding = onboardingFor(publishBranch, environmentBranch)
+  return {
+    ...onboarding,
+    abtests: {
+      ...onboarding.abtests,
+      [NEW_CHANNEL_AB_TEST]: {
+        assigned_at: '2026-09-10T00:00:00.000Z',
+        branch: channelBranch,
+      },
+    },
+  }
+}
+
 describe('webNativeApp onboarding A/B tests', () => {
   it.concurrent('configures independent 25/75 self-signup experiments', () => {
     expect(abTestsConfig[WEBNATIVE_PUBLISH_INTENT_AB_TEST]).toEqual({
       audience: 'self_signup',
       comment: 'Shows a \'convert my webapp to mobile\' intent option. Does not change the rest of the flow by itself.',
       control_branch: 'B',
+      label: 'Publish intent',
       treatment_branch: 'A',
       treatment_percentage: 25,
       branches: {
-        A: { bento_tag: 'ab:webnativeapp_publish_intent' },
-        B: { bento_tag: 'ab:no_webnativeapp_publish_intent' },
+        A: { bento_tag: 'ab:webnativeapp_publish_intent', label: 'WebNativeApp option' },
+        B: { bento_tag: 'ab:no_webnativeapp_publish_intent', label: 'Current publish options' },
       },
     })
     expect(abTestsConfig[WEBNATIVE_DEVELOPMENT_ENVIRONMENT_AB_TEST]).toEqual({
       audience: 'self_signup',
       comment: 'Asks what tools people use to build. Combined with publish + hosted_builder + starting out, this can recommend WebNativeApp.',
       control_branch: 'D',
+      label: 'Development environment',
       treatment_branch: 'C',
       treatment_percentage: 25,
       branches: {
-        C: { bento_tag: 'ab:webnativeapp_development_environment' },
-        D: { bento_tag: 'ab:no_webnativeapp_development_environment' },
+        C: { bento_tag: 'ab:webnativeapp_development_environment', label: 'Development environment question' },
+        D: { bento_tag: 'ab:no_webnativeapp_development_environment', label: 'Current onboarding' },
+      },
+    })
+  })
+
+  it.concurrent('configures a 50/50 channel experiment for exact OTA and both intents', () => {
+    expect(abTestsConfig[NEW_CHANNEL_AB_TEST]).toEqual({
+      audience: 'self_signup',
+      comment: 'Shows the guided channel education and creation flow.',
+      control_branch: 'B',
+      intents: ['ota', 'both'],
+      label: 'Channel creation',
+      treatment_branch: 'A',
+      treatment_percentage: 50,
+      branches: {
+        A: { bento_tag: 'ab:new_channel', label: 'Guided channel flow' },
+        B: { bento_tag: 'ab:no_new_channel', label: 'Current channel flow' },
       },
     })
   })
@@ -62,6 +101,17 @@ describe('webNativeApp onboarding A/B tests', () => {
     expect(resolveOnboardingAnalyticsVersion(onboardingFor('B', 'C'))).toBe('5.C')
     expect(resolveOnboardingAnalyticsVersion(onboardingFor('A', 'D'))).toBe('5.A')
     expect(resolveOnboardingAnalyticsVersion(onboardingFor('B', 'D'))).toBe(4)
+  })
+
+  it.concurrent('uses the channel experiment analytics versions with explicit precedence', () => {
+    expect(resolveOnboardingAnalyticsVersion(onboardingWithNewChannel('B', 'D', 'A'), 'ota')).toBe('5.E')
+    expect(resolveOnboardingAnalyticsVersion(onboardingWithNewChannel('A', 'C', 'A'), 'ota')).toBe('5.F')
+    expect(resolveOnboardingAnalyticsVersion(onboardingWithNewChannel('A', 'D', 'A'), 'ota')).toBe('5.G')
+    expect(resolveOnboardingAnalyticsVersion(onboardingWithNewChannel('A', 'D', 'A'), 'both')).toBe('5.G')
+    expect(resolveOnboardingAnalyticsVersion(onboardingWithNewChannel('A', 'D', 'A'), 'builder')).toBe('5.E')
+    expect(resolveOnboardingAnalyticsVersion(onboardingWithNewChannel('A', 'D', 'B'), 'ota')).toBe('5.A')
+    expect(hasNewChannelTreatment(onboardingWithNewChannel('B', 'D', 'A'))).toBe(true)
+    expect(hasNewChannelTreatment(onboardingWithNewChannel('B', 'D', 'B'))).toBe(false)
   })
 
   it.concurrent('shows the publish intent for either treatment and the environment question only for C', () => {
@@ -95,5 +145,26 @@ describe('webNativeApp onboarding A/B tests', () => {
     expect(parseOnboardingABTestAssignments(null)).toBeNull()
     expect(parseOnboardingABTestAssignments({ invalid: { assigned_at: 12, branch: 'A' } })).toBeNull()
     expect(parseOnboardingABTestAssignments({ invalid: { assigned_at: 'now', branch: 'Z' } })).toBeNull()
+  })
+
+  it.concurrent('removes a revoked channel assignment while preserving unrelated tests', () => {
+    const current = onboardingWithNewChannel('A', 'D', 'A').abtests
+    const authoritative = onboardingFor('A', 'D').abtests
+
+    expect(reconcileOnboardingABTestAssignments(current, authoritative)).toEqual(authoritative)
+  })
+})
+
+describe('independent checklist version experiment', () => {
+  it.concurrent('does not change PostHog wizard version when the todo-list flag is added', () => {
+    for (const intent of ['ota', 'both', 'builder'] as const) {
+      for (const channelBranch of ['A', 'B'] as const) {
+        const existing = { abtests: { [NEW_CHANNEL_AB_TEST]: { branch: channelBranch, assigned_at: '2026-09-16T00:00:00Z' } } }
+        const treatment = { abtests: { ...existing.abtests, ota_todo_list_v3: { branch: 'A', assigned_at: '2026-09-16T00:00:00Z' } } }
+        if (channelBranch === 'A' && intent === 'ota')
+          expect(resolveOnboardingAnalyticsVersion(existing, intent)).toBe('5.E')
+        expect(resolveOnboardingAnalyticsVersion(treatment, intent)).toBe(resolveOnboardingAnalyticsVersion(existing, intent))
+      }
+    }
   })
 })

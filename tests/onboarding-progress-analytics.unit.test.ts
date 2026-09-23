@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  NEW_CHANNEL_ANALYTICS_VERSION,
+  NEW_CHANNEL_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION,
+  NEW_CHANNEL_PUBLISH_INTENT_ANALYTICS_VERSION,
   createOnboardingProgressTracker,
   createOnboardingTelemetryIdentity,
   ONBOARDING_ANALYTICS_VERSION,
@@ -249,6 +252,12 @@ describe('onboarding progress analytics', () => {
     expect(capture.mock.calls).toHaveLength(3)
     for (const call of capture.mock.calls)
       expect(call[2]).toEqual(expect.objectContaining({ onboarding_version: '5.C' }))
+  })
+
+  it.concurrent('exports distinct channel experiment analytics labels', () => {
+    expect(NEW_CHANNEL_ANALYTICS_VERSION).toBe('5.E')
+    expect(NEW_CHANNEL_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION).toBe('5.F')
+    expect(NEW_CHANNEL_PUBLISH_INTENT_ANALYTICS_VERSION).toBe('5.G')
   })
 
   it.concurrent('tracks a hidden tab and its matching return before setup', () => {

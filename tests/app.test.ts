@@ -107,9 +107,10 @@ describe('[GET] /app operations with subkey', () => {
 
   it('should create app and subkey with limited rights', async () => {
     // Create a test app
-    const createApp = await fetch(`${BASE_URL}/app`, {
+    const createApp = await fetchTestRequest(`${BASE_URL}/app`, {
       method: 'POST',
       headers,
+      retryUnsafe: true,
       body: JSON.stringify({
         owner_org: ORG_ID,
         app_id: APPNAME,
@@ -141,7 +142,7 @@ describe('[GET] /app operations with subkey', () => {
   it('should access app with subkey', async () => {
     // Access app with subkey
     const subkeyHeaders = { 'x-limited-key-id': String(subkey) }
-    const getAppWithSubkey = await fetch(`${BASE_URL}/app/${APPNAME}`, {
+    const getAppWithSubkey = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
       method: 'GET',
       headers: { ...headers, ...subkeyHeaders },
     })
@@ -154,9 +155,10 @@ describe('[GET] /app operations with subkey', () => {
     // Create another app
     const otherAppId = randomUUID()
     const OTHER_APPNAME = `com.other.subkey.${otherAppId}`
-    const createOtherApp = await fetch(`${BASE_URL}/app`, {
+    const createOtherApp = await fetchTestRequest(`${BASE_URL}/app`, {
       method: 'POST',
       headers,
+      retryUnsafe: true,
       body: JSON.stringify({
         owner_org: ORG_ID,
         app_id: OTHER_APPNAME,
@@ -174,7 +176,7 @@ describe('[GET] /app operations with subkey', () => {
 
     // Try to access the other app with the subkey
     const subkeyHeaders = { 'x-limited-key-id': String(subkey) }
-    const getOtherAppWithSubkey = await fetch(`${BASE_URL}/app/${OTHER_APPNAME}`, {
+    const getOtherAppWithSubkey = await fetchTestRequest(`${BASE_URL}/app/${OTHER_APPNAME}`, {
       method: 'GET',
       headers: { ...headers, ...subkeyHeaders },
     })
@@ -190,9 +192,10 @@ describe('[GET] /app operations with subkey', () => {
   it('should update app with subkey', async () => {
     // Update app with subkey
     const subkeyHeaders = { 'x-limited-key-id': String(subkey) }
-    const updateApp = await fetch(`${BASE_URL}/app/${APPNAME}`, {
+    const updateApp = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
       method: 'PUT',
       headers: { ...headers, ...subkeyHeaders },
+      retryUnsafe: true,
       body: JSON.stringify({
         name: APPNAME,
         icon: 'https://cdn.example/updated-icon.png',
@@ -212,9 +215,10 @@ describe('[GET] /app operations with subkey', () => {
       appRoleName: 'app_reader',
     })
     const subkeyHeaders = { 'x-limited-key-id': String(subkeyData.id) }
-    const deleteApp = await fetch(`${BASE_URL}/app/${APPNAME}`, {
+    const deleteApp = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
       method: 'DELETE',
       headers: { ...headers, ...subkeyHeaders },
+      retryUnsafe: true,
     })
     expect(deleteApp.status).toBe(400)
     const deleteAppData = await deleteApp.json() as { error: string }
@@ -224,7 +228,7 @@ describe('[GET] /app operations with subkey', () => {
   it('should get all apps with subkey', async () => {
     // Get all apps with subkey
     const subkeyHeaders = { 'x-limited-key-id': String(subkey) }
-    const getAllApps = await fetch(`${BASE_URL}/app`, {
+    const getAllApps = await fetchTestRequest(`${BASE_URL}/app`, {
       method: 'GET',
       headers: { ...headers, ...subkeyHeaders },
     })
@@ -236,7 +240,7 @@ describe('[GET] /app operations with subkey', () => {
 
   it('should get all apps without subkey', async () => {
     // Get all apps without subkey
-    const getAllApps = await fetch(`${BASE_URL}/app`, {
+    const getAllApps = await fetchTestRequest(`${BASE_URL}/app`, {
       method: 'GET',
       headers,
     })
@@ -552,6 +556,7 @@ describe('[POST]/[PUT] /app onboarding progress', () => {
     const created = parseAppOnboarding((await createApp.json() as { onboarding?: unknown }).onboarding)
     expect(created.source).toBe('manual')
     expect(created.outcome).toBe('in_progress')
+    expect(created.todo_list_version).toBe(2)
 
     const firstPut = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
       method: 'PUT',
@@ -560,7 +565,7 @@ describe('[POST]/[PUT] /app onboarding progress', () => {
         onboarding: {
           source: 'cli',
           steps: {
-            add_app: { status: 'done' },
+            login_cli_mcp: { status: 'done' },
           },
         },
       }),
@@ -568,7 +573,7 @@ describe('[POST]/[PUT] /app onboarding progress', () => {
     expect(firstPut.status).toBe(200)
     const afterCli = parseAppOnboarding((await firstPut.json() as { onboarding?: unknown }).onboarding)
     expect(afterCli.source).toBe('cli')
-    expect(afterCli.steps.add_app?.status).toBe('done')
+    expect(afterCli.steps.login_cli_mcp?.status).toBe('done')
 
     const skipPut = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
       method: 'PUT',
@@ -577,7 +582,7 @@ describe('[POST]/[PUT] /app onboarding progress', () => {
         onboarding: {
           source: 'ai',
           steps: {
-            add_app: { status: 'skipped' },
+            login_cli_mcp: { status: 'skipped' },
             add_channel: { status: 'skipped' },
           },
         },
@@ -586,7 +591,7 @@ describe('[POST]/[PUT] /app onboarding progress', () => {
     expect(skipPut.status).toBe(200)
     const afterSkip = parseAppOnboarding((await skipPut.json() as { onboarding?: unknown }).onboarding)
     expect(afterSkip.source).toBe('cli')
-    expect(afterSkip.steps.add_app?.status).toBe('done')
+    expect(afterSkip.steps.login_cli_mcp?.status).toBe('done')
     expect(afterSkip.steps.add_channel?.status).toBe('skipped')
     // Partial CLI progress stays in_progress. Missing steps are not skipped.
     expect(afterSkip.outcome).toBe('in_progress')

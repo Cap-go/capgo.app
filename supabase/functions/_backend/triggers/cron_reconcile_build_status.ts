@@ -267,6 +267,7 @@ app.post('/', middlewareAPISecret, async (c) => {
 
       if (transitionApplied) {
         await emitBuildTransitionEvent(c, {
+          jobId: build.builder_job_id!,
           previousStatus,
           effectiveStatus,
           timeoutApplied,

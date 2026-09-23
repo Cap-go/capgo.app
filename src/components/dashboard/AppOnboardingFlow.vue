@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import type { CliAiPromptOrganization } from '~/services/cliAiPrompt'
 import type { Database, Json } from '~/types/supabase.types'
 import type { OnboardingABTestAssignment } from '~/utils/onboardingABTests'
+import type { OnboardingChannelEvent, OnboardingChannelEventProperties, OnboardingChannelStage } from '~/utils/onboardingChannelAnalytics'
 import type {
   OnboardingAnalyticsStep,
   OnboardingCopyEvent,
@@ -13,7 +15,7 @@ import type {
   OnboardingStepCompletionProperties,
 } from '~/utils/onboardingProgressAnalytics'
 import type { OnboardingPersistOptions, OnboardingPersistResult } from '~/utils/onboardingProgressPersistence'
-import type { UserOnboardingStatus } from '~/utils/userOnboardingProgress'
+import type { UserOnboardingSetupStage, UserOnboardingStatus } from '~/utils/userOnboardingProgress'
 import mime from 'mime'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -21,6 +23,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconCopy from '~icons/ion/copy-outline'
 import IconAppWindow from '~icons/lucide/app-window'
+import IconArrowLeft from '~icons/lucide/arrow-left'
 import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheck from '~icons/lucide/check'
 import IconChevronDown from '~icons/lucide/chevron-down'
@@ -41,9 +44,11 @@ import IconUsers from '~icons/lucide/users-round'
 import { preserveAdminDashboardMinimize } from '~/services/adminDashboardPreferences'
 import { createDefaultApiKey, findUsablePlainApiKey, shareInFlightApiKeyLoad } from '~/services/apikeys'
 import {
+  hasSupportedOtaTodoList,
   parseAppOnboarding,
 } from '~/services/appOnboarding'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
+import { buildCliAiSetupPrompt } from '~/services/cliAiPrompt'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { uploadOrgLogoFile } from '~/services/photos'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
@@ -62,8 +67,10 @@ import { isValidAppId } from '~/utils/appId'
 import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 import { useBeforeUnloadWarning } from '~/utils/beforeUnloadWarning'
 import {
+  hasNewChannelTreatment,
   hasWebNativeDevelopmentEnvironmentTreatment,
   parseOnboardingABTestAssignments,
+  reconcileOnboardingABTestAssignments,
   resolveOnboardingAnalyticsVersion,
   shouldShowWebNativePublishIntent,
   shouldShowWebNativeRecommendation,
@@ -77,6 +84,7 @@ import {
   loadOnboardingAppDraft,
 } from '~/utils/onboardingAppDraft'
 import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
+import { withOnboardingChannelOrigin } from '~/utils/onboardingChannelAnalytics'
 import {
   createOnboardingDetailsFieldDebouncer,
   createOnboardingProgressTracker,
@@ -97,7 +105,12 @@ import {
 } from '~/utils/userOnboardingProgress'
 import AppOnboardingCliSteps from './AppOnboardingCliSteps.vue'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
+import AppOnboardingSetupChecklist from './AppOnboardingSetupChecklist.vue'
 import AppOnboardingWelcome from './AppOnboardingWelcome.vue'
+import ChannelConsoleAssignOnboarding from './ChannelConsoleAssignOnboarding.vue'
+import ChannelCreateOnboarding from './ChannelCreateOnboarding.vue'
+import ChannelDefaultRoutingOnboarding from './ChannelDefaultRoutingOnboarding.vue'
+import ChannelSelfAssignOnboarding from './ChannelSelfAssignOnboarding.vue'
 import { developmentEnvironmentOptions } from './onboardingDevelopmentEnvironmentOptions'
 import OnboardingPublishIntentIcon from './OnboardingPublishIntentIcon.vue'
 import OnboardingToolPattern from './OnboardingToolPattern.vue'
@@ -119,6 +132,7 @@ const organizationStore = useOrganizationStore()
 const dashboardAppsStore = useDashboardAppsStore()
 const onboardingUserId = computed(() => main.user?.id ?? main.auth?.id ?? null)
 const onboardingABTestAssignments = ref<Record<string, OnboardingABTestAssignment>>({})
+const onboardingABTestsPending = ref(false)
 const onboardingForABTests = computed(() => {
   const currentOnboarding = isRecord(main.user?.onboarding) ? main.user.onboarding : {}
   const currentABTests = isRecord(currentOnboarding.abtests) ? currentOnboarding.abtests : {}
@@ -133,12 +147,7 @@ const onboardingForABTests = computed(() => {
 const config = getLocalConfig()
 const webNativePublishIntentTreatment = computed(() => shouldShowWebNativePublishIntent(onboardingForABTests.value))
 const webNativeDevelopmentEnvironmentTreatment = computed(() => hasWebNativeDevelopmentEnvironmentTreatment(onboardingForABTests.value))
-const onboardingAnalyticsVersion = () => resolveOnboardingAnalyticsVersion(onboardingForABTests.value)
-const onboardingTelemetry = createOnboardingTelemetryIdentity({
-  flow: props.preOrg ? 'pre_org' : 'existing_org',
-  onboardingVersion: onboardingAnalyticsVersion,
-  supaHost: config.supaHost,
-})
+const newChannelTreatment = computed(() => hasNewChannelTreatment(onboardingForABTests.value))
 const APPLE_LOOKUP_TIMEOUT_MS = 5_000
 const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
 const ONBOARDING_AB_TEST_WAIT_TIMEOUT_MS = 3_000
@@ -152,8 +161,10 @@ type AppRow = Omit<Database['public']['Tables']['apps']['Row'], 'onboarding'> & 
 type StandardFlowStep = 'details' | 'choice' | 'install' | 'setup'
 type PreOrgFlowStep = 'intent' | 'publish_app_question' | 'details' | 'organization' | 'setup'
 type OnboardingFlowStep = StandardFlowStep | PreOrgFlowStep
+type OnboardingProgressStepId = OnboardingFlowStep | 'channel'
 type AppDetailsStep = 'name' | 'app_id' | 'icon'
 type AppDetailsAnalyticsStep = 'app_name' | 'app_id' | 'app_icon'
+type SetupStage = UserOnboardingSetupStage
 
 const APP_DETAILS_ANALYTICS_STEPS: Record<AppDetailsStep, AppDetailsAnalyticsStep> = {
   name: 'app_name',
@@ -198,6 +209,19 @@ const preOrgShouldInvite = ref(false)
 const reportedSetupSource = ref<'manual' | 'cli' | 'mcp' | 'ai' | null>(null)
 const flowStep = ref<OnboardingFlowStep>('details')
 const appDetailsStep = ref<AppDetailsStep>('name')
+const setupStage = ref<SetupStage>('cli')
+const showSetupBackButton = computed(() => newChannelTreatment.value && (
+  (
+    props.preOrg
+    && flowStep.value === 'setup'
+    && (setupStage.value === 'channel-create' || setupStage.value === 'cli')
+  )
+  || (
+    !props.preOrg
+    && flowStep.value === 'install'
+    && setupStage.value === 'channel-create'
+  )
+))
 const showLanguageSelector = computed(() => (
   (props.preOrg && !createdApp.value)
   || (flowStep.value === 'setup' && Boolean(createdApp.value))
@@ -222,6 +246,12 @@ const storeAppIdLookupFailed = ref(false)
 const selectedDevelopmentEnvironment = ref<OnboardingDevelopmentEnvironment | null>(null)
 const skippedPublishAppQuestion = ref(false)
 const selectedIntent = ref<OnboardingIntent | null>(null)
+const onboardingAnalyticsVersion = () => resolveOnboardingAnalyticsVersion(onboardingForABTests.value, selectedIntent.value)
+const onboardingTelemetry = createOnboardingTelemetryIdentity({
+  flow: props.preOrg ? 'pre_org' : 'existing_org',
+  onboardingVersion: onboardingAnalyticsVersion,
+  supaHost: config.supaHost,
+})
 const webNativeRecommendationDismissed = ref(false)
 const orgNameInput = ref('')
 const hasEditedOrgName = ref(false)
@@ -271,7 +301,9 @@ const startingOutUserCountStop: UserCountStop = {
 const planNameOrder = ['Solo', 'Maker', 'Team', 'Enterprise'] as const
 
 const localCommand = isLocal(config.supaHost) ? ` --supa-host ${config.supaHost} --supa-anon ${config.supaKey}` : ''
-const usesBuilderSetupCommand = computed(() => selectedIntent.value === 'builder' || selectedIntent.value === 'publish')
+// TODO(2027-03-19): Remove v3 compatibility after all existing OTA checklists have migrated.
+const usesOtaTodoList = computed(() => !!createdApp.value && hasSupportedOtaTodoList(parseAppOnboarding(createdApp.value.onboarding)))
+const usesBuilderSetupCommand = computed(() => !usesOtaTodoList.value && (selectedIntent.value === 'builder' || selectedIntent.value === 'publish'))
 const markedOnboardingFeatures = new Set<string>()
 let onboardingABTestsRequest: Promise<void> | null = null
 
@@ -279,64 +311,76 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function refreshOnboardingABTests(): Promise<void> {
+function applyOnboardingABTestAssignments(assignments: Record<string, OnboardingABTestAssignment>) {
+  onboardingABTestAssignments.value = reconcileOnboardingABTestAssignments(
+    onboardingABTestAssignments.value,
+    assignments,
+  )
+  if (!main.user)
+    return
+
+  const currentOnboarding = isRecord(main.user.onboarding) ? main.user.onboarding : {}
+  const currentABTests = parseOnboardingABTestAssignments(currentOnboarding.abtests) ?? {}
+  main.user = {
+    ...main.user,
+    onboarding: {
+      ...currentOnboarding,
+      abtests: reconcileOnboardingABTestAssignments(currentABTests, assignments),
+    } as unknown as Json,
+  }
+}
+
+function refreshOnboardingABTests(options: { force?: boolean } = {}): Promise<void> {
   if (!props.preOrg || !onboardingUserId.value)
     return Promise.resolve()
-  if (onboardingABTestsRequest)
-    return onboardingABTestsRequest
+  if (onboardingABTestsRequest) {
+    if (!options.force)
+      return onboardingABTestsRequest
+    return onboardingABTestsRequest.then(() => refreshOnboardingABTests({ force: true }))
+  }
 
-  onboardingABTestsRequest = (async () => {
+  if (options.force)
+    applyOnboardingABTestAssignments({})
+
+  const request = (async () => {
     const { data, error } = await invokeCapgoApi<OnboardingABTestsResponse>('private/onboarding_ab_tests', {
       method: 'POST',
       retries: 1,
     })
     if (error) {
       console.error('Cannot load onboarding A/B tests', error)
-      onboardingABTestsRequest = null
       return
     }
 
     const assignments = parseOnboardingABTestAssignments(data?.assignments)
-    if (!assignments) {
-      onboardingABTestsRequest = null
-      return
-    }
-
-    onboardingABTestAssignments.value = {
-      ...onboardingABTestAssignments.value,
-      ...assignments,
-    }
-    if (!main.user)
+    if (!assignments)
       return
 
-    const currentOnboarding = isRecord(main.user.onboarding) ? main.user.onboarding : {}
-    const currentABTests = isRecord(currentOnboarding.abtests) ? currentOnboarding.abtests : {}
-    main.user = {
-      ...main.user,
-      onboarding: {
-        ...currentOnboarding,
-        abtests: {
-          ...currentABTests,
-          ...assignments,
-        },
-      } as Json,
-    }
+    applyOnboardingABTestAssignments(assignments)
   })().catch((error) => {
-    onboardingABTestsRequest = null
     console.error('Cannot load onboarding A/B tests', error)
   })
+  onboardingABTestsRequest = request
+  onboardingABTestsPending.value = true
+  void request.finally(() => {
+    if (onboardingABTestsRequest === request) {
+      onboardingABTestsRequest = null
+      onboardingABTestsPending.value = false
+      reconcileSetupStageWithChannelAssignment()
+    }
+  })
 
-  return onboardingABTestsRequest
+  return request
 }
 
-async function waitForOnboardingABTests() {
+async function waitForOnboardingABTests(options: { force?: boolean } = {}) {
   let timeoutId: number | undefined
   const timeout = new Promise<void>((resolve) => {
     timeoutId = window.setTimeout(resolve, ONBOARDING_AB_TEST_WAIT_TIMEOUT_MS)
   })
 
   try {
-    await Promise.race([refreshOnboardingABTests(), timeout])
+    await Promise.race([refreshOnboardingABTests(options), timeout])
   }
   finally {
     window.clearTimeout(timeoutId)
@@ -372,12 +416,12 @@ async function markOnboardingFeatureStarted(featureKey: 'cli_install' | 'ota' | 
   }
 }
 
-watch([flowStep, createdApp, usesBuilderSetupCommand], () => {
+watch([flowStep, createdApp, setupStage, usesBuilderSetupCommand], () => {
   if (!createdApp.value)
     return
-  if (flowStep.value === 'install' || (flowStep.value === 'setup' && !usesBuilderSetupCommand.value))
+  if ((flowStep.value === 'install' && setupStage.value === 'cli') || (flowStep.value === 'setup' && setupStage.value === 'cli' && !usesBuilderSetupCommand.value))
     void markOnboardingFeatureStarted('cli_install')
-  if (flowStep.value === 'setup')
+  if (flowStep.value === 'setup' && setupStage.value === 'cli')
     void markOnboardingFeatureStarted(usesBuilderSetupCommand.value ? 'builder' : 'ota')
 })
 const cliSubcommand = computed(() => usesBuilderSetupCommand.value ? 'build init' : 'i')
@@ -460,21 +504,38 @@ const selectedAppIconSource = computed<NonNullable<OnboardingDetailsEventPropert
   })
 })
 function createAiHelpPrompt() {
+  if (!apiKey.value)
+    return ''
+
   const resolvedAppId = createdApp.value?.app_id || generatedAppId.value || '[APP_ID]'
   const resolvedAppName = createdApp.value?.name?.trim() || appName.value.trim() || resolvedAppId
-  let appStatus = t('app-onboarding-ai-help-status-new')
-  if (props.preOrg)
-    appStatus = t('app-onboarding-v2-ai-help-status')
-  else if (createdApp.value?.existing_app)
-    appStatus = t('app-onboarding-ai-help-status-existing')
+  const appOnboarding = createdApp.value ? parseAppOnboarding(createdApp.value.onboarding) : undefined
+  const activeOrganization = currentOrg.value
+  const resolvedOrganizationId = createdApp.value?.owner_org
+    || preOrgCreatedOrganizationId.value
+    || activeOrganization?.gid
+  const resolvedOrganizationName = activeOrganization && activeOrganization.gid === resolvedOrganizationId
+    ? activeOrganization.name
+    : ''
+  const organizations: CliAiPromptOrganization[] = resolvedOrganizationId
+    ? [{
+        id: resolvedOrganizationId,
+        name: (props.preOrg ? orgNameInput.value.trim() : resolvedOrganizationName.trim()) || resolvedOrganizationId,
+        apps: [{
+          appId: resolvedAppId,
+          name: resolvedAppName,
+          todoListVersion: appOnboarding?.todo_list_version,
+          otaTodoListVersion: appOnboarding?.ota_todo_list_version,
+        }],
+      }]
+    : []
+  const promptIntent = selectedIntent.value === 'publish' ? 'builder' : selectedIntent.value
 
-  return t('app-onboarding-ai-help-prompt', {
-    appName: resolvedAppName,
-    appId: resolvedAppId,
-    appStatus,
-    apiKeyGuidance: t('app-onboarding-ai-help-with-key'),
-    command: cliCommand.value,
-  })
+  return buildCliAiSetupPrompt({
+    apiKey: apiKey.value,
+    organizations,
+    skippedOrganizations: [],
+  }, promptIntent)
 }
 const appOnboardingSteps = computed<Array<{ id: OnboardingFlowStep, label: string }>>(() => {
   if (props.preOrg) {
@@ -492,8 +553,25 @@ const appOnboardingSteps = computed<Array<{ id: OnboardingFlowStep, label: strin
   ]
 })
 const stepperStepId = computed(() => flowStep.value === 'publish_app_question' ? 'intent' : flowStep.value)
-const currentStepIndex = computed(() => Math.max(0, appOnboardingSteps.value.findIndex(entry => entry.id === stepperStepId.value)))
-const stepProgress = computed(() => `${((currentStepIndex.value + 1) / appOnboardingSteps.value.length) * 100}%`)
+const onboardingProgressSteps = computed<Array<{ id: OnboardingProgressStepId, label: string }>>(() => {
+  if (props.preOrg && newChannelTreatment.value) {
+    return [
+      { id: 'intent', label: t('unified-onboarding-step-intent') },
+      { id: 'details', label: t('app-onboarding-step-details') },
+      { id: 'organization', label: t('unified-onboarding-step-organization') },
+      { id: 'channel', label: t('unified-onboarding-step-channel') },
+      { id: 'setup', label: t('unified-onboarding-step-setup') },
+    ]
+  }
+  return appOnboardingSteps.value
+})
+const currentProgressStepId = computed<OnboardingProgressStepId>(() => {
+  if (props.preOrg && newChannelTreatment.value && flowStep.value === 'setup' && setupStage.value !== 'cli')
+    return 'channel'
+  return stepperStepId.value
+})
+const currentStepIndex = computed(() => Math.max(0, onboardingProgressSteps.value.findIndex(entry => entry.id === currentProgressStepId.value)))
+const stepProgress = computed(() => `${((currentStepIndex.value + 1) / onboardingProgressSteps.value.length) * 100}%`)
 const userCountStops = computed<UserCountStop[]>(() => {
   const planStops = planNameOrder.map(planName => main.plans.find(plan => plan.name === planName)).flatMap((plan) => {
     if (!plan?.mau)
@@ -523,6 +601,7 @@ const canCreatePreOrgOrganization = computed(() => {
 })
 const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-title') : t('unified-onboarding-setup-ota-title'))
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
+const showSetupChecklist = computed(() => (flowStep.value === 'setup' || flowStep.value === 'install') && usesOtaTodoList.value)
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
 let trackedAnalyticsSteps: OnboardingAnalyticsStep[] = []
@@ -548,6 +627,10 @@ function trackOrganizationEvent(
   details: OnboardingInteractionProperties = {},
 ) {
   progressTracker?.trackStepEvent(name, 'organization', details)
+}
+
+function trackChannelEvent(name: OnboardingChannelEvent, details: OnboardingChannelEventProperties) {
+  progressTracker?.trackStepEvent(name, analyticsStepFor(flowStep.value), withOnboardingChannelOrigin(details))
 }
 
 const detailsFieldTracker = createOnboardingDetailsFieldDebouncer((name, step, details) => {
@@ -662,6 +745,7 @@ function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress'
     publishAppQuestion: flowStep.value === 'publish_app_question',
     intent: selectedIntent.value,
     detailsStep: appDetailsStep.value,
+    setupStage: flowStep.value === 'setup' || flowStep.value === 'install' ? setupStage.value : undefined,
     appName: appName.value,
     appId: selectedAppIdSource.value === 'generated' ? '' : generatedAppId.value,
     existingApp: existingApp.value,
@@ -800,9 +884,11 @@ async function writeOnboardingProgress(
 function resetOnboardingForm() {
   flowStep.value = props.preOrg ? 'intent' : 'details'
   appDetailsStep.value = 'name'
+  setupStage.value = 'cli'
   selectedDevelopmentEnvironment.value = null
   skippedPublishAppQuestion.value = false
   selectedIntent.value = null
+  applyOnboardingABTestAssignments({})
   webNativeRecommendationDismissed.value = false
   existingApp.value = props.preOrg ? true : null
   existingAppSetup.value = props.preOrg ? 'manual' : null
@@ -845,6 +931,7 @@ function applyOnboardingProgress(progress: ReturnType<typeof parseUserOnboarding
 
   const flow = props.preOrg ? 'pre_org' : 'existing_org'
   flowStep.value = resumableOnboardingFlowStep(progress, flow)
+  setupStage.value = resolveSetupStage(progress)
   if (progress.details_step)
     appDetailsStep.value = progress.details_step
   if (progress.development_environment === 'skipped') {
@@ -1111,7 +1198,12 @@ function startApiKeyLoading() {
 }
 
 async function loadResumeApp() {
-  if (!resumeAppId.value || !currentOrg.value?.gid)
+  if (!resumeAppId.value)
+    return false
+  const appOrganization = organizationStore.getOrgByAppId(resumeAppId.value)
+  if (appOrganization && currentOrg.value?.gid !== appOrganization.gid)
+    organizationStore.setCurrentOrganization(appOrganization.gid)
+  if (!currentOrg.value?.gid)
     return false
 
   const { data, error } = await supabase
@@ -1127,6 +1219,8 @@ async function loadResumeApp() {
   }
 
   createdApp.value = data
+  const savedProgress = parseUserOnboardingProgress(main.user?.onboarding)
+  applyOnboardingProgress(savedProgress)
   appName.value = data.name ?? ''
   existingApp.value = data.existing_app ?? null
   storeUrl.value = data.ios_store_url ?? data.android_store_url ?? ''
@@ -1136,7 +1230,8 @@ async function loadResumeApp() {
   void loadResumeIconPreview(data.icon_url, data.app_id, iconLoadRun)
   if (props.preOrg || resumeStep.value === 'setup') {
     flowStep.value = 'setup'
-    hydrateIntentFromCurrentOrg()
+    if (!savedProgress?.intent)
+      hydrateIntentFromCurrentOrg()
   }
   else {
     flowStep.value = resumeStep.value === 'choice' ? 'choice' : 'install'
@@ -1751,11 +1846,13 @@ function continueFromIntent() {
   })
 }
 
-function continueFromGoal() {
+async function continueFromGoal() {
   if (!selectedIntent.value) {
     toast.error(t('organization-onboarding-intent-required'))
     return
   }
+  await persistOnboardingProgress()
+  await waitForOnboardingABTests({ force: true })
   if (webNativeDevelopmentEnvironmentTreatment.value) {
     ensurePublishAppQuestionStepTracked()
     completeAndViewStep('publish_app_question', {
@@ -1961,8 +2058,91 @@ function continueFromOrganizationInvite(invitationCount: number) {
     invitation_count: invitationCount,
   })
   showOrganizationInvite.value = false
+  setupStage.value = resolveSetupStage()
   completeAndViewStep('setup', { appId: createdApp.value.app_id })
 }
+
+function resolveSetupStage(
+  progress = parseUserOnboardingProgress(main.user?.onboarding),
+): SetupStage {
+  if (usesOtaTodoList.value || (!newChannelTreatment.value && !onboardingABTestsPending.value))
+    return 'cli'
+  return progress?.setup_stage ?? 'channel-routing'
+}
+
+function reconcileSetupStageWithChannelAssignment() {
+  if (
+    !createdApp.value
+    || (flowStep.value !== 'setup' && flowStep.value !== 'install')
+    || onboardingABTestsPending.value
+    || newChannelTreatment.value
+  ) {
+    return
+  }
+
+  setSetupStage('cli')
+}
+
+function setSetupStage(nextStage: SetupStage) {
+  if (setupStage.value === nextStage)
+    return
+  setupStage.value = nextStage
+  void persistOnboardingProgress()
+}
+
+function continueFromChannelDefaultRouting() {
+  trackChannelStageTransition('channel-self-assign', 'forward')
+  setSetupStage('channel-self-assign')
+}
+
+function continueFromChannelSelfAssign() {
+  trackChannelStageTransition('channel-console-assign', 'forward')
+  setSetupStage('channel-console-assign')
+}
+
+function continueFromChannelConsoleAssign() {
+  trackChannelStageTransition('channel-create', 'forward')
+  setSetupStage('channel-create')
+}
+
+function continueFromChannelCreate() {
+  trackChannelStageTransition('cli', 'forward')
+  setSetupStage('cli')
+}
+
+function trackChannelStageTransition(nextStage: OnboardingChannelStage | 'cli', direction: 'backward' | 'forward') {
+  const currentStage = setupStage.value
+  if (currentStage === 'cli')
+    return
+  trackChannelEvent(
+    direction === 'forward' ? 'onboarding_channel_stage_continued' : 'onboarding_channel_stage_backed',
+    {
+      channel_stage: currentStage,
+      navigation_direction: direction,
+      next_channel_stage: nextStage,
+    },
+  )
+}
+
+const previousSetupStage: Partial<Record<SetupStage, SetupStage>> = {
+  'channel-self-assign': 'channel-routing',
+  'channel-console-assign': 'channel-self-assign',
+  'channel-create': 'channel-console-assign',
+  'cli': 'channel-create',
+}
+
+function goBackFromSetupStage() {
+  const previousStage = previousSetupStage[setupStage.value]
+  if (previousStage) {
+    trackChannelStageTransition(previousStage, 'backward')
+    setSetupStage(previousStage)
+  }
+}
+
+watch(newChannelTreatment, () => {
+  if (!onboardingABTestsPending.value)
+    reconcileSetupStageWithChannelAssignment()
+})
 
 function onTechnicalInviteOpened() {
   progressTracker?.trackStepEvent('onboarding_technical_invite_opened', 'setup')
@@ -2100,7 +2280,10 @@ async function createAppRecord(options?: { nextStep?: StandardFlowStep | PreOrgF
     }
     if (flowStep.value === 'details')
       completionProperties.storeImportUsed = hasImportedStoreMetadata.value
-    completeAndViewStep(options?.nextStep ?? 'choice', completionProperties)
+    const nextStep = options?.nextStep ?? 'choice'
+    if (nextStep === 'setup' || nextStep === 'install')
+      setupStage.value = resolveSetupStage()
+    completeAndViewStep(nextStep, completionProperties)
   }
   catch (error) {
     console.error('Cannot create onboarding app', error)
@@ -2146,7 +2329,7 @@ async function seedDemoData() {
       ownerOrgId: currentOrg.value.gid,
     })
     await persistOnboardingProgress('completed')
-    router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
+    router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}`)
   }
   catch (error) {
     console.error('Cannot seed demo data', error)
@@ -2215,9 +2398,9 @@ async function reportOnboardingPatch(patch: { source?: 'manual' | 'cli' | 'mcp' 
   try {
     if (patch.source)
       reportedSetupSource.value = patch.source
-    const { error } = await supabase.rpc('report_app_onboarding_setup', {
-      p_app_id: app.app_id,
-      p_patch: patch as never,
+    const { error } = await invokeCapgoApi(`app/${encodeURIComponent(app.app_id)}`, {
+      method: 'PUT',
+      body: { onboarding: patch },
     })
     if (error)
       throw error
@@ -2256,6 +2439,7 @@ function goToInstallStep() {
     return
 
   isCliCommandVisible.value = false
+  setupStage.value = resolveSetupStage()
   startApiKeyLoading()
   completeAndViewStep('install', {
     appId: createdApp.value.app_id,
@@ -2284,7 +2468,7 @@ async function openDashboard() {
   window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
   allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
   await persistOnboardingProgress('completed')
-  router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
+  router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}`)
 }
 
 async function skipOnboardingSplash() {
@@ -2507,16 +2691,29 @@ defineExpose({
       'onboarding-flow-details-icon': flowStep === 'details' && appDetailsStep === 'icon',
     }"
   >
-    <div class="mx-auto w-full max-w-3xl">
+    <div class="mx-auto w-full" :class="showSetupChecklist || ((flowStep === 'setup' || flowStep === 'install') && setupStage !== 'cli') ? 'max-w-6xl' : 'max-w-3xl'">
       <div v-if="isLoading" class="flex min-h-[50vh] items-center justify-center">
         <Spinner size="w-32 h-32" />
       </div>
 
       <div v-else class="onboarding-flow-content space-y-6">
-        <header class="onboarding-flow-header">
-          <div class="onboarding-flow-badge inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-sm font-semibold text-slate-700 shadow-sm dark:border-white/15 dark:bg-slate-900/95 dark:text-slate-200">
-            <IconSparkles class="h-4 w-4" />
-            {{ t('app-onboarding-badge') }}
+        <header v-if="!showSetupChecklist" class="onboarding-flow-header">
+          <div class="flex items-center gap-2">
+            <button
+              v-if="showSetupBackButton"
+              type="button"
+              class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:-translate-x-0.5 hover:border-slate-300 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:border-white/15 dark:bg-slate-900/95 dark:text-slate-300 dark:hover:border-white/30 dark:hover:text-white"
+              data-test="onboarding-setup-back"
+              :aria-label="t('button-back')"
+              :title="t('button-back')"
+              @click="goBackFromSetupStage"
+            >
+              <IconArrowLeft class="h-4 w-4" aria-hidden="true" />
+            </button>
+            <div class="onboarding-flow-badge inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-sm font-semibold text-slate-700 shadow-sm dark:border-white/15 dark:bg-slate-900/95 dark:text-slate-200">
+              <IconSparkles class="h-4 w-4" />
+              {{ t('app-onboarding-badge') }}
+            </div>
           </div>
           <h1 class="onboarding-flow-title mt-4 text-2xl font-semibold text-slate-950 sm:text-3xl dark:text-white">
             {{ props.onboarding
@@ -2530,26 +2727,26 @@ defineExpose({
           <nav class="mt-6" :aria-label="t('app-onboarding-step-details')">
             <ol class="flex items-center gap-2">
               <li
-                v-for="(entry, index) in appOnboardingSteps"
+                v-for="(entry, index) in onboardingProgressSteps"
                 :key="entry.id"
                 class="flex min-w-0 flex-1 items-center gap-2"
-                :aria-current="stepperStepId === entry.id ? 'step' : undefined"
+                :aria-current="currentProgressStepId === entry.id ? 'step' : undefined"
               >
                 <span
                   class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold"
-                  :class="index < currentStepIndex ? 'bg-emerald-500 text-white' : stepperStepId === entry.id ? 'bg-primary-500 text-white' : 'bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-400'"
+                  :class="index < currentStepIndex ? 'bg-emerald-500 text-white' : currentProgressStepId === entry.id ? 'bg-primary-500 text-white' : 'bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-400'"
                 >
                   <IconCheck v-if="index < currentStepIndex" class="h-3.5 w-3.5" />
                   <span v-else>{{ index + 1 }}</span>
                 </span>
                 <span
                   class="hidden truncate text-sm font-medium sm:block"
-                  :class="stepperStepId === entry.id ? 'text-slate-950 dark:text-white' : index < currentStepIndex ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-400 dark:text-slate-500'"
+                  :class="currentProgressStepId === entry.id ? 'text-slate-950 dark:text-white' : index < currentStepIndex ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-400 dark:text-slate-500'"
                 >
                   {{ entry.label }}
                 </span>
                 <span
-                  v-if="index < appOnboardingSteps.length - 1"
+                  v-if="index < onboardingProgressSteps.length - 1"
                   class="mx-1 hidden h-px flex-1 bg-slate-200 sm:block dark:bg-white/15"
                   aria-hidden="true"
                 />
@@ -3260,111 +3457,158 @@ defineExpose({
           </div>
         </template>
 
-        <div v-else-if="flowStep === 'setup' && createdApp" class="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
-          <div>
-            <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
-              {{ t('unified-onboarding-step-setup') }}
-            </p>
-            <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-              {{ setupTitle }}
-            </h2>
-            <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-              {{ setupSubtitle }}
-            </p>
-          </div>
+        <AppOnboardingSetupChecklist
+          v-else-if="showSetupChecklist && createdApp"
+          :key="createdApp.app_id"
+          :app-id="createdApp.app_id"
+          :initial-onboarding="createdApp.onboarding"
+          :command="cliCommand"
+          :hiding="isHidingSplash"
+          :leaving="isSeedingDemo"
+          @copy-command="copyCliCommand"
+          @copy-ai="copyAiInstructions"
+          @hide="skipOnboardingSplash"
+          @explore="openDashboard"
+          @complete="openDashboard"
+          @invite-opened="onTechnicalInviteOpened"
+          @invite-succeeded="onTechnicalInviteSucceeded"
+          @channel-analytics="trackChannelEvent"
+        />
 
-          <div class="space-y-2">
-            <button
-              v-if="apiKey"
-              type="button"
-              class="d-btn group relative h-auto min-h-0 w-full justify-start whitespace-normal rounded-2xl border-0 bg-slate-950 p-5 pr-14 text-left font-normal ring-1 ring-white/10 transition hover:bg-slate-950 hover:ring-white/20"
-              data-test="app-onboarding-command-copy"
-              :aria-label="t('app-onboarding-command-copy')"
-              @click="copyCliCommand"
-            >
-              <code class="block whitespace-pre-wrap break-all text-sm">
-                <span class="text-slate-500">npx</span>
-                <span class="text-sky-300"> @capgo/cli@latest</span>
-                <span class="font-bold text-violet-300">&nbsp;{{ cliSubcommand }}</span>
-                <span v-if="!usesBuilderSetupCommand" class="text-emerald-300">&nbsp;{{ apiKey }}</span>
-                <template v-for="(arg, index) in cliCommandArgs" :key="`${arg}-${index}`">
-                  <span :class="index % 2 === 0 ? 'text-amber-300' : 'text-cyan-300'"> {{ arg }}</span>
-                </template>
-              </code>
-              <IconCopy class="absolute right-4 top-4 h-5 w-5 text-muted-blue-300 transition group-hover:text-white" />
-            </button>
-            <div v-else class="rounded-2xl bg-slate-950 p-5 pr-14 ring-1 ring-white/10" role="status">
-              <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300">
-                <Spinner size="w-5 h-5" />
-                <span>{{ t('app-onboarding-command-apikey-loading') }}</span>
-              </div>
-            </div>
-            <p class="text-sm leading-6 text-slate-500 dark:text-slate-400">
-              {{ t('onboarding-manual-setup-prefix') }}
-              <a
-                href="https://capgo.app/docs/getting-started/add-an-app/#manual-setup"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="underline decoration-slate-300 underline-offset-2 transition hover:text-slate-700 dark:decoration-slate-600 dark:hover:text-slate-200"
-              >{{ t('onboarding-manual-setup-link') }}</a>
-            </p>
-          </div>
-
-          <AppOnboardingCliSteps
-            :key="createdApp.app_id"
-            :app-id="createdApp.app_id"
-            :initial-onboarding="createdApp.onboarding"
+        <div v-else-if="flowStep === 'setup' && createdApp">
+          <ChannelDefaultRoutingOnboarding
+            v-if="newChannelTreatment && setupStage === 'channel-routing'"
+            @analytics="trackChannelEvent"
+            @continue="continueFromChannelDefaultRouting"
           />
 
-          <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
-            <TechnicalTeammateInviteCard
-              analytics-channel="onboarding-v3"
-              :show-manual-setup-link="false"
-              :tracking-version="3"
-              @opened="onTechnicalInviteOpened"
-              @success="onTechnicalInviteSucceeded"
-            />
-          </div>
+          <ChannelSelfAssignOnboarding
+            v-else-if="newChannelTreatment && setupStage === 'channel-self-assign'"
+            @analytics="trackChannelEvent"
+            @back="goBackFromSetupStage"
+            @continue="continueFromChannelSelfAssign"
+          />
 
-          <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
-            <div class="flex flex-wrap items-start justify-between gap-3">
-              <div class="max-w-2xl">
-                <p class="font-medium text-slate-950 dark:text-white">
-                  {{ t('app-onboarding-ai-help-title') }}
-                </p>
-                <p class="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {{ t('app-onboarding-ai-help-caption') }}
-                </p>
+          <ChannelConsoleAssignOnboarding
+            v-else-if="newChannelTreatment && setupStage === 'channel-console-assign'"
+            @analytics="trackChannelEvent"
+            @back="goBackFromSetupStage"
+            @continue="continueFromChannelConsoleAssign"
+          />
+
+          <ChannelCreateOnboarding
+            v-else-if="newChannelTreatment && setupStage === 'channel-create'"
+            :app-id="createdApp.app_id"
+            @analytics="trackChannelEvent"
+            @continue="continueFromChannelCreate"
+          />
+
+          <div v-else data-test="onboarding-setup-cli" class="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
+            <div>
+              <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
+                {{ t('unified-onboarding-step-setup') }}
+              </p>
+              <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+                {{ setupTitle }}
+              </h2>
+              <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
+                {{ setupSubtitle }}
+              </p>
+            </div>
+
+            <div class="space-y-2">
+              <button
+                v-if="apiKey"
+                type="button"
+                class="d-btn group relative h-auto min-h-0 w-full justify-start whitespace-normal rounded-2xl border-0 bg-slate-950 p-5 pr-14 text-left font-normal ring-1 ring-white/10 transition hover:bg-slate-950 hover:ring-white/20"
+                data-test="app-onboarding-command-copy"
+                :aria-label="t('app-onboarding-command-copy')"
+                @click="copyCliCommand"
+              >
+                <code class="block whitespace-pre-wrap break-all text-sm">
+                  <span class="text-slate-500">npx</span>
+                  <span class="text-sky-300"> @capgo/cli@latest</span>
+                  <span class="font-bold text-violet-300">&nbsp;{{ cliSubcommand }}</span>
+                  <span v-if="!usesBuilderSetupCommand" class="text-emerald-300">&nbsp;{{ apiKey }}</span>
+                  <template v-for="(arg, index) in cliCommandArgs" :key="`${arg}-${index}`">
+                    <span :class="index % 2 === 0 ? 'text-amber-300' : 'text-cyan-300'"> {{ arg }}</span>
+                  </template>
+                </code>
+                <IconCopy class="absolute right-4 top-4 h-5 w-5 text-muted-blue-300 transition group-hover:text-white" />
+              </button>
+              <div v-else class="rounded-2xl bg-slate-950 p-5 pr-14 ring-1 ring-white/10" role="status">
+                <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300">
+                  <Spinner size="w-5 h-5" />
+                  <span>{{ t('app-onboarding-command-apikey-loading') }}</span>
+                </div>
               </div>
-              <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="copyAiInstructions">
-                <IconCopy class="h-4 w-4" />
-                {{ t('app-onboarding-ai-help-button') }}
+              <p class="text-sm leading-6 text-slate-500 dark:text-slate-400">
+                {{ t('onboarding-manual-setup-prefix') }}
+                <a
+                  href="https://capgo.app/docs/getting-started/add-an-app/#manual-setup"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="underline decoration-slate-300 underline-offset-2 transition hover:text-slate-700 dark:decoration-slate-600 dark:hover:text-slate-200"
+                >{{ t('onboarding-manual-setup-link') }}</a>
+              </p>
+            </div>
+
+            <AppOnboardingCliSteps
+              :key="createdApp.app_id"
+              :app-id="createdApp.app_id"
+              :initial-onboarding="createdApp.onboarding"
+            />
+
+            <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
+              <TechnicalTeammateInviteCard
+                analytics-channel="onboarding-v3"
+                :show-manual-setup-link="false"
+                :tracking-version="3"
+                @opened="onTechnicalInviteOpened"
+                @success="onTechnicalInviteSucceeded"
+              />
+            </div>
+
+            <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="max-w-2xl">
+                  <p class="font-medium text-slate-950 dark:text-white">
+                    {{ t('app-onboarding-ai-help-title') }}
+                  </p>
+                  <p class="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                    {{ t('app-onboarding-ai-help-caption') }}
+                  </p>
+                </div>
+                <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="copyAiInstructions">
+                  <IconCopy class="h-4 w-4" />
+                  {{ t('app-onboarding-ai-help-button') }}
+                </button>
+              </div>
+            </div>
+
+            <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
+              <button
+                type="button"
+                class="d-btn min-h-11"
+                :class="whiteCardSecondaryButtonClass()"
+                data-test="app-onboarding-dont-show-again"
+                :aria-label="t('app-onboarding-dont-show-again')"
+                :disabled="isSeedingDemo || isHidingSplash"
+                @click="skipOnboardingSplash"
+              >
+                <IconLoader v-if="isHidingSplash" class="h-4 w-4 animate-spin" />
+                <template v-else>
+                  {{ t('app-onboarding-dont-show-again') }}
+                </template>
+              </button>
+              <button type="button" class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo || isHidingSplash" @click="openDashboard">
+                <IconLoader v-if="isSeedingDemo" class="h-4 w-4 animate-spin" />
+                <template v-else>
+                  {{ t('app-onboarding-explore-dashboard') }}
+                  <IconArrowRight class="h-4 w-4" />
+                </template>
               </button>
             </div>
-          </div>
-
-          <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
-            <button
-              type="button"
-              class="d-btn min-h-11"
-              :class="whiteCardSecondaryButtonClass()"
-              data-test="app-onboarding-dont-show-again"
-              :aria-label="t('app-onboarding-dont-show-again')"
-              :disabled="isSeedingDemo || isHidingSplash"
-              @click="skipOnboardingSplash"
-            >
-              <IconLoader v-if="isHidingSplash" class="h-4 w-4 animate-spin" />
-              <template v-else>
-                {{ t('app-onboarding-dont-show-again') }}
-              </template>
-            </button>
-            <button type="button" class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo || isHidingSplash" @click="openDashboard">
-              <IconLoader v-if="isSeedingDemo" class="h-4 w-4 animate-spin" />
-              <template v-else>
-                {{ t('app-onboarding-explore-dashboard') }}
-                <IconArrowRight class="h-4 w-4" />
-              </template>
-            </button>
           </div>
         </div>
 
@@ -3441,7 +3685,34 @@ defineExpose({
         </div>
 
         <div v-else-if="!props.preOrg && flowStep === 'install' && createdApp">
-          <div class="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
+          <ChannelDefaultRoutingOnboarding
+            v-if="newChannelTreatment && setupStage === 'channel-routing'"
+            @analytics="trackChannelEvent"
+            @continue="continueFromChannelDefaultRouting"
+          />
+
+          <ChannelSelfAssignOnboarding
+            v-else-if="newChannelTreatment && setupStage === 'channel-self-assign'"
+            @analytics="trackChannelEvent"
+            @back="goBackFromSetupStage"
+            @continue="continueFromChannelSelfAssign"
+          />
+
+          <ChannelConsoleAssignOnboarding
+            v-else-if="newChannelTreatment && setupStage === 'channel-console-assign'"
+            @analytics="trackChannelEvent"
+            @back="goBackFromSetupStage"
+            @continue="continueFromChannelConsoleAssign"
+          />
+
+          <ChannelCreateOnboarding
+            v-else-if="newChannelTreatment && setupStage === 'channel-create'"
+            :app-id="createdApp.app_id"
+            @analytics="trackChannelEvent"
+            @continue="continueFromChannelCreate"
+          />
+
+          <div v-else data-test="onboarding-install-cli" class="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
             <div>
               <div>
                 <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
