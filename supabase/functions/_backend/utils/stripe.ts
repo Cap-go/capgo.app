@@ -92,6 +92,32 @@ function isLocalStripeEmulatorHost(hostname: string): boolean {
     || hostname === 'host.docker.internal'
 }
 
+function isLocalStripeEmulatorConfig(c: Context, secretKey: string): boolean {
+  return getEnv(c, 'ENV') === 'local' && secretKey === 'sk_test_emulator'
+}
+
+function assertStripeApiBaseUrlAllowed(
+  c: Context,
+  account: BillingAccount,
+  secretKey: string,
+  apiBaseUrl: URL | null,
+): void {
+  if (!apiBaseUrl || apiBaseUrl.protocol !== 'http:')
+    return
+
+  if (resolveStripeEnvironment(c, account) === 'live') {
+    throw new Error('STRIPE_API_BASE_URL must use https when using live Stripe credentials')
+  }
+
+  if (apiBaseUrl.hostname === 'host.docker.internal' && !isLocalStripeEmulatorConfig(c, secretKey)) {
+    throw new Error('STRIPE_API_BASE_URL host.docker.internal is only allowed for local emulator config')
+  }
+
+  if (!isLocalStripeEmulatorHost(apiBaseUrl.hostname)) {
+    throw new Error('STRIPE_API_BASE_URL must use https for non-loopback hosts')
+  }
+}
+
 function getStripeApiBaseUrl(c: Context): URL | null {
   const rawBaseUrl = getEnv(c, 'STRIPE_API_BASE_URL').trim()
   if (!rawBaseUrl)
@@ -107,10 +133,6 @@ function getStripeApiBaseUrl(c: Context): URL | null {
 
   if (!['http:', 'https:'].includes(parsedBaseUrl.protocol)) {
     throw new Error('STRIPE_API_BASE_URL must use http or https')
-  }
-
-  if (parsedBaseUrl.protocol === 'http:' && !isLocalStripeEmulatorHost(parsedBaseUrl.hostname)) {
-    throw new Error('STRIPE_API_BASE_URL must use https for non-loopback hosts')
   }
 
   if (parsedBaseUrl.pathname !== '/' && parsedBaseUrl.pathname !== '') {
@@ -135,6 +157,7 @@ export function getStripe(c: Context, account: BillingAccount = 'ee'): Stripe {
   }
 
   const apiBaseUrl = getStripeApiBaseUrl(c)
+  assertStripeApiBaseUrlAllowed(c, account, secretKey, apiBaseUrl)
   const apiPort = apiBaseUrl
     ? Number.parseInt(apiBaseUrl.port || (apiBaseUrl.protocol === 'https:' ? '443' : '80'), 10)
     : undefined

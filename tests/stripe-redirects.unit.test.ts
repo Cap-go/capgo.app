@@ -2,6 +2,7 @@ import Stripe from 'stripe'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mockedEnv: Record<string, string> = {
+  ENV: 'local',
   WEBAPP_URL: 'https://capgo.test',
   STRIPE_SECRET_KEY: 'sk_test_123',
 }
@@ -76,6 +77,7 @@ function mockBillingAccountLookup(billingAccount = 'ee') {
 
 afterEach(() => {
   delete mockedEnv.STRIPE_API_BASE_URL
+  mockedEnv.ENV = 'local'
   mockedEnv.STRIPE_SECRET_KEY = 'sk_test_123'
   mockedSupabaseAdmin.mockReset()
   vi.restoreAllMocks()
@@ -291,6 +293,7 @@ describe('stripe redirect URL allowlist', () => {
 
   it('allows host.docker.internal for Playwright Stripe emulator base URL', async () => {
     mockedEnv.STRIPE_API_BASE_URL = 'http://host.docker.internal:4520'
+    mockedEnv.STRIPE_SECRET_KEY = 'sk_test_emulator'
 
     const stripeClient = {
       checkout: {
@@ -305,11 +308,28 @@ describe('stripe redirect URL allowlist', () => {
     const { getStripe } = await import('../supabase/functions/_backend/utils/stripe.ts')
     getStripe(createContext())
 
-    expect(Stripe).toHaveBeenCalledWith('sk_test_123', expect.objectContaining({
+    expect(Stripe).toHaveBeenCalledWith('sk_test_emulator', expect.objectContaining({
       host: 'host.docker.internal',
       port: 4520,
       protocol: 'http',
     }))
+  })
+
+  it('rejects http Stripe API base URL when using live credentials', async () => {
+    mockedEnv.STRIPE_API_BASE_URL = 'http://host.docker.internal:4520'
+    mockedEnv.STRIPE_SECRET_KEY = 'sk_live_123'
+
+    const { getStripe } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    expect(() => getStripe(createContext())).toThrow('STRIPE_API_BASE_URL must use https when using live Stripe credentials')
+  })
+
+  it('rejects host.docker.internal http base URL outside local emulator config', async () => {
+    mockedEnv.STRIPE_API_BASE_URL = 'http://host.docker.internal:4520'
+    mockedEnv.STRIPE_SECRET_KEY = 'sk_test_123'
+    mockedEnv.ENV = 'production'
+
+    const { getStripe } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    expect(() => getStripe(createContext())).toThrow('STRIPE_API_BASE_URL host.docker.internal is only allowed for local emulator config')
   })
 
   it('rejects non-local http Stripe API base URLs', async () => {
