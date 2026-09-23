@@ -19,13 +19,13 @@ import IconVenetianMask from '~icons/lucide/venetian-mask'
 import IconApiKey from '~icons/mdi/shield-key'
 import IconAppStore from '~icons/simple-icons/appstore'
 import { logAsUser } from '~/services/logAs'
-import { isSpoofed, unspoofUser } from '~/services/supabase'
-import { useDialogV2Store } from '~/stores/dialogv2'
-import { useMainStore } from '~/stores/main'
 import {
   confirmOnboardingDashboardExplorationNavigation,
   resolveOnboardingHardGateResumeAppId,
 } from '~/services/onboardingDashboardExplorationConfirm'
+import { isSpoofed, unspoofUser } from '~/services/supabase'
+import { useDialogV2Store } from '~/stores/dialogv2'
+import { useMainStore } from '~/stores/main'
 import DropdownProfile from '../components/dashboard/DropdownProfile.vue'
 import GettingStartedNav from '../components/dashboard/GettingStartedNav.vue'
 
