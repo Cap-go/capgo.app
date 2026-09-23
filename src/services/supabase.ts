@@ -452,35 +452,41 @@ export async function getAllDashboard(orgId: string, startDate?: string, endDate
 export async function getTotalStorage(orgId?: string): Promise<number> {
   if (!orgId)
     return 0
-  const { data, error } = await useSupabase()
-    .rpc('get_total_storage_size_org', { org_id: orgId })
-    .single()
-  if (error)
-    throw new Error(error.message)
 
-  return data ?? 0
+  const response = await invokeCapgoApi<{ bytes: number }>(
+    `private/org_billing/total-storage?org_id=${encodeURIComponent(orgId)}`,
+    { method: 'GET' },
+  )
+  if (response.error)
+    throw new Error(response.error.message)
+
+  return response.data?.bytes ?? 0
 }
 
 // Canonical frontend platform-admin verification.
 // Use this only for platform-rights checks in the UI flow; no other path should use
 // user-id based admin function checks from the browser.
 export async function isPlatformAdmin(): Promise<boolean> {
-  const rpc = useSupabase().rpc('is_platform_admin')
-  const { data, error } = await rpc.single()
-  if (error)
-    throw new Error(error.message)
+  const response = await invokeCapgoApi<{ is_admin: boolean }>('private/org_billing/platform-admin', {
+    method: 'GET',
+  })
+  if (response.error)
+    throw new Error(response.error.message)
 
-  return data ?? false
+  return response.data?.is_admin ?? false
 }
 
 export async function isPayingOrg(orgId: string): Promise<boolean> {
-  const { data, error } = await useSupabase()
-    .rpc('is_paying_org', { orgid: orgId })
-    .single()
-  if (error)
-    console.error('isPayingOrg error', orgId, error)
+  const response = await invokeCapgoApi<{ is_paying: boolean }>(
+    `private/org_billing/is-paying?org_id=${encodeURIComponent(orgId)}`,
+    { method: 'GET' },
+  )
+  if (response.error) {
+    console.error('isPayingOrg error', orgId, response.error)
+    return false
+  }
 
-  return data ?? false
+  return response.data?.is_paying ?? false
 }
 
 export async function getPlans(): Promise<Database['public']['Tables']['plans']['Row'][]> {
@@ -568,17 +574,14 @@ export async function getUsageCreditDeductions(orgId: string): Promise<UsageCred
     return []
 
   try {
-    const { data, error } = await useSupabase()
-      .from('usage_credit_ledger')
-      .select('*')
-      .eq('org_id', orgId)
-      .eq('transaction_type', 'deduction')
-      .order('occurred_at', { ascending: false })
+    const response = await invokeCapgoApi<UsageCreditLedgerRow[]>(
+      `private/org_billing/credit-deductions?org_id=${encodeURIComponent(orgId)}`,
+      { method: 'GET' },
+    )
+    if (response.error)
+      throw new Error(response.error.message)
 
-    if (error)
-      throw new Error(error.message)
-
-    return data ?? []
+    return response.data ?? []
   }
   catch (err) {
     console.error('getUsageCreditDeductions error', err)
@@ -618,12 +621,21 @@ export async function getPlanUsagePercent(orgId?: string): Promise<PlanUsage> {
       build_time_percent: 0,
     }
   }
-  const { data, error } = await useSupabase()
-    .rpc('get_plan_usage_percent_detailed', { orgid: orgId })
-    .single()
-  if (error)
-    throw new Error(error.message)
-  return data
+
+  const response = await invokeCapgoApi<PlanUsage>(
+    `private/org_billing/usage-percent?org_id=${encodeURIComponent(orgId)}`,
+    { method: 'GET' },
+  )
+  if (response.error)
+    throw new Error(response.error.message)
+
+  return response.data ?? {
+    total_percent: 0,
+    mau_percent: 0,
+    bandwidth_percent: 0,
+    storage_percent: 0,
+    build_time_percent: 0,
+  }
 }
 
 const DEFAULT_PLAN_NAME = 'Solo'
@@ -631,30 +643,30 @@ const DEFAULT_PLAN_NAME = 'Solo'
 export async function getCurrentPlanNameOrg(orgId?: string): Promise<string> {
   if (!orgId)
     return DEFAULT_PLAN_NAME
-  const { data, error } = await useSupabase()
-    .rpc('get_current_plan_name_org', { orgid: orgId })
-    .single()
-  if (error)
-    throw new Error(error.message)
 
-  return data ?? DEFAULT_PLAN_NAME
+  const response = await invokeCapgoApi<{ plan_name: string }>(
+    `private/org_billing/plan-name?org_id=${encodeURIComponent(orgId)}`,
+    { method: 'GET' },
+  )
+  if (response.error)
+    throw new Error(response.error.message)
+
+  return response.data?.plan_name ?? DEFAULT_PLAN_NAME
 }
 
 export async function findBestPlan(stats: Database['public']['Functions']['find_best_plan_v3']['Args']): Promise<string> {
-  // console.log('findBestPlan', stats)
-  // const storage = bytesToGb(stats.storage)
-  // const bandwidth = bytesToGb(stats.bandwidth)
-  const { data, error } = await useSupabase()
-    .rpc('find_best_plan_v3', {
+  const response = await invokeCapgoApi<{ plan_name: string }>('private/org_billing/find-best-plan', {
+    body: {
       mau: stats.mau ?? 0,
       bandwidth: stats.bandwidth,
       storage: stats.storage,
-    })
-    .single()
-  if (error)
-    throw new Error(error.message)
+      build_time_unit: stats.build_time_unit ?? 0,
+    },
+  })
+  if (response.error)
+    throw new Error(response.error.message)
 
-  return data
+  return response.data?.plan_name ?? 'Team'
 }
 
 export function convertNativePackages(nativePackages: { name: string, version: string }[] | null | undefined) {
