@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
 import { runAndroidEffect } from '../src/build/onboarding/android/flow.ts'
 import {
+  readImportedGooglePlayCredentialFile,
   trackConnectedGooglePlay,
   trackGeneratedGooglePlayProvisioningFailure,
   trackGooglePlayConnectionFailure,
@@ -61,6 +62,26 @@ assert.deepEqual(actions.splice(0), [{
   tags: {
     attempt_id: journeyId,
     source: 'imported_service_account',
+  },
+  step: 'sa-json-validating',
+}])
+
+// The production credential-read boundary reports before rethrowing to the UI error handler.
+await assert.rejects(
+  readImportedGooglePlayCredentialFile(
+    importedProgress.serviceAccountJsonPath,
+    async () => { throw new Error('credential read failed') },
+    journeyId,
+    trackAction,
+  ),
+  /credential read failed/,
+)
+assert.deepEqual(actions.splice(0), [{
+  action: 'google_play_connection_failed',
+  tags: {
+    attempt_id: journeyId,
+    source: 'imported_service_account',
+    reason: 'file_read_error',
   },
   step: 'sa-json-validating',
 }])

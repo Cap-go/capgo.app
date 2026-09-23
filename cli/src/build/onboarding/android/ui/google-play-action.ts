@@ -1,6 +1,7 @@
 import type { ValidationResult } from '../service-account-validation.js'
 import type { AndroidOnboardingProgress, AndroidOnboardingStep } from '../types.js'
 import type { PreparationTrackAction } from '../../ui/preparation-action.js'
+import type { Buffer } from 'node:buffer'
 import { emitPreparationAction, emitPreparationSuccessOnce } from '../../ui/preparation-action.js'
 
 export type GooglePlayConnectionSource = 'imported_service_account' | 'generated_service_account'
@@ -75,6 +76,23 @@ export function trackImportedGooglePlayValidationFailure(
     journeyId,
     trackAction,
   )
+}
+
+export async function readImportedGooglePlayCredentialFile(
+  path: string,
+  readCredentialFile: (path: string) => Promise<Buffer>,
+  journeyId: string,
+  trackAction: TrackAction,
+  shouldReportFailure: () => boolean = () => true,
+): Promise<Buffer> {
+  try {
+    return await readCredentialFile(path)
+  }
+  catch (err) {
+    if (shouldReportFailure())
+      trackImportedGooglePlayValidationFailure('file-read-error', journeyId, trackAction)
+    throw err
+  }
 }
 
 export function trackGooglePlayConnectionFailure(
