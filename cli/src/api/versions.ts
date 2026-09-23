@@ -25,6 +25,40 @@ interface CapgoHttpOptions {
 
 const BUNDLE_PAGE_SIZE = 50
 
+export type BundleVersionLookupRow = Pick<
+  Database['public']['Tables']['app_versions']['Row'],
+  'id' | 'name' | 'checksum' | 'deleted' | 'created_at'
+>
+
+export async function fetchBundleVersionRow(
+  apikey: string,
+  appId: string,
+  version: string,
+  options: VersionOptions & { includeDeleted?: boolean } = {},
+): Promise<BundleVersionLookupRow | null> {
+  const params = new URLSearchParams({
+    app_id: appId,
+    version,
+  })
+  if (options.includeDeleted)
+    params.set('include_deleted', '1')
+
+  const { data, error } = await invokeCapgoCliApi<BundleVersionLookupRow>(
+    `bundle?${params.toString()}`,
+    {
+      apikey,
+      method: 'GET',
+      body: undefined,
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
+    },
+  )
+
+  if (error)
+    return null
+  return data
+}
+
 async function fetchBundlePages(appid: string, options: CapgoHttpOptions) {
   const all: Database['public']['Tables']['app_versions']['Row'][] = []
   let page = 0

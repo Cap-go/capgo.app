@@ -2099,37 +2099,6 @@ export async function setVersionManifest(
   }
 }
 
-// TODO(cli-http): Prefer POST channel via invokeCapgoCliApi; this SDK upsert remains for callers not yet migrated.
-export async function updateOrCreateChannel(supabase: SupabaseClient<Database>, update: Database['public']['Tables']['channels']['Insert']) {
-  // console.log('updateOrCreateChannel', update)
-  if (!update.app_id || !update.name || !update.created_by) {
-    log.error('missing app_id, name, or created_by')
-    return Promise.reject(new Error('missing app_id, name, or created_by'))
-  }
-
-  const { data, error } = await supabase
-    .from('channels')
-    .select()
-    .eq('app_id', update.app_id)
-    .eq('name', update.name)
-    .single()
-  if (data && !error) {
-    return supabase
-      .from('channels')
-      .update(update)
-      .eq('app_id', update.app_id)
-      .eq('name', update.name)
-      .select()
-      .single()
-  }
-
-  return supabase
-    .from('channels')
-    .insert(update)
-    .select()
-    .single()
-}
-
 type SendEventPayload = TrackOptions & { nonPersonTags?: Record<string, unknown> } & (
   | { notifyConsole: true, icon?: string }
   | { notifyConsole?: false, icon?: never }
@@ -2897,12 +2866,6 @@ export async function getLocalDependencies(packageJsonPath: string | undefined, 
   return dependenciesObject as { name: string, version: string, requested_version?: string, native: boolean, ios_checksum?: string, android_checksum?: string }[]
 }
 
-interface ChannelChecksum {
-  version: {
-    checksum: string
-  }
-}
-
 export async function getRemoteDependencies(
   apikey: string,
   appId: string,
@@ -2922,23 +2885,33 @@ export async function getRemoteDependencies(
   return convertNativePackages(channelContext.version.native_packages ?? [])
 }
 
-export async function getRemoteChecksums(supabase: SupabaseClient<Database>, appId: string, channel: string) {
-  const { data, error } = await supabase
-    .from('channels')
-    .select(`version:app_versions!channels_version_fkey(checksum)`)
-    .eq('name', channel)
-    .eq('app_id', appId)
-    .single()
-  const channelData = data as any as ChannelChecksum
+export async function getRemoteChecksums(
+  apikey: string,
+  appId: string,
+  channel: string,
+  httpOptions: CliHttpOptions = {},
+) {
+  const params = new URLSearchParams({
+    app_id: appId,
+    channel,
+  })
+  const { data, error } = await invokeCapgoCliApi<{
+    bundle_name?: string | null
+    bundle_id?: number | null
+  }>(`channel/current-bundle?${params.toString()}`, {
+    apikey,
+    method: 'GET',
+    body: undefined,
+    supaHost: httpOptions.supaHost,
+    supaAnon: httpOptions.supaAnon,
+  })
 
-  if (error
-    || channelData === null
-    || !channelData.version
-    || !channelData.version.checksum) {
+  if (error || !data?.bundle_name)
     return null
-  }
 
-  return channelData.version.checksum
+  const { fetchBundleVersionRow } = await import('./api/versions')
+  const version = await fetchBundleVersionRow(apikey, appId, data.bundle_name, httpOptions)
+  return version?.checksum ?? null
 }
 
 export type { NativePackage } from './schemas/common'

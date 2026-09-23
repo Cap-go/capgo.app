@@ -9,7 +9,7 @@ import {
   throwTwoFactorComplianceRpcError,
   warnAndContinueTwoFactorPreflightNetworkFailure,
 } from '../shared/two-factor-compliance'
-import { appAddHintMessage, formatCapgoApiErrorBody, formatCapgoCliInvokeError, getCapgoCliHttpStatus, hasCliPermission, hostOptionsFromSupabase, invokeCapgoCliApi, resolveApikeyFromSupabaseClient, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
+import { appAddHintMessage, formatCapgoApiErrorBody, formatCapgoCliInvokeError, getCapgoCliHttpStatus, hasCliPermission, hostOptionsFromSupabase, invokeCapgoCliApi, readCapgoCliApiErrorPayload, resolveApikeyFromSupabaseClient, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
 
 export async function checkAppExists(
   apikey: string,
@@ -294,4 +294,54 @@ export function resolveAppSetIconPath(explicitIcon?: string): string | undefined
 
 export function getAppIconStoragePath(organizationUid: string, appId: string) {
   return `org/${organizationUid}/${appId}/icon`
+}
+
+export interface UploadAppIconResult {
+  path?: string
+  conflict?: boolean
+  error?: Error | null
+}
+
+export async function uploadAppIconHttp(
+  apikey: string,
+  params: {
+    appId: string
+    orgId: string
+    contentBase64: string
+    contentType: string
+    upsert?: boolean
+    supaHost?: string
+    supaAnon?: string
+  },
+): Promise<UploadAppIconResult> {
+  const { data, error } = await invokeCapgoCliApi<{ path?: string, conflict?: boolean }>(
+    'private/cli/storage/icon',
+    {
+      apikey,
+      method: 'POST',
+      body: {
+        app_id: params.appId,
+        org_id: params.orgId,
+        content_base64: params.contentBase64,
+        content_type: params.contentType,
+        upsert: params.upsert === true,
+      },
+      supaHost: params.supaHost,
+      supaAnon: params.supaAnon,
+    },
+  )
+
+  if (error) {
+    if (getCapgoCliHttpStatus(error) === 409) {
+      const payload = await readCapgoCliApiErrorPayload(error) as { path?: string } | null
+      return {
+        path: payload?.path ?? getAppIconStoragePath(params.orgId, params.appId),
+        conflict: true,
+        error: null,
+      }
+    }
+    return { error }
+  }
+
+  return { path: data?.path, conflict: data?.conflict === true, error: null }
 }
