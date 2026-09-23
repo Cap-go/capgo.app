@@ -32,7 +32,7 @@ async function postRegister(body: Record<string, unknown>) {
 }
 
 describe('POST /auth/register', () => {
-  it.concurrent('creates a user and returns session tokens', async () => {
+  it('creates a user and returns session tokens', async () => {
     const payload = buildRegisterPayload()
     const response = await postRegister(payload)
     expect(response.status).toBe(200)
@@ -70,7 +70,7 @@ describe('POST /auth/register', () => {
     })
   })
 
-  it.concurrent('returns invalid_request for malformed payloads', async () => {
+  it('returns invalid_request for malformed payloads', async () => {
     const response = await postRegister({
       email: 'not-an-email',
       password: 'short',
@@ -82,7 +82,7 @@ describe('POST /auth/register', () => {
     expect(body.error).toBe('invalid_request')
   })
 
-  it.concurrent('returns account_deleted for deleted-account emails', async () => {
+  it('returns account_deleted for deleted-account emails', async () => {
     const response = await postRegister(buildRegisterPayload({ email: 'deleted@capgo.app' }))
     expect(response.status).toBe(403)
     const body = await response.json() as { error: string, message: string }
@@ -90,7 +90,7 @@ describe('POST /auth/register', () => {
     expect(body.message).toContain('support@capgo.app')
   })
 
-  it.concurrent('returns email_exists for an already registered email', async () => {
+  it('returns email_exists for an already registered email', async () => {
     const response = await postRegister(buildRegisterPayload({ email: 'test@capgo.app' }))
     expect(response.status).toBe(409)
     const body = await response.json() as { error: string, message: string }
