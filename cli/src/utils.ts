@@ -2903,6 +2903,25 @@ interface ChannelChecksum {
   }
 }
 
+export async function getRemoteDependencies(
+  apikey: string,
+  appId: string,
+  channel: string,
+  httpOptions: CliHttpOptions = {},
+): Promise<Map<string, NativePackage>> {
+  const { fetchChannelCompatibilityContext } = await import('./api/channels')
+  const channelContext = await fetchChannelCompatibilityContext(
+    { apikey, ...httpOptions },
+    appId,
+    channel,
+  )
+
+  if (!channelContext?.version)
+    return convertNativePackages([])
+
+  return convertNativePackages(channelContext.version.native_packages ?? [])
+}
+
 export async function getRemoteChecksums(supabase: SupabaseClient<Database>, appId: string, channel: string) {
   const { data, error } = await supabase
     .from('channels')
@@ -2944,33 +2963,6 @@ export function convertNativePackages(nativePackages: NativePackage[]): Map<stri
     .map(a => [a.name, a]))
 
   return mappedRemoteNativePackages
-}
-
-export async function getRemoteDependencies(supabase: SupabaseClient<Database>, appId: string, channel: string) {
-  const { data: remoteNativePackages, error } = await supabase
-    .from('channels')
-    .select(`version:app_versions!channels_version_fkey(
-            native_packages 
-        )`)
-    .eq('name', channel)
-    .eq('app_id', appId)
-    .maybeSingle()
-
-  if (error) {
-    const duplicateChannelRow = (error as { code?: string }).code === 'PGRST116'
-      || error.message?.includes('Cannot coerce')
-    const message = duplicateChannelRow
-      ? `Multiple channels matched for app "${appId}" and channel "${channel}". Contact support if this persists.`
-      : error.message
-    log.error(`Error fetching native packages: ${message}`)
-    throw new Error(`Error fetching native packages: ${message}`)
-  }
-
-  if (!remoteNativePackages) {
-    return convertNativePackages([])
-  }
-
-  return convertNativePackages(((remoteNativePackages.version as any)?.native_packages as any) ?? [])
 }
 
 export type { Compatibility, CompatibilityDetails } from './schemas/common'
@@ -3100,9 +3092,16 @@ export function isCompatible(pkg: Compatibility): boolean {
   return getCompatibilityDetails(pkg).compatible
 }
 
-export async function checkCompatibilityCloud(supabase: SupabaseClient<Database>, appId: string, channel: string, packageJsonPath: string | undefined, nodeModules: string | undefined) {
+export async function checkCompatibilityCloud(
+  apikey: string,
+  appId: string,
+  channel: string,
+  packageJsonPath: string | undefined,
+  nodeModules: string | undefined,
+  httpOptions: CliHttpOptions = {},
+) {
   const dependenciesObject = await getLocalDependencies(packageJsonPath, nodeModules)
-  const mappedRemoteNativePackages = await getRemoteDependencies(supabase, appId, channel)
+  const mappedRemoteNativePackages = await getRemoteDependencies(apikey, appId, channel, httpOptions)
 
   const finalDependencies: Compatibility[] = dependenciesObject
     .filter(a => !!a.native)
@@ -3153,8 +3152,14 @@ export async function checkCompatibilityCloud(supabase: SupabaseClient<Database>
   }
 }
 
-export async function checkCompatibilityNativePackages(supabase: SupabaseClient<Database>, appId: string, channel: string, nativePackages: NativePackage[]) {
-  const mappedRemoteNativePackages = await getRemoteDependencies(supabase, appId, channel)
+export async function checkCompatibilityNativePackages(
+  apikey: string,
+  appId: string,
+  channel: string,
+  nativePackages: NativePackage[],
+  httpOptions: CliHttpOptions = {},
+) {
+  const mappedRemoteNativePackages = await getRemoteDependencies(apikey, appId, channel, httpOptions)
 
   const finalDependencies: Compatibility[] = nativePackages
     .map((local) => {

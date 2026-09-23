@@ -297,10 +297,11 @@ export async function setChannelInternal(channel: string, appId: string, options
 
     if (!options.ignoreMetadataCheck) {
       const { finalCompatibility, localDependencies } = await checkCompatibilityNativePackages(
-        supabase,
+        options.apikey!,
         appId,
         channel,
         (data.native_packages as any) ?? [],
+        { supaHost: options.supaHost, supaAnon: options.supaAnon },
       )
 
       const incompatiblePackages = finalCompatibility.filter(item => !isCompatible(item))
@@ -345,10 +346,11 @@ export async function setChannelInternal(channel: string, appId: string, options
 
     if (!options.ignoreMetadataCheck) {
       const { finalCompatibility } = await checkCompatibilityNativePackages(
-        supabase,
+        options.apikey!,
         appId,
         channel,
         (data.native_packages as any) ?? [],
+        { supaHost: options.supaHost, supaAnon: options.supaAnon },
       )
 
       const incompatiblePackages = finalCompatibility.filter(item => !isCompatible(item))
@@ -375,10 +377,11 @@ export async function setChannelInternal(channel: string, appId: string, options
 
     if (!options.ignoreMetadataCheck) {
       const { finalCompatibility, localDependencies } = await checkCompatibilityNativePackages(
-        supabase,
+        options.apikey!,
         appId,
         channel,
         (data.native_packages as any) ?? [],
+        { supaHost: options.supaHost, supaAnon: options.supaAnon },
       )
 
       const incompatiblePackages = finalCompatibility.filter(item => !isCompatible(item))
@@ -467,10 +470,11 @@ export async function setChannelInternal(channel: string, appId: string, options
         throw new Error('Cannot find rollout version to promote')
 
       const { finalCompatibility, localDependencies } = await checkCompatibilityNativePackages(
-        supabase,
+        options.apikey!,
         appId,
         channel,
         (data.native_packages as any) ?? [],
+        { supaHost: options.supaHost, supaAnon: options.supaAnon },
       )
 
       const incompatiblePackages = finalCompatibility.filter(item => !isCompatible(item))

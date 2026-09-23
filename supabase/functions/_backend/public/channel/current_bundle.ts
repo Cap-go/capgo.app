@@ -11,6 +11,13 @@ interface GetCurrentBundleBody {
   channel: string
 }
 
+type ChannelVersionRow = {
+  id: number
+  name: string
+  min_update_version: string | null
+  native_packages: Database['public']['Tables']['app_versions']['Row']['native_packages']
+}
+
 export async function getCurrentBundle(
   c: Context<MiddlewareKeyVariables>,
   body: GetCurrentBundleBody,
@@ -29,7 +36,16 @@ export async function getCurrentBundle(
   const supabase = supabaseApikey(c, apikey.key)
   const { data: channelRow, error: channelError } = await supabase
     .from('channels')
-    .select('id, version')
+    .select(`
+      id,
+      disable_auto_update,
+      version:app_versions!channels_version_fkey(
+        id,
+        name,
+        min_update_version,
+        native_packages
+      )
+    `)
     .eq('app_id', body.app_id)
     .eq('name', body.channel)
     .maybeSingle()
@@ -42,19 +58,13 @@ export async function getCurrentBundle(
     throw simpleError('cannot_access_channel', 'You can\'t access this channel', { app_id: body.app_id, channel: body.channel })
   }
 
-  if (!channelRow.version) {
-    throw simpleError('channel_has_no_bundle', 'Channel does not have a bundle linked', { app_id: body.app_id, channel: body.channel })
-  }
+  const version = channelRow.version as ChannelVersionRow | null
 
-  const { data: bundleRows, error: bundleError } = await supabase.rpc('get_channel_current_bundle_rbac', {
-    p_app_id: body.app_id,
-    p_channel_id: channelRow.id,
+  return c.json({
+    bundle_name: version?.name ?? null,
+    bundle_id: version?.id ?? null,
+    min_update_version: version?.min_update_version ?? null,
+    native_packages: version?.native_packages ?? [],
+    disable_auto_update: channelRow.disable_auto_update,
   })
-
-  const bundleName = (bundleRows as Array<{ bundle_name: string | null }> | null)?.[0]?.bundle_name
-  if (bundleError || !bundleName) {
-    throw simpleError('cannot_find_bundle', 'Cannot find current bundle for channel', { supabaseError: bundleError, app_id: body.app_id, channel: body.channel })
-  }
-
-  return c.json({ bundle_name: bundleName })
 }

@@ -74,11 +74,15 @@ export async function checkCompatibilityInternal(
   )
 
   const compatibility = await checkCompatibilityCloud(
-    supabase,
+    enrichedOptions.apikey!,
     resolvedAppId,
     channel,
     enrichedOptions.packageJson,
     enrichedOptions.nodeModules,
+    {
+      supaHost: enrichedOptions.supaHost,
+      supaAnon: enrichedOptions.supaAnon,
+    },
   )
 
   const hasIncompatible = compatibility.finalCompatibility.some(entry => !isCompatible(entry))
