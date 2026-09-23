@@ -1,11 +1,29 @@
+import type { Context } from 'hono'
 import type { AppOnboardingState, AppOnboardingStepHistoryChange } from './appOnboarding.ts'
-import type { AuthInfo } from './hono.ts'
+import type { AppOnboardingMutationResult } from './appOnboardingMutation.ts'
+import type { AuthInfo, MiddlewareKeyVariables } from './hono.ts'
+import { parseAppOnboarding } from './appOnboarding.ts'
+import { trackPosthogEvent } from './posthog.ts'
+import { backgroundTask } from './utils.ts'
 
 interface AppOnboardingStepPosthogInput {
   appId: string
   change: AppOnboardingStepHistoryChange
   orgId: string
   setup: AppOnboardingState
+}
+
+// Call only after the transaction owning these mutations has committed.
+export async function emitCommittedAppOnboardingHistory(c: Context<MiddlewareKeyVariables>, committed: AppOnboardingMutationResult[]) {
+  const events = committed.flatMap(result => result.historyChanges.map(change => buildAppOnboardingStepPosthogEvent({
+    appId: result.appId,
+    orgId: result.orgId,
+    auth: c.get('auth')!,
+    setup: parseAppOnboarding(result.onboarding),
+    change,
+  })))
+  if (events.length)
+    await backgroundTask(c, Promise.all(events.map(event => trackPosthogEvent(c, event))))
 }
 
 export function buildAppOnboardingStepPosthogEvent(input: AppOnboardingStepPosthogInput & ({ auth: AuthInfo, system?: false } | { auth?: never, system: true })) {
