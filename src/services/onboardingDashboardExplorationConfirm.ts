@@ -4,6 +4,7 @@ import {
   allowOnboardingDashboardExploration,
   getOnboardingContinueSetupRoute,
   getOnboardingResumeAppId,
+  getPendingFirstUploadAppId,
   ONBOARDING_DASHBOARD_EXPLORED_EVENT,
   shouldConfirmOnboardingDashboardExploration,
 } from '~/utils/onboardingRedirect'
@@ -14,10 +15,24 @@ export function resolveOnboardingHardGateResumeAppId(
   userId: string | null | undefined,
 ) {
   const resumeQueryAppId = resumeQuery ?? null
-  if (path === '/app/new' && resumeQueryAppId) {
+  const isPendingOnboardingResume = (path === '/app/new' || path === '/onboarding/app')
+    && !!resumeQueryAppId
+  const pendingFirstUploadAppId = getPendingFirstUploadAppId(userId)
+  if (isPendingOnboardingResume)
     return resumeQueryAppId
-  }
-  return getOnboardingResumeAppId(userId)
+  return getOnboardingResumeAppId(userId) ?? pendingFirstUploadAppId
+}
+
+export function isPostCreateOnboardingHardGate(
+  path: string,
+  resumeQuery: string | null | undefined,
+  userId: string | null | undefined,
+) {
+  const resumeQueryAppId = resumeQuery ?? null
+  const isPendingOnboardingResume = (path === '/app/new' || path === '/onboarding/app')
+    && !!resumeQueryAppId
+  const pendingFirstUploadAppId = getPendingFirstUploadAppId(userId)
+  return !!pendingFirstUploadAppId || isPendingOnboardingResume
 }
 
 export type OnboardingDashboardExplorationConfirmResult = 'proceed' | 'handled' | 'cancelled'
@@ -43,9 +58,19 @@ export async function confirmOnboardingDashboardExplorationNavigation(options: {
     return 'proceed'
   }
 
+  const isPostCreateHardGate = isPostCreateOnboardingHardGate(
+    options.currentPath,
+    options.resumeAppId,
+    options.userId,
+  )
+
   options.dialogStore.openDialog({
-    title: options.t('app-onboarding-explore-dashboard-confirm-title'),
-    description: options.t('app-onboarding-explore-dashboard-confirm-description'),
+    title: options.t(isPostCreateHardGate
+      ? 'sidebar-finish-first-update-confirm-title'
+      : 'app-onboarding-explore-dashboard-confirm-title'),
+    description: options.t(isPostCreateHardGate
+      ? 'sidebar-finish-first-update-confirm-description'
+      : 'app-onboarding-explore-dashboard-confirm-description'),
     buttons: [
       { text: options.t('app-onboarding-continue-setup'), role: 'primary' },
       { text: options.t('app-onboarding-explore-dashboard'), role: 'secondary' },
