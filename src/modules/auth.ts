@@ -292,7 +292,12 @@ async function guard(
     = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
   if (mfaError) {
     console.error('Cannot guard auth', mfaError)
-    return
+    return next({
+      path: '/login',
+      query: {
+        to: to.fullPath,
+      },
+    })
   }
 
   if (mfaData.currentLevel === 'aal1' && mfaData.nextLevel === 'aal2') {

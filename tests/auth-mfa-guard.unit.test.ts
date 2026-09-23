@@ -196,7 +196,7 @@ describe('auth guard MFA assurance', () => {
     })
   })
 
-  it.concurrent('allows active platform-admin impersonation sessions at aal1', async () => {
+  it.concurrent('allows aal1 when verify_mfa returns true', async () => {
     await withTestContext(async (context) => {
       context.mockRpc.mockImplementation(async (name: string) => {
         if (name === 'verify_mfa')
@@ -217,6 +217,32 @@ describe('auth guard MFA assurance', () => {
 
       expect(context.mockRpc).toHaveBeenCalledWith('verify_mfa')
       expect(next).toHaveBeenCalledWith()
+    })
+  })
+
+  it.concurrent('redirects to login when getAuthenticatorAssuranceLevel fails', async () => {
+    await withTestContext(async (context) => {
+      context.mockGetAuthenticatorAssuranceLevel.mockResolvedValue({
+        data: null,
+        error: { message: 'AAL lookup failed' },
+      })
+
+      const guard = await getGuard()
+      const next = vi.fn()
+
+      await guard(
+        { path: '/dashboard', fullPath: '/dashboard', meta: { middleware: 'auth' }, query: {} },
+        { path: '/login', fullPath: '/login', meta: {}, query: {} },
+        next,
+      )
+
+      expect(context.mockRpc).not.toHaveBeenCalledWith('verify_mfa')
+      expect(next).toHaveBeenCalledWith({
+        path: '/login',
+        query: {
+          to: '/dashboard',
+        },
+      })
     })
   })
 
