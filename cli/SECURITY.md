@@ -11,8 +11,8 @@ Do not use Discord, GitHub Issues, or any public forum.
 Open a private advisory on the live monorepo (preferred):
 https://github.com/Cap-go/capgo.app/security/advisories/new
 
-Before you file, use the Capgo advisory checklist:
-https://github.com/Cap-go/.github/blob/main/ADVISORY_TEMPLATE.md
+Before you file, follow the Capgo reporting checklist in the org security policy:
+https://github.com/Cap-go/.github/blob/main/SECURITY.md
 
 ## Org policy (canonical)
 
