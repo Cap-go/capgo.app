@@ -23,7 +23,7 @@ export interface OrgMemberLegacyRow {
 }
 
 export interface OrgMember2faStatusRow {
-  user_id: string
+  'user_id': string
   '2fa_enabled': boolean
 }
 
