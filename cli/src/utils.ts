@@ -197,10 +197,24 @@ export function formatError(error: any): string {
   return `\n${prettyjson.render(error)}`
 }
 
-export async function check2FAAccessForOrg(supabase: SupabaseClient<Database>, orgId: string, silent = false): Promise<void> {
-  const { data: reject2fa, error } = await callTwoFactorComplianceRpcWithRetry(() =>
-    supabase.rpc('reject_access_due_to_2fa_for_org', { org_id: orgId }),
+export async function check2FAAccessForOrg(
+  supabase: SupabaseClient<Database>,
+  orgId: string,
+  silent = false,
+  httpOptions: CliHttpOptions = {},
+): Promise<void> {
+  const { data, error } = await callTwoFactorComplianceRpcWithRetry(() =>
+    invokeCliHttpFromSupabase<{ reject?: boolean }>(
+      supabase,
+      'private/cli/2fa/reject-org',
+      { query: { org_id: orgId } },
+      httpOptions,
+    ).then(({ data: responseData, error: responseError }) => ({
+      data: responseData?.reject === true,
+      error: responseError,
+    })),
   )
+  const reject2fa = data
   if (error) {
     if (!silent && !isTransientNetworkError(error))
       log.error(`Cannot check 2FA compliance: ${error.message}`)
@@ -1113,29 +1127,115 @@ export async function createSupabaseClient(apikey: string, supaHost?: string, su
   })
 }
 
-export async function isPayingOrg(supabase: SupabaseClient<Database>, orgId: string): Promise<boolean> {
-  // Keep calling the stable single-arg RPC — old CLIs depend on this signature.
-  const { data } = await supabase
-    .rpc('is_paying_org', { orgid: orgId })
-    .single()
-  return data || false
+export async function isPayingOrg(
+  supabase: SupabaseClient<Database>,
+  orgId: string,
+  httpOptions: CliHttpOptions = {},
+): Promise<boolean> {
+  const entitlements = await fetchCliBillingEntitlements(supabase, orgId, undefined, httpOptions)
+  return entitlements.isPaying
 }
 
-export async function isTrialOrg(supabase: SupabaseClient<Database>, orgId: string): Promise<number> {
-  // Keep calling the stable single-arg RPC — old CLIs depend on this signature.
-  const { data } = await supabase
-    .rpc('is_trial_org', { orgid: orgId })
-    .single()
-  return data || 0
+export async function isTrialOrg(
+  supabase: SupabaseClient<Database>,
+  orgId: string,
+  httpOptions: CliHttpOptions = {},
+): Promise<number> {
+  const entitlements = await fetchCliBillingEntitlements(supabase, orgId, undefined, httpOptions)
+  return entitlements.trialDays
 }
 
-export async function hasOrgUsageCredits(supabase: SupabaseClient<Database>, orgId: string, appId?: string): Promise<boolean> {
-  // New SECURITY DEFINER RPC — do not SELECT orgs.has_usage_credits directly; RLS
-  // can deny app-scoped API keys even when they may upload for that org.
-  const { data } = await supabase
-    .rpc('has_usage_credits_org', appId ? { orgid: orgId, appid: appId } : { orgid: orgId })
-    .single()
-  return data || false
+export async function hasOrgUsageCredits(
+  supabase: SupabaseClient<Database>,
+  orgId: string,
+  appId?: string,
+  httpOptions: CliHttpOptions = {},
+): Promise<boolean> {
+  const entitlements = await fetchCliBillingEntitlements(supabase, orgId, appId, httpOptions)
+  return entitlements.hasCredits
+}
+
+export async function fetchCliMembers2faStatus(
+  apikey: string,
+  orgId: string,
+  httpOptions: CliHttpOptions = {},
+): Promise<Array<{ user_id: string, '2fa_enabled': boolean }>> {
+  const { data, error } = await invokeCapgoCliApi<Array<{ user_id: string, '2fa_enabled': boolean }>>(
+    `private/cli/members/2fa-status?org_id=${encodeURIComponent(orgId)}`,
+    {
+      apikey,
+      method: 'GET',
+      body: undefined,
+      supaHost: httpOptions.supaHost,
+      supaAnon: httpOptions.supaAnon,
+    },
+  )
+  if (error)
+    throw error
+  return data ?? []
+}
+
+export async function fetchCliMembersPasswordPolicyStatus(
+  apikey: string,
+  orgId: string,
+  httpOptions: CliHttpOptions = {},
+): Promise<Array<{
+  user_id: string
+  email: string
+  first_name: string
+  last_name: string
+  password_policy_compliant: boolean
+}>> {
+  const { data, error } = await invokeCapgoCliApi<Array<{
+    user_id: string
+    email: string
+    first_name: string
+    last_name: string
+    password_policy_compliant: boolean
+  }>>(
+    `private/cli/members/password-policy?org_id=${encodeURIComponent(orgId)}`,
+    {
+      apikey,
+      method: 'GET',
+      body: undefined,
+      supaHost: httpOptions.supaHost,
+      supaAnon: httpOptions.supaAnon,
+    },
+  )
+  if (error)
+    throw error
+  return data ?? []
+}
+
+async function fetchCliBillingEntitlements(
+  supabase: SupabaseClient<Database>,
+  orgId: string,
+  appId?: string,
+  httpOptions: CliHttpOptions = {},
+): Promise<{ isPaying: boolean, trialDays: number, hasCredits: boolean }> {
+  const { data, error } = await invokeCliHttpFromSupabase<{
+    isPaying?: boolean
+    trialDays?: number
+    hasCredits?: boolean
+  }>(
+    supabase,
+    'private/cli/billing/entitlements',
+    {
+      query: {
+        org_id: orgId,
+        app_id: appId,
+      },
+    },
+    httpOptions,
+  )
+  if (error)
+    throw new Error(`Cannot validate plan: ${formatError(error)}`)
+
+  return {
+    isPaying: data?.isPaying === true,
+    trialDays: typeof data?.trialDays === 'number' ? data.trialDays : 0,
+    hasCredits: data?.hasCredits === true,
+  }
 }
 
 /** Trial upgrade nag is for unpaid trial orgs only — skip when paying or using credits. */
@@ -1149,14 +1249,21 @@ export function shouldWarnTrialExpiry(options: {
   return !!warning && trialDays > 0 && !isPaying && !hasCredits
 }
 
-export async function isAllowedActionOrg(supabase: SupabaseClient<Database>, orgId: string): Promise<boolean> {
-  const { data, error } = await supabase
-    .rpc('is_allowed_action_org', { orgid: orgId })
-    .single()
+export async function isAllowedActionOrg(
+  supabase: SupabaseClient<Database>,
+  orgId: string,
+  httpOptions: CliHttpOptions = {},
+): Promise<boolean> {
+  const { data, error } = await invokeCliHttpFromSupabase<{ allowed?: boolean }>(
+    supabase,
+    'private/cli/billing/allowed',
+    { query: { org_id: orgId } },
+    httpOptions,
+  )
   if (error)
     throw new Error(`Cannot validate plan: ${formatError(error)}`)
 
-  return data === true
+  return data?.allowed === true
 }
 
 /** Validate metered plan actions while preserving app-scoped RBAC context when available. */
@@ -1165,20 +1272,31 @@ export async function isAllowedPlanActions(
   orgId: string,
   actions: Database['public']['Enums']['action_type'][],
   appId?: string,
+  httpOptions: CliHttpOptions = {},
 ): Promise<boolean> {
-  const { data, error } = appId
-    ? await supabase.rpc('is_allowed_action_org_action', { orgid: orgId, actions, appid: appId })
-    : await supabase.rpc('is_allowed_action_org_action', { orgid: orgId, actions })
+  const { data, error } = await invokeCliHttpFromSupabase<{ allowed?: boolean }>(
+    supabase,
+    'private/cli/billing/allowed-actions',
+    {
+      method: 'POST',
+      body: {
+        org_id: orgId,
+        actions,
+        app_id: appId,
+      },
+    },
+    httpOptions,
+  )
   if (error) {
-    // Older servers may not expose the app-aware overload in PostgREST's
-    // schema cache. Preserve their org-scoped behavior without hiding any
-    // permission, transport, or database errors from supported servers.
-    if (appId && error.code === 'PGRST202')
-      return isAllowedActionOrg(supabase, orgId)
+    const status = getCapgoCliHttpStatus(error)
+    // Older servers may not expose the app-aware overload yet. Preserve their
+    // org-scoped behavior without hiding permission or transport errors.
+    if (appId && status === 404)
+      return isAllowedActionOrg(supabase, orgId, httpOptions)
     throw new Error(`Cannot validate plan: ${formatError(error)}`)
   }
 
-  return data === true
+  return data?.allowed === true
 }
 
 export type MeteredPlanCheckResult = 'allowed' | 'billing_denied' | 'permission_denied'
@@ -1189,18 +1307,19 @@ export async function resolveMeteredPlanAllowed(
   orgId: string,
   actions: Database['public']['Enums']['action_type'][],
   appId?: string,
+  httpOptions: CliHttpOptions = {},
 ): Promise<MeteredPlanCheckResult> {
   if (appId) {
-    const appScoped = await isAllowedPlanActions(supabase, orgId, actions, appId)
+    const appScoped = await isAllowedPlanActions(supabase, orgId, actions, appId, httpOptions)
     if (appScoped)
       return 'allowed'
-    const orgScoped = await isAllowedPlanActions(supabase, orgId, actions)
+    const orgScoped = await isAllowedPlanActions(supabase, orgId, actions, undefined, httpOptions)
     if (orgScoped)
       return 'permission_denied'
     return 'billing_denied'
   }
 
-  const orgScoped = await isAllowedPlanActions(supabase, orgId, actions)
+  const orgScoped = await isAllowedPlanActions(supabase, orgId, actions, undefined, httpOptions)
   return orgScoped ? 'allowed' : 'billing_denied'
 }
 
@@ -1215,16 +1334,31 @@ async function throwPlanPermissionDenied() {
   throw new CliUserError('Plan validation permission denied')
 }
 
-export async function checkRemoteCliMessages(supabase: SupabaseClient<Database>, orgId: string, cliVersion: string) {
-  const { data: messages, error } = await supabase.rpc('get_organization_cli_warnings', { orgid: orgId, cli_version: cliVersion })
+export async function checkRemoteCliMessages(
+  supabase: SupabaseClient<Database>,
+  orgId: string,
+  cliVersion: string,
+  httpOptions: CliHttpOptions = {},
+) {
+  const { data: messages, error } = await invokeCliHttpFromSupabase<Array<unknown>>(
+    supabase,
+    'private/cli/warnings',
+    {
+      query: {
+        org_id: orgId,
+        cli_version: cliVersion,
+      },
+    },
+    httpOptions,
+  )
   if (error) {
     log.error(`Cannot get cli warnings: ${formatError(error)}`)
     return
   }
-  if (messages.length > 0) {
-    log.warn(`Found ${messages.length} cli warnings for your organization.`)
+  if ((messages ?? []).length > 0) {
+    log.warn(`Found ${(messages ?? []).length} cli warnings for your organization.`)
     let fatalError: Error | null = null
-    for (const message of messages) {
+    for (const message of messages ?? []) {
       if (typeof message !== 'object' || typeof (message as any).message !== 'string' || typeof (message as any).fatal !== 'boolean') {
         log.error(`Invalid cli warning: ${message}`)
         continue
@@ -1246,8 +1380,13 @@ export async function checkRemoteCliMessages(supabase: SupabaseClient<Database>,
   }
 }
 
-// TODO(cli-http): billing/entitlement RPCs have no Capgo HTTP equivalents yet
-export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: string, appId?: string, warning = true) {
+export async function checkPlanValid(
+  supabase: SupabaseClient<Database>,
+  orgId: string,
+  appId?: string,
+  warning = true,
+  httpOptions: CliHttpOptions = {},
+) {
   const config = await getRemoteConfig()
   const plansUrl = `${config.hostWeb}/settings/organization/plans`
 
@@ -1257,41 +1396,42 @@ export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: 
       orgId,
       ['mau', 'storage', 'bandwidth', 'build_time'],
       appId,
+      httpOptions,
     )
     if (planCheck === 'permission_denied')
       await throwPlanPermissionDenied()
     if (planCheck === 'billing_denied')
       await throwPlanUpgradeRequired(plansUrl, 'Plan upgrade required')
   }
-  else if (!await isAllowedActionOrg(supabase, orgId)) {
+  else if (!await isAllowedActionOrg(supabase, orgId, httpOptions)) {
     await throwPlanUpgradeRequired(plansUrl, 'Plan upgrade required')
   }
 
-  const [trialDays, ispaying, hasCredits] = await Promise.all([
-    isTrialOrg(supabase, orgId),
-    isPayingOrg(supabase, orgId),
-    hasOrgUsageCredits(supabase, orgId, appId),
-  ])
+  const entitlements = await fetchCliBillingEntitlements(supabase, orgId, appId, httpOptions)
+  const { trialDays, isPaying: ispaying, hasCredits } = entitlements
   if (shouldWarnTrialExpiry({ trialDays, isPaying: ispaying, hasCredits, warning }))
     log.warn(`WARNING !!\nTrial expires in ${trialDays} days, upgrade here: ${plansUrl}\n`)
 }
 
-export async function checkPlanValidUpload(supabase: SupabaseClient<Database>, orgId: string, appId?: string, warning = true) {
+export async function checkPlanValidUpload(
+  supabase: SupabaseClient<Database>,
+  orgId: string,
+  appId?: string,
+  warning = true,
+  httpOptions: CliHttpOptions = {},
+) {
   const config = await getRemoteConfig()
   const plansUrl = `${config.hostWeb}/settings/organization/plans`
 
-  const planCheck = await resolveMeteredPlanAllowed(supabase, orgId, ['storage'], appId)
+  const planCheck = await resolveMeteredPlanAllowed(supabase, orgId, ['storage'], appId, httpOptions)
   if (planCheck === 'permission_denied')
     await throwPlanPermissionDenied()
   if (planCheck === 'billing_denied')
     await throwPlanUpgradeRequired(plansUrl, 'Plan upgrade required for upload')
   // Trial/paying stay on the legacy single-arg RPCs for old CLI compatibility.
   // Credits use the new has_usage_credits_org (with optional appid).
-  const [trialDays, ispaying, hasCredits] = await Promise.all([
-    isTrialOrg(supabase, orgId),
-    isPayingOrg(supabase, orgId),
-    hasOrgUsageCredits(supabase, orgId, appId),
-  ])
+  const entitlements = await fetchCliBillingEntitlements(supabase, orgId, appId, httpOptions)
+  const { trialDays, isPaying: ispaying, hasCredits } = entitlements
   if (shouldWarnTrialExpiry({ trialDays, isPaying: ispaying, hasCredits, warning }))
     log.warn(`WARNING !!\nTrial expires in ${trialDays} days, upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
 }
@@ -2108,6 +2248,60 @@ export async function filterOrgsByPermission(
 export interface CliHttpOptions {
   supaHost?: string
   supaAnon?: string
+}
+
+/** Read the Capgo API key from a supabase-js client created via createSupabaseClient. */
+export function resolveApikeyFromSupabaseClient(supabase: SupabaseClient<Database>): string {
+  const rest = (supabase as SupabaseClient<Database> & { rest?: { headers?: unknown } }).rest
+  const headers = rest?.headers
+  if (!headers)
+    throw new Error('Cannot resolve API key from Supabase client for Capgo HTTP request')
+
+  const getter = (headers as { get?: (name: string) => string | null }).get
+  if (typeof getter === 'function') {
+    const apikey = getter.call(headers, 'capgkey')
+    if (apikey)
+      return apikey
+  }
+  if (Array.isArray(headers)) {
+    const found = headers.find(([key]) => key.toLowerCase() === 'capgkey')
+    if (found?.[1])
+      return found[1]
+  }
+  const recordValue = (headers as unknown as Record<string, string>).capgkey
+  if (recordValue)
+    return recordValue
+
+  throw new Error('Cannot resolve API key from Supabase client for Capgo HTTP request')
+}
+
+async function invokeCliHttpFromSupabase<T>(
+  supabase: SupabaseClient<Database>,
+  path: string,
+  options: {
+    method?: string
+    body?: unknown
+    query?: Record<string, string | undefined>
+  } = {},
+  httpOptions: CliHttpOptions = {},
+): Promise<{ data: T | null, error: Error | null }> {
+  const apikey = resolveApikeyFromSupabaseClient(supabase)
+  const resolvedHttpOptions = resolveCliHttpOptions(supabase, httpOptions)
+  const method = (options.method ?? 'GET').toUpperCase()
+  const query = options.query
+    ? new URLSearchParams(
+      Object.entries(options.query).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].length > 0),
+    ).toString()
+    : ''
+  const resolvedPath = query ? `${path}?${query}` : path
+
+  return invokeCapgoCliApi<T>(resolvedPath, {
+    apikey,
+    method,
+    body: method === 'GET' || method === 'HEAD' ? undefined : options.body,
+    supaHost: resolvedHttpOptions.supaHost,
+    supaAnon: resolvedHttpOptions.supaAnon,
+  })
 }
 
 /** Resolve local/self-host Capgo HTTP options from a supabase-js client instance. */

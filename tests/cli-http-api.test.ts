@@ -4,6 +4,10 @@ import { APIKEY_TEST_ALL, getEndpointUrl, ORG_ID, USER_ID } from './test-utils.t
 const CLI_IDENTITY_URL = getEndpointUrl('/private/cli/identity')
 const CLI_PERMISSION_URL = getEndpointUrl('/private/cli/check-permission')
 const CLI_ORGANIZATIONS_URL = getEndpointUrl('/private/cli/organizations')
+const CLI_BILLING_ENTITLEMENTS_URL = getEndpointUrl('/private/cli/billing/entitlements')
+const CLI_BILLING_ALLOWED_ACTIONS_URL = getEndpointUrl('/private/cli/billing/allowed-actions')
+const CLI_WARNINGS_URL = getEndpointUrl('/private/cli/warnings')
+const CLI_REJECT_ORG_2FA_URL = getEndpointUrl('/private/cli/2fa/reject-org')
 
 function apiHeaders(apikey: string) {
   return {
@@ -62,5 +66,59 @@ describe('private/cli HTTP API', () => {
     expect(body[0]).toHaveProperty('role')
     expect(body[0]).toHaveProperty('enforcing_2fa')
     expect(body[0]).toHaveProperty('2fa_has_access')
+  })
+
+  it.concurrent('GET /private/cli/billing/entitlements returns billing flags', async () => {
+    const response = await fetch(`${CLI_BILLING_ENTITLEMENTS_URL}?org_id=${ORG_ID}`, {
+      method: 'GET',
+      headers: apiHeaders(APIKEY_TEST_ALL),
+    })
+
+    expect(response.status).toBe(200)
+    const body = await response.json() as {
+      isPaying?: boolean
+      trialDays?: number
+      hasCredits?: boolean
+    }
+    expect(typeof body.isPaying).toBe('boolean')
+    expect(typeof body.trialDays).toBe('number')
+    expect(typeof body.hasCredits).toBe('boolean')
+  })
+
+  it.concurrent('POST /private/cli/billing/allowed-actions returns allowed for storage', async () => {
+    const response = await fetch(CLI_BILLING_ALLOWED_ACTIONS_URL, {
+      method: 'POST',
+      headers: apiHeaders(APIKEY_TEST_ALL),
+      body: JSON.stringify({
+        org_id: ORG_ID,
+        actions: ['storage'],
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    const body = await response.json() as { allowed?: boolean }
+    expect(body.allowed).toBe(true)
+  })
+
+  it.concurrent('GET /private/cli/warnings returns an array for the org', async () => {
+    const response = await fetch(`${CLI_WARNINGS_URL}?org_id=${ORG_ID}&cli_version=99.0.0-test`, {
+      method: 'GET',
+      headers: apiHeaders(APIKEY_TEST_ALL),
+    })
+
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    expect(Array.isArray(body)).toBe(true)
+  })
+
+  it.concurrent('GET /private/cli/2fa/reject-org returns reject boolean', async () => {
+    const response = await fetch(`${CLI_REJECT_ORG_2FA_URL}?org_id=${ORG_ID}`, {
+      method: 'GET',
+      headers: apiHeaders(APIKEY_TEST_ALL),
+    })
+
+    expect(response.status).toBe(200)
+    const body = await response.json() as { reject?: boolean }
+    expect(typeof body.reject).toBe('boolean')
   })
 })
