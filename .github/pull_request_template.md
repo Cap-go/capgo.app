@@ -25,5 +25,5 @@
 - [ ] My change has adequate E2E test coverage.
 - [ ] I have tested my code manually, and I have provided steps how to reproduce
       my tests
-- [ ] No GHSA ids or embargoed exploit detail in this public PR (title, body, commits, branch name).
+- [ ] No GHSA ids, unpublished advisory bodies or PoCs, or embargoed exploit detail in this public PR (title, body, commits, branch name).
 - [ ] Security-sensitive authz / OTA / SQL / webhook / path changes reviewed against `docs/agent-security-regressions.md`.
