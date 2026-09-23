@@ -179,6 +179,15 @@ async function swapToNewIndex(client: Client) {
   `)
 }
 
+function formatPgSetting(row: { name: string, setting: string, unit: string | null }): string {
+  const value = Number(row.setting)
+  if (row.unit === '8kB' && Number.isFinite(value))
+    return `${row.name}=${value * 8 / 1024} MiB`
+  if (row.unit === 'kB' && Number.isFinite(value))
+    return `${row.name}=${value / 1024} MiB`
+  return `${row.name}=${row.setting}${row.unit ? ` ${row.unit}` : ''}`
+}
+
 function planHeadline(explainText: string | null): string {
   if (!explainText)
     return 'no query'
@@ -286,7 +295,7 @@ async function main() {
       lines.push(report.skipped ?? '', '')
   }
 
-  lines.push('## Settings', '', '```', settings.rows.map((row: { name: string, setting: string, unit: string | null }) => `${row.name}=${row.setting}${row.unit ?? ''}`).join('\n'), '```', '')
+  lines.push('## Settings', '', '```', settings.rows.map(row => formatPgSetting(row)).join('\n'), '```', '')
 
   const summaryPath = resolve(ROOT, 'scripts/bench/manifest_size_lookup_summary.md')
   writeFileSync(summaryPath, `${lines.join('\n')}\n`)

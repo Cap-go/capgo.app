@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildManifestSizeLookupQuery as buildPluginManifestSizeLookupQuery } from '../supabase/functions/_backend/plugin_runtime/utils/manifest_size.ts'
+import { buildManifestSizeLookupQuery as buildPluginManifestSizeLookupQuery, getManifestDownloadSize as getPluginManifestDownloadSize } from '../supabase/functions/_backend/plugin_runtime/utils/manifest_size.ts'
 import { buildManifestDownloadSizeResult, buildManifestSizeLookupQuery, normalizeManifestSizeFiles, parseManifestSizeVersionId } from '../supabase/functions/_backend/utils/manifest_size.ts'
 
 describe('manifest download size helpers', () => {
@@ -121,6 +121,28 @@ describe('manifest download size helpers', () => {
 
     expect(buildManifestSizeLookupQuery('com.example.app', undefined, undefined, files)).toBeNull()
     expect(buildManifestSizeLookupQuery('com.example.app', '', undefined, files)).toBeNull()
+  })
+
+  it.concurrent('returns unknown sizes without querying postgres when no version scope exists', async () => {
+    const result = await getPluginManifestDownloadSize({
+      get(key: string) {
+        throw new Error(`postgres context was read: ${key}`)
+      },
+    } as never, 'com.example.app', undefined, undefined, [
+      { file_name: 'main.js', file_hash: 'hash-b' },
+    ])
+
+    expect(result).toEqual({
+      totalSize: 0,
+      knownFiles: 0,
+      unknownFiles: 1,
+      files: [{
+        file_name: 'main.js',
+        file_hash: 'hash-b',
+        download_url: null,
+        error: 'size_unknown',
+      }],
+    })
   })
 
   it.concurrent('looks up per-file version ids without scanning every app version', () => {

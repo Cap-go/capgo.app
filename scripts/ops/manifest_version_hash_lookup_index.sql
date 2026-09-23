@@ -1,8 +1,9 @@
--- Optional pre-deploy: build the manifest_size lookup index without blocking writes.
--- Prefer deploying migration 20260923143039 instead.
--- If you still need this: run the SINGLE statement below alone in SQL Editor
--- (or psql). Do not mix with other statements in one Editor run if the Editor
--- wraps a transaction — CREATE INDEX CONCURRENTLY cannot run in a transaction.
+-- Required before migration 20260923143039 when public.manifest is large.
+-- That migration refuses a regular CREATE INDEX once the table estimate is
+-- above 100000 rows, because that build blocks manifest writes.
+-- Run the SINGLE statement below alone in SQL Editor (or psql). Do not mix
+-- with other statements in one Editor run if the Editor wraps a transaction —
+-- CREATE INDEX CONCURRENTLY cannot run in a transaction.
 --
 -- Example (psql):
 --   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/ops/manifest_version_hash_lookup_index.sql

@@ -378,7 +378,7 @@ handler returns size_unknown and does not query
 ```
 jit=off
 server_version=17.11
-shared_buffers=655368kB
-work_mem=32768kB
+shared_buffers=512 MiB
+work_mem=32 MiB
 ```
 
