@@ -30,8 +30,13 @@ export const APP_ONBOARDING_V2_STEP_IDS = [
 
 export const APP_ONBOARDING_OTA_V1_VERSION = '1'
 export const APP_ONBOARDING_OTA_V1_STEP_IDS = [
-  'login_cli_mcp', 'add_channel', 'add_updater', 'add_code',
-  'run_device', 'upload_bundle', 'test_update',
+  'login_cli_mcp',
+  'add_channel',
+  'add_updater',
+  'add_code',
+  'run_device',
+  'upload_bundle',
+  'test_update',
 ] as const
 
 export const APP_ONBOARDING_V3_STEP_IDS = [...APP_ONBOARDING_OTA_V1_STEP_IDS] as const
@@ -296,10 +301,18 @@ export function mergeAppOnboarding(
 
   if (patch.steps) {
     for (const [key, value] of Object.entries(patch.steps) as Array<[AppOnboardingStepId, AppOnboardingStepState | undefined]>) {
-      if (!value || !STEP_STATUS_SET.has(value.status))
+      if (!value || (!STEP_STATUS_SET.has(value.status) && value.status !== 'pending'))
         continue
       if (!stepIds.has(key))
         continue
+      // Only trusted patches reach this reset; public parsing rejects pending.
+      if (value.status === 'pending') {
+        if (current.todo_list_version === 4)
+          steps[key] = { status: 'pending' }
+        else
+          delete steps[key]
+        continue
+      }
       const existing = steps[key]
       if (existing?.status === 'done' && value.status === 'skipped')
         continue
@@ -333,7 +346,7 @@ export function applyAppOnboardingPatch(
   const isOtaV1 = isV4 && setup.ota_todo_list_version === APP_ONBOARDING_OTA_V1_VERSION
   const rawCurrentSteps = isOtaV1 && isRecord(rawSteps.ota) ? rawSteps.ota : rawSteps
   for (const id of Object.keys(setup.steps) as AppOnboardingStepId[]) {
-    if (isRecord(rawCurrentSteps[id]))
+    if (patch.steps?.[id]?.status !== 'pending' && isRecord(rawCurrentSteps[id]))
       setup.steps[id] = { ...rawCurrentSteps[id], ...setup.steps[id]! }
   }
   delete existing.source
@@ -375,7 +388,7 @@ export function appendAppOnboardingStepHistory(
 
   for (const stepId of Object.keys(patch.steps ?? {}) as AppOnboardingStepId[]) {
     const nextStep = mergedSteps[stepId]
-    if (!isRecord(nextStep))
+    if (!isRecord(nextStep) || !STEP_STATUS_SET.has(String(nextStep.status)))
       continue
 
     const currentStep = isRecord(currentStepRecords[stepId]) ? currentStepRecords[stepId] : {}
