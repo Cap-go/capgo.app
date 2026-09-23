@@ -114,7 +114,7 @@ describe('POST /auth/register unit', () => {
     signUpMock.mockResolvedValueOnce({
       data: { user: null, session: null },
       error: { code: 'captcha_failed', message: 'Captcha verification failed' },
-    })
+    } as unknown as Awaited<ReturnType<typeof signUpMock>>)
     const response = await postRegister(validBody)
     expect(response.status).toBe(422)
     const body = await response.json() as { error: string }
