@@ -44,10 +44,15 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   supabaseAdmin: (...args: unknown[]) => supabaseAdminMock(...args),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
-  getPgClient: (...args: unknown[]) => getPgClientMock(...args),
-  closeClient: (...args: unknown[]) => closeClientMock(...args),
-}))
+vi.mock('../supabase/functions/_backend/utils/pg.ts', async () => {
+  const { checkoutPgClient, releasePgClient } = await import('./helpers/pg-checkout-release-mocks.ts')
+  return {
+    getPgClient: (...args: unknown[]) => getPgClientMock(...args),
+    closeClient: (...args: unknown[]) => closeClientMock(...args),
+    checkoutPgClient,
+    releasePgClient,
+  }
+})
 
 const { put } = await import('../supabase/functions/_backend/public/organization/put.ts')
 type OrgRow = Database['public']['Tables']['orgs']['Row']

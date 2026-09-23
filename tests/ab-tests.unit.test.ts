@@ -45,11 +45,16 @@ vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
   syncBentoSubscriberTags: syncBentoSubscriberTagsMock,
 }))
 
-vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
-  closeClient: closeClientMock,
-  getDrizzleClient: getDrizzleClientMock,
-  getPgClient: getPgClientMock,
-}))
+vi.mock('../supabase/functions/_backend/utils/pg.ts', async () => {
+  const { checkoutPgClient, releasePgClient } = await import('./helpers/pg-checkout-release-mocks.ts')
+  return {
+    closeClient: closeClientMock,
+    getDrizzleClient: getDrizzleClientMock,
+    getPgClient: getPgClientMock,
+    checkoutPgClient,
+    releasePgClient,
+  }
+})
 
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
   backgroundTask: backgroundTaskMock,

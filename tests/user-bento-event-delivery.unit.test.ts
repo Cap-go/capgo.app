@@ -27,10 +27,15 @@ vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
   serializeError: mocks.serializeError,
 }))
 
-vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
-  closeClient: mocks.closeClient,
-  getPgClient: mocks.getPgClient,
-}))
+vi.mock('../supabase/functions/_backend/utils/pg.ts', async () => {
+  const { checkoutPgClient, releasePgClient } = await import('./helpers/pg-checkout-release-mocks.ts')
+  return {
+    closeClient: mocks.closeClient,
+    getPgClient: mocks.getPgClient,
+    checkoutPgClient,
+    releasePgClient,
+  }
+})
 
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
   backgroundTask: mocks.backgroundTask,
