@@ -1,5 +1,4 @@
 import { z } from 'zod'
-import { CLI_PROJECT_MODES } from '../framework/mode'
 import { optionsBaseSchema } from './base'
 
 // ============================================================================
@@ -7,7 +6,6 @@ import { optionsBaseSchema } from './base'
 // ============================================================================
 
 export const optionsUploadSchema = optionsBaseSchema.extend({
-  mode: z.enum(CLI_PROJECT_MODES).optional(),
   bundle: z.string().optional(),
   path: z.string().optional(),
   channel: z.string().optional(),

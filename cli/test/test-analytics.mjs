@@ -46,8 +46,7 @@ try {
   delete process.env.CAPGO_DISABLE_TELEMETRY
   delete process.env.CAPGO_DISABLE_POSTHOG
   let requests = stubFetch()
-  const timestamp = new Date('2026-01-01T12:00:00Z')
-  await trackEvent({ apikey: 'capgo-key', channel: 'cli-usage', event: 'Test Event', orgId: 'org-1', appId: 'com.example.app', timestamp, tags: { foo: 'bar', count: 3, flag: true }, nonPersonTags: { scan_attempt_ids: ['example-attempt'] } })
+  await trackEvent({ apikey: 'capgo-key', channel: 'cli-usage', event: 'Test Event', orgId: 'org-1', appId: 'com.example.app', tags: { foo: 'bar', count: 3, flag: true } })
   await flushAnalytics()
   const req = findEvent(requests)
   assert.ok(req, 'expected a /private/events request')
@@ -68,9 +67,6 @@ try {
   assert.equal(body.tags.flag, true)
   assert.equal(body.nonPersonTags.invocation_source, 'cli')
   assert.equal(typeof body.nonPersonTags.cli_version, 'string')
-  assert.deepEqual(body.nonPersonTags.scan_attempt_ids, ['example-attempt'])
-  assert.equal(body.tags.scan_attempt_ids, undefined, 'scan IDs are event properties only')
-  assert.equal(body.timestamp, timestamp.toISOString())
 
   // 3. opt-out suppresses the send
   process.env.CAPGO_DISABLE_TELEMETRY = '1'
@@ -135,12 +131,6 @@ try {
   assert.equal(body.tags.flags, 'apikey,channel')
   assert.equal(body.tags.flags_count, 2)
   assert.equal(body.tags.positional_arg_count, 1)
-
-  requests = stubFetch()
-  trackCommandInvoked('app todo', ctx, 'explicit-todo-key')
-  await flushAnalytics()
-  assert.equal(findEvent(requests).init.headers.capgkey, 'explicit-todo-key', 'explicit --apikey takes precedence over a saved key')
-  assert.equal(JSON.stringify(JSON.parse(findEvent(requests).init.body).tags).includes('explicit-todo-key'), false, 'API keys must not appear in analytics tags')
 
   // 6b. login/init defer invocation until an explicitly validated key is available
   process.env.CAPGO_TOKEN = 'stale-key'

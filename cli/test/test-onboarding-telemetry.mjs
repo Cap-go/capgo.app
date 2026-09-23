@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
-import { trackBuilderOnboardingAction, trackBuilderOnboardingAppSelection, trackBuilderOnboardingCancelled, trackBuilderOnboardingLogin, trackBuilderOnboardingStep } from '../src/build/onboarding/telemetry.ts'
-import { saveImportDistributionAnswer, trackImportDistributionShown } from '../src/build/onboarding/ui/import-distribution-analytics.ts'
+import { trackBuilderOnboardingAction, trackBuilderOnboardingCancelled, trackBuilderOnboardingStep } from '../src/build/onboarding/telemetry.ts'
 
 
 console.log('🧪 Testing onboarding telemetry...\n')
@@ -22,7 +21,6 @@ function installFetchMock() {
       status: 200,
     })
   }
-
   return requests
 }
 
@@ -43,76 +41,12 @@ function findEventBody(requests) {
 }
 
 try {
-  // The new login event is sent only after the caller has a validated key.
-  {
-    const requests = installFetchMock()
-    await trackBuilderOnboardingLogin({
-      apikey: 'capgo-key',
-      appId: 'com.example.app',
-      journeyId: 'bj_login-1',
-      method: 'paste',
-      retryCount: 1,
-      durationMs: 1234,
-    })
-    const body = findEventBody(requests)
-    assert.equal(body.event, 'Builder Onboarding Login')
-    assert.equal(body.channel, 'builder-onboarding')
-    assert.equal(body.org_id, undefined)
-    assert.deepEqual(body.tags, {
-      app_id: 'com.example.app',
-      journey_id: 'bj_login-1',
-      method: 'paste',
-      retry_count: 1,
-      duration_ms: 1234,
-    })
-    assert.equal(JSON.stringify(body).includes('capgo-key'), false)
-  }
-
-  {
-    const requests = installFetchMock()
-    await trackBuilderOnboardingAppSelection({
-      apikey: 'capgo-key',
-      appId: 'com.example.app',
-      journeyId: 'bj_app-selection-1',
-      phase: 'resolved',
-      result: 'selected',
-      source: 'closest_list',
-      visibleCount: 4,
-    })
-    const body = findEventBody(requests)
-    assert.equal(body.event, 'Builder Onboarding App Selection')
-    assert.deepEqual(body.tags, {
-      app_id: 'com.example.app',
-      journey_id: 'bj_app-selection-1',
-      phase: 'resolved',
-      result: 'selected',
-      source: 'closest_list',
-      visible_app_count: 4,
-    })
-    assert.equal(JSON.stringify(body).includes('capgo-key'), false)
-  }
-
   // ── Env opt-out prevents direct onboarding telemetry sends ──────────────────
   {
     const requests = installFetchMock()
     const previousTelemetryOptOut = process.env.CAPGO_DISABLE_TELEMETRY
     process.env.CAPGO_DISABLE_TELEMETRY = 'true'
     try {
-      await trackBuilderOnboardingLogin({
-        apikey: 'capgo-key',
-        appId: 'com.example.app',
-        journeyId: 'bj_login-opt-out',
-        method: 'browser',
-        retryCount: 0,
-        durationMs: 100,
-      })
-      await trackBuilderOnboardingAppSelection({
-        apikey: 'capgo-key',
-        appId: 'com.example.app',
-        journeyId: 'bj_app-selection-opt-out',
-        phase: 'shown',
-        visibleCount: 1,
-      })
       await trackBuilderOnboardingAction({
         action: 'android_sa_method_selected',
         apikey: 'capgo-key',
@@ -177,139 +111,6 @@ try {
     })
     console.log('✅ Action event carries journey_id')
   }
-
-  // ── iOS setup question uses reusable action payloads ──────────────────────
-  for (const [action, choice, reason] of [
-    ['question_shown', undefined],
-    ['question_answered', 'create-new'],
-    ['question_answered', 'import-existing'],
-    ['question_skipped', 'create-new', 'non_macos_auto_create_new'],
-  ]) {
-    const requests = installFetchMock()
-    await trackBuilderOnboardingAction({
-      action,
-      apikey: 'capgo-key',
-      appId: 'com.example.app',
-      orgId: 'org-id',
-      journeyId: 'bj_ios-setup',
-      replaySessionId: 'build-onboarding-replay-ios',
-      platform: 'ios',
-      step: 'setup-method-select',
-      tags: { attempt_id: 'bj_ios-setup', question_id: 'ios_setup_method', ...(choice && { choice }), ...(reason && { reason }) },
-    })
-
-    const body = findEventBody(requests)
-    assert.equal(body.event, 'Builder Onboarding Action')
-    assert.equal(body.org_id, 'org-id')
-    assert.equal(body.tracking_version, 2)
-    assert.deepEqual(body.tags, {
-      $session_id: 'build-onboarding-replay-ios',
-      action,
-      app_id: 'com.example.app',
-      attempt_id: 'bj_ios-setup',
-      ...(choice && { choice }),
-      journey_id: 'bj_ios-setup',
-      platform: 'ios',
-      question_id: 'ios_setup_method',
-      ...(reason && { reason }),
-      step: 'setup-method-select',
-    })
-  }
-  console.log('✅ iOS setup question action payloads')
-
-  // The TUI tracks the import fork on display and only after persistence.
-  for (const [value, choice] of [
-    ['app_store', 'app_store'],
-    ['ad_hoc', 'ad_hoc'],
-    ['__cancel__', 'switch_to_create_new'],
-  ]) {
-    const requests = installFetchMock()
-    const sends = []
-    const trackAction = (action, tags) => sends.push(trackBuilderOnboardingAction({
-      action,
-      apikey: 'capgo-key',
-      appId: 'com.example.app',
-      orgId: 'org-id',
-      journeyId: 'bj_ios-import',
-      replaySessionId: 'build-onboarding-replay-ios',
-      platform: 'ios',
-      step: 'import-distribution-mode',
-      tags,
-    }))
-    trackImportDistributionShown('bj_ios-import', trackAction)
-    let saved = false
-    await saveImportDistributionAnswer(async () => { saved = true }, value, 'bj_ios-import', (action, tags) => {
-      assert.equal(saved, true, 'answer is tracked after save')
-      trackAction(action, tags)
-    })
-    await Promise.all(sends)
-    const bodies = requests.filter(request => request.url.endsWith('/private/events')).map(request => JSON.parse(request.init.body))
-    assert.equal(bodies.length, 2)
-    for (const [index, action] of ['question_shown', 'question_answered'].entries()) {
-      const body = bodies.find(body => body.tags.action === action)
-      assert.equal(body.event, 'Builder Onboarding Action')
-      assert.equal(body.org_id, 'org-id')
-      assert.deepEqual(body.tags, {
-        $session_id: 'build-onboarding-replay-ios',
-        action,
-        app_id: 'com.example.app',
-        attempt_id: 'bj_ios-import',
-        ...(index === 1 && { choice }),
-        journey_id: 'bj_ios-import',
-        platform: 'ios',
-        question_id: 'ios_import_distribution',
-        step: 'import-distribution-mode',
-      })
-    }
-  }
-  {
-    const actions = []
-    await assert.rejects(saveImportDistributionAnswer(async () => { throw new Error('save failed') }, 'ad_hoc', 'bj_ios-import', (...args) => actions.push(args)))
-    assert.equal(actions.length, 0, 'failed save emits no answered event')
-    await saveImportDistributionAnswer(async () => {}, '__cancel__', 'bj_ios-import', () => { throw new Error('telemetry failed') })
-    assert.doesNotThrow(() => trackImportDistributionShown('bj_ios-import', () => { throw new Error('telemetry failed') }))
-  }
-  console.log('✅ iOS import distribution question actions and save ordering')
-
-  // ── iOS credential actions carry checklist correlation without secrets ─────
-  for (const { action, step, extraTags } of [
-    { action: 'credential_verified', step: 'verifying-key', extraTags: {} },
-    { action: 'credential_verification_failed', step: 'asc-key-generating', extraTags: { source: 'guided_helper' } },
-    { action: 'credential_verification_failed', step: 'verifying-key', extraTags: { source: 'cli_verifier', error_category: 'apple_api_forbidden' } },
-  ]) {
-    const requests = installFetchMock()
-    await trackBuilderOnboardingAction({
-      action,
-      apikey: 'capgo-key',
-      appId: 'com.example.app',
-      orgId: 'org-id',
-      journeyId: 'bj_ios-credential',
-      replaySessionId: 'build-onboarding-replay-credential',
-      platform: 'ios',
-      step,
-      tags: {
-        credential: 'ios_app_store_connect_api_key',
-        attempt_id: 'bj_ios-credential',
-        ...extraTags,
-      },
-    })
-
-    const body = findEventBody(requests)
-    assert.equal(body.event, 'Builder Onboarding Action')
-    assert.equal(body.org_id, 'org-id')
-    assert.deepEqual(body.tags, {
-      $session_id: 'build-onboarding-replay-credential',
-      action,
-      app_id: 'com.example.app',
-      attempt_id: 'bj_ios-credential',
-      credential: 'ios_app_store_connect_api_key',
-      journey_id: 'bj_ios-credential',
-      platform: 'ios',
-      step,
-      ...extraTags,
-    })
-  }
-  console.log('✅ iOS credential action correlation and safe tags')
 
   // ── Step event carries the journey id ─────────────────────────────────────
   {

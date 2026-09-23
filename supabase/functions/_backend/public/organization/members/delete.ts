@@ -6,7 +6,7 @@ import { HTTPException } from 'hono/http-exception'
 import { safeParseSchema } from '../../../utils/schema_validation.ts'
 import { BRES, quickError, simpleError } from '../../../utils/hono.ts'
 import { cloudlog } from '../../../utils/logging.ts'
-import { closeClient, getDrizzleClient, getPgClient } from '../../../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, type PgQueryClient, checkoutPgClient, releasePgClient} from '../../../utils/pg.ts'
 import { checkPermission, checkPermissionPg } from '../../../utils/rbac.ts'
 import { supabaseAdmin } from '../../../utils/supabase.ts'
 
@@ -18,14 +18,6 @@ const deleteBodySchema = z.object({
 interface MemberRemovalRanks {
   caller_max_rank: number | string | null
   target_max_rank: number | string | null
-}
-
-interface PinnedPgClient {
-  query: <T = unknown>(query: string, params?: unknown[]) => Promise<{
-    rowCount?: number | null
-    rows: T[]
-  }>
-  release: () => void
 }
 
 interface MemberRemovalRequest {
@@ -74,7 +66,7 @@ async function resolveMemberRemovalTargetUserId(
 }
 
 async function getMemberRemovalRanks(
-  pgClient: PinnedPgClient,
+  pgClient: PgQueryClient,
   authType: 'apikey' | 'jwt',
   callerPrincipalId: string,
   orgId: string,
@@ -157,9 +149,9 @@ async function assertMemberRemovalAuthorizedAfterLock(
   auth: AuthInfo,
   body: MemberRemovalRequest,
   targetUserId: string,
-  dbClient: PinnedPgClient,
+  dbClient: PgQueryClient,
 ): Promise<void> {
-  const pinnedDrizzle = getDrizzleClient(dbClient as unknown as ReturnType<typeof getPgClient>) as DrizzleClient
+  const pinnedDrizzle = getDrizzleClient(dbClient as Parameters<typeof getDrizzleClient>[0]) as DrizzleClient
   const apikeyString = auth.apikey?.key ?? c.get('capgkey') ?? null
   const canManageRoles = await checkPermissionPg(
     c,
@@ -219,13 +211,13 @@ export async function deleteMember(c: Context<MiddlewareKeyVariables>, bodyRaw: 
 
   // Pin the transaction to one connection: rank read, cleanup, and membership deletion
   // must share the organization lock with every RBAC mutation trigger.
-  const pgPool = getPgClient(c)
-  let dbClient: PinnedPgClient | undefined
+  const pgPool = await getPgClient(c)
+  let dbClient: PgQueryClient | undefined
   let transactionOpen = false
   cloudlog({ requestId: c.get('requestId'), message: 'targetUserId', data: targetUserId })
   cloudlog({ requestId: c.get('requestId'), message: 'body.orgId', data: body.orgId })
   try {
-    dbClient = await pgPool.connect() as unknown as PinnedPgClient
+    dbClient = await checkoutPgClient(pgPool)
     await dbClient.query('BEGIN')
     transactionOpen = true
     await dbClient.query('SELECT public.lock_rbac_orgs($1::uuid)', [body.orgId])
@@ -265,7 +257,7 @@ export async function deleteMember(c: Context<MiddlewareKeyVariables>, bodyRaw: 
     throw simpleError('error_deleting_user_from_organization', 'Error deleting user from organization', { error })
   }
   finally {
-    dbClient?.release()
+    if (dbClient) releasePgClient(pgPool, dbClient as import('../../../utils/pg.ts').PgQueryClient)
     closeClient(c, pgPool)
   }
 

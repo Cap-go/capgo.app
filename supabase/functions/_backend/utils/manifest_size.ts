@@ -140,90 +140,6 @@ export function buildManifestDownloadSizeResult(
   }
 }
 
-export interface ManifestSizeLookupQuery {
-  text: string
-  values: [string, string] | [string, string, number | string]
-}
-
-const MANIFEST_SIZE_REQUESTED_CTE = `
-WITH requested AS MATERIALIZED (
-  SELECT DISTINCT file_hash, version_id
-  FROM jsonb_to_recordset($1::jsonb) AS request_files(file_hash text, version_id bigint)
-  WHERE file_hash IS NOT NULL
-)`
-
-const MANIFEST_SIZE_FILE_VERSION_BRANCH = `
-SELECT r.file_hash, av.id AS version_id, MAX(m.file_size) AS file_size
-FROM requested r
-INNER JOIN public.app_versions av
-  ON av.id = r.version_id
- AND av.app_id = $2
- AND av.deleted = false
-INNER JOIN public.manifest m
-  ON m.app_version_id = av.id
- AND m.file_hash = r.file_hash
-WHERE r.version_id IS NOT NULL
-GROUP BY r.file_hash, av.id`
-
-const MANIFEST_SIZE_FALLBACK_ID_BRANCH = `
-SELECT r.file_hash, av.id AS version_id, MAX(m.file_size) AS file_size
-FROM requested r
-INNER JOIN public.app_versions av
-  ON av.id = $3
- AND av.app_id = $2
- AND av.deleted = false
-INNER JOIN public.manifest m
-  ON m.app_version_id = av.id
- AND m.file_hash = r.file_hash
-WHERE r.version_id IS NULL
-GROUP BY r.file_hash, av.id`
-
-const MANIFEST_SIZE_FALLBACK_NAME_BRANCH = `
-SELECT r.file_hash, av.id AS version_id, MAX(m.file_size) AS file_size
-FROM requested r
-INNER JOIN public.app_versions av
-  ON av.app_id = $2
- AND av.name = $3
- AND av.deleted = false
-INNER JOIN public.manifest m
-  ON m.app_version_id = av.id
- AND m.file_hash = r.file_hash
-WHERE r.version_id IS NULL
-GROUP BY r.file_hash, av.id`
-
-export function buildManifestSizeLookupQuery(
-  appId: string,
-  versionName: string | undefined,
-  versionId: number | undefined,
-  files: NormalizedManifestSizeFile[],
-): ManifestSizeLookupQuery | null {
-  const fallbackId = versionId ?? null
-  const fallbackName = versionName && versionName.length > 0 ? versionName : null
-  const hasFileVersion = files.some(file => file.version_id != null)
-  const hasUnscoped = files.some(file => file.version_id == null)
-  const branches: string[] = []
-  if (hasFileVersion)
-    branches.push(MANIFEST_SIZE_FILE_VERSION_BRANCH)
-  if (hasUnscoped && fallbackId != null)
-    branches.push(MANIFEST_SIZE_FALLBACK_ID_BRANCH)
-  else if (hasUnscoped && fallbackName != null)
-    branches.push(MANIFEST_SIZE_FALLBACK_NAME_BRANCH)
-  if (branches.length === 0)
-    return null
-
-  const payload = JSON.stringify(files.map(file => ({ file_hash: file.file_hash, version_id: file.version_id })))
-  let values: ManifestSizeLookupQuery['values'] = [payload, appId]
-  if (hasUnscoped && fallbackId != null)
-    values = [payload, appId, fallbackId]
-  else if (hasUnscoped && fallbackName != null)
-    values = [payload, appId, fallbackName]
-
-  return {
-    text: `${MANIFEST_SIZE_REQUESTED_CTE}\n${branches.join('\nUNION ALL\n')}`,
-    values,
-  }
-}
-
 export async function getManifestDownloadSize(
   c: Context,
   appId: string,
@@ -241,15 +157,46 @@ export async function getManifestDownloadSize(
     }
   }
 
-  const lookup = buildManifestSizeLookupQuery(appId, versionName, versionId, files)
-  if (!lookup)
-    return buildManifestDownloadSizeResult(files, [])
-
-  const pgClient = getPgClient(c, true)
+  const pgClient = await getPgClient(c, true)
   try {
     const result = await pgClient.query<{ file_hash: string, version_id: number | null, file_size: number | string | null }>(
-      lookup.text,
-      lookup.values,
+      `
+      WITH requested AS (
+        SELECT file_hash, version_id
+        FROM jsonb_to_recordset($1::jsonb) AS request_files(file_hash text, version_id bigint)
+        WHERE file_hash IS NOT NULL
+      )
+      SELECT
+        requested.file_hash,
+        app_versions.id AS version_id,
+        MAX(manifest.file_size) AS file_size
+      FROM requested
+      INNER JOIN public.app_versions
+        ON app_versions.app_id = $2
+        AND app_versions.deleted = false
+        AND (
+          (
+            requested.version_id IS NOT NULL
+            AND app_versions.id = requested.version_id
+          ) OR (
+            requested.version_id IS NULL
+            AND (
+              (
+                $3::bigint IS NOT NULL
+                AND app_versions.id = $3
+              ) OR (
+                $3::bigint IS NULL
+                AND ($4::text IS NULL OR app_versions.name = $4)
+              )
+            )
+          )
+        )
+      INNER JOIN public.manifest
+        ON manifest.app_version_id = app_versions.id
+        AND manifest.file_hash = requested.file_hash
+      GROUP BY requested.file_hash, app_versions.id
+      `,
+      [JSON.stringify(files), appId, versionId ?? null, versionName ?? null],
     )
 
     return buildManifestDownloadSizeResult(files, result.rows)

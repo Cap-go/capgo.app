@@ -27,7 +27,7 @@ import {
   verifyNotificationEventProof,
   verifyNotificationIdentityProof,
 } from '../../utils/nativeNotifications.ts'
-import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, type PgClient} from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { isLimited, isValidAppId } from '../../utils/utils.ts'
 import { version } from '../../utils/version.ts'
@@ -261,9 +261,9 @@ async function assertAppPermission(c: Context<MiddlewareKeyVariables>, permissio
 }
 
 async function getNotificationProviderConfigs(c: Context<MiddlewareKeyVariables>, appId: string): Promise<NativeNotificationProviderConfig[]> {
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const result = await drizzleClient.execute(sql`
       SELECT provider, status, config, secret_ref, secret_ciphertext
@@ -287,9 +287,9 @@ async function getNotificationProviderConfigs(c: Context<MiddlewareKeyVariables>
 }
 
 async function getAppOwnerOrg(c: Context<MiddlewareKeyVariables>, appId: string): Promise<string> {
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const result = await drizzleClient.execute(sql`SELECT owner_org::text AS owner_org FROM public.apps WHERE app_id = ${appId} LIMIT 1`)
     const ownerOrg = (result.rows[0] as OwnerOrgRow | undefined)?.owner_org
@@ -368,9 +368,9 @@ function resolveProviderConfigProvider(body: ProviderBody): NativeNotificationPr
 }
 
 async function getExistingProviderSecretCiphertext(c: Context<MiddlewareKeyVariables>, appId: string, provider: NativeNotificationProvider): Promise<string | null> {
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const result = await drizzleClient.execute(sql`
       SELECT secret_ciphertext
@@ -525,9 +525,9 @@ async function resolveTargetPlan(c: Context<MiddlewareKeyVariables>, body: SendB
 }
 
 async function getNotificationSettings(c: Context<MiddlewareKeyVariables>, appId: string) {
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const result = await drizzleClient.execute(sql`
       SELECT app_id, push_update_enabled, push_update_install_mode, push_update_channel
@@ -551,9 +551,9 @@ async function upsertNotificationSettings(c: Context<MiddlewareKeyVariables>, bo
   const pushUpdateInstallMode = body.pushUpdateInstallMode === 'set' ? 'set' : 'next'
   const pushUpdateChannel = body.pushUpdateChannel ? assertString(body.pushUpdateChannel, 'pushUpdateChannel', 128) : null
   const auth = c.get('auth')
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const result = await drizzleClient.execute(sql`
       INSERT INTO public.notification_app_settings (owner_org, app_id, push_update_enabled, push_update_install_mode, push_update_channel, created_by)
@@ -582,9 +582,9 @@ async function createCampaignRecord(c: Context<MiddlewareKeyVariables>, body: Ca
   const scheduledAt = assertOptionalDate(body.scheduledAt, 'scheduledAt')
   const auth = c.get('auth')
 
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const result = await drizzleClient.execute(sql`
       INSERT INTO public.notification_campaigns (owner_org, app_id, name, kind, status, audience, payload, scheduled_at, queued_at, created_by)
@@ -887,9 +887,9 @@ app.post('/send', middlewareAuth(), async (c) => {
 app.get('/campaigns', middlewareAuth(), async (c) => {
   const appId = assertString(c.req.query('app_id'), 'app_id', 128)
   await assertAppPermission(c, NOTIFICATION_MANAGE_PERMISSION, appId)
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const result = await drizzleClient.execute(sql`
       SELECT id, created_at, updated_at, owner_org::text, app_id, name, kind, status, audience, payload, scheduled_at, queued_at, completed_at, counters
@@ -923,9 +923,9 @@ app.get('/stats', middlewareAuth(), async (c) => {
 app.get('/providers', middlewareAuth(), async (c) => {
   const appId = assertString(c.req.query('app_id'), 'app_id', 128)
   await assertAppPermission(c, NOTIFICATION_MANAGE_PERMISSION, appId)
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const result = await drizzleClient.execute(sql`
       SELECT id, created_at, updated_at, owner_org::text, app_id, provider, status, config, secret_ref, secret_ciphertext
@@ -961,9 +961,9 @@ app.put('/providers', middlewareAuth(), async (c) => {
   const secretRef = resolveProviderSecretRef(appId, provider, status, body.secretRef, hasUploadedSecret, hasStoredSecret)
   assertProviderConfigReady(provider, status, config, secretRef, hasUploadedSecret || hasStoredSecret)
   const auth = c.get('auth')
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const result = await drizzleClient.execute(sql`
       INSERT INTO public.notification_provider_configs (owner_org, app_id, provider, status, config, secret_ref, secret_ciphertext, created_by)

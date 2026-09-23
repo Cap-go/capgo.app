@@ -48,31 +48,3 @@ export function logRowDisplayMetadata(versionName: string | null | undefined, me
     return { ...base, filename: parsed.filename }
   return Object.keys(base).length ? base : null
 }
-
-/** Raw plugin / backend error text keys, in display priority order. */
-const LOG_ORIGINAL_MESSAGE_KEYS = [
-  'message',
-  'error',
-  'reason',
-  'msg',
-  'error_message',
-  'detail',
-  'description',
-] as const
-
-export function extractLogOriginalMessage(metadata: LogMetadata): string | null {
-  const normalized = normalizeLogMetadata(metadata)
-  if (!normalized)
-    return null
-
-  for (const key of LOG_ORIGINAL_MESSAGE_KEYS) {
-    const raw = normalized[key]
-    if (typeof raw !== 'string')
-      continue
-    const trimmed = raw.trim()
-    if (trimmed)
-      return trimmed
-  }
-
-  return null
-}

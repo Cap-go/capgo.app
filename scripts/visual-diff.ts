@@ -11,7 +11,6 @@ import { createClient } from '@supabase/supabase-js'
 import pixelmatch from 'pixelmatch'
 import { PNG } from 'pngjs'
 import type { VisualDiffRoute } from '../playwright/visual-diff.config'
-import { dismissSupportPrompt } from '../playwright/support/dismissSupportPrompt'
 import { getSupabaseStatus } from './supabase-worktree-status'
 import { getPlaywrightStripeApiBaseUrl, getStripeEmulatorPort } from './playwright-stripe'
 import { getSupabaseWorktreeConfig } from './supabase-worktree-config'
@@ -576,8 +575,6 @@ async function captureRouteScreenshot(
     await page.goto(route.path, { waitUntil: 'domcontentloaded', timeout: visualDiffActionTimeoutMs })
     console.log(`[visual-diff] settling ${phase} ${route.slug}`)
     await settlePage(page)
-    if (route.auth)
-      await dismissSupportPrompt(page)
     if (route.prepare) {
       console.log(`[visual-diff] preparing ${phase} ${route.slug}`)
       await route.prepare(page)

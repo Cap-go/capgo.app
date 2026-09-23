@@ -47,8 +47,6 @@ import { isAiAnalysisTooTall, resolveAiResultRoute } from '../ai-fit.js'
 import { getWorkflowDiffTelemetry, trackBuildOnboardingWorkflowEvent } from '../analytics.js'
 import { evaluateGate } from '../app-verification.js'
 import { exitAfterOnboardingBeforeExit } from './exit.js'
-import { trackGuidedKeyValidationFailure, trackVerifiedIosKey, verifyIosKeyWithTelemetry } from './ios-credential-action.js'
-import { trackCreatedIosCertificateResult, trackImportedIosCertificateSaveResult, trackIosCertificateCreationThrow, trackIosKeychainExportResult } from './ios-certificate-action.js'
 import { classifyCertAvailability, computeCertSha1, createCertificate, createProfile, deleteProfile, ensureBundleId, findCertIdBySha1, generateJwt, listApps, listBundleIds, listDistributionCerts, listProfilesForCert, revokeCertificate, verifyApiKey } from '../apple-api.js'
 import { runAscKeyHelper } from '../asc-key/helper.js'
 import { sanitizeBuildLogLines } from '../build-log.js'
@@ -65,7 +63,6 @@ import { IOS_MIN_ROWS, terminalFitsOnboarding } from '../min-terminal-size.js'
 import { deleteProgress, extractKeyIdFromP8Path, getImportEntryStep, loadProgress, saveProgress } from '../progress.js'
 import { getBuildOnboardingRecoveryAdvice } from '../recovery.js'
 import { trackBuilderOnboardingAction, trackBuilderOnboardingStep } from '../telemetry.js'
-import { saveImportDistributionAnswer, trackImportDistributionShown } from './import-distribution-analytics.js'
 import {
   getPhaseLabel,
 
@@ -78,7 +75,6 @@ import { CompletedStepsLog } from './completed-steps-log.js'
 import { BOX_HEADER_ROWS, COMPACT_HEADER_ROWS, DiffSummary, Divider, FilteredTextInput, FullscreenAiViewer, FullscreenBuildOutput, FullscreenDiffViewer, Header, isBuildCompleteDismissKey, SecretsTable, SpinnerLine, SuccessLine, Table, WIZARD_PADDING_ROWS } from './components.js'
 import { logBudgetRows } from './frame-fit.js'
 import { TerminalTooSmallPrompt } from './min-size-gate.js'
-import { routeFreshIosSetupMethod } from './setup-method-route.js'
 import {
   AskBuildStep,
   AskCiSecretsStep,
@@ -249,9 +245,10 @@ interface LogEntry { text: string, color?: string }
 interface AppProps {
   /**
    * Capgo lookup key (progress files, saved credentials, Capgo SaaS build
-   * API). Resolved by the Builder app-id helper, which uses
-   * `plugins.CapgoBuilder.capgoBuilderAppId` when configured and otherwise
-   * keeps the prior updater/native fallback. Do NOT use for Apple-side operations — see
+   * API). Resolved by `getAppId()`, which prefers
+   * `config.plugins.CapacitorUpdater.appId` over `config.appId` so dev-tunnel
+   * sandboxes can override the Capgo-side identifier without renaming the
+   * iOS bundle. Do NOT use for Apple-side operations — see
    * `iosBundleIdInitial`.
    */
   appId: string
@@ -362,7 +359,9 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
 
   // ─── iOS bundle id ─────────────────────────────────────────────────────
   //
-  // `appId` (prop) is the Capgo Builder lookup key. It owns the progress-file key, credentials
+  // `appId` (prop) is the Capgo lookup key — what `getAppId()` resolves to,
+  // which prefers `config.plugins.CapacitorUpdater.appId` over `config.appId`
+  // for dev-tunnel sandboxes. It owns the progress-file key, credentials
   // store key, and `capgo build request` command path.
   //
   // `iosBundleId` is what we send to Apple — sourced from `config.appId`
@@ -810,29 +809,6 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
     },
     [appId, resolvedOrgId, step, journeyId],
   )
-  const reportedCertificateSuccessesRef = useRef(new Set<string>())
-  const setupMethodShownRef = useRef(false)
-  useEffect(() => {
-    if (step !== 'setup-method-select') {
-      setupMethodShownRef.current = false
-      return
-    }
-    if (setupMethodShownRef.current || !terminalFitsOnboarding(terminalCols, terminalRows, 'ios'))
-      return
-    setupMethodShownRef.current = true
-    trackAction('question_shown', { attempt_id: journeyId, question_id: 'ios_setup_method' })
-  }, [step, terminalCols, terminalRows, trackAction, journeyId])
-  const importDistributionShownRef = useRef(false)
-  useEffect(() => {
-    if (step !== 'import-distribution-mode') {
-      importDistributionShownRef.current = false
-      return
-    }
-    if (importDistributionShownRef.current || !terminalFitsOnboarding(terminalCols, terminalRows, 'ios'))
-      return
-    importDistributionShownRef.current = true
-    trackImportDistributionShown(journeyId, trackAction)
-  }, [step, terminalCols, terminalRows, trackAction, journeyId])
   const [teamId, setTeamId] = useState(initialProgress?.completedSteps.certificateCreated?.teamId || '')
   const [certData, setCertData] = useState<CertificateData | null>(initialProgress?.completedSteps.certificateCreated || null)
   const [profileData, setProfileData] = useState<ProfileData | null>(initialProgress?.completedSteps.profileCreated || null)
@@ -1762,8 +1738,13 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
             return
           if (existing?.ios)
             setStep('credentials-exist')
+          else if (isMacOS())
+            // Fresh iOS, no creds: offer the import-vs-create fork (create-new →
+            // the guided .p8 helper). Only macOS can drive the helper; other
+            // hosts go straight to the manual .p8 instructions.
+            setStep('setup-method-select')
           else
-            setStep(routeFreshIosSetupMethod(isMacOS(), journeyId, trackAction))
+            setStep('api-key-instructions')
         })()
       }, 800)
     }
@@ -1803,8 +1784,12 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
               return
             if (existing?.ios)
               setStep('credentials-exist')
+            else if (isMacOS())
+              // Fresh iOS, no creds: route through the import-vs-create fork
+              // (create-new → the guided .p8 helper) on macOS.
+              setStep('setup-method-select')
             else
-              setStep(routeFreshIosSetupMethod(isMacOS(), journeyId, trackAction))
+              setStep('api-key-instructions')
           })()
           return
         }
@@ -1834,11 +1819,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
           // helper window if the user quits the TUI, so the CLI doesn't hang.
           const abort = new AbortController()
           ascHelperAbortRef.current = abort
-          const outcome = await runAscKeyHelper({
-            apikey,
-            signal: abort.signal,
-            onEvent: event => trackGuidedKeyValidationFailure(event.name, journeyId, trackAction, cancelled),
-          })
+          const outcome = await runAscKeyHelper({ apikey, signal: abort.signal })
           if (cancelled)
             return
           if (!outcome.ok) {
@@ -2226,10 +2207,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
 
         // ── apple-api (token-adapted) ──
         verifyApiKey: async () => {
-          const token = await getFreshToken()
-          const r = await verifyIosKeyWithTelemetry(
-            () => verifyApiKey(token), journeyId, trackAction, () => cancelled,
-          )
+          const r = await verifyApiKey(await getFreshToken())
           return { teamId: r.teamId }
         },
         createCertificate: async ({ csr }) => createCertificate(await getFreshToken(), csr),
@@ -2310,7 +2288,6 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
         },
       }
 
-      let certificateEffectRunning = false
       try {
         // Run against the freshest persisted progress — the prior input steps
         // persisted p8Path / keyId / issuerId before these auto steps run, so the
@@ -2327,17 +2304,12 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
         // verify-app: surface the step loader while the initial ASC fetch runs.
         if (step === 'verify-app')
           setVerifyAppLoading(true)
-        certificateEffectRunning = step === 'creating-certificate'
         const result = await runIosEffect(step, current, deps)
-        certificateEffectRunning = false
         if (cancelled)
           return
 
         const t: Partial<IosStepCtx> | undefined = result.transient
         const np = result.progress
-
-        if (step === 'creating-certificate')
-          trackCreatedIosCertificateResult(result, journeyId, trackAction, reportedCertificateSuccessesRef.current)
 
         // ── error route: surface through the TUI's handleError so the support
         // bundle + retryCount + telemetry UX is identical to the bespoke catch ──
@@ -2345,9 +2317,6 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
           handleErrorRef.current(new Error(t?.error ?? 'Onboarding failed.'), (t?.retryStep as OnboardingStep) ?? step)
           return
         }
-
-        if (step === 'verifying-key')
-          trackVerifiedIosKey(result, journeyId, trackAction)
 
         // ── merge engine transient into the carried ref (threaded into the next
         // effect) AND mirror it into the React render state downstream code reads ──
@@ -2467,8 +2436,6 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
         if (!next)
           return
         let advanceTo = next
-        if (step === 'backing-up' && (next === 'setup-method-select' || next === 'api-key-instructions'))
-          advanceTo = routeFreshIosSetupMethod(next === 'setup-method-select', journeyId, trackAction)
         if (step === 'verifying-key') {
           // The key is confirmed and the flow is moving on — NOW dismiss the
           // guided helper window (if it's still open on its success screen).
@@ -2484,11 +2451,8 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
           setStep(advanceTo)
       }
       catch (err) {
-        if (!cancelled) {
-          if (certificateEffectRunning)
-            trackIosCertificateCreationThrow(journeyId, trackAction)
+        if (!cancelled)
           handleErrorRef.current(err, step)
-        }
       }
     })()
 
@@ -2641,9 +2605,6 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
 
         const t: Partial<IosStepCtx> | undefined = result.transient
         const np = result.progress
-
-        if (step === 'import-exporting')
-          trackIosKeychainExportResult(result, journeyId, trackAction)
 
         // ── error route: surface through handleError so the support bundle +
         // retryCount + telemetry UX is identical to the bespoke catch ──
@@ -2947,9 +2908,6 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
 
         const t = result.transient
         const np = result.progress
-
-        if (step === 'saving-credentials')
-          trackImportedIosCertificateSaveResult(result, deps.carried ?? {}, journeyId, trackAction, reportedCertificateSuccessesRef.current)
 
         // ── Mirror engine transient → render state ─────────────────────────────
         if (t?.savedCredentials !== undefined)
@@ -3451,8 +3409,13 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
               if (existing?.ios) {
                 setStep('credentials-exist')
               }
+              else if (isMacOS()) {
+              // macOS users see the fork: import existing or create new
+                setStep('setup-method-select')
+              }
               else {
-                setStep(routeFreshIosSetupMethod(isMacOS(), journeyId, trackAction))
+              // Non-macOS hosts can only create new (importing requires Keychain)
+                setStep('api-key-instructions')
               }
             }}
           />
@@ -3477,7 +3440,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
                     if (existing?.ios)
                       setStep('credentials-exist')
                     else
-                      setStep(routeFreshIosSetupMethod(isMacOS(), journeyId, trackAction))
+                      setStep('api-key-instructions')
                   })()
                 }
                 else {
@@ -3541,11 +3504,6 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
               p8CreateMethod: value === 'import' ? existing.p8CreateMethod : undefined,
             }
             await saveProgress(appId, reduced)
-            trackAction('question_answered', {
-              attempt_id: journeyId,
-              question_id: 'ios_setup_method',
-              choice: value === 'import' ? 'import-existing' : 'create-new',
-            })
 
             // Keep the React `importMode` mirror in sync (read by the
             // create-new effect driver's verifying-key guard + saving-credentials).
@@ -3862,7 +3820,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
                 completedSteps: {},
               }
               const reduced = applyIosInput('import-distribution-mode', base, { step: 'import-distribution-mode', value: value as 'app_store' | 'ad_hoc' | '__cancel__' })
-              await saveImportDistributionAnswer(() => saveProgress(appId, reduced), value as 'app_store' | 'ad_hoc' | '__cancel__', journeyId, trackAction)
+              await saveProgress(appId, reduced)
 
               if (value === '__cancel__') {
                 // The user bailed to the create-new path. Keep the React importMode

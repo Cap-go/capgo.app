@@ -22,7 +22,7 @@ app.get('/', async (c) => {
   }
 
   try {
-    const pgClient = getPgClient(c)
+    const pgClient = await getPgClient(c)
     const drizzle = getDrizzleClient(pgClient)
 
     // Récupérer tous les rôles assignables
@@ -62,7 +62,7 @@ app.get('/:scope_type', sValidator('param', roleScopeParamSchema, invalidScopeTy
   }
 
   try {
-    const pgClient = getPgClient(c)
+    const pgClient = await getPgClient(c)
     const drizzle = getDrizzleClient(pgClient)
 
     // Récupérer les rôles pour ce scope

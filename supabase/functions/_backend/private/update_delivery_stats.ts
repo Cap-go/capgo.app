@@ -540,7 +540,7 @@ async function readUpdateDeliveryStatsSB(
   endExclusive: Dayjs,
   endInclusive: Dayjs,
 ) {
-  const db = getPgClient(c, true)
+  const db = await getPgClient(c, true)
 
   try {
     const query = buildStatsQuery(scope)

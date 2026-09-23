@@ -1,4 +1,3 @@
-import { hasSupportedOtaTodoList, parseAppOnboarding } from '~/services/appOnboarding'
 import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 
 // August uses Central European Summer Time (UTC+2).
@@ -15,9 +14,6 @@ interface DashboardExploration {
 // Module memory keeps the grant alive when session storage is blocked, for
 // example in private or restricted browsing contexts.
 let dashboardExplorationFallback: DashboardExploration | null = null
-let explorationGrantedThisPage = false
-let explorationReminderShownThisPage = false
-const EXPLORATION_REMINDER_DISMISSED_KEY = 'capgo:onboarding-exploration-reminder-dismissed'
 
 function webStorages(): Storage[] {
   if (typeof window === 'undefined')
@@ -114,7 +110,6 @@ export function allowOnboardingDashboardExploration(userId: string | null | unde
 
   const state: DashboardExploration = { userId, resumeAppId: resumeAppId ?? null }
   dashboardExplorationFallback = state
-  explorationGrantedThisPage = true
   writeStoredExploration(state)
 }
 
@@ -134,42 +129,6 @@ export function shouldConfirmOnboardingDashboardExploration(options: {
 
 export function getOnboardingResumeAppId(userId: string | null | undefined) {
   return matchingDashboardExploration(userId)?.resumeAppId ?? null
-}
-
-export function shouldShowOnboardingExplorationReminder(options: {
-  userId: string | null | undefined
-  appId: string
-  navigationType: string | undefined
-}) {
-  if (options.navigationType !== 'reload' || explorationGrantedThisPage || explorationReminderShownThisPage)
-    return false
-  if (getOnboardingResumeAppId(options.userId) !== options.appId)
-    return false
-  try {
-    return window.localStorage.getItem(`${EXPLORATION_REMINDER_DISMISSED_KEY}:${options.userId}`) !== 'true'
-  }
-  catch {
-    return true
-  }
-}
-
-export function markOnboardingExplorationReminderShown() {
-  explorationReminderShownThisPage = true
-}
-
-export function dismissOnboardingExplorationReminder(userId: string) {
-  try {
-    window.localStorage.setItem(`${EXPLORATION_REMINDER_DISMISSED_KEY}:${userId}`, 'true')
-  }
-  catch {
-    // Keep dashboard navigation usable when browser storage is blocked.
-  }
-}
-
-export function getAppSetupRedirect(app: { app_id: string, onboarding?: unknown }) {
-  if (!hasSupportedOtaTodoList(parseAppOnboarding(app.onboarding)))
-    return null
-  return { path: '/onboarding/app', query: { resume: app.app_id, step: 'setup' } }
 }
 
 export function getOnboardingExploreBannerAppId(options: {

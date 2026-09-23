@@ -3,8 +3,6 @@ import { isValidAppId } from '~/utils/appId'
 export interface CliAiPromptApp {
   appId: string
   name: string | null
-  todoListVersion?: number
-  otaTodoListVersion?: string
 }
 
 export interface CliAiPromptOrganization {
@@ -556,57 +554,15 @@ The test succeeds when:
 - The application calls \`notifyAppReady()\` without subsequently rolling back.
 - No \`cap sync\`, \`cap copy\`, or equivalent synchronization occurred after the test change was created.`
 
-function otaChecklistProtocol(appIds: string[]): string {
-  return `## OTA todo list progress checks
-
-The following Capgo app IDs use Todo list v3 or v4: ${appIds.map(appId => `\`${appId}\``).join(', ')}.
-
-After selecting the Capgo app, run the checklist once with the selected ephemeral runner only if its app ID is in that OTA list. For any other selected app, skip this entire checklist protocol and every checkpoint below:
-
-{CAPGO_CLI_RUNNER} app todo {SELECTED_CAPGO_APP_ID}
-
-Use the checklist checkpoints below only if this command reports \`Todo list v3\` or \`Todo list v4\` for the selected app. If it reports v1 or v2, skip every later checklist checkpoint and follow the normal setup instructions. A mixed organization can contain apps with different todo-list versions; never apply an OTA checkpoint to a v2 app.
-
-At each checkpoint, inspect all statuses, follow the explanation for the next pending step, and tell me what changed. Treat a task as complete only when the CLI reports it done or skipped. The CLI rechecks progress each time it runs; if a local scan or device event has not appeared yet, rerun after that activity finishes instead of claiming success early.
-
-If I choose guided \`init\`, wait for me to finish it, then run the checklist again for the selected OTA app and explain any remaining pending steps.`
-}
-
-function otaChecklistCheckpoint(when: string): string {
-  return `OTA todo list checkpoint: ${when} Run:
-
-{CAPGO_CLI_RUNNER} app todo {SELECTED_CAPGO_APP_ID}`
-}
-
-function withOtaChecklistCheckpoint(section: string, enabled: boolean, when: string): string {
-  return enabled ? `${section}\n\n${otaChecklistCheckpoint(when)}` : section
-}
-
-function otaChecklistAppIds(input: CliAiPromptInput): string[] {
-  return [...new Set(input.organizations.flatMap(organization => getPromptApps(organization)
-    .filter(app => app.todoListVersion === 3 || (app.todoListVersion === 4 && app.otaTodoListVersion === '1'))
-    .map(app => app.appId)))]
-}
-
-function firstUpdateTestSection(withOtaChecklist: boolean): string {
-  if (!withOtaChecklist)
-    return FIRST_UPDATE_TEST_SECTION
-  const beforeTestChange = FIRST_UPDATE_TEST_SECTION.replace(
-    '### Create a recognizable test change',
-    `${otaChecklistCheckpoint('After the original native app first runs on a device or simulator, recheck device registration.')}\n\n### Create a recognizable test change`,
-  )
-  return `${beforeTestChange}\n\n${otaChecklistCheckpoint('After the installed app applies the live update, recheck update delivery.')}`
-}
-
-function otaSections(input: CliAiPromptInput, withOtaChecklist = false): string[] {
+function otaSections(input: CliAiPromptInput): string[] {
   return [
     INIT_RECOMMENDATION_SECTION,
     buildOrganizationSection(input),
-    withOtaChecklistCheckpoint(CHANNEL_SECTION, withOtaChecklist, 'After the chosen channel is available and configured, recheck channel creation.'),
-    withOtaChecklistCheckpoint(PLUGIN_SECTION, withOtaChecklist, 'After the updater is installed in the selected app project, recheck plugin installation.'),
-    withOtaChecklistCheckpoint(NOTIFY_APP_READY_SECTION, withOtaChecklist, 'After the app-ready call is in the real startup path, recheck the source scan.'),
-    withOtaChecklistCheckpoint(FIRST_UPLOAD_SECTION, withOtaChecklist, 'After the first bundle upload completes, recheck published-bundle progress.'),
-    firstUpdateTestSection(withOtaChecklist),
+    CHANNEL_SECTION,
+    PLUGIN_SECTION,
+    NOTIFY_APP_READY_SECTION,
+    FIRST_UPLOAD_SECTION,
+    FIRST_UPDATE_TEST_SECTION,
   ]
 }
 
@@ -636,11 +592,8 @@ export function buildCliAiSetupPrompt(input: CliAiPromptInput, rawIntent?: unkno
     ].join('\n\n')
   }
 
-  const otaAppIds = rawIntent === 'ota' ? otaChecklistAppIds(input) : []
-  const withOtaChecklist = otaAppIds.length > 0
   return [
     buildAuthenticationSection(input.apiKey),
-    ...(withOtaChecklist ? [otaChecklistProtocol(otaAppIds)] : []),
-    ...otaSections(input, withOtaChecklist),
+    ...otaSections(input),
   ].join('\n\n')
 }

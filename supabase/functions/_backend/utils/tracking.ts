@@ -159,7 +159,7 @@ async function executeBentoTracking(c: Context, payload: SendEventToTrackingPayl
   }
 
   await runTrackedCall(c, 'bento', async () => {
-    const pgClient = getPgClient(c, true)
+    const pgClient = await getPgClient(c, true)
     try {
       if (bento.once) {
         // Permanent per-(event, org, uniqId) claim: per-entity alerts (e.g. an

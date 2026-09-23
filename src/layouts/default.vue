@@ -3,13 +3,10 @@ import { useLocalStorage, useMediaQuery } from '@vueuse/core'
 import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import OnboardingExploreBanner from '~/components/dashboard/OnboardingExploreBanner.vue'
-import OnboardingExploreReminder from '~/components/dashboard/OnboardingExploreReminder.vue'
 import { useRealtimeCLIFeed } from '~/composables/useRealtimeCLIFeed'
 import { useSupabase } from '~/services/supabase'
-import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
-import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
-import { getOnboardingExploreBannerAppId, getOnboardingResumeAppId } from '~/utils/onboardingRedirect'
+import { getOnboardingExploreBannerAppId } from '~/utils/onboardingRedirect'
 import Navbar from '../components/Navbar.vue'
 import Sidebar from '../components/Sidebar.vue'
 
@@ -26,7 +23,6 @@ const pendingOnboardingAppId = ref('')
 const route = useRoute()
 const supabase = useSupabase()
 const organizationStore = useOrganizationStore()
-const main = useMainStore()
 let onboardingLookupRun = 0
 
 const selectableOrganizations = computed(() => organizationStore.organizations.filter(org => !isPendingOrganizationInvite(org)))
@@ -44,17 +40,15 @@ async function refreshPendingOnboardingApp() {
   const singleOrganization = selectableOrganizations.value.length === 1
     ? selectableOrganizations.value[0]
     : undefined
-  const routeAppId = 'app' in route.params && typeof route.params.app === 'string' ? route.params.app : null
-  const candidateAppId = routeAppId ?? getOnboardingResumeAppId(main.user?.id ?? main.auth?.id)
-  if (!candidateAppId && (!singleOrganization || singleOrganization.app_count !== 1))
+  if (!singleOrganization || singleOrganization.app_count !== 1)
     return
 
-  let query = supabase.from('apps').select('app_id, need_onboarding, onboarding')
-  if (candidateAppId)
-    query = query.eq('app_id', candidateAppId)
-  else
-    query = query.eq('owner_org', singleOrganization!.gid)
-  const { data, error } = await query.limit(1).maybeSingle()
+  const { data, error } = await supabase
+    .from('apps')
+    .select('app_id, need_onboarding, onboarding')
+    .eq('owner_org', singleOrganization.gid)
+    .limit(1)
+    .maybeSingle()
 
   if (lookupRun !== onboardingLookupRun)
     return
@@ -64,20 +58,16 @@ async function refreshPendingOnboardingApp() {
     return
   }
 
-  if (data && shouldSkipOnboardingResume(data.onboarding))
-    return
-
   pendingOnboardingAppId.value = getOnboardingExploreBannerAppId({
     app: data,
-    organizationAppCount: singleOrganization?.app_count ?? 0,
+    organizationAppCount: singleOrganization.app_count,
     organizationCount: selectableOrganizations.value.length,
-  }) ?? (candidateAppId && data?.need_onboarding ? data.app_id : '')
+  }) ?? ''
 }
 
 watch([
   () => route.path,
   selectableOrganizationIds,
-  () => main.user?.id ?? main.auth?.id,
 ], refreshPendingOnboardingApp, { immediate: true })
 
 // Initialize realtime CLI activity feed (toasts for CLI actions)
@@ -111,7 +101,6 @@ useRealtimeCLIFeed()
         />
         <!-- App and settings layouts are nested inside this shared dashboard shell. -->
         <OnboardingExploreBanner v-if="pendingOnboardingAppId" :app-id="pendingOnboardingAppId" />
-        <OnboardingExploreReminder v-if="pendingOnboardingAppId" :app-id="pendingOnboardingAppId" />
         <main class="w-full h-full overflow-hidden">
           <RouterView class="h-full overflow-y-auto grow" />
         </main>

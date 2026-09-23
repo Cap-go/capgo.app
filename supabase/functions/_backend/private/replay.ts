@@ -5,7 +5,7 @@ import { Hono } from 'hono/tiny'
 import { BRES, parseBody, quickError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlogErr, serializeError } from '../utils/logging.ts'
-import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, type PgClient} from '../utils/pg.ts'
 import { schema } from '../utils/postgres_schema.ts'
 import { capturePosthogReplaySnapshot } from '../utils/posthog.ts'
 
@@ -77,9 +77,9 @@ function validateReplayBody(body: CliReplayBody): ValidatedReplayPayload {
 }
 
 async function getAuthenticatedUserEmail(c: Context<MiddlewareKeyVariables>, userId: string) {
-  let pgClient: ReturnType<typeof getPgClient> | null = null
+  let pgClient: PgClient | null = null
   try {
-    pgClient = getPgClient(c, true)
+    pgClient = await getPgClient(c, true)
     const drizzle = getDrizzleClient(pgClient)
     const rows = await drizzle
       .select({ email: schema.users.email })

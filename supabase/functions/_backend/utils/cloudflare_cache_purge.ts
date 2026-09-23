@@ -108,7 +108,7 @@ export async function purgePlanCache(c: Context, appId: string) {
  * Plugin endpoints must keep using the read replica exclusively.
  */
 async function listOrgAppIds(c: Context, orgId: string): Promise<string[] | null> {
-  const pg = getPgClient(c)
+  const pg = await getPgClient(c)
   try {
     const result = await pg.query<{ app_id: string }>(
       'SELECT app_id FROM public.apps WHERE owner_org = $1::uuid ORDER BY app_id',

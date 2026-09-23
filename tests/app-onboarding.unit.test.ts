@@ -1,17 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { INIT_ONBOARDING_STEP_IDS } from '../cli/src/init/onboarding-steps'
 import {
-  APP_ONBOARDING_OTA_V1_STEP_IDS,
   APP_ONBOARDING_V1_STEP_IDS,
   APP_ONBOARDING_V2_STEP_IDS,
-  APP_ONBOARDING_V3_STEP_IDS,
   appendAppOnboardingStepHistory,
   applyAppOnboardingPatch,
-  defaultAppOnboarding,
-  filterAppOnboardingReportedPatch,
   getAppOnboardingStepHistoryChanges,
   getAppOnboardingStepIds,
-  hasSupportedOtaTodoList,
+  defaultAppOnboarding,
   mergeAppOnboarding,
   parseAppOnboarding,
   parseAppOnboardingPatch,
@@ -19,19 +15,6 @@ import {
 } from '../supabase/functions/_backend/utils/appOnboarding.ts'
 
 describe('app onboarding merge', () => {
-  it.concurrent.each([3, 4])('resets a trusted v%s step without retaining completion metadata or recording history', (version) => {
-    const step = { status: 'done', at: 'old', update_history: [{ status: 'done', at: 'old' }], annotations: ['old'], type: 'observed' }
-    const current = { setup: { todo_list_version: version, ...(version === 4 ? { ota_todo_list_version: '1' } : {}), steps: version === 4 ? { ota: { add_channel: step } } : { add_channel: step } } }
-    const patch = { steps: { add_channel: { status: 'pending' as const } } }
-    const merged = applyAppOnboardingPatch(current, patch, () => 'new')
-    const next = appendAppOnboardingStepHistory(current, merged, patch, () => 'new') as any
-    expect(version === 4 ? next.setup.steps.ota.add_channel : next.setup.steps.add_channel).toEqual(version === 4 ? { status: 'pending' } : undefined)
-    expect(getAppOnboardingStepHistoryChanges(current, next, patch)).toEqual([])
-    expect(parseAppOnboardingPatch(patch)).toBeNull()
-    expect(parseAppOnboardingPatch({ steps: { ota: patch.steps } })).toBeNull()
-    expect(current.setup.steps).toEqual(version === 4 ? { ota: { add_channel: step } } : { add_channel: step })
-  })
-
   it.concurrent('keeps CLI step ids in sync with the CLI onboarding list', () => {
     // CLI titles live in cli/src/init/onboarding-steps.ts; backend ids must stay identical.
     expect([...APP_ONBOARDING_V1_STEP_IDS]).toEqual([...INIT_ONBOARDING_STEP_IDS])
@@ -208,111 +191,5 @@ describe('app onboarding merge', () => {
       historyLength: 1,
       historyFull: false,
     }])
-  })
-})
-
-describe('seven-goal checklist v3', () => {
-  const current = { setup: { todo_list_version: 3, steps: {} } }
-  it.concurrent('uses seven required milestones without changing v1/v2 or the default', () => {
-    expect(getAppOnboardingStepIds(3)).toEqual(['login_cli_mcp', 'add_channel', 'add_updater', 'add_code', 'run_device', 'upload_bundle', 'test_update'])
-    expect(defaultAppOnboarding().todo_list_version).toBe(2)
-  })
-  it.concurrent('ignores legacy CLI completion until all seven goals are present', () => {
-    const state = mergeAppOnboarding(current, { outcome: 'completed', steps: { completion: { status: 'done' }, add_encryption: { status: 'skipped' } } })
-    expect(state.outcome).toBe('in_progress')
-    expect(state.steps).toEqual({})
-    expect(mergeAppOnboarding(current, { steps: Object.fromEntries(APP_ONBOARDING_V3_STEP_IDS.map(id => [id, { status: 'done' }])) }).outcome).toBe('completed')
-    expect(mergeAppOnboarding(current, { outcome: 'skipped' }).outcome).toBe('skipped')
-  })
-  it.concurrent('keeps app-ready reports while requiring backend evidence for three milestones', () => {
-    const patch = { source: 'cli' as const, steps: { add_code: { status: 'done' as const }, run_device: { status: 'done' as const }, upload_bundle: { status: 'done' as const }, test_update: { status: 'done' as const } } }
-    expect(filterAppOnboardingReportedPatch(current, patch).steps).toEqual({ add_code: { status: 'done' } })
-    expect(filterAppOnboardingReportedPatch({ setup: { todo_list_version: 2 } }, patch)).toBe(patch)
-  })
-  it.concurrent('preserves other milestone histories during an automatic update', () => {
-    const saved = { setup: { todo_list_version: 3, steps: { add_code: { status: 'done', update_history: [{ status: 'done', at: '2026-09-16' }] } } } }
-    const next = applyAppOnboardingPatch(saved, { steps: { run_device: { status: 'done' } } })
-    expect((next.setup as any).steps.add_code.update_history).toEqual(saved.setup.steps.add_code.update_history)
-  })
-})
-
-describe('version 4 OTA checklist', () => {
-  const pending = Object.fromEntries(APP_ONBOARDING_OTA_V1_STEP_IDS.map(id => [id, { status: 'pending' }]))
-  const current = { setup: { todo_list_version: 4, ota_todo_list_version: '1', paths: ['ota'], selected_path: 'ota', steps: { ota: pending } }, features: { ota: { stage: 'local_only' } } }
-
-  it.concurrent('reads the same seven goals under the OTA path and keeps all pending steps visible', () => {
-    expect(getAppOnboardingStepIds(4, '1')).toEqual(APP_ONBOARDING_OTA_V1_STEP_IDS)
-    expect(parseAppOnboarding(current).steps).toEqual(pending)
-    expect(parseAppOnboarding({ setup: { todo_list_version: 4, ota_todo_list_version: '1', steps: { ota: {} } } }).steps).toEqual(pending)
-    expect(parseAppOnboarding({ setup: { todo_list_version: 3, steps: {} } }).steps).toEqual({})
-  })
-
-  it.concurrent('requires the string OTA version before reading or updating v4 steps', () => {
-    expect(getAppOnboardingStepIds(4)).toEqual([])
-    expect(getAppOnboardingStepIds(4, '2')).toEqual([])
-    expect(hasSupportedOtaTodoList(parseAppOnboarding(current))).toBe(true)
-    for (const otaVersion of [undefined, 1, '2']) {
-      const unsupported = { setup: { todo_list_version: 4, ota_todo_list_version: otaVersion, steps: { ota: pending } } }
-      expect(hasSupportedOtaTodoList(parseAppOnboarding(unsupported))).toBe(false)
-      expect(parseAppOnboarding(unsupported).steps).toEqual({})
-      const merged = applyAppOnboardingPatch(unsupported, { steps: { add_code: { status: 'done' } } }) as any
-      expect(merged.setup.steps.ota.add_code).toEqual({ status: 'pending' })
-      expect(merged.setup.paths).toBeUndefined()
-      expect(merged.setup.outcome).toBe('in_progress')
-    }
-    const builderOnly = { setup: { todo_list_version: 4, paths: ['builder'], selected_path: 'builder', steps: { builder: { configure_signing: { status: 'pending' } } } } }
-    const merged = applyAppOnboardingPatch(builderOnly, { steps: { add_code: { status: 'done' } } }) as any
-    expect(merged.setup.paths).toEqual(['builder'])
-    expect(merged.setup.steps.ota).toBeUndefined()
-    expect(merged.setup.steps.builder).toEqual(builderOnly.setup.steps.builder)
-  })
-
-  it.concurrent('writes nested progress while preserving the path and feature ledger', () => {
-    const patch = parseAppOnboardingPatch({ steps: { ota: { add_code: { status: 'done' }, add_channel: { status: 'pending' } } } })!
-    expect(patch.steps).toEqual({ add_code: { status: 'done' } })
-    const merged = applyAppOnboardingPatch(current, patch, () => '2026-09-19T00:00:00.000Z')
-    const setup = merged.setup as any
-    expect(setup.ota_todo_list_version).toBe('1')
-    expect(setup.paths).toEqual(['ota'])
-    expect(setup.selected_path).toBe('ota')
-    expect(setup.steps.ota.add_code).toEqual({ status: 'done', at: '2026-09-19T00:00:00.000Z' })
-    expect(setup.steps.ota.add_channel).toEqual({ status: 'pending' })
-    expect(setup.steps.add_code).toBeUndefined()
-    expect(merged.features).toEqual(current.features)
-    expect(parseAppOnboarding(merged).outcome).toBe('in_progress')
-  })
-
-  it.concurrent('records nested history and requires all seven reported goals', () => {
-    const patch = { steps: { add_code: { status: 'done' as const } } }
-    const merged = applyAppOnboardingPatch(current, patch, () => '2026-09-19T00:00:00.000Z')
-    const withHistory = appendAppOnboardingStepHistory(current, merged, patch, () => '2026-09-19T00:00:01.000Z')
-    expect((withHistory.setup as any).steps.ota.add_code.update_history).toEqual([{ status: 'done', at: '2026-09-19T00:00:01.000Z' }])
-    expect(getAppOnboardingStepHistoryChanges(current, withHistory, patch)).toHaveLength(1)
-    expect(mergeAppOnboarding(current, { outcome: 'completed' }).outcome).toBe('in_progress')
-    expect(mergeAppOnboarding(current, { steps: Object.fromEntries(APP_ONBOARDING_OTA_V1_STEP_IDS.map(id => [id, { status: 'done' }])) }).outcome).toBe('completed')
-    expect(filterAppOnboardingReportedPatch(current, { steps: { add_code: { status: 'done' }, run_device: { status: 'done' } } }).steps).toEqual({ add_code: { status: 'done' } })
-  })
-})
-
-describe('builder-only checklist v4', () => {
-  it.concurrent('preserves Builder steps without creating an OTA path during legacy progress updates', () => {
-    const current = { setup: {
-      todo_list_version: 4,
-      builder_todo_list_version: '1',
-      paths: ['builder'],
-      selected_path: 'builder',
-      steps: { builder: { ios: { start_setup: { status: 'pending' } }, android: { start_setup: { status: 'pending' } } } },
-    } }
-    const patch = { source: 'cli' as const, steps: { login_cli_mcp: { status: 'done' as const } } }
-    const merged = applyAppOnboardingPatch(current, patch)
-    const withHistory = appendAppOnboardingStepHistory(current, merged, patch)
-    const setup = withHistory.setup as any
-
-    expect(hasSupportedOtaTodoList(parseAppOnboarding(withHistory))).toBe(false)
-    expect(setup.steps).toEqual(current.setup.steps)
-    expect(setup.paths).toEqual(['builder'])
-    expect(setup.selected_path).toBe('builder')
-    expect(setup.outcome).toBe('in_progress')
-    expect(getAppOnboardingStepHistoryChanges(current, withHistory, patch)).toEqual([])
   })
 })

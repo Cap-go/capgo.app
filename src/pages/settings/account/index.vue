@@ -56,7 +56,6 @@ async function redirectToEmailVerification() {
     query: {
       reason: 'email_not_verified',
       return_to: '/settings/account',
-      purpose: 'delete_account',
     },
   })
 }

@@ -297,7 +297,7 @@ export async function recordBuilderCapacityIfChanged(
   source = 'sync',
 ): Promise<BuilderCapacityEvent | null> {
   const total = Math.max(0, Math.trunc(workersTotal))
-  const client = getPgClient(c)
+  const client = await getPgClient(c)
   try {
     await client.query('BEGIN')
     await client.query('SELECT pg_advisory_xact_lock($1)', [CAPACITY_ADVISORY_LOCK_KEY])
@@ -369,7 +369,7 @@ async function loadCapacityEvents(
   startIso: string,
   endIso: string,
 ): Promise<BuilderCapacityEvent[]> {
-  const client = getPgClient(c)
+  const client = await getPgClient(c)
   try {
     const { rows } = await client.query<{
       created_at: string
@@ -411,7 +411,7 @@ async function loadRunIntervals(
   startIso: string,
   endIso: string,
 ): Promise<BuilderRunInterval[]> {
-  const client = getPgClient(c)
+  const client = await getPgClient(c)
   try {
     // Only builder-reported run intervals (started_at set when the runner
     // actually starts). Exclude waiting_runner / queue time from "used".

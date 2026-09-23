@@ -357,7 +357,7 @@ async function getBillingBentoEmails(
   audience: NotificationAudience = BENTO_TAG_AUDIENCE,
 ) {
   const emails: Array<string | null | undefined> = [org.management_email]
-  const pgClient = getPgClient(c, true)
+  const pgClient = await getPgClient(c, true)
 
   try {
     const drizzleClient = getDrizzleClient(pgClient)
@@ -651,7 +651,7 @@ async function persistStripeInfoAndRevenueMovement(
   if (Object.keys(transactionUpdateData).length === 0 && !shouldRecordMovement)
     return 'applied'
 
-  const pgClient = getPgClient(c, false)
+  const pgClient = await getPgClient(c, false)
 
   try {
     await pgClient.query('BEGIN')
@@ -793,7 +793,7 @@ async function persistStripeInfoAndRevenueMovement(
 }
 
 async function writePaidAtAtomically(c: Context, customerId: string, eventOccurredAtIso: string) {
-  const pgClient = getPgClient(c, false)
+  const pgClient = await getPgClient(c, false)
   const drizzleClient = getDrizzleClient(pgClient)
 
   try {
@@ -812,7 +812,7 @@ async function writePaidAtAtomically(c: Context, customerId: string, eventOccurr
 }
 
 async function getCreditTopUpProductIdFromCustomer(c: Context, customerId: string): Promise<string> {
-  const pgClient = getPgClient(c, true)
+  const pgClient = await getPgClient(c, true)
   const drizzleClient = getDrizzleClient(pgClient)
 
   try {

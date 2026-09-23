@@ -52,7 +52,7 @@ app.post('/', middlewareAPISecret, triggerValidator('app_versions', 'INSERT'), a
         bundle_name: record.name,
       },
     })
-    const pgClient = getPgClient(c, true)
+    const pgClient = await getPgClient(c, true)
     const drizzleClient = getDrizzleClient(pgClient)
     try {
       await backgroundTask(c, sendEmailToOrgMembers(c, 'bundle:created', 'bundle_created', {

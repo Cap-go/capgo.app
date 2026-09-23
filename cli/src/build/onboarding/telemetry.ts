@@ -1,7 +1,5 @@
 import type { AndroidOnboardingErrorCategory, AndroidOnboardingStep } from './android/types.js'
 import type { OnboardingErrorCategory, OnboardingStep, Platform } from './types.js'
-import type { AppSelectionEvent } from './ui/app-selection-gate.js'
-import { trackEvent } from '../../analytics/track.js'
 import { sendEvent } from '../../utils.js'
 import { getActiveCliReplaySessionId } from '../../init/replay.js'
 import { mapAndroidOnboardingError, mapIosOnboardingError } from './error-categories.js'
@@ -10,47 +8,6 @@ function addReplaySessionTag(tags: Record<string, string>, replaySessionId?: str
   const sessionId = replaySessionId || getActiveCliReplaySessionId()
   if (sessionId)
     tags.$session_id = sessionId
-}
-
-export interface TrackBuilderOnboardingLoginInput {
-  apikey: string
-  appId: string
-  journeyId: string
-  method: 'browser' | 'paste'
-  retryCount: number
-  durationMs: number
-}
-
-/** Login happens before platform and owner-org resolution. Send once a key is valid. */
-export function trackBuilderOnboardingLogin(input: TrackBuilderOnboardingLoginInput): Promise<void> {
-  return trackEvent({
-    apikey: input.apikey,
-    appId: input.appId,
-    channel: 'builder-onboarding',
-    event: 'Builder Onboarding Login',
-    tags: {
-      journey_id: input.journeyId,
-      method: input.method,
-      retry_count: input.retryCount,
-      duration_ms: input.durationMs,
-    },
-  })
-}
-
-export function trackBuilderOnboardingAppSelection(input: AppSelectionEvent & { apikey: string, appId: string, journeyId: string }): Promise<void> {
-  return trackEvent({
-    apikey: input.apikey,
-    appId: input.appId,
-    channel: 'builder-onboarding',
-    event: 'Builder Onboarding App Selection',
-    tags: {
-      journey_id: input.journeyId,
-      phase: input.phase,
-      ...(input.result ? { result: input.result } : {}),
-      ...(input.source ? { source: input.source } : {}),
-      visible_app_count: input.visibleCount,
-    },
-  })
 }
 
 export interface TrackBuilderOnboardingStepInput {
@@ -76,18 +33,9 @@ export type BuilderOnboardingAction
   // fork — `continue` resumes saved progress, `restart` wipes it. Carries a
   // `choice` tag with that value.
   = | 'resume_prompt_decision'
-    | 'question_shown'
-    | 'question_answered'
-    | 'question_skipped'
     | 'android_sa_method_selected'
     | 'android_sa_validation_recovery_selected'
     | 'android_sa_validation_result'
-    | 'credential_verified'
-    | 'credential_verification_failed'
-    | 'certificate_prepared'
-    | 'certificate_preparation_failed'
-    | 'keystore_prepared'
-    | 'keystore_preparation_failed'
 
 export interface TrackBuilderOnboardingActionInput {
   apikey: string

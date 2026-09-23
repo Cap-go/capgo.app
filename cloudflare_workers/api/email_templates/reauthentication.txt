@@ -1,5 +1,0 @@
-Hi,
-
-Please confirm your re-authentication with Capgo.app by using the token below:
-
-{{ token }}

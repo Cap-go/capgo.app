@@ -66,7 +66,7 @@ app.post('/', middlewareAPISecret, triggerValidator('deploy_history', 'INSERT'),
     })
 
     await backgroundTask(c, (async () => {
-      const pgClient = getPgClient(c, true)
+      const pgClient = await getPgClient(c, true)
       const drizzleClient = getDrizzleClient(pgClient)
       try {
         await sendNotifToOrgMembersOnce(c, 'bundle:deployed', 'bundle_deployed', {

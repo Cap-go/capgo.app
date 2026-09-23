@@ -258,7 +258,7 @@ export async function getAdminBuilderAnalytics(c: Context, startDate: string, en
   const onboarding_error_categories = [...onbErrMap.entries()].map(([key, count]) => ({ key, count })).sort((a, b) => b.count - a.count)
 
   // --- Postgres builds (aggregated in-database; exact for any volume) ---
-  const pgClient = getPgClient(c, true)
+  const pgClient = await getPgClient(c, true)
   try {
     const [statusDayRes, orgBuildRes, failedRes] = await Promise.all([
       pgClient.query(

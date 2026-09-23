@@ -11,9 +11,9 @@ import { encryptZipInternal } from '../src/bundle/encrypt.ts'
 import { zipBundleInternal } from '../src/bundle/zip.ts'
 import { shouldCapturePosthogException } from '../src/posthog.ts'
 import { CliUserError } from '../src/shared/cli-user-error.ts'
-import { getAppId, getConfigForWrite, getOrganizationId, NO_CAPACITOR_CONFIG_MESSAGE } from '../src/utils.ts'
+import { getAppId, getConfigForWrite, getOrganizationId } from '../src/utils.ts'
 
-const NO_CONFIG_MESSAGE = NO_CAPACITOR_CONFIG_MESSAGE
+const NO_CONFIG_MESSAGE = 'No capacitor config file found, run `cap init` first'
 const ORG_ID_MESSAGE = 'Cannot get organization id for app'
 
 function assertCliUserError(error, message, contextKeys = []) {

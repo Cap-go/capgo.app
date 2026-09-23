@@ -1,8 +1,7 @@
 import type { Context } from 'hono'
-import type { PoolClient } from 'pg'
 import type { MiddlewareKeyVariables } from './hono.ts'
 import { cloudlog } from './logging.ts'
-import { closeClient, getPgClient } from './pg.ts'
+import { checkoutPgClient, closeClient, getPgClient, releasePgClient, type PgQueryClient } from './pg.ts'
 import { supabaseAdmin } from './supabase.ts'
 
 export function isDemoAppRow(app?: { need_onboarding?: boolean | null }): boolean {
@@ -29,16 +28,17 @@ export async function isDemoApp(c: Context<MiddlewareKeyVariables>, appId: strin
 }
 
 export async function lockOnboardingApp(c: Context<MiddlewareKeyVariables>, appId: string) {
-  const pool = getPgClient(c)
-  let client: PoolClient | undefined
+  const pool = await getPgClient(c)
+  let client: PgQueryClient | undefined
 
   try {
-    client = await pool.connect()
+    client = await checkoutPgClient(pool)
     await client.query('SELECT pg_advisory_lock(hashtext($1))', [`onboarding-demo:${appId}`])
     return { client, pool }
   }
   catch (error) {
-    client?.release(error instanceof Error ? error : true)
+    if (client)
+      releasePgClient(pool, client, error instanceof Error ? error : true)
     await closeClient(c, pool)
     cloudlog({ requestId: c.get('requestId'), message: 'Cannot acquire onboarding app lock', error, app_id: appId })
     throw error
@@ -59,7 +59,7 @@ export async function unlockOnboardingApp(
     cloudlog({ requestId: c.get('requestId'), message: 'Cannot release onboarding app lock', error, app_id: appId })
   }
   finally {
-    lock.client.release(releaseError)
+    releasePgClient(lock.pool, lock.client, releaseError)
     await closeClient(c, lock.pool)
   }
 }

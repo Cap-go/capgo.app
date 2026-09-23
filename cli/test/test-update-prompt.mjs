@@ -13,22 +13,6 @@ import React from 'react'
 import OnboardingShell from '../src/build/onboarding/ui/shell.tsx'
 import { exitAfterOnboardingBeforeExit } from '../src/build/onboarding/ui/exit.ts'
 
-const loginServices = {
-  browserAvailable: true,
-  validateExisting: async () => {},
-  getAccountEmail: async () => 'account@example.com',
-  savePasted: async () => {},
-  beginBrowser: async () => { throw new Error('unused') },
-  completeBrowser: async () => {},
-}
-const appSelectionServices = {
-  list: async () => [{ app_id: 'com.test.app', name: 'Test App' }],
-  verify: async () => {},
-  persist: async () => false,
-  openDashboard: async () => true,
-  dashboardUrl: 'https://console.capgo.app/app/new',
-}
-
 const watchdog = setTimeout(() => {
   console.error('WATCHDOG 30s')
   process.exit(2)
@@ -75,7 +59,7 @@ async function renderShellInstance(props) {
   const stdout = makeStdout(100, 50)
   const stdin = makeStdin()
   const instance = render(
-    React.createElement(OnboardingShell, { appId: 'com.test.app', suggestedSource: 'capacitor', appSelectionServices, iosDir: 'ios', androidDir: 'android', journeyId: 'bj_test', apikey: 'test-key', loginServices, ...props }),
+    React.createElement(OnboardingShell, { appId: 'com.test.app', iosDir: 'ios', androidDir: 'android', journeyId: 'bj_test', ...props }),
     { stdout, stderr: makeStdout(100, 50), stdin, debug: true, exitOnCtrlC: false, patchConsole: false },
   )
   await waitForFirstFrame(stdout)
@@ -84,11 +68,6 @@ async function renderShellInstance(props) {
 
 async function renderShell(props) {
   const { instance, stdout } = await renderShellInstance(props)
-  if (!props.updateInfo) {
-    const deadline = Date.now() + 4000
-    while (!/want to set up|iOS|Android/i.test(stdout.lastFrame ?? '') && Date.now() < deadline)
-      await new Promise(resolve => setTimeout(resolve, 10))
-  }
   const out = stdout.lastFrame ?? ''
   instance.unmount()
   return out

@@ -1,8 +1,7 @@
 import type { Context } from 'hono'
-import type { PoolClient } from 'pg'
 import type { OnboardingPaymentCohortData, OnboardingPaymentCohortPeriod } from './onboarding_payment_cohorts_model.ts'
 import { assertOnboardingPaymentSourceComplete, ONBOARDING_PAYMENT_SOURCE_LIMIT, onboardingPaymentSourceNumber, onboardingPaymentSourceString, onboardingPaymentSourceTimestamp } from './onboarding_payment_cohorts_model.ts'
-import { closeClient, getPgClient } from './pg.ts'
+import { closeClient, getPgClient, type PgQueryClient, checkoutPgClient, releasePgClient } from './pg.ts'
 
 export interface OnboardingPaymentQueryExecutor {
   query: (text: string, values: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>
@@ -77,15 +76,15 @@ export async function queryOnboardingPaymentCohortData(executor: OnboardingPayme
 
 export async function loadOnboardingPaymentCohortData(c: Context, period: OnboardingPaymentCohortPeriod): Promise<OnboardingPaymentCohortData> {
   // auth.users is not replicated: false deliberately selects the primary connection.
-  const pool = getPgClient(c, false)
-  let client: PoolClient | undefined
+  const pool = await getPgClient(c, false)
+  let client: PgQueryClient | undefined
   try {
-    client = await pool.connect()
+    client = await checkoutPgClient(pool)
     return await queryOnboardingPaymentCohortData(client, period)
   }
   finally {
     try {
-      client?.release()
+      if (client) releasePgClient(pool, client)
     }
     finally {
       await closeClient(c, pool)

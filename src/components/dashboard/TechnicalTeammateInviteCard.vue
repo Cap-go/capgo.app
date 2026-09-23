@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import IconArrowRight from '~icons/lucide/arrow-right'
-import IconMail from '~icons/lucide/mail'
 import IconUserPlus from '~icons/lucide/user-plus'
 import InviteTeammateModal from '~/components/dashboard/InviteTeammateModal.vue'
 
@@ -16,14 +14,10 @@ withDefaults(defineProps<{
   analyticsChannel?: string
   showManualSetupLink?: boolean
   trackingVersion?: number
-  compact?: boolean
-  handoff?: boolean
 }>(), {
   analyticsChannel: 'onboarding-v2',
   showManualSetupLink: true,
   trackingVersion: 2,
-  compact: false,
-  handoff: false,
 })
 
 const emit = defineEmits<{
@@ -46,44 +40,7 @@ function onInviteSuccess(invite: InviteSuccessPayload) {
 
 <template>
   <div>
-    <div v-if="handoff" class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-      <div class="flex min-w-0 items-center gap-4">
-        <IconUserPlus class="h-6 w-6 shrink-0 text-azure-500" aria-hidden="true" />
-        <div>
-          <h3 class="text-base font-semibold text-slate-950 dark:text-white">
-            {{ t('setup-checklist-delegate-title') }}
-          </h3>
-          <p class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-            {{ t('setup-checklist-delegate-description') }}
-          </p>
-        </div>
-      </div>
-      <button
-        type="button"
-        class="d-btn min-h-12 shrink-0 self-start border-azure-500 bg-white px-4 text-sky-700 hover:border-azure-600 hover:bg-azure-500/5 focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-offset-2 sm:self-auto dark:bg-slate-900 dark:text-azure-300 dark:hover:bg-azure-500/10"
-        data-test="onboarding-technical-invite"
-        @click="openInviteDialog"
-      >
-        <IconMail class="h-4 w-4" aria-hidden="true" />
-        {{ t('setup-checklist-delegate-cta') }}
-      </button>
-    </div>
-    <div v-else-if="compact">
-      <button
-        type="button"
-        class="d-btn d-btn-ghost h-auto min-h-11 justify-start px-0 text-left font-normal text-sky-700 hover:bg-transparent hover:text-sky-800 dark:text-azure-300"
-        data-test="onboarding-technical-invite"
-        @click="openInviteDialog"
-      >
-        <IconUserPlus class="h-5 w-5 shrink-0" aria-hidden="true" />
-        {{ t('setup-checklist-delegate-action') }}
-        <IconArrowRight class="h-4 w-4 shrink-0" aria-hidden="true" />
-      </button>
-      <p class="pl-7 text-xs leading-5 text-slate-500 dark:text-slate-400">
-        {{ t('setup-checklist-delegate-description') }}
-      </p>
-    </div>
-    <div v-else class="flex flex-wrap items-start justify-between gap-3">
+    <div class="flex flex-wrap items-start justify-between gap-3">
       <div class="max-w-2xl">
         <h3 class="font-medium text-slate-950 dark:text-white">
           {{ t('onboarding-invite-option-title') }}

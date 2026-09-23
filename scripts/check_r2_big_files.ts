@@ -631,7 +631,7 @@ export function getDatabaseURL(): string {
     return DEFAULT_DB_URL
 }
 
-export function getPgClient(c: Context) {
+export function await getPgClient(c: Context) {
     const dbUrl = getDatabaseURL()
     console.log({ message: 'getPgClient', dbUrl })
     return new Pool({
@@ -646,7 +646,7 @@ async function get_app_versions() {
 
     // Create a mock context for getPgClient
     const mockContext = {} as Context
-    const pool = getPgClient(mockContext)
+    const pool = await getPgClient(mockContext)
 
     try {
         console.log('📊 Fetching all app versions...')
@@ -745,7 +745,7 @@ async function get_big_orgs() {
     if (orgsOver100MB.length > 0) {
         // Create a mock context for getPgClient
         const mockContext = {} as Context
-        const pool = getPgClient(mockContext)
+        const pool = await getPgClient(mockContext)
 
         try {
             // Create all the plan queries
@@ -1083,7 +1083,7 @@ async function prepare_cleanup_zip() {
     // Connect to database
     console.log('🔗 Connecting to database...')
     const mockContext = {} as Context
-    const pool = getPgClient(mockContext)
+    const pool = await getPgClient(mockContext)
 
     // Define types for cleanup data
     interface CleanupCandidate {

@@ -40,12 +40,17 @@ vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
   checkPermissionPg,
 }))
 
-vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
-  closeClient,
-  getDrizzleClient,
-  getPgClient,
-  logPgError,
-}))
+vi.mock('../supabase/functions/_backend/utils/pg.ts', async () => {
+  const { checkoutPgClient, releasePgClient } = await import('./helpers/pg-checkout-release-mocks.ts')
+  return {
+    closeClient,
+    getDrizzleClient,
+    getPgClient,
+    logPgError,
+    checkoutPgClient,
+    releasePgClient,
+  }
+})
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   supabaseAdmin,
@@ -192,7 +197,7 @@ describe('public channel post', () => {
     isValidAppId.mockReturnValue(true)
     supabaseAdmin.mockImplementation(() => buildAdminChain())
     updateOrCreateChannel.mockResolvedValue({ data: { id: 99 }, error: null })
-    getPgClient.mockReturnValue(pgClient)
+    getPgClient.mockResolvedValue(pgClient)
     pgClient.connect.mockResolvedValue(dbClient)
     getDrizzleClient.mockReturnValue(drizzle)
     closeClient.mockResolvedValue(undefined)

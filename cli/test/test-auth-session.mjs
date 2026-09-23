@@ -37,7 +37,6 @@ const {
   whoamiMessage,
   logoutMessage,
 } = await import('../src/auth/session.ts')
-const { resolveAccountIdentity } = await import('../src/user/whoami.ts')
 
 await test('validateAndSaveKey rejects an empty key (no write, no network)', async () => {
   let threw = false
@@ -110,33 +109,6 @@ await test('loginSuccessMessage names the user and the scope path', () => {
   const global = loginSuccessMessage('u9', false)
   ok(/user u9/.test(global) && global.includes('~/.capgo'), 'global path mentions user + ~/.capgo')
   ok(loginSuccessMessage('u9', true).includes('./.capgo'), 'local path mentions ./.capgo')
-})
-
-await test('account identity starts ID and email RPCs in parallel', async () => {
-  const started = []
-  const finish = {}
-  const client = {
-    rpc(name) {
-      started.push(name)
-      return new Promise((resolve) => { finish[name] = resolve })
-    },
-  }
-
-  const identity = resolveAccountIdentity(client, 'test-key')
-  eq(started.join(','), 'request_actor_user_id,request_actor_email_adress')
-  finish.request_actor_email_adress({ data: 'account@example.com', error: null })
-  finish.request_actor_user_id({ data: 'user-1', error: null })
-  const result = await identity
-  eq(result.userId, 'user-1')
-  eq(result.email, 'account@example.com')
-})
-
-await test('account identity rejects missing email', async () => {
-  const client = { rpc: async name => ({ data: name === 'request_actor_user_id' ? 'user-1' : null, error: null }) }
-  let threw = false
-  try { await resolveAccountIdentity(client, 'test-key') }
-  catch (error) { threw = true; ok(/email not found/.test(error.message)) }
-  ok(threw, 'a missing email must not produce a partial identity')
 })
 
 console.log(`📊 Results: ${pass} passed, ${fail} failed`)

@@ -6,7 +6,6 @@ import { getConfig } from '../../utils'
 import { CliUserError } from '../../shared/cli-user-error'
 import { mergeCredentials } from '../credentials'
 import { withCwd } from '../cwd'
-import { getBuilderAppId, hasBuilderAppIdField } from '../app-id'
 
 export interface BuildScanContextArgs {
   appId?: string
@@ -29,14 +28,12 @@ export async function buildScanContext(args: BuildScanContextArgs): Promise<Scan
   // @capacitor/cli loadConfig() is cwd-based; honor projectDir for monorepos/workspaces.
   try { config = (await withCwd(args.projectDir, () => getConfig(true))).config }
   catch { config = undefined } // no capacitor project — checks degrade individually
-  const appId = getBuilderAppId(args.appId, config, 'native', 'defined')
+  const appId = args.appId ?? config?.appId
   if (!appId) throw new CliUserError('Missing appId: pass it explicitly or run inside a Capacitor project')
-  const nativeAppId = hasBuilderAppIdField(config) ? config?.appId ?? appId : appId
   const credentials = args.credentials
     ?? (await mergeCredentials(appId, args.platform) as Record<string, string> | undefined)
   return {
     appId,
-    nativeAppId,
     platform: args.platform,
     hostPlatform: process.platform,
     projectDir: args.projectDir,

@@ -1678,69 +1678,6 @@ $$;
 ALTER FUNCTION "public"."assert_request_principal_rank"("p_org_id" "uuid", "p_target_priority" integer, "p_mutation" "text") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."assign_app_onboarding_todo_list_version"() RETURNS "trigger"
-    LANGUAGE "plpgsql" SECURITY DEFINER
-    SET "search_path" TO ''
-    AS $_$
-DECLARE
-  v_creator uuid := auth.uid();
-  v_setup jsonb;
-BEGIN
-  IF v_creator IS NULL AND (NEW.onboarding ->> 'created_by_user_id')
-    ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-  THEN
-    v_creator := (NEW.onboarding ->> 'created_by_user_id')::uuid;
-  END IF;
-  IF EXISTS (
-    SELECT 1 FROM public.orgs AS o
-    WHERE o.id = NEW.owner_org
-      AND o.onboarding ->> 'intent' = 'ota'
-  ) THEN
-    v_setup := CASE WHEN pg_catalog.jsonb_typeof(NEW.onboarding -> 'setup') = 'object'
-      THEN NEW.onboarding -> 'setup' ELSE '{}'::jsonb END;
-    IF v_creator IS NOT NULL THEN
-      NEW.onboarding := COALESCE(NEW.onboarding, '{}'::jsonb)
-        || pg_catalog.jsonb_build_object('created_by_user_id', v_creator::text);
-    END IF;
-    NEW.onboarding := pg_catalog.jsonb_set(COALESCE(NEW.onboarding, '{}'::jsonb), '{setup}',
-      v_setup || pg_catalog.jsonb_build_object(
-        'todo_list_version', 4,
-        'ota_todo_list_version', '1',
-        'paths', pg_catalog.jsonb_build_array('ota'),
-        'selected_path', 'ota',
-        'steps', pg_catalog.jsonb_build_object('ota', pg_catalog.jsonb_build_object(
-          'login_cli_mcp', pg_catalog.jsonb_build_object('status', 'pending'),
-          'add_channel', pg_catalog.jsonb_build_object('status', 'pending'),
-          'add_updater', pg_catalog.jsonb_build_object('status', 'pending'),
-          'add_code', pg_catalog.jsonb_build_object('status', 'pending'),
-          'run_device', pg_catalog.jsonb_build_object('status', 'pending'),
-          'upload_bundle', pg_catalog.jsonb_build_object('status', 'pending'),
-          'test_update', pg_catalog.jsonb_build_object('status', 'pending')
-        ))
-      ), true);
-  ELSIF EXISTS (
-    SELECT 1 FROM public.users AS u
-    JOIN public.orgs AS o ON o.id = NEW.owner_org
-    WHERE u.id = v_creator AND o.created_by = u.id
-      AND u.onboarding ->> 'intent' = 'builder'
-      AND u.onboarding #>> '{abtests,builder_todo_list_v4,branch}' = 'A'
-  ) THEN
-    v_setup := CASE WHEN pg_catalog.jsonb_typeof(NEW.onboarding -> 'setup') = 'object'
-      THEN NEW.onboarding -> 'setup' ELSE '{}'::jsonb END;
-    NEW.onboarding := COALESCE(NEW.onboarding, '{}'::jsonb)
-      || pg_catalog.jsonb_build_object('created_by_user_id', v_creator::text);
-    NEW.onboarding := pg_catalog.jsonb_set(COALESCE(NEW.onboarding, '{}'::jsonb), '{setup}',
-      (v_setup - 'ota_todo_list_version' - 'selected_builder_platform')
-        || public.new_builder_onboarding_setup_v1(), true);
-  END IF;
-  RETURN NEW;
-END;
-$_$;
-
-
-ALTER FUNCTION "public"."assign_app_onboarding_todo_list_version"() OWNER TO "postgres";
-
-
 CREATE OR REPLACE FUNCTION "public"."audit_log_trigger"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -6271,76 +6208,6 @@ COMMENT ON FUNCTION "public"."enforce_sso_provider_client_update_guard"() IS 'BE
 
 
 
-CREATE OR REPLACE FUNCTION "public"."enqueue_app_onboarding_refreshes"("p_limit" integer DEFAULT 500) RETURNS integer
-    LANGUAGE "plpgsql" SECURITY DEFINER
-    SET "search_path" TO ''
-    AS $$
-DECLARE
-  v_batch record;
-  v_queued_at text := pg_catalog.to_char((now() AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
-  v_total integer := 0;
-  v_limit integer := GREATEST(1, LEAST(COALESCE(p_limit, 500), 500));
-BEGIN
-  IF NOT pg_catalog.pg_try_advisory_xact_lock(pg_catalog.hashtext('app_onboarding_refresh_producer')) THEN
-    RETURN 0;
-  END IF;
-  FOR v_batch IN
-    WITH candidates AS MATERIALIZED (
-      SELECT a.app_id, a.onboarding->>'queued_refresh_at' AS queued_at
-      FROM public.apps a
-      WHERE COALESCE(a.onboarding->>'refreshed_at', '') < pg_catalog.to_char((now() - interval '10 minutes') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
-        AND (
-          COALESCE(a.onboarding->>'queued_refresh_at', '') <= COALESCE(a.onboarding->>'refreshed_at', '')
-          OR a.onboarding->>'queued_refresh_at' < pg_catalog.to_char((now() - interval '30 minutes') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
-        )
-        AND COALESCE((
-          SELECT si.status = 'succeeded' OR si.trial_at > now()
-            OR EXISTS (
-              SELECT 1 FROM public.usage_credit_grants g
-              WHERE g.org_id = a.owner_org AND g.expires_at >= now()
-                AND g.credits_total > g.credits_consumed
-            )
-          FROM public.orgs o
-          LEFT JOIN public.stripe_info si ON si.customer_id = o.customer_id
-          WHERE o.id = a.owner_org
-        ), false)
-      ORDER BY COALESCE(a.onboarding->>'queued_refresh_at', ''), COALESCE(a.onboarding->>'refreshed_at', ''), a.app_id
-      LIMIT v_limit FOR UPDATE OF a SKIP LOCKED
-    ),
-    queued AS (
-      UPDATE public.apps a
-      SET onboarding = pg_catalog.jsonb_set(a.onboarding, '{queued_refresh_at}', pg_catalog.to_jsonb(v_queued_at), true)
-      FROM candidates c WHERE a.app_id = c.app_id
-      RETURNING a.app_id, c.queued_at
-    ),
-    numbered AS (
-      SELECT app_id, pg_catalog.row_number() OVER (
-        ORDER BY COALESCE(queued_at, ''), app_id
-      ) - 1 AS ordinal FROM queued
-    ), batches AS (
-      SELECT app_id, ordinal / 25 AS batch FROM numbered
-    )
-    SELECT pg_catalog.array_agg(app_id ORDER BY app_id) AS app_ids
-    FROM batches GROUP BY batch ORDER BY batch
-  LOOP
-    PERFORM pgmq.send('cron_onboarding_refresh_apps', pg_catalog.jsonb_build_object(
-      'function_name', 'cron_onboarding_refresh_apps', 'function_type', 'cloudflare',
-      'payload', pg_catalog.jsonb_build_object('appIds', v_batch.app_ids, 'queuedAt', v_queued_at)));
-    v_total := v_total + pg_catalog.cardinality(v_batch.app_ids);
-  END LOOP;
-  RETURN v_total;
-END;
-$$;
-
-
-ALTER FUNCTION "public"."enqueue_app_onboarding_refreshes"("p_limit" integer) OWNER TO "postgres";
-
-
-COMMENT ON FUNCTION "public"."enqueue_app_onboarding_refreshes"("p_limit" integer) IS 'Internal producer: at most 500 due apps from paying, trial, or credited orgs.
-Updates queued_refresh_at and enqueues batches of at most 25 atomically.';
-
-
-
 CREATE OR REPLACE FUNCTION "public"."enqueue_channel_device_counts"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -7120,15 +6987,10 @@ COMMENT ON COLUMN "public"."apps"."onboarding_completed_at" IS 'Timestamp when t
 
 COMMENT ON COLUMN "public"."apps"."onboarding" IS 'Feature ledger plus setup source.
 Shape: {"refreshed_at": iso, "features": {...}, "setup": {
-"todo_list_version": positive integer (default 2),
+"todo_list_version": positive integer (default 1),
 "source": manual|cli|mcp|ai,
 "outcome": in_progress|completed|skipped|switched_to_manual,
-"steps": {step_id: {"status": done|skipped, "at": iso}}}} for v1-v3.
-Version 1 starts with add_app; version 2 starts with login_cli_mcp.
-Version 3 has seven flat goals. Version 4 has independent paths.
-OTA v1 uses setup.ota_todo_list_version="1" and setup.steps.ota.
-Builder v1 uses setup.builder_todo_list_version="1" and
-setup.steps.builder.ios/android. Each path is present only when assigned.
+"steps": {step_id: {"status": done|skipped, "at": iso}}}}.
 Manual is the default when setup.source is missing.';
 
 
@@ -9307,223 +9169,6 @@ ALTER FUNCTION "public"."get_plan_usage_percent_detailed"("orgid" "uuid", "cycle
 
 
 COMMENT ON FUNCTION "public"."get_plan_usage_percent_detailed"("orgid" "uuid", "cycle_start" "date", "cycle_end" "date") IS 'Return plan usage percentages for the supplied date range after verifying read access; read-only callers stay read-only by using the cached metrics helper.';
-
-
-
-CREATE OR REPLACE FUNCTION "public"."get_public_builder_metrics"() RETURNS "jsonb"
-    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
-    SET "search_path" TO ''
-    AS $$
-DECLARE
-  v_period_days integer := 30;
-  v_window_start timestamptz := timezone('utc', now()) - make_interval(days => 30);
-  v_successes bigint := 0;
-  v_failures bigint := 0;
-  v_total bigint := 0;
-  v_avg_process double precision;
-  v_avg_queue double precision;
-  v_daily jsonb := '[]'::jsonb;
-  v_failures_json jsonb := '[]'::jsonb;
-  v_platforms jsonb := '[]'::jsonb;
-  v_success_rate numeric := 0;
-BEGIN
-  WITH terminal AS (
-    SELECT
-      br.platform::text AS platform,
-      (timezone('utc', br.created_at))::date AS day,
-      CASE
-        WHEN br.status IN ('succeeded', 'completed') THEN 'success'
-        WHEN br.status IN ('failed', 'cancelled', 'canceled', 'expired') THEN 'failure'
-        ELSE NULL
-      END AS outcome,
-      CASE
-        WHEN br.started_at IS NOT NULL
-          AND br.completed_at IS NOT NULL
-          AND br.completed_at >= br.started_at
-        THEN EXTRACT(EPOCH FROM (br.completed_at - br.started_at))::double precision
-        ELSE NULL
-      END AS process_seconds,
-      br.runner_wait_seconds::double precision AS queue_seconds,
-      CASE
-        WHEN br.status IN ('failed', 'cancelled', 'canceled', 'expired') THEN
-          CASE
-            WHEN lower(COALESCE(br.last_error, '')) LIKE '%script_failure%' THEN 'script_failure'
-            WHEN lower(COALESCE(br.last_error, '')) LIKE '%timeout%' THEN 'timeout'
-            WHEN lower(COALESCE(br.last_error, '')) LIKE '%runner_system_failure%' THEN 'runner_system_failure'
-            WHEN lower(COALESCE(br.last_error, '')) LIKE '%runner is not available%'
-              OR lower(COALESCE(br.last_error, '')) LIKE '%runner unavailable%' THEN 'runner_unavailable'
-            ELSE 'other'
-          END
-        ELSE NULL
-      END AS failure_reason
-    FROM public.build_requests AS br
-    WHERE br.created_at >= v_window_start
-      AND br.platform IN ('ios', 'android')
-  ),
-  scored AS (
-    SELECT * FROM terminal WHERE outcome IS NOT NULL
-  ),
-  totals AS (
-    SELECT
-      COUNT(*) FILTER (WHERE outcome = 'success') AS successes,
-      COUNT(*) FILTER (WHERE outcome = 'failure') AS failures,
-      AVG(process_seconds) FILTER (WHERE process_seconds IS NOT NULL) AS avg_process,
-      AVG(queue_seconds) FILTER (WHERE queue_seconds IS NOT NULL) AS avg_queue
-    FROM scored
-  ),
-  daily AS (
-    SELECT
-      day,
-      ROUND((
-        COUNT(*) FILTER (WHERE platform = 'ios' AND outcome = 'success')::numeric
-        / NULLIF(COUNT(*) FILTER (WHERE platform = 'ios'), 0)::numeric
-      ) * 100, 1) AS ios_rate,
-      ROUND((
-        COUNT(*) FILTER (WHERE platform = 'android' AND outcome = 'success')::numeric
-        / NULLIF(COUNT(*) FILTER (WHERE platform = 'android'), 0)::numeric
-      ) * 100, 1) AS android_rate,
-      ROUND(AVG(process_seconds) FILTER (WHERE platform = 'ios' AND process_seconds IS NOT NULL)::numeric, 1) AS ios_process,
-      ROUND(AVG(process_seconds) FILTER (WHERE platform = 'android' AND process_seconds IS NOT NULL)::numeric, 1) AS android_process
-    FROM scored
-    GROUP BY day
-  ),
-  failure_roll AS (
-    SELECT
-      failure_reason AS reason,
-      COUNT(*)::bigint AS n
-    FROM scored
-    WHERE outcome = 'failure' AND failure_reason IS NOT NULL
-    GROUP BY failure_reason
-  ),
-  failure_total AS (
-    SELECT COALESCE(SUM(n), 0)::bigint AS total FROM failure_roll
-  ),
-  platform_roll AS (
-    SELECT
-      platform AS key,
-      COUNT(*)::bigint AS outcomes,
-      COUNT(*) FILTER (WHERE outcome = 'success')::bigint AS successes,
-      COUNT(*) FILTER (WHERE outcome = 'failure')::bigint AS failures,
-      AVG(process_seconds) FILTER (WHERE process_seconds IS NOT NULL) AS avg_process,
-      AVG(queue_seconds) FILTER (WHERE queue_seconds IS NOT NULL) AS avg_queue
-    FROM scored
-    GROUP BY platform
-  ),
-  platform_outcome_total AS (
-    SELECT COALESCE(SUM(outcomes), 0)::bigint AS total FROM platform_roll
-  ),
-  platform_failure_roll AS (
-    SELECT
-      platform,
-      failure_reason AS reason,
-      COUNT(*)::bigint AS n
-    FROM scored
-    WHERE outcome = 'failure' AND failure_reason IS NOT NULL
-    GROUP BY platform, failure_reason
-  ),
-  platform_failure_ranked AS (
-    SELECT
-      pfr.platform,
-      pfr.reason,
-      pfr.n,
-      SUM(pfr.n) OVER (PARTITION BY pfr.platform) AS platform_failure_total,
-      ROW_NUMBER() OVER (PARTITION BY pfr.platform ORDER BY pfr.n DESC, pfr.reason ASC) AS rn
-    FROM platform_failure_roll AS pfr
-  )
-  SELECT
-    t.successes,
-    t.failures,
-    t.avg_process,
-    t.avg_queue,
-    COALESCE((
-      SELECT jsonb_agg(
-        jsonb_build_object(
-          'date', d.day::text,
-          'ios', d.ios_rate,
-          'android', d.android_rate,
-          'ios_process_seconds', d.ios_process,
-          'android_process_seconds', d.android_process
-        )
-        ORDER BY d.day
-      )
-      FROM daily AS d
-    ), '[]'::jsonb),
-    COALESCE((
-      SELECT jsonb_agg(
-        jsonb_build_object(
-          'reason', fr.reason,
-          'share', ROUND((fr.n::numeric / NULLIF(ft.total, 0)::numeric) * 100, 1)
-        )
-        ORDER BY (fr.n::numeric / NULLIF(ft.total, 0)::numeric) DESC, fr.reason ASC
-      )
-      FROM failure_roll AS fr
-      CROSS JOIN failure_total AS ft
-      WHERE ft.total > 0
-    ), '[]'::jsonb),
-    COALESCE((
-      SELECT jsonb_agg(
-        jsonb_build_object(
-          'key', pr.key,
-          'share', ROUND((pr.outcomes::numeric / NULLIF(pot.total, 0)::numeric) * 100, 1),
-          'success_rate', CASE
-            WHEN (pr.successes + pr.failures) > 0
-            THEN ROUND((pr.successes::numeric / (pr.successes + pr.failures)::numeric) * 100, 1)
-            ELSE NULL
-          END,
-          'avg_process_seconds', ROUND(pr.avg_process::numeric, 1),
-          'avg_queue_seconds', ROUND(pr.avg_queue::numeric, 1),
-          'top_failure', (
-            SELECT CASE
-              WHEN pfr.reason IS NULL THEN NULL
-              ELSE jsonb_build_object(
-                'reason', pfr.reason,
-                'share', ROUND((pfr.n::numeric / NULLIF(pfr.platform_failure_total, 0)::numeric) * 100, 1)
-              )
-            END
-            FROM platform_failure_ranked AS pfr
-            WHERE pfr.platform = pr.key AND pfr.rn = 1
-          )
-        )
-        ORDER BY pr.outcomes DESC, pr.key ASC
-      )
-      FROM platform_roll AS pr
-      CROSS JOIN platform_outcome_total AS pot
-    ), '[]'::jsonb)
-  INTO
-    v_successes,
-    v_failures,
-    v_avg_process,
-    v_avg_queue,
-    v_daily,
-    v_failures_json,
-    v_platforms
-  FROM totals AS t;
-
-  v_total := COALESCE(v_successes, 0) + COALESCE(v_failures, 0);
-  IF v_total > 0 THEN
-    v_success_rate := ROUND((COALESCE(v_successes, 0)::numeric / v_total::numeric) * 100, 1);
-  ELSE
-    v_success_rate := 0;
-  END IF;
-
-  RETURN jsonb_build_object(
-    'success_rate', v_success_rate,
-    'avg_process_seconds', CASE WHEN v_avg_process IS NULL THEN NULL ELSE ROUND(v_avg_process::numeric, 1) END,
-    'avg_queue_seconds', CASE WHEN v_avg_queue IS NULL THEN NULL ELSE ROUND(v_avg_queue::numeric, 1) END,
-    'period_days', v_period_days,
-    'updated_at', timezone('utc', now()),
-    'daily_platforms', COALESCE(v_daily, '[]'::jsonb),
-    'failures', COALESCE(v_failures_json, '[]'::jsonb),
-    'platforms', COALESCE(v_platforms, '[]'::jsonb)
-  );
-END;
-$$;
-
-
-ALTER FUNCTION "public"."get_public_builder_metrics"() OWNER TO "postgres";
-
-
-COMMENT ON FUNCTION "public"."get_public_builder_metrics"() IS 'Public Capgo builder metrics for the marketing site. Returns rates/shares only over the last 30 days of build_requests. SECURITY DEFINER; safe for anon.';
 
 
 
@@ -12458,21 +12103,33 @@ CREATE OR REPLACE FUNCTION "public"."merge_app_onboarding_setup"("p_existing" "j
 DECLARE
   v_current jsonb := COALESCE(p_existing, '{}'::jsonb);
   v_setup jsonb;
-  v_todo_list_version bigint := 2;
+  v_todo_list_version bigint := 1;
   v_source text;
   v_next_source text;
   v_outcome text;
   v_patch_outcome text;
   v_steps jsonb;
-  v_step_paths jsonb;
   v_patch_steps jsonb;
   v_step_id text;
   v_step jsonb;
   v_existing_step jsonb;
   v_now text;
-  v_all_present boolean := false;
+  v_all_present boolean := true;
   v_any_skipped boolean := false;
-  v_step_ids text[];
+  v_step_ids text[] := ARRAY[
+    'add_app',
+    'add_channel',
+    'add_updater',
+    'add_code',
+    'add_encryption',
+    'select_platform',
+    'build_project',
+    'run_device',
+    'add_code_change',
+    'upload_bundle',
+    'test_update',
+    'completion'
+  ];
   v_source_rank integer;
   v_next_rank integer;
 BEGIN
@@ -12494,42 +12151,6 @@ BEGIN
   THEN
     v_todo_list_version := (v_setup ->> 'todo_list_version')::bigint;
   END IF;
-
-  v_step_ids := CASE WHEN v_todo_list_version = 1 THEN ARRAY[
-    'add_app',
-    'add_channel',
-    'add_updater',
-    'add_code',
-    'add_encryption',
-    'select_platform',
-    'build_project',
-    'run_device',
-    'add_code_change',
-    'upload_bundle',
-    'test_update',
-    'completion'
-  ] WHEN v_todo_list_version = 3
-    OR (v_todo_list_version = 4
-      AND jsonb_typeof(v_setup -> 'ota_todo_list_version') = 'string'
-      AND v_setup ->> 'ota_todo_list_version' = '1') THEN ARRAY[
-    'login_cli_mcp', 'add_channel', 'add_updater', 'add_code',
-    'run_device', 'upload_bundle', 'test_update'
-  ] WHEN v_todo_list_version = 4 THEN ARRAY[]::text[]
-  ELSE ARRAY[
-    'login_cli_mcp',
-    'add_channel',
-    'add_updater',
-    'add_code',
-    'add_encryption',
-    'select_platform',
-    'build_project',
-    'run_device',
-    'add_code_change',
-    'upload_bundle',
-    'test_update',
-    'completion'
-  ] END;
-  v_all_present := cardinality(v_step_ids) > 0;
 
   v_source := CASE v_setup ->> 'source'
     WHEN 'cli' THEN 'cli'
@@ -12562,25 +12183,7 @@ BEGIN
     v_steps := '{}'::jsonb;
   END IF;
 
-  IF v_todo_list_version = 4 THEN
-    v_step_paths := v_steps;
-    v_steps := COALESCE(v_step_paths -> 'ota', '{}'::jsonb);
-    IF jsonb_typeof(v_steps) IS DISTINCT FROM 'object' THEN
-      v_steps := '{}'::jsonb;
-    END IF;
-    FOREACH v_step_id IN ARRAY v_step_ids LOOP
-      IF jsonb_typeof(v_steps -> v_step_id) IS DISTINCT FROM 'object'
-        OR COALESCE(v_steps -> v_step_id ->> 'status', '') NOT IN ('pending', 'done', 'skipped')
-      THEN
-        v_steps := jsonb_set(v_steps, ARRAY[v_step_id], jsonb_build_object('status', 'pending'), true);
-      END IF;
-    END LOOP;
-  END IF;
-
   v_patch_steps := p_patch -> 'steps';
-  IF v_todo_list_version = 4 AND jsonb_typeof(v_patch_steps -> 'ota') = 'object' THEN
-    v_patch_steps := v_patch_steps -> 'ota';
-  END IF;
   IF jsonb_typeof(v_patch_steps) = 'object' THEN
     FOR v_step_id, v_step IN
       SELECT key, value FROM jsonb_each(v_patch_steps)
@@ -12618,7 +12221,8 @@ BEGIN
   END IF;
 
   FOREACH v_step_id IN ARRAY v_step_ids LOOP
-    -- jsonb -> missing key ->> 'status' is NULL. Treat it as not reported yet.
+    -- jsonb -> missing key ->> 'status' is NULL. NULL NOT IN (...) is unknown, not true,
+    -- so treat empty status as "step not reported yet".
     IF COALESCE(v_steps -> v_step_id ->> 'status', '') NOT IN ('done', 'skipped') THEN
       v_all_present := false;
     ELSIF v_steps -> v_step_id ->> 'status' = 'skipped' THEN
@@ -12633,13 +12237,9 @@ BEGIN
     WHEN 'switched_to_manual' THEN 'switched_to_manual'
     ELSE 'in_progress'
   END;
-  IF v_todo_list_version = 4 AND cardinality(v_step_ids) = 0 THEN
-    IF v_patch_outcome IN ('skipped', 'switched_to_manual') THEN
-      v_outcome := v_patch_outcome;
-    END IF;
-  ELSIF v_all_present THEN
+  IF v_all_present THEN
     v_outcome := CASE WHEN v_any_skipped THEN 'skipped' ELSE 'completed' END;
-  ELSIF v_patch_outcome = 'skipped' OR (v_patch_outcome = 'completed' AND v_todo_list_version NOT IN (3, 4)) THEN
+  ELSIF v_patch_outcome IN ('completed', 'skipped') THEN
     v_outcome := v_patch_outcome;
   ELSIF v_patch_outcome = 'switched_to_manual' OR v_outcome = 'switched_to_manual' THEN
     v_outcome := 'switched_to_manual';
@@ -12649,19 +12249,9 @@ BEGIN
 
   v_now := to_char((now() AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
 
-  IF v_todo_list_version = 4 AND cardinality(v_step_ids) > 0 THEN
-    v_setup := v_setup || jsonb_build_object(
-      'paths', COALESCE(v_setup -> 'paths', jsonb_build_array('ota')),
-      'selected_path', COALESCE(v_setup -> 'selected_path', to_jsonb('ota'::text))
-    );
-    v_steps := jsonb_set(v_step_paths, '{ota}', v_steps, true);
-  ELSIF v_todo_list_version = 4 THEN
-    v_steps := v_step_paths;
-  END IF;
-
   RETURN (v_current - 'source' - 'outcome' - 'steps' - 'updated_at' - 'todo_list_version')
     || jsonb_build_object(
-      'setup', v_setup || jsonb_build_object(
+      'setup', jsonb_build_object(
         'todo_list_version', v_todo_list_version,
         'source', v_source,
         'outcome', v_outcome,
@@ -12679,41 +12269,6 @@ ALTER FUNCTION "public"."merge_app_onboarding_setup"("p_existing" "jsonb", "p_pa
 COMMENT ON FUNCTION "public"."merge_app_onboarding_setup"("p_existing" "jsonb", "p_patch" "jsonb") IS 'Merges versioned CLI/MCP/AI setup source, outcome, and step progress into
 apps.onboarding.setup without touching features.';
 
-
-
-CREATE OR REPLACE FUNCTION "public"."new_builder_onboarding_setup_v1"() RETURNS "jsonb"
-    LANGUAGE "sql" IMMUTABLE
-    SET "search_path" TO ''
-    AS $$
-  SELECT pg_catalog.jsonb_build_object(
-    'todo_list_version', 4,
-    'builder_todo_list_version', '1',
-    'paths', pg_catalog.jsonb_build_array('builder'),
-    'selected_path', 'builder',
-    'outcome', 'in_progress',
-    'steps', pg_catalog.jsonb_build_object(
-      'builder', pg_catalog.jsonb_build_object(
-        'ios', pg_catalog.jsonb_build_object(
-          'start_setup', pg_catalog.jsonb_build_object('status', 'pending'),
-          'choose_destination', pg_catalog.jsonb_build_object('status', 'pending'),
-          'connect_app_store', pg_catalog.jsonb_build_object('status', 'pending'),
-          'prepare_certificate', pg_catalog.jsonb_build_object('status', 'pending'),
-          'prepare_profile', pg_catalog.jsonb_build_object('status', 'pending'),
-          'successful_cloud_build', pg_catalog.jsonb_build_object('status', 'pending')
-        ),
-        'android', pg_catalog.jsonb_build_object(
-          'start_setup', pg_catalog.jsonb_build_object('status', 'pending'),
-          'prepare_keystore', pg_catalog.jsonb_build_object('status', 'pending'),
-          'connect_google_play', pg_catalog.jsonb_build_object('status', 'pending'),
-          'successful_cloud_build', pg_catalog.jsonb_build_object('status', 'pending')
-        )
-      )
-    )
-  );
-$$;
-
-
-ALTER FUNCTION "public"."new_builder_onboarding_setup_v1"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."normalize_public_channel_overlap"() RETURNS "trigger"
@@ -14481,21 +14036,16 @@ DECLARE
   queue_size bigint;
   request_timeout_ms int;
   url text;
-  onboarding_queue boolean := queue_name = 'cron_onboarding_refresh_apps';
 BEGIN
   EXECUTE pg_catalog.format('SELECT count(*) FROM pgmq.%I', 'q_' || queue_name)
   INTO queue_size;
 
   IF queue_size > 0 THEN
-    IF onboarding_queue THEN
-      batch_size := LEAST(batch_size, 4);
-    END IF;
     headers := pg_catalog.jsonb_build_object(
       'Content-Type', 'application/json',
       'apisecret', public.get_apikey()
     );
     request_timeout_ms := CASE
-      WHEN onboarding_queue THEN 100000
       WHEN queue_name = 'on_manifest_create' THEN 60000
       ELSE 8000
     END;
@@ -14506,18 +14056,13 @@ BEGIN
       10
     );
 
-    IF onboarding_queue THEN
-      calls_needed := 1;
-    END IF;
-
     FOR i IN 1..calls_needed LOOP
       PERFORM net.http_post(
         url := url,
         headers := headers,
         body := pg_catalog.jsonb_build_object(
           'queue_name', queue_name,
-          'batch_size', batch_size,
-          'wait_for_completion', onboarding_queue
+          'batch_size', batch_size
         ),
         timeout_milliseconds := request_timeout_ms
       );
@@ -17051,6 +16596,142 @@ $$;
 ALTER FUNCTION "public"."record_trial_extension_event"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."refresh_app_onboarding_progress"("p_batch_size" integer DEFAULT 500) RETURNS integer
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_limit integer := GREATEST(1, LEAST(COALESCE(p_batch_size, 500), 2000));
+  v_updated integer := 0;
+BEGIN
+  WITH batch AS (
+    SELECT apps.app_id
+    FROM public.apps
+    ORDER BY COALESCE(apps.onboarding->>'refreshed_at', ''), apps.app_id
+    LIMIT v_limit
+  ),
+  device_signals AS (
+    SELECT
+      devices.app_id,
+      bool_or(devices.install_source = 'app_store') AS has_app_store,
+      bool_or(devices.install_source = 'testflight') AS has_testflight,
+      bool_or(devices.install_source IN (
+        'google_play',
+        'amazon_appstore',
+        'samsung_galaxy_store',
+        'huawei_appgallery'
+      )) AS has_play_unknown,
+      bool_or(devices.is_prod IS TRUE AND devices.is_emulator IS NOT TRUE) AS has_native,
+      bool_or(devices.install_source IS NOT NULL) AS has_install_source,
+      MAX(devices.updated_at) AS last_device_at
+    FROM public.devices
+    INNER JOIN batch ON batch.app_id = devices.app_id
+    WHERE devices.install_source IS NOT NULL
+       OR (devices.is_prod IS TRUE AND devices.is_emulator IS NOT TRUE)
+    GROUP BY devices.app_id
+  ),
+  bundle_signals AS (
+    SELECT
+      app_versions.app_id,
+      MIN(app_versions.created_at) AS first_bundle_at,
+      MAX(app_versions.created_at) AS last_bundle_at
+    FROM public.app_versions
+    INNER JOIN batch ON batch.app_id = app_versions.app_id
+    WHERE app_versions.deleted IS NOT TRUE
+      AND app_versions.name IS DISTINCT FROM 'builtin'
+      AND app_versions.name IS DISTINCT FROM 'unknown'
+    GROUP BY app_versions.app_id
+  ),
+  install_signals AS (
+    SELECT
+      daily_version.app_id,
+      MIN(daily_version.date)::timestamptz AS first_install_at,
+      MAX(daily_version.date)::timestamptz AS last_install_at
+    FROM public.daily_version
+    INNER JOIN batch ON batch.app_id = daily_version.app_id
+    WHERE COALESCE(daily_version.install, 0) > 0
+    GROUP BY daily_version.app_id
+  ),
+  build_signals AS (
+    SELECT
+      build_requests.app_id,
+      MIN(build_requests.created_at) AS first_build_at,
+      MIN(build_requests.completed_at) FILTER (
+        WHERE build_requests.status IN ('succeeded', 'released')
+      ) AS first_success_at,
+      MAX(COALESCE(build_requests.completed_at, build_requests.created_at)) AS last_build_at
+    FROM public.build_requests
+    INNER JOIN batch ON batch.app_id = build_requests.app_id
+    GROUP BY build_requests.app_id
+  ),
+  merged AS (
+    SELECT
+      batch.app_id,
+      public.merge_app_onboarding_feature(
+        apps.onboarding->'features'->'cli_install',
+        device_signals.last_device_at,
+        device_signals.last_device_at,
+        device_signals.last_device_at,
+        NULL
+      ) AS cli_install,
+      public.merge_app_onboarding_feature(
+        apps.onboarding->'features'->'ota',
+        bundle_signals.first_bundle_at,
+        install_signals.first_install_at,
+        GREATEST(install_signals.last_install_at, bundle_signals.last_bundle_at),
+        CASE
+          WHEN device_signals.has_app_store THEN 'store_live'
+          WHEN device_signals.has_testflight THEN 'testflight'
+          WHEN device_signals.has_play_unknown THEN 'play_unknown'
+          WHEN device_signals.has_native THEN 'native_unknown'
+          WHEN device_signals.has_install_source THEN 'local_only'
+          ELSE 'no_device'
+        END
+      ) AS ota,
+      public.merge_app_onboarding_feature(
+        apps.onboarding->'features'->'builder',
+        build_signals.first_build_at,
+        build_signals.first_success_at,
+        build_signals.last_build_at,
+        NULL
+      ) AS builder
+    FROM batch
+    INNER JOIN public.apps ON apps.app_id = batch.app_id
+    LEFT JOIN device_signals ON device_signals.app_id = batch.app_id
+    LEFT JOIN bundle_signals ON bundle_signals.app_id = batch.app_id
+    LEFT JOIN install_signals ON install_signals.app_id = batch.app_id
+    LEFT JOIN build_signals ON build_signals.app_id = batch.app_id
+  )
+  UPDATE public.apps
+  SET
+    onboarding = jsonb_strip_nulls(
+      COALESCE(apps.onboarding, '{}'::jsonb)
+      || jsonb_build_object(
+        'refreshed_at', to_char((now() AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+        'features', COALESCE(apps.onboarding->'features', '{}'::jsonb) || jsonb_build_object(
+          'cli_install', merged.cli_install,
+          'ota', merged.ota,
+          'builder', merged.builder
+        )
+      )
+    ),
+    updated_at = now()
+  FROM merged
+  WHERE apps.app_id = merged.app_id;
+
+  GET DIAGNOSTICS v_updated = ROW_COUNT;
+  RETURN v_updated;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."refresh_app_onboarding_progress"("p_batch_size" integer) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."refresh_app_onboarding_progress"("p_batch_size" integer) IS 'Hourly bounded backfill/refresh of apps.onboarding from devices, bundles, daily_version installs, and build_requests. Never called from plugin request paths.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."refresh_app_rollout_channel_count"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -17382,7 +17063,7 @@ $$;
 ALTER FUNCTION "public"."refresh_one_app_onboarding_progress"("p_app_id" character varying) OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."refresh_one_app_onboarding_progress"("p_app_id" character varying) IS 'Internal. Refreshes onboarding features for one app from devices, bundles, daily_version installs, and build_requests when Getting Started is verified. Never called from plugin request paths.';
+COMMENT ON FUNCTION "public"."refresh_one_app_onboarding_progress"("p_app_id" character varying) IS 'Internal. Refreshes apps.onboarding features for one app_id from devices, bundles, daily_version installs, and build_requests. Same merge as the hourly batch. Never called from plugin request paths.';
 
 
 
@@ -17745,24 +17426,6 @@ $$;
 
 
 ALTER FUNCTION "public"."remove_old_jobs"() OWNER TO "postgres";
-
-
-CREATE OR REPLACE FUNCTION "public"."request_actor_email_adress"() RETURNS "text"
-    LANGUAGE "sql" SECURITY DEFINER
-    SET "search_path" TO ''
-    AS $$
-  SELECT u.email::text
-  FROM public.users AS u
-  -- Evaluate the volatile actor helper once so the users PK bounds the lookup.
-  WHERE u.id = (SELECT public.request_actor_user_id())
-$$;
-
-
-ALTER FUNCTION "public"."request_actor_email_adress"() OWNER TO "postgres";
-
-
-COMMENT ON FUNCTION "public"."request_actor_email_adress"() IS 'Returns only the validated request actor email for CLI account whoami; no caller-supplied user ID is accepted.';
-
 
 
 CREATE OR REPLACE FUNCTION "public"."request_actor_user_id"() RETURNS "uuid"
@@ -24310,15 +23973,7 @@ CREATE INDEX "idx_apps_default_upload_channel" ON "public"."apps" USING "btree" 
 
 
 
-CREATE INDEX "idx_apps_onboarding_login_creator" ON "public"."apps" USING "btree" ((("onboarding" ->> 'created_by_user_id'::"text"))) WHERE (("onboarding" #>> '{setup,todo_list_version}'::"text"[]) = ANY (ARRAY['2'::"text", '3'::"text", '4'::"text"]));
-
-
-
 CREATE INDEX "idx_apps_onboarding_ota_stage" ON "public"."apps" USING "btree" ((((("onboarding" -> 'features'::"text") -> 'ota'::"text") ->> 'stage'::"text")));
-
-
-
-CREATE INDEX "idx_apps_onboarding_queued_refresh_at" ON "public"."apps" USING "btree" (COALESCE(("onboarding" ->> 'queued_refresh_at'::"text"), ''::"text"), COALESCE(("onboarding" ->> 'refreshed_at'::"text"), ''::"text"), "app_id");
 
 
 
@@ -24514,7 +24169,7 @@ CREATE INDEX "idx_id_app_id_app_versions_meta" ON "public"."app_versions_meta" U
 
 
 
-CREATE INDEX "idx_manifest_app_version_id_file_hash" ON "public"."manifest" USING "btree" ("app_version_id", "file_hash") INCLUDE ("file_size");
+CREATE INDEX "idx_manifest_app_version_id" ON "public"."manifest" USING "btree" ("app_version_id");
 
 
 
@@ -25231,10 +24886,6 @@ CREATE OR REPLACE TRIGGER "update_webhooks_updated_at" BEFORE UPDATE ON "public"
 
 
 CREATE OR REPLACE TRIGGER "validate_channel_preview_role_binding" BEFORE INSERT OR UPDATE OF "role_id", "scope_type", "principal_type", "principal_id", "org_id", "app_id", "channel_id", "parent_binding_id", "expires_at", "is_direct" ON "public"."role_bindings" FOR EACH ROW EXECUTE FUNCTION "public"."validate_channel_preview_role_binding"();
-
-
-
-CREATE OR REPLACE TRIGGER "zz_assign_app_onboarding_todo_list_version" BEFORE INSERT ON "public"."apps" FOR EACH ROW EXECUTE FUNCTION "public"."assign_app_onboarding_todo_list_version"();
 
 
 
@@ -27252,11 +26903,6 @@ GRANT ALL ON FUNCTION "public"."assert_request_principal_rank"("p_org_id" "uuid"
 
 
 
-REVOKE ALL ON FUNCTION "public"."assign_app_onboarding_todo_list_version"() FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."assign_app_onboarding_todo_list_version"() TO "service_role";
-
-
-
 REVOKE ALL ON FUNCTION "public"."audit_log_trigger"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."audit_log_trigger"() TO "service_role";
 
@@ -27698,11 +27344,6 @@ GRANT ALL ON FUNCTION "public"."enforce_sso_provider_client_update_guard"() TO "
 
 
 
-REVOKE ALL ON FUNCTION "public"."enqueue_app_onboarding_refreshes"("p_limit" integer) FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."enqueue_app_onboarding_refreshes"("p_limit" integer) TO "service_role";
-
-
-
 REVOKE ALL ON FUNCTION "public"."enqueue_channel_device_counts"() FROM PUBLIC;
 
 
@@ -28037,13 +27678,6 @@ GRANT ALL ON FUNCTION "public"."get_plan_usage_percent_detailed"("orgid" "uuid")
 REVOKE ALL ON FUNCTION "public"."get_plan_usage_percent_detailed"("orgid" "uuid", "cycle_start" "date", "cycle_end" "date") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."get_plan_usage_percent_detailed"("orgid" "uuid", "cycle_start" "date", "cycle_end" "date") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."get_plan_usage_percent_detailed"("orgid" "uuid", "cycle_start" "date", "cycle_end" "date") TO "service_role";
-
-
-
-REVOKE ALL ON FUNCTION "public"."get_public_builder_metrics"() FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."get_public_builder_metrics"() TO "service_role";
-GRANT ALL ON FUNCTION "public"."get_public_builder_metrics"() TO "anon";
-GRANT ALL ON FUNCTION "public"."get_public_builder_metrics"() TO "authenticated";
 
 
 
@@ -28561,11 +28195,6 @@ GRANT ALL ON FUNCTION "public"."merge_app_onboarding_feature"("p_existing" "json
 
 REVOKE ALL ON FUNCTION "public"."merge_app_onboarding_setup"("p_existing" "jsonb", "p_patch" "jsonb") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."merge_app_onboarding_setup"("p_existing" "jsonb", "p_patch" "jsonb") TO "service_role";
-
-
-
-REVOKE ALL ON FUNCTION "public"."new_builder_onboarding_setup_v1"() FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."new_builder_onboarding_setup_v1"() TO "service_role";
 
 
 
@@ -29380,6 +29009,11 @@ GRANT ALL ON FUNCTION "public"."record_trial_extension_event"() TO "service_role
 
 
 
+REVOKE ALL ON FUNCTION "public"."refresh_app_onboarding_progress"("p_batch_size" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."refresh_app_onboarding_progress"("p_batch_size" integer) TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."refresh_app_rollout_channel_count"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."refresh_app_rollout_channel_count"() TO "service_role";
 
@@ -29447,13 +29081,6 @@ GRANT ALL ON FUNCTION "public"."reject_access_due_to_password_policy"("org_id" "
 
 
 REVOKE ALL ON FUNCTION "public"."remove_old_jobs"() FROM PUBLIC;
-
-
-
-REVOKE ALL ON FUNCTION "public"."request_actor_email_adress"() FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."request_actor_email_adress"() TO "service_role";
-GRANT ALL ON FUNCTION "public"."request_actor_email_adress"() TO "anon";
-GRANT ALL ON FUNCTION "public"."request_actor_email_adress"() TO "authenticated";
 
 
 

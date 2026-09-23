@@ -70,12 +70,6 @@ For an app that is already configured, upload a new bundle with:
 npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel production
 ```
 
-Cordova projects without `capacitor.config.*`:
-
-```bash
-npx @capgo/cli@latest bundle upload com.example.app --mode cordova --path www --channel production
-```
-
 ## CI Upload Example
 
 ```bash
@@ -148,7 +142,6 @@ Capgo continues to load the root config while writing only the selected source. 
   - [Add](#app-add)
   - [Delete](#app-delete)
   - [List](#app-list)
-  - [Todo](#app-todo)
   - [Debug](#app-debug)
   - [Setting](#app-setting)
   - [Set](#app-set)
@@ -163,7 +156,7 @@ Capgo continues to load the root config while writing only the selected source. 
   - [Create](#key-create)
   - [Delete_old](#key-delete_old)
 - 👤 [Account](#account)
-  - [Whoami](#account-whoami)
+  - [Id](#account-id)
 - 🔹 [Organization](#organization)
   - [List](#organization-list)
   - [Add](#organization-add)
@@ -391,7 +384,6 @@ npx @capgo/cli@latest bundle upload
 Version must be > 0.0.0 and unique. Deleted versions cannot be reused for security.
 External option: Store only a URL link (useful for apps >200MB or privacy requirements).
 Capgo never inspects external content. Add encryption for trustless security.
-Cordova example: npx @capgo/cli@latest bundle upload com.example.app --mode cordova --path www --channel production
 
 **Example:**
 
@@ -404,8 +396,7 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--mode** | <code>string</code> | Project framework mode. Use cordova for Cordova apps without capacitor.config (webDir defaults to www) |
-| **-p** | <code>string</code> | Path of the folder to upload, if not provided it will use the webDir set in capacitor.config (or www with --mode cordova) |
+| **-p** | <code>string</code> | Path of the folder to upload, if not provided it will use the webDir set in capacitor.config |
 | **-c** | <code>string</code> | Channel to link to. Use commas for multiple channels, for example production,beta |
 | **--rollout** | <code>string</code> | Set the uploaded bundle as this channel's rollout target at a percentage from 0 to 100 |
 | **--rollout-percentage-bps** | <code>string</code> | Set the uploaded bundle rollout percentage in basis points from 0 to 10000 |
@@ -752,31 +743,6 @@ npx @capgo/cli@latest app list
 | **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
 | **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
 
-### <a id="app-todo"></a> 🔹 **Todo**
-
-**Alias:** `todoList`
-
-```bash
-npx @capgo/cli@latest app todo
-```
-
-📋 Show your app's onboarding todo list with done, skipped, and pending tasks.
-Uses the same live progress checks as the Capgo dashboard. The app ID can be inferred from your Capacitor project.
-
-**Example:**
-
-```bash
-npx @capgo/cli@latest app todo com.example.app
-```
-
-**Options:**
-
-| Param          | Type          | Description          |
-| -------------- | ------------- | -------------------- |
-| **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
-
 ### <a id="app-debug"></a> 🐞 **Debug**
 
 ```bash
@@ -1119,20 +1085,18 @@ npx @capgo/cli@latest key delete_old
 
 👤 Manage your Capgo account details and retrieve information for support or collaboration.
 
-### <a id="account-whoami"></a> 🔹 **Whoami**
-
-**Alias:** `id`
+### <a id="account-id"></a> 🔹 **Id**
 
 ```bash
-npx @capgo/cli@latest account whoami
+npx @capgo/cli@latest account id
 ```
 
-🪪 Retrieve your account ID and email address.
+🪪 Retrieve your account ID, safe to share for collaboration or support purposes in Discord or other platforms.
 
 **Example:**
 
 ```bash
-npx @capgo/cli@latest account whoami
+npx @capgo/cli@latest account id
 ```
 
 **Options:**

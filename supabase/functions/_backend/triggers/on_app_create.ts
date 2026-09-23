@@ -31,7 +31,7 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'INSERT'), async (c)
   // The app_versions table uses a DB trigger (auto_owner_org_by_app_id) that derives owner_org
   // from apps.app_id. If the app is deleted before this async trigger runs, inserting default
   // versions will fail with a NOT NULL violation. Always re-check that the app still exists.
-  const pg = getPgClient(c, true)
+  const pg = await getPgClient(c, true)
   const drizzleClient = getDrizzleClient(pg)
   let appExists = false
   let ownerOrg: string | undefined

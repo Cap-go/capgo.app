@@ -130,7 +130,7 @@ export async function syncOrgOnboardingIntentForOrg(
   org: { id: string, management_email?: string | null, created_by?: string | null, onboarding?: unknown },
 ) {
   const intent = parseOrgOnboardingIntent(org.onboarding)
-  const pgClient = getPgClient(c, true)
+  const pgClient = await getPgClient(c, true)
   const drizzleClient = getDrizzleClient(pgClient)
 
   try {

@@ -79,7 +79,7 @@ export function buildAdminABTestPublishIntentOutcome(
 }
 
 export async function getAdminABTestPublishIntentOutcome(c: Context): Promise<AdminABTestPublishIntentOutcome> {
-  const pgClient = getPgClient(c, true)
+  const pgClient = await getPgClient(c, true)
   try {
     const result = await pgClient.query<AdminABTestPublishIntentOutcomeRow>(
       `WITH exposed_users AS (

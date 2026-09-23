@@ -29,18 +29,4 @@ describe('app onboarding step PostHog event', () => {
       },
     })
   })
-
-  it.concurrent('attributes queue observations to the app rather than a human', () => {
-    expect(buildAppOnboardingStepPosthogEvent({
-      appId: 'com.example.app',
-      system: true,
-      change: { stepId: 'run_device', status: 'done', at: '2026-09-11T18:00:00.000Z', historyLength: 1, historyFull: false },
-      orgId: 'org-id',
-      setup: { todo_list_version: 4, ota_todo_list_version: '1', source: 'manual', outcome: 'in_progress', steps: {} },
-    })).toMatchObject({
-      distinct_id: 'app-onboarding-app:com.example.app',
-      setPersonProperties: false,
-      nonPersonTags: { auth_type: 'system', step_id: 'run_device', todo_list_version: 4 },
-    })
-  })
 })

@@ -773,7 +773,7 @@ async function readReleaseMarkers(
   start: Dayjs,
   endExclusive: Dayjs,
 ) {
-  const db = getPgClient(c, true)
+  const db = await getPgClient(c, true)
   try {
     const result = await db.query<NativeObserveReleaseMarker>(
       releaseMarkersQuery,
@@ -884,7 +884,7 @@ async function readNativeObserveStatsSB(
   const { appId, days, labels, start, endExclusive, endInclusive, versionGroup } = input
   const params = [appId, start.toISOString(), endExclusive.toISOString(), nativeObserveActions]
   const paramsWithIssues = [...params, issueActions]
-  const db = getPgClient(c, true)
+  const db = await getPgClient(c, true)
 
   try {
     const dailyResult = await db.query<NativeObserveMetricRow>(dailyStatsQuery, params)
@@ -973,7 +973,7 @@ export async function readNativeObserveStats(
 }
 
 async function readNativeObservePluginStatsSB(c: Context<MiddlewareKeyVariables>, appId: string) {
-  const db = getPgClient(c, true)
+  const db = await getPgClient(c, true)
 
   try {
     const pluginVersionResult = await db.query<NativeObservePluginVersionRow>(pluginVersionStatsQuery, [appId])

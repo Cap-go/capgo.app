@@ -339,7 +339,7 @@ type ManifestCleanupEntry = {
  * already-trashed paths are idempotent.
  */
 async function deleteManifest(c: Context, record: Database['public']['Tables']['app_versions']['Row']) {
-  const readPgClient = getPgClient(c, true)
+  const readPgClient = await getPgClient(c, true)
   const drizzleClient = getDrizzleClient(readPgClient)
 
   let manifestEntries: ManifestCleanupEntry[] = []
@@ -364,7 +364,7 @@ async function deleteManifest(c: Context, record: Database['public']['Tables']['
     for (let i = 0; i < manifestEntries.length; i += MANIFEST_TRASH_CONCURRENCY) {
       const batch = manifestEntries.slice(i, i + MANIFEST_TRASH_CONCURRENCY)
       await Promise.all(batch.map(async (entry) => {
-        const entryPg = getPgClient(c, false)
+        const entryPg = await getPgClient(c, false)
         try {
           await entryPg.query('BEGIN')
           // Serialize shared-hash cleanup across concurrent deleted versions.
@@ -419,7 +419,7 @@ async function deleteManifest(c: Context, record: Database['public']['Tables']['
     }
   }
 
-  const writePgClient = getPgClient(c, false)
+  const writePgClient = await getPgClient(c, false)
   try {
     await writePgClient.query('BEGIN')
     try {

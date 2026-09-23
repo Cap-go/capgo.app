@@ -16,8 +16,6 @@ const fixtureId = randomUUID()
 const orgId = randomUUID()
 const famousAppId = `com.test.fame.iconic.${fixtureId.slice(0, 8)}`
 const nicheAppId = `com.test.fame.niche.${fixtureId.slice(0, 8)}`
-const capgoDemoAppId = `app.capgo.famehide.${fixtureId.slice(0, 8)}`
-const leakedAppId = `com.test.fame.leaked.${fixtureId.slice(0, 8)}`
 const customerId = `cus_fame_${fixtureId.replaceAll('-', '').slice(0, 20)}`
 
 const INSIGHTS_START = '2026-04-01T00:00:00.000Z'
@@ -42,24 +40,20 @@ describe('admin famous apps', () => {
     await executeSQL(`
       INSERT INTO public.apps (app_id, name, icon_url, owner_org)
       VALUES
-        ($1, 'National Bank', 'https://example.com/bank.png', $5::uuid),
-        ($2, 'Local Utility', 'https://example.com/util.png', $5::uuid),
-        ($3, 'Capgo Brightness', 'https://example.com/capgo.png', $5::uuid),
-        ($4, 'Leaked Startup', 'https://example.com/leak.png', $5::uuid)
-    `, [famousAppId, nicheAppId, capgoDemoAppId, leakedAppId, orgId])
+        ($1, 'National Bank', 'https://example.com/bank.png', $3::uuid),
+        ($2, 'Local Utility', 'https://example.com/util.png', $3::uuid)
+    `, [famousAppId, nicheAppId, orgId])
     await executeSQL(`
       INSERT INTO public.app_fame (
         app_id, fame_score, confidence, tier, category, known_as, summary, model
       ) VALUES
         ($1, 94, 82, 'iconic', 'finance', 'National Bank', 'Major national consumer bank.', 'test-model'),
-        ($2, 38, 60, 'niche', 'utilities', 'Local Utility', 'Regional utility with little public fame.', 'test-model'),
-        ($3, 100, 90, 'iconic', 'software', 'Capgo', 'Internal plugin demo.', 'test-model'),
-        ($4, 100, 90, 'iconic', '90-100', 'Leaked Startup', 'Iconic global consumer brand.', 'test-model')
-    `, [famousAppId, nicheAppId, capgoDemoAppId, leakedAppId])
+        ($2, 38, 60, 'niche', 'utilities', 'Local Utility', 'Regional utility with little public fame.', 'test-model')
+    `, [famousAppId, nicheAppId])
   })
 
   afterAll(async () => {
-    await executeSQL(`DELETE FROM public.apps WHERE app_id = ANY($1::text[])`, [[famousAppId, nicheAppId, capgoDemoAppId, leakedAppId]])
+    await executeSQL(`DELETE FROM public.apps WHERE app_id = ANY($1::text[])`, [[famousAppId, nicheAppId]])
     await executeSQL(`DELETE FROM public.orgs WHERE id = $1::uuid`, [orgId])
     await executeSQL(`DELETE FROM public.stripe_info WHERE customer_id = $1`, [customerId])
     await pool.end()
@@ -128,31 +122,6 @@ describe('admin famous apps', () => {
     }
     expect(payload.data.apps.some(app => app.app_id === famousAppId)).toBe(true)
     expect(payload.data.apps.some(app => app.app_id === nicheAppId)).toBe(false)
-  })
-
-  it('hides Capgo plugin demos and leaked rubric scores from the famous list', async () => {
-    const response = await fetchTestRequest(`${BASE_URL}/private/admin_stats`, {
-      method: 'POST',
-      headers: adminHeaders,
-      body: JSON.stringify({
-        metric_category: 'famous_apps',
-        start_date: INSIGHTS_START,
-        end_date: INSIGHTS_END,
-        min_score: 80,
-        search: fixtureId.slice(0, 8),
-        limit: 50,
-        offset: 0,
-      }),
-    })
-
-    expect(response.status).toBe(200)
-    const payload = await response.json() as {
-      data: { apps: Array<{ app_id: string }> }
-    }
-    const appIds = payload.data.apps.map(app => app.app_id)
-    expect(appIds).toContain(famousAppId)
-    expect(appIds).not.toContain(capgoDemoAppId)
-    expect(appIds).not.toContain(leakedAppId)
   })
 
   it('hides app_fame from authenticated users through RLS', async () => {

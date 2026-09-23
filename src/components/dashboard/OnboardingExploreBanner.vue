@@ -12,10 +12,7 @@ const { t } = useI18n()
 const router = useRouter()
 
 function continueOnboarding() {
-  router.push({
-    path: '/onboarding/app',
-    query: { resume: props.appId, step: 'setup' },
-  })
+  router.push(`/app/new?resume=${encodeURIComponent(props.appId)}`)
 }
 </script>
 

@@ -62,7 +62,7 @@ app.post('/', middlewareAuth, async (c) => {
   }
 
   if (result.verified) {
-    const pgClient = getPgClient(c)
+    const pgClient = await getPgClient(c)
     try {
       const updateResult = await pgClient.query(
         `UPDATE sso_providers 

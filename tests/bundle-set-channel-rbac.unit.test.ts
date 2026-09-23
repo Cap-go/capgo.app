@@ -15,12 +15,17 @@ vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
   checkPermissionPg: (...args: unknown[]) => checkPermissionPgMock(...args),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
-  closeClient: (...args: unknown[]) => closeClientMock(...args),
-  getDrizzleClient: (...args: unknown[]) => getDrizzleClientMock(...args),
-  getPgClient: () => pgClientMock,
-  logPgError: (...args: unknown[]) => logPgErrorMock(...args),
-}))
+vi.mock('../supabase/functions/_backend/utils/pg.ts', async () => {
+  const { checkoutPgClient, releasePgClient } = await import('./helpers/pg-checkout-release-mocks.ts')
+  return {
+    closeClient: (...args: unknown[]) => closeClientMock(...args),
+    getDrizzleClient: (...args: unknown[]) => getDrizzleClientMock(...args),
+    getPgClient: async () => pgClientMock,
+    checkoutPgClient,
+    releasePgClient,
+    logPgError: (...args: unknown[]) => logPgErrorMock(...args),
+  }
+})
 
 const { setChannel } = await import('../supabase/functions/_backend/public/bundle/set_channel.ts')
 

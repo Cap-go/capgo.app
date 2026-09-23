@@ -44,7 +44,6 @@ const TOTAL_STAGES = 8
 
 export interface AppflowAppProps {
   appId: string
-  packageName?: string
   /** Migration scope ('ios' | 'android') from the single-platform "migrating from Appflow?" gate. */
   scope: MigrationScope
   apikey?: string
@@ -55,7 +54,7 @@ export interface AppflowAppProps {
   onBeforeExit?: OnboardingBeforeExit
 }
 
-const AppflowApp: FC<AppflowAppProps> = ({ appId, packageName, scope, apikey, supaHost, journeyId, onStep, onResult, onBeforeExit }) => {
+const AppflowApp: FC<AppflowAppProps> = ({ appId, scope, apikey, supaHost, journeyId, onStep, onResult, onBeforeExit }) => {
   const { exit } = useApp()
   const { rows: terminalRows } = useTerminalSize()
   const [progress, setProgress] = useState<AppflowProgress>(() => ({ scope, capgoAppId: appId, migratable: { ios: false, android: false }, completedSteps: [] }))
@@ -68,7 +67,7 @@ const AppflowApp: FC<AppflowAppProps> = ({ appId, packageName, scope, apikey, su
   const [buildOutput, setBuildOutput] = useState<string[]>([])
   // Guards a single deps build (the appflow-side validators/token) + a single
   // in-flight auto effect per step.
-  const depsRef = useRef(buildAppflowEffectDeps({ appId, packageName: packageName ?? appId }))
+  const depsRef = useRef(buildAppflowEffectDeps({ appId, packageName: appId }))
   // Mirror buildOutput into a ref so finishMigration can lift the queued build
   // URL into the durable summary without taking buildOutput as a dependency
   // (which would rebuild the callback on every streamed line).

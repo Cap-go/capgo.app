@@ -232,7 +232,7 @@ export async function sendNotifOrg(
   }
 
   // Create write-capable drizzle client for mutations
-  const pgClient = getPgClient(c)
+  const pgClient = await getPgClient(c)
   const writeClient = createDrizzleClient(pgClient)
 
   let shouldSend = false
@@ -325,7 +325,7 @@ export async function claimNotifOrgOnce(
     return false
   }
 
-  const ownedPgClient = writeClient ? undefined : getPgClient(c)
+  const ownedPgClient = writeClient ? undefined : await getPgClient(c)
   const effectiveWriteClient = writeClient ?? createDrizzleClient(ownedPgClient!)
 
   try {
@@ -360,7 +360,7 @@ export async function sendNotifOrgOnce(
     return { sent: false, cleanupFailed: false }
   }
 
-  const ownedPgClient = writeClient ? undefined : getPgClient(c)
+  const ownedPgClient = writeClient ? undefined : await getPgClient(c)
   const effectiveWriteClient = writeClient ?? createDrizzleClient(ownedPgClient!)
 
   try {

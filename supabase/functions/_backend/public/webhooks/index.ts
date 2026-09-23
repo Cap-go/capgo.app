@@ -22,7 +22,7 @@ async function apiKeyHasAppScopedBinding(
   if (!apikey.rbac_id)
     return false
 
-  const pgClient = getPgClient(c)
+  const pgClient = await getPgClient(c)
   try {
     const result = await pgClient.query<{ has_app_scope: boolean }>(
       `

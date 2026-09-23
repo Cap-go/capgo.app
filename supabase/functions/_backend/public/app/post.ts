@@ -1,7 +1,6 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
-import { getOrCreateUserABTests } from '../../utils/ab_tests.ts'
 import { applyAppOnboardingPatch, isAppOnboardingSource } from '../../utils/appOnboarding.ts'
 import { addAppCreatorToOnboarding, resolveAppCreatorEmail } from '../../utils/app_creator.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
@@ -59,12 +58,10 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
   }
   if (body.icon && !normalizedIcon)
     throw simpleError('invalid_icon_path', 'Icon path must belong to this app organization')
-  // Ensure intent-gated assignment also exists for apps created outside the wizard.
-  await getOrCreateUserABTests(c, auth.userId)
   let pgClient
   let data: Database['public']['Tables']['apps']['Row'] | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const storedCreator = auth.claims?.email
       ? undefined
       : await pgClient.query<{ email: string }>('SELECT email FROM public.users WHERE id = $1 LIMIT 1', [auth.userId])

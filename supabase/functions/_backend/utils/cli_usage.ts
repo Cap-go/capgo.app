@@ -76,7 +76,7 @@ async function resolveApikeyEmails(c: Context, apikeyIds: string[]): Promise<Map
   if (ids.length === 0)
     return emails
 
-  const pgClient = getPgClient(c, true)
+  const pgClient = await getPgClient(c, true)
   try {
     const result = await pgClient.query<{ rbac_id: string, email: string }>(
       `SELECT a.rbac_id::text AS rbac_id, u.email
@@ -137,7 +137,7 @@ export function trackCliUsage(c: Context, event: CliUsageEvent) {
     }
 
     backgroundTask(c, (async () => {
-      const pgClient = getPgClient(c, false)
+      const pgClient = await getPgClient(c, false)
       try {
         await pgClient.query(
           `INSERT INTO public.cli_usage
@@ -237,7 +237,7 @@ async function getAdminCliUsageFromPostgres(
   start_date: string,
   end_date: string,
 ): Promise<AdminCliUsageStats> {
-  const pgClient = getPgClient(c, true)
+  const pgClient = await getPgClient(c, true)
   try {
     const [totalRes, versionRes, commandRes, apiVersionRes, dayRes, userRes] = await Promise.all([
       pgClient.query<{ total: string }>(

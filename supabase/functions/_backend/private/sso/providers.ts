@@ -6,7 +6,7 @@ import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { BRES, createHono, parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_jwt.ts'
 import { cloudlogErr } from '../../utils/logging.ts'
-import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { closeClient, getPgClient, type PgClient} from '../../utils/pg.ts'
 import { requireEnterprisePlan } from '../../utils/plan-gating.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { createSSOProvider, deleteSSOProvider, ManagementAPIError } from '../../utils/supabase-management.ts'
@@ -91,9 +91,9 @@ async function requireManageSsoPermission(c: Context<MiddlewareKeyVariables>, or
 }
 
 async function syncAuthUsersSsoOnlyByDomain(c: Context<MiddlewareKeyVariables>, domain: string, isSsoOnly: boolean): Promise<void> {
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     await pgClient.query(
       `
         update auth.users

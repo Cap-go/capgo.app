@@ -4,7 +4,7 @@ import type { Database } from '../../utils/supabase.types.ts'
 import { lockOnboardingApp, unlockOnboardingApp } from '../../utils/demo.ts'
 import { simpleError } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
-import { closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
+import { closeClient, getPgClient, logPgError, type PgClient } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { supabaseAdmin } from '../../utils/supabase.ts'
 
@@ -225,8 +225,6 @@ function generateDeviceId(): string {
   return crypto.randomUUID()
 }
 
-type PgClient = ReturnType<typeof getPgClient>
-
 interface SeedDemoAppDataOptions {
   appUuid: string
   appId: string
@@ -277,7 +275,7 @@ async function seedOnboardingDemoDataInTransaction(
   c: Context<MiddlewareKeyVariables>,
   options: SeedDemoAppDataOptions,
 ): Promise<void> {
-  const pgClient = getPgClient(c)
+  const pgClient = await getPgClient(c)
   let shouldRollback = false
 
   try {

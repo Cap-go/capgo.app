@@ -4,7 +4,7 @@ import type { Database } from '../../utils/supabase.types.ts'
 import { HTTPException } from 'hono/http-exception'
 import { throwIfChannelUpdatePackageMismatch } from '../../utils/channel_update_package.ts'
 import { simpleError } from '../../utils/hono.ts'
-import { closeClient, getDrizzleClient, getPgClient, logPgError } from '../../utils/pg.ts'
+import { checkoutPgClient, closeClient, getDrizzleClient, getPgClient, logPgError, releasePgClient} from '../../utils/pg.ts'
 import { checkPermissionPg } from '../../utils/rbac.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
@@ -14,9 +14,8 @@ export interface SetChannelBody {
   channel_id: number
 }
 
-export interface PgQueryClient {
+export interface SetChannelDbClient {
   query: <TRow = Record<string, unknown>>(text: string, params?: unknown[]) => Promise<{ rowCount?: number | null, rows: TRow[] }>
-  release: () => void
 }
 
 interface ChannelRow { name: string, owner_org: string }
@@ -46,7 +45,7 @@ function getEffectiveApikey(c: Context<MiddlewareKeyVariables>, apikey: Database
   return effectiveApikey
 }
 
-async function fetchTargetChannel(dbClient: PgQueryClient, body: SetChannelBody) {
+async function fetchTargetChannel(dbClient: SetChannelDbClient, body: SetChannelBody) {
   const channelResult = await dbClient.query<ChannelRow>(
     `SELECT name, owner_org
      FROM public.channels
@@ -59,7 +58,7 @@ async function fetchTargetChannel(dbClient: PgQueryClient, body: SetChannelBody)
   return (channelResult.rowCount ?? 0) === 1 ? channelResult.rows[0] : null
 }
 
-async function fetchVersionName(dbClient: PgQueryClient, body: SetChannelBody) {
+async function fetchVersionName(dbClient: SetChannelDbClient, body: SetChannelBody) {
   const versionResult = await dbClient.query<{ name: string }>(
     `SELECT name
      FROM public.app_versions
@@ -75,7 +74,7 @@ async function fetchVersionName(dbClient: PgQueryClient, body: SetChannelBody) {
   return versionResult.rows[0].name
 }
 
-async function updateChannelVersion(dbClient: PgQueryClient, body: SetChannelBody, channelOwnerOrg: string) {
+async function updateChannelVersion(dbClient: SetChannelDbClient, body: SetChannelBody, channelOwnerOrg: string) {
   const updateResult = await dbClient.query(
     `UPDATE public.channels
      SET version = $1
@@ -95,10 +94,10 @@ export async function assertCanPromoteChannelInTransaction(
   c: Context<MiddlewareKeyVariables>,
   body: SetChannelBody,
   apikey: Database['public']['Tables']['apikeys']['Row'],
-  dbClient: PgQueryClient,
+  dbClient: SetChannelDbClient,
   checkAppScope = false,
 ) {
-  const drizzle = getDrizzleClient(dbClient as unknown as ReturnType<typeof getPgClient>) as DrizzleClient
+  const drizzle = getDrizzleClient(dbClient as Parameters<typeof getDrizzleClient>[0]) as DrizzleClient
   const canPromote = await checkPermissionPg(
     c,
     'channel.promote_bundle',
@@ -117,7 +116,7 @@ export async function setChannelInTransaction(
   c: Context<MiddlewareKeyVariables>,
   body: SetChannelBody,
   apikey: Database['public']['Tables']['apikeys']['Row'],
-  dbClient: PgQueryClient,
+  dbClient: SetChannelDbClient,
 ): Promise<SetChannelResult> {
   validateSetChannelBody(body)
 
@@ -145,12 +144,12 @@ export async function setChannelInTransaction(
 }
 
 export async function setChannel(c: Context<MiddlewareKeyVariables>, body: SetChannelBody, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
-  const pgClient = getPgClient(c)
-  let dbClient: PgQueryClient | null = null
+  const pgClient = await getPgClient(c)
+  let dbClient: SetChannelDbClient | null = null
   let transactionStarted = false
   let result: SetChannelResult | null = null
   try {
-    dbClient = await pgClient.connect()
+    dbClient = await checkoutPgClient(pgClient)
     await dbClient.query('BEGIN')
     transactionStarted = true
     result = await setChannelInTransaction(c, body, apikey, dbClient)
@@ -172,7 +171,7 @@ export async function setChannel(c: Context<MiddlewareKeyVariables>, body: SetCh
     throw simpleError('cannot_set_bundle_to_channel', 'Cannot set bundle to channel', { error: (error as Error)?.message })
   }
   finally {
-    dbClient?.release()
+    if (dbClient) releasePgClient(pgClient, dbClient as import('../../utils/pg.ts').PgQueryClient)
     await closeClient(c, pgClient)
   }
 

@@ -3,7 +3,7 @@ import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { HTTPException } from 'hono/http-exception'
 import { BRES, simpleError } from '../../utils/hono.ts'
-import { closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
+import { checkoutPgClient, closeClient, getPgClient, logPgError, releasePgClient } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { supabaseApikey } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
@@ -25,9 +25,8 @@ export interface ChannelSet {
   delete_bundle?: boolean
 }
 
-interface PgQueryClient {
+interface ChannelDeleteDbClient {
   query: <TRow = Record<string, unknown>>(text: string, params?: unknown[]) => Promise<{ rowCount?: number | null, rows: TRow[] }>
-  release: () => void
 }
 
 interface PreviewChannelRow {
@@ -56,7 +55,7 @@ function getEffectiveApikey(c: Context<MiddlewareKeyVariables>, apikey: Database
   return effectiveApikey
 }
 
-async function loadPreviewChannelForUpdate(dbClient: PgQueryClient, body: ChannelSet) {
+async function loadPreviewChannelForUpdate(dbClient: ChannelDeleteDbClient, body: ChannelSet) {
   const result = await dbClient.query<PreviewChannelRow>(
     `SELECT id, app_id, owner_org, rbac_id, version, rollout_version
      FROM public.channels
@@ -69,7 +68,7 @@ async function loadPreviewChannelForUpdate(dbClient: PgQueryClient, body: Channe
   return (result.rowCount ?? 0) === 1 ? result.rows[0] : null
 }
 
-async function loadPreviewChannelOwner(dbClient: PgQueryClient, body: ChannelSet) {
+async function loadPreviewChannelOwner(dbClient: ChannelDeleteDbClient, body: ChannelSet) {
   const result = await dbClient.query<OwnerOrgRow>(
     `SELECT owner_org
      FROM public.channels
@@ -81,7 +80,7 @@ async function loadPreviewChannelOwner(dbClient: PgQueryClient, body: ChannelSet
   return (result.rowCount ?? 0) === 1 ? result.rows[0] : null
 }
 
-async function loadPreviewAppForUpdate(dbClient: PgQueryClient, appId: string) {
+async function loadPreviewAppForUpdate(dbClient: ChannelDeleteDbClient, appId: string) {
   const result = await dbClient.query<OwnerOrgRow>(
     `SELECT owner_org
      FROM public.apps
@@ -93,7 +92,7 @@ async function loadPreviewAppForUpdate(dbClient: PgQueryClient, appId: string) {
   return (result.rowCount ?? 0) === 1 ? result.rows[0] : null
 }
 
-async function lockPreviewBundleLifecycle(dbClient: PgQueryClient, versionIds: number[]) {
+async function lockPreviewBundleLifecycle(dbClient: ChannelDeleteDbClient, versionIds: number[]) {
   for (const versionId of [...versionIds].sort((left, right) => left - right)) {
     await dbClient.query(
       'SELECT pg_catalog.pg_advisory_xact_lock($1::bigint)',
@@ -104,7 +103,7 @@ async function lockPreviewBundleLifecycle(dbClient: PgQueryClient, versionIds: n
 
 async function assertPreviewChannelDeletePermission(
   c: Context<MiddlewareKeyVariables>,
-  dbClient: PgQueryClient,
+  dbClient: ChannelDeleteDbClient,
   body: ChannelSet,
   apikey: Database['public']['Tables']['apikeys']['Row'],
   effectiveApikey: string,
@@ -169,12 +168,12 @@ async function deletePreviewChannelAndBundle(
   apikey: Database['public']['Tables']['apikeys']['Row'],
 ) {
   const effectiveApikey = getEffectiveApikey(c, apikey)
-  const pgClient = getPgClient(c)
-  let dbClient: PgQueryClient | null = null
+  const pgClient = await getPgClient(c)
+  let dbClient: ChannelDeleteDbClient | null = null
   let transactionStarted = false
 
   try {
-    dbClient = await pgClient.connect()
+    dbClient = await checkoutPgClient(pgClient)
     await dbClient.query('BEGIN')
     transactionStarted = true
 
@@ -297,7 +296,7 @@ async function deletePreviewChannelAndBundle(
     throw simpleError('cannot_delete_preview_bundle', 'Cannot delete this preview channel and bundle')
   }
   finally {
-    dbClient?.release()
+    if (dbClient) releasePgClient(pgClient, dbClient as import('../../utils/pg.ts').PgQueryClient)
     await closeClient(c, pgClient)
   }
 }

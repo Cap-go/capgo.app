@@ -1,5 +1,5 @@
 import type { Context } from 'hono'
-import type { AppFameCandidate, AppFameDecision } from '../utils/app_fame.ts'
+import type { AppFameCandidate } from '../utils/app_fame.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { AiBinding } from '../utils/workers_ai.ts'
 import { sql } from 'drizzle-orm'
@@ -7,15 +7,11 @@ import { Hono } from 'hono/tiny'
 import {
   APP_FAME_BATCH_SIZE,
   APP_FAME_STALE_DAYS,
-  ignoredFameAppIdPredicateSql,
-  ignoredFameDecision,
-  isIgnoredFameAppId,
-  leakedFameCategoryPredicateSql,
   scoreAppsWithAi,
 } from '../utils/app_fame.ts'
 import { BRES, middlewareAPISecret, quickError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
-import { closeClient, getDrizzleClient, getPgClient, logPgError } from '../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, logPgError, type PgClient} from '../utils/pg.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -26,9 +22,9 @@ export async function processAppFameBatch(c: Context<MiddlewareKeyVariables>): P
     throw quickError(503, 'ai_unavailable', 'Workers AI binding is not configured')
   }
 
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const candidateResult = await drizzleClient.execute(sql`
       SELECT
@@ -42,26 +38,16 @@ export async function processAppFameBatch(c: Context<MiddlewareKeyVariables>): P
       FROM public.apps AS a
       JOIN public.orgs AS o ON o.id = a.owner_org
       LEFT JOIN public.app_fame AS f ON f.app_id = a.app_id
-      WHERE (
-          (
-            NOT ${ignoredFameAppIdPredicateSql}
-            AND (
-              f.app_id IS NULL
-              OR f.checked_at < now() - make_interval(days => ${APP_FAME_STALE_DAYS})
-              OR ${leakedFameCategoryPredicateSql}
-            )
-          )
-          OR (
-            ${ignoredFameAppIdPredicateSql}
-            AND COALESCE(f.fame_score, 0) > 0
-          )
+      WHERE a.app_id NOT LIKE 'com.demo.%'
+        AND a.app_id NOT LIKE 'com.capdemo.%'
+        AND (
+          f.app_id IS NULL
+          OR f.checked_at < now() - make_interval(days => ${APP_FAME_STALE_DAYS})
         )
       ORDER BY
         CASE
-          WHEN ${ignoredFameAppIdPredicateSql} AND COALESCE(f.fame_score, 0) > 0 THEN 0
-          WHEN ${leakedFameCategoryPredicateSql} THEN 1
-          WHEN COALESCE(a.ios_store_url, '') <> '' OR COALESCE(a.android_store_url, '') <> '' THEN 2
-          ELSE 3
+          WHEN COALESCE(a.ios_store_url, '') <> '' OR COALESCE(a.android_store_url, '') <> '' THEN 0
+          ELSE 1
         END,
         f.checked_at NULLS FIRST,
         a.created_at ASC
@@ -81,11 +67,21 @@ export async function processAppFameBatch(c: Context<MiddlewareKeyVariables>): P
     if (candidates.length === 0)
       return { scored: 0, skipped: 0 }
 
-    const ignoredCandidates = candidates.filter(candidate => isIgnoredFameAppId(candidate.app_id))
-    const scoredCandidates = candidates.filter(candidate => !isIgnoredFameAppId(candidate.app_id))
-    const ignoredDecisions = ignoredCandidates.map(candidate => ignoredFameDecision(candidate.app_id))
+    const { decisions, missingAppIds, model } = await scoreAppsWithAi(c, ai, candidates)
+    if (decisions.length === 0) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'cron_app_fame AI returned no usable scores',
+        candidateCount: candidates.length,
+        model,
+      })
+      throw quickError(502, 'ai_invalid_response', 'Workers AI returned no usable app fame scores', {
+        candidateCount: candidates.length,
+        model,
+      })
+    }
 
-    const persistDecision = async (decision: AppFameDecision, modelName: string) => {
+    for (const decision of decisions) {
       await drizzleClient.execute(sql`
         INSERT INTO public.app_fame (
           app_id,
@@ -106,7 +102,7 @@ export async function processAppFameBatch(c: Context<MiddlewareKeyVariables>): P
           ${decision.category || null},
           ${decision.known_as || null},
           ${decision.summary},
-          ${modelName},
+          ${model},
           now(),
           now()
         )
@@ -123,45 +119,16 @@ export async function processAppFameBatch(c: Context<MiddlewareKeyVariables>): P
       `)
     }
 
-    for (const decision of ignoredDecisions)
-      await persistDecision(decision, 'ignored')
-
-    let aiDecisions: AppFameDecision[] = []
-    let missingAppIds: string[] = []
-    let model = 'ignored'
-
-    if (scoredCandidates.length > 0) {
-      const scored = await scoreAppsWithAi(c, ai, scoredCandidates)
-      aiDecisions = scored.decisions
-      missingAppIds = scored.missingAppIds
-      model = scored.model
-      if (aiDecisions.length === 0) {
-        cloudlogErr({
-          requestId: c.get('requestId'),
-          message: 'cron_app_fame AI returned no usable scores',
-          candidateCount: scoredCandidates.length,
-          model,
-        })
-        throw quickError(502, 'ai_invalid_response', 'Workers AI returned no usable app fame scores', {
-          candidateCount: scoredCandidates.length,
-          model,
-        })
-      }
-      for (const decision of aiDecisions)
-        await persistDecision(decision, model)
-    }
-
-    const scoredCount = ignoredDecisions.length + aiDecisions.length
     cloudlog({
       requestId: c.get('requestId'),
       message: 'cron_app_fame scored apps',
-      scored: scoredCount,
+      scored: decisions.length,
       skipped: missingAppIds.length,
       omittedAppIds: missingAppIds,
       model,
     })
 
-    return { scored: scoredCount, skipped: missingAppIds.length }
+    return { scored: decisions.length, skipped: missingAppIds.length }
   }
   catch (error) {
     logPgError(c, 'processAppFameBatch', error)

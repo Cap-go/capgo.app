@@ -19,10 +19,15 @@ const {
   }
 })
 
-vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
-  closeClient: closeClientMock,
-  getPgClient: getPgClientMock,
-}))
+vi.mock('../supabase/functions/_backend/utils/pg.ts', async () => {
+  const { checkoutPgClient, releasePgClient } = await import('./helpers/pg-checkout-release-mocks.ts')
+  return {
+    closeClient: closeClientMock,
+    getPgClient: getPgClientMock,
+    checkoutPgClient,
+    releasePgClient,
+  }
+})
 
 const { createApiKey } = await import('../supabase/functions/_backend/utils/supabase.ts')
 

@@ -864,7 +864,7 @@ app.get('/app/:app_id/channel', requireAuthAndGuardLimitedKeys, sValidator('para
 
   let pgClient
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzle = getDrizzleClient(pgClient)
 
     const appRow = await loadRoleBindingApp(drizzle, appId)
@@ -950,7 +950,7 @@ app.get('/app/:app_id/principals', requireAuthAndGuardLimitedKeys, sValidator('p
 
   let pgClient
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzle = getDrizzleClient(pgClient)
 
     const appRow = await loadRoleBindingApp(drizzle, appId)
@@ -1030,7 +1030,7 @@ app.get('/:org_id', requireAuthAndGuardLimitedKeys, sValidator('param', orgIdPar
 
   let pgClient
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzle = getDrizzleClient(pgClient)
 
     if (!(await checkPermission(c, 'org.read_members', { orgId }))) {
@@ -1109,7 +1109,7 @@ app.post('/', requireAuthMfaAndGuardLimitedKeys, async (c) => {
 
   let pgClient
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzle = getDrizzleClient(pgClient)
     const result = await drizzle.transaction(async (tx) => {
       const txDrizzle = tx as unknown as DrizzleClient
@@ -1210,7 +1210,7 @@ app.patch(
 
     let pgClient
     try {
-      pgClient = getPgClient(c)
+      pgClient = await getPgClient(c)
       const drizzle = getDrizzleClient(pgClient)
       const lockOrgId = await loadRoleBindingLockOrgId(drizzle, bindingId)
       if (!lockOrgId) {
@@ -1295,7 +1295,7 @@ app.delete('/:binding_id', requireAuthMfaAndGuardLimitedKeys, sValidator('param'
 
   let pgClient
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzle = getDrizzleClient(pgClient)
     const lockOrgId = await loadRoleBindingLockOrgId(drizzle, bindingId)
     if (!lockOrgId) {

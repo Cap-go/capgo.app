@@ -5,11 +5,11 @@ import { HTTPException } from 'hono/http-exception'
 import { throwIfChannelUpdatePackageMismatch } from '../../utils/channel_update_package.ts'
 import { BRES, simpleError } from '../../utils/hono.ts'
 import { cloudlogErr } from '../../utils/logging.ts'
-import { closeClient, getDrizzleClient, getPgClient, logPgError } from '../../utils/pg.ts'
+import { checkoutPgClient, closeClient, getDrizzleClient, getPgClient, logPgError, releasePgClient} from '../../utils/pg.ts'
 import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { supabaseAdmin, updateOrCreateChannel } from '../../utils/supabase.ts'
 import { isInternalVersionName, isValidAppId } from '../../utils/utils.ts'
-import { assertCanPromoteChannelInTransaction, type PgQueryClient, setChannelInTransaction, type SetChannelBody } from '../bundle/set_channel.ts'
+import { assertCanPromoteChannelInTransaction, type SetChannelDbClient, setChannelInTransaction, type SetChannelBody } from '../bundle/set_channel.ts'
 
 interface ChannelSet {
   app_id: string
@@ -194,7 +194,7 @@ type CreatedChannel = {
 }
 
 async function insertChannelInTransaction(
-  dbClient: PgQueryClient,
+  dbClient: SetChannelDbClient,
   channel: Database['public']['Tables']['channels']['Insert'],
 ): Promise<CreatedChannel> {
   const channelValues: Record<ChannelInsertColumn, unknown> = {
@@ -246,7 +246,7 @@ async function insertChannelInTransaction(
   return { id: channelId, public: createdChannel.public }
 }
 
-async function findVersionInTransaction(dbClient: PgQueryClient, appId: string, version: string, ownerOrg: string) {
+async function findVersionInTransaction(dbClient: SetChannelDbClient, appId: string, version: string, ownerOrg: string) {
   const result = await dbClient.query<{ id: number }>(
     `SELECT id
      FROM public.app_versions
@@ -273,11 +273,11 @@ async function createAndPromoteChannelInTransaction(
     throw simpleError('cannot_set_bundle_to_channel', 'Cannot set bundle to channel', { error: 'Missing API key context for audit logging' })
   }
 
-  const pgClient = getPgClient(c)
-  let dbClient: PgQueryClient | null = null
+  const pgClient = await getPgClient(c)
+  let dbClient: SetChannelDbClient | null = null
   let transactionStarted = false
   try {
-    dbClient = await pgClient.connect()
+    dbClient = await checkoutPgClient(pgClient)
     await dbClient.query('BEGIN')
     transactionStarted = true
     await dbClient.query(
@@ -285,7 +285,7 @@ async function createAndPromoteChannelInTransaction(
       [JSON.stringify({ capgkey: effectiveApikey })],
     )
 
-    const drizzle = getDrizzleClient(dbClient as unknown as ReturnType<typeof getPgClient>) as DrizzleClient
+    const drizzle = getDrizzleClient(dbClient as Parameters<typeof getDrizzleClient>[0]) as DrizzleClient
     const canCreateChannel = await checkPermissionPg(
       c,
       'app.create_channel',
@@ -326,7 +326,7 @@ async function createAndPromoteChannelInTransaction(
     throw simpleError('cannot_set_bundle_to_channel', 'Cannot set bundle to channel', { error: (error as Error)?.message })
   }
   finally {
-    dbClient?.release()
+    if (dbClient) releasePgClient(pgClient, dbClient as import('../../utils/pg.ts').PgQueryClient)
     await closeClient(c, pgClient)
   }
 }

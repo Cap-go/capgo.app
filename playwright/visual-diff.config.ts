@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test'
+import { dismissSupportPrompt } from './support/dismissSupportPrompt'
 
 export interface VisualDiffRoute {
   slug: string
@@ -17,29 +18,6 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'login', path: '/login/', auth: false },
   { slug: 'dashboard', path: '/dashboard', auth: true },
   { slug: 'account-settings', path: '/settings/account', auth: true },
-  {
-    slug: 'email-verification-send',
-    path: '/resend_email',
-    auth: true,
-    prepare: async (page) => {
-      await page.route('**/rest/v1/user_security?*', route => route.fulfill({ json: { email_otp_verified_at: null } }))
-      await page.goto('/resend_email?reason=email_not_verified&return_to=/settings/account')
-      await page.getByRole('button', { name: 'Send verification code', exact: true }).waitFor()
-    },
-  },
-  {
-    slug: 'email-verification-code',
-    path: '/resend_email',
-    auth: true,
-    prepare: async (page) => {
-      // Keep screenshots deterministic and never send a real verification email.
-      await page.route('**/rest/v1/user_security?*', route => route.fulfill({ json: { email_otp_verified_at: null } }))
-      await page.route('**/auth/v1/otp', route => route.fulfill({ json: { user: null, session: null } }))
-      await page.goto('/resend_email?reason=email_not_verified&return_to=/settings/account')
-      await page.getByRole('button', { name: 'Send verification code', exact: true }).click()
-      await page.getByLabel('Enter the verification code', { exact: true }).waitFor()
-    },
-  },
   { slug: 'organization-credits', path: '/settings/organization/credits', auth: true },
   { slug: 'apps', path: '/apps', auth: true },
   {
@@ -47,6 +25,7 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     path: '/apps',
     auth: true,
     prepare: async (page) => {
+      await dismissSupportPrompt(page)
       const toggle = page.locator('[data-test="sidebar-collapse-toggle"]')
       if (!(await toggle.count()))
         return
@@ -65,26 +44,6 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'app-dashboard-native', path: '/app/com.demo.app/native', auth: true },
   { slug: 'app-dashboard-installs', path: '/app/com.demo.app/installs', auth: true },
   { slug: 'app-dashboard-active-bundle', path: '/app/com.demo.app/active-bundle', auth: true },
-  {
-    slug: 'onboarding-setup-v3',
-    path: '/apps',
-    auth: true,
-    prepare: async (page) => {
-      // Read-only response fixtures let both base and head render the same app.
-      // The base ignores version 3; the head shows the experiment treatment.
-      const onboarding = { setup: { todo_list_version: 3, source: 'manual', outcome: 'in_progress', steps: {} } }
-      await page.route('**/rest/v1/apps?*', async (route) => {
-        const response = await route.fetch()
-        const json = await response.json().catch(() => null)
-        const override = (row: any) => row?.app_id === 'com.demo.app' ? { ...row, need_onboarding: true, onboarding } : row
-        await route.fulfill({ response, json: Array.isArray(json) ? json.map(override) : override(json) })
-      })
-      await page.route('**/rpc/verify_getting_started', route => route.fulfill({ json: onboarding }))
-      await page.route('**/private/onboarding_progress', route => route.fulfill({ json: { onboarding, hasChannel: false, checkErrors: [] } }))
-      await page.goto('/app/new?resume=com.demo.app&step=setup')
-      await page.getByRole('heading', { name: /Start guided setup|Finish setup in your app/ }).waitFor()
-    },
-  },
   { slug: 'app-getting-started', path: '/app/com.demo.app/getting-started', auth: true },
   { slug: 'app-settings', path: '/app/com.demo.app/settings', auth: true },
   { slug: 'app-settings-access', path: '/app/com.demo.app/settings/access', auth: true },

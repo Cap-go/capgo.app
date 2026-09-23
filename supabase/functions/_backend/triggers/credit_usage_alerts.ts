@@ -55,7 +55,7 @@ app.post('/', middlewareAPISecret, async (c) => {
     threshold,
   }
 
-  const pgClient = getPgClient(c, true)
+  const pgClient = await getPgClient(c, true)
   const drizzleClient = getDrizzleClient(pgClient)
 
   try {

@@ -1,9 +1,5 @@
 import type { FC } from 'react'
 import type { OnboardingResult, Platform } from '../types.js'
-import type { BuilderLoginServices } from '../login.js'
-import type { BuilderLoginMetadata } from './login-gate.js'
-import type { BuilderAppSelectionServices } from '../app-selection.js'
-import type { AppSelectionEvent } from './app-selection-gate.js'
 // src/build/onboarding/ui/shell.tsx
 //
 // Top-level wizard shell, rendered ONCE inside the alt-screen buffer
@@ -36,8 +32,6 @@ import { TerminalTooSmallPrompt } from './min-size-gate.js'
 import { CardChooser, PlatformPicker } from './platform-picker.js'
 import { exitAfterOnboardingBeforeExit } from './exit.js'
 import { UpdatePrompt } from './update-prompt.js'
-import BuilderLoginGate from './login-gate.js'
-import BuilderAppSelectionGate from './app-selection-gate.js'
 import type { OnboardingBeforeExit } from './exit.js'
 
 // Progress shapes derived from the loaders so we don't re-import the type names.
@@ -86,17 +80,15 @@ export function useTerminalSize(): { cols: number, rows: number } {
 
 export interface OnboardingShellProps {
   appId: string
-  suggestedSource: 'builder' | 'capacitor'
-  appSelectionServices: BuilderAppSelectionServices
   /**
    * iOS-side bundle id default — sourced from `config.appId` (top-level), which
    * is what `cap sync` writes into `PRODUCT_BUNDLE_IDENTIFIER`. Distinct from
-   * the Capgo app ID selected by this shell, which may use the Builder override
-   * or another visible app. Threaded to the iOS OnboardingApp; Android ignores it.
+   * `appId` above, which `getAppId()` may resolve to
+   * `config.plugins.CapacitorUpdater.appId` (a Capgo lookup key — wrong for
+   * Apple signing). Threaded down to the iOS OnboardingApp; the Android app
+   * ignores it.
    */
   iosBundleIdInitial: string
-  /** Android package name for Appflow validation; defaults to the legacy Capgo key. */
-  appflowPackageName?: string
   iosDir: string
   androidDir: string
   /**
@@ -106,7 +98,6 @@ export interface OnboardingShellProps {
    */
   guidedHelperUsable: boolean
   apikey?: string
-  loginServices: BuilderLoginServices
   supaHost?: string
   /** Custom Supabase anon key for self-hosting (--supa-anon). */
   supaAnon?: string
@@ -134,10 +125,6 @@ export interface OnboardingShellProps {
   onResult?: (result: OnboardingResult) => void
   /** Awaited immediately before Ink exits so replay can capture the alt-screen frame. */
   onBeforeExit?: OnboardingBeforeExit
-  /** Called after the login gate has verified a key. */
-  onAuthenticated?: (key: string, metadata: BuilderLoginMetadata) => void
-  onAppSelected?: (appId: string) => void
-  onAppSelectionEvent?: (event: AppSelectionEvent) => void
 }
 
 const AnalyticsNotice: FC = () => (
@@ -146,13 +133,10 @@ const AnalyticsNotice: FC = () => (
   </Box>
 )
 
-const OnboardingShell: FC<OnboardingShellProps> = ({ appId, suggestedSource, appSelectionServices, iosBundleIdInitial, appflowPackageName, iosDir, androidDir, guidedHelperUsable, apikey, loginServices, supaHost, supaAnon, journeyId, initialPlatform, updateInfo, analyticsNotice, onResolvePlatform, onStep, onResult, onBeforeExit, onAuthenticated, onAppSelected, onAppSelectionEvent }) => {
+const OnboardingShell: FC<OnboardingShellProps> = ({ appId, iosBundleIdInitial, iosDir, androidDir, guidedHelperUsable, apikey, supaHost, supaAnon, journeyId, initialPlatform, updateInfo, analyticsNotice, onResolvePlatform, onStep, onResult, onBeforeExit }) => {
   const { exit } = useApp()
   const { cols, rows } = useTerminalSize()
   const [ready, setReady] = useState<ReadyApp | null>(null)
-  const [authenticatedKey, setAuthenticatedKey] = useState<string | undefined>()
-  const [selectedAppId, setSelectedAppId] = useState<string | undefined>()
-  const [switchingKey, setSwitchingKey] = useState(false)
   // Set when progress loading fails (e.g. corrupt saved-progress JSON). loadProgress
   // throws for non-ENOENT errors, so without a rejection handler `choose` would
   // leave an unhandled promise rejection and the picker stuck with no feedback.
@@ -173,10 +157,8 @@ const OnboardingShell: FC<OnboardingShellProps> = ({ appId, suggestedSource, app
   // The picker stays on screen during the (few-ms) load, so there's no loading
   // frame on the picker path.
   const choose = useCallback((platform: Platform) => {
-    if (!selectedAppId)
-      return
     onResolvePlatform?.(platform)
-    void loadReady(platform, selectedAppId)
+    void loadReady(platform, appId)
       .then(setReady)
       .catch((err: unknown) => {
         // Surface the failure instead of hanging: show an error frame, report a
@@ -187,7 +169,7 @@ const OnboardingShell: FC<OnboardingShellProps> = ({ appId, suggestedSource, app
         onResult?.({ outcome: 'cancelled' })
         setTimeout(exitAfterBeforeExit, 50)
       })
-  }, [selectedAppId, onResolvePlatform, onResult, exitAfterBeforeExit])
+  }, [appId, onResolvePlatform, onResult, exitAfterBeforeExit])
 
   // Picker answer. The picker only yields iOS / Android now; both pass through
   // the "migrating from Appflow?" gate before committing to native onboarding.
@@ -216,21 +198,16 @@ const OnboardingShell: FC<OnboardingShellProps> = ({ appId, suggestedSource, app
   useEffect(() => {
     // Hold the auto-load until the update prompt (if any) is answered, so the
     // update offer is the first screen even when --platform pre-resolves.
-    if (authenticatedKey && selectedAppId && initialPlatform && (!updateInfo || updateAnswered))
+    if (initialPlatform && (!updateInfo || updateAnswered))
       choose(initialPlatform)
-  }, [authenticatedKey, selectedAppId, initialPlatform, choose, updateInfo, updateAnswered])
-
-  useEffect(() => {
-    if (authenticatedKey && !selectedAppId && !switchingKey)
-      onStep?.('app-selection')
-  }, [authenticatedKey, selectedAppId, switchingKey, onStep])
+  }, [initialPlatform, choose, updateInfo, updateAnswered])
 
   // Progress load failed (corrupt/unreadable saved state) — show why and exit,
   // rather than hanging on a frozen picker. The exit is scheduled in the .catch.
   if (loadError) {
     return (
       <Box flexDirection="column" minHeight={rows} padding={1}>
-        <Text bold color="red">{`✖  Could not load onboarding progress for ${selectedAppId ?? appId}.`}</Text>
+        <Text bold color="red">{`✖  Could not load onboarding progress for ${appId}.`}</Text>
         <Text>{loadError}</Text>
         <Box marginTop={1}>
           <Text dimColor>Your saved progress file may be corrupt. Remove it and re-run `capgo build init`.</Text>
@@ -245,12 +222,12 @@ const OnboardingShell: FC<OnboardingShellProps> = ({ appId, suggestedSource, app
   // here would unmount it on a mid-flow shrink, tearing down step state and
   // exiting the wizard. The app owns the size decision so a shrink→regrow keeps
   // the user exactly where they were.
-  if (ready?.kind === 'ios' && selectedAppId)
-    return <OnboardingApp appId={selectedAppId} iosBundleIdInitial={iosBundleIdInitial} initialProgress={ready.progress} iosDir={iosDir} guidedHelperUsable={guidedHelperUsable} apikey={authenticatedKey} supaHost={supaHost} supaAnon={supaAnon} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
-  if (ready?.kind === 'android' && selectedAppId)
-    return <AndroidOnboardingApp appId={selectedAppId} initialProgress={ready.progress} androidDir={androidDir} apikey={authenticatedKey} supaHost={supaHost} supaAnon={supaAnon} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
-  if (ready?.kind === 'appflow' && selectedAppId)
-    return <AppflowApp appId={selectedAppId} packageName={appflowPackageName ?? iosBundleIdInitial} scope={ready.scope} apikey={authenticatedKey} supaHost={supaHost} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
+  if (ready?.kind === 'ios')
+    return <OnboardingApp appId={appId} iosBundleIdInitial={iosBundleIdInitial} initialProgress={ready.progress} iosDir={iosDir} guidedHelperUsable={guidedHelperUsable} apikey={apikey} supaHost={supaHost} supaAnon={supaAnon} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
+  if (ready?.kind === 'android')
+    return <AndroidOnboardingApp appId={appId} initialProgress={ready.progress} androidDir={androidDir} apikey={apikey} supaHost={supaHost} supaAnon={supaAnon} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
+  if (ready?.kind === 'appflow')
+    return <AppflowApp appId={appId} scope={ready.scope} apikey={apikey} supaHost={supaHost} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
 
   // Not ready yet: the platform picker (or a brief framed load). The picker is
   // NOT gated to the full 80×49 onboarding floor — it's small and adapts
@@ -290,56 +267,6 @@ const OnboardingShell: FC<OnboardingShellProps> = ({ appId, suggestedSource, app
           footer={analyticsNotice ? <AnalyticsNotice /> : undefined}
         />
       </Box>
-    )
-  }
-
-  if (!authenticatedKey || switchingKey) {
-    return (
-      <BuilderLoginGate
-        candidateKey={switchingKey ? undefined : apikey}
-        services={loginServices}
-        cols={cols}
-        rows={rows}
-        footer={analyticsNotice ? <AnalyticsNotice /> : undefined}
-        onAuthenticated={(key, metadata) => {
-          setAuthenticatedKey(key)
-          setSwitchingKey(false)
-          onAuthenticated?.(key, metadata)
-        }}
-        onCancel={() => {
-          if (switchingKey) {
-            setSwitchingKey(false)
-            return
-          }
-          onResult?.({ outcome: 'cancelled' })
-          setTimeout(exitAfterBeforeExit, 50)
-        }}
-      />
-    )
-  }
-
-  if (!selectedAppId) {
-    return (
-      <BuilderAppSelectionGate
-        key={authenticatedKey}
-        apikey={authenticatedKey}
-        suggestedId={appId}
-        suggestedSource={suggestedSource}
-        services={appSelectionServices}
-        cols={cols}
-        rows={rows}
-        footer={analyticsNotice ? <AnalyticsNotice /> : undefined}
-        onSelected={(chosenId) => {
-          setSelectedAppId(chosenId)
-          onAppSelected?.(chosenId)
-        }}
-        onSwitchKey={() => setSwitchingKey(true)}
-        onCancel={() => {
-          onResult?.({ outcome: 'cancelled' })
-          setTimeout(exitAfterBeforeExit, 50)
-        }}
-        onEvent={onAppSelectionEvent}
-      />
     )
   }
 

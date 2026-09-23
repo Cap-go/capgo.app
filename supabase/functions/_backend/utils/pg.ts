@@ -7,10 +7,9 @@ import { drizzle } from 'drizzle-orm/node-postgres'
 import { alias } from 'drizzle-orm/pg-core'
 import { getRuntimeKey } from 'hono/adapter'
 // @ts-types="npm:@types/pg"
-import { Pool } from 'pg'
+import { Client, Pool } from 'pg'
 import { serializePostgresError } from '../plugin_runtime/utils/postgres_error.ts'
 import { backgroundTask, existInEnv, getEnv } from '../utils/utils.ts'
-import { ignoredFameAppIdPredicateSql, leakedFameCategoryPredicateSql } from './app_fame.ts'
 import { CacheHelper } from './cache.ts'
 import { getChannelSelfOverride, isChannelSelfStoreEnabled } from './channelSelfStore.ts'
 import { getAdminOnboardingTelemetry } from './cloudflare.ts'
@@ -25,6 +24,31 @@ import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { getRolloutDecision } from './rollout.ts'
 import { createPlatformAdminSignedImageUrl } from './storage.ts'
 import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
+
+/**
+ * PG client handle. On Hyperdrive (workerd) this is a per-request `Client`;
+ * elsewhere it is a short-lived `Pool`.
+ */
+export type PgClient = Client | Pool
+
+/** Checked-out query handle: Pool connection or a connected Hyperdrive Client. */
+export type PgQueryClient = PoolClient | Client
+
+/** Hyperdrive owns Worker↔origin cleanup; do not call `.end()` on these clients. */
+const skipEndClients = new WeakSet<object>()
+
+export async function checkoutPgClient(pg: PgClient): Promise<PgQueryClient> {
+  if (skipEndClients.has(pg))
+    return pg as Client
+  return (pg as Pool).connect()
+}
+
+export function releasePgClient(pg: PgClient, client: PgQueryClient | null | undefined, error?: boolean | Error): void {
+  if (!client || skipEndClients.has(pg))
+    return
+  if ('release' in client)
+    client.release(error)
+}
 
 const REPLICATION_LAG_THRESHOLD_SECONDS = 180
 const REPLICATION_LAG_CACHE_TTL_SECONDS = 60
@@ -116,7 +140,7 @@ export function buildPlanValidationExpression(
   ) OR (${customerIdSubquery} IS NULL)`
 }
 
-export function selectOne(pgClient: ReturnType<typeof getPgClient>) {
+export function selectOne(pgClient: PgClient) {
   // Use pg Pool directly to avoid Drizzle's prepared statement handling
   // which doesn't work with Supabase pooler in transaction mode
   return pgClient.query('SELECT 1')
@@ -362,7 +386,33 @@ export function getDatabaseURL(c: Context, readOnly = false): string {
   return fixSupabaseHost(getEnv(c, 'SUPABASE_DB_URL'))
 }
 
-export function getPgClient(c: Context, readOnly = false) {
+/** True when dbUrl is one of this Worker's Hyperdrive binding connection strings. */
+function isHyperdriveConnectionString(c: Context, dbUrl: string): boolean {
+  const env = c.env as Record<string, { connectionString?: string } | undefined> | undefined
+  if (!env)
+    return false
+  for (const [key, value] of Object.entries(env)) {
+    if (!key.startsWith('HYPERDRIVE_') || !value?.connectionString)
+      continue
+    if (value.connectionString === dbUrl)
+      return true
+  }
+  return false
+}
+
+/**
+ * Create a DB client for this request.
+ *
+ * Hyperdrive connection lifecycle (explicit Cloudflare contract):
+ * @see https://developers.cloudflare.com/hyperdrive/concepts/connection-lifecycle/
+ * - New `pg.Client` inside each request. Never create/cache Client/Pool in global scope.
+ * - `await client.connect()`, then query.
+ * - Do **not** call `client.end()` / `pool.end()`: Workers-to-Hyperdrive connections
+ *   are automatically cleaned up when the request ends.
+ *
+ * Non-Hyperdrive (local/direct/pooler): `Pool` + explicit `closeClient`/`end()`.
+ */
+export async function getPgClient(c: Context, readOnly = false): Promise<PgClient> {
   const dbUrl = getDatabaseURL(c, readOnly)
   const requestId = c.get('requestId')
   const appName = c.res.headers.get('X-Worker-Source') ?? 'unknown source'
@@ -370,20 +420,39 @@ export function getPgClient(c: Context, readOnly = false) {
   cloudlog({ requestId, message: 'SUPABASE_DB_URL selected', dbName, appName, readOnly })
 
   const isPooler = dbName.startsWith('sb_pooler')
-  const options = {
-    connectionString: dbUrl,
-    max: 4,
-    application_name: `${appName}-${dbName}`,
-    idleTimeoutMillis: 20000, // Increase from 2 to 20 seconds
-    connectionTimeoutMillis: 10000, // Add explicit connect timeout
-    maxLifetimeMillis: 30 * 60 * 1000, // 30 minutes
-    // PgBouncer/Supabase pooler doesn't support the 'options' startup parameter
-    options: readOnly && !isPooler ? '-c default_transaction_read_only=on' : undefined,
+  const readOnlyOptions = readOnly && !isPooler ? '-c default_transaction_read_only=on' : undefined
+  const isWorkerd = getRuntimeKey() === 'workerd'
+  // Match on the actual connection string so the Hyperdrive Client contract cannot
+  // silently become Pool+end() if c.set is missed.
+  const useHyperdriveClient = isWorkerd && isHyperdriveConnectionString(c, dbUrl)
+
+  if (useHyperdriveClient) {
+    const client = new Client({
+      connectionString: dbUrl,
+      application_name: `${appName}-${dbName}`,
+      connectionTimeoutMillis: 10000,
+      // PgBouncer/Supabase pooler doesn't support the 'options' startup parameter
+      options: readOnlyOptions,
+    })
+    client.on('error', (err: Error) => {
+      cloudlogErr({ requestId, message: 'PG Client Error', databaseSource: dbName, error: serializePostgresError(err) })
+    })
+    await client.connect()
+    skipEndClients.add(client)
+    return client
   }
 
-  const pool = new Pool(options)
+  const pool = new Pool({
+    connectionString: dbUrl,
+    max: isWorkerd ? 1 : 4,
+    application_name: `${appName}-${dbName}`,
+    idleTimeoutMillis: 20000,
+    connectionTimeoutMillis: 10000,
+    maxLifetimeSeconds: 30 * 60,
+    // PgBouncer/Supabase pooler doesn't support the 'options' startup parameter
+    options: readOnlyOptions,
+  })
 
-  // Hook to log when connections are removed from the pool
   pool.on('remove', () => {
     cloudlog({ requestId, message: 'PG Connection Removed from Pool' })
   })
@@ -395,7 +464,7 @@ export function getPgClient(c: Context, readOnly = false) {
   return pool
 }
 
-export function getDrizzleClient(db: ReturnType<typeof getPgClient> | PoolClient, options?: { logger?: boolean }) {
+export function getDrizzleClient(db: PgClient | PoolClient, options?: { logger?: boolean }) {
   // Keep SQL logging on by default for API/trigger diagnostics.
   // Plugin hot paths pass `{ logger: false }` to avoid per-request log CPU/volume.
   return drizzle({ client: db, logger: options?.logger ?? true })
@@ -411,11 +480,20 @@ export function logPgError(c: Context, functionName: string, error: unknown) {
   })
 }
 
-export function closeClient(c: Context, db: ReturnType<typeof getPgClient>) {
-  // cloudlog(c.get('requestId'), 'Closing client', client)
-  if (getRuntimeKey() !== 'workerd')
-    return backgroundTask(c, db.end())
-  return undefined
+export function closeClient(c: Context, db: PgClient) {
+  // Hyperdrive: do not end() — connection-lifecycle docs say GC cleans the edge hop.
+  // https://developers.cloudflare.com/hyperdrive/concepts/connection-lifecycle/
+  if (skipEndClients.has(db))
+    return
+
+  // Non-Hyperdrive Pool: must end() or we leak sockets (the old workerd sawtooth).
+  return backgroundTask(c, Promise.resolve(db.end()).catch((error: unknown) => {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'PG client end failed',
+      error: serializePostgresError(error),
+    })
+  }))
 }
 
 export function getAlias() {
@@ -1464,7 +1542,7 @@ export async function getAdminDeploymentsTrend(
   app_id?: string,
 ): Promise<AdminDeploymentsTrend[]> {
   try {
-    const pgClient = getPgClient(c, true) // Read-only query
+    const pgClient = await getPgClient(c, true) // Read-only query
     const drizzleClient = getDrizzleClient(pgClient)
 
     const appFilter = app_id ? sql`AND app_id = ${app_id}` : sql``
@@ -1619,7 +1697,7 @@ export async function getAdminGlobalStatsTrend(
     // Admin global stats are low traffic and depend on recently migrated
     // global_stats columns. Use primary DB so replica schema/data drift does not
     // silently blank the dashboard.
-    const pgClient = getPgClient(c)
+    const pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
 
     // Extract just the date portion (YYYY-MM-DD) from ISO timestamps
@@ -1989,7 +2067,7 @@ export function normalizeAdminStatsDate(value: unknown): string {
 }
 
 async function getLiveRegisteredUsersCount(c: Context): Promise<number> {
-  const pgClient = getPgClient(c)
+  const pgClient = await getPgClient(c)
   const drizzleClient = getDrizzleClient(pgClient)
 
   try {
@@ -2023,7 +2101,7 @@ export async function getAdminPayingOrgBreakdown(c: Context): Promise<AdminPayin
     paying_orgs_total: 0,
   }
 
-  const pgClient = getPgClient(c)
+  const pgClient = await getPgClient(c)
   const drizzleClient = getDrizzleClient(pgClient)
 
   try {
@@ -2123,7 +2201,7 @@ export async function getAdminEmailTypeBreakdown(
   }
 
   try {
-    const pgClient = getPgClient(c, true)
+    const pgClient = await getPgClient(c, true)
     const drizzleClient = getDrizzleClient(pgClient)
     const { startDay, seriesEndDay, endExclusive } = getAdminUtcDateRange(start_date, end_date)
 
@@ -2238,7 +2316,7 @@ export async function getAdminCustomerCountryBreakdown(
   }
 
   try {
-    const pgClient = getPgClient(c, false)
+    const pgClient = await getPgClient(c, false)
     const drizzleClient = getDrizzleClient(pgClient)
     const { startDay, endExclusive } = getAdminUtcDateRange(start_date, end_date)
 
@@ -2500,9 +2578,9 @@ export async function getAdminOrganizationInsights(
   end_date: string,
   filters: AdminOrganizationInsightsFilters = {},
 ): Promise<AdminOrganizationInsightsResult> {
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const safeLimit = Math.max(1, Math.min(Math.floor(filters.limit ?? 50), 500))
     const safeOffset = Math.max(0, Math.floor(filters.offset ?? 0))
@@ -2844,9 +2922,9 @@ export async function getAdminEnterpriseAdoption(
   start_date: string,
   end_date: string,
 ): Promise<AdminEnterpriseAdoptionResult> {
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const { startDay, seriesEndDay } = getAdminUtcDateRange(start_date, end_date)
 
@@ -2981,9 +3059,9 @@ export async function getAdminFamousApps(
     famous_count: 0,
     notable_count: 0,
   }
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const safeLimit = Math.max(1, Math.min(Math.floor(filters.limit ?? 50), 500))
     const safeOffset = Math.max(0, Math.floor(filters.offset ?? 0))
@@ -3021,8 +3099,6 @@ export async function getAdminFamousApps(
       JOIN public.apps AS a ON a.app_id = f.app_id
       JOIN public.orgs AS o ON o.id = a.owner_org
       WHERE f.fame_score >= ${minScore}
-        AND NOT ${ignoredFameAppIdPredicateSql}
-        AND NOT ${leakedFameCategoryPredicateSql}
         ${tierFilter}
         ${searchFilter}
       ORDER BY f.fame_score DESC, f.confidence DESC, a.app_id ASC
@@ -3035,8 +3111,6 @@ export async function getAdminFamousApps(
       JOIN public.apps AS a ON a.app_id = f.app_id
       JOIN public.orgs AS o ON o.id = a.owner_org
       WHERE f.fame_score >= ${minScore}
-        AND NOT ${ignoredFameAppIdPredicateSql}
-        AND NOT ${leakedFameCategoryPredicateSql}
         ${tierFilter}
         ${searchFilter}
     `
@@ -3046,16 +3120,14 @@ export async function getAdminFamousApps(
         COUNT(*) FILTER (WHERE f.tier = 'famous')::int AS famous_count,
         COUNT(*) FILTER (WHERE f.tier = 'notable')::int AS notable_count
       FROM public.app_fame AS f
-      JOIN public.apps AS a ON a.app_id = f.app_id
-      WHERE NOT ${ignoredFameAppIdPredicateSql}
-        AND NOT ${leakedFameCategoryPredicateSql}
     `
     const pendingQuery = sql`
       SELECT COUNT(*)::int AS pending_count
       FROM public.apps AS a
       LEFT JOIN public.app_fame AS f ON f.app_id = a.app_id
       WHERE f.app_id IS NULL
-        AND NOT ${ignoredFameAppIdPredicateSql}
+        AND a.app_id NOT LIKE 'com.demo.%'
+        AND a.app_id NOT LIKE 'com.capdemo.%'
     `
 
     const [result, countResult, summaryResult, pendingResult] = await Promise.all([
@@ -3134,7 +3206,7 @@ export async function getAdminCancelledOrganizations(
   offset: number = 0,
 ): Promise<AdminCancelledOrganizationsResult> {
   try {
-    const pgClient = getPgClient(c, true)
+    const pgClient = await getPgClient(c, true)
     const drizzleClient = getDrizzleClient(pgClient)
 
     const dateFilter = start_date && end_date
@@ -3250,7 +3322,7 @@ export async function getAdminTrialOrganizations(
   try {
     // The admin dashboard needs plans.name, and plans is not replicated to
     // read replicas.
-    const pgClient = getPgClient(c)
+    const pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
 
     // Query to get trial organizations ordered by days remaining (ascending - expiring soon first)
@@ -3357,10 +3429,10 @@ export async function getAdminTrialPlanBreakdown(
     trend: [],
   }
 
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
     // The admin dashboard needs plans.name, and plans is not available on every read replica.
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const { startDay, seriesEndDay, endExclusive } = getAdminUtcDateRange(start_date, end_date)
 
@@ -3540,7 +3612,7 @@ export async function getAdminOnboardingFunnel(
 ): Promise<AdminOnboardingFunnel> {
   try {
     // Read replicas don't include org/app/channel data, so use primary DB.
-    const pgClient = getPgClient(c)
+    const pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const now = new Date()
 
@@ -4127,7 +4199,7 @@ export async function getAdminPluginBreakdown(
   end_date: string,
 ): Promise<AdminPluginBreakdown> {
   try {
-    const pgClient = getPgClient(c, true)
+    const pgClient = await getPgClient(c, true)
     const drizzleClient = getDrizzleClient(pgClient)
 
     const startDateOnly = start_date.split('T')[0]

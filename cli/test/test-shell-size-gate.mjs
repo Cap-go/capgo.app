@@ -16,22 +16,6 @@ import React from 'react'
 import stringWidth from 'string-width'
 import OnboardingShell from '../src/build/onboarding/ui/shell.tsx'
 
-const loginServices = {
-  browserAvailable: true,
-  validateExisting: async () => {},
-  getAccountEmail: async () => 'account@example.com',
-  savePasted: async () => {},
-  beginBrowser: async () => { throw new Error('unused') },
-  completeBrowser: async () => {},
-}
-const appSelectionServices = {
-  list: async () => [{ app_id: 'com.test.app', name: 'Test App' }],
-  verify: async () => {},
-  persist: async () => false,
-  openDashboard: async () => true,
-  dashboardUrl: 'https://console.capgo.app/app/new',
-}
-
 const watchdog = setTimeout(() => {
   console.error('WATCHDOG 30s')
   process.exit(2)
@@ -68,13 +52,10 @@ function makeStdin() {
 async function renderShellAt(cols, rows) {
   const stdout = makeStdout(cols, rows)
   const instance = render(
-    React.createElement(OnboardingShell, { appId: 'com.test.app', suggestedSource: 'capacitor', appSelectionServices, iosDir: 'ios', androidDir: 'android', journeyId: 'bj_test', apikey: 'test-key', loginServices }),
+    React.createElement(OnboardingShell, { appId: 'com.test.app', iosDir: 'ios', androidDir: 'android', journeyId: 'bj_test' }),
     { stdout, stderr: makeStdout(cols, rows), stdin: makeStdin(), debug: true, exitOnCtrlC: false, patchConsole: false },
   )
-  const ready = cols < 44 || rows < 11 ? /too small/i : /want to set up|iOS|Android/i
-  const deadline = Date.now() + 4000
-  while (!ready.test(stdout.lastFrame ?? '') && Date.now() < deadline)
-    await new Promise(r => setTimeout(r, 10))
+  await new Promise(r => setTimeout(r, 80))
   const out = stdout.lastFrame ?? ''
   instance.unmount()
   return out

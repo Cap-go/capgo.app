@@ -47,7 +47,7 @@ async function sendQueuedPluginNotification(c: Context, item: PluginNotification
 }
 
 async function processPluginNotifications(c: Context, items: PluginNotificationQueueItem[]) {
-  const pgClient = getPgClient(c, true)
+  const pgClient = await getPgClient(c, true)
   const drizzleClient = getDrizzleClient(pgClient)
   const results: PluginNotificationItemResult[] = []
   let processed = 0

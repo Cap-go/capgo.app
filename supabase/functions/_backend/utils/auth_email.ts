@@ -1,5 +1,22 @@
 import { trimTrailingSlashes } from './utils.ts'
 
+export const AUTH_EMAIL_EVENT_PREFIX = 'auth_'
+
+export const AUTH_EMAIL_EVENTS = {
+  email_change: 'auth_email_change',
+  email_change_current: 'auth_email_change',
+  email_change_new: 'auth_email_change',
+  email_changed_notification: 'auth_email_changed_notification',
+  invite: 'auth_invite',
+  magiclink: 'auth_magic_link',
+  mfa_factor_enrolled_notification: 'auth_mfa_factor_enrolled_notification',
+  mfa_factor_unenrolled_notification: 'auth_mfa_factor_unenrolled_notification',
+  password_changed_notification: 'auth_password_changed_notification',
+  reauthentication: 'auth_reauthentication',
+  recovery: 'auth_recovery',
+  signup: 'auth_confirmation',
+} as const
+
 export interface GoTrueSendEmailEvent {
   email_data?: {
     email_action_type?: string
@@ -36,7 +53,7 @@ export interface AuthEmailDelivery {
   payload: AuthEmailPayload
 }
 
-export interface AuthEmailTemplateDetails {
+export interface AuthEmailBentoDetails {
   confirmation_link: string
   confirmation_url: string
   email: string
@@ -118,6 +135,16 @@ export function authEmailDeliveriesFromGoTrueEvent(event: GoTrueSendEmailEvent):
   return [delivery(currentEmail, event, token, tokenHash)].filter(item => item.email)
 }
 
+export function getAuthEmailBentoEvent(emailActionType: string): string {
+  const actionType = textField(emailActionType)
+  if (!actionType)
+    return `${AUTH_EMAIL_EVENT_PREFIX}unknown`
+
+  return AUTH_EMAIL_EVENTS[actionType as keyof typeof AUTH_EMAIL_EVENTS]
+    ?? AUTH_EMAIL_EVENTS[verifyType(actionType) as keyof typeof AUTH_EMAIL_EVENTS]
+    ?? `${AUTH_EMAIL_EVENT_PREFIX}${actionType}`
+}
+
 export function buildAuthConfirmationUrl(
   supabaseUrl: string,
   tokenHash: string,
@@ -141,11 +168,11 @@ export function buildAuthConfirmationUrl(
   return `${baseUrl}/auth/v1/verify?${params.toString()}`
 }
 
-export function buildAuthEmailTemplateDetails(
+export function buildAuthEmailBentoDetails(
   payload: AuthEmailPayload,
   supabaseUrl: string,
   webappUrl: string,
-): AuthEmailTemplateDetails {
+): AuthEmailBentoDetails {
   const siteUrl = trimTrailingSlashes(textField(webappUrl)) || trimTrailingSlashes(textField(payload.site_url))
   const confirmationUrl = buildAuthConfirmationUrl(
     supabaseUrl,

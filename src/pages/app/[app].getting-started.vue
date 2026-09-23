@@ -24,7 +24,6 @@ import {
   isStoreReleaseValidated,
   markStoreReleaseValidated,
 } from '~/utils/gettingStartedDismiss'
-import { getAppSetupRedirect } from '~/utils/onboardingRedirect'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -49,7 +48,6 @@ const appName = computed(() => app.value?.name || orgApp.value?.name || id.value
 const appIcon = computed(() => orgApp.value?.icon_url || '')
 const iconLoading = computed(() => orgApp.value?.icon_url_loading === true)
 
-const setupRedirect = computed(() => app.value ? getAppSetupRedirect(app.value) : null)
 const ledger = computed(() => parseAppOnboardingLedger(app.value?.onboarding))
 const userId = computed(() => main.user?.id ?? main.auth?.id ?? '')
 const steps = computed(() => buildGettingStartedSteps(ledger.value, {
@@ -229,28 +227,16 @@ watch(() => id.value, async (appId) => {
   void checkBuilderDone(appId)
 }, { immediate: true })
 
-watch([() => app.value?.app_id, () => setupRedirect.value?.path], async () => {
-  const currentApp = app.value
-  if (!currentApp)
+watch(() => app.value?.app_id, (appId) => {
+  if (!appId)
     return
-  const redirect = getAppSetupRedirect(currentApp)
-  if (redirect) {
-    await organizationStore.awaitInitialLoad()
-    if (app.value?.app_id !== currentApp.app_id)
-      return
-    const org = organizationStore.getOrgByAppId(currentApp.app_id)
-    if (org)
-      organizationStore.setCurrentOrganization(org.gid)
-    await router.replace(redirect)
-    return
-  }
   void verifySteps({ silent: true })
 })
 </script>
 
 <template>
-  <AppPageFrame :found="!!app" :loading="isLoading || !!setupRedirect">
-    <div v-if="app && !setupRedirect" class="mx-auto max-w-3xl px-4 py-6 sm:px-0" data-test="getting-started-page">
+  <AppPageFrame :found="!!app" :loading="isLoading">
+    <div v-if="app" class="mx-auto max-w-3xl px-4 py-6 sm:px-0" data-test="getting-started-page">
       <div
         v-if="allDone"
         class="mb-6 flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 dark:border-emerald-800 dark:bg-emerald-950/40"

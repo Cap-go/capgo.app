@@ -6,7 +6,7 @@ import rawABTestsConfig from './ab_tests.json' with { type: 'json' }
 import { syncBentoSubscriberTags } from './bento.ts'
 import { quickError } from './hono.ts'
 import { cloudlogErr } from './logging.ts'
-import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, checkoutPgClient, releasePgClient } from './pg.ts'
 import { backgroundTask } from './utils.ts'
 
 export type ABTestAudience = 'all' | 'self_signup'
@@ -178,7 +178,7 @@ export function createABTestAssignments(
   let assignedAt: string | undefined
 
   for (const [testName, test] of Object.entries(config)) {
-    if (test.treatment_percentage === 0 || !isEligibleForTest(user, test))
+    if (!isEligibleForTest(user, test))
       continue
 
     assignedAt ??= now().toISOString()
@@ -199,8 +199,7 @@ function readExistingAssignments(value: unknown, testNames: string[]) {
     const test = AB_TESTS_CONFIG[testName]
     const assignment = storedAssignments[testName]
     if (assignment === undefined) {
-      if (test.treatment_percentage !== 0)
-        missing.push(testName)
+      missing.push(testName)
       continue
     }
     const branch = isRecord(assignment) ? assignment.branch : undefined
@@ -253,9 +252,9 @@ async function readAssignmentUser(
   c: Context<MiddlewareKeyVariables>,
   userId: string,
 ): Promise<AssignmentUser | undefined> {
-  const pgPool = getPgClient(c, true)
+  const pgPool = await getPgClient(c, true)
   try {
-    const pgClient = await pgPool.connect()
+    const pgClient = await checkoutPgClient(pgPool)
     try {
       const result = await pgClient.query<AssignmentUser>(
         `SELECT created_via_invite,
@@ -271,7 +270,7 @@ async function readAssignmentUser(
       return result.rows[0]
     }
     finally {
-      pgClient.release(true)
+      releasePgClient(pgPool, pgClient, true)
     }
   }
   finally {
@@ -284,10 +283,10 @@ async function persistABTestAssignments(
   userId: string,
   candidates: Record<string, ABTestAssignment>,
 ) {
-  const pgPool = getPgClient(c)
+  const pgPool = await getPgClient(c)
   let persisted: unknown
   try {
-    const pgClient = await pgPool.connect()
+    const pgClient = await checkoutPgClient(pgPool)
     try {
       const result = await pgClient.query<{ abtests: unknown }>(
         `UPDATE public.users
@@ -307,7 +306,7 @@ async function persistABTestAssignments(
       persisted = result.rows[0]?.abtests
     }
     finally {
-      pgClient.release(true)
+      releasePgClient(pgPool, pgClient, true)
     }
   }
   finally {
@@ -331,8 +330,6 @@ function buildBentoTagUpdate(user: AssignmentUser) {
     const branch = isRecord(storedAssignment) ? storedAssignment.branch : undefined
     const isCurrentBranch = isABTestBranch(branch)
       && (branch === test.treatment_branch || branch === test.control_branch)
-    if (test.treatment_percentage === 0 && !isCurrentBranch)
-      continue
     if (!isCurrentBranch || !isEligibleForTest(user, test)) {
       deleteSegments.push(
         test.branches[test.treatment_branch].bento_tag,
@@ -514,7 +511,7 @@ export async function getOrCreateUserABTests(
       return existing.assignments
   }
 
-  const pgPool = getPgClient(c, false)
+  const pgPool = await getPgClient(c, false)
   let closeInFinally = true
   let result: {
     assignments: Record<string, ABTestAssignment>

@@ -48,13 +48,3 @@ To reduce CI failures, run the relevant local checks after finishing a task.
   - Do not treat backend E2E as a blocker to add in this repo unless the task specifically requires coordinating with the Capgo repo.
 
 This is critical to prevent hardcoded build paths or MCP regressions from reaching customers.
-
-## Security (do not regress)
-
-Canonical researcher policy: https://github.com/Cap-go/.github/blob/main/SECURITY.md and https://capgo.app/security/.
-
-- Do **not** put GHSA ids or unpublished advisory/PoC text in public PRs, issues, or changelogs.
-- Zip / bundle extract and write paths: canonicalize and keep writes inside the intended root. Do not follow symlinks out of the target directory.
-- Treat project-controlled config (`localApi`, `localSupa`, app/id paths, custom endpoints) as untrusted for filesystem and network side effects.
-- Prefer containment checks before delete or overwrite of paths derived from user/project input.
-- Report and fix CLI security issues via private advisories: https://github.com/Cap-go/capgo.app/security/advisories/new

@@ -16,11 +16,16 @@ vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
   checkPermission: (...args: unknown[]) => checkPermissionMock(...args),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
-  closeClient: (...args: unknown[]) => closeClientMock(...args),
-  getPgClient: (...args: unknown[]) => getPgClientMock(...args),
-  logPgError: (...args: unknown[]) => logPgErrorMock(...args),
-}))
+vi.mock('../supabase/functions/_backend/utils/pg.ts', async () => {
+  const { checkoutPgClient, releasePgClient } = await import('./helpers/pg-checkout-release-mocks.ts')
+  return {
+    closeClient: (...args: unknown[]) => closeClientMock(...args),
+    getPgClient: (...args: unknown[]) => getPgClientMock(...args),
+    checkoutPgClient,
+    releasePgClient,
+    logPgError: (...args: unknown[]) => logPgErrorMock(...args),
+  }
+})
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   supabaseApikey: (...args: unknown[]) => supabaseApikeyMock(...args),

@@ -6,7 +6,7 @@ import {
   MAX_ORG_NOTIFICATION_STATS_APPS,
   readNotificationStatsCF,
 } from '../utils/nativeNotifications.ts'
-import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, type PgClient} from '../utils/pg.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { version } from '../utils/version.ts'
 
@@ -19,9 +19,9 @@ export const app = createHono('private/org_notification_stats', version)
 app.use('*', useCors)
 
 async function readOrgNotificationOverview(c: Parameters<typeof getPgClient>[0], orgId: string) {
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+  let pgClient: PgClient | undefined
   try {
-    pgClient = getPgClient(c, true)
+    pgClient = await getPgClient(c, true)
     const drizzleClient = getDrizzleClient(pgClient)
     const result = await drizzleClient.execute(sql`
       SELECT

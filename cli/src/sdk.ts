@@ -551,7 +551,6 @@ export class CapgoSDK {
           supaHost: parsed.supaHost || this.supaHost,
           supaAnon: parsed.supaAnon || this.supaAnon,
           path: parsed.path,
-          mode: parsed.mode,
           bundle: parsed.bundle,
           channel: parsed.channel,
           rollout: parsed.rollout,

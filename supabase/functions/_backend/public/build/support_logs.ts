@@ -75,7 +75,7 @@ async function bumpWindow(c: Context, path: string, userId: string, limit: numbe
 async function appExists(c: Context, appId: string): Promise<boolean> {
   let pgClient
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const result = await drizzleClient.execute(
       sql`SELECT EXISTS (
@@ -106,7 +106,7 @@ async function hasCurrentWriteCapableOrgBinding(c: Context, apikey: Database['pu
 
   let pgClient
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const result = await drizzleClient.execute(
       sql`SELECT public.apikey_has_current_org_create_capability(${apikey.rbac_id}::uuid) AS allowed`,

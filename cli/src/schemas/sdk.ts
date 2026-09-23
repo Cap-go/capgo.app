@@ -1,5 +1,4 @@
 import { z } from 'zod'
-import { CLI_PROJECT_MODES } from '../framework/mode'
 import { buildCacheKeyOptionSchema, buildCacheOptionSchema, buildCredentialsSchema } from './build'
 import { localizedReleaseNotesSchema, rejectConflictingBooleanGroup } from './common'
 
@@ -78,7 +77,6 @@ export type StarAllRepositoriesOptions = z.infer<typeof starAllRepositoriesOptio
 export const uploadOptionsSchema = z.object({
   appId: z.string(),
   path: z.string(),
-  mode: z.enum(CLI_PROJECT_MODES).optional(),
   bundle: z.string().optional(),
   channel: z.string().optional(),
   rollout: z.number().min(0).max(100).optional(),

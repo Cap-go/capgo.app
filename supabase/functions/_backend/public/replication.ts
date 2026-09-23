@@ -3,7 +3,7 @@ import { sql } from 'drizzle-orm'
 import { CacheHelper } from '../utils/cache.ts'
 import { honoFactory, useCors } from '../utils/hono.ts'
 import { cloudlogErr } from '../utils/logging.ts'
-import { closeClient, getDrizzleClient, getPgClient, logPgError } from '../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, logPgError, type PgClient} from '../utils/pg.ts'
 import { validatePlatformAdminOrApiSecret } from '../utils/platform_admin_access.ts'
 
 const DEFAULT_THRESHOLD_SECONDS = 180
@@ -478,9 +478,9 @@ app.get('/', async (c) => {
   const thresholdSeconds = DEFAULT_THRESHOLD_SECONDS
   const thresholdBytes = DEFAULT_THRESHOLD_BYTES
 
-  const pgClient = getPgClient(c, false)
+  const pgClient = await getPgClient(c, false)
   const drizzleClient = getDrizzleClient(pgClient)
-  let replicaPgClient: ReturnType<typeof getPgClient> | null = null
+  let replicaPgClient: PgClient | null = null
 
   try {
     const { rows, mode } = await executeReplicationQuery({ requestId: c.get('requestId') }, drizzleClient)
@@ -543,7 +543,7 @@ app.get('/', async (c) => {
     let dataCanary = skippedDataCanary('no_replica_connection')
 
     try {
-      replicaPgClient = getPgClient(c, true)
+      replicaPgClient = await getPgClient(c, true)
       const replicaSource = c.res.headers.get('X-Database-Source') ?? ''
       if (!isReplicaDatabaseSource(replicaSource)) {
         subscription = skippedSubscription('no_replica_connection')

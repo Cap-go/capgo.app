@@ -88,7 +88,7 @@ export async function getAdminRegistrationMonthlyComparison(c: Context, now = ne
   const query = buildRegistrationMonthlyComparisonQuery(now)
   // Admin-only, aggregate-only reporting uses the primary Supabase database so newly
   // created accounts are not omitted by replica lag. Never use this on plugin hot paths.
-  const pgClient = getPgClient(c)
+  const pgClient = await getPgClient(c)
   try {
     const result = await pgClient.query(query.sql, query.params)
     const counts = new Map<string, { self_signup: number, organization_invite: number, unknown_other: number, total: number }>()

@@ -97,8 +97,8 @@ describe('API/trigger PostgreSQL error logging', () => {
     expect(JSON.stringify(payload)).not.toContain('test-secret')
   })
 
-  it('serializes pool errors explicitly without copying the client or credentials', () => {
-    getPgClient(createContext())
+  it('serializes pool errors explicitly without copying the client or credentials', async () => {
+    await getPgClient(createContext())
     const listener = poolOnMock.mock.calls.find(([event]) => event === 'error')?.[1]
     expect(listener).toBeTypeOf('function')
     const error = Object.assign(new Error('failed to acquire a connection'), {

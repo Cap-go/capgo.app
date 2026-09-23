@@ -3,7 +3,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadOnboardingPaymentCohortData } from '../supabase/functions/_backend/utils/onboarding_payment_cohorts_data.ts'
 
 const { getPgMock, closeMock, queryMock, releaseMock, connectMock } = vi.hoisted(() => ({ getPgMock: vi.fn(), closeMock: vi.fn(), queryMock: vi.fn(), releaseMock: vi.fn(), connectMock: vi.fn() }))
-vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({ getPgClient: getPgMock, closeClient: closeMock }))
+vi.mock('../supabase/functions/_backend/utils/pg.ts', async () => {
+  const { checkoutPgClient, releasePgClient } = await import('./helpers/pg-checkout-release-mocks.ts')
+  return { getPgClient: getPgMock, closeClient: closeMock, checkoutPgClient, releasePgClient }
+})
 const c = {} as Context
 const period = { start: '2026-06-01T00:00:00.000Z', cutoff: '2026-09-16T00:00:00.000Z' }
 const user = { id: '00000000-0000-4000-a000-000000000001', signup_at: new Date('2026-09-01T00:00:00Z'), has_public_row: true, created_via_invite: false, total_rows: '1' }
