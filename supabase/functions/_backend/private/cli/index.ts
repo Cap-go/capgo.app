@@ -6,6 +6,7 @@ import { parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts
 import { middlewareKey } from '../../utils/hono_middleware.ts'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { supabaseApikey } from '../../utils/supabase.ts'
+import { uploadCliAppIcon } from './storage_icon.ts'
 
 const checkPermissionBodySchema = z.object({
   apikey: z.string().optional(),
@@ -278,6 +279,11 @@ app.get('/members/2fa-status', middlewareKey(), async (c) => {
   }
 
   return c.json(data ?? [])
+})
+
+app.post('/storage/icon', middlewareKey(), async (c) => {
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  return uploadCliAppIcon(c, apikey)
 })
 
 app.get('/members/password-policy', middlewareKey(), async (c) => {
