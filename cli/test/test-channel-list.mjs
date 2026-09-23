@@ -163,8 +163,8 @@ try {
         return nativeFetch(input)
       if (url.includes('/private/config'))
         return Response.json({})
-      if (url.includes('/rpc/reject_access_due_to_2fa_for_app'))
-        return Response.json(false)
+      if (url.includes('/private/cli/2fa/reject-app'))
+        return Response.json({ reject: false })
       if (url.includes('/private/cli/check-permission'))
         return Response.json({ allowed: scenario !== 'denied-channel' })
       if (url.includes('/app/' + ${JSON.stringify(appId)})) {
