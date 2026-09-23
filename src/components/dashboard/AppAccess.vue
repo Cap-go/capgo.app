@@ -14,6 +14,7 @@ import RoleSelect from '~/components/forms/RoleSelect.vue'
 import SearchInput from '~/components/forms/SearchInput.vue'
 import RoleSelectionModal from '~/components/modals/RoleSelectionModal.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { fetchOrgMembersRbac } from '~/services/orgMembers'
 import { formatLocalDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
 import { useSupabase } from '~/services/supabase'
@@ -270,21 +271,17 @@ async function fetchAvailableMembers() {
     return
 
   try {
-    const { data, error } = await supabase
-      .from('org_users')
-      .select(`
-        user_id,
-        users!inner(email)
-      `)
-      .eq('org_id', ownerOrg.value)
+    const { data, error } = await fetchOrgMembersRbac(ownerOrg.value)
 
     if (error)
       throw error
 
-    availableMembers.value = data.map(m => ({
-      user_id: m.user_id,
-      email: m.users.email,
-    })) as any
+    availableMembers.value = (data ?? [])
+      .filter(member => !member.is_invite && !member.is_tmp)
+      .map(member => ({
+        user_id: member.user_id,
+        email: member.email,
+      }))
   }
   catch (error: unknown) {
     console.error('Error fetching members:', error)
