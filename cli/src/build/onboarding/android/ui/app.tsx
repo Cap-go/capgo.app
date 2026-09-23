@@ -1424,7 +1424,15 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
           if (!androidPackageChoice)
             throw new Error('No Android package on record — pick the package again.')
 
-          const jsonBytes = await readFile(serviceAccountJsonPath)
+          let jsonBytes: Buffer
+          try {
+            jsonBytes = await readFile(serviceAccountJsonPath)
+          }
+          catch (err) {
+            if (!cancelled)
+              trackImportedGooglePlayValidationFailure('file-read-error', journeyId, trackAction)
+            throw err
+          }
           if (cancelled)
             return
 

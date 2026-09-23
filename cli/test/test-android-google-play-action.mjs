@@ -67,6 +67,7 @@ assert.deepEqual(actions.splice(0), [{
 
 // Every validation failure is mapped to a stable, non-sensitive reason.
 for (const [kind, reason] of [
+  ['file-read-error', 'file_read_error'],
   ['shape-error', 'shape_error'],
   ['token-error', 'token_error'],
   ['no-app-access', 'no_app_access'],

@@ -6,6 +6,7 @@ import { emitPreparationAction, emitPreparationSuccessOnce } from '../../ui/prep
 export type GooglePlayConnectionSource = 'imported_service_account' | 'generated_service_account'
 export type GooglePlayConnectionFailureReason
   = | 'shape_error'
+    | 'file_read_error'
     | 'token_error'
     | 'no_app_access'
     | 'network_error'
@@ -14,9 +15,11 @@ export type GooglePlayConnectionFailureReason
     | 'provisioning_failed'
 
 type FailedValidationKind = Extract<ValidationResult, { ok: false }>['kind']
+type ImportedGooglePlayFailureKind = FailedValidationKind | 'file-read-error'
 type TrackAction = PreparationTrackAction<AndroidOnboardingStep>
 
-const validationFailureReasons: Record<FailedValidationKind, GooglePlayConnectionFailureReason> = {
+const validationFailureReasons: Record<ImportedGooglePlayFailureKind, GooglePlayConnectionFailureReason> = {
+  'file-read-error': 'file_read_error',
   'shape-error': 'shape_error',
   'token-error': 'token_error',
   'no-app-access': 'no_app_access',
@@ -61,7 +64,7 @@ export function trackConnectedGooglePlay(
 }
 
 export function trackImportedGooglePlayValidationFailure(
-  kind: FailedValidationKind,
+  kind: ImportedGooglePlayFailureKind,
   journeyId: string,
   trackAction: TrackAction,
 ): void {
