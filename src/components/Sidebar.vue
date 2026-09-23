@@ -19,15 +19,13 @@ import IconVenetianMask from '~icons/lucide/venetian-mask'
 import IconApiKey from '~icons/mdi/shield-key'
 import IconAppStore from '~icons/simple-icons/appstore'
 import { logAsUser } from '~/services/logAs'
+import {
+  confirmOnboardingDashboardExplorationNavigation,
+  resolveOnboardingHardGateResumeAppId,
+} from '~/services/onboardingDashboardExplorationConfirm'
 import { isSpoofed, unspoofUser } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
-import {
-  allowOnboardingDashboardExploration,
-  getOnboardingResumeAppId,
-  ONBOARDING_DASHBOARD_EXPLORED_EVENT,
-  shouldConfirmOnboardingDashboardExploration,
-} from '~/utils/onboardingRedirect'
 import DropdownProfile from '../components/dashboard/DropdownProfile.vue'
 import GettingStartedNav from '../components/dashboard/GettingStartedNav.vue'
 
@@ -142,47 +140,40 @@ function isTabActive(tab: string) {
     return currentPath === tabPath || currentPath.startsWith(`${tabPath}/`)
   })
 }
+function openLogoDashboard() {
+  void openTab({
+    label: 'apps',
+    icon: IconAppStore,
+    key: '/apps',
+  })
+}
+
 async function openTab(tab: Tab) {
   if (isSpoofTab(tab) && spoofLoading.value)
     return
 
   const onboardingUserId = main.user?.id ?? main.auth?.id
-  const resumeQueryAppId = typeof route.query.resume === 'string' ? route.query.resume : null
-  const isPendingOnboardingResume = route.path === '/app/new'
-    && !!resumeQueryAppId
-  const onboardingResumeAppId = isPendingOnboardingResume
-    ? resumeQueryAppId
-    : getOnboardingResumeAppId(onboardingUserId)
-  const requiresOnboardingExplorationConfirmation = shouldConfirmOnboardingDashboardExploration({
+  const currentSource = typeof route.query.source === 'string' ? route.query.source : null
+  const onboardingResumeAppId = resolveOnboardingHardGateResumeAppId(
+    route.path,
+    typeof route.query.resume === 'string' ? route.query.resume : null,
+    onboardingUserId,
+  )
+  const confirmationResult = await confirmOnboardingDashboardExplorationNavigation({
+    currentPath: route.path,
+    currentSource,
+    currentStep: typeof route.query.step === 'string' ? route.query.step : null,
     destination: tab.key,
     resumeAppId: onboardingResumeAppId,
     userId: onboardingUserId,
+    t,
+    dialogStore,
+    router,
   })
 
-  if (tab.key === '/apikeys' && isPendingOnboardingResume)
-    allowOnboardingDashboardExploration(onboardingUserId, onboardingResumeAppId)
-
-  if (requiresOnboardingExplorationConfirmation) {
+  if (confirmationResult === 'cancelled' || confirmationResult === 'handled') {
     emit('closeSidebar')
-    dialogStore.openDialog({
-      title: t('app-onboarding-explore-dashboard-confirm-title'),
-      description: t('app-onboarding-explore-dashboard-confirm-description'),
-      buttons: [
-        { text: t('app-onboarding-continue-setup'), role: 'secondary' },
-        { text: t('app-onboarding-explore-dashboard'), role: 'primary' },
-      ],
-    })
-    const wasCanceled = await dialogStore.onDialogDismiss()
-    if (wasCanceled)
-      return
-    if (dialogStore.lastButtonRole === 'secondary') {
-      return router.push({ path: '/app/new', query: { resume: onboardingResumeAppId } })
-    }
-    if (dialogStore.lastButtonRole !== 'primary')
-      return
-
-    window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
-    allowOnboardingDashboardExploration(onboardingUserId, onboardingResumeAppId)
+    return
   }
 
   if (tab.onClick)
@@ -333,10 +324,11 @@ function tabLabel(tab: Tab) {
       >
         <!-- Sidebar header -->
         <div class="flex border-b shrink-0 border-slate-800 lg:border-slate-700 py-4">
-          <router-link
+          <button
+            type="button"
             class="flex items-center rounded-lg cursor-pointer focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
-            to="/apps"
             aria-label="Capgo - Go to dashboard"
+            @click="openLogoDashboard"
           >
             <span class="flex w-12 h-11 shrink-0 items-center justify-center">
               <img src="/capgo.webp" alt="Capgo logo" class="w-8 h-8 shrink-0">
@@ -344,7 +336,7 @@ function tabLabel(tab: Tab) {
             <span class="text-xl font-semibold whitespace-nowrap font-prompt text-slate-200 hover:text-white lg:text-slate-200 lg:hover:text-white">
               Capgo
             </span>
-          </router-link>
+          </button>
         </div>
 
         <GettingStartedNav :compact="isRail" />

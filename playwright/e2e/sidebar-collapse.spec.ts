@@ -63,7 +63,7 @@ test.describe('Desktop sidebar collapse', () => {
     await expect.poll(() => sidebarWidth(page)).toBeGreaterThan(40)
     await expect.poll(() => sidebarWidth(page)).toBeLessThan(56)
     await expect(page.locator('#sidebar [data-test="org-switcher"]')).toBeVisible()
-    await expect(page.locator('#sidebar').getByRole('button', { name: 'Dashboard' })).toBeVisible()
+    await expect(page.locator('#sidebar').getByRole('button', { name: 'Dashboard', exact: true })).toBeVisible()
     await expect(page.locator('#sidebar').getByRole('button', { name: /refer & earn/i })).toBeVisible()
     await expect.poll(() => shellPadding(page)).toBe('0px 0px 0px 0px')
 
@@ -72,7 +72,7 @@ test.describe('Desktop sidebar collapse', () => {
     expect(await orgSwitcherMenuIsOnTop(page)).toBe(true)
     await page.keyboard.press('Escape')
 
-    await page.locator('#sidebar').getByRole('button', { name: 'Dashboard' }).click()
+    await page.locator('#sidebar').getByRole('button', { name: 'Dashboard', exact: true }).click()
     await expect(page).toHaveURL(/\/dashboard/)
 
     await page.reload()
