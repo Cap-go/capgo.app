@@ -1,22 +1,30 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
-import { parseBody, simpleError, useCors } from '../utils/hono.ts'
+import { parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
+import { canCallerAssignOrgRole } from '../utils/rbac.ts'
 import { emptySupabase, supabaseClient } from '../utils/supabase.ts'
 import { normalizeInviteRole } from '../public/organization/members/post.ts'
 
 const orgIdSchema = z.uuid()
 const rbacOrgRoleSchema = z.enum(['org_member', 'org_billing_admin', 'org_admin', 'org_super_admin'])
 
+function normalizeEmail(email: string) {
+  return email.trim().toLowerCase()
+}
+
+const normalizedEmailSchema = z.string().transform(normalizeEmail).pipe(z.email())
+const normalizedEmailStringSchema = z.string().transform(normalizeEmail).pipe(z.string().min(1))
+
 const inviteBodySchema = z.object({
-  email: z.email(),
+  email: normalizedEmailSchema,
   org_id: orgIdSchema,
   role_name: z.string().min(1),
 })
 
 const rescindBodySchema = z.object({
-  email: z.string().min(1),
+  email: normalizedEmailStringSchema,
   org_id: orgIdSchema,
 })
 
@@ -31,7 +39,7 @@ const inviteRoleBodySchema = z.object({
   role_name: rbacOrgRoleSchema,
   is_tmp: z.boolean(),
   user_id: orgIdSchema.optional(),
-  email: z.string().min(1).optional(),
+  email: normalizedEmailStringSchema.optional(),
 }).superRefine((body, ctx) => {
   if (body.is_tmp) {
     if (!body.email) {
@@ -153,6 +161,10 @@ app.patch('/invite-role', middlewareAuth, async (c) => {
   const parsed = inviteRoleBodySchema.safeParse(body)
   if (!parsed.success)
     throw simpleError('invalid_body', 'Invalid body', { error: parsed.error.message })
+
+  if (parsed.data.is_tmp && !await canCallerAssignOrgRole(c, parsed.data.org_id, parsed.data.role_name)) {
+    throw quickError(403, 'not_authorized', 'Not authorized', { org_id: parsed.data.org_id })
+  }
 
   const supabase = getAuthedSupabase(c)
   const { data, error } = parsed.data.is_tmp

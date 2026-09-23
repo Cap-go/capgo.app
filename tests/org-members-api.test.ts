@@ -66,6 +66,26 @@ describe('org members HTTP API', () => {
     expect(data.code).toBe('NO_EMAIL')
   })
 
+  it.concurrent('invite endpoint normalizes email before validation', async () => {
+    const localPart = `no-account-${randomUUID()}`
+    const response = await fetchTestRequest(getEndpointUrl('/private/org_members/invite'), {
+      method: 'POST',
+      headers: {
+        ...(await getAuthHeaders()),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        org_id: ORG_ID,
+        email: `  ${localPart}@EXAMPLE.COM  `,
+        role_name: 'org_member',
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    const data = await response.json() as { code: string }
+    expect(data.code).toBe('NO_EMAIL')
+  })
+
   it.concurrent('magic invite lookup returns 404 for unknown tokens', async () => {
     const response = await fetchTestRequest(
       getEndpointUrl(`/private/org_members/magic-invite?lookup=${randomUUID()}`),
