@@ -52,7 +52,7 @@ Canonical researcher policy: [org SECURITY.md](https://github.com/Cap-go/.github
 Until Charly/Martin approve public disclosure:
 
 - No unpublished exploit steps in public repos.
-- No GHSA ids in public PR titles, bodies, branch names you create for Capgo product fixes (crew-memory private is fine).
+- No GHSA ids in public PR titles, bodies, branch names, commit messages, issues, or changelogs (crew-memory private is fine).
 - Prefer side-effect or intentional fix PRs without advertising the advisory.
 
 ## When unsure
