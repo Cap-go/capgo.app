@@ -1,5 +1,4 @@
 import type { Context } from 'hono'
-import type { PoolClient } from 'pg'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { sql } from 'drizzle-orm'
@@ -12,7 +11,7 @@ import { createIfNotExistStoreInfo } from '../../utils/cloudflare.ts'
 import { lockOnboardingApp, unlockOnboardingApp } from '../../utils/demo.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
-import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, type PgQueryClient } from '../../utils/pg.ts'
 import { trackPosthogEvent } from '../../utils/posthog.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { createSignedImageUrl, getStorageAllowedOrigins, resolveWritableImageValue } from '../../utils/storage.ts'
@@ -37,7 +36,7 @@ async function persistAppOnboarding(
   c: Context<MiddlewareKeyVariables>,
   appId: string,
   patch: NonNullable<ReturnType<typeof parseAppOnboardingPatch>> | undefined,
-  transactionClient?: PoolClient,
+  transactionClient?: PgQueryClient,
   completePendingOnboarding = false,
 ) {
   const pool = transactionClient ? null : await getPgClient(c)

@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../../utils/logging.ts'
-import { closeClient, getPgClient, logPgError} from '../../utils/pg.ts'
+import { checkoutPgClient, closeClient, getPgClient, logPgError, releasePgClient, type PgClient, type PgQueryClient } from '../../utils/pg.ts'
 import { sendEventToTracking } from '../../utils/tracking.ts'
 import { getEnv, trimTrailingSlashes } from '../../utils/utils.ts'
 
@@ -10,13 +10,7 @@ export const NATIVE_BUILD_TERMINAL_STATUSES = ['succeeded', 'failed', 'expired',
 export const NATIVE_BUILD_CONCURRENCY_ERROR = 'native_build_concurrency_limit_exceeded'
 const NON_ACTIVE_NATIVE_BUILD_STATUSES = ['pending', ...NATIVE_BUILD_TERMINAL_STATUSES] as const
 
-interface PgClient {
-  query: <T extends Record<string, unknown> = Record<string, unknown>>(query: string, params?: unknown[]) => Promise<{
-    rowCount?: number | null
-    rows: T[]
-  }>
-  release: () => void
-}
+type NativeBuildQueryClient = PgQueryClient
 
 interface ReserveNativeBuildSlotInput {
   buildRequestId: string
@@ -149,7 +143,7 @@ function throwNativeBuildConcurrencyLimit(
   }, undefined, { alert: false })
 }
 
-async function readPlanConcurrencyLimit(client: PgClient, orgId: string): Promise<{ planName: string, limit: number }> {
+async function readPlanConcurrencyLimit(client: NativeBuildQueryClient, orgId: string): Promise<{ planName: string, limit: number }> {
   const planLimitResult = await client.query<{
     plan_name: string | null
     native_build_concurrency: number | string | null
@@ -177,7 +171,7 @@ async function readPlanConcurrencyLimit(client: PgClient, orgId: string): Promis
   return { planName, limit }
 }
 
-async function countActiveNativeBuilds(client: PgClient, orgId: string, excludeBuildRequestId?: string): Promise<number> {
+async function countActiveNativeBuilds(client: NativeBuildQueryClient, orgId: string, excludeBuildRequestId?: string): Promise<number> {
   // Bounded by idx_build_requests_org (owner_org); org-scoped active rows stay small.
   const activeBuildsResult = excludeBuildRequestId
     ? await client.query<{ active_count: string }>(
@@ -212,11 +206,11 @@ export async function assertNativeBuildConcurrencyAvailable(
   input: { orgId: string, appId: string, userId?: string | null },
 ): Promise<NativeBuildConcurrencyState> {
   let pgPool: PgClient | null = null
-  let client: PgClient | null = null
+  let client: NativeBuildQueryClient | null = null
 
   try {
     pgPool = await getPgClient(c, true)
-    client = await pgPool.connect() as PgClient
+    client = await checkoutPgClient(pgPool)
     const { planName, limit } = await readPlanConcurrencyLimit(client, input.orgId)
     const activeBuilds = await countActiveNativeBuilds(client, input.orgId)
     const upgradeUrl = getPlansUpgradeUrl(c)
@@ -236,7 +230,7 @@ export async function assertNativeBuildConcurrencyAvailable(
     throw simpleError('internal_error', 'Unable to validate native build concurrency', { error: (error as Error)?.message })
   }
   finally {
-    client?.release()
+    if (client && pgPool) releasePgClient(pgPool, client)
     if (pgPool)
       await closeClient(c, pgPool)
   }
@@ -249,11 +243,11 @@ export async function reserveNativeBuildSlot(
   let planName: string
   let limit: number
   let pgPool: PgClient | null = null
-  let client: PgClient | null = null
+  let client: NativeBuildQueryClient | null = null
 
   try {
     pgPool = await getPgClient(c)
-    client = await pgPool.connect() as PgClient
+    client = await checkoutPgClient(pgPool)
     await client.query('BEGIN')
 
     const orgLock = await client.query(
@@ -345,7 +339,7 @@ export async function reserveNativeBuildSlot(
     throw simpleError('internal_error', 'Unable to reserve native build slot', { error: (error as Error)?.message })
   }
   finally {
-    client?.release()
+    if (client && pgPool) releasePgClient(pgPool, client)
     if (pgPool)
       await closeClient(c, pgPool)
   }

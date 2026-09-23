@@ -27,7 +27,7 @@ import {
   verifyNotificationEventProof,
   verifyNotificationIdentityProof,
 } from '../../utils/nativeNotifications.ts'
-import { closeClient, getDrizzleClient, getPgClient} from '../../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, type PgClient} from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { isLimited, isValidAppId } from '../../utils/utils.ts'
 import { version } from '../../utils/version.ts'

@@ -1,6 +1,6 @@
 import { honoFactory, useCors } from '../utils/hono.ts'
 import { cloudlogErr } from '../utils/logging.ts'
-import { closeClient, getPgClient, logPgError} from '../utils/pg.ts'
+import { closeClient, getPgClient, logPgError, type PgClient} from '../utils/pg.ts'
 import { validatePlatformAdminOrApiSecret } from '../utils/platform_admin_access.ts'
 
 type QueueStatus = 'ok' | 'ko'

@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import { isBentoConfigured, trackBentoEvents } from './bento.ts'
 import { isFrontendOnboardingVersionLabel } from './frontend_onboarding_analytics_model.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
-import { closeClient, getPgClient} from './pg.ts'
+import { closeClient, getPgClient, checkoutPgClient, releasePgClient, type PgClient} from './pg.ts'
 import { backgroundTask } from './utils.ts'
 
 export type TelemetryValue = string | number | boolean
@@ -388,7 +388,7 @@ async function persistUserBentoObservation(
   let pool: PgClient | undefined
   try {
     pool = await getPgClient(c)
-    const client = await pool.connect()
+    const client = await checkoutPgClient(pool)
     let transactionOpen = false
     let rollbackError: Error | undefined
     try {
@@ -435,7 +435,7 @@ async function persistUserBentoObservation(
     }
     finally {
       try {
-        client.release(rollbackError)
+        releasePgClient(pool, client, rollbackError)
       }
       catch (error) {
         logUserBentoError(c, 'observe', userId, observation.bentoEvent, error)
@@ -468,7 +468,7 @@ export async function deliverPendingUserBentoEvents(
   let pool: PgClient | undefined
   try {
     pool = await getPgClient(c)
-    const client = await pool.connect()
+    const client = await checkoutPgClient(pool)
     let transactionOpen = false
     let rollbackError: Error | undefined
     try {
@@ -535,7 +535,7 @@ export async function deliverPendingUserBentoEvents(
     }
     finally {
       try {
-        client.release(rollbackError)
+        releasePgClient(pool, client, rollbackError)
       }
       catch (error) {
         logUserBentoError(c, 'deliver', userId, undefined, error)

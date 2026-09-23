@@ -6,7 +6,7 @@ import {
   MAX_ORG_NOTIFICATION_STATS_APPS,
   readNotificationStatsCF,
 } from '../utils/nativeNotifications.ts'
-import { closeClient, getDrizzleClient, getPgClient} from '../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, type PgClient} from '../utils/pg.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { version } from '../utils/version.ts'
 

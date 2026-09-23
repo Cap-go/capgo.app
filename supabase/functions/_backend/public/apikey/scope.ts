@@ -4,7 +4,7 @@ import type { getDrizzleClient } from '../../utils/pg.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { quickError } from '../../utils/hono.ts'
 import { assertJwtMfaAssurance } from '../../utils/jwt_mfa_assurance.ts'
-import { closeClient, getPgClient} from '../../utils/pg.ts'
+import { closeClient, getPgClient, type PgClient} from '../../utils/pg.ts'
 import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
 

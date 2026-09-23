@@ -4,7 +4,7 @@ import type { Database } from '../../utils/supabase.types.ts'
 import { z } from 'zod'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
-import { closeClient, getPgClient} from '../../utils/pg.ts'
+import { closeClient, getPgClient, type PgQueryClient, checkoutPgClient, releasePgClient, type PgClient} from '../../utils/pg.ts'
 import { assertJwtMfaAssurance } from '../../utils/jwt_mfa_assurance.ts'
 import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
 import { parseOrgOnboardingDevelopmentEnvironment, parseOrgOnboardingIntent } from '../../utils/org_onboarding_intent.ts'
@@ -27,11 +27,6 @@ const bodySchema = z.object({
   developmentEnvironment: z.enum(['hosted_builder', 'ai_assistant', 'hand_coded', 'other', 'local_project', 'exploring', 'skipped']).optional(),
 })
 
-
-interface PgTransactionClient {
-  query: <T = unknown>(text: string, params?: unknown[]) => Promise<{ rows: T[], rowCount?: number | null }>
-  release: () => void
-}
 
 async function getInitialPlanForMau(c: Context<MiddlewareKeyVariables>, estimatedMau: number) {
   const adminClient = supabaseAdmin(c)
@@ -161,11 +156,11 @@ async function insertOrgForApiKey(
 
   // API-key Supabase clients run as anon, so this checked endpoint owns the write path instead of reopening direct anon RLS inserts.
   let pgPool: PgClient | null = null
-  let dbClient: PgTransactionClient | null = null
+  let dbClient: PgQueryClient | null = null
   let transactionStarted = false
   try {
     pgPool = await getPgClient(c)
-    dbClient = await pgPool.connect() as PgTransactionClient
+    dbClient = await checkoutPgClient(pgPool)
     const capabilityResult = await dbClient.query<{ allowed: boolean }>(
       'SELECT public.apikey_has_current_org_create_capability($1::uuid) AS allowed',
       [apikeyRbacId],
@@ -243,7 +238,7 @@ async function insertOrgForApiKey(
     throw error
   }
   finally {
-    dbClient?.release()
+    if (dbClient && pgPool) releasePgClient(pgPool, dbClient)
     if (pgPool) {
       closeClient(c, pgPool)
     }

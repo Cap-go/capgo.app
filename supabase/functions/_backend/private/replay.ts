@@ -5,7 +5,7 @@ import { Hono } from 'hono/tiny'
 import { BRES, parseBody, quickError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlogErr, serializeError } from '../utils/logging.ts'
-import { closeClient, getDrizzleClient, getPgClient} from '../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, type PgClient} from '../utils/pg.ts'
 import { schema } from '../utils/postgres_schema.ts'
 import { capturePosthogReplaySnapshot } from '../utils/posthog.ts'
 

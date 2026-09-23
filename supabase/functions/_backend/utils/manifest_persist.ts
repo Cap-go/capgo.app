@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import { cloudlog } from './logging.ts'
 import { isPostgresSafeText, normalizeLegacyEncodedManifestFileName } from './manifest_encoding.ts'
-import { closeClient, getPgClient } from './pg.ts'
+import { closeClient, getPgClient, checkoutPgClient, releasePgClient } from './pg.ts'
 import { supabaseAdmin } from './supabase.ts'
 
 export interface ManifestPersistEntry {
@@ -86,7 +86,7 @@ export async function persistVersionManifestEntries(
   }
 
   const pgPool = await getPgClient(c, false)
-  const pgClient = await pgPool.connect()
+  const pgClient = await checkoutPgClient(pgPool)
   try {
     await pgClient.query('BEGIN')
     // Serialize concurrent writers for this version (no unique constraint on manifest rows).
@@ -149,7 +149,7 @@ export async function persistVersionManifestEntries(
     throw error
   }
   finally {
-    pgClient.release()
+    if (pgClient) releasePgClient(pgPool, pgClient)
     await closeClient(c, pgPool)
   }
 

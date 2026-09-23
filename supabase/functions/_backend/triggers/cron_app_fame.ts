@@ -11,7 +11,7 @@ import {
 } from '../utils/app_fame.ts'
 import { BRES, middlewareAPISecret, quickError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
-import { closeClient, getDrizzleClient, getPgClient, logPgError} from '../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, logPgError, type PgClient} from '../utils/pg.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
 

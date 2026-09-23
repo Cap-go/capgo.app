@@ -31,8 +31,24 @@ import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './
  */
 export type PgClient = Client | Pool
 
+/** Checked-out query handle: Pool connection or a connected Hyperdrive Client. */
+export type PgQueryClient = PoolClient | Client
+
 /** Hyperdrive owns Worker↔origin cleanup; do not call `.end()` on these clients. */
 const skipEndClients = new WeakSet<object>()
+
+export async function checkoutPgClient(pg: PgClient): Promise<PgQueryClient> {
+  if (skipEndClients.has(pg))
+    return pg as Client
+  return (pg as Pool).connect()
+}
+
+export function releasePgClient(pg: PgClient, client: PgQueryClient | null | undefined, error?: boolean | Error): void {
+  if (!client || skipEndClients.has(pg))
+    return
+  if ('release' in client)
+    client.release(error)
+}
 
 const REPLICATION_LAG_THRESHOLD_SECONDS = 180
 const REPLICATION_LAG_CACHE_TTL_SECONDS = 60

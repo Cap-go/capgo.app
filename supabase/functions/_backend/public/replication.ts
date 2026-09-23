@@ -3,7 +3,7 @@ import { sql } from 'drizzle-orm'
 import { CacheHelper } from '../utils/cache.ts'
 import { honoFactory, useCors } from '../utils/hono.ts'
 import { cloudlogErr } from '../utils/logging.ts'
-import { closeClient, getDrizzleClient, getPgClient, logPgError} from '../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, logPgError, type PgClient} from '../utils/pg.ts'
 import { validatePlatformAdminOrApiSecret } from '../utils/platform_admin_access.ts'
 
 const DEFAULT_THRESHOLD_SECONDS = 180

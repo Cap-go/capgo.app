@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { safeParseSchema } from '../../../utils/schema_validation.ts'
 import { BRES, simpleError } from '../../../utils/hono.ts'
 import { cloudlog } from '../../../utils/logging.ts'
-import { closeClient, getPgClient } from '../../../utils/pg.ts'
+import { closeClient, getPgClient, type PgQueryClient, checkoutPgClient, releasePgClient } from '../../../utils/pg.ts'
 import { checkPermission } from '../../../utils/rbac.ts'
 
 const rbacInviteRoles = ['org_member', 'org_billing_admin', 'org_admin', 'org_super_admin'] as const
@@ -36,11 +36,6 @@ const inviteBodySchema = z.object({
   email: z.email(),
   invite_type: inviteTypeSchema,
 })
-
-interface PgTransactionClient {
-  query: <TRow = Record<string, unknown>>(text: string, params?: unknown[]) => Promise<{ rowCount?: number | null, rows: TRow[] }>
-  release: () => void
-}
 
 export function normalizeInviteRole(inviteType: string): RbacInviteRole | null {
   if (!allowedInviteRoleSet.has(inviteType))
@@ -79,10 +74,10 @@ export async function post(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown,
   // revoking anon execute. Mirrors organization/post.ts: BEGIN before
   // set_config(..., true) so capgkey survives until the RPC runs.
   const pgPool = await getPgClient(c)
-  let dbClient: PgTransactionClient | null = null
+  let dbClient: PgQueryClient | null = null
   let transactionStarted = false
   try {
-    dbClient = await pgPool.connect() as PgTransactionClient
+    dbClient = await checkoutPgClient(pgPool)
     await dbClient.query('BEGIN')
     transactionStarted = true
     await dbClient.query(
@@ -109,7 +104,7 @@ export async function post(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown,
     throw simpleError('error_inviting_user_to_organization', 'Error inviting user to organization', { error })
   }
   finally {
-    dbClient?.release()
+    if (dbClient) releasePgClient(pgPool, dbClient)
     closeClient(c, pgPool)
   }
 

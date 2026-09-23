@@ -3,7 +3,7 @@ import type { MiddlewareKeyVariables } from './hono.ts'
 import type { Database } from './supabase.types.ts'
 import { syncBentoSubscriberTags, trackBentoEvent, unsubscribeBento } from './bento.ts'
 import { quickError } from './hono.ts'
-import { closeClient, getPgClient} from './pg.ts'
+import { closeClient, getPgClient, checkoutPgClient, releasePgClient, type PgClient} from './pg.ts'
 
 export const BENTO_AWAITING_FIRST_ORG_TAG = 'onboarding:awaiting_first_org'
 // Permanent safety opt-out: never remove this tag. The Bento recovery workflow
@@ -202,7 +202,7 @@ async function runBentoMutationWithFirstOrgReconciliation(
 }
 
 async function getFirstOrgDatabaseState(pgPool: PgClient, userId: string) {
-  const pgClient = await pgPool.connect()
+  const pgClient = await checkoutPgClient(pgPool)
   try {
     const result = await pgClient.query<FirstOrgRegistrationState>(
       `SELECT
@@ -237,7 +237,7 @@ async function getFirstOrgDatabaseState(pgPool: PgClient, userId: string) {
     // General-backend Pools are request-scoped and closeClient intentionally
     // does not end them in workerd. Destroy the checked-out socket at the query
     // boundary so it cannot survive across Bento I/O or request teardown.
-    pgClient.release(true)
+    releasePgClient(pgPool, pgClient, true)
   }
 }
 
@@ -344,7 +344,7 @@ export async function syncBentoFirstOrgOnRoleBindingWrite(
   const pgPool = await getPgClient(c)
   try {
     let binding: CurrentRoleBinding | undefined
-    const pgClient = await pgPool.connect()
+    const pgClient = await checkoutPgClient(pgPool)
     try {
       const result = await pgClient.query<CurrentRoleBinding>(
         `SELECT
@@ -369,7 +369,7 @@ export async function syncBentoFirstOrgOnRoleBindingWrite(
     finally {
       // See hasActiveDirectOrgAccess: destroy this request-scoped socket before
       // the handler crosses the network boundary into Bento.
-      pgClient.release(true)
+      releasePgClient(pgPool, pgClient, true)
     }
 
     if (

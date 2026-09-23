@@ -1,7 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Context } from 'hono'
 // @ts-types="npm:@types/pg"
-import type { PoolClient } from 'pg'
 import type { BillingPlanBentoState } from './billing_bento_tags.ts'
 import type { AuthInfo } from './hono.ts'
 import type { Database } from './supabase.types.ts'
@@ -12,7 +11,7 @@ import { buildBillingPlanBentoTags } from './billing_bento_tags.ts'
 import { buildNormalizedDeviceForWrite, hasComparableDeviceChanged, nullableString } from './deviceComparison.ts'
 import { quickError, simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { closeClient, getPgClient } from './pg.ts'
+import { closeClient, getPgClient, type PgQueryClient, checkoutPgClient, releasePgClient } from './pg.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
 import { Constants } from './supabase.types.ts'
 import { getEnv, isStripeConfigured } from './utils.ts'
@@ -952,10 +951,10 @@ export async function createApiKey(c: Context, userId: string) {
   }
 
   const pgPool = await getPgClient(c)
-  let pgClient: PoolClient | undefined
+  let pgClient: PgQueryClient | undefined
   let inTransaction = false
   try {
-    pgClient = await pgPool.connect()
+    pgClient = await checkoutPgClient(pgPool)
     await pgClient.query('BEGIN')
     inTransaction = true
     await pgClient.query(`SET LOCAL lock_timeout = '5s'`)
@@ -1156,7 +1155,7 @@ export async function createApiKey(c: Context, userId: string) {
     // Workerd keeps request-scoped Pools open, so destroy the checked-out
     // socket explicitly after the transaction and then close the Pool where
     // the runtime supports it.
-    pgClient?.release(true)
+    if (pgClient) releasePgClient(pgPool, pgClient, true)
     closeClient(c, pgPool)
   }
 }

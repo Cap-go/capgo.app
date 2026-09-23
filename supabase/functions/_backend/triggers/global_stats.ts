@@ -10,7 +10,7 @@ import { GLOBAL_STATS_SHARDS, REQUIRED_GLOBAL_STATS_SHARDS, USAGE_GLOBAL_STATS_S
 import { BRES, middlewareAPISecret, quickError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { readGlobalNotificationStatsCF } from '../utils/nativeNotifications.ts'
-import { closeClient, getDrizzleClient, getPgClient} from '../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, type PgClient} from '../utils/pg.ts'
 import { countAllApps, countAllUpdates, countAllUpdatesExternal } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'

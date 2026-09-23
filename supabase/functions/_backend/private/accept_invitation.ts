@@ -1,4 +1,3 @@
-import type { PoolClient } from 'pg'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { HTTPException } from 'hono/http-exception'
 import { z } from 'zod'
@@ -7,7 +6,7 @@ import { safeParseSchema } from '../utils/schema_validation.ts'
 import { parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { getEffectivePasswordMinLength, getPasswordPolicyValidationErrors } from '../utils/password_policy.ts'
-import { closeClient, getPgClient } from '../utils/pg.ts'
+import { closeClient, getPgClient, type PgQueryClient, checkoutPgClient, releasePgClient } from '../utils/pg.ts'
 import { emptySupabase, supabaseAdmin as useSupabaseAdmin } from '../utils/supabase.ts'
 import { syncUserPreferenceTags } from '../utils/user_preferences.ts'
 import { getEnv } from '../utils/utils.ts'
@@ -156,12 +155,12 @@ function isPgLockTimeoutError(error: unknown): boolean {
     && (error as { code: string }).code === '55P03'
 }
 
-async function rollbackRbacOrgLockSavepoint(pgClient: PoolClient): Promise<void> {
+async function rollbackRbacOrgLockSavepoint(pgClient: PgQueryClient): Promise<void> {
   await pgClient.query('ROLLBACK TO SAVEPOINT rbac_org_lock').catch(() => {})
   await pgClient.query('RELEASE SAVEPOINT rbac_org_lock').catch(() => {})
 }
 
-async function acquireRbacOrgLockWithRetry(pgClient: PoolClient, orgId: string): Promise<void> {
+async function acquireRbacOrgLockWithRetry(pgClient: PgQueryClient, orgId: string): Promise<void> {
   const lockAttempts = 6
   const lockTimeoutMs = 5000
   const savepointName = 'rbac_org_lock'
@@ -196,11 +195,11 @@ async function ensureOrgMembership(
   invitation: any,
 ) {
   const pgPool = await getPgClient(c, false)
-  let pgClient: PoolClient | null = null
+  let pgClient: PgQueryClient | null = null
   let transactionStarted = false
 
   try {
-    pgClient = await pgPool.connect()
+    pgClient = await checkoutPgClient(pgPool)
     await pgClient.query('BEGIN')
     transactionStarted = true
     await pgClient.query('SET LOCAL statement_timeout = 10000')
@@ -340,7 +339,7 @@ async function ensureOrgMembership(
     return quickError(500, 'failed_to_accept_invitation', 'Failed to finalize org membership', { error: errorMessage })
   }
   finally {
-    pgClient?.release()
+    if (pgClient) releasePgClient(pgPool, pgClient)
     closeClient(c, pgPool)
   }
 }

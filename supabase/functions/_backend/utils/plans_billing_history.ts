@@ -1,6 +1,5 @@
 import type { Context } from 'hono'
-import type { PoolClient } from 'pg'
-import { closeClient, getPgClient } from './pg.ts'
+import { closeClient, getPgClient, type PgQueryClient, checkoutPgClient, releasePgClient } from './pg.ts'
 
 export interface RevenueMovement {
   date: string
@@ -381,10 +380,10 @@ export async function loadPlansBillingHistories(
     return new Map()
 
   const pool = await getPgClient(c, true)
-  let client: PoolClient | undefined
+  let client: PgQueryClient | undefined
 
   try {
-    client = await pool.connect()
+    client = await checkoutPgClient(pool)
     const organizations = await client.query<OrganizationRow>(`
       SELECT o.id::text AS org_id, o.customer_id, si.trial_at, si.paid_at,
              si.canceled_at, si.past_due_at, si.churn_reason
@@ -509,7 +508,7 @@ export async function loadPlansBillingHistories(
     return histories
   }
   finally {
-    client?.release()
+    if (client) releasePgClient(pool, client)
     await closeClient(c, pool)
   }
 }

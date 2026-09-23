@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { AuthInfo, JWTClaims, MiddlewareKeyVariables } from './hono.ts'
 import { quickError } from './hono.ts'
-import { closeClient, getPgClient} from './pg.ts'
+import { closeClient, getPgClient, type PgClient} from './pg.ts'
 
 const SESSION_ID_UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 

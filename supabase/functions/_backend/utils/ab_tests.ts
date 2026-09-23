@@ -6,7 +6,7 @@ import rawABTestsConfig from './ab_tests.json' with { type: 'json' }
 import { syncBentoSubscriberTags } from './bento.ts'
 import { quickError } from './hono.ts'
 import { cloudlogErr } from './logging.ts'
-import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, checkoutPgClient, releasePgClient } from './pg.ts'
 import { backgroundTask } from './utils.ts'
 
 export type ABTestAudience = 'all' | 'self_signup'
@@ -254,7 +254,7 @@ async function readAssignmentUser(
 ): Promise<AssignmentUser | undefined> {
   const pgPool = await getPgClient(c, true)
   try {
-    const pgClient = await pgPool.connect()
+    const pgClient = await checkoutPgClient(pgPool)
     try {
       const result = await pgClient.query<AssignmentUser>(
         `SELECT created_via_invite,
@@ -270,7 +270,7 @@ async function readAssignmentUser(
       return result.rows[0]
     }
     finally {
-      pgClient.release(true)
+      releasePgClient(pgPool, pgClient, true)
     }
   }
   finally {
@@ -286,7 +286,7 @@ async function persistABTestAssignments(
   const pgPool = await getPgClient(c)
   let persisted: unknown
   try {
-    const pgClient = await pgPool.connect()
+    const pgClient = await checkoutPgClient(pgPool)
     try {
       const result = await pgClient.query<{ abtests: unknown }>(
         `UPDATE public.users
@@ -306,7 +306,7 @@ async function persistABTestAssignments(
       persisted = result.rows[0]?.abtests
     }
     finally {
-      pgClient.release(true)
+      releasePgClient(pgPool, pgClient, true)
     }
   }
   finally {
