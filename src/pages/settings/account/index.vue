@@ -16,6 +16,7 @@ import iconName from '~icons/heroicons/user?raw'
 import GitHubProfileDialog from '~/components/dashboard/GitHubProfileDialog.vue'
 import { getRecentEmailOtpVerification } from '~/services/emailOtp'
 import { getFormatLocaleOptions, resolveFormatLocale } from '~/services/formatLocale'
+import { fetchOrgMembersRbac } from '~/services/orgMembers'
 import { pickPhoto, takePhoto } from '~/services/photos'
 import { getCurrentPlanNameOrg, isPayingOrg, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -100,15 +101,14 @@ async function checkOrganizationImpact() {
   // Check each organization to see if user is the only super_admin
   for (const org of superAdminOrgs) {
     try {
-      const { data: members, error } = await supabase
-        .rpc('get_org_members_rbac', { p_org_id: org.gid })
+      const { data: members, error } = await fetchOrgMembersRbac(org.gid)
 
       if (error) {
         console.error('Error getting RBAC org members:', error)
         continue
       }
 
-      const superAdminCount = members.filter(member =>
+      const superAdminCount = (members ?? []).filter(member =>
         !member.is_invite && !member.is_tmp && isSuperAdminRole(member.role_name),
       ).length
 

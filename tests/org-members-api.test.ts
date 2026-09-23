@@ -73,9 +73,100 @@ describe('org members HTTP API', () => {
     expect(typeof data[0]?.role_name).toBe('string')
   })
 
+  it.concurrent('allows org members to list legacy members', async () => {
+    const response = await fetchTestRequest(
+      getEndpointUrl(`/private/org_members/legacy?org_id=${ORG_ID}`),
+      { headers: await getAuthHeaders() },
+    )
+
+    expect(response.status).toBe(200)
+    const data = await response.json() as Array<{
+      uid: string
+      email: string
+      role: string
+      is_tmp: boolean
+    }>
+    expect(Array.isArray(data)).toBe(true)
+    expect(data.length).toBeGreaterThan(0)
+    expect(typeof data[0]?.uid).toBe('string')
+    expect(typeof data[0]?.email).toBe('string')
+    expect(typeof data[0]?.role).toBe('string')
+  })
+
+  it.concurrent('allows org admins to read member 2FA status', async () => {
+    const response = await fetchTestRequest(
+      getEndpointUrl(`/private/org_members/2fa-status?org_id=${ORG_ID}`),
+      { headers: await getAuthHeaders() },
+    )
+
+    expect(response.status).toBe(200)
+    const data = await response.json() as Array<{
+      user_id: string
+      '2fa_enabled': boolean
+    }>
+    expect(Array.isArray(data)).toBe(true)
+    if (data.length > 0) {
+      expect(typeof data[0]?.user_id).toBe('string')
+      expect(typeof data[0]?.['2fa_enabled']).toBe('boolean')
+    }
+  })
+
+  it.concurrent('allows org admins to read member password policy status', async () => {
+    const response = await fetchTestRequest(
+      getEndpointUrl(`/private/org_members/password-policy?org_id=${ORG_ID}`),
+      { headers: await getAuthHeaders() },
+    )
+
+    expect(response.status).toBe(200)
+    const data = await response.json() as Array<{
+      user_id: string
+      email: string
+      password_policy_compliant: boolean
+    }>
+    expect(Array.isArray(data)).toBe(true)
+    if (data.length > 0) {
+      expect(typeof data[0]?.user_id).toBe('string')
+      expect(typeof data[0]?.email).toBe('string')
+      expect(typeof data[0]?.password_policy_compliant).toBe('boolean')
+    }
+  })
+
   it.concurrent('rejects member list reads for non-members', async () => {
     const response = await fetchTestRequest(
       getEndpointUrl(`/private/org_members?org_id=${ORG_ID}`),
+      {
+        headers: await getAuthHeadersForCredentials(USER_EMAIL_NONMEMBER, USER_PASSWORD_NONMEMBER),
+      },
+    )
+
+    expect(response.status).toBeGreaterThanOrEqual(400)
+  })
+
+  it.concurrent('rejects legacy member list reads for non-members', async () => {
+    const response = await fetchTestRequest(
+      getEndpointUrl(`/private/org_members/legacy?org_id=${ORG_ID}`),
+      {
+        headers: await getAuthHeadersForCredentials(USER_EMAIL_NONMEMBER, USER_PASSWORD_NONMEMBER),
+      },
+    )
+
+    expect(response.status).toBeGreaterThanOrEqual(400)
+  })
+
+  it.concurrent('rejects 2FA status reads for non-members', async () => {
+    const response = await fetchTestRequest(
+      getEndpointUrl(`/private/org_members/2fa-status?org_id=${ORG_ID}`),
+      {
+        headers: await getAuthHeadersForCredentials(USER_EMAIL_NONMEMBER, USER_PASSWORD_NONMEMBER),
+      },
+    )
+
+    expect(response.status).toBeGreaterThanOrEqual(400)
+  })
+
+  it.concurrent('rejects password policy status reads for non-members', async () => {
+    const response = await fetchTestRequest(
+      getEndpointUrl(`/private/org_members/password-policy?org_id=${ORG_ID}`),
       {
         headers: await getAuthHeadersForCredentials(USER_EMAIL_NONMEMBER, USER_PASSWORD_NONMEMBER),
       },

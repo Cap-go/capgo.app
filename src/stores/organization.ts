@@ -4,6 +4,7 @@ import type { Database } from '~/types/supabase.types'
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { addUtcDays, normalizeToUtcStartOfDay } from '~/services/date'
+import { fetchOrgMembers, fetchOrgMembersPasswordPolicy } from '~/services/orgMembers'
 import { createSignedImageUrl, getImmediateImageUrl, resolveImagePath } from '~/services/storage'
 import { isPlatformAdmin, stripeEnabled, useSupabase } from '~/services/supabase'
 import { clearWebsitePaidUserCookie, setWebsitePaidUserCookie, syncWebsitePaidUserCookieFromOrganizations } from '~/services/websiteAuthCookie'
@@ -602,10 +603,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     if (!currentOrgId)
       return []
 
-    const { data, error } = await supabase
-      .rpc('get_org_members', {
-        guild_id: currentOrgId,
-      })
+    const { data, error } = await fetchOrgMembers(currentOrgId)
 
     if (error || data === null) {
       return []
@@ -811,11 +809,9 @@ export const useOrganizationStore = defineStore('organization', () => {
 
   // Check password policy compliance for all org members in org admin previews.
   const checkPasswordPolicyImpact = async (orgId: string) => {
-    const { data, error } = await supabase.rpc('check_org_members_password_policy', {
-      org_id: orgId,
-    })
+    const { data, error } = await fetchOrgMembersPasswordPolicy(orgId)
 
-    if (error) {
+    if (error || !data) {
       console.error('Failed to check password policy impact:', error)
       return null
     }

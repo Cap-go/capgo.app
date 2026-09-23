@@ -13,6 +13,28 @@ export interface OrgMemberRbacRow {
   org_user_id: number | null
 }
 
+export interface OrgMemberLegacyRow {
+  uid: string
+  email: string
+  image_url: string
+  role: string
+  is_tmp: boolean
+  aid: number
+}
+
+export interface OrgMember2faStatusRow {
+  user_id: string
+  '2fa_enabled': boolean
+}
+
+export interface OrgMemberPasswordPolicyStatusRow {
+  user_id: string
+  email: string
+  password_policy_compliant: boolean
+  first_name: string | null
+  last_name: string | null
+}
+
 export interface MagicInviteLookup {
   org_name: string
   org_logo: string | null
@@ -22,6 +44,27 @@ export interface MagicInviteLookup {
 export async function fetchOrgMembersRbac(orgId: string) {
   const encodedOrgId = encodeURIComponent(orgId)
   return await invokeCapgoApi<OrgMemberRbacRow[]>(`private/org_members?org_id=${encodedOrgId}`, {
+    method: 'GET',
+  })
+}
+
+export async function fetchOrgMembers(orgId: string) {
+  const encodedOrgId = encodeURIComponent(orgId)
+  return await invokeCapgoApi<OrgMemberLegacyRow[]>(`private/org_members/legacy?org_id=${encodedOrgId}`, {
+    method: 'GET',
+  })
+}
+
+export async function fetchOrgMembers2faStatus(orgId: string) {
+  const encodedOrgId = encodeURIComponent(orgId)
+  return await invokeCapgoApi<OrgMember2faStatusRow[]>(`private/org_members/2fa-status?org_id=${encodedOrgId}`, {
+    method: 'GET',
+  })
+}
+
+export async function fetchOrgMembersPasswordPolicy(orgId: string) {
+  const encodedOrgId = encodeURIComponent(orgId)
+  return await invokeCapgoApi<OrgMemberPasswordPolicyStatusRow[]>(`private/org_members/password-policy?org_id=${encodedOrgId}`, {
     method: 'GET',
   })
 }
