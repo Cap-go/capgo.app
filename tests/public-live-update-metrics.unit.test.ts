@@ -59,17 +59,6 @@ describe('public live update metrics', () => {
         )
       }
 
-      if (query.includes('first_day_successes')) {
-        return analyticsResponse(
-          [
-            { name: 'first_day_successes', type: 'UInt64' },
-            { name: 'first_day_failures', type: 'UInt64' },
-            { name: 'total_successes', type: 'UInt64' },
-          ],
-          [{ first_day_successes: '36', first_day_failures: '4', total_successes: '90' }],
-        )
-      }
-
       if (query.includes('has_reset')) {
         return analyticsResponse(
           [
@@ -238,8 +227,8 @@ describe('public live update metrics', () => {
       { date: '2026-06-29', success_rate: 40 },
       { date: '2026-06-30', success_rate: 90 },
     ])
-    expect(metrics.first_day_rate).toBe(40)
-    expect(metrics.first_day_success_rate).toBe(90)
+    expect(metrics.first_day_rate).toBeNull()
+    expect(metrics.first_day_success_rate).toBeNull()
     expect(metrics.rollback_rate).toBe(3)
     expect(metrics.zip_success_rate).toBe(80)
     expect(metrics.delta_success_rate).toBe(94.1)
@@ -255,17 +244,8 @@ describe('public live update metrics', () => {
     expect(metrics.countries.find(row => row.key === 'IQ')?.success_rate).toBe(33.3)
     expect(metrics.updater_versions[0]).toMatchObject({ key: '8.1.0', share: 60 })
     expect(metrics.updater_versions.find(row => row.key === '8.1.0')?.success_rate).toBe(93.3)
-    expect(queries.length).toBe(14)
-    expect(queries.join('\n')).toContain('GROUP BY date, app_id, device_id')
-    expect(queries.join('\n')).not.toContain('FROM version_usage')
-    expect(queries.join('\n')).toContain('blob6')
-    expect(queries.join('\n')).toContain('blob7')
-    expect(queries.join('\n')).toContain('blob10')
-    const firstDayQuery = queries.find(query => query.includes('first_day_successes'))
-    expect(firstDayQuery).toContain('argMin(successes, date)')
-    expect(firstDayQuery).toContain('argMin(failures, date)')
-    expect(firstDayQuery).toContain('sum(successes)')
-    expect(firstDayQuery).toContain('GROUP BY app_id, version_name')
+    expect(queries.length).toBe(13)
+    expect(queries.join('\n')).not.toContain('first_day_successes')
   })
 
   it('computes device-day success rate for global_stats windows', async () => {

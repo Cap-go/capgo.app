@@ -3420,7 +3420,7 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
   const deltaFailActions = PUBLIC_DELTA_FAIL_ACTIONS.map(action => `'${action}'`).join(', ')
   const outcomeBase = `SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'set', 1, 0)) AS succeeded, max(if(blob2 IN (${failureActions}), 1, 0)) AS failed, argMax(blob5, timestamp) AS platform, argMax(blob6, timestamp) AS country, argMax(blob7, timestamp) AS plugin_version FROM app_log WHERE ${window} AND (blob2 = 'set' OR blob2 IN (${failureActions})) GROUP BY date, app_id, device_id`
   const outcomesQuery = `SELECT date, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures, sum(if(succeeded = 1 AND failed = 0, 1, 0)) AS first_tries FROM (${outcomeBase}) GROUP BY date`
-  const firstDayQuery = `SELECT sum(first_day_successes) AS first_day_successes, sum(first_day_failures) AS first_day_failures, sum(total_successes) AS total_successes FROM (SELECT app_id, version_name, argMin(successes, date) AS first_day_successes, argMin(failures, date) AS first_day_failures, sum(successes) AS total_successes FROM (SELECT date, app_id, version_name, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, blob3 AS version_name, max(if(blob2 = 'set', 1, 0)) AS succeeded, max(if(blob2 IN (${failureActions}), 1, 0)) AS failed FROM app_log WHERE ${window} AND blob3 != '' AND (blob2 = 'set' OR blob2 IN (${failureActions})) GROUP BY date, app_id, device_id, version_name) GROUP BY date, app_id, version_name) GROUP BY app_id, version_name)`
+  // AE SQL rejects the nested first-day-of-release query (HTTP 422). Same skip as website publicLiveUpdateMetrics.
   const rollbackQuery = `SELECT sum(has_reset) AS rollbacks, sum(if(has_set + has_reset > 0, 1, 0)) AS outcomes FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'reset', 1, 0)) AS has_reset, max(if(blob2 = 'set', 1, 0)) AS has_set FROM app_log WHERE ${window} AND blob2 IN ('set', 'reset') GROUP BY date, app_id, device_id)`
   const packageQuery = `SELECT sum(if(zip_ok = 1, 1, 0)) AS zip_successes, sum(if(zip_ok = 0 AND zip_fail = 1, 1, 0)) AS zip_failures, sum(if(delta_ok = 1, 1, 0)) AS delta_successes, sum(if(delta_ok = 0 AND delta_fail = 1, 1, 0)) AS delta_failures FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'download_zip_complete', 1, 0)) AS zip_ok, max(if(blob2 IN (${zipFailActions}), 1, 0)) AS zip_fail, max(if(blob2 = 'download_manifest_complete', 1, 0)) AS delta_ok, max(if(blob2 IN (${deltaFailActions}), 1, 0)) AS delta_fail FROM app_log WHERE ${window} AND blob2 IN ('download_zip_complete', 'download_manifest_complete', ${zipFailActions}, ${deltaFailActions}) GROUP BY date, app_id, device_id)`
   const failuresQuery = `SELECT action, count() AS devices FROM (SELECT ${day} AS date, blob2 AS action, index1 AS app_id, blob1 AS device_id FROM app_log WHERE ${window} AND blob2 IN (${failureActions}) GROUP BY date, action, app_id, device_id) GROUP BY action`
@@ -3437,7 +3437,6 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
   try {
     const [
       outcomeRows,
-      firstDayRows,
       rollbackRows,
       packageRows,
       failureRows,
@@ -3452,7 +3451,6 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
       versionFailureRows,
     ] = await Promise.all([
       runQueryToCFA<{ date: string, successes: number, failures: number, first_tries: number }>(c, outcomesQuery),
-      runQueryToCFA<{ first_day_successes: number, first_day_failures: number, total_successes: number }>(c, firstDayQuery),
       runQueryToCFA<{ rollbacks: number, outcomes: number }>(c, rollbackQuery),
       runQueryToCFA<{ zip_successes: number, zip_failures: number, delta_successes: number, delta_failures: number }>(c, packageQuery),
       runQueryToCFA<{ action: string, devices: number }>(c, failuresQuery),
@@ -3477,10 +3475,6 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
     const totalFirstTries = outcomeRows.reduce((sum, row) => sum + (Number(row.first_tries) || 0), 0)
     const totalOutcomes = totalSuccesses + totalFailures
     const success_rate = totalOutcomes ? roundPublicPercent((totalSuccesses / totalOutcomes) * 100) : 0
-    const firstDay = firstDayRows[0]
-    const firstDaySuccesses = Number(firstDay?.first_day_successes) || 0
-    const firstDayFailures = Number(firstDay?.first_day_failures) || 0
-    const firstDayTotalSuccesses = Number(firstDay?.total_successes) || 0
     const rollback = rollbackRows[0]
     const packages = packageRows[0]
     const failureTotal = failureRows.reduce((sum, row) => sum + (Number(row.devices) || 0), 0)
@@ -3502,8 +3496,8 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
     return {
       success_rate,
       first_try_rate: rateFromParts(totalFirstTries, totalSuccesses),
-      first_day_rate: rateFromParts(firstDaySuccesses, firstDayTotalSuccesses),
-      first_day_success_rate: rateFromOutcomes(firstDaySuccesses, firstDayFailures),
+      first_day_rate: null,
+      first_day_success_rate: null,
       rollback_rate: rateFromParts(Number(rollback?.rollbacks) || 0, Number(rollback?.outcomes) || 0),
       zip_success_rate: rateFromOutcomes(Number(packages?.zip_successes) || 0, Number(packages?.zip_failures) || 0),
       delta_success_rate: rateFromOutcomes(Number(packages?.delta_successes) || 0, Number(packages?.delta_failures) || 0),
