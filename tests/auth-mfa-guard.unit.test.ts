@@ -47,7 +47,7 @@ function createTestContext() {
     error: null,
   })
 
-  const mockRpc = vi.fn(async (name: string) => {
+  const mockRpc = vi.fn(async (name: string): Promise<{ data: boolean | null, error: { message: string } | null }> => {
     if (name === 'verify_mfa')
       return { data: false, error: null }
     if (name === 'is_account_disabled')
@@ -198,9 +198,11 @@ describe('auth guard MFA assurance', () => {
 
   it.concurrent('redirects to login when verify_mfa returns an RPC error', async () => {
     await withTestContext(async (context) => {
+      const verifyMfaError = { message: 'MFA verification failed' }
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
       context.mockRpc.mockImplementation(async (name: string) => {
         if (name === 'verify_mfa')
-          return { data: null, error: { message: 'MFA verification failed' } }
+          return { data: null, error: verifyMfaError }
         if (name === 'is_account_disabled')
           return { data: false, error: null }
         return { data: null, error: null }
@@ -215,12 +217,14 @@ describe('auth guard MFA assurance', () => {
         next,
       )
 
+      expect(consoleError).toHaveBeenCalledWith('Cannot verify MFA assurance', verifyMfaError)
       expect(next).toHaveBeenCalledWith({
         path: '/login',
         query: {
           to: '/dashboard',
         },
       })
+      consoleError.mockRestore()
     })
   })
 
