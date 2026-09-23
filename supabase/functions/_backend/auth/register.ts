@@ -1,7 +1,6 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { z } from 'zod'
 import { Hono } from 'hono/tiny'
-import { verifyCaptchaToken } from '../utils/captcha.ts'
 import { parseBody, simpleErrorWithStatus, useCors } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { getPasswordPolicyValidationErrors } from '../utils/password_policy.ts'
@@ -51,6 +50,13 @@ function isUserAlreadyRegisteredError(err: unknown): boolean {
     || message.includes('user already exists')
 }
 
+function isCaptchaFailedError(err: unknown): boolean {
+  const anyErr = err as { code?: string, message?: string }
+  const code = String(anyErr?.code ?? '').toLowerCase()
+  const message = String(anyErr?.message ?? '').toLowerCase()
+  return code === 'captcha_failed' || message.includes('captcha')
+}
+
 async function rollbackCreatedUser(c: Parameters<typeof supabaseAdmin>[0], userId: string) {
   const admin = supabaseAdmin(c)
   try {
@@ -76,16 +82,8 @@ app.post('/', async (c) => {
   const normalizedEmail = body.email.trim().toLowerCase()
   const captchaSecret = getCaptchaSecret(c)
 
-  if (captchaSecret.length > 0) {
-    if (!body.captcha_token) {
-      return simpleErrorWithStatus(c, 422, 'captcha_failed', 'Captcha verification failed')
-    }
-    try {
-      await verifyCaptchaToken(c, body.captcha_token, captchaSecret)
-    }
-    catch {
-      return simpleErrorWithStatus(c, 422, 'captcha_failed', 'Captcha verification failed')
-    }
+  if (captchaSecret.length > 0 && !body.captcha_token) {
+    return simpleErrorWithStatus(c, 422, 'captcha_failed', 'Captcha verification failed')
   }
 
   const passwordPolicyErrors = getPasswordPolicyValidationErrors(body.password, DEFAULT_PASSWORD_POLICY)
@@ -132,7 +130,9 @@ app.post('/', async (c) => {
     email: normalizedEmail,
     password: body.password,
     options: {
-      captchaToken: captchaSecret.length > 0 ? body.captcha_token : undefined,
+      ...(captchaSecret.length > 0 && body.captcha_token
+        ? { captchaToken: body.captcha_token }
+        : {}),
       data: userMetadata,
     },
   })
@@ -144,6 +144,9 @@ app.post('/', async (c) => {
       error: signupError.message,
       status: signupError.status,
     })
+    if (isCaptchaFailedError(signupError)) {
+      return simpleErrorWithStatus(c, 422, 'captcha_failed', 'Captcha verification failed')
+    }
     if (isUserAlreadyRegisteredError(signupError)) {
       return simpleErrorWithStatus(c, 409, 'email_exists', EMAIL_EXISTS_MESSAGE)
     }
