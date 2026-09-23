@@ -1,11 +1,12 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { User } from '@supabase/supabase-js'
 import { z } from 'zod'
 import { Hono } from 'hono/tiny'
 import { parseBody, simpleErrorWithStatus, useCors } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { getPasswordPolicyValidationErrors } from '../utils/password_policy.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
-import { emptySupabase, supabaseAdmin } from '../utils/supabase.ts'
+import { emptySupabaseWithClientIP, supabaseAdmin } from '../utils/supabase.ts'
 import { getEnv } from '../utils/utils.ts'
 
 const DEFAULT_PASSWORD_POLICY = {
@@ -43,11 +44,13 @@ function getCaptchaSecret(c: Parameters<typeof getEnv>[0]) {
 }
 
 function isUserAlreadyRegisteredError(err: unknown): boolean {
-  const anyErr = err as { message?: string, status?: number }
+  const anyErr = err as { code?: string, message?: string }
+  const code = String(anyErr?.code ?? '').toLowerCase()
   const message = String(anyErr?.message ?? '').toLowerCase()
-  return anyErr?.status === 422
-    || message.includes('already registered')
-    || message.includes('user already exists')
+  if (code === 'user_already_exists' || code === 'email_exists' || code === 'email_address_already_registered') {
+    return true
+  }
+  return message.includes('already registered') || message.includes('user already exists')
 }
 
 function isCaptchaFailedError(err: unknown): boolean {
@@ -57,16 +60,43 @@ function isCaptchaFailedError(err: unknown): boolean {
   return code === 'captcha_failed' || message.includes('captcha')
 }
 
+function isAuthRateLimitError(err: unknown): boolean {
+  const anyErr = err as { code?: string, message?: string, status?: number }
+  const code = String(anyErr?.code ?? '').toLowerCase()
+  const message = String(anyErr?.message ?? '').toLowerCase()
+  return anyErr?.status === 429
+    || code === 'over_request_rate_limit'
+    || code === 'over_email_send_rate_limit'
+    || message.includes('rate limit')
+}
+
+function isEmailConfirmationPending(user: Pick<User, 'email_confirmed_at'> | null | undefined): boolean {
+  return Boolean(user) && !user?.email_confirmed_at
+}
+
 async function rollbackCreatedUser(c: Parameters<typeof supabaseAdmin>[0], userId: string) {
   const admin = supabaseAdmin(c)
-  try {
-    await admin.from('users').delete().eq('id', userId)
+  const requestId = c.get('requestId')
+
+  const { error: profileDeleteError } = await admin.from('users').delete().eq('id', userId)
+  if (profileDeleteError) {
+    cloudlogErr({
+      requestId,
+      message: 'auth register rollback users delete failed',
+      userId,
+      error: serializeError(profileDeleteError),
+    })
   }
-  catch {}
-  try {
-    await admin.auth.admin.deleteUser(userId)
+
+  const { error: authDeleteError } = await admin.auth.admin.deleteUser(userId)
+  if (authDeleteError) {
+    cloudlogErr({
+      requestId,
+      message: 'auth register rollback auth delete failed',
+      userId,
+      error: serializeError(authDeleteError),
+    })
   }
-  catch {}
 }
 
 app.post('/', async (c) => {
@@ -125,7 +155,7 @@ app.post('/', async (c) => {
   if (body.registration_browser)
     userMetadata.registration_browser = body.registration_browser
 
-  const authClient = emptySupabase(c)
+  const authClient = emptySupabaseWithClientIP(c)
   const { data: signupData, error: signupError } = await authClient.auth.signUp({
     email: normalizedEmail,
     password: body.password,
@@ -143,9 +173,13 @@ app.post('/', async (c) => {
       context: 'auth register signUp failed',
       error: signupError.message,
       status: signupError.status,
+      code: signupError.code,
     })
     if (isCaptchaFailedError(signupError)) {
       return simpleErrorWithStatus(c, 422, 'captcha_failed', 'Captcha verification failed')
+    }
+    if (isAuthRateLimitError(signupError)) {
+      return simpleErrorWithStatus(c, 429, 'too_many_requests', 'Too many requests')
     }
     if (isUserAlreadyRegisteredError(signupError)) {
       return simpleErrorWithStatus(c, 409, 'email_exists', EMAIL_EXISTS_MESSAGE)
@@ -157,7 +191,20 @@ app.post('/', async (c) => {
   const accessToken = signupData.session?.access_token
   const refreshToken = signupData.session?.refresh_token
 
-  if (!userId || !accessToken || !refreshToken) {
+  if (!userId) {
+    return simpleErrorWithStatus(c, 500, 'registration_failed', 'Registration failed')
+  }
+
+  if (!accessToken || !refreshToken) {
+    if (isEmailConfirmationPending(signupData.user)) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        context: 'auth register awaiting email confirmation',
+        userId,
+      })
+      return simpleErrorWithStatus(c, 500, 'registration_failed', 'Registration failed')
+    }
+
     cloudlog({
       requestId: c.get('requestId'),
       context: 'auth register missing session after signUp',
@@ -165,8 +212,7 @@ app.post('/', async (c) => {
       hasAccessToken: Boolean(accessToken),
       hasRefreshToken: Boolean(refreshToken),
     })
-    if (userId)
-      await rollbackCreatedUser(c, userId)
+    await rollbackCreatedUser(c, userId)
     return simpleErrorWithStatus(c, 500, 'registration_failed', 'Registration failed')
   }
 
