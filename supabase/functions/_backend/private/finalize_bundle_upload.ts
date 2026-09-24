@@ -1,15 +1,16 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import { eq } from 'drizzle-orm'
+import { HTTPException } from 'hono/http-exception'
 import { Hono } from 'hono/tiny'
 import { BRES, parseBody, quickError, simpleError } from '../utils/hono.ts'
 import { middlewareKey } from '../utils/hono_middleware.ts'
-import { checkPermission } from '../utils/rbac.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
+import { closeClient, getDrizzleClient, getPgClient, logPgError } from '../utils/pg.ts'
+import * as schema from '../utils/postgres_schema.ts'
+import { checkPermissionPg } from '../utils/rbac.ts'
 
 interface FinalizeBundleUploadBody {
   version_id?: unknown
 }
-
-const VERSION_FIELDS = 'id, app_id, deleted, deleted_at, storage_provider'
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -20,63 +21,54 @@ app.post('/', middlewareKey(), async (c) => {
   if (typeof versionId !== 'number' || !Number.isSafeInteger(versionId) || versionId <= 0)
     return quickError(400, 'error_version_id_invalid', 'version_id must be a positive integer')
 
-  const admin = supabaseAdmin(c)
-  const { data: version, error: loadError } = await admin
-    .from('app_versions')
-    .select(VERSION_FIELDS)
-    .eq('id', versionId)
-    .maybeSingle()
+  const pgClient = getPgClient(c, false)
+  try {
+    await getDrizzleClient(pgClient).transaction(async (tx) => {
+      const [version] = await tx
+        .select({
+          appId: schema.app_versions.app_id,
+          deleted: schema.app_versions.deleted,
+          deletedAt: schema.app_versions.deleted_at,
+          storageProvider: schema.app_versions.storage_provider,
+        })
+        .from(schema.app_versions)
+        .where(eq(schema.app_versions.id, versionId))
+        .limit(1)
+        .for('update')
 
-  if (loadError)
-    throw simpleError('error_finalize_bundle_upload', 'Failed to load version', { loadError })
-  if (!version)
-    return quickError(404, 'error_version_not_found', 'Version not found')
+      if (!version)
+        throw quickError(404, 'error_version_not_found', 'Version not found')
 
-  if (!(await checkPermission(c, 'app.upload_bundle', { appId: version.app_id })))
-    return quickError(401, 'not_authorized', 'Not authorized')
+      const auth = c.get('auth')
+      const apikey = auth?.apikey?.key ?? c.get('capgkey') ?? null
+      if (!auth?.userId || !(await checkPermissionPg(c, 'app.upload_bundle', { appId: version.appId }, tx, auth.userId, apikey)))
+        throw quickError(401, 'not_authorized', 'Not authorized')
 
-  if (version.deleted || version.deleted_at)
-    return quickError(400, 'error_version_deleted', 'Deleted versions cannot be finalized')
-  if (version.storage_provider === 'r2')
-    return c.json(BRES)
-  if (version.storage_provider !== 'r2-direct') {
-    return quickError(400, 'error_version_not_finalizable', 'Version cannot be finalized from its current storage provider', {
-      storage_provider: version.storage_provider,
+      if (version.deleted || version.deletedAt)
+        throw quickError(400, 'error_version_deleted', 'Deleted versions cannot be finalized')
+      if (version.storageProvider === 'r2')
+        return
+      if (version.storageProvider !== 'r2-direct') {
+        throw quickError(400, 'error_version_not_finalizable', 'Version cannot be finalized from its current storage provider', {
+          storage_provider: version.storageProvider,
+        })
+      }
+
+      await tx
+        .update(schema.app_versions)
+        .set({ storage_provider: 'r2' })
+        .where(eq(schema.app_versions.id, versionId))
     })
   }
+  catch (error) {
+    if (error instanceof HTTPException)
+      throw error
+    logPgError(c, 'finalize_bundle_upload', error)
+    throw simpleError('error_finalize_bundle_upload', 'Failed to finalize version', {}, error)
+  }
+  finally {
+    await closeClient(c, pgClient)
+  }
 
-  const { data: updated, error: updateError } = await admin
-    .from('app_versions')
-    .update({ storage_provider: 'r2' })
-    .eq('id', versionId)
-    .eq('app_id', version.app_id)
-    .eq('deleted', false)
-    .is('deleted_at', null)
-    .eq('storage_provider', 'r2-direct')
-    .select('id')
-
-  if (updateError)
-    throw simpleError('error_finalize_bundle_upload', 'Failed to finalize version', { updateError })
-  if (updated?.length)
-    return c.json(BRES)
-
-  const { data: current, error: reloadError } = await admin
-    .from('app_versions')
-    .select(VERSION_FIELDS)
-    .eq('id', versionId)
-    .maybeSingle()
-
-  if (reloadError)
-    throw simpleError('error_finalize_bundle_upload', 'Failed to reload version', { reloadError })
-  if (!current)
-    return quickError(404, 'error_version_not_found', 'Version not found')
-  if (current.app_id !== version.app_id && !(await checkPermission(c, 'app.upload_bundle', { appId: current.app_id })))
-    return quickError(401, 'not_authorized', 'Not authorized')
-  if (current.deleted || current.deleted_at)
-    return quickError(400, 'error_version_deleted', 'Deleted versions cannot be finalized')
-  if (current.storage_provider === 'r2')
-    return c.json(BRES)
-  return quickError(400, 'error_version_not_finalizable', 'Version cannot be finalized from its current storage provider', {
-    storage_provider: current.storage_provider,
-  })
+  return c.json(BRES)
 })
