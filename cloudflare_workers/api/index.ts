@@ -1,5 +1,6 @@
 import type { ExecutionContext, ScheduledController } from '@cloudflare/workers-types'
 import type { Bindings } from '../../supabase/functions/_backend/utils/cloudflare.ts'
+import { app as register } from '../../supabase/functions/_backend/auth/register.ts'
 import { app as accept_invitation } from '../../supabase/functions/_backend/private/accept_invitation.ts'
 import { app as admin_credits } from '../../supabase/functions/_backend/private/admin_credits.ts'
 import { app as admin_org_support_channel } from '../../supabase/functions/_backend/private/admin_org_support_channel.ts'
@@ -123,6 +124,7 @@ app.route('/queue_health', queue_health)
 app.route('/check_cpu_usage', check_cpu_usage)
 app.route('/translation', translation)
 app.route('/plugin_regions', pluginRegions)
+app.route('/auth/register', register)
 
 // Private routes are bundled into this Cloudflare API worker at deploy time.
 const functionNamePrivate = 'private'
