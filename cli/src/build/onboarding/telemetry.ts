@@ -88,6 +88,9 @@ export type BuilderOnboardingAction
     | 'certificate_preparation_failed'
     | 'keystore_prepared'
     | 'keystore_preparation_failed'
+    | 'google_play_connected'
+    | 'google_play_connection_failed'
+    | 'google_play_connection_unverified'
 
 export interface TrackBuilderOnboardingActionInput {
   apikey: string
