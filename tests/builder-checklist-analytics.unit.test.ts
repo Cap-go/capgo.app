@@ -255,6 +255,17 @@ describe('builder checklist analytics authorization', () => {
     expect(mocks.track).not.toHaveBeenCalled()
   })
 
+  it('rejects setup start when the resolved app differs from the event app', async () => {
+    const input = startSetupEvent('ios')
+    input.tags['app-id'] = 'com.test.other'
+
+    await expect(markBuilderChecklistFromAnalytics(context(), 'com.test.other', input)).resolves.toBe(false)
+
+    expect(mocks.permission).not.toHaveBeenCalled()
+    expect(mocks.execute).not.toHaveBeenCalled()
+    expect(mocks.track).not.toHaveBeenCalled()
+  })
+
   it.each([
     { setup: { ...onboarding().setup, todo_list_version: 3 } },
     { setup: { ...onboarding().setup, builder_todo_list_version: '2' } },
