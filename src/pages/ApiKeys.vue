@@ -143,6 +143,10 @@ const selectedOrgsForCreation = ref<string[]>([])
 const selectedOrgRolesById = ref<Record<string, string>>({})
 const isHydratingApiKeyEdit = ref(false)
 const manageableOrgIds = ref(new Set<string>())
+// App admins can issue keys limited to their own apps (app.manage_apikeys) in
+// orgs where they cannot manage org-wide keys.
+const appKeyManageableAppIds = ref(new Set<string>())
+const appKeyManageableOrgIds = ref(new Set<string>())
 const pendingAppBindings = ref<Record<string, string>>({})
 const showOrgDropdown = ref(false)
 const showAppDropdown = ref(false)
@@ -695,8 +699,21 @@ const orgRoleOptions = computed(() =>
     .map(r => ({ id: r.id, name: r.name, description: getRoleDisplayName(r.name) })),
 )
 
+// Selected orgs where the caller only manages keys for some apps: the key must
+// be app-scoped and cannot carry roles reserved to role managers.
+const requiresAppOnlyScope = computed(() => selectedOrgsForCreation.value.some(orgId => !manageableOrgIds.value.has(orgId)))
+const APP_ROLES_RESERVED_TO_ROLE_MANAGERS = new Set(['app_admin', 'app_preview'])
+
+// Also re-applied when the modal resets appOnlyScope on open.
+watch([requiresAppOnlyScope, appOnlyScope], ([required, appOnly]) => {
+  if (required && !appOnly)
+    appOnlyScope.value = true
+}, { immediate: true })
+
 const appRoleOptions = computed(() =>
-  appRoles.value.map(r => ({ id: r.id, name: r.name, description: getRoleDisplayName(r.name) })),
+  appRoles.value
+    .filter(r => !requiresAppOnlyScope.value || !APP_ROLES_RESERVED_TO_ROLE_MANAGERS.has(r.name))
+    .map(r => ({ id: r.id, name: r.name, description: getRoleDisplayName(r.name) })),
 )
 
 const rolesWithInheritedAppAccess = new Set(['org_admin', 'org_super_admin'])
@@ -712,7 +729,8 @@ const filteredAppsForSelectedOrgs = computed(() => {
   if (!availableApps.value || selectedOrgsForCreation.value.length === 0)
     return []
   return availableApps.value.filter(app =>
-    selectedOrgsForCreation.value.includes(app.owner_org),
+    selectedOrgsForCreation.value.includes(app.owner_org)
+    && (manageableOrgIds.value.has(app.owner_org) || appKeyManageableAppIds.value.has(app.id)),
   )
 })
 
@@ -995,6 +1013,21 @@ async function loadAllApps() {
   }
 }
 
+function canSelectOrgForKey(orgId: string) {
+  return manageableOrgIds.value.has(orgId) || appKeyManageableOrgIds.value.has(orgId)
+}
+
+// Must run once apps and org-level rights are loaded.
+async function loadAppKeyManageableApps() {
+  const candidates = availableApps.value.filter(app => !manageableOrgIds.value.has(app.owner_org))
+  const allowed = await Promise.all(candidates.map(async app =>
+    await checkPermissions('app.manage_apikeys', { orgId: app.owner_org, appId: app.app_id }) ? app : null,
+  ))
+  const apps = allowed.filter((app): app is typeof candidates[number] => app !== null)
+  appKeyManageableAppIds.value = new Set(apps.map(app => app.id))
+  appKeyManageableOrgIds.value = new Set(apps.map(app => app.owner_org))
+}
+
 async function loadManageableOrganizations() {
   const checks = await Promise.all(organizationStore.organizations.map(async (org) => {
     const canManage = await checkPermissions('org.update_user_roles', { orgId: org.gid })
@@ -1166,11 +1199,14 @@ async function addNewApiKey() {
   showAppDropdown.value = false
 
   await Promise.all([loadAllApps(), fetchRoles(), loadManageableOrganizations()])
+  await loadAppKeyManageableApps()
 
-  // Select all organizations that can receive RBAC bindings from this caller.
-  selectedOrgsForCreation.value = organizationStore.organizations
-    .map(org => org.gid)
-    .filter(orgId => manageableOrgIds.value.has(orgId))
+  // Select all organizations that can receive RBAC bindings from this caller;
+  // app admins without org-wide rights start from the orgs of their apps.
+  const orgIds = organizationStore.organizations.map(org => org.gid)
+  selectedOrgsForCreation.value = orgIds.some(orgId => manageableOrgIds.value.has(orgId))
+    ? orgIds.filter(orgId => manageableOrgIds.value.has(orgId))
+    : orgIds.filter(orgId => appKeyManageableOrgIds.value.has(orgId))
   ensureSelectedOrgRoleAllowed()
 
   // Show creation modal
@@ -1194,6 +1230,7 @@ async function editApiKey(key: Database['public']['Tables']['apikeys']['Row']) {
     showAppDropdown.value = false
 
     await Promise.all([loadAllApps(), fetchRoles(), loadManageableOrganizations(), fetchAllBindings()])
+    await loadAppKeyManageableApps()
 
     const keyBindings = getBindingsForKey(key)
     const editableOrgBindings = keyBindings
@@ -1402,7 +1439,7 @@ async function showEditKeyModal() {
 }
 
 function toggleOrgSelection(orgId: string) {
-  if (!manageableOrgIds.value.has(orgId))
+  if (!canSelectOrgForKey(orgId))
     return
 
   if (selectedOrgsForCreation.value.includes(orgId)) {
@@ -1871,6 +1908,7 @@ getKeys()
                 type="checkbox"
                 data-test="create-key-app-only-scope"
                 class="mt-1 d-checkbox d-checkbox-primary d-checkbox-sm"
+                :disabled="requiresAppOnlyScope"
               >
               <span>
                 <span class="block text-sm font-medium text-slate-800 dark:text-white">
@@ -1914,7 +1952,7 @@ getKeys()
                   v-for="org in organizationStore.organizations"
                   :key="org.gid"
                   class="flex items-center gap-3 px-4 py-2.5 transition-colors"
-                  :class="manageableOrgIds.has(org.gid) ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700' : 'cursor-not-allowed text-slate-400'"
+                  :class="canSelectOrgForKey(org.gid) ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700' : 'cursor-not-allowed text-slate-400'"
                 >
                   <input
                     type="checkbox"
@@ -1922,12 +1960,12 @@ getKeys()
                     :data-org-id="org.gid"
                     class="d-checkbox d-checkbox-sm d-checkbox-primary"
                     :checked="selectedOrgsForCreation.includes(org.gid)"
-                    :disabled="!manageableOrgIds.has(org.gid)"
+                    :disabled="!canSelectOrgForKey(org.gid)"
                     @change="toggleOrgSelection(org.gid)"
                   >
                   <span class="flex-1 text-sm truncate">
                     {{ org.name }}
-                    <span v-if="!manageableOrgIds.has(org.gid)" class="text-xs text-slate-400">
+                    <span v-if="!canSelectOrgForKey(org.gid)" class="text-xs text-slate-400">
                       ({{ t('cannot-manage-org-api-keys') }})
                     </span>
                   </span>

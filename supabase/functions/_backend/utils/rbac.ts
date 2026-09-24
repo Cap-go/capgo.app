@@ -21,8 +21,8 @@ import { sql } from 'drizzle-orm'
 import { HTTPException } from 'hono/http-exception'
 import { quickError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { isTransientPgError } from './pg_errors.ts'
 import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
+import { isTransientPgError } from './pg_errors.ts'
 
 // =============================================================================
 // Types
@@ -61,6 +61,7 @@ export type Permission
     | 'app.build_native'
     | 'app.read_audit'
     | 'app.update_user_roles'
+    | 'app.manage_apikeys'
     // Bundle permissions
     | 'bundle.delete'
     // Channel permissions
