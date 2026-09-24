@@ -1,11 +1,16 @@
 import type { Context } from 'hono'
+import type { PoolClient } from 'pg'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import { createHono, quickError, useCors } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
-import { getPgClient } from '../../utils/pg.ts'
+import { getPgClient, withPgTransaction } from '../../utils/pg.ts'
 import { supabaseAdmin } from '../../utils/supabase.ts'
 import { version } from '../../utils/version.ts'
+
+// Transactions go through withPgTransaction (one checked-out connection);
+// plain reads may use the pool directly.
+type PgExecutor = ReturnType<typeof getPgClient> | PoolClient
 
 interface PublicUserSeed {
   id: string
@@ -36,7 +41,7 @@ export const app = createHono('', version)
 app.use('*', useCors)
 app.use('*', middlewareAuth)
 
-async function findCanonicalAuthUserIdByEmail(pgClient: ReturnType<typeof getPgClient>, email: string, excludedUserId: string, trustedProviders: string[]): Promise<string | null> {
+async function findCanonicalAuthUserIdByEmail(pgClient: PgExecutor, email: string, excludedUserId: string, trustedProviders: string[]): Promise<string | null> {
   const result = await pgClient.query<{ id: string }>(
     `
       select au.id
@@ -127,7 +132,7 @@ function getAuthorizedSsoProviders(provider: SsoProviderRecord, authenticatedPro
   })
 }
 
-async function transferSsoIdentities(pgClient: ReturnType<typeof getPgClient>, originalUserId: string, duplicateUserId: string, trustedProviders: string[]): Promise<number> {
+async function transferSsoIdentities(pgClient: PgExecutor, originalUserId: string, duplicateUserId: string, trustedProviders: string[]): Promise<number> {
   const result = await pgClient.query(
     `
       update auth.identities
@@ -142,7 +147,7 @@ async function transferSsoIdentities(pgClient: ReturnType<typeof getPgClient>, o
   return result.rowCount ?? 0
 }
 
-async function setAuthUserSsoOnly(pgClient: ReturnType<typeof getPgClient>, userId: string, authorizedSsoProviders: string[]): Promise<void> {
+async function setAuthUserSsoOnly(pgClient: PgExecutor, userId: string, authorizedSsoProviders: string[]): Promise<void> {
   const primarySsoProvider = authorizedSsoProviders[0]
   if (!primarySsoProvider) {
     throw new Error('missing_sso_provider')
@@ -192,25 +197,17 @@ function buildPublicUserSeed(userId: string, email: string, userMetadata: Record
 }
 
 async function ensureOrgMembership(
-  pgClient: ReturnType<typeof getPgClient>,
+  pgPool: ReturnType<typeof getPgClient>,
   requestId: string,
   userId: string,
   orgId: string,
   fallbackRole: OrgRoleName = 'org_member',
 ): Promise<EnsureOrgMembershipResult> {
-  await pgClient.query('begin')
   try {
-    const membershipResult = await ensureOrgMembershipInTransaction(pgClient, requestId, userId, orgId, fallbackRole)
-    await pgClient.query('commit')
-    return membershipResult
+    return await withPgTransaction(pgPool, client => ensureOrgMembershipInTransaction(client, requestId, userId, orgId, fallbackRole))
   }
   catch (error) {
-    try {
-      await pgClient.query('rollback')
-    }
-    catch (rollbackError) {
-      cloudlogErr({ requestId, message: 'Failed to roll back SSO provisioning transaction', userId, orgId, error: rollbackError })
-    }
+    cloudlogErr({ requestId, message: 'SSO provisioning transaction rolled back', userId, orgId, error })
     throw error
   }
 }
@@ -266,7 +263,7 @@ async function ensurePublicUserRowExists(
 }
 
 async function ensurePublicUserRowExistsInTransaction(
-  pgClient: ReturnType<typeof getPgClient>,
+  pgClient: PgExecutor,
   requestId: string,
   user: PublicUserSeed,
 ): Promise<void> {
@@ -289,7 +286,7 @@ async function ensurePublicUserRowExistsInTransaction(
 }
 
 async function ensureOrgMembershipInTransaction(
-  pgClient: ReturnType<typeof getPgClient>,
+  pgClient: PgExecutor,
   requestId: string,
   userId: string,
   orgId: string,
@@ -447,7 +444,7 @@ async function ensureOrgMembershipInTransaction(
 }
 
 async function mergeSsoIdentityWithExistingAccount(
-  pgClient: ReturnType<typeof getPgClient>,
+  pgPool: ReturnType<typeof getPgClient>,
   requestId: string,
   params: {
     originalUserId: string
@@ -457,42 +454,36 @@ async function mergeSsoIdentityWithExistingAccount(
     authorizedSsoProviders: string[]
   },
 ): Promise<void> {
-  await pgClient.query('begin')
   try {
-    let transferredIdentityCount = 0
-    try {
-      transferredIdentityCount = await transferSsoIdentities(pgClient, params.originalUserId, params.duplicateUserId, params.authorizedSsoProviders)
-    }
-    catch (identityTransferError) {
-      cloudlogErr({ requestId, message: 'Failed to transfer SSO identity during merge', userId: params.duplicateUserId, originalUserId: params.originalUserId, error: identityTransferError })
-      throw new Error('identity_transfer_failed')
-    }
+    await withPgTransaction(pgPool, async (pgClient) => {
+      let transferredIdentityCount = 0
+      try {
+        transferredIdentityCount = await transferSsoIdentities(pgClient, params.originalUserId, params.duplicateUserId, params.authorizedSsoProviders)
+      }
+      catch (identityTransferError) {
+        cloudlogErr({ requestId, message: 'Failed to transfer SSO identity during merge', userId: params.duplicateUserId, originalUserId: params.originalUserId, error: identityTransferError })
+        throw new Error('identity_transfer_failed')
+      }
 
-    if (transferredIdentityCount === 0) {
-      cloudlogErr({ requestId, message: 'No SSO identities were transferred during merge', userId: params.duplicateUserId, originalUserId: params.originalUserId })
-      throw new Error('identity_transfer_failed')
-    }
+      if (transferredIdentityCount === 0) {
+        cloudlogErr({ requestId, message: 'No SSO identities were transferred during merge', userId: params.duplicateUserId, originalUserId: params.originalUserId })
+        throw new Error('identity_transfer_failed')
+      }
 
-    await ensurePublicUserRowExistsInTransaction(pgClient, requestId, params.publicUser)
-    await ensureOrgMembershipInTransaction(pgClient, requestId, params.originalUserId, params.orgId)
+      await ensurePublicUserRowExistsInTransaction(pgClient, requestId, params.publicUser)
+      await ensureOrgMembershipInTransaction(pgClient, requestId, params.originalUserId, params.orgId)
 
-    try {
-      await setAuthUserSsoOnly(pgClient, params.originalUserId, params.authorizedSsoProviders)
-    }
-    catch (ssoFlagError) {
-      cloudlogErr({ requestId, message: 'Failed to enforce SSO-only auth state on original user during merge', originalUserId: params.originalUserId, error: ssoFlagError })
-      throw new Error('sso_flag_update_failed')
-    }
-
-    await pgClient.query('commit')
+      try {
+        await setAuthUserSsoOnly(pgClient, params.originalUserId, params.authorizedSsoProviders)
+      }
+      catch (ssoFlagError) {
+        cloudlogErr({ requestId, message: 'Failed to enforce SSO-only auth state on original user during merge', originalUserId: params.originalUserId, error: ssoFlagError })
+        throw new Error('sso_flag_update_failed')
+      }
+    })
   }
   catch (error) {
-    try {
-      await pgClient.query('rollback')
-    }
-    catch (rollbackError) {
-      cloudlogErr({ requestId, message: 'Failed to roll back SSO merge transaction', userId: params.duplicateUserId, originalUserId: params.originalUserId, error: rollbackError })
-    }
+    cloudlogErr({ requestId, message: 'SSO merge transaction rolled back', userId: params.duplicateUserId, originalUserId: params.originalUserId, error })
     throw error
   }
 }

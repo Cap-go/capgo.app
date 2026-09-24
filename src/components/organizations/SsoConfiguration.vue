@@ -17,7 +17,7 @@ interface SsoProvider {
   provider_id: string | null
   status: 'pending_verification' | 'verified' | 'active' | 'disabled'
   enforce_sso: boolean
-  metadata_url: string
+  metadata_url: string | null
   dns_verification_token: string | null
   created_at: string
   updated_at: string
@@ -48,6 +48,8 @@ const showAddForm = ref(false)
 // Form fields
 const newDomain = ref('')
 const newMetadataUrl = ref('')
+const newMetadataXml = ref('')
+const metadataSource = ref<'url' | 'xml'>('url')
 
 // Track recently created provider to show DNS token
 const recentlyCreatedId = ref<string | null>(null)
@@ -76,6 +78,13 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
     'authorization': `Bearer ${currentSession.session.access_token}`,
   }
 }
+// Backend errors carry a human readable `message` (e.g. why Supabase Auth could
+// not load the IdP metadata); show it instead of the bare error code.
+async function readApiError(response: Response, fallback: string): Promise<string> {
+  const errorData = await response.json().catch(() => ({})) as { error?: string, message?: string }
+  return errorData.message || errorData.error || fallback
+}
+
 async function copyToClipboard(text: string, label: string) {
   try {
     await navigator.clipboard.writeText(text)
@@ -150,7 +159,8 @@ async function fetchSpMetadata() {
 }
 
 async function addProvider() {
-  if (!newDomain.value.trim() || !newMetadataUrl.value.trim()) {
+  const metadataValue = metadataSource.value === 'url' ? newMetadataUrl.value.trim() : newMetadataXml.value.trim()
+  if (!newDomain.value.trim() || !metadataValue) {
     toast.error(t('sso-fill-all-fields'))
     return
   }
@@ -164,13 +174,12 @@ async function addProvider() {
       body: JSON.stringify({
         org_id: props.orgId,
         domain: newDomain.value.trim(),
-        metadata_url: newMetadataUrl.value.trim(),
+        ...(metadataSource.value === 'url' ? { metadata_url: metadataValue } : { metadata_xml: metadataValue }),
       }),
     })
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as { error?: string }
-      toast.error(errorData.error || t('sso-error-creating'))
+      toast.error(await readApiError(response, t('sso-error-creating')))
       return
     }
 
@@ -181,6 +190,7 @@ async function addProvider() {
     // Reset form
     newDomain.value = ''
     newMetadataUrl.value = ''
+    newMetadataXml.value = ''
     showAddForm.value = false
 
     toast.success(t('sso-provider-created'))
@@ -205,8 +215,13 @@ async function verifyDns(providerId: string) {
     })
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as { error?: string }
-      toast.error(errorData.error || t('sso-dns-verification-failed'))
+      toast.error(await readApiError(response, t('sso-dns-verification-failed')))
+      return
+    }
+
+    const result = await response.json() as { verified: boolean, message?: string }
+    if (!result.verified) {
+      toast.error(result.message || t('sso-dns-verification-failed'))
       return
     }
 
@@ -244,7 +259,7 @@ async function deleteProvider(provider: SsoProvider) {
             })
 
             if (!response.ok) {
-              toast.error(t('sso-error-deleting'))
+              toast.error(await readApiError(response, t('sso-error-deleting')))
               return
             }
 
@@ -274,8 +289,7 @@ async function updateProviderStatus(providerId: string, status: 'active' | 'disa
     })
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as { error?: string }
-      toast.error(errorData.error || t('sso-error-updating'))
+      toast.error(await readApiError(response, t('sso-error-updating')))
       return false
     }
 
@@ -305,7 +319,7 @@ async function toggleEnforceSso(provider: SsoProvider) {
     })
 
     if (!response.ok) {
-      toast.error(t('sso-error-updating'))
+      toast.error(await readApiError(response, t('sso-error-updating')))
       return
     }
 
@@ -469,21 +483,50 @@ defineExpose({
         </p>
       </div>
       <div>
-        <label for="sso-new-metadata-url" class="block mb-1 text-sm font-medium dark:text-white text-slate-700">
-          {{ t('sso-metadata-url') }}
-        </label>
-        <input
-          id="sso-new-metadata-url"
-          v-model="newMetadataUrl"
-          type="url"
-          :placeholder="t('sso-metadata-url-placeholder')"
-          :aria-label="t('sso-metadata-url')"
-          :disabled="isSubmitting"
-          class="d-input d-input-bordered w-full"
-        >
-        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-          {{ t('sso-metadata-url-help') }}
-        </p>
+        <div class="flex gap-4 mb-2" role="radiogroup" :aria-label="t('sso-metadata-source')">
+          <label class="flex items-center gap-2 text-sm dark:text-white text-slate-700">
+            <input v-model="metadataSource" type="radio" value="url" class="d-radio d-radio-sm" :disabled="isSubmitting">
+            {{ t('sso-metadata-url') }}
+          </label>
+          <label class="flex items-center gap-2 text-sm dark:text-white text-slate-700">
+            <input v-model="metadataSource" type="radio" value="xml" class="d-radio d-radio-sm" :disabled="isSubmitting">
+            {{ t('sso-metadata-xml') }}
+          </label>
+        </div>
+        <template v-if="metadataSource === 'url'">
+          <label for="sso-new-metadata-url" class="block mb-1 text-sm font-medium dark:text-white text-slate-700">
+            {{ t('sso-metadata-url') }}
+          </label>
+          <input
+            id="sso-new-metadata-url"
+            v-model="newMetadataUrl"
+            type="url"
+            :placeholder="t('sso-metadata-url-placeholder')"
+            :aria-label="t('sso-metadata-url')"
+            :disabled="isSubmitting"
+            class="d-input d-input-bordered w-full"
+          >
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            {{ t('sso-metadata-url-help') }}
+          </p>
+        </template>
+        <template v-else>
+          <label for="sso-new-metadata-xml" class="block mb-1 text-sm font-medium dark:text-white text-slate-700">
+            {{ t('sso-metadata-xml') }}
+          </label>
+          <textarea
+            id="sso-new-metadata-xml"
+            v-model="newMetadataXml"
+            rows="6"
+            :placeholder="t('sso-metadata-xml-placeholder')"
+            :aria-label="t('sso-metadata-xml')"
+            :disabled="isSubmitting"
+            class="d-textarea d-textarea-bordered w-full font-mono text-xs"
+          />
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            {{ t('sso-metadata-xml-help') }}
+          </p>
+        </template>
       </div>
       <div class="flex items-center gap-3">
         <button
@@ -638,8 +681,8 @@ defineExpose({
         <div class="flex items-center gap-2 shrink-0">
           <!-- Verify DNS button (pending_verification) -->
           <button
-            type="button"
             v-if="provider.status === 'pending_verification'"
+            type="button"
             :disabled="isVerifying === provider.id"
             class="d-btn d-btn-primary d-btn-sm"
             :class="{ 'd-btn-disabled': isVerifying === provider.id }"
@@ -651,8 +694,8 @@ defineExpose({
 
           <!-- Activate button (verified) -->
           <button
-            type="button"
             v-if="provider.status === 'verified'"
+            type="button"
             class="d-btn d-btn-success d-btn-sm"
             @click="updateProviderStatus(provider.id, 'active')"
           >
@@ -661,8 +704,8 @@ defineExpose({
 
           <!-- Deactivate button (active) -->
           <button
-            type="button"
             v-if="provider.status === 'active'"
+            type="button"
             class="d-btn d-btn-warning d-btn-outline d-btn-sm"
             @click="updateProviderStatus(provider.id, 'disabled')"
           >
@@ -671,8 +714,8 @@ defineExpose({
 
           <!-- Re-activate button (disabled) -->
           <button
-            type="button"
             v-if="provider.status === 'disabled'"
+            type="button"
             class="d-btn d-btn-success d-btn-outline d-btn-sm"
             @click="updateProviderStatus(provider.id, 'active')"
           >

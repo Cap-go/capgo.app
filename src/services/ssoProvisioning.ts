@@ -20,6 +20,8 @@ export function isSsoUser(user: Pick<User, 'app_metadata'> | null | undefined): 
   return isSsoProvider(provider) || providers.some(isSsoProvider)
 }
 
+// A stuck backend call must fail visibly instead of hanging navigation.
+const PROVISIONING_TIMEOUT_MS = 15_000
 export async function provisionSsoUser(session: Session): Promise<SsoProvisioningResult> {
   try {
     const response = await fetch(`${defaultApiHost}/private/sso/provision-user`, {
@@ -29,6 +31,7 @@ export async function provisionSsoUser(session: Session): Promise<SsoProvisionin
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({}),
+      signal: AbortSignal.timeout(PROVISIONING_TIMEOUT_MS),
     })
 
     if (!response.ok) {

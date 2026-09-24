@@ -1,23 +1,33 @@
 import type { Context } from 'hono'
-import type { Database } from '../../utils/supabase.types.ts'
+import type { PoolClient } from 'pg'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import { z } from 'zod'
-import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { BRES, createHono, parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_jwt.ts'
 import { cloudlogErr } from '../../utils/logging.ts'
-import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { closeClient, getPgClient, withPgTransaction } from '../../utils/pg.ts'
 import { requireEnterprisePlan } from '../../utils/plan-gating.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { createSSOProvider, deleteSSOProvider, ManagementAPIError } from '../../utils/supabase-management.ts'
+import { safeParseSchema } from '../../utils/schema_validation.ts'
+import { createSSOProvider, deleteSSOProvider, ManagementAPIError, updateSSOProvider } from '../../utils/supabase-management.ts'
 import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
 import { version } from '../../utils/version.ts'
+import { PUBLIC_EMAIL_DOMAINS } from './prelink-shared.ts'
+
+// Metadata XML documents are a few KB; cap well above that to reject abuse.
+const MAX_METADATA_XML_LENGTH = 512 * 1024
+const DOMAIN_REGEX = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
 
 const createBodySchema = z.object({
   org_id: z.uuid(),
   domain: z.string().min(1),
-  metadata_url: z.url(),
+  // Either a URL Supabase Auth downloads, or the raw XML for IdPs whose
+  // metadata endpoint is not reachable from Supabase (WAF, private network).
+  metadata_url: z.url().optional(),
+  metadata_xml: z.string().min(1).max(MAX_METADATA_XML_LENGTH).optional(),
   attribute_mapping: z.unknown().optional(),
+}).refine(body => (body.metadata_url === undefined) !== (body.metadata_xml === undefined), {
+  message: 'Provide exactly one of metadata_url or metadata_xml',
 })
 
 const updateBodySchema = z.object({
@@ -29,7 +39,11 @@ const updateBodySchema = z.object({
 
 const uuidSchema = z.uuid()
 
+// The DNS token is only needed (and meant to be published in DNS) while the
+// domain is pending; keep it so the setup instructions survive a page reload.
 function sanitizeProvider(provider: Record<string, unknown>) {
+  if (provider.status === 'pending_verification')
+    return provider
   const { dns_verification_token: _dnsVerificationToken, ...safeProvider } = provider
   return safeProvider
 }
@@ -90,25 +104,48 @@ async function requireManageSsoPermission(c: Context<MiddlewareKeyVariables>, or
   }
 }
 
-async function syncAuthUsersSsoOnlyByDomain(c: Context<MiddlewareKeyVariables>, domain: string, isSsoOnly: boolean): Promise<void> {
-  let pgClient: ReturnType<typeof getPgClient> | undefined
+const UPDATABLE_PROVIDER_COLUMNS = ['metadata_url', 'attribute_mapping', 'enforce_sso', 'status'] as const
+
+// Updates the provider row and, when the enforced state flips, the matching
+// auth.users.is_sso_user flags in one transaction so they can never diverge.
+async function updateProviderAndSyncEnforcement(
+  c: Context<MiddlewareKeyVariables>,
+  id: string,
+  updates: Record<string, unknown>,
+  sync: { domain: string, isSsoOnly: boolean } | null,
+): Promise<Record<string, unknown> | undefined> {
+  const columns = UPDATABLE_PROVIDER_COLUMNS.filter(column => updates[column] !== undefined)
+  const values = columns.map(column => column === 'attribute_mapping' ? JSON.stringify(updates[column]) : updates[column])
+  const setClause = columns.map((column, index) => `"${column}" = $${index + 2}`).join(', ')
+
+  const pgPool = getPgClient(c)
   try {
-    pgClient = getPgClient(c)
-    await pgClient.query(
-      `
-        update auth.users
-        set is_sso_user = $1
-        where email is not null
-          and lower(split_part(email, '@', 2)) = lower($2)
-      `,
-      [isSsoOnly, domain],
-    )
+    return await withPgTransaction(pgPool, async (client) => {
+      const result = await client.query(
+        `update public.sso_providers set ${setClause} where id = $1 returning *`,
+        [id, ...values],
+      )
+      const updatedProvider = result.rows[0] as Record<string, unknown> | undefined
+      if (updatedProvider && sync)
+        await setDomainSsoOnly(client, sync.domain, sync.isSsoOnly)
+      return updatedProvider
+    })
   }
   finally {
-    if (pgClient) {
-      await closeClient(c, pgClient)
-    }
+    await closeClient(c, pgPool)
   }
+}
+
+async function setDomainSsoOnly(client: PoolClient, domain: string, isSsoOnly: boolean) {
+  await client.query(
+    `
+      update auth.users
+      set is_sso_user = $1
+      where email is not null
+        and lower(split_part(email, '@', 2)) = lower($2)
+    `,
+    [isSsoOnly, domain],
+  )
 }
 
 export const app = createHono('', version)
@@ -126,6 +163,7 @@ app.post('/', async (c) => {
     org_id?: string
     domain?: string
     metadata_url?: string
+    metadata_xml?: string
     attribute_mapping?: unknown
   }>(c)
 
@@ -137,8 +175,11 @@ app.post('/', async (c) => {
   const body = validation.data
   const attributeMapping = parseAttributeMapping(body.attribute_mapping)
   const domain = body.domain.trim().toLowerCase()
-  if (!domain) {
-    throw simpleError('invalid_body', 'domain must not be empty')
+  if (!DOMAIN_REGEX.test(domain)) {
+    throw simpleError('invalid_domain', 'domain must be a valid domain name such as example.com')
+  }
+  if (PUBLIC_EMAIL_DOMAINS.has(domain)) {
+    throw simpleError('public_email_domain', 'Public email domains cannot be used for SSO')
   }
 
   await requireManageSsoPermission(c, body.org_id)
@@ -146,7 +187,8 @@ app.post('/', async (c) => {
 
   let managementProvider: Awaited<ReturnType<typeof createSSOProvider>>
   try {
-    managementProvider = await createSSOProvider(c, domain, body.metadata_url, attributeMapping)
+    const metadata = body.metadata_url ? { metadata_url: body.metadata_url } : { metadata_xml: body.metadata_xml! }
+    managementProvider = await createSSOProvider(c, domain, metadata, attributeMapping)
   }
   catch (err) {
     if (err instanceof ManagementAPIError) {
@@ -167,7 +209,7 @@ app.post('/', async (c) => {
         provider_id: managementProvider.id,
         status: 'pending_verification',
         dns_verification_token: dnsVerificationToken,
-        metadata_url: body.metadata_url,
+        metadata_url: body.metadata_url ?? null,
         attribute_mapping: attributeMapping ?? null,
       })
       .select('*')
@@ -249,7 +291,7 @@ app.patch('/:id', async (c) => {
   const supabase = supabaseWithAuth(c, auth) as any
   const { data: provider, error: providerError } = await supabase
     .from('sso_providers')
-    .select('id, org_id, domain, status, enforce_sso')
+    .select('id, org_id, domain, status, enforce_sso, provider_id')
     .eq('id', id)
     .single()
 
@@ -301,28 +343,47 @@ app.patch('/:id', async (c) => {
     throw simpleError('invalid_body', 'No updatable fields provided')
   }
 
-  const admin = supabaseAdmin(c)
-  const { data: updatedProvider, error: updateError } = await admin
-    .from('sso_providers')
-    .update(updates as Database['public']['Tables']['sso_providers']['Update'])
-    .eq('id', id)
-    .select('*')
-    .single()
+  const becomesActive = updates.status === 'active'
+  if (becomesActive || updates.enforce_sso === true) {
+    await requireEnterprisePlan(c, provider.org_id)
+  }
 
-  if (updateError || !updatedProvider) {
-    quickError(500, 'provider_update_failed', 'Failed to update SSO provider', { error: updateError })
+  // Supabase Auth keeps its own copy of the provider: keep it in sync so a
+  // disabled Capgo provider cannot be used to sign in through Supabase Auth.
+  const managementUpdates: Parameters<typeof updateSSOProvider>[2] = {}
+  if (updates.status !== undefined)
+    managementUpdates.disabled = !becomesActive
+  if (body.metadata_url !== undefined)
+    managementUpdates.metadata_url = body.metadata_url
+  if (attributeMapping !== undefined)
+    managementUpdates.attribute_mapping = attributeMapping
+  if (provider.provider_id && Object.keys(managementUpdates).length > 0) {
+    try {
+      await updateSSOProvider(c, provider.provider_id, managementUpdates)
+    }
+    catch (err) {
+      if (err instanceof ManagementAPIError) {
+        return quickError(err.status >= 400 && err.status < 500 ? err.status : 502, 'provider_update_failed', err.message, { management_error_code: err.code })
+      }
+      throw err
+    }
   }
 
   const wasSsoEnforced = provider.status === 'active' && provider.enforce_sso === true
-  const isSsoEnforced = updatedProvider.status === 'active' && updatedProvider.enforce_sso === true
-  if (wasSsoEnforced !== isSsoEnforced) {
-    try {
-      await syncAuthUsersSsoOnlyByDomain(c, updatedProvider.domain, isSsoEnforced)
-    }
-    catch (syncError) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to sync auth.users.is_sso_user with provider enforcement', providerId: id, domain: updatedProvider.domain, enforceSso: isSsoEnforced, error: syncError })
-      return quickError(500, 'provider_sync_failed', 'Failed to sync SSO enforcement state')
-    }
+  const nextStatus = (updates.status as string | undefined) ?? provider.status
+  const nextEnforce = (updates.enforce_sso as boolean | undefined) ?? provider.enforce_sso
+  const isSsoEnforced = nextStatus === 'active' && nextEnforce === true
+
+  let updatedProvider: Record<string, unknown> | undefined
+  try {
+    updatedProvider = await updateProviderAndSyncEnforcement(c, id, updates, wasSsoEnforced !== isSsoEnforced ? { domain: provider.domain, isSsoOnly: isSsoEnforced } : null)
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to update SSO provider', providerId: id, domain: provider.domain, error })
+    return quickError(500, 'provider_update_failed', 'Failed to update SSO provider')
+  }
+  if (!updatedProvider) {
+    quickError(404, 'provider_not_found', 'SSO provider not found')
   }
 
   return c.json(sanitizeProvider(updatedProvider))
@@ -343,7 +404,7 @@ app.delete('/:id', async (c) => {
   const supabase = supabaseWithAuth(c, auth) as any
   const { data: provider, error: providerError } = await supabase
     .from('sso_providers')
-    .select('id, org_id, provider_id')
+    .select('id, org_id, provider_id, domain, status, enforce_sso')
     .eq('id', id)
     .single()
 
@@ -364,14 +425,25 @@ app.delete('/:id', async (c) => {
     }
   }
 
-  // Then delete the database row
-  const { error: deleteError } = await supabase
-    .from('sso_providers')
-    .delete()
-    .eq('id', id)
-
-  if (deleteError) {
-    return quickError(500, 'provider_delete_failed', 'Failed to delete SSO provider', { error: deleteError })
+  // Then delete the database row. The RLS client is not used here: its DELETE
+  // policy requires a different permission than the one checked above, which
+  // silently left orphaned rows behind.
+  const wasSsoEnforced = provider.status === 'active' && provider.enforce_sso === true
+  const pgPool = getPgClient(c)
+  try {
+    await withPgTransaction(pgPool, async (client) => {
+      await client.query('delete from public.sso_providers where id = $1', [id])
+      // Give password login back to users that were locked to this provider.
+      if (wasSsoEnforced)
+        await setDomainSsoOnly(client, provider.domain, false)
+    })
+  }
+  catch (deleteError) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to delete SSO provider row', providerId: id, error: deleteError })
+    return quickError(500, 'provider_delete_failed', 'Failed to delete SSO provider')
+  }
+  finally {
+    await closeClient(c, pgPool)
   }
 
   return c.json(BRES)

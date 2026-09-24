@@ -6,8 +6,9 @@ export interface SSOProviderResponse {
   id: string
   type: 'saml'
   domains: string[]
-  metadata_url: string
+  metadata_url?: string
   attribute_mapping?: Record<string, string>
+  disabled?: boolean
   created_at: string
   updated_at: string
 }
@@ -16,7 +17,10 @@ export interface SSOProviderUpdate {
   domains?: string[]
   metadata_url?: string
   attribute_mapping?: Record<string, string>
+  disabled?: boolean
 }
+
+export type SSOMetadataSource = { metadata_url: string } | { metadata_xml: string }
 
 export class ManagementAPIError extends Error {
   constructor(
@@ -179,13 +183,16 @@ function toManagementAttributeMapping(mapping: Record<string, string>): { keys: 
 export async function createSSOProvider(
   c: Context,
   domain: string,
-  metadataUrl: string,
+  metadata: SSOMetadataSource,
   attributeMapping?: Record<string, string>,
 ): Promise<SSOProviderResponse> {
+  // Created disabled: Supabase Auth must not accept logins for this domain until
+  // DNS ownership is proven and the org admin activates the provider.
   const body = {
     type: 'saml',
     domains: [domain],
-    metadata_url: metadataUrl,
+    disabled: true,
+    ...metadata,
     ...(attributeMapping && { attribute_mapping: toManagementAttributeMapping(attributeMapping) }),
   }
 
@@ -216,6 +223,9 @@ export async function updateSSOProvider(
   }
   if (updates.attribute_mapping) {
     body.attribute_mapping = toManagementAttributeMapping(updates.attribute_mapping)
+  }
+  if (updates.disabled !== undefined) {
+    body.disabled = updates.disabled
   }
 
   const response = await callManagementAPI(c, 'PATCH', `/config/auth/sso/providers/${providerId}`, body)
