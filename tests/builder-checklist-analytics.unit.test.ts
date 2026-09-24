@@ -45,6 +45,17 @@ function startSetupEvent(platform: 'ios' | 'android') {
   })
 }
 
+function profilePreparedEvent(source: 'created' | 'imported', step = source === 'created' ? 'creating-profile' : 'import-pick-profile') {
+  return event({
+    action: 'profile_prepared',
+    app_id: 'com.test.builder',
+    attempt_id: 'bj_profile-prepared',
+    journey_id: 'bj_profile-prepared',
+    source,
+    step,
+  })
+}
+
 function onboarding(step = 'choose_destination', state: Record<string, unknown> = { status: 'pending' }) {
   return {
     feature_flag: { keep: true },
@@ -114,6 +125,9 @@ describe('builder checklist analytics mapping', () => {
     [{ action: 'certificate_preparation_failed', source: 'created', reason: 'certificate_limit' }, { step: 'prepare_certificate', status: 'warning', annotation: 'ios_certificate_limit_reached', annotationType: 'warning' }],
     [{ action: 'certificate_preparation_failed', source: 'created', reason: 'create_failed' }, { step: 'prepare_certificate', status: 'warning', annotation: 'ios_certificate_creation_failed', annotationType: 'warning' }],
     [{ action: 'certificate_preparation_failed', source: 'keychain_import', reason: 'export_failed' }, { step: 'prepare_certificate', status: 'warning', annotation: 'ios_certificate_export_failed', annotationType: 'warning' }],
+    [profilePreparedEvent('created').tags, { step: 'prepare_profile', status: 'done' }],
+    [profilePreparedEvent('created', 'import-create-profile-only').tags, { step: 'prepare_profile', status: 'done' }],
+    [profilePreparedEvent('imported').tags, { step: 'prepare_profile', status: 'done' }],
   ])('maps %j', (tags, expected) => {
     expect(getBuilderChecklistUpdateFromAnalytics(event(tags))).toEqual({ platform: 'ios', ...expected })
   })
@@ -127,6 +141,14 @@ describe('builder checklist analytics mapping', () => {
     event({ action: 'certificate_prepared', source: 'created' }, { channel: 'other' }),
     event({ action: 'certificate_prepared', source: 'created' }, { event: 'Builder Onboarding Step' }),
     event({ action: 'certificate_prepared', source: 'created' }, { tags: { platform: 'android', action: 'certificate_prepared', source: 'created' } }),
+    event({ action: 'profile_prepared', source: 'manual', app_id: 'com.test.builder', attempt_id: 'attempt', journey_id: 'journey', step: 'import-pick-profile' }),
+    event({ action: 'profile_prepared', source: 'created', app_id: 'com.test.builder', attempt_id: 'attempt', journey_id: 'journey', step: 'import-pick-profile' }),
+    event({ action: 'profile_prepared', source: 'imported', app_id: 'com.test.builder', attempt_id: 'attempt', journey_id: 'journey', step: 'creating-profile' }),
+    event({ action: 'profile_prepared', source: 'created', attempt_id: 'attempt', journey_id: 'journey', step: 'creating-profile' }),
+    event({ action: 'profile_prepared', source: 'created', app_id: 'com.test.builder', journey_id: 'journey', step: 'creating-profile' }),
+    event({ action: 'profile_prepared', source: 'created', app_id: 'com.test.builder', attempt_id: 'attempt', step: 'creating-profile' }),
+    event({ action: 'profile_prepared', source: 'created', app_id: 'com.test.builder', attempt_id: 'attempt', journey_id: 'journey' }),
+    event({ action: 'profile_prepared', source: 'created', app_id: 'com.test.builder', attempt_id: 'attempt', journey_id: 'journey', step: 'creating-profile' }, { tags: { platform: 'android', action: 'profile_prepared', source: 'created', app_id: 'com.test.builder', attempt_id: 'attempt', journey_id: 'journey', step: 'creating-profile' } }),
     event({ action: 'start_setup', app_id: 'com.test.builder', journey_id: 'bj_start-setup', source: 'dashboard', step: 'welcome' }),
     event({ action: 'start_setup', journey_id: 'bj_start-setup', source: 'cli', step: 'welcome' }),
     event({ action: 'start_setup', app_id: 'com.test.builder', source: 'cli', step: 'welcome' }),
@@ -285,5 +307,18 @@ describe('builder checklist analytics authorization', () => {
     await expect(markBuilderChecklistFromAnalytics(context(), 'com.test.builder', startSetupEvent('android'))).resolves.toBe(false)
     expect(mocks.close).toHaveBeenCalledOnce()
     expect(mocks.track).not.toHaveBeenCalled()
+  })
+
+  it('uses the authorized mutation path for a prepared iOS profile', async () => {
+    lockedRow(onboarding())
+    mocks.permission.mockImplementation(async (_c, permission) => permission === 'app.update_settings')
+
+    await expect(markBuilderChecklistFromAnalytics(context(), 'com.test.builder', profilePreparedEvent('imported'))).resolves.toBe(true)
+
+    expect(mocks.permission).toHaveBeenCalledWith(expect.anything(), 'app.update_settings', { appId: 'com.test.builder' }, expect.anything(), expect.any(String), 'fixture-key')
+    expect(mocks.track).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      event: 'App Onboarding Step Changed',
+      nonPersonTags: expect.objectContaining({ step_id: 'builder.ios.prepare_profile', step_status: 'done' }),
+    }))
   })
 })
