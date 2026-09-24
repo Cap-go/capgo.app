@@ -9,14 +9,20 @@ import { cloudlogErr, serializeError } from './logging.ts'
 
 type BuilderChecklistStatus = 'pending' | 'done' | 'skipped' | 'warning'
 type BuilderChecklistAnnotationType = 'note' | 'warning'
-type IosBuilderStep = 'choose_destination' | 'connect_app_store' | 'prepare_certificate'
+type IosBuilderStep = 'start_setup' | 'choose_destination' | 'connect_app_store' | 'prepare_certificate'
 
-export interface BuilderChecklistUpdate {
+export type BuilderChecklistUpdate = {
   platform: 'ios'
   step: IosBuilderStep
   status: BuilderChecklistStatus
   annotation?: string
   annotationType?: BuilderChecklistAnnotationType
+} | {
+  platform: 'android'
+  step: 'start_setup'
+  status: 'done'
+  annotation?: never
+  annotationType?: never
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -90,8 +96,27 @@ function certificateUpdate(tags: Record<string, string | number | boolean>): Bui
     : null
 }
 
+function startSetupUpdate(tags: Record<string, string | number | boolean>): BuilderChecklistUpdate | null {
+  const platform = tags.platform
+  if (tags.action !== 'start_setup'
+    || tags.source !== 'cli'
+    || typeof tags.app_id !== 'string' || !tags.app_id
+    || typeof tags.journey_id !== 'string' || !tags.journey_id
+    || typeof tags.step !== 'string' || !tags.step
+    || (platform !== 'ios' && platform !== 'android')) {
+    return null
+  }
+  return platform === 'ios'
+    ? { platform: 'ios', step: 'start_setup', status: 'done' }
+    : { platform: 'android', step: 'start_setup', status: 'done' }
+}
+
 export function getBuilderChecklistUpdateFromAnalytics(event: Pick<TrackOptions, 'channel' | 'event' | 'tags'>): BuilderChecklistUpdate | null {
-  if (event.channel !== 'builder-onboarding' || event.event !== 'Builder Onboarding Action' || event.tags?.platform !== 'ios')
+  if (event.channel !== 'builder-onboarding' || event.event !== 'Builder Onboarding Action' || !event.tags)
+    return null
+  if (event.tags.action === 'start_setup')
+    return startSetupUpdate(event.tags)
+  if (event.tags.platform !== 'ios')
     return null
   return destinationUpdate(event.tags) ?? appStoreUpdate(event.tags) ?? certificateUpdate(event.tags)
 }
@@ -179,6 +204,8 @@ export async function markBuilderChecklistFromAnalytics(
   const update = getBuilderChecklistUpdateFromAnalytics(event)
   const auth = c.get('auth')
   if (!appId || !update || !auth?.userId)
+    return false
+  if (event.tags?.action === 'start_setup' && event.tags.app_id !== appId)
     return false
 
   const stepId = `builder.${update.platform}.${update.step}` as AppOnboardingBuilderStepId
