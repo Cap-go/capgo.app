@@ -2164,6 +2164,7 @@ describe('sSO role mapping', () => {
     const providerId = randomUUID()
     const externalProviderId = randomUUID()
     const groupId = randomUUID()
+    const appUuid = randomUUID()
     const domain = `${randomUUID()}.sso.test`
     const email = `role-mapping-${randomUUID()}@${domain}`
     const password = 'testtest'
@@ -2193,6 +2194,11 @@ describe('sSO role mapping', () => {
       `select r.name from public.role_bindings rb join public.roles r on r.id = rb.role_id
        where rb.principal_id = $1 and rb.org_id = $2 and rb.scope_type = public.rbac_scope_org()`,
       [userId, managedOrgId],
+    )).rows.map(row => row.name)
+    const appRole = async () => (await pool.query<{ name: string }>(
+      `select r.name from public.role_bindings rb join public.roles r on r.id = rb.role_id
+       where rb.principal_id = $1 and rb.app_id = $2 and rb.scope_type = public.rbac_scope_app()`,
+      [userId, appUuid],
     )).rows.map(row => row.name)
     const inGroup = async () => ((await pool.query('select 1 from public.group_members where group_id = $1 and user_id = $2', [groupId, userId])).rowCount ?? 0) > 0
 
@@ -2231,6 +2237,15 @@ describe('sSO role mapping', () => {
       if (orgUserError)
         throw orgUserError
       await pool.query('insert into public.groups (id, org_id, name) values ($1, $2, $3)', [groupId, managedOrgId, 'SSO admins'])
+      const { error: appError } = await getSupabaseClient().from('apps').insert({
+        id: appUuid,
+        owner_org: managedOrgId,
+        name: 'SSO role mapping app',
+        app_id: `com.test.sso.rolemapping.${randomUUID().slice(0, 8)}`,
+        icon_url: 'https://example.com/icon.png',
+      })
+      if (appError)
+        throw appError
       const { error: providerError } = await (getSupabaseClient().from as any)('sso_providers').insert({
         id: providerId,
         org_id: managedOrgId,
@@ -2249,13 +2264,15 @@ describe('sSO role mapping', () => {
         headers: authHeaders,
         body: JSON.stringify({ role_mapping: roleMapping }),
       })
-      const foreignGroupResponse = await patchMapping({ attribute: 'groups', rules: [{ value: 'x', role: 'org_admin', group_id: randomUUID() }], default_role: null })
+      const foreignGroupResponse = await patchMapping({ attribute: 'groups', rules: [{ value: 'x', org_role: 'org_admin', group_id: randomUUID() }], default_role: null })
       expect(foreignGroupResponse.status).toBe(400)
+      const foreignAppResponse = await patchMapping({ attribute: 'groups', rules: [{ value: 'x', apps: [{ app_id: randomUUID(), role: 'app_admin' }] }], default_role: null })
+      expect(foreignAppResponse.status).toBe(400)
       const mappingResponse = await patchMapping({
         attribute: 'groups',
         rules: [
-          { value: 'capgo-admins', role: 'org_admin', group_id: groupId },
-          { value: 'capgo-devs', role: 'org_member' },
+          { value: 'capgo-admins', org_role: 'org_admin', group_id: groupId },
+          { value: 'capgo-devs', org_role: 'org_member', apps: [{ app_id: appUuid, role: 'app_developer' }] },
         ],
         default_role: null,
       })
@@ -2277,13 +2294,19 @@ describe('sSO role mapping', () => {
       await setClaims(['capgo-devs'])
       expect((await provision()).status).toBe(200)
       expect(await orgRole()).toEqual(['org_member'])
+      expect(await appRole()).toEqual(['app_developer'])
       expect(await inGroup()).toBe(false)
+
+      await setClaims(['capgo-admins'])
+      expect((await provision()).status).toBe(200)
+      expect(await appRole()).toEqual([])
 
       await setClaims(['someone-else'])
       const denied = await provision()
       expect(denied.status).toBe(403)
       expect((await denied.json() as { error: string }).error).toBe('sso_no_access')
       expect(await orgRole()).toEqual([])
+      expect(await appRole()).toEqual([])
       const membership = await pool.query('select 1 from public.org_users where org_id = $1 and user_id = $2', [managedOrgId, userId])
       expect(membership.rowCount).toBe(0)
     }
@@ -2291,6 +2314,7 @@ describe('sSO role mapping', () => {
       await Promise.allSettled([
         getSupabaseClient().auth.admin.deleteUser(userId),
         (getSupabaseClient().from as any)('sso_providers').delete().eq('id', providerId),
+        getSupabaseClient().from('apps').delete().eq('id', appUuid),
         getSupabaseClient().from('orgs').delete().eq('id', managedOrgId),
         getSupabaseClient().from('stripe_info').delete().eq('customer_id', managedCustomerId),
         pool.end(),

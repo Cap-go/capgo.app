@@ -102,19 +102,19 @@ function parseAttributeMapping(value: unknown): Record<string, string> | undefin
   return result
 }
 
-async function requireOrgGroups(c: Context<MiddlewareKeyVariables>, orgId: string, mapping: SsoRoleMapping) {
-  const groupIds = [...new Set(mapping.rules.map(rule => rule.group_id).filter((groupId): groupId is string => groupId !== null))]
-  if (groupIds.length === 0)
-    return
-  const { data, error } = await supabaseAdmin(c)
-    .from('groups')
-    .select('id')
-    .eq('org_id', orgId)
-    .in('id', groupIds)
-  if (error)
-    quickError(500, 'group_lookup_failed', 'Failed to validate role mapping groups')
-  if ((data ?? []).length !== groupIds.length)
-    throw simpleError('invalid_role_mapping', 'Role mapping references a group that does not belong to this organization')
+// Every app and group a mapping grants must belong to the provider's org.
+async function requireMappingTargetsInOrg(c: Context<MiddlewareKeyVariables>, orgId: string, mapping: SsoRoleMapping) {
+  const admin = supabaseAdmin(c)
+  const groupIds = [...new Set(mapping.rules.map(rule => rule.group_id).filter((id): id is string => id !== null))]
+  const appIds = [...new Set(mapping.rules.flatMap(rule => rule.apps.map(app => app.app_id)))]
+  const [groups, apps] = await Promise.all([
+    groupIds.length ? admin.from('groups').select('id').eq('org_id', orgId).in('id', groupIds) : { data: [], error: null },
+    appIds.length ? admin.from('apps').select('id').eq('owner_org', orgId).in('id', appIds) : { data: [], error: null },
+  ])
+  if (groups.error || apps.error)
+    quickError(500, 'role_mapping_lookup_failed', 'Failed to validate role mapping targets')
+  if ((groups.data ?? []).length !== groupIds.length || (apps.data ?? []).length !== appIds.length)
+    throw simpleError('invalid_role_mapping', 'Role mapping references an app or group that does not belong to this organization')
 }
 
 async function requireManageSsoPermission(c: Context<MiddlewareKeyVariables>, orgId: string) {
@@ -375,7 +375,7 @@ app.patch('/:id', async (c) => {
   }
   if (body.role_mapping !== undefined) {
     if (body.role_mapping)
-      await requireOrgGroups(c, provider.org_id, body.role_mapping)
+      await requireMappingTargetsInOrg(c, provider.org_id, body.role_mapping)
     updates.role_mapping = body.role_mapping
   }
   if (body.enforce_sso !== undefined) {

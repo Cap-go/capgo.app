@@ -527,7 +527,7 @@ async function applyMappedAccessInTransaction(
   const currentRole = await getOrgRoleName(client, orgId, userId)
   const isLastSuperAdmin = currentRole === 'org_super_admin' && await countOtherOrgSuperAdmins(client, orgId, userId) === 0
 
-  if (access.role === null) {
+  if (access.orgRole === null) {
     if (isLastSuperAdmin) {
       cloudlog({ requestId, message: 'SSO role mapping grants no access but user is the last super admin; keeping membership', userId, orgId })
       return { alreadyMember: true, noAccess: true }
@@ -547,9 +547,9 @@ async function applyMappedAccessInTransaction(
     return { alreadyMember: false, noAccess: true }
   }
 
-  const targetRole = isLastSuperAdmin ? 'org_super_admin' : access.role
-  if (isLastSuperAdmin && access.role !== 'org_super_admin')
-    cloudlog({ requestId, message: 'SSO role mapping would demote the last super admin; keeping org_super_admin', userId, orgId, mappedRole: access.role })
+  const targetRole = isLastSuperAdmin ? 'org_super_admin' : access.orgRole
+  if (isLastSuperAdmin && access.orgRole !== 'org_super_admin')
+    cloudlog({ requestId, message: 'SSO role mapping would demote the last super admin; keeping org_super_admin', userId, orgId, mappedRole: access.orgRole })
 
   if (existing) {
     await client.query('update public.org_users set is_invite = false, rbac_role_name = $1 where id = $2', [targetRole, existing.id])
@@ -581,6 +581,35 @@ async function applyMappedAccessInTransaction(
           and r.scope_type = public.rbac_scope_org()
       `,
       [userId, orgId, targetRole],
+    )
+  }
+
+  if (access.managedAppIds.length > 0) {
+    const appRoles = JSON.stringify(access.appRoles)
+    // Drop bindings on mapped apps the user no longer matches, or whose role changed.
+    await client.query(
+      `
+        delete from public.role_bindings rb
+        using public.roles r
+        where r.id = rb.role_id
+          and rb.principal_type = public.rbac_principal_user()
+          and rb.principal_id = $1
+          and rb.scope_type = public.rbac_scope_app()
+          and rb.app_id = any($2::uuid[])
+          and r.name is distinct from ($3::jsonb ->> rb.app_id::text)
+      `,
+      [userId, access.managedAppIds, appRoles],
+    )
+    await client.query(
+      `
+        insert into public.role_bindings (principal_type, principal_id, role_id, scope_type, org_id, app_id, granted_by, reason, is_direct)
+        select public.rbac_principal_user(), $1, r.id, public.rbac_scope_app(), $2, a.id, $1, 'SSO role mapping', true
+        from jsonb_each_text($3::jsonb) mapped
+        join public.apps a on a.id = mapped.key::uuid and a.owner_org = $2
+        join public.roles r on r.name = mapped.value and r.scope_type = public.rbac_scope_app()
+        on conflict do nothing
+      `,
+      [userId, orgId, appRoles],
     )
   }
 

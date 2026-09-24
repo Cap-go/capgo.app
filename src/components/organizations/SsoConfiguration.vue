@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import type { SsoRoleMapping } from '~/components/organizations/SsoRoleMappingEditor.vue'
+import type { SsoRoleMapping } from '~/components/organizations/SsoRoleMappingDialog.vue'
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconCopy from '~icons/heroicons/document-duplicate'
 import IconGlobeAlt from '~icons/heroicons/globe-alt'
 import IconTrash from '~icons/heroicons/trash'
-import SsoRoleMappingEditor from '~/components/organizations/SsoRoleMappingEditor.vue'
+import SsoRoleMappingDialog from '~/components/organizations/SsoRoleMappingDialog.vue'
 import Spinner from '~/components/Spinner.vue'
 import { formatLocalDate } from '~/services/date'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
@@ -46,13 +46,12 @@ const spMetadata = ref<SpMetadata | null>(null)
 const isLoading = ref(true)
 const isSubmitting = ref(false)
 const isVerifying = ref<string | null>(null)
-const roleMappingProviderId = ref<string | null>(null)
+const roleMappingDialog = ref<InstanceType<typeof SsoRoleMappingDialog> | null>(null)
 
 function onRoleMappingSaved(providerId: string, roleMapping: SsoRoleMapping | null) {
   const provider = providers.value.find(p => p.id === providerId)
   if (provider)
     provider.role_mapping = roleMapping
-  roleMappingProviderId.value = null
 }
 const showAddForm = ref(false)
 
@@ -752,8 +751,7 @@ defineExpose({
             v-if="provider.status !== 'pending_verification'"
             type="button"
             class="d-btn d-btn-outline d-btn-sm"
-            :aria-expanded="roleMappingProviderId === provider.id"
-            @click="roleMappingProviderId = roleMappingProviderId === provider.id ? null : provider.id"
+            @click="roleMappingDialog?.open(provider)"
           >
             {{ t('sso-role-mapping-title') }}
           </button>
@@ -769,14 +767,8 @@ defineExpose({
           </button>
         </div>
       </div>
-      <div v-if="roleMappingProviderId === provider.id" class="px-4 pb-4">
-        <SsoRoleMappingEditor
-          :org-id="orgId"
-          :provider-id="provider.id"
-          :role-mapping="provider.role_mapping"
-          @saved="onRoleMappingSaved(provider.id, $event)"
-        />
-      </div>
     </div>
   </div>
+
+  <SsoRoleMappingDialog ref="roleMappingDialog" :org-id="orgId" @saved="onRoleMappingSaved" />
 </template>
