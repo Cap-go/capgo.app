@@ -3,7 +3,7 @@ import {
   BUILDER_STEP_IDS,
   hasSupportedBuilderTodoList,
   isBuilderTodoListSelected,
-  parseBuilderOnboardingChecklist,
+  parseBuilderOnboarding,
 } from '../src/services/builderOnboardingChecklist'
 
 function onboarding(setup: Record<string, unknown>) {
@@ -41,8 +41,8 @@ describe('builder onboarding checklist assignment', () => {
     }))).toBe(false)
   })
 
-  it.concurrent('reads the stored platform and includes all configured pending steps', () => {
-    const parsed = parseBuilderOnboardingChecklist(onboarding({
+  it.concurrent('reads the stored platform and status for every configured step', () => {
+    const parsed = parseBuilderOnboarding(onboarding({
       todo_list_version: 4,
       builder_todo_list_version: '1',
       paths: ['builder'],
@@ -51,22 +51,23 @@ describe('builder onboarding checklist assignment', () => {
     }))
 
     expect(parsed.selectedPlatform).toBe('ios')
-    expect(parsed.stepIds.ios).toEqual(BUILDER_STEP_IDS.ios)
-    expect(parsed.stepIds.android).toEqual(BUILDER_STEP_IDS.android)
+    expect(parsed.steps.ios).toEqual(Object.fromEntries(BUILDER_STEP_IDS.ios.map(id => [id, 'pending'])))
+    expect(parsed.steps.android).toEqual(Object.fromEntries(BUILDER_STEP_IDS.android.map(id => [id, 'pending'])))
   })
 
-  it.concurrent('ignores unsupported configured step ids and invalid stored platforms', () => {
-    const parsed = parseBuilderOnboardingChecklist(onboarding({
+  it.concurrent('ignores unsupported step ids, invalid statuses, and invalid stored platforms', () => {
+    const parsed = parseBuilderOnboarding(onboarding({
       selected_builder_platform: 'web',
       steps: {
         builder: {
-          ios: { ...builderSteps.ios, future_step: { status: 'pending' } },
+          ios: { ...builderSteps.ios, prepare_profile: { status: 'future' }, future_step: { status: 'pending' } },
           android: builderSteps.android,
         },
       },
     }))
 
     expect(parsed.selectedPlatform).toBeNull()
-    expect(parsed.stepIds.ios).toEqual(BUILDER_STEP_IDS.ios)
+    expect(parsed.steps.ios.prepare_profile).toBeUndefined()
+    expect(parsed.steps.ios).not.toHaveProperty('future_step')
   })
 })

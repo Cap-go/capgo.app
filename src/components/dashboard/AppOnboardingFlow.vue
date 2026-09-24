@@ -3475,6 +3475,7 @@ defineExpose({
         <AppOnboardingBuilderChecklist
           v-else-if="showBuilderChecklist && createdApp"
           :key="createdApp.app_id"
+          :app-id="createdApp.app_id"
           :initial-onboarding="createdApp.onboarding"
           :command="builderCliCommand"
           :hiding="isHidingSplash"
@@ -3482,6 +3483,7 @@ defineExpose({
           @copy-command="copyBuilderCliCommand"
           @hide="skipOnboardingSplash"
           @explore="openDashboard"
+          @complete="openDashboard"
         />
 
         <AppOnboardingSetupChecklist
