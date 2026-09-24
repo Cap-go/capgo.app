@@ -87,6 +87,7 @@ export type BuilderOnboardingAction
     | 'credential_verification_failed'
     | 'certificate_prepared'
     | 'certificate_preparation_failed'
+    | 'profile_prepared'
     | 'keystore_prepared'
     | 'keystore_preparation_failed'
     | 'google_play_connected'

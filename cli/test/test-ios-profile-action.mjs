@@ -86,7 +86,7 @@ const recoveryCreated = await runIosEffect('import-create-profile-only', importe
   carried: { chosenIdentity: identity, importMatches: [{ identity, profiles: [] }] },
   findCertIdBySha1: async () => 'FAKE_CERT_ID',
   ensureBundleId: async () => {},
-  createProfile: async () => ({ ...profileResult, expirationDate: '2027-01-01' }),
+  createProfile: async () => ({ ...profileResult, profileId: 'FAKE_RECOVERY_PROFILE', expirationDate: '2027-01-01' }),
 })
 trackCreatedIosProfileResult(recoveryCreated, 'import-create-profile-only', journeyId, trackAction, reportedSuccesses)
 assert.equal(recoveryCreated.next, 'import-export-warning')

@@ -9,7 +9,7 @@ import { cloudlogErr, serializeError } from './logging.ts'
 
 type BuilderChecklistStatus = 'pending' | 'done' | 'skipped' | 'warning'
 type BuilderChecklistAnnotationType = 'note' | 'warning'
-type IosBuilderStep = 'start_setup' | 'choose_destination' | 'connect_app_store' | 'prepare_certificate'
+type IosBuilderStep = 'start_setup' | 'choose_destination' | 'connect_app_store' | 'prepare_certificate' | 'prepare_profile'
 
 export type BuilderChecklistUpdate = {
   platform: 'ios'
@@ -96,6 +96,22 @@ function certificateUpdate(tags: Record<string, string | number | boolean>): Bui
     : null
 }
 
+function profileUpdate(tags: Record<string, string | number | boolean>): BuilderChecklistUpdate | null {
+  if (tags.action !== 'profile_prepared'
+    || typeof tags.app_id !== 'string' || !tags.app_id.trim()
+    || typeof tags.attempt_id !== 'string' || !tags.attempt_id.trim()
+    || typeof tags.journey_id !== 'string' || !tags.journey_id.trim()) {
+    return null
+  }
+
+  const validCreatedStep = tags.source === 'created'
+    && (tags.step === 'creating-profile' || tags.step === 'import-create-profile-only')
+  const validImportedStep = tags.source === 'imported' && tags.step === 'import-pick-profile'
+  return validCreatedStep || validImportedStep
+    ? { platform: 'ios', step: 'prepare_profile', status: 'done' }
+    : null
+}
+
 function startSetupUpdate(tags: Record<string, string | number | boolean>): BuilderChecklistUpdate | null {
   const platform = tags.platform
   if (tags.action !== 'start_setup'
@@ -118,7 +134,7 @@ export function getBuilderChecklistUpdateFromAnalytics(event: Pick<TrackOptions,
     return startSetupUpdate(event.tags)
   if (event.tags.platform !== 'ios')
     return null
-  return destinationUpdate(event.tags) ?? appStoreUpdate(event.tags) ?? certificateUpdate(event.tags)
+  return destinationUpdate(event.tags) ?? appStoreUpdate(event.tags) ?? certificateUpdate(event.tags) ?? profileUpdate(event.tags)
 }
 
 export function applyBuilderChecklistUpdate(
