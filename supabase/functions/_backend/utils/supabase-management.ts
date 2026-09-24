@@ -2,15 +2,29 @@ import type { Context } from 'hono'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { getEnv } from './utils.ts'
 
+interface ManagementAttributeMapping { keys: Record<string, { name?: string, names?: string[], array?: boolean, default?: unknown }> }
+
+// Shape returned by the Management API (GetProviderResponse).
 export interface SSOProviderResponse {
   id: string
-  type: 'saml'
-  domains: string[]
-  metadata_url?: string
-  attribute_mapping?: Record<string, string>
+  saml?: {
+    entity_id: string
+    metadata_url?: string
+    metadata_xml?: string
+    attribute_mapping?: ManagementAttributeMapping
+  }
+  domains?: Array<{ domain: string }>
   disabled?: boolean
-  created_at: string
-  updated_at: string
+  created_at?: string
+  updated_at?: string
+}
+
+// Fields of a provider that PUT can set back to a previous state.
+export interface SSOProviderSnapshot {
+  metadata_url?: string
+  metadata_xml?: string
+  attribute_mapping?: ManagementAttributeMapping
+  disabled?: boolean
 }
 
 export interface SSOProviderUpdate {
@@ -228,8 +242,22 @@ export async function updateSSOProvider(
     body.disabled = updates.disabled
   }
 
-  const response = await callManagementAPI(c, 'PATCH', `/config/auth/sso/providers/${providerId}`, body)
+  const response = await callManagementAPI(c, 'PUT', `/config/auth/sso/providers/${providerId}`, body)
   return response as SSOProviderResponse
+}
+
+export async function snapshotSSOProvider(c: Context, providerId: string): Promise<SSOProviderSnapshot> {
+  const provider = await getSSOProvider(c, providerId)
+  return {
+    // The API accepts one metadata source; the URL wins when both are echoed.
+    ...(provider.saml?.metadata_url ? { metadata_url: provider.saml.metadata_url } : provider.saml?.metadata_xml ? { metadata_xml: provider.saml.metadata_xml } : {}),
+    ...(provider.saml?.attribute_mapping ? { attribute_mapping: provider.saml.attribute_mapping } : {}),
+    ...(provider.disabled !== undefined ? { disabled: provider.disabled } : {}),
+  }
+}
+
+export async function restoreSSOProvider(c: Context, providerId: string, snapshot: SSOProviderSnapshot): Promise<void> {
+  await callManagementAPI(c, 'PUT', `/config/auth/sso/providers/${providerId}`, snapshot)
 }
 
 export async function deleteSSOProvider(

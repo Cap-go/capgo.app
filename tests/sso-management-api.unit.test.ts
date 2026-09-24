@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { createSSOProvider, updateSSOProvider } from '../supabase/functions/_backend/utils/supabase-management.ts'
+import { createSSOProvider, restoreSSOProvider, snapshotSSOProvider, updateSSOProvider } from '../supabase/functions/_backend/utils/supabase-management.ts'
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
   cloudlog: vi.fn(),
@@ -59,11 +59,31 @@ describe('supabase Management API SSO provider calls', () => {
     expect(body).not.toHaveProperty('metadata_url')
   })
 
-  it('forwards the disabled flag on update, including false', async () => {
+  it('updates with PUT and forwards the disabled flag, including false', async () => {
     const fetchMock = mockFetch()
 
     await updateSSOProvider(context, 'provider-id', { disabled: false })
 
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe('PUT')
     expect(sentBody(fetchMock)).toEqual({ disabled: false })
+  })
+
+  it('snapshots the Auth provider and restores it verbatim', async () => {
+    const attributeMapping = { keys: { groups: { name: 'memberOf', array: true } } }
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({
+      id: 'provider-id',
+      saml: { entity_id: 'idp', metadata_url: 'https://idp.example.com/metadata', attribute_mapping: attributeMapping },
+      disabled: true,
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const snapshot = await snapshotSSOProvider(context, 'provider-id')
+    expect(snapshot).toEqual({ metadata_url: 'https://idp.example.com/metadata', attribute_mapping: attributeMapping, disabled: true })
+
+    await restoreSSOProvider(context, 'provider-id', snapshot)
+    const [url, init] = fetchMock.mock.calls[1]!
+    expect(url).toBe('https://api.supabase.com/v1/projects/projectref/config/auth/sso/providers/provider-id')
+    expect(init?.method).toBe('PUT')
+    expect(JSON.parse(init?.body as string)).toEqual(snapshot)
   })
 })

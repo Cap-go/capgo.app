@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { PoolClient } from 'pg'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
+import type { SSOProviderSnapshot } from '../../utils/supabase-management.ts'
 import { z } from 'zod'
 import { BRES, createHono, parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_jwt.ts'
@@ -9,7 +10,7 @@ import { closeClient, getPgClient, withPgTransaction } from '../../utils/pg.ts'
 import { requireEnterprisePlan } from '../../utils/plan-gating.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
-import { createSSOProvider, deleteSSOProvider, ManagementAPIError, updateSSOProvider } from '../../utils/supabase-management.ts'
+import { createSSOProvider, deleteSSOProvider, ManagementAPIError, restoreSSOProvider, snapshotSSOProvider, updateSSOProvider } from '../../utils/supabase-management.ts'
 import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
 import { version } from '../../utils/version.ts'
 import { PUBLIC_EMAIL_DOMAINS } from './prelink-shared.ts'
@@ -357,8 +358,12 @@ app.patch('/:id', async (c) => {
     managementUpdates.metadata_url = body.metadata_url
   if (attributeMapping !== undefined)
     managementUpdates.attribute_mapping = attributeMapping
+  // Snapshot taken before the update so Supabase Auth can be put back if the
+  // database write below fails.
+  let authSnapshot: SSOProviderSnapshot | null = null
   if (provider.provider_id && Object.keys(managementUpdates).length > 0) {
     try {
+      authSnapshot = await snapshotSSOProvider(c, provider.provider_id)
       await updateSSOProvider(c, provider.provider_id, managementUpdates)
     }
     catch (err) {
@@ -375,15 +380,23 @@ app.patch('/:id', async (c) => {
   const isSsoEnforced = nextStatus === 'active' && nextEnforce === true
 
   let updatedProvider: Record<string, unknown> | undefined
+  let updateError: unknown
   try {
     updatedProvider = await updateProviderAndSyncEnforcement(c, id, updates, wasSsoEnforced !== isSsoEnforced ? { domain: provider.domain, isSsoOnly: isSsoEnforced } : null)
   }
   catch (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to update SSO provider', providerId: id, domain: provider.domain, error })
-    return quickError(500, 'provider_update_failed', 'Failed to update SSO provider')
+    updateError = error
   }
   if (!updatedProvider) {
-    quickError(404, 'provider_not_found', 'SSO provider not found')
+    if (authSnapshot && provider.provider_id) {
+      await restoreSSOProvider(c, provider.provider_id, authSnapshot).catch((restoreError) => {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to restore Supabase Auth SSO provider after database update failure', providerId: id, externalProviderId: provider.provider_id, error: restoreError })
+      })
+    }
+    if (!updateError)
+      quickError(404, 'provider_not_found', 'SSO provider not found')
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to update SSO provider', providerId: id, domain: provider.domain, error: updateError })
+    return quickError(500, 'provider_update_failed', 'Failed to update SSO provider')
   }
 
   return c.json(sanitizeProvider(updatedProvider))

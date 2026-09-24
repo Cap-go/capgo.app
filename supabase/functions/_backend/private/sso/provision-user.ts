@@ -285,6 +285,13 @@ async function ensurePublicUserRowExistsInTransaction(
   }
 }
 
+// org_users has no unique (user_id, org_id) constraint and FOR UPDATE cannot
+// lock a missing row, so concurrent provisioning of the same user (callback
+// and auth guard, or a retry after a client timeout) is serialized here.
+async function lockOrgMembership(pgClient: PgExecutor, userId: string, orgId: string): Promise<void> {
+  await pgClient.query('select pg_advisory_xact_lock(hashtext($1))', [`sso_org_membership:${orgId}:${userId}`])
+}
+
 async function ensureOrgMembershipInTransaction(
   pgClient: PgExecutor,
   requestId: string,
@@ -389,6 +396,7 @@ async function ensureOrgMembershipInTransaction(
   }
 
   try {
+    await lockOrgMembership(pgClient, userId, orgId)
     const existingMembership = await pgClient.query<{ id: string, is_invite: boolean, rbac_role_name: string | null }>(
       `
         select id, is_invite, rbac_role_name
