@@ -513,6 +513,7 @@ async function applyMappedAccessInTransaction(
   orgId: string,
   access: SsoAccess,
 ): Promise<EnsureOrgMembershipResult> {
+  await lockOrgMembership(client, userId, orgId)
   const membership = await client.query<{ id: string, is_invite: boolean }>(
     `
       select id, is_invite
