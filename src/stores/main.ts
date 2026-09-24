@@ -103,7 +103,7 @@ export const useMainStore = defineStore('main', () => {
 
       totalDevices.value = dashboard.value[monthDay]?.mau ?? 0
       totalDownload.value = dashboard.value[monthDay]?.get ?? 0
-      totalStorage.value = await getTotalStorage()
+      totalStorage.value = await getTotalStorage(currentOrgId)
       totalStats.value = getTotalStats()
       bestPlan.value = await findBestPlan(totalStats.value)
       dashboardFetched.value = true
