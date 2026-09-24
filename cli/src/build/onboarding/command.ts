@@ -12,7 +12,7 @@ import { createBuilderAppSelectionServices, getAppSelectionSuggestion } from './
 import { appendInternalLog, startInternalLog } from '../../support/internal-log.js'
 import { newBuilderJourneyId } from './journey.js'
 import { createBuilderLoginServices, resolveBuilderCandidateKey } from './login.js'
-import { trackBuilderOnboardingAppSelection, trackBuilderOnboardingCancelled, trackBuilderOnboardingLogin } from './telemetry.js'
+import { trackBuilderOnboardingAction, trackBuilderOnboardingAppSelection, trackBuilderOnboardingCancelled, trackBuilderOnboardingLogin } from './telemetry.js'
 import { isMacOS, probeGuidedHelper } from './asc-key/helper.js'
 import { ASC_KEY_CHANNEL } from './asc-key/protocol.js'
 import { getPlatformDirFromCapacitorConfig } from '../platform-paths.js'
@@ -24,7 +24,8 @@ import { resolveSupabaseReplayUrl, startInitReplay } from '../../init/replay.js'
 import { discoverCapacitorProjects, hasCapacitorConfig } from './project-discovery.js'
 import { selectCapacitorProject } from './project-selection.js'
 import type { BuilderProjectPrompts } from './project-selection.js'
-import type { OnboardingResult } from './types.js'
+import type { AndroidOnboardingStep } from './android/types.js'
+import type { OnboardingResult, OnboardingStep } from './types.js'
 import type { AppSelectionEvent } from './ui/app-selection-gate.js'
 export interface OnboardingBuilderOptions {
   analytics?: boolean
@@ -369,6 +370,10 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
   // WHERE the user dropped off regardless of HOW they left (keypress, Ctrl+C,
   // or a fatal error that exits) — none of which run React cleanup reliably.
   let lastStep: string | undefined
+  let appSelectionConfirmed = false
+  let startSetupLookupInFlight = false
+  let startSetupStep: OnboardingStep | AndroidOnboardingStep | undefined
+  let startSetupTracked = false
   const onboardingTree = React.createElement(OnboardingShell, {
       appId,
       suggestedSource,
@@ -395,6 +400,45 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
       },
       onStep: (step: string) => {
         lastStep = step
+        const selectedAppId = appId
+        const platform = resolvedPlatform
+        const apikey = authenticatedApiKey
+        if (
+          startSetupTracked
+          || startSetupLookupInFlight
+          || !analyticsEnabled
+          || !appSelectionConfirmed
+          || !selectedAppId
+          || !apikey
+          || (platform !== 'ios' && platform !== 'android')
+          || step === 'app-selection'
+        )
+          return
+
+        const firstSetupStep = startSetupStep ?? (step as OnboardingStep | AndroidOnboardingStep)
+        startSetupStep = firstSetupStep
+        startSetupLookupInFlight = true
+        const resolveOwner = () => resolveOwnerOrgId(apikey, selectedAppId, {
+          supaHost: options.supaHost,
+          supaAnon: options.supaAnon,
+        })
+        void resolveOwner().then(async orgId => orgId ?? resolveOwner()).then((orgId) => {
+          if (!orgId)
+            return
+          startSetupTracked = true
+          return trackBuilderOnboardingAction({
+            action: 'start_setup',
+            apikey,
+            appId: selectedAppId,
+            journeyId,
+            orgId,
+            platform,
+            step: firstSetupStep,
+            tags: { source: 'cli' },
+          })
+        }).finally(() => {
+          startSetupLookupInFlight = false
+        })
       },
       onResult: (r: OnboardingResult) => {
         result = r
@@ -417,6 +461,7 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
         if (appId !== chosenId)
           appendInternalLog(`build init: selected Capgo app ${chosenId} instead of ${appId}`)
         appId = chosenId
+        appSelectionConfirmed = true
       },
       onAppSelectionEvent: (event: AppSelectionEvent) => {
         if (!authenticatedApiKey || options.analytics === false)
@@ -507,7 +552,10 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
         try {
           await Promise.race([
             (async () => {
-              const orgId = await resolveOwnerOrgId(apikey, appId, undefined, controller.signal)
+              const orgId = await resolveOwnerOrgId(apikey, appId, {
+                supaHost: options.supaHost,
+                supaAnon: options.supaAnon,
+              }, controller.signal)
               await trackBuilderOnboardingCancelled({
                 apikey,
                 appId,

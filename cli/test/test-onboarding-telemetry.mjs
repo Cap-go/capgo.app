@@ -178,6 +178,34 @@ try {
     console.log('✅ Action event carries journey_id')
   }
 
+  // ── CLI setup start uses the shared action envelope ───────────────────────
+  {
+    const requests = installFetchMock()
+    await trackBuilderOnboardingAction({
+      action: 'start_setup',
+      apikey: 'capgo-key',
+      appId: 'com.example.app',
+      orgId: 'org-id',
+      journeyId: 'bj_start-setup',
+      platform: 'ios',
+      step: 'welcome',
+      tags: { source: 'cli' },
+    })
+
+    const body = findEventBody(requests)
+    assert.equal(body.event, 'Builder Onboarding Action')
+    assert.equal(body.org_id, 'org-id')
+    assert.deepEqual(body.tags, {
+      action: 'start_setup',
+      app_id: 'com.example.app',
+      journey_id: 'bj_start-setup',
+      platform: 'ios',
+      source: 'cli',
+      step: 'welcome',
+    })
+    console.log('✅ CLI setup start action payload')
+  }
+
   // ── iOS setup question uses reusable action payloads ──────────────────────
   for (const [action, choice, reason] of [
     ['question_shown', undefined],

@@ -870,6 +870,11 @@ export function normalizeSupabaseHost(host: string): string {
   const parsed = new URL(host)
   if (!['http:', 'https:'].includes(parsed.protocol))
     throw new Error('Invalid Supabase host protocol')
+  const isLoopback = parsed.hostname === 'localhost'
+    || parsed.hostname === '127.0.0.1'
+    || parsed.hostname === '[::1]'
+  if (parsed.protocol === 'http:' && !isLoopback)
+    throw new Error('Supabase host must use HTTPS (HTTP is only allowed for localhost)')
   if (parsed.username || parsed.password)
     throw new Error('Supabase host must not include credentials')
   if (parsed.search || parsed.hash)
@@ -1027,6 +1032,7 @@ export async function invokeCapgoCliApi<T = any>(
   try {
     const response = await fetch(url, {
       method,
+      redirect: 'error',
       headers: buildCliRequestHeaders({
         'Content-Type': 'application/json',
         // Self-host Edge Functions validate the Supabase anon JWT; Capgo cloud uses the API key.
