@@ -15,6 +15,7 @@ import { app as deleted_failed_version } from '../../supabase/functions/_backend
 import { app as devices_priv } from '../../supabase/functions/_backend/private/devices.ts'
 import { app as emailPreferences } from '../../supabase/functions/_backend/private/email_preferences.ts'
 import { app as events } from '../../supabase/functions/_backend/private/events.ts'
+import { app as finalize_bundle_upload } from '../../supabase/functions/_backend/private/finalize_bundle_upload.ts'
 import { app as groups } from '../../supabase/functions/_backend/private/groups.ts'
 import { app as invite_existing_user_to_org } from '../../supabase/functions/_backend/private/invite_existing_user_to_org.ts'
 import { app as invite_new_user_to_org } from '../../supabase/functions/_backend/private/invite_new_user_to_org.ts'
@@ -163,6 +164,7 @@ appPrivate.route('/create_device', create_device)
 appPrivate.route('/latency', latency)
 appPrivate.route('/replay', replay)
 appPrivate.route('/events', events)
+appPrivate.route('/finalize_bundle_upload', finalize_bundle_upload)
 appPrivate.route('/groups', groups)
 appPrivate.route('/role_bindings', role_bindings)
 appPrivate.route('/website_preview', website_preview)

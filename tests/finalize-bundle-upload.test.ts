@@ -141,6 +141,16 @@ describe('[POST] /private/finalize_bundle_upload', () => {
     expect((await response.json() as { error: string }).error).toBe('error_version_id_invalid')
   })
 
+  it.concurrent('rejects a null request body', async () => {
+    const response = await fetchTestRequest(getEndpointUrl(ENDPOINT), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': APIKEY_TEST_ALL },
+      body: 'null',
+    })
+    expect(response.status).toBe(400)
+    expect((await response.json() as { error: string }).error).toBe('error_version_id_invalid')
+  })
+
   it.concurrent.each(['123', 1.5, 0, -1])('rejects invalid version_id %s', async (versionId) => {
     const response = await finalize(versionId)
     expect(response.status).toBe(400)

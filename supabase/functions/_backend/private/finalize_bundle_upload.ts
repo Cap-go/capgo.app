@@ -15,7 +15,7 @@ export const app = new Hono<MiddlewareKeyVariables>()
 
 app.post('/', middlewareKey(), async (c) => {
   const body = await parseBody<FinalizeBundleUploadBody>(c)
-  const versionId = body.version_id
+  const versionId = body?.version_id
 
   if (typeof versionId !== 'number' || !Number.isSafeInteger(versionId) || versionId <= 0)
     return quickError(400, 'error_version_id_invalid', 'version_id must be a positive integer')
