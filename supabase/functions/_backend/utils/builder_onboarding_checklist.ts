@@ -221,7 +221,7 @@ export async function markBuilderChecklistFromAnalytics(
   const auth = c.get('auth')
   if (!appId || !update || !auth?.userId)
     return false
-  if (event.tags?.action === 'start_setup' && event.tags.app_id !== appId)
+  if ((event.tags?.action === 'start_setup' || event.tags?.action === 'profile_prepared') && event.tags.app_id !== appId)
     return false
 
   const stepId = `builder.${update.platform}.${update.step}` as AppOnboardingBuilderStepId
