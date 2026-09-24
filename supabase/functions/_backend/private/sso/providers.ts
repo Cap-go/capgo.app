@@ -162,10 +162,11 @@ async function applyProviderUpdate(
   }
 }
 
-// The failure may come from COMMIT itself, so the outcome is checked on a
-// fresh connection: the row still carrying the updated_at seen under the lock
-// proves the update rolled back. When that cannot be established (e.g. the
-// connection dropped mid-COMMIT), Auth is left alone and the case is logged.
+// The failure may come from COMMIT itself, so the outcome is checked in a new
+// transaction that re-locks the row: updated_at still matching the value seen
+// under the first lock proves the update rolled back, and holding the lock
+// while restoring keeps a concurrent update from landing in between. When the
+// outcome cannot be established, Auth is left alone and the case is logged.
 async function restoreAuthIfRolledBack(
   c: Context<MiddlewareKeyVariables>,
   pgPool: ReturnType<typeof getPgClient>,
@@ -174,12 +175,17 @@ async function restoreAuthIfRolledBack(
   restoreAuth: () => Promise<void>,
 ) {
   try {
-    const { rows } = await pgPool.query<{ updated_at: string }>('select updated_at::text as updated_at from public.sso_providers where id = $1', [id])
-    if (rows[0]?.updated_at !== lockedUpdatedAt) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'SSO provider update outcome unclear or committed; Supabase Auth not restored', providerId: id })
-      return
-    }
-    await restoreAuth()
+    await withPgTransaction(pgPool, async (client) => {
+      const { rows } = await client.query<{ updated_at: string }>(
+        'select updated_at::text as updated_at from public.sso_providers where id = $1 for update',
+        [id],
+      )
+      if (rows[0]?.updated_at !== lockedUpdatedAt) {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'SSO provider update outcome unclear or committed; Supabase Auth not restored', providerId: id })
+        return
+      }
+      await restoreAuth()
+    })
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to restore Supabase Auth SSO provider after database update failure', providerId: id, error })
