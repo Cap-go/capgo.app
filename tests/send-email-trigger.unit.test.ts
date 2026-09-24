@@ -108,6 +108,32 @@ describe('send_email queue handler', () => {
     expect(text).toContain('847291')
     expect(html).toContain('please change your Capgo password immediately')
     expect(text).toContain('please change your Capgo password immediately')
+    expect(html).toContain('font-size:15px')
+    expect(html).toContain('border-top:1px solid #dbe4ef')
+    expect(html).not.toContain('<a ')
+    expect(text).not.toContain('https://')
+  })
+
+  it('sends a code-only 2FA setup email when the magiclink redirect carries the 2FA purpose', async () => {
+    const response = await postSendEmail({
+      user: { email: 'user@example.com' },
+      email_data: {
+        email_action_type: 'magiclink',
+        redirect_to: 'https://console.capgo.app/?reason=setup_2fa',
+        token: '847291',
+        token_hash: 'magic-hash',
+      },
+    })
+
+    expect(response.status).toBe(200)
+    const { subject, html, text } = sendMock.mock.calls[0]![0] as { subject: string, html: string, text: string }
+    expect(subject).toBe('Your code to continue 2FA setup')
+    expect(html).toContain('847291')
+    expect(text).toContain('847291')
+    expect(html).toContain('Two-factor authentication will not be enabled')
+    expect(text).toContain('Two-factor authentication will not be enabled')
+    expect(html).toContain('font-size:15px')
+    expect(html).toContain('border-top:1px solid #dbe4ef')
     expect(html).not.toContain('<a ')
     expect(text).not.toContain('https://')
   })

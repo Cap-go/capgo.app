@@ -72,10 +72,11 @@ export interface TrackBuilderOnboardingStepInput {
 }
 
 export type BuilderOnboardingAction
+  = | 'start_setup'
   // Shared (both platforms): which branch the user picked on the resume-prompt
   // fork — `continue` resumes saved progress, `restart` wipes it. Carries a
   // `choice` tag with that value.
-  = | 'resume_prompt_decision'
+    | 'resume_prompt_decision'
     | 'question_shown'
     | 'question_answered'
     | 'question_skipped'
@@ -88,6 +89,9 @@ export type BuilderOnboardingAction
     | 'certificate_preparation_failed'
     | 'keystore_prepared'
     | 'keystore_preparation_failed'
+    | 'google_play_connected'
+    | 'google_play_connection_failed'
+    | 'google_play_connection_unverified'
 
 export interface TrackBuilderOnboardingActionInput {
   apikey: string
