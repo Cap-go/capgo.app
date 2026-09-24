@@ -34,6 +34,17 @@ function event(tags: Record<string, string>, overrides: Record<string, unknown> 
   } as any
 }
 
+function startSetupEvent(platform: 'ios' | 'android') {
+  return event({
+    action: 'start_setup',
+    app_id: 'com.test.builder',
+    journey_id: 'bj_start-setup',
+    platform,
+    source: 'cli',
+    step: 'welcome',
+  })
+}
+
 function onboarding(step = 'choose_destination', state: Record<string, unknown> = { status: 'pending' }) {
   return {
     feature_flag: { keep: true },
@@ -55,7 +66,7 @@ function onboarding(step = 'choose_destination', state: Record<string, unknown> 
             successful_cloud_build: { status: 'pending' },
             [step]: state,
           },
-          android: { prepare_keystore: { status: 'pending' } },
+          android: { start_setup: { status: 'pending' }, prepare_keystore: { status: 'pending' } },
         },
       },
     },
@@ -86,6 +97,10 @@ function lockedRow(value: unknown) {
 }
 
 describe('builder checklist analytics mapping', () => {
+  it.each(['ios', 'android'] as const)('maps the validated %s setup start', (platform) => {
+    expect(getBuilderChecklistUpdateFromAnalytics(startSetupEvent(platform))).toEqual({ platform, step: 'start_setup', status: 'done' })
+  })
+
   it.each([
     [{ action: 'question_answered', question_id: 'ios_setup_method', choice: 'create-new' }, { step: 'choose_destination', status: 'done', annotation: 'asc_new', annotationType: 'note' }],
     [{ action: 'question_answered', question_id: 'ios_setup_method', choice: 'import-existing' }, { step: 'choose_destination', status: 'pending' }],
@@ -112,6 +127,12 @@ describe('builder checklist analytics mapping', () => {
     event({ action: 'certificate_prepared', source: 'created' }, { channel: 'other' }),
     event({ action: 'certificate_prepared', source: 'created' }, { event: 'Builder Onboarding Step' }),
     event({ action: 'certificate_prepared', source: 'created' }, { tags: { platform: 'android', action: 'certificate_prepared', source: 'created' } }),
+    event({ action: 'start_setup', app_id: 'com.test.builder', journey_id: 'bj_start-setup', source: 'dashboard', step: 'welcome' }),
+    event({ action: 'start_setup', journey_id: 'bj_start-setup', source: 'cli', step: 'welcome' }),
+    event({ action: 'start_setup', app_id: 'com.test.builder', source: 'cli', step: 'welcome' }),
+    event({ action: 'start_setup', app_id: 'com.test.builder', journey_id: 'bj_start-setup', source: 'cli' }),
+    event({ action: 'start_setup', app_id: 'com.test.builder', journey_id: 'bj_start-setup', platform: 'web', source: 'cli', step: 'welcome' }),
+    event({}, { tags: { action: 'start_setup', app_id: 'com.test.builder', journey_id: 'bj_start-setup', source: 'cli', step: 'welcome' } }),
   ])('ignores unrelated or incomplete analytics %#', (input) => {
     expect(getBuilderChecklistUpdateFromAnalytics(input)).toBeNull()
   })
@@ -133,6 +154,15 @@ describe('builder checklist analytics updates', () => {
     expect(result.setup.steps.ota).toEqual(current.setup.steps.ota)
     expect(result.feature_flag).toEqual({ keep: true })
     expect(current.setup.steps.builder.ios.choose_destination).toEqual({ status: 'pending' })
+  })
+
+  it('updates only Android setup start when Android is explicit', () => {
+    const current = onboarding()
+    const result = applyBuilderChecklistUpdate(current, { platform: 'android', step: 'start_setup', status: 'done' }, () => FIXED_NOW) as any
+
+    expect(result.setup.steps.builder.android.start_setup).toEqual({ status: 'done', at: FIXED_NOW })
+    expect(result.setup.steps.builder.ios.start_setup).toEqual({ status: 'pending' })
+    expect(current.setup.steps.builder.android.start_setup).toEqual({ status: 'pending' })
   })
 
   it('clears a warning after success and preserves unknown step fields', () => {
@@ -174,6 +204,13 @@ describe('builder checklist analytics updates', () => {
     }, () => FIXED_NOW)).toBeNull()
   })
 
+  it.each(['ios', 'android'] as const)('is idempotent for an already completed %s setup start', (platform) => {
+    const current = onboarding() as any
+    current.setup.steps.builder[platform].start_setup = { status: 'done', at: 'earlier' }
+
+    expect(applyBuilderChecklistUpdate(current, { platform, step: 'start_setup', status: 'done' }, () => FIXED_NOW)).toBeNull()
+  })
+
   it.each([
     { setup: { todo_list_version: 3, steps: {} } },
     { setup: { ...onboarding().setup, builder_todo_list_version: '2' } },
@@ -191,21 +228,17 @@ describe('builder checklist analytics authorization', () => {
     mocks.transaction.mockImplementation(async (fn: any) => fn({ execute: mocks.execute }))
   })
 
-  it('checks write permissions under the app lock before updating', async () => {
+  it.each(['ios', 'android'] as const)('checks write permissions under the app lock before updating %s setup start', async (platform) => {
     lockedRow(onboarding())
     mocks.permission.mockImplementation(async (_c, permission) => permission === 'app.update_settings')
 
-    await expect(markBuilderChecklistFromAnalytics(context(), 'com.test.builder', event({
-      action: 'question_answered',
-      question_id: 'ios_setup_method',
-      choice: 'create-new',
-    }))).resolves.toBe(true)
+    await expect(markBuilderChecklistFromAnalytics(context(), 'com.test.builder', startSetupEvent(platform))).resolves.toBe(true)
 
     expect(mocks.permission).toHaveBeenCalledWith(expect.anything(), 'app.update_settings', { appId: 'com.test.builder' }, expect.anything(), expect.any(String), 'fixture-key')
     expect(mocks.execute).toHaveBeenCalledTimes(4)
     expect(mocks.track).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       event: 'App Onboarding Step Changed',
-      nonPersonTags: expect.objectContaining({ step_id: 'builder.ios.choose_destination', step_status: 'done' }),
+      nonPersonTags: expect.objectContaining({ step_id: `builder.${platform}.start_setup`, step_status: 'done' }),
     }))
     expect(mocks.close).toHaveBeenCalledOnce()
   })
@@ -214,10 +247,7 @@ describe('builder checklist analytics authorization', () => {
     lockedRow(onboarding())
     mocks.permission.mockResolvedValue(false)
 
-    await expect(markBuilderChecklistFromAnalytics(context(), 'com.test.builder', event({
-      action: 'credential_verified',
-      credential: 'ios_app_store_connect_api_key',
-    }))).resolves.toBe(false)
+    await expect(markBuilderChecklistFromAnalytics(context(), 'com.test.builder', startSetupEvent('ios'))).resolves.toBe(false)
 
     expect(mocks.permission).toHaveBeenNthCalledWith(1, expect.anything(), 'app.update_settings', { appId: 'com.test.builder' }, expect.anything(), expect.any(String), 'fixture-key')
     expect(mocks.permission).toHaveBeenNthCalledWith(2, expect.anything(), 'org.create_app', { orgId: '22222222-2222-4222-8222-222222222222' }, expect.anything(), expect.any(String), 'fixture-key')
@@ -225,12 +255,23 @@ describe('builder checklist analytics authorization', () => {
     expect(mocks.track).not.toHaveBeenCalled()
   })
 
+  it.each([
+    { setup: { ...onboarding().setup, todo_list_version: 3 } },
+    { setup: { ...onboarding().setup, builder_todo_list_version: '2' } },
+    { setup: { ...onboarding().setup, paths: ['ota'] } },
+  ])('does not update an ineligible Builder checklist %#', async (current) => {
+    lockedRow(current)
+    mocks.permission.mockResolvedValue(true)
+
+    await expect(markBuilderChecklistFromAnalytics(context(), 'com.test.builder', startSetupEvent('android'))).resolves.toBe(false)
+
+    expect(mocks.execute).toHaveBeenCalledTimes(3)
+    expect(mocks.track).not.toHaveBeenCalled()
+  })
+
   it('keeps the analytics request best-effort when persistence fails', async () => {
     mocks.execute.mockRejectedValueOnce(new Error('database unavailable'))
-    await expect(markBuilderChecklistFromAnalytics(context(), 'com.test.builder', event({
-      action: 'certificate_prepared',
-      source: 'created',
-    }))).resolves.toBe(false)
+    await expect(markBuilderChecklistFromAnalytics(context(), 'com.test.builder', startSetupEvent('android'))).resolves.toBe(false)
     expect(mocks.close).toHaveBeenCalledOnce()
     expect(mocks.track).not.toHaveBeenCalled()
   })
