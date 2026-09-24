@@ -1,0 +1,11 @@
+Verify your email to continue 2FA setup
+
+Enter this one-time code on the Capgo 2FA setup screen:
+
+{{ token }}
+
+This code expires in 1 hour. Do not share it with anyone.
+
+Entering the code only verifies your email. Two-factor authentication will not be enabled until you finish the remaining setup steps in Capgo.
+
+If you did not start this request, please change your Capgo password immediately.

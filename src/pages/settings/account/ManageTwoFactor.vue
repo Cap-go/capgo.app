@@ -133,6 +133,7 @@ async function sendOtpVerification() {
     supabase,
     otpEmail.value,
     savedCaptchaToken.value || undefined,
+    'setup_2fa',
   )
   otpSending.value = false
   resetCaptchaWidget()

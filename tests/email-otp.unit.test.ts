@@ -95,6 +95,31 @@ describe('sendEmailOtpVerification', () => {
     }
   })
 
+  it('passes a 2FA setup purpose in the same-site redirect URL', async () => {
+    vi.stubGlobal('location', { origin: 'https://console.capgo.app' })
+    const signInWithOtp = vi.fn().mockResolvedValue({ error: null })
+
+    try {
+      await sendEmailOtpVerification(
+        { auth: { signInWithOtp } } as never,
+        'user@example.com',
+        'captcha-token',
+        'setup_2fa',
+      )
+      expect(signInWithOtp).toHaveBeenCalledWith({
+        email: 'user@example.com',
+        options: {
+          shouldCreateUser: false,
+          captchaToken: 'captcha-token',
+          emailRedirectTo: 'https://console.capgo.app/?reason=setup_2fa',
+        },
+      })
+    }
+    finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('leaves generic OTP redirects unset', async () => {
     const signInWithOtp = vi.fn().mockResolvedValue({ error: null })
     await sendEmailOtpVerification({ auth: { signInWithOtp } } as never, 'user@example.com')
