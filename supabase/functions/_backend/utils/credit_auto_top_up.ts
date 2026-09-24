@@ -2,9 +2,8 @@ import type { Context } from 'hono'
 import Stripe from 'stripe'
 import { getFallbackCreditProductId } from './credits.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { getOneTimePriceId, getStripe, isStripeEmulatorEnabled } from './stripe.ts'
+import { getBillingAccountForCustomer, getOneTimePriceId, getStripe, isStripeEmulatorEnabled, isStripeConfiguredForAccount, planProductIdOrFilter, resolvePlanCreditProductId, type BillingAccount } from './stripe.ts'
 import { supabaseAdmin } from './supabase.ts'
-import { isStripeConfigured } from './utils.ts'
 
 export const MIN_AUTO_TOP_UP_THRESHOLD = 10
 export const AUTO_TOP_UP_KIND = 'credit_auto_top_up'
@@ -66,7 +65,8 @@ async function getAvailableCredits(c: Context, orgId: string): Promise<number> {
 }
 
 export async function customerHasSavedPaymentMethod(c: Context, customerId: string): Promise<boolean> {
-  if (!isStripeConfigured(c))
+  const billingAccount = await getBillingAccountForCustomer(c, customerId)
+  if (!isStripeConfiguredForAccount(c, billingAccount))
     return false
   try {
     return Boolean(await getDefaultPaymentMethodId(c, customerId))
@@ -78,7 +78,8 @@ export async function customerHasSavedPaymentMethod(c: Context, customerId: stri
 }
 
 async function getDefaultPaymentMethodId(c: Context, customerId: string): Promise<string | null> {
-  const stripe = getStripe(c)
+  const billingAccount = await getBillingAccountForCustomer(c, customerId)
+  const stripe = getStripe(c, billingAccount)
   const customer = await stripe.customers.retrieve(customerId)
   if (customer.deleted)
     return null
@@ -104,16 +105,21 @@ async function getDefaultPaymentMethodId(c: Context, customerId: string): Promis
   return cards.data[0]?.id ?? null
 }
 
-async function getCreditProductIdForCustomer(c: Context, customerId: string): Promise<string> {
+async function getCreditProductIdForCustomer(
+  c: Context,
+  customerId: string,
+  billingAccountOverride?: BillingAccount,
+): Promise<string> {
+  const billingAccount = billingAccountOverride ?? await getBillingAccountForCustomer(c, customerId)
   const loadSoloPlan = async () => {
     const { data, error } = await supabaseAdmin(c)
       .from('plans')
-      .select('credit_id')
+      .select('*')
       .eq('name', 'Solo')
       .maybeSingle()
     if (error)
       throw error
-    return data ?? null
+    return data ? { credit_id: resolvePlanCreditProductId(data, billingAccount) } : null
   }
 
   const { data: stripeInfo, error: stripeInfoError } = await supabaseAdmin(c)
@@ -127,14 +133,18 @@ async function getCreditProductIdForCustomer(c: Context, customerId: string): Pr
 
   const { data: plan, error: planError } = await supabaseAdmin(c)
     .from('plans')
-    .select('credit_id, name')
-    .eq('stripe_id', stripeInfo.product_id)
+    .select('*')
+    .or(planProductIdOrFilter(stripeInfo.product_id))
     .maybeSingle()
 
-  if (planError || !plan?.credit_id)
+  if (planError || !plan)
     return await getFallbackCreditProductId(c, customerId, loadSoloPlan)
 
-  return plan.credit_id
+  const creditProductId = resolvePlanCreditProductId(plan, billingAccount)
+  if (!creditProductId)
+    return await getFallbackCreditProductId(c, customerId, loadSoloPlan)
+
+  return creditProductId
 }
 
 export async function grantCreditsFromAutoTopUpPayment(
@@ -175,6 +185,9 @@ async function chargeOffSessionCredits(
   orgId: string,
   customerId: string,
   quantity: number,
+  billingAccount: BillingAccount,
+  productId: string,
+  priceId: string,
 ): Promise<Stripe.PaymentIntent | null> {
   const paymentMethodId = await getDefaultPaymentMethodId(c, customerId)
   if (!paymentMethodId) {
@@ -182,14 +195,7 @@ async function chargeOffSessionCredits(
     return null
   }
 
-  const productId = await getCreditProductIdForCustomer(c, customerId)
-  const priceId = await getOneTimePriceId(c, productId)
-  if (!priceId) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_missing_price', orgId, productId })
-    return null
-  }
-
-  const stripe = getStripe(c)
+  const stripe = getStripe(c, billingAccount)
   const price = await stripe.prices.retrieve(priceId)
   const unitAmount = price.unit_amount
   if (!unitAmount || unitAmount <= 0) {
@@ -296,8 +302,34 @@ export async function saveAutoTopUpSettings(
 }
 
 export async function maybeAutoTopUpCredits(c: Context, orgId: string): Promise<void> {
-  if (!isStripeConfigured(c))
+  const { data: org, error: orgError } = await supabaseAdmin(c)
+    .from('orgs')
+    .select('customer_id')
+    .eq('id', orgId)
+    .maybeSingle()
+
+  if (orgError || !org?.customer_id)
     return
+
+  const billingAccount = await getBillingAccountForCustomer(c, org.customer_id)
+  if (!isStripeConfiguredForAccount(c, billingAccount))
+    return
+
+  let productId: string
+  let priceId: string | null
+  try {
+    productId = await getCreditProductIdForCustomer(c, org.customer_id, billingAccount)
+    priceId = await getOneTimePriceId(c, productId, billingAccount)
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_product_lookup_failed', orgId, error })
+    return
+  }
+
+  if (!priceId) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_missing_price', orgId, productId })
+    return
+  }
 
   const { data: claim, error: claimError } = await supabaseAdmin(c)
     .rpc('try_claim_credit_auto_top_up', { p_org_id: orgId })
@@ -315,7 +347,7 @@ export async function maybeAutoTopUpCredits(c: Context, orgId: string): Promise<
   if (quantity < MIN_AUTO_TOP_UP_THRESHOLD)
     return
 
-  const paymentIntent = await chargeOffSessionCredits(c, orgId, claim.customer_id, quantity)
+  const paymentIntent = await chargeOffSessionCredits(c, orgId, claim.customer_id, quantity, billingAccount, productId, priceId)
   if (!paymentIntent || paymentIntent.status !== 'succeeded')
     return
 

@@ -8,6 +8,7 @@ import {
   appApiKeyBindings,
   BASE_URL,
   executeSQL,
+  fetchTestRequest,
   getAuthHeaders,
   getAuthHeadersForCredentials,
   getSupabaseClient,
@@ -42,11 +43,20 @@ async function appKeyBody(name: string, appId = APPNAME, extra: Record<string, u
   }
 }
 
+async function postApikey(body: Record<string, unknown>, headers: Record<string, string> = authHeaders) {
+  return fetchTestRequest(`${BASE_URL}/apikey`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  })
+}
+
 beforeAll(async () => {
   authHeaders = await getAuthHeaders()
   await resetAndSeedAppData(APPNAME)
-  // Load the apikey isolate before concurrent POSTs from this file.
   await warmEdgeEndpoint('/apikey', { method: 'GET', headers: authHeaders })
+  // GET alone does not compile the POST handler; warm create path before concurrent POSTs.
+  await warmEdgeEndpoint('/apikey', { method: 'POST', headers: authHeaders, body: '{}' })
   const warmupPostResponse = await fetch(`${BASE_URL}/apikey`, {
     method: 'POST',
     headers: {
@@ -274,13 +284,9 @@ describe('[POST] /apikey operations', () => {
 
   it.concurrent('creates an app-only preview key bound to its owning organization', async () => {
     const appBindings = await appApiKeyBindings(APPNAME, 'app_preview')
-    const response = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        name: `app-preview-key-${id.slice(0, 8)}`,
-        bindings: appBindings,
-      }),
+    const response = await postApikey({
+      name: `app-preview-key-${id.slice(0, 8)}`,
+      bindings: appBindings,
     })
     expect(response.status).toBe(200)
     const data = await response.json<{ id: number, rbac_id: string }>()
@@ -346,20 +352,12 @@ describe('[POST] /apikey operations', () => {
     const createdKeyIds: number[] = []
 
     try {
-      const limitedResponse = await fetch(`${BASE_URL}/apikey`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify(await appKeyBody('app-management-blocked')),
-      })
+      const limitedResponse = await postApikey(await appKeyBody('app-management-blocked'))
       expect(limitedResponse.status).toBe(200)
       const limitedData = await limitedResponse.json<{ id: number, key: string }>()
       createdKeyIds.push(limitedData.id)
 
-      const siblingResponse = await fetch(`${BASE_URL}/apikey`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify(orgKeyBody('sibling-management-target')),
-      })
+      const siblingResponse = await postApikey(orgKeyBody('sibling-management-target'))
       expect(siblingResponse.status).toBe(200)
       const siblingData = await siblingResponse.json<{ id: number }>()
       createdKeyIds.push(siblingData.id)
@@ -420,22 +418,14 @@ describe('[POST] /apikey operations', () => {
     const orgId = orgApiKeyBindings()[0].org_id
 
     try {
-      const managerResponse = await fetch(`${BASE_URL}/apikey`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify(orgKeyBody('org-management-blocked', {
-          bindings: orgApiKeyBindings(orgId, 'org_member'),
-        })),
-      })
+      const managerResponse = await postApikey(orgKeyBody('org-management-blocked', {
+        bindings: orgApiKeyBindings(orgId, 'org_member'),
+      }))
       expect(managerResponse.status).toBe(200)
       const managerData = await managerResponse.json<{ id: number, key: string }>()
       createdKeyIds.push(managerData.id)
 
-      const siblingResponse = await fetch(`${BASE_URL}/apikey`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify(orgKeyBody('org-sibling-management-target')),
-      })
+      const siblingResponse = await postApikey(orgKeyBody('org-sibling-management-target'))
       expect(siblingResponse.status).toBe(200)
       const siblingData = await siblingResponse.json<{ id: number }>()
       createdKeyIds.push(siblingData.id)

@@ -1,14 +1,15 @@
 import type { Context } from 'hono'
 import type { StripeData } from './stripe.ts'
+import type { BillingAccount } from './stripe_billing.ts'
 import Stripe from 'stripe'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { getStripe, parsePriceIds } from './stripe.ts'
-import { getEnv } from './utils.ts'
+import { getStripeWebhookSecret } from './stripe_billing.ts'
 
-export function parseStripeEvent(c: Context, body: string, signature: string) {
-  const webhookKey = getEnv(c, 'STRIPE_WEBHOOK_SECRET')
+export function parseStripeEvent(c: Context, body: string, signature: string, billingAccount: BillingAccount = 'ee') {
+  const webhookKey = getStripeWebhookSecret(c, billingAccount)
 
-  return getStripe(c).webhooks.constructEventAsync(
+  return getStripe(c, billingAccount).webhooks.constructEventAsync(
     body,
     signature,
     webhookKey,

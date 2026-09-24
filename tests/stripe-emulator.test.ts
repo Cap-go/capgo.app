@@ -4,6 +4,7 @@ import { createServer } from 'node:net'
 import { createEmulator } from 'emulate'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createCheckout, createOneTimeCheckout, getCreditCheckoutDetails, getStripe } from '../supabase/functions/_backend/utils/stripe.ts'
+import type { BillingAccount } from '../supabase/functions/_backend/utils/stripe_billing.ts'
 
 const { mockedSupabaseAdmin } = vi.hoisted(() => ({
   mockedSupabaseAdmin: vi.fn(),
@@ -33,20 +34,60 @@ function expectCheckoutUrlOnEmulator(url: string, baseUrl: string) {
   expect(checkoutUrl.pathname).toMatch(/^\/checkout\/cs_/)
 }
 
-function mockStoredPlanPrices(priceMonthId: string, priceYearId: string) {
+function mockBillingAccountLookup(billingAccount: BillingAccount | null = 'ee') {
   mockedSupabaseAdmin.mockReturnValue({
-    from: vi.fn().mockReturnValue({
-      select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          single: vi.fn().mockResolvedValue({
-            data: {
-              price_m_id: priceMonthId,
-              price_y_id: priceYearId,
-            },
-            error: null,
+    from: vi.fn().mockImplementation((table: string) => {
+      if (table === 'stripe_info') {
+        return {
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: billingAccount ? { billing_account: billingAccount } : null,
+                error: null,
+              }),
+            }),
+          }),
+        }
+      }
+      throw new Error(`unexpected table ${table}`)
+    }),
+  })
+}
+
+function mockCheckoutAdmin(planProductId: string, priceMonthId: string, priceYearId: string) {
+  const planRow = {
+    stripe_id: planProductId,
+    stripe_id_us: null,
+    price_m_id: priceMonthId,
+    price_y_id: priceYearId,
+    price_m_id_us: null,
+    price_y_id_us: null,
+  }
+
+  mockedSupabaseAdmin.mockReturnValue({
+    from: vi.fn().mockImplementation((table: string) => {
+      if (table === 'stripe_info') {
+        return {
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({ data: { billing_account: 'ee' }, error: null }),
+            }),
+          }),
+        }
+      }
+
+      return {
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({ data: planRow, error: null }),
+            maybeSingle: vi.fn().mockResolvedValue({ data: planRow, error: null }),
+          }),
+          or: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({ data: planRow, error: null }),
+            maybeSingle: vi.fn().mockResolvedValue({ data: planRow, error: null }),
           }),
         }),
-      }),
+      }
     }),
   })
 }
@@ -160,7 +201,7 @@ describe('stripe emulator integration', () => {
       },
     })
 
-    mockStoredPlanPrices(monthlyPrice.id, yearlyPrice.id)
+    mockCheckoutAdmin(product.id, monthlyPrice.id, yearlyPrice.id)
 
     const checkout = await createCheckout(
       context,
@@ -173,7 +214,7 @@ describe('stripe emulator integration', () => {
 
     expect(checkout.url).toBeTruthy()
     expectCheckoutUrlOnEmulator(checkout.url as string, stripeApiBaseUrl)
-    expect(mockedSupabaseAdmin).toHaveBeenCalledTimes(1)
+    expect(mockedSupabaseAdmin).toHaveBeenCalled()
 
     const sessions = await stripe.checkout.sessions.list({ limit: 10 })
     const session = sessions.data.find(candidate => candidate.url === checkout.url)
@@ -188,6 +229,7 @@ describe('stripe emulator integration', () => {
 
   it('falls back to checkout metadata when emulate does not implement line item reads', async () => {
     stubStripeEnv(stripeApiBaseUrl)
+    mockBillingAccountLookup()
 
     const context = createContext()
     const stripe = getStripe(context)

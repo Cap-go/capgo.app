@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { BASE_URL, createDirectApiKeyWithBindings, fetchTestRequest, getAuthHeaders, getSupabaseClient, NON_ACCESS_APP_NAME, resetAndSeedAppData, resetAppData, USER_EMAIL, USER_ID } from './test-utils.ts'
+import { BASE_URL, createDirectApiKeyWithBindings, fetchTestRequest, getAuthHeaders, getSupabaseClient, NON_ACCESS_APP_NAME, resetAndSeedAppData, resetAppData, USER_EMAIL, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
 
 const id = randomUUID().replace(/-/g, '').slice(0, 12)
 const APPNAME = `com.app.error.${id}`
@@ -40,6 +40,12 @@ beforeAll(async () => {
     'Content-Type': 'application/json',
     'Authorization': createKey.key,
   }
+
+  await warmEdgeEndpoint(`${BASE_URL}/app`, {
+    method: 'POST',
+    headers: testHeaders,
+    body: JSON.stringify({}),
+  })
 }, 60000)
 
 afterAll(async () => {

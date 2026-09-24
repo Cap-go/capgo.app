@@ -8,6 +8,7 @@ import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { assertJwtMfaAssurance } from '../../utils/jwt_mfa_assurance.ts'
 import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
 import { parseOrgOnboardingDevelopmentEnvironment, parseOrgOnboardingIntent } from '../../utils/org_onboarding_intent.ts'
+import { getNewCustomersBillingAccount, getPlanProductId } from '../../utils/stripe.ts'
 import { normalizeWebsiteUrl } from './website.ts'
 
 const MAX_ESTIMATED_MAU = 1_000_000
@@ -34,23 +35,32 @@ interface PgTransactionClient {
 }
 
 async function getInitialPlanForMau(c: Context<MiddlewareKeyVariables>, estimatedMau: number) {
+  const billingAccount = getNewCustomersBillingAccount(c)
   const adminClient = supabaseAdmin(c)
   const { data: plan, error } = await adminClient
     .from('plans')
-    .select('name, stripe_id, mau')
+    .select('name, stripe_id, stripe_id_us, mau')
     .gte('mau', estimatedMau)
     .order('mau', { ascending: true })
     .limit(1)
     .single()
 
-  if (error || !plan?.stripe_id) {
-    throw simpleError('cannot_get_plan', 'Cannot get plan', { error: error?.message, estimatedMau })
+  if (error || !plan) {
+    throw simpleError('cannot_get_plan', 'Cannot get plan', { error: error?.message, estimatedMau, billingAccount })
+  }
+
+  try {
+    getPlanProductId(plan, billingAccount)
+  }
+  catch {
+    throw simpleError('cannot_get_plan', 'Cannot get plan', { estimatedMau, billingAccount, plan: plan.name })
   }
 
   return plan
 }
 
 async function createPendingStripeInfo(c: Context<MiddlewareKeyVariables>, orgId: string, estimatedMau: number) {
+  const billingAccount = getNewCustomersBillingAccount(c)
   const plan = await getInitialPlanForMau(c, estimatedMau)
   const pendingCustomerId = `pending_${orgId}`
   const trialAt = new Date()
@@ -60,7 +70,8 @@ async function createPendingStripeInfo(c: Context<MiddlewareKeyVariables>, orgId
     .from('stripe_info')
     .insert({
       customer_id: pendingCustomerId,
-      product_id: plan.stripe_id,
+      product_id: getPlanProductId(plan, billingAccount),
+      billing_account: billingAccount,
       trial_at: trialAt.toISOString(),
       status: null,
       is_good_plan: true,

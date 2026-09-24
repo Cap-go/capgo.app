@@ -907,7 +907,27 @@ export function getUpdateBaseData(appId: string): ReturnType<typeof updateAndroi
 }
 
 export async function postUpdate(data: object) {
-  const response = await fetchTestRequest(
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const response = await fetchTestRequest(
+      getEndpointUrl('/updates'),
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(data),
+      },
+    )
+    if (response.status !== 502 && response.status !== 503) {
+      if (response.status !== 200) {
+        const body = await response.clone().text().catch(() => '<unreadable body>')
+        console.error(`[postUpdate] non-200 status=${response.status} body=${body.slice(0, 800)}`)
+      }
+      return response
+    }
+    if (attempt < 3)
+      await new Promise(resolve => setTimeout(resolve, attempt * 500))
+  }
+
+  return await fetchTestRequest(
     getEndpointUrl('/updates'),
     {
       method: 'POST',
@@ -915,11 +935,6 @@ export async function postUpdate(data: object) {
       body: JSON.stringify(data),
     },
   )
-  if (response.status !== 200) {
-    const body = await response.clone().text().catch(() => '<unreadable body>')
-    console.error(`[postUpdate] non-200 status=${response.status} body=${body.slice(0, 800)}`)
-  }
-  return response
 }
 
 export interface DeviceLink {
