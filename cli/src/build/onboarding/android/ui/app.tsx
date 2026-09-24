@@ -2753,6 +2753,9 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
         <KeystoreMethodSelectStep
           dense={false}
           onChoose={(choice) => {
+            if (selectFiredRef.current)
+              return
+            selectFiredRef.current = true
             if (choice === 'learn') {
               setStep('keystore-explainer')
             }
