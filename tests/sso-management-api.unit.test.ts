@@ -68,6 +68,16 @@ describe('supabase Management API SSO provider calls', () => {
     expect(sentBody(fetchMock)).toEqual({ disabled: false })
   })
 
+  it('snapshots a missing or null disabled flag as explicitly enabled', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      id: 'provider-id',
+      saml: { entity_id: 'idp', metadata_xml: '<EntityDescriptor/>' },
+      disabled: null,
+    }), { status: 200, headers: { 'content-type': 'application/json' } })))
+
+    expect(await snapshotSSOProvider(context, 'provider-id')).toEqual({ metadata_xml: '<EntityDescriptor/>', disabled: false })
+  })
+
   it('snapshots the Auth provider and restores it verbatim', async () => {
     const attributeMapping = { keys: { groups: { name: 'memberOf', array: true } } }
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({

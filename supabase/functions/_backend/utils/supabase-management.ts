@@ -252,7 +252,9 @@ export async function snapshotSSOProvider(c: Context, providerId: string): Promi
     // The API accepts one metadata source; the URL wins when both are echoed.
     ...(provider.saml?.metadata_url ? { metadata_url: provider.saml.metadata_url } : provider.saml?.metadata_xml ? { metadata_xml: provider.saml.metadata_xml } : {}),
     ...(provider.saml?.attribute_mapping ? { attribute_mapping: provider.saml.attribute_mapping } : {}),
-    ...(provider.disabled !== undefined ? { disabled: provider.disabled } : {}),
+    // Always explicit: a missing/null flag means enabled, and restoring must
+    // re-enable a provider this request disabled.
+    disabled: provider.disabled === true,
   }
 }
 

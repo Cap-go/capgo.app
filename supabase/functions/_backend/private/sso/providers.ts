@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { PoolClient } from 'pg'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
-import type { SSOProviderSnapshot } from '../../utils/supabase-management.ts'
+import { HTTPException } from 'hono/http-exception'
 import { z } from 'zod'
 import { BRES, createHono, parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_jwt.ts'
@@ -107,13 +107,18 @@ async function requireManageSsoPermission(c: Context<MiddlewareKeyVariables>, or
 
 const UPDATABLE_PROVIDER_COLUMNS = ['metadata_url', 'attribute_mapping', 'enforce_sso', 'status'] as const
 
-// Updates the provider row and, when the enforced state flips, the matching
-// auth.users.is_sso_user flags in one transaction so they can never diverge.
-async function updateProviderAndSyncEnforcement(
+// Applies a PATCH as one unit per provider: the row is locked first, then
+// Supabase Auth is updated, then the row and (when the enforced state flips)
+// auth.users.is_sso_user are written. If the database write fails, Auth is
+// restored while the lock is still held, so a concurrent PATCH can never have
+// its Auth state overwritten by a stale restore.
+async function applyProviderUpdate(
   c: Context<MiddlewareKeyVariables>,
   id: string,
+  expected: { status: string, enforce_sso: boolean },
   updates: Record<string, unknown>,
   sync: { domain: string, isSsoOnly: boolean } | null,
+  updateAuth: (() => Promise<(() => Promise<void>) | null>) | null,
 ): Promise<Record<string, unknown> | undefined> {
   const columns = UPDATABLE_PROVIDER_COLUMNS.filter(column => updates[column] !== undefined)
   const values = columns.map(column => column === 'attribute_mapping' ? JSON.stringify(updates[column]) : updates[column])
@@ -122,14 +127,34 @@ async function updateProviderAndSyncEnforcement(
   const pgPool = getPgClient(c)
   try {
     return await withPgTransaction(pgPool, async (client) => {
-      const result = await client.query(
-        `update public.sso_providers set ${setClause} where id = $1 returning *`,
-        [id, ...values],
+      const locked = await client.query<{ status: string, enforce_sso: boolean }>(
+        'select status, enforce_sso from public.sso_providers where id = $1 for update',
+        [id],
       )
-      const updatedProvider = result.rows[0] as Record<string, unknown> | undefined
-      if (updatedProvider && sync)
-        await setDomainSsoOnly(client, sync.domain, sync.isSsoOnly)
-      return updatedProvider
+      const current = locked.rows[0]
+      if (!current)
+        return undefined
+      // Transitions were validated against the row read before the lock.
+      if (current.status !== expected.status || current.enforce_sso !== expected.enforce_sso)
+        quickError(409, 'provider_changed', 'The SSO provider was modified concurrently, please retry')
+
+      const restoreAuth = updateAuth ? await updateAuth() : null
+      try {
+        const result = await client.query(
+          `update public.sso_providers set ${setClause} where id = $1 returning *`,
+          [id, ...values],
+        )
+        const updatedProvider = result.rows[0] as Record<string, unknown> | undefined
+        if (updatedProvider && sync)
+          await setDomainSsoOnly(client, sync.domain, sync.isSsoOnly)
+        return updatedProvider
+      }
+      catch (error) {
+        await restoreAuth?.().catch((restoreError) => {
+          cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to restore Supabase Auth SSO provider after database update failure', providerId: id, error: restoreError })
+        })
+        throw error
+      }
     })
   }
   finally {
@@ -358,21 +383,22 @@ app.patch('/:id', async (c) => {
     managementUpdates.metadata_url = body.metadata_url
   if (attributeMapping !== undefined)
     managementUpdates.attribute_mapping = attributeMapping
-  // Snapshot taken before the update so Supabase Auth can be put back if the
-  // database write below fails.
-  let authSnapshot: SSOProviderSnapshot | null = null
-  if (provider.provider_id && Object.keys(managementUpdates).length > 0) {
-    try {
-      authSnapshot = await snapshotSSOProvider(c, provider.provider_id)
-      await updateSSOProvider(c, provider.provider_id, managementUpdates)
-    }
-    catch (err) {
-      if (err instanceof ManagementAPIError) {
-        return quickError(err.status >= 400 && err.status < 500 ? err.status : 502, 'provider_update_failed', err.message, { management_error_code: err.code })
+  const externalProviderId = provider.provider_id as string | null
+  const updateAuth = externalProviderId && Object.keys(managementUpdates).length > 0
+    ? async () => {
+      try {
+        // Snapshot first so Auth can be put back if the database write fails.
+        const snapshot = await snapshotSSOProvider(c, externalProviderId)
+        await updateSSOProvider(c, externalProviderId, managementUpdates)
+        return () => restoreSSOProvider(c, externalProviderId, snapshot)
       }
-      throw err
+      catch (err) {
+        if (err instanceof ManagementAPIError)
+          quickError(err.status >= 400 && err.status < 500 ? err.status : 502, 'provider_update_failed', err.message, { management_error_code: err.code })
+        throw err
+      }
     }
-  }
+    : null
 
   const wasSsoEnforced = provider.status === 'active' && provider.enforce_sso === true
   const nextStatus = (updates.status as string | undefined) ?? provider.status
@@ -380,23 +406,24 @@ app.patch('/:id', async (c) => {
   const isSsoEnforced = nextStatus === 'active' && nextEnforce === true
 
   let updatedProvider: Record<string, unknown> | undefined
-  let updateError: unknown
   try {
-    updatedProvider = await updateProviderAndSyncEnforcement(c, id, updates, wasSsoEnforced !== isSsoEnforced ? { domain: provider.domain, isSsoOnly: isSsoEnforced } : null)
+    updatedProvider = await applyProviderUpdate(
+      c,
+      id,
+      { status: provider.status, enforce_sso: provider.enforce_sso },
+      updates,
+      wasSsoEnforced !== isSsoEnforced ? { domain: provider.domain, isSsoOnly: isSsoEnforced } : null,
+      updateAuth,
+    )
   }
   catch (error) {
-    updateError = error
+    if (error instanceof HTTPException)
+      throw error
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to update SSO provider', providerId: id, domain: provider.domain, error })
+    return quickError(500, 'provider_update_failed', 'Failed to update SSO provider')
   }
   if (!updatedProvider) {
-    if (authSnapshot && provider.provider_id) {
-      await restoreSSOProvider(c, provider.provider_id, authSnapshot).catch((restoreError) => {
-        cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to restore Supabase Auth SSO provider after database update failure', providerId: id, externalProviderId: provider.provider_id, error: restoreError })
-      })
-    }
-    if (!updateError)
-      quickError(404, 'provider_not_found', 'SSO provider not found')
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to update SSO provider', providerId: id, domain: provider.domain, error: updateError })
-    return quickError(500, 'provider_update_failed', 'Failed to update SSO provider')
+    quickError(404, 'provider_not_found', 'SSO provider not found')
   }
 
   return c.json(sanitizeProvider(updatedProvider))
