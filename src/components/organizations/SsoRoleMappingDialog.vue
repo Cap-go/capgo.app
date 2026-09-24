@@ -214,14 +214,17 @@ defineExpose({ open })
               </button>
             </div>
             <button
+              v-if="rule.apps.length < apps.length"
               type="button"
               class="d-btn d-btn-ghost d-btn-sm text-primary"
-              :disabled="rule.apps.length >= apps.length"
               @click="addApp(rule)"
             >
               <IconPlus class="h-4 w-4" />
               {{ t('sso-role-mapping-add-app') }}
             </button>
+            <p v-else class="text-xs text-slate-500 dark:text-slate-400">
+              {{ apps.length === 0 ? t('sso-role-mapping-no-apps') : t('sso-role-mapping-all-apps-added') }}
+            </p>
           </div>
         </div>
 
