@@ -125,10 +125,12 @@ async function applyProviderUpdate(
   const setClause = columns.map((column, index) => `"${column}" = $${index + 2}`).join(', ')
 
   const pgPool = getPgClient(c)
+  let restoreAuth: (() => Promise<void>) | null = null
+  let lockedUpdatedAt: string | null = null
   try {
     return await withPgTransaction(pgPool, async (client) => {
-      const locked = await client.query<{ status: string, enforce_sso: boolean }>(
-        'select status, enforce_sso from public.sso_providers where id = $1 for update',
+      const locked = await client.query<{ status: string, enforce_sso: boolean, updated_at: string }>(
+        'select status, enforce_sso, updated_at::text as updated_at from public.sso_providers where id = $1 for update',
         [id],
       )
       const current = locked.rows[0]
@@ -138,27 +140,49 @@ async function applyProviderUpdate(
       if (current.status !== expected.status || current.enforce_sso !== expected.enforce_sso)
         quickError(409, 'provider_changed', 'The SSO provider was modified concurrently, please retry')
 
-      const restoreAuth = updateAuth ? await updateAuth() : null
-      try {
-        const result = await client.query(
-          `update public.sso_providers set ${setClause} where id = $1 returning *`,
-          [id, ...values],
-        )
-        const updatedProvider = result.rows[0] as Record<string, unknown> | undefined
-        if (updatedProvider && sync)
-          await setDomainSsoOnly(client, sync.domain, sync.isSsoOnly)
-        return updatedProvider
-      }
-      catch (error) {
-        await restoreAuth?.().catch((restoreError) => {
-          cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to restore Supabase Auth SSO provider after database update failure', providerId: id, error: restoreError })
-        })
-        throw error
-      }
+      lockedUpdatedAt = current.updated_at
+      restoreAuth = updateAuth ? await updateAuth() : null
+      const result = await client.query(
+        `update public.sso_providers set ${setClause} where id = $1 returning *`,
+        [id, ...values],
+      )
+      const updatedProvider = result.rows[0] as Record<string, unknown> | undefined
+      if (updatedProvider && sync)
+        await setDomainSsoOnly(client, sync.domain, sync.isSsoOnly)
+      return updatedProvider
     })
+  }
+  catch (error) {
+    if (restoreAuth)
+      await restoreAuthIfRolledBack(c, pgPool, id, lockedUpdatedAt, restoreAuth)
+    throw error
   }
   finally {
     await closeClient(c, pgPool)
+  }
+}
+
+// The failure may come from COMMIT itself, so the outcome is checked on a
+// fresh connection: the row still carrying the updated_at seen under the lock
+// proves the update rolled back. When that cannot be established (e.g. the
+// connection dropped mid-COMMIT), Auth is left alone and the case is logged.
+async function restoreAuthIfRolledBack(
+  c: Context<MiddlewareKeyVariables>,
+  pgPool: ReturnType<typeof getPgClient>,
+  id: string,
+  lockedUpdatedAt: string | null,
+  restoreAuth: () => Promise<void>,
+) {
+  try {
+    const { rows } = await pgPool.query<{ updated_at: string }>('select updated_at::text as updated_at from public.sso_providers where id = $1', [id])
+    if (rows[0]?.updated_at !== lockedUpdatedAt) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'SSO provider update outcome unclear or committed; Supabase Auth not restored', providerId: id })
+      return
+    }
+    await restoreAuth()
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to restore Supabase Auth SSO provider after database update failure', providerId: id, error })
   }
 }
 
