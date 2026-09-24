@@ -45,7 +45,7 @@ function startSetupEvent(platform: 'ios' | 'android') {
   })
 }
 
-function profilePreparedEvent(source: 'created' | 'imported', step = source === 'created' ? 'creating-profile' : 'import-pick-profile') {
+function profilePreparedEvent(source: 'created' | 'imported', step = source === 'created' ? 'creating-profile' : 'import-exporting') {
   return event({
     action: 'profile_prepared',
     app_id: 'com.test.builder',
@@ -141,8 +141,8 @@ describe('builder checklist analytics mapping', () => {
     event({ action: 'certificate_prepared', source: 'created' }, { channel: 'other' }),
     event({ action: 'certificate_prepared', source: 'created' }, { event: 'Builder Onboarding Step' }),
     event({ action: 'certificate_prepared', source: 'created' }, { tags: { platform: 'android', action: 'certificate_prepared', source: 'created' } }),
-    event({ action: 'profile_prepared', source: 'manual', app_id: 'com.test.builder', attempt_id: 'attempt', journey_id: 'journey', step: 'import-pick-profile' }),
-    event({ action: 'profile_prepared', source: 'created', app_id: 'com.test.builder', attempt_id: 'attempt', journey_id: 'journey', step: 'import-pick-profile' }),
+    event({ action: 'profile_prepared', source: 'manual', app_id: 'com.test.builder', attempt_id: 'attempt', journey_id: 'journey', step: 'import-exporting' }),
+    event({ action: 'profile_prepared', source: 'created', app_id: 'com.test.builder', attempt_id: 'attempt', journey_id: 'journey', step: 'import-exporting' }),
     event({ action: 'profile_prepared', source: 'imported', app_id: 'com.test.builder', attempt_id: 'attempt', journey_id: 'journey', step: 'creating-profile' }),
     event({ action: 'profile_prepared', source: 'created', attempt_id: 'attempt', journey_id: 'journey', step: 'creating-profile' }),
     event({ action: 'profile_prepared', source: 'created', app_id: 'com.test.builder', journey_id: 'journey', step: 'creating-profile' }),

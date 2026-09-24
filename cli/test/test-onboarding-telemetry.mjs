@@ -349,7 +349,7 @@ try {
       orgId: 'org-id',
       journeyId: 'bj_ios-profile',
       platform: 'ios',
-      step: 'import-pick-profile',
+      step: 'import-exporting',
       tags: {
         attempt_id: 'bj_ios-profile',
         source: 'imported',
@@ -366,7 +366,7 @@ try {
       journey_id: 'bj_ios-profile',
       platform: 'ios',
       source: 'imported',
-      step: 'import-pick-profile',
+      step: 'import-exporting',
     })
   }
   console.log('✅ iOS profile preparation action payload')

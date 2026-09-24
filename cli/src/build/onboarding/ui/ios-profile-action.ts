@@ -29,7 +29,7 @@ function completeCreatedProfile(result: IosEffectResult, step: CreatedProfileSte
 function emitProfilePrepared(
   profileId: string,
   source: 'created' | 'imported',
-  step: CreatedProfileStep | 'import-pick-profile',
+  step: CreatedProfileStep | 'import-exporting',
   journeyId: string,
   trackAction: TrackAction,
   reportedSuccesses: Set<string>,
@@ -54,7 +54,7 @@ export function trackCreatedIosProfileResult(
     emitProfilePrepared(profileId, 'created', step, journeyId, trackAction, reportedSuccesses)
 }
 
-export function trackImportedIosProfileValidationResult(
+export function trackImportedIosProfileResult(
   result: IosEffectResult,
   carried: Partial<IosStepCtx>,
   journeyId: string,
@@ -62,15 +62,16 @@ export function trackImportedIosProfileValidationResult(
   reportedSuccesses: Set<string>,
 ): void {
   const profile = carried.chosenProfile
-  if (result.next !== 'import-export-warning'
+  const imported = result.transient?.profileData
+  if (result.next !== 'saving-credentials'
     || result.progress.setupMethod !== 'import-existing'
     || !profile?.uuid
-    || !profile.name
-    || !profile.bundleId
-    || !profile.profileType
-    || profile.certificateSha1s.length === 0) {
+    || !imported?.profileId
+    || !imported.profileName
+    || !imported.profileBase64
+    || imported.profileId !== profile.uuid) {
     return
   }
 
-  emitProfilePrepared(profile.uuid, 'imported', 'import-pick-profile', journeyId, trackAction, reportedSuccesses)
+  emitProfilePrepared(profile.uuid, 'imported', 'import-exporting', journeyId, trackAction, reportedSuccesses)
 }

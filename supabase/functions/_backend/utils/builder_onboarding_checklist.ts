@@ -106,7 +106,7 @@ function profileUpdate(tags: Record<string, string | number | boolean>): Builder
 
   const validCreatedStep = tags.source === 'created'
     && (tags.step === 'creating-profile' || tags.step === 'import-create-profile-only')
-  const validImportedStep = tags.source === 'imported' && tags.step === 'import-pick-profile'
+  const validImportedStep = tags.source === 'imported' && tags.step === 'import-exporting'
   return validCreatedStep || validImportedStep
     ? { platform: 'ios', step: 'prepare_profile', status: 'done' }
     : null

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
+import { Buffer } from 'node:buffer'
 import { runIosEffect } from '../src/build/onboarding/ios/flow.ts'
-import { trackCreatedIosProfileResult, trackImportedIosProfileValidationResult } from '../src/build/onboarding/ui/ios-profile-action.ts'
+import { trackCreatedIosProfileResult, trackImportedIosProfileResult } from '../src/build/onboarding/ui/ios-profile-action.ts'
 
 const journeyId = 'bj_profile_test'
 const actions = []
@@ -66,19 +67,28 @@ const importedProfile = {
 }
 
 // Import reports only after the engine has validated bundle, distribution,
-// and certificate pairing, and only once for the selected profile.
+// and certificate pairing and then successfully loaded the profile payload.
 const importedProgress = progress('import-existing')
 const importedCarried = { chosenIdentity: identity, chosenProfile: importedProfile }
 const validated = await runIosEffect('import-pick-profile', importedProgress, {
   carried: importedCarried,
 })
-trackImportedIosProfileValidationResult(validated, importedCarried, journeyId, trackAction, reportedSuccesses)
-trackImportedIosProfileValidationResult(validated, importedCarried, journeyId, trackAction, reportedSuccesses)
 assert.equal(validated.next, 'import-export-warning')
+trackImportedIosProfileResult(validated, importedCarried, journeyId, trackAction, reportedSuccesses)
+assert.equal(actions.length, 0, 'validated selection alone is not yet imported')
+
+const imported = await runIosEffect('import-exporting', importedProgress, {
+  carried: importedCarried,
+  exportP12FromKeychain: async () => ({ base64: 'PRIVATE_EXPORTED_P12', passphrase: 'PRIVATE_PASSWORD' }),
+  readFile: async () => Buffer.from('PRIVATE_PROFILE'),
+})
+trackImportedIosProfileResult(imported, importedCarried, journeyId, trackAction, reportedSuccesses)
+trackImportedIosProfileResult(imported, importedCarried, journeyId, trackAction, reportedSuccesses)
+assert.equal(imported.next, 'saving-credentials')
 assert.deepEqual(actions.splice(0), [{
   action: 'profile_prepared',
   tags: { attempt_id: journeyId, source: 'imported' },
-  step: 'import-pick-profile',
+  step: 'import-exporting',
 }])
 
 // Creating a profile while recovering an import still reports its true source.
@@ -101,12 +111,12 @@ const invalidCarried = {
   chosenProfile: { ...importedProfile, uuid: 'FAKE_INVALID_PROFILE', bundleId: 'com.example.other' },
 }
 const invalid = await runIosEffect('import-pick-profile', importedProgress, { carried: invalidCarried })
-trackImportedIosProfileValidationResult(invalid, invalidCarried, journeyId, trackAction, reportedSuccesses)
+trackImportedIosProfileResult(invalid, invalidCarried, journeyId, trackAction, reportedSuccesses)
 assert.equal(invalid.next, 'error')
 assert.equal(actions.length, 0, 'invalid profiles emit no success')
 
-assert.doesNotThrow(() => trackImportedIosProfileValidationResult(
-  validated,
+assert.doesNotThrow(() => trackImportedIosProfileResult(
+  imported,
   importedCarried,
   journeyId,
   () => { throw new Error('telemetry unavailable') },
