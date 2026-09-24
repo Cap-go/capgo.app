@@ -720,6 +720,9 @@ const rolesWithInheritedAppAccess = new Set(['org_admin', 'org_super_admin'])
 const rolesWithOrgCreateAccess = new Set(['org_admin', 'org_super_admin'])
 const apiKeyOrgCreatePermission = 'org.create'
 const isEditingApiKey = computed(() => editingApiKey.value !== null)
+// PUT /apikey needs org.update_user_roles to change bindings: app admins can
+// only rename a key or change its expiration.
+const bindingsLocked = computed(() => isEditingApiKey.value && requiresAppOnlyScope.value)
 const showAppAccessInModal = computed(() =>
   appOnlyScope.value || (!!selectedOrgRole.value && !rolesWithInheritedAppAccess.has(selectedOrgRole.value)),
 )
@@ -1280,7 +1283,7 @@ async function updateApiKey() {
   if (!key)
     return false
 
-  if (!validateApiKeyScope())
+  if (!bindingsLocked.value && !validateApiKeyScope())
     return false
 
   const currentName = key.name || ''
@@ -1309,8 +1312,12 @@ async function updateApiKey() {
       id: key.id,
       ...(nameChanged ? { name: trimmedName } : {}),
       expires_at: expiresAt,
-      bindings: buildApiKeyBindingsFromForm(),
-      global_permissions: buildApiKeyGlobalPermissionsFromForm(key),
+      ...(bindingsLocked.value
+        ? {}
+        : {
+            bindings: buildApiKeyBindingsFromForm(),
+            global_permissions: buildApiKeyGlobalPermissionsFromForm(key),
+          }),
     },
   })
 
@@ -1901,245 +1908,251 @@ getKeys()
               </div>
             </div>
           </div>
-          <div class="rounded-lg border border-azure-200 bg-azure-50 p-4 dark:border-azure-500/30 dark:bg-azure-500/10">
-            <label class="flex items-start gap-3 cursor-pointer">
-              <input
-                v-model="appOnlyScope"
-                type="checkbox"
-                data-test="create-key-app-only-scope"
-                class="mt-1 d-checkbox d-checkbox-primary d-checkbox-sm"
-                :disabled="requiresAppOnlyScope"
-              >
-              <span>
-                <span class="block text-sm font-medium text-slate-800 dark:text-white">
-                  {{ t('api-key-selected-apps-only') }}
-                </span>
-                <span class="mt-1 block text-sm text-slate-600 dark:text-slate-300">
-                  {{ t('api-key-selected-apps-only-description') }}
-                </span>
-              </span>
-            </label>
-          </div>
-          <!-- Organizations Selection (all checked by default) -->
-          <div>
-            <h3 class="mb-2 text-sm font-semibold uppercase text-slate-500">
-              {{ t(appOnlyScope ? 'api-key-selected-apps-only-org-filter' : 'organizations') }}
-            </h3>
-            <p v-if="appOnlyScope" class="mb-2 text-sm text-slate-500">
-              {{ t('api-key-selected-apps-only-org-filter-description') }}
-            </p>
-            <div class="relative">
-              <button
-                type="button"
-                data-test="create-key-org-dropdown"
-                class="flex items-center justify-between w-full gap-3 px-3 py-2 text-sm text-left bg-white border rounded-lg border-slate-300 dark:bg-gray-800 dark:border-slate-600 focus:ring-2 focus:ring-primary-500 focus:outline-none"
-                :aria-expanded="showOrgDropdown"
-                @click="showOrgDropdown = !showOrgDropdown"
-              >
-                <span class="flex-1 truncate" :class="selectedOrgsForCreation.length ? 'text-slate-800 dark:text-white' : 'text-slate-500'">
-                  {{ selectedOrgNamesForCreation || t('select-organization') }}
-                </span>
-                <svg class="w-4 h-4 text-slate-500 shrink-0" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                  <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
-                </svg>
-              </button>
-              <div v-if="showOrgDropdown" class="fixed inset-0 z-10" @click="showOrgDropdown = false" />
-              <div
-                v-if="showOrgDropdown"
-                class="absolute z-20 w-full mt-1 overflow-y-auto bg-white border rounded-lg shadow-lg top-full dark:bg-gray-800 border-slate-200 dark:border-slate-700 max-h-64"
-              >
-                <label
-                  v-for="org in organizationStore.organizations"
-                  :key="org.gid"
-                  class="flex items-center gap-3 px-4 py-2.5 transition-colors"
-                  :class="canSelectOrgForKey(org.gid) ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700' : 'cursor-not-allowed text-slate-400'"
+          <p v-if="bindingsLocked" data-test="edit-key-bindings-locked" class="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+            {{ t('api-key-bindings-locked') }}
+          </p>
+          <!-- Native fieldset: disables every scope/access control at once -->
+          <fieldset :disabled="bindingsLocked" class="min-w-0 space-y-6">
+            <div class="rounded-lg border border-azure-200 bg-azure-50 p-4 dark:border-azure-500/30 dark:bg-azure-500/10">
+              <label class="flex items-start gap-3 cursor-pointer">
+                <input
+                  v-model="appOnlyScope"
+                  type="checkbox"
+                  data-test="create-key-app-only-scope"
+                  class="mt-1 d-checkbox d-checkbox-primary d-checkbox-sm"
+                  :disabled="requiresAppOnlyScope"
                 >
-                  <input
-                    type="checkbox"
-                    data-test="create-key-org-checkbox"
-                    :data-org-id="org.gid"
-                    class="d-checkbox d-checkbox-sm d-checkbox-primary"
-                    :checked="selectedOrgsForCreation.includes(org.gid)"
-                    :disabled="!canSelectOrgForKey(org.gid)"
-                    @change="toggleOrgSelection(org.gid)"
-                  >
-                  <span class="flex-1 text-sm truncate">
-                    {{ org.name }}
-                    <span v-if="!canSelectOrgForKey(org.gid)" class="text-xs text-slate-400">
-                      ({{ t('cannot-manage-org-api-keys') }})
-                    </span>
+                <span>
+                  <span class="block text-sm font-medium text-slate-800 dark:text-white">
+                    {{ t('api-key-selected-apps-only') }}
                   </span>
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <!-- Organization Role -->
-          <div v-if="!appOnlyScope">
-            <h3 class="mb-2 text-sm font-semibold uppercase text-slate-500">
-              {{ t('role') }}
-            </h3>
-            <p class="mb-3 text-sm text-slate-500">
-              {{ t('select-user-role') }}
-            </p>
-            <div class="space-y-2">
-              <div
-                v-for="role in orgRoleOptions"
-                :key="role.id"
-                class="flex items-center gap-2"
-              >
-                <label
-                  class="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-md border p-3 transition-colors"
-                  :class="selectedOrgRole === role.name
-                    ? 'border-primary bg-primary/5 ring-1 ring-primary/30 dark:bg-primary/10'
-                    : 'border-slate-200 bg-white hover:border-primary/60 dark:border-slate-700 dark:bg-transparent'"
-                >
-                  <input
-                    v-model="selectedOrgRole"
-                    type="radio"
-                    :data-test="`create-key-org-role-${role.name}`"
-                    class="d-radio d-radio-primary d-radio-sm"
-                    name="create-org-role"
-                    :value="role.name"
-                  >
-                  <span class="text-sm font-medium dark:text-white text-slate-800">{{ role.description }}</span>
-                </label>
-                <RoleCapabilitiesHint :role-name="role.name" />
-              </div>
-            </div>
-          </div>
-
-          <!-- Global organization permissions -->
-          <div v-if="!appOnlyScope && !hideOrgCreationPermission" class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/40">
-            <label class="flex items-start gap-3" :class="canEnableOrgCreation ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'">
-              <input
-                v-model="allowOrgCreation"
-                type="checkbox"
-                data-test="create-key-org-create-permission"
-                class="mt-1 d-checkbox d-checkbox-primary d-checkbox-sm"
-                :disabled="!canEnableOrgCreation"
-              >
-              <span>
-                <span class="block text-sm font-medium text-slate-800 dark:text-white">
-                  {{ t('allow-api-key-create-organizations') }}
+                  <span class="mt-1 block text-sm text-slate-600 dark:text-slate-300">
+                    {{ t('api-key-selected-apps-only-description') }}
+                  </span>
                 </span>
-                <span class="mt-1 block text-sm text-slate-500 dark:text-slate-400">
-                  {{ t(canEnableOrgCreation ? 'allow-api-key-create-organizations-description' : 'allow-api-key-create-organizations-requires-admin') }}
-                </span>
-              </span>
-            </label>
-          </div>
-
-          <!-- App Access Control -->
-          <div v-if="showAppAccessInModal">
-            <h3 class="mb-2 text-sm font-semibold uppercase text-slate-500">
-              {{ t('app-access-control') }}
-            </h3>
-            <p class="mb-3 text-sm text-slate-500">
-              {{ t(appOnlyScope ? 'api-key-selected-apps-only-app-access' : 'app-access-member-only') }}
-            </p>
-
-            <!-- Add app dropdown -->
-            <div class="flex justify-end mb-4">
+              </label>
+            </div>
+            <!-- Organizations Selection (all checked by default) -->
+            <div>
+              <h3 class="mb-2 text-sm font-semibold uppercase text-slate-500">
+                {{ t(appOnlyScope ? 'api-key-selected-apps-only-org-filter' : 'organizations') }}
+              </h3>
+              <p v-if="appOnlyScope" class="mb-2 text-sm text-slate-500">
+                {{ t('api-key-selected-apps-only-org-filter-description') }}
+              </p>
               <div class="relative">
                 <button
-                  data-test="create-key-add-app"
-                  class="gap-2 d-btn d-btn-sm d-btn-outline"
                   type="button"
-                  @click="showAppDropdown = !showAppDropdown"
+                  data-test="create-key-org-dropdown"
+                  class="flex items-center justify-between w-full gap-3 px-3 py-2 text-sm text-left bg-white border rounded-lg border-slate-300 dark:bg-gray-800 dark:border-slate-600 focus:ring-2 focus:ring-primary-500 focus:outline-none"
+                  :aria-expanded="showOrgDropdown"
+                  @click="showOrgDropdown = !showOrgDropdown"
                 >
-                  <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
-                    <path d="M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z" />
+                  <span class="flex-1 truncate" :class="selectedOrgsForCreation.length ? 'text-slate-800 dark:text-white' : 'text-slate-500'">
+                    {{ selectedOrgNamesForCreation || t('select-organization') }}
+                  </span>
+                  <svg class="w-4 h-4 text-slate-500 shrink-0" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
                   </svg>
-                  {{ t('add-app') }}
                 </button>
-                <div v-if="showAppDropdown" class="fixed inset-0 z-10" @click="showAppDropdown = false" />
+                <div v-if="showOrgDropdown" class="fixed inset-0 z-10" @click="showOrgDropdown = false" />
                 <div
-                  v-if="showAppDropdown"
-                  class="absolute right-0 top-full mt-1 z-20 bg-white dark:bg-gray-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg min-w-[240px] max-h-60 overflow-y-auto"
+                  v-if="showOrgDropdown"
+                  class="absolute z-20 w-full mt-1 overflow-y-auto bg-white border rounded-lg shadow-lg top-full dark:bg-gray-800 border-slate-200 dark:border-slate-700 max-h-64"
                 >
-                  <div v-if="filteredAppsForSelectedOrgs.length === 0" class="px-4 py-3 text-sm text-slate-500">
-                    {{ t('no-apps') }}
-                  </div>
                   <label
-                    v-for="app in filteredAppsForSelectedOrgs"
-                    :key="app.id"
-                    class="flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                    v-for="org in organizationStore.organizations"
+                    :key="org.gid"
+                    class="flex items-center gap-3 px-4 py-2.5 transition-colors"
+                    :class="canSelectOrgForKey(org.gid) ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700' : 'cursor-not-allowed text-slate-400'"
                   >
                     <input
                       type="checkbox"
-                      data-test="create-key-app-checkbox"
-                      :data-app-id="app.id"
+                      data-test="create-key-org-checkbox"
+                      :data-org-id="org.gid"
                       class="d-checkbox d-checkbox-sm d-checkbox-primary"
-                      :checked="app.id in pendingAppBindings"
-                      @change="toggleApp(app.id)"
+                      :checked="selectedOrgsForCreation.includes(org.gid)"
+                      :disabled="!canSelectOrgForKey(org.gid)"
+                      @change="toggleOrgSelection(org.gid)"
                     >
-                    <div>
-                      <div class="text-sm font-medium dark:text-white text-slate-800">
-                        {{ app.name || app.app_id }}
-                      </div>
-                      <div v-if="app.name" class="text-xs text-slate-500">
-                        {{ app.app_id }}
-                      </div>
-                      <div class="text-xs text-slate-500">
-                        {{ getOrgNameById(app.owner_org) }}
-                      </div>
-                    </div>
+                    <span class="flex-1 text-sm truncate">
+                      {{ org.name }}
+                      <span v-if="!canSelectOrgForKey(org.gid)" class="text-xs text-slate-400">
+                        ({{ t('cannot-manage-org-api-keys') }})
+                      </span>
+                    </span>
                   </label>
                 </div>
               </div>
             </div>
 
-            <!-- Selected apps with role selection -->
-            <div v-if="selectedAppIds.length === 0" class="py-4 text-sm text-slate-500">
-              {{ t('app-access-none') }}
-            </div>
-            <div v-else class="overflow-hidden border rounded-lg border-slate-200 dark:border-slate-700">
-              <div
-                v-for="appId in selectedAppIds"
-                :key="appId"
-                data-test="create-key-selected-app"
-                class="flex items-center gap-3 px-4 py-2.5 border-b last:border-0 border-slate-100 dark:border-slate-700 hover:bg-slate-50/50 dark:hover:bg-slate-700/20"
-              >
-                <span class="flex-1 text-sm font-medium truncate dark:text-white text-slate-800">
-                  {{ getAppNameById(appId) }}
-                  <span v-if="getAppOrgNameById(appId)" class="block text-xs font-normal text-slate-500">
-                    {{ getAppOrgNameById(appId) }}
-                  </span>
-                </span>
-                <select
-                  :id="`create-key-app-role-${appId}`"
-                  data-test="create-key-app-role-select"
-                  :aria-label="t('select-role')"
-                  class="d-select d-select-sm d-select-bordered"
-                  :value="pendingAppBindings[appId] || ''"
-                  @change="onAppRoleChange(appId, $event)"
+            <!-- Organization Role -->
+            <div v-if="!appOnlyScope">
+              <h3 class="mb-2 text-sm font-semibold uppercase text-slate-500">
+                {{ t('role') }}
+              </h3>
+              <p class="mb-3 text-sm text-slate-500">
+                {{ t('select-user-role') }}
+              </p>
+              <div class="space-y-2">
+                <div
+                  v-for="role in orgRoleOptions"
+                  :key="role.id"
+                  class="flex items-center gap-2"
                 >
-                  <option value="">
-                    {{ t('select-role') }}
-                  </option>
-                  <option
-                    v-for="role in appRoleOptions"
-                    :key="role.id"
-                    :value="role.name"
+                  <label
+                    class="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-md border p-3 transition-colors"
+                    :class="selectedOrgRole === role.name
+                      ? 'border-primary bg-primary/5 ring-1 ring-primary/30 dark:bg-primary/10'
+                      : 'border-slate-200 bg-white hover:border-primary/60 dark:border-slate-700 dark:bg-transparent'"
                   >
-                    {{ role.description }}
-                  </option>
-                </select>
-                <RoleCapabilitiesHint
-                  v-if="pendingAppBindings[appId]"
-                  :role-name="pendingAppBindings[appId]"
-                />
-                <button
-                  class="text-red-500 d-btn d-btn-xs d-btn-ghost shrink-0"
-                  type="button"
-                  @click="toggleApp(appId)"
-                >
-                  <IconTrash class="w-4 h-4" />
-                </button>
+                    <input
+                      v-model="selectedOrgRole"
+                      type="radio"
+                      :data-test="`create-key-org-role-${role.name}`"
+                      class="d-radio d-radio-primary d-radio-sm"
+                      name="create-org-role"
+                      :value="role.name"
+                    >
+                    <span class="text-sm font-medium dark:text-white text-slate-800">{{ role.description }}</span>
+                  </label>
+                  <RoleCapabilitiesHint :role-name="role.name" />
+                </div>
               </div>
             </div>
-          </div>
+
+            <!-- Global organization permissions -->
+            <div v-if="!appOnlyScope && !hideOrgCreationPermission" class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/40">
+              <label class="flex items-start gap-3" :class="canEnableOrgCreation ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'">
+                <input
+                  v-model="allowOrgCreation"
+                  type="checkbox"
+                  data-test="create-key-org-create-permission"
+                  class="mt-1 d-checkbox d-checkbox-primary d-checkbox-sm"
+                  :disabled="!canEnableOrgCreation"
+                >
+                <span>
+                  <span class="block text-sm font-medium text-slate-800 dark:text-white">
+                    {{ t('allow-api-key-create-organizations') }}
+                  </span>
+                  <span class="mt-1 block text-sm text-slate-500 dark:text-slate-400">
+                    {{ t(canEnableOrgCreation ? 'allow-api-key-create-organizations-description' : 'allow-api-key-create-organizations-requires-admin') }}
+                  </span>
+                </span>
+              </label>
+            </div>
+
+            <!-- App Access Control -->
+            <div v-if="showAppAccessInModal">
+              <h3 class="mb-2 text-sm font-semibold uppercase text-slate-500">
+                {{ t('app-access-control') }}
+              </h3>
+              <p class="mb-3 text-sm text-slate-500">
+                {{ t(appOnlyScope ? 'api-key-selected-apps-only-app-access' : 'app-access-member-only') }}
+              </p>
+
+              <!-- Add app dropdown -->
+              <div class="flex justify-end mb-4">
+                <div class="relative">
+                  <button
+                    data-test="create-key-add-app"
+                    class="gap-2 d-btn d-btn-sm d-btn-outline"
+                    type="button"
+                    @click="showAppDropdown = !showAppDropdown"
+                  >
+                    <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                      <path d="M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z" />
+                    </svg>
+                    {{ t('add-app') }}
+                  </button>
+                  <div v-if="showAppDropdown" class="fixed inset-0 z-10" @click="showAppDropdown = false" />
+                  <div
+                    v-if="showAppDropdown"
+                    class="absolute right-0 top-full mt-1 z-20 bg-white dark:bg-gray-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg min-w-[240px] max-h-60 overflow-y-auto"
+                  >
+                    <div v-if="filteredAppsForSelectedOrgs.length === 0" class="px-4 py-3 text-sm text-slate-500">
+                      {{ t('no-apps') }}
+                    </div>
+                    <label
+                      v-for="app in filteredAppsForSelectedOrgs"
+                      :key="app.id"
+                      class="flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                    >
+                      <input
+                        type="checkbox"
+                        data-test="create-key-app-checkbox"
+                        :data-app-id="app.id"
+                        class="d-checkbox d-checkbox-sm d-checkbox-primary"
+                        :checked="app.id in pendingAppBindings"
+                        @change="toggleApp(app.id)"
+                      >
+                      <div>
+                        <div class="text-sm font-medium dark:text-white text-slate-800">
+                          {{ app.name || app.app_id }}
+                        </div>
+                        <div v-if="app.name" class="text-xs text-slate-500">
+                          {{ app.app_id }}
+                        </div>
+                        <div class="text-xs text-slate-500">
+                          {{ getOrgNameById(app.owner_org) }}
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Selected apps with role selection -->
+              <div v-if="selectedAppIds.length === 0" class="py-4 text-sm text-slate-500">
+                {{ t('app-access-none') }}
+              </div>
+              <div v-else class="overflow-hidden border rounded-lg border-slate-200 dark:border-slate-700">
+                <div
+                  v-for="appId in selectedAppIds"
+                  :key="appId"
+                  data-test="create-key-selected-app"
+                  class="flex items-center gap-3 px-4 py-2.5 border-b last:border-0 border-slate-100 dark:border-slate-700 hover:bg-slate-50/50 dark:hover:bg-slate-700/20"
+                >
+                  <span class="flex-1 text-sm font-medium truncate dark:text-white text-slate-800">
+                    {{ getAppNameById(appId) }}
+                    <span v-if="getAppOrgNameById(appId)" class="block text-xs font-normal text-slate-500">
+                      {{ getAppOrgNameById(appId) }}
+                    </span>
+                  </span>
+                  <select
+                    :id="`create-key-app-role-${appId}`"
+                    data-test="create-key-app-role-select"
+                    :aria-label="t('select-role')"
+                    class="d-select d-select-sm d-select-bordered"
+                    :value="pendingAppBindings[appId] || ''"
+                    @change="onAppRoleChange(appId, $event)"
+                  >
+                    <option value="">
+                      {{ t('select-role') }}
+                    </option>
+                    <option
+                      v-for="role in appRoleOptions"
+                      :key="role.id"
+                      :value="role.name"
+                    >
+                      {{ role.description }}
+                    </option>
+                  </select>
+                  <RoleCapabilitiesHint
+                    v-if="pendingAppBindings[appId]"
+                    :role-name="pendingAppBindings[appId]"
+                  />
+                  <button
+                    class="text-red-500 d-btn d-btn-xs d-btn-ghost shrink-0"
+                    type="button"
+                    @click="toggleApp(appId)"
+                  >
+                    <IconTrash class="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </fieldset>
 
           <!-- Set Expiration Date -->
           <div class="flex items-center gap-2">
