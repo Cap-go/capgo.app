@@ -32,7 +32,7 @@ const supabase = useSupabase()
 
 const groups = ref<Array<{ id: string, name: string }>>([])
 const attribute = ref(props.roleMapping?.attribute ?? '')
-const rules = ref(structuredClone(props.roleMapping?.rules ?? []))
+const rules = ref((props.roleMapping?.rules ?? []).map(rule => ({ ...rule })))
 // '' = no access; kept as a string so it can bind to a <select>.
 const defaultRole = ref<OrgRole | ''>(props.roleMapping ? (props.roleMapping.default_role ?? '') : 'org_member')
 const isSaving = ref(false)
