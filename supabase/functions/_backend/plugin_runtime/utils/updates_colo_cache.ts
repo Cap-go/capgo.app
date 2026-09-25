@@ -1,0 +1,377 @@
+// Colo-local cache for the /updates hot path, with targeted invalidation.
+//
+// Most apps have one public channel and no per-device overrides: their
+// channel resolution is identical for every device on the same
+// (platform, defaultChannel) and can be served from the colo cache with
+// zero database queries. Per-device work (semver compares, rollout
+// decisions, override lookups for apps that have them) stays per-request.
+//
+// Freshness has two layers:
+// - a short TTL backstop (UPDATES_CACHE_TTL_SECONDS, default 60s — the same
+//   class as the Hyperdrive query cache serving this traffic today), and
+// - targeted invalidation: every cached entry is keyed under a per-app
+//   version token; bumping the token (bumpAppCacheToken) makes every entry
+//   for that app unreachable at once. Database triggers fan the bump out to
+//   each regional plugin worker (placement-pinned, so each call lands in
+//   the colo whose cache needs clearing) within ~1s of the commit.
+//
+// The apps.channel_device_count counter (already denormalized and cached in
+// the payload) is the switch: apps with overrides keep their per-device
+// lookup on every request, so adding a FIRST override reacts within one
+// token bump (~1s) or one TTL at worst.
+
+import type { Context } from 'hono'
+import type { AppOwnerPostgresResult, getDrizzleClient, PlanAction } from './pg.ts'
+import { CACHE_PUT_TIMEOUT_MS, CacheHelper } from './cache.ts'
+import { cloudlog } from './logging.ts'
+import {
+  getAppOwnerPostgres,
+  queryAppOwnerPostgres,
+  requestChannelOverrideLookup,
+  requestInfosChannelPostgres,
+  requestInfosChannelPostgresRollout,
+  requestManifestEntriesPostgres,
+  resolveRolloutChannelDataPostgres,
+} from './pg.ts'
+import { existInEnv, getEnv } from './utils.ts'
+
+const CACHE_ORIGIN = 'https://updates-cache.capgo.internal'
+const TOKEN_CACHE_PATH = '/cache/updates-token'
+const OWNER_CACHE_PATH = '/cache/updates-owner'
+const NEGATIVE_STREAK_PATH = '/cache/updates-missing-since'
+const CHANNEL_CACHE_PATH = '/cache/updates-channel'
+const MANIFEST_CACHE_PATH = '/cache/updates-manifest'
+
+const TOKEN_TTL_SECONDS = 7 * 24 * 3600
+const tokenOpChains = new Map<string, Promise<unknown>>()
+
+function runSerializedTokenOp<T>(appId: string, op: () => Promise<T>): Promise<T> {
+  const tail = tokenOpChains.get(appId) ?? Promise.resolve()
+  const run = tail.catch(() => {}).then(op)
+  const next = run.then(() => undefined, () => undefined)
+  tokenOpChains.set(appId, next)
+  void next.finally(() => {
+    if (tokenOpChains.get(appId) === next)
+      tokenOpChains.delete(appId)
+  })
+  return run
+}
+const DEFAULT_PAYLOAD_TTL_SECONDS = 60
+// Unknown apps (Capgo removed, misconfigured open-source installs, plain
+// abuse) hammer /updates forever and by definition never change: cache the
+// negative long — but only once the app has been missing for longer than
+// any replica lag could explain. A brand-new app may not be visible on the
+// regional replica yet; caching that first miss for 10 minutes would give
+// devices a false on-prem answer long after replication catches up.
+const DEFAULT_NEGATIVE_TTL_SECONDS = 600
+const NEGATIVE_ESCALATION_AFTER_MS = 15 * 60 * 1000
+const NEGATIVE_STREAK_TTL_SECONDS = 24 * 3600
+const MANIFEST_TTL_SECONDS = 300
+
+interface TokenPayload { t: string }
+
+// Host-independent cache keys: one entry per colo regardless of which
+// domain alias the device (or the invalidation fan-out) used.
+function buildCacheRequest(path: string, params: Record<string, string>): Request {
+  const url = new URL(path, CACHE_ORIGIN)
+  for (const key of Object.keys(params).sort((a, b) => a.localeCompare(b)))
+    url.searchParams.set(key, params[key])
+  return new Request(url.toString(), { method: 'GET' })
+}
+
+const requestTokenMemo = new WeakMap<object, Map<string, Promise<string | null>>>()
+
+function memoKey(c: Context): object | null {
+  try {
+    return (c.req?.raw as object) ?? null
+  }
+  catch {
+    return null
+  }
+}
+interface OwnerPayload { owner: AppOwnerPostgresResult | null }
+interface ChannelPayload { channel: unknown }
+
+/** Cache-key normalization: omitted/empty defaultChannel must not collide with a channel literally named "undefined". */
+export function normalizeDefaultChannelForCache(defaultChannel: string | undefined): { channelName: string, hasDefaultChannel: boolean } {
+  if (defaultChannel === undefined || defaultChannel === '')
+    return { channelName: '', hasDefaultChannel: false }
+  return { channelName: defaultChannel, hasDefaultChannel: true }
+}
+
+export function isUpdatesCacheEnabled(c: Context): boolean {
+  return existInEnv(c, 'UPDATES_CACHE_MODE') && getEnv(c, 'UPDATES_CACHE_MODE') === 'on'
+}
+
+function payloadTtlSeconds(c: Context): number {
+  const raw = Number(getEnv(c, 'UPDATES_CACHE_TTL_SECONDS'))
+  return Number.isFinite(raw) && raw >= 5 ? raw : DEFAULT_PAYLOAD_TTL_SECONDS
+}
+
+function negativeTtlSeconds(c: Context): number {
+  const raw = Number(getEnv(c, 'UPDATES_CACHE_NEGATIVE_TTL_SECONDS'))
+  return Number.isFinite(raw) && raw >= 5 ? raw : DEFAULT_NEGATIVE_TTL_SECONDS
+}
+
+// Per-app version token: every cached payload embeds it in its key, so one
+// token bump atomically invalidates all payload variants of the app in this
+// colo. The old entries become unreachable and expire by TTL.
+async function loadAppCacheToken(helper: CacheHelper, appId: string): Promise<string | null> {
+  return runSerializedTokenOp(appId, async () => {
+    const request = buildCacheRequest(TOKEN_CACHE_PATH, { app_id: appId })
+    const cached = await helper.matchJson<TokenPayload>(request)
+    if (cached?.t)
+      return cached.t
+    const token = crypto.randomUUID()
+    // Another isolate may have initialized or bumped while we generated.
+    const beforePut = await helper.matchJson<TokenPayload>(request)
+    if (beforePut?.t)
+      return beforePut.t
+    await helper.putJson(request, { t: token }, TOKEN_TTL_SECONDS, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
+    const after = await helper.matchJson<TokenPayload>(request)
+    // Prefer a concurrent invalidator's token over our candidate write.
+    if (after?.t && after.t !== token)
+      return after.t
+    return after?.t ?? token
+  })
+}
+
+// Memoized per request: every cached lookup of one update check reads the
+// same token generation, so a bump landing mid-request cannot mix stale and
+// fresh payloads in a single response.
+function getAppCacheToken(c: Context, helper: CacheHelper, appId: string): Promise<string | null> {
+  const key = memoKey(c)
+  if (!key)
+    return loadAppCacheToken(helper, appId)
+  let perApp = requestTokenMemo.get(key)
+  if (!perApp) {
+    perApp = new Map()
+    requestTokenMemo.set(key, perApp)
+  }
+  let token = perApp.get(appId)
+  if (!token) {
+    token = loadAppCacheToken(helper, appId)
+    perApp.set(appId, token)
+  }
+  return token
+}
+
+// Invalidation entry point, called by the /cache_invalidate route on each
+// regional plugin worker (fan-out from the cache_invalidate trigger).
+async function clearNegativeOwnerStreak(helper: CacheHelper, appId: string): Promise<void> {
+  await helper.delete(buildCacheRequest(NEGATIVE_STREAK_PATH, { app_id: appId }))
+}
+
+export async function bumpAppCacheToken(c: Context, appId: string): Promise<boolean> {
+  return runSerializedTokenOp(appId, async () => {
+    const helper = new CacheHelper(c)
+    const request = buildCacheRequest(TOKEN_CACHE_PATH, { app_id: appId })
+    const token = crypto.randomUUID()
+    await helper.putJson(request, { t: token }, TOKEN_TTL_SECONDS, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
+    const stored = await helper.matchJson<TokenPayload>(request)
+    if (!stored?.t)
+      return false
+    await clearNegativeOwnerStreak(helper, appId)
+    return true
+  })
+}
+
+// Drop-in replacement for getAppOwnerPostgres, cached per app. Negative
+// results (unknown app) are cached too: unknown-app traffic is the
+// enumeration hot path and the apps INSERT trigger bumps the token the
+// moment the app is created.
+export async function cachedGetAppOwner(
+  c: Context,
+  appId: string,
+  drizzleClient: ReturnType<typeof getDrizzleClient>,
+  actions: PlanAction[],
+): Promise<AppOwnerPostgresResult | null> {
+  const helper = new CacheHelper(c)
+  const token = await getAppCacheToken(c, helper, appId)
+  if (!token)
+    return getAppOwnerPostgres(c, appId, drizzleClient, actions)
+  const request = buildCacheRequest(OWNER_CACHE_PATH, { app_id: appId, v: token, a: actions.join('-') })
+  const cached = await helper.matchJson<OwnerPayload>(request)
+  if (cached) {
+    cloudlog({ requestId: c.get('requestId'), message: 'updates cache hit (owner)', appId })
+    return cached.owner
+  }
+  let owner: AppOwnerPostgresResult | null
+  try {
+    owner = await queryAppOwnerPostgres(c, appId, drizzleClient, actions)
+  }
+  catch {
+    // Transient query failure: same null-owner behavior as the direct path,
+    // but never cached — an unknown-app entry would misclassify the app as
+    // on-prem for the whole TTL.
+    return getAppOwnerPostgres(c, appId, drizzleClient, actions)
+  }
+  if (owner !== null)
+    await clearNegativeOwnerStreak(helper, appId)
+  await helper.putJson(request, { owner }, owner === null ? await negativeOwnerTtl(c, helper, appId) : payloadTtlSeconds(c), { timeoutMs: CACHE_PUT_TIMEOUT_MS })
+  return owner
+}
+
+// Escalating negative TTL: the first sightings of a missing app use the
+// short payload TTL (a replica may simply not have replicated a brand-new
+// app yet); once the app has been missing beyond any plausible replication
+// lag, escalate to the long negative TTL so dead apps stop costing queries.
+async function negativeOwnerTtl(c: Context, helper: CacheHelper, appId: string): Promise<number> {
+  const streakRequest = buildCacheRequest(NEGATIVE_STREAK_PATH, { app_id: appId })
+  const streak = await helper.matchJson<{ first: number }>(streakRequest)
+  if (!streak) {
+    await helper.putJson(streakRequest, { first: Date.now() }, NEGATIVE_STREAK_TTL_SECONDS, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
+    return payloadTtlSeconds(c)
+  }
+  return Date.now() - streak.first > NEGATIVE_ESCALATION_AFTER_MS ? negativeTtlSeconds(c) : payloadTtlSeconds(c)
+}
+
+export interface CachedRequestInfosOptions {
+  c: Context
+  platform: string
+  app_id: string
+  device_id: string
+  defaultChannel?: string
+  drizzleClient: ReturnType<typeof getDrizzleClient>
+  channelDeviceCount?: number | null
+  manifestBundleCount?: number | null
+  rolloutChannelCount?: number | null
+  rolloutPausedVersionNames?: string[] | null
+  currentVersionName: string
+  includeMetadata?: boolean
+  channelSelfOverrideChannelId?: number | null
+}
+
+// Cached mirror of requestInfosPostgres (pg.ts): the app-level channel
+// lookup is cached per (app, platform, defaultChannel, flags); the
+// device-level parts (override lookup, rollout decision, rollout manifest)
+// run per request exactly like the uncached path.
+export async function cachedRequestInfos(options: CachedRequestInfosOptions): Promise<{ channelData: any, channelOverride: any }> {
+  const {
+    c,
+    platform,
+    app_id,
+    device_id,
+    defaultChannel,
+    drizzleClient,
+    channelDeviceCount,
+    rolloutChannelCount,
+    rolloutPausedVersionNames,
+    currentVersionName,
+    includeMetadata = false,
+    channelSelfOverrideChannelId,
+  } = options
+  const shouldQueryChannelOverride = channelDeviceCount === undefined || channelDeviceCount === null ? true : channelDeviceCount > 0
+  const isPausedRolloutVersion = Array.isArray(rolloutPausedVersionNames) && rolloutPausedVersionNames.includes(currentVersionName)
+  const rollout = (rolloutChannelCount ?? 0) > 0 || isPausedRolloutVersion
+
+  // Device-level override lookup: never cached (per-device result).
+  const channelOverridePromise = requestChannelOverrideLookup(c, {
+    app_id,
+    device_id,
+    drizzleClient,
+    includeManifest: false,
+    includeMetadata,
+    rollout,
+    shouldQueryChannelOverride,
+    channelSelfOverrideChannelId,
+  })
+
+  // App-level channel resolution: cached.
+  const channelPromise = cachedChannelLookup(c, {
+    platform,
+    app_id,
+    defaultChannel,
+    drizzleClient,
+    includeMetadata,
+    includeManifest: false,
+    rollout,
+  })
+
+  const [channelOverrideRaw, channelDataRaw] = await Promise.all([channelOverridePromise, channelPromise])
+
+  if (!rollout)
+    return { channelData: channelDataRaw, channelOverride: channelOverrideRaw }
+
+  // Rollout: per-device decision + manifest for the selected version, via
+  // the shared resolver with the version-keyed manifest cache as loader.
+  const rolloutArgs = {
+    appId: app_id,
+    deviceId: device_id,
+    currentVersionName,
+    drizzleClient,
+    includeManifest: false,
+    manifestLoader: (versionId: number) => cachedManifestEntries(c, app_id, versionId, drizzleClient),
+  }
+  const channelOverride = await resolveRolloutChannelDataPostgres(c, channelOverrideRaw, rolloutArgs)
+  const channelData = channelOverride
+    ? channelDataRaw
+    : await resolveRolloutChannelDataPostgres(c, channelDataRaw, rolloutArgs)
+  return { channelOverride, channelData }
+}
+
+interface CachedChannelLookupOptions {
+  platform: string
+  app_id: string
+  defaultChannel?: string
+  drizzleClient: ReturnType<typeof getDrizzleClient>
+  includeMetadata: boolean
+  includeManifest: boolean
+  rollout: boolean
+}
+
+async function cachedChannelLookup(c: Context, options: CachedChannelLookupOptions): Promise<any> {
+  const { platform, app_id, defaultChannel, drizzleClient, includeMetadata, includeManifest, rollout } = options
+  const { channelName, hasDefaultChannel } = normalizeDefaultChannelForCache(defaultChannel)
+  const load = () => rollout
+    ? requestInfosChannelPostgresRollout(c, platform, app_id, channelName, drizzleClient, includeMetadata)
+    : requestInfosChannelPostgres(c, platform, app_id, channelName, drizzleClient, includeManifest, includeMetadata)
+
+  const helper = new CacheHelper(c)
+  const token = await getAppCacheToken(c, helper, app_id)
+  if (!token)
+    return load()
+  const request = buildCacheRequest(CHANNEL_CACHE_PATH, {
+    app_id,
+    v: token,
+    platform,
+    channel: channelName,
+    no_default: hasDefaultChannel ? '0' : '1',
+    meta: includeMetadata ? '1' : '0',
+    manifest: includeManifest ? '1' : '0',
+    rollout: rollout ? '1' : '0',
+  })
+  const cached = await helper.matchJson<ChannelPayload>(request)
+  if (cached) {
+    cloudlog({ requestId: c.get('requestId'), message: 'updates cache hit (channel)', appId: app_id, platform })
+    return cached.channel ?? undefined
+  }
+  const channel = await load()
+  // `undefined` is not JSON-representable; store null and map back on read.
+  await helper.putJson(request, { channel: channel ?? null }, payloadTtlSeconds(c), { timeoutMs: CACHE_PUT_TIMEOUT_MS })
+  return channel
+}
+
+// Manifest entries for a rollout-selected version, keyed under the app's
+// version token so a token bump (e.g. the manifest trigger) invalidates them
+// together with the channel payloads. Empty results are never cached (the
+// bundle may still be uploading).
+async function cachedManifestEntries(
+  c: Context,
+  appId: string,
+  versionId: number,
+  drizzleClient: ReturnType<typeof getDrizzleClient>,
+): Promise<{ file_name: string | null, file_hash: string | null, s3_path: string | null }[]> {
+  const helper = new CacheHelper(c)
+  const token = await getAppCacheToken(c, helper, appId)
+  if (!token)
+    return requestManifestEntriesPostgres(c, versionId, drizzleClient)
+  const request = buildCacheRequest(MANIFEST_CACHE_PATH, { app_id: appId, v: token, version_id: String(versionId) })
+  const cached = await helper.matchJson<{ entries: { file_name: string | null, file_hash: string | null, s3_path: string | null }[] }>(request)
+  if (cached)
+    return cached.entries
+  const entries = await requestManifestEntriesPostgres(c, versionId, drizzleClient)
+  if (entries.length > 0)
+    await helper.putJson(request, { entries }, MANIFEST_TTL_SECONDS, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
+  return entries
+}
