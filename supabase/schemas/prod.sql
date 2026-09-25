@@ -15699,6 +15699,15 @@ CREATE OR REPLACE FUNCTION "public"."rbac_perm_app_delete"() RETURNS "text"
 ALTER FUNCTION "public"."rbac_perm_app_delete"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."rbac_perm_app_manage_apikeys"() RETURNS "text"
+    LANGUAGE "sql" IMMUTABLE PARALLEL SAFE
+    SET "search_path" TO ''
+    AS $$ SELECT 'app.manage_apikeys'::text $$;
+
+
+ALTER FUNCTION "public"."rbac_perm_app_manage_apikeys"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."rbac_perm_app_manage_devices"() RETURNS "text"
     LANGUAGE "sql" IMMUTABLE PARALLEL SAFE
     SET "search_path" TO ''
@@ -28853,6 +28862,13 @@ GRANT ALL ON FUNCTION "public"."rbac_perm_app_create_channel"() TO "service_role
 GRANT ALL ON FUNCTION "public"."rbac_perm_app_delete"() TO "anon";
 GRANT ALL ON FUNCTION "public"."rbac_perm_app_delete"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."rbac_perm_app_delete"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."rbac_perm_app_manage_apikeys"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."rbac_perm_app_manage_apikeys"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."rbac_perm_app_manage_apikeys"() TO "anon";
+GRANT ALL ON FUNCTION "public"."rbac_perm_app_manage_apikeys"() TO "authenticated";
 
 
 

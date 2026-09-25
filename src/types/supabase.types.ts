@@ -5212,6 +5212,7 @@ export type Database = {
       rbac_perm_app_build_native: { Args: never; Returns: string }
       rbac_perm_app_create_channel: { Args: never; Returns: string }
       rbac_perm_app_delete: { Args: never; Returns: string }
+      rbac_perm_app_manage_apikeys: { Args: never; Returns: string }
       rbac_perm_app_manage_devices: { Args: never; Returns: string }
       rbac_perm_app_read: { Args: never; Returns: string }
       rbac_perm_app_read_audit: { Args: never; Returns: string }
