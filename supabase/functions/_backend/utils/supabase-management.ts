@@ -1,4 +1,5 @@
 import type { Context } from 'hono'
+import { SSO_ATTRIBUTE_CLAIM_PREFIX } from '../private/sso/role-mapping.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { getEnv } from './utils.ts'
 
@@ -194,7 +195,7 @@ async function callManagementAPI(
 // Multi-valued SAML attributes must be captured as arrays, otherwise Supabase
 // Auth keeps only the first value.
 const ARRAY_ATTRIBUTE_KEYS = new Set(['groups'])
-const isArrayAttributeKey = (key: string) => ARRAY_ATTRIBUTE_KEYS.has(key) || key.startsWith('capgo_attr_')
+const isArrayAttributeKey = (key: string) => ARRAY_ATTRIBUTE_KEYS.has(key) || key.startsWith(SSO_ATTRIBUTE_CLAIM_PREFIX)
 
 function toManagementAttributeMapping(mapping: Record<string, string>): { keys: Record<string, { name: string, array?: boolean }> } {
   const keys: Record<string, { name: string, array?: boolean }> = {}

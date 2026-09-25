@@ -126,11 +126,14 @@ async function requireMappingTargetsInOrg(c: Context<MiddlewareKeyVariables>, or
 // own rank).
 async function requireSuperAdminForRoleMapping(c: Context<MiddlewareKeyVariables>, orgId: string) {
   const auth = c.get('auth')!
+  // Legacy API keys have no RBAC principal, hence no role in the org.
+  if (auth.authType === 'apikey' && !auth.apikey?.rbac_id)
+    quickError(403, 'role_mapping_requires_super_admin', 'Only organization super admins can change the SSO role mapping')
   const pgPool = getPgClient(c)
   try {
     const drizzle = getDrizzleClient(pgPool)
     const callerRank = auth.authType === 'apikey'
-      ? await getCallerMaxPriorityRank(drizzle, 'apikey', auth.apikey?.rbac_id ?? '', orgId)
+      ? await getCallerMaxPriorityRank(drizzle, 'apikey', auth.apikey!.rbac_id!, orgId)
       : await getCallerMaxPriorityRank(drizzle, 'jwt', auth.userId, orgId)
     const { rows } = await pgPool.query<{ priority_rank: number }>(
       'select priority_rank from public.roles where name = public.rbac_role_org_super_admin() and scope_type = public.rbac_scope_org()',
