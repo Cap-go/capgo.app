@@ -36,6 +36,7 @@ import { CORDOVA_DEFAULT_WEB_DIR } from '../cordova/project'
 import { isCordovaMode } from '../framework/mode'
 import { ensureNotifyAppReadyInBuildFolder } from '../recovery/notify-app-ready'
 import { parsePackageJsonOptionPaths, resolveAppIdWithRecovery } from '../recovery/app-id'
+import { finalizeUploadedBundle } from './finalize-upload'
 import { loadUploadProjectConfig } from './upload-config'
 import { prepareBundlePartialFiles, uploadPartial } from './partial'
 import { clackUploadReporter, getUploadReporter, runWithUploadReporter } from './reporter'
@@ -2003,7 +2004,16 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     if (options.verbose)
       log.info(`[Verbose] Updating version record with storage provider...`)
 
-    await persistVersionData(supabase, versionData, 'update')
+    await finalizeUploadedBundle({
+      apikey,
+      appId: appid,
+      bundle,
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
+      reporter: getUploadReporter(),
+    }, async () => {
+      await persistVersionData(supabase, versionData, 'update')
+    })
 
     if (options.verbose)
       log.info(`[Verbose] Version record updated successfully`)
