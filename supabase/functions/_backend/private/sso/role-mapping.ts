@@ -1,9 +1,18 @@
 import { z } from 'zod'
 
-// Supabase Auth attribute_mapping key under which the IdP attribute used for
-// role mapping is captured. Unknown keys land in identity_data.custom_claims,
-// refreshed by Supabase Auth on every SAML login.
-export const SSO_ROLE_SOURCE_CLAIM = 'capgo_role_source'
+// Each SAML attribute used by the mapping is captured by Supabase Auth under
+// its own attribute_mapping key. Unknown keys land in
+// identity_data.custom_claims, refreshed on every SAML login. Keys are derived
+// from the attribute name (a URI for most IdPs) so they stay stable and
+// limited to [a-z0-9_].
+export const SSO_ATTRIBUTE_CLAIM_PREFIX = 'capgo_attr_'
+
+export function ssoAttributeClaimKey(attribute: string): string {
+  let hash = 5381
+  for (const char of attribute)
+    hash = ((hash * 33) ^ char.codePointAt(0)!) >>> 0
+  return `${SSO_ATTRIBUTE_CLAIM_PREFIX}${hash.toString(16)}`
+}
 
 // Ordered from least to most privileged: when several rules match, the
 // highest role wins.
@@ -15,8 +24,8 @@ export type SsoAppRole = typeof SSO_MAPPABLE_APP_ROLES[number]
 const orgRoleSchema = z.enum(SSO_MAPPABLE_ORG_ROLES)
 
 export const roleMappingSchema = z.object({
-  attribute: z.string().trim().min(1).max(256),
   rules: z.array(z.object({
+    attribute: z.string().trim().min(1).max(256),
     value: z.string().trim().min(1).max(256),
     org_role: orgRoleSchema.nullable().default(null),
     apps: z.array(z.object({
@@ -51,11 +60,21 @@ export function parseStoredRoleMapping(value: unknown): SsoRoleMapping | null {
   return parsed.success ? parsed.data : null
 }
 
-export function readRoleSourceValues(identityData: unknown): string[] {
+export function mappedAttributes(mapping: SsoRoleMapping): string[] {
+  return [...new Set(mapping.rules.map(rule => rule.attribute))]
+}
+
+// attribute name -> values sent by the IdP on the last login.
+export function readAttributeValues(identityData: unknown, attributes: string[]): Record<string, string[]> {
   const customClaims = (identityData as { custom_claims?: Record<string, unknown> } | null)?.custom_claims
-  const raw = customClaims?.[SSO_ROLE_SOURCE_CLAIM]
-  const values = Array.isArray(raw) ? raw : [raw]
-  return values.filter((value): value is string => typeof value === 'string').map(value => value.trim()).filter(Boolean)
+  return Object.fromEntries(attributes.map((attribute) => {
+    const raw = customClaims?.[ssoAttributeClaimKey(attribute)]
+    const values = (Array.isArray(raw) ? raw : [raw])
+      .filter((value): value is string => typeof value === 'string')
+      .map(value => value.trim())
+      .filter(Boolean)
+    return [attribute, values]
+  }))
 }
 
 function highest<T extends string>(order: readonly T[], roles: T[]): T | null {
@@ -69,9 +88,8 @@ function unique(ids: (string | null)[]): string[] {
 // The user gets the highest org role and, per app, the highest app role
 // granted by any matching rule. Without an org role there is no org access,
 // so no app role or group either.
-export function resolveSsoAccess(mapping: SsoRoleMapping, attributeValues: string[]): SsoAccess {
-  const values = new Set(attributeValues)
-  const matching = mapping.rules.filter(rule => values.has(rule.value))
+export function resolveSsoAccess(mapping: SsoRoleMapping, valuesByAttribute: Record<string, string[]>): SsoAccess {
+  const matching = mapping.rules.filter(rule => valuesByAttribute[rule.attribute]?.includes(rule.value))
   const orgRole = highest(SSO_MAPPABLE_ORG_ROLES, matching.flatMap(rule => rule.org_role ?? [])) ?? mapping.default_role
   const managedAppIds = unique(mapping.rules.flatMap(rule => rule.apps.map(app => app.app_id)))
   const managedGroupIds = unique(mapping.rules.map(rule => rule.group_id))

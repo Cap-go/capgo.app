@@ -8,7 +8,7 @@ import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { getPgClient, withPgTransaction } from '../../utils/pg.ts'
 import { supabaseAdmin } from '../../utils/supabase.ts'
 import { version } from '../../utils/version.ts'
-import { parseStoredRoleMapping, readRoleSourceValues, resolveSsoAccess } from './role-mapping.ts'
+import { mappedAttributes, parseStoredRoleMapping, readAttributeValues, resolveSsoAccess } from './role-mapping.ts'
 
 // Transactions go through withPgTransaction (one checked-out connection);
 // plain reads may use the pool directly.
@@ -143,7 +143,7 @@ function resolveMappedAccess(provider: { role_mapping?: unknown }, authorizedSso
   if (!mapping)
     return null
   const identity = identities.find(candidate => authorizedSsoProviders.includes(candidate?.provider))
-  return resolveSsoAccess(mapping, readRoleSourceValues(identity?.identity_data))
+  return resolveSsoAccess(mapping, readAttributeValues(identity?.identity_data, mappedAttributes(mapping)))
 }
 
 async function transferSsoIdentities(pgClient: PgExecutor, originalUserId: string, duplicateUserId: string, trustedProviders: string[]): Promise<number> {

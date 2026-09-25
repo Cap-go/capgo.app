@@ -3,8 +3,12 @@
 -- behavior (new members get org_member, existing roles are left untouched).
 -- Shape (validated by /private/sso/providers, the only writer):
 --   {
---     "attribute": "<SAML attribute name>",
---     "rules": [{ "value": "<attribute value>", "role": "<org role>" | null, "group_id": "<uuid>" | null }],
+--     "rules": [{
+--       "attribute": "<SAML attribute name>", "value": "<attribute value>",
+--       "org_role": "<org role>" | null,
+--       "apps": [{ "app_id": "<apps.id>", "role": "<app role>" }],
+--       "group_id": "<uuid>" | null
+--     }],
 --     "default_role": "<org role>" | null   -- null = no access when nothing matches
 --   }
 ALTER TABLE "public"."sso_providers"

@@ -193,12 +193,13 @@ async function callManagementAPI(
 
 // Multi-valued SAML attributes must be captured as arrays, otherwise Supabase
 // Auth keeps only the first value.
-const ARRAY_ATTRIBUTE_KEYS = new Set(['groups', 'capgo_role_source'])
+const ARRAY_ATTRIBUTE_KEYS = new Set(['groups'])
+const isArrayAttributeKey = (key: string) => ARRAY_ATTRIBUTE_KEYS.has(key) || key.startsWith('capgo_attr_')
 
 function toManagementAttributeMapping(mapping: Record<string, string>): { keys: Record<string, { name: string, array?: boolean }> } {
   const keys: Record<string, { name: string, array?: boolean }> = {}
   for (const [key, name] of Object.entries(mapping)) {
-    keys[key] = ARRAY_ATTRIBUTE_KEYS.has(key) ? { name, array: true } : { name }
+    keys[key] = isArrayAttributeKey(key) ? { name, array: true } : { name }
   }
   return { keys }
 }

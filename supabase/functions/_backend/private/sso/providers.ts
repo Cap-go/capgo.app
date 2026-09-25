@@ -15,7 +15,7 @@ import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
 import { version } from '../../utils/version.ts'
 import { PUBLIC_EMAIL_DOMAINS } from './prelink-shared.ts'
 import type { SsoRoleMapping } from './role-mapping.ts'
-import { parseStoredRoleMapping, roleMappingSchema, SSO_ROLE_SOURCE_CLAIM } from './role-mapping.ts'
+import { mappedAttributes, parseStoredRoleMapping, roleMappingSchema, ssoAttributeClaimKey } from './role-mapping.ts'
 
 // Metadata XML documents are a few KB; cap well above that to reject abuse.
 const MAX_METADATA_XML_LENGTH = 512 * 1024
@@ -428,13 +428,13 @@ app.patch('/:id', async (c) => {
     managementUpdates.domains = becomesActive ? [provider.domain] : []
   if (body.metadata_url !== undefined)
     managementUpdates.metadata_url = body.metadata_url
-  // Supabase Auth replaces the whole mapping: the attribute mapping plus the
-  // claim capturing the IdP attribute used for role mapping.
+  // Supabase Auth replaces the whole mapping: the attribute mapping plus one
+  // claim per IdP attribute used by the role mapping.
   const nextAttributeMapping = (updates.attribute_mapping ?? provider.attribute_mapping ?? {}) as Record<string, string>
   const nextRoleMapping = (body.role_mapping !== undefined ? body.role_mapping : parseStoredRoleMapping(provider.role_mapping)) as SsoRoleMapping | null
   const fullAttributeMapping: Record<string, string> = {
     ...nextAttributeMapping,
-    ...(nextRoleMapping ? { [SSO_ROLE_SOURCE_CLAIM]: nextRoleMapping.attribute } : {}),
+    ...Object.fromEntries((nextRoleMapping ? mappedAttributes(nextRoleMapping) : []).map(attribute => [ssoAttributeClaimKey(attribute), attribute])),
   }
   if (body.attribute_mapping !== undefined || body.role_mapping !== undefined)
     managementUpdates.attribute_mapping = fullAttributeMapping

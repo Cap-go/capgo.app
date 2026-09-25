@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { ssoAttributeClaimKey } from '../supabase/functions/_backend/private/sso/role-mapping.ts'
 import { fetchTestRequest, getAuthHeaders, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, SUPABASE_ANON_KEY, SUPABASE_BASE_URL, USER_ADMIN_EMAIL, USER_EMAIL, USER_EMAIL_NONMEMBER, USER_ID, USER_PASSWORD, USER_PASSWORD_NONMEMBER } from './test-utils.ts'
 
 const SSO_TEST_ORG_ID = randomUUID()
@@ -2186,9 +2187,9 @@ describe('sSO role mapping', () => {
       `update auth.identities
        set provider = $1,
            provider_id = $2,
-           identity_data = jsonb_build_object('sub', $2::text, 'email', $3::text, 'custom_claims', jsonb_build_object('capgo_role_source', $4::jsonb))
+           identity_data = jsonb_build_object('sub', $2::text, 'email', $3::text, 'custom_claims', jsonb_build_object($6::text, $4::jsonb))
        where user_id = $5`,
-      [identityProvider, `nameid-${userId}`, email, JSON.stringify(values), userId],
+      [identityProvider, `nameid-${userId}`, email, JSON.stringify(values), userId, ssoAttributeClaimKey('groups')],
     )
     const orgRole = async () => (await pool.query<{ name: string }>(
       `select r.name from public.role_bindings rb join public.roles r on r.id = rb.role_id
@@ -2264,15 +2265,14 @@ describe('sSO role mapping', () => {
         headers: authHeaders,
         body: JSON.stringify({ role_mapping: roleMapping }),
       })
-      const foreignGroupResponse = await patchMapping({ attribute: 'groups', rules: [{ value: 'x', org_role: 'org_admin', group_id: randomUUID() }], default_role: null })
+      const foreignGroupResponse = await patchMapping({ rules: [{ attribute: 'groups', value: 'x', org_role: 'org_admin', group_id: randomUUID() }], default_role: null })
       expect(foreignGroupResponse.status).toBe(400)
-      const foreignAppResponse = await patchMapping({ attribute: 'groups', rules: [{ value: 'x', apps: [{ app_id: randomUUID(), role: 'app_admin' }] }], default_role: null })
+      const foreignAppResponse = await patchMapping({ rules: [{ attribute: 'groups', value: 'x', apps: [{ app_id: randomUUID(), role: 'app_admin' }] }], default_role: null })
       expect(foreignAppResponse.status).toBe(400)
       const mappingResponse = await patchMapping({
-        attribute: 'groups',
         rules: [
-          { value: 'capgo-admins', org_role: 'org_admin', group_id: groupId },
-          { value: 'capgo-devs', org_role: 'org_member', apps: [{ app_id: appUuid, role: 'app_developer' }] },
+          { attribute: 'groups', value: 'capgo-admins', org_role: 'org_admin', group_id: groupId },
+          { attribute: 'groups', value: 'capgo-devs', org_role: 'org_member', apps: [{ app_id: appUuid, role: 'app_developer' }] },
         ],
         default_role: null,
       })

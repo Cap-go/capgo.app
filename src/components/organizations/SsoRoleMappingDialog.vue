@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconPlus from '~icons/heroicons/plus'
@@ -13,8 +13,8 @@ type OrgRole = 'org_member' | 'org_billing_admin' | 'org_admin' | 'org_super_adm
 type AppRole = 'app_reader' | 'app_uploader' | 'app_developer' | 'app_admin'
 
 export interface SsoRoleMapping {
-  attribute: string
   rules: Array<{
+    attribute: string
     value: string
     org_role: OrgRole | null
     apps: Array<{ app_id: string, role: AppRole }>
@@ -42,7 +42,6 @@ const supabase = useSupabase()
 const dialogStore = useDialogV2Store()
 
 const providerId = ref('')
-const attribute = ref('')
 const rules = ref<SsoRoleMapping['rules']>([])
 // '' = no access; a string so it can bind to a <select>.
 const defaultRole = ref<OrgRole | ''>('org_member')
@@ -64,8 +63,13 @@ async function loadTargets() {
   groups.value = groupsResult.data ?? []
 }
 
+// Suggested in every rule's attribute field: the ones already used plus the
+// usual names.
+const attributeSuggestions = computed(() => [...new Set([...rules.value.map(rule => rule.attribute.trim()).filter(Boolean), 'groups', 'role'])])
+
 function addRule() {
-  rules.value.push({ value: '', org_role: 'org_member', apps: [], group_id: null })
+  const attribute = rules.value.at(-1)?.attribute ?? 'groups'
+  rules.value.push({ attribute, value: '', org_role: 'org_member', apps: [], group_id: null })
 }
 
 function addApp(rule: SsoRoleMapping['rules'][number]) {
@@ -96,15 +100,13 @@ async function save(roleMapping: SsoRoleMapping | null): Promise<boolean> {
 
 function currentMapping(): SsoRoleMapping {
   return {
-    attribute: attribute.value.trim(),
-    rules: rules.value.map(rule => ({ ...rule, value: rule.value.trim(), apps: rule.apps.map(app => ({ ...app })) })),
+    rules: rules.value.map(rule => ({ ...rule, attribute: rule.attribute.trim(), value: rule.value.trim(), apps: rule.apps.map(app => ({ ...app })) })),
     default_role: defaultRole.value || null,
   }
 }
 
 function open(provider: { id: string, domain: string, role_mapping: SsoRoleMapping | null }) {
   providerId.value = provider.id
-  attribute.value = provider.role_mapping?.attribute ?? 'groups'
   // Plain copies: Vue reactive proxies cannot be structured-cloned.
   rules.value = (provider.role_mapping?.rules ?? []).map(rule => ({ ...rule, apps: rule.apps.map(app => ({ ...app })) }))
   defaultRole.value = provider.role_mapping ? (provider.role_mapping.default_role ?? '') : 'org_member'
@@ -135,20 +137,16 @@ defineExpose({ open })
 <template>
   <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.id === DIALOG_ID" defer to="#dialog-v2-content">
     <div class="space-y-6">
-      <div class="form-control">
-        <label for="sso-role-attribute" class="label">
-          <span class="label-text font-medium">{{ t('sso-role-mapping-attribute') }}</span>
-        </label>
-        <input id="sso-role-attribute" v-model="attribute" type="text" :placeholder="t('sso-role-mapping-attribute-placeholder')" :class="inputClass">
-        <p class="mt-1.5 text-xs leading-5 text-slate-500 dark:text-slate-400">
-          {{ t('sso-role-mapping-attribute-help') }}
-        </p>
-      </div>
-
       <fieldset class="space-y-3">
         <legend class="text-sm font-medium text-slate-700 dark:text-slate-200">
           {{ t('sso-role-mapping-rules') }}
         </legend>
+        <p class="text-xs leading-5 text-slate-500 dark:text-slate-400">
+          {{ t('sso-role-mapping-attribute-help') }}
+        </p>
+        <datalist id="sso-role-attribute-suggestions">
+          <option v-for="suggestion in attributeSuggestions" :key="suggestion" :value="suggestion" />
+        </datalist>
 
         <div
           v-for="(rule, ruleIndex) in rules"
@@ -156,6 +154,19 @@ defineExpose({ open })
           class="space-y-4 rounded-md border border-slate-200 bg-slate-50/80 p-4 dark:border-slate-700 dark:bg-slate-900/60"
         >
           <div class="flex items-end gap-3">
+            <div class="form-control w-2/5">
+              <label :for="`sso-rule-attribute-${ruleIndex}`" class="label">
+                <span class="label-text text-xs uppercase text-slate-500 dark:text-slate-400">{{ t('sso-role-mapping-attribute') }}</span>
+              </label>
+              <input
+                :id="`sso-rule-attribute-${ruleIndex}`"
+                v-model="rule.attribute"
+                type="text"
+                list="sso-role-attribute-suggestions"
+                :placeholder="t('sso-role-mapping-attribute-placeholder')"
+                :class="inputClass"
+              >
+            </div>
             <div class="form-control flex-1">
               <label :for="`sso-rule-value-${ruleIndex}`" class="label">
                 <span class="label-text text-xs uppercase text-slate-500 dark:text-slate-400">{{ t('sso-role-mapping-value') }}</span>
