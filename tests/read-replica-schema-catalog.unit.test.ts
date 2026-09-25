@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { REPLICA_TYPES, readReplicaSchemaCatalog, replicaConfigPattern } from '../read_replicate/schema_catalog.ts'
+import { REPLICA_TABLES, REPLICA_TYPES, readReplicaSchemaCatalog, replicaConfigPattern } from '../read_replicate/schema_catalog.ts'
 
 describe('read-replica schema catalog', () => {
+  it('keeps primary-only onboarding refresh state out of Cloud SQL replication', () => {
+    expect(REPLICA_TABLES).not.toContain('app_onboarding')
+  })
+
   it('does not export the removed legacy RBAC enum', () => {
     expect(REPLICA_TYPES).not.toContain('user_min_right')
     expect(replicaConfigPattern(REPLICA_TYPES)).not.toContain('user_min_right')
