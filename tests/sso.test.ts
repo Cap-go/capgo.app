@@ -2297,6 +2297,31 @@ describe('sSO role mapping', () => {
       expect(await appRole()).toEqual(['app_developer'])
       expect(await inGroup()).toBe(false)
 
+      // Removing the app from the mapping revokes the SSO-granted binding right
+      // away, since the app is no longer re-evaluated on login. The provider is
+      // detached from Supabase Auth while saving (no Management API locally).
+      await pool.query('update public.sso_providers set provider_id = null where id = $1', [providerId])
+      const withoutApp = await patchMapping({
+        rules: [
+          { attribute: 'groups', value: 'capgo-admins', org_role: 'org_admin', group_id: groupId },
+          { attribute: 'groups', value: 'capgo-devs', org_role: 'org_member' },
+        ],
+        default_role: null,
+      })
+      expect(withoutApp.status).toBe(200)
+      expect(await appRole()).toEqual([])
+
+      await patchMapping({
+        rules: [
+          { attribute: 'groups', value: 'capgo-admins', org_role: 'org_admin', group_id: groupId },
+          { attribute: 'groups', value: 'capgo-devs', org_role: 'org_member', apps: [{ app_id: appUuid, role: 'app_developer' }] },
+        ],
+        default_role: null,
+      })
+      await pool.query('update public.sso_providers set provider_id = $1 where id = $2', [externalProviderId, providerId])
+      expect((await provision()).status).toBe(200)
+      expect(await appRole()).toEqual(['app_developer'])
+
       await setClaims(['capgo-admins'])
       expect((await provision()).status).toBe(200)
       expect(await appRole()).toEqual([])
@@ -2317,6 +2342,65 @@ describe('sSO role mapping', () => {
         getSupabaseClient().from('apps').delete().eq('id', appUuid),
         getSupabaseClient().from('orgs').delete().eq('id', managedOrgId),
         getSupabaseClient().from('stripe_info').delete().eq('customer_id', managedCustomerId),
+        pool.end(),
+      ])
+    }
+  })
+})
+
+describe('sSO role mapping rank guard', () => {
+  it('rejects a mapping granting a role above the caller\'s own', async () => {
+    const providerId = randomUUID()
+    const email = `mapping-org-admin-${randomUUID()}@capgo.app`
+    const password = 'testtest'
+    const pool = new Pool({ connectionString: POSTGRES_URL })
+    const { data: created, error: createError } = await getSupabaseClient().auth.admin.createUser({ email, password, email_confirm: true })
+    if (createError || !created.user) {
+      await pool.end()
+      throw createError ?? new Error('Failed to create org admin for rank guard test')
+    }
+    const adminId = created.user.id
+
+    try {
+      await getSupabaseClient().from('users').upsert({ id: adminId, email })
+      const { error: memberError } = await getSupabaseClient().from('org_users').insert({ org_id: SSO_TEST_ORG_ID, user_id: adminId, rbac_role_name: 'org_admin' as const })
+      if (memberError)
+        throw memberError
+      await pool.query(
+        `insert into public.role_bindings (principal_type, principal_id, role_id, scope_type, org_id, granted_by)
+         select public.rbac_principal_user(), $1, r.id, public.rbac_scope_org(), $2, $3 from public.roles r where r.name = 'org_admin'`,
+        [adminId, SSO_TEST_ORG_ID, USER_ID],
+      )
+      const { error: providerError } = await (getSupabaseClient().from as any)('sso_providers').insert({
+        id: providerId,
+        org_id: SSO_TEST_ORG_ID,
+        domain: `${randomUUID()}.sso.test`,
+        status: 'active',
+        enforce_sso: false,
+        dns_verification_token: `dns-${randomUUID()}`,
+      })
+      if (providerError)
+        throw providerError
+
+      const orgAdminHeaders = await getAuthHeadersForCredentials(email, password)
+      const patchMapping = (roleMapping: unknown) => fetchTestRequest(getEndpointUrl(`/private/sso/providers/${providerId}`), {
+        method: 'PATCH',
+        headers: orgAdminHeaders,
+        body: JSON.stringify({ role_mapping: roleMapping }),
+      })
+
+      const escalation = await patchMapping({ rules: [], default_role: 'org_super_admin' })
+      expect(escalation.status).toBe(403)
+      expect((await escalation.json() as { error: string }).error).toBe('role_mapping_exceeds_caller_role')
+
+      expect((await patchMapping({ rules: [], default_role: 'org_admin' })).status).toBe(200)
+    }
+    finally {
+      await Promise.allSettled([
+        (getSupabaseClient().from as any)('sso_providers').delete().eq('id', providerId),
+        getSupabaseClient().from('role_bindings').delete().eq('principal_id', adminId),
+        getSupabaseClient().from('org_users').delete().eq('user_id', adminId),
+        getSupabaseClient().auth.admin.deleteUser(adminId),
         pool.end(),
       ])
     }
