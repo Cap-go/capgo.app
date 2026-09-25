@@ -117,10 +117,9 @@ describe('tus upload protocol tests', () => {
       const response = await fetch(getEndpointUrl('/files/config'))
       expect(response.status).toBe(200)
 
-      const config = await response.json() as { TUSUpload: boolean, maxUploadLength: number, useNewFinalizeBundleUpload: boolean }
+      const config = await response.json() as { TUSUpload: boolean, maxUploadLength: number }
       expect(config.TUSUpload).toBe(true)
       expect(config.maxUploadLength).toBeGreaterThan(0)
-      expect(config.useNewFinalizeBundleUpload).toBe(false)
     })
   })
 

@@ -5,7 +5,6 @@ import { useCors } from '../utils/hono.ts'
 import { ALERT_UPLOAD_SIZE_BYTES, MAX_CHUNK_SIZE_BYTES, MAX_UPLOAD_LENGTH_BYTES } from './util.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
-const USE_NEW_FINALIZE_BUNDLE_UPLOAD = false
 
 app.use('/', useCors)
 
@@ -20,7 +19,6 @@ app.get('/', (c) => {
       alertUploadSize: ALERT_UPLOAD_SIZE_BYTES,
       TUSUpload: true,
       TUSUploadForced: false,
-      useNewFinalizeBundleUpload: USE_NEW_FINALIZE_BUNDLE_UPLOAD,
     })
   }
   // force partial and tus for 20% of the requests
@@ -37,6 +35,5 @@ app.get('/', (c) => {
     alertUploadSize: ALERT_UPLOAD_SIZE_BYTES,
     TUSUpload: true,
     TUSUploadForced: true, // TODO: remove this when fix the issue with normal upload
-    useNewFinalizeBundleUpload: USE_NEW_FINALIZE_BUNDLE_UPLOAD,
   })
 })

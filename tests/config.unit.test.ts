@@ -21,5 +21,6 @@ describe('get /private/config', () => {
     expect(body.minCliVersionReason).toBe(MIN_CLI_VERSION_REASON)
     expect(String(body.minCliVersionReason).length).toBeGreaterThan(0)
     expect(body.supbaseId).toBe('testproject')
+    expect(body.useNewFinalizeBundleUpload).toBe(false)
   })
 })

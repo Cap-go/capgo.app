@@ -1419,7 +1419,6 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     log.info(`  - TUS upload forced: ${fileConfig.TUSUploadForced ? 'yes' : 'no'}`)
     log.info(`  - Partial upload: ${fileConfig.partialUpload ? 'enabled' : 'disabled'}`)
     log.info(`  - Max chunk size: ${Math.floor(fileConfig.maxChunkSize / 1024 / 1024)} MB`)
-    log.info(`  - Finalize upload endpoint: ${fileConfig.useNewFinalizeBundleUpload ? 'enabled' : 'disabled'}`)
   }
 
   const { appid, path } = await getAppIdAndPath(preAppid, options, extConfig.config, interactive)
@@ -2005,19 +2004,16 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     if (options.verbose)
       log.info(`[Verbose] Updating version record with storage provider...`)
 
-    if (fileConfig.useNewFinalizeBundleUpload) {
-      await finalizeUploadedBundle({
-        apikey,
-        appId: appid,
-        bundle,
-        supaHost: options.supaHost,
-        supaAnon: options.supaAnon,
-        reporter: getUploadReporter(),
-      })
-    }
-    else {
+    await finalizeUploadedBundle({
+      apikey,
+      appId: appid,
+      bundle,
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
+      reporter: getUploadReporter(),
+    }, async () => {
       await persistVersionData(supabase, versionData, 'update')
-    }
+    })
 
     if (options.verbose)
       log.info(`[Verbose] Version record updated successfully`)

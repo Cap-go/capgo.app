@@ -13,13 +13,14 @@ interface FinalizeBundleOptions {
 
 interface FinalizeInvokeOptions {
   apikey: string
-  body: { app_id: string, name: string }
+  method?: string
+  body?: { app_id: string, name: string }
   supaHost?: string
   supaAnon?: string
 }
 
 interface FinalizeBundleDependencies {
-  invoke: (path: string, options: FinalizeInvokeOptions) => Promise<{ error: Error | null }>
+  invoke: (path: string, options: FinalizeInvokeOptions) => Promise<{ data: unknown, error: Error | null }>
   formatError: (error: unknown) => Promise<string>
 }
 
@@ -30,8 +31,20 @@ const defaultDependencies: FinalizeBundleDependencies = {
 
 export async function finalizeUploadedBundle(
   options: FinalizeBundleOptions,
+  legacyFinalize: () => Promise<void>,
   dependencies: FinalizeBundleDependencies = defaultDependencies,
 ): Promise<void> {
+  const { data: config, error: configError } = await dependencies.invoke('private/config', {
+    apikey: options.apikey,
+    method: 'GET',
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
+  if (configError || !(config as { useNewFinalizeBundleUpload?: boolean } | null)?.useNewFinalizeBundleUpload) {
+    await legacyFinalize()
+    return
+  }
+
   const spinner = options.reporter.spinner()
   spinner.start('Finalizing bundle upload...')
 
