@@ -711,10 +711,17 @@ watch([requiresAppOnlyScope, appOnlyScope], ([required, appOnly]) => {
 }, { immediate: true })
 
 const appRoleOptions = computed(() =>
-  appRoles.value
-    .filter(r => !requiresAppOnlyScope.value || !APP_ROLES_RESERVED_TO_ROLE_MANAGERS.has(r.name))
-    .map(r => ({ id: r.id, name: r.name, description: getRoleDisplayName(r.name) })),
+  appRoles.value.map(r => ({ id: r.id, name: r.name, description: getRoleDisplayName(r.name) })),
 )
+
+// Per app: roles reserved to role managers are only offered for apps of orgs
+// where the caller manages roles, not for apps they only administer.
+function appRoleOptionsFor(appId: string) {
+  const app = availableApps.value.find(candidate => candidate.id === appId)
+  if (!app || manageableOrgIds.value.has(app.owner_org))
+    return appRoleOptions.value
+  return appRoleOptions.value.filter(role => !APP_ROLES_RESERVED_TO_ROLE_MANAGERS.has(role.name))
+}
 
 const rolesWithInheritedAppAccess = new Set(['org_admin', 'org_super_admin'])
 const rolesWithOrgCreateAccess = new Set(['org_admin', 'org_super_admin'])
@@ -2131,7 +2138,7 @@ getKeys()
                       {{ t('select-role') }}
                     </option>
                     <option
-                      v-for="role in appRoleOptions"
+                      v-for="role in appRoleOptionsFor(appId)"
                       :key="role.id"
                       :value="role.name"
                     >
