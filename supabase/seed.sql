@@ -1243,6 +1243,7 @@ BEGIN
       (public.rbac_perm_org_invite_user(), public.rbac_scope_org(), 'Invite or add members to org'),
       (public.rbac_perm_org_update_user_roles(), public.rbac_scope_org(), 'Change org/member roles'),
       (public.rbac_perm_org_manage_apikeys(), public.rbac_scope_org(), 'Manage API keys for the org without assigning user roles'),
+      (public.rbac_perm_app_manage_apikeys(), public.rbac_scope_app(), 'Create, update and delete API keys limited to this app'),
       (public.rbac_perm_org_read_billing(), public.rbac_scope_org(), 'Read org billing settings'),
       (public.rbac_perm_org_update_billing(), public.rbac_scope_org(), 'Update org billing settings'),
       (public.rbac_perm_org_read_invoices(), public.rbac_scope_org(), 'Read invoices'),
@@ -1285,7 +1286,7 @@ BEGIN
       public.rbac_perm_app_read(), public.rbac_perm_app_update_settings(), public.rbac_perm_app_delete(), public.rbac_perm_app_read_bundles(), public.rbac_perm_app_upload_bundle(),
       public.rbac_perm_app_create_channel(), public.rbac_perm_app_read_channels(), public.rbac_perm_app_read_logs(), public.rbac_perm_app_manage_devices(), public.rbac_perm_app_read_devices(),
       'app.manage_notifications',
-      public.rbac_perm_app_build_native(), public.rbac_perm_app_read_audit(), public.rbac_perm_app_update_user_roles(), public.rbac_perm_app_transfer(), public.rbac_perm_bundle_delete(),
+      public.rbac_perm_app_build_native(), public.rbac_perm_app_read_audit(), public.rbac_perm_app_update_user_roles(), public.rbac_perm_app_manage_apikeys(), public.rbac_perm_app_transfer(), public.rbac_perm_bundle_delete(),
       public.rbac_perm_channel_read(), public.rbac_perm_channel_update_settings(), public.rbac_perm_channel_delete(), public.rbac_perm_channel_read_history(),
       public.rbac_perm_channel_promote_bundle(), public.rbac_perm_channel_rollback_bundle(), public.rbac_perm_channel_manage_forced_devices(), public.rbac_perm_channel_read_forced_devices(), public.rbac_perm_channel_read_audit()
     )
@@ -1301,7 +1302,7 @@ BEGIN
       public.rbac_perm_app_read(), public.rbac_perm_app_update_settings(), public.rbac_perm_app_read_bundles(), public.rbac_perm_app_upload_bundle(),
       public.rbac_perm_app_create_channel(), public.rbac_perm_app_read_channels(), public.rbac_perm_app_read_logs(), public.rbac_perm_app_manage_devices(), public.rbac_perm_app_read_devices(),
       'app.manage_notifications',
-      public.rbac_perm_app_build_native(), public.rbac_perm_app_read_audit(), public.rbac_perm_app_update_user_roles(),
+      public.rbac_perm_app_build_native(), public.rbac_perm_app_read_audit(), public.rbac_perm_app_update_user_roles(), public.rbac_perm_app_manage_apikeys(),
       public.rbac_perm_channel_read(), public.rbac_perm_channel_update_settings(), public.rbac_perm_channel_read_history(),
       public.rbac_perm_channel_promote_bundle(), public.rbac_perm_channel_rollback_bundle(), public.rbac_perm_channel_manage_forced_devices(), public.rbac_perm_channel_read_forced_devices(), public.rbac_perm_channel_read_audit()
     )
@@ -1365,7 +1366,7 @@ BEGIN
       public.rbac_perm_app_read(), public.rbac_perm_app_update_settings(), public.rbac_perm_app_read_bundles(), public.rbac_perm_app_upload_bundle(),
       public.rbac_perm_app_create_channel(), public.rbac_perm_app_read_channels(), public.rbac_perm_app_read_logs(), public.rbac_perm_app_manage_devices(),
       'app.manage_notifications',
-      public.rbac_perm_app_read_devices(), public.rbac_perm_app_build_native(), public.rbac_perm_app_read_audit(), public.rbac_perm_app_update_user_roles(), public.rbac_perm_bundle_delete(),
+      public.rbac_perm_app_read_devices(), public.rbac_perm_app_build_native(), public.rbac_perm_app_read_audit(), public.rbac_perm_app_update_user_roles(), public.rbac_perm_app_manage_apikeys(), public.rbac_perm_bundle_delete(),
       public.rbac_perm_channel_read(), public.rbac_perm_channel_update_settings(), public.rbac_perm_channel_delete(), public.rbac_perm_channel_read_history(),
       public.rbac_perm_channel_promote_bundle(), public.rbac_perm_channel_rollback_bundle(), public.rbac_perm_channel_manage_forced_devices(), public.rbac_perm_channel_read_forced_devices(), public.rbac_perm_channel_read_audit()
     )
