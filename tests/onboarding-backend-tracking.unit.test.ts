@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { sendOnboardingEvent } from '../src/services/onboardingTracking'
+import { APP_ONBOARDING_READY_EVENT, sendOnboardingEvent } from '../src/services/onboardingTracking'
 import { createOnboardingProgressTracker } from '../src/utils/onboardingProgressAnalytics'
 
 const {
@@ -128,6 +128,26 @@ describe('onboarding backend tracking', () => {
       org_id: 'org-id',
       tags: { app_id: 'com.example.app' },
       timestamp: 1_755_600_000_000,
+      tracking_version: 2,
+    }))
+  })
+
+  it('sends onboarding-ready with verified org and app routing fields', () => {
+    sendOnboardingEvent(APP_ONBOARDING_READY_EVENT, {
+      app_id: 'com.example.pending',
+      org_id: 'org-id',
+    })
+
+    expect(sendEventMock).toHaveBeenCalledOnce()
+    expect(sendEventMock).toHaveBeenCalledWith(expect.objectContaining({
+      channel: 'onboarding',
+      event: APP_ONBOARDING_READY_EVENT,
+      nonPersonTags: expect.objectContaining({
+        app_id: 'com.example.pending',
+        org_id: 'org-id',
+      }),
+      org_id: 'org-id',
+      tags: { app_id: 'com.example.pending' },
       tracking_version: 2,
     }))
   })

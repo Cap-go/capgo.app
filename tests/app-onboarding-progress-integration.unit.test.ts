@@ -561,6 +561,25 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain(`sendOnboardingEvent('onboarding_intent_selected', {`)
   })
 
+  it.concurrent('emits the pending app ready event from the rendered final setup screen before CLI interaction', () => {
+    const emitter = sourceBetween('function emitPendingAppOnboardingReady()', 'let progressTracker:')
+    expect(emitter).toContain(`app.need_onboarding !== true`)
+    expect(emitter).toContain('showBuilderChecklist.value')
+    expect(emitter).toContain('showSetupChecklist.value')
+    expect(emitter).toContain(`setupStage.value === 'cli'`)
+    expect(emitter).toContain('|| !isFinalSetupScreen')
+    expect(emitter).toContain('sendOnboardingEvent(APP_ONBOARDING_READY_EVENT, {')
+    expect(emitter).toContain('app_id: app.app_id')
+    expect(emitter).toContain('org_id: orgId')
+    expect(emitter).toContain(`[flowStep, createdApp, () => currentOrg.value?.gid, setupStage, showBuilderChecklist, showSetupChecklist]`)
+    expect(emitter).toContain(`{ flush: 'post' }`)
+    expectSourceOrder(onboardingSource, [
+      'function emitPendingAppOnboardingReady()',
+      'function copyCliCommand()',
+      'function copyBuilderCliCommand(',
+    ])
+  })
+
   it.concurrent('keeps Maker+ invitations inside the organization progress step before setup', () => {
     expect(onboardingSource).toContain(`createAppRecord({ nextStep: shouldInvite ? 'organization' : 'setup' })`)
     expect(onboardingSource).toContain(`trackOrganizationEvent('onboarding_organization_invite_viewed')`)
