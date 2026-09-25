@@ -184,7 +184,7 @@ export function shouldStampTransferInvoiceFooter(
   return buildTransferInvoiceFooter(invoice.footer) !== null
 }
 
-function invoiceCreatedOrUpdated(event: Stripe.InvoiceCreatedEvent | Stripe.InvoiceUpdatedEvent, data: StripeData['data']) {
+function invoiceCreatedOrUpdated(event: Stripe.InvoiceCreatedEvent | Stripe.InvoiceUpdatedEvent | { data: { object: Stripe.Invoice } }, data: StripeData['data']) {
   const invoice = event.data.object
   data.status = 'updated'
   data.customer_id = getStripeCustomerId(invoice.customer)
@@ -296,7 +296,7 @@ export function extractDataEvent(c: Context, event: Stripe.Event): StripeData {
   else if (event.type === 'invoice.upcoming') {
     data = invoiceUpcoming(event, data)
   }
-  else if (event.type === 'invoice.created' || event.type === 'invoice.updated') {
+  else if (event.type === 'invoice.created' || event.type === 'invoice.updated' || event.type === 'invoice.finalized') {
     data = invoiceCreatedOrUpdated(event, data)
   }
   else if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
@@ -330,6 +330,26 @@ export function extractDataEvent(c: Context, event: Stripe.Event): StripeData {
     const invoice = event.data.object as Stripe.Invoice
     applyInvoiceLineFields(invoice, data)
     data.status = 'failed'
+  }
+  else if (event.type === 'invoice.marked_uncollectible') {
+    const invoice = event.data.object as Stripe.Invoice
+    applyInvoiceLineFields(invoice, data)
+    data.status = 'canceled'
+  }
+  else if (event.type === 'charge.pending') {
+    const charge = event.data.object
+    data.status = 'updated'
+    data.customer_id = getStripeCustomerId(charge.customer)
+  }
+  else if (event.type === 'setup_intent.succeeded') {
+    const setupIntent = event.data.object as Stripe.SetupIntent
+    data.customer_id = getStripeCustomerId(setupIntent.customer)
+    data.status = 'updated'
+  }
+  else if (event.type === 'payment_method.attached') {
+    const paymentMethod = event.data.object as Stripe.PaymentMethod
+    data.customer_id = getStripeCustomerId(paymentMethod.customer)
+    data.status = 'updated'
   }
   else if (event.type === 'customer.updated' || event.type === 'customer.created') {
     const customer = event.data.object as Stripe.Customer
