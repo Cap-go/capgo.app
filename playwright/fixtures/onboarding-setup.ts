@@ -54,6 +54,10 @@ const events: string[] = []
 const channelEvents: Array<{ event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties }> = []
 const preview = { state, events, channelEvents, appId: ref(previewAppId), command: ref('npx @capgo/cli@latest i [API_KEY]'), hiding: ref(false), selectedOrgId: ref('') }
 const previewUserOnboarding = {
+  abtests: {
+    ...(params.get('channelTreatment') === '1' ? { new_channel: { assigned_at: '2026-09-25T00:00:00.000Z', branch: 'A' } } : {}),
+    ...(params.get('todoListTreatment') === '1' ? { ota_todo_list_v3: { assigned_at: '2026-09-25T00:00:00.000Z', branch: 'A' } } : {}),
+  },
   intent: assignment ? 'builder' : 'ota',
   status: 'in_progress',
   step: 'setup',

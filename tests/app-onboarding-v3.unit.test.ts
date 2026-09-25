@@ -248,7 +248,7 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain('website: websitePreview.value?.website')
     expect(onboardingSource).toContain('selectedStop.planName !== \'Solo\'')
     expect(onboardingSource).toContain('<OrganizationOnboardingInvite')
-    expect(onboardingSource).toContain('completeAndViewStep(\'channel\', { appId: createdApp.value.app_id })')
+    expect(onboardingSource).toContain('completeAndViewStep(nextStepAfterChannelEligibility(), { appId: createdApp.value.app_id })')
   })
 
   it.concurrent('keeps the organization website tooltip clear of the panel and viewport edges', () => {
@@ -302,7 +302,7 @@ describe('pre-organization onboarding v3', () => {
     const organizationCreation = sliceBetween(onboardingSource, 'async function createOrganizationAndApp()', 'async function createAppRecord(')
     expect(organizationCreation).toContain('preOrgCreatedOrganizationId.value = data.id')
     expect(organizationCreation).toContain('await completePreOrgAppCreation(data.id, shouldInvite)')
-    expect(organizationCreation).toContain('await createAppRecord({ nextStep: shouldInvite ? \'organization\' : \'channel\' })')
+    expect(organizationCreation).toContain('await createAppRecord({ nextStep: shouldInvite ? \'organization\' : nextStepAfterChannelEligibility() })')
 
     const appCreation = sliceBetween(onboardingSource, 'async function createAppRecord(', 'async function seedDemoData()')
     expect(appCreation).toContain('returnToAppIdAfterConflict()')
