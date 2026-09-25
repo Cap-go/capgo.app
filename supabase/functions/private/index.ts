@@ -14,6 +14,7 @@ import { app as devices_priv } from '../_backend/private/devices.ts'
 import { app as download_link } from '../_backend/private/download_link.ts'
 import { app as emailPreferences } from '../_backend/private/email_preferences.ts'
 import { app as events } from '../_backend/private/events.ts'
+import { app as finalize_bundle_upload } from '../_backend/private/finalize_bundle_upload.ts'
 import { app as groups } from '../_backend/private/groups.ts'
 import { app as invite_existing_user_to_org } from '../_backend/private/invite_existing_user_to_org.ts'
 import { app as invite_new_user_to_org } from '../_backend/private/invite_new_user_to_org.ts'
@@ -87,6 +88,7 @@ appGlobal.route('/set_org_email', set_org_email)
 appGlobal.route('/latency', latency)
 appGlobal.route('/replay', replay)
 appGlobal.route('/events', events)
+appGlobal.route('/finalize_bundle_upload', finalize_bundle_upload)
 appGlobal.route('/groups', groups)
 appGlobal.route('/role_bindings', role_bindings)
 appGlobal.route('/roles', roles)
