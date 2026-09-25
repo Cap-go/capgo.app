@@ -395,6 +395,30 @@ export function getPgClient(c: Context, readOnly = false) {
   return pool
 }
 
+// Transactions must run on one checked-out connection: BEGIN/COMMIT issued on
+// the Pool itself can land on different connections and leave one idle in
+// transaction, holding row locks until the server kills it.
+export async function withPgTransaction<T>(pgPool: ReturnType<typeof getPgClient>, run: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await pgPool.connect()
+  try {
+    await client.query('BEGIN')
+    try {
+      await client.query('SET LOCAL statement_timeout = 10000')
+      await client.query('SET LOCAL idle_in_transaction_session_timeout = 15000')
+      const result = await run(client)
+      await client.query('COMMIT')
+      return result
+    }
+    catch (error) {
+      await client.query('ROLLBACK').catch(() => {})
+      throw error
+    }
+  }
+  finally {
+    client.release()
+  }
+}
+
 export function getDrizzleClient(db: ReturnType<typeof getPgClient> | PoolClient, options?: { logger?: boolean }) {
   // Keep SQL logging on by default for API/trigger diagnostics.
   // Plugin hot paths pass `{ logger: false }` to avoid per-request log CPU/volume.

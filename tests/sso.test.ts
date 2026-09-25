@@ -1,8 +1,9 @@
-import { randomUUID } from 'node:crypto'
 import type { Database } from '../src/types/supabase.types'
+import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { ssoAttributeClaimKey } from '../supabase/functions/_backend/private/sso/role-mapping.ts'
 import { fetchTestRequest, getAuthHeaders, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, SUPABASE_ANON_KEY, SUPABASE_BASE_URL, USER_ADMIN_EMAIL, USER_EMAIL, USER_EMAIL_NONMEMBER, USER_ID, USER_PASSWORD, USER_PASSWORD_NONMEMBER } from './test-utils.ts'
 
 const SSO_TEST_ORG_ID = randomUUID()
@@ -17,7 +18,7 @@ beforeAll(async () => {
   const { error: stripeError } = await getSupabaseClient().from('stripe_info').insert({
     customer_id: SSO_TEST_CUSTOMER_ID,
     status: 'succeeded',
-    product_id: 'prod_LQIregjtNduh4q',
+    product_id: ENTERPRISE_PRODUCT_ID,
     subscription_id: `sub_sso_${randomUUID()}`,
     trial_at: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString(),
     is_good_plan: true,
@@ -1242,7 +1243,8 @@ describe('[POST] /private/sso/provision-user', () => {
       const { error: inviteMembershipError } = await getSupabaseClient().from('org_users').insert({
         org_id: managedOrgId,
         user_id: createdUser.user.id,
-        rbac_role_name: 'org_member' as const, is_invite: true,
+        rbac_role_name: 'org_member' as const,
+        is_invite: true,
       })
       if (inviteMembershipError)
         throw inviteMembershipError
@@ -2156,6 +2158,271 @@ describe('[POST] /private/sso/provision-user', () => {
   })
 })
 
+describe('sSO role mapping', () => {
+  it('re-evaluates role and groups from the SAML attribute on every login, down to no access', async () => {
+    const managedOrgId = randomUUID()
+    const managedCustomerId = `cus_sso_role_mapping_${randomUUID()}`
+    const providerId = randomUUID()
+    const externalProviderId = randomUUID()
+    const groupId = randomUUID()
+    const appUuid = randomUUID()
+    const domain = `${randomUUID()}.sso.test`
+    const email = `role-mapping-${randomUUID()}@${domain}`
+    const password = 'testtest'
+    const identityProvider = `sso:${externalProviderId}`
+    const pool = new Pool({ connectionString: POSTGRES_URL })
+
+    const { data: createdUser, error: createUserError } = await getSupabaseClient().auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+    })
+    if (createUserError || !createdUser.user) {
+      await pool.end()
+      throw createUserError ?? new Error('Failed to create SSO auth user for role mapping test')
+    }
+    const userId = createdUser.user.id
+
+    const setClaims = (values: string[]) => pool.query(
+      `update auth.identities
+       set provider = $1,
+           provider_id = $2,
+           identity_data = jsonb_build_object('sub', $2::text, 'email', $3::text, 'custom_claims', jsonb_build_object($6::text, $4::jsonb))
+       where user_id = $5`,
+      [identityProvider, `nameid-${userId}`, email, JSON.stringify(values), userId, ssoAttributeClaimKey('groups')],
+    )
+    const orgRole = async () => (await pool.query<{ name: string }>(
+      `select r.name from public.role_bindings rb join public.roles r on r.id = rb.role_id
+       where rb.principal_id = $1 and rb.org_id = $2 and rb.scope_type = public.rbac_scope_org()`,
+      [userId, managedOrgId],
+    )).rows.map(row => row.name)
+    const appRole = async () => (await pool.query<{ name: string }>(
+      `select r.name from public.role_bindings rb join public.roles r on r.id = rb.role_id
+       where rb.principal_id = $1 and rb.app_id = $2 and rb.scope_type = public.rbac_scope_app()`,
+      [userId, appUuid],
+    )).rows.map(row => row.name)
+    const inGroup = async () => ((await pool.query('select 1 from public.group_members where group_id = $1 and user_id = $2', [groupId, userId])).rowCount ?? 0) > 0
+
+    try {
+      const ssoAuthHeaders = await getAuthHeadersForCredentials(email, password)
+      const provision = () => fetchTestRequest(getEndpointUrl('/private/sso/provision-user'), {
+        method: 'POST',
+        headers: ssoAuthHeaders,
+        body: JSON.stringify({}),
+      })
+
+      const { error: stripeError } = await getSupabaseClient().from('stripe_info').insert({
+        customer_id: managedCustomerId,
+        status: 'succeeded',
+        product_id: ENTERPRISE_PRODUCT_ID,
+        subscription_id: `sub_sso_role_mapping_${randomUUID()}`,
+        trial_at: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString(),
+        is_good_plan: true,
+      })
+      if (stripeError)
+        throw stripeError
+      const { error: orgError } = await getSupabaseClient().from('orgs').insert({
+        id: managedOrgId,
+        name: `SSO Role Mapping Org ${managedOrgId}`,
+        management_email: `sso-role-mapping-${managedOrgId}@capgo.app`,
+        created_by: USER_ID,
+        customer_id: managedCustomerId,
+      })
+      if (orgError)
+        throw orgError
+      const { error: orgUserError } = await getSupabaseClient().from('org_users').insert({
+        org_id: managedOrgId,
+        user_id: USER_ID,
+        rbac_role_name: 'org_super_admin' as const,
+      })
+      if (orgUserError)
+        throw orgUserError
+      await pool.query('insert into public.groups (id, org_id, name) values ($1, $2, $3)', [groupId, managedOrgId, 'SSO admins'])
+      const { error: appError } = await getSupabaseClient().from('apps').insert({
+        id: appUuid,
+        owner_org: managedOrgId,
+        name: 'SSO role mapping app',
+        app_id: `com.test.sso.rolemapping.${randomUUID().slice(0, 8)}`,
+        icon_url: 'https://example.com/icon.png',
+      })
+      if (appError)
+        throw appError
+      const { error: providerError } = await (getSupabaseClient().from as any)('sso_providers').insert({
+        id: providerId,
+        org_id: managedOrgId,
+        domain,
+        status: 'active',
+        enforce_sso: false,
+        dns_verification_token: `dns-${randomUUID()}`,
+      })
+      if (providerError)
+        throw providerError
+
+      // Configure the mapping through the API (no Supabase Auth provider bound,
+      // so no Management API call).
+      const patchMapping = (roleMapping: unknown) => fetchTestRequest(getEndpointUrl(`/private/sso/providers/${providerId}`), {
+        method: 'PATCH',
+        headers: authHeaders,
+        body: JSON.stringify({ role_mapping: roleMapping }),
+      })
+      const foreignGroupResponse = await patchMapping({ rules: [{ attribute: 'groups', value: 'x', org_role: 'org_admin', group_id: randomUUID() }], default_role: null })
+      expect(foreignGroupResponse.status).toBe(400)
+      const foreignAppResponse = await patchMapping({ rules: [{ attribute: 'groups', value: 'x', apps: [{ app_id: randomUUID(), role: 'app_admin' }] }], default_role: null })
+      expect(foreignAppResponse.status).toBe(400)
+      const mappingResponse = await patchMapping({
+        rules: [
+          { attribute: 'groups', value: 'capgo-admins', org_role: 'org_admin', group_id: groupId },
+          { attribute: 'groups', value: 'capgo-devs', org_role: 'org_member', apps: [{ app_id: appUuid, role: 'app_developer' }] },
+        ],
+        default_role: null,
+      })
+      expect(mappingResponse.status).toBe(200)
+
+      // Bind the provider only now: the PATCH above must not call Supabase Auth.
+      await pool.query('update public.sso_providers set provider_id = $1 where id = $2', [externalProviderId, providerId])
+      const { error: providerMetadataError } = await getSupabaseClient().auth.admin.updateUserById(userId, {
+        app_metadata: { provider: identityProvider },
+      })
+      if (providerMetadataError)
+        throw providerMetadataError
+
+      await setClaims(['capgo-admins'])
+      expect((await provision()).status).toBe(200)
+      expect(await orgRole()).toEqual(['org_admin'])
+      expect(await inGroup()).toBe(true)
+
+      await setClaims(['capgo-devs'])
+      expect((await provision()).status).toBe(200)
+      expect(await orgRole()).toEqual(['org_member'])
+      expect(await appRole()).toEqual(['app_developer'])
+      expect(await inGroup()).toBe(false)
+
+      // Removing the app from the mapping revokes the SSO-granted binding right
+      // away, since the app is no longer re-evaluated on login. The provider is
+      // detached from Supabase Auth while saving (no Management API locally).
+      await pool.query('update public.sso_providers set provider_id = null where id = $1', [providerId])
+      const withoutApp = await patchMapping({
+        rules: [
+          { attribute: 'groups', value: 'capgo-admins', org_role: 'org_admin', group_id: groupId },
+          { attribute: 'groups', value: 'capgo-devs', org_role: 'org_member' },
+        ],
+        default_role: null,
+      })
+      expect(withoutApp.status).toBe(200)
+      expect(await appRole()).toEqual([])
+
+      await patchMapping({
+        rules: [
+          { attribute: 'groups', value: 'capgo-admins', org_role: 'org_admin', group_id: groupId },
+          { attribute: 'groups', value: 'capgo-devs', org_role: 'org_member', apps: [{ app_id: appUuid, role: 'app_developer' }] },
+        ],
+        default_role: null,
+      })
+      await pool.query('update public.sso_providers set provider_id = $1 where id = $2', [externalProviderId, providerId])
+      expect((await provision()).status).toBe(200)
+      expect(await appRole()).toEqual(['app_developer'])
+
+      await setClaims(['capgo-admins'])
+      expect((await provision()).status).toBe(200)
+      expect(await appRole()).toEqual([])
+
+      // A group the mapping does not manage must not keep access alive either.
+      const unmappedGroupId = randomUUID()
+      await pool.query('insert into public.groups (id, org_id, name) values ($1, $2, $3)', [unmappedGroupId, managedOrgId, 'Unmapped'])
+      await pool.query('insert into public.group_members (group_id, user_id, added_by) values ($1, $2, $3)', [unmappedGroupId, userId, USER_ID])
+
+      await setClaims(['someone-else'])
+      const denied = await provision()
+      expect(denied.status).toBe(403)
+      expect((await denied.json() as { error: string }).error).toBe('sso_no_access')
+      expect(await orgRole()).toEqual([])
+      expect(await appRole()).toEqual([])
+      const unmappedMembership = await pool.query('select 1 from public.group_members where group_id = $1 and user_id = $2', [unmappedGroupId, userId])
+      expect(unmappedMembership.rowCount).toBe(0)
+      const membership = await pool.query('select 1 from public.org_users where org_id = $1 and user_id = $2', [managedOrgId, userId])
+      expect(membership.rowCount).toBe(0)
+    }
+    finally {
+      await Promise.allSettled([
+        getSupabaseClient().auth.admin.deleteUser(userId),
+        (getSupabaseClient().from as any)('sso_providers').delete().eq('id', providerId),
+        getSupabaseClient().from('apps').delete().eq('id', appUuid),
+        getSupabaseClient().from('orgs').delete().eq('id', managedOrgId),
+        getSupabaseClient().from('stripe_info').delete().eq('customer_id', managedCustomerId),
+        pool.end(),
+      ])
+    }
+  })
+})
+
+describe('sSO role mapping rank guard', () => {
+  it('only lets org super admins change the role mapping', async () => {
+    const providerId = randomUUID()
+    const email = `mapping-org-admin-${randomUUID()}@capgo.app`
+    const password = 'testtest'
+    const pool = new Pool({ connectionString: POSTGRES_URL })
+    const { data: created, error: createError } = await getSupabaseClient().auth.admin.createUser({ email, password, email_confirm: true })
+    if (createError || !created.user) {
+      await pool.end()
+      throw createError ?? new Error('Failed to create org admin for rank guard test')
+    }
+    const adminId = created.user.id
+
+    try {
+      await getSupabaseClient().from('users').upsert({ id: adminId, email })
+      const { error: memberError } = await getSupabaseClient().from('org_users').insert({ org_id: SSO_TEST_ORG_ID, user_id: adminId, rbac_role_name: 'org_admin' as const })
+      if (memberError)
+        throw memberError
+      await pool.query(
+        `insert into public.role_bindings (principal_type, principal_id, role_id, scope_type, org_id, granted_by)
+         select public.rbac_principal_user(), $1, r.id, public.rbac_scope_org(), $2, $3 from public.roles r where r.name = 'org_admin'`,
+        [adminId, SSO_TEST_ORG_ID, USER_ID],
+      )
+      const { error: providerError } = await (getSupabaseClient().from as any)('sso_providers').insert({
+        id: providerId,
+        org_id: SSO_TEST_ORG_ID,
+        domain: `${randomUUID()}.sso.test`,
+        status: 'active',
+        enforce_sso: false,
+        dns_verification_token: `dns-${randomUUID()}`,
+      })
+      if (providerError)
+        throw providerError
+
+      const orgAdminHeaders = await getAuthHeadersForCredentials(email, password)
+      const patchMapping = (roleMapping: unknown) => fetchTestRequest(getEndpointUrl(`/private/sso/providers/${providerId}`), {
+        method: 'PATCH',
+        headers: orgAdminHeaders,
+        body: JSON.stringify({ role_mapping: roleMapping }),
+      })
+
+      // An org_admin can neither grant a higher role nor demote super admins
+      // through a mapping, whatever it contains.
+      for (const roleMapping of [{ rules: [], default_role: 'org_super_admin' }, { rules: [], default_role: 'org_member' }, null]) {
+        const response = await patchMapping(roleMapping)
+        expect(response.status).toBe(403)
+        expect((await response.json() as { error: string }).error).toBe('role_mapping_requires_super_admin')
+      }
+
+      const asSuperAdmin = await fetchTestRequest(getEndpointUrl(`/private/sso/providers/${providerId}`), {
+        method: 'PATCH',
+        headers: authHeaders,
+        body: JSON.stringify({ role_mapping: { rules: [], default_role: 'org_member' } }),
+      })
+      expect(asSuperAdmin.status).toBe(200)
+    }
+    finally {
+      await Promise.allSettled([
+        (getSupabaseClient().from as any)('sso_providers').delete().eq('id', providerId),
+        getSupabaseClient().from('role_bindings').delete().eq('principal_id', adminId),
+        getSupabaseClient().from('org_users').delete().eq('user_id', adminId),
+        getSupabaseClient().auth.admin.deleteUser(adminId),
+        pool.end(),
+      ])
+    }
+  })
+})
+
 describe('[GET] /private/sso/providers/:orgId', () => {
   it('should return empty array for org with no SSO providers', async () => {
     const response = await fetchTestRequest(getEndpointUrl(`/private/sso/providers/${SSO_TEST_ORG_ID}`), {
@@ -2263,8 +2530,166 @@ describe('[PATCH] /private/sso/providers/:id', () => {
   })
 })
 
-describe('sso_providers PostgREST provider_id guards', () => {
-  // Regression coverage for service-role-only provider_id binding.
+describe('[POST] /private/sso/providers validation', () => {
+  it.concurrent.each([
+    [{ domain: 'not a domain', metadata_url: 'https://idp.example.com/metadata' }, 'invalid_domain'],
+    [{ domain: 'gmail.com', metadata_url: 'https://idp.example.com/metadata' }, 'public_email_domain'],
+    [{ domain: 'example.com' }, 'invalid_body'],
+    [{ domain: 'example.com', metadata_url: 'https://idp.example.com/metadata', metadata_xml: '<EntityDescriptor/>' }, 'invalid_body'],
+  ])('rejects %o with %s', async (payload, expectedError) => {
+    const response = await fetchTestRequest(getEndpointUrl('/private/sso/providers'), {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({ org_id: SSO_TEST_ORG_ID, ...payload }),
+    })
+
+    expect(response.status).toBe(400)
+    const body = await response.json() as { error: string }
+    expect(body.error).toBe(expectedError)
+  })
+})
+
+describe('[POST] /private/sso/providers creation', () => {
+  it('only stores a pending provider: nothing is registered in Supabase Auth before activation', async () => {
+    const domain = `${randomUUID()}.sso.test`
+    const response = await fetchTestRequest(getEndpointUrl('/private/sso/providers'), {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({ org_id: SSO_TEST_ORG_ID, domain, metadata_xml: '<EntityDescriptor/>' }),
+    })
+    const body = await response.json() as { id: string, status: string, provider_id: string | null, metadata_xml: string | null, dns_verification_token: string }
+    try {
+      expect(response.status).toBe(200)
+      expect(body).toMatchObject({ status: 'pending_verification', provider_id: null, metadata_xml: '<EntityDescriptor/>' })
+      expect(body.dns_verification_token).toBeTruthy()
+
+      const duplicate = await fetchTestRequest(getEndpointUrl('/private/sso/providers'), {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ org_id: SSO_TEST_ORG_ID, domain, metadata_url: 'https://idp.example.com/metadata' }),
+      })
+      expect(duplicate.status).toBe(409)
+    }
+    finally {
+      await (getSupabaseClient().from as any)('sso_providers').delete().eq('domain', domain)
+    }
+  })
+})
+
+describe('/private/sso/providers lifecycle without Supabase Auth provider', () => {
+  async function insertProvider(overrides: Record<string, unknown>) {
+    const id = randomUUID()
+    const domain = (overrides.domain as string | undefined) ?? `${randomUUID()}.sso.test`
+    const { error } = await (getSupabaseClient().from as any)('sso_providers').insert({
+      id,
+      org_id: SSO_TEST_ORG_ID,
+      domain,
+      status: 'pending_verification',
+      enforce_sso: false,
+      dns_verification_token: `dns-${randomUUID()}`,
+      ...overrides,
+    })
+    if (error)
+      throw error
+    return { id, domain }
+  }
+
+  it('keeps the DNS token only for pending providers in the list', async () => {
+    const pending = await insertProvider({})
+    const active = await insertProvider({ status: 'active', dns_verified_at: new Date().toISOString() })
+    try {
+      const response = await fetchTestRequest(getEndpointUrl(`/private/sso/providers/${SSO_TEST_ORG_ID}`), {
+        method: 'GET',
+        headers: authHeaders,
+      })
+      expect(response.status).toBe(200)
+      const providers = await response.json() as Array<{ id: string, dns_verification_token?: string }>
+      expect(providers.find(p => p.id === pending.id)?.dns_verification_token).toMatch(/^dns-/)
+      expect(providers.find(p => p.id === active.id)).not.toHaveProperty('dns_verification_token')
+    }
+    finally {
+      await (getSupabaseClient().from as any)('sso_providers').delete().in('id', [pending.id, active.id])
+    }
+  })
+
+  it('only allows verified -> active -> disabled -> active transitions', async () => {
+    const provider = await insertProvider({ metadata_url: 'https://idp.example.com/metadata' })
+    const patch = (body: Record<string, unknown>) => fetchTestRequest(getEndpointUrl(`/private/sso/providers/${provider.id}`), {
+      method: 'PATCH',
+      headers: authHeaders,
+      body: JSON.stringify(body),
+    })
+    const currentStatus = async () => ((await (getSupabaseClient().from as any)('sso_providers').select('status').eq('id', provider.id).single()).data as { status: string }).status
+    try {
+      expect((await patch({ status: 'active' })).status).toBe(400)
+
+      await (getSupabaseClient().from as any)('sso_providers')
+        .update({ status: 'verified', dns_verified_at: new Date().toISOString() })
+        .eq('id', provider.id)
+
+      // Activation creates the SAML provider in Supabase Auth. The Management
+      // API is not reachable locally: the failure must leave the row verified.
+      const activate = await patch({ status: 'active' })
+      expect(activate.status).toBeGreaterThanOrEqual(500)
+      expect(await currentStatus()).toBe('verified')
+
+      // Without a Supabase Auth provider bound, disabling is database-only.
+      await (getSupabaseClient().from as any)('sso_providers').update({ status: 'active' }).eq('id', provider.id)
+      expect((await patch({ enforce_sso: true })).status).toBe(200)
+      const disable = await patch({ status: 'disabled' })
+      expect(disable.status).toBe(200)
+      const disabled = await disable.json() as { status: string, enforce_sso: boolean }
+      expect(disabled).toMatchObject({ status: 'disabled', enforce_sso: false })
+    }
+    finally {
+      await (getSupabaseClient().from as any)('sso_providers').delete().eq('id', provider.id)
+    }
+  })
+
+  it('deletes the row and gives password login back when the provider was enforced', async () => {
+    // Password signups are blocked once a domain has an active provider, so
+    // create the user first.
+    const domain = `${randomUUID()}.sso.test`
+    const email = `delete-user-${randomUUID()}@${domain}`
+    const pool = new Pool({ connectionString: POSTGRES_URL })
+    const { data: createdUser, error: createUserError } = await getSupabaseClient().auth.admin.createUser({
+      email,
+      password: 'testtest',
+      email_confirm: true,
+    })
+    if (createUserError || !createdUser.user) {
+      await pool.end()
+      throw createUserError ?? new Error('Failed to create auth user for provider delete test')
+    }
+    const provider = await insertProvider({ domain, status: 'active', enforce_sso: true, dns_verified_at: new Date().toISOString() })
+
+    try {
+      await pool.query('update auth.users set is_sso_user = true where id = $1', [createdUser.user.id])
+
+      const response = await fetchTestRequest(getEndpointUrl(`/private/sso/providers/${provider.id}`), {
+        method: 'DELETE',
+        headers: authHeaders,
+      })
+      expect(response.status).toBe(200)
+
+      const remaining = await pool.query('select 1 from public.sso_providers where id = $1', [provider.id])
+      expect(remaining.rowCount).toBe(0)
+
+      const user = await pool.query<{ is_sso_user: boolean }>('select is_sso_user from auth.users where id = $1', [createdUser.user.id])
+      expect(user.rows[0]?.is_sso_user).toBe(false)
+    }
+    finally {
+      await Promise.allSettled([
+        (getSupabaseClient().from as any)('sso_providers').delete().eq('id', provider.id),
+        getSupabaseClient().auth.admin.deleteUser(createdUser.user.id),
+        pool.end(),
+      ])
+    }
+  })
+})
+
+describe('sso_providers PostgREST write guards', () => {
+  // All writes go through /private/sso/*; PostgREST clients are read-only.
   async function getOrgAdminSupabaseClient() {
     if (!SUPABASE_BASE_URL || !SUPABASE_ANON_KEY)
       throw new Error('SUPABASE_URL or SUPABASE_ANON_KEY is missing for SSO provider_id guard tests')
@@ -2306,7 +2731,7 @@ describe('sso_providers PostgREST provider_id guards', () => {
     expect(error?.message).toContain('SSO_PROVIDER_PROVIDER_ID_CLIENT_WRITE_DENIED')
   })
 
-  it('allows org-admin insert without provider_id', async () => {
+  it('rejects org-admin insert without provider_id (domain squatting)', async () => {
     const client = await getOrgAdminSupabaseClient()
     const providerId = randomUUID()
     const domain = `${randomUUID()}.sso.test`
@@ -2320,9 +2745,8 @@ describe('sso_providers PostgREST provider_id guards', () => {
       dns_verification_token: `dns-${randomUUID()}`,
     })
 
-    expect(error).toBeNull()
-
-    await getSupabaseClient().from('sso_providers').delete().eq('id', providerId)
+    expect(error).not.toBeNull()
+    expect(error?.code).toBe('42501')
   })
 
   it('rejects org-admin update of provider_id', async () => {
@@ -2342,13 +2766,16 @@ describe('sso_providers PostgREST provider_id guards', () => {
 
     try {
       const client = await getOrgAdminSupabaseClient()
-      const { error } = await client.from('sso_providers')
+      const { data: updatedRows, error } = await client.from('sso_providers')
         .update({ provider_id: `prov_${randomUUID()}` })
         .eq('id', providerId)
+        .select('id')
 
-      expect(error).not.toBeNull()
-      expect(error?.code).toBe('42501')
-      expect(error?.message).toContain('SSO_PROVIDER_PROVIDER_ID_CLIENT_WRITE_DENIED')
+      expect(error).toBeNull()
+      expect(updatedRows).toEqual([])
+
+      const { data: provider } = await getSupabaseClient().from('sso_providers').select('provider_id').eq('id', providerId).single()
+      expect(provider?.provider_id).toBeNull()
     }
     finally {
       await getSupabaseClient().from('sso_providers').delete().eq('id', providerId)

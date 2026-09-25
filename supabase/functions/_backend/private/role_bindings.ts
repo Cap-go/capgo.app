@@ -492,7 +492,7 @@ async function loadAssignableRoleForBinding(
   return { ok: true, data: role }
 }
 
-async function getCallerMaxPriorityRank(
+export async function getCallerMaxPriorityRank(
   drizzle: ReturnType<typeof getDrizzleClient>,
   authType: 'apikey' | 'jwt',
   principalId: string,
