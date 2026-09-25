@@ -14,6 +14,7 @@ import {
 } from '../utils/build_timeout.ts'
 import { emitBuildTransitionEvent } from '../utils/build_tracking.ts'
 import { isoFromBuilderTimestamp } from '../utils/builder_capacity.ts'
+import { persistBuilderBuildOutcome } from '../utils/builder_onboarding_checklist.ts'
 import { BRES, middlewareAPISecret } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { recordBuildTime, supabaseAdmin } from '../utils/supabase.ts'
@@ -94,7 +95,7 @@ app.post('/', middlewareAPISecret, async (c) => {
 
   const orphanResults = await Promise.allSettled(
     orphanBuilds.map(async (build) => {
-      const { error: updateError } = await supabase
+      const { data: updatedRows, error: updateError } = await supabase
         .from('build_requests')
         .update({
           status: BUILD_TIMEOUT_STATUS,
@@ -102,18 +103,27 @@ app.post('/', middlewareAPISecret, async (c) => {
           updated_at: new Date().toISOString(),
         })
         .eq('id', build.id)
+        .eq('status', build.status)
+        .select('id')
 
       if (updateError)
         throw new Error(updateError.message)
+      if (!updatedRows?.length)
+        return false
+      if (build.platform === 'ios' || build.platform === 'android')
+        await persistBuilderBuildOutcome(c, { appId: build.app_id, platform: build.platform, status: BUILD_TIMEOUT_STATUS })
+      return true
     }),
   )
 
   for (let i = 0; i < orphanResults.length; i++) {
-    if (orphanResults[i].status === 'fulfilled') {
-      orphaned++
+    const result = orphanResults[i]
+    if (result.status === 'fulfilled') {
+      if (result.value)
+        orphaned++
     }
     else {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to mark orphan build as failed', buildId: orphanBuilds[i].id, error: (orphanResults[i] as PromiseRejectedResult).reason })
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to mark orphan build as failed', buildId: orphanBuilds[i].id, error: result.reason })
       errors++
     }
   }
@@ -238,6 +248,9 @@ app.post('/', middlewareAPISecret, async (c) => {
         throw new Error(updateError.message)
 
       const transitionApplied = !!updatedRows && updatedRows.length > 0
+
+      if (transitionApplied && (build.platform === 'ios' || build.platform === 'android'))
+        await persistBuilderBuildOutcome(c, { appId: build.app_id, platform: build.platform, status: effectiveStatus })
 
       // recordBuildTime stays unconditional on terminal status: it's idempotent
       // at the DB layer, and skipping it on the CAS-lost branch would let

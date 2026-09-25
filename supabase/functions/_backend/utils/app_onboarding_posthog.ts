@@ -26,6 +26,18 @@ export async function emitCommittedAppOnboardingHistory(c: Context<MiddlewareKey
     await backgroundTask(c, Promise.all(events.map(event => trackPosthogEvent(c, event))))
 }
 
+export async function emitCommittedSystemAppOnboardingHistory(c: Context<MiddlewareKeyVariables>, committed: AppOnboardingMutationResult[]) {
+  const events = committed.flatMap(result => result.historyChanges.map(change => buildAppOnboardingStepPosthogEvent({
+    appId: result.appId,
+    orgId: result.orgId,
+    system: true,
+    setup: parseAppOnboarding(result.onboarding),
+    change,
+  })))
+  if (events.length)
+    await backgroundTask(c, Promise.all(events.map(event => trackPosthogEvent(c, event))))
+}
+
 export function buildAppOnboardingStepPosthogEvent(input: AppOnboardingStepPosthogInput & ({ auth: AuthInfo, system?: false } | { auth?: never, system: true })) {
   return {
     channel: 'app-onboarding',

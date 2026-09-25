@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { Database } from '../../utils/supabase.types.ts'
 import { HTTPException } from 'hono/http-exception'
 import { emitBuildTransitionEvent } from '../../utils/build_tracking.ts'
+import { persistBuilderBuildOutcome } from '../../utils/builder_onboarding_checklist.ts'
 import { simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { checkPermission } from '../../utils/rbac.ts'
@@ -112,7 +113,7 @@ async function markBuildAsFailed(
     })
     // Best-effort: still attempt the unguarded update so the user-facing status
     // is correct even when we can't capture pre-transition context.
-    await adminClient
+    const { data: updatedRows, error: updateError } = await adminClient
       .from('build_requests')
       .update({
         status: 'failed',
@@ -121,6 +122,18 @@ async function markBuildAsFailed(
       })
       .eq('builder_job_id', jobId)
       .eq('app_id', appId)
+      .select('platform')
+    if (updateError) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'Failed to update build_requests status to failed',
+        job_id: jobId,
+        error: updateError,
+      })
+    }
+    const platform = updatedRows?.[0]?.platform
+    if (!updateError && (platform === 'ios' || platform === 'android'))
+      await persistBuilderBuildOutcome(c, { appId, platform, status: 'failed' })
     return
   }
 
@@ -158,6 +171,8 @@ async function markBuildAsFailed(
       job_id: jobId,
       error_message: errorMessage,
     })
+    if (row.platform === 'ios' || row.platform === 'android')
+      await persistBuilderBuildOutcome(c, { appId, platform: row.platform, status: 'failed' })
     await emitBuildTransitionEvent(c, {
       previousStatus,
       effectiveStatus: 'failed',

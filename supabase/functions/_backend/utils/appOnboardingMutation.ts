@@ -27,6 +27,29 @@ interface AuthorizedOnboardingMutation {
   afterPersist?: (tx: WriteTransaction, result: AppOnboardingMutationResult) => Promise<unknown>
 }
 
+interface AppOnboardingMutation {
+  buildPatch: (input: { current: AppOnboardingState, currentValue: unknown, at: string }) => AppOnboardingPatch | null
+  afterPersist?: (tx: WriteTransaction, result: AppOnboardingMutationResult) => Promise<unknown>
+}
+
+async function persistLockedAppOnboardingMutation(
+  tx: WriteTransaction,
+  appId: string,
+  row: { onboarding: unknown, owner_org: string },
+  mutation: AppOnboardingMutation,
+): Promise<AppOnboardingMutationResult | null> {
+  const at = new Date().toISOString()
+  const patch = mutation.buildPatch({ current: parseAppOnboarding(row.onboarding), currentValue: row.onboarding, at })
+  if (!patch)
+    return null
+  const merged = applyAppOnboardingPatch(row.onboarding, patch, () => at)
+  const onboarding = appendAppOnboardingStepHistory(row.onboarding, merged, patch, () => at)
+  const result = { appId, orgId: row.owner_org, onboarding, historyChanges: getAppOnboardingStepHistoryChanges(row.onboarding, onboarding, patch) }
+  await tx.execute(sql`UPDATE public.apps SET onboarding = ${JSON.stringify(onboarding)}::jsonb, updated_at = now() WHERE app_id = ${appId}`)
+  await mutation.afterPersist?.(tx, result)
+  return result
+}
+
 // The caller must already hold the row lock for the supplied snapshot. Results
 // from this variant are committed only when the caller's outer transaction ends.
 export async function persistLockedAuthorizedOnboardingMutation(
@@ -50,16 +73,38 @@ export async function persistLockedAuthorizedOnboardingMutation(
   }
   if (!allowedSteps.size)
     return null
-  const at = new Date().toISOString()
-  const patch = mutation.buildPatch({ current: parseAppOnboarding(row.onboarding), currentValue: row.onboarding, allowedSteps, at })
-  if (!patch)
-    return null
-  const merged = applyAppOnboardingPatch(row.onboarding, patch, () => at)
-  const onboarding = appendAppOnboardingStepHistory(row.onboarding, merged, patch, () => at)
-  const result = { appId, orgId: row.owner_org, onboarding, historyChanges: getAppOnboardingStepHistoryChanges(row.onboarding, onboarding, patch) }
-  await tx.execute(sql`UPDATE public.apps SET onboarding = ${JSON.stringify(onboarding)}::jsonb, updated_at = now() WHERE app_id = ${appId}`)
-  await mutation.afterPersist?.(tx, result)
-  return result
+  return persistLockedAppOnboardingMutation(tx, appId, row, {
+    buildPatch: ({ current, currentValue, at }) => mutation.buildPatch({ current, currentValue, allowedSteps, at }),
+    afterPersist: mutation.afterPersist,
+  })
+}
+
+async function persistWithAppOnboardingLock<T>(
+  c: Context<MiddlewareKeyVariables>,
+  appId: string,
+  operation: (tx: WriteTransaction, row: { onboarding: unknown, owner_org: string }) => Promise<T>,
+  client?: Parameters<typeof getDrizzleClient>[0],
+): Promise<T | null> {
+  const pool = client ? null : getPgClient(c)
+  try {
+    return await retryAppOnboardingWrite(getDrizzleClient(client ?? pool!, { logger: false }), async (tx) => {
+      const row = await lockAppOnboardingForWrite(tx, appId)
+      return row ? operation(tx, row) : null
+    })
+  }
+  finally {
+    if (pool)
+      await closeClient(c, pool)
+  }
+}
+
+export async function persistAppOnboardingMutation(
+  c: Context<MiddlewareKeyVariables>,
+  appId: string,
+  mutation: AppOnboardingMutation,
+  client?: Parameters<typeof getDrizzleClient>[0],
+): Promise<AppOnboardingMutationResult | null> {
+  return persistWithAppOnboardingLock(c, appId, (tx, row) => persistLockedAppOnboardingMutation(tx, appId, row, mutation), client)
 }
 
 export async function persistAuthorizedOnboardingMutation(
@@ -68,15 +113,5 @@ export async function persistAuthorizedOnboardingMutation(
   mutation: AuthorizedOnboardingMutation,
   client?: Parameters<typeof getDrizzleClient>[0],
 ): Promise<AppOnboardingMutationResult | null> {
-  const pool = client ? null : getPgClient(c)
-  try {
-    return await retryAppOnboardingWrite(getDrizzleClient(client ?? pool!, { logger: false }), async (tx) => {
-      const row = await lockAppOnboardingForWrite(tx, appId)
-      return row ? persistLockedAuthorizedOnboardingMutation(c, tx, appId, row, mutation) : null
-    })
-  }
-  finally {
-    if (pool)
-      await closeClient(c, pool)
-  }
+  return persistWithAppOnboardingLock(c, appId, (tx, row) => persistLockedAuthorizedOnboardingMutation(c, tx, appId, row, mutation), client)
 }

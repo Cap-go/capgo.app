@@ -2,9 +2,9 @@ import type { Context } from 'hono'
 import type { AppOnboardingBuilderStepId, AppOnboardingBuilderStepState, AppOnboardingPatch } from './appOnboarding.ts'
 import type { MiddlewareKeyVariables } from './hono.ts'
 import type { TrackOptions } from './tracking.ts'
-import { emitCommittedAppOnboardingHistory } from './app_onboarding_posthog.ts'
-import { applyAppOnboardingPatch } from './appOnboarding.ts'
-import { persistAuthorizedOnboardingMutation } from './appOnboardingMutation.ts'
+import { emitCommittedAppOnboardingHistory, emitCommittedSystemAppOnboardingHistory } from './app_onboarding_posthog.ts'
+import { appendAppOnboardingStepHistory, applyAppOnboardingPatch } from './appOnboarding.ts'
+import { persistAppOnboardingMutation, persistAuthorizedOnboardingMutation } from './appOnboardingMutation.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
 
 type BuilderChecklistStatus = 'pending' | 'done' | 'skipped' | 'warning'
@@ -23,6 +23,18 @@ export type BuilderChecklistUpdate = {
   status: 'done'
   annotation?: never
   annotationType?: never
+} | {
+  platform: 'ios' | 'android'
+  step: 'successful_cloud_build'
+  status: 'done' | 'warning'
+  annotation?: string
+  annotationType?: BuilderChecklistAnnotationType
+}
+
+export interface BuilderBuildOutcome {
+  appId: string
+  platform: 'ios' | 'android'
+  status: string
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -146,6 +158,36 @@ export function applyBuilderChecklistUpdate(
   return patch ? applyAppOnboardingPatch(onboarding, patch, now) : null
 }
 
+export function getBuilderBuildOutcomeUpdate(platform: 'ios' | 'android', status: string): BuilderChecklistUpdate | null {
+  if (status === 'succeeded' || status === 'released')
+    return { platform, step: 'successful_cloud_build', status: 'done' }
+  if (status === 'failed')
+    return { platform, step: 'successful_cloud_build', status: 'warning', annotation: 'cloud_build_failed', annotationType: 'warning' }
+  return null
+}
+
+export function applyBuilderBuildOutcomeRepairs(
+  onboarding: unknown,
+  outcomes: Array<Pick<BuilderBuildOutcome, 'platform' | 'status'>>,
+  now = () => new Date().toISOString(),
+): Record<string, unknown> | null {
+  let current = onboarding
+  let changed = false
+  for (const outcome of outcomes) {
+    const update = getBuilderBuildOutcomeUpdate(outcome.platform, outcome.status)
+    if (!update)
+      continue
+    const at = now()
+    const patch = buildBuilderChecklistPatch(current, update, () => at)
+    if (!patch)
+      continue
+    const merged = applyAppOnboardingPatch(current, patch, () => at)
+    current = appendAppOnboardingStepHistory(current, merged, patch, () => at)
+    changed = true
+  }
+  return changed && isRecord(current) ? current : null
+}
+
 function buildBuilderChecklistPatch(
   onboarding: unknown,
   update: BuilderChecklistUpdate,
@@ -243,6 +285,40 @@ export async function markBuilderChecklistFromAnalytics(
       message: 'builder onboarding checklist analytics update failed',
       app_id: appId,
       step: update.step,
+      error: serializeError(error),
+    })
+    return false
+  }
+}
+
+export async function persistBuilderBuildOutcome(
+  c: Context<MiddlewareKeyVariables>,
+  { appId, platform, status }: BuilderBuildOutcome,
+): Promise<boolean> {
+  // Android persistence is intentionally deferred. The refresh repair still
+  // evaluates Android evidence independently so no cross-platform evidence leaks.
+  if (platform === 'android')
+    return false
+  const update = getBuilderBuildOutcomeUpdate(platform, status)
+  if (!update)
+    return false
+
+  try {
+    const result = await persistAppOnboardingMutation(c, appId, {
+      buildPatch: ({ currentValue, at }) => buildBuilderChecklistPatch(currentValue, update, () => at),
+    })
+    if (!result)
+      return false
+    await emitCommittedSystemAppOnboardingHistory(c, [result])
+    return true
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'builder onboarding checklist build outcome update failed',
+      app_id: appId,
+      platform,
+      status,
       error: serializeError(error),
     })
     return false
