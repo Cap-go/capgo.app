@@ -232,6 +232,10 @@ async function applyProviderUpdate(
   let lockedUpdatedAt: string | null = null
   try {
     return await withPgTransaction(pgPool, async (client) => {
+      // Up to two Management API calls (snapshot + update, 8s each) run while
+      // this transaction sits idle holding the row lock: stay above that worst
+      // case so the session is not killed mid-update.
+      await client.query('SET LOCAL idle_in_transaction_session_timeout = 30000')
       const locked = await client.query<{ unchanged: boolean, updated_at: string }>(
         'select updated_at = $2::timestamptz as unchanged, updated_at::text as updated_at from public.sso_providers where id = $1 for update',
         [id, expectedUpdatedAt],
