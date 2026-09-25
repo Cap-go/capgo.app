@@ -6,6 +6,7 @@ import { useCors } from '../utils/hono.ts'
 import { backgroundTask, existInEnv, getEnv, isStripeConfigured } from '../utils/utils.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
+const USE_NEW_FINALIZE_BUNDLE_UPLOAD = false
 
 app.use('/', useCors)
 
@@ -39,5 +40,6 @@ app.get('/', async (c) => {
     stripeEnabled: isStripeConfigured(c),
     minCliVersion: MIN_CLI_VERSION,
     minCliVersionReason: MIN_CLI_VERSION_REASON,
+    useNewFinalizeBundleUpload: USE_NEW_FINALIZE_BUNDLE_UPLOAD,
   })
 })

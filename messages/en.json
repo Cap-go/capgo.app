@@ -397,6 +397,7 @@
   "api-key-not-found": "API key not found",
   "api-key-policy": "API Key Policy",
   "api-key-policy-description": "Configure policies for API keys used with this organization.",
+  "api-key-bindings-locked": "You can rename this key or change its expiration. Changing which apps and roles it can access requires an organization admin.",
   "api-key-selected-apps-only": "Limit this key to selected apps",
   "api-key-selected-apps-only-app-access": "Choose one role for each app. Each app binding is limited to that app and its owning organization.",
   "api-key-selected-apps-only-description": "Each selected app is bound to its owning organization. This key can access only the selected apps and does not receive organization-wide permissions.",

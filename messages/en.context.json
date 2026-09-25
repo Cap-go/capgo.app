@@ -463,6 +463,7 @@
   "api-key-policy": "Used in Capgo web console areas: pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "api-key-policy-description": "Used in Capgo web console areas: pages/settings/organization. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "api-key-policy-updated": "Used in Capgo web console areas: pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "api-key-bindings-locked": "Used in Capgo web console areas: pages. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "api-key-selected-apps-only": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "api-key-selected-apps-only-app-access": "Used in Capgo web console areas: pages. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "api-key-selected-apps-only-description": "Used in Capgo web console areas: pages. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
