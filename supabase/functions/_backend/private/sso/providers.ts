@@ -118,28 +118,26 @@ async function requireMappingTargetsInOrg(c: Context<MiddlewareKeyVariables>, or
     throw simpleError('invalid_role_mapping', 'Role mapping references an app or group that does not belong to this organization')
 }
 
-// Saving a mapping must not let the caller hand out, through SSO logins,
-// a role they could not assign directly (same rule as role_bindings).
-async function requireMappingRolesWithinCallerRank(c: Context<MiddlewareKeyVariables>, orgId: string, mapping: SsoRoleMapping) {
+// A role mapping is authoritative for every SSO user of the domain: it can
+// grant any role (directly or through a group's bindings) and demote or
+// revoke anyone, super admins included. Only callers holding the org's
+// highest role may therefore change it, which keeps it within the same
+// anti-escalation rule as role_bindings (callers never assign above their
+// own rank).
+async function requireSuperAdminForRoleMapping(c: Context<MiddlewareKeyVariables>, orgId: string) {
   const auth = c.get('auth')!
-  const roleNames = [...new Set([
-    ...mapping.rules.flatMap(rule => [rule.org_role, ...rule.apps.map(app => app.role)]),
-    mapping.default_role,
-  ].filter(role => role !== null))]
-  if (roleNames.length === 0)
-    return
-
   const pgPool = getPgClient(c)
   try {
+    const drizzle = getDrizzleClient(pgPool)
     const callerRank = auth.authType === 'apikey'
-      ? await getCallerMaxPriorityRank(getDrizzleClient(pgPool), 'apikey', auth.apikey?.rbac_id ?? '', orgId)
-      : await getCallerMaxPriorityRank(getDrizzleClient(pgPool), 'jwt', auth.userId, orgId)
-    const { rows } = await pgPool.query<{ name: string }>(
-      'select name from public.roles where name = any($1::text[]) and priority_rank > $2',
-      [roleNames, callerRank],
+      ? await getCallerMaxPriorityRank(drizzle, 'apikey', auth.apikey?.rbac_id ?? '', orgId)
+      : await getCallerMaxPriorityRank(drizzle, 'jwt', auth.userId, orgId)
+    const { rows } = await pgPool.query<{ priority_rank: number }>(
+      'select priority_rank from public.roles where name = public.rbac_role_org_super_admin() and scope_type = public.rbac_scope_org()',
     )
-    if (rows.length > 0)
-      quickError(403, 'role_mapping_exceeds_caller_role', 'Role mapping cannot grant a role higher than your own', { roles: rows.map(row => row.name) })
+    const superAdminRank = rows[0]?.priority_rank
+    if (superAdminRank === undefined || callerRank < superAdminRank)
+      quickError(403, 'role_mapping_requires_super_admin', 'Only organization super admins can change the SSO role mapping')
   }
   finally {
     await closeClient(c, pgPool)
@@ -451,10 +449,9 @@ app.patch('/:id', async (c) => {
     updates.attribute_mapping = attributeMapping
   }
   if (body.role_mapping !== undefined) {
-    if (body.role_mapping) {
+    await requireSuperAdminForRoleMapping(c, provider.org_id)
+    if (body.role_mapping)
       await requireMappingTargetsInOrg(c, provider.org_id, body.role_mapping)
-      await requireMappingRolesWithinCallerRank(c, provider.org_id, body.role_mapping)
-    }
     updates.role_mapping = body.role_mapping
   }
   if (body.enforce_sso !== undefined) {

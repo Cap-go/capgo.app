@@ -2326,12 +2326,19 @@ describe('sSO role mapping', () => {
       expect((await provision()).status).toBe(200)
       expect(await appRole()).toEqual([])
 
+      // A group the mapping does not manage must not keep access alive either.
+      const unmappedGroupId = randomUUID()
+      await pool.query('insert into public.groups (id, org_id, name) values ($1, $2, $3)', [unmappedGroupId, managedOrgId, 'Unmapped'])
+      await pool.query('insert into public.group_members (group_id, user_id, added_by) values ($1, $2, $3)', [unmappedGroupId, userId, USER_ID])
+
       await setClaims(['someone-else'])
       const denied = await provision()
       expect(denied.status).toBe(403)
       expect((await denied.json() as { error: string }).error).toBe('sso_no_access')
       expect(await orgRole()).toEqual([])
       expect(await appRole()).toEqual([])
+      const unmappedMembership = await pool.query('select 1 from public.group_members where group_id = $1 and user_id = $2', [unmappedGroupId, userId])
+      expect(unmappedMembership.rowCount).toBe(0)
       const membership = await pool.query('select 1 from public.org_users where org_id = $1 and user_id = $2', [managedOrgId, userId])
       expect(membership.rowCount).toBe(0)
     }
@@ -2349,7 +2356,7 @@ describe('sSO role mapping', () => {
 })
 
 describe('sSO role mapping rank guard', () => {
-  it('rejects a mapping granting a role above the caller\'s own', async () => {
+  it('only lets org super admins change the role mapping', async () => {
     const providerId = randomUUID()
     const email = `mapping-org-admin-${randomUUID()}@capgo.app`
     const password = 'testtest'
@@ -2389,11 +2396,20 @@ describe('sSO role mapping rank guard', () => {
         body: JSON.stringify({ role_mapping: roleMapping }),
       })
 
-      const escalation = await patchMapping({ rules: [], default_role: 'org_super_admin' })
-      expect(escalation.status).toBe(403)
-      expect((await escalation.json() as { error: string }).error).toBe('role_mapping_exceeds_caller_role')
+      // An org_admin can neither grant a higher role nor demote super admins
+      // through a mapping, whatever it contains.
+      for (const roleMapping of [{ rules: [], default_role: 'org_super_admin' }, { rules: [], default_role: 'org_member' }, null]) {
+        const response = await patchMapping(roleMapping)
+        expect(response.status).toBe(403)
+        expect((await response.json() as { error: string }).error).toBe('role_mapping_requires_super_admin')
+      }
 
-      expect((await patchMapping({ rules: [], default_role: 'org_admin' })).status).toBe(200)
+      const asSuperAdmin = await fetchTestRequest(getEndpointUrl(`/private/sso/providers/${providerId}`), {
+        method: 'PATCH',
+        headers: authHeaders,
+        body: JSON.stringify({ role_mapping: { rules: [], default_role: 'org_member' } }),
+      })
+      expect(asSuperAdmin.status).toBe(200)
     }
     finally {
       await Promise.allSettled([

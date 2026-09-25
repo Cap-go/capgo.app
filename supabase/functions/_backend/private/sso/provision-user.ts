@@ -526,6 +526,10 @@ async function applyMappedAccessInTransaction(
   )
   const existing = membership.rows[0]
   const currentRole = await getOrgRoleName(client, orgId, userId)
+  // Two super admins demoted by concurrent logins could each still count the
+  // other: serialize on the same org-wide lock the last-super-admin triggers use.
+  if (currentRole === 'org_super_admin')
+    await client.query('select pg_advisory_xact_lock(hashtext($1))', [orgId])
   const isLastSuperAdmin = currentRole === 'org_super_admin' && await countOtherOrgSuperAdmins(client, orgId, userId) === 0
 
   if (access.orgRole === null) {
@@ -533,7 +537,12 @@ async function applyMappedAccessInTransaction(
       cloudlog({ requestId, message: 'SSO role mapping grants no access but user is the last super admin; keeping membership', userId, orgId })
       return { alreadyMember: true, noAccess: true }
     }
-    await client.query('delete from public.group_members where user_id = $1 and group_id = any($2::uuid[])', [userId, access.managedGroupIds])
+    // Every group of the org, not only mapped ones: group bindings grant
+    // permissions without an org_users row.
+    await client.query(
+      'delete from public.group_members gm using public.groups g where g.id = gm.group_id and g.org_id = $2 and gm.user_id = $1',
+      [userId, orgId],
+    )
     await client.query(
       `
         delete from public.role_bindings
@@ -645,9 +654,9 @@ async function mergeSsoIdentityWithExistingAccount(
     authorizedSsoProviders: string[]
     access: SsoAccess | null
   },
-): Promise<void> {
+): Promise<{ noAccess: boolean }> {
   try {
-    await withPgTransaction(pgPool, async (pgClient) => {
+    return await withPgTransaction(pgPool, async (pgClient) => {
       let transferredIdentityCount = 0
       try {
         transferredIdentityCount = await transferSsoIdentities(pgClient, params.originalUserId, params.duplicateUserId, params.authorizedSsoProviders)
@@ -663,10 +672,9 @@ async function mergeSsoIdentityWithExistingAccount(
       }
 
       await ensurePublicUserRowExistsInTransaction(pgClient, requestId, params.publicUser)
-      if (params.access)
-        await applyMappedAccessInTransaction(pgClient, requestId, params.originalUserId, params.orgId, params.access)
-      else
-        await ensureOrgMembershipInTransaction(pgClient, requestId, params.originalUserId, params.orgId)
+      const membership = params.access
+        ? await applyMappedAccessInTransaction(pgClient, requestId, params.originalUserId, params.orgId, params.access)
+        : await ensureOrgMembershipInTransaction(pgClient, requestId, params.originalUserId, params.orgId)
 
       try {
         await setAuthUserSsoOnly(pgClient, params.originalUserId, params.authorizedSsoProviders)
@@ -675,6 +683,9 @@ async function mergeSsoIdentityWithExistingAccount(
         cloudlogErr({ requestId, message: 'Failed to enforce SSO-only auth state on original user during merge', originalUserId: params.originalUserId, error: ssoFlagError })
         throw new Error('sso_flag_update_failed')
       }
+      // The identity is still linked: the account belongs to this person even
+      // when the mapping currently grants them no access.
+      return { noAccess: membership.noAccess === true }
     })
   }
   catch (error) {
@@ -793,8 +804,9 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
       }
 
       // Step 2: Transfer the SSO identity and provision the merged account atomically.
+      let mergeResult: { noAccess: boolean }
       try {
-        await mergeSsoIdentityWithExistingAccount(getSharedPgClient(), requestId, {
+        mergeResult = await mergeSsoIdentityWithExistingAccount(getSharedPgClient(), requestId, {
           originalUserId,
           duplicateUserId: userId,
           publicUser: {
@@ -832,6 +844,9 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
         cloudlogErr({ requestId, message: 'Failed to delete duplicate SSO user after identity transfer', userId, originalUserId, error: deleteError })
         // Identity already transferred — log but still return merged so frontend redirects to login
       }
+
+      if (mergeResult.noAccess)
+        return quickError(403, 'sso_no_access', 'Your identity provider does not grant you access to this organization. Contact your administrator.')
 
       cloudlog({ requestId, message: 'SSO account merged successfully — user must re-login', userId, originalUserId })
       return c.json({ success: true, merged: true })
