@@ -7,7 +7,7 @@ Efficiently find and remove orphaned files from R2 storage that are not present 
 The cleanup process uses 2 scripts:
 
 1. **Script 1**: Find orphaned paths using hierarchical listing (fast, doesn't list all 4.8M files)
-2. **Script 2**: Delete orphaned paths (with dry-run by default)
+2. **Script 2**: Dry-run orphaned paths by default; move them to 7-day trash when executed, or permanently delete them with the ops-only flag
 
 ## How It Works
 
@@ -42,17 +42,29 @@ This creates `./tmp/r2_cleanup/1_orphaned_paths.json` with:
 - Orphaned app folders (apps not in DB)
 - Orphaned version files/folders (versions not in DB or deleted)
 
-### Step 2: Delete orphaned paths
+### Step 2: Process orphaned paths
 
-**Dry run (default - no deletion):**
+**Dry run (default — no changes):**
+
 ```bash
 bun scripts/r2_cleanup/2_delete_orphans.ts
 ```
 
-**Actually delete files:**
+**Move orphans to 7-day trash (recommended when executing):**
+
 ```bash
 DRY_RUN=false bun scripts/r2_cleanup/2_delete_orphans.ts
 ```
+
+Objects are copied under `deleted-after-7-days/` and removed from their live key. R2 lifecycle deletes trash after ~7 days.
+
+**Permanent delete (ops-only — bypasses trash):**
+
+```bash
+DRY_RUN=false ALLOW_PERMANENT_R2_DELETE=true bun scripts/r2_cleanup/2_delete_orphans.ts
+```
+
+Requires explicit `ALLOW_PERMANENT_R2_DELETE=true`. Product delete paths must never use this mode.
 
 ## Environment
 
@@ -71,8 +83,9 @@ All output files are saved to `./tmp/r2_cleanup/`:
 ## Safety Features
 
 - Script 2 runs in **dry-run mode by default**
-- Review orphaned paths before deletion
-- Hierarchical deletion (orgs first, then apps, then individual versions)
+- Executing without `ALLOW_PERMANENT_R2_DELETE` moves objects to trash first
+- Permanent delete requires `ALLOW_PERMANENT_R2_DELETE=true`
+- Review orphaned paths before running with `DRY_RUN=false`
 
 ## What Gets Flagged as Orphaned
 

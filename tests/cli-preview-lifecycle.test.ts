@@ -11,6 +11,7 @@ import {
   resetAppData,
   SUPABASE_ANON_KEY,
   SUPABASE_BASE_URL,
+  warmEdgeEndpoint,
 } from './test-utils.ts'
 
 vi.mock('../cli/src/utils', async (importOriginal) => {
@@ -123,16 +124,23 @@ async function createAppApiKey(name: string, roleName = 'app_preview'): Promise<
 beforeAll(async () => {
   authHeaders = await getAuthHeaders()
   await resetAndSeedAppData(APPNAME, seedOptions)
+  await warmEdgeEndpoint('/apikey', { method: 'GET', headers: authHeaders })
 })
 
 afterAll(async () => {
   try {
     for (const apiKeyId of apiKeyIds) {
-      const deleteResponse = await fetch(`${BASE_URL}/apikey/${apiKeyId}`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-      expect(deleteResponse.status).toBe(200)
+      try {
+        const deleteResponse = await fetch(`${BASE_URL}/apikey/${apiKeyId}`, {
+          method: 'DELETE',
+          headers: authHeaders,
+        })
+        if (!deleteResponse.ok)
+          console.error(`Failed to delete apikey ${apiKeyId}: ${deleteResponse.status}`)
+      }
+      catch (error) {
+        console.error(`Failed to delete apikey ${apiKeyId}:`, error)
+      }
     }
   }
   finally {

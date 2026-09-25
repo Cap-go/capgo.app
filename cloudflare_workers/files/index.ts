@@ -23,10 +23,6 @@ type FilesExecutionContext = ExecutionContext & {
   }
 }
 
-function getRequestHostname(request: Request): string {
-  return request.headers.get('host') || new URL(request.url).hostname
-}
-
 function hasAttachmentReadPath(pathname: string): boolean {
   return pathname.startsWith('/files/read/attachments/') || pathname.startsWith('/private/files/read/attachments/')
 }
@@ -48,37 +44,27 @@ function isCacheableAttachmentRead(request: Request): boolean {
   return hasAttachmentReadPath(new URL(request.url).pathname)
 }
 
-function isCacheablePreviewRead(request: Request): boolean {
-  if (request.method !== 'GET' || request.headers.has('range'))
-    return false
-
-  const hostname = getRequestHostname(request).toLowerCase()
-  if (!isPreviewSubdomain(hostname))
-    return false
-
-  const firstLabel = hostname.split('.', 1)[0]
-  if (/^c\d+-/.test(firstLabel))
-    return false
-
-  return new URL(request.url).pathname !== '/.capgo/preview.json'
+function requestHostname(request: Request): string {
+  const hostHeader = request.headers.get('host')
+  if (hostHeader)
+    return hostHeader.split(':')[0]
+  return new URL(request.url).hostname
 }
 
 function buildWorkersCacheKey(request: Request): string | null {
   const url = new URL(request.url)
+  if (isPreviewSubdomain(requestHostname(request).toLowerCase()))
+    return null
+
   if (isCacheableAttachmentRead(request))
     return `/files-cache${url.pathname}${normalizeSearch(url, FILE_READ_TRACKING_QUERY_PARAMS)}`
-
-  if (isCacheablePreviewRead(request)) {
-    const hostname = getRequestHostname(request).toLowerCase()
-    return `/preview-cache/${hostname}${url.pathname}${normalizeSearch(url)}`
-  }
 
   return null
 }
 
 // Middleware to route preview subdomain requests
 app.use('/*', async (c, next) => {
-  const hostname = c.req.header('host') || ''
+  const hostname = (c.req.header('host') || '').split(':')[0].toLowerCase()
   if (isPreviewSubdomain(hostname)) {
     // Handle preview requests directly within this context
     return handlePreviewRequest(c)
