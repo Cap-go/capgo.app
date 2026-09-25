@@ -1,19 +1,22 @@
 import type { Context } from 'hono'
 import type { PoolClient } from 'pg'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
+import type { SsoRoleMapping } from './role-mapping.ts'
 import { HTTPException } from 'hono/http-exception'
 import { z } from 'zod'
 import { BRES, createHono, parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_jwt.ts'
 import { cloudlogErr } from '../../utils/logging.ts'
-import { closeClient, getPgClient, withPgTransaction } from '../../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, withPgTransaction } from '../../utils/pg.ts'
 import { requireEnterprisePlan } from '../../utils/plan-gating.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { createSSOProvider, deleteSSOProvider, ManagementAPIError, restoreSSOProvider, snapshotSSOProvider, updateSSOProvider } from '../../utils/supabase-management.ts'
 import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
 import { version } from '../../utils/version.ts'
+import { getCallerMaxPriorityRank } from '../role_bindings.ts'
 import { PUBLIC_EMAIL_DOMAINS } from './prelink-shared.ts'
+import { mappedAttributes, parseStoredRoleMapping, roleMappingSchema, ssoAttributeClaimKey } from './role-mapping.ts'
 
 // Metadata XML documents are a few KB; cap well above that to reject abuse.
 const MAX_METADATA_XML_LENGTH = 512 * 1024
@@ -36,6 +39,8 @@ const updateBodySchema = z.object({
   attribute_mapping: z.unknown().optional(),
   enforce_sso: z.boolean().optional(),
   status: z.enum(['verified', 'active', 'disabled']).optional(),
+  // null removes the mapping (back to org_member for new members).
+  role_mapping: roleMappingSchema.nullable().optional(),
 })
 
 const uuidSchema = z.uuid()
@@ -98,6 +103,95 @@ function parseAttributeMapping(value: unknown): Record<string, string> | undefin
   return result
 }
 
+// Every app and group a mapping grants must belong to the provider's org.
+async function requireMappingTargetsInOrg(c: Context<MiddlewareKeyVariables>, orgId: string, mapping: SsoRoleMapping) {
+  const admin = supabaseAdmin(c)
+  const groupIds = [...new Set(mapping.rules.map(rule => rule.group_id).filter((id): id is string => id !== null))]
+  const appIds = [...new Set(mapping.rules.flatMap(rule => rule.apps.map(app => app.app_id)))]
+  const [groups, apps] = await Promise.all([
+    groupIds.length ? admin.from('groups').select('id').eq('org_id', orgId).in('id', groupIds) : { data: [], error: null },
+    appIds.length ? admin.from('apps').select('id').eq('owner_org', orgId).in('id', appIds) : { data: [], error: null },
+  ])
+  if (groups.error || apps.error)
+    quickError(500, 'role_mapping_lookup_failed', 'Failed to validate role mapping targets')
+  if ((groups.data ?? []).length !== groupIds.length || (apps.data ?? []).length !== appIds.length)
+    throw simpleError('invalid_role_mapping', 'Role mapping references an app or group that does not belong to this organization')
+}
+
+// A role mapping is authoritative for every SSO user of the domain: it can
+// grant any role (directly or through a group's bindings) and demote or
+// revoke anyone, super admins included. Only callers holding the org's
+// highest role may therefore change it, which keeps it within the same
+// anti-escalation rule as role_bindings (callers never assign above their
+// own rank).
+async function requireSuperAdminForRoleMapping(c: Context<MiddlewareKeyVariables>, orgId: string) {
+  const auth = c.get('auth')!
+  // Legacy API keys have no RBAC principal, hence no role in the org.
+  if (auth.authType === 'apikey' && !auth.apikey?.rbac_id)
+    quickError(403, 'role_mapping_requires_super_admin', 'Only organization super admins can change the SSO role mapping')
+  const pgPool = getPgClient(c)
+  try {
+    const drizzle = getDrizzleClient(pgPool)
+    const callerRank = auth.authType === 'apikey'
+      ? await getCallerMaxPriorityRank(drizzle, 'apikey', auth.apikey!.rbac_id!, orgId)
+      : await getCallerMaxPriorityRank(drizzle, 'jwt', auth.userId, orgId)
+    const { rows } = await pgPool.query<{ priority_rank: number }>(
+      'select priority_rank from public.roles where name = public.rbac_role_org_super_admin() and scope_type = public.rbac_scope_org()',
+    )
+    const superAdminRank = rows[0]?.priority_rank
+    if (superAdminRank === undefined || callerRank < superAdminRank)
+      quickError(403, 'role_mapping_requires_super_admin', 'Only organization super admins can change the SSO role mapping')
+  }
+  finally {
+    await closeClient(c, pgPool)
+  }
+}
+
+// Apps and groups a mapping no longer references are no longer re-evaluated
+// on login, so the access SSO granted on them is revoked when the mapping is
+// saved: app bindings created by SSO and group memberships SSO added (added_by
+// is the user itself), for users of the provider's domain only.
+async function revokeUnmappedSsoAccess(client: PoolClient, orgId: string, domain: string, appIds: string[], groupIds: string[]) {
+  if (appIds.length > 0) {
+    await client.query(
+      `
+        delete from public.role_bindings rb
+        using auth.users u
+        where u.id = rb.principal_id
+          and rb.principal_type = public.rbac_principal_user()
+          and rb.scope_type = public.rbac_scope_app()
+          and rb.org_id = $1
+          and rb.app_id = any($2::uuid[])
+          and rb.reason = 'SSO role mapping'
+          and lower(split_part(u.email, '@', 2)) = lower($3)
+      `,
+      [orgId, appIds, domain],
+    )
+  }
+  if (groupIds.length > 0) {
+    await client.query(
+      `
+        delete from public.group_members gm
+        using auth.users u, public.groups g
+        where u.id = gm.user_id
+          and g.id = gm.group_id
+          and g.org_id = $1
+          and gm.group_id = any($2::uuid[])
+          and gm.added_by = gm.user_id
+          and lower(split_part(u.email, '@', 2)) = lower($3)
+      `,
+      [orgId, groupIds, domain],
+    )
+  }
+}
+
+function mappingTargets(mapping: SsoRoleMapping | null) {
+  return {
+    appIds: new Set(mapping?.rules.flatMap(rule => rule.apps.map(app => app.app_id)) ?? []),
+    groupIds: new Set(mapping?.rules.map(rule => rule.group_id).filter((id): id is string => id !== null) ?? []),
+  }
+}
+
 async function requireManageSsoPermission(c: Context<MiddlewareKeyVariables>, orgId: string) {
   const allowed = await checkPermission(c, 'org.update_settings' as any, { orgId })
   if (!allowed) {
@@ -105,7 +199,8 @@ async function requireManageSsoPermission(c: Context<MiddlewareKeyVariables>, or
   }
 }
 
-const UPDATABLE_PROVIDER_COLUMNS = ['metadata_url', 'attribute_mapping', 'enforce_sso', 'status'] as const
+const UPDATABLE_PROVIDER_COLUMNS = ['metadata_url', 'attribute_mapping', 'role_mapping', 'enforce_sso', 'status'] as const
+const JSONB_PROVIDER_COLUMNS = new Set(['attribute_mapping', 'role_mapping'])
 
 // What a PATCH changed in Supabase Auth: how to undo it and, when the SAML
 // provider was just created, its id to store on the row.
@@ -126,9 +221,10 @@ async function applyProviderUpdate(
   updates: Record<string, unknown>,
   sync: { domain: string, isSsoOnly: boolean } | null,
   updateAuth: (() => Promise<AuthChange | null>) | null,
+  revoke: { orgId: string, domain: string, appIds: string[], groupIds: string[] } | null = null,
 ): Promise<Record<string, unknown> | undefined> {
   const columns = UPDATABLE_PROVIDER_COLUMNS.filter(column => updates[column] !== undefined)
-  const values = columns.map(column => column === 'attribute_mapping' ? JSON.stringify(updates[column]) : updates[column])
+  const values = columns.map(column => JSONB_PROVIDER_COLUMNS.has(column) && updates[column] !== null ? JSON.stringify(updates[column]) : updates[column])
   const setClause = columns.map((column, index) => `"${column}" = $${index + 2}`).join(', ')
 
   const pgPool = getPgClient(c)
@@ -160,6 +256,8 @@ async function applyProviderUpdate(
       const updatedProvider = result.rows[0] as Record<string, unknown> | undefined
       if (updatedProvider && sync)
         await setDomainSsoOnly(client, sync.domain, sync.isSsoOnly)
+      if (updatedProvider && revoke)
+        await revokeUnmappedSsoAccess(client, revoke.orgId, revoke.domain, revoke.appIds, revoke.groupIds)
       return updatedProvider
     })
   }
@@ -322,6 +420,7 @@ app.patch('/:id', async (c) => {
     metadata_url?: string
     attribute_mapping?: unknown
     enforce_sso?: boolean
+    role_mapping?: unknown
   }>(c)
 
   const validation = safeParseSchema(updateBodySchema, rawBody)
@@ -335,7 +434,7 @@ app.patch('/:id', async (c) => {
   const supabase = supabaseWithAuth(c, auth) as any
   const { data: provider, error: providerError } = await supabase
     .from('sso_providers')
-    .select('id, org_id, domain, status, enforce_sso, provider_id, updated_at, metadata_url, metadata_xml, attribute_mapping')
+    .select('id, org_id, domain, status, enforce_sso, provider_id, updated_at, metadata_url, metadata_xml, attribute_mapping, role_mapping')
     .eq('id', id)
     .single()
 
@@ -351,6 +450,12 @@ app.patch('/:id', async (c) => {
   }
   if (body.attribute_mapping !== undefined) {
     updates.attribute_mapping = attributeMapping
+  }
+  if (body.role_mapping !== undefined) {
+    await requireSuperAdminForRoleMapping(c, provider.org_id)
+    if (body.role_mapping)
+      await requireMappingTargetsInOrg(c, provider.org_id, body.role_mapping)
+    updates.role_mapping = body.role_mapping
   }
   if (body.enforce_sso !== undefined) {
     if (body.enforce_sso === true && provider.status !== 'active') {
@@ -402,8 +507,16 @@ app.patch('/:id', async (c) => {
     managementUpdates.domains = becomesActive ? [provider.domain] : []
   if (body.metadata_url !== undefined)
     managementUpdates.metadata_url = body.metadata_url
-  if (attributeMapping !== undefined)
-    managementUpdates.attribute_mapping = attributeMapping
+  // Supabase Auth replaces the whole mapping: the attribute mapping plus one
+  // claim per IdP attribute used by the role mapping.
+  const nextAttributeMapping = (updates.attribute_mapping ?? provider.attribute_mapping ?? {}) as Record<string, string>
+  const nextRoleMapping = (body.role_mapping !== undefined ? body.role_mapping : parseStoredRoleMapping(provider.role_mapping)) as SsoRoleMapping | null
+  const fullAttributeMapping: Record<string, string> = {
+    ...nextAttributeMapping,
+    ...Object.fromEntries((nextRoleMapping ? mappedAttributes(nextRoleMapping) : []).map(attribute => [ssoAttributeClaimKey(attribute), attribute])),
+  }
+  if (body.attribute_mapping !== undefined || body.role_mapping !== undefined)
+    managementUpdates.attribute_mapping = fullAttributeMapping
 
   const toManagementError = (err: unknown): never => {
     if (err instanceof ManagementAPIError)
@@ -416,10 +529,9 @@ app.patch('/:id', async (c) => {
     const metadata = metadataUrl ? { metadata_url: metadataUrl } : provider.metadata_xml ? { metadata_xml: provider.metadata_xml } : null
     if (!metadata)
       throw simpleError('missing_metadata', 'The provider has no SAML metadata to activate with')
-    const mapping = (attributeMapping ?? provider.attribute_mapping ?? undefined) as Record<string, string> | undefined
     updateAuth = async () => {
       try {
-        const created = await createSSOProvider(c, provider.domain, metadata, mapping && Object.keys(mapping).length > 0 ? mapping : undefined)
+        const created = await createSSOProvider(c, provider.domain, metadata, Object.keys(fullAttributeMapping).length > 0 ? fullAttributeMapping : undefined)
         return { providerId: created.id, restore: () => deleteSSOProvider(c, created.id) }
       }
       catch (err) {
@@ -441,6 +553,16 @@ app.patch('/:id', async (c) => {
     }
   }
 
+  let unmappedTargets: Parameters<typeof applyProviderUpdate>[6] = null
+  if (body.role_mapping !== undefined) {
+    const previous = mappingTargets(parseStoredRoleMapping(provider.role_mapping))
+    const next = mappingTargets(body.role_mapping as SsoRoleMapping | null)
+    const appIds = [...previous.appIds].filter(appId => !next.appIds.has(appId))
+    const groupIds = [...previous.groupIds].filter(groupId => !next.groupIds.has(groupId))
+    if (appIds.length > 0 || groupIds.length > 0)
+      unmappedTargets = { orgId: provider.org_id, domain: provider.domain, appIds, groupIds }
+  }
+
   const wasSsoEnforced = provider.status === 'active' && provider.enforce_sso === true
   const nextStatus = (updates.status as string | undefined) ?? provider.status
   const nextEnforce = (updates.enforce_sso as boolean | undefined) ?? provider.enforce_sso
@@ -455,6 +577,7 @@ app.patch('/:id', async (c) => {
       updates,
       wasSsoEnforced !== isSsoEnforced ? { domain: provider.domain, isSsoOnly: isSsoEnforced } : null,
       updateAuth,
+      unmappedTargets,
     )
   }
   catch (error) {

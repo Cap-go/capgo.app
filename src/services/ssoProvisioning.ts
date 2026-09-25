@@ -45,10 +45,11 @@ export async function provisionSsoUser(session: Session): Promise<SsoProvisionin
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({ error: 'Unknown error' })) as Record<string, unknown>
-      const errorMessage = typeof errorData.error === 'string'
-        ? errorData.error
-        : typeof errorData.message === 'string'
-          ? errorData.message
+      // Prefer the human readable message (e.g. no access granted by the IdP).
+      const errorMessage = typeof errorData.message === 'string'
+        ? errorData.message
+        : typeof errorData.error === 'string'
+          ? errorData.error
           : `Provisioning failed (${response.status})`
 
       return {
