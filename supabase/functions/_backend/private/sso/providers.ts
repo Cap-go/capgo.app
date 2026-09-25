@@ -115,7 +115,7 @@ const UPDATABLE_PROVIDER_COLUMNS = ['metadata_url', 'attribute_mapping', 'enforc
 async function applyProviderUpdate(
   c: Context<MiddlewareKeyVariables>,
   id: string,
-  expected: { status: string, enforce_sso: boolean },
+  expectedUpdatedAt: string,
   updates: Record<string, unknown>,
   sync: { domain: string, isSsoOnly: boolean } | null,
   updateAuth: (() => Promise<(() => Promise<void>) | null>) | null,
@@ -129,15 +129,16 @@ async function applyProviderUpdate(
   let lockedUpdatedAt: string | null = null
   try {
     return await withPgTransaction(pgPool, async (client) => {
-      const locked = await client.query<{ status: string, enforce_sso: boolean, updated_at: string }>(
-        'select status, enforce_sso, updated_at::text as updated_at from public.sso_providers where id = $1 for update',
-        [id],
+      const locked = await client.query<{ unchanged: boolean, updated_at: string }>(
+        'select updated_at = $2::timestamptz as unchanged, updated_at::text as updated_at from public.sso_providers where id = $1 for update',
+        [id, expectedUpdatedAt],
       )
       const current = locked.rows[0]
       if (!current)
         return undefined
-      // Transitions were validated against the row read before the lock.
-      if (current.status !== expected.status || current.enforce_sso !== expected.enforce_sso)
+      // Everything was validated against the row read before the lock: any
+      // concurrent write (status, enforcement, metadata...) makes that stale.
+      if (!current.unchanged)
         quickError(409, 'provider_changed', 'The SSO provider was modified concurrently, please retry')
 
       lockedUpdatedAt = current.updated_at
@@ -347,7 +348,7 @@ app.patch('/:id', async (c) => {
   const supabase = supabaseWithAuth(c, auth) as any
   const { data: provider, error: providerError } = await supabase
     .from('sso_providers')
-    .select('id, org_id, domain, status, enforce_sso, provider_id')
+    .select('id, org_id, domain, status, enforce_sso, provider_id, updated_at')
     .eq('id', id)
     .single()
 
@@ -440,7 +441,7 @@ app.patch('/:id', async (c) => {
     updatedProvider = await applyProviderUpdate(
       c,
       id,
-      { status: provider.status, enforce_sso: provider.enforce_sso },
+      provider.updated_at,
       updates,
       wasSsoEnforced !== isSsoEnforced ? { domain: provider.domain, isSsoOnly: isSsoEnforced } : null,
       updateAuth,

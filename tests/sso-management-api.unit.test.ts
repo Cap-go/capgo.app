@@ -68,6 +68,16 @@ describe('supabase Management API SSO provider calls', () => {
     expect(sentBody(fetchMock)).toEqual({ disabled: false })
   })
 
+  it('bounds every call with a timeout and reports it as 504', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
+      throw new DOMException('The operation timed out.', 'TimeoutError')
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(updateSSOProvider(context, 'provider-id', { disabled: true })).rejects.toMatchObject({ status: 504, code: 'management_api_timeout' })
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal)
+  })
+
   it('snapshots a missing or null disabled flag as explicitly enabled', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       id: 'provider-id',

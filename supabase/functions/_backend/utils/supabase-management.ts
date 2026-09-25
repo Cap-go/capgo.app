@@ -73,6 +73,8 @@ function getProjectRef(c: Context): string | null {
   return null
 }
 
+const MANAGEMENT_API_TIMEOUT_MS = 8_000
+
 async function callManagementAPI(
   c: Context,
   method: string,
@@ -102,6 +104,9 @@ async function callManagementAPI(
 
   const options: RequestInit = {
     method,
+    // Callers can hold a provider row lock across this call: fail fast
+    // instead of relying on database timeouts.
+    signal: AbortSignal.timeout(MANAGEMENT_API_TIMEOUT_MS),
     headers: {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
@@ -177,9 +182,10 @@ async function callManagementAPI(
       method,
       error: error instanceof Error ? error.message : String(error),
     })
+    const timedOut = error instanceof Error && error.name === 'TimeoutError'
     throw new ManagementAPIError(
-      500,
-      'management_api_fetch_error',
+      timedOut ? 504 : 500,
+      timedOut ? 'management_api_timeout' : 'management_api_fetch_error',
       'Failed to call Management API',
       error instanceof Error ? { message: error.message } : {},
     )
