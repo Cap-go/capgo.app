@@ -68,14 +68,20 @@ describe('supabase Management API SSO provider calls', () => {
     expect(sentBody(fetchMock)).toEqual({ disabled: false })
   })
 
-  it('bounds every call with a timeout and reports it as 504', async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
-      throw new DOMException('The operation timed out.', 'TimeoutError')
-    })
-    vi.stubGlobal('fetch', fetchMock)
+  it('aborts a hanging call after 8 seconds and reports it as 504', async () => {
+    // Drive the deadline by hand: the request only settles once its signal aborts.
+    const deadline = new AbortController()
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal)
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal!.reason))
+    })))
 
-    await expect(updateSSOProvider(context, 'provider-id', { disabled: true })).rejects.toMatchObject({ status: 504, code: 'management_api_timeout' })
-    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal)
+    const pending = updateSSOProvider(context, 'provider-id', { disabled: true })
+    expect(timeoutSpy).toHaveBeenCalledWith(8_000)
+    deadline.abort(new DOMException('The operation timed out.', 'TimeoutError'))
+
+    await expect(pending).rejects.toMatchObject({ status: 504, code: 'management_api_timeout' })
+    timeoutSpy.mockRestore()
   })
 
   it('snapshots a missing or null disabled flag as explicitly enabled', async () => {
