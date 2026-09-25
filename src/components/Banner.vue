@@ -97,46 +97,57 @@ const bannerColor = computed(() => {
     return ''
   return 'd-btn-success text-black'
 })
+
+const isNavbarInline = computed(() => props.desktop && isMobile)
 </script>
 
 <template>
-  <!-- Desktop inline version -->
+  <!-- Desktop inline version (also used in mobile navbar via Navbar.vue) -->
   <div
     v-if="props.desktop && showBanner"
-    class="flex items-center ml-auto space-x-2 sm:space-x-3 min-w-0 max-w-[50vw] lg:max-w-full overflow-hidden"
+    class="min-w-0 w-full overflow-hidden lg:ml-auto lg:flex lg:max-w-full lg:flex-nowrap lg:items-center lg:gap-3"
+    :class="isNavbarInline
+      ? 'grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-1'
+      : 'flex max-w-[50vw] flex-nowrap items-center gap-2'"
     data-test="org-billing-banner"
   >
     <component
-      :is="showCta ? 'div' : 'a'"
-      v-bind="showCta ? {} : { href: billingCtaHref }"
-      :role="showCta ? 'status' : undefined"
-      class="flex items-center gap-2 min-w-0 flex-1 overflow-hidden"
+      :is="showCta ? 'span' : 'a'"
+      v-bind="showCta ? { role: 'status' } : { href: billingCtaHref }"
+      class="min-w-0 max-w-full overflow-hidden"
       :class="showCta ? '' : 'rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500'"
-      :aria-label="statusAriaLabel"
-      :title="statusAriaLabel"
+      :aria-label="statusLabel"
+      :title="statusLabel"
     >
       <span
-        class="d-badge d-badge-sm font-semibold shrink-0 max-w-full truncate"
-        :class="badgeClass"
+        class="block max-w-full truncate font-semibold"
+        :class="[
+          badgeClass,
+          isNavbarInline ? 'rounded-full px-1.5 py-0.5 text-[10px] leading-tight' : 'd-badge d-badge-sm',
+        ]"
         data-test="org-billing-status"
-        :title="statusLabel"
       >
         {{ statusLabel }}
       </span>
-      <span
-        v-if="statusDetail"
-        class="text-xs font-semibold truncate min-w-0 sm:text-sm"
-        :class="status.trialDaysLeft <= 7 ? 'text-amber-700 dark:text-amber-300' : 'text-slate-800 dark:text-slate-200'"
-        data-test="org-billing-detail"
-        :title="statusDetail"
-      >
-        {{ statusDetail }}
-      </span>
     </component>
+    <span
+      v-if="statusDetail"
+      class="min-w-0 truncate font-semibold leading-tight"
+      :class="[
+        isNavbarInline ? 'text-[10px]' : 'flex-1 text-xs sm:text-sm',
+        status.trialDaysLeft <= 7 ? 'text-amber-700 dark:text-amber-300' : 'text-slate-800 dark:text-slate-200',
+      ]"
+      data-test="org-billing-detail"
+      :title="statusDetail"
+      role="status"
+      :aria-label="statusDetail"
+    >
+      {{ statusDetail }}
+    </span>
     <a
       v-if="showCta"
       :href="billingCtaHref"
-      class="shrink-0 whitespace-nowrap border-none d-btn d-btn-xs sm:d-btn-sm"
+      class="shrink-0 whitespace-nowrap border-none d-btn d-btn-xs h-6 min-h-0 px-1.5 text-[10px] leading-tight lg:h-auto lg:px-2 lg:text-sm lg:d-btn-sm"
       :class="bannerColor"
       data-test="org-billing-cta"
     >
