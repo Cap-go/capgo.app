@@ -14,6 +14,8 @@ import { createSSOProvider, deleteSSOProvider, ManagementAPIError, restoreSSOPro
 import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
 import { version } from '../../utils/version.ts'
 import { PUBLIC_EMAIL_DOMAINS } from './prelink-shared.ts'
+import type { SsoRoleMapping } from './role-mapping.ts'
+import { parseStoredRoleMapping, roleMappingSchema, SSO_ROLE_SOURCE_CLAIM } from './role-mapping.ts'
 
 // Metadata XML documents are a few KB; cap well above that to reject abuse.
 const MAX_METADATA_XML_LENGTH = 512 * 1024
@@ -36,6 +38,8 @@ const updateBodySchema = z.object({
   attribute_mapping: z.unknown().optional(),
   enforce_sso: z.boolean().optional(),
   status: z.enum(['verified', 'active', 'disabled']).optional(),
+  // null removes the mapping (back to org_member for new members).
+  role_mapping: roleMappingSchema.nullable().optional(),
 })
 
 const uuidSchema = z.uuid()
@@ -98,6 +102,21 @@ function parseAttributeMapping(value: unknown): Record<string, string> | undefin
   return result
 }
 
+async function requireOrgGroups(c: Context<MiddlewareKeyVariables>, orgId: string, mapping: SsoRoleMapping) {
+  const groupIds = [...new Set(mapping.rules.map(rule => rule.group_id).filter((groupId): groupId is string => groupId !== null))]
+  if (groupIds.length === 0)
+    return
+  const { data, error } = await supabaseAdmin(c)
+    .from('groups')
+    .select('id')
+    .eq('org_id', orgId)
+    .in('id', groupIds)
+  if (error)
+    quickError(500, 'group_lookup_failed', 'Failed to validate role mapping groups')
+  if ((data ?? []).length !== groupIds.length)
+    throw simpleError('invalid_role_mapping', 'Role mapping references a group that does not belong to this organization')
+}
+
 async function requireManageSsoPermission(c: Context<MiddlewareKeyVariables>, orgId: string) {
   const allowed = await checkPermission(c, 'org.update_settings' as any, { orgId })
   if (!allowed) {
@@ -105,7 +124,8 @@ async function requireManageSsoPermission(c: Context<MiddlewareKeyVariables>, or
   }
 }
 
-const UPDATABLE_PROVIDER_COLUMNS = ['metadata_url', 'attribute_mapping', 'enforce_sso', 'status'] as const
+const UPDATABLE_PROVIDER_COLUMNS = ['metadata_url', 'attribute_mapping', 'role_mapping', 'enforce_sso', 'status'] as const
+const JSONB_PROVIDER_COLUMNS = new Set(['attribute_mapping', 'role_mapping'])
 
 // What a PATCH changed in Supabase Auth: how to undo it and, when the SAML
 // provider was just created, its id to store on the row.
@@ -128,7 +148,7 @@ async function applyProviderUpdate(
   updateAuth: (() => Promise<AuthChange | null>) | null,
 ): Promise<Record<string, unknown> | undefined> {
   const columns = UPDATABLE_PROVIDER_COLUMNS.filter(column => updates[column] !== undefined)
-  const values = columns.map(column => column === 'attribute_mapping' ? JSON.stringify(updates[column]) : updates[column])
+  const values = columns.map(column => JSONB_PROVIDER_COLUMNS.has(column) && updates[column] !== null ? JSON.stringify(updates[column]) : updates[column])
   const setClause = columns.map((column, index) => `"${column}" = $${index + 2}`).join(', ')
 
   const pgPool = getPgClient(c)
@@ -322,6 +342,7 @@ app.patch('/:id', async (c) => {
     metadata_url?: string
     attribute_mapping?: unknown
     enforce_sso?: boolean
+    role_mapping?: unknown
   }>(c)
 
   const validation = safeParseSchema(updateBodySchema, rawBody)
@@ -335,7 +356,7 @@ app.patch('/:id', async (c) => {
   const supabase = supabaseWithAuth(c, auth) as any
   const { data: provider, error: providerError } = await supabase
     .from('sso_providers')
-    .select('id, org_id, domain, status, enforce_sso, provider_id, updated_at, metadata_url, metadata_xml, attribute_mapping')
+    .select('id, org_id, domain, status, enforce_sso, provider_id, updated_at, metadata_url, metadata_xml, attribute_mapping, role_mapping')
     .eq('id', id)
     .single()
 
@@ -351,6 +372,11 @@ app.patch('/:id', async (c) => {
   }
   if (body.attribute_mapping !== undefined) {
     updates.attribute_mapping = attributeMapping
+  }
+  if (body.role_mapping !== undefined) {
+    if (body.role_mapping)
+      await requireOrgGroups(c, provider.org_id, body.role_mapping)
+    updates.role_mapping = body.role_mapping
   }
   if (body.enforce_sso !== undefined) {
     if (body.enforce_sso === true && provider.status !== 'active') {
@@ -402,8 +428,16 @@ app.patch('/:id', async (c) => {
     managementUpdates.domains = becomesActive ? [provider.domain] : []
   if (body.metadata_url !== undefined)
     managementUpdates.metadata_url = body.metadata_url
-  if (attributeMapping !== undefined)
-    managementUpdates.attribute_mapping = attributeMapping
+  // Supabase Auth replaces the whole mapping: the attribute mapping plus the
+  // claim capturing the IdP attribute used for role mapping.
+  const nextAttributeMapping = (updates.attribute_mapping ?? provider.attribute_mapping ?? {}) as Record<string, string>
+  const nextRoleMapping = (body.role_mapping !== undefined ? body.role_mapping : parseStoredRoleMapping(provider.role_mapping)) as SsoRoleMapping | null
+  const fullAttributeMapping: Record<string, string> = {
+    ...nextAttributeMapping,
+    ...(nextRoleMapping ? { [SSO_ROLE_SOURCE_CLAIM]: nextRoleMapping.attribute } : {}),
+  }
+  if (body.attribute_mapping !== undefined || body.role_mapping !== undefined)
+    managementUpdates.attribute_mapping = fullAttributeMapping
 
   const toManagementError = (err: unknown): never => {
     if (err instanceof ManagementAPIError)
@@ -416,10 +450,9 @@ app.patch('/:id', async (c) => {
     const metadata = metadataUrl ? { metadata_url: metadataUrl } : provider.metadata_xml ? { metadata_xml: provider.metadata_xml } : null
     if (!metadata)
       throw simpleError('missing_metadata', 'The provider has no SAML metadata to activate with')
-    const mapping = (attributeMapping ?? provider.attribute_mapping ?? undefined) as Record<string, string> | undefined
     updateAuth = async () => {
       try {
-        const created = await createSSOProvider(c, provider.domain, metadata, mapping && Object.keys(mapping).length > 0 ? mapping : undefined)
+        const created = await createSSOProvider(c, provider.domain, metadata, Object.keys(fullAttributeMapping).length > 0 ? fullAttributeMapping : undefined)
         return { providerId: created.id, restore: () => deleteSSOProvider(c, created.id) }
       }
       catch (err) {

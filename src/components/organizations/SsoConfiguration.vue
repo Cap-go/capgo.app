@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import type { SsoRoleMapping } from '~/components/organizations/SsoRoleMappingEditor.vue'
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconCopy from '~icons/heroicons/document-duplicate'
 import IconGlobeAlt from '~icons/heroicons/globe-alt'
 import IconTrash from '~icons/heroicons/trash'
+import SsoRoleMappingEditor from '~/components/organizations/SsoRoleMappingEditor.vue'
 import Spinner from '~/components/Spinner.vue'
 import { formatLocalDate } from '~/services/date'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
@@ -19,6 +21,7 @@ interface SsoProvider {
   enforce_sso: boolean
   metadata_url: string | null
   dns_verification_token: string | null
+  role_mapping: SsoRoleMapping | null
   created_at: string
   updated_at: string
 }
@@ -43,6 +46,14 @@ const spMetadata = ref<SpMetadata | null>(null)
 const isLoading = ref(true)
 const isSubmitting = ref(false)
 const isVerifying = ref<string | null>(null)
+const roleMappingProviderId = ref<string | null>(null)
+
+function onRoleMappingSaved(providerId: string, roleMapping: SsoRoleMapping | null) {
+  const provider = providers.value.find(p => p.id === providerId)
+  if (provider)
+    provider.role_mapping = roleMapping
+  roleMappingProviderId.value = null
+}
 const showAddForm = ref(false)
 
 // Form fields
@@ -737,6 +748,16 @@ defineExpose({
             <span class="text-slate-700 dark:text-slate-300">{{ t('sso-enforce') }}</span>
           </label>
 
+          <button
+            v-if="provider.status !== 'pending_verification'"
+            type="button"
+            class="d-btn d-btn-outline d-btn-sm"
+            :aria-expanded="roleMappingProviderId === provider.id"
+            @click="roleMappingProviderId = roleMappingProviderId === provider.id ? null : provider.id"
+          >
+            {{ t('sso-role-mapping-title') }}
+          </button>
+
           <!-- Delete button (always visible) -->
           <button
             type="button"
@@ -747,6 +768,14 @@ defineExpose({
             {{ t('delete') }}
           </button>
         </div>
+      </div>
+      <div v-if="roleMappingProviderId === provider.id" class="px-4 pb-4">
+        <SsoRoleMappingEditor
+          :org-id="orgId"
+          :provider-id="provider.id"
+          :role-mapping="provider.role_mapping"
+          @saved="onRoleMappingSaved(provider.id, $event)"
+        />
       </div>
     </div>
   </div>
