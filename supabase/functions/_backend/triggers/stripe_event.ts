@@ -173,7 +173,7 @@ function getPaidAtUpdate(
   nextStatus: StripeWebhookStatus | null | undefined,
   eventOccurredAtIso: string = new Date().toISOString(),
 ) {
-  if (!nextStatus || !['created', 'succeeded'].includes(nextStatus))
+  if (nextStatus !== 'succeeded')
     return undefined
 
   if (currentStripeInfo?.paid_at)
@@ -183,6 +183,22 @@ function getPaidAtUpdate(
     return undefined
 
   return eventOccurredAtIso
+}
+
+export function resolveSubscriptionPersistedStatus(
+  webhookStatus: StripeWebhookStatus | null | undefined,
+  currentStripeInfo: Pick<StripeInfoRow, 'paid_at' | 'status'> | null | undefined,
+): StripeWebhookStatus | null | undefined {
+  if (!webhookStatus)
+    return webhookStatus
+
+  if (webhookStatus === 'past_due' || webhookStatus === 'failed' || webhookStatus === 'canceled')
+    return webhookStatus
+
+  if (currentStripeInfo?.status === 'succeeded' && currentStripeInfo?.paid_at)
+    return 'succeeded'
+
+  return webhookStatus
 }
 
 function toStripeInfoUpdate(data: StripeData['data']): StripeInfoUpdate {
@@ -1156,7 +1172,7 @@ async function createdOrUpdated(
     else {
       updateData.past_due_at = null
     }
-    const paidAt = getPaidAtUpdate(currentStripeInfo, status, eventOccurredAtIso)
+    const paidAt = getPaidAtUpdate(currentStripeInfo, stripeData.data.status, eventOccurredAtIso)
     if (paidAt)
       updateData.paid_at = paidAt
     const revenuePlans = await getRevenuePlans(c)
@@ -1491,11 +1507,6 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
     return handleCheckoutSessionCompleted(c, stripeEvent, org, stripeData.data.customer_id)
   }
 
-  if (stripeEvent.type === 'payment_intent.succeeded') {
-    await handleAutoTopUpPaymentIntent(c, stripeEvent, org.id)
-    return c.json(BRES)
-  }
-
   const { data: customer } = await supabaseAdmin(c)
     .from('stripe_info')
     .select()
@@ -1504,6 +1515,58 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
 
   if (!customer) {
     throw simpleError('no_customer_found', 'no customer found', { stripeData })
+  }
+
+  if (stripeEvent.type === 'payment_intent.succeeded') {
+    const handledAutoTopUp = await handleAutoTopUpPaymentIntent(c, stripeEvent, org.id)
+    if (handledAutoTopUp)
+      return c.json(BRES)
+
+    const paymentIntent = stripeEvent.data.object as Stripe.PaymentIntent
+    if (paymentIntent.status !== 'succeeded')
+      return c.json(BRES)
+
+    if (customer.price_id && customer.product_id) {
+      stripeData.data.status = 'succeeded'
+      stripeData.data.price_id = customer.price_id
+      stripeData.data.product_id = customer.product_id
+      stripeData.data.subscription_id = customer.subscription_id ?? undefined
+      const eventOccurredAtIso = new Date(stripeEvent.created * 1000).toISOString()
+      const createdOrUpdatedResponse = await createdOrUpdated(c, stripeData, org, customer, eventOccurredAtIso, 'succeeded')
+      if (createdOrUpdatedResponse)
+        return createdOrUpdatedResponse
+    }
+    return c.json(BRES)
+  }
+
+  if (stripeEvent.type === 'invoice.paid' || stripeEvent.type === 'invoice.payment_succeeded') {
+    const invoice = stripeEvent.data.object as Stripe.Invoice
+    if (!invoice.status || invoice.status !== 'paid')
+      return c.json(BRES)
+
+    if (stripeData.data.price_id && stripeData.data.product_id) {
+      const eventOccurredAtIso = new Date(stripeEvent.created * 1000).toISOString()
+      stripeData.data.status = 'succeeded'
+      const createdOrUpdatedResponse = await createdOrUpdated(c, stripeData, org, customer, eventOccurredAtIso, 'succeeded')
+      if (createdOrUpdatedResponse)
+        return createdOrUpdatedResponse
+    }
+    return c.json(BRES)
+  }
+
+  if (stripeEvent.type === 'payment_intent.processing') {
+    return c.json(BRES)
+  }
+
+  if (stripeEvent.type === 'payment_intent.payment_failed' || stripeEvent.type === 'invoice.payment_failed') {
+    if (await orgHasActiveUsageCredits(c, org.id)) {
+      cloudlog({ requestId: c.get('requestId'), message: 'Skipping failed payment email because org has active usage credits', orgId: org.id })
+    }
+    else {
+      await trackBillingBentoEvent(c, org, stripeData.data.customer_id, BENTO_FAILED_PAYMENT_EVENT)
+    }
+    await updateStripeInfo(c, stripeData)
+    return c.json(BRES)
   }
 
   if (stripeEvent.type === 'customer.source.expiring') {
@@ -1528,7 +1591,7 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
   if (isSubscriptionUpdateStatus(stripeData.data.status) && stripeData.data.price_id && stripeData.data.product_id) {
     const originalStatus = stripeData.data.status
     const eventOccurredAtIso = new Date(stripeEvent.created * 1000).toISOString()
-    stripeData.data.status = 'succeeded'
+    stripeData.data.status = resolveSubscriptionPersistedStatus(originalStatus, customer)
     const createdOrUpdatedResponse = await createdOrUpdated(c, stripeData, org, customer, eventOccurredAtIso, originalStatus)
     if (createdOrUpdatedResponse)
       return createdOrUpdatedResponse
@@ -1547,7 +1610,7 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
     // Subscription event without price/product data - log warning but don't process
     cloudlog({ requestId: c.get('requestId'), message: 'Subscription webhook missing price_id or product_id', stripeData, subscriptionId: stripeData.data.subscription_id })
   }
-  else if (['canceled', 'deleted'].includes(stripeData.data.status ?? '')) {
+  else if (stripeData.data.status === 'canceled') {
     const eventOccurredAtIso = new Date(stripeEvent.created * 1000).toISOString()
     if (isStaleStripeEvent(customer, eventOccurredAtIso)) {
       cloudlog({
@@ -1562,11 +1625,6 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
     }
     // Check if this is the subscription currently in the database
     if (customer && customer.subscription_id === stripeData.data.subscription_id) {
-      // Only mark as 'succeeded' if subscription is still active until period end
-      // Check if subscription_anchor_end is in the future
-      if (stripeData.data.subscription_anchor_end && new Date(stripeData.data.subscription_anchor_end) > new Date()) {
-        stripeData.data.status = 'succeeded'
-      }
       const updateData = toStripeInfoUpdate(stripeData.data)
       const revenuePlans = await getRevenuePlans(c)
       const revenueMovement = classifyRevenueMovement(customer, updateData, revenuePlans)
@@ -1629,6 +1687,7 @@ export const stripeEventTestUtils = {
   getEventDateId,
   getMovementPlanBreakdown,
   getPaidAtUpdate,
+  resolveSubscriptionPersistedStatus,
   getPlanChangeTrackingEventName,
   getChurnReason,
   getSubscriptionMrr,
