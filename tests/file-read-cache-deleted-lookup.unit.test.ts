@@ -24,6 +24,11 @@ function createContext(requestId = 'req-1') {
 }
 
 describe('file_read_cache deleted lookup', () => {
+  it('uses a 2 second deleted lookup timeout budget', async () => {
+    const { fileReadCacheTestUtils } = await import('../supabase/functions/_backend/files/file_read_cache.ts')
+    expect(fileReadCacheTestUtils.DELETED_LOOKUP_TIMEOUT_MS).toBe(2000)
+  })
+
   beforeEach(() => {
     vi.resetModules()
     vi.clearAllMocks()
