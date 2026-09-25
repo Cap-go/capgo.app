@@ -108,8 +108,6 @@ CREATE TABLE public.apps (
     existing_app boolean DEFAULT false NOT NULL,
     ios_store_url text,
     android_store_url text,
-    stats_updated_at timestamp without time zone,
-    stats_refresh_requested_at timestamp without time zone,
     build_timeout_seconds bigint DEFAULT 900 NOT NULL,
     build_timeout_updated_at timestamp with time zone DEFAULT now() NOT NULL,
     block_provider_infra_requests boolean DEFAULT true NOT NULL,

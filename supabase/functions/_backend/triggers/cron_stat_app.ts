@@ -418,7 +418,7 @@ async function hasPendingAppStatsRefresh(
         `
           SELECT EXISTS (
             SELECT 1
-            FROM public.apps
+            FROM public.app_stats_refresh_state
             WHERE owner_org = $1
               AND stats_refresh_requested_at IS NOT NULL
               AND stats_refresh_requested_at >= $2::timestamp without time zone
