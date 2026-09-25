@@ -4,8 +4,8 @@ import { formatCapgoCliInvokeError, invokeCapgoCliApi } from '../utils'
 
 interface FinalizeBundleOptions {
   apikey: string
-  versionId: number
-  useNewFinalizeBundleUpload: boolean
+  appId: string
+  bundle: string
   supaHost?: string
   supaAnon?: string
   reporter: UploadReporter
@@ -13,7 +13,7 @@ interface FinalizeBundleOptions {
 
 interface FinalizeInvokeOptions {
   apikey: string
-  body: { version_id: number }
+  body: { app_id: string, name: string }
   supaHost?: string
   supaAnon?: string
 }
@@ -30,20 +30,14 @@ const defaultDependencies: FinalizeBundleDependencies = {
 
 export async function finalizeUploadedBundle(
   options: FinalizeBundleOptions,
-  legacyFinalize: () => Promise<void>,
   dependencies: FinalizeBundleDependencies = defaultDependencies,
 ): Promise<void> {
-  if (!options.useNewFinalizeBundleUpload) {
-    await legacyFinalize()
-    return
-  }
-
   const spinner = options.reporter.spinner()
   spinner.start('Finalizing bundle upload...')
 
   const { error } = await dependencies.invoke('private/finalize_bundle_upload', {
     apikey: options.apikey,
-    body: { version_id: options.versionId },
+    body: { app_id: options.appId, name: options.bundle },
     supaHost: options.supaHost,
     supaAnon: options.supaAnon,
   })

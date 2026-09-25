@@ -19,11 +19,13 @@ const APP_ID = `com.test.finalize-bundle-upload.${fixtureId}`
 const ENDPOINT = '/private/finalize_bundle_upload'
 let deniedApiKeyId: number | null = null
 let deniedApiKey = ''
+let uploadApiKeyId: number | null = null
+let uploadApiKey = ''
 let crossOrgApiKeyId: number | null = null
 let crossOrgApiKey = ''
 let versionSequence = 0
 
-async function createVersion(options: {
+async function createVersionRecord(options: {
   storageProvider?: string
   deleted?: boolean
   deletedAt?: string | null
@@ -50,7 +52,11 @@ async function createVersion(options: {
 
   if (error || !data)
     throw new Error(`Failed to create version: ${error?.message}`)
-  return data.id
+  return { id: data.id, name }
+}
+
+async function createVersion(options: Parameters<typeof createVersionRecord>[0] = {}) {
+  return (await createVersionRecord(options)).id
 }
 
 async function finalize(versionId: unknown, apiKey = APIKEY_TEST_ALL) {
@@ -62,6 +68,18 @@ async function finalize(versionId: unknown, apiKey = APIKEY_TEST_ALL) {
       'Authorization': apiKey,
     },
     body: JSON.stringify({ version_id: versionId }),
+  })
+}
+
+async function finalizeByName(appId: unknown, name: unknown, apiKey = APIKEY_TEST_ALL) {
+  return await fetchTestRequest(getEndpointUrl(ENDPOINT), {
+    method: 'POST',
+    retryUnsafe: true,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': apiKey,
+    },
+    body: JSON.stringify({ app_id: appId, name }),
   })
 }
 
@@ -87,6 +105,16 @@ describe('[POST] /private/finalize_bundle_upload', () => {
     })
     deniedApiKeyId = denied.id
     deniedApiKey = denied.key ?? ''
+    const uploader = await createDirectApiKeyWithBindings({
+      key: randomUUID(),
+      name: `finalize-uploader-${fixtureId}`,
+      orgId: ORG_ID,
+      roleName: 'apikey_org_reader',
+      appId: APP_ID,
+      appRoleName: 'app_uploader',
+    })
+    uploadApiKeyId = uploader.id
+    uploadApiKey = uploader.key ?? ''
     const crossOrg = await createDirectApiKeyWithBindings({
       userId: USER_ID_2,
       key: randomUUID(),
@@ -101,6 +129,8 @@ describe('[POST] /private/finalize_bundle_upload', () => {
   afterAll(async () => {
     if (deniedApiKeyId !== null)
       await getSupabaseClient().from('apikeys').delete().eq('id', deniedApiKeyId)
+    if (uploadApiKeyId !== null)
+      await getSupabaseClient().from('apikeys').delete().eq('id', uploadApiKeyId)
     if (crossOrgApiKeyId !== null)
       await getSupabaseClient().from('apikeys').delete().eq('id', crossOrgApiKeyId)
     await resetAppData(APP_ID)
@@ -122,6 +152,14 @@ describe('[POST] /private/finalize_bundle_upload', () => {
       r2_path: before.r2_path,
       manifest_count: before.manifest_count,
     })
+  })
+
+  it.concurrent('finalizes by app ID and bundle name', async () => {
+    const version = await createVersionRecord()
+    const response = await finalizeByName(APP_ID, version.name, uploadApiKey)
+
+    expect(response.status).toBe(200)
+    expect((await readVersion(version.id)).storage_provider).toBe('r2')
   })
 
   it.concurrent('accepts an already finalized version idempotently', async () => {
@@ -174,11 +212,11 @@ describe('[POST] /private/finalize_bundle_upload', () => {
   })
 
   it.concurrent('rejects an API key without upload permission', async () => {
-    const versionId = await createVersion()
-    const response = await finalize(versionId, deniedApiKey)
+    const version = await createVersionRecord()
+    const response = await finalizeByName(APP_ID, version.name, deniedApiKey)
     expect(response.status).toBe(401)
     expect((await response.json() as { error: string }).error).toBe('not_authorized')
-    expect((await readVersion(versionId)).storage_provider).toBe('r2-direct')
+    expect((await readVersion(version.id)).storage_provider).toBe('r2-direct')
   })
 
   it.concurrent('rejects a key from another organization', async () => {

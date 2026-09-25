@@ -1671,8 +1671,6 @@ export async function updateOrCreateVersion(supabase: SupabaseClient<Database>, 
     .upsert(update, { onConflict: 'name,app_id' })
     .eq('app_id', update.app_id)
     .eq('name', update.name)
-    .select('id')
-    .single()
 }
 
 export async function uploadUrl(apikey: string, appId: string, name: string, options?: { supaHost?: string, supaAnon?: string }): Promise<string> {

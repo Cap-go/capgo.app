@@ -23,46 +23,25 @@ function createReporter() {
 }
 
 describe('bundle upload finalization', () => {
-  it('keeps the legacy update when the feature flag is disabled', async () => {
-    const { reporter } = createReporter()
-    const legacyFinalize = vi.fn(async () => {})
-    const invoke = vi.fn()
-
-    await finalizeUploadedBundle({
-      apikey: 'test-key',
-      versionId: 42,
-      useNewFinalizeBundleUpload: false,
-      reporter,
-    }, legacyFinalize, {
-      invoke,
-      formatError: vi.fn(),
-    })
-
-    expect(legacyFinalize).toHaveBeenCalledOnce()
-    expect(invoke).not.toHaveBeenCalled()
-  })
-
-  it('calls the finalize endpoint with a spinner when enabled', async () => {
+  it('calls the finalize endpoint with a spinner', async () => {
     const { reporter, spinner } = createReporter()
-    const legacyFinalize = vi.fn(async () => {})
     const invoke = vi.fn(async () => ({ data: { status: 'ok' }, error: null }))
 
     await finalizeUploadedBundle({
       apikey: 'test-key',
-      versionId: 42,
-      useNewFinalizeBundleUpload: true,
+      appId: 'com.example.app',
+      bundle: '1.2.3',
       supaHost: 'http://localhost:54321',
       supaAnon: 'anon-key',
       reporter,
-    }, legacyFinalize, {
+    }, {
       invoke,
       formatError: vi.fn(),
     })
 
-    expect(legacyFinalize).not.toHaveBeenCalled()
     expect(invoke).toHaveBeenCalledWith('private/finalize_bundle_upload', {
       apikey: 'test-key',
-      body: { version_id: 42 },
+      body: { app_id: 'com.example.app', name: '1.2.3' },
       supaHost: 'http://localhost:54321',
       supaAnon: 'anon-key',
     })
@@ -76,10 +55,10 @@ describe('bundle upload finalization', () => {
 
     const promise = finalizeUploadedBundle({
       apikey: 'test-key',
-      versionId: 42,
-      useNewFinalizeBundleUpload: true,
+      appId: 'com.example.app',
+      bundle: '1.2.3',
       reporter,
-    }, vi.fn(), {
+    }, {
       invoke: vi.fn(async () => ({ data: null, error: backendError })),
       formatError: vi.fn(async () => 'Version upload is already deleted'),
     })

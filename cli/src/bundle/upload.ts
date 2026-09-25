@@ -101,12 +101,9 @@ async function persistVersionData(
   versionData: Database['public']['Tables']['app_versions']['Insert'],
   action: 'add' | 'update',
 ) {
-  const { data, error } = await updateOrCreateVersion(supabase, versionData)
+  const { error } = await updateOrCreateVersion(supabase, versionData)
   if (error)
     uploadFail(`Cannot ${action} bundle ${formatError(error)}`)
-  if (!data?.id)
-    uploadFail(`Cannot ${action} bundle because the version ID was not returned`)
-  return data.id
 }
 
 /**
@@ -1838,7 +1835,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] Creating version record in database...`)
 
-  const versionId = await persistVersionData(supabase, versionData, 'add')
+  await persistVersionData(supabase, versionData, 'add')
 
   if (options.verbose)
     log.info(`[Verbose] Version record created successfully`)
@@ -2008,16 +2005,19 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     if (options.verbose)
       log.info(`[Verbose] Updating version record with storage provider...`)
 
-    await finalizeUploadedBundle({
-      apikey,
-      versionId,
-      useNewFinalizeBundleUpload: fileConfig.useNewFinalizeBundleUpload,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
-      reporter: getUploadReporter(),
-    }, async () => {
+    if (fileConfig.useNewFinalizeBundleUpload) {
+      await finalizeUploadedBundle({
+        apikey,
+        appId: appid,
+        bundle,
+        supaHost: options.supaHost,
+        supaAnon: options.supaAnon,
+        reporter: getUploadReporter(),
+      })
+    }
+    else {
       await persistVersionData(supabase, versionData, 'update')
-    })
+    }
 
     if (options.verbose)
       log.info(`[Verbose] Version record updated successfully`)
