@@ -161,6 +161,7 @@ describe('backend onboarding refresh', () => {
     const client = await pool.connect()
     const item = await fixture(client, 1)
     const appId = item.ids[0]
+    let released = false
     try {
       const onboarding = {
         setup: {
@@ -186,6 +187,8 @@ describe('backend onboarding refresh', () => {
           ($1,$2,$3,'ios','failed','refresh-ios-failed','fixture/ios-failed','https://example.com',now(),now()-interval '3 minutes',now()-interval '2 minutes'),
           ($1,$2,$3,'ios','released','refresh-ios-released','fixture/ios-released','https://example.com',now(),now()-interval '2 minutes',now()-interval '1 minute'),
           ($1,$2,$3,'android','failed','refresh-android-failed','fixture/android-failed','https://example.com',now(),now()-interval '1 minute',now())`, [appId, item.orgId, owner])
+      client.release()
+      released = true
 
       expect(await refreshAppOnboardingBatch(getDrizzleClient(pool), { appIds: [appId], queuedAt: new Date(Date.now() - 60000).toISOString() })).toBe(1)
       const setup = (await pool.query('SELECT onboarding->\'setup\' AS setup FROM public.apps WHERE app_id=$1', [appId])).rows[0].setup
@@ -202,7 +205,8 @@ describe('backend onboarding refresh', () => {
       })
     }
     finally {
-      client.release()
+      if (!released)
+        client.release()
       await cleanup(pool, [item])
     }
   })
