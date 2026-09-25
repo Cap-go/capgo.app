@@ -36,6 +36,7 @@ import { CORDOVA_DEFAULT_WEB_DIR } from '../cordova/project'
 import { isCordovaMode } from '../framework/mode'
 import { ensureNotifyAppReadyInBuildFolder } from '../recovery/notify-app-ready'
 import { parsePackageJsonOptionPaths, resolveAppIdWithRecovery } from '../recovery/app-id'
+import { finalizeUploadedBundle } from './finalize-upload'
 import { loadUploadProjectConfig } from './upload-config'
 import { prepareBundlePartialFiles, uploadPartial } from './partial'
 import { clackUploadReporter, getUploadReporter, runWithUploadReporter } from './reporter'
@@ -100,9 +101,12 @@ async function persistVersionData(
   versionData: Database['public']['Tables']['app_versions']['Insert'],
   action: 'add' | 'update',
 ) {
-  const { error } = await updateOrCreateVersion(supabase, versionData)
+  const { data, error } = await updateOrCreateVersion(supabase, versionData)
   if (error)
     uploadFail(`Cannot ${action} bundle ${formatError(error)}`)
+  if (!data?.id)
+    uploadFail(`Cannot ${action} bundle because the version ID was not returned`)
+  return data.id
 }
 
 /**
@@ -1418,6 +1422,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     log.info(`  - TUS upload forced: ${fileConfig.TUSUploadForced ? 'yes' : 'no'}`)
     log.info(`  - Partial upload: ${fileConfig.partialUpload ? 'enabled' : 'disabled'}`)
     log.info(`  - Max chunk size: ${Math.floor(fileConfig.maxChunkSize / 1024 / 1024)} MB`)
+    log.info(`  - Finalize upload endpoint: ${fileConfig.useNewFinalizeBundleUpload ? 'enabled' : 'disabled'}`)
   }
 
   const { appid, path } = await getAppIdAndPath(preAppid, options, extConfig.config, interactive)
@@ -1833,7 +1838,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] Creating version record in database...`)
 
-  await persistVersionData(supabase, versionData, 'add')
+  const versionId = await persistVersionData(supabase, versionData, 'add')
 
   if (options.verbose)
     log.info(`[Verbose] Version record created successfully`)
@@ -2003,7 +2008,16 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     if (options.verbose)
       log.info(`[Verbose] Updating version record with storage provider...`)
 
-    await persistVersionData(supabase, versionData, 'update')
+    await finalizeUploadedBundle({
+      apikey,
+      versionId,
+      useNewFinalizeBundleUpload: fileConfig.useNewFinalizeBundleUpload,
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
+      reporter: getUploadReporter(),
+    }, async () => {
+      await persistVersionData(supabase, versionData, 'update')
+    })
 
     if (options.verbose)
       log.info(`[Verbose] Version record updated successfully`)

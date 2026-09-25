@@ -46,6 +46,7 @@ vi.mock('../cli/src/utils', async (importOriginal) => {
       partialUploadForced: false,
       TUSUpload: false,
       TUSUploadForced: false,
+      useNewFinalizeBundleUpload: false,
     }),
     sendEvent: async () => {},
   }

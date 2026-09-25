@@ -838,6 +838,7 @@ interface CapgoFilesConfig {
   maxUploadLength: number
   maxChunkSize: number
   alertUploadSize: number
+  useNewFinalizeBundleUpload: boolean
 }
 
 export async function getRemoteFileConfig() {
@@ -862,6 +863,7 @@ export async function getRemoteFileConfig() {
       maxUploadLength: MAX_UPLOAD_LENGTH_BYTES,
       maxChunkSize: MAX_CHUNK_SIZE_BYTES,
       alertUploadSize: ALERT_UPLOAD_SIZE_BYTES,
+      useNewFinalizeBundleUpload: false,
     }
   }
 }
@@ -1669,6 +1671,8 @@ export async function updateOrCreateVersion(supabase: SupabaseClient<Database>, 
     .upsert(update, { onConflict: 'name,app_id' })
     .eq('app_id', update.app_id)
     .eq('name', update.name)
+    .select('id')
+    .single()
 }
 
 export async function uploadUrl(apikey: string, appId: string, name: string, options?: { supaHost?: string, supaAnon?: string }): Promise<string> {
