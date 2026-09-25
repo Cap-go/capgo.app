@@ -45,8 +45,8 @@ describe('file_read_cache deleted lookup', () => {
     await isAttachmentVersionDeleted(contextB, fileId)
 
     expect(getPgClientMock).toHaveBeenCalledTimes(2)
-    expect(getPgClientMock.mock.calls[0]?.[0]).toBe(contextA)
-    expect(getPgClientMock.mock.calls[1]?.[0]).toBe(contextB)
+    expect(getPgClientMock).toHaveBeenNthCalledWith(1, contextA, false)
+    expect(getPgClientMock).toHaveBeenNthCalledWith(2, contextB, false)
   })
 
   it('closes the pg client after the lookup finishes', async () => {
