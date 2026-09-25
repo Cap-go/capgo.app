@@ -339,6 +339,38 @@ try {
   }
   console.log('✅ iOS credential action correlation and safe tags')
 
+  // ── iOS profile preparation carries the complete checklist envelope ───────
+  {
+    const requests = installFetchMock()
+    await trackBuilderOnboardingAction({
+      action: 'profile_prepared',
+      apikey: 'capgo-key',
+      appId: 'com.example.app',
+      orgId: 'org-id',
+      journeyId: 'bj_ios-profile',
+      platform: 'ios',
+      step: 'import-exporting',
+      tags: {
+        attempt_id: 'bj_ios-profile',
+        source: 'imported',
+      },
+    })
+
+    const body = findEventBody(requests)
+    assert.equal(body.event, 'Builder Onboarding Action')
+    assert.equal(body.org_id, 'org-id')
+    assert.deepEqual(body.tags, {
+      action: 'profile_prepared',
+      app_id: 'com.example.app',
+      attempt_id: 'bj_ios-profile',
+      journey_id: 'bj_ios-profile',
+      platform: 'ios',
+      source: 'imported',
+      step: 'import-exporting',
+    })
+  }
+  console.log('✅ iOS profile preparation action payload')
+
   // ── Step event carries the journey id ─────────────────────────────────────
   {
     const requests = installFetchMock()
