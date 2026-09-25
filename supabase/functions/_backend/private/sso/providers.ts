@@ -107,6 +107,13 @@ async function requireManageSsoPermission(c: Context<MiddlewareKeyVariables>, or
 
 const UPDATABLE_PROVIDER_COLUMNS = ['metadata_url', 'attribute_mapping', 'enforce_sso', 'status'] as const
 
+// What a PATCH changed in Supabase Auth: how to undo it and, when the SAML
+// provider was just created, its id to store on the row.
+interface AuthChange {
+  restore: () => Promise<void>
+  providerId?: string
+}
+
 // Applies a PATCH as one unit per provider: the row is locked first, then
 // Supabase Auth is updated, then the row and (when the enforced state flips)
 // auth.users.is_sso_user are written. If the database write fails, Auth is
@@ -118,7 +125,7 @@ async function applyProviderUpdate(
   expectedUpdatedAt: string,
   updates: Record<string, unknown>,
   sync: { domain: string, isSsoOnly: boolean } | null,
-  updateAuth: (() => Promise<(() => Promise<void>) | null>) | null,
+  updateAuth: (() => Promise<AuthChange | null>) | null,
 ): Promise<Record<string, unknown> | undefined> {
   const columns = UPDATABLE_PROVIDER_COLUMNS.filter(column => updates[column] !== undefined)
   const values = columns.map(column => column === 'attribute_mapping' ? JSON.stringify(updates[column]) : updates[column])
@@ -142,7 +149,10 @@ async function applyProviderUpdate(
         quickError(409, 'provider_changed', 'The SSO provider was modified concurrently, please retry')
 
       lockedUpdatedAt = current.updated_at
-      restoreAuth = updateAuth ? await updateAuth() : null
+      const authChange = updateAuth ? await updateAuth() : null
+      restoreAuth = authChange?.restore ?? null
+      if (authChange?.providerId)
+        await client.query('update public.sso_providers set provider_id = $2 where id = $1', [id, authChange.providerId])
       const result = await client.query(
         `update public.sso_providers set ${setClause} where id = $1 returning *`,
         [id, ...values],
@@ -242,53 +252,30 @@ app.post('/', async (c) => {
   await requireManageSsoPermission(c, body.org_id)
   await requireEnterprisePlan(c, body.org_id)
 
-  let managementProvider: Awaited<ReturnType<typeof createSSOProvider>>
-  try {
-    const metadata = body.metadata_url ? { metadata_url: body.metadata_url } : { metadata_xml: body.metadata_xml! }
-    managementProvider = await createSSOProvider(c, domain, metadata, attributeMapping)
-  }
-  catch (err) {
-    if (err instanceof ManagementAPIError) {
-      return quickError(err.status >= 400 ? err.status : 500, 'provider_creation_failed', err.message, { management_error_code: err.code })
-    }
-    throw err
+  // Nothing is registered in Supabase Auth yet: the SAML provider is only
+  // created on activation, once DNS ownership is proven, so a pending or
+  // unverified domain can never be used to sign in.
+  const { data, error } = await supabaseAdmin(c)
+    .from('sso_providers')
+    .insert({
+      org_id: body.org_id,
+      domain,
+      status: 'pending_verification',
+      dns_verification_token: generateDnsVerificationToken(),
+      metadata_url: body.metadata_url ?? null,
+      metadata_xml: body.metadata_xml ?? null,
+      attribute_mapping: attributeMapping ?? null,
+    } as any)
+    .select('*')
+    .single()
+
+  if (error || !data) {
+    if (error?.code === '23505')
+      return quickError(409, 'domain_already_registered', 'This domain already has an SSO provider')
+    return quickError(500, 'provider_create_failed', 'Failed to create SSO provider', { error })
   }
 
-  try {
-    const admin = supabaseAdmin(c)
-    const dnsVerificationToken = generateDnsVerificationToken()
-
-    const { data, error } = await admin
-      .from('sso_providers')
-      .insert({
-        org_id: body.org_id,
-        domain,
-        provider_id: managementProvider.id,
-        status: 'pending_verification',
-        dns_verification_token: dnsVerificationToken,
-        metadata_url: body.metadata_url ?? null,
-        attribute_mapping: attributeMapping ?? null,
-      })
-      .select('*')
-      .single()
-
-    if (error || !data) {
-      // Rollback: delete the external provider to avoid orphan
-      await deleteSSOProvider(c, managementProvider.id).catch((cleanupError) => {
-        cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to cleanup external SSO provider after DB insert failure', error: cleanupError })
-      })
-      return quickError(500, 'provider_create_failed', 'Failed to create SSO provider', { error })
-    }
-
-    return c.json(data)
-  }
-  catch (err) {
-    // Rollback on any exception
-    await deleteSSOProvider(c, managementProvider.id).catch((cleanupError) => {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to cleanup external SSO provider after exception', error: cleanupError })
-    })
-    throw err
-  }
+  return c.json(data)
 })
 
 app.get('/:orgId', async (c) => {
@@ -348,7 +335,7 @@ app.patch('/:id', async (c) => {
   const supabase = supabaseWithAuth(c, auth) as any
   const { data: provider, error: providerError } = await supabase
     .from('sso_providers')
-    .select('id, org_id, domain, status, enforce_sso, provider_id, updated_at')
+    .select('id, org_id, domain, status, enforce_sso, provider_id, updated_at, metadata_url, metadata_xml, attribute_mapping')
     .eq('id', id)
     .single()
 
@@ -405,31 +392,54 @@ app.patch('/:id', async (c) => {
     await requireEnterprisePlan(c, provider.org_id)
   }
 
-  // Supabase Auth keeps its own copy of the provider: keep it in sync so a
-  // disabled Capgo provider cannot be used to sign in through Supabase Auth.
+  // The SAML provider only exists in Supabase Auth once activated (DNS proof
+  // done): created on first activation, then sign-in is switched off and on by
+  // removing/restoring its domain, which keeps the provider and so the users'
+  // sso:<id> identities.
+  const externalProviderId = provider.provider_id as string | null
   const managementUpdates: Parameters<typeof updateSSOProvider>[2] = {}
   if (updates.status !== undefined)
-    managementUpdates.disabled = !becomesActive
+    managementUpdates.domains = becomesActive ? [provider.domain] : []
   if (body.metadata_url !== undefined)
     managementUpdates.metadata_url = body.metadata_url
   if (attributeMapping !== undefined)
     managementUpdates.attribute_mapping = attributeMapping
-  const externalProviderId = provider.provider_id as string | null
-  const updateAuth = externalProviderId && Object.keys(managementUpdates).length > 0
-    ? async () => {
+
+  const toManagementError = (err: unknown): never => {
+    if (err instanceof ManagementAPIError)
+      quickError(err.status >= 400 && err.status < 500 ? err.status : 502, 'provider_update_failed', err.message, { management_error_code: err.code })
+    throw err
+  }
+  let updateAuth: (() => Promise<AuthChange | null>) | null = null
+  if (!externalProviderId && becomesActive) {
+    const metadataUrl = body.metadata_url ?? provider.metadata_url
+    const metadata = metadataUrl ? { metadata_url: metadataUrl } : provider.metadata_xml ? { metadata_xml: provider.metadata_xml } : null
+    if (!metadata)
+      throw simpleError('missing_metadata', 'The provider has no SAML metadata to activate with')
+    const mapping = (attributeMapping ?? provider.attribute_mapping ?? undefined) as Record<string, string> | undefined
+    updateAuth = async () => {
+      try {
+        const created = await createSSOProvider(c, provider.domain, metadata, mapping && Object.keys(mapping).length > 0 ? mapping : undefined)
+        return { providerId: created.id, restore: () => deleteSSOProvider(c, created.id) }
+      }
+      catch (err) {
+        return toManagementError(err)
+      }
+    }
+  }
+  else if (externalProviderId && Object.keys(managementUpdates).length > 0) {
+    updateAuth = async () => {
       try {
         // Snapshot first so Auth can be put back if the database write fails.
         const snapshot = await snapshotSSOProvider(c, externalProviderId)
         await updateSSOProvider(c, externalProviderId, managementUpdates)
-        return () => restoreSSOProvider(c, externalProviderId, snapshot)
+        return { restore: () => restoreSSOProvider(c, externalProviderId, snapshot) }
       }
       catch (err) {
-        if (err instanceof ManagementAPIError)
-          quickError(err.status >= 400 && err.status < 500 ? err.status : 502, 'provider_update_failed', err.message, { management_error_code: err.code })
-        throw err
+        return toManagementError(err)
       }
     }
-    : null
+  }
 
   const wasSsoEnforced = provider.status === 'active' && provider.enforce_sso === true
   const nextStatus = (updates.status as string | undefined) ?? provider.status

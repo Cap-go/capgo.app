@@ -2283,6 +2283,33 @@ describe('[POST] /private/sso/providers validation', () => {
   })
 })
 
+describe('[POST] /private/sso/providers creation', () => {
+  it('only stores a pending provider: nothing is registered in Supabase Auth before activation', async () => {
+    const domain = `${randomUUID()}.sso.test`
+    const response = await fetchTestRequest(getEndpointUrl('/private/sso/providers'), {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({ org_id: SSO_TEST_ORG_ID, domain, metadata_xml: '<EntityDescriptor/>' }),
+    })
+    const body = await response.json() as { id: string, status: string, provider_id: string | null, metadata_xml: string | null, dns_verification_token: string }
+    try {
+      expect(response.status).toBe(200)
+      expect(body).toMatchObject({ status: 'pending_verification', provider_id: null, metadata_xml: '<EntityDescriptor/>' })
+      expect(body.dns_verification_token).toBeTruthy()
+
+      const duplicate = await fetchTestRequest(getEndpointUrl('/private/sso/providers'), {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ org_id: SSO_TEST_ORG_ID, domain, metadata_url: 'https://idp.example.com/metadata' }),
+      })
+      expect(duplicate.status).toBe(409)
+    }
+    finally {
+      await (getSupabaseClient().from as any)('sso_providers').delete().eq('domain', domain)
+    }
+  })
+})
+
 describe('/private/sso/providers lifecycle without Supabase Auth provider', () => {
   async function insertProvider(overrides: Record<string, unknown>) {
     const id = randomUUID()
@@ -2320,12 +2347,13 @@ describe('/private/sso/providers lifecycle without Supabase Auth provider', () =
   })
 
   it('only allows verified -> active -> disabled -> active transitions', async () => {
-    const provider = await insertProvider({})
+    const provider = await insertProvider({ metadata_url: 'https://idp.example.com/metadata' })
     const patch = (body: Record<string, unknown>) => fetchTestRequest(getEndpointUrl(`/private/sso/providers/${provider.id}`), {
       method: 'PATCH',
       headers: authHeaders,
       body: JSON.stringify(body),
     })
+    const currentStatus = async () => ((await (getSupabaseClient().from as any)('sso_providers').select('status').eq('id', provider.id).single()).data as { status: string }).status
     try {
       expect((await patch({ status: 'active' })).status).toBe(400)
 
@@ -2333,16 +2361,19 @@ describe('/private/sso/providers lifecycle without Supabase Auth provider', () =
         .update({ status: 'verified', dns_verified_at: new Date().toISOString() })
         .eq('id', provider.id)
 
+      // Activation creates the SAML provider in Supabase Auth. The Management
+      // API is not reachable locally: the failure must leave the row verified.
       const activate = await patch({ status: 'active' })
-      expect(activate.status).toBe(200)
-      expect((await patch({ enforce_sso: true })).status).toBe(200)
+      expect(activate.status).toBeGreaterThanOrEqual(500)
+      expect(await currentStatus()).toBe('verified')
 
+      // Without a Supabase Auth provider bound, disabling is database-only.
+      await (getSupabaseClient().from as any)('sso_providers').update({ status: 'active' }).eq('id', provider.id)
+      expect((await patch({ enforce_sso: true })).status).toBe(200)
       const disable = await patch({ status: 'disabled' })
       expect(disable.status).toBe(200)
       const disabled = await disable.json() as { status: string, enforce_sso: boolean }
       expect(disabled).toMatchObject({ status: 'disabled', enforce_sso: false })
-
-      expect((await patch({ status: 'active' })).status).toBe(200)
     }
     finally {
       await (getSupabaseClient().from as any)('sso_providers').delete().eq('id', provider.id)

@@ -30,3 +30,11 @@ AS RESTRICTIVE
 FOR DELETE
 TO "anon", "authenticated"
 USING (false);
+
+-- The Supabase Auth SAML provider is now created on activation (after DNS
+-- verification), not when the row is added: keep the metadata to create it
+-- with, whichever source the org admin gave.
+ALTER TABLE "public"."sso_providers"
+ADD COLUMN IF NOT EXISTS "metadata_xml" "text";
+
+COMMENT ON COLUMN "public"."sso_providers"."metadata_xml" IS 'Raw IdP SAML metadata, used instead of metadata_url when the IdP metadata endpoint is not reachable. Sent to Supabase Auth on activation.';

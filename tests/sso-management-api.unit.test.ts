@@ -35,7 +35,7 @@ afterEach(() => {
 })
 
 describe('supabase Management API SSO provider calls', () => {
-  it('creates providers disabled so Supabase Auth refuses logins before DNS proof', async () => {
+  it('creates providers with their domain and metadata', async () => {
     const fetchMock = mockFetch()
 
     await createSSOProvider(context, 'example.com', { metadata_url: 'https://idp.example.com/metadata' })
@@ -44,7 +44,6 @@ describe('supabase Management API SSO provider calls', () => {
     expect(sentBody(fetchMock)).toEqual({
       type: 'saml',
       domains: ['example.com'],
-      disabled: true,
       metadata_url: 'https://idp.example.com/metadata',
     })
   })
@@ -59,13 +58,13 @@ describe('supabase Management API SSO provider calls', () => {
     expect(body).not.toHaveProperty('metadata_url')
   })
 
-  it('updates with PUT and forwards the disabled flag, including false', async () => {
+  it('updates with PUT and forwards an empty domain list to stop sign-in', async () => {
     const fetchMock = mockFetch()
 
-    await updateSSOProvider(context, 'provider-id', { disabled: false })
+    await updateSSOProvider(context, 'provider-id', { domains: [] })
 
     expect(fetchMock.mock.calls[0]?.[1]?.method).toBe('PUT')
-    expect(sentBody(fetchMock)).toEqual({ disabled: false })
+    expect(sentBody(fetchMock)).toEqual({ domains: [] })
   })
 
   it('aborts a hanging call after 8 seconds and reports it as 504', async () => {
@@ -76,7 +75,7 @@ describe('supabase Management API SSO provider calls', () => {
       init?.signal?.addEventListener('abort', () => reject(init.signal!.reason))
     })))
 
-    const pending = updateSSOProvider(context, 'provider-id', { disabled: true })
+    const pending = updateSSOProvider(context, 'provider-id', { domains: [] })
     expect(timeoutSpy).toHaveBeenCalledWith(8_000)
     deadline.abort(new DOMException('The operation timed out.', 'TimeoutError'))
 
@@ -84,14 +83,13 @@ describe('supabase Management API SSO provider calls', () => {
     timeoutSpy.mockRestore()
   })
 
-  it('snapshots a missing or null disabled flag as explicitly enabled', async () => {
+  it('snapshots a provider without domains as an explicit empty list', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       id: 'provider-id',
       saml: { entity_id: 'idp', metadata_xml: '<EntityDescriptor/>' },
-      disabled: null,
     }), { status: 200, headers: { 'content-type': 'application/json' } })))
 
-    expect(await snapshotSSOProvider(context, 'provider-id')).toEqual({ metadata_xml: '<EntityDescriptor/>', disabled: false })
+    expect(await snapshotSSOProvider(context, 'provider-id')).toEqual({ metadata_xml: '<EntityDescriptor/>', domains: [] })
   })
 
   it('snapshots the Auth provider and restores it verbatim', async () => {
@@ -99,12 +97,12 @@ describe('supabase Management API SSO provider calls', () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({
       id: 'provider-id',
       saml: { entity_id: 'idp', metadata_url: 'https://idp.example.com/metadata', attribute_mapping: attributeMapping },
-      disabled: true,
+      domains: [{ domain: 'example.com' }],
     }), { status: 200, headers: { 'content-type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
 
     const snapshot = await snapshotSSOProvider(context, 'provider-id')
-    expect(snapshot).toEqual({ metadata_url: 'https://idp.example.com/metadata', attribute_mapping: attributeMapping, disabled: true })
+    expect(snapshot).toEqual({ metadata_url: 'https://idp.example.com/metadata', attribute_mapping: attributeMapping, domains: ['example.com'] })
 
     await restoreSSOProvider(context, 'provider-id', snapshot)
     const [url, init] = fetchMock.mock.calls[1]!

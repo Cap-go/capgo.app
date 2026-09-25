@@ -14,7 +14,6 @@ export interface SSOProviderResponse {
     attribute_mapping?: ManagementAttributeMapping
   }
   domains?: Array<{ domain: string }>
-  disabled?: boolean
   created_at?: string
   updated_at?: string
 }
@@ -24,14 +23,14 @@ export interface SSOProviderSnapshot {
   metadata_url?: string
   metadata_xml?: string
   attribute_mapping?: ManagementAttributeMapping
-  disabled?: boolean
+  domains: string[]
 }
 
 export interface SSOProviderUpdate {
+  // [] removes every domain: sign-in by domain stops, the provider remains.
   domains?: string[]
   metadata_url?: string
   attribute_mapping?: Record<string, string>
-  disabled?: boolean
 }
 
 export type SSOMetadataSource = { metadata_url: string } | { metadata_xml: string }
@@ -206,12 +205,9 @@ export async function createSSOProvider(
   metadata: SSOMetadataSource,
   attributeMapping?: Record<string, string>,
 ): Promise<SSOProviderResponse> {
-  // Created disabled: Supabase Auth must not accept logins for this domain until
-  // DNS ownership is proven and the org admin activates the provider.
   const body = {
     type: 'saml',
     domains: [domain],
-    disabled: true,
     ...metadata,
     ...(attributeMapping && { attribute_mapping: toManagementAttributeMapping(attributeMapping) }),
   }
@@ -235,7 +231,7 @@ export async function updateSSOProvider(
 ): Promise<SSOProviderResponse> {
   const body: any = {}
 
-  if (updates.domains) {
+  if (updates.domains !== undefined) {
     body.domains = updates.domains
   }
   if (updates.metadata_url) {
@@ -243,9 +239,6 @@ export async function updateSSOProvider(
   }
   if (updates.attribute_mapping) {
     body.attribute_mapping = toManagementAttributeMapping(updates.attribute_mapping)
-  }
-  if (updates.disabled !== undefined) {
-    body.disabled = updates.disabled
   }
 
   const response = await callManagementAPI(c, 'PUT', `/config/auth/sso/providers/${providerId}`, body)
@@ -258,9 +251,8 @@ export async function snapshotSSOProvider(c: Context, providerId: string): Promi
     // The API accepts one metadata source; the URL wins when both are echoed.
     ...(provider.saml?.metadata_url ? { metadata_url: provider.saml.metadata_url } : provider.saml?.metadata_xml ? { metadata_xml: provider.saml.metadata_xml } : {}),
     ...(provider.saml?.attribute_mapping ? { attribute_mapping: provider.saml.attribute_mapping } : {}),
-    // Always explicit: a missing/null flag means enabled, and restoring must
-    // re-enable a provider this request disabled.
-    disabled: provider.disabled === true,
+    // Always explicit: [] must be restored too, to undo a re-activation.
+    domains: provider.domains?.map(entry => entry.domain) ?? [],
   }
 }
 
