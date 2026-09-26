@@ -43,7 +43,7 @@ describe('cron_stat_app refresh completion', () => {
       stats_updated_at: null,
     }).eq('id', orgId).throwOnError()
 
-    await getSupabaseClient().from('apps').update({
+    await getSupabaseClient().from('app_stats_refresh_state').update({
       stats_refresh_requested_at: requestedAt,
       stats_updated_at: null,
     }).in('app_id', [firstAppId, secondAppId]).throwOnError()
@@ -61,6 +61,13 @@ describe('cron_stat_app refresh completion', () => {
   }, 60000)
 
   it('updates app freshness immediately and only marks the org fresh after the last pending app completes', { timeout: 30000 }, async () => {
+    const { data: appsBefore, error: appsBeforeError } = await getSupabaseClient()
+      .from('apps')
+      .select('app_id,updated_at')
+      .in('app_id', [firstAppId, secondAppId])
+      .order('app_id')
+    expect(appsBeforeError).toBeNull()
+
     const firstResponse = await fetch(getEndpointUrl('/triggers/cron_stat_app'), {
       body: JSON.stringify({
         appId: firstAppId,
@@ -73,7 +80,7 @@ describe('cron_stat_app refresh completion', () => {
     expect(firstResponse.status).toBe(200)
 
     const { data: firstAppState, error: firstAppError } = await getSupabaseClient()
-      .from('apps')
+      .from('app_stats_refresh_state')
       .select('stats_updated_at')
       .eq('app_id', firstAppId)
       .single()
@@ -81,7 +88,7 @@ describe('cron_stat_app refresh completion', () => {
     expect(firstAppState?.stats_updated_at).toBeTruthy()
 
     const { data: secondAppStateBefore, error: secondAppBeforeError } = await getSupabaseClient()
-      .from('apps')
+      .from('app_stats_refresh_state')
       .select('stats_updated_at')
       .eq('app_id', secondAppId)
       .single()
@@ -108,7 +115,7 @@ describe('cron_stat_app refresh completion', () => {
     expect(secondResponse.status).toBe(200)
 
     const { data: secondAppStateAfter, error: secondAppAfterError } = await getSupabaseClient()
-      .from('apps')
+      .from('app_stats_refresh_state')
       .select('stats_updated_at')
       .eq('app_id', secondAppId)
       .single()
@@ -122,5 +129,13 @@ describe('cron_stat_app refresh completion', () => {
       .single()
     expect(orgAfterError).toBeNull()
     expect(orgAfterCompletion?.stats_updated_at).toBeTruthy()
+
+    const { data: appsAfter, error: appsAfterError } = await getSupabaseClient()
+      .from('apps')
+      .select('app_id,updated_at')
+      .in('app_id', [firstAppId, secondAppId])
+      .order('app_id')
+    expect(appsAfterError).toBeNull()
+    expect(appsAfter).toEqual(appsBefore)
   })
 })

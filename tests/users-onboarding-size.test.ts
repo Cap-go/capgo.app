@@ -57,4 +57,31 @@ describe('users.onboarding size constraint', () => {
       [userId, 'b'.repeat(65_522)],
     )).rejects.toMatchObject({ code: '23514' })
   })
+
+  it('accepts the channel step and final destination, and rejects unknown steps', async () => {
+    const accepted = await executeSQL<{ step: string }>(
+      `UPDATE public.users
+       SET onboarding = jsonb_build_object('status', 'in_progress', 'flow', 'pre_org', 'step', 'channel', 'setup_stage', 'channel-create', 'final_step', 'setup')
+       WHERE id = $1
+       RETURNING onboarding ->> 'step' AS step`,
+      [userId],
+    )
+    expect(accepted[0]?.step).toBe('channel')
+
+    await expect(executeSQL(
+      `UPDATE public.users
+       SET onboarding = jsonb_build_object('status', 'in_progress', 'flow', 'pre_org', 'step', 'channels')
+       WHERE id = $1`,
+      [userId],
+    )).rejects.toMatchObject({ code: '23514' })
+
+    for (const invalidFinalStep of ['channel', 123]) {
+      await expect(executeSQL(
+        `UPDATE public.users
+         SET onboarding = jsonb_build_object('status', 'in_progress', 'flow', 'pre_org', 'step', 'channel', 'final_step', $2::jsonb)
+         WHERE id = $1`,
+        [userId, JSON.stringify(invalidFinalStep)],
+      )).rejects.toMatchObject({ code: '23514' })
+    }
+  })
 })

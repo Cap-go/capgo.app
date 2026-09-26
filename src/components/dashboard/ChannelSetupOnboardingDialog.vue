@@ -50,7 +50,7 @@ function exit(action: 'closed' | 'completed') {
     track('onboarding_channel_stage_continued', {
       channel_stage: stage.value,
       navigation_direction: 'forward',
-      next_channel_stage: 'cli',
+      next_channel_stage: 'setup',
     })
   }
   track('onboarding_channel_flow_closed', {

@@ -47,6 +47,7 @@ const showNameError = ref(false)
 const submitError = ref('')
 const completedChannel = ref<SavedChannel | null>(null)
 const createdInOnboarding = ref(false)
+const hasContinued = ref(false)
 const channelNameSource = ref<'manual' | 'suggestion'>('manual')
 const lastTrackedChannelName = ref('')
 const currentOrganization = computed(() => organizationStore.currentOrganization)
@@ -63,6 +64,7 @@ const canSubmit = computed(() => (
   hasRequiredPermissions.value
   && !isInitializing.value
   && !isSubmitting.value
+  && !completedChannel.value
   && !channelNameError.value
 ))
 
@@ -202,6 +204,8 @@ function getCreateBlockReason(): NonNullable<OnboardingChannelEventProperties['f
 }
 
 async function createChannel() {
+  if (completedChannel.value)
+    return
   showNameError.value = true
   submitError.value = ''
   const normalizedName = normalizedChannelName.value
@@ -251,12 +255,6 @@ async function createChannel() {
           channel_name_length: existingChannel.name.length,
           created_in_onboarding: false,
           found_existing_channel: true,
-        })
-        track('onboarding_channel_create_succeeded', {
-          allow_device_self_set: existingChannel.allow_device_self_set,
-          channel_name_length: existingChannel.name.length,
-          channel_name_source: channelNameSource.value,
-          created_in_onboarding: false,
         })
       }
       else {
@@ -319,6 +317,9 @@ async function createChannel() {
 }
 
 function continueOnboarding() {
+  if (!completedChannel.value || hasContinued.value)
+    return
+  hasContinued.value = true
   track('onboarding_channel_create_continued', {
     allow_device_self_set: completedChannel.value?.allow_device_self_set,
     channel_name_length: completedChannel.value?.name.length,
