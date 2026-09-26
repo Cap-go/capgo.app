@@ -290,8 +290,8 @@ export async function persistBuilderBuildOutcome(
   c: Context<MiddlewareKeyVariables>,
   { appId, platform, status }: BuilderBuildOutcome,
 ): Promise<boolean> {
-  // Android persistence is intentionally deferred. The refresh repair still
-  // evaluates Android evidence independently so no cross-platform evidence leaks.
+  // Live build hooks update iOS only. refreshAppOnboardingTodoBatch updates
+  // Android independently from persisted build_requests evidence.
   if (platform === 'android')
     return false
   const update = getBuilderBuildOutcomeUpdate(platform, status)
