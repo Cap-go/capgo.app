@@ -25,7 +25,7 @@ const log = {
 }
 
 // Check if file already exists on server (bypass cache and force storage lookup)
-async function fileExists(localConfig: any, filename: string): Promise<boolean> {
+async function fileExists(localConfig: any, filename: string): Promise<{ exists: boolean, receipt?: string }> {
   try {
     const url = new URL(`${localConfig.hostFilesApi}/files/read/attachments/${encodeURIComponent(filename)}`)
     url.searchParams.set('nocache', `${Date.now()}`)
@@ -33,10 +33,10 @@ async function fileExists(localConfig: any, filename: string): Promise<boolean> 
       method: 'GET',
 headers: buildCliRequestHeaders({ range: 'bytes=0-0', 'cache-control': 'no-cache' }),
     })
-    return response.ok
+    return { exists: response.ok, receipt: response.headers.get('X-Capgo-Manifest-Size-Receipt') ?? undefined }
   }
   catch {
-    return false
+    return { exists: false }
   }
 }
 
@@ -285,12 +285,14 @@ export async function uploadPartial(
       // Check if file already exists on server
       // Skip reuse when encryption is enabled because the session key changes per upload
       // and reusing a file encrypted with a different session key would cause decryption to fail
-      if (!encryptionOptions && await fileExists(localConfig, filename)) {
+      const existing = !encryptionOptions ? await fileExists(localConfig, filename) : { exists: false }
+      if (existing.exists) {
         uploadedFiles++
         return Promise.resolve({
           file_name: uploadPathUnix,
           s3_path: filename,
           file_hash: file.hash,
+          file_size_receipt: existing.receipt,
         })
       }
 
@@ -343,12 +345,13 @@ headers: buildCliRequestHeaders({ Authorization: apikey }),
             const percentage = ((uploadedFiles / totalFiles) * 100).toFixed(2)
             spinner.message(`Uploading partial update: ${percentage}%`)
           },
-          onSuccess() {
+          onSuccess({ lastResponse }) {
             uploadedFiles++
             resolve({
               file_name: uploadPathUnix,
               s3_path: filename,
               file_hash: file.hash,
+              file_size_receipt: lastResponse.getHeader('X-Capgo-Manifest-Size-Receipt') ?? undefined,
             })
           },
         })
@@ -373,6 +376,8 @@ headers: buildCliRequestHeaders({ Authorization: apikey }),
       const batchResults = await Promise.all(batch.map(file => uploadFile(file)))
       results.push(...batchResults)
     }
+    if (results.some(entry => !entry.file_size_receipt))
+      results.forEach(entry => delete entry.file_size_receipt)
     const endTime = performance.now()
     const uploadTime = ((endTime - startTime) / 1000).toFixed(2)
     spinner.stop(`Partial update uploaded successfully 💪 in (${uploadTime} seconds)`)

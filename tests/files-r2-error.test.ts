@@ -46,6 +46,26 @@ vi.mock('../supabase/functions/_backend/files/retry.ts', () => ({
 }))
 
 describe('files R2 error handling', () => {
+  it('only signs a completed TUS upload after R2 confirms the object', async () => {
+    const { UPLOAD_INFO_KEY, UPLOAD_OFFSET_KEY } = await import('../supabase/functions/_backend/files/util.ts')
+    const { UploadHandler } = await import('../supabase/functions/_backend/files/uploadHandler.ts')
+    const storage = {
+      get: vi.fn(async (key: string) => key === UPLOAD_OFFSET_KEY ? 5 : key === UPLOAD_INFO_KEY ? { uploadLength: 5 } : undefined),
+      getAlarm: vi.fn(async () => null),
+    }
+    const handler = new UploadHandler({ storage } as any, {
+      ATTACHMENT_BUCKET: {},
+      MANIFEST_SIZE_RECEIPT_SECRET: 'receipt-secret',
+    } as any)
+    ;(handler as any).ctx = { storage }
+    const context = { get: () => 'request-id', req: { param: () => 'bundle.zip' } } as any
+
+    retryHeadMock.mockResolvedValueOnce(null).mockResolvedValueOnce({ size: 4 }).mockResolvedValueOnce({ size: 5 })
+    expect((await handler.head(context)).headers.get('x-capgo-manifest-size-receipt')).toBeNull()
+    expect((await handler.head(context)).headers.get('x-capgo-manifest-size-receipt')).toBeNull()
+    expect((await handler.head(context)).headers.get('x-capgo-manifest-size-receipt')).not.toBeNull()
+  })
+
   it('should return 503 when R2 get fails', async () => {
     vi.resetModules()
     queryMock.mockResolvedValue({ rows: [] })

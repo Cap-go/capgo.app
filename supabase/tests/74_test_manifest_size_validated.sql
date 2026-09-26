@@ -1,91 +1,60 @@
 BEGIN;
 
-SELECT plan(12);
+SELECT plan(8);
 
+SELECT ok(pg_catalog.to_regclass('public.manifest_size_validated') IS NULL, 'validation table is removed');
 SELECT ok(
-  pg_catalog.to_regclass('public.manifest_size_validated') IS NOT NULL,
-  'manifest_size_validated exists'
+  NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint WHERE conname = 'app_versions_manifest_size_validated_fkey'),
+  'reverse validation foreign key is removed'
 );
 SELECT ok(
-  (SELECT relrowsecurity FROM pg_catalog.pg_class WHERE oid = 'public.manifest_size_validated'::regclass),
-  'manifest_size_validated has RLS enabled'
+  NOT EXISTS (SELECT 1 FROM pg_catalog.pg_trigger WHERE tgname = 'on_manifest_create' AND NOT tgisinternal),
+  'unconditional manifest trigger is removed'
 );
-SELECT policies_are(
-  'public',
-  'manifest_size_validated',
-  ARRAY['Deny client access to manifest size validation']
-);
-
 SELECT ok(
-  NOT EXISTS (
-    SELECT 1
-    FROM public.app_versions av
-    LEFT JOIN public.manifest_size_validated msv ON msv.id = av.id
-    WHERE msv.id IS NULL
-  ),
-  'every existing app version has validation state'
+  pg_catalog.to_regprocedure('public.create_manifest_size_validation()') IS NULL,
+  'validation row trigger function is removed'
 );
-
 SELECT ok(
-  NOT EXISTS (
-    SELECT 1 FROM public.manifest_size_validated WHERE validated
-  ),
-  'backfilled validation state is false'
-);
-
-SELECT ok(
-  NOT EXISTS (
-    SELECT 1
-    FROM pg_catalog.pg_publication_tables
-    WHERE schemaname = 'public'
-      AND tablename = 'manifest_size_validated'
-  ),
-  'validation state is not logically replicated'
-);
-
-SELECT ok(
-  NOT has_table_privilege('anon', 'public.manifest_size_validated', 'INSERT,UPDATE,DELETE'),
-  'anon cannot write validation state'
-);
-
-SELECT ok(
-  NOT has_table_privilege('authenticated', 'public.manifest_size_validated', 'INSERT,UPDATE,DELETE'),
-  'authenticated users cannot write validation state'
-);
-
-SELECT ok(
-  has_table_privilege('service_role', 'public.manifest_size_validated', 'SELECT,INSERT,UPDATE,DELETE'),
-  'service role can manage validation state'
+  EXISTS (SELECT 1 FROM pg_catalog.pg_trigger WHERE tgname = 'on_manifest_create_compat' AND NOT tgisinternal),
+  'rollout compatibility trigger exists'
 );
 
 INSERT INTO public.app_versions (id, app_id, name, owner_org, storage_provider)
-SELECT -7400001, app_id, 'pgtap-manifest-size-validation', owner_org, 'r2'
+SELECT -7400001, app_id, 'pgtap-manifest-size-receipts', owner_org, 'r2'
 FROM public.apps
 ORDER BY app_id
 LIMIT 1;
 
-SELECT is(
-  (SELECT validated FROM public.manifest_size_validated WHERE id = -7400001),
-  false,
-  'new app versions automatically receive false validation state'
-);
+DELETE FROM pgmq.q_on_manifest_create
+WHERE message->'payload'->'record'->>'app_version_id' = '-7400001';
 
-SET CONSTRAINTS app_versions_manifest_size_validated_fkey IMMEDIATE;
-
-SELECT throws_ok(
-  $$DELETE FROM public.manifest_size_validated WHERE id = -7400001$$,
-  '23503',
-  'update or delete on table "manifest_size_validated" violates foreign key constraint "app_versions_manifest_size_validated_fkey" on table "app_versions"',
-  'validation state cannot be removed while its app version exists'
-);
-
-SET CONSTRAINTS app_versions_manifest_size_validated_fkey DEFERRED;
-DELETE FROM public.app_versions WHERE id = -7400001;
+INSERT INTO public.manifest (app_version_id, file_name, s3_path, file_hash, file_size)
+VALUES (-7400001, 'trusted.js', 'trusted.js', 'trusted', 123);
 
 SELECT is(
-  (SELECT count(*)::integer FROM public.manifest_size_validated WHERE id = -7400001),
+  (SELECT count(*)::integer FROM pgmq.q_on_manifest_create WHERE message->'payload'->'record'->>'app_version_id' = '-7400001'),
   0,
-  'deleting an app version cascades its validation state'
+  'receipt-sized rows do not queue an R2 lookup'
+);
+
+INSERT INTO public.manifest (app_version_id, file_name, s3_path, file_hash, file_size)
+VALUES (-7400001, 'legacy.js', 'legacy.js', 'legacy', 0);
+
+SELECT is(
+  (SELECT count(*)::integer FROM pgmq.q_on_manifest_create WHERE message->'payload'->'record'->>'app_version_id' = '-7400001'),
+  1,
+  'old Worker rows still queue during rollout'
+);
+
+SELECT pg_catalog.set_config('capgo.manifest_queue_managed', 'on', true);
+INSERT INTO public.manifest (app_version_id, file_name, s3_path, file_hash, file_size)
+VALUES (-7400001, 'managed.js', 'managed.js', 'managed', 0);
+
+SELECT is(
+  (SELECT count(*)::integer FROM pgmq.q_on_manifest_create WHERE message->'payload'->'record'->>'app_version_id' = '-7400001'),
+  1,
+  'new Worker transactions own legacy queue scheduling'
 );
 
 SELECT * FROM finish();
