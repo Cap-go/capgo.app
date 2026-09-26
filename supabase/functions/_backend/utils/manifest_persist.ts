@@ -1,15 +1,17 @@
 import type { Context } from 'hono'
+import { sql } from 'drizzle-orm'
 import { cloudlog } from './logging.ts'
 import { isPostgresSafeText, normalizeLegacyEncodedManifestFileName } from './manifest_encoding.ts'
-import { closeClient, getPgClient } from './pg.ts'
+import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
 import { supabaseAdmin } from './supabase.ts'
 
 export interface ManifestPersistEntry {
   file_name?: string | null
   file_hash?: string | null
   s3_path?: string | null
-  // Intentionally ignored — file sizes are set by on_manifest_create from R2.
+  // Used only after server-side receipt verification.
   file_size?: number | null
+  file_size_receipt?: string | null
 }
 
 export interface PersistVersionManifestResult {
@@ -21,6 +23,7 @@ export function buildTrustedManifestRows(
   appVersionId: number,
   entries: ManifestPersistEntry[],
   s3PathPrefix?: string | null,
+  trustFileSizes = false,
 ) {
   return entries
     .filter(entry => entry.file_name && entry.file_hash && entry.s3_path)
@@ -30,8 +33,7 @@ export function buildTrustedManifestRows(
       file_name: normalizeLegacyEncodedManifestFileName(entry.file_name, entry.s3_path)!,
       file_hash: entry.file_hash!,
       s3_path: entry.s3_path!,
-      // Never trust client-provided sizes; on_manifest_create fills these from R2.
-      file_size: 0,
+      file_size: trustFileSizes ? entry.file_size! : 0,
     }))
     // Drop rows that would raise Postgres 54000 "null character not permitted".
     .filter(entry =>
@@ -52,7 +54,7 @@ async function clearLegacyAppVersionManifest(c: Context, versionId: number) {
 
 /**
  * Inserts manifest rows for a version when none exist yet.
- * Always writes file_size=0; trusted sizes come from on_manifest_create via R2 HEAD.
+ * Writes receipt-verified sizes directly; legacy callers are queued for R2 lookup.
  */
 export async function persistVersionManifestEntries(
   c: Context,
@@ -61,12 +63,13 @@ export async function persistVersionManifestEntries(
   options: {
     clearAppVersionsManifest?: boolean
     s3PathPrefix?: string | null
+    trustFileSizes?: boolean
   } = {},
 ): Promise<PersistVersionManifestResult> {
   if (!Array.isArray(manifestEntries))
     return { inserted: 0, alreadyPresent: false }
 
-  const validEntries = buildTrustedManifestRows(record.id, manifestEntries, options.s3PathPrefix)
+  const validEntries = buildTrustedManifestRows(record.id, manifestEntries, options.s3PathPrefix, options.trustFileSizes)
   const dropped = manifestEntries.length - validEntries.length
   if (dropped > 0) {
     cloudlog({
@@ -86,71 +89,44 @@ export async function persistVersionManifestEntries(
   }
 
   const pgPool = getPgClient(c, false)
-  const pgClient = await pgPool.connect()
+  let alreadyPresent = false
   try {
-    await pgClient.query('BEGIN')
-    // Serialize concurrent writers for this version (no unique constraint on manifest rows).
-    await pgClient.query('SELECT pg_advisory_xact_lock($1)', [record.id])
+    alreadyPresent = await getDrizzleClient(pgPool).transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_catalog.set_config('capgo.manifest_queue_managed', 'on', true)`)
+      await tx.execute(sql`SELECT pg_catalog.pg_advisory_xact_lock(${record.id})`)
+      const existing = await tx.execute<{ id: number }>(sql`SELECT id FROM public.manifest WHERE app_version_id = ${record.id} LIMIT 1`)
+      if (existing.rows.length > 0)
+        return true
 
-    const existing = await pgClient.query<{ id: number }>(
-      'SELECT id FROM public.manifest WHERE app_version_id = $1 LIMIT 1',
-      [record.id],
-    )
-    if (existing.rows.length > 0) {
-      await pgClient.query('COMMIT')
-      if (options.clearAppVersionsManifest)
-        await clearLegacyAppVersionManifest(c, record.id)
-      return { inserted: 0, alreadyPresent: true }
-    }
+      const rowsJson = JSON.stringify(validEntries.map(({ file_name, s3_path, file_hash, file_size }) => ({ file_name, s3_path, file_hash, file_size })))
+      await tx.execute(sql`INSERT INTO public.manifest (app_version_id, file_name, s3_path, file_hash, file_size)
+        SELECT ${record.id}::bigint, entry.file_name, entry.s3_path, entry.file_hash, entry.file_size FROM jsonb_to_recordset(${rowsJson}::jsonb)
+        AS entry(file_name text, s3_path text, file_hash text, file_size bigint)`)
 
-    await pgClient.query(
-      `INSERT INTO public.manifest (app_version_id, file_name, s3_path, file_hash, file_size)
-       SELECT
-         $1::bigint,
-         entry.file_name,
-         entry.s3_path,
-         entry.file_hash,
-         0
-       FROM jsonb_to_recordset($2::jsonb) AS entry(
-         file_name text,
-         s3_path text,
-         file_hash text
-       )`,
-      [record.id, JSON.stringify(validEntries.map(({ file_name, s3_path, file_hash }) => ({ file_name, s3_path, file_hash })))],
-    )
+      if (!options.trustFileSizes)
+        await tx.execute(sql`WITH queued AS MATERIALIZED (SELECT pgmq.send('on_manifest_create', pg_catalog.jsonb_build_object(
+          'function_name', 'on_manifest_create', 'function_type', 'cloudflare', 'payload', pg_catalog.jsonb_build_object('old_record', NULL,
+          'record', pg_catalog.to_jsonb(manifest), 'type', 'INSERT', 'table', 'manifest', 'schema', 'public'))) AS msg_id
+          FROM public.manifest WHERE app_version_id = ${record.id}) SELECT count(*) FROM queued`)
 
-    await pgClient.query(
-      `UPDATE public.app_versions
-       SET manifest_count = $2,
-           updated_at = now()
-           ${options.clearAppVersionsManifest ? ', manifest = NULL' : ''}
-       WHERE id = $1`,
-      [record.id, validEntries.length],
-    )
-
-    await pgClient.query(
-      `UPDATE public.apps
-       SET manifest_bundle_count = manifest_bundle_count + 1,
-           updated_at = now()
-       WHERE app_id = $1`,
-      [record.app_id],
-    )
-
-    await pgClient.query('COMMIT')
+      await tx.execute(sql`UPDATE public.app_versions SET manifest_count = ${validEntries.length}, updated_at = now()
+        ${sql.raw(options.clearAppVersionsManifest ? ', manifest = NULL' : '')} WHERE id = ${record.id}`)
+      await tx.execute(sql`UPDATE public.apps SET manifest_bundle_count = manifest_bundle_count + 1, updated_at = now() WHERE app_id = ${record.app_id}`)
+      return false
+    })
   }
   catch (error) {
-    try {
-      await pgClient.query('ROLLBACK')
-    }
-    catch (rollbackError) {
-      cloudlog({ requestId: c.get('requestId'), message: 'error rollback manifest persist', error: rollbackError, id: record.id })
-    }
     cloudlog({ requestId: c.get('requestId'), message: 'error insert manifest', error, id: record.id })
     throw error
   }
   finally {
-    pgClient.release()
     await closeClient(c, pgPool)
+  }
+
+  if (alreadyPresent) {
+    if (options.clearAppVersionsManifest)
+      await clearLegacyAppVersionManifest(c, record.id)
+    return { inserted: 0, alreadyPresent: true }
   }
 
   return { inserted: validEntries.length, alreadyPresent: false }

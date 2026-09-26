@@ -1931,6 +1931,7 @@ export interface VersionManifestEntry {
   file_name: string
   s3_path: string
   file_hash: string
+  file_size_receipt?: string
 }
 
 /**

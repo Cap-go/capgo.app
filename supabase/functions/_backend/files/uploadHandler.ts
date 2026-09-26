@@ -16,6 +16,7 @@ import { requestId } from 'hono/request-id'
 import { Hono } from 'hono/tiny'
 import { quickError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
+import { createManifestSizeReceipt, MANIFEST_SIZE_RECEIPT_HEADER } from '../utils/manifest_size_receipt.ts'
 import { onError } from '../utils/on_error.ts'
 import { noopDigester, sha256Digester } from './digest.ts'
 import { parseChecksum, parseUploadMetadata } from './parse.ts'
@@ -84,6 +85,7 @@ function optionsHandler(c: Context) {
 
 interface Env {
   ATTACHMENT_BUCKET: R2Bucket
+  API_SECRET: string
 }
 
 export class UploadHandler extends DurableObject {
@@ -91,6 +93,7 @@ export class UploadHandler extends DurableObject {
   parts: StoredR2Part[]
   multipart: RetryMultipartUpload | undefined
   retryBucket: RetryBucket
+  receiptSecret: string
 
   // only allow a single request to operate at a time
   requestGate: AsyncLock
@@ -98,6 +101,7 @@ export class UploadHandler extends DurableObject {
   constructor(ctx: ConstructorParameters<typeof DurableObject>[0], env: Env) {
     super(ctx, env)
     const bucket = env.ATTACHMENT_BUCKET
+    this.receiptSecret = env.API_SECRET
     this.parts = []
     this.requestGate = new AsyncLock()
     this.retryBucket = new RetryBucket(bucket, DEFAULT_RETRY_PARAMS)
@@ -367,6 +371,13 @@ export class UploadHandler extends DurableObject {
     const uploadOffset = hasContent
       ? await this.appendBody(c, r2Key, c.req.raw.body as ReadableStream<Uint8Array>, 0, uploadInfo)
       : 0
+    if (!hasContent && uploadLength === 0) {
+      await this.r2Put(c, r2Key, new Uint8Array(), checksum, uploadInfo.contentType)
+      await this.cleanup()
+    }
+    const receipt = uploadInfo.uploadLength === uploadOffset && this.receiptSecret
+      ? await createManifestSizeReceipt(this.receiptSecret, r2Key, uploadOffset)
+      : null
     return new Response(null, {
       status: 201,
       headers: new Headers({
@@ -378,6 +389,7 @@ export class UploadHandler extends DurableObject {
         'Access-Control-Allow-Methods': ALLOWED_METHODS,
         'Access-Control-Allow-Headers': ALLOWED_HEADERS,
         'Access-Control-Expose-Headers': EXPOSED_HEADERS,
+        ...(receipt ? { [MANIFEST_SIZE_RECEIPT_HEADER]: receipt } : {}),
       }),
     })
   }
@@ -390,6 +402,7 @@ export class UploadHandler extends DurableObject {
       return quickError(400, 'missing_upload_id', 'Missing upload id')
 
     let offset: number | undefined = await this.ctx.storage.get(UPLOAD_OFFSET_KEY)
+    let completed = false
     let uploadLength: number | undefined
     if (offset == null) {
       const headResponse = await this.retryBucket.head(r2Key)
@@ -399,6 +412,7 @@ export class UploadHandler extends DurableObject {
       }
       offset = headResponse.size
       uploadLength = headResponse.size
+      completed = true
     }
     else {
       const info: StoredUploadInfo | undefined = await this.ctx.storage.get(UPLOAD_INFO_KEY)
@@ -418,6 +432,8 @@ export class UploadHandler extends DurableObject {
     if (uploadLength != null) {
       headers.set('Upload-Length', uploadLength.toString())
     }
+    if (completed && this.receiptSecret)
+      headers.set(MANIFEST_SIZE_RECEIPT_HEADER, await createManifestSizeReceipt(this.receiptSecret, r2Key, offset))
     return new Response(null, { headers })
   }
 
@@ -463,6 +479,9 @@ export class UploadHandler extends DurableObject {
 
     uploadOffset = await this.appendBody(c, r2Key, c.req.raw.body, currentUploadOffset, uploadInfo)
 
+    const receipt = uploadInfo.uploadLength === uploadOffset && this.receiptSecret
+      ? await createManifestSizeReceipt(this.receiptSecret, r2Key, uploadOffset)
+      : null
     return new Response(null, {
       status: 204,
       headers: new Headers({
@@ -473,6 +492,7 @@ export class UploadHandler extends DurableObject {
         'Access-Control-Allow-Methods': ALLOWED_METHODS,
         'Access-Control-Allow-Headers': ALLOWED_HEADERS,
         'Access-Control-Expose-Headers': EXPOSED_HEADERS,
+        ...(receipt ? { [MANIFEST_SIZE_RECEIPT_HEADER]: receipt } : {}),
       }),
     })
   }

@@ -12,12 +12,13 @@ import { quickError, simpleError } from '../utils/hono.ts'
 import { onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
 import { middlewareKey } from '../utils/hono_middleware.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
+import { createManifestSizeReceipt, MANIFEST_SIZE_RECEIPT_HEADER } from '../utils/manifest_size_receipt.ts'
 import { closeClient, getAppByIdPg, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { getAppByAppIdPg, getUserIdFromApikey } from '../utils/pg_files.ts'
 import { checkPermissionPg } from '../utils/rbac.ts'
 import { createStatsBandwidth } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
-import { backgroundTask } from '../utils/utils.ts'
+import { backgroundTask, getEnv } from '../utils/utils.ts'
 import { buildFileReadCacheRequest, getFileReadCache, isAttachmentVersionDeleted } from './file_read_cache.ts'
 import { app as files_config } from './files_config.ts'
 import { parseUploadMetadata } from './parse.ts'
@@ -538,6 +539,7 @@ async function getHandler(c: Context): Promise<Response> {
     }
 
     const headers = objectHeaders(objectInfo)
+    await addManifestSizeReceipt(c, headers, fileId, objectInfo.size)
     headers.set('Content-Disposition', `attachment; filename="${objectInfo.key}"`)
 
     if (rangeHeaderFromRequest) {
@@ -576,6 +578,7 @@ async function getHandler(c: Context): Promise<Response> {
   const bytesTransferred = calculateBytesTransferred(object.size, object.range)
   await saveBandwidthUsage(c, bytesTransferred)
   const headers = objectHeaders(object)
+  await addManifestSizeReceipt(c, headers, fileId, object.size)
   headers.set('content-length', bytesTransferred.toString())
   if (object.range != null && c.req.header('range')) {
     cloudlog({ requestId: c.get('requestId'), message: 'getHandler files range request', range: rangeHeader(object.size, object.range) })
@@ -612,6 +615,12 @@ function objectHeaders(object: R2Object): Headers {
     headers.set(X_CHECKSUM_SHA256, object.customMetadata[X_CHECKSUM_SHA256])
   }
   return headers
+}
+
+async function addManifestSizeReceipt(c: Context, headers: Headers, path: string, size: number) {
+  const secret = getEnv(c, 'API_SECRET')
+  if (secret && c.req.query('nocache'))
+    headers.set(MANIFEST_SIZE_RECEIPT_HEADER, await createManifestSizeReceipt(secret, path, size))
 }
 
 function rangeHeader(objLen: number, r2Range: R2Range): string {

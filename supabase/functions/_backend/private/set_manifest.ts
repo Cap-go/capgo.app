@@ -6,8 +6,10 @@ import { BRES, parseBody, quickError, simpleError } from '../utils/hono.ts'
 import { middlewareKey } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { persistVersionManifestEntries } from '../utils/manifest_persist.ts'
+import { verifyManifestSizeReceipts } from '../utils/manifest_size_receipt.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { supabaseAdmin, supabaseApikey } from '../utils/supabase.ts'
+import { getEnv } from '../utils/utils.ts'
 
 interface DataSetManifest {
   app_id: string
@@ -87,6 +89,18 @@ app.post('/', middlewareKey(), async (c) => {
     })
   }
 
+  const receiptMode = body.manifest.some(entry => entry.file_size_receipt != null)
+  let trustFileSizes = false
+  if (receiptMode) {
+    if (body.manifest.some(entry => typeof entry.file_size_receipt !== 'string' || entry.file_size_receipt.length > 128))
+      return quickError(400, 'error_manifest_size_receipt_invalid', 'Every manifest entry must include a valid size receipt')
+    const sizes = await verifyManifestSizeReceipts(getEnv(c, 'API_SECRET'), body.manifest.map(entry => ({ path: entry.s3_path!, receipt: entry.file_size_receipt! })))
+    if (!sizes)
+      return quickError(400, 'error_manifest_size_receipt_invalid', 'Manifest size receipt verification failed')
+    body.manifest = body.manifest.map((entry, index) => ({ ...entry, file_size: sizes[index] }))
+    trustFileSizes = true
+  }
+
   // After storage_provider flips to r2, only idempotent retries are allowed.
   if (version.storage_provider === 'r2') {
     const { data: existingEntries, error: existingError } = await supabaseAdmin(c)
@@ -115,7 +129,7 @@ app.post('/', middlewareKey(), async (c) => {
       c,
       { id: version.id, app_id: version.app_id },
       body.manifest,
-      { s3PathPrefix },
+      { s3PathPrefix, trustFileSizes },
     )
 
     cloudlog({
