@@ -101,7 +101,7 @@ async function fetchHead(appGlobal: Awaited<ReturnType<typeof createFilesApp>>, 
   const headers = range ? { range } : undefined
   return appGlobal.fetch(
     new Request(readUrl, { method: 'HEAD', headers }),
-    { API_SECRET: 'receipt-secret', ATTACHMENT_BUCKET: {} },
+    { MANIFEST_SIZE_RECEIPT_SECRET: 'receipt-secret', ATTACHMENT_BUCKET: {} },
     { waitUntil: () => { } } as any,
   )
 }
@@ -110,7 +110,7 @@ describe('files attachment HEAD reads on workerd/R2', () => {
   beforeEach(() => {
     vi.resetModules()
     vi.clearAllMocks()
-    vi.stubEnv('API_SECRET', 'receipt-secret')
+    vi.stubEnv('MANIFEST_SIZE_RECEIPT_SECRET', 'receipt-secret')
     queryMock.mockResolvedValue({ rows: [] })
     globalThis.caches = {
       default: {

@@ -8,6 +8,7 @@ import {
   fetchTestRequest,
   getEndpointUrl,
   getSupabaseClient,
+  MANIFEST_SIZE_RECEIPT_SECRET,
   ORG_ID,
   resetAndSeedAppData,
   resetAppData,
@@ -139,7 +140,7 @@ describe('[POST] /private/set_manifest', () => {
     const sizes = [321, 654]
     const manifest = await Promise.all(entries.map(async (entry, index) => ({
       ...entry,
-      file_size_receipt: await createManifestSizeReceipt(API_SECRET, entry.s3_path, sizes[index]!),
+      file_size_receipt: await createManifestSizeReceipt(MANIFEST_SIZE_RECEIPT_SECRET, entry.s3_path, sizes[index]!),
     })))
 
     const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
@@ -167,7 +168,27 @@ describe('[POST] /private/set_manifest', () => {
     const name = `${BUNDLE_NAME}-mixed-receipts`
     const version = await createUploadVersion('r2-direct', name)
     const manifest = manifestEntries(version.owner_org)
-    manifest[0]!.file_size_receipt = await createManifestSizeReceipt(API_SECRET, manifest[0]!.s3_path, 321)
+    manifest[0]!.file_size_receipt = await createManifestSizeReceipt(MANIFEST_SIZE_RECEIPT_SECRET, manifest[0]!.s3_path, 321)
+
+    const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
+      method: 'POST',
+      retryUnsafe: true,
+      headers: { 'Content-Type': 'application/json', 'Authorization': APIKEY_TEST_ALL },
+      body: JSON.stringify({ app_id: APP_ID, name, manifest }),
+    })
+
+    expect(response.status).toBe(400)
+    const rows = await executeSQL('SELECT id FROM public.manifest WHERE app_version_id = $1', [version.id])
+    expect(rows).toHaveLength(0)
+  })
+
+  it('rejects receipts signed with the unrelated API secret', async () => {
+    const name = `${BUNDLE_NAME}-api-secret`
+    const version = await createUploadVersion('r2-direct', name)
+    const manifest = await Promise.all(manifestEntries(version.owner_org).map(async entry => ({
+      ...entry,
+      file_size_receipt: await createManifestSizeReceipt(API_SECRET, entry.s3_path, 321),
+    })))
 
     const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
       method: 'POST',

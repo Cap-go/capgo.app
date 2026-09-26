@@ -618,7 +618,7 @@ function objectHeaders(object: R2Object): Headers {
 }
 
 async function addManifestSizeReceipt(c: Context, headers: Headers, path: string, size: number) {
-  const secret = getEnv(c, 'API_SECRET')
+  const secret = getEnv(c, 'MANIFEST_SIZE_RECEIPT_SECRET')
   if (secret && c.req.query('nocache'))
     headers.set(MANIFEST_SIZE_RECEIPT_HEADER, await createManifestSizeReceipt(secret, path, size))
 }

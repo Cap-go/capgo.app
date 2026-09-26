@@ -94,7 +94,7 @@ app.post('/', middlewareKey(), async (c) => {
   if (receiptMode) {
     if (body.manifest.some(entry => typeof entry.file_size_receipt !== 'string' || entry.file_size_receipt.length > 128))
       return quickError(400, 'error_manifest_size_receipt_invalid', 'Every manifest entry must include a valid size receipt')
-    const sizes = await verifyManifestSizeReceipts(getEnv(c, 'API_SECRET'), body.manifest.map(entry => ({ path: entry.s3_path!, receipt: entry.file_size_receipt! })))
+    const sizes = await verifyManifestSizeReceipts(getEnv(c, 'MANIFEST_SIZE_RECEIPT_SECRET'), body.manifest.map(entry => ({ path: entry.s3_path!, receipt: entry.file_size_receipt! })))
     if (!sizes)
       return quickError(400, 'error_manifest_size_receipt_invalid', 'Manifest size receipt verification failed')
     body.manifest = body.manifest.map((entry, index) => ({ ...entry, file_size: sizes[index] }))

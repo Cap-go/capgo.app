@@ -85,7 +85,7 @@ function optionsHandler(c: Context) {
 
 interface Env {
   ATTACHMENT_BUCKET: R2Bucket
-  API_SECRET: string
+  MANIFEST_SIZE_RECEIPT_SECRET: string
 }
 
 export class UploadHandler extends DurableObject {
@@ -101,7 +101,7 @@ export class UploadHandler extends DurableObject {
   constructor(ctx: ConstructorParameters<typeof DurableObject>[0], env: Env) {
     super(ctx, env)
     const bucket = env.ATTACHMENT_BUCKET
-    this.receiptSecret = env.API_SECRET
+    this.receiptSecret = env.MANIFEST_SIZE_RECEIPT_SECRET
     this.parts = []
     this.requestGate = new AsyncLock()
     this.retryBucket = new RetryBucket(bucket, DEFAULT_RETRY_PARAMS)
@@ -402,7 +402,6 @@ export class UploadHandler extends DurableObject {
       return quickError(400, 'missing_upload_id', 'Missing upload id')
 
     let offset: number | undefined = await this.ctx.storage.get(UPLOAD_OFFSET_KEY)
-    let completed = false
     let uploadLength: number | undefined
     if (offset == null) {
       const headResponse = await this.retryBucket.head(r2Key)
@@ -412,7 +411,6 @@ export class UploadHandler extends DurableObject {
       }
       offset = headResponse.size
       uploadLength = headResponse.size
-      completed = true
     }
     else {
       const info: StoredUploadInfo | undefined = await this.ctx.storage.get(UPLOAD_INFO_KEY)
@@ -432,7 +430,7 @@ export class UploadHandler extends DurableObject {
     if (uploadLength != null) {
       headers.set('Upload-Length', uploadLength.toString())
     }
-    if (completed && this.receiptSecret)
+    if (offset === uploadLength && this.receiptSecret)
       headers.set(MANIFEST_SIZE_RECEIPT_HEADER, await createManifestSizeReceipt(this.receiptSecret, r2Key, offset))
     return new Response(null, { headers })
   }
