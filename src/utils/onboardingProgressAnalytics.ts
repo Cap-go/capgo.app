@@ -1,4 +1,4 @@
-import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '~/utils/onboardingChannelAnalytics'
+import type { OnboardingChannelEvent, OnboardingChannelEventProperties, OnboardingChannelStage } from '~/utils/onboardingChannelAnalytics'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 
 export const ONBOARDING_ANALYTICS_VERSION = 4
@@ -16,7 +16,7 @@ export type OnboardingAnalyticsVersion
     | typeof NEW_CHANNEL_PUBLISH_INTENT_ANALYTICS_VERSION
 
 export type OnboardingAnalyticsFlow = 'pre_org' | 'existing_org'
-export type OnboardingAnalyticsStep = 'welcome' | 'intent' | 'publish_app_question' | 'details' | 'app_name' | 'app_id' | 'app_icon' | 'organization' | 'choice' | 'install' | 'setup'
+export type OnboardingAnalyticsStep = 'welcome' | 'intent' | 'publish_app_question' | 'details' | 'app_name' | 'app_id' | 'app_icon' | 'organization' | 'choice' | 'channel' | 'install' | 'setup'
 export type OnboardingCopyEvent = 'onboarding_ai_instructions_copied' | 'onboarding_cli_command_copied'
 export type OnboardingDevelopmentEnvironment = 'hosted_builder' | 'ai_assistant' | 'hand_coded' | 'other' | 'local_project' | 'exploring' | 'skipped'
 export type OnboardingIntent = 'ota' | 'builder' | 'both' | 'exploring' | 'publish'
@@ -118,7 +118,9 @@ export function resolveOnboardingAppIconSource(options: {
 }
 
 export type OnboardingInteractionProperties = Partial<OnboardingChannelEventProperties> & {
+  app_id?: string
   development_environment?: OnboardingDevelopmentEnvironment
+  existing_app?: boolean
   invitation_count?: number
   intent?: OnboardingIntent
   starting_out?: boolean
@@ -220,13 +222,13 @@ export function createOnboardingTelemetryIdentity(options: CreateOnboardingTelem
   }
 
   function recordResumeDialogViewed() {
-    if (recorded.dialog || !candidate)
+    if (recorded.dialog || recorded.decision || !candidate)
       return
     recorded.dialog = true
     safelyCapture('onboarding_resume_dialog_viewed', resumeProperties(candidate))
   }
 
-  function recordDecision(name: string, continueSavedAttempt: boolean) {
+  function recordDecision(name: string, continueSavedAttempt: boolean, details: AnalyticsProperties = {}) {
     if (recorded.decision || !candidate)
       return
     recorded.decision = true
@@ -234,7 +236,7 @@ export function createOnboardingTelemetryIdentity(options: CreateOnboardingTelem
     if (continueSavedAttempt && candidate.onboardingAttemptId)
       activeAttemptId = candidate.onboardingAttemptId
 
-    const properties = resumeProperties(candidate)
+    const properties = { ...resumeProperties(candidate), ...details }
     if (activeAttemptId !== previousAttemptId)
       properties.initial_onboarding_attempt_id = initialAttemptId
     safelyCapture(name, properties)
@@ -248,6 +250,7 @@ export function createOnboardingTelemetryIdentity(options: CreateOnboardingTelem
       candidate = next
     },
     recordResumeContinued: () => recordDecision('onboarding_resume_continued', true),
+    recordResumeDialogSkipped: (channelStage: OnboardingChannelStage) => recordDecision('onboarding_resume_dialog_skipped', true, { channel_stage: channelStage }),
     recordResumeDialogViewed,
     recordResumeRestarted: () => recordDecision('onboarding_resume_restarted', false),
   }

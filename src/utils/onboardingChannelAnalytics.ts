@@ -51,7 +51,7 @@ export interface OnboardingChannelEventProperties {
   flow_exit_action?: 'closed' | 'completed'
   had_completed_animation?: boolean
   navigation_direction?: 'backward' | 'forward'
-  next_channel_stage?: OnboardingChannelStage | 'cli'
+  next_channel_stage?: OnboardingChannelStage | 'setup' | 'install'
   permission_state?: 'denied' | 'granted' | 'not_checked'
   reduced_motion?: boolean
   replay_count?: number

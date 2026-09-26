@@ -5,6 +5,7 @@ import {
   hasWebNativeDevelopmentEnvironmentTreatment,
   hasWebNativePublishIntentTreatment,
   NEW_CHANNEL_AB_TEST,
+  OTA_TODO_LIST_V3_AB_TEST,
   parseOnboardingABTestAssignments,
   reconcileOnboardingABTestAssignments,
   resolveOnboardingAnalyticsVersion,
@@ -155,16 +156,47 @@ describe('webNativeApp onboarding A/B tests', () => {
   })
 })
 
-describe('independent checklist version experiment', () => {
-  it.concurrent('does not change PostHog wizard version when the todo-list flag is added', () => {
-    for (const intent of ['ota', 'both', 'builder'] as const) {
-      for (const channelBranch of ['A', 'B'] as const) {
-        const existing = { abtests: { [NEW_CHANNEL_AB_TEST]: { branch: channelBranch, assigned_at: '2026-09-16T00:00:00Z' } } }
-        const treatment = { abtests: { ...existing.abtests, ota_todo_list_v3: { branch: 'A', assigned_at: '2026-09-16T00:00:00Z' } } }
-        if (channelBranch === 'A' && intent === 'ota')
-          expect(resolveOnboardingAnalyticsVersion(existing, intent)).toBe('5.E')
-        expect(resolveOnboardingAnalyticsVersion(treatment, intent)).toBe(resolveOnboardingAnalyticsVersion(existing, intent))
+describe('channel and checklist experiment interaction', () => {
+  it.concurrent('explicitly disables the channel treatment when the new todo list is assigned', () => {
+    const channelTreatment = onboardingWithNewChannel('B', 'D', 'A')
+    const combinedTreatment = {
+      ...channelTreatment,
+      abtests: {
+        ...channelTreatment.abtests,
+        [OTA_TODO_LIST_V3_AB_TEST]: { branch: 'A', assigned_at: '2026-09-16T00:00:00Z' },
+      },
+    }
+    const todoControl = {
+      ...channelTreatment,
+      abtests: {
+        ...channelTreatment.abtests,
+        [OTA_TODO_LIST_V3_AB_TEST]: { branch: 'B', assigned_at: '2026-09-16T00:00:00Z' },
+      },
+    }
+
+    expect(hasNewChannelTreatment(channelTreatment)).toBe(true)
+    expect(hasNewChannelTreatment(combinedTreatment)).toBe(false)
+    expect(hasNewChannelTreatment(todoControl)).toBe(true)
+    expect(resolveOnboardingAnalyticsVersion(channelTreatment, 'ota')).toBe('5.E')
+    expect(resolveOnboardingAnalyticsVersion(combinedTreatment, 'ota')).toBe(4)
+    expect(resolveOnboardingAnalyticsVersion(todoControl, 'ota')).toBe('5.E')
+  })
+
+  it.concurrent('falls back to the remaining active experiment analytics version', () => {
+    for (const [publishBranch, environmentBranch, expected] of [
+      ['A', 'D', '5.A'],
+      ['B', 'C', '5.C'],
+    ] as const) {
+      const channelTreatment = onboardingWithNewChannel(publishBranch, environmentBranch, 'A')
+      const combinedTreatment = {
+        ...channelTreatment,
+        abtests: {
+          ...channelTreatment.abtests,
+          [OTA_TODO_LIST_V3_AB_TEST]: { branch: 'A', assigned_at: '2026-09-16T00:00:00Z' },
+        },
       }
+
+      expect(resolveOnboardingAnalyticsVersion(combinedTreatment, 'ota')).toBe(expected)
     }
   })
 })

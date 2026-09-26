@@ -15,6 +15,7 @@ import {
 export const WEBNATIVE_PUBLISH_INTENT_AB_TEST = 'webnativeapp_publish_intent'
 export const WEBNATIVE_DEVELOPMENT_ENVIRONMENT_AB_TEST = 'webnativeapp_development_environment'
 export const NEW_CHANNEL_AB_TEST = 'new_channel'
+export const OTA_TODO_LIST_V3_AB_TEST = 'ota_todo_list_v3'
 
 export type OnboardingABTestBranch = 'A' | 'B' | 'C' | 'D'
 
@@ -79,7 +80,10 @@ export function hasWebNativeDevelopmentEnvironmentTreatment(onboarding: unknown)
 }
 
 export function hasNewChannelTreatment(onboarding: unknown): boolean {
-  return getABTestBranch(onboarding, NEW_CHANNEL_AB_TEST) === 'A'
+  // The new OTA todo list owns channel creation. Its treatment intentionally
+  // overrides a simultaneous new-channel treatment so users do not see both.
+  return getABTestBranch(onboarding, OTA_TODO_LIST_V3_AB_TEST) !== 'A'
+    && getABTestBranch(onboarding, NEW_CHANNEL_AB_TEST) === 'A'
 }
 
 export function shouldShowWebNativePublishIntent(onboarding: unknown): boolean {
