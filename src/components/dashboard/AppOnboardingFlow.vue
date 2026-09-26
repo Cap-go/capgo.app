@@ -51,7 +51,7 @@ import {
 import { isBuilderTodoListSelected } from '~/services/builderOnboardingChecklist'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { buildCliAiSetupPrompt } from '~/services/cliAiPrompt'
-import { sendOnboardingEvent } from '~/services/onboardingTracking'
+import { APP_ONBOARDING_READY_EVENT, sendOnboardingEvent } from '~/services/onboardingTracking'
 import { uploadOrgLogoFile } from '~/services/photos'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
@@ -417,6 +417,7 @@ watch([flowStep, createdApp, setupStage, usesBuilderSetupCommand], () => {
   if (flowStep.value === 'setup' && setupStage.value === 'cli')
     void markOnboardingFeatureStarted(usesBuilderSetupCommand.value ? 'builder' : 'ota')
 })
+
 const cliSubcommand = computed(() => usesBuilderSetupCommand.value ? 'build init' : 'i')
 const builderCliCommand = computed(() => apiKey.value ? `npx @capgo/cli@latest build init -a ${apiKey.value}` : '')
 const cliCommand = computed(() => {
@@ -441,6 +442,7 @@ const cliCommandArgs = computed(() => {
   return args
 })
 const currentOrg = computed(() => organizationStore.currentOrganization)
+
 const resumeAppId = computed(() => {
   const value = route.query.resume
   return typeof value === 'string' ? value : ''
@@ -587,6 +589,33 @@ const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onb
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
 const showBuilderChecklist = computed(() => (flowStep.value === 'setup' || flowStep.value === 'install') && !!createdApp.value && usesBuilderTodoList.value)
 const showSetupChecklist = computed(() => (flowStep.value === 'setup' || flowStep.value === 'install') && usesOtaTodoList.value && !showBuilderChecklist.value)
+
+function emitPendingAppOnboardingReady() {
+  const app = createdApp.value
+  const orgId = currentOrg.value?.gid
+  const isFinalSetupScreen = showBuilderChecklist.value
+    || showSetupChecklist.value
+    || ((flowStep.value === 'setup' || flowStep.value === 'install') && setupStage.value === 'cli')
+  if (
+    !app
+    || app.need_onboarding !== true
+    || !orgId
+    || !isFinalSetupScreen
+  ) {
+    return
+  }
+
+  sendOnboardingEvent(APP_ONBOARDING_READY_EVENT, {
+    app_id: app.app_id,
+    org_id: orgId,
+  })
+}
+
+watch(
+  [flowStep, createdApp, () => currentOrg.value?.gid, setupStage, showBuilderChecklist, showSetupChecklist],
+  emitPendingAppOnboardingReady,
+  { flush: 'post' },
+)
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
 let trackedAnalyticsSteps: OnboardingAnalyticsStep[] = []

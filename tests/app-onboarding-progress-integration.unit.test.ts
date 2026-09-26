@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { URL as NodeUrl } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
-import { createApp } from 'vue'
+import { createApp, nextTick } from 'vue'
 import AppOnboardingFlow from '../src/components/dashboard/AppOnboardingFlow.vue'
 import { sendOnboardingEvent } from '../src/services/onboardingTracking'
 
@@ -38,6 +38,7 @@ const writerMocks = vi.hoisted(() => ({
   refreshUser: vi.fn(),
   replaceUserOnboardingIfUnchanged: vi.fn(),
   route: { query: {} as Record<string, string> },
+  sendOnboardingEvent: vi.fn(),
 }))
 
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
@@ -63,7 +64,10 @@ vi.mock('~/services/apikeys', () => ({
   findUsablePlainApiKey: vi.fn(async () => 'test-api-key'),
   shareInFlightApiKeyLoad: vi.fn(async (_key: unknown, load: () => Promise<unknown>) => load()),
 }))
-vi.mock('~/services/onboardingTracking', () => ({ sendOnboardingEvent: vi.fn() }))
+vi.mock('~/services/onboardingTracking', () => ({
+  APP_ONBOARDING_READY_EVENT: 'app:onboarding_ready',
+  sendOnboardingEvent: writerMocks.sendOnboardingEvent,
+}))
 vi.mock('~/services/capgoApi', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/services/capgoApi')>()
   return {
@@ -837,6 +841,91 @@ describe('app onboarding progress analytics integration', () => {
 
   it.concurrent('retains the existing intent compatibility event', () => {
     expect(onboardingSource).toContain(`sendOnboardingEvent('onboarding_intent_selected', {`)
+  })
+
+  it('emits the pending app ready event only after the final setup screen renders', async () => {
+    const previousUser = writerMocks.main.user
+    const previousRouteQuery = writerMocks.route.query
+    const previousOrganization = writerMocks.organization.currentOrganization
+    const matchMediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+    const pendingApp = {
+      android_store_url: null,
+      app_id: 'com.example.pending-ready',
+      existing_app: true,
+      icon_url: null,
+      ios_store_url: null,
+      name: 'Pending ready app',
+      need_onboarding: true,
+      onboarding: {},
+      owner_org: 'ready-org',
+    }
+    writerMocks.route.query = { resume: pendingApp.app_id, step: 'choice' }
+    writerMocks.organization.currentOrganization = {
+      gid: pendingApp.owner_org,
+      name: 'Ready Org',
+      onboarding: { intent: 'ota' },
+    }
+    writerMocks.main.user = {
+      id: 'user-bento-retry',
+      image_url: 'avatar.png',
+      onboarding: {},
+    }
+    writerMocks.loadApp.mockReset()
+    writerMocks.loadApp.mockResolvedValue({ data: pendingApp, error: null })
+    writerMocks.replaceUserOnboardingIfUnchanged.mockReset()
+    writerMocks.replaceUserOnboardingIfUnchanged.mockImplementation(async (_userId, _expectedOnboarding, onboarding) => ({
+      data: { ...writerMocks.main.user, onboarding },
+      error: null,
+    }))
+    writerMocks.sendOnboardingEvent.mockClear()
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn(() => ({ matches: false })),
+    })
+    const clipboardWrite = vi.fn(async () => undefined)
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: clipboardWrite },
+    })
+    const container = document.createElement('div')
+    const app = createApp(AppOnboardingFlow, { onboarding: true, preOrg: false })
+    app.config.warnHandler = () => undefined
+
+    try {
+      app.mount(container)
+      await vi.waitFor(() => expect(container.textContent).toContain('app-onboarding-choice-real-title'))
+
+      expect(writerMocks.sendOnboardingEvent.mock.calls.filter(([event]) => event === 'app:onboarding_ready')).toHaveLength(0)
+
+      const setupButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+        .find(button => button.textContent?.includes('app-onboarding-choice-real-title'))
+      expect(setupButton).toBeDefined()
+      setupButton!.click()
+      await nextTick()
+
+      await vi.waitFor(() => expect(container.querySelector('[data-test="onboarding-install-cli"]')).not.toBeNull())
+      await vi.waitFor(() => expect(writerMocks.sendOnboardingEvent).toHaveBeenCalledWith('app:onboarding_ready', {
+        app_id: pendingApp.app_id,
+        org_id: pendingApp.owner_org,
+      }))
+      expect(clipboardWrite).not.toHaveBeenCalled()
+      expect(writerMocks.sendOnboardingEvent.mock.calls.filter(([event]) => event === 'app:onboarding_ready')).toHaveLength(1)
+    }
+    finally {
+      app.unmount()
+      writerMocks.main.user = previousUser
+      writerMocks.route.query = previousRouteQuery
+      writerMocks.organization.currentOrganization = previousOrganization
+      if (matchMediaDescriptor)
+        Object.defineProperty(window, 'matchMedia', matchMediaDescriptor)
+      else
+        Reflect.deleteProperty(window, 'matchMedia')
+      if (clipboardDescriptor)
+        Object.defineProperty(navigator, 'clipboard', clipboardDescriptor)
+      else
+        Reflect.deleteProperty(navigator, 'clipboard')
+    }
   })
 
   it.concurrent('keeps Maker+ invitations inside the organization progress step before the eligible next step', () => {

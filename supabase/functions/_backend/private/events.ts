@@ -11,6 +11,7 @@ import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { buildAiInstructionsCopiedBentoEvent } from '../utils/onboarding_copy_tracking.ts'
+import { APP_ONBOARDING_READY_EVENT, buildAppOnboardingReadyBentoEvent } from '../utils/onboarding_app_ready_tracking.ts'
 import { trackPosthogEvent } from '../utils/posthog.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { broadcastCLIEvent } from '../utils/realtime_broadcast.ts'
@@ -232,6 +233,42 @@ async function buildOnboardingBentoEvent(
       },
     }
   })
+}
+
+async function buildTrackedAppOnboardingReadyBentoEvent(
+  c: Context<MiddlewareKeyVariables>,
+  supabase: ReturnType<typeof supabaseWithAuth>,
+  onboardingOrgId: string | undefined,
+  appId: string | undefined,
+  trackedBody: TrackOptions,
+) {
+  if (!onboardingOrgId || !appId || trackedBody.event !== APP_ONBOARDING_READY_EVENT)
+    return undefined
+
+  const [orgResult, appResult] = await Promise.all([
+    supabase
+      .from('orgs')
+      .select('id, name, onboarding, website')
+      .eq('id', onboardingOrgId)
+      .single(),
+    supabase
+      .from('apps')
+      .select('app_id, existing_app, name, need_onboarding, onboarding')
+      .eq('app_id', appId)
+      .single(),
+  ])
+
+  if (orgResult.error || !orgResult.data || appResult.error || !appResult.data) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'app onboarding ready Bento lookup failed; skipping signal',
+      org: orgResult.error,
+      app: appResult.error,
+    })
+    return undefined
+  }
+
+  return buildAppOnboardingReadyBentoEvent(c, trackedBody.event, orgResult.data, appResult.data)
 }
 
 async function buildBuilderBentoEvent(
@@ -497,6 +534,11 @@ app.post('/', middlewareAuth(), async (c) => {
     ?? (!trackingV2 && typeof trackedBody.user_id === 'string' ? trackedBody.user_id : undefined)
   const onboardingBentoEvent: BentoTrackingPayload | undefined = await buildOnboardingBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody)
 
+  // The setup screen is the first point where the pending app is ready for CLI
+  // work. Keep this separate from app:created, which remains a later completion
+  // signal after the CLI clears need_onboarding.
+  const appOnboardingReadyBentoEvent: BentoTrackingPayload | undefined = await buildTrackedAppOnboardingReadyBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody)
+
   // Builder native-build onboarding (capgo build init): emit start/finish signal
   // events to Bento so a later automation can recover users who started but never
   // finished. Mirrors the onboarding-step-done block above. Only the milestone
@@ -530,7 +572,7 @@ app.post('/', middlewareAuth(), async (c) => {
   const appTooLargeBentoEvent: BentoTrackingPayload | undefined = await buildAppTooLargeTrackedBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody)
 
   // Exactly one of these is ever set (distinct event names); `??` picks the active one.
-  const bentoEvent = onboardingBentoEvent ?? builderBentoEvent ?? bundleIncompatibleBentoEvent ?? aiInstructionsCopiedBentoEvent ?? appTooLargeBentoEvent
+  const bentoEvent = appOnboardingReadyBentoEvent ?? onboardingBentoEvent ?? builderBentoEvent ?? bundleIncompatibleBentoEvent ?? aiInstructionsCopiedBentoEvent ?? appTooLargeBentoEvent
   const apikeyId = c.get('apikey')?.id
   await sendEventToTracking(c, addAuthenticatedApiKeyIdToTrackingPayload({
     ...trackedBody,
