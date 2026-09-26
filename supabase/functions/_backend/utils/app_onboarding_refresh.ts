@@ -37,13 +37,22 @@ export async function refreshAppOnboardingBatch(
       pg_catalog.set_config('TimeZone', 'UTC', true)
     `)
 
+    // Messages queued before app_onboarding was deployed have no state row.
+    // Seed one here so those batches remain processable after the migration.
+    await tx.execute(sql`
+      INSERT INTO public.app_onboarding (app_id)
+      SELECT app_id FROM public.apps
+      WHERE app_id = ANY(${sql.param(body.appIds)}::varchar[])
+      ON CONFLICT (app_id) DO NOTHING
+    `)
+
     // Avoid reading large signal tables for messages already covered by a
     // later refresh. Recheck this after locking because another worker may win.
     const { rows: dueApps } = await tx.execute<{ app_id: string }>(sql`
-      SELECT app_id FROM public.apps
-      WHERE app_id = ANY(${sql.param(body.appIds)}::varchar[])
-        AND COALESCE(onboarding->>'refreshed_at', '') < ${body.queuedAt}
-      ORDER BY app_id
+      SELECT state.app_id FROM public.app_onboarding state
+      WHERE state.app_id = ANY(${sql.param(body.appIds)}::varchar[])
+        AND (state.refreshed_at IS NULL OR state.refreshed_at < ${body.queuedAt}::timestamptz)
+      ORDER BY state.app_id
     `)
     if (!dueApps.length)
       return 0
@@ -107,9 +116,8 @@ export async function refreshAppOnboardingBatch(
           first_install_at timestamptz, last_install_at timestamptz,
           first_build_at timestamptz, first_success_at timestamptz, last_build_at timestamptz
         )
-      )
-      UPDATE public.apps a SET onboarding = pg_catalog.jsonb_set(
-        pg_catalog.jsonb_set(
+      ), updated AS (
+        UPDATE public.apps a SET onboarding = pg_catalog.jsonb_set(
           a.onboarding, '{features}',
           COALESCE(a.onboarding->'features', '{}'::jsonb) || pg_catalog.jsonb_build_object(
             'cli_install', public.merge_app_onboarding_feature(
@@ -130,14 +138,18 @@ export async function refreshAppOnboardingBatch(
               a.onboarding->'features'->'builder', s.first_build_at,
               s.first_success_at, s.last_build_at, NULL)
           ), true
-        ), '{refreshed_at}',
-        pg_catalog.to_jsonb(pg_catalog.to_char((now() AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')),
-        true
+        )
+        FROM signals s
+        JOIN public.app_onboarding state ON state.app_id = s.app_id
+        WHERE a.app_id = s.app_id
+          AND (state.refreshed_at IS NULL OR state.refreshed_at < ${body.queuedAt}::timestamptz)
+        RETURNING a.app_id
       )
-      FROM signals s
-      WHERE a.app_id = s.app_id
-        AND COALESCE(a.onboarding->>'refreshed_at', '') < ${body.queuedAt}
-      RETURNING a.app_id
+      INSERT INTO public.app_onboarding (app_id, refreshed_at)
+      SELECT app_id, pg_catalog.now() FROM updated
+      ON CONFLICT (app_id) DO UPDATE
+      SET refreshed_at = EXCLUDED.refreshed_at
+      RETURNING app_id
     `)
     return result.rowCount ?? 0
   })

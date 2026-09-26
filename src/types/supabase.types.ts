@@ -210,6 +210,32 @@ export type Database = {
           },
         ]
       }
+      app_onboarding: {
+        Row: {
+          app_id: string
+          queued_refresh_at: string | null
+          refreshed_at: string | null
+        }
+        Insert: {
+          app_id: string
+          queued_refresh_at?: string | null
+          refreshed_at?: string | null
+        }
+        Update: {
+          app_id?: string
+          queued_refresh_at?: string | null
+          refreshed_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "app_onboarding_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: true
+            referencedRelation: "apps"
+            referencedColumns: ["app_id"]
+          },
+        ]
+      }
       app_stats_refresh_state: {
         Row: {
           app_id: string
