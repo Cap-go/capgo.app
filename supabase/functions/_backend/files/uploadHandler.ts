@@ -430,7 +430,7 @@ export class UploadHandler extends DurableObject {
     if (uploadLength != null) {
       headers.set('Upload-Length', uploadLength.toString())
     }
-    if (offset === uploadLength && this.receiptSecret)
+    if (offset === uploadLength && this.receiptSecret && (await this.retryBucket.head(r2Key))?.size === offset)
       headers.set(MANIFEST_SIZE_RECEIPT_HEADER, await createManifestSizeReceipt(this.receiptSecret, r2Key, offset))
     return new Response(null, { headers })
   }
