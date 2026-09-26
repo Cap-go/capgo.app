@@ -82,7 +82,7 @@ describe('pending onboarding Bento event', () => {
     vi.clearAllMocks()
   })
 
-  it.each(['ota', 'publish'])('includes %s intent when pending onboarding completes', async (intent) => {
+  it.each(['ota', 'publish'])('preserves app:created with %s intent when pending onboarding completes', async (intent) => {
     mocks.org.onboarding = { intent }
     const context = {
       env: { WEBAPP_URL: 'https://console.example' },
