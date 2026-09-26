@@ -308,6 +308,29 @@ describe('stripe subscription event classification', () => {
     expect(stripeData.data.status).toBe('past_due')
   })
 
+  it.concurrent('maps customer.subscription.deleted to canceled status', () => {
+    const stripeData = extractDataEvent(mockContext, {
+      data: {
+        object: {
+          customer: 'cus_deleted_status',
+          id: 'sub_deleted_status',
+          items: {
+            data: [
+              makeSubscriptionItem({
+                interval: 'month',
+                priceId: 'price_monthly_deleted',
+                productId: 'prod_deleted',
+              }),
+            ],
+          },
+        },
+      },
+      type: 'customer.subscription.deleted',
+    } as any)
+
+    expect(stripeData.data.status).toBe('canceled')
+  })
+
   it.concurrent('tags churn from unresolved past due subscriptions', () => {
     expect(stripeEventTestUtils.getChurnReason(
       { status: 'succeeded', past_due_at: '2026-04-01T00:00:00.000Z' },
