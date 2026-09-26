@@ -1031,6 +1031,76 @@
       "type": "bigint"
     },
     {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "version_id",
+      "notNull": true,
+      "position": 1,
+      "table": "manifest_per_version",
+      "type": "bigint"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "format_version",
+      "notNull": true,
+      "position": 2,
+      "table": "manifest_per_version",
+      "type": "smallint"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "entry_count",
+      "notNull": true,
+      "position": 3,
+      "table": "manifest_per_version",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "total_file_size",
+      "notNull": true,
+      "position": 4,
+      "table": "manifest_per_version",
+      "type": "bigint"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "payload_hash",
+      "notNull": true,
+      "position": 5,
+      "table": "manifest_per_version",
+      "type": "bytea"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "manifest",
+      "notNull": true,
+      "position": 6,
+      "table": "manifest_per_version",
+      "type": "bytea"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "created_at",
+      "notNull": true,
+      "position": 7,
+      "table": "manifest_per_version",
+      "type": "timestamp with time zone"
+    },
+    {
       "default": "now()",
       "generated": "",
       "identity": "",
@@ -1950,6 +2020,48 @@
       "valid": true
     },
     {
+      "definition": "CHECK (entry_count >= 0)",
+      "name": "manifest_per_version_entry_count_check",
+      "table": "manifest_per_version",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (format_version >= 0)",
+      "name": "manifest_per_version_format_version_check",
+      "table": "manifest_per_version",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (octet_length(manifest) > 0)",
+      "name": "manifest_per_version_manifest_check",
+      "table": "manifest_per_version",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (octet_length(payload_hash) = 32)",
+      "name": "manifest_per_version_payload_hash_check",
+      "table": "manifest_per_version",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "PRIMARY KEY (version_id)",
+      "name": "manifest_per_version_pkey",
+      "table": "manifest_per_version",
+      "type": "p",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (total_file_size >= 0)",
+      "name": "manifest_per_version_total_file_size_check",
+      "table": "manifest_per_version",
+      "type": "c",
+      "valid": true
+    },
+    {
       "definition": "PRIMARY KEY (owner_org, event, uniq_id)",
       "name": "notifications_pkey",
       "table": "notifications",
@@ -2415,6 +2527,13 @@
     },
     {
       "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX manifest_per_version_pkey ON public.manifest_per_version USING btree (version_id)",
+      "name": "manifest_per_version_pkey",
+      "table": "manifest_per_version",
+      "valid": true
+    },
+    {
+      "constraintOwned": true,
       "definition": "CREATE UNIQUE INDEX notifications_pkey ON public.notifications USING btree (owner_org, event, uniq_id)",
       "name": "notifications_pkey",
       "table": "notifications",
@@ -2694,6 +2813,11 @@
         "autovacuum_analyze_scale_factor=0.02",
         "autovacuum_vacuum_scale_factor=0.05"
       ]
+    },
+    {
+      "kind": "r",
+      "name": "manifest_per_version",
+      "reloptions": []
     },
     {
       "kind": "r",
