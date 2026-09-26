@@ -3,7 +3,7 @@ import type { AppOnboardingBuilderStepId, AppOnboardingBuilderStepState, AppOnbo
 import type { MiddlewareKeyVariables } from './hono.ts'
 import type { TrackOptions } from './tracking.ts'
 import { emitCommittedAppOnboardingHistory, emitCommittedSystemAppOnboardingHistory } from './app_onboarding_posthog.ts'
-import { appendAppOnboardingStepHistory, applyAppOnboardingPatch } from './appOnboarding.ts'
+import { applyAppOnboardingPatch } from './appOnboarding.ts'
 import { persistAppOnboardingMutation, persistAuthorizedOnboardingMutation } from './appOnboardingMutation.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
 
@@ -166,26 +166,21 @@ export function getBuilderBuildOutcomeUpdate(platform: 'ios' | 'android', status
   return null
 }
 
-export function applyBuilderBuildOutcomeRepairs(
+export function buildBuilderBuildOutcomePatch(
   onboarding: unknown,
   outcomes: Array<Pick<BuilderBuildOutcome, 'platform' | 'status'>>,
   now = () => new Date().toISOString(),
-): Record<string, unknown> | null {
-  let current = onboarding
-  let changed = false
+): AppOnboardingPatch | null {
+  const builderSteps: NonNullable<AppOnboardingPatch['builderSteps']> = {}
+  const at = now()
   for (const outcome of outcomes) {
     const update = getBuilderBuildOutcomeUpdate(outcome.platform, outcome.status)
     if (!update)
       continue
-    const at = now()
-    const patch = buildBuilderChecklistPatch(current, update, () => at)
-    if (!patch)
-      continue
-    const merged = applyAppOnboardingPatch(current, patch, () => at)
-    current = appendAppOnboardingStepHistory(current, merged, patch, () => at)
-    changed = true
+    const patch = buildBuilderChecklistPatch(onboarding, update, () => at)
+    Object.assign(builderSteps, patch?.builderSteps)
   }
-  return changed && isRecord(current) ? current : null
+  return Object.keys(builderSteps).length ? { builderSteps } : null
 }
 
 function buildBuilderChecklistPatch(

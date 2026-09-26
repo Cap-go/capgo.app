@@ -156,61 +156,6 @@ describe('backend onboarding refresh', () => {
     }
   })
 
-  it('repairs Builder cloud-build steps from platform-specific evidence', async () => {
-    const pool = await getPostgresClient()
-    const client = await pool.connect()
-    const item = await fixture(client, 1)
-    const appId = item.ids[0]
-    let released = false
-    try {
-      const onboarding = {
-        setup: {
-          todo_list_version: 4,
-          builder_todo_list_version: '1',
-          paths: ['builder'],
-          selected_path: 'builder',
-          source: 'manual',
-          outcome: 'in_progress',
-          steps: {
-            builder: {
-              ios: { successful_cloud_build: { status: 'pending' } },
-              android: { successful_cloud_build: { status: 'pending' } },
-            },
-          },
-        },
-      }
-      await client.query('UPDATE public.apps SET onboarding=$2::jsonb WHERE app_id=$1', [appId, JSON.stringify(onboarding)])
-      const owner = (await client.query('SELECT created_by FROM public.orgs WHERE id=$1', [item.orgId])).rows[0].created_by
-      await client.query(`INSERT INTO public.build_requests(
-        app_id,owner_org,requested_by,platform,status,upload_session_key,upload_path,upload_url,upload_expires_at,created_at,completed_at)
-        VALUES
-          ($1,$2,$3,'ios','failed','refresh-ios-failed','fixture/ios-failed','https://example.com',now(),now()-interval '3 minutes',now()-interval '2 minutes'),
-          ($1,$2,$3,'ios','released','refresh-ios-released','fixture/ios-released','https://example.com',now(),now()-interval '2 minutes',now()-interval '1 minute'),
-          ($1,$2,$3,'android','failed','refresh-android-failed','fixture/android-failed','https://example.com',now(),now()-interval '1 minute',now())`, [appId, item.orgId, owner])
-      client.release()
-      released = true
-
-      expect(await refreshAppOnboardingBatch(getDrizzleClient(pool), { appIds: [appId], queuedAt: new Date(Date.now() - 60000).toISOString() })).toBe(1)
-      const setup = (await pool.query('SELECT onboarding->\'setup\' AS setup FROM public.apps WHERE app_id=$1', [appId])).rows[0].setup
-      expect(setup.steps.builder.ios.successful_cloud_build).toMatchObject({
-        status: 'done',
-        update_history: [{ status: 'done' }],
-      })
-      expect(setup.steps.builder.ios.successful_cloud_build).not.toHaveProperty('annotation')
-      expect(setup.steps.builder.android.successful_cloud_build).toMatchObject({
-        status: 'warning',
-        annotation: 'cloud_build_failed',
-        annotation_type: 'warning',
-        update_history: [{ status: 'warning' }],
-      })
-    }
-    finally {
-      if (!released)
-        client.release()
-      await cleanup(pool, [item])
-    }
-  })
-
   it('rolls back feature and checkpoint writes when the transaction fails', async () => {
     const pool = await getPostgresClient()
     const client = await pool.connect()

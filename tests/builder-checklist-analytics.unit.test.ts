@@ -1,9 +1,10 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../supabase/functions/_backend/utils/hono.ts'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { appendAppOnboardingStepHistory, applyAppOnboardingPatch } from '../supabase/functions/_backend/utils/appOnboarding.ts'
 import {
-  applyBuilderBuildOutcomeRepairs,
   applyBuilderChecklistUpdate,
+  buildBuilderBuildOutcomePatch,
   getBuilderBuildOutcomeUpdate,
   getBuilderChecklistUpdateFromAnalytics,
   markBuilderChecklistFromAnalytics,
@@ -185,10 +186,17 @@ describe('builder cloud build outcome mapping', () => {
 
 describe('builder cloud build outcome repairs', () => {
   it('repairs platforms independently and records history', () => {
-    const result = applyBuilderBuildOutcomeRepairs(onboarding(), [
+    const current = onboarding()
+    const patch = buildBuilderBuildOutcomePatch(current, [
       { platform: 'ios', status: 'succeeded' },
       { platform: 'android', status: 'failed' },
-    ], () => FIXED_NOW) as any
+    ], () => FIXED_NOW)!
+    const result = appendAppOnboardingStepHistory(
+      current,
+      applyAppOnboardingPatch(current, patch, () => FIXED_NOW),
+      patch,
+      () => FIXED_NOW,
+    ) as any
 
     expect(result.setup.steps.builder.ios.successful_cloud_build).toEqual({
       status: 'done',
@@ -206,13 +214,13 @@ describe('builder cloud build outcome repairs', () => {
 
   it('is idempotent, preserves done, and requires an eligible existing step', () => {
     const done = onboarding('successful_cloud_build', { status: 'done', at: 'earlier' })
-    expect(applyBuilderBuildOutcomeRepairs(done, [{ platform: 'ios', status: 'failed' }], () => FIXED_NOW)).toBeNull()
-    expect(applyBuilderBuildOutcomeRepairs(done, [{ platform: 'ios', status: 'succeeded' }], () => FIXED_NOW)).toBeNull()
+    expect(buildBuilderBuildOutcomePatch(done, [{ platform: 'ios', status: 'failed' }], () => FIXED_NOW)).toBeNull()
+    expect(buildBuilderBuildOutcomePatch(done, [{ platform: 'ios', status: 'succeeded' }], () => FIXED_NOW)).toBeNull()
 
     const missing = onboarding() as any
     delete missing.setup.steps.builder.ios.successful_cloud_build
-    expect(applyBuilderBuildOutcomeRepairs(missing, [{ platform: 'ios', status: 'succeeded' }], () => FIXED_NOW)).toBeNull()
-    expect(applyBuilderBuildOutcomeRepairs({ setup: { ...onboarding().setup, builder_todo_list_version: '2' } }, [{ platform: 'ios', status: 'succeeded' }], () => FIXED_NOW)).toBeNull()
+    expect(buildBuilderBuildOutcomePatch(missing, [{ platform: 'ios', status: 'succeeded' }], () => FIXED_NOW)).toBeNull()
+    expect(buildBuilderBuildOutcomePatch({ setup: { ...onboarding().setup, builder_todo_list_version: '2' } }, [{ platform: 'ios', status: 'succeeded' }], () => FIXED_NOW)).toBeNull()
   })
 
   it('clears a cloud-build failure annotation after success', () => {
@@ -222,7 +230,8 @@ describe('builder cloud build outcome repairs', () => {
       annotation: 'cloud_build_failed',
       annotation_type: 'warning',
     })
-    const result = applyBuilderBuildOutcomeRepairs(current, [{ platform: 'ios', status: 'released' }], () => FIXED_NOW) as any
+    const patch = buildBuilderBuildOutcomePatch(current, [{ platform: 'ios', status: 'released' }], () => FIXED_NOW)!
+    const result = applyAppOnboardingPatch(current, patch, () => FIXED_NOW) as any
     expect(result.setup.steps.builder.ios.successful_cloud_build).toMatchObject({ status: 'done', at: FIXED_NOW })
     expect(result.setup.steps.builder.ios.successful_cloud_build).not.toHaveProperty('annotation')
     expect(result.setup.steps.builder.ios.successful_cloud_build).not.toHaveProperty('annotation_type')

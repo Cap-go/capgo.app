@@ -1,7 +1,6 @@
 import type { getDrizzleClient } from './pg.ts'
 import { sql } from 'drizzle-orm'
 import { z } from 'zod'
-import { applyBuilderBuildOutcomeRepairs } from './builder_onboarding_checklist.ts'
 
 export const ONBOARDING_APPS_PER_MESSAGE = 25
 export const ONBOARDING_MESSAGES_PER_MINUTE = 4
@@ -25,10 +24,6 @@ interface OnboardingSignals extends Record<string, unknown> {
   first_build_at: Date | null
   first_success_at: Date | null
   last_build_at: Date | null
-  ios_build_succeeded: boolean | null
-  ios_build_failed: boolean | null
-  android_build_succeeded: boolean | null
-  android_build_failed: boolean | null
 }
 
 export async function refreshAppOnboardingBatch(
@@ -62,9 +57,7 @@ export async function refreshAppOnboardingBatch(
         d.has_play_unknown, d.has_native, d.has_install_source,
         v.first_bundle_at, v.last_bundle_at,
         dv.first_install_at, dv.last_install_at,
-        br.first_build_at, br.first_success_at, br.last_build_at,
-        br.ios_build_succeeded, br.ios_build_failed,
-        br.android_build_succeeded, br.android_build_failed
+        br.first_build_at, br.first_success_at, br.last_build_at
       FROM pg_catalog.unnest(${sql.param(dueIds)}::varchar[]) AS batch(app_id)
       LEFT JOIN LATERAL (
         SELECT
@@ -93,11 +86,7 @@ export async function refreshAppOnboardingBatch(
       LEFT JOIN LATERAL (
         SELECT min(created_at) AS first_build_at,
           min(completed_at) FILTER (WHERE status IN ('succeeded', 'released')) AS first_success_at,
-          max(COALESCE(completed_at, created_at)) AS last_build_at,
-          bool_or(platform = 'ios' AND status IN ('succeeded', 'released')) AS ios_build_succeeded,
-          bool_or(platform = 'ios' AND status = 'failed') AS ios_build_failed,
-          bool_or(platform = 'android' AND status IN ('succeeded', 'released')) AS android_build_succeeded,
-          bool_or(platform = 'android' AND status = 'failed') AS android_build_failed
+          max(COALESCE(completed_at, created_at)) AS last_build_at
         FROM public.build_requests WHERE app_id = batch.app_id
       ) br ON true
       ORDER BY batch.app_id
@@ -108,7 +97,7 @@ export async function refreshAppOnboardingBatch(
       WHERE app_id = ANY(${sql.param(dueIds)}::varchar[])
       ORDER BY app_id FOR UPDATE
     `)
-    const result = await tx.execute<{ app_id: string, onboarding: unknown }>(sql`
+    const result = await tx.execute(sql`
       WITH signals AS (
         SELECT * FROM pg_catalog.jsonb_to_recordset(${JSON.stringify(signals)}::jsonb) AS s(
           app_id varchar, last_device_at timestamptz,
@@ -116,9 +105,7 @@ export async function refreshAppOnboardingBatch(
           has_native boolean, has_install_source boolean,
           first_bundle_at timestamptz, last_bundle_at timestamptz,
           first_install_at timestamptz, last_install_at timestamptz,
-          first_build_at timestamptz, first_success_at timestamptz, last_build_at timestamptz,
-          ios_build_succeeded boolean, ios_build_failed boolean,
-          android_build_succeeded boolean, android_build_failed boolean
+          first_build_at timestamptz, first_success_at timestamptz, last_build_at timestamptz
         )
       )
       UPDATE public.apps a SET onboarding = pg_catalog.jsonb_set(
@@ -150,30 +137,8 @@ export async function refreshAppOnboardingBatch(
       FROM signals s
       WHERE a.app_id = s.app_id
         AND COALESCE(a.onboarding->>'refreshed_at', '') < ${body.queuedAt}
-      RETURNING a.app_id, a.onboarding
+      RETURNING a.app_id
     `)
-
-    const signalsByApp = new Map(signals.map(signal => [signal.app_id, signal]))
-    const repairs = result.rows.flatMap((row) => {
-      const signal = signalsByApp.get(row.app_id)
-      if (!signal)
-        return []
-      const outcomes = (['ios', 'android'] as const).flatMap((platform) => {
-        if (signal[`${platform}_build_succeeded`])
-          return [{ platform, status: 'succeeded' }]
-        return signal[`${platform}_build_failed`] ? [{ platform, status: 'failed' }] : []
-      })
-      const onboarding = applyBuilderBuildOutcomeRepairs(row.onboarding, outcomes)
-      return onboarding ? [{ app_id: row.app_id, onboarding }] : []
-    })
-    if (repairs.length) {
-      await tx.execute(sql`
-        UPDATE public.apps AS app SET onboarding = repaired.onboarding, updated_at = now()
-        FROM pg_catalog.jsonb_to_recordset(${JSON.stringify(repairs)}::jsonb)
-          AS repaired(app_id varchar, onboarding jsonb)
-        WHERE app.app_id = repaired.app_id
-      `)
-    }
     return result.rowCount ?? 0
   })
 }
