@@ -450,6 +450,38 @@ describe('build start direct log token', () => {
     }
   })
 
+  it('does not overwrite a terminal build when the failure prefetch fails', async () => {
+    const updateBuilder = {
+      eq: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: [], error: null }),
+    }
+    const adminSelectChain = {
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: 'prefetch failed' } }),
+    }
+    mockSupabaseAdmin.mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        update: vi.fn().mockReturnValue(updateBuilder),
+        select: vi.fn().mockReturnValue(adminSelectChain),
+      }),
+    })
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('builder is offline', { status: 500 }))
+    const context = {
+      get: vi.fn().mockReturnValue(requestId),
+      json: (data: unknown, status = 200) => new Response(JSON.stringify(data), { status }),
+    }
+
+    try {
+      await expect(startBuild(context as any, jobId, appId, { key: 'cli-api-key', user_id: userId } as any)).rejects.toThrow()
+      expect(updateBuilder.not).toHaveBeenCalledWith('status', 'in', '(succeeded,failed,expired,released,cancelled)')
+      expect(mockPersistBuilderBuildOutcome).not.toHaveBeenCalled()
+    }
+    finally {
+      fetchMock.mockRestore()
+    }
+  })
+
   it('skips Build Started emission when CAS guard finds no matching row (lost race)', async () => {
     // Override the default update mock: zero rows returned from .select('id')
     // simulates another writer having already advanced the row's status before

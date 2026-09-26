@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { Database } from '../../utils/supabase.types.ts'
 import { HTTPException } from 'hono/http-exception'
+import { TERMINAL_BUILD_STATUSES } from '../../utils/build_timeout.ts'
 import { emitBuildTransitionEvent } from '../../utils/build_tracking.ts'
 import { persistBuilderBuildOutcome } from '../../utils/builder_onboarding_checklist.ts'
 import { simpleError } from '../../utils/hono.ts'
@@ -122,6 +123,7 @@ async function markBuildAsFailed(
       })
       .eq('builder_job_id', jobId)
       .eq('app_id', appId)
+      .not('status', 'in', `(${[...TERMINAL_BUILD_STATUSES].join(',')})`)
       .select('platform')
     if (updateError) {
       cloudlogErr({
