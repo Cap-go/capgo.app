@@ -2,13 +2,18 @@ import { jwtVerify } from 'jose'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { startBuild } from '../supabase/functions/_backend/public/build/start.ts'
 
-const { mockSupabaseAdmin, mockSupabaseApikey, mockCheckPermission, mockGetEnv, mockReserveNativeBuildSlot, mockSendEventToTracking } = vi.hoisted(() => ({
+const { mockSupabaseAdmin, mockSupabaseApikey, mockCheckPermission, mockGetEnv, mockPersistBuilderBuildOutcome, mockReserveNativeBuildSlot, mockSendEventToTracking } = vi.hoisted(() => ({
   mockSupabaseAdmin: vi.fn(),
   mockSupabaseApikey: vi.fn(),
   mockCheckPermission: vi.fn(),
   mockGetEnv: vi.fn(),
+  mockPersistBuilderBuildOutcome: vi.fn(),
   mockReserveNativeBuildSlot: vi.fn(),
   mockSendEventToTracking: vi.fn(),
+}))
+
+vi.mock('../supabase/functions/_backend/utils/builder_onboarding_checklist.ts', () => ({
+  persistBuilderBuildOutcome: mockPersistBuilderBuildOutcome,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
@@ -78,9 +83,11 @@ describe('build start direct log token', () => {
     mockSupabaseApikey.mockReset()
     mockCheckPermission.mockReset()
     mockGetEnv.mockReset()
+    mockPersistBuilderBuildOutcome.mockReset()
     mockReserveNativeBuildSlot.mockReset()
     mockSendEventToTracking.mockReset()
     mockSendEventToTracking.mockResolvedValue(undefined)
+    mockPersistBuilderBuildOutcome.mockResolvedValue(true)
 
     const selectBuilder = {
       eq: vi.fn().mockReturnThis(),
@@ -221,6 +228,7 @@ describe('build start direct log token', () => {
         expect.anything(),
         expect.objectContaining({ event: 'Build Started' }),
       )
+      expect(mockPersistBuilderBuildOutcome).not.toHaveBeenCalled()
     }
     finally {
       fetchMock.mockRestore()
@@ -301,6 +309,11 @@ describe('build start direct log token', () => {
           }),
         }),
       )
+      expect(mockPersistBuilderBuildOutcome).toHaveBeenCalledWith(context, {
+        appId,
+        platform: 'ios',
+        status: 'failed',
+      })
     }
     finally {
       fetchMock.mockRestore()
@@ -392,6 +405,77 @@ describe('build start direct log token', () => {
           }),
         }),
       )
+    }
+    finally {
+      fetchMock.mockRestore()
+    }
+  })
+
+  it('does not update the checklist when an immediate failure loses the CAS race', async () => {
+    const updateBuilder = {
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: [], error: null }),
+    }
+    const adminSelectChain = {
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: {
+          status: 'pending',
+          platform: 'ios',
+          build_mode: 'release',
+          owner_org: '3eb4f870-720d-46b9-843f-2e6d57d54001',
+          requested_by: userId,
+        },
+        error: null,
+      }),
+    }
+    mockSupabaseAdmin.mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        update: vi.fn().mockReturnValue(updateBuilder),
+        select: vi.fn().mockReturnValue(adminSelectChain),
+      }),
+    })
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('builder is offline', { status: 500 }))
+    const context = {
+      get: vi.fn().mockReturnValue(requestId),
+      json: (data: unknown, status = 200) => new Response(JSON.stringify(data), { status }),
+    }
+
+    try {
+      await expect(startBuild(context as any, jobId, appId, { key: 'cli-api-key', user_id: userId } as any)).rejects.toThrow()
+      expect(mockPersistBuilderBuildOutcome).not.toHaveBeenCalled()
+    }
+    finally {
+      fetchMock.mockRestore()
+    }
+  })
+
+  it('does not overwrite a terminal build when the failure prefetch fails', async () => {
+    const updateBuilder = {
+      eq: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: [], error: null }),
+    }
+    const adminSelectChain = {
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: 'prefetch failed' } }),
+    }
+    mockSupabaseAdmin.mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        update: vi.fn().mockReturnValue(updateBuilder),
+        select: vi.fn().mockReturnValue(adminSelectChain),
+      }),
+    })
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('builder is offline', { status: 500 }))
+    const context = {
+      get: vi.fn().mockReturnValue(requestId),
+      json: (data: unknown, status = 200) => new Response(JSON.stringify(data), { status }),
+    }
+
+    try {
+      await expect(startBuild(context as any, jobId, appId, { key: 'cli-api-key', user_id: userId } as any)).rejects.toThrow()
+      expect(updateBuilder.not).toHaveBeenCalledWith('status', 'in', '(succeeded,failed,expired,released,cancelled)')
+      expect(mockPersistBuilderBuildOutcome).not.toHaveBeenCalled()
     }
     finally {
       fetchMock.mockRestore()

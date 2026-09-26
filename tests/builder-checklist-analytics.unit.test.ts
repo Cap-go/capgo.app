@@ -1,15 +1,20 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../supabase/functions/_backend/utils/hono.ts'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { appendAppOnboardingStepHistory, applyAppOnboardingPatch } from '../supabase/functions/_backend/utils/appOnboarding.ts'
 import {
   applyBuilderChecklistUpdate,
+  buildBuilderBuildOutcomePatch,
+  getBuilderBuildOutcomeUpdate,
   getBuilderChecklistUpdateFromAnalytics,
   markBuilderChecklistFromAnalytics,
+  persistBuilderBuildOutcome,
 } from '../supabase/functions/_backend/utils/builder_onboarding_checklist.ts'
 
 const mocks = vi.hoisted(() => ({
   close: vi.fn(),
   execute: vi.fn(),
+  log: vi.fn(),
   permission: vi.fn(),
   track: vi.fn(),
   transaction: vi.fn(),
@@ -22,6 +27,7 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
 }))
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({ checkPermissionPg: mocks.permission }))
 vi.mock('../supabase/functions/_backend/utils/posthog.ts', () => ({ trackPosthogEvent: mocks.track }))
+vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({ cloudlogErr: mocks.log, serializeError: (error: unknown) => error }))
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({ backgroundTask: async (_c: unknown, task: Promise<unknown>) => await task }))
 
 const FIXED_NOW = '2026-09-22T12:00:00.000Z'
@@ -77,7 +83,7 @@ function onboarding(step = 'choose_destination', state: Record<string, unknown> 
             successful_cloud_build: { status: 'pending' },
             [step]: state,
           },
-          android: { start_setup: { status: 'pending' }, prepare_keystore: { status: 'pending' } },
+          android: { start_setup: { status: 'pending' }, prepare_keystore: { status: 'pending' }, successful_cloud_build: { status: 'pending' } },
         },
       },
     },
@@ -157,6 +163,78 @@ describe('builder checklist analytics mapping', () => {
     event({}, { tags: { action: 'start_setup', app_id: 'com.test.builder', journey_id: 'bj_start-setup', source: 'cli', step: 'welcome' } }),
   ])('ignores unrelated or incomplete analytics %#', (input) => {
     expect(getBuilderChecklistUpdateFromAnalytics(input)).toBeNull()
+  })
+})
+
+describe('builder cloud build outcome mapping', () => {
+  it.each(['ios', 'android'] as const)('maps terminal %s outcomes', (platform) => {
+    expect(getBuilderBuildOutcomeUpdate(platform, 'succeeded')).toEqual({ platform, step: 'successful_cloud_build', status: 'done' })
+    expect(getBuilderBuildOutcomeUpdate(platform, 'released')).toEqual({ platform, step: 'successful_cloud_build', status: 'done' })
+    expect(getBuilderBuildOutcomeUpdate(platform, 'failed')).toEqual({
+      platform,
+      step: 'successful_cloud_build',
+      status: 'warning',
+      annotation: 'cloud_build_failed',
+      annotationType: 'warning',
+    })
+  })
+
+  it.each(['pending', 'running', 'cancelled', 'expired'])('ignores %s', (status) => {
+    expect(getBuilderBuildOutcomeUpdate('ios', status)).toBeNull()
+  })
+})
+
+describe('builder cloud build outcome repairs', () => {
+  it('repairs platforms independently and records history', () => {
+    const current = onboarding()
+    const patch = buildBuilderBuildOutcomePatch(current, [
+      { platform: 'ios', status: 'succeeded' },
+      { platform: 'android', status: 'failed' },
+    ], () => FIXED_NOW)!
+    const result = appendAppOnboardingStepHistory(
+      current,
+      applyAppOnboardingPatch(current, patch, () => FIXED_NOW),
+      patch,
+      () => FIXED_NOW,
+    ) as any
+
+    expect(result.setup.steps.builder.ios.successful_cloud_build).toEqual({
+      status: 'done',
+      at: FIXED_NOW,
+      update_history: [{ status: 'done', at: FIXED_NOW }],
+    })
+    expect(result.setup.steps.builder.android.successful_cloud_build).toEqual({
+      status: 'warning',
+      at: FIXED_NOW,
+      annotation: 'cloud_build_failed',
+      annotation_type: 'warning',
+      update_history: [{ status: 'warning', at: FIXED_NOW }],
+    })
+  })
+
+  it('is idempotent, preserves done, and requires an eligible existing step', () => {
+    const done = onboarding('successful_cloud_build', { status: 'done', at: 'earlier' })
+    expect(buildBuilderBuildOutcomePatch(done, [{ platform: 'ios', status: 'failed' }], () => FIXED_NOW)).toBeNull()
+    expect(buildBuilderBuildOutcomePatch(done, [{ platform: 'ios', status: 'succeeded' }], () => FIXED_NOW)).toBeNull()
+
+    const missing = onboarding() as any
+    delete missing.setup.steps.builder.ios.successful_cloud_build
+    expect(buildBuilderBuildOutcomePatch(missing, [{ platform: 'ios', status: 'succeeded' }], () => FIXED_NOW)).toBeNull()
+    expect(buildBuilderBuildOutcomePatch({ setup: { ...onboarding().setup, builder_todo_list_version: '2' } }, [{ platform: 'ios', status: 'succeeded' }], () => FIXED_NOW)).toBeNull()
+  })
+
+  it('clears a cloud-build failure annotation after success', () => {
+    const current = onboarding('successful_cloud_build', {
+      status: 'warning',
+      at: 'earlier',
+      annotation: 'cloud_build_failed',
+      annotation_type: 'warning',
+    })
+    const patch = buildBuilderBuildOutcomePatch(current, [{ platform: 'ios', status: 'released' }], () => FIXED_NOW)!
+    const result = applyAppOnboardingPatch(current, patch, () => FIXED_NOW) as any
+    expect(result.setup.steps.builder.ios.successful_cloud_build).toMatchObject({ status: 'done', at: FIXED_NOW })
+    expect(result.setup.steps.builder.ios.successful_cloud_build).not.toHaveProperty('annotation')
+    expect(result.setup.steps.builder.ios.successful_cloud_build).not.toHaveProperty('annotation_type')
   })
 })
 
@@ -330,6 +408,45 @@ describe('builder checklist analytics authorization', () => {
     expect(mocks.track).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       event: 'App Onboarding Step Changed',
       nonPersonTags: expect.objectContaining({ step_id: 'builder.ios.prepare_profile', step_status: 'done' }),
+    }))
+  })
+})
+
+describe('persisted builder cloud build outcomes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.transaction.mockImplementation(async (fn: any) => fn({ execute: mocks.execute }))
+  })
+
+  it('persists an eligible iOS outcome and emits system history', async () => {
+    lockedRow(onboarding())
+
+    await expect(persistBuilderBuildOutcome(context(), { appId: 'com.test.builder', platform: 'ios', status: 'failed' })).resolves.toBe(true)
+
+    expect(mocks.permission).not.toHaveBeenCalled()
+    expect(mocks.execute).toHaveBeenCalledTimes(4)
+    expect(mocks.track).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      distinct_id: 'app-onboarding-app:com.test.builder',
+      nonPersonTags: expect.objectContaining({ step_id: 'builder.ios.successful_cloud_build', step_status: 'warning' }),
+    }))
+  })
+
+  it('explicitly no-ops Android without opening a database connection', async () => {
+    await expect(persistBuilderBuildOutcome(context(), { appId: 'com.test.builder', platform: 'android', status: 'succeeded' })).resolves.toBe(false)
+    expect(mocks.transaction).not.toHaveBeenCalled()
+    expect(mocks.execute).not.toHaveBeenCalled()
+  })
+
+  it('isolates persistence failures from its caller', async () => {
+    mocks.transaction.mockRejectedValue(new Error('database unavailable'))
+    await expect(persistBuilderBuildOutcome(context(), { appId: 'com.test.builder', platform: 'ios', status: 'succeeded' })).resolves.toBe(false)
+    expect(mocks.track).not.toHaveBeenCalled()
+    expect(mocks.close).toHaveBeenCalledOnce()
+    expect(mocks.log).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'builder onboarding checklist build outcome update failed',
+      app_id: 'com.test.builder',
+      platform: 'ios',
+      status: 'succeeded',
     }))
   })
 })
