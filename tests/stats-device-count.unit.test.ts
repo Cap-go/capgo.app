@@ -14,11 +14,15 @@ vi.mock('hono/adapter', async (importOriginal) => {
   }
 })
 
-vi.mock('../supabase/functions/_backend/utils/cloudflare.ts', () => ({
-  countDevicesCF: vi.fn(),
-  countInstallSourcesCF: vi.fn(),
-  readBandwidthUsageCF: vi.fn(),
-}))
+vi.mock('../supabase/functions/_backend/utils/cloudflare.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/cloudflare.ts')>()
+  return {
+    ...actual,
+    countDevicesCF: vi.fn(),
+    countInstallSourcesCF: vi.fn(),
+    readBandwidthUsageCF: vi.fn(),
+  }
+})
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   countDevicesSB: vi.fn(),
