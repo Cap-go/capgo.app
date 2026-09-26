@@ -1,22 +1,40 @@
 import type { Context } from 'hono'
+import { SSO_ATTRIBUTE_CLAIM_PREFIX } from '../private/sso/role-mapping.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { getEnv } from './utils.ts'
 
+interface ManagementAttributeMapping { keys: Record<string, { name?: string, names?: string[], array?: boolean, default?: unknown }> }
+
+// Shape returned by the Management API (GetProviderResponse).
 export interface SSOProviderResponse {
   id: string
-  type: 'saml'
+  saml?: {
+    entity_id: string
+    metadata_url?: string
+    metadata_xml?: string
+    attribute_mapping?: ManagementAttributeMapping
+  }
+  domains?: Array<{ domain: string }>
+  created_at?: string
+  updated_at?: string
+}
+
+// Fields of a provider that PUT can set back to a previous state.
+export interface SSOProviderSnapshot {
+  metadata_url?: string
+  metadata_xml?: string
+  attribute_mapping?: ManagementAttributeMapping
   domains: string[]
-  metadata_url: string
-  attribute_mapping?: Record<string, string>
-  created_at: string
-  updated_at: string
 }
 
 export interface SSOProviderUpdate {
+  // [] removes every domain: sign-in by domain stops, the provider remains.
   domains?: string[]
   metadata_url?: string
   attribute_mapping?: Record<string, string>
 }
+
+export type SSOMetadataSource = { metadata_url: string } | { metadata_xml: string }
 
 export class ManagementAPIError extends Error {
   constructor(
@@ -55,6 +73,8 @@ function getProjectRef(c: Context): string | null {
   return null
 }
 
+const MANAGEMENT_API_TIMEOUT_MS = 8_000
+
 async function callManagementAPI(
   c: Context,
   method: string,
@@ -84,6 +104,9 @@ async function callManagementAPI(
 
   const options: RequestInit = {
     method,
+    // Callers can hold a provider row lock across this call: fail fast
+    // instead of relying on database timeouts.
+    signal: AbortSignal.timeout(MANAGEMENT_API_TIMEOUT_MS),
     headers: {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
@@ -159,19 +182,25 @@ async function callManagementAPI(
       method,
       error: error instanceof Error ? error.message : String(error),
     })
+    const timedOut = error instanceof Error && error.name === 'TimeoutError'
     throw new ManagementAPIError(
-      500,
-      'management_api_fetch_error',
+      timedOut ? 504 : 500,
+      timedOut ? 'management_api_timeout' : 'management_api_fetch_error',
       'Failed to call Management API',
       error instanceof Error ? { message: error.message } : {},
     )
   }
 }
 
-function toManagementAttributeMapping(mapping: Record<string, string>): { keys: Record<string, { name: string }> } {
-  const keys: Record<string, { name: string }> = {}
+// Multi-valued SAML attributes must be captured as arrays, otherwise Supabase
+// Auth keeps only the first value.
+const ARRAY_ATTRIBUTE_KEYS = new Set(['groups'])
+const isArrayAttributeKey = (key: string) => ARRAY_ATTRIBUTE_KEYS.has(key) || key.startsWith(SSO_ATTRIBUTE_CLAIM_PREFIX)
+
+function toManagementAttributeMapping(mapping: Record<string, string>): { keys: Record<string, { name: string, array?: boolean }> } {
+  const keys: Record<string, { name: string, array?: boolean }> = {}
   for (const [key, name] of Object.entries(mapping)) {
-    keys[key] = { name }
+    keys[key] = isArrayAttributeKey(key) ? { name, array: true } : { name }
   }
   return { keys }
 }
@@ -179,13 +208,13 @@ function toManagementAttributeMapping(mapping: Record<string, string>): { keys: 
 export async function createSSOProvider(
   c: Context,
   domain: string,
-  metadataUrl: string,
+  metadata: SSOMetadataSource,
   attributeMapping?: Record<string, string>,
 ): Promise<SSOProviderResponse> {
   const body = {
     type: 'saml',
     domains: [domain],
-    metadata_url: metadataUrl,
+    ...metadata,
     ...(attributeMapping && { attribute_mapping: toManagementAttributeMapping(attributeMapping) }),
   }
 
@@ -208,7 +237,7 @@ export async function updateSSOProvider(
 ): Promise<SSOProviderResponse> {
   const body: any = {}
 
-  if (updates.domains) {
+  if (updates.domains !== undefined) {
     body.domains = updates.domains
   }
   if (updates.metadata_url) {
@@ -218,8 +247,23 @@ export async function updateSSOProvider(
     body.attribute_mapping = toManagementAttributeMapping(updates.attribute_mapping)
   }
 
-  const response = await callManagementAPI(c, 'PATCH', `/config/auth/sso/providers/${providerId}`, body)
+  const response = await callManagementAPI(c, 'PUT', `/config/auth/sso/providers/${providerId}`, body)
   return response as SSOProviderResponse
+}
+
+export async function snapshotSSOProvider(c: Context, providerId: string): Promise<SSOProviderSnapshot> {
+  const provider = await getSSOProvider(c, providerId)
+  return {
+    // The API accepts one metadata source; the URL wins when both are echoed.
+    ...(provider.saml?.metadata_url ? { metadata_url: provider.saml.metadata_url } : provider.saml?.metadata_xml ? { metadata_xml: provider.saml.metadata_xml } : {}),
+    ...(provider.saml?.attribute_mapping ? { attribute_mapping: provider.saml.attribute_mapping } : {}),
+    // Always explicit: [] must be restored too, to undo a re-activation.
+    domains: provider.domains?.map(entry => entry.domain) ?? [],
+  }
+}
+
+export async function restoreSSOProvider(c: Context, providerId: string, snapshot: SSOProviderSnapshot): Promise<void> {
+  await callManagementAPI(c, 'PUT', `/config/auth/sso/providers/${providerId}`, snapshot)
 }
 
 export async function deleteSSOProvider(

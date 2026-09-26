@@ -1,8 +1,9 @@
--- Org admins cannot forge provider_id on SSO providers via PostgREST.
--- pending_verification inserts remain the client path without provider_id.
+-- Org admins cannot write SSO providers via PostgREST: every write goes
+-- through /private/sso/* (service role), which enforces plan, domain and
+-- Supabase Auth lifecycle checks.
 BEGIN;
 
-SELECT plan(15);
+SELECT plan(16);
 
 SELECT tests.authenticate_as_service_role();
 SELECT tests.create_supabase_user(
@@ -145,7 +146,7 @@ SELECT throws_ok(
   'org admin cannot insert pending_verification with provider_id via PostgREST'
 );
 
-SELECT lives_ok(
+SELECT throws_ok(
   $$
     INSERT INTO public.sso_providers (
       id,
@@ -164,50 +165,71 @@ SELECT lives_ok(
       'dns-pending-ok'
     )
   $$,
-  'org admin can insert a pending_verification SSO provider without provider_id'
+  '42501',
+  'new row violates row-level security policy for table "sso_providers"',
+  'org admin cannot insert even a pending_verification SSO provider (domain squatting)'
 );
 
-SELECT throws_ok(
+SELECT tests.authenticate_as_service_role();
+SELECT set_config('request.jwt.claim.role', 'service_role', true);
+
+INSERT INTO public.sso_providers (
+  id,
+  org_id,
+  domain,
+  status,
+  enforce_sso,
+  dns_verification_token
+)
+VALUES (
+  '71000000-0000-4000-8000-000000000072',
+  '71000000-0000-4000-8000-000000000071',
+  'pending-ok.sso.test',
+  'pending_verification',
+  false,
+  'dns-pending-ok'
+)
+ON CONFLICT (id) DO NOTHING;
+
+SELECT tests.authenticate_as('sso_direct_insert_admin');
+
+SELECT is_empty(
   $$
     UPDATE public.sso_providers
     SET provider_id = 'prov_hijacked'
     WHERE id = '71000000-0000-4000-8000-000000000072'
+    RETURNING id
   $$,
-  '42501',
-  'SSO_PROVIDER_PROVIDER_ID_CLIENT_WRITE_DENIED',
   'org admin cannot change provider_id via PostgREST'
 );
 
-SELECT throws_ok(
+SELECT is_empty(
   $$
     UPDATE public.sso_providers
     SET status = 'active', enforce_sso = true
     WHERE id = '71000000-0000-4000-8000-000000000072'
+    RETURNING id
   $$,
-  '42501',
-  'SSO_PROVIDER_STATUS_PROMOTION_DENIED',
   'org admin cannot promote a pending provider to active via PostgREST'
 );
 
-SELECT throws_ok(
+SELECT is_empty(
   $$
     UPDATE public.sso_providers
     SET enforce_sso = true
     WHERE id = '71000000-0000-4000-8000-000000000072'
+    RETURNING id
   $$,
-  '42501',
-  'SSO_PROVIDER_ENFORCE_SSO_DENIED',
   'org admin cannot enable enforce_sso on a pending provider via PostgREST'
 );
 
-SELECT throws_ok(
+SELECT is_empty(
   $$
     UPDATE public.sso_providers
     SET dns_verified_at = NOW()
     WHERE id = '71000000-0000-4000-8000-000000000072'
+    RETURNING id
   $$,
-  '42501',
-  'SSO_PROVIDER_DNS_VERIFICATION_CLIENT_WRITE_DENIED',
   'org admin cannot stamp dns_verified_at via PostgREST'
 );
 
@@ -282,37 +304,43 @@ ON CONFLICT (id) DO NOTHING;
 
 SELECT tests.authenticate_as('sso_direct_insert_admin');
 
-SELECT throws_ok(
+SELECT is_empty(
   $$
     UPDATE public.sso_providers
     SET status = 'active'
     WHERE id = '71000000-0000-4000-8000-000000000073'
+    RETURNING id
   $$,
-  '42501',
-  'SSO_PROVIDER_STATUS_PROMOTION_DENIED',
   'org admin cannot promote verified provider without dns_verified_at'
 );
 
-SELECT throws_ok(
+SELECT is_empty(
   $$
     UPDATE public.sso_providers
     SET enforce_sso = true
     WHERE id = '71000000-0000-4000-8000-000000000075'
+    RETURNING id
   $$,
-  '42501',
-  'SSO_PROVIDER_ENFORCE_SSO_DENIED',
   'org admin cannot enable enforce_sso on active provider via PostgREST'
 );
 
-SELECT throws_ok(
+SELECT is_empty(
   $$
     UPDATE public.sso_providers
     SET domain = 'hijacked.sso.test'
     WHERE id = '71000000-0000-4000-8000-000000000074'
+    RETURNING id
   $$,
-  '42501',
-  'SSO_PROVIDER_DOMAIN_CHANGE_DENIED',
   'org admin cannot change domain on an active enforce_sso provider'
+);
+
+SELECT is_empty(
+  $$
+    DELETE FROM public.sso_providers
+    WHERE id = '71000000-0000-4000-8000-000000000074'
+    RETURNING id
+  $$,
+  'org admin cannot delete an SSO provider via PostgREST'
 );
 
 SELECT tests.authenticate_as_service_role();

@@ -22,7 +22,7 @@ describe('app onboarding API key loading state', () => {
 
   it.concurrent('renders a resumed app without waiting for API key provisioning', () => {
     const resumeLoader = onboardingSource.slice(
-      onboardingSource.indexOf('async function loadResumeApp()'),
+      onboardingSource.indexOf('async function loadResumeApp('),
       onboardingSource.indexOf('async function importStoreMetadata('),
     )
     const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
@@ -39,7 +39,7 @@ describe('app onboarding API key loading state', () => {
   it.concurrent('targets the created app when a stale resume falls back to replacement creation', () => {
     const keyLoader = onboardingSource.slice(
       onboardingSource.indexOf('async function ensureApiKey('),
-      onboardingSource.indexOf('async function loadResumeApp()'),
+      onboardingSource.indexOf('async function loadResumeApp('),
     )
 
     expect(keyLoader).toContain('const userId = main.user?.id ?? main.auth?.id')

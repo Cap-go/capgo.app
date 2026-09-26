@@ -441,32 +441,12 @@
       "type": "text"
     },
     {
-      "default": null,
-      "generated": "",
-      "identity": "",
-      "name": "stats_updated_at",
-      "notNull": false,
-      "position": 22,
-      "table": "apps",
-      "type": "timestamp without time zone"
-    },
-    {
-      "default": null,
-      "generated": "",
-      "identity": "",
-      "name": "stats_refresh_requested_at",
-      "notNull": false,
-      "position": 23,
-      "table": "apps",
-      "type": "timestamp without time zone"
-    },
-    {
       "default": "900",
       "generated": "",
       "identity": "",
       "name": "build_timeout_seconds",
       "notNull": true,
-      "position": 24,
+      "position": 22,
       "table": "apps",
       "type": "bigint"
     },
@@ -476,7 +456,7 @@
       "identity": "",
       "name": "build_timeout_updated_at",
       "notNull": true,
-      "position": 25,
+      "position": 23,
       "table": "apps",
       "type": "timestamp with time zone"
     },
@@ -486,7 +466,7 @@
       "identity": "",
       "name": "block_provider_infra_requests",
       "notNull": true,
-      "position": 26,
+      "position": 24,
       "table": "apps",
       "type": "boolean"
     },
@@ -496,7 +476,7 @@
       "identity": "",
       "name": "rollout_channel_count",
       "notNull": true,
-      "position": 27,
+      "position": 25,
       "table": "apps",
       "type": "bigint"
     },
@@ -506,7 +486,7 @@
       "identity": "",
       "name": "rollout_paused_version_names",
       "notNull": true,
-      "position": 28,
+      "position": 26,
       "table": "apps",
       "type": "character varying[]"
     },
@@ -516,7 +496,7 @@
       "identity": "",
       "name": "created_from_onboarding",
       "notNull": true,
-      "position": 29,
+      "position": 27,
       "table": "apps",
       "type": "boolean"
     },
@@ -526,7 +506,7 @@
       "identity": "",
       "name": "onboarding_completed_at",
       "notNull": false,
-      "position": 30,
+      "position": 28,
       "table": "apps",
       "type": "timestamp with time zone"
     },
@@ -536,7 +516,7 @@
       "identity": "",
       "name": "onboarding",
       "notNull": true,
-      "position": 31,
+      "position": 29,
       "table": "apps",
       "type": "jsonb"
     },
