@@ -117,7 +117,24 @@ async function loadPendingInvitations() {
   }
 }
 
-async function acceptInvitation(invitation: Organization) {
+async function acceptInvitation(invitation: Organization): Promise<string> {
+  const userId = getCurrentUserId()
+  if (!userId)
+    throw new Error('missing_user')
+
+  const { data: pendingMembership, error: pendingMembershipError } = await supabase
+    .from('org_users')
+    .select('id')
+    .eq('org_id', invitation.gid)
+    .eq('user_id', userId)
+    .eq('is_invite', true)
+    .maybeSingle()
+
+  if (pendingMembershipError)
+    throw pendingMembershipError
+  if (!pendingMembership)
+    throw new Error('NO_INVITE')
+
   const { data, error } = await supabase.rpc('accept_invitation_to_org', {
     org_id: invitation.gid,
   })
@@ -126,9 +143,11 @@ async function acceptInvitation(invitation: Organization) {
     throw error
   if (data !== 'OK')
     throw new Error(typeof data === 'string' ? data : 'FAILED_TO_ACCEPT_INVITATION')
+
+  return String(pendingMembership.id)
 }
 
-async function declineInvitation(invitation: Organization) {
+async function declineInvitation(invitation: Organization): Promise<string> {
   const userId = getCurrentUserId()
   if (!userId)
     throw new Error('missing_user')
@@ -145,6 +164,8 @@ async function declineInvitation(invitation: Organization) {
     throw error
   if (!data.length)
     throw new Error('NO_INVITE')
+
+  return String(data[0].id)
 }
 
 async function resolveInvitation(invitation: Organization, action: 'accept' | 'decline') {
@@ -162,7 +183,6 @@ async function resolveInvitation(invitation: Organization, action: 'accept' | 'd
     if (action === 'accept') {
       await runTrackedOrganizationInvitationMutation({
         failureReason: 'acceptance_failed',
-        invitationId: invitation.gid,
         pendingInvitationCount,
         successEvent: 'organization_membership_invitation_accepted',
         userId,
@@ -174,7 +194,6 @@ async function resolveInvitation(invitation: Organization, action: 'accept' | 'd
     else {
       await runTrackedOrganizationInvitationMutation({
         failureReason: 'decline_failed',
-        invitationId: invitation.gid,
         pendingInvitationCount,
         successEvent: 'organization_membership_invitation_declined',
         userId,
@@ -217,7 +236,7 @@ async function declineAllInvitations() {
         .eq('user_id', userId)
         .eq('is_invite', true)
         .in('org_id', inviteOrgIds.slice(offset, offset + 100))
-        .select('org_id')
+        .select('id')
       if (error)
         throw error
       if (!data.length)
@@ -226,7 +245,7 @@ async function declineAllInvitations() {
       for (const invitation of data) {
         captureOrganizationInvitationEvent({
           event: 'organization_membership_invitation_declined',
-          invitationId: invitation.org_id,
+          invitationId: String(invitation.id),
           pendingInvitationCount,
           userId,
         })

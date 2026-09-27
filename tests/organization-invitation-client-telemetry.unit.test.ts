@@ -19,7 +19,7 @@ const {
 } = await import('../src/services/organizationInvitationTelemetry.ts')
 
 const USER_ID = '550e8400-e29b-41d4-a716-446655440000'
-const INVITATION_ID = 'a3d4cb0c-96df-4e65-bca4-b7e037a09017'
+const INVITATION_ID = '71'
 
 describe('organization invitation client telemetry', () => {
   beforeEach(() => {
@@ -67,12 +67,12 @@ describe('organization invitation client telemetry', () => {
 
     await runTrackedOrganizationInvitationMutation({
       failureReason: 'acceptance_failed',
-      invitationId: INVITATION_ID,
       pendingInvitationCount: 2,
       successEvent: 'organization_membership_invitation_accepted',
       userId: USER_ID,
     }, async () => {
       membershipFinalized = true
+      return INVITATION_ID
     })
 
     expect(pushEventForUserMock).toHaveBeenCalledWith(
@@ -94,12 +94,12 @@ describe('organization invitation client telemetry', () => {
 
     await runTrackedOrganizationInvitationMutation({
       failureReason: 'decline_failed',
-      invitationId: INVITATION_ID,
       pendingInvitationCount: 1,
       successEvent: 'organization_membership_invitation_declined',
       userId: USER_ID,
     }, async () => {
       invitationDeleted = true
+      return INVITATION_ID
     })
 
     expect(pushEventForUserMock).toHaveBeenCalledWith(
@@ -116,7 +116,6 @@ describe('organization invitation client telemetry', () => {
   it('emits only a sanitized failure when membership acceptance fails', async () => {
     await expect(runTrackedOrganizationInvitationMutation({
       failureReason: 'acceptance_failed',
-      invitationId: INVITATION_ID,
       pendingInvitationCount: 2,
       successEvent: 'organization_membership_invitation_accepted',
       userId: USER_ID,
@@ -143,23 +142,25 @@ describe('organization invitation client telemetry', () => {
   it('uses a deterministic insert id and ignores PostHog failures', async () => {
     const input = {
       failureReason: 'acceptance_failed' as const,
-      invitationId: INVITATION_ID,
       pendingInvitationCount: 1,
       successEvent: 'organization_membership_invitation_accepted' as const,
       userId: USER_ID,
     }
 
-    await runTrackedOrganizationInvitationMutation(input, async () => {})
-    await runTrackedOrganizationInvitationMutation(input, async () => {})
+    await runTrackedOrganizationInvitationMutation(input, async () => INVITATION_ID)
+    await runTrackedOrganizationInvitationMutation(input, async () => INVITATION_ID)
+    await runTrackedOrganizationInvitationMutation(input, async () => '72')
 
     const firstInsertId = pushEventForUserMock.mock.calls[0][3].$insert_id
     const secondInsertId = pushEventForUserMock.mock.calls[1][3].$insert_id
+    const newInvitationInsertId = pushEventForUserMock.mock.calls[2][3].$insert_id
     expect(firstInsertId).toBe(secondInsertId)
+    expect(newInvitationInsertId).not.toBe(firstInsertId)
 
     pushEventForUserMock.mockImplementation(() => {
       throw new Error('PostHog unavailable')
     })
-    await expect(runTrackedOrganizationInvitationMutation(input, async () => {})).resolves.toBeUndefined()
+    await expect(runTrackedOrganizationInvitationMutation(input, async () => INVITATION_ID)).resolves.toBeUndefined()
   })
 
   it('keeps authenticated mutations in the frontend and uses one backend magic lookup', () => {

@@ -28,7 +28,6 @@ interface OrganizationInvitationEventInput {
 
 interface TrackedOrganizationInvitationMutationInput {
   failureReason: Extract<OrganizationInvitationFailureReason, 'acceptance_failed' | 'decline_failed'>
-  invitationId: string
   pendingInvitationCount: number
   successEvent: OrganizationInvitationSuccessEvent
   userId: string
@@ -88,10 +87,11 @@ export function captureOrganizationInvitationEvent(input: OrganizationInvitation
 
 export async function runTrackedOrganizationInvitationMutation(
   input: TrackedOrganizationInvitationMutationInput,
-  mutation: () => Promise<void>,
+  mutation: () => Promise<string>,
 ): Promise<void> {
+  let invitationId: string
   try {
-    await mutation()
+    invitationId = await mutation()
   }
   catch (error) {
     captureOrganizationInvitationEvent({
@@ -105,7 +105,7 @@ export async function runTrackedOrganizationInvitationMutation(
 
   captureOrganizationInvitationEvent({
     event: input.successEvent,
-    invitationId: input.invitationId,
+    invitationId,
     pendingInvitationCount: input.pendingInvitationCount,
     userId: input.userId,
   })
