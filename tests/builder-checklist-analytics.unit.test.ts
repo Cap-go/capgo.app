@@ -62,6 +62,32 @@ function profilePreparedEvent(source: 'created' | 'imported', step = source === 
   })
 }
 
+function androidPreparationEvent(action: 'keystore_prepared' | 'google_play_connected', tags: Record<string, string>) {
+  return event({
+    action,
+    app_id: 'com.test.builder',
+    attempt_id: 'bj_android-preparation',
+    journey_id: 'bj_android-preparation',
+    platform: 'android',
+    ...tags,
+  })
+}
+
+function preparedKeystoreEvent(source: 'generated' | 'imported' = 'generated', keyPassword = source === 'generated' ? 'generated_with_keystore' : 'verified') {
+  return androidPreparationEvent('keystore_prepared', {
+    source,
+    step: source === 'generated' ? 'keystore-generating' : 'keystore-existing-key-password',
+    key_password: keyPassword,
+  })
+}
+
+function connectedGooglePlayEvent(source: 'imported_service_account' | 'generated_service_account' = 'imported_service_account') {
+  return androidPreparationEvent('google_play_connected', {
+    source,
+    step: source === 'imported_service_account' ? 'sa-json-validating' : 'gcp-setup-running',
+  })
+}
+
 function onboarding(step = 'choose_destination', state: Record<string, unknown> = { status: 'pending' }) {
   return {
     feature_flag: { keep: true },
@@ -83,7 +109,12 @@ function onboarding(step = 'choose_destination', state: Record<string, unknown> 
             successful_cloud_build: { status: 'pending' },
             [step]: state,
           },
-          android: { start_setup: { status: 'pending' }, prepare_keystore: { status: 'pending' }, successful_cloud_build: { status: 'pending' } },
+          android: {
+            start_setup: { status: 'pending' },
+            prepare_keystore: { status: 'pending' },
+            connect_google_play: { status: 'pending' },
+            successful_cloud_build: { status: 'pending' },
+          },
         },
       },
     },
@@ -136,6 +167,29 @@ describe('builder checklist analytics mapping', () => {
     [profilePreparedEvent('imported').tags, { step: 'prepare_profile', status: 'done' }],
   ])('maps %j', (tags, expected) => {
     expect(getBuilderChecklistUpdateFromAnalytics(event(tags))).toEqual({ platform: 'ios', ...expected })
+  })
+
+  it.each([
+    [preparedKeystoreEvent('generated'), 'prepare_keystore'],
+    [preparedKeystoreEvent('imported', 'verified'), 'prepare_keystore'],
+    [preparedKeystoreEvent('imported', 'not_checked'), 'prepare_keystore'],
+    [connectedGooglePlayEvent('imported_service_account'), 'connect_google_play'],
+    [connectedGooglePlayEvent('generated_service_account'), 'connect_google_play'],
+  ])('maps validated Android preparation analytics %#', (input, step) => {
+    expect(getBuilderChecklistUpdateFromAnalytics(input)).toEqual({ platform: 'android', step, status: 'done' })
+  })
+
+  it.each([
+    androidPreparationEvent('keystore_prepared', { source: 'generated', step: 'keystore-existing-key-password', key_password: 'generated_with_keystore' }),
+    androidPreparationEvent('keystore_prepared', { source: 'generated', step: 'keystore-generating', key_password: 'verified' }),
+    androidPreparationEvent('keystore_prepared', { source: 'imported', step: 'keystore-generating', key_password: 'not_checked' }),
+    androidPreparationEvent('keystore_prepared', { source: 'imported', step: 'keystore-existing-key-password', key_password: 'generated_with_keystore' }),
+    androidPreparationEvent('google_play_connected', { source: 'generated_service_account', step: 'sa-json-validating' }),
+    androidPreparationEvent('google_play_connected', { source: 'imported_service_account', step: 'gcp-setup-running' }),
+    androidPreparationEvent('google_play_connected', { app_id: '', source: 'imported_service_account', step: 'sa-json-validating' }),
+    androidPreparationEvent('google_play_connected', { attempt_id: '', source: 'imported_service_account', step: 'sa-json-validating' }),
+  ])('rejects invalid Android preparation analytics %#', (input) => {
+    expect(getBuilderChecklistUpdateFromAnalytics(input)).toBeNull()
   })
 
   it.each([
@@ -410,6 +464,30 @@ describe('builder checklist analytics authorization', () => {
       nonPersonTags: expect.objectContaining({ step_id: 'builder.ios.prepare_profile', step_status: 'done' }),
     }))
   })
+
+  it.each([
+    [preparedKeystoreEvent(), 'builder.android.prepare_keystore'],
+    [connectedGooglePlayEvent(), 'builder.android.connect_google_play'],
+  ])('uses the authorized mutation path for %s', async (input, stepId) => {
+    lockedRow(onboarding())
+    mocks.permission.mockImplementation(async (_c, permission) => permission === 'app.update_settings')
+
+    await expect(markBuilderChecklistFromAnalytics(context(), 'com.test.builder', input)).resolves.toBe(true)
+
+    expect(mocks.permission).toHaveBeenCalledWith(expect.anything(), 'app.update_settings', { appId: 'com.test.builder' }, expect.anything(), expect.any(String), 'fixture-key')
+    expect(mocks.track).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      event: 'App Onboarding Step Changed',
+      nonPersonTags: expect.objectContaining({ step_id: stepId, step_status: 'done' }),
+    }))
+  })
+
+  it.each([preparedKeystoreEvent(), connectedGooglePlayEvent()])('rejects Android preparation when the event app differs from the resolved app %#', async (input) => {
+    await expect(markBuilderChecklistFromAnalytics(context(), 'com.test.other', input)).resolves.toBe(false)
+
+    expect(mocks.permission).not.toHaveBeenCalled()
+    expect(mocks.execute).not.toHaveBeenCalled()
+    expect(mocks.track).not.toHaveBeenCalled()
+  })
 })
 
 describe('persisted builder cloud build outcomes', () => {
@@ -431,10 +509,44 @@ describe('persisted builder cloud build outcomes', () => {
     }))
   })
 
-  it('explicitly no-ops Android without opening a database connection', async () => {
-    await expect(persistBuilderBuildOutcome(context(), { appId: 'com.test.builder', platform: 'android', status: 'succeeded' })).resolves.toBe(false)
-    expect(mocks.transaction).not.toHaveBeenCalled()
-    expect(mocks.execute).not.toHaveBeenCalled()
+  it.each([
+    ['succeeded', 'done'],
+    ['failed', 'warning'],
+  ])('persists an immediate Android %s outcome as %s', async (status, stepStatus) => {
+    lockedRow(onboarding())
+
+    await expect(persistBuilderBuildOutcome(context(), { appId: 'com.test.builder', platform: 'android', status })).resolves.toBe(true)
+
+    expect(mocks.execute).toHaveBeenCalledTimes(4)
+    expect(mocks.track).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      distinct_id: 'app-onboarding-app:com.test.builder',
+      nonPersonTags: expect.objectContaining({ step_id: 'builder.android.successful_cloud_build', step_status: stepStatus }),
+    }))
+  })
+
+  it.each([
+    ['succeeded', { status: 'done', at: 'earlier' }],
+    ['failed', { status: 'warning', at: 'earlier', annotation: 'cloud_build_failed', annotation_type: 'warning' }],
+  ])('is idempotent for an already persisted Android %s outcome', async (status, currentStep) => {
+    const current = onboarding() as any
+    current.setup.steps.builder.android.successful_cloud_build = currentStep
+    lockedRow(current)
+
+    await expect(persistBuilderBuildOutcome(context(), { appId: 'com.test.builder', platform: 'android', status })).resolves.toBe(false)
+
+    expect(mocks.execute).toHaveBeenCalledTimes(3)
+    expect(mocks.track).not.toHaveBeenCalled()
+  })
+
+  it('preserves a completed Android build step after a later failure', async () => {
+    const current = onboarding() as any
+    current.setup.steps.builder.android.successful_cloud_build = { status: 'done', at: 'earlier' }
+    lockedRow(current)
+
+    await expect(persistBuilderBuildOutcome(context(), { appId: 'com.test.builder', platform: 'android', status: 'failed' })).resolves.toBe(false)
+
+    expect(mocks.execute).toHaveBeenCalledTimes(3)
+    expect(mocks.track).not.toHaveBeenCalled()
   })
 
   it('isolates persistence failures from its caller', async () => {
