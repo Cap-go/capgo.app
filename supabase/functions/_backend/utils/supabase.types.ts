@@ -2580,16 +2580,19 @@ export type Database = {
       }
       org_stats_refresh_state: {
         Row: {
+          manual_refresh_requested_at: string | null
           org_id: string
           stats_refresh_requested_at: string | null
           stats_updated_at: string | null
         }
         Insert: {
+          manual_refresh_requested_at?: string | null
           org_id: string
           stats_refresh_requested_at?: string | null
           stats_updated_at?: string | null
         }
         Update: {
+          manual_refresh_requested_at?: string | null
           org_id?: string
           stats_refresh_requested_at?: string | null
           stats_updated_at?: string | null
@@ -4686,6 +4689,13 @@ export type Database = {
       get_org_perm_for_apikey_v2: {
         Args: { apikey: string; app_id: string }
         Returns: string
+      }
+      get_org_stats_refresh_state: {
+        Args: { p_org_id: string }
+        Returns: {
+          stats_refresh_requested_at: string
+          stats_updated_at: string
+        }[]
       }
       get_org_user_access_rbac: {
         Args: { p_org_id: string; p_user_id: string }

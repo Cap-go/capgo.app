@@ -50,7 +50,9 @@ describe('cron_stat_app refresh completion', () => {
 
     await executeSQL(`
       UPDATE public.org_stats_refresh_state
-      SET stats_updated_at = NULL, stats_refresh_requested_at = NULL
+      SET stats_updated_at = NULL,
+          stats_refresh_requested_at = NULL,
+          manual_refresh_requested_at = NULL
       WHERE org_id = $1
     `, [orgId])
     await executeSQL(`DELETE FROM pgmq.q_cron_stat_org WHERE message->'payload'->>'orgId' = $1`, [orgId])
@@ -176,6 +178,20 @@ describe('cron_stat_app refresh completion', () => {
     )
     expect(queuedMessages[0]?.count).toBe(1)
 
+    const [legacyOrgBefore] = await executeSQL<{
+      last_stats_updated_at: string | null
+      stats_refresh_requested_at: string | null
+      stats_updated_at: string | null
+      xmin: string
+    }>(`
+      SELECT xmin::text AS xmin,
+             last_stats_updated_at::text AS last_stats_updated_at,
+             stats_refresh_requested_at::text AS stats_refresh_requested_at,
+             stats_updated_at::text AS stats_updated_at
+      FROM public.orgs
+      WHERE id = $1
+    `, [orgId])
+
     const orgResponse = await fetch(getEndpointUrl('/triggers/cron_stat_org'), {
       body: JSON.stringify({
         customerId,
@@ -197,6 +213,16 @@ describe('cron_stat_app refresh completion', () => {
       WHERE org_id = $1
     `, [orgId])
     expect(completedOrgState?.stats_updated_at).toBe(completedOrgState?.stats_refresh_requested_at)
+
+    const [legacyOrgAfter] = await executeSQL(`
+      SELECT xmin::text AS xmin,
+             last_stats_updated_at::text AS last_stats_updated_at,
+             stats_refresh_requested_at::text AS stats_refresh_requested_at,
+             stats_updated_at::text AS stats_updated_at
+      FROM public.orgs
+      WHERE id = $1
+    `, [orgId])
+    expect(legacyOrgAfter).toEqual(legacyOrgBefore)
 
     const [repeatResult] = await executeSQL<{ queued: number }>(
       'SELECT public.process_cron_stat_org_jobs(500, $1) AS queued',
@@ -346,6 +372,47 @@ describe('cron_stat_app refresh completion', () => {
       WHERE message->'payload'->>'orgId' = $1
     `, [orgId])
     expect(new Date(`${message?.target_at}Z`).toISOString()).toBe(requestedAt)
+  })
+
+  it('advances completion monotonically without rewriting the legacy org row', async () => {
+    const firstTarget = new Date(Date.now() - 2 * 60 * 1000).toISOString()
+    const newerTarget = new Date(Date.now() - 60 * 1000).toISOString()
+    const olderTarget = new Date(Date.now() - 3 * 60 * 1000).toISOString()
+    const [legacyOrgBefore] = await executeSQL(`
+      SELECT xmin::text AS xmin,
+             last_stats_updated_at::text AS last_stats_updated_at,
+             stats_refresh_requested_at::text AS stats_refresh_requested_at,
+             stats_updated_at::text AS stats_updated_at
+      FROM public.orgs
+      WHERE id = $1
+    `, [orgId])
+
+    await executeSQL('SELECT public.mark_org_stats_refreshed($1, $2::timestamp without time zone)', [orgId, firstTarget])
+    await executeSQL('SELECT public.mark_org_stats_refreshed($1, $2::timestamp without time zone)', [orgId, olderTarget])
+    const [afterOlderTarget] = await executeSQL<{ stats_updated_at: string }>(`
+      SELECT stats_updated_at::text AS stats_updated_at
+      FROM public.org_stats_refresh_state
+      WHERE org_id = $1
+    `, [orgId])
+    expect(new Date(`${afterOlderTarget?.stats_updated_at}Z`).toISOString()).toBe(firstTarget)
+
+    await executeSQL('SELECT public.mark_org_stats_refreshed($1, $2::timestamp without time zone)', [orgId, newerTarget])
+    const [afterNewerTarget] = await executeSQL<{ stats_updated_at: string }>(`
+      SELECT stats_updated_at::text AS stats_updated_at
+      FROM public.org_stats_refresh_state
+      WHERE org_id = $1
+    `, [orgId])
+    expect(new Date(`${afterNewerTarget?.stats_updated_at}Z`).toISOString()).toBe(newerTarget)
+
+    const [legacyOrgAfter] = await executeSQL(`
+      SELECT xmin::text AS xmin,
+             last_stats_updated_at::text AS last_stats_updated_at,
+             stats_refresh_requested_at::text AS stats_refresh_requested_at,
+             stats_updated_at::text AS stats_updated_at
+      FROM public.orgs
+      WHERE id = $1
+    `, [orgId])
+    expect(legacyOrgAfter).toEqual(legacyOrgBefore)
   })
 
   it('registers the producer to run once per minute', async () => {
