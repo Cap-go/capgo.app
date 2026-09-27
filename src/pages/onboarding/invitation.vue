@@ -9,8 +9,9 @@ import IconCheck from '~icons/lucide/check'
 import IconLoader from '~icons/lucide/loader-2'
 import IconUserPlus from '~icons/lucide/user-plus'
 import IconX from '~icons/lucide/x'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
-import { useSupabase } from '~/services/supabase'
+import { captureOrganizationInvitationSkipped } from '~/services/organizationInvitationTelemetry'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
@@ -20,7 +21,6 @@ import { validateRedirectPath } from '~/utils/safeRedirect'
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
-const supabase = useSupabase()
 const displayStore = useDisplayStore()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
@@ -89,8 +89,14 @@ async function loadPendingInvitations() {
   try {
     await organizationStore.fetchOrganizations()
     invitations.value = getPendingInviteOrganizations()
-    if (invitations.value.length === 0)
+    if (invitations.value.length === 0) {
       await continueAfterInvitationsResolved()
+    }
+    else {
+      void invokeCapgoApi('private/organization_invitation', {
+        body: { action: 'view' },
+      })
+    }
   }
   catch (error) {
     console.error('Failed to load pending organization invitations', error)
@@ -102,29 +108,27 @@ async function loadPendingInvitations() {
 }
 
 async function acceptInvitation(invitation: Organization) {
-  const { data, error } = await supabase.rpc('accept_invitation_to_org', {
-    org_id: invitation.gid,
+  const { error } = await invokeCapgoApi('private/organization_invitation', {
+    body: {
+      action: 'accept',
+      org_id: invitation.gid,
+    },
   })
 
   if (error)
     throw error
-  if (data !== 'OK')
-    throw new Error(typeof data === 'string' ? data : 'failed_to_accept_invitation')
 
   await organizationStore.fetchOrganizations()
   organizationStore.setCurrentOrganization(invitation.gid)
 }
 
 async function declineInvitation(invitation: Organization) {
-  const userId = getCurrentUserId()
-  if (!userId)
-    throw new Error('missing_user')
-
-  const { error } = await supabase
-    .from('org_users')
-    .delete()
-    .eq('org_id', invitation.gid)
-    .eq('user_id', userId)
+  const { error } = await invokeCapgoApi('private/organization_invitation', {
+    body: {
+      action: 'decline',
+      org_id: invitation.gid,
+    },
+  })
 
   if (error)
     throw error
@@ -172,11 +176,12 @@ async function declineAllInvitations() {
     clearPendingInviteSkip(userId)
 
     const inviteOrgIds = invitations.value.map(invitation => invitation.gid)
-    const { error } = await supabase
-      .from('org_users')
-      .delete()
-      .eq('user_id', userId)
-      .in('org_id', inviteOrgIds)
+    const { error } = await invokeCapgoApi('private/organization_invitation', {
+      body: {
+        action: 'decline_all',
+        org_ids: inviteOrgIds,
+      },
+    })
     if (error)
       throw error
 
@@ -199,7 +204,12 @@ async function skipInvitations() {
   isSkipping.value = true
   errorMessage.value = ''
   try {
-    rememberPendingInviteSkip(getCurrentUserId())
+    const userId = getCurrentUserId()
+    if (!userId)
+      throw new Error('missing_user')
+
+    rememberPendingInviteSkip(userId)
+    captureOrganizationInvitationSkipped(userId, invitations.value.length)
     await continueAfterInvitationsResolved()
   }
   catch (error) {

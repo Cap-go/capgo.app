@@ -2,6 +2,57 @@
 import { shouldSuppressPostHogExceptionEvent } from '~/services/staleAssetErrors'
 import { isLocal } from '~/services/supabase'
 
+const POSTHOG_URL_PROPERTY_KEYS = [
+  '$current_url',
+  '$initial_current_url',
+  '$initial_referrer',
+  '$referrer',
+  'current_url',
+  'url',
+]
+
+function removeInvitationToken(value: unknown): unknown {
+  if (typeof value !== 'string' || !value.toLowerCase().includes('invite_magic_string'))
+    return value
+
+  try {
+    const isAbsolute = /^[a-z][a-z\d+.-]*:\/\//i.test(value)
+    const url = new URL(value, 'https://redacted.invalid')
+    url.searchParams.delete('invite_magic_string')
+    return isAbsolute ? url.toString() : `${url.pathname}${url.search}${url.hash}`
+  }
+  catch {
+    return value.replace(/([?&]invite_magic_string=)[^&#]*/gi, '$1[redacted]')
+  }
+}
+
+function sanitizeInvitationUrlProperties(properties: Record<string, unknown>) {
+  const sanitized = { ...properties }
+  for (const key of POSTHOG_URL_PROPERTY_KEYS) {
+    if (key in sanitized)
+      sanitized[key] = removeInvitationToken(sanitized[key])
+  }
+  return sanitized
+}
+
+export function sanitizePostHogInvitationEvent(event: unknown) {
+  if (!event || typeof event !== 'object')
+    return event
+
+  const properties = (event as { properties?: Record<string, unknown> }).properties
+  if (!properties)
+    return event
+
+  const sanitizedProperties = sanitizeInvitationUrlProperties(properties)
+  for (const key of ['$set', '$set_once']) {
+    const nestedProperties = sanitizedProperties[key]
+    if (nestedProperties && typeof nestedProperties === 'object' && !Array.isArray(nestedProperties))
+      sanitizedProperties[key] = sanitizeInvitationUrlProperties(nestedProperties as Record<string, unknown>)
+  }
+
+  return { ...event, properties: sanitizedProperties }
+}
+
 export function posthogLoader(supaHost: string) {
   if (isLocal(supaHost))
     return
@@ -12,9 +63,10 @@ export function posthogLoader(supaHost: string) {
     person_profiles: 'identified_only',
     defaults: '2026-05-30',
     before_send: (event) => {
-      if (shouldSuppressPostHogExceptionEvent(event))
+      const sanitizedEvent = sanitizePostHogInvitationEvent(event)
+      if (shouldSuppressPostHogExceptionEvent(sanitizedEvent))
         return false
-      return event
+      return sanitizedEvent
     },
   })
 }
@@ -25,6 +77,13 @@ type PostHogProperties = Record<string, JsonPrimitive>
 export function pushEvent(nameEvent: string, supaHost: string, properties?: PostHogProperties): void {
   if (isLocal(supaHost))
     return
+  posthog.capture(nameEvent, properties)
+}
+
+export function pushEventForUser(nameEvent: string, uuid: string, supaHost: string, properties?: PostHogProperties): void {
+  if (isLocal(supaHost))
+    return
+  posthog.identify(uuid)
   posthog.capture(nameEvent, properties)
 }
 

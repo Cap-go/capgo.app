@@ -99,6 +99,12 @@ onMounted(async () => {
     else {
       inviteRow.value = data
       isFetchingInvite.value = false
+      void invokeCapgoApi('private/organization_invitation/magic-view', {
+        allowAnonymous: true,
+        body: {
+          magic_invite_string: inviteMagicString.value,
+        },
+      })
     }
   }
   else {
