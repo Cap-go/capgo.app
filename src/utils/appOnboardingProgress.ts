@@ -1,4 +1,5 @@
 import type { Json } from '~/types/supabase.types'
+import { getAppOnboardingStepIds, parseAppOnboarding } from '~/services/appOnboarding'
 
 export const APP_ONBOARDING_FEATURES = ['cli_install', 'ota', 'builder'] as const
 export type AppOnboardingFeatureKey = typeof APP_ONBOARDING_FEATURES[number]
@@ -266,9 +267,22 @@ export function gettingStartedProgress(steps: GettingStartedStep[]): {
   }
 }
 
-export function shouldShowGettingStartedNav(ledger: AppOnboardingLedger, extras?: GettingStartedStepExtras): boolean {
+export function shouldShowGettingStartedNav(onboarding: unknown, extras?: GettingStartedStepExtras): boolean {
+  const ledger = parseAppOnboardingLedger(onboarding)
   if (ledger.getting_started_dismissed_at)
     return false
+
+  const checklist = parseAppOnboarding(onboarding)
+  if (checklist.todo_list_version === 3 || checklist.todo_list_version === 4) {
+    return getAppOnboardingStepIds(checklist.todo_list_version, checklist.ota_todo_list_version)
+      .some((id) => {
+        const status = checklist.steps[id]?.status
+        return status !== 'done' && status !== 'skipped'
+      })
+  }
+  if (checklist.todo_list_version !== 1 && checklist.todo_list_version !== 2)
+    return false
+
   return buildGettingStartedSteps(ledger, extras)
     .some(step => step.group === 'essential' && !step.done)
 }

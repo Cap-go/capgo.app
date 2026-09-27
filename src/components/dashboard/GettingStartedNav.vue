@@ -36,7 +36,7 @@ const apps = computed(() => {
     return [] as OrganizationApp[]
 
   return organizationStore.getAppsByOrgId(orgId).filter((app) => {
-    return shouldShowGettingStartedNav(parseAppOnboardingLedger(app.onboarding), {
+    return shouldShowGettingStartedNav(app.onboarding, {
       storeReleaseValidated: isStoreReleaseValidated(userId.value, app.app_id),
     })
   })
