@@ -12,14 +12,14 @@ import { sendNotifOrgCached } from '../utils/notifications.ts'
 import type { AppOwnerPostgresResult } from '../utils/pg.ts'
 import { closeClient, getAppVersionPostgres, getDrizzleClient, getEffectiveDeviceChannelNamePostgres, getPgClient, lookupAppOwnerPostgres } from '../utils/pg.ts'
 import { makeDevice, parsePluginBody } from '../utils/plugin_parser.ts'
-import { createStatsMau, createStatsVersion, sendStatsAndDevice } from '../utils/plugin_stats.ts'
+import { createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from '../utils/plugin_stats.ts'
 import { statsRequestSchema } from '../utils/plugin_validation.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
 import { backgroundTask, INVALID_STRING_APP_ID, isLimited, MISSING_STRING_APP_ID, reverseDomainRegex } from '../utils/utils.ts'
 import { onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
 import {
+  markPluginAppOnprem,
   pluginAppLookupUnavailableResponse,
-  respondPluginExternalAppOnprem,
   tryHealCachedOnpremAppOwner,
 } from '../utils/plugin_app_classification.ts'
 
@@ -64,6 +64,7 @@ interface PostResult {
   error?: string
   message?: string
   isOnprem?: boolean
+  onpremResetAt?: number
   moreInfo?: Record<string, unknown>
 }
 
@@ -101,12 +102,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     if (heal.kind === 'upstream')
       return { success: false, response: pluginAppLookupUnavailableResponse(c) }
     if (heal.kind === 'external_onprem') {
-      const device = makeDevice(body, cachedAppStatus.allow_device_custom_id)
-      return {
-        success: true,
-        isOnprem: true,
-        response: await respondPluginExternalAppOnprem(c, app_id, action, device, metadata, cachedAppStatus),
-      }
+      return { success: true, isOnprem: true, onpremResetAt: heal.resetAt }
     }
     if (heal.kind === 'cancelled') {
       cachedStatus = 'cancelled'
@@ -137,12 +133,14 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     if (lookup.status === 'error')
       return { success: false, response: pluginAppLookupUnavailableResponse(c) }
     if (lookup.status === 'not_found') {
-      const device = makeDevice(body, cachedAppStatus.allow_device_custom_id)
-      return {
-        success: true,
-        isOnprem: true,
-        response: await respondPluginExternalAppOnprem(c, app_id, action, device, metadata, cachedAppStatus),
-      }
+      const resetAt = await markPluginAppOnprem(
+        c,
+        app_id,
+        cachedAppStatus.block_provider_infra_requests,
+        cachedAppStatus,
+      )
+      await onPremStats(c, app_id, action, device, metadata, resetAt)
+      return { success: true, isOnprem: true, onpremResetAt: resetAt }
     }
     appOwner = lookup.owner
   }
@@ -333,7 +331,7 @@ app.post('/', async (c) => {
         return result.response
       }
       if (result.isOnprem) {
-        return onPremiseAppResponse(c)
+        return onPremiseAppResponse(c, result.onpremResetAt)
       }
       if (result.success) {
         return c.json(BRES)
