@@ -51,7 +51,7 @@
     "audience": "all",
     "intents": ["builder"],
     "label": "Builder setup checklist v4",
-    "treatment_percentage": 0,
+    "treatment_percentage": 50,
     "treatment_branch": "A",
     "control_branch": "B",
     "branches": {
