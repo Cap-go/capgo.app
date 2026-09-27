@@ -114,7 +114,10 @@ describe('handleOrgNotificationsAndEvents onboarding reminder', () => {
       {} as any,
     )
 
-    expect(result).toBe(false)
+    expect(result).toEqual({
+      exceededFlags: null,
+      finalIsGoodPlan: false,
+    })
     expect(orgNotificationCalls(sendNotifToOrgMembersMock, orgId)).toHaveLength(0)
     expect(sendNotifToOrgMembersOnceMock).toHaveBeenCalledWith(
       expect.anything(),
@@ -196,7 +199,15 @@ describe('handleOrgNotificationsAndEvents onboarding reminder', () => {
       {} as any,
     )
 
-    expect(result).toBe(true)
+    expect(result).toEqual({
+      exceededFlags: {
+        bandwidth_exceeded: false,
+        build_time_exceeded: false,
+        mau_exceeded: false,
+        storage_exceeded: false,
+      },
+      finalIsGoodPlan: true,
+    })
     expect(orgNotificationCalls(sendNotifToOrgMembersMock, orgId)).toHaveLength(0)
     expect(trackingCalls(orgId)).toHaveLength(0)
   })
@@ -225,7 +236,15 @@ describe('handleOrgNotificationsAndEvents onboarding reminder', () => {
       {} as any,
     )
 
-    expect(result).toBe(true)
+    expect(result).toEqual({
+      exceededFlags: {
+        bandwidth_exceeded: false,
+        build_time_exceeded: false,
+        mau_exceeded: false,
+        storage_exceeded: false,
+      },
+      finalIsGoodPlan: true,
+    })
     expect(sendNotifToOrgMembersMock).toHaveBeenCalledWith(
       expect.anything(),
       'user:usage_50_percent_of_plan',

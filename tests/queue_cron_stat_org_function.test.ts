@@ -71,32 +71,27 @@ describe('[Function] queue_cron_stat_org_for_org', () => {
       return
     }
 
-    await getSupabaseClient()
-      .from('stripe_info')
-      .update({ plan_calculated_at: null })
-      .eq('customer_id', testCustomerId)
-      .throwOnError()
+    await executeSQL(`
+      UPDATE public.org_stats_refresh_state
+      SET plan_calculated_at = NULL
+      WHERE org_id = $1
+    `, [ORG_ID_CRON_QUEUE])
 
     await expectQueuedForOrg(testCustomerId)
   })
 
-  // TODO: fix this broken test
-  // it('skips queuing when plan was calculated within last hour', async () => {
-  //     ...
-  // })
-
-  it('queues plan processing when plan was calculated over 1 hour ago', async () => {
+  it('queues plan processing when a previous calculation exists', async () => {
     if (!testCustomerId) {
       console.log('Skipping test - no customer_id available')
       return
     }
 
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
-    await getSupabaseClient()
-      .from('stripe_info')
-      .update({ plan_calculated_at: twoHoursAgo.toISOString() })
-      .eq('customer_id', testCustomerId)
-      .throwOnError()
+    const previousCalculation = new Date(Date.now() - 2 * 60 * 60 * 1000)
+    await executeSQL(`
+      UPDATE public.org_stats_refresh_state
+      SET plan_calculated_at = $2::timestamptz
+      WHERE org_id = $1
+    `, [ORG_ID_CRON_QUEUE, previousCalculation.toISOString()])
 
     await expectQueuedForOrg(testCustomerId)
   })

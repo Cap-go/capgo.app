@@ -4,7 +4,6 @@ import { BRES, middlewareAPISecret, parseBody, simpleError } from '../utils/hono
 import { cloudlog } from '../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { checkPlanStatusOnly } from '../utils/plans.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
 
 interface OrgToGet {
   orgId?: string
@@ -34,22 +33,6 @@ app.post('/', middlewareAPISecret, async (c) => {
       throw error
     }
 
-    // Update plan_calculated_at timestamp if we have customerId
-    if (body.customerId) {
-      try {
-        const supabase = supabaseAdmin(c)
-        await supabase
-          .from('stripe_info')
-          .update({ plan_calculated_at: new Date().toISOString() })
-          .eq('customer_id', body.customerId)
-          .throwOnError()
-
-        cloudlog({ requestId: c.get('requestId'), message: 'plan calculated timestamp updated', customerId: body.customerId })
-      }
-      catch (error) {
-        cloudlog({ requestId: c.get('requestId'), message: 'plan calculated timestamp update failed', customerId: body.customerId, error })
-      }
-    }
     await pgClient.query(
       'SELECT public.mark_org_stats_refreshed($1, $2::timestamp without time zone)',
       [body.orgId, body.statsTargetAt ?? null],

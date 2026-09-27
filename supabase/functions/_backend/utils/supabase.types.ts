@@ -2591,18 +2591,21 @@ export type Database = {
         Row: {
           manual_refresh_requested_at: string | null
           org_id: string
+          plan_calculated_at: string | null
           stats_refresh_requested_at: string | null
           stats_updated_at: string | null
         }
         Insert: {
           manual_refresh_requested_at?: string | null
           org_id: string
+          plan_calculated_at?: string | null
           stats_refresh_requested_at?: string | null
           stats_updated_at?: string | null
         }
         Update: {
           manual_refresh_requested_at?: string | null
           org_id?: string
+          plan_calculated_at?: string | null
           stats_refresh_requested_at?: string | null
           stats_updated_at?: string | null
         }

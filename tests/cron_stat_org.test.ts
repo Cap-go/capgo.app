@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { BASE_URL, fetchTestRequest, getBaseData, getSupabaseClient, PRODUCT_ID, postUpdate, TEST_EMAIL, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
+import { BASE_URL, executeSQL, fetchTestRequest, getBaseData, getSupabaseClient, PRODUCT_ID, postUpdate, TEST_EMAIL, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
 
 // Create unique IDs for this test file to avoid parallel test interference
 const id = randomUUID()
@@ -138,6 +138,44 @@ describe('[POST] /triggers/cron_stat_org', () => {
     expect(response.status).toBe(400)
     const data = await response.json() as { error: string }
     expect(data.error).toBe('no_orgId')
+  })
+
+  it('does not rewrite stripe_info when the calculated plan state is unchanged', async () => {
+    const firstResponse = await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ orgId: TEST_ORG_ID }),
+    })
+    expect(firstResponse.status).toBe(200)
+
+    const [before] = await executeSQL<{
+      row_version: string
+      updated_at: string
+    }>(`
+      SELECT xmin::text AS row_version,
+             updated_at::text AS updated_at
+      FROM public.stripe_info
+      WHERE customer_id = $1
+    `, [TEST_STRIPE_CUSTOMER_ID])
+
+    const secondResponse = await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ orgId: TEST_ORG_ID }),
+    })
+    expect(secondResponse.status).toBe(200)
+
+    const [after] = await executeSQL<{
+      row_version: string
+      updated_at: string
+    }>(`
+      SELECT xmin::text AS row_version,
+             updated_at::text AS updated_at
+      FROM public.stripe_info
+      WHERE customer_id = $1
+    `, [TEST_STRIPE_CUSTOMER_ID])
+
+    expect(after).toEqual(before)
   })
 
   it('should handle too big MAU correctly', async () => {
