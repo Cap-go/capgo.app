@@ -220,6 +220,8 @@ async function declineAllInvitations() {
         .select('org_id')
       if (error)
         throw error
+      if (!data.length)
+        throw new Error('NO_INVITE')
 
       for (const invitation of data) {
         captureOrganizationInvitationEvent({
