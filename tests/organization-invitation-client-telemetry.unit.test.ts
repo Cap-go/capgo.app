@@ -13,19 +13,35 @@ vi.mock('~/services/supabase', () => ({
   getLocalConfig: () => ({ supaHost: 'https://sb.capgo.app' }),
 }))
 
-const { captureOrganizationInvitationSkipped } = await import('../src/services/organizationInvitationTelemetry.ts')
+const {
+  captureOrganizationInvitationEvent,
+  runTrackedOrganizationInvitationMutation,
+} = await import('../src/services/organizationInvitationTelemetry.ts')
+
+const USER_ID = '550e8400-e29b-41d4-a716-446655440000'
+const INVITATION_ID = 'a3d4cb0c-96df-4e65-bca4-b7e037a09017'
 
 describe('organization invitation client telemetry', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('records skip with the authenticated Capgo UUID and no invitation identifiers', () => {
-    captureOrganizationInvitationSkipped('550e8400-e29b-41d4-a716-446655440000', 3)
+  it('records authenticated viewed and skipped events with the Capgo UUID', () => {
+    captureOrganizationInvitationEvent({
+      event: 'organization_membership_invitation_viewed',
+      pendingInvitationCount: 3,
+      userId: USER_ID,
+    })
+    captureOrganizationInvitationEvent({
+      event: 'organization_membership_invitation_skipped',
+      pendingInvitationCount: 3,
+      userId: USER_ID,
+    })
 
-    expect(pushEventForUserMock).toHaveBeenCalledWith(
-      'organization_membership_invitation_skipped',
-      '550e8400-e29b-41d4-a716-446655440000',
+    expect(pushEventForUserMock).toHaveBeenNthCalledWith(
+      1,
+      'organization_membership_invitation_viewed',
+      USER_ID,
       'https://sb.capgo.app',
       {
         account_state: 'already_existed',
@@ -34,24 +50,130 @@ describe('organization invitation client telemetry', () => {
         pending_invitation_count: 3,
       },
     )
+    expect(pushEventForUserMock).toHaveBeenNthCalledWith(
+      2,
+      'organization_membership_invitation_skipped',
+      USER_ID,
+      'https://sb.capgo.app',
+      expect.objectContaining({ pending_invitation_count: 3 }),
+    )
   })
 
-  it.concurrent('routes state-changing pending-invite actions through the backend', () => {
-    const source = readFileSync(new URL('../src/pages/onboarding/invitation.vue', import.meta.url), 'utf8')
+  it('emits accepted only after the membership mutation succeeds', async () => {
+    let membershipFinalized = false
+    pushEventForUserMock.mockImplementation(() => {
+      expect(membershipFinalized).toBe(true)
+    })
 
-    expect(source).toContain('invokeCapgoApi(\'private/organization_invitation\'')
-    expect(source).toContain('action: \'accept\'')
-    expect(source).toContain('action: \'decline\'')
-    expect(source).toContain('action: \'decline_all\'')
-    expect(source).toContain('inviteOrgIds.slice(offset, offset + 100)')
-    expect(source).toContain('captureOrganizationInvitationSkipped(userId, invitations.value.length)')
-    expect(source).not.toContain('supabase.rpc(\'accept_invitation_to_org\'')
+    await runTrackedOrganizationInvitationMutation({
+      failureReason: 'acceptance_failed',
+      invitationId: INVITATION_ID,
+      pendingInvitationCount: 2,
+      successEvent: 'organization_membership_invitation_accepted',
+      userId: USER_ID,
+    }, async () => {
+      membershipFinalized = true
+    })
+
+    expect(pushEventForUserMock).toHaveBeenCalledWith(
+      'organization_membership_invitation_accepted',
+      USER_ID,
+      'https://sb.capgo.app',
+      expect.objectContaining({
+        $insert_id: expect.stringContaining(`${USER_ID}:${INVITATION_ID}`),
+        pending_invitation_count: 2,
+      }),
+    )
   })
 
-  it.concurrent('routes magic-link viewed telemetry through the anonymous backend endpoint', () => {
-    const source = readFileSync(new URL('../src/pages/invitation.vue', import.meta.url), 'utf8')
+  it('emits declined only after the invitation deletion succeeds', async () => {
+    let invitationDeleted = false
+    pushEventForUserMock.mockImplementation(() => {
+      expect(invitationDeleted).toBe(true)
+    })
 
-    expect(source).toContain('invokeCapgoApi(\'private/organization_invitation/magic-view\'')
-    expect(source).toContain('allowAnonymous: true')
+    await runTrackedOrganizationInvitationMutation({
+      failureReason: 'decline_failed',
+      invitationId: INVITATION_ID,
+      pendingInvitationCount: 1,
+      successEvent: 'organization_membership_invitation_declined',
+      userId: USER_ID,
+    }, async () => {
+      invitationDeleted = true
+    })
+
+    expect(pushEventForUserMock).toHaveBeenCalledWith(
+      'organization_membership_invitation_declined',
+      USER_ID,
+      'https://sb.capgo.app',
+      expect.objectContaining({
+        $insert_id: expect.any(String),
+        pending_invitation_count: 1,
+      }),
+    )
+  })
+
+  it('emits only a sanitized failure when membership acceptance fails', async () => {
+    await expect(runTrackedOrganizationInvitationMutation({
+      failureReason: 'acceptance_failed',
+      invitationId: INVITATION_ID,
+      pendingInvitationCount: 2,
+      successEvent: 'organization_membership_invitation_accepted',
+      userId: USER_ID,
+    }, async () => {
+      throw Object.assign(new Error('private invitee@example.com details'), { code: 'ROLE_NOT_FOUND' })
+    })).rejects.toThrow()
+
+    expect(pushEventForUserMock).toHaveBeenCalledTimes(1)
+    expect(pushEventForUserMock).toHaveBeenCalledWith(
+      'organization_membership_invitation_failed',
+      USER_ID,
+      'https://sb.capgo.app',
+      expect.objectContaining({ failure_reason: 'membership_update_failed' }),
+    )
+    expect(JSON.stringify(pushEventForUserMock.mock.calls)).not.toContain('invitee@example.com')
+    expect(pushEventForUserMock).not.toHaveBeenCalledWith(
+      'organization_membership_invitation_accepted',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    )
+  })
+
+  it('uses a deterministic insert id and ignores PostHog failures', async () => {
+    const input = {
+      failureReason: 'acceptance_failed' as const,
+      invitationId: INVITATION_ID,
+      pendingInvitationCount: 1,
+      successEvent: 'organization_membership_invitation_accepted' as const,
+      userId: USER_ID,
+    }
+
+    await runTrackedOrganizationInvitationMutation(input, async () => {})
+    await runTrackedOrganizationInvitationMutation(input, async () => {})
+
+    const firstInsertId = pushEventForUserMock.mock.calls[0][3].$insert_id
+    const secondInsertId = pushEventForUserMock.mock.calls[1][3].$insert_id
+    expect(firstInsertId).toBe(secondInsertId)
+
+    pushEventForUserMock.mockImplementation(() => {
+      throw new Error('PostHog unavailable')
+    })
+    await expect(runTrackedOrganizationInvitationMutation(input, async () => {})).resolves.toBeUndefined()
+  })
+
+  it('keeps authenticated mutations in the frontend and uses one backend magic lookup', () => {
+    const authenticatedSource = readFileSync(new URL('../src/pages/onboarding/invitation.vue', import.meta.url), 'utf8')
+    const magicLinkSource = readFileSync(new URL('../src/pages/invitation.vue', import.meta.url), 'utf8')
+
+    expect(authenticatedSource).toContain("supabase.rpc('accept_invitation_to_org'")
+    expect(authenticatedSource).toContain(".from('org_users')")
+    expect(authenticatedSource).not.toContain("invokeCapgoApi('private/organization_invitation'")
+    expect(authenticatedSource).toContain('organization_membership_invitation_declined')
+    expect(authenticatedSource).toContain('organization_membership_invitation_skipped')
+
+    expect(magicLinkSource).toContain("'private/organization_invitation/magic-lookup'")
+    expect(magicLinkSource).toContain('allowAnonymous: true')
+    expect(magicLinkSource).not.toContain("supabase.rpc('get_invite_by_magic_lookup'")
   })
 })

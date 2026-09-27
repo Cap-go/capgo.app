@@ -2,238 +2,86 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
-import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
-import { middlewareAuth } from '../utils/hono_jwt.ts'
+import { parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { cloudlogErr } from '../utils/logging.ts'
-import {
-  captureOrganizationInvitationPosthogEvent,
-  sanitizeOrganizationInvitationFailureReason,
-} from '../utils/organization_invitation_posthog.ts'
+import { captureOrganizationInvitationPosthogEvent } from '../utils/organization_invitation_posthog.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
-import { supabaseAdmin, supabaseWithAuth } from '../utils/supabase.ts'
+import { supabaseAdmin } from '../utils/supabase.ts'
 
-const magicViewSchema = z.object({
-  magic_invite_string: z.string().min(1),
+const magicLookupSchema = z.object({
+  magic_invite_string: z.string().min(1).max(512),
 })
 
-const authenticatedActionSchema = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('view') }),
-  z.object({ action: z.literal('accept'), org_id: z.uuid() }),
-  z.object({ action: z.literal('decline'), org_id: z.uuid() }),
-  z.object({ action: z.literal('decline_all'), org_ids: z.array(z.uuid()).min(1).max(100) }),
-])
-
-type AuthenticatedAction = z.infer<typeof authenticatedActionSchema>
-type AuthenticatedClient = ReturnType<typeof supabaseWithAuth>
-type PendingMembership = Pick<Database['public']['Tables']['org_users']['Row'], 'id'>
+type MagicInvitationLookup = Database['public']['Functions']['get_invite_by_magic_lookup']['Returns'][number]
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.use('*', useCors)
 
-async function getPendingInvitationCount(c: Parameters<typeof supabaseWithAuth>[0], client: AuthenticatedClient) {
-  const { data, error } = await client.rpc('get_orgs_v7')
-  if (error) {
-    cloudlogErr({
-      requestId: c.get('requestId'),
-      message: 'Failed to count pending organization invitations for telemetry',
-      error,
-    })
-    return undefined
-  }
-
-  return data.filter(organization => organization.is_invite).length
-}
-
-async function getPendingMembership(client: AuthenticatedClient, userId: string, orgId: string): Promise<{
-  data: PendingMembership | null
-  error: unknown
-}> {
-  const { data, error } = await client
-    .from('org_users')
-    .select('id')
-    .eq('user_id', userId)
-    .eq('org_id', orgId)
-    .eq('is_invite', true)
-    .maybeSingle()
-
-  return { data, error }
-}
-
-app.post('/magic-view', async (c) => {
-  const validation = safeParseSchema(magicViewSchema, await parseBody(c))
+app.post('/magic-lookup', async (c) => {
+  const validation = safeParseSchema(magicLookupSchema, await parseBody(c))
   if (!validation.success)
     throw simpleError('invalid_json_body', 'Invalid request')
 
+  const magicInviteString = validation.data.magic_invite_string
   const adminClient = supabaseAdmin(c)
-  const { data: invitation, error: invitationError } = await adminClient
-    .from('tmp_users')
-    .select('id, future_uuid, email, cancelled_at')
-    .eq('invite_magic_string', validation.data.magic_invite_string)
+  const { data: invitationData, error: invitationDataError } = await adminClient
+    .rpc('get_invite_by_magic_lookup', { lookup: magicInviteString })
     .maybeSingle()
 
-  if (invitationError)
+  if (invitationDataError) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'Failed to load magic-link invitation details',
+      error: invitationDataError,
+    })
     return quickError(500, 'failed_to_load_invitation', 'Failed to load invitation')
-  if (!invitation || invitation.cancelled_at)
+  }
+  if (!invitationData)
     return quickError(404, 'invitation_not_found', 'Invitation not found')
+
+  const invitation = invitationData as MagicInvitationLookup
+  const { data: invitationIdentity, error: invitationIdentityError } = await adminClient
+    .from('tmp_users')
+    .select('future_uuid, email')
+    .eq('invite_magic_string', magicInviteString)
+    .maybeSingle()
+
+  if (invitationIdentityError || !invitationIdentity) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'Failed to resolve magic-link invitation telemetry identity',
+      error: invitationIdentityError,
+    })
+    return c.json(invitation)
+  }
 
   const { data: existingUser, error: existingUserError } = await adminClient
     .from('users')
     .select('id')
-    .eq('email', invitation.email)
+    .eq('email', invitationIdentity.email)
     .maybeSingle()
 
   if (existingUserError) {
     cloudlogErr({
       requestId: c.get('requestId'),
-      message: 'Failed to resolve magic-link invitation telemetry identity',
+      message: 'Failed to resolve magic-link invitation account state',
       error: existingUserError,
     })
-    return c.json(BRES)
   }
-
-  await captureOrganizationInvitationPosthogEvent(c, {
-    event: 'organization_membership_invitation_viewed',
-    flow: 'new_user_magic_link',
-    pendingInvitationCount: 1,
-    userId: existingUser?.id ?? invitation.future_uuid,
-  })
-
-  return c.json(BRES)
-})
-
-app.post('/', middlewareAuth, async (c) => {
-  const auth = c.get('auth')
-  if (!auth?.userId || auth.authType !== 'jwt')
-    return quickError(401, 'unauthorized', 'Unauthorized')
-
-  const validation = safeParseSchema(authenticatedActionSchema, await parseBody(c))
-  if (!validation.success)
-    throw simpleError('invalid_json_body', 'Invalid request')
-
-  const action: AuthenticatedAction = validation.data
-  const client = supabaseWithAuth(c, auth)
-  const pendingInvitationCountPromise = getPendingInvitationCount(c, client)
-
-  if (action.action === 'view') {
-    const pendingInvitationCount = await pendingInvitationCountPromise
-    if (!pendingInvitationCount)
-      return c.json(BRES)
-
-    await captureOrganizationInvitationPosthogEvent(c, {
-      accountState: 'already_existed',
-      event: 'organization_membership_invitation_viewed',
-      flow: 'authenticated_pending_invite',
-      pendingInvitationCount,
-      userId: auth.userId,
-    })
-    return c.json(BRES)
-  }
-
-  if (action.action === 'decline_all') {
-    const { data: deletedInvitations, error } = await client
-      .from('org_users')
-      .delete()
-      .eq('user_id', auth.userId)
-      .eq('is_invite', true)
-      .in('org_id', action.org_ids)
-      .select('id')
-
-    const pendingInvitationCount = await pendingInvitationCountPromise
-    if (error || !deletedInvitations?.length) {
+  else {
+    try {
       await captureOrganizationInvitationPosthogEvent(c, {
-        accountState: 'already_existed',
-        event: 'organization_membership_invitation_failed',
-        failureReason: sanitizeOrganizationInvitationFailureReason(error, error ? 'decline_failed' : 'invitation_not_found'),
-        flow: 'authenticated_pending_invite',
-        pendingInvitationCount,
-        userId: auth.userId,
+        event: 'organization_membership_invitation_viewed',
+        flow: 'new_user_magic_link',
+        pendingInvitationCount: 1,
+        userId: existingUser?.id ?? invitationIdentity.future_uuid,
       })
-      return quickError(error ? 500 : 404, 'failed_to_decline_invitation', 'Failed to decline invitation')
     }
-
-    await Promise.all(deletedInvitations.map(invitation => captureOrganizationInvitationPosthogEvent(c, {
-      accountState: 'already_existed',
-      event: 'organization_membership_invitation_declined',
-      flow: 'authenticated_pending_invite',
-      invitationId: invitation.id,
-      pendingInvitationCount,
-      userId: auth.userId,
-    })))
-    return c.json(BRES)
+    catch {
+      // Invitation lookup must never depend on analytics availability.
+    }
   }
 
-  if (action.action === 'accept') {
-    const { data: pendingMembership, error: pendingMembershipError } = await getPendingMembership(client, auth.userId, action.org_id)
-    if (pendingMembershipError || !pendingMembership) {
-      const pendingInvitationCount = await pendingInvitationCountPromise
-      await captureOrganizationInvitationPosthogEvent(c, {
-        accountState: 'already_existed',
-        event: 'organization_membership_invitation_failed',
-        failureReason: pendingMembershipError ? 'acceptance_failed' : 'invitation_not_found',
-        flow: 'authenticated_pending_invite',
-        pendingInvitationCount,
-        userId: auth.userId,
-      })
-      return quickError(pendingMembershipError ? 500 : 404, 'failed_to_accept_invitation', 'Failed to accept invitation')
-    }
-
-    const { data, error } = await client.rpc('accept_invitation_to_org', {
-      org_id: action.org_id,
-    })
-    const pendingInvitationCount = await pendingInvitationCountPromise
-
-    if (error || data !== 'OK') {
-      await captureOrganizationInvitationPosthogEvent(c, {
-        accountState: 'already_existed',
-        event: 'organization_membership_invitation_failed',
-        failureReason: sanitizeOrganizationInvitationFailureReason(error ?? data, 'acceptance_failed'),
-        flow: 'authenticated_pending_invite',
-        pendingInvitationCount,
-        userId: auth.userId,
-      })
-      return quickError(409, 'failed_to_accept_invitation', 'Failed to accept invitation')
-    }
-
-    await captureOrganizationInvitationPosthogEvent(c, {
-      accountState: 'already_existed',
-      event: 'organization_membership_invitation_accepted',
-      flow: 'authenticated_pending_invite',
-      invitationId: pendingMembership.id,
-      pendingInvitationCount,
-      userId: auth.userId,
-    })
-    return c.json(BRES)
-  }
-
-  const { data: deletedInvitations, error } = await client
-    .from('org_users')
-    .delete()
-    .eq('user_id', auth.userId)
-    .eq('org_id', action.org_id)
-    .eq('is_invite', true)
-    .select('id')
-
-  const pendingInvitationCount = await pendingInvitationCountPromise
-  if (error || !deletedInvitations?.length) {
-    await captureOrganizationInvitationPosthogEvent(c, {
-      accountState: 'already_existed',
-      event: 'organization_membership_invitation_failed',
-      failureReason: sanitizeOrganizationInvitationFailureReason(error, error ? 'decline_failed' : 'invitation_not_found'),
-      flow: 'authenticated_pending_invite',
-      pendingInvitationCount,
-      userId: auth.userId,
-    })
-    return quickError(error ? 500 : 404, 'failed_to_decline_invitation', 'Failed to decline invitation')
-  }
-
-  await captureOrganizationInvitationPosthogEvent(c, {
-    accountState: 'already_existed',
-    event: 'organization_membership_invitation_declined',
-    flow: 'authenticated_pending_invite',
-    invitationId: deletedInvitations[0].id,
-    pendingInvitationCount,
-    userId: auth.userId,
-  })
-  return c.json(BRES)
+  return c.json(invitation)
 })
