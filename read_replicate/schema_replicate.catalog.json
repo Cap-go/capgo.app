@@ -1101,6 +1101,36 @@
       "type": "timestamp with time zone"
     },
     {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "size_receipts_provided",
+      "notNull": true,
+      "position": 8,
+      "table": "manifest_per_version",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "manifest_size",
+      "notNull": false,
+      "position": 9,
+      "table": "manifest_per_version",
+      "type": "bytea"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "manifest_size_payload_hash",
+      "notNull": false,
+      "position": 10,
+      "table": "manifest_per_version",
+      "type": "bytea"
+    },
+    {
       "default": "now()",
       "generated": "",
       "identity": "",
@@ -2034,14 +2064,14 @@
       "valid": true
     },
     {
-      "definition": "CHECK (octet_length(manifest) > 0)",
+      "definition": "CHECK (octet_length(manifest) > 0 OR size_receipts_provided AND octet_length(manifest) = 0)",
       "name": "manifest_per_version_manifest_check",
       "table": "manifest_per_version",
       "type": "c",
       "valid": true
     },
     {
-      "definition": "CHECK (octet_length(payload_hash) = 32)",
+      "definition": "CHECK (octet_length(payload_hash) = 32 OR size_receipts_provided AND octet_length(payload_hash) = 0)",
       "name": "manifest_per_version_payload_hash_check",
       "table": "manifest_per_version",
       "type": "c",
