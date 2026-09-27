@@ -133,13 +133,14 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     if (lookup.status === 'error')
       return { success: false, response: pluginAppLookupUnavailableResponse(c) }
     if (lookup.status === 'not_found') {
+      const externalDevice = makeDevice(body, cachedAppStatus.allow_device_custom_id)
       const resetAt = await markPluginAppOnprem(
         c,
         app_id,
         cachedAppStatus.block_provider_infra_requests,
         cachedAppStatus,
       )
-      await onPremStats(c, app_id, action, device, metadata, resetAt)
+      await onPremStats(c, app_id, action, externalDevice, metadata, resetAt)
       return { success: true, isOnprem: true, onpremResetAt: resetAt }
     }
     appOwner = lookup.owner
