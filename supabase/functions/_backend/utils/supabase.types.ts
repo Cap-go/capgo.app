@@ -363,13 +363,6 @@ export type Database = {
             referencedColumns: ["app_id"]
           },
           {
-            foreignKeyName: "app_versions_manifest_size_validated_fkey"
-            columns: ["id"]
-            isOneToOne: true
-            referencedRelation: "manifest_size_validated"
-            referencedColumns: ["id"]
-          },
-          {
             foreignKeyName: "owner_org_id_fkey"
             columns: ["owner_org"]
             isOneToOne: false
@@ -2165,23 +2158,38 @@ export type Database = {
           },
         ]
       }
-      manifest_size_validated: {
+      manifest_per_version: {
         Row: {
-          id: number
-          validated: boolean
+          created_at: string
+          entry_count: number
+          format_version: number
+          manifest: string
+          payload_hash: string
+          total_file_size: number
+          version_id: number
         }
         Insert: {
-          id: number
-          validated?: boolean
+          created_at?: string
+          entry_count: number
+          format_version: number
+          manifest: string
+          payload_hash: string
+          total_file_size: number
+          version_id: number
         }
         Update: {
-          id?: number
-          validated?: boolean
+          created_at?: string
+          entry_count?: number
+          format_version?: number
+          manifest?: string
+          payload_hash?: string
+          total_file_size?: number
+          version_id?: number
         }
         Relationships: [
           {
-            foreignKeyName: "manifest_size_validated_id_fkey"
-            columns: ["id"]
+            foreignKeyName: "manifest_per_version_version_id_fkey"
+            columns: ["version_id"]
             isOneToOne: true
             referencedRelation: "app_versions"
             referencedColumns: ["id"]
@@ -2563,6 +2571,32 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "org_metrics_cache_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: true
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      org_stats_refresh_state: {
+        Row: {
+          org_id: string
+          stats_refresh_requested_at: string | null
+          stats_updated_at: string | null
+        }
+        Insert: {
+          org_id: string
+          stats_refresh_requested_at?: string | null
+          stats_updated_at?: string | null
+        }
+        Update: {
+          org_id?: string
+          stats_refresh_requested_at?: string | null
+          stats_updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "org_stats_refresh_state_org_id_fkey"
             columns: ["org_id"]
             isOneToOne: true
             referencedRelation: "orgs"
@@ -5125,6 +5159,10 @@ export type Database = {
         Args: { p_app_id: string; p_feature_key: string }
         Returns: Json
       }
+      mark_org_stats_refreshed: {
+        Args: { p_org_id: string; p_stats_target_at?: string }
+        Returns: string
+      }
       mass_edit_queue_messages_cf_ids: {
         Args: {
           updates: Database["public"]["CompositeTypes"]["message_update"][]
@@ -5195,6 +5233,10 @@ export type Database = {
       process_billing_period_stats_email: { Args: never; Returns: undefined }
       process_channel_device_counts_queue: {
         Args: { batch_size?: number }
+        Returns: number
+      }
+      process_cron_stat_org_jobs: {
+        Args: { p_batch_size?: number; p_org_id?: string }
         Returns: number
       }
       process_cron_stats_jobs: { Args: never; Returns: undefined }
