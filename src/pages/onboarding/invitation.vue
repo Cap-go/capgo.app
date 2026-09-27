@@ -183,8 +183,11 @@ async function declineAllInvitations() {
           org_ids: inviteOrgIds.slice(offset, offset + 100),
         },
       })
-      if (error)
+      if (error) {
+        await organizationStore.fetchOrganizations().catch(() => {})
+        invitations.value = getPendingInviteOrganizations()
         throw error
+      }
     }
 
     await organizationStore.fetchOrganizations()
