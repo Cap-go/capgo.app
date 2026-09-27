@@ -243,6 +243,36 @@ describe('[POST] /private/set_manifest', () => {
     expect(row).toEqual({ manifest_length: 0, payload_hash_length: 0, size_receipts_provided: false })
   })
 
+  it('refreshes an existing empty summary after inserting receipt-backed rows', async () => {
+    const name = `${BUNDLE_NAME}-existing-empty-summary`
+    const version = await createUploadVersion('r2-direct', name)
+    await executeSQL(
+      `INSERT INTO public.manifest_per_version
+        (version_id, format_version, entry_count, total_file_size, payload_hash, manifest, size_receipts_provided)
+       VALUES ($1, 0, 0, 0, ''::bytea, ''::bytea, false)`,
+      [version.id],
+    )
+    const manifest = await Promise.all(manifestEntries(version.owner_org).map(async entry => ({
+      ...entry,
+      file_size_receipt: await createManifestSizeReceipt(MANIFEST_SIZE_RECEIPT_SECRET, entry.s3_path, 321),
+    })))
+
+    const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
+      method: 'POST',
+      retryUnsafe: true,
+      headers: { 'Content-Type': 'application/json', 'Authorization': APIKEY_TEST_ALL },
+      body: JSON.stringify({ app_id: APP_ID, name, manifest }),
+    })
+    expect(response.status).toBe(200)
+
+    const [summary] = await executeSQL<{ entry_count: number, size_receipts_provided: boolean, total_file_size: string }>(
+      `SELECT entry_count, total_file_size, size_receipts_provided
+       FROM public.manifest_per_version WHERE version_id = $1`,
+      [version.id],
+    )
+    expect(summary).toEqual({ entry_count: 2, total_file_size: '642', size_receipts_provided: true })
+  })
+
   it('rejects mixed legacy and receipt manifest entries atomically', async () => {
     const name = `${BUNDLE_NAME}-mixed-receipts`
     const version = await createUploadVersion('r2-direct', name)

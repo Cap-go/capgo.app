@@ -121,7 +121,15 @@ export async function persistVersionManifestEntries(
           SELECT ${record.id}::bigint, 0, count(*)::integer, COALESCE(sum(file_size), 0)::bigint,
                  ''::bytea, ''::bytea, true, NULL, NULL
           FROM public.manifest WHERE app_version_id = ${record.id}
-          ON CONFLICT (version_id) DO NOTHING`)
+          ON CONFLICT (version_id) DO UPDATE SET
+            format_version = EXCLUDED.format_version,
+            entry_count = EXCLUDED.entry_count,
+            total_file_size = EXCLUDED.total_file_size,
+            payload_hash = EXCLUDED.payload_hash,
+            manifest = EXCLUDED.manifest,
+            size_receipts_provided = EXCLUDED.size_receipts_provided,
+            manifest_size = EXCLUDED.manifest_size,
+            manifest_size_payload_hash = EXCLUDED.manifest_size_payload_hash`)
       }
 
       return alreadyPresent
