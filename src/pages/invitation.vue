@@ -86,14 +86,20 @@ onMounted(async () => {
 
   if (route.query.invite_magic_string) {
     inviteMagicString.value = route.query.invite_magic_string as string
-    const { data, error } = await supabase.rpc('get_invite_by_magic_lookup', {
-      lookup: inviteMagicString.value,
-    }).single()
+    const { data, error } = await invokeCapgoApi<Database['public']['Functions']['get_invite_by_magic_lookup']['Returns'][number]>(
+      'private/organization_invitation/magic-lookup',
+      {
+        allowAnonymous: true,
+        body: {
+          magic_invite_string: inviteMagicString.value,
+        },
+      },
+    )
 
-    if (error) {
+    if (error || !data) {
       safeResetTurnstile(captchaComponent.value)
       console.error('Error fetching invite:', error)
-      isError.value = error.message
+      isError.value = error?.message ?? t('invitation-failed')
       isFetchingInvite.value = false
     }
     else {
