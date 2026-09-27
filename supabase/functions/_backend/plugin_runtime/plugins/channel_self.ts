@@ -111,6 +111,10 @@ type AppOwnerResult = Awaited<ReturnType<typeof getAppOwnerPostgres>>
 type AppStatusResult = Awaited<ReturnType<typeof getAppStatus>>
 type ChannelSelfOverrideResult = Awaited<ReturnType<typeof getChannelDeviceOverridePg>>
 type ChannelSelfDeviceOperation = 'set' | 'get' | 'delete'
+type ChannelSelfCachedStatusResult =
+  | Response
+  | { healedOwner: NonNullable<AppOwnerResult> }
+  | null
 
 async function assertChannelSelfCachedStatus(
   c: Context,
@@ -120,7 +124,7 @@ async function assertChannelSelfCachedStatus(
   operationLabel: string,
   drizzleClient?: ReturnType<typeof getDrizzleClient>,
   planActions: Array<'mau'> = PLAN_MAU_ACTIONS,
-) {
+): Promise<ChannelSelfCachedStatusResult> {
   if (cachedAppStatus.status === 'onprem' && drizzleClient) {
     const heal = await tryHealCachedOnpremAppOwner(c, appId, drizzleClient, planActions, cachedAppStatus)
     if (heal.kind === 'upstream')
@@ -130,7 +134,7 @@ async function assertChannelSelfCachedStatus(
       return respondPluginExternalAppOnprem(c, appId, 'get', device, undefined, cachedAppStatus)
     }
     if (heal.kind === 'healed')
-      return null
+      return { healedOwner: heal.owner }
     if (heal.kind === 'cancelled') {
       cachedAppStatus.status = 'cancelled'
     }
@@ -300,11 +304,12 @@ async function prepareChannelSelfDeviceRequest(
 ): Promise<{ response: Response } | { appOwner: NonNullable<AppOwnerResult>, device: ReturnType<typeof makeDevice> }> {
   const { app_id, device_id } = body
   const cachedLimit = await assertChannelSelfCachedStatus(c, cachedAppStatus, app_id, makeDevice(body, cachedAppStatus.allow_device_custom_id), operationLabel.toLowerCase(), drizzleClient as ReturnType<typeof getDrizzleClient>)
-  if (cachedLimit) {
+  if (cachedLimit instanceof Response) {
     return { response: cachedLimit }
   }
 
-  const appOwner = await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
+  const appOwner = cachedLimit?.healedOwner
+    ?? await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
   const device = makeDevice(body, appOwner?.allow_device_custom_id)
   const blockProviderInfraRequests = appOwner?.block_provider_infra_requests ?? cachedAppStatus.block_provider_infra_requests
   const blocked = await blockProviderInfrastructure(c, operationLabel, blockProviderInfraRequests)
@@ -594,22 +599,25 @@ async function deleteOverride(c: Context, drizzleClient: ReturnType<typeof getDr
 async function listCompatibleChannels(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient>, body: DeviceLink, cachedAppStatus: AppStatusResult): Promise<Response> {
   const { app_id, platform, is_emulator, is_prod } = body
   const cachedLimit = await assertChannelSelfCachedStatus(c, cachedAppStatus, app_id, makeDevice(body, cachedAppStatus.allow_device_custom_id), 'list', drizzleClient as ReturnType<typeof getDrizzleClient>)
-  if (cachedLimit) {
+  if (cachedLimit instanceof Response) {
     return cachedLimit
   }
 
-  // First check if app exists - Read operation can use v2 flag
-  const appExists = await getAppByIdPg(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
+  let appOwner: AppOwnerResult = cachedLimit?.healedOwner ?? null
+  if (!appOwner) {
+    // First check if app exists - Read operation can use v2 flag
+    const appExists = await getAppByIdPg(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
 
-  if (!appExists) {
-    const blocked = await blockProviderInfrastructure(c, 'GET', true)
-    if (blocked)
-      return blocked
+    if (!appExists) {
+      const blocked = await blockProviderInfrastructure(c, 'GET', true)
+      if (blocked)
+        return blocked
 
-    // App doesn't exist in database - normalize response to avoid oracle
-    return onPremiseAppResponse(c)
+      // App doesn't exist in database - normalize response to avoid oracle
+      return onPremiseAppResponse(c)
+    }
+    appOwner = await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
   }
-  const appOwner = await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
   const device = makeDevice(body, appOwner?.allow_device_custom_id)
   const blockProviderInfraRequests = appOwner?.block_provider_infra_requests ?? cachedAppStatus.block_provider_infra_requests
   const blocked = await blockProviderInfrastructure(c, 'GET', blockProviderInfraRequests)
