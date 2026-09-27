@@ -54,14 +54,14 @@ function onboardingWithNewChannel(
 }
 
 describe('webNativeApp onboarding A/B tests', () => {
-  it.concurrent('configures independent 25/75 self-signup experiments', () => {
+  it.concurrent('configures independent 10/90 self-signup experiments', () => {
     expect(abTestsConfig[WEBNATIVE_PUBLISH_INTENT_AB_TEST]).toEqual({
       audience: 'self_signup',
       comment: 'Shows a \'convert my webapp to mobile\' intent option. Does not change the rest of the flow by itself.',
       control_branch: 'B',
       label: 'Publish intent',
       treatment_branch: 'A',
-      treatment_percentage: 25,
+      treatment_percentage: 10,
       branches: {
         A: { bento_tag: 'ab:webnativeapp_publish_intent', label: 'WebNativeApp option' },
         B: { bento_tag: 'ab:no_webnativeapp_publish_intent', label: 'Current publish options' },
@@ -73,7 +73,7 @@ describe('webNativeApp onboarding A/B tests', () => {
       control_branch: 'D',
       label: 'Development environment',
       treatment_branch: 'C',
-      treatment_percentage: 25,
+      treatment_percentage: 10,
       branches: {
         C: { bento_tag: 'ab:webnativeapp_development_environment', label: 'Development environment question' },
         D: { bento_tag: 'ab:no_webnativeapp_development_environment', label: 'Current onboarding' },
