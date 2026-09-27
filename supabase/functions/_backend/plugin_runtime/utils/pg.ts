@@ -1135,15 +1135,20 @@ export interface AppOwnerPostgresResult {
   block_provider_infra_requests: boolean
 }
 
-export async function getAppOwnerPostgres(
+export type AppOwnerLookupResult
+  = | { status: 'found', owner: AppOwnerPostgresResult }
+    | { status: 'not_found' }
+    | { status: 'error' }
+
+export async function lookupAppOwnerPostgres(
   c: Context,
   appId: string,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
   actions: PlanAction[] = [],
-): Promise<AppOwnerPostgresResult | null> {
+): Promise<AppOwnerLookupResult> {
   try {
     if (actions.length === 0)
-      return null
+      return { status: 'not_found' }
     const orgAlias = alias(schema.orgs, 'orgs')
     const planExpression = buildPlanValidationExpression(actions, schema.apps.owner_org)
 
@@ -1171,7 +1176,7 @@ export async function getAppOwnerPostgres(
       .then(data => data[0])
 
     if (!appOwner)
-      return null
+      return { status: 'not_found' }
 
     if (!appOwner.orgs?.id || !appOwner.orgs.created_by || !appOwner.orgs.management_email) {
       cloudlog({
@@ -1181,24 +1186,37 @@ export async function getAppOwnerPostgres(
         ownerOrg: appOwner.owner_org,
       })
       return {
-        ...appOwner,
-        orgs: {
-          created_by: appOwner.orgs?.created_by ?? '',
-          id: appOwner.owner_org,
-          management_email: appOwner.orgs?.management_email ?? '',
+        status: 'found',
+        owner: {
+          ...appOwner,
+          orgs: {
+            created_by: appOwner.orgs?.created_by ?? '',
+            id: appOwner.owner_org,
+            management_email: appOwner.orgs?.management_email ?? '',
+          },
         },
       }
     }
 
-    return appOwner as AppOwnerPostgresResult
+    return { status: 'found', owner: appOwner as AppOwnerPostgresResult }
   }
   catch (e: unknown) {
     logPgError(c, 'getAppOwnerPostgres', e, {
       appId,
       planActions: actions,
     })
-    return null
+    return { status: 'error' }
   }
+}
+
+export async function getAppOwnerPostgres(
+  c: Context,
+  appId: string,
+  drizzleClient: ReturnType<typeof getDrizzleClient>,
+  actions: PlanAction[] = [],
+): Promise<AppOwnerPostgresResult | null> {
+  const lookup = await lookupAppOwnerPostgres(c, appId, drizzleClient, actions)
+  return lookup.status === 'found' ? lookup.owner : null
 }
 
 export type AppBlockProviderInfraRequestsLookup

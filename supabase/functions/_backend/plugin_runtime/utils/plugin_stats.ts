@@ -106,7 +106,7 @@ export function createStatsMau(c: Context, device_id: string, app_id: string, or
   return Promise.resolve(supabaseFallbacks!.trackDeviceUsageSB(c, lowerDeviceId, app_id, org_id, platform, version_build)).then(() => undefined)
 }
 
-export async function onPremStats(c: Context, app_id: string, action: string, device: DeviceWithoutCreatedAt, metadata?: StatsMetadata) {
+export async function onPremStats(c: Context, app_id: string, action: string, device: DeviceWithoutCreatedAt, metadata?: StatsMetadata, resetAtMs?: number) {
   if (!app_id) {
     cloudlog({ requestId: c.get('requestId'), message: 'App ID is missing in onPremStats', country: c.req.raw?.cf?.country })
     return simpleError200(c, 'app_not_found', 'App not found')
@@ -133,7 +133,7 @@ export async function onPremStats(c: Context, app_id: string, action: string, de
     getStatsLogDimensions(c, device),
   )
   cloudlog({ requestId: c.get('requestId'), message: 'App is external (onPremise), returning 429', app_id: device.app_id, country: c.req.raw.cf?.country, user_agent: c.req.raw.headers.get('user-agent') })
-  return onPremiseAppResponse(c)
+  return onPremiseAppResponse(c, resetAtMs)
 }
 
 export function createStatsBandwidth(c: Context, device_id: string, app_id: string, file_size: number) {

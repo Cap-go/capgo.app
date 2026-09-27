@@ -34,6 +34,26 @@ const getAppOwnerPostgresMock = vi.fn(async (_c: unknown, _appId: string, drizzl
   }
   return null
 })
+const lookupAppOwnerPostgresMock = vi.fn(async (_c: unknown, _appId: string, drizzleClient: { kind: string }) => {
+  if (drizzleClient?.kind === 'replica') {
+    return {
+      status: 'found' as const,
+      owner: {
+        allow_device_custom_id: true,
+        block_provider_infra_requests: false,
+        channel_device_count: 0,
+        expose_metadata: false,
+        manifest_bundle_count: 0,
+        owner_org: 'org-1',
+        orgs: { created_by: 'user-1', id: 'org-1', management_email: 'owner@example.com' },
+        plan_valid: true,
+        rollout_channel_count: 0,
+        rollout_paused_version_names: [],
+      },
+    }
+  }
+  return { status: 'not_found' as const }
+})
 const setAppStatusMock = vi.fn(() => Promise.resolve())
 const getAppStatusMock = vi.fn(async () => ({
   status: null,
@@ -76,6 +96,7 @@ vi.mock('../supabase/functions/_backend/plugin_runtime/utils/notifications.ts', 
 vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pg.ts', () => ({
   closeClient: vi.fn(() => Promise.resolve()),
   getAppOwnerPostgres: getAppOwnerPostgresMock,
+  lookupAppOwnerPostgres: lookupAppOwnerPostgresMock,
   getAppVersionPostgres: getAppVersionPostgresMock,
   getDrizzleClient: getDrizzleClientMock,
   getEffectiveDeviceChannelNamePostgres: getEffectiveDeviceChannelNamePostgresMock,
@@ -148,6 +169,26 @@ describe('stats custom_id primary onprem misclassify repro', () => {
         }
       }
       return null
+    })
+    lookupAppOwnerPostgresMock.mockImplementation(async (_c: unknown, _appId: string, drizzleClient: { kind: string }) => {
+      if (drizzleClient?.kind === 'replica') {
+        return {
+          status: 'found' as const,
+          owner: {
+            allow_device_custom_id: true,
+            block_provider_infra_requests: false,
+            channel_device_count: 0,
+            expose_metadata: false,
+            manifest_bundle_count: 0,
+            owner_org: 'org-1',
+            orgs: { created_by: 'user-1', id: 'org-1', management_email: 'owner@example.com' },
+            plan_valid: true,
+            rollout_channel_count: 0,
+            rollout_paused_version_names: [],
+          },
+        }
+      }
+      return { status: 'not_found' as const }
     })
     getAppStatusMock.mockResolvedValue({
       status: null,

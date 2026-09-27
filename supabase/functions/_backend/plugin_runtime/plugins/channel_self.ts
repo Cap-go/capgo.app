@@ -15,12 +15,17 @@ import { invalidIpInfo } from '../utils/invalids_ip.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { sendNotifOrgCached } from '../utils/notifications.ts'
 import { sendNotifToOrgMembersCached } from '../utils/org_email_notifications.ts'
-import { closeClient, deleteChannelDevicePg, getAppByIdPg, getAppOwnerPostgres, getChannelByIdPg, getChannelByNamePg, getChannelDeviceOverridePg, getChannelsPg, getCompatibleChannelsPg, getDrizzleClient, getMainChannelsPg, getPgClient, setReplicationLagHeader, upsertChannelDevicePg } from '../utils/pg.ts'
+import { closeClient, deleteChannelDevicePg, getAppByIdPg, getAppOwnerPostgres, getChannelByIdPg, getChannelByNamePg, getChannelDeviceOverridePg, getChannelsPg, getCompatibleChannelsPg, getDrizzleClient, getMainChannelsPg, getPgClient, lookupAppOwnerPostgres, setReplicationLagHeader, upsertChannelDevicePg } from '../utils/pg.ts'
 import { convertQueryToBody, makeDevice, parsePluginBody } from '../utils/plugin_parser.ts'
 import { sendStatsAndDevice } from '../utils/plugin_stats.ts'
 import { channelSelfGetRequestSchema, channelSelfRequestSchema, isDevicePlatform } from '../utils/plugin_validation.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
 import { buildRateLimitInfo, onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
+import {
+  pluginAppLookupUnavailableResponse,
+  respondPluginExternalAppOnprem,
+  tryHealCachedOnpremAppOwner,
+} from '../utils/plugin_app_classification.ts'
 import { logSkippedSupabaseWrite, shouldSkipChannelSelfPostgresFallback } from '../utils/supabase_write_guard.ts'
 import { backgroundTask, isDeprecatedPluginVersion, isLimited } from '../utils/utils.ts'
 
@@ -113,10 +118,26 @@ async function assertChannelSelfCachedStatus(
   appId: string,
   device: ReturnType<typeof makeDevice>,
   operationLabel: string,
+  drizzleClient?: ReturnType<typeof getDrizzleClient>,
+  planActions: Array<'mau'> = PLAN_MAU_ACTIONS,
 ) {
+  if (cachedAppStatus.status === 'onprem' && drizzleClient) {
+    const heal = await tryHealCachedOnpremAppOwner(c, appId, drizzleClient, planActions, cachedAppStatus)
+    if (heal.kind === 'upstream')
+      return pluginAppLookupUnavailableResponse(c)
+    if (heal.kind === 'external_onprem') {
+      cloudlog({ requestId: c.get('requestId'), message: `Channel_self cache hit (${operationLabel}), app marked onprem`, app_id: appId })
+      return respondPluginExternalAppOnprem(c, appId, 'get', device, undefined, cachedAppStatus)
+    }
+    if (heal.kind === 'healed')
+      return null
+    if (heal.kind === 'cancelled') {
+      cachedAppStatus.status = 'cancelled'
+    }
+  }
   if (cachedAppStatus.status === 'onprem') {
     cloudlog({ requestId: c.get('requestId'), message: `Channel_self cache hit (${operationLabel}), app marked onprem`, app_id: appId })
-    return onPremiseAppResponse(c)
+    return onPremiseAppResponse(c, cachedAppStatus.onprem_retry_reset_at)
   }
   if (cachedAppStatus.status === 'cancelled') {
     await sendStatsAndDevice(c, device, [{ action: 'needPlanUpgrade' }])
@@ -134,14 +155,28 @@ async function assertChannelSelfAppOwnerPlanValid(
   cachedBlockProviderInfraRequests: boolean,
   deviceId?: string,
 ): Promise<{ response: Response } | { appOwner: NonNullable<AppOwnerResult> }> {
-  if (!appOwner) {
+  const lookup = appOwner
+    ? { status: 'found' as const, owner: appOwner }
+    : await lookupAppOwnerPostgres(c, appId, drizzleClient, PLAN_MAU_ACTIONS)
+
+  if (lookup.status === 'error')
+    return { response: pluginAppLookupUnavailableResponse(c) }
+
+  if (lookup.status === 'not_found') {
     cloudlog({ requestId: c.get('requestId'), message: `On-premise app detected in channel_self ${operationLabel}, returning 429`, app_id: appId })
-    await setAppStatus(c, appId, 'onprem', true, cachedBlockProviderInfraRequests)
-    return { response: onPremiseAppResponse(c) }
+    return {
+      response: await respondPluginExternalAppOnprem(c, appId, 'get', device, undefined, {
+        status: null,
+        allow_device_custom_id: true,
+        block_provider_infra_requests: cachedBlockProviderInfraRequests,
+        cacheHit: false,
+      }),
+    }
   }
 
-  if (!appOwner.plan_valid) {
-    await setAppStatus(c, appId, 'cancelled', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests)
+  const resolvedOwner = lookup.owner
+  if (!resolvedOwner.plan_valid) {
+    await setAppStatus(c, appId, 'cancelled', resolvedOwner.allow_device_custom_id, resolvedOwner.block_provider_infra_requests)
     cloudlog({ requestId: c.get('requestId'), message: 'Cannot update, upgrade plan to continue to update', id: appId })
     await sendStatsAndDevice(c, device, [{ action: 'needPlanUpgrade' }])
 
@@ -153,18 +188,18 @@ async function assertChannelSelfAppOwnerPlanValid(
       c,
       'org:missing_payment',
       payload,
-      appOwner.owner_org,
+      resolvedOwner.owner_org,
       appId,
       '0 0 * * 1',
-      appOwner.orgs.management_email,
+      resolvedOwner.orgs.management_email,
       drizzleClient,
     )) // Weekly on Monday
 
     return { response: onPremiseAppResponse(c) }
   }
 
-  await setAppStatus(c, appId, 'cloud', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests)
-  return { appOwner }
+  await setAppStatus(c, appId, 'cloud', resolvedOwner.allow_device_custom_id, resolvedOwner.block_provider_infra_requests)
+  return { appOwner: resolvedOwner }
 }
 
 function isChannelSelfLocalChannelStorageVersion(c: Context, body: DeviceLink, operationLabel: string) {
@@ -264,7 +299,7 @@ async function prepareChannelSelfDeviceRequest(
   cachedAppStatus: AppStatusResult,
 ): Promise<{ response: Response } | { appOwner: NonNullable<AppOwnerResult>, device: ReturnType<typeof makeDevice> }> {
   const { app_id, device_id } = body
-  const cachedLimit = await assertChannelSelfCachedStatus(c, cachedAppStatus, app_id, makeDevice(body, cachedAppStatus.allow_device_custom_id), operationLabel.toLowerCase())
+  const cachedLimit = await assertChannelSelfCachedStatus(c, cachedAppStatus, app_id, makeDevice(body, cachedAppStatus.allow_device_custom_id), operationLabel.toLowerCase(), drizzleClient as ReturnType<typeof getDrizzleClient>)
   if (cachedLimit) {
     return { response: cachedLimit }
   }
@@ -558,7 +593,7 @@ async function deleteOverride(c: Context, drizzleClient: ReturnType<typeof getDr
 
 async function listCompatibleChannels(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient>, body: DeviceLink, cachedAppStatus: AppStatusResult): Promise<Response> {
   const { app_id, platform, is_emulator, is_prod } = body
-  const cachedLimit = await assertChannelSelfCachedStatus(c, cachedAppStatus, app_id, makeDevice(body, cachedAppStatus.allow_device_custom_id), 'list')
+  const cachedLimit = await assertChannelSelfCachedStatus(c, cachedAppStatus, app_id, makeDevice(body, cachedAppStatus.allow_device_custom_id), 'list', drizzleClient as ReturnType<typeof getDrizzleClient>)
   if (cachedLimit) {
     return cachedLimit
   }
