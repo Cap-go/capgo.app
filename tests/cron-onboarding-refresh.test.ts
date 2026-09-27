@@ -171,6 +171,79 @@ describe('backend onboarding refresh', () => {
     }
   })
 
+  it('advances every due checkpoint without rewriting unchanged app tuples', async () => {
+    const pool = await getPostgresClient()
+    const item = await fixture(pool, 2)
+    const [changedApp, unchangedApp] = item.ids
+    const snapshot = async () => {
+      const { rows } = await pool.query(`SELECT a.app_id, a.xmin::text AS app_xmin,
+        a.onboarding, state.refreshed_at::text AS refreshed_at
+        FROM public.apps a
+        JOIN public.app_onboarding state ON state.app_id = a.app_id
+        WHERE a.app_id=ANY($1::varchar[])`, [item.ids])
+      return new Map<string, { app_xmin: string, onboarding: any, refreshed_at: string }>(
+        rows.map(row => [row.app_id, row]),
+      )
+    }
+    try {
+      const database = getDrizzleClient(pool)
+      const refreshWithAppUpdateCount = async (queuedAt: string) => {
+        let appUpdates = 0
+        const measuredDatabase: Pick<typeof database, 'transaction'> = {
+          transaction: (operation, config) => database.transaction(async (tx) => {
+            const countUpdates = async () => {
+              const { rows } = await tx.execute<{ app_updates: number }>(sql`
+                SELECT COALESCE(n_tup_upd, 0)::int AS app_updates
+                FROM pg_catalog.pg_stat_xact_user_tables
+                WHERE relid = 'public.apps'::regclass
+              `)
+              return rows[0]?.app_updates ?? 0
+            }
+            const before = await countUpdates()
+            const processed = await operation(tx)
+            // Count only updates made by this refresh; xmin identifies which
+            // fixture app received the single update in the mixed batch.
+            appUpdates = await countUpdates() - before
+            return processed
+          }, config),
+        }
+        const processed = await refreshAppOnboardingBatch(measuredDatabase, { appIds: item.ids, queuedAt })
+        return { processed, appUpdates }
+      }
+      const firstQueuedAt = new Date(Date.now() - 120_000).toISOString()
+      expect(await refreshWithAppUpdateCount(firstQueuedAt)).toEqual({ processed: 2, appUpdates: 2 })
+      const first = await snapshot()
+
+      await pool.query(`INSERT INTO public.devices(app_id,device_id,platform,plugin_version,version_name,install_source,is_prod,is_emulator,updated_at)
+        VALUES ($1,$2,'ios','7.0.0','1.0.0','testflight',true,false,now())`, [changedApp, `device-${randomUUID()}`])
+      const secondQueuedAt = new Date(Date.now() + 60_000).toISOString()
+      expect(await refreshWithAppUpdateCount(secondQueuedAt)).toEqual({ processed: 2, appUpdates: 1 })
+      const second = await snapshot()
+      expect(second.get(changedApp)?.app_xmin).not.toBe(first.get(changedApp)?.app_xmin)
+      expect(second.get(changedApp)?.onboarding.features.cli_install.succeeded_at).toBeTruthy()
+      expect(second.get(unchangedApp)?.app_xmin).toBe(first.get(unchangedApp)?.app_xmin)
+      expect(second.get(unchangedApp)?.onboarding).toEqual(first.get(unchangedApp)?.onboarding)
+      for (const appId of item.ids) {
+        const advanced = await pool.query(`SELECT refreshed_at > $2::timestamptz AS advanced
+          FROM public.app_onboarding WHERE app_id=$1`, [appId, first.get(appId)?.refreshed_at])
+        expect(advanced.rows[0].advanced).toBe(true)
+      }
+
+      const thirdQueuedAt = new Date(Date.now() + 120_000).toISOString()
+      expect(await refreshWithAppUpdateCount(thirdQueuedAt)).toEqual({ processed: 2, appUpdates: 0 })
+      const third = await snapshot()
+      for (const appId of item.ids) {
+        expect(third.get(appId)?.app_xmin).toBe(second.get(appId)?.app_xmin)
+        const advanced = await pool.query(`SELECT refreshed_at > $2::timestamptz AS advanced
+          FROM public.app_onboarding WHERE app_id=$1`, [appId, second.get(appId)?.refreshed_at])
+        expect(advanced.rows[0].advanced).toBe(true)
+      }
+    }
+    finally {
+      await cleanup(pool, [item])
+    }
+  })
+
   it('rolls back feature and checkpoint writes when the transaction fails', async () => {
     const pool = await getPostgresClient()
     const client = await pool.connect()

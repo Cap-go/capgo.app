@@ -116,8 +116,8 @@ export async function refreshAppOnboardingBatch(
           first_install_at timestamptz, last_install_at timestamptz,
           first_build_at timestamptz, first_success_at timestamptz, last_build_at timestamptz
         )
-      ), updated AS (
-        UPDATE public.apps a SET onboarding = pg_catalog.jsonb_set(
+      ), computed AS MATERIALIZED (
+        SELECT a.app_id, pg_catalog.jsonb_set(
           a.onboarding, '{features}',
           COALESCE(a.onboarding->'features', '{}'::jsonb) || pg_catalog.jsonb_build_object(
             'cli_install', public.merge_app_onboarding_feature(
@@ -138,15 +138,20 @@ export async function refreshAppOnboardingBatch(
               a.onboarding->'features'->'builder', s.first_build_at,
               s.first_success_at, s.last_build_at, NULL)
           ), true
-        )
-        FROM signals s
+        ) AS new_onboarding
+        FROM public.apps a
+        JOIN signals s ON s.app_id = a.app_id
         JOIN public.app_onboarding state ON state.app_id = s.app_id
-        WHERE a.app_id = s.app_id
-          AND (state.refreshed_at IS NULL OR state.refreshed_at < ${body.queuedAt}::timestamptz)
+        WHERE state.refreshed_at IS NULL OR state.refreshed_at < ${body.queuedAt}::timestamptz
+      ), updated AS (
+        UPDATE public.apps a SET onboarding = computed.new_onboarding
+        FROM computed
+        WHERE a.app_id = computed.app_id
+          AND a.onboarding IS DISTINCT FROM computed.new_onboarding
         RETURNING a.app_id
       )
       INSERT INTO public.app_onboarding (app_id, refreshed_at)
-      SELECT app_id, pg_catalog.now() FROM updated
+      SELECT app_id, pg_catalog.now() FROM computed
       ON CONFLICT (app_id) DO UPDATE
       SET refreshed_at = EXCLUDED.refreshed_at
       RETURNING app_id
