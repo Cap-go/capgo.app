@@ -1,6 +1,6 @@
-import { readFile, stat, writeFile } from 'node:fs/promises'
+import { stat, writeFile } from 'node:fs/promises'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
-import { cleanupCapturedJobFiles, getAiPromptPath, getLogCapturePath } from './log-capture'
+import { cleanupCapturedJobFiles, flushCapturedLogs, getAiPromptPath, getLogCapturePath, readCapturedLog } from './log-capture'
 import { SYSTEM_PROMPT } from './prompt'
 import { createSseParser } from './sse'
 
@@ -79,8 +79,7 @@ export function shouldPrintCiTip(input: ShouldPrintCiTipInput): boolean {
 }
 
 export async function writeLocalAiFile(jobId: string): Promise<string> {
-  const logsPath = getLogCapturePath(jobId)
-  const logs = await readFile(logsPath, 'utf8')
+  const logs = await readCapturedLog(jobId)
   const promptPath = getAiPromptPath(jobId)
   // Wrap the log in the same <BUILD_LOG>...</BUILD_LOG> boundary the worker
   // uses, so SYSTEM_PROMPT's anti-prompt-injection instructions apply when
@@ -223,6 +222,7 @@ export const HARD_LOG_SIZE_LIMIT = 10 * 1024 * 1024
 
 export async function isLogTooBig(jobId: string): Promise<boolean> {
   try {
+    await flushCapturedLogs(jobId)
     const s = await stat(getLogCapturePath(jobId))
     return s.size > HARD_LOG_SIZE_LIMIT
   }
@@ -252,7 +252,7 @@ export async function runCapgoAiAnalysis(input: RunCapgoAiAnalysisInput): Promis
 
   let logs: string
   try {
-    logs = await readFile(getLogCapturePath(input.jobId), 'utf8')
+    logs = await readCapturedLog(input.jobId)
   }
   catch (err) {
     return { kind: 'error', message: err instanceof Error ? err.message : 'log_unavailable' }
