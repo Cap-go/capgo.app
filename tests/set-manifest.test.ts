@@ -224,6 +224,25 @@ describe('[POST] /private/set_manifest', () => {
     expect(summaries).toHaveLength(0)
   })
 
+  it('allows empty manifest payloads without size receipts', async () => {
+    const version = await createUploadVersion('r2-direct', `${BUNDLE_NAME}-empty-payload`)
+    await executeSQL(
+      `INSERT INTO public.manifest_per_version
+        (version_id, format_version, entry_count, total_file_size, payload_hash, manifest, size_receipts_provided)
+       VALUES ($1, 0, 0, 0, ''::bytea, ''::bytea, false)`,
+      [version.id],
+    )
+
+    const [row] = await executeSQL<{ manifest_length: number, payload_hash_length: number, size_receipts_provided: boolean }>(
+      `SELECT octet_length(manifest)::integer AS manifest_length,
+              octet_length(payload_hash)::integer AS payload_hash_length,
+              size_receipts_provided
+       FROM public.manifest_per_version WHERE version_id = $1`,
+      [version.id],
+    )
+    expect(row).toEqual({ manifest_length: 0, payload_hash_length: 0, size_receipts_provided: false })
+  })
+
   it('rejects mixed legacy and receipt manifest entries atomically', async () => {
     const name = `${BUNDLE_NAME}-mixed-receipts`
     const version = await createUploadVersion('r2-direct', name)

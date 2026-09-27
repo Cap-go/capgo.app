@@ -2064,14 +2064,14 @@
       "valid": true
     },
     {
-      "definition": "CHECK (octet_length(manifest) > 0 OR size_receipts_provided AND octet_length(manifest) = 0)",
+      "definition": "CHECK (octet_length(manifest) > 0 OR octet_length(manifest) = 0)",
       "name": "manifest_per_version_manifest_check",
       "table": "manifest_per_version",
       "type": "c",
       "valid": true
     },
     {
-      "definition": "CHECK (octet_length(payload_hash) = 32 OR size_receipts_provided AND octet_length(payload_hash) = 0)",
+      "definition": "CHECK (octet_length(payload_hash) = 32 OR octet_length(payload_hash) = 0)",
       "name": "manifest_per_version_payload_hash_check",
       "table": "manifest_per_version",
       "type": "c",

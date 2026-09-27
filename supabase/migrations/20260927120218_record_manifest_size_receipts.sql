@@ -9,12 +9,12 @@ ALTER TABLE public.manifest_per_version
   ADD CONSTRAINT manifest_per_version_payload_hash_check
     CHECK (
       octet_length(payload_hash) = 32
-      OR (size_receipts_provided AND octet_length(payload_hash) = 0)
+      OR octet_length(payload_hash) = 0
     ),
   ADD CONSTRAINT manifest_per_version_manifest_check
     CHECK (
       octet_length(manifest) > 0
-      OR (size_receipts_provided AND octet_length(manifest) = 0)
+      OR octet_length(manifest) = 0
     );
 
 COMMENT ON COLUMN public.manifest_per_version.size_receipts_provided IS

@@ -168,8 +168,8 @@ export const MANIFEST_PER_VERSION_TABLE_SQL = [
   '  CONSTRAINT "manifest_per_version_format_version_check" CHECK (format_version >= 0),',
   '  CONSTRAINT "manifest_per_version_entry_count_check" CHECK (entry_count >= 0),',
   '  CONSTRAINT "manifest_per_version_total_file_size_check" CHECK (total_file_size >= 0),',
-  '  CONSTRAINT "manifest_per_version_payload_hash_check" CHECK (octet_length(payload_hash) = 32 OR size_receipts_provided AND octet_length(payload_hash) = 0),',
-  '  CONSTRAINT "manifest_per_version_manifest_check" CHECK (octet_length(manifest) > 0 OR size_receipts_provided AND octet_length(manifest) = 0)',
+  '  CONSTRAINT "manifest_per_version_payload_hash_check" CHECK (octet_length(payload_hash) = 32 OR octet_length(payload_hash) = 0),',
+  '  CONSTRAINT "manifest_per_version_manifest_check" CHECK (octet_length(manifest) > 0 OR octet_length(manifest) = 0)',
   ')',
 ].join('\n')
 const MANIFEST_PER_VERSION_COLUMNS: Record<string, { type: string, default: string | null, notNull?: boolean }> = {
@@ -189,8 +189,8 @@ const MANIFEST_PER_VERSION_CONSTRAINTS: Record<string, { type: SchemaConstraint[
   manifest_per_version_format_version_check: { type: 'c', definition: 'CHECK (format_version >= 0)' },
   manifest_per_version_entry_count_check: { type: 'c', definition: 'CHECK (entry_count >= 0)' },
   manifest_per_version_total_file_size_check: { type: 'c', definition: 'CHECK (total_file_size >= 0)' },
-  manifest_per_version_payload_hash_check: { type: 'c', definition: 'CHECK (octet_length(payload_hash) = 32 OR size_receipts_provided AND octet_length(payload_hash) = 0)' },
-  manifest_per_version_manifest_check: { type: 'c', definition: 'CHECK (octet_length(manifest) > 0 OR size_receipts_provided AND octet_length(manifest) = 0)' },
+  manifest_per_version_payload_hash_check: { type: 'c', definition: 'CHECK (octet_length(payload_hash) = 32 OR octet_length(payload_hash) = 0)' },
+  manifest_per_version_manifest_check: { type: 'c', definition: 'CHECK (octet_length(manifest) > 0 OR octet_length(manifest) = 0)' },
 }
 const DEFAULT_SCHEMA_SYNC_STATEMENT_TIMEOUT_MS = 550_000
 const DEFAULT_SCHEMA_SYNC_MAX_DURATION_MS = 585_000
