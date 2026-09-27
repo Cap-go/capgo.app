@@ -150,7 +150,7 @@ describe('[POST] /private/set_manifest', () => {
       body: JSON.stringify({ app_id: APP_ID, name, manifest }),
     })
 
-    expect(response.status).toBe(200)
+    expect(response.status, await response.clone().text()).toBe(200)
     const rows = await executeSQL<{ file_size: number }>(
       'SELECT file_size FROM public.manifest WHERE app_version_id = $1 ORDER BY file_name',
       [version.id],
@@ -162,6 +162,37 @@ describe('[POST] /private/set_manifest', () => {
       [String(version.id)],
     )
     expect(queued?.count).toBe(0)
+
+    const [perVersion] = await executeSQL<{
+      entry_count: number
+      format_version: number
+      manifest_hex: string
+      manifest_size: string | null
+      manifest_size_payload_hash: string | null
+      payload_hash_hex: string
+      size_receipts_provided: boolean
+      total_file_size: string
+      version_id: string
+    }>(
+      `SELECT version_id, format_version, entry_count, total_file_size,
+              encode(payload_hash, 'hex') AS payload_hash_hex,
+              encode(manifest, 'hex') AS manifest_hex,
+              size_receipts_provided, manifest_size, manifest_size_payload_hash
+       FROM public.manifest_per_version
+       WHERE version_id = $1`,
+      [version.id],
+    )
+    expect(perVersion).toEqual({
+      version_id: String(version.id),
+      format_version: 0,
+      entry_count: 2,
+      total_file_size: '975',
+      payload_hash_hex: '',
+      manifest_hex: '',
+      size_receipts_provided: true,
+      manifest_size: null,
+      manifest_size_payload_hash: null,
+    })
   })
 
   it('rejects mixed legacy and receipt manifest entries atomically', async () => {
