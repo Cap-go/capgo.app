@@ -195,6 +195,35 @@ describe('[POST] /private/set_manifest', () => {
     })
   })
 
+  it('does not mark legacy manifest rows as receipt-backed on retry', async () => {
+    const name = `${BUNDLE_NAME}-legacy-receipt-retry`
+    const version = await createUploadVersion('r2-direct', name)
+    const entries = manifestEntries(version.owner_org)
+
+    const legacyResponse = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
+      method: 'POST',
+      retryUnsafe: true,
+      headers: { 'Content-Type': 'application/json', 'Authorization': APIKEY_TEST_ALL },
+      body: JSON.stringify({ app_id: APP_ID, name, manifest: entries }),
+    })
+    expect(legacyResponse.status).toBe(200)
+
+    const manifest = await Promise.all(entries.map(async entry => ({
+      ...entry,
+      file_size_receipt: await createManifestSizeReceipt(MANIFEST_SIZE_RECEIPT_SECRET, entry.s3_path, 321),
+    })))
+    const receiptRetry = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
+      method: 'POST',
+      retryUnsafe: true,
+      headers: { 'Content-Type': 'application/json', 'Authorization': APIKEY_TEST_ALL },
+      body: JSON.stringify({ app_id: APP_ID, name, manifest }),
+    })
+    expect(receiptRetry.status).toBe(200)
+
+    const summaries = await executeSQL('SELECT version_id FROM public.manifest_per_version WHERE version_id = $1', [version.id])
+    expect(summaries).toHaveLength(0)
+  })
+
   it('rejects mixed legacy and receipt manifest entries atomically', async () => {
     const name = `${BUNDLE_NAME}-mixed-receipts`
     const version = await createUploadVersion('r2-direct', name)

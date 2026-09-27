@@ -114,7 +114,7 @@ export async function persistVersionManifestEntries(
         await tx.execute(sql`UPDATE public.apps SET manifest_bundle_count = manifest_bundle_count + 1, updated_at = now() WHERE app_id = ${record.app_id}`)
       }
 
-      if (options.trustFileSizes) {
+      if (options.trustFileSizes && !alreadyPresent) {
         await tx.execute(sql`INSERT INTO public.manifest_per_version
           (version_id, format_version, entry_count, total_file_size, payload_hash, manifest,
            size_receipts_provided, manifest_size, manifest_size_payload_hash)
