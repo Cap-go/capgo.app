@@ -147,6 +147,7 @@ async function assertChannelSelfCachedStatus(
     await sendStatsAndDevice(c, device, [{ action: 'needPlanUpgrade' }])
     return onPremiseAppResponse(c)
   }
+  return null
 }
 
 async function assertChannelSelfAppOwnerPlanValid(
