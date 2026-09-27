@@ -160,22 +160,28 @@ export const MANIFEST_PER_VERSION_TABLE_SQL = [
   '  "total_file_size" bigint NOT NULL,',
   '  "payload_hash" bytea NOT NULL,',
   '  "manifest" bytea NOT NULL,',
+  '  "size_receipts_provided" boolean DEFAULT false NOT NULL,',
+  '  "manifest_size" bytea,',
+  '  "manifest_size_payload_hash" bytea,',
   '  "created_at" timestamp with time zone DEFAULT now() NOT NULL,',
   '  CONSTRAINT "manifest_per_version_pkey" PRIMARY KEY ("version_id"),',
   '  CONSTRAINT "manifest_per_version_format_version_check" CHECK (format_version >= 0),',
   '  CONSTRAINT "manifest_per_version_entry_count_check" CHECK (entry_count >= 0),',
   '  CONSTRAINT "manifest_per_version_total_file_size_check" CHECK (total_file_size >= 0),',
-  '  CONSTRAINT "manifest_per_version_payload_hash_check" CHECK (octet_length(payload_hash) = 32),',
-  '  CONSTRAINT "manifest_per_version_manifest_check" CHECK (octet_length(manifest) > 0)',
+  '  CONSTRAINT "manifest_per_version_payload_hash_check" CHECK (octet_length(payload_hash) = 32 OR octet_length(payload_hash) = 0),',
+  '  CONSTRAINT "manifest_per_version_manifest_check" CHECK (octet_length(manifest) > 0 OR octet_length(manifest) = 0)',
   ')',
 ].join('\n')
-const MANIFEST_PER_VERSION_COLUMNS: Record<string, { type: string, default: string | null }> = {
+const MANIFEST_PER_VERSION_COLUMNS: Record<string, { type: string, default: string | null, notNull?: boolean }> = {
   version_id: { type: 'bigint', default: null },
   format_version: { type: 'smallint', default: null },
   entry_count: { type: 'integer', default: null },
   total_file_size: { type: 'bigint', default: null },
   payload_hash: { type: 'bytea', default: null },
   manifest: { type: 'bytea', default: null },
+  size_receipts_provided: { type: 'boolean', default: 'false' },
+  manifest_size: { type: 'bytea', default: null, notNull: false },
+  manifest_size_payload_hash: { type: 'bytea', default: null, notNull: false },
   created_at: { type: 'timestamp with time zone', default: 'now()' },
 }
 const MANIFEST_PER_VERSION_CONSTRAINTS: Record<string, { type: SchemaConstraint['type'], definition: string }> = {
@@ -183,8 +189,8 @@ const MANIFEST_PER_VERSION_CONSTRAINTS: Record<string, { type: SchemaConstraint[
   manifest_per_version_format_version_check: { type: 'c', definition: 'CHECK (format_version >= 0)' },
   manifest_per_version_entry_count_check: { type: 'c', definition: 'CHECK (entry_count >= 0)' },
   manifest_per_version_total_file_size_check: { type: 'c', definition: 'CHECK (total_file_size >= 0)' },
-  manifest_per_version_payload_hash_check: { type: 'c', definition: 'CHECK (octet_length(payload_hash) = 32)' },
-  manifest_per_version_manifest_check: { type: 'c', definition: 'CHECK (octet_length(manifest) > 0)' },
+  manifest_per_version_payload_hash_check: { type: 'c', definition: 'CHECK (octet_length(payload_hash) = 32 OR octet_length(payload_hash) = 0)' },
+  manifest_per_version_manifest_check: { type: 'c', definition: 'CHECK (octet_length(manifest) > 0 OR octet_length(manifest) = 0)' },
 }
 const DEFAULT_SCHEMA_SYNC_STATEMENT_TIMEOUT_MS = 550_000
 const DEFAULT_SCHEMA_SYNC_MAX_DURATION_MS = 585_000
@@ -612,7 +618,7 @@ function matchesManifestPerVersionTable(catalog: SchemaCatalog): boolean {
       return required !== undefined
         && column.type === required.type
         && column.default === required.default
-        && column.notNull
+        && column.notNull === (required.notNull ?? true)
         && !column.identity
         && !column.generated
     })

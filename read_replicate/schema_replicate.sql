@@ -321,10 +321,13 @@ CREATE TABLE public.manifest_per_version (
     payload_hash bytea NOT NULL,
     manifest bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    size_receipts_provided boolean DEFAULT false NOT NULL,
+    manifest_size bytea,
+    manifest_size_payload_hash bytea,
     CONSTRAINT manifest_per_version_entry_count_check CHECK ((entry_count >= 0)),
     CONSTRAINT manifest_per_version_format_version_check CHECK ((format_version >= 0)),
-    CONSTRAINT manifest_per_version_manifest_check CHECK ((octet_length(manifest) > 0)),
-    CONSTRAINT manifest_per_version_payload_hash_check CHECK ((octet_length(payload_hash) = 32)),
+    CONSTRAINT manifest_per_version_manifest_check CHECK (((octet_length(manifest) > 0) OR (octet_length(manifest) = 0))),
+    CONSTRAINT manifest_per_version_payload_hash_check CHECK (((octet_length(payload_hash) = 32) OR (octet_length(payload_hash) = 0))),
     CONSTRAINT manifest_per_version_total_file_size_check CHECK ((total_file_size >= 0))
 );
 

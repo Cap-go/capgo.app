@@ -150,7 +150,7 @@ describe('[POST] /private/set_manifest', () => {
       body: JSON.stringify({ app_id: APP_ID, name, manifest }),
     })
 
-    expect(response.status).toBe(200)
+    expect(response.status, await response.clone().text()).toBe(200)
     const rows = await executeSQL<{ file_size: number }>(
       'SELECT file_size FROM public.manifest WHERE app_version_id = $1 ORDER BY file_name',
       [version.id],
@@ -162,6 +162,115 @@ describe('[POST] /private/set_manifest', () => {
       [String(version.id)],
     )
     expect(queued?.count).toBe(0)
+
+    const [perVersion] = await executeSQL<{
+      entry_count: number
+      format_version: number
+      manifest_hex: string
+      manifest_size: string | null
+      manifest_size_payload_hash: string | null
+      payload_hash_hex: string
+      size_receipts_provided: boolean
+      total_file_size: string
+      version_id: string
+    }>(
+      `SELECT version_id, format_version, entry_count, total_file_size,
+              encode(payload_hash, 'hex') AS payload_hash_hex,
+              encode(manifest, 'hex') AS manifest_hex,
+              size_receipts_provided, manifest_size, manifest_size_payload_hash
+       FROM public.manifest_per_version
+       WHERE version_id = $1`,
+      [version.id],
+    )
+    expect(perVersion).toEqual({
+      version_id: String(version.id),
+      format_version: 0,
+      entry_count: 2,
+      total_file_size: '975',
+      payload_hash_hex: '',
+      manifest_hex: '',
+      size_receipts_provided: true,
+      manifest_size: null,
+      manifest_size_payload_hash: null,
+    })
+  })
+
+  it('does not mark legacy manifest rows as receipt-backed on retry', async () => {
+    const name = `${BUNDLE_NAME}-legacy-receipt-retry`
+    const version = await createUploadVersion('r2-direct', name)
+    const entries = manifestEntries(version.owner_org)
+
+    const legacyResponse = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
+      method: 'POST',
+      retryUnsafe: true,
+      headers: { 'Content-Type': 'application/json', 'Authorization': APIKEY_TEST_ALL },
+      body: JSON.stringify({ app_id: APP_ID, name, manifest: entries }),
+    })
+    expect(legacyResponse.status).toBe(200)
+
+    const manifest = await Promise.all(entries.map(async entry => ({
+      ...entry,
+      file_size_receipt: await createManifestSizeReceipt(MANIFEST_SIZE_RECEIPT_SECRET, entry.s3_path, 321),
+    })))
+    const receiptRetry = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
+      method: 'POST',
+      retryUnsafe: true,
+      headers: { 'Content-Type': 'application/json', 'Authorization': APIKEY_TEST_ALL },
+      body: JSON.stringify({ app_id: APP_ID, name, manifest }),
+    })
+    expect(receiptRetry.status).toBe(200)
+
+    const summaries = await executeSQL('SELECT version_id FROM public.manifest_per_version WHERE version_id = $1', [version.id])
+    expect(summaries).toHaveLength(0)
+  })
+
+  it('allows empty manifest payloads without size receipts', async () => {
+    const version = await createUploadVersion('r2-direct', `${BUNDLE_NAME}-empty-payload`)
+    await executeSQL(
+      `INSERT INTO public.manifest_per_version
+        (version_id, format_version, entry_count, total_file_size, payload_hash, manifest, size_receipts_provided)
+       VALUES ($1, 0, 0, 0, ''::bytea, ''::bytea, false)`,
+      [version.id],
+    )
+
+    const [row] = await executeSQL<{ manifest_length: number, payload_hash_length: number, size_receipts_provided: boolean }>(
+      `SELECT octet_length(manifest)::integer AS manifest_length,
+              octet_length(payload_hash)::integer AS payload_hash_length,
+              size_receipts_provided
+       FROM public.manifest_per_version WHERE version_id = $1`,
+      [version.id],
+    )
+    expect(row).toEqual({ manifest_length: 0, payload_hash_length: 0, size_receipts_provided: false })
+  })
+
+  it('refreshes an existing empty summary after inserting receipt-backed rows', async () => {
+    const name = `${BUNDLE_NAME}-existing-empty-summary`
+    const version = await createUploadVersion('r2-direct', name)
+    await executeSQL(
+      `INSERT INTO public.manifest_per_version
+        (version_id, format_version, entry_count, total_file_size, payload_hash, manifest, size_receipts_provided)
+       VALUES ($1, 0, 0, 0, ''::bytea, ''::bytea, false)`,
+      [version.id],
+    )
+    const manifest = await Promise.all(manifestEntries(version.owner_org).map(async entry => ({
+      ...entry,
+      file_size_receipt: await createManifestSizeReceipt(MANIFEST_SIZE_RECEIPT_SECRET, entry.s3_path, 321),
+    })))
+
+    const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
+      method: 'POST',
+      retryUnsafe: true,
+      headers: { 'Content-Type': 'application/json', 'Authorization': APIKEY_TEST_ALL },
+      body: JSON.stringify({ app_id: APP_ID, name, manifest }),
+    })
+    expect(response.status).toBe(200)
+
+    const [summary] = await executeSQL<{ entry_count: number, size_receipts_provided: boolean, total_file_size: string }>(
+      `SELECT entry_count, total_file_size, size_receipts_provided
+       FROM public.manifest_per_version WHERE version_id = $1`,
+      [version.id],
+    )
+    expect(summary).toEqual({ entry_count: 2, total_file_size: '642', size_receipts_provided: true })
   })
 
   it('rejects mixed legacy and receipt manifest entries atomically', async () => {

@@ -95,24 +95,44 @@ export async function persistVersionManifestEntries(
       await tx.execute(sql`SELECT pg_catalog.set_config('capgo.manifest_queue_managed', 'on', true)`)
       await tx.execute(sql`SELECT pg_catalog.pg_advisory_xact_lock(${record.id})`)
       const existing = await tx.execute<{ id: number }>(sql`SELECT id FROM public.manifest WHERE app_version_id = ${record.id} LIMIT 1`)
-      if (existing.rows.length > 0)
-        return true
+      const alreadyPresent = existing.rows.length > 0
 
-      const rowsJson = JSON.stringify(validEntries.map(({ file_name, s3_path, file_hash, file_size }) => ({ file_name, s3_path, file_hash, file_size })))
-      await tx.execute(sql`INSERT INTO public.manifest (app_version_id, file_name, s3_path, file_hash, file_size)
-        SELECT ${record.id}::bigint, entry.file_name, entry.s3_path, entry.file_hash, entry.file_size FROM jsonb_to_recordset(${rowsJson}::jsonb)
-        AS entry(file_name text, s3_path text, file_hash text, file_size bigint)`)
+      if (!alreadyPresent) {
+        const rowsJson = JSON.stringify(validEntries.map(({ file_name, s3_path, file_hash, file_size }) => ({ file_name, s3_path, file_hash, file_size })))
+        await tx.execute(sql`INSERT INTO public.manifest (app_version_id, file_name, s3_path, file_hash, file_size)
+          SELECT ${record.id}::bigint, entry.file_name, entry.s3_path, entry.file_hash, entry.file_size FROM jsonb_to_recordset(${rowsJson}::jsonb)
+          AS entry(file_name text, s3_path text, file_hash text, file_size bigint)`)
 
-      if (!options.trustFileSizes)
-        await tx.execute(sql`WITH queued AS MATERIALIZED (SELECT pgmq.send('on_manifest_create', pg_catalog.jsonb_build_object(
-          'function_name', 'on_manifest_create', 'function_type', 'cloudflare', 'payload', pg_catalog.jsonb_build_object('old_record', NULL,
-          'record', pg_catalog.to_jsonb(manifest), 'type', 'INSERT', 'table', 'manifest', 'schema', 'public'))) AS msg_id
-          FROM public.manifest WHERE app_version_id = ${record.id}) SELECT count(*) FROM queued`)
+        if (!options.trustFileSizes)
+          await tx.execute(sql`WITH queued AS MATERIALIZED (SELECT pgmq.send('on_manifest_create', pg_catalog.jsonb_build_object(
+            'function_name', 'on_manifest_create', 'function_type', 'cloudflare', 'payload', pg_catalog.jsonb_build_object('old_record', NULL,
+            'record', pg_catalog.to_jsonb(manifest), 'type', 'INSERT', 'table', 'manifest', 'schema', 'public'))) AS msg_id
+            FROM public.manifest WHERE app_version_id = ${record.id}) SELECT count(*) FROM queued`)
 
-      await tx.execute(sql`UPDATE public.app_versions SET manifest_count = ${validEntries.length}, updated_at = now()
-        ${sql.raw(options.clearAppVersionsManifest ? ', manifest = NULL' : '')} WHERE id = ${record.id}`)
-      await tx.execute(sql`UPDATE public.apps SET manifest_bundle_count = manifest_bundle_count + 1, updated_at = now() WHERE app_id = ${record.app_id}`)
-      return false
+        await tx.execute(sql`UPDATE public.app_versions SET manifest_count = ${validEntries.length}, updated_at = now()
+          ${sql.raw(options.clearAppVersionsManifest ? ', manifest = NULL' : '')} WHERE id = ${record.id}`)
+        await tx.execute(sql`UPDATE public.apps SET manifest_bundle_count = manifest_bundle_count + 1, updated_at = now() WHERE app_id = ${record.app_id}`)
+      }
+
+      if (options.trustFileSizes && !alreadyPresent) {
+        await tx.execute(sql`INSERT INTO public.manifest_per_version
+          (version_id, format_version, entry_count, total_file_size, payload_hash, manifest,
+           size_receipts_provided, manifest_size, manifest_size_payload_hash)
+          SELECT ${record.id}::bigint, 0, count(*)::integer, COALESCE(sum(file_size), 0)::bigint,
+                 ''::bytea, ''::bytea, true, NULL, NULL
+          FROM public.manifest WHERE app_version_id = ${record.id}
+          ON CONFLICT (version_id) DO UPDATE SET
+            format_version = EXCLUDED.format_version,
+            entry_count = EXCLUDED.entry_count,
+            total_file_size = EXCLUDED.total_file_size,
+            payload_hash = EXCLUDED.payload_hash,
+            manifest = EXCLUDED.manifest,
+            size_receipts_provided = EXCLUDED.size_receipts_provided,
+            manifest_size = EXCLUDED.manifest_size,
+            manifest_size_payload_hash = EXCLUDED.manifest_size_payload_hash`)
+      }
+
+      return alreadyPresent
     })
   }
   catch (error) {
