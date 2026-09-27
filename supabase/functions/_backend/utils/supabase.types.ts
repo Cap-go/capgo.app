@@ -2164,7 +2164,10 @@ export type Database = {
           entry_count: number
           format_version: number
           manifest: string
+          manifest_size: string | null
+          manifest_size_payload_hash: string | null
           payload_hash: string
+          size_receipts_provided: boolean
           total_file_size: number
           version_id: number
         }
@@ -2173,7 +2176,10 @@ export type Database = {
           entry_count: number
           format_version: number
           manifest: string
+          manifest_size?: string | null
+          manifest_size_payload_hash?: string | null
           payload_hash: string
+          size_receipts_provided?: boolean
           total_file_size: number
           version_id: number
         }
@@ -2182,7 +2188,10 @@ export type Database = {
           entry_count?: number
           format_version?: number
           manifest?: string
+          manifest_size?: string | null
+          manifest_size_payload_hash?: string | null
           payload_hash?: string
+          size_receipts_provided?: boolean
           total_file_size?: number
           version_id?: number
         }

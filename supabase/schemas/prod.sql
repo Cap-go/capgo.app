@@ -4925,8 +4925,8 @@ CREATE OR REPLACE FUNCTION "public"."create_org_stats_refresh_state"() RETURNS "
     SET "search_path" TO ''
     AS $$
 BEGIN
-  INSERT INTO public.org_stats_refresh_state (org_id, stats_updated_at, stats_refresh_requested_at)
-  VALUES (NEW.id, NEW.stats_updated_at, NEW.stats_updated_at);
+  INSERT INTO public.org_stats_refresh_state (org_id)
+  VALUES (NEW.id);
   RETURN NEW;
 END;
 $$;
@@ -7405,11 +7405,10 @@ BEGIN
     RETURN;
   END IF;
 
-  SELECT o.stats_updated_at
+  SELECT state.stats_updated_at
   INTO org_stats_updated_at
-  FROM public.orgs o
-  WHERE o.id = get_app_metrics.org_id
-  LIMIT 1;
+  FROM public.org_stats_refresh_state state
+  WHERE state.org_id = get_app_metrics.org_id;
 
   SELECT *
   INTO cache_entry
@@ -7497,11 +7496,10 @@ BEGIN
     RETURN;
   END IF;
 
-  SELECT o.stats_updated_at
+  SELECT state.stats_updated_at
   INTO org_stats_updated_at
-  FROM public.orgs o
-  WHERE o.id = get_app_metrics.p_org_id
-  LIMIT 1;
+  FROM public.org_stats_refresh_state state
+  WHERE state.org_id = get_app_metrics.p_org_id;
 
   SELECT *
   INTO cache_entry
@@ -8472,6 +8470,24 @@ COMMENT ON FUNCTION "public"."get_org_perm_for_apikey_v2"("apikey" "text", "app_
 
 
 
+CREATE OR REPLACE FUNCTION "public"."get_org_stats_refresh_state"("p_org_id" "uuid") RETURNS TABLE("stats_updated_at" timestamp without time zone, "stats_refresh_requested_at" timestamp without time zone)
+    LANGUAGE "sql" SECURITY DEFINER ROWS 1
+    SET "search_path" TO ''
+    AS $$
+  SELECT
+    state.stats_updated_at,
+    GREATEST(state.manual_refresh_requested_at, state.stats_refresh_requested_at)
+  FROM public.org_stats_refresh_state state
+  WHERE state.org_id = p_org_id
+    AND public.rbac_check_permission_request(
+      public.rbac_perm_org_read(), state.org_id, NULL::character varying, NULL::bigint
+    );
+$$;
+
+
+ALTER FUNCTION "public"."get_org_stats_refresh_state"("p_org_id" "uuid") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."get_org_user_access_rbac"("p_user_id" "uuid", "p_org_id" "uuid") RETURNS TABLE("id" "uuid", "principal_type" "text", "principal_id" "uuid", "role_id" "uuid", "role_name" "text", "role_description" "text", "scope_type" "text", "org_id" "uuid", "app_id" "uuid", "channel_id" "uuid", "granted_at" timestamp with time zone, "granted_by" "uuid", "expires_at" timestamp with time zone, "reason" "text", "is_direct" boolean, "principal_name" "text", "user_email" "text", "group_name" "text")
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -8720,7 +8736,8 @@ BEGIN
       AND (rb.expires_at IS NULL OR rb.expires_at > now())
   ),
   rbac_org_roles AS (
-    SELECT org_id, (ARRAY_AGG(rbac_role_candidates.name ORDER BY rbac_role_candidates.priority_rank DESC))[1] AS role_name
+    SELECT org_id,
+      (ARRAY_AGG(rbac_role_candidates.name ORDER BY rbac_role_candidates.priority_rank DESC))[1] AS role_name
     FROM rbac_role_candidates
     GROUP BY org_id
   ),
@@ -8773,7 +8790,8 @@ BEGIN
       AND (rb.expires_at IS NULL OR rb.expires_at > now())
   ),
   pending_invites AS (
-    SELECT ou.org_id, COALESCE(ou.rbac_role_name, public.rbac_role_org_member()) AS role_name
+    SELECT ou.org_id,
+      COALESCE(ou.rbac_role_name, public.rbac_role_org_member()) AS role_name
     FROM public.org_users ou
     WHERE ou.user_id = userid
       AND ou.is_invite IS TRUE
@@ -8810,12 +8828,20 @@ BEGIN
     SELECT
       o.id AS org_id,
       CASE
-        WHEN COALESCE(si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start), tc.zero_day_interval)
-             > tc.current_time - tc.current_month_start
+        WHEN COALESCE(
+          si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
+          tc.zero_day_interval
+        ) > tc.current_time - tc.current_month_start
         THEN date_trunc('MONTH', tc.current_time - INTERVAL '1 MONTH')
-             + COALESCE(si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start), tc.zero_day_interval)
+          + COALESCE(
+            si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
+            tc.zero_day_interval
+          )
         ELSE tc.current_month_start
-             + COALESCE(si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start), tc.zero_day_interval)
+          + COALESCE(
+            si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
+            tc.zero_day_interval
+          )
       END AS cycle_start
     FROM public.orgs o
     CROSS JOIN time_constants tc
@@ -8866,24 +8892,32 @@ BEGIN
     o.logo,
     o.website,
     o.name,
-    COALESCE(pi.role_name::varchar, ror.role_name::varchar, public.rbac_role_org_member()::varchar) AS role,
+    COALESCE(
+      pi.role_name::varchar,
+      ror.role_name::varchar,
+      public.rbac_role_org_member()::varchar
+    ) AS role,
     (pi.org_id IS NOT NULL) AS is_invite,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN false
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password
+        OR COALESCE(billing_acc.should_redact_billing, true) THEN false
       ELSE COALESCE(si.status = 'succeeded', false)
     END AS paying,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN 0
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password
+        OR COALESCE(billing_acc.should_redact_billing, true) THEN 0
       ELSE GREATEST(COALESCE((si.trial_at::date - NOW()::date), 0), 0)::integer
     END AS trial_left,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN false
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password
+        OR COALESCE(billing_acc.should_redact_billing, true) THEN false
       ELSE COALESCE((si.status = 'succeeded' AND si.is_good_plan = true)
         OR (si.trial_at::date - NOW()::date > 0)
         OR COALESCE(ucb.available_credits, 0) > 0, false)
     END AS can_use_more,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN false
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password
+        OR COALESCE(billing_acc.should_redact_billing, true) THEN false
       ELSE COALESCE(si.status = 'canceled', false)
     END AS is_canceled,
     CASE
@@ -8891,39 +8925,56 @@ BEGIN
       ELSE COALESCE(ac.cnt, 0)
     END AS app_count,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::timestamptz
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password
+        OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::timestamptz
       ELSE bc.cycle_start
     END AS subscription_start,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::timestamptz
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password
+        OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::timestamptz
       ELSE (bc.cycle_start + INTERVAL '1 MONTH')
     END AS subscription_end,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::text
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password
+        OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::text
       ELSE o.management_email
     END AS management_email,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN false
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password
+        OR COALESCE(billing_acc.should_redact_billing, true) THEN false
       ELSE COALESCE(si.price_id = p.price_y_id, false)
     END AS is_yearly,
-    o.stats_updated_at,
-    o.stats_refresh_requested_at,
+    CASE
+      WHEN refresh_state.org_id IS NULL THEN o.stats_updated_at
+      ELSE refresh_state.stats_updated_at
+    END AS stats_updated_at,
+    CASE
+      WHEN refresh_state.org_id IS NULL THEN o.stats_refresh_requested_at
+      ELSE GREATEST(
+        refresh_state.manual_refresh_requested_at,
+        refresh_state.stats_refresh_requested_at
+      )
+    END AS stats_refresh_requested_at,
     CASE
       WHEN COALESCE(billing_acc.should_redact_billing, true) THEN NULL::timestamptz
       WHEN poo.id IS NOT NULL THEN
-        public.get_next_cron_time('0 3 * * *', NOW()) + make_interval(mins => poo.preceding_count::int * 4)
+        public.get_next_cron_time('0 3 * * *', NOW())
+          + make_interval(mins => poo.preceding_count::int * 4)
       ELSE NULL
     END AS next_stats_update_at,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::numeric
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password
+        OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::numeric
       ELSE COALESCE(ucb.available_credits, 0)
     END AS credit_available,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::numeric
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password
+        OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::numeric
       ELSE COALESCE(ucb.total_credits, 0)
     END AS credit_total,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::timestamptz
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password
+        OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::timestamptz
       ELSE ucb.next_expiration
     END AS credit_next_expiration,
     tfa.enforcing_2fa,
@@ -8947,7 +8998,8 @@ BEGIN
   LEFT JOIN app_counts ac ON ac.owner_org = o.id
   LEFT JOIN public.usage_credit_balances ucb ON ucb.org_id = o.id
   LEFT JOIN paying_orgs_ordered poo ON poo.id = o.id
-  LEFT JOIN billing_cycles bc ON bc.org_id = o.id;
+  LEFT JOIN billing_cycles bc ON bc.org_id = o.id
+  LEFT JOIN public.org_stats_refresh_state refresh_state ON refresh_state.org_id = o.id;
 END;
 $$;
 
@@ -12338,8 +12390,8 @@ DECLARE
   v_now_utc timestamp without time zone := pg_catalog.timezone('UTC', pg_catalog.clock_timestamp());
   v_target_at timestamp without time zone;
 BEGIN
-  INSERT INTO public.org_stats_refresh_state (org_id, stats_updated_at, stats_refresh_requested_at)
-  SELECT org.id, org.stats_updated_at, org.stats_updated_at
+  INSERT INTO public.org_stats_refresh_state (org_id)
+  SELECT org.id
   FROM public.orgs org
   WHERE org.id = p_org_id
   ON CONFLICT ON CONSTRAINT org_stats_refresh_state_pkey DO NOTHING;
@@ -12364,12 +12416,6 @@ BEGIN
   SET stats_updated_at = GREATEST(COALESCE(state.stats_updated_at, v_target_at), v_target_at),
       stats_refresh_requested_at = GREATEST(COALESCE(state.stats_refresh_requested_at, v_target_at), v_target_at)
   WHERE state.org_id = p_org_id;
-
-  UPDATE public.orgs org
-  SET last_stats_updated_at = org.stats_updated_at,
-      stats_updated_at = v_target_at
-  WHERE org.id = p_org_id
-    AND (org.stats_updated_at IS NULL OR org.stats_updated_at < v_target_at);
 
   RETURN v_target_at;
 END;
@@ -15036,10 +15082,8 @@ BEGIN
     RETURN;
   END IF;
 
-  INSERT INTO public.org_stats_refresh_state (org_id, stats_updated_at, stats_refresh_requested_at)
-  SELECT org.id, org.stats_updated_at, org.stats_updated_at
-  FROM public.orgs org
-  WHERE org.id = v_org_id
+  INSERT INTO public.org_stats_refresh_state (org_id)
+  VALUES (v_org_id)
   ON CONFLICT ON CONSTRAINT org_stats_refresh_state_pkey DO NOTHING;
 
   PERFORM 1 FROM public.org_stats_refresh_state s
@@ -15094,8 +15138,8 @@ DECLARE
   v_now_utc timestamp without time zone := pg_catalog.timezone('UTC', pg_catalog.clock_timestamp());
   v_target_at timestamp without time zone;
 BEGIN
-  INSERT INTO public.org_stats_refresh_state (org_id, stats_updated_at, stats_refresh_requested_at)
-  SELECT org.id, org.stats_updated_at, org.stats_updated_at
+  INSERT INTO public.org_stats_refresh_state (org_id)
+  SELECT org.id
   FROM public.orgs org
   WHERE org.id = queue_cron_stat_org_for_org.org_id
   ON CONFLICT ON CONSTRAINT org_stats_refresh_state_pkey DO NOTHING;
@@ -18166,8 +18210,8 @@ BEGIN
   IF request_org_chart_refresh.org_id IS NULL THEN
     RAISE EXCEPTION 'Org ID is required';
   END IF;
-  SELECT o.stats_refresh_requested_at
-  INTO v_org_requested_at_before
+
+  PERFORM 1
   FROM public.orgs o
   WHERE o.id = request_org_chart_refresh.org_id;
   IF NOT FOUND THEN
@@ -18176,6 +18220,7 @@ BEGIN
     END IF;
     RAISE EXCEPTION 'Organization access denied';
   END IF;
+
   IF NOT public.is_internal_request_role(public.current_request_role())
     AND NOT public.rbac_check_permission_request(
       public.rbac_perm_org_read(),
@@ -18186,6 +18231,16 @@ BEGIN
   THEN
     RAISE EXCEPTION 'Organization access denied';
   END IF;
+
+  INSERT INTO public.org_stats_refresh_state (org_id)
+  VALUES (request_org_chart_refresh.org_id)
+  ON CONFLICT ON CONSTRAINT org_stats_refresh_state_pkey DO NOTHING;
+
+  SELECT GREATEST(state.manual_refresh_requested_at, state.stats_refresh_requested_at)
+  INTO v_org_requested_at_before
+  FROM public.org_stats_refresh_state state
+  WHERE state.org_id = request_org_chart_refresh.org_id;
+
   FOR app_record IN
     SELECT a.app_id, s.stats_refresh_requested_at
     FROM public.apps a
@@ -18208,14 +18263,19 @@ BEGIN
       v_queued_app_ids := pg_catalog.array_append(v_queued_app_ids, app_record.app_id);
     END IF;
   END LOOP;
+
   IF v_queued_count > 0 THEN
-    UPDATE public.orgs
-    SET stats_refresh_requested_at = v_request_started_at
-    WHERE id = request_org_chart_refresh.org_id;
-    requested_at := v_request_started_at;
+    UPDATE public.org_stats_refresh_state state
+    SET manual_refresh_requested_at = GREATEST(
+      COALESCE(state.manual_refresh_requested_at, v_request_started_at),
+      v_request_started_at
+    )
+    WHERE state.org_id = request_org_chart_refresh.org_id
+    RETURNING state.manual_refresh_requested_at INTO requested_at;
   ELSE
     requested_at := v_org_requested_at_before;
   END IF;
+
   queued_app_ids := COALESCE(v_queued_app_ids, ARRAY[]::character varying[]);
   queued_count := v_queued_count;
   skipped_count := GREATEST(v_total_count - v_queued_count, 0);
@@ -22640,15 +22700,22 @@ CREATE TABLE IF NOT EXISTS "public"."manifest_per_version" (
     "payload_hash" "bytea" NOT NULL,
     "manifest" "bytea" NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "size_receipts_provided" boolean DEFAULT false NOT NULL,
+    "manifest_size" "bytea",
+    "manifest_size_payload_hash" "bytea",
     CONSTRAINT "manifest_per_version_entry_count_check" CHECK (("entry_count" >= 0)),
     CONSTRAINT "manifest_per_version_format_version_check" CHECK (("format_version" >= 0)),
-    CONSTRAINT "manifest_per_version_manifest_check" CHECK (("octet_length"("manifest") > 0)),
-    CONSTRAINT "manifest_per_version_payload_hash_check" CHECK (("octet_length"("payload_hash") = 32)),
+    CONSTRAINT "manifest_per_version_manifest_check" CHECK ((("octet_length"("manifest") > 0) OR ("octet_length"("manifest") = 0))),
+    CONSTRAINT "manifest_per_version_payload_hash_check" CHECK ((("octet_length"("payload_hash") = 32) OR ("octet_length"("payload_hash") = 0))),
     CONSTRAINT "manifest_per_version_total_file_size_check" CHECK (("total_file_size" >= 0))
 );
 
 
 ALTER TABLE "public"."manifest_per_version" OWNER TO "postgres";
+
+
+COMMENT ON COLUMN "public"."manifest_per_version"."size_receipts_provided" IS 'True when total_file_size came from signed per-file size receipts.';
+
 
 
 CREATE TABLE IF NOT EXISTS "public"."notification_app_settings" (
@@ -22823,7 +22890,8 @@ COMMENT ON COLUMN "public"."org_id_tombstones"."org_id" IS 'Deleted organization
 CREATE TABLE IF NOT EXISTS "public"."org_stats_refresh_state" (
     "org_id" "uuid" NOT NULL,
     "stats_updated_at" timestamp without time zone,
-    "stats_refresh_requested_at" timestamp without time zone
+    "stats_refresh_requested_at" timestamp without time zone,
+    "manual_refresh_requested_at" timestamp without time zone
 );
 
 
@@ -22831,6 +22899,10 @@ ALTER TABLE "public"."org_stats_refresh_state" OWNER TO "postgres";
 
 
 COMMENT ON TABLE "public"."org_stats_refresh_state" IS 'Primary-only watermark for producing org stats jobs after app refreshes settle.';
+
+
+
+COMMENT ON COLUMN "public"."org_stats_refresh_state"."manual_refresh_requested_at" IS 'User-visible start time for a manual dashboard refresh. This is separate from stats_refresh_requested_at, which is the org-job coordinator target.';
 
 
 
@@ -28349,6 +28421,12 @@ GRANT ALL ON FUNCTION "public"."get_org_perm_for_apikey"("apikey" "text", "app_i
 REVOKE ALL ON FUNCTION "public"."get_org_perm_for_apikey_v2"("apikey" "text", "app_id" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."get_org_perm_for_apikey_v2"("apikey" "text", "app_id" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."get_org_perm_for_apikey_v2"("apikey" "text", "app_id" "text") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."get_org_stats_refresh_state"("p_org_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."get_org_stats_refresh_state"("p_org_id" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."get_org_stats_refresh_state"("p_org_id" "uuid") TO "authenticated";
 
 
 
