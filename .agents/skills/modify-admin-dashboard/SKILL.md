@@ -27,7 +27,8 @@ repository. Treat that repository as the source of truth.
 1. Use an existing checkout of `Cap-go/capgo_admin_dashboard`, or clone
    `git@github.com:Cap-go/capgo_admin_dashboard.git` when no usable checkout is
    available.
-2. Read that repository's `AGENTS.md` and work from its current `main` branch.
+2. Read that repository's `AGENTS.md`, update its current `main` branch, and
+   create a feature branch from it before making changes.
 3. Preserve the dashboard's Cloudflare Access enforcement and read-only admin
    guardrails.
 4. Run the validation commands documented in the private repository.
