@@ -64,15 +64,24 @@ describe('backend onboarding refresh', () => {
       expect(ownMessages.every(row => row.payload.appIds.length <= 25)).toBe(true)
       expect(ownMessages.every(row => typeof row.payload.queuedAt === 'string')).toBe(true)
       expect(await countMessagesFor(excluded.ids[0])).toBe(0)
+      const excludedStateCount = (await client.query(
+        'SELECT count(*)::int AS count FROM public.app_onboarding WHERE app_id=$1',
+        [excluded.ids[0]],
+      )).rows[0].count
+      expect(excludedStateCount).toBe(0)
+      const state = (await client.query(`SELECT queued_refresh_at, refreshed_at
+        FROM public.app_onboarding WHERE app_id=$1`, [eligible[0]])).rows[0]
+      expect(state.queued_refresh_at).toBeTruthy()
+      expect(state.refreshed_at).toBeNull()
+      expect((await client.query(`SELECT onboarding ? 'queued_refresh_at' AS present
+        FROM public.apps WHERE app_id=$1`, [eligible[0]])).rows[0].present).toBe(false)
       await client.query('SELECT public.enqueue_app_onboarding_refreshes(500)')
       expect(await countMessagesFor(eligible[0])).toBe(1)
-      await client.query(`UPDATE public.apps SET onboarding = jsonb_set(onboarding,'{queued_refresh_at}',
-        to_jsonb(to_char((now() - interval '31 minutes') AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')))
+      await client.query(`UPDATE public.app_onboarding SET queued_refresh_at=now()-interval '31 minutes'
         WHERE app_id=ANY($1::varchar[])`, [eligible])
       await client.query('SELECT public.enqueue_app_onboarding_refreshes(500)')
       expect(await countMessagesFor(eligible[0])).toBe(2)
-      await client.query(`UPDATE public.apps SET onboarding = jsonb_set(onboarding,'{refreshed_at}',
-        to_jsonb(to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')))
+      await client.query(`UPDATE public.app_onboarding SET refreshed_at=now()
         WHERE app_id=ANY($1::varchar[])`, [eligible])
       await client.query('SELECT public.enqueue_app_onboarding_refreshes(500)')
       expect(await countMessagesFor(eligible[0])).toBe(2)
@@ -126,6 +135,7 @@ describe('backend onboarding refresh', () => {
       client.release()
       released = true
       const queuedAt = new Date(Date.now() - 60000).toISOString()
+      await pool.query('DELETE FROM public.app_onboarding WHERE app_id=ANY($1::varchar[])', [item.ids])
       expect(await refreshAppOnboardingBatch(getDrizzleClient(pool), { appIds: item.ids, queuedAt })).toBe(2)
       const row = (await pool.query('SELECT onboarding FROM public.apps WHERE app_id=$1', [appId])).rows[0].onboarding
       expect(row.setup).toEqual(onboarding.setup)
@@ -144,6 +154,11 @@ describe('backend onboarding refresh', () => {
         started_at: '2026-08-03T00:00:00.000Z',
         succeeded_at: '2026-08-04T00:00:00.000Z',
       })
+      expect(row).not.toHaveProperty('refreshed_at')
+      const refreshState = (await pool.query(`SELECT queued_refresh_at, refreshed_at
+        FROM public.app_onboarding WHERE app_id=$1`, [appId])).rows[0]
+      expect(refreshState.queued_refresh_at).toBeNull()
+      expect(refreshState.refreshed_at).toBeTruthy()
       const empty = (await pool.query('SELECT onboarding FROM public.apps WHERE app_id=$1', [emptyApp])).rows[0].onboarding
       expect(empty.features.ota.stage).toBe('no_device')
       expect(await refreshAppOnboardingBatch(getDrizzleClient(pool), { appIds: item.ids, queuedAt })).toBe(0)
@@ -163,6 +178,7 @@ describe('backend onboarding refresh', () => {
     client.release()
     try {
       const before = (await pool.query('SELECT onboarding FROM public.apps WHERE app_id=$1', [item.ids[0]])).rows[0].onboarding
+      await pool.query('DELETE FROM public.app_onboarding WHERE app_id=$1', [item.ids[0]])
       const database = getDrizzleClient(pool)
       const failingDatabase: Pick<typeof database, 'transaction'> = {
         transaction: (operation, config) => database.transaction(async (tx) => {
@@ -173,6 +189,7 @@ describe('backend onboarding refresh', () => {
       }
       await expect(refreshAppOnboardingBatch(failingDatabase, { appIds: item.ids, queuedAt: new Date(Date.now() - 60000).toISOString() })).rejects.toThrow()
       expect((await pool.query('SELECT onboarding FROM public.apps WHERE app_id=$1', [item.ids[0]])).rows[0].onboarding).toEqual(before)
+      expect((await pool.query('SELECT count(*)::int AS count FROM public.app_onboarding WHERE app_id=$1', [item.ids[0]])).rows[0].count).toBe(0)
     }
     finally {
       await cleanup(pool, [item])

@@ -128,6 +128,7 @@ export const SUPABASE_BASE_URL = normalizeLocalhostUrl(env.SUPABASE_URL) ?? ''
 export const BASE_URL = USE_CLOUDFLARE ? CLOUDFLARE_API_URL : `${SUPABASE_BASE_URL}/functions/v1`
 export const PLUGIN_BASE_URL = USE_CLOUDFLARE ? CLOUDFLARE_PLUGIN_URL : `${SUPABASE_BASE_URL}/functions/v1`
 export const API_SECRET = 'testsecret'
+export const MANIFEST_SIZE_RECEIPT_SECRET = 'manifest-size-receipt-testsecret'
 export const SUPABASE_ANON_KEY = env.SUPABASE_ANON_KEY ?? ''
 
 /**

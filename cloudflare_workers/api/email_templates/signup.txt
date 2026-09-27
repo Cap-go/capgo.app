@@ -1,0 +1,7 @@
+Hi,
+
+Thank you for registering with Capgo.app.
+
+To complete your account setup, please confirm your email address by following the link below:
+
+{{ confirmation_link }}

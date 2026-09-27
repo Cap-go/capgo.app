@@ -6,6 +6,7 @@ import type { Context } from 'hono'
 import { Buffer } from 'node:buffer'
 import { HTTPException } from 'hono/http-exception'
 import { cloudlog } from '../utils/logging.ts'
+import { MANIFEST_SIZE_RECEIPT_HEADER } from '../utils/manifest_size_receipt.ts'
 
 export const REQUEST_METHODS = ['POST', 'HEAD', 'PATCH', 'OPTIONS', 'DELETE'] as const
 
@@ -60,7 +61,7 @@ export const UPLOAD_INFO_KEY = 'upload-info'
 
 export const ALLOWED_HEADERS = HEADERS.join(', ')
 export const ALLOWED_METHODS = REQUEST_METHODS.join(', ')
-export const EXPOSED_HEADERS = HEADERS.join(', ')
+export const EXPOSED_HEADERS = [...HEADERS, MANIFEST_SIZE_RECEIPT_HEADER].join(', ')
 
 export type AppScopedAttachmentPath = | { kind: 'scoped', app_id: string, owner_org: string } | { kind: 'invalid_scoped' }
 

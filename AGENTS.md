@@ -3,6 +3,19 @@
 This file provides guidance to AI agents (Claude Code, Cursor, Copilot, etc.)
 when working with code in this repository.
 
+## MUST NOT — modify the admin dashboard in this repository
+
+The admin dashboard is maintained in the private
+[`Cap-go/capgo_admin_dashboard`](https://github.com/Cap-go/capgo_admin_dashboard)
+repository. Existing dashboard code in this repository is transitional and is not
+the source of truth. Do not edit it or open dashboard pull requests here.
+
+For admin dashboard work, load
+`.agents/skills/modify-admin-dashboard/SKILL.md` and make the change and pull
+request in `Cap-go/capgo_admin_dashboard`. Shared backend producers that serve
+other Capgo features can still be changed here when the requested work genuinely
+belongs to shared infrastructure. See `docs/admin-dashboard.md`.
+
 ## MUST NOT — never publish private customer data
 
 **This repository is public.** Chat, tickets, and internal messages may contain

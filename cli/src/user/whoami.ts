@@ -6,18 +6,23 @@ import { trackEvent } from '../analytics/track'
 import { formatTable } from '../terminal-table'
 import { createSupabaseClient, findSavedKey, formatError, resolveUserIdFromApiKey } from '../utils'
 
-export async function resolveAccountIdentity(supabase: SupabaseClient<Database>, apikey: string) {
-  const [userId, emailResult] = await Promise.all([
-    resolveUserIdFromApiKey(supabase, apikey, true),
-    supabase.rpc('request_actor_email_adress'),
-  ])
-
+export async function resolveAccountEmail(supabase: SupabaseClient<Database>): Promise<string> {
+  const emailResult = await supabase.rpc('request_actor_email_adress')
   if (emailResult.error)
     throw emailResult.error
   if (!emailResult.data)
     throw new Error('Account email not found for this API key')
 
-  return { userId, email: emailResult.data }
+  return emailResult.data
+}
+
+export async function resolveAccountIdentity(supabase: SupabaseClient<Database>, apikey: string) {
+  const [userId, email] = await Promise.all([
+    resolveUserIdFromApiKey(supabase, apikey, true),
+    resolveAccountEmail(supabase),
+  ])
+
+  return { userId, email }
 }
 
 export async function whoami(options: Options) {

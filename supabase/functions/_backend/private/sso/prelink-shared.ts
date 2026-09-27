@@ -18,7 +18,7 @@ interface PrelinkCandidate {
   email_identity_id: string
 }
 
-const PUBLIC_EMAIL_DOMAINS = new Set([
+export const PUBLIC_EMAIL_DOMAINS = new Set([
   'gmail.com',
   'googlemail.com',
   'yahoo.com',

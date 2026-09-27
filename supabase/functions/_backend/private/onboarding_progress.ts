@@ -2,22 +2,19 @@ import type { Context } from 'hono'
 import type { AppOnboardingPatch } from '../utils/appOnboarding.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Permission } from '../utils/rbac.ts'
-import { sql } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
-import { buildAppOnboardingStepPosthogEvent } from '../utils/app_onboarding_posthog.ts'
-import { appendAppOnboardingStepHistory, applyAppOnboardingPatch, getAppOnboardingStepHistoryChanges, hasSupportedOtaTodoList, parseAppOnboarding, pickAppOnboardingSource } from '../utils/appOnboarding.ts'
-import { lockAppOnboardingForWrite, retryAppOnboardingWrite } from '../utils/appOnboardingWriteLock.ts'
+import { emitCommittedAppOnboardingHistory } from '../utils/app_onboarding_posthog.ts'
+import { hasSupportedOtaTodoList, parseAppOnboarding, pickAppOnboardingSource } from '../utils/appOnboarding.ts'
+import { tryCompletePendingAppOnboarding } from '../utils/appOnboardingCompletion.ts'
+import { persistAuthorizedOnboardingMutation } from '../utils/appOnboardingMutation.ts'
 import { parseBody, quickError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlogErr, serializeError } from '../utils/logging.ts'
-import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
-import { trackPosthogEvent } from '../utils/posthog.ts'
 import { appIdSchema } from '../utils/privateAnalyticsValidation.ts'
-import { checkPermission, checkPermissionPg } from '../utils/rbac.ts'
+import { checkPermission } from '../utils/rbac.ts'
 import { readDevices, readStats } from '../utils/stats.ts'
 import { supabaseWithAuth } from '../utils/supabase.ts'
-import { backgroundTask } from '../utils/utils.ts'
 
 const bodySchema = z.object({ appId: appIdSchema, N: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), initial: z.boolean().optional() })
 type Observations = Partial<Record<'login_cli_mcp' | 'add_channel' | 'run_device' | 'upload_bundle' | 'test_update', boolean>>
@@ -51,70 +48,30 @@ async function hasAppliedBundle(c: Context<MiddlewareKeyVariables>, client: Auth
 // Evidence is gathered outside the lock; merge only the observed milestones into
 // the current row, so a concurrent CLI report cannot be overwritten.
 export async function persistObservedProgress(c: Context<MiddlewareKeyVariables>, appId: string, observations: Observations) {
-  const auth = c.get('auth')!
-  const pool = getPgClient(c)
-  try {
-    const result = await retryAppOnboardingWrite(getDrizzleClient(pool, { logger: false }), async (tx) => {
-      const row = await lockAppOnboardingForWrite(tx, appId)
-      if (!row || !hasSupportedOtaTodoList(parseAppOnboarding(row.onboarding)))
+  const result = await persistAuthorizedOnboardingMutation(c, appId, {
+    requestedSteps: (Object.keys(observations) as Array<keyof Observations>).map(id => `ota.${id}` as const),
+    stepOverrides: { 'ota.login_cli_mcp': { permission: 'app.read', authType: 'apikey' } },
+    buildPatch: ({ current, allowedSteps, at }) => {
+      if (!hasSupportedOtaTodoList(current) || current.outcome === 'skipped')
         return null
-      const key = auth.apikey?.key ?? c.get('capgkey') ?? null
-      const canMarkCliStart = observations.login_cli_mcp === true
-        && auth.authType === 'apikey'
-        && await checkPermissionPg(c, 'app.read', { appId }, tx, auth.userId, key)
-      const hasOtherObservations = Object.keys(observations).some(id => id !== 'login_cli_mcp')
-      const canWriteObservations = hasOtherObservations
-        && ((await checkPermissionPg(c, 'app.update_settings', { appId }, tx, auth.userId, key))
-          || (await checkPermissionPg(c, 'org.create_app', { orgId: row.owner_org }, tx, auth.userId, key)))
-      if (!canMarkCliStart && !canWriteObservations) {
-        return null
-      }
-      const current = parseAppOnboarding(row.onboarding)
-      if (current.outcome === 'skipped')
-        return null
-      const at = new Date().toISOString()
+      const canMarkCliStart = observations.login_cli_mcp === true && allowedSteps.has('ota.login_cli_mcp')
       const patch: AppOnboardingPatch = { steps: {}, ...(canMarkCliStart ? { source: 'cli' } : {}) }
       for (const [id, present] of Object.entries(observations) as Array<[keyof Observations, boolean]>) {
-        if (id === 'login_cli_mcp' ? !canMarkCliStart : !canWriteObservations)
+        if (!allowedSteps.has(`ota.${id}`))
           continue
         if (present && current.steps[id]?.status !== 'done')
           patch.steps![id] = { status: 'done', at }
       }
-      const removeChannel = canWriteObservations && observations.add_channel === false && current.steps.add_channel?.status === 'done'
+      if (allowedSteps.has('ota.add_channel') && observations.add_channel === false && current.steps.add_channel?.status === 'done')
+        patch.steps!.add_channel = { status: 'pending' }
       const sourceChanged = canMarkCliStart && pickAppOnboardingSource(current.source, 'cli') !== current.source
-      if (!removeChannel && Object.keys(patch.steps!).length === 0 && !sourceChanged)
-        return null
-      const base = applyAppOnboardingPatch(row.onboarding, {}, () => at)
-      const setup = base.setup as Record<string, unknown>
-      const stepPaths = setup.steps as Record<string, unknown>
-      const steps = current.todo_list_version === 4 ? stepPaths.ota as Record<string, unknown> : stepPaths
-      if (removeChannel) {
-        if (current.todo_list_version === 4)
-          steps.add_channel = { status: 'pending' }
-        else
-          delete steps.add_channel
-      }
-      const merged = applyAppOnboardingPatch(base, patch, () => at)
-      const onboarding = appendAppOnboardingStepHistory(row.onboarding, merged, patch, () => at)
-      const historyChanges = getAppOnboardingStepHistoryChanges(row.onboarding, onboarding, patch)
-      await tx.execute(sql`UPDATE public.apps SET onboarding = ${JSON.stringify(onboarding)}::jsonb, updated_at = now() WHERE app_id = ${appId}`)
-      await tx.execute(sql`SELECT public.try_complete_pending_onboarding_if_setup_done(${appId})`)
-      return { onboarding, historyChanges, orgId: row.owner_org }
-    })
-    if (result?.historyChanges.length) {
-      await backgroundTask(c, Promise.all(result.historyChanges.map(change => trackPosthogEvent(c, buildAppOnboardingStepPosthogEvent({
-        appId,
-        auth,
-        change,
-        orgId: result.orgId,
-        setup: parseAppOnboarding(result.onboarding),
-      })))))
-    }
-    return result?.onboarding
-  }
-  finally {
-    await closeClient(c, pool)
-  }
+      return Object.keys(patch.steps!).length || sourceChanged ? patch : null
+    },
+    afterPersist: tryCompletePendingAppOnboarding,
+  })
+  if (result)
+    await emitCommittedAppOnboardingHistory(c, [result])
+  return result?.onboarding
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()

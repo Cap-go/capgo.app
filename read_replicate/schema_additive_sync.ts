@@ -84,7 +84,8 @@ interface SchemaCatalog {
 }
 
 type SyncStatementKind
-  = | 'column'
+  = | 'table'
+    | 'column'
     | 'check_constraint'
     | 'constraint'
     | 'drop_check_constraint'
@@ -95,7 +96,7 @@ type SyncStatementKind
     | 'sequence'
     | 'type'
 
-type SyncObjectKind = 'column' | 'constraint' | 'function' | 'index' | 'sequence' | 'type'
+type SyncObjectKind = 'table' | 'column' | 'constraint' | 'function' | 'index' | 'sequence' | 'type'
 
 export interface ReadReplicaSchemaSyncStatement {
   kind: SyncStatementKind
@@ -150,6 +151,41 @@ const SAFE_IDENTIFIER_RE = /^[A-Z_]\w*$/i
 const SAFE_SQL_FRAGMENT_RE = /^[\w .()[\],:'"{}+\-=<>!]+$/
 const REPLICA_TABLE_SET = new Set<string>(REPLICA_TABLES)
 const REPLICA_FUNCTION_SET = new Set<string>(REPLICA_FUNCTIONS)
+const MANIFEST_PER_VERSION_TABLE = 'manifest_per_version'
+export const MANIFEST_PER_VERSION_TABLE_SQL = [
+  'CREATE TABLE public."manifest_per_version" (',
+  '  "version_id" bigint NOT NULL,',
+  '  "format_version" smallint NOT NULL,',
+  '  "entry_count" integer NOT NULL,',
+  '  "total_file_size" bigint NOT NULL,',
+  '  "payload_hash" bytea NOT NULL,',
+  '  "manifest" bytea NOT NULL,',
+  '  "created_at" timestamp with time zone DEFAULT now() NOT NULL,',
+  '  CONSTRAINT "manifest_per_version_pkey" PRIMARY KEY ("version_id"),',
+  '  CONSTRAINT "manifest_per_version_format_version_check" CHECK (format_version >= 0),',
+  '  CONSTRAINT "manifest_per_version_entry_count_check" CHECK (entry_count >= 0),',
+  '  CONSTRAINT "manifest_per_version_total_file_size_check" CHECK (total_file_size >= 0),',
+  '  CONSTRAINT "manifest_per_version_payload_hash_check" CHECK (octet_length(payload_hash) = 32),',
+  '  CONSTRAINT "manifest_per_version_manifest_check" CHECK (octet_length(manifest) > 0)',
+  ')',
+].join('\n')
+const MANIFEST_PER_VERSION_COLUMNS: Record<string, { type: string, default: string | null }> = {
+  version_id: { type: 'bigint', default: null },
+  format_version: { type: 'smallint', default: null },
+  entry_count: { type: 'integer', default: null },
+  total_file_size: { type: 'bigint', default: null },
+  payload_hash: { type: 'bytea', default: null },
+  manifest: { type: 'bytea', default: null },
+  created_at: { type: 'timestamp with time zone', default: 'now()' },
+}
+const MANIFEST_PER_VERSION_CONSTRAINTS: Record<string, { type: SchemaConstraint['type'], definition: string }> = {
+  manifest_per_version_pkey: { type: 'p', definition: 'PRIMARY KEY (version_id)' },
+  manifest_per_version_format_version_check: { type: 'c', definition: 'CHECK (format_version >= 0)' },
+  manifest_per_version_entry_count_check: { type: 'c', definition: 'CHECK (entry_count >= 0)' },
+  manifest_per_version_total_file_size_check: { type: 'c', definition: 'CHECK (total_file_size >= 0)' },
+  manifest_per_version_payload_hash_check: { type: 'c', definition: 'CHECK (octet_length(payload_hash) = 32)' },
+  manifest_per_version_manifest_check: { type: 'c', definition: 'CHECK (octet_length(manifest) > 0)' },
+}
 const DEFAULT_SCHEMA_SYNC_STATEMENT_TIMEOUT_MS = 550_000
 const DEFAULT_SCHEMA_SYNC_MAX_DURATION_MS = 585_000
 const SCHEMA_SYNC_RESPONSE_BUFFER_MS = 5_000
@@ -193,6 +229,30 @@ export function planReadReplicaSchemaSync(
   const skippedColumnsByTable = new Map<string, Set<string>>()
   const statements: ReadReplicaSchemaSyncStatement[] = []
   const skipped: SkippedChange[] = []
+  const createdTables = new Set<string>()
+
+  // Only this newly introduced table may be created automatically. An absent
+  // established replica table indicates data loss and must remain a blocker.
+  for (const table of expectedCatalog.tables ?? []) {
+    if (actualTables.has(table.name) || table.name !== MANIFEST_PER_VERSION_TABLE)
+      continue
+    if (!matchesManifestPerVersionTable(expectedCatalog)) {
+      skipped.push({
+        kind: 'table',
+        table: table.name,
+        name: table.name,
+        reason: 'unexpected_manifest_per_version_definition',
+      })
+      continue
+    }
+    statements.push({
+      kind: 'table',
+      table: table.name,
+      name: table.name,
+      sql: MANIFEST_PER_VERSION_TABLE_SQL,
+    })
+    createdTables.add(table.name)
+  }
 
   for (const type of expectedCatalog.types ?? []) {
     if (typeMatches(type, actualTypesByName.get(type.name)))
@@ -271,6 +331,8 @@ export function planReadReplicaSchemaSync(
   }
 
   for (const column of expectedCatalog.columns ?? []) {
+    if (createdTables.has(column.table))
+      continue
     const actualColumn = actualColumnsByKey.get(columnKey(column))
     if (!actualColumn) {
       const addColumnSql = buildAddColumnStatement(column, actualTables)
@@ -308,6 +370,8 @@ export function planReadReplicaSchemaSync(
   }
 
   for (const index of expectedCatalog.indexes ?? []) {
+    if (createdTables.has(index.table))
+      continue
     const actualIndex = actualIndexByName.get(index.name)
     if (indexMatches(index, actualIndex))
       continue
@@ -409,6 +473,8 @@ export function planReadReplicaSchemaSync(
     })
   }
   for (const constraint of expectedCatalog.constraints ?? []) {
+    if (createdTables.has(constraint.table))
+      continue
     if (constraint.type === 'c') {
       const actualConstraint = actualConstraintsByKey.get(
         constraintKey(constraint),
@@ -533,6 +599,36 @@ export function planReadReplicaSchemaSync(
   }
 
   return { statements, skipped }
+}
+
+function matchesManifestPerVersionTable(catalog: SchemaCatalog): boolean {
+  const columns = (catalog.columns ?? []).filter(column => column.table === MANIFEST_PER_VERSION_TABLE)
+  const constraints = (catalog.constraints ?? []).filter(constraint => constraint.table === MANIFEST_PER_VERSION_TABLE)
+  const indexes = (catalog.indexes ?? []).filter(index => index.table === MANIFEST_PER_VERSION_TABLE)
+
+  return columns.length === Object.keys(MANIFEST_PER_VERSION_COLUMNS).length
+    && columns.every((column) => {
+      const required = MANIFEST_PER_VERSION_COLUMNS[column.name]
+      return required !== undefined
+        && column.type === required.type
+        && column.default === required.default
+        && column.notNull
+        && !column.identity
+        && !column.generated
+    })
+    && constraints.length === Object.keys(MANIFEST_PER_VERSION_CONSTRAINTS).length
+    && constraints.every((constraint) => {
+      const required = MANIFEST_PER_VERSION_CONSTRAINTS[constraint.name]
+      return required !== undefined
+        && constraint.type === required.type
+        && constraint.definition === required.definition
+        && constraint.valid !== false
+    })
+    && indexes.length === 1
+    && indexes[0]?.name === 'manifest_per_version_pkey'
+    && indexes[0].definition === 'CREATE UNIQUE INDEX manifest_per_version_pkey ON public.manifest_per_version USING btree (version_id)'
+    && indexes[0].valid
+    && indexes[0].constraintOwned === true
 }
 
 export const planReadReplicaAdditiveSchemaSync = planReadReplicaSchemaSync

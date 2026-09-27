@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { createManifestSizeReceipt } from '../supabase/functions/_backend/utils/manifest_size_receipt.ts'
 import {
+  API_SECRET,
   APIKEY_TEST_ALL,
   executeSQL,
   fetchTestRequest,
   getEndpointUrl,
   getSupabaseClient,
+  MANIFEST_SIZE_RECEIPT_SECRET,
   ORG_ID,
   resetAndSeedAppData,
   resetAppData,
@@ -16,12 +19,12 @@ const id = randomUUID()
 const APP_ID = `com.demo.set-manifest.${id}`
 const BUNDLE_NAME = `1.0.0-set-manifest-${id.slice(0, 8)}`
 
-async function createUploadVersion(storageProvider: 'r2-direct' | 'r2' = 'r2-direct') {
+async function createUploadVersion(storageProvider: 'r2-direct' | 'r2' = 'r2-direct', name = BUNDLE_NAME) {
   const { data, error } = await getSupabaseClient()
     .from('app_versions')
     .insert({
       app_id: APP_ID,
-      name: BUNDLE_NAME,
+      name,
       checksum: randomUUID().replaceAll('-', ''),
       owner_org: ORG_ID,
       user_id: USER_ID,
@@ -37,7 +40,7 @@ async function createUploadVersion(storageProvider: 'r2-direct' | 'r2' = 'r2-dir
   return data
 }
 
-function manifestEntries(ownerOrg: string) {
+function manifestEntries(ownerOrg: string): Array<{ file_name: string, s3_path: string, file_hash: string, file_size?: number, file_size_receipt?: string }> {
   const prefix = `orgs/${ownerOrg}/apps/${APP_ID}/delta`
   return [
     {
@@ -98,6 +101,13 @@ describe('[POST] /private/set_manifest', () => {
     expect(rows?.every(row => row.file_size === 0)).toBe(true)
     expect(rows?.map(row => row.file_name)).toEqual(['index.html', 'main.js'])
 
+    const [queued] = await executeSQL<{ count: number }>(
+      `SELECT count(*)::integer AS count FROM pgmq.q_on_manifest_create
+       WHERE message->'payload'->'record'->>'app_version_id' = $1`,
+      [String(version.id)],
+    )
+    expect(queued?.count).toBe(2)
+
     const { data: appVersion } = await getSupabaseClient()
       .from('app_versions')
       .select('manifest, manifest_count')
@@ -121,6 +131,75 @@ describe('[POST] /private/set_manifest', () => {
     const retryJson = await retry.json() as { inserted: number, alreadyPresent: boolean }
     expect(retryJson.alreadyPresent).toBe(true)
     expect(retryJson.inserted).toBe(0)
+  })
+
+  it('stores receipt-verified sizes without queueing R2 lookups', async () => {
+    const name = `${BUNDLE_NAME}-receipts`
+    const version = await createUploadVersion('r2-direct', name)
+    const entries = manifestEntries(version.owner_org)
+    const sizes = [321, 654]
+    const manifest = await Promise.all(entries.map(async (entry, index) => ({
+      ...entry,
+      file_size_receipt: await createManifestSizeReceipt(MANIFEST_SIZE_RECEIPT_SECRET, entry.s3_path, sizes[index]!),
+    })))
+
+    const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
+      method: 'POST',
+      retryUnsafe: true,
+      headers: { 'Content-Type': 'application/json', 'Authorization': APIKEY_TEST_ALL },
+      body: JSON.stringify({ app_id: APP_ID, name, manifest }),
+    })
+
+    expect(response.status).toBe(200)
+    const rows = await executeSQL<{ file_size: number }>(
+      'SELECT file_size FROM public.manifest WHERE app_version_id = $1 ORDER BY file_name',
+      [version.id],
+    )
+    expect(rows.map(row => Number(row.file_size))).toEqual(sizes)
+    const [queued] = await executeSQL<{ count: number }>(
+      `SELECT count(*)::integer AS count FROM pgmq.q_on_manifest_create
+       WHERE message->'payload'->'record'->>'app_version_id' = $1`,
+      [String(version.id)],
+    )
+    expect(queued?.count).toBe(0)
+  })
+
+  it('rejects mixed legacy and receipt manifest entries atomically', async () => {
+    const name = `${BUNDLE_NAME}-mixed-receipts`
+    const version = await createUploadVersion('r2-direct', name)
+    const manifest = manifestEntries(version.owner_org)
+    manifest[0]!.file_size_receipt = await createManifestSizeReceipt(MANIFEST_SIZE_RECEIPT_SECRET, manifest[0]!.s3_path, 321)
+
+    const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
+      method: 'POST',
+      retryUnsafe: true,
+      headers: { 'Content-Type': 'application/json', 'Authorization': APIKEY_TEST_ALL },
+      body: JSON.stringify({ app_id: APP_ID, name, manifest }),
+    })
+
+    expect(response.status).toBe(400)
+    const rows = await executeSQL('SELECT id FROM public.manifest WHERE app_version_id = $1', [version.id])
+    expect(rows).toHaveLength(0)
+  })
+
+  it('rejects receipts signed with the unrelated API secret', async () => {
+    const name = `${BUNDLE_NAME}-api-secret`
+    const version = await createUploadVersion('r2-direct', name)
+    const manifest = await Promise.all(manifestEntries(version.owner_org).map(async entry => ({
+      ...entry,
+      file_size_receipt: await createManifestSizeReceipt(API_SECRET, entry.s3_path, 321),
+    })))
+
+    const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
+      method: 'POST',
+      retryUnsafe: true,
+      headers: { 'Content-Type': 'application/json', 'Authorization': APIKEY_TEST_ALL },
+      body: JSON.stringify({ app_id: APP_ID, name, manifest }),
+    })
+
+    expect(response.status).toBe(400)
+    const rows = await executeSQL('SELECT id FROM public.manifest WHERE app_version_id = $1', [version.id])
+    expect(rows).toHaveLength(0)
   })
 
   it('rejects paths outside the app prefix and blocks r2-direct manifest jsonb writes', async () => {

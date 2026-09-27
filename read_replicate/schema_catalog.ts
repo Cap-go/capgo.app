@@ -9,6 +9,7 @@ export const REPLICA_TABLES = [
   'channels',
   'channel_devices',
   'manifest',
+  'manifest_per_version',
   'notifications',
   'onboarding_demo_data',
 ] as const

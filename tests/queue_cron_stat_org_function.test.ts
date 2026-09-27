@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   ORG_ID_CRON_QUEUE,
   cleanupPostgresClient,
+  executeSQL,
   getCronPlanQueueCountForOrg,
   getLatestCronPlanMessageForOrg,
   getSupabaseClient,
@@ -41,8 +42,7 @@ describe('[Function] queue_cron_stat_org_for_org', () => {
   })
 
   async function expectQueuedForOrg(customerId: string) {
-    // Scope by org so parallel cron tests writing other orgs cannot inflate a global count.
-    const initialCount = await getCronPlanQueueCountForOrg(ORG_ID_CRON_QUEUE)
+    await executeSQL(`DELETE FROM pgmq.q_cron_stat_org WHERE message->'payload'->>'orgId' = $1`, [ORG_ID_CRON_QUEUE])
 
     const { error } = await getSupabaseClient().rpc('queue_cron_stat_org_for_org', {
       org_id: ORG_ID_CRON_QUEUE,
@@ -51,7 +51,7 @@ describe('[Function] queue_cron_stat_org_for_org', () => {
     expect(error).toBeNull()
 
     const finalCount = await getCronPlanQueueCountForOrg(ORG_ID_CRON_QUEUE)
-    expect(finalCount).toBeGreaterThanOrEqual(initialCount + 1)
+    expect(finalCount).toBe(1)
 
     const latestMessage = await getLatestCronPlanMessageForOrg(ORG_ID_CRON_QUEUE)
     expect(latestMessage).toMatchObject({
@@ -60,6 +60,7 @@ describe('[Function] queue_cron_stat_org_for_org', () => {
       payload: {
         orgId: ORG_ID_CRON_QUEUE,
         customerId,
+        statsTargetAt: expect.any(String),
       },
     })
   }
@@ -109,6 +110,23 @@ describe('[Function] queue_cron_stat_org_for_org', () => {
     })
 
     expect(error).toBeNull()
+  })
+
+  it('deduplicates an org that is already queued', async () => {
+    if (!testCustomerId)
+      return
+
+    await executeSQL(`DELETE FROM pgmq.q_cron_stat_org WHERE message->'payload'->>'orgId' = $1`, [ORG_ID_CRON_QUEUE])
+    await getSupabaseClient().rpc('queue_cron_stat_org_for_org', {
+      org_id: ORG_ID_CRON_QUEUE,
+      customer_id: testCustomerId,
+    }).throwOnError()
+    await getSupabaseClient().rpc('queue_cron_stat_org_for_org', {
+      org_id: ORG_ID_CRON_QUEUE,
+      customer_id: testCustomerId,
+    }).throwOnError()
+
+    expect(await getCronPlanQueueCountForOrg(ORG_ID_CRON_QUEUE)).toBe(1)
   })
 
   it('has correct permissions - only service_role can call', async () => {

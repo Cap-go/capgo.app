@@ -210,6 +210,68 @@ export type Database = {
           },
         ]
       }
+      app_onboarding: {
+        Row: {
+          app_id: string
+          queued_refresh_at: string | null
+          refreshed_at: string | null
+        }
+        Insert: {
+          app_id: string
+          queued_refresh_at?: string | null
+          refreshed_at?: string | null
+        }
+        Update: {
+          app_id?: string
+          queued_refresh_at?: string | null
+          refreshed_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "app_onboarding_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: true
+            referencedRelation: "apps"
+            referencedColumns: ["app_id"]
+          },
+        ]
+      }
+      app_stats_refresh_state: {
+        Row: {
+          app_id: string
+          owner_org: string
+          stats_refresh_requested_at: string | null
+          stats_updated_at: string | null
+        }
+        Insert: {
+          app_id: string
+          owner_org: string
+          stats_refresh_requested_at?: string | null
+          stats_updated_at?: string | null
+        }
+        Update: {
+          app_id?: string
+          owner_org?: string
+          stats_refresh_requested_at?: string | null
+          stats_updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "app_stats_refresh_state_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: true
+            referencedRelation: "apps"
+            referencedColumns: ["app_id"]
+          },
+          {
+            foreignKeyName: "app_stats_refresh_state_owner_org_fkey"
+            columns: ["owner_org"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       app_versions: {
         Row: {
           app_id: string
@@ -301,6 +363,13 @@ export type Database = {
             referencedColumns: ["app_id"]
           },
           {
+            foreignKeyName: "app_versions_manifest_size_validated_fkey"
+            columns: ["id"]
+            isOneToOne: true
+            referencedRelation: "manifest_size_validated"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "owner_org_id_fkey"
             columns: ["owner_org"]
             isOneToOne: false
@@ -389,8 +458,6 @@ export type Database = {
           retention: number
           rollout_channel_count: number
           rollout_paused_version_names: string[]
-          stats_refresh_requested_at: string | null
-          stats_updated_at: string | null
           transfer_history: Json[] | null
           updated_at: string | null
           user_id: string | null
@@ -422,8 +489,6 @@ export type Database = {
           retention?: number
           rollout_channel_count?: number
           rollout_paused_version_names?: string[]
-          stats_refresh_requested_at?: string | null
-          stats_updated_at?: string | null
           transfer_history?: Json[] | null
           updated_at?: string | null
           user_id?: string | null
@@ -455,8 +520,6 @@ export type Database = {
           retention?: number
           rollout_channel_count?: number
           rollout_paused_version_names?: string[]
-          stats_refresh_requested_at?: string | null
-          stats_updated_at?: string | null
           transfer_history?: Json[] | null
           updated_at?: string | null
           user_id?: string | null
@@ -2102,6 +2165,29 @@ export type Database = {
           },
         ]
       }
+      manifest_size_validated: {
+        Row: {
+          id: number
+          validated: boolean
+        }
+        Insert: {
+          id: number
+          validated?: boolean
+        }
+        Update: {
+          id?: number
+          validated?: boolean
+        }
+        Relationships: [
+          {
+            foreignKeyName: "manifest_size_validated_id_fkey"
+            columns: ["id"]
+            isOneToOne: true
+            referencedRelation: "app_versions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       notification_app_settings: {
         Row: {
           app_id: string
@@ -2997,8 +3083,10 @@ export type Database = {
           enforce_sso: boolean
           id: string
           metadata_url: string | null
+          metadata_xml: string | null
           org_id: string
           provider_id: string | null
+          role_mapping: Json | null
           status: string
           updated_at: string
         }
@@ -3011,8 +3099,10 @@ export type Database = {
           enforce_sso?: boolean
           id?: string
           metadata_url?: string | null
+          metadata_xml?: string | null
           org_id: string
           provider_id?: string | null
+          role_mapping?: Json | null
           status?: string
           updated_at?: string
         }
@@ -3025,8 +3115,10 @@ export type Database = {
           enforce_sso?: boolean
           id?: string
           metadata_url?: string | null
+          metadata_xml?: string | null
           org_id?: string
           provider_id?: string | null
+          role_mapping?: Json | null
           status?: string
           updated_at?: string
         }
@@ -4198,6 +4290,10 @@ export type Database = {
       }
       delete_user: { Args: never; Returns: undefined }
       dismiss_getting_started: { Args: { p_app_id: string }; Returns: Json }
+      enqueue_app_onboarding_refreshes: {
+        Args: { p_limit?: number }
+        Returns: number
+      }
       exist_app: { Args: { appid: string }; Returns: boolean }
       exist_app_v2: { Args: { appid: string }; Returns: boolean }
       exist_app_versions:
@@ -4276,8 +4372,6 @@ export type Database = {
           retention: number
           rollout_channel_count: number
           rollout_paused_version_names: string[]
-          stats_refresh_requested_at: string | null
-          stats_updated_at: string | null
           transfer_history: Json[] | null
           updated_at: string | null
           user_id: string | null
@@ -4360,6 +4454,14 @@ export type Database = {
               uninstall: number
             }[]
           }
+      get_app_stats_refresh_state: {
+        Args: { p_app_id: string }
+        Returns: {
+          owner_org: string
+          stats_refresh_requested_at: string
+          stats_updated_at: string
+        }[]
+      }
       get_app_versions: {
         Args: { apikey: string; appid: string; name_version: string }
         Returns: number
@@ -4723,6 +4825,7 @@ export type Database = {
               total_percent: number
             }[]
           }
+      get_public_builder_metrics: { Args: never; Returns: Json }
       get_sso_enforcement_by_domain: {
         Args: { p_domain: string }
         Returns: {
@@ -5042,6 +5145,7 @@ export type Database = {
         Args: { p_existing: Json; p_patch: Json }
         Returns: Json
       }
+      new_builder_onboarding_setup_v1: { Args: never; Returns: Json }
       null_migrated_app_version_manifests: {
         Args: {
           batch_size?: number
@@ -5206,6 +5310,7 @@ export type Database = {
       rbac_perm_app_build_native: { Args: never; Returns: string }
       rbac_perm_app_create_channel: { Args: never; Returns: string }
       rbac_perm_app_delete: { Args: never; Returns: string }
+      rbac_perm_app_manage_apikeys: { Args: never; Returns: string }
       rbac_perm_app_manage_devices: { Args: never; Returns: string }
       rbac_perm_app_read: { Args: never; Returns: string }
       rbac_perm_app_read_audit: { Args: never; Returns: string }

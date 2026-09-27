@@ -653,8 +653,10 @@ function isPresentCapacitorConfig(extConfig: ExtConfigPairs | undefined): extCon
   return !!extConfig.path && existsSync(extConfig.path)
 }
 
+export const NO_CAPACITOR_CONFIG_MESSAGE = 'No capacitor config file found, run `cap init` first'
+
 async function getConfigFrom(loader: () => Promise<ExtConfigPairs | undefined>, silent = false): Promise<ExtConfigPairs> {
-  const message = 'No capacitor config file found, run `cap init` first'
+  const message = NO_CAPACITOR_CONFIG_MESSAGE
   try {
     const extConfig = await loader()
     if (!isPresentCapacitorConfig(extConfig)) {
@@ -868,6 +870,11 @@ export function normalizeSupabaseHost(host: string): string {
   const parsed = new URL(host)
   if (!['http:', 'https:'].includes(parsed.protocol))
     throw new Error('Invalid Supabase host protocol')
+  const isLoopback = parsed.hostname === 'localhost'
+    || parsed.hostname === '127.0.0.1'
+    || parsed.hostname === '[::1]'
+  if (parsed.protocol === 'http:' && !isLoopback)
+    throw new Error('Supabase host must use HTTPS (HTTP is only allowed for localhost)')
   if (parsed.username || parsed.password)
     throw new Error('Supabase host must not include credentials')
   if (parsed.search || parsed.hash)
@@ -1025,6 +1032,7 @@ export async function invokeCapgoCliApi<T = any>(
   try {
     const response = await fetch(url, {
       method,
+      redirect: 'error',
       headers: buildCliRequestHeaders({
         'Content-Type': 'application/json',
         // Self-host Edge Functions validate the Supabase anon JWT; Capgo cloud uses the API key.
@@ -1089,7 +1097,8 @@ export async function createSupabaseClient(apikey: string, supaHost?: string, su
     config.supaKey = supaKey
   }
   if (!config.supaHost || !config.supaKey) {
-    log.error(CAPGO_SERVER_CONFIG_MISSING_MESSAGE)
+    if (!silent)
+      log.error(CAPGO_SERVER_CONFIG_MISSING_MESSAGE)
     throw new CliUserError(CAPGO_SERVER_CONFIG_MISSING_MESSAGE, {
       missingSupaHost: !config.supaHost,
       missingSupaKey: !config.supaKey,
@@ -1922,6 +1931,7 @@ export interface VersionManifestEntry {
   file_name: string
   s3_path: string
   file_hash: string
+  file_size_receipt?: string
 }
 
 /**

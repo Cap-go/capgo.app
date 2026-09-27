@@ -1,4 +1,4 @@
-import type { AnalyticsEngineDataset, D1Database, Hyperdrive, KVNamespace, Queue } from '@cloudflare/workers-types'
+import type { AnalyticsEngineDataset, D1Database, Hyperdrive, KVNamespace, Queue, SendEmail } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
 import type { DeviceComparable } from './deviceComparison.ts'
 import type { StatsInsightRawAction, StatsInsightRawDaily, StatsInsightRawDevice, StatsInsightRawSummary, StatsInsightRawVersion } from './statsInsights.ts'
@@ -63,6 +63,7 @@ export type Bindings = {
   NOTIFICATION_EVENTS?: AnalyticsEngineDataset
   CLI_USAGE?: AnalyticsEngineDataset
   NOTIFICATION_QUEUE?: Queue
+  AUTH_EMAIL?: SendEmail
   DB_STOREAPPS: D1Database
   CHANNEL_SELF_STORE?: KVNamespace
   PLUGIN_NOTIFICATION_QUEUE?: KVNamespace
@@ -451,7 +452,7 @@ function convertDataToJsTypes<T>(apiResponse: AnalyticsApiResponse) {
   })
 }
 
-export async function runQueryToCFA<T>(c: Context, query: string) {
+export async function runQueryToCFA<T>(c: Context, query: string, signal?: AbortSignal) {
   const CF_ANALYTICS_TOKEN = getEnv(c, 'CF_ANALYTICS_TOKEN')
   const CF_ACCOUNT_ID = getEnv(c, 'CF_ACCOUNT_ANALYTICS_ID')
 
@@ -474,6 +475,7 @@ export async function runQueryToCFA<T>(c: Context, query: string) {
       method: 'POST',
       headers,
       body: query,
+      signal,
     })
 
     if (!response.ok) {

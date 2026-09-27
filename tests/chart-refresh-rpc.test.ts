@@ -63,7 +63,7 @@ async function countStatsRefreshAuditLogs(): Promise<number> {
 
 async function getAppRefreshState(appId: string) {
   const { data, error } = await getSupabaseClient()
-    .from('apps')
+    .from('app_stats_refresh_state')
     .select('stats_refresh_requested_at,stats_updated_at')
     .eq('app_id', appId)
     .single()
@@ -139,7 +139,7 @@ describe('chart refresh RPCs', () => {
       stats_refresh_requested_at: null,
       stats_updated_at: null,
     }).eq('id', orgId).throwOnError()
-    await getSupabaseClient().from('apps').update({
+    await getSupabaseClient().from('app_stats_refresh_state').update({
       stats_refresh_requested_at: null,
       stats_updated_at: null,
     }).in('app_id', [staleAppId, freshAppId]).throwOnError()
@@ -158,9 +158,15 @@ describe('chart refresh RPCs', () => {
   })
 
   it('queue_cron_stat_app_for_app only stamps refresh_requested_at when it enqueues work', async () => {
-    await getSupabaseClient().from('apps').update({
+    await getSupabaseClient().from('app_stats_refresh_state').update({
       stats_updated_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
     }).eq('app_id', staleAppId).throwOnError()
+
+    const { data: appBefore } = await getSupabaseClient()
+      .from('apps')
+      .select('updated_at')
+      .eq('app_id', staleAppId)
+      .single()
 
     await getSupabaseClient().rpc('queue_cron_stat_app_for_app', {
       p_app_id: staleAppId,
@@ -171,7 +177,14 @@ describe('chart refresh RPCs', () => {
     expect(queuedState?.stats_refresh_requested_at).toBeTruthy()
     expect(await countCronStatAppMessages(staleAppId)).toBe(1)
 
-    await getSupabaseClient().from('apps').update({
+    const { data: appAfter } = await getSupabaseClient()
+      .from('apps')
+      .select('updated_at')
+      .eq('app_id', staleAppId)
+      .single()
+    expect(appAfter?.updated_at).toBe(appBefore?.updated_at)
+
+    await getSupabaseClient().from('app_stats_refresh_state').update({
       stats_refresh_requested_at: null,
       stats_updated_at: new Date().toISOString(),
     }).eq('app_id', freshAppId).throwOnError()
@@ -186,8 +199,22 @@ describe('chart refresh RPCs', () => {
     expect(await countCronStatAppMessages(freshAppId)).toBe(0)
   })
 
+  it('only returns app refresh state to users who can read the app', async () => {
+    const { data: authorizedState, error: authorizedError } = await authorizedClient
+      .rpc('get_app_stats_refresh_state', { p_app_id: staleAppId })
+      .single()
+    expect(authorizedError).toBeNull()
+    expect(authorizedState?.owner_org).toBe(orgId)
+
+    const { data: unauthorizedState, error: unauthorizedError } = await unauthorizedClient
+      .rpc('get_app_stats_refresh_state', { p_app_id: staleAppId })
+      .maybeSingle()
+    expect(unauthorizedError).toBeNull()
+    expect(unauthorizedState).toBeNull()
+  })
+
   it('request_app_chart_refresh queues once when stale and rejects users without access', async () => {
-    await getSupabaseClient().from('apps').update({
+    await getSupabaseClient().from('app_stats_refresh_state').update({
       stats_updated_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
     }).eq('app_id', staleAppId).throwOnError()
 
@@ -220,10 +247,10 @@ describe('chart refresh RPCs', () => {
   })
 
   it('request_org_chart_refresh stamps org refresh state and only queues stale apps', async () => {
-    await getSupabaseClient().from('apps').update({
+    await getSupabaseClient().from('app_stats_refresh_state').update({
       stats_updated_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
     }).eq('app_id', staleAppId).throwOnError()
-    await getSupabaseClient().from('apps').update({
+    await getSupabaseClient().from('app_stats_refresh_state').update({
       stats_updated_at: new Date().toISOString(),
     }).eq('app_id', freshAppId).throwOnError()
 
@@ -261,7 +288,7 @@ describe('chart refresh RPCs', () => {
     await getSupabaseClient().from('orgs').update({
       stats_refresh_requested_at: inProgressRequestedAt,
     }).eq('id', orgId).throwOnError()
-    await getSupabaseClient().from('apps').update({
+    await getSupabaseClient().from('app_stats_refresh_state').update({
       stats_refresh_requested_at: inProgressRequestedAt,
       stats_updated_at: new Date().toISOString(),
     }).in('app_id', [staleAppId, freshAppId]).throwOnError()

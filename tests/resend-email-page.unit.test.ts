@@ -261,7 +261,37 @@ describe('progressive email verification', () => {
     expect(button(container, messages['email-otp-send-code']).disabled).toBe(false)
     expect(container.querySelector('input[autocomplete="one-time-code"]')).toBeNull()
     await sendOtp(container)
-    expect(mocks.sendEmailOtpVerification).toHaveBeenCalledWith(expect.anything(), 'confirmation-test@example.com', '')
+    expect(mocks.sendEmailOtpVerification).toHaveBeenCalledWith(expect.anything(), 'confirmation-test@example.com', '', undefined)
+  })
+
+  it('marks OTP requests from account deletion with the deletion purpose', async () => {
+    mocks.route.query = { reason: 'email_not_verified', return_to: '/delete_account' }
+    mocks.getSession.mockResolvedValue({ data: { session: { user: { id: 'test-user', email: 'confirmation-test@example.com' } } } })
+    const container = await mountPage()
+    await sendOtp(container)
+    expect(mocks.sendEmailOtpVerification).toHaveBeenCalledWith(
+      expect.anything(),
+      'confirmation-test@example.com',
+      'test-captcha-token',
+      'delete_account',
+    )
+  })
+
+  it('marks account-settings deletion requests without changing the return destination', async () => {
+    mocks.route.query = { reason: 'email_not_verified', return_to: '/settings/account', purpose: 'delete_account' }
+    mocks.getSession.mockResolvedValue({ data: { session: { user: { id: 'test-user', email: 'confirmation-test@example.com' } } } })
+    const container = await mountPage()
+    await sendOtp(container)
+    expect(mocks.sendEmailOtpVerification).toHaveBeenCalledWith(
+      expect.anything(),
+      'confirmation-test@example.com',
+      'test-captcha-token',
+      'delete_account',
+    )
+
+    await inputs.get('email_otp')!.input('123456')
+    button(container, messages['validate-email']).click()
+    await vi.waitFor(() => expect(mocks.router.replace).toHaveBeenCalledWith('/settings/account'))
   })
 
   it('requires a fresh CAPTCHA to resend and preserves the previous code when going back', async () => {
@@ -516,7 +546,7 @@ describe('email confirmation CAPTCHA', () => {
 
     await completeCaptcha(container)
     button(container, messages['email-otp-send-code']).click()
-    await vi.waitFor(() => expect(mocks.sendEmailOtpVerification).toHaveBeenCalledWith(expect.anything(), 'confirmation-test@example.com', 'test-captcha-token'))
+    await vi.waitFor(() => expect(mocks.sendEmailOtpVerification).toHaveBeenCalledWith(expect.anything(), 'confirmation-test@example.com', 'test-captcha-token', undefined))
     expect(mocks.resetCaptcha).toHaveBeenCalledOnce()
     await vi.waitFor(() => expect(container.querySelector('input[autocomplete="one-time-code"]')).not.toBeNull())
 

@@ -58,17 +58,36 @@ async function createApiKeyRecord(
   return apiKey
 }
 
-async function assertCanManageApiKeysForOrgsPg(
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+// org.manage_apikeys allows any binding in the org. Without it, app owners
+// (app.manage_apikeys, granted to app_admin) may still issue keys whose
+// bindings are limited to their own apps or channels.
+async function assertCanManageApiKeyBindingsPg(
   c: Parameters<typeof checkPermissionPg>[0],
   drizzle: ReturnType<typeof getDrizzleClient>,
   userId: string,
   apikeyString: string | null,
-  orgIds: string[],
+  bindings: BindingInput[],
 ): Promise<void> {
-  for (const orgId of orgIds) {
-    if (!(await checkPermissionPg(c, 'org.manage_apikeys', { orgId }, drizzle, userId, apikeyString))) {
-      throw quickError(403, 'forbidden_binding', `Forbidden - API key management rights required for org ${orgId}`)
+  const canManageOrg = new Map<string, boolean>()
+  for (const binding of bindings) {
+    const orgId = binding.org_id
+    if (!canManageOrg.has(orgId))
+      canManageOrg.set(orgId, await checkPermissionPg(c, 'org.manage_apikeys', { orgId }, drizzle, userId, apikeyString))
+    if (canManageOrg.get(orgId))
+      continue
+
+    if (binding.scope_type !== 'org' && binding.app_id && UUID_REGEX.test(binding.app_id)) {
+      const app = await drizzle.execute<{ app_id: string }>(sql`
+        SELECT app_id FROM public.apps WHERE id = ${binding.app_id}::uuid AND owner_org = ${orgId}::uuid LIMIT 1
+      `)
+      const appId = app.rows[0]?.app_id
+      if (appId && await checkPermissionPg(c, 'app.manage_apikeys', { orgId, appId }, drizzle, userId, apikeyString))
+        continue
     }
+
+    throw quickError(403, 'forbidden_binding', `Forbidden - API key management rights required for org ${orgId}`)
   }
 }
 
@@ -152,7 +171,7 @@ app.post('/', middlewareAuth(), async (c) => {
       await lockRbacOrgs(txDrizzle, allOrgIds)
 
       const apikeyString = auth.apikey?.key ?? c.get('capgkey') ?? null
-      await assertCanManageApiKeysForOrgsPg(c, txDrizzle, auth.userId, apikeyString, allOrgIds)
+      await assertCanManageApiKeyBindingsPg(c, txDrizzle, auth.userId, apikeyString, resolvedBindings)
       await assertApiKeyManagerCanAssignBindings(c, auth, resolvedBindings, txDrizzle)
       await assertExpirationMatchesOrgPoliciesPg(tx, allOrgIds, expiresAt)
 
