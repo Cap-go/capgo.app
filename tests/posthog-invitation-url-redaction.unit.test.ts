@@ -31,4 +31,17 @@ describe('postHog invitation URL redaction', () => {
     expect(sanitized.properties.entry_path).toBe('/invitation')
     expect(JSON.stringify(sanitized)).not.toContain(secret)
   })
+
+  it.concurrent('removes tokens when the invitation query key is percent encoded', () => {
+    const secret = 'encoded-secret-invitation-token'
+    const sanitized = sanitizePostHogInvitationEvent({
+      event: '$pageview',
+      properties: {
+        $current_url: `https://console.capgo.app/invitation?invite_magic%5Fstring=${secret}&source=email`,
+      },
+    }) as any
+
+    expect(sanitized.properties.$current_url).toBe('https://console.capgo.app/invitation?source=email')
+    expect(JSON.stringify(sanitized)).not.toContain(secret)
+  })
 })

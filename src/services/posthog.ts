@@ -11,18 +11,42 @@ const POSTHOG_URL_PROPERTY_KEYS = [
   'url',
 ]
 
+function isInvitationTokenKey(value: string): boolean {
+  try {
+    return decodeURIComponent(value.replace(/\+/g, ' ')).toLowerCase().includes('invite_magic_string')
+  }
+  catch {
+    return value.toLowerCase().includes('invite_magic_string')
+  }
+}
+
 function removeInvitationToken(value: unknown): unknown {
-  if (typeof value !== 'string' || !value.toLowerCase().includes('invite_magic_string'))
+  if (typeof value !== 'string')
     return value
 
   try {
     const isAbsolute = /^[a-z][a-z\d+.-]*:\/\//i.test(value)
     const url = new URL(value, 'https://redacted.invalid')
-    url.searchParams.delete('invite_magic_string')
+    let removedToken = false
+    for (const key of [...url.searchParams.keys()]) {
+      if (isInvitationTokenKey(key)) {
+        url.searchParams.delete(key)
+        removedToken = true
+      }
+    }
+    if (!removedToken)
+      return value
     return isAbsolute ? url.toString() : `${url.pathname}${url.search}${url.hash}`
   }
   catch {
-    return value.replace(/([?&]invite_magic_string=)[^&#]*/gi, '$1[redacted]')
+    let removedToken = false
+    const sanitized = value.replace(/([?&])([^=&#]+)(?:=[^&#]*)?/g, (match, separator, key) => {
+      if (!isInvitationTokenKey(key))
+        return match
+      removedToken = true
+      return `${separator}${key}=[redacted]`
+    })
+    return removedToken ? sanitized : value
   }
 }
 

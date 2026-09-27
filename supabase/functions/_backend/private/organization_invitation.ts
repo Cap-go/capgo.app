@@ -45,8 +45,11 @@ async function getPendingInvitationCount(c: Parameters<typeof supabaseWithAuth>[
   return data.filter(organization => organization.is_invite).length
 }
 
-async function getPendingMembership(client: AuthenticatedClient, userId: string, orgId: string): Promise<PendingMembership | null> {
-  const { data } = await client
+async function getPendingMembership(client: AuthenticatedClient, userId: string, orgId: string): Promise<{
+  data: PendingMembership | null
+  error: unknown
+}> {
+  const { data, error } = await client
     .from('org_users')
     .select('id')
     .eq('user_id', userId)
@@ -54,7 +57,7 @@ async function getPendingMembership(client: AuthenticatedClient, userId: string,
     .eq('is_invite', true)
     .maybeSingle()
 
-  return data
+  return { data, error }
 }
 
 app.post('/magic-view', async (c) => {
@@ -110,9 +113,10 @@ app.post('/', middlewareAuth, async (c) => {
 
   const action: AuthenticatedAction = validation.data
   const client = supabaseWithAuth(c, auth)
-  const pendingInvitationCount = await getPendingInvitationCount(c, client)
+  const pendingInvitationCountPromise = getPendingInvitationCount(c, client)
 
   if (action.action === 'view') {
+    const pendingInvitationCount = await pendingInvitationCountPromise
     if (!pendingInvitationCount)
       return c.json(BRES)
 
@@ -135,6 +139,7 @@ app.post('/', middlewareAuth, async (c) => {
       .in('org_id', action.org_ids)
       .select('id')
 
+    const pendingInvitationCount = await pendingInvitationCountPromise
     if (error || !deletedInvitations?.length) {
       await captureOrganizationInvitationPosthogEvent(c, {
         accountState: 'already_existed',
@@ -158,12 +163,25 @@ app.post('/', middlewareAuth, async (c) => {
     return c.json(BRES)
   }
 
-  const pendingMembership = await getPendingMembership(client, auth.userId, action.org_id)
-
   if (action.action === 'accept') {
+    const { data: pendingMembership, error: pendingMembershipError } = await getPendingMembership(client, auth.userId, action.org_id)
+    if (pendingMembershipError || !pendingMembership) {
+      const pendingInvitationCount = await pendingInvitationCountPromise
+      await captureOrganizationInvitationPosthogEvent(c, {
+        accountState: 'already_existed',
+        event: 'organization_membership_invitation_failed',
+        failureReason: pendingMembershipError ? 'acceptance_failed' : 'invitation_not_found',
+        flow: 'authenticated_pending_invite',
+        pendingInvitationCount,
+        userId: auth.userId,
+      })
+      return quickError(pendingMembershipError ? 500 : 404, 'failed_to_accept_invitation', 'Failed to accept invitation')
+    }
+
     const { data, error } = await client.rpc('accept_invitation_to_org', {
       org_id: action.org_id,
     })
+    const pendingInvitationCount = await pendingInvitationCountPromise
 
     if (error || data !== 'OK') {
       await captureOrganizationInvitationPosthogEvent(c, {
@@ -181,7 +199,7 @@ app.post('/', middlewareAuth, async (c) => {
       accountState: 'already_existed',
       event: 'organization_membership_invitation_accepted',
       flow: 'authenticated_pending_invite',
-      invitationId: pendingMembership?.id ?? action.org_id,
+      invitationId: pendingMembership.id,
       pendingInvitationCount,
       userId: auth.userId,
     })
@@ -196,6 +214,7 @@ app.post('/', middlewareAuth, async (c) => {
     .eq('is_invite', true)
     .select('id')
 
+  const pendingInvitationCount = await pendingInvitationCountPromise
   if (error || !deletedInvitations?.length) {
     await captureOrganizationInvitationPosthogEvent(c, {
       accountState: 'already_existed',

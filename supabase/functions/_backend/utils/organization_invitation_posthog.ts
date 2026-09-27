@@ -22,15 +22,23 @@ export type OrganizationInvitationFailureReason
     | 'membership_update_failed'
     | 'unknown'
 
-interface OrganizationInvitationPosthogInput {
+interface OrganizationInvitationPosthogBaseInput {
   accountState?: OrganizationInvitationAccountState
-  event: OrganizationInvitationEvent
   failureReason?: OrganizationInvitationFailureReason
   flow: OrganizationInvitationFlow
-  invitationId?: number | string
   pendingInvitationCount?: number
   userId: string
 }
+
+type OrganizationInvitationPosthogInput
+  = | OrganizationInvitationPosthogBaseInput & {
+    event: Extract<OrganizationInvitationEvent, 'organization_membership_invitation_accepted' | 'organization_membership_invitation_declined'>
+    invitationId: number | string
+  }
+  | OrganizationInvitationPosthogBaseInput & {
+    event: Extract<OrganizationInvitationEvent, 'organization_membership_invitation_failed' | 'organization_membership_invitation_viewed'>
+    invitationId?: never
+  }
 
 const ENTRY_PATH_BY_FLOW: Record<OrganizationInvitationFlow, string> = {
   authenticated_pending_invite: '/onboarding/invitation',

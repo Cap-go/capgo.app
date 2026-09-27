@@ -29,7 +29,7 @@ describe('organization invitation PostHog events', () => {
     trackPosthogEventMock.mockResolvedValue(true)
   })
 
-  it.concurrent('builds deterministic, opaque insert ids for successful membership changes', async () => {
+  it('builds deterministic, opaque insert ids for successful membership changes', async () => {
     const input = {
       event: 'organization_membership_invitation_accepted' as const,
       flow: 'new_user_magic_link' as const,
@@ -74,7 +74,7 @@ describe('organization invitation PostHog events', () => {
     expect(JSON.stringify(payload.nonPersonTags)).not.toContain('secret-invitation-token')
   })
 
-  it.concurrent('reduces arbitrary failures to a fixed safe reason', () => {
+  it('reduces arbitrary failures to a fixed safe reason', () => {
     expect(sanitizeOrganizationInvitationFailureReason({ cause: { error: 'SIGN_IN_FAILED' } })).toBe('authentication_failed')
     expect(sanitizeOrganizationInvitationFailureReason('invitee@example.com secret-token', 'acceptance_failed')).toBe('acceptance_failed')
   })

@@ -347,6 +347,7 @@ async function ensureOrgMembership(
 }
 
 app.post('/', async (c) => {
+  let membershipFinalized = false
   let telemetryUserId: string | undefined
   let telemetryInvitationId: number | undefined
 
@@ -433,12 +434,7 @@ app.post('/', async (c) => {
       if (membershipError)
         return membershipError
 
-      // Remove the invite only after the org membership is created successfully.
-      const { error: tmpUserDeleteError } = await supabaseAdmin.from('tmp_users').delete().eq('invite_magic_string', baseBody.magic_invite_string)
-      if (tmpUserDeleteError) {
-        return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation delete tmp_users', { error: tmpUserDeleteError.message })
-      }
-
+      membershipFinalized = true
       await captureOrganizationInvitationPosthogEvent(c, {
         accountState: 'already_existed',
         event: 'organization_membership_invitation_accepted',
@@ -447,6 +443,12 @@ app.post('/', async (c) => {
         pendingInvitationCount: 1,
         userId,
       })
+
+      // Remove the invite only after the org membership is created successfully.
+      const { error: tmpUserDeleteError } = await supabaseAdmin.from('tmp_users').delete().eq('invite_magic_string', baseBody.magic_invite_string)
+      if (tmpUserDeleteError) {
+        return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation delete tmp_users', { error: tmpUserDeleteError.message })
+      }
 
       return c.json({
         access_token: session.session?.access_token,
@@ -512,11 +514,7 @@ app.post('/', async (c) => {
           if (membershipError)
             return membershipError
 
-          const { error: tmpUserDeleteError } = await supabaseAdmin.from('tmp_users').delete().eq('invite_magic_string', body.magic_invite_string)
-          if (tmpUserDeleteError) {
-            return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation delete tmp_users', { error: tmpUserDeleteError.message })
-          }
-
+          membershipFinalized = true
           await captureOrganizationInvitationPosthogEvent(c, {
             accountState: 'already_existed',
             event: 'organization_membership_invitation_accepted',
@@ -525,6 +523,11 @@ app.post('/', async (c) => {
             pendingInvitationCount: 1,
             userId: session.user.id,
           })
+
+          const { error: tmpUserDeleteError } = await supabaseAdmin.from('tmp_users').delete().eq('invite_magic_string', body.magic_invite_string)
+          if (tmpUserDeleteError) {
+            return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation delete tmp_users', { error: tmpUserDeleteError.message })
+          }
 
           return c.json({
             access_token: session.session?.access_token,
@@ -610,12 +613,7 @@ app.post('/', async (c) => {
         await rollbackCreatedUser(c, user.user.id)
         return membershipError
       }
-      // Remove the invite only after the account + org membership are created successfully.
-      const { error: tmpUserDeleteError } = await supabaseAdmin.from('tmp_users').delete().eq('invite_magic_string', body.magic_invite_string)
-      if (tmpUserDeleteError) {
-        return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation delete tmp_users', { error: tmpUserDeleteError.message })
-      }
-
+      membershipFinalized = true
       await captureOrganizationInvitationPosthogEvent(c, {
         accountState: 'created',
         event: 'organization_membership_invitation_accepted',
@@ -625,20 +623,26 @@ app.post('/', async (c) => {
         userId: user.user.id,
       })
 
+      // Remove the invite only after the account + org membership are created successfully.
+      const { error: tmpUserDeleteError } = await supabaseAdmin.from('tmp_users').delete().eq('invite_magic_string', body.magic_invite_string)
+      if (tmpUserDeleteError) {
+        return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation delete tmp_users', { error: tmpUserDeleteError.message })
+      }
+
       return c.json({
         access_token: session.session?.access_token,
         refresh_token: session.session?.refresh_token,
       })
     }
     catch (e) {
-      if (!didRollback) {
+      if (!didRollback && !membershipFinalized) {
         await rollbackCreatedUser(c, user.user.id)
       }
       throw e
     }
   }
   catch (error) {
-    if (telemetryUserId) {
+    if (telemetryUserId && !membershipFinalized) {
       await captureOrganizationInvitationPosthogEvent(c, {
         event: 'organization_membership_invitation_failed',
         failureReason: sanitizeOrganizationInvitationFailureReason(error, 'acceptance_failed'),

@@ -46,6 +46,8 @@ interface ClientOptions {
   acceptResults?: string[]
   deleteError?: Error | null
   deletedInvitationIds?: number[]
+  pendingMembership?: { id: number } | null
+  pendingMembershipError?: Error | null
   pendingInvitationCount?: number
 }
 
@@ -69,7 +71,10 @@ function buildAuthenticatedClient(options: ClientOptions = {}) {
       expect(table).toBe('org_users')
       const selectChain: any = {
         eq: () => selectChain,
-        maybeSingle: async () => ({ data: { id: 71 }, error: null }),
+        maybeSingle: async () => ({
+          data: options.pendingMembership === undefined ? { id: 71 } : options.pendingMembership,
+          error: options.pendingMembershipError ?? null,
+        }),
       }
       const deleteChain: any = {
         eq: () => deleteChain,
@@ -127,6 +132,19 @@ describe('authenticated organization invitation endpoint', () => {
     expect(retry.status).toBe(409)
     expect(captureInvitationEventMock.mock.calls.filter(([, event]) => event.event === 'organization_membership_invitation_accepted')).toHaveLength(1)
     expect(captureInvitationEventMock.mock.calls.filter(([, event]) => event.event === 'organization_membership_invitation_failed')).toHaveLength(1)
+  })
+
+  it('does not run acceptance or emit accepted when no pending membership exists', async () => {
+    const client = buildAuthenticatedClient({ pendingMembership: null })
+    supabaseWithAuthMock.mockReturnValue(client)
+
+    const response = await postAuthenticatedAction({ action: 'accept', org_id: ORG_ID })
+
+    expect(response.status).toBe(404)
+    expect(client.rpc).not.toHaveBeenCalledWith('accept_invitation_to_org', expect.anything())
+    expect(captureInvitationEventMock).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      event: 'organization_membership_invitation_accepted',
+    }))
   })
 
   it('emits failed and never accepted when acceptance is rejected', async () => {

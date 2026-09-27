@@ -176,14 +176,16 @@ async function declineAllInvitations() {
     clearPendingInviteSkip(userId)
 
     const inviteOrgIds = invitations.value.map(invitation => invitation.gid)
-    const { error } = await invokeCapgoApi('private/organization_invitation', {
-      body: {
-        action: 'decline_all',
-        org_ids: inviteOrgIds,
-      },
-    })
-    if (error)
-      throw error
+    for (let offset = 0; offset < inviteOrgIds.length; offset += 100) {
+      const { error } = await invokeCapgoApi('private/organization_invitation', {
+        body: {
+          action: 'decline_all',
+          org_ids: inviteOrgIds.slice(offset, offset + 100),
+        },
+      })
+      if (error)
+        throw error
+    }
 
     await organizationStore.fetchOrganizations()
     invitations.value = getPendingInviteOrganizations()

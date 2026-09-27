@@ -43,6 +43,7 @@ describe('organization invitation client telemetry', () => {
     expect(source).toContain('action: \'accept\'')
     expect(source).toContain('action: \'decline\'')
     expect(source).toContain('action: \'decline_all\'')
+    expect(source).toContain('inviteOrgIds.slice(offset, offset + 100)')
     expect(source).toContain('captureOrganizationInvitationSkipped(userId, invitations.value.length)')
     expect(source).not.toContain('supabase.rpc(\'accept_invitation_to_org\'')
   })

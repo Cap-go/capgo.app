@@ -4,6 +4,7 @@ const {
   captureInvitationEventMock,
   closeClientMock,
   createUserMock,
+  deleteUserMock,
   emptySupabaseMock,
   getPgClientMock,
   signInMock,
@@ -12,6 +13,7 @@ const {
   captureInvitationEventMock: vi.fn(),
   closeClientMock: vi.fn(),
   createUserMock: vi.fn(),
+  deleteUserMock: vi.fn(),
   emptySupabaseMock: vi.fn(),
   getPgClientMock: vi.fn(),
   signInMock: vi.fn(),
@@ -79,13 +81,18 @@ function buildPgPool(existingMembership: boolean) {
   }
 }
 
-function buildAdmin(options: { existingUserId?: string, invitationAvailable?: { value: boolean } }) {
+function buildAdmin(options: {
+  deleteInvitationError?: { message: string } | null
+  existingUserId?: string
+  invitationAvailable?: { value: boolean }
+}) {
   const invitationAvailable = options.invitationAvailable ?? { value: true }
 
   return {
     auth: {
       admin: {
         createUser: createUserMock,
+        deleteUser: deleteUserMock,
       },
     },
     from(table: string) {
@@ -93,8 +100,9 @@ function buildAdmin(options: { existingUserId?: string, invitationAvailable?: { 
         return {
           delete: () => ({
             eq: async () => {
-              invitationAvailable.value = false
-              return { error: null }
+              if (!options.deleteInvitationError)
+                invitationAvailable.value = false
+              return { error: options.deleteInvitationError ?? null }
             },
           }),
           select: () => ({
@@ -203,6 +211,55 @@ describe('magic-link invitation acceptance telemetry', () => {
       accountState: 'already_existed',
       event: 'organization_membership_invitation_accepted',
       userId: EXISTING_USER_ID,
+    }))
+  })
+
+  it('reports accepted rather than failed when cleanup fails after membership finalization', async () => {
+    supabaseAdminMock.mockReturnValue(buildAdmin({
+      deleteInvitationError: { message: 'cleanup failed' },
+      existingUserId: EXISTING_USER_ID,
+    }))
+    getPgClientMock.mockReturnValue(buildPgPool(true))
+    signInMock.mockResolvedValue({
+      data: {
+        session: { access_token: 'access-token', refresh_token: 'refresh-token' },
+        user: { id: EXISTING_USER_ID },
+      },
+      error: null,
+    })
+
+    const response = await acceptRequest()
+
+    expect(response.status).toBe(500)
+    expect(captureInvitationEventMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      event: 'organization_membership_invitation_accepted',
+      invitationId: invitation.id,
+      userId: EXISTING_USER_ID,
+    }))
+    expect(captureInvitationEventMock).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      event: 'organization_membership_invitation_failed',
+    }))
+  })
+
+  it('keeps a newly created membership finalized when invitation cleanup fails', async () => {
+    supabaseAdminMock.mockReturnValue(buildAdmin({
+      deleteInvitationError: { message: 'cleanup failed' },
+    }))
+    getPgClientMock.mockReturnValue(buildPgPool(false))
+    createUserMock.mockResolvedValue({ data: { user: { id: FUTURE_USER_ID } }, error: null })
+
+    const response = await acceptRequest()
+
+    expect(response.status).toBe(500)
+    expect(deleteUserMock).not.toHaveBeenCalled()
+    expect(captureInvitationEventMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      accountState: 'created',
+      event: 'organization_membership_invitation_accepted',
+      invitationId: invitation.id,
+      userId: FUTURE_USER_ID,
+    }))
+    expect(captureInvitationEventMock).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      event: 'organization_membership_invitation_failed',
     }))
   })
 
