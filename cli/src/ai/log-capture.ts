@@ -1,3 +1,4 @@
+import { unlinkSync } from 'node:fs'
 import { appendFile, mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import process from 'node:process'
@@ -176,9 +177,31 @@ export function registerCleanupHandlers(jobId: string, getKeepPromptFile: () => 
     cleanedUp = true
     await cleanupCapturedJobFiles(jobId, { keepAiPromptFile: getKeepPromptFile() })
   }
-  // Signal handlers (SIGINT/SIGTERM) clean up and YIELD — they intentionally
-  // don't call process.exit() so the build command's own SIGINT handler can
-  // still run /build/cancel/:jobId before Node exits naturally.
+  const cleanupSynchronously = (): void => {
+    if (cleanedUp)
+      return
+    cleanedUp = true
+
+    try {
+      unlinkSync(getLogCapturePath(jobId))
+    }
+    catch {
+      // ignore
+    }
+    if (!getKeepPromptFile()) {
+      try {
+        unlinkSync(getAiPromptPath(jobId))
+      }
+      catch {
+        // ignore
+      }
+    }
+  }
+
+  // SIGINT cleans up and yields so the build command's own first-SIGINT
+  // handler can request /build/cancel/:jobId instead of terminating locally.
+  // SIGTERM has no build-specific policy, so it is re-raised after cleanup to
+  // preserve Node's normal signal termination and exit status.
   //
   // uncaughtException IS different: registering ANY handler suppresses Node's
   // default exit-with-code-1 behavior, and continuing after a thrown error
@@ -187,8 +210,22 @@ export function registerCleanupHandlers(jobId: string, getKeepPromptFile: () => 
   const onBeforeExit = () => {
     void cleanup().catch(() => {})
   }
-  const onSignal = () => {
+  const onExit = () => {
+    cleanupSynchronously()
+  }
+  const onSigint = () => {
     void cleanup().catch(() => {})
+  }
+  const onSigterm = () => {
+    void cleanup().catch(() => {}).finally(() => {
+      process.removeListener('SIGTERM', onSigterm)
+      try {
+        process.kill(process.pid, 'SIGTERM')
+      }
+      catch {
+        // The process may already be terminating.
+      }
+    })
   }
   const onUncaught = (err: Error) => {
     void cleanup().catch(() => {}).finally(() => {
@@ -200,17 +237,20 @@ export function registerCleanupHandlers(jobId: string, getKeepPromptFile: () => 
     })
   }
 
-  // `exit` handlers cannot await asynchronous I/O. `beforeExit` keeps the event
-  // loop alive until the ordered write queue drains and cleanup finishes.
+  // `exit` handlers cannot await asynchronous I/O. `beforeExit` drains the
+  // ordered queue during a normal shutdown, while `exit` is a final synchronous
+  // fallback for explicit termination paths.
   process.once('beforeExit', onBeforeExit)
-  process.once('SIGINT', onSignal)
-  process.once('SIGTERM', onSignal)
+  process.once('exit', onExit)
+  process.once('SIGINT', onSigint)
+  process.once('SIGTERM', onSigterm)
   process.once('uncaughtException', onUncaught)
 
   return () => {
     process.removeListener('beforeExit', onBeforeExit)
-    process.removeListener('SIGINT', onSignal)
-    process.removeListener('SIGTERM', onSignal)
+    process.removeListener('exit', onExit)
+    process.removeListener('SIGINT', onSigint)
+    process.removeListener('SIGTERM', onSigterm)
     process.removeListener('uncaughtException', onUncaught)
   }
 }
