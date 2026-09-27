@@ -187,14 +187,37 @@ describe('backend onboarding refresh', () => {
     }
     try {
       const database = getDrizzleClient(pool)
+      const refreshWithAppUpdateCount = async (queuedAt: string) => {
+        let appUpdates = 0
+        const measuredDatabase: Pick<typeof database, 'transaction'> = {
+          transaction: (operation, config) => database.transaction(async (tx) => {
+            const countUpdates = async () => {
+              const { rows } = await tx.execute<{ app_updates: number }>(sql`
+                SELECT COALESCE(n_tup_upd, 0)::int AS app_updates
+                FROM pg_catalog.pg_stat_xact_user_tables
+                WHERE relid = 'public.apps'::regclass
+              `)
+              return rows[0]?.app_updates ?? 0
+            }
+            const before = await countUpdates()
+            const processed = await operation(tx)
+            // Count only updates made by this refresh; xmin identifies which
+            // fixture app received the single update in the mixed batch.
+            appUpdates = await countUpdates() - before
+            return processed
+          }, config),
+        }
+        const processed = await refreshAppOnboardingBatch(measuredDatabase, { appIds: item.ids, queuedAt })
+        return { processed, appUpdates }
+      }
       const firstQueuedAt = new Date(Date.now() - 120_000).toISOString()
-      expect(await refreshAppOnboardingBatch(database, { appIds: item.ids, queuedAt: firstQueuedAt })).toBe(2)
+      expect(await refreshWithAppUpdateCount(firstQueuedAt)).toEqual({ processed: 2, appUpdates: 2 })
       const first = await snapshot()
 
       await pool.query(`INSERT INTO public.devices(app_id,device_id,platform,plugin_version,version_name,install_source,is_prod,is_emulator,updated_at)
         VALUES ($1,$2,'ios','7.0.0','1.0.0','testflight',true,false,now())`, [changedApp, `device-${randomUUID()}`])
       const secondQueuedAt = new Date(Date.now() + 60_000).toISOString()
-      expect(await refreshAppOnboardingBatch(database, { appIds: item.ids, queuedAt: secondQueuedAt })).toBe(2)
+      expect(await refreshWithAppUpdateCount(secondQueuedAt)).toEqual({ processed: 2, appUpdates: 1 })
       const second = await snapshot()
       expect(second.get(changedApp)?.app_xmin).not.toBe(first.get(changedApp)?.app_xmin)
       expect(second.get(changedApp)?.onboarding.features.cli_install.succeeded_at).toBeTruthy()
@@ -207,7 +230,7 @@ describe('backend onboarding refresh', () => {
       }
 
       const thirdQueuedAt = new Date(Date.now() + 120_000).toISOString()
-      expect(await refreshAppOnboardingBatch(database, { appIds: item.ids, queuedAt: thirdQueuedAt })).toBe(2)
+      expect(await refreshWithAppUpdateCount(thirdQueuedAt)).toEqual({ processed: 2, appUpdates: 0 })
       const third = await snapshot()
       for (const appId of item.ids) {
         expect(third.get(appId)?.app_xmin).toBe(second.get(appId)?.app_xmin)
