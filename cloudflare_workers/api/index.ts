@@ -30,6 +30,7 @@ import { app as plans } from '../../supabase/functions/_backend/private/plans.ts
 import { app as publicStats } from '../../supabase/functions/_backend/private/public_stats.ts'
 import { app as replay } from '../../supabase/functions/_backend/private/replay.ts'
 import { app as role_bindings } from '../../supabase/functions/_backend/private/role_bindings.ts'
+// Manifest finalization validates size receipts issued by the files worker.
 import { app as set_manifest } from '../../supabase/functions/_backend/private/set_manifest.ts'
 import { app as set_org_email } from '../../supabase/functions/_backend/private/set_org_email.ts'
 import { app as sso_check_domain } from '../../supabase/functions/_backend/private/sso/check-domain.ts'
