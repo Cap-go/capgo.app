@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { BUILDER_STEP_IDS } from '../src/services/builderOnboardingChecklist.ts'
 import {
   buildGettingStartedSteps,
   getAppOnboardingFeature,
@@ -229,6 +230,45 @@ describe('app onboarding progress ledger', () => {
     ].map(id => [id, { status: 'done' }]))
     expect(shouldShowGettingStartedNav({ setup: { ...setup, steps: { ota: doneSteps } }, features: {} })).toBe(false)
     expect(shouldShowGettingStartedNav({ setup: { todo_list_version: 5 }, features: {} })).toBe(false)
+  })
+
+  it.concurrent('uses incomplete v4 Builder steps from either platform', () => {
+    const doneBuilderSteps = {
+      ios: Object.fromEntries(BUILDER_STEP_IDS.ios.map(id => [id, { status: 'done' }])),
+      android: Object.fromEntries(BUILDER_STEP_IDS.android.map(id => [id, { status: 'done' }])),
+    }
+    const setup = {
+      todo_list_version: 4,
+      builder_todo_list_version: '1',
+      paths: ['builder'],
+      steps: { builder: doneBuilderSteps },
+    }
+
+    expect(shouldShowGettingStartedNav({ setup })).toBe(false)
+    expect(shouldShowGettingStartedNav({
+      setup: {
+        ...setup,
+        steps: { builder: { ...doneBuilderSteps, ios: { ...doneBuilderSteps.ios, prepare_profile: { status: 'pending' } } } },
+      },
+    })).toBe(true)
+    expect(shouldShowGettingStartedNav({
+      setup: {
+        ...setup,
+        steps: { builder: { ...doneBuilderSteps, android: { ...doneBuilderSteps.android, prepare_keystore: { status: 'pending' } } } },
+      },
+    })).toBe(true)
+    expect(shouldShowGettingStartedNav({
+      setup: {
+        ...setup,
+        steps: { builder: { ...doneBuilderSteps, ios: { ...doneBuilderSteps.ios, connect_app_store: { status: 'warning' } } } },
+      },
+    })).toBe(true)
+    expect(shouldShowGettingStartedNav({
+      setup: {
+        ...setup,
+        steps: { builder: { ...doneBuilderSteps, ios: { ...doneBuilderSteps.ios, prepare_profile: { status: 'skipped' } } } },
+      },
+    })).toBe(false)
   })
 
   it.concurrent('keeps feature-based nav visibility for v1 and v2', () => {
