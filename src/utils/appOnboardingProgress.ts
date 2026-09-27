@@ -1,5 +1,6 @@
 import type { Json } from '~/types/supabase.types'
 import { getAppOnboardingStepIds, parseAppOnboarding } from '~/services/appOnboarding'
+import { BUILDER_STEP_IDS, hasSupportedBuilderTodoList, parseBuilderOnboarding } from '~/services/builderOnboardingChecklist'
 
 export const APP_ONBOARDING_FEATURES = ['cli_install', 'ota', 'builder'] as const
 export type AppOnboardingFeatureKey = typeof APP_ONBOARDING_FEATURES[number]
@@ -274,11 +275,25 @@ export function shouldShowGettingStartedNav(onboarding: unknown, extras?: Gettin
 
   const checklist = parseAppOnboarding(onboarding)
   if (checklist.todo_list_version === 3 || checklist.todo_list_version === 4) {
-    return getAppOnboardingStepIds(checklist.todo_list_version, checklist.ota_todo_list_version)
+    const hasPendingOtaStep = getAppOnboardingStepIds(checklist.todo_list_version, checklist.ota_todo_list_version)
       .some((id) => {
         const status = checklist.steps[id]?.status
         return status !== 'done' && status !== 'skipped'
       })
+    if (checklist.todo_list_version === 3)
+      return hasPendingOtaStep
+    if (hasPendingOtaStep)
+      return true
+
+    if (!hasSupportedBuilderTodoList(onboarding))
+      return false
+
+    const builder = parseBuilderOnboarding(onboarding)
+    return (Object.keys(BUILDER_STEP_IDS) as Array<keyof typeof BUILDER_STEP_IDS>)
+      .some(platform => BUILDER_STEP_IDS[platform].some((id) => {
+        const status = builder.steps[platform][id]
+        return status !== 'done' && status !== 'skipped'
+      }))
   }
   if (checklist.todo_list_version !== 1 && checklist.todo_list_version !== 2)
     return false
