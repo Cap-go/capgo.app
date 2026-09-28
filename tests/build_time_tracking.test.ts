@@ -87,7 +87,6 @@ beforeEach(async () => {
       storage_exceeded: false,
       bandwidth_exceeded: false,
       build_time_exceeded: false,
-      plan_calculated_at: null,
     })
     .eq('customer_id', STRIPE_CUSTOMER_ID)
   if (error)

@@ -35,7 +35,8 @@ describe('[POST] /triggers/cron_stat_app', () => {
       UPDATE public.org_stats_refresh_state
       SET stats_updated_at = NULL,
           stats_refresh_requested_at = NULL,
-          manual_refresh_requested_at = NULL
+          manual_refresh_requested_at = NULL,
+          plan_calculated_at = NULL
       WHERE org_id = $1
     `, [ORG_ID_CRON_APP])
     await executeSQL(`DELETE FROM pgmq.q_cron_stat_org WHERE message->'payload'->>'orgId' = $1`, [ORG_ID_CRON_APP])
@@ -140,14 +141,12 @@ describe('[POST] /triggers/cron_stat_app', () => {
   })
 
   it('queues plan processing through the producer after successful app stats', async () => {
-    const supabase = getSupabaseClient()
-
-    // Reset plan_calculated_at to ensure we can detect if it gets queued
-    await supabase
-      .from('stripe_info')
-      .update({ plan_calculated_at: null })
-      .eq('customer_id', STRIPE_CUSTOMER_ID_CRON_APP)
-      .throwOnError()
+    // Reset the org plan timestamp to ensure the producer can be exercised independently.
+    await executeSQL(`
+      UPDATE public.org_stats_refresh_state
+      SET plan_calculated_at = NULL
+      WHERE org_id = $1
+    `, [ORG_ID_CRON_APP])
 
     const response = await fetch(`${BASE_URL}/triggers/cron_stat_app`, {
       method: 'POST',

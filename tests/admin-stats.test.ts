@@ -818,12 +818,17 @@ describe('global stats core snapshots', () => {
             is_above_plan = true,
             is_good_plan = true,
             created_at = $2::timestamptz,
-            plan_calculated_at = $2::timestamptz,
             paid_at = $2::timestamptz,
             canceled_at = NULL,
             subscription_anchor_end = $3::timestamptz
         WHERE customer_id = ANY($1::text[])
       `, [customerIds, beforeSnapshot, afterSnapshot])
+
+      await executeSQL(`
+        UPDATE public.org_stats_refresh_state
+        SET plan_calculated_at = $2::timestamptz
+        WHERE org_id = ANY($1::uuid[])
+      `, [orgIds, beforeSnapshot])
 
       const [grant] = await executeSQL(`
         INSERT INTO public.usage_credit_grants (

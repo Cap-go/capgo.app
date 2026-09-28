@@ -31,17 +31,12 @@ describe('[Integration] cron_stat_app -> cron_stat_org flow', () => {
     }).eq('app_id', appId).throwOnError()
     await executeSQL(`
       UPDATE public.org_stats_refresh_state
-      SET stats_updated_at = NULL, stats_refresh_requested_at = NULL
+      SET stats_updated_at = NULL,
+          stats_refresh_requested_at = NULL,
+          plan_calculated_at = NULL
       WHERE org_id = $1
     `, [ORG_ID_CRON_INTEGRATION])
     await executeSQL(`DELETE FROM pgmq.q_cron_stat_org WHERE message->'payload'->>'orgId' = $1`, [ORG_ID_CRON_INTEGRATION])
-
-    // Reset plan calculated timestamp
-    await supabase
-      .from('stripe_info')
-      .update({ plan_calculated_at: null })
-      .eq('customer_id', STRIPE_CUSTOMER_ID_CRON_INTEGRATION)
-      .throwOnError()
   })
 
   afterAll(async () => {
@@ -68,22 +63,20 @@ describe('[Integration] cron_stat_app -> cron_stat_org flow', () => {
       return
     }
 
-    // Reset plan_calculated_at to null for this customer
-    await supabase
-      .from('stripe_info')
-      .update({ plan_calculated_at: null })
-      .eq('customer_id', orgData.customer_id)
-      .throwOnError()
+    // Reset the plan calculation state for this organization.
+    await executeSQL(`
+      UPDATE public.org_stats_refresh_state
+      SET plan_calculated_at = NULL
+      WHERE org_id = $1
+    `, [ORG_ID_CRON_INTEGRATION])
 
     // Verify initial state - no plan_calculated_at
-    const { data: initialStripeInfo } = await supabase
-      .from('stripe_info')
-      .select('plan_calculated_at')
-      .eq('customer_id', orgData.customer_id)
-      .single()
-      .throwOnError()
-
-    expect(initialStripeInfo?.plan_calculated_at).toBeNull()
+    const [initialOrgState] = await executeSQL<{ plan_calculated_at: string | null }>(`
+      SELECT plan_calculated_at::text AS plan_calculated_at
+      FROM public.org_stats_refresh_state
+      WHERE org_id = $1
+    `, [ORG_ID_CRON_INTEGRATION])
+    expect(initialOrgState?.plan_calculated_at).toBeNull()
 
     // Trigger app aggregation; PostgreSQL produces the org job afterward.
     const statsResponse = await fetch(`${BASE_URL}/triggers/cron_stat_app`, {
@@ -144,27 +137,21 @@ describe('[Integration] cron_stat_app -> cron_stat_org flow', () => {
     expect(planResponse.status).toBe(200)
 
     const [completedOrgState] = await executeSQL<{
+      plan_calculated_at: string
       stats_refresh_requested_at: string
       stats_updated_at: string
     }>(`
-      SELECT stats_refresh_requested_at::text AS stats_refresh_requested_at,
+      SELECT plan_calculated_at::text AS plan_calculated_at,
+             stats_refresh_requested_at::text AS stats_refresh_requested_at,
              stats_updated_at::text AS stats_updated_at
       FROM public.org_stats_refresh_state
       WHERE org_id = $1
     `, [ORG_ID_CRON_INTEGRATION])
     expect(completedOrgState?.stats_updated_at).toBe(completedOrgState?.stats_refresh_requested_at)
 
-    // Verify plan_calculated_at was updated
-    const { data: updatedStripeInfo } = await supabase
-      .from('stripe_info')
-      .select('plan_calculated_at')
-      .eq('customer_id', orgData.customer_id)
-      .single()
-      .throwOnError()
+    expect(completedOrgState?.plan_calculated_at).toBeTruthy()
 
-    expect(updatedStripeInfo?.plan_calculated_at).toBeTruthy()
-
-    const timestamp = updatedStripeInfo?.plan_calculated_at
+    const timestamp = completedOrgState?.plan_calculated_at
     const updatedAtMs = new Date(timestamp!).getTime()
     expect(Number.isNaN(updatedAtMs)).toBe(false)
 
@@ -172,7 +159,7 @@ describe('[Integration] cron_stat_app -> cron_stat_org flow', () => {
     expect(diffMs).toBeLessThan(60_000) // Within last minute
   })
 
-  it('rate limiting prevents duplicate plan processing within 1 hour', async () => {
+  it('queuing does not mark plan calculation complete', async () => {
     const supabase = getSupabaseClient()
 
     // Get the actual customer_id for our test org
@@ -189,13 +176,13 @@ describe('[Integration] cron_stat_app -> cron_stat_org flow', () => {
       return
     }
 
-    // Set plan_calculated_at to 30 minutes ago (within 1 hour)
+    // Preserve an existing completion timestamp while a new job is only queued.
     const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000)
-    await supabase
-      .from('stripe_info')
-      .update({ plan_calculated_at: thirtyMinutesAgo.toISOString() })
-      .eq('customer_id', orgData.customer_id)
-      .throwOnError()
+    await executeSQL(`
+      UPDATE public.org_stats_refresh_state
+      SET plan_calculated_at = $2::timestamptz
+      WHERE org_id = $1
+    `, [ORG_ID_CRON_INTEGRATION, thirtyMinutesAgo.toISOString()])
 
     // Call the queue function directly (simulating what cron_stat_app does)
     const { error } = await supabase.rpc('queue_cron_stat_org_for_org', {
@@ -203,25 +190,24 @@ describe('[Integration] cron_stat_app -> cron_stat_org flow', () => {
       customer_id: orgData.customer_id,
     })
 
-    // Should not error (rate limiting should silently skip)
+    // Enqueuing alone must not claim that calculation completed.
     expect(error).toBeNull()
 
     // The timestamp should remain unchanged (not updated)
-    const { data: stripeInfo } = await supabase
-      .from('stripe_info')
-      .select('plan_calculated_at')
-      .eq('customer_id', orgData.customer_id)
-      .single()
-      .throwOnError()
+    const [orgState] = await executeSQL<{ plan_calculated_at: string }>(`
+      SELECT plan_calculated_at::text AS plan_calculated_at
+      FROM public.org_stats_refresh_state
+      WHERE org_id = $1
+    `, [ORG_ID_CRON_INTEGRATION])
 
-    const actualTimestamp = new Date(stripeInfo?.plan_calculated_at ?? 0).getTime()
+    const actualTimestamp = new Date(orgState?.plan_calculated_at ?? 0).getTime()
     const expectedTimestamp = thirtyMinutesAgo.getTime()
 
     // Should be within 1 second of the original timestamp (accounting for precision)
     expect(Math.abs(actualTimestamp - expectedTimestamp)).toBeLessThan(1000)
   })
 
-  it('allows plan processing after 1 hour has passed', async () => {
+  it('refreshes the org plan timestamp after plan processing', async () => {
     const supabase = getSupabaseClient()
 
     // Get the actual customer_id for our test org
@@ -238,13 +224,13 @@ describe('[Integration] cron_stat_app -> cron_stat_org flow', () => {
       return
     }
 
-    // Set plan_calculated_at to 2 hours ago (outside 1 hour window)
+    // Set plan_calculated_at to an older completed calculation.
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
-    await supabase
-      .from('stripe_info')
-      .update({ plan_calculated_at: twoHoursAgo.toISOString() })
-      .eq('customer_id', orgData.customer_id)
-      .throwOnError()
+    await executeSQL(`
+      UPDATE public.org_stats_refresh_state
+      SET plan_calculated_at = $2::timestamptz
+      WHERE org_id = $1
+    `, [ORG_ID_CRON_INTEGRATION, twoHoursAgo.toISOString()])
 
     // Call the queue function directly
     const { error } = await supabase.rpc('queue_cron_stat_org_for_org', {
@@ -266,15 +252,14 @@ describe('[Integration] cron_stat_app -> cron_stat_org flow', () => {
 
     expect(planResponse.status).toBe(200)
 
-    // Verify plan_calculated_at was updated to recent time
-    const { data: stripeInfo } = await supabase
-      .from('stripe_info')
-      .select('plan_calculated_at')
-      .eq('customer_id', orgData.customer_id)
-      .single()
-      .throwOnError()
+    // Verify plan_calculated_at was updated to recent time.
+    const [orgState] = await executeSQL<{ plan_calculated_at: string }>(`
+      SELECT plan_calculated_at::text AS plan_calculated_at
+      FROM public.org_stats_refresh_state
+      WHERE org_id = $1
+    `, [ORG_ID_CRON_INTEGRATION])
 
-    const timestamp = stripeInfo?.plan_calculated_at
+    const timestamp = orgState?.plan_calculated_at
     const updatedAtMs = new Date(timestamp!).getTime()
     const diffMs = Math.abs(Date.now() - updatedAtMs)
 
