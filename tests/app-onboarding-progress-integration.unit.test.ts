@@ -592,6 +592,62 @@ describe('app onboarding progress analytics integration', () => {
     }
   })
 
+  it('clears the persisted intent when the user explicitly restarts onboarding', async () => {
+    const previousUser = writerMocks.main.user
+    const previousDialogRole = writerMocks.dialog.lastButtonRole
+    const previousAssignments = writerMocks.abTestAssignments
+    const matchMediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+    const currentOnboarding = {
+      abtests: {
+        new_channel: {
+          assigned_at: '2026-09-11T10:00:00.000Z',
+          branch: 'A',
+        },
+      },
+      flow: 'pre_org',
+      intent: 'ota',
+      status: 'in_progress',
+      step: 'organization',
+      updated_at: '2026-09-11T10:01:00.000Z',
+    }
+    writerMocks.dialog.lastButtonRole = 'onboarding-resume-restart'
+    writerMocks.abTestAssignments = currentOnboarding.abtests
+    writerMocks.main.user = {
+      id: 'user-bento-retry',
+      image_url: 'avatar.png',
+      onboarding: currentOnboarding,
+    }
+    writerMocks.replaceUserOnboardingIfUnchanged.mockReset()
+    writerMocks.replaceUserOnboardingIfUnchanged.mockImplementation(async (_userId, _expectedOnboarding, onboarding) => ({
+      data: { ...writerMocks.main.user, onboarding },
+      error: null,
+    }))
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn(() => ({ matches: false })),
+    })
+    const container = document.createElement('div')
+    const app = createApp(AppOnboardingFlow, { onboarding: true, preOrg: true })
+    app.config.warnHandler = () => undefined
+
+    try {
+      app.mount(container)
+      await vi.waitFor(() => expect(writerMocks.replaceUserOnboardingIfUnchanged).toHaveBeenCalled())
+
+      expect(writerMocks.replaceUserOnboardingIfUnchanged.mock.calls[0]?.[2]).not.toHaveProperty('intent')
+    }
+    finally {
+      app.unmount()
+      writerMocks.main.user = previousUser
+      writerMocks.dialog.lastButtonRole = previousDialogRole
+      writerMocks.abTestAssignments = previousAssignments
+      if (matchMediaDescriptor)
+        Object.defineProperty(window, 'matchMedia', matchMediaDescriptor)
+      else
+        Reflect.deleteProperty(window, 'matchMedia')
+    }
+  })
+
   it.concurrent('initializes tracking once the real initial or resumed step is resolved', () => {
     const analyticsImport = sourceBetween(
       'import {\n  createOnboardingDetailsFieldDebouncer,',
