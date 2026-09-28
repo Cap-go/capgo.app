@@ -10,7 +10,7 @@ import { sendOnboardingEvent } from '../src/services/onboardingTracking'
 const writerMocks = vi.hoisted(() => ({
   abTestAssignments: {} as Record<string, unknown>,
   dialog: {
-    lastButtonRole: null,
+    lastButtonRole: null as string | null,
     onDialogDismiss: vi.fn(async () => undefined),
     openDialog: vi.fn(),
   },
@@ -592,6 +592,62 @@ describe('app onboarding progress analytics integration', () => {
     }
   })
 
+  it('clears the persisted intent when the user explicitly restarts onboarding', async () => {
+    const previousUser = writerMocks.main.user
+    const previousDialogRole = writerMocks.dialog.lastButtonRole
+    const previousAssignments = writerMocks.abTestAssignments
+    const matchMediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+    const currentOnboarding = {
+      abtests: {
+        new_channel: {
+          assigned_at: '2026-09-11T10:00:00.000Z',
+          branch: 'A',
+        },
+      },
+      flow: 'pre_org',
+      intent: 'ota',
+      status: 'in_progress',
+      step: 'organization',
+      updated_at: '2026-09-11T10:01:00.000Z',
+    }
+    writerMocks.dialog.lastButtonRole = 'onboarding-resume-restart'
+    writerMocks.abTestAssignments = currentOnboarding.abtests
+    writerMocks.main.user = {
+      id: 'user-bento-retry',
+      image_url: 'avatar.png',
+      onboarding: currentOnboarding,
+    }
+    writerMocks.replaceUserOnboardingIfUnchanged.mockReset()
+    writerMocks.replaceUserOnboardingIfUnchanged.mockImplementation(async (_userId, _expectedOnboarding, onboarding) => ({
+      data: { ...writerMocks.main.user, onboarding },
+      error: null,
+    }))
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn(() => ({ matches: false })),
+    })
+    const container = document.createElement('div')
+    const app = createApp(AppOnboardingFlow, { onboarding: true, preOrg: true })
+    app.config.warnHandler = () => undefined
+
+    try {
+      app.mount(container)
+      await vi.waitFor(() => expect(writerMocks.replaceUserOnboardingIfUnchanged).toHaveBeenCalled())
+
+      expect(writerMocks.replaceUserOnboardingIfUnchanged.mock.calls[0]?.[2]).not.toHaveProperty('intent')
+    }
+    finally {
+      app.unmount()
+      writerMocks.main.user = previousUser
+      writerMocks.dialog.lastButtonRole = previousDialogRole
+      writerMocks.abTestAssignments = previousAssignments
+      if (matchMediaDescriptor)
+        Object.defineProperty(window, 'matchMedia', matchMediaDescriptor)
+      else
+        Reflect.deleteProperty(window, 'matchMedia')
+    }
+  })
+
   it.concurrent('initializes tracking once the real initial or resumed step is resolved', () => {
     const analyticsImport = sourceBetween(
       'import {\n  createOnboardingDetailsFieldDebouncer,',
@@ -629,7 +685,7 @@ describe('app onboarding progress analytics integration', () => {
       'if (await loadResumeApp(saved.app_id))',
       'recordSkippedChannelResumeDialog(saved)',
       'return true',
-      'resetOnboardingForm()',
+      'await resetOnboardingForm()',
       'showWelcomeOnDesktop()',
       'return false',
       'onboardingTelemetry.prepareResumeCandidate({',
@@ -656,7 +712,7 @@ describe('app onboarding progress analytics integration', () => {
     expectSourceOrder(restartBranch, [
       restartCheck,
       'onboardingTelemetry.recordResumeRestarted()',
-      'resetOnboardingForm()',
+      'await resetOnboardingForm()',
       'return false',
     ])
     const continueCheck = `if (dialogStore.lastButtonRole !== 'onboarding-resume-continue')`
@@ -719,6 +775,20 @@ describe('app onboarding progress analytics integration', () => {
     ])
   })
 
+  it.concurrent('clears intent directly inside the reset operation and nowhere else', () => {
+    const reset = sourceBetween('async function resetOnboardingForm()', 'function showWelcomeOnDesktop()')
+    expectSourceOrder(reset, [
+      'selectedIntent.value = null',
+      `await persistOnboardingProgress('in_progress', { clearIntent: true })`,
+    ])
+    expect(reset.match(/persistOnboardingProgress\('in_progress', \{ clearIntent: true \}\)/g)).toHaveLength(2)
+
+    const outsideReset = onboardingSource.replace(reset, '')
+    expect(outsideReset).not.toContain('clearIntent: true')
+    expect(outsideReset).not.toContain('clearIntentOnInitialPersist')
+    expect(sourceBetween('onMounted(async () => {', 'onBeforeUnmount(() => {')).not.toContain('clearIntent')
+  })
+
   it.concurrent('persists telemetry identity metadata with each progress snapshot', () => {
     const snapshot = sourceBetween('function snapshotOnboardingProgress(', 'async function persistOnboardingProgress(')
     expect(snapshot).toContain('const telemetry = onboardingTelemetry.getProgressMetadata()')
@@ -746,13 +816,14 @@ describe('app onboarding progress analytics integration', () => {
     expect(persistenceQueue).not.toContain('writeOnboardingProgress(status)')
     expect(persistenceQueue).not.toContain('initializeProgressTracking')
 
-    const writer = sourceBetween('async function writeOnboardingProgress(', 'function resetOnboardingForm(')
-    expect(writer).toContain(`if (!userId || isHydratingOnboarding.value)\n    return 'skipped'`)
+    const writer = sourceBetween('async function writeOnboardingProgress(', 'async function resetOnboardingForm(')
+    expect(writer).toContain(`if (!userId || (isHydratingOnboarding.value && !options.clearIntent))\n    return 'skipped'`)
     expect(writer).toContain('return serializeUserOnboardingWrite(userId, async () => {')
     expect(writer).toContain('main.authGeneration !== authGeneration')
     expect(writer).toContain('(onboardingFlowDisposed && !options.allowDisposed)')
     expect(writer).toContain('attempt < MAX_USER_ONBOARDING_WRITE_ATTEMPTS')
     expect(writer).toContain(`if (current?.status === 'completed' && status !== 'completed')`)
+    expect(writer).toContain('{ clearIntent: options.clearIntent }')
     expect(writer).toContain('await replaceUserOnboardingIfUnchanged(')
     expectSourceOrder(writer, [
       'const onboardingWithPreferences = preserveAdminDashboardMinimize(',
@@ -804,7 +875,7 @@ describe('app onboarding progress analytics integration', () => {
       'onboardingInitialPersistInFlight = true',
       'onboardingPersistResult = await persistOnboardingProgress()',
       `if (onboardingPersistResult === 'retryable_failure' && !onboardingFlowDisposed)`,
-      'onboardingPersistResult = await persistOnboardingProgress()',
+      `onboardingPersistResult = await persistOnboardingProgress()`,
       'onboardingInitialPersistInFlight = false',
       'if (onboardingFlowDisposed || onboardingProgressPersistence.isAborted())',
       'return',
