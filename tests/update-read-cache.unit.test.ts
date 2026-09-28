@@ -5,6 +5,7 @@ const payload = {
   ownerOrg: 'org-1',
   allowDeviceCustomId: true,
   versionName: '1.2.3',
+  keyId: null as string | null,
 }
 
 const body = {
@@ -31,5 +32,29 @@ describe('update read cache', () => {
 
   it.concurrent('opens Postgres when the native build is not semver', () => {
     expect(canServeUpToDateFromCache({ ...body, version_build: 'unknown' }, payload, false)).toBe(false)
+  })
+
+  it.concurrent('opens Postgres when the device encryption key does not match the bundle', () => {
+    expect(canServeUpToDateFromCache(
+      { ...body, plugin_version: '8.41.0', key_id: 'device-key' },
+      { ...payload, keyId: 'bundle-key' },
+      false,
+    )).toBe(false)
+  })
+
+  it.concurrent('serves an older plugin when the encryption keys differ', () => {
+    expect(canServeUpToDateFromCache(
+      { ...body, plugin_version: '7.40.0', key_id: 'device-key' },
+      { ...payload, keyId: 'bundle-key' },
+      false,
+    )).toBe(true)
+  })
+
+  it.concurrent('serves an up-to-date device when the encryption keys match', () => {
+    expect(canServeUpToDateFromCache(
+      { ...body, key_id: 'same-key' },
+      { ...payload, keyId: 'same-key' },
+      false,
+    )).toBe(true)
   })
 })

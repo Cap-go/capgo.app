@@ -567,26 +567,6 @@ export async function updateWithPG(
     return updateError200(c, 'null_channel_data', 'channel data still null')
   }
 
-  if (
-    !channelOverride
-    && !channelSelfOverride
-    && appOwner.plan_valid
-    && (appOwner.channel_device_count ?? 0) === 0
-    && (appOwner.rollout_channel_count ?? 0) === 0
-    && channelData.version?.name
-    && (isInternalVersionName(channelData.version.name) || !isVersionDeleted(channelData.version))
-  ) {
-    void setUpdateReadCache(c, {
-      appId: app_id,
-      platform,
-      defaultChannel: defaultChannel ?? '',
-    }, {
-      ownerOrg: appOwner.owner_org,
-      allowDeviceCustomId: Boolean(appOwner.allow_device_custom_id),
-      versionName: channelData.version.name,
-    })
-  }
-
   const version = channelOverride?.version ?? channelData.version
   let manifestEntries = (channelOverride?.manifestEntries ?? channelData?.manifestEntries ?? []) as Partial<Database['public']['Tables']['manifest']['Row']>[]
   const updatePackage = resolveChannelUpdatePackage(
@@ -634,6 +614,27 @@ export async function updateWithPG(
     return updateError200(c, 'key_id_mismatch', 'Device encryption key does not match bundle encryption key. The device may have a different public key than the one used to encrypt this bundle.', {
       deviceKeyId: body.key_id,
       bundleKeyId: version.key_id,
+    })
+  }
+
+  if (
+    !channelOverride
+    && !channelSelfOverride
+    && !shouldUseRolloutPath
+    && appOwner.plan_valid
+    && (appOwner.channel_device_count ?? 0) === 0
+    && version?.name
+    && (isInternalVersionName(version.name) || !isVersionDeleted(version))
+  ) {
+    void setUpdateReadCache(c, {
+      appId: app_id,
+      platform,
+      defaultChannel: defaultChannel ?? '',
+    }, {
+      ownerOrg: appOwner.owner_org,
+      allowDeviceCustomId: Boolean(appOwner.allow_device_custom_id),
+      versionName: version.name,
+      keyId: version.key_id ?? null,
     })
   }
 
@@ -938,6 +939,10 @@ export async function update(c: Context, body: AppInfos) {
       defaultChannel: body.defaultChannel ?? '',
     })
     if (cachedRead && canServeUpToDateFromCache(body, cachedRead, hasChannelSelfStoreBinding(c))) {
+      const existingUpdateEnumerationLimit = await isUpdateEnumerationLimited(c)
+      if (existingUpdateEnumerationLimit.limited)
+        return updateEnumerationLimitedResponse(c, existingUpdateEnumerationLimit.resetAt)
+
       const device = makeDevice(body, cachedRead.allowDeviceCustomId)
       await setAppStatus(c, body.app_id, 'cloud', cachedRead.allowDeviceCustomId, appStatus.block_provider_infra_requests)
       await backgroundTask(c, createStatsMau(c, body.device_id, body.app_id, cachedRead.ownerOrg, body.platform, body.version_build))

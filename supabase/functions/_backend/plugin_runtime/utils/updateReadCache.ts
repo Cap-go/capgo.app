@@ -2,9 +2,10 @@ import type { Context } from 'hono'
 import type { AppInfos } from './types.ts'
 import { parse, tryParse } from '@std/semver'
 import { CacheHelper } from './cache.ts'
+import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
 import { backgroundTask, fixSemver, isDeprecatedPluginVersion } from './utils.ts'
 
-const UPDATE_READ_CACHE_PATH = '/.update-read-v1'
+const UPDATE_READ_CACHE_PATH = '/.update-read-v2'
 const UPDATE_READ_CACHE_TTL_SECONDS = 60
 const CHANNEL_SELF_STORE_MIN_V5 = '5.34.0'
 const CHANNEL_SELF_STORE_MIN_V6 = '6.34.0'
@@ -15,6 +16,7 @@ export interface UpdateReadCachePayload {
   ownerOrg: string
   allowDeviceCustomId: boolean
   versionName: string
+  keyId: string | null
 }
 
 export interface UpdateReadCacheKey {
@@ -38,7 +40,7 @@ function buildUpdateReadRequest(c: Context, key: UpdateReadCacheKey) {
 export async function getUpdateReadCache(c: Context, key: UpdateReadCacheKey): Promise<UpdateReadCachePayload | null> {
   const cacheEntry = buildUpdateReadRequest(c, key)
   const payload = await cacheEntry.helper.matchJson<UpdateReadCachePayload>(cacheEntry.request)
-  if (!payload?.ownerOrg || !payload.versionName)
+  if (!payload?.ownerOrg || !payload.versionName || !('keyId' in payload))
     return null
   return payload
 }
@@ -65,7 +67,7 @@ function usesLegacyChannelSelfStore(pluginVersion: string) {
  * Cache TTL is not refreshed on hit, so a channel change shows up within 60s.
  */
 export function canServeUpToDateFromCache(
-  body: Pick<AppInfos, 'app_id' | 'device_id' | 'platform' | 'version_name' | 'version_build' | 'plugin_version'>,
+  body: Pick<AppInfos, 'app_id' | 'device_id' | 'platform' | 'version_name' | 'version_build' | 'plugin_version' | 'key_id'>,
   payload: UpdateReadCachePayload,
   hasChannelSelfStore: boolean,
 ): boolean {
@@ -83,6 +85,15 @@ export function canServeUpToDateFromCache(
   }
   catch {
     return false
+  }
+  if (body.key_id && payload.keyId && body.key_id !== payload.keyId) {
+    try {
+      if (usesCurrentEncryptionKeyIdFormat(parse(body.plugin_version || '0.0.0')))
+        return false
+    }
+    catch {
+      return false
+    }
   }
   return payload.versionName === body.version_name
 }
