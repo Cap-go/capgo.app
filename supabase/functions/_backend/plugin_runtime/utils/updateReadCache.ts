@@ -63,8 +63,10 @@ function usesLegacyChannelSelfStore(pluginVersion: string) {
 
 /**
  * True only for the up-to-date /updates response.
- * Device overrides, rollouts, and a newer channel version still open Postgres.
- * Cache TTL is not refreshed on hit, so a channel change shows up within 60s.
+ * Device overrides, rollouts, and a newer channel version still open Postgres
+ * when they already existed at write time.
+ * Accepted contract: an override or rollout created after the entry was written
+ * is ignored until the 60s TTL. The TTL is not refreshed on hit.
  */
 export function canServeUpToDateFromCache(
   body: Pick<AppInfos, 'app_id' | 'device_id' | 'platform' | 'version_name' | 'version_build' | 'plugin_version' | 'key_id'>,

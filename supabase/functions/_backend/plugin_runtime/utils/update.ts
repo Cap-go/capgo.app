@@ -617,6 +617,8 @@ export async function updateWithPG(
     })
   }
 
+  // Do not write while an override or rollout is already active.
+  // A change created after this write shows up within the 60s TTL.
   if (
     !channelOverride
     && !channelSelfOverride
@@ -938,6 +940,8 @@ export async function update(c: Context, body: AppInfos) {
       platform: body.platform,
       defaultChannel: body.defaultChannel ?? '',
     })
+    // Accepted 60s contract: overrides and rollouts added after the write are
+    // picked up when the entry expires. The TTL is not refreshed on a hit.
     if (cachedRead && canServeUpToDateFromCache(body, cachedRead, hasChannelSelfStoreBinding(c))) {
       const existingUpdateEnumerationLimit = await isUpdateEnumerationLimited(c)
       if (existingUpdateEnumerationLimit.limited)
