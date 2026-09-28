@@ -4,6 +4,7 @@ import type { AppOwnerPostgresResult, PlanAction } from './pg.ts'
 import type { DeviceWithoutCreatedAt, StatsMetadata } from './types.ts'
 import { getAppStatus, setAppStatus } from './appStatus.ts'
 import { lookupAppOwnerPostgres } from './pg.ts'
+import { cloudlog } from './logging.ts'
 import { onPremStats } from './plugin_stats.ts'
 import { getOnPremiseRetryAfterSeconds } from './rateLimitInfo.ts'
 
@@ -64,8 +65,14 @@ export async function tryHealCachedOnpremAppOwner(
     return { kind: 'unchanged' }
 
   const lookup = await lookupAppOwnerPostgres(c, appId, drizzleClient, planActions)
-  if (lookup.status === 'error')
+  if (lookup.status === 'error') {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'plugin_onprem_heal_upstream_unavailable',
+      appId,
+    })
     return { kind: 'upstream' }
+  }
   if (lookup.status === 'found' && lookup.owner.plan_valid) {
     await setAppStatus(
       c,
@@ -74,6 +81,12 @@ export async function tryHealCachedOnpremAppOwner(
       lookup.owner.allow_device_custom_id,
       lookup.owner.block_provider_infra_requests,
     )
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'plugin_onprem_heal_reclassified_cloud',
+      appId,
+      ownerOrg: lookup.owner.owner_org,
+    })
     return { kind: 'healed', owner: lookup.owner }
   }
   if (lookup.status === 'found' && !lookup.owner.plan_valid) {
@@ -84,9 +97,21 @@ export async function tryHealCachedOnpremAppOwner(
       lookup.owner.allow_device_custom_id,
       lookup.owner.block_provider_infra_requests,
     )
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'plugin_onprem_heal_reclassified_cancelled',
+      appId,
+      ownerOrg: lookup.owner.owner_org,
+    })
     return { kind: 'cancelled', owner: lookup.owner }
   }
 
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'plugin_onprem_heal_still_external',
+    appId,
+    lookupStatus: lookup.status,
+  })
   const resetAt = typeof cachedAppStatus.onprem_retry_reset_at === 'number'
     && cachedAppStatus.onprem_retry_reset_at > Date.now()
     ? cachedAppStatus.onprem_retry_reset_at

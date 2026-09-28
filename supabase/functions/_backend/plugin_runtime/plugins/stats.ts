@@ -102,6 +102,8 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     if (heal.kind === 'upstream')
       return { success: false, response: pluginAppLookupUnavailableResponse(c) }
     if (heal.kind === 'external_onprem') {
+      const device = makeDevice(body, cachedAppStatus.allow_device_custom_id)
+      await onPremStats(c, app_id, action, device, metadata, heal.resetAt)
       return { success: true, isOnprem: true, onpremResetAt: heal.resetAt }
     }
     if (heal.kind === 'cancelled') {

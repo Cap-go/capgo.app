@@ -97,4 +97,45 @@ describe('plugin on-prem misclassification guards', () => {
       expect.anything(),
     )
   })
+
+  it('reclassifies sticky onprem to cancelled when replica finds app but plan is invalid', async () => {
+    lookupAppOwnerPostgresMock.mockResolvedValue({
+      status: 'found',
+      owner: {
+        owner_org: 'org-1',
+        plan_valid: false,
+        channel_device_count: 0,
+        manifest_bundle_count: 0,
+        rollout_channel_count: 0,
+        rollout_paused_version_names: [],
+        expose_metadata: false,
+        allow_device_custom_id: true,
+        block_provider_infra_requests: false,
+        orgs: { created_by: 'user-1', id: 'org-1', management_email: 'owner@example.com' },
+      },
+    })
+
+    const { tryHealCachedOnpremAppOwner } = await import('../supabase/functions/_backend/plugin_runtime/utils/plugin_app_classification.ts')
+    const result = await tryHealCachedOnpremAppOwner(
+      { get: () => undefined, req: { raw: { cf: {} } } } as any,
+      'com.dopaminquest.app',
+      {} as any,
+      ['mau', 'bandwidth'],
+      {
+        status: 'onprem',
+        allow_device_custom_id: true,
+        block_provider_infra_requests: false,
+        cacheHit: true,
+      },
+    )
+
+    expect(result.kind).toBe('cancelled')
+    expect(setAppStatusMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'com.dopaminquest.app',
+      'cancelled',
+      true,
+      false,
+    )
+  })
 })

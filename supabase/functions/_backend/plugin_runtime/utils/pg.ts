@@ -1140,6 +1140,30 @@ export type AppOwnerLookupResult
     | { status: 'not_found' }
     | { status: 'error' }
 
+function logPluginAppOwnerLookupOutcome(
+  c: Context,
+  appId: string,
+  planActions: PlanAction[],
+  outcome: AppOwnerLookupResult,
+  details: Record<string, unknown> = {},
+) {
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'plugin_app_owner_lookup',
+    appId,
+    planActions,
+    lookupStatus: outcome.status,
+    databaseSource: c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? 'unknown',
+    ...(outcome.status === 'found'
+      ? {
+          ownerOrg: outcome.owner.owner_org,
+          planValid: outcome.owner.plan_valid,
+        }
+      : {}),
+    ...details,
+  })
+}
+
 export async function lookupAppOwnerPostgres(
   c: Context,
   appId: string,
@@ -1147,8 +1171,29 @@ export async function lookupAppOwnerPostgres(
   actions: PlanAction[] = [],
 ): Promise<AppOwnerLookupResult> {
   try {
-    if (actions.length === 0)
-      return { status: 'not_found' }
+    if (actions.length === 0) {
+      const outcome = { status: 'not_found' as const }
+      logPluginAppOwnerLookupOutcome(c, appId, actions, outcome, { reason: 'empty_plan_actions' })
+      return outcome
+    }
+
+    const appShell = await drizzleClient
+      .select({
+        owner_org: schema.apps.owner_org,
+        allow_device_custom_id: schema.apps.allow_device_custom_id,
+        block_provider_infra_requests: schema.apps.block_provider_infra_requests,
+      })
+      .from(schema.apps)
+      .where(eq(schema.apps.app_id, appId))
+      .limit(1)
+      .then(data => data[0])
+
+    if (!appShell) {
+      const outcome = { status: 'not_found' as const }
+      logPluginAppOwnerLookupOutcome(c, appId, actions, outcome, { reason: 'apps_row_missing_on_replica' })
+      return outcome
+    }
+
     const orgAlias = alias(schema.orgs, 'orgs')
     const planExpression = buildPlanValidationExpression(actions, schema.apps.owner_org)
 
@@ -1175,8 +1220,14 @@ export async function lookupAppOwnerPostgres(
       .limit(1)
       .then(data => data[0])
 
-    if (!appOwner)
-      return { status: 'not_found' }
+    if (!appOwner) {
+      const outcome = { status: 'not_found' as const }
+      logPluginAppOwnerLookupOutcome(c, appId, actions, outcome, {
+        reason: 'apps_row_missing_after_plan_join',
+        ownerOrg: appShell.owner_org,
+      })
+      return outcome
+    }
 
     if (!appOwner.orgs?.id || !appOwner.orgs.created_by || !appOwner.orgs.management_email) {
       cloudlog({
@@ -1185,8 +1236,8 @@ export async function lookupAppOwnerPostgres(
         appId,
         ownerOrg: appOwner.owner_org,
       })
-      return {
-        status: 'found',
+      const outcome = {
+        status: 'found' as const,
         owner: {
           ...appOwner,
           orgs: {
@@ -1196,16 +1247,30 @@ export async function lookupAppOwnerPostgres(
           },
         },
       }
+      logPluginAppOwnerLookupOutcome(c, appId, actions, outcome, { orgJoinPartial: true })
+      return outcome
     }
 
-    return { status: 'found', owner: appOwner as AppOwnerPostgresResult }
+    const outcome = { status: 'found' as const, owner: appOwner as AppOwnerPostgresResult }
+    if (!appOwner.plan_valid) {
+      logPluginAppOwnerLookupOutcome(c, appId, actions, outcome, {
+        planInvalidOnReplica: true,
+        hint: 'sticky_onprem_or_cancelled_cache_may_still_return_on_premise_app_until_healed',
+      })
+    }
+    else {
+      logPluginAppOwnerLookupOutcome(c, appId, actions, outcome)
+    }
+    return outcome
   }
   catch (e: unknown) {
-    logPgError(c, 'getAppOwnerPostgres', e, {
+    logPgError(c, 'lookupAppOwnerPostgres', e, {
       appId,
       planActions: actions,
     })
-    return { status: 'error' }
+    const outcome = { status: 'error' as const }
+    logPluginAppOwnerLookupOutcome(c, appId, actions, outcome, { reason: 'postgres_exception' })
+    return outcome
   }
 }
 
