@@ -685,7 +685,7 @@ describe('app onboarding progress analytics integration', () => {
       'if (await loadResumeApp(saved.app_id))',
       'recordSkippedChannelResumeDialog(saved)',
       'return true',
-      'resetOnboardingForm()',
+      'await resetOnboardingForm()',
       'showWelcomeOnDesktop()',
       'return false',
       'onboardingTelemetry.prepareResumeCandidate({',
@@ -712,7 +712,7 @@ describe('app onboarding progress analytics integration', () => {
     expectSourceOrder(restartBranch, [
       restartCheck,
       'onboardingTelemetry.recordResumeRestarted()',
-      'resetOnboardingForm()',
+      'await resetOnboardingForm()',
       'return false',
     ])
     const continueCheck = `if (dialogStore.lastButtonRole !== 'onboarding-resume-continue')`
@@ -762,18 +762,31 @@ describe('app onboarding progress analytics integration', () => {
     expect(mountedFlow).toContain('resumedFlow = resumed')
     expect(mountedFlow).not.toContain('.viewStep(')
     expect(mountedFlow.match(/initializeProgressTracking\(resumedFlow\)/g)).toHaveLength(1)
-    expect(mountedFlow.match(/persistOnboardingProgress\('in_progress', initialPersistOptions\)/g)).toHaveLength(2)
+    expect(mountedFlow.match(/persistOnboardingProgress\(\)/g)).toHaveLength(2)
     const finallyBlock = mountedFlow.slice(mountedFlow.indexOf('finally {'))
     expect(finallyBlock).toContain('initializeProgressTracking(resumedFlow)')
     expectSourceOrder(mountedFlow, [
       'resumedFlow = resumeResult',
       'finally {',
       'isHydratingOnboarding.value = false',
-      'const initialPersistOptions: OnboardingPersistOptions = clearIntentOnInitialPersist ? { clearIntent: true } : {}',
-      `await persistOnboardingProgress('in_progress', initialPersistOptions)`,
+      'await persistOnboardingProgress()',
       'isLoading.value = false',
       'initializeProgressTracking(resumedFlow)',
     ])
+  })
+
+  it.concurrent('clears intent directly inside the reset operation and nowhere else', () => {
+    const reset = sourceBetween('async function resetOnboardingForm()', 'function showWelcomeOnDesktop()')
+    expectSourceOrder(reset, [
+      'selectedIntent.value = null',
+      `await persistOnboardingProgress('in_progress', { clearIntent: true })`,
+    ])
+    expect(reset.match(/persistOnboardingProgress\('in_progress', \{ clearIntent: true \}\)/g)).toHaveLength(2)
+
+    const outsideReset = onboardingSource.replace(reset, '')
+    expect(outsideReset).not.toContain('clearIntent: true')
+    expect(outsideReset).not.toContain('clearIntentOnInitialPersist')
+    expect(sourceBetween('onMounted(async () => {', 'onBeforeUnmount(() => {')).not.toContain('clearIntent')
   })
 
   it.concurrent('persists telemetry identity metadata with each progress snapshot', () => {
@@ -803,8 +816,8 @@ describe('app onboarding progress analytics integration', () => {
     expect(persistenceQueue).not.toContain('writeOnboardingProgress(status)')
     expect(persistenceQueue).not.toContain('initializeProgressTracking')
 
-    const writer = sourceBetween('async function writeOnboardingProgress(', 'function resetOnboardingForm(')
-    expect(writer).toContain(`if (!userId || isHydratingOnboarding.value)\n    return 'skipped'`)
+    const writer = sourceBetween('async function writeOnboardingProgress(', 'async function resetOnboardingForm(')
+    expect(writer).toContain(`if (!userId || (isHydratingOnboarding.value && !options.clearIntent))\n    return 'skipped'`)
     expect(writer).toContain('return serializeUserOnboardingWrite(userId, async () => {')
     expect(writer).toContain('main.authGeneration !== authGeneration')
     expect(writer).toContain('(onboardingFlowDisposed && !options.allowDisposed)')
@@ -854,16 +867,15 @@ describe('app onboarding progress analytics integration', () => {
     expect(persistenceGuardStart).toBeGreaterThan(mountedFlow.indexOf('isHydratingOnboarding.value = false'))
     expect(persistenceGuardEnd).toBeGreaterThan(persistenceGuardStart)
     const initialPersistence = mountedFlow.slice(persistenceGuardStart, persistenceGuardEnd)
-    expect(initialPersistence.match(/persistOnboardingProgress\('in_progress', initialPersistOptions\)/g)).toHaveLength(2)
+    expect(initialPersistence.match(/persistOnboardingProgress\(\)/g)).toHaveLength(2)
     expect(mountedFlow).toContain('function finishOnboardingMount()')
     expectSourceOrder(mountedFlow, [
       `let onboardingPersistResult: OnboardingPersistResult = 'skipped'`,
       persistenceGuard,
       'onboardingInitialPersistInFlight = true',
-      'const initialPersistOptions: OnboardingPersistOptions = clearIntentOnInitialPersist ? { clearIntent: true } : {}',
-      `onboardingPersistResult = await persistOnboardingProgress('in_progress', initialPersistOptions)`,
+      'onboardingPersistResult = await persistOnboardingProgress()',
       `if (onboardingPersistResult === 'retryable_failure' && !onboardingFlowDisposed)`,
-      `onboardingPersistResult = await persistOnboardingProgress('in_progress', initialPersistOptions)`,
+      `onboardingPersistResult = await persistOnboardingProgress()`,
       'onboardingInitialPersistInFlight = false',
       'if (onboardingFlowDisposed || onboardingProgressPersistence.isAborted())',
       'return',

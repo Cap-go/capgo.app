@@ -626,7 +626,6 @@ let persistFieldsQueuedAt: number | undefined
 let pendingDashboardExplored = false
 let onboardingFlowDisposed = false
 let onboardingInitialPersistInFlight = false
-let clearIntentOnInitialPersist = false
 const onboardingProgressPersistence = createOnboardingProgressPersistence({
   write: writeOnboardingProgress,
   onError: error => console.error('Failed to persist onboarding progress', error),
@@ -823,7 +822,7 @@ async function writeOnboardingProgress(
   options: OnboardingPersistOptions,
 ) {
   const userId = onboardingUserId.value
-  if (!userId || isHydratingOnboarding.value)
+  if (!userId || (isHydratingOnboarding.value && !options.clearIntent))
     return 'skipped'
 
   const authGeneration = main.authGeneration
@@ -832,7 +831,7 @@ async function writeOnboardingProgress(
       (onboardingFlowDisposed && !options.allowDisposed)
       || onboardingUserId.value !== userId
       || main.authGeneration !== authGeneration
-      || isHydratingOnboarding.value
+      || (isHydratingOnboarding.value && !options.clearIntent)
     ) {
       return 'skipped'
     }
@@ -913,7 +912,7 @@ async function writeOnboardingProgress(
   })
 }
 
-function resetOnboardingForm() {
+async function resetOnboardingForm() {
   flowStep.value = props.preOrg ? 'intent' : 'details'
   finalOnboardingStep.value = props.preOrg ? 'setup' : 'install'
   appDetailsStep.value = 'name'
@@ -942,6 +941,9 @@ function resetOnboardingForm() {
   localIconPreview.value = ''
   iconStoreUrl.value = ''
   resetStoreImportState()
+  const resetPersistResult = await persistOnboardingProgress('in_progress', { clearIntent: true })
+  if (resetPersistResult === 'retryable_failure' && !onboardingFlowDisposed)
+    await persistOnboardingProgress('in_progress', { clearIntent: true })
 }
 
 function showWelcomeOnDesktop() {
@@ -1072,7 +1074,7 @@ async function maybeResumeSavedOnboarding() {
       recordSkippedChannelResumeDialog(saved)
       return true
     }
-    resetOnboardingForm()
+    await resetOnboardingForm()
     if (props.preOrg)
       applyDefaultPreOrgDetails()
     showWelcomeOnDesktop()
@@ -1102,8 +1104,7 @@ async function maybeResumeSavedOnboarding() {
 
   if (dialogStore.lastButtonRole === 'onboarding-resume-restart') {
     onboardingTelemetry.recordResumeRestarted()
-    clearIntentOnInitialPersist = true
-    resetOnboardingForm()
+    await resetOnboardingForm()
     existingApp.value = true
     existingAppSetup.value = 'manual'
     showWelcomeOnDesktop()
@@ -1117,7 +1118,7 @@ async function maybeResumeSavedOnboarding() {
   applyOnboardingProgress(saved)
   if (flowStep.value === 'channel' || flowStep.value === 'setup' || flowStep.value === 'install') {
     if (!saved.app_id || !await loadResumeApp(saved.app_id)) {
-      resetOnboardingForm()
+      await resetOnboardingForm()
       return false
     }
   }
@@ -2679,10 +2680,9 @@ onMounted(async () => {
     let onboardingPersistResult: OnboardingPersistResult = 'skipped'
     if (!onboardingFlowDisposed && !onboardingProgressPersistence.isAborted()) {
       onboardingInitialPersistInFlight = true
-      const initialPersistOptions: OnboardingPersistOptions = clearIntentOnInitialPersist ? { clearIntent: true } : {}
-      onboardingPersistResult = await persistOnboardingProgress('in_progress', initialPersistOptions)
+      onboardingPersistResult = await persistOnboardingProgress()
       if (onboardingPersistResult === 'retryable_failure' && !onboardingFlowDisposed)
-        onboardingPersistResult = await persistOnboardingProgress('in_progress', initialPersistOptions)
+        onboardingPersistResult = await persistOnboardingProgress()
       onboardingInitialPersistInFlight = false
     }
     function finishOnboardingMount() {
