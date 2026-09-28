@@ -34,6 +34,7 @@ const { app } = await import('../supabase/functions/_backend/private/organizatio
 const USER_ID = '550e8400-e29b-41d4-a716-446655440000'
 const FUTURE_USER_ID = '1311385a-996f-4a0c-a758-75377255692a'
 const ORG_ID = 'f8c34640-4478-46c8-87f5-bcc7548d1355'
+const OTHER_ORG_ID = '2a46c8fd-e122-43ef-8ac6-743f4d2d1dc2'
 const ORG_OWNER_ID = 'b9f76c28-2d51-43e2-81da-19d648dd49b9'
 const SIGNED_LOGO_URL = 'https://example.supabase.co/storage/v1/object/sign/images/org-logo.png?token=signed'
 const INVITATION_DATA = {
@@ -113,7 +114,9 @@ describe('magic-link invitation lookup endpoint', () => {
     createSignedImageUrlMock.mockImplementation(async (_context, rawLogo: string, scope?: { orgId?: string, userId?: string }) => {
       if (rawLogo.startsWith('https://'))
         return rawLogo
-      return scope ? SIGNED_LOGO_URL : null
+      const belongsToOrganization = scope?.orgId && rawLogo.startsWith(`org/${scope.orgId}/logo/`)
+      const belongsToUser = scope?.userId && rawLogo.startsWith(`${scope.userId}/`)
+      return belongsToOrganization || belongsToUser ? SIGNED_LOGO_URL : null
     })
   })
 
@@ -169,6 +172,26 @@ describe('magic-link invitation lookup endpoint', () => {
     expect(createSignedImageUrlMock).toHaveBeenCalledWith(
       expect.anything(),
       legacyLogoPath,
+      { orgId: ORG_ID, userId: ORG_OWNER_ID },
+    )
+  })
+
+  it('does not sign a logo storage key belonging to another organization', async () => {
+    const outOfScopeLogoPath = `org/${OTHER_ORG_ID}/logo/organization-logo.png`
+    supabaseAdminMock.mockReturnValue(buildAdminClient({
+      invitationData: {
+        ...INVITATION_DATA,
+        org_logo: outOfScopeLogoPath,
+      },
+    }))
+
+    const response = await postMagicLookup()
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ org_logo: '' })
+    expect(createSignedImageUrlMock).toHaveBeenCalledWith(
+      expect.anything(),
+      outOfScopeLogoPath,
       { orgId: ORG_ID, userId: ORG_OWNER_ID },
     )
   })
