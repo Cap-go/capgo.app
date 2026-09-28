@@ -649,6 +649,7 @@ export async function checkPlanStatusOnly(c: Context, orgId: string, drizzleClie
     }
     catch (error) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'calculatePlanStatus failed', orgId, error })
+      throw error
     }
     if (planStatus) {
       const { is_good_plan, percentUsage } = planStatus

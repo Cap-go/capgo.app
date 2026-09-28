@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest'
 const {
   cloudlogErrMock,
   cloudlogMock,
+  getPlanUsageAndFitUncachedMock,
+  getPlanUsagePercentMock,
   isGoodPlanOrgMock,
   isOnboardedOrgMock,
   isOnboardingNeededMock,
@@ -14,6 +16,8 @@ const {
 } = vi.hoisted(() => ({
   cloudlogErrMock: vi.fn(),
   cloudlogMock: vi.fn(),
+  getPlanUsageAndFitUncachedMock: vi.fn(),
+  getPlanUsagePercentMock: vi.fn(),
   isGoodPlanOrgMock: vi.fn(async () => false),
   isOnboardedOrgMock: vi.fn(async (_c: unknown, orgId: string) => !orgId.includes('onboarding')),
   isOnboardingNeededMock: vi.fn(async (_c: unknown, orgId: string) => orgId.includes('onboarding')),
@@ -45,8 +49,8 @@ vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   getCurrentPlanNameOrg: vi.fn(),
   getPlanUsageAndFit: vi.fn(),
-  getPlanUsageAndFitUncached: vi.fn(),
-  getPlanUsagePercent: vi.fn(),
+  getPlanUsageAndFitUncached: getPlanUsageAndFitUncachedMock,
+  getPlanUsagePercent: getPlanUsagePercentMock,
   getTotalStats: vi.fn(),
   isGoodPlanOrg: isGoodPlanOrgMock,
   isOnboardedOrg: isOnboardedOrgMock,
@@ -279,5 +283,44 @@ describe('handleOrgNotificationsAndEvents onboarding reminder', () => {
         },
       }),
     )
+  })
+})
+
+describe('checkPlanStatusOnly failures', () => {
+  it('rethrows when both fresh and fallback plan calculation fail', async () => {
+    const calculationError = new Error('plan calculation failed')
+    getPlanUsageAndFitUncachedMock.mockRejectedValueOnce(new Error('fresh plan calculation failed'))
+    getPlanUsagePercentMock.mockRejectedValueOnce(calculationError)
+    supabaseAdminMock.mockReturnValueOnce({
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({
+          eq: vi.fn(() => ({
+            maybeSingle: vi.fn(async () => ({
+              data: {
+                customer_id: 'cus_plan_calculation_failure',
+                has_usage_credits: false,
+                name: 'Plan Calculation Failure',
+                onboarding: null,
+                stripe_info: null,
+                website: null,
+              },
+              error: null,
+            })),
+          })),
+        })),
+      })),
+    })
+
+    const { checkPlanStatusOnly } = await import('../supabase/functions/_backend/utils/plans.ts')
+    const drizzleClient = { execute: vi.fn() }
+
+    await expect(checkPlanStatusOnly(createContext(), 'org-plan-calculation-failure', drizzleClient as any))
+      .rejects.toBe(calculationError)
+    expect(drizzleClient.execute).not.toHaveBeenCalled()
+    expect(cloudlogErrMock).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'calculatePlanStatus failed',
+      orgId: 'org-plan-calculation-failure',
+      error: calculationError,
+    }))
   })
 })
