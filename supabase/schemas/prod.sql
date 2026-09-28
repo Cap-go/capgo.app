@@ -12414,7 +12414,8 @@ BEGIN
 
   UPDATE public.org_stats_refresh_state state
   SET stats_updated_at = GREATEST(COALESCE(state.stats_updated_at, v_target_at), v_target_at),
-      stats_refresh_requested_at = GREATEST(COALESCE(state.stats_refresh_requested_at, v_target_at), v_target_at)
+      stats_refresh_requested_at = GREATEST(COALESCE(state.stats_refresh_requested_at, v_target_at), v_target_at),
+      plan_calculated_at = pg_catalog.clock_timestamp()
   WHERE state.org_id = p_org_id;
 
   RETURN v_target_at;
@@ -22891,7 +22892,8 @@ CREATE TABLE IF NOT EXISTS "public"."org_stats_refresh_state" (
     "org_id" "uuid" NOT NULL,
     "stats_updated_at" timestamp without time zone,
     "stats_refresh_requested_at" timestamp without time zone,
-    "manual_refresh_requested_at" timestamp without time zone
+    "manual_refresh_requested_at" timestamp without time zone,
+    "plan_calculated_at" timestamp with time zone
 );
 
 
@@ -22903,6 +22905,10 @@ COMMENT ON TABLE "public"."org_stats_refresh_state" IS 'Primary-only watermark f
 
 
 COMMENT ON COLUMN "public"."org_stats_refresh_state"."manual_refresh_requested_at" IS 'User-visible start time for a manual dashboard refresh. This is separate from stats_refresh_requested_at, which is the org-job coordinator target.';
+
+
+
+COMMENT ON COLUMN "public"."org_stats_refresh_state"."plan_calculated_at" IS 'Time when the organization plan state was last calculated successfully.';
 
 
 
@@ -23324,6 +23330,10 @@ ALTER TABLE ONLY "public"."stripe_info" REPLICA IDENTITY FULL;
 
 
 ALTER TABLE "public"."stripe_info" OWNER TO "postgres";
+
+
+COMMENT ON COLUMN "public"."stripe_info"."plan_calculated_at" IS 'Deprecated compatibility column. Current plan calculation state is stored on org_stats_refresh_state.';
+
 
 
 COMMENT ON COLUMN "public"."stripe_info"."build_time_exceeded" IS 'Organization exceeded build time limit';
