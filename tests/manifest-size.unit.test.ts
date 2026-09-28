@@ -162,7 +162,9 @@ describe('manifest download size helpers', () => {
     const lookup = buildManifestSizeLookupQuery('com.example.app', undefined, undefined, files)
 
     expect(lookup).not.toBeNull()
-    expect(lookup?.text).toContain('av.id = r.version_id')
+    expect(lookup?.text).toContain('allowed_versions')
+    expect(lookup?.text).toContain('WHERE id = ids.version_id')
+    expect(lookup?.text).toContain('OFFSET 0')
     expect(lookup?.text).toContain('m.app_version_id = av.id')
     expect(lookup?.text).toContain('m.file_hash = r.file_hash')
     expect(lookup?.text).toContain('SELECT DISTINCT file_hash, version_id')
@@ -182,7 +184,8 @@ describe('manifest download size helpers', () => {
     ])
 
     const byId = buildManifestSizeLookupQuery('com.example.app', '1.2.3', 7, files)
-    expect(byId?.text).toContain('av.id = $3')
+    expect(byId?.text).toContain('WHERE id = $3')
+    expect(byId?.text).toContain('OFFSET 0')
     expect(byId?.text).not.toContain('av.name = $3')
     expect(byId?.values).toEqual([expect.any(String), 'com.example.app', 7])
 
