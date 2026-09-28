@@ -11,6 +11,8 @@ interface AppStatusCachePayload {
   status: AppStatus
   allow_device_custom_id: boolean
   block_provider_infra_requests: boolean
+  /** Absolute ms epoch for on-prem 429 Retry-After; preserved across retries. */
+  onprem_retry_reset_at?: number
 }
 
 export interface AppStatusResult {
@@ -18,6 +20,7 @@ export interface AppStatusResult {
   allow_device_custom_id: boolean
   block_provider_infra_requests: boolean
   cacheHit: boolean
+  onprem_retry_reset_at?: number
 }
 
 function buildAppStatusRequest(c: Context, appId: string) {
@@ -42,12 +45,14 @@ export async function getAppStatus(c: Context, appId: string): Promise<AppStatus
     }
   }
   const blockProviderInfraRequests = payload.block_provider_infra_requests ?? false
+  const onpremRetryResetAt = payload.onprem_retry_reset_at
   if (payload.status === 'cancelled' && !isStripeConfigured(c)) {
     return {
       status: 'cloud',
       allow_device_custom_id: payload.allow_device_custom_id,
       block_provider_infra_requests: blockProviderInfraRequests,
       cacheHit: true,
+      onprem_retry_reset_at: onpremRetryResetAt,
     }
   }
   return {
@@ -55,6 +60,7 @@ export async function getAppStatus(c: Context, appId: string): Promise<AppStatus
     allow_device_custom_id: payload.allow_device_custom_id,
     block_provider_infra_requests: blockProviderInfraRequests,
     cacheHit: true,
+    onprem_retry_reset_at: onpremRetryResetAt,
   }
 }
 
@@ -64,6 +70,7 @@ export function setAppStatus(
   status: AppStatus,
   allowDeviceCustomId: boolean,
   blockProviderInfraRequests = false,
+  onpremRetryResetAt?: number,
 ) {
   return backgroundTask(c, (async () => {
     const cacheEntry = buildAppStatusRequest(c, appId)
@@ -72,6 +79,8 @@ export function setAppStatus(
       allow_device_custom_id: allowDeviceCustomId,
       block_provider_infra_requests: blockProviderInfraRequests,
     }
+    if (status === 'onprem' && typeof onpremRetryResetAt === 'number' && Number.isFinite(onpremRetryResetAt))
+      payload.onprem_retry_reset_at = onpremRetryResetAt
     await cacheEntry.helper.putJson(cacheEntry.request, payload, APP_STATUS_CACHE_TTL_SECONDS)
   })())
 }

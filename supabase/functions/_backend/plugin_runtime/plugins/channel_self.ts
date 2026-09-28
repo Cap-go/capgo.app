@@ -15,12 +15,17 @@ import { invalidIpInfo } from '../utils/invalids_ip.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { sendNotifOrgCached } from '../utils/notifications.ts'
 import { sendNotifToOrgMembersCached } from '../utils/org_email_notifications.ts'
-import { closeClient, deleteChannelDevicePg, getAppByIdPg, getAppOwnerPostgres, getChannelByIdPg, getChannelByNamePg, getChannelDeviceOverridePg, getChannelsPg, getCompatibleChannelsPg, getDrizzleClient, getMainChannelsPg, getPgClient, setReplicationLagHeader, upsertChannelDevicePg } from '../utils/pg.ts'
+import { closeClient, deleteChannelDevicePg, getAppOwnerPostgres, getChannelByIdPg, getChannelByNamePg, getChannelDeviceOverridePg, getChannelsPg, getCompatibleChannelsPg, getDrizzleClient, getMainChannelsPg, getPgClient, lookupAppOwnerPostgres, setReplicationLagHeader, upsertChannelDevicePg } from '../utils/pg.ts'
 import { convertQueryToBody, makeDevice, parsePluginBody } from '../utils/plugin_parser.ts'
 import { sendStatsAndDevice } from '../utils/plugin_stats.ts'
 import { channelSelfGetRequestSchema, channelSelfRequestSchema, isDevicePlatform } from '../utils/plugin_validation.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
 import { buildRateLimitInfo, onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
+import {
+  pluginAppLookupUnavailableResponse,
+  respondPluginExternalAppOnprem,
+  tryHealCachedOnpremAppOwner,
+} from '../utils/plugin_app_classification.ts'
 import { logSkippedSupabaseWrite, shouldSkipChannelSelfPostgresFallback } from '../utils/supabase_write_guard.ts'
 import { backgroundTask, isDeprecatedPluginVersion, isLimited } from '../utils/utils.ts'
 
@@ -106,6 +111,10 @@ type AppOwnerResult = Awaited<ReturnType<typeof getAppOwnerPostgres>>
 type AppStatusResult = Awaited<ReturnType<typeof getAppStatus>>
 type ChannelSelfOverrideResult = Awaited<ReturnType<typeof getChannelDeviceOverridePg>>
 type ChannelSelfDeviceOperation = 'set' | 'get' | 'delete'
+type ChannelSelfCachedStatusResult =
+  | Response
+  | { healedOwner: NonNullable<AppOwnerResult> }
+  | null
 
 async function assertChannelSelfCachedStatus(
   c: Context,
@@ -113,15 +122,32 @@ async function assertChannelSelfCachedStatus(
   appId: string,
   device: ReturnType<typeof makeDevice>,
   operationLabel: string,
-) {
+  drizzleClient?: ReturnType<typeof getDrizzleClient>,
+  planActions: Array<'mau'> = PLAN_MAU_ACTIONS,
+): Promise<ChannelSelfCachedStatusResult> {
+  if (cachedAppStatus.status === 'onprem' && drizzleClient) {
+    const heal = await tryHealCachedOnpremAppOwner(c, appId, drizzleClient, planActions, cachedAppStatus)
+    if (heal.kind === 'upstream')
+      return pluginAppLookupUnavailableResponse(c)
+    if (heal.kind === 'external_onprem') {
+      cloudlog({ requestId: c.get('requestId'), message: `Channel_self cache hit (${operationLabel}), app marked onprem`, app_id: appId })
+      return respondPluginExternalAppOnprem(c, appId, 'get', device, undefined, cachedAppStatus)
+    }
+    if (heal.kind === 'healed')
+      return { healedOwner: heal.owner }
+    if (heal.kind === 'cancelled') {
+      cachedAppStatus.status = 'cancelled'
+    }
+  }
   if (cachedAppStatus.status === 'onprem') {
     cloudlog({ requestId: c.get('requestId'), message: `Channel_self cache hit (${operationLabel}), app marked onprem`, app_id: appId })
-    return onPremiseAppResponse(c)
+    return onPremiseAppResponse(c, cachedAppStatus.onprem_retry_reset_at)
   }
   if (cachedAppStatus.status === 'cancelled') {
     await sendStatsAndDevice(c, device, [{ action: 'needPlanUpgrade' }])
     return onPremiseAppResponse(c)
   }
+  return null
 }
 
 async function assertChannelSelfAppOwnerPlanValid(
@@ -134,14 +160,28 @@ async function assertChannelSelfAppOwnerPlanValid(
   cachedBlockProviderInfraRequests: boolean,
   deviceId?: string,
 ): Promise<{ response: Response } | { appOwner: NonNullable<AppOwnerResult> }> {
-  if (!appOwner) {
+  const lookup = appOwner
+    ? { status: 'found' as const, owner: appOwner }
+    : await lookupAppOwnerPostgres(c, appId, drizzleClient, PLAN_MAU_ACTIONS)
+
+  if (lookup.status === 'error')
+    return { response: pluginAppLookupUnavailableResponse(c) }
+
+  if (lookup.status === 'not_found') {
     cloudlog({ requestId: c.get('requestId'), message: `On-premise app detected in channel_self ${operationLabel}, returning 429`, app_id: appId })
-    await setAppStatus(c, appId, 'onprem', true, cachedBlockProviderInfraRequests)
-    return { response: onPremiseAppResponse(c) }
+    return {
+      response: await respondPluginExternalAppOnprem(c, appId, 'get', device, undefined, {
+        status: null,
+        allow_device_custom_id: true,
+        block_provider_infra_requests: cachedBlockProviderInfraRequests,
+        cacheHit: false,
+      }),
+    }
   }
 
-  if (!appOwner.plan_valid) {
-    await setAppStatus(c, appId, 'cancelled', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests)
+  const resolvedOwner = lookup.owner
+  if (!resolvedOwner.plan_valid) {
+    await setAppStatus(c, appId, 'cancelled', resolvedOwner.allow_device_custom_id, resolvedOwner.block_provider_infra_requests)
     cloudlog({ requestId: c.get('requestId'), message: 'Cannot update, upgrade plan to continue to update', id: appId })
     await sendStatsAndDevice(c, device, [{ action: 'needPlanUpgrade' }])
 
@@ -153,18 +193,18 @@ async function assertChannelSelfAppOwnerPlanValid(
       c,
       'org:missing_payment',
       payload,
-      appOwner.owner_org,
+      resolvedOwner.owner_org,
       appId,
       '0 0 * * 1',
-      appOwner.orgs.management_email,
+      resolvedOwner.orgs.management_email,
       drizzleClient,
     )) // Weekly on Monday
 
     return { response: onPremiseAppResponse(c) }
   }
 
-  await setAppStatus(c, appId, 'cloud', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests)
-  return { appOwner }
+  await setAppStatus(c, appId, 'cloud', resolvedOwner.allow_device_custom_id, resolvedOwner.block_provider_infra_requests)
+  return { appOwner: resolvedOwner }
 }
 
 function isChannelSelfLocalChannelStorageVersion(c: Context, body: DeviceLink, operationLabel: string) {
@@ -264,12 +304,13 @@ async function prepareChannelSelfDeviceRequest(
   cachedAppStatus: AppStatusResult,
 ): Promise<{ response: Response } | { appOwner: NonNullable<AppOwnerResult>, device: ReturnType<typeof makeDevice> }> {
   const { app_id, device_id } = body
-  const cachedLimit = await assertChannelSelfCachedStatus(c, cachedAppStatus, app_id, makeDevice(body, cachedAppStatus.allow_device_custom_id), operationLabel.toLowerCase())
-  if (cachedLimit) {
+  const cachedLimit = await assertChannelSelfCachedStatus(c, cachedAppStatus, app_id, makeDevice(body, cachedAppStatus.allow_device_custom_id), operationLabel.toLowerCase(), drizzleClient as ReturnType<typeof getDrizzleClient>)
+  if (cachedLimit instanceof Response) {
     return { response: cachedLimit }
   }
 
-  const appOwner = await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
+  const appOwner = cachedLimit?.healedOwner
+    ?? await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
   const device = makeDevice(body, appOwner?.allow_device_custom_id)
   const blockProviderInfraRequests = appOwner?.block_provider_infra_requests ?? cachedAppStatus.block_provider_infra_requests
   const blocked = await blockProviderInfrastructure(c, operationLabel, blockProviderInfraRequests)
@@ -558,23 +599,26 @@ async function deleteOverride(c: Context, drizzleClient: ReturnType<typeof getDr
 
 async function listCompatibleChannels(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient>, body: DeviceLink, cachedAppStatus: AppStatusResult): Promise<Response> {
   const { app_id, platform, is_emulator, is_prod } = body
-  const cachedLimit = await assertChannelSelfCachedStatus(c, cachedAppStatus, app_id, makeDevice(body, cachedAppStatus.allow_device_custom_id), 'list')
-  if (cachedLimit) {
+  const cachedLimit = await assertChannelSelfCachedStatus(c, cachedAppStatus, app_id, makeDevice(body, cachedAppStatus.allow_device_custom_id), 'list', drizzleClient as ReturnType<typeof getDrizzleClient>)
+  if (cachedLimit instanceof Response) {
     return cachedLimit
   }
 
-  // First check if app exists - Read operation can use v2 flag
-  const appExists = await getAppByIdPg(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
+  let appOwner: AppOwnerResult = cachedLimit?.healedOwner ?? null
+  if (!appOwner) {
+    const lookup = await lookupAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
+    if (lookup.status === 'error')
+      return pluginAppLookupUnavailableResponse(c)
+    if (lookup.status === 'not_found') {
+      const blocked = await blockProviderInfrastructure(c, 'GET', true)
+      if (blocked)
+        return blocked
 
-  if (!appExists) {
-    const blocked = await blockProviderInfrastructure(c, 'GET', true)
-    if (blocked)
-      return blocked
-
-    // App doesn't exist in database - normalize response to avoid oracle
-    return onPremiseAppResponse(c)
+      // App doesn't exist in database - normalize response to avoid oracle
+      return onPremiseAppResponse(c)
+    }
+    appOwner = lookup.owner
   }
-  const appOwner = await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
   const device = makeDevice(body, appOwner?.allow_device_custom_id)
   const blockProviderInfraRequests = appOwner?.block_provider_infra_requests ?? cachedAppStatus.block_provider_infra_requests
   const blocked = await blockProviderInfrastructure(c, 'GET', blockProviderInfraRequests)

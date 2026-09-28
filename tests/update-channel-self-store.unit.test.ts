@@ -37,6 +37,12 @@ vi.mock('../supabase/functions/_backend/plugin_runtime/utils/org_email_notificat
 vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pg.ts', () => ({
   closeClient: vi.fn(() => Promise.resolve()),
   getAppOwnerPostgres: getAppOwnerPostgresMock,
+  lookupAppOwnerPostgres: vi.fn(async (...args: Parameters<typeof getAppOwnerPostgresMock>) => {
+    const owner = await getAppOwnerPostgresMock(...args)
+    if (!owner)
+      return { status: 'not_found' as const }
+    return { status: 'found' as const, owner }
+  }),
   getDrizzleClient: vi.fn(() => ({})),
   getPgClient: vi.fn(() => Promise.resolve({ client: 'pg' })),
   requestInfosChannelDevicePostgres: requestInfosChannelDevicePostgresMock,

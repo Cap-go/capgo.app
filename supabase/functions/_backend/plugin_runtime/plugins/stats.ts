@@ -9,13 +9,19 @@ import { BRES, simpleError, simpleError200, simpleRateLimit } from '../utils/hon
 import { invalidIpInfo } from '../utils/invalids_ip.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { sendNotifOrgCached } from '../utils/notifications.ts'
-import { closeClient, getAppOwnerPostgres, getAppVersionPostgres, getDrizzleClient, getEffectiveDeviceChannelNamePostgres, getPgClient } from '../utils/pg.ts'
+import type { AppOwnerPostgresResult } from '../utils/pg.ts'
+import { closeClient, getAppVersionPostgres, getDrizzleClient, getEffectiveDeviceChannelNamePostgres, getPgClient, lookupAppOwnerPostgres } from '../utils/pg.ts'
 import { makeDevice, parsePluginBody } from '../utils/plugin_parser.ts'
 import { createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from '../utils/plugin_stats.ts'
 import { statsRequestSchema } from '../utils/plugin_validation.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
 import { backgroundTask, INVALID_STRING_APP_ID, isLimited, MISSING_STRING_APP_ID, reverseDomainRegex } from '../utils/utils.ts'
 import { onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
+import {
+  markPluginAppOnprem,
+  pluginAppLookupUnavailableResponse,
+  tryHealCachedOnpremAppOwner,
+} from '../utils/plugin_app_classification.ts'
 
 const PLAN_ERROR = 'Cannot send stats, upgrade plan to continue to update'
 const DOWNLOAD_FAIL_FIXED_PLUGIN_VERSION = parse('7.17.0')
@@ -58,6 +64,7 @@ interface PostResult {
   error?: string
   message?: string
   isOnprem?: boolean
+  onpremResetAt?: number
   moreInfo?: Record<string, unknown>
 }
 
@@ -87,11 +94,27 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
 
   const planActions: Array<'mau' | 'bandwidth'> = ['mau', 'bandwidth']
   const cachedAppStatus = appStatus ?? await getAppStatus(c, app_id)
-  const cachedStatus = cachedAppStatus.status
+  let cachedStatus = cachedAppStatus.status
+  let appOwner: AppOwnerPostgresResult | null = null
+
   if (cachedStatus === 'onprem') {
-    const device = makeDevice(body, cachedAppStatus.allow_device_custom_id)
-    await onPremStats(c, app_id, action, device, metadata)
-    return { success: true, isOnprem: true }
+    const heal = await tryHealCachedOnpremAppOwner(c, app_id, drizzleClient, planActions, cachedAppStatus)
+    if (heal.kind === 'upstream')
+      return { success: false, response: pluginAppLookupUnavailableResponse(c) }
+    if (heal.kind === 'external_onprem') {
+      const device = makeDevice(body, cachedAppStatus.allow_device_custom_id)
+      await onPremStats(c, app_id, action, device, metadata, heal.resetAt)
+      return { success: true, isOnprem: true, onpremResetAt: heal.resetAt }
+    }
+    if (heal.kind === 'cancelled') {
+      cachedStatus = 'cancelled'
+      cachedAppStatus.status = 'cancelled'
+      appOwner = heal.owner
+    }
+    else if (heal.kind === 'healed') {
+      appOwner = heal.owner
+      cachedStatus = 'cloud'
+    }
   }
 
   if (cachedStatus === 'cancelled') {
@@ -106,19 +129,32 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     await sendStatsAndDevice(c, device, statsActions)
     return { success: false, error: 'need_plan_upgrade', message: PLAN_ERROR }
   }
-  const appOwner = await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, planActions)
-  const allowDeviceCustomId = appOwner?.allow_device_custom_id
+
+  if (!appOwner) {
+    const lookup = await lookupAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, planActions)
+    if (lookup.status === 'error')
+      return { success: false, response: pluginAppLookupUnavailableResponse(c) }
+    if (lookup.status === 'not_found') {
+      const externalDevice = makeDevice(body, cachedAppStatus.allow_device_custom_id)
+      const resetAt = await markPluginAppOnprem(
+        c,
+        app_id,
+        cachedAppStatus.block_provider_infra_requests,
+        cachedAppStatus,
+      )
+      await onPremStats(c, app_id, action, externalDevice, metadata, resetAt)
+      return { success: true, isOnprem: true, onpremResetAt: resetAt }
+    }
+    appOwner = lookup.owner
+  }
+
+  const allowDeviceCustomId = appOwner.allow_device_custom_id
   const device = makeDevice(body, allowDeviceCustomId)
-  const blockProviderInfraRequests = appOwner?.block_provider_infra_requests ?? cachedAppStatus.block_provider_infra_requests
+  const blockProviderInfraRequests = appOwner.block_provider_infra_requests ?? cachedAppStatus.block_provider_infra_requests
   const blocked = await blockProviderInfrastructure(c, blockProviderInfraRequests)
   if (blocked)
     return { success: false, response: blocked }
 
-  if (!appOwner) {
-    await setAppStatus(c, app_id, 'onprem', true, cachedAppStatus.block_provider_infra_requests)
-    await onPremStats(c, app_id, action, device, metadata)
-    return { success: true, isOnprem: true }
-  }
   if (!appOwner.plan_valid) {
     await setAppStatus(c, app_id, 'cancelled', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests)
     cloudlog({ requestId: c.get('requestId'), message: 'Cannot update, upgrade plan to continue to update', id: app_id })
@@ -298,7 +334,7 @@ app.post('/', async (c) => {
         return result.response
       }
       if (result.isOnprem) {
-        return onPremiseAppResponse(c)
+        return onPremiseAppResponse(c, result.onpremResetAt)
       }
       if (result.success) {
         return c.json(BRES)

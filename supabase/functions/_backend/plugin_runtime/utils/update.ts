@@ -19,9 +19,14 @@ import { onPremiseAppResponse } from './rateLimitInfo.ts'
 import { cloudlog } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
 import { sendNotifToOrgMembersCached } from './org_email_notifications.ts'
-import { closeClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDrizzleClient, getPgClient, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
+import { closeClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDrizzleClient, getPgClient, lookupAppOwnerPostgres, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
+import {
+  pluginAppLookupUnavailableResponse,
+  respondPluginExternalAppOnprem,
+  tryHealCachedOnpremAppOwner,
+} from './plugin_app_classification.ts'
 import { makeDevice } from './plugin_parser.ts'
-import { createStatsBandwidth, createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from './plugin_stats.ts'
+import { createStatsBandwidth, createStatsMau, createStatsVersion, sendStatsAndDevice } from './plugin_stats.ts'
 import { getClientIP } from './rate_limit.ts'
 import { s3 } from './s3.ts'
 import { shouldQueuePluginNotifications } from './supabase_write_guard.ts'
@@ -323,15 +328,31 @@ export async function updateWithPG(
   // Request body is already logged with curated fields in plugins/updates.ts.
   // Avoid a second per-request cloudlog on this hot path (HAR CPU inspect).
   const cachedAppStatus = appStatus ?? await getAppStatus(c, app_id)
-  const cachedStatus = cachedAppStatus.status
+  let cachedStatus = cachedAppStatus.status
+  let prefetchedAppOwner: Awaited<ReturnType<typeof getAppOwnerPostgres>> | null = null
+
   if (cachedStatus === 'onprem') {
     const updateEnumerationLimit = await recordUpdateEnumerationMiss(c, app_id)
     if (updateEnumerationLimit.limited)
       return updateEnumerationLimitedResponse(c, updateEnumerationLimit.resetAt)
 
-    const device = makeDevice(body, cachedAppStatus.allow_device_custom_id)
-    return onPremStats(c, app_id, 'get', device)
+    const heal = await tryHealCachedOnpremAppOwner(c, app_id, drizzleClient, PLAN_LIMIT, cachedAppStatus)
+    if (heal.kind === 'upstream')
+      return pluginAppLookupUnavailableResponse(c)
+    if (heal.kind === 'external_onprem') {
+      const device = makeDevice(body, cachedAppStatus.allow_device_custom_id)
+      return respondPluginExternalAppOnprem(c, app_id, 'get', device, undefined, cachedAppStatus)
+    }
+    if (heal.kind === 'cancelled') {
+      cachedStatus = 'cancelled'
+      prefetchedAppOwner = heal.owner
+    }
+    else if (heal.kind === 'healed') {
+      prefetchedAppOwner = heal.owner
+      cachedStatus = 'cloud'
+    }
   }
+
   if (cachedStatus === 'cancelled') {
     const device = makeDevice(body, cachedAppStatus.allow_device_custom_id)
     cloudlog({ requestId: c.get('requestId'), message: 'Cannot update, upgrade plan to continue to update', id: app_id })
@@ -361,10 +382,9 @@ export async function updateWithPG(
   // client when app-status cache already says cloud. Cuts Request Duration by
   // one serial replica RTT on the common path (CF chart != waitUntil).
   // Prefetch failures must never block owner — degrade to serial requestInfos.
-  let appOwner: Awaited<ReturnType<typeof getAppOwnerPostgres>>
+  let appOwner = prefetchedAppOwner
   let prefetchedChannel: Awaited<ReturnType<typeof requestInfosChannelPostgres>> | null = null
   const startOwner = performance.now()
-  const ownerPromise = getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT)
   const channelPrefetchPromise = cachedStatus === 'cloud' && coerce
     ? (async () => {
         try {
@@ -390,19 +410,27 @@ export async function updateWithPG(
         }
       })()
     : Promise.resolve(null)
-  appOwner = await ownerPromise
-  if (pathTiming)
-    pathTiming.ownerMs = Math.round(performance.now() - startOwner)
-  // if version_build is not semver, then make it semver
-  const device = makeDevice(body, appOwner?.allow_device_custom_id)
-  if (!appOwner) {
-    const updateEnumerationLimit = await recordUpdateEnumerationMiss(c, app_id)
-    if (updateEnumerationLimit.limited)
-      return updateEnumerationLimitedResponse(c, updateEnumerationLimit.resetAt)
 
-    await setAppStatus(c, app_id, 'onprem', true, cachedAppStatus.block_provider_infra_requests)
-    return onPremStats(c, app_id, 'get', device)
+  if (!appOwner) {
+    const lookup = await lookupAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT)
+    if (pathTiming)
+      pathTiming.ownerMs = Math.round(performance.now() - startOwner)
+    if (lookup.status === 'error')
+      return pluginAppLookupUnavailableResponse(c)
+    if (lookup.status === 'not_found') {
+      const updateEnumerationLimit = await recordUpdateEnumerationMiss(c, app_id)
+      if (updateEnumerationLimit.limited)
+        return updateEnumerationLimitedResponse(c, updateEnumerationLimit.resetAt)
+      const device = makeDevice(body, cachedAppStatus.allow_device_custom_id)
+      return respondPluginExternalAppOnprem(c, app_id, 'get', device, undefined, cachedAppStatus)
+    }
+    appOwner = lookup.owner
   }
+  else if (pathTiming) {
+    pathTiming.ownerMs = Math.round(performance.now() - startOwner)
+  }
+
+  const device = makeDevice(body, appOwner.allow_device_custom_id)
   const providerBlockedResponse = await providerInfrastructureBlockResponse(c, appOwner.block_provider_infra_requests)
   if (providerBlockedResponse)
     return providerBlockedResponse

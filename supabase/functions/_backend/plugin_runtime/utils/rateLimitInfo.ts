@@ -35,16 +35,19 @@ export function getOnPremiseRetryAfterSeconds(c: Context): number {
  * Do not use for IP-scoped guards (e.g. update enumeration): those must stay
  * `private, no-store` so they cannot poison the app-keyed public edge cache.
  */
-export function onPremiseAppResponse(c: Context) {
+export function onPremiseAppResponse(c: Context, resetAtMs?: number) {
   const retryAfterSeconds = getOnPremiseRetryAfterSeconds(c)
-  const resetAt = Date.now() + retryAfterSeconds * 1000
+  const resetAt = typeof resetAtMs === 'number' && Number.isFinite(resetAtMs) && resetAtMs > Date.now()
+    ? resetAtMs
+    : Date.now() + retryAfterSeconds * 1000
   const moreInfo = buildRateLimitInfo(resetAt)
+  const retryAfterHeader = Math.max(0, Math.ceil((resetAt - Date.now()) / 1000))
 
   // Retry-After is relative; X-RateLimit-Reset is absolute. The edge snippet
   // rewrites Retry-After + Cache-Control from the reset on every cache HIT.
-  c.header('Retry-After', String(retryAfterSeconds))
+  c.header('Retry-After', String(retryAfterHeader))
   c.header('X-RateLimit-Reset', String(Math.ceil(resetAt / 1000)))
-  c.header('Cache-Control', `public, max-age=${retryAfterSeconds}`)
+  c.header('Cache-Control', `public, max-age=${retryAfterHeader}`)
 
   return c.json({
     error: 'on_premise_app',

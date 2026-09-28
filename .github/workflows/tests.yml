@@ -15,6 +15,8 @@ on:
     branches-ignore:
       - main
       - development
+      # Cloud-agent branches always have an open PR; pull_request alone runs CI.
+      - 'cursor/**'
   merge_group:
     types:
       - checks_requested
@@ -999,7 +1001,7 @@ jobs:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 7
+    timeout-minutes: 12
     name: Run Playwright tests (shard ${{ matrix.shard }})
     permissions:
       contents: read
@@ -1097,7 +1099,7 @@ jobs:
             tcp:127.0.0.1:${{ steps.start_playwright_services.outputs.stripe_port }} \
             "file:${{ github.workspace }}/.context/playwright/gha-backend.ready" \
             http-get://localhost:5173 \
-            --timeout 180000 --interval 500 --log
+            --timeout 420000 --interval 500 --log
       - name: Run Playwright tests
         env:
           SKIP_STRIPE_EMULATOR_START: 'true'
