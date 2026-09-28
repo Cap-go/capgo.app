@@ -1097,7 +1097,7 @@ jobs:
             tcp:127.0.0.1:${{ steps.start_playwright_services.outputs.stripe_port }} \
             "file:${{ github.workspace }}/.context/playwright/gha-backend.ready" \
             http-get://localhost:5173 \
-            --timeout 240000 --interval 500 --log
+            --timeout 420000 --interval 500 --log
       - name: Run Playwright tests
         env:
           SKIP_STRIPE_EMULATOR_START: 'true'
