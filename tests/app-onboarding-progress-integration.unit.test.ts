@@ -10,7 +10,7 @@ import { sendOnboardingEvent } from '../src/services/onboardingTracking'
 const writerMocks = vi.hoisted(() => ({
   abTestAssignments: {} as Record<string, unknown>,
   dialog: {
-    lastButtonRole: null,
+    lastButtonRole: null as string | null,
     onDialogDismiss: vi.fn(async () => undefined),
     openDialog: vi.fn(),
   },
