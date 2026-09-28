@@ -25,8 +25,10 @@ export function mergeUserOnboardingProgress(
     delete merged[key]
 
   const next = isJsonObject(nextProgress) ? { ...nextProgress } : {}
-  if (options.clearIntent)
+  if (options.clearIntent) {
+    delete merged.intent
     delete next.intent
+  }
   return {
     ...merged,
     ...(!options.clearIntent && currentIntent && next.intent === undefined ? { intent: currentIntent } : {}),
