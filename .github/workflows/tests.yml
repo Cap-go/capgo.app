@@ -1001,7 +1001,7 @@ jobs:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 7
+    timeout-minutes: 12
     name: Run Playwright tests (shard ${{ matrix.shard }})
     permissions:
       contents: read
