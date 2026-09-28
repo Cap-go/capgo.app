@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import { quickError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
+import { planProductIdOrFilter } from './stripe.ts'
 import { getCurrentPlanNameOrg, supabaseAdmin } from './supabase.ts'
 
 function isActivePlanStatus(status: string | null | undefined): boolean {
@@ -45,7 +46,7 @@ async function getActivePlanNameOrg(c: Context, orgId: string): Promise<string |
   const { data: plan, error: planError } = await supabaseAdmin(c)
     .from('plans')
     .select('name')
-    .eq('stripe_id', stripeInfo.product_id)
+    .or(planProductIdOrFilter(stripeInfo.product_id))
     .single()
   if (planError || !plan?.name) {
     cloudlogErr({

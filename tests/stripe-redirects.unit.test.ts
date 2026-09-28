@@ -1,7 +1,8 @@
 import Stripe from 'stripe'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mockedEnv: Record<string, string> = {
+  ENV: 'local',
   WEBAPP_URL: 'https://capgo.test',
   STRIPE_SECRET_KEY: 'sk_test_123',
 }
@@ -53,13 +54,40 @@ function createPriceList(recurringInterval = 'month', type = 'recurring') {
   ]
 }
 
+function mockBillingAccountLookup(billingAccount = 'ee') {
+  mockedSupabaseAdmin.mockReturnValue({
+    from: vi.fn().mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          maybeSingle: vi.fn().mockResolvedValue({
+            data: { billing_account: billingAccount },
+            error: null,
+          }),
+        }),
+        or: vi.fn().mockReturnValue({
+          maybeSingle: vi.fn().mockResolvedValue({
+            data: null,
+            error: null,
+          }),
+        }),
+      }),
+    }),
+  })
+}
+
 afterEach(() => {
   delete mockedEnv.STRIPE_API_BASE_URL
+  mockedEnv.ENV = 'local'
+  mockedEnv.STRIPE_SECRET_KEY = 'sk_test_123'
   mockedSupabaseAdmin.mockReset()
   vi.restoreAllMocks()
 })
 
 describe('stripe redirect URL allowlist', () => {
+  beforeEach(() => {
+    mockBillingAccountLookup()
+  })
+
   it('allows same-origin return URLs for billing portal', async () => {
     const createSession = vi.fn().mockResolvedValue({ url: 'https://pay.capgo.test/p/session' })
     const stripeClient = {
@@ -82,6 +110,25 @@ describe('stripe redirect URL allowlist', () => {
       customer: 'cus_123',
       return_url: 'https://capgo.test/app/usage',
     })
+  })
+
+  it('returns empty portal url when stripe is not configured for the billing account', async () => {
+    mockedEnv.STRIPE_SECRET_KEY = ''
+
+    const createSession = vi.fn()
+    vi.mocked(Stripe).mockImplementation(function () {
+      return {
+        billingPortal: {
+          sessions: { create: createSession },
+        },
+      } as any
+    } as any)
+
+    const { createPortal } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    const result = await createPortal(createContext(), 'cus_123', '/app/usage')
+
+    expect(result.url).toBe('')
+    expect(createSession).not.toHaveBeenCalled()
   })
 
   it('rejects external return URLs for billing portal', async () => {
@@ -129,7 +176,7 @@ describe('stripe redirect URL allowlist', () => {
       createContext(),
       'cus_123',
       'month',
-      'plan_test',
+      'prod_test',
       '/app/success',
       '/app/cancel',
       'org_123',
@@ -178,7 +225,7 @@ describe('stripe redirect URL allowlist', () => {
       createContext(),
       'cus_123',
       'month',
-      'plan_test',
+      'prod_test',
       'https://example.com/phishing',
       '/app/cancel',
     ).catch(error => error)
@@ -242,6 +289,54 @@ describe('stripe redirect URL allowlist', () => {
       port: 4510,
       protocol: 'http',
     }))
+  })
+
+  it('allows host.docker.internal for Playwright Stripe emulator base URL', async () => {
+    mockedEnv.STRIPE_API_BASE_URL = 'http://host.docker.internal:4520'
+    mockedEnv.STRIPE_SECRET_KEY = 'sk_test_emulator'
+
+    const stripeClient = {
+      checkout: {
+        sessions: {},
+      },
+    } as any
+
+    vi.mocked(Stripe).mockImplementation(function () {
+      return stripeClient
+    } as any)
+
+    const { getStripe } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    getStripe(createContext())
+
+    expect(Stripe).toHaveBeenCalledWith('sk_test_emulator', expect.objectContaining({
+      host: 'host.docker.internal',
+      port: 4520,
+      protocol: 'http',
+    }))
+  })
+
+  it('rejects http Stripe API base URL when using live credentials', async () => {
+    mockedEnv.STRIPE_API_BASE_URL = 'http://host.docker.internal:4520'
+    mockedEnv.STRIPE_SECRET_KEY = 'sk_live_123'
+
+    const { getStripe } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    expect(() => getStripe(createContext())).toThrow('STRIPE_API_BASE_URL must use https when using live Stripe credentials')
+  })
+
+  it('rejects host.docker.internal http base URL outside local emulator config', async () => {
+    mockedEnv.STRIPE_API_BASE_URL = 'http://host.docker.internal:4520'
+    mockedEnv.STRIPE_SECRET_KEY = 'sk_test_123'
+    mockedEnv.ENV = 'production'
+
+    const { getStripe } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    expect(() => getStripe(createContext())).toThrow('STRIPE_API_BASE_URL host.docker.internal is only allowed for local emulator config')
+  })
+
+  it('rejects non-local http Stripe API base URLs', async () => {
+    mockedEnv.STRIPE_API_BASE_URL = 'http://stripe.example.com'
+
+    const { getStripe } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    expect(() => getStripe(createContext())).toThrow('STRIPE_API_BASE_URL must use https for non-loopback hosts')
   })
 
   it('falls back to checkout metadata for credit top-ups when line items are unavailable in emulator mode', async () => {
@@ -355,6 +450,28 @@ describe('stripe redirect URL allowlist', () => {
               },
               error: null,
             }),
+            maybeSingle: vi.fn().mockResolvedValue({
+              data: { billing_account: 'ee' },
+              error: null,
+            }),
+          }),
+          or: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({
+              data: {
+                stripe_id: 'prod_test',
+                price_m_id: 'price_monthly_from_plan',
+                price_y_id: 'price_yearly_from_plan',
+              },
+              error: null,
+            }),
+            maybeSingle: vi.fn().mockResolvedValue({
+              data: {
+                stripe_id: 'prod_test',
+                price_m_id: 'price_monthly_from_plan',
+                price_y_id: 'price_yearly_from_plan',
+              },
+              error: null,
+            }),
           }),
         }),
       }),
@@ -389,7 +506,7 @@ describe('stripe redirect URL allowlist', () => {
       createContext(),
       'cus_123',
       'month',
-      'plan_test',
+      'prod_test',
       '/app/success',
       '/app/cancel',
     )
