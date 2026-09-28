@@ -15,7 +15,7 @@ import { invalidIpInfo } from '../utils/invalids_ip.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { sendNotifOrgCached } from '../utils/notifications.ts'
 import { sendNotifToOrgMembersCached } from '../utils/org_email_notifications.ts'
-import { closeClient, deleteChannelDevicePg, getAppByIdPg, getAppOwnerPostgres, getChannelByIdPg, getChannelByNamePg, getChannelDeviceOverridePg, getChannelsPg, getCompatibleChannelsPg, getDrizzleClient, getMainChannelsPg, getPgClient, lookupAppOwnerPostgres, setReplicationLagHeader, upsertChannelDevicePg } from '../utils/pg.ts'
+import { closeClient, deleteChannelDevicePg, getAppOwnerPostgres, getChannelByIdPg, getChannelByNamePg, getChannelDeviceOverridePg, getChannelsPg, getCompatibleChannelsPg, getDrizzleClient, getMainChannelsPg, getPgClient, lookupAppOwnerPostgres, setReplicationLagHeader, upsertChannelDevicePg } from '../utils/pg.ts'
 import { convertQueryToBody, makeDevice, parsePluginBody } from '../utils/plugin_parser.ts'
 import { sendStatsAndDevice } from '../utils/plugin_stats.ts'
 import { channelSelfGetRequestSchema, channelSelfRequestSchema, isDevicePlatform } from '../utils/plugin_validation.ts'
@@ -606,10 +606,10 @@ async function listCompatibleChannels(c: Context, drizzleClient: ReturnType<type
 
   let appOwner: AppOwnerResult = cachedLimit?.healedOwner ?? null
   if (!appOwner) {
-    // First check if app exists - Read operation can use v2 flag
-    const appExists = await getAppByIdPg(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
-
-    if (!appExists) {
+    const lookup = await lookupAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
+    if (lookup.status === 'error')
+      return pluginAppLookupUnavailableResponse(c)
+    if (lookup.status === 'not_found') {
       const blocked = await blockProviderInfrastructure(c, 'GET', true)
       if (blocked)
         return blocked
@@ -617,7 +617,7 @@ async function listCompatibleChannels(c: Context, drizzleClient: ReturnType<type
       // App doesn't exist in database - normalize response to avoid oracle
       return onPremiseAppResponse(c)
     }
-    appOwner = await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
+    appOwner = lookup.owner
   }
   const device = makeDevice(body, appOwner?.allow_device_custom_id)
   const blockProviderInfraRequests = appOwner?.block_provider_infra_requests ?? cachedAppStatus.block_provider_infra_requests
