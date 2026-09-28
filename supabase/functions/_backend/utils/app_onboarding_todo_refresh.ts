@@ -3,12 +3,14 @@ import type { z } from 'zod'
 import type { onboardingRefreshBody } from './app_onboarding_refresh.ts'
 import type { TodoEvidenceResult } from './app_onboarding_todo_evidence.ts'
 import type { AppOnboardingPatch, AppOnboardingStepHistoryChange } from './appOnboarding.ts'
+import type { BuilderBuildOutcome } from './builder_onboarding_checklist.ts'
 import type { MiddlewareKeyVariables } from './hono.ts'
 import type { getDrizzleClient } from './pg.ts'
 import { sql } from 'drizzle-orm'
 import { buildAppOnboardingStepPosthogEvent } from './app_onboarding_posthog.ts'
 import { gatherTodoEvidence, getTodoEvidenceNeeds, loadTodoEvidenceCandidates } from './app_onboarding_todo_evidence.ts'
 import { appendAppOnboardingStepHistory, applyAppOnboardingPatch, getAppOnboardingStepHistoryChanges, parseAppOnboarding } from './appOnboarding.ts'
+import { buildBuilderBuildOutcomePatch } from './builder_onboarding_checklist.ts'
 import { cloudlogErr } from './logging.ts'
 import { trackPosthogEventBatch } from './posthog.ts'
 import { backgroundTask } from './utils.ts'
@@ -29,7 +31,39 @@ interface StepEvent {
   changes: AppOnboardingStepHistoryChange[]
 }
 
-function positiveTodoPatch(row: LockedApp, evidence: TodoEvidenceResult, at: string): AppOnboardingPatch {
+type BuilderBuildEvidence = Map<string, Array<Pick<BuilderBuildOutcome, 'platform' | 'status'>>>
+
+async function loadBuilderBuildEvidence(database: Pick<Database, 'execute'>, appIds: string[]): Promise<BuilderBuildEvidence> {
+  if (!appIds.length)
+    return new Map()
+  const { rows } = await database.execute<{
+    app_id: string
+    platform: 'ios' | 'android'
+    succeeded: boolean
+    failed: boolean
+  }>(sql`
+    SELECT app_id, platform,
+      bool_or(status IN ('succeeded', 'released')) AS succeeded,
+      bool_or(status = 'failed') AS failed
+    FROM public.build_requests
+    WHERE app_id = ANY(${sql.param(appIds)}::varchar[])
+      AND platform IN ('ios', 'android')
+      AND status IN ('succeeded', 'released', 'failed')
+    GROUP BY app_id, platform
+  `)
+  const outcomes: BuilderBuildEvidence = new Map()
+  for (const row of rows) {
+    const status = row.succeeded ? 'succeeded' : row.failed ? 'failed' : null
+    if (!status)
+      continue
+    const appOutcomes = outcomes.get(row.app_id) ?? []
+    appOutcomes.push({ platform: row.platform, status })
+    outcomes.set(row.app_id, appOutcomes)
+  }
+  return outcomes
+}
+
+function positiveTodoPatch(row: LockedApp, evidence: TodoEvidenceResult, buildEvidence: BuilderBuildEvidence, at: string): AppOnboardingPatch {
   const needs = getTodoEvidenceNeeds(row.onboarding)
   const patch: AppOnboardingPatch = { steps: {} }
   if (needs.channel && evidence.channel.has(row.app_id))
@@ -40,6 +74,9 @@ function positiveTodoPatch(row: LockedApp, evidence: TodoEvidenceResult, at: str
     patch.steps!.upload_bundle = { status: 'done', at }
   if (needs.update && evidence.update.has(row.app_id))
     patch.steps!.test_update = { status: 'done', at }
+  const buildPatch = buildBuilderBuildOutcomePatch(row.onboarding, buildEvidence.get(row.app_id) ?? [], () => at)
+  if (buildPatch?.builderSteps)
+    patch.builderSteps = buildPatch.builderSteps
   return patch
 }
 
@@ -59,7 +96,8 @@ export async function refreshAppOnboardingTodoBatch(
   for (const error of evidence.errors) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'onboarding todo evidence query failed', source: error.source, appIds: error.appIds, error: error.message })
   }
-  const positiveIds = [...new Set([...evidence.channel, ...evidence.device, ...evidence.bundle, ...evidence.update])].sort((a, b) => a.localeCompare(b))
+  const buildEvidence = await loadBuilderBuildEvidence(database, candidates.map(candidate => candidate.appId))
+  const positiveIds = [...new Set([...evidence.channel, ...evidence.device, ...evidence.bundle, ...evidence.update, ...buildEvidence.keys()])].sort((a, b) => a.localeCompare(b))
   if (!positiveIds.length)
     return { updated: 0, steps: 0, cfErrors: evidence.errors.length }
 
@@ -77,8 +115,8 @@ export async function refreshAppOnboardingTodoBatch(
     const updates: Array<{ app_id: string, onboarding: Record<string, unknown> }> = []
     for (const row of rows) {
       const at = new Date().toISOString()
-      const patch = positiveTodoPatch(row, evidence, at)
-      if (!Object.keys(patch.steps!).length)
+      const patch = positiveTodoPatch(row, evidence, buildEvidence, at)
+      if (!Object.keys(patch.steps ?? {}).length && !Object.keys(patch.builderSteps ?? {}).length)
         continue
 
       const merged = applyAppOnboardingPatch(row.onboarding, patch, () => at)

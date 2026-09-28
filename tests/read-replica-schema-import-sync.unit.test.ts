@@ -4,6 +4,7 @@ import type {
 } from '../read_replicate/schema_additive_sync.ts'
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
+import { MANIFEST_PER_VERSION_TABLE_SQL } from '../read_replicate/schema_additive_sync.ts'
 import {
   assertGoogleReadReplicaSchemaPlan,
   partitionReadReplicaImportStatements,
@@ -21,6 +22,13 @@ const safeColumnStatement: ReadReplicaSchemaSyncStatement = {
   table: 'apps',
   name: 'read_replica_import_unit',
   sql: 'ALTER TABLE public."apps" ADD COLUMN IF NOT EXISTS "read_replica_import_unit" boolean',
+}
+
+const safeTableStatement: ReadReplicaSchemaSyncStatement = {
+  kind: 'table',
+  table: 'manifest_per_version',
+  name: 'manifest_per_version',
+  sql: MANIFEST_PER_VERSION_TABLE_SQL,
 }
 
 const safeIndexStatement: ReadReplicaSchemaSyncStatement = {
@@ -58,6 +66,20 @@ function plan(
 }
 
 describe('read-replica Cloud SQL server-side import', () => {
+  it.concurrent('creates only the reviewed new table inside the atomic import', () => {
+    assertGoogleReadReplicaSchemaPlan(plan([safeTableStatement]))
+    expect(renderReadReplicaImportTransaction([safeTableStatement])).toBe(
+      `BEGIN;\n${MANIFEST_PER_VERSION_TABLE_SQL};\nCOMMIT;`,
+    )
+    expect(partitionReadReplicaImportStatements([safeTableStatement]).preIndexAtomicStatements)
+      .toEqual([safeTableStatement])
+
+    expect(() => assertGoogleReadReplicaSchemaPlan(plan([{
+      ...safeTableStatement,
+      sql: MANIFEST_PER_VERSION_TABLE_SQL.replace('"manifest" bytea', '"manifest" text'),
+    }]))).toThrow('cannot create unsupported table')
+  })
+
   it.concurrent('renders reviewed DDL as one postgres-owned atomic import transaction', () => {
     assertGoogleReadReplicaSchemaPlan(plan([safeColumnStatement]))
 

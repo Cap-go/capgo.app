@@ -1,5 +1,4 @@
 import { z } from 'zod'
-import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { verifyDnsTxtRecord } from '../../utils/dns-verification.ts'
 import { createHono, parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_jwt.ts'
@@ -7,6 +6,7 @@ import { cloudlog } from '../../utils/logging.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { requireEnterprisePlan } from '../../utils/plan-gating.ts'
 import { checkPermission } from '../../utils/rbac.ts'
+import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { supabaseAdmin } from '../../utils/supabase.ts'
 import { version } from '../../utils/version.ts'
 
@@ -78,7 +78,7 @@ app.post('/', middlewareAuth, async (c) => {
       }
     }
     finally {
-      closeClient(c, pgClient)
+      await closeClient(c, pgClient)
     }
 
     cloudlog({ requestId, context: 'verify-dns - verified', domain: provider.domain, provider_id })

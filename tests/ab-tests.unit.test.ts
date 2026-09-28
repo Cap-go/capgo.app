@@ -224,15 +224,16 @@ describe('new-user A/B test assignment', () => {
   it('does not persist or tag a new user for an eligible 0% test', async () => {
     const module = await loadABTestsModule()
     const configured = module.AB_TESTS_CONFIG[BUILDER_TODO_TEST_NAME]
-    expect(configured).toMatchObject({ audience: 'all', intents: ['builder'], treatment_percentage: 0 })
+    expect(configured).toMatchObject({ audience: 'all', intents: ['builder'], treatment_percentage: 50 })
+    const disabled = { ...configured, intents: undefined, treatment_percentage: 0 }
     expect(module.createABTestAssignments(
       { created_via_invite: false, intent: 'builder' },
-      { [BUILDER_TODO_TEST_NAME]: configured },
+      { [BUILDER_TODO_TEST_NAME]: disabled },
       () => 0,
       () => FIXED_DATE,
     )).toEqual({})
 
-    module.AB_TESTS_CONFIG[BUILDER_TODO_TEST_NAME] = { ...configured, intents: undefined }
+    module.AB_TESTS_CONFIG[BUILDER_TODO_TEST_NAME] = disabled
     try {
       await module.syncNewUserABTests({ get: vi.fn(() => 'request-id') } as never, 'new.user@example.com', {
         created_via_invite: true,
@@ -611,7 +612,10 @@ describe('new-user A/B test assignment', () => {
   it('bypasses the replica when intent-gated tests require authoritative intent', async () => {
     const module = await loadABTestsModule()
     installIntentTest(module)
-    const persisted = persistedAssignments({ channel: null, development: 'D', emails: 'B', publish: 'B' })
+    const persisted = {
+      ...persistedAssignments({ channel: null, development: 'D', emails: 'B', publish: 'B' }),
+      [BUILDER_TODO_TEST_NAME]: intentAssignment('B'),
+    }
     const replicaAssignments = {
       ...persisted,
       [INTENT_TEST_NAME]: intentAssignment('B'),
@@ -649,17 +653,23 @@ describe('new-user A/B test assignment', () => {
   })
 
   it('leaves an eligible 0% test unassigned during on-demand lookup', async () => {
-    const { getOrCreateUserABTests } = await loadABTestsModule()
+    const module = await loadABTestsModule()
+    const configured = module.AB_TESTS_CONFIG[BUILDER_TODO_TEST_NAME]
+    module.AB_TESTS_CONFIG[BUILDER_TODO_TEST_NAME] = { ...configured, treatment_percentage: 0 }
     const persisted = persistedAssignments({ channel: null })
     const context = { get: vi.fn(() => 'request-id') } as never
     drizzleExecuteMock.mockResolvedValueOnce({
       rows: [{ abtests: persisted, created_via_invite: false, email: 'user@example.com', intent: 'builder' }],
     })
 
-    await expect(getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(persisted)
-
-    expect(drizzleExecuteMock).toHaveBeenCalledOnce()
-    expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
+    try {
+      await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(persisted)
+      expect(drizzleExecuteMock).toHaveBeenCalledOnce()
+      expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
+    }
+    finally {
+      module.AB_TESTS_CONFIG[BUILDER_TODO_TEST_NAME] = configured
+    }
   })
 
   it('preserves a manual branch A assignment while filling other missing tests', async () => {
@@ -1040,7 +1050,10 @@ describe('new-user A/B test assignment', () => {
   it('treats a malformed current branch as unassigned during Bento reconciliation', async () => {
     const module = await loadABTestsModule()
     installIntentTest(module)
-    const standardAssignments = persistedAssignments({ channel: null, development: 'D', emails: 'B', publish: 'B' })
+    const standardAssignments = {
+      ...persistedAssignments({ channel: null, development: 'D', emails: 'B', publish: 'B' }),
+      [BUILDER_TODO_TEST_NAME]: intentAssignment(),
+    }
     const existing = {
       ...standardAssignments,
       [NEW_CHANNEL_TEST_NAME]: intentAssignment(),
@@ -1073,6 +1086,9 @@ describe('new-user A/B test assignment', () => {
     const module = await loadABTestsModule()
     installIntentTest(module)
     const standardAssignments = persistedAssignments({ channel: null, development: 'D', emails: 'B', publish: 'B' })
+    const expectedAssignments = intent === 'builder'
+      ? { ...standardAssignments, [BUILDER_TODO_TEST_NAME]: intentAssignment() }
+      : standardAssignments
     const retiredAssignment = { assigned_at: FIXED_DATE.toISOString(), branch: 'A' }
     const existing = {
       ...standardAssignments,
@@ -1081,10 +1097,13 @@ describe('new-user A/B test assignment', () => {
       retired_experiment: retiredAssignment,
     }
     const persisted = {
-      ...standardAssignments,
+      ...expectedAssignments,
       retired_experiment: retiredAssignment,
     }
     const context = { get: vi.fn(() => 'request-id') } as never
+    vi.useFakeTimers()
+    vi.setSystemTime(FIXED_DATE)
+    vi.spyOn(Math, 'random').mockReturnValue(0)
     drizzleExecuteMock
       .mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false, email: 'User@Example.com', intent }] })
       .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
@@ -1092,7 +1111,7 @@ describe('new-user A/B test assignment', () => {
     queueBentoSnapshot(currentUser)
     queueBentoSnapshot(currentUser, true)
 
-    await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(standardAssignments)
+    await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(expectedAssignments)
 
     expect(getPgClientMock.mock.calls).toEqual([[context, false]])
     expect(pgQueryMock).not.toHaveBeenCalled()
@@ -1131,6 +1150,7 @@ describe('new-user A/B test assignment', () => {
     }
     const persisted = {
       ...standardAssignments,
+      [BUILDER_TODO_TEST_NAME]: intentAssignment(),
       [BUILDER_INTENT_TEST_NAME]: intentAssignment(),
     }
     const context = { get: vi.fn(() => 'request-id') } as never
@@ -1146,7 +1166,7 @@ describe('new-user A/B test assignment', () => {
 
     await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(persisted)
 
-    expect(random).toHaveBeenCalledOnce()
+    expect(random).toHaveBeenCalledTimes(2)
     const updateParameters = collectSqlParameterValues(drizzleExecuteMock.mock.calls[1]?.[0])
     const assignmentsJson = updateParameters.find(value => typeof value === 'string' && value.startsWith('{'))
     expect(JSON.parse(String(assignmentsJson))).toEqual(persisted)

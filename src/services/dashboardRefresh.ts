@@ -111,9 +111,7 @@ export async function requestOrgChartRefresh(orgId: string): Promise<ChartRefres
 
 export async function fetchAppChartRefreshState(appId: string): Promise<AppChartRefreshState> {
   const { data, error } = await useSupabase()
-    .from('apps')
-    .select('owner_org,stats_updated_at,stats_refresh_requested_at')
-    .eq('app_id', appId)
+    .rpc('get_app_stats_refresh_state', { p_app_id: appId })
     .single()
 
   if (error || !data)
@@ -124,9 +122,7 @@ export async function fetchAppChartRefreshState(appId: string): Promise<AppChart
 
 export async function fetchOrgChartRefreshState(orgId: string): Promise<OrgChartRefreshState> {
   const { data, error } = await useSupabase()
-    .from('orgs')
-    .select('stats_updated_at,stats_refresh_requested_at')
-    .eq('id', orgId)
+    .rpc('get_org_stats_refresh_state', { p_org_id: orgId })
     .single()
 
   if (error || !data)

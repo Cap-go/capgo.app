@@ -14,6 +14,7 @@ import { app as devices_priv } from '../_backend/private/devices.ts'
 import { app as download_link } from '../_backend/private/download_link.ts'
 import { app as emailPreferences } from '../_backend/private/email_preferences.ts'
 import { app as events } from '../_backend/private/events.ts'
+import { app as finalize_bundle_upload } from '../_backend/private/finalize_bundle_upload.ts'
 import { app as groups } from '../_backend/private/groups.ts'
 import { app as invite_existing_user_to_org } from '../_backend/private/invite_existing_user_to_org.ts'
 import { app as invite_new_user_to_org } from '../_backend/private/invite_new_user_to_org.ts'
@@ -24,6 +25,7 @@ import { app as observe } from '../_backend/private/observe.ts'
 import { app as onboarding_ab_tests } from '../_backend/private/onboarding_ab_tests.ts'
 import { app as onboarding_progress } from '../_backend/private/onboarding_progress.ts'
 import { app as org_notification_stats } from '../_backend/private/org_notification_stats.ts'
+import { app as organization_invitation } from '../_backend/private/organization_invitation.ts'
 // Webapps API
 import { app as plans } from '../_backend/private/plans.ts'
 import { app as publicStats } from '../_backend/private/public_stats.ts'
@@ -72,6 +74,7 @@ appGlobal.route('/observe', observe)
 appGlobal.route('/onboarding_ab_tests', onboarding_ab_tests)
 appGlobal.route('/onboarding_progress', onboarding_progress)
 appGlobal.route('/org_notification_stats', org_notification_stats)
+appGlobal.route('/organization_invitation', organization_invitation)
 appGlobal.route('/download_link', download_link)
 appGlobal.route('/log_as', log_as)
 appGlobal.route('/admin_credits', admin_credits)
@@ -87,6 +90,7 @@ appGlobal.route('/set_org_email', set_org_email)
 appGlobal.route('/latency', latency)
 appGlobal.route('/replay', replay)
 appGlobal.route('/events', events)
+appGlobal.route('/finalize_bundle_upload', finalize_bundle_upload)
 appGlobal.route('/groups', groups)
 appGlobal.route('/role_bindings', role_bindings)
 appGlobal.route('/roles', roles)

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   ORG_ID_CRON_QUEUE,
   cleanupPostgresClient,
+  executeSQL,
   getCronPlanQueueCountForOrg,
   getLatestCronPlanMessageForOrg,
   getSupabaseClient,
@@ -41,8 +42,7 @@ describe('[Function] queue_cron_stat_org_for_org', () => {
   })
 
   async function expectQueuedForOrg(customerId: string) {
-    // Scope by org so parallel cron tests writing other orgs cannot inflate a global count.
-    const initialCount = await getCronPlanQueueCountForOrg(ORG_ID_CRON_QUEUE)
+    await executeSQL(`DELETE FROM pgmq.q_cron_stat_org WHERE message->'payload'->>'orgId' = $1`, [ORG_ID_CRON_QUEUE])
 
     const { error } = await getSupabaseClient().rpc('queue_cron_stat_org_for_org', {
       org_id: ORG_ID_CRON_QUEUE,
@@ -51,7 +51,7 @@ describe('[Function] queue_cron_stat_org_for_org', () => {
     expect(error).toBeNull()
 
     const finalCount = await getCronPlanQueueCountForOrg(ORG_ID_CRON_QUEUE)
-    expect(finalCount).toBeGreaterThanOrEqual(initialCount + 1)
+    expect(finalCount).toBe(1)
 
     const latestMessage = await getLatestCronPlanMessageForOrg(ORG_ID_CRON_QUEUE)
     expect(latestMessage).toMatchObject({
@@ -60,6 +60,7 @@ describe('[Function] queue_cron_stat_org_for_org', () => {
       payload: {
         orgId: ORG_ID_CRON_QUEUE,
         customerId,
+        statsTargetAt: expect.any(String),
       },
     })
   }
@@ -70,32 +71,27 @@ describe('[Function] queue_cron_stat_org_for_org', () => {
       return
     }
 
-    await getSupabaseClient()
-      .from('stripe_info')
-      .update({ plan_calculated_at: null })
-      .eq('customer_id', testCustomerId)
-      .throwOnError()
+    await executeSQL(`
+      UPDATE public.org_stats_refresh_state
+      SET plan_calculated_at = NULL
+      WHERE org_id = $1
+    `, [ORG_ID_CRON_QUEUE])
 
     await expectQueuedForOrg(testCustomerId)
   })
 
-  // TODO: fix this broken test
-  // it('skips queuing when plan was calculated within last hour', async () => {
-  //     ...
-  // })
-
-  it('queues plan processing when plan was calculated over 1 hour ago', async () => {
+  it('queues plan processing when a previous calculation exists', async () => {
     if (!testCustomerId) {
       console.log('Skipping test - no customer_id available')
       return
     }
 
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
-    await getSupabaseClient()
-      .from('stripe_info')
-      .update({ plan_calculated_at: twoHoursAgo.toISOString() })
-      .eq('customer_id', testCustomerId)
-      .throwOnError()
+    const previousCalculation = new Date(Date.now() - 2 * 60 * 60 * 1000)
+    await executeSQL(`
+      UPDATE public.org_stats_refresh_state
+      SET plan_calculated_at = $2::timestamptz
+      WHERE org_id = $1
+    `, [ORG_ID_CRON_QUEUE, previousCalculation.toISOString()])
 
     await expectQueuedForOrg(testCustomerId)
   })
@@ -109,6 +105,23 @@ describe('[Function] queue_cron_stat_org_for_org', () => {
     })
 
     expect(error).toBeNull()
+  })
+
+  it('deduplicates an org that is already queued', async () => {
+    if (!testCustomerId)
+      return
+
+    await executeSQL(`DELETE FROM pgmq.q_cron_stat_org WHERE message->'payload'->>'orgId' = $1`, [ORG_ID_CRON_QUEUE])
+    await getSupabaseClient().rpc('queue_cron_stat_org_for_org', {
+      org_id: ORG_ID_CRON_QUEUE,
+      customer_id: testCustomerId,
+    }).throwOnError()
+    await getSupabaseClient().rpc('queue_cron_stat_org_for_org', {
+      org_id: ORG_ID_CRON_QUEUE,
+      customer_id: testCustomerId,
+    }).throwOnError()
+
+    expect(await getCronPlanQueueCountForOrg(ORG_ID_CRON_QUEUE)).toBe(1)
   })
 
   it('has correct permissions - only service_role can call', async () => {

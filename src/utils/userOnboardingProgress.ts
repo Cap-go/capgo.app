@@ -5,7 +5,7 @@ import type {
 } from '~/utils/onboardingProgressAnalytics'
 
 export const USER_ONBOARDING_STATUSES = ['in_progress', 'completed', 'abandoned'] as const
-export const USER_ONBOARDING_STEPS = ['intent', 'publish_app_question', 'details', 'organization', 'choice', 'install', 'setup'] as const
+export const USER_ONBOARDING_STEPS = ['intent', 'publish_app_question', 'details', 'organization', 'choice', 'channel', 'install', 'setup'] as const
 export const USER_ONBOARDING_FLOWS = ['pre_org', 'existing_org'] as const
 export const USER_ONBOARDING_DEVELOPMENT_ENVIRONMENTS = ['hosted_builder', 'ai_assistant', 'hand_coded', 'other', 'local_project', 'exploring', 'skipped'] as const satisfies readonly OnboardingDevelopmentEnvironment[]
 export const USER_ONBOARDING_INTENTS = ['ota', 'builder', 'both', 'exploring', 'publish'] as const
@@ -25,6 +25,7 @@ export interface UserOnboardingProgress {
   intent?: OnboardingIntent
   publish_app_question?: true
   details_step?: UserOnboardingDetailsStep
+  final_step?: 'setup' | 'install'
   setup_stage?: UserOnboardingSetupStage
   app_name?: string
   app_id?: string
@@ -45,6 +46,7 @@ export const USER_ONBOARDING_PROGRESS_FIELDS = {
   app_name: true,
   completed_at: true,
   details_step: true,
+  final_step: true,
   development_environment: true,
   estimated_users_index: true,
   existing_app: true,
@@ -71,6 +73,7 @@ export interface UserOnboardingProgressInput {
   intent?: OnboardingIntent | null
   publishAppQuestion?: boolean
   detailsStep?: UserOnboardingDetailsStep
+  finalStep?: 'setup' | 'install'
   setupStage?: UserOnboardingSetupStage
   appName?: string
   appId?: string
@@ -163,6 +166,9 @@ function applyOptionalUserOnboardingFields(
 
   if (isOneOf(raw.details_step, USER_ONBOARDING_DETAILS_STEPS))
     progress.details_step = raw.details_step
+
+  if (raw.final_step === 'setup' || raw.final_step === 'install')
+    progress.final_step = raw.final_step
 
   if (isOneOf(raw.setup_stage, USER_ONBOARDING_SETUP_STAGES))
     progress.setup_stage = raw.setup_stage
@@ -257,6 +263,9 @@ export function buildUserOnboardingProgress(input: UserOnboardingProgressInput):
   if (input.detailsStep)
     progress.details_step = input.detailsStep
 
+  if (input.finalStep)
+    progress.final_step = input.finalStep
+
   if (input.setupStage)
     progress.setup_stage = input.setupStage
 
@@ -305,7 +314,7 @@ export function clampResumableOnboardingStep(
   step: UserOnboardingStep,
   flow: OnboardingAnalyticsFlow,
 ): UserOnboardingStep {
-  if (flow === 'pre_org' && (step === 'choice' || step === 'install' || step === 'setup'))
+  if (flow === 'pre_org' && (step === 'choice' || step === 'install'))
     return 'organization'
   return step
 }
@@ -315,6 +324,8 @@ export function resumableOnboardingFlowStep(
   flow: OnboardingAnalyticsFlow,
 ): UserOnboardingStep {
   const step = clampResumableOnboardingStep(progress.step, flow)
+  if ((step === 'setup' || step === 'install') && (progress.setup_stage !== 'cli' || !progress.final_step))
+    return 'channel'
   if (progress.publish_app_question === true && (step === 'intent' || step === 'publish_app_question'))
     return 'publish_app_question'
   return step

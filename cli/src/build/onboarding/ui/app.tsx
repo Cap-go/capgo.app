@@ -49,6 +49,7 @@ import { evaluateGate } from '../app-verification.js'
 import { exitAfterOnboardingBeforeExit } from './exit.js'
 import { trackGuidedKeyValidationFailure, trackVerifiedIosKey, verifyIosKeyWithTelemetry } from './ios-credential-action.js'
 import { trackCreatedIosCertificateResult, trackImportedIosCertificateSaveResult, trackIosCertificateCreationThrow, trackIosKeychainExportResult } from './ios-certificate-action.js'
+import { trackCreatedIosProfileResult, trackImportedIosProfileResult } from './ios-profile-action.js'
 import { classifyCertAvailability, computeCertSha1, createCertificate, createProfile, deleteProfile, ensureBundleId, findCertIdBySha1, generateJwt, listApps, listBundleIds, listDistributionCerts, listProfilesForCert, revokeCertificate, verifyApiKey } from '../apple-api.js'
 import { runAscKeyHelper } from '../asc-key/helper.js'
 import { sanitizeBuildLogLines } from '../build-log.js'
@@ -811,6 +812,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
     [appId, resolvedOrgId, step, journeyId],
   )
   const reportedCertificateSuccessesRef = useRef(new Set<string>())
+  const reportedProfileSuccessesRef = useRef(new Set<string>())
   const setupMethodShownRef = useRef(false)
   useEffect(() => {
     if (step !== 'setup-method-select') {
@@ -2338,6 +2340,8 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
 
         if (step === 'creating-certificate')
           trackCreatedIosCertificateResult(result, journeyId, trackAction, reportedCertificateSuccessesRef.current)
+        if (step === 'creating-profile')
+          trackCreatedIosProfileResult(result, step, journeyId, trackAction, reportedProfileSuccessesRef.current)
 
         // ── error route: surface through the TUI's handleError so the support
         // bundle + retryCount + telemetry UX is identical to the bespoke catch ──
@@ -2642,8 +2646,12 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
         const t: Partial<IosStepCtx> | undefined = result.transient
         const np = result.progress
 
-        if (step === 'import-exporting')
+        if (step === 'import-exporting') {
           trackIosKeychainExportResult(result, journeyId, trackAction)
+          trackImportedIosProfileResult(result, deps.carried ?? {}, journeyId, trackAction, reportedProfileSuccessesRef.current)
+        }
+        if (step === 'import-create-profile-only')
+          trackCreatedIosProfileResult(result, step, journeyId, trackAction, reportedProfileSuccessesRef.current)
 
         // ── error route: surface through handleError so the support bundle +
         // retryCount + telemetry UX is identical to the bespoke catch ──

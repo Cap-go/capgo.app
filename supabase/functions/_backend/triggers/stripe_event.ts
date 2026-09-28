@@ -89,7 +89,6 @@ const STRIPE_INFO_TRANSACTION_COLUMNS = [
   'mau_exceeded',
   'paid_at',
   'past_due_at',
-  'plan_calculated_at',
   'plan_usage',
   'price_id',
   'product_id',

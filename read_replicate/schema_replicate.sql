@@ -1,6 +1,6 @@
 BEGIN;
 
-DROP TABLE IF EXISTS public.channel_devices, public.manifest, public.onboarding_demo_data, public.app_versions, public.channels, public.apps, public.notifications, public.org_users, public.orgs, public.stripe_info CASCADE;
+DROP TABLE IF EXISTS public.channel_devices, public.manifest, public.manifest_per_version, public.onboarding_demo_data, public.app_versions, public.channels, public.apps, public.notifications, public.org_users, public.orgs, public.stripe_info CASCADE;
 DROP SEQUENCE IF EXISTS public.app_versions_id_seq, public.channel_devices_id_seq, public.channel_id_seq, public.manifest_id_seq, public.org_users_id_seq, public.stripe_info_id_seq CASCADE;
 DROP FUNCTION IF EXISTS public.one_month_ahead();
 DROP TYPE IF EXISTS public.channel_update_package, public.manifest_entry, public.disable_update, public.stripe_status;
@@ -108,8 +108,6 @@ CREATE TABLE public.apps (
     existing_app boolean DEFAULT false NOT NULL,
     ios_store_url text,
     android_store_url text,
-    stats_updated_at timestamp without time zone,
-    stats_refresh_requested_at timestamp without time zone,
     build_timeout_seconds bigint DEFAULT 900 NOT NULL,
     build_timeout_updated_at timestamp with time zone DEFAULT now() NOT NULL,
     block_provider_infra_requests boolean DEFAULT true NOT NULL,
@@ -309,6 +307,29 @@ CREATE SEQUENCE public.manifest_id_seq
 --
 
 ALTER SEQUENCE public.manifest_id_seq OWNED BY public.manifest.id;
+
+
+--
+-- Name: manifest_per_version; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.manifest_per_version (
+    version_id bigint NOT NULL,
+    format_version smallint NOT NULL,
+    entry_count integer NOT NULL,
+    total_file_size bigint NOT NULL,
+    payload_hash bytea NOT NULL,
+    manifest bytea NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    size_receipts_provided boolean DEFAULT false NOT NULL,
+    manifest_size bytea,
+    manifest_size_payload_hash bytea,
+    CONSTRAINT manifest_per_version_entry_count_check CHECK ((entry_count >= 0)),
+    CONSTRAINT manifest_per_version_format_version_check CHECK ((format_version >= 0)),
+    CONSTRAINT manifest_per_version_manifest_check CHECK (((octet_length(manifest) > 0) OR (octet_length(manifest) = 0))),
+    CONSTRAINT manifest_per_version_payload_hash_check CHECK (((octet_length(payload_hash) = 32) OR (octet_length(payload_hash) = 0))),
+    CONSTRAINT manifest_per_version_total_file_size_check CHECK ((total_file_size >= 0))
+);
 
 
 --
@@ -556,6 +577,14 @@ ALTER TABLE ONLY public.channels
 
 ALTER TABLE ONLY public.channels
     ADD CONSTRAINT channels_rbac_id_key UNIQUE (rbac_id);
+
+
+--
+-- Name: manifest_per_version manifest_per_version_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manifest_per_version
+    ADD CONSTRAINT manifest_per_version_pkey PRIMARY KEY (version_id);
 
 
 --
@@ -889,20 +918,6 @@ CREATE INDEX idx_apps_onboarding_login_creator ON public.apps USING btree (((onb
 --
 
 CREATE INDEX idx_apps_onboarding_ota_stage ON public.apps USING btree (((((onboarding -> 'features'::text) -> 'ota'::text) ->> 'stage'::text)));
-
-
---
--- Name: idx_apps_onboarding_queued_refresh_at; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_apps_onboarding_queued_refresh_at ON public.apps USING btree (COALESCE((onboarding ->> 'queued_refresh_at'::text), ''::text), COALESCE((onboarding ->> 'refreshed_at'::text), ''::text), app_id);
-
-
---
--- Name: idx_apps_onboarding_refreshed_at; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_apps_onboarding_refreshed_at ON public.apps USING btree (COALESCE((onboarding ->> 'refreshed_at'::text), ''::text), app_id);
 
 
 --

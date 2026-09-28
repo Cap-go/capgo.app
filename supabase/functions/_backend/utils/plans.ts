@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { getDrizzleClient } from './pg.ts'
 import type { PlanUsage } from './supabase.ts'
 import type { Database } from './supabase.types.ts'
+import { sql } from 'drizzle-orm'
 import { maybeAutoTopUpCredits } from './credit_auto_top_up.ts'
 import { quickError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
@@ -18,10 +19,6 @@ import {
   isOnboardedOrg,
   isOnboardingNeeded,
   isTrialOrg,
-  set_bandwidth_exceeded,
-  set_build_time_exceeded,
-  set_mau_exceeded,
-  set_storage_exceeded,
   supabaseAdmin,
 } from './supabase.ts'
 import { sendEventToTracking } from './tracking.ts'
@@ -77,6 +74,39 @@ interface CreditApplicationResult {
   overage_covered: number
   overage_unpaid: number
   credit_step_id: number | null
+}
+
+interface PlanExceededFlags {
+  bandwidth_exceeded: boolean
+  build_time_exceeded: boolean
+  mau_exceeded: boolean
+  storage_exceeded: boolean
+}
+
+interface PlanNotificationResult {
+  exceededFlags: PlanExceededFlags | null
+  finalIsGoodPlan: boolean
+}
+
+interface UserAbovePlanResult {
+  exceededFlags: PlanExceededFlags | null
+  needsUpgrade: boolean
+}
+
+const EXCEEDED_FLAG_BY_METRIC: Record<CreditMetric, keyof PlanExceededFlags> = {
+  bandwidth: 'bandwidth_exceeded',
+  build_time: 'build_time_exceeded',
+  mau: 'mau_exceeded',
+  storage: 'storage_exceeded',
+}
+
+function createEmptyExceededFlags(): PlanExceededFlags {
+  return {
+    bandwidth_exceeded: false,
+    build_time_exceeded: false,
+    mau_exceeded: false,
+    storage_exceeded: false,
+  }
 }
 
 function getHighestPlanUsage(percentUsage: PlanUsage) {
@@ -319,13 +349,13 @@ async function userAbovePlan(c: Context, org: {
     trial_at?: string | null
     subscription_anchor_end?: string | null
   } | null
-}, orgId: string, is_good_plan: boolean, drizzleClient: ReturnType<typeof getDrizzleClient>, forceCreditMode = false): Promise<boolean> {
+}, orgId: string, is_good_plan: boolean, drizzleClient: ReturnType<typeof getDrizzleClient>, forceCreditMode = false): Promise<UserAbovePlanResult> {
   const creditOnlyMode = forceCreditMode || isCreditOnlyBillingOrg(org)
   cloudlog({ requestId: c.get('requestId'), message: 'userAbovePlan', orgId, is_good_plan, creditOnlyMode })
   const hasActivePlan = hasActivePlanEntitlement(org)
   const totalStats = await getTotalStats(c, orgId)
   if (!totalStats) {
-    return false
+    return { exceededFlags: null, needsUpgrade: false }
   }
 
   const currentPlanName = await getCurrentPlanNameOrg(c, orgId)
@@ -358,6 +388,7 @@ async function userAbovePlan(c: Context, org: {
   }
 
   let hasUnpaidOverage = false
+  const exceededFlags = createEmptyExceededFlags()
 
   for (const metric of metrics) {
     const planLimit = Number(metric.limit ?? 0)
@@ -366,43 +397,20 @@ async function userAbovePlan(c: Context, org: {
       const creditResult = await applyCreditsForMetric(c, orgId, metric.key, overage, planId, metric.usage, metric.limit, billingCycle)
       creditResults[metric.key] = creditResult
       const unpaid = creditResult?.overage_unpaid ?? overage
-      if (metric.key === 'mau') {
-        await set_mau_exceeded(c, org.customer_id, unpaid > 0, orgId)
-      }
-      else if (metric.key === 'storage') {
-        await set_storage_exceeded(c, org.customer_id, unpaid > 0, orgId)
-      }
-      else if (metric.key === 'bandwidth') {
-        await set_bandwidth_exceeded(c, org.customer_id, unpaid > 0, orgId)
-      }
-      else if (metric.key === 'build_time') {
-        await set_build_time_exceeded(c, orgId, unpaid > 0)
-      }
+      exceededFlags[EXCEEDED_FLAG_BY_METRIC[metric.key]] = unpaid > 0
       if (unpaid > 0)
         hasUnpaidOverage = true
-    }
-    else if (metric.key === 'mau') {
-      await set_mau_exceeded(c, org.customer_id, false, orgId)
-    }
-    else if (metric.key === 'storage') {
-      await set_storage_exceeded(c, org.customer_id, false, orgId)
-    }
-    else if (metric.key === 'bandwidth') {
-      await set_bandwidth_exceeded(c, org.customer_id, false, orgId)
-    }
-    else if (metric.key === 'build_time') {
-      await set_build_time_exceeded(c, orgId, false)
     }
   }
 
   if (!hasUnpaidOverage) {
     cloudlog({ requestId: c.get('requestId'), message: 'Overage fully covered by credits', orgId, creditResults })
-    return false
+    return { exceededFlags, needsUpgrade: false }
   }
 
   if (!hasActivePlan) {
     cloudlog({ requestId: c.get('requestId'), message: 'Credits-only org overage check completed', orgId, creditResults })
-    return true
+    return { exceededFlags, needsUpgrade: true }
   }
 
   const bestPlan = await findBestPlan(c, {
@@ -414,7 +422,7 @@ async function userAbovePlan(c: Context, org: {
 
   // If the calculated best plan ranks lower than the current one, the org is over-provisioned, so skip upgrade nudges.
   if (currentPlanName && planToInt(bestPlan) < planToInt(currentPlanName)) {
-    return true
+    return { exceededFlags, needsUpgrade: true }
   }
 
   const bestPlanKey = bestPlan.toLowerCase().replace(' ', '_')
@@ -438,16 +446,10 @@ async function userAbovePlan(c: Context, org: {
     }).catch()
   }
 
-  return true
+  return { exceededFlags, needsUpgrade: true }
 }
 
-async function userIsAtPlanUsage(c: Context, orgId: string, customerId: string | null, percentUsage: PlanUsage, drizzleClient: ReturnType<typeof getDrizzleClient>) {
-  // Reset exceeded flags if plan is good
-  await set_mau_exceeded(c, customerId, false, orgId)
-  await set_storage_exceeded(c, customerId, false, orgId)
-  await set_bandwidth_exceeded(c, customerId, false, orgId)
-  await set_build_time_exceeded(c, orgId, false)
-
+async function userIsAtPlanUsage(c: Context, orgId: string, percentUsage: PlanUsage, drizzleClient: ReturnType<typeof getDrizzleClient>) {
   const alert = getPlanUsageAlert(percentUsage)
   if (!alert)
     return
@@ -495,15 +497,16 @@ export async function syncOrgSubscriptionData(c: Context, org: any): Promise<voi
 }
 
 // Handle trial organization logic
-export async function handleTrialOrg(c: Context, orgId: string, org: any): Promise<boolean> {
+export async function handleTrialOrg(c: Context, orgId: string, org: any, drizzleClient: ReturnType<typeof getDrizzleClient>): Promise<boolean> {
   if (await isTrialOrg(c, orgId)) {
-    const { error } = await supabaseAdmin(c)
-      .from('stripe_info')
-      .update({ is_good_plan: true })
-      .eq('customer_id', org.customer_id!)
-      .then()
-    if (error)
-      cloudlogErr({ requestId: c.get('requestId'), message: 'update stripe info', error })
+    if (org.customer_id) {
+      await drizzleClient.execute(sql`
+        UPDATE public.stripe_info
+        SET is_good_plan = true
+        WHERE customer_id = ${org.customer_id}
+          AND is_good_plan IS DISTINCT FROM true
+      `)
+    }
     return true // Trial handled
   }
   return false // Not a trial
@@ -533,19 +536,22 @@ export async function calculatePlanStatusFresh(c: Context, orgId: string) {
 }
 
 // Handle notifications and events based on org status
-export async function handleOrgNotificationsAndEvents(c: Context, org: any, orgId: string, is_good_plan: boolean, percentUsage: PlanUsage, drizzleClient: ReturnType<typeof getDrizzleClient>): Promise<boolean> {
+export async function handleOrgNotificationsAndEvents(c: Context, org: any, orgId: string, is_good_plan: boolean, percentUsage: PlanUsage, drizzleClient: ReturnType<typeof getDrizzleClient>): Promise<PlanNotificationResult> {
   const is_onboarded = await isOnboardedOrg(c, orgId)
   const is_onboarding_needed = await isOnboardingNeeded(c, orgId)
 
   let finalIsGoodPlan = is_good_plan
+  let exceededFlags: PlanExceededFlags | null = null
 
   if (is_onboarded && isCreditOnlyBillingOrg(org)) {
-    const needsUpgrade = await userAbovePlan(c, org, orgId, is_good_plan, drizzleClient, true)
-    finalIsGoodPlan = !needsUpgrade
+    const result = await userAbovePlan(c, org, orgId, is_good_plan, drizzleClient, true)
+    finalIsGoodPlan = !result.needsUpgrade
+    exceededFlags = result.exceededFlags
   }
   else if (!is_good_plan && is_onboarded) {
-    const needsUpgrade = await userAbovePlan(c, org, orgId, is_good_plan, drizzleClient)
-    finalIsGoodPlan = !needsUpgrade
+    const result = await userAbovePlan(c, org, orgId, is_good_plan, drizzleClient)
+    finalIsGoodPlan = !result.needsUpgrade
+    exceededFlags = result.exceededFlags
   }
   else if (!is_onboarded && is_onboarding_needed) {
     const onboardingIntent = parseOrgOnboardingIntent(org.onboarding)
@@ -565,25 +571,64 @@ export async function handleOrgNotificationsAndEvents(c: Context, org: any, orgI
     }
   }
   else if (is_good_plan && is_onboarded) {
-    await userIsAtPlanUsage(c, orgId, org.customer_id, percentUsage, drizzleClient)
+    await userIsAtPlanUsage(c, orgId, percentUsage, drizzleClient)
     finalIsGoodPlan = true
+    exceededFlags = createEmptyExceededFlags()
   }
 
-  return finalIsGoodPlan
+  return { exceededFlags, finalIsGoodPlan }
 }
 
-// Update stripe_info with plan status
-export async function updatePlanStatus(c: Context, org: any, finalIsGoodPlan: boolean, isAbovePlan: boolean, percentUsage: PlanUsage): Promise<void> {
+async function updateExceededFlags(customerId: string | null, flags: PlanExceededFlags, drizzleClient: ReturnType<typeof getDrizzleClient>): Promise<void> {
+  if (!customerId)
+    return
+
+  await drizzleClient.execute(sql`
+    UPDATE public.stripe_info
+    SET mau_exceeded = ${flags.mau_exceeded},
+        storage_exceeded = ${flags.storage_exceeded},
+        bandwidth_exceeded = ${flags.bandwidth_exceeded},
+        build_time_exceeded = ${flags.build_time_exceeded}
+    WHERE customer_id = ${customerId}
+      AND ROW(mau_exceeded, storage_exceeded, bandwidth_exceeded, build_time_exceeded)
+        IS DISTINCT FROM ROW(${flags.mau_exceeded}, ${flags.storage_exceeded}, ${flags.bandwidth_exceeded}, ${flags.build_time_exceeded})
+  `)
+}
+
+// Update stripe_info once, and only when the calculated plan state changed.
+export async function updatePlanStatus(org: any, result: PlanNotificationResult, isAbovePlan: boolean, percentUsage: PlanUsage, drizzleClient: ReturnType<typeof getDrizzleClient>): Promise<void> {
+  if (!org.customer_id)
+    return
+
   const normalizedUsage = normalizePlanUsage(percentUsage)
-  await supabaseAdmin(c)
-    .from('stripe_info')
-    .update({
-      is_above_plan: isAbovePlan,
-      is_good_plan: finalIsGoodPlan,
-      plan_usage: Math.round(normalizedUsage.total_percent),
-    })
-    .eq('customer_id', org.customer_id!)
-    .throwOnError()
+  const planUsage = Math.round(normalizedUsage.total_percent)
+  if (!result.exceededFlags) {
+    await drizzleClient.execute(sql`
+      UPDATE public.stripe_info
+      SET is_above_plan = ${isAbovePlan},
+          is_good_plan = ${result.finalIsGoodPlan},
+          plan_usage = ${planUsage}
+      WHERE customer_id = ${org.customer_id}
+        AND ROW(is_above_plan, is_good_plan, plan_usage)
+          IS DISTINCT FROM ROW(${isAbovePlan}, ${result.finalIsGoodPlan}, ${planUsage})
+    `)
+    return
+  }
+
+  const flags = result.exceededFlags
+  await drizzleClient.execute(sql`
+    UPDATE public.stripe_info
+    SET is_above_plan = ${isAbovePlan},
+        is_good_plan = ${result.finalIsGoodPlan},
+        plan_usage = ${planUsage},
+        mau_exceeded = ${flags.mau_exceeded},
+        storage_exceeded = ${flags.storage_exceeded},
+        bandwidth_exceeded = ${flags.bandwidth_exceeded},
+        build_time_exceeded = ${flags.build_time_exceeded}
+    WHERE customer_id = ${org.customer_id}
+      AND ROW(is_above_plan, is_good_plan, plan_usage, mau_exceeded, storage_exceeded, bandwidth_exceeded, build_time_exceeded)
+        IS DISTINCT FROM ROW(${isAbovePlan}, ${result.finalIsGoodPlan}, ${planUsage}, ${flags.mau_exceeded}, ${flags.storage_exceeded}, ${flags.bandwidth_exceeded}, ${flags.build_time_exceeded})
+  `)
 }
 
 // New function for cron_stat_org - handles is_good_plan + plan % + exceeded flags
@@ -594,7 +639,7 @@ export async function checkPlanStatusOnly(c: Context, orgId: string, drizzleClie
   const org = await getOrgWithCustomerInfo(c, orgId)
 
   // Handle trial organizations
-  const trialHandled = await handleTrialOrg(c, orgId, org)
+  const trialHandled = await handleTrialOrg(c, orgId, org, drizzleClient)
   let planStatusWriteError: unknown
   if (!trialHandled) {
     // Calculate plan status and usage
@@ -604,14 +649,15 @@ export async function checkPlanStatusOnly(c: Context, orgId: string, drizzleClie
     }
     catch (error) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'calculatePlanStatus failed', orgId, error })
+      throw error
     }
     if (planStatus) {
       const { is_good_plan, percentUsage } = planStatus
       // Credits can restore final plan eligibility, so retain the raw usage threshold separately.
       const isAbovePlan = percentUsage.total_percent > 100
       try {
-        const finalIsGoodPlan = await handleOrgNotificationsAndEvents(c, org, orgId, is_good_plan, percentUsage, drizzleClient)
-        await updatePlanStatus(c, org, finalIsGoodPlan, isAbovePlan, percentUsage)
+        const result = await handleOrgNotificationsAndEvents(c, org, orgId, is_good_plan, percentUsage, drizzleClient)
+        await updatePlanStatus(org, result, isAbovePlan, percentUsage, drizzleClient)
       }
       catch (error) {
         planStatusWriteError = error
@@ -640,7 +686,7 @@ export async function syncSubscriptionAndEvents(c: Context, orgId: string, drizz
   await syncOrgSubscriptionData(c, org)
 
   // Handle trial organizations
-  if (await handleTrialOrg(c, orgId, org)) {
+  if (await handleTrialOrg(c, orgId, org, drizzleClient)) {
     return // Trial handled, exit early
   }
 
@@ -648,5 +694,7 @@ export async function syncSubscriptionAndEvents(c: Context, orgId: string, drizz
   const { is_good_plan, percentUsage } = await calculatePlanStatus(c, orgId)
 
   // Handle notifications and events
-  await handleOrgNotificationsAndEvents(c, org, orgId, is_good_plan, percentUsage, drizzleClient)
+  const result = await handleOrgNotificationsAndEvents(c, org, orgId, is_good_plan, percentUsage, drizzleClient)
+  if (result.exceededFlags)
+    await updateExceededFlags(org.customer_id, result.exceededFlags, drizzleClient)
 }

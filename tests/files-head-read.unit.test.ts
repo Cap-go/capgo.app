@@ -94,14 +94,14 @@ async function createFilesApp(routePrefix = '/files') {
 }
 
 const filePath = 'orgs/test-org/apps/com.test.app/bundle.zip'
-const readUrl = `http://localhost/files/read/attachments/${filePath}?device_id=device-1`
+const readUrl = `http://localhost/files/read/attachments/${filePath}?device_id=device-1&nocache=test`
 const objectSize = 1_000
 
 async function fetchHead(appGlobal: Awaited<ReturnType<typeof createFilesApp>>, range?: string) {
   const headers = range ? { range } : undefined
   return appGlobal.fetch(
     new Request(readUrl, { method: 'HEAD', headers }),
-    { ATTACHMENT_BUCKET: {} },
+    { MANIFEST_SIZE_RECEIPT_SECRET: 'receipt-secret', ATTACHMENT_BUCKET: {} },
     { waitUntil: () => { } } as any,
   )
 }
@@ -110,6 +110,7 @@ describe('files attachment HEAD reads on workerd/R2', () => {
   beforeEach(() => {
     vi.resetModules()
     vi.clearAllMocks()
+    vi.stubEnv('MANIFEST_SIZE_RECEIPT_SECRET', 'receipt-secret')
     queryMock.mockResolvedValue({ rows: [] })
     globalThis.caches = {
       default: {
@@ -134,6 +135,9 @@ describe('files attachment HEAD reads on workerd/R2', () => {
     expect(response.headers.get('content-length')).toBe('3478395')
     expect(response.headers.get('content-type')).toBe('application/zip')
     expect(response.headers.get('content-disposition')).toBe(`attachment; filename="${filePath}"`)
+    const receipt = response.headers.get('x-capgo-manifest-size-receipt')
+    const { verifyManifestSizeReceipts } = await import('../supabase/functions/_backend/utils/manifest_size_receipt.ts')
+    expect(await verifyManifestSizeReceipts('receipt-secret', [{ path: filePath, receipt: receipt! }])).toEqual([3_478_395])
     expect(await response.text()).toBe('')
     expect((await response.arrayBuffer()).byteLength).toBe(0)
     expect(retryGetMock).not.toHaveBeenCalled()

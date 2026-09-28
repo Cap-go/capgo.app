@@ -98,6 +98,50 @@ describe('onboarding progress analytics', () => {
     })
   })
 
+  it.concurrent.each(['pre_org', 'existing_org'] as const)('records an automatic %s channel resume without a dialog or duplicate decision', (flow) => {
+    const capture = vi.fn()
+    const ids = [ATTEMPT_A2, RUN_R2_UUID]
+    const identity = createOnboardingTelemetryIdentity({
+      capture,
+      flow,
+      idFactory: () => ids.shift()!,
+      supaHost: 'https://supabase.capgo.test',
+    })
+    identity.prepareResumeCandidate({
+      lastRunId: RUN_R1,
+      onboardingAttemptId: ATTEMPT_A1,
+      savedStep: 'channel',
+      steps: ['app_name', 'channel', flow === 'pre_org' ? 'setup' : 'install'],
+    })
+
+    identity.recordResumeDialogSkipped('channel-create')
+    identity.recordResumeDialogSkipped('channel-create')
+    identity.recordResumeDialogViewed()
+    identity.recordResumeContinued()
+
+    expect(capture.mock.calls).toEqual([[
+      'onboarding_resume_dialog_skipped',
+      'https://supabase.capgo.test',
+      {
+        channel_stage: 'channel-create',
+        flow,
+        initial_onboarding_attempt_id: ATTEMPT_A2,
+        onboarding_attempt_id: ATTEMPT_A1,
+        onboarding_run_id: RUN_R2,
+        onboarding_version: ONBOARDING_ANALYTICS_VERSION,
+        resume_onboarding_attempt_id: ATTEMPT_A1,
+        resumed_from_run_id: RUN_R1,
+        saved_step: 'channel',
+        step_index: 1,
+        total_steps: 3,
+      },
+    ]])
+    expect(identity.getProgressMetadata()).toEqual({
+      lastRunId: RUN_R2,
+      onboardingAttemptId: ATTEMPT_A1,
+    })
+  })
+
   it.concurrent('keeps the fresh attempt when restarting saved progress', () => {
     const capture = vi.fn()
     const ids = [ATTEMPT_A2, RUN_R2_UUID]
