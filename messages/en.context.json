@@ -3764,5 +3764,20 @@
   "app-onboarding-exploration-reminder-title": "Title of a dialog shown after refreshing the dashboard during unfinished app setup. Offers staying in the dashboard or returning to setup.",
   "app-onboarding-exploration-reminder-description": "Dialog body asking a user who previously explored the dashboard whether to continue exploring or return to unfinished app setup.",
   "app-onboarding-exploration-reminder-continue": "Dialog button that closes the reminder and keeps the user exploring the app dashboard.",
-  "app-onboarding-exploration-reminder-setup": "Dialog button returning the user to the fullscreen app setup checklist."
+  "app-onboarding-exploration-reminder-setup": "Dialog button returning the user to the fullscreen app setup checklist.",
+  "mcp-oauth-allow": "Used in Capgo web console areas: pages/oauth. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "mcp-oauth-connected": "Used in Capgo web console areas: pages/oauth. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "mcp-oauth-denied": "Used in Capgo web console areas: pages/oauth. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "mcp-oauth-deny": "Used in Capgo web console areas: pages/oauth. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "mcp-oauth-description": "Used in Capgo web console areas: pages/oauth. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "mcp-oauth-error": "Used in Capgo web console areas: pages/oauth. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "mcp-oauth-expired": "Used in Capgo web console areas: pages/oauth. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "mcp-oauth-key-note": "Used in Capgo web console areas: pages/oauth. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "mcp-oauth-loading": "Used in Capgo web console areas: pages/oauth. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "mcp-oauth-no-eligible": "Used in Capgo web console areas: pages/oauth. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "mcp-oauth-organizations": "Used in Capgo web console areas: pages/oauth. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "mcp-oauth-redirect": "Used in Capgo web console areas: pages/oauth. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "mcp-oauth-select-organization": "Used in Capgo web console areas: pages/oauth. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "mcp-oauth-title": "Used in Capgo web console areas: pages/oauth. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "mcp-oauth-unverified": "Used in Capgo web console areas: pages/oauth. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }

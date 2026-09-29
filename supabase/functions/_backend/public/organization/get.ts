@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { z } from 'zod'
-import { safeParseSchema } from '../../utils/schema_validation.ts'
+import { integerLikeSchema, safeParseSchema } from '../../utils/schema_validation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { createSignedImageUrl } from '../../utils/storage.ts'
@@ -11,7 +11,7 @@ import { fetchLimit } from '../../utils/utils.ts'
 
 const bodySchema = z.object({
   orgId: z.string().optional(),
-  page: z.number().optional(),
+  page: integerLikeSchema.refine(page => Number.isSafeInteger(page) && page >= 0, { message: 'page must be a non-negative integer' }).optional(),
 })
 const orgSchema = z.object({
   id: z.uuid(),
