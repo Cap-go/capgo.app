@@ -1769,7 +1769,8 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   // --encrypt-partial is the deprecated alias of --encrypt-delta
   options.encryptDelta = options.encryptDelta || options.encryptPartial
 
-  if (options.encryptDelta && encryptionMethod === 'v1')
+  // Never upload delta files unencrypted when encryption was explicitly requested
+  if (options.encryptDelta && encryptionMethod !== 'v2')
     uploadFail('You cannot encrypt the delta update if you are not using the v2 encryption method')
 
   // Minimum versions that support hex checksum format
@@ -1780,7 +1781,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   // Check if updater supports hex checksum format
   let supportsHexChecksum = false
 
-  // Auto-encrypt delta updates for updater versions > 6.14.5 if encryption method is v2
+  // Auto-encrypt delta updates for updater versions >= 6.14.4 if encryption method is v2
   if (options.delta && encryptionMethod === 'v2' && !options.encryptDelta) {
     // Check updater version
     const root = findRoot(cwd())
@@ -1794,7 +1795,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     }
 
     if (updaterVersion && coerced && greaterOrEqual(coerced, parse('6.14.4'))) {
-      log.info(`Auto-enabling delta update encryption for updater version ${coerced} (> 6.14.4)`)
+      log.info(`Auto-enabling delta update encryption for updater version ${coerced} (>= 6.14.4)`)
       if (options.verbose)
         log.info(`[Verbose] Delta encryption auto-enabled for updater >= 6.14.4`)
       options.encryptDelta = true
@@ -2205,7 +2206,7 @@ export function checkValidOptions(options: OptionsUpload) {
     uploadFail('You need to provide an external url if you want to use the --encrypted-checksum option')
   }
   if ((options.partial || options.delta || options.partialOnly || options.deltaOnly) && options.external) {
-    uploadFail('You cannot use the --delta/--delta-only option with an external url')
+    uploadFail('You cannot use delta upload options (--delta/--delta-only, or deprecated --partial/--partial-only) with an external url')
   }
   if (options.tus && options.external) {
     uploadFail('You cannot use the --tus option with an external url')
