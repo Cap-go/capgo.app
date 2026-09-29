@@ -39,7 +39,7 @@ async function startAuthorization(clientId: string, challenge: string, state: st
   const response = await fetchTestRequest(url.toString(), { redirect: 'manual' })
   expect(response.status).toBe(302)
   const location = new URL(response.headers.get('location') ?? '')
-  expect(location.pathname).toBe('/oauth/authorize')
+  expect(location.pathname, location.toString()).toBe('/oauth/authorize')
   const requestId = location.searchParams.get('request')
   expect(requestId).toMatch(/^[0-9a-f-]{36}$/)
   return requestId!
