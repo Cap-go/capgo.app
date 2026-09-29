@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { purgeLocalTaggedKeys } from '../supabase/functions/_backend/plugin_runtime/utils/cache.ts'
 import { createLazyPgClient, getLazyPgQueryCount } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
 import { getCachedAppOwner, getCachedDefaultChannel, getUpdatesEdgeCacheTtlSeconds, isUpdatesEdgeCacheEnabled, updatesAppCacheTag, updatesCacheTags } from '../supabase/functions/_backend/plugin_runtime/utils/updatesEdgeCache.ts'
-import { chunk, getRepurgeDelayMs, parseAppIds, purgeUpdatesCacheTags } from '../supabase/functions/_backend/triggers/updates_cache_purge.ts'
+import { chunk, parseAppIds, purgeUpdatesCacheTags } from '../supabase/functions/_backend/triggers/updates_cache_purge.ts'
 
 function makeContext(env: Record<string, string> = {}) {
   const raw = new Request('https://plugin.capgo.test/updates', { method: 'POST' })
@@ -145,15 +145,6 @@ describe('updates cache purge trigger', () => {
     expect(parseAppIds({})).toEqual([])
     expect(parseAppIds({ app_ids: Array.from({ length: 1500 }, (_, i) => `app${i}`) })).toHaveLength(1000)
     expect(chunk([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]])
-  })
-
-  it('clamps the re-purge delay', () => {
-    const c = makeContext()
-    expect(getRepurgeDelayMs(c)).toBe(10_000)
-    vi.stubEnv('UPDATES_CACHE_REPURGE_DELAY_MS', '0')
-    expect(getRepurgeDelayMs(c)).toBe(0)
-    vi.stubEnv('UPDATES_CACHE_REPURGE_DELAY_MS', '600000')
-    expect(getRepurgeDelayMs(c)).toBe(25_000)
   })
 
   it('purges every zone in chunks of 100 tags', async () => {

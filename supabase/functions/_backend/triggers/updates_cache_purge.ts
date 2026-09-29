@@ -1,11 +1,11 @@
 // Purges the /updates edge cache of the given apps in every Cloudflare data
-// center (zone purge-by-tag), then purges once more after read replicas had
-// time to catch up so an entry refilled from a lagging replica (or by a
-// request that read just before the commit) cannot outlive the change.
+// center (zone purge-by-tag).
 //
 // Called by the invalidate_updates_edge_cache() statement-level database
-// triggers through pg_net. Every failure is soft: the cache TTL is the
-// backstop.
+// triggers through pg_net right after the commit, then again from the
+// updates_cache_purge pgmq queue (10s / 60s / 180s later) so an entry refilled
+// from a lagging read replica cannot outlive the change. Every failure is
+// soft: the cache TTL is the backstop.
 
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
@@ -19,9 +19,7 @@ import { backgroundTask, getEnv } from '../utils/utils.ts'
 const PURGE_TAGS_PER_CALL = 100
 const MAX_APPS_PER_REQUEST = 1000
 const PURGE_TIMEOUT_MS = 5000
-const DEFAULT_REPURGE_DELAY_MS = 10_000
-const MAX_REPURGE_DELAY_MS = 25_000
-const MAX_RETRY_AFTER_MS = 5000
+const MAX_RETRY_AFTER_MS = 2000
 const MAX_PURGE_ATTEMPTS = 3
 
 export function chunk<T>(items: T[], size: number): T[][] {
@@ -40,13 +38,6 @@ export function parseAppIds(body: unknown): string[] {
     ? (body as { app_ids: unknown[] }).app_ids
     : []
   return [...new Set(appIds.filter((appId): appId is string => typeof appId === 'string' && appId.length > 0))].slice(0, MAX_APPS_PER_REQUEST)
-}
-
-export function getRepurgeDelayMs(c: Context) {
-  const raw = Number.parseInt(getEnv(c, 'UPDATES_CACHE_REPURGE_DELAY_MS'), 10)
-  if (!Number.isFinite(raw))
-    return DEFAULT_REPURGE_DELAY_MS
-  return Math.min(Math.max(raw, 0), MAX_REPURGE_DELAY_MS)
 }
 
 async function postPurge(url: string, headers: Record<string, string>, body: unknown) {
@@ -111,19 +102,14 @@ app.post('/', middlewareAPISecret, async (c) => {
     return c.json({ ...BRES, apps: 0 })
 
   const tags = appIds.map(updatesAppCacheTag)
-  const repurgeDelayMs = getRepurgeDelayMs(c)
-  // Answer pg_net right away; purges (and 429 back-off) run in the background.
+  // Answer pg_net / the queue right away; the purge (and 429 back-off) runs
+  // in the background, bounded well under the 30s waitUntil budget.
   await backgroundTask(c, (async () => {
-    const first = await purgeUpdatesCacheTags(c, tags)
-    if (first.calls === 0) {
+    const result = await purgeUpdatesCacheTags(c, tags)
+    if (result.calls === 0)
       cloudlog({ requestId: c.get('requestId'), message: 'updates cache purge skipped (not configured)', apps: appIds.length })
-      return
-    }
-    cloudlog({ requestId: c.get('requestId'), message: 'updates cache purged', apps: appIds.length, calls: first.calls, failed: first.failed, repurgeDelayMs })
-    if (repurgeDelayMs > 0) {
-      await new Promise(resolve => setTimeout(resolve, repurgeDelayMs))
-      await purgeUpdatesCacheTags(c, tags)
-    }
+    else
+      cloudlog({ requestId: c.get('requestId'), message: 'updates cache purged', apps: appIds.length, calls: result.calls, failed: result.failed })
   })())
   return c.json({ ...BRES, apps: appIds.length })
 })

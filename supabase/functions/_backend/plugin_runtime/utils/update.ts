@@ -19,7 +19,7 @@ import { onPremiseAppResponse } from './rateLimitInfo.ts'
 import { cloudlog } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
 import { sendNotifToOrgMembersCached } from './org_email_notifications.ts'
-import { closeClient, createLazyPgClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDrizzleClient, getLazyPgQueryCount, getPgClient, isLazyPgConnectError, logPgError, queryAppOwnerPostgres, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
+import { closeClient, createLazyPgClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDrizzleClient, getLazyPgQueryCount, getPgClient, isLazyPgConnectError, logPgError, queryAppOwnerPostgres, refreshReplicationLag, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
 import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
 import { makeDevice } from './plugin_parser.ts'
 import { createStatsBandwidth, createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from './plugin_stats.ts'
@@ -1067,14 +1067,19 @@ async function updateWithEdgeCache(
 ) {
   const lazyClient = createLazyPgClient(c, true)
   const pathTiming: UpdatePathTiming = {}
+  let closeInBackground = false
   try {
     // Memory-only lag header: a cache hit must not trigger a background probe.
     await setReplicationLagHeader(c, lazyClient.client, { probeOnMiss: false })
     const drizzlePg = getDrizzleClient(lazyClient.client, { logger: false })
     const response = await updateWithPG(c, body, drizzlePg, appStatus, pathTiming)
-    if (lazyClient.isConnected())
-      await setReplicationLagHeader(c, lazyClient.client)
     const dbQueries = getLazyPgQueryCount(c)
+    if (lazyClient.isConnected()) {
+      // Probe lag only on requests that already use the database, and close
+      // the client after the probe (a Pool cannot run it once ended).
+      closeInBackground = true
+      await backgroundTask(c, refreshReplicationLag(c, lazyClient.client).finally(() => lazyClient.close()))
+    }
     try {
       response.headers.set('X-Updates-Cache', dbQueries === 0 ? 'hit' : 'miss')
     }
@@ -1102,6 +1107,7 @@ async function updateWithEdgeCache(
     return response
   }
   finally {
-    await lazyClient.close()
+    if (!closeInBackground)
+      await lazyClient.close()
   }
 }

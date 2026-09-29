@@ -253,6 +253,11 @@ async function getCachedReplicaLag(c: Context, pool: PluginPgClient): Promise<Re
   return query
 }
 
+/** Refresh the cached replica lag status (memory + Cache API) with one probe at most. */
+export function refreshReplicationLag(c: Context, pool: PluginPgClient) {
+  return getCachedReplicaLag(c, pool)
+}
+
 /**
  * Set replication lag headers on hot plugin responses using a 60-second cache.
  */
@@ -1145,14 +1150,23 @@ export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
         const needsParallelClients = shouldQueryChannelOverride || typeof channelSelfOverrideChannelId === 'number'
         if (needsParallelClients && getRuntimeKey() === 'workerd') {
           try {
-            // Lazy: a default channel served from the edge cache never connects.
-            const parallelClient = createLazyPgClient(c, true)
+            if (loadDefaultChannel) {
+              // Lazy: a default channel served from the edge cache never connects.
+              const lazyParallelClient = createLazyPgClient(c, true)
+              try {
+                return await runPair(drizzleClient, getDrizzleClient(lazyParallelClient.client, { logger: false }))
+              }
+              finally {
+                await lazyParallelClient.close()
+              }
+            }
+            const parallelClient = await getPgClient(c, true)
             try {
-              const drizzleParallel = getDrizzleClient(parallelClient.client, { logger: false })
+              const drizzleParallel = getDrizzleClient(parallelClient, { logger: false })
               return await runPair(drizzleClient, drizzleParallel)
             }
             finally {
-              await parallelClient.close()
+              await closeClient(c, parallelClient)
             }
           }
           catch {

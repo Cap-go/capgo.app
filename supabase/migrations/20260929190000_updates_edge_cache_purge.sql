@@ -5,12 +5,32 @@
 -- per app. These statement-level triggers collect the app ids whose served
 -- data changed and POST them (pg_net, async, after commit) to
 -- triggers/updates_cache_purge, which purges the tags in every Cloudflare data
--- center. Nothing here can fail or slow down the write: every error is
--- swallowed and the cache TTL is the backstop.
+-- center. The same app ids are also queued (pgmq, delayed 10s / 60s / 180s)
+-- for re-purges: a request that read a lagging read replica, or read just
+-- before the commit, may have refilled the cache with the old answer. 180s is
+-- the replica lag threshold past which a replica is reported as lagging.
+-- Nothing here can fail or slow down the write: every error is swallowed and
+-- the cache TTL is the backstop.
 --
 -- Only columns the update path reads are compared, so background writes
 -- (stats refresh, audit bookkeeping, auto-pause checks, per-device override
 -- counter churn) do not purge anything.
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pgmq.list_queues() WHERE queue_name = 'updates_cache_purge') THEN
+    PERFORM pgmq.create('updates_cache_purge');
+  END IF;
+END;
+$$;
+
+-- Drain the delayed re-purges with the other high-frequency trigger queues.
+UPDATE public.cron_tasks
+SET
+  target = (target::jsonb || '["updates_cache_purge"]'::jsonb)::text,
+  updated_at = pg_catalog.now()
+WHERE name = 'high_frequency_queues'
+  AND NOT (target::jsonb ? 'updates_cache_purge');
 
 CREATE OR REPLACE FUNCTION public.notify_updates_edge_cache_purge(p_app_ids text[])
 RETURNS void
@@ -23,6 +43,8 @@ DECLARE
   chunk text[];
   chunk_size constant int := 100;
   max_apps constant int := 1000;
+  repurge_delays constant int[] := ARRAY[10, 60, 180];
+  delay_seconds int;
   i int;
 BEGIN
   SELECT pg_catalog.array_agg(DISTINCT app_id) INTO deduped
@@ -47,6 +69,17 @@ BEGIN
       body := pg_catalog.jsonb_build_object('app_ids', pg_catalog.to_jsonb(chunk)),
       timeout_milliseconds := 5000
     );
+    FOREACH delay_seconds IN ARRAY repurge_delays LOOP
+      PERFORM pgmq.send(
+        'updates_cache_purge',
+        pg_catalog.jsonb_build_object(
+          'function_name', 'updates_cache_purge',
+          'function_type', 'cloudflare',
+          'payload', pg_catalog.jsonb_build_object('app_ids', pg_catalog.to_jsonb(chunk))
+        ),
+        delay_seconds
+      );
+    END LOOP;
     i := i + chunk_size;
   END LOOP;
 EXCEPTION WHEN OTHERS THEN
@@ -120,11 +153,11 @@ BEGIN
     ELSE
       SELECT pg_catalog.array_agg(DISTINCT n.app_id::text) INTO app_ids
       FROM old_rows o JOIN new_rows n ON n.id = o.id
-      WHERE (o.name, o.checksum, o.session_key, o.key_id, o.storage_provider, o.external_url,
+      WHERE (o.app_id, o.name, o.checksum, o.session_key, o.key_id, o.storage_provider, o.external_url,
              o.min_update_version, o.manifest_count, o.r2_path, o.deleted, o.deleted_at,
              o.link, o.comment)
         IS DISTINCT FROM
-            (n.name, n.checksum, n.session_key, n.key_id, n.storage_provider, n.external_url,
+            (n.app_id, n.name, n.checksum, n.session_key, n.key_id, n.storage_provider, n.external_url,
              n.min_update_version, n.manifest_count, n.r2_path, n.deleted, n.deleted_at,
              n.link, n.comment);
     END IF;
@@ -138,11 +171,15 @@ BEGIN
       FROM (SELECT DISTINCT app_version_id FROM new_rows) AS m
       JOIN public.app_versions av ON av.id = m.app_version_id;
     ELSE
+      -- file_size backfills (one UPDATE per file) are not read by /updates.
       SELECT pg_catalog.array_agg(DISTINCT av.app_id::text) INTO app_ids
       FROM (
-        SELECT app_version_id FROM old_rows
+        SELECT o.app_version_id FROM old_rows o JOIN new_rows n ON n.id = o.id
+        WHERE (o.app_version_id, o.file_name, o.file_hash, o.s3_path)
+          IS DISTINCT FROM (n.app_version_id, n.file_name, n.file_hash, n.s3_path)
         UNION
-        SELECT app_version_id FROM new_rows
+        SELECT n.app_version_id FROM old_rows o JOIN new_rows n ON n.id = o.id
+        WHERE o.app_version_id IS DISTINCT FROM n.app_version_id
       ) AS m
       JOIN public.app_versions av ON av.id = m.app_version_id;
     END IF;
