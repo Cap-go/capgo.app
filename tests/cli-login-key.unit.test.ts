@@ -2,13 +2,17 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   aggregateCliKeyPolicy,
   canonicalizeCliBindings,
+  createMcpOAuthKey,
   getCliLoginDestination,
   isCliAiQuery,
   isCliLoginPath,
   isMatchingCliLoginEvent,
+  isMcpAuthorizePath,
   isValidCliLoginSession,
+  mcpOAuthKeyName,
   nextManagedCliKeyName,
   prepareCliLoginKey,
+  resolveCliKeyEligibility,
   roleForCliKey,
   shouldShowCliLoginGuidance,
 } from '../src/services/cliLogin'
@@ -304,5 +308,46 @@ describe('prepareCliLoginKey', () => {
     })
     expect(io.listMetadata).not.toHaveBeenCalled()
     expect(io.createKey).not.toHaveBeenCalled()
+  })
+})
+
+describe('MCP OAuth key model', () => {
+  it.concurrent('only offers organizations that pass the CLI key eligibility rules', async () => {
+    const result = await resolveCliKeyEligibility([
+      org(),
+      org({ gid: 'org-b', name: 'Beta', role: 'org_member' }),
+      org({ gid: 'org-c', name: 'Gamma', is_invite: true }),
+    ], dependencies())
+    expect(result.eligible.map(organization => organization.gid)).toEqual(['org-a'])
+    expect(result.skippedOrganizations).toEqual([{ id: 'org-b', name: 'Beta' }, { id: 'org-c', name: 'Gamma' }])
+  })
+
+  it.concurrent('mints a dedicated key per client bound to the selected organizations and policy', async () => {
+    const deps = dependencies()
+    const key = await createMcpOAuthKey([
+      org(),
+      org({ gid: 'org-b', role: 'owner', enforce_hashed_api_keys: true, require_apikey_expiration: true, max_apikey_expiration_days: 30 }),
+    ], deps, 'Lovable', now)
+    expect(key).toBe('new-secret')
+    expect(deps.createKey).toHaveBeenCalledWith({
+      name: 'MCP · Lovable',
+      hashed: true,
+      expires_at: aggregateCliKeyPolicy([org({ require_apikey_expiration: true, max_apikey_expiration_days: 30 })], now).expiresAt,
+      bindings: [
+        { role_name: 'org_admin', scope_type: 'org', org_id: 'org-a' },
+        { role_name: 'org_super_admin', scope_type: 'org', org_id: 'org-b' },
+      ],
+      global_permissions: [],
+    })
+  })
+
+  it.concurrent('refuses to mint a key without organizations', async () => {
+    await expect(createMcpOAuthKey([], dependencies(), 'Lovable', now)).rejects.toThrow()
+  })
+
+  it.concurrent('names keys and recognizes the consent route', () => {
+    expect(mcpOAuthKeyName('  ')).toBe('MCP · client')
+    expect(isMcpAuthorizePath('/oauth/authorize/')).toBe(true)
+    expect(isMcpAuthorizePath('/oauth')).toBe(false)
   })
 })

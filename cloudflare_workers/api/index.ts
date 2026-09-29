@@ -1,5 +1,7 @@
 import type { ExecutionContext, ScheduledController } from '@cloudflare/workers-types'
+import type { Context } from 'hono'
 import type { Bindings } from '../../supabase/functions/_backend/utils/cloudflare.ts'
+import { createMcpApp } from '../../supabase/functions/_backend/mcp/index.ts'
 import { app as accept_invitation } from '../../supabase/functions/_backend/private/accept_invitation.ts'
 import { app as admin_credits } from '../../supabase/functions/_backend/private/admin_credits.ts'
 import { app as admin_org_support_channel } from '../../supabase/functions/_backend/private/admin_org_support_channel.ts'
@@ -21,6 +23,7 @@ import { app as invite_existing_user_to_org } from '../../supabase/functions/_ba
 import { app as invite_new_user_to_org } from '../../supabase/functions/_backend/private/invite_new_user_to_org.ts'
 import { app as latency } from '../../supabase/functions/_backend/private/latency.ts'
 import { app as log_as } from '../../supabase/functions/_backend/private/log_as.ts'
+import { app as mcp_oauth } from '../../supabase/functions/_backend/private/mcp_oauth.ts'
 import { app as native_observe_stats } from '../../supabase/functions/_backend/private/native_observe_stats.ts'
 import { app as observe } from '../../supabase/functions/_backend/private/observe.ts'
 import { app as onboarding_ab_tests } from '../../supabase/functions/_backend/private/onboarding_ab_tests.ts'
@@ -105,6 +108,16 @@ import { processNativeNotificationQueueBatch } from '../../supabase/functions/_b
 import { flushQueuedPluginNotifications } from '../../supabase/functions/_backend/utils/plugin_notification_flush.ts'
 import { version } from '../../supabase/functions/_backend/utils/version.ts'
 
+function getExecutionContext(c: Context): Context['executionCtx'] | undefined {
+  try {
+    return c.executionCtx
+  }
+  catch {
+    // Unit tests call app.fetch without an execution context.
+    return undefined
+  }
+}
+
 // Public API
 const functionName = 'api'
 const app = createHono(functionName, version)
@@ -126,6 +139,9 @@ app.route('/queue_health', queue_health)
 app.route('/check_cpu_usage', check_cpu_usage)
 app.route('/translation', translation)
 app.route('/plugin_regions', pluginRegions)
+// Hosted MCP server (POST /mcp) + OAuth discovery/endpoints. Tools replay public API requests
+// through this same worker with the caller's API key, so RBAC and rate limits apply unchanged.
+app.route('/', createMcpApp((request, c) => app.fetch(request, c.env, getExecutionContext(c))))
 
 // Private routes are bundled into this Cloudflare API worker at deploy time.
 const functionNamePrivate = 'private'
@@ -141,6 +157,7 @@ appPrivate.route('/email_preferences', emailPreferences)
 appPrivate.route('/devices', devices_priv)
 appPrivate.route('/channel_device', channel_device)
 appPrivate.route('/log_as', log_as)
+appPrivate.route('/mcp_oauth', mcp_oauth)
 appPrivate.route('/invite_new_user_to_org', invite_new_user_to_org)
 appPrivate.route('/invite_existing_user_to_org', invite_existing_user_to_org)
 appPrivate.route('/set_org_email', set_org_email)

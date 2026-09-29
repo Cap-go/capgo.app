@@ -20,6 +20,7 @@ import { app as invite_existing_user_to_org } from '../_backend/private/invite_e
 import { app as invite_new_user_to_org } from '../_backend/private/invite_new_user_to_org.ts'
 import { app as latency } from '../_backend/private/latency.ts'
 import { app as log_as } from '../_backend/private/log_as.ts'
+import { app as mcp_oauth } from '../_backend/private/mcp_oauth.ts'
 import { app as native_observe_stats } from '../_backend/private/native_observe_stats.ts'
 import { app as observe } from '../_backend/private/observe.ts'
 import { app as onboarding_ab_tests } from '../_backend/private/onboarding_ab_tests.ts'
@@ -77,6 +78,7 @@ appGlobal.route('/org_notification_stats', org_notification_stats)
 appGlobal.route('/organization_invitation', organization_invitation)
 appGlobal.route('/download_link', download_link)
 appGlobal.route('/log_as', log_as)
+appGlobal.route('/mcp_oauth', mcp_oauth)
 appGlobal.route('/admin_credits', admin_credits)
 appGlobal.route('/admin_org_support_channel', admin_org_support_channel)
 appGlobal.route('/admin_stats', admin_stats)
