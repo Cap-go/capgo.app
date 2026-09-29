@@ -341,29 +341,3 @@ function getAPIKeyRateLimit(c: Context, scope: APIKeyRateLimitScope): number {
   }
   return scope === 'upload' ? DEFAULT_UPLOAD_API_KEY_RATE_LIMIT : DEFAULT_API_KEY_RATE_LIMIT
 }
-
-/**
- * Fixed-window per-IP limiter for unauthenticated endpoints that write rows (e.g. OAuth client
- * registration). Counts the call and reports whether the IP went over `limit` in the window.
- * Fails open when the IP or cache is unavailable, like the other limiters in this file.
- */
-export async function consumeIPRateLimit(c: Context, bucket: string, limit: number, windowSeconds: number): Promise<RateLimitStatus> {
-  const ip = getClientIP(c)
-  if (ip === 'unknown')
-    return { limited: false }
-
-  const cacheHelper = new CacheHelper(c)
-  const cacheKey = cacheHelper.buildRequest(`/rate-limit/ip/${bucket}`, { ip })
-  const existing = await cacheHelper.matchJson<RateLimitData>(cacheKey)
-  const now = Date.now()
-  const windowActive = existing?.resetAt !== undefined && existing.resetAt > now
-  const resetAt = windowActive ? existing!.resetAt! : now + windowSeconds * 1000
-  const count = (windowActive ? existing!.count : 0) + 1
-
-  if (count > limit) {
-    cloudlog({ requestId: c.get('requestId'), message: 'IP rate limited', bucket, ip, count, limit })
-    return { limited: true, resetAt }
-  }
-  await cacheHelper.putJson(cacheKey, { count, resetAt }, getRateLimitWindowSeconds(resetAt, now))
-  return { limited: false, resetAt }
-}

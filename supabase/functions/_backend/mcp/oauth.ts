@@ -2,8 +2,8 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
-import { closeClient, getPgClient } from '../utils/pg.ts'
-import { consumeIPRateLimit, isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
+import { closeClient, getPgClient, withPgTransaction } from '../utils/pg.ts'
+import { getClientIP, isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
 import { getEnv } from '../utils/utils.ts'
 import {
   buildRedirectUrl,
@@ -112,6 +112,40 @@ const METADATA_DOCUMENT_MAX_BYTES = 64 * 1024
 const REGISTER_RATE_LIMIT = { limit: 20, windowSeconds: 60 * 60 }
 const AUTHORIZE_RATE_LIMIT = { limit: 60, windowSeconds: 60 * 10 }
 
+type PgTransactionClient = Parameters<Parameters<typeof withPgTransaction>[1]>[0]
+
+/** SHA-256 of the caller IP (never store raw IPs); null when the IP is unknown (fail open like other limiters). */
+async function getClientIpHash(c: McpContext): Promise<string | null> {
+  const ip = getClientIP(c)
+  return ip === 'unknown' ? null : sha256Hex(`mcp-oauth-ip:${ip}`)
+}
+
+/**
+ * Atomic per-IP limit for unauthenticated inserts: a transaction-scoped advisory lock on the IP
+ * hash serializes concurrent requests from one IP, so the count check and the insert cannot race.
+ * Returns null when the IP is over the limit.
+ */
+async function insertWithIpLimit<T>(
+  c: McpContext,
+  table: 'mcp_oauth_clients' | 'mcp_oauth_requests',
+  ipHash: string | null,
+  limit: { limit: number, windowSeconds: number },
+  insert: (client: PgTransactionClient) => Promise<T>,
+): Promise<T | null> {
+  return withPg(c, pg => withPgTransaction(pg, async (client) => {
+    if (ipHash) {
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${table}:${ipHash}`])
+      const { rows } = await client.query<{ count: string }>(
+        `SELECT count(*) FROM public.${table} WHERE ip_hash = $1 AND created_at > now() - make_interval(secs => $2)`,
+        [ipHash, limit.windowSeconds],
+      )
+      if (Number(rows[0]?.count ?? 0) >= limit.limit)
+        return null
+    }
+    return insert(client)
+  }))
+}
+
 /** Read a response body but stop (and fail) as soon as it exceeds maxBytes. */
 async function readBoundedText(response: Response, maxBytes: number): Promise<string | null> {
   const declared = Number(response.headers.get('content-length') ?? '0')
@@ -200,8 +234,6 @@ app.get(`/.well-known/oauth-authorization-server${MCP_PATH}`, c => c.json(author
 // RFC 7591 Dynamic Client Registration (public clients only, PKCE required).
 // ---------------------------------------------------------------------------
 app.post(`${MCP_OAUTH_PATH}/register`, async (c) => {
-  if ((await consumeIPRateLimit(c, 'mcp-oauth-register', REGISTER_RATE_LIMIT.limit, REGISTER_RATE_LIMIT.windowSeconds)).limited)
-    return oauthError(c, 429, 'slow_down', 'Too many client registrations, try again later')
   const body = await c.req.json().catch(() => null) as Record<string, unknown> | null
   if (!body || typeof body !== 'object')
     return oauthError(c, 400, 'invalid_client_metadata', 'Expected a JSON body')
@@ -221,16 +253,19 @@ app.post(`${MCP_OAUTH_PATH}/register`, async (c) => {
   const logoUri = typeof body.logo_uri === 'string' && body.logo_uri.startsWith('https://') ? body.logo_uri.slice(0, 2000) : null
   const clientId = `mcp_${randomToken(24)}`
 
-  const createdAt = await withPg(c, async (pg) => {
+  const ipHash = await getClientIpHash(c)
+  const createdAt = await insertWithIpLimit(c, 'mcp_oauth_clients', ipHash, REGISTER_RATE_LIMIT, async (client) => {
     // Abandoned registrations are never used for a token; keep the table small.
-    await pg.query(`DELETE FROM public.mcp_oauth_clients WHERE last_used_at IS NULL AND created_at < now() - interval '7 days'`)
-    const { rows } = await pg.query<{ created_at: string }>(
-      `INSERT INTO public.mcp_oauth_clients (client_id, client_name, client_uri, logo_uri, redirect_uris)
-       VALUES ($1, $2, $3, $4, $5::text[]) RETURNING created_at`,
-      [clientId, clientName, clientUri, logoUri, redirectUris],
+    await client.query(`DELETE FROM public.mcp_oauth_clients WHERE last_used_at IS NULL AND created_at < now() - interval '7 days'`)
+    const { rows } = await client.query<{ created_at: string }>(
+      `INSERT INTO public.mcp_oauth_clients (client_id, client_name, client_uri, logo_uri, redirect_uris, ip_hash)
+       VALUES ($1, $2, $3, $4, $5::text[], $6) RETURNING created_at`,
+      [clientId, clientName, clientUri, logoUri, redirectUris, ipHash],
     )
-    return rows[0]?.created_at
+    return rows[0]?.created_at ?? new Date().toISOString()
   })
+  if (createdAt === null)
+    return oauthError(c, 429, 'slow_down', 'Too many client registrations, try again later')
 
   cloudlog({ requestId: c.get('requestId'), message: 'mcp_oauth_client_registered', clientId, clientName })
   c.header('Cache-Control', 'no-store')
@@ -253,8 +288,6 @@ app.post(`${MCP_OAUTH_PATH}/register`, async (c) => {
 // Capgo console consent page (which handles login, SSO, 2FA and org policies).
 // ---------------------------------------------------------------------------
 app.get(`${MCP_OAUTH_PATH}/authorize`, async (c) => {
-  if ((await consumeIPRateLimit(c, 'mcp-oauth-authorize', AUTHORIZE_RATE_LIMIT.limit, AUTHORIZE_RATE_LIMIT.windowSeconds)).limited)
-    return oauthError(c, 429, 'slow_down', 'Too many authorization requests, try again later')
   const query = c.req.query()
   const clientId = query.client_id ?? ''
   const redirectUri = query.redirect_uri ?? ''
@@ -290,16 +323,19 @@ app.get(`${MCP_OAUTH_PATH}/authorize`, async (c) => {
     return redirectError('server_error', 'Consent page is not configured')
   }
 
-  const requestId = await withPg(c, async (pg) => {
-    await pg.query(`DELETE FROM public.mcp_oauth_requests WHERE status <> 'exchanged' AND expires_at < now() - interval '1 day'`)
-    const { rows } = await pg.query<{ id: string }>(
-      `INSERT INTO public.mcp_oauth_requests (client_id, client_name, redirect_uri, state, scope, resource, code_challenge, issuer, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + make_interval(secs => $9))
+  const ipHash = await getClientIpHash(c)
+  const requestId = await insertWithIpLimit(c, 'mcp_oauth_requests', ipHash, AUTHORIZE_RATE_LIMIT, async (tx) => {
+    await tx.query(`DELETE FROM public.mcp_oauth_requests WHERE status <> 'exchanged' AND expires_at < now() - interval '1 day'`)
+    const { rows } = await tx.query<{ id: string }>(
+      `INSERT INTO public.mcp_oauth_requests (client_id, client_name, redirect_uri, state, scope, resource, code_challenge, issuer, ip_hash, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now() + make_interval(secs => $10))
        RETURNING id`,
-      [client.client_id, client.client_name, resolvedRedirectUri, query.state ?? null, MCP_OAUTH_SCOPE, query.resource ?? null, query.code_challenge, getIssuer(c), MCP_OAUTH_REQUEST_TTL_SECONDS],
+      [client.client_id, client.client_name, resolvedRedirectUri, query.state ?? null, MCP_OAUTH_SCOPE, query.resource ?? null, query.code_challenge, getIssuer(c), ipHash, MCP_OAUTH_REQUEST_TTL_SECONDS],
     )
-    return rows[0]?.id
+    return rows[0]?.id ?? ''
   })
+  if (requestId === null)
+    return oauthError(c, 429, 'slow_down', 'Too many authorization requests, try again later')
   if (!requestId)
     return redirectError('server_error', 'Cannot create authorization request')
 

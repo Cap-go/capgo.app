@@ -11,12 +11,15 @@ CREATE TABLE "public"."mcp_oauth_clients" (
   "redirect_uris" text[] NOT NULL,
   "created_at" timestamp with time zone NOT NULL DEFAULT now(),
   "last_used_at" timestamp with time zone,
+  "ip_hash" text,
   CONSTRAINT "mcp_oauth_clients_pkey" PRIMARY KEY ("client_id"),
   CONSTRAINT "mcp_oauth_clients_redirect_uris_not_empty" CHECK (cardinality("redirect_uris") BETWEEN 1 AND 20)
 );
 ALTER TABLE "public"."mcp_oauth_clients" OWNER TO "postgres";
 COMMENT ON TABLE "public"."mcp_oauth_clients" IS 'RFC 7591 dynamically registered public clients of the hosted MCP OAuth server. Service role only.';
 
+-- ip_hash = SHA-256 of the registering IP, used only for the per-IP registration limit.
+CREATE INDEX "mcp_oauth_clients_ip_hash_idx" ON "public"."mcp_oauth_clients" ("ip_hash", "created_at") WHERE "ip_hash" IS NOT NULL;
 CREATE INDEX "mcp_oauth_clients_unused_idx" ON "public"."mcp_oauth_clients" ("created_at") WHERE "last_used_at" IS NULL;
 
 -- One row per /authorize call. client_id is not a foreign key because clients can also be
@@ -31,6 +34,7 @@ CREATE TABLE "public"."mcp_oauth_requests" (
   "resource" text,
   "code_challenge" text NOT NULL,
   "issuer" text NOT NULL,
+  "ip_hash" text,
   "status" text NOT NULL DEFAULT 'pending',
   "user_id" uuid,
   "apikey_id" bigint,
@@ -49,6 +53,7 @@ ALTER TABLE "public"."mcp_oauth_requests" OWNER TO "postgres";
 COMMENT ON TABLE "public"."mcp_oauth_requests" IS 'Hosted MCP OAuth authorization requests and single-use codes. The code is never stored: only its SHA-256 hash, and the minted API key is AES-GCM encrypted with a key derived from the code. Service role only.';
 
 CREATE UNIQUE INDEX "mcp_oauth_requests_code_hash_idx" ON "public"."mcp_oauth_requests" ("code_hash") WHERE "code_hash" IS NOT NULL;
+CREATE INDEX "mcp_oauth_requests_ip_hash_idx" ON "public"."mcp_oauth_requests" ("ip_hash", "created_at") WHERE "ip_hash" IS NOT NULL;
 CREATE INDEX "mcp_oauth_requests_expires_at_idx" ON "public"."mcp_oauth_requests" ("expires_at") WHERE "status" <> 'exchanged';
 CREATE INDEX "mcp_oauth_requests_apikey_id_idx" ON "public"."mcp_oauth_requests" ("apikey_id") WHERE "apikey_id" IS NOT NULL;
 CREATE INDEX "mcp_oauth_requests_user_id_idx" ON "public"."mcp_oauth_requests" ("user_id") WHERE "user_id" IS NOT NULL;
