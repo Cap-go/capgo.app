@@ -826,7 +826,6 @@ describe('app onboarding progress analytics integration', () => {
     expect(writer).toContain('{ clearIntent: options.clearIntent }')
     expect(writer).toContain('await replaceUserOnboardingIfUnchanged(')
     expectSourceOrder(writer, [
-      'const onboardingWithPreferences = preserveAdminDashboardMinimize(',
       'const onboarding = mergeUserOnboardingProgress(',
       'await replaceUserOnboardingIfUnchanged(',
     ])

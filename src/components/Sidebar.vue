@@ -18,6 +18,7 @@ import IconScanQrCode from '~icons/lucide/scan-qr-code'
 import IconVenetianMask from '~icons/lucide/venetian-mask'
 import IconApiKey from '~icons/mdi/shield-key'
 import IconAppStore from '~icons/simple-icons/appstore'
+import { ADMIN_DASHBOARD_URL } from '~/constants/adminDashboard'
 import { logAsUser } from '~/services/logAs'
 import { isSpoofed, unspoofUser } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -266,7 +267,9 @@ const tabs = computed<Tab[]>(() => {
     baseTabs.splice(2, 0, {
       label: 'admin-dashboard',
       icon: IconShield,
-      key: '/admin/dashboard',
+      key: '#admin-dashboard',
+      onClick: () => window.open(ADMIN_DASHBOARD_URL, '_blank', 'noopener,noreferrer'),
+      redirect: true,
     })
   }
 

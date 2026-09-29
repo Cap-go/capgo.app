@@ -7,8 +7,8 @@ when working with code in this repository.
 
 The admin dashboard is maintained in the private
 [`Cap-go/capgo_admin_dashboard`](https://github.com/Cap-go/capgo_admin_dashboard)
-repository. Existing dashboard code in this repository is transitional and is not
-the source of truth. Do not edit it or open dashboard pull requests here.
+repository and deployed at `admin.capgo.app`. The web app only links to it. Do
+not add dashboard code or open dashboard pull requests here.
 
 For admin dashboard work, load
 `.agents/skills/modify-admin-dashboard/SKILL.md` and make the change and pull
