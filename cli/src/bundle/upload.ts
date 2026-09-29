@@ -1417,7 +1417,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     log.info(`  - Alert upload size: ${Math.floor(fileConfig.alertUploadSize / 1024 / 1024)} MB`)
     log.info(`  - TUS upload: ${fileConfig.TUSUpload ? 'enabled' : 'disabled'}`)
     log.info(`  - TUS upload forced: ${fileConfig.TUSUploadForced ? 'yes' : 'no'}`)
-    log.info(`  - Partial upload: ${fileConfig.partialUpload ? 'enabled' : 'disabled'}`)
+    log.info(`  - Delta upload: ${fileConfig.partialUpload ? 'enabled' : 'disabled'}`)
     log.info(`  - Max chunk size: ${Math.floor(fileConfig.maxChunkSize / 1024 / 1024)} MB`)
   }
 
@@ -1766,8 +1766,12 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
       log.info(`[Verbose] Delta updates: ${options.delta ? 'enabled' : 'disabled'}`)
   }
 
-  if (options.encryptPartial && encryptionMethod === 'v1')
-    uploadFail('You cannot encrypt the partial update if you are not using the v2 encryption method')
+  // --encrypt-partial is the deprecated alias of --encrypt-delta
+  options.encryptDelta = options.encryptDelta || options.encryptPartial
+
+  // Never upload delta files unencrypted when encryption was explicitly requested
+  if (options.encryptDelta && encryptionMethod !== 'v2')
+    uploadFail('You cannot encrypt the delta update if you are not using the v2 encryption method')
 
   // Minimum versions that support hex checksum format
   const HEX_CHECKSUM_MIN_VERSION_V5 = '5.30.0'
@@ -1777,8 +1781,8 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   // Check if updater supports hex checksum format
   let supportsHexChecksum = false
 
-  // Auto-encrypt partial updates for updater versions > 6.14.5 if encryption method is v2
-  if (options.delta && encryptionMethod === 'v2' && !options.encryptPartial) {
+  // Auto-encrypt delta updates for updater versions >= 6.14.4 if encryption method is v2
+  if (options.delta && encryptionMethod === 'v2' && !options.encryptDelta) {
     // Check updater version
     const root = findRoot(cwd())
     const updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
@@ -1791,15 +1795,15 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     }
 
     if (updaterVersion && coerced && greaterOrEqual(coerced, parse('6.14.4'))) {
-      log.info(`Auto-enabling partial update encryption for updater version ${coerced} (> 6.14.4)`)
+      log.info(`Auto-enabling delta update encryption for updater version ${coerced} (>= 6.14.4)`)
       if (options.verbose)
-        log.info(`[Verbose] Partial encryption auto-enabled for updater >= 6.14.4`)
-      options.encryptPartial = true
+        log.info(`[Verbose] Delta encryption auto-enabled for updater >= 6.14.4`)
+      options.encryptDelta = true
     }
   }
 
   // Check if updater supports hex checksum format (for delta updates with encryption)
-  if (options.delta && (options.encryptPartial || encryptionMethod === 'v2')) {
+  if (options.delta && (options.encryptDelta || encryptionMethod === 'v2')) {
     const root = findRoot(cwd())
     const updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
     let coerced
@@ -1820,9 +1824,9 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   }
 
   if (options.verbose && options.delta)
-    log.info(`[Verbose] Preparing delta/partial update manifest...`)
+    log.info(`[Verbose] Preparing delta update manifest...`)
 
-  const manifest: manifestType = options.delta ? await prepareBundlePartialFiles(path, apikey, orgId, appid, options.encryptPartial ? encryptionMethod : 'none', finalKeyData, supportsHexChecksum) : []
+  const manifest: manifestType = options.delta ? await prepareBundlePartialFiles(path, apikey, orgId, appid, options.encryptDelta ? encryptionMethod : 'none', finalKeyData, supportsHexChecksum) : []
 
   if (options.verbose && options.delta)
     log.info(`[Verbose] Delta manifest prepared with ${manifest.length} files`)
@@ -1933,7 +1937,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
         if (options.verbose)
           log.info(`[Verbose] Dry upload mode: skipping delta upload`)
       }
-      const encryptionData = versionData.session_key && options.encryptPartial && sessionKey
+      const encryptionData = versionData.session_key && options.encryptDelta && sessionKey
         ? {
             sessionKey,
             ivSessionKey: versionData.session_key,
@@ -1941,7 +1945,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
         : undefined
 
       if (options.verbose && options.delta) {
-        log.info(`[Verbose] Starting delta/partial file upload...`)
+        log.info(`[Verbose] Starting delta file upload...`)
         log.info(`  - Manifest entries: ${manifest.length}`)
         log.info(`  - Encryption: ${encryptionData ? 'enabled' : 'disabled'}`)
       }
@@ -1971,7 +1975,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
       }
 
       // Auto-enabled delta that failed - not critical
-      log.info(`Failed to upload partial files to capgo cloud. Error: ${formatError(err)}. This is not a critical error, the bundle has been uploaded without the partial files`)
+      log.info(`Failed to upload delta files to capgo cloud. Error: ${formatError(err)}. This is not a critical error, the bundle has been uploaded without the delta files`)
       if (options.verbose)
         log.info(`[Verbose] Delta upload error details: ${formatError(err)}`)
     }
@@ -2202,7 +2206,7 @@ export function checkValidOptions(options: OptionsUpload) {
     uploadFail('You need to provide an external url if you want to use the --encrypted-checksum option')
   }
   if ((options.partial || options.delta || options.partialOnly || options.deltaOnly) && options.external) {
-    uploadFail('You cannot use the --partial/--delta/--partial-only/--delta-only option with an external url')
+    uploadFail('You cannot use delta upload options (--delta/--delta-only, or deprecated --partial/--partial-only) with an external url')
   }
   if (options.tus && options.external) {
     uploadFail('You cannot use the --tus option with an external url')

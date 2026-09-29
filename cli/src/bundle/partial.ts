@@ -201,7 +201,7 @@ export async function uploadPartial(
   options: OptionsUpload,
 ): Promise<any[] | null> {
   const spinner = getUploadReporter().spinner()
-  spinner.start('Preparing partial update with TUS protocol')
+  spinner.start('Preparing delta update with TUS protocol')
   const startTime = performance.now()
   const localConfig = await getLocalConfig()
 
@@ -297,7 +297,7 @@ export async function uploadPartial(
       }
 
       return new Promise((resolve, reject) => {
-        spinner.message(`Prepare upload partial file: ${filePathUnix}`)
+        spinner.message(`Prepare upload delta file: ${filePathUnix}`)
         // Get the MIME type for this file (based on original filename, not the R2 path)
         const filetype = getContentType(uploadPathUnix)
         const upload = new tus.Upload(finalBuffer as any, {
@@ -343,7 +343,7 @@ headers: buildCliRequestHeaders({ Authorization: apikey }),
           },
           onProgress() {
             const percentage = ((uploadedFiles / totalFiles) * 100).toFixed(2)
-            spinner.message(`Uploading partial update: ${percentage}%`)
+            spinner.message(`Uploading delta update: ${percentage}%`)
           },
           onSuccess({ lastResponse }) {
             uploadedFiles++
@@ -380,7 +380,7 @@ headers: buildCliRequestHeaders({ Authorization: apikey }),
       results.forEach(entry => delete entry.file_size_receipt)
     const endTime = performance.now()
     const uploadTime = ((endTime - startTime) / 1000).toFixed(2)
-    spinner.stop(`Partial update uploaded successfully 💪 in (${uploadTime} seconds)`)
+    spinner.stop(`Delta update uploaded successfully 💪 in (${uploadTime} seconds)`)
 
     if (brFilesCount > 0) {
       log.info(`${brFilesCount} of ${totalFiles} files were compressed with brotli and use .br extension`)
@@ -410,17 +410,17 @@ headers: buildCliRequestHeaders({ Authorization: apikey }),
   catch (error) {
     const endTime = performance.now()
     const uploadTime = ((endTime - startTime) / 1000).toFixed(2)
-    spinner.error(`Failed to upload Partial bundle (after ${uploadTime} seconds)`)
+    spinner.error(`Failed to upload delta update (after ${uploadTime} seconds)`)
 
     if (userRequestedDelta) {
       // User explicitly requested delta/partial updates, so we should fail
-      log.error(`Error uploading partial update: ${error}`)
-      log.error(`Delta/partial upload was explicitly requested but failed. Upload aborted.`)
+      log.error(`Error uploading delta update: ${error}`)
+      log.error(`Delta upload was explicitly requested but failed. Upload aborted.`)
       throw error
     }
     else {
       // Delta was auto-enabled, treat as non-critical
-      log.info(`Error uploading partial update: ${error}, This is not a critical error, the bundle has been uploaded without the partial files`)
+      log.info(`Error uploading delta update: ${error}, This is not a critical error, the bundle has been uploaded without the delta files`)
       return null
     }
   }
