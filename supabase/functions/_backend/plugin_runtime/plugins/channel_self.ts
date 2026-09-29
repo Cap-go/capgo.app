@@ -31,6 +31,34 @@ const CHANNEL_SELF_MIN_V7 = '7.34.0'
 const CHANNEL_SELF_MIN_V8 = '8.0.0'
 
 const PLAN_MAU_ACTIONS: Array<'mau'> = ['mau']
+const LEGACY_PLUGIN_UPGRADE_EVENT = 'plugin:legacy_channel_upgrade'
+const LEGACY_PLUGIN_UPGRADE_CRON = '0 0 * * *'
+
+function notifyLegacyPluginSetChannel(
+  c: Context,
+  drizzleClient: ReturnType<typeof getDrizzleClient>,
+  orgId: string,
+  appId: string,
+  channel: string,
+  pluginVersion: string | undefined,
+) {
+  // Current plugins store the channel on the device and do not reach this path.
+  // The daily cron keeps one org to one event per day.
+  backgroundTask(c, sendNotifToOrgMembersCached(
+    c,
+    LEGACY_PLUGIN_UPGRADE_EVENT,
+    'channel_self_rejected',
+    {
+      app_id: appId,
+      channel,
+      plugin_version: pluginVersion ?? '',
+    },
+    orgId,
+    'legacy-plugin-upgrade',
+    LEGACY_PLUGIN_UPGRADE_CRON,
+    drizzleClient,
+  ))
+}
 
 async function blockProviderInfrastructure(c: Context, route: string, shouldBlockProviderInfrastructure: boolean) {
   if (!shouldBlockProviderInfrastructure)
@@ -390,6 +418,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
 
     cloudlog({ requestId: c.get('requestId'), message: 'main channel set, removing override' })
     await sendStatsAndDevice(c, device, [{ action: 'setChannel' }])
+    notifyLegacyPluginSetChannel(c, drizzleClient, validatedAppOwner.owner_org, app_id, channel, body.plugin_version)
     return c.json(BRES)
   }
   // if dataChannelOverride is same from dataChannel and exist then do nothing
@@ -415,6 +444,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
   }
 
   await sendStatsAndDevice(c, device, [{ action: 'setChannel' }])
+  notifyLegacyPluginSetChannel(c, drizzleClient, validatedAppOwner.owner_org, app_id, channel, body.plugin_version)
   return c.json(BRES)
 }
 
