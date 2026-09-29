@@ -26,9 +26,19 @@ export function negotiateProtocolVersion(clientVersion: unknown): string {
 }
 
 export function resolvePublicRequestUrl(requestUrl: string, forwardedUrl?: string | null): string {
-  if (forwardedUrl && forwardedUrl.startsWith('http'))
-    return forwardedUrl
-  return requestUrl
+  if (!forwardedUrl?.startsWith('http'))
+    return requestUrl
+  try {
+    const request = new URL(requestUrl)
+    const forwarded = new URL(forwardedUrl)
+    // Same origin only. A different origin would send the org API key to that host.
+    if (forwarded.origin !== request.origin)
+      return requestUrl
+    return forwarded.toString()
+  }
+  catch {
+    return requestUrl
+  }
 }
 
 export function rewriteSupabaseMcpUrl(requestUrl: string): string {

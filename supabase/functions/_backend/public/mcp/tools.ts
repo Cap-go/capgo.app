@@ -435,6 +435,11 @@ export function listMcpTools() {
     name: item.name,
     description: item.description,
     inputSchema: item.inputSchema,
+    annotations: {
+      readOnlyHint: item.method === 'GET' || item.method === undefined,
+      destructiveHint: item.method === 'DELETE',
+      openWorldHint: false,
+    },
   }))
 }
 

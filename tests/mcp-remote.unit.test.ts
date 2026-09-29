@@ -9,6 +9,7 @@ import {
   mcpResourceUrl,
   negotiateProtocolVersion,
   pkceS256,
+  resolvePublicRequestUrl,
   rewriteSupabaseMcpUrl,
   validateRedirectUri,
 } from '../supabase/functions/_backend/public/mcp/protocol.ts'
@@ -26,6 +27,11 @@ describe('remote MCP protocol', () => {
     expect(rewriteSupabaseMcpUrl('http://127.0.0.1:54321/functions/v1/mcp')).toBe('http://127.0.0.1:54321/mcp')
     expect(rewriteSupabaseMcpUrl('http://127.0.0.1:54321/functions/v1/mcp/oauth/token')).toBe('http://127.0.0.1:54321/mcp/oauth/token')
     expect(rewriteSupabaseMcpUrl('http://127.0.0.1:54321/oauth/token')).toBe('http://127.0.0.1:54321/mcp/oauth/token')
+    expect(resolvePublicRequestUrl('https://api.capgo.app/mcp', 'https://evil.example/mcp')).toBe('https://api.capgo.app/mcp')
+    expect(resolvePublicRequestUrl(
+      'http://127.0.0.1:54321/mcp',
+      'http://127.0.0.1:54321/functions/v1/mcp',
+    )).toBe('http://127.0.0.1:54321/functions/v1/mcp')
   })
 
   it('negotiates a supported protocol version', () => {
@@ -157,6 +163,15 @@ describe('remote MCP tools', () => {
       expect(tool.name.startsWith('capgo_')).toBe(true)
       expect(tool.description.length).toBeGreaterThan(10)
       expect(tool.inputSchema).toMatchObject({ type: 'object' })
+      expect(tool.annotations.openWorldHint).toBe(false)
     }
+    expect(tools.find(tool => tool.name === 'capgo_list_apps')?.annotations).toMatchObject({
+      readOnlyHint: true,
+      destructiveHint: false,
+    })
+    expect(tools.find(tool => tool.name === 'capgo_delete_app')?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+    })
   })
 })

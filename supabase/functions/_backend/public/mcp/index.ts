@@ -1,14 +1,32 @@
 import type { Context } from 'hono'
+import type { McpCaller } from './tools.ts'
 import { cors } from 'hono/cors'
 import { honoFactory } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_middleware.ts'
+import { isIPRateLimited, recordFailedAuth } from '../../utils/rate_limit.ts'
 import { checkKey, supabaseAdmin } from '../../utils/supabase.ts'
 import { getEnv } from '../../utils/utils.ts'
 import { version } from '../../utils/version.ts'
 import {
+  assertOrgId,
+  clientAllowsRedirect,
+  consumeAuthCode,
+  getOAuthClient,
+  issueTokenPair,
+  mintMcpApiKey,
+  orgMcpKeyPolicy,
+  registerOAuthClient,
+  resolveOAuthAccessToken,
+  revokeOAuthToken,
+  rotateRefreshToken,
+  storeAuthCode,
+  validateRegistration,
+} from './oauth.ts'
+import {
   appendRedirectQuery,
   authorizationServerMetadata,
   bearerToken,
+  capgoApiRoot,
   isSupportedProtocolVersion,
   jsonRpcError,
   jsonRpcResult,
@@ -23,22 +41,7 @@ import {
   validateRedirectUri,
   wwwAuthenticate,
 } from './protocol.ts'
-import {
-  assertOrgId,
-  clientAllowsRedirect,
-  consumeAuthCode,
-  getOAuthClient,
-  issueTokenPair,
-  keyExpiresAt,
-  mintMcpApiKey,
-  registerOAuthClient,
-  resolveOAuthAccessToken,
-  revokeOAuthToken,
-  rotateRefreshToken,
-  storeAuthCode,
-  validateRegistration,
-} from './oauth.ts'
-import { callMcpTool, listMcpTools, type McpCaller } from './tools.ts'
+import { callMcpTool, listMcpTools } from './tools.ts'
 
 const app = honoFactory.createApp()
 
@@ -86,6 +89,10 @@ app.post('/mcp/oauth/register', async (c) => {
   const parsed = validateRegistration(body)
   if ('error' in parsed)
     return oauthError(c, 400, 'invalid_client_metadata', parsed.error)
+  const ipLimited = await isIPRateLimited(c)
+  if (ipLimited.limited)
+    return oauthError(c, 400, 'invalid_request', 'Too many registration attempts. Try again later.')
+  await recordFailedAuth(c)
   const client = await registerOAuthClient(c, parsed.name, parsed.redirectUris)
   return c.json({
     client_id: client.client_id,
@@ -173,8 +180,10 @@ app.post('/mcp/oauth/approve', middlewareAuth(), async (c) => {
 
   const userJwt = c.req.header('authorization') ?? ''
   try {
-    const expiresAt = await keyExpiresAt(c, body.org_id)
-    const minted = await mintMcpApiKey(c, userJwt, body.org_id, client.client_name, expiresAt)
+    const policy = await orgMcpKeyPolicy(c, body.org_id)
+    if (policy.hashedRequired)
+      return oauthError(c, 400, 'access_denied', 'This organization requires hashed API keys, so MCP sign-in cannot create one.')
+    const minted = await mintMcpApiKey(c, userJwt, body.org_id, client.client_name, policy.expiresAt, capgoApiRoot(publicUrl(c)))
     const code = await storeAuthCode(c, {
       clientId: client.client_id,
       userId: auth.userId,

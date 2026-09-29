@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import { closeClient, getPgClient, withPgTransaction } from '../../utils/pg.ts'
 import { supabaseAdmin } from '../../utils/supabase.ts'
-import { capgoApiRoot, isUuid, pkceS256, randomToken, resolvePublicRequestUrl, sha256Hex, validateCodeVerifier, validateRedirectUri, AUTH_CODE_TTL_SECONDS, ACCESS_TOKEN_TTL_SECONDS, REFRESH_TOKEN_TTL_SECONDS } from './protocol.ts'
+import { ACCESS_TOKEN_TTL_SECONDS, AUTH_CODE_TTL_SECONDS, isUuid, pkceS256, randomToken, REFRESH_TOKEN_TTL_SECONDS, sha256Hex, validateCodeVerifier, validateRedirectUri } from './protocol.ts'
 
 interface QueryClient {
   query: <T = Record<string, unknown>>(text: string, params?: unknown[]) => Promise<{ rows: T[], rowCount?: number | null }>
@@ -69,11 +69,6 @@ export function validateRegistration(body: unknown): { name: string, redirectUri
 export async function registerOAuthClient(c: Context, name: string, redirectUris: string[]): Promise<OAuthClientRow> {
   const clientId = randomToken('capgo_mcp_client_')
   return await withPool(c, async (pool) => {
-    await pool.query(
-      `DELETE FROM public.mcp_oauth_codes WHERE code_hash IN (
-         SELECT code_hash FROM public.mcp_oauth_codes WHERE expires_at < now() LIMIT 100
-       )`,
-    )
     const result = await pool.query<OAuthClientRow>(
       `INSERT INTO public.mcp_oauth_clients (client_id, client_name, redirect_uris)
        VALUES ($1, $2, $3::jsonb)
@@ -104,26 +99,28 @@ export function clientAllowsRedirect(client: OAuthClientRow, redirectUri: string
   return client.redirect_uris.includes(redirectUri) && validateRedirectUri(redirectUri) == null
 }
 
-export async function keyExpiresAt(c: Context, orgId: string): Promise<string | null> {
+export async function orgMcpKeyPolicy(c: Context, orgId: string): Promise<{ expiresAt: string | null, hashedRequired: boolean }> {
   const { data } = await supabaseAdmin(c)
     .from('orgs')
-    .select('require_apikey_expiration, max_apikey_expiration_days')
+    .select('require_apikey_expiration, max_apikey_expiration_days, enforce_hashed_api_keys')
     .eq('id', orgId)
     .maybeSingle()
   const required = data?.require_apikey_expiration === true
   const maxDays = typeof data?.max_apikey_expiration_days === 'number' && data.max_apikey_expiration_days > 0
     ? data.max_apikey_expiration_days
     : null
-  if (!required && maxDays == null)
-    return null
-  const days = maxDays == null ? 30 : Math.min(maxDays, 30)
-  const expires = new Date()
-  expires.setUTCDate(expires.getUTCDate() + days)
-  return expires.toISOString()
+  let expiresAt: string | null = null
+  if (required || maxDays != null) {
+    const days = maxDays == null ? 30 : Math.min(maxDays, 30)
+    const expires = new Date()
+    expires.setUTCDate(expires.getUTCDate() + days)
+    expiresAt = expires.toISOString()
+  }
+  return { expiresAt, hashedRequired: data?.enforce_hashed_api_keys === true }
 }
 
-export async function mintMcpApiKey(c: Context, userJwt: string, orgId: string, clientName: string, expiresAt: string | null): Promise<{ id: number, key: string }> {
-  const response = await fetch(`${capgoApiRoot(resolvePublicRequestUrl(c.req.url, c.req.header('x-capgo-mcp-public-url')))}/apikey`, {
+export async function mintMcpApiKey(c: Context, userJwt: string, orgId: string, clientName: string, expiresAt: string | null, apiRoot: string): Promise<{ id: number, key: string }> {
+  const response = await fetch(`${apiRoot}/apikey`, {
     method: 'POST',
     headers: {
       Authorization: userJwt.startsWith('Bearer ') ? userJwt : `Bearer ${userJwt}`,
