@@ -1,0 +1,193 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { purgeLocalTaggedKeys } from '../supabase/functions/_backend/plugin_runtime/utils/cache.ts'
+import { createLazyPgClient, getLazyPgQueryCount } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
+import { getCachedAppOwner, getCachedDefaultChannel, getUpdatesEdgeCacheTtlSeconds, isUpdatesEdgeCacheEnabled, updatesAppCacheTag, updatesCacheTags } from '../supabase/functions/_backend/plugin_runtime/utils/updatesEdgeCache.ts'
+import { chunk, getRepurgeDelayMs, parseAppIds, purgeUpdatesCacheTags } from '../supabase/functions/_backend/triggers/updates_cache_purge.ts'
+
+function makeContext(env: Record<string, string> = {}) {
+  const raw = new Request('https://plugin.capgo.test/updates', { method: 'POST' })
+  return {
+    env,
+    req: { url: raw.url, raw, header: () => undefined },
+    res: { headers: new Headers() },
+    get: (key: string) => key === 'requestId' ? 'req-edge-cache' : undefined,
+    set: () => {},
+    header: () => {},
+  } as any
+}
+
+/** In-memory Cache API stand-in that keeps the stored headers. */
+function stubCaches() {
+  const store = new Map<string, Response>()
+  const cache = {
+    match: vi.fn(async (request: Request) => store.get(request.url)?.clone()),
+    put: vi.fn(async (request: Request, response: Response) => {
+      store.set(request.url, response.clone())
+    }),
+    delete: vi.fn(async (request: Request) => store.delete(request.url)),
+  }
+  vi.stubGlobal('caches', { default: cache, open: vi.fn().mockResolvedValue(cache) })
+  return { cache, store }
+}
+
+describe('updates edge cache', () => {
+  beforeEach(() => {
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
+
+  it('builds one lowercase, comma-free tag per app', () => {
+    expect(updatesAppCacheTag('com.Example.App')).toBe('capgo-updates-com.example.app')
+    expect(updatesAppCacheTag('com.example,app x')).toBe('capgo-updates-com.example_app_x')
+  })
+
+  it('is off unless UPDATES_EDGE_CACHE=on and clamps the TTL', () => {
+    const c = makeContext()
+    expect(isUpdatesEdgeCacheEnabled(c)).toBe(false)
+    expect(updatesCacheTags(c, 'com.example.app')).toBeUndefined()
+    vi.stubEnv('UPDATES_EDGE_CACHE', 'on')
+    expect(isUpdatesEdgeCacheEnabled(c)).toBe(true)
+    expect(updatesCacheTags(c, 'com.example.app')).toEqual(['capgo-updates-com.example.app'])
+    expect(getUpdatesEdgeCacheTtlSeconds(c)).toBe(300)
+    vi.stubEnv('UPDATES_EDGE_CACHE_TTL_SECONDS', '1')
+    expect(getUpdatesEdgeCacheTtlSeconds(c)).toBe(10)
+    vi.stubEnv('UPDATES_EDGE_CACHE_TTL_SECONDS', '999999')
+    expect(getUpdatesEdgeCacheTtlSeconds(c)).toBe(3600)
+  })
+
+  it('loads the owner once, then serves it from the cache with the app tag', async () => {
+    const { store } = stubCaches()
+    const c = makeContext()
+    const load = vi.fn().mockResolvedValue({ owner_org: 'org-1', plan_valid: true })
+
+    await expect(getCachedAppOwner(c, 'com.example.app', 'mau,bandwidth', load)).resolves.toEqual({ value: { owner_org: 'org-1', plan_valid: true }, hit: false })
+    await expect(getCachedAppOwner(c, 'com.example.app', 'mau,bandwidth', load)).resolves.toEqual({ value: { owner_org: 'org-1', plan_valid: true }, hit: true })
+    expect(load).toHaveBeenCalledTimes(1)
+
+    const [stored] = [...store.values()]
+    expect(stored.headers.get('Cache-Tag')).toBe('capgo-updates-com.example.app')
+    expect(stored.headers.get('Cache-Control')).toBe('public, s-maxage=300')
+  })
+
+  it('caches a missing app for a shorter time', async () => {
+    const { store } = stubCaches()
+    const c = makeContext()
+    const load = vi.fn().mockResolvedValue(null)
+
+    await expect(getCachedAppOwner(c, 'com.missing.app', 'mau', load)).resolves.toEqual({ value: null, hit: false })
+    await expect(getCachedAppOwner(c, 'com.missing.app', 'mau', load)).resolves.toEqual({ value: null, hit: true })
+    expect(load).toHaveBeenCalledTimes(1)
+    expect([...store.values()][0].headers.get('Cache-Control')).toBe('public, s-maxage=60')
+  })
+
+  it('never caches a failed read', async () => {
+    const { cache } = stubCaches()
+    const c = makeContext()
+    const load = vi.fn().mockRejectedValue(new Error('replica down'))
+
+    await expect(getCachedAppOwner(c, 'com.example.app', 'mau', load)).rejects.toThrow('replica down')
+    expect(cache.put).not.toHaveBeenCalled()
+  })
+
+  it('keys the default channel by platform, channel, mode and metadata', async () => {
+    stubCaches()
+    const c = makeContext()
+    const load = vi.fn().mockResolvedValue({ channels: { id: 1 } })
+    const key = { appId: 'com.example.app', platform: 'ios', defaultChannel: '', mode: 'standard' as const, includeMetadata: false }
+
+    await getCachedDefaultChannel(c, key, load)
+    await getCachedDefaultChannel(c, key, load)
+    await getCachedDefaultChannel(c, { ...key, platform: 'android' }, load)
+    await getCachedDefaultChannel(c, { ...key, defaultChannel: 'beta' }, load)
+    await getCachedDefaultChannel(c, { ...key, mode: 'rollout' }, load)
+    await getCachedDefaultChannel(c, { ...key, includeMetadata: true }, load)
+    expect(load).toHaveBeenCalledTimes(5)
+  })
+
+  it('local purge deletes every entry of the tag', async () => {
+    const { store } = stubCaches()
+    const c = makeContext({ ENV_NAME: 'capgo_plugin-local' })
+    const load = vi.fn().mockResolvedValue({ owner_org: 'org-1' })
+    await getCachedAppOwner(c, 'com.purge.app', 'mau', load)
+    await getCachedDefaultChannel(c, { appId: 'com.purge.app', platform: 'ios', defaultChannel: '', mode: 'standard', includeMetadata: false }, load)
+    expect(store.size).toBe(2)
+
+    await expect(purgeLocalTaggedKeys([updatesAppCacheTag('com.purge.app')])).resolves.toBe(2)
+    expect(store.size).toBe(0)
+    await getCachedAppOwner(c, 'com.purge.app', 'mau', load)
+    expect(load).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('lazy pg client', () => {
+  it('does not connect until the first query and counts queries per request', async () => {
+    const c = makeContext()
+    const lazy = createLazyPgClient(c, true)
+    expect(lazy.isConnected()).toBe(false)
+    expect(getLazyPgQueryCount(c)).toBe(0)
+    await lazy.close()
+    expect(lazy.isConnected()).toBe(false)
+  })
+})
+
+describe('updates cache purge trigger', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
+
+  it('dedupes and bounds app ids', () => {
+    expect(parseAppIds({ app_ids: ['a', 'a', '', 1, 'b'] })).toEqual(['a', 'b'])
+    expect(parseAppIds({})).toEqual([])
+    expect(parseAppIds({ app_ids: Array.from({ length: 1500 }, (_, i) => `app${i}`) })).toHaveLength(1000)
+    expect(chunk([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]])
+  })
+
+  it('clamps the re-purge delay', () => {
+    const c = makeContext()
+    expect(getRepurgeDelayMs(c)).toBe(10_000)
+    vi.stubEnv('UPDATES_CACHE_REPURGE_DELAY_MS', '0')
+    expect(getRepurgeDelayMs(c)).toBe(0)
+    vi.stubEnv('UPDATES_CACHE_REPURGE_DELAY_MS', '600000')
+    expect(getRepurgeDelayMs(c)).toBe(25_000)
+  })
+
+  it('purges every zone in chunks of 100 tags', async () => {
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
+    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a, zone-b')
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const tags = Array.from({ length: 150 }, (_, i) => `capgo-updates-app${i}`)
+
+    await expect(purgeUpdatesCacheTags(makeContext(), tags)).resolves.toEqual({ calls: 4, failed: 0 })
+    const urls = fetchMock.mock.calls.map(call => call[0])
+    expect(urls.filter(url => url.endsWith('/zones/zone-a/purge_cache'))).toHaveLength(2)
+    expect(urls.filter(url => url.endsWith('/zones/zone-b/purge_cache'))).toHaveLength(2)
+    const [, init] = fetchMock.mock.calls[0]
+    expect(init.headers.Authorization).toBe('Bearer token')
+    expect(JSON.parse(init.body).tags).toHaveLength(100)
+  })
+
+  it('retries once on 429 and reports failures', async () => {
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
+    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('{}', { status: 429, headers: { 'Retry-After': '0' } }))
+      .mockResolvedValueOnce(new Response('{}', { status: 500 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(purgeUpdatesCacheTags(makeContext(), ['capgo-updates-a'])).resolves.toEqual({ calls: 1, failed: 1 })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('does nothing when no purge target is configured', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(purgeUpdatesCacheTags(makeContext(), ['capgo-updates-a'])).resolves.toEqual({ calls: 0, failed: 0 })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})

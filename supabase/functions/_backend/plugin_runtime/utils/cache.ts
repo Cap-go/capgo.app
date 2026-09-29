@@ -51,6 +51,57 @@ async function resolveGlobalCache(): Promise<Cache | null> {
 
 export type CacheKeyParams = Record<string, string>
 
+export interface CachePutOptions {
+  timeoutMs?: number
+  /**
+   * Cloudflare `Cache-Tag` values. Cache API entries carrying a tag are
+   * evicted in every data center by one zone purge-by-tag API call.
+   */
+  tags?: string[]
+}
+
+// Local workerd has no purge-by-tag API: remember tagged keys per isolate so
+// the local purge route can emulate it with cache.delete.
+const localTaggedKeys = new Map<string, Set<string>>()
+const LOCAL_TAGGED_KEYS_MAX = 10_000
+
+function isLocalCacheEnv(context: Context) {
+  const envName = (context.env as Record<string, unknown> | undefined)?.ENV_NAME
+  return typeof envName === 'string' && envName.endsWith('-local')
+}
+
+function rememberLocalTaggedKey(tags: string[], url: string) {
+  for (const tag of tags) {
+    let urls = localTaggedKeys.get(tag)
+    if (!urls) {
+      if (localTaggedKeys.size >= LOCAL_TAGGED_KEYS_MAX)
+        localTaggedKeys.clear()
+      urls = new Set()
+      localTaggedKeys.set(tag, urls)
+    }
+    urls.add(url)
+  }
+}
+
+/** Local-only purge-by-tag emulation. Returns the number of deleted keys. */
+export async function purgeLocalTaggedKeys(tags: string[]): Promise<number> {
+  const cache = await resolveGlobalCache()
+  if (!cache)
+    return 0
+  let deleted = 0
+  for (const tag of tags) {
+    const urls = localTaggedKeys.get(tag.toLowerCase())
+    if (!urls)
+      continue
+    localTaggedKeys.delete(tag.toLowerCase())
+    for (const url of urls) {
+      if (await cache.delete(new Request(url, { method: CACHE_METHOD })))
+        deleted++
+    }
+  }
+  return deleted
+}
+
 export class CacheHelper {
   private cache: Cache | null = null
   private cachePromise: Promise<Cache | null> | null = null
@@ -111,15 +162,15 @@ export class CacheHelper {
    * Pass `timeoutMs` for best-effort waitUntil caches (device/MAU). Omit it for
    * rate-limit counters that must finish the write before treating it as recorded.
    */
-  async putJson(key: Request, payload: unknown, ttlSeconds: number, options?: { timeoutMs?: number }) {
+  async putJson(key: Request, payload: unknown, ttlSeconds: number, options?: CachePutOptions) {
     if (options?.timeoutMs == null)
-      return this.putJsonUnbound(key, payload, ttlSeconds)
-    const result = await withTimeout(this.putJsonUnbound(key, payload, ttlSeconds), options.timeoutMs)
+      return this.putJsonUnbound(key, payload, ttlSeconds, options?.tags)
+    const result = await withTimeout(this.putJsonUnbound(key, payload, ttlSeconds, options.tags), options.timeoutMs)
     if (result === TIMEOUT)
       return
   }
 
-  private async putJsonUnbound(key: Request, payload: unknown, ttlSeconds: number) {
+  private async putJsonUnbound(key: Request, payload: unknown, ttlSeconds: number, tags?: string[]) {
     try {
       const cache = await this.ensureCache()
       if (!cache)
@@ -128,6 +179,11 @@ export class CacheHelper {
         'Content-Type': 'application/json',
         'Cache-Control': this.buildCacheControl(ttlSeconds),
       })
+      if (tags?.length) {
+        headers.set('Cache-Tag', tags.join(','))
+        if (isLocalCacheEnv(this.context))
+          rememberLocalTaggedKey(tags.map(tag => tag.toLowerCase()), key.url)
+      }
       const response = new Response(JSON.stringify(payload), { headers })
       await cache.put(key, response.clone())
     }

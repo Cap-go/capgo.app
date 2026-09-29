@@ -17,7 +17,10 @@
     "prod_eu": {
       "name": "capgo_plugin-eu-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-eu-prod"
+        "ENV_NAME": "capgo_plugin-eu-prod",
+        // /updates edge cache (Cache API + purge-by-tag). Flip to "on" once
+        // CF_CACHE_PURGE_TOKEN / CF_CACHE_PURGE_ZONE_IDS are set on the purge trigger.
+        "UPDATES_EDGE_CACHE": "off"
       },
       "observability": {
         "head_sampling_rate": 0.001,
@@ -146,7 +149,8 @@
     "prod_me": {
       "name": "capgo_plugin-me-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-me-prod"
+        "ENV_NAME": "capgo_plugin-me-prod",
+        "UPDATES_EDGE_CACHE": "off"
       },
       "observability": {
         "head_sampling_rate": 0.001,
@@ -241,7 +245,8 @@
     "prod_hk": {
       "name": "capgo_plugin-hk-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-hk-prod"
+        "ENV_NAME": "capgo_plugin-hk-prod",
+        "UPDATES_EDGE_CACHE": "off"
       },
       "observability": {
         "head_sampling_rate": 0.001,
@@ -336,7 +341,8 @@
     "prod_jp": {
       "name": "capgo_plugin-jp-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-jp-prod"
+        "ENV_NAME": "capgo_plugin-jp-prod",
+        "UPDATES_EDGE_CACHE": "off"
       },
       "observability": {
         "head_sampling_rate": 0.001,
@@ -431,7 +437,8 @@
     "prod_as": {
       "name": "capgo_plugin-as-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-as-prod"
+        "ENV_NAME": "capgo_plugin-as-prod",
+        "UPDATES_EDGE_CACHE": "off"
       },
       "observability": {
         "head_sampling_rate": 0.001,
@@ -526,7 +533,8 @@
     "prod_na": {
       "name": "capgo_plugin-na-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-na-prod"
+        "ENV_NAME": "capgo_plugin-na-prod",
+        "UPDATES_EDGE_CACHE": "off"
       },
       "observability": {
         "head_sampling_rate": 0.001,
@@ -621,7 +629,8 @@
     "prod_af": {
       "name": "capgo_plugin-af-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-af-prod"
+        "ENV_NAME": "capgo_plugin-af-prod",
+        "UPDATES_EDGE_CACHE": "off"
       },
       "placement": {
         "region": "gcp:africa-south1"
@@ -716,7 +725,8 @@
     "prod_oc": {
       "name": "capgo_plugin-oc-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-oc-prod"
+        "ENV_NAME": "capgo_plugin-oc-prod",
+        "UPDATES_EDGE_CACHE": "off"
       },
       "observability": {
         "head_sampling_rate": 0.001,
@@ -811,7 +821,8 @@
     "prod_sa": {
       "name": "capgo_plugin-sa-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-sa-prod"
+        "ENV_NAME": "capgo_plugin-sa-prod",
+        "UPDATES_EDGE_CACHE": "off"
       },
       "observability": {
         "head_sampling_rate": 0.001,
@@ -894,7 +905,8 @@
     "preprod": {
       "name": "capgo_plugin-eu-preprod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-eu-preprod"
+        "ENV_NAME": "capgo_plugin-eu-preprod",
+        "UPDATES_EDGE_CACHE": "off"
       },
       "observability": {
         "head_sampling_rate": 1,

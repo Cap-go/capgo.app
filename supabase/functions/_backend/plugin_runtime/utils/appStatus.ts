@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import { CacheHelper } from './cache.ts'
+import { updatesCacheTags } from './updatesEdgeCache.ts'
 import { backgroundTask, isStripeConfigured } from './utils.ts'
 
 const APP_STATUS_CACHE_PATH = '/.app-status-v3'
@@ -72,7 +73,7 @@ export function setAppStatus(
       allow_device_custom_id: allowDeviceCustomId,
       block_provider_infra_requests: blockProviderInfraRequests,
     }
-    await cacheEntry.helper.putJson(cacheEntry.request, payload, APP_STATUS_CACHE_TTL_SECONDS)
+    await cacheEntry.helper.putJson(cacheEntry.request, payload, APP_STATUS_CACHE_TTL_SECONDS, { tags: updatesCacheTags(c, appId) })
   })())
 }
 
