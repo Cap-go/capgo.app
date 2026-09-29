@@ -89,11 +89,13 @@ interface ResolvedRelease {
   deployed_at: string
 }
 
+type RawCount = number | string | null
+
 interface RawBucketRow {
   bucket: number | string
-  get: number | string | null
-  install: number | string | null
-  fail: number | string | null
+  get: RawCount
+  install: RawCount
+  fail: RawCount
 }
 
 interface RawFailureRow {
@@ -126,7 +128,7 @@ function pickBucketMinutes(windowMs: number): number {
     if (windowMs / (minutes * 60_000) <= MAX_BUCKETS)
       return minutes
   }
-  return BUCKET_MINUTES_OPTIONS[BUCKET_MINUTES_OPTIONS.length - 1]
+  return BUCKET_MINUTES_OPTIONS.at(-1) ?? 60
 }
 
 function resolveWindow(releaseAt: string, now = new Date()) {

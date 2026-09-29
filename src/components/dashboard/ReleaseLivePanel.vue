@@ -206,11 +206,13 @@ function refresh() {
   void fetchLive()
 }
 
-// useReleaseLive refetches on its own when the target changes; only reset the
-// selection when the app changes.
-watch(() => props.appId, () => {
+// useReleaseLive refetches on its own when the target changes. Re-seed the
+// selection when the app or the ?version= link changes; the picker list only
+// belongs to the app, so keep it across query-only navigation.
+watch([() => props.appId, () => route.query.version], ([appId], [previousAppId]) => {
   selectedKey.value = keyFromQuery()
-  recentDeployments.value = []
+  if (appId !== previousAppId)
+    recentDeployments.value = []
 })
 </script>
 

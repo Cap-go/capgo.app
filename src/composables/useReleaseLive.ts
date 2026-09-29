@@ -150,6 +150,14 @@ export function useReleaseLive(
   return { data, loading, error, lastUpdatedAt, fetchLive }
 }
 
+function demoFailures(index: number) {
+  if (index % 7 === 2)
+    return 3
+  if (index % 5 === 0)
+    return 1
+  return 0
+}
+
 export function buildDemoReleaseLive(now = Date.now()): ReleaseLiveResponse {
   const bucketMinutes = 5
   const bucketMs = bucketMinutes * 60_000
@@ -162,7 +170,7 @@ export function buildDemoReleaseLive(now = Date.now()): ReleaseLiveResponse {
       ts: new Date(start + index * bucketMs).toISOString(),
       get: ramp + 6,
       install: ramp,
-      fail: index % 7 === 2 ? 3 : index % 5 === 0 ? 1 : 0,
+      fail: demoFailures(index),
     })
   }
   const install = series.reduce((sum, bucket) => sum + bucket.install, 0)
