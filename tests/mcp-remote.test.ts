@@ -51,10 +51,12 @@ async function createUserKey(): Promise<string> {
     headers: jwtHeaders,
     body: JSON.stringify({
       name: `MCP · vitest-${randomUUID().slice(0, 8)}`,
+      // Keys handed to MCP OAuth clients must expire within 90 days, like the consent page sets.
+      expires_at: new Date(Date.now() + 30 * 86_400_000).toISOString(),
       bindings: [{ role_name: 'org_super_admin', scope_type: 'org', org_id: ORG_ID }],
     }),
   })
-  expect(response.status).toBe(200)
+  expect(response.status, await response.clone().text()).toBe(200)
   const body = await response.json() as { key: string }
   return body.key
 }
@@ -94,7 +96,7 @@ describe.skipIf(!USE_CLOUDFLARE)('hosted MCP OAuth flow', () => {
       headers: jwtHeaders,
       body: JSON.stringify({ request: requestId, apikey }),
     })
-    expect(approve.status).toBe(200)
+    expect(approve.status, await approve.clone().text()).toBe(200)
     const redirect = new URL((await approve.json() as { redirect_to: string }).redirect_to)
     expect(`${redirect.origin}${redirect.pathname}`).toBe(REDIRECT_URI)
     expect(redirect.searchParams.get('state')).toBe(state)
@@ -107,7 +109,7 @@ describe.skipIf(!USE_CLOUDFLARE)('hosted MCP OAuth flow', () => {
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: tokenBody.toString(),
     })
-    expect(token.status).toBe(200)
+    expect(token.status, await token.clone().text()).toBe(200)
     const tokenJson = await token.json() as { access_token: string, token_type: string }
     expect(tokenJson).toMatchObject({ access_token: apikey, token_type: 'Bearer' })
 
@@ -161,6 +163,29 @@ describe.skipIf(!USE_CLOUDFLARE)('hosted MCP OAuth flow', () => {
 
     const again = await fetchTestRequest(getEndpointUrl(`/private/mcp_oauth?request=${requestId}`), { headers: jwtHeaders })
     expect(again.status).toBe(410)
+  })
+
+  it('refuses to hand a non-expiring API key to an OAuth client', async () => {
+    const clientId = await registerClient()
+    const requestId = await startAuthorization(clientId, pkcePair().challenge, randomUUID())
+    const created = await fetchTestRequest(getEndpointUrl('/apikey'), {
+      method: 'POST',
+      headers: jwtHeaders,
+      body: JSON.stringify({
+        name: `MCP · vitest-noexp-${randomUUID().slice(0, 8)}`,
+        bindings: [{ role_name: 'org_super_admin', scope_type: 'org', org_id: ORG_ID }],
+      }),
+    })
+    expect(created.status).toBe(200)
+    const { key } = await created.json() as { key: string }
+
+    const approve = await fetchTestRequest(getEndpointUrl('/private/mcp_oauth/approve'), {
+      method: 'POST',
+      headers: jwtHeaders,
+      body: JSON.stringify({ request: requestId, apikey: key }),
+    })
+    expect(approve.status).toBe(400)
+    await expect(approve.json()).resolves.toMatchObject({ error: 'apikey_expiration_required' })
   })
 
   it('rejects unregistered redirect URIs without redirecting', async () => {
