@@ -374,7 +374,7 @@ function tabLabel(tab: Tab) {
               <li v-for="tab, i in group.tabs" :key="i">
                 <button
                   type="button"
-                  class="relative d-btn d-btn-ghost flex justify-start items-center w-full h-auto p-0 rounded-md border-none shadow-none transition-colors duration-150 cursor-pointer lg:rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-200 lg:text-slate-200 lg:hover:bg-slate-700/50 hover:bg-slate-700/50 focus:ring-offset-slate-800"
+                  class="relative d-btn d-btn-ghost flex justify-start items-center w-full h-auto p-0 rounded-md border-none shadow-none transition-colors duration-150 cursor-pointer lg:rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500 text-slate-200 lg:text-slate-200 lg:hover:bg-slate-700/50 hover:bg-slate-700/50"
                   :class="{
                     'min-h-11': !tab.redirect,
                     'min-h-10': tab.redirect,
@@ -391,7 +391,7 @@ function tabLabel(tab: Tab) {
                 >
                   <span
                     v-if="isTabActive(tab.key)"
-                    class="absolute left-0 w-1 h-5 -translate-y-1/2 rounded-r-full top-1/2 bg-azure-500"
+                    class="absolute left-1 w-1 h-5 -translate-y-1/2 rounded-full top-1/2 bg-azure-500"
                     aria-hidden="true"
                   />
                   <span class="flex w-12 h-10 shrink-0 items-center justify-center">
