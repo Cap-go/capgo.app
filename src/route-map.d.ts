@@ -493,9 +493,9 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
-    '/mcp/authorize': RouteRecordInfo<
-      '/mcp/authorize',
-      '/mcp/authorize',
+    '/oauth/authorize': RouteRecordInfo<
+      '/oauth/authorize',
+      '/oauth/authorize',
       Record<never, never>,
       Record<never, never>,
       | never
@@ -1264,9 +1264,9 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | never
     }
-    'src/pages/mcp/authorize.vue': {
+    'src/pages/oauth/authorize.vue': {
       routes:
-        | '/mcp/authorize'
+        | '/oauth/authorize'
       views:
         | never
       pathParamNames:

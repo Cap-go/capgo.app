@@ -49,6 +49,7 @@ export const deployMatchers: Record<DeployTarget, RegExp[]> = {
     ...backendUtilityMatchers,
     /^cloudflare_workers\/api\//,
     /^supabase\/functions\/_backend\/files\/util\.ts$/,
+    /^supabase\/functions\/_backend\/mcp\//,
     /^supabase\/functions\/_backend\/private\//,
     /^supabase\/functions\/_backend\/public\//,
     /^supabase\/functions\/_backend\/triggers\//,

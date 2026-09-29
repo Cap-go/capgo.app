@@ -8,20 +8,12 @@ sidebar:
 
 🤖 Start the Capgo MCP (Model Context Protocol) server for AI agent integration.
 
-Remote MCP for Lovable, Claude, and other clients that take a URL:
-
-```text
-https://api.capgo.app/mcp
-```
-
-Sign-in is the MCP OAuth browser flow. Paste the URL, approve the organization, done.
-
 ```bash
 npx @capgo/cli@latest mcp
 ```
 
-This command starts a local MCP server over stdio for agents on your machine.
-The server is designed for non-interactive, programmatic use.
+This command starts an MCP server that exposes Capgo functionality as tools for AI agents.
+The server communicates via stdio and is designed for non-interactive, programmatic use.
 Selected tools exposed via MCP:
   - capgo_list_apps, capgo_add_app, capgo_update_app, capgo_delete_app
   - capgo_upload_bundle, capgo_list_bundles, capgo_delete_bundle, capgo_cleanup_bundles

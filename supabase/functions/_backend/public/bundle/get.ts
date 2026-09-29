@@ -24,7 +24,9 @@ export async function get(c: Context<MiddlewareKeyVariables>, body: GetLatest, a
     throw simpleError('cannot_get_bundle', 'You can\'t access this app', { app_id: body.app_id })
   }
 
-  const fetchOffset = body.page ?? 0
+  // GET callers send page as a query string; coerce so (page + 1) is not string concatenation.
+  const requestedPage = Math.trunc(Number(body.page ?? 0))
+  const fetchOffset = Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 0
   const from = fetchOffset * fetchLimit
   const to = (fetchOffset + 1) * fetchLimit - 1
   const { data: dataBundles, error: dbError } = await supabaseApikey(c, apikey.key)

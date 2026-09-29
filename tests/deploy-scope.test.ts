@@ -87,6 +87,16 @@ describe('deploy scope matching', () => {
     })
   })
 
+  it.concurrent('deploys hosted MCP server changes with the API worker', () => {
+    expect(resolveDeployScopeFromFiles(['supabase/functions/_backend/mcp/tools.ts'])).toEqual({
+      api: true,
+      files: false,
+      plugins: false,
+      supabase: true,
+      translation: false,
+    })
+  })
+
   it.concurrent('deploys shared Hono utilities to API/files workers but not isolated plugins', () => {
     expect(resolveDeployScopeFromFiles(['supabase/functions/_backend/utils/hono.ts'])).toEqual({
       api: true,
