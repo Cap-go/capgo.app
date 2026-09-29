@@ -1712,12 +1712,13 @@ getKeys()
 <template>
   <div>
     <div class="h-full pb-4 overflow-hidden">
-      <div class="w-full h-full px-0 pt-0 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
+      <div class="w-full h-full px-0 pt-6 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
         <div class="flex flex-col">
+          <SectionIntro section="apikeys" />
           <section
             v-if="showCliLoginGuidance"
             data-test="cli-login-guidance"
-            class="relative mt-6 mb-4 overflow-hidden rounded-xl border border-primary-500/20 bg-white px-5 py-5 shadow-sm md:mt-10 md:px-6 dark:border-primary-500/40 dark:bg-slate-800"
+            class="relative mb-4 overflow-hidden rounded-xl border border-primary-500/20 bg-white px-5 py-5 shadow-sm md:px-6 dark:border-primary-500/40 dark:bg-slate-800"
           >
             <div class="absolute inset-y-0 left-0 w-1 bg-primary-500" />
 

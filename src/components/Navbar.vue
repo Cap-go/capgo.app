@@ -26,15 +26,25 @@ const isMobile = ref(Capacitor.isNativePlatform())
 const router = useRouter()
 
 const displayStore = useDisplayStore()
+const { t } = useI18n()
 const lastBreadcrumbName = computed(() => displayStore.pathTitle.at(-1)?.name)
 const showNavTitle = computed(() => displayStore.NavTitle && displayStore.pathTitle.length === 0)
+// Mobile has no breadcrumbs, so fall back to the current crumb: without it,
+// app pages show an empty header and users lose track of where they are.
+const mobileTitle = computed(() => {
+  if (displayStore.NavTitle)
+    return displayStore.NavTitle
+  const last = displayStore.pathTitle.at(-1)
+  if (!last)
+    return ''
+  return last.translate === false ? last.name : t(last.name)
+})
 function back() {
   if (window.history.length > 2)
     router.back()
   else
     router.push(displayStore.defaultBack)
 }
-const { t } = useI18n()
 </script>
 
 <template>
@@ -119,8 +129,8 @@ const { t } = useI18n()
 
         <!-- Centered title on mobile -->
         <div class="flex-1 px-4 text-center lg:hidden">
-          <div class="font-bold truncate dark:text-white text-md text-dark">
-            {{ displayStore.NavTitle }}
+          <div class="font-bold truncate dark:text-white text-md text-dark first-letter:uppercase">
+            {{ mobileTitle }}
           </div>
         </div>
 
