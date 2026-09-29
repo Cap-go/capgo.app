@@ -32,8 +32,12 @@ ALTER TABLE public.updates_cache_purge_pending OWNER TO postgres;
 ALTER TABLE public.updates_cache_purge_pending ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.updates_cache_purge_pending FROM PUBLIC, anon, authenticated;
 
-CREATE UNLOGGED TABLE public.updates_cache_purge_state (
+-- `enabled` is the database-side switch: until the Cloudflare purge secrets are
+-- deployed and a region uses the cache, triggers return before doing any work.
+-- Not UNLOGGED, so the switch survives a crash restart.
+CREATE TABLE public.updates_cache_purge_state (
   id boolean PRIMARY KEY DEFAULT true CHECK (id),
+  enabled boolean NOT NULL DEFAULT false,
   last_flush_at timestamptz NOT NULL DEFAULT '-infinity'
 );
 INSERT INTO public.updates_cache_purge_state (id) VALUES (true) ON CONFLICT DO NOTHING;
@@ -156,6 +160,10 @@ AS $$
 DECLARE
   app_ids text[];
 BEGIN
+  IF NOT EXISTS (SELECT 1 FROM public.updates_cache_purge_state WHERE enabled) THEN
+    RETURN NULL;
+  END IF;
+
   IF TG_TABLE_NAME = 'channels' THEN
     IF TG_OP = 'INSERT' THEN
       SELECT pg_catalog.array_agg(DISTINCT n.app_id::text) INTO app_ids FROM new_rows n;

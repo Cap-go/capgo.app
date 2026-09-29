@@ -63,8 +63,8 @@ export function isUpdatesEdgeCacheEnabled(c: Context) {
 export function updatesEdgeCacheBucket(appId: string, deviceId: string) {
   let hash = 0x811C9DC5
   const input = `${appId}:${deviceId}`
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i)
+  for (const char of input) {
+    hash ^= char.codePointAt(0) ?? 0
     hash = Math.imul(hash, 0x01000193)
   }
   return (hash >>> 0) % 10_000

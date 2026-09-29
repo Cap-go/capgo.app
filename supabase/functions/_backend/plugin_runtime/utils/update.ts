@@ -981,6 +981,34 @@ export async function updateWithPG(
   return c.json(res, 200)
 }
 
+/**
+ * Up-to-date answer from the per-colo read cache, without Postgres.
+ * Accepted 60s contract: overrides and rollouts added after the write are
+ * picked up when the entry expires (or is purged). The TTL is not refreshed
+ * on a hit.
+ */
+async function upToDateFromReadCache(c: Context, body: AppInfos, appStatus: Awaited<ReturnType<typeof getAppStatus>>) {
+  const cachedRead = await getUpdateReadCache(c, {
+    appId: body.app_id,
+    platform: body.platform,
+    defaultChannel: body.defaultChannel ?? '',
+  })
+  if (!cachedRead || !canServeUpToDateFromCache(body, cachedRead, hasChannelSelfStoreBinding(c)))
+    return null
+
+  const existingUpdateEnumerationLimit = await isUpdateEnumerationLimited(c)
+  if (existingUpdateEnumerationLimit.limited)
+    return updateEnumerationLimitedResponse(c, existingUpdateEnumerationLimit.resetAt)
+
+  const device = makeDevice(body, cachedRead.allowDeviceCustomId)
+  await setAppStatus(c, body.app_id, 'cloud', cachedRead.allowDeviceCustomId, appStatus.block_provider_infra_requests)
+  await backgroundTask(c, createStatsMau(c, body.device_id, body.app_id, cachedRead.ownerOrg, body.platform, body.version_build))
+  await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: cachedRead.versionName }])
+  if (shouldUseUpdatesEdgeCache(c, body.app_id, body.device_id))
+    c.header('X-Updates-Cache', 'hit')
+  return updateError200(c, 'no_new_version_available', 'No new version available')
+}
+
 export async function update(c: Context, body: AppInfos) {
   const startUpdate = performance.now()
   const appStatus = await getAppStatus(c, body.app_id)
@@ -991,26 +1019,9 @@ export async function update(c: Context, body: AppInfos) {
       return providerBlockedResponse
   }
   if (appStatus.cacheHit && appStatus.status === 'cloud') {
-    const cachedRead = await getUpdateReadCache(c, {
-      appId: body.app_id,
-      platform: body.platform,
-      defaultChannel: body.defaultChannel ?? '',
-    })
-    // Accepted 60s contract: overrides and rollouts added after the write are
-    // picked up when the entry expires. The TTL is not refreshed on a hit.
-    if (cachedRead && canServeUpToDateFromCache(body, cachedRead, hasChannelSelfStoreBinding(c))) {
-      const existingUpdateEnumerationLimit = await isUpdateEnumerationLimited(c)
-      if (existingUpdateEnumerationLimit.limited)
-        return updateEnumerationLimitedResponse(c, existingUpdateEnumerationLimit.resetAt)
-
-      const device = makeDevice(body, cachedRead.allowDeviceCustomId)
-      await setAppStatus(c, body.app_id, 'cloud', cachedRead.allowDeviceCustomId, appStatus.block_provider_infra_requests)
-      await backgroundTask(c, createStatsMau(c, body.device_id, body.app_id, cachedRead.ownerOrg, body.platform, body.version_build))
-      await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: cachedRead.versionName }])
-      if (shouldUseUpdatesEdgeCache(c, body.app_id, body.device_id))
-        c.header('X-Updates-Cache', 'hit')
-      return updateError200(c, 'no_new_version_available', 'No new version available')
-    }
+    const upToDateResponse = await upToDateFromReadCache(c, body, appStatus)
+    if (upToDateResponse)
+      return upToDateResponse
   }
   if (shouldUseUpdatesEdgeCache(c, body.app_id, body.device_id))
     return updateWithEdgeCache(c, body, appStatus, startUpdate, appStatusMs)

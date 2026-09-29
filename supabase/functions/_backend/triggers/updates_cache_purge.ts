@@ -110,10 +110,12 @@ app.post('/', middlewareAPISecret, async (c) => {
   // in the background, bounded well under the 30s waitUntil budget.
   await backgroundTask(c, (async () => {
     const result = await purgeUpdatesCacheTags(c, tags)
-    if (result.calls === 0)
+    if (result.calls === 0) {
+      // Not configured here: no follow-up chain either.
       cloudlog({ requestId: c.get('requestId'), message: 'updates cache purge skipped (not configured)', apps: appIds.length })
-    else
-      cloudlog({ requestId: c.get('requestId'), message: 'updates cache purged', apps: appIds.length, calls: result.calls, failed: result.failed })
+      return
+    }
+    cloudlog({ requestId: c.get('requestId'), message: 'updates cache purged', apps: appIds.length, calls: result.calls, failed: result.failed })
     // Drain changes that were throttled while this flush ran.
     await new Promise(resolve => setTimeout(resolve, FOLLOW_UP_FLUSH_DELAY_MS))
     const { error } = await supabaseAdmin(c).rpc('flush_updates_cache_purge', { p_force: false })
