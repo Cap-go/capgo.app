@@ -12,6 +12,7 @@ import DeploymentBanner from '~/components/dashboard/DeploymentBanner.vue'
 import DeploymentStatsCard from '~/components/dashboard/DeploymentStatsCard.vue'
 import DevicesStats from '~/components/dashboard/DevicesStats.vue'
 import ReleaseBanner from '~/components/dashboard/ReleaseBanner.vue'
+import ReleaseLivePanel from '~/components/dashboard/ReleaseLivePanel.vue'
 import UpdateStatsCard from '~/components/dashboard/UpdateStatsCard.vue'
 import { fetchAppChartRefreshState } from '~/services/dashboardRefresh'
 import { useSupabase } from '~/services/supabase'
@@ -139,7 +140,7 @@ watchEffect(async () => {
 
         <div :class="{ 'blur-sm pointer-events-none select-none': appNotFound }">
           <DeploymentBanner v-if="!appNotFound" :app-id="id" @deployed="refreshData" />
-          <ReleaseBanner v-if="!appNotFound" :app-id="id" />
+          <ReleaseBanner v-if="!appNotFound && props.section !== 'live'" :app-id="id" />
           <CompatibilityBanner v-if="!appNotFound" :app-id="id" />
 
           <template v-if="!lacksSecurityAccess && props.section === 'usage'">
@@ -207,6 +208,13 @@ watchEffect(async () => {
               :accumulated="false"
               :force-demo="appNotFound"
               class="col-span-full"
+            />
+          </div>
+
+          <div v-else-if="!lacksSecurityAccess && props.section === 'live'" class="mb-6">
+            <ReleaseLivePanel
+              :app-id="id"
+              :force-demo="appNotFound"
             />
           </div>
         </div>

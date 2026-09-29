@@ -1,4 +1,4 @@
-export const APP_DASHBOARD_SUBTABS = ['native', 'installs', 'active-bundle'] as const
+export const APP_DASHBOARD_SUBTABS = ['native', 'installs', 'active-bundle', 'live'] as const
 
 export type AppDashboardSubtab = typeof APP_DASHBOARD_SUBTABS[number]
 export type AppDashboardSection = 'usage' | AppDashboardSubtab

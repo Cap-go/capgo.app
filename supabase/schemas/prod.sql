@@ -22719,6 +22719,57 @@ COMMENT ON COLUMN "public"."manifest_per_version"."size_receipts_provided" IS 'T
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."mcp_oauth_clients" (
+    "client_id" "text" NOT NULL,
+    "client_name" "text" NOT NULL,
+    "client_uri" "text",
+    "logo_uri" "text",
+    "redirect_uris" "text"[] NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "last_used_at" timestamp with time zone,
+    "ip_hash" "text",
+    CONSTRAINT "mcp_oauth_clients_redirect_uris_not_empty" CHECK ((("cardinality"("redirect_uris") >= 1) AND ("cardinality"("redirect_uris") <= 20)))
+);
+
+
+ALTER TABLE "public"."mcp_oauth_clients" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."mcp_oauth_clients" IS 'RFC 7591 dynamically registered public clients of the hosted MCP OAuth server. Service role only.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."mcp_oauth_requests" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "client_id" "text" NOT NULL,
+    "client_name" "text" NOT NULL,
+    "redirect_uri" "text" NOT NULL,
+    "state" "text",
+    "scope" "text",
+    "resource" "text",
+    "code_challenge" "text" NOT NULL,
+    "issuer" "text" NOT NULL,
+    "ip_hash" "text",
+    "status" "text" DEFAULT 'pending'::"text" NOT NULL,
+    "user_id" "uuid",
+    "apikey_id" bigint,
+    "code_hash" "text",
+    "encrypted_token" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "expires_at" timestamp with time zone NOT NULL,
+    "code_expires_at" timestamp with time zone,
+    "exchanged_at" timestamp with time zone,
+    CONSTRAINT "mcp_oauth_requests_status_check" CHECK (("status" = ANY (ARRAY['pending'::"text", 'approved'::"text", 'denied'::"text", 'exchanged'::"text"])))
+);
+
+
+ALTER TABLE "public"."mcp_oauth_requests" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."mcp_oauth_requests" IS 'Hosted MCP OAuth authorization requests and single-use codes. The code is never stored: only its SHA-256 hash, and the minted API key is AES-GCM encrypted with a key derived from the code. Service role only.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."notification_app_settings" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
@@ -24218,6 +24269,16 @@ ALTER TABLE ONLY "public"."manifest"
 
 
 
+ALTER TABLE ONLY "public"."mcp_oauth_clients"
+    ADD CONSTRAINT "mcp_oauth_clients_pkey" PRIMARY KEY ("client_id");
+
+
+
+ALTER TABLE ONLY "public"."mcp_oauth_requests"
+    ADD CONSTRAINT "mcp_oauth_requests_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."notification_app_settings"
     ADD CONSTRAINT "notification_app_settings_app_key" UNIQUE ("app_id");
 
@@ -25068,6 +25129,34 @@ CREATE INDEX "idx_version_usage_version_name" ON "public"."version_usage" USING 
 
 
 
+CREATE INDEX "mcp_oauth_clients_ip_hash_idx" ON "public"."mcp_oauth_clients" USING "btree" ("ip_hash", "created_at") WHERE ("ip_hash" IS NOT NULL);
+
+
+
+CREATE INDEX "mcp_oauth_clients_unused_idx" ON "public"."mcp_oauth_clients" USING "btree" ("created_at") WHERE ("last_used_at" IS NULL);
+
+
+
+CREATE INDEX "mcp_oauth_requests_apikey_id_idx" ON "public"."mcp_oauth_requests" USING "btree" ("apikey_id") WHERE ("apikey_id" IS NOT NULL);
+
+
+
+CREATE UNIQUE INDEX "mcp_oauth_requests_code_hash_idx" ON "public"."mcp_oauth_requests" USING "btree" ("code_hash") WHERE ("code_hash" IS NOT NULL);
+
+
+
+CREATE INDEX "mcp_oauth_requests_expires_at_idx" ON "public"."mcp_oauth_requests" USING "btree" ("expires_at") WHERE ("status" <> 'exchanged'::"text");
+
+
+
+CREATE INDEX "mcp_oauth_requests_ip_hash_idx" ON "public"."mcp_oauth_requests" USING "btree" ("ip_hash", "created_at") WHERE ("ip_hash" IS NOT NULL);
+
+
+
+CREATE INDEX "mcp_oauth_requests_user_id_idx" ON "public"."mcp_oauth_requests" USING "btree" ("user_id") WHERE ("user_id" IS NOT NULL);
+
+
+
 CREATE INDEX "notifications_uniq_id_idx" ON "public"."notifications" USING "btree" ("uniq_id");
 
 
@@ -25841,6 +25930,16 @@ ALTER TABLE ONLY "public"."manifest"
 
 ALTER TABLE ONLY "public"."manifest_per_version"
     ADD CONSTRAINT "manifest_per_version_version_id_fkey" FOREIGN KEY ("version_id") REFERENCES "public"."app_versions"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."mcp_oauth_requests"
+    ADD CONSTRAINT "mcp_oauth_requests_apikey_id_fkey" FOREIGN KEY ("apikey_id") REFERENCES "public"."apikeys"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."mcp_oauth_requests"
+    ADD CONSTRAINT "mcp_oauth_requests_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE CASCADE;
 
 
 
@@ -26989,6 +27088,12 @@ ALTER TABLE "public"."manifest" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."manifest_per_version" ENABLE ROW LEVEL SECURITY;
+
+
+ALTER TABLE "public"."mcp_oauth_clients" ENABLE ROW LEVEL SECURITY;
+
+
+ALTER TABLE "public"."mcp_oauth_requests" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."notification_app_settings" ENABLE ROW LEVEL SECURITY;
@@ -30627,6 +30732,14 @@ GRANT ALL ON SEQUENCE "public"."manifest_id_seq" TO "service_role";
 
 
 GRANT ALL ON TABLE "public"."manifest_per_version" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."mcp_oauth_clients" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."mcp_oauth_requests" TO "service_role";
 
 
 

@@ -10,10 +10,12 @@ declare global {
   const DEFAULT_DATE_RANGE_MODE: typeof import('./stores/adminDashboard').DEFAULT_DATE_RANGE_MODE
   const EffectScope: typeof import('vue').EffectScope
   const RBAC_ORG_ROLE_I18N_KEYS: typeof import('./stores/organization').RBAC_ORG_ROLE_I18N_KEYS
+  const RELEASE_LIVE_POLL_INTERVAL_MS: typeof import('./composables/useReleaseLive').RELEASE_LIVE_POLL_INTERVAL_MS
   const WEBHOOK_EVENT_TYPES: typeof import('./stores/webhooks').WEBHOOK_EVENT_TYPES
   const asyncComputed: typeof import('@vueuse/core').asyncComputed
   const autoResetRef: typeof import('@vueuse/core').autoResetRef
   const buildDemoBundleInstallStats: typeof import('./composables/useBundleInstallStats').buildDemoBundleInstallStats
+  const buildDemoReleaseLive: typeof import('./composables/useReleaseLive').buildDemoReleaseLive
   const buildDemoUpdateDeliveryStats: typeof import('./composables/useUpdateDeliveryStats').buildDemoUpdateDeliveryStats
   const computed: typeof import('vue').computed
   const computedAsync: typeof import('@vueuse/core').computedAsync
@@ -131,6 +133,7 @@ declare global {
   const until: typeof import('@vueuse/core').until
   const useActiveElement: typeof import('@vueuse/core').useActiveElement
   const useAdminDashboardStore: typeof import('./stores/adminDashboard').useAdminDashboardStore
+  const useAnchorPopover: typeof import('./composables/useAnchorPopover').useAnchorPopover
   const useAnimate: typeof import('@vueuse/core').useAnimate
   const useAppDetailStore: typeof import('./stores/appDetail').useAppDetailStore
   const useAppOnboardingCliProgress: typeof import('./composables/useAppOnboardingCliProgress').useAppOnboardingCliProgress
@@ -267,6 +270,7 @@ declare global {
   const useRafFn: typeof import('@vueuse/core').useRafFn
   const useRealtimeCLIFeed: typeof import('./composables/useRealtimeCLIFeed').useRealtimeCLIFeed
   const useRefHistory: typeof import('@vueuse/core').useRefHistory
+  const useReleaseLive: typeof import('./composables/useReleaseLive').useReleaseLive
   const useResizeObserver: typeof import('@vueuse/core').useResizeObserver
   const useRoute: typeof import('vue-router').useRoute
   const useRouter: typeof import('vue-router').useRouter
@@ -349,11 +353,17 @@ declare global {
   export type { Component, Slot, Slots, ComponentPublicInstance, ComputedRef, DirectiveBinding, ExtractDefaultPropTypes, ExtractPropTypes, ExtractPublicPropTypes, InjectionKey, PropType, Ref, ShallowRef, MaybeRef, MaybeRefOrGetter, VNode, WritableComputedRef } from 'vue'
   import('vue')
   // @ts-ignore
+  export type { UseAnchorPopoverOptions } from './composables/useAnchorPopover'
+  import('./composables/useAnchorPopover')
+  // @ts-ignore
   export type { BundleInstallStatsItem, BundleInstallStatsResponse } from './composables/useBundleInstallStats'
   import('./composables/useBundleInstallStats')
   // @ts-ignore
   export type { UpdateEndpointRequest } from './composables/useDeviceUpdateFormat'
   import('./composables/useDeviceUpdateFormat')
+  // @ts-ignore
+  export type { ReleaseLiveDeployment, ReleaseLiveBucket, ReleaseLiveResponse } from './composables/useReleaseLive'
+  import('./composables/useReleaseLive')
   // @ts-ignore
   export type { CheckDomainResponse } from './composables/useSSORouting'
   import('./composables/useSSORouting')
@@ -386,10 +396,12 @@ declare module 'vue' {
     readonly DEFAULT_DATE_RANGE_MODE: UnwrapRef<typeof import('./stores/adminDashboard')['DEFAULT_DATE_RANGE_MODE']>
     readonly EffectScope: UnwrapRef<typeof import('vue')['EffectScope']>
     readonly RBAC_ORG_ROLE_I18N_KEYS: UnwrapRef<typeof import('./stores/organization')['RBAC_ORG_ROLE_I18N_KEYS']>
+    readonly RELEASE_LIVE_POLL_INTERVAL_MS: UnwrapRef<typeof import('./composables/useReleaseLive')['RELEASE_LIVE_POLL_INTERVAL_MS']>
     readonly WEBHOOK_EVENT_TYPES: UnwrapRef<typeof import('./stores/webhooks')['WEBHOOK_EVENT_TYPES']>
     readonly asyncComputed: UnwrapRef<typeof import('@vueuse/core')['asyncComputed']>
     readonly autoResetRef: UnwrapRef<typeof import('@vueuse/core')['autoResetRef']>
     readonly buildDemoBundleInstallStats: UnwrapRef<typeof import('./composables/useBundleInstallStats')['buildDemoBundleInstallStats']>
+    readonly buildDemoReleaseLive: UnwrapRef<typeof import('./composables/useReleaseLive')['buildDemoReleaseLive']>
     readonly buildDemoUpdateDeliveryStats: UnwrapRef<typeof import('./composables/useUpdateDeliveryStats')['buildDemoUpdateDeliveryStats']>
     readonly computed: UnwrapRef<typeof import('vue')['computed']>
     readonly computedAsync: UnwrapRef<typeof import('@vueuse/core')['computedAsync']>
@@ -504,6 +516,7 @@ declare module 'vue' {
     readonly until: UnwrapRef<typeof import('@vueuse/core')['until']>
     readonly useActiveElement: UnwrapRef<typeof import('@vueuse/core')['useActiveElement']>
     readonly useAdminDashboardStore: UnwrapRef<typeof import('./stores/adminDashboard')['useAdminDashboardStore']>
+    readonly useAnchorPopover: UnwrapRef<typeof import('./composables/useAnchorPopover')['useAnchorPopover']>
     readonly useAnimate: UnwrapRef<typeof import('@vueuse/core')['useAnimate']>
     readonly useAppDetailStore: UnwrapRef<typeof import('./stores/appDetail')['useAppDetailStore']>
     readonly useAppOnboardingCliProgress: UnwrapRef<typeof import('./composables/useAppOnboardingCliProgress')['useAppOnboardingCliProgress']>
@@ -640,6 +653,7 @@ declare module 'vue' {
     readonly useRafFn: UnwrapRef<typeof import('@vueuse/core')['useRafFn']>
     readonly useRealtimeCLIFeed: UnwrapRef<typeof import('./composables/useRealtimeCLIFeed')['useRealtimeCLIFeed']>
     readonly useRefHistory: UnwrapRef<typeof import('@vueuse/core')['useRefHistory']>
+    readonly useReleaseLive: UnwrapRef<typeof import('./composables/useReleaseLive')['useReleaseLive']>
     readonly useResizeObserver: UnwrapRef<typeof import('@vueuse/core')['useResizeObserver']>
     readonly useRoute: UnwrapRef<typeof import('vue-router')['useRoute']>
     readonly useRouter: UnwrapRef<typeof import('vue-router')['useRouter']>
