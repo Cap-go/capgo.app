@@ -111,6 +111,13 @@ function installIntentTest(
   module.AB_TESTS_CONFIG[testName] = config[testName]
 }
 
+function enableNewChannelTest(module: ABTestsModule) {
+  module.AB_TESTS_CONFIG[NEW_CHANNEL_TEST_NAME] = {
+    ...module.AB_TESTS_CONFIG[NEW_CHANNEL_TEST_NAME]!,
+    treatment_percentage: 50,
+  }
+}
+
 function intentAssignment(branch: 'A' | 'B' = 'A') {
   return { assigned_at: FIXED_DATE.toISOString(), branch }
 }
@@ -169,6 +176,10 @@ describe('new-user A/B test assignment', () => {
     const module = await loadABTestsModule()
     delete module.AB_TESTS_CONFIG[INTENT_TEST_NAME]
     delete module.AB_TESTS_CONFIG[BUILDER_INTENT_TEST_NAME]
+    module.AB_TESTS_CONFIG[NEW_CHANNEL_TEST_NAME] = {
+      ...module.AB_TESTS_CONFIG[NEW_CHANNEL_TEST_NAME]!,
+      treatment_percentage: 0,
+    }
     vi.useRealTimers()
     vi.restoreAllMocks()
   })
@@ -355,7 +366,12 @@ describe('new-user A/B test assignment', () => {
 
   it('assigns the configured channel experiment only after an exact eligible persisted intent', async () => {
     const { AB_TESTS_CONFIG, createABTestAssignments } = await loadABTestsModule()
-    const config = { [NEW_CHANNEL_TEST_NAME]: AB_TESTS_CONFIG[NEW_CHANNEL_TEST_NAME]! }
+    const config = {
+      [NEW_CHANNEL_TEST_NAME]: {
+        ...AB_TESTS_CONFIG[NEW_CHANNEL_TEST_NAME]!,
+        treatment_percentage: 50,
+      },
+    }
 
     expect(createABTestAssignments(
       { created_via_invite: false },
@@ -669,6 +685,26 @@ describe('new-user A/B test assignment', () => {
     }
     finally {
       module.AB_TESTS_CONFIG[BUILDER_TODO_TEST_NAME] = configured
+    }
+  })
+
+  it('preserves an existing assignment after a test is set to 0%', async () => {
+    const module = await loadABTestsModule()
+    const configured = module.AB_TESTS_CONFIG[NEW_CHANNEL_TEST_NAME]
+    module.AB_TESTS_CONFIG[NEW_CHANNEL_TEST_NAME] = { ...configured, treatment_percentage: 0 }
+    const persisted = persistedAssignments({ channel: 'A' })
+    const context = { get: vi.fn(() => 'request-id') } as never
+    drizzleExecuteMock.mockResolvedValueOnce({
+      rows: [{ abtests: persisted, created_via_invite: false, email: 'user@example.com', intent: 'ota' }],
+    })
+
+    try {
+      await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(persisted)
+      expect(drizzleExecuteMock).toHaveBeenCalledOnce()
+      expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
+    }
+    finally {
+      module.AB_TESTS_CONFIG[NEW_CHANNEL_TEST_NAME] = configured
     }
   })
 
@@ -1084,6 +1120,7 @@ describe('new-user A/B test assignment', () => {
     ['a cleared intent', null],
   ])('revokes a stale intent-gated assignment after %s', async (_label, intent) => {
     const module = await loadABTestsModule()
+    enableNewChannelTest(module)
     installIntentTest(module)
     const standardAssignments = persistedAssignments({ channel: null, development: 'D', emails: 'B', publish: 'B' })
     const expectedAssignments = intent === 'builder'
@@ -1140,6 +1177,7 @@ describe('new-user A/B test assignment', () => {
 
   it('revokes the old intent assignment and creates the new intent assignment atomically', async () => {
     const module = await loadABTestsModule()
+    enableNewChannelTest(module)
     installIntentTest(module)
     installIntentTest(module, ['builder'], BUILDER_INTENT_TEST_NAME)
     const standardAssignments = persistedAssignments({ channel: null, development: 'D', emails: 'B', publish: 'B' })

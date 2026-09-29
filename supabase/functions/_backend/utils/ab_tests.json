@@ -15,7 +15,7 @@
     "audience": "self_signup",
     "intents": ["ota", "both"],
     "label": "Channel creation",
-    "treatment_percentage": 50,
+    "treatment_percentage": 0,
     "treatment_branch": "A",
     "control_branch": "B",
     "branches": {
