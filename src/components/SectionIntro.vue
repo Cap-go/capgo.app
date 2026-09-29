@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useLocalStorage, useMediaQuery } from '@vueuse/core'
+import { useLocalStorage } from '@vueuse/core'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
@@ -44,14 +44,13 @@ const showFlow = computed(() => !!appRouteSegment.value && flowSteps.some(step =
 const showHeading = computed(() => !!appRouteSegment.value)
 
 // The explanation is for people learning the console, not for daily users.
-// Desktop shows it until dismissed once per section; mobile keeps it behind a
-// one-line toggle so it never pushes the table down on every visit.
+// It shows until dismissed once per section, then collapses to a
+// "What is ...?" pill so it never pushes the table down on every visit.
 const dismissedSections = useLocalStorage<string[]>('capgo-section-intro-dismissed', [])
-const isDesktop = useMediaQuery('(min-width: 1024px)')
 const open = ref(false)
 
 watch(() => props.section, (section) => {
-  open.value = isDesktop.value && !dismissedSections.value.includes(section)
+  open.value = !dismissedSections.value.includes(section)
 }, { immediate: true })
 
 function dismiss() {
