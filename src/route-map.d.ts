@@ -493,6 +493,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/mcp/authorize': RouteRecordInfo<
+      '/mcp/authorize',
+      '/mcp/authorize',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/onboarding/app': RouteRecordInfo<
       '/onboarding/app',
       '/onboarding/app',
@@ -1252,6 +1259,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/login-cli.vue': {
       routes:
         | '/login-cli'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/mcp/authorize.vue': {
+      routes:
+        | '/mcp/authorize'
       views:
         | never
       pathParamNames:
