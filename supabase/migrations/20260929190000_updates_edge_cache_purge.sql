@@ -75,10 +75,11 @@ BEGIN
   )
   SELECT pg_catalog.array_agg(DISTINCT app_id) INTO due_app_ids FROM due;
 
-  UPDATE public.updates_cache_purge_state SET last_flush_at = pg_catalog.now() WHERE id;
+  -- Nothing due: no HTTP call and no state write.
   IF due_app_ids IS NULL THEN
     RETURN 0;
   END IF;
+  UPDATE public.updates_cache_purge_state SET last_flush_at = pg_catalog.now() WHERE id;
 
   i := 1;
   WHILE i <= pg_catalog.array_length(due_app_ids, 1) LOOP
