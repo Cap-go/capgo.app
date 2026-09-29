@@ -2,64 +2,87 @@
 --
 -- The plugin worker caches app-level /updates reads (app owner + plan, default
 -- channel row, manifest rows) in the Cloudflare Cache API with one Cache-Tag
--- per app. These statement-level triggers collect the app ids whose served
--- data changed and POST them (pg_net, async, after commit) to
--- triggers/updates_cache_purge, which purges the tags in every Cloudflare data
--- center. The same app ids are also queued (pgmq, delayed 10s / 60s / 180s)
--- for re-purges: a request that read a lagging read replica, or read just
--- before the commit, may have refilled the cache with the old answer. 180s is
--- the replica lag threshold past which a replica is reported as lagging.
--- Nothing here can fail or slow down the write: every error is swallowed and
--- the cache TTL is the backstop.
+-- per app. Statement-level triggers collect the app ids whose served data
+-- changed; triggers/updates_cache_purge then purges their tags in every
+-- Cloudflare data center (zone purge-by-tag, 100 tags per API call).
+--
+-- Batching: triggers only record (app_id, due_at) rows. One flush sends every
+-- due app in a single pg_net call:
+-- - the first change after a quiet second flushes right away (~1s end to end),
+-- - during bursts at most one flush per second runs; leftovers go out with the
+--   next change or the 10s cron tick,
+-- - re-purges at +10s / +60s / +180s are rows too (a request that read a
+--   lagging replica, or read just before the commit, may have refilled the
+--   cache; 180s is the replica-lag alert threshold), so they batch as well.
+-- Duplicates collapse on (app_id, due_at), so a hot app costs one tag per flush.
 --
 -- Only columns the update path reads are compared, so background writes
 -- (stats refresh, audit bookkeeping, auto-pause checks, per-device override
--- counter churn) do not purge anything.
+-- counter churn, manifest file_size backfills) do not purge anything.
+-- Nothing here can fail or slow down the write: every error is swallowed and
+-- the cache TTL is the backstop.
 
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pgmq.list_queues() WHERE queue_name = 'updates_cache_purge') THEN
-    PERFORM pgmq.create('updates_cache_purge');
-  END IF;
-END;
-$$;
+CREATE UNLOGGED TABLE public.updates_cache_purge_pending (
+  app_id text NOT NULL,
+  due_at timestamptz NOT NULL,
+  PRIMARY KEY (app_id, due_at)
+);
+CREATE INDEX updates_cache_purge_pending_due_at_idx ON public.updates_cache_purge_pending (due_at);
+ALTER TABLE public.updates_cache_purge_pending OWNER TO postgres;
+ALTER TABLE public.updates_cache_purge_pending ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.updates_cache_purge_pending FROM PUBLIC, anon, authenticated;
 
--- Drain the delayed re-purges with the other high-frequency trigger queues.
-UPDATE public.cron_tasks
-SET
-  target = (target::jsonb || '["updates_cache_purge"]'::jsonb)::text,
-  updated_at = pg_catalog.now()
-WHERE name = 'high_frequency_queues'
-  AND NOT (target::jsonb ? 'updates_cache_purge');
+CREATE UNLOGGED TABLE public.updates_cache_purge_state (
+  id boolean PRIMARY KEY DEFAULT true CHECK (id),
+  last_flush_at timestamptz NOT NULL DEFAULT '-infinity'
+);
+INSERT INTO public.updates_cache_purge_state (id) VALUES (true) ON CONFLICT DO NOTHING;
+ALTER TABLE public.updates_cache_purge_state OWNER TO postgres;
+ALTER TABLE public.updates_cache_purge_state ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.updates_cache_purge_state FROM PUBLIC, anon, authenticated;
 
-CREATE OR REPLACE FUNCTION public.notify_updates_edge_cache_purge(p_app_ids text[])
-RETURNS void
+-- Sends every due app in one pg_net call (the endpoint chunks per 100 tags).
+-- p_force = false (from triggers) skips when another flush ran in the last
+-- second or is running now; the cron tick passes true to drain leftovers.
+CREATE OR REPLACE FUNCTION public.flush_updates_cache_purge(p_force boolean DEFAULT true)
+RETURNS integer
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
 AS $$
 DECLARE
-  deduped text[];
+  due_app_ids text[];
   chunk text[];
-  chunk_size constant int := 100;
-  max_apps constant int := 1000;
-  repurge_delays constant int[] := ARRAY[10, 60, 180];
-  delay_seconds int;
+  chunk_size constant int := 1000;
+  min_interval constant interval := '1 second';
   i int;
 BEGIN
-  SELECT pg_catalog.array_agg(DISTINCT app_id) INTO deduped
-  FROM pg_catalog.unnest(p_app_ids) AS app_id
-  WHERE app_id IS NOT NULL AND app_id <> '';
-
-  IF deduped IS NULL THEN
-    RETURN;
+  -- One flusher at a time; others leave their rows for the next flush.
+  IF NOT pg_catalog.pg_try_advisory_xact_lock(pg_catalog.hashtext('updates_cache_purge_flush')) THEN
+    RETURN 0;
   END IF;
-  -- Beyond the cap the TTL backstop takes over for the tail.
-  deduped := deduped[1:max_apps];
+  IF NOT p_force AND EXISTS (
+    SELECT 1 FROM public.updates_cache_purge_state
+    WHERE last_flush_at > pg_catalog.now() - min_interval
+  ) THEN
+    RETURN 0;
+  END IF;
+
+  WITH due AS (
+    DELETE FROM public.updates_cache_purge_pending
+    WHERE due_at <= pg_catalog.clock_timestamp()
+    RETURNING app_id
+  )
+  SELECT pg_catalog.array_agg(DISTINCT app_id) INTO due_app_ids FROM due;
+
+  UPDATE public.updates_cache_purge_state SET last_flush_at = pg_catalog.now() WHERE id;
+  IF due_app_ids IS NULL THEN
+    RETURN 0;
+  END IF;
 
   i := 1;
-  WHILE i <= pg_catalog.array_length(deduped, 1) LOOP
-    chunk := deduped[i:i + chunk_size - 1];
+  WHILE i <= pg_catalog.array_length(due_app_ids, 1) LOOP
+    chunk := due_app_ids[i:i + chunk_size - 1];
     PERFORM net.http_post(
       url := public.get_db_url() || '/functions/v1/triggers/updates_cache_purge',
       headers := pg_catalog.jsonb_build_object(
@@ -69,19 +92,37 @@ BEGIN
       body := pg_catalog.jsonb_build_object('app_ids', pg_catalog.to_jsonb(chunk)),
       timeout_milliseconds := 5000
     );
-    FOREACH delay_seconds IN ARRAY repurge_delays LOOP
-      PERFORM pgmq.send(
-        'updates_cache_purge',
-        pg_catalog.jsonb_build_object(
-          'function_name', 'updates_cache_purge',
-          'function_type', 'cloudflare',
-          'payload', pg_catalog.jsonb_build_object('app_ids', pg_catalog.to_jsonb(chunk))
-        ),
-        delay_seconds
-      );
-    END LOOP;
     i := i + chunk_size;
   END LOOP;
+  RETURN pg_catalog.array_length(due_app_ids, 1);
+END;
+$$;
+
+ALTER FUNCTION public.flush_updates_cache_purge(boolean) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.flush_updates_cache_purge(boolean) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.flush_updates_cache_purge(boolean) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.flush_updates_cache_purge(boolean) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.notify_updates_edge_cache_purge(p_app_ids text[])
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  INSERT INTO public.updates_cache_purge_pending (app_id, due_at)
+  SELECT app_id, pg_catalog.date_trunc('second', pg_catalog.now()) + delay
+  FROM (
+    SELECT DISTINCT app_id FROM pg_catalog.unnest(p_app_ids) AS app_id
+    WHERE app_id IS NOT NULL AND app_id <> ''
+  ) AS apps
+  CROSS JOIN (VALUES
+    (interval '0 seconds'), (interval '10 seconds'),
+    (interval '60 seconds'), (interval '180 seconds')
+  ) AS delays (delay)
+  ON CONFLICT DO NOTHING;
+
+  PERFORM public.flush_updates_cache_purge(false);
 EXCEPTION WHEN OTHERS THEN
   -- Cache purge is an accelerator; never fail the business write.
   RAISE WARNING 'notify_updates_edge_cache_purge failed: %', SQLERRM;
@@ -92,6 +133,18 @@ ALTER FUNCTION public.notify_updates_edge_cache_purge(text[]) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.notify_updates_edge_cache_purge(text[]) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.notify_updates_edge_cache_purge(text[]) FROM anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.notify_updates_edge_cache_purge(text[]) TO service_role;
+
+-- Drains leftovers and due re-purges every 10 seconds.
+INSERT INTO public.cron_tasks (name, description, task_type, target, second_interval, enabled)
+VALUES (
+  'updates_cache_purge_flush',
+  'Batched Cloudflare purge of the /updates edge cache (leftovers and delayed re-purges)',
+  'function',
+  'public.flush_updates_cache_purge(true)',
+  10,
+  true
+)
+ON CONFLICT (name) DO NOTHING;
 
 CREATE OR REPLACE FUNCTION public.invalidate_updates_edge_cache()
 RETURNS trigger

@@ -20,12 +20,12 @@
  *
  * - BENCH_DOCKER_NETWORK: docker network of the local Supabase stack
  * - SUPABASE_API_URL: local Supabase API (kong) URL, receives the other triggers
+ * - optional: BENCH_REQUESTS (300), BENCH_FRESHNESS_TRIALS (3), BENCH_ONLY_EDGE,
+ *   BENCH_SKIP_LOAD, BENCH_DEBUG (prints top statements and timed-out answers)
  *
  * The script temporarily points the vault `db_url` (used by pg_net triggers)
  * at a mailbox container that relays /functions/v1/triggers/* to API_URL, and
- * restores it on exit. The queued re-purges (pgmq, 10s / 60s / 180s) are
- * replayed by this script because the local queue consumer cannot reach host
- * workers.
+ * restores it on exit.
  */
 import { SQL } from 'bun'
 
@@ -41,7 +41,6 @@ const FRESHNESS_TRIALS = Number(process.env.BENCH_FRESHNESS_TRIALS ?? 3)
 const RELAY_PORT = Number(process.env.BENCH_RELAY_PORT ?? 18785)
 const SUPABASE_API_URL = process.env.SUPABASE_API_URL ?? 'http://127.0.0.1:54321'
 const POLL_MS = 25
-const REPURGE_DELAYS_MS = [10_000, 60_000, 180_000]
 const FRESHNESS_TIMEOUT_MS = 120_000
 
 if (!DB_URL)
@@ -300,7 +299,6 @@ async function withTriggerRelay<T>(run: () => Promise<T>): Promise<T> {
   await fetch(`http://127.0.0.1:${RELAY_PORT}/__next`).catch(() => null) // drain health probes
 
   let running = true
-  const repurgeTimers: ReturnType<typeof setTimeout>[] = []
   const pump = (async () => {
     while (running) {
       const items = await fetch(`http://127.0.0.1:${RELAY_PORT}/__next`).then(r => r.json() as Promise<{ path: string, headers: Record<string, string>, body: string }[]>).catch(() => [])
@@ -313,14 +311,6 @@ async function withTriggerRelay<T>(run: () => Promise<T>): Promise<T> {
           ? `${API_URL}${item.path.replace('/functions/v1', '')}`
           : `${SUPABASE_API_URL}${item.path}`, { method: 'POST', headers: { 'Content-Type': item.headers['content-type'] ?? 'application/json', 'apisecret': item.headers.apisecret ?? '' }, body: item.body }).catch(() => null)
         forward()
-        // Production re-purges come from the updates_cache_purge pgmq queue
-        // (10s / 60s / 180s) through queue_consumer -> CLOUDFLARE_FUNCTION_URL.
-        // The local queue consumer cannot reach the host workers, so replay
-        // them here on the same schedule.
-        if (isPurge) {
-          for (const delayMs of REPURGE_DELAYS_MS)
-            repurgeTimers.push(setTimeout(forward, delayMs))
-        }
       }
     }
   })()
@@ -333,7 +323,6 @@ async function withTriggerRelay<T>(run: () => Promise<T>): Promise<T> {
   finally {
     await sql`SELECT vault.update_secret(${secret.id}, ${secret.decrypted_secret})`
     running = false
-    repurgeTimers.forEach(clearTimeout)
     Bun.spawnSync(['docker', 'rm', '-f', name])
     await pump.catch(() => null)
   }

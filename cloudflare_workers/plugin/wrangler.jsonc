@@ -18,8 +18,9 @@
       "name": "capgo_plugin-eu-prod",
       "vars": {
         "ENV_NAME": "capgo_plugin-eu-prod",
-        // /updates edge cache (Cache API + purge-by-tag). Flip to "on" once
-        // CF_CACHE_PURGE_TOKEN / CF_CACHE_PURGE_ZONE_IDS are set on the purge trigger.
+        // /updates edge cache (Cache API + purge-by-tag): "off", "on" or a share of
+        // devices such as "1%". Raise it once CF_CACHE_PURGE_TOKEN /
+        // CF_CACHE_PURGE_ZONE_IDS are set on the purge trigger.
         "UPDATES_EDGE_CACHE": "off"
       },
       "observability": {

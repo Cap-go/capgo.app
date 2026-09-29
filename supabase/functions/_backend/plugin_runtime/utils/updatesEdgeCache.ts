@@ -36,8 +36,54 @@ interface CachedValue<T> {
   v: T | null
 }
 
+/**
+ * Share of /updates requests served through the edge cache, in basis points
+ * (0-10000). `UPDATES_EDGE_CACHE` accepts `off`, `on`, or a percentage such
+ * as `1%`, `0.5` or `25` for a progressive rollout.
+ */
+export function getUpdatesEdgeCacheBps(c: Context) {
+  const raw = getEnv(c, 'UPDATES_EDGE_CACHE').trim().toLowerCase()
+  if (raw === 'on')
+    return 10_000
+  const percent = Number.parseFloat(raw.replace(/%$/, ''))
+  if (!Number.isFinite(percent) || percent <= 0)
+    return 0
+  return Math.min(Math.round(percent * 100), 10_000)
+}
+
+/**
+ * True as soon as any share of traffic uses the edge cache. Tagging (and so
+ * purging) then applies to every /updates cache entry, whichever path wrote it.
+ */
 export function isUpdatesEdgeCacheEnabled(c: Context) {
-  return getEnv(c, 'UPDATES_EDGE_CACHE') === 'on'
+  return getUpdatesEdgeCacheBps(c) > 0
+}
+
+/** Stable bucket 0-9999 (FNV-1a) so a device always takes the same path. */
+export function updatesEdgeCacheBucket(appId: string, deviceId: string) {
+  let hash = 0x811C9DC5
+  const input = `${appId}:${deviceId}`
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0) % 10_000
+}
+
+const sampledRequests = new WeakMap<object, boolean>()
+
+/**
+ * Decides once per request whether this device uses the edge cache, and
+ * remembers it for the rest of the request.
+ */
+export function shouldUseUpdatesEdgeCache(c: Context, appId: string, deviceId: string) {
+  const known = sampledRequests.get(c.req.raw)
+  if (known !== undefined)
+    return known
+  const bps = getUpdatesEdgeCacheBps(c)
+  const sampled = bps >= 10_000 || (bps > 0 && updatesEdgeCacheBucket(appId, deviceId) < bps)
+  sampledRequests.set(c.req.raw, sampled)
+  return sampled
 }
 
 export function getUpdatesEdgeCacheTtlSeconds(c: Context) {

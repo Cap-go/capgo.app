@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { purgeLocalTaggedKeys } from '../supabase/functions/_backend/plugin_runtime/utils/cache.ts'
 import { createLazyPgClient, getLazyPgQueryCount } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
-import { getCachedAppOwner, getCachedDefaultChannel, getUpdatesEdgeCacheTtlSeconds, isUpdatesEdgeCacheEnabled, updatesAppCacheTag, updatesCacheTags } from '../supabase/functions/_backend/plugin_runtime/utils/updatesEdgeCache.ts'
+import { getCachedAppOwner, getCachedDefaultChannel, getUpdatesEdgeCacheBps, getUpdatesEdgeCacheTtlSeconds, isUpdatesEdgeCacheEnabled, shouldUseUpdatesEdgeCache, updatesAppCacheTag, updatesCacheTags, updatesEdgeCacheBucket } from '../supabase/functions/_backend/plugin_runtime/utils/updatesEdgeCache.ts'
 import { chunk, parseAppIds, purgeUpdatesCacheTags } from '../supabase/functions/_backend/triggers/updates_cache_purge.ts'
 
 function makeContext(env: Record<string, string> = {}) {
@@ -57,6 +57,47 @@ describe('updates edge cache', () => {
     expect(getUpdatesEdgeCacheTtlSeconds(c)).toBe(10)
     vi.stubEnv('UPDATES_EDGE_CACHE_TTL_SECONDS', '999999')
     expect(getUpdatesEdgeCacheTtlSeconds(c)).toBe(3600)
+  })
+
+  it('parses off, on and percentages', () => {
+    const c = makeContext()
+    const bps = (value: string) => {
+      vi.stubEnv('UPDATES_EDGE_CACHE', value)
+      return getUpdatesEdgeCacheBps(c)
+    }
+    expect(bps('off')).toBe(0)
+    expect(bps('')).toBe(0)
+    expect(bps('garbage')).toBe(0)
+    expect(bps('on')).toBe(10_000)
+    expect(bps('1%')).toBe(100)
+    expect(bps('0.1')).toBe(10)
+    expect(bps(' 25 % ')).toBe(2500)
+    expect(bps('25%')).toBe(2500)
+    expect(bps('250')).toBe(10_000)
+    vi.stubEnv('UPDATES_EDGE_CACHE', '1%')
+    // Any share turns tagging on so purges also clear the non-sampled path.
+    expect(isUpdatesEdgeCacheEnabled(c)).toBe(true)
+  })
+
+  it('samples a stable ~1% of devices and remembers the choice per request', () => {
+    vi.stubEnv('UPDATES_EDGE_CACHE', '1%')
+    let sampled = 0
+    for (let i = 0; i < 20_000; i++) {
+      if (shouldUseUpdatesEdgeCache(makeContext(), 'com.example.app', `device-${i}`))
+        sampled++
+    }
+    expect(sampled).toBeGreaterThan(120)
+    expect(sampled).toBeLessThan(280)
+    expect(updatesEdgeCacheBucket('com.example.app', 'device-1')).toBe(updatesEdgeCacheBucket('com.example.app', 'device-1'))
+
+    const c = makeContext()
+    const first = shouldUseUpdatesEdgeCache(c, 'com.example.app', 'device-42')
+    vi.stubEnv('UPDATES_EDGE_CACHE', first ? 'off' : 'on')
+    expect(shouldUseUpdatesEdgeCache(c, 'com.example.app', 'device-42')).toBe(first)
+    vi.stubEnv('UPDATES_EDGE_CACHE', 'off')
+    expect(shouldUseUpdatesEdgeCache(makeContext(), 'com.example.app', 'device-42')).toBe(false)
+    vi.stubEnv('UPDATES_EDGE_CACHE', 'on')
+    expect(shouldUseUpdatesEdgeCache(makeContext(), 'com.example.app', 'device-42')).toBe(true)
   })
 
   it('loads the owner once, then serves it from the cache with the app tag', async () => {

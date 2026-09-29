@@ -28,7 +28,7 @@ import { s3 } from './s3.ts'
 import { shouldQueuePluginNotifications } from './supabase_write_guard.ts'
 import { isUpdateEnumerationLimited, recordUpdateEnumerationMiss, updateEnumerationLimitedResponse } from './updateOracleGuard.ts'
 import { canServeUpToDateFromCache, getUpdateReadCache, setUpdateReadCache } from './updateReadCache.ts'
-import { getCachedAppOwner, getCachedDefaultChannel, isUpdatesEdgeCacheEnabled } from './updatesEdgeCache.ts'
+import { getCachedAppOwner, getCachedDefaultChannel, shouldUseUpdatesEdgeCache } from './updatesEdgeCache.ts'
 import { backgroundTask, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, fixSemver, isDeprecatedPluginVersion, isInternalVersionName, isVersionDeleted } from './utils.ts'
 
 const PLAN_LIMIT: Array<'mau' | 'bandwidth' | 'storage'> = ['mau', 'bandwidth']
@@ -389,7 +389,7 @@ export async function updateWithPG(
   let appOwner: Awaited<ReturnType<typeof getAppOwnerPostgres>>
   let prefetchedChannel: Awaited<ReturnType<typeof requestInfosChannelPostgres>> | null = null
   const startOwner = performance.now()
-  const edgeCache = isUpdatesEdgeCacheEnabled(c)
+  const edgeCache = shouldUseUpdatesEdgeCache(c, app_id, device_id)
   const ownerPromise = edgeCache
     ? getAppOwnerFromEdgeCache(c, app_id, drizzleClient, pathTiming)
     : getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT)
@@ -1007,12 +1007,12 @@ export async function update(c: Context, body: AppInfos) {
       await setAppStatus(c, body.app_id, 'cloud', cachedRead.allowDeviceCustomId, appStatus.block_provider_infra_requests)
       await backgroundTask(c, createStatsMau(c, body.device_id, body.app_id, cachedRead.ownerOrg, body.platform, body.version_build))
       await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: cachedRead.versionName }])
-      if (isUpdatesEdgeCacheEnabled(c))
+      if (shouldUseUpdatesEdgeCache(c, body.app_id, body.device_id))
         c.header('X-Updates-Cache', 'hit')
       return updateError200(c, 'no_new_version_available', 'No new version available')
     }
   }
-  if (isUpdatesEdgeCacheEnabled(c))
+  if (shouldUseUpdatesEdgeCache(c, body.app_id, body.device_id))
     return updateWithEdgeCache(c, body, appStatus, startUpdate, appStatusMs)
 
   const startPgClient = performance.now()

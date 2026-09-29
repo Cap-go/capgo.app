@@ -1,11 +1,12 @@
 // Purges the /updates edge cache of the given apps in every Cloudflare data
-// center (zone purge-by-tag).
+// center (zone purge-by-tag, 100 tags per API call).
 //
-// Called by the invalidate_updates_edge_cache() statement-level database
-// triggers through pg_net right after the commit, then again from the
-// updates_cache_purge pgmq queue (10s / 60s / 180s later) so an entry refilled
-// from a lagging read replica cannot outlive the change. Every failure is
-// soft: the cache TTL is the backstop.
+// Called through pg_net by public.flush_updates_cache_purge(), which batches
+// every due app (right after a change, then again 10s / 60s / 180s later so an
+// entry refilled from a lagging read replica cannot outlive the change) into
+// one request. Changes that arrive during the 1s flush throttle are drained
+// by this endpoint calling the flush again ~1s later (the chain stops once
+// nothing is due). Every failure is soft: the cache TTL is the backstop.
 
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
@@ -13,6 +14,7 @@ import { Hono } from 'hono/tiny'
 import { updatesAppCacheTag } from '../plugin_runtime/utils/updatesCacheTag.ts'
 import { BRES, middlewareAPISecret, parseBody } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
+import { supabaseAdmin } from '../utils/supabase.ts'
 import { backgroundTask, getEnv } from '../utils/utils.ts'
 
 /** Cloudflare purge API accepts at most 100 tags per call on every plan. */
@@ -21,6 +23,8 @@ const MAX_APPS_PER_REQUEST = 1000
 const PURGE_TIMEOUT_MS = 5000
 const MAX_RETRY_AFTER_MS = 2000
 const MAX_PURGE_ATTEMPTS = 3
+/** Just over the DB flush throttle (1s), so the follow-up flush is allowed. */
+const FOLLOW_UP_FLUSH_DELAY_MS = 1100
 
 export function chunk<T>(items: T[], size: number): T[][] {
   const chunks: T[][] = []
@@ -110,6 +114,11 @@ app.post('/', middlewareAPISecret, async (c) => {
       cloudlog({ requestId: c.get('requestId'), message: 'updates cache purge skipped (not configured)', apps: appIds.length })
     else
       cloudlog({ requestId: c.get('requestId'), message: 'updates cache purged', apps: appIds.length, calls: result.calls, failed: result.failed })
+    // Drain changes that were throttled while this flush ran.
+    await new Promise(resolve => setTimeout(resolve, FOLLOW_UP_FLUSH_DELAY_MS))
+    const { error } = await supabaseAdmin(c).rpc('flush_updates_cache_purge', { p_force: false })
+    if (error)
+      cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache follow-up flush failed', error: serializeError(error) })
   })())
   return c.json({ ...BRES, apps: appIds.length })
 })

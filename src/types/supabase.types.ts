@@ -4513,6 +4513,10 @@ export type Database = {
           name: string
         }[]
       }
+      flush_updates_cache_purge: {
+        Args: { p_force?: boolean }
+        Returns: number
+      }
       get_accessible_apps_for_apikey_v2: {
         Args: { apikey?: string }
         Returns: {
