@@ -51,6 +51,7 @@ import { app as validate_password_compliance } from '../../supabase/functions/_b
 import { app as verify_email_otp } from '../../supabase/functions/_backend/private/verify_email_otp.ts'
 import { app as website_preview } from '../../supabase/functions/_backend/private/website_preview.ts'
 import { app as apikey } from '../../supabase/functions/_backend/public/apikey/index.ts'
+import { app as mcp } from '../../supabase/functions/_backend/public/mcp/index.ts'
 import { app as appEndpoint } from '../../supabase/functions/_backend/public/app/index.ts'
 import { app as build } from '../../supabase/functions/_backend/public/build/index.ts'
 import { app as bundle } from '../../supabase/functions/_backend/public/bundle/index.ts'
@@ -111,6 +112,7 @@ const app = createHono(functionName, version)
 const functionNameScheduled = 'api-scheduled'
 const appScheduled = createHono(functionNameScheduled, version)
 app.route('/ok', ok)
+app.route('/', mcp)
 app.route('/apikey', apikey)
 app.route('/bundle', bundle)
 app.route('/channel', channel)

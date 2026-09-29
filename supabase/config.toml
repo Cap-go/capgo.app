@@ -433,6 +433,10 @@ import_map = "./functions/deno.json"
 verify_jwt = false
 import_map = "./functions/deno.json"
 
+[functions.mcp]
+verify_jwt = false
+import_map = "./functions/deno.json"
+
 # FILES ENDPOINTS
 
 [functions.files]

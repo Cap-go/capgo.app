@@ -196,7 +196,8 @@ async function guard(
     : null
   const isAdminRoute = to.path.startsWith('/admin')
   const isCliLoginRoute = isCliLoginPath(to.path)
-  const organizationFetchOptions = { loadImages: !isCliLoginRoute }
+  const isMcpAuthorizeRoute = to.path.replace(/\/+$/, '') === '/mcp/authorize'
+  const organizationFetchOptions = { loadImages: !isCliLoginRoute && !isMcpAuthorizeRoute }
 
   async function tryLoadOrganizations(fetcher: () => Promise<void>) {
     try {
@@ -245,7 +246,7 @@ async function guard(
   }
 
   async function getPendingOnboardingRedirect(organizationsLoaded: boolean) {
-    if (isCliLoginRoute)
+    if (isCliLoginRoute || isMcpAuthorizeRoute)
       return null
     if (!organizationsLoaded)
       return null
