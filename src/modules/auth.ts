@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NavigationGuardNext, RouteLocationNormalized } from 'vue-router'
 import type { UserModule } from '~/types'
+import { ADMIN_DASHBOARD_URL } from '~/constants/adminDashboard'
 import { clearChartDataCache } from '~/services/chartDataService'
 import { isCliLoginPath, isMcpAuthorizePath } from '~/services/cliLogin'
 import { hideLoader } from '~/services/loader'
@@ -194,7 +195,6 @@ async function guard(
   const inviteOrgId = typeof to.query.invite_org === 'string' && to.query.invite_org.length > 0
     ? to.query.invite_org
     : null
-  const isAdminRoute = to.path.startsWith('/admin')
   const isCliLoginRoute = isCliLoginPath(to.path) || isMcpAuthorizePath(to.path)
   const organizationFetchOptions = { loadImages: !isCliLoginRoute }
 
@@ -355,27 +355,13 @@ async function guard(
       })
     }
 
-    if (organizationsLoaded && isAdminRoute) {
-      try {
-        main.isAdmin = await isPlatformAdmin()
-        if (main.isAdmin)
-          setWebsitePaidUserCookie(true)
-      }
-      catch (error) {
-        console.error('Failed to resolve platform admin status:', error)
-        main.isAdmin = false
-      }
-    }
-
     if (organizationsLoaded && !organizationStore.hasOrganizations && shouldRedirectToOrgOnboarding()) {
-      if (!isAdminRoute || !main.isAdmin) {
-        return next({
-          path: '/onboarding/app',
-          query: {
-            to: to.fullPath,
-          },
-        })
-      }
+      return next({
+        path: '/onboarding/app',
+        query: {
+          to: to.fullPath,
+        },
+      })
     }
 
     const onboardingRedirect = await getPendingOnboardingRedirect(organizationsLoaded)
@@ -454,26 +440,6 @@ async function guard(
     if (onboardingRedirect)
       return next(onboardingRedirect)
 
-    // Check if user is trying to access admin routes
-    if (isAdminRoute) {
-      try {
-        // Re-check via the single approved frontend path for admin-rights.
-        main.isAdmin = await isPlatformAdmin()
-        if (main.isAdmin)
-          setWebsitePaidUserCookie(true)
-      }
-      catch (error) {
-        console.error('Failed to resolve platform admin status:', error)
-        main.isAdmin = false
-      }
-
-      // Redirect non-admin users to dashboard
-      if (!main.isAdmin) {
-        console.warn('Non-admin user attempted to access admin route:', to.path)
-        return next('/dashboard')
-      }
-    }
-
     hideLoader()
     next()
   }
@@ -502,6 +468,11 @@ export const install: UserModule = ({ router }) => {
   }
 
   router.beforeEach(async (to, from, next) => {
+    // The admin dashboard moved to its own app; send old bookmarks there.
+    if (to.path === '/admin' || to.path.startsWith('/admin/')) {
+      window.location.replace(ADMIN_DASHBOARD_URL)
+      return next(false)
+    }
     if (to.meta.middleware) {
       await guard(next, to, from)
     }
