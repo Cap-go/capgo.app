@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parsePeriodDays } from '../src/utils/periodDays.ts'
-import { generateUtcDateLabels, getRollingStatsPeriod } from '../supabase/functions/_backend/utils/statsPeriod.ts'
+import { generateUtcDateLabels, getCustomStatsPeriod, getRollingStatsPeriod } from '../supabase/functions/_backend/utils/statsPeriod.ts'
 
 describe('rolling stats period', () => {
   it.concurrent('uses last 24 hours and two UTC day labels for 1 day', () => {
@@ -31,6 +31,11 @@ describe('rolling stats period', () => {
       '2026-08-15',
       '2026-08-16',
     ])
+  })
+
+  it.concurrent('custom period labels exclude the day after rangeEnd', () => {
+    const period = getCustomStatsPeriod('2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z')
+    expect(period.labels).toEqual(['2026-01-01'])
   })
 
   it.concurrent('generates inclusive UTC day labels', () => {

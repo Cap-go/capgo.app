@@ -10,7 +10,7 @@ import IconBuild from '~icons/heroicons/wrench-screwdriver'
 
 export const appTabs: Tab[] = [
   { label: 'dashboard', icon: IconChart, key: '' },
-  { label: 'observe', icon: IconObserve, key: '/observe/updater', badge: 'beta' },
+  { label: 'observe', icon: IconObserve, key: '/observe/update', badge: 'beta' },
   { label: 'settings', icon: IconCog, key: '/settings' },
   { label: 'bundles', icon: IconCube, key: '/bundles' },
   { label: 'channels', icon: IconChannel, key: '/channels' },

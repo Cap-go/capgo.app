@@ -191,7 +191,7 @@ const activeTab = computed(() => {
     return tabs.value[0]?.key ?? ''
 
   if (appSectionType.value === 'observe')
-    return `/app/${appRouteSegment.value}/observe/updater`
+    return `/app/${appRouteSegment.value}/observe/update`
   if (appSectionType.value === 'settings')
     return `/app/${appRouteSegment.value}/settings`
   if (appSectionType.value === 'dashboard')
@@ -237,7 +237,7 @@ function handleTab(key: string) {
 }
 
 function handleSecondaryTab(key: string) {
-  router.push(key)
+  router.push({ path: key, query: route.query })
 }
 </script>
 

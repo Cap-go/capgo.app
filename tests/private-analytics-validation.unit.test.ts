@@ -147,6 +147,34 @@ describe('private analytics route validation', () => {
     }))
   })
 
+  it('rejects reversed rangeStart and rangeEnd on /private/stats/insights', async () => {
+    const response = await statsApp.request(postJson('http://local/insights', {
+      appId: 'com.example.app',
+      rangeStart: '2026-01-02T00:00:00.000Z',
+      rangeEnd: '2026-01-01T00:00:00.000Z',
+    }))
+
+    await expectInvalidBody(response)
+    expect(readStatsInsightsMock).not.toHaveBeenCalled()
+  })
+
+  it('accepts rangeStart and rangeEnd on /private/stats/insights', async () => {
+    const rangeStart = '2026-01-01T00:00:00.000Z'
+    const rangeEnd = '2026-01-02T00:00:00.000Z'
+    const response = await statsApp.request(postJson('http://local/insights', {
+      appId: 'com.example.app',
+      rangeStart,
+      rangeEnd,
+    }))
+
+    expect(response.status).toBe(200)
+    expect(readStatsInsightsMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      app_id: 'com.example.app',
+      start_date: rangeStart,
+      end_date: rangeEnd,
+    }))
+  })
+
   it('rejects control characters in versionName on /private/stats/insights', async () => {
     const response = await statsApp.request(postJson('http://local/insights', {
       appId: 'com.example.app',

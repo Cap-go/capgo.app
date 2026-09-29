@@ -6,7 +6,7 @@ test.describe('Bundle reach', () => {
   })
 
   test('shows reach on observe updater', async ({ page }) => {
-    await page.goto('/app/com.demo.app/observe/updater')
+    await page.goto('/app/com.demo.app/observe/update')
     const reachCard = page.locator('[data-test="bundle-adoption-card"]').first()
     await expect(reachCard).toBeVisible()
     await expect(reachCard).toContainText('Bundle reach')

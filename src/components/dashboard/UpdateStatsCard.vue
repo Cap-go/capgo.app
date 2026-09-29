@@ -1,15 +1,17 @@
 <script setup lang="ts">
+import { onClickOutside } from '@vueuse/core'
 import colors from 'tailwindcss/colors'
 import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ArrowDownOnSquareIcon from '~icons/heroicons/arrow-down-on-square'
 import GlobeAltIcon from '~icons/heroicons/globe-alt'
+import IconInformationCircle from '~icons/heroicons/information-circle'
 import XCircleIcon from '~icons/heroicons/x-circle'
 import UpdateStatsChart from '~/components/dashboard/UpdateStatsChart.vue'
 import { addUtcDays, formatUtcDateParam, normalizeToUtcStartOfDay } from '~/services/date'
 import { calculateDemoEvolution, calculateDemoTotal, generateDemoUpdateStatsData } from '~/services/demoChartData'
 import { formatNumberValue } from '~/services/formatLocale'
-import { useSupabase } from '~/services/supabase'
+import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
 import { createUndefinedArray, incrementArrayValue } from '~/utils/chartOptimizations'
@@ -42,6 +44,23 @@ const props = defineProps({
 // Removed filterToBillingPeriod - no longer needed as we work with correct date range from the start
 
 const { t } = useI18n()
+const devicesFailedHelpOpen = ref(false)
+const devicesFailedHelpRef = ref<HTMLElement | null>(null)
+const devicesFailedHelpTriggerId = useId()
+const devicesFailedHelpPanelId = `${devicesFailedHelpTriggerId}-panel`
+
+onClickOutside(devicesFailedHelpRef, () => {
+  devicesFailedHelpOpen.value = false
+})
+
+function toggleDevicesFailedHelp() {
+  devicesFailedHelpOpen.value = !devicesFailedHelpOpen.value
+}
+
+function closeDevicesFailedHelp() {
+  devicesFailedHelpOpen.value = false
+}
+
 const organizationStore = useOrganizationStore()
 const effectiveOrganization = computed(() => {
   if (props.appId)
@@ -85,7 +104,7 @@ const chartUpdateDataByAction = computed(() => {
 const actionDisplayNames = computed(() => ({
   requested: capitalize(t('get')),
   install: capitalize(t('installed')),
-  fail: capitalize(t('failed')),
+  fail: capitalize(t('update-stats-devices-failed')),
 }))
 
 // Generate demo data when forceDemo is true
@@ -119,6 +138,43 @@ const effectiveLastDayEvolution = computed(() => isDemoMode.value ? calculateDem
 const hasData = computed(() => effectiveTotalUpdates.value > 0 || isDemoMode.value)
 
 const PAGE_SIZE = 1000
+
+async function fetchDeviceFailedByDay(targetAppIds: string[], startDate: string, endDateExclusive: string) {
+  try {
+    const supabase = useSupabase()
+    const { data: sessionData } = await supabase.auth.getSession()
+    if (!sessionData.session)
+      return null
+
+    if (targetAppIds.length === 0)
+      return null
+
+    const response = await fetch(`${defaultApiHost}/private/stats/device_outcomes`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'authorization': `Bearer ${sessionData.session.access_token}`,
+      },
+      body: JSON.stringify({
+        ...(props.appId ? { appId: props.appId } : {}),
+        appIds: targetAppIds,
+        rangeStart: `${startDate}T00:00:00.000Z`,
+        rangeEnd: `${endDateExclusive}T00:00:00.000Z`,
+      }),
+    })
+
+    if (!response.ok) {
+      console.error('Failed to fetch device update outcomes:', await response.json().catch(() => ({})))
+      return null
+    }
+
+    return await response.json() as Array<{ date: string, devices_failed: number }>
+  }
+  catch (error) {
+    console.error('Failed to fetch device update outcomes:', error)
+    return null
+  }
+}
 
 async function fetchDailyVersionStats(targetAppIds: string[], startDate: string, endDate: string) {
   const supabase = useSupabase()
@@ -184,6 +240,7 @@ async function calculateStats(forceRefetch = false) {
 
   const startDate = formatUtcDateParam(rangeStart)
   const endDate = formatUtcDateParam(today)
+  const endDateExclusive = formatUtcDateParam(addUtcDays(today, 1))
 
   // Cache key includes org, app, and range to avoid stale data between periods
   const cacheKey = `${currentOrgId ?? 'none'}:${props.appId || 'org'}:${startDate}:${endDate}`
@@ -258,6 +315,23 @@ async function calculateStats(forceRefetch = false) {
     let failedTotal = 0
     let requestedTotal = 0
 
+    let usedDeviceFailedSeries = isDemoMode.value
+    if (!isDemoMode.value) {
+      const deviceOutcomes = await fetchDeviceFailedByDay(targetAppIds, startDate, endDateExclusive)
+      if (deviceOutcomes !== null) {
+        usedDeviceFailedSeries = true
+        actionData.fail = createUndefinedArray(dayCount) as (number | undefined)[]
+        deviceOutcomes.forEach((row) => {
+          if (!row.date)
+            return
+          const statDate = normalizeToUtcStartOfDay(new Date(`${row.date}T00:00:00.000Z`))
+          const daysDiff = Math.floor((statDate.getTime() - rangeStart.getTime()) / DAY_IN_MS)
+          if (daysDiff >= 0 && daysDiff < dayCount)
+            incrementArrayValue(actionData.fail, daysDiff, row.devices_failed || 0)
+        })
+      }
+    }
+
     if (data && data.length > 0) {
       // Process each stat entry
       data.forEach((stat: any) => {
@@ -271,14 +345,16 @@ async function calculateStats(forceRefetch = false) {
             const installedCount = stat.install || 0
             const failedCount = stat.fail || 0
             const requestedCount = stat.get || 0
-            const totalForDay = installedCount + failedCount + requestedCount
+            const failForRow = usedDeviceFailedSeries ? 0 : failedCount
+            const totalForDay = installedCount + failForRow + requestedCount
 
             // Increment arrays
             incrementArrayValue(dailyCounts, daysDiff, totalForDay)
 
             // Track by action type
             incrementArrayValue(actionData.install, daysDiff, installedCount)
-            incrementArrayValue(actionData.fail, daysDiff, failedCount)
+            if (!usedDeviceFailedSeries)
+              incrementArrayValue(actionData.fail, daysDiff, failedCount)
             incrementArrayValue(actionData.requested, daysDiff, requestedCount)
 
             // Track by app
@@ -288,6 +364,14 @@ async function calculateStats(forceRefetch = false) {
           }
         }
       })
+    }
+
+    if (usedDeviceFailedSeries) {
+      for (let daysDiff = 0; daysDiff < dayCount; daysDiff++) {
+        const deviceFailedCount = actionData.fail[daysDiff] ?? 0
+        if (deviceFailedCount > 0)
+          incrementArrayValue(dailyCounts, daysDiff, deviceFailedCount)
+      }
     }
 
     const finalDailyCounts = dailyCounts
@@ -378,9 +462,41 @@ onMounted(async () => {
   >
     <template #header>
       <div class="flex flex-col gap-2 justify-between items-start">
-        <h2 class="flex-1 min-w-0 text-2xl font-semibold leading-tight dark:text-white text text-slate-600">
-          {{ t('update_statistics') }}
-        </h2>
+        <div class="flex flex-1 gap-1.5 items-center min-w-0">
+          <h2 class="text-2xl font-semibold leading-tight dark:text-white text text-slate-600">
+            {{ t('update_statistics') }}
+          </h2>
+          <div
+            ref="devicesFailedHelpRef"
+            class="relative inline-flex shrink-0"
+            data-test="update-stats-devices-failed-help"
+          >
+            <button
+              :id="devicesFailedHelpTriggerId"
+              type="button"
+              class="inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+              :aria-label="t('update-stats-devices-failed-help-aria')"
+              :aria-expanded="devicesFailedHelpOpen"
+              :aria-controls="devicesFailedHelpPanelId"
+              aria-haspopup="dialog"
+              @click.stop="toggleDevicesFailedHelp"
+              @keydown.escape="closeDevicesFailedHelp"
+            >
+              <IconInformationCircle class="h-4 w-4" aria-hidden="true" />
+            </button>
+            <dialog
+              v-if="devicesFailedHelpOpen"
+              :id="devicesFailedHelpPanelId"
+              class="absolute left-0 z-30 m-0 mt-1 w-[min(18rem,calc(100vw-2rem))] max-w-none translate-none rounded-md border border-slate-200 bg-white p-3 text-left text-xs leading-5 text-slate-600 shadow-lg open:flex open:flex-col dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+              open
+              :aria-label="t('update-stats-devices-failed-help-aria')"
+              @keydown.escape="closeDevicesFailedHelp"
+              @click.stop
+            >
+              {{ t('update-stats-devices-failed-help') }}
+            </dialog>
+          </div>
+        </div>
         <div class="flex flex-wrap gap-2 items-center text-xs sm:gap-3 sm:text-sm">
           <div class="flex gap-2 items-center">
             <div class="w-3 h-3 rounded-full" style="background-color: hsl(210, 65%, 55%)" />
