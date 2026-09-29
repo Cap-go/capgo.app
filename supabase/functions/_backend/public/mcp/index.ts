@@ -42,12 +42,19 @@ import { callMcpTool, listMcpTools, type McpCaller } from './tools.ts'
 
 const app = honoFactory.createApp()
 
-app.use('*', cors({
+// Scope CORS to MCP paths. A `*` middleware on an app mounted at `/` answers
+// OPTIONS for every API route and strips TUS discovery headers.
+const mcpCors = cors({
   origin: '*',
   allowHeaders: ['Authorization', 'Content-Type', 'Accept', 'MCP-Protocol-Version', 'Mcp-Protocol-Version'],
   exposeHeaders: ['WWW-Authenticate'],
   allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-}))
+})
+app.use('/mcp', mcpCors)
+app.use('/mcp/*', mcpCors)
+app.use('/.well-known/oauth-protected-resource', mcpCors)
+app.use('/.well-known/oauth-protected-resource/*', mcpCors)
+app.use('/.well-known/oauth-authorization-server', mcpCors)
 
 function publicUrl(c: Context): string {
   return resolvePublicRequestUrl(c.req.url, c.req.header('x-capgo-mcp-public-url'))

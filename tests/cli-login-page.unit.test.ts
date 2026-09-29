@@ -267,11 +267,13 @@ describe('/login-cli page contract', () => {
 
   it.concurrent('keeps the route out of normal onboarding redirects', () => {
     expect(auth).toContain('const isCliLoginRoute = isCliLoginPath(to.path)')
-    expect(auth.match(/if \(isCliLoginRoute\)/g)).toHaveLength(3)
+    expect(auth).toContain('const isMcpAuthorizeRoute = to.path.replace(/\\/+$/, \'\') === \'/mcp/authorize\'')
+    expect(auth.match(/if \(isCliLoginRoute\)\r?\n/g)).toHaveLength(2)
+    expect(auth).toContain('if (isCliLoginRoute || isMcpAuthorizeRoute)')
   })
 
   it.concurrent('defers organization image signing on the CLI login route', () => {
-    expect(auth).toContain('const organizationFetchOptions = { loadImages: !isCliLoginRoute }')
+    expect(auth).toContain('const organizationFetchOptions = { loadImages: !isCliLoginRoute && !isMcpAuthorizeRoute }')
     expect(auth).toContain('organizationStore.fetchOrganizations(organizationFetchOptions)')
     expect(auth).toContain('organizationStore.dedupFetchOrganizations(organizationFetchOptions)')
     expect(organizationStoreSource).not.toContain('let loadOrganizationImages')

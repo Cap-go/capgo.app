@@ -94,6 +94,23 @@ describe('remote MCP HTTP', () => {
     })
   })
 
+  it('keeps TUS discovery on build uploads', async () => {
+    const response = await apiWorker.fetch(new Request('https://api.capgo.app/build/upload/test-job', { method: 'OPTIONS' }))
+    expect(response.status).toBe(204)
+    expect(response.headers.get('Tus-Version')).toBe('1.0.0')
+  })
+
+  it('allows browser clients to preflight the MCP URL', async () => {
+    const response = await apiWorker.fetch(new Request('https://api.capgo.app/mcp', {
+      method: 'OPTIONS',
+      headers: {
+        'Origin': 'https://lovable.dev',
+        'Access-Control-Request-Method': 'POST',
+      },
+    }))
+    expect(response.headers.get('access-control-allow-origin')).toBe('*')
+  })
+
   it('asks unauthenticated MCP calls to start OAuth', async () => {
     const response = await app.request('https://api.capgo.app/mcp', {
       method: 'POST',
