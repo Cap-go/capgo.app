@@ -2205,6 +2205,113 @@ export type Database = {
           },
         ]
       }
+      mcp_oauth_clients: {
+        Row: {
+          client_id: string
+          client_name: string
+          client_uri: string | null
+          created_at: string
+          ip_hash: string | null
+          last_used_at: string | null
+          logo_uri: string | null
+          redirect_uris: string[]
+        }
+        Insert: {
+          client_id: string
+          client_name: string
+          client_uri?: string | null
+          created_at?: string
+          ip_hash?: string | null
+          last_used_at?: string | null
+          logo_uri?: string | null
+          redirect_uris: string[]
+        }
+        Update: {
+          client_id?: string
+          client_name?: string
+          client_uri?: string | null
+          created_at?: string
+          ip_hash?: string | null
+          last_used_at?: string | null
+          logo_uri?: string | null
+          redirect_uris?: string[]
+        }
+        Relationships: []
+      }
+      mcp_oauth_requests: {
+        Row: {
+          apikey_id: number | null
+          client_id: string
+          client_name: string
+          code_challenge: string
+          code_expires_at: string | null
+          code_hash: string | null
+          created_at: string
+          encrypted_token: string | null
+          exchanged_at: string | null
+          expires_at: string
+          id: string
+          ip_hash: string | null
+          issuer: string
+          redirect_uri: string
+          resource: string | null
+          scope: string | null
+          state: string | null
+          status: string
+          user_id: string | null
+        }
+        Insert: {
+          apikey_id?: number | null
+          client_id: string
+          client_name: string
+          code_challenge: string
+          code_expires_at?: string | null
+          code_hash?: string | null
+          created_at?: string
+          encrypted_token?: string | null
+          exchanged_at?: string | null
+          expires_at: string
+          id?: string
+          ip_hash?: string | null
+          issuer: string
+          redirect_uri: string
+          resource?: string | null
+          scope?: string | null
+          state?: string | null
+          status?: string
+          user_id?: string | null
+        }
+        Update: {
+          apikey_id?: number | null
+          client_id?: string
+          client_name?: string
+          code_challenge?: string
+          code_expires_at?: string | null
+          code_hash?: string | null
+          created_at?: string
+          encrypted_token?: string | null
+          exchanged_at?: string | null
+          expires_at?: string
+          id?: string
+          ip_hash?: string | null
+          issuer?: string
+          redirect_uri?: string
+          resource?: string | null
+          scope?: string | null
+          state?: string | null
+          status?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mcp_oauth_requests_apikey_id_fkey"
+            columns: ["apikey_id"]
+            isOneToOne: false
+            referencedRelation: "apikeys"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       notification_app_settings: {
         Row: {
           app_id: string
