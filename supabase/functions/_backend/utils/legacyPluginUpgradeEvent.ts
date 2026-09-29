@@ -187,3 +187,12 @@ export async function legacyPluginUpgradeRecipientId(email: string) {
     .map(byte => byte.toString(16).padStart(2, '0'))
     .join('')
 }
+
+/**
+ * Notifications are unique on (owner_org, event, uniq_id). This org id is
+ * derived from the recipient hash so every process claims the same row.
+ */
+export function legacyPluginUpgradeClaimOrgId(recipientId: string) {
+  const hex = recipientId.replace(/[^0-9a-f]/gi, '').padEnd(32, '0').slice(0, 32).toLowerCase()
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
+}

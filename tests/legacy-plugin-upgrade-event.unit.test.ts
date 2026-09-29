@@ -3,6 +3,7 @@ import { CHANNEL_SELF_STORE_CUTOFF_CAPTION } from '../supabase/functions/_backen
 import {
   buildLegacyPluginUpgradeEvents,
   LEGACY_PLUGIN_UPGRADE_BENTO_EVENT,
+  legacyPluginUpgradeClaimOrgId,
   selectLegacyPluginUpgradeEventsForSend,
   summarizeLegacyPluginApps,
 } from '../supabase/functions/_backend/utils/legacyPluginUpgradeEvent.ts'
@@ -74,5 +75,12 @@ describe('legacy plugin upgrade bento event', () => {
       ['admin@example.com', '2026-09-28T18:00:00.000Z'],
     ]), now)
     expect(nextDay.map(event => event.email)).toEqual(['admin@example.com', 'other@example.com'])
+  })
+
+  it('uses one notification org id per recipient so two orgs cannot both claim the same email', () => {
+    const recipientId = 'ab'.repeat(32)
+    expect(legacyPluginUpgradeClaimOrgId(recipientId)).toBe('abababab-abab-abab-abab-abababababab')
+    expect(legacyPluginUpgradeClaimOrgId(recipientId)).toBe(legacyPluginUpgradeClaimOrgId(recipientId.toUpperCase()))
+    expect(legacyPluginUpgradeClaimOrgId('cd'.repeat(32))).not.toBe(legacyPluginUpgradeClaimOrgId(recipientId))
   })
 })

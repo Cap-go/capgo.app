@@ -24,6 +24,7 @@ import {
   isLegacyPluginUpgradeDue,
   LEGACY_PLUGIN_UPGRADE_BENTO_EVENT,
   LEGACY_PLUGIN_UPGRADE_MIN_INTERVAL_MS,
+  legacyPluginUpgradeClaimOrgId,
   legacyPluginUpgradeRecipientId,
   selectLegacyPluginUpgradeEventsForSend,
   summarizeLegacyPluginApps,
@@ -100,7 +101,15 @@ async function loadUpgradeNotifications(supabase: ReturnType<typeof createSupaba
 interface SendClaim {
   event: LegacyPluginUpgradeEvent
   uniqId: string
+  claimOrgId: string
   previousLastSendAt: string | null
+}
+
+class BentoBatchRejectedError extends Error {
+  constructor(message: string, readonly retryable: boolean) {
+    super(message)
+    this.name = 'BentoBatchRejectedError'
+  }
 }
 
 async function claimEvents(
@@ -114,6 +123,7 @@ async function claimEvents(
   const recentSince = new Date(now.getTime() - LEGACY_PLUGIN_UPGRADE_MIN_INTERVAL_MS).toISOString()
   for (const event of events) {
     const uniqId = await legacyPluginUpgradeRecipientId(event.email)
+    const claimOrgId = legacyPluginUpgradeClaimOrgId(uniqId)
     const { data: recent, error: recentError } = await supabase
       .from('notifications')
       .select('uniq_id')
@@ -126,11 +136,11 @@ async function claimEvents(
     if ((recent ?? []).length > 0)
       continue
 
-    const claimKey = `${uniqId}\n${event.details.org_id}`
+    const claimKey = `${uniqId}\n${claimOrgId}`
     const previousLastSendAt = lastSendAtByRecipientOrg.get(claimKey) ?? null
     if (previousLastSendAt == null) {
       const { error } = await supabase.from('notifications').insert({
-        owner_org: event.details.org_id,
+        owner_org: claimOrgId,
         event: LEGACY_PLUGIN_UPGRADE_BENTO_EVENT,
         uniq_id: uniqId,
         last_send_at: nowIso,
@@ -145,7 +155,7 @@ async function claimEvents(
       const { data, error } = await supabase
         .from('notifications')
         .update({ last_send_at: nowIso })
-        .eq('owner_org', event.details.org_id)
+        .eq('owner_org', claimOrgId)
         .eq('event', LEGACY_PLUGIN_UPGRADE_BENTO_EVENT)
         .eq('uniq_id', uniqId)
         .eq('last_send_at', previousLastSendAt)
@@ -156,7 +166,7 @@ async function claimEvents(
         continue
     }
     lastSendAtByRecipientOrg.set(claimKey, nowIso)
-    claimed.push({ event, uniqId, previousLastSendAt })
+    claimed.push({ event, uniqId, claimOrgId, previousLastSendAt })
   }
   return claimed
 }
@@ -167,7 +177,7 @@ async function rollbackClaims(supabase: ReturnType<typeof createSupabaseServiceC
       const { error } = await supabase
         .from('notifications')
         .delete()
-        .eq('owner_org', claim.event.details.org_id)
+        .eq('owner_org', claim.claimOrgId)
         .eq('event', LEGACY_PLUGIN_UPGRADE_BENTO_EVENT)
         .eq('uniq_id', claim.uniqId)
       if (error)
@@ -177,7 +187,7 @@ async function rollbackClaims(supabase: ReturnType<typeof createSupabaseServiceC
     const { error } = await supabase
       .from('notifications')
       .update({ last_send_at: claim.previousLastSendAt })
-      .eq('owner_org', claim.event.details.org_id)
+      .eq('owner_org', claim.claimOrgId)
       .eq('event', LEGACY_PLUGIN_UPGRADE_BENTO_EVENT)
       .eq('uniq_id', claim.uniqId)
     if (error)
@@ -206,11 +216,17 @@ async function sendBentoBatch(env: Record<string, string | undefined>, events: A
   })
   const body = await response.text()
   if (!response.ok)
-    throw new Error(`Bento batch failed (${response.status}): ${body.slice(0, 500)}`)
+    throw new BentoBatchRejectedError(`Bento batch failed (${response.status}): ${body.slice(0, 500)}`, true)
 
-  const parsed = JSON.parse(body) as { results?: number, failed?: number }
+  let parsed: { results?: number, failed?: number }
+  try {
+    parsed = JSON.parse(body) as { results?: number, failed?: number }
+  }
+  catch {
+    throw new BentoBatchRejectedError(`Bento batch response was not JSON: ${body.slice(0, 500)}`, false)
+  }
   if (parsed.results !== events.length || parsed.failed !== 0)
-    throw new Error(`Bento batch was not fully accepted: ${body.slice(0, 500)}`)
+    throw new BentoBatchRejectedError(`Bento batch was not fully accepted: ${body.slice(0, 500)}`, false)
 }
 
 async function main() {
@@ -419,7 +435,9 @@ GROUP BY plugin_version, app_id`)
       })))
     }
     catch (error) {
-      await rollbackClaims(supabase, claimed)
+      const retryable = !(error instanceof BentoBatchRejectedError) || error.retryable
+      if (retryable)
+        await rollbackClaims(supabase, claimed)
       throw error
     }
     console.log(`sent ${claimed.length}`)
