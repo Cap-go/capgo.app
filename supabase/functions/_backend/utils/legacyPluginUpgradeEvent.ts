@@ -104,7 +104,7 @@ export function buildLegacyPluginUpgradeEvents(
   }
 
   const events: LegacyPluginUpgradeEvent[] = []
-  const orgIds = [...appsByOrg.keys()].sort()
+  const orgIds = [...appsByOrg.keys()].sort((left, right) => left.localeCompare(right))
   for (const orgId of orgIds) {
     const orgApps = appsByOrg.get(orgId) ?? []
     orgApps.sort((left, right) => right.legacyDevices - left.legacyDevices || left.appId.localeCompare(right.appId))
@@ -132,7 +132,7 @@ export function buildLegacyPluginUpgradeEvents(
       })),
     }
 
-    for (const email of [...emails].sort()) {
+    for (const email of [...emails].sort((left, right) => left.localeCompare(right))) {
       events.push({
         email,
         event: LEGACY_PLUGIN_UPGRADE_BENTO_EVENT,
