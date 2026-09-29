@@ -3,6 +3,7 @@ import { CHANNEL_SELF_STORE_CUTOFF_CAPTION } from '../supabase/functions/_backen
 import {
   buildLegacyPluginUpgradeEvents,
   LEGACY_PLUGIN_UPGRADE_BENTO_EVENT,
+  selectLegacyPluginUpgradeEventsForSend,
   summarizeLegacyPluginApps,
 } from '../supabase/functions/_backend/utils/legacyPluginUpgradeEvent.ts'
 
@@ -46,5 +47,32 @@ describe('legacy plugin upgrade bento event', () => {
       cutoff: CHANNEL_SELF_STORE_CUTOFF_CAPTION,
     })
     expect(events[0]?.details.apps.map(app => app.app_id)).toEqual(['com.example.a', 'com.example.b'])
+  })
+
+  it('sends each email at most once per day and keeps the org with the most old devices', () => {
+    const now = new Date('2026-09-29T18:00:00.000Z')
+    const events = buildLegacyPluginUpgradeEvents([
+      { appId: 'com.example.big', ownerOrgId: 'org-big', legacyDevices: 40, reportedDevices: 40, mainPluginVersion: '7.12.0' },
+      { appId: 'com.example.small', ownerOrgId: 'org-small', legacyDevices: 4, reportedDevices: 4, mainPluginVersion: '6.1.0' },
+    ], new Map([
+      ['org-big', ['admin@example.com']],
+      ['org-small', ['admin@example.com', 'other@example.com']],
+    ]))
+
+    const firstRun = selectLegacyPluginUpgradeEventsForSend(events, new Map(), now)
+    expect(firstRun.map(event => `${event.email}:${event.details.org_id}`)).toEqual([
+      'admin@example.com:org-big',
+      'other@example.com:org-small',
+    ])
+
+    const sameDay = selectLegacyPluginUpgradeEventsForSend(events, new Map([
+      ['admin@example.com', '2026-09-29T10:00:00.000Z'],
+    ]), now)
+    expect(sameDay.map(event => event.email)).toEqual(['other@example.com'])
+
+    const nextDay = selectLegacyPluginUpgradeEventsForSend(events, new Map([
+      ['admin@example.com', '2026-09-28T18:00:00.000Z'],
+    ]), now)
+    expect(nextDay.map(event => event.email)).toEqual(['admin@example.com', 'other@example.com'])
   })
 })

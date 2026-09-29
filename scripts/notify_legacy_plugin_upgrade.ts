@@ -2,8 +2,9 @@
  * Send one Bento event per org admin for apps still on the old channel plugin.
  *
  * The event is `plugin:legacy_channel_upgrade`. Create the Bento email automation
- * on that event before applying. Bento does not replay events that were sent
- * earlier, and this script does not send mail itself.
+ * on that event before applying. This script does not send mail itself.
+ * Each email is sent at most once per 24 hours. The last send is stored in
+ * public.notifications, so a second run the same day sends nothing.
  *
  * Dry run:
  *   bun run admin:notify-legacy-plugin-upgrade
@@ -16,20 +17,23 @@
  *   --min-legacy-devices=N      Skip apps below this legacy device count. Default: 1.
  *   --env-file=PATH             Default: internal/cloudflare/.env.prod
  */
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import process from 'node:process'
 import { CHANNEL_SELF_STORE_CUTOFF_CAPTION } from '../supabase/functions/_backend/utils/plugin_compatibility.ts'
 import {
   buildLegacyPluginUpgradeEvents,
+  isLegacyPluginUpgradeDue,
   LEGACY_PLUGIN_UPGRADE_BENTO_EVENT,
-  legacyPluginUpgradeEventKey,
+  LEGACY_PLUGIN_UPGRADE_MIN_INTERVAL_MS,
+  legacyPluginUpgradeRecipientId,
+  selectLegacyPluginUpgradeEventsForSend,
   summarizeLegacyPluginApps,
+  type LegacyPluginUpgradeEvent,
 } from '../supabase/functions/_backend/utils/legacyPluginUpgradeEvent.ts'
 import { createSupabaseServiceClient, DEFAULT_ENV_FILE, getArgValue, getRequiredEnv, loadEnv, parsePositiveInteger } from './admin_stripe_backfill_utils.ts'
 
 const LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000
-const SENT_LEDGER_PATH = '.context/legacy-plugin-upgrade-sent.json'
 const BENTO_BATCH_SIZE = 50
+const NOTIFICATION_PAGE_SIZE = 1000
 const QUERY_CHUNK = 100
 const ADMIN_ROLE_NAMES = ['org_admin', 'org_super_admin']
 
@@ -66,19 +70,119 @@ async function runAnalyticsQuery(env: Record<string, string | undefined>, query:
   return payload.data ?? []
 }
 
-async function readLedger() {
-  try {
-    const parsed = JSON.parse(await readFile(SENT_LEDGER_PATH, 'utf8')) as unknown
-    return new Set(Array.isArray(parsed) ? parsed.filter((key): key is string => typeof key === 'string') : [])
+async function loadUpgradeNotifications(supabase: ReturnType<typeof createSupabaseServiceClient>) {
+  const latestByRecipient = new Map<string, Date>()
+  const lastSendAtByRecipientOrg = new Map<string, string>()
+  for (let from = 0; ; from += NOTIFICATION_PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from('notifications')
+      .select('owner_org, uniq_id, last_send_at')
+      .eq('event', LEGACY_PLUGIN_UPGRADE_BENTO_EVENT)
+      .order('uniq_id')
+      .order('owner_org')
+      .range(from, from + NOTIFICATION_PAGE_SIZE - 1)
+    if (error)
+      throw new Error(error.message)
+
+    for (const row of data ?? []) {
+      const sentAt = new Date(row.last_send_at)
+      const previous = latestByRecipient.get(row.uniq_id)
+      if (!previous || sentAt > previous)
+        latestByRecipient.set(row.uniq_id, sentAt)
+      lastSendAtByRecipientOrg.set(`${row.uniq_id}\n${row.owner_org}`, row.last_send_at)
+    }
+    if ((data ?? []).length < NOTIFICATION_PAGE_SIZE)
+      break
   }
-  catch {
-    return new Set<string>()
-  }
+  return { latestByRecipient, lastSendAtByRecipientOrg }
 }
 
-async function writeLedger(keys: Set<string>) {
-  await mkdir('.context', { recursive: true })
-  await writeFile(SENT_LEDGER_PATH, JSON.stringify([...keys].sort(), null, 2))
+interface SendClaim {
+  event: LegacyPluginUpgradeEvent
+  uniqId: string
+  previousLastSendAt: string | null
+}
+
+async function claimEvents(
+  supabase: ReturnType<typeof createSupabaseServiceClient>,
+  events: readonly LegacyPluginUpgradeEvent[],
+  lastSendAtByRecipientOrg: Map<string, string>,
+  now: Date,
+) {
+  const claimed: SendClaim[] = []
+  const nowIso = now.toISOString()
+  const recentSince = new Date(now.getTime() - LEGACY_PLUGIN_UPGRADE_MIN_INTERVAL_MS).toISOString()
+  for (const event of events) {
+    const uniqId = await legacyPluginUpgradeRecipientId(event.email)
+    const { data: recent, error: recentError } = await supabase
+      .from('notifications')
+      .select('uniq_id')
+      .eq('event', LEGACY_PLUGIN_UPGRADE_BENTO_EVENT)
+      .eq('uniq_id', uniqId)
+      .gte('last_send_at', recentSince)
+      .limit(1)
+    if (recentError)
+      throw new Error(recentError.message)
+    if ((recent ?? []).length > 0)
+      continue
+
+    const claimKey = `${uniqId}\n${event.details.org_id}`
+    const previousLastSendAt = lastSendAtByRecipientOrg.get(claimKey) ?? null
+    if (previousLastSendAt == null) {
+      const { error } = await supabase.from('notifications').insert({
+        owner_org: event.details.org_id,
+        event: LEGACY_PLUGIN_UPGRADE_BENTO_EVENT,
+        uniq_id: uniqId,
+        last_send_at: nowIso,
+      })
+      if (error) {
+        if (error.code === '23505')
+          continue
+        throw new Error(error.message)
+      }
+    }
+    else {
+      const { data, error } = await supabase
+        .from('notifications')
+        .update({ last_send_at: nowIso })
+        .eq('owner_org', event.details.org_id)
+        .eq('event', LEGACY_PLUGIN_UPGRADE_BENTO_EVENT)
+        .eq('uniq_id', uniqId)
+        .eq('last_send_at', previousLastSendAt)
+        .select('uniq_id')
+      if (error)
+        throw new Error(error.message)
+      if ((data ?? []).length === 0)
+        continue
+    }
+    lastSendAtByRecipientOrg.set(claimKey, nowIso)
+    claimed.push({ event, uniqId, previousLastSendAt })
+  }
+  return claimed
+}
+
+async function rollbackClaims(supabase: ReturnType<typeof createSupabaseServiceClient>, claims: readonly SendClaim[]) {
+  for (const claim of claims) {
+    if (claim.previousLastSendAt == null) {
+      const { error } = await supabase
+        .from('notifications')
+        .delete()
+        .eq('owner_org', claim.event.details.org_id)
+        .eq('event', LEGACY_PLUGIN_UPGRADE_BENTO_EVENT)
+        .eq('uniq_id', claim.uniqId)
+      if (error)
+        throw new Error(error.message)
+      continue
+    }
+    const { error } = await supabase
+      .from('notifications')
+      .update({ last_send_at: claim.previousLastSendAt })
+      .eq('owner_org', claim.event.details.org_id)
+      .eq('event', LEGACY_PLUGIN_UPGRADE_BENTO_EVENT)
+      .eq('uniq_id', claim.uniqId)
+    if (error)
+      throw new Error(error.message)
+  }
 }
 
 async function sendBentoBatch(env: Record<string, string | undefined>, events: Array<{ email: string, event: string, details: Record<string, unknown> }>) {
@@ -118,7 +222,7 @@ Usage:
   bun run admin:notify-legacy-plugin-upgrade [-- --apply] [--min-legacy-devices=N]
 
 ${CHANNEL_SELF_STORE_CUTOFF_CAPTION}
-Create the Bento automation before --apply. Already sent org/email pairs are skipped via ${SENT_LEDGER_PATH}.`)
+Create the Bento automation before --apply. Each email is sent at most once per 24 hours.`)
     return
   }
 
@@ -196,7 +300,7 @@ GROUP BY plugin_version, app_id`)
     throw new Error('org admin roles were not found')
   const recipientsByOrg = new Map<string, string[]>()
   const userIdsByOrg = new Map<string, Set<string>>()
-  const now = Date.now()
+  const nowMs = Date.now()
 
   for (const ids of chunk([...paidOrgIds], QUERY_CHUNK)) {
     const { data, error } = await supabase
@@ -215,7 +319,7 @@ GROUP BY plugin_version, app_id`)
     for (const binding of data ?? []) {
       if (!binding.org_id || !binding.principal_id)
         continue
-      if (binding.expires_at && new Date(binding.expires_at).getTime() <= now)
+      if (binding.expires_at && new Date(binding.expires_at).getTime() <= nowMs)
         continue
       if (binding.principal_type === 'user') {
         const users = userIdsByOrg.get(binding.org_id) ?? new Set<string>()
@@ -275,35 +379,50 @@ GROUP BY plugin_version, app_id`)
     recipientsByOrg.set(orgId, emails)
   }
 
-  const sent = await readLedger()
-  const events = buildLegacyPluginUpgradeEvents(paidApps, recipientsByOrg).filter(event => !sent.has(legacyPluginUpgradeEventKey(event)))
-  const orgCount = new Set(events.map(event => event.details.org_id)).size
+  const candidates = buildLegacyPluginUpgradeEvents(paidApps, recipientsByOrg)
+  const { latestByRecipient, lastSendAtByRecipientOrg } = await loadUpgradeNotifications(supabase)
+  const now = new Date()
+  const lastSentAtByEmail = new Map<string, Date>()
+  for (const event of candidates) {
+    const sentAt = latestByRecipient.get(await legacyPluginUpgradeRecipientId(event.email))
+    if (sentAt)
+      lastSentAtByEmail.set(event.email, sentAt)
+  }
+  const events = selectLegacyPluginUpgradeEventsForSend(candidates, lastSentAtByEmail, now)
+  const skippedRecent = new Set(candidates.filter(event => !isLegacyPluginUpgradeDue(lastSentAtByEmail.get(event.email), now)).map(event => event.email)).size
   console.log(JSON.stringify({
     apply,
     cutoff: CHANNEL_SELF_STORE_CUTOFF_CAPTION,
     window_start: start,
     legacy_apps: legacyApps.length,
     paid_apps: paidApps.length,
-    orgs: orgCount,
+    orgs: new Set(events.map(event => event.details.org_id)).size,
+    candidates: candidates.length,
     events: events.length,
-    already_sent: sent.size,
+    skipped_recent: skippedRecent,
   }))
 
   if (!apply) {
-    console.log('Dry run. Re-run with --apply after the Bento automation exists.')
+    console.log('Dry run. Re-run with --apply after the Bento automation exists. Each email is sent at most once per 24 hours.')
     return
   }
 
   for (const batch of chunk(events, BENTO_BATCH_SIZE)) {
-    await sendBentoBatch(env, batch.map(event => ({
-      email: event.email,
-      event: event.event,
-      details: event.details,
-    })))
-    for (const event of batch)
-      sent.add(legacyPluginUpgradeEventKey(event))
-    await writeLedger(sent)
-    console.log(`sent ${batch.length}`)
+    const claimed = await claimEvents(supabase, batch, lastSendAtByRecipientOrg, new Date())
+    if (claimed.length === 0)
+      continue
+    try {
+      await sendBentoBatch(env, claimed.map(claim => ({
+        email: claim.event.email,
+        event: claim.event.event,
+        details: claim.event.details,
+      })))
+    }
+    catch (error) {
+      await rollbackClaims(supabase, claimed)
+      throw error
+    }
+    console.log(`sent ${claimed.length}`)
   }
 }
 

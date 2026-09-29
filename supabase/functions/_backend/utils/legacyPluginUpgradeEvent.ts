@@ -6,6 +6,9 @@ export const LEGACY_PLUGIN_UPGRADE_BENTO_EVENT = 'plugin:legacy_channel_upgrade'
 /** Keep the Bento payload small when an org still has many old apps. */
 export const LEGACY_PLUGIN_UPGRADE_APP_LIMIT = 10
 
+/** One Bento event per email, even when that person admins several orgs. */
+export const LEGACY_PLUGIN_UPGRADE_MIN_INTERVAL_MS = 24 * 60 * 60 * 1000
+
 export interface PluginVersionDeviceRow {
   app_id: string
   plugin_version: string
@@ -141,6 +144,46 @@ export function buildLegacyPluginUpgradeEvents(
   return events
 }
 
-export function legacyPluginUpgradeEventKey(event: Pick<LegacyPluginUpgradeEvent, 'email' | 'details'>) {
-  return `${event.email}\n${event.details.org_id}`
+export function isLegacyPluginUpgradeDue(lastSentAt: Date | string | null | undefined, now: Date) {
+  if (lastSentAt == null || lastSentAt === '')
+    return true
+  const last = lastSentAt instanceof Date ? lastSentAt : new Date(lastSentAt)
+  if (Number.isNaN(last.getTime()))
+    return false
+  return now.getTime() - last.getTime() >= LEGACY_PLUGIN_UPGRADE_MIN_INTERVAL_MS
+}
+
+/**
+ * One event per email per 24 hours. When the same person admins several orgs,
+ * keep the org with the most legacy devices.
+ */
+export function selectLegacyPluginUpgradeEventsForSend(
+  events: readonly LegacyPluginUpgradeEvent[],
+  lastSentAtByEmail: ReadonlyMap<string, Date | string>,
+  now: Date,
+): LegacyPluginUpgradeEvent[] {
+  const ranked = [...events].sort((left, right) =>
+    right.details.legacy_devices - left.details.legacy_devices
+    || left.email.localeCompare(right.email)
+    || left.details.org_id.localeCompare(right.details.org_id))
+
+  const selected: LegacyPluginUpgradeEvent[] = []
+  const seen = new Set<string>()
+  for (const event of ranked) {
+    if (seen.has(event.email))
+      continue
+    seen.add(event.email)
+    if (!isLegacyPluginUpgradeDue(lastSentAtByEmail.get(event.email), now))
+      continue
+    selected.push(event)
+  }
+  return selected
+}
+
+export async function legacyPluginUpgradeRecipientId(email: string) {
+  const data = new TextEncoder().encode(normalizeEmail(email))
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+  return Array.from(new Uint8Array(hashBuffer))
+    .map(byte => byte.toString(16).padStart(2, '0'))
+    .join('')
 }
