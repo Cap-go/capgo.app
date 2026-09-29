@@ -1069,6 +1069,7 @@ jobs:
           # Fresh CI runner: supabase start applies migrations + seed, so skip the redundant db reset.
           nohup bash -c "PLAYWRIGHT_READY_FILE=.context/playwright/gha-backend.ready \
             SKIP_SUPABASE_DB_RESET=true \
+            PLAYWRIGHT_SUPABASE_EXCLUDE=imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector \
             ENV=local \
             STRIPE_SECRET_KEY=sk_test_emulator \
             STRIPE_API_BASE_URL=http://host.docker.internal:${stripe_port} \
