@@ -25,7 +25,8 @@ export async function get(c: Context<MiddlewareKeyVariables>, body: GetLatest, a
   }
 
   // GET callers send page as a query string; coerce so (page + 1) is not string concatenation.
-  const fetchOffset = Math.max(0, Math.trunc(Number(body.page ?? 0)) || 0)
+  const requestedPage = Math.trunc(Number(body.page ?? 0))
+  const fetchOffset = Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 0
   const from = fetchOffset * fetchLimit
   const to = (fetchOffset + 1) * fetchLimit - 1
   const { data: dataBundles, error: dbError } = await supabaseApikey(c, apikey.key)

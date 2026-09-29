@@ -9,6 +9,7 @@ import {
   isMatchingCliLoginEvent,
   isMcpAuthorizePath,
   isValidCliLoginSession,
+  mcpOAuthKeyExpiresAt,
   mcpOAuthKeyName,
   nextManagedCliKeyName,
   prepareCliLoginKey,
@@ -339,6 +340,14 @@ describe('MCP OAuth key model', () => {
       ],
       global_permissions: [],
     })
+  })
+
+  it.concurrent('always gives OAuth keys a lifetime of at most 90 days', () => {
+    expect(mcpOAuthKeyExpiresAt([org()], now)).toBe(new Date(now.getTime() + 90 * 86_400_000 - 60_000).toISOString())
+    expect(mcpOAuthKeyExpiresAt([org({ require_apikey_expiration: true, max_apikey_expiration_days: 7 })], now))
+      .toBe(new Date(now.getTime() + 7 * 86_400_000 - 60_000).toISOString())
+    expect(mcpOAuthKeyExpiresAt([org({ require_apikey_expiration: true, max_apikey_expiration_days: 365 })], now))
+      .toBe(new Date(now.getTime() + 90 * 86_400_000 - 60_000).toISOString())
   })
 
   it.concurrent('refuses to mint a key without organizations', async () => {

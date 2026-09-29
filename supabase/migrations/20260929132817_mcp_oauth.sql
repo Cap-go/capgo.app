@@ -30,6 +30,7 @@ CREATE TABLE "public"."mcp_oauth_requests" (
   "scope" text,
   "resource" text,
   "code_challenge" text NOT NULL,
+  "issuer" text NOT NULL,
   "status" text NOT NULL DEFAULT 'pending',
   "user_id" uuid,
   "apikey_id" bigint,

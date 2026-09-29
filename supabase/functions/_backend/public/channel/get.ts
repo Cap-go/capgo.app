@@ -14,7 +14,8 @@ interface GetDevice {
 
 async function getAll(c: Context, body: GetDevice, apikey: Database['public']['Tables']['apikeys']['Row']) {
   // GET callers send page as a query string; coerce so (page + 1) is not string concatenation.
-  const fetchOffset = Math.max(0, Math.trunc(Number(body.page ?? 0)) || 0)
+  const requestedPage = Math.trunc(Number(body.page ?? 0))
+  const fetchOffset = Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 0
   const from = fetchOffset * fetchLimit
   const to = (fetchOffset + 1) * fetchLimit - 1
   const { data: dataChannels, error: dbError } = await supabaseApikey(c, apikey.key)

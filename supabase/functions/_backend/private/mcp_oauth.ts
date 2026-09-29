@@ -1,7 +1,6 @@
 import type { Context } from 'hono'
 import type { AuthInfo, MiddlewareKeyVariables } from '../utils/hono.ts'
 import { z } from 'zod'
-import { getIssuer } from '../mcp/oauth.ts'
 import { buildRedirectUrl, encryptWithCode, MCP_OAUTH_CODE_TTL_SECONDS, randomToken, sha256Hex } from '../mcp/oauth_utils.ts'
 import { honoFactory, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
@@ -19,6 +18,9 @@ export const app = honoFactory.createApp()
 
 app.use('*', useCors)
 
+const MCP_OAUTH_KEY_MAX_DAYS = 90
+// One extra day of slack for client clocks.
+const MCP_OAUTH_KEY_MAX_LIFETIME_MS = (MCP_OAUTH_KEY_MAX_DAYS + 1) * 86_400_000
 const requestIdSchema = z.string().uuid()
 const approveSchema = z.object({ request: requestIdSchema, apikey: z.string().min(1).max(512) })
 const denySchema = z.object({ request: requestIdSchema })
@@ -93,18 +95,22 @@ app.post('/approve', middlewareAuth(), async (c) => {
   const apikey = await checkKey(c, parsed.data.apikey, supabaseAdmin(c))
   if (!apikey || apikey.user_id !== auth.userId)
     throw quickError(403, 'invalid_apikey', 'The API key does not belong to the signed-in user')
+  // Tokens handed to third-party clients must expire: the consent page sets at most 90 days.
+  const expiresAt = apikey.expires_at ? new Date(apikey.expires_at).getTime() : Number.NaN
+  if (!Number.isFinite(expiresAt) || expiresAt > Date.now() + MCP_OAUTH_KEY_MAX_LIFETIME_MS)
+    throw quickError(400, 'apikey_expiration_required', `MCP API keys must expire within ${MCP_OAUTH_KEY_MAX_DAYS} days`)
 
   const code = randomToken(32)
   const codeHash = await sha256Hex(code)
   const encryptedToken = await encryptWithCode(parsed.data.apikey, code)
 
   const row = await withPg(c, async (pg) => {
-    const { rows } = await pg.query<{ redirect_uri: string, state: string | null, client_id: string }>(
+    const { rows } = await pg.query<{ redirect_uri: string, state: string | null, client_id: string, issuer: string }>(
       `UPDATE public.mcp_oauth_requests
        SET status = 'approved', user_id = $2, apikey_id = $3, code_hash = $4, encrypted_token = $5,
            code_expires_at = now() + make_interval(secs => $6)
        WHERE id = $1 AND status = 'pending' AND expires_at > now()
-       RETURNING redirect_uri, state, client_id`,
+       RETURNING redirect_uri, state, client_id, issuer`,
       [parsed.data.request, auth.userId, apikey.id, codeHash, encryptedToken, MCP_OAUTH_CODE_TTL_SECONDS],
     )
     return rows[0]
@@ -114,7 +120,8 @@ app.post('/approve', middlewareAuth(), async (c) => {
 
   cloudlog({ requestId: c.get('requestId'), message: 'mcp_oauth_request_approved', clientId: row.client_id, apikeyId: apikey.id })
   return c.json({
-    redirect_to: buildRedirectUrl(row.redirect_uri, { code, state: row.state, iss: getIssuer(c) }),
+    // RFC 9207: iss must be the authorization server issuer seen by the client, not this console API origin.
+    redirect_to: buildRedirectUrl(row.redirect_uri, { code, state: row.state, iss: row.issuer }),
   })
 })
 
@@ -125,10 +132,10 @@ app.post('/deny', middlewareAuth(), async (c) => {
     throw simpleError('invalid_request', 'Invalid deny body')
 
   const row = await withPg(c, async (pg) => {
-    const { rows } = await pg.query<{ redirect_uri: string, state: string | null }>(
+    const { rows } = await pg.query<{ redirect_uri: string, state: string | null, issuer: string }>(
       `UPDATE public.mcp_oauth_requests SET status = 'denied'
        WHERE id = $1 AND status = 'pending'
-       RETURNING redirect_uri, state`,
+       RETURNING redirect_uri, state, issuer`,
       [parsed.data.request],
     )
     return rows[0]
@@ -141,7 +148,7 @@ app.post('/deny', middlewareAuth(), async (c) => {
       error: 'access_denied',
       error_description: 'The user denied access',
       state: row.state,
-      iss: getIssuer(c),
+      iss: row.issuer,
     }),
   })
 })

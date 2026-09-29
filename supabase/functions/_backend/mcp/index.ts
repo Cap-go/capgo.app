@@ -23,6 +23,8 @@ import { handleJsonRpcMessage, JSON_RPC_ERRORS, jsonRpcError } from './protocol.
 export type McpDispatch = (request: Request, c: Context<MiddlewareKeyVariables>) => Response | Promise<Response>
 
 const MAX_BODY_BYTES = 1024 * 1024
+// Batching was removed in MCP 2025-06-18; keep legacy batches small so one request cannot fan out.
+const MAX_BATCH_MESSAGES = 20
 const STREAM_READ_TIMEOUT_MS = 8000
 const STREAM_MAX_BYTES = 256 * 1024
 
@@ -172,6 +174,8 @@ export function createMcpApp(dispatch: McpDispatch) {
     }
     const ctx: McpToolContext = { call: createCaller(c, dispatch, token), caller }
 
+    if (Array.isArray(payload) && (payload.length === 0 || payload.length > MAX_BATCH_MESSAGES))
+      return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, `Batches must contain 1 to ${MAX_BATCH_MESSAGES} messages`), 400)
     const messages = Array.isArray(payload) ? payload : [payload]
     const responses: JsonRpcResponse[] = []
     for (const message of messages) {

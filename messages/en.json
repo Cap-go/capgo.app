@@ -3304,7 +3304,7 @@
   "mcp-oauth-description": "{client} wants to use the Capgo MCP server on your behalf. It will be able to list and manage apps, bundles, channels, devices, statistics, builds, webhooks and push notifications in the organizations you select.",
   "mcp-oauth-error": "We could not complete the connection. Start it again from your MCP client.",
   "mcp-oauth-expired": "This connection request expired or was already used. Start it again from your MCP client.",
-  "mcp-oauth-key-note": "A dedicated API key named {name} is created. Revoke it any time from the API keys page to disconnect this client.",
+  "mcp-oauth-key-note": "A dedicated API key named {name} is created. It expires after 90 days at most. Revoke it any time from the API keys page to disconnect this client.",
   "mcp-oauth-loading": "Loading connection request…",
   "mcp-oauth-no-eligible": "None of your organizations can be connected. You need an admin role and to meet the organization security requirements.",
   "mcp-oauth-organizations": "Organizations to share",

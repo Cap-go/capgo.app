@@ -11,7 +11,7 @@ import { fetchLimit } from '../../utils/utils.ts'
 
 const bodySchema = z.object({
   orgId: z.string().optional(),
-  page: integerLikeSchema.optional(),
+  page: integerLikeSchema.refine(page => Number.isSafeInteger(page) && page >= 0, { message: 'page must be a non-negative integer' }).optional(),
 })
 const orgSchema = z.object({
   id: z.uuid(),

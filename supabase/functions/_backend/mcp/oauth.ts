@@ -3,7 +3,7 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
-import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
+import { consumeIPRateLimit, isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
 import { getEnv } from '../utils/utils.ts'
 import {
   buildRedirectUrl,
@@ -108,6 +108,34 @@ async function withPg<T>(c: McpContext, fn: (pg: ReturnType<typeof getPgClient>)
 }
 
 const METADATA_DOCUMENT_MAX_BYTES = 64 * 1024
+// Unauthenticated endpoints that insert rows: generous for real clients, tight enough to stop floods.
+const REGISTER_RATE_LIMIT = { limit: 20, windowSeconds: 60 * 60 }
+const AUTHORIZE_RATE_LIMIT = { limit: 60, windowSeconds: 60 * 10 }
+
+/** Read a response body but stop (and fail) as soon as it exceeds maxBytes. */
+async function readBoundedText(response: Response, maxBytes: number): Promise<string | null> {
+  const declared = Number(response.headers.get('content-length') ?? '0')
+  if (declared > maxBytes)
+    return null
+  const reader = response.body?.getReader()
+  if (!reader)
+    return ''
+  const decoder = new TextDecoder()
+  let received = 0
+  let text = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done)
+      break
+    received += value.byteLength
+    if (received > maxBytes) {
+      await reader.cancel().catch(() => {})
+      return null
+    }
+    text += decoder.decode(value, { stream: true })
+  }
+  return text + decoder.decode()
+}
 
 /** Resolve a Client ID Metadata Document (the MCP 2025-11-25 preferred client identification). */
 async function fetchClientMetadataDocument(c: McpContext, clientId: string): Promise<McpOAuthClient | null> {
@@ -119,8 +147,8 @@ async function fetchClientMetadataDocument(c: McpContext, clientId: string): Pro
     })
     if (!response.ok)
       return null
-    const text = await response.text()
-    if (text.length > METADATA_DOCUMENT_MAX_BYTES)
+    const text = await readBoundedText(response, METADATA_DOCUMENT_MAX_BYTES)
+    if (text === null)
       return null
     const doc = JSON.parse(text) as Record<string, unknown>
     if (doc.client_id !== clientId || !Array.isArray(doc.redirect_uris))
@@ -172,6 +200,8 @@ app.get(`/.well-known/oauth-authorization-server${MCP_PATH}`, c => c.json(author
 // RFC 7591 Dynamic Client Registration (public clients only, PKCE required).
 // ---------------------------------------------------------------------------
 app.post(`${MCP_OAUTH_PATH}/register`, async (c) => {
+  if ((await consumeIPRateLimit(c, 'mcp-oauth-register', REGISTER_RATE_LIMIT.limit, REGISTER_RATE_LIMIT.windowSeconds)).limited)
+    return oauthError(c, 429, 'slow_down', 'Too many client registrations, try again later')
   const body = await c.req.json().catch(() => null) as Record<string, unknown> | null
   if (!body || typeof body !== 'object')
     return oauthError(c, 400, 'invalid_client_metadata', 'Expected a JSON body')
@@ -223,6 +253,8 @@ app.post(`${MCP_OAUTH_PATH}/register`, async (c) => {
 // Capgo console consent page (which handles login, SSO, 2FA and org policies).
 // ---------------------------------------------------------------------------
 app.get(`${MCP_OAUTH_PATH}/authorize`, async (c) => {
+  if ((await consumeIPRateLimit(c, 'mcp-oauth-authorize', AUTHORIZE_RATE_LIMIT.limit, AUTHORIZE_RATE_LIMIT.windowSeconds)).limited)
+    return oauthError(c, 429, 'slow_down', 'Too many authorization requests, try again later')
   const query = c.req.query()
   const clientId = query.client_id ?? ''
   const redirectUri = query.redirect_uri ?? ''
@@ -252,21 +284,26 @@ app.get(`${MCP_OAUTH_PATH}/authorize`, async (c) => {
   if (query.resource && query.resource.replace(/\/+$/, '') !== getResourceUrl(c))
     return redirectError('invalid_target', `resource must be ${getResourceUrl(c)}`)
 
+  const webAppUrl = getEnv(c, 'WEBAPP_URL').replace(/\/+$/, '')
+  if (!webAppUrl) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'mcp_oauth_missing_webapp_url' })
+    return redirectError('server_error', 'Consent page is not configured')
+  }
+
   const requestId = await withPg(c, async (pg) => {
     await pg.query(`DELETE FROM public.mcp_oauth_requests WHERE status <> 'exchanged' AND expires_at < now() - interval '1 day'`)
     const { rows } = await pg.query<{ id: string }>(
-      `INSERT INTO public.mcp_oauth_requests (client_id, client_name, redirect_uri, state, scope, resource, code_challenge, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, now() + make_interval(secs => $8))
+      `INSERT INTO public.mcp_oauth_requests (client_id, client_name, redirect_uri, state, scope, resource, code_challenge, issuer, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + make_interval(secs => $9))
        RETURNING id`,
-      [client.client_id, client.client_name, resolvedRedirectUri, query.state ?? null, MCP_OAUTH_SCOPE, query.resource ?? null, query.code_challenge, MCP_OAUTH_REQUEST_TTL_SECONDS],
+      [client.client_id, client.client_name, resolvedRedirectUri, query.state ?? null, MCP_OAUTH_SCOPE, query.resource ?? null, query.code_challenge, getIssuer(c), MCP_OAUTH_REQUEST_TTL_SECONDS],
     )
     return rows[0]?.id
   })
   if (!requestId)
     return redirectError('server_error', 'Cannot create authorization request')
 
-  const consoleUrl = (getEnv(c, 'WEBAPP_URL') || 'https://console.capgo.app').replace(/\/+$/, '')
-  return c.redirect(`${consoleUrl}${CONSENT_PAGE_PATH}?request=${encodeURIComponent(requestId)}`, 302)
+  return c.redirect(`${webAppUrl}${CONSENT_PAGE_PATH}?request=${encodeURIComponent(requestId)}`, 302)
 })
 
 // ---------------------------------------------------------------------------

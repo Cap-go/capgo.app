@@ -237,6 +237,15 @@ export async function resolveCliKeyEligibility(
   }
 }
 
+/** OAuth-issued MCP keys always expire; clients re-run the login flow afterwards. */
+export const MCP_OAUTH_KEY_MAX_DAYS = 90
+
+export function mcpOAuthKeyExpiresAt(organizations: CliLoginOrganization[], now = new Date()): string {
+  const defaultExpiry = now.getTime() + MCP_OAUTH_KEY_MAX_DAYS * DAY_MS - CLOCK_MARGIN_MS
+  const policyExpiry = aggregateCliKeyPolicy(organizations, now).expiresAt
+  return new Date(policyExpiry ? Math.min(defaultExpiry, new Date(policyExpiry).getTime()) : defaultExpiry).toISOString()
+}
+
 export function mcpOAuthKeyName(clientName: string): string {
   return `MCP · ${clientName.trim() || 'client'}`.slice(0, 120)
 }
@@ -257,7 +266,7 @@ export async function createMcpOAuthKey(
   const created = await dependencies.createKey({
     name: mcpOAuthKeyName(clientName),
     hashed: policy.hashed,
-    expires_at: policy.expiresAt,
+    expires_at: mcpOAuthKeyExpiresAt(organizations, now),
     bindings: organizations.map(organization => ({
       role_name: roleForCliKey(organization.role)!,
       scope_type: 'org',
