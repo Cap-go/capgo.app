@@ -44,6 +44,10 @@ app.post('/magic-lookup', async (c) => {
 
   const invitation = invitationData as MagicInvitationLookup
   const invitationResponse = async (scope?: ImagePathScope) => {
+    if (invitation.org_logo && URL.canParse(invitation.org_logo)) {
+      return invitation
+    }
+
     try {
       return {
         ...invitation,

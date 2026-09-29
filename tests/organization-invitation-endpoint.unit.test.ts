@@ -209,6 +209,23 @@ describe('magic-link invitation lookup endpoint', () => {
 
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({ org_logo: externalLogoUrl })
+    expect(createSignedImageUrlMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps Supabase storage URLs unchanged', async () => {
+    const storageLogoUrl = 'https://example.supabase.co/storage/v1/object/public/images/organization-logo.png'
+    supabaseAdminMock.mockReturnValue(buildAdminClient({
+      invitationData: {
+        ...INVITATION_DATA,
+        org_logo: storageLogoUrl,
+      },
+    }))
+
+    const response = await postMagicLookup()
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ org_logo: storageLogoUrl })
+    expect(createSignedImageUrlMock).not.toHaveBeenCalled()
   })
 
   it('does not emit viewed for an invalid or expired invitation', async () => {
