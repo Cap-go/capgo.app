@@ -23,7 +23,6 @@ const organizationStore = useOrganizationStore()
 const isLoading = ref(false)
 const lastVersion = ref<string>('')
 const lastReleaseDate = ref<string | null>(null)
-const defaultChannelId = ref<number | null>(null)
 const adoptionPercent = ref<number | null>(null)
 let requestToken = 0
 
@@ -66,7 +65,6 @@ async function fetchReleaseInfo() {
     if (!orgId) {
       lastVersion.value = ''
       lastReleaseDate.value = null
-      defaultChannelId.value = null
       adoptionPercent.value = null
       return
     }
@@ -79,18 +77,10 @@ async function fetchReleaseInfo() {
       .order('created_at', { ascending: false })
       .limit(1)
 
-    const { data: channelsData } = await supabase
-      .from('channels')
-      .select('id')
-      .eq('app_id', props.appId)
-      .eq('public', true)
-      .limit(1)
-
     if (currentToken !== requestToken)
       return
 
     const latestVersion = versionsData?.[0]
-    const defaultChannel = channelsData?.[0]
 
     if (latestVersion) {
       lastVersion.value = latestVersion.name
@@ -120,8 +110,6 @@ async function fetchReleaseInfo() {
       lastReleaseDate.value = null
       adoptionPercent.value = null
     }
-
-    defaultChannelId.value = defaultChannel?.id || null
   }
   catch (error) {
     if (currentToken !== requestToken)
@@ -134,13 +122,8 @@ async function fetchReleaseInfo() {
   }
 }
 
-function viewStats() {
-  if (defaultChannelId.value) {
-    router.push(`/app/${props.appId}/channel/${defaultChannelId.value}/statistics`)
-  }
-  else {
-    router.push(`/app/${props.appId}/channels`)
-  }
+function viewLive() {
+  router.push(`/app/${props.appId}/live`)
 }
 
 watch(() => [props.appId, organizationStore.currentOrganization?.gid], () => {
@@ -154,7 +137,7 @@ watch(() => [props.appId, organizationStore.currentOrganization?.gid], () => {
     type="button"
     data-test="release-banner"
     class="block w-full mb-4 overflow-hidden text-left transition-colors border rounded-lg cursor-pointer border-emerald-200 bg-emerald-50 hover:bg-emerald-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 dark:bg-emerald-900/20 dark:border-emerald-800 dark:hover:bg-emerald-900/30"
-    @click="viewStats"
+    @click="viewLive"
   >
     <div class="flex items-center justify-between p-4">
       <div class="flex items-center gap-3">
@@ -179,12 +162,11 @@ watch(() => [props.appId, organizationStore.currentOrganization?.gid], () => {
 
       <!-- Visual affordance only: the whole card is the button, so this is a span. -->
       <span
-        v-if="defaultChannelId"
         data-test="release-banner-view"
         class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-md bg-emerald-600 shrink-0"
       >
         <IconTrendingUp class="w-4 h-4" />
-        {{ t('view-adoption') }}
+        {{ t('release-banner-watch-live') }}
       </span>
     </div>
   </button>

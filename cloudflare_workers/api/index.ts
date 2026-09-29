@@ -32,6 +32,7 @@ import { app as org_notification_stats } from '../../supabase/functions/_backend
 import { app as organization_invitation } from '../../supabase/functions/_backend/private/organization_invitation.ts'
 import { app as plans } from '../../supabase/functions/_backend/private/plans.ts'
 import { app as publicStats } from '../../supabase/functions/_backend/private/public_stats.ts'
+import { app as release_live } from '../../supabase/functions/_backend/private/release_live.ts'
 import { app as replay } from '../../supabase/functions/_backend/private/replay.ts'
 import { app as role_bindings } from '../../supabase/functions/_backend/private/role_bindings.ts'
 // Manifest finalization validates size receipts issued by the files worker.
@@ -175,6 +176,7 @@ appPrivate.route('/org_notification_stats', org_notification_stats)
 appPrivate.route('/organization_invitation', organization_invitation)
 appPrivate.route('/update_delivery_stats', update_delivery_stats)
 appPrivate.route('/bundle_install_stats', bundle_install_stats)
+appPrivate.route('/release_live', release_live)
 appPrivate.route('/stripe_checkout', stripe_checkout)
 appPrivate.route('/stripe_portal', stripe_portal)
 appPrivate.route('/verify_email_otp', verify_email_otp)

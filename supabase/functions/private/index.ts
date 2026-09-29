@@ -30,6 +30,7 @@ import { app as organization_invitation } from '../_backend/private/organization
 // Webapps API
 import { app as plans } from '../_backend/private/plans.ts'
 import { app as publicStats } from '../_backend/private/public_stats.ts'
+import { app as release_live } from '../_backend/private/release_live.ts'
 import { app as replay } from '../_backend/private/replay.ts'
 import { app as role_bindings } from '../_backend/private/role_bindings.ts'
 import { app as roles } from '../_backend/private/roles.ts'
@@ -70,6 +71,7 @@ appGlobal.route('/channel_device', channel_device)
 appGlobal.route('/create_device', create_device)
 appGlobal.route('/channel_stats', channel_stats)
 appGlobal.route('/bundle_install_stats', bundle_install_stats)
+appGlobal.route('/release_live', release_live)
 appGlobal.route('/native_observe_stats', native_observe_stats)
 appGlobal.route('/observe', observe)
 appGlobal.route('/onboarding_ab_tests', onboarding_ab_tests)
