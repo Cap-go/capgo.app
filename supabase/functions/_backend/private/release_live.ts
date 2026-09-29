@@ -10,13 +10,20 @@ import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { readDeviceVersionCounts } from '../utils/stats.ts'
-import { supabaseWithAuth } from '../utils/supabase.ts'
+import { supabaseAdmin } from '../utils/supabase.ts'
 
 // Near-realtime view of a release rollout. Analytics Engine ingests within
-// about a minute, so a short colo cache keeps polling cheap without making the
-// page feel stale.
-const RELEASE_LIVE_CACHE_TTL_SECONDS = 30
-const RELEASE_LIVE_CACHE_PATH = '/.release-live'
+// about a minute, so every expensive read sits behind a colo cache keyed per
+// app: polling tabs only cost the auth + permission check per request.
+// - activity (version_usage + app_log AE queries): 1 minute
+// - release candidates (deploy_history + latest bundle): 1 minute
+// - adoption (full device_info scan): 5 minutes
+const ACTIVITY_CACHE_TTL_SECONDS = 60
+const CANDIDATES_CACHE_TTL_SECONDS = 60
+const ADOPTION_CACHE_TTL_SECONDS = 300
+const ACTIVITY_CACHE_PATH = '/.release-live-activity'
+const CANDIDATES_CACHE_PATH = '/.release-live-candidates'
+const ADOPTION_CACHE_PATH = '/.release-live-adoption'
 const MAX_WINDOW_MS = 72 * 60 * 60 * 1000
 const MIN_WINDOW_MS = 15 * 60 * 1000
 const MAX_BUCKETS = 90
@@ -269,25 +276,43 @@ LIMIT ${MAX_FAILURE_ACTIONS}`,
   }
 }
 
-async function resolveRelease(
-  c: Context<MiddlewareKeyVariables>,
-  appId: string,
-  channelId?: number,
-  versionName?: string,
-): Promise<{ release: ResolvedRelease | null, recent: ReleaseLiveDeployment[] }> {
-  const auth = c.get('auth')
-  if (!auth)
-    throw simpleError('not_authenticated', 'Authentication required')
-  const supabase = supabaseWithAuth(c, auth)
+interface ReleaseCandidates {
+  deployments: ResolvedRelease[]
+  latest_bundle: ResolvedRelease | null
+}
 
-  const { data: deployRows, error: deployError } = await supabase
-    .from('deploy_history')
-    .select('deployed_at, channel_id, version_id, channels(name), app_versions(id, name)')
-    .eq('app_id', appId)
-    .order('deployed_at', { ascending: false })
-    .limit(50)
-  if (deployError) {
-    cloudlog({ requestId: c.get('requestId'), message: 'release_live deploy_history error', error: deployError })
+function cacheBucket(ttlSeconds: number, nowMs = Date.now()) {
+  return String(Math.floor(nowMs / (ttlSeconds * 1000)))
+}
+
+// Candidates are identical for every user allowed to read the app, so they are
+// read with the admin client (after checkPermission) and shared through the cache.
+async function loadReleaseCandidates(c: Context<MiddlewareKeyVariables>, appId: string): Promise<ReleaseCandidates> {
+  const cache = new CacheHelper(c)
+  const cacheKey = cache.buildRequest(CANDIDATES_CACHE_PATH, { appId, bucket: cacheBucket(CANDIDATES_CACHE_TTL_SECONDS) })
+  const cached = await cache.matchJson<ReleaseCandidates>(cacheKey)
+  if (cached)
+    return cached
+
+  const supabase = supabaseAdmin(c)
+  const [{ data: deployRows, error: deployError }, { data: versions, error: versionError }] = await Promise.all([
+    supabase
+      .from('deploy_history')
+      .select('deployed_at, channel_id, channels(name), app_versions(id, name)')
+      .eq('app_id', appId)
+      .order('deployed_at', { ascending: false })
+      .limit(50),
+    supabase
+      .from('app_versions')
+      .select('id, name, created_at')
+      .eq('app_id', appId)
+      .eq('deleted', false)
+      .not('name', 'in', '("builtin","unknown")')
+      .order('created_at', { ascending: false })
+      .limit(1),
+  ])
+  if (deployError || versionError) {
+    cloudlog({ requestId: c.get('requestId'), message: 'release_live candidates error', deployError, versionError })
     throw simpleError('fetch_error', 'Failed to fetch deployment history')
   }
 
@@ -305,9 +330,26 @@ async function resolveRelease(
     } satisfies ResolvedRelease]
   })
 
-  const recent = deployments.slice(0, RECENT_DEPLOYMENTS_LIMIT).map(({ bundle_id: _bundleId, ...rest }) => rest)
+  const version = versions?.[0]
+  const candidates: ReleaseCandidates = {
+    deployments,
+    latest_bundle: version?.name && version.created_at
+      ? {
+          bundle_id: version.id,
+          version_name: version.name,
+          channel_id: null,
+          channel_name: null,
+          deployed_at: version.created_at,
+        }
+      : null,
+  }
+  await cache.putJson(cacheKey, candidates, CANDIDATES_CACHE_TTL_SECONDS)
+  return candidates
+}
 
-  let release: ResolvedRelease | null = null
+function pickRelease(candidates: ReleaseCandidates, channelId?: number, versionName?: string): ResolvedRelease | null {
+  const { deployments, latest_bundle: latestBundle } = candidates
+  let release: ResolvedRelease | null
   if (channelId && versionName)
     release = deployments.find(d => d.channel_id === channelId && d.version_name === versionName) ?? null
   else if (channelId)
@@ -317,39 +359,29 @@ async function resolveRelease(
   else
     release = deployments[0] ?? null
 
-  if (release)
-    return { release, recent }
-
+  if (release || channelId)
+    return release
   // Bundle never deployed through a channel (or history pruned): fall back to
   // the bundle upload time so the page still shows its activity.
-  let versionQuery = supabase
-    .from('app_versions')
-    .select('id, name, created_at')
-    .eq('app_id', appId)
-    .eq('deleted', false)
-    .not('name', 'in', '("builtin","unknown")')
-    .order('created_at', { ascending: false })
-    .limit(1)
-  if (versionName)
-    versionQuery = versionQuery.eq('name', versionName)
-  const { data: versions, error: versionError } = await versionQuery
-  if (versionError) {
-    cloudlog({ requestId: c.get('requestId'), message: 'release_live app_versions error', error: versionError })
-    throw simpleError('fetch_error', 'Failed to fetch bundle')
-  }
-  const version = versions?.[0]
-  if (!version?.name || !version.created_at)
-    return { release: null, recent }
+  if (latestBundle && (!versionName || latestBundle.version_name === versionName))
+    return latestBundle
+  return null
+}
 
-  return {
-    release: {
-      bundle_id: version.id,
-      version_name: version.name,
-      channel_id: null,
-      channel_name: null,
-      deployed_at: version.created_at,
-    },
-    recent,
+async function readAdoption(c: Context<MiddlewareKeyVariables>, appId: string) {
+  const cache = new CacheHelper(c)
+  const cacheKey = cache.buildRequest(ADOPTION_CACHE_PATH, { appId, bucket: cacheBucket(ADOPTION_CACHE_TTL_SECONDS) })
+  const cached = await cache.matchJson<Record<string, number>>(cacheKey)
+  if (cached)
+    return cached
+  try {
+    const counts = await readDeviceVersionCounts(c, appId)
+    await cache.putJson(cacheKey, counts, ADOPTION_CACHE_TTL_SECONDS)
+    return counts
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'release_live device counts failed', error: serializeError(error) })
+    return {} as Record<string, number>
   }
 }
 
@@ -359,41 +391,36 @@ async function readReleaseLive(
   channelId?: number,
   versionName?: string,
 ): Promise<ReleaseLiveResponse | ReleaseLiveEmptyResponse> {
-  const { release, recent } = await resolveRelease(c, appId, channelId, versionName)
+  const candidates = await loadReleaseCandidates(c, appId)
+  const release = pickRelease(candidates, channelId, versionName)
+  const recent = candidates.deployments
+    .slice(0, RECENT_DEPLOYMENTS_LIMIT)
+    .map(({ bundle_id: _bundleId, ...rest }) => rest)
   if (!release)
     return { release: null, recent_deployments: recent }
 
   const now = new Date()
   const window = resolveWindow(release.deployed_at, now)
   const cache = new CacheHelper(c)
-  const cacheKey = cache.buildRequest(RELEASE_LIVE_CACHE_PATH, {
+  const cacheKey = cache.buildRequest(ACTIVITY_CACHE_PATH, {
     appId,
     version: release.version_name,
     since: release.deployed_at,
-    bucket: String(Math.floor(now.getTime() / (RELEASE_LIVE_CACHE_TTL_SECONDS * 1000))),
+    bucket: cacheBucket(ACTIVITY_CACHE_TTL_SECONDS, now.getTime()),
   })
   const cached = await cache.matchJson<Omit<ReleaseLiveResponse, 'release' | 'recent_deployments'>>(cacheKey)
   if (cached)
     return { ...cached, release, recent_deployments: recent }
 
-  let activity: Awaited<ReturnType<typeof readActivityCF>>
-  if (c.env.VERSION_USAGE) {
-    try {
-      activity = await readActivityCF(c, appId, release.version_name, window.startMs, window.endMs, window.bucketMinutes)
-    }
-    catch (error) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'release_live CF read failed, falling back to Postgres', error: serializeError(error), app_id: appId })
-      activity = await readActivitySB(c, appId, release.version_name, window.startMs, window.endMs, window.bucketMinutes)
-    }
-  }
-  else {
-    activity = await readActivitySB(c, appId, release.version_name, window.startMs, window.endMs, window.bucketMinutes)
-  }
-
-  const deviceCounts = await readDeviceVersionCounts(c, appId).catch((error) => {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'release_live device counts failed', error: serializeError(error) })
-    return {} as Record<string, number>
-  })
+  // No Postgres fallback when Analytics Engine is bound: if AE is down, every
+  // polling tab would otherwise move its load onto the database. The client
+  // keeps showing its last snapshot and retries on the next poll.
+  const [activity, deviceCounts] = await Promise.all([
+    c.env.VERSION_USAGE
+      ? readActivityCF(c, appId, release.version_name, window.startMs, window.endMs, window.bucketMinutes)
+      : readActivitySB(c, appId, release.version_name, window.startMs, window.endMs, window.bucketMinutes),
+    readAdoption(c, appId),
+  ])
 
   const series = fillBuckets(activity.seriesRows, window.startMs, window.endMs, window.bucketMinutes)
   const totals = series.reduce((acc, bucket) => {
@@ -422,7 +449,7 @@ async function readReleaseLive(
     generated_at: now.toISOString(),
   }
 
-  await cache.putJson(cacheKey, payload, RELEASE_LIVE_CACHE_TTL_SECONDS)
+  await cache.putJson(cacheKey, payload, ACTIVITY_CACHE_TTL_SECONDS)
   return { ...payload, release, recent_deployments: recent }
 }
 
@@ -458,6 +485,7 @@ app.post('/', middlewareAuth, async (c) => {
 })
 
 export const releaseLiveTestUtils = {
+  pickRelease,
   pickBucketMinutes,
   resolveWindow,
   fillBuckets,

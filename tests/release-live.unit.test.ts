@@ -80,4 +80,20 @@ describe('release live helpers', () => {
     expect(failures).toContain('blob3 = \'1.0.0\'')
     expect(failures).toContain('LIKE \'%fail%\'')
   })
+
+  it.concurrent('picks the release from cached candidates', () => {
+    const prodNew = { bundle_id: 2, version_name: '1.1.0', channel_id: 1, channel_name: 'production', deployed_at: '2026-09-29T10:00:00.000Z' }
+    const beta = { bundle_id: 3, version_name: '1.2.0-beta', channel_id: 2, channel_name: 'beta', deployed_at: '2026-09-28T10:00:00.000Z' }
+    const prodOld = { bundle_id: 1, version_name: '1.0.0', channel_id: 1, channel_name: 'production', deployed_at: '2026-09-20T10:00:00.000Z' }
+    const latestBundle = { bundle_id: 4, version_name: '1.3.0', channel_id: null, channel_name: null, deployed_at: '2026-09-29T11:00:00.000Z' }
+    const candidates = { deployments: [prodNew, beta, prodOld], latest_bundle: latestBundle }
+
+    expect(releaseLiveTestUtils.pickRelease(candidates)).toBe(prodNew)
+    expect(releaseLiveTestUtils.pickRelease(candidates, 2)).toBe(beta)
+    expect(releaseLiveTestUtils.pickRelease(candidates, 1, '1.0.0')).toBe(prodOld)
+    expect(releaseLiveTestUtils.pickRelease(candidates, undefined, '1.3.0')).toBe(latestBundle)
+    expect(releaseLiveTestUtils.pickRelease(candidates, 3)).toBeNull()
+    expect(releaseLiveTestUtils.pickRelease(candidates, undefined, 'missing')).toBeNull()
+    expect(releaseLiveTestUtils.pickRelease({ deployments: [], latest_bundle: latestBundle })).toBe(latestBundle)
+  })
 })

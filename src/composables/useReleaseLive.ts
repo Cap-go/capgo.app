@@ -3,7 +3,7 @@ import { useDocumentVisibility, useIntervalFn } from '@vueuse/core'
 import { ref, watch } from 'vue'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 
-export const RELEASE_LIVE_POLL_INTERVAL_MS = 30_000
+export const RELEASE_LIVE_POLL_INTERVAL_MS = 60_000
 
 export interface ReleaseLiveDeployment {
   version_name: string
