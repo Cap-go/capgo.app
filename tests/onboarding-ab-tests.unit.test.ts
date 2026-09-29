@@ -81,7 +81,7 @@ describe('webNativeApp onboarding A/B tests', () => {
     })
   })
 
-  it.concurrent('configures a 50/50 channel experiment for exact OTA and both intents', () => {
+  it.concurrent('pauses new channel experiment assignments for exact OTA and both intents', () => {
     expect(abTestsConfig[NEW_CHANNEL_AB_TEST]).toEqual({
       audience: 'self_signup',
       comment: 'Shows the guided channel education and creation flow.',
@@ -89,7 +89,7 @@ describe('webNativeApp onboarding A/B tests', () => {
       intents: ['ota', 'both'],
       label: 'Channel creation',
       treatment_branch: 'A',
-      treatment_percentage: 50,
+      treatment_percentage: 0,
       branches: {
         A: { bento_tag: 'ab:new_channel', label: 'Guided channel flow' },
         B: { bento_tag: 'ab:no_new_channel', label: 'Current channel flow' },
