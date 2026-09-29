@@ -564,7 +564,10 @@ const paginationClass = computed(() => props.mobileFixedPagination
       <div class="flex h-10 shrink-0 items-center">
         <button
           class="inline-flex items-center py-1.5 px-3 mr-2 text-sm font-medium text-gray-500 bg-white rounded-md border border-gray-300 cursor-pointer dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden"
-          type="button" @click="handleResetClick"
+          type="button"
+          :aria-label="t('reload')"
+          :title="t('reload')"
+          @click="handleResetClick"
         >
           <IconReload v-if="!isReloading" class="m-1 md:mr-2" />
           <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
@@ -626,13 +629,14 @@ const paginationClass = computed(() => props.mobileFixedPagination
             :data-test="addButtonTestId"
             :aria-describedby="addDisabled && addTooltip ? addTooltipId : undefined"
             :aria-disabled="addDisabled"
-            :title="addDisabled ? addTooltip : undefined"
+            :title="addDisabled ? addTooltip : t('add-one')"
             class="inline-flex items-center py-1.5 px-3 text-sm font-medium text-gray-500 bg-white rounded-md cursor-pointer dark:text-white dark:bg-gray-800 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden aria-disabled:cursor-not-allowed aria-disabled:bg-gray-100 aria-disabled:text-gray-400 aria-disabled:hover:bg-gray-100 dark:aria-disabled:bg-gray-700 dark:aria-disabled:text-gray-500 dark:aria-disabled:hover:bg-gray-700"
             type="button" @click="handleAddClick"
           >
-            <plusOutline v-if="!isAdding" class="m-1 md:mr-2" />
+            <plusOutline v-if="!isAdding" class="m-1 mr-2" />
             <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
-            <span class="hidden text-sm md:block">{{ t("add-one") }}</span>
+            <!-- The primary action keeps its label on mobile: a lone "+" is easy to miss. -->
+            <span class="text-sm">{{ t("add-one") }}</span>
           </button>
           <span v-if="addDisabled && addTooltip" :id="addTooltipId" class="sr-only">{{ addTooltip }}</span>
         </div>
@@ -644,6 +648,8 @@ const paginationClass = computed(() => props.mobileFixedPagination
             data-test="data-table-filters-open"
             :aria-expanded="isFilterModalOpen"
             aria-haspopup="dialog"
+            :aria-label="t(filterText ?? 'Filters')"
+            :title="t(filterText ?? 'Filters')"
             @click="openFilterModal"
           >
             <div
@@ -652,7 +658,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
             >
               {{ filterActivated }}
             </div>
-            <IconFilter class="w-4 h-4 mr-2" />
+            <IconFilter class="w-4 h-4 md:mr-2" />
             <span class="hidden md:block">{{ t(filterText ?? '') }}</span>
           </button>
           <FilterModal

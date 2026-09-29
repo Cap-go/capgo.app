@@ -2,7 +2,7 @@
 import type { Database } from '~/types/supabase.types'
 import { greaterThan, parse } from '@std/semver'
 import { computedAsync, onClickOutside } from '@vueuse/core'
-import { ref, watchEffect } from 'vue'
+import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -13,7 +13,7 @@ import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
 import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentionNotice.vue'
 import { useDeviceUpdateFormat } from '~/composables/useDeviceUpdateFormat'
-import { formatDate } from '~/services/date'
+import { formatDate, formatDistanceToNow } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useAppDetailStore } from '~/stores/appDetail'
@@ -358,6 +358,18 @@ function openDefaultChannel() {
       router.push(`/app/${packageId.value}/channel/${defaultChannel.id}`)
   }
 }
+// Answers "what is this device running and where does it get updates?" before the detail rows.
+const deviceChannelName = computed(() => channelDevice.value?.name ?? device.value?.default_channel ?? '')
+const deviceSummary = computed(() => {
+  if (!device.value)
+    return ''
+  const bundle = device.value.version_name ?? t('unknown')
+  const platform = [device.value.platform, device.value.os_version].filter(Boolean).join(' ')
+  return platform
+    ? t('device-summary-runs-on', { bundle, platform })
+    : t('device-summary-runs', { bundle })
+})
+
 function openBundle() {
   if (packageId.value && device.value?.version)
     router.push(`/app/${packageId.value}/bundle/${device.value.version}`)
@@ -399,6 +411,19 @@ async function copyCurlCommand() {
           {{ t('device-injected-2') }}
         </div>
         <div class="flex flex-col bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
+          <div class="px-4 py-4 border-b sm:px-6 border-slate-200 dark:border-slate-500" data-test="device-summary">
+            <p class="text-sm text-slate-700 dark:text-slate-200">
+              {{ deviceSummary }}
+            </p>
+            <div class="flex flex-wrap gap-2 mt-2 text-xs font-medium">
+              <span class="px-2 py-1 rounded-md bg-slate-100 text-slate-700 dark:bg-slate-900 dark:text-slate-200">
+                {{ deviceChannelName ? t('device-summary-channel', { channel: deviceChannelName }) : t('device-summary-no-channel') }}
+              </span>
+              <span v-if="device.updated_at" class="px-2 py-1 rounded-md bg-slate-100 text-slate-700 dark:bg-slate-900 dark:text-slate-200" :title="formatDate(device.updated_at)">
+                {{ t('device-summary-last-seen', { time: formatDistanceToNow(device.updated_at) }) }}
+              </span>
+            </div>
+          </div>
           <dl :key="reloadCount" class="divide-y divide-slate-200 dark:divide-slate-500">
             <InfoRow :label="t('device-id')">
               {{ device.device_id }}

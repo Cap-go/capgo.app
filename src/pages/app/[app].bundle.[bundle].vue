@@ -346,6 +346,11 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
   }
 }
 
+const liveChannels = computed(() => {
+  const versionId = version.value?.id
+  return versionId == null ? [] : channels.value.filter(c => c.version === versionId)
+})
+
 async function openChannel(selChannel: Database['public']['Tables']['channels']['Row']) {
   channel.value = selChannel
   if (!version.value || !main.auth)
@@ -820,6 +825,21 @@ async function deleteBundle() {
             <div
               class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-lg md:rounded-lg border-slate-300 dark:border-slate-900 dark:bg-slate-800"
             >
+              <!-- Where this bundle is live, before the technical details. -->
+              <div class="px-4 py-4 border-b sm:px-6 border-slate-200 dark:border-slate-500" data-test="bundle-summary">
+                <p v-if="liveChannels.length" class="text-sm text-slate-700 dark:text-slate-200">
+                  {{ t('bundle-summary-live-on') }}
+                  <template v-for="(chn, i) in liveChannels" :key="chn.id">
+                    <span v-if="i > 0">, </span>
+                    <button type="button" class="font-semibold text-blue-700 underline-offset-4 hover:underline dark:text-azure-400" @click="openChannel(chn)">
+                      {{ chn.name }}
+                    </button>
+                  </template>
+                </p>
+                <p v-else class="text-sm text-slate-600 dark:text-slate-300">
+                  {{ t('bundle-summary-not-live') }}
+                </p>
+              </div>
               <dl class="divide-y divide-slate-200 dark:divide-slate-500">
                 <InfoRow :label="t('bundle-number')">
                   {{ version.name }}

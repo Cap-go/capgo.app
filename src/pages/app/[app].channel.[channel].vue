@@ -950,6 +950,23 @@ rolloutConfirmFlows = createChannelRolloutConfirmFlows({
   openSelectRolloutVersion,
 })
 
+// One-line answer to "who gets what from this channel", shown above the details.
+const channelPlatforms = computed(() => {
+  if (!channel.value)
+    return []
+  return (['ios', 'android', 'electron'] as const)
+    .filter(platform => channel.value?.[platform])
+    .map(platform => t(`platform-${platform}`))
+})
+
+const channelAudience = computed(() => {
+  if (channel.value?.public)
+    return t('channel-summary-audience-default')
+  if (channel.value?.allow_device_self_set)
+    return t('channel-summary-audience-self-set')
+  return t('channel-summary-audience-assigned')
+})
+
 function getAutoUpdateLabel(value: string) {
   switch (value) {
     case 'major':
@@ -1183,6 +1200,22 @@ async function copyCurlCommand() {
     <div v-else-if="channel" class="mt-0 md:mt-8">
       <div class="w-full h-full px-0 pt-0 mx-auto mb-8 sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
         <div class="flex flex-col bg-white border shadow-lg md:rounded-lg border-slate-300 dark:border-slate-900 dark:bg-slate-800">
+          <div class="px-4 py-4 border-b sm:px-6 border-slate-200 dark:border-slate-500" data-test="channel-summary">
+            <p v-if="!rolloutIsActive" class="text-sm text-slate-700 dark:text-slate-200">
+              {{ t('channel-summary-serves', { bundle: channel.version.name }) }}
+            </p>
+            <div class="flex flex-wrap gap-2 text-xs font-medium" :class="{ 'mt-2': !rolloutIsActive }">
+              <span class="px-2 py-1 rounded-md bg-slate-100 text-slate-700 dark:bg-slate-900 dark:text-slate-200">
+                {{ channelAudience }}
+              </span>
+              <span
+                class="px-2 py-1 rounded-md"
+                :class="channelPlatforms.length ? 'bg-slate-100 text-slate-700 dark:bg-slate-900 dark:text-slate-200' : 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200'"
+              >
+                {{ channelPlatforms.length ? channelPlatforms.join(' · ') : t('channel-summary-no-platform') }}
+              </span>
+            </div>
+          </div>
           <dl class="divide-y divide-slate-200 dark:divide-slate-500">
             <InfoRow :label="t('name')">
               {{ channel.name }}
