@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const {
   captureInvitationEventMock,
   cloudlogErrMock,
+  createSignedImageUrlMock,
   supabaseAdminMock,
 } = vi.hoisted(() => ({
   captureInvitationEventMock: vi.fn(),
   cloudlogErrMock: vi.fn(),
+  createSignedImageUrlMock: vi.fn(),
   supabaseAdminMock: vi.fn(),
 }))
 
@@ -19,6 +21,10 @@ vi.mock('../supabase/functions/_backend/utils/organization_invitation_posthog.ts
   captureOrganizationInvitationPosthogEvent: captureInvitationEventMock,
 }))
 
+vi.mock('../supabase/functions/_backend/utils/storage.ts', () => ({
+  createSignedImageUrl: createSignedImageUrlMock,
+}))
+
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   supabaseAdmin: supabaseAdminMock,
 }))
@@ -27,22 +33,33 @@ const { app } = await import('../supabase/functions/_backend/private/organizatio
 
 const USER_ID = '550e8400-e29b-41d4-a716-446655440000'
 const FUTURE_USER_ID = '1311385a-996f-4a0c-a758-75377255692a'
+const ORG_ID = 'f8c34640-4478-46c8-87f5-bcc7548d1355'
+const OTHER_ORG_ID = '2a46c8fd-e122-43ef-8ac6-743f4d2d1dc2'
+const ORG_OWNER_ID = 'b9f76c28-2d51-43e2-81da-19d648dd49b9'
+const SIGNED_LOGO_URL = 'https://example.supabase.co/storage/v1/object/sign/images/org-logo.png?token=signed'
 const INVITATION_DATA = {
-  org_logo: 'organization-logo.png',
+  org_logo: `org/${ORG_ID}/logo/organization-logo.png`,
   org_name: 'Example organization',
   role: 'org_member',
+}
+const SIGNED_INVITATION_DATA = {
+  ...INVITATION_DATA,
+  org_logo: SIGNED_LOGO_URL,
 }
 
 interface ClientOptions {
   existingUser?: { id: string } | null
   identityError?: Error | null
   invitationData?: typeof INVITATION_DATA | null
+  organizationError?: Error | null
+  organizationOwner?: { created_by: string } | null
 }
 
 function buildAdminClient(options: ClientOptions = {}) {
   const invitationIdentity = {
     email: 'invitee@example.com',
     future_uuid: FUTURE_USER_ID,
+    org_id: ORG_ID,
   }
 
   return {
@@ -60,6 +77,14 @@ function buildAdminClient(options: ClientOptions = {}) {
             return {
               data: options.identityError ? null : invitationIdentity,
               error: options.identityError ?? null,
+            }
+          }
+          if (table === 'orgs') {
+            return {
+              data: options.organizationError
+                ? null
+                : (options.organizationOwner === undefined ? { created_by: ORG_OWNER_ID } : options.organizationOwner),
+              error: options.organizationError ?? null,
             }
           }
           return {
@@ -86,15 +111,27 @@ describe('magic-link invitation lookup endpoint', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     captureInvitationEventMock.mockResolvedValue(true)
+    createSignedImageUrlMock.mockImplementation(async (_context, rawLogo: string, scope?: { orgId?: string, userId?: string }) => {
+      if (rawLogo.startsWith('https://'))
+        return rawLogo
+      const belongsToOrganization = scope?.orgId && rawLogo.startsWith(`org/${scope.orgId}/logo/`)
+      const belongsToUser = scope?.userId && rawLogo.startsWith(`${scope.userId}/`)
+      return belongsToOrganization || belongsToUser ? SIGNED_LOGO_URL : null
+    })
   })
 
-  it('returns the existing lookup data and tracks a new account with its future Capgo UUID', async () => {
+  it('returns a signed organization logo and tracks a new account with its future Capgo UUID', async () => {
     supabaseAdminMock.mockReturnValue(buildAdminClient({ existingUser: null }))
 
     const response = await postMagicLookup()
 
     expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toEqual(INVITATION_DATA)
+    await expect(response.json()).resolves.toEqual(SIGNED_INVITATION_DATA)
+    expect(createSignedImageUrlMock).toHaveBeenCalledWith(
+      expect.anything(),
+      INVITATION_DATA.org_logo,
+      { orgId: ORG_ID, userId: ORG_OWNER_ID },
+    )
     expect(captureInvitationEventMock).toHaveBeenCalledWith(expect.anything(), {
       event: 'organization_membership_invitation_viewed',
       flow: 'new_user_magic_link',
@@ -119,6 +156,78 @@ describe('magic-link invitation lookup endpoint', () => {
     expect(JSON.stringify(captureInvitationEventMock.mock.calls)).not.toContain('invitee@example.com')
   })
 
+  it('uses the organization owner scope for legacy logo storage paths', async () => {
+    const legacyLogoPath = `${ORG_OWNER_ID}/organization-logo.png`
+    supabaseAdminMock.mockReturnValue(buildAdminClient({
+      invitationData: {
+        ...INVITATION_DATA,
+        org_logo: legacyLogoPath,
+      },
+    }))
+
+    const response = await postMagicLookup()
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ org_logo: SIGNED_LOGO_URL })
+    expect(createSignedImageUrlMock).toHaveBeenCalledWith(
+      expect.anything(),
+      legacyLogoPath,
+      { orgId: ORG_ID, userId: ORG_OWNER_ID },
+    )
+  })
+
+  it('does not sign a logo storage key belonging to another organization', async () => {
+    const outOfScopeLogoPath = `org/${OTHER_ORG_ID}/logo/organization-logo.png`
+    supabaseAdminMock.mockReturnValue(buildAdminClient({
+      invitationData: {
+        ...INVITATION_DATA,
+        org_logo: outOfScopeLogoPath,
+      },
+    }))
+
+    const response = await postMagicLookup()
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ org_logo: '' })
+    expect(createSignedImageUrlMock).toHaveBeenCalledWith(
+      expect.anything(),
+      outOfScopeLogoPath,
+      { orgId: ORG_ID, userId: ORG_OWNER_ID },
+    )
+  })
+
+  it('keeps external organization logo URLs unchanged', async () => {
+    const externalLogoUrl = 'https://cdn.example.com/organization-logo.png'
+    supabaseAdminMock.mockReturnValue(buildAdminClient({
+      invitationData: {
+        ...INVITATION_DATA,
+        org_logo: externalLogoUrl,
+      },
+    }))
+
+    const response = await postMagicLookup()
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ org_logo: externalLogoUrl })
+    expect(createSignedImageUrlMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps Supabase storage URLs unchanged', async () => {
+    const storageLogoUrl = 'https://example.supabase.co/storage/v1/object/public/images/organization-logo.png'
+    supabaseAdminMock.mockReturnValue(buildAdminClient({
+      invitationData: {
+        ...INVITATION_DATA,
+        org_logo: storageLogoUrl,
+      },
+    }))
+
+    const response = await postMagicLookup()
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ org_logo: storageLogoUrl })
+    expect(createSignedImageUrlMock).not.toHaveBeenCalled()
+  })
+
   it('does not emit viewed for an invalid or expired invitation', async () => {
     supabaseAdminMock.mockReturnValue(buildAdminClient({ invitationData: null }))
 
@@ -134,9 +243,25 @@ describe('magic-link invitation lookup endpoint', () => {
     const response = await postMagicLookup()
 
     expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toEqual(INVITATION_DATA)
+    await expect(response.json()).resolves.toEqual({
+      ...INVITATION_DATA,
+      org_logo: '',
+    })
     expect(captureInvitationEventMock).not.toHaveBeenCalled()
     expect(cloudlogErrMock).toHaveBeenCalled()
+  })
+
+  it('falls back to initials instead of returning a raw logo key when signing fails', async () => {
+    supabaseAdminMock.mockReturnValue(buildAdminClient())
+    createSignedImageUrlMock.mockResolvedValueOnce(null)
+
+    const response = await postMagicLookup()
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      ...INVITATION_DATA,
+      org_logo: '',
+    })
   })
 
   it('still returns invitation details when PostHog capture fails', async () => {
@@ -146,6 +271,6 @@ describe('magic-link invitation lookup endpoint', () => {
     const response = await postMagicLookup()
 
     expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toEqual(INVITATION_DATA)
+    await expect(response.json()).resolves.toEqual(SIGNED_INVITATION_DATA)
   })
 })
