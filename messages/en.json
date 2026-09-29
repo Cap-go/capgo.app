@@ -3807,7 +3807,7 @@
   "section-intro-question-devices": "What is a device?",
   "section-intro-question-builds": "What is a native build?",
   "section-intro-question-apikeys": "What is an API key?",
-  "section-intro-dismiss": "Got it, hide this",
+  "section-intro-dismiss": "Hide explanation",
   "channel-default-badge": "Default",
   "channel-default-badge-hint": "New devices get their updates from this channel unless they are assigned another one.",
   "channel-serving-bundle": "Serving bundle",

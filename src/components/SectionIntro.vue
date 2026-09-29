@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import IconExternal from '~icons/heroicons/arrow-top-right-on-square'
 import IconInfo from '~icons/heroicons/information-circle'
+import IconClose from '~icons/heroicons/x-mark'
 
 type Section = 'apps' | 'bundles' | 'channels' | 'devices' | 'builds' | 'apikeys'
 
@@ -62,18 +63,18 @@ function dismiss() {
 
 <template>
   <section
-    class="px-4 sm:px-0"
-    :class="open ? 'pb-6' : 'pb-3 lg:pb-4'"
+    class="px-4 pb-4 sm:px-0 lg:pb-6"
     :aria-label="t(config.title)"
     data-test="section-intro"
   >
-    <div v-if="!open" class="flex items-center gap-3">
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
       <h1 v-if="showHeading" class="sr-only lg:not-sr-only text-xl font-semibold tracking-tight text-slate-900 first-letter:uppercase dark:text-white">
         {{ t(config.title) }}
       </h1>
       <button
+        v-if="!open"
         type="button"
-        class="inline-flex items-center gap-1 text-xs font-medium rounded-sm text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500"
+        class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full ring-1 ring-slate-300 text-slate-600 hover:bg-white hover:text-slate-900 dark:ring-white/15 dark:text-slate-300 dark:hover:bg-white/5 dark:hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500"
         :aria-expanded="false"
         :aria-controls="`section-intro-${section}`"
         data-test="section-intro-toggle"
@@ -84,17 +85,18 @@ function dismiss() {
       </button>
     </div>
 
-    <div v-else :id="`section-intro-${section}`" class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+    <!-- Dismissible callout: the close button is the standard corner "×". -->
+    <div
+      v-if="open"
+      :id="`section-intro-${section}`"
+      class="relative flex flex-col gap-4 p-4 pr-12 rounded-xl bg-white ring-1 ring-slate-200 dark:bg-white/[0.03] dark:ring-white/10 lg:flex-row lg:items-center lg:justify-between"
+      :class="{ 'lg:mt-3': showHeading }"
+    >
       <div class="min-w-0">
-        <template v-if="showHeading">
-          <p class="font-mono text-xs font-semibold tracking-widest uppercase text-blue-700 dark:text-azure-400">
-            {{ t(config.group) }}
-          </p>
-          <h1 class="mt-1 text-xl font-semibold tracking-tight text-slate-900 first-letter:uppercase dark:text-white">
-            {{ t(config.title) }}
-          </h1>
-        </template>
-        <p class="text-sm max-w-2xl text-slate-600 dark:text-slate-400" :class="{ 'mt-1': showHeading }">
+        <p class="font-mono text-[11px] font-semibold tracking-widest uppercase text-blue-700 dark:text-azure-400">
+          {{ t(config.group) }}
+        </p>
+        <p class="mt-1 text-sm max-w-2xl text-slate-600 dark:text-slate-300">
           {{ t(config.description) }}
           <a
             :href="config.docs"
@@ -107,18 +109,10 @@ function dismiss() {
             <span class="sr-only">({{ t('open-in-new-tab') }})</span>
           </a>
         </p>
-        <button
-          type="button"
-          class="mt-2 text-xs font-medium rounded-sm text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500"
-          data-test="section-intro-dismiss"
-          @click="dismiss"
-        >
-          {{ t('section-intro-dismiss') }}
-        </button>
       </div>
 
       <nav v-if="showFlow" :aria-label="t('flow-label')" class="shrink-0">
-        <ol class="flex items-center w-fit max-w-full gap-1 p-1 overflow-x-auto text-xs font-medium rounded-full no-scrollbar bg-white ring-1 ring-slate-200 dark:bg-white/5 dark:ring-white/10">
+        <ol class="flex items-center w-fit max-w-full gap-1 p-1 overflow-x-auto text-xs font-medium rounded-full no-scrollbar bg-slate-50 ring-1 ring-slate-200 dark:bg-white/5 dark:ring-white/10">
           <li v-for="(step, i) in flowSteps" :key="step.section" class="flex items-center gap-1 shrink-0">
             <span v-if="i > 0" class="text-slate-400 dark:text-slate-600" aria-hidden="true">→</span>
             <span
@@ -140,6 +134,17 @@ function dismiss() {
           </li>
         </ol>
       </nav>
+
+      <button
+        type="button"
+        class="absolute flex items-center justify-center rounded-md top-2 right-2 size-8 text-slate-400 hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-white/10 dark:hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500"
+        :aria-label="t('section-intro-dismiss')"
+        :title="t('section-intro-dismiss')"
+        data-test="section-intro-dismiss"
+        @click="dismiss"
+      >
+        <IconClose class="w-5 h-5" aria-hidden="true" />
+      </button>
     </div>
   </section>
 </template>
