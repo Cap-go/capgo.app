@@ -84,7 +84,7 @@ Use this skill for OTA update workflows in Capgo Cloud.
   - `--dry-upload`
   - `--package-json <packageJson>`
   - `--node-modules <nodeModules>`
-  - `--encrypt-partial`
+  - `--encrypt-delta`
   - `--delete-linked-bundle-on-upload`
   - `--no-brotli-patterns <patterns>`
   - `--disable-brotli`
@@ -94,7 +94,7 @@ Use this skill for OTA update workflows in Capgo Cloud.
   - `--send-update-notification`
   - S3 options: `--s3-region`, `--s3-apikey`, `--s3-apisecret`, `--s3-endpoint`, `--s3-bucket-name`, `--s3-port`, `--no-s3-ssl`
   - Signing options: `--key-v2`, `--key-data-v2`, `--bundle-url`, `--no-key`, `--display-iv-session`
-  - Deprecated options still supported: `--multipart`, `--partial`, `--partial-only`
+  - Deprecated options still supported: `--multipart`, `--partial`, `--partial-only`, `--encrypt-partial`
 
 ### `bundle compatibility [appId]`
 

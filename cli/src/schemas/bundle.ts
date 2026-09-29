@@ -56,6 +56,7 @@ export const optionsUploadSchema = optionsBaseSchema.extend({
   packageJson: z.string().optional(),
   dryUpload: z.boolean().optional(),
   nodeModules: z.string().optional(),
+  encryptDelta: z.boolean().optional(),
   encryptPartial: z.boolean().optional(),
   deleteLinkedBundleOnUpload: z.boolean().optional(),
   tusChunkSize: z.number().optional(),
