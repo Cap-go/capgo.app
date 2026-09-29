@@ -1044,12 +1044,13 @@ jobs:
       # Key on the Playwright version, not the lockfile: bun.lock churns on every
       # release bump, which made this cache miss (and re-download ~50s of browsers)
       # on nearly every run. Browsers only change when the Playwright version does.
+      # `shell` in the key: CI only caches the headless shell (+ ffmpeg), not full Chromium.
       - name: Cache Playwright browsers
         id: playwright_browser_cache
         uses: actions/cache@v5 # v5
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-browsers-${{ runner.os }}-${{ steps.playwright_version.outputs.version }}
+          key: playwright-browsers-shell-${{ runner.os }}-${{ steps.playwright_version.outputs.version }}
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v2 # v2.0.0
         with:
@@ -1091,7 +1092,8 @@ jobs:
       # system libraries, so install-deps was ~28s of apt for packages already present.
       - name: Install Playwright browser
         if: steps.playwright_browser_cache.outputs.cache-hit != 'true'
-        run: bunx playwright install --with-deps chromium
+        # Headless runs with no `channel` only launch chromium-headless-shell; skip the full browser.
+        run: bunx playwright install --with-deps --only-shell chromium
       - name: Wait for Playwright services
         run: |
           bunx wait-on@8.0.1 \

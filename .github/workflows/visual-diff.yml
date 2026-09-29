@@ -65,7 +65,8 @@ jobs:
         run: bun install
 
       - name: Install Playwright browser
-        run: bunx playwright install --with-deps chromium
+        # scripts/visual-diff.ts launches headless with no `channel`, so only the headless shell is used.
+        run: bunx playwright install --with-deps --only-shell chromium
 
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v2
