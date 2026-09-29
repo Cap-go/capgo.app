@@ -123,7 +123,10 @@ async function fetchReleaseInfo() {
 }
 
 function viewLive() {
-  router.push(`/app/${props.appId}/live`)
+  router.push({
+    path: `/app/${props.appId}/live`,
+    query: lastVersion.value ? { version: lastVersion.value } : {},
+  })
 }
 
 watch(() => [props.appId, organizationStore.currentOrganization?.gid], () => {

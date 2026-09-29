@@ -368,6 +368,42 @@ function pickRelease(candidates: ReleaseCandidates, channelId?: number, versionN
   return null
 }
 
+// Older bundle that never went through a channel and is not the newest upload.
+// Only reachable with an explicit version_name, cached per app + version.
+async function loadNamedBundle(c: Context<MiddlewareKeyVariables>, appId: string, versionName: string): Promise<ResolvedRelease | null> {
+  const cache = new CacheHelper(c)
+  const cacheKey = cache.buildRequest(CANDIDATES_CACHE_PATH, { appId, version: versionName, bucket: cacheBucket(CANDIDATES_CACHE_TTL_SECONDS) })
+  const cached = await cache.matchJson<{ bundle: ResolvedRelease | null }>(cacheKey)
+  if (cached)
+    return cached.bundle
+
+  const { data, error } = await supabaseAdmin(c)
+    .from('app_versions')
+    .select('id, name, created_at')
+    .eq('app_id', appId)
+    .eq('name', versionName)
+    .eq('deleted', false)
+    .not('name', 'in', '("builtin","unknown")')
+    .limit(1)
+  if (error) {
+    cloudlog({ requestId: c.get('requestId'), message: 'release_live named bundle error', error })
+    throw simpleError('fetch_error', 'Failed to fetch bundle')
+  }
+
+  const version = data?.[0]
+  const bundle: ResolvedRelease | null = version?.name && version.created_at
+    ? {
+        bundle_id: version.id,
+        version_name: version.name,
+        channel_id: null,
+        channel_name: null,
+        deployed_at: version.created_at,
+      }
+    : null
+  await cache.putJson(cacheKey, { bundle }, CANDIDATES_CACHE_TTL_SECONDS)
+  return bundle
+}
+
 async function readAdoption(c: Context<MiddlewareKeyVariables>, appId: string) {
   const cache = new CacheHelper(c)
   const cacheKey = cache.buildRequest(ADOPTION_CACHE_PATH, { appId, bucket: cacheBucket(ADOPTION_CACHE_TTL_SECONDS) })
@@ -393,6 +429,7 @@ async function readReleaseLive(
 ): Promise<ReleaseLiveResponse | ReleaseLiveEmptyResponse> {
   const candidates = await loadReleaseCandidates(c, appId)
   const release = pickRelease(candidates, channelId, versionName)
+    ?? (versionName && !channelId ? await loadNamedBundle(c, appId, versionName) : null)
   const recent = candidates.deployments
     .slice(0, RECENT_DEPLOYMENTS_LIMIT)
     .map(({ bundle_id: _bundleId, ...rest }) => rest)

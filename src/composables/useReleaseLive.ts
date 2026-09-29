@@ -115,13 +115,28 @@ export function useReleaseLive(
       void fetchLive({ silent: true })
   }, RELEASE_LIVE_POLL_INTERVAL_MS, { immediate: false })
 
+  // Any change of target invalidates the in-flight request and the previous
+  // snapshot, so the panel never shows another app's or release's numbers.
   watch(
-    () => params().enabled,
-    (enabled) => {
-      if (enabled)
+    () => {
+      const { app_id, channel_id, version_name, enabled } = params()
+      return [app_id, channel_id, version_name, enabled] as const
+    },
+    ([, , , enabled], previous) => {
+      if (previous) {
+        latestRequest += 1
+        data.value = null
+        error.value = false
+        lastUpdatedAt.value = null
+        loading.value = false
+      }
+      if (enabled) {
+        void fetchLive()
         resume()
-      else
+      }
+      else {
         pause()
+      }
     },
     { immediate: true },
   )

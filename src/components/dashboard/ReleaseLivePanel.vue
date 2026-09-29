@@ -5,6 +5,7 @@ import { useDark, useDocumentVisibility, useNow } from '@vueuse/core'
 import { computed, ref, useId, watch } from 'vue'
 import { Bar } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
+import { useRoute } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconRefresh from '~icons/lucide/refresh-cw'
 import Spinner from '~/components/Spinner.vue'
@@ -28,8 +29,17 @@ const visibility = useDocumentVisibility()
 const now = useNow({ interval: 1000 })
 const selectId = useId()
 
-// Empty selection means "latest deployment"; the backend resolves it.
-const selectedKey = ref('')
+const route = useRoute()
+
+// Key format is `${channel_id}|${version_name}`. Empty means "latest
+// deployment"; `|${version}` (from ?version=, e.g. the release banner) asks the
+// backend for that bundle on any channel.
+function keyFromQuery() {
+  const version = route.query.version
+  return typeof version === 'string' && version ? `|${version}` : ''
+}
+
+const selectedKey = ref(keyFromQuery())
 const selected = computed(() => {
   if (!selectedKey.value)
     return { version_name: undefined, channel_id: undefined }
@@ -62,10 +72,21 @@ function deploymentKey(deployment: Pick<ReleaseLiveDeployment, 'channel_id' | 'v
   return `${deployment.channel_id ?? ''}|${deployment.version_name}`
 }
 
+// Kept across release switches so the picker does not vanish while loading.
+const recentDeployments = ref<ReleaseLiveDeployment[]>([])
+watch(live, (value) => {
+  if (value)
+    recentDeployments.value = value.recent_deployments
+})
+
 const deploymentOptions = computed(() => {
   const seen = new Set<string>()
   const options: { key: string, label: string }[] = []
-  for (const deployment of live.value?.recent_deployments ?? []) {
+  if (selectedKey.value.startsWith('|')) {
+    seen.add(selectedKey.value)
+    options.push({ key: selectedKey.value, label: selectedKey.value.slice(1) })
+  }
+  for (const deployment of recentDeployments.value) {
     const key = deploymentKey(deployment)
     if (seen.has(key))
       continue
@@ -185,16 +206,12 @@ function refresh() {
   void fetchLive()
 }
 
-watch(
-  () => [props.appId, props.forceDemo, selectedKey.value] as const,
-  ([appId], previous) => {
-    if (previous && appId !== previous[0])
-      selectedKey.value = ''
-    if (!props.forceDemo)
-      void fetchLive()
-  },
-  { immediate: true },
-)
+// useReleaseLive refetches on its own when the target changes; only reset the
+// selection when the app changes.
+watch(() => props.appId, () => {
+  selectedKey.value = keyFromQuery()
+  recentDeployments.value = []
+})
 </script>
 
 <template>
