@@ -1157,7 +1157,7 @@
   "mcp-authorize-org-placeholder": "Choose an organization",
   "mcp-authorize-revoke-hint": "This creates an admin API key for that organization. Revoke it anytime from API keys.",
   "mcp-authorize-scope": "The AI app will be able to manage this organization in Capgo.",
-  "mcp-authorize-subtitle": "Allow this app to use Capgo on your behalf",
+  "mcp-authorize-subtitle": "Allow this app to use Capgo on your behalf.",
   "mcp-authorize-title": "Connect to Capgo",
   "mcp-authorize-unknown-client": "An AI app",
   "consider-pushing-update": "Consider pushing an update - no recent releases in the last 48 hours.",
