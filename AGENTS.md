@@ -1236,6 +1236,15 @@ documented in [docs/frontend-security.md](docs/frontend-security.md). Review
 that checklist when touching `public/_headers`, external scripts, or user-controlled
 HTML/URL rendering.
 
+## Billing usage retention
+
+Deleted-app usage stays billable for 35 days, a deleted app ID recreated by
+another org in that window shares its usage rows (both orgs billed, new owner
+can read them), and app transfers count MAU for each org. These are intentional
+anti-fraud behaviors documented in
+[docs/billing-usage-retention.md](docs/billing-usage-retention.md). Do not
+change them without a product decision.
+
 ## Graphify
 
 The project-scoped Graphify skill lives at `.agents/skills/graphify/SKILL.md`.
