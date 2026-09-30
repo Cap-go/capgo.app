@@ -320,7 +320,7 @@ jobs:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     name: Run backend tests (shard ${{ matrix.shard }})
     permissions:
       contents: read
@@ -490,7 +490,7 @@ jobs:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     name: Run backend plugin tests (serial)
     permissions:
       contents: read
@@ -595,12 +595,12 @@ jobs:
           bun scripts/supabase-worktree.ts stop --no-backup || true
 
 
-  # SQL/schema checks split so each 5-minute job has headroom after cold Supabase start.
+  # Keep SQL/schema checks split so each job stays focused after a cold Supabase start.
   test_backend_sql:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     name: Run backend SQL checks
     permissions:
       contents: read
@@ -670,7 +670,7 @@ jobs:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     name: Run backend SQL catalog checks
     permissions:
       contents: read
@@ -885,7 +885,7 @@ jobs:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     name: Run Cloudflare plugin tests (serial)
     permissions:
       contents: read
@@ -1451,7 +1451,7 @@ jobs:
     # changes must run them too (they are excluded from the backend shards).
     if: needs.changes.outputs.run_cli == 'true' || needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     name: Run Capgo CLI integration tests
     permissions:
       contents: read
