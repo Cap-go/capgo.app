@@ -732,6 +732,11 @@ export interface DeviceUsageAllCF {
   org_id: string
 }
 
+// Intentional anti-fraud MAU behavior: devices are grouped by (device_id, app_id, org_id).
+// After an app transfer, a device active under both the old and the new org in the same
+// period is counted once per org, so moving an app between orgs cannot hide its MAU.
+// Usage of deleted apps stays billable via deleted_apps for 35 days (see
+// calculate_org_metrics_cache_entry), so deleting/recreating an app cannot reset MAU.
 export async function readDeviceUsageCF(c: Context, app_id: string, period_start: string, period_end: string) {
   if (!c.env.DEVICE_USAGE)
     return [] as DeviceUsageCF[]

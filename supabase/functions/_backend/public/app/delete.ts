@@ -113,17 +113,10 @@ export async function deleteApp(c: Context<MiddlewareKeyVariables>, appId: strin
       .delete()
       .eq('app_id', appId),
 
-    // Delete daily metrics (internal, needs admin)
-    admin
-      .from('daily_mau')
-      .delete()
-      .eq('app_id', appId),
-
-    admin
-      .from('daily_bandwidth')
-      .delete()
-      .eq('app_id', appId),
-
+    // Keep daily_mau / daily_bandwidth / daily_build_time: they stay billable
+    // through deleted_apps for the rest of the cycle (anti-fraud, so deleting and
+    // recreating an app cannot reset usage). delete_old_deleted_apps purges them
+    // after 35 days, same as the dashboard deletion path.
     admin
       .from('daily_storage')
       .delete()
