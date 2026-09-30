@@ -38,6 +38,9 @@ permissions: {}
 env:
   DENO_DIR: my_cache_directory
   CLICOLOR: '1'
+  # Pull Supabase CLI images from GHCR instead of the default public.ecr.aws,
+  # whose anonymous pull quota fails CI with "toomanyrequests: Data limit exceeded".
+  SUPABASE_INTERNAL_IMAGE_REGISTRY: ghcr.io
 
 jobs:
   should_run:
