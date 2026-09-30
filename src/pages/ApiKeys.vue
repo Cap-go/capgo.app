@@ -92,6 +92,7 @@ interface ApiKeyAppAccessOption {
 type ApiKeyRow = Database['public']['Tables']['apikeys']['Row'] & {
   global_permissions?: string[]
   is_hashed_key?: boolean
+  bindings?: Array<Pick<RoleBindingRow, 'id' | 'scope_type' | 'org_id' | 'app_id' | 'role_name'>>
 }
 
 const { t } = useI18n()
@@ -960,7 +961,8 @@ async function getKeys(retry = true): Promise<void> {
       new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime(),
     )
     if (data.length > 0) {
-      await Promise.all([fetchAllBindings(), fetchRoles()])
+      setBindingsFromKeys(data)
+      await fetchRoles()
       await fetchOrgAndAppNames()
     }
     else {
@@ -1000,39 +1002,37 @@ async function fetchRoles() {
   roles.value = (data || []) as Role[]
 }
 
+// GET /apikey returns each key's bindings. Reading role_bindings directly needs
+// org.update_user_roles, which API key managers do not have.
+function setBindingsFromKeys(rows: ApiKeyRow[]) {
+  allBindings.value = rows.flatMap(row => (row.bindings ?? []).map(binding => ({
+    id: binding.id,
+    principal_type: 'apikey' as const,
+    principal_id: row.rbac_id,
+    scope_type: binding.scope_type,
+    org_id: binding.org_id,
+    app_id: binding.app_id,
+    role_name: binding.role_name,
+  })))
+}
+
 async function fetchAllBindings() {
   if (!keys.value || keys.value.length === 0) {
     allBindings.value = []
     return
   }
 
-  const rbacIds = keys.value.map(k => k.rbac_id).filter(Boolean)
-  if (rbacIds.length === 0) {
-    allBindings.value = []
-    return
-  }
+  const { data, error } = await invokeCapgoApi<ApiKeyRow[]>('apikey', {
+    method: 'GET',
+  })
 
-  const { data, error } = await supabase
-    .from('role_bindings')
-    .select('id, principal_type, principal_id, scope_type, org_id, app_id, role_id, roles(name)')
-    .eq('principal_type', 'apikey')
-    .in('principal_id', rbacIds)
-
-  if (error) {
+  if (error || !data) {
     console.error('Error fetching role bindings:', error)
     allBindings.value = []
     return
   }
 
-  allBindings.value = ((data || []) as any[]).map(row => ({
-    id: row.id,
-    principal_type: 'apikey',
-    principal_id: row.principal_id,
-    scope_type: row.scope_type,
-    org_id: row.org_id,
-    app_id: row.app_id,
-    role_name: row.roles?.name || '',
-  }))
+  setBindingsFromKeys(data)
 }
 
 async function loadAllApps() {

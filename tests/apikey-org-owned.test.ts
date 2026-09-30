@@ -243,6 +243,55 @@ describe('org-owned (shared) API keys', () => {
     await expect(response.json()).resolves.toMatchObject({ error: 'shared_apikey_single_org' })
   })
 
+  it('requires channel allow-overrides of the shared key before regenerating it', async () => {
+    const supabase = getSupabaseClient()
+    const appId = `com.shared.key.override.${TEST_ID.slice(0, 8)}`
+    const { error: appError } = await supabase.from('apps').insert({
+      app_id: appId,
+      owner_org: ORG_ID,
+      icon_url: 'shared-key-override-icon',
+      name: 'Shared key override app',
+      user_id: ownerUserId,
+    })
+    expect(appError).toBeNull()
+    const { data: version, error: versionError } = await supabase
+      .from('app_versions')
+      .insert({ app_id: appId, name: '1.0.0', owner_org: ORG_ID, user_id: ownerUserId, storage_provider: 'r2', deleted: false })
+      .select('id')
+      .single()
+    expect(versionError).toBeNull()
+    const { data: channel, error: channelError } = await supabase
+      .from('channels')
+      .insert({ app_id: appId, name: 'override-channel', version: version!.id, owner_org: ORG_ID, created_by: ownerUserId, public: false })
+      .select('id')
+      .single()
+    expect(channelError).toBeNull()
+
+    // The key gets promote on this channel through an allow-override; the admin
+    // is explicitly denied promote there, so regenerating would escalate.
+    await executeSQL(`
+      INSERT INTO public.channel_permission_overrides (principal_type, principal_id, channel_id, permission_key, is_allowed)
+      SELECT public.rbac_principal_apikey(), a.rbac_id, $2::bigint, 'channel.promote_bundle', true FROM public.apikeys a WHERE a.id = $1
+      UNION ALL
+      SELECT public.rbac_principal_user(), $3::uuid, $2::bigint, 'channel.promote_bundle', false
+    `, [sharedKeyId, channel!.id, adminUserId])
+
+    try {
+      const response = await apiRequest(`/apikey/${sharedKeyId}`, adminHeaders, {
+        method: 'PUT',
+        body: { regenerate: true },
+      })
+      expect(response.status).toBe(403)
+      await expect(response.text()).resolves.toContain('channel.promote_bundle')
+    }
+    finally {
+      await executeSQL('DELETE FROM public.channel_permission_overrides WHERE channel_id = $1', [channel!.id])
+      await supabase.from('channels').delete().eq('app_id', appId)
+      await supabase.from('app_versions').delete().eq('app_id', appId)
+      await supabase.from('apps').delete().eq('app_id', appId)
+    }
+  })
+
   it('does not let a plain member manage the shared key', async () => {
     const response = await apiRequest(`/apikey/${sharedKeyId}`, memberHeaders, { method: 'DELETE' })
     expect(response.status).toBe(404)

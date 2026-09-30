@@ -625,7 +625,9 @@ END;
 $$;
 
 -- Account deletion request: personal keys are removed right away (existing
--- behavior); shared keys move to a successor so org automation keeps working.
+-- behavior). Shared keys stay until the purge (delete_accounts_marked_for_deletion),
+-- which moves them to a successor, so a super admin added during the 30-day
+-- window can still inherit them. user_id grants nothing in the meantime.
 CREATE OR REPLACE FUNCTION public.delete_user()
 RETURNS void
 LANGUAGE plpgsql
@@ -698,8 +700,6 @@ BEGIN
       'function_name', 'on_user_delete'
     )
   );
-
-  PERFORM "public"."transfer_org_owned_apikeys_from_user"(user_id_fn);
 
   DELETE FROM "public"."apikeys"
   WHERE "public"."apikeys"."user_id" = user_id_fn

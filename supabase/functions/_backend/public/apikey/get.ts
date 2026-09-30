@@ -24,25 +24,57 @@ function toApiKeyPublicRow(apikey: ApiKeyPublicSelectRow): ApiKeyPublicRow {
   }
 }
 
-async function withGlobalPermissions<T extends { rbac_id: string | null }>(
+interface ApiKeyBindingSummary {
+  id: string
+  scope_type: string
+  org_id: string | null
+  app_id: string | null
+  role_name: string
+}
+
+// Callers only reach this with keys they may manage. Return their bindings so
+// managers without org.update_user_roles (which role_bindings RLS requires) can
+// still see and edit the keys, especially shared ones.
+async function withGlobalPermissionsAndBindings<T extends { rbac_id: string | null }>(
   c: Context<MiddlewareKeyVariables>,
   apikeys: T[],
 ) {
   const rbacIds = apikeys.map(key => key.rbac_id).filter((rbacId): rbacId is string => !!rbacId)
   if (rbacIds.length === 0) {
-    return attachApiKeyGlobalPermissions(apikeys, [])
+    return attachApiKeyGlobalPermissions(apikeys, []).map(apikey => ({ ...apikey, bindings: [] as ApiKeyBindingSummary[] }))
   }
 
   let pgClient
   try {
     pgClient = getPgClient(c)
-    const { rows } = await pgClient.query<{ apikey_rbac_id: string, permission_key: string }>(
-      `SELECT apikey_rbac_id::text, permission_key
-       FROM public.apikey_global_permissions
-       WHERE apikey_rbac_id = ANY($1::uuid[])`,
-      [rbacIds],
-    )
-    return attachApiKeyGlobalPermissions(apikeys, rows)
+    const [{ rows: permissionRows }, { rows: bindingRows }] = await Promise.all([
+      pgClient.query<{ apikey_rbac_id: string, permission_key: string }>(
+        `SELECT apikey_rbac_id::text, permission_key
+         FROM public.apikey_global_permissions
+         WHERE apikey_rbac_id = ANY($1::uuid[])`,
+        [rbacIds],
+      ),
+      pgClient.query<ApiKeyBindingSummary & { principal_id: string }>(
+        `SELECT rb.id::text, rb.principal_id::text, rb.scope_type, rb.org_id::text, rb.app_id::text, r.name AS role_name
+         FROM public.role_bindings rb
+         JOIN public.roles r ON r.id = rb.role_id
+         WHERE rb.principal_type = public.rbac_principal_apikey()
+           AND rb.principal_id = ANY($1::uuid[])`,
+        [rbacIds],
+      ),
+    ])
+
+    const bindingsByRbacId = new Map<string, ApiKeyBindingSummary[]>()
+    for (const { principal_id, ...binding } of bindingRows) {
+      const existing = bindingsByRbacId.get(principal_id) ?? []
+      existing.push(binding)
+      bindingsByRbacId.set(principal_id, existing)
+    }
+
+    return attachApiKeyGlobalPermissions(apikeys, permissionRows).map(apikey => ({
+      ...apikey,
+      bindings: apikey.rbac_id ? bindingsByRbacId.get(apikey.rbac_id) ?? [] : [],
+    }))
   }
   finally {
     if (pgClient) {
@@ -95,7 +127,7 @@ app.get('/', middlewareAuth(), async (c) => {
 
   const publicApiKeys = ((apikeys ?? []) as ApiKeyPublicSelectRow[]).map(toApiKeyPublicRow)
   const manageableApiKeys = await filterApiKeysManageableByAuth(c, auth, apikey, publicApiKeys)
-  return c.json(await withGlobalPermissions(c, manageableApiKeys))
+  return c.json(await withGlobalPermissionsAndBindings(c, manageableApiKeys))
 })
 
 app.get('/:id', middlewareAuth(), async (c) => {
@@ -119,7 +151,7 @@ app.get('/:id', middlewareAuth(), async (c) => {
     throw quickError(404, 'failed_to_get_apikey', 'Failed to get API key', { supabaseError: error })
   }
   await ensureApiKeyCanManageTargetOrgIds(c, auth, authApikey, fetchedApikey.rbac_id ? await getApiKeyBindingOrgIds(c, fetchedApikey.rbac_id) : [], 'cannot_get_apikey')
-  const [apikeyWithPermissions] = await withGlobalPermissions(c, [toApiKeyPublicRow(fetchedApikey)])
+  const [apikeyWithPermissions] = await withGlobalPermissionsAndBindings(c, [toApiKeyPublicRow(fetchedApikey)])
   return c.json(apikeyWithPermissions)
 })
 

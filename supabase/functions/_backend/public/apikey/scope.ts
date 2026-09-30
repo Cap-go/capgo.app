@@ -360,8 +360,9 @@ export async function deleteManageableApiKeyById(c: Context<MiddlewareKeyVariabl
 }
 
 // Regenerating a shared key hands its secret to the caller, so the caller must
-// already hold every effective permission of the key (org, app, and channel
-// permissions, including inherited roles) at each binding scope.
+// already hold every effective permission of the key: role permissions
+// (including inherited roles) at each binding scope, plus channel
+// allow-overrides on their channel.
 export async function assertCallerCanTakeOverSharedApiKey(
   c: Context<MiddlewareKeyVariables>,
   auth: AuthInfo,
@@ -377,7 +378,7 @@ export async function assertCallerCanTakeOverSharedApiKey(
     const { rows } = await pgClient.query<{ has_bindings: boolean, missing_permission: string | null }>(
       `
       WITH RECURSIVE key_bindings AS (
-        SELECT rb.role_id, rb.org_id, a.app_id AS public_app_id, ch.id AS channel_id
+        SELECT rb.role_id, rb.scope_type, rb.org_id, a.app_id AS public_app_id, ch.id AS channel_id
         FROM public.role_bindings rb
         LEFT JOIN public.apps a ON a.id = rb.app_id
         LEFT JOIN public.channels ch ON ch.rbac_id = rb.channel_id
@@ -386,29 +387,48 @@ export async function assertCallerCanTakeOverSharedApiKey(
           AND rb.org_id IS NOT NULL
           AND (rb.expires_at IS NULL OR rb.expires_at > now())
       ),
+      -- Same closure as rbac_has_permission: inherited roles stay in the
+      -- scope of the binding that grants them.
       role_closure AS (
-        SELECT key_bindings.role_id AS effective_role_id, key_bindings.org_id, key_bindings.public_app_id, key_bindings.channel_id
+        SELECT key_bindings.role_id AS effective_role_id, key_bindings.scope_type, key_bindings.org_id, key_bindings.public_app_id, key_bindings.channel_id
         FROM key_bindings
 
         UNION
 
-        SELECT role_hierarchy.child_role_id, role_closure.org_id, role_closure.public_app_id, role_closure.channel_id
+        SELECT role_hierarchy.child_role_id, role_closure.scope_type, role_closure.org_id, role_closure.public_app_id, role_closure.channel_id
         FROM role_closure
         JOIN public.role_hierarchy ON role_hierarchy.parent_role_id = role_closure.effective_role_id
+        JOIN public.roles AS child_role
+          ON child_role.id = role_hierarchy.child_role_id
+          AND child_role.scope_type = role_closure.scope_type
+      ),
+      required_permissions AS (
+        SELECT permission.key AS permission_key, role_closure.org_id, role_closure.public_app_id, role_closure.channel_id
+        FROM role_closure
+        JOIN public.role_permissions ON role_permissions.role_id = role_closure.effective_role_id
+        JOIN public.permissions AS permission ON permission.id = role_permissions.permission_id
+
+        UNION
+
+        -- Channel allow-overrides grant permissions beyond the key's roles.
+        SELECT overrides.permission_key, channels.owner_org, channels.app_id, channels.id
+        FROM public.channel_permission_overrides AS overrides
+        JOIN public.channels AS channels ON channels.id = overrides.channel_id
+        WHERE overrides.principal_type = public.rbac_principal_apikey()
+          AND overrides.principal_id = $1::uuid
+          AND overrides.is_allowed
       )
       SELECT
         EXISTS (SELECT 1 FROM key_bindings) AS has_bindings,
         (
-          SELECT permission.key
-          FROM role_closure
-          JOIN public.role_permissions ON role_permissions.role_id = role_closure.effective_role_id
-          JOIN public.permissions AS permission ON permission.id = role_permissions.permission_id
+          SELECT required_permissions.permission_key
+          FROM required_permissions
           WHERE NOT public.rbac_check_permission_direct(
-            permission.key,
+            required_permissions.permission_key,
             $2::uuid,
-            role_closure.org_id,
-            role_closure.public_app_id,
-            role_closure.channel_id,
+            required_permissions.org_id,
+            required_permissions.public_app_id,
+            required_permissions.channel_id,
             NULL
           )
           LIMIT 1
