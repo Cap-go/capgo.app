@@ -4,9 +4,24 @@ import { getTransientCiJobFailure } from '../scripts/retry-transient-ci-run'
 describe('transient CI job retry classifier', () => {
   it('classifies external runner shutdowns as transient', () => {
     expect(getTransientCiJobFailure(
-      'The runner has received a shutdown signal. This can happen when the runner service is stopped.',
+      [
+        '##[error]The runner has received a shutdown signal. This can happen when the runner service is stopped.',
+        '##[error]Process completed with exit code 143.',
+        'Cleaning up orphan processes',
+      ].join('\n'),
       ['Run Supabase Start'],
     )).toBe('runner_shutdown')
+  })
+
+  it('ignores shutdown text that is not the terminal runner trailer', () => {
+    const output = [
+      '##[error]The runner has received a shutdown signal.',
+      '##[error]Process completed with exit code 143.',
+      'Cleaning up orphan processes',
+      'FAIL tests/product.test.ts > product assertion',
+    ].join('\n')
+
+    expect(getTransientCiJobFailure(output, ['Run backend integration tests'])).toBeNull()
   })
 
   it('classifies exhausted Docker startup failures only when Supabase start failed', () => {

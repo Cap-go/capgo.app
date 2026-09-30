@@ -25,13 +25,13 @@ interface WorkflowRunResponse {
   status: string
 }
 
-const RUNNER_SHUTDOWN = /The runner has received a shutdown signal|runner (?:has )?lost communication with the server/i
+const RUNNER_SHUTDOWN_TRAILER = /##\[error\]The runner has received a shutdown signal\.[\s\S]{0,1000}##\[error\]Process completed with exit code 143\.[\s\S]{0,1000}Cleaning up orphan processes\s*$/i
 
 export function getTransientCiJobFailure(
   output: string,
   failedStepNames: string[],
 ): TransientCiJobFailure | null {
-  if (RUNNER_SHUTDOWN.test(output))
+  if (RUNNER_SHUTDOWN_TRAILER.test(output))
     return 'runner_shutdown'
 
   if (!failedStepNames.some(name => /Supabase Start/i.test(name)))
