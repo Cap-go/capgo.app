@@ -1,43 +1,27 @@
-import type { Context } from 'hono'
-import { CacheHelper } from './cache.ts'
-
 const MAX_BPS = 10000
-const DEFAULT_ROLLOUT_CACHE_TTL_SECONDS = 2592000
+const TWO_POW_32 = 0x100000000
 
 export type AutoPauseAction = 'pause' | 'rollback' | 'notify'
-
-export interface RolloutDecisionCachePayload {
-  selected: boolean
-  percentage_bps: number
-  rollout_id: string
-  rollout_version: number
-  created_at: string
-  updated_at: string
-}
 
 export interface RolloutDecisionInput {
   appId: string
   channelId: number
   currentVersionName: string
   deviceId: string
-  rolloutCacheTtlSeconds: number | null | undefined
   rolloutEnabled: boolean
   rolloutId: string
   rolloutPausedAt: Date | string | null
   rolloutPercentageBps: number | null | undefined
   rolloutVersionId: number
   rolloutVersionName: string
-  cachePayload?: RolloutDecisionCachePayload | null
-  now?: Date
-  randomBps?: () => number
 }
 
 export interface RolloutDecisionResult {
-  payload: RolloutDecisionCachePayload | null
-  reason: 'already_on_rollout' | 'cached_selected' | 'cached_unselected' | 'disabled' | 'paused' | 'cache_miss' | 'delta_reroll' | 'percentage_decrease_reroll' | 'percentage_zero'
+  /** Stable bucket of this device for this rollout, in [0, 10000). */
+  bucketBps: number
+  percentageBps: number
+  reason: 'already_on_rollout' | 'bucket_selected' | 'bucket_unselected' | 'disabled' | 'paused' | 'percentage_zero'
   selected: boolean
-  shouldWriteCache: boolean
-  ttlSeconds: number
 }
 
 export interface AutoPauseEvaluationInput {
@@ -74,174 +58,69 @@ export function sanitizeRolloutPercentageBps(value: number | null | undefined): 
   return clampInteger(Number(value ?? 0), 0, MAX_BPS)
 }
 
-export function sanitizeRolloutCacheTtlSeconds(value: number | null | undefined): number {
-  return clampInteger(Number(value ?? DEFAULT_ROLLOUT_CACHE_TTL_SECONDS), 60, 31536000)
-}
-
-export function randomPercentageBps(): number {
-  const values = new Uint32Array(1)
-  crypto.getRandomValues(values)
-  return Math.floor((values[0] / 0x100000000) * MAX_BPS)
-}
-
-export function getDeltaProbabilityBps(previousBps: number, nextBps: number): number {
-  const previous = sanitizeRolloutPercentageBps(previousBps)
-  const next = sanitizeRolloutPercentageBps(nextBps)
-  if (next <= previous || previous >= MAX_BPS)
-    return 0
-  return Math.ceil(((next - previous) * MAX_BPS) / (MAX_BPS - previous))
-}
-
-function isMatchingCachedDecision(input: RolloutDecisionInput, cached: RolloutDecisionCachePayload | null | undefined): cached is RolloutDecisionCachePayload {
-  return Boolean(cached)
-    && cached!.rollout_id === input.rolloutId
-    && cached!.rollout_version === input.rolloutVersionId
-    && typeof cached!.selected === 'boolean'
-}
-
-function buildPayload(input: RolloutDecisionInput, selected: boolean, percentageBps: number): RolloutDecisionCachePayload {
-  const now = (input.now ?? new Date()).toISOString()
-  return {
-    selected,
-    percentage_bps: sanitizeRolloutPercentageBps(percentageBps),
-    rollout_id: input.rolloutId,
-    rollout_version: input.rolloutVersionId,
-    created_at: now,
-    updated_at: now,
+/**
+ * 32-bit FNV-1a over UTF-16 code units followed by the murmur3 fmix32 finalizer.
+ *
+ * Why not Web Crypto SHA-256: this runs on every /updates request of a channel
+ * with an active rollout. A synchronous inline hash needs no await, no
+ * TextEncoder allocation and no digest buffer, and assignment needs uniformity
+ * and stability rather than cryptographic strength (the inputs are not
+ * secret and a device can always pick its own device_id anyway). FNV-1a alone
+ * has weak avalanche on short, similar inputs (sequential device ids), so the
+ * fmix32 finalizer spreads every input bit across the output before bucketing.
+ */
+export function stableHash32(input: string): number {
+  let hash = 0x811C9DC5
+  for (let index = 0; index < input.length; index++) {
+    hash ^= input.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
   }
+  hash ^= hash >>> 16
+  hash = Math.imul(hash, 0x85EBCA6B)
+  hash ^= hash >>> 13
+  hash = Math.imul(hash, 0xC2B2AE35)
+  hash ^= hash >>> 16
+  return hash >>> 0
 }
 
-function updatePayload(input: RolloutDecisionInput, cached: RolloutDecisionCachePayload, selected: boolean, percentageBps: number): RolloutDecisionCachePayload {
-  return {
-    ...cached,
-    selected,
-    percentage_bps: sanitizeRolloutPercentageBps(percentageBps),
-    updated_at: (input.now ?? new Date()).toISOString(),
-  }
+/**
+ * Deterministic rollout bucket in basis points ([0, 10000)).
+ *
+ * The key is salted with the rollout identity (rollout_id rotates whenever the
+ * channel's rollout target changes, plus the rollout bundle id), so every new
+ * rollout reshuffles the cohort, while changing the percentage of the same
+ * rollout keeps each device's bucket. Because selection is `bucket < percentage`,
+ * raising the percentage only adds devices and lowering it only removes the
+ * devices with the highest buckets. Every worker and data centre computes the
+ * same answer, so there is no per-colo state to drift.
+ */
+export function getRolloutBucketBps(input: Pick<RolloutDecisionInput, 'appId' | 'channelId' | 'deviceId' | 'rolloutId' | 'rolloutVersionId'>): number {
+  const key = `${input.appId}\u0000${input.channelId}\u0000${input.rolloutId}\u0000${input.rolloutVersionId}\u0000${input.deviceId.toLowerCase()}`
+  return Math.floor((stableHash32(key) / TWO_POW_32) * MAX_BPS)
 }
 
 export function resolveRolloutDecision(input: RolloutDecisionInput): RolloutDecisionResult {
   const percentageBps = sanitizeRolloutPercentageBps(input.rolloutPercentageBps)
-  const ttlSeconds = sanitizeRolloutCacheTtlSeconds(input.rolloutCacheTtlSeconds)
-  const cached = isMatchingCachedDecision(input, input.cachePayload) ? input.cachePayload : null
-  const reportsRolloutVersion = input.currentVersionName === input.rolloutVersionName
-  const hasCachedRejection = cached?.selected === false
+  const bucketBps = getRolloutBucketBps(input)
+  const base = { bucketBps, percentageBps }
 
-  if (!input.rolloutEnabled) {
-    return {
-      selected: false,
-      shouldWriteCache: false,
-      payload: cached,
-      reason: 'disabled',
-      ttlSeconds,
-    }
-  }
+  if (!input.rolloutEnabled)
+    return { ...base, selected: false, reason: 'disabled' }
 
-  if (reportsRolloutVersion && !hasCachedRejection) {
-    return {
-      selected: true,
-      shouldWriteCache: true,
-      payload: cached?.selected ? updatePayload(input, cached, true, Math.max(cached.percentage_bps, percentageBps)) : buildPayload(input, true, percentageBps),
-      reason: 'already_on_rollout',
-      ttlSeconds,
-    }
-  }
+  // Devices already running the rollout bundle stay on it (also while paused or
+  // at 0%) so they are never downgraded by a percentage change.
+  if (input.currentVersionName === input.rolloutVersionName)
+    return { ...base, selected: true, reason: 'already_on_rollout' }
 
-  if (input.rolloutPausedAt) {
-    return {
-      selected: false,
-      shouldWriteCache: false,
-      payload: cached,
-      reason: 'paused',
-      ttlSeconds,
-    }
-  }
+  if (input.rolloutPausedAt)
+    return { ...base, selected: false, reason: 'paused' }
 
-  if (percentageBps <= 0) {
-    return {
-      selected: false,
-      shouldWriteCache: false,
-      payload: cached,
-      reason: 'percentage_zero',
-      ttlSeconds,
-    }
-  }
-  const randomBps = input.randomBps ?? randomPercentageBps
+  if (percentageBps <= 0)
+    return { ...base, selected: false, reason: 'percentage_zero' }
 
-  if (cached?.selected) {
-    if (percentageBps >= cached.percentage_bps) {
-      return {
-        selected: true,
-        shouldWriteCache: false,
-        payload: cached,
-        reason: 'cached_selected',
-        ttlSeconds,
-      }
-    }
-
-    const selected = randomBps() < Math.ceil((percentageBps * MAX_BPS) / cached.percentage_bps)
-    return {
-      selected,
-      shouldWriteCache: true,
-      payload: updatePayload(input, cached, selected, percentageBps),
-      reason: 'percentage_decrease_reroll',
-      ttlSeconds,
-    }
-  }
-
-  if (cached) {
-    if (percentageBps <= cached.percentage_bps) {
-      return {
-        selected: false,
-        shouldWriteCache: false,
-        payload: cached,
-        reason: 'cached_unselected',
-        ttlSeconds,
-      }
-    }
-
-    const selected = randomBps() < getDeltaProbabilityBps(cached.percentage_bps, percentageBps)
-    return {
-      selected,
-      shouldWriteCache: true,
-      payload: updatePayload(input, cached, selected, percentageBps),
-      reason: 'delta_reroll',
-      ttlSeconds,
-    }
-  }
-
-  const selected = randomBps() < percentageBps
-  return {
-    selected,
-    shouldWriteCache: true,
-    payload: buildPayload(input, selected, percentageBps),
-    reason: 'cache_miss',
-    ttlSeconds,
-  }
-}
-
-async function hashDeviceId(deviceId: string): Promise<string> {
-  const bytes = new TextEncoder().encode(deviceId)
-  const digest = await crypto.subtle.digest('SHA-256', bytes)
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
-}
-
-export async function getRolloutDecision(c: Context, input: Omit<RolloutDecisionInput, 'cachePayload'>): Promise<RolloutDecisionResult> {
-  const cache = new CacheHelper(c)
-  const deviceHash = await hashDeviceId(input.deviceId)
-  const request = cache.buildRequest('/cache/rollouts/v1', {
-    app_id: input.appId,
-    channel_id: String(input.channelId),
-    device: deviceHash,
-    rollout_id: input.rolloutId,
-  })
-  const cached = await cache.matchJson<RolloutDecisionCachePayload>(request)
-  const decision = resolveRolloutDecision({ ...input, cachePayload: cached })
-
-  if (decision.shouldWriteCache && decision.payload)
-    await cache.putJson(request, decision.payload, decision.ttlSeconds)
-
-  return decision
+  return bucketBps < percentageBps
+    ? { ...base, selected: true, reason: 'bucket_selected' }
+    : { ...base, selected: false, reason: 'bucket_unselected' }
 }
 
 function parseDate(value: Date | string | null | undefined): Date | null {

@@ -1,11 +1,11 @@
 import type { AnalyticsEngineDataset, D1Database, Hyperdrive, KVNamespace, Queue, SendEmail } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
-import type { DeviceComparable } from './deviceComparison.ts'
+import type { DeviceInfoWriteCachePayload } from './deviceComparison.ts'
 import type { StatsInsightRawAction, StatsInsightRawDaily, StatsInsightRawDevice, StatsInsightRawSummary, StatsInsightRawVersion } from './statsInsights.ts'
 import type { Database } from './supabase.types.ts'
-import type { DeviceRes, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
+import type { ChannelDeviceOverrideIds, DeviceRes, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
 import { CACHE_PUT_TIMEOUT_MS, CacheHelper } from './cache.ts'
-import { hasComparableDeviceChanged, toComparableDevice } from './deviceComparison.ts'
+import { canSkipDeviceInfoWrite, DEVICE_INFO_REFRESH_TTL_SECONDS, toComparableDevice } from './deviceComparison.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
 import { DEFAULT_LIMIT } from './types.ts'
@@ -300,13 +300,9 @@ function getReplicaReadStoreAppSession(c: Context) {
 }
 
 const TRACK_DEVICE_CACHE_PATH = '/.track-device-cache'
-const TRACK_DEVICE_CACHE_MAX_AGE_SECONDS = 31536000
-
-type DeviceCachePayload = DeviceComparable & {
-  app_id: string
-  device_id: string
-  cached_at: string
-}
+// Cache entries expire with the refresh TTL; canSkipDeviceInfoWrite also checks
+// cached_at so an entry kept past its max-age by the colo still forces a write.
+const TRACK_DEVICE_CACHE_MAX_AGE_SECONDS = DEVICE_INFO_REFRESH_TTL_SECONDS
 
 export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt) {
   // Runs under waitUntil — Cache I/O here stretches Workers Wall Time charts.
@@ -326,8 +322,8 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
       device_id: device.device_id,
     })
     // Do not gate on helper.available — it is sync-racy before ensureCache resolves.
-    const cachedDevice = await trackDeviceCache.matchJson<DeviceCachePayload>(trackDeviceCacheRequest)
-    if (cachedDevice && !hasComparableDeviceChanged(cachedDevice, device)) {
+    const cachedDevice = await trackDeviceCache.matchJson<DeviceInfoWriteCachePayload>(trackDeviceCacheRequest)
+    if (canSkipDeviceInfoWrite(cachedDevice, device)) {
       outcome = 'cache_hit'
       cloudlog({
         requestId: c.get('requestId'),
@@ -368,7 +364,7 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
       indexes: [device.app_id],
     })
 
-    const cachePayload: DeviceCachePayload = {
+    const cachePayload: DeviceInfoWriteCachePayload = {
       ...comparableDevice,
       app_id: device.app_id,
       device_id: device.device_id,
@@ -851,18 +847,47 @@ interface StoreApp {
   developer_id?: string // Optional as it's not NOT NULL
 }
 
-export async function readStatsVersionCF(c: Context, app_id: string, period_start: string, period_end: string, channel?: VersionUsageChannel | string): Promise<VersionUsage[]> {
+export interface VersionUsageChannelFilterOptions {
+  /**
+   * Also match `get` rows written without any channel. /updates only started
+   * recording the serving channel on `get` rows recently, so dashboards that
+   * chart `get` keep older history visible while those rows age out of the
+   * retention window. Never set this for install/fail based decisions.
+   */
+  includeUnattributedGets?: boolean
+}
+
+/**
+ * version_usage channel filter. blob4 holds the channel name and blob5 the channel
+ * id; blob5 only exists on newer rows. With both id and name, rows are matched by
+ * id and legacy rows without an id fall back to the name.
+ */
+export function buildVersionUsageChannelFilterCF(channel?: VersionUsageChannel | string | null, options: VersionUsageChannelFilterOptions = {}): string {
+  if (!channel)
+    return ''
+  const channelId = typeof channel === 'object' && channel.id ? String(channel.id) : ''
+  const channelName = typeof channel === 'string' ? channel : (channel.name ?? '')
+  const safeChannelId = channelId ? escapeSqlString(channelId) : ''
+  const safeChannelName = channelName ? escapeSqlString(channelName) : ''
+  let match = ''
+  if (safeChannelId && safeChannelName)
+    match = `(blob5 = '${safeChannelId}' OR (blob5 = '' AND blob4 = '${safeChannelName}'))`
+  else if (safeChannelId)
+    match = `blob5 = '${safeChannelId}'`
+  else if (safeChannelName)
+    match = `blob4 = '${safeChannelName}'`
+  if (!match)
+    return ''
+  if (options.includeUnattributedGets)
+    return `AND (${match} OR (blob3 = 'get' AND blob4 = '' AND blob5 = ''))`
+  return `AND ${match}`
+}
+
+export async function readStatsVersionCF(c: Context, app_id: string, period_start: string, period_end: string, channel?: VersionUsageChannel | string, options: VersionUsageChannelFilterOptions = {}): Promise<VersionUsage[]> {
   if (!c.env.VERSION_USAGE)
     return []
   // Note: blob2 contains version_name for new data and version_id (numeric) for old data.
-  // blob4 contains channel_name and blob5 contains channel_id only for newer data.
-  const channelId = typeof channel === 'object' && channel?.id ? String(channel.id) : ''
-  const channelName = typeof channel === 'string' ? channel : channelId ? null : channel?.name
-  const safeChannelName = channelName ? escapeSqlString(channelName) : ''
-  const safeChannelId = channelId ? escapeSqlString(channelId) : ''
-  const channelFilter = safeChannelId
-    ? `AND blob5 = '${safeChannelId}'`
-    : safeChannelName ? `AND blob4 = '${safeChannelName}'` : ''
+  const channelFilter = buildVersionUsageChannelFilterCF(channel, options)
   const query = `SELECT
   blob1 as app_id,
   blob2 as version_name,
@@ -1039,14 +1064,31 @@ ORDER BY date`
   }
 }
 
-export async function readDeviceVersionCountsCF(c: Context, app_id: string, channelName?: string): Promise<Record<string, number>> {
-  if (!c.env.DEVICE_INFO)
-    return {}
+function buildDeviceIdListCF(deviceIds: string[]) {
+  return deviceIds.map(id => `'${escapeSqlString(id)}'`).join(', ')
+}
 
-  const safeChannel = channelName ? escapeSqlString(channelName) : ''
-  const channelFilter = safeChannel ? `AND default_channel = '${safeChannel}'` : ''
+/**
+ * Channel scope for device_info rows by effective channel: the device-reported
+ * default_channel, minus devices forced to another channel, plus devices forced
+ * into this channel through channel_devices.
+ */
+export function buildDeviceChannelScopeCF(channelName: string, overrides?: ChannelDeviceOverrideIds): string {
+  const defaultChannelMatch = `default_channel = '${escapeSqlString(channelName)}'`
+  const elsewhere = overrides?.elsewhere ?? []
+  const into = overrides?.into ?? []
+  const byDefaultChannel = elsewhere.length
+    ? `(${defaultChannelMatch} AND device_id NOT IN (${buildDeviceIdListCF(elsewhere)}))`
+    : defaultChannelMatch
+  if (!into.length)
+    return byDefaultChannel
+  return `(${byDefaultChannel} OR device_id IN (${buildDeviceIdListCF(into)}))`
+}
 
-  const query = `SELECT
+export function buildDeviceVersionCountsCFQuery(app_id: string, channelName?: string, overrides?: ChannelDeviceOverrideIds) {
+  const channelFilter = channelName ? `AND ${buildDeviceChannelScopeCF(channelName, overrides)}` : ''
+
+  return `SELECT
   version_name,
   count() AS device_count
 FROM (
@@ -1060,6 +1102,13 @@ FROM (
 )
 WHERE version_name != '' ${channelFilter}
 GROUP BY version_name`
+}
+
+export async function readDeviceVersionCountsCF(c: Context, app_id: string, channelName?: string, overrides?: ChannelDeviceOverrideIds): Promise<Record<string, number>> {
+  if (!c.env.DEVICE_INFO)
+    return {}
+
+  const query = buildDeviceVersionCountsCFQuery(app_id, channelName, overrides)
 
   cloudlog({ requestId: c.get('requestId'), message: 'readDeviceVersionCountsCF query', query })
   try {

@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { UpdateDeliveryTimingEventCF } from '../utils/cloudflare.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import type { VersionUsage } from '../utils/types.ts'
+import type { VersionUsage, VersionUsageChannel } from '../utils/types.ts'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
 import { HTTPException } from 'hono/http-exception'
@@ -271,11 +271,19 @@ async function readRollingSuccessRows(
   start: dayjs.Dayjs,
   endExclusive: dayjs.Dayjs,
   versionFilter?: Set<string>,
+  channel?: VersionUsageChannel,
 ) {
   // Route through readStatsVersion: production writes version_usage to Analytics
   // Engine only, so reading the Postgres RPC directly returned no installs.
-  const usage = await readStatsVersion(c, appId, start.toISOString(), endExclusive.toISOString())
+  const usage = await readStatsVersion(c, appId, start.toISOString(), endExclusive.toISOString(), channel)
   return aggregateSuccessRowsFromVersionUsage(usage, versionFilter)
+}
+
+// daily_version has no channel dimension. Channel-scoped requests read
+// version_usage (which records the channel) for every period so installs of
+// the same bundle from other channels are not counted.
+function readsSuccessFromVersionUsage(days: BundleInstallPeriodDays, channel?: VersionUsageChannel) {
+  return days === 1 || Boolean(channel)
 }
 
 function buildBundleInstallResponse(input: {
@@ -457,7 +465,7 @@ async function resolveChannelVersionFilter(
   c: Context<MiddlewareKeyVariables>,
   appId: string,
   channelId: number,
-): Promise<Set<string>> {
+): Promise<{ versionNames: Set<string>, channel: VersionUsageChannel }> {
   const auth = c.get('auth')
   if (!auth)
     throw simpleError('not_authenticated', 'Authentication required')
@@ -483,7 +491,7 @@ async function resolveChannelVersionFilter(
 
   const { data: channelData } = await supabase
     .from('channels')
-    .select('version:app_versions(name)')
+    .select('name, version:app_versions(name)')
     .eq('id', channelId)
     .eq('app_id', appId)
     .single()
@@ -492,7 +500,7 @@ async function resolveChannelVersionFilter(
   if (currentName)
     versionNames.add(currentName)
 
-  return versionNames
+  return { versionNames, channel: { id: channelId, name: channelData?.name ?? null } }
 }
 
 async function readInstallTimingEventsCFChunked(
@@ -547,6 +555,7 @@ async function readBundleInstallStatsSB(
   endExclusive: dayjs.Dayjs,
   endInclusive: dayjs.Dayjs,
   versionFilter?: Set<string>,
+  channel?: VersionUsageChannel,
 ) {
   const db = getPgClient(c, true)
   try {
@@ -563,8 +572,8 @@ async function readBundleInstallStatsSB(
       timingParams.push(versionNames)
 
     const [successRows, timingResult] = await Promise.all([
-      days === 1
-        ? readRollingSuccessRows(c, appId, start, endExclusive, versionFilter)
+      readsSuccessFromVersionUsage(days, channel)
+        ? readRollingSuccessRows(c, appId, start, endExclusive, versionFilter, channel)
         : db.query<BundleSuccessRow>(
             buildSuccessRateQuery(hasVersionFilter),
             hasVersionFilter ? [appId, start.format('YYYY-MM-DD'), endInclusive.format('YYYY-MM-DD'), versionNames] : [appId, start.format('YYYY-MM-DD'), endInclusive.format('YYYY-MM-DD')],
@@ -602,7 +611,10 @@ async function readBundleInstallStatsCF(
   endExclusive: dayjs.Dayjs,
   endInclusive: dayjs.Dayjs,
   versionFilter?: Set<string>,
+  channel?: VersionUsageChannel,
 ) {
+  // app_log timing rows carry no channel; timings stay scoped by the channel's
+  // version names only.
   const queryStart = start.subtract(2, 'hour')
   const versionNames = versionFilter ? [...versionFilter] : undefined
   const events = await readInstallTimingEventsCFChunked(c, {
@@ -619,8 +631,8 @@ async function readBundleInstallStatsCF(
   const timingRows = aggregateInstallTimingsByVersion(timingSamples)
 
   let successRows: BundleSuccessRow[]
-  if (days === 1) {
-    successRows = await readRollingSuccessRows(c, appId, start, endExclusive, versionFilter)
+  if (readsSuccessFromVersionUsage(days, channel)) {
+    successRows = await readRollingSuccessRows(c, appId, start, endExclusive, versionFilter, channel)
   }
   else {
     const auth = c.get('auth')
@@ -707,8 +719,11 @@ async function readBundleInstallStats(
     return filterResponseByVersionName(cached, versionName)
 
   let versionFilter: Set<string> | undefined
+  let channel: VersionUsageChannel | undefined
   if (channelId) {
-    versionFilter = await resolveChannelVersionFilter(c, appId, channelId)
+    const resolved = await resolveChannelVersionFilter(c, appId, channelId)
+    versionFilter = resolved.versionNames
+    channel = resolved.channel
     if (versionFilter.size === 0) {
       const emptyPeriod = getRollingStatsPeriod(days)
       const empty = buildBundleInstallResponse({
@@ -731,7 +746,7 @@ async function readBundleInstallStats(
   let response: BundleInstallStatsResponse
   if (c.env.APP_LOG) {
     try {
-      response = await readBundleInstallStatsCF(c, appId, days, start, endExclusive, endInclusive, versionFilter)
+      response = await readBundleInstallStatsCF(c, appId, days, start, endExclusive, endInclusive, versionFilter, channel)
     }
     catch (error) {
       cloudlogErr({
@@ -740,11 +755,11 @@ async function readBundleInstallStats(
         error: serializeError(error),
         app_id: appId,
       })
-      response = await readBundleInstallStatsSB(c, appId, days, start, endExclusive, endInclusive, versionFilter)
+      response = await readBundleInstallStatsSB(c, appId, days, start, endExclusive, endInclusive, versionFilter, channel)
     }
   }
   else {
-    response = await readBundleInstallStatsSB(c, appId, days, start, endExclusive, endInclusive, versionFilter)
+    response = await readBundleInstallStatsSB(c, appId, days, start, endExclusive, endInclusive, versionFilter, channel)
   }
 
   if (response.bundles.length > 0)
@@ -804,4 +819,5 @@ export const bundleInstallStatsTestUtils = {
   aggregateSuccessRowsFromVersionUsage,
   filterResponseByVersionName,
   parseMetaDurationMs: parseStatsDurationMs,
+  readsSuccessFromVersionUsage,
 }

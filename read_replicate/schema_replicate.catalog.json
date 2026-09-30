@@ -591,6 +591,16 @@
       "type": "uuid"
     },
     {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "is_self_set",
+      "notNull": true,
+      "position": 8,
+      "table": "channel_devices",
+      "type": "boolean"
+    },
+    {
       "default": null,
       "generated": "",
       "identity": "d",

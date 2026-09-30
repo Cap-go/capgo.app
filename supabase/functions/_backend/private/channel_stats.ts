@@ -302,11 +302,17 @@ app.post('/', middlewareAuth, async (c) => {
       ?? (currentVersionCreatedAt ? dayjs(currentVersionCreatedAt).utc().toISOString() : null)
     const period = getStatsPeriod(days, endDate, currentVersionReleasedAt)
     const { startDate } = period
+    // Only count usage attributed to this channel (blob5 id, legacy blob4 name).
+    // `get` rows recorded before /updates attributed them to a channel have no
+    // channel at all; keep them until they age out so history stays visible.
+    const channelScope = { id: channelData.id, name: channelData.name }
     const usageRows = await readStatsVersion(
       c,
       body.app_id,
       dayjs(startDate).utc().startOf('day').toISOString(),
       dayjs(endDate).utc().add(1, 'day').startOf('day').toISOString(),
+      channelScope,
+      { includeUnattributedGets: true },
     )
 
     const dailyVersion = (usageRows as unknown as AppUsageByVersion[])
@@ -326,7 +332,7 @@ app.post('/', middlewareAuth, async (c) => {
     const labels = trimTrailingEmptyLabels(period.labels, rawAllCountsByDate)
     const allCountsByDate = fillMissingDailyCounts(rawAllCountsByDate, labels, allVersionNames)
 
-    const currentCounts = await readDeviceVersionCounts(c, body.app_id, channelData.name)
+    const currentCounts = await readDeviceVersionCounts(c, body.app_id, channelScope)
 
     const selectedVersions = selectRecentChannelVersions(deploymentHistory, currentVersionName, currentCounts, 10)
     const chartCounts = createChartCountsByDate(labels, allCountsByDate, selectedVersions, allVersionNames)

@@ -390,7 +390,7 @@ describe('channel information rollout and update package UX', () => {
     expect(container.textContent).toContain('Progressive rollout')
     expect(container.textContent).toContain('Stable fallback stays for most devices')
     expect(container.textContent).toContain('Share of eligible devices in the sticky rollout cohort')
-    expect(container.textContent).toContain('cached server-side')
+    expect(container.textContent).toContain('computed from each device ID')
     expect(container.textContent).not.toContain('Confirm')
     findDialogButton(container, 'Close').click()
     await nextTick()
