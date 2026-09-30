@@ -520,8 +520,10 @@ async function runSupabaseStartWithRetry(args: string[], repoRoot: string): Prom
     if (status === 0)
       return 0
     const transientFailure = getTransientSupabaseStartFailure(output)
-    if (attempt >= maxAttempts || transientFailure === null)
+    if (attempt >= maxAttempts || transientFailure === null) {
+      console.error(`SUPABASE_START_FINAL_FAILURE=${transientFailure ?? 'non_transient'}`)
       return status
+    }
     const reason = transientFailure === 'docker_port_bind' ? 'Docker port bind' : 'Docker image pull'
     console.error(`Supabase start hit a transient ${reason} failure (attempt ${attempt}/${maxAttempts}); stopping and retrying...`)
     runSupabase(['stop', '--no-backup'], repoRoot)

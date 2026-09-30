@@ -10,10 +10,21 @@ describe('transient CI job retry classifier', () => {
   })
 
   it('classifies exhausted Docker startup failures only when Supabase start failed', () => {
-    const output = 'failed to pull docker image\nrequest returned 503 Service Unavailable'
+    const output = 'SUPABASE_START_FINAL_FAILURE=docker_image_pull'
 
     expect(getTransientCiJobFailure(output, ['Run Supabase Start'])).toBe('supabase_docker_image_pull')
     expect(getTransientCiJobFailure(output, ['Run backend integration tests'])).toBeNull()
+  })
+
+  it('uses the terminal startup classification instead of earlier retry output', () => {
+    const output = [
+      'failed to pull docker image',
+      'request returned 503 Service Unavailable',
+      'Migration failed: relation does not exist',
+      'SUPABASE_START_FINAL_FAILURE=non_transient',
+    ].join('\n')
+
+    expect(getTransientCiJobFailure(output, ['Run Supabase Start'])).toBeNull()
   })
 
   it('does not classify application failures or generic HTTP 500 responses as transient', () => {

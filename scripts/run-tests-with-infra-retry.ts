@@ -11,11 +11,22 @@ const TRANSIENT_FAILURE_PATTERNS: ReadonlyArray<readonly [TransientTestFailure, 
 ]
 
 export function getTransientTestFailure(output: string): TransientTestFailure | null {
-  for (const [failure, pattern] of TRANSIENT_FAILURE_PATTERNS) {
-    if (pattern.test(output))
-      return failure
+  const normalizedOutput = output.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')
+  const failedTestStarts = [...normalizedOutput.matchAll(/^\s*FAIL\s+.+$/gm)]
+  if (failedTestStarts.length === 0)
+    return null
+
+  let classifiedFailure: TransientTestFailure | null = null
+  for (let index = 0; index < failedTestStarts.length; index++) {
+    const start = failedTestStarts[index].index
+    const end = failedTestStarts[index + 1]?.index ?? normalizedOutput.length
+    const failedDiagnostic = normalizedOutput.slice(start, end)
+    const match = TRANSIENT_FAILURE_PATTERNS.find(([, pattern]) => pattern.test(failedDiagnostic))
+    if (!match)
+      return null
+    classifiedFailure ??= match[0]
   }
-  return null
+  return classifiedFailure
 }
 
 async function run(command: string[]): Promise<{ exitCode: number, output: string }> {
