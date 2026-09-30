@@ -323,6 +323,48 @@ describe('app onboarding progress analytics integration', () => {
     }
   })
 
+  it.each([true, false])('leaves Getting started for the app page when its app cannot load (preOrg=%s)', async (preOrg) => {
+    const previousUser = writerMocks.main.user
+    const previousOrganization = writerMocks.organization.currentOrganization
+    const matchMediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+    writerMocks.organization.currentOrganization = { gid: 'test-org', name: 'Test Org' }
+    // Saved setup for another app must not hijack Getting started for this one.
+    writerMocks.main.user = {
+      id: 'user-missing-app',
+      image_url: 'avatar.png',
+      onboarding: {
+        app_id: 'com.example.other',
+        final_step: 'setup',
+        flow: 'pre_org',
+        setup_stage: 'cli',
+        status: 'in_progress',
+        step: 'setup',
+        updated_at: '2026-09-21T00:00:00.000Z',
+      },
+    }
+    writerMocks.loadApp.mockResolvedValue({ data: null, error: { message: 'not found' } })
+    writerMocks.router.replace.mockClear()
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: vi.fn(() => ({ matches: false })) })
+    const container = document.createElement('div')
+    const app = createApp(AppOnboardingFlow, { onboarding: true, preOrg, setupAppId: 'com.example.missing' })
+    app.config.warnHandler = () => undefined
+    try {
+      app.mount(container)
+      await vi.waitFor(() => expect(writerMocks.router.replace).toHaveBeenCalledWith('/app/com.example.missing'))
+      expect(writerMocks.router.replace).not.toHaveBeenCalledWith('/app/com.example.other/getting-started')
+      expect(container.querySelector('[data-test="app-onboarding-name"]')).toBeNull()
+    }
+    finally {
+      app.unmount()
+      writerMocks.main.user = previousUser
+      writerMocks.organization.currentOrganization = previousOrganization
+      if (matchMediaDescriptor)
+        Object.defineProperty(window, 'matchMedia', matchMediaDescriptor)
+      else
+        Reflect.deleteProperty(window, 'matchMedia')
+    }
+  })
+
   it('continues the creation attempt when Getting started receives the setup handoff', async () => {
     const previousUser = writerMocks.main.user
     const previousOrganization = writerMocks.organization.currentOrganization

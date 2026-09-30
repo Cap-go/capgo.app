@@ -2597,6 +2597,14 @@ async function leaveSplashIfAlreadySetup() {
   return true
 }
 
+// Getting started must never fall back to saved progress or app creation
+// when its own app cannot be loaded.
+async function leaveUnavailableSetupApp() {
+  onboardingProgressPersistence.abort()
+  if (props.setupAppId)
+    await router.replace(`/app/${encodeURIComponent(props.setupAppId)}`)
+}
+
 function trackDashboardExplored() {
   if (!progressTracker) {
     pendingDashboardExplored = true
@@ -2629,6 +2637,10 @@ onMounted(async () => {
           if (!setupHandoff)
             recordSkippedChannelResumeDialog(parseUserOnboardingProgress(main.user?.onboarding))
           startApiKeyLoading()
+          return
+        }
+        if (props.setupAppId) {
+          await leaveUnavailableSetupApp()
           return
         }
       }
@@ -2668,6 +2680,10 @@ onMounted(async () => {
 
     const resumed = await loadResumeApp()
     resumedFlow = resumed
+    if (!resumed && props.setupAppId) {
+      await leaveUnavailableSetupApp()
+      return
+    }
     if (!resumed) {
       flowStep.value = 'details'
       appDetailsStep.value = 'name'
