@@ -78,8 +78,8 @@ describe('buildReadDevicesCFQuery', () => {
       limit: 1,
     }, true)
 
-    expect(query).toContain("custom_id != ''")
-    expect(query).not.toContain("blob5 != ''")
+    expect(query).toContain('custom_id != \'\'')
+    expect(query).not.toContain('blob5 != \'\'')
     expect(query).not.toContain('blob10')
   })
 
@@ -168,6 +168,18 @@ describe('buildReadDevicesCFQuery', () => {
     expect(Math.max(outerWhereIndex, altOuterWhereIndex)).toBeGreaterThan(groupByIndex)
   })
 
+  it.concurrent('filters devices by latest aggregated default_channel after grouping', () => {
+    const query = buildReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      default_channel: 'beta\'s',
+      limit: 1,
+    }, false)
+
+    const groupByIndex = query.indexOf('GROUP BY blob1')
+    expect(query).not.toContain(`blob7 = `)
+    expect(query.indexOf(`default_channel = 'beta''s'`)).toBeGreaterThan(groupByIndex)
+  })
+
   it.concurrent('filters devices by os_version gte after grouping', () => {
     const query = buildReadDevicesCFQuery({
       app_id: 'com.example.app',
@@ -180,8 +192,8 @@ describe('buildReadDevicesCFQuery', () => {
     const groupByIndex = query.indexOf('GROUP BY blob1')
     expect(query).toContain('argMax(blob4, timestamp) AS os_version')
     expect(query.indexOf('>= 14')).toBeGreaterThan(groupByIndex)
-    expect(query.indexOf("splitByChar('.', os_version)")).toBeGreaterThan(groupByIndex)
-    expect(query.indexOf("splitByChar('.', version_name)")).toBeGreaterThan(groupByIndex)
+    expect(query.indexOf('splitByChar(\'.\', os_version)')).toBeGreaterThan(groupByIndex)
+    expect(query.indexOf('splitByChar(\'.\', version_name)')).toBeGreaterThan(groupByIndex)
     expect(query).not.toContain('concat(')
   })
 
@@ -251,6 +263,37 @@ describe('countDevicesCF', () => {
     expect(query).toContain('COUNT(DISTINCT blob1) AS total')
     expect(query).not.toContain('blob9')
     expect(query).not.toContain('install_source')
+  })
+})
+
+describe('countDevicesCF default channel', () => {
+  it('filters counts by latest aggregated default_channel', async () => {
+    let query = ''
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      query = String(init?.body ?? '')
+      return new Response(JSON.stringify({
+        meta: [{ name: 'total', type: 'UInt64' }],
+        data: [{ total: 3 }],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const count = await countDevicesCF(
+      createContextMock() as unknown as Context,
+      'com.example.app',
+      false,
+      [],
+      undefined,
+      undefined,
+      { defaultChannel: 'beta' },
+    )
+
+    expect(count).toBe(3)
+    expect(query).toContain('argMax(blob7, timestamp) AS default_channel')
+    expect(query.indexOf(`default_channel = 'beta'`)).toBeGreaterThan(query.indexOf('GROUP BY blob1'))
   })
 })
 
@@ -397,6 +440,19 @@ describe('readDevicesSB', () => {
 
     expect(query.eq).toHaveBeenCalledWith('platform', 'android')
     expect(query.eq).toHaveBeenCalledWith('version_name', '2.0.0')
+  })
+
+  it('applies default_channel filter', async () => {
+    const { client, query } = createReadDevicesQueryMock()
+    vi.mocked(createClient).mockReturnValue(client as unknown as ReturnType<typeof createClient>)
+
+    await readDevicesSB(createContextMock() as unknown as Context, {
+      app_id: 'com.example.app',
+      default_channel: 'beta',
+      limit: 1,
+    }, false)
+
+    expect(query.eq).toHaveBeenCalledWith('default_channel', 'beta')
   })
 
   it('filters devices with updated_at greater than the provided timestamp', async () => {
