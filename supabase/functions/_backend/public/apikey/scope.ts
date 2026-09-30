@@ -315,15 +315,17 @@ export async function selectManageableApiKeyByIdentifier<T = ApiKeyRow>(
 ) {
   let query
   if (auth.authType === 'apikey') {
-    const manageableOrgIds = [...await getApiKeyManageableOrgIds(c, c.get('apikey') as ApiKeyRow | undefined)]
+    const callerApikey = c.get('apikey') as ApiKeyRow | undefined
+    const manageableOrgIds = [...await getApiKeyManageableOrgIds(c, callerApikey)]
     const ownershipFilters = [`and(user_id.eq.${auth.userId},owner_org_id.is.null)`]
     if (manageableOrgIds.length > 0) {
       ownershipFilters.push(`owner_org_id.in.(${manageableOrgIds.join(',')})`)
     }
-    query = supabaseAdmin(c)
-      .from('apikeys')
-      .select(columns)
-      .or(ownershipFilters.join(','))
+    const adminQuery = supabaseAdmin(c).from('apikeys').select(columns)
+    // A shared caller's user_id is attribution, never personal-key ownership.
+    query = callerApikey?.owner_org_id
+      ? adminQuery.in('owner_org_id', manageableOrgIds)
+      : adminQuery.or(ownershipFilters.join(','))
   }
   else {
     query = supabaseWithAuth(c, auth)
@@ -411,6 +413,36 @@ async function findApiKeyPermissionMissingForCaller(
         WHERE overrides.principal_type = public.rbac_principal_apikey()
           AND overrides.principal_id = ${apikeyRbacId}::uuid
           AND overrides.is_allowed
+
+        UNION
+
+        -- Broad org/app roles inherit channel rights. Check the caller's
+        -- explicit denies at their concrete channel, even when the key has
+        -- no channel binding or allow-override of its own.
+        SELECT denied.permission_key, channels.owner_org, channels.app_id, channels.id
+        FROM public.channel_permission_overrides AS denied
+        JOIN public.channels ON channels.id = denied.channel_id
+        WHERE denied.principal_type = public.rbac_principal_user()
+          AND denied.principal_id = ${callerUserId}::uuid
+          AND NOT denied.is_allowed
+          AND EXISTS (SELECT 1 FROM key_bindings WHERE key_bindings.org_id = channels.owner_org)
+          AND public.rbac_has_permission(
+            public.rbac_principal_apikey(), ${apikeyRbacId}::uuid,
+            denied.permission_key, channels.owner_org, channels.app_id, channels.id
+          )
+          AND (
+            NOT public.rbac_principal_has_org_binding(
+              public.rbac_principal_apikey(), ${apikeyRbacId}::uuid, channels.owner_org
+            )
+            OR NOT EXISTS (
+              SELECT 1 FROM public.channel_permission_overrides AS key_denied
+              WHERE key_denied.principal_type = public.rbac_principal_apikey()
+                AND key_denied.principal_id = ${apikeyRbacId}::uuid
+                AND key_denied.channel_id = channels.id
+                AND key_denied.permission_key = denied.permission_key
+                AND NOT key_denied.is_allowed
+            )
+          )
       )
       SELECT
         EXISTS (SELECT 1 FROM key_bindings) AS has_bindings,
@@ -432,9 +464,8 @@ async function findApiKeyPermissionMissingForCaller(
   return { hasBindings: row?.has_bindings === true, missingPermission: row?.missing_permission ?? null }
 }
 
-// Anyone who gets the secret of a shared key uses its rights, even after they
-// leave the org. Creating or regenerating one therefore requires the caller to
-// already hold every effective permission of the key.
+// Receiving a shared secret must not grant rights beyond the issuing user's
+// permissions, including narrower channel denies under a broad role.
 export async function assertCallerHoldsSharedApiKeyPermissions(
   db: DrizzleExecutor,
   auth: AuthInfo,
@@ -453,21 +484,44 @@ export async function assertCallerHoldsSharedApiKeyPermissions(
   }
 }
 
-export async function assertCallerCanTakeOverSharedApiKey(
-  c: Context<MiddlewareKeyVariables>,
+// Rotation replaces the only live secret, so its issuing user is its current
+// recipient. Expiring access grants bound the secret lifetime without a cron.
+export async function stampSharedApiKeySecretRecipient(
+  db: DrizzleExecutor,
   auth: AuthInfo,
-  targetRbacId: string,
+  apikeyRbacId: string,
 ) {
-  let pgClient: ReturnType<typeof getPgClient> | undefined
-  try {
-    pgClient = getPgClient(c)
-    await assertCallerHoldsSharedApiKeyPermissions(getDrizzleClient(pgClient), auth, targetRbacId)
+  if (auth.authType !== 'jwt' || !auth.userId) {
+    throw quickError(403, 'cannot_update_apikey', 'Only user sessions can receive shared API key secrets')
   }
-  finally {
-    if (pgClient) {
-      await closeClient(c, pgClient)
-    }
-  }
+  await db.execute(sql`
+    UPDATE public.apikeys AS apikey
+    SET shared_secret_user_id = ${auth.userId}::uuid,
+        shared_secret_expires_at = (
+          SELECT min(grants.expires_at)
+          FROM (
+            SELECT rb.expires_at
+            FROM public.role_bindings rb
+            WHERE rb.principal_type = public.rbac_principal_user()
+              AND rb.principal_id = ${auth.userId}::uuid
+              AND rb.org_id = apikey.owner_org_id
+              AND rb.expires_at > now()
+
+            UNION ALL
+
+            SELECT rb.expires_at
+            FROM public.group_members gm
+            JOIN public.role_bindings rb
+              ON rb.principal_type = public.rbac_principal_group()
+              AND rb.principal_id = gm.group_id
+              AND rb.org_id = apikey.owner_org_id
+            WHERE gm.user_id = ${auth.userId}::uuid
+              AND rb.expires_at > now()
+          ) AS grants
+        )
+    WHERE apikey.rbac_id = ${apikeyRbacId}::uuid
+      AND apikey.owner_org_id IS NOT NULL
+  `)
 }
 
 // Backend writes use a service connection, so the audit trigger cannot see the

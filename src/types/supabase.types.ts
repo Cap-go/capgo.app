@@ -90,6 +90,8 @@ export type Database = {
           key_hash: string | null
           name: string
           owner_org_id: string | null
+          shared_secret_user_id: string | null
+          shared_secret_expires_at: string | null
           rbac_id: string
           updated_at: string | null
           user_id: string
@@ -102,6 +104,8 @@ export type Database = {
           key_hash?: string | null
           name: string
           owner_org_id?: string | null
+          shared_secret_user_id?: string | null
+          shared_secret_expires_at?: string | null
           rbac_id?: string
           updated_at?: string | null
           user_id: string
@@ -114,11 +118,20 @@ export type Database = {
           key_hash?: string | null
           name?: string
           owner_org_id?: string | null
+          shared_secret_user_id?: string | null
+          shared_secret_expires_at?: string | null
           rbac_id?: string
           updated_at?: string | null
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "apikeys_shared_secret_user_id_fkey"
+            columns: ["shared_secret_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "apikeys_owner_org_id_fkey"
             columns: ["owner_org_id"]
@@ -4493,6 +4506,8 @@ export type Database = {
           key_hash: string | null
           name: string
           owner_org_id: string | null
+          shared_secret_user_id: string | null
+          shared_secret_expires_at: string | null
           rbac_id: string
           updated_at: string | null
           user_id: string
@@ -5716,6 +5731,8 @@ export type Database = {
           key_hash: string | null
           name: string
           owner_org_id: string | null
+          shared_secret_user_id: string | null
+          shared_secret_expires_at: string | null
           rbac_id: string
           updated_at: string | null
           user_id: string
@@ -5737,6 +5754,8 @@ export type Database = {
           key_hash: string | null
           name: string
           owner_org_id: string | null
+          shared_secret_user_id: string | null
+          shared_secret_expires_at: string | null
           rbac_id: string
           updated_at: string | null
           user_id: string

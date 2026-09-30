@@ -54,6 +54,8 @@ type FindApikeyByValueResult = {
   name: string
   expires_at: string | null
   owner_org_id: string | null
+  shared_secret_user_id: string | null
+  shared_secret_expires_at: string | null
 } & Record<string, unknown>
 
 /**
@@ -97,6 +99,8 @@ async function checkKeyPg(
       name: apiKey.name,
       expires_at: apiKey.expires_at,
       owner_org_id: apiKey.owner_org_id,
+      shared_secret_user_id: apiKey.shared_secret_user_id ?? null,
+      shared_secret_expires_at: apiKey.shared_secret_expires_at ?? null,
     } as Database['public']['Tables']['apikeys']['Row']
   }
   catch (e: unknown) {
@@ -149,6 +153,8 @@ async function checkKeyByIdPg(
       name: result.name,
       expires_at: result.expires_at?.toISOString() || null,
       owner_org_id: result.owner_org_id ?? null,
+      shared_secret_user_id: result.shared_secret_user_id ?? null,
+      shared_secret_expires_at: result.shared_secret_expires_at?.toISOString() ?? null,
     } as Database['public']['Tables']['apikeys']['Row']
   }
   catch (e: unknown) {

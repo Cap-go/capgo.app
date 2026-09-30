@@ -95,14 +95,28 @@ app.get('/', middlewareAuth(), async (c) => {
   let listQuery
   if (auth.authType === 'apikey') {
     const manageableOrgIds = [...await getApiKeyManageableOrgIds(c, apikey)]
-    const ownershipFilters = [`and(user_id.eq.${auth.userId},owner_org_id.is.null)`]
+    const ownershipFilters = apikey?.owner_org_id ? [] : [`and(user_id.eq.${auth.userId},owner_org_id.is.null)`]
     if (manageableOrgIds.length > 0) {
       ownershipFilters.push(`owner_org_id.in.(${manageableOrgIds.join(',')})`)
     }
-    listQuery = supabaseAdmin(c).from('apikeys').select(APIKEY_PUBLIC_COLUMNS).or(ownershipFilters.join(','))
+    const adminQuery = supabaseAdmin(c).from('apikeys').select(APIKEY_PUBLIC_COLUMNS)
+    listQuery = apikey?.owner_org_id
+      ? adminQuery.in('owner_org_id', manageableOrgIds)
+      : adminQuery.or(ownershipFilters.join(','))
   }
   else {
-    listQuery = supabaseWithAuth(c, auth).from('apikeys').select(APIKEY_PUBLIC_COLUMNS)
+    const userClient = supabaseWithAuth(c, auth)
+    const { data: manageableOrgIds, error: scopeError } = await userClient.rpc('org_owned_apikey_manageable_org_ids')
+    if (scopeError) {
+      throw quickError(500, 'failed_to_list_apikeys', 'Failed to load API key management scope', { supabaseError: scopeError })
+    }
+    // Keep the query indexed before RLS evaluates request-level policies.
+    // RLS still rechecks ownership if grants change after this lookup.
+    const ownershipFilters = [`and(user_id.eq.${auth.userId},owner_org_id.is.null)`]
+    if (manageableOrgIds?.length) {
+      ownershipFilters.push(`owner_org_id.in.(${manageableOrgIds.join(',')})`)
+    }
+    listQuery = userClient.from('apikeys').select(APIKEY_PUBLIC_COLUMNS).or(ownershipFilters.join(','))
   }
 
   const ownerOrgFilter = c.req.query('owner_org_id')

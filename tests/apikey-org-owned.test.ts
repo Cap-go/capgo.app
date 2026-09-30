@@ -5,6 +5,8 @@ import {
   executeSQL,
   getAuthHeadersForCredentials,
   getSupabaseClient,
+  SUPABASE_ANON_KEY,
+  SUPABASE_BASE_URL,
   USER_PASSWORD,
 } from './test-utils.ts'
 
@@ -198,6 +200,43 @@ describe('org-owned (shared) API keys', () => {
     expect(leaked[0]?.count).toBe(0)
   })
 
+  it('binds the issued secret to the recipient and their earliest grant expiry', async () => {
+    const expiry = new Date(Date.now() + 60_000).toISOString()
+    let issuedKeyId: number | undefined
+    try {
+      await executeSQL(`UPDATE public.role_bindings SET expires_at = $3::timestamptz
+        WHERE principal_type = 'user' AND principal_id = $1::uuid AND org_id = $2::uuid`, [managerUserId, ORG_ID, expiry])
+      const created = await apiRequest('/apikey', managerHeaders, {
+        method: 'POST',
+        body: {
+          name: 'shared-recipient-expiry',
+          owner_org_id: ORG_ID,
+          bindings: [{ role_name: 'apikey_manager', scope_type: 'org', org_id: ORG_ID }],
+        },
+      })
+      expect(created.status).toBe(200)
+      const issued = await created.json() as ApiKeyResponse
+      issuedKeyId = issued.id
+      const [recipient] = await executeSQL<{ user_id: string, expiry: Date }>(`
+        SELECT shared_secret_user_id::text AS user_id, shared_secret_expires_at AS expiry
+        FROM public.apikeys WHERE id = $1`, [issued.id])
+      expect(recipient?.user_id).toBe(managerUserId)
+      expect(new Date(recipient!.expiry).toISOString()).toBe(expiry)
+      const beforeChange = await apiRequest('/organization', { capgkey: issued.key! })
+      expect(beforeChange.status).toBe(200)
+      await executeSQL(`UPDATE public.role_bindings SET expires_at = NULL
+        WHERE principal_type = 'user' AND principal_id = $1::uuid AND org_id = $2::uuid`, [managerUserId, ORG_ID])
+      const afterChange = await apiRequest('/organization', { capgkey: issued.key! })
+      expect(afterChange.status).toBe(401)
+    }
+    finally {
+      await executeSQL(`UPDATE public.role_bindings SET expires_at = NULL
+        WHERE principal_type = 'user' AND principal_id = $1::uuid AND org_id = $2::uuid`, [managerUserId, ORG_ID])
+      if (issuedKeyId !== undefined)
+        await getSupabaseClient().from('apikeys').delete().eq('id', issuedKeyId)
+    }
+  })
+
   it('lists the shared key for org key managers but not for members', async () => {
     const managerResponse = await apiRequest('/apikey?shared=true', managerHeaders)
     expect(managerResponse.status).toBe(200)
@@ -218,6 +257,54 @@ describe('org-owned (shared) API keys', () => {
   it('authenticates requests with the shared key', async () => {
     const response = await apiRequest('/organization', { capgkey: sharedKeySecret })
     expect(response.status).toBe(200)
+  })
+
+  it('keeps shared callers away from attributed user personal keys', async () => {
+    const personalResponse = await apiRequest('/apikey', adminHeaders, {
+      method: 'POST',
+      body: { name: 'personal-isolation', hashed: true, bindings: [orgMemberBinding()] },
+    })
+    expect(personalResponse.status).toBe(200)
+    const personal = await personalResponse.json() as ApiKeyResponse
+    const managerResponse = await apiRequest('/apikey', adminHeaders, {
+      method: 'POST',
+      body: {
+        name: 'shared-manager-isolation',
+        owner_org_id: ORG_ID,
+        bindings: [{ role_name: 'apikey_manager', scope_type: 'org', org_id: ORG_ID }],
+      },
+    })
+    expect(managerResponse.status).toBe(200)
+    const manager = await managerResponse.json() as ApiKeyResponse
+    const sharedHeaders = { capgkey: manager.key! }
+    try {
+      const listed = await apiRequest('/apikey', sharedHeaders)
+      expect(listed.status).toBe(200)
+      const keys = await listed.json() as ApiKeyResponse[]
+      expect(keys.some(key => key.id === personal.id)).toBe(false)
+      expect(keys.every(key => key.owner_org_id === ORG_ID)).toBe(true)
+      for (const request of [
+        {},
+        { method: 'PUT', body: { name: 'stolen-personal-key' } },
+        { method: 'PUT', body: { regenerate: true } },
+        { method: 'DELETE' },
+      ]) {
+        const response = await apiRequest(`/apikey/${personal.id}`, sharedHeaders, request)
+        expect(response.status).toBe(404)
+      }
+      const rpcResponse = await fetch(`${SUPABASE_BASE_URL}/rest/v1/rpc/regenerate_hashed_apikey`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY, ...sharedHeaders },
+        body: JSON.stringify({ p_apikey_id: personal.id }),
+      })
+      expect(rpcResponse.status).toBe(401)
+      await expect(rpcResponse.json()).resolves.toMatchObject({ code: '42501' })
+      const stillOwned = await apiRequest(`/apikey/${personal.id}`, adminHeaders)
+      expect(stillOwned.status).toBe(200)
+    }
+    finally {
+      await getSupabaseClient().from('apikeys').delete().in('id', [personal.id, manager.id])
+    }
   })
 
   it('does not let a lower-privileged key manager take over the key by regenerating it', async () => {
@@ -288,6 +375,17 @@ describe('org-owned (shared) API keys', () => {
       .single()
     expect(channelError).toBeNull()
 
+    const broadResponse = await apiRequest('/apikey', adminHeaders, {
+      method: 'POST',
+      body: {
+        name: 'shared-broad-channel-deny',
+        owner_org_id: ORG_ID,
+        bindings: [{ role_name: 'org_admin', scope_type: 'org', org_id: ORG_ID }],
+      },
+    })
+    expect(broadResponse.status).toBe(200)
+    const broadKey = await broadResponse.json() as ApiKeyResponse
+
     // The key gets promote on this channel through an allow-override; the admin
     // is explicitly denied promote there, so regenerating would escalate.
     await executeSQL(`
@@ -298,6 +396,20 @@ describe('org-owned (shared) API keys', () => {
     `, [sharedKeyId, channel!.id, adminUserId])
 
     try {
+      const broadRotation = await apiRequest(`/apikey/${broadKey.id}`, adminHeaders, {
+        method: 'PUT',
+        body: { regenerate: true },
+      })
+      expect(broadRotation.status).toBe(403)
+      const broadCreation = await apiRequest('/apikey', adminHeaders, {
+        method: 'POST',
+        body: {
+          name: 'shared-broad-channel-deny-new',
+          owner_org_id: ORG_ID,
+          bindings: [{ role_name: 'org_admin', scope_type: 'org', org_id: ORG_ID }],
+        },
+      })
+      expect(broadCreation.status).toBe(403)
       const response = await apiRequest(`/apikey/${sharedKeyId}`, adminHeaders, {
         method: 'PUT',
         body: { regenerate: true },
@@ -306,10 +418,15 @@ describe('org-owned (shared) API keys', () => {
       await expect(response.text()).resolves.toContain('channel.promote_bundle')
     }
     finally {
+      await supabase.from('apikeys').delete().eq('id', broadKey.id)
       await executeSQL('DELETE FROM public.channel_permission_overrides WHERE channel_id = $1', [channel!.id])
       await supabase.from('channels').delete().eq('app_id', appId)
       await supabase.from('app_versions').delete().eq('app_id', appId)
       await supabase.from('apps').delete().eq('app_id', appId)
+      const restored = await apiRequest(`/apikey/${sharedKeyId}`, adminHeaders, { method: 'PUT', body: { regenerate: true } })
+      expect(restored.status).toBe(200)
+      const restoredKey = await restored.json() as ApiKeyResponse
+      sharedKeySecret = restoredKey.key!
     }
   })
 
@@ -318,7 +435,9 @@ describe('org-owned (shared) API keys', () => {
     expect(response.status).toBe(404)
   })
 
-  it('keeps working with unchanged privileges after its creator leaves the org', async () => {
+  it('keeps bindings but revokes the copied secret after its recipient leaves the org', async () => {
+    const authorizedBeforeDeparture = await apiRequest('/organization', { capgkey: sharedKeySecret })
+    expect(authorizedBeforeDeparture.status).toBe(200)
     const before = await executeSQL(`
       SELECT count(*)::int AS count FROM public.role_bindings rb
       JOIN public.apikeys a ON a.rbac_id = rb.principal_id
@@ -338,7 +457,7 @@ describe('org-owned (shared) API keys', () => {
     expect(after[0]?.count).toBe(before[0]?.count)
 
     const stillWorks = await apiRequest('/organization', { capgkey: sharedKeySecret })
-    expect(stillWorks.status).toBe(200)
+    expect(stillWorks.status).toBe(401)
   })
 
   it('records shared key changes in the owner org audit log with the real actor', async () => {

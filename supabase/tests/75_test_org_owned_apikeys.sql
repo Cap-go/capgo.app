@@ -2,7 +2,12 @@
 -- and attribution-only transfer when the attributed user leaves.
 BEGIN;
 
-SELECT plan(30);
+SELECT plan(44);
+
+SELECT ok(NOT has_function_privilege('anon', 'public.lock_channel_override_orgs()', 'EXECUTE'),
+  'anonymous callers cannot directly invoke the override lock trigger');
+SELECT ok(NOT has_function_privilege('authenticated', 'public.lock_channel_override_orgs()', 'EXECUTE'),
+  'user sessions cannot directly invoke the override lock trigger');
 
 SELECT tests.create_supabase_user('shared_key_owner', 'shared-key-owner@test.local');
 SELECT tests.create_supabase_user('shared_key_creator', 'shared-key-creator@test.local');
@@ -126,6 +131,8 @@ JOIN public.roles
   ON public.roles.name = public.rbac_role_org_member()
   AND public.roles.scope_type = public.rbac_scope_org()
 WHERE public.apikeys.id IN (75000001, 75000002);
+
+UPDATE public.apikeys SET shared_secret_user_id = tests.get_supabase_uid('shared_key_owner') WHERE id IN (75000001, 75000002);
 
 INSERT INTO public.apps (app_id, icon_url, user_id, name, owner_org)
 VALUES (
@@ -313,6 +320,81 @@ SELECT set_config('request.headers', '{}', true);
 SELECT tests.authenticate_as_service_role();
 SET LOCAL ROLE postgres;
 
+-- A shared manager cannot use attribution to rotate a personal key.
+INSERT INTO public.apikeys (id, user_id, key_hash, name, owner_org_id)
+VALUES (75000005, tests.get_supabase_uid('shared_key_creator'),
+  encode(extensions.digest('shared-manager-secret-75000005', 'sha256'), 'hex'),
+  'Shared manager', '75000000-0000-4000-8000-000000000001');
+INSERT INTO public.role_bindings (principal_type, principal_id, role_id, scope_type, org_id, granted_by)
+SELECT 'apikey', a.rbac_id, r.id, 'org', a.owner_org_id, a.user_id
+FROM public.apikeys a JOIN public.roles r ON r.name = 'apikey_manager' AND r.scope_type = 'org'
+WHERE a.id = 75000005;
+UPDATE public.apikeys SET shared_secret_user_id = tests.get_supabase_uid('shared_key_owner') WHERE id = 75000005;
+SELECT tests.clear_authentication();
+SET LOCAL ROLE anon;
+SELECT set_config('request.headers', '{"capgkey":"shared-manager-secret-75000005"}', true);
+SELECT throws_ok(
+  $$SELECT public.regenerate_hashed_apikey(75000003)$$,
+  '42501', 'PERMISSION_DENIED_PERSONAL_APIKEY',
+  'shared manager cannot rotate attributed user personal keys through RPC'
+);
+SELECT tests.authenticate_as('shared_key_creator');
+SELECT lives_ok(
+  $$SELECT public.regenerate_hashed_apikey(75000003)$$,
+  'JWT user retains priority over an accompanying shared capgkey'
+);
+SELECT set_config('request.headers', '{}', true);
+SELECT tests.clear_authentication();
+SELECT tests.authenticate_as_service_role();
+SET LOCAL "request.jwt.claim.role" = 'service_role';
+SET LOCAL ROLE postgres;
+DELETE FROM public.apikeys WHERE id = 75000005;
+
+-- Secret expiry stops authorization without waiting for cron cleanup.
+UPDATE public.apikeys SET shared_secret_expires_at = now() - interval '1 second' WHERE id = 75000002;
+SELECT is((SELECT count(*)::int FROM public.find_apikey_by_value('shared-key-plain-75000002')), 0,
+  'shared secret stops at recipient supporting binding expiry');
+UPDATE public.apikeys SET shared_secret_expires_at = NULL WHERE id = 75000002;
+SAVEPOINT shared_key_privilege_increase;
+UPDATE public.role_bindings SET role_id = (SELECT id FROM public.roles WHERE name = 'org_admin' AND scope_type = 'org')
+WHERE principal_type = 'apikey' AND principal_id = (SELECT rbac_id FROM public.apikeys WHERE id = 75000002);
+SELECT is((SELECT count(*)::int FROM public.find_apikey_by_value('shared-key-plain-75000002')), 0,
+  'increasing key privileges revokes the previously copied secret');
+ROLLBACK TO SAVEPOINT shared_key_privilege_increase;
+
+SAVEPOINT shared_key_recipient_downgrade;
+UPDATE public.apikeys SET shared_secret_user_id = tests.get_supabase_uid('shared_key_creator') WHERE id = 75000002;
+UPDATE public.role_bindings SET role_id = (SELECT id FROM public.roles WHERE name = 'org_member' AND scope_type = 'org')
+WHERE principal_type = 'user' AND principal_id = tests.get_supabase_uid('shared_key_creator')
+  AND org_id = '75000000-0000-4000-8000-000000000001';
+SELECT is((SELECT count(*)::int FROM public.find_apikey_by_value('shared-key-plain-75000002')), 0,
+  'recipient role downgrade revokes their copied shared secret');
+ROLLBACK TO SAVEPOINT shared_key_recipient_downgrade;
+
+SAVEPOINT shared_key_group_revocation;
+INSERT INTO public.groups (id, org_id, name, created_by)
+VALUES ('75000000-0000-4000-8000-000000000004', '75000000-0000-4000-8000-000000000001',
+  'Shared secret recipient group', tests.get_supabase_uid('shared_key_owner'));
+INSERT INTO public.group_members (group_id, user_id, added_by)
+VALUES ('75000000-0000-4000-8000-000000000004', tests.get_supabase_uid('shared_key_creator'), tests.get_supabase_uid('shared_key_owner'));
+INSERT INTO public.role_bindings (principal_type, principal_id, role_id, scope_type, org_id, granted_by)
+SELECT 'group', '75000000-0000-4000-8000-000000000004', r.id, 'org', '75000000-0000-4000-8000-000000000001', tests.get_supabase_uid('shared_key_owner')
+FROM public.roles r WHERE r.name = 'org_member' AND r.scope_type = 'org';
+UPDATE public.apikeys SET shared_secret_user_id = tests.get_supabase_uid('shared_key_creator') WHERE id = 75000002;
+SAVEPOINT shared_key_group_mutation;
+DELETE FROM public.group_members WHERE group_id = '75000000-0000-4000-8000-000000000004';
+SELECT is((SELECT count(*)::int FROM public.find_apikey_by_value('shared-key-plain-75000002')), 0,
+  'recipient group removal revokes their copied shared secret');
+ROLLBACK TO SAVEPOINT shared_key_group_mutation;
+DELETE FROM public.role_bindings WHERE principal_type = 'group' AND principal_id = '75000000-0000-4000-8000-000000000004';
+SELECT is((SELECT count(*)::int FROM public.find_apikey_by_value('shared-key-plain-75000002')), 0,
+  'group role removal revokes member copied shared secrets');
+ROLLBACK TO SAVEPOINT shared_key_group_mutation;
+DELETE FROM public.groups WHERE id = '75000000-0000-4000-8000-000000000004';
+SELECT is((SELECT count(*)::int FROM public.find_apikey_by_value('shared-key-plain-75000002')), 0,
+  'group deletion revokes secrets before cascading away memberships');
+ROLLBACK TO SAVEPOINT shared_key_group_revocation;
+
 -- Creator leaves the org: shared key is reassigned, its bindings stay intact
 DELETE FROM public.org_users
 WHERE org_id = '75000000-0000-4000-8000-000000000001'
@@ -396,6 +478,42 @@ SELECT is(
   0,
   'personal key is deleted with its owner account'
 );
+
+-- Deleting an org creator must not cascade the organization before transfer.
+SELECT tests.create_supabase_user('shared_key_org_creator', 'shared-key-org-creator@test.local');
+INSERT INTO public.users (id, email)
+VALUES (tests.get_supabase_uid('shared_key_org_creator'), 'shared-key-org-creator@test.local')
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO public.orgs (id, created_by, name, management_email)
+VALUES ('75000000-0000-4000-8000-000000000003', tests.get_supabase_uid('shared_key_org_creator'),
+  'Creator deletion org', 'creator-deletion@test.local');
+INSERT INTO public.org_users (org_id, user_id, rbac_role_name, is_invite)
+SELECT '75000000-0000-4000-8000-000000000003', tests.get_supabase_uid(identifier), 'org_super_admin', false
+FROM (VALUES ('shared_key_org_creator'), ('shared_key_owner')) AS fixture(identifier);
+INSERT INTO public.role_bindings (principal_type, principal_id, role_id, scope_type, org_id, granted_by)
+SELECT 'user', tests.get_supabase_uid(identifier), r.id, 'org', '75000000-0000-4000-8000-000000000003', tests.get_supabase_uid('shared_key_owner')
+FROM (VALUES ('shared_key_org_creator'), ('shared_key_owner')) AS fixture(identifier)
+JOIN public.roles r ON r.name = 'org_super_admin' AND r.scope_type = 'org'
+ON CONFLICT DO NOTHING;
+INSERT INTO public.apikeys (id, user_id, key_hash, name, owner_org_id)
+VALUES (75000006, tests.get_supabase_uid('shared_key_org_creator'),
+  encode(extensions.digest('creator-deletion-shared-key', 'sha256'), 'hex'),
+  'Creator deletion key', '75000000-0000-4000-8000-000000000003');
+INSERT INTO public.role_bindings (principal_type, principal_id, role_id, scope_type, org_id, granted_by)
+SELECT 'apikey', a.rbac_id, r.id, 'org', a.owner_org_id, a.user_id
+FROM public.apikeys a JOIN public.roles r ON r.name = 'org_member' AND r.scope_type = 'org'
+WHERE a.id = 75000006;
+UPDATE public.apikeys SET shared_secret_user_id = tests.get_supabase_uid('shared_key_org_creator') WHERE id = 75000006;
+DELETE FROM auth.users WHERE id = tests.get_supabase_uid('shared_key_org_creator');
+SELECT is((SELECT created_by FROM public.orgs WHERE id = '75000000-0000-4000-8000-000000000003'),
+  tests.get_supabase_uid('shared_key_owner'), 'organization survives creator auth deletion with successor');
+SELECT is((SELECT user_id FROM public.apikeys WHERE id = 75000006),
+  tests.get_supabase_uid('shared_key_owner'), 'shared key survives org creator auth deletion');
+SELECT is((SELECT count(*)::int FROM public.role_bindings WHERE principal_type = 'apikey'
+  AND principal_id = (SELECT rbac_id FROM public.apikeys WHERE id = 75000006)),
+  1, 'shared key bindings survive org creator auth deletion');
+SELECT is((SELECT count(*)::int FROM public.find_apikey_by_value('creator-deletion-shared-key')), 0,
+  'copied shared secret is revoked when its recipient account is deleted');
 
 -- Shared keys never rotate through the personal compatibility RPC
 SELECT tests.authenticate_as('shared_key_owner');

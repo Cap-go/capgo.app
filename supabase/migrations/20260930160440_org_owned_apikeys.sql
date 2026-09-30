@@ -7,11 +7,18 @@
 -- holding org.manage_apikeys in the owner org instead of by their creator.
 -- When the attributed user leaves the org or deletes their account, the key is
 -- reassigned to a durable org super admin (or deleted when none exists), so
--- CI keys survive staff changes without any change in the key's privileges.
+-- Key rows and privileges survive staff changes. Issued secrets are revoked
+-- when their recipient's access changes and must be regenerated for CI.
 -- Multi-org keys stay personal and keep the existing user-owned lifecycle.
 
 ALTER TABLE public.apikeys
-ADD COLUMN owner_org_id uuid;
+ADD COLUMN owner_org_id uuid,
+ADD COLUMN shared_secret_user_id uuid REFERENCES public.users(id) ON DELETE SET NULL,
+ADD COLUMN shared_secret_expires_at timestamptz;
+
+CREATE INDEX apikeys_shared_secret_recipient_idx
+ON public.apikeys (shared_secret_user_id, owner_org_id)
+WHERE owner_org_id IS NOT NULL AND shared_secret_user_id IS NOT NULL;
 
 ALTER TABLE public.apikeys
 ADD CONSTRAINT apikeys_owner_org_id_fkey
@@ -24,6 +31,15 @@ CHECK (owner_org_id IS NULL OR key_hash IS NOT NULL);
 CREATE INDEX apikeys_owner_org_id_idx
 ON public.apikeys USING btree (owner_org_id)
 WHERE owner_org_id IS NOT NULL;
+
+CREATE INDEX apikeys_personal_user_id_idx
+ON public.apikeys USING btree (user_id)
+WHERE owner_org_id IS NULL;
+
+-- MFA depends on the request, not the key row. Evaluate it once per statement
+-- as shared-key visibility broadens beyond the attributed user's own keys.
+ALTER POLICY "Prevent non 2FA access" ON public.apikeys
+USING ((SELECT public.verify_mfa()));
 
 COMMENT ON COLUMN public.apikeys.owner_org_id IS
 'When set, the key is shared with (owned by) this organization: bindings are limited to this org, it is managed through org.manage_apikeys, and user_id is attribution only.';
@@ -224,7 +240,21 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
 AS $$
+DECLARE
+  v_org_id uuid;
+  v_successor_id uuid;
 BEGIN
+  -- Preserve the organization before its created_by foreign key cascades.
+  FOR v_org_id IN
+    SELECT orgs.id FROM public.orgs WHERE orgs.created_by = OLD.id ORDER BY orgs.id
+  LOOP
+    PERFORM public.lock_rbac_orgs(v_org_id);
+    v_successor_id := public.org_owned_apikey_successor_user_id(v_org_id, OLD.id);
+    IF v_successor_id IS NOT NULL THEN
+      UPDATE public.orgs SET created_by = v_successor_id WHERE id = v_org_id;
+    END IF;
+  END LOOP;
+
   PERFORM public.transfer_org_owned_apikeys_from_user(OLD.id);
   RETURN OLD;
 END;
@@ -471,7 +501,21 @@ DECLARE
   v_org_id uuid;
   v_has_org_binding boolean := false;
   v_caller_apikey text;
+  v_caller_key public.apikeys%ROWTYPE;
 BEGIN
+  -- Shared-key user_id is attribution only, never ownership of personal keys.
+  -- An authenticated JWT retains priority over an accompanying capgkey.
+  IF auth.uid() IS NULL THEN
+    v_caller_apikey := public.get_apikey_header();
+    SELECT * INTO v_caller_key
+    FROM public.find_apikey_by_value(v_caller_apikey)
+    LIMIT 1;
+    IF v_caller_key.owner_org_id IS NOT NULL THEN
+      RAISE EXCEPTION 'PERMISSION_DENIED_PERSONAL_APIKEY'
+        USING ERRCODE = '42501';
+    END IF;
+  END IF;
+
   v_user_id := public.request_actor_user_id();
   IF v_user_id IS NULL THEN
     RAISE EXCEPTION 'No authentication provided';
@@ -1270,3 +1314,210 @@ BEGIN
   RETURN public.is_app_owner(public.get_user_id(apikey), appid);
 END;
 $$;
+
+
+-- Binding cleanup must not update the key tuple currently being deleted.
+CREATE OR REPLACE FUNCTION public.cleanup_apikey_role_bindings()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_previous_deleting_principal text;
+BEGIN
+  v_previous_deleting_principal := pg_catalog.current_setting('capgo.deleting_apikey_principal', true);
+  PERFORM pg_catalog.set_config('capgo.deleting_apikey_principal', OLD.rbac_id::text, true);
+  DELETE FROM public.role_bindings
+  WHERE principal_type = public.rbac_principal_apikey() AND principal_id = OLD.rbac_id;
+  PERFORM pg_catalog.set_config('capgo.deleting_apikey_principal', COALESCE(v_previous_deleting_principal, ''), true);
+  RETURN OLD;
+END;
+$$;
+ALTER FUNCTION public.cleanup_apikey_role_bindings() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.cleanup_apikey_role_bindings() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.cleanup_apikey_role_bindings() TO service_role;
+
+-- Shared secrets belong to the last user who received them. Invalidate copied
+-- secrets on relevant authorization changes; rotations issue a fresh secret.
+-- BEFORE triggers run alphabetically. The existing priority trigger must take
+-- the org lock before the principal lock, matching shared secret issuance.
+ALTER TRIGGER lock_rbac_apikey_principal_on_binding ON public.role_bindings
+RENAME TO serialize_apikey_binding_principal;
+
+CREATE OR REPLACE FUNCTION public.lock_channel_override_orgs()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_old_org_id uuid;
+  v_new_org_id uuid;
+BEGIN
+  IF TG_OP <> 'INSERT' THEN
+    SELECT channels.owner_org INTO v_old_org_id
+    FROM public.channels WHERE channels.id = OLD.channel_id;
+  END IF;
+  IF TG_OP <> 'DELETE' THEN
+    SELECT channels.owner_org INTO v_new_org_id
+    FROM public.channels WHERE channels.id = NEW.channel_id;
+  END IF;
+  -- Permission changes must wait for issuance before looking for recipients.
+  PERFORM public.lock_rbac_orgs(v_old_org_id, v_new_org_id);
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+ALTER FUNCTION public.lock_channel_override_orgs() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.lock_channel_override_orgs() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.lock_channel_override_orgs() TO service_role;
+
+CREATE TRIGGER lock_channel_override_orgs
+BEFORE INSERT OR UPDATE OR DELETE ON public.channel_permission_overrides
+FOR EACH ROW EXECUTE FUNCTION public.lock_channel_override_orgs();
+
+CREATE OR REPLACE FUNCTION public.invalidate_shared_apikey_secrets(p_user_id uuid, p_org_id uuid)
+RETURNS void
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  UPDATE public.apikeys
+  SET key = NULL,
+      key_hash = pg_catalog.encode(extensions.digest(pg_catalog.gen_random_uuid()::text, 'sha256'), 'hex'),
+      shared_secret_user_id = NULL,
+      shared_secret_expires_at = NULL
+  WHERE shared_secret_user_id = p_user_id
+    AND owner_org_id = p_org_id;
+$$;
+ALTER FUNCTION public.invalidate_shared_apikey_secrets(uuid, uuid) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.invalidate_shared_apikey_secrets(uuid, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.invalidate_shared_apikey_secrets(uuid, uuid) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.revoke_shared_apikey_secrets_on_authorization_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_record jsonb;
+  v_principal_type text;
+  v_principal_id uuid;
+  v_org_id uuid;
+BEGIN
+  IF TG_TABLE_NAME = 'groups' THEN
+    UPDATE public.apikeys
+    SET key = NULL,
+        key_hash = pg_catalog.encode(extensions.digest(pg_catalog.gen_random_uuid()::text, 'sha256'), 'hex'),
+        shared_secret_user_id = NULL,
+        shared_secret_expires_at = NULL
+    WHERE owner_org_id = OLD.org_id
+      AND shared_secret_user_id IN (
+        SELECT members.user_id FROM public.group_members members WHERE members.group_id = OLD.id
+      );
+    RETURN OLD;
+  END IF;
+
+  -- Check both sides of UPDATE when a principal or scope moves.
+  FOR v_record IN
+    SELECT record FROM (
+      SELECT CASE WHEN TG_OP <> 'INSERT' THEN pg_catalog.to_jsonb(OLD) END AS record
+      UNION
+      SELECT CASE WHEN TG_OP <> 'DELETE' THEN pg_catalog.to_jsonb(NEW) END
+    ) AS records WHERE record IS NOT NULL
+  LOOP
+    IF TG_TABLE_NAME = 'group_members' THEN
+      SELECT groups.org_id INTO v_org_id FROM public.groups WHERE groups.id = (v_record->>'group_id')::uuid;
+      PERFORM public.invalidate_shared_apikey_secrets((v_record->>'user_id')::uuid, v_org_id);
+      CONTINUE;
+    END IF;
+
+    v_principal_type := v_record->>'principal_type';
+    IF TG_TABLE_NAME = 'role_bindings' AND TG_OP = 'INSERT' AND v_principal_type <> 'apikey' THEN
+      CONTINUE;
+    END IF;
+    v_principal_id := (v_record->>'principal_id')::uuid;
+    IF TG_TABLE_NAME = 'channel_permission_overrides' THEN
+      SELECT channels.owner_org INTO v_org_id FROM public.channels WHERE channels.id = (v_record->>'channel_id')::bigint;
+    ELSE
+      v_org_id := (v_record->>'org_id')::uuid;
+    END IF;
+
+    IF v_principal_type = 'apikey' THEN
+      IF v_principal_id::text = pg_catalog.current_setting('capgo.deleting_apikey_principal', true) THEN
+        CONTINUE;
+      END IF;
+      UPDATE public.apikeys
+      SET key = NULL,
+          key_hash = pg_catalog.encode(extensions.digest(pg_catalog.gen_random_uuid()::text, 'sha256'), 'hex'),
+          shared_secret_user_id = NULL,
+          shared_secret_expires_at = NULL
+      WHERE rbac_id = v_principal_id
+        AND owner_org_id IS NOT NULL
+        AND shared_secret_user_id IS NOT NULL;
+    ELSIF v_principal_type = 'user' THEN
+      PERFORM public.invalidate_shared_apikey_secrets(v_principal_id, v_org_id);
+    ELSIF v_principal_type = 'group' THEN
+      UPDATE public.apikeys
+      SET key = NULL,
+          key_hash = pg_catalog.encode(extensions.digest(pg_catalog.gen_random_uuid()::text, 'sha256'), 'hex'),
+          shared_secret_user_id = NULL,
+          shared_secret_expires_at = NULL
+      WHERE owner_org_id = v_org_id
+        AND shared_secret_user_id IN (
+          SELECT members.user_id FROM public.group_members members WHERE members.group_id = v_principal_id
+        );
+    END IF;
+  END LOOP;
+  RETURN NULL;
+END;
+$$;
+ALTER FUNCTION public.revoke_shared_apikey_secrets_on_authorization_change() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.revoke_shared_apikey_secrets_on_authorization_change() FROM PUBLIC, anon, authenticated;
+
+CREATE TRIGGER revoke_shared_apikey_secrets_on_binding_change
+AFTER INSERT OR UPDATE OR DELETE ON public.role_bindings
+FOR EACH ROW EXECUTE FUNCTION public.revoke_shared_apikey_secrets_on_authorization_change();
+CREATE TRIGGER revoke_shared_apikey_secrets_on_group_delete
+BEFORE DELETE ON public.groups
+FOR EACH ROW EXECUTE FUNCTION public.revoke_shared_apikey_secrets_on_authorization_change();
+CREATE TRIGGER revoke_shared_apikey_secrets_on_group_member_change
+AFTER UPDATE OR DELETE ON public.group_members
+FOR EACH ROW EXECUTE FUNCTION public.revoke_shared_apikey_secrets_on_authorization_change();
+CREATE TRIGGER revoke_shared_apikey_secrets_on_channel_override_change
+AFTER INSERT OR UPDATE OR DELETE ON public.channel_permission_overrides
+FOR EACH ROW EXECUTE FUNCTION public.revoke_shared_apikey_secrets_on_authorization_change();
+
+-- Keep indexed hash/plain lookups. A shared key without an issued recipient,
+-- or past the earliest supporting user/group binding expiry, cannot authorize.
+CREATE OR REPLACE FUNCTION public.find_apikey_by_value(key_value text)
+RETURNS SETOF public.apikeys
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  apikey_row public.apikeys%ROWTYPE;
+  key_value_hash text;
+BEGIN
+  IF key_value IS NULL OR key_value = '' THEN RETURN; END IF;
+  key_value_hash := pg_catalog.encode(extensions.digest(key_value, 'sha256'), 'hex');
+  SELECT apikeys.* INTO apikey_row FROM public.apikeys WHERE apikeys.key_hash = key_value_hash LIMIT 1;
+  IF apikey_row.id IS NULL THEN
+    SELECT apikeys.* INTO apikey_row FROM public.apikeys WHERE apikeys.key = key_value LIMIT 1;
+  END IF;
+  IF apikey_row.id IS NULL OR NOT public.check_apikey_hashed_key_enforcement(apikey_row) THEN RETURN; END IF;
+  IF apikey_row.owner_org_id IS NOT NULL AND (
+    apikey_row.shared_secret_user_id IS NULL
+    OR apikey_row.shared_secret_expires_at <= pg_catalog.now()
+  ) THEN RETURN; END IF;
+  RETURN NEXT apikey_row;
+END;
+$$;
+ALTER FUNCTION public.find_apikey_by_value(text) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.find_apikey_by_value(text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.find_apikey_by_value(text) TO service_role;

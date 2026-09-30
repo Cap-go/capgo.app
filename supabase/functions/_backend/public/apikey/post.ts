@@ -11,7 +11,7 @@ import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
 import { checkPermissionPg } from '../../utils/rbac.ts'
 import { assertExpirationMatchesOrgPolicies, validateExpirationDate } from '../../utils/supabase.ts'
 import { parseApiKeyGlobalPermissions, replaceApiKeyGlobalPermissions, validateApiKeyGlobalPermissionsForBindings } from './global_permissions.ts'
-import { assertApiKeyManagerCanAssignBindings, assertCallerHoldsSharedApiKeyPermissions, ensureApiKeyManagementAllowed, requireApiKeyManagementAuth, requireJwtMfaForPrivilegedAction, sanitizeClientBindings, setApiKeyAuditActor } from './scope.ts'
+import { assertApiKeyManagerCanAssignBindings, assertCallerHoldsSharedApiKeyPermissions, ensureApiKeyManagementAllowed, requireApiKeyManagementAuth, requireJwtMfaForPrivilegedAction, sanitizeClientBindings, setApiKeyAuditActor, stampSharedApiKeySecretRecipient } from './scope.ts'
 
 type BindingInput = ClientBindingInput
 type ApiKeyRow = Database['public']['Tables']['apikeys']['Row']
@@ -259,10 +259,11 @@ app.post('/', middlewareAuth(), async (c) => {
       }
 
       // Role rank and app/channel checks above do not cover org.* permissions.
-      // The secret of a shared key outlives the caller's membership, so the
-      // caller must already hold everything the new key can do.
+      // The caller must hold everything the new key can do before receiving
+      // its secret, and losing access must invalidate that secret.
       if (ownerOrgId !== null) {
         await assertCallerHoldsSharedApiKeyPermissions(txDrizzle, auth, apikeyData.rbac_id)
+        await stampSharedApiKeySecretRecipient(txDrizzle, auth, apikeyData.rbac_id)
       }
     })
 
