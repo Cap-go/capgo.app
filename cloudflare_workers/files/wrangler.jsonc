@@ -47,6 +47,7 @@
         "ENV_NAME": "capgo_files-prod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "enabled": true,
         "head_sampling_rate": 0.001
       },
@@ -155,6 +156,7 @@
         "ENV_NAME": "capgo_files-preprod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "enabled": true
       },
       "hyperdrive": [
@@ -218,6 +220,7 @@
         "ENV_NAME": "capgo_files-alpha"
       },
       "observability": {
+        "issues": { "enabled": true },
         "enabled": true
       },
       "routes": [
