@@ -144,4 +144,48 @@ export function buildNormalizedDeviceForWrite(device: DeviceWithoutCreatedAt) {
   }
 }
 
+/**
+ * Max age of a per-colo "device unchanged" cache entry before trackDevicesCF
+ * forces a fresh DEVICE_INFO write anyway.
+ *
+ * Analytics Engine keeps ~90 days of data and device lists / version counts read
+ * the latest row per device, so an unchanged device must be re-written well
+ * inside that window or it ages out. The colo cache can also hold a stale
+ * version for a device that later moved (for example rolled back) while routed
+ * through another colo; re-writing daily bounds that staleness to one day. One
+ * day means at most one extra AE write per active, unchanged device per colo
+ * per day.
+ */
+export const DEVICE_INFO_REFRESH_TTL_SECONDS = 86400
+
+export interface DeviceInfoWriteCachePayload extends DeviceComparable {
+  app_id: string
+  device_id: string
+  /** ISO timestamp of the last DEVICE_INFO write this entry represents. */
+  cached_at: string
+}
+
+/**
+ * True when the colo cache proves an identical DEVICE_INFO row was written
+ * recently enough that this write can be skipped.
+ */
+export function canSkipDeviceInfoWrite(
+  cached: DeviceInfoWriteCachePayload | null | undefined,
+  device: DeviceWithoutCreatedAt,
+  nowMs: number = Date.now(),
+  refreshTtlSeconds: number = DEVICE_INFO_REFRESH_TTL_SECONDS,
+) {
+  if (!cached)
+    return false
+  const cachedAtMs = typeof cached.cached_at === 'string' ? Date.parse(cached.cached_at) : Number.NaN
+  // Entries without a usable write timestamp force a refresh.
+  if (!Number.isFinite(cachedAtMs))
+    return false
+  const ageMs = nowMs - cachedAtMs
+  // A future timestamp (clock skew) is treated as stale rather than trusted.
+  if (ageMs < 0 || ageMs >= refreshTtlSeconds * 1000)
+    return false
+  return !hasComparableDeviceChanged(cached, device)
+}
+
 export { normalizeOptionalString as nullableString }

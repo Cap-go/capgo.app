@@ -1,9 +1,10 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { VersionUsageChannel } from '../utils/types.ts'
 import { HTTPException } from 'hono/http-exception'
 import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
-import { escapeSqlString, formatDateCF, runQueryToCFA } from '../utils/cloudflare.ts'
+import { buildVersionUsageChannelFilterCF, escapeSqlString, formatDateCF, runQueryToCFA } from '../utils/cloudflare.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
@@ -183,7 +184,10 @@ function computeAdoption(counts: Record<string, number>, versionName: string) {
   }
 }
 
-function buildSeriesQueryCF(appId: string, versionName: string, startMs: number, endMs: number, bucketMinutes: number) {
+function buildSeriesQueryCF(appId: string, versionName: string, startMs: number, endMs: number, bucketMinutes: number, channel?: VersionUsageChannel) {
+  // Older `get` rows carry no channel; keep them so a channel view does not lose
+  // them while they age out (the release window is at most 72h).
+  const channelFilter = buildVersionUsageChannelFilterCF(channel, { includeUnattributedGets: true })
   return `SELECT
   toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL '${bucketMinutes}' MINUTE)) AS bucket,
   sum(if(blob3 = 'get', _sample_interval, 0)) AS get,
@@ -195,6 +199,7 @@ WHERE
   AND blob2 = '${escapeSqlString(versionName)}'
   AND timestamp >= toDateTime('${formatDateCF(new Date(startMs))}')
   AND timestamp < toDateTime('${formatDateCF(new Date(endMs))}')
+  ${channelFilter}
 GROUP BY bucket
 ORDER BY bucket`
 }
@@ -215,11 +220,12 @@ ORDER BY count DESC
 LIMIT ${MAX_FAILURE_ACTIONS}`
 }
 
-async function readActivityCF(c: Context, appId: string, versionName: string, startMs: number, endMs: number, bucketMinutes: number) {
+async function readActivityCF(c: Context, appId: string, versionName: string, startMs: number, endMs: number, bucketMinutes: number, channel?: VersionUsageChannel) {
   const [seriesRows, failureRows] = await Promise.all([
     c.env.VERSION_USAGE
-      ? runQueryToCFA<RawBucketRow>(c, buildSeriesQueryCF(appId, versionName, startMs, endMs, bucketMinutes))
+      ? runQueryToCFA<RawBucketRow>(c, buildSeriesQueryCF(appId, versionName, startMs, endMs, bucketMinutes, channel))
       : Promise.resolve([] as RawBucketRow[]),
+    // app_log rows carry no channel, so the failure breakdown stays per version.
     c.env.APP_LOG
       ? runQueryToCFA<RawFailureRow>(c, buildFailuresQueryCF(appId, versionName, startMs, endMs))
           .catch((error) => {
@@ -232,7 +238,7 @@ async function readActivityCF(c: Context, appId: string, versionName: string, st
   return { seriesRows, failureRows }
 }
 
-async function readActivitySB(c: Context, appId: string, versionName: string, startMs: number, endMs: number, bucketMinutes: number) {
+async function readActivitySB(c: Context, appId: string, versionName: string, startMs: number, endMs: number, bucketMinutes: number, channel?: VersionUsageChannel) {
   const db = getPgClient(c, true)
   try {
     const start = new Date(startMs).toISOString()
@@ -249,9 +255,15 @@ WHERE vu.app_id = $1
   AND vu.version_name = $2
   AND vu.timestamp >= ($3::timestamptz AT TIME ZONE 'UTC')
   AND vu.timestamp < ($4::timestamptz AT TIME ZONE 'UTC')
+  AND (
+    ($6::bigint IS NULL AND $7::text IS NULL)
+    OR vu.channel_id = $6::bigint
+    OR (vu.channel_id IS NULL AND vu.channel_name = $7::text)
+    OR (vu.action = 'get' AND vu.channel_id IS NULL AND vu.channel_name IS NULL)
+  )
 GROUP BY bucket
 ORDER BY bucket`,
-        [appId, versionName, start, end, bucketMinutes],
+        [appId, versionName, start, end, bucketMinutes, channel?.id ?? null, channel?.name ?? null],
       ),
       db.query<RawFailureRow>(
         `SELECT s.action::text AS action, count(*) AS count
@@ -406,14 +418,18 @@ async function loadNamedBundle(c: Context<MiddlewareKeyVariables>, appId: string
   return bundle
 }
 
-async function readAdoption(c: Context<MiddlewareKeyVariables>, appId: string) {
+async function readAdoption(c: Context<MiddlewareKeyVariables>, appId: string, channel?: VersionUsageChannel) {
   const cache = new CacheHelper(c)
-  const cacheKey = cache.buildRequest(ADOPTION_CACHE_PATH, { appId, bucket: cacheBucket(ADOPTION_CACHE_TTL_SECONDS) })
+  const cacheKey = cache.buildRequest(ADOPTION_CACHE_PATH, {
+    appId,
+    channelId: channel?.id ? String(channel.id) : '',
+    bucket: cacheBucket(ADOPTION_CACHE_TTL_SECONDS),
+  })
   const cached = await cache.matchJson<Record<string, number>>(cacheKey)
   if (cached)
     return cached
   try {
-    const counts = await readDeviceVersionCounts(c, appId)
+    const counts = await readDeviceVersionCounts(c, appId, channel)
     await cache.putJson(cacheKey, counts, ADOPTION_CACHE_TTL_SECONDS)
     return counts
   }
@@ -421,6 +437,14 @@ async function readAdoption(c: Context<MiddlewareKeyVariables>, appId: string) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'release_live device counts failed', error: serializeError(error) })
     return {} as Record<string, number>
   }
+}
+
+// A request for one channel scopes activity and adoption to that channel.
+// Without a channel the view stays app-wide.
+function resolveChannelScope(release: ResolvedRelease, channelId?: number): VersionUsageChannel | undefined {
+  if (!channelId || release.channel_id !== channelId)
+    return undefined
+  return { id: release.channel_id, name: release.channel_name }
 }
 
 async function readReleaseLive(
@@ -440,9 +464,11 @@ async function readReleaseLive(
 
   const now = new Date()
   const window = resolveWindow(release.deployed_at, now)
+  const channelScope = resolveChannelScope(release, channelId)
   const cache = new CacheHelper(c)
   const cacheKey = cache.buildRequest(ACTIVITY_CACHE_PATH, {
     appId,
+    channelId: channelScope?.id ? String(channelScope.id) : '',
     version: release.version_name,
     since: release.deployed_at,
     bucket: cacheBucket(ACTIVITY_CACHE_TTL_SECONDS, now.getTime()),
@@ -456,9 +482,9 @@ async function readReleaseLive(
   // keeps showing its last snapshot and retries on the next poll.
   const [activity, deviceCounts] = await Promise.all([
     c.env.VERSION_USAGE
-      ? readActivityCF(c, appId, release.version_name, window.startMs, window.endMs, window.bucketMinutes)
-      : readActivitySB(c, appId, release.version_name, window.startMs, window.endMs, window.bucketMinutes),
-    readAdoption(c, appId),
+      ? readActivityCF(c, appId, release.version_name, window.startMs, window.endMs, window.bucketMinutes, channelScope)
+      : readActivitySB(c, appId, release.version_name, window.startMs, window.endMs, window.bucketMinutes, channelScope),
+    readAdoption(c, appId, channelScope),
   ])
 
   const series = fillBuckets(activity.seriesRows, window.startMs, window.endMs, window.bucketMinutes)
@@ -532,4 +558,5 @@ export const releaseLiveTestUtils = {
   computeSuccessRate,
   buildSeriesQueryCF,
   buildFailuresQueryCF,
+  resolveChannelScope,
 }

@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import {
+  buildDeviceVersionCountsCFQuery,
   buildNativeObservePluginTotalDevicesCFQuery,
   buildNativeObservePluginVersionsCFQuery,
   buildReadDevicesCFQuery,
@@ -233,6 +234,13 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
 
     const staticFixtures: AnalyticsEngineSqlFixture[] = [
       {
+        name: 'buildDeviceVersionCountsCFQuery.channelOverrides',
+        query: buildDeviceVersionCountsCFQuery(SAMPLE_APP_ID, 'production', {
+          into: [SAMPLE_DEVICE_ID],
+          elsewhere: ['22222222-2222-4222-8222-222222222222'],
+        }),
+      },
+      {
         name: 'buildNotificationStatsQuery.app',
         query: buildNotificationStatsQuery({
           dataset: 'notification_events',
@@ -331,6 +339,8 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
     await captureCall('readDeviceUsageCF', () => readDeviceUsageCF(context, SAMPLE_APP_ID, SAMPLE_START, SAMPLE_END))
     await captureCall('readBandwidthUsageCF', () => readBandwidthUsageCF(context, SAMPLE_APP_ID, SAMPLE_START, SAMPLE_END))
     await captureCall('readStatsVersionCF', () => readStatsVersionCF(context, SAMPLE_APP_ID, SAMPLE_START, SAMPLE_END))
+    await captureCall('readStatsVersionCF.channel', () => readStatsVersionCF(context, SAMPLE_APP_ID, SAMPLE_START, SAMPLE_END, { id: 42, name: 'production' }))
+    await captureCall('readStatsVersionCF.channelWithLegacyGets', () => readStatsVersionCF(context, SAMPLE_APP_ID, SAMPLE_START, SAMPLE_END, { id: 42, name: 'production' }, { includeUnattributedGets: true }))
     await captureCall('readNativeVersionUsageCF', () => readNativeVersionUsageCF(context, SAMPLE_APP_ID, SAMPLE_START, SAMPLE_END))
     await captureCall('readDeviceVersionCountsCF', () => readDeviceVersionCountsCF(context, SAMPLE_APP_ID, 'production'))
     await captureCall('countInstallSourcesCF', () => countInstallSourcesCF(context, SAMPLE_APP_ID))
