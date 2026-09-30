@@ -26,6 +26,9 @@ interface WorkflowRunResponse {
 }
 
 const RUNNER_SHUTDOWN_TRAILER = /##\[error\]The runner has received a shutdown signal\.[\s\S]{0,1000}##\[error\]Process completed with exit code 143\.[\s\S]{0,1000}Cleaning up orphan processes\s*$/i
+const GITHUB_READ_ATTEMPTS = 3
+const GITHUB_READ_RETRY_DELAY_MS = 1000
+const TRANSIENT_GITHUB_READ_FAILURE = /(?:HTTP (?:500|502|503|504)\b|error connecting to api\.github\.com|connection reset by peer|TLS handshake timeout|unexpected EOF)/i
 
 export function getTransientCiJobFailure(
   output: string,
@@ -46,21 +49,37 @@ export function getTransientCiJobFailure(
   return null
 }
 
-function runGh(args: string[]): string {
-  const result = spawnSync('gh', args, {
-    encoding: 'utf8',
-    env,
-    maxBuffer: 50 * 1024 * 1024,
-  })
-  if (result.status !== 0) {
+export function isTransientGitHubReadFailure(output: string): boolean {
+  return TRANSIENT_GITHUB_READ_FAILURE.test(output)
+}
+
+function wait(milliseconds: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds)
+}
+
+function runGh(args: string[], retryTransientReadFailure = false): string {
+  for (let attempt = 1; attempt <= GITHUB_READ_ATTEMPTS; attempt++) {
+    const result = spawnSync('gh', args, {
+      encoding: 'utf8',
+      env,
+      maxBuffer: 50 * 1024 * 1024,
+    })
+    if (result.status === 0)
+      return result.stdout
+
     const details = result.stderr.trim() || result.stdout.trim() || `exit ${result.status ?? 'unknown'}`
-    throw new Error(`gh ${args.join(' ')} failed: ${details}`)
+    if (!retryTransientReadFailure || !isTransientGitHubReadFailure(details) || attempt === GITHUB_READ_ATTEMPTS)
+      throw new Error(`gh ${args.join(' ')} failed: ${details}`)
+
+    console.warn(`Transient GitHub API read failure (attempt ${attempt}/${GITHUB_READ_ATTEMPTS}); retrying.`)
+    wait(GITHUB_READ_RETRY_DELAY_MS * attempt)
   }
-  return result.stdout
+
+  throw new Error('Unreachable GitHub API retry state')
 }
 
 function readJson<T>(args: string[]): T {
-  return JSON.parse(runGh(args)) as T
+  return JSON.parse(runGh(args, true)) as T
 }
 
 function main(): void {
@@ -87,7 +106,7 @@ function main(): void {
   }
 
   const classifications = failedJobs.map((job) => {
-    const log = runGh(['api', `repos/${repository}/actions/jobs/${job.id}/logs`])
+    const log = runGh(['api', `repos/${repository}/actions/jobs/${job.id}/logs`], true)
     const failedStepNames = job.steps?.filter(step => step.conclusion === 'failure').map(step => step.name) ?? []
     return {
       failure: getTransientCiJobFailure(log, failedStepNames),
