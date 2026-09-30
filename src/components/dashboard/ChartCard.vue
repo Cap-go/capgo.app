@@ -81,13 +81,11 @@ function toggleCollapsed() {
 
 <template>
   <div
-    class="relative col-span-full flex flex-col overflow-hidden rounded-[1.75rem] border border-slate-200/80 bg-white/95 shadow-[0_20px_60px_-38px_rgba(15,23,42,0.3)] backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/85 dark:shadow-[0_24px_70px_-42px_rgba(2,6,23,0.72)]"
+    class="relative col-span-full flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-800/60"
     :class="canCollapse
       ? ['transition-[min-height,box-shadow] duration-300', isCollapsed ? 'min-h-0' : 'min-h-[460px]']
       : 'min-h-[460px]'"
   >
-    <div class="pointer-events-none absolute inset-x-0 top-0 h-28 bg-gradient-to-br from-slate-50 via-white to-transparent dark:from-slate-800/70 dark:via-slate-900/40 dark:to-transparent" />
-
     <!-- Header with title and stats -->
     <div
       class="relative overflow-hidden px-5"

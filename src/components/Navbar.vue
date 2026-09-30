@@ -127,7 +127,7 @@ function back() {
                   </li>
                   <li v-if="trailingTitle" class="flex items-center">
                     <span class="mx-1" aria-hidden="true"> / </span>
-                    <span class="flex items-center h-16 px-2 font-bold text-slate-600 dark:text-slate-100" aria-current="page">
+                    <span class="flex items-center h-16 px-2 font-bold capitalize text-slate-600 dark:text-slate-100" aria-current="page">
                       {{ trailingTitle }}
                     </span>
                   </li>

@@ -1718,7 +1718,7 @@ getKeys()
           <section
             v-if="showCliLoginGuidance"
             data-test="cli-login-guidance"
-            class="relative mb-4 overflow-hidden rounded-xl border border-primary-500/20 bg-white px-5 py-5 shadow-sm md:px-6 dark:border-primary-500/40 dark:bg-slate-800"
+            class="relative mb-4 overflow-hidden rounded-xl border border-primary-500/20 bg-white px-5 py-5 shadow-sm md:px-6 dark:border-primary-500/40 dark:bg-slate-800/60"
           >
             <div class="absolute inset-y-0 left-0 w-1 bg-primary-500" />
 
@@ -1755,7 +1755,7 @@ getKeys()
           </section>
 
           <div
-            class="flex flex-col overflow-hidden overflow-y-auto bg-white md:rounded-lg md:border md:shadow-lg border-slate-300 dark:border-slate-900 dark:bg-slate-800"
+            class="flex flex-col overflow-hidden overflow-y-auto bg-white md:rounded-xl md:border md:shadow-sm border-slate-200 dark:border-white/10 dark:bg-slate-800/60"
             :class="{ 'md:mt-5': !showCliLoginGuidance }"
           >
             <DataTable
@@ -1796,7 +1796,7 @@ getKeys()
               rel="noopener noreferrer"
               :aria-label="`${t('cli-doc')} (opens in new tab)`"
             >{{ t('cli-doc') }}</a>
-            <span aria-hidden="true">·</span>
+            <span class="mx-1" aria-hidden="true">·</span>
             <a
               class="inline-flex items-center gap-1 font-medium text-blue-700 rounded-sm hover:underline dark:text-azure-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500"
               href="https://capgo.app/docs/public-api/api-keys/"
@@ -1903,7 +1903,7 @@ getKeys()
               </div>
             </div>
           </div>
-          <p v-if="bindingsLocked" data-test="edit-key-bindings-locked" class="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+          <p v-if="bindingsLocked" data-test="edit-key-bindings-locked" class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300">
             {{ t('api-key-bindings-locked') }}
           </p>
           <!-- Native fieldset: disables every scope/access control at once -->
@@ -2017,7 +2017,7 @@ getKeys()
             </div>
 
             <!-- Global organization permissions -->
-            <div v-if="!appOnlyScope && !hideOrgCreationPermission" class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/40">
+            <div v-if="!appOnlyScope && !hideOrgCreationPermission" class="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
               <label class="flex items-start gap-3" :class="canEnableOrgCreation ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'">
                 <input
                   v-model="allowOrgCreation"

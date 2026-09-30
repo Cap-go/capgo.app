@@ -153,7 +153,7 @@ function handleTab(key: string) {
           v-if="hasNoApps"
           class="flex absolute inset-0 z-10 flex-col justify-center items-center bg-white/60 dark:bg-gray-900/60"
         >
-          <div class="p-8 text-center bg-white rounded-xl border shadow-lg dark:bg-gray-800 dark:border-gray-700">
+          <div class="p-8 text-center bg-white rounded-xl border shadow-sm dark:bg-slate-800/60 dark:border-white/10">
             <h2 class="mb-2 text-2xl font-bold text-gray-900 dark:text-white">
               {{ t('no-apps-yet') }}
             </h2>

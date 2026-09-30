@@ -1037,7 +1037,7 @@ watch(activeNotificationTab, () => {
                     </button>
                     <div class="overflow-x-auto border rounded-lg border-slate-200 dark:border-slate-700">
                       <table class="w-full text-sm text-left text-gray-500 d-table d-table-sm dark:text-gray-400">
-                        <thead class="text-gray-700 bg-gray-50 dark:text-gray-400 dark:bg-gray-700">
+                        <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
                           <tr>
                             <th class="whitespace-nowrap">
                               {{ t('device') }}
@@ -1140,13 +1140,13 @@ watch(activeNotificationTab, () => {
                       <div class="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">
                         {{ t('notification-audience-json') }}
                       </div>
-                      <pre class="max-h-40 overflow-auto rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200">{{ formatJson(selectedCampaign.audience) }}</pre>
+                      <pre class="max-h-40 overflow-auto rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-200">{{ formatJson(selectedCampaign.audience) }}</pre>
                     </div>
                     <div>
                       <div class="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">
                         {{ t('notification-payload-json') }}
                       </div>
-                      <pre class="max-h-40 overflow-auto rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200">{{ formatJson(selectedCampaign.payload) }}</pre>
+                      <pre class="max-h-40 overflow-auto rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-200">{{ formatJson(selectedCampaign.payload) }}</pre>
                     </div>
                   </div>
                 </div>

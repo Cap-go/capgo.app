@@ -635,7 +635,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
             type="button" @click="handleAddClick"
           >
             <plusOutline v-if="!isAdding" class="w-4 h-4" />
-            <Spinner v-else size="w-4 h-4" />
+            <Spinner v-else size="w-4 h-4" color="fill-white text-white/30" />
             <!-- The primary action keeps its label on mobile: a lone "+" is easy to miss. -->
             <span class="text-sm">{{ t("add-one") }}</span>
           </button>

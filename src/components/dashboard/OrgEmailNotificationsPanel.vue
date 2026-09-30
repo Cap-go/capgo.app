@@ -90,7 +90,7 @@ async function toggleEmailPref(key: EmailPreferenceKey) {
 
 <template>
   <div
-    class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-lg grow md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900"
+    class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-sm grow md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10"
     :class="{ 'border-0 shadow-none md:rounded-none': embedded }"
   >
     <div class="p-6 space-y-6">

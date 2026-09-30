@@ -161,7 +161,7 @@ watch(
       v-if="effectiveStats?.totals && hasData && !compact"
       class="grid grid-cols-1 gap-3 sm:grid-cols-2"
     >
-      <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+      <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
         <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
           <IconCheckCircle class="w-4 h-4" />
           {{ t('bundle-install-success-rate') }}
@@ -173,7 +173,7 @@ watch(
           {{ t('bundle-install-success-rate-help') }}
         </p>
       </div>
-      <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+      <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
         <div class="text-sm text-slate-600 dark:text-slate-400">
           {{ t('installed') }} / {{ t('failed') }}
         </div>
@@ -183,13 +183,13 @@ watch(
       </div>
     </div>
 
-    <div v-if="statsLoading && !forceDemo && !stats && !statsError" class="flex items-center justify-center h-48 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+    <div v-if="statsLoading && !forceDemo && !stats && !statsError" class="flex items-center justify-center h-48 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
       <Spinner size="w-10 h-10" />
     </div>
 
     <div
       v-else-if="statsError && !forceDemo"
-      class="flex flex-col items-center justify-center h-48 gap-3 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400"
+      class="flex flex-col items-center justify-center h-48 gap-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10 text-slate-500 dark:text-slate-400"
     >
       <IconAlertCircle class="w-10 h-10" />
       <p class="text-sm">
@@ -202,7 +202,7 @@ watch(
 
     <div
       v-else-if="!hasData"
-      class="flex flex-col items-center justify-center h-48 gap-2 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400"
+      class="flex flex-col items-center justify-center h-48 gap-2 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10 text-slate-500 dark:text-slate-400"
     >
       <IconAlertCircle class="w-10 h-10" />
       <p>{{ t('bundle-install-stats-no-data') }}</p>
@@ -213,11 +213,11 @@ watch(
 
     <div
       v-else
-      class="overflow-x-auto bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700"
+      class="overflow-x-auto bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10"
     >
       <table class="min-w-full text-sm">
-        <thead>
-          <tr class="border-b border-slate-200 dark:border-slate-700 text-left text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
+        <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
+          <tr class="text-left">
             <th scope="col" class="px-4 py-3 font-semibold">
               {{ t('bundle') }}
             </th>
