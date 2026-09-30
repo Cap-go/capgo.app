@@ -1,37 +1,42 @@
-// Purges the /updates edge cache of the given apps in every Cloudflare data
-// center (zone purge-by-tag, 100 tags per API call).
+// Purges the /updates edge cache in every Cloudflare data center (zone
+// purge-by-tag, one Cloudflare call per zone per batch of up to 100 apps).
 //
-// Called through pg_net by public.flush_updates_cache_purge(), which batches
-// every due app (right after a change, then again 10s / 60s / 180s later so an
-// entry refilled from a lagging read replica cannot outlive the change) into
-// one request. Changes that arrive during the 1s flush throttle are drained
-// by this endpoint calling the flush again ~1s later (the chain stops once
-// nothing is due). Every failure is soft: the cache TTL is the backstop.
+// Woken through pg_net by public.notify_updates_edge_cache_purge() (after the
+// change commits) and by the 10s cron tick while purges are due. Each wake
+// drains the queue in its own transactions:
+//   claim_updates_cache_purge() -> purge -> ack_updates_cache_purge()
+// Claims are limited to one per second across all callers, so the Cloudflare
+// rate stays bounded whatever the backlog. A successful first purge schedules
+// re-purges (+10s / +60s / +180s) for replica lag; failed apps go back to the
+// queue at their Retry-After. Every failure is soft: the cache TTL is the
+// backstop.
 //
 // Token: CF_CACHE_PURGE_TOKEN, else the existing CF_ANALYTICS_TOKEN once it is
 // granted Zone Read + Cache Purge. Zones are the plugin worker's own zones,
 // derived from cloudflare_workers/plugin/wrangler.jsonc (CF_CACHE_PURGE_ZONE_IDS
-// only overrides that). A runtime without any token
-// forwards the purge to the Cloudflare API worker at CLOUDFLARE_FUNCTION_URL.
+// only overrides that). A runtime without any token forwards the wake to the
+// Cloudflare API worker at CLOUDFLARE_FUNCTION_URL.
 
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { PLUGIN_ROUTE_HOSTS, PLUGIN_ROUTE_ZONE_NAMES } from '../plugin_runtime/utils/pluginRouteHosts.generated.ts'
 import { updatesAppCacheTag } from '../plugin_runtime/utils/updatesCacheTag.ts'
-import { BRES, middlewareAPISecret, parseBody } from '../utils/hono.ts'
+import { BRES, middlewareAPISecret } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 import { backgroundTask, getEnv } from '../utils/utils.ts'
 
 /** Cloudflare purge API accepts at most 100 tags per call on every plan. */
 const PURGE_TAGS_PER_CALL = 100
-const MAX_APPS_PER_REQUEST = 1000
+/** One claim = one purge call per zone. */
+const CLAIM_LIMIT = PURGE_TAGS_PER_CALL
 const PURGE_TIMEOUT_MS = 5000
-const MAX_RETRY_AFTER_MS = 2000
-const MAX_PURGE_ATTEMPTS = 3
-/** Just over the DB flush throttle (1s), so the follow-up flush is allowed. */
-const FOLLOW_UP_FLUSH_DELAY_MS = 1100
+const DEFAULT_RETRY_AFTER_SECONDS = 5
+const ZONE_DISCOVERY_RETRY_SECONDS = 30
+/** Stay well inside the 30s waitUntil budget; the cron tick picks up the rest. */
+const DRAIN_BUDGET_MS = 20_000
+const MAX_THROTTLE_WAIT_MS = 1500
 const ZONE_LIST_TTL_MS = 60 * 60 * 1000
 const FORWARDED_HEADER = 'x-capgo-purge-forwarded'
 
@@ -120,64 +125,126 @@ export function parseCsv(raw: string): string[] {
   return raw.split(',').map(value => value.trim()).filter(Boolean)
 }
 
-export function parseAppIds(body: unknown): string[] {
-  const appIds = body && typeof body === 'object' && Array.isArray((body as { app_ids?: unknown }).app_ids)
-    ? (body as { app_ids: unknown[] }).app_ids
-    : []
-  return [...new Set(appIds.filter((appId): appId is string => typeof appId === 'string' && appId.length > 0))].slice(0, MAX_APPS_PER_REQUEST)
+export interface PurgeResult {
+  /** A purge target exists (token or local purge URL). */
+  configured: boolean
+  calls: number
+  failed: number
+  /** Largest Retry-After seen on a failed call, in seconds. */
+  retryAfterSeconds: number
 }
 
-async function postPurge(url: string, headers: Record<string, string>, body: unknown) {
-  const send = () => fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...headers },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(PURGE_TIMEOUT_MS),
-  })
-  let response = await send()
-  // Purge API token bucket: wait for the advertised refill, a few times.
-  for (let attempt = 1; response.status === 429 && attempt < MAX_PURGE_ATTEMPTS; attempt++) {
-    const retryAfterMs = Math.min(Number(response.headers.get('Retry-After') ?? '1') * 1000 || 1000, MAX_RETRY_AFTER_MS)
-    await new Promise(resolve => setTimeout(resolve, retryAfterMs))
-    response = await send()
-  }
-  return response
+function parseRetryAfterSeconds(response: Response) {
+  const value = Number(response.headers.get('Retry-After'))
+  return Number.isFinite(value) && value > 0 ? Math.ceil(value) : DEFAULT_RETRY_AFTER_SECONDS
 }
 
-export async function purgeUpdatesCacheTags(c: Context, tags: string[]) {
+/**
+ * One call per zone (and to the local emulator when set), sequentially. No
+ * in-worker retries: failures are reported so the caller can requeue them at
+ * their Retry-After.
+ */
+export async function purgeUpdatesCacheTags(c: Context, tags: string[]): Promise<PurgeResult> {
   const token = getPurgeToken(c)
-  const zoneIds = token ? await resolvePurgeZoneIds(c, token) : []
   const localPurgeUrl = getEnv(c, 'UPDATES_CACHE_LOCAL_PURGE_URL')
-  let calls = 0
-  let failed = 0
+  const result: PurgeResult = { configured: Boolean(token || localPurgeUrl), calls: 0, failed: 0, retryAfterSeconds: 0 }
+  const targets: { url: string, headers: Record<string, string> }[] = []
 
-  const run = async (url: string, headers: Record<string, string>, body: unknown) => {
-    calls++
-    try {
-      const response = await postPurge(url, headers, body)
-      if (!response.ok) {
-        failed++
-        cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge failed', url, status: response.status, tags: Array.isArray((body as { tags?: unknown }).tags) ? (body as { tags: unknown[] }).tags.length : 0 })
-      }
+  if (token) {
+    const zoneIds = await resolvePurgeZoneIds(c, token)
+    if (zoneIds.length === 0) {
+      // Discovery failed or the token sees no plugin zone: retry later.
+      result.failed++
+      result.retryAfterSeconds = ZONE_DISCOVERY_RETRY_SECONDS
     }
-    catch (error) {
-      failed++
-      cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge error', url, error: serializeError(error) })
-    }
-  }
-
-  const jobs: Promise<void>[] = []
-  if (token && zoneIds.length > 0) {
-    for (const zoneId of zoneIds) {
-      for (const tagChunk of chunk(tags, PURGE_TAGS_PER_CALL)) {
-        jobs.push(run(`https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(zoneId)}/purge_cache`, { Authorization: `Bearer ${token}` }, { tags: tagChunk }))
-      }
-    }
+    for (const zoneId of zoneIds)
+      targets.push({ url: `https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(zoneId)}/purge_cache`, headers: { Authorization: `Bearer ${token}` } })
   }
   if (localPurgeUrl)
-    jobs.push(run(localPurgeUrl, { apisecret: getEnv(c, 'API_SECRET') }, { tags }))
-  await Promise.all(jobs)
-  return { calls, failed }
+    targets.push({ url: localPurgeUrl, headers: { apisecret: getEnv(c, 'API_SECRET') } })
+
+  for (const target of targets) {
+    for (const tagChunk of chunk(tags, PURGE_TAGS_PER_CALL)) {
+      result.calls++
+      try {
+        const response = await fetch(target.url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...target.headers },
+          body: JSON.stringify({ tags: tagChunk }),
+          signal: AbortSignal.timeout(PURGE_TIMEOUT_MS),
+        })
+        if (!response.ok) {
+          result.failed++
+          result.retryAfterSeconds = Math.max(result.retryAfterSeconds, parseRetryAfterSeconds(response))
+          cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge failed', url: target.url, status: response.status, tags: tagChunk.length })
+        }
+      }
+      catch (error) {
+        result.failed++
+        result.retryAfterSeconds = Math.max(result.retryAfterSeconds, DEFAULT_RETRY_AFTER_SECONDS)
+        cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge error', url: target.url, error: serializeError(error) })
+      }
+    }
+  }
+  return result
+}
+
+export type PurgeRpc = (fn: 'claim_updates_cache_purge' | 'ack_updates_cache_purge', args: Record<string, unknown>) => PromiseLike<{ data: unknown, error: unknown }>
+
+interface ClaimResult {
+  status: 'busy' | 'throttled' | 'empty' | 'ok'
+  wait_ms?: number
+  apps?: { app_id: string, initial: boolean }[]
+  has_more?: boolean
+}
+
+/**
+ * Claims, purges and acknowledges batches until the queue is empty, another
+ * caller is draining, or the time budget is spent.
+ */
+export async function drainUpdatesCachePurge(
+  c: Context,
+  rpc: PurgeRpc,
+  options: { budgetMs?: number, sleep?: (ms: number) => Promise<unknown> } = {},
+) {
+  const sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)))
+  const deadline = Date.now() + (options.budgetMs ?? DRAIN_BUDGET_MS)
+  let purgedApps = 0
+  while (Date.now() < deadline) {
+    const { data, error } = await rpc('claim_updates_cache_purge', { p_limit: CLAIM_LIMIT })
+    if (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge claim failed', error: serializeError(error) })
+      break
+    }
+    const claim = data as ClaimResult
+    if (claim.status === 'throttled') {
+      await sleep(Math.min((claim.wait_ms ?? 1000) + 50, MAX_THROTTLE_WAIT_MS))
+      continue
+    }
+    if (claim.status !== 'ok' || !claim.apps?.length)
+      break
+
+    const apps = claim.apps
+    const result = await purgeUpdatesCacheTags(c, apps.map(app => updatesAppCacheTag(app.app_id)))
+    if (!result.configured) {
+      cloudlog({ requestId: c.get('requestId'), message: 'updates cache purge skipped (not configured)', apps: apps.length })
+      break
+    }
+    const ok = result.failed === 0
+    const { error: ackError } = await rpc('ack_updates_cache_purge', {
+      p_repurge_app_ids: ok ? apps.filter(app => app.initial).map(app => app.app_id) : [],
+      p_retry: ok ? [] : apps,
+      p_retry_after_seconds: result.retryAfterSeconds || DEFAULT_RETRY_AFTER_SECONDS,
+    })
+    if (ackError)
+      cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge ack failed', error: serializeError(ackError) })
+    cloudlog({ requestId: c.get('requestId'), message: 'updates cache purged', apps: apps.length, calls: result.calls, failed: result.failed })
+    if (ok)
+      purgedApps += apps.length
+    if (!claim.has_more)
+      break
+  }
+  return { purgedApps }
 }
 
 export function shouldForwardPurge(c: Context) {
@@ -187,12 +254,12 @@ export function shouldForwardPurge(c: Context) {
     && c.req.header(FORWARDED_HEADER) !== '1'
 }
 
-async function forwardPurge(c: Context, appIds: string[]) {
+async function forwardWake(c: Context) {
   try {
     const response = await fetch(`${getEnv(c, 'CLOUDFLARE_FUNCTION_URL').replace(/\/$/, '')}/triggers/updates_cache_purge`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'apisecret': getEnv(c, 'API_SECRET'), [FORWARDED_HEADER]: '1' },
-      body: JSON.stringify({ app_ids: appIds }),
+      body: JSON.stringify({ wake: true }),
       signal: AbortSignal.timeout(PURGE_TIMEOUT_MS),
     })
     if (!response.ok)
@@ -206,34 +273,13 @@ async function forwardPurge(c: Context, appIds: string[]) {
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.post('/', middlewareAPISecret, async (c) => {
-  const body = await parseBody<unknown>(c).catch(() => null)
-  const appIds = parseAppIds(body)
-  if (appIds.length === 0)
-    return c.json({ ...BRES, apps: 0 })
-
   if (shouldForwardPurge(c)) {
-    // No Cloudflare token here (Supabase function): hand the batch to the
-    // Cloudflare API worker, which has it from the Cloudflare env file.
-    await backgroundTask(c, forwardPurge(c, appIds))
-    return c.json({ ...BRES, apps: appIds.length, forwarded: true })
+    // No Cloudflare token here (Supabase function): wake the Cloudflare API
+    // worker, which has it from the Cloudflare env file.
+    await backgroundTask(c, forwardWake(c))
+    return c.json({ ...BRES, forwarded: true })
   }
-
-  const tags = appIds.map(updatesAppCacheTag)
-  // Answer pg_net / the queue right away; the purge (and 429 back-off) runs
-  // in the background, bounded well under the 30s waitUntil budget.
-  await backgroundTask(c, (async () => {
-    const result = await purgeUpdatesCacheTags(c, tags)
-    if (result.calls === 0) {
-      // Not configured here: no follow-up chain either.
-      cloudlog({ requestId: c.get('requestId'), message: 'updates cache purge skipped (not configured)', apps: appIds.length })
-      return
-    }
-    cloudlog({ requestId: c.get('requestId'), message: 'updates cache purged', apps: appIds.length, calls: result.calls, failed: result.failed })
-    // Drain changes that were throttled while this flush ran.
-    await new Promise(resolve => setTimeout(resolve, FOLLOW_UP_FLUSH_DELAY_MS))
-    const { error } = await supabaseAdmin(c).rpc('flush_updates_cache_purge', { p_force: false })
-    if (error)
-      cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache follow-up flush failed', error: serializeError(error) })
-  })())
-  return c.json({ ...BRES, apps: appIds.length })
+  // Answer the wake right away; draining runs in the background.
+  await backgroundTask(c, drainUpdatesCachePurge(c, (fn, args) => supabaseAdmin(c).rpc(fn, args as never)))
+  return c.json(BRES)
 })

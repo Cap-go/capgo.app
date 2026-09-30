@@ -314,7 +314,7 @@ async function getAppOwnerFromEdgeCache(
   pathTiming?: UpdatePathTiming,
 ) {
   try {
-    const owner = await getCachedAppOwner(c, appId, PLAN_LIMIT.join(','), () => queryAppOwnerPostgres(c, appId, drizzleClient, PLAN_LIMIT))
+    const owner = await getCachedAppOwner(c, appId, PLAN_LIMIT.join(','), () => queryAppOwnerPostgres(c, appId, drizzleClient, PLAN_LIMIT, { includeTrialAt: true }))
     if (pathTiming)
       pathTiming.ownerCacheHit = owner.hit
     return owner.value

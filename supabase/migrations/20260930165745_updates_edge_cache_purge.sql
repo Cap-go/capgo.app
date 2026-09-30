@@ -3,113 +3,232 @@
 -- The plugin worker caches app-level /updates reads (app owner + plan, default
 -- channel row, manifest rows) in the Cloudflare Cache API with one Cache-Tag
 -- per app. Statement-level triggers collect the app ids whose served data
--- changed; triggers/updates_cache_purge then purges their tags in every
--- Cloudflare data center (zone purge-by-tag, 100 tags per API call).
+-- changed; triggers/updates_cache_purge purges their tags in every Cloudflare
+-- data center (zone purge-by-tag).
 --
--- Batching: triggers only record (app_id, due_at) rows. One flush sends every
--- due app in a single pg_net call:
--- - the first change after a quiet second flushes right away (~1s end to end),
--- - during bursts at most one flush per second runs; leftovers go out with the
---   next change or the 10s cron tick,
--- - re-purges at +10s / +60s / +180s are rows too (a request that read a
---   lagging replica, or read just before the commit, may have refilled the
---   cache; 180s is the replica-lag alert threshold), so they batch as well.
--- Duplicates collapse on (app_id, due_at), so a hot app costs one tag per flush.
+-- The write path never waits and never drains shared work:
+-- - triggers only INSERT rows (identity key, no unique constraint, so no
+--   writer can block on another writer's uncommitted row) and queue a pg_net
+--   wake, which is sent after commit;
+-- - the endpoint claims due apps in its own short transaction through
+--   claim_updates_cache_purge(): at most 100 apps per claim and one claim per
+--   second (advisory lock + last_claim_at), i.e. about one Cloudflare call per
+--   zone per second whatever the backlog;
+-- - after a purge, ack_updates_cache_purge() schedules the re-purges at
+--   +10s / +60s / +180s from that moment (after commit, so a long transaction
+--   cannot collapse them; they cover a request that refilled the cache from a
+--   lagging read replica, 180s being the replica-lag alert threshold) and puts
+--   failed apps back at their Retry-After;
+-- - the 10s cron tick wakes the endpoint while due rows remain.
 --
 -- Only columns the update path reads are compared, so background writes
 -- (stats refresh, audit bookkeeping, auto-pause checks, per-device override
--- counter churn, manifest file_size backfills) do not purge anything.
--- Nothing here can fail or slow down the write: every error is swallowed and
--- the cache TTL is the backstop.
+-- counter churn, manifest uploads of versions no channel serves) do not purge
+-- anything. Nothing here can fail the business write: every error is swallowed
+-- and the cache TTL is the backstop.
+--
+-- Runtime switch: Vault secret CAPGO_UPDATES_CACHE_PURGE_ENABLED = 'true'.
 
--- Logged (not UNLOGGED) so scheduled purges survive a crash restart; it is not
--- in the read-replica publication (explicit FOR TABLE list).
+-- Logged so scheduled purges survive a crash restart; not in the read-replica
+-- publication (explicit FOR TABLE list).
 CREATE TABLE public.updates_cache_purge_pending (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   app_id text NOT NULL,
   due_at timestamptz NOT NULL,
-  PRIMARY KEY (app_id, due_at)
+  -- true for the first purge of a change: its success schedules re-purges.
+  initial boolean NOT NULL DEFAULT true
 );
 CREATE INDEX updates_cache_purge_pending_due_at_idx ON public.updates_cache_purge_pending (due_at);
 ALTER TABLE public.updates_cache_purge_pending OWNER TO postgres;
 ALTER TABLE public.updates_cache_purge_pending ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.updates_cache_purge_pending FROM PUBLIC, anon, authenticated;
 
--- `enabled` is the database-side switch: until the Cloudflare purge secrets are
--- deployed and a region uses the cache, triggers return before doing any work.
+-- Operational state only (the switch lives in Vault).
 CREATE TABLE public.updates_cache_purge_state (
   id boolean PRIMARY KEY DEFAULT true CHECK (id),
-  enabled boolean NOT NULL DEFAULT false,
-  last_flush_at timestamptz NOT NULL DEFAULT '-infinity'
+  last_claim_at timestamptz NOT NULL DEFAULT '-infinity'
 );
 INSERT INTO public.updates_cache_purge_state (id) VALUES (true) ON CONFLICT DO NOTHING;
 ALTER TABLE public.updates_cache_purge_state OWNER TO postgres;
 ALTER TABLE public.updates_cache_purge_state ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.updates_cache_purge_state FROM PUBLIC, anon, authenticated;
 
--- Sends every due app in one pg_net call (the endpoint chunks per 100 tags).
--- p_force = false (from triggers) skips when another flush ran in the last
--- second or is running now; the cron tick passes true to drain leftovers.
-CREATE OR REPLACE FUNCTION public.flush_updates_cache_purge(p_force boolean DEFAULT true)
-RETURNS integer
+CREATE OR REPLACE FUNCTION public.updates_cache_purge_enabled()
+RETURNS boolean
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_setting text;
+BEGIN
+  SELECT decrypted_secret
+  INTO v_setting
+  FROM vault.decrypted_secrets
+  WHERE name = 'CAPGO_UPDATES_CACHE_PURGE_ENABLED'
+  LIMIT 1;
+
+  RETURN pg_catalog.lower(pg_catalog.btrim(COALESCE(v_setting, ''))) IN ('true', 'on', '1');
+EXCEPTION WHEN OTHERS THEN
+  RETURN false;
+END;
+$$;
+
+ALTER FUNCTION public.updates_cache_purge_enabled() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.updates_cache_purge_enabled() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.updates_cache_purge_enabled() FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.updates_cache_purge_enabled() TO service_role;
+
+-- Queues one wake of the purge endpoint (pg_net sends it after commit).
+CREATE OR REPLACE FUNCTION public.wake_updates_cache_purge()
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  PERFORM net.http_post(
+    url := public.get_db_url() || '/functions/v1/triggers/updates_cache_purge',
+    headers := pg_catalog.jsonb_build_object(
+      'Content-Type', 'application/json',
+      'apisecret', public.get_apikey()
+    ),
+    body := pg_catalog.jsonb_build_object('wake', true),
+    timeout_milliseconds := 5000
+  );
+END;
+$$;
+
+ALTER FUNCTION public.wake_updates_cache_purge() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.wake_updates_cache_purge() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.wake_updates_cache_purge() FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.wake_updates_cache_purge() TO service_role;
+
+-- Cron tick: wake the endpoint only while purges are due (no HTTP otherwise).
+CREATE OR REPLACE FUNCTION public.wake_updates_cache_purge_if_due()
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM public.updates_cache_purge_pending
+    WHERE due_at <= pg_catalog.clock_timestamp()
+  ) THEN
+    PERFORM public.wake_updates_cache_purge();
+  END IF;
+END;
+$$;
+
+ALTER FUNCTION public.wake_updates_cache_purge_if_due() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.wake_updates_cache_purge_if_due() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.wake_updates_cache_purge_if_due() FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.wake_updates_cache_purge_if_due() TO service_role;
+
+-- Claims up to p_limit due apps in the endpoint's own transaction.
+-- Returns {status: busy|throttled|empty|ok, wait_ms?, apps?, has_more?}.
+CREATE OR REPLACE FUNCTION public.claim_updates_cache_purge(p_limit integer DEFAULT 100)
+RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
 AS $$
 DECLARE
-  due_app_ids text[];
-  chunk text[];
-  chunk_size constant int := 1000;
-  min_interval constant interval := '1 second';
-  i int;
+  v_now timestamptz := pg_catalog.clock_timestamp();
+  v_last timestamptz;
+  v_min_interval constant interval := '1 second';
+  v_apps jsonb;
 BEGIN
-  -- One flusher at a time; others leave their rows for the next flush.
-  IF NOT pg_catalog.pg_try_advisory_xact_lock(pg_catalog.hashtext('updates_cache_purge_flush')) THEN
-    RETURN 0;
-  END IF;
-  IF NOT p_force AND EXISTS (
-    SELECT 1 FROM public.updates_cache_purge_state
-    WHERE last_flush_at > pg_catalog.clock_timestamp() - min_interval
-  ) THEN
-    RETURN 0;
+  IF NOT pg_catalog.pg_try_advisory_xact_lock(pg_catalog.hashtext('updates_cache_purge_claim')) THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'busy');
   END IF;
 
-  WITH due AS (
-    DELETE FROM public.updates_cache_purge_pending
-    WHERE due_at <= pg_catalog.clock_timestamp()
-    RETURNING app_id
-  )
-  SELECT pg_catalog.array_agg(DISTINCT app_id) INTO due_app_ids FROM due;
-
-  -- Nothing due: no HTTP call and no state write.
-  IF due_app_ids IS NULL THEN
-    RETURN 0;
-  END IF;
-  -- Wall-clock time: a long trigger transaction must not record its start time.
-  UPDATE public.updates_cache_purge_state SET last_flush_at = pg_catalog.clock_timestamp() WHERE id;
-
-  i := 1;
-  WHILE i <= pg_catalog.array_length(due_app_ids, 1) LOOP
-    chunk := due_app_ids[i:i + chunk_size - 1];
-    PERFORM net.http_post(
-      url := public.get_db_url() || '/functions/v1/triggers/updates_cache_purge',
-      headers := pg_catalog.jsonb_build_object(
-        'Content-Type', 'application/json',
-        'apisecret', public.get_apikey()
-      ),
-      body := pg_catalog.jsonb_build_object('app_ids', pg_catalog.to_jsonb(chunk)),
-      timeout_milliseconds := 5000
+  SELECT last_claim_at INTO v_last FROM public.updates_cache_purge_state WHERE id;
+  IF v_last > v_now - v_min_interval THEN
+    RETURN pg_catalog.jsonb_build_object(
+      'status', 'throttled',
+      'wait_ms', CEIL(EXTRACT(EPOCH FROM (v_last + v_min_interval - v_now)) * 1000)::int
     );
-    i := i + chunk_size;
-  END LOOP;
-  RETURN pg_catalog.array_length(due_app_ids, 1);
+  END IF;
+
+  WITH picked AS (
+    SELECT p.app_id
+    FROM public.updates_cache_purge_pending p
+    WHERE p.due_at <= v_now
+    GROUP BY p.app_id
+    ORDER BY MIN(p.due_at)
+    LIMIT GREATEST(LEAST(p_limit, 1000), 1)
+  ),
+  claimed AS (
+    DELETE FROM public.updates_cache_purge_pending p
+    USING picked
+    WHERE p.app_id = picked.app_id AND p.due_at <= v_now
+    RETURNING p.app_id, p.initial
+  )
+  SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('app_id', c.app_id, 'initial', c.initial))
+  INTO v_apps
+  FROM (SELECT app_id, bool_or(initial) AS initial FROM claimed GROUP BY app_id) AS c;
+
+  IF v_apps IS NULL THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'empty');
+  END IF;
+
+  UPDATE public.updates_cache_purge_state SET last_claim_at = v_now WHERE id;
+  RETURN pg_catalog.jsonb_build_object(
+    'status', 'ok',
+    'apps', v_apps,
+    'has_more', EXISTS (SELECT 1 FROM public.updates_cache_purge_pending WHERE due_at <= v_now)
+  );
 END;
 $$;
 
-ALTER FUNCTION public.flush_updates_cache_purge(boolean) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.flush_updates_cache_purge(boolean) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.flush_updates_cache_purge(boolean) FROM anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.flush_updates_cache_purge(boolean) TO service_role;
+ALTER FUNCTION public.claim_updates_cache_purge(integer) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.claim_updates_cache_purge(integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.claim_updates_cache_purge(integer) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_updates_cache_purge(integer) TO service_role;
 
+-- After a purge: schedule re-purges for first purges that succeeded, and put
+-- failed apps back at their retry time. All times are from now (wall clock).
+CREATE OR REPLACE FUNCTION public.ack_updates_cache_purge(
+  p_repurge_app_ids text[] DEFAULT '{}',
+  p_retry jsonb DEFAULT '[]',
+  p_retry_after_seconds integer DEFAULT 5
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_now timestamptz := pg_catalog.clock_timestamp();
+BEGIN
+  INSERT INTO public.updates_cache_purge_pending (app_id, due_at, initial)
+  SELECT app_id, v_now + delay, false
+  FROM (
+    SELECT DISTINCT app_id FROM pg_catalog.unnest(p_repurge_app_ids) AS app_id
+    WHERE app_id IS NOT NULL AND app_id <> ''
+  ) AS apps
+  CROSS JOIN (VALUES
+    (interval '10 seconds'), (interval '60 seconds'), (interval '180 seconds')
+  ) AS delays (delay);
+
+  INSERT INTO public.updates_cache_purge_pending (app_id, due_at, initial)
+  SELECT r.app_id,
+         v_now + pg_catalog.make_interval(secs => GREATEST(LEAST(p_retry_after_seconds, 300), 1)),
+         COALESCE(r.initial, false)
+  FROM pg_catalog.jsonb_to_recordset(COALESCE(p_retry, '[]'::jsonb)) AS r(app_id text, initial boolean)
+  WHERE r.app_id IS NOT NULL AND r.app_id <> '';
+END;
+$$;
+
+ALTER FUNCTION public.ack_updates_cache_purge(text[], jsonb, integer) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.ack_updates_cache_purge(text[], jsonb, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.ack_updates_cache_purge(text[], jsonb, integer) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.ack_updates_cache_purge(text[], jsonb, integer) TO service_role;
+
+-- Trigger side: record the change (non-blocking insert) and queue a wake.
 CREATE OR REPLACE FUNCTION public.notify_updates_edge_cache_purge(p_app_ids text[])
 RETURNS void
 LANGUAGE plpgsql
@@ -117,19 +236,14 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 BEGIN
-  INSERT INTO public.updates_cache_purge_pending (app_id, due_at)
-  SELECT app_id, pg_catalog.date_trunc('second', pg_catalog.now()) + delay
+  INSERT INTO public.updates_cache_purge_pending (app_id, due_at, initial)
+  SELECT app_id, pg_catalog.clock_timestamp(), true
   FROM (
     SELECT DISTINCT app_id FROM pg_catalog.unnest(p_app_ids) AS app_id
     WHERE app_id IS NOT NULL AND app_id <> ''
-  ) AS apps
-  CROSS JOIN (VALUES
-    (interval '0 seconds'), (interval '10 seconds'),
-    (interval '60 seconds'), (interval '180 seconds')
-  ) AS delays (delay)
-  ON CONFLICT DO NOTHING;
+  ) AS apps;
 
-  PERFORM public.flush_updates_cache_purge(false);
+  PERFORM public.wake_updates_cache_purge();
 EXCEPTION WHEN OTHERS THEN
   -- Cache purge is an accelerator; never fail the business write.
   RAISE WARNING 'notify_updates_edge_cache_purge failed: %', SQLERRM;
@@ -141,13 +255,14 @@ REVOKE ALL ON FUNCTION public.notify_updates_edge_cache_purge(text[]) FROM PUBLI
 REVOKE ALL ON FUNCTION public.notify_updates_edge_cache_purge(text[]) FROM anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.notify_updates_edge_cache_purge(text[]) TO service_role;
 
--- Drains leftovers and due re-purges every 10 seconds.
+-- Wakes the endpoint every 10 seconds while purges are due (leftovers,
+-- re-purges, retries).
 INSERT INTO public.cron_tasks (name, description, task_type, target, second_interval, enabled)
 VALUES (
-  'updates_cache_purge_flush',
-  'Batched Cloudflare purge of the /updates edge cache (leftovers and delayed re-purges)',
+  'updates_cache_purge_wake',
+  'Wake the /updates edge cache purge endpoint while purges are due',
   'function',
-  'public.flush_updates_cache_purge(true)',
+  'public.wake_updates_cache_purge_if_due()',
   10,
   true
 )
@@ -162,7 +277,7 @@ AS $$
 DECLARE
   app_ids text[];
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM public.updates_cache_purge_state WHERE enabled) THEN
+  IF NOT public.updates_cache_purge_enabled() THEN
     RETURN NULL;
   END IF;
 
@@ -212,40 +327,29 @@ BEGIN
              COALESCE(n.rollout_channel_count, 0) > 0);
     END IF;
   ELSIF TG_TABLE_NAME = 'app_versions' THEN
+    -- Only versions a channel serves (as version or rollout target) can be in
+    -- the cache; channel changes that start serving a version purge on their
+    -- own. This keeps uploads (manifest_count, storage_provider flips of
+    -- unlinked bundles) from evicting the app's live entries.
     IF TG_OP = 'DELETE' THEN
-      SELECT pg_catalog.array_agg(DISTINCT o.app_id::text) INTO app_ids FROM old_rows o;
+      SELECT pg_catalog.array_agg(DISTINCT o.app_id::text) INTO app_ids
+      FROM old_rows o
+      WHERE EXISTS (
+        SELECT 1 FROM public.channels c WHERE c.version = o.id OR c.rollout_version = o.id
+      );
     ELSE
       SELECT pg_catalog.array_agg(DISTINCT n.app_id::text) INTO app_ids
       FROM old_rows o JOIN new_rows n ON n.id = o.id
-      WHERE (o.app_id, o.name, o.checksum, o.session_key, o.key_id, o.storage_provider, o.external_url,
+      WHERE EXISTS (
+        SELECT 1 FROM public.channels c WHERE c.version = n.id OR c.rollout_version = n.id
+      )
+        AND (o.app_id, o.name, o.checksum, o.session_key, o.key_id, o.storage_provider, o.external_url,
              o.min_update_version, o.manifest_count, o.r2_path, o.deleted, o.deleted_at,
              o.link, o.comment)
         IS DISTINCT FROM
             (n.app_id, n.name, n.checksum, n.session_key, n.key_id, n.storage_provider, n.external_url,
              n.min_update_version, n.manifest_count, n.r2_path, n.deleted, n.deleted_at,
              n.link, n.comment);
-    END IF;
-  ELSIF TG_TABLE_NAME = 'manifest' THEN
-    IF TG_OP = 'DELETE' THEN
-      SELECT pg_catalog.array_agg(DISTINCT av.app_id::text) INTO app_ids
-      FROM (SELECT DISTINCT app_version_id FROM old_rows) AS m
-      JOIN public.app_versions av ON av.id = m.app_version_id;
-    ELSIF TG_OP = 'INSERT' THEN
-      SELECT pg_catalog.array_agg(DISTINCT av.app_id::text) INTO app_ids
-      FROM (SELECT DISTINCT app_version_id FROM new_rows) AS m
-      JOIN public.app_versions av ON av.id = m.app_version_id;
-    ELSE
-      -- file_size backfills (one UPDATE per file) are not read by /updates.
-      SELECT pg_catalog.array_agg(DISTINCT av.app_id::text) INTO app_ids
-      FROM (
-        SELECT o.app_version_id FROM old_rows o JOIN new_rows n ON n.id = o.id
-        WHERE (o.app_version_id, o.file_name, o.file_hash, o.s3_path)
-          IS DISTINCT FROM (n.app_version_id, n.file_name, n.file_hash, n.s3_path)
-        UNION
-        SELECT n.app_version_id FROM old_rows o JOIN new_rows n ON n.id = o.id
-        WHERE o.app_version_id IS DISTINCT FROM n.app_version_id
-      ) AS m
-      JOIN public.app_versions av ON av.id = m.app_version_id;
     END IF;
   ELSIF TG_TABLE_NAME = 'orgs' THEN
     SELECT pg_catalog.array_agg(DISTINCT a.app_id::text) INTO app_ids
@@ -296,7 +400,8 @@ COMMENT ON FUNCTION public.invalidate_updates_edge_cache() IS
   'Statement-level AFTER trigger: collects app ids whose /updates answer may '
   'have changed and asks triggers/updates_cache_purge to purge their Cloudflare '
   'Cache-Tag. Runs once per statement over transition tables; lookups use '
-  'app_versions_pkey, idx_orgs_customer_id and finx_apps_owner_org.';
+  'finx_channels_version, idx_channels_rollout_version, idx_orgs_customer_id '
+  'and finx_apps_owner_org.';
 
 -- channels
 CREATE TRIGGER invalidate_updates_edge_cache_channels_ins
@@ -326,17 +431,6 @@ AFTER UPDATE ON public.app_versions REFERENCING OLD TABLE AS old_rows NEW TABLE 
 FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_edge_cache();
 CREATE TRIGGER invalidate_updates_edge_cache_app_versions_del
 AFTER DELETE ON public.app_versions REFERENCING OLD TABLE AS old_rows
-FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_edge_cache();
-
--- manifest (bundle uploads insert many rows in one statement)
-CREATE TRIGGER invalidate_updates_edge_cache_manifest_ins
-AFTER INSERT ON public.manifest REFERENCING NEW TABLE AS new_rows
-FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_edge_cache();
-CREATE TRIGGER invalidate_updates_edge_cache_manifest_upd
-AFTER UPDATE ON public.manifest REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows
-FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_edge_cache();
-CREATE TRIGGER invalidate_updates_edge_cache_manifest_del
-AFTER DELETE ON public.manifest REFERENCING OLD TABLE AS old_rows
 FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_edge_cache();
 
 -- orgs (plan validation inputs)

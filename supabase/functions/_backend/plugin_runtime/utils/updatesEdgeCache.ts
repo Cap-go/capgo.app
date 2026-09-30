@@ -121,6 +121,7 @@ async function cachedLookup<T>(
   path: string,
   params: Record<string, string>,
   load: () => Promise<T | null | undefined>,
+  ttlCapSeconds?: (value: T | null) => number | undefined,
 ): Promise<EdgeCacheLookup<T>> {
   const helper = new CacheHelper(c)
   const request = helper.buildRequest(path, params)
@@ -130,16 +131,38 @@ async function cachedLookup<T>(
 
   // Loader errors propagate: a failed read must never be cached as "missing".
   const value = (await load()) ?? null
-  const ttl = getUpdatesEdgeCacheTtlSeconds(c)
-  await backgroundTask(c, helper.putJson(request, { v: value } satisfies CachedValue<T>, value === null ? Math.min(ttl, UPDATES_EDGE_CACHE_NEGATIVE_TTL_SECONDS) : ttl, {
+  let ttl = getUpdatesEdgeCacheTtlSeconds(c)
+  if (value === null)
+    ttl = Math.min(ttl, UPDATES_EDGE_CACHE_NEGATIVE_TTL_SECONDS)
+  const cap = ttlCapSeconds?.(value)
+  if (cap !== undefined)
+    ttl = Math.max(1, Math.min(ttl, cap))
+  await backgroundTask(c, helper.putJson(request, { v: value } satisfies CachedValue<T>, ttl, {
     tags: [updatesAppCacheTag(appId)],
     timeoutMs: UPDATES_EDGE_CACHE_PUT_TIMEOUT_MS,
   }))
   return { value, hit: false }
 }
 
-export function getCachedAppOwner<T>(c: Context, appId: string, planKey: string, load: () => Promise<T | null>) {
-  return cachedLookup(c, appId, OWNER_CACHE_PATH, { app_id: appId, plan: planKey }, load)
+/**
+ * Seconds until a trial-based `plan_valid` flips on its own: the plan check is
+ * `trial_at::date > CURRENT_DATE` (UTC), so it ends at 00:00 UTC of the trial
+ * date. No write happens then, so the owner entry must not outlive it.
+ */
+export function planValidityTtlCapSeconds(owner: { plan_valid?: boolean, plan_trial_at?: string | null } | null, nowMs = Date.now()) {
+  if (!owner?.plan_valid || !owner.plan_trial_at)
+    return undefined
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(owner.plan_trial_at)
+  if (!match)
+    return undefined
+  const trialEnd = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+  if (trialEnd <= nowMs)
+    return undefined
+  return Math.ceil((trialEnd - nowMs) / 1000)
+}
+
+export function getCachedAppOwner<T extends { plan_valid?: boolean, plan_trial_at?: string | null }>(c: Context, appId: string, planKey: string, load: () => Promise<T | null>) {
+  return cachedLookup(c, appId, OWNER_CACHE_PATH, { app_id: appId, plan: planKey }, load, planValidityTtlCapSeconds)
 }
 
 export interface UpdatesChannelCacheKey {

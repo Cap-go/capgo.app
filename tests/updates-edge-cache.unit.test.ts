@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { purgeLocalTaggedKeys } from '../supabase/functions/_backend/plugin_runtime/utils/cache.ts'
-import { createLazyPgClient, getLazyPgQueryCount } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
-import { getCachedAppOwner, getCachedDefaultChannel, getUpdatesEdgeCacheBps, getUpdatesEdgeCacheTtlSeconds, isUpdatesEdgeCacheEnabled, shouldUseUpdatesEdgeCache, updatesAppCacheTag, updatesCacheTags, updatesEdgeCacheBucket } from '../supabase/functions/_backend/plugin_runtime/utils/updatesEdgeCache.ts'
-import { chunk, parseAppIds, purgeUpdatesCacheTags, resetPurgeZoneCache, shouldForwardPurge } from '../supabase/functions/_backend/triggers/updates_cache_purge.ts'
+import { createLazyPgClient, getLazyPgQueryCount, isLazyPgConnectError } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
+import { getCachedAppOwner, getCachedDefaultChannel, getUpdatesEdgeCacheBps, getUpdatesEdgeCacheTtlSeconds, isUpdatesEdgeCacheEnabled, planValidityTtlCapSeconds, shouldUseUpdatesEdgeCache, updatesAppCacheTag, updatesCacheTags, updatesEdgeCacheBucket } from '../supabase/functions/_backend/plugin_runtime/utils/updatesEdgeCache.ts'
+import { chunk, drainUpdatesCachePurge, purgeUpdatesCacheTags, resetPurgeZoneCache, shouldForwardPurge } from '../supabase/functions/_backend/triggers/updates_cache_purge.ts'
 
 function makeContext(env: Record<string, string> = {}) {
   const raw = new Request('https://plugin.capgo.test/updates', { method: 'POST' })
@@ -212,7 +212,7 @@ describe('updates cache purge trigger', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(purgeUpdatesCacheTags(makeContext(), ['capgo-updates-a'])).resolves.toEqual({ calls: 2, failed: 0 })
+    await expect(purgeUpdatesCacheTags(makeContext(), ['capgo-updates-a'])).resolves.toMatchObject({ calls: 2, failed: 0 })
     await purgeUpdatesCacheTags(makeContext(), ['capgo-updates-b'])
     const urls = fetchMock.mock.calls.map(call => call[0])
     expect(urls.filter(url => url.includes('/zones?'))).toHaveLength(1)
@@ -245,7 +245,7 @@ describe('updates cache purge trigger', () => {
     vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
     const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
-    await expect(purgeUpdatesCacheTags(makeContext(), ['capgo-updates-a'])).resolves.toEqual({ calls: 1, failed: 0 })
+    await expect(purgeUpdatesCacheTags(makeContext(), ['capgo-updates-a'])).resolves.toMatchObject({ calls: 1, failed: 0 })
     expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer analytics-token')
   })
 
@@ -261,10 +261,7 @@ describe('updates cache purge trigger', () => {
     expect(shouldForwardPurge(c)).toBe(false)
   })
 
-  it('dedupes and bounds app ids', () => {
-    expect(parseAppIds({ app_ids: ['a', 'a', '', 1, 'b'] })).toEqual(['a', 'b'])
-    expect(parseAppIds({})).toEqual([])
-    expect(parseAppIds({ app_ids: Array.from({ length: 1500 }, (_, i) => `app${i}`) })).toHaveLength(1000)
+  it('chunks tags', () => {
     expect(chunk([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]])
   })
 
@@ -275,7 +272,7 @@ describe('updates cache purge trigger', () => {
     vi.stubGlobal('fetch', fetchMock)
     const tags = Array.from({ length: 150 }, (_, i) => `capgo-updates-app${i}`)
 
-    await expect(purgeUpdatesCacheTags(makeContext(), tags)).resolves.toEqual({ calls: 4, failed: 0 })
+    await expect(purgeUpdatesCacheTags(makeContext(), tags)).resolves.toMatchObject({ calls: 4, failed: 0 })
     const urls = fetchMock.mock.calls.map(call => call[0])
     expect(urls.filter(url => url.endsWith('/zones/zone-a/purge_cache'))).toHaveLength(2)
     expect(urls.filter(url => url.endsWith('/zones/zone-b/purge_cache'))).toHaveLength(2)
@@ -284,22 +281,109 @@ describe('updates cache purge trigger', () => {
     expect(JSON.parse(init.body).tags).toHaveLength(100)
   })
 
-  it('retries once on 429 and reports failures', async () => {
+  it('does not retry in the worker and reports Retry-After for requeueing', async () => {
     vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
     vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response('{}', { status: 429, headers: { 'Retry-After': '0' } }))
-      .mockResolvedValueOnce(new Response('{}', { status: 500 }))
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 429, headers: { 'Retry-After': '7' } }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(purgeUpdatesCacheTags(makeContext(), ['capgo-updates-a'])).resolves.toEqual({ calls: 1, failed: 1 })
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    await expect(purgeUpdatesCacheTags(makeContext(), ['capgo-updates-a'])).resolves.toEqual({ configured: true, calls: 1, failed: 1, retryAfterSeconds: 7 })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('treats a token with no discoverable plugin zone as a failure to retry', async () => {
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
+    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', '')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 403 })))
+    await expect(purgeUpdatesCacheTags(makeContext(), ['capgo-updates-a'])).resolves.toMatchObject({ configured: true, calls: 0, failed: 1, retryAfterSeconds: 30 })
   })
 
   it('does nothing when no purge target is configured', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
-    await expect(purgeUpdatesCacheTags(makeContext(), ['capgo-updates-a'])).resolves.toEqual({ calls: 0, failed: 0 })
+    await expect(purgeUpdatesCacheTags(makeContext(), ['capgo-updates-a'])).resolves.toEqual({ configured: false, calls: 0, failed: 0, retryAfterSeconds: 0 })
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('updates cache purge drain', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+    resetPurgeZoneCache()
+  })
+
+  function rpcFrom(claims: unknown[]) {
+    const calls: { fn: string, args: Record<string, unknown> }[] = []
+    const rpc = vi.fn(async (fn: string, args: Record<string, unknown>) => {
+      calls.push({ fn, args })
+      if (fn === 'claim_updates_cache_purge')
+        return { data: claims.shift() ?? { status: 'empty' }, error: null }
+      return { data: null, error: null }
+    })
+    return { rpc, calls }
+  }
+
+  it('waits out the claim throttle, purges, and schedules re-purges only for first purges', async () => {
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
+    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })))
+    const sleep = vi.fn(async () => {})
+    const { rpc, calls } = rpcFrom([
+      { status: 'throttled', wait_ms: 400 },
+      { status: 'ok', apps: [{ app_id: 'com.a', initial: true }, { app_id: 'com.b', initial: false }], has_more: true },
+      { status: 'ok', apps: [{ app_id: 'com.c', initial: true }], has_more: false },
+    ])
+
+    await expect(drainUpdatesCachePurge(makeContext(), rpc, { sleep })).resolves.toEqual({ purgedApps: 3 })
+    expect(sleep).toHaveBeenCalledWith(450)
+    const acks = calls.filter(call => call.fn === 'ack_updates_cache_purge').map(call => call.args)
+    expect(acks).toEqual([
+      { p_repurge_app_ids: ['com.a'], p_retry: [], p_retry_after_seconds: 5 },
+      { p_repurge_app_ids: ['com.c'], p_retry: [], p_retry_after_seconds: 5 },
+    ])
+  })
+
+  it('puts a failed batch back at its Retry-After instead of dropping it', async () => {
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
+    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 429, headers: { 'Retry-After': '12' } })))
+    const apps = [{ app_id: 'com.a', initial: true }]
+    const { rpc, calls } = rpcFrom([{ status: 'ok', apps, has_more: false }])
+
+    await expect(drainUpdatesCachePurge(makeContext(), rpc)).resolves.toEqual({ purgedApps: 0 })
+    expect(calls.find(call => call.fn === 'ack_updates_cache_purge')?.args).toEqual({ p_repurge_app_ids: [], p_retry: apps, p_retry_after_seconds: 12 })
+  })
+
+  it('stops when another caller is draining', async () => {
+    const { rpc, calls } = rpcFrom([{ status: 'busy' }])
+    await drainUpdatesCachePurge(makeContext(), rpc)
+    expect(calls).toHaveLength(1)
+  })
+})
+
+describe('edge cache safety', () => {
+  it('recognizes a lazy connect failure wrapped by Drizzle', async () => {
+    // The plugin worker requires a read replica; none is configured here, so
+    // opening the lazy connection fails (the production failure mode).
+    const base = makeContext()
+    const c = { ...base, get: (key: string) => key === 'requireReadReplica' ? true : base.get(key) }
+    const lazy = createLazyPgClient(c, true)
+    const connectError = await (lazy.client as unknown as { query: (sql: string) => Promise<unknown> }).query('SELECT 1').catch((error: unknown) => error)
+    expect(isLazyPgConnectError(connectError)).toBe(true)
+    // Drizzle rethrows client rejections as DrizzleQueryError with the original as cause.
+    const wrapped = new Error('Failed query: SELECT 1', { cause: connectError })
+    expect(isLazyPgConnectError(wrapped)).toBe(true)
+    expect(isLazyPgConnectError(new Error('outer', { cause: wrapped }))).toBe(true)
+    expect(isLazyPgConnectError(new Error('query error'))).toBe(false)
+    expect(isLazyPgConnectError(new Error('wrapped', { cause: new Error('query error') }))).toBe(false)
+  })
+
+  it('caps the owner TTL at the end of a trial that keeps the plan valid', () => {
+    const now = Date.UTC(2026, 8, 30, 23, 59, 0)
+    expect(planValidityTtlCapSeconds({ plan_valid: true, plan_trial_at: '2026-10-01 10:00:00+00' }, now)).toBe(60)
+    expect(planValidityTtlCapSeconds({ plan_valid: true, plan_trial_at: '2026-09-30T08:00:00Z' }, now)).toBeUndefined()
+    expect(planValidityTtlCapSeconds({ plan_valid: false, plan_trial_at: '2026-10-01 10:00:00+00' }, now)).toBeUndefined()
+    expect(planValidityTtlCapSeconds({ plan_valid: true, plan_trial_at: null }, now)).toBeUndefined()
   })
 })

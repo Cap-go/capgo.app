@@ -3651,6 +3651,14 @@ export type Database = {
     }
     Functions: {
       accept_invitation_to_org: { Args: { org_id: string }; Returns: string }
+      ack_updates_cache_purge: {
+        Args: {
+          p_repurge_app_ids?: string[]
+          p_retry?: Json
+          p_retry_after_seconds?: number
+        }
+        Returns: undefined
+      }
       acknowledge_compatibility_event: {
         Args: { event_id: number; note: string }
         Returns: undefined
@@ -3813,6 +3821,10 @@ export type Database = {
         Args: { p_app_uuid: string }
         Returns: undefined
       }
+      claim_updates_cache_purge: {
+        Args: { p_limit?: number }
+        Returns: Json
+      }
       cleanup_completed_onboarding_apps: { Args: never; Returns: undefined }
       cleanup_expired_apikeys: { Args: never; Returns: undefined }
       cleanup_expired_demo_apps: { Args: never; Returns: undefined }
@@ -3954,10 +3966,6 @@ export type Database = {
         Returns: {
           name: string
         }[]
-      }
-      flush_updates_cache_purge: {
-        Args: { p_force?: boolean }
-        Returns: number
       }
       get_accessible_apps_for_apikey_v2: {
         Args: { apikey?: string }

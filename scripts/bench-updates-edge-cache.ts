@@ -291,9 +291,11 @@ async function withTriggerRelay<T>(run: () => Promise<T>): Promise<T> {
   const [secret] = await sql`SELECT id, decrypted_secret FROM vault.decrypted_secrets WHERE name = 'db_url'`
   if (!secret)
     throw new Error('vault secret db_url is missing; seed the local database first')
-  const [state] = await sql`SELECT enabled FROM public.updates_cache_purge_state WHERE id`
-  if (!state)
-    throw new Error('updates_cache_purge_state is missing; apply the edge cache migration first')
+  const [fn] = await sql`SELECT 1 FROM pg_proc WHERE proname = 'updates_cache_purge_enabled'`
+  if (!fn)
+    throw new Error('updates_cache_purge_enabled() is missing; apply the edge cache migration first')
+  // Runtime switch is the CAPGO_UPDATES_CACHE_PURGE_ENABLED Vault secret.
+  const [switchSecret] = await sql`SELECT id, decrypted_secret FROM vault.decrypted_secrets WHERE name = 'CAPGO_UPDATES_CACHE_PURGE_ENABLED'`
   Bun.spawnSync(['docker', 'rm', '-f', name])
   const started = Bun.spawnSync(['docker', 'run', '-d', '--rm', '--name', name, '--network', network, '-p', `${RELAY_PORT}:18785`, image, 'bun', '-e', MAILBOX_CODE])
   if (started.exitCode !== 0)
@@ -323,12 +325,18 @@ async function withTriggerRelay<T>(run: () => Promise<T>): Promise<T> {
   })()
 
   await sql`SELECT vault.update_secret(${secret.id}, ${`http://${name}:18785`})`
-  await sql`UPDATE public.updates_cache_purge_state SET enabled = true WHERE id`
+  if (switchSecret)
+    await sql`SELECT vault.update_secret(${switchSecret.id}, 'true')`
+  else
+    await sql`SELECT vault.create_secret('true', 'CAPGO_UPDATES_CACHE_PURGE_ENABLED', 'edge cache benchmark')`
   try {
     return await run()
   }
   finally {
-    await sql`UPDATE public.updates_cache_purge_state SET enabled = ${state.enabled} WHERE id`
+    if (switchSecret)
+      await sql`SELECT vault.update_secret(${switchSecret.id}, ${switchSecret.decrypted_secret})`
+    else
+      await sql`DELETE FROM vault.secrets WHERE name = 'CAPGO_UPDATES_CACHE_PURGE_ENABLED'`
     await sql`SELECT vault.update_secret(${secret.id}, ${secret.decrypted_secret})`
     running = false
     Bun.spawnSync(['docker', 'rm', '-f', name])

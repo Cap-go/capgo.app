@@ -472,9 +472,18 @@ function markLazyPgConnectError(error: unknown) {
   return marked
 }
 
-/** True when a lazy client failed to open its connection (not a query error). */
+/**
+ * True when a lazy client failed to open its connection (not a query error).
+ * Drizzle wraps client rejections (DrizzleQueryError), so follow the cause chain.
+ */
 export function isLazyPgConnectError(error: unknown) {
-  return error instanceof Error && (error as Error & { [LAZY_PG_CONNECT_ERROR]?: true })[LAZY_PG_CONNECT_ERROR] === true
+  let current: unknown = error
+  for (let depth = 0; depth < 5 && current instanceof Error; depth++) {
+    if ((current as Error & { [LAZY_PG_CONNECT_ERROR]?: true })[LAZY_PG_CONNECT_ERROR] === true)
+      return true
+    current = current.cause
+  }
+  return false
 }
 
 /** Queries sent through lazy clients during this request (all lazy clients combined). */
@@ -1220,6 +1229,8 @@ export interface AppOwnerPostgresResult {
   expose_metadata: boolean
   allow_device_custom_id: boolean
   block_provider_infra_requests: boolean
+  /** stripe_info.trial_at, only selected for the edge cache (bounds how long plan_valid holds). */
+  plan_trial_at?: string | null
 }
 
 /**
@@ -1231,16 +1242,28 @@ export async function queryAppOwnerPostgres(
   appId: string,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
   actions: PlanAction[] = [],
+  options: { includeTrialAt?: boolean } = {},
 ): Promise<AppOwnerPostgresResult | null> {
   if (actions.length === 0)
     return null
   const orgAlias = alias(schema.orgs, 'orgs')
   const planExpression = buildPlanValidationExpression(actions, schema.apps.owner_org)
+  // Only the edge cache needs it (a constant NULL keeps the plain query shape).
+  const planTrialAt = options.includeTrialAt
+    ? sql<string | null>`(
+        SELECT ${schema.stripe_info.trial_at}
+        FROM ${schema.stripe_info}
+        WHERE ${schema.stripe_info.customer_id} = (
+          SELECT ${schema.orgs.customer_id} FROM ${schema.orgs} WHERE ${schema.orgs.id} = ${schema.apps.owner_org}
+        )
+      )`
+    : sql<string | null>`NULL`
 
   const appOwner = await drizzleClient
     .select({
       owner_org: schema.apps.owner_org,
       plan_valid: planExpression,
+      plan_trial_at: planTrialAt,
       channel_device_count: schema.apps.channel_device_count,
       manifest_bundle_count: schema.apps.manifest_bundle_count,
       rollout_channel_count: schema.apps.rollout_channel_count,
