@@ -32,6 +32,16 @@ describe('transient integration test retry classifier', () => {
     expect(getTransientTestFailure(output)).toBeNull()
   })
 
+  it('classifies consecutive failure headers with one shared diagnostic', () => {
+    const output = [
+      'FAIL tests/example.test.ts > first request',
+      'FAIL tests/example.test.ts > second request',
+      'AssertionError: expected 502 to be 200',
+    ].join('\n')
+
+    expect(getTransientTestFailure(output)).toBe('gateway_502_503')
+  })
+
   it('ignores transient messages emitted by passing tests', () => {
     const output = [
       'stderr | tests/passing.test.ts > passes',

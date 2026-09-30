@@ -16,10 +16,21 @@ export function getTransientTestFailure(output: string): TransientTestFailure | 
   if (failedTestStarts.length === 0)
     return null
 
+  const failedDiagnosticStarts = failedTestStarts.flatMap((failedTestStart, index) => {
+    const previousStart = failedTestStarts[index - 1]
+    if (!previousStart)
+      return [failedTestStart.index]
+
+    const previousHeaderEnd = previousStart.index + previousStart[0].length
+    return normalizedOutput.slice(previousHeaderEnd, failedTestStart.index).trim() === ''
+      ? []
+      : [failedTestStart.index]
+  })
+
   let classifiedFailure: TransientTestFailure | null = null
-  for (let index = 0; index < failedTestStarts.length; index++) {
-    const start = failedTestStarts[index].index
-    const end = failedTestStarts[index + 1]?.index ?? normalizedOutput.length
+  for (let index = 0; index < failedDiagnosticStarts.length; index++) {
+    const start = failedDiagnosticStarts[index]
+    const end = failedDiagnosticStarts[index + 1] ?? normalizedOutput.length
     const failedDiagnostic = normalizedOutput.slice(start, end)
     const match = TRANSIENT_FAILURE_PATTERNS.find(([, pattern]) => pattern.test(failedDiagnostic))
     if (!match)

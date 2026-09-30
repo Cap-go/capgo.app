@@ -25,7 +25,7 @@ interface WorkflowRunResponse {
   status: string
 }
 
-const RUNNER_SHUTDOWN_TRAILER = /##\[error\]The runner has received a shutdown signal\.[\s\S]{0,1000}##\[error\]Process completed with exit code 143\.[\s\S]{0,1000}Cleaning up orphan processes\s*$/i
+const RUNNER_SHUTDOWN_TRAILER = /##\[error\]The runner has received a shutdown signal\.[\s\S]{0,1000}##\[error\]Process completed with exit code 143\.[\s\S]{0,1000}Cleaning up orphan processes(?:\r?\n[^\r\n]*Terminate orphan process: pid \(\d+\) \([^)]+\))*\s*$/i
 const GITHUB_READ_ATTEMPTS = 3
 const GITHUB_READ_RETRY_DELAY_MS = 1000
 const TRANSIENT_GITHUB_READ_FAILURE = /(?:HTTP (?:500|502|503|504)\b|error connecting to api\.github\.com|connection reset by peer|TLS handshake timeout|unexpected EOF)/i

@@ -17,6 +17,18 @@ describe('transient CI job retry classifier', () => {
     )).toBe('runner_shutdown')
   })
 
+  it('accepts timestamp-prefixed orphan cleanup after a runner shutdown', () => {
+    expect(getTransientCiJobFailure(
+      [
+        '##[error]The runner has received a shutdown signal. This can happen when the runner service is stopped.',
+        '##[error]Process completed with exit code 143.',
+        '2026-09-30T14:13:30.2800815Z Cleaning up orphan processes',
+        '2026-09-30T14:13:30.3021187Z Terminate orphan process: pid (5104) (MainThread)',
+      ].join('\n'),
+      ['Run backend integration tests'],
+    )).toBe('runner_shutdown')
+  })
+
   it('ignores shutdown text that is not the terminal runner trailer', () => {
     const output = [
       '##[error]The runner has received a shutdown signal.',
