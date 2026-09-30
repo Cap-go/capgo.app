@@ -479,7 +479,7 @@
   "app-delete-removes-desc": "The app, its bundles and channels, device links, and dashboard configuration.",
   "app-delete-type-to-confirm": "Type this App ID to confirm:",
   "app-delete-why-ask": "Why we ask",
-  "app-delete-why-ask-desc": "This feedback helps us separate setup problems from normal test cleanup. It does not change what gets deleted.",
+  "app-delete-why-ask-desc": "Thank you for taking the time to share your feedback. It helps us improve Capgo.",
   "app-delete-your-reason": "Your reason",
   "app-deleted": "App deleted",
   "app-id": "App ID",
