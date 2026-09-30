@@ -3234,7 +3234,7 @@
   "update-package-all": "Zip + delta (default)",
   "update-package-all-description": "Each device gets the best package it supports. Devices on a plugin version with delta support download only the changed files when the bundle has delta files. Only devices on an old plugin version without delta support, or bundles uploaded without delta files, fall back to the full zip.",
   "update-package-delta": "Delta only",
-  "update-package-delta-description": "Only changed files are served. Devices without delta support cannot update until you switch to a format that serves a full zip.",
+  "update-package-delta-description": "Only the changed delta files are served. Devices on an old plugin version without delta support still get the full zip when the bundle has one.",
   "update-package-delta-from-builtin": "Delta from store build only",
   "update-package-delta-from-builtin-description": "While the device still matches the native store version, serve delta only. Other devices keep zip + delta.",
   "update-package-delta-required": "This channel requires a delta package, but the bundle has no delta files. Upload with delta enabled, or switch the channel to zip only or zip and delta.",
