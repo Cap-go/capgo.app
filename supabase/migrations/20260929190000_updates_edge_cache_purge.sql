@@ -22,7 +22,9 @@
 -- Nothing here can fail or slow down the write: every error is swallowed and
 -- the cache TTL is the backstop.
 
-CREATE UNLOGGED TABLE public.updates_cache_purge_pending (
+-- Logged (not UNLOGGED) so scheduled purges survive a crash restart; it is not
+-- in the read-replica publication (explicit FOR TABLE list).
+CREATE TABLE public.updates_cache_purge_pending (
   app_id text NOT NULL,
   due_at timestamptz NOT NULL,
   PRIMARY KEY (app_id, due_at)
@@ -34,7 +36,6 @@ REVOKE ALL ON TABLE public.updates_cache_purge_pending FROM PUBLIC, anon, authen
 
 -- `enabled` is the database-side switch: until the Cloudflare purge secrets are
 -- deployed and a region uses the cache, triggers return before doing any work.
--- Not UNLOGGED, so the switch survives a crash restart.
 CREATE TABLE public.updates_cache_purge_state (
   id boolean PRIMARY KEY DEFAULT true CHECK (id),
   enabled boolean NOT NULL DEFAULT false,
