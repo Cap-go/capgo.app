@@ -413,7 +413,7 @@ const { continueOnboarding, goBack, replay } = useOnboardingChannelAnimation({
                   <div><IconSearch />{{ t('search-by-device-id') }}</div><span>30 days <IconChevronDown /></span>
                 </div>
                 <div class="csa-console-device-grid csa-console-table-head">
-                  <span>{{ t('device-id') }}</span><span>{{ t('updated-at') }}</span><span>{{ t('platform') }}</span><span>{{ t('bundle') }}</span>
+                  <span>{{ t('device-id') }}</span><span>{{ t('last-seen') }}</span><span>{{ t('platform') }}</span><span>{{ t('bundle') }}</span>
                 </div>
                 <div class="csa-console-device-grid csa-console-data-row relative">
                   <span class="csa-device-row csa-console-click-target"><strong>abc-123</strong></span><span>Just now</span><span>iOS 18.0</span><span class="text-blue-600">1.1.0</span>
@@ -441,7 +441,7 @@ const { continueOnboarding, goBack, replay } = useOnboardingChannelAnimation({
             <div class="csa-console-device-page">
               <div class="csa-console-device-details">
                 <div><span>{{ t('device-id') }}</span><strong>abc-123</strong></div>
-                <div><span>{{ t('last-update') }}</span><strong>Aug 23, 2026, 7:04 PM</strong></div>
+                <div><span>{{ t('last-seen') }}</span><strong>Aug 23, 2026, 7:04 PM</strong></div>
                 <div><span>{{ t('platform') }}</span><strong>iOS</strong></div>
                 <div><span>{{ t('plugin-version') }}</span><strong>7.0.0</strong></div>
                 <div><span>{{ t('version') }}</span><strong class="text-blue-600">1.1.0</strong></div>

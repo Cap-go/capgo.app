@@ -154,7 +154,7 @@ const columns = ref<TableColumn[]>([
     },
   },
   {
-    label: t('updated-at'),
+    label: t('last-seen'),
     key: 'updated_at',
     mobile: false,
     sortable: 'desc',
