@@ -7,6 +7,7 @@ import { Bar } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
+import IconChevronDown from '~icons/lucide/chevron-down'
 import IconRefresh from '~icons/lucide/refresh-cw'
 import Spinner from '~/components/Spinner.vue'
 import { buildDemoReleaseLive, RELEASE_LIVE_POLL_INTERVAL_MS, useReleaseLive } from '~/composables/useReleaseLive'
@@ -28,6 +29,8 @@ const isDark = useDark()
 const visibility = useDocumentVisibility()
 const now = useNow({ interval: 1000 })
 const channelSelectId = useId()
+// Native select with our own chevron: daisyUI's select-sm chevron overlaps long labels.
+const pickerClass = 'block h-9 w-full min-w-40 max-w-xs appearance-none truncate rounded-md border border-slate-300 bg-white py-0 pl-3 pr-9 text-sm text-slate-900 shadow-sm transition-colors hover:border-slate-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:hover:border-slate-500'
 const releaseSelectId = useId()
 
 const route = useRoute()
@@ -270,45 +273,51 @@ watch(() => props.appId, () => {
           {{ t('release-live-help', { seconds: RELEASE_LIVE_POLL_INTERVAL_MS / 1000 }) }}
         </p>
       </div>
-      <div class="flex items-end gap-2">
-        <div v-if="channelOptions.length" class="flex flex-col gap-1">
+      <div class="flex flex-wrap items-end gap-2">
+        <div v-if="channelOptions.length" class="flex flex-col min-w-0 gap-1">
           <label :for="channelSelectId" class="text-xs font-medium text-slate-600 dark:text-slate-400">
             {{ t('release-live-select-channel') }}
           </label>
-          <select
-            :id="channelSelectId"
-            v-model="selectedChannelId"
-            class="d-select d-select-sm d-select-bordered max-w-xs"
-            :disabled="forceDemo"
-            data-testid="release-live-channel"
-          >
-            <option v-for="option in channelOptions" :key="option.id" :value="option.id">
-              {{ option.label }}
-            </option>
-          </select>
+          <div class="relative">
+            <select
+              :id="channelSelectId"
+              v-model="selectedChannelId"
+              :class="pickerClass"
+              :disabled="forceDemo"
+              data-testid="release-live-channel"
+            >
+              <option v-for="option in channelOptions" :key="option.id" :value="option.id">
+                {{ option.label }}
+              </option>
+            </select>
+            <IconChevronDown class="absolute w-4 h-4 -translate-y-1/2 pointer-events-none right-2.5 top-1/2 text-slate-400" aria-hidden="true" />
+          </div>
         </div>
-        <div v-if="deploymentOptions.length" class="flex flex-col gap-1">
+        <div v-if="deploymentOptions.length" class="flex flex-col min-w-0 gap-1">
           <label :for="releaseSelectId" class="text-xs font-medium text-slate-600 dark:text-slate-400">
             {{ t('release-live-select-release') }}
           </label>
-          <select
-            :id="releaseSelectId"
-            v-model="selectedVersion"
-            class="d-select d-select-sm d-select-bordered max-w-xs"
-            :disabled="forceDemo"
-            data-testid="release-live-release"
-          >
-            <option value="">
-              {{ t('release-live-latest') }}
-            </option>
-            <option v-for="option in deploymentOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
+          <div class="relative">
+            <select
+              :id="releaseSelectId"
+              v-model="selectedVersion"
+              :class="pickerClass"
+              :disabled="forceDemo"
+              data-testid="release-live-release"
+            >
+              <option value="">
+                {{ t('release-live-latest') }}
+              </option>
+              <option v-for="option in deploymentOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+            <IconChevronDown class="absolute w-4 h-4 -translate-y-1/2 pointer-events-none right-2.5 top-1/2 text-slate-400" aria-hidden="true" />
+          </div>
         </div>
         <button
           type="button"
-          class="d-btn d-btn-sm d-btn-ghost"
+          class="h-9 min-h-9 d-btn d-btn-sm d-btn-ghost"
           :disabled="loading || forceDemo"
           :aria-label="t('refresh')"
           @click="refresh"
