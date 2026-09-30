@@ -37,13 +37,17 @@ describe('manifest-per-version replication exclusion', () => {
       await database.query('CREATE TABLE public.apps (id bigint PRIMARY KEY)')
       await database.query('INSERT INTO public.manifest_per_version VALUES (1)')
       await database.query('CREATE PUBLICATION capgo_google_eu_2_pub FOR TABLE public.manifest_per_version, public.apps')
+      await database.query('CREATE PUBLICATION capgo_google_replicate FOR TABLE public.manifest_per_version, public.apps')
       const migration = await readFile(migrationUrl, 'utf8')
 
       await database.query(migration)
       await database.query(migration)
 
-      const publication = await database.query('SELECT tablename FROM pg_catalog.pg_publication_tables WHERE pubname = \'capgo_google_eu_2_pub\' ORDER BY tablename')
-      expect(publication.rows.map(row => row.tablename)).toEqual(['apps'])
+      const publication = await database.query("SELECT pubname, tablename FROM pg_catalog.pg_publication_tables WHERE pubname IN ('capgo_google_eu_2_pub', 'capgo_google_replicate') ORDER BY pubname, tablename")
+      expect(publication.rows.map(row => [row.pubname, row.tablename])).toEqual([
+        ['capgo_google_eu_2_pub', 'apps'],
+        ['capgo_google_replicate', 'apps'],
+      ])
       const primaryRows = await database.query('SELECT version_id FROM public.manifest_per_version')
       expect(primaryRows.rows.map(row => Number(row.version_id))).toEqual([1])
     }
