@@ -9,7 +9,7 @@ import type { getDrizzleClient } from './pg.ts'
 import { sql } from 'drizzle-orm'
 import { buildAppOnboardingStepPosthogEvent } from './app_onboarding_posthog.ts'
 import { gatherTodoEvidence, getTodoEvidenceNeeds, loadTodoEvidenceCandidates } from './app_onboarding_todo_evidence.ts'
-import { appendAppOnboardingStepHistory, applyAppOnboardingPatch, getAppOnboardingStepHistoryChanges, parseAppOnboarding } from './appOnboarding.ts'
+import { APP_ONBOARDING_ADD_CODE_INFERRED_ANNOTATION, appendAppOnboardingStepHistory, applyAppOnboardingPatch, getAppOnboardingStepHistoryChanges, hasSupportedOtaTodoList, parseAppOnboarding } from './appOnboarding.ts'
 import { buildBuilderBuildOutcomePatch } from './builder_onboarding_checklist.ts'
 import { cloudlogErr } from './logging.ts'
 import { trackPosthogEventBatch } from './posthog.ts'
@@ -32,6 +32,13 @@ interface StepEvent {
 }
 
 type BuilderBuildEvidence = Map<string, Array<Pick<BuilderBuildOutcome, 'platform' | 'status'>>>
+
+function shouldInferAddCode(onboarding: unknown, hasTestUpdateEvidence = false): boolean {
+  const current = parseAppOnboarding(onboarding)
+  return hasSupportedOtaTodoList(current)
+    && current.steps.add_code?.status !== 'done'
+    && (current.steps.test_update?.status === 'done' || hasTestUpdateEvidence)
+}
 
 async function loadBuilderBuildEvidence(database: Pick<Database, 'execute'>, appIds: string[]): Promise<BuilderBuildEvidence> {
   if (!appIds.length)
@@ -74,6 +81,14 @@ function positiveTodoPatch(row: LockedApp, evidence: TodoEvidenceResult, buildEv
     patch.steps!.upload_bundle = { status: 'done', at }
   if (needs.update && evidence.update.has(row.app_id))
     patch.steps!.test_update = { status: 'done', at }
+  if (shouldInferAddCode(row.onboarding, evidence.update.has(row.app_id))) {
+    patch.steps!.add_code = {
+      status: 'done',
+      at,
+      annotation: APP_ONBOARDING_ADD_CODE_INFERRED_ANNOTATION,
+      annotationType: 'note',
+    }
+  }
   const buildPatch = buildBuilderBuildOutcomePatch(row.onboarding, buildEvidence.get(row.app_id) ?? [], () => at)
   if (buildPatch?.builderSteps)
     patch.builderSteps = buildPatch.builderSteps
@@ -97,7 +112,10 @@ export async function refreshAppOnboardingTodoBatch(
     cloudlogErr({ requestId: c.get('requestId'), message: 'onboarding todo evidence query failed', source: error.source, appIds: error.appIds, error: error.message })
   }
   const buildEvidence = await loadBuilderBuildEvidence(database, candidates.map(candidate => candidate.appId))
-  const positiveIds = [...new Set([...evidence.channel, ...evidence.device, ...evidence.bundle, ...evidence.update, ...buildEvidence.keys()])].sort((a, b) => a.localeCompare(b))
+  const inferredAddCodeIds = candidates
+    .filter(candidate => shouldInferAddCode(candidate.onboarding, evidence.update.has(candidate.appId)))
+    .map(candidate => candidate.appId)
+  const positiveIds = [...new Set([...evidence.channel, ...evidence.device, ...evidence.bundle, ...evidence.update, ...buildEvidence.keys(), ...inferredAddCodeIds])].sort((a, b) => a.localeCompare(b))
   if (!positiveIds.length)
     return { updated: 0, steps: 0, cfErrors: evidence.errors.length }
 
