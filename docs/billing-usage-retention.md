@@ -1,5 +1,10 @@
 # Billing usage retention and app ID reuse
 
+This covers usage recorded by Capgo Cloud's own endpoints (updates, stats,
+bundle downloads and builds). Traffic a customer routes to their own servers
+through custom `updateUrl` / `statsUrl` plugin settings never reaches Capgo and
+is out of scope.
+
 Usage is stored per `app_id` in the daily tables (`daily_mau`,
 `daily_bandwidth`, `daily_build_time`). These tables have no foreign key to
 `apps`, so their rows outlive the app. The behaviors below are intentional:
