@@ -6,7 +6,7 @@ import IconCheck from '~icons/lucide/check'
 import IconChevronDown from '~icons/lucide/chevron-down'
 import IconMinus from '~icons/lucide/minus'
 import { useAppOnboardingCliProgress } from '~/composables/useAppOnboardingCliProgress'
-import { getAppOnboardingStepIds } from '~/services/appOnboarding'
+import { APP_ONBOARDING_OTA_V1_STEP_IDS, getAppOnboardingStepIds } from '~/services/appOnboarding'
 
 const props = defineProps<{
   appId: string
@@ -17,10 +17,16 @@ const { t } = useI18n()
 const isOpen = ref(false)
 const { onboarding } = useAppOnboardingCliProgress(() => props.appId, () => props.initialOnboarding)
 
-const steps = computed(() => getAppOnboardingStepIds(onboarding.value.todo_list_version, onboarding.value.ota_todo_list_version).map(id => ({
+// Every app shows the seven OTA setup steps. The legacy v1/v2 lists share
+// these ids, except v1 called the first one add_app.
+const stepIds = computed(() => onboarding.value.todo_list_version === 4
+  ? getAppOnboardingStepIds(4, onboarding.value.ota_todo_list_version)
+  : APP_ONBOARDING_OTA_V1_STEP_IDS)
+const steps = computed(() => stepIds.value.map(id => ({
   id,
-  status: onboarding.value.steps[id]?.status as AppOnboardingStepStatus | undefined,
-  title: t([3, 4].includes(onboarding.value.todo_list_version) ? `setup-checklist-step-${id}` : `app-onboarding-cli-step-${id}`),
+  status: (onboarding.value.steps[id]?.status
+    ?? (id === 'login_cli_mcp' ? onboarding.value.steps.add_app?.status : undefined)) as AppOnboardingStepStatus | undefined,
+  title: t(`setup-checklist-step-${id}`),
 })))
 
 const doneCount = computed(() => steps.value.filter(step => step.status === 'done' || step.status === 'skipped').length)
@@ -54,7 +60,7 @@ function statusLabel(status: AppOnboardingStepStatus | undefined) {
     >
       <span class="min-w-0">
         <span class="block text-sm font-medium text-slate-950 dark:text-white">
-          {{ t([3, 4].includes(onboarding.todo_list_version) ? 'setup-checklist-list-title' : 'app-onboarding-cli-steps-title') }}
+          {{ t('setup-checklist-list-title') }}
         </span>
         <span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">
           {{ t('app-onboarding-cli-steps-progress', { done: doneCount, total: steps.length }) }}
@@ -73,7 +79,7 @@ function statusLabel(status: AppOnboardingStepStatus | undefined) {
       class="border-t border-slate-200 px-4 py-3 dark:border-white/10"
     >
       <p class="mb-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
-        {{ t([3, 4].includes(onboarding.todo_list_version) ? 'setup-checklist-list-subtitle' : 'app-onboarding-cli-steps-subtitle') }}
+        {{ t('setup-checklist-list-subtitle') }}
       </p>
       <ol class="space-y-2">
         <li

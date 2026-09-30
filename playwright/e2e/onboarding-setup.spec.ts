@@ -138,14 +138,14 @@ test.describe('Actionable onboarding setup checklist', () => {
     expect(polls.map((poll: any) => poll.initial)).toEqual([true, false, false, false, false, false])
   })
 
-  test('keeps twelve goals for v1/v2 controls and seven for v3 in the compact checklist', async ({ page }) => {
+  test('shows the same seven goals for every checklist version in the compact checklist', async ({ page }) => {
     for (const version of [1, 2, 3]) {
       await page.goto(`${fixture}?version=${version}&view=compact`)
       const checklist = page.locator('[data-test="app-onboarding-cli-steps"]')
       await checklist.getByRole('button').click()
-      await expect(checklist.locator('li')).toHaveCount(version === 3 ? 7 : 12)
-      await expect(checklist).toContainText(version === 3 ? 'Publish your first update' : 'Upload bundle')
-      await expect(checklist).toContainText(`0 of ${version === 3 ? 7 : 12} steps`)
+      await expect(checklist.locator('li')).toHaveCount(7)
+      await expect(checklist).toContainText('Publish your first update')
+      await expect(checklist).toContainText('0 of 7 steps')
       expect(await page.evaluate(() => (window as any).onboardingSetupPreview.state.version)).toBe(version)
     }
   })
