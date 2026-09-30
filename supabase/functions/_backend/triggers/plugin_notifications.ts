@@ -71,7 +71,9 @@ async function processPluginNotifications(c: Context, items: PluginNotificationQ
         results.push(result)
         if (result.status === 'failed') {
           failed++
-          cloudlogErr({ requestId: c.get('requestId'), message: 'Plugin notification item was not delivered', type: item.type, eventName: item.eventName, orgId: item.orgId })
+          // Expected outcomes (lost claim race, Bento not configured) land here
+          // too; real causes (Postgres, Bento API) log their own errors.
+          cloudlog({ requestId: c.get('requestId'), message: 'Plugin notification item was not delivered', type: item.type, eventName: item.eventName, orgId: item.orgId })
           continue
         }
         if (result.status === 'throttled')
