@@ -84,6 +84,8 @@ describe('updates edge cache', () => {
     const c = makeContext()
     vi.stubEnv('UPDATES_EDGE_CACHE', 'on')
     vi.stubEnv('CF_CACHE_PURGE_TOKEN', '')
+    vi.stubEnv('CF_ANALYTICS_TOKEN', '')
+    vi.stubEnv('UPDATES_CACHE_LOCAL_PURGE_URL', '')
     expect(getUpdatesEdgeCacheBps(c)).toBe(0)
     expect(isUpdatesEdgeCacheEnabled(c)).toBe(false)
     expect(shouldUseUpdatesEdgeCache(makeContext(), 'com.example.app', 'device-1')).toBe(false)
@@ -299,6 +301,9 @@ describe('updates cache purge trigger', () => {
   })
 
   it('does nothing when no purge target is configured', async () => {
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', '')
+    vi.stubEnv('CF_ANALYTICS_TOKEN', '')
+    vi.stubEnv('UPDATES_CACHE_LOCAL_PURGE_URL', '')
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
     await expect(purgeUpdatesCacheTags(makeContext(), ['capgo-updates-a'])).resolves.toEqual({ configured: false, calls: 0, failed: 0, retryAfterSeconds: 0 })
@@ -353,6 +358,18 @@ describe('updates cache purge drain', () => {
 
     await expect(drainUpdatesCachePurge(makeContext(), rpc)).resolves.toEqual({ purgedApps: 0 })
     expect(calls.find(call => call.fn === 'ack_updates_cache_purge')?.args).toEqual({ p_repurge_app_ids: [], p_retry: apps, p_retry_after_seconds: 12 })
+  })
+
+  it('waits out the throttle once before its first claim, then leaves the drain to the active caller', async () => {
+    const sleep = vi.fn(async () => {})
+    const { rpc, calls } = rpcFrom([
+      { status: 'throttled', wait_ms: 900 },
+      { status: 'throttled', wait_ms: 700 },
+      { status: 'ok', apps: [{ app_id: 'com.never', initial: true }], has_more: false },
+    ])
+    await expect(drainUpdatesCachePurge(makeContext(), rpc, { sleep })).resolves.toEqual({ purgedApps: 0 })
+    expect(sleep).toHaveBeenCalledTimes(1)
+    expect(calls.filter(call => call.fn === 'claim_updates_cache_purge')).toHaveLength(2)
   })
 
   it('stops when another caller is draining', async () => {

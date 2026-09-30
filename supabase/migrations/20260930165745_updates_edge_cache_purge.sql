@@ -243,7 +243,11 @@ BEGIN
     WHERE app_id IS NOT NULL AND app_id <> ''
   ) AS apps;
 
-  PERFORM public.wake_updates_cache_purge();
+  -- One wake per transaction (an app delete cascades to several statements).
+  IF pg_catalog.current_setting('capgo.updates_cache_wake_sent', true) IS DISTINCT FROM 'on' THEN
+    PERFORM pg_catalog.set_config('capgo.updates_cache_wake_sent', 'on', true);
+    PERFORM public.wake_updates_cache_purge();
+  END IF;
 EXCEPTION WHEN OTHERS THEN
   -- Cache purge is an accelerator; never fail the business write.
   RAISE WARNING 'notify_updates_edge_cache_purge failed: %', SQLERRM;

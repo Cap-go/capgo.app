@@ -210,6 +210,8 @@ export async function drainUpdatesCachePurge(
   const sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)))
   const deadline = Date.now() + (options.budgetMs ?? DRAIN_BUDGET_MS)
   let purgedApps = 0
+  let claimed = false
+  let throttledBeforeClaim = 0
   while (Date.now() < deadline) {
     const { data, error } = await rpc('claim_updates_cache_purge', { p_limit: CLAIM_LIMIT })
     if (error) {
@@ -218,11 +220,17 @@ export async function drainUpdatesCachePurge(
     }
     const claim = data as ClaimResult
     if (claim.status === 'throttled') {
+      // Before its first claim, a caller waits out the throttle once (the
+      // previous drain may already be done). Throttled again means another
+      // caller is draining and follows has_more; the cron tick covers the rest.
+      if (!claimed && throttledBeforeClaim++ > 0)
+        break
       await sleep(Math.min((claim.wait_ms ?? 1000) + 50, MAX_THROTTLE_WAIT_MS))
       continue
     }
     if (claim.status !== 'ok' || !claim.apps?.length)
       break
+    claimed = true
 
     const apps = claim.apps
     const result = await purgeUpdatesCacheTags(c, apps.map(app => updatesAppCacheTag(app.app_id)))
