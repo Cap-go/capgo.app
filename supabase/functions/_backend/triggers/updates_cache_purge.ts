@@ -8,11 +8,10 @@
 // by this endpoint calling the flush again ~1s later (the chain stops once
 // nothing is due). Every failure is soft: the cache TTL is the backstop.
 //
-// Configuration is one secret, CF_CACHE_PURGE_TOKEN (Zone Read + Cache Purge),
-// deployed with the Cloudflare env file. Zones are the ones the token can see
-// (CF_CACHE_PURGE_ZONE_IDS only overrides that). A runtime without the token
-// (the Supabase function behind db_url) forwards the purge to the Cloudflare
-// API worker at CLOUDFLARE_FUNCTION_URL.
+// Token: CF_CACHE_PURGE_TOKEN, else the existing CF_ANALYTICS_TOKEN once it is
+// granted Zone Read + Cache Purge. Zones are the ones the token can see
+// (CF_CACHE_PURGE_ZONE_IDS only overrides that). A runtime without any token
+// forwards the purge to the Cloudflare API worker at CLOUDFLARE_FUNCTION_URL.
 
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
@@ -33,6 +32,11 @@ const MAX_PURGE_ATTEMPTS = 3
 const FOLLOW_UP_FLUSH_DELAY_MS = 1100
 const ZONE_LIST_TTL_MS = 60 * 60 * 1000
 const FORWARDED_HEADER = 'x-capgo-purge-forwarded'
+
+/** Dedicated purge token, else the account's existing Cloudflare API token. */
+export function getPurgeToken(c: Context) {
+  return getEnv(c, 'CF_CACHE_PURGE_TOKEN') || getEnv(c, 'CF_ANALYTICS_TOKEN')
+}
 
 let zoneListCache: { token: string, zoneIds: string[], expiresAt: number } | null = null
 
@@ -113,7 +117,7 @@ async function postPurge(url: string, headers: Record<string, string>, body: unk
 }
 
 export async function purgeUpdatesCacheTags(c: Context, tags: string[]) {
-  const token = getEnv(c, 'CF_CACHE_PURGE_TOKEN')
+  const token = getPurgeToken(c)
   const zoneIds = token ? await resolvePurgeZoneIds(c, token) : []
   const localPurgeUrl = getEnv(c, 'UPDATES_CACHE_LOCAL_PURGE_URL')
   let calls = 0
@@ -149,7 +153,7 @@ export async function purgeUpdatesCacheTags(c: Context, tags: string[]) {
 }
 
 export function shouldForwardPurge(c: Context) {
-  return !getEnv(c, 'CF_CACHE_PURGE_TOKEN')
+  return !getPurgeToken(c)
     && !getEnv(c, 'UPDATES_CACHE_LOCAL_PURGE_URL')
     && Boolean(getEnv(c, 'CLOUDFLARE_FUNCTION_URL'))
     && c.req.header(FORWARDED_HEADER) !== '1'

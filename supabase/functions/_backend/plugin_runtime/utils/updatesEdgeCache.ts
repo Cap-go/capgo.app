@@ -41,12 +41,13 @@ interface CachedValue<T> {
  * (0-10000). `UPDATES_EDGE_CACHE` accepts `off`, `on`, or a percentage such
  * as `1%`, `0.5` or `25` for a progressive rollout.
  *
- * Safety interlock: the purge token ships in the same Cloudflare env file as
- * this worker's secrets. Without it the purge path is not set up, so the cache
- * stays off (entries would otherwise only expire with the TTL).
+ * Safety interlock: without any Cloudflare token in this worker's env the
+ * purge path cannot work, so the cache stays off (entries would otherwise only
+ * expire with the TTL). It cannot tell whether the token has the Cache Purge
+ * permission: check `updates cache purged` logs before raising the share.
  */
 export function hasUpdatesPurgeTarget(c: Context) {
-  return ['CF_CACHE_PURGE_TOKEN', 'CF_CACHE_PURGE_ZONE_IDS', 'UPDATES_CACHE_LOCAL_PURGE_URL'].some(key => getEnv(c, key).trim() !== '')
+  return ['CF_CACHE_PURGE_TOKEN', 'CF_ANALYTICS_TOKEN', 'CF_CACHE_PURGE_ZONE_IDS', 'UPDATES_CACHE_LOCAL_PURGE_URL'].some(key => getEnv(c, key).trim() !== '')
 }
 
 export function getUpdatesEdgeCacheBps(c: Context) {

@@ -93,6 +93,9 @@ describe('updates edge cache', () => {
     vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', '')
     vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
     expect(getUpdatesEdgeCacheBps(c)).toBe(10_000)
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', '')
+    vi.stubEnv('CF_ANALYTICS_TOKEN', 'analytics-token')
+    expect(getUpdatesEdgeCacheBps(c)).toBe(10_000)
   })
 
   it('samples a stable ~1% of devices and remembers the choice per request', () => {
@@ -216,7 +219,17 @@ describe('updates cache purge trigger', () => {
     expect(urls.filter(url => url.endsWith('/zones/zone-2/purge_cache'))).toHaveLength(2)
   })
 
+  it('falls back to the existing analytics token', async () => {
+    vi.stubEnv('CF_ANALYTICS_TOKEN', 'analytics-token')
+    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(purgeUpdatesCacheTags(makeContext(), ['capgo-updates-a'])).resolves.toEqual({ calls: 1, failed: 0 })
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer analytics-token')
+  })
+
   it('forwards to the Cloudflare API worker only when it has no token and was not forwarded already', () => {
+    vi.stubEnv('CF_ANALYTICS_TOKEN', '')
     const c = makeContext()
     expect(shouldForwardPurge(c)).toBe(false)
     vi.stubEnv('CLOUDFLARE_FUNCTION_URL', 'https://api.capgo.test')
