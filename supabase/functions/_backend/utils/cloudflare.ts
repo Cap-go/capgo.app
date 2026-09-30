@@ -2369,6 +2369,24 @@ export async function getTotalAppsByModeCF(c: Context, mode: string) {
   return 0
 }
 
+export async function getTotalAppsCF(c: Context) {
+  if (!c.env.DB_STOREAPPS)
+    return Promise.resolve(0)
+  const query = 'SELECT COUNT(*) AS total FROM store_apps'
+
+  cloudlog({ requestId: c.get('requestId'), message: 'getTotalAppsCF query', query })
+  try {
+    const res = await getReplicaReadStoreAppSession(c)
+      .prepare(query)
+      .first('total')
+    return Number(res ?? 0)
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error getting total apps', error: serializeError(e) })
+  }
+  return 0
+}
+
 // add function createIfNotExistStoreInfo
 
 export async function createIfNotExistStoreInfo(c: Context, app: Partial<StoreApp>) {
