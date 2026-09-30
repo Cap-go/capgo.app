@@ -201,12 +201,12 @@ describe('updates cache purge trigger', () => {
     resetPurgeZoneCache()
   })
 
-  it('discovers the zones from the token when no override is set, and caches them', async () => {
+  it('purges only the plugin zones among those the token sees, and caches the lookup', async () => {
     vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
     vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', '')
     const fetchMock = vi.fn(async (url: string) => {
       if (url.includes('/zones?'))
-        return new Response(JSON.stringify({ result: [{ id: 'zone-1' }, { id: 'zone-2' }], result_info: { total_pages: 1 } }), { status: 200 })
+        return new Response(JSON.stringify({ result: [{ id: 'zone-1', name: 'capgo.app' }, { id: 'zone-2', name: 'usecapgo.com' }, { id: 'zone-3', name: 'unrelated.example' }], result_info: { total_pages: 1 } }), { status: 200 })
       return new Response('{}', { status: 200 })
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -217,6 +217,8 @@ describe('updates cache purge trigger', () => {
     expect(urls.filter(url => url.includes('/zones?'))).toHaveLength(1)
     expect(urls.filter(url => url.endsWith('/zones/zone-1/purge_cache'))).toHaveLength(2)
     expect(urls.filter(url => url.endsWith('/zones/zone-2/purge_cache'))).toHaveLength(2)
+    // A token scoped to every zone still only purges the plugin's zones.
+    expect(urls.filter(url => url.endsWith('/zones/zone-3/purge_cache'))).toHaveLength(0)
   })
 
   it('falls back to the existing analytics token', async () => {

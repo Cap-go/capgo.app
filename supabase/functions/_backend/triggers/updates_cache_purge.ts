@@ -9,13 +9,15 @@
 // nothing is due). Every failure is soft: the cache TTL is the backstop.
 //
 // Token: CF_CACHE_PURGE_TOKEN, else the existing CF_ANALYTICS_TOKEN once it is
-// granted Zone Read + Cache Purge. Zones are the ones the token can see
-// (CF_CACHE_PURGE_ZONE_IDS only overrides that). A runtime without any token
+// granted Zone Read + Cache Purge. Zones are the plugin worker's own zones,
+// derived from cloudflare_workers/plugin/wrangler.jsonc (CF_CACHE_PURGE_ZONE_IDS
+// only overrides that). A runtime without any token
 // forwards the purge to the Cloudflare API worker at CLOUDFLARE_FUNCTION_URL.
 
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
+import { PLUGIN_ROUTE_HOSTS, PLUGIN_ROUTE_ZONE_NAMES } from '../plugin_runtime/utils/pluginRouteHosts.generated.ts'
 import { updatesAppCacheTag } from '../plugin_runtime/utils/updatesCacheTag.ts'
 import { BRES, middlewareAPISecret, parseBody } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
@@ -40,7 +42,20 @@ export function getPurgeToken(c: Context) {
 
 let zoneListCache: { token: string, zoneIds: string[], expiresAt: number } | null = null
 
-/** Zone ids to purge: the explicit override, else every active zone the token can read (cached 1h). */
+/**
+ * True when a Cloudflare zone can hold plugin cache entries: it is named by a
+ * plugin route, or one of the plugin worker's hostnames sits in it.
+ */
+export function isPluginZone(zoneName: string, hosts: readonly string[] = PLUGIN_ROUTE_HOSTS, zoneNames: readonly string[] = PLUGIN_ROUTE_ZONE_NAMES) {
+  const name = zoneName.toLowerCase()
+  return zoneNames.includes(name) || hosts.some(host => host === name || host.endsWith(`.${name}`))
+}
+
+/**
+ * Zone ids to purge: the explicit override, else the zones of the account
+ * the plugin worker is routed on (from cloudflare_workers/plugin/wrangler.jsonc),
+ * looked up once per hour. A token scoped to all zones purges only those.
+ */
 export async function resolvePurgeZoneIds(c: Context, token: string): Promise<string[]> {
   const override = parseCsv(getEnv(c, 'CF_CACHE_PURGE_ZONE_IDS'))
   if (override.length > 0)
@@ -57,9 +72,9 @@ export async function resolvePurgeZoneIds(c: Context, token: string): Promise<st
       })
       if (!response.ok)
         throw new Error(`zone list HTTP ${response.status}`)
-      const body = await response.json() as { result?: { id?: string }[], result_info?: { total_pages?: number } }
+      const body = await response.json() as { result?: { id?: string, name?: string }[], result_info?: { total_pages?: number } }
       for (const zone of body.result ?? []) {
-        if (zone.id)
+        if (zone.id && zone.name && isPluginZone(zone.name))
           zoneIds.push(zone.id)
       }
       if (page >= (body.result_info?.total_pages ?? 1))
@@ -72,7 +87,7 @@ export async function resolvePurgeZoneIds(c: Context, token: string): Promise<st
   }
   zoneListCache = { token, zoneIds, expiresAt: Date.now() + ZONE_LIST_TTL_MS }
   if (zoneIds.length === 0)
-    cloudlog({ requestId: c.get('requestId'), message: 'updates cache purge token sees no zones' })
+    cloudlog({ requestId: c.get('requestId'), message: 'updates cache purge found no plugin zone for the token' })
   return zoneIds
 }
 
