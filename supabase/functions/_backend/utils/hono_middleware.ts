@@ -360,20 +360,20 @@ function assertSubkeyHasPlaintextSecret(
 }
 
 /**
- * Verifies that a subkey belongs to the same user as its parent API key.
+ * Only personal keys may delegate to a subkey belonging to the same user.
  *
  * @param c - Hono context used for logging.
  * @param subkey - The subkey row.
  * @param apikey - The parent API key row.
- * @returns quickError response when the user IDs differ, otherwise null.
+ * @returns quickError when either key is shared or the user IDs differ.
  */
 function validateSubkeyUser(c: Context, subkey: Database['public']['Tables']['apikeys']['Row'], apikey: Database['public']['Tables']['apikeys']['Row']) {
-  // Shared (org-owned) keys only delegate within the same owner org, and never
-  // to or from personal keys of the attributed user.
-  if (subkey.user_id !== apikey.user_id || (subkey.owner_org_id ?? null) !== (apikey.owner_org_id ?? null)) {
+  // ID lookups cannot prove possession of a shared key's issued secret or its
+  // recipient/expiry state. Keep delegation restricted to personal keys.
+  if (apikey.owner_org_id || subkey.owner_org_id || subkey.user_id !== apikey.user_id) {
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'Subkey user_id does not match apikey user_id',
+      message: 'Invalid subkey ownership or shared key delegation',
       subkeyId: subkey.id,
       subkeyUserId: subkey.user_id,
       apikeyId: apikey.id,

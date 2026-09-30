@@ -5,6 +5,7 @@ import {
   APIKEY_MANAGEMENT_ORG_SUPER_ADMIN,
   BASE_URL,
   createDirectApiKeyWithBindings,
+  executeSQL,
   getAuthHeadersForCredentials,
   ORG_ID_APIKEY_MANAGEMENT,
   USER_EMAIL_APIKEY_MANAGEMENT,
@@ -25,7 +26,9 @@ describe('x-limited-key-id delegation containment', () => {
   let appAScopedParentKey = ''
   let appBSiblingId = 0
   let limitedChildId = 0
-  let privilegedParentKey = APIKEY_MANAGEMENT_ORG_SUPER_ADMIN
+  const privilegedParentKey = APIKEY_MANAGEMENT_ORG_SUPER_ADMIN
+  let sharedParentKey = ''
+  const sharedChildIds: Record<string, number> = {}
 
   beforeAll(async () => {
     const authHeaders = await getAuthHeadersForCredentials(USER_EMAIL_APIKEY_MANAGEMENT, USER_PASSWORD)
@@ -122,6 +125,36 @@ describe('x-limited-key-id delegation containment', () => {
     limitedChildId = limitedChild.id
     createdKeyIds.push(limitedChild.id)
     createdKeyRbacIds.push(limitedChild.rbac_id)
+
+    for (const state of ['parent', 'active', 'never-issued', 'revoked', 'expired']) {
+      const key = randomUUID()
+      // The schema permits both hash and plaintext on service-created rows.
+      // Normal API-created shared keys have no plaintext and already fail the
+      // existing plaintext-only subkey guard.
+      const [shared] = await executeSQL<{ id: number, rbac_id: string }>(`
+        INSERT INTO public.apikeys (user_id, key, key_hash, name, owner_org_id)
+        VALUES ($1::uuid, CASE WHEN $5::boolean THEN NULL ELSE $2 END, encode(extensions.digest($2::text, 'sha256'), 'hex'), $3, $4::uuid)
+        RETURNING id, rbac_id`, [USER_ID_APIKEY_MANAGEMENT, key, `shared subkey ${state} ${runId}`, ORG_ID_APIKEY_MANAGEMENT, state === 'parent'])
+      createdKeyIds.push(Number(shared.id))
+      createdKeyRbacIds.push(shared.rbac_id)
+      await executeSQL(`
+        INSERT INTO public.role_bindings (principal_type, principal_id, role_id, scope_type, org_id, granted_by)
+        SELECT 'apikey', $1::uuid, id, 'org', $2::uuid, $3::uuid
+        FROM public.roles WHERE name=$4 AND scope_type='org'`, [shared.rbac_id, ORG_ID_APIKEY_MANAGEMENT, USER_ID_APIKEY_MANAGEMENT, state === 'parent' ? 'org_super_admin' : 'org_admin'])
+      if (state !== 'never-issued' && state !== 'revoked') {
+        await executeSQL(`UPDATE public.apikeys
+          SET shared_secret_user_id=$2::uuid,
+              shared_secret_expires_at=CASE WHEN $3::boolean THEN now()-interval '1 second' ELSE NULL END
+          WHERE id=$1`, [shared.id, USER_ID_APIKEY_MANAGEMENT, state === 'expired'])
+      }
+      if (state === 'revoked') {
+        await executeSQL('UPDATE public.apikeys SET key=NULL, key_hash=encode(extensions.digest(gen_random_uuid()::text, \'sha256\'), \'hex\') WHERE id=$1', [shared.id])
+      }
+      if (state === 'parent')
+        sharedParentKey = key
+      else
+        sharedChildIds[state] = Number(shared.id)
+    }
   })
 
   afterAll(async () => {
@@ -208,6 +241,34 @@ describe('x-limited-key-id delegation containment', () => {
     })
 
     expect(response.status).toBe(200)
+  })
+
+  it.concurrent.each(['active', 'never-issued', 'revoked', 'expired'])('rejects a shared parent adopting a %s same-org shared subkey', async (state) => {
+    const response = await fetch(`${BASE_URL}/app/${appA}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'capgkey': sharedParentKey,
+        'x-limited-key-id': String(sharedChildIds[state]),
+      },
+      body: JSON.stringify({ name: `Shared subkey ${state} ${runId}` }),
+    })
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toMatchObject({ error: 'invalid_subkey' })
+  })
+
+  it.concurrent('rejects a personal parent adopting a shared subkey', async () => {
+    const response = await fetch(`${BASE_URL}/app/${appA}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'capgkey': privilegedParentKey,
+        'x-limited-key-id': String(sharedChildIds.active),
+      },
+      body: JSON.stringify({ name: `Personal parent shared child ${runId}` }),
+    })
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toMatchObject({ error: 'invalid_subkey' })
   })
 
   it.concurrent('rejects apikey_manager app update without x-limited-key-id', async () => {
