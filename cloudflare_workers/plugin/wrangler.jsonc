@@ -19,7 +19,8 @@
       "vars": {
         "ENV_NAME": "capgo_plugin-eu-prod",
         // /updates edge cache (Cache API + purge-by-tag): "off", "on" or a share of
-        // devices such as "1%". Only takes effect once CF_CACHE_PURGE_TOKEN is in
+        // devices such as "1%". Takes effect when CF_CACHE_PURGE_TOKEN or
+        // CF_ANALYTICS_TOKEN (with Zone Read + Cache Purge) is in
         // internal/cloudflare/.env.prod (deployed to every worker).
         "UPDATES_EDGE_CACHE": "off"
       },

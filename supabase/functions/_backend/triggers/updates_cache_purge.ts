@@ -51,10 +51,30 @@ export function isPluginZone(zoneName: string, hosts: readonly string[] = PLUGIN
   return zoneNames.includes(name) || hosts.some(host => host === name || host.endsWith(`.${name}`))
 }
 
+/** Pages through the account zones the token can read and keeps the plugin's zones. */
+async function fetchPluginZoneIds(token: string): Promise<string[]> {
+  const zoneIds: string[] = []
+  for (let page = 1, totalPages = 1; page <= Math.min(totalPages, 20); page++) {
+    const response = await fetch(`https://api.cloudflare.com/client/v4/zones?status=active&per_page=50&page=${page}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(PURGE_TIMEOUT_MS),
+    })
+    if (!response.ok)
+      throw new Error(`zone list HTTP ${response.status}`)
+    const body = await response.json() as { result?: { id?: string, name?: string }[], result_info?: { total_pages?: number } }
+    totalPages = body.result_info?.total_pages ?? 1
+    zoneIds.push(...(body.result ?? []).filter(zone => zone.id && zone.name && isPluginZone(zone.name)).map(zone => zone.id as string))
+  }
+  return zoneIds
+}
+
+let zoneListInflight: { token: string, promise: Promise<string[]> } | null = null
+
 /**
  * Zone ids to purge: the explicit override, else the zones of the account
  * the plugin worker is routed on (from cloudflare_workers/plugin/wrangler.jsonc),
- * looked up once per hour. A token scoped to all zones purges only those.
+ * looked up once per hour. Concurrent callers share one lookup. A token scoped
+ * to all zones purges only those.
  */
 export async function resolvePurgeZoneIds(c: Context, token: string): Promise<string[]> {
   const override = parseCsv(getEnv(c, 'CF_CACHE_PURGE_ZONE_IDS'))
@@ -62,38 +82,31 @@ export async function resolvePurgeZoneIds(c: Context, token: string): Promise<st
     return override
   if (zoneListCache?.token === token && zoneListCache.expiresAt > Date.now())
     return zoneListCache.zoneIds
+  if (zoneListInflight?.token !== token)
+    zoneListInflight = { token, promise: fetchPluginZoneIds(token) }
+  const inflight = zoneListInflight
 
-  const zoneIds: string[] = []
   try {
-    for (let page = 1; page <= 20; page++) {
-      const response = await fetch(`https://api.cloudflare.com/client/v4/zones?status=active&per_page=50&page=${page}`, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(PURGE_TIMEOUT_MS),
-      })
-      if (!response.ok)
-        throw new Error(`zone list HTTP ${response.status}`)
-      const body = await response.json() as { result?: { id?: string, name?: string }[], result_info?: { total_pages?: number } }
-      for (const zone of body.result ?? []) {
-        if (zone.id && zone.name && isPluginZone(zone.name))
-          zoneIds.push(zone.id)
-      }
-      if (page >= (body.result_info?.total_pages ?? 1))
-        break
-    }
+    const zoneIds = await inflight.promise
+    zoneListCache = { token, zoneIds, expiresAt: Date.now() + ZONE_LIST_TTL_MS }
+    if (zoneIds.length === 0)
+      cloudlog({ requestId: c.get('requestId'), message: 'updates cache purge found no plugin zone for the token' })
+    return zoneIds
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge zone discovery failed', error: serializeError(error) })
     return zoneListCache?.token === token ? zoneListCache.zoneIds : []
   }
-  zoneListCache = { token, zoneIds, expiresAt: Date.now() + ZONE_LIST_TTL_MS }
-  if (zoneIds.length === 0)
-    cloudlog({ requestId: c.get('requestId'), message: 'updates cache purge found no plugin zone for the token' })
-  return zoneIds
+  finally {
+    if (zoneListInflight === inflight)
+      zoneListInflight = null
+  }
 }
 
 /** Test hook. */
 export function resetPurgeZoneCache() {
   zoneListCache = null
+  zoneListInflight = null
 }
 
 export function chunk<T>(items: T[], size: number): T[][] {

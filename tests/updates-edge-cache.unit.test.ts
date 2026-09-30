@@ -221,6 +221,24 @@ describe('updates cache purge trigger', () => {
     expect(urls.filter(url => url.endsWith('/zones/zone-3/purge_cache'))).toHaveLength(0)
   })
 
+  it('shares one zone lookup between concurrent purges', async () => {
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
+    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', '')
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/zones?'))
+        return new Response(JSON.stringify({ result: [{ id: 'zone-1', name: 'capgo.app' }], result_info: { total_pages: 1 } }), { status: 200 })
+      return new Response('{}', { status: 200 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await Promise.all([
+      purgeUpdatesCacheTags(makeContext(), ['capgo-updates-a']),
+      purgeUpdatesCacheTags(makeContext(), ['capgo-updates-b']),
+      purgeUpdatesCacheTags(makeContext(), ['capgo-updates-c']),
+    ])
+    expect(fetchMock.mock.calls.filter(call => call[0].includes('/zones?'))).toHaveLength(1)
+  })
+
   it('falls back to the existing analytics token', async () => {
     vi.stubEnv('CF_ANALYTICS_TOKEN', 'analytics-token')
     vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
