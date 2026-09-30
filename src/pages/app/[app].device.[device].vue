@@ -431,7 +431,7 @@ async function copyCurlCommand() {
             <InfoRow v-if="device.custom_id" :label="t('custom-id')">
               {{ device.custom_id }}
             </InfoRow>
-            <InfoRow v-if="device.updated_at" :label="t('last-update')">
+            <InfoRow v-if="device.updated_at" :label="t('last-seen')">
               {{ formatDate(device.updated_at) }}
             </InfoRow>
             <InfoRow v-if="device.platform" :label="t('platform')">
