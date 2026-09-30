@@ -12,6 +12,12 @@ export interface ReleaseLiveDeployment {
   deployed_at: string
 }
 
+export interface ReleaseLiveChannel {
+  id: number
+  name: string
+  is_default: boolean
+}
+
 export interface ReleaseLiveBucket {
   ts: string
   get: number
@@ -40,6 +46,8 @@ export interface ReleaseLiveResponse {
   }
   failures?: { action: string, count: number }[]
   series?: ReleaseLiveBucket[]
+  channel: ReleaseLiveChannel | null
+  channels: ReleaseLiveChannel[]
   recent_deployments: ReleaseLiveDeployment[]
   generated_at?: string
 }
@@ -208,6 +216,11 @@ export function buildDemoReleaseLive(now = Date.now()): ReleaseLiveResponse {
       { action: 'unzip_fail', count: 1 },
     ],
     series,
+    channel: { id: 1, name: 'production', is_default: true },
+    channels: [
+      { id: 1, name: 'production', is_default: true },
+      { id: 2, name: 'beta', is_default: false },
+    ],
     recent_deployments: [
       { version_name: '1.2.0', channel_id: 1, channel_name: 'production', deployed_at: deployedAt },
     ],

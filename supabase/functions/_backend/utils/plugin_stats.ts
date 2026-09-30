@@ -25,6 +25,7 @@ export interface StatsLogDimensions {
   platform?: string | null
   country_code?: string | null
   plugin_version?: string | null
+  channel?: VersionUsageChannel | null
 }
 
 export interface PluginStatsSupabaseFallbacks {
@@ -215,8 +216,8 @@ export function createStatsDevices(c: Context, device: DeviceWithoutCreatedAt) {
 export function sendStatsAndDevice(c: Context, device: DeviceWithoutCreatedAt, statsActions: StatsActions[], isFailedStat = false) {
   const dimensions = getStatsLogDimensions(c, device)
   const jobs = []
-  statsActions.forEach(({ action, versionName, metadata }) => {
-    jobs.push(createStatsLogs(c, device.app_id, device.device_id, action, versionName ?? device.version_name, metadata, dimensions))
+  statsActions.forEach(({ action, versionName, metadata, channel }) => {
+    jobs.push(createStatsLogs(c, device.app_id, device.device_id, action, versionName ?? device.version_name, metadata, channel ? { ...dimensions, channel } : dimensions))
   })
 
   if (!isFailedStat)
