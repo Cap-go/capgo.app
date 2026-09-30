@@ -364,7 +364,7 @@ watch([packageId, days, versionGroup], async () => {
         </div>
 
         <div v-if="hasData" class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+          <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
             <div class="text-sm truncate text-slate-600 dark:text-slate-400">
               {{ t('native-observe-tracked-devices') }}
             </div>
@@ -373,7 +373,7 @@ watch([packageId, days, versionGroup], async () => {
             </div>
           </div>
 
-          <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+          <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
             <div class="text-sm truncate text-slate-600 dark:text-slate-400">
               {{ t('native-observe-issue-free-rate') }}
             </div>
@@ -387,7 +387,7 @@ watch([packageId, days, versionGroup], async () => {
             </div>
           </div>
 
-          <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+          <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
             <div class="text-sm truncate text-slate-600 dark:text-slate-400">
               {{ t('native-observe-launch-p90') }}
             </div>
@@ -396,7 +396,7 @@ watch([packageId, days, versionGroup], async () => {
             </div>
           </div>
 
-          <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+          <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
             <div class="text-sm truncate text-slate-600 dark:text-slate-400">
               {{ t('native-observe-webview-p90') }}
             </div>
@@ -405,7 +405,7 @@ watch([packageId, days, versionGroup], async () => {
             </div>
           </div>
 
-          <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+          <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
             <div class="text-sm truncate text-slate-600 dark:text-slate-400">
               {{ t('native-observe-issues') }}
             </div>
@@ -426,7 +426,7 @@ watch([packageId, days, versionGroup], async () => {
           <Spinner size="w-5 h-5" />
         </div>
 
-        <div v-if="!hasData" class="flex flex-col items-center justify-center h-72 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400">
+        <div v-if="!hasData" class="flex flex-col items-center justify-center h-72 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10 text-slate-500 dark:text-slate-400">
           <IconActivity class="w-12 h-12 mb-3" />
           <h2 class="text-lg font-semibold text-slate-800 dark:text-slate-100">
             {{ t('native-observe-no-data') }}
@@ -438,7 +438,7 @@ watch([packageId, days, versionGroup], async () => {
 
         <template v-else>
           <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
               <div class="flex items-center justify-between gap-3 mb-4">
                 <div>
                   <h2 class="text-base font-semibold text-slate-950 dark:text-white">
@@ -455,7 +455,7 @@ watch([packageId, days, versionGroup], async () => {
               </div>
             </div>
 
-            <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
               <div class="flex items-center justify-between gap-3 mb-4">
                 <div>
                   <h2 class="text-base font-semibold text-slate-950 dark:text-white">
@@ -474,7 +474,7 @@ watch([packageId, days, versionGroup], async () => {
           </div>
 
           <div class="grid grid-cols-1 gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.65fr)]">
-            <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
               <div class="flex flex-col gap-3 mb-4 sm:flex-row sm:items-start sm:justify-between">
                 <div class="min-w-0">
                   <div class="flex items-center gap-2">
@@ -491,7 +491,7 @@ watch([packageId, days, versionGroup], async () => {
               </div>
               <div class="overflow-x-auto">
                 <table class="d-table d-table-sm w-full" :class="versionTableMinWidth">
-                  <thead>
+                  <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
                     <tr>
                       <th class="whitespace-nowrap">
                         {{ t('native-observe-version') }}
@@ -541,7 +541,7 @@ watch([packageId, days, versionGroup], async () => {
               </div>
             </div>
 
-            <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
               <div class="flex items-center justify-between gap-3 mb-4">
                 <div>
                   <h2 class="text-base font-semibold text-slate-950 dark:text-white">
@@ -578,7 +578,7 @@ watch([packageId, days, versionGroup], async () => {
             </div>
           </div>
 
-          <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+          <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
             <div class="flex items-center justify-between gap-3 mb-4">
               <div>
                 <h2 class="text-base font-semibold text-slate-950 dark:text-white">
@@ -592,7 +592,7 @@ watch([packageId, days, versionGroup], async () => {
             </div>
             <div class="overflow-x-auto">
               <table class="d-table d-table-sm w-full min-w-[820px]">
-                <thead>
+                <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
                   <tr>
                     <th class="whitespace-nowrap">
                       {{ t('action') }}

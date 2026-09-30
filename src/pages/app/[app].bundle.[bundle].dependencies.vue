@@ -427,7 +427,7 @@ watch(bundleRouteKey, async (key) => {
     <PageLoader v-if="loading" />
     <div v-else-if="version">
       <div class="w-full h-full px-0 pt-0 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
-        <div class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
+        <div class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10">
           <!-- Header -->
           <div class="px-4 py-5 border-b border-slate-200 dark:border-slate-700 sm:px-6">
             <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-gray-100">
@@ -457,7 +457,7 @@ watch(bundleRouteKey, async (key) => {
                 />
 
                 <div v-if="!compareVersionId" class="grid w-full grid-cols-2 gap-4 text-right md:w-auto md:text-left">
-                  <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                  <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300">
                     <div class="uppercase tracking-wide">
                       {{ t('dependencies-summary-packages') }}
                     </div>
@@ -465,7 +465,7 @@ watch(bundleRouteKey, async (key) => {
                       {{ nativePackages.length }}
                     </div>
                   </div>
-                  <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                  <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300">
                     <div class="uppercase tracking-wide">
                       {{ t('dependencies-summary-versions') }}
                     </div>
@@ -500,7 +500,7 @@ watch(bundleRouteKey, async (key) => {
                       {{ statusCounts.removed }}
                     </div>
                   </div>
-                  <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                  <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300">
                     <div class="uppercase tracking-wide">
                       {{ t('dependencies-unchanged-packages') }}
                     </div>
@@ -576,8 +576,8 @@ watch(bundleRouteKey, async (key) => {
 
                 <!-- Comparison view: status-aware rows with the candidate→baseline diff -->
                 <div v-else-if="compareVersionId && comparisons.length > 0 && displayComparisons.length > 0" class="overflow-x-auto">
-                  <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-                    <thead class="bg-gray-50 dark:bg-gray-900">
+                  <table class="min-w-full">
+                    <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
                       <tr>
                         <th scope="col" class="px-6 py-3 text-xs font-medium tracking-wider text-left text-gray-500 uppercase dark:text-gray-400">
                           {{ t('package-name') }}
@@ -590,7 +590,7 @@ watch(bundleRouteKey, async (key) => {
                         </th>
                       </tr>
                     </thead>
-                    <tbody class="bg-white divide-y divide-gray-200 dark:bg-gray-800 dark:divide-gray-700">
+                    <tbody class="divide-y divide-slate-100 dark:divide-white/5">
                       <tr
                         v-for="entry in displayComparisons"
                         :key="entry.name"
@@ -680,8 +680,8 @@ watch(bundleRouteKey, async (key) => {
 
                 <!-- No baseline selected: plain list of this bundle's packages -->
                 <div v-else-if="!compareVersionId && nativePackages.length > 0 && displayNativePackages.length > 0" class="overflow-x-auto">
-                  <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-                    <thead class="bg-gray-50 dark:bg-gray-900">
+                  <table class="min-w-full">
+                    <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
                       <tr>
                         <th scope="col" class="px-6 py-3 text-xs font-medium tracking-wider text-left text-gray-500 uppercase dark:text-gray-400">
                           {{ t('package-name') }}
@@ -691,7 +691,7 @@ watch(bundleRouteKey, async (key) => {
                         </th>
                       </tr>
                     </thead>
-                    <tbody class="bg-white divide-y divide-gray-200 dark:bg-gray-800 dark:divide-gray-700">
+                    <tbody class="divide-y divide-slate-100 dark:divide-white/5">
                       <tr v-for="pkg in displayNativePackages" :key="`${pkg.name}@${pkg.version}`" class="hover:bg-gray-50 dark:hover:bg-gray-700">
                         <td class="px-6 py-4 text-sm font-medium text-gray-900 whitespace-nowrap dark:text-gray-100">
                           <div class="flex items-center gap-2">

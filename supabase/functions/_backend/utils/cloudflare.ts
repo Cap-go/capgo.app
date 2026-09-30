@@ -737,7 +737,7 @@ export interface DeviceUsageAllCF {
 // period is counted once per org, so moving an app between orgs cannot hide its MAU.
 // Usage of deleted apps stays billable via deleted_apps for 35 days (see
 // calculate_org_metrics_cache_entry), so deleting/recreating an app cannot reset MAU.
-export async function readDeviceUsageCF(c: Context, app_id: string, period_start: string, period_end: string) {
+export async function readDeviceUsageCF(c: Context, app_id: string, period_start: string, period_end: string, options: { throwOnError?: boolean } = {}) {
   if (!c.env.DEVICE_USAGE)
     return [] as DeviceUsageCF[]
   const query = `SELECT
@@ -773,6 +773,8 @@ export async function readDeviceUsageCF(c: Context, app_id: string, period_start
   }
   catch (e) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading device usage', error: serializeError(e), query })
+    if (options.throwOnError)
+      throw e
   }
   return [] as DeviceUsageCF[]
 }
@@ -802,7 +804,7 @@ export async function readBandwidthUsageCF(c: Context, app_id: string, period_st
     return [] as BandwidthUsageCF[]
   const query = `SELECT
   formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
-  sum(double1) AS bandwidth,
+  sum(double1 * _sample_interval) AS bandwidth,
   index1 AS app_id
 FROM bandwidth_usage
 WHERE
@@ -870,13 +872,13 @@ export async function readStatsVersionCF(c: Context, app_id: string, period_star
   blob1 as app_id,
   blob2 as version_name,
   formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
-  sum(if(blob3 = 'get', 1, 0)) AS get,
-  sum(if(blob3 = 'fail', 1, 0)) AS fail,
-  sum(if(blob3 = 'install', 1, 0)) AS install,
-  sum(if(blob3 = 'uninstall', 1, 0)) AS uninstall
+  sum(if(blob3 = 'get', _sample_interval, 0)) AS get,
+  sum(if(blob3 = 'fail', _sample_interval, 0)) AS fail,
+  sum(if(blob3 = 'install', _sample_interval, 0)) AS install,
+  sum(if(blob3 = 'uninstall', _sample_interval, 0)) AS uninstall
 FROM version_usage
 WHERE
-  app_id = '${escapeSqlString(app_id)}'
+  index1 = '${escapeSqlString(app_id)}'
   AND timestamp >= toDateTime('${formatDateCF(period_start)}')
   AND timestamp < toDateTime('${formatDateCF(period_end)}')
   ${channelFilter}
@@ -1058,7 +1060,7 @@ FROM (
     argMax(blob7, timestamp) AS default_channel,
     blob1 AS device_id
   FROM device_info
-  WHERE index1 = '${escapeSqlString(app_id)}' AND blob9 != ''
+  WHERE index1 = '${escapeSqlString(app_id)}'
   GROUP BY blob1
 )
 WHERE version_name != '' ${channelFilter}
@@ -1919,7 +1921,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
     ${versionFilter}`
 
   const summaryQuery = `SELECT
-    count() AS total,
+    sum(_sample_interval) AS total,
     COUNT(DISTINCT blob1) AS device_count,
     COUNT(DISTINCT blob2) AS action_count
   FROM app_log
@@ -1927,7 +1929,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
 
   const actionsQuery = `SELECT
     blob2 AS action,
-    count() AS total,
+    sum(_sample_interval) AS total,
     COUNT(DISTINCT blob1) AS device_count,
     COUNT(DISTINCT blob3) AS version_count,
     min(timestamp) AS first_seen,
@@ -1943,7 +1945,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
   const dailyQuery = `SELECT
     formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
     blob2 AS action,
-    count() AS total
+    sum(_sample_interval) AS total
   FROM app_log
   WHERE ${baseWhere}
   GROUP BY date, action
@@ -1952,7 +1954,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
   const versionsQuery = `SELECT
     blob2 AS action,
     blob3 AS version_name,
-    count() AS total,
+    sum(_sample_interval) AS total,
     COUNT(DISTINCT blob1) AS device_count,
     max(timestamp) AS last_seen
   FROM app_log
@@ -1964,7 +1966,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
   const devicesQuery = `SELECT
     blob2 AS action,
     blob1 AS device_id,
-    count() AS total,
+    sum(_sample_interval) AS total,
     argMax(blob3, timestamp) AS version_name,
     max(timestamp) AS last_seen
   FROM app_log
@@ -2418,9 +2420,9 @@ export async function getUpdateStatsCF(c: Context): Promise<UpdateStats> {
   const query = `
     SELECT
       blob1 AS app_id,
-      sum(if(blob3 = 'fail', 1, 0)) AS failed,
-      sum(if(blob3 = 'install', 1, 0)) AS set,
-      sum(if(blob3 = 'get', 1, 0)) AS get
+      sum(if(blob3 = 'fail', _sample_interval, 0)) AS failed,
+      sum(if(blob3 = 'install', _sample_interval, 0)) AS set,
+      sum(if(blob3 = 'get', _sample_interval, 0)) AS get
     FROM version_usage
     WHERE timestamp >= toDateTime(toUnixTimestamp(now()) - 600)
       AND timestamp < toDateTime(toUnixTimestamp(now()) - 540)
@@ -2616,8 +2618,8 @@ export async function getAdminDistributionMetrics(
 
   const query = `SELECT
     formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
-    sum(if(blob3 = 'get', 1, 0)) AS downloads,
-    sum(if(blob3 = 'install', 1, 0)) AS installs
+    sum(if(blob3 = 'get', _sample_interval, 0)) AS downloads,
+    sum(if(blob3 = 'install', _sample_interval, 0)) AS installs
     ${app_id ? `, blob1 AS app_id` : ''}
   FROM version_usage
   WHERE timestamp >= toDateTime('${formatDateCF(start_date)}')
@@ -2654,8 +2656,8 @@ export async function getAdminFailureMetrics(
 
   const query = `SELECT
     formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
-    sum(if(blob3 = 'fail', 1, 0)) AS failures,
-    sum(if(blob3 = 'install', 1, 0)) AS installs
+    sum(if(blob3 = 'fail', _sample_interval, 0)) AS failures,
+    sum(if(blob3 = 'install', _sample_interval, 0)) AS installs
     ${app_id ? `, blob1 AS app_id` : ''}
   FROM version_usage
   WHERE timestamp >= toDateTime('${formatDateCF(start_date)}')
@@ -2756,7 +2758,7 @@ export async function getAdminPlatformOverview(
         AND blob2 = 'get'`
 
     // Query 3: Total bandwidth from BANDWIDTH_USAGE
-    const bandwidthQuery = `SELECT sum(double1) AS total_bandwidth
+    const bandwidthQuery = `SELECT sum(double1 * _sample_interval) AS total_bandwidth
       FROM bandwidth_usage
       WHERE timestamp >= toDateTime('${formatDateCF(start_date)}')
         AND timestamp < toDateTime('${formatDateCF(end_date)}')`
@@ -2780,8 +2782,8 @@ export async function getAdminPlatformOverview(
 
     // Query 6: Success rate from VERSION_USAGE
     const successRateQuery = `SELECT
-      sum(if(blob3 = 'install', 1, 0)) AS installs,
-      sum(if(blob3 = 'fail', 1, 0)) AS fails
+      sum(if(blob3 = 'install', _sample_interval, 0)) AS installs,
+      sum(if(blob3 = 'fail', _sample_interval, 0)) AS fails
     FROM version_usage
     WHERE timestamp >= toDateTime('${formatDateCF(start_date)}')
       AND timestamp < toDateTime('${formatDateCF(end_date)}')`
@@ -2881,7 +2883,7 @@ export async function getAdminOrgMetrics(
       GROUP BY blob1`
       const bandwidthByDeviceQuery = `SELECT
         blob1 AS device_id,
-        sum(double1) AS bandwidth,
+        sum(double1 * _sample_interval) AS bandwidth,
         COUNT() AS updates
       FROM bandwidth_usage
       WHERE timestamp >= toDateTime('${periodStart}')
@@ -3096,7 +3098,7 @@ export async function getAdminStorageTrend(
 
   const query = `SELECT
   formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
-  sum(double1) AS storage_bytes
+  sum(double1 * _sample_interval) AS storage_bytes
 FROM bandwidth_usage
 WHERE timestamp >= toDateTime('${formatDateCF(start_date)}')
   AND timestamp < toDateTime('${formatDateCF(end_date)}')
@@ -3138,7 +3140,7 @@ export async function getAdminBandwidthTrend(
 
   const query = `SELECT
   formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
-  sum(double1) AS bandwidth_bytes
+  sum(double1 * _sample_interval) AS bandwidth_bytes
 FROM bandwidth_usage
 WHERE timestamp >= toDateTime('${formatDateCF(start_date)}')
   AND timestamp < toDateTime('${formatDateCF(end_date)}')

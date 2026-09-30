@@ -402,7 +402,7 @@ defineExpose({
     <p class="mb-3 text-sm text-slate-500 dark:text-slate-400">
       {{ t('sso-metadata-description') }}
     </p>
-    <div class="p-3 space-y-2 font-mono text-sm bg-white border border-slate-200 rounded dark:bg-gray-800 dark:border-slate-700">
+    <div class="p-3 space-y-2 font-mono text-sm bg-white border border-slate-200 rounded dark:bg-slate-800/60 dark:border-white/10">
       <div class="flex items-center justify-between gap-2">
         <p class="text-slate-600 dark:text-slate-400 min-w-0">
           <span class="font-semibold text-slate-800 dark:text-white">{{ t('sso-acs-url') }}:</span>
@@ -575,7 +575,7 @@ defineExpose({
     <p class="mb-3 text-sm text-blue-700 dark:text-blue-300">
       {{ t('sso-dns-verification-instructions') }}
     </p>
-    <div class="p-3 mb-3 space-y-2 font-mono text-sm bg-white border border-blue-200 rounded dark:bg-gray-800 dark:border-blue-700">
+    <div class="p-3 mb-3 space-y-2 font-mono text-sm bg-white border border-blue-200 rounded dark:bg-slate-800/60 dark:border-blue-700">
       <p class="text-slate-600 dark:text-slate-400">
         {{ t('sso-dns-record-type') }}: <span class="font-semibold text-slate-800 dark:text-white">TXT</span>
       </p>

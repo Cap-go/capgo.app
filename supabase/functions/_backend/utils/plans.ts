@@ -40,11 +40,6 @@ const PLAN_USAGE_METRICS: Array<{ key: PlanUsageMetric, metric: CreditMetric }> 
   { key: 'build_time_percent', metric: 'build_time' },
 ]
 
-interface BillingCycleInfo {
-  subscription_anchor_start: string | null
-  subscription_anchor_end: string | null
-}
-
 interface StripeInfoForPlanCheck {
   subscription_id: string | null
   subscription_anchor_start?: string | null
@@ -149,15 +144,6 @@ function getPlanUsageAlert(percentUsage: PlanUsage) {
   }
 }
 
-function getDefaultBillingCycleRange(referenceDate = new Date()): BillingCycleRange {
-  const start = new Date(Date.UTC(referenceDate.getUTCFullYear(), referenceDate.getUTCMonth(), 1, 0, 0, 0, 0))
-  const end = new Date(Date.UTC(referenceDate.getUTCFullYear(), referenceDate.getUTCMonth() + 1, 1, 0, 0, 0, 0))
-  return {
-    subscription_anchor_start: start.toISOString(),
-    subscription_anchor_end: end.toISOString(),
-  }
-}
-
 function isFutureTimestamp(value: string | null | undefined): boolean {
   if (!value)
     return false
@@ -195,29 +181,32 @@ function isCreditOnlyBillingOrg(org: Pick<OrgWithCustomerInfo, 'has_usage_credit
   return org.has_usage_credits === true && !hasActivePlanEntitlement(org)
 }
 
-async function getBillingCycleRange(c: Context, orgId: string): Promise<BillingCycleRange> {
+// Overage/credit application is keyed by billing_cycle_start/end, so it must
+// only ever use the SQL cycle (get_cycle_info_org). Never substitute a guessed
+// range here: a different key re-debits credits for the same period.
+async function getBillingCycleRange(c: Context, orgId: string): Promise<BillingCycleRange | null> {
   try {
     const { data, error } = await supabaseAdmin(c)
       .rpc('get_cycle_info_org', { orgid: orgId })
       .single()
     if (error) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'getBillingCycleRange error', orgId, error })
-      return getDefaultBillingCycleRange()
+      return null
     }
     if (!data?.subscription_anchor_start || !data?.subscription_anchor_end) {
-      cloudlog({
+      cloudlogErr({
         requestId: c.get('requestId'),
-        message: 'getBillingCycleRange fallback to default',
+        message: 'getBillingCycleRange missing cycle',
         orgId,
         billingCycle: data,
       })
-      return getDefaultBillingCycleRange()
+      return null
     }
     return data as BillingCycleRange
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'getBillingCycleRange error', orgId, error })
-    return getDefaultBillingCycleRange()
+    return null
   }
 }
 
@@ -229,14 +218,10 @@ async function applyCreditsForMetric(
   planId: string | undefined,
   usage: number,
   limit: number | null | undefined,
-  billingCycle: BillingCycleInfo | null,
+  billingCycle: BillingCycleRange,
 ): Promise<CreditApplicationResult | null> {
   if (overageAmount <= 0)
     return null
-
-  const resolvedBillingCycle: BillingCycleRange = billingCycle?.subscription_anchor_start && billingCycle?.subscription_anchor_end
-    ? (billingCycle as BillingCycleRange)
-    : getDefaultBillingCycleRange()
 
   if (!planId) {
     cloudlog({
@@ -244,7 +229,7 @@ async function applyCreditsForMetric(
       message: 'applyCreditsForMetric missing plan context, continuing',
       orgId,
       metric,
-      billingCycle: resolvedBillingCycle,
+      billingCycle,
     })
   }
   try {
@@ -253,8 +238,8 @@ async function applyCreditsForMetric(
         p_org_id: orgId,
         p_metric: metric,
         p_overage_amount: overageAmount,
-        p_billing_cycle_start: resolvedBillingCycle.subscription_anchor_start!,
-        p_billing_cycle_end: resolvedBillingCycle.subscription_anchor_end!,
+        p_billing_cycle_start: billingCycle.subscription_anchor_start,
+        p_billing_cycle_end: billingCycle.subscription_anchor_end,
         p_details: {
           usage,
           limit: limit ?? 0,
@@ -394,6 +379,14 @@ async function userAbovePlan(c: Context, org: {
     const planLimit = Number(metric.limit ?? 0)
     const overage = metric.usage - planLimit
     if (overage > 0) {
+      if (!billingCycle) {
+        // Skip this run instead of applying overage under a guessed cycle key
+        // (a different key re-debits credits). Nothing was applied yet: every
+        // metric needs the cycle. Throwing leaves stripe_info untouched and
+        // lets the queue retry.
+        cloudlogErr({ requestId: c.get('requestId'), message: 'userAbovePlan skipped overage: billing cycle unavailable', orgId, metric: metric.key, overage })
+        throw new Error(`billing_cycle_unavailable for org ${orgId}`)
+      }
       const creditResult = await applyCreditsForMetric(c, orgId, metric.key, overage, planId, metric.usage, metric.limit, billingCycle)
       creditResults[metric.key] = creditResult
       const unpaid = creditResult?.overage_unpaid ?? overage

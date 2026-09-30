@@ -151,7 +151,7 @@ defineExpose({ open })
         <div
           v-for="(rule, ruleIndex) in rules"
           :key="ruleIndex"
-          class="space-y-4 rounded-md border border-slate-200 bg-slate-50/80 p-4 dark:border-slate-700 dark:bg-slate-900/60"
+          class="space-y-4 rounded-md border border-slate-200 bg-slate-50/80 p-4 dark:border-white/10 dark:bg-white/[0.03]"
         >
           <div class="flex items-end gap-3">
             <div class="form-control w-2/5">

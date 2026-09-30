@@ -13,8 +13,9 @@ import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
 import { checkPermission } from '../utils/rbac.ts'
+import { readStatsVersion } from '../utils/stats.ts'
 import { getRollingStatsPeriod } from '../utils/statsPeriod.ts'
-import { supabaseAdmin, supabaseWithAuth } from '../utils/supabase.ts'
+import { supabaseWithAuth } from '../utils/supabase.ts'
 
 dayjs.extend(utc)
 
@@ -271,14 +272,10 @@ async function readRollingSuccessRows(
   endExclusive: dayjs.Dayjs,
   versionFilter?: Set<string>,
 ) {
-  const { data, error } = await supabaseAdmin(c).rpc('read_version_usage', {
-    p_app_id: appId,
-    p_period_start: start.toISOString(),
-    p_period_end: endExclusive.toISOString(),
-  })
-  if (error)
-    throw error
-  return aggregateSuccessRowsFromVersionUsage((data ?? []) as VersionUsage[], versionFilter)
+  // Route through readStatsVersion: production writes version_usage to Analytics
+  // Engine only, so reading the Postgres RPC directly returned no installs.
+  const usage = await readStatsVersion(c, appId, start.toISOString(), endExclusive.toISOString())
+  return aggregateSuccessRowsFromVersionUsage(usage, versionFilter)
 }
 
 function buildBundleInstallResponse(input: {

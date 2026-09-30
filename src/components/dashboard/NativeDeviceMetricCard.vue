@@ -40,7 +40,7 @@ const displayValue = computed(() => {
 </script>
 
 <template>
-  <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+  <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
     <div class="flex items-start justify-between gap-3">
       <div class="min-w-0 text-sm text-slate-600 dark:text-slate-400">
         {{ title }}
