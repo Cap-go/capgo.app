@@ -739,6 +739,9 @@ export interface DeviceUsageAllCF {
 // period is counted once per org, so moving an app between orgs cannot hide its MAU.
 // Usage of deleted apps stays billable via deleted_apps for 35 days (see
 // calculate_org_metrics_cache_entry), so deleting/recreating an app cannot reset MAU.
+// Another org recreating that app_id within 35 days shares the same usage rows
+// (both orgs billed, new owner can read them): expected, see
+// docs/billing-usage-retention.md.
 export async function readDeviceUsageCF(c: Context, app_id: string, period_start: string, period_end: string, options: { throwOnError?: boolean } = {}) {
   if (!c.env.DEVICE_USAGE)
     return [] as DeviceUsageCF[]
