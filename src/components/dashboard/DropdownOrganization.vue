@@ -153,6 +153,8 @@ function unbindCompactMenuListeners() {
 async function onDropdownToggle() {
   const open = dropdown.value?.open ?? false
   compactMenuOpen.value = props.compact && open
+  if (!open)
+    organizationSearch.value = ''
   if (!compactMenuOpen.value) {
     unbindCompactMenuListeners()
     return
@@ -297,6 +299,13 @@ function closeDropdown(options?: { restoreFocus?: boolean }) {
   dropdown.value?.removeAttribute('open')
   if (wasCompactOpen && options?.restoreFocus !== false)
     dropdown.value?.querySelector('summary')?.focus()
+}
+
+function onMenuClick(event: MouseEvent) {
+  // Typing in the search field must not close the menu.
+  if (event.target instanceof Element && event.target.closest('[data-org-switcher-search]'))
+    return
+  closeDropdown()
 }
 
 onKeyStroke('Escape', (event) => {
@@ -540,13 +549,13 @@ watch(
             ? 'fixed z-[100] w-80'
             : 'absolute top-full inset-x-0 mt-1.5 z-50'"
           :style="props.compact ? compactMenuStyle : undefined"
-          @click="closeDropdown()"
+          @click="onMenuClick"
         >
           <div class="flex items-center justify-between px-3 pt-3 pb-1.5">
             <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">{{ t('organizations') }}</span>
             <span class="text-[11px] tabular-nums text-slate-500">{{ organizationStore.organizations.length }}</span>
           </div>
-          <div v-if="showOrganizationSearch" class="px-2 pb-2" @click.stop>
+          <div v-if="showOrganizationSearch" class="px-2 pb-2" data-org-switcher-search>
             <label class="flex items-center gap-2 h-9 px-2.5 rounded-lg border border-slate-600 bg-slate-900/60 text-slate-400 focus-within:border-azure-500 focus-within:ring-2 focus-within:ring-azure-500/30">
               <IconSearch class="size-4 shrink-0" aria-hidden="true" />
               <input

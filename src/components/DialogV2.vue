@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { WatchStopHandle } from 'vue'
 import type { DialogV2Button } from '~/stores/dialogv2'
-import { computed, onMounted, onUnmounted, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconClose from '~icons/lucide/x'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -10,6 +10,8 @@ const dialogStore = useDialogV2Store()
 const route = useRoute()
 const { t } = useI18n()
 const titleId = 'dialog-v2-title'
+const panelRef = useTemplateRef<HTMLDialogElement>('panelRef')
+let returnFocusEl: HTMLElement | null = null
 
 let escapeHandler: ((event: KeyboardEvent) => void) | null = null
 let stopRouteWatch: WatchStopHandle | undefined
@@ -72,6 +74,59 @@ const footerButtonGroups = computed(() => {
   ].filter(group => group.buttons.length > 0)
 })
 
+function getFocusable() {
+  const panel = panelRef.value
+  if (!panel)
+    return [] as HTMLElement[]
+  return Array.from(panel.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )).filter(el => el.offsetParent !== null)
+}
+
+function trapTab(event: KeyboardEvent) {
+  const panel = panelRef.value
+  if (!panel)
+    return
+  const focusable = getFocusable()
+  if (!focusable.length) {
+    event.preventDefault()
+    panel.focus()
+    return
+  }
+  const first = focusable[0]!
+  const last = focusable[focusable.length - 1]!
+  const active = document.activeElement
+  if (event.shiftKey && (active === first || active === panel || !panel.contains(active))) {
+    event.preventDefault()
+    last.focus()
+  }
+  else if (!event.shiftKey && (active === last || !panel.contains(active))) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
+// Move focus into the dialog on open and give it back to the opener on close.
+watch(() => dialogStore.showDialog, async (open) => {
+  if (open) {
+    returnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    // Custom content teleports in after the panel mounts; let it settle (and autofocus) first.
+    await nextTick()
+    await nextTick()
+    const panel = panelRef.value
+    if (!panel || panel.contains(document.activeElement))
+      return
+    const firstField = getFocusable().find(el => el.matches('input:not([type="checkbox"]):not([type="radio"]), select, textarea'))
+    ;(firstField ?? panel).focus({ preventScroll: true })
+    return
+  }
+  const target = returnFocusEl
+  returnFocusEl = null
+  await nextTick()
+  if (!dialogStore.showDialog && target?.isConnected)
+    target.focus({ preventScroll: true })
+})
+
 function close(button?: DialogV2Button) {
   dialogStore.closeDialog(button)
 }
@@ -119,7 +174,13 @@ onMounted(() => {
 
   // Close dialog on Escape key
   escapeHandler = (event: KeyboardEvent) => {
-    if (event.key === 'Escape' && dialogStore.showDialog && !dialogStore.dialogOptions?.preventAccidentalClose) {
+    if (!dialogStore.showDialog)
+      return
+    if (event.key === 'Tab') {
+      trapTab(event)
+      return
+    }
+    if (event.key === 'Escape' && !dialogStore.dialogOptions?.preventAccidentalClose) {
       dialogStore.closeDialog()
     }
   }
@@ -149,11 +210,13 @@ onUnmounted(() => {
       />
 
       <!-- Dialog -->
-      <div
-        role="dialog"
+      <dialog
+        ref="panelRef"
+        open
+        tabindex="-1"
         aria-modal="true"
         :aria-labelledby="dialogStore.dialogOptions?.title ? titleId : undefined"
-        class="dialog-v2-panel relative flex w-full flex-col overflow-hidden rounded-xl border border-slate-200 bg-base-100 shadow-2xl max-h-[calc(100dvh-2rem)] sm:max-h-[90vh] dark:border-slate-700"
+        class="dialog-v2-panel relative m-0 flex w-full flex-col overflow-hidden rounded-xl border border-slate-200 bg-base-100 p-0 text-base-content shadow-2xl outline-none max-h-[calc(100dvh-2rem)] sm:max-h-[90vh] dark:border-slate-700"
         :class="[
           sizeClasses[dialogStore.dialogOptions?.size || 'md'],
         ]"
@@ -171,7 +234,7 @@ onUnmounted(() => {
               v-if="!dialogStore.dialogOptions?.preventAccidentalClose"
               type="button"
               class="-mr-2 flex size-9 shrink-0 items-center justify-center rounded-lg text-slate-400 cursor-pointer transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 dark:hover:bg-slate-700 dark:hover:text-white"
-              :aria-label="t('close')"
+              :aria-label="t('close-dialog')"
               @click="close()"
             >
               <IconClose class="size-5" />
@@ -183,7 +246,7 @@ onUnmounted(() => {
             v-else-if="!dialogStore.dialogOptions?.preventAccidentalClose"
             type="button"
             class="absolute z-10 top-3 right-3 flex size-9 items-center justify-center rounded-lg text-slate-400 cursor-pointer transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 dark:hover:bg-slate-700 dark:hover:text-white"
-            :aria-label="t('close')"
+            :aria-label="t('close-dialog')"
             @click="close()"
           >
             <IconClose class="size-5" />
@@ -243,7 +306,7 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
-      </div>
+      </dialog>
     </div>
   </Teleport>
 </template>

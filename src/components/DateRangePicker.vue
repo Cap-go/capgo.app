@@ -346,7 +346,7 @@ function presetButtonClass(active: boolean, disabled: boolean) {
         ref="popoverRef"
         open
         :aria-label="`${t('date-range')}: ${triggerLabel}`"
-        class="date-range-popover fixed z-[100] m-0 w-[min(34.5rem,calc(100vw-1.5rem))] overflow-hidden rounded-xl border p-0"
+        class="date-range-popover fixed z-[100] m-0 w-[min(34.5rem,calc(100vw-1.5rem))] overflow-x-hidden overflow-y-auto overscroll-contain rounded-xl border p-0"
         :data-capgo-surface="isDark ? 'dark' : 'light'"
         :style="popoverStyle"
       >
@@ -518,7 +518,7 @@ function presetButtonClass(active: boolean, disabled: boolean) {
 .date-range-popover {
   left: auto;
   max-width: none;
-  max-height: none;
+  max-height: calc(100dvh - 24px);
   background: var(--drp-bg) !important;
   border-color: var(--drp-border) !important;
   color: var(--drp-text) !important;
@@ -685,6 +685,8 @@ function presetButtonClass(active: boolean, disabled: boolean) {
 
 .date-range-calendar :deep(.dp__calendar_header_item),
 .date-range-calendar :deep(.dp--calendar-header-item) {
+  height: auto !important;
+  padding: 0.25rem 0 !important;
   font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -784,12 +786,6 @@ function presetButtonClass(active: boolean, disabled: boolean) {
 .date-range-calendar :deep(.dp__calendar_header) {
   height: auto !important;
   padding-bottom: 0.25rem !important;
-}
-
-.date-range-calendar :deep(.dp--calendar-header-item),
-.date-range-calendar :deep(.dp__calendar_header_item) {
-  height: auto !important;
-  padding: 0.25rem 0 !important;
 }
 
 /* Inline start/end time: two compact bordered fields under the calendar. */

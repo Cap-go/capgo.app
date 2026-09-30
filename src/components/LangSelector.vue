@@ -31,7 +31,6 @@ function selectLanguage(locale: string) {
     <button
       type="button"
       tabindex="0"
-      aria-haspopup="listbox"
       class="inline-flex items-center gap-2 h-9 px-3 m-1 text-sm font-medium rounded-lg border border-slate-300 bg-white text-slate-700 cursor-pointer transition-colors duration-150 hover:border-slate-400 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-offset-2 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:bg-slate-700"
     >
       <span aria-hidden="true">{{ getEmoji(i18n.global.locale.value) }}</span>
@@ -40,7 +39,6 @@ function selectLanguage(locale: string) {
     </button>
     <ul
       tabindex="0"
-      role="listbox"
       class="d-dropdown-content z-20 w-56 max-h-72 overflow-y-auto overscroll-contain p-1 rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-800"
       :class="props.placement === 'top' ? 'mb-1' : 'mt-1'"
     >
@@ -48,11 +46,10 @@ function selectLanguage(locale: string) {
         v-for="locale in availableLocales"
         :id="locale"
         :key="locale"
-        role="option"
-        :aria-selected="locale === i18n.global.locale.value"
       >
         <button
           type="button"
+          :aria-current="locale === i18n.global.locale.value ? 'true' : undefined"
           class="flex w-full items-center gap-2.5 h-9 px-2.5 rounded-lg text-left text-sm cursor-pointer transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500"
           :class="locale === i18n.global.locale.value
             ? 'bg-azure-500/10 font-medium text-slate-900 dark:text-white'

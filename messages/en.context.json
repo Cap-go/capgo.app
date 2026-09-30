@@ -1234,6 +1234,7 @@
   "cli-login-waiting": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cli-version": "Used in Capgo web console areas: pages/admin/dashboard, pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "close": "Used in Capgo web console areas: components, components/admin, components/dashboard, components/forms, components/tables. Role: button or action label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "close-dialog": "Used in Capgo web console areas: components. Role: accessible label for the icon-only close button of a dialog. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "close-sidebar": "Used in Capgo web console areas: components. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cloud-replication-delay": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "collapse-chart": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

@@ -46,7 +46,7 @@ function onKeydown(e: KeyboardEvent) {
     return
   const first = focusable[0]!
   const last = focusable[focusable.length - 1]!
-  if (e.shiftKey && document.activeElement === first) {
+  if (e.shiftKey && (document.activeElement === first || document.activeElement === modalBoxRef.value)) {
     e.preventDefault()
     last.focus()
   }
