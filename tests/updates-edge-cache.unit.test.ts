@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { purgeLocalTaggedKeys } from '../supabase/functions/_backend/plugin_runtime/utils/cache.ts'
 import { createLazyPgClient, getLazyPgQueryCount } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
 import { getCachedAppOwner, getCachedDefaultChannel, getUpdatesEdgeCacheBps, getUpdatesEdgeCacheTtlSeconds, isUpdatesEdgeCacheEnabled, shouldUseUpdatesEdgeCache, updatesAppCacheTag, updatesCacheTags, updatesEdgeCacheBucket } from '../supabase/functions/_backend/plugin_runtime/utils/updatesEdgeCache.ts'
-import { chunk, parseAppIds, purgeUpdatesCacheTags } from '../supabase/functions/_backend/triggers/updates_cache_purge.ts'
+import { chunk, parseAppIds, purgeUpdatesCacheTags, resetPurgeZoneCache, shouldForwardPurge } from '../supabase/functions/_backend/triggers/updates_cache_purge.ts'
 
 function makeContext(env: Record<string, string> = {}) {
   const raw = new Request('https://plugin.capgo.test/updates', { method: 'POST' })
@@ -88,6 +88,10 @@ describe('updates edge cache', () => {
     expect(isUpdatesEdgeCacheEnabled(c)).toBe(false)
     expect(shouldUseUpdatesEdgeCache(makeContext(), 'com.example.app', 'device-1')).toBe(false)
     vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a,zone-b')
+    expect(getUpdatesEdgeCacheBps(c)).toBe(10_000)
+    // The token alone (deployed with the Cloudflare env file) is enough.
+    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', '')
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
     expect(getUpdatesEdgeCacheBps(c)).toBe(10_000)
   })
 
@@ -191,6 +195,36 @@ describe('updates cache purge trigger', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
     vi.unstubAllEnvs()
+    resetPurgeZoneCache()
+  })
+
+  it('discovers the zones from the token when no override is set, and caches them', async () => {
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
+    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', '')
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/zones?'))
+        return new Response(JSON.stringify({ result: [{ id: 'zone-1' }, { id: 'zone-2' }], result_info: { total_pages: 1 } }), { status: 200 })
+      return new Response('{}', { status: 200 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(purgeUpdatesCacheTags(makeContext(), ['capgo-updates-a'])).resolves.toEqual({ calls: 2, failed: 0 })
+    await purgeUpdatesCacheTags(makeContext(), ['capgo-updates-b'])
+    const urls = fetchMock.mock.calls.map(call => call[0])
+    expect(urls.filter(url => url.includes('/zones?'))).toHaveLength(1)
+    expect(urls.filter(url => url.endsWith('/zones/zone-1/purge_cache'))).toHaveLength(2)
+    expect(urls.filter(url => url.endsWith('/zones/zone-2/purge_cache'))).toHaveLength(2)
+  })
+
+  it('forwards to the Cloudflare API worker only when it has no token and was not forwarded already', () => {
+    const c = makeContext()
+    expect(shouldForwardPurge(c)).toBe(false)
+    vi.stubEnv('CLOUDFLARE_FUNCTION_URL', 'https://api.capgo.test')
+    expect(shouldForwardPurge(c)).toBe(true)
+    const forwarded = { ...makeContext(), req: { ...makeContext().req, header: (name: string) => name === 'x-capgo-purge-forwarded' ? '1' : undefined } }
+    expect(shouldForwardPurge(forwarded)).toBe(false)
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
+    expect(shouldForwardPurge(c)).toBe(false)
   })
 
   it('dedupes and bounds app ids', () => {

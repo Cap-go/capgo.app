@@ -7,6 +7,12 @@
 // one request. Changes that arrive during the 1s flush throttle are drained
 // by this endpoint calling the flush again ~1s later (the chain stops once
 // nothing is due). Every failure is soft: the cache TTL is the backstop.
+//
+// Configuration is one secret, CF_CACHE_PURGE_TOKEN (Zone Read + Cache Purge),
+// deployed with the Cloudflare env file. Zones are the ones the token can see
+// (CF_CACHE_PURGE_ZONE_IDS only overrides that). A runtime without the token
+// (the Supabase function behind db_url) forwards the purge to the Cloudflare
+// API worker at CLOUDFLARE_FUNCTION_URL.
 
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
@@ -25,6 +31,51 @@ const MAX_RETRY_AFTER_MS = 2000
 const MAX_PURGE_ATTEMPTS = 3
 /** Just over the DB flush throttle (1s), so the follow-up flush is allowed. */
 const FOLLOW_UP_FLUSH_DELAY_MS = 1100
+const ZONE_LIST_TTL_MS = 60 * 60 * 1000
+const FORWARDED_HEADER = 'x-capgo-purge-forwarded'
+
+let zoneListCache: { token: string, zoneIds: string[], expiresAt: number } | null = null
+
+/** Zone ids to purge: the explicit override, else every active zone the token can read (cached 1h). */
+export async function resolvePurgeZoneIds(c: Context, token: string): Promise<string[]> {
+  const override = parseCsv(getEnv(c, 'CF_CACHE_PURGE_ZONE_IDS'))
+  if (override.length > 0)
+    return override
+  if (zoneListCache?.token === token && zoneListCache.expiresAt > Date.now())
+    return zoneListCache.zoneIds
+
+  const zoneIds: string[] = []
+  try {
+    for (let page = 1; page <= 20; page++) {
+      const response = await fetch(`https://api.cloudflare.com/client/v4/zones?status=active&per_page=50&page=${page}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(PURGE_TIMEOUT_MS),
+      })
+      if (!response.ok)
+        throw new Error(`zone list HTTP ${response.status}`)
+      const body = await response.json() as { result?: { id?: string }[], result_info?: { total_pages?: number } }
+      for (const zone of body.result ?? []) {
+        if (zone.id)
+          zoneIds.push(zone.id)
+      }
+      if (page >= (body.result_info?.total_pages ?? 1))
+        break
+    }
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge zone discovery failed', error: serializeError(error) })
+    return zoneListCache?.token === token ? zoneListCache.zoneIds : []
+  }
+  zoneListCache = { token, zoneIds, expiresAt: Date.now() + ZONE_LIST_TTL_MS }
+  if (zoneIds.length === 0)
+    cloudlog({ requestId: c.get('requestId'), message: 'updates cache purge token sees no zones' })
+  return zoneIds
+}
+
+/** Test hook. */
+export function resetPurgeZoneCache() {
+  zoneListCache = null
+}
 
 export function chunk<T>(items: T[], size: number): T[][] {
   const chunks: T[][] = []
@@ -63,7 +114,7 @@ async function postPurge(url: string, headers: Record<string, string>, body: unk
 
 export async function purgeUpdatesCacheTags(c: Context, tags: string[]) {
   const token = getEnv(c, 'CF_CACHE_PURGE_TOKEN')
-  const zoneIds = parseCsv(getEnv(c, 'CF_CACHE_PURGE_ZONE_IDS'))
+  const zoneIds = token ? await resolvePurgeZoneIds(c, token) : []
   const localPurgeUrl = getEnv(c, 'UPDATES_CACHE_LOCAL_PURGE_URL')
   let calls = 0
   let failed = 0
@@ -97,6 +148,29 @@ export async function purgeUpdatesCacheTags(c: Context, tags: string[]) {
   return { calls, failed }
 }
 
+export function shouldForwardPurge(c: Context) {
+  return !getEnv(c, 'CF_CACHE_PURGE_TOKEN')
+    && !getEnv(c, 'UPDATES_CACHE_LOCAL_PURGE_URL')
+    && Boolean(getEnv(c, 'CLOUDFLARE_FUNCTION_URL'))
+    && c.req.header(FORWARDED_HEADER) !== '1'
+}
+
+async function forwardPurge(c: Context, appIds: string[]) {
+  try {
+    const response = await fetch(`${getEnv(c, 'CLOUDFLARE_FUNCTION_URL').replace(/\/$/, '')}/triggers/updates_cache_purge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apisecret': getEnv(c, 'API_SECRET'), [FORWARDED_HEADER]: '1' },
+      body: JSON.stringify({ app_ids: appIds }),
+      signal: AbortSignal.timeout(PURGE_TIMEOUT_MS),
+    })
+    if (!response.ok)
+      cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge forward failed', status: response.status })
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge forward error', error: serializeError(error) })
+  }
+}
+
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.post('/', middlewareAPISecret, async (c) => {
@@ -104,6 +178,13 @@ app.post('/', middlewareAPISecret, async (c) => {
   const appIds = parseAppIds(body)
   if (appIds.length === 0)
     return c.json({ ...BRES, apps: 0 })
+
+  if (shouldForwardPurge(c)) {
+    // No Cloudflare token here (Supabase function): hand the batch to the
+    // Cloudflare API worker, which has it from the Cloudflare env file.
+    await backgroundTask(c, forwardPurge(c, appIds))
+    return c.json({ ...BRES, apps: appIds.length, forwarded: true })
+  }
 
   const tags = appIds.map(updatesAppCacheTag)
   // Answer pg_net / the queue right away; the purge (and 429 back-off) runs
