@@ -106,3 +106,11 @@ printf '%s' '{"run_attempt":2,"status":"completed","conclusion":"failure"}'
     }
   })
 })
+
+describe('transient CI retry workflow', () => {
+  it('is disabled unless the repository explicitly opts in', () => {
+    const workflow = readFileSync(new URL('../.github/workflows/retry_transient_ci.yml', import.meta.url), 'utf8')
+
+    expect(workflow).toContain('vars.ENABLE_TRANSIENT_CI_RETRY == \'true\' &&')
+  })
+})

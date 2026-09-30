@@ -18,7 +18,9 @@ concurrency:
 
 jobs:
   retry:
+    # Disabled by default. Set the repository Actions variable to true to opt in.
     if: >-
+      vars.ENABLE_TRANSIENT_CI_RETRY == 'true' &&
       github.event.workflow_run.conclusion == 'failure' &&
       github.event.workflow_run.run_attempt == 1 &&
       github.event.workflow_run.head_repository.full_name == github.repository
