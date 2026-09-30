@@ -116,7 +116,9 @@ export async function deleteApp(c: Context<MiddlewareKeyVariables>, appId: strin
     // Keep daily_mau / daily_bandwidth / daily_build_time: they stay billable
     // through deleted_apps for the rest of the cycle (anti-fraud, so deleting and
     // recreating an app cannot reset usage). delete_old_deleted_apps purges them
-    // after 35 days, same as the dashboard deletion path.
+    // after 35 days, same as the dashboard deletion path. An app_id recreated in
+    // that window, even by another org, shares these rows on purpose; see
+    // docs/billing-usage-retention.md.
     admin
       .from('daily_storage')
       .delete()
