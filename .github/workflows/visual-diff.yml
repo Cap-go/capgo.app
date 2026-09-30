@@ -17,6 +17,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Pull Supabase CLI images from GHCR instead of the default public.ecr.aws,
+  # whose anonymous pull quota fails CI with "toomanyrequests: Data limit exceeded".
+  SUPABASE_INTERNAL_IMAGE_REGISTRY: ghcr.io
+
 jobs:
   check:
     runs-on: ubuntu-latest

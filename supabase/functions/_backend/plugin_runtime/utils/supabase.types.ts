@@ -716,6 +716,7 @@ export type Database = {
           created_at: string | null
           device_id: string
           id: number
+          is_self_set: boolean
           owner_org: string
           updated_at: string
         }
@@ -725,6 +726,7 @@ export type Database = {
           created_at?: string | null
           device_id: string
           id?: number
+          is_self_set?: boolean
           owner_org: string
           updated_at?: string
         }
@@ -734,6 +736,7 @@ export type Database = {
           created_at?: string | null
           device_id?: string
           id?: number
+          is_self_set?: boolean
           owner_org?: string
           updated_at?: string
         }

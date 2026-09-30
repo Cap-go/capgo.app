@@ -26,6 +26,7 @@ interface DataDevice {
   osVersion?: string
   osVersionOp?: VersionCompareOp
   platform?: typeof Constants.public.Enums.platform_os[number]
+  defaultChannel?: string
   devicesId?: string[]
   deviceIds?: string[] // TODO: remove when migration is done
   installSources?: string[]
@@ -61,6 +62,7 @@ const devicesBodyShape = {
   osVersion: safeQueryTextSchema.optional(),
   osVersionOp: versionCompareOpSchema.optional(),
   platform: platformSchema.optional(),
+  defaultChannel: safeQueryTextSchema.optional(),
   devicesId: z.array(deviceIdSchema).optional(),
   deviceIds: z.array(deviceIdSchema).optional(),
   installSources: z.array(safeQueryTextSchema).optional(),
@@ -155,6 +157,7 @@ function toReadDevicesParams(body: z.infer<typeof devicesBodySchema>, limit?: nu
       version_name_compare: versionNameCompare,
       os_version_compare: osVersionCompare,
       platform: body.platform,
+      default_channel: body.defaultChannel?.trim() || undefined,
       deviceIds: devicesIds,
       installSources: body.installSources,
       search: body.search,
@@ -188,6 +191,7 @@ app.post('/', middlewareAuth(), async (c) => {
         body.search?.trim(),
         {
           platform: body.platform,
+          defaultChannel: body.defaultChannel?.trim() || undefined,
           updatedAt: { gt: body.updated_at_gt, lte: body.updated_at_lte },
           osVersionCompare,
           versionNameCompare,

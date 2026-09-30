@@ -181,7 +181,8 @@ CREATE TABLE public.channel_devices (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     device_id text NOT NULL,
     id bigint NOT NULL,
-    owner_org uuid NOT NULL
+    owner_org uuid NOT NULL,
+    is_self_set boolean DEFAULT false NOT NULL
 );
 
 ALTER TABLE ONLY public.channel_devices REPLICA IDENTITY FULL;

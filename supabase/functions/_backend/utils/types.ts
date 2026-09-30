@@ -125,6 +125,17 @@ export interface VersionUsageChannel {
   name?: string | null
 }
 
+/**
+ * channel_devices overrides relevant to one channel, used to scope device counts
+ * by effective channel instead of only the device-reported default_channel.
+ */
+export interface ChannelDeviceOverrideIds {
+  /** Devices forced into the channel. */
+  into: string[]
+  /** Devices forced to another channel of the same app. */
+  elsewhere: string[]
+}
+
 export interface NativeVersionUsage {
   date: string
   platform: string
@@ -147,6 +158,8 @@ export interface ReadDevicesParams {
   os_version_compare?: VersionCompareFilter
   /** Exact platform filter (`ios` | `android` | `electron`) */
   platform?: Database['public']['Enums']['platform_os']
+  /** Exact default_channel match (channel the device reports via plugin config) */
+  default_channel?: string
   deviceIds?: string[]
   /** Exact custom_id match filter (case-sensitive, already trimmed by callers) */
   customIds?: string[]
@@ -178,6 +191,7 @@ export interface StatsActions {
   action: Database['public']['Enums']['stats_action']
   versionName?: string
   metadata?: StatsMetadata
+  channel?: VersionUsageChannel | null
 }
 
 export const DEFAULT_LIMIT = 1000
