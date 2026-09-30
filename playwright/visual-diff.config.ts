@@ -25,6 +25,16 @@ const nativeObserveActionRows: Array<[string, number, number, number | null, num
 ]
 
 async function mockNativeObserveStats(page: Page) {
+  const emptySeries = nativeObserveDays.map(() => null)
+  await page.route('**/private/update_delivery_stats', route => route.fulfill({
+    json: {
+      scope: 'app',
+      labels: nativeObserveDays,
+      period: { requested_days: 7, actual_days: 7, start: '2026-09-24T00:00:00.000Z', end: '2026-09-30T23:59:59.999Z' },
+      overview: { samples: 0, devices: null, p50_ms: null, p75_ms: null, p95_ms: null, p99_ms: null },
+      daily: { samples: nativeObserveDays.map(() => 0), p50_ms: emptySeries, p75_ms: emptySeries, p95_ms: emptySeries, p99_ms: emptySeries },
+    },
+  }))
   await page.route('**/private/native_observe_stats', route => route.fulfill({
     json: {
       labels: nativeObserveDays,
@@ -220,8 +230,7 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await page.goto('/app/com.demo.app/observe/native')
       const heading = page.getByRole('heading', { name: 'Action breakdown' })
       await heading.waitFor()
-      await heading.scrollIntoViewIfNeeded()
-      await page.evaluate(() => window.scrollBy(0, -16))
+      await heading.evaluate(el => el.scrollIntoView({ block: 'start' }))
     },
   },
   { slug: 'observe-compatibility', path: '/app/com.demo.app/observe/compatibility', auth: true },

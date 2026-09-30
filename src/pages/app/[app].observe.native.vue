@@ -452,16 +452,16 @@ watch([packageId, days, versionGroup], async () => {
             <p class="mt-1 text-slate-600 dark:text-slate-300">
               {{ t('native-observe-signals-note-body') }}
             </p>
-            <ul class="grid gap-2 mt-3 md:grid-cols-3">
-              <li class="flex items-start gap-2">
+            <ul class="flex flex-col gap-2 mt-3">
+              <li class="flex items-center gap-2">
                 <span class="px-1.5 py-0.5 text-[11px] font-medium rounded border shrink-0" :class="signalBadgeClass.crash">{{ t('native-observe-signal-crash') }}</span>
                 <span class="text-xs text-slate-600 dark:text-slate-400">{{ t('native-observe-signals-note-crash') }}</span>
               </li>
-              <li class="flex items-start gap-2">
+              <li class="flex items-center gap-2">
                 <span class="px-1.5 py-0.5 text-[11px] font-medium rounded border shrink-0" :class="signalBadgeClass.web">{{ t('native-observe-signal-web') }}</span>
                 <span class="text-xs text-slate-600 dark:text-slate-400">{{ t('native-observe-signals-note-web') }}</span>
               </li>
-              <li class="flex items-start gap-2">
+              <li class="flex items-center gap-2">
                 <span class="px-1.5 py-0.5 text-[11px] font-medium rounded border shrink-0" :class="signalBadgeClass.system">{{ t('native-observe-signal-system') }}</span>
                 <span class="text-xs text-slate-600 dark:text-slate-400">{{ t('native-observe-signals-note-system') }}</span>
               </li>
@@ -677,7 +677,7 @@ watch([packageId, days, versionGroup], async () => {
                 </thead>
                 <tbody>
                   <tr v-for="action in topActions" :key="action.action">
-                    <td class="max-w-md">
+                    <td class="min-w-[220px] max-w-[380px]">
                       <div class="font-medium text-slate-900 dark:text-slate-100">
                         {{ formatAction(action.action) }}
                       </div>
@@ -685,16 +685,26 @@ watch([packageId, days, versionGroup], async () => {
                         {{ signalHelp(action.action) }}
                       </div>
                     </td>
-                    <td class="align-top">
+                    <td>
                       <span class="inline-block px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap rounded border" :class="signalBadgeClass[observeSignalCategory(action.action)]">
                         {{ signalLabel(action.action) }}
                       </span>
                     </td>
-                    <td>{{ formatCount(action.events) }}</td>
-                    <td>{{ formatCount(action.devices) }}</td>
-                    <td>{{ formatDuration(action.p50_ms) }}</td>
-                    <td>{{ formatDuration(action.p90_ms) }}</td>
-                    <td>{{ formatDuration(action.p99_ms) }}</td>
+                    <td class="whitespace-nowrap">
+                      {{ formatCount(action.events) }}
+                    </td>
+                    <td class="whitespace-nowrap">
+                      {{ formatCount(action.devices) }}
+                    </td>
+                    <td class="whitespace-nowrap">
+                      {{ formatDuration(action.p50_ms) }}
+                    </td>
+                    <td class="whitespace-nowrap">
+                      {{ formatDuration(action.p90_ms) }}
+                    </td>
+                    <td class="whitespace-nowrap">
+                      {{ formatDuration(action.p99_ms) }}
+                    </td>
                     <td class="text-right">
                       <button type="button" class="d-btn d-btn-ghost d-btn-xs" :title="t('native-observe-open-logs')" @click="openLogs(action.action)">
                         <IconExternalLink class="w-4 h-4" />
