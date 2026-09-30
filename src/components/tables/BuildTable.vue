@@ -358,7 +358,7 @@ watch(showSetupFlow, (newValue) => {
       @done="onboardingDone"
       @close-step="closeSteps()"
     />
-    <div v-else class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
+    <div v-else class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10">
       <DataTable
         v-model:filters="filters"
         v-model:search="search"

@@ -612,20 +612,21 @@ watch(props, async () => {
   <div>
     <div
       v-if="totalAllBundles !== null && totalAllBundles === 0 && !search"
-      class="p-6 mb-6 bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900"
+      class="p-6 mb-6 bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10"
     >
       <h2 class="text-xl font-semibold text-slate-900 dark:text-slate-50">
-        {{ t('feel-magic-of-capgo') }} <span class="font-prompt">Capgo</span> !
+        {{ t('bundles-empty-title') }}
       </h2>
-      <p class="mt-2 text-slate-600 dark:text-slate-200">
-        {{ t('add-your-first-bundle') }}
+      <p class="mt-2 max-w-2xl text-slate-600 dark:text-slate-200">
+        {{ t('bundles-empty-description') }}
       </p>
+      <code class="block mt-4 w-fit max-w-full overflow-x-auto px-3 py-2 font-mono text-sm rounded-md bg-slate-100 text-slate-800 dark:bg-slate-900 dark:text-slate-200">npx @capgo/cli@latest bundle upload</code>
       <button type="button" class="mt-4 d-btn d-btn-primary" @click="addOne()">
-        {{ t('add-another-bundle') }}
+        {{ t('bundles-empty-cta') }}
       </button>
     </div>
 
-    <div class="flex overflow-hidden overflow-y-auto flex-col bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
+    <div class="flex overflow-hidden overflow-y-auto flex-col bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10">
       <DataTable
         v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
         :total="total"

@@ -334,9 +334,10 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="overflow-y-auto py-4 sm:py-6">
-    <div class="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 sm:px-6 lg:px-8">
-      <header class="flex flex-col gap-5 rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6">
+  <section class="overflow-y-auto pb-4 sm:pb-6">
+    <!-- Rendered inside the Builds page, which already pads the content: no extra inset. -->
+    <div class="flex w-full flex-col gap-6 px-4 sm:px-0">
+      <header class="flex flex-col gap-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-slate-800/60 sm:p-6">
         <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div class="flex min-w-0 gap-3">
             <button
@@ -396,8 +397,8 @@ onUnmounted(() => {
           v-for="(s, i) in steps"
           :id="`build_step_${i}`"
           :key="s.key"
-          class="rounded-lg border bg-white p-5 shadow-sm transition-opacity dark:bg-slate-900 sm:p-6"
-          :class="step === i ? 'border-azure-500 dark:border-azure-500' : 'border-slate-200 opacity-60 dark:border-slate-800'"
+          class="rounded-xl border bg-white p-5 shadow-sm transition-opacity dark:bg-slate-800/60 sm:p-6"
+          :class="step === i ? 'border-azure-500 dark:border-azure-500' : 'border-slate-200 opacity-60 dark:border-white/10'"
         >
           <div class="flex gap-4">
             <div

@@ -406,7 +406,7 @@ watch(
     <PageLoader v-if="loading" />
     <div v-else-if="version">
       <div class="w-full h-full px-0 pt-0 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
-        <div class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
+        <div class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10">
           <div class="px-4 py-5 border-b border-slate-200 dark:border-slate-700 sm:px-6">
             <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-gray-100">
               {{ t('manifest') }}
@@ -424,7 +424,7 @@ watch(
             <p class="mt-2 max-w-xl text-center text-sm text-slate-600 dark:text-slate-300">
               {{ t('manifest-no-manifest-body') }}
             </p>
-            <div class="mt-6 w-full max-w-xl rounded-lg border border-slate-200 bg-slate-50 p-4 text-left text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+            <div class="mt-6 w-full max-w-xl rounded-lg border border-slate-200 bg-slate-50 p-4 text-left text-sm text-slate-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-200">
               <div class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
                 {{ t('manifest-delta-command-label') }}
               </div>
@@ -465,7 +465,7 @@ watch(
 
                 <!-- Summary cards: show different layout when comparing vs not -->
                 <div v-if="!compareVersionId" class="grid w-full grid-cols-2 gap-4 text-right md:w-auto md:text-left">
-                  <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                  <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300">
                     <div class="uppercase tracking-wide">
                       {{ t('manifest-summary-files') }}
                     </div>
@@ -473,7 +473,7 @@ watch(
                       {{ manifestEntries.length }}
                     </div>
                   </div>
-                  <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                  <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300">
                     <div class="uppercase tracking-wide">
                       {{ t('size') }}
                     </div>
@@ -498,7 +498,7 @@ watch(
                     </div>
                   </div>
                   <!-- Already cached / unchanged -->
-                  <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                  <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-slate-300">
                     <div class="uppercase tracking-wide">
                       {{ t('manifest-already-cached') }}
                     </div>
@@ -510,7 +510,7 @@ watch(
                     </div>
                   </div>
                   <!-- Total bundle -->
-                  <div class="col-span-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400 md:col-span-2">
+                  <div class="col-span-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 dark:border-white/10 dark:bg-slate-800/60 dark:text-slate-400 md:col-span-2">
                     <div class="uppercase tracking-wide">
                       {{ t('manifest-total-bundle') }}
                     </div>

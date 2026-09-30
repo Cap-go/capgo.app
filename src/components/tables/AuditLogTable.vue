@@ -548,8 +548,8 @@ onUnmounted(() => {
     </div>
 
     <div class="block overflow-x-auto">
-      <table id="custom_table" class="w-full text-sm text-left text-gray-500 dark:text-gray-400">
-        <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:text-gray-400 dark:bg-gray-700">
+      <table id="custom_table" class="w-full text-sm text-left text-slate-600 dark:text-slate-300">
+        <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
           <tr>
             <th v-for="(col, i) in columns" :key="i" scope="col" class="px-1 py-3 md:px-6" :class="{ 'cursor-pointer': col.sortable, 'hidden md:table-cell': !col.mobile }" @click="sortClick(i)">
               <div class="flex items-center first-letter:uppercase">
@@ -566,7 +566,7 @@ onUnmounted(() => {
         <tbody v-if="!isLoading && auditLogs.length !== 0">
           <tr
             v-for="(elem, i) in auditLogs" :key="i"
-            class="bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
+            class="border-b border-slate-100 last:border-b-0 transition-colors hover:bg-slate-50 dark:border-white/5 dark:hover:bg-white/[0.03]"
           >
             <template v-for="(col, y) in columns" :key="`${i}_${y}`">
               <td
@@ -598,8 +598,8 @@ onUnmounted(() => {
 
     <nav class="fixed bottom-0 left-0 z-40 flex items-center justify-between w-full p-4 bg-white md:relative md:pt-4 md:bg-transparent dark:bg-gray-900 dark:md:bg-transparent" aria-label="Table navigation">
       <button
-        type="button"
         v-if="auditLogs.length < total"
+        type="button"
         class="flex items-center justify-center h-10 px-4 py-2 space-x-2 text-sm font-medium transition-colors border border-gray-300 rounded-md whitespace-nowrap dark:text-white dark:border-gray-700 focus-visible:ring-2 focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none ring-offset-background dark:hover:bg-primary/90 hover:bg-primary/10 focus-visible:outline-hidden focus-visible:ring-ring"
         @click="loadMore"
       >

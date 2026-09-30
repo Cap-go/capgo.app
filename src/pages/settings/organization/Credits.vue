@@ -733,7 +733,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
       :class="{ 'blur-sm pointer-events-none select-none': showAdminModal && adminModalPermission === 'org.update_billing' }"
     >
       <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
-        <div class="flex h-full flex-col justify-between rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div class="flex h-full flex-col justify-between rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-slate-800/60">
           <div class="flex items-start justify-between gap-4">
             <div>
               <div class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
@@ -773,7 +773,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
           </div>
         </div>
 
-        <div class="flex h-full flex-col justify-between rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div class="flex h-full flex-col justify-between rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-slate-800/60">
           <div>
             <div class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
               <BanknotesIcon class="h-4 w-4" />
@@ -871,7 +871,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
         </div>
       </div>
 
-      <div class="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800" data-test="credits-auto-top-up">
+      <div class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-slate-800/60" data-test="credits-auto-top-up">
         <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div class="max-w-xl">
             <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
@@ -946,7 +946,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
         </div>
       </div>
 
-      <details id="credit-pricing" class="group rounded-3xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800" :open="isCreditPricingOpen" @toggle="handleCreditPricingToggle">
+      <details id="credit-pricing" class="group rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-800/60" :open="isCreditPricingOpen" @toggle="handleCreditPricingToggle">
         <summary class="flex w-full cursor-pointer items-center justify-between gap-4 p-6 text-left [&::-webkit-details-marker]:hidden">
           <div>
             <h2 class="text-2xl font-semibold text-gray-900 dark:text-white">
@@ -965,7 +965,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             <div
               v-for="section in creditPricingSections"
               :key="section.title"
-              class="flex h-full flex-col rounded-2xl border border-gray-200 bg-gray-50 p-6 shadow-sm dark:border-gray-700 dark:bg-gray-900/40"
+              class="flex h-full flex-col rounded-2xl border border-gray-200 bg-gray-50 p-6 shadow-sm dark:border-white/10 dark:bg-white/[0.03]"
             >
               <div class="flex items-start gap-3">
                 <div class="flex h-10 w-20 items-center justify-center rounded-full" :class="section.accentClass">
@@ -1006,7 +1006,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
           </div>
         </div>
       </details>
-      <div class="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+      <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-800/60">
         <div class="flex items-center justify-between border-b border-gray-200 px-6 py-4 dark:border-gray-700">
           <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
             {{ t('credits-transactions') }}
@@ -1023,8 +1023,8 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             {{ t('credits-empty-state') }}
           </div>
           <div v-else class="-mx-4 overflow-x-auto sm:mx-0">
-            <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
-              <thead class="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:bg-gray-900 dark:text-gray-400">
+            <table class="min-w-full text-sm">
+              <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
                 <tr>
                   <th scope="col" class="px-4 py-3">
                     {{ t('credit-transaction-occurred-at') }}
@@ -1037,9 +1037,9 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
                   </th>
                 </tr>
               </thead>
-              <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+              <tbody class="divide-y divide-slate-100 dark:divide-white/5">
                 <template v-for="day in paginatedDailyTransactions" :key="day.dateKey">
-                  <tr class="bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-white">
+                  <tr class="bg-slate-50 text-slate-900 dark:bg-white/[0.02] dark:text-white">
                     <td class="px-4 py-3 font-semibold">
                       {{ day.dateLabel }}
                     </td>

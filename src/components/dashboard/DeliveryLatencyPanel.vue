@@ -205,13 +205,13 @@ watch(
       />
     </div>
 
-    <div v-if="statsLoading && !forceDemo && !stats && !statsError" class="flex items-center justify-center h-64 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+    <div v-if="statsLoading && !forceDemo && !stats && !statsError" class="flex items-center justify-center h-64 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
       <Spinner size="w-10 h-10" />
     </div>
 
     <div
       v-else-if="statsError && !forceDemo"
-      class="flex flex-col items-center justify-center h-64 gap-3 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400"
+      class="flex flex-col items-center justify-center h-64 gap-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10 text-slate-500 dark:text-slate-400"
     >
       <IconTimer class="w-12 h-12" />
       <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">
@@ -230,7 +230,7 @@ watch(
         <div
           v-for="card in percentileCards"
           :key="card.key"
-          class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700"
+          class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10"
         >
           <div class="text-sm truncate text-slate-600 dark:text-slate-400">
             {{ card.label }}
@@ -239,7 +239,7 @@ watch(
             {{ formatDuration(card.value) }}
           </div>
         </div>
-        <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+        <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
           <div class="text-sm truncate text-slate-600 dark:text-slate-400">
             {{ t('update-delivery-samples') }}
           </div>
@@ -247,7 +247,7 @@ watch(
             {{ formatCount(effectiveStats?.overview.samples) }}
           </div>
         </div>
-        <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+        <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
           <div class="text-sm truncate text-slate-600 dark:text-slate-400">
             {{ t('update-delivery-devices') }}
           </div>
@@ -257,7 +257,7 @@ watch(
         </div>
       </div>
 
-      <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+      <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
         <div class="flex items-center justify-between gap-3 mb-4">
           <div>
             <h3 class="text-base font-semibold text-slate-950 dark:text-white">

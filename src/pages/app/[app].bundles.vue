@@ -56,8 +56,9 @@ watchEffect(async () => {
 <template>
   <div>
     <div v-if="app || isLoading">
-      <div class="mt-0 md:mt-8">
-        <div class="w-full h-full px-0 pt-0 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
+      <div class="mt-0">
+        <div class="w-full h-full px-0 pt-6 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
+          <SectionIntro section="bundles" />
           <BundleTable :app-id="id" />
         </div>
       </div>
