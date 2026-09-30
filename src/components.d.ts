@@ -66,6 +66,7 @@ declare module 'vue' {
     BundleTable: typeof import('./components/tables/BundleTable.vue')['default']
     BundleUploadsCard: typeof import('./components/dashboard/BundleUploadsCard.vue')['default']
     BundleUploadsChart: typeof import('./components/dashboard/BundleUploadsChart.vue')['default']
+    CapgoLoader: typeof import('./components/CapgoLoader.vue')['default']
     ChannelAccessPanel: typeof import('./components/permissions/ChannelAccessPanel.vue')['default']
     ChannelConsoleAssignMockup: typeof import('./components/dashboard/ChannelConsoleAssignMockup.vue')['default']
     ChannelConsoleAssignOnboarding: typeof import('./components/dashboard/ChannelConsoleAssignOnboarding.vue')['default']
