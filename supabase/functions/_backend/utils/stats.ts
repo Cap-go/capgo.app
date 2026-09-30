@@ -508,6 +508,7 @@ export function countDevices(
   search?: string,
   options?: {
     platform?: Database['public']['Enums']['platform_os']
+    defaultChannel?: string
     updatedAt?: { gt?: string, lte?: string }
     osVersionCompare?: VersionCompareFilter
     versionNameCompare?: VersionCompareFilter

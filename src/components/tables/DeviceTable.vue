@@ -65,6 +65,8 @@ const initialRange = getDateRangeForPreset(TABLE_DATE_RANGE_DEFAULT)
 const dateRange = ref<[Date, Date] | null>([initialRange.start, initialRange.end])
 const dateRangeMode = ref<DateRangePreset>(TABLE_DATE_RANGE_DEFAULT)
 const selectedPlatform = ref<'' | PlatformOs>('')
+const selectedDefaultChannel = ref('')
+const channelNames = ref<string[]>([])
 const selectedVersionNames = ref<string[]>(props.versionName ? [props.versionName] : [])
 const bundleCompareOp = ref<BundleCompareOp>('in')
 const osVersionOp = ref<VersionCompareOp>('gte')
@@ -82,6 +84,7 @@ const activeExtraFilters = computed(() => {
     ? selectedVersionNames.value.length > 0
     : hasVersionDigits(selectedVersionNames.value[0])
   return (selectedPlatform.value ? 1 : 0)
+    + (selectedDefaultChannel.value ? 1 : 0)
     + (bundleActive ? 1 : 0)
     + (hasVersionDigits(osVersionValue.value) ? 1 : 0)
 })
@@ -110,6 +113,7 @@ function clearExtraFilters() {
   // schedule a second reload in the same clear action.
   skipFilterReload.value = true
   selectedPlatform.value = ''
+  selectedDefaultChannel.value = ''
   selectedVersionNames.value = []
   bundleCompareOp.value = 'in'
   osVersionOp.value = 'gte'
@@ -216,6 +220,10 @@ function getPlatformFilter(): PlatformOs | undefined {
   return selectedPlatform.value || undefined
 }
 
+function getDefaultChannelFilter(): string | undefined {
+  return selectedDefaultChannel.value || undefined
+}
+
 function getOsVersionFilter() {
   const value = osVersionValue.value.trim()
   if (!value || !/\d/.test(value))
@@ -241,6 +249,7 @@ function getDevicesFilterBody() {
     ...getBundleFilterPayload(),
     ...getOsVersionFilter(),
     platform: getPlatformFilter(),
+    defaultChannel: getDefaultChannelFilter(),
   }
 }
 
@@ -254,6 +263,7 @@ function getQuerySignature() {
     osVersion: os.osVersion ?? '',
     osVersionOp: os.osVersionOp ?? osVersionOp.value,
     platform: getPlatformFilter() ?? '',
+    defaultChannel: getDefaultChannelFilter() ?? '',
     search: getSearchTerm(),
     order: getActiveOrder(columns.value),
     override: filters.value.Override,
@@ -293,6 +303,29 @@ async function loadBundleNames() {
       names.unshift(name)
   }
   bundleNames.value = names
+}
+
+async function loadChannelNames() {
+  const appId = props.appId
+  if (!appId)
+    return
+
+  const { data, error } = await supabase
+    .from('channels')
+    .select('name')
+    .eq('app_id', appId)
+    .order('name', { ascending: true })
+    .limit(200)
+
+  // Ignore stale responses if the user switched apps while the query was in flight.
+  if (appId !== props.appId)
+    return
+
+  const names = error || !data ? [] : [...new Set(data.map(row => row.name).filter(Boolean))]
+  const selected = selectedDefaultChannel.value
+  if (selected && !names.includes(selected))
+    names.unshift(selected)
+  channelNames.value = names
 }
 
 async function getDevicesID() {
@@ -648,7 +681,7 @@ async function ensureVersionNames(devices: Device[]) {
 }
 
 onMounted(async () => {
-  await loadBundleNames()
+  await Promise.all([loadBundleNames(), loadChannelNames()])
 })
 
 watch(() => props.appId, async (appId) => {
@@ -659,11 +692,12 @@ watch(() => props.appId, async (appId) => {
   unfilteredTotal.value = null
   skipFilterReload.value = true
   selectedPlatform.value = ''
+  selectedDefaultChannel.value = ''
   selectedVersionNames.value = props.versionName ? [props.versionName] : []
   bundleCompareOp.value = 'in'
   osVersionOp.value = 'gte'
   osVersionValue.value = ''
-  await loadBundleNames()
+  await Promise.all([loadBundleNames(), loadChannelNames()])
   if (appId !== props.appId)
     return
   skipFilterReload.value = false
@@ -681,7 +715,7 @@ watch(() => props.versionName, (value) => {
   })
 })
 
-watch([selectedPlatform, selectedVersionNames, bundleCompareOp, osVersionOp, osVersionValue], () => {
+watch([selectedPlatform, selectedDefaultChannel, selectedVersionNames, bundleCompareOp, osVersionOp, osVersionValue], () => {
   if (skipFilterReload.value)
     return
   debouncedReload()
@@ -917,6 +951,28 @@ async function exportDevices(format: 'csv' | 'json') {
             </button>
           </div>
         </fieldset>
+        <div class="flex w-full flex-col gap-2" data-test="device-default-channel-filter">
+          <label
+            for="device-table-default-channel-filter"
+            class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400"
+          >
+            {{ t('default-channel') }}
+          </label>
+          <select
+            id="device-table-default-channel-filter"
+            v-model="selectedDefaultChannel"
+            name="device-default-channel"
+            class="d-select d-select-bordered min-h-11 w-full border-slate-200 bg-white text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+            data-test="device-default-channel-select"
+          >
+            <option value="">
+              {{ t('all-channels') }}
+            </option>
+            <option v-for="name in channelNames" :key="name" :value="name">
+              {{ name }}
+            </option>
+          </select>
+        </div>
         <VersionCompareField
           :label="t('os-version')"
           :op="osVersionOp"

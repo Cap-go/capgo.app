@@ -111,6 +111,11 @@ function buildDevicesSqlWhere(params: ReadDevicesParams, customIdMode: boolean) 
     clauses.push(`platform = $${values.length}::public.platform_os`)
   }
 
+  if (params.default_channel) {
+    values.push(params.default_channel)
+    clauses.push(`default_channel = $${values.length}`)
+  }
+
   if (params.installSources?.length) {
     values.push(params.installSources)
     clauses.push(`install_source = ANY($${values.length}::text[])`)
@@ -179,6 +184,7 @@ async function countDevicesSBSql(
   search: string | undefined,
   options?: {
     platform?: Database['public']['Enums']['platform_os']
+    defaultChannel?: string
     updatedAt?: { gt?: string, lte?: string }
     osVersionCompare?: ReadDevicesParams['os_version_compare']
     versionNameCompare?: ReadDevicesParams['version_name_compare']
@@ -190,6 +196,7 @@ async function countDevicesSBSql(
     version_name: versionName,
     search,
     platform: options?.platform,
+    default_channel: options?.defaultChannel,
     updated_at_gt: options?.updatedAt?.gt,
     updated_at_lte: options?.updatedAt?.lte,
     os_version_compare: options?.osVersionCompare,
@@ -1789,6 +1796,9 @@ export async function readDevicesSB(c: Context, params: ReadDevicesParams, custo
   if (params.platform)
     query = query.eq('platform', params.platform)
 
+  if (params.default_channel)
+    query = query.eq('default_channel', params.default_channel)
+
   if (params.installSources?.length)
     query = query.in('install_source', params.installSources)
 
@@ -1867,6 +1877,7 @@ export async function countDevicesSB(
   search?: string,
   options?: {
     platform?: Database['public']['Enums']['platform_os']
+    defaultChannel?: string
     updatedAt?: { gt?: string, lte?: string }
     osVersionCompare?: ReadDevicesParams['os_version_compare']
     versionNameCompare?: ReadDevicesParams['version_name_compare']
@@ -1914,6 +1925,8 @@ export async function countDevicesSB(
 
   if (options?.platform)
     req = req.eq('platform', options.platform)
+  if (options?.defaultChannel)
+    req = req.eq('default_channel', options.defaultChannel)
   if (options?.updatedAt?.gt)
     req = req.gt('updated_at', options.updatedAt.gt)
   if (options?.updatedAt?.lte)

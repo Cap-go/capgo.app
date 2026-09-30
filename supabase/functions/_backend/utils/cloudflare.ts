@@ -1169,6 +1169,7 @@ export async function countDevicesCF(
   search?: string,
   options?: {
     platform?: Database['public']['Enums']['platform_os']
+    defaultChannel?: string
     updatedAt?: { gt?: string, lte?: string }
     osVersionCompare?: ReadDevicesParams['os_version_compare']
     versionNameCompare?: ReadDevicesParams['version_name_compare']
@@ -1176,6 +1177,7 @@ export async function countDevicesCF(
 ) {
   // Use Analytics Engine DEVICE_INFO for counting devices
   const platform = options?.platform
+  const defaultChannel = options?.defaultChannel
   const updatedAt = options?.updatedAt
   const osVersionCondition = buildVersionCompareSql('os_version', options?.osVersionCompare, 'cf')
   const versionNameCompareCondition = buildVersionCompareSql('version_name', options?.versionNameCompare, 'cf')
@@ -1197,7 +1199,7 @@ export async function countDevicesCF(
   // Match latest aggregated fields for current-state filtering (same as Supabase devices table).
   // customIdMode must use aggregated custom_id so historical non-empty blob5 rows
   // do not keep devices that later cleared their custom id.
-  if (versionNameCondition || versionNameCompareCondition || osVersionCondition || platform || search || customIdMode) {
+  if (versionNameCondition || versionNameCompareCondition || osVersionCondition || platform || defaultChannel || search || customIdMode) {
     const outerConditions: string[] = []
     if (customIdMode)
       outerConditions.push(`custom_id != ''`)
@@ -1209,6 +1211,8 @@ export async function countDevicesCF(
       outerConditions.push(osVersionCondition)
     if (platform)
       outerConditions.push(`platform = ${platformOsToCFDouble(platform)}`)
+    if (defaultChannel)
+      outerConditions.push(`default_channel = '${escapeSqlString(defaultChannel)}'`)
     if (search) {
       const searchLower = search.toLowerCase()
       if (deviceIds.length) {
@@ -1226,6 +1230,7 @@ FROM (
     argMax(blob2, timestamp) AS version_name,
     argMax(blob4, timestamp) AS os_version,
     argMax(blob5, timestamp) AS custom_id,
+    argMax(blob7, timestamp) AS default_channel,
     argMax(double1, timestamp) AS platform
   FROM device_info
   WHERE ${conditions.join(' AND ')}
@@ -1337,6 +1342,12 @@ function buildReadDevicesCFPlatformCondition(platform: ReadDevicesParams['platfo
   return `platform = ${platformOsToCFDouble(platform)}`
 }
 
+function buildReadDevicesCFDefaultChannelCondition(defaultChannel: ReadDevicesParams['default_channel']) {
+  if (!defaultChannel)
+    return ''
+  return `default_channel = '${escapeSqlString(defaultChannel)}'`
+}
+
 function buildReadDevicesCFVersionNameCondition(versionName: ReadDevicesParams['version_name']) {
   return buildVersionNameSqlCondition(versionName)
 }
@@ -1361,6 +1372,7 @@ function buildReadDevicesCFOuterConditions(params: ReadDevicesParams, devicesOrd
     buildReadDevicesCFCustomIdsCondition(params.customIds),
     // Match the latest aggregated platform/version/search, not historical event rows.
     buildReadDevicesCFPlatformCondition(params.platform),
+    buildReadDevicesCFDefaultChannelCondition(params.default_channel),
     params.version_name_compare
       ? buildVersionCompareSql('version_name', params.version_name_compare, 'cf')
       : buildReadDevicesCFVersionNameCondition(params.version_name),
