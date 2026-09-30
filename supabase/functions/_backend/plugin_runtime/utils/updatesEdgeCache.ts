@@ -47,7 +47,8 @@ interface CachedValue<T> {
  * permission: check `updates cache purged` logs before raising the share.
  */
 export function hasUpdatesPurgeTarget(c: Context) {
-  return ['CF_CACHE_PURGE_TOKEN', 'CF_ANALYTICS_TOKEN', 'CF_CACHE_PURGE_ZONE_IDS', 'UPDATES_CACHE_LOCAL_PURGE_URL'].some(key => getEnv(c, key).trim() !== '')
+  // Zone ids alone cannot purge (no credentials), so they do not count.
+  return ['CF_CACHE_PURGE_TOKEN', 'CF_ANALYTICS_TOKEN', 'UPDATES_CACHE_LOCAL_PURGE_URL'].some(key => getEnv(c, key).trim() !== '')
 }
 
 export function getUpdatesEdgeCacheBps(c: Context) {

@@ -68,7 +68,7 @@ BEGIN
   END IF;
   IF NOT p_force AND EXISTS (
     SELECT 1 FROM public.updates_cache_purge_state
-    WHERE last_flush_at > pg_catalog.now() - min_interval
+    WHERE last_flush_at > pg_catalog.clock_timestamp() - min_interval
   ) THEN
     RETURN 0;
   END IF;
@@ -84,7 +84,8 @@ BEGIN
   IF due_app_ids IS NULL THEN
     RETURN 0;
   END IF;
-  UPDATE public.updates_cache_purge_state SET last_flush_at = pg_catalog.now() WHERE id;
+  -- Wall-clock time: a long trigger transaction must not record its start time.
+  UPDATE public.updates_cache_purge_state SET last_flush_at = pg_catalog.clock_timestamp() WHERE id;
 
   i := 1;
   WHILE i <= pg_catalog.array_length(due_app_ids, 1) LOOP

@@ -33,7 +33,7 @@ function stubCaches() {
 describe('updates edge cache', () => {
   beforeEach(() => {
     vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
-    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'mock-token')
   })
 
   afterEach(() => {
@@ -83,12 +83,13 @@ describe('updates edge cache', () => {
   it('stays off without a purge target, whatever UPDATES_EDGE_CACHE says', () => {
     const c = makeContext()
     vi.stubEnv('UPDATES_EDGE_CACHE', 'on')
-    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', '')
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', '')
     expect(getUpdatesEdgeCacheBps(c)).toBe(0)
     expect(isUpdatesEdgeCacheEnabled(c)).toBe(false)
     expect(shouldUseUpdatesEdgeCache(makeContext(), 'com.example.app', 'device-1')).toBe(false)
+    // Zone ids alone carry no credentials: still off.
     vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a,zone-b')
-    expect(getUpdatesEdgeCacheBps(c)).toBe(10_000)
+    expect(getUpdatesEdgeCacheBps(c)).toBe(0)
     // The token alone (deployed with the Cloudflare env file) is enough.
     vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', '')
     vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
