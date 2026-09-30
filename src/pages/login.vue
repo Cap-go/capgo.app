@@ -11,6 +11,9 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
+import IconRollback from '~icons/heroicons/arrow-uturn-left'
+import IconDevice from '~icons/heroicons/device-phone-mobile'
+import IconTeam from '~icons/heroicons/user-group'
 import IconScanQrCode from '~icons/lucide/scan-qr-code'
 import iconEmail from '~icons/oui/email?raw'
 import iconPassword from '~icons/ph/key?raw'
@@ -79,14 +82,17 @@ const loginHeroChips = computed(() => [
 ])
 const loginHeroHighlights = computed(() => [
   {
+    icon: IconRollback,
     title: t('login-highlight-rollouts-title'),
     description: t('login-highlight-rollouts-description'),
   },
   {
+    icon: IconDevice,
     title: t('login-highlight-observability-title'),
     description: t('login-highlight-observability-description'),
   },
   {
+    icon: IconTeam,
     title: t('login-highlight-team-title'),
     description: t('login-highlight-team-description'),
   },
@@ -837,7 +843,9 @@ onMounted(checkLogin)
               :key="highlight.title"
               class="rounded-3xl border border-white/70 bg-white/78 p-5 shadow-[0_20px_50px_-30px_rgba(15,23,42,0.45)] backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/72"
             >
-              <div class="mb-3 h-2 w-12 rounded-full bg-gradient-to-r from-sky-500 via-sky-400 to-indigo-500" />
+              <span class="mb-4 inline-flex h-9 w-9 items-center justify-center rounded-lg bg-azure-500/10 text-blue-700 ring-1 ring-azure-500/20 dark:text-azure-400" aria-hidden="true">
+                <component :is="highlight.icon" class="h-5 w-5" />
+              </span>
               <h2 class="text-base font-semibold text-slate-900 dark:text-white">
                 {{ highlight.title }}
               </h2>
