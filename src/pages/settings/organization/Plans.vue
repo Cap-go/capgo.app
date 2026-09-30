@@ -9,6 +9,7 @@ import { toast } from 'vue-sonner'
 import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheckCircle from '~icons/lucide/check-circle'
 import CreditsCta from '~/components/CreditsCta.vue'
+import CreditsOnlyTip from '~/components/CreditsOnlyTip.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
 import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
 import { invokeCapgoApi } from '~/services/capgoApi'
@@ -477,7 +478,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
 </script>
 
 <template>
-  <div class="flex flex-col bg-white border shadow-sm md:p-8 md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10" :class="thankYouPage ? 'pb-0' : 'pb-8 md:pb-0'">
+  <div class="flex flex-col bg-white border shadow-sm md:p-8 md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10" :class="thankYouPage ? 'pb-0' : 'pb-8'">
     <div v-if="!thankYouPage" class="flex flex-col w-full h-full">
       <!-- Header Section -->
       <div class="flex flex-col items-center justify-between gap-4 mb-6 sm:flex-row shrink-0">
@@ -635,6 +636,9 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
 
       <!-- Credits CTA: under prices so plan cards stay visible without scrolling -->
       <CreditsCta v-if="!isMobile" class="mt-6 shrink-0" :credits-only="isCreditsOnly" />
+
+      <!-- Secondary tip: credits work without any plan. Dismissible so it never competes with the plans. -->
+      <CreditsOnlyTip v-if="!isMobile && !isCreditsOnly" class="mt-3 shrink-0" show-link />
 
       <!-- Expert as a Service CTA -->
       <div v-if="!isMobile" class="mt-4 shrink-0">
