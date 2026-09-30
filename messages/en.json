@@ -451,7 +451,7 @@
   "app-delete-detail-temporary-test": "This was a temporary test",
   "app-delete-detail-wrong-org": "Used the wrong organization",
   "app-delete-detail-wrong-project": "I used the wrong project",
-  "app-delete-details-question": "Can you narrow it down?",
+  "app-delete-details-question": "A little more context",
   "app-delete-eyebrow": "Delete app",
   "app-delete-expected-id": "What App ID did you expect?",
   "app-delete-feedback-question": "Why are you deleting this app?",

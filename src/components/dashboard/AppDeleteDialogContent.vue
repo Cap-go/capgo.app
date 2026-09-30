@@ -180,7 +180,7 @@ function selectReason(reason: AppDeletionReason) {
             {{ t('app-delete-feedback-question') }}
           </legend>
           <div class="space-y-2">
-            <template v-for="option in reasonOptions" :key="option.id">
+            <div v-for="option in reasonOptions" :key="option.id">
               <button
                 type="button"
                 class="w-full p-3 text-left transition border rounded-xl"
@@ -210,39 +210,45 @@ function selectReason(reason: AppDeletionReason) {
                 </span>
               </button>
 
-              <div v-if="reason === option.id" class="p-4 border rounded-xl border-slate-200 bg-slate-50/70 dark:border-slate-700 dark:bg-slate-800/40">
-                <p class="text-xs font-semibold text-slate-700 dark:text-slate-200">
-                  {{ t('app-delete-details-question') }} <span class="font-normal text-slate-400">{{ t('optional') }}</span>
-                </p>
-                <div class="flex flex-wrap gap-2 mt-3">
-                  <button
-                    v-for="detailId in activeDetails"
-                    :key="detailId"
-                    type="button"
-                    class="px-3 py-1.5 text-xs font-medium transition border rounded-full"
-                    :class="detail === detailId
-                      ? 'border-blue-600 bg-blue-600 text-white'
-                      : 'border-slate-300 bg-white text-slate-600 hover:border-blue-400 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300'"
-                    :aria-pressed="detail === detailId"
-                    @click="emit('update:detail', detail === detailId ? null : detailId)"
-                  >
-                    {{ detailLabels[detailId] }}
-                  </button>
+              <Transition name="app-delete-details">
+                <div v-if="reason === option.id" class="app-delete-details">
+                  <div class="min-h-0 overflow-hidden">
+                    <div class="p-4 border rounded-xl border-slate-200 bg-slate-50/70 dark:border-slate-700 dark:bg-slate-800/40">
+                      <p class="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                        {{ t('app-delete-details-question') }} <span class="font-normal text-slate-400">({{ t('optional') }})</span>
+                      </p>
+                      <div class="flex flex-wrap gap-2 mt-3">
+                        <button
+                          v-for="detailId in activeDetails"
+                          :key="detailId"
+                          type="button"
+                          class="px-3 py-1.5 text-xs font-medium transition border rounded-full"
+                          :class="detail === detailId
+                            ? 'border-blue-600 bg-blue-600 text-white'
+                            : 'border-slate-300 bg-white text-slate-600 hover:border-blue-400 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300'"
+                          :aria-pressed="detail === detailId"
+                          @click="emit('update:detail', detail === detailId ? null : detailId)"
+                        >
+                          {{ detailLabels[detailId] }}
+                        </button>
+                      </div>
+                      <label v-if="detail !== 'no_feedback'" for="app-delete-note" class="block mt-4 text-xs font-medium text-slate-600 dark:text-slate-300">
+                        {{ reason === 'app_id_wrong' ? t('app-delete-expected-id') : reason === 'no_longer_needed' ? t('app-delete-moving-service') : t('app-delete-note') }}
+                      </label>
+                      <textarea
+                        v-if="detail !== 'no_feedback'"
+                        id="app-delete-note"
+                        :value="note"
+                        rows="2"
+                        :placeholder="t('app-delete-note-placeholder')"
+                        class="w-full px-3 py-2 mt-1 text-sm bg-white border rounded-lg resize-none border-slate-300 text-slate-800 placeholder:text-slate-400 focus:border-blue-500 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+                        @input="emit('update:note', ($event.target as HTMLTextAreaElement).value)"
+                      />
+                    </div>
+                  </div>
                 </div>
-                <label v-if="detail !== 'no_feedback'" for="app-delete-note" class="block mt-4 text-xs font-medium text-slate-600 dark:text-slate-300">
-                  {{ reason === 'app_id_wrong' ? t('app-delete-expected-id') : reason === 'no_longer_needed' ? t('app-delete-moving-service') : t('app-delete-note') }}
-                </label>
-                <textarea
-                  v-if="detail !== 'no_feedback'"
-                  id="app-delete-note"
-                  :value="note"
-                  rows="2"
-                  :placeholder="t('app-delete-note-placeholder')"
-                  class="w-full px-3 py-2 mt-1 text-sm bg-white border rounded-lg resize-none border-slate-300 text-slate-800 placeholder:text-slate-400 focus:border-blue-500 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
-                  @input="emit('update:note', ($event.target as HTMLTextAreaElement).value)"
-                />
-              </div>
-            </template>
+              </Transition>
+            </div>
           </div>
         </fieldset>
       </section>
@@ -336,3 +342,35 @@ function selectReason(reason: AppDeletionReason) {
     </div>
   </div>
 </template>
+
+<style scoped>
+.app-delete-details {
+  display: grid;
+  grid-template-rows: 1fr;
+  margin-top: 0.5rem;
+}
+
+.app-delete-details-enter-active,
+.app-delete-details-leave-active {
+  transition:
+    grid-template-rows 200ms cubic-bezier(0.2, 0, 0, 1),
+    margin-top 200ms cubic-bezier(0.2, 0, 0, 1),
+    opacity 160ms ease-out,
+    transform 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.app-delete-details-enter-from,
+.app-delete-details-leave-to {
+  grid-template-rows: 0fr;
+  margin-top: 0;
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-delete-details-enter-active,
+  .app-delete-details-leave-active {
+    transition: none;
+  }
+}
+</style>
