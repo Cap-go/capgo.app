@@ -13,6 +13,7 @@ import ChevronDownIcon from '~icons/heroicons/chevron-down'
 import CloudIcon from '~icons/heroicons/cloud'
 import ScaleIcon from '~icons/heroicons/scale'
 import UserGroupIcon from '~icons/heroicons/user-group'
+import CreditsOnlyTip from '~/components/CreditsOnlyTip.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
 import { creditPricingMetricOrder, formatCreditPricingPrice, formatCreditPricingTierLabel } from '~/services/creditPricing'
 import { formatLocalDate } from '~/services/date'
@@ -23,6 +24,7 @@ import { completeCreditTopUp, getCreditAutoTopUp, openPortal, saveCreditAutoTopU
 import { getCreditPricingSteps, useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
+import { isCreditsOnlyOrg } from '~/utils/organizationBilling'
 
 interface UsageCreditLedgerRow {
   id: number
@@ -64,6 +66,7 @@ const { t } = useI18n()
 const supabase = useSupabase()
 const organizationStore = useOrganizationStore()
 const { currentOrganization } = storeToRefs(organizationStore)
+const isCreditsOnly = computed(() => isCreditsOnlyOrg(currentOrganization.value))
 const displayStore = useDisplayStore()
 const isMobile = isNativeAppStoreContext()
 
@@ -806,6 +809,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             <p class="mt-2 max-w-xl text-sm opacity-90 font-medium text-gray-900 dark:text-white">
               {{ t('credits-cta-description') }}
             </p>
+            <CreditsOnlyTip v-if="!isCreditsOnly" class="mt-4" />
           </div>
           <form class="flex w-full flex-col p-3 sm:flex-row sm:items-center sm:justify-between" @submit.prevent="handleBuyCredits">
             <div class="flex w-full flex-col gap-3 sm:max-w-md">
