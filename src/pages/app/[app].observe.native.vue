@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions } from 'chart.js'
 import type { VersionGroupOption } from '~/components/dashboard/VersionGroupSelector.vue'
+import type { ObserveSignalCategory } from '~/services/statsActions'
 import type { PeriodDayOption } from '~/utils/periodDays'
 import { BarElement, CategoryScale, Chart, Legend, LinearScale, LineElement, PointElement, Tooltip } from 'chart.js'
 import { computed, ref, watch } from 'vue'
@@ -10,6 +11,7 @@ import { useRoute, useRouter } from 'vue-router'
 import IconActivity from '~icons/lucide/activity'
 import IconAlertTriangle from '~icons/lucide/alert-triangle'
 import IconExternalLink from '~icons/lucide/external-link'
+import IconInfo from '~icons/lucide/info'
 import IconRocket from '~icons/lucide/rocket'
 import IconTimer from '~icons/lucide/timer'
 import DeliveryLatencyPanel from '~/components/dashboard/DeliveryLatencyPanel.vue'
@@ -19,7 +21,7 @@ import { useNativeObserveStats } from '~/composables/useNativeObserveStats'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { formatLocalDateShort } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
-import { actionToFilter } from '~/services/statsActions'
+import { actionToFilter, observeSignalCategory, observeSignalHelpKey } from '~/services/statsActions'
 import { useDisplayStore } from '~/stores/display'
 
 Chart.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Tooltip, Legend)
@@ -192,8 +194,8 @@ const eventChartData = computed<ChartData<'bar'>>(() => ({
     {
       label: t('native-observe-issues'),
       data: stats.value?.daily.issue_events ?? [],
-      backgroundColor: 'rgba(244, 63, 94, 0.72)',
-      borderColor: 'rgb(244, 63, 94)',
+      backgroundColor: 'rgba(245, 158, 11, 0.6)',
+      borderColor: 'rgb(245, 158, 11)',
       borderWidth: 1,
     },
     {
@@ -284,6 +286,29 @@ function formatDuration(value: number | null | undefined) {
 function formatAction(action: string) {
   const key = actionToFilter[action]
   return key ? t(key) : action
+}
+
+const signalBadgeClass: Record<ObserveSignalCategory, string> = {
+  crash: 'border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-400/30 dark:bg-rose-400/10 dark:text-rose-200',
+  web: 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-200',
+  system: 'border-slate-300 bg-slate-100 text-slate-600 dark:border-white/15 dark:bg-white/5 dark:text-slate-300',
+  context: 'border-transparent bg-transparent text-slate-500 dark:text-slate-400',
+}
+
+function signalLabel(action: string) {
+  const category = observeSignalCategory(action)
+  if (category === 'crash')
+    return t('native-observe-signal-crash')
+  if (category === 'web')
+    return t('native-observe-signal-web')
+  if (category === 'system')
+    return t('native-observe-signal-system')
+  return t('native-observe-context')
+}
+
+function signalHelp(action: string) {
+  const key = observeSignalHelpKey(action)
+  return key ? t(key) : ''
 }
 
 function selectPeriod(option: PeriodDayOption) {
@@ -409,11 +434,41 @@ watch([packageId, days, versionGroup], async () => {
             <div class="text-sm truncate text-slate-600 dark:text-slate-400">
               {{ t('native-observe-issues') }}
             </div>
-            <div class="mt-2 text-2xl font-semibold text-rose-600 dark:text-rose-400">
+            <div class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
               {{ formatCount(stats?.overview.issue_count) }}
             </div>
           </div>
         </div>
+        <div
+          v-if="hasData"
+          class="flex gap-3 p-4 border rounded-xl border-sky-200 bg-sky-50/70 dark:border-sky-400/20 dark:bg-sky-400/5"
+          data-testid="observe-signals-note"
+        >
+          <IconInfo class="w-5 h-5 mt-0.5 shrink-0 text-sky-600 dark:text-sky-300" />
+          <div class="min-w-0 text-sm">
+            <div class="font-semibold text-slate-900 dark:text-slate-100">
+              {{ t('native-observe-signals-note-title') }}
+            </div>
+            <p class="mt-1 text-slate-600 dark:text-slate-300">
+              {{ t('native-observe-signals-note-body') }}
+            </p>
+            <ul class="grid gap-2 mt-3 md:grid-cols-3">
+              <li class="flex items-start gap-2">
+                <span class="px-1.5 py-0.5 text-[11px] font-medium rounded border shrink-0" :class="signalBadgeClass.crash">{{ t('native-observe-signal-crash') }}</span>
+                <span class="text-xs text-slate-600 dark:text-slate-400">{{ t('native-observe-signals-note-crash') }}</span>
+              </li>
+              <li class="flex items-start gap-2">
+                <span class="px-1.5 py-0.5 text-[11px] font-medium rounded border shrink-0" :class="signalBadgeClass.web">{{ t('native-observe-signal-web') }}</span>
+                <span class="text-xs text-slate-600 dark:text-slate-400">{{ t('native-observe-signals-note-web') }}</span>
+              </li>
+              <li class="flex items-start gap-2">
+                <span class="px-1.5 py-0.5 text-[11px] font-medium rounded border shrink-0" :class="signalBadgeClass.system">{{ t('native-observe-signal-system') }}</span>
+                <span class="text-xs text-slate-600 dark:text-slate-400">{{ t('native-observe-signals-note-system') }}</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+
         <DeliveryLatencyPanel
           :key="packageId"
           scope="app"
@@ -588,7 +643,7 @@ watch([packageId, days, versionGroup], async () => {
                   {{ t('native-observe-action-breakdown-help') }}
                 </p>
               </div>
-              <IconAlertTriangle class="w-5 h-5 text-rose-500" />
+              <IconAlertTriangle class="w-5 h-5 text-amber-500" />
             </div>
             <div class="overflow-x-auto">
               <table class="d-table d-table-sm w-full min-w-[820px]">
@@ -622,12 +677,17 @@ watch([packageId, days, versionGroup], async () => {
                 </thead>
                 <tbody>
                   <tr v-for="action in topActions" :key="action.action">
-                    <td class="font-medium text-slate-900 dark:text-slate-100">
-                      {{ formatAction(action.action) }}
+                    <td class="max-w-md">
+                      <div class="font-medium text-slate-900 dark:text-slate-100">
+                        {{ formatAction(action.action) }}
+                      </div>
+                      <div v-if="signalHelp(action.action)" class="mt-0.5 text-xs font-normal whitespace-normal text-slate-500 dark:text-slate-400">
+                        {{ signalHelp(action.action) }}
+                      </div>
                     </td>
-                    <td>
-                      <span class="d-badge d-badge-sm" :class="action.is_issue ? 'd-badge-error' : 'd-badge-ghost'">
-                        {{ action.is_issue ? t('native-observe-issue') : t('native-observe-context') }}
+                    <td class="align-top">
+                      <span class="inline-block px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap rounded border" :class="signalBadgeClass[observeSignalCategory(action.action)]">
+                        {{ signalLabel(action.action) }}
                       </span>
                     </td>
                     <td>{{ formatCount(action.events) }}</td>

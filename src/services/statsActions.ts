@@ -174,3 +174,40 @@ export const updateActionFilterKeys = statsActionFilters
 export function createActionFilterState(): Record<string, boolean> {
   return Object.fromEntries(statsActionFilters.map(([filterKey]) => [filterKey, false]))
 }
+
+/**
+ * Observe signal categories. None of these come from Capgo itself: the updater
+ * plugin only relays what the OS and the WebView report about the host app.
+ * - crash: the app process failed (crash, ANR, startup failure, launch timeout).
+ * - web: an error thrown or triggered by the app's own web code.
+ * - system: the OS reclaimed memory or restarted the WebView. Often expected,
+ *   especially while the app sits in the background.
+ * - context: informational events (launches, page loads, navigation).
+ */
+export type ObserveSignalCategory = 'crash' | 'web' | 'system' | 'context'
+
+const observeSignals: Record<string, { category: ObserveSignalCategory, helpKey: string }> = {
+  app_crash: { category: 'crash', helpKey: 'observe-signal-help-app-crash' },
+  app_crash_native: { category: 'crash', helpKey: 'observe-signal-help-app-crash-native' },
+  app_anr: { category: 'crash', helpKey: 'observe-signal-help-app-anr' },
+  app_initialization_failure: { category: 'crash', helpKey: 'observe-signal-help-app-initialization-failure' },
+  app_launch_timeout: { category: 'crash', helpKey: 'observe-signal-help-app-launch-timeout' },
+  webview_javascript_error: { category: 'web', helpKey: 'observe-signal-help-webview-javascript-error' },
+  webview_unhandled_rejection: { category: 'web', helpKey: 'observe-signal-help-webview-unhandled-rejection' },
+  webview_resource_error: { category: 'web', helpKey: 'observe-signal-help-webview-resource-error' },
+  webview_security_policy_violation: { category: 'web', helpKey: 'observe-signal-help-webview-security-policy-violation' },
+  app_killed_low_memory: { category: 'system', helpKey: 'observe-signal-help-app-killed-low-memory' },
+  app_killed_excessive_resource_usage: { category: 'system', helpKey: 'observe-signal-help-app-killed-excessive-resource-usage' },
+  app_memory_warning: { category: 'system', helpKey: 'observe-signal-help-app-memory-warning' },
+  webview_unclean_restart: { category: 'system', helpKey: 'observe-signal-help-webview-unclean-restart' },
+  webview_render_process_gone: { category: 'system', helpKey: 'observe-signal-help-webview-render-process-gone' },
+  webview_content_process_terminated: { category: 'system', helpKey: 'observe-signal-help-webview-content-process-terminated' },
+}
+
+export function observeSignalCategory(action: string): ObserveSignalCategory {
+  return observeSignals[action]?.category ?? 'context'
+}
+
+export function observeSignalHelpKey(action: string): string | null {
+  return observeSignals[action]?.helpKey ?? null
+}
