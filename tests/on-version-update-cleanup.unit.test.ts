@@ -84,7 +84,10 @@ const {
         })),
       })),
     })),
-    getPgClient: vi.fn(() => ({ query: pgQuery })),
+    getPgClient: vi.fn(() => ({
+      query: pgQuery,
+      connect: vi.fn(async () => ({ query: pgQuery, release: vi.fn() })),
+    })),
     manifestSelectWhere,
     moveObjectToTrash,
     pgQuery,
@@ -487,6 +490,21 @@ describe('on_version_update manifest cleanup load', () => {
     expect(callOrder.filter(v => v.startsWith('db_delete_row:'))).toHaveLength(5000)
     expect(pgQuery).toHaveBeenCalledWith(expect.stringContaining('WITH prev AS'), expect.any(Array))
   }, 60_000)
+
+  it('reuses a bounded set of pg pools and runs each entry transaction on a checked-out client', async () => {
+    manifestSelectWhere.mockResolvedValue(makeEntries(500))
+    getPgClient.mockClear()
+
+    const response = await deleteIt(createContext(), createVersion({ r2_path: null, manifest_count: 500 }))
+
+    expect(response.status).toBe(200)
+    // read + 10 trash workers + final write, not one pool per manifest file
+    expect(getPgClient.mock.calls.length).toBeLessThanOrEqual(12)
+    const pools = getPgClient.mock.results.map(result => result.value as { query: ReturnType<typeof vi.fn>, connect: ReturnType<typeof vi.fn> })
+    const checkouts = pools.reduce((total, pool) => total + pool.connect.mock.calls.length, 0)
+    expect(checkouts).toBe(500)
+    expect(callOrder.filter(v => v.startsWith('db_delete_row:'))).toHaveLength(500)
+  }, 30_000)
 
   it('keeps remaining rows retryable when one file in a large batch fails trash', async () => {
     manifestSelectWhere.mockResolvedValue(makeEntries(200))
