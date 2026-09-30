@@ -1,7 +1,9 @@
 # R2 Delta Manifest Object Lifecycle
 
-**Date:** 2026-09-30  
-**Status:** Idea and migration proposal; no implementation is included  
+**Date:** 2026-09-30
+
+**Status:** Idea and migration proposal; no implementation is included
+
 **Scope:** Delta-manifest database rows, shared R2 objects, CLI upload compatibility, garbage collection, Cloudflare Queues, and replication/operational cost
 
 ---
