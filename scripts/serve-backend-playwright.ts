@@ -14,6 +14,9 @@ const supabaseConfig = getSupabaseWorktreeConfig(repoRoot)
 const stripeApiBaseUrl = getPlaywrightStripeApiBaseUrl(env)
 const webAppUrl = env.WEBAPP_URL || 'http://localhost:5173'
 const functionsReadyTimeoutMs = Number(env.PLAYWRIGHT_BACKEND_TIMEOUT_MS || '360000')
+// Comma-separated Supabase services to skip (`supabase start -x`). CI skips the ones E2E
+// never touches so a cold runner pulls fewer images before the stack is healthy.
+const supabaseStartExclude = env.PLAYWRIGHT_SUPABASE_EXCLUDE?.trim()
 
 function upsertEnvValue(content: string, key: string, value: string): string {
   const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -95,7 +98,7 @@ async function ensureSupabaseStarted() {
     if (hasHealthySupabaseApi(getSupabaseStatus()))
       return
 
-    const startResult = spawnSync('bun', ['run', 'supabase:start'], {
+    const startResult = spawnSync('bun', ['run', 'supabase:start', ...(supabaseStartExclude ? ['-x', supabaseStartExclude] : [])], {
       cwd: repoRoot,
       stdio: 'inherit',
       env: process.env,
