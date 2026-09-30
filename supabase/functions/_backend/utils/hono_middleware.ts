@@ -53,6 +53,7 @@ type FindApikeyByValueResult = {
   updated_at: string | null
   name: string
   expires_at: string | null
+  owner_org_id: string | null
 } & Record<string, unknown>
 
 /**
@@ -95,6 +96,7 @@ async function checkKeyPg(
       updated_at: apiKey.updated_at,
       name: apiKey.name,
       expires_at: apiKey.expires_at,
+      owner_org_id: apiKey.owner_org_id,
     } as Database['public']['Tables']['apikeys']['Row']
   }
   catch (e: unknown) {
@@ -146,6 +148,7 @@ async function checkKeyByIdPg(
       updated_at: result.updated_at?.toISOString() || null,
       name: result.name,
       expires_at: result.expires_at?.toISOString() || null,
+      owner_org_id: result.owner_org_id ?? null,
     } as Database['public']['Tables']['apikeys']['Row']
   }
   catch (e: unknown) {
@@ -359,7 +362,9 @@ function assertSubkeyHasPlaintextSecret(
  * @returns quickError response when the user IDs differ, otherwise null.
  */
 function validateSubkeyUser(c: Context, subkey: Database['public']['Tables']['apikeys']['Row'], apikey: Database['public']['Tables']['apikeys']['Row']) {
-  if (subkey.user_id !== apikey.user_id) {
+  // Shared (org-owned) keys only delegate within the same owner org, and never
+  // to or from personal keys of the attributed user.
+  if (subkey.user_id !== apikey.user_id || (subkey.owner_org_id ?? null) !== (apikey.owner_org_id ?? null)) {
     cloudlog({
       requestId: c.get('requestId'),
       message: 'Subkey user_id does not match apikey user_id',

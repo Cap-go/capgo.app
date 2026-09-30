@@ -17,7 +17,7 @@ const {
   requireApiKeyManagementAuthMock,
   requireJwtMfaForPrivilegedActionMock,
   sanitizeClientBindingsMock,
-  selectOwnedApiKeyByIdentifierMock,
+  selectManageableApiKeyByIdentifierMock,
 } = vi.hoisted(() => ({
   assertApiKeyManagerCanAssignBindingsMock: vi.fn(),
   assertCanKeepOrgCreateMock: vi.fn(),
@@ -34,7 +34,7 @@ const {
   requireApiKeyManagementAuthMock: vi.fn(),
   requireJwtMfaForPrivilegedActionMock: vi.fn(),
   sanitizeClientBindingsMock: vi.fn(),
-  selectOwnedApiKeyByIdentifierMock: vi.fn(),
+  selectManageableApiKeyByIdentifierMock: vi.fn(),
 }))
 
 const ORG_ID = '00000000-0000-4000-8000-000000000111'
@@ -82,6 +82,8 @@ vi.mock('../supabase/functions/_backend/public/apikey/global_permissions.ts', ()
 
 vi.mock('../supabase/functions/_backend/public/apikey/scope.ts', () => ({
   assertApiKeyManagerCanAssignBindings: assertApiKeyManagerCanAssignBindingsMock,
+  assertApiKeyManagerCanRotateTarget: vi.fn(),
+  assertCallerCanTakeOverSharedApiKey: vi.fn(),
   ensureApiKeyCanManageTargetOrgIds: vi.fn(),
   ensureApiKeyManagementAllowed: ensureApiKeyManagementAllowedMock,
   getApiKeyBindingOrgIds: getApiKeyBindingOrgIdsMock,
@@ -89,7 +91,9 @@ vi.mock('../supabase/functions/_backend/public/apikey/scope.ts', () => ({
   requireApiKeyManagementAuth: requireApiKeyManagementAuthMock,
   requireJwtMfaForPrivilegedAction: requireJwtMfaForPrivilegedActionMock,
   sanitizeClientBindings: sanitizeClientBindingsMock,
-  selectOwnedApiKeyByIdentifier: selectOwnedApiKeyByIdentifierMock,
+  selectManageableApiKeyByIdentifier: selectManageableApiKeyByIdentifierMock,
+  setApiKeyAuditActor: vi.fn(),
+  withApiKeyAuditActor: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
@@ -108,13 +112,15 @@ describe('api key update authorization recheck', () => {
     requireJwtMfaForPrivilegedActionMock.mockResolvedValue(undefined)
     ensureApiKeyManagementAllowedMock.mockResolvedValue(undefined)
     getApiKeyBindingOrgIdsMock.mockResolvedValue([ORG_ID])
-    selectOwnedApiKeyByIdentifierMock.mockResolvedValue({
+    selectManageableApiKeyByIdentifierMock.mockResolvedValue({
       data: {
         id: 41,
         rbac_id: APIKEY_RBAC_ID,
         expires_at: null,
         key: null,
         key_hash: null,
+        user_id: USER_ID,
+        owner_org_id: null,
       },
       error: null,
     })

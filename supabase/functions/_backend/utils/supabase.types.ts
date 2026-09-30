@@ -89,6 +89,7 @@ export type Database = {
           key: string | null
           key_hash: string | null
           name: string
+          owner_org_id: string | null
           rbac_id: string
           updated_at: string | null
           user_id: string
@@ -100,6 +101,7 @@ export type Database = {
           key?: string | null
           key_hash?: string | null
           name: string
+          owner_org_id?: string | null
           rbac_id?: string
           updated_at?: string | null
           user_id: string
@@ -111,11 +113,19 @@ export type Database = {
           key?: string | null
           key_hash?: string | null
           name?: string
+          owner_org_id?: string | null
           rbac_id?: string
           updated_at?: string | null
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "apikeys_owner_org_id_fkey"
+            columns: ["owner_org_id"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "apikeys_user_id_fkey"
             columns: ["user_id"]
@@ -4468,6 +4478,7 @@ export type Database = {
           key: string | null
           key_hash: string | null
           name: string
+          owner_org_id: string | null
           rbac_id: string
           updated_at: string | null
           user_id: string
@@ -5323,6 +5334,11 @@ export type Database = {
       }
       one_month_ahead: { Args: never; Returns: string }
       org_member_readable_org_ids: { Args: never; Returns: string[] }
+      org_owned_apikey_manageable_org_ids: { Args: never; Returns: string[] }
+      org_owned_apikey_successor_user_id: {
+        Args: { p_excluded_user_id: string; p_org_id: string }
+        Returns: string
+      }
       orgs_admin_org_ids: { Args: never; Returns: string[] }
       orgs_readable_org_ids: { Args: never; Returns: string[] }
       parse_cron_field: {
@@ -5678,6 +5694,7 @@ export type Database = {
           key: string | null
           key_hash: string | null
           name: string
+          owner_org_id: string | null
           rbac_id: string
           updated_at: string | null
           user_id: string
@@ -5698,6 +5715,7 @@ export type Database = {
           key: string | null
           key_hash: string | null
           name: string
+          owner_org_id: string | null
           rbac_id: string
           updated_at: string | null
           user_id: string
@@ -5852,6 +5870,10 @@ export type Database = {
       }
       transfer_app: {
         Args: { p_app_id: string; p_new_org_id: string }
+        Returns: undefined
+      }
+      transfer_org_owned_apikeys_from_user: {
+        Args: { p_org_id?: string; p_user_id: string }
         Returns: undefined
       }
       try_claim_credit_auto_top_up: {

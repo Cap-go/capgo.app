@@ -610,8 +610,8 @@ SELECT
         'public',
         'apikeys',
         ARRAY[
-            'Allow owner to delete own apikeys',
-            'Allow owner to select own apikeys',
+            'Allow owner or org key managers to delete apikeys',
+            'Allow owner or org key managers to select apikeys',
             'Deny anon delete on apikeys',
             'Deny anon select on apikeys',
             'Deny client update on apikeys',

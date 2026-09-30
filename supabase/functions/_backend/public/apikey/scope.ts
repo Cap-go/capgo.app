@@ -1,10 +1,10 @@
 import type { Context } from 'hono'
 import type { AuthInfo, MiddlewareKeyVariables } from '../../utils/hono.ts'
-import type { getDrizzleClient } from '../../utils/pg.ts'
 import type { Database } from '../../utils/supabase.types.ts'
+import { sql } from 'drizzle-orm'
 import { quickError } from '../../utils/hono.ts'
 import { assertJwtMfaAssurance } from '../../utils/jwt_mfa_assurance.ts'
-import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
 import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
 
@@ -83,7 +83,7 @@ async function loadApiKeyBindingOrgIdsForRbacIds(
   }
 }
 
-async function getApiKeyManageableOrgIds(
+export async function getApiKeyManageableOrgIds(
   c: Context<MiddlewareKeyVariables>,
   authApikey: ApiKeyRow | undefined,
 ): Promise<Set<string>> {
@@ -303,16 +303,33 @@ export async function filterApiKeysManageableByAuth<T extends Pick<ApiKeyRow, 'r
   })
 }
 
-export async function selectOwnedApiKeyByIdentifier<T = ApiKeyRow>(
+// Personal keys are managed by their owner. Shared keys (owner_org_id) are
+// managed by whoever holds org.manage_apikeys in the owner org; user_id is
+// attribution only. JWT callers are scoped by RLS, API-key callers by the orgs
+// the calling key can manage.
+export async function selectManageableApiKeyByIdentifier<T = ApiKeyRow>(
   c: Context<MiddlewareKeyVariables>,
   auth: AuthInfo,
   id: string,
   columns = '*',
 ) {
-  const query = (auth.authType === 'apikey' ? supabaseAdmin(c) : supabaseWithAuth(c, auth))
-    .from('apikeys')
-    .select(columns)
-    .eq('user_id', auth.userId)
+  let query
+  if (auth.authType === 'apikey') {
+    const manageableOrgIds = [...await getApiKeyManageableOrgIds(c, c.get('apikey') as ApiKeyRow | undefined)]
+    const ownershipFilters = [`and(user_id.eq.${auth.userId},owner_org_id.is.null)`]
+    if (manageableOrgIds.length > 0) {
+      ownershipFilters.push(`owner_org_id.in.(${manageableOrgIds.join(',')})`)
+    }
+    query = supabaseAdmin(c)
+      .from('apikeys')
+      .select(columns)
+      .or(ownershipFilters.join(','))
+  }
+  else {
+    query = supabaseWithAuth(c, auth)
+      .from('apikeys')
+      .select(columns)
+  }
 
   const filteredQuery = isNumericApiKeyId(id)
     ? query.eq('id', Number(id))
@@ -322,15 +339,128 @@ export async function selectOwnedApiKeyByIdentifier<T = ApiKeyRow>(
   return { data: data as T | null, error }
 }
 
-export async function deleteOwnedApiKeyByIdentifier(c: Context<MiddlewareKeyVariables>, auth: AuthInfo, id: string) {
-  const query = (auth.authType === 'apikey' ? supabaseAdmin(c) : supabaseWithAuth(c, auth))
+// Call only after selectManageableApiKeyByIdentifier authorized this key.
+// JWT callers delete through RLS (the audit trigger sees auth.uid()); API-key
+// callers delete on a service connection that carries the calling key as actor.
+export async function deleteManageableApiKeyById(c: Context<MiddlewareKeyVariables>, auth: AuthInfo, apikeyId: number): Promise<{ error: unknown }> {
+  if (auth.authType === 'apikey') {
+    try {
+      await withApiKeyAuditActor(c, auth, tx => tx.execute(sql`DELETE FROM public.apikeys WHERE id = ${apikeyId}::bigint`))
+      return { error: null }
+    }
+    catch (error) {
+      return { error }
+    }
+  }
+
+  return supabaseWithAuth(c, auth)
     .from('apikeys')
     .delete()
-    .eq('user_id', auth.userId)
+    .eq('id', apikeyId)
+}
 
-  const filteredQuery = isNumericApiKeyId(id)
-    ? query.eq('id', Number(id))
-    : query.eq('key', id)
+// Regenerating a shared key hands its secret to the caller, so the caller must
+// already hold every effective permission of the key (org, app, and channel
+// permissions, including inherited roles) at each binding scope.
+export async function assertCallerCanTakeOverSharedApiKey(
+  c: Context<MiddlewareKeyVariables>,
+  auth: AuthInfo,
+  targetRbacId: string,
+) {
+  if (auth.authType !== 'jwt' || !auth.userId) {
+    throw quickError(403, 'cannot_update_apikey', 'Only user sessions can regenerate shared API keys')
+  }
 
-  return filteredQuery
+  let pgClient: ReturnType<typeof getPgClient> | undefined
+  try {
+    pgClient = getPgClient(c)
+    const { rows } = await pgClient.query<{ has_bindings: boolean, missing_permission: string | null }>(
+      `
+      WITH RECURSIVE key_bindings AS (
+        SELECT rb.role_id, rb.org_id, a.app_id AS public_app_id, ch.id AS channel_id
+        FROM public.role_bindings rb
+        LEFT JOIN public.apps a ON a.id = rb.app_id
+        LEFT JOIN public.channels ch ON ch.rbac_id = rb.channel_id
+        WHERE rb.principal_type = public.rbac_principal_apikey()
+          AND rb.principal_id = $1::uuid
+          AND rb.org_id IS NOT NULL
+          AND (rb.expires_at IS NULL OR rb.expires_at > now())
+      ),
+      role_closure AS (
+        SELECT key_bindings.role_id AS effective_role_id, key_bindings.org_id, key_bindings.public_app_id, key_bindings.channel_id
+        FROM key_bindings
+
+        UNION
+
+        SELECT role_hierarchy.child_role_id, role_closure.org_id, role_closure.public_app_id, role_closure.channel_id
+        FROM role_closure
+        JOIN public.role_hierarchy ON role_hierarchy.parent_role_id = role_closure.effective_role_id
+      )
+      SELECT
+        EXISTS (SELECT 1 FROM key_bindings) AS has_bindings,
+        (
+          SELECT permission.key
+          FROM role_closure
+          JOIN public.role_permissions ON role_permissions.role_id = role_closure.effective_role_id
+          JOIN public.permissions AS permission ON permission.id = role_permissions.permission_id
+          WHERE NOT public.rbac_check_permission_direct(
+            permission.key,
+            $2::uuid,
+            role_closure.org_id,
+            role_closure.public_app_id,
+            role_closure.channel_id,
+            NULL
+          )
+          LIMIT 1
+        ) AS missing_permission
+      `,
+      [targetRbacId, auth.userId],
+    )
+
+    const result = rows[0]
+    if (!result?.has_bindings) {
+      throw quickError(403, 'cannot_update_apikey', 'Shared API key has no active bindings')
+    }
+    if (result.missing_permission) {
+      throw quickError(403, 'forbidden_binding', `Forbidden - regenerating this shared API key requires the ${result.missing_permission} permission`)
+    }
+  }
+  finally {
+    if (pgClient) {
+      await closeClient(c, pgClient)
+    }
+  }
+}
+
+type DrizzleExecutor = Pick<ReturnType<typeof getDrizzleClient>, 'execute'>
+
+// Backend writes use a service connection, so the audit trigger cannot see the
+// caller. Pass it through transaction-local settings (see audit_log_trigger).
+export async function setApiKeyAuditActor(db: DrizzleExecutor, auth: AuthInfo) {
+  const actorApiKeyId = auth.authType === 'apikey' && auth.apikey?.id ? String(auth.apikey.id) : ''
+  await db.execute(sql`SELECT
+    pg_catalog.set_config('capgo.audit_actor_user_id', ${auth.userId ?? ''}, true),
+    pg_catalog.set_config('capgo.audit_actor_apikey_id', ${actorApiKeyId}, true)`)
+}
+
+export async function withApiKeyAuditActor<T>(
+  c: Context<MiddlewareKeyVariables>,
+  auth: AuthInfo,
+  fn: (tx: ReturnType<typeof getDrizzleClient>) => Promise<T>,
+): Promise<T> {
+  let pgClient: ReturnType<typeof getPgClient> | undefined
+  try {
+    pgClient = getPgClient(c)
+    const drizzle = getDrizzleClient(pgClient)
+    return await drizzle.transaction(async (tx) => {
+      const txDrizzle = tx as unknown as ReturnType<typeof getDrizzleClient>
+      await setApiKeyAuditActor(txDrizzle, auth)
+      return fn(txDrizzle)
+    })
+  }
+  finally {
+    if (pgClient) {
+      await closeClient(c, pgClient)
+    }
+  }
 }

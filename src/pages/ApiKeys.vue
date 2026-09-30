@@ -129,6 +129,10 @@ const editingApiKey = ref<ApiKeyRow | null>(null)
 
 // State for hashed key creation
 const createAsHashed = ref(false)
+// Shared keys belong to one organization instead of the creating user
+const createAsShared = ref(false)
+const sharedKeyOrgIds = ref(new Set<string>())
+const ownershipFilter = ref<'all' | 'personal' | 'shared'>('all')
 
 // State for expiration date
 const setExpirationCheckbox = ref(false)
@@ -183,6 +187,13 @@ function isHashedKey(key: ApiKeyRow) {
     return key.is_hashed_key
   return key.key === null && key.key_hash !== null
 }
+
+function isSharedKey(key: Pick<ApiKeyRow, 'owner_org_id'>) {
+  return !!key.owner_org_id
+}
+
+// Shared keys are bound to a single org; edits and creation must stay inside it.
+const isSharedKeyForm = computed(() => createAsShared.value || !!editingApiKey.value?.owner_org_id)
 
 function getRoleDisplayName(roleName: string): string {
   const normalized = roleName.replace(/^invite_/, '')
@@ -635,7 +646,15 @@ async function fetchOrgAndAppNames() {
 
 const searchQuery = ref('')
 
-const apiKeyFilterResult = computed(() => filterApiKeyListRows(keys.value ?? [], {
+const ownershipFilteredKeys = computed(() => (keys.value ?? []).filter((key) => {
+  if (ownershipFilter.value === 'shared')
+    return isSharedKey(key)
+  if (ownershipFilter.value === 'personal')
+    return !isSharedKey(key)
+  return true
+}))
+
+const apiKeyFilterResult = computed(() => filterApiKeyListRows(ownershipFilteredKeys.value, {
   searchQuery: searchQuery.value,
   orgFilterIds: selectedScopeFilterIds('org'),
   appFilterIds: selectedScopeFilterIds('app'),
@@ -786,6 +805,7 @@ function getOrgRoleForBinding(orgId: string) {
 
 const canEnableOrgCreation = computed(() =>
   !appOnlyScope.value
+  && !isSharedKeyForm.value
   && !hideOrgCreationPermission
   && selectedOrgsForCreation.value.some(orgId => rolesWithOrgCreateAccess.has(getOrgRoleForBinding(orgId))),
 )
@@ -821,6 +841,24 @@ columns.value = [
       if (!highest)
         return '-'
       return getRoleDisplayName(highest)
+    },
+  },
+  {
+    key: 'ownership',
+    label: t('api-key-ownership'),
+    renderFunction: (row: ApiKeyRow) => {
+      if (!isSharedKey(row)) {
+        return h('span', {
+          'class': 'rounded-md border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:border-slate-600 dark:bg-slate-700/60 dark:text-slate-300',
+          'data-test': `key-ownership-personal-${row.id}`,
+        }, t('api-key-personal'))
+      }
+      const orgName = getOrgNameById(row.owner_org_id!)
+      return h('span', {
+        'class': 'max-w-[12rem] truncate rounded-md border border-violet-200 bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-700 dark:border-violet-500/40 dark:bg-violet-500/15 dark:text-violet-200',
+        'title': `${t('api-key-shared-with')} ${orgName}`,
+        'data-test': `key-ownership-shared-${row.id}`,
+      }, `${t('api-key-shared')} · ${orgName}`)
     },
   },
   {
@@ -1024,7 +1062,33 @@ async function loadAllApps() {
 }
 
 function canSelectOrgForKey(orgId: string) {
+  if (editingApiKey.value?.owner_org_id)
+    return orgId === editingApiKey.value.owner_org_id
+  if (createAsShared.value)
+    return sharedKeyOrgIds.value.has(orgId)
   return manageableOrgIds.value.has(orgId) || appKeyManageableOrgIds.value.has(orgId)
+}
+
+async function loadSharedKeyOrganizations() {
+  const checks = await Promise.all(organizationStore.organizations.map(async (org) => {
+    const canManage = await checkPermissions('org.manage_apikeys', { orgId: org.gid })
+    return canManage ? org.gid : null
+  }))
+  sharedKeyOrgIds.value = new Set(checks.filter((orgId): orgId is string => !!orgId))
+}
+
+function onSharedKeyToggle() {
+  if (!createAsShared.value)
+    return
+  // Shared keys are hashed, single-org, and never carry org.create.
+  createAsHashed.value = true
+  allowOrgCreation.value = false
+  const currentOrgId = currentOrganizationId.value
+  const ownerOrgId = currentOrgId && sharedKeyOrgIds.value.has(currentOrgId)
+    ? currentOrgId
+    : [...sharedKeyOrgIds.value][0]
+  selectedOrgsForCreation.value = ownerOrgId ? [ownerOrgId] : []
+  pruneAppBindings()
 }
 
 // Must run once apps and org-level rights are loaded.
@@ -1047,6 +1111,11 @@ async function loadManageableOrganizations() {
 }
 
 function validateApiKeyScope() {
+  if (isSharedKeyForm.value && selectedOrgsForCreation.value.length !== 1) {
+    toast.error(t('api-key-shared-select-one-org'))
+    return false
+  }
+
   if (appOnlyScope.value) {
     if (selectedAppIds.value.length === 0) {
       toast.error(t('select-at-least-one-app'))
@@ -1074,7 +1143,8 @@ function validateApiKeyScope() {
 }
 
 async function createApiKey() {
-  const isHashed = createAsHashed.value
+  const isShared = createAsShared.value
+  const isHashed = isShared || createAsHashed.value
 
   if (!validateApiKeyScope())
     return false
@@ -1107,6 +1177,7 @@ async function createApiKey() {
         hashed: isHashed,
         bindings,
         global_permissions: buildApiKeyGlobalPermissionsFromForm(),
+        ...(isShared ? { owner_org_id: selectedOrgsForCreation.value[0] } : {}),
       },
     })
 
@@ -1198,6 +1269,7 @@ async function addNewApiKey() {
   editingApiKey.value = null
   newApiKeyName.value = ''
   createAsHashed.value = false
+  createAsShared.value = false
   allowOrgCreation.value = false
   appOnlyScope.value = false
   setExpirationCheckbox.value = false
@@ -1208,7 +1280,7 @@ async function addNewApiKey() {
   showOrgDropdown.value = false
   showAppDropdown.value = false
 
-  await Promise.all([loadAllApps(), fetchRoles(), loadManageableOrganizations()])
+  await Promise.all([loadAllApps(), fetchRoles(), loadManageableOrganizations(), loadSharedKeyOrganizations()])
   await loadAppKeyManageableApps()
 
   // Select all organizations that can receive RBAC bindings from this caller;
@@ -1230,6 +1302,7 @@ async function editApiKey(key: Database['public']['Tables']['apikeys']['Row']) {
     editingApiKey.value = key
     newApiKeyName.value = key.name || ''
     createAsHashed.value = isHashedKey(key)
+    createAsShared.value = false
     allowOrgCreation.value = hasOrgCreatePermission(key as ApiKeyRow)
     appOnlyScope.value = false
     setExpirationCheckbox.value = !!key.expires_at
@@ -1455,6 +1528,12 @@ async function showEditKeyModal() {
 function toggleOrgSelection(orgId: string) {
   if (!canSelectOrgForKey(orgId))
     return
+
+  if (isSharedKeyForm.value) {
+    selectedOrgsForCreation.value = [orgId]
+    pruneAppBindings()
+    return
+  }
 
   if (selectedOrgsForCreation.value.includes(orgId)) {
     selectedOrgsForCreation.value = selectedOrgsForCreation.value.filter(id => id !== orgId)
@@ -1777,6 +1856,24 @@ getKeys()
               @reload="getKeys()"
               @reset="refreshData()"
             >
+              <template #toolbar-extras>
+                <div class="inline-flex overflow-hidden rounded-lg border border-slate-300 dark:border-slate-600" role="group" :aria-label="t('api-key-ownership')">
+                  <button
+                    v-for="option in (['all', 'personal', 'shared'] as const)"
+                    :key="option"
+                    type="button"
+                    :data-test="`key-ownership-filter-${option}`"
+                    :aria-pressed="ownershipFilter === option"
+                    class="px-3 py-1.5 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary-500"
+                    :class="ownershipFilter === option
+                      ? 'bg-primary-500 text-white'
+                      : 'bg-white text-slate-600 hover:bg-slate-100 dark:bg-gray-800 dark:text-slate-300 dark:hover:bg-slate-700'"
+                    @click="ownershipFilter = option; currentPage = 1"
+                  >
+                    {{ t(option === 'all' ? 'key-all' : option === 'personal' ? 'api-key-personal' : 'api-key-shared') }}
+                  </button>
+                </div>
+              </template>
               <template #table-notice>
                 <ApiKeyHiddenScopeNotice
                   :hidden-count="hiddenByScopeCount"
@@ -1896,6 +1993,32 @@ getKeys()
             />
           </div>
 
+          <!-- Share with organization (org-owned key) -->
+          <div v-if="!isEditingApiKey" class="p-4 border rounded-lg border-violet-200 bg-violet-50 dark:bg-violet-500/10 dark:border-violet-500/30">
+            <div class="flex items-start gap-3">
+              <input
+                id="create-as-shared"
+                v-model="createAsShared"
+                type="checkbox"
+                data-test="create-key-shared"
+                class="mt-1 d-checkbox d-checkbox-primary d-checkbox-sm"
+                :disabled="sharedKeyOrgIds.size === 0"
+                @change="onSharedKeyToggle"
+              >
+              <div>
+                <label for="create-as-shared" class="font-medium cursor-pointer text-violet-800 dark:text-violet-200">
+                  {{ t('api-key-share-with-org') }}
+                </label>
+                <p class="mt-1 text-sm text-violet-700 dark:text-violet-300">
+                  {{ t(sharedKeyOrgIds.size === 0 ? 'api-key-share-with-org-unavailable' : 'api-key-share-with-org-description') }}
+                </p>
+              </div>
+            </div>
+          </div>
+          <p v-else-if="editingApiKey?.owner_org_id" data-test="edit-key-shared-notice" class="rounded-lg border border-violet-200 bg-violet-50 p-3 text-sm text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-200">
+            {{ t('api-key-shared-with') }} {{ getOrgNameById(editingApiKey.owner_org_id) }}. {{ t('api-key-shared-edit-notice') }}
+          </p>
+
           <!-- Create as Secure (Hashed) Key -->
           <div v-if="!isEditingApiKey" class="p-4 border border-blue-200 rounded-lg bg-blue-50 dark:bg-blue-900/20 dark:border-blue-700">
             <div class="flex items-start gap-3">
@@ -1904,6 +2027,7 @@ getKeys()
                 v-model="createAsHashed"
                 type="checkbox"
                 class="mt-1 border-blue-500 dark:border-blue-400 checkbox checkbox-primary"
+                :disabled="createAsShared"
               >
               <div>
                 <label for="create-as-hashed" class="font-medium text-blue-800 cursor-pointer dark:text-blue-200">

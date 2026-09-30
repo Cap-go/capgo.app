@@ -299,6 +299,7 @@ async function validateApiKeyPrincipalAccess(
   const [apiKey] = await drizzle
     .select({
       user_id: schema.apikeys.user_id,
+      owner_org_id: schema.apikeys.owner_org_id,
     })
     .from(schema.apikeys)
     .where(eq(schema.apikeys.rbac_id, principalId))
@@ -309,6 +310,20 @@ async function validateApiKeyPrincipalAccess(
       message: 'validatePrincipalAccess: missing apiKey for role binding principal',
       principalId,
       orgId,
+    })
+    return { ok: false, status: 400, error: INVALID_APIKEY_ACCESS_ERROR }
+  }
+
+  // Shared keys belong to their org, not to the attributed user.
+  if (apiKey.owner_org_id) {
+    if (apiKey.owner_org_id === orgId) {
+      return { ok: true, data: null }
+    }
+    cloudlogErr({
+      message: 'validatePrincipalAccess: shared apiKey bound outside its owner org',
+      principalId,
+      orgId,
+      ownerOrgId: apiKey.owner_org_id,
     })
     return { ok: false, status: 400, error: INVALID_APIKEY_ACCESS_ERROR }
   }

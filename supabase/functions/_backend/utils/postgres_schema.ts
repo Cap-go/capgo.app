@@ -205,6 +205,7 @@ export const apikeys = pgTable('apikeys', {
   name: varchar('name').notNull(),
   expires_at: timestamp('expires_at', { withTimezone: true }),
   rbac_id: uuid('rbac_id').notNull(),
+  owner_org_id: uuid('owner_org_id'),
 })
 
 export const org_users = pgTable('org_users', {

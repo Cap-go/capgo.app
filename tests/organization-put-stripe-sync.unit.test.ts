@@ -264,6 +264,7 @@ describe('organization put Stripe sync', () => {
       key: null,
       key_hash: 'stored-hash',
       name: 'hashed org update key',
+      owner_org_id: null,
       rbac_id: 'rbac-apikey-123',
       updated_at: null,
       user_id: 'user-123',
