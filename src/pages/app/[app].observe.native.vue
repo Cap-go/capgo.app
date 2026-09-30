@@ -3,8 +3,9 @@ import type { ChartData, ChartOptions } from 'chart.js'
 import type { VersionGroupOption } from '~/components/dashboard/VersionGroupSelector.vue'
 import type { ObserveSignalCategory } from '~/services/statsActions'
 import type { PeriodDayOption } from '~/utils/periodDays'
+import { useLocalStorage } from '@vueuse/core'
 import { BarElement, CategoryScale, Chart, Legend, LinearScale, LineElement, PointElement, Tooltip } from 'chart.js'
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, useTemplateRef, watch } from 'vue'
 import { Bar, Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -14,6 +15,7 @@ import IconExternalLink from '~icons/lucide/external-link'
 import IconInfo from '~icons/lucide/info'
 import IconRocket from '~icons/lucide/rocket'
 import IconTimer from '~icons/lucide/timer'
+import IconX from '~icons/lucide/x'
 import DeliveryLatencyPanel from '~/components/dashboard/DeliveryLatencyPanel.vue'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import VersionGroupSelector from '~/components/dashboard/VersionGroupSelector.vue'
@@ -104,6 +106,15 @@ const { stats, statsLoading, fetchStats } = useNativeObserveStats<NativeObserveS
   () => ({ days: days.value, version_group: versionGroup.value }),
   'native observe stats',
 )
+const signalsNoteDismissed = useLocalStorage('capgo:observe-native-signals-note-dismissed', false)
+const signalsNote = useTemplateRef<HTMLElement>('signalsNote')
+
+async function showSignalsNote() {
+  signalsNoteDismissed.value = false
+  await nextTick()
+  signalsNote.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
 const hasData = computed(() => (stats.value?.overview.total_events ?? 0) > 0)
 const topActions = computed(() => stats.value?.actionBreakdown.slice(0, 10) ?? [])
 const topVersions = computed(() => stats.value?.versions.slice(0, versionGroup.value === 'version' ? 8 : 24) ?? [])
@@ -440,11 +451,22 @@ watch([packageId, days, versionGroup], async () => {
           </div>
         </div>
         <div
-          v-if="hasData"
-          class="flex gap-3 p-4 border rounded-xl border-sky-200 bg-sky-50/70 dark:border-sky-400/20 dark:bg-sky-400/5"
+          v-if="hasData && !signalsNoteDismissed"
+          ref="signalsNote"
+          class="relative flex gap-3 p-4 pr-10 border rounded-xl border-sky-200 bg-sky-50/70 dark:border-sky-400/20 dark:bg-sky-400/5"
           data-testid="observe-signals-note"
         >
           <IconInfo class="w-5 h-5 mt-0.5 shrink-0 text-sky-600 dark:text-sky-300" />
+          <button
+            type="button"
+            class="absolute top-2 right-2 d-btn d-btn-ghost d-btn-xs d-btn-square text-slate-500 dark:text-slate-400"
+            :aria-label="t('native-observe-signals-note-dismiss')"
+            :title="t('native-observe-signals-note-dismiss')"
+            data-testid="observe-signals-note-dismiss"
+            @click="signalsNoteDismissed = true"
+          >
+            <IconX class="w-4 h-4" />
+          </button>
           <div class="min-w-0 text-sm">
             <div class="font-semibold text-slate-900 dark:text-slate-100">
               {{ t('native-observe-signals-note-title') }}
@@ -641,6 +663,15 @@ watch([packageId, days, versionGroup], async () => {
                 </h2>
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
                   {{ t('native-observe-action-breakdown-help') }}
+                  <button
+                    v-if="signalsNoteDismissed"
+                    type="button"
+                    class="ml-1 underline text-sky-700 underline-offset-2 hover:text-sky-800 dark:text-sky-300 dark:hover:text-sky-200"
+                    data-testid="observe-signals-note-show"
+                    @click="showSignalsNote"
+                  >
+                    {{ t('native-observe-signals-note-show') }}
+                  </button>
                 </p>
               </div>
               <IconAlertTriangle class="w-5 h-5 text-amber-500" />

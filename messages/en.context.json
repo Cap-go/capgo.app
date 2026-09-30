@@ -2340,6 +2340,8 @@
   "native-observe-webview-p90": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "native-observe-signals-note-title": "Used in Capgo web console areas: pages/app. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "native-observe-signals-note-body": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "native-observe-signals-note-dismiss": "Used in Capgo web console areas: pages/app. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "native-observe-signals-note-show": "Used in Capgo web console areas: pages/app. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "native-observe-signals-note-crash": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "native-observe-signals-note-web": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "native-observe-signals-note-system": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
