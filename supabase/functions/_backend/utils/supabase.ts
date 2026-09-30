@@ -1529,7 +1529,11 @@ interface ChannelDeviceOverrideRow {
 /**
  * Split an app's channel_devices rows into devices forced into `channel` and
  * devices forced elsewhere. Matches by channel id when known, otherwise by name.
- * Forced-into devices are kept first when the combined list must be capped.
+ * Device ids are lowercased, matching plugin ingestion.
+ * Forced-into devices are kept first when the combined list must be capped, so
+ * past the cap some forced-elsewhere ids are dropped: those devices still count
+ * under their reported default_channel, which can inflate this channel's counts
+ * (never deflate them). The cap is logged by readChannelDeviceOverrideIdsSB.
  */
 export function partitionChannelDeviceOverrides(
   rows: ChannelDeviceOverrideRow[],

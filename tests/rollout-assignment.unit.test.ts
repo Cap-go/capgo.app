@@ -48,6 +48,15 @@ describe('rollout deterministic assignment', () => {
     expect(stableHash32('')).toBe(stableHash32(''))
   })
 
+  it.concurrent('pins hash and bucket values so an algorithm change reshuffling cohorts fails', () => {
+    // Changing these values moves devices between rollout cohorts in production.
+    expect(stableHash32('device-a')).toBe(3786085048)
+    expect(stableHash32('')).toBe(2872998923)
+    expect(getRolloutBucketBps(baseDecision)).toBe(9295)
+    expect(pluginRuntimeRollout.stableHash32('device-a')).toBe(3786085048)
+    expect(pluginRuntimeRollout.getRolloutBucketBps(baseDecision)).toBe(9295)
+  })
+
   it.concurrent('returns the same decision for the same device on every call', () => {
     for (let index = 0; index < 500; index++) {
       const input = { ...baseDecision, deviceId: syntheticDeviceId(index), rolloutPercentageBps: 2500 }

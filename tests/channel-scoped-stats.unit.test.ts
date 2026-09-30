@@ -45,10 +45,10 @@ describe('device version counts channel scope', () => {
 
   it.concurrent('adds forced-in devices and removes devices forced elsewhere', () => {
     const scope = buildDeviceChannelScopeCF('production', { into: ['in-1', 'in-2'], elsewhere: ['out-1'] })
-    expect(scope).toBe('((default_channel = \'production\' AND device_id NOT IN (\'out-1\')) OR device_id IN (\'in-1\', \'in-2\'))')
+    expect(scope).toBe('((default_channel = \'production\' AND lower(device_id) NOT IN (\'out-1\')) OR lower(device_id) IN (\'in-1\', \'in-2\'))')
 
     const query = buildDeviceVersionCountsCFQuery('com.app', 'production', { into: ['in-1'], elsewhere: [] })
-    expect(query).toContain('WHERE version_name != \'\' AND (default_channel = \'production\' OR device_id IN (\'in-1\'))')
+    expect(query).toContain('WHERE version_name != \'\' AND (default_channel = \'production\' OR lower(device_id) IN (\'in-1\'))')
   })
 
   it.concurrent('escapes device ids and channel names', () => {

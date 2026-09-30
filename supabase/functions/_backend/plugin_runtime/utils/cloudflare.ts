@@ -896,18 +896,19 @@ function buildDeviceIdListCF(deviceIds: string[]) {
 /**
  * Channel scope for device_info rows by effective channel: the device-reported
  * default_channel, minus devices forced to another channel, plus devices forced
- * into this channel through channel_devices.
+ * into this channel through channel_devices. Override ids are lowercased by
+ * partitionChannelDeviceOverrides, so device ids are compared lowercased too.
  */
 export function buildDeviceChannelScopeCF(channelName: string, overrides?: ChannelDeviceOverrideIds): string {
   const defaultChannelMatch = `default_channel = '${escapeSqlString(channelName)}'`
   const elsewhere = overrides?.elsewhere ?? []
   const into = overrides?.into ?? []
   const byDefaultChannel = elsewhere.length
-    ? `(${defaultChannelMatch} AND device_id NOT IN (${buildDeviceIdListCF(elsewhere)}))`
+    ? `(${defaultChannelMatch} AND lower(device_id) NOT IN (${buildDeviceIdListCF(elsewhere)}))`
     : defaultChannelMatch
   if (!into.length)
     return byDefaultChannel
-  return `(${byDefaultChannel} OR device_id IN (${buildDeviceIdListCF(into)}))`
+  return `(${byDefaultChannel} OR lower(device_id) IN (${buildDeviceIdListCF(into)}))`
 }
 
 export function buildDeviceVersionCountsCFQuery(app_id: string, channelName?: string, overrides?: ChannelDeviceOverrideIds) {
