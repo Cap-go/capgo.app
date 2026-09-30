@@ -1,0 +1,40 @@
+name: Retry transient CI failures
+
+on:
+  workflow_run:
+    workflows:
+      - Run tests
+      - Bump version
+    types:
+      - completed
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: retry-transient-ci-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  retry:
+    # Disabled by default. Set the repository Actions variable to true to opt in.
+    if: >-
+      vars.ENABLE_TRANSIENT_CI_RETRY == 'true' &&
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.run_attempt == 1 &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # workflow_run has a write token, so only execute trusted code from the default branch.
+      - name: Checkout default branch
+        uses: actions/checkout@v6
+      - name: Setup bun
+        run: bash scripts/setup-bun.sh
+      - name: Retry proven infrastructure failures once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: bun scripts/retry-transient-ci-run.ts "$REPOSITORY" "$RUN_ID"

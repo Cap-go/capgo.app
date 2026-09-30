@@ -243,6 +243,7 @@ export interface AppLogDimensions {
   platform?: string | null
   country_code?: string | null
   plugin_version?: string | null
+  channel?: VersionUsageChannel | null
 }
 
 function normalizeAppLogDimension(value: string | null | undefined, maxLength: number) {
@@ -256,10 +257,15 @@ function normalizeAppLogDimension(value: string | null | undefined, maxLength: n
 
 function appLogDimensionBlobs(dimensions?: AppLogDimensions) {
   // blob5=platform, blob6=country_code, blob7=plugin_version (denormalized for public /data breakdowns)
+  // blob8=channel name, blob9=channel id: only set on failure logs, so the live
+  // release view can break failures down per channel.
+  const channelId = dimensions?.channel?.id
   return [
     normalizeAppLogDimension(dimensions?.platform, 16),
     normalizeAppLogDimension(dimensions?.country_code, 2).toUpperCase(),
     normalizeAppLogDimension(dimensions?.plugin_version, 32),
+    normalizeAppLogDimension(dimensions?.channel?.name, 128),
+    channelId ? String(channelId) : '',
   ]
 }
 
@@ -733,6 +739,9 @@ export interface DeviceUsageAllCF {
 // period is counted once per org, so moving an app between orgs cannot hide its MAU.
 // Usage of deleted apps stays billable via deleted_apps for 35 days (see
 // calculate_org_metrics_cache_entry), so deleting/recreating an app cannot reset MAU.
+// Another org recreating that app_id within 35 days shares the same usage rows
+// (both orgs billed, new owner can read them): expected, see
+// docs/billing-usage-retention.md.
 export async function readDeviceUsageCF(c: Context, app_id: string, period_start: string, period_end: string, options: { throwOnError?: boolean } = {}) {
   if (!c.env.DEVICE_USAGE)
     return [] as DeviceUsageCF[]

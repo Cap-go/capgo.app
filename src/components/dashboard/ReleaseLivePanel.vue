@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions } from 'chart.js'
-import type { ReleaseLiveDeployment } from '~/composables/useReleaseLive'
+import type { ReleaseLiveChannel, ReleaseLiveDeployment } from '~/composables/useReleaseLive'
 import { useDark, useDocumentVisibility, useNow } from '@vueuse/core'
 import { computed, ref, useId, watch } from 'vue'
 import { Bar } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconRefresh from '~icons/lucide/refresh-cw'
 import Spinner from '~/components/Spinner.vue'
@@ -27,29 +27,36 @@ const { t } = useI18n()
 const isDark = useDark()
 const visibility = useDocumentVisibility()
 const now = useNow({ interval: 1000 })
-const selectId = useId()
+const channelSelectId = useId()
+const releaseSelectId = useId()
 
 const route = useRoute()
+const router = useRouter()
 
-// Key format is `${channel_id}|${version_name}`. Empty means "latest
-// deployment"; `|${version}` (from ?version=, e.g. the release banner) asks the
-// backend for that bundle on any channel.
-function keyFromQuery() {
-  const version = route.query.version
-  return typeof version === 'string' && version ? `|${version}` : ''
+function queryString(value: unknown) {
+  return typeof value === 'string' && value ? value : undefined
 }
 
-const selectedKey = ref(keyFromQuery())
+// The route query is the selection: ?channel= picks the channel (the backend
+// falls back to the app's default channel) and ?version= a deployment on it
+// (empty means the latest one). The release banner links with ?version= only.
 const selected = computed(() => {
-  if (!selectedKey.value)
-    return { version_name: undefined, channel_id: undefined }
-  const [channel, ...versionParts] = selectedKey.value.split('|')
-  const channelId = Number(channel)
+  const channelId = Number(queryString(route.query.channel))
   return {
-    version_name: versionParts.join('|') || undefined,
-    channel_id: channel && Number.isFinite(channelId) ? channelId : undefined,
+    channel_id: Number.isInteger(channelId) && channelId > 0 ? channelId : undefined,
+    version_name: queryString(route.query.version),
   }
 })
+
+function selectRelease(channelId: number | undefined, versionName: string | undefined) {
+  void router.replace({
+    query: {
+      ...route.query,
+      channel: channelId ? String(channelId) : undefined,
+      version: versionName || undefined,
+    },
+  })
+}
 
 const { data, loading, error, lastUpdatedAt, fetchLive } = useReleaseLive(() => ({
   app_id: props.appId,
@@ -68,35 +75,55 @@ const failures = computed(() => live.value?.failures ?? [])
 const hasActivity = computed(() => totals.value.get + totals.value.install + totals.value.fail > 0)
 const isPolling = computed(() => !props.forceDemo && visibility.value === 'visible')
 
-function deploymentKey(deployment: Pick<ReleaseLiveDeployment, 'channel_id' | 'version_name'>) {
-  return `${deployment.channel_id ?? ''}|${deployment.version_name}`
-}
-
-// Kept across release switches so the picker does not vanish while loading.
+// Kept across selection changes so the pickers do not vanish while loading.
+const channels = ref<ReleaseLiveChannel[]>([])
+const activeChannel = ref<ReleaseLiveChannel | null>(null)
 const recentDeployments = ref<ReleaseLiveDeployment[]>([])
 watch(live, (value) => {
-  if (value)
-    recentDeployments.value = value.recent_deployments
+  if (!value)
+    return
+  channels.value = value.channels
+  activeChannel.value = value.channel
+  recentDeployments.value = value.recent_deployments
+})
+
+const channelOptions = computed(() => channels.value.map(channel => ({
+  id: channel.id,
+  label: channel.is_default ? `${channel.name} (${t('release-live-default-channel')})` : channel.name,
+})))
+
+const selectedChannelId = computed<number | ''>({
+  get: () => selected.value.channel_id ?? activeChannel.value?.id ?? '',
+  set: (channelId) => {
+    if (!channelId || channelId === selectedChannelId.value)
+      return
+    // A new channel starts on its latest deployment.
+    recentDeployments.value = []
+    selectRelease(channelId, undefined)
+  },
+})
+
+const selectedVersion = computed<string>({
+  get: () => selected.value.version_name ?? '',
+  set: versionName => selectRelease(selected.value.channel_id ?? activeChannel.value?.id, versionName || undefined),
 })
 
 const deploymentOptions = computed(() => {
   const seen = new Set<string>()
-  const options: { key: string, label: string }[] = []
-  if (selectedKey.value.startsWith('|')) {
-    seen.add(selectedKey.value)
-    options.push({ key: selectedKey.value, label: selectedKey.value.slice(1) })
-  }
+  const options: { value: string, label: string }[] = []
   for (const deployment of recentDeployments.value) {
-    const key = deploymentKey(deployment)
-    if (seen.has(key))
+    if (seen.has(deployment.version_name))
       continue
-    seen.add(key)
-    const channel = deployment.channel_name ?? t('release-live-no-channel')
+    seen.add(deployment.version_name)
     options.push({
-      key,
-      label: `${deployment.version_name} · ${channel} · ${formatLocalDateTime(deployment.deployed_at)}`,
+      value: deployment.version_name,
+      label: `${deployment.version_name} · ${formatLocalDateTime(deployment.deployed_at)}`,
     })
   }
+  // A bundle opened by name (release banner) may not be in the recent list.
+  const version = selected.value.version_name
+  if (version && !seen.has(version))
+    options.unshift({ value: version, label: version })
   return options
 })
 
@@ -206,13 +233,11 @@ function refresh() {
   void fetchLive()
 }
 
-// useReleaseLive refetches on its own when the target changes. Re-seed the
-// selection when the app or the ?version= link changes; the picker list only
-// belongs to the app, so keep it across query-only navigation.
-watch([() => props.appId, () => route.query.version], ([appId], [previousAppId]) => {
-  selectedKey.value = keyFromQuery()
-  if (appId !== previousAppId)
-    recentDeployments.value = []
+// Pickers belong to one app: drop them when the app changes.
+watch(() => props.appId, () => {
+  channels.value = []
+  activeChannel.value = null
+  recentDeployments.value = []
 })
 </script>
 
@@ -246,20 +271,37 @@ watch([() => props.appId, () => route.query.version], ([appId], [previousAppId])
         </p>
       </div>
       <div class="flex items-end gap-2">
-        <div v-if="deploymentOptions.length > 1" class="flex flex-col gap-1">
-          <label :for="selectId" class="text-xs font-medium text-slate-600 dark:text-slate-400">
+        <div v-if="channelOptions.length" class="flex flex-col gap-1">
+          <label :for="channelSelectId" class="text-xs font-medium text-slate-600 dark:text-slate-400">
+            {{ t('release-live-select-channel') }}
+          </label>
+          <select
+            :id="channelSelectId"
+            v-model="selectedChannelId"
+            class="d-select d-select-sm d-select-bordered max-w-xs"
+            :disabled="forceDemo"
+            data-testid="release-live-channel"
+          >
+            <option v-for="option in channelOptions" :key="option.id" :value="option.id">
+              {{ option.label }}
+            </option>
+          </select>
+        </div>
+        <div v-if="deploymentOptions.length" class="flex flex-col gap-1">
+          <label :for="releaseSelectId" class="text-xs font-medium text-slate-600 dark:text-slate-400">
             {{ t('release-live-select-release') }}
           </label>
           <select
-            :id="selectId"
-            v-model="selectedKey"
+            :id="releaseSelectId"
+            v-model="selectedVersion"
             class="d-select d-select-sm d-select-bordered max-w-xs"
-            :aria-label="t('release-live-select-release')"
+            :disabled="forceDemo"
+            data-testid="release-live-release"
           >
             <option value="">
               {{ t('release-live-latest') }}
             </option>
-            <option v-for="option in deploymentOptions" :key="option.key" :value="option.key">
+            <option v-for="option in deploymentOptions" :key="option.value" :value="option.value">
               {{ option.label }}
             </option>
           </select>

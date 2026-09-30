@@ -240,6 +240,7 @@ export interface AppLogDimensions {
   platform?: string | null
   country_code?: string | null
   plugin_version?: string | null
+  channel?: VersionUsageChannel | null
 }
 
 function normalizeAppLogDimension(value: string | null | undefined, maxLength: number) {
@@ -253,10 +254,15 @@ function normalizeAppLogDimension(value: string | null | undefined, maxLength: n
 
 function appLogDimensionBlobs(dimensions?: AppLogDimensions) {
   // blob5=platform, blob6=country_code, blob7=plugin_version (denormalized for public /data breakdowns)
+  // blob8=channel name, blob9=channel id: only set on failure logs, so the live
+  // release view can break failures down per channel.
+  const channelId = dimensions?.channel?.id
   return [
     normalizeAppLogDimension(dimensions?.platform, 16),
     normalizeAppLogDimension(dimensions?.country_code, 2).toUpperCase(),
     normalizeAppLogDimension(dimensions?.plugin_version, 32),
+    normalizeAppLogDimension(dimensions?.channel?.name, 128),
+    channelId ? String(channelId) : '',
   ]
 }
 

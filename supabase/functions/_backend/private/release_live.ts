@@ -13,11 +13,13 @@ import { checkPermission } from '../utils/rbac.ts'
 import { readDeviceVersionCounts } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 
-// Near-realtime view of a release rollout. Analytics Engine ingests within
-// about a minute, so every expensive read sits behind a colo cache keyed per
-// app: polling tabs only cost the auth + permission check per request.
+// Near-realtime view of a release rollout on one channel. Every number is
+// scoped to that channel (the app's default channel unless the request names
+// another one). Analytics Engine ingests within about a minute, so every
+// expensive read sits behind a colo cache keyed per app + channel: polling tabs
+// only cost the auth + permission check per request.
 // - activity (version_usage + app_log AE queries): 1 minute
-// - release candidates (deploy_history + latest bundle): 1 minute
+// - release candidates (channels + deploy_history): 1 minute
 // - adoption (full device_info scan): 5 minutes
 const ACTIVITY_CACHE_TTL_SECONDS = 60
 const CANDIDATES_CACHE_TTL_SECONDS = 60
@@ -31,6 +33,8 @@ const MAX_BUCKETS = 90
 const BUCKET_MINUTES_OPTIONS = [1, 5, 15, 30, 60] as const
 const MAX_FAILURE_ACTIONS = 8
 const RECENT_DEPLOYMENTS_LIMIT = 10
+const DEPLOY_HISTORY_LIMIT = 100
+const INTERNAL_VERSION_NAMES = new Set(['builtin', 'unknown'])
 
 interface ReleaseLiveRequest {
   app_id: string
@@ -52,7 +56,19 @@ export interface ReleaseLiveDeployment {
   deployed_at: string
 }
 
-export interface ReleaseLiveResponse {
+export interface ReleaseLiveChannel {
+  id: number
+  name: string
+  is_default: boolean
+}
+
+interface ReleaseLiveChannelContext {
+  channel: ReleaseLiveChannel | null
+  channels: ReleaseLiveChannel[]
+  recent_deployments: ReleaseLiveDeployment[]
+}
+
+export interface ReleaseLiveResponse extends ReleaseLiveChannelContext {
   release: ReleaseLiveDeployment & { bundle_id: number | null }
   window: {
     start: string
@@ -73,14 +89,14 @@ export interface ReleaseLiveResponse {
   }
   failures: { action: string, count: number }[]
   series: ReleaseLiveBucket[]
-  recent_deployments: ReleaseLiveDeployment[]
   generated_at: string
 }
 
-export interface ReleaseLiveEmptyResponse {
+export interface ReleaseLiveEmptyResponse extends ReleaseLiveChannelContext {
   release: null
-  recent_deployments: ReleaseLiveDeployment[]
 }
+
+type ReleaseLiveActivity = Omit<ReleaseLiveResponse, 'release' | keyof ReleaseLiveChannelContext>
 
 interface ResolvedRelease {
   bundle_id: number | null
@@ -204,7 +220,21 @@ GROUP BY bucket
 ORDER BY bucket`
 }
 
-function buildFailuresQueryCF(appId: string, versionName: string, startMs: number, endMs: number) {
+// app_log failure rows carry the channel in blob8 (name) and blob9 (id). Rows
+// written before that have neither and stay out of a channel view.
+function buildFailureChannelFilterCF(channel: VersionUsageChannel) {
+  const channelId = channel.id ? escapeSqlString(String(channel.id)) : ''
+  const channelName = channel.name ? escapeSqlString(channel.name) : ''
+  if (channelId && channelName)
+    return `AND (blob9 = '${channelId}' OR (blob9 = '' AND blob8 = '${channelName}'))`
+  if (channelId)
+    return `AND blob9 = '${channelId}'`
+  if (channelName)
+    return `AND blob8 = '${channelName}'`
+  return ''
+}
+
+function buildFailuresQueryCF(appId: string, versionName: string, startMs: number, endMs: number, channel: VersionUsageChannel) {
   return `SELECT
   blob2 AS action,
   sum(_sample_interval) AS count
@@ -215,19 +245,19 @@ WHERE
   AND blob2 LIKE '%fail%'
   AND timestamp >= toDateTime('${formatDateCF(new Date(startMs))}')
   AND timestamp < toDateTime('${formatDateCF(new Date(endMs))}')
+  ${buildFailureChannelFilterCF(channel)}
 GROUP BY action
 ORDER BY count DESC
 LIMIT ${MAX_FAILURE_ACTIONS}`
 }
 
-async function readActivityCF(c: Context, appId: string, versionName: string, startMs: number, endMs: number, bucketMinutes: number, channel?: VersionUsageChannel) {
+async function readActivityCF(c: Context, appId: string, versionName: string, startMs: number, endMs: number, bucketMinutes: number, channel: VersionUsageChannel) {
   const [seriesRows, failureRows] = await Promise.all([
     c.env.VERSION_USAGE
       ? runQueryToCFA<RawBucketRow>(c, buildSeriesQueryCF(appId, versionName, startMs, endMs, bucketMinutes, channel))
       : Promise.resolve([] as RawBucketRow[]),
-    // app_log rows carry no channel, so the failure breakdown stays per version.
     c.env.APP_LOG
-      ? runQueryToCFA<RawFailureRow>(c, buildFailuresQueryCF(appId, versionName, startMs, endMs))
+      ? runQueryToCFA<RawFailureRow>(c, buildFailuresQueryCF(appId, versionName, startMs, endMs, channel))
           .catch((error) => {
             // Failure breakdown is a nice-to-have; never fail the whole view on it.
             cloudlogErr({ requestId: c.get('requestId'), message: 'release_live failures query failed', error: serializeError(error) })
@@ -238,7 +268,7 @@ async function readActivityCF(c: Context, appId: string, versionName: string, st
   return { seriesRows, failureRows }
 }
 
-async function readActivitySB(c: Context, appId: string, versionName: string, startMs: number, endMs: number, bucketMinutes: number, channel?: VersionUsageChannel) {
+async function readActivitySB(c: Context, appId: string, versionName: string, startMs: number, endMs: number, bucketMinutes: number, channel: VersionUsageChannel) {
   const db = getPgClient(c, true)
   try {
     const start = new Date(startMs).toISOString()
@@ -256,14 +286,13 @@ WHERE vu.app_id = $1
   AND vu.timestamp >= ($3::timestamptz AT TIME ZONE 'UTC')
   AND vu.timestamp < ($4::timestamptz AT TIME ZONE 'UTC')
   AND (
-    ($6::bigint IS NULL AND $7::text IS NULL)
-    OR vu.channel_id = $6::bigint
+    vu.channel_id = $6::bigint
     OR (vu.channel_id IS NULL AND vu.channel_name = $7::text)
     OR (vu.action = 'get' AND vu.channel_id IS NULL AND vu.channel_name IS NULL)
   )
 GROUP BY bucket
 ORDER BY bucket`,
-        [appId, versionName, start, end, bucketMinutes, channel?.id ?? null, channel?.name ?? null],
+        [appId, versionName, start, end, bucketMinutes, channel.id ?? null, channel.name ?? null],
       ),
       db.query<RawFailureRow>(
         `SELECT s.action::text AS action, count(*) AS count
@@ -273,10 +302,16 @@ WHERE s.app_id = $1
   AND s.created_at >= $3::timestamptz
   AND s.created_at < $4::timestamptz
   AND s.action::text LIKE '%fail%'
+  AND EXISTS (
+    SELECT 1 FROM public.devices d
+    WHERE d.app_id = s.app_id
+      AND d.device_id = s.device_id
+      AND d.default_channel = $5::text
+  )
 GROUP BY s.action
 ORDER BY count DESC
 LIMIT ${MAX_FAILURE_ACTIONS}`,
-        [appId, versionName, start, end],
+        [appId, versionName, start, end, channel.name ?? ''],
       ),
     ])
     return { seriesRows: series.rows, failureRows: failures.rows }
@@ -290,9 +325,17 @@ LIMIT ${MAX_FAILURE_ACTIONS}`,
   }
 }
 
+interface CandidateChannel {
+  id: number
+  name: string
+  public: boolean
+  // Bundle the channel currently serves, used when deploy history has no row.
+  current: ResolvedRelease | null
+}
+
 interface ReleaseCandidates {
+  channels: CandidateChannel[]
   deployments: ResolvedRelease[]
-  latest_bundle: ResolvedRelease | null
 }
 
 function cacheBucket(ttlSeconds: number, nowMs = Date.now()) {
@@ -303,32 +346,44 @@ function cacheBucket(ttlSeconds: number, nowMs = Date.now()) {
 // read with the admin client (after checkPermission) and shared through the cache.
 async function loadReleaseCandidates(c: Context<MiddlewareKeyVariables>, appId: string): Promise<ReleaseCandidates> {
   const cache = new CacheHelper(c)
-  const cacheKey = cache.buildRequest(CANDIDATES_CACHE_PATH, { appId, bucket: cacheBucket(CANDIDATES_CACHE_TTL_SECONDS) })
+  const cacheKey = cache.buildRequest(CANDIDATES_CACHE_PATH, { appId, v: '2', bucket: cacheBucket(CANDIDATES_CACHE_TTL_SECONDS) })
   const cached = await cache.matchJson<ReleaseCandidates>(cacheKey)
   if (cached)
     return cached
 
   const supabase = supabaseAdmin(c)
-  const [{ data: deployRows, error: deployError }, { data: versions, error: versionError }] = await Promise.all([
+  const [{ data: channelRows, error: channelError }, { data: deployRows, error: deployError }] = await Promise.all([
+    supabase
+      .from('channels')
+      .select('id, name, public, version:app_versions!channels_version_fkey(id, name, created_at)')
+      .eq('app_id', appId)
+      .order('name', { ascending: true })
+      .order('id', { ascending: true }),
     supabase
       .from('deploy_history')
       .select('deployed_at, channel_id, channels(name), app_versions(id, name)')
       .eq('app_id', appId)
       .order('deployed_at', { ascending: false })
-      .limit(50),
-    supabase
-      .from('app_versions')
-      .select('id, name, created_at')
-      .eq('app_id', appId)
-      .eq('deleted', false)
-      .not('name', 'in', '("builtin","unknown")')
-      .order('created_at', { ascending: false })
-      .limit(1),
+      .limit(DEPLOY_HISTORY_LIMIT),
   ])
-  if (deployError || versionError) {
-    cloudlog({ requestId: c.get('requestId'), message: 'release_live candidates error', deployError, versionError })
+  if (channelError || deployError) {
+    cloudlog({ requestId: c.get('requestId'), message: 'release_live candidates error', channelError, deployError })
     throw simpleError('fetch_error', 'Failed to fetch deployment history')
   }
+
+  const channels = (channelRows ?? []).map((row) => {
+    const version = one(row.version as Relation<{ id: number, name: string, created_at: string | null }>)
+    const current = version?.name && version.created_at && !INTERNAL_VERSION_NAMES.has(version.name)
+      ? {
+        bundle_id: version.id,
+        version_name: version.name,
+        channel_id: row.id,
+        channel_name: row.name,
+        deployed_at: version.created_at,
+      } satisfies ResolvedRelease
+      : null
+    return { id: row.id, name: row.name, public: row.public, current } satisfies CandidateChannel
+  })
 
   const deployments = (deployRows ?? []).flatMap((row) => {
     const version = one(row.app_versions as Relation<{ id: number, name: string }>)
@@ -344,52 +399,74 @@ async function loadReleaseCandidates(c: Context<MiddlewareKeyVariables>, appId: 
     } satisfies ResolvedRelease]
   })
 
-  const version = versions?.[0]
-  const candidates: ReleaseCandidates = {
-    deployments,
-    latest_bundle: version?.name && version.created_at
-      ? {
-          bundle_id: version.id,
-          version_name: version.name,
-          channel_id: null,
-          channel_name: null,
-          deployed_at: version.created_at,
-        }
-      : null,
-  }
+  const candidates: ReleaseCandidates = { channels, deployments }
   await cache.putJson(cacheKey, candidates, CANDIDATES_CACHE_TTL_SECONDS)
   return candidates
 }
 
-function pickRelease(candidates: ReleaseCandidates, channelId?: number, versionName?: string): ResolvedRelease | null {
-  const { deployments, latest_bundle: latestBundle } = candidates
-  let release: ResolvedRelease | null
-  if (channelId && versionName)
-    release = deployments.find(d => d.channel_id === channelId && d.version_name === versionName) ?? null
-  else if (channelId)
-    release = deployments.find(d => d.channel_id === channelId) ?? null
-  else if (versionName)
-    release = deployments.find(d => d.version_name === versionName) ?? null
-  else
-    release = deployments[0] ?? null
+// Default channel: the first public channel in the same order devices use
+// (name, then id). Apps without a public channel fall back to the channel with
+// the latest deployment, then to the first channel.
+function pickDefaultChannel(candidates: ReleaseCandidates): CandidateChannel | null {
+  const { channels, deployments } = candidates
+  const publicChannel = channels.find(channel => channel.public)
+  if (publicChannel)
+    return publicChannel
+  for (const deployment of deployments) {
+    const channel = channels.find(item => item.id === deployment.channel_id)
+    if (channel)
+      return channel
+  }
+  return channels[0] ?? null
+}
 
-  if (release || channelId)
-    return release
-  // Bundle never deployed through a channel (or history pruned): fall back to
-  // the bundle upload time so the page still shows its activity.
-  if (latestBundle && (!versionName || latestBundle.version_name === versionName))
-    return latestBundle
+// An explicit channel wins. A version-only request (release banner) opens the
+// default channel when that version was deployed there, otherwise the channel
+// that received it last.
+function pickChannel(candidates: ReleaseCandidates, channelId?: number, versionName?: string): CandidateChannel | null {
+  const { channels, deployments } = candidates
+  if (channelId) {
+    const requested = channels.find(channel => channel.id === channelId)
+    if (requested)
+      return requested
+  }
+  const defaultChannel = pickDefaultChannel(candidates)
+  if (!versionName)
+    return defaultChannel
+  const onVersion = deployments.filter(deployment => deployment.version_name === versionName)
+  if (defaultChannel && (onVersion.some(deployment => deployment.channel_id === defaultChannel.id) || defaultChannel.current?.version_name === versionName))
+    return defaultChannel
+  for (const deployment of onVersion) {
+    const channel = channels.find(item => item.id === deployment.channel_id)
+    if (channel)
+      return channel
+  }
+  return channels.find(channel => channel.current?.version_name === versionName) ?? defaultChannel
+}
+
+function pickRelease(candidates: ReleaseCandidates, channel: CandidateChannel, versionName?: string): ResolvedRelease | null {
+  const onChannel = candidates.deployments.filter(deployment => deployment.channel_id === channel.id)
+  const release = versionName
+    ? onChannel.find(deployment => deployment.version_name === versionName)
+    : onChannel[0]
+  if (release)
+    return { ...release, channel_name: channel.name }
+  // Deploy history pruned or never recorded: fall back to the bundle the
+  // channel serves right now, timed from its upload.
+  if (channel.current && (!versionName || channel.current.version_name === versionName))
+    return channel.current
   return null
 }
 
-// Older bundle that never went through a channel and is not the newest upload.
-// Only reachable with an explicit version_name, cached per app + version.
-async function loadNamedBundle(c: Context<MiddlewareKeyVariables>, appId: string, versionName: string): Promise<ResolvedRelease | null> {
+// Bundle named explicitly but never deployed on the channel (or history
+// pruned): show its activity on the channel since its upload.
+// Cached per app + version.
+async function loadNamedBundle(c: Context<MiddlewareKeyVariables>, appId: string, versionName: string, channel: CandidateChannel): Promise<ResolvedRelease | null> {
   const cache = new CacheHelper(c)
   const cacheKey = cache.buildRequest(CANDIDATES_CACHE_PATH, { appId, version: versionName, bucket: cacheBucket(CANDIDATES_CACHE_TTL_SECONDS) })
   const cached = await cache.matchJson<{ bundle: ResolvedRelease | null }>(cacheKey)
   if (cached)
-    return cached.bundle
+    return cached.bundle ? { ...cached.bundle, channel_id: channel.id, channel_name: channel.name } : null
 
   const { data, error } = await supabaseAdmin(c)
     .from('app_versions')
@@ -415,14 +492,15 @@ async function loadNamedBundle(c: Context<MiddlewareKeyVariables>, appId: string
       }
     : null
   await cache.putJson(cacheKey, { bundle }, CANDIDATES_CACHE_TTL_SECONDS)
-  return bundle
+  return bundle ? { ...bundle, channel_id: channel.id, channel_name: channel.name } : null
 }
 
-async function readAdoption(c: Context<MiddlewareKeyVariables>, appId: string, channel?: VersionUsageChannel) {
+async function readAdoption(c: Context<MiddlewareKeyVariables>, appId: string, channel: VersionUsageChannel) {
   const cache = new CacheHelper(c)
   const cacheKey = cache.buildRequest(ADOPTION_CACHE_PATH, {
     appId,
-    channelId: channel?.id ? String(channel.id) : '',
+    channelId: String(channel.id ?? ''),
+    channelName: channel.name ?? '',
     bucket: cacheBucket(ADOPTION_CACHE_TTL_SECONDS),
   })
   const cached = await cache.matchJson<Record<string, number>>(cacheKey)
@@ -439,12 +517,18 @@ async function readAdoption(c: Context<MiddlewareKeyVariables>, appId: string, c
   }
 }
 
-// A request for one channel scopes activity and adoption to that channel.
-// Without a channel the view stays app-wide.
-function resolveChannelScope(release: ResolvedRelease, channelId?: number): VersionUsageChannel | undefined {
-  if (!channelId || release.channel_id !== channelId)
-    return undefined
-  return { id: release.channel_id, name: release.channel_name }
+function toChannelContext(candidates: ReleaseCandidates, channel: CandidateChannel | null): ReleaseLiveChannelContext {
+  const defaultChannel = pickDefaultChannel(candidates)
+  return {
+    channel: channel ? { id: channel.id, name: channel.name, is_default: channel.id === defaultChannel?.id } : null,
+    channels: candidates.channels.map(item => ({ id: item.id, name: item.name, is_default: item.id === defaultChannel?.id })),
+    recent_deployments: channel
+      ? candidates.deployments
+          .filter(deployment => deployment.channel_id === channel.id)
+          .slice(0, RECENT_DEPLOYMENTS_LIMIT)
+          .map(({ bundle_id: _bundleId, ...rest }) => ({ ...rest, channel_name: channel.name }))
+      : [],
+  }
 }
 
 async function readReleaseLive(
@@ -454,28 +538,30 @@ async function readReleaseLive(
   versionName?: string,
 ): Promise<ReleaseLiveResponse | ReleaseLiveEmptyResponse> {
   const candidates = await loadReleaseCandidates(c, appId)
-  const release = pickRelease(candidates, channelId, versionName)
-    ?? (versionName && !channelId ? await loadNamedBundle(c, appId, versionName) : null)
-  const recent = candidates.deployments
-    .slice(0, RECENT_DEPLOYMENTS_LIMIT)
-    .map(({ bundle_id: _bundleId, ...rest }) => rest)
+  const channel = pickChannel(candidates, channelId, versionName)
+  const context = toChannelContext(candidates, channel)
+  if (!channel)
+    return { release: null, ...context }
+
+  const release = pickRelease(candidates, channel, versionName)
+    ?? (versionName ? await loadNamedBundle(c, appId, versionName, channel) : null)
   if (!release)
-    return { release: null, recent_deployments: recent }
+    return { release: null, ...context }
 
   const now = new Date()
   const window = resolveWindow(release.deployed_at, now)
-  const channelScope = resolveChannelScope(release, channelId)
+  const channelScope: VersionUsageChannel = { id: channel.id, name: channel.name }
   const cache = new CacheHelper(c)
   const cacheKey = cache.buildRequest(ACTIVITY_CACHE_PATH, {
     appId,
-    channelId: channelScope?.id ? String(channelScope.id) : '',
+    channelId: String(channel.id),
     version: release.version_name,
     since: release.deployed_at,
     bucket: cacheBucket(ACTIVITY_CACHE_TTL_SECONDS, now.getTime()),
   })
-  const cached = await cache.matchJson<Omit<ReleaseLiveResponse, 'release' | 'recent_deployments'>>(cacheKey)
+  const cached = await cache.matchJson<ReleaseLiveActivity>(cacheKey)
   if (cached)
-    return { ...cached, release, recent_deployments: recent }
+    return { ...cached, release, ...context }
 
   // No Postgres fallback when Analytics Engine is bound: if AE is down, every
   // polling tab would otherwise move its load onto the database. The client
@@ -495,7 +581,7 @@ async function readReleaseLive(
     return acc
   }, { get: 0, install: 0, fail: 0 })
 
-  const payload: Omit<ReleaseLiveResponse, 'release' | 'recent_deployments'> = {
+  const payload: ReleaseLiveActivity = {
     window: {
       start: new Date(window.startMs).toISOString(),
       end: new Date(window.endMs).toISOString(),
@@ -515,7 +601,7 @@ async function readReleaseLive(
   }
 
   await cache.putJson(cacheKey, payload, ACTIVITY_CACHE_TTL_SECONDS)
-  return { ...payload, release, recent_deployments: recent }
+  return { ...payload, release, ...context }
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -550,6 +636,8 @@ app.post('/', middlewareAuth, async (c) => {
 })
 
 export const releaseLiveTestUtils = {
+  pickDefaultChannel,
+  pickChannel,
   pickRelease,
   pickBucketMinutes,
   resolveWindow,
@@ -558,5 +646,5 @@ export const releaseLiveTestUtils = {
   computeSuccessRate,
   buildSeriesQueryCF,
   buildFailuresQueryCF,
-  resolveChannelScope,
+  toChannelContext,
 }
