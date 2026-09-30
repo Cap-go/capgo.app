@@ -258,12 +258,15 @@ async function handleManifest(c: Context, record: Database['public']['Tables']['
     ? `orgs/${ownerOrg}/apps/${record.app_id}/`
     : null
 
-  await persistVersionManifestEntries(
+  const { inserted, alreadyPresent } = await persistVersionManifestEntries(
     c,
     { id: record.id, app_id: record.app_id },
     manifestEntries,
     { clearAppVersionsManifest: true, s3PathPrefix },
   )
+
+  if (alreadyPresent || inserted === 0)
+    return
 
   await sendEventToTracking(c, {
     channel: 'bundle',
@@ -274,7 +277,7 @@ async function handleManifest(c: Context, record: Database['public']['Tables']['
       $insert_id: `legacy-manifest:${record.id}`,
       app_id: record.app_id,
       cli_version: record.cli_version ?? 'unknown',
-      entry_count: manifestEntries.length,
+      entry_count: inserted,
       version_id: record.id,
     },
   })

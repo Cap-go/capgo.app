@@ -378,6 +378,7 @@ describe('on_version_update legacy manifest tracking', () => {
     const manifestEntries = [
       { file_name: 'index.html', file_hash: 'hash-1', s3_path: 'orgs/org-1/apps/com.cleanup.test/delta/index.html' },
       { file_name: 'main.js', file_hash: 'hash-2', s3_path: 'orgs/org-1/apps/com.cleanup.test/delta/main.js' },
+      { file_name: '', file_hash: '', s3_path: '' },
     ]
     const record = createVersion({
       cli_version: '8.29.3',
@@ -423,6 +424,28 @@ describe('on_version_update legacy manifest tracking', () => {
       user_id: undefined,
       groups: { organization: 'org-1' },
     }))
+  })
+
+  it('does not track a legacy manifest when every entry is filtered out', async () => {
+    persistVersionManifestEntries.mockResolvedValue({ inserted: 0, alreadyPresent: false })
+
+    await onVersionUpdateTestUtils.handleManifest(createContext(), createVersion({
+      manifest: [{ file_name: '', file_hash: '', s3_path: '' }],
+      user_id: 'user-1',
+    }))
+
+    expect(sendEventToTracking).not.toHaveBeenCalled()
+  })
+
+  it('does not track an already-migrated legacy manifest retry', async () => {
+    persistVersionManifestEntries.mockResolvedValue({ inserted: 0, alreadyPresent: true })
+
+    await onVersionUpdateTestUtils.handleManifest(createContext(), createVersion({
+      manifest: [{ file_name: 'index.html', file_hash: 'hash-1', s3_path: 'orgs/org-1/apps/com.cleanup.test/delta/index.html' }],
+      user_id: 'user-1',
+    }))
+
+    expect(sendEventToTracking).not.toHaveBeenCalled()
   })
 })
 
