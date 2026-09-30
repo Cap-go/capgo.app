@@ -5,8 +5,10 @@ const onboardingSource = readFileSync(new URL('../src/components/dashboard/AppOn
 const englishMessages = JSON.parse(readFileSync(new URL('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
 describe('app onboarding API key loading state', () => {
-  it.concurrent('does not render the terminal alternative before an organization exists', () => {
-    expect(onboardingSource).toContain('<div v-if="!props.preOrg && appDetailsStep === \'icon\'" class="pt-1">')
+  it.concurrent('keeps the CLI command out of app creation in every flow', () => {
+    // App creation matches onboarding everywhere; the command lives on Getting started.
+    expect(onboardingSource).not.toContain('function showCliCommand()')
+    expect(onboardingSource).not.toContain('isCliCommandVisible')
   })
 
   it.concurrent('replaces every incomplete CLI command with the shared loading treatment', () => {
@@ -47,11 +49,7 @@ describe('app onboarding API key loading state', () => {
     expect(keyLoader).not.toContain('resumeAppId.value')
   })
 
-  it.concurrent('retries API key loading from both CLI entry points', () => {
-    const showCommand = onboardingSource.slice(
-      onboardingSource.indexOf('function showCliCommand()'),
-      onboardingSource.indexOf('async function reportOnboardingPatch('),
-    )
+  it.concurrent('retries API key loading when setup resumes on Getting started', () => {
     // Post-creation setup reopens on Getting started, which resumes the app
     // through the setup-app-id mount path and retries the key load there.
     const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
@@ -64,10 +62,8 @@ describe('app onboarding API key loading state', () => {
       mountedFlow.indexOf('finally {'),
     )
 
-    expect(showCommand).toContain('startApiKeyLoading()')
     expect(preOrgSetupResume).toContain('startApiKeyLoading()')
     expect(existingOrgSetupResume).toContain('startApiKeyLoading()')
-    expect(onboardingSource).toContain('@click="showCliCommand"')
     expect(onboardingSource).not.toContain('function goToInstallStep()')
   })
 

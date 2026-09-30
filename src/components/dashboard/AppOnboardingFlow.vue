@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { BuilderPlatform } from '~/services/builderOnboardingChecklist'
 import type { CliAiPromptOrganization } from '~/services/cliAiPrompt'
+import type { OrganizationApp } from '~/stores/organization'
 import type { Database, Json } from '~/types/supabase.types'
 import type { OnboardingABTestAssignment } from '~/utils/onboardingABTests'
 import type { OnboardingChannelEvent, OnboardingChannelEventProperties, OnboardingChannelStage } from '~/utils/onboardingChannelAnalytics'
@@ -23,7 +24,6 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconCopy from '~icons/ion/copy-outline'
-import IconAppWindow from '~icons/lucide/app-window'
 import IconArrowLeft from '~icons/lucide/arrow-left'
 import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheck from '~icons/lucide/check'
@@ -212,7 +212,6 @@ const isImportingStoreIcon = ref(false)
 const isResumeIconLoading = ref(false)
 const isHidingSplash = ref(false)
 const isHandingOff = ref(false)
-const isCliCommandVisible = ref(false)
 const apiKey = ref<string | null>(null)
 const createdApp = ref<AppRow | null>(null)
 const preOrgCreatedOrganizationId = ref<string | null>(null)
@@ -926,8 +925,8 @@ async function resetOnboardingForm() {
   selectedIntent.value = null
   applyOnboardingABTestAssignments({})
   webNativeRecommendationDismissed.value = false
-  existingApp.value = props.preOrg ? true : null
-  existingAppSetup.value = props.preOrg ? 'manual' : null
+  existingApp.value = true
+  existingAppSetup.value = 'manual'
   appName.value = ''
   manualAppId.value = ''
   hasEditedAppId.value = false
@@ -2339,7 +2338,16 @@ async function createAppRecord(options?: { nextStep?: 'organization' }): Promise
       .eq('app_id', appId)
       .single()
 
-    createdApp.value = refreshed ?? responseData
+    const createdRow = refreshed ?? responseData
+    createdApp.value = createdRow
+    organizationStore.upsertOrganizationApp({
+      app_id: createdRow.app_id,
+      icon_url: createdRow.icon_url,
+      name: createdRow.name,
+      need_onboarding: createdRow.need_onboarding,
+      onboarding: createdRow.onboarding as OrganizationApp['onboarding'],
+      owner_org: createdRow.owner_org,
+    })
     trackDetailsEvent('onboarding_app_creation_succeeded', {
       app_id_source: creationAppIdSource,
       has_icon: creationIconSource !== 'none',
@@ -2471,11 +2479,6 @@ async function copyBuilderCliCommand(platform: BuilderPlatform) {
   const copied = await copyText(`${builderCliCommand.value} --platform ${platform}`)
   if (copied)
     trackSuccessfulCopy('onboarding_cli_command_copied')
-}
-
-function showCliCommand() {
-  isCliCommandVisible.value = true
-  startApiKeyLoading()
 }
 
 async function reportOnboardingPatch(patch: { source?: 'manual' | 'cli' | 'mcp' | 'ai', outcome?: 'in_progress' | 'completed' | 'skipped' | 'switched_to_manual' }) {
@@ -2668,8 +2671,8 @@ onMounted(async () => {
     if (!resumed) {
       flowStep.value = 'details'
       appDetailsStep.value = 'name'
-      existingApp.value = null
-      existingAppSetup.value = null
+      existingApp.value = true
+      existingAppSetup.value = 'manual'
     }
     else if (await leaveSplashIfAlreadySetup()) {
       onboardingProgressPersistence.abort()
@@ -2826,9 +2829,6 @@ defineExpose({
               ? t('app-onboarding-title-first')
               : t('app-onboarding-title-return') }}
           </h1>
-          <p v-if="!props.preOrg" class="mt-2 text-base leading-7 text-slate-600 dark:text-slate-300">
-            {{ t('app-onboarding-subtitle') }}
-          </p>
 
           <nav class="mt-6" :aria-label="t('app-onboarding-step-details')">
             <ol class="flex items-center gap-2">
@@ -2974,53 +2974,6 @@ defineExpose({
                 </p>
               </div>
 
-              <div v-if="!props.preOrg && appDetailsStep === 'name'" class="grid gap-3 sm:grid-cols-2">
-                <button
-                  type="button"
-                  :aria-pressed="existingApp === true"
-                  class="d-btn group h-auto min-h-32 w-full items-center justify-start gap-4 whitespace-normal rounded-2xl border p-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
-                  :class="whiteCardToggleButtonClass(existingApp === true)"
-                  data-test="app-onboarding-existing-yes"
-                  @click="existingApp = true"
-                >
-                  <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary-500 text-white">
-                    <IconStore class="h-5 w-5" />
-                  </span>
-                  <span class="min-w-0 flex-1">
-                    <span class="block text-base font-semibold">{{ t('app-onboarding-existing-yes') }}</span>
-                    <span
-                      class="mt-1 block text-sm leading-6"
-                      :class="existingApp === true ? 'text-slate-600 dark:text-slate-200' : 'text-slate-500 dark:text-slate-400'"
-                    >
-                      {{ t('app-onboarding-existing-yes-helper') }}
-                    </span>
-                  </span>
-                  <IconCheck v-if="existingApp === true" class="h-5 w-5 shrink-0 text-current" />
-                </button>
-                <button
-                  type="button"
-                  :aria-pressed="existingApp === false"
-                  class="d-btn group h-auto min-h-32 w-full items-center justify-start gap-4 whitespace-normal rounded-2xl border p-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
-                  :class="whiteCardToggleButtonClass(existingApp === false)"
-                  data-test="app-onboarding-existing-no"
-                  @click="existingApp = false"
-                >
-                  <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-white dark:bg-white dark:text-slate-950">
-                    <IconAppWindow class="h-5 w-5" />
-                  </span>
-                  <span class="min-w-0 flex-1">
-                    <span class="block text-base font-semibold">{{ t('app-onboarding-existing-no') }}</span>
-                    <span
-                      class="mt-1 block text-sm leading-6"
-                      :class="existingApp === false ? 'text-slate-600 dark:text-slate-200' : 'text-slate-500 dark:text-slate-400'"
-                    >
-                      {{ t('app-onboarding-existing-no-helper') }}
-                    </span>
-                  </span>
-                  <IconCheck v-if="existingApp === false" class="h-5 w-5 shrink-0 text-current" />
-                </button>
-              </div>
-
               <div class="contents">
                 <div v-if="appDetailsStep === 'icon'" class="onboarding-icon-identity flex items-center gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-white/15 dark:bg-slate-950/90">
                   <div class="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-slate-200 ring-1 ring-slate-300 dark:bg-slate-800 dark:ring-white/10">
@@ -3067,7 +3020,6 @@ defineExpose({
                       </template>
                     </i18n-t>
                     <button
-                      v-if="props.preOrg"
                       type="button"
                       class="text-sm font-medium text-primary-500 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
                       data-test="app-onboarding-appid-learn-more"
@@ -3092,7 +3044,7 @@ defineExpose({
                   </div>
                 </div>
 
-                <div v-if="appDetailsStep === 'app_id' && (props.preOrg || existingApp === true)" class="onboarding-store-import mb-6 mt-4 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-white/15 dark:bg-slate-950/60">
+                <div v-if="appDetailsStep === 'app_id'" class="onboarding-store-import mb-6 mt-4 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-white/15 dark:bg-slate-950/60">
                   <button
                     type="button"
                     class="flex min-h-12 w-full items-center justify-between gap-3 px-4 py-3 text-left text-sm font-semibold text-slate-800 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500 dark:text-slate-200 dark:hover:bg-slate-900"
@@ -3259,59 +3211,6 @@ defineExpose({
                       <span v-else>{{ appDetailsPrimaryActionLabel }}</span>
                       <IconArrowRight v-if="!isSubmitting" class="h-4 w-4" />
                     </button>
-                  </div>
-                </div>
-              </div>
-
-              <div v-if="!props.preOrg && appDetailsStep === 'icon'" class="pt-1">
-                <button
-                  v-if="!isCliCommandVisible"
-                  type="button"
-                  class="text-[11px] text-slate-400/70 underline-offset-2 transition hover:text-slate-500 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-slate-500/70 dark:hover:text-slate-400"
-                  @click="showCliCommand"
-                >
-                  {{ t('app-onboarding-command-show') }}
-                </button>
-
-                <div
-                  v-else
-                  class="space-y-3 rounded-xl border border-slate-200/80 bg-slate-50/60 p-4 dark:border-white/10 dark:bg-slate-950/40"
-                >
-                  <div class="flex items-start justify-between gap-3">
-                    <p class="text-xs leading-5 text-slate-500 dark:text-slate-400">
-                      {{ t('app-onboarding-command-help') }}
-                    </p>
-                    <button
-                      type="button"
-                      class="shrink-0 text-[11px] text-slate-400 underline-offset-2 transition hover:text-slate-600 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-slate-500 dark:hover:text-slate-300"
-                      @click="isCliCommandVisible = false"
-                    >
-                      {{ t('app-onboarding-command-hide') }}
-                    </button>
-                  </div>
-                  <button
-                    v-if="apiKey"
-                    type="button"
-                    class="d-btn group relative h-auto min-h-0 w-full justify-start whitespace-normal rounded-xl border-0 bg-slate-950 p-4 pr-14 text-left font-normal ring-1 ring-white/10 transition hover:bg-slate-950 hover:ring-white/20"
-                    :aria-label="t('app-onboarding-command-copy')"
-                    @click="copyCliCommand"
-                  >
-                    <code class="block whitespace-pre-wrap break-all text-sm">
-                      <span class="text-slate-500">npx</span>
-                      <span class="text-sky-300"> @capgo/cli@latest</span>
-                      <span class="font-bold text-violet-300">&nbsp;{{ cliSubcommand }}</span>
-                      <span v-if="!usesBuilderSetupCommand" class="text-emerald-300">&nbsp;{{ apiKey }}</span>
-                      <template v-for="(arg, index) in cliCommandArgs" :key="`${arg}-${index}`">
-                        <span :class="index % 2 === 0 ? 'text-amber-300' : 'text-cyan-300'"> {{ arg }}</span>
-                      </template>
-                    </code>
-                    <IconCopy class="absolute right-4 top-4 h-5 w-5 text-muted-blue-300 transition group-hover:text-white" />
-                  </button>
-                  <div v-else class="rounded-xl bg-slate-950 p-4 pr-14 ring-1 ring-white/10" role="status">
-                    <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300">
-                      <Spinner size="w-5 h-5" />
-                      <span>{{ t('app-onboarding-command-apikey-loading') }}</span>
-                    </div>
                   </div>
                 </div>
               </div>

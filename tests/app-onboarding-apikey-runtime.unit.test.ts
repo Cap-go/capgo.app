@@ -40,6 +40,7 @@ const runtimeMocks = vi.hoisted(() => {
       currentOrganization: { gid: 'org-runtime-onboarding', name: 'Runtime organization' },
       organizations: [],
       updateAppOnboarding: vi.fn(),
+      upsertOrganizationApp: vi.fn(),
     },
     query: {} as Record<string, string>,
     router: {
@@ -140,7 +141,6 @@ async function click(container: Element, selector: string) {
 
 async function reachIconStep(container: Element) {
   await vi.waitFor(() => expect(container.querySelector('[data-test="app-onboarding-name"]')).not.toBeNull())
-  await click(container, '[data-test="app-onboarding-existing-no"]')
 
   const nameInput = element<HTMLInputElement>(container, '[data-test="app-onboarding-name"]')
   nameInput.value = 'Runtime onboarding app'
@@ -150,15 +150,7 @@ async function reachIconStep(container: Element) {
   await click(container, '[data-test="app-onboarding-continue"]')
   await vi.waitFor(() => expect(container.querySelector('[data-test="app-onboarding-skip-app-id"]')).not.toBeNull())
   await click(container, '[data-test="app-onboarding-skip-app-id"]')
-  await vi.waitFor(() => expect(container.textContent).toContain('app-onboarding-command-show'))
-}
-
-function buttonWithText(container: Element, text: string) {
-  const button = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
-    .find(candidate => candidate.textContent?.includes(text))
-  if (!button)
-    throw new Error(`Missing onboarding button with text: ${text}`)
-  return button
+  await vi.waitFor(() => expect(container.textContent).toContain('app-onboarding-icon-step-title'))
 }
 
 beforeEach(() => {
@@ -221,27 +213,6 @@ describe('app onboarding API key runtime loading', () => {
       runtimeMocks.organizationStore.currentOrganization.gid,
       undefined,
     )
-  })
-
-  it('retries a settled failed load when the CLI command is revealed', async () => {
-    const loadError = new Error('transient API-key failure')
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
-    runtimeMocks.findUsablePlainApiKey
-      .mockRejectedValueOnce(loadError)
-      .mockResolvedValueOnce('runtime-retried-api-key')
-
-    try {
-      const { container } = await mountFlow()
-      await vi.waitFor(() => expect(consoleError).toHaveBeenCalledWith('Cannot ensure API key', loadError))
-      await reachIconStep(container)
-
-      buttonWithText(container, 'app-onboarding-command-show').click()
-
-      await vi.waitFor(() => expect(runtimeMocks.findUsablePlainApiKey).toHaveBeenCalledTimes(2))
-    }
-    finally {
-      consoleError.mockRestore()
-    }
   })
 
   it('retries a settled failed load when setup continues on Getting started', async () => {

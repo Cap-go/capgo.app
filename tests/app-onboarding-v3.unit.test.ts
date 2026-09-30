@@ -41,7 +41,7 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain('id="app-onboarding-v2-store-url"')
     expect(onboardingSource).toContain('const isStoreImportOpen = ref(false)')
     expect(onboardingSource).toContain('data-test="app-onboarding-toggle-store-import"')
-    expect(onboardingSource).toContain('v-if="appDetailsStep === \'app_id\' && (props.preOrg || existingApp === true)"')
+    expect(onboardingSource).toContain('<div v-if="appDetailsStep === \'app_id\'" class="onboarding-store-import')
     expect(onboardingSource).toContain(':aria-expanded="isStoreImportOpen"')
     expect(onboardingSource).toContain('v-if="isStoreImportOpen" id="app-onboarding-store-import-panel"')
     expect(onboardingSource).toContain('trackDetailsEvent(isStoreImportOpen.value ? \'onboarding_store_import_shown\' : \'onboarding_store_import_hidden\')')
@@ -57,7 +57,7 @@ describe('pre-organization onboarding v3', () => {
   it.concurrent('uses imported API metadata in the editable App ID and current icon preview', () => {
     const metadataImport = sliceBetween(onboardingSource, 'async function importStoreMetadata()', 'function cancelPendingStoreIconImport()')
     const appleLookup = sliceBetween(onboardingSource, 'async function fetchAppleBundleId(rawUrl: string)', 'async function importStoreMetadata()')
-    const detailsPreview = sliceBetween(onboardingSource, 'v-if="appDetailsStep !== \'icon\'"', '<div v-if="!props.preOrg && appDetailsStep === \'name\'"')
+    const detailsPreview = sliceBetween(onboardingSource, 'v-if="appDetailsStep !== \'icon\'"', '<div class="contents">')
     const appIdField = sliceBetween(onboardingSource, 'id="app-onboarding-app-id"', '<div class="mt-2 flex flex-wrap items-baseline')
     const appIdSource = sliceBetween(onboardingSource, 'const selectedAppIdSource = computed', 'const selectedAppIconSource = computed')
 
@@ -119,12 +119,12 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).not.toContain('v-if="false && storeScreenshotPreview"')
   })
 
-  it.concurrent('keeps the existing-app choice reachable for existing-organization creation', () => {
-    expect(onboardingSource).toContain('v-if="!props.preOrg && appDetailsStep === \'name\'" class="grid gap-3 sm:grid-cols-2"')
-    expect(onboardingSource).toContain('existingApp.value = props.preOrg ? true : null')
-    expect(onboardingSource).toContain('toast.error(t(\'app-onboarding-toast-existing-required\'))')
-    const appChoice = sliceBetween(onboardingSource, 'v-if="!props.preOrg && appDetailsStep === \'name\'"', '<div class="contents">')
-    expect(appChoice.match(/class="d-btn group h-auto min-h-32/g)).toHaveLength(2)
+  it.concurrent('uses the onboarding app details for existing-organization creation', () => {
+    expect(onboardingSource).not.toContain('data-test="app-onboarding-existing-no"')
+    expect(onboardingSource).not.toContain('existingApp.value = props.preOrg ? true : null')
+    const reset = sliceBetween(onboardingSource, 'async function resetOnboardingForm()', 'function showWelcomeOnDesktop()')
+    expect(reset).toContain('existingApp.value = true')
+    expect(reset).toContain('existingAppSetup.value = \'manual\'')
   })
 
   it.concurrent('does not restore a skipped generated App ID as a manual choice', () => {

@@ -34,6 +34,7 @@ const writerMocks = vi.hoisted(() => ({
     currentOrganization: null as { gid: string, name: string, onboarding?: unknown } | null,
     organizations: [],
     updateAppOnboarding: vi.fn(),
+    upsertOrganizationApp: vi.fn(),
   },
   refreshUser: vi.fn(),
   replaceUserOnboardingIfUnchanged: vi.fn(),
