@@ -4207,6 +4207,17 @@ export type Database = {
         Returns: undefined
       }
       audit_logs_allowed_orgs: { Args: never; Returns: string[] }
+      billing_cycle_anchor: {
+        Args: { p_period_end: string; p_period_start: string }
+        Returns: string
+      }
+      billing_cycle_for_anchor: {
+        Args: { p_now?: string; p_period_end: string; p_period_start: string }
+        Returns: {
+          cycle_end: string
+          cycle_start: string
+        }[]
+      }
       billing_period_completed_cycle: {
         Args: { p_anchor_start: string; p_as_of?: string }
         Returns: {
@@ -4753,6 +4764,13 @@ export type Database = {
           transfer_history: Json[]
           updated_at: string
           user_id: string
+        }[]
+      }
+      get_org_billing_cycle: {
+        Args: { orgid: string }
+        Returns: {
+          cycle_end: string
+          cycle_start: string
         }[]
       }
       get_org_build_time_unit: {
