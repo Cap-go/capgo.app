@@ -207,7 +207,7 @@ function isSharedKeySecretRevoked(key: Pick<ApiKeyRow, 'owner_org_id' | 'shared_
     return false
   if (!key.shared_secret_user_id)
     return true
-  return !!key.shared_secret_expires_at && new Date(key.shared_secret_expires_at).getTime() <= Date.now()
+  return !!key.shared_secret_expires_at && new Date(key.shared_secret_expires_at).getTime() <= now.value.getTime()
 }
 
 // Shared keys are bound to a single org; edits and creation must stay inside it.
