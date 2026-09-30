@@ -282,12 +282,12 @@ test.describe('API Key Management', () => {
     await expect(page.getByText('Added new API key successfully').first()).toBeVisible()
     const keyRow = await expectApiKeyRow(page, keyName)
     await expect(keyRow).toContainText('App Preview')
-    await expect(keyRow.locator('td').nth(1)).toContainText('-')
+    await expect(keyRow.locator('td').nth(2)).toContainText('-')
 
     await page.reload()
     const reloadedKeyRow = await expectApiKeyRow(page, keyName)
     await expect(reloadedKeyRow).toContainText('App Preview')
-    await expect(reloadedKeyRow.locator('td').nth(1)).toContainText('-')
+    await expect(reloadedKeyRow.locator('td').nth(2)).toContainText('-')
 
     const supabase = getSupabaseClient()
     const { data: key, error: keyError } = await supabase
