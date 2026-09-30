@@ -2806,7 +2806,7 @@ defineExpose({
       </div>
 
       <div v-else class="onboarding-flow-content space-y-6">
-        <header v-if="!showSetupChecklist && !showBuilderChecklist" class="onboarding-flow-header">
+        <header v-if="!showSetupChecklist && !showBuilderChecklist && (!props.setupAppId || showSetupBackButton)" class="onboarding-flow-header">
           <div class="flex items-center gap-2">
             <button
               v-if="showSetupBackButton"
@@ -2819,49 +2819,51 @@ defineExpose({
             >
               <IconArrowLeft class="h-4 w-4" aria-hidden="true" />
             </button>
-            <div class="onboarding-flow-badge inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-sm font-semibold text-slate-700 shadow-sm dark:border-white/15 dark:bg-slate-900/95 dark:text-slate-200">
+            <div v-if="!props.setupAppId" class="onboarding-flow-badge inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-sm font-semibold text-slate-700 shadow-sm dark:border-white/15 dark:bg-slate-900/95 dark:text-slate-200">
               <IconSparkles class="h-4 w-4" />
               {{ t('app-onboarding-badge') }}
             </div>
           </div>
-          <h1 class="onboarding-flow-title mt-4 text-2xl font-semibold text-slate-950 sm:text-3xl dark:text-white">
-            {{ props.onboarding
-              ? t('app-onboarding-title-first')
-              : t('app-onboarding-title-return') }}
-          </h1>
+          <template v-if="!props.setupAppId">
+            <h1 class="onboarding-flow-title mt-4 text-2xl font-semibold text-slate-950 sm:text-3xl dark:text-white">
+              {{ props.onboarding
+                ? t('app-onboarding-title-first')
+                : t('app-onboarding-title-return') }}
+            </h1>
 
-          <nav class="mt-6" :aria-label="t('app-onboarding-step-details')">
-            <ol class="flex items-center gap-2">
-              <li
-                v-for="(entry, index) in onboardingProgressSteps"
-                :key="entry.id"
-                class="flex min-w-0 flex-1 items-center gap-2"
-                :aria-current="currentProgressStepId === entry.id ? 'step' : undefined"
-              >
-                <span
-                  class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold"
-                  :class="index < currentStepIndex ? 'bg-emerald-500 text-white' : currentProgressStepId === entry.id ? 'bg-primary-500 text-white' : 'bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-400'"
+            <nav class="mt-6" :aria-label="t('app-onboarding-step-details')">
+              <ol class="flex items-center gap-2">
+                <li
+                  v-for="(entry, index) in onboardingProgressSteps"
+                  :key="entry.id"
+                  class="flex min-w-0 flex-1 items-center gap-2"
+                  :aria-current="currentProgressStepId === entry.id ? 'step' : undefined"
                 >
-                  <IconCheck v-if="index < currentStepIndex" class="h-3.5 w-3.5" />
-                  <span v-else>{{ index + 1 }}</span>
-                </span>
-                <span
-                  class="hidden truncate text-sm font-medium sm:block"
-                  :class="currentProgressStepId === entry.id ? 'text-slate-950 dark:text-white' : index < currentStepIndex ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-400 dark:text-slate-500'"
-                >
-                  {{ entry.label }}
-                </span>
-                <span
-                  v-if="index < onboardingProgressSteps.length - 1"
-                  class="mx-1 hidden h-px flex-1 bg-slate-200 sm:block dark:bg-white/15"
-                  aria-hidden="true"
-                />
-              </li>
-            </ol>
-            <div class="mt-3 h-1 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800" aria-hidden="true">
-              <div class="h-full rounded-full bg-primary-500 transition-all duration-300" :style="{ width: stepProgress }" />
-            </div>
-          </nav>
+                  <span
+                    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold"
+                    :class="index < currentStepIndex ? 'bg-emerald-500 text-white' : currentProgressStepId === entry.id ? 'bg-primary-500 text-white' : 'bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-400'"
+                  >
+                    <IconCheck v-if="index < currentStepIndex" class="h-3.5 w-3.5" />
+                    <span v-else>{{ index + 1 }}</span>
+                  </span>
+                  <span
+                    class="hidden truncate text-sm font-medium sm:block"
+                    :class="currentProgressStepId === entry.id ? 'text-slate-950 dark:text-white' : index < currentStepIndex ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-400 dark:text-slate-500'"
+                  >
+                    {{ entry.label }}
+                  </span>
+                  <span
+                    v-if="index < onboardingProgressSteps.length - 1"
+                    class="mx-1 hidden h-px flex-1 bg-slate-200 sm:block dark:bg-white/15"
+                    aria-hidden="true"
+                  />
+                </li>
+              </ol>
+              <div class="mt-3 h-1 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800" aria-hidden="true">
+                <div class="h-full rounded-full bg-primary-500 transition-all duration-300" :style="{ width: stepProgress }" />
+              </div>
+            </nav>
+          </template>
         </header>
 
         <div v-if="props.preOrg && (flowStep === 'intent' || flowStep === 'publish_app_question')" class="onboarding-intent-card rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
