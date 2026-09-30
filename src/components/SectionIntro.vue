@@ -66,7 +66,7 @@ function dismiss() {
     :aria-label="t(config.title)"
     data-test="section-intro"
   >
-    <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-3">
       <h1 v-if="showHeading" class="sr-only lg:not-sr-only text-xl font-semibold tracking-tight text-slate-900 first-letter:uppercase dark:text-white">
         {{ t(config.title) }}
       </h1>
@@ -82,6 +82,10 @@ function dismiss() {
         <IconInfo class="w-4 h-4" aria-hidden="true" />
         {{ t(`section-intro-question-${section}`) }}
       </button>
+      <!-- Page-level controls share the title row instead of adding a row of their own. -->
+      <div v-if="$slots.actions" class="w-full sm:w-auto sm:ml-auto">
+        <slot name="actions" />
+      </div>
     </div>
 
     <!-- Dismissible callout: the close button is the standard corner "×". -->

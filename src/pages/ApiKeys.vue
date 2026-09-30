@@ -1787,37 +1787,24 @@ getKeys()
               </template>
             </DataTable>
           </div>
-          <p class="mt-6 ml-4">
-            {{ t('api-keys-are-used-for-cli-and-public-api') }}
-          </p>
-          <div class="mb-2 ml-4">
+          <p class="px-4 mt-4 text-sm text-slate-500 sm:px-0 dark:text-slate-400">
+            {{ t('api-keys-are-used-for-cli-and-public-api') }}:
             <a
-              class="inline-flex items-center text-blue-500 underline rounded-sm focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 focus:outline-none"
+              class="inline-flex items-center gap-1 font-medium text-blue-700 rounded-sm hover:underline dark:text-azure-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500"
               href="https://capgo.app/docs/cli/reference/key/"
               target="_blank"
               rel="noopener noreferrer"
               :aria-label="`${t('cli-doc')} (opens in new tab)`"
-            >
-              {{ t('cli-doc') }}
-              <svg class="w-3 h-3 ml-1" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                <path fill-rule="evenodd" d="M4.25 5.5a.75.75 0 00-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 00.75-.75v-4a.75.75 0 011.5 0v4A2.25 2.25 0 0112.75 17h-8.5A2.25 2.25 0 012 14.75v-8.5A2.25 2.25 0 014.25 4h5a.75.75 0 010 1.5h-5z" clip-rule="evenodd" />
-                <path fill-rule="evenodd" d="M6.194 12.753a.75.75 0 001.06.053L16.5 4.44v2.81a.75.75 0 001.5 0v-4.5a.75.75 0 00-.75-.75h-4.5a.75.75 0 000 1.5h2.553l-9.056 8.194a.75.75 0 00-.053 1.06z" clip-rule="evenodd" />
-              </svg>
-            </a>
+            >{{ t('cli-doc') }}</a>
+            <span aria-hidden="true">·</span>
             <a
-              class="inline-flex items-center ml-1 text-blue-500 underline rounded-sm focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 focus:outline-none"
+              class="inline-flex items-center gap-1 font-medium text-blue-700 rounded-sm hover:underline dark:text-azure-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500"
               href="https://capgo.app/docs/public-api/api-keys/"
               target="_blank"
               rel="noopener noreferrer"
               :aria-label="`${t('api-doc')} (opens in new tab)`"
-            >
-              {{ t('api-doc') }}
-              <svg class="w-3 h-3 ml-1" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                <path fill-rule="evenodd" d="M4.25 5.5a.75.75 0 00-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 00.75-.75v-4a.75.75 0 011.5 0v4A2.25 2.25 0 0112.75 17h-8.5A2.25 2.25 0 012 14.75v-8.5A2.25 2.25 0 014.25 4h5a.75.75 0 010 1.5h-5z" clip-rule="evenodd" />
-                <path fill-rule="evenodd" d="M6.194 12.753a.75.75 0 001.06.053L16.5 4.44v2.81a.75.75 0 001.5 0v-4.5a.75.75 0 00-.75-.75h-4.5a.75.75 0 000 1.5h2.553l-9.056 8.194a.75.75 0 00-.053 1.06z" clip-rule="evenodd" />
-              </svg>
-            </a>
-          </div>
+            >{{ t('api-doc') }}</a>
+          </p>
         </div>
       </div>
 

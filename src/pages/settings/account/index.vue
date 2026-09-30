@@ -29,6 +29,7 @@ const version = import.meta.env.VITE_APP_VERSION
 const { locale, t } = useI18n()
 const supabase = useSupabase()
 const displayStore = useDisplayStore()
+displayStore.NavTitle = t('account')
 const router = useRouter()
 const route = useRoute()
 const main = useMainStore()
