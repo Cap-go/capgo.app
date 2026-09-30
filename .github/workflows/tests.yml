@@ -320,7 +320,7 @@ jobs:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     name: Run backend tests (shard ${{ matrix.shard }})
     permissions:
       contents: read
@@ -458,7 +458,7 @@ jobs:
       - name: Run backend integration tests
         env:
           VITEST_SHARD: ${{ matrix.shard }}
-        run: bun run supabase:with-env -- bunx vitest run --exclude=tests/*.unit.test.ts --exclude=tests/cli* --exclude=tests/published-cli-rpc-contract.test.ts --exclude=tests/read-replica-schema-catalog.test.ts --exclude=tests/updates* --exclude=tests/stats* --exclude=tests/channel_self* --exclude=tests/channel-rate-limit.test.ts $(sed 's|^|--exclude=|' tests/tinbase-db-tests.txt | tr '\n' ' ') --shard="$VITEST_SHARD"
+        run: bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run --exclude=tests/*.unit.test.ts --exclude=tests/cli* --exclude=tests/published-cli-rpc-contract.test.ts --exclude=tests/read-replica-schema-catalog.test.ts --exclude=tests/updates* --exclude=tests/stats* --exclude=tests/channel_self* --exclude=tests/channel-rate-limit.test.ts $(sed 's|^|--exclude=|' tests/tinbase-db-tests.txt | tr '\n' ' ') --shard="$VITEST_SHARD"
       - name: Show Edge server logs after backend test failure
         if: failure() && steps.bootstrap_edge_server.outputs.log_path != ''
         run: |
@@ -490,7 +490,7 @@ jobs:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     name: Run backend plugin tests (serial)
     permissions:
       contents: read
@@ -569,7 +569,7 @@ jobs:
             done
           done
       - name: Run backend plugin integration tests (serial)
-        run: bun run supabase:with-env -- bunx vitest run tests/updates*.test.ts tests/stats*.test.ts tests/channel_self*.test.ts tests/channel-rate-limit.test.ts --exclude=tests/*.unit.test.ts --exclude=tests/stats-export-cors.test.ts --no-file-parallelism --maxWorkers=1 --maxConcurrency=1
+        run: bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run tests/updates*.test.ts tests/stats*.test.ts tests/channel_self*.test.ts tests/channel-rate-limit.test.ts --exclude=tests/*.unit.test.ts --exclude=tests/stats-export-cors.test.ts --no-file-parallelism --maxWorkers=1 --maxConcurrency=1
       - name: Show Edge server logs after backend plugin test failure
         if: failure() && steps.bootstrap_edge_server.outputs.log_path != ''
         run: |
@@ -595,12 +595,12 @@ jobs:
           bun scripts/supabase-worktree.ts stop --no-backup || true
 
 
-  # SQL/schema checks split so each 5-minute job has headroom after cold Supabase start.
+  # Keep SQL/schema checks split so each job stays focused after a cold Supabase start.
   test_backend_sql:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     name: Run backend SQL checks
     permissions:
       contents: read
@@ -670,7 +670,7 @@ jobs:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     name: Run backend SQL catalog checks
     permissions:
       contents: read
@@ -726,7 +726,7 @@ jobs:
           export BACKGROUND_WAIT_ON="${SUPABASE_FUNCTIONS_HEALTH_URL:?Missing isolated Supabase health URL}"
           bash .github/scripts/start-background-service.sh
       - name: Run read-replica schema catalog test
-        run: bun run supabase:with-env -- bunx vitest run tests/read-replica-schema-catalog.test.ts --no-file-parallelism --maxWorkers=1
+        run: bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run tests/read-replica-schema-catalog.test.ts --no-file-parallelism --maxWorkers=1
       - name: Stop background services
         if: always()
         run: |
@@ -742,7 +742,7 @@ jobs:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     name: Run Cloudflare Workers tests (shard ${{ matrix.shard }})
     permissions:
       contents: read
@@ -852,7 +852,7 @@ jobs:
       - name: Run Cloudflare Workers integration tests
         env:
           VITEST_SHARD: ${{ matrix.shard }}
-        run: bun run supabase:with-env -- bunx vitest run --exclude=tests/cli* --exclude=tests/published-cli-rpc-contract.test.ts --exclude=tests/*.unit.test.ts $(sed 's|^|--exclude=|' tests/tinbase-db-tests.txt | tr '\n' ' ') --config vitest.config.cloudflare.ts --shard="$VITEST_SHARD"
+        run: bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run --exclude=tests/cli* --exclude=tests/published-cli-rpc-contract.test.ts --exclude=tests/*.unit.test.ts $(sed 's|^|--exclude=|' tests/tinbase-db-tests.txt | tr '\n' ' ') --config vitest.config.cloudflare.ts --shard="$VITEST_SHARD"
       - name: Show Cloudflare Worker logs after Cloudflare test failure
         if: failure() && steps.start_cloudflare_workers.outputs.log_path != ''
         run: |
@@ -885,7 +885,7 @@ jobs:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     name: Run Cloudflare plugin tests (serial)
     permissions:
       contents: read
@@ -968,7 +968,7 @@ jobs:
             sleep "${attempt}"
           done
       - name: Run Cloudflare plugin integration tests (serial)
-        run: bun run supabase:with-env -- bun run test:cloudflare:plugin
+        run: bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bun run test:cloudflare:plugin
       - name: Show Cloudflare Worker logs after plugin test failure
         if: failure() && steps.start_cloudflare_workers.outputs.log_path != ''
         run: |
@@ -999,7 +999,7 @@ jobs:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 7
+    timeout-minutes: 10
     name: Run Playwright tests (shard ${{ matrix.shard }})
     permissions:
       contents: read
@@ -1100,7 +1100,7 @@ jobs:
             tcp:127.0.0.1:${{ steps.start_playwright_services.outputs.stripe_port }} \
             "file:${{ github.workspace }}/.context/playwright/gha-backend.ready" \
             http-get://localhost:5173 \
-            --timeout 180000 --interval 500 --log
+            --timeout 420000 --interval 500 --log
       - name: Run Playwright tests
         env:
           SKIP_STRIPE_EMULATOR_START: 'true'
@@ -1451,7 +1451,7 @@ jobs:
     # changes must run them too (they are excluded from the backend shards).
     if: needs.changes.outputs.run_cli == 'true' || needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     name: Run Capgo CLI integration tests
     permissions:
       contents: read
@@ -1508,9 +1508,9 @@ jobs:
           bash .github/scripts/start-background-service.sh
       - name: Run Capgo CLI integration tests
         run: |
-          bun run supabase:with-env -- bunx vitest run tests/cli* --exclude=tests/cli-min-version.test.ts --exclude=tests/cli-new-encryption.test.ts
-          bun run supabase:with-env -- bunx vitest run tests/cli-min-version.test.ts --no-file-parallelism --maxWorkers=1
-          bun run supabase:with-env -- bunx vitest run tests/cli-new-encryption.test.ts --no-file-parallelism --maxWorkers=1
+          bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run tests/cli* --exclude=tests/cli-min-version.test.ts --exclude=tests/cli-new-encryption.test.ts
+          bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run tests/cli-min-version.test.ts --no-file-parallelism --maxWorkers=1
+          bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run tests/cli-new-encryption.test.ts --no-file-parallelism --maxWorkers=1
       - name: Show CLI Edge server logs after failure
         if: failure() && steps.bootstrap_cli_edge_server.outputs.log_path != ''
         run: |
@@ -1603,7 +1603,7 @@ jobs:
       - name: Run published CLI contract unit checks
         run: bunx vitest run tests/published-cli-rpc-contract.unit.test.ts
       - name: Run published CLI contract against PR schema
-        run: bun run supabase:with-env -- bunx vitest run tests/published-cli-rpc-contract.test.ts --no-file-parallelism --maxWorkers=1
+        run: bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run tests/published-cli-rpc-contract.test.ts --no-file-parallelism --maxWorkers=1
       - name: Show published CLI Edge server logs after failure
         if: failure() && steps.bootstrap_published_cli_edge_server.outputs.log_path != ''
         run: |

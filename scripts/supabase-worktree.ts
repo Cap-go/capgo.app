@@ -344,9 +344,28 @@ function runSupabaseStreaming(args: string[], repoRoot: string): Promise<{ statu
   })
 }
 
-function isTransientDockerPortBindFailure(output: string): boolean {
-  return /address already in use/i.test(output)
-    || /failed to bind host port/i.test(output)
+export type TransientSupabaseStartFailure = 'docker_image_pull' | 'docker_port_bind'
+
+/**
+ * Classify only infrastructure failures that are safe to retry before tests run.
+ * Keep generic HTTP 5xx responses out of this classifier so application failures
+ * and deterministic Supabase configuration errors still fail immediately.
+ */
+export function getTransientSupabaseStartFailure(output: string): TransientSupabaseStartFailure | null {
+  if (/address already in use/i.test(output) || /failed to bind host port/i.test(output))
+    return 'docker_port_bind'
+
+  const lines = output.split(/\r?\n/)
+  const dockerPullContext = /failed to pull docker image|pulling image|docker\.io|(?:container|image) registry|failed to resolve reference|failed to fetch anonymous token|error response from daemon[^\n]*(?:pull|image|manifest|blob|registry)/i
+  const transientPullSignal = /toomanyrequests|too many requests|data limit exceeded|unexpected eof|tls handshake timeout|connection reset by peer|context deadline exceeded|i\/o timeout|(?:status|response|request)[^\n]{0,80}\b(?:429|500|502|503|504)\b|\b(?:429|500|502|503|504)\b[^\n]{0,80}(?:status|response)/i
+
+  for (let index = 0; index < lines.length; index++) {
+    const nearbyOutput = lines.slice(Math.max(0, index - 3), index + 4).join('\n')
+    if (dockerPullContext.test(nearbyOutput) && transientPullSignal.test(nearbyOutput))
+      return 'docker_image_pull'
+  }
+
+  return null
 }
 
 function getCloudflareWorkerPorts(): number[] {
@@ -481,9 +500,9 @@ function removeLeftoverWorktreeContainers(projectId: string): void {
 }
 
 /**
- * `supabase start` can fail on GitHub runners with a transient Docker port bind
- * (`address already in use`) after a partial start/stop. Retry only that class of
- * failure so permanent start errors fail fast.
+ * `supabase start` can fail on GitHub runners with transient Docker port binds
+ * or image-pull failures before tests start. Retry only classified infrastructure
+ * failures so permanent start and application errors fail fast.
  */
 async function runSupabaseStartWithRetry(args: string[], repoRoot: string): Promise<number> {
   const { cfg } = ensureWorktreeSupabaseDir(repoRoot)
@@ -500,10 +519,13 @@ async function runSupabaseStartWithRetry(args: string[], repoRoot: string): Prom
     const { status, output } = await runSupabaseStreaming(args, repoRoot)
     if (status === 0)
       return 0
-    const canRetry = attempt < maxAttempts && isTransientDockerPortBindFailure(output)
-    if (!canRetry)
+    const transientFailure = getTransientSupabaseStartFailure(output)
+    if (attempt >= maxAttempts || transientFailure === null) {
+      console.error(`SUPABASE_START_FINAL_FAILURE=${transientFailure ?? 'non_transient'}`)
       return status
-    console.error(`Supabase start hit a transient Docker port bind (attempt ${attempt}/${maxAttempts}); stopping and retrying...`)
+    }
+    const reason = transientFailure === 'docker_port_bind' ? 'Docker port bind' : 'Docker image pull'
+    console.error(`Supabase start hit a transient ${reason} failure (attempt ${attempt}/${maxAttempts}); stopping and retrying...`)
     runSupabase(['stop', '--no-backup'], repoRoot)
     removeLeftoverWorktreeContainers(cfg.projectId)
     freeHostPorts(ports)
@@ -600,4 +622,5 @@ async function main(): Promise<number> {
   }
 }
 
-process.exitCode = await main()
+if (import.meta.main)
+  process.exitCode = await main()
