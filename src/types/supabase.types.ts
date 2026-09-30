@@ -1317,15 +1317,7 @@ export type Database = {
           build_time_unit?: number
           date?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "daily_build_time_app_id_fkey"
-            columns: ["app_id"]
-            isOneToOne: false
-            referencedRelation: "apps"
-            referencedColumns: ["app_id"]
-          },
-        ]
+        Relationships: []
       }
       daily_mau: {
         Row: {
