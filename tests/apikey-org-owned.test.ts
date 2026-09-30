@@ -177,6 +177,27 @@ describe('org-owned (shared) API keys', () => {
     expect(response.status).toBe(403)
   })
 
+  it('does not let a key manager mint a shared key with permissions they lack', async () => {
+    // org_member grants org.read_members/org.read_billing/org.create_app, which
+    // apikey_manager does not hold even though its role rank is higher.
+    const response = await apiRequest('/apikey', managerHeaders, {
+      method: 'POST',
+      body: {
+        name: 'shared-by-manager',
+        owner_org_id: ORG_ID,
+        bindings: [orgMemberBinding()],
+      },
+    })
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toMatchObject({ error: 'forbidden_binding' })
+
+    const leaked = await executeSQL<{ count: number }>(
+      'SELECT count(*)::int AS count FROM public.apikeys WHERE owner_org_id = $1 AND name = $2',
+      [ORG_ID, 'shared-by-manager'],
+    )
+    expect(leaked[0]?.count).toBe(0)
+  })
+
   it('lists the shared key for org key managers but not for members', async () => {
     const managerResponse = await apiRequest('/apikey?shared=true', managerHeaders)
     expect(managerResponse.status).toBe(200)

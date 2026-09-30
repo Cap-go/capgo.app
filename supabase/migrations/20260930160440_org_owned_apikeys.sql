@@ -1237,3 +1237,36 @@ EXECUTE FUNCTION public.audit_log_trigger();
 
 COMMENT ON TABLE public.audit_logs IS
 'Audit log for tracking changes to orgs, apps, channels, app_versions, org_users, shared (org-owned) apikeys, and their role_bindings';
+
+-- Legacy ownership probe: for a shared key the owner is its org, not the
+-- attributed user, so the answer does not change when user_id is transferred.
+CREATE OR REPLACE FUNCTION public.is_app_owner(apikey text, appid character varying)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_api_key public.apikeys%ROWTYPE;
+BEGIN
+  SELECT *
+  INTO v_api_key
+  FROM public.find_apikey_by_value(apikey)
+  LIMIT 1;
+
+  IF v_api_key.id IS NOT NULL AND v_api_key.owner_org_id IS NOT NULL THEN
+    IF public.is_apikey_expired(v_api_key.expires_at) THEN
+      RETURN false;
+    END IF;
+
+    RETURN EXISTS (
+      SELECT 1
+      FROM public.apps
+      WHERE apps.app_id = appid
+        AND apps.owner_org = v_api_key.owner_org_id
+    );
+  END IF;
+
+  RETURN public.is_app_owner(public.get_user_id(apikey), appid);
+END;
+$$;

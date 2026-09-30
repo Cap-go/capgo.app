@@ -59,7 +59,8 @@ async function withGlobalPermissionsAndBindings<T extends { rbac_id: string | nu
          FROM public.role_bindings rb
          JOIN public.roles r ON r.id = rb.role_id
          WHERE rb.principal_type = public.rbac_principal_apikey()
-           AND rb.principal_id = ANY($1::uuid[])`,
+           AND rb.principal_id = ANY($1::uuid[])
+           AND (rb.expires_at IS NULL OR rb.expires_at > now())`,
         [rbacIds],
       ),
     ])

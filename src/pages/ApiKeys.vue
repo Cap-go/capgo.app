@@ -133,6 +133,8 @@ const createAsHashed = ref(false)
 // Shared keys belong to one organization instead of the creating user
 const createAsShared = ref(false)
 const sharedKeyOrgIds = ref(new Set<string>())
+// Form values chosen before sharing was switched on, restored when it is off.
+let preSharingFormState: { createAsHashed: boolean, allowOrgCreation: boolean, selectedOrgs: string[] } | null = null
 const ownershipFilter = ref<'all' | 'personal' | 'shared'>('all')
 
 // State for expiration date
@@ -1078,8 +1080,21 @@ async function loadSharedKeyOrganizations() {
 }
 
 function onSharedKeyToggle() {
-  if (!createAsShared.value)
+  if (!createAsShared.value) {
+    if (preSharingFormState) {
+      createAsHashed.value = preSharingFormState.createAsHashed
+      allowOrgCreation.value = preSharingFormState.allowOrgCreation
+      selectedOrgsForCreation.value = preSharingFormState.selectedOrgs.filter(orgId => canSelectOrgForKey(orgId))
+      preSharingFormState = null
+      pruneAppBindings()
+    }
     return
+  }
+  preSharingFormState = {
+    createAsHashed: createAsHashed.value,
+    allowOrgCreation: allowOrgCreation.value,
+    selectedOrgs: [...selectedOrgsForCreation.value],
+  }
   // Shared keys are hashed, single-org, and never carry org.create.
   createAsHashed.value = true
   allowOrgCreation.value = false
@@ -1270,6 +1285,7 @@ async function addNewApiKey() {
   newApiKeyName.value = ''
   createAsHashed.value = false
   createAsShared.value = false
+  preSharingFormState = null
   allowOrgCreation.value = false
   appOnlyScope.value = false
   setExpirationCheckbox.value = false

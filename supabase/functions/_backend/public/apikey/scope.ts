@@ -359,31 +359,25 @@ export async function deleteManageableApiKeyById(c: Context<MiddlewareKeyVariabl
     .eq('id', apikeyId)
 }
 
-// Regenerating a shared key hands its secret to the caller, so the caller must
-// already hold every effective permission of the key: role permissions
-// (including inherited roles) at each binding scope, plus channel
-// allow-overrides on their channel.
-export async function assertCallerCanTakeOverSharedApiKey(
-  c: Context<MiddlewareKeyVariables>,
-  auth: AuthInfo,
-  targetRbacId: string,
-) {
-  if (auth.authType !== 'jwt' || !auth.userId) {
-    throw quickError(403, 'cannot_update_apikey', 'Only user sessions can regenerate shared API keys')
-  }
+type DrizzleExecutor = Pick<ReturnType<typeof getDrizzleClient>, 'execute'>
 
-  let pgClient: ReturnType<typeof getPgClient> | undefined
-  try {
-    pgClient = getPgClient(c)
-    const { rows } = await pgClient.query<{ has_bindings: boolean, missing_permission: string | null }>(
-      `
+// Returns the first permission the key grants that the caller does not hold:
+// role permissions (including inherited roles, in the binding scope) and
+// channel allow-overrides on their channel. Runs on the given executor so it
+// can see bindings created earlier in the same transaction.
+async function findApiKeyPermissionMissingForCaller(
+  db: DrizzleExecutor,
+  apikeyRbacId: string,
+  callerUserId: string,
+): Promise<{ hasBindings: boolean, missingPermission: string | null }> {
+  const result = await db.execute<{ has_bindings: boolean, missing_permission: string | null }>(sql`
       WITH RECURSIVE key_bindings AS (
         SELECT rb.role_id, rb.scope_type, rb.org_id, a.app_id AS public_app_id, ch.id AS channel_id
         FROM public.role_bindings rb
         LEFT JOIN public.apps a ON a.id = rb.app_id
         LEFT JOIN public.channels ch ON ch.rbac_id = rb.channel_id
         WHERE rb.principal_type = public.rbac_principal_apikey()
-          AND rb.principal_id = $1::uuid
+          AND rb.principal_id = ${apikeyRbacId}::uuid
           AND rb.org_id IS NOT NULL
           AND (rb.expires_at IS NULL OR rb.expires_at > now())
       ),
@@ -415,7 +409,7 @@ export async function assertCallerCanTakeOverSharedApiKey(
         FROM public.channel_permission_overrides AS overrides
         JOIN public.channels AS channels ON channels.id = overrides.channel_id
         WHERE overrides.principal_type = public.rbac_principal_apikey()
-          AND overrides.principal_id = $1::uuid
+          AND overrides.principal_id = ${apikeyRbacId}::uuid
           AND overrides.is_allowed
       )
       SELECT
@@ -425,7 +419,7 @@ export async function assertCallerCanTakeOverSharedApiKey(
           FROM required_permissions
           WHERE NOT public.rbac_check_permission_direct(
             required_permissions.permission_key,
-            $2::uuid,
+            ${callerUserId}::uuid,
             required_permissions.org_id,
             required_permissions.public_app_id,
             required_permissions.channel_id,
@@ -433,17 +427,41 @@ export async function assertCallerCanTakeOverSharedApiKey(
           )
           LIMIT 1
         ) AS missing_permission
-      `,
-      [targetRbacId, auth.userId],
-    )
+      `)
+  const row = result.rows[0]
+  return { hasBindings: row?.has_bindings === true, missingPermission: row?.missing_permission ?? null }
+}
 
-    const result = rows[0]
-    if (!result?.has_bindings) {
-      throw quickError(403, 'cannot_update_apikey', 'Shared API key has no active bindings')
-    }
-    if (result.missing_permission) {
-      throw quickError(403, 'forbidden_binding', `Forbidden - regenerating this shared API key requires the ${result.missing_permission} permission`)
-    }
+// Anyone who gets the secret of a shared key uses its rights, even after they
+// leave the org. Creating or regenerating one therefore requires the caller to
+// already hold every effective permission of the key.
+export async function assertCallerHoldsSharedApiKeyPermissions(
+  db: DrizzleExecutor,
+  auth: AuthInfo,
+  apikeyRbacId: string,
+) {
+  if (auth.authType !== 'jwt' || !auth.userId) {
+    throw quickError(403, 'cannot_update_apikey', 'Only user sessions can create or regenerate shared API keys')
+  }
+
+  const { hasBindings, missingPermission } = await findApiKeyPermissionMissingForCaller(db, apikeyRbacId, auth.userId)
+  if (!hasBindings) {
+    throw quickError(403, 'cannot_update_apikey', 'Shared API key has no active bindings')
+  }
+  if (missingPermission) {
+    throw quickError(403, 'forbidden_binding', `Forbidden - this shared API key requires the ${missingPermission} permission, which you do not hold`)
+  }
+}
+
+export async function assertCallerCanTakeOverSharedApiKey(
+  c: Context<MiddlewareKeyVariables>,
+  auth: AuthInfo,
+  targetRbacId: string,
+) {
+  let pgClient: ReturnType<typeof getPgClient> | undefined
+  try {
+    pgClient = getPgClient(c)
+    await assertCallerHoldsSharedApiKeyPermissions(getDrizzleClient(pgClient), auth, targetRbacId)
   }
   finally {
     if (pgClient) {
@@ -451,8 +469,6 @@ export async function assertCallerCanTakeOverSharedApiKey(
     }
   }
 }
-
-type DrizzleExecutor = Pick<ReturnType<typeof getDrizzleClient>, 'execute'>
 
 // Backend writes use a service connection, so the audit trigger cannot see the
 // caller. Pass it through transaction-local settings (see audit_log_trigger).

@@ -14,7 +14,7 @@ import { schema } from '../../utils/postgres_schema.ts'
 import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { supabaseAdmin, supabaseWithAuth, validateExpirationAgainstOrgPolicies, validateExpirationDate } from '../../utils/supabase.ts'
 import { apiKeyBindingsAllowOrgCreate, assertApiKeyCanKeepOrgCreateGrant, parseApiKeyGlobalPermissions, replaceApiKeyGlobalPermissions, validateApiKeyGlobalPermissionsForBindings } from './global_permissions.ts'
-import { assertApiKeyManagerCanAssignBindings, assertApiKeyManagerCanRotateTarget, assertCallerCanTakeOverSharedApiKey, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, requireJwtMfaForPrivilegedAction, sanitizeClientBindings, selectManageableApiKeyByIdentifier, setApiKeyAuditActor, withApiKeyAuditActor } from './scope.ts'
+import { assertApiKeyManagerCanAssignBindings, assertApiKeyManagerCanRotateTarget, assertCallerCanTakeOverSharedApiKey, assertCallerHoldsSharedApiKeyPermissions, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, requireJwtMfaForPrivilegedAction, sanitizeClientBindings, selectManageableApiKeyByIdentifier, setApiKeyAuditActor, withApiKeyAuditActor } from './scope.ts'
 
 const app = honoFactory.createApp()
 type ApiKeyRow = Database['public']['Tables']['apikeys']['Row']
@@ -90,7 +90,7 @@ function toDrizzleApiKeyUpdate(updateData: ApiKeyUpdateData): Partial<typeof sch
 async function replaceApiKeyBindings(
   c: Context<MiddlewareKeyVariables>,
   auth: AuthInfo,
-  apikey: { id: number, rbac_id: string },
+  apikey: { id: number, rbac_id: string, owner_org_id: string | null },
   currentBindingOrgIds: string[],
   bindings: BindingInput[],
   globalPermissions?: string[],
@@ -188,6 +188,10 @@ async function replaceApiKeyBindings(
       else if (!apiKeyBindingsAllowOrgCreate(bindings)) {
         // Legacy clients can omit global_permissions; keep stored grants aligned with the new bindings.
         await replaceApiKeyGlobalPermissions(tx, apikey.rbac_id, [], auth.userId)
+      }
+
+      if (apikey.owner_org_id) {
+        await assertCallerHoldsSharedApiKeyPermissions(txDrizzle, auth, apikey.rbac_id)
       }
     })
 
@@ -404,6 +408,7 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
     await replaceApiKeyBindings(c, auth, {
       id: existingApikey.id,
       rbac_id: existingApikey.rbac_id,
+      owner_org_id: existingApikey.owner_org_id,
     }, currentBindingOrgIds, bindings, globalPermissions, hasUpdates ? updateData : undefined)
 
     const { data: updatedData, error: fetchUpdatedError } = await supabase

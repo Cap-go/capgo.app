@@ -2,7 +2,7 @@
 -- and attribution-only transfer when the attributed user leaves.
 BEGIN;
 
-SELECT plan(28);
+SELECT plan(30);
 
 SELECT tests.create_supabase_user('shared_key_owner', 'shared-key-owner@test.local');
 SELECT tests.create_supabase_user('shared_key_creator', 'shared-key-creator@test.local');
@@ -126,6 +126,16 @@ JOIN public.roles
   ON public.roles.name = public.rbac_role_org_member()
   AND public.roles.scope_type = public.rbac_scope_org()
 WHERE public.apikeys.id IN (75000001, 75000002);
+
+INSERT INTO public.apps (app_id, icon_url, user_id, name, owner_org)
+VALUES (
+  'com.test.shared.key.owner',
+  '',
+  tests.get_supabase_uid('shared_key_owner'),
+  'Shared key owner app',
+  '75000000-0000-4000-8000-000000000001'
+)
+ON CONFLICT (app_id) DO NOTHING;
 
 CREATE TEMP TABLE shared_key_fixture AS
 SELECT id, rbac_id FROM public.apikeys WHERE id IN (75000001, 75000002, 75000003, 75000004);
@@ -312,6 +322,18 @@ SELECT is(
   (SELECT user_id FROM public.apikeys WHERE id = 75000001),
   tests.get_supabase_uid('shared_key_owner'),
   'shared key moves to the durable org super admin when its creator leaves'
+);
+
+SELECT is(
+  public.is_app_owner('shared-key-plain-75000001', 'com.test.shared.key.owner'),
+  true,
+  'is_app_owner answers from the owner org for a shared key'
+);
+
+SELECT is(
+  public.is_app_owner('shared-key-plain-75000001', 'com.demo.app'),
+  false,
+  'is_app_owner does not follow the attributed user to apps of other orgs'
 );
 
 SELECT ok(
