@@ -76,6 +76,13 @@ describe('release live helpers', () => {
     expect(series).toContain('blob2 = \'1.0.0\'\' OR 1=1 --\'')
     expect(series).toContain('INTERVAL \'5\' MINUTE')
 
+    expect(series).not.toContain('blob5')
+
+    const channelSeries = releaseLiveTestUtils.buildSeriesQueryCF('com.demo.app', '1.0.0', start, end, 5, { id: 7, name: 'prod\'uction' })
+    expect(channelSeries).toContain('(blob5 = \'7\' OR (blob5 = \'\' AND blob4 = \'prod\'\'uction\'))')
+    // Legacy `get` rows written before /updates recorded the channel stay visible.
+    expect(channelSeries).toContain('OR (blob3 = \'get\' AND blob4 = \'\' AND blob5 = \'\')')
+
     const failures = releaseLiveTestUtils.buildFailuresQueryCF('com.demo.app', '1.0.0', start, end)
     expect(failures).toContain('blob3 = \'1.0.0\'')
     expect(failures).toContain('LIKE \'%fail%\'')
@@ -95,5 +102,12 @@ describe('release live helpers', () => {
     expect(releaseLiveTestUtils.pickRelease(candidates, 3)).toBeNull()
     expect(releaseLiveTestUtils.pickRelease(candidates, undefined, 'missing')).toBeNull()
     expect(releaseLiveTestUtils.pickRelease({ deployments: [], latest_bundle: latestBundle })).toBe(latestBundle)
+  })
+
+  it.concurrent('scopes to the channel only when the request names one', () => {
+    const release = { bundle_id: 2, version_name: '1.1.0', channel_id: 1, channel_name: 'production', deployed_at: '2026-09-29T10:00:00.000Z' }
+    expect(releaseLiveTestUtils.resolveChannelScope(release, 1)).toEqual({ id: 1, name: 'production' })
+    expect(releaseLiveTestUtils.resolveChannelScope(release)).toBeUndefined()
+    expect(releaseLiveTestUtils.resolveChannelScope(release, 2)).toBeUndefined()
   })
 })

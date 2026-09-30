@@ -897,10 +897,12 @@ export async function updateWithPG(
     // TODO: remove this when all plugin accept no URL
     signedURL = 'https://404.capgo.app/no.zip'
   }
-  // cloudlog(c.get('requestId'), 'save stats', device_id)
-  device.version_name = version.name
+  // Keep device.version_name as the version the device reports running. The offered
+  // bundle is not installed yet; /stats `set` records it once the device switches.
+  // Attribute the offer to the channel that served it so channel stats and
+  // release views can scope `get` counts (install/fail already carry it).
   await Promise.all([
-    createStatsVersion(c, version.name, app_id, 'get'),
+    createStatsVersion(c, version.name, app_id, 'get', { id: channelData.channels.id, name: channelData.channels.name }),
     sendStatsAndDevice(c, device, [{ action: 'get', versionName: version.name }]),
   ])
   if (requestInfosMs >= 50 || manifestFetchMs >= 50 || bundleUrlMs >= 50) {

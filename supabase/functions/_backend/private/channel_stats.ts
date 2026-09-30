@@ -290,6 +290,10 @@ app.post('/', middlewareAuth, async (c) => {
         versionIdToName[String(versionId)] = versionName
     }
 
+    const knownVersionNames = new Set(Object.values(versionIdToName))
+    if (currentVersionName)
+      knownVersionNames.add(currentVersionName)
+
     const currentVersionRelease = deploymentHistory
       .filter(entry => entry.version_name === currentVersionName)
       .sort((a, b) => dayjs(b.deployed_at).valueOf() - dayjs(a.deployed_at).valueOf())[0]
@@ -298,16 +302,23 @@ app.post('/', middlewareAuth, async (c) => {
       ?? (currentVersionCreatedAt ? dayjs(currentVersionCreatedAt).utc().toISOString() : null)
     const period = getStatsPeriod(days, endDate, currentVersionReleasedAt)
     const { startDate } = period
+    // Only count usage attributed to this channel (blob5 id, legacy blob4 name).
+    // `get` rows recorded before /updates attributed them to a channel have no
+    // channel at all; keep them until they age out so history stays visible.
+    const channelScope = { id: channelData.id, name: channelData.name }
     const usageRows = await readStatsVersion(
       c,
       body.app_id,
       dayjs(startDate).utc().startOf('day').toISOString(),
       dayjs(endDate).utc().add(1, 'day').startOf('day').toISOString(),
+      channelScope,
+      { includeUnattributedGets: true },
     )
 
     const dailyVersion = (usageRows as unknown as AppUsageByVersion[])
       .map((row) => {
-        const mapped = versionIdToName[row.version_name]
+        // Legacy rows stored the numeric version id; never remap a real bundle name like "123".
+        const mapped = knownVersionNames.has(row.version_name) ? undefined : versionIdToName[row.version_name]
         return {
           ...row,
           version_name: mapped ?? row.version_name,
@@ -321,7 +332,7 @@ app.post('/', middlewareAuth, async (c) => {
     const labels = trimTrailingEmptyLabels(period.labels, rawAllCountsByDate)
     const allCountsByDate = fillMissingDailyCounts(rawAllCountsByDate, labels, allVersionNames)
 
-    const currentCounts = await readDeviceVersionCounts(c, body.app_id, channelData.name)
+    const currentCounts = await readDeviceVersionCounts(c, body.app_id, channelScope)
 
     const selectedVersions = selectRecentChannelVersions(deploymentHistory, currentVersionName, currentCounts, 10)
     const chartCounts = createChartCountsByDate(labels, allCountsByDate, selectedVersions, allVersionNames)

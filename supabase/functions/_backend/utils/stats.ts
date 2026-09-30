@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Context } from 'hono'
+import type { VersionUsageChannelFilterOptions } from './cloudflare.ts'
 import type { MiddlewareKeyVariables } from './hono.ts'
 import type { StatsLogDimensions, VersionAction } from './plugin_stats.ts'
 import type { Database } from './supabase.types.ts'
@@ -20,7 +21,7 @@ import {
   onPremStats,
 } from './plugin_stats.ts'
 import { normalizeStatsInsightDate, normalizeStatsInsightNumber, sortStatsInsightTotals } from './statsInsights.ts'
-import { countDevicesSB, countInstallSourcesSB, getAppsFromSB, getUpdateStatsSB, readBandwidthUsageSB, readDevicesSB, readDeviceUsageSB, readDeviceVersionCountsSB, readNativeActiveDevicesSummarySB, readNativeDailyPlatformActiveSB, readNativeVersionUsageSB, readStatsInsightsSB, readStatsSB, readStatsStorageSB, readStatsVersionSB, supabaseWithAuth, trackBandwidthUsageSB, trackDevicesSB, trackDeviceUsageSB, trackLogsSB, trackMetaSB, trackVersionUsageSB } from './supabase.ts'
+import { countDevicesSB, countInstallSourcesSB, getAppsFromSB, getUpdateStatsSB, readBandwidthUsageSB, readChannelDeviceOverrideIdsSB, readDevicesSB, readDeviceUsageSB, readDeviceVersionCountsSB, readNativeActiveDevicesSummarySB, readNativeDailyPlatformActiveSB, readNativeVersionUsageSB, readStatsInsightsSB, readStatsSB, readStatsStorageSB, readStatsVersionSB, supabaseWithAuth, trackBandwidthUsageSB, trackDevicesSB, trackDeviceUsageSB, trackLogsSB, trackMetaSB, trackVersionUsageSB } from './supabase.ts'
 import { logSkippedSupabaseWrite, shouldSkipSupabaseStatsFallback } from './supabase_write_guard.ts'
 import { DEFAULT_LIMIT } from './types.ts'
 import { backgroundTask, getEnv, isInternalVersionName } from './utils.ts'
@@ -154,7 +155,10 @@ export function createStatsMeta(c: Context, app_id: string, version_id: number, 
 export function readStatsMau(c: Context, app_id: string, start_date: string, end_date: string) {
   if (!c.env.DEVICE_USAGE)
     return readDeviceUsageSB(c, app_id, start_date, end_date)
-  return readDeviceUsageCF(c, app_id, start_date, end_date).then(res => res.map(({ org_id: _org_id, ...rest }) => rest))
+  assertAnalyticsEngineReadConfig(c, 'device usage')
+  // Throw on read errors like bandwidth: an empty result would upsert nothing and
+  // leave billed MAU silently stale instead of letting the cron retry.
+  return readDeviceUsageCF(c, app_id, start_date, end_date, { throwOnError: true }).then(res => res.map(({ org_id: _org_id, ...rest }) => rest))
 }
 
 export function readStatsBandwidth(c: Context, app_id: string, start_date: string, end_date: string) {
@@ -169,10 +173,11 @@ export function readStatsStorage(c: Context, app_id: string, start_date: string,
   return readStatsStorageSB(c, app_id, start_date, end_date)
 }
 
-export function readStatsVersion(c: Context, app_id: string, start_date: string, end_date: string, channel?: VersionUsageChannel | string): Promise<VersionUsage[]> {
+export function readStatsVersion(c: Context, app_id: string, start_date: string, end_date: string, channel?: VersionUsageChannel | string, options: VersionUsageChannelFilterOptions = {}): Promise<VersionUsage[]> {
+  // The Postgres fallback (on-prem/local) only matches rows recorded with the channel.
   if (!c.env.VERSION_USAGE)
     return readStatsVersionSB(c, app_id, start_date, end_date, channel)
-  return readStatsVersionCF(c, app_id, start_date, end_date, channel)
+  return readStatsVersionCF(c, app_id, start_date, end_date, channel, options)
 }
 
 export function readNativeVersionUsage(c: Context, app_id: string, start_date: string, end_date: string, supabase: SupabaseClient<Database>): Promise<NativeVersionUsage[]> {
@@ -223,10 +228,19 @@ function assertAnalyticsEngineReadConfig(c: Context, metricName: string): void {
   }
 }
 
-export function readDeviceVersionCounts(c: Context, app_id: string, channelName?: string): Promise<Record<string, number>> {
+/**
+ * Device counts per version. With a channel, devices are scoped by effective
+ * channel: the reported default_channel, adjusted by channel_devices overrides
+ * (forced into this channel are added, forced elsewhere are removed).
+ */
+export async function readDeviceVersionCounts(c: Context, app_id: string, channel?: VersionUsageChannel | string): Promise<Record<string, number>> {
+  const channelName = (typeof channel === 'string' ? channel : channel?.name) || undefined
+  const overrides = channel && channelName
+    ? await readChannelDeviceOverrideIdsSB(c, app_id, channel)
+    : undefined
   if (!shouldUseAnalyticsEngine(c))
-    return readDeviceVersionCountsSB(c, app_id, channelName)
-  return readDeviceVersionCountsCF(c, app_id, channelName)
+    return readDeviceVersionCountsSB(c, app_id, channelName, overrides)
+  return readDeviceVersionCountsCF(c, app_id, channelName, overrides)
 }
 
 /**

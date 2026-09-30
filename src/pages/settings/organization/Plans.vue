@@ -9,6 +9,7 @@ import { toast } from 'vue-sonner'
 import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheckCircle from '~icons/lucide/check-circle'
 import CreditsCta from '~/components/CreditsCta.vue'
+import CreditsOnlyTip from '~/components/CreditsOnlyTip.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
 import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
 import { invokeCapgoApi } from '~/services/capgoApi'
@@ -477,7 +478,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
 </script>
 
 <template>
-  <div class="flex flex-col bg-white border shadow-lg md:p-8 md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900" :class="thankYouPage ? 'pb-0' : 'pb-8 md:pb-0'">
+  <div class="flex flex-col bg-white border shadow-sm md:p-8 md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10" :class="thankYouPage ? 'pb-0' : 'pb-8'">
     <div v-if="!thankYouPage" class="flex flex-col w-full h-full">
       <!-- Header Section -->
       <div class="flex flex-col items-center justify-between gap-4 mb-6 sm:flex-row shrink-0">
@@ -636,9 +637,12 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
       <!-- Credits CTA: under prices so plan cards stay visible without scrolling -->
       <CreditsCta v-if="!isMobile" class="mt-6 shrink-0" :credits-only="isCreditsOnly" />
 
+      <!-- Secondary tip: credits work without any plan. Dismissible so it never competes with the plans. -->
+      <CreditsOnlyTip v-if="!isMobile && !isCreditsOnly" class="mt-3 shrink-0" show-link />
+
       <!-- Expert as a Service CTA -->
       <div v-if="!isMobile" class="mt-4 shrink-0">
-        <div class="flex flex-col gap-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/70 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex flex-col gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.03] sm:flex-row sm:items-center sm:justify-between">
           <div class="min-w-0 flex-1">
             <p class="text-sm font-semibold text-slate-900 dark:text-white">
               {{ t('expert-service-title') }}

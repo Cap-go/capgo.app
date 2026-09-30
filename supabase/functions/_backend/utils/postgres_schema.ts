@@ -114,6 +114,7 @@ export const channel_devices = pgTable('channel_devices', {
   channel_id: bigint('channel_id', { mode: 'number' }).notNull().references(() => channels.id),
   app_id: varchar('app_id').notNull().references(() => apps.name),
   owner_org: uuid('owner_org').notNull(),
+  is_self_set: boolean('is_self_set').notNull().default(false),
 })
 
 export const orgs = pgTable('orgs', {

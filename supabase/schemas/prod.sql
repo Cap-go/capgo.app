@@ -2034,6 +2034,96 @@ $$;
 ALTER FUNCTION "public"."auto_owner_org_by_app_id"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."billing_cycle_anchor"("p_period_start" timestamp with time zone, "p_period_end" timestamp with time zone) RETURNS timestamp with time zone
+    LANGUAGE "sql" STABLE
+    SET "search_path" TO ''
+    AS $$
+  SELECT CASE
+    WHEN p_period_start IS NULL THEN NULL::timestamptz
+    ELSE (
+      '2000-01-01 00:00:00'::timestamp
+      + pg_catalog.make_interval(
+        days => GREATEST(
+          EXTRACT(DAY FROM (p_period_start AT TIME ZONE 'UTC'))::integer,
+          COALESCE(EXTRACT(DAY FROM (p_period_end AT TIME ZONE 'UTC'))::integer, 1)
+        ) - 1
+      )
+      + (
+        (p_period_start AT TIME ZONE 'UTC')
+        - pg_catalog.date_trunc('day', p_period_start AT TIME ZONE 'UTC')
+      )
+    ) AT TIME ZONE 'UTC'
+  END;
+$$;
+
+
+ALTER FUNCTION "public"."billing_cycle_anchor"("p_period_start" timestamp with time zone, "p_period_end" timestamp with time zone) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."billing_cycle_anchor"("p_period_start" timestamp with time zone, "p_period_end" timestamp with time zone) IS 'Internal: canonical Stripe billing anchor (Jan 2000 UTC, real anchor day-of-month and time) derived from a stored Stripe period.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."billing_cycle_for_anchor"("p_period_start" timestamp with time zone, "p_period_end" timestamp with time zone, "p_now" timestamp with time zone DEFAULT "now"()) RETURNS TABLE("cycle_start" timestamp with time zone, "cycle_end" timestamp with time zone)
+    LANGUAGE "plpgsql" STABLE
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_now timestamptz := COALESCE(p_now, now());
+  v_now_utc timestamp;
+  v_anchor_utc timestamp;
+  v_months integer;
+  v_start_utc timestamp;
+BEGIN
+  -- Stripe's stored period is authoritative while it is current and monthly.
+  IF p_period_start IS NOT NULL
+    AND p_period_end IS NOT NULL
+    AND p_period_start <= v_now
+    AND v_now < p_period_end
+    AND p_period_end - p_period_start <= INTERVAL '32 days'
+  THEN
+    cycle_start := p_period_start;
+    cycle_end := p_period_end;
+    RETURN NEXT;
+    RETURN;
+  END IF;
+
+  v_now_utc := v_now AT TIME ZONE 'UTC';
+
+  -- No Stripe period: calendar month (UTC).
+  IF p_period_start IS NULL THEN
+    cycle_start := pg_catalog.date_trunc('month', v_now_utc) AT TIME ZONE 'UTC';
+    cycle_end := (pg_catalog.date_trunc('month', v_now_utc) + INTERVAL '1 month') AT TIME ZONE 'UTC';
+    RETURN NEXT;
+    RETURN;
+  END IF;
+
+  -- Stale or yearly period: roll monthly from the fixed original anchor.
+  -- timestamp + n months clamps to the month end without losing the anchor
+  -- day for later months (Jan 31 + 1 = Feb 29/28, Jan 31 + 2 = Mar 31).
+  v_anchor_utc := public.billing_cycle_anchor(p_period_start, p_period_end) AT TIME ZONE 'UTC';
+  v_months := (EXTRACT(YEAR FROM v_now_utc)::integer - 2000) * 12
+    + EXTRACT(MONTH FROM v_now_utc)::integer - 1;
+  v_start_utc := v_anchor_utc + pg_catalog.make_interval(months => v_months);
+  IF v_start_utc > v_now_utc THEN
+    v_months := v_months - 1;
+    v_start_utc := v_anchor_utc + pg_catalog.make_interval(months => v_months);
+  END IF;
+
+  cycle_start := v_start_utc AT TIME ZONE 'UTC';
+  cycle_end := (v_anchor_utc + pg_catalog.make_interval(months => v_months + 1)) AT TIME ZONE 'UTC';
+  RETURN NEXT;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."billing_cycle_for_anchor"("p_period_start" timestamp with time zone, "p_period_end" timestamp with time zone, "p_now" timestamp with time zone) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."billing_cycle_for_anchor"("p_period_start" timestamp with time zone, "p_period_end" timestamp with time zone, "p_now" timestamp with time zone) IS 'Internal: the single billing cycle calculation. Returns the stored Stripe period while current, otherwise rolls monthly from the original anchor day, otherwise the UTC calendar month.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."billing_period_completed_cycle"("p_anchor_start" timestamp with time zone, "p_as_of" "date" DEFAULT (("now"() AT TIME ZONE 'UTC'::"text"))::"date") RETURNS TABLE("is_anniversary" boolean, "cycle_start" timestamp with time zone, "cycle_end" timestamp with time zone)
     LANGUAGE "plpgsql" STABLE
     SET "search_path" TO ''
@@ -7754,12 +7844,6 @@ CREATE OR REPLACE FUNCTION "public"."get_cycle_info_org"("orgid" "uuid") RETURNS
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-DECLARE
-  customer_id_var text;
-  stripe_info_row public.stripe_info%ROWTYPE;
-  anchor_day interval;
-  start_date timestamptz;
-  end_date timestamptz;
 BEGIN
   IF NOT public.is_internal_request_role(public.current_request_role())
     AND NOT public.rbac_check_permission_request(
@@ -7772,31 +7856,9 @@ BEGIN
     RETURN;
   END IF;
 
-  SELECT customer_id
-  INTO customer_id_var
-  FROM public.orgs
-  WHERE id = orgid;
-
-  SELECT *
-  INTO stripe_info_row
-  FROM public.stripe_info
-  WHERE customer_id = customer_id_var;
-
-  anchor_day := COALESCE(
-    stripe_info_row.subscription_anchor_start - date_trunc('MONTH', stripe_info_row.subscription_anchor_start),
-    '0 DAYS'::interval
-  );
-
-  IF anchor_day > now() - date_trunc('MONTH', now()) THEN
-    start_date := date_trunc('MONTH', now() - interval '1 MONTH') + anchor_day;
-  ELSE
-    start_date := date_trunc('MONTH', now()) + anchor_day;
-  END IF;
-
-  end_date := start_date + interval '1 MONTH';
-
   RETURN QUERY
-  SELECT start_date, end_date;
+  SELECT cycle.cycle_start, cycle.cycle_end
+  FROM public.get_org_billing_cycle(get_cycle_info_org.orgid) AS cycle;
 END;
 $$;
 
@@ -8143,6 +8205,30 @@ ALTER FUNCTION "public"."get_org_apps_with_last_upload"("p_org_id" "uuid", "p_se
 
 
 COMMENT ON FUNCTION "public"."get_org_apps_with_last_upload"("p_org_id" "uuid", "p_search" "text", "p_sort_by" "text", "p_sort_desc" boolean, "p_limit" integer, "p_offset" integer) IS 'Bounded org app list. SECURITY DEFINER reads primary-only refresh state; explicit readable-app filters preserve caller visibility.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."get_org_billing_cycle"("orgid" "uuid") RETURNS TABLE("cycle_start" timestamp with time zone, "cycle_end" timestamp with time zone)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  SELECT cycle.cycle_start, cycle.cycle_end
+  FROM (SELECT 1) AS single_row
+  LEFT JOIN public.orgs o ON o.id = get_org_billing_cycle.orgid
+  LEFT JOIN public.stripe_info si ON si.customer_id = o.customer_id
+  CROSS JOIN LATERAL public.billing_cycle_for_anchor(
+    si.subscription_anchor_start,
+    si.subscription_anchor_end,
+    now()
+  ) AS cycle
+  LIMIT 1;
+$$;
+
+
+ALTER FUNCTION "public"."get_org_billing_cycle"("orgid" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."get_org_billing_cycle"("orgid" "uuid") IS 'Internal: current billing cycle for an org (single source of truth). No RBAC; call through get_cycle_info_org from clients.';
 
 
 
@@ -8827,25 +8913,16 @@ BEGIN
   billing_cycles AS (
     SELECT
       o.id AS org_id,
-      CASE
-        WHEN COALESCE(
-          si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
-          tc.zero_day_interval
-        ) > tc.current_time - tc.current_month_start
-        THEN date_trunc('MONTH', tc.current_time - INTERVAL '1 MONTH')
-          + COALESCE(
-            si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
-            tc.zero_day_interval
-          )
-        ELSE tc.current_month_start
-          + COALESCE(
-            si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start),
-            tc.zero_day_interval
-          )
-      END AS cycle_start
+      cycle.cycle_start,
+      cycle.cycle_end
     FROM public.orgs o
-    CROSS JOIN time_constants tc
+    JOIN user_orgs uo ON uo.org_id = o.id
     LEFT JOIN public.stripe_info si ON o.customer_id = si.customer_id
+    CROSS JOIN LATERAL public.billing_cycle_for_anchor(
+      si.subscription_anchor_start,
+      si.subscription_anchor_end,
+      NOW()
+    ) AS cycle
   ),
   two_fa_access AS (
     SELECT
@@ -8932,7 +9009,7 @@ BEGIN
     CASE
       WHEN tfa.should_redact_2fa OR ppa.should_redact_password
         OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::timestamptz
-      ELSE (bc.cycle_start + INTERVAL '1 MONTH')
+      ELSE bc.cycle_end
     END AS subscription_end,
     CASE
       WHEN tfa.should_redact_2fa OR ppa.should_redact_password
@@ -9054,13 +9131,6 @@ DECLARE
     v_plan_bandwidth bigint;
     v_plan_storage bigint;
     v_plan_build_time bigint;
-    v_anchor_day integer;
-    v_current_month_start date;
-    v_current_month_anchor date;
-    v_target_month_start date;
-    v_target_month_last_day date;
-    v_next_target_month_start date;
-    v_next_target_month_last_day date;
     v_plan_name text;
     total_stats RECORD;
     percent_mau double precision;
@@ -9070,42 +9140,22 @@ DECLARE
     v_is_good_plan boolean;
 BEGIN
     SELECT
-        COALESCE(EXTRACT(DAY FROM si.subscription_anchor_start)::integer, 1),
         p.mau,
         p.bandwidth,
         p.storage,
         p.build_time_unit,
         p.name
-    INTO v_anchor_day, v_plan_mau, v_plan_bandwidth, v_plan_storage, v_plan_build_time, v_plan_name
+    INTO v_plan_mau, v_plan_bandwidth, v_plan_storage, v_plan_build_time, v_plan_name
     FROM public.orgs o
     LEFT JOIN public.stripe_info si ON o.customer_id = si.customer_id
     LEFT JOIN public.plans p ON si.product_id = p.stripe_id
     WHERE o.id = orgid;
 
-    v_current_month_start := date_trunc('MONTH', NOW())::date;
-    v_current_month_anchor := v_current_month_start + (
-        LEAST(
-            v_anchor_day,
-            EXTRACT(DAY FROM (v_current_month_start + INTERVAL '1 MONTH - 1 day'))::integer
-        ) - 1
-    );
-
-    IF NOW()::date < v_current_month_anchor THEN
-        v_target_month_start := (v_current_month_start - INTERVAL '1 MONTH')::date;
-    ELSE
-        v_target_month_start := v_current_month_start;
-    END IF;
-
-    v_target_month_last_day := (v_target_month_start + INTERVAL '1 MONTH - 1 day')::date;
-    v_start_date := v_target_month_start + (
-        LEAST(v_anchor_day, EXTRACT(DAY FROM v_target_month_last_day)::integer) - 1
-    );
-
-    v_next_target_month_start := (v_target_month_start + INTERVAL '1 MONTH')::date;
-    v_next_target_month_last_day := (v_next_target_month_start + INTERVAL '1 MONTH - 1 day')::date;
-    v_end_date := v_next_target_month_start + (
-        LEAST(v_anchor_day, EXTRACT(DAY FROM v_next_target_month_last_day)::integer) - 1
-    );
+    SELECT
+        (cycle.cycle_start AT TIME ZONE 'UTC')::date,
+        (cycle.cycle_end AT TIME ZONE 'UTC')::date
+    INTO v_start_date, v_end_date
+    FROM public.get_org_billing_cycle(orgid) AS cycle;
 
     SELECT * INTO total_stats
     FROM public.get_total_metrics(orgid, v_start_date, v_end_date);
@@ -9151,13 +9201,6 @@ DECLARE
     v_plan_bandwidth bigint;
     v_plan_storage bigint;
     v_plan_build_time bigint;
-    v_anchor_day integer;
-    v_current_month_start date;
-    v_current_month_anchor date;
-    v_target_month_start date;
-    v_target_month_last_day date;
-    v_next_target_month_start date;
-    v_next_target_month_last_day date;
     v_plan_name text;
     total_stats RECORD;
     percent_mau double precision;
@@ -9167,42 +9210,22 @@ DECLARE
     v_is_good_plan boolean;
 BEGIN
     SELECT
-        COALESCE(EXTRACT(DAY FROM si.subscription_anchor_start)::integer, 1),
         p.mau,
         p.bandwidth,
         p.storage,
         p.build_time_unit,
         p.name
-    INTO v_anchor_day, v_plan_mau, v_plan_bandwidth, v_plan_storage, v_plan_build_time, v_plan_name
+    INTO v_plan_mau, v_plan_bandwidth, v_plan_storage, v_plan_build_time, v_plan_name
     FROM public.orgs o
     LEFT JOIN public.stripe_info si ON o.customer_id = si.customer_id
     LEFT JOIN public.plans p ON si.product_id = p.stripe_id
     WHERE o.id = orgid;
 
-    v_current_month_start := date_trunc('MONTH', NOW())::date;
-    v_current_month_anchor := v_current_month_start + (
-        LEAST(
-            v_anchor_day,
-            EXTRACT(DAY FROM (v_current_month_start + INTERVAL '1 MONTH - 1 day'))::integer
-        ) - 1
-    );
-
-    IF NOW()::date < v_current_month_anchor THEN
-        v_target_month_start := (v_current_month_start - INTERVAL '1 MONTH')::date;
-    ELSE
-        v_target_month_start := v_current_month_start;
-    END IF;
-
-    v_target_month_last_day := (v_target_month_start + INTERVAL '1 MONTH - 1 day')::date;
-    v_start_date := v_target_month_start + (
-        LEAST(v_anchor_day, EXTRACT(DAY FROM v_target_month_last_day)::integer) - 1
-    );
-
-    v_next_target_month_start := (v_target_month_start + INTERVAL '1 MONTH')::date;
-    v_next_target_month_last_day := (v_next_target_month_start + INTERVAL '1 MONTH - 1 day')::date;
-    v_end_date := v_next_target_month_start + (
-        LEAST(v_anchor_day, EXTRACT(DAY FROM v_next_target_month_last_day)::integer) - 1
-    );
+    SELECT
+        (cycle.cycle_start AT TIME ZONE 'UTC')::date,
+        (cycle.cycle_end AT TIME ZONE 'UTC')::date
+    INTO v_start_date, v_end_date
+    FROM public.get_org_billing_cycle(orgid) AS cycle;
 
     SELECT * INTO total_stats
     FROM public.seed_org_metrics_cache(orgid, v_start_date, v_end_date);
@@ -9248,7 +9271,6 @@ DECLARE
   v_plan_bandwidth bigint;
   v_plan_storage bigint;
   v_plan_build_time bigint;
-  v_anchor_day interval;
   total_stats record;
   percent_mau double precision;
   percent_bandwidth double precision;
@@ -9268,23 +9290,21 @@ BEGIN
   END IF;
 
   SELECT
-    COALESCE(si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start), '0 DAYS'::interval),
     p.mau,
     p.bandwidth,
     p.storage,
     p.build_time_unit
-  INTO v_anchor_day, v_plan_mau, v_plan_bandwidth, v_plan_storage, v_plan_build_time
+  INTO v_plan_mau, v_plan_bandwidth, v_plan_storage, v_plan_build_time
   FROM public.orgs o
   LEFT JOIN public.stripe_info si ON o.customer_id = si.customer_id
   LEFT JOIN public.plans p ON si.product_id = p.stripe_id
   WHERE o.id = orgid;
 
-  IF v_anchor_day > now() - date_trunc('MONTH', now()) THEN
-    v_start_date := (date_trunc('MONTH', now() - interval '1 MONTH') + v_anchor_day)::date;
-  ELSE
-    v_start_date := (date_trunc('MONTH', now()) + v_anchor_day)::date;
-  END IF;
-  v_end_date := (v_start_date + interval '1 MONTH')::date;
+  SELECT
+    (cycle.cycle_start AT TIME ZONE 'UTC')::date,
+    (cycle.cycle_end AT TIME ZONE 'UTC')::date
+  INTO v_start_date, v_end_date
+  FROM public.get_org_billing_cycle(orgid) AS cycle;
 
   IF v_tx_read_only THEN
     SELECT * INTO total_stats
@@ -9723,25 +9743,20 @@ CREATE OR REPLACE FUNCTION "public"."get_total_metrics"("org_id" "uuid") RETURNS
 DECLARE
   v_start_date date;
   v_end_date date;
-  v_anchor_day interval;
 BEGIN
-  SELECT
-    COALESCE(si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start), '0 DAYS'::INTERVAL)
-  INTO v_anchor_day
-  FROM public.orgs o
-  LEFT JOIN public.stripe_info si ON o.customer_id = si.customer_id
-  WHERE o.id = get_total_metrics.org_id;
-
-  IF NOT FOUND THEN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.orgs o
+    WHERE o.id = get_total_metrics.org_id
+  ) THEN
     RETURN;
   END IF;
 
-  IF v_anchor_day > NOW() - date_trunc('MONTH', NOW()) THEN
-    v_start_date := (date_trunc('MONTH', NOW() - INTERVAL '1 MONTH') + v_anchor_day)::date;
-  ELSE
-    v_start_date := (date_trunc('MONTH', NOW()) + v_anchor_day)::date;
-  END IF;
-  v_end_date := (v_start_date + INTERVAL '1 MONTH')::date;
+  SELECT
+    (cycle.cycle_start AT TIME ZONE 'UTC')::date,
+    (cycle.cycle_end AT TIME ZONE 'UTC')::date
+  INTO v_start_date, v_end_date
+  FROM public.get_org_billing_cycle(get_total_metrics.org_id) AS cycle;
 
   RETURN QUERY
   SELECT
@@ -11470,7 +11485,6 @@ DECLARE
   v_end_date date;
   v_plan_name text;
   total_metrics record;
-  v_anchor_day interval;
 BEGIN
   IF NOT public.is_internal_request_role(public.current_request_role())
     AND NOT public.rbac_check_permission_request(public.rbac_perm_org_read(), orgid, NULL::character varying, NULL::bigint)
@@ -11478,20 +11492,17 @@ BEGIN
     RETURN false;
   END IF;
 
-  SELECT
-    si.product_id,
-    COALESCE(si.subscription_anchor_start - date_trunc('MONTH', si.subscription_anchor_start), '0 DAYS'::interval)
-  INTO v_product_id, v_anchor_day
+  SELECT si.product_id
+  INTO v_product_id
   FROM public.orgs o
   LEFT JOIN public.stripe_info si ON o.customer_id = si.customer_id
   WHERE o.id = orgid;
 
-  IF v_anchor_day > now() - date_trunc('MONTH', now()) THEN
-    v_start_date := (date_trunc('MONTH', now() - interval '1 MONTH') + v_anchor_day)::date;
-  ELSE
-    v_start_date := (date_trunc('MONTH', now()) + v_anchor_day)::date;
-  END IF;
-  v_end_date := (v_start_date + interval '1 MONTH')::date;
+  SELECT
+    (cycle.cycle_start AT TIME ZONE 'UTC')::date,
+    (cycle.cycle_end AT TIME ZONE 'UTC')::date
+  INTO v_start_date, v_end_date
+  FROM public.get_org_billing_cycle(orgid) AS cycle;
 
   SELECT p.name INTO v_plan_name
   FROM public.plans p
@@ -14160,7 +14171,10 @@ BEGIN
     SELECT
       o.id AS org_id,
       o.management_email,
-      si.subscription_anchor_start
+      public.billing_cycle_anchor(
+        si.subscription_anchor_start,
+        si.subscription_anchor_end
+      ) AS billing_anchor
     FROM public.orgs o
     JOIN public.stripe_info si ON o.customer_id = si.customer_id
     WHERE si.status = 'succeeded'
@@ -14170,7 +14184,7 @@ BEGIN
     SELECT *
     INTO v_cycle
     FROM public.billing_period_completed_cycle(
-      org_record.subscription_anchor_start,
+      org_record.billing_anchor,
       (now() AT TIME ZONE 'UTC')::date
     );
 
@@ -27825,6 +27839,16 @@ REVOKE ALL ON FUNCTION "public"."auto_owner_org_by_app_id"() FROM PUBLIC;
 
 
 
+REVOKE ALL ON FUNCTION "public"."billing_cycle_anchor"("p_period_start" timestamp with time zone, "p_period_end" timestamp with time zone) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."billing_cycle_anchor"("p_period_start" timestamp with time zone, "p_period_end" timestamp with time zone) TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."billing_cycle_for_anchor"("p_period_start" timestamp with time zone, "p_period_end" timestamp with time zone, "p_now" timestamp with time zone) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."billing_cycle_for_anchor"("p_period_start" timestamp with time zone, "p_period_end" timestamp with time zone, "p_now" timestamp with time zone) TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."billing_period_completed_cycle"("p_anchor_start" timestamp with time zone, "p_as_of" "date") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."billing_period_completed_cycle"("p_anchor_start" timestamp with time zone, "p_as_of" "date") TO "service_role";
 
@@ -28494,6 +28518,11 @@ REVOKE ALL ON FUNCTION "public"."get_org_apps_with_last_upload"("p_org_id" "uuid
 GRANT ALL ON FUNCTION "public"."get_org_apps_with_last_upload"("p_org_id" "uuid", "p_search" "text", "p_sort_by" "text", "p_sort_desc" boolean, "p_limit" integer, "p_offset" integer) TO "service_role";
 GRANT ALL ON FUNCTION "public"."get_org_apps_with_last_upload"("p_org_id" "uuid", "p_search" "text", "p_sort_by" "text", "p_sort_desc" boolean, "p_limit" integer, "p_offset" integer) TO "anon";
 GRANT ALL ON FUNCTION "public"."get_org_apps_with_last_upload"("p_org_id" "uuid", "p_search" "text", "p_sort_by" "text", "p_sort_desc" boolean, "p_limit" integer, "p_offset" integer) TO "authenticated";
+
+
+
+REVOKE ALL ON FUNCTION "public"."get_org_billing_cycle"("orgid" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."get_org_billing_cycle"("orgid" "uuid") TO "service_role";
 
 
 

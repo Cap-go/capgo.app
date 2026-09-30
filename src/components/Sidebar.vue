@@ -303,6 +303,13 @@ const tabs = computed<Tab[]>(() => {
   return baseTabs
 })
 
+// Group destinations the way capgo.app groups products: where you work first,
+// then help and community links that open outside the console.
+const navGroups = computed(() => [
+  { key: 'workspace', label: 'section-group-workspace', tabs: tabs.value.filter(tab => !tab.redirect) },
+  { key: 'help', label: 'sidebar-group-help', tabs: tabs.value.filter(tab => tab.redirect) },
+].filter(group => group.tabs.length))
+
 function tabLabel(tab: Tab) {
   if (tab.key === '/app/modules_test')
     return `${t('module-heading')} ${t('tests')}`
@@ -362,18 +369,23 @@ function tabLabel(tab: Tab) {
           <dropdown-organization v-if="main.user" :compact="isRail" />
         </div>
 
-        <!-- Navigation -->
-        <div class="flex-1 space-y-4 overflow-y-auto py-2">
-          <div>
-            <h3 class="pl-12 pr-3 mb-3 text-xs font-semibold uppercase whitespace-nowrap text-slate-500 lg:mb-4 lg:tracking-wider lg:text-slate-500">
-              {{ t('pages') }}
+        <!-- Navigation: product areas first, help and community links after -->
+        <nav class="flex-1 space-y-5 overflow-y-auto py-2" :aria-label="t('pages')">
+          <div v-for="group in navGroups" :key="group.key" :data-test="`sidebar-group-${group.key}`">
+            <h3
+              class="pl-12 pr-3 mb-2 font-mono text-[11px] font-semibold tracking-widest uppercase whitespace-nowrap text-slate-500 transition-opacity duration-300"
+              :class="isRail ? 'opacity-0' : 'opacity-100'"
+            >
+              {{ t(group.label) }}
             </h3>
-            <ul class="space-y-1 lg:space-y-2">
-              <li v-for="tab, i in tabs" :key="i">
+            <ul class="space-y-1">
+              <li v-for="tab, i in group.tabs" :key="i">
                 <button
                   type="button"
-                  class="d-btn d-btn-ghost flex justify-start items-center w-full h-auto min-h-11 p-0 rounded-md border-none shadow-none transition-colors duration-150 cursor-pointer lg:rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-200 lg:text-slate-200 lg:hover:bg-slate-700/50 hover:bg-slate-700/50 focus:ring-offset-slate-800"
+                  class="relative d-btn d-btn-ghost flex justify-start items-center w-full h-auto p-0 rounded-md border-none shadow-none transition-colors duration-150 cursor-pointer lg:rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500 text-slate-200 lg:text-slate-200 lg:hover:bg-slate-700/50 hover:bg-slate-700/50"
                   :class="{
+                    'min-h-11': !tab.redirect,
+                    'min-h-10': tab.redirect,
                     'hover:bg-slate-700/50 lg:hover:bg-slate-700/50': !isTabActive(tab.key),
                     'bg-slate-700 text-white lg:bg-slate-700 lg:text-white': isTabActive(tab.key),
                     'cursor-default': isTabActive(tab.key),
@@ -385,15 +397,20 @@ function tabLabel(tab: Tab) {
                   :aria-current="isTabActive(tab.key) ? 'page' : undefined"
                   @click="openTab(tab)"
                 >
-                  <span class="flex w-12 h-11 shrink-0 items-center justify-center">
+                  <span
+                    v-if="isTabActive(tab.key)"
+                    class="absolute left-1 w-1 h-5 -translate-y-1/2 rounded-full top-1/2 bg-azure-500"
+                    aria-hidden="true"
+                  />
+                  <span class="flex w-12 h-10 shrink-0 items-center justify-center">
                     <Spinner v-if="isSpoofTab(tab) && spoofLoading" size="w-5 h-5" />
                     <component :is="tab.icon" v-else class="w-5 h-5 transition-colors duration-150 shrink-0" :class="{ 'text-blue-500 lg:text-blue-500': isTabActive(tab.key), 'text-slate-400 group-hover:text-slate-300 lg:text-slate-400 lg:group-hover:text-slate-300': !isTabActive(tab.key) }" />
                   </span>
                   <span
-                    class="flex items-center pr-3 text-sm font-medium capitalize whitespace-nowrap"
+                    class="flex items-center pr-3 font-medium capitalize whitespace-nowrap"
                     :class="[
                       isTabActive(tab.key) ? 'text-blue-500 lg:text-blue-500' : 'text-slate-400 group-hover:text-slate-300 lg:text-slate-400 lg:group-hover:text-slate-300',
-                      tab.redirect ? 'underline' : '',
+                      tab.redirect ? 'text-[13px]' : 'text-sm',
                     ]"
                   >
                     {{ isSpoofTab(tab) && spoofLoading ? t('loading') : tabLabel(tab) }}
@@ -406,7 +423,7 @@ function tabLabel(tab: Tab) {
               </li>
             </ul>
           </div>
-        </div>
+        </nav>
 
         <!-- User menu -->
         <div class="mt-auto shrink-0 pt-2 lg:border-t lg:border-slate-700 lg:mt-0">

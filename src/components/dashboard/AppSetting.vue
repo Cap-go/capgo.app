@@ -1345,7 +1345,7 @@ async function transferAppOwnership() {
                 label="Google Play link"
                 placeholder="https://play.google.com/store/apps/details?id=..."
               />
-              <div v-if="shouldShowStoreIconImport" class="mb-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/70">
+              <div v-if="shouldShowStoreIconImport" class="mb-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
                 <div class="text-sm font-medium text-slate-800 dark:text-slate-100">
                   Import the app icon from the store
                 </div>

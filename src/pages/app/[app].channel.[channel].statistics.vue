@@ -670,7 +670,7 @@ watchEffect(async () => {
           </div>
 
           <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
               <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
                 <IconAlertCircle class="w-4 h-4" />
                 {{ t('period-check-ins') }}
@@ -683,7 +683,7 @@ watchEffect(async () => {
               </div>
             </div>
 
-            <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
               <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
                 <IconCheckCircle class="w-4 h-4" />
                 {{ t('start-of-selected-period') }}
@@ -696,7 +696,7 @@ watchEffect(async () => {
               </div>
             </div>
 
-            <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
               <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
                 <IconCheckCircle class="w-4 h-4" />
                 {{ t('latest-day-in-selected-period') }}
@@ -709,7 +709,7 @@ watchEffect(async () => {
               </div>
             </div>
 
-            <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
               <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
                 <IconTrendingUp class="w-4 h-4" />
                 {{ t('period-change') }}
@@ -732,7 +732,7 @@ watchEffect(async () => {
         </div>
 
         <!-- Chart -->
-        <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+        <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
           <div class="mb-4">
             <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
               {{ t('device-version-adoption-over-time') }}
@@ -784,7 +784,7 @@ watchEffect(async () => {
           </div>
         </div>
 
-        <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+        <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
           <BundleInstallStatsPanel
             :app-id="packageId"
             :channel-id="id"

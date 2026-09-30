@@ -665,31 +665,24 @@ test.describe('Dashboard exploration and returning to v3 setup', () => {
     await expect(page.locator('[data-test="onboarding-setup-cli"]')).toBeVisible()
   })
 
-  test('renders the v3 onboarding setup on Getting started and keeps the v2 checklist', async ({ page }) => {
-    await page.goto(`/app/${appId}/getting-started?version=3`)
-    await expect(page.locator('[data-test="onboarding-setup-cli"]')).toBeVisible()
-    await expect(page).toHaveURL(new RegExp(`/app/${appId}/getting-started\\?version=3$`))
-    await expect(page.locator('[data-test="getting-started-page"]')).toHaveCount(0)
-    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.events)).toContain('getting-started-mounted')
-    await page.goto(`/app/${appId}/getting-started?version=2`)
-    await expect(page.locator('[data-test="getting-started-page"]')).toBeVisible()
-    await expect(page).toHaveURL(new RegExp(`/app/${appId}/getting-started\\?version=2$`))
-    await expect(page.locator('[data-test="onboarding-setup-cli"]')).toHaveCount(0)
-    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.events)).toContain('getting-started-mounted')
+  test('renders the onboarding setup on Getting started for every checklist version', async ({ page }) => {
+    for (const version of [2, 3]) {
+      await page.goto(`/app/${appId}/getting-started?version=${version}`)
+      await expect(page.locator('[data-test="onboarding-setup-cli"]')).toBeVisible()
+      await expect(page).toHaveURL(new RegExp(`/app/${appId}/getting-started\\?version=${version}$`))
+      await expect(page.locator('[data-test="getting-started-page"]')).toHaveCount(0)
+      expect(await page.evaluate(() => (window as any).onboardingSetupPreview.events)).toContain('getting-started-mounted')
+    }
   })
 
-  test('links Getting started to the in-shell setup for v3 and the legacy page for v2', async ({ page }) => {
-    await page.goto(`/app/${appId}?version=3`)
+  test('links Getting started to the in-shell setup for every checklist version', async ({ page }) => {
     const link = page.locator('[data-test="getting-started-nav-link"]')
-    await expect(link).toHaveAttribute('href', `/app/${appId}/getting-started`)
-    await link.click()
-    await expect(page.locator('[data-test="onboarding-setup-cli"]')).toBeVisible()
-    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.events)).toContain('getting-started-mounted')
-
-    await page.goto(`/app/${appId}?version=2`)
-    await expect(link).toHaveAttribute('href', `/app/${appId}/getting-started`)
-    await link.click()
-    await expect(page.locator('[data-test="getting-started-page"]')).toBeVisible()
-    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.events)).toContain('getting-started-mounted')
+    for (const version of [2, 3]) {
+      await page.goto(`/app/${appId}?version=${version}`)
+      await expect(link).toHaveAttribute('href', `/app/${appId}/getting-started`)
+      await link.click()
+      await expect(page.locator('[data-test="onboarding-setup-cli"]')).toBeVisible()
+      expect(await page.evaluate(() => (window as any).onboardingSetupPreview.events)).toContain('getting-started-mounted')
+    }
   })
 })

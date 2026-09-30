@@ -120,6 +120,8 @@ export async function setChannelDeviceOverride(c: Context<MiddlewareKeyVariables
     channel_id: channel.id,
     device_id: body.device_id.toLowerCase(),
     owner_org: channel.owner_org,
+    // Console override: never expires (only /channel_self rows are self-set).
+    is_self_set: false,
   }
 
   const { error } = await supabase

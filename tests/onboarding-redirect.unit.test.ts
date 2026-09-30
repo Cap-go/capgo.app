@@ -191,15 +191,6 @@ describe('exploration refresh reminder and v3 setup routing', () => {
     expect(() => refreshed.dismissOnboardingExplorationReminder('user-1')).not.toThrow()
   })
 
-  it('uses the onboarding setup UI for OTA and Builder todo lists and keeps legacy apps on the checklist', async () => {
-    const { usesOnboardingSetupUi } = await import('../src/utils/onboardingRedirect')
-    for (const version of [3, 4])
-      expect(usesOnboardingSetupUi({ onboarding: { setup: { todo_list_version: version, ...(version === 4 ? { ota_todo_list_version: '1' } : {}) } } })).toBe(true)
-    expect(usesOnboardingSetupUi({ onboarding: { setup: { todo_list_version: 4, ota_todo_list_version: '2' } } })).toBe(false)
-    for (const version of [1, 2])
-      expect(usesOnboardingSetupUi({ onboarding: { setup: { todo_list_version: version } } })).toBe(false)
-  })
-
   it('reads a creation handoff only for the matching app', async () => {
     const { ONBOARDING_SETUP_HANDOFF_STATE_KEY, readOnboardingSetupHandoff } = await import('../src/utils/onboardingRedirect')
     const handoff = { appId: 'com.example.app', attemptId: 'attempt', flow: 'pre_org', previousStep: 'organization', runId: 'ir_run' }

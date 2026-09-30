@@ -1,6 +1,4 @@
 import type { OnboardingAnalyticsFlow, OnboardingAnalyticsStep } from '~/utils/onboardingProgressAnalytics'
-import { hasSupportedOtaTodoList, parseAppOnboarding } from '~/services/appOnboarding'
-import { isBuilderTodoListSelected } from '~/services/builderOnboardingChecklist'
 import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 
 // August uses Central European Summer Time (UTC+2).
@@ -180,11 +178,6 @@ export interface OnboardingSetupHandoff {
 
 export function getAppGettingStartedPath(appId: string) {
   return `/app/${encodeURIComponent(appId)}/getting-started`
-}
-
-// Apps with a setup todo list use the onboarding setup UI on Getting started.
-export function usesOnboardingSetupUi(app: { onboarding?: unknown }) {
-  return hasSupportedOtaTodoList(parseAppOnboarding(app.onboarding)) || isBuilderTodoListSelected(app.onboarding)
 }
 
 export function readOnboardingSetupHandoff(state: unknown, appId: string): OnboardingSetupHandoff | null {

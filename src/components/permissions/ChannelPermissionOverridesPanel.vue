@@ -340,7 +340,7 @@ watch(
 
     <div v-else class="overflow-x-auto border border-slate-200 dark:border-slate-700 rounded-lg">
       <table class="min-w-full text-sm">
-        <thead class="bg-slate-50 dark:bg-slate-900/40">
+        <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
           <tr>
             <th class="px-3 py-2 text-left font-semibold text-gray-700 dark:text-gray-200">
               {{ t('channels') }}

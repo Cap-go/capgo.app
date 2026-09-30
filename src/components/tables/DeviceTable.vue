@@ -154,7 +154,7 @@ const columns = ref<TableColumn[]>([
     },
   },
   {
-    label: t('updated-at'),
+    label: t('last-seen'),
     key: 'updated_at',
     mobile: false,
     sortable: 'desc',
@@ -174,7 +174,7 @@ const columns = ref<TableColumn[]>([
     mobile: true,
     head: true,
     sortable: false,
-    displayFunction: (elem: Device) => elem.version_name ?? elem.version ?? 'unknown',
+    displayFunction: (elem: Device) => elem.version_name ?? elem.version ?? t('unknown'),
     onClick: (elem: Device) => openOneVersion(elem),
   },
 ])

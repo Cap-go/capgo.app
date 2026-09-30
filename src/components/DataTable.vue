@@ -441,10 +441,11 @@ function tooltipIdFor(rowIndex: number, actionIndex: number): string {
 
 const displayElemRange = computed(() => {
   if (props.elementList.length === 0)
-    return '0-0'
+    return '0'
+  // Rows are counted from 1 for people: "1-10 of 42", not "0-10 of 42".
   const begin = (props.currentPage - 1) * pageSize.value
   const end = begin + props.elementList.length
-  return `${begin}-${end}`
+  return `${begin + 1}–${end}`
 })
 
 function canNext() {
@@ -554,32 +555,35 @@ function getSkeletonWidth(columnIndex?: number) {
 const isReloading = computed(() => props.isLoading || pendingReset.value)
 const isAdding = computed(() => props.isLoading || pendingAdd.value)
 const paginationClass = computed(() => props.mobileFixedPagination
-  ? 'fixed bottom-0 left-0 z-40 flex items-center justify-between w-full p-4 bg-white md:relative md:pt-4 md:bg-transparent dark:bg-gray-900 dark:md:bg-transparent'
-  : 'flex items-center justify-between w-full p-4 bg-white md:relative md:pt-4 md:bg-transparent dark:bg-gray-900 dark:md:bg-transparent')
+  ? 'fixed bottom-0 left-0 z-40 flex items-center justify-between w-full px-4 py-3 border-t border-slate-200 bg-white/95 backdrop-blur md:relative md:border-t-0 md:bg-transparent md:backdrop-blur-none dark:border-white/10 dark:bg-slate-900/95 dark:md:bg-transparent'
+  : 'flex items-center justify-between w-full px-4 py-3 md:bg-transparent')
 </script>
 
 <template>
   <div class="pb-4 overflow-x-auto md:pb-0">
-    <div class="flex flex-wrap items-center justify-between gap-2 p-3 pb-4 overflow-visible md:flex-nowrap">
-      <div class="flex h-10 shrink-0 items-center">
+    <div class="flex flex-wrap items-center justify-between gap-2 px-4 py-3 overflow-visible md:flex-nowrap">
+      <div class="flex h-10 shrink-0 items-center gap-2">
         <button
-          class="inline-flex items-center py-1.5 px-3 mr-2 text-sm font-medium text-gray-500 bg-white rounded-md border border-gray-300 cursor-pointer dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden"
-          type="button" @click="handleResetClick"
+          class="inline-flex items-center gap-2 h-9 px-3 text-sm font-medium rounded-lg border border-slate-200 bg-white text-slate-700 shadow-xs cursor-pointer transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-white/10 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 disabled:opacity-50 disabled:cursor-not-allowed"
+          type="button"
+          :aria-label="t('reload')"
+          :title="t('reload')"
+          @click="handleResetClick"
         >
-          <IconReload v-if="!isReloading" class="m-1 md:mr-2" />
-          <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
+          <IconReload v-if="!isReloading" class="w-4 h-4" />
+          <Spinner v-else size="w-4 h-4" />
           <span class="hidden text-sm md:block">{{ t("reload") }}</span>
         </button>
         <div
           v-if="exportable"
-          class="d-dropdown mr-2"
+          class="d-dropdown"
           @focusout="onExportFocusOut"
           @keydown.escape.prevent="closeExportMenu"
         >
           <button
             ref="exportTriggerRef"
             type="button"
-            class="d-btn d-btn-sm inline-flex h-full items-center rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-500 shadow-none dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+            class="inline-flex items-center gap-2 h-9 px-3 text-sm font-medium rounded-lg border border-slate-200 bg-white text-slate-700 shadow-xs cursor-pointer transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-white/10 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 disabled:opacity-50 disabled:cursor-not-allowed"
             :disabled="isLoading || exportLoading"
             data-test="data-table-export"
             :aria-label="t('export')"
@@ -588,8 +592,8 @@ const paginationClass = computed(() => props.mobileFixedPagination
             :aria-controls="exportMenuId"
             @click="toggleExportMenu"
           >
-            <IconDownload v-if="!exportLoading" class="m-1 md:mr-2" />
-            <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
+            <IconDownload v-if="!exportLoading" class="w-4 h-4" />
+            <Spinner v-else size="w-4 h-4" />
             <span class="hidden text-sm md:block">{{ t('export') }}</span>
           </button>
           <ul
@@ -621,38 +625,41 @@ const paginationClass = computed(() => props.mobileFixedPagination
             </li>
           </ul>
         </div>
-        <div v-if="showAdd" class="p-px mr-2 rounded-lg from-cyan-500 to-purple-500 bg-linear-to-r">
+        <div v-if="showAdd">
           <button
             :data-test="addButtonTestId"
             :aria-describedby="addDisabled && addTooltip ? addTooltipId : undefined"
             :aria-disabled="addDisabled"
-            :title="addDisabled ? addTooltip : undefined"
-            class="inline-flex items-center py-1.5 px-3 text-sm font-medium text-gray-500 bg-white rounded-md cursor-pointer dark:text-white dark:bg-gray-800 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden aria-disabled:cursor-not-allowed aria-disabled:bg-gray-100 aria-disabled:text-gray-400 aria-disabled:hover:bg-gray-100 dark:aria-disabled:bg-gray-700 dark:aria-disabled:text-gray-500 dark:aria-disabled:hover:bg-gray-700"
+            :title="addDisabled ? addTooltip : t('add-one')"
+            class="inline-flex items-center gap-2 h-9 px-3 text-sm font-semibold text-white rounded-lg bg-blue-600 shadow-xs cursor-pointer transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 aria-disabled:cursor-not-allowed aria-disabled:bg-slate-200 aria-disabled:text-slate-400 aria-disabled:hover:bg-slate-200 dark:aria-disabled:bg-white/10 dark:aria-disabled:text-slate-500"
             type="button" @click="handleAddClick"
           >
-            <plusOutline v-if="!isAdding" class="m-1 md:mr-2" />
-            <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
-            <span class="hidden text-sm md:block">{{ t("add-one") }}</span>
+            <plusOutline v-if="!isAdding" class="w-4 h-4" />
+            <Spinner v-else size="w-4 h-4" color="fill-white text-white/30" />
+            <!-- The primary action keeps its label on mobile: a lone "+" is easy to miss. -->
+            <span class="text-sm">{{ t("add-one") }}</span>
           </button>
           <span v-if="addDisabled && addTooltip" :id="addTooltipId" class="sr-only">{{ addTooltip }}</span>
         </div>
-        <div v-if="showFilterMenu" class="relative h-10">
+        <div v-if="showFilterMenu" class="relative">
           <button
             ref="filterOpenButtonRef"
             type="button"
-            class="inline-flex items-center py-1.5 px-3 mr-2 h-full text-sm font-medium text-gray-500 bg-white rounded-md border border-gray-300 cursor-pointer dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden"
+            class="relative inline-flex items-center gap-2 h-9 px-3 text-sm font-medium rounded-lg border border-slate-200 bg-white text-slate-700 shadow-xs cursor-pointer transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-white/10 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 disabled:opacity-50 disabled:cursor-not-allowed"
             data-test="data-table-filters-open"
             :aria-expanded="isFilterModalOpen"
             aria-haspopup="dialog"
+            :aria-label="t(filterText ?? 'Filters')"
+            :title="t(filterText ?? 'Filters')"
             @click="openFilterModal"
           >
             <div
               v-if="filterActivated"
-              class="absolute inline-flex items-center justify-center w-6 h-6 text-xs font-bold text-white bg-red-500 border-2 border-white rounded-full -top-2 -right-2 dark:border-gray-900"
+              class="absolute inline-flex items-center justify-center min-w-5 h-5 px-1 text-[10px] font-bold text-white bg-blue-600 border-2 border-white rounded-full -top-2 -right-2 dark:border-slate-900"
             >
               {{ filterActivated }}
             </div>
-            <IconFilter class="w-4 h-4 mr-2" />
+            <IconFilter class="w-4 h-4" />
             <span class="hidden md:block">{{ t(filterText ?? '') }}</span>
           </button>
           <FilterModal
@@ -704,7 +711,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
       </div>
       <button
         v-if="isSelectAllEnabled"
-        class="inline-flex items-center self-end px-3 py-2 ml-auto mr-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-lg cursor-pointer dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden"
+        class="ml-auto inline-flex items-center gap-2 h-9 px-3 text-sm font-medium rounded-lg border border-slate-200 bg-white text-slate-700 shadow-xs cursor-pointer transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-white/10 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 disabled:opacity-50 disabled:cursor-not-allowed"
         type="button" @click="
           selectedRows = selectedRows.map(() => true);
           emit('selectRow', selectedRows);
@@ -714,10 +721,10 @@ const paginationClass = computed(() => props.mobileFixedPagination
       </button>
       <button
         v-if="isSelectAllEnabled"
-        class="inline-flex items-center self-end py-1.5 px-3 mr-2 text-sm font-medium text-gray-500 bg-white rounded-lg border border-gray-300 cursor-pointer dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden"
+        class="inline-flex items-center gap-2 h-9 px-3 text-sm font-medium rounded-lg border border-slate-200 bg-white text-slate-700 shadow-xs cursor-pointer transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-white/10 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 disabled:opacity-50 disabled:cursor-not-allowed hover:border-red-300 hover:bg-red-50 dark:hover:bg-red-500/10"
         type="button" @click="emit('massDelete')"
       >
-        <IconTrash class="h-6 text-red-500" />
+        <IconTrash class="w-4 h-4 text-red-500" />
       </button>
       <div class="flex w-full min-w-0 flex-col items-stretch gap-2 overflow-visible sm:w-auto sm:min-w-0 sm:flex-1 sm:flex-row sm:items-center sm:justify-end md:w-auto md:flex-none">
         <div v-if="$slots['toolbar-extras']" class="flex h-10 shrink-0 items-center self-end sm:self-auto">
@@ -738,22 +745,22 @@ const paginationClass = computed(() => props.mobileFixedPagination
     </div>
     <slot name="table-notice" />
     <div class="block">
-      <table id="custom_table" class="w-full text-sm text-left text-gray-500 pb-14 md:pb-0 dark:text-gray-400">
-        <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:text-gray-400 dark:bg-gray-700">
+      <table id="custom_table" class="w-full text-sm text-left text-slate-600 pb-14 md:pb-0 dark:text-slate-300">
+        <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
           <tr>
             <th v-if="props.massSelect" class="px-4 md:px-6" />
             <th
-              v-for="(col, i) in columns" :key="i" scope="col" class="px-4 py-1 md:py-3 md:px-6" :class="{
-                'cursor-pointer': col.sortable,
+              v-for="(col, i) in columns" :key="i" scope="col" class="px-4 py-2.5 md:px-6 font-semibold md:whitespace-nowrap" :class="{
+                'cursor-pointer select-none hover:text-slate-900 dark:hover:text-white transition-colors': col.sortable,
                 'hidden md:table-cell': !col.mobile,
               }" @click="sortClick(i)"
             >
-              <div class="flex items-center first-letter:uppercase">
+              <div class="flex items-center gap-1 first-letter:uppercase">
                 {{ col.label }}
-                <div v-if="col.sortable">
-                  <IconSortUp v-if="col.sortable === 'asc'" />
-                  <IconSortDown v-else-if="col.sortable === 'desc'" />
-                  <IconSort v-else />
+                <div v-if="col.sortable" class="shrink-0">
+                  <IconSortUp v-if="col.sortable === 'asc'" class="w-3.5 h-3.5 text-blue-600 dark:text-azure-400" />
+                  <IconSortDown v-else-if="col.sortable === 'desc'" class="w-3.5 h-3.5 text-blue-600 dark:text-azure-400" />
+                  <IconSort v-else class="w-3.5 h-3.5 opacity-50" />
                 </div>
               </div>
             </th>
@@ -762,14 +769,14 @@ const paginationClass = computed(() => props.mobileFixedPagination
         <tbody v-if="shouldShowRows">
           <tr
             v-for="(elem, i) in elementList" :key="i"
-            class="bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
+            class="border-b border-slate-100 last:border-b-0 transition-colors hover:bg-slate-50 dark:border-white/5 dark:hover:bg-white/[0.03]"
           >
             <template v-if="true">
               <th v-if="props.massSelect" class="px-4 md:px-6">
                 <input
                   :id="`select-row-${i}`"
                   :checked="selectedRows[i]"
-                  class="scale-checkbox"
+                  class="size-4 rounded cursor-pointer accent-blue-600"
                   type="checkbox"
                   :aria-label="t('select_all')"
                   @click="(e: MouseEvent) => { handleCheckboxClick(i, e) }"
@@ -781,7 +788,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
                   } ${col.onClick
                     ? 'cursor-pointer hover:underline clickable-cell'
                     : ''
-                  }`" scope="row" class="px-4 py-2 font-medium text-gray-900 whitespace-nowrap md:py-4 md:px-6 dark:text-white"
+                  }`" scope="row" class="px-4 py-3 font-medium text-slate-900 whitespace-nowrap md:py-3.5 md:px-6 dark:text-white"
                   @click.stop="col.onClick ? col.onClick(elem) : () => { }"
                 >
                   <RenderCell v-if="col.renderFunction" :renderer="col.renderFunction" :item="elem" />
@@ -791,9 +798,9 @@ const paginationClass = computed(() => props.mobileFixedPagination
                 </th>
                 <td
                   v-else-if="col.actions || col.icon" :class="`${col.class ?? ''} ${!col.mobile ? 'hidden md:table-cell' : ''
-                  }`" class="px-4 py-2 md:py-4 md:px-6"
+                  }`" class="px-4 py-2 md:px-6"
                 >
-                  <div class="flex items-center space-x-1">
+                  <div class="flex items-center gap-1">
                     <template v-if="col.actions">
                       <div
                         v-for="(action, actionIndex) in col.actions"
@@ -807,7 +814,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
                             :disabled="isActionDisabled(action, elem)"
                             :aria-describedby="getActionTitle(action, elem) ? tooltipIdFor(i, actionIndex) : undefined"
                             :data-test="action.testId ? (typeof action.testId === 'function' ? action.testId(elem) : action.testId) : undefined"
-                            class="p-2 text-gray-500 rounded-md cursor-pointer dark:text-gray-400 hover:text-gray-600 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed dark:hover:bg-gray-700 dark:hover:text-gray-300 dark:disabled:hover:text-gray-400 disabled:hover:bg-transparent disabled:hover:text-gray-500"
+                            class="inline-flex items-center justify-center size-8 text-slate-400 rounded-md cursor-pointer transition-colors hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-slate-400"
                             @click.stop="action.onClick(elem)"
                           >
                             <component :is="action.icon" />
@@ -826,7 +833,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
                     <template v-else-if="col.icon">
                       <button
                         type="button"
-                        class="p-2 text-gray-500 rounded-md cursor-pointer dark:text-gray-400 hover:text-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+                        class="inline-flex items-center justify-center size-8 text-slate-400 rounded-md cursor-pointer transition-colors hover:text-slate-900 hover:bg-slate-100 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500"
                         @click.stop="col.onClick ? col.onClick(elem) : () => { }"
                       >
                         <component :is="col.icon" />
@@ -836,7 +843,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
                 </td>
                 <td
                   v-else
-                  class="overflow-hidden text-ellipsis whitespace-nowrap px-4 py-2 md:py-4 md:px-6"
+                  class="overflow-hidden text-ellipsis whitespace-nowrap px-4 py-3 md:py-3.5 md:px-6"
                   :class="`${col.class ?? ''} ${!col.mobile ? 'hidden md:table-cell' : ''
                   } ${col.onClick
                     ? 'cursor-pointer hover:underline clickable-cell'
@@ -857,7 +864,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
           <tr>
             <td
               :colspan="columns.length + (props.massSelect ? 1 : 0)"
-              class="px-4 py-2 text-center text-gray-500 md:py-4 md:px-6 dark:text-gray-400"
+              class="px-4 py-10 text-center text-slate-500 md:px-6 dark:text-slate-400"
             >
               <slot
                 name="empty-state"
@@ -870,20 +877,20 @@ const paginationClass = computed(() => props.mobileFixedPagination
           </tr>
         </tbody>
         <tbody v-else>
-          <tr v-for="i in 10" :key="i" :class="{ 'animate-pulse duration-1000': shouldShowSkeleton }">
+          <tr v-for="i in 10" :key="i" class="border-b border-slate-100 dark:border-white/5" :class="{ 'animate-pulse duration-1000': shouldShowSkeleton }">
             <td
-              v-if="props.massSelect" class="px-4 py-2 md:py-4 md:px-6"
+              v-if="props.massSelect" class="px-4 py-4 md:px-6"
               :style="`width: ${getSkeletonWidth()}`"
             >
-              <div class="mb-4 w-full h-2.5 bg-gray-200 rounded-full dark:bg-gray-700" />
+              <div class="w-full h-2.5 rounded-full bg-slate-200 dark:bg-white/10" />
             </td>
             <td
-              v-for="(col, y) in columns" :key="`${i}_${y}`" class="px-4 py-2 md:py-4 md:px-6"
+              v-for="(col, y) in columns" :key="`${i}_${y}`" class="px-4 py-4 md:px-6"
               :class="{ 'hidden md:table-cell': !col.mobile }" :style="`width: ${getSkeletonWidth(y)}`"
             >
               <div
-                class="w-full bg-gray-200 rounded-full dark:bg-gray-700"
-                :class="{ 'mb-4 h-2.5': col.head, 'h-2 mb-2.5': !col.head }"
+                class="w-full rounded-full bg-slate-200 dark:bg-white/10"
+                :class="{ 'h-2.5': col.head, 'h-2': !col.head }"
               />
             </td>
           </tr>
@@ -892,89 +899,52 @@ const paginationClass = computed(() => props.mobileFixedPagination
     </div>
 
     <nav :class="paginationClass" aria-label="Table navigation">
-      <span class="text-sm font-normal text-gray-500 dark:text-gray-400">
+      <span class="text-sm text-slate-500 dark:text-slate-400">
         <span class="hidden mr-1 md:inline-block">
           {{ t("showing") }}
         </span>
-        <span class="font-semibold text-gray-900 dark:text-white">
+        <span class="font-semibold text-slate-900 dark:text-white">
           {{ displayElemRange }}
         </span>
         {{ t('of') }}
-        <span class="font-semibold text-gray-900 dark:text-white">
+        <span class="font-semibold text-slate-900 dark:text-white">
           {{ total }}
         </span>
       </span>
-      <ul class="inline-flex items-center -space-x-px">
+      <ul class="inline-flex items-center gap-1">
         <li>
-          <button
-            type="button"
-            class="block px-3 py-2 ml-0 leading-tight text-gray-500 bg-white border border-gray-300 rounded-l-lg cursor-pointer dark:text-gray-400 dark:bg-gray-800 dark:border-gray-700"
-            :class="{
-              'hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-700 dark:hover:text-white':
-                canPrev(),
-            }" :disabled="!canPrev()" @click="fastBackward"
-          >
+          <button type="button" class="inline-flex items-center justify-center size-8 rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors dark:border-white/10 dark:bg-white/5 dark:text-slate-300 enabled:hover:bg-slate-50 enabled:hover:text-slate-900 dark:enabled:hover:bg-white/10 dark:enabled:hover:text-white disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500" :disabled="!canPrev()" @click="fastBackward">
             <span class="sr-only">{{ t("fast-backward") }}</span>
-            <IconFastBackward />
+            <IconFastBackward class="w-4 h-4" />
           </button>
         </li>
         <li>
-          <button
-            type="button"
-            class="block px-3 py-2 ml-0 leading-tight text-gray-500 bg-white border border-gray-300 cursor-pointer dark:text-gray-400 dark:bg-gray-800 dark:border-gray-700"
-            :class="{
-              'hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-700 dark:hover:text-white':
-                canPrev(),
-            }" :disabled="!canPrev()" @click="prev"
-          >
+          <button type="button" class="inline-flex items-center justify-center size-8 rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors dark:border-white/10 dark:bg-white/5 dark:text-slate-300 enabled:hover:bg-slate-50 enabled:hover:text-slate-900 dark:enabled:hover:bg-white/10 dark:enabled:hover:text-white disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500" :disabled="!canPrev()" @click="prev">
             <span class="sr-only">{{ t("previous") }}</span>
-            <IconPrev />
+            <IconPrev class="w-4 h-4" />
           </button>
         </li>
         <li>
-          <button
-            type="button"
+          <span
             aria-current="page"
-            class="z-10 px-3 py-2 leading-tight text-blue-600 border border-blue-300 bg-blue-50 dark:text-white dark:bg-gray-700 dark:border-gray-700"
-            disabled
+            class="inline-flex items-center justify-center min-w-8 h-8 px-2 text-sm font-semibold rounded-lg bg-azure-500/10 text-blue-700 ring-1 ring-azure-500/30 dark:text-azure-300"
           >
             {{ currentPage }}
-          </button>
+          </span>
         </li>
         <li>
-          <button
-            type="button"
-            class="block px-3 py-2 leading-tight text-gray-500 bg-white border border-gray-300 cursor-pointer dark:text-gray-400 dark:bg-gray-800 dark:border-gray-700"
-            :class="{
-              'hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-700 dark:hover:text-white':
-                canNext(),
-            }" :disabled="!canNext()" @click="next"
-          >
+          <button type="button" class="inline-flex items-center justify-center size-8 rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors dark:border-white/10 dark:bg-white/5 dark:text-slate-300 enabled:hover:bg-slate-50 enabled:hover:text-slate-900 dark:enabled:hover:bg-white/10 dark:enabled:hover:text-white disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500" :disabled="!canNext()" @click="next">
             <span class="sr-only">{{ t("next") }}</span>
-            <IconNext />
+            <IconNext class="w-4 h-4" />
           </button>
         </li>
         <li>
-          <button
-            type="button"
-            class="block px-3 py-2 leading-tight text-gray-500 bg-white border border-gray-300 rounded-r-lg cursor-pointer dark:text-gray-400 dark:bg-gray-800 dark:border-gray-700"
-            :class="{
-              'hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-700 dark:hover:text-white':
-                canNext(),
-            }" :disabled="!canNext()" @click="fastForward"
-          >
+          <button type="button" class="inline-flex items-center justify-center size-8 rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors dark:border-white/10 dark:bg-white/5 dark:text-slate-300 enabled:hover:bg-slate-50 enabled:hover:text-slate-900 dark:enabled:hover:bg-white/10 dark:enabled:hover:text-white disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500" :disabled="!canNext()" @click="fastForward">
             <span class="sr-only"> {{ t("fast-forward") }} </span>
-            <IconFastForward />
+            <IconFastForward class="w-4 h-4" />
           </button>
         </li>
       </ul>
     </nav>
   </div>
 </template>
-
-<style scoped>
-.scale-checkbox {
-  transform: scale(1.5);
-  transform-origin: center;
-}
-</style>

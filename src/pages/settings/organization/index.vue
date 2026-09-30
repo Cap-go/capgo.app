@@ -6,6 +6,7 @@ import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import IconCopy from '~icons/heroicons/document-duplicate'
 import iconEmail from '~icons/heroicons/envelope?raw'
 import iconName from '~icons/heroicons/user?raw'
 import { invokeCapgoApi } from '~/services/capgoApi'
@@ -261,7 +262,7 @@ async function copyOrganizationId() {
 
 <template>
   <div>
-    <div class="flex flex-col h-full pb-8 overflow-hidden overflow-y-auto bg-white border shadow-lg md:pb-0 max-h-fit grow md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
+    <div class="flex flex-col h-full pb-8 overflow-hidden overflow-y-auto bg-white border shadow-sm md:pb-0 max-h-fit grow md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
       <FormKit id="update-org" :key="currentOrganization?.gid ?? 'no-org'" type="form" :actions="false" @submit="saveChanges">
         <div class="p-6 space-y-6">
           <h2 class="mb-5 text-2xl font-bold dark:text-white text-slate-800">
@@ -325,13 +326,21 @@ async function copyOrganizationId() {
                 :label="t('organization-email')"
               />
             </div>
-            <div class="flex flex-col md:flex-row md:items-center items-left">
-              <p class="dark:text-white text-slate-800">
+            <!-- Show the ID itself: support and the CLI ask for it, so people need to read it, not just copy it blind. -->
+            <div class="flex flex-col gap-1">
+              <p class="text-sm font-semibold dark:text-white text-slate-800">
                 {{ t('organization-id') }}
               </p>
-              <div class="pt-2 md:pt-0 md:ml-6">
-                <button type="button" class="px-3 py-2 text-xs font-medium text-center text-gray-700 border rounded-lg cursor-pointer dark:text-white hover:bg-gray-100 focus:ring-4 focus:ring-blue-300 border-slate-500 dark:hover:bg-gray-600 dark:focus:ring-blue-800 focus:outline-hidden" @click.prevent="copyOrganizationId()">
-                  {{ t('copy-organization-id') }}
+              <div class="flex items-center gap-2 max-w-md">
+                <code class="flex-1 min-w-0 px-3 py-2 overflow-x-auto font-mono text-sm rounded-lg whitespace-nowrap bg-slate-100 text-slate-800 dark:bg-slate-900 dark:text-slate-200" data-test="organization-id-value">{{ currentOrganization?.gid }}</code>
+                <button
+                  type="button"
+                  class="inline-flex items-center justify-center rounded-lg size-9 shrink-0 border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-900 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500"
+                  :aria-label="t('copy-organization-id')"
+                  :title="t('copy-organization-id')"
+                  @click.prevent="copyOrganizationId()"
+                >
+                  <IconCopy class="w-4 h-4" aria-hidden="true" />
                 </button>
               </div>
             </div>

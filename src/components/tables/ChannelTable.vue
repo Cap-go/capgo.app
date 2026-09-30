@@ -287,18 +287,28 @@ columns.value = [
           if (canRead)
             openOne(elem)
         },
-      }, elem.name)
+      }, [
+        elem.name,
+        // The default channel is where new devices land; make it findable at a glance.
+        elem.public
+          ? h('span', {
+              class: 'ml-2 px-1.5 py-0.5 text-[10px] font-semibold uppercase align-middle rounded border border-azure-500/40 bg-azure-500/10 text-blue-700 dark:text-azure-300',
+              title: t('channel-default-badge-hint'),
+            }, t('channel-default-badge'))
+          : null,
+      ])
     },
   },
   {
-    label: t('last-upload'),
+    // This is the channel's own update time, not a bundle upload time.
+    label: t('last-update'),
     key: 'updated_at',
     mobile: false,
     sortable: 'desc',
     displayFunction: (elem: Element) => formatDate(elem.updated_at ?? ''),
   },
   {
-    label: t('last-version'),
+    label: t('channel-serving-bundle'),
     key: 'version',
     mobile: true,
     sortable: true,
@@ -316,10 +326,16 @@ columns.value = [
     onClick: (elem: Element) => openOneVersion(elem),
   },
   {
-    label: t('misconfigured'),
+    // "Misconfigured: no" is a double negative; say what state the channel is in.
+    label: t('status'),
     mobile: false,
     key: 'misconfigured',
-    displayFunction: (elem: Element) => elem.misconfigured ? t('yes') : t('no'),
+    renderFunction: (elem: Element) => elem.misconfigured
+      ? h('span', {
+          class: 'inline-flex items-center gap-1 font-medium text-amber-700 dark:text-amber-300',
+          title: t('channel-status-misconfigured-hint'),
+        }, `⚠ ${t('misconfigured')}`)
+      : h('span', { class: 'text-slate-500 dark:text-slate-400' }, t('ok')),
   },
   {
     key: 'action',

@@ -9,10 +9,9 @@ describe('getting started CLI onboarding accordion', () => {
     const messages = JSON.parse(await readFile(new URL('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
     const gettingStarted = await readFile(new URL('../src/pages/app/[app].getting-started.vue', import.meta.url), 'utf8')
-    expect(gettingStarted).toContain('data-test="getting-started-verify"')
-    expect(gettingStarted).toContain('data-test="getting-started-hide"')
-    expect(gettingStarted).toContain('verify_getting_started')
-    expect(gettingStarted).toContain('dismiss_getting_started')
+    // Getting started always embeds the onboarding setup UI in the dashboard shell.
+    expect(gettingStarted).toContain(':setup-app-id="setupFlowAppId"')
+    expect(gettingStarted).not.toContain('data-test="getting-started-page"')
     expect(source).toContain('data-test="app-onboarding-dont-show-again"')
     expect(source).toContain('skipOnboardingSplash')
     expect(source).toContain('leaveSplashIfAlreadySetup')
