@@ -4,6 +4,9 @@ import { storeToRefs } from 'pinia'
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import IconCheck from '~icons/lucide/check'
+import IconPlus from '~icons/lucide/plus'
+import IconSearch from '~icons/lucide/search'
 import IconSettings from '~icons/lucide/settings'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
@@ -32,6 +35,7 @@ const main = useMainStore()
 const dropdown = useTemplateRef<HTMLDetailsElement>('dropdown')
 const menu = useTemplateRef<HTMLElement>('orgSwitcherMenu')
 const compactMenuOpen = ref(false)
+const organizationSearch = ref('')
 const compactMenuStyle = ref<Record<string, string>>({})
 const hasVisibleOrganizations = computed(() => organizationStore.organizations.length > 0)
 const currentLabel = computed(() => currentOrganization.value?.name ?? t('select-organization'))
@@ -57,6 +61,18 @@ const triggerAriaLabel = computed(() => {
   return `${baseLabel}, ${t('org-switcher-pending-invites', invitationCount.value)}`
 })
 const canCreateOrganizationInContext = !isNativeAppStoreContext()
+const ORGANIZATION_SEARCH_THRESHOLD = 8
+const showOrganizationSearch = computed(() => {
+  const appCount = organizationStore.organizations.reduce((total, org) => total + getOrgApps(org).length, 0)
+  return organizationStore.organizations.length + appCount > ORGANIZATION_SEARCH_THRESHOLD
+})
+const normalizedOrganizationSearch = computed(() => organizationSearch.value.trim().toLowerCase())
+const filteredOrganizations = computed(() => {
+  const query = normalizedOrganizationSearch.value
+  if (!query)
+    return organizationStore.organizations
+  return organizationStore.organizations.filter(org => org.name.toLowerCase().includes(query) || getOrgApps(org).some(app => appMatchesSearch(app, query)))
+})
 const ORGANIZATION_LOGO_REFRESH_INTERVAL_MS = 10 * 60 * 1000
 const isRefreshingBrokenLogos = ref(false)
 const lastOrganizationLogoRefreshAt = ref(0)
@@ -137,6 +153,8 @@ function unbindCompactMenuListeners() {
 async function onDropdownToggle() {
   const open = dropdown.value?.open ?? false
   compactMenuOpen.value = props.compact && open
+  if (!open)
+    organizationSearch.value = ''
   if (!compactMenuOpen.value) {
     unbindCompactMenuListeners()
     return
@@ -184,6 +202,7 @@ async function handleOrganizationInvitation(org: OrganizationInvitationTarget) {
     buttons: [
       {
         text: t('button-join'),
+        role: 'primary',
         id: 'confirm-button',
         handler: async () => {
           const { data, error } = await supabase.rpc('accept_invitation_to_org', {
@@ -274,11 +293,19 @@ async function openInvitationFromRouteIfNeeded() {
 
 function closeDropdown(options?: { restoreFocus?: boolean }) {
   const wasCompactOpen = compactMenuOpen.value
+  organizationSearch.value = ''
   compactMenuOpen.value = false
   unbindCompactMenuListeners()
   dropdown.value?.removeAttribute('open')
   if (wasCompactOpen && options?.restoreFocus !== false)
     dropdown.value?.querySelector('summary')?.focus()
+}
+
+function onMenuClick(event: MouseEvent) {
+  // Typing in the search field must not close the menu.
+  if (event.target instanceof Element && event.target.closest('[data-org-switcher-search]'))
+    return
+  closeDropdown()
 }
 
 onKeyStroke('Escape', (event) => {
@@ -394,6 +421,18 @@ function getAppLabel(app: Pick<OrganizationApp, 'app_id' | 'name'>) {
   return app.name || app.app_id
 }
 
+function appMatchesSearch(app: Pick<OrganizationApp, 'app_id' | 'name'>, query: string) {
+  return getAppLabel(app).toLowerCase().includes(query) || app.app_id.toLowerCase().includes(query)
+}
+
+function getVisibleOrgApps(org: Organization) {
+  const apps = getOrgApps(org)
+  const query = normalizedOrganizationSearch.value
+  if (!query || org.name.toLowerCase().includes(query))
+    return apps
+  return apps.filter(app => appMatchesSearch(app, query))
+}
+
 function isSelectedApp(app: OrganizationApp) {
   return app.app_id === currentAppId.value
 }
@@ -448,8 +487,7 @@ watch(
       v-if="hasVisibleOrganizations"
       ref="dropdown"
       data-test="org-switcher"
-      class="d-dropdown w-full"
-      :class="{ 'd-dropdown-end': !props.compact }"
+      class="relative w-full"
       @toggle="onDropdownToggle"
     >
       <summary
@@ -506,118 +544,145 @@ watch(
           v-show="!props.compact || compactMenuOpen"
           ref="orgSwitcherMenu"
           data-test="org-switcher-menu"
-          class="flex flex-col max-h-[60vh] shadow bg-[#1a1d24] rounded-box text-white"
+          class="flex flex-col max-h-[min(34rem,70vh)] overflow-hidden rounded-xl border border-slate-600/70 bg-slate-800 text-slate-200 shadow-2xl shadow-black/40"
           :class="props.compact
-            ? 'fixed z-[100] min-w-72'
-            : 'w-full min-w-0 d-dropdown-content z-50'"
+            ? 'fixed z-[100] w-80'
+            : 'absolute top-full inset-x-0 mt-1.5 z-50'"
           :style="props.compact ? compactMenuStyle : undefined"
-          @click="closeDropdown()"
+          @click="onMenuClick"
         >
-          <ul class="flex-1 overflow-y-auto p-2">
+          <div class="flex items-center justify-between px-3 pt-3 pb-1.5">
+            <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">{{ t('organizations') }}</span>
+            <span class="text-[11px] tabular-nums text-slate-500">{{ organizationStore.organizations.length }}</span>
+          </div>
+          <div v-if="showOrganizationSearch" class="px-2 pb-2" data-org-switcher-search>
+            <label class="flex items-center gap-2 h-9 px-2.5 rounded-lg border border-slate-600 bg-slate-900/60 text-slate-400 focus-within:border-azure-500 focus-within:ring-2 focus-within:ring-azure-500/30">
+              <IconSearch class="size-4 shrink-0" aria-hidden="true" />
+              <input
+                v-model="organizationSearch"
+                type="search"
+                data-test="org-switcher-search"
+                class="w-full min-w-0 bg-transparent text-sm text-white placeholder:text-slate-500 outline-none"
+                :placeholder="t('search-organizations')"
+                :aria-label="t('search-organizations')"
+              >
+            </label>
+          </div>
+          <ul class="flex-1 overflow-y-auto overscroll-contain px-1.5 pb-1.5 space-y-0.5">
             <li
-              v-for="org in organizationStore.organizations"
+              v-for="org in filteredOrganizations"
               :key="org.gid"
-              class="block px-1 my-1 rounded-lg"
-              :class="isSelected(org) ? 'bg-gray-700/80' : ''"
+              class="group/org"
             >
-              <div class="flex items-center gap-2 px-3 py-3 text-white rounded-md hover:bg-gray-600">
+              <div
+                class="flex items-center gap-1 rounded-lg transition-colors duration-150"
+                :class="isSelected(org) ? 'bg-slate-700/70' : 'hover:bg-slate-700/50'"
+              >
                 <button
                   type="button"
-                  class="d-btn d-btn-ghost d-btn-sm h-auto min-h-0 flex-1 items-center justify-start min-w-0 border-none px-0 shadow-none text-white hover:bg-transparent"
+                  class="flex flex-1 min-w-0 items-center gap-2.5 h-10 pl-2 pr-1 text-left text-sm font-medium text-white rounded-lg cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500"
                   :aria-current="isSelected(org) ? 'true' : undefined"
                   :aria-label="org.name"
+                  :title="org.name"
                   @click="onOrganizationClick(org)"
                 >
                   <img
                     v-if="org.logo"
                     :src="org.logo"
                     :alt="`${org.name} logo`"
-                    class="object-cover size-6 mr-2 rounded-sm d-mask d-mask-squircle shrink-0"
+                    class="object-cover size-6 rounded-md shrink-0 ring-1 ring-white/10"
                     @error="refreshBrokenOrganizationLogo(org)"
                   >
-                  <div
+                  <span
                     v-else-if="org.logo_is_loading"
-                    class="flex items-center justify-center size-6 mr-2 bg-gray-700 rounded-sm d-mask d-mask-squircle shrink-0"
+                    class="flex items-center justify-center size-6 rounded-md bg-slate-700 shrink-0"
                     :aria-label="t('loading')"
                   >
-                    <span class="size-3.5 rounded-full border-2 border-blue-400 border-t-transparent animate-spin" />
+                    <span class="size-3 rounded-full border-2 border-blue-400 border-t-transparent animate-spin" />
                     <span class="sr-only">{{ t('loading') }}</span>
-                  </div>
-                  <div
+                  </span>
+                  <span
                     v-else
-                    class="flex items-center justify-center size-6 mr-2 text-xs font-semibold text-gray-300 bg-gray-700 rounded-sm d-mask d-mask-squircle shrink-0"
+                    class="flex items-center justify-center size-6 rounded-md bg-slate-600 text-[10px] font-semibold text-slate-100 shrink-0"
                   >
                     {{ acronym(org.name) }}
-                  </div>
-                  <span class="block truncate min-w-0">{{ org.name }}</span>
+                  </span>
+                  <span class="block truncate min-w-0 flex-1">{{ org.name }}</span>
                   <span
                     v-if="isInvitation(org)"
-                    class="inline-flex items-center gap-1 px-2 py-0.5 ml-auto text-[10px] font-medium rounded-full border border-amber-400/25 bg-amber-500/8 text-amber-200 shrink-0"
+                    class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded-full border border-amber-400/25 bg-amber-500/10 text-amber-200 shrink-0"
                   >
                     <span class="size-1.5 rounded-full bg-amber-300" />
                     {{ t('sso-status-pending') }}
                   </span>
+                  <IconCheck v-else-if="isSelected(org) && !currentAppId" class="size-4 shrink-0 text-azure-400" aria-hidden="true" />
                 </button>
                 <button
                   v-if="!isInvitation(org)"
                   type="button"
-                  class="d-btn d-btn-ghost d-btn-sm d-btn-square size-8 min-h-0 border-none text-slate-300 hover:bg-slate-500/30 hover:text-white shrink-0"
+                  class="flex items-center justify-center size-8 mr-1 rounded-md text-slate-400 shrink-0 cursor-pointer transition-opacity duration-150 hover:bg-slate-600/60 hover:text-white focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500"
+                  :class="isSelected(org) ? 'opacity-100' : 'opacity-100 md:opacity-0 md:group-hover/org:opacity-100'"
                   :aria-label="`${t('settings')} ${org.name}`"
+                  :title="t('settings')"
                   @click="openOrganizationSettings(org, $event)"
                 >
                   <IconSettings class="size-4" />
                 </button>
               </div>
-              <div v-if="!isInvitation(org)" class="pb-2 pl-8 pr-1">
-                <div v-if="getOrgApps(org).length > 0" class="space-y-1">
+              <ul v-if="!isInvitation(org) && getVisibleOrgApps(org).length > 0" class="py-0.5 space-y-0.5">
+                <li v-for="app in getVisibleOrgApps(org)" :key="app.app_id">
                   <button
-                    v-for="app in getOrgApps(org)"
-                    :key="app.app_id"
                     type="button"
-                    class="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left"
-                    :class="isSelectedApp(app) ? 'bg-azure-500/15 text-azure-100' : 'text-slate-300 hover:bg-gray-600 hover:text-white'"
+                    class="flex w-full items-center gap-2.5 min-h-10 py-1.5 pl-6 pr-2 rounded-lg text-left cursor-pointer transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500"
+                    :class="isSelectedApp(app) ? 'bg-azure-500/15 text-white' : 'text-slate-300 hover:bg-slate-700/50 hover:text-white'"
                     :aria-current="isSelectedApp(app) ? 'page' : undefined"
+                    :title="`${getAppLabel(app)} (${app.app_id})`"
                     @click="onAppClick(org, app, $event)"
                   >
                     <img
                       v-if="app.icon_url"
                       :src="app.icon_url"
                       :alt="`${getAppLabel(app)} icon`"
-                      class="object-cover size-5 rounded-sm d-mask d-mask-squircle shrink-0"
+                      class="object-cover size-5 rounded-md shrink-0 ring-1 ring-white/10"
                     >
                     <span
                       v-else-if="app.icon_url_loading"
-                      class="flex size-5 items-center justify-center rounded-sm bg-gray-700 d-mask d-mask-squircle shrink-0"
+                      class="flex size-5 items-center justify-center rounded-md bg-slate-700 shrink-0"
                       :aria-label="t('loading')"
                     >
-                      <span class="size-3 rounded-full border-2 border-blue-400 border-t-transparent animate-spin" />
+                      <span class="size-2.5 rounded-full border-2 border-blue-400 border-t-transparent animate-spin" />
                       <span class="sr-only">{{ t('loading') }}</span>
                     </span>
-                    <span v-else class="flex size-5 items-center justify-center rounded-sm bg-gray-700 text-[10px] font-semibold text-gray-300 d-mask d-mask-squircle shrink-0">
+                    <span v-else class="flex size-5 items-center justify-center rounded-md bg-slate-700 text-[9px] font-semibold text-slate-300 shrink-0">
                       {{ acronym(getAppLabel(app)) }}
                     </span>
-                    <span class="min-w-0 flex-1">
-                      <span class="block truncate text-sm font-medium">{{ getAppLabel(app) }}</span>
-                      <span class="block truncate font-mono text-xs text-slate-500">{{ app.app_id }}</span>
+                    <span class="min-w-0 flex-1 leading-tight">
+                      <span class="block truncate text-[13px] font-medium">{{ getAppLabel(app) }}</span>
+                      <span class="block truncate font-mono text-[11px]" :class="isSelectedApp(app) ? 'text-slate-400' : 'text-slate-500'">{{ app.app_id }}</span>
                     </span>
+                    <IconCheck v-if="isSelectedApp(app)" class="size-4 shrink-0 text-azure-400" aria-hidden="true" />
                   </button>
-                </div>
-                <p v-else-if="isSelected(org)" class="px-2 py-2 text-sm text-slate-400">
-                  {{ t('no-apps') }}
-                </p>
-              </div>
+                </li>
+              </ul>
+              <p v-else-if="!isInvitation(org) && isSelected(org) && !normalizedOrganizationSearch" class="py-1.5 pl-[2.625rem] pr-2 text-xs text-slate-500">
+                {{ t('no-apps') }}
+              </p>
+            </li>
+            <li v-if="filteredOrganizations.length === 0" class="px-3 py-6 text-center text-sm text-slate-400">
+              {{ t('no-results') }}
             </li>
           </ul>
-          <div v-if="canCreateOrganizationInContext" class="p-2 border-t border-gray-700">
-            <div class="block p-px rounded-lg from-cyan-500 to-purple-500 bg-linear-to-r">
-              <button
-                type="button"
-                class="d-btn d-btn-ghost flex w-full h-auto min-h-0 justify-center items-center py-3 px-3 text-center text-white rounded-lg bg-[#1a1d24] hover:bg-gray-600 cursor-pointer"
-                @click="createNewOrg"
-              >
-                {{ t('add-organization') }}
-              </button>
-            </div>
+          <div v-if="canCreateOrganizationInContext" class="p-1.5 border-t border-slate-700">
+            <button
+              type="button"
+              class="flex w-full items-center gap-2.5 h-10 px-2 rounded-lg text-sm font-medium text-slate-300 cursor-pointer transition-colors duration-150 hover:bg-slate-700/50 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500"
+              @click="createNewOrg"
+            >
+              <span class="flex items-center justify-center size-6 rounded-md border border-dashed border-slate-500 text-slate-400 shrink-0">
+                <IconPlus class="size-3.5" />
+              </span>
+              {{ t('add-organization') }}
+            </button>
           </div>
         </div>
       </Teleport>

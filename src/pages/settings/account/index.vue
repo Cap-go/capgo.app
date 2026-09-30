@@ -646,7 +646,7 @@ onMounted(async () => {
               {{ t('language') }}:
             </p>
             <div class="md:ml-6">
-              <LangSelector />
+              <LangSelector placement="bottom" />
             </div>
           </section>
 

@@ -69,6 +69,7 @@ async function openLogAsDialog() {
       },
       {
         text: t('log-as'),
+        role: 'primary',
         handler: () => {
           identifier = logAsInput.value
         },
