@@ -81,6 +81,8 @@ const packageId = ref<string>('')
 const id = ref<number>(0)
 const loading = ref(true)
 const channel = ref<Database['public']['Tables']['channels']['Row'] & Channel>()
+const defaultUploadChannel = ref<string | null>(null)
+const isDefaultUploadChannel = computed(() => !!channel.value?.name && channel.value.name === defaultUploadChannel.value)
 const rolloutConfigured = computed(() => !!channel.value?.rollout_version)
 const rolloutPercentage = computed(() => (channel.value?.rollout_percentage_bps ?? 0) / 100)
 const rolloutIsActive = computed(() => !!channel.value?.rollout_enabled && rolloutConfigured.value)
@@ -329,6 +331,21 @@ async function getChannel(force = false) {
   }
 }
 
+async function getDefaultUploadChannel() {
+  if (!packageId.value)
+    return
+  const { data, error } = await supabase
+    .from('apps')
+    .select('default_upload_channel')
+    .eq('app_id', packageId.value)
+    .maybeSingle()
+  if (error) {
+    console.error('cannot load default upload channel', error)
+    return
+  }
+  defaultUploadChannel.value = data?.default_upload_channel ?? null
+}
+
 async function saveChannelChanges(update: ChannelUpdate) {
   const changesStableVersion = Object.prototype.hasOwnProperty.call(update, 'version')
   const changesRolloutVersion = Object.prototype.hasOwnProperty.call(update, 'rollout_version')
@@ -489,7 +506,7 @@ watchEffect(async () => {
     loading.value = true
     packageId.value = route.params.app as string
     id.value = Number(route.params.channel as string)
-    await getChannel()
+    await Promise.all([getChannel(), getDefaultUploadChannel()])
     loading.value = false
     if (!channel.value?.name)
       displayStore.NavTitle = t('channel')
@@ -1209,6 +1226,13 @@ async function copyCurlCommand() {
                 {{ channelAudience }}
               </span>
               <span
+                v-if="isDefaultUploadChannel"
+                class="px-2 py-1 rounded-md bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200"
+                :title="t('channel-default-upload-badge-hint')"
+              >
+                {{ t('channel-summary-default-upload') }}
+              </span>
+              <span
                 class="px-2 py-1 rounded-md"
                 :class="channelPlatforms.length ? 'bg-slate-100 text-slate-700 dark:bg-slate-900 dark:text-slate-200' : 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200'"
               >
@@ -1631,6 +1655,25 @@ async function copyCurlCommand() {
                     <div class="absolute w-2 h-2 rotate-45 bg-gray-800 -bottom-1 right-2" />
                   </div>
                 </div>
+              </div>
+            </InfoRow>
+            <InfoRow :label="t('default-upload-channel')">
+              <div class="flex items-center justify-end w-full gap-3 text-right">
+                <span
+                  class="inline-flex items-center px-2 py-1 text-xs font-semibold rounded-md"
+                  :class="isDefaultUploadChannel
+                    ? 'bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200'
+                    : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200'"
+                >
+                  {{ isDefaultUploadChannel ? t('channel-default-upload-active') : t('channel-default-upload-inactive') }}
+                </span>
+                <button
+                  type="button"
+                  class="text-sm font-medium text-blue-600 underline dark:text-blue-400 hover:text-blue-500 decoration-dotted dark:hover:text-blue-300"
+                  @click="goToDefaultChannelSettings"
+                >
+                  {{ t('manage-default-channel') }}
+                </button>
               </div>
             </InfoRow>
             <InfoRow
