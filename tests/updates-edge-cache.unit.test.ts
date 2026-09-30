@@ -281,7 +281,7 @@ describe('updates cache purge trigger', () => {
     expect(JSON.parse(init.body).tags).toHaveLength(100)
   })
 
-  it('does not retry in the worker and reports Retry-After for requeueing', async () => {
+  it('does not retry in the worker and reports Retry-After for requeuing', async () => {
     vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
     vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
     const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 429, headers: { 'Retry-After': '7' } }))
