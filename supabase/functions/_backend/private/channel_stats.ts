@@ -290,6 +290,10 @@ app.post('/', middlewareAuth, async (c) => {
         versionIdToName[String(versionId)] = versionName
     }
 
+    const knownVersionNames = new Set(Object.values(versionIdToName))
+    if (currentVersionName)
+      knownVersionNames.add(currentVersionName)
+
     const currentVersionRelease = deploymentHistory
       .filter(entry => entry.version_name === currentVersionName)
       .sort((a, b) => dayjs(b.deployed_at).valueOf() - dayjs(a.deployed_at).valueOf())[0]
@@ -307,7 +311,8 @@ app.post('/', middlewareAuth, async (c) => {
 
     const dailyVersion = (usageRows as unknown as AppUsageByVersion[])
       .map((row) => {
-        const mapped = versionIdToName[row.version_name]
+        // Legacy rows stored the numeric version id; never remap a real bundle name like "123".
+        const mapped = knownVersionNames.has(row.version_name) ? undefined : versionIdToName[row.version_name]
         return {
           ...row,
           version_name: mapped ?? row.version_name,

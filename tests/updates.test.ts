@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
-import { z } from 'zod'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { z } from 'zod'
 import { parseSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
 
 import { APP_NAME, createAppVersions, getBaseData, getEndpointUrl, getSupabaseClient, getVersionFromAction, headers, ORG_ID, postUpdate, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
@@ -816,6 +816,29 @@ describe('manifest bundle count gating', () => {
 })
 
 describe('[POST] /updates parallel tests', () => {
+  it.skipIf(USE_CLOUDFLARE)('records the running version, not the offered one', async () => {
+    const uuid = randomUUID().toLowerCase()
+    const baseData = getBaseData(APP_NAME_UPDATE)
+    baseData.device_id = uuid
+    baseData.version_name = '1.1.0'
+
+    const response = await postUpdate(baseData)
+    expect(response.status).toBe(200)
+    const json = await response.json<UpdateRes>()
+    expect(json.version).toBe('1.0.0')
+
+    const { error, data } = await getSupabaseClient()
+      .from('devices')
+      .select('version_name')
+      .eq('device_id', uuid)
+      .eq('app_id', APP_NAME_UPDATE)
+      .single()
+    expect(error).toBeNull()
+    expect(data?.version_name).toBe('1.1.0')
+
+    await getSupabaseClient().from('devices').delete().eq('device_id', uuid).eq('app_id', APP_NAME_UPDATE)
+  })
+
   it.skipIf(USE_CLOUDFLARE)('with new device', async () => {
     const uuid = randomUUID().toLowerCase()
 

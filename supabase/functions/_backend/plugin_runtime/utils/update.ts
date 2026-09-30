@@ -897,8 +897,8 @@ export async function updateWithPG(
     // TODO: remove this when all plugin accept no URL
     signedURL = 'https://404.capgo.app/no.zip'
   }
-  // cloudlog(c.get('requestId'), 'save stats', device_id)
-  device.version_name = version.name
+  // Keep device.version_name as the version the device reports running. The offered
+  // bundle is not installed yet; /stats `set` records it once the device switches.
   await Promise.all([
     createStatsVersion(c, version.name, app_id, 'get'),
     sendStatsAndDevice(c, device, [{ action: 'get', versionName: version.name }]),
