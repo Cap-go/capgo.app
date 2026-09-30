@@ -58,6 +58,7 @@ const newChannelName = ref('')
 const canPromoteChannel = ref<Record<number, boolean>>({})
 const canReadChannel = ref<Record<number, boolean>>({})
 const canDeleteChannel = ref<Record<number, boolean>>({})
+const defaultUploadChannel = ref<string | null>(null)
 
 const canCreateChannel = computedAsync(async () => {
   if (!props.appId)
@@ -143,7 +144,11 @@ async function getData() {
           req = req.order(col.key as any, { ascending: col.sortable === 'asc' })
       })
     }
-    const { data: dataVersions, count } = await req
+    const [{ data: dataVersions, count }, { data: appData }] = await Promise.all([
+      req,
+      supabase.from('apps').select('default_upload_channel').eq('app_id', props.appId).maybeSingle(),
+    ])
+    defaultUploadChannel.value = appData?.default_upload_channel ?? null
     if (!dataVersions)
       return
     total.value = count ?? 0
@@ -289,12 +294,18 @@ columns.value = [
         },
       }, [
         elem.name,
-        // The default channel is where new devices land; make it findable at a glance.
+        // Download default = where new devices land; upload default = where CLI uploads go.
         elem.public
           ? h('span', {
               class: 'ml-2 px-1.5 py-0.5 text-[10px] font-semibold uppercase align-middle rounded border border-azure-500/40 bg-azure-500/10 text-blue-700 dark:text-azure-300',
               title: t('channel-default-badge-hint'),
             }, t('channel-default-badge'))
+          : null,
+        defaultUploadChannel.value === elem.name
+          ? h('span', {
+              class: 'ml-2 px-1.5 py-0.5 text-[10px] font-semibold uppercase align-middle rounded border border-violet-500/40 bg-violet-500/10 text-violet-700 dark:text-violet-300',
+              title: t('channel-default-upload-badge-hint'),
+            }, t('channel-default-upload-badge'))
           : null,
       ])
     },
