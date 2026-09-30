@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { getBentoSubscriberEmailByUuid, parseBentoSubscriberEmail, syncBentoSubscriberTags, trackBentoEvent, trackBentoEvents, unsubscribeBento } from '../supabase/functions/_backend/utils/bento.ts'
+import { getBentoSubscriberEmailByUuid, parseBentoSubscriberEmail, syncBentoSubscriberTags, trackBentoEvent, trackBentoEvents, trackBentoRecipientEvents, unsubscribeBento } from '../supabase/functions/_backend/utils/bento.ts'
 
 const { cloudlogErrMock, getEnvMock } = vi.hoisted(() => ({
   cloudlogErrMock: vi.fn(),
@@ -154,6 +154,15 @@ describe('bento response acceptance and configuration', () => {
         'user:created',
       )).resolves.toBe(false)
     })
+  })
+
+  it('batches different recipient emails in a single accepted request', async () => {
+    queueAcknowledgement({ failed: 0, results: 2 })
+    const recipientEvents = events.map((item, index) => ({ ...item, email: `recipient-${index}@example.com` }))
+    await expect(trackBentoRecipientEvents(createContext(), recipientEvents)).resolves.toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const payload = JSON.parse(fetchMock.mock.calls[0][1]!.body as string)
+    expect(payload.events.map((item: { email: string }) => item.email)).toEqual(['recipient-0@example.com', 'recipient-1@example.com'])
   })
 
   describe('trackBentoEvents', () => {

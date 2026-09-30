@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { trackBentoEventMock, isBentoConfiguredMock, queryMock, closeClientMock } = vi.hoisted(() => ({
-  trackBentoEventMock: vi.fn(async () => true),
+const { trackBentoRecipientEventsMock, isBentoConfiguredMock, queryMock, closeClientMock } = vi.hoisted(() => ({
+  trackBentoRecipientEventsMock: vi.fn(async () => true),
   isBentoConfiguredMock: vi.fn(() => true),
   queryMock: vi.fn(),
   closeClientMock: vi.fn(async () => undefined),
@@ -12,7 +12,7 @@ vi.mock('../supabase/functions/_backend/utils/bento.ts', async () => {
   return {
     ...actual,
     isBentoConfigured: isBentoConfiguredMock,
-    trackBentoEvent: trackBentoEventMock,
+    trackBentoRecipientEvents: trackBentoRecipientEventsMock,
   }
 })
 
@@ -49,15 +49,14 @@ function sendRevocation(record: unknown) {
 describe('on_shared_apikey_secret_revoked trigger', () => {
   beforeEach(() => {
     process.env.API_SECRET = API_SECRET
-    trackBentoEventMock.mockClear()
+    trackBentoRecipientEventsMock.mockReset()
+    trackBentoRecipientEventsMock.mockResolvedValue(true)
     isBentoConfiguredMock.mockReturnValue(true)
     queryMock.mockReset()
     queryMock.mockImplementation(async (text: string) => {
       if (text.includes('FROM public.orgs'))
         return { rows: [{ name: 'Acme CI' }] }
-      if (text.includes('WHERE id = ANY'))
-        return { rows: [{ email: 'removed@example.com' }] }
-      return { rows: [{ email: 'admin@example.com' }, { email: 'dev@example.com' }] }
+      return { rows: [{ id: '00000000-0000-4000-8000-000000000001', email: 'admin@example.com' }, { id: '00000000-0000-4000-8000-000000000002', email: 'dev@example.com' }] }
     })
   })
 
@@ -78,22 +77,39 @@ describe('on_shared_apikey_secret_revoked trigger', () => {
     })
 
     expect(response.status).toBe(200)
-    expect(trackBentoEventMock).toHaveBeenCalledTimes(2)
-    const recipients = trackBentoEventMock.mock.calls.map(call => (call as unknown[])[1])
-    expect(recipients).toEqual(['admin@example.com', 'dev@example.com'])
-    expect(trackBentoEventMock).toHaveBeenCalledWith(
-      expect.anything(),
-      'admin@example.com',
-      expect.objectContaining({
-        org_id: ORG_ID,
-        org_name: 'Acme CI',
-        apikey_count: 2,
-        apikey_names: ['CI deploy', 'Nightly build'],
-        previous_holder_emails: ['removed@example.com'],
-      }),
-      'org:shared_apikey_rotated',
-    )
+    expect(trackBentoRecipientEventsMock).toHaveBeenCalledTimes(1)
+    const events = (trackBentoRecipientEventsMock.mock.calls[0] as unknown[])[1]
+    expect(events).toEqual([
+      { email: 'admin@example.com', event: 'org:shared_apikey_rotated', data: { org_id: ORG_ID, org_name: 'Acme CI', apikeys_url: expect.any(String) } },
+      { email: 'dev@example.com', event: 'org:shared_apikey_rotated', data: { org_id: ORG_ID, org_name: 'Acme CI', apikeys_url: expect.any(String) } },
+    ])
+    expect(queryMock).toHaveBeenCalledTimes(2)
+    expect(queryMock.mock.calls[1][0]).toContain('rb.scope_type = public.rbac_scope_org()')
+    expect(queryMock.mock.calls[1][1]).toEqual([ORG_ID, null, 101])
     expect(closeClientMock).toHaveBeenCalled()
+  })
+
+  it('returns a retryable failure without advancing the cursor when Bento fails', async () => {
+    trackBentoRecipientEventsMock.mockResolvedValue(false)
+    const response = await sendRevocation({ owner_org_id: ORG_ID, apikeys: [{ id: 7, name: 'CI deploy', previous_recipient_user_id: null }] })
+    expect(response.status).toBe(503)
+    expect(queryMock.mock.calls.some(call => call[0].includes('pgmq.send'))).toBe(false)
+  })
+
+  it('sends a bounded batch and queues only the next page without key metadata', async () => {
+    const rows = Array.from({ length: 101 }, (_, index) => ({
+      id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+      email: `member-${index}@example.com`,
+    }))
+    queryMock.mockImplementation(async (text: string) => text.includes('FROM public.orgs') ? { rows: [{ name: 'Acme CI' }] } : { rows })
+    const response = await sendRevocation({ owner_org_id: ORG_ID, after_user_id: REMOVED_USER_ID })
+    expect(response.status).toBe(200)
+    expect((trackBentoRecipientEventsMock.mock.calls[0] as unknown[])[1]).toHaveLength(100)
+    expect(queryMock.mock.calls[1][1]).toEqual([ORG_ID, REMOVED_USER_ID, 101])
+    const sendCall = queryMock.mock.calls.find(call => call[0].includes('pgmq.send'))!
+    expect(sendCall[1][0]).toBe('on_shared_apikey_secret_revoked')
+    expect(JSON.parse(sendCall[1][1]).payload.record).toEqual({ owner_org_id: ORG_ID, after_user_id: rows[99].id })
+    expect(sendCall[1][2]).toBe(1)
   })
 
   it('does nothing when the org no longer exists', async () => {
@@ -104,13 +120,13 @@ describe('on_shared_apikey_secret_revoked trigger', () => {
     })
 
     expect(response.status).toBe(200)
-    expect(trackBentoEventMock).not.toHaveBeenCalled()
+    expect(trackBentoRecipientEventsMock).not.toHaveBeenCalled()
   })
 
   it('rejects malformed payloads', async () => {
     const response = await sendRevocation({ owner_org_id: ORG_ID, apikeys: [] })
 
     expect(response.status).toBe(400)
-    expect(trackBentoEventMock).not.toHaveBeenCalled()
+    expect(trackBentoRecipientEventsMock).not.toHaveBeenCalled()
   })
 })

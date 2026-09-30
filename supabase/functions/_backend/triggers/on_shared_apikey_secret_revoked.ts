@@ -1,6 +1,6 @@
 import { z } from 'zod'
-import { isBentoConfigured, trackBentoEvent } from '../utils/bento.ts'
-import { BRES, createHono, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
+import { isBentoConfigured, trackBentoRecipientEvents } from '../utils/bento.ts'
+import { BRES, createHono, middlewareAPISecret, quickError, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { getEnv } from '../utils/utils.ts'
@@ -14,8 +14,11 @@ const revokedPayloadSchema = z.object({
     id: z.number(),
     name: z.string(),
     previous_recipient_user_id: z.uuid().nullable(),
-  })).min(1),
-})
+  })).min(1).optional(),
+  after_user_id: z.uuid().optional(),
+}).refine(data => !!data.apikeys || !!data.after_user_id)
+
+const RECIPIENT_BATCH_SIZE = 100
 
 export const app = createHono('', version)
 
@@ -31,8 +34,7 @@ app.post('/', middlewareAPISecret, triggerValidator('apikeys', 'UPDATE'), async 
   if (!isBentoConfigured(c))
     return c.json(BRES)
 
-  const { owner_org_id: orgId, apikeys } = parsed.data
-  const previousRecipientIds = [...new Set(apikeys.map(key => key.previous_recipient_user_id).filter((id): id is string => !!id))]
+  const { owner_org_id: orgId, after_user_id: afterUserId } = parsed.data
 
   let pgClient: ReturnType<typeof getPgClient> | undefined
   try {
@@ -48,61 +50,82 @@ app.post('/', middlewareAPISecret, triggerValidator('apikeys', 'UPDATE'), async 
       return c.json(BRES)
     }
 
-    // Current members only: a removed member no longer has an org binding.
-    const [{ rows: memberRows }, { rows: previousRows }] = await Promise.all([
-      pgClient.query<{ email: string }>(
-        `
-        SELECT DISTINCT lower(users.email) AS email
-        FROM public.users
-        WHERE users.email IS NOT NULL
-          AND users.id IN (
-            SELECT rb.principal_id
-            FROM public.role_bindings rb
-            WHERE rb.principal_type = public.rbac_principal_user()
-              AND rb.org_id = $1::uuid
-              AND (rb.expires_at IS NULL OR rb.expires_at > now())
-
-            UNION
-
-            SELECT gm.user_id
-            FROM public.group_members gm
-            JOIN public.groups g ON g.id = gm.group_id AND g.org_id = $1::uuid
-            JOIN public.role_bindings rb
-              ON rb.principal_type = public.rbac_principal_group()
-              AND rb.principal_id = gm.group_id
-              AND rb.org_id = g.org_id
-            WHERE rb.expires_at IS NULL OR rb.expires_at > now()
-          )
-        `,
-        [orgId],
-      ),
-      previousRecipientIds.length > 0
-        ? pgClient.query<{ email: string }>(
-            'SELECT email FROM public.users WHERE id = ANY($1::uuid[]) AND email IS NOT NULL',
-            [previousRecipientIds],
-          )
-        : Promise.resolve({ rows: [] as { email: string }[] }),
-    ])
+    // Start with indexed org-scope bindings, never all users or app grants.
+    const { rows: memberRows } = await pgClient.query<{ id: string, email: string }>(
+      `
+      WITH member_ids AS (
+        SELECT rb.principal_id AS user_id
+        FROM public.role_bindings rb
+        WHERE rb.scope_type = public.rbac_scope_org()
+          AND rb.principal_type = public.rbac_principal_user()
+          AND rb.org_id = $1::uuid
+          AND ($2::uuid IS NULL OR rb.principal_id > $2::uuid)
+          AND (rb.expires_at IS NULL OR rb.expires_at > now())
+        UNION
+        SELECT gm.user_id
+        FROM public.role_bindings rb
+        JOIN public.groups g ON g.id = rb.principal_id AND g.org_id = rb.org_id
+        JOIN public.group_members gm ON gm.group_id = rb.principal_id
+        WHERE rb.scope_type = public.rbac_scope_org()
+          AND rb.principal_type = public.rbac_principal_group()
+          AND rb.org_id = $1::uuid
+          AND ($2::uuid IS NULL OR gm.user_id > $2::uuid)
+          AND (rb.expires_at IS NULL OR rb.expires_at > now())
+      )
+      SELECT users.id, lower(users.email) AS email
+      FROM member_ids
+      JOIN public.users ON users.id = member_ids.user_id
+      WHERE users.email IS NOT NULL
+        AND ($2::uuid IS NULL OR users.id > $2::uuid)
+      ORDER BY users.id
+      LIMIT $3
+      `,
+      [orgId, afterUserId ?? null, RECIPIENT_BATCH_SIZE + 1],
+    )
+    const recipients = memberRows.slice(0, RECIPIENT_BATCH_SIZE)
 
     const baseUrl = (getEnv(c, 'WEBAPP_URL') || '').replace(/\/+$/, '')
     const eventData = {
       org_id: orgId,
       org_name: org.name,
-      apikey_count: apikeys.length,
-      apikey_names: apikeys.map(key => key.name),
-      apikey_ids: apikeys.map(key => key.id),
-      previous_holder_emails: previousRows.map(row => row.email),
       apikeys_url: baseUrl ? `${baseUrl}/apikeys?ownership=shared&org=${orgId}` : '',
     }
 
-    await Promise.all(memberRows.map(row => trackBentoEvent(c, row.email, eventData, SHARED_APIKEY_ROTATED_EVENT)))
+    // All org members need this actionable automation notice. Key metadata and
+    // former holder identities remain behind the console's API key permissions.
+    const accepted = await trackBentoRecipientEvents(c, recipients.map(row => ({
+      email: row.email,
+      data: eventData,
+      event: SHARED_APIKEY_ROTATED_EVENT,
+    })), AbortSignal.timeout(8000))
+    if (!accepted)
+      quickError(503, 'notification_delivery_failed', 'Shared API key notice delivery failed')
+
+    if (memberRows.length > RECIPIENT_BATCH_SIZE) {
+      // Continue successful pages with a fresh queue message; retries only repeat
+      // the current page. A crash between delivery and enqueue can duplicate it.
+      await pgClient.query('SELECT pgmq.send($1::text, $2::jsonb, $3::integer)', [
+        'on_shared_apikey_secret_revoked',
+        JSON.stringify({
+          function_name: 'on_shared_apikey_secret_revoked',
+          function_type: 'cloudflare',
+          payload: {
+            type: 'UPDATE',
+            table: 'apikeys',
+            schema: 'public',
+            old_record: null,
+            record: { owner_org_id: orgId, after_user_id: recipients[recipients.length - 1].id },
+          },
+        }),
+        1,
+      ])
+    }
 
     cloudlog({
       requestId: c.get('requestId'),
       message: 'on_shared_apikey_secret_revoked: notified',
       orgId,
-      apikeyCount: apikeys.length,
-      recipients: memberRows.length,
+      recipients: recipients.length,
     })
   }
   finally {
