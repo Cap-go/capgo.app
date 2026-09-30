@@ -17,6 +17,12 @@ describe('getTransientSupabaseStartFailure', () => {
     expect(getTransientSupabaseStartFailure('failed to pull docker image\nrequest returned 500 Internal Server Error')).toBe('docker_image_pull')
     expect(getTransientSupabaseStartFailure('registry docker.io request failed: TLS handshake timeout')).toBe('docker_image_pull')
     expect(getTransientSupabaseStartFailure('error response from daemon while fetching manifest: unexpected EOF')).toBe('docker_image_pull')
+    expect(getTransientSupabaseStartFailure([
+      'failed to pull docker image from all registries:',
+      'docker.io: unauthorized',
+      'public.ecr.aws: manifest unknown',
+      'ghcr.io: request returned 503 Service Unavailable',
+    ].join('\n'))).toBe('docker_image_pull')
   })
 
   it('does not retry generic application or deterministic startup failures', () => {

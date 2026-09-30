@@ -360,7 +360,7 @@ export function getTransientSupabaseStartFailure(output: string): TransientSupab
   const transientPullSignal = /toomanyrequests|too many requests|data limit exceeded|unexpected eof|tls handshake timeout|connection reset by peer|context deadline exceeded|i\/o timeout|(?:status|response|request)[^\n]{0,80}\b(?:429|500|502|503|504)\b|\b(?:429|500|502|503|504)\b[^\n]{0,80}(?:status|response)/i
 
   for (let index = 0; index < lines.length; index++) {
-    const nearbyOutput = lines.slice(Math.max(0, index - 1), index + 2).join('\n')
+    const nearbyOutput = lines.slice(Math.max(0, index - 3), index + 4).join('\n')
     if (dockerPullContext.test(nearbyOutput) && transientPullSignal.test(nearbyOutput))
       return 'docker_image_pull'
   }
