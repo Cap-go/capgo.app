@@ -7,8 +7,8 @@ repository. That repository is the source of truth for the dashboard deployed at
 
 Do not implement or update admin dashboard pages, components, stores, services,
 admin-only API handlers, authentication adapters, or deployment configuration in
-this repository. Some older dashboard code may remain here during the transition,
-but it is not the maintained implementation and must not be modified. Open admin
+this repository. The web app only exposes an external link to `admin.capgo.app`
+for platform admins, and legacy `/admin/*` routes redirect there. Open admin
 dashboard pull requests against `Cap-go/capgo_admin_dashboard` instead.
 
 Shared backend producers can still belong in this repository. This includes cron
