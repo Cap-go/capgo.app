@@ -612,7 +612,7 @@ watch(props, async () => {
   <div>
     <div
       v-if="totalAllBundles !== null && totalAllBundles === 0 && !search"
-      class="p-6 mb-6 bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900"
+      class="p-6 mb-6 bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10"
     >
       <h2 class="text-xl font-semibold text-slate-900 dark:text-slate-50">
         {{ t('bundles-empty-title') }}
@@ -626,7 +626,7 @@ watch(props, async () => {
       </button>
     </div>
 
-    <div class="flex overflow-hidden overflow-y-auto flex-col bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
+    <div class="flex overflow-hidden overflow-y-auto flex-col bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10">
       <DataTable
         v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
         :total="total"

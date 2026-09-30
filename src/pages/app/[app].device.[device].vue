@@ -410,7 +410,7 @@ async function copyCurlCommand() {
           <br>
           {{ t('device-injected-2') }}
         </div>
-        <div class="flex flex-col bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
+        <div class="flex flex-col bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10">
           <div class="px-4 py-4 border-b sm:px-6 border-slate-200 dark:border-slate-500" data-test="device-summary">
             <p class="text-sm text-slate-700 dark:text-slate-200">
               {{ deviceSummary }}

@@ -228,7 +228,7 @@ displayStore.defaultBack = '/apps'
             </div>
           </div>
           <!-- App table - always visible even when payment failed -->
-          <div class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
+          <div class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10">
             <AppTable
               :current-page="currentPage"
               :search="searchQuery"
