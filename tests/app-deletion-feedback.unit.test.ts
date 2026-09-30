@@ -22,7 +22,7 @@ describe('app deletion feedback', () => {
     expect(getAppDeletionTrackingProperties({
       reason: 'other',
       detail: 'no_feedback',
-      note: '  ',
+      note: 'Previously entered feedback',
     }, {
       appId: 'com.example.app',
       orgId: 'example-org',

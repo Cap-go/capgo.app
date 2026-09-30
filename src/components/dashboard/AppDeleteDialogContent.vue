@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
 import type { AppDeletionDetail, AppDeletionReason } from '~/utils/appDeletionFeedback'
-import { computed } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ArrowLeft from '~icons/heroicons/arrow-left'
 import ArrowPathRoundedSquare from '~icons/heroicons/arrow-path-rounded-square'
@@ -42,6 +42,12 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const stageHeading = ref<HTMLElement | null>(null)
+
+watch(() => props.stage, async () => {
+  await nextTick()
+  stageHeading.value?.focus()
+})
 
 interface ReasonOption {
   id: AppDeletionReason
@@ -112,7 +118,7 @@ function selectReason(reason: AppDeletionReason) {
       <p class="mb-1 text-xs font-semibold tracking-wider text-blue-600 uppercase dark:text-blue-400">
         {{ t('app-delete-eyebrow') }}
       </p>
-      <h2 class="text-2xl font-bold text-slate-900 dark:text-white">
+      <h2 ref="stageHeading" tabindex="-1" class="text-2xl font-bold text-slate-900 dark:text-white">
         {{ t('app-delete-feedback-title', { name: appName }) }}
       </h2>
       <p class="mt-2 text-sm text-slate-500 dark:text-slate-300">
@@ -257,7 +263,7 @@ function selectReason(reason: AppDeletionReason) {
       <p class="mb-1 text-xs font-semibold tracking-wider text-red-600 uppercase dark:text-red-400">
         {{ t('app-delete-final-check') }}
       </p>
-      <h2 class="text-2xl font-bold text-slate-900 dark:text-white">
+      <h2 ref="stageHeading" tabindex="-1" class="text-2xl font-bold text-slate-900 dark:text-white">
         {{ t('app-delete-confirm-title', { name: appName }) }}
       </h2>
       <p class="mt-2 text-sm text-slate-500 dark:text-slate-300">

@@ -38,12 +38,14 @@ export function getAppDeletionTrackingProperties(
   feedback: AppDeletionFeedback,
   context: { appId: string, orgId?: string },
 ) {
+  const feedbackOptOut = feedback.reason === 'other' && feedback.detail === 'no_feedback'
+
   return {
     app_id: context.appId,
     ...(context.orgId ? { org_id: context.orgId } : {}),
     ...(feedback.reason ? { deletion_reason: feedback.reason } : {}),
     ...(feedback.detail ? { deletion_detail: feedback.detail } : {}),
-    ...(feedback.note.trim() ? { deletion_note: feedback.note.trim() } : {}),
-    feedback_opt_out: feedback.reason === 'other' && feedback.detail === 'no_feedback',
+    ...(!feedbackOptOut && feedback.note.trim() ? { deletion_note: feedback.note.trim() } : {}),
+    feedback_opt_out: feedbackOptOut,
   }
 }
