@@ -688,13 +688,15 @@ it.skipIf(USE_CLOUDFLARE)('[POST] /channel_self creates new channel_device with 
     // Verify channel_devices record was created with owner_org
     const { data: channelDevice, error: channelDeviceError } = await getSupabaseClient()
       .from('channel_devices')
-      .select('device_id, app_id, channel_id, owner_org')
+      .select('device_id, app_id, channel_id, owner_org, is_self_set')
       .eq('device_id', data.device_id)
       .eq('app_id', APPNAME)
       .single()
 
     expect(channelDeviceError).toBeNull()
     expect(channelDevice).toBeTruthy()
+    // Device self-assignment is the only override kind that expires after 90 days.
+    expect(channelDevice!.is_self_set).toBe(true)
     expect(channelDevice!.device_id).toBe(data.device_id)
     expect(channelDevice!.app_id).toBe(APPNAME)
     expect(channelDevice!.owner_org).toBeTruthy() // Most important: owner_org must be set

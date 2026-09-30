@@ -67,6 +67,7 @@ export function hasUnsafeDevicesQueryText(body: {
   versionName?: string
   versionNames?: string[]
   osVersion?: string
+  defaultChannel?: string
   search?: string
   cursor?: string
   order?: { key: string }[]
@@ -74,6 +75,7 @@ export function hasUnsafeDevicesQueryText(body: {
   return hasUnsafeQueryText(body.versionName)
     || body.versionNames?.some(name => hasUnsafeQueryText(name))
     || hasUnsafeQueryText(body.osVersion)
+    || hasUnsafeQueryText(body.defaultChannel)
     || hasUnsafeQueryText(body.search)
     || hasUnsafeQueryText(body.cursor, 128)
     || body.order?.some(item => hasUnsafeQueryText(item.key, 64))

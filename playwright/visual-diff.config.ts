@@ -9,6 +9,79 @@ export interface VisualDiffRoute {
   prepare?: (page: Page) => Promise<void>
 }
 
+const nativeObserveDays = ['2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30']
+
+const nativeObserveActionRows: Array<[string, number, number, number | null, number | null, number | null, boolean]> = [
+  ['app_launch_ready', 18420, 5120, 820, 1650, 3100, false],
+  ['webview_page_loaded', 18110, 5080, 540, 1180, 2400, false],
+  ['webview_render_process_gone', 412, 301, null, null, null, true],
+  ['webview_content_process_terminated', 268, 190, null, null, null, true],
+  ['webview_javascript_error', 197, 88, null, null, null, true],
+  ['app_memory_warning', 143, 120, null, null, null, true],
+  ['webview_resource_error', 61, 40, null, null, null, true],
+  ['app_killed_low_memory', 38, 35, null, null, null, true],
+  ['app_crash', 9, 7, null, null, null, true],
+  ['app_launch_timeout', 4, 4, null, null, null, true],
+]
+
+async function mockNativeObserveStats(page: Page) {
+  const emptySeries = nativeObserveDays.map(() => null)
+  await page.route('**/private/update_delivery_stats', route => route.fulfill({
+    json: {
+      scope: 'app',
+      labels: nativeObserveDays,
+      period: { requested_days: 7, actual_days: 7, start: '2026-09-24T00:00:00.000Z', end: '2026-09-30T23:59:59.999Z' },
+      overview: { samples: 0, devices: null, p50_ms: null, p75_ms: null, p95_ms: null, p99_ms: null },
+      daily: { samples: nativeObserveDays.map(() => 0), p50_ms: emptySeries, p75_ms: emptySeries, p95_ms: emptySeries, p99_ms: emptySeries },
+    },
+  }))
+  await page.route('**/private/native_observe_stats', route => route.fulfill({
+    json: {
+      labels: nativeObserveDays,
+      period: { requested_days: 7, actual_days: 7, start: '2026-09-24T00:00:00.000Z', end: '2026-09-30T23:59:59.999Z' },
+      overview: {
+        total_events: 37662,
+        total_devices: 5230,
+        issue_count: 1132,
+        affected_devices: 612,
+        issue_free_rate: 88.3,
+        launch_timeout_count: 4,
+        launch_p50_ms: 820,
+        launch_p90_ms: 1650,
+        webview_load_p50_ms: 540,
+        webview_load_p90_ms: 1180,
+      },
+      daily: {
+        total_events: [5200, 5310, 5402, 5388, 5290, 5460, 5612],
+        issue_events: [150, 162, 171, 158, 149, 166, 176],
+        launches: [2540, 2600, 2650, 2630, 2590, 2680, 2730],
+        webview_loads: [2500, 2570, 2610, 2590, 2560, 2620, 2660],
+        launch_p50_ms: [810, 830, 820, 800, 815, 825, 840],
+        launch_p90_ms: [1600, 1680, 1640, 1620, 1650, 1670, 1690],
+        webview_load_p50_ms: [530, 540, 550, 535, 545, 540, 548],
+        webview_load_p90_ms: [1150, 1190, 1170, 1160, 1185, 1180, 1200],
+      },
+      actionBreakdown: nativeObserveActionRows.map(([action, events, devices, p50, p90, p99, isIssue]) => ({
+        action,
+        events,
+        devices,
+        p50_ms: p50,
+        p90_ms: p90,
+        p99_ms: p99,
+        is_issue: isIssue,
+      })),
+      version_group: 'version',
+      versions: [
+        { version_name: '2.4.1', platform: null, channel_name: null, events: 21400, devices: 3100, issue_count: 610, affected_devices: 340, issue_free_rate: 89, launch_p90_ms: 1620, webview_load_p90_ms: 1150 },
+        { version_name: '2.4.0', platform: null, channel_name: null, events: 16262, devices: 2130, issue_count: 522, affected_devices: 272, issue_free_rate: 87.2, launch_p90_ms: 1690, webview_load_p90_ms: 1210 },
+      ],
+      releaseMarkers: [
+        { version_name: '2.4.1', channel_name: 'production', deployed_at: '2026-09-27T10:00:00.000Z' },
+      ],
+    },
+  }))
+}
+
 /**
  * Console pages captured for before/after visual diffs.
  * Add routes here when a PR touches a new screen reviewers should compare.
@@ -137,7 +210,29 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await page.getByText('All failures', { exact: true }).waitFor({ state: 'visible' })
     },
   },
-  { slug: 'observe-native', path: '/app/com.demo.app/observe/native', auth: true },
+  {
+    slug: 'observe-native',
+    path: '/app/com.demo.app/observe/native',
+    auth: true,
+    prepare: async (page) => {
+      // Seed data has no native observe events, so fixture the stats to show the populated layout.
+      await mockNativeObserveStats(page)
+      await page.goto('/app/com.demo.app/observe/native')
+      await page.getByRole('heading', { name: 'Action breakdown' }).waitFor()
+    },
+  },
+  {
+    slug: 'observe-native-actions',
+    path: '/app/com.demo.app/observe/native',
+    auth: true,
+    prepare: async (page) => {
+      await mockNativeObserveStats(page)
+      await page.goto('/app/com.demo.app/observe/native')
+      const heading = page.getByRole('heading', { name: 'Action breakdown' })
+      await heading.waitFor()
+      await heading.evaluate(el => el.scrollIntoView({ block: 'start' }))
+    },
+  },
   { slug: 'observe-compatibility', path: '/app/com.demo.app/observe/compatibility', auth: true },
   { slug: 'observe-plugins', path: '/app/com.demo.app/observe/plugins', auth: true },
   {

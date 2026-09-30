@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(33);
+SELECT plan(35);
 
 DO $$
 BEGIN
@@ -327,6 +327,30 @@ SELECT
         ),
         1::numeric,
         'usage_credit_grants updated with consumed credits'
+    );
+
+SELECT
+    is(
+        (
+            SELECT sum(uoe.credits_debited)
+            FROM public.usage_overage_events AS uoe
+            WHERE
+                uoe.org_id = (SELECT ctx.org_id FROM test_credit_context AS ctx)
+                AND uoe.metric = 'mau'
+                AND uoe.billing_cycle_start = now()::date
+                AND uoe.billing_cycle_end = (now() + interval '1 month')::date
+        ),
+        1::numeric,
+        'apply_usage_overage debits at most credits_required per cycle'
+    );
+
+SELECT
+    ok(
+        pg_get_functiondef(
+            'apply_usage_overage(uuid, public.credit_metric_type, numeric, '
+            'timestamptz, timestamptz, jsonb)'::regprocedure
+        ) LIKE '%pg_advisory_xact_lock(%',
+        'apply_usage_overage serializes calls per org and metric'
     );
 
 UPDATE public.usage_credit_grants

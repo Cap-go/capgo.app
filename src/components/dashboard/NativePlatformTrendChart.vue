@@ -100,7 +100,6 @@ const chartOptions = computed<ChartOptions<'line'>>(() => {
 
 <template>
   <ChartCard
-    chart-id="native-platform-active-trend"
     :title="t('native-platform-active-trend')"
     :is-loading="isLoading"
     :has-data="hasData"

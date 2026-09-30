@@ -618,7 +618,7 @@ watchEffect(async () => {
             <section
               v-if="hasUnresolved"
               data-test="compatibility-fix-guidance"
-              class="overflow-hidden border rounded-xl border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900"
+              class="overflow-hidden border rounded-xl border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-800/60"
             >
               <button
                 type="button"
@@ -679,8 +679,8 @@ watchEffect(async () => {
                     </p>
                     <div class="flex flex-wrap items-center gap-2 mt-4">
                       <button
-                        type="button"
                         v-if="permittedRollbackTargets.length > 0"
+                        type="button"
                         data-test="compatibility-rollback-cta"
                         class="text-white d-btn d-btn-primary d-btn-sm"
                         @click="openRollbackDialog"
@@ -727,7 +727,7 @@ watchEffect(async () => {
             <!-- Empty state -->
             <div
               v-if="!isLoading && visibleGroups.length === 0"
-              class="flex flex-col items-center justify-center py-16 text-center border rounded-lg border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/40"
+              class="flex flex-col items-center justify-center py-16 text-center border rounded-xl border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-800/60"
             >
               <IconCheckCircle class="w-12 h-12 mb-4 text-emerald-500" />
               <h2 class="text-lg font-semibold text-slate-900 dark:text-white">
@@ -744,7 +744,7 @@ watchEffect(async () => {
               class="overflow-x-auto border rounded-lg border-slate-200 dark:border-slate-700"
             >
               <table class="w-full text-sm text-left">
-                <thead class="text-xs uppercase text-slate-500 bg-slate-50 dark:bg-slate-800 dark:text-slate-400">
+                <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
                   <tr>
                     <th scope="col" class="px-4 py-3">
                       {{ t('platform') }}
@@ -872,8 +872,8 @@ watchEffect(async () => {
                     <td class="px-4 py-3 text-right whitespace-nowrap">
                       <div class="flex items-center justify-end gap-2">
                         <button
-                          type="button"
                           v-if="dependencyDiffPath(id, group.representative)"
+                          type="button"
                           data-test="compatibility-diff-link"
                           class="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md text-blue-600 hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-900/30"
                           @click="openDependencyDiff(group.representative)"
@@ -882,8 +882,8 @@ watchEffect(async () => {
                           {{ t('compatibility-view-dependency-diff') }}
                         </button>
                         <button
-                          type="button"
                           v-if="!group.resolved"
+                          type="button"
                           data-test="compatibility-accept"
                           class="inline-flex items-center px-3 py-1 text-xs font-medium text-white rounded-md bg-amber-600 hover:bg-amber-700"
                           @click="openAcceptDialog(group)"

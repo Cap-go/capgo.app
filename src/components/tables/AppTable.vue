@@ -303,7 +303,7 @@ const filteredApps = computed(() => {
 <template>
   <div class="block w-full pb-14 md:pb-0">
     <div
-      class="w-full bg-transparent border-none rounded-none shadow-none col-span-full md:bg-white md:rounded-lg md:border md:shadow-lg dark:bg-transparent md:dark:border-slate-800 md:dark:bg-gray-800 xl:col-span-16"
+      class="w-full col-span-full xl:col-span-16"
     >
       <DataTable
         v-model:filters="filters"

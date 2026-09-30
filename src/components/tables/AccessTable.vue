@@ -639,7 +639,7 @@ watch(
 </script>
 
 <template>
-  <div class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
+  <div class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10">
     <DataTable
       v-model:columns="columns"
       v-model:current-page="currentPage"
@@ -664,7 +664,7 @@ watch(
     to="#dialog-v2-content"
   >
     <div class="w-full">
-      <div class="rounded-md border border-slate-200 bg-slate-50/80 p-3 dark:border-slate-700 dark:bg-slate-900/60">
+      <div class="rounded-md border border-slate-200 bg-slate-50/80 p-3 dark:border-white/10 dark:bg-white/[0.03]">
         <div class="space-y-2">
           <div v-for="option in selectedRoleOptions" :key="option.id" class="form-control">
             <div class="flex items-center gap-2">
@@ -699,7 +699,7 @@ watch(
     to="#dialog-v2-content"
   >
     <div class="space-y-5">
-      <div class="rounded-md border border-slate-200 bg-slate-50/80 p-3 dark:border-slate-700 dark:bg-slate-900/60">
+      <div class="rounded-md border border-slate-200 bg-slate-50/80 p-3 dark:border-white/10 dark:bg-white/[0.03]">
         <div class="flex flex-wrap items-center gap-2">
           <span class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">
             {{ t('assign-access-selected-scope') }}
@@ -820,7 +820,7 @@ watch(
         </p>
       </fieldset>
 
-      <div class="grid gap-4 rounded-md border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-700 dark:bg-slate-900/40 md:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
+      <div class="grid gap-4 rounded-md border border-slate-200 bg-slate-50/70 p-3 dark:border-white/10 dark:bg-white/[0.03] md:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
         <div v-if="assignAccessForm.scope_type === 'channel'" class="form-control">
           <label for="assign-channel" class="label">
             <span class="label-text">{{ t('channel') }}</span>

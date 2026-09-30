@@ -318,7 +318,7 @@ async function reload() {
 
 <template>
   <div>
-    <div class="flex flex-col h-full pb-8 overflow-hidden overflow-y-auto bg-white border shadow-lg md:p-8 md:pb-0 max-h-fit grow md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
+    <div class="flex flex-col h-full pb-8 overflow-hidden overflow-y-auto bg-white border shadow-sm md:p-8 md:pb-0 max-h-fit grow md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
       <div class="flex justify-between w-full mb-5 ml-2 md:ml-0">
         <h2 class="text-2xl font-bold dark:text-white text-slate-800">
           {{ t('groups') }}

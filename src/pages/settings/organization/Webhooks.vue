@@ -277,7 +277,7 @@ function getWebhookDetailsId(webhookId: string) {
 
 <template>
   <div>
-    <div class="flex flex-col h-full pb-8 overflow-hidden overflow-y-auto bg-white border shadow-lg md:pb-0 max-h-fit grow md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
+    <div class="flex flex-col h-full pb-8 overflow-hidden overflow-y-auto bg-white border shadow-sm md:pb-0 max-h-fit grow md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
       <div class="p-6 space-y-6">
         <!-- Header -->
         <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -290,8 +290,8 @@ function getWebhookDetailsId(webhookId: string) {
             </p>
           </div>
           <button
-            type="button"
             v-if="canManageWebhooks"
+            type="button"
             class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 focus:ring-4 focus:ring-blue-300 dark:focus:ring-blue-800"
             @click="openCreateForm"
           >
@@ -322,8 +322,8 @@ function getWebhookDetailsId(webhookId: string) {
             {{ t('no-webhooks-description') }}
           </p>
           <button
-            type="button"
             v-if="canManageWebhooks"
+            type="button"
             class="px-4 py-2 mt-4 text-sm font-medium text-blue-600 border border-blue-600 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20"
             @click="openCreateForm"
           >
@@ -495,8 +495,8 @@ function getWebhookDetailsId(webhookId: string) {
                   {{ t('view-deliveries') }}
                 </button>
                 <button
-                  type="button"
                   v-if="canManageWebhooks"
+                  type="button"
                   class="flex items-center gap-1 px-3 py-1.5 min-h-11 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-700"
                   @click.stop="toggleWebhook(webhook)"
                 >
@@ -505,8 +505,8 @@ function getWebhookDetailsId(webhookId: string) {
                   {{ webhook.enabled ? t('disable') : t('enable') }}
                 </button>
                 <button
-                  type="button"
                   v-if="canManageWebhooks"
+                  type="button"
                   class="flex items-center gap-1 px-3 py-1.5 min-h-11 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-700"
                   @click.stop="openEditForm(webhook)"
                 >
@@ -514,8 +514,8 @@ function getWebhookDetailsId(webhookId: string) {
                   {{ t('edit') }}
                 </button>
                 <button
-                  type="button"
                   v-if="canManageWebhooks"
+                  type="button"
                   class="flex items-center gap-1 px-3 py-1.5 min-h-11 text-sm font-medium text-red-600 bg-white border border-red-300 rounded-lg hover:bg-red-50 dark:bg-gray-800 dark:border-red-600 dark:hover:bg-red-900/20"
                   @click.stop="deleteWebhook(webhook)"
                 >

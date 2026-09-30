@@ -346,6 +346,19 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
   }
 }
 
+const liveChannels = computed(() => {
+  const versionId = version.value?.id
+  if (versionId == null)
+    return []
+  // A bundle is live on a channel when it is the stable bundle there or the
+  // target of a rollout that is currently serving devices.
+  return channels.value.filter(c => c.version === versionId
+    || (c.rollout_version === versionId
+      && !!c.rollout_enabled
+      && !c.rollout_paused_at
+      && (c.rollout_percentage_bps ?? 0) > 0))
+})
+
 async function openChannel(selChannel: Database['public']['Tables']['channels']['Row']) {
   channel.value = selChannel
   if (!version.value || !main.auth)
@@ -818,8 +831,23 @@ async function deleteBundle() {
         <div class="w-full h-full px-0 pt-0 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
           <div class="flex flex-col gap-4">
             <div
-              class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-lg md:rounded-lg border-slate-300 dark:border-slate-900 dark:bg-slate-800"
+              class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10"
             >
+              <!-- Where this bundle is live, before the technical details. -->
+              <div class="px-4 py-4 border-b sm:px-6 border-slate-200 dark:border-slate-500" data-test="bundle-summary">
+                <p v-if="liveChannels.length" class="text-sm text-slate-700 dark:text-slate-200">
+                  {{ t('bundle-summary-live-on') }}
+                  <template v-for="(chn, i) in liveChannels" :key="chn.id">
+                    <span v-if="i > 0">, </span>
+                    <button type="button" class="font-semibold text-blue-700 underline-offset-4 hover:underline dark:text-azure-400" @click="openChannel(chn)">
+                      {{ chn.name }}
+                    </button>
+                  </template>
+                </p>
+                <p v-else class="text-sm text-slate-600 dark:text-slate-300">
+                  {{ t('bundle-summary-not-live') }}
+                </p>
+              </div>
               <dl class="divide-y divide-slate-200 dark:divide-slate-500">
                 <InfoRow :label="t('bundle-number')">
                   {{ version.name }}

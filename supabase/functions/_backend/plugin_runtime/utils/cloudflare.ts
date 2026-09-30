@@ -1,11 +1,11 @@
 import type { AnalyticsEngineDataset, D1Database, Hyperdrive, KVNamespace, Queue } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
-import type { DeviceComparable } from './deviceComparison.ts'
+import type { DeviceInfoWriteCachePayload } from './deviceComparison.ts'
 import type { StatsInsightRawAction, StatsInsightRawDaily, StatsInsightRawDevice, StatsInsightRawSummary, StatsInsightRawVersion } from './statsInsights.ts'
 import type { Database } from './supabase.types.ts'
-import type { DeviceRes, DeviceWithoutCreatedAt, NativeVersionUsage, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
+import type { ChannelDeviceOverrideIds, DeviceRes, DeviceWithoutCreatedAt, NativeVersionUsage, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
 import { CACHE_PUT_TIMEOUT_MS, CacheHelper } from './cache.ts'
-import { hasComparableDeviceChanged, toComparableDevice } from './deviceComparison.ts'
+import { canSkipDeviceInfoWrite, DEVICE_INFO_REFRESH_TTL_SECONDS, toComparableDevice } from './deviceComparison.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
 import { DEFAULT_LIMIT } from './types.ts'
@@ -240,6 +240,7 @@ export interface AppLogDimensions {
   platform?: string | null
   country_code?: string | null
   plugin_version?: string | null
+  channel?: VersionUsageChannel | null
 }
 
 function normalizeAppLogDimension(value: string | null | undefined, maxLength: number) {
@@ -253,10 +254,15 @@ function normalizeAppLogDimension(value: string | null | undefined, maxLength: n
 
 function appLogDimensionBlobs(dimensions?: AppLogDimensions) {
   // blob5=platform, blob6=country_code, blob7=plugin_version (denormalized for public /data breakdowns)
+  // blob8=channel name, blob9=channel id: only set on failure logs, so the live
+  // release view can break failures down per channel.
+  const channelId = dimensions?.channel?.id
   return [
     normalizeAppLogDimension(dimensions?.platform, 16),
     normalizeAppLogDimension(dimensions?.country_code, 2).toUpperCase(),
     normalizeAppLogDimension(dimensions?.plugin_version, 32),
+    normalizeAppLogDimension(dimensions?.channel?.name, 128),
+    channelId ? String(channelId) : '',
   ]
 }
 
@@ -297,13 +303,9 @@ function getReplicaReadStoreAppSession(c: Context) {
 }
 
 const TRACK_DEVICE_CACHE_PATH = '/.track-device-cache'
-const TRACK_DEVICE_CACHE_MAX_AGE_SECONDS = 31536000
-
-type DeviceCachePayload = DeviceComparable & {
-  app_id: string
-  device_id: string
-  cached_at: string
-}
+// Cache entries expire with the refresh TTL; canSkipDeviceInfoWrite also checks
+// cached_at so an entry kept past its max-age by the colo still forces a write.
+const TRACK_DEVICE_CACHE_MAX_AGE_SECONDS = DEVICE_INFO_REFRESH_TTL_SECONDS
 
 export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt) {
   // Runs under waitUntil — Cache I/O here stretches Workers Wall Time charts.
@@ -323,8 +325,8 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
       device_id: device.device_id,
     })
     // Do not gate on helper.available — it is sync-racy before ensureCache resolves.
-    const cachedDevice = await trackDeviceCache.matchJson<DeviceCachePayload>(trackDeviceCacheRequest)
-    if (cachedDevice && !hasComparableDeviceChanged(cachedDevice, device)) {
+    const cachedDevice = await trackDeviceCache.matchJson<DeviceInfoWriteCachePayload>(trackDeviceCacheRequest)
+    if (canSkipDeviceInfoWrite(cachedDevice, device)) {
       outcome = 'cache_hit'
       cloudlog({
         requestId: c.get('requestId'),
@@ -365,7 +367,7 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
       indexes: [device.app_id],
     })
 
-    const cachePayload: DeviceCachePayload = {
+    const cachePayload: DeviceInfoWriteCachePayload = {
       ...comparableDevice,
       app_id: device.app_id,
       device_id: device.device_id,
@@ -679,7 +681,7 @@ export interface DeviceUsageAllCF {
   org_id: string
 }
 
-export async function readDeviceUsageCF(c: Context, app_id: string, period_start: string, period_end: string) {
+export async function readDeviceUsageCF(c: Context, app_id: string, period_start: string, period_end: string, options: { throwOnError?: boolean } = {}) {
   if (!c.env.DEVICE_USAGE)
     return [] as DeviceUsageCF[]
   const query = `SELECT
@@ -715,6 +717,8 @@ export async function readDeviceUsageCF(c: Context, app_id: string, period_start
   }
   catch (e) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading device usage', error: serializeError(e), query })
+    if (options.throwOnError)
+      throw e
   }
   return [] as DeviceUsageCF[]
 }
@@ -744,7 +748,7 @@ export async function readBandwidthUsageCF(c: Context, app_id: string, period_st
     return [] as BandwidthUsageCF[]
   const query = `SELECT
   formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
-  sum(double1) AS bandwidth,
+  sum(double1 * _sample_interval) AS bandwidth,
   index1 AS app_id
 FROM bandwidth_usage
 WHERE
@@ -796,29 +800,58 @@ interface StoreApp {
   developer_id?: string // Optional as it's not NOT NULL
 }
 
-export async function readStatsVersionCF(c: Context, app_id: string, period_start: string, period_end: string, channel?: VersionUsageChannel | string): Promise<VersionUsage[]> {
+export interface VersionUsageChannelFilterOptions {
+  /**
+   * Also match `get` rows written without any channel. /updates only started
+   * recording the serving channel on `get` rows recently, so dashboards that
+   * chart `get` keep older history visible while those rows age out of the
+   * retention window. Never set this for install/fail based decisions.
+   */
+  includeUnattributedGets?: boolean
+}
+
+/**
+ * version_usage channel filter. blob4 holds the channel name and blob5 the channel
+ * id; blob5 only exists on newer rows. With both id and name, rows are matched by
+ * id and legacy rows without an id fall back to the name.
+ */
+export function buildVersionUsageChannelFilterCF(channel?: VersionUsageChannel | string | null, options: VersionUsageChannelFilterOptions = {}): string {
+  if (!channel)
+    return ''
+  const channelId = typeof channel === 'object' && channel.id ? String(channel.id) : ''
+  const channelName = typeof channel === 'string' ? channel : (channel.name ?? '')
+  const safeChannelId = channelId ? escapeSqlString(channelId) : ''
+  const safeChannelName = channelName ? escapeSqlString(channelName) : ''
+  let match = ''
+  if (safeChannelId && safeChannelName)
+    match = `(blob5 = '${safeChannelId}' OR (blob5 = '' AND blob4 = '${safeChannelName}'))`
+  else if (safeChannelId)
+    match = `blob5 = '${safeChannelId}'`
+  else if (safeChannelName)
+    match = `blob4 = '${safeChannelName}'`
+  if (!match)
+    return ''
+  if (options.includeUnattributedGets)
+    return `AND (${match} OR (blob3 = 'get' AND blob4 = '' AND blob5 = ''))`
+  return `AND ${match}`
+}
+
+export async function readStatsVersionCF(c: Context, app_id: string, period_start: string, period_end: string, channel?: VersionUsageChannel | string, options: VersionUsageChannelFilterOptions = {}): Promise<VersionUsage[]> {
   if (!c.env.VERSION_USAGE)
     return []
   // Note: blob2 contains version_name for new data and version_id (numeric) for old data.
-  // blob4 contains channel_name and blob5 contains channel_id only for newer data.
-  const channelId = typeof channel === 'object' && channel?.id ? String(channel.id) : ''
-  const channelName = typeof channel === 'string' ? channel : channelId ? null : channel?.name
-  const safeChannelName = channelName ? escapeSqlString(channelName) : ''
-  const safeChannelId = channelId ? escapeSqlString(channelId) : ''
-  const channelFilter = safeChannelId
-    ? `AND blob5 = '${safeChannelId}'`
-    : safeChannelName ? `AND blob4 = '${safeChannelName}'` : ''
+  const channelFilter = buildVersionUsageChannelFilterCF(channel, options)
   const query = `SELECT
   blob1 as app_id,
   blob2 as version_name,
   formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
-  sum(if(blob3 = 'get', 1, 0)) AS get,
-  sum(if(blob3 = 'fail', 1, 0)) AS fail,
-  sum(if(blob3 = 'install', 1, 0)) AS install,
-  sum(if(blob3 = 'uninstall', 1, 0)) AS uninstall
+  sum(if(blob3 = 'get', _sample_interval, 0)) AS get,
+  sum(if(blob3 = 'fail', _sample_interval, 0)) AS fail,
+  sum(if(blob3 = 'install', _sample_interval, 0)) AS install,
+  sum(if(blob3 = 'uninstall', _sample_interval, 0)) AS uninstall
 FROM version_usage
 WHERE
-  app_id = '${escapeSqlString(app_id)}'
+  index1 = '${escapeSqlString(app_id)}'
   AND timestamp >= toDateTime('${formatDateCF(period_start)}')
   AND timestamp < toDateTime('${formatDateCF(period_end)}')
   ${channelFilter}
@@ -862,14 +895,32 @@ ORDER BY date, platform, version_build`
   return []
 }
 
-export async function readDeviceVersionCountsCF(c: Context, app_id: string, channelName?: string): Promise<Record<string, number>> {
-  if (!c.env.DEVICE_INFO)
-    return {}
+function buildDeviceIdListCF(deviceIds: string[]) {
+  return deviceIds.map(id => `'${escapeSqlString(id)}'`).join(', ')
+}
 
-  const safeChannel = channelName ? escapeSqlString(channelName) : ''
-  const channelFilter = safeChannel ? `AND default_channel = '${safeChannel}'` : ''
+/**
+ * Channel scope for device_info rows by effective channel: the device-reported
+ * default_channel, minus devices forced to another channel, plus devices forced
+ * into this channel through channel_devices. Override ids are lowercased by
+ * partitionChannelDeviceOverrides, so device ids are compared lowercased too.
+ */
+export function buildDeviceChannelScopeCF(channelName: string, overrides?: ChannelDeviceOverrideIds): string {
+  const defaultChannelMatch = `default_channel = '${escapeSqlString(channelName)}'`
+  const elsewhere = overrides?.elsewhere ?? []
+  const into = overrides?.into ?? []
+  const byDefaultChannel = elsewhere.length
+    ? `(${defaultChannelMatch} AND lower(device_id) NOT IN (${buildDeviceIdListCF(elsewhere)}))`
+    : defaultChannelMatch
+  if (!into.length)
+    return byDefaultChannel
+  return `(${byDefaultChannel} OR lower(device_id) IN (${buildDeviceIdListCF(into)}))`
+}
 
-  const query = `SELECT
+export function buildDeviceVersionCountsCFQuery(app_id: string, channelName?: string, overrides?: ChannelDeviceOverrideIds) {
+  const channelFilter = channelName ? `AND ${buildDeviceChannelScopeCF(channelName, overrides)}` : ''
+
+  return `SELECT
   version_name,
   count() AS device_count
 FROM (
@@ -878,11 +929,18 @@ FROM (
     argMax(blob7, timestamp) AS default_channel,
     blob1 AS device_id
   FROM device_info
-  WHERE index1 = '${escapeSqlString(app_id)}' AND blob9 != ''
+  WHERE index1 = '${escapeSqlString(app_id)}'
   GROUP BY blob1
 )
 WHERE version_name != '' ${channelFilter}
 GROUP BY version_name`
+}
+
+export async function readDeviceVersionCountsCF(c: Context, app_id: string, channelName?: string, overrides?: ChannelDeviceOverrideIds): Promise<Record<string, number>> {
+  if (!c.env.DEVICE_INFO)
+    return {}
+
+  const query = buildDeviceVersionCountsCFQuery(app_id, channelName, overrides)
 
   cloudlog({ requestId: c.get('requestId'), message: 'readDeviceVersionCountsCF query', query })
   try {
@@ -1359,7 +1417,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
     ${actionFilter}`
 
   const summaryQuery = `SELECT
-    count() AS total,
+    sum(_sample_interval) AS total,
     COUNT(DISTINCT blob1) AS device_count,
     COUNT(DISTINCT blob2) AS action_count
   FROM app_log
@@ -1367,7 +1425,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
 
   const actionsQuery = `SELECT
     blob2 AS action,
-    count() AS total,
+    sum(_sample_interval) AS total,
     COUNT(DISTINCT blob1) AS device_count,
     COUNT(DISTINCT blob3) AS version_count,
     min(timestamp) AS first_seen,
@@ -1383,7 +1441,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
   const dailyQuery = `SELECT
     formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
     blob2 AS action,
-    count() AS total
+    sum(_sample_interval) AS total
   FROM app_log
   WHERE ${baseWhere}
   GROUP BY date, action
@@ -1392,7 +1450,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
   const versionsQuery = `SELECT
     blob2 AS action,
     blob3 AS version_name,
-    count() AS total,
+    sum(_sample_interval) AS total,
     COUNT(DISTINCT blob1) AS device_count,
     max(timestamp) AS last_seen
   FROM app_log
@@ -1404,7 +1462,7 @@ export async function readStatsInsightsCF(c: Context, params: ReadStatsInsightsP
   const devicesQuery = `SELECT
     blob2 AS action,
     blob1 AS device_id,
-    count() AS total,
+    sum(_sample_interval) AS total,
     argMax(blob3, timestamp) AS version_name,
     max(timestamp) AS last_seen
   FROM app_log
@@ -1858,9 +1916,9 @@ export async function getUpdateStatsCF(c: Context): Promise<UpdateStats> {
   const query = `
     SELECT
       blob1 AS app_id,
-      sum(if(blob3 = 'fail', 1, 0)) AS failed,
-      sum(if(blob3 = 'install', 1, 0)) AS set,
-      sum(if(blob3 = 'get', 1, 0)) AS get
+      sum(if(blob3 = 'fail', _sample_interval, 0)) AS failed,
+      sum(if(blob3 = 'install', _sample_interval, 0)) AS set,
+      sum(if(blob3 = 'get', _sample_interval, 0)) AS get
     FROM version_usage
     WHERE timestamp >= toDateTime(toUnixTimestamp(now()) - 600)
       AND timestamp < toDateTime(toUnixTimestamp(now()) - 540)
@@ -1919,7 +1977,6 @@ export async function getUpdateStatsCF(c: Context): Promise<UpdateStats> {
 }
 
 // Note: Device cleanup is no longer needed as Analytics Engine handles data retention automatically
-
 
 // Shared failure taxonomy for device-day success rates (admin + public /data).
 const PUBLIC_FAILURE_ACTIONS = ['set_fail', 'update_fail', 'download_fail', 'windows_path_fail', 'canonical_path_fail', 'directory_path_fail', 'unzip_fail', 'low_mem_fail', 'download_manifest_file_fail', 'download_manifest_checksum_fail', 'download_manifest_brotli_fail', 'finish_download_fail', 'manifest_path_fail', 'decrypt_fail', 'insufficient_disk_space', 'cannotGetBundle', 'checksum_fail', 'blocked_by_server_url', 'backend_refusal'] as const
@@ -2057,8 +2114,8 @@ export async function getAdminDistributionMetrics(
 
   const query = `SELECT
     formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
-    sum(if(blob3 = 'get', 1, 0)) AS downloads,
-    sum(if(blob3 = 'install', 1, 0)) AS installs
+    sum(if(blob3 = 'get', _sample_interval, 0)) AS downloads,
+    sum(if(blob3 = 'install', _sample_interval, 0)) AS installs
     ${app_id ? `, blob1 AS app_id` : ''}
   FROM version_usage
   WHERE timestamp >= toDateTime('${formatDateCF(start_date)}')
@@ -2095,8 +2152,8 @@ export async function getAdminFailureMetrics(
 
   const query = `SELECT
     formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
-    sum(if(blob3 = 'fail', 1, 0)) AS failures,
-    sum(if(blob3 = 'install', 1, 0)) AS installs
+    sum(if(blob3 = 'fail', _sample_interval, 0)) AS failures,
+    sum(if(blob3 = 'install', _sample_interval, 0)) AS installs
     ${app_id ? `, blob1 AS app_id` : ''}
   FROM version_usage
   WHERE timestamp >= toDateTime('${formatDateCF(start_date)}')
@@ -2197,7 +2254,7 @@ export async function getAdminPlatformOverview(
         AND blob2 = 'get'`
 
     // Query 3: Total bandwidth from BANDWIDTH_USAGE
-    const bandwidthQuery = `SELECT sum(double1) AS total_bandwidth
+    const bandwidthQuery = `SELECT sum(double1 * _sample_interval) AS total_bandwidth
       FROM bandwidth_usage
       WHERE timestamp >= toDateTime('${formatDateCF(start_date)}')
         AND timestamp < toDateTime('${formatDateCF(end_date)}')`
@@ -2221,8 +2278,8 @@ export async function getAdminPlatformOverview(
 
     // Query 6: Success rate from VERSION_USAGE
     const successRateQuery = `SELECT
-      sum(if(blob3 = 'install', 1, 0)) AS installs,
-      sum(if(blob3 = 'fail', 1, 0)) AS fails
+      sum(if(blob3 = 'install', _sample_interval, 0)) AS installs,
+      sum(if(blob3 = 'fail', _sample_interval, 0)) AS fails
     FROM version_usage
     WHERE timestamp >= toDateTime('${formatDateCF(start_date)}')
       AND timestamp < toDateTime('${formatDateCF(end_date)}')`
@@ -2322,7 +2379,7 @@ export async function getAdminOrgMetrics(
       GROUP BY blob1`
       const bandwidthByDeviceQuery = `SELECT
         blob1 AS device_id,
-        sum(double1) AS bandwidth,
+        sum(double1 * _sample_interval) AS bandwidth,
         COUNT() AS updates
       FROM bandwidth_usage
       WHERE timestamp >= toDateTime('${periodStart}')
@@ -2537,7 +2594,7 @@ export async function getAdminStorageTrend(
 
   const query = `SELECT
   formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
-  sum(double1) AS storage_bytes
+  sum(double1 * _sample_interval) AS storage_bytes
 FROM bandwidth_usage
 WHERE timestamp >= toDateTime('${formatDateCF(start_date)}')
   AND timestamp < toDateTime('${formatDateCF(end_date)}')
@@ -2579,7 +2636,7 @@ export async function getAdminBandwidthTrend(
 
   const query = `SELECT
   formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
-  sum(double1) AS bandwidth_bytes
+  sum(double1 * _sample_interval) AS bandwidth_bytes
 FROM bandwidth_usage
 WHERE timestamp >= toDateTime('${formatDateCF(start_date)}')
   AND timestamp < toDateTime('${formatDateCF(end_date)}')
@@ -2744,7 +2801,6 @@ export async function getPluginBreakdownCF(c: Context, referenceDate?: Date): Pr
     return emptyResult
   }
 }
-
 
 export interface PublicBreakdownMetric {
   key: string

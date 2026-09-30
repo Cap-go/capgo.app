@@ -198,7 +198,8 @@ displayStore.defaultBack = '/apps'
     </div>
     <div v-else-if="!isLoading">
       <div class="relative h-full pb-4 overflow-hidden">
-        <div class="w-full h-full px-0 pt-0 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
+        <div class="w-full h-full px-0 pt-6 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
+          <SectionIntro v-if="totalApps > 0 || searchQuery" section="apps" />
           <div
             v-if="totalApps === 0 && !searchQuery"
             class="relative p-8 mb-6 overflow-hidden bg-white border shadow-lg rounded-2xl border-violet-200/70 dark:border-slate-900 dark:bg-gray-900"
@@ -227,7 +228,7 @@ displayStore.defaultBack = '/apps'
             </div>
           </div>
           <!-- App table - always visible even when payment failed -->
-          <div class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
+          <div class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10">
             <AppTable
               :current-page="currentPage"
               :search="searchQuery"

@@ -5,7 +5,7 @@ import type { PoolClient } from 'pg'
 import type { BillingPlanBentoState } from './billing_bento_tags.ts'
 import type { AuthInfo } from './hono.ts'
 import type { Database } from './supabase.types.ts'
-import type { DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, Order, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
+import type { ChannelDeviceOverrideIds, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, Order, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
 import { createClient } from '@supabase/supabase-js'
 import { HTTPException } from 'hono/http-exception'
 import { buildBillingPlanBentoTags } from './billing_bento_tags.ts'
@@ -111,6 +111,11 @@ function buildDevicesSqlWhere(params: ReadDevicesParams, customIdMode: boolean) 
     clauses.push(`platform = $${values.length}::public.platform_os`)
   }
 
+  if (params.default_channel) {
+    values.push(params.default_channel)
+    clauses.push(`default_channel = $${values.length}`)
+  }
+
   if (params.installSources?.length) {
     values.push(params.installSources)
     clauses.push(`install_source = ANY($${values.length}::text[])`)
@@ -179,6 +184,7 @@ async function countDevicesSBSql(
   search: string | undefined,
   options?: {
     platform?: Database['public']['Enums']['platform_os']
+    defaultChannel?: string
     updatedAt?: { gt?: string, lte?: string }
     osVersionCompare?: ReadDevicesParams['os_version_compare']
     versionNameCompare?: ReadDevicesParams['version_name_compare']
@@ -190,6 +196,7 @@ async function countDevicesSBSql(
     version_name: versionName,
     search,
     platform: options?.platform,
+    default_channel: options?.defaultChannel,
     updated_at_gt: options?.updatedAt?.gt,
     updated_at_lte: options?.updatedAt?.lte,
     os_version_compare: options?.osVersionCompare,
@@ -1511,10 +1518,131 @@ export async function readNativeDailyPlatformActiveSB(
   }))
 }
 
-export async function readDeviceVersionCountsSB(c: Context, app_id: string, channelName?: string): Promise<Record<string, number>> {
-  let query = supabaseAdmin(c)
+/**
+ * Upper bound of channel_devices ids inlined into one device count query. Keeps
+ * the Analytics Engine SQL (and PostgREST filters) bounded for apps with huge
+ * override lists; overflow is logged and the extra overrides are ignored.
+ */
+export const MAX_CHANNEL_DEVICE_OVERRIDES_FOR_COUNTS = 1000
+const CHANNEL_DEVICE_OVERRIDES_SCAN_LIMIT = 5000
+const DEVICE_ID_FILTER_CHUNK = 200
+
+interface ChannelDeviceOverrideRow {
+  device_id: string
+  channel_id: number
+  channels?: { name?: string | null } | Array<{ name?: string | null }> | null
+}
+
+/**
+ * Split an app's channel_devices rows into devices forced into `channel` and
+ * devices forced elsewhere. Matches by channel id when known, otherwise by name.
+ * Device ids are lowercased, matching plugin ingestion.
+ * Forced-into devices are kept first when the combined list must be capped, so
+ * past the cap some forced-elsewhere ids are dropped: those devices still count
+ * under their reported default_channel, which can inflate this channel's counts
+ * (never deflate them). The cap is logged by readChannelDeviceOverrideIdsSB.
+ */
+export function partitionChannelDeviceOverrides(
+  rows: ChannelDeviceOverrideRow[],
+  channel: VersionUsageChannel | string,
+  limit = MAX_CHANNEL_DEVICE_OVERRIDES_FOR_COUNTS,
+): ChannelDeviceOverrideIds & { truncated: boolean } {
+  const channelId = typeof channel === 'object' && channel.id ? Number(channel.id) : null
+  const channelName = typeof channel === 'string' ? channel : (channel.name ?? null)
+  const into = new Set<string>()
+  const elsewhere = new Set<string>()
+
+  for (const row of rows) {
+    if (!row.device_id)
+      continue
+    const deviceId = row.device_id.toLowerCase()
+    const rowChannel = Array.isArray(row.channels) ? row.channels[0] : row.channels
+    const matches = channelId !== null
+      ? Number(row.channel_id) === channelId
+      : Boolean(channelName) && rowChannel?.name === channelName
+    if (matches)
+      into.add(deviceId)
+    else
+      elsewhere.add(deviceId)
+  }
+  // A device has at most one override per app; guard against duplicates anyway.
+  for (const deviceId of into)
+    elsewhere.delete(deviceId)
+
+  const intoList = [...into].slice(0, limit)
+  const elsewhereList = [...elsewhere].slice(0, Math.max(0, limit - intoList.length))
+  return {
+    into: intoList,
+    elsewhere: elsewhereList,
+    truncated: intoList.length < into.size || elsewhereList.length < elsewhere.size,
+  }
+}
+
+/**
+ * Load channel_devices overrides for scoping device counts of one channel.
+ * Returns undefined on error so callers fall back to default_channel-only counts.
+ */
+export async function readChannelDeviceOverrideIdsSB(c: Context, app_id: string, channel: VersionUsageChannel | string): Promise<ChannelDeviceOverrideIds | undefined> {
+  const { data, error } = await supabaseAdmin(c)
+    .from('channel_devices')
+    .select('device_id, channel_id, channels(name)')
+    .eq('app_id', app_id)
+    .order('updated_at', { ascending: false })
+    .limit(CHANNEL_DEVICE_OVERRIDES_SCAN_LIMIT + 1)
+
+  if (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading channel_devices overrides for device counts', app_id, error })
+    return undefined
+  }
+
+  const rows = (data ?? []) as ChannelDeviceOverrideRow[]
+  const partitioned = partitionChannelDeviceOverrides(rows.slice(0, CHANNEL_DEVICE_OVERRIDES_SCAN_LIMIT), channel)
+  if (partitioned.truncated || rows.length > CHANNEL_DEVICE_OVERRIDES_SCAN_LIMIT) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'channel_devices overrides capped for device counts',
+      app_id,
+      scanned: Math.min(rows.length, CHANNEL_DEVICE_OVERRIDES_SCAN_LIMIT),
+      into: partitioned.into.length,
+      elsewhere: partitioned.elsewhere.length,
+      limit: MAX_CHANNEL_DEVICE_OVERRIDES_FOR_COUNTS,
+    })
+  }
+  return { into: partitioned.into, elsewhere: partitioned.elsewhere }
+}
+
+/**
+ * Count devices per version for the effective channel: default_channel matches
+ * minus devices forced elsewhere, plus devices forced into the channel.
+ */
+export function countChannelScopedDeviceVersions(
+  defaultChannelRows: Array<{ device_id: string, version_name: string | null }>,
+  forcedIntoRows: Array<{ device_id: string, version_name: string | null }>,
+  overrides?: ChannelDeviceOverrideIds,
+): Record<string, number> {
+  const elsewhere = new Set((overrides?.elsewhere ?? []).map(id => id.toLowerCase()))
+  const versionByDevice = new Map<string, string | null>()
+  for (const row of defaultChannelRows) {
+    const deviceId = row.device_id.toLowerCase()
+    if (!elsewhere.has(deviceId))
+      versionByDevice.set(deviceId, row.version_name)
+  }
+  for (const row of forcedIntoRows)
+    versionByDevice.set(row.device_id.toLowerCase(), row.version_name)
+
+  const counts: Record<string, number> = {}
+  for (const versionName of versionByDevice.values()) {
+    const version = versionName || 'unknown'
+    counts[version] = (counts[version] || 0) + 1
+  }
+  return counts
+}
+
+export async function readDeviceVersionCountsSB(c: Context, app_id: string, channelName?: string, overrides?: ChannelDeviceOverrideIds): Promise<Record<string, number>> {
+  const supabase = supabaseAdmin(c)
+  let query = supabase
     .from('devices')
-    .select('version_name')
+    .select('device_id, version_name')
     .eq('app_id', app_id)
 
   if (channelName) {
@@ -1527,11 +1655,22 @@ export async function readDeviceVersionCountsSB(c: Context, app_id: string, chan
     return {}
   }
 
-  return (data ?? []).reduce<Record<string, number>>((acc, row) => {
-    const version = row.version_name || 'unknown'
-    acc[version] = (acc[version] || 0) + 1
-    return acc
-  }, {})
+  const forcedIntoRows: Array<{ device_id: string, version_name: string | null }> = []
+  const into = channelName ? (overrides?.into ?? []) : []
+  for (let index = 0; index < into.length; index += DEVICE_ID_FILTER_CHUNK) {
+    const { data: chunkRows, error: chunkError } = await supabase
+      .from('devices')
+      .select('device_id, version_name')
+      .eq('app_id', app_id)
+      .in('device_id', into.slice(index, index + DEVICE_ID_FILTER_CHUNK))
+    if (chunkError) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading forced channel devices for version counts', error: chunkError })
+      break
+    }
+    forcedIntoRows.push(...(chunkRows ?? []))
+  }
+
+  return countChannelScopedDeviceVersions(data ?? [], forcedIntoRows, channelName ? overrides : undefined)
 }
 
 /**
@@ -1789,6 +1928,9 @@ export async function readDevicesSB(c: Context, params: ReadDevicesParams, custo
   if (params.platform)
     query = query.eq('platform', params.platform)
 
+  if (params.default_channel)
+    query = query.eq('default_channel', params.default_channel)
+
   if (params.installSources?.length)
     query = query.in('install_source', params.installSources)
 
@@ -1867,6 +2009,7 @@ export async function countDevicesSB(
   search?: string,
   options?: {
     platform?: Database['public']['Enums']['platform_os']
+    defaultChannel?: string
     updatedAt?: { gt?: string, lte?: string }
     osVersionCompare?: ReadDevicesParams['os_version_compare']
     versionNameCompare?: ReadDevicesParams['version_name_compare']
@@ -1914,6 +2057,8 @@ export async function countDevicesSB(
 
   if (options?.platform)
     req = req.eq('platform', options.platform)
+  if (options?.defaultChannel)
+    req = req.eq('default_channel', options.defaultChannel)
   if (options?.updatedAt?.gt)
     req = req.gt('updated_at', options.updatedAt.gt)
   if (options?.updatedAt?.lte)

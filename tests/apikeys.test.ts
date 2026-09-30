@@ -8,6 +8,7 @@ import {
   appApiKeyBindings,
   BASE_URL,
   executeSQL,
+  fetchTestRequest,
   getAuthHeaders,
   getAuthHeadersForCredentials,
   getSupabaseClient,
@@ -193,7 +194,7 @@ describe('[GET] /apikey operations', () => {
   })
 
   it('get api key with invalid id', async () => {
-    const response = await fetch(`${BASE_URL}/apikey/424242`, {
+    const response = await fetchTestRequest(`${BASE_URL}/apikey/424242`, {
       method: 'GET',
       headers: authHeaders,
     })

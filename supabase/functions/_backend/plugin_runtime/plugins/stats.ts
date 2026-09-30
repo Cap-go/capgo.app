@@ -14,8 +14,9 @@ import { makeDevice, parsePluginBody } from '../utils/plugin_parser.ts'
 import { createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from '../utils/plugin_stats.ts'
 import { statsRequestSchema } from '../utils/plugin_validation.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
-import { backgroundTask, INVALID_STRING_APP_ID, isLimited, MISSING_STRING_APP_ID, reverseDomainRegex } from '../utils/utils.ts'
 import { onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
+import { backgroundTask, INVALID_STRING_APP_ID, isInternalVersionName, isLimited, MISSING_STRING_APP_ID, reverseDomainRegex } from '../utils/utils.ts'
+import { isRunningVersionAction } from './stats_actions.ts'
 
 const PLAN_ERROR = 'Cannot send stats, upgrade plan to continue to update'
 const DOWNLOAD_FAIL_FIXED_PLUGIN_VERSION = parse('7.17.0')
@@ -146,7 +147,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     // Legacy plugins can report download_fail for a non-existent target version
     // when there was no update to download, so skip version validation too.
     await backgroundTask(c, createStatsMau(c, device.device_id, app_id, appOwner.owner_org, device.platform, device.version_build))
-    await sendStatsAndDevice(c, device, statsActions, action.endsWith('_fail'))
+    await sendStatsAndDevice(c, device, statsActions, !isRunningVersionAction(action))
     return { success: true }
   }
 
@@ -158,21 +159,24 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     return effectiveStatsChannelPromise
   }
 
+  let failureChannel: Awaited<ReturnType<typeof getEffectiveDeviceChannelNamePostgres>> = null
+
   // Extract version from composite format if present (e.g., "1.2.3:main.js" -> "1.2.3")
   // Composite format is used for file-specific failure stats
   const colonIndex = version_name.indexOf(':')
   const versionOnly = colonIndex > 0 ? version_name.substring(0, colonIndex) : version_name
 
-  let allowedDeleted = false
-  if (versionOnly === 'builtin' || versionOnly === 'unknown') {
-    allowedDeleted = true
-  }
-  const appVersion = await getAppVersionPostgres(c, app_id, versionOnly, allowedDeleted, drizzleClient as ReturnType<typeof getDrizzleClient>)
+  // Devices keep running bundles after they are deleted, and builtin is reported as
+  // the native version_build (see plugin_parser), which usually has no bundle row.
+  // Resolve deleted and live bundles alike, and still record the log, device and MAU
+  // when no bundle matches; only version_usage needs a known bundle.
+  const appVersion = isInternalVersionName(versionOnly)
+    ? null
+    : await getAppVersionPostgres(c, app_id, versionOnly, undefined, drizzleClient as ReturnType<typeof getDrizzleClient>)
   if (!appVersion) {
-    return { success: false, error: 'version_not_found', message: 'Version not found', moreInfo: { app_id, version_name } }
+    cloudlog({ requestId: c.get('requestId'), message: 'Stats version not found, skipping version usage', app_id, version_name, action })
   }
-  // device.version = appVersion.id
-  if (action === 'set' && !device.is_emulator && device.is_prod) {
+  else if (action === 'set' && !device.is_emulator && device.is_prod) {
     // Use versionOnly from the request body and resolve channel overrides only when configured.
     await createStatsVersion(c, versionOnly, app_id, 'install', await getEffectiveStatsChannel())
     if (old_version_name) {
@@ -183,23 +187,26 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
       }
     }
   }
-  else if (action.endsWith('_fail') && shouldRecordAction) {
+  // File-level failures ("1.2.3:main.js") are followed by a bundle-level failure for
+  // the same update; count only the latter so one failed update is one version fail.
+  else if (action.endsWith('_fail') && shouldRecordAction && colonIndex <= 0) {
     if (!device.is_emulator && device.is_prod) {
       // Keep version_usage fail and install cohorts aligned for rollout auto-pause.
-      await createStatsVersion(c, versionOnly, app_id, 'fail', await getEffectiveStatsChannel())
+      failureChannel = await getEffectiveStatsChannel()
+      await createStatsVersion(c, versionOnly, app_id, 'fail', failureChannel)
       cloudlog({ requestId: c.get('requestId'), message: 'FAIL!' })
       // Daily fail ratio emails are now sent via cron job that checks aggregate stats
       // instead of per-device notifications. See process_daily_fail_ratio_email.
     }
   }
   if (shouldRecordAction) {
-    statsActions.push({ action: action as Database['public']['Enums']['stats_action'], metadata })
+    // The failure log carries the same channel as its version_usage fail row so
+    // the live release view can break failure reasons down per channel.
+    statsActions.push({ action: action as Database['public']['Enums']['stats_action'], metadata, channel: failureChannel })
   }
 
-  // Don't update device record on failure actions - the version_name in the request
-  // is the failed version, not the actual running version on the device
   await backgroundTask(c, createStatsMau(c, device.device_id, app_id, appOwner.owner_org, device.platform, device.version_build))
-  await sendStatsAndDevice(c, device, statsActions, action.endsWith('_fail'))
+  await sendStatsAndDevice(c, device, statsActions, !isRunningVersionAction(action))
   return { success: true }
 }
 

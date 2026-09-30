@@ -11,10 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { assertCloudSqlDataApiResponseSucceeded } from '../read_replicate/cloud_sql_data_api_response.ts'
-import {
-  MANIFEST_PER_VERSION_TABLE_SQL,
-  planReadReplicaSchemaSync,
-} from '../read_replicate/schema_additive_sync.ts'
+import { planReadReplicaSchemaSync } from '../read_replicate/schema_additive_sync.ts'
 import {
   READ_REPLICA_SCHEMA_CATALOG_SQL,
   readReplicaSchemaCatalog,
@@ -146,13 +143,6 @@ function statementResolvesCompatibilityIssue(
   statement: ReadReplicaSchemaSyncStatement,
   issue: SchemaCompatibilityIssue,
 ): boolean {
-  if (statement.kind === 'table' && statement.table === 'manifest_per_version') {
-    return (issue.kind === 'table' && issue.object === statement.table)
-      || ((issue.kind === 'column' || issue.kind === 'constraint')
-        && issue.object.startsWith(`${statement.table}.`))
-      || (issue.kind === 'index' && issue.object === 'manifest_per_version_pkey')
-  }
-
   switch (issue.kind) {
     case 'column':
       return statement.kind === issue.kind
@@ -269,16 +259,9 @@ function assertGoogleReadReplicaSchemaStatement(
   switch (statement.kind) {
     case 'table':
       assertSelectedReplicaTable(statement)
-      if (
-        statement.table !== 'manifest_per_version'
-        || statement.name !== statement.table
-        || statement.sql !== MANIFEST_PER_VERSION_TABLE_SQL
-      ) {
-        throw new Error(
-          `Cloud SQL server-side import cannot create unsupported table ${statement.table}.`,
-        )
-      }
-      return
+      throw new Error(
+        `Cloud SQL server-side import cannot create unsupported table ${statement.table}.`,
+      )
     case 'column':
       assertSelectedReplicaTable(statement)
       assertColumnStatement(statement)

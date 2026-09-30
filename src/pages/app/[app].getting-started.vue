@@ -377,7 +377,7 @@ watch([() => app.value?.app_id, () => setupRedirect.value?.path], async () => {
               {{ group.doneCount }}/{{ group.steps.length }}
             </span>
           </summary>
-          <ul class="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white shadow-sm dark:divide-white/10 dark:border-white/10 dark:bg-slate-800 dark:shadow-none dark:inset-ring dark:inset-ring-white/5">
+          <ul class="divide-y divide-slate-200 rounded-xl border border-slate-200 bg-white shadow-sm dark:divide-white/10 dark:border-white/10 dark:bg-slate-800/60 dark:shadow-none dark:inset-ring dark:inset-ring-white/5">
             <li
               v-for="step in group.steps"
               :key="step.id"

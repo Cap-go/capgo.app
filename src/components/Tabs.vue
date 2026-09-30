@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import type { Tab } from './comp_def'
+import { useElementSize, useScroll } from '@vueuse/core'
+import { computed, nextTick, onMounted, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
@@ -15,6 +17,46 @@ const props = defineProps<{
 const emit = defineEmits(['update:activeTab', 'update:secondaryActiveTab', 'update:tertiaryActiveTab'])
 
 const { t } = useI18n()
+const primaryList = useTemplateRef<HTMLUListElement>('primaryList')
+
+// Scrollable tab rows hide tabs off-screen on mobile; keep the active one visible.
+async function revealActiveTab() {
+  await nextTick()
+  const list = primaryList.value
+  const active = list?.querySelector<HTMLElement>('[aria-current="page"]')
+  if (!list || !active || list.scrollWidth <= list.clientWidth)
+    return
+  const listBox = list.getBoundingClientRect()
+  const activeBox = active.getBoundingClientRect()
+  list.scrollLeft += activeBox.left - listBox.left - (listBox.width - activeBox.width) / 2
+}
+
+onMounted(revealActiveTab)
+watch(() => props.activeTab, revealActiveTab)
+
+// Fade the trailing edge while more tabs sit off-screen, so the row reads as scrollable.
+const { arrivedState } = useScroll(primaryList)
+const { width: primaryListWidth } = useElementSize(primaryList)
+watch(primaryListWidth, revealActiveTab)
+const primaryOverflowClass = computed(() => {
+  const list = primaryList.value
+  if (!primaryListWidth.value || !props.noWrap || !list || arrivedState.right || list.scrollWidth <= list.clientWidth)
+    return ''
+  return '[mask-image:linear-gradient(to_right,#000_80%,transparent)]'
+})
+
+// A divider separates tab groups (e.g. ship / monitor / configure) so the
+// row reads as a workflow instead of an unordered list of destinations.
+function startsNewGroup(list: Tab[], index: number) {
+  if (index === 0)
+    return false
+  const current = list[index]?.group
+  return !!current && current !== list[index - 1]?.group
+}
+
+function tabTitle(tab: Tab) {
+  return tab.description ? `${t(tab.label)} — ${t(tab.description)}` : undefined
+}
 
 function activeTabColor(tab: string, row: 'primary' | 'secondary' | 'tertiary' = 'primary') {
   const isActive = row === 'tertiary'
@@ -48,23 +90,28 @@ const buttonPrimaryClass = 'inline-flex items-center gap-2 px-3 py-2 min-w-[42px
 const buttonSecondaryClass = 'inline-flex items-center gap-2 px-3 py-1.5 rounded-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-slate-900 transition-colors group'
 const buttonTertiaryClass = 'inline-flex items-center gap-2 px-3 py-2 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-slate-900 transition-colors group'
 const iconClass = 'w-5 h-5 transition-colors'
-const labelClass = 'hidden md:block text-xs md:text-sm font-medium transition-colors first-letter:uppercase'
+// Primary tabs always show their label: icon-only tabs are guesswork on mobile.
+// Secondary rows keep icons on small screens but always label the active tab.
+const primaryLabelClass = 'block text-sm font-medium whitespace-nowrap transition-colors first-letter:uppercase'
+const labelClass = 'md:block text-xs md:text-sm font-medium whitespace-nowrap transition-colors first-letter:uppercase'
 </script>
 
 <template>
   <div class="w-full min-w-0 shrink-0">
     <div class="min-w-0 pb-0">
-      <ul :class="[ulPrimaryClass, noWrap ? noWrapClass : 'flex-wrap']">
-        <li v-for="(tab, i) in tabs" :key="i" class="relative mr-2" :class="{ 'z-20': activeTab === tab.key }">
+      <ul ref="primaryList" :class="[ulPrimaryClass, noWrap ? noWrapClass : 'flex-wrap', primaryOverflowClass]">
+        <li v-for="(tab, i) in tabs" :key="i" class="relative flex items-end mr-1 md:mr-2" :class="{ 'z-20': activeTab === tab.key }" :data-tab-group="tab.group">
+          <span v-if="startsNewGroup(tabs, i)" class="self-center w-px h-5 mr-1 md:mr-2 bg-slate-300 dark:bg-slate-700" aria-hidden="true" />
           <button
             type="button"
             :aria-current="activeTab === tab.key ? 'page' : undefined"
             :aria-label="t(tab.label)"
+            :title="tabTitle(tab)"
             :class="[buttonPrimaryClass, activeTabColor(tab.key)]"
             @click="emit('update:activeTab', tab.key)"
           >
             <component :is="tab.icon" :class="iconClass" />
-            <span :class="labelClass">{{ t(tab.label) }}</span>
+            <span :class="primaryLabelClass">{{ t(tab.label) }}</span>
             <span v-if="tab.badge" class="hidden px-1.5 py-0.5 text-[10px] font-semibold uppercase rounded border md:inline border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t(tab.badge) }}</span>
           </button>
         </li>
@@ -77,11 +124,12 @@ const labelClass = 'hidden md:block text-xs md:text-sm font-medium transition-co
             type="button"
             :aria-current="secondaryActiveTab === tab.key ? 'page' : undefined"
             :aria-label="t(tab.label)"
+            :title="tabTitle(tab)"
             :class="[buttonSecondaryClass, activeTabColor(tab.key, 'secondary')]"
             @click="emit('update:secondaryActiveTab', tab.key)"
           >
             <component :is="tab.icon" :class="iconClass" />
-            <span :class="labelClass">{{ t(tab.label) }}</span>
+            <span :class="[labelClass, secondaryActiveTab === tab.key || !tab.icon ? 'block' : 'hidden']">{{ t(tab.label) }}</span>
             <span v-if="tab.badge" class="hidden px-1.5 py-0.5 text-[10px] font-semibold uppercase rounded border md:inline border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t(tab.badge) }}</span>
           </button>
         </li>
@@ -92,11 +140,12 @@ const labelClass = 'hidden md:block text-xs md:text-sm font-medium transition-co
             type="button"
             :aria-current="tertiaryActiveTab === tab.key ? 'page' : undefined"
             :aria-label="t(tab.label)"
+            :title="tabTitle(tab)"
             :class="[buttonTertiaryClass, activeTabColor(tab.key, 'tertiary')]"
             @click="emit('update:tertiaryActiveTab', tab.key)"
           >
             <component :is="tab.icon" :class="iconClass" />
-            <span :class="labelClass">{{ t(tab.label) }}</span>
+            <span :class="[labelClass, tertiaryActiveTab === tab.key || !tab.icon ? 'block' : 'hidden']">{{ t(tab.label) }}</span>
             <span v-if="tab.badge" class="hidden px-1.5 py-0.5 text-[10px] font-semibold uppercase rounded border md:inline border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t(tab.badge) }}</span>
           </button>
         </li>

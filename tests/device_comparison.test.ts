@@ -1,8 +1,11 @@
-import type { DeviceExistingRowLike } from '../supabase/functions/_backend/utils/deviceComparison.ts'
+import type { DeviceExistingRowLike, DeviceInfoWriteCachePayload } from '../supabase/functions/_backend/utils/deviceComparison.ts'
 import type { DeviceWithoutCreatedAt } from '../supabase/functions/_backend/utils/types.ts'
 import { describe, expect, it } from 'vitest'
+import * as pluginRuntimeDeviceComparison from '../supabase/functions/_backend/plugin_runtime/utils/deviceComparison.ts'
 import {
   buildNormalizedDeviceForWrite,
+  canSkipDeviceInfoWrite,
+  DEVICE_INFO_REFRESH_TTL_SECONDS,
   hasComparableDeviceChanged,
   normalizeDeviceCountryCode,
   nullableString as normalizeOptionalString,
@@ -1502,5 +1505,70 @@ describe('deviceComparison utilities', () => {
         expect(changed).toBe(false) // Should NEVER trigger write
       }
     })
+  })
+})
+
+describe('canSkipDeviceInfoWrite (trackDevicesCF colo cache)', () => {
+  const device: DeviceWithoutCreatedAt = {
+    device_id: 'cache-device',
+    app_id: 'com.example.cache',
+    platform: 'ios',
+    plugin_version: '7.0.0',
+    os_version: '17',
+    version_build: '1.0.0',
+    custom_id: '',
+    version_name: '2.0.0',
+    is_prod: true,
+    is_emulator: false,
+    default_channel: 'production',
+  }
+  const nowMs = Date.parse('2026-09-30T12:00:00.000Z')
+
+  function cachedAt(ageMs: number, overrides: Partial<DeviceWithoutCreatedAt> = {}): DeviceInfoWriteCachePayload {
+    return {
+      ...toComparableDevice({ ...device, ...overrides }),
+      app_id: device.app_id,
+      device_id: device.device_id,
+      cached_at: new Date(nowMs - ageMs).toISOString(),
+    }
+  }
+
+  it('uses a one day refresh TTL', () => {
+    expect(DEVICE_INFO_REFRESH_TTL_SECONDS).toBe(86400)
+  })
+
+  it('skips the write for an unchanged device written recently', () => {
+    expect(canSkipDeviceInfoWrite(cachedAt(60_000), device, nowMs)).toBe(true)
+    expect(canSkipDeviceInfoWrite(cachedAt(DEVICE_INFO_REFRESH_TTL_SECONDS * 1000 - 1), device, nowMs)).toBe(true)
+  })
+
+  it('forces a write when there is no cache entry', () => {
+    expect(canSkipDeviceInfoWrite(null, device, nowMs)).toBe(false)
+    expect(canSkipDeviceInfoWrite(undefined, device, nowMs)).toBe(false)
+  })
+
+  it('forces a refresh once the last write is older than the TTL, even if unchanged', () => {
+    expect(canSkipDeviceInfoWrite(cachedAt(DEVICE_INFO_REFRESH_TTL_SECONDS * 1000), device, nowMs)).toBe(false)
+    // Entries written under the previous one-year cache max-age.
+    expect(canSkipDeviceInfoWrite(cachedAt(200 * 24 * 60 * 60 * 1000), device, nowMs)).toBe(false)
+  })
+
+  it('forces a write when the device changed (for example a rollback)', () => {
+    expect(canSkipDeviceInfoWrite(cachedAt(60_000, { version_name: '1.0.0' }), device, nowMs)).toBe(false)
+  })
+
+  it('forces a write for missing, invalid or future write timestamps', () => {
+    const entry = cachedAt(60_000)
+    expect(canSkipDeviceInfoWrite({ ...entry, cached_at: 'not-a-date' }, device, nowMs)).toBe(false)
+    expect(canSkipDeviceInfoWrite({ ...entry, cached_at: undefined as unknown as string }, device, nowMs)).toBe(false)
+    expect(canSkipDeviceInfoWrite({ ...entry, cached_at: new Date(nowMs + 60_000).toISOString() }, device, nowMs)).toBe(false)
+  })
+
+  it('keeps the plugin_runtime copy in sync', () => {
+    const entry = cachedAt(60_000)
+    const stale = cachedAt(DEVICE_INFO_REFRESH_TTL_SECONDS * 1000 + 1)
+    expect(pluginRuntimeDeviceComparison.DEVICE_INFO_REFRESH_TTL_SECONDS).toBe(DEVICE_INFO_REFRESH_TTL_SECONDS)
+    expect(pluginRuntimeDeviceComparison.canSkipDeviceInfoWrite(entry, device, nowMs)).toBe(true)
+    expect(pluginRuntimeDeviceComparison.canSkipDeviceInfoWrite(stale, device, nowMs)).toBe(false)
   })
 })

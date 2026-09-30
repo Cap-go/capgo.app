@@ -371,9 +371,6 @@ declare global {
   export type { UpdateDeliveryScope, UpdateDeliveryStatsResponse } from './composables/useUpdateDeliveryStats'
   import('./composables/useUpdateDeliveryStats')
   // @ts-ignore
-  export type { MetricCategory, DateRangeMode } from './stores/adminDashboard'
-  import('./stores/adminDashboard')
-  // @ts-ignore
   export type { DialogV2Button, DialogV2Options } from './stores/dialogv2'
   import('./stores/dialogv2')
   // @ts-ignore
@@ -392,8 +389,6 @@ import { UnwrapRef } from 'vue'
 declare module 'vue' {
   interface GlobalComponents {}
   interface ComponentCustomProperties {
-    readonly DATE_RANGE_DURATIONS_MS: UnwrapRef<typeof import('./stores/adminDashboard')['DATE_RANGE_DURATIONS_MS']>
-    readonly DEFAULT_DATE_RANGE_MODE: UnwrapRef<typeof import('./stores/adminDashboard')['DEFAULT_DATE_RANGE_MODE']>
     readonly EffectScope: UnwrapRef<typeof import('vue')['EffectScope']>
     readonly RBAC_ORG_ROLE_I18N_KEYS: UnwrapRef<typeof import('./stores/organization')['RBAC_ORG_ROLE_I18N_KEYS']>
     readonly RELEASE_LIVE_POLL_INTERVAL_MS: UnwrapRef<typeof import('./composables/useReleaseLive')['RELEASE_LIVE_POLL_INTERVAL_MS']>
@@ -434,7 +429,6 @@ declare module 'vue' {
     readonly getCurrentInstance: UnwrapRef<typeof import('vue')['getCurrentInstance']>
     readonly getCurrentScope: UnwrapRef<typeof import('vue')['getCurrentScope']>
     readonly getCurrentWatcher: UnwrapRef<typeof import('vue')['getCurrentWatcher']>
-    readonly getDateRangeForMode: UnwrapRef<typeof import('./stores/adminDashboard')['getDateRangeForMode']>
     readonly getRbacRoleI18nKey: UnwrapRef<typeof import('./stores/organization')['getRbacRoleI18nKey']>
     readonly h: UnwrapRef<typeof import('vue')['h']>
     readonly ignorableWatch: UnwrapRef<typeof import('@vueuse/core')['ignorableWatch']>
@@ -515,7 +509,6 @@ declare module 'vue' {
     readonly unrefElement: UnwrapRef<typeof import('@vueuse/core')['unrefElement']>
     readonly until: UnwrapRef<typeof import('@vueuse/core')['until']>
     readonly useActiveElement: UnwrapRef<typeof import('@vueuse/core')['useActiveElement']>
-    readonly useAdminDashboardStore: UnwrapRef<typeof import('./stores/adminDashboard')['useAdminDashboardStore']>
     readonly useAnchorPopover: UnwrapRef<typeof import('./composables/useAnchorPopover')['useAnchorPopover']>
     readonly useAnimate: UnwrapRef<typeof import('@vueuse/core')['useAnimate']>
     readonly useAppDetailStore: UnwrapRef<typeof import('./stores/appDetail')['useAppDetailStore']>
