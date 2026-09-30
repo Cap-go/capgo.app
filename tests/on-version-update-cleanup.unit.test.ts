@@ -503,6 +503,11 @@ describe('on_version_update manifest cleanup load', () => {
     const pools = getPgClient.mock.results.map(result => result.value as { query: ReturnType<typeof vi.fn>, connect: ReturnType<typeof vi.fn> })
     const checkouts = pools.reduce((total, pool) => total + pool.connect.mock.calls.length, 0)
     expect(checkouts).toBe(500)
+    // A leaked client would exhaust the bounded pool and stall cleanup.
+    const clients = await Promise.all(pools.flatMap(pool => pool.connect.mock.results.map(result => result.value as Promise<{ release: ReturnType<typeof vi.fn> }>)))
+    expect(clients).toHaveLength(500)
+    for (const client of clients)
+      expect(client.release).toHaveBeenCalledTimes(1)
     expect(callOrder.filter(v => v.startsWith('db_delete_row:'))).toHaveLength(500)
   }, 30_000)
 
