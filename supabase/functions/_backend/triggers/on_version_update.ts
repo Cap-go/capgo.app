@@ -348,6 +348,62 @@ type ManifestCleanupEntry = {
   s3_path: string | null
 }
 
+// BEGIN/lock/COMMIT must share one connection, so run them on a checked-out
+// client rather than on the pool itself.
+async function trashManifestEntry(c: Context, pool: ReturnType<typeof getPgClient>, versionId: number, entry: ManifestCleanupEntry) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    // Serialize shared-hash cleanup across concurrent deleted versions.
+    // Do NOT use chr(0) as a separator — Postgres raises 54000 "null character not permitted".
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext($1::text), hashtext($2::text))`,
+      [entry.file_hash, entry.file_name],
+    )
+
+    if (entry.s3_path) {
+      const refs = await client.query(
+        `SELECT 1 AS ok
+         FROM public.manifest
+         WHERE file_hash = $1
+           AND file_name = $2
+           AND app_version_id <> $3
+         LIMIT 1`,
+        [entry.file_hash, entry.file_name, versionId],
+      )
+
+      if (refs.rows.length === 0) {
+        const moved = await s3.moveObjectToTrash(c, entry.s3_path)
+        if (!moved) {
+          throw simpleError('cannot_move_manifest_s3_to_trash', 'Cannot move S3 object for deleted manifest file to trash', {
+            id: entry.id,
+            s3_path: entry.s3_path,
+          })
+        }
+      }
+    }
+
+    // Only delete the DB row after R2 is handled (or shared and kept).
+    await client.query(
+      `DELETE FROM public.manifest WHERE id = $1`,
+      [entry.id],
+    )
+    await client.query('COMMIT')
+  }
+  catch (error) {
+    try {
+      await client.query('ROLLBACK')
+    }
+    catch {
+      // ignore rollback errors
+    }
+    throw error
+  }
+  finally {
+    client.release()
+  }
+}
+
 /**
  * Trash unreferenced R2 objects first (exist → move to deleted-after-7-days/,
  * missing → ok), then delete that DB row. Never drop DB tracking before R2 is handled.
@@ -379,62 +435,30 @@ async function deleteManifest(c: Context, record: Database['public']['Tables']['
   const startedWithRows = manifestEntries.length > 0
 
   if (startedWithRows) {
-    for (let i = 0; i < manifestEntries.length; i += MANIFEST_TRASH_CONCURRENCY) {
-      const batch = manifestEntries.slice(i, i + MANIFEST_TRASH_CONCURRENCY)
-      await Promise.all(batch.map(async (entry) => {
-        const entryPg = getPgClient(c, false)
-        try {
-          await entryPg.query('BEGIN')
-          // Serialize shared-hash cleanup across concurrent deleted versions.
-          // Do NOT use chr(0) as a separator — Postgres raises 54000 "null character not permitted".
-          await entryPg.query(
-            `SELECT pg_advisory_xact_lock(hashtext($1::text), hashtext($2::text))`,
-            [entry.file_hash, entry.file_name],
-          )
-
-          if (entry.s3_path) {
-            const refs = await entryPg.query(
-              `SELECT 1 AS ok
-               FROM public.manifest
-               WHERE file_hash = $1
-                 AND file_name = $2
-                 AND app_version_id <> $3
-               LIMIT 1`,
-              [entry.file_hash, entry.file_name, record.id],
-            )
-
-            if (refs.rows.length === 0) {
-              const moved = await s3.moveObjectToTrash(c, entry.s3_path)
-              if (!moved) {
-                throw simpleError('cannot_move_manifest_s3_to_trash', 'Cannot move S3 object for deleted manifest file to trash', {
-                  id: entry.id,
-                  s3_path: entry.s3_path,
-                })
-              }
-            }
-          }
-
-          // Only delete the DB row after R2 is handled (or shared and kept).
-          await entryPg.query(
-            `DELETE FROM public.manifest WHERE id = $1`,
-            [entry.id],
-          )
-          await entryPg.query('COMMIT')
-        }
-        catch (error) {
+    // A fixed set of workers, each with one pool, drains the entries. Opening a
+    // pool per file meant thousands of Hyperdrive connections (and log lines)
+    // for a large bundle, which overflowed the Workers per-request log limit.
+    let nextEntry = 0
+    let failed = false
+    const workers = Array.from({ length: Math.min(MANIFEST_TRASH_CONCURRENCY, manifestEntries.length) }, async () => {
+      const workerPg = getPgClient(c, false)
+      try {
+        while (!failed && nextEntry < manifestEntries.length) {
+          const entry = manifestEntries[nextEntry++]!
           try {
-            await entryPg.query('ROLLBACK')
+            await trashManifestEntry(c, workerPg, record.id, entry)
           }
-          catch {
-            // ignore rollback errors
+          catch (error) {
+            failed = true
+            throw error
           }
-          throw error
         }
-        finally {
-          await closeClient(c, entryPg)
-        }
-      }))
-    }
+      }
+      finally {
+        await closeClient(c, workerPg)
+      }
+    })
+    await Promise.all(workers)
   }
 
   const writePgClient = getPgClient(c, false)
