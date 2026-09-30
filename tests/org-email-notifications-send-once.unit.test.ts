@@ -178,6 +178,26 @@ describe('sendNotifToOrgMembersOnce', () => {
     expect(claimNotifOrgOnceMock).not.toHaveBeenCalled()
     expect(closeClientMock).toHaveBeenCalledWith(expect.anything(), { id: 'owned-pg-client' })
   })
+  it('reports an existing org-level claim as terminal and a failed claim lookup as retryable', async () => {
+    const { sendNotifToOrgMembersOnceWithResult } = await import('../supabase/functions/_backend/utils/org_email_notifications.ts')
+    const send = () => sendNotifToOrgMembersOnceWithResult(
+      createContext(),
+      'device:downgrade_blocked',
+      'device_error',
+      { app_id: 'com.test.app' },
+      'org-123',
+      'com.test.app',
+      {} as any,
+    )
+
+    hasNotifOrgClaimMock.mockResolvedValue(true)
+    await expect(send()).resolves.toBe('already_claimed')
+
+    hasNotifOrgClaimMock.mockResolvedValue(null)
+    await expect(send()).resolves.toBe('failed')
+    expect(sendNotifOrgOnceMock).not.toHaveBeenCalled()
+  })
+
   it('fails closed when the org-level claim lookup errors', async () => {
     hasNotifOrgClaimMock.mockResolvedValue(null)
 

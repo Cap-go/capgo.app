@@ -619,6 +619,15 @@ export async function sendNotifToOrgMembers(
   return true
 }
 
+/**
+ * Outcome of a one-time org-members notification.
+ * - `sent`: this call delivered and claimed the notification.
+ * - `already_claimed` / `no_recipients` / `org_not_found`: terminal, retrying
+ *   can never deliver it, so queue consumers must drop the item.
+ * - `failed`: transient, safe to retry.
+ */
+export type OrgMembersOnceResult = 'sent' | 'already_claimed' | 'no_recipients' | 'org_not_found' | 'failed'
+
 export async function sendNotifToOrgMembersOnce(
   c: Context,
   eventName: string,
@@ -629,13 +638,26 @@ export async function sendNotifToOrgMembersOnce(
   drizzleClient: ReturnType<typeof getDrizzleClient>,
   audience: NotificationAudience = 'admins',
 ): Promise<boolean> {
+  return await sendNotifToOrgMembersOnceWithResult(c, eventName, preferenceKey, eventData, orgId, uniqId, drizzleClient, audience) === 'sent'
+}
+
+export async function sendNotifToOrgMembersOnceWithResult(
+  c: Context,
+  eventName: string,
+  preferenceKey: EmailPreferenceKey,
+  eventData: Record<string, unknown>,
+  orgId: string,
+  uniqId: string,
+  drizzleClient: ReturnType<typeof getDrizzleClient>,
+  audience: NotificationAudience = 'admins',
+): Promise<OrgMembersOnceResult> {
   if (shouldSkipSupabaseNotificationWrites(c)) {
     logSkippedSupabaseWrite(c, 'sendNotifToOrgMembersOnce')
-    return false
+    return 'failed'
   }
 
   if (!isBentoConfigured(c))
-    return false
+    return 'failed'
 
   const pgClient = getPgClient(c)
   const writeClient = getDrizzleClient(pgClient)
@@ -651,7 +673,7 @@ export async function sendNotifToOrgMembersOnce(
         orgId,
         uniqId,
       })
-      return false
+      return 'failed'
     }
     if (alreadySentForOrg) {
       cloudlog({
@@ -662,15 +684,15 @@ export async function sendNotifToOrgMembersOnce(
         orgId,
         uniqId,
       })
-      // false = not newly sent this call. Callers that mirror to PostHog/etc must
+      // Not newly sent this call. Callers that mirror to PostHog/etc must
       // not treat idempotent "already claimed" as a fresh delivery.
-      return false
+      return 'already_claimed'
     }
 
     const { recipients, resolutionFailed } = await getPreparedEligibleEmailTargets(c, orgId, preferenceKey, writeClient, audience)
     if (!recipients) {
       cloudlog({ requestId: c.get('requestId'), message: 'sendNotifToOrgMembersOnce: org not found', orgId })
-      return false
+      return 'org_not_found'
     }
     if (resolutionFailed) {
       cloudlog({
@@ -680,7 +702,7 @@ export async function sendNotifToOrgMembersOnce(
         preferenceKey,
         orgId,
       })
-      return false
+      return 'failed'
     }
 
     const { managementEmail, allEmails, primaryEmail, additionalEmails } = recipients
@@ -694,7 +716,7 @@ export async function sendNotifToOrgMembersOnce(
       })
       // Claim anyway so once-dedup (SQL + retries) does not re-queue forever.
       await claimNotifOrgOnce(c, eventName, orgId, uniqId, writeClient)
-      return false
+      return 'no_recipients'
     }
 
     const recipientEmails = [primaryEmail, ...additionalEmails]
@@ -711,7 +733,7 @@ export async function sendNotifToOrgMembersOnce(
           orgId,
           recipientUniqId,
         })
-        return false
+        return 'failed'
       }
       recipientEntries.push({ email, recipientUniqId, wasAlreadyClaimedBeforeRun })
     }
@@ -746,12 +768,12 @@ export async function sendNotifToOrgMembersOnce(
         orgId,
         cleanupFailedRecipients: cleanupFailedEmails,
       })
-      return false
+      return 'failed'
     }
 
     const unresolvedResults = sendResults.filter(result => !result.sent && !result.wasAlreadyClaimedBeforeRun)
     if (unresolvedResults.length > 0)
-      return false
+      return 'failed'
 
     const firstOrgSend = await claimNotifOrgOnce(c, eventName, orgId, uniqId, writeClient)
 
@@ -769,7 +791,9 @@ export async function sendNotifToOrgMembersOnce(
       managementEmailIncluded: !!managementEmail,
     })
 
-    return firstOrgSend
+    // Every recipient is delivered or already claimed; a lost org claim race
+    // means another run finished it, so there is nothing left to retry.
+    return firstOrgSend ? 'sent' : 'already_claimed'
   }
   finally {
     await closeClient(c, pgClient)

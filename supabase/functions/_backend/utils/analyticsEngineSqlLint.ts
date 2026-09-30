@@ -156,6 +156,31 @@ function hasConditionalAggIf(sql: string): boolean {
   return sqlHasBareCall(sql, /^(?:avgIf|sumIf|countIf)\s*\(/i)
 }
 
+const ORDER_BY_CLAUSE = /\bORDER\s+BY\b([^)]*)/gi
+const ALIASED_SOURCE_COLUMN = /\b(blob\d+|double\d+|index\d+|timestamp)\s+AS\s+(\w+)/gi
+
+// Analytics Engine resolves ORDER BY against the projected columns only: once
+// `blob2 AS action` is selected, `ORDER BY blob2` fails with
+// "unable to find type of column".
+function ordersByAliasedSourceColumn(sql: string): boolean {
+  const aliasedColumns = new Set<string>()
+  for (const [, column, alias] of sql.matchAll(ALIASED_SOURCE_COLUMN)) {
+    if (column!.toLowerCase() !== alias!.toLowerCase())
+      aliasedColumns.add(column!.toLowerCase())
+  }
+  if (aliasedColumns.size === 0)
+    return false
+
+  for (const [, clause] of sql.matchAll(ORDER_BY_CLAUSE)) {
+    const orderBy = clause!.split(/\b(?:LIMIT|FORMAT)\b/i)[0]!
+    for (const [word] of orderBy.matchAll(/\b\w+\b/g)) {
+      if (aliasedColumns.has(word.toLowerCase()))
+        return true
+    }
+  }
+  return false
+}
+
 export const ANALYTICS_ENGINE_SQL_LINT_RULES: AnalyticsEngineSqlLintRule[] = [
   {
     id: 'no-count-star',
@@ -206,6 +231,11 @@ export const ANALYTICS_ENGINE_SQL_LINT_RULES: AnalyticsEngineSqlLintRule[] = [
     id: 'no-conditional-agg-if',
     test: hasConditionalAggIf,
     message: 'avgIf/sumIf/countIf expand to if(expr, NULL) which Analytics Engine rejects (Double/DateTime vs Null). Use if(cond, value, 0.0) or a typed DateTime sentinel instead.',
+  },
+  {
+    id: 'no-order-by-aliased-source-column',
+    test: ordersByAliasedSourceColumn,
+    message: 'Analytics Engine SQL ORDER BY only sees projected columns; order by the SELECT alias instead of the aliased source column',
   },
 ]
 

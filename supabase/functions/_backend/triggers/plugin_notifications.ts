@@ -5,7 +5,7 @@ import { Hono } from 'hono/tiny'
 import { BRES, middlewareAPISecret, parseBody, quickError, simpleError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { sendNotifOrg } from '../utils/notifications.ts'
-import { sendNotifToOrgMembersOnce } from '../utils/org_email_notifications.ts'
+import { sendNotifToOrgMembersOnceWithResult } from '../utils/org_email_notifications.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 
 const MAX_PLUGIN_NOTIFICATION_BATCH = 100
@@ -28,12 +28,14 @@ function isValidPluginNotificationItem(item: unknown): item is PluginNotificatio
   return false
 }
 
-type PluginNotificationSendResult = boolean | { sent: false, lastSendAt: string }
-export type PluginNotificationItemResult = { status: 'delivered' } | { status: 'failed' } | { lastSendAt: string, status: 'throttled' }
+type PluginNotificationSendResult = boolean | { sent: false, lastSendAt: string } | { settled: true }
+export type PluginNotificationItemResult = { status: 'delivered' } | { status: 'failed' } | { status: 'settled' } | { lastSendAt: string, status: 'throttled' }
 
 function getPluginNotificationItemResult(result: PluginNotificationSendResult): PluginNotificationItemResult {
   if (result === true)
     return { status: 'delivered' }
+  if (typeof result === 'object' && 'settled' in result)
+    return { status: 'settled' }
   if (typeof result === 'object' && result.sent === false && result.lastSendAt)
     return { status: 'throttled', lastSendAt: result.lastSendAt }
   return { status: 'failed' }
@@ -43,7 +45,15 @@ async function sendQueuedPluginNotification(c: Context, item: PluginNotification
   if (item.type === 'org')
     return await sendNotifOrg(c, item.eventName, item.eventData, item.orgId, item.uniqId, item.cron, item.managementEmail, drizzleClient)
 
-  return await sendNotifToOrgMembersOnce(c, item.eventName, item.preferenceKey, item.eventData, item.orgId, item.uniqId, drizzleClient, item.audience)
+  const result = await sendNotifToOrgMembersOnceWithResult(c, item.eventName, item.preferenceKey, item.eventData, item.orgId, item.uniqId, drizzleClient, item.audience)
+  if (result === 'sent')
+    return true
+  // Terminal outcomes (already claimed, no recipients, org gone) can never be
+  // delivered by a retry; treating them as failures kept them in the KV queue
+  // forever and starved every newer item behind them.
+  if (result === 'already_claimed' || result === 'no_recipients' || result === 'org_not_found')
+    return { settled: true }
+  return false
 }
 
 async function processPluginNotifications(c: Context, items: PluginNotificationQueueItem[]) {

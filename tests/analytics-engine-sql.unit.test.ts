@@ -36,6 +36,21 @@ describe('analytics engine sql lint rules', () => {
     expect(lintAnalyticsEngineSql("SELECT concat(index1, ':', blob1) FROM device_usage").map(issue => issue.rule)).toContain('no-concat')
   })
 
+  it.concurrent('flags ORDER BY on a source column that is only projected under an alias', () => {
+    expect(lintAnalyticsEngineSql(
+      'SELECT blob2 AS action, timestamp AS created_at FROM app_log ORDER BY created_at ASC, blob2 ASC LIMIT 10',
+    ).map(issue => issue.rule)).toContain('no-order-by-aliased-source-column')
+    expect(lintAnalyticsEngineSql(
+      'SELECT blob2 AS action, timestamp AS created_at FROM app_log ORDER BY timestamp ASC',
+    ).map(issue => issue.rule)).toContain('no-order-by-aliased-source-column')
+    expect(lintAnalyticsEngineSql(
+      'SELECT blob2 AS action, timestamp AS created_at FROM app_log ORDER BY created_at ASC, action ASC LIMIT 10',
+    ).map(issue => issue.rule)).not.toContain('no-order-by-aliased-source-column')
+    expect(lintAnalyticsEngineSql(
+      'SELECT blob2, count() AS total FROM app_log GROUP BY blob2 ORDER BY blob2',
+    ).map(issue => issue.rule)).not.toContain('no-order-by-aliased-source-column')
+  })
+
   it.concurrent('accepts supported COUNT() and COUNT(DISTINCT) forms', () => {
     expect(lintAnalyticsEngineSql('SELECT COUNT() AS total FROM device_info')).toEqual([])
     expect(lintAnalyticsEngineSql('SELECT COUNT(DISTINCT blob1) AS total FROM device_info')).toEqual([])
