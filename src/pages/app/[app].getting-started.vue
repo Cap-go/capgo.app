@@ -2,12 +2,13 @@
 import type { GettingStartedStep } from '~/utils/appOnboardingProgress'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconCheck from '~icons/lucide/check'
 import IconRefreshCw from '~icons/lucide/refresh-cw'
 import IconX from '~icons/lucide/x'
 import AppOnboardingCliSteps from '~/components/dashboard/AppOnboardingCliSteps.vue'
+import AppOnboardingFlow from '~/components/dashboard/AppOnboardingFlow.vue'
 import AppPageFrame from '~/components/dashboard/AppPageFrame.vue'
 import { useAppPage } from '~/composables/useAppPage'
 import { useSupabase } from '~/services/supabase'
@@ -24,10 +25,12 @@ import {
   isStoreReleaseValidated,
   markStoreReleaseValidated,
 } from '~/utils/gettingStartedDismiss'
-import { getAppSetupRedirect } from '~/utils/onboardingRedirect'
+import { readOnboardingSetupHandoff, usesOnboardingSetupUi } from '~/utils/onboardingRedirect'
+import { parseUserOnboardingProgress } from '~/utils/userOnboardingProgress'
 
 const { t } = useI18n()
 const router = useRouter()
+const route = useRoute('/app/[app].getting-started')
 const supabase = useSupabase()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
@@ -49,7 +52,12 @@ const appName = computed(() => app.value?.name || orgApp.value?.name || id.value
 const appIcon = computed(() => orgApp.value?.icon_url || '')
 const iconLoading = computed(() => orgApp.value?.icon_url_loading === true)
 
-const setupRedirect = computed(() => app.value ? getAppSetupRedirect(app.value) : null)
+// Apps with a setup todo list, or a legacy app opening CLI setup, use the same
+// setup UI as onboarding, rendered inside the dashboard shell.
+const usesSetupUi = computed(() => !!app.value && (usesOnboardingSetupUi(app.value) || route.query.setup === 'cli'))
+// Read once per app: the flow reads its analytics flow at mount.
+const setupFlowAppId = ref('')
+const setupPreOrg = ref(false)
 const ledger = computed(() => parseAppOnboardingLedger(app.value?.onboarding))
 const userId = computed(() => main.user?.id ?? main.auth?.id ?? '')
 const steps = computed(() => buildGettingStartedSteps(ledger.value, {
@@ -199,7 +207,7 @@ function runStep(step: GettingStartedStep) {
     return
   if (step.id === 'cli_install') {
     if (app.value?.need_onboarding)
-      void router.push({ path: '/app/new', query: { resume: id.value } })
+      void router.push({ query: { setup: 'cli' } })
     else
       void router.push(`/app/${encodeURIComponent(id.value)}/devices`)
     return
@@ -229,19 +237,23 @@ watch(() => id.value, async (appId) => {
   void checkBuilderDone(appId)
 }, { immediate: true })
 
-watch([() => app.value?.app_id, () => setupRedirect.value?.path], async () => {
+function resolveSetupPreOrg(appId: string) {
+  const handoff = readOnboardingSetupHandoff(window.history.state, appId)
+  if (handoff)
+    return handoff.flow === 'pre_org'
+  const saved = parseUserOnboardingProgress(main.user?.onboarding)
+  return saved?.status === 'in_progress' && saved.flow === 'pre_org' && saved.app_id === appId
+}
+
+watch([() => app.value?.app_id, usesSetupUi], () => {
   const currentApp = app.value
   if (!currentApp)
     return
-  const redirect = getAppSetupRedirect(currentApp)
-  if (redirect) {
-    await organizationStore.awaitInitialLoad()
-    if (app.value?.app_id !== currentApp.app_id)
-      return
-    const org = organizationStore.getOrgByAppId(currentApp.app_id)
-    if (org)
-      organizationStore.setCurrentOrganization(org.gid)
-    await router.replace(redirect)
+  if (usesSetupUi.value) {
+    if (setupFlowAppId.value !== currentApp.app_id) {
+      setupPreOrg.value = resolveSetupPreOrg(currentApp.app_id)
+      setupFlowAppId.value = currentApp.app_id
+    }
     return
   }
   void verifySteps({ silent: true })
@@ -249,8 +261,16 @@ watch([() => app.value?.app_id, () => setupRedirect.value?.path], async () => {
 </script>
 
 <template>
-  <AppPageFrame :found="!!app" :loading="isLoading || !!setupRedirect">
-    <div v-if="app && !setupRedirect" class="mx-auto max-w-3xl px-4 py-6 sm:px-0" data-test="getting-started-page">
+  <AppPageFrame :found="!!app" :loading="isLoading">
+    <AppOnboardingFlow
+      v-if="app && usesSetupUi && setupFlowAppId === app.app_id"
+      :key="setupFlowAppId"
+      data-test="getting-started-setup"
+      :setup-app-id="setupFlowAppId"
+      :pre-org="setupPreOrg"
+      onboarding
+    />
+    <div v-else-if="app && !usesSetupUi" class="mx-auto max-w-3xl px-4 py-6 sm:px-0" data-test="getting-started-page">
       <div
         v-if="allDone"
         class="mb-6 flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 dark:border-emerald-800 dark:bg-emerald-950/40"

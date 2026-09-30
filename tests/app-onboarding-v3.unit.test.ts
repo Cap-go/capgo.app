@@ -18,9 +18,9 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain('type AppDetailsStep = \'name\' | \'app_id\' | \'icon\'')
     expect(onboardingSource).toContain('const appDetailsStep = ref<AppDetailsStep>(\'name\')')
     expect(onboardingSource).toContain('const hasProvidedAppId = computed(() => Boolean(manualAppId.value.trim() || importedStoreAppId.value.trim()))')
-    expect(onboardingSource).toContain("completeAndViewAppDetailsStep('app_id', { appId: generatedAppId.value, appName: appName.value.trim() })")
-    expect(onboardingSource).toContain("completeAndViewAppDetailsStep('icon')")
-    expect(onboardingSource).toContain(":data-test=\"appDetailsStep === 'app_id' && !hasProvidedAppId ? 'app-onboarding-skip-app-id' : 'app-onboarding-continue'\"")
+    expect(onboardingSource).toContain('completeAndViewAppDetailsStep(\'app_id\', { appId: generatedAppId.value, appName: appName.value.trim() })')
+    expect(onboardingSource).toContain('completeAndViewAppDetailsStep(\'icon\')')
+    expect(onboardingSource).toContain(':data-test="appDetailsStep === \'app_id\' && !hasProvidedAppId ? \'app-onboarding-skip-app-id\' : \'app-onboarding-continue\'"')
     expect(onboardingSource).toContain('function skipAppId()')
     expect(onboardingSource).toContain('function continueFromCurrentAppDetailsStep()')
     expect(onboardingSource).toContain('manualAppId.value = \'\'')
@@ -66,7 +66,7 @@ describe('pre-organization onboarding v3', () => {
     expect(metadataImport.indexOf('data?.app_id_lookup_failed === true')).toBeLessThan(metadataImport.indexOf('await fetchAppleBundleId(requestedUrl)'))
     expect(metadataImport).toContain('if (!importedAppId && !appIdLookupFailed)')
     expect(metadataImport).toContain('storeAppIdLookupFailed.value = appIdLookupFailed')
-    expect(metadataImport).not.toContain("throw new Error('Apple lookup did not return an App ID')")
+    expect(metadataImport).not.toContain('throw new Error(\'Apple lookup did not return an App ID\')')
     expect(onboardingSource).toContain('const shouldShowStoreAppIdLookupWarning = computed(() => storeAppIdLookupFailed.value && !manualAppId.value.trim())')
     expect(sliceBetween(onboardingSource, 'function onStoreUrlInput', 'function onIconStoreUrlInput')).toContain('storeAppIdLookupFailed.value = false')
     expect(metadataImport.indexOf('storeAppNamePreview.value =')).toBeLessThan(metadataImport.indexOf('await fetchAppleBundleId(requestedUrl)'))
@@ -75,16 +75,16 @@ describe('pre-organization onboarding v3', () => {
     expect(metadataImport).toContain('if (importedAppId && manualAppId.value === manualAppIdAtRequest)')
     expect(metadataImport).toContain('manualAppId.value = importedAppId')
     expect(metadataImport).toContain('hasEditedAppId.value = false')
-    expect(appleLookup).toContain("new URL('https://itunes.apple.com/lookup')")
+    expect(appleLookup).toContain('new URL(\'https://itunes.apple.com/lookup\')')
     expect(appleLookup).toContain('return result.bundleId.trim()')
     expect(appleLookup).toContain('signal: controller.signal')
     expect(appleLookup).not.toContain('.text()')
-    expect(appIdSource.indexOf("return 'store'")).toBeLessThan(appIdSource.indexOf("return 'manual'"))
+    expect(appIdSource.indexOf('return \'store\'')).toBeLessThan(appIdSource.indexOf('return \'manual\''))
     expect(detailsPreview).toContain('<img v-if="iconPreview"')
     expect(detailsPreview).toContain(':src="iconPreview"')
     expect(appIdField).toContain(':value="manualAppId"')
     expect(appIdField).toContain('@input="onAppIdInput"')
-    expect(onboardingSource).toContain("t('app-onboarding-store-imported-missing-app-id')")
+    expect(onboardingSource).toContain('t(\'app-onboarding-store-imported-missing-app-id\')')
   })
 
   it.concurrent('renders the generated App ID as code without swallowing sentence punctuation', () => {
@@ -128,7 +128,7 @@ describe('pre-organization onboarding v3', () => {
   })
 
   it.concurrent('does not restore a skipped generated App ID as a manual choice', () => {
-    expect(onboardingSource).toContain("appId: createdApp.value?.app_id ?? (selectedAppIdSource.value === 'generated' ? '' : generatedAppId.value)")
+    expect(onboardingSource).toContain('appId: createdApp.value?.app_id ?? (selectedAppIdSource.value === \'generated\' ? \'\' : generatedAppId.value)')
   })
 
   it.concurrent('tracks every app-details page as a standard onboarding step', () => {
@@ -213,7 +213,7 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain('function analyticsStepFor(')
     expect(onboardingSource).toContain('return APP_DETAILS_ANALYTICS_STEPS[detailsStep]')
     expect(onboardingSource).toContain(`const initialStep: OnboardingAnalyticsStep = showPreOrgWelcome.value ? 'welcome' : analyticsStepFor(flowStep.value)`)
-    expect(onboardingSource).toContain('progressTracker.viewStep(initialStep)')
+    expect(onboardingSource).toContain('progressTracker.viewStep(initialStep, handoffPreviousStep)')
     expect(onboardingSource).toContain('const previousAnalyticsStep = analyticsStepFor(previousStep)')
     expect(onboardingSource).toContain('const nextAnalyticsStep = analyticsStepFor(nextStep)')
   })
@@ -248,7 +248,10 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain('website: websitePreview.value?.website')
     expect(onboardingSource).toContain('selectedStop.planName !== \'Solo\'')
     expect(onboardingSource).toContain('<OrganizationOnboardingInvite')
-    expect(onboardingSource).toContain('completeAndViewStep(nextStepAfterChannelEligibility(), { appId: createdApp.value.app_id })')
+    const inviteContinuation = sliceBetween(onboardingSource, 'function continueFromOrganizationInvite(', 'function resolveSetupStage(')
+    expect(inviteContinuation).toContain('void handOffToGettingStarted({ appId: createdApp.value.app_id })')
+    const handOff = sliceBetween(onboardingSource, 'async function handOffToGettingStarted(', 'async function copyText(')
+    expect(handOff).toContain('const nextStep = nextStepAfterChannelEligibility()')
   })
 
   it.concurrent('keeps the organization website tooltip clear of the panel and viewport edges', () => {
@@ -285,8 +288,11 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain('async function createAppRecord(')
     const creation = sliceBetween(onboardingSource, 'async function createOrganizationAndApp()', 'async function createAppRecord(')
     expect(creation).toContain('await createAppRecord(')
-    expect(creation).toContain('showOrganizationInvite.value = shouldInvite')
-    expect(creation.indexOf('await createAppRecord(')).toBeLessThan(creation.indexOf('showOrganizationInvite.value = shouldInvite'))
+    expect(creation).toContain('showOrganizationInvite.value = true')
+    expect(creation.indexOf('await createAppRecord(')).toBeLessThan(creation.indexOf('showOrganizationInvite.value = true'))
+    // Without invitations, setup continues on Getting started instead.
+    expect(creation).toContain('await handOffToGettingStarted(completionProperties)')
+    expect(creation.indexOf('await handOffToGettingStarted(completionProperties)')).toBeLessThan(creation.indexOf('showOrganizationInvite.value = true'))
   })
 
   it.concurrent('retries only app creation after an App ID conflict created the organization', () => {
@@ -302,16 +308,16 @@ describe('pre-organization onboarding v3', () => {
     const organizationCreation = sliceBetween(onboardingSource, 'async function createOrganizationAndApp()', 'async function createAppRecord(')
     expect(organizationCreation).toContain('preOrgCreatedOrganizationId.value = data.id')
     expect(organizationCreation).toContain('await completePreOrgAppCreation(data.id, shouldInvite)')
-    expect(organizationCreation).toContain('await createAppRecord({ nextStep: shouldInvite ? \'organization\' : nextStepAfterChannelEligibility() })')
+    expect(organizationCreation).toContain('await createAppRecord(shouldInvite ? { nextStep: \'organization\' } : undefined)')
 
-    const appCreation = sliceBetween(onboardingSource, 'async function createAppRecord(', 'async function seedDemoData()')
+    const appCreation = sliceBetween(onboardingSource, 'async function createAppRecord(', 'async function createAppAndHandOff()')
     expect(appCreation).toContain('returnToAppIdAfterConflict()')
   })
 
   it.concurrent('shows technical delegation unconditionally on pre-org setup', () => {
     expect(onboardingSource).toContain('flowStep === \'setup\' && createdApp')
-    expect(onboardingSource).toContain('!props.preOrg && flowStep === \'choice\'')
-    const setup = sliceBetween(onboardingSource, 'flowStep === \'setup\' && createdApp', '!props.preOrg && flowStep === \'choice\'')
+    expect(onboardingSource).not.toContain('flowStep === \'choice\'')
+    const setup = sliceBetween(onboardingSource, 'flowStep === \'setup\' && createdApp', '<div v-if="showLanguageSelector"')
     expect(setup).toContain('<TechnicalTeammateInviteCard')
     expect(setup).toContain('analytics-channel="onboarding-v3"')
     expect(setup).toContain(':show-manual-setup-link="false"')

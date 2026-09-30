@@ -18,14 +18,13 @@ describe('onboarding dashboard redirect', () => {
   const eligibleUser = '2026-08-03T23:00:01.000Z'
 
   it('redirects an eligible user with one pending app to its setup flow', async () => {
-    const expectedResume = { path: '/onboarding/app', query: { resume: 'com.example.app', step: 'setup' } }
+    const expectedResume = { path: '/app/com.example.app/getting-started' }
     await expect(getRedirect({
       appId: 'com.example.app',
       appCount: 1,
       createdAt: eligibleUser,
       organizationCount: 1,
       path: '/settings/account',
-      resumeAppId: null,
       userId: 'user-1',
     })).resolves.toEqual(expectedResume)
     await expect(getRedirect({
@@ -34,7 +33,6 @@ describe('onboarding dashboard redirect', () => {
       createdAt: eligibleUser,
       organizationCount: 1,
       path: '/dashboard',
-      resumeAppId: null,
       userId: 'user-1',
     })).resolves.toEqual(expectedResume)
     await expect(getRedirect({
@@ -43,26 +41,24 @@ describe('onboarding dashboard redirect', () => {
       createdAt: eligibleUser,
       organizationCount: 1,
       path: '/apps',
-      resumeAppId: null,
       userId: 'user-1',
     })).resolves.toEqual(expectedResume)
   })
 
-  it('does not redirect the resumable onboarding route or ineligible account shapes', async () => {
-    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/onboarding/app', resumeAppId: 'com.example.app', userId: 'user-1' })).resolves.toBeNull()
-    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/app/new', resumeAppId: 'com.example.app', userId: 'user-1' })).resolves.toBeNull()
-    await expect(getRedirect({ appId: 'com.example.app', appCount: 2, createdAt: eligibleUser, organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-1' })).resolves.toBeNull()
-    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 2, path: '/apps', resumeAppId: null, userId: 'user-1' })).resolves.toBeNull()
-    await expect(getRedirect({ appId: null, appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-1' })).resolves.toBeNull()
-    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: '2026-08-03T23:00:00.000Z', organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-1' })).resolves.toBeNull()
+  it('does not redirect Getting started or ineligible account shapes', async () => {
+    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/app/com.example.app/getting-started', userId: 'user-1' })).resolves.toBeNull()
+    await expect(getRedirect({ appId: 'com.example.app', appCount: 2, createdAt: eligibleUser, organizationCount: 1, path: '/apps', userId: 'user-1' })).resolves.toBeNull()
+    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 2, path: '/apps', userId: 'user-1' })).resolves.toBeNull()
+    await expect(getRedirect({ appId: null, appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', userId: 'user-1' })).resolves.toBeNull()
+    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: '2026-08-03T23:00:00.000Z', organizationCount: 1, path: '/apps', userId: 'user-1' })).resolves.toBeNull()
   })
 
   it('lets an onboarding user open their existing app, devices, and settings without a redirect', async () => {
-    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/app/com.example.app', resumeAppId: null, userId: 'user-1' })).resolves.toBeNull()
-    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/app/com.example.app/device/abc', resumeAppId: null, userId: 'user-1' })).resolves.toBeNull()
-    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/app/com.example.app/bundle/12', resumeAppId: null, userId: 'user-1' })).resolves.toBeNull()
-    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/app/com.example.app/settings', resumeAppId: null, userId: 'user-1' })).resolves.toBeNull()
-    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/app/com.example.app/settings/access', resumeAppId: null, userId: 'user-1' })).resolves.toBeNull()
+    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/app/com.example.app', userId: 'user-1' })).resolves.toBeNull()
+    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/app/com.example.app/device/abc', userId: 'user-1' })).resolves.toBeNull()
+    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/app/com.example.app/bundle/12', userId: 'user-1' })).resolves.toBeNull()
+    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/app/com.example.app/settings', userId: 'user-1' })).resolves.toBeNull()
+    await expect(getRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/app/com.example.app/settings/access', userId: 'user-1' })).resolves.toBeNull()
   })
 
   it('keeps dashboard exploration granted after a page reload', async () => {
@@ -70,14 +66,14 @@ describe('onboarding dashboard redirect', () => {
     module.allowOnboardingDashboardExploration('user-1', 'com.example.app')
     expect(module.getOnboardingResumeAppId('user-1')).toBe('com.example.app')
     expect(module.getOnboardingResumeAppId('user-2')).toBeNull()
-    expect(module.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-1' })).toBeNull()
-    expect(module.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-2' })).toEqual({ path: '/onboarding/app', query: { resume: 'com.example.app', step: 'setup' } })
+    expect(module.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', userId: 'user-1' })).toBeNull()
+    expect(module.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', userId: 'user-2' })).toEqual({ path: '/app/com.example.app/getting-started' })
 
     // Reloading the page drops module memory but keeps session storage.
     vi.resetModules()
     const refreshedModule = await import('../src/utils/onboardingRedirect.ts')
     expect(refreshedModule.getOnboardingResumeAppId('user-1')).toBe('com.example.app')
-    expect(refreshedModule.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-1' })).toBeNull()
+    expect(refreshedModule.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', userId: 'user-1' })).toBeNull()
   })
 
   it('keeps dashboard exploration granted after a new login in the same browser', async () => {
@@ -88,7 +84,7 @@ describe('onboarding dashboard redirect', () => {
     vi.resetModules()
     window.sessionStorage.clear()
     const refreshedModule = await import('../src/utils/onboardingRedirect.ts')
-    expect(refreshedModule.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-1' })).toBeNull()
+    expect(refreshedModule.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', userId: 'user-1' })).toBeNull()
   })
 
   it('keeps the shared exploration grant free of analytics signals', async () => {
@@ -107,7 +103,7 @@ describe('onboarding dashboard redirect', () => {
     module.allowOnboardingDashboardExploration('user-1', 'com.example.app')
     module.allowOnboardingDashboardExploration(null, 'com.example.app')
     expect(module.getOnboardingResumeAppId('user-1')).toBe('com.example.app')
-    expect(module.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-1' })).toBeNull()
+    expect(module.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', userId: 'user-1' })).toBeNull()
   })
 
   it('prefers the in-memory grant when session storage still holds another user', async () => {
@@ -195,12 +191,21 @@ describe('exploration refresh reminder and v3 setup routing', () => {
     expect(() => refreshed.dismissOnboardingExplorationReminder('user-1')).not.toThrow()
   })
 
-  it('uses fullscreen setup for v3 and v4 with no exploration grant and preserves legacy routes', async () => {
-    const { getAppSetupRedirect } = await import('../src/utils/onboardingRedirect')
+  it('uses the onboarding setup UI for OTA and Builder todo lists and keeps legacy apps on the checklist', async () => {
+    const { usesOnboardingSetupUi } = await import('../src/utils/onboardingRedirect')
     for (const version of [3, 4])
-      expect(getAppSetupRedirect({ app_id: 'com.example.app', onboarding: { setup: { todo_list_version: version, ...(version === 4 ? { ota_todo_list_version: '1' } : {}) } } })).toEqual({ path: '/onboarding/app', query: { resume: 'com.example.app', step: 'setup' } })
-    expect(getAppSetupRedirect({ app_id: 'com.example.app', onboarding: { setup: { todo_list_version: 4, ota_todo_list_version: '2' } } })).toBeNull()
+      expect(usesOnboardingSetupUi({ onboarding: { setup: { todo_list_version: version, ...(version === 4 ? { ota_todo_list_version: '1' } : {}) } } })).toBe(true)
+    expect(usesOnboardingSetupUi({ onboarding: { setup: { todo_list_version: 4, ota_todo_list_version: '2' } } })).toBe(false)
     for (const version of [1, 2])
-      expect(getAppSetupRedirect({ app_id: 'com.example.app', onboarding: { setup: { todo_list_version: version } } })).toBeNull()
+      expect(usesOnboardingSetupUi({ onboarding: { setup: { todo_list_version: version } } })).toBe(false)
+  })
+
+  it('reads a creation handoff only for the matching app', async () => {
+    const { ONBOARDING_SETUP_HANDOFF_STATE_KEY, readOnboardingSetupHandoff } = await import('../src/utils/onboardingRedirect')
+    const handoff = { appId: 'com.example.app', attemptId: 'attempt', flow: 'pre_org', previousStep: 'organization', runId: 'ir_run' }
+    expect(readOnboardingSetupHandoff({ [ONBOARDING_SETUP_HANDOFF_STATE_KEY]: handoff }, 'com.example.app')).toEqual(handoff)
+    expect(readOnboardingSetupHandoff({ [ONBOARDING_SETUP_HANDOFF_STATE_KEY]: handoff }, 'com.other.app')).toBeNull()
+    expect(readOnboardingSetupHandoff({ [ONBOARDING_SETUP_HANDOFF_STATE_KEY]: { ...handoff, flow: 'unknown' } }, 'com.example.app')).toBeNull()
+    expect(readOnboardingSetupHandoff(null, 'com.example.app')).toBeNull()
   })
 })

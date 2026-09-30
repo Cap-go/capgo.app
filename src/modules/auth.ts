@@ -276,7 +276,6 @@ async function guard(
       createdAt: sessionUser?.created_at,
       organizationCount: selectableOrganizations.length,
       path: to.path,
-      resumeAppId: typeof to.query.resume === 'string' ? to.query.resume : null,
       userId: sessionUser?.id,
     })
   }

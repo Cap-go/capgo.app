@@ -644,7 +644,7 @@
   "app-onboarding-store-screenshot-alt": "Store screenshot preview",
   "app-onboarding-skip-app-id": "Skip",
   "app-onboarding-skip-icon": "Skip",
-  "app-onboarding-subtitle": "The app is created immediately in Capgo. From there you can either connect your real project in the CLI or explore the dashboard with temporary demo data.",
+  "app-onboarding-subtitle": "The app is created immediately in Capgo. Then Getting started walks you through connecting your real project.",
   "app-onboarding-summary-method": "Setup method",
   "app-onboarding-summary-source": "Starting point",
   "app-onboarding-summary-status": "App status",

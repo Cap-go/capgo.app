@@ -52,14 +52,23 @@ describe('app onboarding API key loading state', () => {
       onboardingSource.indexOf('function showCliCommand()'),
       onboardingSource.indexOf('async function reportOnboardingPatch('),
     )
-    const installNavigation = onboardingSource.slice(
-      onboardingSource.indexOf('function goToInstallStep()'),
-      onboardingSource.indexOf('async function openDashboard()'),
+    // Post-creation setup reopens on Getting started, which resumes the app
+    // through the setup-app-id mount path and retries the key load there.
+    const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
+    const preOrgSetupResume = mountedFlow.slice(
+      mountedFlow.indexOf('if (resumeAppId.value) {'),
+      mountedFlow.indexOf('const resumeResult = await maybeResumeSavedOnboarding()'),
+    )
+    const existingOrgSetupResume = mountedFlow.slice(
+      mountedFlow.indexOf('const resumed = await loadResumeApp()\n    resumedFlow = resumed'),
+      mountedFlow.indexOf('finally {'),
     )
 
     expect(showCommand).toContain('startApiKeyLoading()')
-    expect(installNavigation).toContain('startApiKeyLoading()')
+    expect(preOrgSetupResume).toContain('startApiKeyLoading()')
+    expect(existingOrgSetupResume).toContain('startApiKeyLoading()')
     expect(onboardingSource).toContain('@click="showCliCommand"')
+    expect(onboardingSource).not.toContain('function goToInstallStep()')
   })
 
   it.concurrent('renders ready commands as native DaisyUI buttons', () => {
@@ -99,7 +108,7 @@ describe('app onboarding API key loading state', () => {
 
   it.concurrent('always includes the API key and tracks successful copy actions', () => {
     const copyHandlerStart = onboardingSource.indexOf('async function copyAiInstructions()')
-    const copyHandlerEnd = onboardingSource.indexOf('function goToInstallStep()', copyHandlerStart)
+    const copyHandlerEnd = onboardingSource.indexOf('async function openDashboard()', copyHandlerStart)
     expect(copyHandlerStart).toBeGreaterThanOrEqual(0)
     expect(copyHandlerEnd).toBeGreaterThan(copyHandlerStart)
     const copyHandler = onboardingSource.slice(copyHandlerStart, copyHandlerEnd)
