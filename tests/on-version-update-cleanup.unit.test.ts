@@ -12,8 +12,10 @@ const {
   getPgClient,
   manifestSelectWhere,
   moveObjectToTrash,
+  pgConnect,
   pgQuery,
   persistVersionManifestEntries,
+  pgRelease,
   purgeFileReadCache,
   sendEventToTracking,
   supabaseAdmin,
@@ -44,6 +46,10 @@ const {
   const pgQuery = vi.fn(async (sql: string, params?: any[]) => {
     if (sql === 'BEGIN')
       callOrder.push('begin')
+    if (sql.includes('pg_try_advisory_xact_lock')) {
+      callOrder.push(`try_lock:${params?.[0]}`)
+      return { rows: [{ locked: true }], rowCount: 1 }
+    }
     if (sql.includes('pg_advisory_xact_lock'))
       callOrder.push('lock')
     if (sql.includes('SELECT 1 AS ok'))
@@ -66,6 +72,8 @@ const {
     callOrder.push('r2_trash')
     return true
   })
+  const pgRelease = vi.fn()
+  const pgConnect = vi.fn(async () => ({ query: pgQuery, release: pgRelease }))
 
   return {
     appVersionsMetaSelectEq,
@@ -84,11 +92,13 @@ const {
         })),
       })),
     })),
-    getPgClient: vi.fn(() => ({ query: pgQuery })),
+    getPgClient: vi.fn(() => ({ connect: pgConnect, query: pgQuery })),
     manifestSelectWhere,
     moveObjectToTrash,
+    pgConnect,
     pgQuery,
     persistVersionManifestEntries: vi.fn(),
+    pgRelease,
     purgeFileReadCache: vi.fn(async () => {}),
     sendEventToTracking: vi.fn(),
     supabaseAdmin: vi.fn(() => ({ from: supabaseFrom })),
@@ -188,6 +198,10 @@ describe('on_version_update deleted version cleanup', () => {
     pgQuery.mockImplementation(async (sql: string, params?: any[]) => {
       if (sql === 'BEGIN')
         callOrder.push('begin')
+      if (sql.includes('pg_try_advisory_xact_lock')) {
+        callOrder.push(`try_lock:${params?.[0]}`)
+        return { rows: [{ locked: true }], rowCount: 1 }
+      }
       if (sql.includes('pg_advisory_xact_lock'))
         callOrder.push('lock')
       if (sql.includes('SELECT 1 AS ok'))
@@ -251,12 +265,12 @@ describe('on_version_update deleted version cleanup', () => {
 
     await deleteIt(createContext(), createVersion({ r2_path: null, manifest_count: 1 }))
 
-    expect(callOrder).toContain('lock')
-    expect(callOrder.indexOf('r2_trash')).toBeGreaterThan(callOrder.indexOf('lock'))
+    expect(callOrder).toContain('try_lock:hash-0')
+    expect(callOrder.indexOf('r2_trash')).toBeGreaterThan(callOrder.indexOf('try_lock:hash-0'))
     expect(callOrder.indexOf('db_delete_row:1000')).toBeGreaterThan(callOrder.indexOf('r2_trash'))
     expect(pgQuery).toHaveBeenCalledWith(expect.stringContaining('WITH prev AS'), expect.any(Array))
     // Postgres rejects chr(0) with 54000 "null character not permitted".
-    const lockSql = pgQuery.mock.calls.find(([sql]) => typeof sql === 'string' && sql.includes('pg_advisory_xact_lock'))?.[0] as string
+    const lockSql = pgQuery.mock.calls.find(([sql]) => typeof sql === 'string' && sql.includes('advisory_xact_lock'))?.[0] as string
     expect(lockSql).toContain('hashtext($1::text), hashtext($2::text)')
     expect(lockSql).not.toContain('chr(0)')
   })
@@ -273,7 +287,8 @@ describe('on_version_update deleted version cleanup', () => {
     )
     expect(callOrder).toContain('r2_trash')
     expect(callOrder.some(v => v.startsWith('db_delete_row:'))).toBe(false)
-    expect(callOrder).toContain('rollback_entry')
+    expect(callOrder).toContain('commit_entry')
+    expect(callOrder).not.toContain('rollback_entry')
   })
 
   it('skips R2 trash when another version still references the file, then deletes the row', async () => {
@@ -281,6 +296,10 @@ describe('on_version_update deleted version cleanup', () => {
     pgQuery.mockImplementation((async (sql: string, params?: any[]) => {
       if (sql === 'BEGIN')
         callOrder.push('begin')
+      if (sql.includes('pg_try_advisory_xact_lock')) {
+        callOrder.push(`try_lock:${params?.[0]}`)
+        return { rows: [{ locked: true }], rowCount: 1 }
+      }
       if (sql.includes('pg_advisory_xact_lock'))
         callOrder.push('lock')
       if (sql.includes('SELECT 1 AS ok'))
@@ -336,6 +355,10 @@ describe('on_version_update deleted version cleanup', () => {
     pgQuery.mockImplementation(async (sql: string, params?: any[]) => {
       if (sql === 'BEGIN')
         callOrder.push('begin')
+      if (sql.includes('pg_try_advisory_xact_lock')) {
+        callOrder.push(`try_lock:${params?.[0]}`)
+        return { rows: [{ locked: true }], rowCount: 1 }
+      }
       if (sql.includes('pg_advisory_xact_lock'))
         callOrder.push('lock')
       if (sql.includes('SELECT 1 AS ok'))
@@ -463,12 +486,18 @@ describe('on_version_update manifest cleanup load', () => {
       return true
     })
     pgQuery.mockImplementation(async (sql: string, params?: any[]) => {
+      if (sql.includes('pg_try_advisory_xact_lock')) {
+        callOrder.push(`try_lock:${params?.[0]}`)
+        return { rows: [{ locked: true }], rowCount: 1 }
+      }
       if (sql.includes('SELECT 1 AS ok'))
         return { rows: [], rowCount: 0 }
       if (sql.includes('DELETE FROM public.manifest WHERE id')) {
         callOrder.push(`db_delete_row:${params?.[0]}`)
         return { rows: [], rowCount: 1 }
       }
+      if (sql === 'COMMIT')
+        callOrder.push('commit_entry')
       if (sql.includes('SELECT COUNT(*)'))
         return { rows: [{ count: 0 }], rowCount: 1 }
       if (sql.includes('WITH prev AS'))
@@ -487,6 +516,69 @@ describe('on_version_update manifest cleanup load', () => {
     expect(callOrder.filter(v => v.startsWith('db_delete_row:'))).toHaveLength(5000)
     expect(pgQuery).toHaveBeenCalledWith(expect.stringContaining('WITH prev AS'), expect.any(Array))
   }, 60_000)
+
+  it('reuses one checked-out connection for all manifest cleanup transactions', async () => {
+    manifestSelectWhere.mockResolvedValue(makeEntries(20))
+
+    const response = await deleteIt(createContext(), createVersion({ r2_path: null, manifest_count: 20 }))
+
+    expect(response.status).toBe(200)
+    expect(getPgClient).toHaveBeenCalledTimes(3)
+    expect(pgConnect).toHaveBeenCalledTimes(1)
+    expect(pgRelease).toHaveBeenCalledTimes(1)
+  })
+
+  it('defers contended entries until every entry gets a non-blocking lock attempt', async () => {
+    manifestSelectWhere.mockResolvedValue(makeEntries(3))
+    pgQuery.mockImplementation(async (sql: string, params?: any[]) => {
+      if (sql.includes('pg_try_advisory_xact_lock')) {
+        callOrder.push(`try_lock:${params?.[0]}`)
+        return { rows: [{ locked: params?.[0] !== 'hash-1' }], rowCount: 1 }
+      }
+      if (sql.includes('pg_advisory_xact_lock')) {
+        callOrder.push(`wait_lock:${params?.[0]}`)
+        return { rows: [{ locked: true }], rowCount: 1 }
+      }
+      if (sql.includes('SELECT 1 AS ok'))
+        return { rows: [], rowCount: 0 }
+      if (sql.includes('DELETE FROM public.manifest WHERE id')) {
+        callOrder.push(`db_delete_row:${params?.[0]}`)
+        return { rows: [], rowCount: 1 }
+      }
+      if (sql.includes('SELECT COUNT(*)'))
+        return { rows: [{ count: 0 }], rowCount: 1 }
+      if (sql.includes('WITH prev AS'))
+        return { rows: [], rowCount: 1 }
+      return { rows: [], rowCount: 0 }
+    })
+
+    const response = await deleteIt(createContext(), createVersion({ r2_path: null, manifest_count: 3 }))
+
+    expect(response.status).toBe(200)
+    expect(callOrder).toContain('try_lock:hash-0')
+    expect(callOrder).toContain('try_lock:hash-1')
+    expect(callOrder).toContain('try_lock:hash-2')
+    expect(callOrder).toContain('wait_lock:hash-1')
+    expect(callOrder.indexOf('try_lock:hash-2')).toBeLessThan(callOrder.indexOf('wait_lock:hash-1'))
+    expect(callOrder).toContain('db_delete_row:1001')
+  })
+
+  it('commits successful rows before surfacing a failed R2 move', async () => {
+    manifestSelectWhere.mockResolvedValue(makeEntries(3))
+    moveObjectToTrash.mockImplementation(async (_c: unknown, path: string) => {
+      callOrder.push(`r2_trash:${path}`)
+      return !path.endsWith('file-1.js')
+    })
+
+    await expect(deleteIt(createContext(), createVersion({ r2_path: null, manifest_count: 3 }))).rejects.toThrow(
+      'Cannot move S3 object for deleted manifest file to trash',
+    )
+
+    expect(callOrder).toContain('db_delete_row:1000')
+    expect(callOrder).not.toContain('db_delete_row:1001')
+    expect(callOrder).toContain('db_delete_row:1002')
+    expect(callOrder.indexOf('commit_entry')).toBeGreaterThan(callOrder.indexOf('db_delete_row:1002'))
+  })
 
   it('keeps remaining rows retryable when one file in a large batch fails trash', async () => {
     manifestSelectWhere.mockResolvedValue(makeEntries(200))
