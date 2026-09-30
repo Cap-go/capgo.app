@@ -15,6 +15,7 @@ declare module 'vue' {
     ApiKeyHiddenScopeNotice: typeof import('./components/ApiKeyHiddenScopeNotice.vue')['default']
     AppAccess: typeof import('./components/dashboard/AppAccess.vue')['default']
     AppDashboardPage: typeof import('./components/dashboard/AppDashboardPage.vue')['default']
+    AppDeleteDialogContent: typeof import('./components/dashboard/AppDeleteDialogContent.vue')['default']
     AppNotFoundModal: typeof import('./components/AppNotFoundModal.vue')['default']
     AppOnboardingBuilderChecklist: typeof import('./components/dashboard/AppOnboardingBuilderChecklist.vue')['default']
     AppOnboardingCliSteps: typeof import('./components/dashboard/AppOnboardingCliSteps.vue')['default']

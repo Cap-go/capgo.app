@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Database } from '~/types/supabase.types'
+import type { AppDeletionDetail, AppDeletionReason } from '~/utils/appDeletionFeedback'
 import { Camera } from '@capacitor/camera'
 import { FormKit, FormKitMessages } from '@formkit/vue'
 import { computedAsync } from '@vueuse/core'
@@ -14,10 +15,12 @@ import gearSix from '~icons/ph/gear-six?raw'
 import iconName from '~icons/ph/user?raw'
 import Toggle from '~/components/Toggle.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
+import { getAppDeletionTrackingProperties } from '~/utils/appDeletionFeedback'
 
 const props = defineProps<{ appId: string }>()
 const DOWNLOAD_PLATFORMS = ['ios', 'android', 'electron'] as const
@@ -51,6 +54,13 @@ const disableDownloadUpdates = ref(false)
 const selectedCombinedChannelId = ref<number | null>(null)
 const combinedSearch = ref('')
 const downloadSearches = reactive<Record<DownloadPlatform, string>>({ ios: '', android: '', electron: '' })
+const APP_DELETE_DIALOG_ID = 'app-delete-feedback'
+const deleteDialogStage = ref<'feedback' | 'confirm'>('feedback')
+const deletionReason = ref<AppDeletionReason | null>(null)
+const deletionDetail = ref<AppDeletionDetail | null>(null)
+const deletionNote = ref('')
+const deletionConfirmation = ref('')
+const isDeletingApp = ref(false)
 
 const canUpdateSettings = computedAsync(async () => {
   if (!appRef.value)
@@ -175,34 +185,60 @@ const acronym = computed(() => {
   return res.toUpperCase()
 })
 
-async function didCancel(name: string) {
-  dialogStore.openDialog({
-    title: t('alert-confirm-delete'),
-    description: `${t('alert-not-reverse-message')} ${t('alert-delete-message')} ${name}?`,
-    buttons: [
-      {
-        text: t('button-cancel'),
-        role: 'cancel',
-      },
-      {
-        text: t('button-delete'),
-        role: 'danger',
-        id: 'confirm-button',
-      },
-    ],
+function getDeletionEventProperties() {
+  return getAppDeletionTrackingProperties({
+    reason: deletionReason.value,
+    detail: deletionDetail.value,
+    note: deletionNote.value,
+  }, {
+    appId: props.appId,
+    orgId: appRef.value?.owner_org.id,
   })
-  return dialogStore.onDialogDismiss()
 }
 
-async function deleteApp() {
-  if (await didCancel(t('app')))
-    return
-
+async function openDeleteAppDialog() {
   if (!canDeleteApp.value) {
     toast.error(t('no-permission'))
     return
   }
 
+  deleteDialogStage.value = 'feedback'
+  deletionReason.value = null
+  deletionDetail.value = null
+  deletionNote.value = ''
+  deletionConfirmation.value = ''
+  dialogStore.openDialog({
+    id: APP_DELETE_DIALOG_ID,
+    size: '4xl',
+  })
+  sendOnboardingEvent('app_deletion_feedback_opened', getDeletionEventProperties())
+}
+
+function cancelDeleteApp() {
+  dialogStore.closeDialog({ text: t('button-cancel'), role: 'cancel' })
+}
+
+function continueDeleteApp() {
+  if (!deletionReason.value)
+    return
+
+  sendOnboardingEvent('app_deletion_feedback_submitted', getDeletionEventProperties())
+  deleteDialogStage.value = 'confirm'
+  deletionConfirmation.value = ''
+  sendOnboardingEvent('app_deletion_confirmation_viewed', getDeletionEventProperties())
+}
+
+function backToDeleteFeedback() {
+  deleteDialogStage.value = 'feedback'
+  deletionConfirmation.value = ''
+}
+
+async function deleteApp() {
+  if (deletionConfirmation.value !== props.appId || isDeletingApp.value)
+    return
+
+  isDeletingApp.value = true
+  sendOnboardingEvent('app_deletion_confirmed', getDeletionEventProperties())
   try {
     const org = organizationStore.getOrgByAppId(props.appId)
     const { error: errorIcon } = await supabase.storage
@@ -217,18 +253,23 @@ async function deleteApp() {
       .eq('app_id', props.appId)
     if (dbAppError) {
       toast.error(t('cannot-delete-app'))
+      sendOnboardingEvent('app_deletion_failed', getDeletionEventProperties())
     }
     else {
       await organizationStore.fetchOrganizations()
       toast.success(t('app-deleted'))
+      sendOnboardingEvent('app_deletion_completed', getDeletionEventProperties())
+      dialogStore.closeDialog({ text: t('button-delete'), role: 'danger' })
+      router.push('/apps')
     }
-
-    // return to home
-    router.push('/apps')
   }
   catch (error) {
     console.error(error)
     toast.error(t('cannot-delete-app'))
+    sendOnboardingEvent('app_deletion_failed', getDeletionEventProperties())
+  }
+  finally {
+    isDeletingApp.value = false
   }
 }
 
@@ -1561,7 +1602,7 @@ async function transferAppOwnership() {
       <footer>
         <div class="flex flex-col px-6 py-5 border-t dark:border-slate-600">
           <div class="flex self-end">
-            <button v-if="canDeleteApp" type="button" class="p-2 text-red-600 border border-red-400 rounded-lg hover:text-white hover:bg-red-600" @click="deleteApp()">
+            <button v-if="canDeleteApp" type="button" class="p-2 text-red-600 border border-red-400 rounded-lg hover:text-white hover:bg-red-600" @click="openDeleteAppDialog()">
               {{ t('delete-app') }}
             </button>
             <button
@@ -1579,6 +1620,31 @@ async function transferAppOwnership() {
         </div>
       </footer>
     </FormKit>
+
+    <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.id === APP_DELETE_DIALOG_ID && appRef" defer to="#dialog-v2-content">
+      <AppDeleteDialogContent
+        :stage="deleteDialogStage"
+        :app-name="appRef.name || appRef.app_id"
+        :app-id="appRef.app_id"
+        :app-icon="appRef.icon_url"
+        :app-acronym="acronym"
+        :organization-name="appRef.owner_org.name"
+        :created-at="appRef.created_at"
+        :reason="deletionReason"
+        :detail="deletionDetail"
+        :note="deletionNote"
+        :confirmation="deletionConfirmation"
+        :deleting="isDeletingApp"
+        @update:reason="deletionReason = $event"
+        @update:detail="deletionDetail = $event"
+        @update:note="deletionNote = $event"
+        @update:confirmation="deletionConfirmation = $event"
+        @cancel="cancelDeleteApp"
+        @continue="continueDeleteApp"
+        @back="backToDeleteFeedback"
+        @confirm="deleteApp"
+      />
+    </Teleport>
 
     <!-- Teleport for Transfer App ID Input -->
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('confirm-transfer')" defer to="#dialog-v2-content">

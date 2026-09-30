@@ -1,15 +1,32 @@
-# Onboarding checklist v3 QA
+# Design QA: app deletion feedback
 
-The real Capgo onboarding flow shows the seven-goal layout only for apps with persisted `setup.todo_list_version = 3`. Versions 1 and 2 keep their twelve-step accordion and setup page. The user-level `ota_todo_list_v3` assignment targets exact OTA intent at 50%; treatment apps must belong to an organization created by their app creator. Existing app versions stay fixed. Wizard analytics versions are unchanged.
+Status: passed
 
-The checklist stays on the left. First-task terminal and AI copy actions sit together on the right, with the manual guide at its bottom. Teammate handoff, dismissal, and the secondary dashboard link remain connected to existing actions. Dashboard exploration aligns with the handoff card's inset right edge.
+## Inputs
 
-One authenticated endpoint polls every two seconds, always loading the selected app. Additional checks rotate with N, and initial/manual refresh checks all four. Device contact does not require a download. Publication requires finished upload evidence. Delivery requires a real bundle's `set` event. App-ready code and updater installation retain init-command reporting. Confirmed milestones persist; the channel follows current existence, including deletion. Errors retain last known progress, and old app responses are discarded.
+- Source visual: `/Users/michaltremblay/.codex/generated_images/01a0e272-9a5a-7ec0-95ba-e43578940ed5/exec-ebf84fb3-c112-4bd9-97a2-ebf2da6043cb.png`
+- Implementation: `http://127.0.0.1:4173/preview/app-delete-feedback` (temporary local harness rendering the production component with fake data)
+- Reviewed at 1440×1000 and 390×844 in the Codex in-app browser.
 
-The existing animated channel creation flow runs in an accessible native dialog and tags its events `channel_flow_origin: todo_list`. Keyboard dismissal, focus restoration, loading guards, permissions, channel reuse, mobile layout and reduced motion are covered by browser tests.
+## Results
 
-Validation: full unit suite 3,128 passing; Tinbase DB suite 294 passing; browser suite 17 passing; frontend/backend/CLI type checks passing; frontend/backend lint passing (36 pre-existing frontend warnings); production build passing. Three PostgreSQL checks for function permissions, protected direct inserts, and version freezing passed separately because Tinbase grants all public functions again after migration bootstrap. Assignment predicate benchmark: 1,000,000 users and 100,000 organizations, two primary-key index scans, 0.038 ms execution, no sequential scans.
+| Severity | Result |
+| --- | --- |
+| P0 | None |
+| P1 | None |
+| P2 | None remaining |
 
-Screenshots in `docs/pr-assets/onboarding-v3` show the real AppOnboardingFlow with intercepted responses and synthetic identity. No production resources or invitations were created. The mobile image shows the initial viewport. The repository visual tool captured the control and treatment at 1190 × 1322 and measured 12.649% changed pixels. CI also captures the real route with read-only response fixtures. Generated Graphify output is excluded.
+The first pass placed the expanded details below the full reason list. It was moved directly beneath the selected reason to match the approved interaction. The compact card hierarchy, responsive stacking, selected states, optional detail chips, and separate permanent-confirmation screen now preserve the target design.
 
-The 17 browser checks also pass against the built CI preview (14.4 seconds). The preview enables its fixture entry explicitly; the normal production build excludes that entry. Fake-clock tests wait for each polling response between subsequent ticks and prove terminal progress stops subsequent polls. The visual runner dismisses the existing support-profile prompt before preparing authenticated routes so that overlay cannot intercept screenshot setup clicks. Unit regressions verify that A/B assignment errors retain their HTTP response and that assignment happens before opening the app connection.
+The deliberate differences reflect the final product decisions: a top-level reason is required, the feedback opt-out is nested under Other, and the left summary uses known app metadata rather than inferred onboarding history.
+
+## Interaction checks
+
+- Continue is disabled until one of the six reasons is selected.
+- Every reason exposes its expected optional details inline.
+- Other contains “I don't want to provide feedback”; choosing it hides the note field.
+- Continue opens the permanent confirmation screen without presenting a step count.
+- The destructive action stays disabled for an empty or incorrect confirmation and enables only for an exact, case-sensitive App ID.
+- Back returns to the feedback screen without deleting anything.
+- Mobile review showed no horizontal overflow (`scrollWidth === clientWidth`).
+- No feature-specific console errors were produced. Existing router deprecation warnings and Turnstile errors from the earlier login page were unrelated to this flow.
