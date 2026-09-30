@@ -70,6 +70,12 @@ For an app that is already configured, upload a new bundle with:
 npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel production
 ```
 
+Cordova projects without `capacitor.config.*`:
+
+```bash
+npx @capgo/cli@latest bundle upload com.example.app --mode cordova --path www --channel production
+```
+
 ## CI Upload Example
 
 ```bash
@@ -142,6 +148,7 @@ Capgo continues to load the root config while writing only the selected source. 
   - [Add](#app-add)
   - [Delete](#app-delete)
   - [List](#app-list)
+  - [Todo](#app-todo)
   - [Debug](#app-debug)
   - [Setting](#app-setting)
   - [Set](#app-set)
@@ -156,7 +163,7 @@ Capgo continues to load the root config while writing only the selected source. 
   - [Create](#key-create)
   - [Delete_old](#key-delete_old)
 - 👤 [Account](#account)
-  - [Id](#account-id)
+  - [Whoami](#account-whoami)
 - 🔹 [Organization](#organization)
   - [List](#organization-list)
   - [Add](#organization-add)
@@ -384,6 +391,7 @@ npx @capgo/cli@latest bundle upload
 Version must be > 0.0.0 and unique. Deleted versions cannot be reused for security.
 External option: Store only a URL link (useful for apps >200MB or privacy requirements).
 Capgo never inspects external content. Add encryption for trustless security.
+Cordova example: npx @capgo/cli@latest bundle upload com.example.app --mode cordova --path www --channel production
 
 **Example:**
 
@@ -396,7 +404,8 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **-p** | <code>string</code> | Path of the folder to upload, if not provided it will use the webDir set in capacitor.config |
+| **--mode** | <code>string</code> | Project framework mode. Use cordova for Cordova apps without capacitor.config (webDir defaults to www) |
+| **-p** | <code>string</code> | Path of the folder to upload, if not provided it will use the webDir set in capacitor.config (or www with --mode cordova) |
 | **-c** | <code>string</code> | Channel to link to. Use commas for multiple channels, for example production,beta |
 | **--rollout** | <code>string</code> | Set the uploaded bundle as this channel's rollout target at a percentage from 0 to 100 |
 | **--rollout-percentage-bps** | <code>string</code> | Set the uploaded bundle rollout percentage in basis points from 0 to 10000 |
@@ -445,7 +454,8 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | **--dry-upload** | <code>boolean</code> | Dry upload the bundle process: add the row in database without uploading files or updating channels (Used by Capgo for internal testing) |
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
 | **--node-modules** | <code>string</code> | Paths to node_modules directories for monorepos (comma-separated) |
-| **--encrypt-partial** | <code>boolean</code> | Encrypt delta update files (auto-enabled for updater > 6.14.4) |
+| **--encrypt-delta** | <code>boolean</code> | Encrypt delta update files (auto-enabled for updater >= 6.14.4) |
+| **--encrypt-partial** | <code>boolean</code> | [DEPRECATED] Use --encrypt-delta instead. Encrypt delta update files |
 | **--delete-linked-bundle-on-upload** | <code>boolean</code> | Locates the currently linked bundle in the channel you are trying to upload to, and deletes it |
 | **--no-brotli-patterns** | <code>string</code> | Files to exclude from Brotli compression (comma-separated globs, e.g., "*.jpg,*.png") |
 | **--disable-brotli** | <code>boolean</code> | Completely disable brotli compression even if updater version supports it |
@@ -740,6 +750,31 @@ npx @capgo/cli@latest app list
 | **--show-org** | <code>boolean</code> | Show the organization name for each app |
 | **--show-org-id** | <code>boolean</code> | Show the organization ID for each app |
 | **--output-text** | <code>boolean</code> | Print plain text with a CSV app table and no interactive formatting |
+| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
+| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+
+### <a id="app-todo"></a> 🔹 **Todo**
+
+**Alias:** `todoList`
+
+```bash
+npx @capgo/cli@latest app todo
+```
+
+📋 Show your app's onboarding todo list with done, skipped, and pending tasks.
+Uses the same live progress checks as the Capgo dashboard. The app ID can be inferred from your Capacitor project.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest app todo com.example.app
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-a** | <code>string</code> | API key to link to your account |
 | **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
 | **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
 
@@ -1085,18 +1120,20 @@ npx @capgo/cli@latest key delete_old
 
 👤 Manage your Capgo account details and retrieve information for support or collaboration.
 
-### <a id="account-id"></a> 🔹 **Id**
+### <a id="account-whoami"></a> 🔹 **Whoami**
+
+**Alias:** `id`
 
 ```bash
-npx @capgo/cli@latest account id
+npx @capgo/cli@latest account whoami
 ```
 
-🪪 Retrieve your account ID, safe to share for collaboration or support purposes in Discord or other platforms.
+🪪 Retrieve your account ID and email address.
 
 **Example:**
 
 ```bash
-npx @capgo/cli@latest account id
+npx @capgo/cli@latest account whoami
 ```
 
 **Options:**

@@ -23,7 +23,7 @@ const cliLoginMocks = vi.hoisted(() => ({
   prepareCliLoginKey: vi.fn(),
 }))
 const organizationApps = vi.hoisted(() => new Map([
-  ['org-1', [{ app_id: 'com.test.app', name: 'Test App', owner_org: 'org-1' }]],
+  ['org-1', [{ app_id: 'com.test.app', name: 'Test App', owner_org: 'org-1', onboarding: { setup: { todo_list_version: 2 } } }]],
 ]))
 const organizationStore = vi.hoisted(() => ({
   awaitInitialLoad: vi.fn(async () => {}),
@@ -185,6 +185,9 @@ describe('/login-cli page contract', () => {
     expect(page).toContain('route.query.intent')
     expect(page).toContain('buildCliAiSetupPrompt({')
     expect(page).toContain('organizationStore.getAppsByOrgId(organization.gid)')
+    expect(page).toContain('const onboarding = parseAppOnboarding(app.onboarding)')
+    expect(page).toContain('todoListVersion: onboarding.todo_list_version')
+    expect(page).toContain('otaTodoListVersion: onboarding.ota_todo_list_version')
     expect(page).toContain('eligibleIds.has(organization.gid)')
     expect(page).toContain('await navigator.clipboard.writeText(aiPrompt.value)')
     expect(page).toContain(`v-if="aiMode"`)
@@ -225,6 +228,41 @@ describe('/login-cli page contract', () => {
     expect(copiedPrompt).toContain(`login ${preparedKey}`)
     expect(copiedPrompt).toContain('start_capgo_builder_onboarding')
     expect(copiedPrompt).not.toContain('## 8. Test the first live update')
+  })
+
+  it('copies v3 checklist checkpoints only for explicit OTA intent and a v3 app', async () => {
+    route.query = { ai: '1', intent: 'ota' }
+    organizationStore.getAppsByOrgId.mockReturnValueOnce([{
+      app_id: 'com.test.app',
+      name: 'Test App',
+      owner_org: 'org-1',
+      onboarding: { setup: { todo_list_version: 3 } },
+    }])
+    const container = mountLoginCliPage()
+    await flushPromises()
+
+    const copyButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent?.includes(messages['cli-login-ai-copy']))
+    copyButton?.click()
+    await flushPromises()
+
+    const copiedPrompt = clipboardWrite.mock.calls[0]?.[0] as string
+    expect(copiedPrompt).toContain('OTA todo list progress checks')
+    expect(copiedPrompt).toContain('app todo {SELECTED_CAPGO_APP_ID}')
+  })
+
+  it('keeps explicit OTA guidance unchanged for a v2 app', async () => {
+    route.query = { ai: '1', intent: 'ota' }
+    const container = mountLoginCliPage()
+    await flushPromises()
+
+    const copyButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent?.includes(messages['cli-login-ai-copy']))
+    copyButton?.click()
+    await flushPromises()
+
+    const copiedPrompt = clipboardWrite.mock.calls[0]?.[0] as string
+    expect(copiedPrompt).not.toContain('app todo {SELECTED_CAPGO_APP_ID}')
   })
 
   it.concurrent('keeps the route out of normal onboarding redirects', () => {

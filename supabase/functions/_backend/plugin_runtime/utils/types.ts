@@ -120,6 +120,17 @@ export interface VersionUsageChannel {
   name?: string | null
 }
 
+/**
+ * channel_devices overrides relevant to one channel, used to scope device counts
+ * by effective channel instead of only the device-reported default_channel.
+ */
+export interface ChannelDeviceOverrideIds {
+  /** Devices forced into the channel. */
+  into: string[]
+  /** Devices forced to another channel of the same app. */
+  elsewhere: string[]
+}
+
 export interface NativeVersionUsage {
   date: string
   platform: string
@@ -164,6 +175,7 @@ export interface StatsActions {
   action: Database['public']['Enums']['stats_action']
   versionName?: string
   metadata?: StatsMetadata
+  channel?: VersionUsageChannel | null
 }
 
 export const DEFAULT_LIMIT = 1000

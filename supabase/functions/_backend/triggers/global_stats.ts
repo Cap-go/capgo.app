@@ -2602,16 +2602,20 @@ async function getCoreSnapshotCounts(c: Context, snapshotExclusiveEnd: Date): Pr
   const drizzleClient = getDrizzleClient(pgClient)
   const snapshotExclusiveEndIso = snapshotExclusiveEnd.toISOString()
 
-  // stripe_info stores current plan-state flags; plan_calculated_at bounds dated replays against later recalculations.
+  // stripe_info stores current plan-state flags; the primary-only org state stores their calculation time.
   try {
     const result = await drizzleClient.execute<CoreSnapshotRow>(sql`
       WITH active_need_upgrade AS (
         SELECT DISTINCT ON (si.customer_id)
           si.customer_id
         FROM public.stripe_info si
+        LEFT JOIN public.orgs o
+          ON o.customer_id = si.customer_id
+        LEFT JOIN public.org_stats_refresh_state plan_state
+          ON plan_state.org_id = o.id
         WHERE si.is_good_plan = false
           AND si.created_at < ${snapshotExclusiveEndIso}::timestamptz
-          AND (si.plan_calculated_at IS NULL OR si.plan_calculated_at < ${snapshotExclusiveEndIso}::timestamptz)
+          AND (plan_state.plan_calculated_at IS NULL OR plan_state.plan_calculated_at < ${snapshotExclusiveEndIso}::timestamptz)
           AND (si.paid_at < ${snapshotExclusiveEndIso}::timestamptz OR si.paid_at IS NULL)
           AND si.status IN (
             'succeeded'::public.stripe_status,
@@ -2634,12 +2638,14 @@ async function getCoreSnapshotCounts(c: Context, snapshotExclusiveEnd: Date): Pr
         FROM public.stripe_info si
         INNER JOIN public.orgs o
           ON o.customer_id = si.customer_id
+        LEFT JOIN public.org_stats_refresh_state plan_state
+          ON plan_state.org_id = o.id
         INNER JOIN public.plans p
           ON p.stripe_id = si.product_id
         WHERE si.is_above_plan = true
           AND p.name <> 'Enterprise'
           AND si.created_at < ${snapshotExclusiveEndIso}::timestamptz
-          AND (si.plan_calculated_at IS NULL OR si.plan_calculated_at < ${snapshotExclusiveEndIso}::timestamptz)
+          AND (plan_state.plan_calculated_at IS NULL OR plan_state.plan_calculated_at < ${snapshotExclusiveEndIso}::timestamptz)
           AND (si.paid_at < ${snapshotExclusiveEndIso}::timestamptz OR si.paid_at IS NULL)
           AND si.status IN (
             'succeeded'::public.stripe_status,

@@ -4,6 +4,7 @@ import IconChart from '~icons/heroicons/chart-bar'
 import IconCheckCircle from '~icons/heroicons/check-circle'
 import IconCube from '~icons/heroicons/cube'
 import IconDevice from '~icons/heroicons/device-phone-mobile'
+import IconRocket from '~icons/heroicons/rocket-launch'
 
 export type { AppDashboardSection } from '~/utils/appDashboardPath'
 
@@ -16,4 +17,5 @@ export const appDashboardTabs: Tab[] = [
   { label: 'native', icon: IconDevice, key: subtabKey('native') },
   { label: 'dashboard-tab-installs', icon: IconCheckCircle, key: subtabKey('installs') },
   { label: 'active-bundle', icon: IconCube, key: subtabKey('active-bundle') },
+  { label: 'dashboard-tab-live-release', icon: IconRocket, key: subtabKey('live') },
 ]

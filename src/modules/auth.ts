@@ -1,8 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NavigationGuardNext, RouteLocationNormalized } from 'vue-router'
 import type { UserModule } from '~/types'
+import { ADMIN_DASHBOARD_URL } from '~/constants/adminDashboard'
 import { clearChartDataCache } from '~/services/chartDataService'
-import { isCliLoginPath } from '~/services/cliLogin'
+import { isCliLoginPath, isMcpAuthorizePath } from '~/services/cliLogin'
 import { hideLoader } from '~/services/loader'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { setUser } from '~/services/posthog'
@@ -10,14 +11,14 @@ import { isSsoUser, provisionSsoUser } from '~/services/ssoProvisioning'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { getLocalConfig, useSupabase } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
-import { clearWebsitePaidUserCookie, setWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
+import { clearWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
 import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 import { getOnboardingResumeRedirect, isNewOnboardingUser } from '~/utils/onboardingRedirect'
 import { hasPendingInviteSkip } from '~/utils/pendingInviteSkip'
 import { validateRedirectPath } from '~/utils/safeRedirect'
-import { getPlans, isPlatformAdmin } from './../services/supabase'
+import { getPlans } from './../services/supabase'
 
 async function updateUser(
   main: ReturnType<typeof useMainStore>,
@@ -194,7 +195,7 @@ async function guard(
   const inviteOrgId = typeof to.query.invite_org === 'string' && to.query.invite_org.length > 0
     ? to.query.invite_org
     : null
-  const isCliLoginRoute = isCliLoginPath(to.path)
+  const isCliLoginRoute = isCliLoginPath(to.path) || isMcpAuthorizePath(to.path)
   const organizationFetchOptions = { loadImages: !isCliLoginRoute }
 
   async function tryLoadOrganizations(fetcher: () => Promise<void>) {
@@ -217,10 +218,7 @@ async function guard(
 
   async function resolvePlatformAdminStatus() {
     try {
-      // isPlatformAdmin() is the only frontend admin-rights source.
-      main.isAdmin = await isPlatformAdmin()
-      if (main.isAdmin)
-        setWebsitePaidUserCookie(true)
+      await main.resolvePlatformAdminStatus()
     }
     catch (error) {
       console.error('Failed to resolve platform admin status:', error)
@@ -430,8 +428,7 @@ async function guard(
       organizationsLoaded = await tryLoadOrganizations(() => organizationStore.fetchOrganizations(organizationFetchOptions))
     }
 
-    if (organizationsLoaded && !organizationStore.hasOrganizations)
-      await resolvePlatformAdminStatus()
+    await resolvePlatformAdminStatus()
 
     if (organizationsLoaded && !organizationStore.hasOrganizations && !main.isAdmin && shouldRedirectToOrgOnboarding()) {
       return next({
@@ -474,6 +471,11 @@ export const install: UserModule = ({ router }) => {
   }
 
   router.beforeEach(async (to, from, next) => {
+    // The admin dashboard moved to its own app; send old bookmarks there.
+    if (to.path === '/admin' || to.path.startsWith('/admin/')) {
+      window.location.replace(ADMIN_DASHBOARD_URL)
+      return next(false)
+    }
     if (to.meta.middleware) {
       await guard(next, to, from)
     }

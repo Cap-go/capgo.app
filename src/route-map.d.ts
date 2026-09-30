@@ -206,6 +206,13 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
+    '/app/[app].live': RouteRecordInfo<
+      '/app/[app].live',
+      '/app/:app/live',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
     '/app/[app].native': RouteRecordInfo<
       '/app/[app].native',
       '/app/:app/native',
@@ -370,6 +377,13 @@ declare module 'vue-router/auto-routes' {
     '/login-cli': RouteRecordInfo<
       '/login-cli',
       '/login-cli',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/oauth/authorize': RouteRecordInfo<
+      '/oauth/authorize',
+      '/oauth/authorize',
       Record<never, never>,
       Record<never, never>,
       | never
@@ -810,6 +824,14 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | 'app'
     }
+    'src/pages/app/[app].live.vue': {
+      routes:
+        | '/app/[app].live'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
     'src/pages/app/[app].native.vue': {
       routes:
         | '/app/[app].native'
@@ -997,6 +1019,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/login-cli.vue': {
       routes:
         | '/login-cli'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/oauth/authorize.vue': {
+      routes:
+        | '/oauth/authorize'
       views:
         | never
       pathParamNames:

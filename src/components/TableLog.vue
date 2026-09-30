@@ -446,8 +446,8 @@ onMounted(() => {
       </div>
     </div>
     <div class="block overflow-x-auto">
-      <table id="custom_table" class="w-full text-sm text-left text-gray-500 dark:text-gray-400" :class="{ 'table-fixed': fixedLayout }">
-        <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:text-gray-400 dark:bg-gray-700">
+      <table id="custom_table" class="w-full text-sm text-left text-slate-600 dark:text-slate-300" :class="{ 'table-fixed': fixedLayout }">
+        <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
           <tr>
             <th v-for="(col, i) in columns" :key="i" scope="col" class="px-1 py-3 md:px-6" :class="[fixedLayout ? col.class : undefined, { 'cursor-pointer': col.sortable, 'hidden md:table-cell': !col.mobile }]" @click="sortClick(i)">
               <div class="flex items-center first-letter:uppercase">
@@ -464,7 +464,7 @@ onMounted(() => {
         <tbody v-if="elementList.length !== 0">
           <tr
             v-for="(elem, i) in elementList" :key="i"
-            class="bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
+            class="border-b border-slate-100 last:border-b-0 transition-colors hover:bg-slate-50 dark:border-white/5 dark:hover:bg-white/[0.03]"
           >
             <template v-for="(col, _y) in columns" :key="`${i}_${_y}`">
               <th v-if="col.head" :class="`${col.class ?? ''} ${!col.mobile ? 'hidden md:table-cell' : ''} ${col.onClick ? 'cursor-pointer hover:underline clickable-cell' : ''} ${fixedLayout ? 'overflow-hidden' : ''}`" scope="row" class="px-1 py-1 font-medium text-gray-900 whitespace-nowrap md:py-4 md:px-6 dark:text-white" @click.stop="col.onClick ? col.onClick(elem) : () => {}">

@@ -21,6 +21,7 @@
   "env": {
     "prod": {
       "name": "capgo_api-prod",
+      "send_email": [{ "name": "AUTH_EMAIL", "allowed_sender_addresses": ["noreply@capgo.app"] }],
       "triggers": {
         "crons": ["* * * * *"]
       },
@@ -117,6 +118,7 @@
     },
     "preprod": {
       "name": "capgo_api-preprod",
+      "send_email": [{ "name": "AUTH_EMAIL", "allowed_sender_addresses": ["noreply@capgo.app"] }],
       "triggers": {
         "crons": ["* * * * *"]
       },
@@ -212,6 +214,7 @@
     },
     "alpha": {
       "name": "capgo_api-alpha",
+      "send_email": [{ "name": "AUTH_EMAIL", "allowed_sender_addresses": ["noreply@capgo.app"] }],
       "triggers": {
         "crons": ["* * * * *"]
       },

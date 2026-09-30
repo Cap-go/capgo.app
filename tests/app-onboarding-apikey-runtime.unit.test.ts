@@ -34,6 +34,8 @@ const runtimeMocks = vi.hoisted(() => {
       user: { id: 'user-runtime-onboarding', onboarding: {} } as { id: string, onboarding: Record<string, unknown> } | null,
     },
     organizationStore: {
+      getOrgByAppId: vi.fn(),
+      setCurrentOrganization: vi.fn(),
       awaitInitialLoad: vi.fn(async () => undefined),
       currentOrganization: { gid: 'org-runtime-onboarding', name: 'Runtime organization' },
       organizations: [],
@@ -168,7 +170,13 @@ beforeEach(() => {
   runtimeMocks.organizationStore.updateAppOnboarding.mockClear()
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
-    value: vi.fn(() => ({ matches: false })),
+    value: vi.fn(() => ({
+      addEventListener: vi.fn(),
+      addListener: vi.fn(),
+      matches: false,
+      removeEventListener: vi.fn(),
+      removeListener: vi.fn(),
+    })),
   })
 })
 
@@ -230,7 +238,7 @@ describe('app onboarding API key runtime loading', () => {
     }
   })
 
-  it('retries a settled failed load when entering the install step', async () => {
+  it('retries a settled failed load when entering the channel step', async () => {
     const loadError = new Error('transient API-key failure')
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     runtimeMocks.findUsablePlainApiKey

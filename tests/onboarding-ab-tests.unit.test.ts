@@ -5,6 +5,7 @@ import {
   hasWebNativeDevelopmentEnvironmentTreatment,
   hasWebNativePublishIntentTreatment,
   NEW_CHANNEL_AB_TEST,
+  OTA_TODO_LIST_V3_AB_TEST,
   parseOnboardingABTestAssignments,
   reconcileOnboardingABTestAssignments,
   resolveOnboardingAnalyticsVersion,
@@ -53,14 +54,14 @@ function onboardingWithNewChannel(
 }
 
 describe('webNativeApp onboarding A/B tests', () => {
-  it.concurrent('configures independent 25/75 self-signup experiments', () => {
+  it.concurrent('configures independent 10/90 self-signup experiments', () => {
     expect(abTestsConfig[WEBNATIVE_PUBLISH_INTENT_AB_TEST]).toEqual({
       audience: 'self_signup',
       comment: 'Shows a \'convert my webapp to mobile\' intent option. Does not change the rest of the flow by itself.',
       control_branch: 'B',
       label: 'Publish intent',
       treatment_branch: 'A',
-      treatment_percentage: 25,
+      treatment_percentage: 10,
       branches: {
         A: { bento_tag: 'ab:webnativeapp_publish_intent', label: 'WebNativeApp option' },
         B: { bento_tag: 'ab:no_webnativeapp_publish_intent', label: 'Current publish options' },
@@ -72,7 +73,7 @@ describe('webNativeApp onboarding A/B tests', () => {
       control_branch: 'D',
       label: 'Development environment',
       treatment_branch: 'C',
-      treatment_percentage: 25,
+      treatment_percentage: 10,
       branches: {
         C: { bento_tag: 'ab:webnativeapp_development_environment', label: 'Development environment question' },
         D: { bento_tag: 'ab:no_webnativeapp_development_environment', label: 'Current onboarding' },
@@ -80,7 +81,7 @@ describe('webNativeApp onboarding A/B tests', () => {
     })
   })
 
-  it.concurrent('configures a 50/50 channel experiment for exact OTA and both intents', () => {
+  it.concurrent('pauses new channel experiment assignments for exact OTA and both intents', () => {
     expect(abTestsConfig[NEW_CHANNEL_AB_TEST]).toEqual({
       audience: 'self_signup',
       comment: 'Shows the guided channel education and creation flow.',
@@ -88,7 +89,7 @@ describe('webNativeApp onboarding A/B tests', () => {
       intents: ['ota', 'both'],
       label: 'Channel creation',
       treatment_branch: 'A',
-      treatment_percentage: 50,
+      treatment_percentage: 0,
       branches: {
         A: { bento_tag: 'ab:new_channel', label: 'Guided channel flow' },
         B: { bento_tag: 'ab:no_new_channel', label: 'Current channel flow' },
@@ -152,5 +153,50 @@ describe('webNativeApp onboarding A/B tests', () => {
     const authoritative = onboardingFor('A', 'D').abtests
 
     expect(reconcileOnboardingABTestAssignments(current, authoritative)).toEqual(authoritative)
+  })
+})
+
+describe('channel and checklist experiment interaction', () => {
+  it.concurrent('explicitly disables the channel treatment when the new todo list is assigned', () => {
+    const channelTreatment = onboardingWithNewChannel('B', 'D', 'A')
+    const combinedTreatment = {
+      ...channelTreatment,
+      abtests: {
+        ...channelTreatment.abtests,
+        [OTA_TODO_LIST_V3_AB_TEST]: { branch: 'A', assigned_at: '2026-09-16T00:00:00Z' },
+      },
+    }
+    const todoControl = {
+      ...channelTreatment,
+      abtests: {
+        ...channelTreatment.abtests,
+        [OTA_TODO_LIST_V3_AB_TEST]: { branch: 'B', assigned_at: '2026-09-16T00:00:00Z' },
+      },
+    }
+
+    expect(hasNewChannelTreatment(channelTreatment)).toBe(true)
+    expect(hasNewChannelTreatment(combinedTreatment)).toBe(false)
+    expect(hasNewChannelTreatment(todoControl)).toBe(true)
+    expect(resolveOnboardingAnalyticsVersion(channelTreatment, 'ota')).toBe('5.E')
+    expect(resolveOnboardingAnalyticsVersion(combinedTreatment, 'ota')).toBe(4)
+    expect(resolveOnboardingAnalyticsVersion(todoControl, 'ota')).toBe('5.E')
+  })
+
+  it.concurrent('falls back to the remaining active experiment analytics version', () => {
+    for (const [publishBranch, environmentBranch, expected] of [
+      ['A', 'D', '5.A'],
+      ['B', 'C', '5.C'],
+    ] as const) {
+      const channelTreatment = onboardingWithNewChannel(publishBranch, environmentBranch, 'A')
+      const combinedTreatment = {
+        ...channelTreatment,
+        abtests: {
+          ...channelTreatment.abtests,
+          [OTA_TODO_LIST_V3_AB_TEST]: { branch: 'A', assigned_at: '2026-09-16T00:00:00Z' },
+        },
+      }
+
+      expect(resolveOnboardingAnalyticsVersion(combinedTreatment, 'ota')).toBe(expected)
+    }
   })
 })

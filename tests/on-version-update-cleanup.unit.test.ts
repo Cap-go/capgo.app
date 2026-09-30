@@ -13,7 +13,9 @@ const {
   manifestSelectWhere,
   moveObjectToTrash,
   pgQuery,
+  persistVersionManifestEntries,
   purgeFileReadCache,
+  sendEventToTracking,
   supabaseAdmin,
   channelsUpdate,
 } = vi.hoisted(() => {
@@ -86,7 +88,9 @@ const {
     manifestSelectWhere,
     moveObjectToTrash,
     pgQuery,
+    persistVersionManifestEntries: vi.fn(),
     purgeFileReadCache: vi.fn(async () => {}),
+    sendEventToTracking: vi.fn(),
     supabaseAdmin: vi.fn(() => ({ from: supabaseFrom })),
   }
 })
@@ -110,6 +114,14 @@ vi.mock('../supabase/functions/_backend/utils/s3.ts', () => ({
 
 vi.mock('../supabase/functions/_backend/utils/stats.ts', () => ({
   createStatsMeta,
+}))
+
+vi.mock('../supabase/functions/_backend/utils/manifest_persist.ts', () => ({
+  persistVersionManifestEntries,
+}))
+
+vi.mock('../supabase/functions/_backend/utils/tracking.ts', () => ({
+  sendEventToTracking,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
@@ -169,6 +181,8 @@ describe('on_version_update deleted version cleanup', () => {
       callOrder.push('r2_trash')
       return true
     })
+    persistVersionManifestEntries.mockResolvedValue({ inserted: 2, alreadyPresent: false })
+    sendEventToTracking.mockResolvedValue(undefined)
     createStatsMeta.mockResolvedValue({ error: null })
     manifestSelectWhere.mockResolvedValue([])
     pgQuery.mockImplementation(async (sql: string, params?: any[]) => {
@@ -350,6 +364,88 @@ describe('on_version_update deleted version cleanup', () => {
       createVersion({ deleted_at: '2026-01-01T00:00:00Z', manifest_count: 3 }),
       createVersion({ deleted_at: '2026-01-01T00:00:00Z', manifest_count: 3 }),
     )).toBe('cleanup_manifest')
+  })
+})
+
+describe('on_version_update legacy manifest tracking', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    persistVersionManifestEntries.mockResolvedValue({ inserted: 2, alreadyPresent: false })
+    sendEventToTracking.mockResolvedValue(undefined)
+  })
+
+  it('tracks a migrated legacy manifest against the uploading user and organization', async () => {
+    const manifestEntries = [
+      { file_name: 'index.html', file_hash: 'hash-1', s3_path: 'orgs/org-1/apps/com.cleanup.test/delta/index.html' },
+      { file_name: 'main.js', file_hash: 'hash-2', s3_path: 'orgs/org-1/apps/com.cleanup.test/delta/main.js' },
+      { file_name: '', file_hash: '', s3_path: '' },
+    ]
+    const record = createVersion({
+      cli_version: '8.29.3',
+      manifest: manifestEntries,
+      user_id: 'user-1',
+    })
+
+    await onVersionUpdateTestUtils.handleManifest(createContext(), record)
+
+    expect(persistVersionManifestEntries).toHaveBeenCalledWith(
+      expect.anything(),
+      { id: 123, app_id: 'com.cleanup.test' },
+      manifestEntries,
+      {
+        clearAppVersionsManifest: true,
+        s3PathPrefix: 'orgs/org-1/apps/com.cleanup.test/',
+      },
+    )
+    expect(sendEventToTracking).toHaveBeenCalledWith(expect.anything(), {
+      channel: 'bundle',
+      event: 'Legacy Bundle Manifest Migrated',
+      user_id: 'user-1',
+      groups: { organization: 'org-1' },
+      nonPersonTags: {
+        $insert_id: 'legacy-manifest:123',
+        app_id: 'com.cleanup.test',
+        cli_version: '8.29.3',
+        entry_count: 2,
+        version_id: 123,
+      },
+    })
+  })
+
+  it('does not use the organization as the PostHog user identity', async () => {
+    const record = createVersion({
+      manifest: [{ file_name: 'index.html', file_hash: 'hash-1', s3_path: 'orgs/org-1/apps/com.cleanup.test/delta/index.html' }],
+      user_id: null,
+    })
+
+    await onVersionUpdateTestUtils.handleManifest(createContext(), record)
+
+    expect(sendEventToTracking).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      user_id: undefined,
+      groups: { organization: 'org-1' },
+    }))
+  })
+
+  it('does not track a legacy manifest when every entry is filtered out', async () => {
+    persistVersionManifestEntries.mockResolvedValue({ inserted: 0, alreadyPresent: false })
+
+    await onVersionUpdateTestUtils.handleManifest(createContext(), createVersion({
+      manifest: [{ file_name: '', file_hash: '', s3_path: '' }],
+      user_id: 'user-1',
+    }))
+
+    expect(sendEventToTracking).not.toHaveBeenCalled()
+  })
+
+  it('does not track an already-migrated legacy manifest retry', async () => {
+    persistVersionManifestEntries.mockResolvedValue({ inserted: 0, alreadyPresent: true })
+
+    await onVersionUpdateTestUtils.handleManifest(createContext(), createVersion({
+      manifest: [{ file_name: 'index.html', file_hash: 'hash-1', s3_path: 'orgs/org-1/apps/com.cleanup.test/delta/index.html' }],
+      user_id: 'user-1',
+    }))
+
+    expect(sendEventToTracking).not.toHaveBeenCalled()
   })
 })
 

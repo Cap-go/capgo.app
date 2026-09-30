@@ -23,6 +23,13 @@ const safeColumnStatement: ReadReplicaSchemaSyncStatement = {
   sql: 'ALTER TABLE public."apps" ADD COLUMN IF NOT EXISTS "read_replica_import_unit" boolean',
 }
 
+const unsupportedTableStatement: ReadReplicaSchemaSyncStatement = {
+  kind: 'table',
+  table: 'manifest_per_version',
+  name: 'manifest_per_version',
+  sql: 'CREATE TABLE public."manifest_per_version" ("version_id" bigint NOT NULL)',
+}
+
 const safeIndexStatement: ReadReplicaSchemaSyncStatement = {
   kind: 'index',
   table: 'apps',
@@ -58,6 +65,11 @@ function plan(
 }
 
 describe('read-replica Cloud SQL server-side import', () => {
+  it.concurrent('never creates the excluded manifest table on a subscriber', () => {
+    expect(() => assertGoogleReadReplicaSchemaPlan(plan([unsupportedTableStatement])))
+      .toThrow('rejected non-subscriber table manifest_per_version')
+  })
+
   it.concurrent('renders reviewed DDL as one postgres-owned atomic import transaction', () => {
     assertGoogleReadReplicaSchemaPlan(plan([safeColumnStatement]))
 

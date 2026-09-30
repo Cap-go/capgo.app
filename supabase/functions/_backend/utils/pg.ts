@@ -22,7 +22,7 @@ import { buildAdminOnboardingWizardDropoff, getAdminOnboardingActivationMetrics 
 import { hasPluginVersionBreakdown } from './plugin_compatibility.ts'
 import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
-import { getRolloutDecision } from './rollout.ts'
+import { resolveRolloutDecision } from './rollout.ts'
 import { createPlatformAdminSignedImageUrl } from './storage.ts'
 import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
 
@@ -393,6 +393,30 @@ export function getPgClient(c: Context, readOnly = false) {
   })
 
   return pool
+}
+
+// Transactions must run on one checked-out connection: BEGIN/COMMIT issued on
+// the Pool itself can land on different connections and leave one idle in
+// transaction, holding row locks until the server kills it.
+export async function withPgTransaction<T>(pgPool: ReturnType<typeof getPgClient>, run: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await pgPool.connect()
+  try {
+    await client.query('BEGIN')
+    try {
+      await client.query('SET LOCAL statement_timeout = 10000')
+      await client.query('SET LOCAL idle_in_transaction_session_timeout = 15000')
+      const result = await run(client)
+      await client.query('COMMIT')
+      return result
+    }
+    catch (error) {
+      await client.query('ROLLBACK').catch(() => {})
+      throw error
+    }
+  }
+  finally {
+    client.release()
+  }
 }
 
 export function getDrizzleClient(db: ReturnType<typeof getPgClient> | PoolClient, options?: { logger?: boolean }) {
@@ -878,12 +902,11 @@ async function resolveRolloutChannelDataPostgres(
   let selectedVersion = stableVersion
 
   if (rolloutVersion?.id && channelData.channels?.rollout_version) {
-    const decision = await getRolloutDecision(c, {
+    const decision = resolveRolloutDecision({
       appId,
       channelId: channelData.channels.id,
       currentVersionName,
       deviceId,
-      rolloutCacheTtlSeconds: channelData.channels.rollout_cache_ttl_seconds,
       rolloutEnabled: channelData.channels.rollout_enabled,
       rolloutId: channelData.channels.rollout_id,
       rolloutPausedAt: channelData.channels.rollout_paused_at,
@@ -895,7 +918,7 @@ async function resolveRolloutChannelDataPostgres(
     if (decision.selected)
       selectedVersion = rolloutVersion
 
-    cloudlog({ requestId: c.get('requestId'), message: 'rollout decision', appId, channelId: channelData.channels.id, selected: decision.selected, reason: decision.reason })
+    cloudlog({ requestId: c.get('requestId'), message: 'rollout decision', appId, channelId: channelData.channels.id, selected: decision.selected, reason: decision.reason, bucketBps: decision.bucketBps, percentageBps: decision.percentageBps })
   }
 
   const manifestEntries = includeManifest && selectedVersion?.manifest_count > 0
@@ -1323,11 +1346,15 @@ export async function upsertChannelDevicePg(
         channel_id: data.channel_id,
         app_id: data.app_id,
         owner_org: data.owner_org,
+        // Only /channel_self writes here: self-set overrides expire after 90 days
+        // without a refresh (cleanup_old_channel_devices), console/API ones never do.
+        is_self_set: true,
       })
       .onConflictDoUpdate({
         target: [schema.channel_devices.device_id, schema.channel_devices.app_id],
         set: {
           channel_id: data.channel_id,
+          is_self_set: true,
           updated_at: new Date(),
         },
       })

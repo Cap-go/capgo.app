@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { getSupabaseWorktreeConfig } from './supabase-worktree-config'
@@ -279,7 +279,7 @@ function parseInlineEnvAssignments(args: string[]): { env: Record<string, string
 /**
  * Run a Supabase CLI command against the current worktree's generated `--workdir`.
  */
-function runSupabase(args: string[], repoRoot: string, options: { captureOutput?: boolean } = {}): { status: number, output: string } {
+function buildSupabaseInvocation(args: string[], repoRoot: string): { cmd: string, args: string[] } {
   const { workdir, cfg } = ensureWorktreeSupabaseDir(repoRoot)
   const supa = getSupabaseCmd(repoRoot)
   const commandArgs = [...args]
@@ -303,25 +303,69 @@ function runSupabase(args: string[], repoRoot: string, options: { captureOutput?
     }
   }
 
-  const res = spawnSync(supa.cmd, [...supa.argsPrefix, ...commandArgs, '--workdir', workdir], {
-    stdio: options.captureOutput ? 'pipe' : 'inherit',
-    encoding: options.captureOutput ? 'utf8' : undefined,
-    env: process.env,
-  })
-  const stdout = options.captureOutput ? (res.stdout ?? '') : ''
-  const stderr = options.captureOutput ? (res.stderr ?? '') : ''
-  if (options.captureOutput) {
-    if (stdout)
-      process.stdout.write(stdout)
-    if (stderr)
-      process.stderr.write(stderr)
-  }
-  return { status: res.status ?? 1, output: `${stdout}${stderr}` }
+  return { cmd: supa.cmd, args: [...supa.argsPrefix, ...commandArgs, '--workdir', workdir] }
 }
 
-function isTransientDockerPortBindFailure(output: string): boolean {
-  return /address already in use/i.test(output)
-    || /failed to bind host port/i.test(output)
+function runSupabase(args: string[], repoRoot: string): number {
+  const invocation = buildSupabaseInvocation(args, repoRoot)
+  const res = spawnSync(invocation.cmd, invocation.args, {
+    stdio: 'inherit',
+    env: process.env,
+  })
+  return res.status ?? 1
+}
+
+/**
+ * Run a Supabase command while streaming its output live and keeping a copy for
+ * retry classification. Buffering until exit hid which step a slow `supabase start`
+ * was stuck on (image pull, health check, seed) when CI timed out waiting for it.
+ */
+function runSupabaseStreaming(args: string[], repoRoot: string): Promise<{ status: number, output: string }> {
+  const invocation = buildSupabaseInvocation(args, repoRoot)
+  return new Promise((resolvePromise) => {
+    const child = spawn(invocation.cmd, invocation.args, {
+      stdio: ['inherit', 'pipe', 'pipe'],
+      env: process.env,
+    })
+    let output = ''
+    child.stdout.on('data', (chunk: Buffer) => {
+      output += chunk.toString()
+      process.stdout.write(chunk)
+    })
+    child.stderr.on('data', (chunk: Buffer) => {
+      output += chunk.toString()
+      process.stderr.write(chunk)
+    })
+    child.on('error', (error) => {
+      console.error(error.message)
+      resolvePromise({ status: 1, output })
+    })
+    child.on('close', code => resolvePromise({ status: code ?? 1, output }))
+  })
+}
+
+export type TransientSupabaseStartFailure = 'docker_image_pull' | 'docker_port_bind'
+
+/**
+ * Classify only infrastructure failures that are safe to retry before tests run.
+ * Keep generic HTTP 5xx responses out of this classifier so application failures
+ * and deterministic Supabase configuration errors still fail immediately.
+ */
+export function getTransientSupabaseStartFailure(output: string): TransientSupabaseStartFailure | null {
+  if (/address already in use/i.test(output) || /failed to bind host port/i.test(output))
+    return 'docker_port_bind'
+
+  const lines = output.split(/\r?\n/)
+  const dockerPullContext = /failed to pull docker image|pulling image|docker\.io|(?:container|image) registry|failed to resolve reference|failed to fetch anonymous token|error response from daemon[^\n]*(?:pull|image|manifest|blob|registry)/i
+  const transientPullSignal = /toomanyrequests|too many requests|data limit exceeded|unexpected eof|tls handshake timeout|connection reset by peer|context deadline exceeded|i\/o timeout|(?:status|response|request)[^\n]{0,80}\b(?:429|500|502|503|504)\b|\b(?:429|500|502|503|504)\b[^\n]{0,80}(?:status|response)/i
+
+  for (let index = 0; index < lines.length; index++) {
+    const nearbyOutput = lines.slice(Math.max(0, index - 3), index + 4).join('\n')
+    if (dockerPullContext.test(nearbyOutput) && transientPullSignal.test(nearbyOutput))
+      return 'docker_image_pull'
+  }
+
+  return null
 }
 
 function getCloudflareWorkerPorts(): number[] {
@@ -456,11 +500,11 @@ function removeLeftoverWorktreeContainers(projectId: string): void {
 }
 
 /**
- * `supabase start` can fail on GitHub runners with a transient Docker port bind
- * (`address already in use`) after a partial start/stop. Retry only that class of
- * failure so permanent start errors fail fast.
+ * `supabase start` can fail on GitHub runners with transient Docker port binds
+ * or image-pull failures before tests start. Retry only classified infrastructure
+ * failures so permanent start and application errors fail fast.
  */
-function runSupabaseStartWithRetry(args: string[], repoRoot: string): number {
+async function runSupabaseStartWithRetry(args: string[], repoRoot: string): Promise<number> {
   const { cfg } = ensureWorktreeSupabaseDir(repoRoot)
   const ports = [
     ...Object.values(cfg.ports).filter(port => Number.isFinite(port)),
@@ -472,22 +516,21 @@ function runSupabaseStartWithRetry(args: string[], repoRoot: string): number {
 
   const maxAttempts = 5
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const { status, output } = runSupabase(args, repoRoot, { captureOutput: true })
+    const { status, output } = await runSupabaseStreaming(args, repoRoot)
     if (status === 0)
       return 0
-    const canRetry = attempt < maxAttempts && isTransientDockerPortBindFailure(output)
-    if (!canRetry)
+    const transientFailure = getTransientSupabaseStartFailure(output)
+    if (attempt >= maxAttempts || transientFailure === null) {
+      console.error(`SUPABASE_START_FINAL_FAILURE=${transientFailure ?? 'non_transient'}`)
       return status
-    console.error(`Supabase start hit a transient Docker port bind (attempt ${attempt}/${maxAttempts}); stopping and retrying...`)
+    }
+    const reason = transientFailure === 'docker_port_bind' ? 'Docker port bind' : 'Docker image pull'
+    console.error(`Supabase start hit a transient ${reason} failure (attempt ${attempt}/${maxAttempts}); stopping and retrying...`)
     runSupabase(['stop', '--no-backup'], repoRoot)
     removeLeftoverWorktreeContainers(cfg.projectId)
     freeHostPorts(ports)
     // Back off so docker-proxy / TIME_WAIT can release before the next bind.
-    const sleepSeconds = String(Math.min(2 ** attempt, 8))
-    spawnSync(
-      process.platform === 'win32' ? 'timeout' : 'sleep',
-      process.platform === 'win32' ? ['/T', sleepSeconds, '/NOBREAK'] : [sleepSeconds],
-    )
+    await new Promise(resolveSleep => setTimeout(resolveSleep, Math.min(2 ** attempt, 8) * 1000))
   }
   return 1
 }
@@ -549,7 +592,7 @@ function runWithEnv(cmdArgs: string[], repoRoot: string): number {
  * - `bun scripts/supabase-worktree.ts <supabase-subcommand...>`
  * - `bun scripts/supabase-worktree.ts with-env <command...>`
  */
-function main(): number {
+async function main(): Promise<number> {
   try {
     const repoRoot = process.cwd()
     const args = process.argv.slice(2)
@@ -571,7 +614,7 @@ function main(): number {
     if (args[0] === 'start')
       return runSupabaseStartWithRetry(args, repoRoot)
 
-    return runSupabase(args, repoRoot).status
+    return runSupabase(args, repoRoot)
   }
   catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
@@ -579,4 +622,5 @@ function main(): number {
   }
 }
 
-process.exitCode = main()
+if (import.meta.main)
+  process.exitCode = await main()

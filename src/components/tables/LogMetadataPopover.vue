@@ -1,24 +1,30 @@
 <script setup lang="ts">
-import { onClickOutside, onKeyStroke } from '@vueuse/core'
-import { computed, nextTick, onMounted, onUnmounted, ref, useId, useTemplateRef } from 'vue'
+import { computed, useId, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconClipboard from '~icons/heroicons/clipboard-document'
 import IconInformation from '~icons/heroicons/information-circle'
+import { useAnchorPopover } from '~/composables/useAnchorPopover'
 
 const props = defineProps<{
   json: string
 }>()
 
 const { t } = useI18n()
-const isOpen = ref(false)
-const triggerRef = useTemplateRef<HTMLButtonElement>('triggerRef')
-const popoverRef = useTemplateRef<HTMLElement>('popoverRef')
-const popoverStyle = ref<Record<string, string>>({})
 const titleId = `${useId()}-metadata-title`
 const panelId = `${useId()}-metadata-panel`
-const finePointer = ref(false)
-let closeTimer: ReturnType<typeof setTimeout> | undefined
+const triggerRef = useTemplateRef<HTMLButtonElement>('triggerRef')
+const popoverRef = useTemplateRef<HTMLElement>('popoverRef')
+
+const {
+  isOpen,
+  popoverStyle,
+  finePointer,
+  cancelClose,
+  openPanel,
+  togglePanel,
+  onTriggerLeave,
+} = useAnchorPopover({ triggerRef, popoverRef, defaultWidth: 448, align: 'end' })
 
 type JsonTokenKind = 'key' | 'string' | 'number' | 'keyword' | 'punct' | 'space'
 interface JsonToken { kind: JsonTokenKind, text: string }
@@ -63,63 +69,6 @@ const triggerLabel = computed(() => {
   return `${t('metadata')}: ${compact}`
 })
 
-function updatePopoverPosition() {
-  const anchor = triggerRef.value
-  if (!anchor)
-    return
-  const rect = anchor.getBoundingClientRect()
-  const margin = 12
-  const gap = 8
-  const viewportW = window.innerWidth
-  const viewportH = window.innerHeight
-  const maxHeight = Math.max(160, viewportH - margin * 2)
-  const panel = popoverRef.value
-  const panelWidth = Math.min(panel?.offsetWidth || 448, viewportW - margin * 2)
-  const panelHeight = Math.min(panel?.offsetHeight || 0, maxHeight)
-
-  let left = rect.right - panelWidth
-  left = Math.min(left, viewportW - margin - panelWidth)
-  left = Math.max(margin, left)
-
-  let top = rect.bottom + gap
-  if (panelHeight && top + panelHeight > viewportH - margin)
-    top = rect.top - panelHeight - gap
-  top = Math.min(Math.max(margin, top), viewportH - margin - (panelHeight || 0))
-
-  popoverStyle.value = {
-    top: `${Math.round(top)}px`,
-    left: `${Math.round(left)}px`,
-    maxHeight: `${Math.round(maxHeight)}px`,
-  }
-}
-
-function cancelClose() {
-  if (closeTimer !== undefined) {
-    clearTimeout(closeTimer)
-    closeTimer = undefined
-  }
-}
-
-function closePanel() {
-  cancelClose()
-  isOpen.value = false
-}
-
-async function openPanel() {
-  cancelClose()
-  updatePopoverPosition()
-  isOpen.value = true
-  await nextTick()
-  updatePopoverPosition()
-}
-
-function togglePanel() {
-  if (isOpen.value)
-    closePanel()
-  else
-    void openPanel()
-}
-
 function onTriggerClick(event: MouseEvent) {
   event.stopPropagation()
   if (event.detail === 0) {
@@ -139,20 +88,6 @@ function onTriggerEnter() {
     void openPanel()
 }
 
-function onTriggerLeave() {
-  if (!finePointer.value)
-    return
-  cancelClose()
-  closeTimer = setTimeout(() => {
-    closePanel()
-  }, 150)
-}
-
-function onViewportChange() {
-  if (isOpen.value)
-    updatePopoverPosition()
-}
-
 async function copyJson() {
   try {
     await navigator.clipboard.writeText(props.json)
@@ -163,33 +98,6 @@ async function copyJson() {
     toast.error(t('copy-fail'))
   }
 }
-
-onClickOutside(popoverRef, (event) => {
-  const target = event.target as Node | null
-  if (target && triggerRef.value?.contains(target))
-    return
-  closePanel()
-})
-
-onKeyStroke('Escape', (event) => {
-  if (!isOpen.value)
-    return
-  event.preventDefault()
-  closePanel()
-  triggerRef.value?.focus()
-})
-
-onMounted(() => {
-  finePointer.value = window.matchMedia('(hover: hover) and (pointer: fine)').matches
-  window.addEventListener('resize', onViewportChange)
-  window.addEventListener('scroll', onViewportChange, true)
-})
-
-onUnmounted(() => {
-  cancelClose()
-  window.removeEventListener('resize', onViewportChange)
-  window.removeEventListener('scroll', onViewportChange, true)
-})
 </script>
 
 <template>

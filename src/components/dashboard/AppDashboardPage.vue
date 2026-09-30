@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { AppDashboardSection } from '~/constants/appDashboardTabs'
+import type { AppChartRefreshState } from '~/services/dashboardRefresh'
 import type { Database } from '~/types/supabase.types'
 import { computed, ref, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
@@ -11,7 +12,9 @@ import DeploymentBanner from '~/components/dashboard/DeploymentBanner.vue'
 import DeploymentStatsCard from '~/components/dashboard/DeploymentStatsCard.vue'
 import DevicesStats from '~/components/dashboard/DevicesStats.vue'
 import ReleaseBanner from '~/components/dashboard/ReleaseBanner.vue'
+import ReleaseLivePanel from '~/components/dashboard/ReleaseLivePanel.vue'
 import UpdateStatsCard from '~/components/dashboard/UpdateStatsCard.vue'
+import { fetchAppChartRefreshState } from '~/services/dashboardRefresh'
 import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDisplayStore } from '~/stores/display'
@@ -31,7 +34,9 @@ const dashboardAppsStore = useDashboardAppsStore()
 const isLoading = ref(false)
 const supabase = useSupabase()
 const displayStore = useDisplayStore()
-const app = ref<Database['public']['Tables']['apps']['Row']>()
+type AppDashboardRow = Database['public']['Tables']['apps']['Row'] & AppChartRefreshState
+
+const app = ref<AppDashboardRow>()
 const usageComponent = ref<{
   useBillingPeriod: boolean
   showCumulative: boolean
@@ -63,11 +68,10 @@ async function loadAppInfo(requestedId: string, generation: number) {
     if (generation !== loadGeneration || id.value !== requestedId)
       return
 
-    const { data: dataApp, error } = await supabase
-      .from('apps')
-      .select()
-      .eq('app_id', requestedId)
-      .single()
+    const [{ data: dataApp, error }, refreshState] = await Promise.all([
+      supabase.from('apps').select().eq('app_id', requestedId).single(),
+      fetchAppChartRefreshState(requestedId),
+    ])
 
     if (generation !== loadGeneration || id.value !== requestedId)
       return
@@ -78,7 +82,7 @@ async function loadAppInfo(requestedId: string, generation: number) {
     }
 
     appNotFound.value = false
-    app.value = dataApp
+    app.value = { ...dataApp, ...refreshState }
     dashboardAppsStore.upsertApp({
       app_id: requestedId,
       name: dataApp.name ?? null,
@@ -136,7 +140,7 @@ watchEffect(async () => {
 
         <div :class="{ 'blur-sm pointer-events-none select-none': appNotFound }">
           <DeploymentBanner v-if="!appNotFound" :app-id="id" @deployed="refreshData" />
-          <ReleaseBanner v-if="!appNotFound" :app-id="id" />
+          <ReleaseBanner v-if="!appNotFound && props.section !== 'live'" :app-id="id" />
           <CompatibilityBanner v-if="!appNotFound" :app-id="id" />
 
           <template v-if="!lacksSecurityAccess && props.section === 'usage'">
@@ -204,6 +208,13 @@ watchEffect(async () => {
               :accumulated="false"
               :force-demo="appNotFound"
               class="col-span-full"
+            />
+          </div>
+
+          <div v-else-if="!lacksSecurityAccess && props.section === 'live'" class="mb-6">
+            <ReleaseLivePanel
+              :app-id="id"
+              :force-demo="appNotFound"
             />
           </div>
         </div>

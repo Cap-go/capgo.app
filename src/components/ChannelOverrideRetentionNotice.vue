@@ -15,7 +15,10 @@ withDefaults(defineProps<{
 const { t } = useI18n()
 const open = defineModel<boolean>('open', { default: false })
 
-/** Keep in sync with cleanup_old_channel_devices retention (90 days). */
+/**
+ * Keep in sync with cleanup_old_channel_devices retention (90 days). Only
+ * device self-set overrides (channel_devices.is_self_set) expire.
+ */
 const CHANNEL_OVERRIDE_RETENTION_DAYS = 90
 
 const docsUrl = 'https://capgo.app/docs/live-updates/channels/'

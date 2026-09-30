@@ -41,7 +41,6 @@ const {
     ) => Promise<boolean | undefined>>(async () => true),
   }
 })
-
 vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
   syncBentoSubscriberTags: syncBentoSubscriberTagsMock,
 }))
@@ -64,6 +63,7 @@ const FIXED_DATE = new Date('2026-08-23T12:34:56.000Z')
 const USER_ID = '11111111-1111-4111-8111-111111111111'
 const INTENT_TEST_NAME = 'intent_targeted'
 const BUILDER_INTENT_TEST_NAME = 'builder_intent_targeted'
+const BUILDER_TODO_TEST_NAME = 'builder_todo_list_v4'
 const NEW_CHANNEL_TEST_NAME = 'new_channel'
 
 async function loadABTestsModule() {
@@ -111,6 +111,13 @@ function installIntentTest(
   module.AB_TESTS_CONFIG[testName] = config[testName]
 }
 
+function enableNewChannelTest(module: ABTestsModule) {
+  module.AB_TESTS_CONFIG[NEW_CHANNEL_TEST_NAME] = {
+    ...module.AB_TESTS_CONFIG[NEW_CHANNEL_TEST_NAME]!,
+    treatment_percentage: 50,
+  }
+}
+
 function intentAssignment(branch: 'A' | 'B' = 'A') {
   return { assigned_at: FIXED_DATE.toISOString(), branch }
 }
@@ -153,7 +160,7 @@ function queueBentoSnapshot(user: Record<string, unknown>, writesState = false) 
 }
 
 describe('new-user A/B test assignment', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetAllMocks()
     pgConnectMock.mockImplementation(async () => ({ query: pgQueryMock, release: pgReleaseMock }))
     getPgClientMock.mockImplementation(() => ({ connect: pgConnectMock }))
@@ -169,6 +176,10 @@ describe('new-user A/B test assignment', () => {
     const module = await loadABTestsModule()
     delete module.AB_TESTS_CONFIG[INTENT_TEST_NAME]
     delete module.AB_TESTS_CONFIG[BUILDER_INTENT_TEST_NAME]
+    module.AB_TESTS_CONFIG[NEW_CHANNEL_TEST_NAME] = {
+      ...module.AB_TESTS_CONFIG[NEW_CHANNEL_TEST_NAME]!,
+      treatment_percentage: 0,
+    }
     vi.useRealTimers()
     vi.restoreAllMocks()
   })
@@ -186,7 +197,7 @@ describe('new-user A/B test assignment', () => {
     expect(source).toContain('getPgClient(c, false)')
     expect(source).toContain('drizzle.transaction(async (tx) =>')
     expect(source).toContain('FOR UPDATE')
-    expect(source).toContain("SET LOCAL lock_timeout = '2s'")
+    expect(source).toContain('SET LOCAL lock_timeout = \'2s\'')
     expect(source).toContain('AbortSignal.timeout(BENTO_AB_TEST_SYNC_TIMEOUT_MS)')
   })
 
@@ -212,19 +223,51 @@ describe('new-user A/B test assignment', () => {
     })
   })
 
-  it.each([
-    [0, 'B'],
-    [100, 'A'],
-  ] as const)('uses %s%% treatment allocation to always select branch %s', async (percentage, branch) => {
+  it('leaves both branches unassigned at 0% treatment', async () => {
     const { createABTestAssignments, validateABTestsConfig } = await loadABTestsModule()
-    const config = validateABTestsConfig(testConfig(percentage))
+    const config = validateABTestsConfig(testConfig(0))
+    const random = vi.fn(() => 0)
+
+    expect(createABTestAssignments({ created_via_invite: false }, config, random, () => FIXED_DATE)).toEqual({})
+    expect(random).not.toHaveBeenCalled()
+  })
+
+  it('does not persist or tag a new user for an eligible 0% test', async () => {
+    const module = await loadABTestsModule()
+    const configured = module.AB_TESTS_CONFIG[BUILDER_TODO_TEST_NAME]
+    expect(configured).toMatchObject({ audience: 'all', intents: ['builder'], treatment_percentage: 50 })
+    const disabled = { ...configured, intents: undefined, treatment_percentage: 0 }
+    expect(module.createABTestAssignments(
+      { created_via_invite: false, intent: 'builder' },
+      { [BUILDER_TODO_TEST_NAME]: disabled },
+      () => 0,
+      () => FIXED_DATE,
+    )).toEqual({})
+
+    module.AB_TESTS_CONFIG[BUILDER_TODO_TEST_NAME] = disabled
+    try {
+      await module.syncNewUserABTests({ get: vi.fn(() => 'request-id') } as never, 'new.user@example.com', {
+        created_via_invite: true,
+        id: USER_ID,
+      })
+      expect(getPgClientMock).not.toHaveBeenCalled()
+      expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
+    }
+    finally {
+      module.AB_TESTS_CONFIG[BUILDER_TODO_TEST_NAME] = configured
+    }
+  })
+
+  it('uses 100% treatment allocation to always select branch A', async () => {
+    const { createABTestAssignments, validateABTestsConfig } = await loadABTestsModule()
+    const config = validateABTestsConfig(testConfig(100))
 
     expect(createABTestAssignments(
       { created_via_invite: false },
       config,
       () => 0.75,
       () => FIXED_DATE,
-    ).new_emails?.branch).toBe(branch)
+    ).new_emails?.branch).toBe('A')
   })
 
   it.each([
@@ -323,7 +366,12 @@ describe('new-user A/B test assignment', () => {
 
   it('assigns the configured channel experiment only after an exact eligible persisted intent', async () => {
     const { AB_TESTS_CONFIG, createABTestAssignments } = await loadABTestsModule()
-    const config = { [NEW_CHANNEL_TEST_NAME]: AB_TESTS_CONFIG[NEW_CHANNEL_TEST_NAME]! }
+    const config = {
+      [NEW_CHANNEL_TEST_NAME]: {
+        ...AB_TESTS_CONFIG[NEW_CHANNEL_TEST_NAME]!,
+        treatment_percentage: 50,
+      },
+    }
 
     expect(createABTestAssignments(
       { created_via_invite: false },
@@ -580,7 +628,10 @@ describe('new-user A/B test assignment', () => {
   it('bypasses the replica when intent-gated tests require authoritative intent', async () => {
     const module = await loadABTestsModule()
     installIntentTest(module)
-    const persisted = persistedAssignments({ channel: null, development: 'D', emails: 'B', publish: 'B' })
+    const persisted = {
+      ...persistedAssignments({ channel: null, development: 'D', emails: 'B', publish: 'B' }),
+      [BUILDER_TODO_TEST_NAME]: intentAssignment('B'),
+    }
     const replicaAssignments = {
       ...persisted,
       [INTENT_TEST_NAME]: intentAssignment('B'),
@@ -615,6 +666,75 @@ describe('new-user A/B test assignment', () => {
     expect(pgQueryMock).not.toHaveBeenCalled()
     expect(drizzleExecuteMock).toHaveBeenCalledOnce()
     expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
+  })
+
+  it('leaves an eligible 0% test unassigned during on-demand lookup', async () => {
+    const module = await loadABTestsModule()
+    const configured = module.AB_TESTS_CONFIG[BUILDER_TODO_TEST_NAME]
+    module.AB_TESTS_CONFIG[BUILDER_TODO_TEST_NAME] = { ...configured, treatment_percentage: 0 }
+    const persisted = persistedAssignments({ channel: null })
+    const context = { get: vi.fn(() => 'request-id') } as never
+    drizzleExecuteMock.mockResolvedValueOnce({
+      rows: [{ abtests: persisted, created_via_invite: false, email: 'user@example.com', intent: 'builder' }],
+    })
+
+    try {
+      await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(persisted)
+      expect(drizzleExecuteMock).toHaveBeenCalledOnce()
+      expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
+    }
+    finally {
+      module.AB_TESTS_CONFIG[BUILDER_TODO_TEST_NAME] = configured
+    }
+  })
+
+  it('preserves an existing assignment after a test is set to 0%', async () => {
+    const module = await loadABTestsModule()
+    const configured = module.AB_TESTS_CONFIG[NEW_CHANNEL_TEST_NAME]
+    module.AB_TESTS_CONFIG[NEW_CHANNEL_TEST_NAME] = { ...configured, treatment_percentage: 0 }
+    const persisted = persistedAssignments({ channel: 'A' })
+    const context = { get: vi.fn(() => 'request-id') } as never
+    drizzleExecuteMock.mockResolvedValueOnce({
+      rows: [{ abtests: persisted, created_via_invite: false, email: 'user@example.com', intent: 'ota' }],
+    })
+
+    try {
+      await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(persisted)
+      expect(drizzleExecuteMock).toHaveBeenCalledOnce()
+      expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
+    }
+    finally {
+      module.AB_TESTS_CONFIG[NEW_CHANNEL_TEST_NAME] = configured
+    }
+  })
+
+  it('preserves a manual branch A assignment while filling other missing tests', async () => {
+    const { getOrCreateUserABTests } = await loadABTestsModule()
+    const manualAssignment = intentAssignment('A')
+    const existing = {
+      new_emails: intentAssignment('B'),
+      [BUILDER_TODO_TEST_NAME]: manualAssignment,
+    }
+    const persisted = {
+      ...persistedAssignments({ channel: null, development: 'D', emails: 'B', publish: 'B' }),
+      [BUILDER_TODO_TEST_NAME]: manualAssignment,
+    }
+    const context = { get: vi.fn(() => 'request-id') } as never
+    drizzleExecuteMock
+      .mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false, email: 'user@example.com', intent: 'builder' }] })
+      .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
+    const currentUser = { abtests: persisted, created_via_invite: false, email: 'user@example.com', intent: 'builder' }
+    queueBentoSnapshot(currentUser)
+    queueBentoSnapshot(currentUser, true)
+
+    await expect(getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(persisted)
+
+    const updateParameters = collectSqlParameterValues(drizzleExecuteMock.mock.calls[1]?.[0])
+    const assignmentsJson = updateParameters.find(value => typeof value === 'string' && value.startsWith('{'))
+    expect(JSON.parse(String(assignmentsJson))[BUILDER_TODO_TEST_NAME]).toEqual(manualAssignment)
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledWith(context, expect.objectContaining({
+      segments: expect.arrayContaining(['ab:builder_todo_list_v4']),
+    }), expect.any(AbortSignal))
   })
 
   it('clears a pending Bento sync when the user has no deliverable email', async () => {
@@ -966,7 +1086,10 @@ describe('new-user A/B test assignment', () => {
   it('treats a malformed current branch as unassigned during Bento reconciliation', async () => {
     const module = await loadABTestsModule()
     installIntentTest(module)
-    const standardAssignments = persistedAssignments({ channel: null, development: 'D', emails: 'B', publish: 'B' })
+    const standardAssignments = {
+      ...persistedAssignments({ channel: null, development: 'D', emails: 'B', publish: 'B' }),
+      [BUILDER_TODO_TEST_NAME]: intentAssignment(),
+    }
     const existing = {
       ...standardAssignments,
       [NEW_CHANNEL_TEST_NAME]: intentAssignment(),
@@ -997,8 +1120,12 @@ describe('new-user A/B test assignment', () => {
     ['a cleared intent', null],
   ])('revokes a stale intent-gated assignment after %s', async (_label, intent) => {
     const module = await loadABTestsModule()
+    enableNewChannelTest(module)
     installIntentTest(module)
     const standardAssignments = persistedAssignments({ channel: null, development: 'D', emails: 'B', publish: 'B' })
+    const expectedAssignments = intent === 'builder'
+      ? { ...standardAssignments, [BUILDER_TODO_TEST_NAME]: intentAssignment() }
+      : standardAssignments
     const retiredAssignment = { assigned_at: FIXED_DATE.toISOString(), branch: 'A' }
     const existing = {
       ...standardAssignments,
@@ -1007,10 +1134,13 @@ describe('new-user A/B test assignment', () => {
       retired_experiment: retiredAssignment,
     }
     const persisted = {
-      ...standardAssignments,
+      ...expectedAssignments,
       retired_experiment: retiredAssignment,
     }
     const context = { get: vi.fn(() => 'request-id') } as never
+    vi.useFakeTimers()
+    vi.setSystemTime(FIXED_DATE)
+    vi.spyOn(Math, 'random').mockReturnValue(0)
     drizzleExecuteMock
       .mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false, email: 'User@Example.com', intent }] })
       .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
@@ -1018,7 +1148,7 @@ describe('new-user A/B test assignment', () => {
     queueBentoSnapshot(currentUser)
     queueBentoSnapshot(currentUser, true)
 
-    await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(standardAssignments)
+    await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(expectedAssignments)
 
     expect(getPgClientMock.mock.calls).toEqual([[context, false]])
     expect(pgQueryMock).not.toHaveBeenCalled()
@@ -1047,6 +1177,7 @@ describe('new-user A/B test assignment', () => {
 
   it('revokes the old intent assignment and creates the new intent assignment atomically', async () => {
     const module = await loadABTestsModule()
+    enableNewChannelTest(module)
     installIntentTest(module)
     installIntentTest(module, ['builder'], BUILDER_INTENT_TEST_NAME)
     const standardAssignments = persistedAssignments({ channel: null, development: 'D', emails: 'B', publish: 'B' })
@@ -1057,6 +1188,7 @@ describe('new-user A/B test assignment', () => {
     }
     const persisted = {
       ...standardAssignments,
+      [BUILDER_TODO_TEST_NAME]: intentAssignment(),
       [BUILDER_INTENT_TEST_NAME]: intentAssignment(),
     }
     const context = { get: vi.fn(() => 'request-id') } as never
@@ -1072,7 +1204,7 @@ describe('new-user A/B test assignment', () => {
 
     await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(persisted)
 
-    expect(random).toHaveBeenCalledOnce()
+    expect(random).toHaveBeenCalledTimes(2)
     const updateParameters = collectSqlParameterValues(drizzleExecuteMock.mock.calls[1]?.[0])
     const assignmentsJson = updateParameters.find(value => typeof value === 'string' && value.startsWith('{'))
     expect(JSON.parse(String(assignmentsJson))).toEqual(persisted)

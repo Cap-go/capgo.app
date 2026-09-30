@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { BuilderPlatform } from '~/services/builderOnboardingChecklist'
 import type { CliAiPromptOrganization } from '~/services/cliAiPrompt'
 import type { Database, Json } from '~/types/supabase.types'
 import type { OnboardingABTestAssignment } from '~/utils/onboardingABTests'
@@ -15,9 +16,9 @@ import type {
   OnboardingStepCompletionProperties,
 } from '~/utils/onboardingProgressAnalytics'
 import type { OnboardingPersistOptions, OnboardingPersistResult } from '~/utils/onboardingProgressPersistence'
-import type { UserOnboardingSetupStage, UserOnboardingStatus } from '~/utils/userOnboardingProgress'
+import type { UserOnboardingProgress, UserOnboardingSetupStage, UserOnboardingStatus } from '~/utils/userOnboardingProgress'
 import mime from 'mime'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -43,11 +44,13 @@ import IconTrash from '~icons/lucide/trash-2'
 import IconUsers from '~icons/lucide/users-round'
 import { createDefaultApiKey, findUsablePlainApiKey, shareInFlightApiKeyLoad } from '~/services/apikeys'
 import {
+  hasSupportedOtaTodoList,
   parseAppOnboarding,
 } from '~/services/appOnboarding'
+import { isBuilderTodoListSelected } from '~/services/builderOnboardingChecklist'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { buildCliAiSetupPrompt } from '~/services/cliAiPrompt'
-import { sendOnboardingEvent } from '~/services/onboardingTracking'
+import { APP_ONBOARDING_READY_EVENT, sendOnboardingEvent } from '~/services/onboardingTracking'
 import { uploadOrgLogoFile } from '~/services/photos'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
@@ -82,6 +85,7 @@ import {
   loadOnboardingAppDraft,
 } from '~/utils/onboardingAppDraft'
 import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
+import { withOnboardingChannelOrigin } from '~/utils/onboardingChannelAnalytics'
 import {
   createOnboardingDetailsFieldDebouncer,
   createOnboardingProgressTracker,
@@ -100,8 +104,10 @@ import {
   resumableOnboardingFlowStep,
   shouldPromptOnboardingResume,
 } from '~/utils/userOnboardingProgress'
+import AppOnboardingBuilderChecklist from './AppOnboardingBuilderChecklist.vue'
 import AppOnboardingCliSteps from './AppOnboardingCliSteps.vue'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
+import AppOnboardingSetupChecklist from './AppOnboardingSetupChecklist.vue'
 import AppOnboardingWelcome from './AppOnboardingWelcome.vue'
 import ChannelConsoleAssignOnboarding from './ChannelConsoleAssignOnboarding.vue'
 import ChannelCreateOnboarding from './ChannelCreateOnboarding.vue'
@@ -154,10 +160,10 @@ const removeBeforeUnloadWarning = useBeforeUnloadWarning(Boolean(props.preOrg))
 type AppRow = Omit<Database['public']['Tables']['apps']['Row'], 'onboarding'> & {
   onboarding?: unknown
 }
-type StandardFlowStep = 'details' | 'choice' | 'install' | 'setup'
-type PreOrgFlowStep = 'intent' | 'publish_app_question' | 'details' | 'organization' | 'setup'
+type StandardFlowStep = 'details' | 'choice' | 'channel' | 'install' | 'setup'
+type PreOrgFlowStep = 'intent' | 'publish_app_question' | 'details' | 'organization' | 'channel' | 'setup'
 type OnboardingFlowStep = StandardFlowStep | PreOrgFlowStep
-type OnboardingProgressStepId = OnboardingFlowStep | 'channel'
+type OnboardingProgressStepId = OnboardingFlowStep
 type AppDetailsStep = 'name' | 'app_id' | 'icon'
 type AppDetailsAnalyticsStep = 'app_name' | 'app_id' | 'app_icon'
 type SetupStage = UserOnboardingSetupStage
@@ -204,20 +210,10 @@ const preOrgCreatedOrganizationId = ref<string | null>(null)
 const preOrgShouldInvite = ref(false)
 const reportedSetupSource = ref<'manual' | 'cli' | 'mcp' | 'ai' | null>(null)
 const flowStep = ref<OnboardingFlowStep>('details')
+const finalOnboardingStep = ref<'setup' | 'install'>(props.preOrg ? 'setup' : 'install')
 const appDetailsStep = ref<AppDetailsStep>('name')
-const setupStage = ref<SetupStage>('cli')
-const showSetupBackButton = computed(() => newChannelTreatment.value && (
-  (
-    props.preOrg
-    && flowStep.value === 'setup'
-    && (setupStage.value === 'channel-create' || setupStage.value === 'cli')
-  )
-  || (
-    !props.preOrg
-    && flowStep.value === 'install'
-    && setupStage.value === 'channel-create'
-  )
-))
+const setupStage = ref<SetupStage>('channel-routing')
+const showSetupBackButton = computed(() => flowStep.value === 'channel' && setupStage.value !== 'channel-routing')
 const showLanguageSelector = computed(() => (
   (props.preOrg && !createdApp.value)
   || (flowStep.value === 'setup' && Boolean(createdApp.value))
@@ -297,7 +293,10 @@ const startingOutUserCountStop: UserCountStop = {
 const planNameOrder = ['Solo', 'Maker', 'Team', 'Enterprise'] as const
 
 const localCommand = isLocal(config.supaHost) ? ` --supa-host ${config.supaHost} --supa-anon ${config.supaKey}` : ''
-const usesBuilderSetupCommand = computed(() => selectedIntent.value === 'builder' || selectedIntent.value === 'publish')
+// TODO(2027-03-19): Remove v3 compatibility after all existing OTA checklists have migrated.
+const usesOtaTodoList = computed(() => !!createdApp.value && hasSupportedOtaTodoList(parseAppOnboarding(createdApp.value.onboarding)))
+const usesBuilderTodoList = computed(() => !!createdApp.value && isBuilderTodoListSelected(createdApp.value.onboarding))
+const usesBuilderSetupCommand = computed(() => usesBuilderTodoList.value || (!usesOtaTodoList.value && (selectedIntent.value === 'builder' || selectedIntent.value === 'publish')))
 const markedOnboardingFeatures = new Set<string>()
 let onboardingABTestsRequest: Promise<void> | null = null
 
@@ -360,7 +359,6 @@ function refreshOnboardingABTests(options: { force?: boolean } = {}): Promise<vo
     if (onboardingABTestsRequest === request) {
       onboardingABTestsRequest = null
       onboardingABTestsPending.value = false
-      reconcileSetupStageWithChannelAssignment()
     }
   })
 
@@ -418,7 +416,9 @@ watch([flowStep, createdApp, setupStage, usesBuilderSetupCommand], () => {
   if (flowStep.value === 'setup' && setupStage.value === 'cli')
     void markOnboardingFeatureStarted(usesBuilderSetupCommand.value ? 'builder' : 'ota')
 })
+
 const cliSubcommand = computed(() => usesBuilderSetupCommand.value ? 'build init' : 'i')
+const builderCliCommand = computed(() => apiKey.value ? `npx @capgo/cli@latest build init -a ${apiKey.value}` : '')
 const cliCommand = computed(() => {
   const key = apiKey.value
   if (!key)
@@ -441,13 +441,14 @@ const cliCommandArgs = computed(() => {
   return args
 })
 const currentOrg = computed(() => organizationStore.currentOrganization)
+
 const resumeAppId = computed(() => {
   const value = route.query.resume
   return typeof value === 'string' ? value : ''
 })
 const resumeStep = computed(() => {
   const value = route.query.step
-  return value === 'choice' || value === 'install' || value === 'setup' ? value : null
+  return value === 'choice' || value === 'channel' || value === 'install' || value === 'setup' ? value : null
 })
 const canUseStoreImportPreview = computed(() => useImportedStoreIcon.value && !!storeIconPreview.value)
 const iconPreview = computed(() => localIconPreview.value || (canUseStoreImportPreview.value ? storeIconPreview.value : '') || '')
@@ -503,6 +504,7 @@ function createAiHelpPrompt() {
 
   const resolvedAppId = createdApp.value?.app_id || generatedAppId.value || '[APP_ID]'
   const resolvedAppName = createdApp.value?.name?.trim() || appName.value.trim() || resolvedAppId
+  const appOnboarding = createdApp.value ? parseAppOnboarding(createdApp.value.onboarding) : undefined
   const activeOrganization = currentOrg.value
   const resolvedOrganizationId = createdApp.value?.owner_org
     || preOrgCreatedOrganizationId.value
@@ -514,7 +516,12 @@ function createAiHelpPrompt() {
     ? [{
         id: resolvedOrganizationId,
         name: (props.preOrg ? orgNameInput.value.trim() : resolvedOrganizationName.trim()) || resolvedOrganizationId,
-        apps: [{ appId: resolvedAppId, name: resolvedAppName }],
+        apps: [{
+          appId: resolvedAppId,
+          name: resolvedAppName,
+          todoListVersion: appOnboarding?.todo_list_version,
+          otaTodoListVersion: appOnboarding?.ota_todo_list_version,
+        }],
       }]
     : []
   const promptIntent = selectedIntent.value === 'publish' ? 'builder' : selectedIntent.value
@@ -526,38 +533,28 @@ function createAiHelpPrompt() {
   }, promptIntent)
 }
 const appOnboardingSteps = computed<Array<{ id: OnboardingFlowStep, label: string }>>(() => {
+  const channelStep: Array<{ id: OnboardingFlowStep, label: string }> = newChannelTreatment.value
+    ? [{ id: 'channel', label: t('unified-onboarding-step-channel') }]
+    : []
   if (props.preOrg) {
     return [
       { id: 'intent', label: t('unified-onboarding-step-intent') },
       { id: 'details', label: t('app-onboarding-step-details') },
       { id: 'organization', label: t('unified-onboarding-step-organization') },
+      ...channelStep,
       { id: 'setup', label: t('unified-onboarding-step-setup') },
     ]
   }
   return [
     { id: 'details', label: t('app-onboarding-step-details') },
     { id: 'choice', label: t('app-onboarding-step-choice') },
-    { id: 'install', label: t('app-onboarding-step-install') },
+    ...channelStep,
+    { id: finalOnboardingStep.value, label: t(finalOnboardingStep.value === 'setup' ? 'unified-onboarding-step-setup' : 'app-onboarding-step-install') },
   ]
 })
 const stepperStepId = computed(() => flowStep.value === 'publish_app_question' ? 'intent' : flowStep.value)
-const onboardingProgressSteps = computed<Array<{ id: OnboardingProgressStepId, label: string }>>(() => {
-  if (props.preOrg && newChannelTreatment.value) {
-    return [
-      { id: 'intent', label: t('unified-onboarding-step-intent') },
-      { id: 'details', label: t('app-onboarding-step-details') },
-      { id: 'organization', label: t('unified-onboarding-step-organization') },
-      { id: 'channel', label: t('unified-onboarding-step-channel') },
-      { id: 'setup', label: t('unified-onboarding-step-setup') },
-    ]
-  }
-  return appOnboardingSteps.value
-})
-const currentProgressStepId = computed<OnboardingProgressStepId>(() => {
-  if (props.preOrg && newChannelTreatment.value && flowStep.value === 'setup' && setupStage.value !== 'cli')
-    return 'channel'
-  return stepperStepId.value
-})
+const onboardingProgressSteps = computed<Array<{ id: OnboardingProgressStepId, label: string }>>(() => appOnboardingSteps.value)
+const currentProgressStepId = computed<OnboardingProgressStepId>(() => stepperStepId.value)
 const currentStepIndex = computed(() => Math.max(0, onboardingProgressSteps.value.findIndex(entry => entry.id === currentProgressStepId.value)))
 const stepProgress = computed(() => `${((currentStepIndex.value + 1) / onboardingProgressSteps.value.length) * 100}%`)
 const userCountStops = computed<UserCountStop[]>(() => {
@@ -589,6 +586,35 @@ const canCreatePreOrgOrganization = computed(() => {
 })
 const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-title') : t('unified-onboarding-setup-ota-title'))
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
+const showBuilderChecklist = computed(() => (flowStep.value === 'setup' || flowStep.value === 'install') && !!createdApp.value && usesBuilderTodoList.value)
+const showSetupChecklist = computed(() => (flowStep.value === 'setup' || flowStep.value === 'install') && usesOtaTodoList.value && !showBuilderChecklist.value)
+
+function emitPendingAppOnboardingReady() {
+  const app = createdApp.value
+  const orgId = currentOrg.value?.gid
+  const isFinalSetupScreen = showBuilderChecklist.value
+    || showSetupChecklist.value
+    || ((flowStep.value === 'setup' || flowStep.value === 'install') && setupStage.value === 'cli')
+  if (
+    !app
+    || app.need_onboarding !== true
+    || !orgId
+    || !isFinalSetupScreen
+  ) {
+    return
+  }
+
+  sendOnboardingEvent(APP_ONBOARDING_READY_EVENT, {
+    app_id: app.app_id,
+    org_id: orgId,
+  })
+}
+
+watch(
+  [flowStep, createdApp, () => currentOrg.value?.gid, setupStage, showBuilderChecklist, showSetupChecklist],
+  emitPendingAppOnboardingReady,
+  { flush: 'post' },
+)
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
 let trackedAnalyticsSteps: OnboardingAnalyticsStep[] = []
@@ -617,7 +643,12 @@ function trackOrganizationEvent(
 }
 
 function trackChannelEvent(name: OnboardingChannelEvent, details: OnboardingChannelEventProperties) {
-  progressTracker?.trackStepEvent(name, analyticsStepFor(flowStep.value), details)
+  progressTracker?.trackStepEvent(name, 'channel', {
+    ...withOnboardingChannelOrigin(details),
+    app_id: createdApp.value?.app_id,
+    existing_app: existingApp.value ?? undefined,
+    intent: selectedIntent.value ?? undefined,
+  })
 }
 
 const detailsFieldTracker = createOnboardingDetailsFieldDebouncer((name, step, details) => {
@@ -661,8 +692,6 @@ function initializeProgressTracking(resumed: boolean) {
   })
   if (initialStep === 'welcome')
     trackedAnalyticsSteps.unshift('welcome')
-  if (!props.preOrg && resumed && flowStep.value === 'setup')
-    trackedAnalyticsSteps.push('setup')
   ensurePublishAppQuestionStepTracked()
 
   progressTracker = createOnboardingProgressTracker({
@@ -674,7 +703,10 @@ function initializeProgressTracking(resumed: boolean) {
     onboardingAttemptId: onboardingTelemetry.attemptId,
     onboardingRunId: onboardingTelemetry.runId,
   })
-  progressTracker.viewStep(initialStep)
+  if (initialStep === 'setup' || initialStep === 'install')
+    void viewFinalStepWhenRendered(initialStep)
+  else
+    progressTracker.viewStep(initialStep)
   for (const visibilityChange of pendingVisibilityChanges)
     progressTracker.trackVisibilityChange(visibilityChange.state, visibilityChange.occurredAt)
   pendingVisibilityChanges = []
@@ -694,8 +726,17 @@ function completeAndViewStep(nextStep: OnboardingFlowStep, completionProperties:
     nextStep: nextAnalyticsStep,
   })
   flowStep.value = nextStep
-  progressTracker?.viewStep(nextAnalyticsStep, previousAnalyticsStep)
+  if (nextStep === 'setup' || nextStep === 'install')
+    void viewFinalStepWhenRendered(nextStep, previousAnalyticsStep)
+  else
+    progressTracker?.viewStep(nextAnalyticsStep, previousAnalyticsStep)
   void persistOnboardingProgress()
+}
+
+async function viewFinalStepWhenRendered(step: 'setup' | 'install', previousStep?: OnboardingAnalyticsStep) {
+  await nextTick()
+  if (!isLoading.value && createdApp.value && flowStep.value === step)
+    progressTracker?.viewStep(step, previousStep)
 }
 
 function viewPreviousStep(nextStep: OnboardingFlowStep) {
@@ -732,9 +773,10 @@ function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress'
     publishAppQuestion: flowStep.value === 'publish_app_question',
     intent: selectedIntent.value,
     detailsStep: appDetailsStep.value,
-    setupStage: flowStep.value === 'setup' || flowStep.value === 'install' ? setupStage.value : undefined,
+    finalStep: finalOnboardingStep.value,
+    setupStage: flowStep.value === 'channel' ? setupStage.value : flowStep.value === 'setup' || flowStep.value === 'install' ? 'cli' : undefined,
     appName: appName.value,
-    appId: selectedAppIdSource.value === 'generated' ? '' : generatedAppId.value,
+    appId: createdApp.value?.app_id ?? (selectedAppIdSource.value === 'generated' ? '' : generatedAppId.value),
     existingApp: existingApp.value,
     existingAppSetup: existingAppSetup.value,
     storeUrl: storeUrl.value,
@@ -779,7 +821,7 @@ async function writeOnboardingProgress(
   options: OnboardingPersistOptions,
 ) {
   const userId = onboardingUserId.value
-  if (!userId || isHydratingOnboarding.value)
+  if (!userId || (isHydratingOnboarding.value && !options.clearIntent))
     return 'skipped'
 
   const authGeneration = main.authGeneration
@@ -788,7 +830,7 @@ async function writeOnboardingProgress(
       (onboardingFlowDisposed && !options.allowDisposed)
       || onboardingUserId.value !== userId
       || main.authGeneration !== authGeneration
-      || isHydratingOnboarding.value
+      || (isHydratingOnboarding.value && !options.clearIntent)
     ) {
       return 'skipped'
     }
@@ -818,6 +860,7 @@ async function writeOnboardingProgress(
       const onboarding = mergeUserOnboardingProgress(
         persistableProgress as unknown as Json,
         currentOnboarding,
+        { clearIntent: options.clearIntent },
       )
       const { data, error } = await replaceUserOnboardingIfUnchanged(
         userId,
@@ -863,10 +906,11 @@ async function writeOnboardingProgress(
   })
 }
 
-function resetOnboardingForm() {
+async function resetOnboardingForm() {
   flowStep.value = props.preOrg ? 'intent' : 'details'
+  finalOnboardingStep.value = props.preOrg ? 'setup' : 'install'
   appDetailsStep.value = 'name'
-  setupStage.value = 'cli'
+  setupStage.value = 'channel-routing'
   selectedDevelopmentEnvironment.value = null
   skippedPublishAppQuestion.value = false
   selectedIntent.value = null
@@ -891,6 +935,9 @@ function resetOnboardingForm() {
   localIconPreview.value = ''
   iconStoreUrl.value = ''
   resetStoreImportState()
+  const resetPersistResult = await persistOnboardingProgress('in_progress', { clearIntent: true })
+  if (resetPersistResult === 'retryable_failure' && !onboardingFlowDisposed)
+    await persistOnboardingProgress('in_progress', { clearIntent: true })
 }
 
 function showWelcomeOnDesktop() {
@@ -912,7 +959,11 @@ function applyOnboardingProgress(progress: ReturnType<typeof parseUserOnboarding
     return
 
   const flow = props.preOrg ? 'pre_org' : 'existing_org'
-  flowStep.value = resumableOnboardingFlowStep(progress, flow)
+  finalOnboardingStep.value = props.preOrg || progress.final_step === 'setup' || progress.step === 'setup' ? 'setup' : 'install'
+  const resumableStep = resumableOnboardingFlowStep(progress, flow)
+  flowStep.value = resumableStep === 'channel' && !newChannelTreatment.value
+    ? finalOnboardingStep.value
+    : resumableStep
   setupStage.value = resolveSetupStage(progress)
   if (progress.details_step)
     appDetailsStep.value = progress.details_step
@@ -957,6 +1008,45 @@ function applyDefaultPreOrgDetails() {
   flowStep.value = 'intent'
 }
 
+function nextStepAfterChannelEligibility(): 'channel' | 'install' | 'setup' {
+  return newChannelTreatment.value ? 'channel' : finalOnboardingStep.value
+}
+
+function resumeCandidateSteps(savedStep: OnboardingFlowStep): OnboardingFlowStep[] {
+  const steps = appOnboardingSteps.value.map(step => step.id)
+  if (savedStep !== 'channel' || steps.includes('channel'))
+    return steps
+
+  // A todo-list treatment can disable channel after it was already persisted.
+  // Keep the saved channel in resume telemetry so its step index stays valid.
+  const finalStepIndex = steps.findIndex(step => step === 'setup' || step === 'install')
+  steps.splice(finalStepIndex < 0 ? steps.length : finalStepIndex, 0, 'channel')
+  return steps
+}
+
+function recordSkippedChannelResumeDialog(saved: UserOnboardingProgress | null) {
+  const flow = props.preOrg ? 'pre_org' : 'existing_org'
+  if (
+    saved?.status !== 'in_progress'
+    || saved.flow !== flow
+    || resumableOnboardingFlowStep(saved, flow) !== 'channel'
+    || saved.app_id !== createdApp.value?.app_id
+    || !saved.setup_stage
+    || saved.setup_stage === 'cli'
+  ) {
+    return false
+  }
+
+  onboardingTelemetry.prepareResumeCandidate({
+    onboardingAttemptId: saved.onboarding_attempt_id,
+    lastRunId: saved.last_run_id,
+    savedStep: 'channel',
+    steps: resumeCandidateSteps('channel'),
+  })
+  onboardingTelemetry.recordResumeDialogSkipped(saved.setup_stage)
+  return true
+}
+
 async function maybeResumeSavedOnboarding() {
   const flow = props.preOrg ? 'pre_org' : 'existing_org'
   const saved = parseUserOnboardingProgress(main.user?.onboarding)
@@ -973,11 +1063,23 @@ async function maybeResumeSavedOnboarding() {
   }
 
   const resumableStep = resumableOnboardingFlowStep(saved, flow)
+  if (resumableStep === 'channel' && saved.app_id) {
+    if (await loadResumeApp(saved.app_id)) {
+      recordSkippedChannelResumeDialog(saved)
+      return true
+    }
+    await resetOnboardingForm()
+    if (props.preOrg)
+      applyDefaultPreOrgDetails()
+    showWelcomeOnDesktop()
+    return false
+  }
+
   onboardingTelemetry.prepareResumeCandidate({
     onboardingAttemptId: saved.onboarding_attempt_id,
     lastRunId: saved.last_run_id,
     savedStep: resumableStep,
-    steps: appOnboardingSteps.value.map(step => step.id),
+    steps: resumeCandidateSteps(resumableStep),
   })
   dialogStore.openDialog({
     title: t('onboarding-resume-title'),
@@ -996,7 +1098,7 @@ async function maybeResumeSavedOnboarding() {
 
   if (dialogStore.lastButtonRole === 'onboarding-resume-restart') {
     onboardingTelemetry.recordResumeRestarted()
-    resetOnboardingForm()
+    await resetOnboardingForm()
     existingApp.value = true
     existingAppSetup.value = 'manual'
     showWelcomeOnDesktop()
@@ -1008,6 +1110,12 @@ async function maybeResumeSavedOnboarding() {
 
   onboardingTelemetry.recordResumeContinued()
   applyOnboardingProgress(saved)
+  if (flowStep.value === 'channel' || flowStep.value === 'setup' || flowStep.value === 'install') {
+    if (!saved.app_id || !await loadResumeApp(saved.app_id)) {
+      await resetOnboardingForm()
+      return false
+    }
+  }
   return true
 }
 
@@ -1179,15 +1287,21 @@ function startApiKeyLoading() {
   })
 }
 
-async function loadResumeApp() {
-  if (!resumeAppId.value || !currentOrg.value?.gid)
+async function loadResumeApp(appId = resumeAppId.value) {
+  if (!appId)
+    return false
+  await organizationStore.awaitInitialLoad()
+  const appOrganization = organizationStore.getOrgByAppId(appId)
+  if (appOrganization && currentOrg.value?.gid !== appOrganization.gid)
+    organizationStore.setCurrentOrganization(appOrganization.gid)
+  if (!currentOrg.value?.gid)
     return false
 
   const { data, error } = await supabase
     .from('apps')
     .select()
     .eq('owner_org', currentOrg.value.gid)
-    .eq('app_id', resumeAppId.value)
+    .eq('app_id', appId)
     .single()
 
   if (error || !data) {
@@ -1205,13 +1319,16 @@ async function loadResumeApp() {
   const iconLoadRun = ++resumeIconLoadRun
   localIconPreview.value = getImmediateImageUrl(data.icon_url) || ''
   void loadResumeIconPreview(data.icon_url, data.app_id, iconLoadRun)
-  if (props.preOrg || resumeStep.value === 'setup') {
-    flowStep.value = 'setup'
+  finalOnboardingStep.value = props.preOrg || resumeStep.value === 'setup' || (resumeStep.value !== 'choice' && savedProgress?.app_id === data.app_id && (savedProgress?.final_step === 'setup' || savedProgress?.step === 'setup')) ? 'setup' : 'install'
+  const resumeFinalStep = !newChannelTreatment.value
+    || Boolean(savedProgress && savedProgress.app_id === data.app_id && savedProgress.final_step && savedProgress.setup_stage === 'cli')
+  if (finalOnboardingStep.value === 'setup') {
+    flowStep.value = resumeFinalStep ? 'setup' : 'channel'
     if (!savedProgress?.intent)
       hydrateIntentFromCurrentOrg()
   }
   else {
-    flowStep.value = resumeStep.value === 'choice' ? 'choice' : 'install'
+    flowStep.value = resumeStep.value === 'choice' ? 'choice' : resumeFinalStep ? 'install' : 'channel'
   }
   return true
 }
@@ -1997,7 +2114,7 @@ async function createOrganizationAndApp() {
 }
 
 async function completePreOrgAppCreation(organizationId: string, shouldInvite: boolean) {
-  await createAppRecord({ nextStep: shouldInvite ? 'organization' : 'setup' })
+  await createAppRecord({ nextStep: shouldInvite ? 'organization' : nextStepAfterChannelEligibility() })
 
   if (!createdApp.value)
     return
@@ -2036,28 +2153,17 @@ function continueFromOrganizationInvite(invitationCount: number) {
   })
   showOrganizationInvite.value = false
   setupStage.value = resolveSetupStage()
-  completeAndViewStep('setup', { appId: createdApp.value.app_id })
+  completeAndViewStep(nextStepAfterChannelEligibility(), { appId: createdApp.value.app_id })
 }
 
 function resolveSetupStage(
   progress = parseUserOnboardingProgress(main.user?.onboarding),
 ): SetupStage {
-  if (!newChannelTreatment.value && !onboardingABTestsPending.value)
+  if (!newChannelTreatment.value)
     return 'cli'
-  return progress?.setup_stage ?? 'channel-routing'
-}
-
-function reconcileSetupStageWithChannelAssignment() {
-  if (
-    !createdApp.value
-    || (flowStep.value !== 'setup' && flowStep.value !== 'install')
-    || onboardingABTestsPending.value
-    || newChannelTreatment.value
-  ) {
-    return
-  }
-
-  setSetupStage('cli')
+  if (!progress || progress.app_id !== createdApp.value?.app_id || !progress.setup_stage || progress.setup_stage === 'cli')
+    return 'channel-routing'
+  return progress.setup_stage
 }
 
 function setSetupStage(nextStage: SetupStage) {
@@ -2083,11 +2189,14 @@ function continueFromChannelConsoleAssign() {
 }
 
 function continueFromChannelCreate() {
-  trackChannelStageTransition('cli', 'forward')
+  if (flowStep.value !== 'channel' || setupStage.value !== 'channel-create' || !createdApp.value)
+    return
+  trackChannelStageTransition(finalOnboardingStep.value, 'forward')
   setSetupStage('cli')
+  completeAndViewStep(finalOnboardingStep.value, { appId: createdApp.value.app_id })
 }
 
-function trackChannelStageTransition(nextStage: OnboardingChannelStage | 'cli', direction: 'backward' | 'forward') {
+function trackChannelStageTransition(nextStage: OnboardingChannelStage | 'setup' | 'install', direction: 'backward' | 'forward') {
   const currentStage = setupStage.value
   if (currentStage === 'cli')
     return
@@ -2101,11 +2210,10 @@ function trackChannelStageTransition(nextStage: OnboardingChannelStage | 'cli', 
   )
 }
 
-const previousSetupStage: Partial<Record<SetupStage, SetupStage>> = {
+const previousSetupStage: Partial<Record<SetupStage, OnboardingChannelStage>> = {
   'channel-self-assign': 'channel-routing',
   'channel-console-assign': 'channel-self-assign',
   'channel-create': 'channel-console-assign',
-  'cli': 'channel-create',
 }
 
 function goBackFromSetupStage() {
@@ -2115,11 +2223,6 @@ function goBackFromSetupStage() {
     setSetupStage(previousStage)
   }
 }
-
-watch(newChannelTreatment, () => {
-  if (!onboardingABTestsPending.value)
-    reconcileSetupStageWithChannelAssignment()
-})
 
 function onTechnicalInviteOpened() {
   progressTracker?.trackStepEvent('onboarding_technical_invite_opened', 'setup')
@@ -2258,7 +2361,7 @@ async function createAppRecord(options?: { nextStep?: StandardFlowStep | PreOrgF
     if (flowStep.value === 'details')
       completionProperties.storeImportUsed = hasImportedStoreMetadata.value
     const nextStep = options?.nextStep ?? 'choice'
-    if (nextStep === 'setup' || nextStep === 'install')
+    if (nextStep === 'channel')
       setupStage.value = resolveSetupStage()
     completeAndViewStep(nextStep, completionProperties)
   }
@@ -2306,7 +2409,7 @@ async function seedDemoData() {
       ownerOrgId: currentOrg.value.gid,
     })
     await persistOnboardingProgress('completed')
-    router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
+    router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}`)
   }
   catch (error) {
     console.error('Cannot seed demo data', error)
@@ -2357,6 +2460,15 @@ async function copyCliCommand() {
     return
 
   const copied = await copyText(cliCommand.value)
+  if (copied)
+    trackSuccessfulCopy('onboarding_cli_command_copied')
+}
+
+async function copyBuilderCliCommand(platform: BuilderPlatform) {
+  if (!apiKey.value)
+    return
+
+  const copied = await copyText(`${builderCliCommand.value} --platform ${platform}`)
   if (copied)
     trackSuccessfulCopy('onboarding_cli_command_copied')
 }
@@ -2418,7 +2530,7 @@ function goToInstallStep() {
   isCliCommandVisible.value = false
   setupStage.value = resolveSetupStage()
   startApiKeyLoading()
-  completeAndViewStep('install', {
+  completeAndViewStep(nextStepAfterChannelEligibility(), {
     appId: createdApp.value.app_id,
   })
 }
@@ -2445,7 +2557,7 @@ async function openDashboard() {
   window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
   allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
   await persistOnboardingProgress('completed')
-  router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
+  router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}`)
 }
 
 async function skipOnboardingSplash() {
@@ -2515,6 +2627,7 @@ onMounted(async () => {
       void refreshOnboardingABTests()
       if (resumeAppId.value) {
         await organizationStore.awaitInitialLoad()
+        await waitForOnboardingABTests()
         const resumed = await loadResumeApp()
         if (resumed) {
           resumedFlow = true
@@ -2522,6 +2635,7 @@ onMounted(async () => {
             onboardingProgressPersistence.abort()
             return
           }
+          recordSkippedChannelResumeDialog(parseUserOnboardingProgress(main.user?.onboarding))
           startApiKeyLoading()
           return
         }
@@ -2550,6 +2664,8 @@ onMounted(async () => {
       onboardingProgressPersistence.abort()
       return
     }
+    if (resumed)
+      recordSkippedChannelResumeDialog(parseUserOnboardingProgress(main.user?.onboarding))
 
     startApiKeyLoading()
   }
@@ -2668,13 +2784,13 @@ defineExpose({
       'onboarding-flow-details-icon': flowStep === 'details' && appDetailsStep === 'icon',
     }"
   >
-    <div class="mx-auto w-full" :class="(flowStep === 'setup' || flowStep === 'install') && setupStage !== 'cli' ? 'max-w-6xl' : 'max-w-3xl'">
+    <div class="mx-auto w-full" :class="showSetupChecklist || showBuilderChecklist || flowStep === 'channel' ? 'max-w-6xl' : 'max-w-3xl'">
       <div v-if="isLoading" class="flex min-h-[50vh] items-center justify-center">
         <Spinner size="w-32 h-32" />
       </div>
 
       <div v-else class="onboarding-flow-content space-y-6">
-        <header class="onboarding-flow-header">
+        <header v-if="!showSetupChecklist && !showBuilderChecklist" class="onboarding-flow-header">
           <div class="flex items-center gap-2">
             <button
               v-if="showSetupBackButton"
@@ -3434,35 +3550,69 @@ defineExpose({
           </div>
         </template>
 
-        <div v-else-if="flowStep === 'setup' && createdApp">
+        <AppOnboardingBuilderChecklist
+          v-else-if="showBuilderChecklist && createdApp"
+          :key="createdApp.app_id"
+          :app-id="createdApp.app_id"
+          :initial-onboarding="createdApp.onboarding"
+          :command="builderCliCommand"
+          :hiding="isHidingSplash"
+          :leaving="isSeedingDemo"
+          @copy-command="copyBuilderCliCommand"
+          @hide="skipOnboardingSplash"
+          @explore="openDashboard"
+          @complete="openDashboard"
+        />
+
+        <AppOnboardingSetupChecklist
+          v-else-if="showSetupChecklist && createdApp"
+          :key="createdApp.app_id"
+          :app-id="createdApp.app_id"
+          :initial-onboarding="createdApp.onboarding"
+          :command="cliCommand"
+          :hiding="isHidingSplash"
+          :leaving="isSeedingDemo"
+          @copy-command="copyCliCommand"
+          @copy-ai="copyAiInstructions"
+          @hide="skipOnboardingSplash"
+          @explore="openDashboard"
+          @complete="openDashboard"
+          @invite-opened="onTechnicalInviteOpened"
+          @invite-succeeded="onTechnicalInviteSucceeded"
+          @channel-analytics="trackChannelEvent"
+        />
+
+        <div v-else-if="flowStep === 'channel' && newChannelTreatment && createdApp">
           <ChannelDefaultRoutingOnboarding
-            v-if="newChannelTreatment && setupStage === 'channel-routing'"
+            v-if="setupStage === 'channel-routing'"
             @analytics="trackChannelEvent"
             @continue="continueFromChannelDefaultRouting"
           />
 
           <ChannelSelfAssignOnboarding
-            v-else-if="newChannelTreatment && setupStage === 'channel-self-assign'"
+            v-else-if="setupStage === 'channel-self-assign'"
             @analytics="trackChannelEvent"
             @back="goBackFromSetupStage"
             @continue="continueFromChannelSelfAssign"
           />
 
           <ChannelConsoleAssignOnboarding
-            v-else-if="newChannelTreatment && setupStage === 'channel-console-assign'"
+            v-else-if="setupStage === 'channel-console-assign'"
             @analytics="trackChannelEvent"
             @back="goBackFromSetupStage"
             @continue="continueFromChannelConsoleAssign"
           />
 
           <ChannelCreateOnboarding
-            v-else-if="newChannelTreatment && setupStage === 'channel-create'"
+            v-else-if="setupStage === 'channel-create'"
             :app-id="createdApp.app_id"
             @analytics="trackChannelEvent"
             @continue="continueFromChannelCreate"
           />
+        </div>
 
-          <div v-else data-test="onboarding-setup-cli" class="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
+        <div v-else-if="flowStep === 'setup' && createdApp">
+          <div data-test="onboarding-setup-cli" class="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
             <div>
               <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
                 {{ t('unified-onboarding-step-setup') }}
@@ -3644,34 +3794,7 @@ defineExpose({
         </div>
 
         <div v-else-if="!props.preOrg && flowStep === 'install' && createdApp">
-          <ChannelDefaultRoutingOnboarding
-            v-if="newChannelTreatment && setupStage === 'channel-routing'"
-            @analytics="trackChannelEvent"
-            @continue="continueFromChannelDefaultRouting"
-          />
-
-          <ChannelSelfAssignOnboarding
-            v-else-if="newChannelTreatment && setupStage === 'channel-self-assign'"
-            @analytics="trackChannelEvent"
-            @back="goBackFromSetupStage"
-            @continue="continueFromChannelSelfAssign"
-          />
-
-          <ChannelConsoleAssignOnboarding
-            v-else-if="newChannelTreatment && setupStage === 'channel-console-assign'"
-            @analytics="trackChannelEvent"
-            @back="goBackFromSetupStage"
-            @continue="continueFromChannelConsoleAssign"
-          />
-
-          <ChannelCreateOnboarding
-            v-else-if="newChannelTreatment && setupStage === 'channel-create'"
-            :app-id="createdApp.app_id"
-            @analytics="trackChannelEvent"
-            @continue="continueFromChannelCreate"
-          />
-
-          <div v-else data-test="onboarding-install-cli" class="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
+          <div data-test="onboarding-install-cli" class="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
             <div>
               <div>
                 <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">

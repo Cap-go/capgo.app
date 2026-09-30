@@ -47,9 +47,9 @@ export async function waitForOnboardingChecks(command: Pick<Command, 'optsWithGl
       timestamp: new Date(),
       nonPersonTags: {
         command_path: commandPath,
-        pending_checks: checks.length,
+        pending_checks: checks.reduce((total, check) => total + check.attemptIds.length, 0),
         grace_period_ms: gracePeriodMs,
-        scan_attempt_ids: checks.map(check => check.attemptId),
+        scan_attempt_ids: checks.flatMap(check => check.attemptIds),
       },
     })
     await Promise.race([

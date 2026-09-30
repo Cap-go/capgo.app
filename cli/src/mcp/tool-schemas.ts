@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { CLI_PROJECT_MODES } from '../framework/mode'
 import { buildCacheKeyOptionSchema, buildCacheOptionSchema } from '../schemas/build'
 import { capacitorConfigOptionSchema, observeOptionsObjectSchema, refineObserveDeviceId } from '../schemas/sdk'
 
@@ -22,6 +23,7 @@ export const mcpDeleteAppInputSchema = z.object({
 export const mcpUploadBundleInputSchema = z.object({
   appId: z.string(),
   path: z.string(),
+  mode: z.enum(CLI_PROJECT_MODES).optional().describe('Project framework mode. Use cordova for Cordova apps without capacitor.config'),
   bundle: z.string().optional(),
   channel: z.string().optional(),
   rollout: z.number().min(0).max(100).optional(),

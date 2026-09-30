@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { CLI_PROJECT_MODES } from '../framework/mode'
 import { optionsBaseSchema } from './base'
 
 // ============================================================================
@@ -6,6 +7,7 @@ import { optionsBaseSchema } from './base'
 // ============================================================================
 
 export const optionsUploadSchema = optionsBaseSchema.extend({
+  mode: z.enum(CLI_PROJECT_MODES).optional(),
   bundle: z.string().optional(),
   path: z.string().optional(),
   channel: z.string().optional(),
@@ -54,6 +56,7 @@ export const optionsUploadSchema = optionsBaseSchema.extend({
   packageJson: z.string().optional(),
   dryUpload: z.boolean().optional(),
   nodeModules: z.string().optional(),
+  encryptDelta: z.boolean().optional(),
   encryptPartial: z.boolean().optional(),
   deleteLinkedBundleOnUpload: z.boolean().optional(),
   tusChunkSize: z.number().optional(),

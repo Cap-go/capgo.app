@@ -20,13 +20,14 @@ import { cloudlog } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
 import { sendNotifToOrgMembersCached } from './org_email_notifications.ts'
 import { closeClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDrizzleClient, getPgClient, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
+import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
 import { makeDevice } from './plugin_parser.ts'
 import { createStatsBandwidth, createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from './plugin_stats.ts'
 import { getClientIP } from './rate_limit.ts'
 import { s3 } from './s3.ts'
 import { shouldQueuePluginNotifications } from './supabase_write_guard.ts'
 import { isUpdateEnumerationLimited, recordUpdateEnumerationMiss, updateEnumerationLimitedResponse } from './updateOracleGuard.ts'
-import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
+import { canServeUpToDateFromCache, getUpdateReadCache, setUpdateReadCache } from './updateReadCache.ts'
 import { backgroundTask, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, fixSemver, isDeprecatedPluginVersion, isInternalVersionName, isVersionDeleted } from './utils.ts'
 
 const PLAN_LIMIT: Array<'mau' | 'bandwidth' | 'storage'> = ['mau', 'bandwidth']
@@ -616,6 +617,29 @@ export async function updateWithPG(
     })
   }
 
+  // Do not write while an override or rollout is already active.
+  // A change created after this write shows up within the 60s TTL.
+  if (
+    !channelOverride
+    && !channelSelfOverride
+    && !shouldUseRolloutPath
+    && appOwner.plan_valid
+    && (appOwner.channel_device_count ?? 0) === 0
+    && version?.name
+    && (isInternalVersionName(version.name) || !isVersionDeleted(version))
+  ) {
+    void setUpdateReadCache(c, {
+      appId: app_id,
+      platform,
+      defaultChannel: defaultChannel ?? '',
+    }, {
+      ownerOrg: appOwner.owner_org,
+      allowDeviceCustomId: Boolean(appOwner.allow_device_custom_id),
+      versionName: version.name,
+      keyId: version.key_id ?? null,
+    })
+  }
+
   // cloudlog(c.get('requestId'), 'signedURL', device_id, version_name, version.name)
   if (version_name === version.name) {
     if (requestInfosMs >= 50) {
@@ -873,10 +897,12 @@ export async function updateWithPG(
     // TODO: remove this when all plugin accept no URL
     signedURL = 'https://404.capgo.app/no.zip'
   }
-  // cloudlog(c.get('requestId'), 'save stats', device_id)
-  device.version_name = version.name
+  // Keep device.version_name as the version the device reports running. The offered
+  // bundle is not installed yet; /stats `set` records it once the device switches.
+  // Attribute the offer to the channel that served it so channel stats and
+  // release views can scope `get` counts (install/fail already carry it).
   await Promise.all([
-    createStatsVersion(c, version.name, app_id, 'get'),
+    createStatsVersion(c, version.name, app_id, 'get', { id: channelData.channels.id, name: channelData.channels.name }),
     sendStatsAndDevice(c, device, [{ action: 'get', versionName: version.name }]),
   ])
   if (requestInfosMs >= 50 || manifestFetchMs >= 50 || bundleUrlMs >= 50) {
@@ -909,6 +935,26 @@ export async function update(c: Context, body: AppInfos) {
     const providerBlockedResponse = await providerInfrastructureBlockResponse(c, appStatus.block_provider_infra_requests)
     if (providerBlockedResponse)
       return providerBlockedResponse
+  }
+  if (appStatus.cacheHit && appStatus.status === 'cloud') {
+    const cachedRead = await getUpdateReadCache(c, {
+      appId: body.app_id,
+      platform: body.platform,
+      defaultChannel: body.defaultChannel ?? '',
+    })
+    // Accepted 60s contract: overrides and rollouts added after the write are
+    // picked up when the entry expires. The TTL is not refreshed on a hit.
+    if (cachedRead && canServeUpToDateFromCache(body, cachedRead, hasChannelSelfStoreBinding(c))) {
+      const existingUpdateEnumerationLimit = await isUpdateEnumerationLimited(c)
+      if (existingUpdateEnumerationLimit.limited)
+        return updateEnumerationLimitedResponse(c, existingUpdateEnumerationLimit.resetAt)
+
+      const device = makeDevice(body, cachedRead.allowDeviceCustomId)
+      await setAppStatus(c, body.app_id, 'cloud', cachedRead.allowDeviceCustomId, appStatus.block_provider_infra_requests)
+      await backgroundTask(c, createStatsMau(c, body.device_id, body.app_id, cachedRead.ownerOrg, body.platform, body.version_build))
+      await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: cachedRead.versionName }])
+      return updateError200(c, 'no_new_version_available', 'No new version available')
+    }
   }
   const startPgClient = performance.now()
   const pgClient = await getPgClient(c, true)

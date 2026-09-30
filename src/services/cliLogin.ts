@@ -166,6 +166,11 @@ export function isCliLoginPath(path: string): boolean {
   return path.replace(/\/+$/, '') === '/login-cli'
 }
 
+/** MCP OAuth consent page: an agent-initiated login that must not detour into onboarding. */
+export function isMcpAuthorizePath(path: string): boolean {
+  return path.replace(/\/+$/, '') === '/oauth/authorize'
+}
+
 export function isMatchingCliLoginEvent(
   payload: { event?: string, channel?: string, description?: string },
   session: string,
@@ -212,22 +217,74 @@ function candidatePolicyAllows(
   return expiresAt !== null && expiresAt <= new Date(policy.expiresAt).getTime() + CLOCK_MARGIN_MS
 }
 
-export async function prepareCliLoginKey(
+/** Organizations a user may bind a new API key to (accepted membership, admin role, security policies met). */
+export async function resolveCliKeyEligibility(
   organizations: CliLoginOrganization[],
-  dependencies: CliLoginKeyDependencies,
-  now = new Date(),
-): Promise<CliLoginKeyPreparation> {
+  dependencies: Pick<CliLoginKeyDependencies, 'hasRequiredPermissions'>,
+): Promise<{ eligible: CliLoginOrganization[], skippedOrganizations: CliSkippedOrganization[] }> {
   const checks = await Promise.all(organizations.map(async (organization) => {
     if (!orgPassesStaticChecks(organization))
       return { organization, eligible: false }
     const eligible = await dependencies.hasRequiredPermissions(organization.gid).catch(() => false)
     return { organization, eligible }
   }))
-  const eligible = checks.filter(check => check.eligible).map(check => check.organization)
-  const skippedOrganizations = checks.filter(check => !check.eligible).map(check => ({
-    id: check.organization.gid,
-    name: check.organization.name,
-  }))
+  return {
+    eligible: checks.filter(check => check.eligible).map(check => check.organization),
+    skippedOrganizations: checks.filter(check => !check.eligible).map(check => ({
+      id: check.organization.gid,
+      name: check.organization.name,
+    })),
+  }
+}
+
+/** OAuth-issued MCP keys always expire; clients re-run the login flow afterwards. */
+export const MCP_OAUTH_KEY_MAX_DAYS = 90
+
+export function mcpOAuthKeyExpiresAt(organizations: CliLoginOrganization[], now = new Date()): string {
+  const defaultExpiry = now.getTime() + MCP_OAUTH_KEY_MAX_DAYS * DAY_MS - CLOCK_MARGIN_MS
+  const policyExpiry = aggregateCliKeyPolicy(organizations, now).expiresAt
+  return new Date(policyExpiry ? Math.min(defaultExpiry, new Date(policyExpiry).getTime()) : defaultExpiry).toISOString()
+}
+
+export function mcpOAuthKeyName(clientName: string): string {
+  return `MCP · ${clientName.trim() || 'client'}`.slice(0, 120)
+}
+
+/**
+ * Mint a dedicated API key for an MCP OAuth client, bound to the selected organizations with the
+ * same role the CLI login uses. One key per authorization so each client can be revoked alone.
+ */
+export async function createMcpOAuthKey(
+  organizations: CliLoginOrganization[],
+  dependencies: Pick<CliLoginKeyDependencies, 'createKey'>,
+  clientName: string,
+  now = new Date(),
+): Promise<string> {
+  if (!organizations.length)
+    throw new Error('Select at least one organization')
+  const policy = aggregateCliKeyPolicy(organizations, now)
+  const created = await dependencies.createKey({
+    name: mcpOAuthKeyName(clientName),
+    hashed: policy.hashed,
+    expires_at: mcpOAuthKeyExpiresAt(organizations, now),
+    bindings: organizations.map(organization => ({
+      role_name: roleForCliKey(organization.role)!,
+      scope_type: 'org',
+      org_id: organization.gid,
+    })),
+    global_permissions: [],
+  })
+  if (!created.key)
+    throw new Error('MCP API key creation did not return a secret')
+  return created.key
+}
+
+export async function prepareCliLoginKey(
+  organizations: CliLoginOrganization[],
+  dependencies: CliLoginKeyDependencies,
+  now = new Date(),
+): Promise<CliLoginKeyPreparation> {
+  const { eligible, skippedOrganizations } = await resolveCliKeyEligibility(organizations, dependencies)
   if (!eligible.length)
     return { status: 'empty', skippedOrganizations }
 

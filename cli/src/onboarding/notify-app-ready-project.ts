@@ -1,5 +1,5 @@
 import type { CapacitorConfig } from '../config'
-import type { NotifyAppReadyCheckOptions } from '../notify-app-ready-background'
+import type { OnboardingCheckOptions } from './background'
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { discoverCapacitorProjects, hasCapacitorConfig } from '../build/onboarding/project-discovery'
@@ -13,6 +13,8 @@ export interface NotifyAppReadyProject {
   appId: string
   webDir?: string
 }
+
+export type OnboardingScanProject = Pick<NotifyAppReadyProject, 'dir' | 'workspaceRoot' | 'appId' | 'webDir'>
 
 function ancestors(dir: string): string[] {
   const result: string[] = []
@@ -45,7 +47,7 @@ async function readConfig(dir: string): Promise<CapacitorConfig> {
   return loadConfigTarget(file)
 }
 
-function projectDirectory(options: NotifyAppReadyCheckOptions, configDir: string, config: CapacitorConfig): string | undefined {
+function projectDirectory(options: OnboardingCheckOptions, configDir: string, config: CapacitorConfig): string | undefined {
   if (options.packageJson) {
     const paths = options.packageJson.split(',').map(path => path.trim()).filter(Boolean)
     // Multiple metadata files do not identify a unique source app.
@@ -70,7 +72,7 @@ function projectDirectory(options: NotifyAppReadyCheckOptions, configDir: string
   return existsSync(join(configDir, 'package.json')) ? configDir : undefined
 }
 
-export async function resolveNotifyAppReadyProject(options: NotifyAppReadyCheckOptions): Promise<NotifyAppReadyProject | undefined> {
+export async function resolveNotifyAppReadyProject(options: OnboardingCheckOptions): Promise<NotifyAppReadyProject | undefined> {
   const initialDir = realpathSync(options.cwd)
   const root = workspaceRoot(initialDir)
   const activeDir = ancestors(initialDir).find(hasCapacitorConfig)

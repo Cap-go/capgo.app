@@ -12,9 +12,11 @@ import {
   getAllDashboard,
   getLocalConfig,
   getTotalStorage,
+  isPlatformAdmin,
   normalizeDashboardDateRange,
   useSupabase,
 } from '~/services/supabase'
+import { setWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
 import { createDeferredPromise } from '../utils/promise'
 
 interface TotalStats {
@@ -42,6 +44,8 @@ export const useMainStore = defineStore('main', () => {
     last_run: '',
   })
   const isAdmin = ref<boolean>(false)
+  let platformAdminStatusGeneration = -1
+  let platformAdminStatusRequest: { generation: number, promise: Promise<boolean> } | undefined
   const dashboard = ref<AppUsageGlobal[]>([])
   const dashboardByapp = ref<AppUsageByApp[]>([])
   const totalDevices = ref<number>(0)
@@ -51,8 +55,45 @@ export const useMainStore = defineStore('main', () => {
 
   const totalDownload = ref<number>(0)
 
+  const invalidatePlatformAdminStatus = () => {
+    platformAdminStatusGeneration = -1
+    isAdmin.value = false
+  }
+
+  const resolvePlatformAdminStatus = async () => {
+    const generation = authGeneration.value
+    if (platformAdminStatusGeneration === generation)
+      return isAdmin.value
+    if (platformAdminStatusRequest?.generation === generation)
+      return platformAdminStatusRequest.promise
+
+    const promise: Promise<boolean> = isPlatformAdmin()
+      .then((status) => {
+        if (authGeneration.value === generation) {
+          isAdmin.value = status
+          platformAdminStatusGeneration = generation
+          if (status)
+            setWebsitePaidUserCookie(true)
+        }
+        return status
+      })
+      .finally(() => {
+        if (platformAdminStatusRequest?.promise === promise)
+          platformAdminStatusRequest = undefined
+      })
+
+    platformAdminStatusRequest = { generation, promise }
+    return promise
+  }
+
+  const refreshPlatformAdminStatus = () => {
+    invalidatePlatformAdminStatus()
+    return resolvePlatformAdminStatus()
+  }
+
   watch(auth, () => {
     authGeneration.value += 1
+    invalidatePlatformAdminStatus()
   }, { flush: 'sync' })
 
   const logout = async () => {
@@ -156,6 +197,9 @@ export const useMainStore = defineStore('main', () => {
     statsTime,
     plans,
     isAdmin,
+    invalidatePlatformAdminStatus,
+    refreshPlatformAdminStatus,
+    resolvePlatformAdminStatus,
     totalStorage,
     totalStats,
     bestPlan,

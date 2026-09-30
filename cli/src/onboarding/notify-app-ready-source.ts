@@ -1,4 +1,4 @@
-import type { NotifyAppReadyProject } from './notify-app-ready-project'
+import type { OnboardingScanProject } from './notify-app-ready-project'
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { NodeTypes, parse as parseVue } from '@vue/compiler-dom'
@@ -97,7 +97,7 @@ function hasCall(source: ts.SourceFile, checker: ts.TypeChecker): boolean {
   return visit(source)
 }
 
-export function scanNotifyAppReadySource(project: NotifyAppReadyProject): 'found' | 'not_found' | 'unknown' {
+export function scanNotifyAppReadySource(project: OnboardingScanProject): 'found' | 'not_found' | 'unknown' {
   try {
     const deadline = Date.now() + 5_000
     const contents = new Map<string, string>()

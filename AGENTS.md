@@ -3,6 +3,19 @@
 This file provides guidance to AI agents (Claude Code, Cursor, Copilot, etc.)
 when working with code in this repository.
 
+## MUST NOT — modify the admin dashboard in this repository
+
+The admin dashboard is maintained in the private
+[`Cap-go/capgo_admin_dashboard`](https://github.com/Cap-go/capgo_admin_dashboard)
+repository and deployed at `admin.capgo.app`. The web app only links to it. Do
+not add dashboard code or open dashboard pull requests here.
+
+For admin dashboard work, load
+`.agents/skills/modify-admin-dashboard/SKILL.md` and make the change and pull
+request in `Cap-go/capgo_admin_dashboard`. Shared backend producers that serve
+other Capgo features can still be changed here when the requested work genuinely
+belongs to shared infrastructure. See `docs/admin-dashboard.md`.
+
 ## MUST NOT — never publish private customer data
 
 **This repository is public.** Chat, tickets, and internal messages may contain
@@ -1222,6 +1235,15 @@ Console CSP, SRI maintenance, sanitization helpers, and redirect validation are
 documented in [docs/frontend-security.md](docs/frontend-security.md). Review
 that checklist when touching `public/_headers`, external scripts, or user-controlled
 HTML/URL rendering.
+
+## Billing usage retention
+
+Deleted-app usage stays billable for 35 days, a deleted app ID recreated by
+another org in that window shares its usage rows (both orgs billed, new owner
+can read them), and app transfers count MAU for each org. These are intentional
+anti-fraud behaviors documented in
+[docs/billing-usage-retention.md](docs/billing-usage-retention.md). Do not
+change them without a product decision.
 
 ## Graphify
 

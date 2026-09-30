@@ -202,6 +202,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
     async ({
       appId,
       path,
+      mode,
       bundle,
       channel,
       rollout,
@@ -219,6 +220,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
       const result = await sdk.uploadBundle({
         appId,
         path,
+        mode,
         bundle,
         channel,
         rollout,

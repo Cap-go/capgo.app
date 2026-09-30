@@ -14,7 +14,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
     await expect(page.locator('#app-loader')).toBeVisible()
     await expect(page.locator('#app-loader')).toHaveCSS('background-color', expectedBackground)
     await expect(page.locator('body')).toHaveCSS('background-color', expectedBackground)
-    await expect(page.locator('#app-loader img')).toBeVisible()
-    await expect(page.locator('#app-loader img')).toHaveCSS('filter', colorScheme === 'light' ? 'invert(1)' : 'invert(0)')
+    await expect(page.locator('#app-loader svg')).toBeVisible()
+    await expect(page.locator('#app-loader svg')).toHaveCSS('color', colorScheme === 'light' ? 'rgb(15, 23, 42)' : 'rgb(255, 255, 255)')
   })
 }

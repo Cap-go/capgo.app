@@ -25,7 +25,7 @@ describe('customer chart card', () => {
     mountedApps.push(app)
 
     const card = container.firstElementChild
-    const header = card?.children[1]
+    const header = card?.children[0]
     const headerRow = header?.firstElementChild?.firstElementChild
     const headerActions = headerRow?.lastElementChild
     const content = container.querySelector('[data-test="chart-content"]')?.parentElement

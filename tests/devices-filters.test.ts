@@ -48,6 +48,7 @@ beforeAll(async () => {
       version_build: '1.0.0',
       version_name: '1.1.0',
       custom_id: '',
+      default_channel: 'beta',
       is_prod: true,
       is_emulator: false,
       updated_at: new Date().toISOString(),
@@ -99,6 +100,35 @@ describe('[POST] /private/devices version compare', () => {
     expect(ids).not.toContain(oldAndroid)
     expect(ids).not.toContain(iosDevice)
     expect(countData.count).toBe(ids.length)
+  })
+
+  it('filters devices by default channel', async () => {
+    const countResponse = await fetchTestRequest(getEndpointUrl('/private/devices'), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        appId: APP_ID,
+        count: true,
+        defaultChannel: 'beta',
+      }),
+    })
+    expect(countResponse.status).toBe(200)
+    const countData = await countResponse.json() as { count: number }
+
+    const listResponse = await fetchTestRequest(getEndpointUrl('/private/devices'), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        appId: APP_ID,
+        defaultChannel: 'beta',
+        limit: 50,
+      }),
+    })
+    expect(listResponse.status).toBe(200)
+    const listData = await listResponse.json() as { data: { device_id: string }[] }
+    const ids = listData.data.map(row => row.device_id)
+    expect(ids).toEqual([iosDevice])
+    expect(countData.count).toBe(1)
   })
 
   it('exports matching devices as csv and json', async () => {

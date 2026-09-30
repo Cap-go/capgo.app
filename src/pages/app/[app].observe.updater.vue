@@ -444,7 +444,7 @@ watch(() => [
             :version-name="channel.versionName"
             :linked-channel-id="channel.id"
           />
-          <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+          <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
             <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
               <IconBug class="w-4 h-4" />
               {{ t('errors-in-period') }}
@@ -453,7 +453,7 @@ watch(() => [
               {{ formatCount(totalErrors) }}
             </div>
           </div>
-          <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+          <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
             <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
               <IconSmartphone class="w-4 h-4" />
               {{ t('affected-devices') }}
@@ -462,7 +462,7 @@ watch(() => [
               {{ formatCount(insights?.summary.device_count) }}
             </div>
           </div>
-          <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+          <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
             <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
               <IconLayers class="w-4 h-4" />
               {{ t('action-count') }}
@@ -471,7 +471,7 @@ watch(() => [
               {{ formatCount(insights?.summary.action_count) }}
             </div>
           </div>
-          <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+          <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
             <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
               <IconActivity class="w-4 h-4" />
               {{ t('top-priority') }}
@@ -485,11 +485,11 @@ watch(() => [
           </div>
         </div>
 
-        <div v-if="insightsLoading" class="flex items-center justify-center h-64 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+        <div v-if="insightsLoading" class="flex items-center justify-center h-64 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
           <Spinner size="w-12 h-12" />
         </div>
 
-        <div v-else-if="!insights || totalErrors === 0" class="flex flex-col items-center justify-center h-64 bg-white border rounded-lg shadow-sm text-slate-500 dark:bg-slate-800 dark:text-slate-400 border-slate-200 dark:border-slate-700">
+        <div v-else-if="!insights || totalErrors === 0" class="flex flex-col items-center justify-center h-64 bg-white border rounded-xl shadow-sm text-slate-500 dark:bg-slate-800/60 dark:text-slate-400 border-slate-200 dark:border-white/10">
           <IconActivity class="w-12 h-12 mb-2" />
           <p>{{ t('no-log-insights') }}</p>
           <p class="mt-1 text-sm">
@@ -499,7 +499,7 @@ watch(() => [
 
         <template v-else>
           <div class="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-            <section class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+            <section class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
               <div class="mb-4">
                 <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
                   {{ t('error-categories') }}
@@ -529,7 +529,7 @@ watch(() => [
               </div>
             </section>
 
-            <section class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+            <section class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
               <div class="mb-4">
                 <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
                   {{ t('daily-error-trend') }}
@@ -549,7 +549,7 @@ watch(() => [
           </div>
 
           <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
-            <section class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+            <section class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
               <div class="mb-4">
                 <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
                   {{ t('top-error-versions') }}
@@ -557,7 +557,7 @@ watch(() => [
               </div>
               <div class="overflow-x-auto">
                 <table class="min-w-full text-sm">
-                  <thead class="text-xs uppercase text-slate-500 dark:text-slate-400">
+                  <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
                     <tr>
                       <th class="px-0 py-2 text-left font-medium">
                         {{ t('version') }}
@@ -573,7 +573,7 @@ watch(() => [
                       </th>
                     </tr>
                   </thead>
-                  <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                  <tbody class="divide-y divide-slate-100 dark:divide-white/5">
                     <tr
                       v-for="version in insights.versions"
                       :key="`${version.action}-${version.version_name}`"
@@ -604,7 +604,7 @@ watch(() => [
               </div>
             </section>
 
-            <section class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+            <section class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
               <div class="mb-4">
                 <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
                   {{ t('top-error-devices') }}

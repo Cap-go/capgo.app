@@ -40,6 +40,7 @@ function createTestContext() {
     user: undefined as any,
     isAdmin: false,
     plans: [] as any[],
+    resolvePlatformAdminStatus: vi.fn<() => Promise<boolean>>(),
   }
 
   const organizationStore = {
@@ -98,6 +99,13 @@ function createTestContext() {
   const mockGetPlans = vi.fn<() => Promise<any[]>>(async () => [])
   const mockIsPlatformAdmin = vi.fn(async () => false)
   const mockSetWebsitePaidUserCookie = vi.fn()
+  mainStore.resolvePlatformAdminStatus.mockImplementation(async () => {
+    const status = await mockIsPlatformAdmin()
+    mainStore.isAdmin = status
+    if (status)
+      mockSetWebsitePaidUserCookie(true)
+    return status
+  })
   const mockFetch = vi.fn<(...args: unknown[]) => Promise<MockFetchResponse>>(async () => ({
     ok: true,
     json: async () => ({ success: true }),
@@ -509,6 +517,33 @@ describe('auth guard SSO provisioning', () => {
         expect(next).toHaveBeenCalledWith({ path: '/onboarding/app', query: { to: '/dashboard' } })
         expect(context.mockSetWebsitePaidUserCookie).not.toHaveBeenCalled()
       }
+    })
+  })
+
+  it.concurrent('retries platform-admin access on later navigations for users with organizations', async () => {
+    await withTestContext(async (context) => {
+      const user = {
+        id: 'user-123',
+        email: 'user@managed.test',
+        email_confirmed_at: '2026-04-15T10:00:00.000Z',
+        app_metadata: { provider: 'email', providers: ['email'] },
+      }
+      context.mainStore.auth = user
+      context.organizationStore.organizations = [{ gid: 'org-123', role: 'read' }]
+      context.organizationStore.hasOrganizations = true
+      context.mockIsPlatformAdmin.mockResolvedValue(true)
+
+      const guard = await getGuard()
+      const next = vi.fn()
+      await guard(
+        { path: '/dashboard', fullPath: '/dashboard', meta: { middleware: 'auth' }, query: {} },
+        { path: '/dashboard', fullPath: '/dashboard', meta: { middleware: 'auth' }, query: {} },
+        next,
+      )
+
+      expect(context.mockIsPlatformAdmin).toHaveBeenCalledOnce()
+      expect(context.mainStore.isAdmin).toBe(true)
+      expect(next).toHaveBeenCalledWith()
     })
   })
 
