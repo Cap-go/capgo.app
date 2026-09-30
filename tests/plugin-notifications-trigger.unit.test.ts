@@ -17,7 +17,7 @@ vi.mock('../supabase/functions/_backend/utils/notifications.ts', () => ({
 }))
 
 vi.mock('../supabase/functions/_backend/utils/org_email_notifications.ts', () => ({
-  sendNotifToOrgMembersOnce: sendNotifToOrgMembersOnceMock,
+  sendNotifToOrgMembersOnceWithResult: sendNotifToOrgMembersOnceMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
@@ -109,7 +109,7 @@ describe('plugin notification trigger', () => {
   })
 
   it('accepts delivered org member notifications after durable per-recipient delivery', async () => {
-    sendNotifToOrgMembersOnceMock.mockResolvedValue(true)
+    sendNotifToOrgMembersOnceMock.mockResolvedValue('sent')
 
     const response = await requestPluginNotifications([orgMembersQueueItem()])
     const body = await response.json() as { processed: number, failed: number }
@@ -127,6 +127,27 @@ describe('plugin notification trigger', () => {
       expect.objectContaining({ pgClient: { id: 'pg-client' } }),
       'admins',
     )
+  })
+
+  it.each(['already_claimed', 'no_recipients', 'org_not_found'] as const)('settles org member notifications that can never be delivered (%s)', async (outcome) => {
+    sendNotifToOrgMembersOnceMock.mockResolvedValue(outcome)
+
+    const response = await requestPluginNotifications([orgMembersQueueItem()])
+    const body = await response.json() as { processed: number, failed: number, results: Array<{ status: string }> }
+
+    expect(response.status).toBe(200)
+    expect(body).toMatchObject({ processed: 1, failed: 0 })
+    expect(body.results).toEqual([{ status: 'settled' }])
+  })
+
+  it('keeps transient org member notification failures retryable', async () => {
+    sendNotifToOrgMembersOnceMock.mockResolvedValue('failed')
+
+    const response = await requestPluginNotifications([orgMembersQueueItem()])
+    const body = await response.text()
+
+    expect(response.status).toBe(500)
+    expect(body).toContain('Plugin notification batch failed')
   })
 
   it('returns non-2xx when durable org member notification processing throws', async () => {

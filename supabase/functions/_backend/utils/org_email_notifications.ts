@@ -4,7 +4,7 @@ import { and, eq, inArray } from 'drizzle-orm'
 import { isBentoConfigured, trackBentoEvent } from './bento.ts'
 import { CacheHelper } from './cache.ts'
 import { cloudlog } from './logging.ts'
-import { claimNotifOrgOnce, hasNotifOrgClaim, sendNotifOrg, sendNotifOrgOnce } from './notifications.ts'
+import { claimNotifOrgOnceWithResult, hasNotifOrgClaim, sendNotifOrg, sendNotifOrgOnce } from './notifications.ts'
 import { closeClient, getDrizzleClient, getPgClient, logPgError } from './pg.ts'
 import * as schema from './postgres_schema.ts'
 import { logSkippedSupabaseWrite, shouldQueuePluginNotifications, shouldSkipSupabaseNotificationWrites } from './supabase_write_guard.ts'
@@ -275,7 +275,7 @@ async function getOrgInfoWithClient(
   c: Context,
   orgId: string,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
-): Promise<OrgWithPreferences | null> {
+): Promise<{ org: OrgWithPreferences | null, lookupFailed: boolean }> {
   try {
     const org = await drizzleClient
       .select({
@@ -289,17 +289,21 @@ async function getOrgInfoWithClient(
 
     if (!org) {
       cloudlog({ requestId: c.get('requestId'), message: 'getOrgInfo not found', orgId })
-      return null
+      return { org: null, lookupFailed: false }
     }
 
     return {
-      management_email: org.management_email,
-      email_preferences: (org.email_preferences as EmailPreferences | null) ?? {},
+      org: {
+        management_email: org.management_email,
+        email_preferences: (org.email_preferences as EmailPreferences | null) ?? {},
+      },
+      lookupFailed: false,
     }
   }
   catch (e: unknown) {
     logPgError(c, 'getOrgInfo', e)
-    return null
+    // A failed query is not a missing org: callers must keep it retryable.
+    return { org: null, lookupFailed: true }
   }
 }
 
@@ -395,9 +399,9 @@ async function getAllEligibleEmails(
   audience: NotificationAudience = 'admins',
 ): Promise<{ adminEmails: string[], managementEmail: string | null, org: OrgWithPreferences | null, resolutionFailed: boolean }> {
   // Get org info
-  const org = await getOrgInfoWithClient(c, orgId, drizzleClient)
+  const { org, lookupFailed } = await getOrgInfoWithClient(c, orgId, drizzleClient)
   if (!org) {
-    return { adminEmails: [], managementEmail: null, org: null, resolutionFailed: false }
+    return { adminEmails: [], managementEmail: null, org: null, resolutionFailed: lookupFailed }
   }
 
   // Get eligible admin emails
@@ -619,6 +623,15 @@ export async function sendNotifToOrgMembers(
   return true
 }
 
+/**
+ * Outcome of a one-time org-members notification.
+ * - `sent`: this call delivered and claimed the notification.
+ * - `already_claimed` / `no_recipients` / `org_not_found`: terminal, retrying
+ *   can never deliver it, so queue consumers must drop the item.
+ * - `failed`: transient, safe to retry.
+ */
+export type OrgMembersOnceResult = 'sent' | 'already_claimed' | 'no_recipients' | 'org_not_found' | 'failed'
+
 export async function sendNotifToOrgMembersOnce(
   c: Context,
   eventName: string,
@@ -629,13 +642,26 @@ export async function sendNotifToOrgMembersOnce(
   drizzleClient: ReturnType<typeof getDrizzleClient>,
   audience: NotificationAudience = 'admins',
 ): Promise<boolean> {
+  return await sendNotifToOrgMembersOnceWithResult(c, eventName, preferenceKey, eventData, orgId, uniqId, drizzleClient, audience) === 'sent'
+}
+
+export async function sendNotifToOrgMembersOnceWithResult(
+  c: Context,
+  eventName: string,
+  preferenceKey: EmailPreferenceKey,
+  eventData: Record<string, unknown>,
+  orgId: string,
+  uniqId: string,
+  drizzleClient: ReturnType<typeof getDrizzleClient>,
+  audience: NotificationAudience = 'admins',
+): Promise<OrgMembersOnceResult> {
   if (shouldSkipSupabaseNotificationWrites(c)) {
     logSkippedSupabaseWrite(c, 'sendNotifToOrgMembersOnce')
-    return false
+    return 'failed'
   }
 
   if (!isBentoConfigured(c))
-    return false
+    return 'failed'
 
   const pgClient = getPgClient(c)
   const writeClient = getDrizzleClient(pgClient)
@@ -651,7 +677,7 @@ export async function sendNotifToOrgMembersOnce(
         orgId,
         uniqId,
       })
-      return false
+      return 'failed'
     }
     if (alreadySentForOrg) {
       cloudlog({
@@ -662,17 +688,17 @@ export async function sendNotifToOrgMembersOnce(
         orgId,
         uniqId,
       })
-      // false = not newly sent this call. Callers that mirror to PostHog/etc must
+      // Not newly sent this call. Callers that mirror to PostHog/etc must
       // not treat idempotent "already claimed" as a fresh delivery.
-      return false
+      return 'already_claimed'
     }
 
     const { recipients, resolutionFailed } = await getPreparedEligibleEmailTargets(c, orgId, preferenceKey, writeClient, audience)
-    if (!recipients) {
+    if (!recipients && !resolutionFailed) {
       cloudlog({ requestId: c.get('requestId'), message: 'sendNotifToOrgMembersOnce: org not found', orgId })
-      return false
+      return 'org_not_found'
     }
-    if (resolutionFailed) {
+    if (!recipients || resolutionFailed) {
       cloudlog({
         requestId: c.get('requestId'),
         message: 'sendNotifToOrgMembersOnce: recipient resolution failed',
@@ -680,7 +706,7 @@ export async function sendNotifToOrgMembersOnce(
         preferenceKey,
         orgId,
       })
-      return false
+      return 'failed'
     }
 
     const { managementEmail, allEmails, primaryEmail, additionalEmails } = recipients
@@ -693,8 +719,8 @@ export async function sendNotifToOrgMembersOnce(
         orgId,
       })
       // Claim anyway so once-dedup (SQL + retries) does not re-queue forever.
-      await claimNotifOrgOnce(c, eventName, orgId, uniqId, writeClient)
-      return false
+      const claim = await claimNotifOrgOnceWithResult(c, eventName, orgId, uniqId, writeClient)
+      return claim === 'failed' ? 'failed' : 'no_recipients'
     }
 
     const recipientEmails = [primaryEmail, ...additionalEmails]
@@ -711,7 +737,7 @@ export async function sendNotifToOrgMembersOnce(
           orgId,
           recipientUniqId,
         })
-        return false
+        return 'failed'
       }
       recipientEntries.push({ email, recipientUniqId, wasAlreadyClaimedBeforeRun })
     }
@@ -746,14 +772,17 @@ export async function sendNotifToOrgMembersOnce(
         orgId,
         cleanupFailedRecipients: cleanupFailedEmails,
       })
-      return false
+      return 'failed'
     }
 
     const unresolvedResults = sendResults.filter(result => !result.sent && !result.wasAlreadyClaimedBeforeRun)
     if (unresolvedResults.length > 0)
-      return false
+      return 'failed'
 
-    const firstOrgSend = await claimNotifOrgOnce(c, eventName, orgId, uniqId, writeClient)
+    const orgClaim = await claimNotifOrgOnceWithResult(c, eventName, orgId, uniqId, writeClient)
+    if (orgClaim === 'failed')
+      return 'failed'
+    const firstOrgSend = orgClaim === 'claimed'
 
     cloudlog({
       requestId: c.get('requestId'),
@@ -769,7 +798,9 @@ export async function sendNotifToOrgMembersOnce(
       managementEmailIncluded: !!managementEmail,
     })
 
-    return firstOrgSend
+    // Every recipient is delivered or already claimed; a lost org claim race
+    // means another run finished it, so there is nothing left to retry.
+    return firstOrgSend ? 'sent' : 'already_claimed'
   }
   finally {
     await closeClient(c, pgClient)

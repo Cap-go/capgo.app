@@ -727,13 +727,6 @@ export interface DeviceUsageCF {
   org_id?: string
 }
 
-export interface DeviceUsageAllCF {
-  date: string
-  device_id: string
-  app_id: string
-  org_id: string
-}
-
 // Intentional anti-fraud MAU behavior: devices are grouped by (device_id, app_id, org_id).
 // After an app transfer, a device active under both the old and the new org in the same
 // period is counted once per org, so moving an app between orgs cannot hide its MAU.
@@ -742,25 +735,40 @@ export interface DeviceUsageAllCF {
 // Another org recreating that app_id within 35 days shares the same usage rows
 // (both orgs billed, new owner can read them): expected, see
 // docs/billing-usage-retention.md.
+export function buildDeviceUsageCFQuery(app_id: string, period_start: string, period_end: string) {
+  return `SELECT
+    date,
+    app_id,
+    org_id,
+    count() AS mau
+  FROM (
+    SELECT
+      formatDateTime(toStartOfInterval(min(timestamp), INTERVAL '1' DAY), '%Y-%m-%d') AS date,
+      blob1 AS device_id,
+      index1 AS app_id,
+      blob2 AS org_id
+    FROM device_usage
+    WHERE
+      app_id = '${escapeSqlString(app_id)}'
+      AND timestamp >= toDateTime('${formatDateCF(period_start)}')
+      AND timestamp < toDateTime('${formatDateCF(period_end)}')
+    GROUP BY device_id, app_id, org_id
+  )
+  GROUP BY date, app_id, org_id
+  ORDER BY date`
+}
+
 export async function readDeviceUsageCF(c: Context, app_id: string, period_start: string, period_end: string, options: { throwOnError?: boolean } = {}) {
   if (!c.env.DEVICE_USAGE)
     return [] as DeviceUsageCF[]
-  const query = `SELECT
-    formatDateTime(toStartOfInterval(min(timestamp), INTERVAL '1' DAY), '%Y-%m-%d') AS date,
-    blob1 AS device_id,
-    index1 AS app_id,
-    blob2 AS org_id
-  FROM device_usage
-  WHERE
-    app_id = '${escapeSqlString(app_id)}'
-    AND timestamp >= toDateTime('${formatDateCF(period_start)}')
-    AND timestamp < toDateTime('${formatDateCF(period_end)}')
-  GROUP BY device_id, app_id, org_id
-  ORDER BY date`
+  // Count each device on its first active day inside Analytics Engine. Returning
+  // one row per device fails with "query result is too large" for apps with
+  // hundreds of thousands of monthly devices.
+  const query = buildDeviceUsageCFQuery(app_id, period_start, period_end)
 
   cloudlog({ requestId: c.get('requestId'), message: 'readDeviceUsageCF query', query })
   try {
-    const res = await runQueryToCFA<DeviceUsageAllCF>(c, query)
+    const res = await runQueryToCFA<Omit<DeviceUsageCF, 'mau'> & { mau: number | string }>(c, query)
     const groupedByDay = res.reduce((acc, curr) => {
       const { date, app_id, org_id } = curr
       if (!acc[date]) {
@@ -771,7 +779,7 @@ export async function readDeviceUsageCF(c: Context, app_id: string, period_start
           org_id,
         }
       }
-      acc[date].mau++
+      acc[date].mau += Number(curr.mau) || 0
       return acc
     }, {} as Record<string, DeviceUsageCF>)
     return Object.values(groupedByDay).sort((a, b) => a.date > b.date ? 1 : -1)
@@ -1840,7 +1848,7 @@ WHERE
   ${appFilter}
   ${versionFilter}
   ${cursorFilter}
-ORDER BY created_at ASC, app_id ASC, device_id ASC, blob2 ASC
+ORDER BY created_at ASC, app_id ASC, device_id ASC, action ASC
 LIMIT ${limit}`
 }
 
