@@ -34,6 +34,12 @@ Both commands read `internal/cloudflare/.env.prod` for DB URLs and use the
 baked-in Capgo EU2 publication/subscription/slot names (`capgo_google_eu_2_pub` /
 `capgo_google_eu_2_sub` / live slot) — no shell exports.
 
+`public.manifest_per_version` is primary-only while the encoded format is not
+used by plugin reads. The migration removing it from the EU2 publication stops
+future logical row changes from crossing to Google; setup/reset scripts must
+not add it back. Existing subscriber rows and physical tables are deliberately
+left alone. This change does not reclaim their storage or eliminate primary WAL.
+
 ## Release reconciliation
 
 The release job rebuilds the selected schema catalog from the checked-out local
