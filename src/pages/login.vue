@@ -822,7 +822,7 @@ onMounted(checkLogin)
               <p class="text-xs font-semibold tracking-[0.26em] text-slate-500 uppercase dark:text-slate-300">
                 {{ t('login-console-kicker') }}
               </p>
-              <h1 class="mt-4 text-4xl font-semibold leading-tight text-slate-950 dark:text-white xl:text-5xl">
+              <h1 class="mt-4 text-4xl font-semibold leading-tight text-balance text-slate-950 dark:text-white xl:text-5xl">
                 {{ t('login-console-title') }}
               </h1>
               <p class="mt-5 max-w-xl text-base leading-7 text-slate-600 dark:text-slate-300 xl:text-lg">
