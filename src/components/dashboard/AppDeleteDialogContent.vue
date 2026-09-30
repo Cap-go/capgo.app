@@ -174,71 +174,71 @@ function selectReason(reason: AppDeletionReason) {
             {{ t('app-delete-feedback-question') }}
           </legend>
           <div class="space-y-2">
-            <button
-              v-for="option in reasonOptions"
-              :key="option.id"
-              type="button"
-              class="w-full p-3 text-left transition border rounded-xl"
-              :class="reason === option.id
-                ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-500/15 dark:border-blue-400 dark:bg-blue-950/30'
-                : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50 dark:border-slate-700 dark:hover:border-blue-700 dark:hover:bg-slate-800/50'"
-              :aria-pressed="reason === option.id"
-              @click="selectReason(option.id)"
-            >
-              <span class="flex items-start gap-3">
-                <span
-                  class="flex items-center justify-center w-9 h-9 rounded-lg shrink-0"
-                  :class="reason === option.id ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-300'"
-                >
-                  <component :is="option.icon" class="w-5 h-5" />
+            <template v-for="option in reasonOptions" :key="option.id">
+              <button
+                type="button"
+                class="w-full p-3 text-left transition border rounded-xl"
+                :class="reason === option.id
+                  ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-500/15 dark:border-blue-400 dark:bg-blue-950/30'
+                  : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50 dark:border-slate-700 dark:hover:border-blue-700 dark:hover:bg-slate-800/50'"
+                :aria-pressed="reason === option.id"
+                @click="selectReason(option.id)"
+              >
+                <span class="flex items-start gap-3">
+                  <span
+                    class="flex items-center justify-center w-9 h-9 rounded-lg shrink-0"
+                    :class="reason === option.id ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-300'"
+                  >
+                    <component :is="option.icon" class="w-5 h-5" />
+                  </span>
+                  <span class="min-w-0 grow">
+                    <span class="block text-sm font-semibold text-slate-900 dark:text-white">{{ option.title }}</span>
+                    <span class="block mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ option.description }}</span>
+                  </span>
+                  <span
+                    class="flex items-center justify-center w-5 h-5 mt-2 border rounded-full shrink-0"
+                    :class="reason === option.id ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 dark:border-slate-600'"
+                  >
+                    <CheckCircle v-if="reason === option.id" class="w-4 h-4" />
+                  </span>
                 </span>
-                <span class="min-w-0 grow">
-                  <span class="block text-sm font-semibold text-slate-900 dark:text-white">{{ option.title }}</span>
-                  <span class="block mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ option.description }}</span>
-                </span>
-                <span
-                  class="flex items-center justify-center w-5 h-5 mt-2 border rounded-full shrink-0"
-                  :class="reason === option.id ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 dark:border-slate-600'"
-                >
-                  <CheckCircle v-if="reason === option.id" class="w-4 h-4" />
-                </span>
-              </span>
-            </button>
+              </button>
+
+              <div v-if="reason === option.id" class="p-4 border rounded-xl border-slate-200 bg-slate-50/70 dark:border-slate-700 dark:bg-slate-800/40">
+                <p class="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                  {{ t('app-delete-details-question') }} <span class="font-normal text-slate-400">{{ t('optional') }}</span>
+                </p>
+                <div class="flex flex-wrap gap-2 mt-3">
+                  <button
+                    v-for="detailId in activeDetails"
+                    :key="detailId"
+                    type="button"
+                    class="px-3 py-1.5 text-xs font-medium transition border rounded-full"
+                    :class="detail === detailId
+                      ? 'border-blue-600 bg-blue-600 text-white'
+                      : 'border-slate-300 bg-white text-slate-600 hover:border-blue-400 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300'"
+                    :aria-pressed="detail === detailId"
+                    @click="emit('update:detail', detail === detailId ? null : detailId)"
+                  >
+                    {{ detailLabels[detailId] }}
+                  </button>
+                </div>
+                <label v-if="detail !== 'no_feedback'" for="app-delete-note" class="block mt-4 text-xs font-medium text-slate-600 dark:text-slate-300">
+                  {{ reason === 'app_id_wrong' ? t('app-delete-expected-id') : reason === 'no_longer_needed' ? t('app-delete-moving-service') : t('app-delete-note') }}
+                </label>
+                <textarea
+                  v-if="detail !== 'no_feedback'"
+                  id="app-delete-note"
+                  :value="note"
+                  rows="2"
+                  :placeholder="t('app-delete-note-placeholder')"
+                  class="w-full px-3 py-2 mt-1 text-sm bg-white border rounded-lg resize-none border-slate-300 text-slate-800 placeholder:text-slate-400 focus:border-blue-500 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+                  @input="emit('update:note', ($event.target as HTMLTextAreaElement).value)"
+                />
+              </div>
+            </template>
           </div>
         </fieldset>
-
-        <div v-if="reason" class="p-4 mt-3 border rounded-xl border-slate-200 bg-slate-50/70 dark:border-slate-700 dark:bg-slate-800/40">
-          <p class="text-xs font-semibold text-slate-700 dark:text-slate-200">
-            {{ t('app-delete-details-question') }} <span class="font-normal text-slate-400">{{ t('optional') }}</span>
-          </p>
-          <div class="flex flex-wrap gap-2 mt-3">
-            <button
-              v-for="detailId in activeDetails"
-              :key="detailId"
-              type="button"
-              class="px-3 py-1.5 text-xs font-medium transition border rounded-full"
-              :class="detail === detailId
-                ? 'border-blue-600 bg-blue-600 text-white'
-                : 'border-slate-300 bg-white text-slate-600 hover:border-blue-400 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300'"
-              :aria-pressed="detail === detailId"
-              @click="emit('update:detail', detail === detailId ? null : detailId)"
-            >
-              {{ detailLabels[detailId] }}
-            </button>
-          </div>
-          <label v-if="detail !== 'no_feedback'" for="app-delete-note" class="block mt-4 text-xs font-medium text-slate-600 dark:text-slate-300">
-            {{ reason === 'app_id_wrong' ? t('app-delete-expected-id') : reason === 'no_longer_needed' ? t('app-delete-moving-service') : t('app-delete-note') }}
-          </label>
-          <textarea
-            v-if="detail !== 'no_feedback'"
-            id="app-delete-note"
-            :value="note"
-            rows="2"
-            :placeholder="t('app-delete-note-placeholder')"
-            class="w-full px-3 py-2 mt-1 text-sm bg-white border rounded-lg resize-none border-slate-300 text-slate-800 placeholder:text-slate-400 focus:border-blue-500 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
-            @input="emit('update:note', ($event.target as HTMLTextAreaElement).value)"
-          />
-        </div>
       </section>
     </div>
 
