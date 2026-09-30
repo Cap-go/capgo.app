@@ -67,6 +67,7 @@ declare module 'vue' {
     CompatibilityBanner: typeof import('./components/dashboard/CompatibilityBanner.vue')['default']
     ConnectAppPicker: typeof import('./components/connect/ConnectAppPicker.vue')['default']
     CreditsCta: typeof import('./components/CreditsCta.vue')['default']
+    CreditsOnlyTip: typeof import('./components/CreditsOnlyTip.vue')['default']
     DataTable: typeof import('./components/DataTable.vue')['default']
     DateRangePicker: typeof import('./components/DateRangePicker.vue')['default']
     DeliveryLatencyPanel: typeof import('./components/dashboard/DeliveryLatencyPanel.vue')['default']

@@ -44,14 +44,14 @@ function dismiss() {
     <div
       v-else
       id="credits-only-tip"
-      class="relative flex items-start gap-3 p-4 pr-12 rounded-xl bg-white ring-1 ring-slate-200 dark:bg-white/[0.03] dark:ring-white/10"
+      class="relative flex items-start gap-3 px-4 py-3 pr-12 rounded-xl bg-white ring-1 ring-slate-200 dark:bg-white/[0.03] dark:ring-white/10"
     >
-      <IconLightBulb class="w-5 h-5 mt-0.5 shrink-0 text-amber-500" aria-hidden="true" />
+      <IconLightBulb class="w-4 h-4 mt-0.5 shrink-0 text-amber-500" aria-hidden="true" />
       <div class="min-w-0">
         <p class="text-sm font-semibold text-slate-900 dark:text-white">
           {{ t('credits-only-tip-title') }}
         </p>
-        <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
+        <p class="mt-0.5 text-xs text-slate-600 dark:text-slate-300">
           {{ t('credits-only-tip-description') }}
           <router-link
             v-if="props.showLink"
@@ -64,13 +64,13 @@ function dismiss() {
       </div>
       <button
         type="button"
-        class="absolute flex items-center justify-center rounded-md top-2 right-2 size-8 text-slate-400 hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-white/10 dark:hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500"
+        class="absolute flex items-center justify-center rounded-md top-1.5 right-1.5 size-7 text-slate-400 hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-white/10 dark:hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500"
         :aria-label="t('credits-only-tip-dismiss')"
         :title="t('credits-only-tip-dismiss')"
         data-test="credits-only-tip-dismiss"
         @click="dismiss"
       >
-        <IconClose class="w-5 h-5" aria-hidden="true" />
+        <IconClose class="w-4 h-4" aria-hidden="true" />
       </button>
     </div>
   </div>
