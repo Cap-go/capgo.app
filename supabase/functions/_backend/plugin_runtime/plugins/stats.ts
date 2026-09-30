@@ -159,6 +159,8 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     return effectiveStatsChannelPromise
   }
 
+  let failureChannel: Awaited<ReturnType<typeof getEffectiveDeviceChannelNamePostgres>> = null
+
   // Extract version from composite format if present (e.g., "1.2.3:main.js" -> "1.2.3")
   // Composite format is used for file-specific failure stats
   const colonIndex = version_name.indexOf(':')
@@ -190,14 +192,17 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
   else if (action.endsWith('_fail') && shouldRecordAction && colonIndex <= 0) {
     if (!device.is_emulator && device.is_prod) {
       // Keep version_usage fail and install cohorts aligned for rollout auto-pause.
-      await createStatsVersion(c, versionOnly, app_id, 'fail', await getEffectiveStatsChannel())
+      failureChannel = await getEffectiveStatsChannel()
+      await createStatsVersion(c, versionOnly, app_id, 'fail', failureChannel)
       cloudlog({ requestId: c.get('requestId'), message: 'FAIL!' })
       // Daily fail ratio emails are now sent via cron job that checks aggregate stats
       // instead of per-device notifications. See process_daily_fail_ratio_email.
     }
   }
   if (shouldRecordAction) {
-    statsActions.push({ action: action as Database['public']['Enums']['stats_action'], metadata })
+    // The failure log carries the same channel as its version_usage fail row so
+    // the live release view can break failure reasons down per channel.
+    statsActions.push({ action: action as Database['public']['Enums']['stats_action'], metadata, channel: failureChannel })
   }
 
   await backgroundTask(c, createStatsMau(c, device.device_id, app_id, appOwner.owner_org, device.platform, device.version_build))

@@ -175,6 +175,7 @@ export interface StatsActions {
   action: Database['public']['Enums']['stats_action']
   versionName?: string
   metadata?: StatsMetadata
+  channel?: VersionUsageChannel | null
 }
 
 export const DEFAULT_LIMIT = 1000

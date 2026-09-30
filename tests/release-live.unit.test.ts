@@ -83,31 +83,61 @@ describe('release live helpers', () => {
     // Legacy `get` rows written before /updates recorded the channel stay visible.
     expect(channelSeries).toContain('OR (blob3 = \'get\' AND blob4 = \'\' AND blob5 = \'\')')
 
-    const failures = releaseLiveTestUtils.buildFailuresQueryCF('com.demo.app', '1.0.0', start, end)
+    const failures = releaseLiveTestUtils.buildFailuresQueryCF('com.demo.app', '1.0.0', start, end, { id: 7, name: 'prod\'uction' })
     expect(failures).toContain('blob3 = \'1.0.0\'')
     expect(failures).toContain('LIKE \'%fail%\'')
+    expect(failures).toContain('AND (blob9 = \'7\' OR (blob9 = \'\' AND blob8 = \'prod\'\'uction\'))')
   })
 
-  it.concurrent('picks the release from cached candidates', () => {
-    const prodNew = { bundle_id: 2, version_name: '1.1.0', channel_id: 1, channel_name: 'production', deployed_at: '2026-09-29T10:00:00.000Z' }
-    const beta = { bundle_id: 3, version_name: '1.2.0-beta', channel_id: 2, channel_name: 'beta', deployed_at: '2026-09-28T10:00:00.000Z' }
-    const prodOld = { bundle_id: 1, version_name: '1.0.0', channel_id: 1, channel_name: 'production', deployed_at: '2026-09-20T10:00:00.000Z' }
-    const latestBundle = { bundle_id: 4, version_name: '1.3.0', channel_id: null, channel_name: null, deployed_at: '2026-09-29T11:00:00.000Z' }
-    const candidates = { deployments: [prodNew, beta, prodOld], latest_bundle: latestBundle }
+  const prodNew = { bundle_id: 2, version_name: '1.1.0', channel_id: 1, channel_name: 'production', deployed_at: '2026-09-29T10:00:00.000Z' }
+  const beta = { bundle_id: 3, version_name: '1.2.0-beta', channel_id: 2, channel_name: 'beta', deployed_at: '2026-09-29T11:00:00.000Z' }
+  const prodOld = { bundle_id: 1, version_name: '1.0.0', channel_id: 1, channel_name: 'production', deployed_at: '2026-09-20T10:00:00.000Z' }
+  const betaCurrent = { bundle_id: 5, version_name: '1.3.0', channel_id: 2, channel_name: 'beta', deployed_at: '2026-09-29T12:00:00.000Z' }
+  const production = { id: 1, name: 'production', public: true, current: { ...prodNew } }
+  const betaChannel = { id: 2, name: 'beta', public: false, current: betaCurrent }
+  const staging = { id: 3, name: 'staging', public: false, current: null }
+  const candidates = { channels: [betaChannel, production, staging], deployments: [beta, prodNew, prodOld] }
 
-    expect(releaseLiveTestUtils.pickRelease(candidates)).toBe(prodNew)
-    expect(releaseLiveTestUtils.pickRelease(candidates, 2)).toBe(beta)
-    expect(releaseLiveTestUtils.pickRelease(candidates, 1, '1.0.0')).toBe(prodOld)
-    expect(releaseLiveTestUtils.pickRelease(candidates, undefined, '1.3.0')).toBe(latestBundle)
-    expect(releaseLiveTestUtils.pickRelease(candidates, 3)).toBeNull()
-    expect(releaseLiveTestUtils.pickRelease(candidates, undefined, 'missing')).toBeNull()
-    expect(releaseLiveTestUtils.pickRelease({ deployments: [], latest_bundle: latestBundle })).toBe(latestBundle)
+  it.concurrent('defaults to the public channel', () => {
+    expect(releaseLiveTestUtils.pickDefaultChannel(candidates)).toBe(production)
+    // No public channel: the channel with the latest deployment, then the first one.
+    expect(releaseLiveTestUtils.pickDefaultChannel({ channels: [staging, betaChannel], deployments: [beta] })).toBe(betaChannel)
+    expect(releaseLiveTestUtils.pickDefaultChannel({ channels: [staging, betaChannel], deployments: [] })).toBe(staging)
+    expect(releaseLiveTestUtils.pickDefaultChannel({ channels: [], deployments: [] })).toBeNull()
   })
 
-  it.concurrent('scopes to the channel only when the request names one', () => {
-    const release = { bundle_id: 2, version_name: '1.1.0', channel_id: 1, channel_name: 'production', deployed_at: '2026-09-29T10:00:00.000Z' }
-    expect(releaseLiveTestUtils.resolveChannelScope(release, 1)).toEqual({ id: 1, name: 'production' })
-    expect(releaseLiveTestUtils.resolveChannelScope(release)).toBeUndefined()
-    expect(releaseLiveTestUtils.resolveChannelScope(release, 2)).toBeUndefined()
+  it.concurrent('picks the requested channel, else the default one', () => {
+    expect(releaseLiveTestUtils.pickChannel(candidates)).toBe(production)
+    expect(releaseLiveTestUtils.pickChannel(candidates, 2)).toBe(betaChannel)
+    expect(releaseLiveTestUtils.pickChannel(candidates, 99)).toBe(production)
+    // Version-only links open the channel that received that version.
+    expect(releaseLiveTestUtils.pickChannel(candidates, undefined, '1.0.0')).toBe(production)
+    expect(releaseLiveTestUtils.pickChannel(candidates, undefined, '1.2.0-beta')).toBe(betaChannel)
+    expect(releaseLiveTestUtils.pickChannel(candidates, undefined, '1.3.0')).toBe(betaChannel)
+    expect(releaseLiveTestUtils.pickChannel(candidates, undefined, 'missing')).toBe(production)
+  })
+
+  it.concurrent('picks the release inside the channel', () => {
+    expect(releaseLiveTestUtils.pickRelease(candidates, production)).toEqual(prodNew)
+    expect(releaseLiveTestUtils.pickRelease(candidates, production, '1.0.0')).toEqual(prodOld)
+    expect(releaseLiveTestUtils.pickRelease(candidates, production, '1.2.0-beta')).toBeNull()
+    expect(releaseLiveTestUtils.pickRelease(candidates, betaChannel)).toEqual(beta)
+    // No deploy history on the channel: the bundle it serves now.
+    expect(releaseLiveTestUtils.pickRelease({ ...candidates, deployments: [] }, betaChannel)).toBe(betaCurrent)
+    expect(releaseLiveTestUtils.pickRelease(candidates, staging)).toBeNull()
+  })
+
+  it.concurrent('lists channels and only the selected channel deployments', () => {
+    const context = releaseLiveTestUtils.toChannelContext(candidates, betaChannel)
+    expect(context.channel).toEqual({ id: 2, name: 'beta', is_default: false })
+    expect(context.channels).toEqual([
+      { id: 2, name: 'beta', is_default: false },
+      { id: 1, name: 'production', is_default: true },
+      { id: 3, name: 'staging', is_default: false },
+    ])
+    expect(context.recent_deployments).toEqual([
+      { version_name: '1.2.0-beta', channel_id: 2, channel_name: 'beta', deployed_at: beta.deployed_at },
+    ])
+    expect(releaseLiveTestUtils.toChannelContext({ channels: [], deployments: [] }, null)).toEqual({ channel: null, channels: [], recent_deployments: [] })
   })
 })
