@@ -49,6 +49,15 @@ describe('analytics engine sql lint rules', () => {
     expect(lintAnalyticsEngineSql(
       'SELECT blob2, count() AS total FROM app_log GROUP BY blob2 ORDER BY blob2',
     ).map(issue => issue.rule)).not.toContain('no-order-by-aliased-source-column')
+    expect(lintAnalyticsEngineSql(
+      'SELECT blob2 AS action FROM app_log ORDER BY action -- blob2',
+    ).map(issue => issue.rule)).not.toContain('no-order-by-aliased-source-column')
+    expect(lintAnalyticsEngineSql(
+      'SELECT blob2 AS action FROM app_log ORDER BY action /* blob2 */ LIMIT 1',
+    ).map(issue => issue.rule)).not.toContain('no-order-by-aliased-source-column')
+    expect(lintAnalyticsEngineSql(
+      'SELECT blob2 AS action FROM app_log WHERE blob3 != \'ORDER BY blob2\' ORDER BY action',
+    ).map(issue => issue.rule)).not.toContain('no-order-by-aliased-source-column')
   })
 
   it.concurrent('accepts supported COUNT() and COUNT(DISTINCT) forms', () => {

@@ -35,7 +35,11 @@ vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
 }))
 
 vi.mock('../supabase/functions/_backend/utils/notifications.ts', () => ({
-  claimNotifOrgOnce: claimNotifOrgOnceMock,
+  // Tests drive the boolean claim outcome; 'failed' passes through for write errors.
+  claimNotifOrgOnceWithResult: async (...args: unknown[]) => {
+    const result = await claimNotifOrgOnceMock(...args)
+    return result === true ? 'claimed' : result === false ? 'already_claimed' : result
+  },
   hasNotifOrgClaim: hasNotifOrgClaimMock,
   sendNotifOrg: sendNotifOrgMock,
   sendNotifOrgOnce: sendNotifOrgOnceMock,
@@ -196,6 +200,48 @@ describe('sendNotifToOrgMembersOnce', () => {
     hasNotifOrgClaimMock.mockResolvedValue(null)
     await expect(send()).resolves.toBe('failed')
     expect(sendNotifOrgOnceMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps org lookup failures retryable instead of reporting a missing org', async () => {
+    getDrizzleClientMock.mockReturnValue(createDrizzleStub({ failTables: ['orgs'], kind: 'write-client' }))
+    const { sendNotifToOrgMembersOnceWithResult } = await import('../supabase/functions/_backend/utils/org_email_notifications.ts')
+
+    await expect(sendNotifToOrgMembersOnceWithResult(
+      createContext(),
+      'device:downgrade_blocked',
+      'device_error',
+      { app_id: 'com.test.app' },
+      'org-123',
+      'com.test.app',
+      {} as any,
+    )).resolves.toBe('failed')
+    expect(claimNotifOrgOnceMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps org claim write failures retryable and reports duplicate claims as terminal', async () => {
+    hasNotifOrgClaimMock
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true)
+    const { sendNotifToOrgMembersOnceWithResult } = await import('../supabase/functions/_backend/utils/org_email_notifications.ts')
+    const send = () => sendNotifToOrgMembersOnceWithResult(
+      createContext(),
+      'device:downgrade_blocked',
+      'device_error',
+      { app_id: 'com.test.app' },
+      'org-123',
+      'com.test.app',
+      createDrizzleStub(),
+    )
+
+    claimNotifOrgOnceMock.mockResolvedValue('failed')
+    await expect(send()).resolves.toBe('failed')
+
+    hasNotifOrgClaimMock
+      .mockReset()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true)
+    claimNotifOrgOnceMock.mockResolvedValue(false)
+    await expect(send()).resolves.toBe('already_claimed')
   })
 
   it('fails closed when the org-level claim lookup errors', async () => {

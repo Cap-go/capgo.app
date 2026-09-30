@@ -4,7 +4,7 @@ import { and, eq, inArray } from 'drizzle-orm'
 import { isBentoConfigured, trackBentoEvent } from './bento.ts'
 import { CacheHelper } from './cache.ts'
 import { cloudlog } from './logging.ts'
-import { claimNotifOrgOnce, hasNotifOrgClaim, sendNotifOrg, sendNotifOrgOnce } from './notifications.ts'
+import { claimNotifOrgOnceWithResult, hasNotifOrgClaim, sendNotifOrg, sendNotifOrgOnce } from './notifications.ts'
 import { closeClient, getDrizzleClient, getPgClient, logPgError } from './pg.ts'
 import * as schema from './postgres_schema.ts'
 import { logSkippedSupabaseWrite, shouldQueuePluginNotifications, shouldSkipSupabaseNotificationWrites } from './supabase_write_guard.ts'
@@ -275,7 +275,7 @@ async function getOrgInfoWithClient(
   c: Context,
   orgId: string,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
-): Promise<OrgWithPreferences | null> {
+): Promise<{ org: OrgWithPreferences | null, lookupFailed: boolean }> {
   try {
     const org = await drizzleClient
       .select({
@@ -289,17 +289,21 @@ async function getOrgInfoWithClient(
 
     if (!org) {
       cloudlog({ requestId: c.get('requestId'), message: 'getOrgInfo not found', orgId })
-      return null
+      return { org: null, lookupFailed: false }
     }
 
     return {
-      management_email: org.management_email,
-      email_preferences: (org.email_preferences as EmailPreferences | null) ?? {},
+      org: {
+        management_email: org.management_email,
+        email_preferences: (org.email_preferences as EmailPreferences | null) ?? {},
+      },
+      lookupFailed: false,
     }
   }
   catch (e: unknown) {
     logPgError(c, 'getOrgInfo', e)
-    return null
+    // A failed query is not a missing org: callers must keep it retryable.
+    return { org: null, lookupFailed: true }
   }
 }
 
@@ -395,9 +399,9 @@ async function getAllEligibleEmails(
   audience: NotificationAudience = 'admins',
 ): Promise<{ adminEmails: string[], managementEmail: string | null, org: OrgWithPreferences | null, resolutionFailed: boolean }> {
   // Get org info
-  const org = await getOrgInfoWithClient(c, orgId, drizzleClient)
+  const { org, lookupFailed } = await getOrgInfoWithClient(c, orgId, drizzleClient)
   if (!org) {
-    return { adminEmails: [], managementEmail: null, org: null, resolutionFailed: false }
+    return { adminEmails: [], managementEmail: null, org: null, resolutionFailed: lookupFailed }
   }
 
   // Get eligible admin emails
@@ -690,11 +694,11 @@ export async function sendNotifToOrgMembersOnceWithResult(
     }
 
     const { recipients, resolutionFailed } = await getPreparedEligibleEmailTargets(c, orgId, preferenceKey, writeClient, audience)
-    if (!recipients) {
+    if (!recipients && !resolutionFailed) {
       cloudlog({ requestId: c.get('requestId'), message: 'sendNotifToOrgMembersOnce: org not found', orgId })
       return 'org_not_found'
     }
-    if (resolutionFailed) {
+    if (!recipients || resolutionFailed) {
       cloudlog({
         requestId: c.get('requestId'),
         message: 'sendNotifToOrgMembersOnce: recipient resolution failed',
@@ -715,8 +719,8 @@ export async function sendNotifToOrgMembersOnceWithResult(
         orgId,
       })
       // Claim anyway so once-dedup (SQL + retries) does not re-queue forever.
-      await claimNotifOrgOnce(c, eventName, orgId, uniqId, writeClient)
-      return 'no_recipients'
+      const claim = await claimNotifOrgOnceWithResult(c, eventName, orgId, uniqId, writeClient)
+      return claim === 'failed' ? 'failed' : 'no_recipients'
     }
 
     const recipientEmails = [primaryEmail, ...additionalEmails]
@@ -775,7 +779,10 @@ export async function sendNotifToOrgMembersOnceWithResult(
     if (unresolvedResults.length > 0)
       return 'failed'
 
-    const firstOrgSend = await claimNotifOrgOnce(c, eventName, orgId, uniqId, writeClient)
+    const orgClaim = await claimNotifOrgOnceWithResult(c, eventName, orgId, uniqId, writeClient)
+    if (orgClaim === 'failed')
+      return 'failed'
+    const firstOrgSend = orgClaim === 'claimed'
 
     cloudlog({
       requestId: c.get('requestId'),

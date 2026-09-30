@@ -162,7 +162,29 @@ const ALIASED_SOURCE_COLUMN = /\b(blob\d+|double\d+|index\d+|timestamp)\s+AS\s+(
 // Analytics Engine resolves ORDER BY against the projected columns only: once
 // `blob2 AS action` is selected, `ORDER BY blob2` fails with
 // "unable to find type of column".
-function ordersByAliasedSourceColumn(sql: string): boolean {
+function stripSqlCommentsAndStrings(sql: string): string {
+  let out = ''
+  let i = 0
+  while (i < sql.length) {
+    if (sql[i] === "'") {
+      i = skipSqlQuote(sql, i)
+      out += "''"
+      continue
+    }
+    const afterComment = skipSqlComment(sql, i)
+    if (afterComment !== i) {
+      i = afterComment
+      out += ' '
+      continue
+    }
+    out += sql[i]
+    i++
+  }
+  return out
+}
+
+function ordersByAliasedSourceColumn(rawSql: string): boolean {
+  const sql = stripSqlCommentsAndStrings(rawSql)
   const aliasedColumns = new Set<string>()
   for (const [, column, alias] of sql.matchAll(ALIASED_SOURCE_COLUMN)) {
     if (column!.toLowerCase() !== alias!.toLowerCase())
