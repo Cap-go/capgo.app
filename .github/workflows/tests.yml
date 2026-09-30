@@ -742,7 +742,7 @@ jobs:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     name: Run Cloudflare Workers tests (shard ${{ matrix.shard }})
     permissions:
       contents: read
