@@ -13,6 +13,7 @@ import { isCanonicalAppVersionR2Path } from '../utils/app_version_r2_path.ts'
 import { getPath, s3 } from '../utils/s3.ts'
 import { createStatsMeta } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
+import { sendEventToTracking } from '../utils/tracking.ts'
 
 /**
  * Resolves `owner_org` for an app version row.
@@ -257,12 +258,29 @@ async function handleManifest(c: Context, record: Database['public']['Tables']['
     ? `orgs/${ownerOrg}/apps/${record.app_id}/`
     : null
 
-  await persistVersionManifestEntries(
+  const { inserted, alreadyPresent } = await persistVersionManifestEntries(
     c,
     { id: record.id, app_id: record.app_id },
     manifestEntries,
     { clearAppVersionsManifest: true, s3PathPrefix },
   )
+
+  if (alreadyPresent || inserted === 0)
+    return
+
+  await sendEventToTracking(c, {
+    channel: 'bundle',
+    event: 'Legacy Bundle Manifest Migrated',
+    user_id: record.user_id ?? undefined,
+    ...(ownerOrg ? { groups: { organization: ownerOrg } } : {}),
+    nonPersonTags: {
+      $insert_id: `legacy-manifest:${record.id}`,
+      app_id: record.app_id,
+      cli_version: record.cli_version ?? 'unknown',
+      entry_count: inserted,
+      version_id: record.id,
+    },
+  })
 }
 
 /**
@@ -595,6 +613,7 @@ app.post('/', middlewareAPISecret, triggerValidator('app_versions', 'UPDATE'), a
 
 export const onVersionUpdateTestUtils = {
   getDeletedVersionAction,
+  handleManifest,
   deleteManifest,
   unlinkChannelsFromDeletedVersion,
 }
