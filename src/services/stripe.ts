@@ -19,6 +19,7 @@ async function presentActionSheetOpen(url: string) {
       },
       {
         text: t('continue'),
+        role: 'primary',
         id: 'continue-button',
         handler: async () => {
           window.open(url, '_blank')

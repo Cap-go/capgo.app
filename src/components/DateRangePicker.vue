@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { DateRangePreset, DateRangePresetGroupKey, RollingDateRangePreset } from '~/services/dateRange'
 import { VueDatePicker } from '@vuepic/vue-datepicker'
-import { onClickOutside, onKeyStroke, useMediaQuery, useMutationObserver } from '@vueuse/core'
+import { onClickOutside, onKeyStroke, useMutationObserver } from '@vueuse/core'
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import CalendarDaysIcon from '~icons/heroicons/calendar-days'
@@ -36,7 +36,6 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const isWide = useMediaQuery('(min-width: 768px)')
 const baseId = useId()
 const triggerId = `${baseId}-trigger`
 const popoverId = `${baseId}-popover`
@@ -110,12 +109,6 @@ const boundFields = computed(() => [
   { id: 'end', label: t('end'), value: pickerRange.value?.[1] },
 ])
 
-const multiCalendarConfig = computed(() => ({
-  count: isWide.value ? 2 : 1,
-  static: true,
-  solo: false,
-}))
-
 const triggerLabel = computed(() => {
   const preset = allPresets.value.find(p => p.mode === props.mode)
   if (preset && props.mode !== 'custom')
@@ -154,9 +147,17 @@ function updatePopoverPosition() {
   if (!anchor)
     return
   const rect = anchor.getBoundingClientRect()
+  const margin = 12
+  const width = popoverRef.value?.offsetWidth || Math.min(552, window.innerWidth - margin * 2)
+  const height = popoverRef.value?.offsetHeight || 0
+  // Right-align with the trigger, but never spill past either viewport edge.
+  const left = Math.min(Math.max(margin, rect.right - width), window.innerWidth - width - margin)
+  let top = rect.bottom + 8
+  if (height && top + height > window.innerHeight - margin)
+    top = Math.max(margin, Math.min(rect.top - height - 8, window.innerHeight - height - margin))
   popoverStyle.value = {
-    top: `${Math.round(rect.bottom + 8)}px`,
-    right: `${Math.round(window.innerWidth - rect.right)}px`,
+    top: `${Math.round(top)}px`,
+    left: `${Math.round(Math.max(margin, left))}px`,
   }
 }
 
@@ -345,17 +346,17 @@ function presetButtonClass(active: boolean, disabled: boolean) {
         ref="popoverRef"
         open
         :aria-label="`${t('date-range')}: ${triggerLabel}`"
-        class="date-range-popover fixed z-[100] m-0 w-[min(48rem,calc(100vw-1.5rem))] overflow-hidden rounded-lg border p-0"
+        class="date-range-popover fixed z-[100] m-0 w-[min(34.5rem,calc(100vw-1.5rem))] overflow-hidden rounded-xl border p-0"
         :data-capgo-surface="isDark ? 'dark' : 'light'"
         :style="popoverStyle"
       >
         <div class="flex flex-col md:flex-row">
-          <div class="date-range-sidebar flex w-full shrink-0 flex-col border-b md:w-44 md:border-b-0 md:border-r">
-            <div class="max-h-64 overflow-y-auto p-2 md:max-h-[22.5rem]">
+          <div class="date-range-sidebar flex w-full shrink-0 flex-col border-b md:w-36 md:border-b-0 md:border-r">
+            <div class="max-h-56 overflow-y-auto overscroll-contain p-1.5 md:max-h-none">
               <template v-for="(group, groupIndex) in presetGroups" :key="group.key">
                 <div
                   v-if="groupIndex > 0"
-                  class="date-range-divider my-1.5 border-t"
+                  class="date-range-divider mx-1 my-0.5 border-t"
                   aria-hidden="true"
                 />
                 <div class="flex flex-col gap-0.5">
@@ -363,7 +364,7 @@ function presetButtonClass(active: boolean, disabled: boolean) {
                     v-for="preset in group.items"
                     :key="preset.mode"
                     type="button"
-                    class="rounded-md px-3 py-1.5 text-left text-sm whitespace-nowrap transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500/40"
+                    class="flex h-[26px] items-center rounded-md px-2.5 text-left text-[13px] whitespace-nowrap transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500/40"
                     :class="presetButtonClass(draftMode === preset.mode, preset.disabled)"
                     :aria-pressed="draftMode === preset.mode"
                     :disabled="preset.disabled"
@@ -375,12 +376,12 @@ function presetButtonClass(active: boolean, disabled: boolean) {
               </template>
 
               <div
-                class="date-range-divider my-1.5 border-t"
+                class="date-range-divider mx-1 my-0.5 border-t"
                 aria-hidden="true"
               />
               <button
                 type="button"
-                class="w-full cursor-pointer rounded-md px-3 py-1.5 text-left text-sm whitespace-nowrap transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500/40"
+                class="flex h-[26px] w-full cursor-pointer items-center rounded-md px-2.5 text-left text-[13px] whitespace-nowrap transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500/40"
                 :class="presetButtonClass(draftMode === 'custom', false)"
                 :aria-pressed="draftMode === 'custom'"
                 @click="draftMode = 'custom'"
@@ -396,10 +397,8 @@ function presetButtonClass(active: boolean, disabled: boolean) {
               :model-value="pickerRange"
               inline
               range
-              :multi-calendars="multiCalendarConfig"
-              hide-month-year-select
-              :formats="{ month: 'MMM yyyy', year: 'yyyy' }"
-              :time-config="{ enableTimePicker: true, timePickerInline: false }"
+              :formats="{ month: 'MMMM', year: 'yyyy' }"
+              :time-config="{ enableTimePicker: true, timePickerInline: true }"
               :dark="isDark"
               :min-date="minDate"
               :max-date="effectiveMaxDate"
@@ -409,29 +408,28 @@ function presetButtonClass(active: boolean, disabled: boolean) {
           </div>
         </div>
 
-        <div class="date-range-footer flex flex-col gap-3 border-t px-3 py-3 sm:flex-row sm:items-end sm:justify-between sm:px-4">
-          <div class="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
-            <div v-for="field in boundFields" :key="field.id">
-              <div
+        <div class="date-range-footer flex flex-col gap-2 border-t px-3 py-2.5 sm:flex-row sm:items-center">
+          <div class="grid min-w-0 flex-1 grid-cols-1 gap-2 sm:grid-cols-2">
+            <div
+              v-for="field in boundFields"
+              :key="field.id"
+              class="date-range-field flex h-9 min-w-0 items-center gap-2 rounded-lg border px-2.5"
+              :aria-labelledby="`${baseId}-${field.id}-label`"
+            >
+              <span
                 :id="`${baseId}-${field.id}-label`"
-                class="date-range-field-label mb-1 text-[11px] font-medium tracking-wide uppercase"
+                class="date-range-field-label shrink-0 text-[11px] font-semibold tracking-wide uppercase"
               >
                 {{ field.label }}
-              </div>
-              <div
-                class="date-range-field flex h-9 items-center gap-2 rounded-md border px-2.5"
-                :aria-labelledby="`${baseId}-${field.id}-label`"
-              >
-                <CalendarDaysIcon class="date-range-field-icon h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                <span class="date-range-field-value truncate font-mono text-[13px] tabular-nums">
-                  {{ field.value instanceof Date ? formatLocalDateTime(field.value) : '—' }}
-                </span>
-              </div>
+              </span>
+              <span class="date-range-field-value truncate text-[13px] tabular-nums">
+                {{ field.value instanceof Date ? formatLocalDateTime(field.value) : '—' }}
+              </span>
             </div>
           </div>
           <button
             type="button"
-            class="inline-flex h-9 min-h-9 cursor-pointer items-center justify-center rounded-md bg-azure-500 px-4 text-sm font-semibold text-white transition-colors duration-150 hover:bg-azure-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500/50 disabled:cursor-not-allowed disabled:opacity-40"
+            class="inline-flex h-9 min-h-9 cursor-pointer items-center justify-center rounded-lg bg-azure-500 px-4 text-sm font-semibold text-white transition-colors duration-150 hover:bg-azure-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500/50 disabled:cursor-not-allowed disabled:opacity-40"
             :disabled="!canApply"
             @click="apply"
           >
@@ -456,8 +454,8 @@ function presetButtonClass(active: boolean, disabled: boolean) {
   --drp-text-subtle: #94a3b8;
   --drp-preset: #475569;
   --drp-preset-hover: #f1f5f9;
-  --drp-preset-active-bg: #0f172a;
-  --drp-preset-active-text: #ffffff;
+  --drp-preset-active-bg: rgb(17 158 255 / 0.1);
+  --drp-preset-active-text: #0369a1;
   --drp-field-bg: #ffffff;
   --drp-field-border: #e2e8f0;
   --drp-shadow: 0 12px 40px -12px rgb(15 23 42 / 0.35);
@@ -473,8 +471,8 @@ function presetButtonClass(active: boolean, disabled: boolean) {
 
 .date-range-trigger[data-capgo-surface='dark'],
 .date-range-popover[data-capgo-surface='dark'] {
-  --drp-bg: #0b1220;
-  --drp-bg-muted: #0b1220;
+  --drp-bg: #111827;
+  --drp-bg-muted: #111827;
   --drp-border: #334155;
   --drp-divider: #1e293b;
   --drp-text: #f8fafc;
@@ -482,9 +480,9 @@ function presetButtonClass(active: boolean, disabled: boolean) {
   --drp-text-subtle: #94a3b8;
   --drp-preset: #e2e8f0;
   --drp-preset-hover: #1e293b;
-  --drp-preset-active-bg: #f8fafc;
-  --drp-preset-active-text: #0f172a;
-  --drp-field-bg: #0b1220;
+  --drp-preset-active-bg: rgb(17 158 255 / 0.2);
+  --drp-preset-active-text: #7dd3fc;
+  --drp-field-bg: #0f172a;
   --drp-field-border: #475569;
   --drp-shadow: 0 16px 48px -12px rgb(0 0 0 / 0.65);
   --drp-cal-text: #f1f5f9;
@@ -494,7 +492,7 @@ function presetButtonClass(active: boolean, disabled: boolean) {
   --drp-cal-icon: #cbd5e1;
   --drp-cal-between: rgb(17 158 255 / 0.28);
   --drp-cal-between-text: #f8fafc;
-  --drp-cal-input-bg: #0b1220;
+  --drp-cal-input-bg: #0f172a;
 }
 
 .date-range-trigger {
@@ -647,7 +645,7 @@ function presetButtonClass(active: boolean, disabled: boolean) {
   /* Spacing handled by our divider; library gap would overflow the pane. */
   --dp-multi-calendars-spacing: 0;
   --dp-row-margin: 0;
-  --dp-cell-size: 34px;
+  --dp-cell-size: 38px;
   --dp-cell-padding: 2px;
   --dp-month-year-row-height: 36px;
   --dp-month-year-row-button-size: 32px;
@@ -774,6 +772,57 @@ function presetButtonClass(active: boolean, disabled: boolean) {
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
+}
+
+/* Center the single month in its pane instead of hugging the left edge. */
+.date-range-calendar :deep(.dp--main.dp--flex-display) {
+  justify-content: center;
+}
+
+/* Keep the weekday row tight against the first week. */
+.date-range-calendar :deep(.dp--calendar-header),
+.date-range-calendar :deep(.dp__calendar_header) {
+  height: auto !important;
+  padding-bottom: 0.25rem !important;
+}
+
+.date-range-calendar :deep(.dp--calendar-header-item),
+.date-range-calendar :deep(.dp__calendar_header_item) {
+  height: auto !important;
+  padding: 0.25rem 0 !important;
+}
+
+/* Inline start/end time: two compact bordered fields under the calendar. */
+.date-range-calendar :deep(.dp--time-picker-inline-container) {
+  justify-content: center !important;
+  gap: 0.75rem;
+  margin-top: 0.5rem !important;
+  padding-top: 0.5rem !important;
+  border-top: 1px solid var(--drp-divider) !important;
+}
+
+.date-range-calendar :deep(.dp--time-picker-inline-container > .dp--flex) {
+  gap: 0.75rem;
+  justify-content: center;
+  width: 100%;
+}
+
+.date-range-calendar :deep(.dp--time-input) {
+  border: 1px solid var(--drp-field-border);
+  border-radius: 0.5rem;
+  background: var(--drp-field-bg);
+  padding: 0 0.375rem;
+}
+
+.date-range-calendar :deep(.dp--time-display) {
+  background: transparent !important;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  border-radius: 0.375rem;
+}
+
+.date-range-calendar :deep(.dp--tp-inline-btn-bar) {
+  background-color: var(--drp-text-subtle) !important;
 }
 
 @media (prefers-reduced-motion: reduce) {

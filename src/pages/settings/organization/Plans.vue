@@ -294,6 +294,7 @@ async function redirectWhenNoOrg() {
     buttons: [
       {
         text: t('ok'),
+        role: 'primary',
       },
     ],
   })
@@ -355,6 +356,7 @@ watch(currentOrganization, async (newOrg, prevOrg) => {
         buttons: [
           {
             text: t('ok'),
+            role: 'primary',
           },
         ],
       })
@@ -421,6 +423,7 @@ watchEffect(async (onCleanup) => {
             buttons: [
               {
                 text: t('ok'),
+                role: 'primary',
               },
             ],
           })
