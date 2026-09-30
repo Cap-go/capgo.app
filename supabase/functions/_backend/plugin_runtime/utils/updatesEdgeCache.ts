@@ -40,8 +40,14 @@ interface CachedValue<T> {
  * Share of /updates requests served through the edge cache, in basis points
  * (0-10000). `UPDATES_EDGE_CACHE` accepts `off`, `on`, or a percentage such
  * as `1%`, `0.5` or `25` for a progressive rollout.
+ *
+ * Safety interlock: without `CF_CACHE_PURGE_ZONE_IDS` on this worker the
+ * purge path is not set up, so the cache stays off (entries would otherwise
+ * only expire with the TTL).
  */
 export function getUpdatesEdgeCacheBps(c: Context) {
+  if (!getEnv(c, 'CF_CACHE_PURGE_ZONE_IDS').trim() && !getEnv(c, 'UPDATES_CACHE_LOCAL_PURGE_URL').trim())
+    return 0
   const raw = getEnv(c, 'UPDATES_EDGE_CACHE').trim().toLowerCase()
   if (raw === 'on')
     return 10_000

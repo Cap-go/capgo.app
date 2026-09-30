@@ -33,6 +33,7 @@ function stubCaches() {
 describe('updates edge cache', () => {
   beforeEach(() => {
     vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
   })
 
   afterEach(() => {
@@ -77,6 +78,17 @@ describe('updates edge cache', () => {
     vi.stubEnv('UPDATES_EDGE_CACHE', '1%')
     // Any share turns tagging on so purges also clear the non-sampled path.
     expect(isUpdatesEdgeCacheEnabled(c)).toBe(true)
+  })
+
+  it('stays off without a purge target, whatever UPDATES_EDGE_CACHE says', () => {
+    const c = makeContext()
+    vi.stubEnv('UPDATES_EDGE_CACHE', 'on')
+    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', '')
+    expect(getUpdatesEdgeCacheBps(c)).toBe(0)
+    expect(isUpdatesEdgeCacheEnabled(c)).toBe(false)
+    expect(shouldUseUpdatesEdgeCache(makeContext(), 'com.example.app', 'device-1')).toBe(false)
+    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a,zone-b')
+    expect(getUpdatesEdgeCacheBps(c)).toBe(10_000)
   })
 
   it('samples a stable ~1% of devices and remembers the choice per request', () => {
