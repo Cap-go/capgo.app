@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useId } from 'vue'
+
 // Animated Capgo mark: a light traces the diamond while the inner mark breathes.
 // Keep the markup in sync with the boot loader in index.html.
 withDefaults(defineProps<{
@@ -7,7 +9,8 @@ withDefaults(defineProps<{
   size: 'w-16 h-16',
 })
 
-const uid = `capgo-loader-${Math.random().toString(36).slice(2, 8)}`
+// Unique per instance so several loaders on one page keep their own clip path.
+const uid = `capgo-loader-${useId().replace(/[^\w-]/g, '')}`
 </script>
 
 <template>

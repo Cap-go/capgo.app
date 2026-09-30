@@ -348,7 +348,15 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
 
 const liveChannels = computed(() => {
   const versionId = version.value?.id
-  return versionId == null ? [] : channels.value.filter(c => c.version === versionId)
+  if (versionId == null)
+    return []
+  // A bundle is live on a channel when it is the stable bundle there or the
+  // target of a rollout that is currently serving devices.
+  return channels.value.filter(c => c.version === versionId
+    || (c.rollout_version === versionId
+      && !!c.rollout_enabled
+      && !c.rollout_paused_at
+      && (c.rollout_percentage_bps ?? 0) > 0))
 })
 
 async function openChannel(selChannel: Database['public']['Tables']['channels']['Row']) {

@@ -37,6 +37,7 @@ watch(() => props.activeTab, revealActiveTab)
 // Fade the trailing edge while more tabs sit off-screen, so the row reads as scrollable.
 const { arrivedState } = useScroll(primaryList)
 const { width: primaryListWidth } = useElementSize(primaryList)
+watch(primaryListWidth, revealActiveTab)
 const primaryOverflowClass = computed(() => {
   const list = primaryList.value
   if (!primaryListWidth.value || !props.noWrap || !list || arrivedState.right || list.scrollWidth <= list.clientWidth)
@@ -128,7 +129,7 @@ const labelClass = 'md:block text-xs md:text-sm font-medium whitespace-nowrap tr
             @click="emit('update:secondaryActiveTab', tab.key)"
           >
             <component :is="tab.icon" :class="iconClass" />
-            <span :class="[labelClass, secondaryActiveTab === tab.key ? 'block' : 'hidden']">{{ t(tab.label) }}</span>
+            <span :class="[labelClass, secondaryActiveTab === tab.key || !tab.icon ? 'block' : 'hidden']">{{ t(tab.label) }}</span>
             <span v-if="tab.badge" class="hidden px-1.5 py-0.5 text-[10px] font-semibold uppercase rounded border md:inline border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t(tab.badge) }}</span>
           </button>
         </li>
@@ -144,7 +145,7 @@ const labelClass = 'md:block text-xs md:text-sm font-medium whitespace-nowrap tr
             @click="emit('update:tertiaryActiveTab', tab.key)"
           >
             <component :is="tab.icon" :class="iconClass" />
-            <span :class="[labelClass, tertiaryActiveTab === tab.key ? 'block' : 'hidden']">{{ t(tab.label) }}</span>
+            <span :class="[labelClass, tertiaryActiveTab === tab.key || !tab.icon ? 'block' : 'hidden']">{{ t(tab.label) }}</span>
             <span v-if="tab.badge" class="hidden px-1.5 py-0.5 text-[10px] font-semibold uppercase rounded border md:inline border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t(tab.badge) }}</span>
           </button>
         </li>
