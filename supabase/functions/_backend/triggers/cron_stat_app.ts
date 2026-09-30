@@ -420,7 +420,9 @@ app.post('/', middlewareAPISecret, async (c) => {
     mau = mau.slice(-1)
     bandwidth = bandwidth.slice(-1)
     storage = storage.slice(-1)
-    versionUsage = versionUsage.slice(-1)
+    // version usage has one row per (date, version): keep every version of the last day
+    const lastVersionDate = versionUsage.at(-1)?.date
+    versionUsage = versionUsage.filter(v => v.date === lastVersionDate)
   }
 
   // Handle backwards compatibility: old Cloudflare data has numeric version_id in blob2,
@@ -431,12 +433,26 @@ app.post('/', middlewareAPISecret, async (c) => {
 
   let versionIdToNameMap: Record<number, string> = {}
   if (versionNamesToResolve.length > 0) {
-    const { data: versions } = await runSupabaseResultWithRetry<VersionNameRow[]>(c, 'resolve_version_names', async () => await supabase
-      .from('app_versions')
-      .select('id, name')
-      .in('id', versionNamesToResolve))
+    // Only resolve ids of this app's bundles, and never rewrite a value that is also
+    // a real bundle name of this app (bundles can be named "123").
+    const appId = body.appId
+    const [{ data: versions }, { data: numericNamedVersions }] = await Promise.all([
+      runSupabaseResultWithRetry<VersionNameRow[]>(c, 'resolve_version_names', async () => await supabase
+        .from('app_versions')
+        .select('id, name')
+        .eq('app_id', appId)
+        .in('id', versionNamesToResolve)),
+      runSupabaseResultWithRetry<VersionNameRow[]>(c, 'resolve_numeric_version_names', async () => await supabase
+        .from('app_versions')
+        .select('id, name')
+        .eq('app_id', appId)
+        .in('name', versionNamesToResolve.map(String))),
+    ])
+    const realNumericNames = new Set((numericNamedVersions ?? []).map(v => v.name))
     if (versions) {
-      versionIdToNameMap = Object.fromEntries(versions.map(v => [v.id, v.name]))
+      versionIdToNameMap = Object.fromEntries(versions
+        .filter(v => !realNumericNames.has(String(v.id)))
+        .map(v => [v.id, v.name]))
     }
   }
 

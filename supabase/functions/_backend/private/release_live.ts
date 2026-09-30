@@ -186,9 +186,9 @@ function computeAdoption(counts: Record<string, number>, versionName: string) {
 function buildSeriesQueryCF(appId: string, versionName: string, startMs: number, endMs: number, bucketMinutes: number) {
   return `SELECT
   toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL '${bucketMinutes}' MINUTE)) AS bucket,
-  sum(if(blob3 = 'get', 1, 0)) AS get,
-  sum(if(blob3 = 'install', 1, 0)) AS install,
-  sum(if(blob3 = 'fail', 1, 0)) AS fail
+  sum(if(blob3 = 'get', _sample_interval, 0)) AS get,
+  sum(if(blob3 = 'install', _sample_interval, 0)) AS install,
+  sum(if(blob3 = 'fail', _sample_interval, 0)) AS fail
 FROM version_usage
 WHERE
   index1 = '${escapeSqlString(appId)}'
@@ -202,7 +202,7 @@ ORDER BY bucket`
 function buildFailuresQueryCF(appId: string, versionName: string, startMs: number, endMs: number) {
   return `SELECT
   blob2 AS action,
-  count() AS count
+  sum(_sample_interval) AS count
 FROM app_log
 WHERE
   index1 = '${escapeSqlString(appId)}'

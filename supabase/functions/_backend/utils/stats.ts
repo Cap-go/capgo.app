@@ -154,7 +154,10 @@ export function createStatsMeta(c: Context, app_id: string, version_id: number, 
 export function readStatsMau(c: Context, app_id: string, start_date: string, end_date: string) {
   if (!c.env.DEVICE_USAGE)
     return readDeviceUsageSB(c, app_id, start_date, end_date)
-  return readDeviceUsageCF(c, app_id, start_date, end_date).then(res => res.map(({ org_id: _org_id, ...rest }) => rest))
+  assertAnalyticsEngineReadConfig(c, 'device usage')
+  // Throw on read errors like bandwidth: an empty result would upsert nothing and
+  // leave billed MAU silently stale instead of letting the cron retry.
+  return readDeviceUsageCF(c, app_id, start_date, end_date, { throwOnError: true }).then(res => res.map(({ org_id: _org_id, ...rest }) => rest))
 }
 
 export function readStatsBandwidth(c: Context, app_id: string, start_date: string, end_date: string) {
