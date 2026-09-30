@@ -9,12 +9,12 @@ import { attachApiKeyGlobalPermissions } from './global_permissions.ts'
 import { ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, filterApiKeysManageableByAuth, getApiKeyBindingOrgIds, getApiKeyManageableOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, selectManageableApiKeyByIdentifier } from './scope.ts'
 
 type ApiKeyRow = Database['public']['Tables']['apikeys']['Row']
-type ApiKeyPublicSelectRow = Pick<ApiKeyRow, 'created_at' | 'expires_at' | 'id' | 'key_hash' | 'name' | 'owner_org_id' | 'rbac_id' | 'updated_at' | 'user_id'>
+type ApiKeyPublicSelectRow = Pick<ApiKeyRow, 'created_at' | 'expires_at' | 'id' | 'key_hash' | 'name' | 'owner_org_id' | 'rbac_id' | 'shared_secret_expires_at' | 'shared_secret_user_id' | 'updated_at' | 'user_id'>
 type ApiKeyPublicRow = Omit<ApiKeyPublicSelectRow, 'key_hash'> & { is_hashed_key: boolean }
 
 const app = honoFactory.createApp()
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const APIKEY_PUBLIC_COLUMNS = 'created_at, expires_at, id, key_hash, name, owner_org_id, rbac_id, updated_at, user_id'
+const APIKEY_PUBLIC_COLUMNS = 'created_at, expires_at, id, key_hash, name, owner_org_id, rbac_id, shared_secret_expires_at, shared_secret_user_id, updated_at, user_id'
 
 function toApiKeyPublicRow(apikey: ApiKeyPublicSelectRow): ApiKeyPublicRow {
   const { key_hash, ...publicApiKey } = apikey

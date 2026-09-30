@@ -20,9 +20,9 @@ const app = honoFactory.createApp()
 type ApiKeyRow = Database['public']['Tables']['apikeys']['Row']
 type ApiKeyUpdateData = Partial<Pick<Database['public']['Tables']['apikeys']['Update'], 'name' | 'expires_at'>>
 type ApiKeyLookupRow = Pick<ApiKeyRow, 'id' | 'rbac_id' | 'expires_at' | 'key' | 'key_hash' | 'user_id' | 'owner_org_id'>
-type ApiKeyPublicSelectRow = Pick<ApiKeyRow, 'created_at' | 'expires_at' | 'id' | 'key_hash' | 'name' | 'owner_org_id' | 'rbac_id' | 'updated_at' | 'user_id'>
+type ApiKeyPublicSelectRow = Pick<ApiKeyRow, 'created_at' | 'expires_at' | 'id' | 'key_hash' | 'name' | 'owner_org_id' | 'rbac_id' | 'shared_secret_expires_at' | 'shared_secret_user_id' | 'updated_at' | 'user_id'>
 type ApiKeyPublicRow = Omit<ApiKeyPublicSelectRow, 'key_hash'> & { is_hashed_key: boolean }
-const APIKEY_PUBLIC_COLUMNS = 'created_at, expires_at, id, key_hash, name, owner_org_id, rbac_id, updated_at, user_id'
+const APIKEY_PUBLIC_COLUMNS = 'created_at, expires_at, id, key_hash, name, owner_org_id, rbac_id, shared_secret_expires_at, shared_secret_user_id, updated_at, user_id'
 
 interface ApiKeyPut {
   id?: string | number

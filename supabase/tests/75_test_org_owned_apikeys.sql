@@ -2,7 +2,7 @@
 -- and attribution-only transfer when the attributed user leaves.
 BEGIN;
 
-SELECT plan(44);
+SELECT plan(46);
 
 SELECT ok(NOT has_function_privilege('anon', 'public.lock_channel_override_orgs()', 'EXECUTE'),
   'anonymous callers cannot directly invoke the override lock trigger');
@@ -394,6 +394,39 @@ DELETE FROM public.groups WHERE id = '75000000-0000-4000-8000-000000000004';
 SELECT is((SELECT count(*)::int FROM public.find_apikey_by_value('shared-key-plain-75000002')), 0,
   'group deletion revokes secrets before cascading away memberships');
 ROLLBACK TO SAVEPOINT shared_key_group_revocation;
+
+-- Removing the member who holds a shared secret notifies the org once.
+SAVEPOINT shared_key_removal_notice;
+UPDATE public.apikeys SET shared_secret_user_id = tests.get_supabase_uid('shared_key_creator') WHERE id = 75000002;
+SELECT is(
+  (
+    SELECT count(*)::int
+    FROM pgmq.q_on_shared_apikey_secret_revoked AS queued
+    WHERE queued.message->'payload'->'record'->>'owner_org_id' = '75000000-0000-4000-8000-000000000001'
+  ),
+  0,
+  'recipient stamping alone does not queue a rotation notice'
+);
+DELETE FROM public.org_users
+WHERE org_id = '75000000-0000-4000-8000-000000000001'
+  AND user_id = tests.get_supabase_uid('shared_key_creator');
+SELECT ok(
+  EXISTS (
+    SELECT 1
+    FROM pgmq.q_on_shared_apikey_secret_revoked AS queued
+    WHERE queued.message->>'function_name' = 'on_shared_apikey_secret_revoked'
+      AND queued.message->'payload'->>'table' = 'apikeys'
+      AND queued.message->'payload'->'record'->>'owner_org_id' = '75000000-0000-4000-8000-000000000001'
+      AND queued.message->'payload'->'record'->'apikeys' @> pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object(
+          'id', 75000002,
+          'previous_recipient_user_id', tests.get_supabase_uid('shared_key_creator')
+        )
+      )
+  ),
+  'removing the secret holder queues a rotated shared key notice for the org'
+);
+ROLLBACK TO SAVEPOINT shared_key_removal_notice;
 
 -- Creator leaves the org: shared key is reassigned, its bindings stay intact
 DELETE FROM public.org_users

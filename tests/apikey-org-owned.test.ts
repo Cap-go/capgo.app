@@ -458,6 +458,22 @@ describe('org-owned (shared) API keys', () => {
 
     const stillWorks = await apiRequest('/organization', { capgkey: sharedKeySecret })
     expect(stillWorks.status).toBe(401)
+
+    // Managers see the key as revoked so the console can offer a regenerate.
+    const listResponse = await apiRequest(`/apikey?owner_org_id=${ORG_ID}`, managerHeaders)
+    expect(listResponse.status).toBe(200)
+    const listed = (await listResponse.json() as Array<ApiKeyResponse & { shared_secret_user_id: string | null }>)
+      .find(key => key.id === sharedKeyId)
+    expect(listed?.shared_secret_user_id).toBeNull()
+
+    // Remaining members are told through the rotation notice queue.
+    const queued = await executeSQL<{ count: number }>(`
+      SELECT count(*)::int AS count
+      FROM pgmq.q_on_shared_apikey_secret_revoked AS queued
+      WHERE queued.message->'payload'->'record'->>'owner_org_id' = $1
+        AND queued.message->'payload'->'record'->'apikeys' @> pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('id', $2::bigint))
+    `, [ORG_ID, sharedKeyId])
+    expect(queued[0]?.count).toBeGreaterThan(0)
   })
 
   it('records shared key changes in the owner org audit log with the real actor', async () => {

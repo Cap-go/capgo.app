@@ -1521,3 +1521,123 @@ $$;
 ALTER FUNCTION public.find_apikey_by_value(text) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.find_apikey_by_value(text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.find_apikey_by_value(text) TO service_role;
+
+-- Tell the org when shared key secrets stop working. Every revocation path
+-- (member removal, role/group/override change, account deletion, key access
+-- change) clears shared_secret_user_id, so one statement-level trigger covers
+-- them all and batches the revoked keys per org into one queue message.
+--
+-- Execution model:
+-- - Where: AFTER UPDATE statement trigger on public.apikeys.
+-- - Frequency: once per UPDATE statement; transition tables hold only the
+--   rows that statement touched, which are bounded by a single user/org or
+--   key lookup in the revocation functions.
+-- - Cardinality: one pgmq.send per org with revoked keys; no table scan.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pgmq.list_queues()
+    WHERE queue_name = 'on_shared_apikey_secret_revoked'
+  ) THEN
+    PERFORM pgmq.create('on_shared_apikey_secret_revoked');
+  END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.queue_shared_apikey_secret_revoked()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_event record;
+BEGIN
+  FOR v_event IN
+    SELECT
+      new_rows.owner_org_id AS org_id,
+      pg_catalog.jsonb_agg(
+        pg_catalog.jsonb_build_object(
+          'id', new_rows.id,
+          'name', new_rows.name,
+          'previous_recipient_user_id', old_rows.shared_secret_user_id
+        )
+        ORDER BY new_rows.id
+      ) AS apikeys
+    FROM new_rows
+    INNER JOIN old_rows ON old_rows.id = new_rows.id
+    WHERE new_rows.owner_org_id IS NOT NULL
+      AND old_rows.shared_secret_user_id IS NOT NULL
+      AND new_rows.shared_secret_user_id IS NULL
+    GROUP BY new_rows.owner_org_id
+  LOOP
+    -- The org and its keys are being deleted; nobody is left to notify.
+    IF public.is_org_delete_cascade(v_event.org_id) THEN
+      CONTINUE;
+    END IF;
+
+    PERFORM pgmq.send(
+      'on_shared_apikey_secret_revoked',
+      pg_catalog.jsonb_build_object(
+        'function_name', 'on_shared_apikey_secret_revoked',
+        'function_type', 'cloudflare',
+        'payload', pg_catalog.jsonb_build_object(
+          'type', 'UPDATE',
+          'table', 'apikeys',
+          'schema', 'public',
+          'old_record', NULL,
+          'record', pg_catalog.jsonb_build_object(
+            'owner_org_id', v_event.org_id,
+            'apikeys', v_event.apikeys
+          )
+        )
+      )
+    );
+  END LOOP;
+
+  RETURN NULL;
+END;
+$$;
+
+ALTER FUNCTION public.queue_shared_apikey_secret_revoked() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.queue_shared_apikey_secret_revoked() FROM PUBLIC, anon, authenticated;
+
+CREATE TRIGGER queue_shared_apikey_secret_revoked
+AFTER UPDATE ON public.apikeys
+REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows
+FOR EACH STATEMENT
+EXECUTE FUNCTION public.queue_shared_apikey_secret_revoked();
+
+DO $$
+DECLARE
+  high_frequency_task_type public.cron_task_type;
+  high_frequency_target jsonb;
+BEGIN
+  SELECT cron.task_type, cron.target::jsonb
+  INTO high_frequency_task_type, high_frequency_target
+  FROM public.cron_tasks AS cron
+  WHERE cron.name = 'high_frequency_queues'
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Required cron task high_frequency_queues is missing';
+  END IF;
+
+  IF high_frequency_task_type IS DISTINCT FROM 'function_queue'::public.cron_task_type THEN
+    RAISE EXCEPTION 'Cron task high_frequency_queues must use task type function_queue';
+  END IF;
+
+  IF pg_catalog.jsonb_typeof(high_frequency_target) IS DISTINCT FROM 'array' THEN
+    RAISE EXCEPTION 'Cron task high_frequency_queues target must be a JSON array';
+  END IF;
+
+  IF NOT (high_frequency_target ? 'on_shared_apikey_secret_revoked') THEN
+    UPDATE public.cron_tasks
+    SET
+      target = (high_frequency_target || '["on_shared_apikey_secret_revoked"]'::jsonb)::text,
+      updated_at = pg_catalog.now()
+    WHERE name = 'high_frequency_queues';
+  END IF;
+END;
+$$;

@@ -7,6 +7,7 @@ import { useDark, useNow } from '@vueuse/core'
 import dayjs from 'dayjs'
 import { computed, h, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconArrowPath from '~icons/heroicons/arrow-path'
 import IconCalendar from '~icons/heroicons/calendar'
@@ -135,7 +136,11 @@ const createAsShared = ref(false)
 const sharedKeyOrgIds = ref(new Set<string>())
 // Form values chosen before sharing was switched on, restored when it is off.
 let preSharingFormState: { createAsHashed: boolean, allowOrgCreation: boolean, selectedOrgs: string[] } | null = null
-const ownershipFilter = ref<'all' | 'personal' | 'shared'>('all')
+// Deep link from the "shared key rotated" email: /apikeys?ownership=shared
+const initialOwnership = useRoute()?.query.ownership
+const ownershipFilter = ref<'all' | 'personal' | 'shared'>(
+  initialOwnership === 'shared' || initialOwnership === 'personal' ? initialOwnership : 'all',
+)
 
 // State for expiration date
 const setExpirationCheckbox = ref(false)
@@ -193,6 +198,16 @@ function isHashedKey(key: ApiKeyRow) {
 
 function isSharedKey(key: Pick<ApiKeyRow, 'owner_org_id'>) {
   return !!key.owner_org_id
+}
+
+// A shared secret stops working when the member it was issued to loses or
+// changes access in the org (or their grant expires). Only a regenerate fixes it.
+function isSharedKeySecretRevoked(key: Pick<ApiKeyRow, 'owner_org_id' | 'shared_secret_user_id' | 'shared_secret_expires_at'>) {
+  if (!key.owner_org_id)
+    return false
+  if (!key.shared_secret_user_id)
+    return true
+  return !!key.shared_secret_expires_at && new Date(key.shared_secret_expires_at).getTime() <= Date.now()
 }
 
 // Shared keys are bound to a single org; edits and creation must stay inside it.
@@ -857,11 +872,27 @@ columns.value = [
         }, t('api-key-personal'))
       }
       const orgName = getOrgNameById(row.owner_org_id!)
-      return h('span', {
+      const sharedBadge = h('span', {
         'class': 'max-w-[12rem] truncate rounded-md border border-violet-200 bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-700 dark:border-violet-500/40 dark:bg-violet-500/15 dark:text-violet-200',
         'title': `${t('api-key-shared-with')} ${orgName}`,
         'data-test': `key-ownership-shared-${row.id}`,
       }, `${t('api-key-shared')} · ${orgName}`)
+      if (!isSharedKeySecretRevoked(row))
+        return sharedBadge
+
+      return h('div', { class: 'flex min-w-0 flex-col items-start gap-1' }, [
+        sharedBadge,
+        h('button', {
+          'type': 'button',
+          'class': 'rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-700 hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-400 dark:border-red-500/40 dark:bg-red-500/15 dark:text-red-200',
+          'title': t('api-key-shared-revoked-description'),
+          'data-test': `key-shared-revoked-${row.id}`,
+          'onClick': (event: MouseEvent) => {
+            event.stopPropagation()
+            regenrateKey(row)
+          },
+        }, t('api-key-shared-revoked-regenerate')),
+      ])
     },
   },
   {
@@ -1462,7 +1493,7 @@ async function regenrateKey(apikey: Database['public']['Tables']['apikeys']['Row
 
   if (error || !data) {
     console.error('Error regenerating API key:', error)
-    toast.error(t('failed-to-regenerate-api-key'))
+    toast.error(await getUserFacingErrorMessage(error, t('failed-to-regenerate-api-key')))
     return
   }
 
@@ -1477,6 +1508,10 @@ async function regenrateKey(apikey: Database['public']['Tables']['apikeys']['Row
 
   if (plainKeyForDisplay)
     await showOneTimeKeyModal(plainKeyForDisplay)
+
+  // The new shared secret is issued to the caller; reload its recipient state.
+  if (apikey.owner_org_id)
+    await getKeys()
 
   toast.success(t('generated-new-apikey'))
 }
