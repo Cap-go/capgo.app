@@ -35,7 +35,9 @@ type BuilderBuildEvidence = Map<string, Array<Pick<BuilderBuildOutcome, 'platfor
 
 function shouldInferAddCode(onboarding: unknown, hasTestUpdateEvidence = false): boolean {
   const current = parseAppOnboarding(onboarding)
-  return hasSupportedOtaTodoList(current)
+  return current.outcome !== 'completed'
+    && current.outcome !== 'skipped'
+    && hasSupportedOtaTodoList(current)
     && current.steps.add_code?.status !== 'done'
     && (current.steps.test_update?.status === 'done' || hasTestUpdateEvidence)
 }
@@ -132,6 +134,9 @@ export async function refreshAppOnboardingTodoBatch(
     const changed: StepEvent[] = []
     const updates: Array<{ app_id: string, onboarding: Record<string, unknown> }> = []
     for (const row of rows) {
+      const current = parseAppOnboarding(row.onboarding)
+      if (current.outcome === 'completed' || current.outcome === 'skipped')
+        continue
       const at = new Date().toISOString()
       const patch = positiveTodoPatch(row, evidence, buildEvidence, at)
       if (!Object.keys(patch.steps ?? {}).length && !Object.keys(patch.builderSteps ?? {}).length)

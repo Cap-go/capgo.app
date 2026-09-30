@@ -50,7 +50,7 @@ describe('queued onboarding todo refresh', () => {
         // worker locks rows. The worker must preserve its timestamp and history.
         await pool.query(`UPDATE public.apps SET onboarding = jsonb_set(onboarding,
           '{setup,steps,run_device}', $2::jsonb, true) WHERE app_id=$1`, [appIds[2], JSON.stringify({ status: 'done', at: oldAt, update_history: [{ status: 'done', at: oldAt }] })])
-        const newlyObserved = appIds.slice(0, 4)
+        const newlyObserved = appIds.slice(0, 5)
         return { channel: new Set(newlyObserved), device: new Set(newlyObserved), bundle: new Set(newlyObserved), update: new Set(newlyObserved), errors: [] }
       })
       const body = { appIds, queuedAt: new Date().toISOString() }
@@ -107,7 +107,7 @@ describe('queued onboarding todo refresh', () => {
       expect(v3Steps.run_device.update_history).toEqual([{ status: 'done', at: oldAt }])
 
       const beforeReplay = (await pool.query('SELECT app_id, onboarding FROM public.apps WHERE app_id=ANY($1::varchar[]) ORDER BY app_id', [appIds])).rows
-      const replayEvidence = appIds.slice(0, 4)
+      const replayEvidence = appIds.slice(0, 5)
       const replay = await refreshAppOnboardingTodoBatch(c, getDrizzleClient(pool), body, { gatherEvidence: async () => ({ channel: new Set(replayEvidence), device: new Set(replayEvidence), bundle: new Set(replayEvidence), update: new Set(replayEvidence), errors: [] }) })
       expect(replay.updated).toBe(0)
       expect((await pool.query('SELECT app_id, onboarding FROM public.apps WHERE app_id=ANY($1::varchar[]) ORDER BY app_id', [appIds])).rows).toEqual(beforeReplay)
