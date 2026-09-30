@@ -154,7 +154,7 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       })
       await page.route('**/rpc/verify_getting_started', route => route.fulfill({ json: onboarding }))
       await page.route('**/private/onboarding_progress', route => route.fulfill({ json: { onboarding, hasChannel: false, checkErrors: [] } }))
-      await page.goto('/app/new?resume=com.demo.app&step=setup')
+      await page.goto('/app/com.demo.app/getting-started')
       await page.getByRole('heading', { name: /Start guided setup|Finish setup in your app/ }).waitFor()
     },
   },

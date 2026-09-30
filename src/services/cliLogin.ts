@@ -186,7 +186,7 @@ export function getCliLoginDestination(
 ): string {
   if (organizationCount !== 1 || apps.length !== 1 || !apps[0].need_onboarding)
     return '/dashboard'
-  return `/app/new?resume=${encodeURIComponent(apps[0].app_id)}`
+  return `/app/${encodeURIComponent(apps[0].app_id)}/getting-started`
 }
 
 function orgPassesStaticChecks(org: CliLoginOrganization): boolean {

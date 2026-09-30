@@ -5,8 +5,10 @@ const onboardingSource = readFileSync(new URL('../src/components/dashboard/AppOn
 const englishMessages = JSON.parse(readFileSync(new URL('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
 describe('app onboarding API key loading state', () => {
-  it.concurrent('does not render the terminal alternative before an organization exists', () => {
-    expect(onboardingSource).toContain('<div v-if="!props.preOrg && appDetailsStep === \'icon\'" class="pt-1">')
+  it.concurrent('keeps the CLI command out of app creation in every flow', () => {
+    // App creation matches onboarding everywhere; the command lives on Getting started.
+    expect(onboardingSource).not.toContain('function showCliCommand()')
+    expect(onboardingSource).not.toContain('isCliCommandVisible')
   })
 
   it.concurrent('replaces every incomplete CLI command with the shared loading treatment', () => {
@@ -47,19 +49,22 @@ describe('app onboarding API key loading state', () => {
     expect(keyLoader).not.toContain('resumeAppId.value')
   })
 
-  it.concurrent('retries API key loading from both CLI entry points', () => {
-    const showCommand = onboardingSource.slice(
-      onboardingSource.indexOf('function showCliCommand()'),
-      onboardingSource.indexOf('async function reportOnboardingPatch('),
+  it.concurrent('retries API key loading when setup resumes on Getting started', () => {
+    // Post-creation setup reopens on Getting started, which resumes the app
+    // through the setup-app-id mount path and retries the key load there.
+    const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
+    const preOrgSetupResume = mountedFlow.slice(
+      mountedFlow.indexOf('if (resumeAppId.value) {'),
+      mountedFlow.indexOf('const resumeResult = await maybeResumeSavedOnboarding()'),
     )
-    const installNavigation = onboardingSource.slice(
-      onboardingSource.indexOf('function goToInstallStep()'),
-      onboardingSource.indexOf('async function openDashboard()'),
+    const existingOrgSetupResume = mountedFlow.slice(
+      mountedFlow.indexOf('const resumed = await loadResumeApp()\n    resumedFlow = resumed'),
+      mountedFlow.indexOf('finally {'),
     )
 
-    expect(showCommand).toContain('startApiKeyLoading()')
-    expect(installNavigation).toContain('startApiKeyLoading()')
-    expect(onboardingSource).toContain('@click="showCliCommand"')
+    expect(preOrgSetupResume).toContain('startApiKeyLoading()')
+    expect(existingOrgSetupResume).toContain('startApiKeyLoading()')
+    expect(onboardingSource).not.toContain('function goToInstallStep()')
   })
 
   it.concurrent('renders ready commands as native DaisyUI buttons', () => {
@@ -99,7 +104,7 @@ describe('app onboarding API key loading state', () => {
 
   it.concurrent('always includes the API key and tracks successful copy actions', () => {
     const copyHandlerStart = onboardingSource.indexOf('async function copyAiInstructions()')
-    const copyHandlerEnd = onboardingSource.indexOf('function goToInstallStep()', copyHandlerStart)
+    const copyHandlerEnd = onboardingSource.indexOf('async function openDashboard()', copyHandlerStart)
     expect(copyHandlerStart).toBeGreaterThanOrEqual(0)
     expect(copyHandlerEnd).toBeGreaterThan(copyHandlerStart)
     const copyHandler = onboardingSource.slice(copyHandlerStart, copyHandlerEnd)

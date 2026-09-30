@@ -382,13 +382,9 @@ async function createNewOrg() {
     return
 
   closeDropdown()
-  await router.push({
-    path: '/onboarding/organization',
-    query: {
-      source: 'org-switcher',
-      to: '/dashboard',
-    },
-  })
+  // Same first-run flow as a user without an organization: goal, app,
+  // organization, then Getting started for the new app.
+  await router.push({ path: '/onboarding/app', query: { new_org: '1' } })
 }
 
 async function openOrganizationSettings(org: Organization, e: MouseEvent) {

@@ -77,7 +77,7 @@ describe('app onboarding welcome', () => {
 
     expect(analyticsSource).toContain(`export type OnboardingAnalyticsStep = 'welcome' | 'intent'`)
     expect(initializeTracking).toContain(`trackedAnalyticsSteps.unshift('welcome')`)
-    expect(initializeTracking).toContain(`progressTracker.viewStep(initialStep)`)
+    expect(initializeTracking).toContain(`progressTracker.viewStep(initialStep, handoffPreviousStep)`)
     expect(continueFromWelcome).toContain('ensurePublishAppQuestionStepTracked()')
     expect(continueFromWelcome).toContain('const nextAnalyticsStep = analyticsStepFor(nextStep)')
     expect(continueFromWelcome).toContain(`completeStep('welcome', { nextStep: nextAnalyticsStep })`)
