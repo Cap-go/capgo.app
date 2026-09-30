@@ -158,6 +158,8 @@ export interface ReadDevicesParams {
   os_version_compare?: VersionCompareFilter
   /** Exact platform filter (`ios` | `android` | `electron`) */
   platform?: Database['public']['Enums']['platform_os']
+  /** Exact default_channel match (channel the device reports via plugin config) */
+  default_channel?: string
   deviceIds?: string[]
   /** Exact custom_id match filter (case-sensitive, already trimmed by callers) */
   customIds?: string[]
