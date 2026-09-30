@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import { getRuntimeKey } from 'hono/adapter'
+import { closeClient, getPgClient } from '../plugin_runtime/utils/pg.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { getDatabaseURL, getPgClient } from '../utils/pg.ts'
 
 export const FILE_READ_TRACKING_QUERY_PARAMS = ['device_id'] as const
 export const DELETED_FILE_CACHE_HEADER = 'x-capgo-file-deleted'
@@ -13,6 +13,9 @@ const FILE_READ_PATH_PREFIXES = [
   '/private/files/read/attachments/',
   '/read/attachments/',
 ] as const
+
+/** Fail-open quickly on primary blips; full zip download must not wait on 10s pool connect. */
+const DELETED_LOOKUP_TIMEOUT_MS = 2000
 
 export function isVersionDeleted(row: { deleted?: boolean | null, deleted_at?: string | Date | null } | null | undefined): boolean {
   if (!row)
@@ -119,18 +122,6 @@ export async function markFileDeletedInCache(fileId: string): Promise<void> {
   }))
 }
 
-let sharedDeletedLookupPool: ReturnType<typeof getPgClient> | null = null
-let sharedDeletedLookupPoolUrl: string | null = null
-
-function getDeletedLookupPgClient(c: Context): ReturnType<typeof getPgClient> {
-  const dbUrl = getDatabaseURL(c, false)
-  if (!sharedDeletedLookupPool || sharedDeletedLookupPoolUrl !== dbUrl) {
-    sharedDeletedLookupPool = getPgClient(c, false)
-    sharedDeletedLookupPoolUrl = dbUrl
-  }
-  return sharedDeletedLookupPool
-}
-
 function buildFileReadCacheRequestsForPath(fileId: string, checksum?: string | null): Request[] {
   const identityParamSets: Array<Record<string, string>> = [{}]
   if (checksum)
@@ -183,17 +174,13 @@ export async function purgeFileReadCache(fileId: string, checksum?: string | nul
   await Promise.all(requests.map(request => cache.delete(request).catch(() => false)))
 }
 
-export async function isAttachmentVersionDeleted(c: Context, fileId: string): Promise<boolean> {
-  if (await hasDeletedFileMarker(fileId))
-    return true
+const attachmentDeletedLookupByRequest = new WeakMap<Context, Map<string, Promise<boolean>>>()
 
-  // app_versions.r2_path only tracks bundle zip objects, not arbitrary attachment uploads.
-  if (!fileId.endsWith('.zip'))
-    return false
-
+async function lookupAttachmentVersionDeletedFromPrimary(c: Context, fileId: string): Promise<boolean> {
+  let pgClient: Awaited<ReturnType<typeof getPgClient>> | undefined
   try {
-    const pgClient = getDeletedLookupPgClient(c)
-    const result = await pgClient.query<{ deleted: boolean | null, deleted_at: string | null }>(
+    pgClient = await getPgClient(c, false)
+    const queryPromise = pgClient.query<{ deleted: boolean | null, deleted_at: string | null }>(
       `
         SELECT deleted, deleted_at
         FROM public.app_versions
@@ -203,6 +190,12 @@ export async function isAttachmentVersionDeleted(c: Context, fileId: string): Pr
       `,
       [fileId],
     )
+    const result = await Promise.race([
+      queryPromise,
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('deleted lookup timeout')), DELETED_LOOKUP_TIMEOUT_MS)
+      }),
+    ])
     return result.rows.length > 0
   }
   catch (error) {
@@ -214,6 +207,36 @@ export async function isAttachmentVersionDeleted(c: Context, fileId: string): Pr
     })
     return false
   }
+  finally {
+    if (pgClient)
+      closeClient(c, pgClient)
+  }
+}
+
+async function resolveAttachmentVersionDeleted(c: Context, fileId: string): Promise<boolean> {
+  if (await hasDeletedFileMarker(fileId))
+    return true
+
+  // app_versions.r2_path only tracks bundle zip objects, not arbitrary attachment uploads.
+  if (!fileId.endsWith('.zip'))
+    return false
+
+  return lookupAttachmentVersionDeletedFromPrimary(c, fileId)
+}
+
+export async function isAttachmentVersionDeleted(c: Context, fileId: string): Promise<boolean> {
+  let perRequest = attachmentDeletedLookupByRequest.get(c)
+  if (!perRequest) {
+    perRequest = new Map()
+    attachmentDeletedLookupByRequest.set(c, perRequest)
+  }
+
+  let pending = perRequest.get(fileId)
+  if (!pending) {
+    pending = resolveAttachmentVersionDeleted(c, fileId)
+    perRequest.set(fileId, pending)
+  }
+  return pending
 }
 
 export const fileReadCacheTestUtils = {
@@ -222,4 +245,5 @@ export const fileReadCacheTestUtils = {
   buildWorkersFileCacheKey,
   getAttachmentFileIdFromReadPath,
   isVersionDeleted,
+  DELETED_LOOKUP_TIMEOUT_MS,
 }
