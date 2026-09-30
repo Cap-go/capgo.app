@@ -129,6 +129,9 @@ const props = defineProps<{
   // Getting started renders the post-creation setup for this app inside the
   // dashboard shell. Creation pages hand off there once the app exists.
   setupAppId?: string
+  // An existing user creating another organization runs the same first-run
+  // flow from the start, ignoring any saved onboarding progress.
+  newOrganization?: boolean
 }>()
 
 const router = useRouter()
@@ -2625,6 +2628,10 @@ onMounted(async () => {
           startApiKeyLoading()
           return
         }
+      }
+      if (props.newOrganization) {
+        applyDefaultPreOrgDetails()
+        return
       }
       // Saved setup already lives on Getting started; go there without
       // replaying the resume dialog or its telemetry on this page.
