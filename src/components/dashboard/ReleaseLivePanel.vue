@@ -356,7 +356,7 @@ watch(() => props.appId, () => {
         <div class="min-w-0">
           <div class="flex flex-wrap items-center gap-2">
             <span class="text-lg font-semibold text-slate-900 dark:text-white">{{ release.version_name }}</span>
-            <span v-if="release.channel_name" class="px-2 py-0.5 text-xs font-medium rounded bg-azure-50 text-azure-700 dark:bg-azure-900/30 dark:text-azure-300">
+            <span v-if="release.channel_name" class="px-2 py-0.5 text-xs font-medium rounded bg-azure-500/10 text-blue-800 dark:bg-azure-900/30 dark:text-azure-300">
               {{ release.channel_name }}
             </span>
             <span v-if="status" class="px-2 py-0.5 text-xs font-semibold rounded" :class="status.class">
