@@ -26686,6 +26686,30 @@ CREATE POLICY "Deny all authenticated on builder_capacity_events" ON "public"."b
 
 
 
+CREATE POLICY "Deny all direct access" ON "public"."app_onboarding" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny all direct access" ON "public"."app_stats_refresh_state" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny all direct access" ON "public"."manifest_per_version" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny all direct access" ON "public"."mcp_oauth_clients" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny all direct access" ON "public"."mcp_oauth_requests" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny all direct access" ON "public"."org_stats_refresh_state" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
 CREATE POLICY "Deny all notification app settings access" ON "public"."notification_app_settings" AS RESTRICTIVE USING (false) WITH CHECK (false);
 
 
