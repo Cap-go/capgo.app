@@ -218,6 +218,28 @@ async function moveObjectToTrash(c: Context, fileId: string) {
   }
 }
 
+// Undo a trash move for an object that gained a new reference while it was
+// being trashed. The trash copy stays and expires with the trash prefix.
+async function restoreObjectFromTrash(c: Context, fileId: string) {
+  const client = initS3(c)
+  const trashPath = getTrashPath(fileId)
+  try {
+    await client.copyObject({ sourceKey: trashPath }, fileId)
+    cloudlog({ requestId: c.get('requestId'), message: 'restored R2 object from trash', fileId, trashPath })
+    return true
+  }
+  catch (error) {
+    if (isMissingObjectError(error)) {
+      // The object was already absent before the trash move: nothing to restore.
+      cloudlog({ requestId: c.get('requestId'), message: 'R2 object missing in trash, nothing to restore', fileId, trashPath })
+      return true
+    }
+
+    cloudlogErr({ requestId: c.get('requestId'), message: 'restore R2 object from trash failed', fileId, trashPath, error: serializeStorageError(error) })
+    return false
+  }
+}
+
 async function deleteObjectsWithPrefix(c: Context, prefix: string): Promise<number> {
   const client = initS3(c)
   let deletedCount = 0
@@ -559,6 +581,7 @@ export const s3 = {
   deleteObject,
   getSizeDiagnostics,
   moveObjectToTrash,
+  restoreObjectFromTrash,
   deleteObjectsWithPrefix,
   checkIfExist,
   getSignedUrl,
