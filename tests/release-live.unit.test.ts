@@ -108,6 +108,19 @@ describe('release live helpers', () => {
     // Only failures are channel scoped: set logs carry no channel.
     expect(query).toContain('(blob2 = \'set\' OR ((blob2 LIKE \'%_fail\' OR blob2 IN (\'insufficient_disk_space\', \'cannotGetBundle\', \'blocked_by_server_url\', \'backend_refusal\')) AND (blob9 = \'7\' OR (blob9 = \'\' AND blob8 = \'prod\'\'uction\'))))')
 
+    // The Postgres fallback must keep the same rules.
+    const sb = releaseLiveTestUtils.FAILED_DEVICES_QUERY_SB
+    expect(sb).toContain('min(date_trunc(\'second\', s.created_at)) FILTER (WHERE s.action <> \'set\') AS first_fail')
+    expect(sb).toContain('max(date_trunc(\'second\', s.created_at)) FILTER (WHERE s.action = \'set\') AS last_set')
+    expect(sb).toContain('count(*) FILTER (WHERE d.last_set >= d.first_fail) AS recovered')
+    expect(sb).toContain('count(*) FILTER (WHERE d.last_set IS NULL OR d.last_set < d.first_fail) AS stuck')
+    expect(sb).toContain('(s.action::text LIKE \'%\\_fail\' OR s.action::text = ANY($6::text[]))')
+    // Channel scope sits inside the failure branch only.
+    expect(sb.indexOf('EXISTS')).toBeGreaterThan(sb.indexOf('ANY($6::text[])'))
+    expect(sb).toContain('s.action = \'set\'\n      OR (')
+    expect(sb).toContain('WHERE d.first_fail IS NOT NULL')
+    expect(releaseLiveTestUtils.EXTRA_FAILURE_ACTIONS).toEqual(['insufficient_disk_space', 'cannotGetBundle', 'blocked_by_server_url', 'backend_refusal'])
+
     expect(releaseLiveTestUtils.toFailedDevices(null)).toBeNull()
     expect(releaseLiveTestUtils.toFailedDevices([])).toEqual({ total: 0, recovered: 0, stuck: 0 })
     expect(releaseLiveTestUtils.toFailedDevices([{ recovered: '8', stuck: 3 }])).toEqual({ total: 11, recovered: 8, stuck: 3 })

@@ -299,6 +299,38 @@ FROM (
 WHERE first_fail < ${NO_FAILURE_TS}`
 }
 
+// Postgres fallback of buildFailedDevicesQueryCF: same failure set, same
+// failure-only channel scope, and whole seconds like Analytics Engine.
+// $1 app, $2 version, $3/$4 window, $5 channel name, $6 EXTRA_FAILURE_ACTIONS.
+const FAILED_DEVICES_QUERY_SB = String.raw`SELECT
+  count(*) FILTER (WHERE d.last_set >= d.first_fail) AS recovered,
+  count(*) FILTER (WHERE d.last_set IS NULL OR d.last_set < d.first_fail) AS stuck
+FROM (
+  SELECT
+    s.device_id,
+    min(date_trunc('second', s.created_at)) FILTER (WHERE s.action <> 'set') AS first_fail,
+    max(date_trunc('second', s.created_at)) FILTER (WHERE s.action = 'set') AS last_set
+  FROM public.stats s
+  WHERE s.app_id = $1
+    AND s.version_name = $2
+    AND s.created_at >= $3::timestamptz
+    AND s.created_at < $4::timestamptz
+    AND (
+      s.action = 'set'
+      OR (
+        (s.action::text LIKE '%\_fail' OR s.action::text = ANY($6::text[]))
+        AND EXISTS (
+          SELECT 1 FROM public.devices dv
+          WHERE dv.app_id = s.app_id
+            AND dv.device_id = s.device_id
+            AND dv.default_channel = $5::text
+        )
+      )
+    )
+  GROUP BY s.device_id
+) d
+WHERE d.first_fail IS NOT NULL`
+
 function toFailedDevices(rows: RawFailedDevicesRow[] | null): ReleaseLiveFailedDevices | null {
   if (!rows)
     return null
@@ -379,34 +411,7 @@ LIMIT ${MAX_FAILURE_ACTIONS}`,
       // Optional breakdown: never fail the whole view on it. Only failures are
       // channel scoped, matching the Analytics Engine query.
       db.query<RawFailedDevicesRow>(
-        String.raw`SELECT
-  count(*) FILTER (WHERE d.last_set >= d.first_fail) AS recovered,
-  count(*) FILTER (WHERE d.last_set IS NULL OR d.last_set < d.first_fail) AS stuck
-FROM (
-  SELECT
-    s.device_id,
-    min(s.created_at) FILTER (WHERE s.action <> 'set') AS first_fail,
-    max(s.created_at) FILTER (WHERE s.action = 'set') AS last_set
-  FROM public.stats s
-  WHERE s.app_id = $1
-    AND s.version_name = $2
-    AND s.created_at >= $3::timestamptz
-    AND s.created_at < $4::timestamptz
-    AND (
-      s.action = 'set'
-      OR (
-        (s.action::text LIKE '%\_fail' OR s.action::text = ANY($6::text[]))
-        AND EXISTS (
-          SELECT 1 FROM public.devices dv
-          WHERE dv.app_id = s.app_id
-            AND dv.device_id = s.device_id
-            AND dv.default_channel = $5::text
-        )
-      )
-    )
-  GROUP BY s.device_id
-) d
-WHERE d.first_fail IS NOT NULL`,
+        FAILED_DEVICES_QUERY_SB,
         [appId, versionName, start, end, channel.name ?? '', EXTRA_FAILURE_ACTIONS],
       ).catch((error) => {
         logPgError(c, 'release_live failed devices', error)
@@ -747,6 +752,8 @@ export const releaseLiveTestUtils = {
   buildSeriesQueryCF,
   buildFailuresQueryCF,
   buildFailedDevicesQueryCF,
+  FAILED_DEVICES_QUERY_SB,
+  EXTRA_FAILURE_ACTIONS,
   toFailedDevices,
   toChannelContext,
 }
