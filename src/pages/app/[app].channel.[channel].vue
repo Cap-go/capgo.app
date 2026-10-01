@@ -1326,7 +1326,7 @@ async function copyCurlCommand() {
                         <span class="ml-1 font-semibold text-slate-900 dark:text-white">{{ channel?.rollout_version_info?.name ?? t('not-configured') }}</span>
                       </p>
                       <button type="button" class="d-btn d-btn-outline d-btn-sm" :disabled="!canPromoteBundle" @click="openSelectRolloutVersion()">
-                        {{ t('update') }}
+                        {{ t('edit') }}
                       </button>
                       <button type="button" class="d-btn d-btn-outline d-btn-sm" :disabled="rolloutPauseDisabled" @click="toggleRolloutPause()">
                         {{ channel.rollout_paused_at ? t('resume') : t('pause') }}
@@ -1419,7 +1419,7 @@ async function copyCurlCommand() {
                         :disabled="rolloutControlsDisabled || (editingRolloutSettings && !rolloutSettingsDraftChanged)"
                         @click="editingRolloutSettings ? applyRolloutSettings() : startEditRolloutSettings()"
                       >
-                        {{ editingRolloutSettings ? t('apply') : t('update') }}
+                        {{ editingRolloutSettings ? t('apply') : t('edit') }}
                       </button>
                     </div>
                   </div>
@@ -1468,7 +1468,7 @@ async function copyCurlCommand() {
                           :disabled="rolloutControlsDisabled"
                           @click="editingAutoPause ? applyAutoPauseSettings() : startEditAutoPause()"
                         >
-                          {{ editingAutoPause ? t('apply') : t('update') }}
+                          {{ editingAutoPause ? t('apply') : t('edit') }}
                         </button>
                       </template>
                     </div>
