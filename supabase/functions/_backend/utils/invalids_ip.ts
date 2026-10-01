@@ -34,7 +34,21 @@ type CacheableInvalidIpInfo = InvalidIpInfo & {
 }
 
 const inMemoryInvalidIpCache = new Map<string, CacheableInvalidIpInfo>()
-const inflightLookups = new Map<string, Promise<InvalidIpInfo>>()
+// Dedupe in-flight lookups only within one request. A promise whose I/O
+// belongs to another request never settles for the waiter once its owner
+// finishes, and Workers then cancels the waiter as "code had hung".
+const inflightLookupsByRequest = new WeakMap<Context, Map<string, Promise<InvalidIpInfo>>>()
+
+function getInflightLookups(context: Context | undefined) {
+  if (!context)
+    return null
+  let lookups = inflightLookupsByRequest.get(context)
+  if (!lookups) {
+    lookups = new Map()
+    inflightLookupsByRequest.set(context, lookups)
+  }
+  return lookups
+}
 
 function normalize(value: string | undefined) {
   return (value ?? '').toLowerCase()
@@ -224,7 +238,8 @@ async function fetchProviderIpInfo(ip: string, context?: Context) {
 }
 
 function lookupProviderIpInfo(context: Context | undefined, ip: string) {
-  const existing = inflightLookups.get(ip)
+  const inflightLookups = getInflightLookups(context)
+  const existing = inflightLookups?.get(ip)
   if (existing)
     return existing
 
@@ -239,9 +254,9 @@ function lookupProviderIpInfo(context: Context | undefined, ip: string) {
     return result
   })()
 
-  inflightLookups.set(ip, lookup)
+  inflightLookups?.set(ip, lookup)
   void lookup.finally(() => {
-    inflightLookups.delete(ip)
+    inflightLookups?.delete(ip)
   })
 
   return lookup

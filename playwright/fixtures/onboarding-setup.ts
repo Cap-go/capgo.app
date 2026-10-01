@@ -184,7 +184,7 @@ const app = createApp(defineComponent({
         navigationView
           ? h(RouterView)
           : params.get('view') === 'flow'
-            ? h(AppOnboardingFlow, { onboarding: true })
+            ? h(AppOnboardingFlow, { onboarding: true, setupAppId: params.get('resume') ?? undefined })
             : builderComponentView
               ? h(AppOnboardingBuilderChecklist, {
                   appId: preview.appId.value,
@@ -251,7 +251,8 @@ const router = createRouter({
             return () => h(GettingStartedPage)
           },
         }) },
-        { path: '/:pathMatch(.*)*', component: defineComponent({ setup: () => () => h(AppOnboardingFlow, { onboarding: true }) }) },
+        // A resume id renders the setup UI the way Getting started embeds it.
+        { path: '/:pathMatch(.*)*', component: defineComponent({ setup: () => () => h(AppOnboardingFlow, { onboarding: true, setupAppId: params.get('resume') ?? undefined }) }) },
       ]
     : [{ path: '/:pathMatch(.*)*', component: { render: () => null } }],
 })

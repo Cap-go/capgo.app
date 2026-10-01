@@ -51,13 +51,14 @@ const displayNoDataMessage = computed(() => props.noDataMessage ?? t('no-data'))
 
 <template>
   <div
+    data-test="chart-card"
     class="relative col-span-full flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-800/60 min-h-[460px]"
   >
     <!-- Header with title and stats -->
-    <div class="relative overflow-hidden px-5 pt-5">
+    <div data-test="chart-card-header" class="relative overflow-hidden px-5 pt-5">
       <!-- Custom header slot or default header -->
       <div class="flex flex-col gap-4">
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div data-test="chart-card-header-row" class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div class="min-w-0 flex-1">
             <slot name="header">
               <div class="min-w-0">
@@ -68,7 +69,7 @@ const displayNoDataMessage = computed(() => props.noDataMessage ?? t('no-data'))
             </slot>
           </div>
 
-          <div class="flex items-center gap-2 sm:justify-end">
+          <div data-test="chart-card-header-actions" class="flex items-center gap-2 sm:justify-end">
             <div
               v-if="showEvolutionBadge"
               class="inline-flex justify-center items-center rounded-full px-3 py-1 text-xs font-bold text-white shadow-sm"
@@ -92,7 +93,7 @@ const displayNoDataMessage = computed(() => props.noDataMessage ?? t('no-data'))
     </div>
 
     <!-- Chart content area -->
-    <div class="relative flex min-h-0 flex-1 flex-col px-5 pb-5 pt-4">
+    <div data-test="chart-card-content" class="relative flex min-h-0 flex-1 flex-col px-5 pb-5 pt-4">
       <!-- Loading state -->
       <div v-if="isLoading" class="flex h-full items-center justify-center">
         <Spinner size="w-24 h-24" />

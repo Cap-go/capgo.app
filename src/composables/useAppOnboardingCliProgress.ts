@@ -1,4 +1,5 @@
 import type { MaybeRefOrGetter } from 'vue'
+import { FunctionsHttpError } from '@supabase/supabase-js'
 import { computed, onBeforeUnmount, onMounted, ref, toValue, watch } from 'vue'
 import { parseAppOnboarding } from '~/services/appOnboarding'
 import { invokeCapgoApi } from '~/services/capgoApi'
@@ -29,6 +30,7 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
   let generation = 0
   let refreshing = false
   let mounted = false
+  let accessRevoked = false
   let N = 0
 
   function stopPolling() {
@@ -37,7 +39,7 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
   }
 
   function startPolling() {
-    if (pollTimer === undefined && mounted)
+    if (pollTimer === undefined && mounted && !accessRevoked)
       pollTimer = setInterval(() => void refreshProgress(false), 2000)
   }
 
@@ -55,6 +57,18 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
       if (requestedGeneration !== generation || requestedAppId !== toValue(appId))
         return
       refreshError.value = !!error || !!data?.checkErrors?.length
+      // No access to (or no longer existing) app: retrying every 2s can never
+      // succeed, so stop polling until the app changes or a manual refresh works.
+      if (error instanceof FunctionsHttpError && [403, 404].includes(error.context?.status)) {
+        accessRevoked = true
+        stopPolling()
+        return
+      }
+      if (!error && accessRevoked) {
+        accessRevoked = false
+        if (!isTerminal.value)
+          startPolling()
+      }
       if (data) {
         reportedOnboarding.value = parseAppOnboarding(data.onboarding)
         if (typeof data.hasChannel === 'boolean')
@@ -78,6 +92,7 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
   watch(() => toValue(appId), () => {
     generation += 1
     refreshing = false
+    accessRevoked = false
     N = 0
     refreshError.value = false
     hasChannel.value = null

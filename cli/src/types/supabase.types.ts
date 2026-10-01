@@ -3399,6 +3399,14 @@ export type Database = {
     }
     Functions: {
       accept_invitation_to_org: { Args: { org_id: string }; Returns: string }
+      ack_updates_cache_purge: {
+        Args: {
+          p_lease_token: string
+          p_retry_after_seconds?: number
+          p_success: boolean
+        }
+        Returns: undefined
+      }
       acknowledge_compatibility_event: {
         Args: { event_id: number; note: string }
         Returns: undefined
@@ -3417,6 +3425,7 @@ export type Database = {
           p_billing_cycle_end: string
           p_billing_cycle_start: string
           p_details?: Json
+          p_included_amount?: number
           p_metric: Database["public"]["Enums"]["credit_metric_type"]
           p_org_id: string
           p_overage_amount: number
@@ -3433,17 +3442,30 @@ export type Database = {
         }[]
       }
       audit_logs_allowed_orgs: { Args: never; Returns: string[] }
-      calculate_credit_cost: {
-        Args: {
-          p_metric: Database["public"]["Enums"]["credit_metric_type"]
-          p_overage_amount: number
-        }
-        Returns: {
-          credit_cost_per_unit: number
-          credit_step_id: number
-          credits_required: number
-        }[]
-      }
+      calculate_credit_cost:
+        | {
+            Args: {
+              p_metric: Database["public"]["Enums"]["credit_metric_type"]
+              p_overage_amount: number
+            }
+            Returns: {
+              credit_cost_per_unit: number
+              credit_step_id: number
+              credits_required: number
+            }[]
+          }
+        | {
+            Args: {
+              p_included_amount: number
+              p_metric: Database["public"]["Enums"]["credit_metric_type"]
+              p_overage_amount: number
+            }
+            Returns: {
+              credit_cost_per_unit: number
+              credit_step_id: number
+              credits_required: number
+            }[]
+          }
       calculate_org_metrics_cache_entry: {
         Args: { p_end_date: string; p_org_id: string; p_start_date: string }
         Returns: {
@@ -3514,6 +3536,10 @@ export type Database = {
       claim_legacy_onboarding_demo_data: {
         Args: { p_app_uuid: string }
         Returns: undefined
+      }
+      claim_updates_cache_purge: {
+        Args: { p_limit?: number }
+        Returns: Json
       }
       cleanup_expired_apikeys: { Args: never; Returns: undefined }
       cleanup_expired_demo_apps: { Args: never; Returns: undefined }

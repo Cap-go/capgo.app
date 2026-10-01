@@ -1340,15 +1340,7 @@ export type Database = {
           build_time_unit?: number
           date?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "daily_build_time_app_id_fkey"
-            columns: ["app_id"]
-            isOneToOne: false
-            referencedRelation: "apps"
-            referencedColumns: ["app_id"]
-          },
-        ]
+        Relationships: []
       }
       daily_mau: {
         Row: {
@@ -2821,6 +2813,7 @@ export type Database = {
         Row: {
           auto_top_up_enabled: boolean
           auto_top_up_last_attempt_at: string | null
+          auto_top_up_monthly_limit: number
           auto_top_up_threshold: number
           created_at: string | null
           created_by: string
@@ -2851,6 +2844,7 @@ export type Database = {
         Insert: {
           auto_top_up_enabled?: boolean
           auto_top_up_last_attempt_at?: string | null
+          auto_top_up_monthly_limit?: number
           auto_top_up_threshold?: number
           created_at?: string | null
           created_by: string
@@ -2881,6 +2875,7 @@ export type Database = {
         Update: {
           auto_top_up_enabled?: boolean
           auto_top_up_last_attempt_at?: string | null
+          auto_top_up_monthly_limit?: number
           auto_top_up_threshold?: number
           created_at?: string | null
           created_by?: string
@@ -4157,6 +4152,14 @@ export type Database = {
     }
     Functions: {
       accept_invitation_to_org: { Args: { org_id: string }; Returns: string }
+      ack_updates_cache_purge: {
+        Args: {
+          p_lease_token: string
+          p_retry_after_seconds?: number
+          p_success: boolean
+        }
+        Returns: undefined
+      }
       acknowledge_compatibility_event: {
         Args: { event_id: number; note: string }
         Returns: undefined
@@ -4183,6 +4186,7 @@ export type Database = {
           p_billing_cycle_end: string
           p_billing_cycle_start: string
           p_details?: Json
+          p_included_amount?: number
           p_metric: Database["public"]["Enums"]["credit_metric_type"]
           p_org_id: string
           p_overage_amount: number
@@ -4249,17 +4253,30 @@ export type Database = {
           is_anniversary: boolean
         }[]
       }
-      calculate_credit_cost: {
-        Args: {
-          p_metric: Database["public"]["Enums"]["credit_metric_type"]
-          p_overage_amount: number
-        }
-        Returns: {
-          credit_cost_per_unit: number
-          credit_step_id: number
-          credits_required: number
-        }[]
-      }
+      calculate_credit_cost:
+        | {
+            Args: {
+              p_metric: Database["public"]["Enums"]["credit_metric_type"]
+              p_overage_amount: number
+            }
+            Returns: {
+              credit_cost_per_unit: number
+              credit_step_id: number
+              credits_required: number
+            }[]
+          }
+        | {
+            Args: {
+              p_included_amount: number
+              p_metric: Database["public"]["Enums"]["credit_metric_type"]
+              p_overage_amount: number
+            }
+            Returns: {
+              credit_cost_per_unit: number
+              credit_step_id: number
+              credits_required: number
+            }[]
+          }
       calculate_org_metrics_cache_entry: {
         Args: { p_end_date: string; p_org_id: string; p_start_date: string }
         Returns: {
@@ -4356,6 +4373,10 @@ export type Database = {
       claim_legacy_onboarding_demo_data: {
         Args: { p_app_uuid: string }
         Returns: undefined
+      }
+      claim_updates_cache_purge: {
+        Args: { p_limit?: number }
+        Returns: Json
       }
       cleanup_audit_logs_bookkeeping_noise: {
         Args: {
@@ -4667,6 +4688,10 @@ export type Database = {
         Returns: {
           bundle_name: string
         }[]
+      }
+      get_credit_auto_top_up_month_total: {
+        Args: { p_org_id: string }
+        Returns: number
       }
       get_current_plan_max_org: {
         Args: { orgid: string }
@@ -5360,6 +5385,10 @@ export type Database = {
         Returns: Json
       }
       new_builder_onboarding_setup_v1: { Args: never; Returns: Json }
+      new_ota_onboarding_steps_v1: {
+        Args: { p_legacy_steps?: Json }
+        Returns: Json
+      }
       null_migrated_app_version_manifests: {
         Args: {
           batch_size?: number

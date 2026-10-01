@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { getBentoSubscriberEmailByUuid, syncBentoSubscriberTags, trackBentoEvents, unsubscribeBento } from '../supabase/functions/_backend/utils/bento.ts'
+import { getBentoSubscriberEmailByUuid, syncBentoSubscriberTags, trackBentoEvents, unsubscribeBento, updateBentoFields } from '../supabase/functions/_backend/utils/bento.ts'
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
   cloudlog: vi.fn(),
@@ -97,6 +97,36 @@ describe('bento abort signals', () => {
     expect(init?.signal).toBe(controller.signal)
   })
 
+  it('sends field updates through Bento update_fields', async () => {
+    const fetchMock = vi.fn<(
+      input: string | URL | Request,
+      init?: RequestInit,
+    ) => Promise<Response>>(async () => new Response(JSON.stringify({
+      failed: 0,
+      results: 1,
+    }), {
+      headers: { 'content-type': 'application/json' },
+      status: 200,
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const controller = new AbortController()
+    await expect(updateBentoFields(createContext(), 'event.user@example.com', {
+      preorg_intent: 'builder',
+    }, controller.signal)).resolves.toBe(true)
+
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(String(url)).toBe('https://app.bentonow.com/api/v1/batch/events?site_uuid=site-uuid-value')
+    expect(init?.signal).toBe(controller.signal)
+    expect(JSON.parse(String(init?.body))).toEqual({
+      events: [{
+        email: 'event.user@example.com',
+        fields: { preorg_intent: 'builder' },
+        type: '$update_fields',
+      }],
+    })
+  })
+
   it('forwards the optional subscriber uuid lookup signal to the GET fetch', async () => {
     const fetchMock = vi.fn<(
       input: string | URL | Request,
@@ -134,6 +164,12 @@ describe('bento abort signals', () => {
     [
       'subscriber synchronization',
       (context: Context, signal: AbortSignal) => syncBentoSubscriberTags(context, subscriberUpdate, signal),
+    ],
+    [
+      'field update',
+      (context: Context, signal: AbortSignal) => updateBentoFields(context, subscriberUpdate.email, {
+        preorg_intent: 'builder',
+      }, signal),
     ],
     [
       'unsubscribe',

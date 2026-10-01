@@ -181,8 +181,9 @@ function acceptedBentoCommandResult(result: unknown, expectedResults: number) {
 }
 
 export interface BentoBatchEvent {
-  data: Record<string, unknown>
+  data?: Record<string, unknown>
   event: string
+  fields?: Record<string, unknown>
 }
 
 export async function trackBentoEvents(
@@ -210,7 +211,8 @@ export async function trackBentoRecipientEvents(
       events: events.map(item => ({
         type: item.event,
         email: item.email,
-        details: item.data,
+        ...(item.data ? { details: item.data } : {}),
+        ...(item.fields ? { fields: item.fields } : {}),
       })),
     }
     const res = await bentoFetch(c, 'batch/events', siteUuid, payload, signal)
@@ -224,6 +226,18 @@ export async function trackBentoRecipientEvents(
     cloudlogErr({ requestId: c.get('requestId'), message: 'trackBentoEvents error', error: serializeError(error) })
     return false
   }
+}
+
+export function updateBentoFields(
+  c: Context,
+  email: string,
+  fields: Record<string, unknown>,
+  signal?: AbortSignal,
+) {
+  if (Object.keys(fields).length === 0)
+    return Promise.resolve(true)
+
+  return trackBentoEvents(c, email, [{ event: '$update_fields', fields }], signal)
 }
 
 // Only use this function when a specific member of the organization needs to be tracked in Bento. For organization-level events, use sendNotifToOrgMembers in org_email_notifications.ts which will call trackBentoEvent for each member with an email in the background.

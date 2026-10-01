@@ -80,6 +80,85 @@ describe('credits pricing API', () => {
     expect(data.total_cost).toBe(8)
   })
 
+  it.concurrent('prices overage on total-volume tiers above the included amount', async () => {
+    const calculate = async (included?: Record<string, number>) => {
+      const response = await fetchTestRequest(getEndpointUrl('/private/credits'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          mau: 1_000_000,
+          bandwidth: 109_951_162_777_600, // 100 TB
+          storage: 0,
+          included,
+        }),
+      })
+      expect(response.status).toBe(200)
+      return await response.json() as {
+        breakdown: {
+          mau: { cost: number }
+          bandwidth: { cost: number }
+        }
+      }
+    }
+
+    // 1M MAU and 100 TB included: the overage starts on the high-volume tiers.
+    const abovePlan = await calculate({ mau: 1_000_000, bandwidth: 109_951_162_777_600 })
+    expect(abovePlan.breakdown.mau.cost).toBeCloseTo(600, 6)
+    expect(abovePlan.breakdown.bandwidth.cost).toBeCloseTo(819.2, 6)
+
+    // Nothing included: priced from the bottom of the ladder.
+    const fromZero = await calculate()
+    expect(fromZero.breakdown.mau.cost).toBeCloseTo(3000, 6)
+    // 0-100 TB walks every tier up to 63-100 TB ($0.015/GiB)
+    expect(fromZero.breakdown.bandwidth.cost).toBeCloseTo(2214.4, 6)
+  })
+
+  it.concurrent('accepts numeric strings like the website calculator sends', async () => {
+    const response = await fetchTestRequest(getEndpointUrl('/private/credits'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        mau: '1000000',
+        bandwidth: '0',
+        storage: '0',
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    const data = await response.json() as { total_cost: number }
+    expect(data.total_cost).toBeCloseTo(3000, 6)
+  })
+
+  it.concurrent.each([
+    ['non-numeric string', { mau: 'lots' }],
+    ['empty string', { mau: '' }],
+    ['null', { mau: null }],
+    ['boolean', { bandwidth: true }],
+    ['negative number', { mau: -1 }],
+    ['negative string', { storage: '-1' }],
+  ])('rejects %s usage input', async (_label, override) => {
+    const response = await fetchTestRequest(getEndpointUrl('/private/credits'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        mau: 0,
+        bandwidth: 0,
+        storage: 0,
+        ...override,
+      }),
+    })
+
+    expect(response.status).toBe(400)
+    const data = await response.json() as { error: string }
+    expect(data.error).toBe('invalid_usage')
+  })
+
   it.concurrent('rejects negative build_time input', async () => {
     const response = await fetchTestRequest(getEndpointUrl('/private/credits'), {
       method: 'POST',

@@ -17,9 +17,13 @@
     "prod_eu": {
       "name": "capgo_plugin-eu-prod",
       "vars": {
+        // UPDATES_EDGE_CACHE (/updates edge cache: off | on | share like 1%) is a
+        // worker secret so it changes without a deploy:
+        //   bun run updates-edge-cache:set 1%
         "ENV_NAME": "capgo_plugin-eu-prod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -149,6 +153,7 @@
         "ENV_NAME": "capgo_plugin-me-prod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -244,6 +249,7 @@
         "ENV_NAME": "capgo_plugin-hk-prod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -339,6 +345,7 @@
         "ENV_NAME": "capgo_plugin-jp-prod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -434,6 +441,7 @@
         "ENV_NAME": "capgo_plugin-as-prod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -529,6 +537,7 @@
         "ENV_NAME": "capgo_plugin-na-prod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -627,6 +636,7 @@
         "region": "gcp:africa-south1"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -719,6 +729,7 @@
         "ENV_NAME": "capgo_plugin-oc-prod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -814,6 +825,7 @@
         "ENV_NAME": "capgo_plugin-sa-prod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -897,6 +909,7 @@
         "ENV_NAME": "capgo_plugin-eu-preprod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 1,
         "enabled": true
       },
@@ -988,6 +1001,7 @@
         "ENV_NAME": "capgo_plugin-alpha"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 1,
         "enabled": true
       },

@@ -15,11 +15,13 @@ const mocks = vi.hoisted(() => ({
     message: error instanceof Error ? error.message : String(error),
   })),
   trackBentoEvents: vi.fn(),
+  updateBentoFields: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
   isBentoConfigured: mocks.isBentoConfigured,
   trackBentoEvents: mocks.trackBentoEvents,
+  updateBentoFields: mocks.updateBentoFields,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
@@ -156,6 +158,7 @@ describe('user Bento event delivery', () => {
     mocks.closeClient.mockResolvedValue(undefined)
     mocks.isBentoConfigured.mockReturnValue(true)
     mocks.trackBentoEvents.mockResolvedValue(true)
+    mocks.updateBentoFields.mockResolvedValue(true)
   })
 
   afterEach(() => {
@@ -231,18 +234,29 @@ describe('user Bento event delivery', () => {
     expect(mocks.closeClient).toHaveBeenCalledWith(expect.anything(), fastPool)
   })
 
-  it('delivers every onboarding step completion without persisting once-only state', async () => {
+  it('updates Bento fields directly for every onboarding step completion', async () => {
     vi.useFakeTimers()
     const pendingLogin = pendingLoginOnboarding()
+    const sentLogin = {
+      bento_events: {
+        'cli:login_successful': {
+          ...pendingLogin.bento_events['cli:login_successful'],
+          sent_at: '2026-08-22T10:00:00.500Z',
+        },
+      },
+    }
     const fastPool = createFastPool({
       rows: [{ email: 'bento.user@example.com', onboarding: pendingLogin }],
     })
+    fastPool.query
+      .mockResolvedValueOnce({ rows: [{ email: 'bento.user@example.com', onboarding: pendingLogin }] })
+      .mockResolvedValueOnce({ rows: [{ email: 'bento.user@example.com', onboarding: sentLogin }] })
     const deliveryTx = createTransactionPool({ lockOnboarding: pendingLogin })
     const sharedPool = { ...deliveryTx.pool, query: fastPool.query }
     mocks.getPgClient.mockReturnValue(sharedPool)
 
     const tags = {
-      app_id: 'com.test.app', app_name: 'Test App', next_step: 'app_id', secret: 'must-not-leak',
+      app_id: 'com.test.app', app_name: 'Test App', flow: 'pre_org', secret: 'must-not-leak',
       step: 'app_name', step_index: 2, total_steps: 7,
     }
     await recordUserBentoEvent(createContext(), {
@@ -258,44 +272,42 @@ describe('user Bento event delivery', () => {
       userId: USER_ID,
     })
 
-    expect(mocks.trackBentoEvents.mock.calls.filter(call => call[2]?.[0]?.event === 'onboarding:step_completed')).toHaveLength(2)
-    expect(mocks.trackBentoEvents).toHaveBeenNthCalledWith(1, expect.anything(), 'bento.user@example.com', [{
-      event: 'onboarding:step_completed',
-      data: {
-        app_id: 'com.test.app',
-        app_name: 'Test App',
-        next_step: 'app_id',
-        observed_at: OBSERVED_AT,
-        source_event: 'onboarding_step_completed',
-        step: 'app_name',
-        step_index: 2,
-        total_steps: 7,
-      },
-    }], expect.any(AbortSignal))
+    expect(mocks.updateBentoFields).toHaveBeenNthCalledWith(1, expect.anything(), 'bento.user@example.com', {
+      preorg_app_id: 'com.test.app',
+      preorg_app_name: 'Test App',
+      preorg_app_name_followup_at: '2026-08-22T10:15:00.000Z',
+    }, expect.any(AbortSignal))
+    expect(mocks.updateBentoFields).toHaveBeenNthCalledWith(2, expect.anything(), 'bento.user@example.com', {
+      preorg_app_id: 'com.test.app',
+      preorg_app_name: 'Test App',
+      preorg_app_name_followup_at: '2026-08-22T10:15:01.000Z',
+    }, expect.any(AbortSignal))
     expect(mocks.trackBentoEvents).toHaveBeenCalledWith(
       expect.anything(), 'bento.user@example.com',
       [{ event: 'cli:login_successful', data: expect.anything() }], expect.any(AbortSignal),
     )
+    expect(mocks.trackBentoEvents).toHaveBeenCalledTimes(1)
     expect(vi.getTimerCount()).toBe(0)
     expect(fastPool.connect).not.toHaveBeenCalled()
   })
 
-  it('logs a repeatable event that cannot resolve the user email', async () => {
+  it('logs a field update that cannot resolve the user email', async () => {
     const fastPool = createFastPool({ rows: [{ onboarding: {} }] })
     mocks.getPgClient.mockReturnValueOnce(fastPool)
 
     await recordUserBentoEvent(createContext(), {
       sourceEvent: 'onboarding_step_completed',
       observedAt: OBSERVED_AT,
-      tags: { step: 'intent' },
+      tags: { flow: 'pre_org', intent: 'builder', step: 'intent' },
       userId: USER_ID,
     })
 
     expect(mocks.trackBentoEvents).not.toHaveBeenCalled()
+    expect(mocks.updateBentoFields).not.toHaveBeenCalled()
     expect(mocks.cloudlogErr).toHaveBeenCalledWith(expect.objectContaining({
       phase: 'deliver',
       userId: USER_ID,
-      event: 'onboarding:step_completed',
+      event: '$update_fields',
       error: { message: 'User email unavailable' },
     }))
   })

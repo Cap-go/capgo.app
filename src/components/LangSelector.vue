@@ -1,24 +1,76 @@
 <script setup lang="ts">
+import IconCheck from '~icons/lucide/check'
+import IconDown from '~icons/lucide/chevron-down'
 import { availableLocales, i18n, languages } from '~/modules/i18n'
 import { changeLanguage, getEmoji } from '~/services/i18n'
 
-const dropdown = useTemplateRef('dropdown')
+const props = withDefaults(defineProps<{
+  placement?: 'top' | 'bottom'
+}>(), {
+  placement: 'top',
+})
+
+const menuId = useId()
+const dropdown = useTemplateRef<HTMLElement>('dropdown')
+const trigger = useTemplateRef<HTMLButtonElement>('trigger')
+const isOpen = ref(false)
+
 onClickOutside(dropdown, () => closeDropdown())
+onKeyStroke('Escape', () => {
+  if (!isOpen.value)
+    return
+  closeDropdown()
+  trigger.value?.focus()
+})
+
 function closeDropdown() {
-  if (dropdown.value) {
-    dropdown.value.removeAttribute('open')
-  }
+  isOpen.value = false
+}
+
+function selectLanguage(locale: string) {
+  void changeLanguage(locale)
+  closeDropdown()
 }
 </script>
 
 <template>
-  <div ref="dropdown" class="d-dropdown">
-    <button type="button" tabindex="0" class="m-1 border-gray-300 dark:border-gray-600 d-btn d-btn-outline d-btn-sm">
-      {{ getEmoji(i18n.global.locale.value) }} {{ languages[i18n.global.locale.value as keyof typeof languages] }} <svg class="ml-2 w-4 h-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg>
+  <div ref="dropdown" class="relative inline-block">
+    <button
+      ref="trigger"
+      type="button"
+      :aria-expanded="isOpen"
+      :aria-controls="menuId"
+      class="inline-flex items-center gap-2 h-9 px-3 m-1 text-sm font-medium rounded-lg border border-slate-300 bg-white text-slate-700 cursor-pointer transition-colors duration-150 hover:border-slate-400 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-offset-2 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:bg-slate-700"
+      @click="isOpen = !isOpen"
+    >
+      <span aria-hidden="true">{{ getEmoji(i18n.global.locale.value) }}</span>
+      {{ languages[i18n.global.locale.value as keyof typeof languages] }}
+      <IconDown class="size-4 text-slate-400" aria-hidden="true" />
     </button>
-    <ul tabindex="0" class="p-2 w-52 bg-white shadow d-dropdown-content d-menu rounded-box z-1 dark:bg-base-200">
-      <li v-for="locale in availableLocales" :id="locale" :key="locale" class="cursor-pointer" @click="changeLanguage(locale)">
-        <span class="block py-2 px-4 hover:text-gray-900 hover:bg-gray-100 dark:hover:bg-gray-600 dark:hover:text-white" :class="{ 'bg-gray-100 text-gray-600 dark:text-gray-300 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-900': locale === i18n.global.locale.value }">{{ getEmoji(locale) }} {{ languages[locale as keyof typeof languages] }}</span>
+    <ul
+      v-show="isOpen"
+      :id="menuId"
+      class="absolute left-1/2 z-20 w-56 max-h-72 -translate-x-1/2 overflow-y-auto overscroll-contain p-1 rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-800"
+      :class="props.placement === 'top' ? 'bottom-full mb-1' : 'top-full mt-1'"
+    >
+      <li
+        v-for="locale in availableLocales"
+        :id="locale"
+        :key="locale"
+      >
+        <button
+          type="button"
+          :aria-current="locale === i18n.global.locale.value ? 'true' : undefined"
+          class="flex w-full items-center gap-2.5 h-9 px-2.5 rounded-lg text-left text-sm cursor-pointer transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500"
+          :class="locale === i18n.global.locale.value
+            ? 'bg-azure-500/10 font-medium text-slate-900 dark:text-white'
+            : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700'"
+          @click="selectLanguage(locale)"
+        >
+          <span aria-hidden="true">{{ getEmoji(locale) }}</span>
+          <span class="flex-1 truncate">{{ languages[locale as keyof typeof languages] }}</span>
+          <IconCheck v-if="locale === i18n.global.locale.value" class="size-4 shrink-0 text-azure-500" aria-hidden="true" />
+        </button>
       </li>
     </ul>
   </div>

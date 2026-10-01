@@ -419,7 +419,7 @@ onBeforeUnmount(() => {
           {{ t('cli-login-success-title') }}
         </h2>
         <button class="d-btn d-btn-primary" type="button" @click="goToDestination">
-          {{ t(destination.startsWith('/app/new') ? 'cli-login-continue-setup' : 'dashboard') }}
+          {{ t(destination.endsWith('/getting-started') ? 'cli-login-continue-setup' : 'dashboard') }}
         </button>
       </div>
 
