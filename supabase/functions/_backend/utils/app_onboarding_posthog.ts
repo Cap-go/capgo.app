@@ -57,6 +57,8 @@ export function buildAppOnboardingStepPosthogEvent(input: AppOnboardingStepPosth
       todo_list_version: input.setup.todo_list_version,
       step_id: input.change.stepId,
       step_status: input.change.status,
+      ...(input.change.completionSource ? { step_completion_source: input.change.completionSource } : {}),
+      ...(input.change.inferredFromStepId ? { step_inferred_from: input.change.inferredFromStepId } : {}),
     },
   }
 }
