@@ -137,12 +137,20 @@ async function getUsage(orgId: string) {
 
   if (currentPlan) {
     try {
+      const includedBandwidthBytes = Math.round(currentPlan.bandwidth * 1073741824)
+      const includedStorageBytes = Math.round(currentPlan.storage * 1073741824)
       const overageCost = await calculateCreditCost({
         org_id: orgId,
         mau: Math.max(totalMau - currentPlan.mau, 0),
-        bandwidth: Math.max(totalBandwidthBytes - Math.round(currentPlan.bandwidth * 1073741824), 0),
-        storage: Math.max(totalStorageBytes - Math.round(currentPlan.storage * 1073741824), 0),
+        bandwidth: Math.max(totalBandwidthBytes - includedBandwidthBytes, 0),
+        storage: Math.max(totalStorageBytes - includedStorageBytes, 0),
         build_time: Math.max(totalBuildTime - currentPlan.build_time_unit, 0),
+        included: {
+          mau: currentPlan.mau,
+          bandwidth: includedBandwidthBytes,
+          storage: includedStorageBytes,
+          build_time: currentPlan.build_time_unit,
+        },
       })
       estimatedUsagePrice = roundNumber(overageCost.total_cost)
     }
