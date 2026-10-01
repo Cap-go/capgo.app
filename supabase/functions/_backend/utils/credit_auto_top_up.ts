@@ -10,6 +10,8 @@ export const MIN_AUTO_TOP_UP_THRESHOLD = 10
 // orgs.auto_top_up_monthly_limit is numeric(18,6): 12 integer digits max.
 export const MAX_AUTO_TOP_UP_MONTHLY_LIMIT = 999_999_999_999
 export const AUTO_TOP_UP_KIND = 'credit_auto_top_up'
+export const CYCLE_TOP_UP_KIND = 'credit_cycle_top_up'
+type TopUpKind = typeof AUTO_TOP_UP_KIND | typeof CYCLE_TOP_UP_KIND
 const AUTO_TOP_UP_SOURCE = 'stripe_top_up'
 
 export interface AutoTopUpSettings {
@@ -21,6 +23,19 @@ export interface AutoTopUpSettings {
   monthlyLimit: number
   /** Credits bought by auto top-up so far this calendar month (UTC). null when the lookup failed. */
   monthlyTotal: number | null
+  /** Buy cycleAmount credits once per billing cycle. Independent from the threshold top-up. */
+  cycleEnabled: boolean
+  cycleAmount: number
+  /** End of the current billing cycle, i.e. when the next scheduled top-up runs. null when unknown. */
+  cycleEnd: string | null
+}
+
+export interface AutoTopUpSettingsUpdate {
+  enabled: boolean
+  threshold: number
+  monthlyLimit?: number
+  cycleEnabled?: boolean
+  cycleAmount?: number
 }
 
 // Mirrors try_claim_credit_auto_top_up eligibility (enabled, min $10, balance, 1h cooldown, monthly limit).
@@ -63,6 +78,16 @@ export function normalizeAutoTopUpThreshold(value: unknown): number | null {
   return rounded
 }
 
+// Scheduled top-up amount: whole credits, at least $10, within the numeric(18,6) column range.
+export function normalizeCycleTopUpAmount(value: unknown): number | null {
+  if (typeof value !== 'number' && (typeof value !== 'string' || value.trim() === ''))
+    return null
+  const normalized = normalizeAutoTopUpThreshold(value)
+  if (normalized === null || normalized > MAX_AUTO_TOP_UP_MONTHLY_LIMIT)
+    return null
+  return normalized
+}
+
 // 0 means no limit. Otherwise the limit must allow at least one top-up of `threshold`.
 export function normalizeAutoTopUpMonthlyLimit(value: unknown, threshold: number): number | null {
   // Reject null, booleans and empty strings so malformed input never becomes "no limit".
@@ -86,6 +111,17 @@ async function getMonthlyAutoTopUpTotal(c: Context, orgId: string): Promise<numb
     return null
   }
   return Number(data ?? 0)
+}
+
+async function getBillingCycleEnd(c: Context, orgId: string): Promise<string | null> {
+  const { data, error } = await supabaseAdmin(c)
+    .rpc('get_org_billing_cycle', { orgid: orgId })
+    .maybeSingle()
+  if (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'credit_cycle_top_up_cycle_lookup_failed', orgId, error })
+    return null
+  }
+  return data?.cycle_end ?? null
 }
 
 async function getAvailableCredits(c: Context, orgId: string): Promise<number> {
@@ -178,10 +214,11 @@ export async function grantCreditsFromAutoTopUpPayment(
   orgId: string,
   quantity: number,
   paymentIntentId: string,
+  kind: TopUpKind = AUTO_TOP_UP_KIND,
 ): Promise<void> {
   const sourceRef = {
     paymentIntentId,
-    kind: AUTO_TOP_UP_KIND,
+    kind,
     quantity,
   }
   const { error } = await supabaseAdmin(c)
@@ -189,7 +226,7 @@ export async function grantCreditsFromAutoTopUpPayment(
       p_org_id: orgId,
       p_amount: quantity,
       p_source: AUTO_TOP_UP_SOURCE,
-      p_notes: 'Automatic credit top-up',
+      p_notes: kind === CYCLE_TOP_UP_KIND ? 'Scheduled credit top-up' : 'Automatic credit top-up',
       p_source_ref: sourceRef,
     })
     .single()
@@ -211,6 +248,8 @@ async function chargeOffSessionCredits(
   orgId: string,
   customerId: string,
   quantity: number,
+  kind: TopUpKind,
+  idempotencyKey: string,
 ): Promise<Stripe.PaymentIntent | null> {
   const paymentMethodId = await getDefaultPaymentMethodId(c, customerId)
   if (!paymentMethodId) {
@@ -233,7 +272,6 @@ async function chargeOffSessionCredits(
     return null
   }
 
-  const idempotencyKey = `credit_auto_top_up:${orgId}:${quantity}:${Math.floor(Date.now() / (60 * 60 * 1000))}`
   try {
     return await stripe.paymentIntents.create({
       amount: unitAmount * quantity,
@@ -243,7 +281,7 @@ async function chargeOffSessionCredits(
       off_session: true,
       confirm: true,
       metadata: {
-        kind: AUTO_TOP_UP_KIND,
+        kind,
         orgId,
         productId,
         intendedQuantity: String(quantity),
@@ -266,7 +304,7 @@ async function chargeOffSessionCredits(
 export async function getAutoTopUpSettings(c: Context, orgId: string): Promise<AutoTopUpSettings> {
   const { data: org, error } = await supabaseAdmin(c)
     .from('orgs')
-    .select('auto_top_up_enabled, auto_top_up_threshold, auto_top_up_monthly_limit, customer_id')
+    .select('auto_top_up_enabled, auto_top_up_threshold, auto_top_up_monthly_limit, auto_top_up_cycle_enabled, auto_top_up_cycle_amount, customer_id')
     .eq('id', orgId)
     .maybeSingle()
 
@@ -279,6 +317,9 @@ export async function getAutoTopUpSettings(c: Context, orgId: string): Promise<A
       availableCredits: 0,
       monthlyLimit: 0,
       monthlyTotal: null,
+      cycleEnabled: false,
+      cycleAmount: MIN_AUTO_TOP_UP_THRESHOLD,
+      cycleEnd: null,
     }
   }
 
@@ -293,16 +334,18 @@ export async function getAutoTopUpSettings(c: Context, orgId: string): Promise<A
     availableCredits: await getAvailableCredits(c, orgId),
     monthlyLimit: Number(org.auto_top_up_monthly_limit ?? 0),
     monthlyTotal: await getMonthlyAutoTopUpTotal(c, orgId),
+    cycleEnabled: Boolean(org.auto_top_up_cycle_enabled),
+    cycleAmount: Number(org.auto_top_up_cycle_amount ?? MIN_AUTO_TOP_UP_THRESHOLD),
+    cycleEnd: await getBillingCycleEnd(c, orgId),
   }
 }
 
 export async function saveAutoTopUpSettings(
   c: Context,
   orgId: string,
-  enabled: boolean,
-  threshold: number,
-  monthlyLimit?: number,
+  update: AutoTopUpSettingsUpdate,
 ): Promise<AutoTopUpSettings> {
+  const { enabled, threshold, monthlyLimit, cycleEnabled, cycleAmount } = update
   const { data: org, error: orgError } = await supabaseAdmin(c)
     .from('orgs')
     .select('customer_id, auto_top_up_monthly_limit')
@@ -316,7 +359,7 @@ export async function saveAutoTopUpSettings(
   if (monthlyLimit === undefined && normalizeAutoTopUpMonthlyLimit(Number(org.auto_top_up_monthly_limit ?? 0), threshold) === null)
     throw new Error('invalid_monthly_limit')
 
-  if (enabled) {
+  if (enabled || cycleEnabled) {
     if (!org.customer_id)
       throw new Error('stripe_customer_missing')
     const hasPaymentMethod = await customerHasSavedPaymentMethod(c, org.customer_id)
@@ -330,6 +373,8 @@ export async function saveAutoTopUpSettings(
       auto_top_up_enabled: enabled,
       auto_top_up_threshold: threshold,
       ...(monthlyLimit === undefined ? {} : { auto_top_up_monthly_limit: monthlyLimit }),
+      ...(cycleEnabled === undefined ? {} : { auto_top_up_cycle_enabled: cycleEnabled }),
+      ...(cycleAmount === undefined ? {} : { auto_top_up_cycle_amount: cycleAmount }),
     })
     .eq('id', orgId)
 
@@ -366,11 +411,62 @@ export async function maybeAutoTopUpCredits(c: Context, orgId: string): Promise<
   if (quantity < MIN_AUTO_TOP_UP_THRESHOLD)
     return
 
-  const paymentIntent = await chargeOffSessionCredits(c, orgId, claim.customer_id, quantity)
+  const idempotencyKey = `credit_auto_top_up:${orgId}:${quantity}:${Math.floor(Date.now() / (60 * 60 * 1000))}`
+  const paymentIntent = await chargeOffSessionCredits(c, orgId, claim.customer_id, quantity, AUTO_TOP_UP_KIND, idempotencyKey)
   if (!paymentIntent || paymentIntent.status !== 'succeeded')
     return
 
   await grantCreditsFromAutoTopUpPayment(c, orgId, quantity, paymentIntent.id)
+}
+
+// Charge states where no money moved and none will without customer action: retry next window.
+const CYCLE_TOP_UP_RETRYABLE_STATUSES = new Set<Stripe.PaymentIntent.Status>(['requires_payment_method', 'requires_action', 'requires_confirmation', 'canceled'])
+
+export async function maybeCycleTopUpCredits(c: Context, orgId: string): Promise<void> {
+  if (!isStripeConfigured(c))
+    return
+
+  const { data: claim, error: claimError } = await supabaseAdmin(c)
+    .rpc('try_claim_credit_cycle_top_up', { p_org_id: orgId })
+    .maybeSingle()
+
+  if (claimError) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'credit_cycle_top_up_claim_failed', orgId, error: claimError })
+    return
+  }
+
+  if (!claim?.claimed || !claim.customer_id || !claim.cycle_start)
+    return
+
+  const release = async () => {
+    const { error } = await supabaseAdmin(c)
+      .rpc('release_credit_cycle_top_up', {
+        p_org_id: orgId,
+        p_cycle_start: claim.cycle_start!,
+        p_previous_paid_for: claim.previous_paid_for ?? undefined,
+      })
+    if (error)
+      cloudlogErr({ requestId: c.get('requestId'), message: 'credit_cycle_top_up_release_failed', orgId, error })
+  }
+
+  const quantity = Math.floor(Number(claim.amount ?? 0))
+  if (quantity < MIN_AUTO_TOP_UP_THRESHOLD) {
+    await release()
+    return
+  }
+
+  // One key per cycle and 6h retry window: a retried cron run in the same window cannot charge twice.
+  const idempotencyKey = `${CYCLE_TOP_UP_KIND}:${orgId}:${claim.cycle_start}:${Math.floor(Date.now() / (6 * 60 * 60 * 1000))}`
+  const paymentIntent = await chargeOffSessionCredits(c, orgId, claim.customer_id, quantity, CYCLE_TOP_UP_KIND, idempotencyKey)
+  if (!paymentIntent || CYCLE_TOP_UP_RETRYABLE_STATUSES.has(paymentIntent.status)) {
+    await release()
+    return
+  }
+  // processing: the payment_intent.succeeded webhook grants the credits later.
+  if (paymentIntent.status !== 'succeeded')
+    return
+
+  await grantCreditsFromAutoTopUpPayment(c, orgId, quantity, paymentIntent.id, CYCLE_TOP_UP_KIND)
 }
 
 export async function handleAutoTopUpPaymentIntent(c: Context, event: Stripe.Event, orgId: string): Promise<boolean> {
@@ -378,7 +474,8 @@ export async function handleAutoTopUpPaymentIntent(c: Context, event: Stripe.Eve
     return false
 
   const paymentIntent = event.data.object as Stripe.PaymentIntent
-  if (paymentIntent.metadata?.kind !== AUTO_TOP_UP_KIND)
+  const kind = paymentIntent.metadata?.kind
+  if (kind !== AUTO_TOP_UP_KIND && kind !== CYCLE_TOP_UP_KIND)
     return false
 
   const metadataOrgId = paymentIntent.metadata.orgId
@@ -397,6 +494,6 @@ export async function handleAutoTopUpPaymentIntent(c: Context, event: Stripe.Eve
   if (quantity < MIN_AUTO_TOP_UP_THRESHOLD)
     return true
 
-  await grantCreditsFromAutoTopUpPayment(c, orgId, quantity, paymentIntent.id)
+  await grantCreditsFromAutoTopUpPayment(c, orgId, quantity, paymentIntent.id, kind)
   return true
 }

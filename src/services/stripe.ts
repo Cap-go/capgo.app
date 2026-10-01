@@ -235,6 +235,26 @@ export async function completeCreditTopUp(orgId: string, sessionId?: string | nu
   }
 }
 
+export interface CreditAutoTopUpSettings {
+  enabled: boolean
+  threshold: number
+  hasPaymentMethod: boolean
+  availableCredits: number
+  monthlyLimit: number
+  monthlyTotal: number | null
+  cycleEnabled: boolean
+  cycleAmount: number
+  cycleEnd: string | null
+}
+
+export interface CreditAutoTopUpUpdate {
+  enabled: boolean
+  threshold: number
+  monthlyLimit?: number
+  cycleEnabled?: boolean
+  cycleAmount?: number
+}
+
 export async function getCreditAutoTopUp(orgId: string) {
   if (!orgId)
     return null
@@ -245,32 +265,18 @@ export async function getCreditAutoTopUp(orgId: string) {
     console.error('Failed to load credit auto top-up', error)
     throw error
   }
-  return data as {
-    enabled: boolean
-    threshold: number
-    hasPaymentMethod: boolean
-    availableCredits: number
-    monthlyLimit: number
-    monthlyTotal: number | null
-  } | null
+  return data as CreditAutoTopUpSettings | null
 }
 
-export async function saveCreditAutoTopUp(orgId: string, enabled: boolean, threshold: number, monthlyLimit: number) {
+export async function saveCreditAutoTopUp(orgId: string, update: CreditAutoTopUpUpdate) {
   if (!orgId)
     return null
   const { data, error } = await invokeCapgoApi('private/credits/auto-top-up', {
-    body: JSON.stringify({ orgId, enabled, threshold, monthlyLimit }),
+    body: JSON.stringify({ orgId, ...update }),
   })
   if (error) {
     console.error('Failed to save credit auto top-up', error)
     throw error
   }
-  return data as {
-    enabled: boolean
-    threshold: number
-    hasPaymentMethod: boolean
-    availableCredits: number
-    monthlyLimit: number
-    monthlyTotal: number | null
-  } | null
+  return data as CreditAutoTopUpSettings | null
 }

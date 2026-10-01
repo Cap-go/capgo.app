@@ -8,6 +8,7 @@ import {
   MIN_AUTO_TOP_UP_THRESHOLD,
   normalizeAutoTopUpMonthlyLimit,
   normalizeAutoTopUpThreshold,
+  normalizeCycleTopUpAmount,
   saveAutoTopUpSettings,
 } from '../utils/credit_auto_top_up.ts'
 import { getFallbackCreditProductId, priceCreditTiers } from '../utils/credits.ts'
@@ -671,7 +672,7 @@ app.get('/auto-top-up', middlewareAuth, async (c) => {
 })
 
 app.post('/auto-top-up', middlewareAuth, async (c) => {
-  const body = await parseBody<{ orgId?: string, enabled?: boolean, threshold?: number, monthlyLimit?: number }>(c)
+  const body = await parseBody<{ orgId?: string, enabled?: boolean, threshold?: number, monthlyLimit?: number, cycleEnabled?: boolean, cycleAmount?: number }>(c)
   if (!body.orgId)
     throw simpleError('missing_org_id', 'Organization id is required')
   if (!await checkPermission(c, 'org.update_billing', { orgId: body.orgId }))
@@ -692,8 +693,25 @@ app.post('/auto-top-up', middlewareAuth, async (c) => {
     monthlyLimit = normalizedLimit
   }
 
+  if (body.cycleEnabled !== undefined && typeof body.cycleEnabled !== 'boolean')
+    throw simpleError('invalid_cycle_enabled', 'cycleEnabled must be a boolean')
+
+  let cycleAmount: number | undefined
+  if (body.cycleAmount !== undefined) {
+    const normalizedAmount = normalizeCycleTopUpAmount(body.cycleAmount)
+    if (normalizedAmount === null)
+      throw simpleError('invalid_cycle_amount', `Scheduled top-up amount must be at least ${MIN_AUTO_TOP_UP_THRESHOLD}`)
+    cycleAmount = normalizedAmount
+  }
+
   try {
-    return c.json(await saveAutoTopUpSettings(c as AppContext, body.orgId, body.enabled === true, threshold, monthlyLimit))
+    return c.json(await saveAutoTopUpSettings(c as AppContext, body.orgId, {
+      enabled: body.enabled === true,
+      threshold,
+      monthlyLimit,
+      cycleEnabled: body.cycleEnabled,
+      cycleAmount,
+    }))
   }
   catch (error) {
     const message = error instanceof Error ? error.message : String(error)

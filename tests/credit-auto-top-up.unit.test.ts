@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MIN_AUTO_TOP_UP_THRESHOLD, normalizeAutoTopUpMonthlyLimit, shouldAttemptAutoTopUp } from '../supabase/functions/_backend/utils/credit_auto_top_up.ts'
+import { MIN_AUTO_TOP_UP_THRESHOLD, normalizeAutoTopUpMonthlyLimit, normalizeCycleTopUpAmount, shouldAttemptAutoTopUp } from '../supabase/functions/_backend/utils/credit_auto_top_up.ts'
 
 describe('credit auto top-up decision', () => {
   it('does not attempt when disabled', () => {
@@ -127,5 +127,20 @@ describe('credit auto top-up monthly limit validation', () => {
     expect(normalizeAutoTopUpMonthlyLimit(false, 10)).toBeNull()
     expect(normalizeAutoTopUpMonthlyLimit('', 10)).toBeNull()
     expect(normalizeAutoTopUpMonthlyLimit('  ', 10)).toBeNull()
+  })
+})
+
+describe('scheduled top-up amount validation', () => {
+  it.concurrent('accepts whole amounts of at least $10', () => {
+    expect(normalizeCycleTopUpAmount(600)).toBe(600)
+    expect(normalizeCycleTopUpAmount('10.9')).toBe(10)
+  })
+
+  it.concurrent('rejects malformed, too small, or too large amounts', () => {
+    expect(normalizeCycleTopUpAmount(9)).toBeNull()
+    expect(normalizeCycleTopUpAmount(null)).toBeNull()
+    expect(normalizeCycleTopUpAmount(false)).toBeNull()
+    expect(normalizeCycleTopUpAmount('')).toBeNull()
+    expect(normalizeCycleTopUpAmount(1_000_000_000_000)).toBeNull()
   })
 })
