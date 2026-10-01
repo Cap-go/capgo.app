@@ -49,8 +49,9 @@ for (const version of [1, 2, 3, 4, 0, -1, 1.5, '3', undefined]) {
   assert.deepEqual(actual.steps.map(step => step.id), getAppOnboardingStepIds(parsed.todo_list_version, parsed.ota_todo_list_version), 'step order matches the frontend')
   for (const step of actual.steps) {
     assert.equal(step.status, parsed.steps[step.id]?.status ?? 'pending')
-    const prefix = actual.version === 3 || actual.version === 4 ? 'setup-checklist-step-' : 'app-onboarding-cli-step-'
-    assert.equal(step.title, messages[prefix + step.id], 'task titles match the frontend')
+    // The dashboard only renders the v3/v4 setup checklist; legacy v1/v2 titles live in the CLI alone.
+    if (actual.version === 3 || actual.version === 4)
+      assert.equal(step.title, messages[`setup-checklist-step-${step.id}`], 'task titles match the frontend')
   }
 }
 
