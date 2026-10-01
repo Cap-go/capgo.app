@@ -51,10 +51,14 @@ export type AppOnboardingBuilderStepStatus = AppOnboardingStepStatus | 'warning'
 export type AppOnboardingBuilderStepId = `builder.${'ios' | 'android'}.${string}`
 export const APP_ONBOARDING_STEP_HISTORY_LIMIT = 10
 export const DEFAULT_APP_ONBOARDING_TODO_LIST_VERSION = 2
+export const APP_ONBOARDING_ADD_CODE_INFERRED_ANNOTATION = 'inferred_from_test_update'
 
 export interface AppOnboardingStepState {
   status: AppOnboardingStepStatus
   at?: string
+  /** Trusted server-only completion provenance. Public patch parsing ignores it. */
+  annotation?: typeof APP_ONBOARDING_ADD_CODE_INFERRED_ANNOTATION
+  annotationType?: 'note'
 }
 
 export interface AppOnboardingBuilderStepState {
@@ -99,6 +103,8 @@ export interface AppOnboardingStepHistoryChange {
   at: string
   historyLength: number
   historyFull: boolean
+  completionSource?: 'inferred'
+  inferredFromStepId?: AppOnboardingStepId
 }
 
 const SOURCE_RANK: Record<AppOnboardingSource, number> = {
@@ -436,12 +442,47 @@ export function applyAppOnboardingPatch(
   const mergedStepPaths = isV4
     ? applyBuilderStepPatches({ ...rawSteps, ...(isOtaV1 ? { ota: setup.steps } : {}) }, patch.builderSteps, now)
     : setup.steps
-  return {
+  const merged = {
     ...existing,
     setup: isV4
       ? { ...rawSetup, ...setup, ...(isOtaV1 ? { paths: rawSetup.paths ?? ['ota'], selected_path: rawSetup.selected_path ?? 'ota' } : {}), steps: mergedStepPaths }
       : setup,
   }
+  return applyAppOnboardingStepAnnotations(currentValue, merged, patch)
+}
+
+export function applyAppOnboardingStepAnnotations(
+  currentValue: unknown,
+  mergedValue: unknown,
+  patch: AppOnboardingPatch,
+): Record<string, unknown> {
+  const addCodePatch = patch.steps?.add_code
+  if (addCodePatch?.status !== 'done')
+    return isRecord(mergedValue) ? mergedValue : {}
+
+  const merged = isRecord(mergedValue) ? { ...mergedValue } : {}
+  const mergedSetup = { ...parseSetupRecord(merged) }
+  const mergedStepPaths = isRecord(mergedSetup.steps) ? { ...mergedSetup.steps } : {}
+  const currentSteps = getRawStepRecords(currentValue)
+  const currentStep = isRecord(currentSteps.add_code) ? currentSteps.add_code : {}
+  const isOtaV4 = parseTodoListVersion(mergedSetup.todo_list_version) === 4
+    && mergedSetup.ota_todo_list_version === APP_ONBOARDING_OTA_V1_VERSION
+  const otaSteps = isOtaV4 && isRecord(mergedStepPaths.ota) ? { ...mergedStepPaths.ota } : mergedStepPaths
+  const nextStep = isRecord(otaSteps.add_code) ? { ...otaSteps.add_code } : null
+  if (!nextStep)
+    return merged
+
+  if (addCodePatch.annotation === APP_ONBOARDING_ADD_CODE_INFERRED_ANNOTATION) {
+    nextStep.annotation = APP_ONBOARDING_ADD_CODE_INFERRED_ANNOTATION
+    nextStep.annotation_type = addCodePatch.annotationType ?? 'note'
+  }
+  else if (currentStep.annotation === APP_ONBOARDING_ADD_CODE_INFERRED_ANNOTATION) {
+    delete nextStep.annotation
+    delete nextStep.annotation_type
+  }
+  otaSteps.add_code = nextStep
+  mergedSetup.steps = isOtaV4 ? { ...mergedStepPaths, ota: otaSteps } : otaSteps
+  return { ...merged, setup: mergedSetup }
 }
 
 function getRawStepRecords(value: unknown): Record<string, unknown> {
@@ -534,6 +575,9 @@ export function getAppOnboardingStepHistoryChanges(
       at: latest.at,
       historyLength: nextHistory.length,
       historyFull: 'type' in latest,
+      ...(stepId === 'add_code' && patch.steps?.add_code?.annotation === APP_ONBOARDING_ADD_CODE_INFERRED_ANNOTATION
+        ? { completionSource: 'inferred' as const, inferredFromStepId: 'test_update' as const }
+        : {}),
     }]
   })
 

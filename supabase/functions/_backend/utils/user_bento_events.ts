@@ -1,6 +1,5 @@
 import type { Context } from 'hono'
-import { isBentoConfigured, trackBentoEvents } from './bento.ts'
-import { isFrontendOnboardingVersionLabel } from './frontend_onboarding_analytics_model.ts'
+import { isBentoConfigured, trackBentoEvents, updateBentoFields } from './bento.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
 import { closeClient, getPgClient } from './pg.ts'
 import { backgroundTask } from './utils.ts'
@@ -12,7 +11,6 @@ type DetailField
   = | { key: string, type: 'boolean' }
     | { key: string, type: 'integer', min: number, max: number }
     | { key: string, type: 'string', maxLength: number }
-    | { key: string, type: 'uuid' }
 
 interface UserBentoEventMapping {
   bentoEvent: UserBentoEventName
@@ -24,8 +22,6 @@ export const USER_BENTO_EVENT_NAMES = [
   'cli:command_invoked',
   'cli:login_successful',
   'cli:onboarding_run_started',
-  'onboarding:resume_restarted',
-  'onboarding:step_completed',
   'user:login',
 ] as const
 
@@ -66,42 +62,6 @@ const USER_BENTO_EVENT_REGISTRY = {
       { key: 'total_steps', type: 'integer', min: 0, max: 1_000 },
     ],
   },
-  'onboarding_resume_restarted': {
-    bentoEvent: 'onboarding:resume_restarted',
-    delivery: 'every',
-    fields: [
-      { key: 'flow', type: 'string', maxLength: 32 },
-      { key: 'onboarding_attempt_id', type: 'uuid' },
-      { key: 'onboarding_run_id', type: 'string', maxLength: 80 },
-      { key: 'onboarding_version', type: 'integer', min: 1, max: 100 },
-      { key: 'resume_onboarding_attempt_id', type: 'uuid' },
-      { key: 'resumed_from_run_id', type: 'string', maxLength: 80 },
-      { key: 'saved_step', type: 'string', maxLength: 32 },
-      { key: 'step_index', type: 'integer', min: 0, max: 100 },
-      { key: 'total_steps', type: 'integer', min: 0, max: 100 },
-    ],
-  },
-  'onboarding_step_completed': {
-    bentoEvent: 'onboarding:step_completed',
-    delivery: 'every',
-    fields: [
-      { key: 'app_id', type: 'string', maxLength: 255 },
-      { key: 'app_name', type: 'string', maxLength: 255 },
-      { key: 'duration_ms', type: 'integer', min: 0, max: Number.MAX_SAFE_INTEGER },
-      { key: 'flow', type: 'string', maxLength: 32 },
-      { key: 'intent', type: 'string', maxLength: 32 },
-      { key: 'next_step', type: 'string', maxLength: 32 },
-      { key: 'onboarding_attempt_id', type: 'uuid' },
-      { key: 'onboarding_run_id', type: 'string', maxLength: 80 },
-      { key: 'onboarding_version', type: 'integer', min: 1, max: 100 },
-      { key: 'previous_step', type: 'string', maxLength: 32 },
-      { key: 'resumed', type: 'boolean' },
-      { key: 'step', type: 'string', maxLength: 32 },
-      { key: 'step_index', type: 'integer', min: 0, max: 100 },
-      { key: 'store_import_used', type: 'boolean' },
-      { key: 'total_steps', type: 'integer', min: 0, max: 100 },
-    ],
-  },
 } as const satisfies Record<string, UserBentoEventMapping>
 
 type SourceEventName = keyof typeof USER_BENTO_EVENT_REGISTRY
@@ -123,7 +83,7 @@ export type StoredUserBentoEvents = Partial<Record<UserBentoEventName, StoredUse
 export const MAX_USER_BENTO_DETAILS = 5
 
 const USER_BENTO_TIMEOUT_MS = 5_000
-const ONBOARDING_ATTEMPT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const ONBOARDING_FOLLOWUP_DELAY_MS = 15 * 60 * 1_000
 const FAST_STATE_SQL = `
   SELECT email, onboarding
   FROM public.users
@@ -165,6 +125,49 @@ function validIsoDate(value: unknown): value is string {
   return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value
 }
 
+export function buildUserBentoFieldUpdate(input: {
+  observedAt: string
+  sourceEvent: string
+  tags?: Record<string, unknown>
+}): Record<string, string> | undefined {
+  if (!validIsoDate(input.observedAt))
+    return undefined
+
+  if (input.sourceEvent === 'onboarding_resume_restarted') {
+    return {
+      preorg_app_id: '',
+      preorg_app_name: '',
+      preorg_app_name_followup_at: '',
+      preorg_intent: '',
+    }
+  }
+
+  if (input.sourceEvent !== 'onboarding_step_completed' || input.tags?.flow !== 'pre_org')
+    return undefined
+
+  const step = input.tags.step
+  if (step === 'intent' && typeof input.tags.intent === 'string' && input.tags.intent.length > 0)
+    return { preorg_intent: truncate(input.tags.intent, 32) }
+
+  const followupAt = new Date(Date.parse(input.observedAt) + ONBOARDING_FOLLOWUP_DELAY_MS).toISOString()
+  if (step === 'app_name' && typeof input.tags.app_name === 'string' && input.tags.app_name.length > 0) {
+    return {
+      ...(typeof input.tags.app_id === 'string' && input.tags.app_id.length > 0
+        ? { preorg_app_id: truncate(input.tags.app_id, 255) }
+        : {}),
+      preorg_app_name: truncate(input.tags.app_name, 255),
+      preorg_app_name_followup_at: followupAt,
+    }
+  }
+  if (step === 'app_id' && typeof input.tags.app_id === 'string' && input.tags.app_id.length > 0) {
+    return {
+      preorg_app_id: truncate(input.tags.app_id, 255),
+      preorg_app_name_followup_at: followupAt,
+    }
+  }
+  return undefined
+}
+
 function sourceMapping(event: string) {
   if (!Object.hasOwn(USER_BENTO_EVENT_REGISTRY, event))
     return undefined
@@ -191,22 +194,12 @@ function copyMappedFields(
     else if (field.type === 'boolean' && typeof value === 'boolean') {
       target[field.key] = value
     }
-    else if (field.type === 'uuid' && typeof value === 'string' && ONBOARDING_ATTEMPT_ID_PATTERN.test(value)) {
-      target[field.key] = value
-    }
     else if (
       field.type === 'integer'
       && typeof value === 'number'
       && Number.isInteger(value)
       && value >= field.min
       && value <= field.max
-    ) {
-      target[field.key] = value
-    }
-    else if (
-      field.type === 'integer'
-      && field.key === 'onboarding_version'
-      && isFrontendOnboardingVersionLabel(value)
     ) {
       target[field.key] = value
     }
@@ -348,7 +341,7 @@ function logUserBentoError(
   c: Context,
   phase: 'observe' | 'deliver',
   userId: string,
-  event: UserBentoEventName | undefined,
+  event: string | undefined,
   error: unknown,
 ) {
   cloudlogErr({
@@ -370,6 +363,21 @@ async function deliverEveryUserBentoEvent(
   const timeout = setTimeout(() => controller.abort(), USER_BENTO_TIMEOUT_MS)
   try {
     await trackBentoEvents(c, email, [{ event: observation.bentoEvent, data: observation.details }], controller.signal)
+  }
+  finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function deliverUserBentoFields(
+  c: Context,
+  email: string,
+  fields: Record<string, string>,
+) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), USER_BENTO_TIMEOUT_MS)
+  try {
+    await updateBentoFields(c, email, fields, controller.signal)
   }
   finally {
     clearTimeout(timeout)
@@ -562,14 +570,25 @@ export async function recordUserBentoEvent(
   c: Context,
   input: RecordUserBentoEventInput,
 ): Promise<void> {
+  const observedAt = input.observedAt ?? new Date().toISOString()
+  const fieldUpdate = buildUserBentoFieldUpdate({
+    observedAt,
+    sourceEvent: input.sourceEvent,
+    tags: input.tags,
+  })
   const observation = buildMappedUserBentoEvent({
     appId: input.appId,
-    observedAt: input.observedAt ?? new Date().toISOString(),
+    observedAt,
     orgId: input.orgId,
     sourceEvent: input.sourceEvent,
     tags: input.tags,
   })
-  if (!observation)
+  const delivery = fieldUpdate
+    ? { fields: fieldUpdate, type: 'fields' as const }
+    : observation
+      ? { observation, type: 'event' as const }
+      : undefined
+  if (!delivery)
     return
 
   try {
@@ -588,27 +607,38 @@ export async function recordUserBentoEvent(
     }
 
     const fastPending = getPendingUserBentoEvents(fastState)
-    if (observation.delivery === 'every') {
+    if (delivery.type === 'fields') {
       if (fastEmail)
-        await backgroundTask(c, deliverEveryUserBentoEvent(c, fastEmail, observation))
+        await backgroundTask(c, deliverUserBentoFields(c, fastEmail, delivery.fields))
       else
-        logUserBentoError(c, 'deliver', input.userId, observation.bentoEvent, new Error('User email unavailable'))
+        logUserBentoError(c, 'deliver', input.userId, '$update_fields', new Error('User email unavailable'))
       if (fastPending.length > 0)
         await backgroundTask(c, deliverPendingUserBentoEvents(c, input.userId))
       return
     }
 
-    const currentSent = validIsoDate(fastState[observation.bentoEvent]?.sent_at)
+    const mappedObservation = delivery.observation
+    if (mappedObservation.delivery === 'every') {
+      if (fastEmail)
+        await backgroundTask(c, deliverEveryUserBentoEvent(c, fastEmail, mappedObservation))
+      else
+        logUserBentoError(c, 'deliver', input.userId, mappedObservation.bentoEvent, new Error('User email unavailable'))
+      if (fastPending.length > 0)
+        await backgroundTask(c, deliverPendingUserBentoEvents(c, input.userId))
+      return
+    }
+
+    const currentSent = validIsoDate(fastState[mappedObservation.bentoEvent]?.sent_at)
     if (currentSent && fastPending.length === 0)
       return
 
     const hasPending = currentSent
       ? fastPending.length > 0
-      : await persistUserBentoObservation(c, input.userId, observation)
+      : await persistUserBentoObservation(c, input.userId, mappedObservation)
     if (hasPending)
       await backgroundTask(c, deliverPendingUserBentoEvents(c, input.userId))
   }
   catch (error) {
-    logUserBentoError(c, 'observe', input.userId, observation.bentoEvent, error)
+    logUserBentoError(c, 'observe', input.userId, delivery.type === 'fields' ? '$update_fields' : delivery.observation.bentoEvent, error)
   }
 }

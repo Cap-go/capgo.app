@@ -11,14 +11,14 @@ import { isSsoUser, provisionSsoUser } from '~/services/ssoProvisioning'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { getLocalConfig, useSupabase } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
-import { clearWebsitePaidUserCookie, setWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
+import { clearWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
 import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 import { getOnboardingResumeRedirect, isNewOnboardingUser } from '~/utils/onboardingRedirect'
 import { hasPendingInviteSkip } from '~/utils/pendingInviteSkip'
 import { validateRedirectPath } from '~/utils/safeRedirect'
-import { getPlans, isPlatformAdmin } from './../services/supabase'
+import { getPlans } from './../services/supabase'
 
 async function updateUser(
   main: ReturnType<typeof useMainStore>,
@@ -216,6 +216,16 @@ async function guard(
     main.plans = await getPlans()
   }
 
+  async function resolvePlatformAdminStatus() {
+    try {
+      await main.resolvePlatformAdminStatus()
+    }
+    catch (error) {
+      console.error('Failed to resolve platform admin status:', error)
+      main.isAdmin = false
+    }
+  }
+
   function shouldRedirectToOrgOnboarding() {
     if (isCliLoginRoute)
       return false
@@ -357,7 +367,9 @@ async function guard(
       })
     }
 
-    if (organizationsLoaded && !organizationStore.hasOrganizations && shouldRedirectToOrgOnboarding()) {
+    await resolvePlatformAdminStatus()
+
+    if (organizationsLoaded && !organizationStore.hasOrganizations && !main.isAdmin && shouldRedirectToOrgOnboarding()) {
       return next({
         path: '/onboarding/app',
         query: {
@@ -369,17 +381,6 @@ async function guard(
     const onboardingRedirect = await getPendingOnboardingRedirect(organizationsLoaded)
     if (onboardingRedirect)
       return next(onboardingRedirect)
-
-    try {
-      // isPlatformAdmin() is the only frontend admin-rights source.
-      main.isAdmin = await isPlatformAdmin()
-      if (main.isAdmin)
-        setWebsitePaidUserCookie(true)
-    }
-    catch (error) {
-      console.error('Failed to resolve platform admin status:', error)
-      main.isAdmin = false
-    }
 
     next()
     hideLoader()
@@ -429,7 +430,9 @@ async function guard(
       organizationsLoaded = await tryLoadOrganizations(() => organizationStore.fetchOrganizations(organizationFetchOptions))
     }
 
-    if (organizationsLoaded && !organizationStore.hasOrganizations && shouldRedirectToOrgOnboarding()) {
+    await resolvePlatformAdminStatus()
+
+    if (organizationsLoaded && !organizationStore.hasOrganizations && !main.isAdmin && shouldRedirectToOrgOnboarding()) {
       return next({
         path: '/onboarding/app',
         query: {

@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { INIT_ONBOARDING_STEP_IDS } from '../cli/src/init/onboarding-steps'
 import {
+  type AppOnboardingPatch,
+  APP_ONBOARDING_ADD_CODE_INFERRED_ANNOTATION,
   APP_ONBOARDING_OTA_V1_STEP_IDS,
   APP_ONBOARDING_V1_STEP_IDS,
   APP_ONBOARDING_V2_STEP_IDS,
   APP_ONBOARDING_V3_STEP_IDS,
   appendAppOnboardingStepHistory,
   applyAppOnboardingPatch,
+  applyAppOnboardingStepAnnotations,
   defaultAppOnboarding,
   filterAppOnboardingReportedPatch,
   getAppOnboardingStepHistoryChanges,
@@ -291,6 +294,38 @@ describe('version 4 OTA checklist', () => {
     expect(mergeAppOnboarding(current, { outcome: 'completed' }).outcome).toBe('in_progress')
     expect(mergeAppOnboarding(current, { steps: Object.fromEntries(APP_ONBOARDING_OTA_V1_STEP_IDS.map(id => [id, { status: 'done' }])) }).outcome).toBe('completed')
     expect(filterAppOnboardingReportedPatch(current, { steps: { add_code: { status: 'done' }, run_device: { status: 'done' } } }).steps).toEqual({ add_code: { status: 'done' } })
+  })
+
+  it.concurrent('stores inferred add-code provenance and clears it after direct CLI evidence', () => {
+    const inferredPatch: AppOnboardingPatch = {
+      steps: {
+        add_code: {
+          status: 'done' as const,
+          annotation: APP_ONBOARDING_ADD_CODE_INFERRED_ANNOTATION,
+          annotationType: 'note' as const,
+        },
+      },
+    }
+    const inferred = applyAppOnboardingPatch(current, inferredPatch, () => '2026-09-30T10:00:00.000Z') as any
+    const withHistory = appendAppOnboardingStepHistory(current, inferred, inferredPatch, () => '2026-09-30T10:00:01.000Z')
+    expect(inferred.setup.steps.ota.add_code).toMatchObject({
+      status: 'done',
+      annotation: APP_ONBOARDING_ADD_CODE_INFERRED_ANNOTATION,
+      annotation_type: 'note',
+    })
+    expect(getAppOnboardingStepHistoryChanges(current, withHistory, inferredPatch)).toMatchObject([{
+      stepId: 'add_code',
+      completionSource: 'inferred',
+      inferredFromStepId: 'test_update',
+    }])
+
+    const directPatch = parseAppOnboardingPatch({
+      steps: { ota: { add_code: { status: 'done', annotation: 'forged' } } },
+    })!
+    expect(directPatch).toEqual({ steps: { add_code: { status: 'done' } } })
+    const directlyVerified = applyAppOnboardingStepAnnotations(inferred, inferred, directPatch) as any
+    expect(directlyVerified.setup.steps.ota.add_code).not.toHaveProperty('annotation')
+    expect(directlyVerified.setup.steps.ota.add_code).not.toHaveProperty('annotation_type')
   })
 })
 

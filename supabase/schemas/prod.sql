@@ -985,7 +985,7 @@ COMMENT ON FUNCTION "public"."app_versions_readable_app_ids"() IS 'Returns app I
 
 
 
-CREATE OR REPLACE FUNCTION "public"."apply_usage_overage"("p_org_id" "uuid", "p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_billing_cycle_start" timestamp with time zone, "p_billing_cycle_end" timestamp with time zone, "p_details" "jsonb" DEFAULT NULL::"jsonb") RETURNS TABLE("overage_amount" numeric, "credits_required" numeric, "credits_applied" numeric, "credits_remaining" numeric, "credit_step_id" bigint, "overage_covered" numeric, "overage_unpaid" numeric, "overage_event_id" "uuid")
+CREATE OR REPLACE FUNCTION "public"."apply_usage_overage"("p_org_id" "uuid", "p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_billing_cycle_start" timestamp with time zone, "p_billing_cycle_end" timestamp with time zone, "p_details" "jsonb" DEFAULT NULL::"jsonb", "p_included_amount" numeric DEFAULT 0) RETURNS TABLE("overage_amount" numeric, "credits_required" numeric, "credits_applied" numeric, "credits_remaining" numeric, "credit_step_id" bigint, "overage_covered" numeric, "overage_unpaid" numeric, "overage_event_id" "uuid")
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -1005,6 +1005,13 @@ DECLARE
   v_latest_event_id uuid;
   v_latest_overage_amount numeric;
   v_needs_new_record boolean := false;
+  v_budget numeric;
+  v_start numeric;
+  v_end numeric;
+  v_slice numeric;
+  v_slice_cost numeric;
+  v_unit_factor numeric;
+  step_rec public.capgo_credits_steps%ROWTYPE;
   grant_rec public.usage_credit_grants%ROWTYPE;
 BEGIN
   -- Early exit for invalid input
@@ -1017,10 +1024,11 @@ BEGIN
   -- read below always reflects committed debits from other callers.
   PERFORM pg_advisory_xact_lock(hashtextextended('apply_usage_overage:' || p_org_id::text || ':' || p_metric::text, 0));
 
-  -- Calculate credit cost for this overage
+  -- Price the overage at the tiers of the total volume it sits in:
+  -- [p_included_amount, p_included_amount + p_overage_amount).
   SELECT *
   INTO v_calc
-  FROM public.calculate_credit_cost(p_metric, p_overage_amount)
+  FROM public.calculate_credit_cost(p_metric, p_overage_amount, COALESCE(p_included_amount, 0))
   LIMIT 1;
 
   -- If no pricing step found, create a single record and exit
@@ -1221,11 +1229,42 @@ BEGIN
     v_event_id := v_latest_event_id;
   END IF;
 
-  -- Calculate how much overage is covered by credits
-  IF v_per_unit > 0 THEN
-    v_overage_paid := LEAST(p_overage_amount, (v_applied + v_existing_credits_debited) / v_per_unit);
-  ELSE
+  -- Calculate how much overage is covered by credits. Walk the same tier
+  -- slices as calculate_credit_cost: a blended rate would overstate the
+  -- usage partial credits cover, since the cheaper tiers come last.
+  v_budget := v_applied + v_existing_credits_debited;
+  IF v_per_unit <= 0 OR v_budget >= v_required THEN
     v_overage_paid := p_overage_amount;
+  ELSE
+    v_start := GREATEST(COALESCE(p_included_amount, 0), 0);
+    v_end := v_start + p_overage_amount;
+    FOR step_rec IN
+      SELECT *
+      FROM public.capgo_credits_steps
+      WHERE type = p_metric::text
+        AND org_id IS NULL
+        AND step_max > v_start
+        AND step_min < v_end
+      ORDER BY step_min ASC
+    LOOP
+      EXIT WHEN v_budget <= 0;
+
+      v_slice := LEAST(v_end, step_rec.step_max::numeric) - GREATEST(v_start, step_rec.step_min::numeric);
+      CONTINUE WHEN v_slice <= 0 OR step_rec.price_per_unit <= 0;
+
+      v_unit_factor := GREATEST(NULLIF(step_rec.unit_factor, 0), 1)::numeric;
+      v_slice_cost := CEILING(v_slice / v_unit_factor) * step_rec.price_per_unit::numeric;
+
+      IF v_budget >= v_slice_cost THEN
+        v_overage_paid := v_overage_paid + v_slice;
+        v_budget := v_budget - v_slice_cost;
+      ELSE
+        v_overage_paid := v_overage_paid
+          + FLOOR(v_budget / step_rec.price_per_unit::numeric) * v_unit_factor;
+        v_budget := 0;
+      END IF;
+    END LOOP;
+    v_overage_paid := LEAST(v_overage_paid, p_overage_amount);
   END IF;
 
   RETURN QUERY SELECT
@@ -1241,7 +1280,7 @@ END;
 $$;
 
 
-ALTER FUNCTION "public"."apply_usage_overage"("p_org_id" "uuid", "p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_billing_cycle_start" timestamp with time zone, "p_billing_cycle_end" timestamp with time zone, "p_details" "jsonb") OWNER TO "postgres";
+ALTER FUNCTION "public"."apply_usage_overage"("p_org_id" "uuid", "p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_billing_cycle_start" timestamp with time zone, "p_billing_cycle_end" timestamp with time zone, "p_details" "jsonb", "p_included_amount" numeric) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."apps_readable_app_ids"() RETURNS character varying[]
@@ -1708,47 +1747,36 @@ BEGIN
   THEN
     v_creator := (NEW.onboarding ->> 'created_by_user_id')::uuid;
   END IF;
-  IF EXISTS (
+  v_setup := CASE WHEN pg_catalog.jsonb_typeof(NEW.onboarding -> 'setup') = 'object'
+    THEN NEW.onboarding -> 'setup' ELSE '{}'::jsonb END;
+  IF v_creator IS NOT NULL THEN
+    NEW.onboarding := COALESCE(NEW.onboarding, '{}'::jsonb)
+      || pg_catalog.jsonb_build_object('created_by_user_id', v_creator::text);
+  END IF;
+
+  IF NOT EXISTS (
     SELECT 1 FROM public.orgs AS o
     WHERE o.id = NEW.owner_org
       AND o.onboarding ->> 'intent' = 'ota'
-  ) THEN
-    v_setup := CASE WHEN pg_catalog.jsonb_typeof(NEW.onboarding -> 'setup') = 'object'
-      THEN NEW.onboarding -> 'setup' ELSE '{}'::jsonb END;
-    IF v_creator IS NOT NULL THEN
-      NEW.onboarding := COALESCE(NEW.onboarding, '{}'::jsonb)
-        || pg_catalog.jsonb_build_object('created_by_user_id', v_creator::text);
-    END IF;
-    NEW.onboarding := pg_catalog.jsonb_set(COALESCE(NEW.onboarding, '{}'::jsonb), '{setup}',
-      v_setup || pg_catalog.jsonb_build_object(
-        'todo_list_version', 4,
-        'ota_todo_list_version', '1',
-        'paths', pg_catalog.jsonb_build_array('ota'),
-        'selected_path', 'ota',
-        'steps', pg_catalog.jsonb_build_object('ota', pg_catalog.jsonb_build_object(
-          'login_cli_mcp', pg_catalog.jsonb_build_object('status', 'pending'),
-          'add_channel', pg_catalog.jsonb_build_object('status', 'pending'),
-          'add_updater', pg_catalog.jsonb_build_object('status', 'pending'),
-          'add_code', pg_catalog.jsonb_build_object('status', 'pending'),
-          'run_device', pg_catalog.jsonb_build_object('status', 'pending'),
-          'upload_bundle', pg_catalog.jsonb_build_object('status', 'pending'),
-          'test_update', pg_catalog.jsonb_build_object('status', 'pending')
-        ))
-      ), true);
-  ELSIF EXISTS (
+  ) AND EXISTS (
     SELECT 1 FROM public.users AS u
     JOIN public.orgs AS o ON o.id = NEW.owner_org
     WHERE u.id = v_creator AND o.created_by = u.id
       AND u.onboarding ->> 'intent' = 'builder'
       AND u.onboarding #>> '{abtests,builder_todo_list_v4,branch}' = 'A'
   ) THEN
-    v_setup := CASE WHEN pg_catalog.jsonb_typeof(NEW.onboarding -> 'setup') = 'object'
-      THEN NEW.onboarding -> 'setup' ELSE '{}'::jsonb END;
-    NEW.onboarding := COALESCE(NEW.onboarding, '{}'::jsonb)
-      || pg_catalog.jsonb_build_object('created_by_user_id', v_creator::text);
     NEW.onboarding := pg_catalog.jsonb_set(COALESCE(NEW.onboarding, '{}'::jsonb), '{setup}',
       (v_setup - 'ota_todo_list_version' - 'selected_builder_platform')
         || public.new_builder_onboarding_setup_v1(), true);
+  ELSE
+    NEW.onboarding := pg_catalog.jsonb_set(COALESCE(NEW.onboarding, '{}'::jsonb), '{setup}',
+      v_setup || pg_catalog.jsonb_build_object(
+        'todo_list_version', 4,
+        'ota_todo_list_version', '1',
+        'paths', pg_catalog.jsonb_build_array('ota'),
+        'selected_path', 'ota',
+        'steps', pg_catalog.jsonb_build_object('ota', public.new_ota_onboarding_steps_v1())
+      ), true);
   END IF;
   RETURN NEW;
 END;
@@ -2356,30 +2384,46 @@ ALTER FUNCTION "public"."bind_creating_apikey_to_org_on_create"() OWNER TO "post
 
 
 CREATE OR REPLACE FUNCTION "public"."calculate_credit_cost"("p_metric" "public"."credit_metric_type", "p_overage_amount" numeric) RETURNS TABLE("credit_step_id" bigint, "credit_cost_per_unit" numeric, "credits_required" numeric)
+    LANGUAGE "sql"
+    SET "search_path" TO ''
+    AS $$
+  SELECT *
+  FROM public.calculate_credit_cost(p_metric, p_overage_amount, 0::numeric);
+$$;
+
+
+ALTER FUNCTION "public"."calculate_credit_cost"("p_metric" "public"."credit_metric_type", "p_overage_amount" numeric) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."calculate_credit_cost"("p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_included_amount" numeric) RETURNS TABLE("credit_step_id" bigint, "credit_cost_per_unit" numeric, "credits_required" numeric)
     LANGUAGE "plpgsql"
     SET "search_path" TO ''
     AS $$
 DECLARE
   v_step public.capgo_credits_steps%ROWTYPE;
   v_highest public.capgo_credits_steps%ROWTYPE;
-  v_remaining numeric;
-  v_applied_range numeric;
+  v_start numeric;
+  v_end numeric;
+  v_covered numeric := 0;
+  v_slice numeric;
   v_units numeric;
+  v_unit_factor numeric;
   v_total_credits numeric := 0;
   v_last_step_id bigint := NULL;
-  v_unit_factor numeric;
 BEGIN
   IF p_overage_amount IS NULL OR p_overage_amount <= 0 THEN
     RETURN QUERY SELECT NULL::bigint, 0::numeric, 0::numeric;
     RETURN;
   END IF;
 
-  v_remaining := p_overage_amount;
+  v_start := GREATEST(COALESCE(p_included_amount, 0), 0);
+  v_end := v_start + p_overage_amount;
 
   SELECT *
   INTO v_highest
   FROM public.capgo_credits_steps
   WHERE type = p_metric::text
+    AND org_id IS NULL
   ORDER BY step_max DESC, step_min DESC
   LIMIT 1;
 
@@ -2393,54 +2437,42 @@ BEGIN
     SELECT *
     FROM public.capgo_credits_steps
     WHERE type = p_metric::text
+      AND org_id IS NULL
+      AND step_max > v_start
+      AND step_min < v_end
     ORDER BY step_min ASC
   LOOP
-    EXIT WHEN v_remaining <= 0;
+    v_slice := LEAST(v_end, v_step.step_max::numeric) - GREATEST(v_start, v_step.step_min::numeric);
 
-    IF p_overage_amount < v_step.step_min THEN
-      EXIT;
-    END IF;
-
-    v_applied_range := LEAST(
-      v_remaining,
-      (v_step.step_max - v_step.step_min)::numeric
-    );
-
-    IF v_applied_range <= 0 THEN
+    IF v_slice <= 0 THEN
       CONTINUE;
     END IF;
 
     v_unit_factor := GREATEST(NULLIF(v_step.unit_factor, 0), 1)::numeric;
-    v_units := CEILING(v_applied_range / v_unit_factor);
-
-    IF v_units <= 0 THEN
-      CONTINUE;
-    END IF;
-
+    v_units := CEILING(v_slice / v_unit_factor);
     v_total_credits := v_total_credits + (v_units * v_step.price_per_unit::numeric);
-    v_remaining := v_remaining - v_applied_range;
+    v_covered := v_covered + v_slice;
     v_last_step_id := v_step.id;
   END LOOP;
 
-  IF v_remaining > 0 THEN
+  -- Usage outside every tier range (gaps or above the top tier) is billed
+  -- at the top tier price.
+  IF v_covered < p_overage_amount THEN
     v_unit_factor := GREATEST(NULLIF(v_highest.unit_factor, 0), 1)::numeric;
-    v_units := CEILING(v_remaining / v_unit_factor);
-
-    IF v_units > 0 THEN
-      v_total_credits := v_total_credits + (v_units * v_highest.price_per_unit::numeric);
-      v_last_step_id := v_highest.id;
-    END IF;
+    v_units := CEILING((p_overage_amount - v_covered) / v_unit_factor);
+    v_total_credits := v_total_credits + (v_units * v_highest.price_per_unit::numeric);
+    v_last_step_id := COALESCE(v_last_step_id, v_highest.id);
   END IF;
 
   RETURN QUERY SELECT
-    v_last_step_id::bigint,
-    CASE WHEN p_overage_amount > 0 THEN v_total_credits / p_overage_amount ELSE 0 END,
+    v_last_step_id,
+    v_total_credits / p_overage_amount,
     v_total_credits;
 END;
 $$;
 
 
-ALTER FUNCTION "public"."calculate_credit_cost"("p_metric" "public"."credit_metric_type", "p_overage_amount" numeric) OWNER TO "postgres";
+ALTER FUNCTION "public"."calculate_credit_cost"("p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_included_amount" numeric) OWNER TO "postgres";
 
 SET default_tablespace = '';
 
@@ -12927,6 +12959,37 @@ $$;
 
 
 ALTER FUNCTION "public"."new_builder_onboarding_setup_v1"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."new_ota_onboarding_steps_v1"("p_legacy_steps" "jsonb" DEFAULT '{}'::"jsonb") RETURNS "jsonb"
+    LANGUAGE "sql" IMMUTABLE
+    SET "search_path" TO ''
+    AS $$
+  -- Carries done/skipped statuses (and their metadata) from a flat v1-v3 step
+  -- record. v1 named the first step add_app instead of login_cli_mcp.
+  SELECT pg_catalog.jsonb_object_agg(
+    step.id,
+    CASE
+      WHEN legacy.value ->> 'status' IN ('done', 'skipped') THEN legacy.value
+      ELSE pg_catalog.jsonb_build_object('status', 'pending')
+    END
+  )
+  FROM unnest(ARRAY[
+    'login_cli_mcp', 'add_channel', 'add_updater', 'add_code',
+    'run_device', 'upload_bundle', 'test_update'
+  ]) AS step(id)
+  LEFT JOIN LATERAL (
+    SELECT CASE
+      WHEN pg_catalog.jsonb_typeof(COALESCE(p_legacy_steps, '{}'::jsonb)) <> 'object' THEN NULL
+      WHEN pg_catalog.jsonb_typeof(p_legacy_steps -> step.id) = 'object' THEN p_legacy_steps -> step.id
+      WHEN step.id = 'login_cli_mcp' AND pg_catalog.jsonb_typeof(p_legacy_steps -> 'add_app') = 'object'
+        THEN p_legacy_steps -> 'add_app'
+    END AS value
+  ) AS legacy ON true;
+$$;
+
+
+ALTER FUNCTION "public"."new_ota_onboarding_steps_v1"("p_legacy_steps" "jsonb") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."normalize_public_channel_overlap"() RETURNS "trigger"
@@ -26623,6 +26686,30 @@ CREATE POLICY "Deny all authenticated on builder_capacity_events" ON "public"."b
 
 
 
+CREATE POLICY "Deny all direct access" ON "public"."app_onboarding" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny all direct access" ON "public"."app_stats_refresh_state" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny all direct access" ON "public"."manifest_per_version" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny all direct access" ON "public"."mcp_oauth_clients" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny all direct access" ON "public"."mcp_oauth_requests" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny all direct access" ON "public"."org_stats_refresh_state" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
 CREATE POLICY "Deny all notification app settings access" ON "public"."notification_app_settings" AS RESTRICTIVE USING (false) WITH CHECK (false);
 
 
@@ -27857,8 +27944,8 @@ GRANT ALL ON FUNCTION "public"."app_versions_readable_app_ids"() TO "authenticat
 
 
 
-REVOKE ALL ON FUNCTION "public"."apply_usage_overage"("p_org_id" "uuid", "p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_billing_cycle_start" timestamp with time zone, "p_billing_cycle_end" timestamp with time zone, "p_details" "jsonb") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."apply_usage_overage"("p_org_id" "uuid", "p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_billing_cycle_start" timestamp with time zone, "p_billing_cycle_end" timestamp with time zone, "p_details" "jsonb") TO "service_role";
+REVOKE ALL ON FUNCTION "public"."apply_usage_overage"("p_org_id" "uuid", "p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_billing_cycle_start" timestamp with time zone, "p_billing_cycle_end" timestamp with time zone, "p_details" "jsonb", "p_included_amount" numeric) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."apply_usage_overage"("p_org_id" "uuid", "p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_billing_cycle_start" timestamp with time zone, "p_billing_cycle_end" timestamp with time zone, "p_details" "jsonb", "p_included_amount" numeric) TO "service_role";
 
 
 
@@ -27955,6 +28042,10 @@ GRANT ALL ON FUNCTION "public"."bind_creating_apikey_to_org_on_create"() TO "ser
 
 
 REVOKE ALL ON FUNCTION "public"."calculate_credit_cost"("p_metric" "public"."credit_metric_type", "p_overage_amount" numeric) FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "public"."calculate_credit_cost"("p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_included_amount" numeric) FROM PUBLIC;
 
 
 
@@ -29265,6 +29356,11 @@ GRANT ALL ON FUNCTION "public"."merge_app_onboarding_setup"("p_existing" "jsonb"
 
 REVOKE ALL ON FUNCTION "public"."new_builder_onboarding_setup_v1"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."new_builder_onboarding_setup_v1"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."new_ota_onboarding_steps_v1"("p_legacy_steps" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."new_ota_onboarding_steps_v1"("p_legacy_steps" "jsonb") TO "service_role";
 
 
 

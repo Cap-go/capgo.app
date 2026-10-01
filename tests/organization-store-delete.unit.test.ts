@@ -25,10 +25,18 @@ const mockResolveImagePath = vi.fn((raw?: string | null) => ({
   shouldSign: Boolean(raw?.trim()),
 }))
 const mockUpdateDashboard = vi.fn()
-const mainStore = {
+const mainStore: any = {
   auth: { id: 'auth-user-123' } as { id: string } | undefined,
   user: { id: 'user-123' } as { id: string } | undefined,
   isAdmin: false,
+  invalidatePlatformAdminStatus: vi.fn(() => {
+    mainStore.isAdmin = false
+  }),
+  resolvePlatformAdminStatus: vi.fn(async () => {
+    const isAdmin = await mockIsPlatformAdmin()
+    mainStore.isAdmin = isAdmin
+    return isAdmin
+  }),
   updateDashboard: mockUpdateDashboard,
 }
 
