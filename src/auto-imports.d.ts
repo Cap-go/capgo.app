@@ -362,7 +362,7 @@ declare global {
   export type { UpdateEndpointRequest } from './composables/useDeviceUpdateFormat'
   import('./composables/useDeviceUpdateFormat')
   // @ts-ignore
-  export type { ReleaseLiveDeployment, ReleaseLiveBucket, ReleaseLiveResponse } from './composables/useReleaseLive'
+  export type { ReleaseLiveDeployment, ReleaseLiveChannel, ReleaseLiveBucket, ReleaseLiveResponse } from './composables/useReleaseLive'
   import('./composables/useReleaseLive')
   // @ts-ignore
   export type { CheckDomainResponse } from './composables/useSSORouting'

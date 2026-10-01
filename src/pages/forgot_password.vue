@@ -193,7 +193,7 @@ watchEffect(() => {
     :card-description="cardDescription"
   >
     <div v-if="isLoadingMain" class="flex justify-center py-10">
-      <Spinner size="w-14 h-14" class="my-auto" />
+      <CapgoLoader size="w-14 h-14" class="my-auto" />
     </div>
 
     <FormKit v-else id="forgot-password" type="form" :actions="false" :value="initialFormValue" @submit="submit">

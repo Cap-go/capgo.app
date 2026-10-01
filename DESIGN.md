@@ -198,6 +198,11 @@ Capgo uses a hybrid of tonal layering and light structural shadows. The default 
 - **State:** Loading uses skeletons or spinner-in-button feedback. Empty states teach the next action.
 - **Actions:** Icon buttons need accessible titles/tooltips and disabled styles.
 
+### Logo / Loaders
+- **Mark:** A rounded diamond with the capacitor-symbol plates cut out. Master SVGs live in `assets/brand/`; every raster (favicons, PWA, native icons and splash screens, `public/capgo.webp`) is generated from them with `bun run brand:assets`. Do not hand-edit generated rasters.
+- **App icon:** White mark on navy `#001827` rounded square. Environment favicons swap only the square color (development azure, local green, preprod amber).
+- **Page loading:** Use `PageLoader` / `CapgoLoader` (quarter-turn spin with pulsing plates) for full-page or card-level waits. Keep `Spinner` for inline and in-button feedback.
+
 ### Dialogs
 - **Style:** Teleported modal with black backdrop, base surface, 8px radius, and strong shadow.
 - **Layout:** Title, description, custom content, then right-aligned action row.
