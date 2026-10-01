@@ -201,9 +201,24 @@ function useManifestEntries(entries: ReturnType<typeof makeEntries>) {
  * Simulates the batched cleanup SQL: the release CTE deletes rows still used by
  * another version (sharedIds) and returns the rest as last references.
  */
-function mockCleanupPg(options: { sharedIds?: Set<number>, remainingCount?: number, reReferencedPaths?: string[] } = {}) {
+function mockCleanupPg(options: { sharedIds?: Set<number>, remainingCount?: number, reReferencedPaths?: string[], pendingRestorePaths?: string[] } = {}) {
   const sharedIds = options.sharedIds ?? new Set<number>()
   pgQuery.mockImplementation(async (sql: string, params?: any[]) => {
+    if (sql.includes('public.manifest_trash_restore_pending')) {
+      if (sql.includes('INSERT INTO')) {
+        for (const path of params?.[1] as string[])
+          callOrder.push(`pending_insert:${path}`)
+      }
+      else if (sql.includes('DELETE FROM')) {
+        for (const path of params?.[1] as string[])
+          callOrder.push(`pending_delete:${path}`)
+      }
+      else {
+        const rows = (options.pendingRestorePaths ?? []).map(s3_path => ({ s3_path }))
+        return { rows, rowCount: rows.length }
+      }
+      return { rows: [], rowCount: 0 }
+    }
     if (sql.includes('pg_advisory_xact_lock')) {
       callOrder.push('lock')
       return { rows: [], rowCount: 0 }
@@ -351,15 +366,45 @@ describe('on_version_update deleted version cleanup', () => {
     expect(callOrder).toContain('db_delete_row:1001')
   })
 
-  it('keeps rows tracked and fails when a re-referenced object cannot be restored', async () => {
+  it('persists a failed restore and keeps rows tracked', async () => {
     useManifestEntries(makeEntries(1))
-    mockCleanupPg({ reReferencedPaths: [makeEntries(1)[0]!.s3_path] })
+    const path = makeEntries(1)[0]!.s3_path
+    mockCleanupPg({ reReferencedPaths: [path] })
     restoreObjectFromTrash.mockResolvedValue(false)
 
     await expect(deleteIt(createContext(), createVersion({ r2_path: null, manifest_count: 1 }))).rejects.toThrow(
       'Cannot restore re-referenced manifest file from trash',
     )
+    expect(callOrder).toContain(`pending_insert:${path}`)
     expect(callOrder.some(v => v.startsWith('db_delete_row:'))).toBe(false)
+  })
+
+  it('retries a pending restore before releasing any row, and keeps everything while it fails', async () => {
+    useManifestEntries(makeEntries(1))
+    const path = makeEntries(1)[0]!.s3_path
+    // The retry sees the new upload's row: this row would be released as shared.
+    mockCleanupPg({ pendingRestorePaths: [path], sharedIds: new Set([1000]) })
+    restoreObjectFromTrash.mockResolvedValue(false)
+
+    await expect(deleteIt(createContext(), createVersion({ r2_path: null, manifest_count: 1 }))).rejects.toThrow(
+      'Cannot restore re-referenced manifest file from trash',
+    )
+    expect(restoreObjectFromTrash).toHaveBeenCalledWith(expect.anything(), path)
+    expect(callOrder).not.toContain('lock')
+    expect(callOrder).not.toContain('db_release_row:1000')
+    expect(callOrder).not.toContain(`pending_delete:${path}`)
+  })
+
+  it('clears a pending restore once it succeeds, then releases the shared row', async () => {
+    useManifestEntries(makeEntries(1))
+    const path = makeEntries(1)[0]!.s3_path
+    mockCleanupPg({ pendingRestorePaths: [path], sharedIds: new Set([1000]) })
+
+    await deleteIt(createContext(), createVersion({ r2_path: null, manifest_count: 1 }))
+
+    expect(restoreObjectFromTrash).toHaveBeenCalledWith(expect.anything(), path)
+    expect(callOrder.indexOf(`pending_delete:${path}`)).toBeLessThan(callOrder.indexOf('db_release_row:1000'))
+    expect(moveObjectToTrash).not.toHaveBeenCalled()
   })
 
   it('still clears manifests when version meta is missing', async () => {

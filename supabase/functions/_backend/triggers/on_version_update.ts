@@ -414,8 +414,12 @@ async function releaseSharedManifestEntries(database: ManifestCleanupDatabase, v
  * locks, so a new version can start referencing an object between the batch
  * commit and its trash move. Recheck after the move and copy those objects
  * back; the rows of this version are then dropped like any shared file.
+ *
+ * A failed restore is persisted before raising: on the retry the new row makes
+ * this version's row look shared, so it would be released without another
+ * restore attempt. retryPendingTrashRestores runs before any release.
  */
-async function restoreReReferencedObjects(c: Context, database: ManifestCleanupDatabase, entries: ManifestCleanupEntry[]) {
+async function restoreReReferencedObjects(c: Context, database: ManifestCleanupDatabase, versionId: number, entries: ManifestCleanupEntry[]) {
   const reReferenced = await database.execute<{ s3_path: string }>(sql`
     SELECT DISTINCT s3_path
     FROM public.manifest
@@ -428,6 +432,49 @@ async function restoreReReferencedObjects(c: Context, database: ManifestCleanupD
     cloudlog({ requestId: c.get('requestId'), message: 'manifest object re-referenced during trash, restoring', s3_path })
     if (!await s3.restoreObjectFromTrash(c, s3_path))
       failedPaths.push(s3_path)
+  }
+  if (failedPaths.length > 0) {
+    await database.execute(sql`
+      INSERT INTO public.manifest_trash_restore_pending (s3_path, app_version_id)
+      SELECT pending.s3_path, ${versionId}
+      FROM unnest(${sql.param(failedPaths)}::text[]) AS pending(s3_path)
+      ON CONFLICT (app_version_id, s3_path) DO NOTHING
+    `)
+    simpleError('cannot_restore_manifest_s3_from_trash', 'Cannot restore re-referenced manifest file from trash', {
+      s3_path: failedPaths[0],
+      failedCount: failedPaths.length,
+    })
+  }
+}
+
+/**
+ * Retries restores that failed on an earlier pass for this version. Raises
+ * while any is still failing, so no manifest row is released before its
+ * re-referenced object is back.
+ */
+async function retryPendingTrashRestores(c: Context, database: ManifestCleanupDatabase, versionId: number) {
+  const pending = await database.execute<{ s3_path: string }>(sql`
+    SELECT s3_path
+    FROM public.manifest_trash_restore_pending
+    WHERE app_version_id = ${versionId}
+  `)
+  if (pending.rows.length === 0)
+    return
+
+  const restoredPaths: string[] = []
+  const failedPaths: string[] = []
+  for (const { s3_path } of pending.rows) {
+    if (await s3.restoreObjectFromTrash(c, s3_path))
+      restoredPaths.push(s3_path)
+    else
+      failedPaths.push(s3_path)
+  }
+  if (restoredPaths.length > 0) {
+    await database.execute(sql`
+      DELETE FROM public.manifest_trash_restore_pending
+      WHERE app_version_id = ${versionId}
+        AND s3_path = ANY(${sql.param(restoredPaths)}::text[])
+    `)
   }
   if (failedPaths.length > 0) {
     simpleError('cannot_restore_manifest_s3_from_trash', 'Cannot restore re-referenced manifest file from trash', {
@@ -462,7 +509,7 @@ async function trashLastReferenceEntries(c: Context, database: ManifestCleanupDa
   await Promise.all(workers)
 
   if (trashed.length > 0) {
-    await restoreReReferencedObjects(c, database, trashed)
+    await restoreReReferencedObjects(c, database, versionId, trashed)
     await database.execute(sql`
       DELETE FROM public.manifest
       WHERE id = ANY(${sql.param(trashed.map(entry => entry.id))}::bigint[])
@@ -512,6 +559,7 @@ async function deleteManifest(c: Context, record: Database['public']['Tables']['
     const cleanupPool = getPgClient(c, false)
     try {
       const cleanupDatabase = getDrizzleClient(cleanupPool)
+      await retryPendingTrashRestores(c, cleanupDatabase, record.id)
       for (let offset = 0; offset < manifestIds.length; offset += MANIFEST_CLEANUP_BATCH_SIZE) {
         const batchIds = manifestIds.slice(offset, offset + MANIFEST_CLEANUP_BATCH_SIZE)
         const lastReferences = await releaseSharedManifestEntries(cleanupDatabase, record.id, batchIds)
