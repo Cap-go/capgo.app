@@ -45,7 +45,8 @@ export const useMainStore = defineStore('main', () => {
   })
   const isAdmin = ref<boolean>(false)
   let platformAdminStatusGeneration = -1
-  let platformAdminStatusRequest: { generation: number, promise: Promise<boolean> } | undefined
+  let platformAdminStatusEpoch = 0
+  let platformAdminStatusRequest: { epoch: number, generation: number, promise: Promise<boolean> } | undefined
   const dashboard = ref<AppUsageGlobal[]>([])
   const dashboardByapp = ref<AppUsageByApp[]>([])
   const totalDevices = ref<number>(0)
@@ -56,20 +57,23 @@ export const useMainStore = defineStore('main', () => {
   const totalDownload = ref<number>(0)
 
   const invalidatePlatformAdminStatus = () => {
+    platformAdminStatusEpoch += 1
     platformAdminStatusGeneration = -1
+    platformAdminStatusRequest = undefined
     isAdmin.value = false
   }
 
   const resolvePlatformAdminStatus = async () => {
     const generation = authGeneration.value
+    const epoch = platformAdminStatusEpoch
     if (platformAdminStatusGeneration === generation)
       return isAdmin.value
-    if (platformAdminStatusRequest?.generation === generation)
+    if (platformAdminStatusRequest?.generation === generation && platformAdminStatusRequest.epoch === epoch)
       return platformAdminStatusRequest.promise
 
     const promise: Promise<boolean> = isPlatformAdmin()
       .then((status) => {
-        if (authGeneration.value === generation) {
+        if (authGeneration.value === generation && platformAdminStatusEpoch === epoch) {
           isAdmin.value = status
           platformAdminStatusGeneration = generation
           if (status)
@@ -82,7 +86,7 @@ export const useMainStore = defineStore('main', () => {
           platformAdminStatusRequest = undefined
       })
 
-    platformAdminStatusRequest = { generation, promise }
+    platformAdminStatusRequest = { epoch, generation, promise }
     return promise
   }
 

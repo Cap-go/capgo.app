@@ -141,4 +141,39 @@ describe('main store dashboard range normalization', () => {
     expect(mockIsPlatformAdmin).toHaveBeenCalledTimes(2)
     expect(store.isAdmin).toBe(true)
   })
+
+  it('discards an in-flight platform-admin lookup after invalidation', async () => {
+    let resolveStale!: (status: boolean) => void
+    let resolveFresh!: (status: boolean) => void
+    const staleResponse = new Promise<boolean>((resolve) => {
+      resolveStale = resolve
+    })
+    const freshResponse = new Promise<boolean>((resolve) => {
+      resolveFresh = resolve
+    })
+    mockIsPlatformAdmin
+      .mockReturnValueOnce(staleResponse)
+      .mockReturnValueOnce(freshResponse)
+
+    const { useMainStore } = await import('../src/stores/main.ts')
+    const store = useMainStore()
+    store.auth = { id: 'admin-123' } as any
+
+    const staleLookup = store.resolvePlatformAdminStatus()
+    store.invalidatePlatformAdminStatus()
+    const freshLookup = store.resolvePlatformAdminStatus()
+
+    expect(mockIsPlatformAdmin).toHaveBeenCalledTimes(2)
+
+    resolveFresh(true)
+    await expect(freshLookup).resolves.toBe(true)
+    expect(store.isAdmin).toBe(true)
+
+    resolveStale(false)
+    await expect(staleLookup).resolves.toBe(false)
+    expect(store.isAdmin).toBe(true)
+
+    await expect(store.resolvePlatformAdminStatus()).resolves.toBe(true)
+    expect(mockIsPlatformAdmin).toHaveBeenCalledTimes(2)
+  })
 })
