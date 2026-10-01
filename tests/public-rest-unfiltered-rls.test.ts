@@ -47,6 +47,21 @@ const coreUnfilteredRestTables = [
   'orgs',
 ]
 
+const rlsTablesWithoutPoliciesSql = `
+SELECT c.relname AS table_name
+FROM pg_class c
+INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public'
+  AND c.relkind IN ('r', 'p')
+  AND c.relrowsecurity
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pg_policy p
+    WHERE p.polrelid = c.oid
+  )
+ORDER BY c.relname
+`
+
 const riskySelectPolicySql = `
 WITH exposed_select_policies AS (
   SELECT
@@ -208,6 +223,12 @@ async function fetchRestProbe(probe: RestProbeRow, headers: Record<string, strin
 }
 
 describe('public REST unfiltered RLS regression guard', () => {
+  it.concurrent('keeps a policy on every RLS-enabled public table', async () => {
+    const rows = await executeSQL(rlsTablesWithoutPoliciesSql)
+
+    expect(rows).toEqual([])
+  })
+
   it('does not run direct per-row identity helpers in exposed SELECT policies', async () => {
     const riskyRows = await executeSQL(riskySelectPolicySql, [
       '\\m(check_min_rights|get_identity|get_identity_org_allowed|get_identity_org_appid|get_user_main_org_id_by_app_id|is_member_of_org|is_current_user_group_member|rbac_check_permission|rbac_check_permission_request|app_versions_has_app_permission|is_user_org_admin|is_user_app_admin|user_has_role_in_app|user_has_app_update_user_roles)\\M',
