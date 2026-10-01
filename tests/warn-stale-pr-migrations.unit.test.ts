@@ -113,8 +113,8 @@ describe('stale pull request migration warnings', () => {
         sha: 'abc123',
       },
       core,
+      currentMainMigrationPaths: ['supabase/migrations/20261001093410_latest.sql'],
       mainMigrationPaths: ['supabase/migrations/20261001093410_latest.sql'],
-      latestMainMigrationPath: 'supabase/migrations/20261001093410_latest.sql',
       now: new Date('2026-10-01T12:00:00Z'),
     })
 
@@ -164,8 +164,8 @@ describe('stale pull request migration warnings', () => {
         sha: 'abc123',
       },
       core,
+      currentMainMigrationPaths: ['supabase/migrations/20261001120000_current-main.sql'],
       mainMigrationPaths: ['supabase/migrations/20261001093410_latest.sql'],
-      latestMainMigrationPath: 'supabase/migrations/20261001093410_latest.sql',
       now: new Date('2026-10-01T12:00:00Z'),
     })
 
@@ -174,6 +174,9 @@ describe('stale pull request migration warnings', () => {
     expect(createComment).toHaveBeenCalledWith(expect.objectContaining({
       issue_number: 20,
       body: expect.stringContaining(warningModule.COMMENT_MARKER),
+    }))
+    expect(createComment).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.stringContaining('20261001120000_current-main.sql'),
     }))
     expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('PR #19: temporary API failure'))
   })
@@ -210,6 +213,8 @@ describe('stale pull request migration warnings', () => {
     expect(findStep?.run).toContain('-M100%')
     expect(findStep?.run).toContain('--diff-filter=AR')
     expect(findStep?.run).toContain('git rev-parse --verify --quiet "$BEFORE_SHA^{commit}"')
+    expect(findStep?.run).toContain('git fetch --no-tags origin')
+    expect(findStep?.run).toContain('git ls-tree -rz --name-only')
     expect(steps.find(step => step.name === 'Warn affected pull requests')?.uses).toBe('actions/github-script@v8')
   })
 })

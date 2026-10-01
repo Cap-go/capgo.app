@@ -32,6 +32,8 @@ jobs:
         env:
           AFTER_SHA: ${{ github.sha }}
           BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_MAIN_MIGRATION_PATHS_FILE: ${{ runner.temp }}/current-main-migrations.txt
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           if [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
             echo 'No previous main SHA is available; skipping migration-order warnings.'
@@ -52,6 +54,9 @@ jobs:
             exit 0
           fi
 
+          git fetch --no-tags origin "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}"
+          git ls-tree -rz --name-only "origin/${DEFAULT_BRANCH}" -- supabase/migrations > "$CURRENT_MAIN_MIGRATION_PATHS_FILE"
+
           {
             echo 'found=true'
             echo 'paths<<__MIGRATIONS__'
@@ -63,6 +68,7 @@ jobs:
         if: steps.main-migrations.outputs.found == 'true'
         uses: actions/github-script@v8
         env:
+          CURRENT_MAIN_MIGRATION_PATHS_FILE: ${{ runner.temp }}/current-main-migrations.txt
           MAIN_MIGRATION_PATHS: ${{ steps.main-migrations.outputs.paths }}
         with:
           script: |

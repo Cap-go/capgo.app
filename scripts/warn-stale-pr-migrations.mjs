@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import process from 'node:process'
 
@@ -96,12 +96,27 @@ function localMainMigrationPaths(workspace) {
     .map(file => `${MIGRATIONS_PREFIX}${file}`)
 }
 
+function loadCurrentMainMigrationPaths(workspace, providedPaths) {
+  if (providedPaths)
+    return providedPaths
+
+  const snapshotPath = process.env.CURRENT_MAIN_MIGRATION_PATHS_FILE
+  if (snapshotPath) {
+    return readFileSync(snapshotPath, 'utf8')
+      .split('\0')
+      .map(path => path.trim())
+      .filter(Boolean)
+  }
+
+  return localMainMigrationPaths(workspace)
+}
+
 export async function warnStalePrMigrations({
   github,
   context,
   core,
+  currentMainMigrationPaths,
   mainMigrationPaths,
-  latestMainMigrationPath,
   now = new Date(),
 }) {
   const changedMainMigrations = mainMigrationPaths
@@ -115,9 +130,8 @@ export async function warnStalePrMigrations({
   }
 
   const workspace = process.env.GITHUB_WORKSPACE ?? process.cwd()
-  const currentMainMigrationPaths = localMainMigrationPaths(workspace)
-  const latestMain = latestMainMigrationPath
-    ?? latestMigrationPath(currentMainMigrationPaths)
+  const currentMainPaths = loadCurrentMainMigrationPaths(workspace, currentMainMigrationPaths)
+  const latestMain = latestMigrationPath(currentMainPaths)
   if (!latestMain)
     throw new Error('Could not determine the latest Supabase migration on main.')
 
@@ -147,7 +161,7 @@ export async function warnStalePrMigrations({
         pull_number: pullRequest.number,
         per_page: 100,
       })
-      const staleMigrationPaths = stalePullRequestMigrations(files, latestMain, currentMainMigrationPaths)
+      const staleMigrationPaths = stalePullRequestMigrations(files, latestMain, currentMainPaths)
       const comments = await github.paginate(github.rest.issues.listComments, {
         owner,
         repo,
