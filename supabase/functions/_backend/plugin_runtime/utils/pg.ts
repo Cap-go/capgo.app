@@ -16,6 +16,7 @@ import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { resolveRolloutDecision } from './rollout.ts'
 import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
+import { updatesCacheTags } from './updatesEdgeCache.ts'
 
 /**
  * Plugin PG client handle. On Hyperdrive (workerd) this is a per-request `Client`;
@@ -258,10 +259,15 @@ async function getCachedReplicaLag(c: Context, pool: PluginPgClient): Promise<Re
   return query
 }
 
+/** Refresh the cached replica lag status (memory + Cache API) with one probe at most. */
+export function refreshReplicationLag(c: Context, pool: PluginPgClient) {
+  return getCachedReplicaLag(c, pool)
+}
+
 /**
  * Set replication lag headers on hot plugin responses using a 60-second cache.
  */
-export async function setReplicationLagHeader(c: Context, pool: PluginPgClient): Promise<void> {
+export async function setReplicationLagHeader(c: Context, pool: PluginPgClient, options: { probeOnMiss?: boolean } = {}): Promise<void> {
   // Hot path: only use in-memory lag. Cold Cache API / DB probe runs in background
   // so a miss cannot add another Hyperdrive RTT to /updates P999.
   const cacheKey = getReplicationLagCacheKey(c)
@@ -275,7 +281,8 @@ export async function setReplicationLagHeader(c: Context, pool: PluginPgClient):
   }
 
   safeSetResponseHeader(c, 'X-Replication-Lag', 'unknown')
-  backgroundTask(c, getCachedReplicaLag(c, pool))
+  if (options.probeOnMiss !== false)
+    backgroundTask(c, getCachedReplicaLag(c, pool))
 }
 
 /**
@@ -449,6 +456,72 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
   })
 
   return pool
+}
+
+/**
+ * Request-scoped client that opens the database connection on the first
+ * query. /updates answers served from the edge cache never touch Postgres, so
+ * they must not pay a Hyperdrive connect either.
+ */
+export interface LazyPgClient {
+  client: PluginPgClient
+  isConnected: () => boolean
+  close: () => unknown
+}
+
+const lazyPgQueryCounts = new WeakMap<object, number>()
+const LAZY_PG_CONNECT_ERROR = Symbol('lazy-pg-connect-error')
+
+function markLazyPgConnectError(error: unknown) {
+  const marked = error instanceof Error ? error : new Error(String(error))
+  ;(marked as Error & { [LAZY_PG_CONNECT_ERROR]?: true })[LAZY_PG_CONNECT_ERROR] = true
+  return marked
+}
+
+/**
+ * True when a lazy client failed to open its connection (not a query error).
+ * Drizzle wraps client rejections (DrizzleQueryError), so follow the cause chain.
+ */
+export function isLazyPgConnectError(error: unknown) {
+  let current: unknown = error
+  for (let depth = 0; depth < 5 && current instanceof Error; depth++) {
+    if ((current as Error & { [LAZY_PG_CONNECT_ERROR]?: true })[LAZY_PG_CONNECT_ERROR] === true)
+      return true
+    current = current.cause
+  }
+  return false
+}
+
+/** Queries sent through lazy clients during this request (all lazy clients combined). */
+export function getLazyPgQueryCount(c: Context) {
+  return lazyPgQueryCounts.get(c.req.raw) ?? 0
+}
+
+export function createLazyPgClient(c: Context, readOnly = false): LazyPgClient {
+  let inner: Promise<PluginPgClient> | null = null
+  const ensure = () => {
+    inner ??= getPgClient(c, readOnly).catch((error: unknown) => {
+      throw markLazyPgConnectError(error)
+    })
+    return inner
+  }
+  const client = {
+    query: (...args: unknown[]) => {
+      lazyPgQueryCounts.set(c.req.raw, getLazyPgQueryCount(c) + 1)
+      return ensure().then(db => (db.query as (...queryArgs: unknown[]) => unknown)(...args))
+    },
+  } as unknown as PluginPgClient
+  return {
+    client,
+    isConnected: () => inner !== null,
+    close: async () => {
+      if (!inner)
+        return
+      const db = await inner.catch(() => null)
+      if (db)
+        return closeClient(c, db)
+    },
+  }
 }
 
 export function getDrizzleClient(db: PluginPgClient, options?: { logger?: boolean }) {
@@ -840,6 +913,7 @@ export async function requestManifestEntriesPostgres(
   c: Context,
   versionId: number,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
+  appId?: string,
 ): Promise<ManifestRow[]> {
   // Cache raw rows by version id (not final download URLs — those embed device_id).
   const helper = new CacheHelper(c)
@@ -858,8 +932,11 @@ export async function requestManifestEntriesPostgres(
     .where(eq(schema.manifest.app_version_id, versionId))
 
   // Cache API size limits may reject huge manifests; the put fails open.
-  if (rows.length > 0)
-    await backgroundTask(c, helper.putJson(cacheKey, rows, MANIFEST_ROWS_CACHE_TTL_SECONDS))
+  // With the /updates edge cache on, the rows also carry the app's purge tag.
+  if (rows.length > 0) {
+    const tags = appId ? updatesCacheTags(c, appId) : undefined
+    await backgroundTask(c, helper.putJson(cacheKey, rows, MANIFEST_ROWS_CACHE_TTL_SECONDS, { tags }))
+  }
   return rows
 }
 
@@ -1001,7 +1078,7 @@ async function resolveRolloutChannelDataPostgres(
   }
 
   const manifestEntries = includeManifest && selectedVersion?.manifest_count > 0
-    ? await requestManifestEntriesPostgres(c, selectedVersion.id, drizzleClient)
+    ? await requestManifestEntriesPostgres(c, selectedVersion.id, drizzleClient, appId)
     : []
 
   return {
@@ -1030,7 +1107,14 @@ interface RequestInfosPostgresOptions {
   currentVersionName: string
   includeMetadata?: boolean
   channelSelfOverrideChannelId?: number | null
+  /**
+   * Wraps the app-level default-channel read (e.g. with the /updates edge
+   * cache). Per-device override reads always go to Postgres.
+   */
+  loadDefaultChannel?: DefaultChannelLoader
 }
+
+export type DefaultChannelLoader = <T>(mode: 'standard' | 'rollout', load: () => Promise<T>) => Promise<T | null | undefined>
 
 export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
   const {
@@ -1048,6 +1132,7 @@ export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
     currentVersionName,
     includeMetadata = false,
     channelSelfOverrideChannelId,
+    loadDefaultChannel,
   } = options
   const shouldQueryChannelOverride = channelDeviceCount === undefined || channelDeviceCount === null ? true : channelDeviceCount > 0
   const shouldFetchManifest = includeManifest !== false
@@ -1071,7 +1156,8 @@ export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
       else {
         channelDevice = Promise.resolve(null)
       }
-      const channel = requestInfosChannelPostgres(c, platform, app_id, defaultChannel, channelClient, shouldFetchManifest, includeMetadata)
+      const loadChannel = () => requestInfosChannelPostgres(c, platform, app_id, defaultChannel, channelClient, shouldFetchManifest, includeMetadata)
+      const channel = loadDefaultChannel ? loadDefaultChannel('standard', loadChannel) : loadChannel()
       const [channelOverride, channelData] = await Promise.all([channelDevice, channel])
       return { channelData, channelOverride }
     }
@@ -1083,6 +1169,16 @@ export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
         const needsParallelClients = shouldQueryChannelOverride || typeof channelSelfOverrideChannelId === 'number'
         if (needsParallelClients && getRuntimeKey() === 'workerd') {
           try {
+            if (loadDefaultChannel) {
+              // Lazy: a default channel served from the edge cache never connects.
+              const lazyParallelClient = createLazyPgClient(c, true)
+              try {
+                return await runPair(drizzleClient, getDrizzleClient(lazyParallelClient.client, { logger: false }))
+              }
+              finally {
+                await lazyParallelClient.close()
+              }
+            }
             const parallelClient = await getPgClient(c, true)
             try {
               const drizzleParallel = getDrizzleClient(parallelClient, { logger: false })
@@ -1115,7 +1211,8 @@ export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
   else {
     channelDevice = Promise.resolve(null)
   }
-  const channel = requestInfosChannelPostgresRollout(c, platform, app_id, defaultChannel, drizzleClient, includeMetadata)
+  const loadRolloutChannel = () => requestInfosChannelPostgresRollout(c, platform, app_id, defaultChannel, drizzleClient, includeMetadata)
+  const channel = loadDefaultChannel ? loadDefaultChannel('rollout', loadRolloutChannel) : loadRolloutChannel()
 
   return Promise.all([channelDevice, channel])
     .then(async ([channelOverride, channelData]) => {
@@ -1142,6 +1239,81 @@ export interface AppOwnerPostgresResult {
   expose_metadata: boolean
   allow_device_custom_id: boolean
   block_provider_infra_requests: boolean
+  /** stripe_info.trial_at, only selected for the edge cache (bounds how long plan_valid holds). */
+  plan_trial_at?: string | null
+}
+
+/**
+ * App owner + plan lookup. Throws on database errors so callers can tell a
+ * missing app (null) from a failed read; caches must only store the former.
+ */
+export async function queryAppOwnerPostgres(
+  c: Context,
+  appId: string,
+  drizzleClient: ReturnType<typeof getDrizzleClient>,
+  actions: PlanAction[] = [],
+  options: { includeTrialAt?: boolean } = {},
+): Promise<AppOwnerPostgresResult | null> {
+  if (actions.length === 0)
+    return null
+  const orgAlias = alias(schema.orgs, 'orgs')
+  const planExpression = buildPlanValidationExpression(actions, schema.apps.owner_org)
+  // Only the edge cache needs it (a constant NULL keeps the plain query shape).
+  const planTrialAt = options.includeTrialAt
+    ? sql<string | null>`(
+        SELECT ${schema.stripe_info.trial_at}
+        FROM ${schema.stripe_info}
+        WHERE ${schema.stripe_info.customer_id} = (
+          SELECT ${schema.orgs.customer_id} FROM ${schema.orgs} WHERE ${schema.orgs.id} = ${schema.apps.owner_org}
+        )
+      )`
+    : sql<string | null>`NULL`
+
+  const appOwner = await drizzleClient
+    .select({
+      owner_org: schema.apps.owner_org,
+      plan_valid: planExpression,
+      plan_trial_at: planTrialAt,
+      channel_device_count: schema.apps.channel_device_count,
+      manifest_bundle_count: schema.apps.manifest_bundle_count,
+      rollout_channel_count: schema.apps.rollout_channel_count,
+      rollout_paused_version_names: schema.apps.rollout_paused_version_names,
+      expose_metadata: schema.apps.expose_metadata,
+      allow_device_custom_id: schema.apps.allow_device_custom_id,
+      block_provider_infra_requests: schema.apps.block_provider_infra_requests,
+      orgs: {
+        created_by: orgAlias.created_by,
+        id: orgAlias.id,
+        management_email: orgAlias.management_email,
+      },
+    })
+    .from(schema.apps)
+    .where(eq(schema.apps.app_id, appId))
+    .leftJoin(orgAlias, eq(schema.apps.owner_org, orgAlias.id))
+    .limit(1)
+    .then(data => data[0])
+
+  if (!appOwner)
+    return null
+
+  if (!appOwner.orgs?.id || !appOwner.orgs.created_by || !appOwner.orgs.management_email) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'App owner org missing on read replica; preserving cloud app classification from apps row',
+      appId,
+      ownerOrg: appOwner.owner_org,
+    })
+    return {
+      ...appOwner,
+      orgs: {
+        created_by: appOwner.orgs?.created_by ?? '',
+        id: appOwner.owner_org,
+        management_email: appOwner.orgs?.management_email ?? '',
+      },
+    }
+  }
+
+  return appOwner as AppOwnerPostgresResult
 }
 
 export async function getAppOwnerPostgres(
@@ -1151,55 +1323,7 @@ export async function getAppOwnerPostgres(
   actions: PlanAction[] = [],
 ): Promise<AppOwnerPostgresResult | null> {
   try {
-    if (actions.length === 0)
-      return null
-    const orgAlias = alias(schema.orgs, 'orgs')
-    const planExpression = buildPlanValidationExpression(actions, schema.apps.owner_org)
-
-    const appOwner = await drizzleClient
-      .select({
-        owner_org: schema.apps.owner_org,
-        plan_valid: planExpression,
-        channel_device_count: schema.apps.channel_device_count,
-        manifest_bundle_count: schema.apps.manifest_bundle_count,
-        rollout_channel_count: schema.apps.rollout_channel_count,
-        rollout_paused_version_names: schema.apps.rollout_paused_version_names,
-        expose_metadata: schema.apps.expose_metadata,
-        allow_device_custom_id: schema.apps.allow_device_custom_id,
-        block_provider_infra_requests: schema.apps.block_provider_infra_requests,
-        orgs: {
-          created_by: orgAlias.created_by,
-          id: orgAlias.id,
-          management_email: orgAlias.management_email,
-        },
-      })
-      .from(schema.apps)
-      .where(eq(schema.apps.app_id, appId))
-      .leftJoin(orgAlias, eq(schema.apps.owner_org, orgAlias.id))
-      .limit(1)
-      .then(data => data[0])
-
-    if (!appOwner)
-      return null
-
-    if (!appOwner.orgs?.id || !appOwner.orgs.created_by || !appOwner.orgs.management_email) {
-      cloudlog({
-        requestId: c.get('requestId'),
-        message: 'App owner org missing on read replica; preserving cloud app classification from apps row',
-        appId,
-        ownerOrg: appOwner.owner_org,
-      })
-      return {
-        ...appOwner,
-        orgs: {
-          created_by: appOwner.orgs?.created_by ?? '',
-          id: appOwner.owner_org,
-          management_email: appOwner.orgs?.management_email ?? '',
-        },
-      }
-    }
-
-    return appOwner as AppOwnerPostgresResult
+    return await queryAppOwnerPostgres(c, appId, drizzleClient, actions)
   }
   catch (e: unknown) {
     logPgError(c, 'getAppOwnerPostgres', e, {

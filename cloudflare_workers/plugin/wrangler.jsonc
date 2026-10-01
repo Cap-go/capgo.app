@@ -17,6 +17,9 @@
     "prod_eu": {
       "name": "capgo_plugin-eu-prod",
       "vars": {
+        // UPDATES_EDGE_CACHE (/updates edge cache: off | on | share like 1%) is a
+        // worker secret so it changes without a deploy:
+        //   bun run updates-edge-cache:set 1%
         "ENV_NAME": "capgo_plugin-eu-prod"
       },
       "observability": {

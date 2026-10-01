@@ -144,6 +144,8 @@
     "schemas": "bunx supabase db dump > supabase/schemas/prod.sql",
     "schemas:local": "bunx supabase db dump --local > supabase/schemas/prod.sql",
     "types": "bun ./scripts/getTypes.mjs",
+    "generate:plugin-route-hosts": "bun scripts/generate-plugin-route-hosts.ts",
+    "updates-edge-cache:set": "bun scripts/set-updates-edge-cache.ts",
     "types:dev": "BRANCH=development bun ./scripts/getTypes.mjs",
     "types:local": "BRANCH=local bun ./scripts/getTypes.mjs",
     "typecheck:backend": "tsgo --project tsconfig.backend.tsgo.json --noEmit",
