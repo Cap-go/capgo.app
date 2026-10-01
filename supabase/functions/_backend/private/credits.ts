@@ -31,10 +31,10 @@ interface CreditStep {
 }
 
 interface CostCalculationRequest {
-  mau: number
-  bandwidth: number // in bytes
-  storage: number // in bytes
-  build_time?: number // in seconds
+  mau: number | string
+  bandwidth: number | string // in bytes
+  storage: number | string // in bytes
+  build_time?: number | string // in seconds
   org_id?: string
   // Usage already included in the plan, per metric. Tiers follow total
   // usage, so the overage above is priced from this point of the ladder.
@@ -424,14 +424,21 @@ app.get('/', async (c) => {
 app.post('/', async (c) => {
   const body = await parseBody<CostCalculationRequest>(c)
   const buildTime = Number(body.build_time ?? 0)
-  const { mau, bandwidth, org_id: orgId, storage } = body
+  const orgId = body.org_id
 
   // Validate inputs
-  if (mau === undefined || bandwidth === undefined || storage === undefined) {
+  if (body.mau === undefined || body.bandwidth === undefined || body.storage === undefined) {
     throw simpleError('missing_required_fields', 'Missing required fields: mau, bandwidth, storage')
   }
   if (!Number.isFinite(buildTime) || buildTime < 0)
     throw simpleError('invalid_build_time', 'build_time must be a non-negative number')
+
+  // Clients (the website calculator) send numeric strings: coerce once here.
+  const mau = Number(body.mau)
+  const bandwidth = Number(body.bandwidth)
+  const storage = Number(body.storage)
+  if (![mau, bandwidth, storage].every(value => Number.isFinite(value) && value >= 0))
+    throw simpleError('invalid_usage', 'mau, bandwidth and storage must be non-negative numbers')
 
   const typedCredits = await getScopedCreditSteps(c as AppContext, orgId)
 
