@@ -3444,7 +3444,7 @@
   "confirm-resume-rollout-title": "Resume rollout?",
   "confirm-resume-rollout-description": "New eligible devices can enter the {percent} cohort again. Devices already selected stay on {target}.",
   "confirm-promote-rollout-title": "Promote to 100% of devices?",
-  "confirm-promote-rollout-description": "{target} will be sent to 100% of devices on this channel and becomes the new stable bundle. The previous stable bundle is replaced and the progressive rollout ends.",
+  "confirm-promote-rollout-description": "{target} will be sent to 100% of devices on this channel and will become the new stable bundle. The previous stable bundle is replaced and the progressive rollout ends.",
   "confirm-rollback-rollout-title": "Roll back progressive rollout?",
   "confirm-rollback-rollout-description": "Before: devices in the rollout cohort can receive {target} (stable fallback stays {fallback}). After: rollout turns off, percentage resets to 0%, and every device receives only stable {fallback} on the next update check.",
   "confirm-set-rollout-target-title": "Change rollout target?",
