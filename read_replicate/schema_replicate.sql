@@ -595,7 +595,7 @@ ALTER TABLE ONLY public.org_users
 --
 
 ALTER TABLE public.orgs
-    ADD CONSTRAINT orgs_auto_top_up_monthly_limit_valid CHECK (((auto_top_up_monthly_limit >= (0)::numeric) AND (auto_top_up_monthly_limit = trunc(auto_top_up_monthly_limit)) AND (auto_top_up_monthly_limit < 'Infinity'::numeric))) NOT VALID;
+    ADD CONSTRAINT orgs_auto_top_up_monthly_limit_valid CHECK (((auto_top_up_monthly_limit >= (0)::numeric) AND (auto_top_up_monthly_limit = trunc(auto_top_up_monthly_limit)) AND (auto_top_up_monthly_limit < 'Infinity'::numeric) AND ((auto_top_up_monthly_limit = (0)::numeric) OR (auto_top_up_monthly_limit >= auto_top_up_threshold)))) NOT VALID;
 
 
 --

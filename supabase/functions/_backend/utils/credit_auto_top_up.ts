@@ -19,8 +19,8 @@ export interface AutoTopUpSettings {
   availableCredits: number
   /** Max credits auto top-up may buy per calendar month (UTC). 0 means no limit. */
   monthlyLimit: number
-  /** Credits bought by auto top-up so far this calendar month (UTC). */
-  monthlyTotal: number
+  /** Credits bought by auto top-up so far this calendar month (UTC). null when the lookup failed. */
+  monthlyTotal: number | null
 }
 
 // Mirrors try_claim_credit_auto_top_up eligibility (enabled, min $10, balance, 1h cooldown, monthly limit).
@@ -77,12 +77,13 @@ export function normalizeAutoTopUpMonthlyLimit(value: unknown, threshold: number
   return rounded
 }
 
-async function getMonthlyAutoTopUpTotal(c: Context, orgId: string): Promise<number> {
+async function getMonthlyAutoTopUpTotal(c: Context, orgId: string): Promise<number | null> {
   const { data, error } = await supabaseAdmin(c)
     .rpc('get_credit_auto_top_up_month_total', { p_org_id: orgId })
   if (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_month_total_failed', orgId, error })
-    throw error
+    // Report "unknown" instead of 0 so the UI never shows false usage, without failing the read or a committed save.
+    return null
   }
   return Number(data ?? 0)
 }
@@ -277,7 +278,7 @@ export async function getAutoTopUpSettings(c: Context, orgId: string): Promise<A
       hasPaymentMethod: false,
       availableCredits: 0,
       monthlyLimit: 0,
-      monthlyTotal: 0,
+      monthlyTotal: null,
     }
   }
 
@@ -333,6 +334,9 @@ export async function saveAutoTopUpSettings(
     .eq('id', orgId)
 
   if (updateError) {
+    // A concurrent save can still break the limit >= threshold rule; the DB constraint rejects it.
+    if (updateError.code === '23514' && updateError.message?.includes('orgs_auto_top_up_monthly_limit_valid'))
+      throw new Error('invalid_monthly_limit')
     cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_settings_update_failed', orgId, error: updateError })
     throw updateError
   }

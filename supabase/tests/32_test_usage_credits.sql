@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(40);
+SELECT plan(41);
 
 DO $$
 BEGIN
@@ -1141,6 +1141,18 @@ SELECT
         '23514',
         'new row for relation "orgs" violates check constraint "orgs_auto_top_up_monthly_limit_valid"',
         'auto_top_up_monthly_limit rejects negative values'
+    );
+
+SELECT
+    throws_ok(
+        $$
+      UPDATE public.orgs
+      SET auto_top_up_threshold = 10, auto_top_up_monthly_limit = 5
+      WHERE id = (SELECT org_id FROM test_credit_consume_context)
+    $$,
+        '23514',
+        'new row for relation "orgs" violates check constraint "orgs_auto_top_up_monthly_limit_valid"',
+        'auto_top_up_monthly_limit must be 0 or at least auto_top_up_threshold'
     );
 
 -- A fully consumed auto top-up grant from this month counts toward the monthly limit.

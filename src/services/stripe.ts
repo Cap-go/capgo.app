@@ -251,7 +251,7 @@ export async function getCreditAutoTopUp(orgId: string) {
     hasPaymentMethod: boolean
     availableCredits: number
     monthlyLimit: number
-    monthlyTotal: number
+    monthlyTotal: number | null
   } | null
 }
 
@@ -271,6 +271,6 @@ export async function saveCreditAutoTopUp(orgId: string, enabled: boolean, thres
     hasPaymentMethod: boolean
     availableCredits: number
     monthlyLimit: number
-    monthlyTotal: number
+    monthlyTotal: number | null
   } | null
 }

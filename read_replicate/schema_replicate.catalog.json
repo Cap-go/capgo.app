@@ -1998,7 +1998,7 @@
       "valid": true
     },
     {
-      "definition": "CHECK (auto_top_up_monthly_limit >= 0::numeric AND auto_top_up_monthly_limit = trunc(auto_top_up_monthly_limit) AND auto_top_up_monthly_limit < 'Infinity'::numeric) NOT VALID",
+      "definition": "CHECK (auto_top_up_monthly_limit >= 0::numeric AND auto_top_up_monthly_limit = trunc(auto_top_up_monthly_limit) AND auto_top_up_monthly_limit < 'Infinity'::numeric AND (auto_top_up_monthly_limit = 0::numeric OR auto_top_up_monthly_limit >= auto_top_up_threshold)) NOT VALID",
       "name": "orgs_auto_top_up_monthly_limit_valid",
       "table": "orgs",
       "type": "c",

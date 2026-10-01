@@ -7,9 +7,9 @@ ALTER TABLE "public"."orgs"
   DROP CONSTRAINT IF EXISTS "orgs_auto_top_up_monthly_limit_valid";
 
 ALTER TABLE "public"."orgs"
-  ADD CONSTRAINT "orgs_auto_top_up_monthly_limit_valid" CHECK (("auto_top_up_monthly_limit" >= (0)::numeric AND "auto_top_up_monthly_limit" = trunc("auto_top_up_monthly_limit") AND "auto_top_up_monthly_limit" < 'Infinity'::numeric)) NOT VALID;
+  ADD CONSTRAINT "orgs_auto_top_up_monthly_limit_valid" CHECK (("auto_top_up_monthly_limit" >= (0)::numeric AND "auto_top_up_monthly_limit" = trunc("auto_top_up_monthly_limit") AND "auto_top_up_monthly_limit" < 'Infinity'::numeric AND ("auto_top_up_monthly_limit" = (0)::numeric OR "auto_top_up_monthly_limit" >= "auto_top_up_threshold"))) NOT VALID;
 
-COMMENT ON COLUMN "public"."orgs"."auto_top_up_monthly_limit" IS 'Maximum credits (USD, 1:1) that auto top-up may buy per calendar month (UTC). 0 means no limit. Auto top-up stops once the next charge would exceed it.';
+COMMENT ON COLUMN "public"."orgs"."auto_top_up_monthly_limit" IS 'Maximum credits (USD, 1:1) that auto top-up may buy per calendar month (UTC). 0 means no limit; otherwise it must be at least auto_top_up_threshold. Auto top-up stops once the next charge would exceed it.';
 
 -- Bounds the monthly auto top-up sum to this month's purchased grants of one org.
 CREATE INDEX IF NOT EXISTS "idx_usage_credit_grants_org_top_up_granted_at"
