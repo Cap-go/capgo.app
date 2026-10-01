@@ -9,9 +9,11 @@ import { backgroundTask } from './utils.ts'
 // every size is known, so complete maps are cached for a day per colo.
 const MANIFEST_SIZES_CACHE_PATH = '/.manifest-sizes-v1'
 const MANIFEST_SIZES_CACHE_TTL_SECONDS = 86400
-// Whole-version reads are bounded by this many versions per request. Requests
-// spanning more versions use the hash-scoped lookup without caching.
-const MANIFEST_SIZES_MAX_CACHED_VERSIONS = 4
+// A cache miss reads the whole version (one index-only scan, bounded by bundle
+// file count) so the map serves every later subset request. Plugin requests are
+// scoped to the one bundle being downloaded; requests spanning several versions
+// keep the hash-scoped lookup without caching.
+const MANIFEST_SIZES_MAX_CACHED_VERSIONS = 1
 
 interface ManifestSizeRow {
   file_hash: string
@@ -294,10 +296,15 @@ export function buildCompleteManifestVersionSizes(rows: ManifestSizeRow[]): Map<
       sizesByVersion.set(versionId, null)
       continue
     }
-    if (sizes)
+    if (sizes) {
       sizes[row.file_hash] = size
-    else
-      sizesByVersion.set(versionId, { [row.file_hash]: size })
+    }
+    else {
+      // Null prototype: a "__proto__" file hash must stay an own key.
+      const versionSizes = Object.create(null) as Record<string, number>
+      versionSizes[row.file_hash] = size
+      sizesByVersion.set(versionId, versionSizes)
+    }
   }
 
   const complete = new Map<number, Record<string, number>>()

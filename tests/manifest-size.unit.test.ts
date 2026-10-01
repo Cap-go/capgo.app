@@ -230,6 +230,16 @@ describe('manifest download size helpers', () => {
 
     expect([...sizes.entries()]).toEqual([[42, { 'hash-a': 100, 'hash-b': 50 }]])
   })
+
+  it.concurrent('keeps a __proto__ file hash as an own key', () => {
+    const sizes = buildCompleteManifestVersionSizes([
+      { file_hash: 'hash-a', version_id: 42, file_size: 100 },
+      { file_hash: '__proto__', version_id: 42, file_size: 7 },
+    ]).get(42)!
+
+    expect(Object.keys(sizes)).toEqual(['hash-a', '__proto__'])
+    expect(JSON.parse(JSON.stringify(sizes))).toEqual(JSON.parse('{"hash-a":100,"__proto__":7}'))
+  })
 })
 
 describe('manifest download size cache', () => {
