@@ -520,7 +520,7 @@ describe('auth guard SSO provisioning', () => {
     })
   })
 
-  it.concurrent('retries platform-admin access on later navigations for users with organizations', async () => {
+  it.concurrent('resolves platform-admin access for users with organizations', async () => {
     await withTestContext(async (context) => {
       const user = {
         id: 'user-123',

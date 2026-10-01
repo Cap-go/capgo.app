@@ -1,39 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import process from 'node:process'
-import { Hono } from 'hono/tiny'
 import { afterAll, describe, expect, it } from 'vitest'
 import { globalStatsTestUtils } from '../supabase/functions/_backend/triggers/global_stats.ts'
-import { cleanupPostgresClient, executeSQL, POSTGRES_URL, PRODUCT_ID, resetAndSeedAppData, resetAppData } from './test-utils.ts'
-
-type StatsTestApp = Hono<{ Bindings: { SUPABASE_DB_URL: string } }>
-
-async function requestDirectStats<T>(registerRoute: (app: StatsTestApp) => void): Promise<T> {
-  const globalWithEdgeRuntime = globalThis as typeof globalThis & {
-    EdgeRuntime?: { waitUntil: (promise: Promise<unknown>) => void }
-  }
-  const previousEdgeRuntime = globalWithEdgeRuntime.EdgeRuntime
-  const previousSupabaseDbUrl = process.env.SUPABASE_DB_URL
-  globalWithEdgeRuntime.EdgeRuntime = undefined
-  process.env.SUPABASE_DB_URL = POSTGRES_URL
-
-  try {
-    const app = new Hono<{ Bindings: { SUPABASE_DB_URL: string } }>()
-    registerRoute(app)
-
-    const response = await app.request('http://local/', undefined, { SUPABASE_DB_URL: POSTGRES_URL })
-    return await response.json() as T
-  }
-  finally {
-    if (previousSupabaseDbUrl === undefined)
-      delete process.env.SUPABASE_DB_URL
-    else
-      process.env.SUPABASE_DB_URL = previousSupabaseDbUrl
-    globalWithEdgeRuntime.EdgeRuntime = previousEdgeRuntime
-  }
-}
+import { cleanupPostgresClient, executeSQL, PRODUCT_ID, requestDirectDatabaseRoute, resetAndSeedAppData, resetAppData } from './test-utils.ts'
 
 async function getCoreSnapshotCountsAt(snapshotExclusiveEnd: Date) {
-  return requestDirectStats<{
+  return requestDirectDatabaseRoute<{
     abovePlanWithCredits: number
     abovePlanWithoutCredits: number
   }>((app) => {
@@ -42,7 +13,7 @@ async function getCoreSnapshotCountsAt(snapshotExclusiveEnd: Date) {
 }
 
 async function getBillingSnapshotCountsAt(snapshotExclusiveEnd: Date) {
-  return requestDirectStats<{
+  return requestDirectDatabaseRoute<{
     plans: Record<string, number>
   }>((app) => {
     app.get('/', async c => c.json(await globalStatsTestUtils.getBillingSnapshotCounts(c, snapshotExclusiveEnd)))

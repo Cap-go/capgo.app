@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest'
-import { fetchTestRequest, getEndpointUrl } from './test-utils.ts'
+import { beforeAll, describe, expect, it } from 'vitest'
+import { fetchTestRequest, getEndpointUrl, warmEdgeEndpoint } from './test-utils.ts'
 
 describe('retired dashboard endpoints', () => {
+  beforeAll(async () => {
+    await warmEdgeEndpoint('/private')
+  })
+
   it.concurrent.each([
     '/private/admin_stats',
     '/private/admin_credits/grant',
