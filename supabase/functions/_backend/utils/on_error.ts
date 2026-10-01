@@ -194,7 +194,7 @@ export function onError(functionName: string) {
         // ignore errors; fall back to default
       }
       // Single, structured log entry. 4xx are expected client errors (invalid
-      // app id, no access, ...): log them without console.error or a stack
+      // app id, no access, ...): log them without an error-level console call or a stack
       // trace so Cloudflare Workers Issues only groups real backend failures.
       const httpExceptionLog = {
         requestId: c.get('requestId'),
