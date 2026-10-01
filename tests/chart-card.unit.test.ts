@@ -28,7 +28,7 @@ describe('customer chart card', () => {
     const header = container.querySelector('[data-test="chart-card-header"]')
     const headerRow = container.querySelector('[data-test="chart-card-header-row"]')
     const headerActions = container.querySelector('[data-test="chart-card-header-actions"]')
-    const content = container.querySelector('[data-test="chart-content"]')?.parentElement
+    const content = container.querySelector('[data-test="chart-card-content"]')
 
     expect(container.querySelector('[data-test="chart-collapse-toggle"]')).toBeNull()
     expect(card?.classList).toContain('min-h-[460px]')
@@ -39,5 +39,6 @@ describe('customer chart card', () => {
     expect(headerActions?.classList).not.toContain('shrink-0')
     expect(content).not.toBeNull()
     expect(content?.hasAttribute('id')).toBe(false)
+    expect(container.querySelector('[data-test="chart-content"]')).not.toBeNull()
   })
 })
