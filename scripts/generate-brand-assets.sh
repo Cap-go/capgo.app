@@ -71,7 +71,7 @@ done
 rsvg-convert -w 355 -h 355 "$BRAND/capgo-mark-white.svg" -o "$TMP/feature-mark.png"
 magick -size 1024x500 xc:'#001827' "$TMP/feature-mark.png" -gravity center -composite public/featured.png
 
-# Google Play listing graphics (uploaded by `fastlane android upload_screenshots`): 8-bit PNGs
+# Google Play listing graphics (uploaded by `fastlane android upload_screenshots`), 8-bit PNG files
 play_images=fastlane/metadata/android/en-US/images
 magick public/featured.png -depth 8 "PNG24:$play_images/featureGraphic.png"
 magick assets/icon-only.png -resize 512x512 -depth 8 "PNG32:$play_images/icon.png"
