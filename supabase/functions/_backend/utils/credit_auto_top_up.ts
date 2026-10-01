@@ -335,8 +335,10 @@ export async function saveAutoTopUpSettings(
 
   if (updateError) {
     // A concurrent save can still break the limit >= threshold rule; the DB constraint rejects it.
-    if (updateError.code === '23514' && updateError.message?.includes('orgs_auto_top_up_monthly_limit_valid'))
+    if (updateError.code === '23514' && updateError.message?.includes('orgs_auto_top_up_monthly_limit_valid')) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_monthly_limit_constraint_failed', orgId, error: updateError })
       throw new Error('invalid_monthly_limit')
+    }
     cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_settings_update_failed', orgId, error: updateError })
     throw updateError
   }

@@ -1032,6 +1032,13 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             {{ t('credits-auto-top-up-monthly-usage', { used: formatCurrency(autoTopUpMonthlyTotal ?? 0), limit: formatCurrency(confirmedAutoTopUpMonthlyLimit) }) }}
           </p>
           <p
+            v-if="!isLoadingAutoTopUp && !autoTopUpLoadFailed && confirmedAutoTopUpMonthlyLimit > 0 && autoTopUpMonthlyTotal === null"
+            class="mt-1 text-xs text-gray-500 dark:text-gray-400"
+            data-test="credits-auto-top-up-monthly-usage-unavailable"
+          >
+            {{ t('credits-auto-top-up-monthly-usage-unavailable') }}
+          </p>
+          <p
             v-if="isAutoTopUpMonthlyLimitReached"
             class="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300"
             data-test="credits-auto-top-up-monthly-limit-reached"

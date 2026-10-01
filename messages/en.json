@@ -1220,6 +1220,7 @@
   "credits-auto-top-up-monthly-limit-label": "Monthly auto top-up limit",
   "credits-auto-top-up-monthly-limit-reached": "Monthly limit reached. Auto top-up is paused until next month or until you raise the limit.",
   "credits-auto-top-up-monthly-usage": "Auto top-ups this month: {used} of {limit}.",
+  "credits-auto-top-up-monthly-usage-unavailable": "Could not load this month's auto top-ups. Auto top-up still stops once the monthly limit is reached.",
   "credits-auto-top-up-no-card": "Add a card in the billing portal before turning this on.",
   "credits-auto-top-up-save-error": "Could not save auto top-up settings.",
   "credits-auto-top-up-saved": "Auto top-up settings saved.",
