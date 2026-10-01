@@ -3931,5 +3931,7 @@
   "release-live-no-release": "No release on this channel yet",
   "release-live-no-release-help": "Upload a bundle and assign it to this channel to follow its rollout here.",
   "release-live-fetch-error": "Could not load live release data",
-  "release-banner-watch-live": "Watch live"
+  "release-banner-watch-live": "Watch live",
+  "more-menu": "More",
+  "switch-organization": "Switch organization"
 }

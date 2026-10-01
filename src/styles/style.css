@@ -345,3 +345,11 @@ html {
     animation: none;
   }
 }
+
+/* Capacitor dashboard shell: keep page content between the native navbar and tabbar. */
+.native-chrome-content {
+  padding-top: var(--cap-native-navigation-top, var(--safe-area-top));
+  padding-right: var(--cap-native-navigation-right, var(--safe-area-right));
+  padding-bottom: var(--cap-native-navigation-bottom, var(--safe-area-bottom));
+  padding-left: var(--cap-native-navigation-left, var(--safe-area-left));
+}

@@ -3930,5 +3930,7 @@
   "release-live-view-bundle": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "release-live-view-channel": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "release-live-waiting": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "release-banner-watch-live": "Used in Capgo web console areas: components/dashboard. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "release-banner-watch-live": "Used in Capgo web console areas: components/dashboard. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "more-menu": "Used in Capgo mobile app areas: native tab bar. Role: tab label opening a menu with extra destinations. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "switch-organization": "Used in Capgo mobile app areas: native menu. Role: action label to change the active organization. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }
