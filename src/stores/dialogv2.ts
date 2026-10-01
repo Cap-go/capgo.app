@@ -9,6 +9,8 @@ export interface DialogV2Button {
   rel?: string
   handler?: () => void | boolean | Promise<void | boolean>
   role?: 'primary' | 'secondary' | 'danger' | 'cancel'
+  /** 'start' renders the button as a quiet text action on the left of the footer (e.g. "Don't show again"). */
+  placement?: 'start' | 'end'
   preventClose?: boolean
   disabled?: boolean
   skipNavigation?: boolean

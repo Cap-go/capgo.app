@@ -8,14 +8,13 @@ const {
   closeClient,
   createStatsMeta,
   deleteObject,
+  drizzleTransaction,
   getDrizzleClient,
   getPgClient,
   manifestSelectWhere,
   moveObjectToTrash,
-  pgConnect,
   pgQuery,
   persistVersionManifestEntries,
-  pgRelease,
   purgeFileReadCache,
   sendEventToTracking,
   supabaseAdmin,
@@ -44,8 +43,6 @@ const {
   })
   const manifestSelectWhere = vi.fn(async (): Promise<any[]> => [])
   const pgQuery = vi.fn(async (sql: string, params?: any[]) => {
-    if (sql === 'BEGIN')
-      callOrder.push('begin')
     if (sql.includes('pg_try_advisory_xact_lock')) {
       callOrder.push(`try_lock:${params?.[0]}`)
       return { rows: [{ locked: true }], rowCount: 1 }
@@ -55,26 +52,44 @@ const {
     if (sql.includes('SELECT 1 AS ok'))
       return { rows: [], rowCount: 0 }
     if (sql.includes('DELETE FROM public.manifest WHERE id')) {
-      callOrder.push(`db_delete_row:${params?.[0]}`)
+      for (const id of params?.[0] ?? [])
+        callOrder.push(`db_delete_row:${id}`)
       return { rows: [], rowCount: 1 }
     }
-    if (sql === 'COMMIT')
-      callOrder.push('commit_entry')
-    if (sql === 'ROLLBACK')
-      callOrder.push('rollback_entry')
     if (sql.includes('SELECT COUNT(*)'))
       return { rows: [{ count: 0 }], rowCount: 1 }
     if (sql.includes('WITH prev AS'))
       return { rows: [], rowCount: 1 }
     return { rows: [], rowCount: 0 }
   })
+  const drizzleExecute = async (query: any) => {
+    const params: any[] = []
+    let parameterIndex = 0
+    const queryText = query.queryChunks.map((chunk: any) => {
+      if (Array.isArray(chunk?.value))
+        return chunk.value.join('')
+      params.push(chunk)
+      parameterIndex += 1
+      return `$${parameterIndex}`
+    }).join('')
+    return pgQuery(queryText, params)
+  }
+  const drizzleTransaction = vi.fn(async (operation: (tx: { execute: typeof drizzleExecute }) => Promise<unknown>) => {
+    callOrder.push('begin')
+    try {
+      const result = await operation({ execute: drizzleExecute })
+      callOrder.push('commit_entry')
+      return result
+    }
+    catch (error) {
+      callOrder.push('rollback_entry')
+      throw error
+    }
+  })
   const moveObjectToTrash = vi.fn(async (..._args: any[]) => {
     callOrder.push('r2_trash')
     return true
   })
-  const pgRelease = vi.fn()
-  const pgConnect = vi.fn(async () => ({ query: pgQuery, release: pgRelease }))
-
   return {
     appVersionsMetaSelectEq,
     appVersionsMetaUpdate,
@@ -85,20 +100,20 @@ const {
     closeClient: vi.fn(),
     createStatsMeta: vi.fn(),
     deleteObject: vi.fn(),
+    drizzleTransaction,
     getDrizzleClient: vi.fn(() => ({
       select: vi.fn(() => ({
         from: vi.fn(() => ({
           where: manifestSelectWhere,
         })),
       })),
+      transaction: drizzleTransaction,
     })),
-    getPgClient: vi.fn(() => ({ connect: pgConnect, query: pgQuery })),
+    getPgClient: vi.fn(() => ({})),
     manifestSelectWhere,
     moveObjectToTrash,
-    pgConnect,
     pgQuery,
     persistVersionManifestEntries: vi.fn(),
-    pgRelease,
     purgeFileReadCache: vi.fn(async () => {}),
     sendEventToTracking: vi.fn(),
     supabaseAdmin: vi.fn(() => ({ from: supabaseFrom })),
@@ -207,7 +222,8 @@ describe('on_version_update deleted version cleanup', () => {
       if (sql.includes('SELECT 1 AS ok'))
         return { rows: [], rowCount: 0 }
       if (sql.includes('DELETE FROM public.manifest WHERE id')) {
-        callOrder.push(`db_delete_row:${params?.[0]}`)
+        for (const id of params?.[0] ?? [])
+          callOrder.push(`db_delete_row:${id}`)
         return { rows: [], rowCount: 1 }
       }
       if (sql === 'COMMIT')
@@ -305,7 +321,8 @@ describe('on_version_update deleted version cleanup', () => {
       if (sql.includes('SELECT 1 AS ok'))
         return { rows: [{ ok: 1 }], rowCount: 1 }
       if (sql.includes('DELETE FROM public.manifest WHERE id')) {
-        callOrder.push(`db_delete_row:${params?.[0]}`)
+        for (const id of params?.[0] ?? [])
+          callOrder.push(`db_delete_row:${id}`)
         return { rows: [], rowCount: 1 }
       }
       if (sql === 'COMMIT')
@@ -364,7 +381,8 @@ describe('on_version_update deleted version cleanup', () => {
       if (sql.includes('SELECT 1 AS ok'))
         return { rows: [], rowCount: 0 }
       if (sql.includes('DELETE FROM public.manifest WHERE id')) {
-        callOrder.push(`db_delete_row:${params?.[0]}`)
+        for (const id of params?.[0] ?? [])
+          callOrder.push(`db_delete_row:${id}`)
         return { rows: [], rowCount: 1 }
       }
       if (sql === 'COMMIT')
@@ -493,7 +511,8 @@ describe('on_version_update manifest cleanup load', () => {
       if (sql.includes('SELECT 1 AS ok'))
         return { rows: [], rowCount: 0 }
       if (sql.includes('DELETE FROM public.manifest WHERE id')) {
-        callOrder.push(`db_delete_row:${params?.[0]}`)
+        for (const id of params?.[0] ?? [])
+          callOrder.push(`db_delete_row:${id}`)
         return { rows: [], rowCount: 1 }
       }
       if (sql === 'COMMIT')
@@ -517,15 +536,19 @@ describe('on_version_update manifest cleanup load', () => {
     expect(pgQuery).toHaveBeenCalledWith(expect.stringContaining('WITH prev AS'), expect.any(Array))
   }, 60_000)
 
-  it('reuses one checked-out connection for all manifest cleanup transactions', async () => {
+  it('uses one bounded cleanup pool and Drizzle transactions for five-file batches', async () => {
     manifestSelectWhere.mockResolvedValue(makeEntries(20))
 
     const response = await deleteIt(createContext(), createVersion({ r2_path: null, manifest_count: 20 }))
 
     expect(response.status).toBe(200)
     expect(getPgClient).toHaveBeenCalledTimes(3)
-    expect(pgConnect).toHaveBeenCalledTimes(1)
-    expect(pgRelease).toHaveBeenCalledTimes(1)
+    // Four cleanup batches plus the final metadata transaction.
+    expect(drizzleTransaction).toHaveBeenCalledTimes(5)
+    const deleteQueries = pgQuery.mock.calls.filter(([query]) => query.includes('DELETE FROM public.manifest WHERE id'))
+    expect(deleteQueries).toHaveLength(4)
+    for (const [, params] of deleteQueries)
+      expect(params?.[0]).toHaveLength(5)
   })
 
   it('defers contended entries until every entry gets a non-blocking lock attempt', async () => {
@@ -542,7 +565,8 @@ describe('on_version_update manifest cleanup load', () => {
       if (sql.includes('SELECT 1 AS ok'))
         return { rows: [], rowCount: 0 }
       if (sql.includes('DELETE FROM public.manifest WHERE id')) {
-        callOrder.push(`db_delete_row:${params?.[0]}`)
+        for (const id of params?.[0] ?? [])
+          callOrder.push(`db_delete_row:${id}`)
         return { rows: [], rowCount: 1 }
       }
       if (sql.includes('SELECT COUNT(*)'))

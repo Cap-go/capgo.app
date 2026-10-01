@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { buildManifestSizeLookupQuery as buildPluginManifestSizeLookupQuery, getManifestDownloadSize as getPluginManifestDownloadSize } from '../supabase/functions/_backend/plugin_runtime/utils/manifest_size.ts'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { buildCompleteManifestVersionSizes, buildManifestVersionSizesQuery, buildManifestSizeLookupQuery as buildPluginManifestSizeLookupQuery, getManifestDownloadSize as getPluginManifestDownloadSize } from '../supabase/functions/_backend/plugin_runtime/utils/manifest_size.ts'
 import { buildManifestDownloadSizeResult, buildManifestSizeLookupQuery, normalizeManifestSizeFiles, parseManifestSizeVersionId } from '../supabase/functions/_backend/utils/manifest_size.ts'
 
 describe('manifest download size helpers', () => {
@@ -207,5 +207,71 @@ describe('manifest download size helpers', () => {
 
     expect(buildPluginManifestSizeLookupQuery('com.example.app', '1.2.3', undefined, files))
       .toEqual(buildManifestSizeLookupQuery('com.example.app', '1.2.3', undefined, files))
+  })
+
+  it.concurrent('reads whole versions through the app-scoped primary key probe', () => {
+    const lookup = buildManifestVersionSizesQuery('com.example.app', [42, 43])
+
+    expect(lookup.text).toContain('WHERE id = ids.version_id')
+    expect(lookup.text).toContain('OFFSET 0')
+    expect(lookup.text).toContain('av.app_id = $2 AND av.deleted = false')
+    expect(lookup.text).toContain('m.app_version_id = av.id')
+    expect(lookup.values).toEqual([[42, 43], 'com.example.app'])
+  })
+
+  it.concurrent('only builds cacheable size maps for versions with every size known', () => {
+    const sizes = buildCompleteManifestVersionSizes([
+      { file_hash: 'hash-a', version_id: '42' as never, file_size: '100' },
+      { file_hash: 'hash-b', version_id: 42, file_size: 50 },
+      { file_hash: 'hash-a', version_id: 43, file_size: 100 },
+      { file_hash: 'hash-c', version_id: 43, file_size: 0 },
+      { file_hash: 'hash-d', version_id: 43, file_size: 10 },
+    ])
+
+    expect([...sizes.entries()]).toEqual([[42, { 'hash-a': 100, 'hash-b': 50 }]])
+  })
+
+  it.concurrent('keeps a __proto__ file hash as an own key', () => {
+    const sizes = buildCompleteManifestVersionSizes([
+      { file_hash: 'hash-a', version_id: 42, file_size: 100 },
+      { file_hash: '__proto__', version_id: 42, file_size: 7 },
+    ]).get(42)!
+
+    expect(Object.keys(sizes)).toEqual(['hash-a', '__proto__'])
+    expect(JSON.parse(JSON.stringify(sizes))).toEqual(JSON.parse('{"hash-a":100,"__proto__":7}'))
+  })
+})
+
+describe('manifest download size cache', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('serves version-scoped files from Cache API without querying postgres', async () => {
+    const cachedKeys: string[] = []
+    vi.stubGlobal('caches', {
+      open: async () => ({
+        match: async (request: Request) => {
+          cachedKeys.push(request.url)
+          return new Response(JSON.stringify({ 'hash-a': 100, 'hash-b': 25 }))
+        },
+      }),
+    })
+
+    const result = await getPluginManifestDownloadSize({
+      req: { url: 'https://plugin.capgo.test/updates/manifest_size' },
+      get(key: string) {
+        throw new Error(`postgres context was read: ${key}`)
+      },
+    } as never, 'com.example.app', undefined, undefined, [
+      { file_name: 'index.html', file_hash: 'hash-a', download_url: 'https://plugin.capgo.test/files/read/attachments/a?key=42' },
+      { file_name: 'main.js', file_hash: 'hash-b', download_url: 'https://plugin.capgo.test/files/read/attachments/b?key=42' },
+      { file_name: 'new.js', file_hash: 'hash-z', download_url: 'https://plugin.capgo.test/files/read/attachments/z?key=42' },
+    ])
+
+    expect(cachedKeys).toEqual(['https://plugin.capgo.test/.manifest-sizes-v1?app_id=com.example.app&version_id=42'])
+    expect(result.totalSize).toBe(125)
+    expect(result.knownFiles).toBe(2)
+    expect(result.unknownFiles).toBe(1)
   })
 })

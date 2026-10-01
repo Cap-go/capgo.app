@@ -50,7 +50,7 @@ interface FaviconTheme {
 
 const productionFaviconTheme: FaviconTheme = {
   iconPrefix: '',
-  maskColor: '#00aba9',
+  maskColor: '#001827',
   themeColor: '#ffffff',
 }
 

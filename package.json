@@ -1,7 +1,7 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "12.315.0",
+  "version": "12.318.1",
   "private": true,
   "workspaces": [
     "cli",
@@ -37,7 +37,8 @@
     "build:dev": "BRANCH=development vite build",
     "build:preprod": "BRANCH=preprod vite build",
     "build:dev:mobile": "BRANCH=development vite build && cap copy",
-    "capacitor:assets": "bunx @capacitor/assets generate --assetPath assets --iconBackgroundColor '#111827' --iconBackgroundColorDark '#111827' --splashBackgroundColor '#111827' --splashBackgroundColorDark '#111827' --logoSplashScale 0.3",
+    "brand:assets": "./scripts/generate-brand-assets.sh && bun run capacitor:assets",
+    "capacitor:assets": "bunx @capacitor/assets generate --assetPath assets --ios --android",
     "resources": "cordova-res --skip-config --copy --icon-background-source '#ffffff'",
     "sync": "cap sync",
     "sync:ios": "cap sync ios",
@@ -409,7 +410,7 @@
     "vite-plugin-webfont-dl": "^3.12.0",
     "vitest": "^4.1.10",
     "vue-tsc": "3.3.11",
-    "wrangler": "^4.113.0",
+    "wrangler": "^4.145.0",
     "yaml": "^2.9.0",
     "zod": "4.5.4",
     "zod-compiler": "^1.15.0"

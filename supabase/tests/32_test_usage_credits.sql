@@ -11,7 +11,7 @@ $$ LANGUAGE plpgsql;
 SELECT
     ok(
         pg_get_functiondef(
-            'apply_usage_overage(uuid, public.credit_metric_type, numeric, timestamptz, timestamptz, jsonb)'::regprocedure
+            'apply_usage_overage(uuid, public.credit_metric_type, numeric, timestamptz, timestamptz, jsonb, numeric)'::regprocedure
         ) IS NOT NULL,
         'apply_usage_overage function exists'
     );
@@ -348,7 +348,7 @@ SELECT
     ok(
         pg_get_functiondef(
             'apply_usage_overage(uuid, public.credit_metric_type, numeric, '
-            'timestamptz, timestamptz, jsonb)'::regprocedure
+            'timestamptz, timestamptz, jsonb, numeric)'::regprocedure
         ) LIKE '%pg_advisory_xact_lock(%',
         'apply_usage_overage serializes calls per org and metric'
     );

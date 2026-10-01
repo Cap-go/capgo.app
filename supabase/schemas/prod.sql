@@ -597,6 +597,19 @@ BEGIN
     RETURN OLD;
   END IF;
 
+  -- App deleted: build_logs_app_id_fkey (ON DELETE SET NULL) detaches the log.
+  -- Keep the daily bucket so the build stays billable via deleted_apps.
+  IF TG_OP = 'UPDATE'
+    AND OLD.app_id IS NOT NULL
+    AND NEW.app_id IS NULL
+    AND NOT EXISTS (
+      SELECT 1
+      FROM public.apps
+      WHERE apps.app_id = OLD.app_id
+    ) THEN
+    RETURN NEW;
+  END IF;
+
   -- Handle UPDATE: subtract old values from the old bucket (if old had app_id)
   IF TG_OP = 'UPDATE' AND OLD.app_id IS NOT NULL THEN
     v_old_date := (OLD.created_at AT TIME ZONE 'UTC')::date;
@@ -999,6 +1012,10 @@ BEGIN
     RETURN QUERY SELECT 0::numeric, 0::numeric, 0::numeric, 0::numeric, NULL::bigint, 0::numeric, 0::numeric, NULL::uuid;
     RETURN;
   END IF;
+
+  -- Serialize concurrent calls for the same org + metric so the debited total
+  -- read below always reflects committed debits from other callers.
+  PERFORM pg_advisory_xact_lock(hashtextextended('apply_usage_overage:' || p_org_id::text || ':' || p_metric::text, 0));
 
   -- Calculate credit cost for this overage
   SELECT *
@@ -2540,6 +2557,10 @@ $$;
 ALTER FUNCTION "public"."calculate_org_metrics_cache_entry"("p_org_id" "uuid", "p_start_date" "date", "p_end_date" "date") OWNER TO "postgres";
 
 
+COMMENT ON FUNCTION "public"."calculate_org_metrics_cache_entry"("p_org_id" "uuid", "p_start_date" "date", "p_end_date" "date") IS 'Org cycle usage used for billing. Intentionally unions deleted_apps (kept 35 days by delete_old_deleted_apps) with live apps for MAU, bandwidth and build time: deleting and recreating an app, or reusing an app_id, cannot reset usage inside a billing cycle. Anti-fraud behavior, do not remove.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."canceled_org_ids_past_grace"("p_days" integer) RETURNS SETOF "uuid"
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
@@ -2558,6 +2579,28 @@ ALTER FUNCTION "public"."canceled_org_ids_past_grace"("p_days" integer) OWNER TO
 
 
 COMMENT ON FUNCTION "public"."canceled_org_ids_past_grace"("p_days" integer) IS 'Org ids whose stripe_info is canceled/deleted, without active usage credits, and GREATEST(canceled_at, subscription_anchor_end, trial_at) is older than p_days.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."channel_devices_force_admin_origin"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  -- PostgREST user and API-key requests run as anon/authenticated. Those are
+  -- console, Public API, or CLI writes, never device self-assignment.
+  IF current_user IN ('anon', 'authenticated') THEN
+    NEW.is_self_set := false;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."channel_devices_force_admin_origin"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."channel_devices_force_admin_origin"() IS 'Forces is_self_set = false for anon/authenticated writes (console, API key, CLI) so admin overrides never expire.';
 
 
 
@@ -4495,9 +4538,11 @@ BEGIN
 
     -- Use nested block with exception handler to ensure trigger is re-enabled on any failure
     BEGIN
-        -- Delete channel_devices where the last override write (updated_at or created_at) is older than 90 days
+        -- Only device self-assigned overrides expire, 90 days after the device last
+        -- (re)wrote them. Console/API overrides are kept until explicitly removed.
         DELETE FROM public.channel_devices
-        WHERE COALESCE(updated_at, created_at) < NOW() - INTERVAL '90 days';
+        WHERE is_self_set
+          AND COALESCE(updated_at, created_at) < NOW() - INTERVAL '90 days';
 
         GET DIAGNOSTICS deleted_count = ROW_COUNT;
 
@@ -4505,7 +4550,7 @@ BEGIN
         ALTER TABLE public.channel_devices ENABLE TRIGGER channel_device_count_enqueue;
 
         IF deleted_count > 0 THEN
-            RAISE NOTICE 'cleanup_old_channel_devices: Deleted % stale channel device entries', deleted_count;
+            RAISE NOTICE 'cleanup_old_channel_devices: Deleted % stale self-set channel device entries', deleted_count;
 
             -- Purge any pending messages in the channel_device_counts queue before recomputing
             -- This prevents stale deltas from being applied after the full recount
@@ -5525,14 +5570,45 @@ CREATE OR REPLACE FUNCTION "public"."delete_old_deleted_apps"() RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
+DECLARE
+  v_purged_app_ids character varying[];
 BEGIN
-    DELETE FROM "public"."deleted_apps"
-    WHERE deleted_at < NOW() - INTERVAL '35 days';
+  WITH purged AS (
+    DELETE FROM public.deleted_apps
+    WHERE deleted_at < now() - interval '35 days'
+    RETURNING app_id
+  )
+  SELECT COALESCE(array_agg(DISTINCT purged.app_id), '{}')
+  INTO v_purged_app_ids
+  FROM purged;
+
+  IF cardinality(v_purged_app_ids) = 0 THEN
+    RETURN;
+  END IF;
+
+  DELETE FROM public.daily_build_time dbt
+  WHERE dbt.app_id = ANY (v_purged_app_ids)
+    AND NOT EXISTS (SELECT 1 FROM public.apps a WHERE a.app_id = dbt.app_id)
+    AND NOT EXISTS (SELECT 1 FROM public.deleted_apps da WHERE da.app_id = dbt.app_id);
+
+  DELETE FROM public.daily_mau dm
+  WHERE dm.app_id = ANY (v_purged_app_ids)
+    AND NOT EXISTS (SELECT 1 FROM public.apps a WHERE a.app_id = dm.app_id)
+    AND NOT EXISTS (SELECT 1 FROM public.deleted_apps da WHERE da.app_id = dm.app_id);
+
+  DELETE FROM public.daily_bandwidth db
+  WHERE db.app_id = ANY (v_purged_app_ids)
+    AND NOT EXISTS (SELECT 1 FROM public.apps a WHERE a.app_id = db.app_id)
+    AND NOT EXISTS (SELECT 1 FROM public.deleted_apps da WHERE da.app_id = db.app_id);
 END;
 $$;
 
 
 ALTER FUNCTION "public"."delete_old_deleted_apps"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."delete_old_deleted_apps"() IS 'Purges deleted_apps rows older than 35 days and the daily_build_time, daily_mau and daily_bandwidth rows of those app_ids when the app_id is not live and not retained by another deleted_apps row. Until then the usage stays billable through calculate_org_metrics_cache_entry.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."delete_old_deleted_versions"() RETURNS "void"
@@ -8238,10 +8314,19 @@ CREATE OR REPLACE FUNCTION "public"."get_org_build_time_unit"("p_org_id" "uuid",
     AS $$
 BEGIN
   RETURN QUERY
+  WITH app_ids AS (
+    SELECT a.app_id
+    FROM public.apps a
+    WHERE a.owner_org = p_org_id
+    UNION
+    SELECT da.app_id
+    FROM public.deleted_apps da
+    WHERE da.owner_org = p_org_id
+  )
   SELECT COALESCE(SUM(dbt.build_time_unit), 0)::bigint, COALESCE(SUM(dbt.build_count), 0)::bigint
   FROM public.daily_build_time dbt
-  INNER JOIN public.apps a ON a.app_id = dbt.app_id
-  WHERE a.owner_org = p_org_id AND dbt.date >= p_start_date AND dbt.date <= p_end_date;
+  INNER JOIN app_ids ON app_ids.app_id = dbt.app_id
+  WHERE dbt.date >= p_start_date AND dbt.date <= p_end_date;
 END;
 $$;
 
@@ -14707,6 +14792,7 @@ DECLARE
   request_timeout_ms int;
   url text;
   onboarding_queue boolean := queue_name = 'cron_onboarding_refresh_apps';
+  awaited_queue boolean := queue_name IN ('cron_onboarding_refresh_apps', 'cron_app_fame');
 BEGIN
   EXECUTE pg_catalog.format('SELECT count(*) FROM pgmq.%I', 'q_' || queue_name)
   INTO queue_size;
@@ -14720,7 +14806,7 @@ BEGIN
       'apisecret', public.get_apikey()
     );
     request_timeout_ms := CASE
-      WHEN onboarding_queue THEN 100000
+      WHEN awaited_queue THEN 100000
       WHEN queue_name = 'on_manifest_create' THEN 60000
       ELSE 8000
     END;
@@ -14731,7 +14817,7 @@ BEGIN
       10
     );
 
-    IF onboarding_queue THEN
+    IF awaited_queue THEN
       calls_needed := 1;
     END IF;
 
@@ -14742,7 +14828,7 @@ BEGIN
         body := pg_catalog.jsonb_build_object(
           'queue_name', queue_name,
           'batch_size', batch_size,
-          'wait_for_completion', onboarding_queue
+          'wait_for_completion', awaited_queue
         ),
         timeout_milliseconds := request_timeout_ms
       );
@@ -21599,13 +21685,18 @@ CREATE TABLE IF NOT EXISTS "public"."channel_devices" (
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "device_id" "text" NOT NULL,
     "id" bigint NOT NULL,
-    "owner_org" "uuid" NOT NULL
+    "owner_org" "uuid" NOT NULL,
+    "is_self_set" boolean DEFAULT false NOT NULL
 );
 
 ALTER TABLE ONLY "public"."channel_devices" REPLICA IDENTITY FULL;
 
 
 ALTER TABLE "public"."channel_devices" OWNER TO "postgres";
+
+
+COMMENT ON COLUMN "public"."channel_devices"."is_self_set" IS 'Written by the device through /channel_self. Only these rows expire (cleanup_old_channel_devices); console/API overrides never expire.';
+
 
 
 ALTER TABLE "public"."channel_devices" ALTER COLUMN "id" ADD GENERATED BY DEFAULT AS IDENTITY (
@@ -25367,6 +25458,10 @@ CREATE OR REPLACE TRIGGER "channel_device_count_enqueue" AFTER INSERT OR DELETE 
 
 
 
+CREATE OR REPLACE TRIGGER "channel_devices_force_admin_origin" BEFORE INSERT OR UPDATE ON "public"."channel_devices" FOR EACH ROW EXECUTE FUNCTION "public"."channel_devices_force_admin_origin"();
+
+
+
 CREATE OR REPLACE TRIGGER "check_if_org_can_exist_org_users" AFTER DELETE ON "public"."org_users" FOR EACH ROW EXECUTE FUNCTION "public"."check_if_org_can_exist"();
 
 
@@ -25884,11 +25979,6 @@ ALTER TABLE ONLY "public"."compatibility_events"
 
 ALTER TABLE ONLY "public"."compatibility_events"
     ADD CONSTRAINT "compatibility_events_org_id_fkey" FOREIGN KEY ("org_id") REFERENCES "public"."orgs"("id") ON DELETE CASCADE;
-
-
-
-ALTER TABLE ONLY "public"."daily_build_time"
-    ADD CONSTRAINT "daily_build_time_app_id_fkey" FOREIGN KEY ("app_id") REFERENCES "public"."apps"("app_id") ON DELETE CASCADE;
 
 
 
@@ -27880,6 +27970,11 @@ REVOKE ALL ON FUNCTION "public"."calculate_org_metrics_cache_entry"("p_org_id" "
 
 REVOKE ALL ON FUNCTION "public"."canceled_org_ids_past_grace"("p_days" integer) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."canceled_org_ids_past_grace"("p_days" integer) TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."channel_devices_force_admin_origin"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."channel_devices_force_admin_origin"() TO "service_role";
 
 
 

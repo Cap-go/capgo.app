@@ -28,6 +28,7 @@
         "ENV_NAME": "capgo_translation_console-prod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "enabled": true,
         "head_sampling_rate": 1
       },
@@ -75,6 +76,7 @@
         "ENV_NAME": "capgo_translation_console-preprod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "enabled": true
       },
       "d1_databases": [
@@ -121,6 +123,7 @@
         "ENV_NAME": "capgo_translation_console-alpha"
       },
       "observability": {
+        "issues": { "enabled": true },
         "enabled": true
       },
       "d1_databases": [

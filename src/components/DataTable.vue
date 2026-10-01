@@ -681,15 +681,16 @@ const paginationClass = computed(() => props.mobileFixedPagination
               class="border-t border-slate-200 dark:border-slate-700"
               role="separator"
             />
-            <fieldset v-if="filterList.length" class="space-y-1">
-              <legend class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            <fieldset v-if="filterList.length" class="-mx-2 space-y-0.5">
+              <legend class="mb-1.5 px-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
                 {{ t('filter-options') }}
               </legend>
               <label
                 v-for="(f, i) in filterList"
                 :key="f"
                 :for="`filter-radio-example-${i}`"
-                class="flex min-h-11 cursor-pointer items-center rounded-md px-2 py-2 transition-colors duration-150 hover:bg-slate-50 dark:hover:bg-slate-800"
+                class="flex min-h-9 cursor-pointer items-center rounded-lg px-2 py-1.5 transition-colors duration-150 hover:bg-slate-50 dark:hover:bg-slate-700/50"
+                :class="{ 'bg-azure-500/5 dark:bg-azure-500/10': filters?.[f] }"
               >
                 <input
                   :id="`filter-radio-example-${i}`"
@@ -701,7 +702,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
                     emit('update:filters', { ...filters, [f]: !filters?.[f] })
                   "
                 >
-                <span class="ml-3 min-w-0 text-sm font-medium text-slate-900 dark:text-slate-200">
+                <span class="ml-3 min-w-0 text-sm font-medium text-slate-900 first-letter:uppercase dark:text-slate-200">
                   {{ getFilterLabel(f) }}
                 </span>
               </label>

@@ -247,6 +247,9 @@ async function guard(
   async function getPendingOnboardingRedirect(organizationsLoaded: boolean) {
     if (isCliLoginRoute)
       return null
+    // Creating another organization must not bounce back to pending setup.
+    if (to.path === '/onboarding/app' && to.query.new_org === '1')
+      return null
     if (!organizationsLoaded)
       return null
     if (!isNewOnboardingUser(sessionUser?.created_at))
@@ -276,7 +279,6 @@ async function guard(
       createdAt: sessionUser?.created_at,
       organizationCount: selectableOrganizations.length,
       path: to.path,
-      resumeAppId: typeof to.query.resume === 'string' ? to.query.resume : null,
       userId: sessionUser?.id,
     })
   }
