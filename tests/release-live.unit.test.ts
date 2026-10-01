@@ -98,8 +98,15 @@ describe('release live helpers', () => {
     expect(query).toContain('index1 = \'com.demo\'\'app\'')
     expect(query).toContain('blob3 = \'1.0.0\'')
     expect(query).toContain('GROUP BY device_id')
+    // Per device: earliest failure and latest install of this version.
+    expect(query).toContain('min(if(blob2 = \'set\', 4102444800, toUnixTimestamp(timestamp))) AS first_fail')
+    expect(query).toContain('max(if(blob2 = \'set\', toUnixTimestamp(timestamp), 0)) AS last_set')
+    // Recovered = installed at or after the first failure, stuck otherwise; devices without failure are dropped.
+    expect(query).toContain('sum(if(last_set >= first_fail, 1, 0)) AS recovered')
+    expect(query).toContain('sum(if(last_set >= first_fail, 0, 1)) AS stuck')
+    expect(query).toContain('WHERE first_fail < 4102444800')
     // Only failures are channel scoped: set logs carry no channel.
-    expect(query).toContain('(blob2 = \'set\' OR (blob2 LIKE \'%_fail\' AND (blob9 = \'7\' OR (blob9 = \'\' AND blob8 = \'prod\'\'uction\'))))')
+    expect(query).toContain('(blob2 = \'set\' OR ((blob2 LIKE \'%_fail\' OR blob2 IN (\'insufficient_disk_space\', \'cannotGetBundle\', \'blocked_by_server_url\', \'backend_refusal\')) AND (blob9 = \'7\' OR (blob9 = \'\' AND blob8 = \'prod\'\'uction\'))))')
 
     expect(releaseLiveTestUtils.toFailedDevices(null)).toBeNull()
     expect(releaseLiveTestUtils.toFailedDevices([])).toEqual({ total: 0, recovered: 0, stuck: 0 })

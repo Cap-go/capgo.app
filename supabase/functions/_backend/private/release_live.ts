@@ -4,7 +4,7 @@ import type { VersionUsageChannel } from '../utils/types.ts'
 import { HTTPException } from 'hono/http-exception'
 import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
-import { buildVersionUsageChannelFilterCF, escapeSqlString, formatDateCF, runQueryToCFA } from '../utils/cloudflare.ts'
+import { buildVersionUsageChannelFilterCF, escapeSqlString, formatDateCF, PUBLIC_FAILURE_ACTIONS, runQueryToCFA } from '../utils/cloudflare.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
@@ -270,8 +270,13 @@ LIMIT ${MAX_FAILURE_ACTIONS}`
 // (`set`) at or after its first bundle-level failure? `set` logs carry no
 // channel, so only the failure side is channel scoped; the set side only needs
 // to match the same device and version. File-level failures ("1.2.3:main.js")
-// never match the exact version name.
+// never match the exact version name. Timestamps are compared in whole seconds
+// (Analytics Engine precision): a set in the same second as the first failure
+// counts as recovered.
 const NO_FAILURE_TS = 4102444800 // 2100-01-01, sentinel for "no failure"
+// Bundle failures are every `*_fail` action plus these, as in the public metrics.
+const EXTRA_FAILURE_ACTIONS: string[] = PUBLIC_FAILURE_ACTIONS.filter(action => !action.endsWith('_fail'))
+const EXTRA_FAILURE_ACTIONS_CF = EXTRA_FAILURE_ACTIONS.map(action => `'${escapeSqlString(action)}'`).join(', ')
 
 function buildFailedDevicesQueryCF(appId: string, versionName: string, startMs: number, endMs: number, channel: VersionUsageChannel) {
   return `SELECT
@@ -288,7 +293,7 @@ FROM (
     AND blob3 = '${escapeSqlString(versionName)}'
     AND timestamp >= toDateTime('${formatDateCF(new Date(startMs))}')
     AND timestamp < toDateTime('${formatDateCF(new Date(endMs))}')
-    AND (blob2 = 'set' OR (blob2 LIKE '%_fail' ${buildFailureChannelFilterCF(channel)}))
+    AND (blob2 = 'set' OR ((blob2 LIKE '%_fail' OR blob2 IN (${EXTRA_FAILURE_ACTIONS_CF})) ${buildFailureChannelFilterCF(channel)}))
   GROUP BY device_id
 )
 WHERE first_fail < ${NO_FAILURE_TS}`
@@ -371,34 +376,44 @@ ORDER BY count DESC
 LIMIT ${MAX_FAILURE_ACTIONS}`,
         [appId, versionName, start, end, channel.name ?? ''],
       ),
+      // Optional breakdown: never fail the whole view on it. Only failures are
+      // channel scoped, matching the Analytics Engine query.
       db.query<RawFailedDevicesRow>(
-        `SELECT
+        String.raw`SELECT
   count(*) FILTER (WHERE d.last_set >= d.first_fail) AS recovered,
   count(*) FILTER (WHERE d.last_set IS NULL OR d.last_set < d.first_fail) AS stuck
 FROM (
   SELECT
     s.device_id,
-    min(s.created_at) FILTER (WHERE s.action::text LIKE '%\\_fail') AS first_fail,
+    min(s.created_at) FILTER (WHERE s.action <> 'set') AS first_fail,
     max(s.created_at) FILTER (WHERE s.action = 'set') AS last_set
   FROM public.stats s
   WHERE s.app_id = $1
     AND s.version_name = $2
     AND s.created_at >= $3::timestamptz
     AND s.created_at < $4::timestamptz
-    AND (s.action = 'set' OR s.action::text LIKE '%\\_fail')
-    AND EXISTS (
-      SELECT 1 FROM public.devices dv
-      WHERE dv.app_id = s.app_id
-        AND dv.device_id = s.device_id
-        AND dv.default_channel = $5::text
+    AND (
+      s.action = 'set'
+      OR (
+        (s.action::text LIKE '%\_fail' OR s.action::text = ANY($6::text[]))
+        AND EXISTS (
+          SELECT 1 FROM public.devices dv
+          WHERE dv.app_id = s.app_id
+            AND dv.device_id = s.device_id
+            AND dv.default_channel = $5::text
+        )
+      )
     )
   GROUP BY s.device_id
 ) d
 WHERE d.first_fail IS NOT NULL`,
-        [appId, versionName, start, end, channel.name ?? ''],
-      ),
+        [appId, versionName, start, end, channel.name ?? '', EXTRA_FAILURE_ACTIONS],
+      ).catch((error) => {
+        logPgError(c, 'release_live failed devices', error)
+        return null
+      }),
     ])
-    return { seriesRows: series.rows, failureRows: failures.rows, failedDevices: toFailedDevices(failedDevices.rows) }
+    return { seriesRows: series.rows, failureRows: failures.rows, failedDevices: toFailedDevices(failedDevices?.rows ?? null) }
   }
   catch (error) {
     logPgError(c, 'release_live readActivitySB', error)

@@ -359,8 +359,8 @@ function tabLabel(tab: Tab) {
             </span>
             <!-- The rail is 48px wide: hide the wordmark so its first letter does not peek past the logo. -->
             <CapgoWordtype
-              class="-ml-1 h-6 w-auto shrink-0 text-slate-200 transition-[opacity,transform,color] duration-300 ease-in-out group-hover:text-white motion-reduce:transition-none"
-              :class="isRail ? 'pointer-events-none -translate-x-3 opacity-0' : 'translate-x-0 opacity-100 delay-150'"
+              class="-ml-1 h-6 w-auto shrink-0 text-slate-200 transition-[opacity,translate,color] duration-300 ease-in-out group-hover:text-white motion-reduce:transition-none"
+              :class="isRail ? 'pointer-events-none -translate-x-3 opacity-0' : 'translate-x-0 opacity-100'"
               :aria-hidden="isRail"
             />
           </router-link>
