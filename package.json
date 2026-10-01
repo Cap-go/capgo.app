@@ -9,6 +9,8 @@
   ],
   "license": "GPL-3.0",
   "scripts": {
+    "build:snippet": "bun scripts/snippet/build-snippet.ts",
+    "check:snippet": "bun scripts/snippet/build-snippet.ts --check",
     "readreplicate:setup-source": "bash read_replicate/replicate_setup_source.sh",
     "readreplicate:prepare": "bash read_replicate/replicate_prepare.sh",
     "readreplicate:replica": "bash read_replicate/replicate_to_replica.sh",
