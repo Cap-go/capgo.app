@@ -7,6 +7,8 @@ import { supabaseAdmin } from './supabase.ts'
 import { isStripeConfigured } from './utils.ts'
 
 export const MIN_AUTO_TOP_UP_THRESHOLD = 10
+// orgs.auto_top_up_monthly_limit is numeric(18,6): 12 integer digits max.
+export const MAX_AUTO_TOP_UP_MONTHLY_LIMIT = 999_999_999_999
 export const AUTO_TOP_UP_KIND = 'credit_auto_top_up'
 const AUTO_TOP_UP_SOURCE = 'stripe_top_up'
 
@@ -63,8 +65,11 @@ export function normalizeAutoTopUpThreshold(value: unknown): number | null {
 
 // 0 means no limit. Otherwise the limit must allow at least one top-up of `threshold`.
 export function normalizeAutoTopUpMonthlyLimit(value: unknown, threshold: number): number | null {
-  const parsed = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(parsed) || parsed < 0)
+  // Reject null, booleans and empty strings so malformed input never becomes "no limit".
+  if (typeof value !== 'number' && (typeof value !== 'string' || value.trim() === ''))
+    return null
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > MAX_AUTO_TOP_UP_MONTHLY_LIMIT)
     return null
   const rounded = Math.floor(parsed)
   if (rounded !== 0 && rounded < threshold)
@@ -77,7 +82,7 @@ async function getMonthlyAutoTopUpTotal(c: Context, orgId: string): Promise<numb
     .rpc('get_credit_auto_top_up_month_total', { p_org_id: orgId })
   if (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_month_total_failed', orgId, error })
-    return 0
+    throw error
   }
   return Number(data ?? 0)
 }
@@ -299,12 +304,16 @@ export async function saveAutoTopUpSettings(
 ): Promise<AutoTopUpSettings> {
   const { data: org, error: orgError } = await supabaseAdmin(c)
     .from('orgs')
-    .select('customer_id')
+    .select('customer_id, auto_top_up_monthly_limit')
     .eq('id', orgId)
     .maybeSingle()
 
   if (orgError || !org)
     throw orgError ?? new Error('stripe_customer_missing')
+
+  // When the caller keeps the stored limit, it must still allow one top-up at the new threshold.
+  if (monthlyLimit === undefined && normalizeAutoTopUpMonthlyLimit(Number(org.auto_top_up_monthly_limit ?? 0), threshold) === null)
+    throw new Error('invalid_monthly_limit')
 
   if (enabled) {
     if (!org.customer_id)

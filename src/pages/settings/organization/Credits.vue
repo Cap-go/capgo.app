@@ -452,8 +452,8 @@ function applyAutoTopUpSettings(settings: { enabled?: boolean | null, threshold?
   autoTopUpHasCard.value = Boolean(settings?.hasPaymentMethod)
 }
 
-function resolveAutoTopUpThresholdForSave(enabled: boolean): number | null {
-  if (enabled) {
+function resolveAutoTopUpThresholdForSave(useInput: boolean): number | null {
+  if (useInput) {
     if (!isAutoTopUpThresholdValid.value || autoTopUpThreshold.value === null)
       return null
     return autoTopUpThreshold.value
@@ -461,8 +461,8 @@ function resolveAutoTopUpThresholdForSave(enabled: boolean): number | null {
   return confirmedAutoTopUpThreshold
 }
 
-function resolveAutoTopUpMonthlyLimitForSave(enabled: boolean): number | null {
-  if (enabled) {
+function resolveAutoTopUpMonthlyLimitForSave(useInput: boolean): number | null {
+  if (useInput) {
     if (!isAutoTopUpMonthlyLimitValid.value || autoTopUpMonthlyLimit.value === null)
       return null
     return autoTopUpMonthlyLimit.value
@@ -472,6 +472,9 @@ function resolveAutoTopUpMonthlyLimitForSave(enabled: boolean): number | null {
 
 async function loadAutoTopUpSettings() {
   const orgId = currentOrganization.value?.gid
+  // Never show the previous organization's monthly usage while the new one loads.
+  confirmedAutoTopUpMonthlyLimit.value = 0
+  autoTopUpMonthlyTotal.value = 0
   if (!orgId) {
     autoTopUpEnabled.value = false
     autoTopUpHasCard.value = false
@@ -508,17 +511,17 @@ async function loadAutoTopUpSettings() {
   }
 }
 
-async function persistAutoTopUpSettings(enabled: boolean, revertEnabledTo: boolean = !enabled) {
+async function persistAutoTopUpSettings(enabled: boolean, revertEnabledTo: boolean = !enabled, useInputs: boolean = enabled) {
   const orgId = currentOrganization.value?.gid
   if (!orgId)
     return
-  const run = () => persistAutoTopUpSettingsNow(orgId, enabled, revertEnabledTo)
+  const run = () => persistAutoTopUpSettingsNow(orgId, enabled, revertEnabledTo, useInputs)
   const pending = autoTopUpPersistQueue.then(run, run)
   autoTopUpPersistQueue = pending.then(() => undefined, () => undefined)
   await pending
 }
 
-async function persistAutoTopUpSettingsNow(orgId: string, enabled: boolean, revertEnabledTo: boolean) {
+async function persistAutoTopUpSettingsNow(orgId: string, enabled: boolean, revertEnabledTo: boolean, useInputs: boolean) {
   if (currentOrganization.value?.gid !== orgId)
     return
   if (!(await ensureUpdateBillingAccess())) {
@@ -528,13 +531,13 @@ async function persistAutoTopUpSettingsNow(orgId: string, enabled: boolean, reve
   }
   if (currentOrganization.value?.gid !== orgId)
     return
-  const thresholdToSave = resolveAutoTopUpThresholdForSave(enabled)
+  const thresholdToSave = resolveAutoTopUpThresholdForSave(useInputs)
   if (thresholdToSave === null) {
     toast.error(t('credits-auto-top-up-threshold-invalid'))
     autoTopUpEnabled.value = revertEnabledTo
     return
   }
-  const monthlyLimitToSave = resolveAutoTopUpMonthlyLimitForSave(enabled)
+  const monthlyLimitToSave = resolveAutoTopUpMonthlyLimitForSave(useInputs)
   if (monthlyLimitToSave === null) {
     toast.error(t('credits-auto-top-up-monthly-limit-invalid'))
     autoTopUpEnabled.value = revertEnabledTo
@@ -573,9 +576,16 @@ async function onAutoTopUpToggle(event: Event) {
 }
 
 async function onAutoTopUpFieldBlur() {
-  if (!autoTopUpEnabled.value)
+  if (autoTopUpEnabled.value) {
+    await persistAutoTopUpSettings(true, true)
     return
-  await persistAutoTopUpSettings(true, true)
+  }
+  // While disabled, save edited values so they survive a reload; skip unchanged or invalid input.
+  const unchanged = autoTopUpThreshold.value === confirmedAutoTopUpThreshold
+    && autoTopUpMonthlyLimit.value === confirmedAutoTopUpMonthlyLimit.value
+  if (unchanged || !isAutoTopUpThresholdValid.value || !isAutoTopUpMonthlyLimitValid.value)
+    return
+  await persistAutoTopUpSettings(false, false, true)
 }
 
 async function openBillingPortalForCard() {

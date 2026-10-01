@@ -119,5 +119,13 @@ describe('credit auto top-up monthly limit validation', () => {
     expect(normalizeAutoTopUpMonthlyLimit(Number.POSITIVE_INFINITY, 10)).toBeNull()
     expect(normalizeAutoTopUpMonthlyLimit('abc', 10)).toBeNull()
     expect(normalizeAutoTopUpMonthlyLimit(5, 10)).toBeNull()
+    expect(normalizeAutoTopUpMonthlyLimit(1_000_000_000_000, 10)).toBeNull()
+  })
+
+  it.concurrent('rejects malformed values instead of treating them as no limit', () => {
+    expect(normalizeAutoTopUpMonthlyLimit(null, 10)).toBeNull()
+    expect(normalizeAutoTopUpMonthlyLimit(false, 10)).toBeNull()
+    expect(normalizeAutoTopUpMonthlyLimit('', 10)).toBeNull()
+    expect(normalizeAutoTopUpMonthlyLimit('  ', 10)).toBeNull()
   })
 })

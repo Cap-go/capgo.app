@@ -679,6 +679,8 @@ app.post('/auto-top-up', middlewareAuth, async (c) => {
     const message = error instanceof Error ? error.message : String(error)
     if (message === 'payment_method_required')
       throw simpleError('payment_method_required', 'Add a card before enabling auto top-up')
+    if (message === 'invalid_monthly_limit')
+      throw simpleError('invalid_monthly_limit', 'Auto top-up monthly limit must be 0 (no limit) or at least the top-up amount')
     if (message === 'stripe_customer_missing')
       throw simpleError('stripe_customer_missing', 'Organization does not have a Stripe customer')
     cloudlogErr({ requestId: c.get('requestId'), message: 'auto_top_up_save_failed', orgId: body.orgId, error })

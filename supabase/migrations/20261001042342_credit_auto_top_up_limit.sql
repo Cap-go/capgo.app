@@ -11,11 +11,16 @@ ALTER TABLE "public"."orgs"
 
 COMMENT ON COLUMN "public"."orgs"."auto_top_up_monthly_limit" IS 'Maximum credits (USD, 1:1) that auto top-up may buy per calendar month (UTC). 0 means no limit. Auto top-up stops once the next charge would exceed it.';
 
+-- Bounds the monthly auto top-up sum to this month's purchased grants of one org.
+CREATE INDEX IF NOT EXISTS "idx_usage_credit_grants_org_top_up_granted_at"
+  ON "public"."usage_credit_grants" USING "btree" ("org_id", "granted_at")
+  WHERE "source" = 'stripe_top_up';
+
 -- Execution profile (service_role only):
 -- Called from try_claim_credit_auto_top_up (plan-check cron, once per org per run) and from
--- the /private/credits/auto-top-up settings endpoint. Reads public.usage_credit_grants by
--- org_id equality (idx_usage_credit_grants_org_expires prefix), filtered to auto top-up
--- grants of the current month. An org holds a handful of grants, so the scan stays tiny.
+-- the /private/credits/auto-top-up settings endpoint. Reads public.usage_credit_grants through
+-- idx_usage_credit_grants_org_top_up_granted_at (org_id equality + granted_at >= month start),
+-- so only this month's purchased grants of one org are visited.
 CREATE OR REPLACE FUNCTION public.get_credit_auto_top_up_month_total(p_org_id uuid)
 RETURNS numeric
 LANGUAGE sql

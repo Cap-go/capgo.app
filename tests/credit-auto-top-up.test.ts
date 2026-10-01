@@ -130,4 +130,17 @@ describe('credit auto top-up API', () => {
     expect(unlimited.status).toBe(200)
     expect((await unlimited.json() as AutoTopUpSettings).monthlyLimit).toBe(0)
   })
+
+  it('rejects a threshold above the stored monthly limit when monthlyLimit is omitted', async () => {
+    const headers = await getAuthHeaders()
+    const save = (body: Record<string, unknown>) => fetchTestRequest(getEndpointUrl('/private/credits/auto-top-up'), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ orgId: ORG_ID_CREDIT_AUTO_TOP_UP, enabled: false, ...body }),
+    })
+    expect((await save({ threshold: 10, monthlyLimit: 20 })).status).toBe(200)
+    const response = await save({ threshold: 25 })
+    expect(response.status).toBeGreaterThanOrEqual(400)
+    expect((await response.json() as AutoTopUpSettings).error).toBe('invalid_monthly_limit')
+  })
 })
