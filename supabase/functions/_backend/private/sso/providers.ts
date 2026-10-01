@@ -45,6 +45,15 @@ const updateBodySchema = z.object({
 
 const uuidSchema = z.uuid()
 
+const createLinkBodySchema = z.object({
+  org_id: z.uuid(),
+})
+
+const updateLinkBodySchema = z.object({
+  // null removes the mapping: the linked org then gets nobody from SSO.
+  role_mapping: roleMappingSchema.nullable(),
+})
+
 // The DNS token is only needed (and meant to be published in DNS) while the
 // domain is pending; keep it so the setup instructions survive a page reload.
 function sanitizeProvider(provider: Record<string, unknown>) {
@@ -125,10 +134,15 @@ async function requireMappingTargetsInOrg(c: Context<MiddlewareKeyVariables>, or
 // anti-escalation rule as role_bindings (callers never assign above their
 // own rank).
 async function requireSuperAdminForRoleMapping(c: Context<MiddlewareKeyVariables>, orgId: string) {
+  if (!await isOrgSuperAdmin(c, orgId))
+    quickError(403, 'role_mapping_requires_super_admin', 'Only organization super admins can change the SSO role mapping')
+}
+
+async function isOrgSuperAdmin(c: Context<MiddlewareKeyVariables>, orgId: string): Promise<boolean> {
   const auth = c.get('auth')!
   // Legacy API keys have no RBAC principal, hence no role in the org.
   if (auth.authType === 'apikey' && !auth.apikey?.rbac_id)
-    quickError(403, 'role_mapping_requires_super_admin', 'Only organization super admins can change the SSO role mapping')
+    return false
   const pgPool = getPgClient(c)
   try {
     const drizzle = getDrizzleClient(pgPool)
@@ -139,8 +153,7 @@ async function requireSuperAdminForRoleMapping(c: Context<MiddlewareKeyVariables
       'select priority_rank from public.roles where name = public.rbac_role_org_super_admin() and scope_type = public.rbac_scope_org()',
     )
     const superAdminRank = rows[0]?.priority_rank
-    if (superAdminRank === undefined || callerRank < superAdminRank)
-      quickError(403, 'role_mapping_requires_super_admin', 'Only organization super admins can change the SSO role mapping')
+    return superAdminRank !== undefined && callerRank >= superAdminRank
   }
   finally {
     await closeClient(c, pgPool)
@@ -183,6 +196,25 @@ async function revokeUnmappedSsoAccess(client: PoolClient, orgId: string, domain
       [orgId, groupIds, domain],
     )
   }
+}
+
+// Supabase Auth only captures the SAML attributes listed in the provider's
+// attribute mapping: one claim per attribute used by the owner org's role
+// mapping or by any linked org's mapping.
+function buildAuthAttributeMapping(attributeMapping: Record<string, string>, roleMappings: (SsoRoleMapping | null)[]): Record<string, string> {
+  const attributes = roleMappings.flatMap(mapping => mapping ? mappedAttributes(mapping) : [])
+  return {
+    ...attributeMapping,
+    ...Object.fromEntries(attributes.map(attribute => [ssoAttributeClaimKey(attribute), attribute])),
+  }
+}
+
+async function loadLinkedRoleMappings(client: PoolClient | ReturnType<typeof getPgClient>, providerId: string, excludedOrgId: string | null = null): Promise<(SsoRoleMapping | null)[]> {
+  const { rows } = await client.query<{ role_mapping: unknown }>(
+    'select role_mapping from public.sso_provider_org_links where sso_provider_id = $1 and role_mapping is not null and org_id is distinct from $2',
+    [providerId, excludedOrgId],
+  )
+  return rows.map(row => parseStoredRoleMapping(row.role_mapping))
 }
 
 function mappingTargets(mapping: SsoRoleMapping | null) {
@@ -315,6 +347,42 @@ async function setDomainSsoOnly(client: PoolClient, domain: string, isSsoOnly: b
     `,
     [isSsoOnly, domain],
   )
+}
+
+async function withPgPool<T>(c: Context<MiddlewareKeyVariables>, run: (pool: ReturnType<typeof getPgClient>) => Promise<T>): Promise<T> {
+  const pgPool = getPgClient(c)
+  try {
+    return await run(pgPool)
+  }
+  finally {
+    await closeClient(c, pgPool)
+  }
+}
+
+interface ProviderForLink {
+  id: string
+  org_id: string
+  domain: string
+}
+
+async function getProviderForLink(c: Context<MiddlewareKeyVariables>, id: string): Promise<ProviderForLink> {
+  const provider = await withPgPool(c, async (pool) => {
+    const { rows } = await pool.query<ProviderForLink>(
+      'select id, org_id, domain from public.sso_providers where id = $1',
+      [id],
+    )
+    return rows[0]
+  })
+  if (!provider)
+    quickError(404, 'provider_not_found', 'SSO provider not found')
+  return provider!
+}
+
+function parseUuidParam(value: string | undefined, error: string, message: string): string {
+  const validation = safeParseSchema(uuidSchema, value)
+  if (!validation.success)
+    throw simpleError(error, message)
+  return validation.data
 }
 
 export const app = createHono('', version)
@@ -515,10 +583,10 @@ app.patch('/:id', async (c) => {
   // claim per IdP attribute used by the role mapping.
   const nextAttributeMapping = (updates.attribute_mapping ?? provider.attribute_mapping ?? {}) as Record<string, string>
   const nextRoleMapping = (body.role_mapping !== undefined ? body.role_mapping : parseStoredRoleMapping(provider.role_mapping)) as SsoRoleMapping | null
-  const fullAttributeMapping: Record<string, string> = {
-    ...nextAttributeMapping,
-    ...Object.fromEntries((nextRoleMapping ? mappedAttributes(nextRoleMapping) : []).map(attribute => [ssoAttributeClaimKey(attribute), attribute])),
-  }
+  // Linked orgs' mappings are read before the row lock: saving one bumps the
+  // provider's updated_at, so a stale read here fails with provider_changed.
+  const linkedRoleMappings = await withPgPool(c, pool => loadLinkedRoleMappings(pool, id))
+  const fullAttributeMapping = buildAuthAttributeMapping(nextAttributeMapping, [nextRoleMapping, ...linkedRoleMappings])
   if (body.attribute_mapping !== undefined || body.role_mapping !== undefined)
     managementUpdates.attribute_mapping = fullAttributeMapping
 
@@ -654,5 +722,193 @@ app.delete('/:id', async (c) => {
     await closeClient(c, pgPool)
   }
 
+  return c.json(BRES)
+})
+
+// ---------------------------------------------------------------------------
+// Sharing a provider with other orgs of the same company (same IdP, same
+// email domain). Only one org can own a domain, so the other orgs link to the
+// owner's provider and keep their own role mapping.
+
+// Providers the org owns with the orgs they are shared with, and providers
+// other orgs share with it.
+app.get('/:orgId/links', async (c) => {
+  const orgId = parseUuidParam(c.req.param('orgId'), 'invalid_org_id', 'Invalid org_id')
+  await requireManageSsoPermission(c, orgId)
+
+  const result = await withPgPool(c, async (pool) => {
+    const [shared, linked] = await Promise.all([
+      pool.query(
+        `
+          select l.sso_provider_id as provider_id, l.org_id, o.name as org_name, l.role_mapping is not null as has_role_mapping, l.created_at
+          from public.sso_provider_org_links l
+          join public.sso_providers p on p.id = l.sso_provider_id
+          join public.orgs o on o.id = l.org_id
+          where p.org_id = $1
+          order by o.name
+        `,
+        [orgId],
+      ),
+      pool.query(
+        `
+          select p.id as provider_id, p.domain, p.status, p.org_id as owner_org_id, o.name as owner_org_name, l.role_mapping, l.created_at
+          from public.sso_provider_org_links l
+          join public.sso_providers p on p.id = l.sso_provider_id
+          join public.orgs o on o.id = p.org_id
+          where l.org_id = $1
+          order by p.domain
+        `,
+        [orgId],
+      ),
+    ])
+    return { shared: shared.rows, linked: linked.rows }
+  })
+  return c.json(result)
+})
+
+// Being super admin of both orgs is the consent of both sides.
+app.post('/:id/links', async (c) => {
+  const id = parseUuidParam(c.req.param('id'), 'invalid_provider_id', 'Invalid provider id')
+  const validation = safeParseSchema(createLinkBodySchema, await parseBody<{ org_id?: string }>(c))
+  if (!validation.success)
+    throw simpleError('invalid_body', 'Invalid request body', { errors: validation.error.message })
+  const targetOrgId = validation.data.org_id
+
+  const provider = await getProviderForLink(c, id)
+  if (provider.org_id === targetOrgId)
+    throw simpleError('invalid_link', 'The provider already belongs to this organization')
+  if (!await isOrgSuperAdmin(c, provider.org_id) || !await isOrgSuperAdmin(c, targetOrgId))
+    quickError(403, 'link_requires_super_admin', 'You must be super admin of both organizations to share an SSO provider')
+  await requireEnterprisePlan(c, targetOrgId)
+
+  const auth = c.get('auth')!
+  try {
+    const link = await withPgPool(c, async (pool) => {
+      const { rows } = await pool.query(
+        `
+          insert into public.sso_provider_org_links (sso_provider_id, org_id, linked_by)
+          values ($1, $2, $3)
+          returning sso_provider_id as provider_id, org_id, role_mapping, created_at
+        `,
+        [id, targetOrgId, auth.authType === 'jwt' ? auth.userId : null],
+      )
+      return rows[0]
+    })
+    return c.json(link)
+  }
+  catch (error) {
+    if ((error as { code?: string })?.code === '23505')
+      return quickError(409, 'link_exists', 'The SSO provider is already shared with this organization')
+    if ((error as { code?: string })?.code === '23503')
+      return quickError(404, 'org_not_found', 'Organization not found')
+    throw error
+  }
+})
+
+// The linked org's super admins own its mapping, like the owner org's.
+app.put('/:id/links/:orgId', async (c) => {
+  const id = parseUuidParam(c.req.param('id'), 'invalid_provider_id', 'Invalid provider id')
+  const orgId = parseUuidParam(c.req.param('orgId'), 'invalid_org_id', 'Invalid org_id')
+  const validation = safeParseSchema(updateLinkBodySchema, await parseBody<{ role_mapping?: unknown }>(c))
+  if (!validation.success)
+    throw simpleError('invalid_body', 'Invalid request body', { errors: validation.error.message })
+  const roleMapping = validation.data.role_mapping
+
+  const provider = await getProviderForLink(c, id)
+  await requireManageSsoPermission(c, orgId)
+  await requireSuperAdminForRoleMapping(c, orgId)
+  if (roleMapping)
+    await requireMappingTargetsInOrg(c, orgId, roleMapping)
+
+  const pgPool = getPgClient(c)
+  try {
+    const link = await withPgTransaction(pgPool, async (client) => {
+      // Up to two Management API calls (8s each) run while the row is locked.
+      await client.query('SET LOCAL idle_in_transaction_session_timeout = 30000')
+      // Same lock as a provider PATCH: the Auth attribute mapping is the union
+      // of every org's mapping, so writes to it are serialized per provider.
+      const locked = await client.query<{ provider_id: string | null, attribute_mapping: Record<string, string> | null, role_mapping: unknown }>(
+        'select provider_id, attribute_mapping, role_mapping from public.sso_providers where id = $1 for update',
+        [id],
+      )
+      const current = locked.rows[0]
+      if (!current)
+        quickError(404, 'provider_not_found', 'SSO provider not found')
+      const existing = await client.query<{ role_mapping: unknown }>(
+        'select role_mapping from public.sso_provider_org_links where sso_provider_id = $1 and org_id = $2 for update',
+        [id, orgId],
+      )
+      if (!existing.rows[0])
+        quickError(404, 'link_not_found', 'The SSO provider is not shared with this organization')
+
+      if (current!.provider_id) {
+        const otherMappings = await loadLinkedRoleMappings(client, id, orgId)
+        const allMappings = [parseStoredRoleMapping(current!.role_mapping), ...otherMappings]
+        const before = buildAuthAttributeMapping(current!.attribute_mapping ?? {}, [...allMappings, parseStoredRoleMapping(existing.rows[0]!.role_mapping)])
+        const after = buildAuthAttributeMapping(current!.attribute_mapping ?? {}, [...allMappings, roleMapping])
+        // Auth only ever gains claims here, so nothing has to be restored if
+        // the write below fails: an unused claim is harmless. Attributes only
+        // the previous mapping used are left in place for the same reason.
+        if (Object.keys(after).some(key => !(key in before))) {
+          try {
+            await updateSSOProvider(c, current!.provider_id, { attribute_mapping: { ...before, ...after } })
+          }
+          catch (err) {
+            if (err instanceof ManagementAPIError)
+              quickError(err.status >= 400 && err.status < 500 ? err.status : 502, 'provider_update_failed', err.message, { management_error_code: err.code })
+            throw err
+          }
+        }
+      }
+
+      const { rows } = await client.query(
+        `
+          update public.sso_provider_org_links
+          set role_mapping = $3, updated_at = now()
+          where sso_provider_id = $1 and org_id = $2
+          returning sso_provider_id as provider_id, org_id, role_mapping, created_at
+        `,
+        [id, orgId, roleMapping === null ? null : JSON.stringify(roleMapping)],
+      )
+      // Invalidates provider PATCHes computed from the previous mappings.
+      await client.query('update public.sso_providers set updated_at = now() where id = $1', [id])
+
+      const previous = mappingTargets(parseStoredRoleMapping(existing.rows[0]!.role_mapping))
+      const next = mappingTargets(roleMapping)
+      const appIds = [...previous.appIds].filter(appId => !next.appIds.has(appId))
+      const groupIds = [...previous.groupIds].filter(groupId => !next.groupIds.has(groupId))
+      await revokeUnmappedSsoAccess(client, orgId, provider.domain, appIds, groupIds)
+      return rows[0]
+    })
+    return c.json(link)
+  }
+  catch (error) {
+    if (error instanceof HTTPException)
+      throw error
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to update SSO provider link', providerId: id, orgId, error })
+    return quickError(500, 'link_update_failed', 'Failed to update the shared SSO provider')
+  }
+  finally {
+    await closeClient(c, pgPool)
+  }
+})
+
+// Either side can end the sharing. Access SSO already granted in the linked
+// org stays as is (like deleting a provider): admins manage those members
+// manually from then on.
+app.delete('/:id/links/:orgId', async (c) => {
+  const id = parseUuidParam(c.req.param('id'), 'invalid_provider_id', 'Invalid provider id')
+  const orgId = parseUuidParam(c.req.param('orgId'), 'invalid_org_id', 'Invalid org_id')
+
+  const provider = await getProviderForLink(c, id)
+  if (!await isOrgSuperAdmin(c, orgId) && !await isOrgSuperAdmin(c, provider.org_id))
+    quickError(403, 'link_requires_super_admin', 'Only super admins of either organization can stop sharing an SSO provider')
+
+  const deleted = await withPgPool(c, async (pool) => {
+    const result = await pool.query('delete from public.sso_provider_org_links where sso_provider_id = $1 and org_id = $2', [id, orgId])
+    return result.rowCount ?? 0
+  })
+  if (deleted === 0)
+    quickError(404, 'link_not_found', 'The SSO provider is not shared with this organization')
   return c.json(BRES)
 })

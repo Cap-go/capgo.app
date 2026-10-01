@@ -33,6 +33,13 @@ interface EnsureOrgMembershipResult {
   noAccess?: boolean
 }
 
+// One org the login provisions: the provider's owner org (legacy behavior
+// when it has no role mapping) and every linked org with a role mapping.
+interface OrgAccessTarget {
+  orgId: string
+  access: SsoAccess | null
+}
+
 interface SsoProviderRecord {
   id: string
   org_id: string
@@ -146,6 +153,52 @@ function resolveMappedAccess(provider: { role_mapping?: unknown }, authorizedSso
   return resolveSsoAccess(mapping, readAttributeValues(identity?.identity_data, mappedAttributes(mapping)))
 }
 
+// Orgs sharing the provider (sso_provider_org_links) are only provisioned
+// through their own role mapping: a link without a valid mapping grants
+// nothing. Sorted by org id so concurrent logins take org locks in one order.
+async function resolveOrgTargets(
+  pgClient: PgExecutor,
+  provider: { id: string, org_id: string, role_mapping?: unknown },
+  authorizedSsoProviders: string[],
+  identities: any[],
+): Promise<OrgAccessTarget[]> {
+  const { rows } = await pgClient.query<{ org_id: string, role_mapping: unknown }>(
+    `
+      select org_id, role_mapping
+      from public.sso_provider_org_links
+      where sso_provider_id = $1
+        and role_mapping is not null
+        and org_id <> $2
+      order by org_id
+    `,
+    [provider.id, provider.org_id],
+  )
+  const linked = rows.flatMap((link) => {
+    const access = resolveMappedAccess(link, authorizedSsoProviders, identities)
+    return access ? [{ orgId: link.org_id, access }] : []
+  })
+  return [{ orgId: provider.org_id, access: resolveMappedAccess(provider, authorizedSsoProviders, identities) }, ...linked]
+}
+
+// The login is denied only when no org grants access.
+async function provisionOrgsInTransaction(
+  client: PoolClient,
+  requestId: string,
+  userId: string,
+  targets: OrgAccessTarget[],
+): Promise<EnsureOrgMembershipResult> {
+  const results: EnsureOrgMembershipResult[] = []
+  for (const target of targets) {
+    results.push(target.access
+      ? await applyMappedAccessInTransaction(client, requestId, userId, target.orgId, target.access)
+      : await ensureOrgMembershipInTransaction(client, requestId, userId, target.orgId))
+  }
+  return {
+    alreadyMember: results.every(result => result.alreadyMember),
+    noAccess: results.every(result => result.noAccess === true),
+  }
+}
+
 async function transferSsoIdentities(pgClient: PgExecutor, originalUserId: string, duplicateUserId: string, trustedProviders: string[]): Promise<number> {
   const result = await pgClient.query(
     `
@@ -214,16 +267,13 @@ async function ensureOrgMembership(
   pgPool: ReturnType<typeof getPgClient>,
   requestId: string,
   userId: string,
-  orgId: string,
-  access: SsoAccess | null,
+  targets: OrgAccessTarget[],
 ): Promise<EnsureOrgMembershipResult> {
   try {
-    return await withPgTransaction(pgPool, client => access
-      ? applyMappedAccessInTransaction(client, requestId, userId, orgId, access)
-      : ensureOrgMembershipInTransaction(client, requestId, userId, orgId))
+    return await withPgTransaction(pgPool, client => provisionOrgsInTransaction(client, requestId, userId, targets))
   }
   catch (error) {
-    cloudlogErr({ requestId, message: 'SSO provisioning transaction rolled back', userId, orgId, error })
+    cloudlogErr({ requestId, message: 'SSO provisioning transaction rolled back', userId, orgIds: targets.map(target => target.orgId), error })
     throw error
   }
 }
@@ -650,9 +700,8 @@ async function mergeSsoIdentityWithExistingAccount(
     originalUserId: string
     duplicateUserId: string
     publicUser: PublicUserSeed
-    orgId: string
+    targets: OrgAccessTarget[]
     authorizedSsoProviders: string[]
-    access: SsoAccess | null
   },
 ): Promise<{ noAccess: boolean }> {
   try {
@@ -672,9 +721,7 @@ async function mergeSsoIdentityWithExistingAccount(
       }
 
       await ensurePublicUserRowExistsInTransaction(pgClient, requestId, params.publicUser)
-      const membership = params.access
-        ? await applyMappedAccessInTransaction(pgClient, requestId, params.originalUserId, params.orgId, params.access)
-        : await ensureOrgMembershipInTransaction(pgClient, requestId, params.originalUserId, params.orgId)
+      const membership = await provisionOrgsInTransaction(pgClient, requestId, params.originalUserId, params.targets)
 
       try {
         await setAuthUserSsoOnly(pgClient, params.originalUserId, params.authorizedSsoProviders)
@@ -803,6 +850,15 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
         return quickError(403, 'provider_mismatch', 'SSO provider does not match the email domain provider')
       }
 
+      let targets: OrgAccessTarget[]
+      try {
+        targets = await resolveOrgTargets(getSharedPgClient(), mergeProvider, authorizedSsoProviders, userIdentities)
+      }
+      catch (linkLookupError) {
+        cloudlogErr({ requestId, message: 'Failed to resolve orgs sharing the SSO provider during merge', originalUserId, providerId: mergeProvider.id, error: linkLookupError })
+        return quickError(500, 'provider_lookup_failed', 'Failed to resolve SSO provider for your email domain')
+      }
+
       // Step 2: Transfer the SSO identity and provision the merged account atomically.
       let mergeResult: { noAccess: boolean }
       try {
@@ -813,9 +869,8 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
             ...publicUserSeed,
             id: originalUserId,
           },
-          orgId: mergeProvider.org_id,
+          targets,
           authorizedSsoProviders,
-          access: resolveMappedAccess(mergeProvider, authorizedSsoProviders, userIdentities),
         })
       }
       catch (mergeError) {
@@ -883,9 +938,18 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
       return quickError(500, 'public_user_sync_failed', 'Failed to create user profile for SSO account')
     }
 
+    let targets: OrgAccessTarget[]
+    try {
+      targets = await resolveOrgTargets(getSharedPgClient(), provider, authorizedSsoProviders, userIdentities)
+    }
+    catch (linkLookupError) {
+      cloudlogErr({ requestId, message: 'Failed to resolve orgs sharing the SSO provider', userId, providerId: provider.id, error: linkLookupError })
+      return quickError(500, 'provider_lookup_failed', 'Failed to resolve SSO provider for your email domain')
+    }
+
     let membershipResult: EnsureOrgMembershipResult
     try {
-      membershipResult = await ensureOrgMembership(getSharedPgClient(), requestId, userId, provider.org_id, resolveMappedAccess(provider, authorizedSsoProviders, userIdentities))
+      membershipResult = await ensureOrgMembership(getSharedPgClient(), requestId, userId, targets)
     }
     catch {
       return quickError(500, 'provision_failed', 'Failed to provision user to organization')

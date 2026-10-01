@@ -28,7 +28,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  saved: [providerId: string, roleMapping: SsoRoleMapping | null]
+  saved: [providerId: string, roleMapping: SsoRoleMapping | null, shared: boolean]
 }>()
 
 const DIALOG_ID = 'sso-role-mapping'
@@ -42,6 +42,8 @@ const supabase = useSupabase()
 const dialogStore = useDialogV2Store()
 
 const providerId = ref('')
+// Editing this org's mapping on a provider another org shares with it.
+const shared = ref(false)
 const rules = ref<SsoRoleMapping['rules']>([])
 // '' = no access; a string so it can bind to a <select>.
 const defaultRole = ref<OrgRole | ''>('org_member')
@@ -80,8 +82,11 @@ function addApp(rule: SsoRoleMapping['rules'][number]) {
 
 async function save(roleMapping: SsoRoleMapping | null): Promise<boolean> {
   const { data: session } = await supabase.auth.getSession()
-  const response = await fetch(`${defaultApiHost}/private/sso/providers/${providerId.value}`, {
-    method: 'PATCH',
+  const url = shared.value
+    ? `${defaultApiHost}/private/sso/providers/${providerId.value}/links/${props.orgId}`
+    : `${defaultApiHost}/private/sso/providers/${providerId.value}`
+  const response = await fetch(url, {
+    method: shared.value ? 'PUT' : 'PATCH',
     headers: {
       'Content-Type': 'application/json',
       'authorization': `Bearer ${session.session?.access_token ?? ''}`,
@@ -94,7 +99,7 @@ async function save(roleMapping: SsoRoleMapping | null): Promise<boolean> {
     return false
   }
   toast.success(t('sso-role-mapping-saved'))
-  emit('saved', providerId.value, roleMapping)
+  emit('saved', providerId.value, roleMapping, shared.value)
   return true
 }
 
@@ -105,11 +110,14 @@ function currentMapping(): SsoRoleMapping {
   }
 }
 
-function open(provider: { id: string, domain: string, role_mapping: SsoRoleMapping | null }) {
+function open(provider: { id: string, domain: string, role_mapping: SsoRoleMapping | null }, options: { shared?: boolean } = {}) {
   providerId.value = provider.id
+  shared.value = options.shared === true
   // Plain copies: Vue reactive proxies cannot be structured-cloned.
   rules.value = (provider.role_mapping?.rules ?? []).map(rule => ({ ...rule, apps: rule.apps.map(app => ({ ...app })) }))
-  defaultRole.value = provider.role_mapping ? (provider.role_mapping.default_role ?? '') : 'org_member'
+  // Without a mapping the owner org gives every SSO user org_member, while a
+  // shared provider gives nobody access: suggest the matching default.
+  defaultRole.value = provider.role_mapping ? (provider.role_mapping.default_role ?? '') : (shared.value ? '' : 'org_member')
   if (rules.value.length === 0)
     addRule()
   loadTargets()
@@ -117,7 +125,7 @@ function open(provider: { id: string, domain: string, role_mapping: SsoRoleMappi
   dialogStore.openDialog({
     id: DIALOG_ID,
     title: t('sso-role-mapping-dialog-title', { domain: provider.domain }),
-    description: t('sso-role-mapping-description'),
+    description: shared.value ? `${t('sso-role-mapping-description')} ${t('sso-shared-role-mapping-description')}` : t('sso-role-mapping-description'),
     size: '3xl',
     preventAccidentalClose: true,
     buttons: [
