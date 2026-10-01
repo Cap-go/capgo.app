@@ -15,15 +15,21 @@ export interface AutoTopUpSettings {
   threshold: number
   hasPaymentMethod: boolean
   availableCredits: number
+  /** Max credits auto top-up may buy per calendar month (UTC). 0 means no limit. */
+  monthlyLimit: number
+  /** Credits bought by auto top-up so far this calendar month (UTC). */
+  monthlyTotal: number
 }
 
-// Mirrors try_claim_credit_auto_top_up eligibility (enabled, min $10, balance, 1h cooldown).
+// Mirrors try_claim_credit_auto_top_up eligibility (enabled, min $10, balance, 1h cooldown, monthly limit).
 // SQL remains the source of truth for charging; this helper exists for unit tests.
 export function shouldAttemptAutoTopUp(input: {
   enabled: boolean
   availableCredits: number
   threshold: number
   lastAttemptAt: string | null
+  monthlyLimit?: number
+  monthlyTotal?: number
   now?: number
   cooldownMs?: number
 }): boolean {
@@ -39,6 +45,9 @@ export function shouldAttemptAutoTopUp(input: {
     if (Number.isFinite(lastAttempt) && (input.now ?? Date.now()) - lastAttempt < cooldownMs)
       return false
   }
+  const monthlyLimit = input.monthlyLimit ?? 0
+  if (monthlyLimit > 0 && (input.monthlyTotal ?? 0) + input.threshold > monthlyLimit)
+    return false
   return true
 }
 
@@ -50,6 +59,27 @@ export function normalizeAutoTopUpThreshold(value: unknown): number | null {
   if (rounded < MIN_AUTO_TOP_UP_THRESHOLD)
     return null
   return rounded
+}
+
+// 0 means no limit. Otherwise the limit must allow at least one top-up of `threshold`.
+export function normalizeAutoTopUpMonthlyLimit(value: unknown, threshold: number): number | null {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(parsed) || parsed < 0)
+    return null
+  const rounded = Math.floor(parsed)
+  if (rounded !== 0 && rounded < threshold)
+    return null
+  return rounded
+}
+
+async function getMonthlyAutoTopUpTotal(c: Context, orgId: string): Promise<number> {
+  const { data, error } = await supabaseAdmin(c)
+    .rpc('get_credit_auto_top_up_month_total', { p_org_id: orgId })
+  if (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_month_total_failed', orgId, error })
+    return 0
+  }
+  return Number(data ?? 0)
 }
 
 async function getAvailableCredits(c: Context, orgId: string): Promise<number> {
@@ -230,7 +260,7 @@ async function chargeOffSessionCredits(
 export async function getAutoTopUpSettings(c: Context, orgId: string): Promise<AutoTopUpSettings> {
   const { data: org, error } = await supabaseAdmin(c)
     .from('orgs')
-    .select('auto_top_up_enabled, auto_top_up_threshold, customer_id')
+    .select('auto_top_up_enabled, auto_top_up_threshold, auto_top_up_monthly_limit, customer_id')
     .eq('id', orgId)
     .maybeSingle()
 
@@ -241,6 +271,8 @@ export async function getAutoTopUpSettings(c: Context, orgId: string): Promise<A
       threshold: MIN_AUTO_TOP_UP_THRESHOLD,
       hasPaymentMethod: false,
       availableCredits: 0,
+      monthlyLimit: 0,
+      monthlyTotal: 0,
     }
   }
 
@@ -253,6 +285,8 @@ export async function getAutoTopUpSettings(c: Context, orgId: string): Promise<A
     threshold: Number(org.auto_top_up_threshold ?? MIN_AUTO_TOP_UP_THRESHOLD),
     hasPaymentMethod,
     availableCredits: await getAvailableCredits(c, orgId),
+    monthlyLimit: Number(org.auto_top_up_monthly_limit ?? 0),
+    monthlyTotal: await getMonthlyAutoTopUpTotal(c, orgId),
   }
 }
 
@@ -261,6 +295,7 @@ export async function saveAutoTopUpSettings(
   orgId: string,
   enabled: boolean,
   threshold: number,
+  monthlyLimit?: number,
 ): Promise<AutoTopUpSettings> {
   const { data: org, error: orgError } = await supabaseAdmin(c)
     .from('orgs')
@@ -284,6 +319,7 @@ export async function saveAutoTopUpSettings(
     .update({
       auto_top_up_enabled: enabled,
       auto_top_up_threshold: threshold,
+      ...(monthlyLimit === undefined ? {} : { auto_top_up_monthly_limit: monthlyLimit }),
     })
     .eq('id', orgId)
 

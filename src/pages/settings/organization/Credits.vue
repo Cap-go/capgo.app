@@ -111,6 +111,9 @@ const autoTopUpLoadFailed = ref(false)
 let autoTopUpPersistQueue = Promise.resolve()
 let autoTopUpLoadSeq = 0
 let confirmedAutoTopUpThreshold = MIN_AUTO_TOP_UP
+const autoTopUpMonthlyLimitInput = ref('0')
+const autoTopUpMonthlyTotal = ref(0)
+const confirmedAutoTopUpMonthlyLimit = ref(0)
 const isAutoTopUpControlsDisabled = computed(() => isLoadingAutoTopUp.value || isSavingAutoTopUp.value || autoTopUpLoadFailed.value)
 const autoTopUpThreshold = computed(() => {
   const parsed = Number.parseInt(autoTopUpThresholdInput.value, 10)
@@ -119,6 +122,23 @@ const autoTopUpThreshold = computed(() => {
   return parsed
 })
 const isAutoTopUpThresholdValid = computed(() => autoTopUpThreshold.value !== null && autoTopUpThreshold.value >= MIN_AUTO_TOP_UP)
+const autoTopUpMonthlyLimit = computed(() => {
+  const parsed = Number.parseInt(autoTopUpMonthlyLimitInput.value, 10)
+  if (Number.isNaN(parsed))
+    return null
+  return parsed
+})
+// 0 means no limit; otherwise the limit must allow at least one top-up.
+const isAutoTopUpMonthlyLimitValid = computed(() => {
+  const limit = autoTopUpMonthlyLimit.value
+  if (limit === null || limit < 0)
+    return false
+  return limit === 0 || (autoTopUpThreshold.value !== null && limit >= autoTopUpThreshold.value)
+})
+const isAutoTopUpMonthlyLimitReached = computed(() => {
+  const limit = confirmedAutoTopUpMonthlyLimit.value
+  return autoTopUpEnabled.value && limit > 0 && autoTopUpMonthlyTotal.value + confirmedAutoTopUpThreshold > limit
+})
 
 const creditTotal = computed(() => Number(currentOrganization.value?.credit_total ?? 0))
 const creditAvailable = computed(() => Number(currentOrganization.value?.credit_available ?? 0))
@@ -420,9 +440,13 @@ async function loadPricingSteps() {
   pricingSteps.value = await getCreditPricingSteps(currentOrganization.value?.gid)
 }
 
-function applyAutoTopUpSettings(settings: { enabled?: boolean | null, threshold?: number | null, hasPaymentMethod?: boolean | null }) {
+function applyAutoTopUpSettings(settings: { enabled?: boolean | null, threshold?: number | null, hasPaymentMethod?: boolean | null, monthlyLimit?: number | null, monthlyTotal?: number | null }) {
   const threshold = Math.max(MIN_AUTO_TOP_UP, Math.floor(Number(settings?.threshold ?? MIN_AUTO_TOP_UP)))
+  const monthlyLimit = Math.max(0, Math.floor(Number(settings?.monthlyLimit ?? 0)))
   confirmedAutoTopUpThreshold = threshold
+  confirmedAutoTopUpMonthlyLimit.value = monthlyLimit
+  autoTopUpMonthlyLimitInput.value = String(monthlyLimit)
+  autoTopUpMonthlyTotal.value = Number(settings?.monthlyTotal ?? 0)
   autoTopUpEnabled.value = Boolean(settings?.enabled)
   autoTopUpThresholdInput.value = String(threshold)
   autoTopUpHasCard.value = Boolean(settings?.hasPaymentMethod)
@@ -435,6 +459,15 @@ function resolveAutoTopUpThresholdForSave(enabled: boolean): number | null {
     return autoTopUpThreshold.value
   }
   return confirmedAutoTopUpThreshold
+}
+
+function resolveAutoTopUpMonthlyLimitForSave(enabled: boolean): number | null {
+  if (enabled) {
+    if (!isAutoTopUpMonthlyLimitValid.value || autoTopUpMonthlyLimit.value === null)
+      return null
+    return autoTopUpMonthlyLimit.value
+  }
+  return confirmedAutoTopUpMonthlyLimit.value
 }
 
 async function loadAutoTopUpSettings() {
@@ -464,6 +497,9 @@ async function loadAutoTopUpSettings() {
       autoTopUpHasCard.value = false
       autoTopUpThresholdInput.value = String(MIN_AUTO_TOP_UP)
       confirmedAutoTopUpThreshold = MIN_AUTO_TOP_UP
+      autoTopUpMonthlyLimitInput.value = '0'
+      confirmedAutoTopUpMonthlyLimit.value = 0
+      autoTopUpMonthlyTotal.value = 0
     }
   }
   finally {
@@ -498,6 +534,12 @@ async function persistAutoTopUpSettingsNow(orgId: string, enabled: boolean, reve
     autoTopUpEnabled.value = revertEnabledTo
     return
   }
+  const monthlyLimitToSave = resolveAutoTopUpMonthlyLimitForSave(enabled)
+  if (monthlyLimitToSave === null) {
+    toast.error(t('credits-auto-top-up-monthly-limit-invalid'))
+    autoTopUpEnabled.value = revertEnabledTo
+    return
+  }
   if (enabled && !autoTopUpHasCard.value) {
     toast.error(t('credits-auto-top-up-no-card'))
     autoTopUpEnabled.value = false
@@ -507,10 +549,10 @@ async function persistAutoTopUpSettingsNow(orgId: string, enabled: boolean, reve
   autoTopUpLoadSeq += 1
   const saveSeq = autoTopUpLoadSeq
   try {
-    const settings = await saveCreditAutoTopUp(orgId, enabled, thresholdToSave)
+    const settings = await saveCreditAutoTopUp(orgId, enabled, thresholdToSave, monthlyLimitToSave)
     if (currentOrganization.value?.gid !== orgId || saveSeq !== autoTopUpLoadSeq)
       return
-    applyAutoTopUpSettings(settings ?? { enabled, threshold: thresholdToSave, hasPaymentMethod: autoTopUpHasCard.value })
+    applyAutoTopUpSettings(settings ?? { enabled, threshold: thresholdToSave, hasPaymentMethod: autoTopUpHasCard.value, monthlyLimit: monthlyLimitToSave, monthlyTotal: autoTopUpMonthlyTotal.value })
     toast.success(t('credits-auto-top-up-saved'))
   }
   catch (error) {
@@ -530,7 +572,7 @@ async function onAutoTopUpToggle(event: Event) {
   await persistAutoTopUpSettings(checked)
 }
 
-async function onAutoTopUpThresholdBlur() {
+async function onAutoTopUpFieldBlur() {
   if (!autoTopUpEnabled.value)
     return
   await persistAutoTopUpSettings(true, true)
@@ -930,7 +972,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             validation-visibility="live"
             outer-class="w-full !mb-0"
             :disabled="isAutoTopUpControlsDisabled"
-            @blur="onAutoTopUpThresholdBlur"
+            @blur="onAutoTopUpFieldBlur"
           >
             <template #prefix>
               $
@@ -938,6 +980,43 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
           </FormKit>
           <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
             {{ t('credits-auto-top-up-min') }}
+          </p>
+          <FormKit
+            id="credits-auto-top-up-monthly-limit"
+            v-model="autoTopUpMonthlyLimitInput"
+            type="number"
+            name="creditsAutoTopUpMonthlyLimit"
+            data-test="credits-auto-top-up-monthly-limit"
+            inputmode="numeric"
+            min="0"
+            step="1"
+            :label="t('credits-auto-top-up-monthly-limit-label')"
+            validation="required|min:0"
+            validation-visibility="live"
+            outer-class="w-full !mb-0 mt-4"
+            :disabled="isAutoTopUpControlsDisabled"
+            @blur="onAutoTopUpFieldBlur"
+          >
+            <template #prefix>
+              $
+            </template>
+          </FormKit>
+          <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('credits-auto-top-up-monthly-limit-help') }}
+          </p>
+          <p
+            v-if="confirmedAutoTopUpMonthlyLimit > 0"
+            class="mt-1 text-xs text-gray-500 dark:text-gray-400"
+            data-test="credits-auto-top-up-monthly-usage"
+          >
+            {{ t('credits-auto-top-up-monthly-usage', { used: formatCurrency(autoTopUpMonthlyTotal), limit: formatCurrency(confirmedAutoTopUpMonthlyLimit) }) }}
+          </p>
+          <p
+            v-if="isAutoTopUpMonthlyLimitReached"
+            class="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300"
+            data-test="credits-auto-top-up-monthly-limit-reached"
+          >
+            {{ t('credits-auto-top-up-monthly-limit-reached') }}
           </p>
           <button
             v-if="!autoTopUpHasCard"

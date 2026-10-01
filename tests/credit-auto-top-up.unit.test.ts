@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MIN_AUTO_TOP_UP_THRESHOLD, shouldAttemptAutoTopUp } from '../supabase/functions/_backend/utils/credit_auto_top_up.ts'
+import { MIN_AUTO_TOP_UP_THRESHOLD, normalizeAutoTopUpMonthlyLimit, shouldAttemptAutoTopUp } from '../supabase/functions/_backend/utils/credit_auto_top_up.ts'
 
 describe('credit auto top-up decision', () => {
   it('does not attempt when disabled', () => {
@@ -68,5 +68,56 @@ describe('credit auto top-up decision', () => {
       threshold: 10,
       lastAttemptAt: 'not-a-date',
     })).toBe(true)
+  })
+
+  it.concurrent('ignores the monthly limit when it is 0', () => {
+    expect(shouldAttemptAutoTopUp({
+      enabled: true,
+      availableCredits: 0,
+      threshold: 10,
+      lastAttemptAt: null,
+      monthlyLimit: 0,
+      monthlyTotal: 1000,
+    })).toBe(true)
+  })
+
+  it.concurrent('attempts while the next charge fits in the monthly limit', () => {
+    expect(shouldAttemptAutoTopUp({
+      enabled: true,
+      availableCredits: 0,
+      threshold: 10,
+      lastAttemptAt: null,
+      monthlyLimit: 30,
+      monthlyTotal: 20,
+    })).toBe(true)
+  })
+
+  it.concurrent('stops when the next charge would exceed the monthly limit', () => {
+    expect(shouldAttemptAutoTopUp({
+      enabled: true,
+      availableCredits: 0,
+      threshold: 10,
+      lastAttemptAt: null,
+      monthlyLimit: 25,
+      monthlyTotal: 20,
+    })).toBe(false)
+  })
+})
+
+describe('credit auto top-up monthly limit validation', () => {
+  it.concurrent('accepts 0 as no limit', () => {
+    expect(normalizeAutoTopUpMonthlyLimit(0, 10)).toBe(0)
+  })
+
+  it.concurrent('accepts a limit at least equal to the top-up amount', () => {
+    expect(normalizeAutoTopUpMonthlyLimit(10, 10)).toBe(10)
+    expect(normalizeAutoTopUpMonthlyLimit('100.7', 25)).toBe(100)
+  })
+
+  it.concurrent('rejects negative, non-finite, or too-small limits', () => {
+    expect(normalizeAutoTopUpMonthlyLimit(-1, 10)).toBeNull()
+    expect(normalizeAutoTopUpMonthlyLimit(Number.POSITIVE_INFINITY, 10)).toBeNull()
+    expect(normalizeAutoTopUpMonthlyLimit('abc', 10)).toBeNull()
+    expect(normalizeAutoTopUpMonthlyLimit(5, 10)).toBeNull()
   })
 })

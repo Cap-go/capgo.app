@@ -3921,5 +3921,10 @@
   "release-live-no-release": "No release on this channel yet",
   "release-live-no-release-help": "Upload a bundle and assign it to this channel to follow its rollout here.",
   "release-live-fetch-error": "Could not load live release data",
-  "release-banner-watch-live": "Watch live"
+  "release-banner-watch-live": "Watch live",
+  "credits-auto-top-up-monthly-limit-label": "Monthly auto top-up limit",
+  "credits-auto-top-up-monthly-limit-help": "Maximum Capgo can charge for auto top-ups per calendar month (UTC). Set 0 for no limit.",
+  "credits-auto-top-up-monthly-limit-invalid": "Enter 0 for no limit, or a limit at least equal to the top-up amount.",
+  "credits-auto-top-up-monthly-usage": "Auto top-ups this month: {used} of {limit}.",
+  "credits-auto-top-up-monthly-limit-reached": "Monthly limit reached. Auto top-up is paused until next month or until you raise the limit."
 }

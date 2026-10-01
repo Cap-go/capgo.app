@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(35);
+SELECT plan(40);
 
 DO $$
 BEGIN
@@ -1129,6 +1129,91 @@ SELECT
         ),
         false,
         'try_claim_credit_auto_top_up respects the one-hour cooldown'
+    );
+
+SELECT
+    throws_ok(
+        $$
+      UPDATE public.orgs
+      SET auto_top_up_monthly_limit = -1
+      WHERE id = (SELECT org_id FROM test_credit_consume_context)
+    $$,
+        '23514',
+        'new row for relation "orgs" violates check constraint "orgs_auto_top_up_monthly_limit_valid"',
+        'auto_top_up_monthly_limit rejects negative values'
+    );
+
+-- A fully consumed auto top-up grant from this month counts toward the monthly limit.
+INSERT INTO public.usage_credit_grants (
+    org_id,
+    credits_total,
+    credits_consumed,
+    source,
+    source_ref,
+    notes
+)
+VALUES (
+    (SELECT org_id FROM test_credit_consume_context),
+    20,
+    20,
+    'stripe_top_up',
+    jsonb_build_object('kind', 'credit_auto_top_up', 'paymentIntentId', 'pi_test_monthly_limit', 'quantity', 20),
+    'Automatic credit top-up'
+);
+
+SELECT
+    is(
+        public.get_credit_auto_top_up_month_total((SELECT org_id FROM test_credit_consume_context)),
+        20::numeric,
+        'get_credit_auto_top_up_month_total sums this month auto top-up grants'
+    );
+
+UPDATE public.orgs
+SET
+    auto_top_up_monthly_limit = 25,
+    auto_top_up_last_attempt_at = NULL
+WHERE id = (SELECT org_id FROM test_credit_consume_context);
+
+SELECT
+    is(
+        (
+            SELECT claimed
+            FROM public.try_claim_credit_auto_top_up((SELECT org_id FROM test_credit_consume_context))
+        ),
+        false,
+        'try_claim_credit_auto_top_up stops when the next charge would exceed the monthly limit'
+    );
+
+UPDATE public.orgs
+SET
+    auto_top_up_monthly_limit = 30,
+    auto_top_up_last_attempt_at = NULL
+WHERE id = (SELECT org_id FROM test_credit_consume_context);
+
+SELECT
+    is(
+        (
+            SELECT claimed
+            FROM public.try_claim_credit_auto_top_up((SELECT org_id FROM test_credit_consume_context))
+        ),
+        true,
+        'try_claim_credit_auto_top_up claims when the next charge fits exactly in the monthly limit'
+    );
+
+UPDATE public.orgs
+SET
+    auto_top_up_monthly_limit = 0,
+    auto_top_up_last_attempt_at = NULL
+WHERE id = (SELECT org_id FROM test_credit_consume_context);
+
+SELECT
+    is(
+        (
+            SELECT claimed
+            FROM public.try_claim_credit_auto_top_up((SELECT org_id FROM test_credit_consume_context))
+        ),
+        true,
+        'try_claim_credit_auto_top_up ignores the monthly limit when it is 0'
     );
 
 SELECT *

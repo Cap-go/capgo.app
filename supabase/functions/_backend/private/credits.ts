@@ -6,6 +6,7 @@ import { Hono } from 'hono/tiny'
 import {
   getAutoTopUpSettings,
   MIN_AUTO_TOP_UP_THRESHOLD,
+  normalizeAutoTopUpMonthlyLimit,
   normalizeAutoTopUpThreshold,
   saveAutoTopUpSettings,
 } from '../utils/credit_auto_top_up.ts'
@@ -650,7 +651,7 @@ app.get('/auto-top-up', middlewareAuth, async (c) => {
 })
 
 app.post('/auto-top-up', middlewareAuth, async (c) => {
-  const body = await parseBody<{ orgId?: string, enabled?: boolean, threshold?: number }>(c)
+  const body = await parseBody<{ orgId?: string, enabled?: boolean, threshold?: number, monthlyLimit?: number }>(c)
   if (!body.orgId)
     throw simpleError('missing_org_id', 'Organization id is required')
   if (!await checkPermission(c, 'org.update_billing', { orgId: body.orgId }))
@@ -663,8 +664,16 @@ app.post('/auto-top-up', middlewareAuth, async (c) => {
   if (threshold === null)
     throw simpleError('invalid_threshold', `Auto top-up amount must be at least ${MIN_AUTO_TOP_UP_THRESHOLD}`)
 
+  let monthlyLimit: number | undefined
+  if (body.monthlyLimit !== undefined) {
+    const normalizedLimit = normalizeAutoTopUpMonthlyLimit(body.monthlyLimit, threshold)
+    if (normalizedLimit === null)
+      throw simpleError('invalid_monthly_limit', 'Auto top-up monthly limit must be 0 (no limit) or at least the top-up amount')
+    monthlyLimit = normalizedLimit
+  }
+
   try {
-    return c.json(await saveAutoTopUpSettings(c as AppContext, body.orgId, body.enabled === true, threshold))
+    return c.json(await saveAutoTopUpSettings(c as AppContext, body.orgId, body.enabled === true, threshold, monthlyLimit))
   }
   catch (error) {
     const message = error instanceof Error ? error.message : String(error)
