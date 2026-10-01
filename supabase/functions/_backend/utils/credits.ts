@@ -61,7 +61,7 @@ export interface MetricBreakdown {
  * public.calculate_credit_cost. `steps` must be sorted by step_min.
  */
 export function priceCreditTiers(steps: CreditTierStep[], value: number, included = 0): MetricBreakdown {
-  if (!(value > 0))
+  if (!Number.isFinite(value) || value <= 0)
     return { cost: 0, tiers: [] }
 
   const start = Math.max(Number.isFinite(included) ? included : 0, 0)

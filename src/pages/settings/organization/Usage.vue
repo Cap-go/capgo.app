@@ -45,6 +45,35 @@ watchEffect(async () => {
   }
 })
 
+type UsageTotals = Record<'mau' | 'bandwidth' | 'storage' | 'build_time', number>
+
+async function estimateOverageCost(orgId: string, plan: Database['public']['Tables']['plans']['Row'], usage: UsageTotals) {
+  // Credit-only orgs have no plan allowance: billing prices all usage
+  // from the bottom of the tier ladder.
+  const creditsOnly = isCreditsOnlyOrg(organizationStore.currentOrganization)
+  const included: UsageTotals = {
+    mau: creditsOnly ? 0 : plan.mau,
+    bandwidth: creditsOnly ? 0 : Math.round(plan.bandwidth * 1073741824),
+    storage: creditsOnly ? 0 : Math.round(plan.storage * 1073741824),
+    build_time: creditsOnly ? 0 : plan.build_time_unit,
+  }
+  try {
+    const overageCost = await calculateCreditCost({
+      org_id: orgId,
+      mau: Math.max(usage.mau - included.mau, 0),
+      bandwidth: Math.max(usage.bandwidth - included.bandwidth, 0),
+      storage: Math.max(usage.storage - included.storage, 0),
+      build_time: Math.max(usage.build_time - included.build_time, 0),
+      included,
+    })
+    return roundNumber(overageCost.total_cost)
+  }
+  catch (err) {
+    console.error('Error estimating credit overage cost:', err)
+    return null
+  }
+}
+
 async function getUsage(orgId: string) {
   const usage = main.dashboard
 
@@ -133,33 +162,15 @@ async function getUsage(orgId: string) {
   })
 
   const basePrice = currentPlan?.price_m ?? 0
-  let estimatedUsagePrice: number | null = null
 
-  if (currentPlan) {
-    try {
-      // Credit-only orgs have no plan allowance: billing prices all usage
-      // from the bottom of the tier ladder.
-      const creditsOnly = isCreditsOnlyOrg(organizationStore.currentOrganization)
-      const included = {
-        mau: creditsOnly ? 0 : currentPlan.mau,
-        bandwidth: creditsOnly ? 0 : Math.round(currentPlan.bandwidth * 1073741824),
-        storage: creditsOnly ? 0 : Math.round(currentPlan.storage * 1073741824),
-        build_time: creditsOnly ? 0 : currentPlan.build_time_unit,
-      }
-      const overageCost = await calculateCreditCost({
-        org_id: orgId,
-        mau: Math.max(totalMau - included.mau, 0),
-        bandwidth: Math.max(totalBandwidthBytes - included.bandwidth, 0),
-        storage: Math.max(totalStorageBytes - included.storage, 0),
-        build_time: Math.max(totalBuildTime - included.build_time, 0),
-        included,
+  const estimatedUsagePrice = currentPlan
+    ? await estimateOverageCost(orgId, currentPlan, {
+        mau: totalMau,
+        bandwidth: totalBandwidthBytes,
+        storage: totalStorageBytes,
+        build_time: totalBuildTime,
       })
-      estimatedUsagePrice = roundNumber(overageCost.total_cost)
-    }
-    catch (err) {
-      console.error('Error estimating credit overage cost:', err)
-    }
-  }
+    : null
 
   const totalUsagePrice = creditDeductionsInCycle.length > 0
     ? roundNumber(totalCreditDeductions)
