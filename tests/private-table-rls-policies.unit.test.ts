@@ -2,29 +2,38 @@ import { createPgliteEngine, Database } from 'tinbase'
 import { loadSupabaseProject } from 'tinbase/node'
 import { describe, expect, it } from 'vitest'
 
-describe('private table RLS policies', () => {
-  it('keeps a policy on every RLS-enabled public table', async () => {
+describe('public table RLS protection', () => {
+  it('enables RLS and defines a policy on every public table', async () => {
     const project = await loadSupabaseProject(process.cwd())
     const database = await Database.create(await createPgliteEngine())
 
     try {
       await database.runMigrations(project.migrations)
-      const missingPolicies = await database.query(`
-        SELECT c.relname AS table_name
+      const missingRlsProtection = await database.query(`
+        SELECT
+          c.relname AS table_name,
+          c.relrowsecurity AS rls_enabled,
+          EXISTS (
+            SELECT 1
+            FROM pg_policy p
+            WHERE p.polrelid = c.oid
+          ) AS has_policy
         FROM pg_class c
         INNER JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public'
           AND c.relkind IN ('r', 'p')
-          AND c.relrowsecurity
-          AND NOT EXISTS (
-            SELECT 1
-            FROM pg_policy p
-            WHERE p.polrelid = c.oid
+          AND (
+            NOT c.relrowsecurity
+            OR NOT EXISTS (
+              SELECT 1
+              FROM pg_policy p
+              WHERE p.polrelid = c.oid
+            )
           )
         ORDER BY c.relname
       `)
 
-      expect(missingPolicies.rows).toEqual([])
+      expect(missingRlsProtection.rows).toEqual([])
 
       const denyPolicies = await database.query(`
         WITH target_tables(table_name) AS (
