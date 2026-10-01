@@ -244,6 +244,8 @@ async function applyCreditsForMetric(
           usage,
           limit: limit ?? 0,
         },
+        // Tiers follow total usage: price the overage above the plan limit.
+        p_included_amount: Math.max(Number(limit ?? 0), 0),
       })
       .single()
 
