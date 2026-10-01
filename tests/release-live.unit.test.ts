@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { releaseLiveTestUtils } from '../supabase/functions/_backend/private/release_live.ts'
+import { lintAnalyticsEngineSql } from '../supabase/functions/_backend/utils/analyticsEngineSqlLint.ts'
 
 describe('release live helpers', () => {
   it.concurrent('picks the smallest bucket that keeps the series bounded', () => {
@@ -87,6 +88,22 @@ describe('release live helpers', () => {
     expect(failures).toContain('blob3 = \'1.0.0\'')
     expect(failures).toContain('LIKE \'%fail%\'')
     expect(failures).toContain('AND (blob9 = \'7\' OR (blob9 = \'\' AND blob8 = \'prod\'\'uction\'))')
+  })
+
+  it.concurrent('builds the failed devices query and counts recovered vs stuck', () => {
+    const start = Date.parse('2026-09-30T10:00:00.000Z')
+    const end = Date.parse('2026-09-30T12:00:00.000Z')
+    const query = releaseLiveTestUtils.buildFailedDevicesQueryCF('com.demo\'app', '1.0.0', start, end, { id: 7, name: 'prod\'uction' })
+    expect(lintAnalyticsEngineSql(query)).toEqual([])
+    expect(query).toContain('index1 = \'com.demo\'\'app\'')
+    expect(query).toContain('blob3 = \'1.0.0\'')
+    expect(query).toContain('GROUP BY device_id')
+    // Only failures are channel scoped: set logs carry no channel.
+    expect(query).toContain('(blob2 = \'set\' OR (blob2 LIKE \'%_fail\' AND (blob9 = \'7\' OR (blob9 = \'\' AND blob8 = \'prod\'\'uction\'))))')
+
+    expect(releaseLiveTestUtils.toFailedDevices(null)).toBeNull()
+    expect(releaseLiveTestUtils.toFailedDevices([])).toEqual({ total: 0, recovered: 0, stuck: 0 })
+    expect(releaseLiveTestUtils.toFailedDevices([{ recovered: '8', stuck: 3 }])).toEqual({ total: 11, recovered: 8, stuck: 3 })
   })
 
   const prodNew = { bundle_id: 2, version_name: '1.1.0', channel_id: 1, channel_name: 'production', deployed_at: '2026-09-29T10:00:00.000Z' }
