@@ -835,7 +835,10 @@ export function requestInfosChannelPostgres(
 }
 
 const MANIFEST_ROWS_CACHE_PATH = '/.manifest-rows-v1'
-const MANIFEST_ROWS_CACHE_TTL_SECONDS = 60
+// manifest_persist inserts a version's rows once, in the same transaction that
+// sets manifest_count, and never rewrites them. A non-empty row set is final and
+// safe to keep a day; empty sets are not cached because the insert may land later.
+const MANIFEST_ROWS_CACHE_TTL_SECONDS = 86400
 
 interface ManifestRow { file_name: string, file_hash: string, s3_path: string }
 
@@ -860,8 +863,9 @@ export async function requestManifestEntriesPostgres(
     .from(schema.manifest)
     .where(eq(schema.manifest.app_version_id, versionId))
 
-  // Fire-and-forget put; Cache API size limits may reject huge manifests.
-  void helper.putJson(cacheKey, rows, MANIFEST_ROWS_CACHE_TTL_SECONDS)
+  // Cache API size limits may reject huge manifests; the put fails open.
+  if (rows.length > 0)
+    await backgroundTask(c, helper.putJson(cacheKey, rows, MANIFEST_ROWS_CACHE_TTL_SECONDS))
   return rows
 }
 
