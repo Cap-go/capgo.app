@@ -5,6 +5,9 @@ import {
   buildChannelPreviewLatestOptions,
   buildDeferredPreviewInstallReferrerUrl,
   hasNativeConfirmedPreview,
+  isNetworkReachabilityError,
+  isReachableHttpUrl,
+  normalizeManualPreviewUrl,
   parseChannelPreviewDeepLink,
   parsePreviewDeepLink,
   previewLinkFromInstallReferrer,
@@ -214,5 +217,56 @@ describe('channel preview deep links', () => {
     expect(parsePreviewDeepLink('capgo://preview/bundle?appId=com.example.other-user-app&versionId=1.5')).toBeNull()
     expect(parsePreviewDeepLink('capgo://preview/bundle?appId=com.example.other-user-app&versionId=-1')).toBeNull()
     expect(parsePreviewDeepLink(`capgo://preview/bundle?appId=com.example.other-user-app&versionId=${Number.MAX_SAFE_INTEGER + 1}`)).toBeNull()
+  })
+})
+
+describe('manual preview url normalization', () => {
+  it.concurrent('assumes https for scheme-less input', () => {
+    expect(normalizeManualPreviewUrl('preview.capgo.app/x')).toBe('https://preview.capgo.app/x')
+  })
+
+  it.concurrent('keeps an explicit scheme as typed', () => {
+    expect(normalizeManualPreviewUrl('http://localhost:1234/x')).toBe('http://localhost:1234/x')
+    expect(normalizeManualPreviewUrl('capgo://preview/bundle?appId=com.example.app&versionId=1')).toBe('capgo://preview/bundle?appId=com.example.app&versionId=1')
+  })
+
+  it.concurrent('trims and returns empty for blank input', () => {
+    expect(normalizeManualPreviewUrl('   ')).toBe('')
+    expect(normalizeManualPreviewUrl('  preview.capgo.app  ')).toBe('https://preview.capgo.app')
+  })
+})
+
+describe('reachable http url guard', () => {
+  it.concurrent('rejects a hostname with no dot', () => {
+    // "capago" -> "https://capago" parses fine but resolves to nothing, so the
+    // native downloader fails with a raw platform DNS error. Reject it up front.
+    expect(isReachableHttpUrl(normalizeManualPreviewUrl('capago'))).toBe(false)
+    expect(isReachableHttpUrl('https://capago')).toBe(false)
+  })
+
+  it.concurrent('accepts dotted domains, IP literals, and local hosts', () => {
+    expect(isReachableHttpUrl('https://preview.capgo.app/.capgo/preview.json')).toBe(true)
+    expect(isReachableHttpUrl('http://127.0.0.1:54321/x')).toBe(true)
+    expect(isReachableHttpUrl('http://localhost:1234/x')).toBe(true)
+    expect(isReachableHttpUrl('http://[::1]:1234/x')).toBe(true)
+  })
+
+  it.concurrent('rejects non-http schemes', () => {
+    expect(isReachableHttpUrl('capgo://preview/bundle?appId=com.example.app&versionId=1')).toBe(false)
+    expect(isReachableHttpUrl('not a url')).toBe(false)
+  })
+})
+
+describe('network reachability error detection', () => {
+  it.concurrent('matches native and browser transport failures', () => {
+    expect(isNetworkReachabilityError('A server with the specified hostname could not be found.')).toBe(true)
+    expect(isNetworkReachabilityError('The Internet connection appears to be offline.')).toBe(true)
+    expect(isNetworkReachabilityError('Failed to fetch')).toBe(true)
+    expect(isNetworkReachabilityError('Load failed')).toBe(true)
+  })
+
+  it.concurrent('ignores unrelated errors', () => {
+    expect(isNetworkReachabilityError('Preview payload is missing a version')).toBe(false)
+    expect(isNetworkReachabilityError('Encrypted bundles cannot be previewed.')).toBe(false)
   })
 })

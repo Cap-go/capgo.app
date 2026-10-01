@@ -236,7 +236,8 @@ async function getChannelPreviewVersionId(c: Context<MiddlewareKeyVariables>, ap
     .single()
 
   if (error || !channel) {
-    throw simpleError('channel_not_found', 'Channel not found', { channelId })
+    // Pass the DB error as cause so onError maps a transient hiccup to a 503.
+    throw simpleError('channel_not_found', 'Channel not found', { channelId }, error)
   }
 
   const versionId = channel.version
@@ -323,7 +324,8 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
     }
 
     if (appError || !appData) {
-      throw simpleError('app_not_found', 'App not found', { appId })
+      // Pass the DB error as cause so onError maps a transient hiccup to a 503.
+      throw simpleError('app_not_found', 'App not found', { appId }, appError)
     }
 
     // Cache the app auth result
@@ -369,7 +371,10 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
     const { data: bundle, error: bundleError } = bundleLookup
 
     if (bundleError || !bundle) {
-      throw simpleError('bundle_not_found', 'Bundle not found', { versionId: previewVersionId })
+      // A Postgres pool timeout on this lookup used to escape as a bare 500 on the
+      // payload route. Pass the raw DB error as the cause so onError maps a
+      // transient database failure to a retryable 503 instead.
+      throw simpleError('bundle_not_found', 'Bundle not found', { versionId: previewVersionId }, bundleError)
     }
 
     if (isPayloadRequest)

@@ -171,6 +171,41 @@ export function parsePreviewDeepLink(value: string): PreviewDeepLink | null {
   }
 }
 
+function hasResolvableHost(hostname: string) {
+  const host = hostname.toLowerCase()
+  // A bare word like "capago" parses as a valid URL once "https://" is prepended,
+  // but it points at no reachable host, so the native downloader fails with a raw
+  // platform DNS error. Require a dotted domain, an IP literal, or an explicit
+  // local host before we try to reach it.
+  return LOCAL_PREVIEW_HOSTS.has(host) || host.includes('.') || host.includes(':')
+}
+
+export function isReachableHttpUrl(value: string): boolean {
+  const url = parseUrl(value)
+  if (!url || (url.protocol !== 'https:' && url.protocol !== 'http:'))
+    return false
+  return hasResolvableHost(url.hostname)
+}
+
+export function normalizeManualPreviewUrl(rawValue: string): string {
+  const value = rawValue.trim()
+  if (!value)
+    return ''
+  if (parsePreviewDeepLink(value))
+    return value
+  // Keep an explicit scheme (https:, http:, capgo:) as typed; otherwise assume https.
+  return /^[a-z][a-z\d+.-]*:/i.test(value) ? value : `https://${value}`
+}
+
+const NETWORK_REACHABILITY_ERROR_RE = /hostname could not be found|could not connect to the server|network connection was lost|internet connection appears to be offline|the request timed out|request timed out|a data connection is not currently allowed|nsurlerrordomain|failed to fetch|load failed|network ?error/i
+
+// The native updater and browser fetch surface transport failures as raw platform
+// strings ("A server with the specified hostname could not be found", "Failed to
+// fetch"). Detect them so the scan page can show plain guidance instead.
+export function isNetworkReachabilityError(message: string): boolean {
+  return NETWORK_REACHABILITY_ERROR_RE.test(message)
+}
+
 export function hasNativeConfirmedPreview(value: string) {
   const url = parseUrl(value)
   return url?.searchParams.get(NATIVE_CONFIRMED_PREVIEW_PARAM) === '1'

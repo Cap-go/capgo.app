@@ -21,7 +21,7 @@ import IconPlay from '~icons/heroicons/play-20-solid'
 import IconQrCode from '~icons/heroicons/qr-code-20-solid'
 import IconRectangleStack from '~icons/heroicons/rectangle-stack-20-solid'
 import IconTrash from '~icons/heroicons/trash-20-solid'
-import { buildChannelPreviewLatestOptions, parsePreviewDeepLink } from '~/services/previewLinks'
+import { buildChannelPreviewLatestOptions, isNetworkReachabilityError, isReachableHttpUrl, normalizeManualPreviewUrl, parsePreviewDeepLink } from '~/services/previewLinks'
 import { useDisplayStore } from '~/stores/display'
 import { buildChannelPreviewSubdomain, buildPreviewSubdomain, parsePreviewHostname } from '../../shared/preview-subdomain.ts'
 
@@ -193,6 +193,13 @@ function isHttpUrl(value: string) {
   return parsedUrl?.protocol === 'https:' || parsedUrl?.protocol === 'http:'
 }
 
+function describePreviewFailure(error: unknown) {
+  const rawMessage = error instanceof Error ? error.message : String(error)
+  if (isNetworkReachabilityError(rawMessage))
+    return 'That address could not be reached. Check the link and your connection, then try again.'
+  return `Failed to start preview: ${rawMessage}`
+}
+
 function previewHostTargetFromUrl(value: string): PreviewHostTarget | null {
   const parsedUrl = parseSafeUrl(value)
   if (!parsedUrl || (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:'))
@@ -242,18 +249,9 @@ function previewPayloadUrlFromBundleLink(previewLink: Extract<PreviewDeepLink, {
 const progressPercentage = computed(() => Math.round(downloadProgress.value))
 const trimmedManualUrl = computed(() => manualUrl.value.trim())
 const manualPreviewLink = computed(() => parsePreviewDeepLink(trimmedManualUrl.value))
-const normalizedManualUrl = computed(() => {
-  const value = trimmedManualUrl.value
-  if (!value)
-    return ''
-
-  if (manualPreviewLink.value)
-    return value
-
-  return /^[a-z][a-z\d+.-]*:/i.test(value) ? value : `https://${value}`
-})
+const normalizedManualUrl = computed(() => normalizeManualPreviewUrl(manualUrl.value))
 const manualPreviewPayloadUrl = computed(() => previewPayloadUrlFromUrl(normalizedManualUrl.value))
-const canSubmitManualUrl = computed(() => !isLoading.value && (!!manualPreviewLink.value || !!manualPreviewPayloadUrl.value || isHttpUrl(normalizedManualUrl.value)))
+const canSubmitManualUrl = computed(() => !isLoading.value && (!!manualPreviewLink.value || !!manualPreviewPayloadUrl.value || isReachableHttpUrl(normalizedManualUrl.value)))
 const manualActionLabel = computed(() => {
   if (manualPreviewLink.value || manualPreviewPayloadUrl.value)
     return 'Start preview'
@@ -386,8 +384,7 @@ async function confirmPreviewLoad() {
   }
   catch (error) {
     debugWarn('failed to start confirmed preview', error)
-    const message = error instanceof Error ? error.message : String(error)
-    errorMessage.value = `Failed to start preview: ${message}`
+    errorMessage.value = describePreviewFailure(error)
     toast.error(errorMessage.value)
   }
 }
@@ -850,7 +847,7 @@ async function handleBarcodeScan(scannedValue: string, source: PreviewLoadSource
     return
   }
 
-  if (!isHttpUrl(value)) {
+  if (!isReachableHttpUrl(value)) {
     debugWarn('scan value is unsupported', value)
     errorMessage.value = 'This QR code is not a Capgo preview link or an HTTPS bundle URL.'
     manualUrl.value = value
@@ -1100,8 +1097,7 @@ async function startPreviewPayload(payloadUrl: string, appId?: string) {
   }
   catch (error) {
     debugWarn('failed to start preview payload flow', error)
-    const message = error instanceof Error ? error.message : String(error)
-    errorMessage.value = `Failed to start preview: ${message}`
+    errorMessage.value = describePreviewFailure(error)
     manualUrl.value = scannedUrl.value
     toast.error(errorMessage.value)
   }
@@ -1188,8 +1184,7 @@ async function startChannelPreview(previewLink: Extract<PreviewDeepLink, { type:
   }
   catch (error) {
     debugWarn('failed to start channel preview flow', error)
-    const message = error instanceof Error ? error.message : String(error)
-    errorMessage.value = `Failed to start preview: ${message}`
+    errorMessage.value = describePreviewFailure(error)
     manualUrl.value = scannedUrl.value
     toast.error(errorMessage.value)
   }
@@ -1230,8 +1225,7 @@ async function startPreviewDownloadUrl(downloadUrl: string, version = `preview-$
   }
   catch (error) {
     debugWarn('failed to download/apply direct preview', error)
-    const message = error instanceof Error ? error.message : String(error)
-    errorMessage.value = `Failed to start preview: ${message}`
+    errorMessage.value = describePreviewFailure(error)
     manualUrl.value = scannedUrl.value
     toast.error(errorMessage.value)
   }
@@ -1255,7 +1249,7 @@ async function downloadUpdate(updateUrl: string) {
     return
   }
 
-  if (!isHttpUrl(updateUrl)) {
+  if (!isReachableHttpUrl(updateUrl)) {
     debugWarn('downloadUpdate rejected unsupported URL', updateUrl)
     errorMessage.value = 'This is not a downloadable bundle URL. Use a Capgo preview QR code or an HTTPS bundle URL.'
     toast.error('Unsupported update URL')
