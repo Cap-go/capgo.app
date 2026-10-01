@@ -3,7 +3,7 @@ import { loadSupabaseProject } from 'tinbase/node'
 import { describe, expect, it } from 'vitest'
 
 describe('public table RLS protection', () => {
-  it('enables RLS and defines a policy on every public table', async () => {
+  it('enables RLS and defines a policy on every migration-owned public table', async () => {
     const project = await loadSupabaseProject(process.cwd())
     const database = await Database.create(await createPgliteEngine())
 

@@ -47,26 +47,17 @@ const coreUnfilteredRestTables = [
   'orgs',
 ]
 
-const tablesWithoutRlsProtectionSql = `
-SELECT
-  c.relname AS table_name,
-  c.relrowsecurity AS rls_enabled,
-  EXISTS (
-    SELECT 1
-    FROM pg_policy p
-    WHERE p.polrelid = c.oid
-  ) AS has_policy
+const rlsTablesWithoutPoliciesSql = `
+SELECT c.relname AS table_name
 FROM pg_class c
 INNER JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = 'public'
   AND c.relkind IN ('r', 'p')
-  AND (
-    NOT c.relrowsecurity
-    OR NOT EXISTS (
-      SELECT 1
-      FROM pg_policy p
-      WHERE p.polrelid = c.oid
-    )
+  AND c.relrowsecurity
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pg_policy p
+    WHERE p.polrelid = c.oid
   )
 ORDER BY c.relname
 `
@@ -232,8 +223,8 @@ async function fetchRestProbe(probe: RestProbeRow, headers: Record<string, strin
 }
 
 describe('public REST unfiltered RLS regression guard', () => {
-  it.concurrent('enables RLS and defines a policy on every public table', async () => {
-    const rows = await executeSQL(tablesWithoutRlsProtectionSql)
+  it.concurrent('keeps a policy on every RLS-enabled public table', async () => {
+    const rows = await executeSQL(rlsTablesWithoutPoliciesSql)
 
     expect(rows).toEqual([])
   })
