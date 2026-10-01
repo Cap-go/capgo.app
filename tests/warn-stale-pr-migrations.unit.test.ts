@@ -17,7 +17,11 @@ interface WarningModule {
     staleMigrationPaths: string[]
   }) => string
   latestMigrationPath: (paths: string[]) => null | string
-  stalePullRequestMigrations: (files: PullRequestFile[], latestMainMigrationPath: string) => string[]
+  stalePullRequestMigrations: (
+    files: PullRequestFile[],
+    latestMainMigrationPath: string,
+    mainMigrationPaths?: string[],
+  ) => string[]
   warnStalePrMigrations: (input: Record<string, unknown>) => Promise<number>
 }
 
@@ -44,6 +48,35 @@ describe('stale pull request migration warnings', () => {
       latestMain,
       'supabase/migrations/not-a-migration.sql',
     ])).toBe(latestMain)
+  })
+
+  it.concurrent('allows a unique older baseline for an intentional migration squash', () => {
+    const latestMain = 'supabase/migrations/20261001093410_latest.sql'
+    const olderMain = 'supabase/migrations/20260930000000_existing.sql'
+    const squashFiles: PullRequestFile[] = [
+      { filename: 'supabase/migrations/20260929000000_schema_baseline.sql', status: 'added' },
+      ...Array.from({ length: 50 }, (_, index) => ({
+        filename: `supabase/migrations/202608${String(index + 1).padStart(2, '0')}000000_old.sql`,
+        status: 'removed',
+      })),
+    ]
+
+    expect(warningModule.stalePullRequestMigrations(
+      squashFiles,
+      latestMain,
+      [olderMain, latestMain],
+    )).toEqual([])
+
+    expect(warningModule.stalePullRequestMigrations(
+      [
+        ...squashFiles.filter(file => file.status === 'removed'),
+        { filename: olderMain.replace('_existing.sql', '_schema_baseline.sql'), status: 'added' },
+      ],
+      latestMain,
+      [olderMain, latestMain],
+    )).toEqual([
+      'supabase/migrations/20260930000000_schema_baseline.sql',
+    ])
   })
 
   it.concurrent('warns only recently active affected PRs and upserts the workflow comment', async () => {
@@ -104,7 +137,10 @@ describe('stale pull request migration warnings', () => {
   it.concurrent('configures the workflow for main migration pushes with comment permissions', async () => {
     const source = await readFile(new URL('../.github/workflows/warn-stale-pr-migrations.yml', import.meta.url), 'utf8')
     const workflow = parse(source) as {
-      jobs: Record<string, { steps: Array<Record<string, unknown>> }>
+      jobs: Record<string, {
+        concurrency?: { 'group': string, 'cancel-in-progress': boolean, 'queue': string }
+        steps: Array<Record<string, unknown>>
+      }>
       on: { push: { branches: string[], paths: string[] } }
       permissions: Record<string, string>
     }
@@ -115,6 +151,11 @@ describe('stale pull request migration warnings', () => {
       'contents': 'read',
       'issues': 'write',
       'pull-requests': 'write',
+    })
+    expect(workflow.jobs.warn.concurrency).toEqual({
+      'group': 'warn-stale-pr-migrations-main',
+      'cancel-in-progress': false,
+      'queue': 'max',
     })
     const steps = workflow.jobs.warn.steps
     expect(steps.find(step => step.name === 'Checkout main')).toMatchObject({

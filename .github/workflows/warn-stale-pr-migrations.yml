@@ -17,6 +17,10 @@ jobs:
     name: Warn recently active PRs
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    concurrency:
+      group: warn-stale-pr-migrations-main
+      cancel-in-progress: false
+      queue: max
     steps:
       - name: Checkout main
         uses: actions/checkout@v6

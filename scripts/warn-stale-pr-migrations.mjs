@@ -22,18 +22,38 @@ export function latestMigrationPath(paths) {
     .at(-1) ?? null
 }
 
-export function stalePullRequestMigrations(files, latestMainMigrationPath) {
+export function stalePullRequestMigrations(files, latestMainMigrationPath, mainMigrationPaths = [latestMainMigrationPath]) {
   const latestMainTimestamp = migrationTimestamp(latestMainMigrationPath)
   if (!latestMainTimestamp)
     return []
 
-  return [...new Set(files
+  const migrationFiles = files
     .filter(file => file.status === 'added' || file.status === 'renamed')
+    .filter(file => file.filename.startsWith(MIGRATIONS_PREFIX) && file.filename.endsWith('.sql'))
+  const addedBaselines = migrationFiles.filter(file =>
+    file.status === 'added' && file.filename.endsWith('_baseline.sql'),
+  )
+  const removedMigrationCount = files.filter(file =>
+    file.status === 'removed'
+    && file.filename.startsWith(MIGRATIONS_PREFIX)
+    && file.filename.endsWith('.sql'),
+  ).length
+  const squashBaselinePath = addedBaselines.length === 1 && removedMigrationCount >= 50
+    ? addedBaselines[0].filename
+    : null
+  const mainTimestamps = new Set(mainMigrationPaths.map(migrationTimestamp).filter(Boolean))
+
+  return [...new Set(migrationFiles
     .map(file => file.filename)
-    .filter(path => path.startsWith(MIGRATIONS_PREFIX) && path.endsWith('.sql'))
     .filter((path) => {
       const timestamp = migrationTimestamp(path)
-      return timestamp && timestamp <= latestMainTimestamp
+      if (!timestamp || timestamp > latestMainTimestamp)
+        return false
+
+      const isAllowedSquashBaseline = path === squashBaselinePath
+        && timestamp < latestMainTimestamp
+        && !mainTimestamps.has(timestamp)
+      return !isAllowedSquashBaseline
     }))].toSorted()
 }
 
@@ -85,8 +105,9 @@ export async function warnStalePrMigrations({
   }
 
   const workspace = process.env.GITHUB_WORKSPACE ?? process.cwd()
+  const currentMainMigrationPaths = localMainMigrationPaths(workspace)
   const latestMain = latestMainMigrationPath
-    ?? latestMigrationPath(localMainMigrationPaths(workspace))
+    ?? latestMigrationPath(currentMainMigrationPaths)
   if (!latestMain)
     throw new Error('Could not determine the latest Supabase migration on main.')
 
@@ -115,7 +136,7 @@ export async function warnStalePrMigrations({
       pull_number: pullRequest.number,
       per_page: 100,
     })
-    const staleMigrationPaths = stalePullRequestMigrations(files, latestMain)
+    const staleMigrationPaths = stalePullRequestMigrations(files, latestMain, currentMainMigrationPaths)
     if (staleMigrationPaths.length === 0) {
       core.info(`PR #${pullRequest.number} has no stale Supabase migrations.`)
       continue
