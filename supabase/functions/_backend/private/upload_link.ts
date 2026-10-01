@@ -1,6 +1,7 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
+import { assertUploadCliVersionSupported } from '../utils/cliMinVersion.ts'
 import { parseBody, quickError, simpleError } from '../utils/hono.ts'
 import { middlewareKey } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
@@ -18,6 +19,8 @@ interface DataUpload {
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.post('/', middlewareKey(), async (c) => {
+  // Reject uploads from CLIs too old to finalize correctly before any files transfer.
+  assertUploadCliVersionSupported(c)
   const body = await parseBody<DataUpload>(c)
   cloudlog({ requestId: c.get('requestId'), message: 'post upload link body', body })
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']

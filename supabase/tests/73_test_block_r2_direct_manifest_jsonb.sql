@@ -89,8 +89,8 @@ SELECT throws_ok(
     )
   $sql$,
   'P0001',
-  'r2_direct_manifest_jsonb: Use POST /private/set_manifest for in-progress '
-  'r2-direct uploads instead of app_versions.manifest jsonb.',
+  'r2_direct_manifest_jsonb: Your @capgo/cli is too old to finish this upload. '
+  'Update it: run npx @capgo/cli@latest, then upload again.',
   'in-progress r2-direct cannot INSERT manifest jsonb'
 );
 
@@ -108,8 +108,8 @@ SELECT throws_ok(
       AND name = '1.0.0-in-progress'
   $sql$,
   'P0001',
-  'r2_direct_manifest_jsonb: Use POST /private/set_manifest for in-progress '
-  'r2-direct uploads instead of app_versions.manifest jsonb.',
+  'r2_direct_manifest_jsonb: Your @capgo/cli is too old to finish this upload. '
+  'Update it: run npx @capgo/cli@latest, then upload again.',
   'in-progress r2-direct cannot UPDATE manifest jsonb'
 );
 
@@ -130,8 +130,8 @@ SELECT throws_ok(
       AND name = '1.0.0-in-progress'
   $sql$,
   'P0001',
-  'r2_direct_manifest_jsonb: Use POST /private/set_manifest for in-progress '
-  'r2-direct uploads instead of app_versions.manifest jsonb.',
+  'r2_direct_manifest_jsonb: Your @capgo/cli is too old to finish this upload. '
+  'Update it: run npx @capgo/cli@latest, then upload again.',
   'r2-direct cannot set manifest jsonb while finalizing to r2'
 );
 
