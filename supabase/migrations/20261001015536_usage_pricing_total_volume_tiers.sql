@@ -19,6 +19,9 @@
 -- ---------------------------------------------------------------------------
 -- 1. calculate_credit_cost over a slice of the tier ladder
 -- ---------------------------------------------------------------------------
+--
+-- Billing has no org parameter, so it only reads the global tiers
+-- (org_id IS NULL). An org-scoped row must never change another org's price.
 
 CREATE FUNCTION public.calculate_credit_cost(
     p_metric public.credit_metric_type,
@@ -57,6 +60,7 @@ BEGIN
   INTO v_highest
   FROM public.capgo_credits_steps
   WHERE type = p_metric::text
+    AND org_id IS NULL
   ORDER BY step_max DESC, step_min DESC
   LIMIT 1;
 
@@ -70,6 +74,7 @@ BEGIN
     SELECT *
     FROM public.capgo_credits_steps
     WHERE type = p_metric::text
+      AND org_id IS NULL
       AND step_max > v_start
       AND step_min < v_end
     ORDER BY step_min ASC
@@ -419,6 +424,7 @@ BEGIN
       SELECT *
       FROM public.capgo_credits_steps
       WHERE type = p_metric::text
+        AND org_id IS NULL
         AND step_max > v_start
         AND step_min < v_end
       ORDER BY step_min ASC
@@ -464,35 +470,89 @@ GRANT ALL ON FUNCTION public.apply_usage_overage(uuid, public.credit_metric_type
 -- 3. Re-price the high-volume tiers
 -- ---------------------------------------------------------------------------
 
+-- Rows are re-priced in place (matched by position) so existing
+-- usage_overage_events.credit_step_id references keep their row; extra old
+-- rows are deleted and missing ones inserted.
+CREATE TEMP TABLE new_credit_tiers (
+    type text NOT NULL,
+    from_step_min bigint NOT NULL,
+    position integer NOT NULL,
+    step_min bigint NOT NULL,
+    step_max bigint NOT NULL,
+    price_per_unit double precision NOT NULL,
+    unit_factor bigint NOT NULL
+) ON COMMIT DROP;
+
 -- MAU: 0-1M stays at $0.003. Above 1M, per 1k MAU: $0.60 up to 3M,
 -- $0.45 up to 6M, $0.35 up to 10M, $0.25 up to 25M, $0.18 up to 100M,
 -- then $0.12.
-DELETE FROM public.capgo_credits_steps
-WHERE type = 'mau'
-  AND org_id IS NULL
-  AND step_min >= 1000000;
-
-INSERT INTO public.capgo_credits_steps (type, step_min, step_max, price_per_unit, unit_factor, org_id)
-VALUES
-    ('mau', 1000000, 3000000, 0.0006, 1, NULL),
-    ('mau', 3000000, 6000000, 0.00045, 1, NULL),
-    ('mau', 6000000, 10000000, 0.00035, 1, NULL),
-    ('mau', 10000000, 25000000, 0.00025, 1, NULL),
-    ('mau', 25000000, 100000000, 0.00018, 1, NULL),
-    ('mau', 100000000, 9223372036854775807, 0.00012, 1, NULL);
-
 -- Bandwidth: tiers up to 63 TB stay. 63-100 TB stays at $0.015/GiB.
 -- Above 100 TB: $0.008/GiB up to 250 TB, $0.006 up to 500 TB, $0.005 up
 -- to 1 PB, then $0.004.
-DELETE FROM public.capgo_credits_steps
-WHERE type = 'bandwidth'
-  AND org_id IS NULL
-  AND step_min >= 69269232549888;
-
-INSERT INTO public.capgo_credits_steps (type, step_min, step_max, price_per_unit, unit_factor, org_id)
+INSERT INTO new_credit_tiers (
+    type, from_step_min, position, step_min, step_max, price_per_unit, unit_factor
+)
 VALUES
-    ('bandwidth', 69269232549888, 109951162777600, 0.015, 1073741824, NULL),
-    ('bandwidth', 109951162777600, 274877906944000, 0.008, 1073741824, NULL),
-    ('bandwidth', 274877906944000, 549755813888000, 0.006, 1073741824, NULL),
-    ('bandwidth', 549755813888000, 1125899906842624, 0.005, 1073741824, NULL),
-    ('bandwidth', 1125899906842624, 9223372036854775807, 0.004, 1073741824, NULL);
+    ('mau', 1000000, 1, 1000000, 3000000, 0.0006, 1),
+    ('mau', 1000000, 2, 3000000, 6000000, 0.00045, 1),
+    ('mau', 1000000, 3, 6000000, 10000000, 0.00035, 1),
+    ('mau', 1000000, 4, 10000000, 25000000, 0.00025, 1),
+    ('mau', 1000000, 5, 25000000, 100000000, 0.00018, 1),
+    ('mau', 1000000, 6, 100000000, 9223372036854775807, 0.00012, 1),
+    ('bandwidth', 69269232549888, 1, 69269232549888, 109951162777600, 0.015, 1073741824),
+    ('bandwidth', 69269232549888, 2, 109951162777600, 274877906944000, 0.008, 1073741824),
+    ('bandwidth', 69269232549888, 3, 274877906944000, 549755813888000, 0.006, 1073741824),
+    ('bandwidth', 69269232549888, 4, 549755813888000, 1125899906842624, 0.005, 1073741824),
+    ('bandwidth', 69269232549888, 5, 1125899906842624, 9223372036854775807, 0.004, 1073741824);
+
+CREATE TEMP TABLE old_credit_tiers ON COMMIT DROP AS
+SELECT
+    s.id,
+    s.type,
+    row_number() OVER (PARTITION BY s.type ORDER BY s.step_min, s.id)::integer AS position
+FROM public.capgo_credits_steps AS s
+WHERE
+    s.org_id IS NULL
+    AND s.step_min >= (
+        SELECT min(n.from_step_min)
+        FROM new_credit_tiers AS n
+        WHERE n.type = s.type
+    );
+
+DELETE FROM public.capgo_credits_steps AS s
+USING old_credit_tiers AS o
+WHERE
+    s.id = o.id
+    AND NOT EXISTS (
+        SELECT 1
+        FROM new_credit_tiers AS n
+        WHERE n.type = o.type AND n.position = o.position
+    );
+
+UPDATE public.capgo_credits_steps AS s
+SET
+    step_min = n.step_min,
+    step_max = n.step_max,
+    price_per_unit = n.price_per_unit,
+    unit_factor = n.unit_factor
+FROM old_credit_tiers AS o
+INNER JOIN new_credit_tiers AS n
+    ON o.type = n.type AND o.position = n.position
+WHERE s.id = o.id;
+
+INSERT INTO public.capgo_credits_steps (
+    type, step_min, step_max, price_per_unit, unit_factor, org_id
+)
+SELECT
+    n.type,
+    n.step_min,
+    n.step_max,
+    n.price_per_unit,
+    n.unit_factor,
+    NULL
+FROM new_credit_tiers AS n
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM old_credit_tiers AS o
+    WHERE o.type = n.type AND o.position = n.position
+);

@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(14);
+SELECT plan(15);
 
 -- Credit tiers follow total usage: overage is priced on the slice
 -- [included, included + overage) of the tier ladder.
@@ -139,6 +139,26 @@ SELECT
         $$VALUES (600.0::numeric)$$,
         'apply_usage_overage prices overage above the included amount'
     );
+
+-- An org-scoped tier must not change the global price billing uses.
+INSERT INTO public.capgo_credits_steps (
+    type, step_min, step_max, price_per_unit, unit_factor, org_id
+)
+VALUES (
+    'mau', 0, 9223372036854775807, 1, 1,
+    '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid
+);
+
+SELECT
+    results_eq(
+        $$SELECT credits_required
+          FROM public.calculate_credit_cost('mau', 1000000, 1000000)$$,
+        $$VALUES (600.0::numeric)$$,
+        'billing ignores org-scoped tiers'
+    );
+
+DELETE FROM public.capgo_credits_steps
+WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid;
 
 -- Partial credits: covered usage follows the tier slices, not a blended
 -- rate. 4M MAU above a 1M plan costs 2M x $0.0006 + 2M x $0.00045 = $2100.
