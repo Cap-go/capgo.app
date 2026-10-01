@@ -114,7 +114,8 @@ useEdgeSwipeBack(contentShell, {
     </div>
     <LogAsDialogField />
   </div>
-  <div v-else class="flex h-full overflow-hidden bg-slate-800 pt-safe safe-areas">
+  <!-- Below lg the sidebar is an overlay drawer, so the safe areas take the content color instead of the sidebar color. -->
+  <div v-else class="flex h-full overflow-hidden bg-slate-100 dark:bg-slate-900 lg:bg-slate-800 lg:dark:bg-slate-800 pt-safe safe-areas">
     <!-- Sidebar -->
     <Sidebar
       :sidebar-open="sidebarOpen"
@@ -128,7 +129,7 @@ useEdgeSwipeBack(contentShell, {
       :class="sidebarCollapsed ? 'lg:px-0 lg:py-0' : 'lg:px-3 lg:py-3'"
     >
       <div
-        class="flex flex-col h-full overflow-hidden border border-gray-200 dark:border-gray-700 bg-slate-100 dark:bg-slate-900 transition-[border-radius,box-shadow,border-color] duration-500 ease-in-out motion-reduce:!transition-none"
+        class="flex flex-col h-full overflow-hidden lg:border border-gray-200 dark:border-gray-700 bg-slate-100 dark:bg-slate-900 transition-[border-radius,box-shadow,border-color] duration-500 ease-in-out motion-reduce:!transition-none"
         :class="sidebarCollapsed ? 'lg:rounded-none lg:border-transparent lg:dark:border-transparent lg:shadow-none' : 'lg:rounded-xl lg:shadow-sm'"
       >
         <!-- Site header -->
