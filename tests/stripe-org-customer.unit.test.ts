@@ -202,7 +202,16 @@ describe('createStripeCustomer', () => {
     }))
   })
 
-  it('throws when org reload fails so the queue can retry', async () => {
+  it('recovers with the passed org row when the reload fails', async () => {
+    const orgState = { customer_id: PENDING_ID as string | null }
+    const stripeInfoDeleteEq = vi.fn(async () => ({ error: null }))
+    const orgUpdate = vi.fn(async (payload: { customer_id: string }, filters: Record<string, unknown> = {}) => {
+      if ('customer_id' in filters && orgState.customer_id !== filters.customer_id)
+        return { data: null, error: null }
+      orgState.customer_id = payload.customer_id
+      return { data: createOrg(payload.customer_id), error: null }
+    })
+
     supabaseAdminMock.mockImplementation(() => ({
       from: (table: string) => {
         if (table === 'orgs') {
@@ -212,16 +221,37 @@ describe('createStripeCustomer', () => {
                 single: async () => ({ data: null, error: { message: 'timeout' } }),
               }),
             }),
+            update: (payload: { customer_id: string }) => orgUpdateQuery(payload, orgUpdate),
+          }
+        }
+        if (table === 'stripe_info') {
+          return {
+            insert: async () => ({ error: null }),
+            delete: () => ({ eq: stripeInfoDeleteEq }),
+          }
+        }
+        if (table === 'plans') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({ data: SOLO_PLAN, error: null }),
+                maybeSingle: async () => ({ data: { name: SOLO_PLAN.name }, error: null }),
+              }),
+            }),
           }
         }
         throw new Error(`unexpected table ${table}`)
       },
     }))
 
-    await expect(createStripeCustomer(createContext(), createOrg(PENDING_ID)))
-      .rejects
-      .toThrow('createStripeCustomer org reload failed')
-    expect(createCustomerMock).not.toHaveBeenCalled()
+    const planName = await createStripeCustomer(createContext(), createOrg(PENDING_ID))
+
+    expect(planName).toBe('Solo')
+    expect(createCustomerMock).toHaveBeenCalledTimes(1)
+    expect(orgUpdate).toHaveBeenCalledWith({ customer_id: CUSTOMER_ID }, expect.objectContaining({
+      id: ORG_ID,
+      customer_id: PENDING_ID,
+    }))
   })
 
   it('reuses the Stripe customer when stripe_info insert hits a unique violation', async () => {

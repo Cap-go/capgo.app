@@ -41,7 +41,7 @@ function isUniqueViolation(error: { code?: string, message?: string } | null | u
   return error.code === '23505' || Boolean(error.message?.toLowerCase().includes('duplicate'))
 }
 
-async function requireOrg(c: Context, orgId: string) {
+async function reloadOrg(c: Context, orgId: string): Promise<{ org: OrgRow | null, error: { message?: string } | null }> {
   const { data, error } = await supabaseAdmin(c)
     .from('orgs')
     .select('*')
@@ -54,9 +54,9 @@ async function requireOrg(c: Context, orgId: string) {
       orgId,
       error: error?.message,
     })
-    throw new Error('createStripeCustomer org reload failed')
+    return { org: null, error: error ?? null }
   }
-  return data
+  return { org: data, error: null }
 }
 
 async function linkOrgCustomer(c: Context, orgId: string, observedCustomerId: string | null, customerId: string) {
@@ -119,7 +119,11 @@ async function trialPlanNameForCustomer(c: Context, customerId: string, fallback
 }
 
 export async function createStripeCustomer(c: Context, org: OrgRow) {
-  const current = await requireOrg(c, org.id)
+  // The trigger already reloaded the committed org row and falls back to the
+  // INSERT queue payload when that reload misses. Reuse the row it passed when
+  // this reload misses too, so a stale read no longer aborts billing bootstrap.
+  const { org: reloaded } = await reloadOrg(c, org.id)
+  const current = reloaded ?? org
 
   if (isProvisionedStripeCustomerId(current.customer_id)) {
     cloudlog({
@@ -171,8 +175,8 @@ export async function createStripeCustomer(c: Context, org: OrgRow) {
     return selectedPlan.name
   }
 
-  const latest = await requireOrg(c, current.id)
-  if (isProvisionedStripeCustomerId(latest.customer_id)) {
+  const { org: latest, error: latestReloadError } = await reloadOrg(c, current.id)
+  if (latest && isProvisionedStripeCustomerId(latest.customer_id)) {
     if (latest.customer_id !== customer.id)
       await deleteUnusedStripeInfo(c, customer.id)
     cloudlog({
@@ -185,7 +189,10 @@ export async function createStripeCustomer(c: Context, org: OrgRow) {
     return await trialPlanNameForCustomer(c, latest.customer_id!, selectedPlan.name)
   }
 
-  throw new Error('createStripeCustomer customer_id link raced')
+  // Carry the org id and the reload error in the message: error tracking keeps
+  // only the exception message, so this is the one place it can read which org
+  // failed and why the recovery reload could not confirm the linked customer.
+  throw new Error(`createStripeCustomer customer_id link raced (org ${current.id}${latestReloadError?.message ? `, reload error: ${latestReloadError.message}` : ''})`)
 }
 
 export async function finalizePendingStripeCustomer(c: Context, org: OrgRow) {
