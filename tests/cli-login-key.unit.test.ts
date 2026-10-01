@@ -22,17 +22,17 @@ const now = new Date('2026-08-15T12:00:00.000Z')
 
 function org(overrides: Record<string, unknown> = {}) {
   return {
-    gid: 'org-a',
-    name: 'Alpha',
-    role: 'org_admin',
-    is_invite: false,
-    enforcing_2fa: false,
+    'gid': 'org-a',
+    'name': 'Alpha',
+    'role': 'org_admin',
+    'is_invite': false,
+    'enforcing_2fa': false,
     '2fa_has_access': true,
-    password_policy_config: null,
-    password_has_access: true,
-    enforce_hashed_api_keys: false,
-    require_apikey_expiration: false,
-    max_apikey_expiration_days: null,
+    'password_policy_config': null,
+    'password_has_access': true,
+    'enforce_hashed_api_keys': false,
+    'require_apikey_expiration': false,
+    'max_apikey_expiration_days': null,
     ...overrides,
   }
 }
@@ -48,7 +48,7 @@ function dependencies(overrides: Record<string, unknown> = {}) {
   }
 }
 
-describe('CLI login key model', () => {
+describe('cLI login key model', () => {
   it.concurrent.each([
     ['owner', 'org_super_admin'],
     ['org_super_admin', 'org_super_admin'],
@@ -140,7 +140,7 @@ describe('CLI login key model', () => {
   it.concurrent('offers onboarding only for one accepted org and one pending app', () => {
     expect(getCliLoginDestination(1, [
       { app_id: 'com.demo.app', need_onboarding: true },
-    ])).toBe('/app/new?resume=com.demo.app')
+    ])).toBe('/app/com.demo.app/getting-started')
     expect(getCliLoginDestination(2, [
       { app_id: 'com.demo.app', need_onboarding: true },
     ])).toBe('/dashboard')
@@ -159,7 +159,7 @@ describe('prepareCliLoginKey', () => {
       org(),
       org({ gid: 'member', name: 'Member', role: 'org_member' }),
       org({ gid: 'invite', name: 'Invite', is_invite: true }),
-      org({ gid: 'security', name: 'Security', enforcing_2fa: true, '2fa_has_access': false }),
+      org({ 'gid': 'security', 'name': 'Security', 'enforcing_2fa': true, '2fa_has_access': false }),
       org({ gid: 'blocked', name: 'Blocked' }),
     ], io, now)
 
@@ -312,7 +312,7 @@ describe('prepareCliLoginKey', () => {
   })
 })
 
-describe('MCP OAuth key model', () => {
+describe('mCP OAuth key model', () => {
   it.concurrent('only offers organizations that pass the CLI key eligibility rules', async () => {
     const result = await resolveCliKeyEligibility([
       org(),

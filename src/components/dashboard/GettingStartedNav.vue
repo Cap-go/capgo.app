@@ -14,7 +14,7 @@ import {
   withoutGettingStartedDismissed,
 } from '~/utils/appOnboardingProgress'
 import { isStoreReleaseValidated } from '~/utils/gettingStartedDismiss'
-import { getAppSetupRedirect } from '~/utils/onboardingRedirect'
+import { getAppGettingStartedPath } from '~/utils/onboardingRedirect'
 
 const props = withDefaults(defineProps<{
   compact?: boolean
@@ -56,17 +56,8 @@ function acronym(name: string) {
   return (first + second).toUpperCase()
 }
 
-function gettingStartedPath(appId: string) {
-  return `/app/${encodeURIComponent(appId)}/getting-started`
-}
-
-function gettingStartedDestination(app: OrganizationApp) {
-  return getAppSetupRedirect(app) ?? gettingStartedPath(app.app_id)
-}
-
 function isActive(appId: string) {
-  return route.path === gettingStartedPath(appId)
-    || (route.path === '/onboarding/app' && route.query.resume === appId)
+  return route.path === getAppGettingStartedPath(appId)
 }
 
 async function persistDismiss(app: OrganizationApp) {
@@ -122,7 +113,7 @@ watch(() => organizationStore.currentOrganization?.gid, async (orgId) => {
         >
           <router-link
             class="d-btn d-btn-ghost flex min-h-11 h-auto min-w-0 flex-1 items-center justify-start border-none bg-transparent p-0 shadow-none hover:bg-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500"
-            :to="gettingStartedDestination(app)"
+            :to="getAppGettingStartedPath(app.app_id)"
             :aria-current="isActive(app.app_id) ? 'page' : undefined"
             :aria-label="`${t('getting-started')} — ${appLabel(app)}`"
             :title="`${t('getting-started')} — ${appLabel(app)}`"

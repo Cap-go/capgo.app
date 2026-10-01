@@ -34,7 +34,7 @@ watch([() => props.appId, () => main.user?.id ?? main.auth?.id, () => dialogStor
         role: 'primary',
         handler: () => { void router.push({ path: '/onboarding/app', query: { resume: appId, step: 'setup' } }) },
       },
-      { text: t('app-onboarding-dont-show-again'), role: 'cancel', handler: () => dismissOnboardingExplorationReminder(userId) },
+      { text: t('app-onboarding-dont-show-again'), role: 'cancel', placement: 'start', handler: () => dismissOnboardingExplorationReminder(userId) },
     ],
   })
 }, { immediate: true, flush: 'post' })

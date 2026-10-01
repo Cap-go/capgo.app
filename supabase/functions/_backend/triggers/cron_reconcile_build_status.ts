@@ -36,6 +36,12 @@ const STALE_THRESHOLD_MINUTES = 5
 const ORPHAN_THRESHOLD_HOURS = 1
 const BATCH_LIMIT = 500
 
+const MISSING_BUILDER_JOB_ERROR = 'Build job no longer exists in builder'
+
+function isMissingBuilderJob(status: number, body: string): boolean {
+  return (status === 404 || status === 500) && /job not found/i.test(body)
+}
+
 export const app = new Hono<MiddlewareKeyVariables>()
 
 async function cancelTimedOutBuilderJob(builderUrl: string, builderApiKey: string, jobId: string): Promise<Response> {
@@ -58,6 +64,7 @@ app.post('/', middlewareAPISecret, async (c) => {
   let reconciled = 0
   let timedOut = 0
   let orphaned = 0
+  let missing = 0
   let errors = 0
 
   const supabase = supabaseAdmin(c)
@@ -149,6 +156,30 @@ app.post('/', middlewareAPISecret, async (c) => {
     }
   }
 
+  // Builder answers 500 "job not found" once a job is purged from its
+  // database. Such a build can never be reconciled, so settle it as failed
+  // instead of retrying it on every cron run forever.
+  async function markMissingBuilderJobFailed(build: typeof builderBuilds[number]) {
+    const { data: updatedRows, error: updateError } = await supabase
+      .from('build_requests')
+      .update({
+        status: BUILD_TIMEOUT_STATUS,
+        last_error: MISSING_BUILDER_JOB_ERROR,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', build.id)
+      .eq('status', build.status)
+      .select('id')
+
+    if (updateError)
+      throw new Error(updateError.message)
+    if (!updatedRows?.length)
+      return
+    missing++
+    if (build.platform === 'ios' || build.platform === 'android')
+      await persistBuilderBuildOutcome(c, { appId: build.app_id, platform: build.platform, status: BUILD_TIMEOUT_STATUS })
+  }
+
   const builderResults = await Promise.allSettled(
     builderBuilds.map(async (build) => {
       const response = await fetch(`${builderUrl}/jobs/${build.builder_job_id}`, {
@@ -156,8 +187,14 @@ app.post('/', middlewareAPISecret, async (c) => {
         headers: { 'x-api-key': builderApiKey },
       })
 
-      if (!response.ok)
-        throw new Error(`Builder status fetch failed: ${response.status}`)
+      if (!response.ok) {
+        // Always drain the body: unread responses pin one of the few concurrent
+        // connection slots and Workers cancels them as a stalled deadlock.
+        const errorText = await response.text().catch(() => '')
+        if (isMissingBuilderJob(response.status, errorText) && new Date(build.created_at).getTime() < orphanCutoff)
+          return await markMissingBuilderJobFailed(build)
+        throw new Error(`Builder status fetch failed: ${response.status} ${errorText.slice(0, 200)}`.trim())
+      }
 
       const builderJob = await response.json() as BuilderStatusResponse
       const jobStatus = builderJob.job.status
@@ -184,6 +221,7 @@ app.post('/', middlewareAPISecret, async (c) => {
         try {
           const cancelResponse = await cancelTimedOutBuilderJob(builderUrl, builderApiKey, build.builder_job_id!)
           if (cancelResponse.ok) {
+            await cancelResponse.body?.cancel()
             timeoutApplied = true
           }
           else {
@@ -318,6 +356,7 @@ app.post('/', middlewareAPISecret, async (c) => {
     reconciled,
     timed_out: timedOut,
     orphaned,
+    missing,
     errors,
   })
 

@@ -81,6 +81,8 @@ interface OnboardingResumeCandidate {
 
 interface CreateOnboardingTelemetryIdentityOptions {
   capture?: CaptureEvent
+  // Continue an attempt handed off by another page instead of starting one.
+  continueFrom?: { attemptId: string, runId: string } | null
   flow: OnboardingAnalyticsFlow
   idFactory?: () => string
   onboardingVersion?: () => OnboardingAnalyticsVersion
@@ -192,8 +194,8 @@ export function createOnboardingDetailsFieldDebouncer(
 export function createOnboardingTelemetryIdentity(options: CreateOnboardingTelemetryIdentityOptions) {
   const capture = options.capture ?? captureOnboardingEvent
   const idFactory = options.idFactory ?? (() => crypto.randomUUID())
-  const initialAttemptId = idFactory()
-  const onboardingRunId = `ir_${idFactory()}`
+  const initialAttemptId = options.continueFrom?.attemptId ?? idFactory()
+  const onboardingRunId = options.continueFrom?.runId ?? `ir_${idFactory()}`
   let activeAttemptId = initialAttemptId
   let candidate: OnboardingResumeCandidate | undefined
   const recorded = { decision: false, dialog: false }

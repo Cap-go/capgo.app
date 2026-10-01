@@ -23,8 +23,10 @@ import { logAsUser } from '~/services/logAs'
 import { isSpoofed, unspoofUser } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
+import { useOrganizationStore } from '~/stores/organization'
 import {
   allowOnboardingDashboardExploration,
+  getAppGettingStartedPath,
   getOnboardingResumeAppId,
   ONBOARDING_DASHBOARD_EXPLORED_EVENT,
   shouldConfirmOnboardingDashboardExploration,
@@ -39,6 +41,7 @@ const props = defineProps<{
 
 const emit = defineEmits(['closeSidebar'])
 const main = useMainStore()
+const organizationStore = useOrganizationStore()
 const isRail = computed(() => !!props.sidebarCollapsed)
 const dialogStore = useDialogV2Store()
 const router = useRouter()
@@ -69,6 +72,7 @@ async function openLogAsDialog() {
       },
       {
         text: t('log-as'),
+        role: 'primary',
         handler: () => {
           identifier = logAsInput.value
         },
@@ -148,11 +152,13 @@ async function openTab(tab: Tab) {
     return
 
   const onboardingUserId = main.user?.id ?? main.auth?.id
-  const resumeQueryAppId = typeof route.query.resume === 'string' ? route.query.resume : null
-  const isPendingOnboardingResume = route.path === '/app/new'
-    && !!resumeQueryAppId
+  const gettingStartedAppId = route.name === '/app/[app].getting-started' && typeof route.params.app === 'string'
+    ? route.params.app
+    : null
+  const isPendingOnboardingResume = !!gettingStartedAppId
+    && organizationStore.getAppByAppId(gettingStartedAppId)?.need_onboarding === true
   const onboardingResumeAppId = isPendingOnboardingResume
-    ? resumeQueryAppId
+    ? gettingStartedAppId
     : getOnboardingResumeAppId(onboardingUserId)
   const requiresOnboardingExplorationConfirmation = shouldConfirmOnboardingDashboardExploration({
     destination: tab.key,
@@ -176,8 +182,8 @@ async function openTab(tab: Tab) {
     const wasCanceled = await dialogStore.onDialogDismiss()
     if (wasCanceled)
       return
-    if (dialogStore.lastButtonRole === 'secondary') {
-      return router.push({ path: '/app/new', query: { resume: onboardingResumeAppId } })
+    if (dialogStore.lastButtonRole === 'secondary' && onboardingResumeAppId) {
+      return router.push(getAppGettingStartedPath(onboardingResumeAppId))
     }
     if (dialogStore.lastButtonRole !== 'primary')
       return

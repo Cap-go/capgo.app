@@ -1103,6 +1103,7 @@ async function editPhoto() {
       },
       {
         text: t('change'),
+        role: 'primary',
         id: 'verify',
         handler: async () => {
           const rawPhotos = await Camera.pickImages({

@@ -601,7 +601,7 @@ async function finishOnboarding() {
       appDraft.value = null
       if (appIdFeedback)
         toast.info(appIdFeedback)
-      await router.push(`/app/new?resume=${encodeURIComponent(app.app_id)}&step=choice`)
+      await router.push(`/app/${encodeURIComponent(app.app_id)}/getting-started`)
       return
     }
     catch (error) {

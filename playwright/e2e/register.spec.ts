@@ -185,7 +185,7 @@ test.describe('Registration', () => {
 
     await continuePastChannelOnboardingIfShown(page)
     await expect(page.locator('[data-test="onboarding-technical-invite"]')).toBeVisible()
-    await expect(page).toHaveURL(/\/onboarding\/app/)
+    await expect(page).toHaveURL(/\/app\/[^/]+\/getting-started$/)
   })
 
   test('should offer to continue or restart onboarding after a dropout', async ({ page }) => {

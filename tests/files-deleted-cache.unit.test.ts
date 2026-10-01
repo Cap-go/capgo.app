@@ -143,6 +143,23 @@ describe('deleted bundle cache', () => {
     expect(queryMock).toHaveBeenCalled()
   })
 
+  it('never reuses a deleted-lookup pg pool across requests', async () => {
+    // Workers hang a request that awaits a socket opened by another request,
+    // so the pool must stay scoped to one request context.
+    const { isAttachmentVersionDeleted } = await import('../supabase/functions/_backend/files/file_read_cache.ts')
+    const firstRequest = { get: () => 'request-1' } as any
+    const secondRequest = { get: () => 'request-2' } as any
+    const fileId = 'orgs/test-org/apps/test-app/bundle.zip'
+
+    await isAttachmentVersionDeleted(firstRequest, fileId)
+    await isAttachmentVersionDeleted(firstRequest, fileId)
+    await isAttachmentVersionDeleted(secondRequest, fileId)
+
+    expect(getPgClientMock).toHaveBeenCalledTimes(2)
+    expect(getPgClientMock).toHaveBeenNthCalledWith(1, firstRequest, false)
+    expect(getPgClientMock).toHaveBeenNthCalledWith(2, secondRequest, false)
+  })
+
   it('does not serve or restore a cached file when a deleted marker is present', async () => {
     const { buildDeletedFileMarkerRequest } = await import('../supabase/functions/_backend/files/file_read_cache.ts')
     const cache = createCache(new Map([

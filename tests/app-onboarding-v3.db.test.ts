@@ -10,9 +10,10 @@ describe('persisted app checklists', () => {
   it.concurrent.each([
     ['ota', 'ota', null, true, 4],
     ['ota', 'builder', 'B', false, 4],
-    ['both', 'ota', 'A', true, 2],
-    ['builder', 'ota', 'A', true, 2],
-    ['unknown', 'ota', 'A', true, 2],
+    // Every non-Builder app gets the seven-step OTA checklist, whatever the org intent.
+    ['both', 'ota', 'A', true, 4],
+    ['builder', 'ota', 'A', true, 4],
+    ['unknown', 'ota', 'A', true, 4],
   ] as const)('assigns org intent %s, creator intent %s, saved branch %s, creator-owned org %s to version %s', async (orgIntent, creatorIntent, branch, ownOrg, expectedVersion) => {
     const email = `onboarding-v3-${randomUUID()}@example.com`
     const created = await admin.auth.admin.createUser({ email, password: 'v3test-password', email_confirm: true })
@@ -95,6 +96,27 @@ describe('persisted app checklists', () => {
         await admin.auth.admin.deleteUser(userId)
       }
     }
+  })
+
+  it.concurrent('maps legacy v1/v2 step statuses onto the seven OTA steps', async () => {
+    const v2 = await admin.rpc('new_ota_onboarding_steps_v1', { p_legacy_steps: {
+      login_cli_mcp: { status: 'done', at: '2026-09-01T00:00:00.000Z' },
+      add_channel: { status: 'skipped' },
+      add_encryption: { status: 'done' },
+      upload_bundle: { status: 'unknown' },
+    } })
+    expect(v2.error).toBeNull()
+    expect(Object.keys(v2.data).sort()).toEqual([...APP_ONBOARDING_OTA_V1_STEP_IDS].sort())
+    expect(v2.data.login_cli_mcp).toEqual({ status: 'done', at: '2026-09-01T00:00:00.000Z' })
+    expect(v2.data.add_channel).toEqual({ status: 'skipped' })
+    expect(v2.data.upload_bundle).toEqual({ status: 'pending' })
+    expect(v2.data.add_encryption).toBeUndefined()
+    const v1 = await admin.rpc('new_ota_onboarding_steps_v1', { p_legacy_steps: { add_app: { status: 'done' } } })
+    expect(v1.error).toBeNull()
+    expect(v1.data.login_cli_mcp).toEqual({ status: 'done' })
+    const empty = await admin.rpc('new_ota_onboarding_steps_v1', {})
+    expect(empty.error).toBeNull()
+    expect(Object.values(empty.data)).toEqual(Array.from({ length: 7 }, () => ({ status: 'pending' })))
   })
 
   it.concurrent('sql merge requires all seven v3 milestones and preserves legacy v2 completion', async () => {

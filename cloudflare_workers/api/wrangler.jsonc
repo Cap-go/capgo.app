@@ -42,6 +42,7 @@
         }
       ],
       "observability": {
+        "issues": { "enabled": true },
         "enabled": true,
         "head_sampling_rate": 1
       },
@@ -139,6 +140,7 @@
         }
       ],
       "observability": {
+        "issues": { "enabled": true },
         "enabled": true
       },
       "analytics_engine_datasets": [
@@ -235,6 +237,7 @@
         }
       ],
       "observability": {
+        "issues": { "enabled": true },
         "enabled": true
       },
       "analytics_engine_datasets": [

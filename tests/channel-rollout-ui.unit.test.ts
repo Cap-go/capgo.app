@@ -409,7 +409,7 @@ describe('channel information rollout and update package UX', () => {
     expect(container.textContent).toContain('Download format')
     expect(container.textContent).toContain('Controls what each device downloads on update check')
     expect(container.textContent).toContain('Zip + delta (default)')
-    expect(container.textContent).toContain('Devices that support delta get changed files only')
+    expect(container.textContent).toContain('Only devices on an old plugin version without delta support')
     expect(container.textContent).not.toContain('Confirm')
     findDialogButton(container, 'Close').click()
     await nextTick()

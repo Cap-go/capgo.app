@@ -64,7 +64,18 @@ interface ReplicationLagCacheEntry extends ReplicationLagStatus {
 }
 
 const replicationLagMemoryCache = new Map<string, ReplicationLagCacheEntry>()
-const replicationLagInflight = new Map<string, Promise<ReplicationLagStatus>>()
+// Scoped per request: awaiting a lag probe started by another request can
+// hang once that request's I/O context ends.
+const replicationLagInflightByRequest = new WeakMap<Context, Map<string, Promise<ReplicationLagStatus>>>()
+
+function getReplicationLagInflight(c: Context) {
+  let inflight = replicationLagInflightByRequest.get(c)
+  if (!inflight) {
+    inflight = new Map()
+    replicationLagInflightByRequest.set(c, inflight)
+  }
+  return inflight
+}
 
 const READ_REPLICA_ROUTES: { region: string, binding: ReadReplicaHyperdriveBinding }[] = [
   { region: 'AS_JAPAN', binding: 'HYPERDRIVE_CAPGO_READ_AS_JAPAN' },
@@ -213,6 +224,7 @@ async function queryReplicaLag(c: Context, pool: PluginPgClient): Promise<Replic
 
 async function getCachedReplicaLag(c: Context, pool: PluginPgClient): Promise<ReplicationLagStatus> {
   const cacheKey = getReplicationLagCacheKey(c)
+  const replicationLagInflight = getReplicationLagInflight(c)
   const memoryEntry = getFreshReplicationLagMemoryEntry(cacheKey)
   if (memoryEntry)
     return memoryEntry

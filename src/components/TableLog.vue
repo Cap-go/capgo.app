@@ -7,10 +7,12 @@ import { computed, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconFastBackward from '~icons/ic/round-keyboard-double-arrow-left'
 import IconSearch from '~icons/ic/round-search?raw'
+import IconCheck from '~icons/lucide/check'
 import IconSortDown from '~icons/lucide/chevron-down'
 import IconSortUp from '~icons/lucide/chevron-up'
 import IconSort from '~icons/lucide/chevrons-up-down'
 import IconDownload from '~icons/lucide/download'
+import IconSearchField from '~icons/lucide/search'
 import IconFilter from '~icons/system-uicons/filtering'
 import IconReload from '~icons/tabler/reload'
 import DateRangePicker from '~/components/DateRangePicker.vue'
@@ -380,40 +382,42 @@ onMounted(() => {
                 :key="shortcut.label"
                 type="button"
                 data-test="log-table-filter-shortcut"
-                class="d-btn d-btn-sm min-h-10 border-2 border-slate-300 bg-white px-3.5 font-semibold text-slate-800 shadow-sm hover:border-azure-500 hover:bg-azure-50 hover:text-azure-700 dark:border-slate-500 dark:bg-slate-800 dark:text-slate-100 dark:hover:border-azure-400 dark:hover:bg-slate-700"
-                :class="{
-                  'border-azure-500 bg-azure-50 text-azure-700 ring-2 ring-azure-500 dark:border-azure-400 dark:bg-azure-950/40 dark:text-azure-200': isShortcutActive(shortcut),
-                }"
+                class="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-full border px-3 text-sm font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-offset-1"
+                :class="isShortcutActive(shortcut)
+                  ? 'border-azure-500 bg-azure-500/10 text-sky-700 dark:border-azure-400 dark:bg-azure-500/20 dark:text-sky-200'
+                  : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-transparent dark:text-slate-200 dark:hover:border-slate-500 dark:hover:bg-slate-700/60'"
                 :aria-pressed="isShortcutActive(shortcut)"
                 @click="applyFilterShortcut(shortcut)"
               >
+                <IconCheck v-if="isShortcutActive(shortcut)" class="size-3.5" aria-hidden="true" />
                 {{ t(shortcut.label) }}
               </button>
             </div>
           </div>
 
-          <div>
-            <label for="log-filter-search" class="sr-only">{{ t('search') }}</label>
+          <label for="log-filter-search" class="flex h-9 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-slate-400 focus-within:border-azure-500 focus-within:ring-2 focus-within:ring-azure-500/30 dark:border-slate-600 dark:bg-slate-900/60">
+            <IconSearchField class="size-4 shrink-0" aria-hidden="true" />
             <input
               id="log-filter-search"
               v-model="filterSearchVal"
-              type="text"
+              type="search"
               name="log-filter-search"
-              :aria-label="t('search')"
-              :placeholder="t('search')"
-              class="w-full rounded-md border border-slate-300 px-3 py-2.5 text-sm text-slate-900 focus:border-azure-500 focus:outline-none focus:ring-2 focus:ring-azure-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+              :aria-label="t('search-actions')"
+              :placeholder="t('search-actions')"
+              class="w-full min-w-0 bg-transparent text-sm text-slate-900 placeholder:text-slate-400 outline-none dark:text-white dark:placeholder:text-slate-500"
             >
-          </div>
+          </label>
 
-          <fieldset v-if="filterList.length" class="space-y-1">
-            <legend class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+          <fieldset v-if="filterList.length" class="-mx-2 space-y-0.5">
+            <legend class="mb-1.5 px-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
               {{ t('filter-options') }}
             </legend>
             <label
               v-for="f in filterList"
               :key="f"
               :for="`log-filter-option-${f}`"
-              class="flex min-h-11 cursor-pointer items-center rounded-md px-2 py-2 transition-colors duration-150 hover:bg-slate-50 dark:hover:bg-slate-800"
+              class="flex min-h-9 cursor-pointer items-center rounded-lg px-2 py-1.5 transition-colors duration-150 hover:bg-slate-50 dark:hover:bg-slate-700/50"
+              :class="{ 'bg-azure-500/5 dark:bg-azure-500/10': filters?.[f] }"
             >
               <input
                 :id="`log-filter-option-${f}`"

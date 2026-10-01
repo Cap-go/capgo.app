@@ -281,8 +281,7 @@ describe('auth guard SSO provisioning', () => {
       )
 
       expect(next).toHaveBeenCalledWith({
-        path: '/onboarding/app',
-        query: { resume: 'com.test.pending-onboarding', step: 'setup' },
+        path: '/app/com.test.pending-onboarding/getting-started',
       })
     })
   })
@@ -316,8 +315,7 @@ describe('auth guard SSO provisioning', () => {
       )
 
       expect(next).toHaveBeenCalledWith({
-        path: '/onboarding/app',
-        query: { resume: 'com.test.pending-onboarding', step: 'setup' },
+        path: '/app/com.test.pending-onboarding/getting-started',
       })
       expect(context.mockGetPlans).toHaveBeenCalledOnce()
       expect(context.mainStore.plans).toEqual(loadedPlans)
@@ -351,8 +349,7 @@ describe('auth guard SSO provisioning', () => {
       )
 
       expect(next).toHaveBeenCalledWith({
-        path: '/onboarding/app',
-        query: { resume: 'com.test.pending-onboarding', step: 'setup' },
+        path: '/app/com.test.pending-onboarding/getting-started',
       })
       expect(context.mockSendEvent).toHaveBeenCalledOnce()
       expect(context.mockSendEvent).toHaveBeenCalledWith(expect.objectContaining({

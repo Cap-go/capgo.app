@@ -25,6 +25,7 @@
         "UPDATES_EDGE_CACHE": "off"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -155,6 +156,7 @@
         "UPDATES_EDGE_CACHE": "off"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -251,6 +253,7 @@
         "UPDATES_EDGE_CACHE": "off"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -347,6 +350,7 @@
         "UPDATES_EDGE_CACHE": "off"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -443,6 +447,7 @@
         "UPDATES_EDGE_CACHE": "off"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -539,6 +544,7 @@
         "UPDATES_EDGE_CACHE": "off"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -638,6 +644,7 @@
         "region": "gcp:africa-south1"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -731,6 +738,7 @@
         "UPDATES_EDGE_CACHE": "off"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -827,6 +835,7 @@
         "UPDATES_EDGE_CACHE": "off"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -911,6 +920,7 @@
         "UPDATES_EDGE_CACHE": "off"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 1,
         "enabled": true
       },
@@ -1002,6 +1012,7 @@
         "ENV_NAME": "capgo_plugin-alpha"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 1,
         "enabled": true
       },
