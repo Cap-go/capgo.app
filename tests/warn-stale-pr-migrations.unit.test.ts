@@ -1,4 +1,6 @@
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { parse } from 'yaml'
 import * as warningModule from '../scripts/warn-stale-pr-migrations.mjs'
@@ -181,6 +183,63 @@ describe('stale pull request migration warnings', () => {
     expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('PR #19: temporary API failure'))
   })
 
+  it('loads the current main migration snapshot emitted by git ls-tree', async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), 'capgo-main-migrations-'))
+    const snapshotPath = join(tempDirectory, 'current-main-migrations.txt')
+    const previousSnapshotPath = process.env.CURRENT_MAIN_MIGRATION_PATHS_FILE
+    await writeFile(snapshotPath, [
+      'supabase/migrations/20261001090000_old.sql',
+      'supabase/migrations/20261001120000_current.sql',
+      '',
+    ].join('\0'))
+    process.env.CURRENT_MAIN_MIGRATION_PATHS_FILE = snapshotPath
+
+    const pullsList = vi.fn()
+    const listFiles = vi.fn()
+    const listComments = vi.fn()
+    const createComment = vi.fn()
+    const github = {
+      paginate: vi.fn(async (method) => {
+        if (method === pullsList)
+          return [{ number: 21, updated_at: '2026-10-01T10:00:00Z' }]
+        if (method === listFiles)
+          return [{ filename: 'supabase/migrations/20261001100000_stale.sql', status: 'added' }]
+        return []
+      }),
+      rest: {
+        issues: { createComment, deleteComment: vi.fn(), listComments, updateComment: vi.fn() },
+        pulls: { list: pullsList, listFiles },
+      },
+    }
+
+    try {
+      await warningModule.warnStalePrMigrations({
+        github,
+        context: {
+          payload: { repository: { default_branch: 'main' } },
+          repo: { owner: 'Cap-go', repo: 'capgo.app' },
+          sha: 'abc123',
+        },
+        core: { info: vi.fn(), notice: vi.fn(), warning: vi.fn() },
+        currentMainMigrationPaths: undefined,
+        mainMigrationPaths: ['supabase/migrations/20261001093410_trigger.sql'],
+        now: new Date('2026-10-01T12:00:00Z'),
+      })
+
+      expect(createComment).toHaveBeenCalledOnce()
+      expect(createComment).toHaveBeenCalledWith(expect.objectContaining({
+        body: expect.stringContaining('20261001120000_current.sql'),
+      }))
+    }
+    finally {
+      if (previousSnapshotPath === undefined)
+        delete process.env.CURRENT_MAIN_MIGRATION_PATHS_FILE
+      else
+        process.env.CURRENT_MAIN_MIGRATION_PATHS_FILE = previousSnapshotPath
+      await rm(tempDirectory, { recursive: true, force: true })
+    }
+  })
+
   it.concurrent('configures the workflow for main migration pushes with comment permissions', async () => {
     const source = await readFile(new URL('../.github/workflows/warn-stale-pr-migrations.yml', import.meta.url), 'utf8')
     const workflow = parse(source) as {
@@ -215,6 +274,8 @@ describe('stale pull request migration warnings', () => {
     expect(findStep?.run).toContain('git rev-parse --verify --quiet "$BEFORE_SHA^{commit}"')
     expect(findStep?.run).toContain('git fetch --no-tags origin')
     expect(findStep?.run).toContain('git ls-tree -rz --name-only')
+    expect(findStep?.run).toContain('if ! git fetch')
+    expect(findStep?.run).toContain('if ! git ls-tree')
     expect(steps.find(step => step.name === 'Warn affected pull requests')?.uses).toBe('actions/github-script@v8')
   })
 })
