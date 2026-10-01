@@ -357,7 +357,12 @@ function tabLabel(tab: Tab) {
             <span class="flex w-12 h-11 shrink-0 items-center justify-center">
               <img src="/capgo.webp" alt="Capgo logo" class="w-8 h-8 shrink-0 transition-transform duration-300 ease-[cubic-bezier(0.3,1.6,0.5,1)] group-hover:rotate-90 group-hover:scale-105 motion-reduce:transition-none">
             </span>
-            <CapgoWordtype class="-ml-1 h-6 w-auto shrink-0 text-slate-200 transition-colors group-hover:text-white" />
+            <!-- The rail is 48px wide: hide the wordmark so its first letter does not peek past the logo. -->
+            <CapgoWordtype
+              class="-ml-1 h-6 w-auto shrink-0 text-slate-200 transition-[opacity,translate,color] duration-300 ease-in-out group-hover:text-white motion-reduce:transition-none"
+              :class="isRail ? 'pointer-events-none -translate-x-3 opacity-0' : 'translate-x-0 opacity-100'"
+              :aria-hidden="isRail"
+            />
           </router-link>
         </div>
 
