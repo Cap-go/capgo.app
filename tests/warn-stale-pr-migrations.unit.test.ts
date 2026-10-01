@@ -59,6 +59,19 @@ describe('stale pull request migration warnings', () => {
     ])
   })
 
+  it.concurrent('escapes migration paths embedded in the bot comment', () => {
+    const body = warningModule.buildWarningBody({
+      commitUrl: 'https://github.com/Cap-go/capgo.app/commit/abc123',
+      latestMainMigrationPath: 'supabase/migrations/20261001093410_latest.sql',
+      mainMigrationPaths: ['supabase/migrations/20261001093410_`main<.sql'],
+      staleMigrationPaths: ['supabase/migrations/20261001090000_`stale>.sql'],
+    })
+
+    expect(body).not.toContain('`stale>')
+    expect(body).toContain('<code>supabase/migrations/20261001090000_`stale&gt;.sql</code>')
+    expect(body).toContain('<code>supabase/migrations/20261001093410_`main&lt;.sql</code>')
+  })
+
   it.concurrent('warns only recently active affected PRs and upserts the workflow comment', async () => {
     const pullsList = vi.fn()
     const listFiles = vi.fn()
@@ -123,10 +136,16 @@ describe('stale pull request migration warnings', () => {
     const listComments = vi.fn()
     const createComment = vi.fn()
     const github = {
-      paginate: vi.fn(async (method) => {
-        if (method === pullsList)
-          return [{ number: 20, updated_at: '2026-10-01T10:00:00Z' }]
-        if (method === listFiles)
+      paginate: vi.fn(async (method, input: { pull_number?: number }) => {
+        if (method === pullsList) {
+          return [
+            { number: 19, updated_at: '2026-10-01T10:30:00Z' },
+            { number: 20, updated_at: '2026-10-01T10:00:00Z' },
+          ]
+        }
+        if (method === listFiles && input.pull_number === 19)
+          throw new Error('temporary API failure')
+        if (method === listFiles && input.pull_number === 20)
           return [{ filename: 'supabase/migrations/20261001090000_stale.sql', status: 'added' }]
         return []
       }),
@@ -136,6 +155,7 @@ describe('stale pull request migration warnings', () => {
       },
     }
 
+    const core = { info: vi.fn(), notice: vi.fn(), warning: vi.fn() }
     const warned = await warningModule.warnStalePrMigrations({
       github,
       context: {
@@ -143,7 +163,7 @@ describe('stale pull request migration warnings', () => {
         repo: { owner: 'Cap-go', repo: 'capgo.app' },
         sha: 'abc123',
       },
-      core: { info: vi.fn(), notice: vi.fn() },
+      core,
       mainMigrationPaths: ['supabase/migrations/20261001093410_latest.sql'],
       latestMainMigrationPath: 'supabase/migrations/20261001093410_latest.sql',
       now: new Date('2026-10-01T12:00:00Z'),
@@ -155,6 +175,7 @@ describe('stale pull request migration warnings', () => {
       issue_number: 20,
       body: expect.stringContaining(warningModule.COMMENT_MARKER),
     }))
+    expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('PR #19: temporary API failure'))
   })
 
   it.concurrent('configures the workflow for main migration pushes with comment permissions', async () => {

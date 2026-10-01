@@ -22,6 +22,16 @@ export function latestMigrationPath(paths) {
     .at(-1) ?? null
 }
 
+function migrationPathMarkup(path) {
+  const escaped = path
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('\'', '&#39;')
+  return `<code>${escaped}</code>`
+}
+
 export function stalePullRequestMigrations(files, latestMainMigrationPath, mainMigrationPaths = [latestMainMigrationPath]) {
   const latestMainTimestamp = migrationTimestamp(latestMainMigrationPath)
   if (!latestMainTimestamp)
@@ -63,8 +73,8 @@ export function buildWarningBody({
   staleMigrationPaths,
   commitUrl,
 }) {
-  const mainList = mainMigrationPaths.map(path => `- \`${path}\``).join('\n')
-  const staleList = staleMigrationPaths.map(path => `- \`${path}\``).join('\n')
+  const mainList = mainMigrationPaths.map(path => `- ${migrationPathMarkup(path)}`).join('\n')
+  const staleList = staleMigrationPaths.map(path => `- ${migrationPathMarkup(path)}`).join('\n')
 
   return `${COMMENT_MARKER}
 ## ⚠️ Supabase migration order is now stale
@@ -73,7 +83,7 @@ export function buildWarningBody({
 
 ${mainList}
 
-This PR still adds migrations that sort at or before the latest migration on \`main\` (\`${latestMainMigrationPath}\`):
+This PR still adds migrations that sort at or before the latest migration on \`main\` (${migrationPathMarkup(latestMainMigrationPath)}):
 
 ${staleList}
 
@@ -130,61 +140,67 @@ export async function warnStalePrMigrations({
 
   let warned = 0
   for (const pullRequest of recentPullRequests) {
-    const files = await github.paginate(github.rest.pulls.listFiles, {
-      owner,
-      repo,
-      pull_number: pullRequest.number,
-      per_page: 100,
-    })
-    const staleMigrationPaths = stalePullRequestMigrations(files, latestMain, currentMainMigrationPaths)
-    const comments = await github.paginate(github.rest.issues.listComments, {
-      owner,
-      repo,
-      issue_number: pullRequest.number,
-      per_page: 100,
-    })
-    const existing = comments.find(comment =>
-      comment.user?.login === 'github-actions[bot]'
-      && comment.body?.startsWith(COMMENT_MARKER),
-    )
-    if (staleMigrationPaths.length === 0) {
-      if (existing) {
-        await github.rest.issues.deleteComment({
-          owner,
-          repo,
-          comment_id: existing.id,
-        })
-        core.notice(`Removed resolved migration-order warning from PR #${pullRequest.number}.`)
-      }
-      core.info(`PR #${pullRequest.number} has no stale Supabase migrations.`)
-      continue
-    }
-
-    const body = buildWarningBody({
-      mainMigrationPaths: changedMainMigrations,
-      latestMainMigrationPath: latestMain,
-      staleMigrationPaths,
-      commitUrl: `https://github.com/${owner}/${repo}/commit/${context.sha}`,
-    })
-    if (existing) {
-      await github.rest.issues.updateComment({
+    try {
+      const files = await github.paginate(github.rest.pulls.listFiles, {
         owner,
         repo,
-        comment_id: existing.id,
-        body,
+        pull_number: pullRequest.number,
+        per_page: 100,
       })
-      core.notice(`Updated migration-order warning on PR #${pullRequest.number}.`)
-    }
-    else {
-      await github.rest.issues.createComment({
+      const staleMigrationPaths = stalePullRequestMigrations(files, latestMain, currentMainMigrationPaths)
+      const comments = await github.paginate(github.rest.issues.listComments, {
         owner,
         repo,
         issue_number: pullRequest.number,
-        body,
+        per_page: 100,
       })
-      core.notice(`Posted migration-order warning on PR #${pullRequest.number}.`)
+      const existing = comments.find(comment =>
+        comment.user?.login === 'github-actions[bot]'
+        && comment.body?.startsWith(COMMENT_MARKER),
+      )
+      if (staleMigrationPaths.length === 0) {
+        if (existing) {
+          await github.rest.issues.deleteComment({
+            owner,
+            repo,
+            comment_id: existing.id,
+          })
+          core.notice(`Removed resolved migration-order warning from PR #${pullRequest.number}.`)
+        }
+        core.info(`PR #${pullRequest.number} has no stale Supabase migrations.`)
+        continue
+      }
+
+      const body = buildWarningBody({
+        mainMigrationPaths: changedMainMigrations,
+        latestMainMigrationPath: latestMain,
+        staleMigrationPaths,
+        commitUrl: `https://github.com/${owner}/${repo}/commit/${context.sha}`,
+      })
+      if (existing) {
+        await github.rest.issues.updateComment({
+          owner,
+          repo,
+          comment_id: existing.id,
+          body,
+        })
+        core.notice(`Updated migration-order warning on PR #${pullRequest.number}.`)
+      }
+      else {
+        await github.rest.issues.createComment({
+          owner,
+          repo,
+          issue_number: pullRequest.number,
+          body,
+        })
+        core.notice(`Posted migration-order warning on PR #${pullRequest.number}.`)
+      }
+      warned += 1
     }
-    warned += 1
+    catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      core.warning(`Could not process migration warning for PR #${pullRequest.number}: ${message}`)
+    }
   }
 
   core.info(`Checked ${recentPullRequests.length} recently active PRs and warned ${warned}.`)
