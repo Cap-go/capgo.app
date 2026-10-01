@@ -6,8 +6,11 @@ import { useId } from 'vue'
 // Keep the markup in sync with the boot loader in index.html.
 withDefaults(defineProps<{
   size?: string
+  // When set, the loader announces itself as a status region with this text.
+  label?: string
 }>(), {
   size: 'w-16 h-16',
+  label: '',
 })
 
 // Unique per instance so several loaders on one page keep their own mask.
@@ -15,32 +18,35 @@ const uid = `capgo-loader-${useId().replace(/[^\w-]/g, '')}`
 </script>
 
 <template>
-  <svg
-    :class="size"
-    class="capgo-loader text-slate-900 dark:text-white"
-    viewBox="0 0 1024 1024"
-    aria-hidden="true"
-    xmlns="http://www.w3.org/2000/svg"
-  >
-    <defs>
-      <mask :id="uid" maskUnits="userSpaceOnUse" x="-512" y="-512" width="1024" height="1024">
-        <rect x="-512" y="-512" width="1024" height="1024" fill="#fff" />
-        <g fill="#000">
-          <path class="capgo-loader-plate-left" d="M-160-145A45 45 0 0 1-70-145V145A45 45 0 0 1-160 145V50H-195A45 45 0 0 1-240 5V-5A45 45 0 0 1-195-50H-160Z" />
-          <path class="capgo-loader-plate-right" d="M160-145A45 45 0 0 0 70-145V145A45 45 0 0 0 160 145V50H195A45 45 0 0 0 240 5V-5A45 45 0 0 0 195-50H160Z" />
+  <span class="inline-flex" :role="label ? 'status' : undefined">
+    <svg
+      :class="size"
+      class="capgo-loader text-slate-900 dark:text-white"
+      viewBox="0 0 1024 1024"
+      aria-hidden="true"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <defs>
+        <mask :id="uid" maskUnits="userSpaceOnUse" x="-512" y="-512" width="1024" height="1024">
+          <rect x="-512" y="-512" width="1024" height="1024" fill="#fff" />
+          <g fill="#000">
+            <path class="capgo-loader-plate-left" d="M-160-145A45 45 0 0 1-70-145V145A45 45 0 0 1-160 145V50H-195A45 45 0 0 1-240 5V-5A45 45 0 0 1-195-50H-160Z" />
+            <path class="capgo-loader-plate-right" d="M160-145A45 45 0 0 0 70-145V145A45 45 0 0 0 160 145V50H195A45 45 0 0 0 240 5V-5A45 45 0 0 0 195-50H160Z" />
+          </g>
+        </mask>
+      </defs>
+      <g class="capgo-loader-spin">
+        <g transform="translate(512 512) rotate(-45)">
+          <path
+            fill="currentColor"
+            :mask="`url(#${uid})`"
+            d="M-190-340H190A150 150 0 0 1 340-190V190A150 150 0 0 1 190 340H-190A150 150 0 0 1-340 190V-190A150 150 0 0 1-190-340Z"
+          />
         </g>
-      </mask>
-    </defs>
-    <g class="capgo-loader-spin">
-      <g transform="translate(512 512) rotate(-45)">
-        <path
-          fill="currentColor"
-          :mask="`url(#${uid})`"
-          d="M-190-340H190A150 150 0 0 1 340-190V190A150 150 0 0 1 190 340H-190A150 150 0 0 1-340 190V-190A150 150 0 0 1-190-340Z"
-        />
       </g>
-    </g>
-  </svg>
+    </svg>
+    <span v-if="label" class="sr-only">{{ label }}</span>
+  </span>
 </template>
 
 <style scoped>

@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 # Regenerate every raster Capgo logo asset from the master SVGs in assets/brand/.
 # Requires rsvg-convert (librsvg) and magick (ImageMagick 7). macOS: brew install librsvg imagemagick
-# Native app icons + splash screens are generated afterwards with `bun run capacitor:assets`.
+# Native app icons + splash screens: run `bun run brand:assets` (this script + capacitor:assets).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 BRAND=assets/brand
+
+# Fail before touching any tracked file, so a missing tool never leaves half-regenerated assets.
+for tool in rsvg-convert magick; do
+  command -v "$tool" >/dev/null || { echo "Missing $tool (brew install librsvg imagemagick)" >&2; exit 1; }
+done
+for svg in capgo-icon capgo-icon-development capgo-icon-local capgo-icon-preprod capgo-mark capgo-mark-white; do
+  [[ -f "$BRAND/$svg.svg" ]] || { echo "Missing $BRAND/$svg.svg" >&2; exit 1; }
+done
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
@@ -75,4 +83,3 @@ else
   echo "iconutil not found (macOS only), skipped cli-helper/assets/Capgo.icns" >&2
 fi
 
-echo "Done. Now run: bun run capacitor:assets"

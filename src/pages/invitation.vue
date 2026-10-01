@@ -194,7 +194,7 @@ function openPrivacy() {
     :card-description="inviteDescription"
   >
     <div v-if="isFetchingInvite" class="flex items-center justify-center py-12">
-      <CapgoLoader size="w-14 h-14" />
+      <CapgoLoader size="w-14 h-14" :label="t('loading')" />
     </div>
 
     <div v-else-if="inviteRow" class="space-y-5 text-slate-500 dark:text-slate-300">

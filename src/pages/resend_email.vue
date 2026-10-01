@@ -327,7 +327,7 @@ onBeforeUnmount(() => {
     :card-title="emailVerificationBlockingReason ? t('email-verification-title') : t('resend-email')"
   >
     <div v-if="isLoadingMain" class="flex justify-center py-10">
-      <CapgoLoader size="w-14 h-14" class="my-auto" />
+      <CapgoLoader size="w-14 h-14" :label="t('loading')" class="my-auto" />
     </div>
 
     <template v-else>

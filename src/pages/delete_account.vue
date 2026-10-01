@@ -247,7 +247,7 @@ onMounted (() => {
     :card-title="t('delete-your-account')"
   >
     <div v-if="isLoadingSession" class="flex justify-center py-10">
-      <CapgoLoader size="w-14 h-14" class="my-auto" />
+      <CapgoLoader size="w-14 h-14" :label="t('loading')" class="my-auto" />
     </div>
 
     <div
