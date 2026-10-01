@@ -1,6 +1,5 @@
 import type { Context } from 'hono'
 import { getRuntimeKey } from 'hono/adapter'
-import { formatDateCF, runQueryToCFA } from './cloudflare.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
 import { closeClient, getPgClient } from './pg.ts'
 import { checkKey, supabaseAdmin } from './supabase.ts'
@@ -15,88 +14,6 @@ export interface CliUsageEvent {
   org_id: string | null
   source: 'config' | 'api' | 'events'
   api_version: string
-}
-
-export interface AdminCliUsageUser {
-  email: string
-  count: number
-}
-
-export interface AdminCliUsageStats {
-  total: number
-  by_version: Record<string, number>
-  by_command: Record<string, number>
-  by_api_version: Record<string, number>
-  by_day: Array<{ date: string, count: number }>
-  top_users: AdminCliUsageUser[]
-}
-
-const TOP_USERS_LIMIT = 20
-const TOP_APIKEY_LOOKUP_LIMIT = 1000
-const APIKEY_RBAC_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-function emptyAdminCliUsageStats(): AdminCliUsageStats {
-  return {
-    total: 0,
-    by_version: {},
-    by_command: {},
-    by_api_version: {},
-    by_day: [],
-    top_users: [],
-  }
-}
-
-export function aggregateTopUsersByEmail(
-  rows: Array<{ email: string, count: number }>,
-  limit = TOP_USERS_LIMIT,
-): AdminCliUsageUser[] {
-  const totals = new Map<string, number>()
-  for (const row of rows) {
-    const email = row.email.trim() || 'unknown'
-    totals.set(email, (totals.get(email) || 0) + (Number(row.count) || 0))
-  }
-  return [...totals.entries()]
-    .map(([email, count]) => ({ email, count }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, limit)
-}
-
-function validApikeyIds(ids: string[]): string[] {
-  const unique = new Set<string>()
-  for (const id of ids) {
-    if (APIKEY_RBAC_ID_RE.test(id))
-      unique.add(id)
-  }
-  return [...unique]
-}
-
-async function resolveApikeyEmails(c: Context, apikeyIds: string[]): Promise<Map<string, string>> {
-  const emails = new Map<string, string>()
-  const ids = validApikeyIds(apikeyIds)
-  if (ids.length === 0)
-    return emails
-
-  const pgClient = getPgClient(c, true)
-  try {
-    const result = await pgClient.query<{ rbac_id: string, email: string }>(
-      `SELECT a.rbac_id::text AS rbac_id, u.email
-       FROM public.apikeys a
-       JOIN public.users u ON u.id = a.user_id
-       WHERE a.rbac_id = ANY($1::uuid[])`,
-      [ids],
-    )
-    for (const row of result.rows) {
-      if (row.rbac_id && row.email)
-        emails.set(row.rbac_id, row.email)
-    }
-  }
-  catch (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'resolveApikeyEmails failed', error: serializeError(error) })
-  }
-  finally {
-    await closeClient(c, pgClient)
-  }
-  return emails
 }
 
 function usesAnalyticsEngine(c: Context): boolean {
@@ -181,141 +98,12 @@ export async function resolveCliUsageIdentity(
       return { apikey_id: null, org_id: null }
     return {
       apikey_id: apikey.rbac_id ?? null,
-      // TODO: apikeys rows have no owner_org; org breakdown is not needed for the admin dashboard yet.
+      // API key rows do not carry an owner_org, so CLI events cannot derive one here.
       org_id: null,
     }
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'resolveCliUsageIdentity failed', error: serializeError(error) })
     return { apikey_id: null, org_id: null }
-  }
-}
-
-function rowsToRecord(rows: Array<{ key: string, count: number }>): Record<string, number> {
-  const result: Record<string, number> = {}
-  for (const row of rows) {
-    const key = row.key || 'unknown'
-    result[key] = Number(row.count) || 0
-  }
-  return result
-}
-
-async function getAdminCliUsageFromAE(
-  c: Context,
-  start_date: string,
-  end_date: string,
-): Promise<AdminCliUsageStats> {
-  const timeFilter = `timestamp >= toDateTime('${formatDateCF(start_date)}')
-    AND timestamp < toDateTime('${formatDateCF(end_date)}')`
-
-  const [totalRows, versionRows, commandRows, apiVersionRows, dayRows, apikeyRows] = await Promise.all([
-    runQueryToCFA<{ total: number }>(c, `SELECT count() AS total FROM cli_usage WHERE ${timeFilter}`),
-    runQueryToCFA<{ key: string, count: number }>(c, `SELECT blob1 AS key, count() AS count FROM cli_usage WHERE ${timeFilter} GROUP BY key ORDER BY count DESC LIMIT 50`),
-    runQueryToCFA<{ key: string, count: number }>(c, `SELECT blob2 AS key, count() AS count FROM cli_usage WHERE ${timeFilter} GROUP BY key ORDER BY count DESC LIMIT 50`),
-    runQueryToCFA<{ key: string, count: number }>(c, `SELECT blob8 AS key, count() AS count FROM cli_usage WHERE ${timeFilter} GROUP BY key ORDER BY count DESC LIMIT 50`),
-    runQueryToCFA<{ date: string, count: number }>(c, `SELECT formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date, count() AS count FROM cli_usage WHERE ${timeFilter} GROUP BY date ORDER BY date ASC`),
-    runQueryToCFA<{ apikey_id: string, count: number }>(c, `SELECT index1 AS apikey_id, count() AS count FROM cli_usage WHERE ${timeFilter} AND index1 != 'anonymous' GROUP BY apikey_id ORDER BY count DESC LIMIT ${TOP_APIKEY_LOOKUP_LIMIT}`),
-  ])
-
-  const emails = await resolveApikeyEmails(c, apikeyRows.map(row => row.apikey_id))
-
-  return {
-    total: Number(totalRows[0]?.total) || 0,
-    by_version: rowsToRecord(versionRows),
-    by_command: rowsToRecord(commandRows),
-    by_api_version: rowsToRecord(apiVersionRows),
-    by_day: dayRows.map(row => ({ date: row.date, count: Number(row.count) || 0 })),
-    top_users: aggregateTopUsersByEmail(apikeyRows.map(row => ({
-      email: emails.get(row.apikey_id) || 'unknown',
-      count: Number(row.count) || 0,
-    }))),
-  }
-}
-
-async function getAdminCliUsageFromPostgres(
-  c: Context,
-  start_date: string,
-  end_date: string,
-): Promise<AdminCliUsageStats> {
-  const pgClient = getPgClient(c, true)
-  try {
-    const [totalRes, versionRes, commandRes, apiVersionRes, dayRes, userRes] = await Promise.all([
-      pgClient.query<{ total: string }>(
-        `SELECT count(*)::bigint AS total FROM public.cli_usage
-         WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz`,
-        [start_date, end_date],
-      ),
-      pgClient.query<{ key: string, count: string }>(
-        `SELECT coalesce(cli_version, 'unknown') AS key, count(*)::bigint AS count
-         FROM public.cli_usage
-         WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz
-         GROUP BY 1 ORDER BY count DESC LIMIT 50`,
-        [start_date, end_date],
-      ),
-      pgClient.query<{ key: string, count: string }>(
-        `SELECT coalesce(command, 'unknown') AS key, count(*)::bigint AS count
-         FROM public.cli_usage
-         WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz
-         GROUP BY 1 ORDER BY count DESC LIMIT 50`,
-        [start_date, end_date],
-      ),
-      pgClient.query<{ key: string, count: string }>(
-        `SELECT coalesce(api_version, 'unknown') AS key, count(*)::bigint AS count
-         FROM public.cli_usage
-         WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz
-         GROUP BY 1 ORDER BY count DESC LIMIT 50`,
-        [start_date, end_date],
-      ),
-      pgClient.query<{ date: string, count: string }>(
-        `SELECT to_char(date_trunc('day', created_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS date,
-                count(*)::bigint AS count
-         FROM public.cli_usage
-         WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz
-         GROUP BY 1 ORDER BY 1 ASC`,
-        [start_date, end_date],
-      ),
-      pgClient.query<{ email: string, count: string }>(
-        `SELECT coalesce(u.email, 'unknown') AS email, count(*)::bigint AS count
-         FROM public.cli_usage cu
-         LEFT JOIN public.apikeys a ON a.rbac_id = cu.apikey_id
-         LEFT JOIN public.users u ON u.id = a.user_id
-         WHERE cu.created_at >= $1::timestamptz AND cu.created_at < $2::timestamptz
-           AND cu.apikey_id IS NOT NULL
-         GROUP BY 1 ORDER BY count DESC LIMIT 20`,
-        [start_date, end_date],
-      ),
-    ])
-
-    return {
-      total: Number(totalRes.rows[0]?.total) || 0,
-      by_version: rowsToRecord(versionRes.rows.map(r => ({ key: r.key, count: Number(r.count) }))),
-      by_command: rowsToRecord(commandRes.rows.map(r => ({ key: r.key, count: Number(r.count) }))),
-      by_api_version: rowsToRecord(apiVersionRes.rows.map(r => ({ key: r.key, count: Number(r.count) }))),
-      by_day: dayRes.rows.map(row => ({ date: row.date, count: Number(row.count) || 0 })),
-      top_users: userRes.rows.map(row => ({
-        email: row.email || 'unknown',
-        count: Number(row.count) || 0,
-      })),
-    }
-  }
-  finally {
-    await closeClient(c, pgClient)
-  }
-}
-
-export async function getAdminCliUsage(
-  c: Context,
-  start_date: string,
-  end_date: string,
-): Promise<AdminCliUsageStats> {
-  try {
-    if (usesAnalyticsEngine(c)) {
-      return await getAdminCliUsageFromAE(c, start_date, end_date)
-    }
-    return await getAdminCliUsageFromPostgres(c, start_date, end_date)
-  }
-  catch (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'getAdminCliUsage failed', error: serializeError(error) })
-    return emptyAdminCliUsageStats()
   }
 }

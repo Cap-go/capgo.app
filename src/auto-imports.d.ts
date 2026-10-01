@@ -6,8 +6,6 @@
 // biome-ignore lint: disable
 export {}
 declare global {
-  const DATE_RANGE_DURATIONS_MS: typeof import('./stores/adminDashboard').DATE_RANGE_DURATIONS_MS
-  const DEFAULT_DATE_RANGE_MODE: typeof import('./stores/adminDashboard').DEFAULT_DATE_RANGE_MODE
   const EffectScope: typeof import('vue').EffectScope
   const RBAC_ORG_ROLE_I18N_KEYS: typeof import('./stores/organization').RBAC_ORG_ROLE_I18N_KEYS
   const RELEASE_LIVE_POLL_INTERVAL_MS: typeof import('./composables/useReleaseLive').RELEASE_LIVE_POLL_INTERVAL_MS
@@ -48,7 +46,6 @@ declare global {
   const getCurrentInstance: typeof import('vue').getCurrentInstance
   const getCurrentScope: typeof import('vue').getCurrentScope
   const getCurrentWatcher: typeof import('vue').getCurrentWatcher
-  const getDateRangeForMode: typeof import('./stores/adminDashboard').getDateRangeForMode
   const getRbacRoleI18nKey: typeof import('./stores/organization').getRbacRoleI18nKey
   const h: typeof import('vue').h
   const ignorableWatch: typeof import('@vueuse/core').ignorableWatch
@@ -132,7 +129,6 @@ declare global {
   const unrefElement: typeof import('@vueuse/core').unrefElement
   const until: typeof import('@vueuse/core').until
   const useActiveElement: typeof import('@vueuse/core').useActiveElement
-  const useAdminDashboardStore: typeof import('./stores/adminDashboard').useAdminDashboardStore
   const useAnchorPopover: typeof import('./composables/useAnchorPopover').useAnchorPopover
   const useAnimate: typeof import('@vueuse/core').useAnimate
   const useAppDetailStore: typeof import('./stores/appDetail').useAppDetailStore

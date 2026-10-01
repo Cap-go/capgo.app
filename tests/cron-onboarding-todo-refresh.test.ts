@@ -12,7 +12,7 @@ describe('queued onboarding todo refresh', () => {
   it('writes positive evidence to supported versions, preserves concurrent progress and unrelated JSON, and replays safely', async () => {
     const pool = await getPostgresClient()
     const orgId = randomUUID()
-    const versions = [1, 2, 3, 4, 3]
+    const versions = [1, 2, 3, 4, 3, 4]
     const appIds = versions.map(version => `com.example.todo.cron.${version}.${randomUUID()}`)
     const oldAt = '2026-09-01T00:00:00.000Z'
     let customerId: string | null = null
@@ -29,6 +29,8 @@ describe('queued onboarding todo refresh', () => {
             outcome: index === 4 ? 'completed' : 'in_progress',
             steps: index === 4
               ? {}
+              : index === 5
+                ? { ota: { test_update: { status: 'done', at: oldAt } } }
               : version === 4
                 ? { ota: { add_channel: { status: 'pending' }, run_device: { status: 'pending' } } }
                 : version === 3
@@ -48,12 +50,13 @@ describe('queued onboarding todo refresh', () => {
         // worker locks rows. The worker must preserve its timestamp and history.
         await pool.query(`UPDATE public.apps SET onboarding = jsonb_set(onboarding,
           '{setup,steps,run_device}', $2::jsonb, true) WHERE app_id=$1`, [appIds[2], JSON.stringify({ status: 'done', at: oldAt, update_history: [{ status: 'done', at: oldAt }] })])
-        return { channel: new Set(appIds), device: new Set(appIds), bundle: new Set(appIds), update: new Set(appIds), errors: [] }
+        const newlyObserved = appIds.slice(0, 5)
+        return { channel: new Set(newlyObserved), device: new Set(newlyObserved), bundle: new Set(newlyObserved), update: new Set(newlyObserved), errors: [] }
       })
       const body = { appIds, queuedAt: new Date().toISOString() }
       const first = await refreshAppOnboardingTodoBatch(c, getDrizzleClient(pool), body, { gatherEvidence: gatherEvidence as any })
-      expect(first.updated).toBe(4)
-      expect(first.steps).toBe(8)
+      expect(first.updated).toBe(5)
+      expect(first.steps).toBe(11)
 
       const rows = (await pool.query('SELECT app_id, onboarding FROM public.apps WHERE app_id=ANY($1::varchar[])', [appIds])).rows
       const byId = new Map(rows.map(row => [row.app_id, row.onboarding]))
@@ -69,6 +72,17 @@ describe('queued onboarding todo refresh', () => {
           expect(steps).toEqual({})
           continue
         }
+        if (index === 5) {
+          expect(steps.test_update).toEqual({ status: 'done', at: oldAt })
+          expect(steps.add_code).toMatchObject({
+            status: 'done',
+            annotation: 'inferred_from_test_update',
+            annotation_type: 'note',
+          })
+          expect(steps.run_device.status).toBe('pending')
+          expect(steps.upload_bundle.status).toBe('pending')
+          continue
+        }
         expect(steps.add_channel.status).toBe('done')
         if (version < 3) {
           expect(steps.run_device).toBeUndefined()
@@ -76,6 +90,11 @@ describe('queued onboarding todo refresh', () => {
           expect(steps.test_update).toBeUndefined()
         }
         else {
+          expect(steps.add_code).toMatchObject({
+            status: 'done',
+            annotation: 'inferred_from_test_update',
+            annotation_type: 'note',
+          })
           expect(steps.run_device.status).toBe('done')
           expect(steps.upload_bundle.status).toBe('done')
           expect(steps.test_update.status).toBe('done')
@@ -88,7 +107,8 @@ describe('queued onboarding todo refresh', () => {
       expect(v3Steps.run_device.update_history).toEqual([{ status: 'done', at: oldAt }])
 
       const beforeReplay = (await pool.query('SELECT app_id, onboarding FROM public.apps WHERE app_id=ANY($1::varchar[]) ORDER BY app_id', [appIds])).rows
-      const replay = await refreshAppOnboardingTodoBatch(c, getDrizzleClient(pool), body, { gatherEvidence: async () => ({ channel: new Set(appIds), device: new Set(appIds), bundle: new Set(appIds), update: new Set(appIds), errors: [] }) })
+      const replayEvidence = appIds.slice(0, 5)
+      const replay = await refreshAppOnboardingTodoBatch(c, getDrizzleClient(pool), body, { gatherEvidence: async () => ({ channel: new Set(replayEvidence), device: new Set(replayEvidence), bundle: new Set(replayEvidence), update: new Set(replayEvidence), errors: [] }) })
       expect(replay.updated).toBe(0)
       expect((await pool.query('SELECT app_id, onboarding FROM public.apps WHERE app_id=ANY($1::varchar[]) ORDER BY app_id', [appIds])).rows).toEqual(beforeReplay)
     }

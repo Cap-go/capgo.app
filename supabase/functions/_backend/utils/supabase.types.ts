@@ -5340,6 +5340,10 @@ export type Database = {
         Returns: Json
       }
       new_builder_onboarding_setup_v1: { Args: never; Returns: Json }
+      new_ota_onboarding_steps_v1: {
+        Args: { p_legacy_steps?: Json }
+        Returns: Json
+      }
       null_migrated_app_version_manifests: {
         Args: {
           batch_size?: number

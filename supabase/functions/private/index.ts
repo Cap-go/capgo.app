@@ -1,7 +1,4 @@
 import { app as accept_invitation } from '../_backend/private/accept_invitation.ts'
-import { app as admin_credits } from '../_backend/private/admin_credits.ts'
-import { app as admin_org_support_channel } from '../_backend/private/admin_org_support_channel.ts'
-import { app as admin_stats } from '../_backend/private/admin_stats.ts'
 import { app as bundle_install_stats } from '../_backend/private/bundle_install_stats.ts'
 import { app as channel_device } from '../_backend/private/channel_device.ts'
 import { app as channel_stats } from '../_backend/private/channel_stats.ts'
@@ -81,9 +78,6 @@ appGlobal.route('/organization_invitation', organization_invitation)
 appGlobal.route('/download_link', download_link)
 appGlobal.route('/log_as', log_as)
 appGlobal.route('/mcp_oauth', mcp_oauth)
-appGlobal.route('/admin_credits', admin_credits)
-appGlobal.route('/admin_org_support_channel', admin_org_support_channel)
-appGlobal.route('/admin_stats', admin_stats)
 appGlobal.route('/stats', stats_priv)
 appGlobal.route('/stripe_checkout', stripe_checkout)
 appGlobal.route('/stripe_portal', stripe_portal)

@@ -1,3 +1,4 @@
+import { PgDialect } from 'drizzle-orm/pg-core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
@@ -8,6 +9,7 @@ const {
   closeClient,
   createStatsMeta,
   deleteObject,
+  drizzleTransaction,
   getDrizzleClient,
   getPgClient,
   manifestSelectWhere,
@@ -15,6 +17,7 @@ const {
   pgQuery,
   persistVersionManifestEntries,
   purgeFileReadCache,
+  restoreObjectFromTrash,
   sendEventToTracking,
   supabaseAdmin,
   channelsUpdate,
@@ -43,11 +46,38 @@ const {
   const manifestSelectWhere = vi.fn(async (): Promise<any[]> => [])
   // Every suite installs its SQL behavior through mockCleanupPg().
   const pgQuery = vi.fn(async (_sql: string, _params?: any[]): Promise<any> => ({ rows: [], rowCount: 0 }))
+  let dialectPromise: Promise<any> | undefined
+  const compileDrizzleQuery = async (query: any) => {
+    dialectPromise ??= import('drizzle-orm/pg-core').then(({ PgDialect }) => new PgDialect())
+    const dialect = await dialectPromise
+    return dialect.sqlToQuery(query)
+  }
+  const drizzleExecute = async (query: any) => {
+    const { sql: queryText, params } = await compileDrizzleQuery(query)
+    return pgQuery(queryText, params)
+  }
+  const drizzleDelete = (_table: unknown) => ({
+    where: async (condition: any) => {
+      const { sql: whereSql, params } = await compileDrizzleQuery(condition)
+      return pgQuery(`DELETE FROM public.manifest WHERE ${whereSql}`, params)
+    },
+  })
+  const drizzleTransaction = vi.fn(async (operation: (tx: { delete: typeof drizzleDelete, execute: typeof drizzleExecute }) => Promise<unknown>) => {
+    callOrder.push('begin')
+    try {
+      const result = await operation({ delete: drizzleDelete, execute: drizzleExecute })
+      callOrder.push('commit_entry')
+      return result
+    }
+    catch (error) {
+      callOrder.push('rollback_entry')
+      throw error
+    }
+  })
   const moveObjectToTrash = vi.fn(async (..._args: any[]) => {
     callOrder.push('r2_trash')
     return true
   })
-
   return {
     appVersionsMetaSelectEq,
     appVersionsMetaUpdate,
@@ -58,22 +88,23 @@ const {
     closeClient: vi.fn(),
     createStatsMeta: vi.fn(),
     deleteObject: vi.fn(),
+    drizzleTransaction,
     getDrizzleClient: vi.fn(() => ({
       select: vi.fn(() => ({
         from: vi.fn(() => ({
           where: manifestSelectWhere,
         })),
       })),
+      execute: drizzleExecute,
+      transaction: drizzleTransaction,
     })),
-    getPgClient: vi.fn(() => ({
-      query: pgQuery,
-      connect: vi.fn(async () => ({ query: pgQuery, release: vi.fn() })),
-    })),
+    getPgClient: vi.fn(() => ({})),
     manifestSelectWhere,
     moveObjectToTrash,
     pgQuery,
     persistVersionManifestEntries: vi.fn(),
     purgeFileReadCache: vi.fn(async () => {}),
+    restoreObjectFromTrash: vi.fn(async (..._args: any[]) => true),
     sendEventToTracking: vi.fn(),
     supabaseAdmin: vi.fn(() => ({ from: supabaseFrom })),
   }
@@ -93,6 +124,7 @@ vi.mock('../supabase/functions/_backend/utils/s3.ts', () => ({
   s3: {
     deleteObject,
     moveObjectToTrash,
+    restoreObjectFromTrash,
   },
 }))
 
@@ -169,13 +201,13 @@ function useManifestEntries(entries: ReturnType<typeof makeEntries>) {
  * Simulates the batched cleanup SQL: the release CTE deletes rows still used by
  * another version (sharedIds) and returns the rest as last references.
  */
-function mockCleanupPg(options: { sharedIds?: Set<number>, remainingCount?: number } = {}) {
+function mockCleanupPg(options: { sharedIds?: Set<number>, remainingCount?: number, reReferencedPaths?: string[] } = {}) {
   const sharedIds = options.sharedIds ?? new Set<number>()
   pgQuery.mockImplementation(async (sql: string, params?: any[]) => {
-    if (sql === 'BEGIN')
-      callOrder.push('begin')
-    if (sql.includes('pg_advisory_xact_lock'))
+    if (sql.includes('pg_advisory_xact_lock')) {
       callOrder.push('lock')
+      return { rows: [], rowCount: 0 }
+    }
     if (sql.includes('WITH batch AS')) {
       const ids = params?.[0] as number[]
       const rows = []
@@ -187,15 +219,16 @@ function mockCleanupPg(options: { sharedIds?: Set<number>, remainingCount?: numb
       }
       return { rows, rowCount: rows.length }
     }
-    if (sql.includes('DELETE FROM public.manifest WHERE id = ANY')) {
+    if (sql.includes('SELECT DISTINCT s3_path')) {
+      callOrder.push('recheck_refs')
+      const rows = (options.reReferencedPaths ?? []).map(s3_path => ({ s3_path }))
+      return { rows, rowCount: rows.length }
+    }
+    if (sql.includes('DELETE FROM public.manifest')) {
       for (const id of params?.[0] as number[])
         callOrder.push(`db_delete_row:${id}`)
       return { rows: [], rowCount: (params?.[0] as number[]).length }
     }
-    if (sql === 'COMMIT')
-      callOrder.push('commit')
-    if (sql === 'ROLLBACK')
-      callOrder.push('rollback')
     if (sql.includes('SELECT COUNT(*)'))
       return { rows: [{ count: options.remainingCount ?? 0 }], rowCount: 1 }
     if (sql.includes('WITH prev AS'))
@@ -216,6 +249,7 @@ describe('on_version_update deleted version cleanup', () => {
     persistVersionManifestEntries.mockResolvedValue({ inserted: 2, alreadyPresent: false })
     sendEventToTracking.mockResolvedValue(undefined)
     createStatsMeta.mockResolvedValue({ error: null })
+    restoreObjectFromTrash.mockResolvedValue(true)
     useManifestEntries([])
     mockCleanupPg()
     appVersionsMetaSelectEq.mockReturnValue({
@@ -265,8 +299,8 @@ describe('on_version_update deleted version cleanup', () => {
 
     expect(callOrder.filter(v => v === 'lock')).toHaveLength(1)
     // The lock transaction commits before any R2 round trip.
-    expect(callOrder.indexOf('commit')).toBeGreaterThan(callOrder.indexOf('lock'))
-    expect(callOrder.indexOf('r2_trash')).toBeGreaterThan(callOrder.indexOf('commit'))
+    expect(callOrder.indexOf('commit_entry')).toBeGreaterThan(callOrder.indexOf('lock'))
+    expect(callOrder.indexOf('r2_trash')).toBeGreaterThan(callOrder.indexOf('commit_entry'))
     expect(callOrder.indexOf('db_delete_row:1000')).toBeGreaterThan(callOrder.indexOf('r2_trash'))
     expect(pgQuery).toHaveBeenCalledWith(expect.stringContaining('WITH prev AS'), expect.any(Array))
     // Same key space as the previous per-file lock, taken in sorted order.
@@ -299,6 +333,32 @@ describe('on_version_update deleted version cleanup', () => {
 
     expect(moveObjectToTrash).not.toHaveBeenCalled()
     expect(callOrder).toContain('db_release_row:1000')
+    expect(callOrder.some(v => v.startsWith('db_delete_row:'))).toBe(false)
+  })
+
+  it('restores an object that a new upload referenced while it was being trashed', async () => {
+    useManifestEntries(makeEntries(2))
+    const reReferencedPath = makeEntries(2)[1]!.s3_path
+    mockCleanupPg({ reReferencedPaths: [reReferencedPath] })
+
+    await deleteIt(createContext(), createVersion({ r2_path: null, manifest_count: 2 }))
+
+    expect(restoreObjectFromTrash).toHaveBeenCalledTimes(1)
+    expect(restoreObjectFromTrash).toHaveBeenCalledWith(expect.anything(), reReferencedPath)
+    // Recheck runs after the moves and before this version's rows are dropped.
+    expect(callOrder.lastIndexOf('r2_trash')).toBeLessThan(callOrder.indexOf('recheck_refs'))
+    expect(callOrder.indexOf('recheck_refs')).toBeLessThan(callOrder.indexOf('db_delete_row:1000'))
+    expect(callOrder).toContain('db_delete_row:1001')
+  })
+
+  it('keeps rows tracked and fails when a re-referenced object cannot be restored', async () => {
+    useManifestEntries(makeEntries(1))
+    mockCleanupPg({ reReferencedPaths: [makeEntries(1)[0]!.s3_path] })
+    restoreObjectFromTrash.mockResolvedValue(false)
+
+    await expect(deleteIt(createContext(), createVersion({ r2_path: null, manifest_count: 1 }))).rejects.toThrow(
+      'Cannot restore re-referenced manifest file from trash',
+    )
     expect(callOrder.some(v => v.startsWith('db_delete_row:'))).toBe(false)
   })
 
@@ -336,7 +396,7 @@ describe('on_version_update deleted version cleanup', () => {
     await expect(deleteIt(createContext(), createVersion({ r2_path: null, manifest_count: 1 }))).rejects.toThrow(
       'Manifest rows still present after trash/delete pass',
     )
-    expect(callOrder).toContain('rollback')
+    expect(callOrder).toContain('rollback_entry')
   })
 
   it('routes already-deleted versions with leftover counts to cleanup_manifest', () => {
@@ -442,6 +502,7 @@ describe('on_version_update manifest cleanup load', () => {
       callOrder.push('r2_trash')
       return true
     })
+    restoreObjectFromTrash.mockResolvedValue(true)
     mockCleanupPg()
   })
 
@@ -475,23 +536,16 @@ describe('on_version_update manifest cleanup load', () => {
     expect(callOrder.filter(v => v.startsWith('db_delete_row:'))).toHaveLength(500)
   }, 60_000)
 
-  it('reuses one pg pool and releases every checked-out client', async () => {
+  it('uses one bounded cleanup pool and one Drizzle transaction per 50-file batch', async () => {
     useManifestEntries(makeEntries(500))
-    getPgClient.mockClear()
 
     const response = await deleteIt(createContext(), createVersion({ r2_path: null, manifest_count: 500 }))
 
     expect(response.status).toBe(200)
     // read + cleanup + final write, not one pool per manifest file
-    expect(getPgClient.mock.calls.length).toBeLessThanOrEqual(3)
-    const pools = getPgClient.mock.results.map(result => result.value as { query: ReturnType<typeof vi.fn>, connect: ReturnType<typeof vi.fn> })
-    const checkouts = pools.reduce((total, pool) => total + pool.connect.mock.calls.length, 0)
-    // One checked-out client per 50-file batch.
-    expect(checkouts).toBe(10)
-    // A leaked client would exhaust the bounded pool and stall cleanup.
-    const clients = await Promise.all(pools.flatMap(pool => pool.connect.mock.results.map(result => result.value as Promise<{ release: ReturnType<typeof vi.fn> }>)))
-    for (const client of clients)
-      expect(client.release).toHaveBeenCalledTimes(1)
+    expect(getPgClient).toHaveBeenCalledTimes(3)
+    // Ten release batches plus the final metadata transaction.
+    expect(drizzleTransaction).toHaveBeenCalledTimes(11)
     expect(callOrder.filter(v => v.startsWith('db_delete_row:'))).toHaveLength(500)
   }, 30_000)
 
@@ -512,6 +566,23 @@ describe('on_version_update manifest cleanup load', () => {
     expect(deletedIds).not.toContain(1150)
     expect(deletedIds).toHaveLength(199)
   }, 30_000)
+
+  it('keeps a row whose R2 move throws and still deletes the trashed rows', async () => {
+    useManifestEntries(makeEntries(3))
+    moveObjectToTrash.mockImplementation(async (_c: unknown, path: string) => {
+      if (path.endsWith('file-1.js'))
+        throw new Error('r2 unavailable')
+      return true
+    })
+
+    await expect(deleteIt(createContext(), createVersion({ r2_path: null, manifest_count: 3 }))).rejects.toThrow(
+      'Cannot move S3 object for deleted manifest file to trash',
+    )
+
+    expect(callOrder).toContain('db_delete_row:1000')
+    expect(callOrder).not.toContain('db_delete_row:1001')
+    expect(callOrder).toContain('db_delete_row:1002')
+  })
 })
 
 describe('on_version_update concurrent cleanup of versions sharing files', () => {
@@ -523,6 +594,8 @@ describe('on_version_update concurrent cleanup of versions sharing files', () =>
     s3_path: string
   }
 
+  const defaultDrizzleClient = getDrizzleClient.getMockImplementation()!
+
   beforeEach(() => {
     vi.clearAllMocks()
     callOrder.length = 0
@@ -531,13 +604,11 @@ describe('on_version_update concurrent cleanup of versions sharing files', () =>
       single: vi.fn(async () => ({ data: { size: 0 }, error: null })),
     })
     appVersionsMetaUpdateEq.mockResolvedValue({ error: null })
+    restoreObjectFromTrash.mockResolvedValue(true)
   })
 
   afterEach(() => {
-    getPgClient.mockImplementation(() => ({
-      query: pgQuery,
-      connect: vi.fn(async () => ({ query: pgQuery, release: vi.fn() })),
-    }))
+    getDrizzleClient.mockImplementation(defaultDrizzleClient)
   })
 
   it('trashes every object exactly once, before its last row, and leaves no rows', async () => {
@@ -554,7 +625,7 @@ describe('on_version_update concurrent cleanup of versions sharing files', () =>
     }
     const yieldToOtherCleanup = () => new Promise(resolve => setTimeout(resolve, 0))
 
-    // Mirrors the release CTE and the trashed-row delete against the store.
+    // Mirrors the cleanup statements against the store.
     const runSql = async (sql: string, params: any[] = []) => {
       await yieldToOtherCleanup()
       if (sql.includes('WITH batch AS')) {
@@ -570,7 +641,13 @@ describe('on_version_update concurrent cleanup of versions sharing files', () =>
         const rows = batch.filter(row => !releasable.includes(row))
         return { rows, rowCount: rows.length }
       }
-      if (sql.includes('DELETE FROM public.manifest WHERE id = ANY')) {
+      if (sql.includes('SELECT DISTINCT s3_path')) {
+        const [, paths, ids] = params as [string[], string[], number[]]
+        const rows = [...new Set([...store.values()].filter(row => paths.includes(row.s3_path) && !ids.includes(row.id)).map(row => row.s3_path))]
+          .map(s3_path => ({ s3_path }))
+        return { rows, rowCount: rows.length }
+      }
+      if (sql.includes('DELETE FROM public.manifest')) {
         const [ids, versionId] = params as [number[], number]
         for (const id of ids) {
           if (store.get(id)?.app_version_id === versionId)
@@ -585,37 +662,45 @@ describe('on_version_update concurrent cleanup of versions sharing files', () =>
       return { rows: [], rowCount: 0 }
     }
 
+    const dialect = new PgDialect()
     // The advisory lock statement blocks until the other batch transaction ends.
     let lockTail = Promise.resolve()
-    getPgClient.mockImplementation((() => ({
-      query: vi.fn(runSql),
-      connect: vi.fn(async () => {
+    getDrizzleClient.mockImplementation((() => ({
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: async (condition: { queryChunks: { constructor: { name: string }, value?: unknown }[] }) => {
+            const versionId = condition.queryChunks.find(chunk => chunk?.constructor?.name === 'Param')?.value
+            return [...store.values()].filter(row => row.app_version_id === versionId).map(row => ({ ...row }))
+          },
+        })),
+      })),
+      execute: async (query: any) => {
+        const { sql, params } = dialect.sqlToQuery(query)
+        return runSql(sql, params)
+      },
+      transaction: async (operation: (tx: { execute: (query: any) => Promise<any> }) => Promise<unknown>) => {
         let unlock: (() => void) | undefined
-        return {
-          release: vi.fn(),
-          query: vi.fn(async (sql: string, params?: any[]) => {
-            if (sql.includes('pg_advisory_xact_lock')) {
-              const previous = lockTail
-              lockTail = new Promise<void>((resolve) => {
-                unlock = resolve
-              })
-              await previous
-              return { rows: [], rowCount: 0 }
-            }
-            if (sql === 'COMMIT' || sql === 'ROLLBACK') {
-              unlock?.()
-              unlock = undefined
-              return { rows: [], rowCount: 0 }
-            }
-            return runSql(sql, params)
-          }),
+        try {
+          return await operation({
+            execute: async (query: any) => {
+              const { sql, params } = dialect.sqlToQuery(query)
+              if (sql.includes('pg_advisory_xact_lock')) {
+                const previous = lockTail
+                lockTail = new Promise<void>((resolve) => {
+                  unlock = resolve
+                })
+                await previous
+                return { rows: [], rowCount: 0 }
+              }
+              return runSql(sql, params)
+            },
+          })
         }
-      }),
+        finally {
+          unlock?.()
+        }
+      },
     })) as any)
-    manifestSelectWhere.mockImplementation((async (condition: { queryChunks: { constructor: { name: string }, value?: unknown }[] }) => {
-      const versionId = condition.queryChunks.find(chunk => chunk?.constructor?.name === 'Param')?.value
-      return [...store.values()].filter(row => row.app_version_id === versionId).map(row => ({ ...row }))
-    }) as any)
 
     const trashCounts = new Map<string, number>()
     const trashedWithoutTracking: string[] = []
@@ -638,5 +723,6 @@ describe('on_version_update concurrent cleanup of versions sharing files', () =>
     expect(trashCounts.size).toBe(180)
     expect([...trashCounts.values()].every(count => count === 1)).toBe(true)
     expect(trashedWithoutTracking).toEqual([])
+    expect(restoreObjectFromTrash).not.toHaveBeenCalled()
   }, 30_000)
 })
