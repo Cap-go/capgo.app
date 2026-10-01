@@ -1,5 +1,5 @@
 {
-  "originHash" : "ab06eac6f466fa5a658cff1940891bc0d5d22a674cbf5f219ad0cdd49e671f87",
+  "originHash" : "77c2b88d1db6fae8f0823f387b6c57ff18e45a6e38ce55e6a8cef57d282309e7",
   "pins" : [
     {
       "identity" : "alamofire",
@@ -11,21 +11,12 @@
       }
     },
     {
-      "identity" : "bigint",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/attaswift/BigInt.git",
-      "state" : {
-        "revision" : "e07e00fa1fd435143a2dcf8b7eec9a7710b2fdfe",
-        "version" : "5.7.0"
-      }
-    },
-    {
       "identity" : "capacitor-swift-pm",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ionic-team/capacitor-swift-pm.git",
       "state" : {
-        "revision" : "44ae2505f54a80c5e559533950886d0644fc2fca",
-        "version" : "8.4.0"
+        "revision" : "0b6882e9a3288342aacf36348e5a94e4f1dd7b13",
+        "version" : "8.5.2"
       }
     },
     {
@@ -87,8 +78,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ionic-team/ion-ios-camera.git",
       "state" : {
-        "revision" : "2cd4f06b0ece21b6458e23357280c51f94bfceb8",
-        "version" : "1.0.4"
+        "revision" : "00c3dfdd6267f80db299d9c5a0bad522156b6cbc",
+        "version" : "2.0.0"
       }
     },
     {
@@ -114,8 +105,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/jwplayer/JWPlayerKit-package.git",
       "state" : {
-        "revision" : "d5e3b35adf991191b829e745e71b29781bceb276",
-        "version" : "4.26.2"
+        "revision" : "d7790b1009d92b9af0aa4be5926cf36a82a04d97",
+        "version" : "4.28.0"
       }
     },
     {
@@ -141,26 +132,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/muxinc/mux-stats-sdk-avplayer",
       "state" : {
-        "revision" : "a8c04056f331218959fff89c9d249d7db6ecc73d",
-        "version" : "4.12.0"
-      }
-    },
-    {
-      "identity" : "purchases-hybrid-common",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/RevenueCat/purchases-hybrid-common.git",
-      "state" : {
-        "revision" : "a9d25f3d300cdb515b0cce464b59ebb29ad9ec14",
-        "version" : "18.10.0"
-      }
-    },
-    {
-      "identity" : "purchases-ios-spm",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/RevenueCat/purchases-ios-spm",
-      "state" : {
-        "revision" : "92e2804a6b84b3b7ce60bfe7e9ff63dc9524ef5b",
-        "version" : "5.76.0"
+        "revision" : "ed4e8a73372843ec4fe18822b0a8381519969162",
+        "version" : "4.10.0"
       }
     },
     {
@@ -206,15 +179,6 @@
       "state" : {
         "revision" : "aba0b57a2fb75e154848b30ad8ec07283b520b75",
         "version" : "5.11.0"
-      }
-    },
-    {
-      "identity" : "version",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/mrackwitz/Version.git",
-      "state" : {
-        "revision" : "fd4b0eb5756aa7f1c33977fb626cf37d2140a3a0",
-        "version" : "0.8.0"
       }
     },
     {
