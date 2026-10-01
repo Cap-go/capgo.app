@@ -16,11 +16,9 @@ vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
 
 const {
   assertAllowedImagePath,
-  createPlatformAdminSignedImageUrl,
   createSignedImageUrl,
   getStorageAllowedOrigins,
   isAllowedImagePath,
-  isOwnershipBearingImagePath,
   isSupabaseStorageImageUrl,
   normalizeImagePath,
   resolveWritableImageValue,
@@ -59,9 +57,6 @@ describe('image path ownership for signed URLs', () => {
     expect(assertAllowedImagePath('org/org-2/logo/a.png', { orgId: 'org-1' })).toBeNull()
     expect(assertAllowedImagePath('private/secret.png', { orgId: 'org-1' })).toBeNull()
     expect(assertAllowedImagePath('test-icon', { orgId: 'org-1' })).toBeNull()
-    expect(isOwnershipBearingImagePath('test-icon')).toBe(false)
-    expect(isOwnershipBearingImagePath('private/secret.png')).toBe(true)
-    expect(isOwnershipBearingImagePath('org/org-1/logo/a.png')).toBe(true)
   })
 
   it('refuses org-scoped signing of app-icon paths and app-scoped signing of logos', async () => {
@@ -236,40 +231,4 @@ describe('image path ownership for signed URLs', () => {
     )).toBe('org/org-1/file%name.png')
   })
 
-  it('signs any foldered images path for platform admin without org membership', async () => {
-    mocks.createSignedUrl.mockResolvedValue({
-      data: { signedUrl: 'https://signed.example/other-org.png' },
-      error: null,
-    })
-    const context = {} as Parameters<typeof createPlatformAdminSignedImageUrl>[0]
-    await expect(createPlatformAdminSignedImageUrl(context, 'org/other-org/com.app/icon'))
-      .resolves
-      .toBe('https://signed.example/other-org.png')
-    await expect(createPlatformAdminSignedImageUrl(context, '357002ca-7a72-4aa3-9ba2-e5a7b73fe49b/com.app/icon'))
-      .resolves
-      .toBe('https://signed.example/other-org.png')
-    expect(mocks.createSignedUrl).toHaveBeenCalledWith('org/other-org/com.app/icon', expect.any(Number))
-    expect(mocks.createSignedUrl).toHaveBeenCalledWith('357002ca-7a72-4aa3-9ba2-e5a7b73fe49b/com.app/icon', expect.any(Number))
-  })
-
-  it('re-signs Capgo public storage URLs for platform admin', async () => {
-    mocks.createSignedUrl.mockResolvedValue({
-      data: { signedUrl: 'https://signed.example/icon.png' },
-      error: null,
-    })
-    const context = {} as Parameters<typeof createPlatformAdminSignedImageUrl>[0]
-    await expect(createPlatformAdminSignedImageUrl(
-      context,
-      'https://example.supabase.co/storage/v1/object/public/images/org/org-1/com.app/icon',
-    )).resolves.toBe('https://signed.example/icon.png')
-    expect(mocks.createSignedUrl).toHaveBeenCalledWith('org/org-1/com.app/icon', expect.any(Number))
-  })
-
-  it('keeps external CDN URLs unsigned for platform admin', async () => {
-    const context = {} as Parameters<typeof createPlatformAdminSignedImageUrl>[0]
-    await expect(createPlatformAdminSignedImageUrl(context, 'https://cdn.example/logo.png'))
-      .resolves
-      .toBe('https://cdn.example/logo.png')
-    expect(mocks.createSignedUrl).not.toHaveBeenCalled()
-  })
 })

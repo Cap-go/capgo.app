@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from 'vitest'
 import { cleanupPostgresClient, executeSQL } from './test-utils.ts'
 
-describe('admin A/B test distribution index', () => {
+describe('onboarding A/B assignment index', () => {
   afterAll(async () => {
     await cleanupPostgresClient()
   })
