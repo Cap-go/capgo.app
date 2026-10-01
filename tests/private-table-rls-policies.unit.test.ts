@@ -40,7 +40,9 @@ describe('private table RLS policies', () => {
           target_tables.table_name,
           count(p.oid)::integer AS policy_count,
           COALESCE(bool_and(
-            p.polcmd = '*'
+            c.relrowsecurity
+            AND NOT p.polpermissive
+            AND p.polcmd = '*'
             AND p.polroles = ARRAY[0::oid]
             AND pg_get_expr(p.polqual, p.polrelid) = 'false'
             AND pg_get_expr(p.polwithcheck, p.polrelid) = 'false'
