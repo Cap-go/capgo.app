@@ -129,9 +129,10 @@ $$;
 -- 2. apply_usage_overage takes the plan's included amount
 -- ---------------------------------------------------------------------------
 --
--- Same body as 20260930094441 except the credit cost call. The new
--- parameter defaults to 0 so a backend deployed before this migration
--- keeps working with the old (bottom of the ladder) pricing.
+-- Same body as 20260930094441 except the credit cost call and the
+-- covered-usage walk. The new parameter defaults to 0 so a backend
+-- deployed before this migration keeps working with the old (bottom of
+-- the ladder) pricing.
 
 DROP FUNCTION public.apply_usage_overage(
     uuid,
@@ -181,6 +182,13 @@ DECLARE
   v_latest_event_id uuid;
   v_latest_overage_amount numeric;
   v_needs_new_record boolean := false;
+  v_budget numeric;
+  v_start numeric;
+  v_end numeric;
+  v_slice numeric;
+  v_slice_cost numeric;
+  v_unit_factor numeric;
+  step_rec public.capgo_credits_steps%ROWTYPE;
   grant_rec public.usage_credit_grants%ROWTYPE;
 BEGIN
   -- Early exit for invalid input
@@ -398,11 +406,41 @@ BEGIN
     v_event_id := v_latest_event_id;
   END IF;
 
-  -- Calculate how much overage is covered by credits
-  IF v_per_unit > 0 THEN
-    v_overage_paid := LEAST(p_overage_amount, (v_applied + v_existing_credits_debited) / v_per_unit);
-  ELSE
+  -- Calculate how much overage is covered by credits. Walk the same tier
+  -- slices as calculate_credit_cost: a blended rate would overstate the
+  -- usage partial credits cover, since the cheaper tiers come last.
+  v_budget := v_applied + v_existing_credits_debited;
+  IF v_per_unit <= 0 OR v_budget >= v_required THEN
     v_overage_paid := p_overage_amount;
+  ELSE
+    v_start := GREATEST(COALESCE(p_included_amount, 0), 0);
+    v_end := v_start + p_overage_amount;
+    FOR step_rec IN
+      SELECT *
+      FROM public.capgo_credits_steps
+      WHERE type = p_metric::text
+        AND step_max > v_start
+        AND step_min < v_end
+      ORDER BY step_min ASC
+    LOOP
+      EXIT WHEN v_budget <= 0;
+
+      v_slice := LEAST(v_end, step_rec.step_max::numeric) - GREATEST(v_start, step_rec.step_min::numeric);
+      CONTINUE WHEN v_slice <= 0 OR step_rec.price_per_unit <= 0;
+
+      v_unit_factor := GREATEST(NULLIF(step_rec.unit_factor, 0), 1)::numeric;
+      v_slice_cost := CEILING(v_slice / v_unit_factor) * step_rec.price_per_unit::numeric;
+
+      IF v_budget >= v_slice_cost THEN
+        v_overage_paid := v_overage_paid + v_slice;
+        v_budget := v_budget - v_slice_cost;
+      ELSE
+        v_overage_paid := v_overage_paid
+          + FLOOR(v_budget / step_rec.price_per_unit::numeric) * v_unit_factor;
+        v_budget := 0;
+      END IF;
+    END LOOP;
+    v_overage_paid := LEAST(v_overage_paid, p_overage_amount);
   END IF;
 
   RETURN QUERY SELECT

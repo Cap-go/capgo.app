@@ -137,20 +137,22 @@ async function getUsage(orgId: string) {
 
   if (currentPlan) {
     try {
-      const includedBandwidthBytes = Math.round(currentPlan.bandwidth * 1073741824)
-      const includedStorageBytes = Math.round(currentPlan.storage * 1073741824)
+      // Credit-only orgs have no plan allowance: billing prices all usage
+      // from the bottom of the tier ladder.
+      const creditsOnly = isCreditsOnlyOrg(organizationStore.currentOrganization)
+      const included = {
+        mau: creditsOnly ? 0 : currentPlan.mau,
+        bandwidth: creditsOnly ? 0 : Math.round(currentPlan.bandwidth * 1073741824),
+        storage: creditsOnly ? 0 : Math.round(currentPlan.storage * 1073741824),
+        build_time: creditsOnly ? 0 : currentPlan.build_time_unit,
+      }
       const overageCost = await calculateCreditCost({
         org_id: orgId,
-        mau: Math.max(totalMau - currentPlan.mau, 0),
-        bandwidth: Math.max(totalBandwidthBytes - includedBandwidthBytes, 0),
-        storage: Math.max(totalStorageBytes - includedStorageBytes, 0),
-        build_time: Math.max(totalBuildTime - currentPlan.build_time_unit, 0),
-        included: {
-          mau: currentPlan.mau,
-          bandwidth: includedBandwidthBytes,
-          storage: includedStorageBytes,
-          build_time: currentPlan.build_time_unit,
-        },
+        mau: Math.max(totalMau - included.mau, 0),
+        bandwidth: Math.max(totalBandwidthBytes - included.bandwidth, 0),
+        storage: Math.max(totalStorageBytes - included.storage, 0),
+        build_time: Math.max(totalBuildTime - included.build_time, 0),
+        included,
       })
       estimatedUsagePrice = roundNumber(overageCost.total_cost)
     }

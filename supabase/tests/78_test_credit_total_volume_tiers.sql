@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(12);
+SELECT plan(14);
 
 -- Credit tiers follow total usage: overage is priced on the slice
 -- [included, included + overage) of the tier ladder.
@@ -24,7 +24,8 @@ SELECT
 SELECT
     is(
         to_regprocedure(
-            'public.apply_usage_overage(uuid, public.credit_metric_type, numeric, timestamptz, timestamptz, jsonb)'
+            'public.apply_usage_overage(uuid, public.credit_metric_type, '
+            'numeric, timestamptz, timestamptz, jsonb)'
         ),
         NULL,
         'six-argument apply_usage_overage is replaced, no ambiguous overload'
@@ -137,6 +138,89 @@ SELECT
           )$$,
         $$VALUES (600.0::numeric)$$,
         'apply_usage_overage prices overage above the included amount'
+    );
+
+-- Partial credits: covered usage follows the tier slices, not a blended
+-- rate. 4M MAU above a 1M plan costs 2M x $0.0006 + 2M x $0.00045 = $2100.
+-- $900 of credits covers 1.5M MAU of the first slice; a blended rate
+-- would claim about 1.71M.
+DO $$
+BEGIN
+  PERFORM tests.create_supabase_user('tier_credits_user', 'tier-credits@example.com', '555-555-0178');
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TEMP TABLE tier_ctx (org_id uuid) ON COMMIT DROP;
+
+WITH user_insert AS (
+    INSERT INTO public.users (id, email, created_at, updated_at)
+    SELECT
+        tests.get_supabase_uid('tier_credits_user'),
+        'tier-credits@example.com',
+        now(),
+        now()
+    RETURNING id
+),
+
+org_insert AS (
+    INSERT INTO public.orgs (id, created_by, name, management_email)
+    SELECT
+        gen_random_uuid(),
+        user_insert.id,
+        'Tier Credits Org',
+        'tier-credits@example.com'
+    FROM user_insert
+    RETURNING id
+),
+
+grant_insert AS (
+    INSERT INTO public.usage_credit_grants (
+        org_id,
+        credits_total,
+        credits_consumed,
+        granted_at,
+        expires_at,
+        source
+    )
+    SELECT
+        org_insert.id,
+        900,
+        0,
+        now(),
+        now() + interval '1 year',
+        'manual'
+    FROM org_insert
+    RETURNING org_id
+)
+
+INSERT INTO tier_ctx (org_id)
+SELECT grant_insert.org_id FROM grant_insert;
+
+CREATE TEMP TABLE tier_result ON COMMIT DROP AS
+SELECT r.*
+FROM tier_ctx,
+    LATERAL public.apply_usage_overage(
+        tier_ctx.org_id,
+        'mau',
+        4000000,
+        date_trunc('month', now()),
+        date_trunc('month', now()) + interval '1 month',
+        '{"usage": 5000000, "limit": 1000000}'::jsonb,
+        1000000
+    ) AS r;
+
+SELECT
+    results_eq(
+        $$SELECT credits_required, credits_applied FROM tier_result$$,
+        $$VALUES (2100.0::numeric, 900.0::numeric)$$,
+        'partial credits are fully applied against the tiered cost'
+    );
+
+SELECT
+    results_eq(
+        $$SELECT overage_covered, overage_unpaid FROM tier_result$$,
+        $$VALUES (1500000.0::numeric, 2500000.0::numeric)$$,
+        'covered usage walks the tier slices'
     );
 
 SELECT * FROM finish(); -- noqa: AM04

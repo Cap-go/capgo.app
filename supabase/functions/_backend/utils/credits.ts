@@ -71,7 +71,7 @@ export function priceCreditTiers(steps: CreditTierStep[], value: number, include
   let cost = 0
 
   const addTier = (step: CreditTierStep, rawUsage: number) => {
-    const unitFactor = step.unit_factor || 1
+    const unitFactor = Math.max(step.unit_factor || 1, 1)
     // Convert using unit_factor and round up for pricing
     const unitsUsed = Math.ceil(rawUsage / unitFactor)
     const tierCost = unitsUsed * step.price_per_unit

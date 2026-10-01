@@ -111,6 +111,8 @@ describe('credits pricing API', () => {
     // Nothing included: priced from the bottom of the ladder.
     const fromZero = await calculate()
     expect(fromZero.breakdown.mau.cost).toBeCloseTo(3000, 6)
+    // 0-100 TB walks every tier up to 63-100 TB ($0.015/GiB)
+    expect(fromZero.breakdown.bandwidth.cost).toBeCloseTo(2214.4, 6)
   })
 
   it.concurrent('rejects negative build_time input', async () => {

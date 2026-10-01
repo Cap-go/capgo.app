@@ -48,12 +48,13 @@ describe('priceCreditTiers', () => {
     expect(result.cost).toBeCloseTo(2100, 9)
   })
 
-  it('keeps cost per MAU going down with volume above 1M', () => {
-    const perMau = [2, 3, 5, 10, 20, 50].map((millions) => {
-      const total = millions * 1_000_000
-      return (249 + priceCreditTiers(mauSteps, total - 1_000_000, 1_000_000).cost) / total
+  it('keeps overage cost per MAU going down with volume above 1M', () => {
+    // Overage only, on a plan that includes 1M MAU
+    const perMau = [1, 2, 4, 9, 19, 49, 149].map((millions) => {
+      const overage = millions * 1_000_000
+      return priceCreditTiers(mauSteps, overage, 1_000_000).cost / overage
     })
-    for (let i = 2; i < perMau.length; i++)
+    for (let i = 1; i < perMau.length; i++)
       expect(perMau[i]).toBeLessThanOrEqual(perMau[i - 1])
   })
 
