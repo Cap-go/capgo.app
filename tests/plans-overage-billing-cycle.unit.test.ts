@@ -176,6 +176,7 @@ describe('userAbovePlan overage billing cycle', () => {
       p_overage_amount: 500,
       p_billing_cycle_start: cycle.subscription_anchor_start,
       p_billing_cycle_end: cycle.subscription_anchor_end,
+      p_included_amount: 1000,
     }))
   })
 })
