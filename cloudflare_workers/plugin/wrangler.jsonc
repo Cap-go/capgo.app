@@ -17,12 +17,10 @@
     "prod_eu": {
       "name": "capgo_plugin-eu-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-eu-prod",
-        // /updates edge cache (Cache API + purge-by-tag): "off", "on" or a share of
-        // devices such as "1%". Takes effect when CF_CACHE_PURGE_TOKEN or
-        // CF_ANALYTICS_TOKEN (with Zone Read + Cache Purge) is in
-        // internal/cloudflare/.env.prod (deployed to every worker).
-        "UPDATES_EDGE_CACHE": "off"
+        // UPDATES_EDGE_CACHE (/updates edge cache: off | on | share like 1%) is a
+        // worker secret so it changes without a deploy:
+        //   bun run updates-edge-cache:set 1%
+        "ENV_NAME": "capgo_plugin-eu-prod"
       },
       "observability": {
         "issues": { "enabled": true },
@@ -152,8 +150,7 @@
     "prod_me": {
       "name": "capgo_plugin-me-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-me-prod",
-        "UPDATES_EDGE_CACHE": "off"
+        "ENV_NAME": "capgo_plugin-me-prod"
       },
       "observability": {
         "issues": { "enabled": true },
@@ -249,8 +246,7 @@
     "prod_hk": {
       "name": "capgo_plugin-hk-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-hk-prod",
-        "UPDATES_EDGE_CACHE": "off"
+        "ENV_NAME": "capgo_plugin-hk-prod"
       },
       "observability": {
         "issues": { "enabled": true },
@@ -346,8 +342,7 @@
     "prod_jp": {
       "name": "capgo_plugin-jp-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-jp-prod",
-        "UPDATES_EDGE_CACHE": "off"
+        "ENV_NAME": "capgo_plugin-jp-prod"
       },
       "observability": {
         "issues": { "enabled": true },
@@ -443,8 +438,7 @@
     "prod_as": {
       "name": "capgo_plugin-as-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-as-prod",
-        "UPDATES_EDGE_CACHE": "off"
+        "ENV_NAME": "capgo_plugin-as-prod"
       },
       "observability": {
         "issues": { "enabled": true },
@@ -540,8 +534,7 @@
     "prod_na": {
       "name": "capgo_plugin-na-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-na-prod",
-        "UPDATES_EDGE_CACHE": "off"
+        "ENV_NAME": "capgo_plugin-na-prod"
       },
       "observability": {
         "issues": { "enabled": true },
@@ -637,8 +630,7 @@
     "prod_af": {
       "name": "capgo_plugin-af-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-af-prod",
-        "UPDATES_EDGE_CACHE": "off"
+        "ENV_NAME": "capgo_plugin-af-prod"
       },
       "placement": {
         "region": "gcp:africa-south1"
@@ -734,8 +726,7 @@
     "prod_oc": {
       "name": "capgo_plugin-oc-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-oc-prod",
-        "UPDATES_EDGE_CACHE": "off"
+        "ENV_NAME": "capgo_plugin-oc-prod"
       },
       "observability": {
         "issues": { "enabled": true },
@@ -831,8 +822,7 @@
     "prod_sa": {
       "name": "capgo_plugin-sa-prod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-sa-prod",
-        "UPDATES_EDGE_CACHE": "off"
+        "ENV_NAME": "capgo_plugin-sa-prod"
       },
       "observability": {
         "issues": { "enabled": true },
@@ -916,8 +906,7 @@
     "preprod": {
       "name": "capgo_plugin-eu-preprod",
       "vars": {
-        "ENV_NAME": "capgo_plugin-eu-preprod",
-        "UPDATES_EDGE_CACHE": "off"
+        "ENV_NAME": "capgo_plugin-eu-preprod"
       },
       "observability": {
         "issues": { "enabled": true },
