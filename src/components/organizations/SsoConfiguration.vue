@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { SsoRoleMapping } from '~/components/organizations/SsoRoleMappingDialog.vue'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconCopy from '~icons/heroicons/document-duplicate'
@@ -88,6 +88,11 @@ function onRoleMappingSaved(providerId: string, roleMapping: SsoRoleMapping | nu
 }
 
 const isOrgSuperAdmin = computed(() => isSuperAdminRole(organizationStore.organizations.find(org => org.gid === props.orgId)?.role))
+
+// Unsharing is allowed to super admins of either org.
+function canStopSharing(orgId: string) {
+  return isOrgSuperAdmin.value || isSuperAdminRole(organizationStore.organizations.find(org => org.gid === orgId)?.role)
+}
 
 function sharedWith(providerId: string) {
   return sharedLinks.value.filter(link => link.provider_id === providerId)
@@ -530,6 +535,15 @@ onMounted(async () => {
   await Promise.all([fetchProviders(), fetchLinks(), fetchSpMetadata()])
 })
 
+// The page keeps this component mounted when the user switches orgs.
+watch(() => props.orgId, async () => {
+  providers.value = []
+  sharedLinks.value = []
+  linkedProviders.value = []
+  recentlyCreatedId.value = null
+  await Promise.all([fetchProviders(), fetchLinks()])
+})
+
 // Expose showAddForm so parent can control it
 defineExpose({
   showAddForm,
@@ -927,6 +941,7 @@ defineExpose({
           {{ link.org_name }}
           <span v-if="!link.has_role_mapping" class="text-amber-600 dark:text-amber-400">({{ t('sso-shared-no-mapping-short') }})</span>
           <button
+            v-if="canStopSharing(link.org_id)"
             type="button"
             class="text-slate-500 hover:text-slate-700 dark:hover:text-white"
             :aria-label="`${t('sso-stop-sharing')} ${link.org_name}`"
@@ -986,6 +1001,7 @@ defineExpose({
         </div>
         <div class="flex items-center gap-2 shrink-0">
           <button
+            v-if="isOrgSuperAdmin"
             type="button"
             class="d-btn d-btn-outline d-btn-sm"
             @click="roleMappingDialog?.open({ id: linked.provider_id, domain: linked.domain, role_mapping: linked.role_mapping }, { shared: true })"
@@ -993,7 +1009,7 @@ defineExpose({
             {{ t('sso-role-mapping-title') }}
           </button>
           <button
-            v-if="isOrgSuperAdmin"
+            v-if="canStopSharing(linked.owner_org_id)"
             type="button"
             class="d-btn d-btn-error d-btn-outline d-btn-sm"
             @click="stopSharing(linked.provider_id, orgId, linked.domain, linked.owner_org_name)"

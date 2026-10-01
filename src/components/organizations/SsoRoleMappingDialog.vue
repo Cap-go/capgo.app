@@ -105,7 +105,9 @@ async function save(roleMapping: SsoRoleMapping | null): Promise<boolean> {
 
 function currentMapping(): SsoRoleMapping {
   return {
-    rules: rules.value.map(rule => ({ ...rule, attribute: rule.attribute.trim(), value: rule.value.trim(), apps: rule.apps.map(app => ({ ...app })) })),
+    // A blank rule (the placeholder added when opening an empty mapping) is
+    // dropped instead of failing validation.
+    rules: rules.value.filter(rule => rule.attribute.trim() && rule.value.trim()).map(rule => ({ ...rule, attribute: rule.attribute.trim(), value: rule.value.trim(), apps: rule.apps.map(app => ({ ...app })) })),
     default_role: defaultRole.value || null,
   }
 }

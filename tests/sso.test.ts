@@ -2398,11 +2398,32 @@ describe('sSO provider shared with another org', () => {
       [userId, linkedAppUuid],
     )).rows.map(row => row.name)
     const bindProvider = (bound: boolean) => pool.query('update public.sso_providers set provider_id = $1 where id = $2', [bound ? externalProviderId : null, providerId])
-    const api = (path: string, method: string, body?: unknown) => fetchTestRequest(getEndpointUrl(`/private/sso/providers${path}`), {
+    const api = (path: string, method: string, body?: unknown, headers = authHeaders) => fetchTestRequest(getEndpointUrl(`/private/sso/providers${path}`), {
       method,
-      headers: authHeaders,
+      headers,
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
+    // Super admin of a single org: USER_ID is super admin of both.
+    const adminIds: string[] = []
+    const createSuperAdmin = async (orgId: string) => {
+      const adminEmail = `sso-shared-admin-${randomUUID()}@capgo.app`
+      const { data: created, error } = await getSupabaseClient().auth.admin.createUser({ email: adminEmail, password, email_confirm: true })
+      if (error || !created.user)
+        throw error ?? new Error('Failed to create super admin for shared provider test')
+      adminIds.push(created.user.id)
+      await getSupabaseClient().from('users').upsert({ id: created.user.id, email: adminEmail })
+      const { error: memberError } = await getSupabaseClient().from('org_users').insert({ org_id: orgId, user_id: created.user.id, rbac_role_name: 'org_super_admin' as const })
+      if (memberError)
+        throw memberError
+      await pool.query(
+        `insert into public.role_bindings (principal_type, principal_id, role_id, scope_type, org_id, granted_by)
+         select public.rbac_principal_user(), $1, r.id, public.rbac_scope_org(), $2, $3 from public.roles r
+         where r.name = 'org_super_admin'
+           and not exists (select 1 from public.role_bindings rb where rb.principal_id = $1 and rb.org_id = $2 and rb.scope_type = public.rbac_scope_org())`,
+        [created.user.id, orgId, USER_ID],
+      )
+      return getAuthHeadersForCredentials(adminEmail, password)
+    }
 
     try {
       for (const [customerId, orgId] of [[ownerCustomerId, ownerOrgId], [linkedCustomerId, linkedOrgId]]) {
@@ -2471,6 +2492,15 @@ describe('sSO provider shared with another org', () => {
       expect((await api(`/${providerId}/links`, 'POST', { org_id: linkedOrgId })).status).toBe(200)
       expect((await api(`/${providerId}/links`, 'POST', { org_id: linkedOrgId })).status).toBe(409)
 
+      const ownerAdminHeaders = await createSuperAdmin(ownerOrgId)
+      const linkedAdminHeaders = await createSuperAdmin(linkedOrgId)
+      // Neither side alone can share the provider.
+      for (const headers of [ownerAdminHeaders, linkedAdminHeaders]) {
+        const response = await api(`/${providerId}/links`, 'POST', { org_id: linkedOrgId }, headers)
+        expect(response.status).toBe(403)
+        expect((await response.json() as { error: string }).error).toBe('link_requires_super_admin')
+      }
+
       const ownerLinks = await (await api(`/${ownerOrgId}/links`, 'GET')).json() as { shared: Array<{ provider_id: string, org_id: string }>, linked: unknown[] }
       expect(ownerLinks.shared).toEqual([expect.objectContaining({ provider_id: providerId, org_id: linkedOrgId })])
       expect(ownerLinks.linked).toEqual([])
@@ -2498,13 +2528,14 @@ describe('sSO provider shared with another org', () => {
       expect(await orgRole(linkedOrgId)).toEqual([])
       await bindProvider(false)
 
-      // The linked org's mapping may only target the linked org's apps.
+      // The linked org's mapping belongs to the linked org's super admins, and
+      // may only target the linked org's apps.
+      const linkedMapping = { rules: [{ attribute: 'groups', value: 'linked-team', org_role: 'org_member', apps: [{ app_id: linkedAppUuid, role: 'app_admin' }] }], default_role: null }
+      expect((await api(`/${providerId}/links/${linkedOrgId}`, 'PUT', { role_mapping: linkedMapping }, ownerAdminHeaders)).status).toBe(403)
       expect((await api(`/${providerId}/links/${linkedOrgId}`, 'PUT', {
         role_mapping: { rules: [{ attribute: 'groups', value: 'linked-team', org_role: 'org_member', apps: [{ app_id: ownerAppUuid, role: 'app_admin' }] }], default_role: null },
-      })).status).toBe(400)
-      expect((await api(`/${providerId}/links/${linkedOrgId}`, 'PUT', {
-        role_mapping: { rules: [{ attribute: 'groups', value: 'linked-team', org_role: 'org_member', apps: [{ app_id: linkedAppUuid, role: 'app_admin' }] }], default_role: null },
-      })).status).toBe(200)
+      }, linkedAdminHeaders)).status).toBe(400)
+      expect((await api(`/${providerId}/links/${linkedOrgId}`, 'PUT', { role_mapping: linkedMapping }, linkedAdminHeaders)).status).toBe(200)
       await bindProvider(true)
 
       expect((await provision()).status).toBe(200)
@@ -2529,16 +2560,22 @@ describe('sSO provider shared with another org', () => {
       expect((await denied.json() as { error: string }).error).toBe('sso_no_access')
       expect(await orgRole(ownerOrgId)).toEqual([])
 
-      // Once unlinked, SSO logins no longer touch the linked org.
-      expect((await api(`/${providerId}/links/${linkedOrgId}`, 'DELETE')).status).toBe(200)
-      expect((await api(`/${providerId}/links/${linkedOrgId}`, 'DELETE')).status).toBe(404)
+      // Once unlinked, SSO logins no longer touch the linked org: access it
+      // granted stays as it is.
       await setClaims(['linked-team'])
+      expect((await provision()).status).toBe(200)
+      expect(await orgRole(linkedOrgId)).toEqual(['org_member'])
+      expect((await api(`/${providerId}/links/${linkedOrgId}`, 'DELETE', undefined, linkedAdminHeaders)).status).toBe(200)
+      expect((await api(`/${providerId}/links/${linkedOrgId}`, 'DELETE')).status).toBe(404)
+      await setClaims(['nobody'])
       expect((await provision()).status).toBe(403)
-      expect(await orgRole(linkedOrgId)).toEqual([])
+      expect(await orgRole(linkedOrgId)).toEqual(['org_member'])
+      expect(await appRole()).toEqual(['app_admin'])
     }
     finally {
       await Promise.allSettled([
         getSupabaseClient().auth.admin.deleteUser(userId),
+        ...adminIds.map(adminId => getSupabaseClient().auth.admin.deleteUser(adminId)),
         (getSupabaseClient().from as any)('sso_providers').delete().eq('id', providerId),
         getSupabaseClient().from('apps').delete().in('id', [linkedAppUuid, ownerAppUuid]),
         getSupabaseClient().from('orgs').delete().in('id', [ownerOrgId, linkedOrgId, foreignOrgId]),

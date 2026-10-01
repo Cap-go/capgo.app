@@ -155,9 +155,12 @@ function resolveMappedAccess(provider: { role_mapping?: unknown }, authorizedSso
 
 // Orgs sharing the provider (sso_provider_org_links) are only provisioned
 // through their own role mapping: a link without a valid mapping grants
-// nothing. Sorted by org id so concurrent logins take org locks in one order.
+// nothing. Read inside the provisioning transaction with a share lock, so an
+// unlink or mapping change waits for this login instead of being overridden
+// by a stale read. Sorted by org id so concurrent logins take org locks in
+// one order.
 async function resolveOrgTargets(
-  pgClient: PgExecutor,
+  pgClient: PoolClient,
   provider: { id: string, org_id: string, role_mapping?: unknown },
   authorizedSsoProviders: string[],
   identities: any[],
@@ -170,6 +173,7 @@ async function resolveOrgTargets(
         and role_mapping is not null
         and org_id <> $2
       order by org_id
+      for share
     `,
     [provider.id, provider.org_id],
   )
@@ -263,17 +267,19 @@ function buildPublicUserSeed(userId: string, email: string, userMetadata: Record
   }
 }
 
+type TargetResolver = (client: PoolClient) => Promise<OrgAccessTarget[]>
+
 async function ensureOrgMembership(
   pgPool: ReturnType<typeof getPgClient>,
   requestId: string,
   userId: string,
-  targets: OrgAccessTarget[],
+  resolveTargets: TargetResolver,
 ): Promise<EnsureOrgMembershipResult> {
   try {
-    return await withPgTransaction(pgPool, client => provisionOrgsInTransaction(client, requestId, userId, targets))
+    return await withPgTransaction(pgPool, async client => provisionOrgsInTransaction(client, requestId, userId, await resolveTargets(client)))
   }
   catch (error) {
-    cloudlogErr({ requestId, message: 'SSO provisioning transaction rolled back', userId, orgIds: targets.map(target => target.orgId), error })
+    cloudlogErr({ requestId, message: 'SSO provisioning transaction rolled back', userId, error })
     throw error
   }
 }
@@ -700,7 +706,7 @@ async function mergeSsoIdentityWithExistingAccount(
     originalUserId: string
     duplicateUserId: string
     publicUser: PublicUserSeed
-    targets: OrgAccessTarget[]
+    resolveTargets: TargetResolver
     authorizedSsoProviders: string[]
   },
 ): Promise<{ noAccess: boolean }> {
@@ -721,7 +727,7 @@ async function mergeSsoIdentityWithExistingAccount(
       }
 
       await ensurePublicUserRowExistsInTransaction(pgClient, requestId, params.publicUser)
-      const membership = await provisionOrgsInTransaction(pgClient, requestId, params.originalUserId, params.targets)
+      const membership = await provisionOrgsInTransaction(pgClient, requestId, params.originalUserId, await params.resolveTargets(pgClient))
 
       try {
         await setAuthUserSsoOnly(pgClient, params.originalUserId, params.authorizedSsoProviders)
@@ -850,15 +856,6 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
         return quickError(403, 'provider_mismatch', 'SSO provider does not match the email domain provider')
       }
 
-      let targets: OrgAccessTarget[]
-      try {
-        targets = await resolveOrgTargets(getSharedPgClient(), mergeProvider, authorizedSsoProviders, userIdentities)
-      }
-      catch (linkLookupError) {
-        cloudlogErr({ requestId, message: 'Failed to resolve orgs sharing the SSO provider during merge', originalUserId, providerId: mergeProvider.id, error: linkLookupError })
-        return quickError(500, 'provider_lookup_failed', 'Failed to resolve SSO provider for your email domain')
-      }
-
       // Step 2: Transfer the SSO identity and provision the merged account atomically.
       let mergeResult: { noAccess: boolean }
       try {
@@ -869,7 +866,7 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
             ...publicUserSeed,
             id: originalUserId,
           },
-          targets,
+          resolveTargets: client => resolveOrgTargets(client, mergeProvider, authorizedSsoProviders, userIdentities),
           authorizedSsoProviders,
         })
       }
@@ -938,18 +935,9 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
       return quickError(500, 'public_user_sync_failed', 'Failed to create user profile for SSO account')
     }
 
-    let targets: OrgAccessTarget[]
-    try {
-      targets = await resolveOrgTargets(getSharedPgClient(), provider, authorizedSsoProviders, userIdentities)
-    }
-    catch (linkLookupError) {
-      cloudlogErr({ requestId, message: 'Failed to resolve orgs sharing the SSO provider', userId, providerId: provider.id, error: linkLookupError })
-      return quickError(500, 'provider_lookup_failed', 'Failed to resolve SSO provider for your email domain')
-    }
-
     let membershipResult: EnsureOrgMembershipResult
     try {
-      membershipResult = await ensureOrgMembership(getSharedPgClient(), requestId, userId, targets)
+      membershipResult = await ensureOrgMembership(getSharedPgClient(), requestId, userId, client => resolveOrgTargets(client, provider, authorizedSsoProviders, userIdentities))
     }
     catch {
       return quickError(500, 'provision_failed', 'Failed to provision user to organization')
