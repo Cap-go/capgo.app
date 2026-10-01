@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { spawn, spawnSync } from 'node:child_process'
-import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { copyFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import process from 'node:process'
 import net from 'node:net'
@@ -30,10 +30,14 @@ interface ScreenshotDevice {
   expectedWidth: number
   expectedHeight: number
   mobile: boolean
+  // Google Play screenshot folders that reuse this capture
+  androidDirs: string[]
 }
 
 const repoRoot = process.cwd()
 const outputRoot = resolve(repoRoot, 'fastlane/screenshots/en-US')
+const androidOutputRoot = resolve(repoRoot, 'fastlane/metadata/android/en-US/images')
+const androidScreenshotDirs = ['phoneScreenshots', 'sevenInchScreenshots', 'tenInchScreenshots']
 const logRoot = resolve(repoRoot, '.context/app-store-screenshots/logs')
 const screenshotBaseUrl = process.env.APP_STORE_SCREENSHOT_BASE_URL || 'http://127.0.0.1:5173'
 const supabaseConfig = getSupabaseWorktreeConfig(repoRoot)
@@ -54,6 +58,7 @@ const devices: ScreenshotDevice[] = [
     expectedWidth: 1290,
     expectedHeight: 2796,
     mobile: true,
+    androidDirs: [],
   },
   {
     slug: 'iphone-6-5',
@@ -64,6 +69,7 @@ const devices: ScreenshotDevice[] = [
     expectedWidth: 1284,
     expectedHeight: 2778,
     mobile: true,
+    androidDirs: [],
   },
   {
     slug: 'iphone-5-5',
@@ -74,6 +80,7 @@ const devices: ScreenshotDevice[] = [
     expectedWidth: 1242,
     expectedHeight: 2208,
     mobile: true,
+    androidDirs: ['phoneScreenshots'],
   },
   {
     slug: 'ipad-13',
@@ -84,6 +91,7 @@ const devices: ScreenshotDevice[] = [
     expectedWidth: 2048,
     expectedHeight: 2732,
     mobile: false,
+    androidDirs: ['sevenInchScreenshots', 'tenInchScreenshots'],
   },
 ]
 
@@ -311,7 +319,8 @@ async function ensureLocalStack() {
   const apiDomain = supabaseUrl.replace(/^https?:\/\//, '').replace(/\/$/, '') + '/functions/v1'
 
   if (!(await isHttpReady(`${screenshotBaseUrl}/login/`))) {
-    startProcess('frontend', ['bunx', 'vite', '--host', '127.0.0.1'], {
+    const frontendPort = new URL(screenshotBaseUrl).port || '5173'
+    startProcess('frontend', ['bunx', 'vite', '--host', '127.0.0.1', '--port', frontendPort, '--strictPort'], {
       ENV: 'local',
       SUPA_URL: supabaseUrl,
       SUPA_ANON: supabaseAnon,
@@ -348,14 +357,36 @@ async function prepareScreenshotData(supabaseUrl: string, supabaseAnon: string) 
     throw new Error(`Unable to enable demo preview for screenshots: ${error.message}`)
 }
 
+// Runs in the browser before every navigation: keep first-run hints, the
+// support usernames prompt, and the dev-server Vue DevTools button out of store screenshots.
+function hideScreenshotNoise() {
+  localStorage.setItem('capgo-section-intro-dismissed', JSON.stringify(['apps', 'bundles', 'channels', 'builds', 'devices', 'apikeys']))
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i)
+    if (!key?.startsWith('sb-') || !key.endsWith('-auth-token'))
+      continue
+    try {
+      const userId = JSON.parse(localStorage.getItem(key) || '{}')?.user?.id
+      if (userId)
+        localStorage.setItem(`capgo.supportUsernames.dismissed.${userId}`, '1')
+    }
+    catch {}
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    const style = document.createElement('style')
+    style.textContent = '#__vue-devtools-container__, [id^="vue-devtools"] { display: none !important; }'
+    document.head.appendChild(style)
+  })
+}
+
 async function login(page: Page) {
   await page.goto('/login/', { waitUntil: 'domcontentloaded' })
   await page.fill('[data-test="email"]', 'test@capgo.app')
-  await page.click('[data-test="continue"]')
   await page.waitForSelector('[data-test="password"]', { timeout: 30_000 })
   await page.fill('[data-test="password"]', 'testtest')
   await page.click('[data-test="submit"]')
-  await page.waitForURL(/\/(apps|dashboard)(\/|$)/, { timeout: 60_000 })
+  // Match the pathname only: a bounced login lands on /login?to=/dashboard
+  await page.waitForURL(url => /^\/(?:apps|dashboard)(?:\/|$)/.test(url.pathname), { timeout: 60_000 })
 }
 
 async function settlePage(page: Page) {
@@ -370,6 +401,10 @@ async function settlePage(page: Page) {
 async function captureScreenshots() {
   rmSync(outputRoot, { recursive: true, force: true })
   mkdirSync(outputRoot, { recursive: true })
+  for (const dir of androidScreenshotDirs) {
+    rmSync(resolve(androidOutputRoot, dir), { recursive: true, force: true })
+    mkdirSync(resolve(androidOutputRoot, dir), { recursive: true })
+  }
 
   const browser = await chromium.launch({ headless: true })
   try {
@@ -384,6 +419,7 @@ async function captureScreenshots() {
         reducedMotion: 'reduce',
         colorScheme: 'light',
       })
+      await context.addInitScript(hideScreenshotNoise)
       const page = await context.newPage()
 
       try {
@@ -393,7 +429,8 @@ async function captureScreenshots() {
           await page.goto(screen.path, { waitUntil: 'domcontentloaded' })
           await settlePage(page)
 
-          const fileName = `${device.filePrefix}-${String(index + 1).padStart(2, '0')}-${screen.slug}.png`
+          const baseName = `${String(index + 1).padStart(2, '0')}-${screen.slug}.png`
+          const fileName = `${device.filePrefix}-${baseName}`
           const outputPath = resolve(outputRoot, fileName)
           mkdirSync(dirname(outputPath), { recursive: true })
           await page.screenshot({
@@ -403,6 +440,8 @@ async function captureScreenshots() {
             caret: 'hide',
           })
           verifyScreenshotSize(outputPath, device)
+          for (const dir of device.androidDirs)
+            copyFileSync(outputPath, resolve(androidOutputRoot, dir, baseName))
           console.log(`${device.slug}: ${fileName}`)
         }
       }
@@ -420,7 +459,7 @@ try {
   const localStack = await ensureLocalStack()
   await prepareScreenshotData(localStack.supabaseUrl, localStack.supabaseAnon)
   await captureScreenshots()
-  console.log(`Screenshots written to ${outputRoot}`)
+  console.log(`Screenshots written to ${outputRoot} and ${androidOutputRoot}`)
 }
 finally {
   for (const managed of managedProcesses.reverse())
