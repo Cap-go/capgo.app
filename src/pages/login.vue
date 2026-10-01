@@ -866,9 +866,7 @@ onMounted(checkLogin)
             <p class="text-[0.7rem] font-semibold tracking-[0.18em] text-slate-500 uppercase dark:text-slate-300">
               {{ t('login-console-kicker') }}
             </p>
-            <p class="mt-1 truncate text-sm font-medium text-slate-600 dark:text-slate-300">
-              <span class="font-prompt">Capgo</span>
-            </p>
+            <CapgoWordtype class="mt-1.5 h-3.5 w-auto text-slate-600 dark:text-slate-300" />
           </div>
         </div>
 
