@@ -340,10 +340,11 @@ async function updateIt(c: Context, record: Database['public']['Tables']['app_ve
 }
 
 const MANIFEST_TRASH_CONCURRENCY = 10
-// One advisory lock per distinct file is held for the whole batch transaction,
-// so keep batches small enough that concurrent cleanups stay far below the
-// shared lock table size (max_locks_per_transaction * max_connections).
-const MANIFEST_CLEANUP_BATCH_SIZE = 200
+// One advisory lock per distinct file is held for the whole batch transaction.
+// The shared lock table holds max_locks_per_transaction (64) per backend, so a
+// batch below 64 locks cannot exhaust it even if every connection runs a
+// cleanup batch at once. 50 also leaves room for the relation locks.
+const MANIFEST_CLEANUP_BATCH_SIZE = 50
 
 interface ManifestCleanupEntry {
   id: number

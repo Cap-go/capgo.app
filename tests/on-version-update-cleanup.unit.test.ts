@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
   appVersionsMetaSelectEq,
@@ -456,7 +456,7 @@ describe('on_version_update manifest cleanup load', () => {
     expect(pgQuery).toHaveBeenCalledWith(expect.stringContaining('WITH prev AS'), expect.any(Array))
   }, 60_000)
 
-  it('takes one batched lock per 200 files instead of one lock transaction per file', async () => {
+  it('takes one batched lock statement per 50 files instead of one lock transaction per file', async () => {
     useManifestEntries(makeEntries(5000))
     // Most files of a bundle are shared with the previous version.
     mockCleanupPg({ sharedIds: new Set(makeEntries(5000).filter((_, i) => i % 10 !== 0).map(entry => entry.id)) })
@@ -464,7 +464,12 @@ describe('on_version_update manifest cleanup load', () => {
     const response = await deleteIt(createContext(), createVersion({ r2_path: null, manifest_count: 5000 }))
 
     expect(response.status).toBe(200)
-    expect(callOrder.filter(v => v === 'lock')).toHaveLength(25)
+    expect(callOrder.filter(v => v === 'lock')).toHaveLength(100)
+    // Below max_locks_per_transaction (64) so batches cannot exhaust the shared lock table.
+    const lockBatchSizes = pgQuery.mock.calls
+      .filter(([sql]) => typeof sql === 'string' && sql.includes('pg_advisory_xact_lock'))
+      .map(([, params]) => (params?.[0] as number[]).length)
+    expect(Math.max(...lockBatchSizes)).toBe(50)
     expect(moveObjectToTrash).toHaveBeenCalledTimes(500)
     expect(callOrder.filter(v => v.startsWith('db_release_row:'))).toHaveLength(4500)
     expect(callOrder.filter(v => v.startsWith('db_delete_row:'))).toHaveLength(500)
@@ -481,8 +486,8 @@ describe('on_version_update manifest cleanup load', () => {
     expect(getPgClient.mock.calls.length).toBeLessThanOrEqual(3)
     const pools = getPgClient.mock.results.map(result => result.value as { query: ReturnType<typeof vi.fn>, connect: ReturnType<typeof vi.fn> })
     const checkouts = pools.reduce((total, pool) => total + pool.connect.mock.calls.length, 0)
-    // One checked-out client per 200-file batch.
-    expect(checkouts).toBe(3)
+    // One checked-out client per 50-file batch.
+    expect(checkouts).toBe(10)
     // A leaked client would exhaust the bounded pool and stall cleanup.
     const clients = await Promise.all(pools.flatMap(pool => pool.connect.mock.results.map(result => result.value as Promise<{ release: ReturnType<typeof vi.fn> }>)))
     for (const client of clients)
@@ -506,5 +511,132 @@ describe('on_version_update manifest cleanup load', () => {
     const deletedIds = callOrder.filter(v => v.startsWith('db_delete_row:')).map(v => Number(v.split(':')[1]))
     expect(deletedIds).not.toContain(1150)
     expect(deletedIds).toHaveLength(199)
+  }, 30_000)
+})
+
+describe('on_version_update concurrent cleanup of versions sharing files', () => {
+  interface StoredManifestRow {
+    id: number
+    app_version_id: number
+    file_hash: string
+    file_name: string
+    s3_path: string
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    callOrder.length = 0
+    createStatsMeta.mockResolvedValue({ error: null })
+    appVersionsMetaSelectEq.mockReturnValue({
+      single: vi.fn(async () => ({ data: { size: 0 }, error: null })),
+    })
+    appVersionsMetaUpdateEq.mockResolvedValue({ error: null })
+  })
+
+  afterEach(() => {
+    getPgClient.mockImplementation(() => ({
+      query: pgQuery,
+      connect: vi.fn(async () => ({ query: pgQuery, release: vi.fn() })),
+    }))
+  })
+
+  it('trashes every object exactly once, before its last row, and leaves no rows', async () => {
+    const store = new Map<number, StoredManifestRow>()
+    const file = (i: number) => ({
+      file_hash: `hash-${i}`,
+      file_name: `file-${i}.js`,
+      s3_path: `orgs/org-1/apps/com.cleanup.test/delta/file-${i}.js`,
+    })
+    // Files 0-119 are shared by both versions; each version also owns 30 files.
+    for (let i = 0; i < 150; i++) {
+      store.set(1000 + i, { id: 1000 + i, app_version_id: 1, ...file(i) })
+      store.set(2000 + i, { id: 2000 + i, app_version_id: 2, ...file(i < 120 ? i : i + 1000) })
+    }
+    const yieldToOtherCleanup = () => new Promise(resolve => setTimeout(resolve, 0))
+
+    // Mirrors the release CTE and the trashed-row delete against the store.
+    const runSql = async (sql: string, params: any[] = []) => {
+      await yieldToOtherCleanup()
+      if (sql.includes('WITH batch AS')) {
+        const [ids, versionId] = params as [number[], number]
+        const batch = ids.map(id => store.get(id)).filter((row): row is StoredManifestRow => row?.app_version_id === versionId)
+        const releasable = batch.filter(row => row.s3_path === '' || [...store.values()].some(other =>
+          other.file_hash === row.file_hash && other.file_name === row.file_name && other.app_version_id !== row.app_version_id))
+        // The reference check reads a snapshot: the other cleanup can run
+        // before this delete lands unless the advisory lock serializes them.
+        await yieldToOtherCleanup()
+        for (const row of releasable)
+          store.delete(row.id)
+        const rows = batch.filter(row => !releasable.includes(row))
+        return { rows, rowCount: rows.length }
+      }
+      if (sql.includes('DELETE FROM public.manifest WHERE id = ANY')) {
+        const [ids, versionId] = params as [number[], number]
+        for (const id of ids) {
+          if (store.get(id)?.app_version_id === versionId)
+            store.delete(id)
+        }
+        return { rows: [], rowCount: ids.length }
+      }
+      if (sql.includes('SELECT COUNT(*)'))
+        return { rows: [{ count: [...store.values()].filter(row => row.app_version_id === params[0]).length }], rowCount: 1 }
+      if (sql.includes('WITH prev AS'))
+        return { rows: [], rowCount: 1 }
+      return { rows: [], rowCount: 0 }
+    }
+
+    // The advisory lock statement blocks until the other batch transaction ends.
+    let lockTail = Promise.resolve()
+    getPgClient.mockImplementation((() => ({
+      query: vi.fn(runSql),
+      connect: vi.fn(async () => {
+        let unlock: (() => void) | undefined
+        return {
+          release: vi.fn(),
+          query: vi.fn(async (sql: string, params?: any[]) => {
+            if (sql.includes('pg_advisory_xact_lock')) {
+              const previous = lockTail
+              lockTail = new Promise<void>((resolve) => {
+                unlock = resolve
+              })
+              await previous
+              return { rows: [], rowCount: 0 }
+            }
+            if (sql === 'COMMIT' || sql === 'ROLLBACK') {
+              unlock?.()
+              unlock = undefined
+              return { rows: [], rowCount: 0 }
+            }
+            return runSql(sql, params)
+          }),
+        }
+      }),
+    })) as any)
+    manifestSelectWhere.mockImplementation((async (condition: { queryChunks: { constructor: { name: string }, value?: unknown }[] }) => {
+      const versionId = condition.queryChunks.find(chunk => chunk?.constructor?.name === 'Param')?.value
+      return [...store.values()].filter(row => row.app_version_id === versionId).map(row => ({ ...row }))
+    }) as any)
+
+    const trashCounts = new Map<string, number>()
+    const trashedWithoutTracking: string[] = []
+    moveObjectToTrash.mockImplementation(async (_c: unknown, path: string) => {
+      if (![...store.values()].some(row => row.s3_path === path))
+        trashedWithoutTracking.push(path)
+      await yieldToOtherCleanup()
+      trashCounts.set(path, (trashCounts.get(path) ?? 0) + 1)
+      return true
+    })
+
+    const responses = await Promise.all([
+      deleteIt(createContext(), createVersion({ id: 1, r2_path: null, manifest_count: 150 })),
+      deleteIt(createContext(), createVersion({ id: 2, r2_path: null, manifest_count: 150 })),
+    ])
+
+    expect(responses.map(response => response.status)).toEqual([200, 200])
+    expect(store.size).toBe(0)
+    // 120 shared + 2 x 30 owned objects, each moved once and only while still tracked.
+    expect(trashCounts.size).toBe(180)
+    expect([...trashCounts.values()].every(count => count === 1)).toBe(true)
+    expect(trashedWithoutTracking).toEqual([])
   }, 30_000)
 })
