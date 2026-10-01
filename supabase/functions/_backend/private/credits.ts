@@ -411,6 +411,19 @@ async function resolveCheckoutSession(
   return unresolvedSession
 }
 
+// A usage amount is a non-negative finite number, or a non-empty string of
+// one. Number() alone would turn '', null, true or [] into 0.
+function parseUsageAmount(value: unknown): number | null {
+  let parsed: number
+  if (typeof value === 'number')
+    parsed = value
+  else if (typeof value === 'string' && value.trim() !== '')
+    parsed = Number(value)
+  else
+    return null
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+}
+
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.use('*', useCors)
@@ -434,10 +447,10 @@ app.post('/', async (c) => {
     throw simpleError('invalid_build_time', 'build_time must be a non-negative number')
 
   // Clients (the website calculator) send numeric strings: coerce once here.
-  const mau = Number(body.mau)
-  const bandwidth = Number(body.bandwidth)
-  const storage = Number(body.storage)
-  if (![mau, bandwidth, storage].every(value => Number.isFinite(value) && value >= 0))
+  const mau = parseUsageAmount(body.mau)
+  const bandwidth = parseUsageAmount(body.bandwidth)
+  const storage = parseUsageAmount(body.storage)
+  if (mau === null || bandwidth === null || storage === null)
     throw simpleError('invalid_usage', 'mau, bandwidth and storage must be non-negative numbers')
 
   const typedCredits = await getScopedCreditSteps(c as AppContext, orgId)

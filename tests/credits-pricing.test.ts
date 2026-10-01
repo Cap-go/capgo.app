@@ -133,16 +133,24 @@ describe('credits pricing API', () => {
     expect(data.total_cost).toBeCloseTo(3000, 6)
   })
 
-  it.concurrent('rejects non-numeric usage input', async () => {
+  it.concurrent.each([
+    ['non-numeric string', { mau: 'lots' }],
+    ['empty string', { mau: '' }],
+    ['null', { mau: null }],
+    ['boolean', { bandwidth: true }],
+    ['negative number', { mau: -1 }],
+    ['negative string', { storage: '-1' }],
+  ])('rejects %s usage input', async (_label, override) => {
     const response = await fetchTestRequest(getEndpointUrl('/private/credits'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        mau: 'lots',
+        mau: 0,
         bandwidth: 0,
         storage: 0,
+        ...override,
       }),
     })
 
