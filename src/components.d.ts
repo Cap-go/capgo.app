@@ -49,6 +49,7 @@ declare module 'vue' {
     BundleUploadsCard: typeof import('./components/dashboard/BundleUploadsCard.vue')['default']
     BundleUploadsChart: typeof import('./components/dashboard/BundleUploadsChart.vue')['default']
     CapgoLoader: typeof import('./components/CapgoLoader.vue')['default']
+    CapgoWordtype: typeof import('./components/CapgoWordtype.vue')['default']
     ChannelAccessPanel: typeof import('./components/permissions/ChannelAccessPanel.vue')['default']
     ChannelConsoleAssignMockup: typeof import('./components/dashboard/ChannelConsoleAssignMockup.vue')['default']
     ChannelConsoleAssignOnboarding: typeof import('./components/dashboard/ChannelConsoleAssignOnboarding.vue')['default']

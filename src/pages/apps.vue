@@ -208,7 +208,7 @@ displayStore.defaultBack = '/apps'
               {{ t('get-started') }}
             </span>
             <h2 class="mt-4 text-2xl font-semibold md:text-3xl text-slate-900 dark:text-slate-50">
-              {{ t('start-using-capgo') }} <span class="font-prompt">Capgo</span> !
+              {{ t('start-using-capgo') }} Capgo !
             </h2>
             <p class="max-w-2xl mt-3 text-slate-700 dark:text-slate-200">
               {{ t('add-your-first-app-t') }}

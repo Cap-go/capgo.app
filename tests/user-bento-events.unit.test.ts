@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   appendUserBentoObservation,
   buildMappedUserBentoEvent,
+  buildUserBentoFieldUpdate,
   getPendingUserBentoEvents,
   parseUserBentoEvents,
 } from '../supabase/functions/_backend/utils/user_bento_events.ts'
@@ -32,8 +33,8 @@ describe('cli user Bento event registry', () => {
     })
   })
 
-  it('maps every frontend onboarding restart with only allowlisted details', () => {
-    expect(buildMappedUserBentoEvent({
+  it('clears pre-organization fields when onboarding restarts', () => {
+    expect(buildUserBentoFieldUpdate({
       sourceEvent: 'onboarding_resume_restarted',
       observedAt: '2026-08-23T12:00:00.000Z',
       tags: {
@@ -49,33 +50,62 @@ describe('cli user Bento event registry', () => {
         total_steps: 4,
       },
     })).toEqual({
-      bentoEvent: 'onboarding:resume_restarted',
-      delivery: 'every',
-      details: {
-        flow: 'pre_org',
-        observed_at: '2026-08-23T12:00:00.000Z',
-        onboarding_attempt_id: '84c27b64-9c96-4a05-b614-d63200b25799',
-        onboarding_run_id: 'run-new',
-        onboarding_version: 4,
-        resume_onboarding_attempt_id: '020acb55-8e96-44bb-8335-a7fc2379ea86',
-        resumed_from_run_id: 'run-old',
-        saved_step: 'organization',
-        source_event: 'onboarding_resume_restarted',
-        step_index: 2,
-        total_steps: 4,
-      },
+      preorg_app_id: '',
+      preorg_app_name: '',
+      preorg_app_name_followup_at: '',
+      preorg_intent: '',
     })
   })
 
-  it.each(['5.A', '5.C', '5.E', '5.F', '5.G'])('keeps onboarding analytics version %s in Bento events', (onboardingVersion) => {
-    expect(buildMappedUserBentoEvent({
+  it.each([
+    ['intent', { intent: 'builder' }, { preorg_intent: 'builder' }],
+    ['app_name', { app_id: 'com.test.app', app_name: 'Test App' }, {
+      preorg_app_id: 'com.test.app',
+      preorg_app_name: 'Test App',
+      preorg_app_name_followup_at: '2026-08-23T12:15:00.000Z',
+    }],
+    ['app_id', { app_id: 'com.test.app' }, {
+      preorg_app_id: 'com.test.app',
+      preorg_app_name_followup_at: '2026-08-23T12:15:00.000Z',
+    }],
+  ])('maps the %s step directly to Bento fields', (step, tags, expected) => {
+    expect(buildUserBentoFieldUpdate({
       sourceEvent: 'onboarding_step_completed',
-      observedAt: '2026-09-10T10:00:00.000Z',
-      tags: { onboarding_version: onboardingVersion },
-    })?.details.onboarding_version).toBe(onboardingVersion)
+      observedAt: '2026-08-23T12:00:00.000Z',
+      tags: { flow: 'pre_org', step, ...tags },
+    })).toEqual(expected)
   })
 
-  it('does not accept onboarding version labels for other integer fields', () => {
+  it('ignores other flows, missing values, and malformed timestamps', () => {
+    expect(buildUserBentoFieldUpdate({
+      sourceEvent: 'onboarding_step_completed',
+      observedAt: '2026-08-23T12:00:00.000Z',
+      tags: { flow: 'existing_org', intent: 'builder', step: 'intent' },
+    })).toBeUndefined()
+    expect(buildUserBentoFieldUpdate({
+      sourceEvent: 'onboarding_step_completed',
+      observedAt: '2026-08-23T12:00:00.000Z',
+      tags: { flow: 'pre_org', intent: '', step: 'intent' },
+    })).toBeUndefined()
+    expect(buildUserBentoFieldUpdate({
+      sourceEvent: 'onboarding_step_completed',
+      observedAt: 'not-a-timestamp',
+      tags: { flow: 'pre_org', intent: 'builder', step: 'intent' },
+    })).toBeUndefined()
+  })
+
+  it.each([
+    'onboarding_resume_restarted',
+    'onboarding_step_completed',
+  ])('does not emit the old %s custom Bento event', (sourceEvent) => {
+    expect(buildMappedUserBentoEvent({
+      sourceEvent,
+      observedAt: '2026-08-23T12:00:00.000Z',
+      tags: { flow: 'pre_org', intent: 'builder', step: 'intent' },
+    })).toBeUndefined()
+  })
+
+  it('does not accept strings for integer fields', () => {
     expect(buildMappedUserBentoEvent({
       sourceEvent: 'CLI Command Invoked',
       observedAt: '2026-09-10T10:00:00.000Z',
@@ -83,22 +113,6 @@ describe('cli user Bento event registry', () => {
     })?.details).toEqual({
       observed_at: '2026-09-10T10:00:00.000Z',
       source_event: 'CLI Command Invoked',
-    })
-  })
-
-  it('drops malformed onboarding attempt IDs', () => {
-    expect(buildMappedUserBentoEvent({
-      sourceEvent: 'onboarding_resume_restarted',
-      observedAt: '2026-08-23T12:00:00.000Z',
-      tags: {
-        flow: 'pre_org',
-        onboarding_attempt_id: 'not-a-uuid',
-        resume_onboarding_attempt_id: 'also-not-a-uuid',
-      },
-    })?.details).toEqual({
-      flow: 'pre_org',
-      observed_at: '2026-08-23T12:00:00.000Z',
-      source_event: 'onboarding_resume_restarted',
     })
   })
 

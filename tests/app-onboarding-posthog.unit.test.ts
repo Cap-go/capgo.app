@@ -43,4 +43,26 @@ describe('app onboarding step PostHog event', () => {
       nonPersonTags: { auth_type: 'system', step_id: 'run_device', todo_list_version: 4 },
     })
   })
+
+  it.concurrent('marks backend-inferred completion with its source step', () => {
+    expect(buildAppOnboardingStepPosthogEvent({
+      appId: 'com.example.app',
+      system: true,
+      change: {
+        stepId: 'add_code',
+        status: 'done',
+        at: '2026-09-30T10:00:00.000Z',
+        historyLength: 1,
+        historyFull: false,
+        completionSource: 'inferred',
+        inferredFromStepId: 'test_update',
+      },
+      orgId: 'org-id',
+      setup: { todo_list_version: 4, ota_todo_list_version: '1', source: 'manual', outcome: 'in_progress', steps: {} },
+    }).nonPersonTags).toMatchObject({
+      step_id: 'add_code',
+      step_completion_source: 'inferred',
+      step_inferred_from: 'test_update',
+    })
+  })
 })

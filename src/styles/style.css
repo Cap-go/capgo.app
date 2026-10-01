@@ -284,25 +284,6 @@
   --border-width-3: 3px;
 }
 
-@font-face {
-  font-family: 'AirbnbCerealLight';
-  font-style: normal;
-  font-weight: normal;
-  src: url('/fonts/AirbnbCerealLight.woff');
-}
-@font-face {
-  font-family: 'AirbnbCerealMedium';
-  font-style: normal;
-  font-weight: normal;
-  src: url('/fonts/AirbnbCerealMedium.woff');
-}
-@font-face {
-  font-family: 'AirbnbCerealBold';
-  font-style: normal;
-  font-weight: normal;
-  src: url('/fonts/AirbnbCerealBold.woff');
-}
-
 html {
   height: 100%;
   overflow: hidden;
