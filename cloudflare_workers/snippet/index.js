@@ -483,7 +483,7 @@ export default {
       BAQ: ZONE.SOUTH_AMERICA, // Barranquilla, Colombia
       BBI: ZONE.ASIA, // Bhubaneswar, India
       BCN: ZONE.EUROPE, // Barcelona, Spain
-      BDQ: ZONE.ASIA, // Jamnagar, India
+      BDQ: ZONE.ASIA, // Jamnagar (Vadodara airport code), India
       BEG: ZONE.EUROPE, // Belgrade, Serbia
       BEL: ZONE.SOUTH_AMERICA, // Belém, Brazil
       BEY: ZONE.MIDDLE_EAST, // Beirut, Lebanon
