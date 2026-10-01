@@ -1,12 +1,18 @@
 import type { Context } from 'hono'
 import { isBentoConfigured, trackBentoEvents } from './bento.ts'
-import { isFrontendOnboardingVersionLabel } from './frontend_onboarding_analytics_model.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
 import { closeClient, getPgClient } from './pg.ts'
 import { backgroundTask } from './utils.ts'
 
 export type TelemetryValue = string | number | boolean
 type UserBentoDetails = Record<string, TelemetryValue>
+
+const WEBNATIVE_ONBOARDING_VERSION_LABELS = ['5.A', '5.C', '5.E', '5.F', '5.G'] as const
+
+function isFrontendOnboardingVersionLabel(value: unknown): value is typeof WEBNATIVE_ONBOARDING_VERSION_LABELS[number] {
+  return typeof value === 'string'
+    && (WEBNATIVE_ONBOARDING_VERSION_LABELS as readonly string[]).includes(value)
+}
 
 type DetailField
   = | { key: string, type: 'boolean' }
