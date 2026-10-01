@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
-import { eq, sql } from 'drizzle-orm'
+import { eq, inArray, sql } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
 import { isVersionDeleted, purgeFileReadCache } from '../files/file_read_cache.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
@@ -452,7 +452,7 @@ async function cleanupManifestBatch(
 
     if (handled.length > 0) {
       const handledIds = handled.map(entry => entry.id)
-      await tx.execute(sql`DELETE FROM public.manifest WHERE id = ANY(${handledIds}::bigint[])`)
+      await tx.delete(manifest).where(inArray(manifest.id, handledIds))
     }
 
     return { deferred, failures }
