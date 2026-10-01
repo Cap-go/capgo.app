@@ -7,7 +7,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
-import { dirname, join, relative, resolve } from 'node:path'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
@@ -16,7 +16,6 @@ export const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../i
 export const PACKAGE_ENTRIES = ['plugin.json', 'mcp.json', 'skills', 'assets']
 
 const MAX_ASSET_BYTES = 5 * 1024 * 1024
-const HTTPS_URL = /^https:\/\/\S+$/
 const HEX_COLOR = /^#[0-9a-f]{6}$/i
 
 type Json = Record<string, any>
@@ -33,9 +32,21 @@ function checkLength(errors: string[], field: string, value: unknown, max: numbe
     errors.push(`${field} is ${value.length} characters, max ${max}`)
 }
 
+function isHttpsUrl(value: unknown): boolean {
+  if (typeof value !== 'string')
+    return false
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' && url.hostname.length > 0
+  }
+  catch {
+    return false
+  }
+}
+
 function checkUrl(errors: string[], field: string, value: unknown) {
   checkLength(errors, field, value, 1024)
-  if (typeof value === 'string' && !HTTPS_URL.test(value))
+  if (typeof value === 'string' && !isHttpsUrl(value))
     errors.push(`${field} must be an https URL`)
 }
 
@@ -51,19 +62,26 @@ function checkAsset(errors: string[], dir: string, field: string, value: unknown
     errors.push(`${field} must be a ./-prefixed path`)
     return
   }
-  const path = join(dir, value)
+  // Resolve first so ./assets/../README.md or hidden files cannot slip past the packaged set.
+  const path = resolve(dir, value)
+  const packaged = path.startsWith(resolve(dir, 'assets') + sep) && !relative(dir, path).split(sep).some(part => part.startsWith('.'))
+  if (!packaged) {
+    errors.push(`${field} must point to a non-hidden file under ./assets/ so it is packaged`)
+    return
+  }
   if (!existsSync(path)) {
     errors.push(`${field} points to missing file ${value}`)
     return
   }
-  if (!value.startsWith('./assets/'))
-    errors.push(`${field} must live under ./assets/ so it is packaged`)
   const file = readFileSync(path)
   if (file.length > MAX_ASSET_BYTES)
     errors.push(`${field} is larger than 5 MiB`)
+  // OpenAI also accepts JPEG, WebP and SVG; this package sticks to PNG so sizes can be checked here.
   const size = pngSize(file)
-  if (!size)
+  if (!size) {
+    errors.push(`${field} must be a valid PNG file`)
     return
+  }
   if (square && size.width !== size.height)
     errors.push(`${field} must be square, got ${size.width}x${size.height}`)
   if (Math.min(size.width, size.height) < 48 || Math.max(size.width, size.height) > 4096)
@@ -99,7 +117,7 @@ export function validateOpenAiPlugin(dir = PLUGIN_DIR): string[] {
     errors.push('version must be semver')
   checkLength(errors, 'description', manifest.description, 4000)
   checkLength(errors, 'author.name', manifest.author?.name, 120)
-  if (manifest.author?.url !== undefined && !HTTPS_URL.test(manifest.author.url))
+  if (manifest.author?.url !== undefined && !isHttpsUrl(manifest.author.url))
     errors.push('author.url must be an https URL')
 
   const ui = manifest.extensions?.['com.openai']?.interface as Json | undefined
@@ -118,7 +136,7 @@ export function validateOpenAiPlugin(dir = PLUGIN_DIR): string[] {
   const capabilities = ui.capabilities ?? []
   if (!Array.isArray(capabilities) || capabilities.length > 20 || capabilities.some((entry: unknown) => typeof entry !== 'string' || entry.length > 120))
     errors.push('capabilities must be at most 20 strings of 120 characters')
-  const prompts = ui.defaultPrompt ?? []
+  const prompts = typeof ui.defaultPrompt === 'string' ? [ui.defaultPrompt] : ui.defaultPrompt ?? []
   if (!Array.isArray(prompts) || prompts.length > 3 || prompts.some((entry: unknown) => typeof entry !== 'string' || entry.length > 128 || entry.includes('@')))
     errors.push('defaultPrompt must be at most 3 prompts of 128 characters without @mentions')
   for (const field of ['brandColor', 'brandColorDark']) {
@@ -132,8 +150,14 @@ export function validateOpenAiPlugin(dir = PLUGIN_DIR): string[] {
     if (ui[field] !== undefined)
       checkAsset(errors, dir, field, ui[field], true)
   }
-  for (const [index, screenshot] of (ui.screenshots ?? []).entries())
-    checkAsset(errors, dir, `screenshots[${index}]`, screenshot, false)
+  const screenshots = ui.screenshots ?? []
+  if (Array.isArray(screenshots)) {
+    for (const [index, screenshot] of screenshots.entries())
+      checkAsset(errors, dir, `screenshots[${index}]`, screenshot, false)
+  }
+  else {
+    errors.push('screenshots must be an array of paths')
+  }
 
   const mcp = JSON.parse(readFileSync(join(dir, 'mcp.json'), 'utf8')) as Json
   const servers = Object.entries(mcp.mcpServers ?? {}) as Array<[string, Json]>
@@ -142,7 +166,7 @@ export function validateOpenAiPlugin(dir = PLUGIN_DIR): string[] {
   for (const [name, server] of servers) {
     if (server.type !== 'streamable-http')
       errors.push(`mcp.json ${name}: type must be streamable-http`)
-    if (typeof server.url !== 'string' || !HTTPS_URL.test(server.url))
+    if (!isHttpsUrl(server.url))
       errors.push(`mcp.json ${name}: url must be an absolute https URL`)
   }
 
@@ -168,7 +192,10 @@ async function main() {
   mkdirSync(outDir, { recursive: true })
   rmSync(outFile, { force: true })
 
-  const files = PACKAGE_ENTRIES.flatMap(entry => listFiles(join(PLUGIN_DIR, entry))).map(file => relative(PLUGIN_DIR, file))
+  const files = PACKAGE_ENTRIES
+    .filter(entry => existsSync(join(PLUGIN_DIR, entry)))
+    .flatMap(entry => listFiles(join(PLUGIN_DIR, entry)))
+    .map(file => relative(PLUGIN_DIR, file))
   const zip = spawnSync('zip', ['-X', '-q', outFile, ...files], { cwd: PLUGIN_DIR, stdio: 'inherit' })
   if (zip.status !== 0)
     process.exit(zip.status ?? 1)
