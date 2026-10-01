@@ -4,12 +4,12 @@ import type { Database } from '../utils/supabase.types.ts'
 import { eq } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
 import { isVersionDeleted, purgeFileReadCache } from '../files/file_read_cache.ts'
+import { isCanonicalAppVersionR2Path } from '../utils/app_version_r2_path.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { persistVersionManifestEntries } from '../utils/manifest_persist.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { manifest } from '../utils/postgres_schema.ts'
-import { isCanonicalAppVersionR2Path } from '../utils/app_version_r2_path.ts'
 import { getPath, s3 } from '../utils/s3.ts'
 import { createStatsMeta } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
@@ -340,55 +340,75 @@ async function updateIt(c: Context, record: Database['public']['Tables']['app_ve
 }
 
 const MANIFEST_TRASH_CONCURRENCY = 10
+// One advisory lock per distinct file is held for the whole batch transaction,
+// so keep batches small enough that concurrent cleanups stay far below the
+// shared lock table size (max_locks_per_transaction * max_connections).
+const MANIFEST_CLEANUP_BATCH_SIZE = 200
 
-type ManifestCleanupEntry = {
+interface ManifestCleanupEntry {
   id: number
   file_hash: string
   file_name: string
   s3_path: string | null
 }
 
-// BEGIN/lock/COMMIT must share one connection, so run them on a checked-out
-// client rather than on the pool itself.
-async function trashManifestEntry(c: Context, pool: ReturnType<typeof getPgClient>, versionId: number, entry: ManifestCleanupEntry) {
+/**
+ * Locks every file of the batch, deletes the rows whose file is still used by
+ * another version (or has no R2 object), and returns the rows that hold the
+ * last reference so their R2 object can be trashed before the row is dropped.
+ *
+ * Locks use the same hashtext(file_hash), hashtext(file_name) keys as before,
+ * are taken in sorted order (no deadlock between concurrent batches), and are
+ * held only for these two statements, never across an R2 call. A per-file lock
+ * held over the HEAD/copy/delete round trip made concurrent deletions of
+ * versions sharing files queue behind each other file by file.
+ */
+async function releaseSharedManifestEntries(pool: ReturnType<typeof getPgClient>, versionId: number, ids: number[]): Promise<ManifestCleanupEntry[]> {
+  // BEGIN/lock/COMMIT must share one connection.
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
-    // Serialize shared-hash cleanup across concurrent deleted versions.
     // Do NOT use chr(0) as a separator — Postgres raises 54000 "null character not permitted".
     await client.query(
-      `SELECT pg_advisory_xact_lock(hashtext($1::text), hashtext($2::text))`,
-      [entry.file_hash, entry.file_name],
-    )
-
-    if (entry.s3_path) {
-      const refs = await client.query(
-        `SELECT 1 AS ok
+      `SELECT pg_advisory_xact_lock(k.hash_key, k.name_key)
+       FROM (
+         SELECT DISTINCT hashtext(file_hash::text) AS hash_key, hashtext(file_name::text) AS name_key
          FROM public.manifest
-         WHERE file_hash = $1
-           AND file_name = $2
-           AND app_version_id <> $3
-         LIMIT 1`,
-        [entry.file_hash, entry.file_name, versionId],
-      )
-
-      if (refs.rows.length === 0) {
-        const moved = await s3.moveObjectToTrash(c, entry.s3_path)
-        if (!moved) {
-          throw simpleError('cannot_move_manifest_s3_to_trash', 'Cannot move S3 object for deleted manifest file to trash', {
-            id: entry.id,
-            s3_path: entry.s3_path,
-          })
-        }
-      }
-    }
-
-    // Only delete the DB row after R2 is handled (or shared and kept).
-    await client.query(
-      `DELETE FROM public.manifest WHERE id = $1`,
-      [entry.id],
+         WHERE id = ANY($1::bigint[])
+           AND app_version_id = $2
+         ORDER BY 1, 2
+       ) AS k`,
+      [ids, versionId],
+    )
+    const lastReferences = await client.query<ManifestCleanupEntry>(
+      `WITH batch AS (
+         SELECT m.id, m.file_hash, m.file_name, m.s3_path,
+           COALESCE(m.s3_path, '') = ''
+             OR EXISTS (
+               SELECT 1
+               FROM public.manifest AS other
+               WHERE other.file_hash = m.file_hash
+                 AND other.file_name = m.file_name
+                 AND other.app_version_id <> m.app_version_id
+             ) AS releasable
+         FROM public.manifest AS m
+         WHERE m.id = ANY($1::bigint[])
+           AND m.app_version_id = $2
+       ),
+       released AS (
+         DELETE FROM public.manifest AS d
+         USING batch
+         WHERE d.id = batch.id
+           AND batch.releasable
+         RETURNING d.id
+       )
+       SELECT id, file_hash, file_name, s3_path
+       FROM batch
+       WHERE NOT releasable`,
+      [ids, versionId],
     )
     await client.query('COMMIT')
+    return lastReferences.rows.map(row => ({ ...row, id: Number(row.id) }))
   }
   catch (error) {
     try {
@@ -405,9 +425,45 @@ async function trashManifestEntry(c: Context, pool: ReturnType<typeof getPgClien
 }
 
 /**
+ * Trashes the R2 objects of last-reference rows, then deletes only the rows
+ * whose object was handled. Rows whose trash failed stay tracked for the retry.
+ */
+async function trashLastReferenceEntries(c: Context, pool: ReturnType<typeof getPgClient>, versionId: number, entries: ManifestCleanupEntry[]) {
+  const trashedIds: number[] = []
+  const failedEntries: ManifestCleanupEntry[] = []
+  let nextEntry = 0
+  const workers = Array.from({ length: Math.min(MANIFEST_TRASH_CONCURRENCY, entries.length) }, async () => {
+    while (nextEntry < entries.length) {
+      const entry = entries[nextEntry++]!
+      if (await s3.moveObjectToTrash(c, entry.s3_path!))
+        trashedIds.push(entry.id)
+      else
+        failedEntries.push(entry)
+    }
+  })
+  await Promise.all(workers)
+
+  if (trashedIds.length > 0) {
+    await pool.query(
+      `DELETE FROM public.manifest WHERE id = ANY($1::bigint[]) AND app_version_id = $2`,
+      [trashedIds, versionId],
+    )
+  }
+
+  const failedEntry = failedEntries[0]
+  if (failedEntry) {
+    throw simpleError('cannot_move_manifest_s3_to_trash', 'Cannot move S3 object for deleted manifest file to trash', {
+      id: failedEntry.id,
+      s3_path: failedEntry.s3_path,
+      failedCount: failedEntries.length,
+    })
+  }
+}
+
+/**
  * Trash unreferenced R2 objects first (exist → move to deleted-after-7-days/,
  * missing → ok), then delete that DB row. Never drop DB tracking before R2 is handled.
- * Per-file work is committed, so a timeout mid-pass is safe to retry. Leftover rows
+ * Work is committed per batch, so a timeout mid-pass is safe to retry. Leftover rows
  * after the normal retry budget (MAX_QUEUE_READS=5) are reclaimed by
  * sweep_deleted_version_manifests. Incomplete work throws so the queue retries;
  * already-trashed paths are idempotent.
@@ -416,49 +472,36 @@ async function deleteManifest(c: Context, record: Database['public']['Tables']['
   const readPgClient = getPgClient(c, true)
   const drizzleClient = getDrizzleClient(readPgClient)
 
-  let manifestEntries: ManifestCleanupEntry[] = []
+  let manifestIds: number[] = []
   try {
-    manifestEntries = await drizzleClient
-      .select({
-        id: manifest.id,
-        file_hash: manifest.file_hash,
-        file_name: manifest.file_name,
-        s3_path: manifest.s3_path,
-      })
+    const rows = await drizzleClient
+      .select({ id: manifest.id })
       .from(manifest)
       .where(eq(manifest.app_version_id, record.id))
+    manifestIds = rows.map(row => row.id)
   }
   finally {
     await closeClient(c, readPgClient)
   }
 
-  const startedWithRows = manifestEntries.length > 0
+  const startedWithRows = manifestIds.length > 0
 
   if (startedWithRows) {
-    // A fixed set of workers, each with one pool, drains the entries. Opening a
-    // pool per file meant thousands of Hyperdrive connections (and log lines)
-    // for a large bundle, which overflowed the Workers per-request log limit.
-    let nextEntry = 0
-    let failed = false
-    const workers = Array.from({ length: Math.min(MANIFEST_TRASH_CONCURRENCY, manifestEntries.length) }, async () => {
-      const workerPg = getPgClient(c, false)
-      try {
-        while (!failed && nextEntry < manifestEntries.length) {
-          const entry = manifestEntries[nextEntry++]!
-          try {
-            await trashManifestEntry(c, workerPg, record.id, entry)
-          }
-          catch (error) {
-            failed = true
-            throw error
-          }
-        }
+    // One pool for the whole pass: opening a pool per file meant thousands of
+    // Hyperdrive connections (and log lines) for a large bundle, which
+    // overflowed the Workers per-request log limit.
+    const cleanupPg = getPgClient(c, false)
+    try {
+      for (let offset = 0; offset < manifestIds.length; offset += MANIFEST_CLEANUP_BATCH_SIZE) {
+        const batchIds = manifestIds.slice(offset, offset + MANIFEST_CLEANUP_BATCH_SIZE)
+        const lastReferences = await releaseSharedManifestEntries(cleanupPg, record.id, batchIds)
+        if (lastReferences.length > 0)
+          await trashLastReferenceEntries(c, cleanupPg, record.id, lastReferences)
       }
-      finally {
-        await closeClient(c, workerPg)
-      }
-    })
-    await Promise.all(workers)
+    }
+    finally {
+      await closeClient(c, cleanupPg)
+    }
   }
 
   const writePgClient = getPgClient(c, false)
