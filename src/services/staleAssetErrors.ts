@@ -24,6 +24,12 @@ const TRANSIENT_NETWORK_ERROR_PATTERNS = [
   /^(?:.*: )?Failed to fetch$/i,
   /^(?:.*: )?Load failed$/i,
   /^(?:.*: )?NetworkError when attempting to fetch resource\.?$/i,
+  // posthog-js aborts its own outgoing request on an internal timeout, and
+  // exception autocapture then files that abort as a page error even though no
+  // application code raises it. Anchored to the SDK's exact timeout wording (the
+  // millisecond value varies, e.g. 3000ms or 10000ms) so a genuine app-side
+  // abort with a different message still reports.
+  /^(?:.*: )?PostHog request timed out after \d+ms$/i,
 ]
 
 // vue-router throws this when a lazy route component fails to load (e.g. a stale
