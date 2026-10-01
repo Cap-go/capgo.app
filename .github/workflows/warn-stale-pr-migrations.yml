@@ -1,0 +1,68 @@
+name: Warn stale PR migrations
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/*.sql'
+
+permissions:
+  contents: read
+  issues: write
+  # Pull request comments return 403 with read-only PR permissions.
+  pull-requests: write
+
+jobs:
+  warn:
+    name: Warn recently active PRs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - id: main-migrations
+        name: Find migrations added to main
+        env:
+          AFTER_SHA: ${{ github.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
+            echo 'No previous main SHA is available; skipping migration-order warnings.'
+            echo 'found=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed_migrations="$(git diff -M100% --name-only --diff-filter=AR "$BEFORE_SHA" "$AFTER_SHA" -- 'supabase/migrations/*.sql')"
+          if [[ -z "$changed_migrations" ]]; then
+            echo 'This push did not add or restamp a Supabase migration.'
+            echo 'found=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo 'found=true'
+            echo 'paths<<__MIGRATIONS__'
+            printf '%s\n' "$changed_migrations"
+            echo '__MIGRATIONS__'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Warn affected pull requests
+        if: steps.main-migrations.outputs.found == 'true'
+        uses: actions/github-script@v8
+        env:
+          MAIN_MIGRATION_PATHS: ${{ steps.main-migrations.outputs.paths }}
+        with:
+          script: |
+            const { pathToFileURL } = require('node:url')
+            const scriptUrl = pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/warn-stale-pr-migrations.mjs`).href
+            const { warnStalePrMigrations } = await import(scriptUrl)
+
+            await warnStalePrMigrations({
+              github,
+              context,
+              core,
+              mainMigrationPaths: process.env.MAIN_MIGRATION_PATHS.split('\n'),
+            })
