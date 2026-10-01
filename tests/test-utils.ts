@@ -26,7 +26,7 @@ export let POSTGRES_URL = getPostgresUrlFromEnv()
 
 type DirectDatabaseTestApp = Hono<{ Bindings: { SUPABASE_DB_URL: string } }>
 
-export async function requestDirectDatabaseRoute<T>(registerRoute: (app: DirectDatabaseTestApp) => void): Promise<T> {
+export async function requestDirectDatabaseRoute<T>(registerRoute: (app: DirectDatabaseTestApp) => void, path = '/'): Promise<T> {
   const globalWithEdgeRuntime = globalThis as typeof globalThis & {
     EdgeRuntime?: { waitUntil: (promise: Promise<unknown>) => void }
   }
@@ -39,7 +39,11 @@ export async function requestDirectDatabaseRoute<T>(registerRoute: (app: DirectD
     const app = new Hono<{ Bindings: { SUPABASE_DB_URL: string } }>()
     registerRoute(app)
 
-    const response = await app.request('http://local/', undefined, { SUPABASE_DB_URL: POSTGRES_URL })
+    const response = await app.request(new URL(path, 'http://local').toString(), undefined, { SUPABASE_DB_URL: POSTGRES_URL })
+    if (!response.ok) {
+      const body = await response.text()
+      throw new Error(`Direct database test route failed with ${response.status}: ${body}`)
+    }
     return await response.json() as T
   }
   finally {

@@ -24,12 +24,19 @@ describe('customer chart card', () => {
     app.mount(container)
     mountedApps.push(app)
 
-    const card = container.firstElementChild
+    const card = container.querySelector('[data-test="chart-card"]')
+    const header = container.querySelector('[data-test="chart-card-header"]')
+    const headerRow = container.querySelector('[data-test="chart-card-header-row"]')
+    const headerActions = container.querySelector('[data-test="chart-card-header-actions"]')
     const content = container.querySelector('[data-test="chart-content"]')?.parentElement
 
     expect(container.querySelector('[data-test="chart-collapse-toggle"]')).toBeNull()
+    expect(card?.classList).toContain('min-h-[460px]')
     expect(card?.classList).not.toContain('transition-[min-height,box-shadow]')
-    expect(container.querySelector('.shrink-0')).toBeNull()
+    expect(header?.classList).toContain('pt-5')
+    expect(headerRow?.classList).toContain('flex-col')
+    expect(headerRow?.classList).toContain('sm:flex-row')
+    expect(headerActions?.classList).not.toContain('shrink-0')
     expect(content).not.toBeNull()
     expect(content?.hasAttribute('id')).toBe(false)
   })
