@@ -20,7 +20,7 @@ colors:
   white: "#ffffff"
 typography:
   display:
-    fontFamily: "Prompt, Inter, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif"
     fontSize: "3.75rem"
     fontWeight: 700
     lineHeight: 1.2
@@ -134,11 +134,11 @@ The palette combines a deep slate operating shell with a rare azure highlight an
 
 ## 3. Typography
 
-**Display Font:** Prompt with Inter and system sans fallback.
+**Display Font:** Inter with system sans fallback. The "Capgo" wordmark is not a font: it is outlined Satoshi Black slanted 14°, baked as SVG paths (`CapgoWordtype`, `assets/brand/capgo-wordmark*.svg`).
 **Body Font:** Inter with system sans fallback.
 **Label/Mono Font:** System monospace is available for code-like values, but product UI labels stay in Inter.
 
-**Character:** The product uses one practical sans system for most UI, with Prompt reserved for brand-bearing display moments such as the Capgo mark. The type scale is fixed and compact, which suits dashboards, settings, tables, and release workflows.
+**Character:** The product uses one practical sans system for most UI, with the baked "Capgo" wordmark as the only brand-bearing type. The type scale is fixed and compact, which suits dashboards, settings, tables, and release workflows.
 
 ### Hierarchy
 - **Display** (700, 3.75rem, 1.2): Rare. Use for marketing-adjacent or onboarding hero moments only, not routine app screens.
@@ -151,7 +151,7 @@ The palette combines a deep slate operating shell with a rare azure highlight an
 
 **The Product Scale Rule.** Do not use fluid hero typography in console screens. Fixed rem sizes keep dense UI predictable.
 
-**The Prompt Restraint Rule.** Prompt can carry the brand mark. It must not appear in dense labels, tables, settings controls, or logs.
+**The Wordmark Rule.** Render "Capgo" as a logo only through `CapgoWordtype` or the brand SVGs. Never re-create it with a web font, and keep it out of dense labels, tables, settings controls, and logs.
 
 ## 4. Elevation
 
@@ -200,6 +200,7 @@ Capgo uses a hybrid of tonal layering and light structural shadows. The default 
 
 ### Logo / Loaders
 - **Mark:** A rounded diamond with the capacitor-symbol plates cut out. Master SVGs live in `assets/brand/`; every raster (favicons, PWA, native icons and splash screens, `public/capgo.webp`) is generated from them with `bun run brand:assets`. Do not hand-edit generated rasters.
+- **Wordmark:** Mark + "Capgo" in outlined Satoshi Black slanted 14° (forward = fast updates), mark upright, gap 0.13em, mark nudged slightly below cap-center. Files: `assets/brand/capgo-wordmark*.svg` (lockup) and `capgo-wordtype*.svg` (text only).
 - **App icon:** White mark on navy `#001827` rounded square. Environment favicons swap only the square color (development azure, local green, preprod amber).
 - **Page loading:** Use `PageLoader` / `CapgoLoader` (quarter-turn spin with pulsing plates) for full-page or card-level waits. Keep `Spinner` for inline and in-button feedback.
 

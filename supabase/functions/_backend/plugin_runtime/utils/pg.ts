@@ -22,7 +22,7 @@ import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { resolveRolloutDecision } from './rollout.ts'
 import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
-import { getUpdatesEdgeCacheTtlSeconds, updatesCacheTags } from './updatesEdgeCache.ts'
+import { updatesCacheTags } from './updatesEdgeCache.ts'
 
 /**
  * Plugin PG client handle. On Hyperdrive (workerd) this is a per-request `Client`;
@@ -908,7 +908,10 @@ export function requestInfosChannelPostgres(
 }
 
 const MANIFEST_ROWS_CACHE_PATH = '/.manifest-rows-v1'
-const MANIFEST_ROWS_CACHE_TTL_SECONDS = 60
+// manifest_persist inserts a version's rows once, in the same transaction that
+// sets manifest_count, and never rewrites them. A non-empty row set is final and
+// safe to keep a day; empty sets are not cached because the insert may land later.
+const MANIFEST_ROWS_CACHE_TTL_SECONDS = 86400
 
 interface ManifestRow { file_name: string, file_hash: string, s3_path: string }
 
@@ -934,11 +937,12 @@ export async function requestManifestEntriesPostgres(
     .from(schema.manifest)
     .where(eq(schema.manifest.app_version_id, versionId))
 
-  // Fire-and-forget put; Cache API size limits may reject huge manifests.
-  // Tagged rows are purged on manifest writes, so they can live as long as
-  // the other /updates edge cache entries.
-  const tags = appId ? updatesCacheTags(c, appId) : undefined
-  void helper.putJson(cacheKey, rows, tags ? getUpdatesEdgeCacheTtlSeconds(c) : MANIFEST_ROWS_CACHE_TTL_SECONDS, { tags })
+  // Cache API size limits may reject huge manifests; the put fails open.
+  // With the /updates edge cache on, the rows also carry the app's purge tag.
+  if (rows.length > 0) {
+    const tags = appId ? updatesCacheTags(c, appId) : undefined
+    await backgroundTask(c, helper.putJson(cacheKey, rows, MANIFEST_ROWS_CACHE_TTL_SECONDS, { tags }))
+  }
   return rows
 }
 

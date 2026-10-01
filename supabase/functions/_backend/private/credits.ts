@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import type Stripe from 'stripe'
+import type { MetricBreakdown } from '../utils/credits.ts'
 import type { AuthInfo, MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import {
@@ -8,7 +9,7 @@ import {
   normalizeAutoTopUpThreshold,
   saveAutoTopUpSettings,
 } from '../utils/credit_auto_top_up.ts'
-import { getFallbackCreditProductId } from '../utils/credits.ts'
+import { getFallbackCreditProductId, priceCreditTiers } from '../utils/credits.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
@@ -35,21 +36,9 @@ interface CostCalculationRequest {
   storage: number // in bytes
   build_time?: number // in seconds
   org_id?: string
-}
-
-interface TierUsage {
-  tier_id: number
-  step_min: number
-  step_max: number
-  unit_factor: number
-  units_used: number // billing units (GiB/minutes/count)
-  price_per_unit: number // Price per billing unit
-  cost: number
-}
-
-interface MetricBreakdown {
-  cost: number
-  tiers: TierUsage[]
+  // Usage already included in the plan, per metric. Tiers follow total
+  // usage, so the overage above is priced from this point of the ladder.
+  included?: Partial<Record<'mau' | 'bandwidth' | 'storage' | 'build_time', number>>
 }
 
 interface CostCalculationResponse {
@@ -446,80 +435,15 @@ app.post('/', async (c) => {
 
   const typedCredits = await getScopedCreditSteps(c as AppContext, orgId)
 
-  // Calculate cost for each metric type with tier breakdown
-  const calculateMetricCost = (value: number, type: string): MetricBreakdown => {
-    if (value <= 0)
-      return { cost: 0, tiers: [] }
-
-    const applicableSteps = typedCredits.filter(credit => credit.type === type)
-    const tiersUsed: TierUsage[] = []
-    let remainingValue = value
-    let totalCost = 0
-
-    for (const step of applicableSteps) {
-      const stepMin = step.step_min
-      const stepMax = step.step_max
-      const unitFactor = step.unit_factor || 1
-
-      if (remainingValue > 0 && value >= stepMin) {
-        const tierUsageBytes = Math.min(remainingValue, stepMax - stepMin)
-
-        // Convert using unit_factor and round up for pricing
-        const tierUsage = Math.ceil(tierUsageBytes / unitFactor)
-        const tierCost = tierUsage * step.price_per_unit
-
-        tiersUsed.push({
-          tier_id: step.id,
-          step_min: stepMin,
-          step_max: stepMax,
-          unit_factor: step.unit_factor || 1,
-          units_used: tierUsage,
-          price_per_unit: step.price_per_unit,
-          cost: tierCost,
-        })
-
-        totalCost += tierCost
-        remainingValue -= tierUsageBytes
-
-        if (remainingValue <= 0)
-          break
-      }
-    }
-
-    // If there's still remaining value, use the highest tier
-    if (remainingValue > 0) {
-      const highestStep = applicableSteps.at(-1)
-      if (highestStep) {
-        const unitFactor = highestStep.unit_factor || 1
-
-        // Convert using unit_factor and round up
-        const tierUsage = Math.ceil(remainingValue / unitFactor)
-        const tierCost = tierUsage * highestStep.price_per_unit
-
-        const stepMin = highestStep.step_min
-
-        tiersUsed.push({
-          tier_id: highestStep.id,
-          step_min: stepMin,
-          step_max: highestStep.step_max,
-          unit_factor: highestStep.unit_factor || 1,
-          units_used: tierUsage,
-          price_per_unit: highestStep.price_per_unit,
-          cost: tierCost,
-        })
-
-        totalCost += tierCost
-      }
-    }
-
-    return { cost: totalCost, tiers: tiersUsed }
-  }
+  const calculateMetricCost = (value: number, type: string, included: number): MetricBreakdown =>
+    priceCreditTiers(typedCredits.filter(credit => credit.type === type), value, included)
 
   // Calculate costs
-  const mauResult = calculateMetricCost(mau, 'mau')
-  const bandwidthResult = calculateMetricCost(bandwidth, 'bandwidth')
-  const storageResult = calculateMetricCost(storage, 'storage')
-  const buildTimeResult = calculateMetricCost(buildTime, 'build_time')
+  const included = body.included ?? {}
+  const mauResult = calculateMetricCost(mau, 'mau', Number(included.mau ?? 0))
+  const bandwidthResult = calculateMetricCost(bandwidth, 'bandwidth', Number(included.bandwidth ?? 0))
+  const storageResult = calculateMetricCost(storage, 'storage', Number(included.storage ?? 0))
+  const buildTimeResult = calculateMetricCost(buildTime, 'build_time', Number(included.build_time ?? 0))
 
   const totalCost = mauResult.cost + bandwidthResult.cost + storageResult.cost + buildTimeResult.cost
 
