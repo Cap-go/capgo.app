@@ -3653,9 +3653,9 @@ export type Database = {
       accept_invitation_to_org: { Args: { org_id: string }; Returns: string }
       ack_updates_cache_purge: {
         Args: {
-          p_repurge_app_ids?: string[]
-          p_retry?: Json
+          p_lease_token: string
           p_retry_after_seconds?: number
+          p_success: boolean
         }
         Returns: undefined
       }

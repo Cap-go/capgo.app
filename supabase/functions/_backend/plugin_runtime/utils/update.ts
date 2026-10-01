@@ -19,7 +19,7 @@ import { onPremiseAppResponse } from './rateLimitInfo.ts'
 import { cloudlog } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
 import { sendNotifToOrgMembersCached } from './org_email_notifications.ts'
-import { closeClient, createLazyPgClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDrizzleClient, getLazyPgQueryCount, getPgClient, isLazyPgConnectError, logPgError, queryAppOwnerPostgres, refreshReplicationLag, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
+import { closeClient, createLazyPgClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDatabaseURL, getDrizzleClient, getLazyPgQueryCount, getPgClient, isLazyPgConnectError, logPgError, queryAppOwnerPostgres, refreshReplicationLag, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
 import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
 import { makeDevice } from './plugin_parser.ts'
 import { createStatsBandwidth, createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from './plugin_stats.ts'
@@ -1080,6 +1080,14 @@ async function updateWithEdgeCache(
   const pathTiming: UpdatePathTiming = {}
   let closeInBackground = false
   try {
+    // Pick the replica now (no connection) so the lag lookup uses its cache
+    // key instead of "unknown"; the lazy client connects to the same source.
+    try {
+      getDatabaseURL(c, true)
+    }
+    catch {
+      // No usable replica: the first query reports it.
+    }
     // Memory-only lag header: a cache hit must not trigger a background probe.
     await setReplicationLagHeader(c, lazyClient.client, { probeOnMiss: false })
     const drizzlePg = getDrizzleClient(lazyClient.client, { logger: false })

@@ -63,7 +63,9 @@ export interface CachePutOptions {
 // Local workerd has no purge-by-tag API: remember tagged keys per isolate so
 // the local purge route can emulate it with cache.delete.
 const localTaggedKeys = new Map<string, Set<string>>()
+/** Total (tag, key) entries kept; past it the index starts over (local only). */
 const LOCAL_TAGGED_KEYS_MAX = 10_000
+let localTaggedKeyCount = 0
 
 function isLocalCacheEnv(context: Context) {
   const envName = (context.env as Record<string, unknown> | undefined)?.ENV_NAME
@@ -72,14 +74,19 @@ function isLocalCacheEnv(context: Context) {
 
 function rememberLocalTaggedKey(tags: string[], url: string) {
   for (const tag of tags) {
+    if (localTaggedKeys.get(tag)?.has(url))
+      continue
+    if (localTaggedKeyCount >= LOCAL_TAGGED_KEYS_MAX) {
+      localTaggedKeys.clear()
+      localTaggedKeyCount = 0
+    }
     let urls = localTaggedKeys.get(tag)
     if (!urls) {
-      if (localTaggedKeys.size >= LOCAL_TAGGED_KEYS_MAX)
-        localTaggedKeys.clear()
       urls = new Set()
       localTaggedKeys.set(tag, urls)
     }
     urls.add(url)
+    localTaggedKeyCount++
   }
 }
 
@@ -88,18 +95,17 @@ export async function purgeLocalTaggedKeys(tags: string[]): Promise<number> {
   const cache = await resolveGlobalCache()
   if (!cache)
     return 0
-  let deleted = 0
+  const urls: string[] = []
   for (const tag of tags) {
-    const urls = localTaggedKeys.get(tag.toLowerCase())
-    if (!urls)
+    const tagged = localTaggedKeys.get(tag.toLowerCase())
+    if (!tagged)
       continue
     localTaggedKeys.delete(tag.toLowerCase())
-    for (const url of urls) {
-      if (await cache.delete(new Request(url, { method: CACHE_METHOD })))
-        deleted++
-    }
+    localTaggedKeyCount -= tagged.size
+    urls.push(...tagged)
   }
-  return deleted
+  const results = await Promise.all(urls.map(url => cache.delete(new Request(url, { method: CACHE_METHOD }))))
+  return results.filter(Boolean).length
 }
 
 export class CacheHelper {

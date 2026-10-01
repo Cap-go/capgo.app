@@ -75,6 +75,9 @@ describe('updates edge cache', () => {
     expect(bps(' 25 % ')).toBe(2500)
     expect(bps('25%')).toBe(2500)
     expect(bps('250')).toBe(10_000)
+    // Malformed values stay off instead of taking a numeric prefix.
+    expect(bps('1abc')).toBe(0)
+    expect(bps('5%%')).toBe(0)
     vi.stubEnv('UPDATES_EDGE_CACHE', '1%')
     // Any share turns tagging on so purges also clear the non-sampled path.
     expect(isUpdatesEdgeCacheEnabled(c)).toBe(true)
@@ -329,23 +332,24 @@ describe('updates cache purge drain', () => {
     return { rpc, calls }
   }
 
-  it('waits out the claim throttle, purges, and schedules re-purges only for first purges', async () => {
+  it('waits out the claim throttle, purges, and settles each lease', async () => {
     vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
     vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })))
     const sleep = vi.fn(async () => {})
     const { rpc, calls } = rpcFrom([
       { status: 'throttled', wait_ms: 400 },
-      { status: 'ok', apps: [{ app_id: 'com.a', initial: true }, { app_id: 'com.b', initial: false }], has_more: true },
-      { status: 'ok', apps: [{ app_id: 'com.c', initial: true }], has_more: false },
+      { status: 'ok', lease_token: 'lease-1', apps: [{ app_id: 'com.a', initial: true }, { app_id: 'com.b', initial: false }], has_more: true },
+      { status: 'ok', lease_token: 'lease-2', apps: [{ app_id: 'com.c', initial: true }], has_more: false },
     ])
 
     await expect(drainUpdatesCachePurge(makeContext(), rpc, { sleep })).resolves.toEqual({ purgedApps: 3 })
     expect(sleep).toHaveBeenCalledWith(450)
     const acks = calls.filter(call => call.fn === 'ack_updates_cache_purge').map(call => call.args)
+    // Re-purges for first purges are scheduled in SQL from the leased rows.
     expect(acks).toEqual([
-      { p_repurge_app_ids: ['com.a'], p_retry: [], p_retry_after_seconds: 5 },
-      { p_repurge_app_ids: ['com.c'], p_retry: [], p_retry_after_seconds: 5 },
+      { p_lease_token: 'lease-1', p_success: true, p_retry_after_seconds: 5 },
+      { p_lease_token: 'lease-2', p_success: true, p_retry_after_seconds: 5 },
     ])
   })
 
@@ -353,14 +357,33 @@ describe('updates cache purge drain', () => {
     vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
     vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 429, headers: { 'Retry-After': '12' } })))
-    const apps = [{ app_id: 'com.a', initial: true }]
-    const { rpc, calls } = rpcFrom([{ status: 'ok', apps, has_more: false }])
+    const { rpc, calls } = rpcFrom([{ status: 'ok', lease_token: 'lease-1', apps: [{ app_id: 'com.a', initial: true }], has_more: false }])
 
     await expect(drainUpdatesCachePurge(makeContext(), rpc)).resolves.toEqual({ purgedApps: 0 })
-    expect(calls.find(call => call.fn === 'ack_updates_cache_purge')?.args).toEqual({ p_repurge_app_ids: [], p_retry: apps, p_retry_after_seconds: 12 })
+    expect(calls.find(call => call.fn === 'ack_updates_cache_purge')?.args).toEqual({ p_lease_token: 'lease-1', p_success: false, p_retry_after_seconds: 12 })
+  })
+
+  it('treats a 200 answer with success: false as a failed purge', async () => {
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
+    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ success: false, errors: [{ code: 1134 }] }), { status: 200 })))
+    const { rpc, calls } = rpcFrom([{ status: 'ok', lease_token: 'lease-1', apps: [{ app_id: 'com.a', initial: true }], has_more: false }])
+
+    await drainUpdatesCachePurge(makeContext(), rpc)
+    expect(calls.find(call => call.fn === 'ack_updates_cache_purge')?.args).toMatchObject({ p_lease_token: 'lease-1', p_success: false })
+  })
+
+  it('does not claim (so drops nothing) when no purge target is configured', async () => {
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', '')
+    vi.stubEnv('CF_ANALYTICS_TOKEN', '')
+    vi.stubEnv('UPDATES_CACHE_LOCAL_PURGE_URL', '')
+    const { rpc, calls } = rpcFrom([{ status: 'ok', lease_token: 'lease-1', apps: [{ app_id: 'com.a', initial: true }] }])
+    await drainUpdatesCachePurge(makeContext(), rpc)
+    expect(calls).toHaveLength(0)
   })
 
   it('waits out the throttle once before its first claim, then leaves the drain to the active caller', async () => {
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
     const sleep = vi.fn(async () => {})
     const { rpc, calls } = rpcFrom([
       { status: 'throttled', wait_ms: 900 },
@@ -373,6 +396,7 @@ describe('updates cache purge drain', () => {
   })
 
   it('stops when another caller is draining', async () => {
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
     const { rpc, calls } = rpcFrom([{ status: 'busy' }])
     await drainUpdatesCachePurge(makeContext(), rpc)
     expect(calls).toHaveLength(1)

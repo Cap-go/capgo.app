@@ -13,12 +13,14 @@
 -- - the endpoint claims due apps in its own short transaction through
 --   claim_updates_cache_purge(): at most 100 apps per claim and one claim per
 --   second (advisory lock + last_claim_at), i.e. about one Cloudflare call per
---   zone per second whatever the backlog;
--- - after a purge, ack_updates_cache_purge() schedules the re-purges at
+--   zone per second whatever the backlog. A claim leases rows (2 minutes)
+--   instead of deleting them, so a crash before the ack loses nothing;
+-- - after a purge, ack_updates_cache_purge() deletes the leased rows and
+--   schedules the re-purges at
 --   +10s / +60s / +180s from that moment (after commit, so a long transaction
 --   cannot collapse them; they cover a request that refilled the cache from a
---   lagging read replica, 180s being the replica-lag alert threshold) and puts
---   failed apps back at their Retry-After;
+--   lagging read replica, 180s being the replica-lag alert threshold), or on
+--   failure releases them at their Retry-After;
 -- - the 10s cron tick wakes the endpoint while due rows remain.
 --
 -- Only columns the update path reads are compared, so background writes
@@ -36,9 +38,13 @@ CREATE TABLE public.updates_cache_purge_pending (
   app_id text NOT NULL,
   due_at timestamptz NOT NULL,
   -- true for the first purge of a change: its success schedules re-purges.
-  initial boolean NOT NULL DEFAULT true
+  initial boolean NOT NULL DEFAULT true,
+  -- Set by a claim; an expired lease makes the row claimable again.
+  lease_token uuid,
+  leased_until timestamptz
 );
 CREATE INDEX updates_cache_purge_pending_due_at_idx ON public.updates_cache_purge_pending (due_at);
+CREATE INDEX updates_cache_purge_pending_lease_idx ON public.updates_cache_purge_pending (lease_token) WHERE lease_token IS NOT NULL;
 ALTER TABLE public.updates_cache_purge_pending OWNER TO postgres;
 ALTER TABLE public.updates_cache_purge_pending ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.updates_cache_purge_pending FROM PUBLIC, anon, authenticated;
@@ -116,6 +122,7 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM public.updates_cache_purge_pending
     WHERE due_at <= pg_catalog.clock_timestamp()
+      AND (lease_token IS NULL OR leased_until <= pg_catalog.clock_timestamp())
   ) THEN
     PERFORM public.wake_updates_cache_purge();
   END IF;
@@ -127,8 +134,8 @@ REVOKE ALL ON FUNCTION public.wake_updates_cache_purge_if_due() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.wake_updates_cache_purge_if_due() FROM anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.wake_updates_cache_purge_if_due() TO service_role;
 
--- Claims up to p_limit due apps in the endpoint's own transaction.
--- Returns {status: busy|throttled|empty|ok, wait_ms?, apps?, has_more?}.
+-- Claims (leases) up to p_limit due apps in the endpoint's own transaction.
+-- Returns {status: busy|throttled|empty|ok, wait_ms?, lease_token?, apps?, has_more?}.
 CREATE OR REPLACE FUNCTION public.claim_updates_cache_purge(p_limit integer DEFAULT 100)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -139,6 +146,8 @@ DECLARE
   v_now timestamptz := pg_catalog.clock_timestamp();
   v_last timestamptz;
   v_min_interval constant interval := '1 second';
+  v_lease interval := '2 minutes';
+  v_token uuid := gen_random_uuid();
   v_apps jsonb;
 BEGIN
   IF NOT pg_catalog.pg_try_advisory_xact_lock(pg_catalog.hashtext('updates_cache_purge_claim')) THEN
@@ -156,15 +165,18 @@ BEGIN
   WITH picked AS (
     SELECT p.app_id
     FROM public.updates_cache_purge_pending p
-    WHERE p.due_at <= v_now
+    WHERE p.due_at <= v_now AND (p.lease_token IS NULL OR p.leased_until <= v_now)
     GROUP BY p.app_id
     ORDER BY MIN(p.due_at)
     LIMIT GREATEST(LEAST(p_limit, 1000), 1)
   ),
   claimed AS (
-    DELETE FROM public.updates_cache_purge_pending p
-    USING picked
-    WHERE p.app_id = picked.app_id AND p.due_at <= v_now
+    UPDATE public.updates_cache_purge_pending p
+    SET lease_token = v_token, leased_until = v_now + v_lease
+    FROM picked
+    WHERE p.app_id = picked.app_id
+      AND p.due_at <= v_now
+      AND (p.lease_token IS NULL OR p.leased_until <= v_now)
     RETURNING p.app_id, p.initial
   )
   SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('app_id', c.app_id, 'initial', c.initial))
@@ -178,8 +190,12 @@ BEGIN
   UPDATE public.updates_cache_purge_state SET last_claim_at = v_now WHERE id;
   RETURN pg_catalog.jsonb_build_object(
     'status', 'ok',
+    'lease_token', v_token,
     'apps', v_apps,
-    'has_more', EXISTS (SELECT 1 FROM public.updates_cache_purge_pending WHERE due_at <= v_now)
+    'has_more', EXISTS (
+      SELECT 1 FROM public.updates_cache_purge_pending
+      WHERE due_at <= v_now AND (lease_token IS NULL OR leased_until <= v_now)
+    )
   );
 END;
 $$;
@@ -189,11 +205,12 @@ REVOKE ALL ON FUNCTION public.claim_updates_cache_purge(integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.claim_updates_cache_purge(integer) FROM anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.claim_updates_cache_purge(integer) TO service_role;
 
--- After a purge: schedule re-purges for first purges that succeeded, and put
--- failed apps back at their retry time. All times are from now (wall clock).
+-- Settles a lease. Success: delete the leased rows and schedule re-purges
+-- (+10s / +60s / +180s from now) for the apps whose first purge this was.
+-- Failure: release the rows, due again after the Retry-After.
 CREATE OR REPLACE FUNCTION public.ack_updates_cache_purge(
-  p_repurge_app_ids text[] DEFAULT '{}',
-  p_retry jsonb DEFAULT '[]',
+  p_lease_token uuid,
+  p_success boolean,
   p_retry_after_seconds integer DEFAULT 5
 )
 RETURNS void
@@ -204,29 +221,32 @@ AS $$
 DECLARE
   v_now timestamptz := pg_catalog.clock_timestamp();
 BEGIN
-  INSERT INTO public.updates_cache_purge_pending (app_id, due_at, initial)
-  SELECT app_id, v_now + delay, false
-  FROM (
-    SELECT DISTINCT app_id FROM pg_catalog.unnest(p_repurge_app_ids) AS app_id
-    WHERE app_id IS NOT NULL AND app_id <> ''
-  ) AS apps
-  CROSS JOIN (VALUES
-    (interval '10 seconds'), (interval '60 seconds'), (interval '180 seconds')
-  ) AS delays (delay);
-
-  INSERT INTO public.updates_cache_purge_pending (app_id, due_at, initial)
-  SELECT r.app_id,
-         v_now + pg_catalog.make_interval(secs => GREATEST(LEAST(p_retry_after_seconds, 300), 1)),
-         COALESCE(r.initial, false)
-  FROM pg_catalog.jsonb_to_recordset(COALESCE(p_retry, '[]'::jsonb)) AS r(app_id text, initial boolean)
-  WHERE r.app_id IS NOT NULL AND r.app_id <> '';
+  IF p_success THEN
+    WITH done AS (
+      DELETE FROM public.updates_cache_purge_pending
+      WHERE lease_token = p_lease_token
+      RETURNING app_id, initial
+    )
+    INSERT INTO public.updates_cache_purge_pending (app_id, due_at, initial)
+    SELECT apps.app_id, v_now + delays.delay, false
+    FROM (SELECT DISTINCT app_id FROM done WHERE initial) AS apps
+    CROSS JOIN (VALUES
+      (interval '10 seconds'), (interval '60 seconds'), (interval '180 seconds')
+    ) AS delays (delay);
+  ELSE
+    UPDATE public.updates_cache_purge_pending
+    SET lease_token = NULL,
+        leased_until = NULL,
+        due_at = v_now + pg_catalog.make_interval(secs => GREATEST(LEAST(p_retry_after_seconds, 300), 1))
+    WHERE lease_token = p_lease_token;
+  END IF;
 END;
 $$;
 
-ALTER FUNCTION public.ack_updates_cache_purge(text[], jsonb, integer) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.ack_updates_cache_purge(text[], jsonb, integer) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.ack_updates_cache_purge(text[], jsonb, integer) FROM anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.ack_updates_cache_purge(text[], jsonb, integer) TO service_role;
+ALTER FUNCTION public.ack_updates_cache_purge(uuid, boolean, integer) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.ack_updates_cache_purge(uuid, boolean, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.ack_updates_cache_purge(uuid, boolean, integer) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.ack_updates_cache_purge(uuid, boolean, integer) TO service_role;
 
 -- Trigger side: record the change (non-blocking insert) and queue a wake.
 CREATE OR REPLACE FUNCTION public.notify_updates_edge_cache_purge(p_app_ids text[])

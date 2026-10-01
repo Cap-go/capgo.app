@@ -51,7 +51,40 @@ export function parseJsonc(text: string): unknown {
     }
     out += char
   }
-  return JSON.parse(out.replace(/,(\s*[}\]])/g, '$1'))
+  return JSON.parse(stripTrailingCommas(out))
+}
+
+/** Drops commas before `}` / `]`, outside strings only (string values stay intact). */
+function stripTrailingCommas(text: string) {
+  let out = ''
+  let inString = false
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]
+    if (inString) {
+      out += char
+      if (char === '\\') {
+        out += text[++i] ?? ''
+        continue
+      }
+      if (char === '"')
+        inString = false
+      continue
+    }
+    if (char === '"') {
+      inString = true
+      out += char
+      continue
+    }
+    if (char === ',') {
+      let next = i + 1
+      while (next < text.length && /\s/.test(text[next]))
+        next++
+      if (text[next] === '}' || text[next] === ']')
+        continue
+    }
+    out += char
+  }
+  return out
 }
 
 interface Route { pattern?: string, zone_name?: string }

@@ -11,6 +11,8 @@ describe('plugin route hosts', () => {
 
   it('parses jsonc comments and trailing commas without touching strings', () => {
     expect(parseJsonc('{\n  // comment\n  "a": "x//y", /* block */ "b": [1, 2,],\n}')).toEqual({ a: 'x//y', b: [1, 2] })
+    // Commas inside strings are values, not trailing commas.
+    expect(parseJsonc('{"value": "a, }", "list": ["b, ]",],}')).toEqual({ value: 'a, }', list: ['b, ]'] })
     expect(collectPluginRouteHosts({ env: { prod: { routes: [{ pattern: 'api.example.com/updates*', zone_name: 'example.com' }, { pattern: 'plugin.example.net' }] } } }))
       .toEqual({ hosts: ['api.example.com', 'plugin.example.net'], zoneNames: ['example.com'] })
   })

@@ -76,11 +76,15 @@ function updateBody(deviceId: string, versionName: string, extra: Record<string,
   }
 }
 
+const REQUEST_TIMEOUT_MS = 15_000
+
 async function postJson(url: string, body: unknown) {
+  // A hung worker must not stall the benchmark past its own deadlines.
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
   return { response, json: await response.json() as Record<string, any> }
 }
@@ -110,7 +114,7 @@ async function updatePathStatementCount() {
   const [row] = await sql.unsafe(`
     SELECT COALESCE(SUM(calls), 0)::bigint AS calls
     FROM extensions.pg_stat_statements
-    WHERE (query ~ '"(apps|channels|channel_devices|manifest|app_versions|orgs|stripe_info)"' AND query NOT LIKE '%pgrst_source%')
+    WHERE (query ~ '"(apps|channels|channel_devices|manifest|app_versions|orgs|stripe_info)"' AND query NOT LIKE '%pgrst_source%' AND query NOT ILIKE '%pg_stat_statements%')
        OR query ILIKE '%pg_stat_subscription%'`)
   return Number(row.calls)
 }
@@ -159,7 +163,7 @@ async function runLoad(target: typeof allTargets[number], scenario: string, vers
   const statements = await updatePathStatementCount() - before
   if (process.env.BENCH_DEBUG) {
     const top = await sql.unsafe(`SELECT calls, left(regexp_replace(query, '\\s+', ' ', 'g'), 120) AS q FROM extensions.pg_stat_statements
-      WHERE (query ~ '"(apps|channels|channel_devices|manifest|app_versions|orgs|stripe_info)"' AND query NOT LIKE '%pgrst_source%') OR query ILIKE '%pg_stat_subscription%' ORDER BY calls DESC LIMIT 5`)
+      WHERE (query ~ '"(apps|channels|channel_devices|manifest|app_versions|orgs|stripe_info)"' AND query NOT LIKE '%pgrst_source%' AND query NOT ILIKE '%pg_stat_statements%') OR query ILIKE '%pg_stat_subscription%' ORDER BY calls DESC LIMIT 5`)
     console.error(target.name, scenario, top.map((row: { calls: number, q: string }) => `${row.calls}x ${row.q}`))
   }
   return {
@@ -186,9 +190,8 @@ async function waitUntilServed(target: typeof allTargets[number], body: () => Re
       return { ms: performance.now() - start, polls }
     await Bun.sleep(POLL_MS)
   }
-  if (process.env.BENCH_DEBUG)
-    console.error(`${target.name}: timed out, last answer`, JSON.stringify(last).slice(0, 300))
-  return { ms: Number.NaN, polls }
+  // A timed-out trial is a failed measurement, not a data point.
+  throw new Error(`${target.name}: change not served within ${FRESHNESS_TIMEOUT_MS} ms (${polls} polls), last answer ${JSON.stringify(last).slice(0, 300)}`)
 }
 
 interface FreshnessResult {
@@ -251,10 +254,8 @@ async function freshnessChannelSelf(target: typeof allTargets[number], pluginVer
     if (json.status !== 'ok' && json.error)
       throw new Error(`${target.name} channel_self failed: ${JSON.stringify(json)}`)
     const localChannel = pluginVersion >= '7.34.0' ? { defaultChannel: 'beta' } : {}
-    const result = await waitUntilServed(target, () => ({ ...base, ...localChannel }), answer => answer.version === '1.361.0')
+    await waitUntilServed(target, () => ({ ...base, ...localChannel }), answer => answer.version === '1.361.0')
     trialsMs.push(round(performance.now() - start, 0))
-    if (Number.isNaN(result.ms))
-      trialsMs[trialsMs.length - 1] = Number.NaN
   }
   return { target: target.name, scenario, trialsMs }
 }
@@ -287,7 +288,7 @@ async function withTriggerRelay<T>(run: () => Promise<T>): Promise<T> {
   if (!network)
     throw new Error('BENCH_DOCKER_NETWORK is required (docker network of the local Supabase stack)')
   const name = 'capgo-bench-trigger-mailbox'
-  // Look the secret up before starting anything that needs cleanup.
+  // Look everything up before changing anything that needs restoring.
   const [secret] = await sql`SELECT id, decrypted_secret FROM vault.decrypted_secrets WHERE name = 'db_url'`
   if (!secret)
     throw new Error('vault secret db_url is missing; seed the local database first')
@@ -296,56 +297,77 @@ async function withTriggerRelay<T>(run: () => Promise<T>): Promise<T> {
     throw new Error('updates_cache_purge_enabled() is missing; apply the edge cache migration first')
   // Runtime switch is the CAPGO_UPDATES_CACHE_PURGE_ENABLED Vault secret.
   const [switchSecret] = await sql`SELECT id, decrypted_secret FROM vault.decrypted_secrets WHERE name = 'CAPGO_UPDATES_CACHE_PURGE_ENABLED'`
-  Bun.spawnSync(['docker', 'rm', '-f', name])
-  const started = Bun.spawnSync(['docker', 'run', '-d', '--rm', '--name', name, '--network', network, '-p', `${RELAY_PORT}:18785`, image, 'bun', '-e', MAILBOX_CODE])
-  if (started.exitCode !== 0)
-    throw new Error(`mailbox container failed: ${started.stderr.toString()}`)
-  for (let i = 0; i < 50; i++) {
-    if (await fetch(`http://127.0.0.1:${RELAY_PORT}/health`, { method: 'POST' }).then(r => r.ok).catch(() => false))
-      break
-    await Bun.sleep(200)
-  }
-  await fetch(`http://127.0.0.1:${RELAY_PORT}/__next`).catch(() => null) // drain health probes
 
   let running = true
-  const pump = (async () => {
-    while (running) {
-      const items = await fetch(`http://127.0.0.1:${RELAY_PORT}/__next`).then(r => r.json() as Promise<{ path: string, headers: Record<string, string>, body: string }[]>).catch(() => [])
-      // Purges go to the branch API worker; every other trigger keeps flowing
-      // to the local Supabase functions so the stack behaves normally.
-      // Fire and forget: a slow unrelated trigger must not delay the next purge.
-      for (const item of items) {
-        const isPurge = item.path.startsWith('/functions/v1/triggers/updates_cache_purge')
-        const forward = () => void fetch(isPurge
-          ? `${API_URL}${item.path.replace('/functions/v1', '')}`
-          : `${SUPABASE_API_URL}${item.path}`, { method: 'POST', headers: { 'Content-Type': item.headers['content-type'] ?? 'application/json', 'apisecret': item.headers.apisecret ?? '' }, body: item.body }).catch(() => null)
-        forward()
-      }
-    }
-  })()
+  let pump: Promise<void> = Promise.resolve()
+  let restored = false
+  // Restores Vault and removes the container whatever happened (errors,
+  // Ctrl+C), so local triggers keep reaching the Supabase functions.
+  const restore = async () => {
+    if (restored)
+      return
+    restored = true
+    running = false
+    await sql`SELECT vault.update_secret(${secret.id}, ${secret.decrypted_secret})`.catch(() => null)
+    if (switchSecret)
+      await sql`SELECT vault.update_secret(${switchSecret.id}, ${switchSecret.decrypted_secret})`.catch(() => null)
+    else
+      await sql`DELETE FROM vault.secrets WHERE name = 'CAPGO_UPDATES_CACHE_PURGE_ENABLED'`.catch(() => null)
+    Bun.spawnSync(['docker', 'rm', '-f', name])
+  }
+  const onSignal = () => {
+    void restore().finally(() => process.exit(130))
+  }
+  process.once('SIGINT', onSignal)
+  process.once('SIGTERM', onSignal)
 
-  await sql`SELECT vault.update_secret(${secret.id}, ${`http://${name}:18785`})`
-  if (switchSecret)
-    await sql`SELECT vault.update_secret(${switchSecret.id}, 'true')`
-  else
-    await sql`SELECT vault.create_secret('true', 'CAPGO_UPDATES_CACHE_PURGE_ENABLED', 'edge cache benchmark')`
   try {
+    Bun.spawnSync(['docker', 'rm', '-f', name])
+    const started = Bun.spawnSync(['docker', 'run', '-d', '--rm', '--name', name, '--network', network, '-p', `${RELAY_PORT}:18785`, image, 'bun', '-e', MAILBOX_CODE])
+    if (started.exitCode !== 0)
+      throw new Error(`mailbox container failed: ${started.stderr.toString()}`)
+    let ready = false
+    for (let i = 0; i < 50 && !ready; i++) {
+      ready = await fetch(`http://127.0.0.1:${RELAY_PORT}/health`, { method: 'POST' }).then(r => r.ok).catch(() => false)
+      if (!ready)
+        await Bun.sleep(200)
+    }
+    if (!ready)
+      throw new Error(`mailbox container not reachable on port ${RELAY_PORT}; purges would never arrive`)
+    await fetch(`http://127.0.0.1:${RELAY_PORT}/__next`).catch(() => null) // drain health probes
+
+    pump = (async () => {
+      while (running) {
+        const items = await fetch(`http://127.0.0.1:${RELAY_PORT}/__next`).then(r => r.json() as Promise<{ path: string, headers: Record<string, string>, body: string }[]>).catch(() => [])
+        // Purges go to the branch API worker; every other trigger keeps flowing
+        // to the local Supabase functions so the stack behaves normally.
+        // Fire and forget: a slow unrelated trigger must not delay the next purge.
+        for (const item of items) {
+          const isPurge = item.path.startsWith('/functions/v1/triggers/updates_cache_purge')
+          void fetch(isPurge
+            ? `${API_URL}${item.path.replace('/functions/v1', '')}`
+            : `${SUPABASE_API_URL}${item.path}`, { method: 'POST', headers: { 'Content-Type': item.headers['content-type'] ?? 'application/json', 'apisecret': item.headers.apisecret ?? '' }, body: item.body }).catch(() => null)
+        }
+      }
+    })()
+
+    await sql`SELECT vault.update_secret(${secret.id}, ${`http://${name}:18785`})`
+    if (switchSecret)
+      await sql`SELECT vault.update_secret(${switchSecret.id}, 'true')`
+    else
+      await sql`SELECT vault.create_secret('true', 'CAPGO_UPDATES_CACHE_PURGE_ENABLED', 'edge cache benchmark')`
     return await run()
   }
   finally {
-    if (switchSecret)
-      await sql`SELECT vault.update_secret(${switchSecret.id}, ${switchSecret.decrypted_secret})`
-    else
-      await sql`DELETE FROM vault.secrets WHERE name = 'CAPGO_UPDATES_CACHE_PURGE_ENABLED'`
-    await sql`SELECT vault.update_secret(${secret.id}, ${secret.decrypted_secret})`
-    running = false
-    Bun.spawnSync(['docker', 'rm', '-f', name])
+    await restore()
+    process.off('SIGINT', onSignal)
+    process.off('SIGTERM', onSignal)
     await pump.catch(() => null)
   }
 }
 
 function median(values: number[]) {
-  return percentile(values.filter(v => !Number.isNaN(v)), 50)
+  return percentile(values, 50)
 }
 
 async function main() {

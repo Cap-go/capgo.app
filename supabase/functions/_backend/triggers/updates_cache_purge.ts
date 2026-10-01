@@ -8,8 +8,8 @@
 // Claims are limited to one per second across all callers, so the Cloudflare
 // rate stays bounded whatever the backlog. A successful first purge schedules
 // re-purges (+10s / +60s / +180s) for replica lag; failed apps go back to the
-// queue at their Retry-After. Every failure is soft: the cache TTL is the
-// backstop.
+// queue at their Retry-After. Claims lease rows, so a crash before the ack
+// only delays them. Every failure is soft: the cache TTL is the backstop.
 //
 // Token: CF_CACHE_PURGE_TOKEN, else the existing CF_ANALYTICS_TOKEN once it is
 // granted Zone Read + Cache Purge. Zones are the plugin worker's own zones,
@@ -173,10 +173,13 @@ export async function purgeUpdatesCacheTags(c: Context, tags: string[]): Promise
           body: JSON.stringify({ tags: tagChunk }),
           signal: AbortSignal.timeout(PURGE_TIMEOUT_MS),
         })
-        if (!response.ok) {
+        // Cloudflare can answer 200 with { success: false }: only an explicit
+        // success counts as purged.
+        const body = await response.json().catch(() => null) as { success?: boolean } | null
+        if (!response.ok || body?.success === false) {
           result.failed++
           result.retryAfterSeconds = Math.max(result.retryAfterSeconds, parseRetryAfterSeconds(response))
-          cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge failed', url: target.url, status: response.status, tags: tagChunk.length })
+          cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge failed', url: target.url, status: response.status, cfSuccess: body?.success, tags: tagChunk.length })
         }
       }
       catch (error) {
@@ -194,8 +197,14 @@ export type PurgeRpc = (fn: 'claim_updates_cache_purge' | 'ack_updates_cache_pur
 interface ClaimResult {
   status: 'busy' | 'throttled' | 'empty' | 'ok'
   wait_ms?: number
+  lease_token?: string
   apps?: { app_id: string, initial: boolean }[]
   has_more?: boolean
+}
+
+/** A purge target exists here (token or local purge URL); checked before claiming. */
+export function hasPurgeTarget(c: Context) {
+  return Boolean(getPurgeToken(c) || getEnv(c, 'UPDATES_CACHE_LOCAL_PURGE_URL'))
 }
 
 /**
@@ -210,6 +219,11 @@ export async function drainUpdatesCachePurge(
   const sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)))
   const deadline = Date.now() + (options.budgetMs ?? DRAIN_BUDGET_MS)
   let purgedApps = 0
+  // Claiming without a target would only lease rows we cannot purge.
+  if (!hasPurgeTarget(c)) {
+    cloudlog({ requestId: c.get('requestId'), message: 'updates cache purge skipped (not configured)' })
+    return { purgedApps }
+  }
   let claimed = false
   let throttledBeforeClaim = 0
   while (Date.now() < deadline) {
@@ -234,14 +248,13 @@ export async function drainUpdatesCachePurge(
 
     const apps = claim.apps
     const result = await purgeUpdatesCacheTags(c, apps.map(app => updatesAppCacheTag(app.app_id)))
-    if (!result.configured) {
-      cloudlog({ requestId: c.get('requestId'), message: 'updates cache purge skipped (not configured)', apps: apps.length })
-      break
-    }
-    const ok = result.failed === 0
+    const ok = result.configured && result.failed === 0
+    // Success deletes the leased rows (and schedules re-purges); failure
+    // releases them at the Retry-After. A crash before this leaves the lease
+    // to expire, so the rows are claimed again.
     const { error: ackError } = await rpc('ack_updates_cache_purge', {
-      p_repurge_app_ids: ok ? apps.filter(app => app.initial).map(app => app.app_id) : [],
-      p_retry: ok ? [] : apps,
+      p_lease_token: claim.lease_token,
+      p_success: ok,
       p_retry_after_seconds: result.retryAfterSeconds || DEFAULT_RETRY_AFTER_SECONDS,
     })
     if (ackError)

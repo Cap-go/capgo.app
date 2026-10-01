@@ -26,11 +26,15 @@ export function normalizeEdgeCacheValue(raw: string): string | null {
   const percent = Number.parseFloat(value.replace(/%$/, ''))
   if (!/^\d+(?:\.\d+)?%?$/.test(value) || !Number.isFinite(percent) || percent < 0 || percent > 100)
     return null
-  if (percent === 0)
+  // The worker works in basis points (0.01%): refuse what would round to 0.
+  const bps = Math.round(percent * 100)
+  if (percent > 0 && bps === 0)
+    return null
+  if (bps === 0)
     return 'off'
-  if (percent === 100)
+  if (bps === 10_000)
     return 'on'
-  return `${percent}%`
+  return `${bps / 100}%`
 }
 
 export function pluginEnvs(config: unknown) {

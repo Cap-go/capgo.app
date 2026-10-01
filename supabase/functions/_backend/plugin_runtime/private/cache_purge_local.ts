@@ -16,8 +16,9 @@ app.post('/', async (c) => {
   const secret = getEnv(c, 'API_SECRET')
   if (!secret || c.req.header('apisecret') !== secret)
     throw simpleError('invalid_api_secret', 'Invalid API secret')
-  const body = await parseBody<{ tags?: unknown }>(c)
-  const tags = Array.isArray(body.tags) ? body.tags.filter((tag): tag is string => typeof tag === 'string') : []
+  const body = await parseBody<{ tags?: unknown } | null>(c)
+  const rawTags = body && typeof body === 'object' ? body.tags : undefined
+  const tags = Array.isArray(rawTags) ? rawTags.filter((tag): tag is string => typeof tag === 'string') : []
   const deleted = await purgeLocalTaggedKeys(tags)
   return c.json({ ...BRES, deleted })
 })

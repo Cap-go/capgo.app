@@ -54,10 +54,13 @@ export function hasUpdatesPurgeTarget(c: Context) {
 export function getUpdatesEdgeCacheBps(c: Context) {
   if (!hasUpdatesPurgeTarget(c))
     return 0
-  const raw = getEnv(c, 'UPDATES_EDGE_CACHE').trim().toLowerCase()
+  const raw = getEnv(c, 'UPDATES_EDGE_CACHE').replace(/\s+/g, '').toLowerCase()
   if (raw === 'on')
     return 10_000
-  const percent = Number.parseFloat(raw.replace(/%$/, ''))
+  // Whole value only: a malformed setting (e.g. "1abc") stays off.
+  if (!/^\d+(?:\.\d+)?%?$/.test(raw))
+    return 0
+  const percent = Number(raw.replace(/%$/, ''))
   if (!Number.isFinite(percent) || percent <= 0)
     return 0
   return Math.min(Math.round(percent * 100), 10_000)

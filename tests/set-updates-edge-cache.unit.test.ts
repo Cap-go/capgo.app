@@ -12,6 +12,10 @@ describe('updates-edge-cache:set', () => {
     expect(normalizeEdgeCacheValue('0')).toBe('off')
     expect(normalizeEdgeCacheValue('100%')).toBe('on')
     expect(normalizeEdgeCacheValue('250%')).toBeNull()
+    // The worker works in 0.01% steps: refuse what it would round to 0.
+    expect(normalizeEdgeCacheValue('0.004%')).toBeNull()
+    expect(normalizeEdgeCacheValue('0.01%')).toBe('0.01%')
+    expect(normalizeEdgeCacheValue('12.345%')).toBe('12.35%')
     expect(normalizeEdgeCacheValue('yes')).toBeNull()
   })
 
