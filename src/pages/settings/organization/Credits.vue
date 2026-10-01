@@ -129,8 +129,7 @@ const isCycleTopUpAmountValid = computed(() => cycleTopUpAmount.value !== null &
 const cycleTopUpNextDate = computed(() => {
   if (!cycleTopUpEnd.value)
     return null
-  const date = new Date(cycleTopUpEnd.value)
-  return Number.isNaN(date.getTime()) ? null : date.toLocaleDateString()
+  return formatLocalDate(cycleTopUpEnd.value) || null
 })
 const isAutoTopUpControlsDisabled = computed(() => isLoadingAutoTopUp.value || isSavingAutoTopUp.value || autoTopUpLoadFailed.value)
 const autoTopUpThreshold = computed(() => {
@@ -459,6 +458,13 @@ async function loadPricingSteps() {
   pricingSteps.value = await getCreditPricingSteps(currentOrganization.value?.gid)
 }
 
+function resetCycleTopUpState() {
+  cycleTopUpEnabled.value = false
+  cycleTopUpAmountInput.value = String(MIN_AUTO_TOP_UP)
+  confirmedCycleTopUpAmount = MIN_AUTO_TOP_UP
+  cycleTopUpEnd.value = null
+}
+
 function applyAutoTopUpSettings(settings: Partial<CreditAutoTopUpSettings>) {
   const threshold = Math.max(MIN_AUTO_TOP_UP, Math.floor(Number(settings?.threshold ?? MIN_AUTO_TOP_UP)))
   const monthlyLimit = Math.max(0, Math.floor(Number(settings?.monthlyLimit ?? 0)))
@@ -496,8 +502,9 @@ function resolveAutoTopUpMonthlyLimitForSave(useInput: boolean): number | null {
 
 async function loadAutoTopUpSettings() {
   const orgId = currentOrganization.value?.gid
-  // Never show the previous organization's monthly usage while the new one loads.
+  // Never show the previous organization's monthly usage or schedule while the new one loads.
   autoTopUpMonthlyTotal.value = null
+  resetCycleTopUpState()
   if (!orgId) {
     autoTopUpEnabled.value = false
     autoTopUpHasCard.value = false
@@ -526,6 +533,7 @@ async function loadAutoTopUpSettings() {
       autoTopUpMonthlyLimitInput.value = '0'
       confirmedAutoTopUpMonthlyLimit.value = 0
       autoTopUpMonthlyTotal.value = null
+      resetCycleTopUpState()
     }
   }
   finally {
@@ -621,7 +629,9 @@ async function persistCycleTopUpSettingsNow(orgId: string, cycleEnabled: boolean
   }
   if (currentOrganization.value?.gid !== orgId)
     return
-  if (!isCycleTopUpAmountValid.value || cycleTopUpAmount.value === null) {
+  // An invalid draft amount must never block turning the schedule off: keep the saved amount then.
+  const draftValid = isCycleTopUpAmountValid.value && cycleTopUpAmount.value !== null
+  if (cycleEnabled && !draftValid) {
     toast.error(t('credits-cycle-top-up-amount-invalid'))
     cycleTopUpEnabled.value = revertCycleEnabledTo
     return
@@ -631,18 +641,13 @@ async function persistCycleTopUpSettingsNow(orgId: string, cycleEnabled: boolean
     cycleTopUpEnabled.value = false
     return
   }
-  const cycleAmount = cycleTopUpAmount.value
+  const cycleAmount = draftValid && cycleTopUpAmount.value !== null ? cycleTopUpAmount.value : confirmedCycleTopUpAmount
   isSavingAutoTopUp.value = true
   autoTopUpLoadSeq += 1
   const saveSeq = autoTopUpLoadSeq
   try {
-    // Keep the threshold top-up as last saved; only the scheduled top-up changes here.
-    const settings = await saveCreditAutoTopUp(orgId, {
-      enabled: autoTopUpEnabled.value,
-      threshold: confirmedAutoTopUpThreshold,
-      cycleEnabled,
-      cycleAmount,
-    })
+    // Partial update: the threshold top-up keeps whatever is stored, even if another tab changed it.
+    const settings = await saveCreditAutoTopUp(orgId, { cycleEnabled, cycleAmount })
     if (currentOrganization.value?.gid !== orgId || saveSeq !== autoTopUpLoadSeq)
       return
     if (settings) {

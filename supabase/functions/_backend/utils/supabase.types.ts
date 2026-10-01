@@ -2789,9 +2789,11 @@ export type Database = {
       orgs: {
         Row: {
           auto_top_up_cycle_amount: number
+          auto_top_up_cycle_attempt: number
           auto_top_up_cycle_enabled: boolean
           auto_top_up_cycle_last_attempt_at: string | null
           auto_top_up_cycle_paid_for: string | null
+          auto_top_up_cycle_pending_intent_id: string | null
           auto_top_up_enabled: boolean
           auto_top_up_last_attempt_at: string | null
           auto_top_up_monthly_limit: number
@@ -2824,9 +2826,11 @@ export type Database = {
         }
         Insert: {
           auto_top_up_cycle_amount?: number
+          auto_top_up_cycle_attempt?: number
           auto_top_up_cycle_enabled?: boolean
           auto_top_up_cycle_last_attempt_at?: string | null
           auto_top_up_cycle_paid_for?: string | null
+          auto_top_up_cycle_pending_intent_id?: string | null
           auto_top_up_enabled?: boolean
           auto_top_up_last_attempt_at?: string | null
           auto_top_up_monthly_limit?: number
@@ -2859,9 +2863,11 @@ export type Database = {
         }
         Update: {
           auto_top_up_cycle_amount?: number
+          auto_top_up_cycle_attempt?: number
           auto_top_up_cycle_enabled?: boolean
           auto_top_up_cycle_last_attempt_at?: string | null
           auto_top_up_cycle_paid_for?: string | null
+          auto_top_up_cycle_pending_intent_id?: string | null
           auto_top_up_enabled?: boolean
           auto_top_up_last_attempt_at?: string | null
           auto_top_up_monthly_limit?: number
@@ -5790,8 +5796,8 @@ export type Database = {
       release_credit_cycle_top_up: {
         Args: {
           p_cycle_start: string
+          p_new_attempt?: boolean
           p_org_id: string
-          p_previous_paid_for?: string
         }
         Returns: undefined
       }
@@ -5938,10 +5944,10 @@ export type Database = {
         Args: { p_org_id: string }
         Returns: {
           amount: number
+          attempt: number
           claimed: boolean
           customer_id: string
           cycle_start: string
-          previous_paid_for: string
         }[]
       }
       try_complete_pending_onboarding: {

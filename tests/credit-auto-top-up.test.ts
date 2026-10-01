@@ -164,4 +164,33 @@ describe('credit auto top-up API', () => {
     expect(rejected.status).toBeGreaterThanOrEqual(400)
     expect((await rejected.json() as AutoTopUpSettings).error).toBe('invalid_cycle_amount')
   })
+
+  it('requires a Stripe customer to enable the scheduled top-up', async () => {
+    const response = await fetchTestRequest(getEndpointUrl('/private/credits/auto-top-up'), {
+      method: 'POST',
+      headers: await getAuthHeaders(),
+      body: JSON.stringify({ orgId: ORG_ID_CREDIT_AUTO_TOP_UP, cycleEnabled: true, cycleAmount: 600 }),
+    })
+    expect(response.status).toBeGreaterThanOrEqual(400)
+    expect((await response.json() as AutoTopUpSettings).error).toBe('stripe_customer_missing')
+  })
+
+  it('saves the scheduled top-up without touching the threshold settings', async () => {
+    const headers = await getAuthHeaders()
+    const endpoint = getEndpointUrl('/private/credits/auto-top-up')
+    expect((await fetchTestRequest(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ orgId: ORG_ID_CREDIT_AUTO_TOP_UP, enabled: false, threshold: 30, monthlyLimit: 0 }),
+    })).status).toBe(200)
+    const response = await fetchTestRequest(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ orgId: ORG_ID_CREDIT_AUTO_TOP_UP, cycleEnabled: false, cycleAmount: 50 }),
+    })
+    expect(response.status).toBe(200)
+    const data = await response.json() as AutoTopUpSettings
+    expect(data.threshold).toBe(30)
+    expect(data.cycleAmount).toBe(50)
+  })
 })

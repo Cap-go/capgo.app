@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(9);
+SELECT plan(12);
 
 INSERT INTO public.stripe_info (
     customer_id,
@@ -100,8 +100,15 @@ SELECT
 SELECT public.release_credit_cycle_top_up(
     (SELECT org_id FROM test_cycle_context),
     (SELECT cycle_start FROM test_cycle_claim),
-    (SELECT previous_paid_for FROM test_cycle_claim)
+    true
 );
+
+SELECT
+    is(
+        (SELECT auto_top_up_cycle_attempt FROM public.orgs WHERE id = (SELECT org_id FROM test_cycle_context)),
+        1,
+        'release after a confirmed failure moves to a new idempotency attempt'
+    );
 
 SELECT
     is(
@@ -119,6 +126,32 @@ SELECT
         (SELECT claimed FROM public.try_claim_credit_cycle_top_up((SELECT org_id FROM test_cycle_context))),
         true,
         'released cycle top-up is retried after the cooldown'
+    );
+
+-- A charge with an unknown outcome blocks new claims until reconciled.
+UPDATE public.orgs
+SET
+    auto_top_up_cycle_paid_for = NULL,
+    auto_top_up_cycle_last_attempt_at = NULL,
+    auto_top_up_cycle_pending_intent_id = 'pi_test_pending'
+WHERE id = (SELECT org_id FROM test_cycle_context);
+
+SELECT
+    is(
+        (SELECT claimed FROM public.try_claim_credit_cycle_top_up((SELECT org_id FROM test_cycle_context))),
+        false,
+        'a pending scheduled PaymentIntent blocks a new cycle claim'
+    );
+
+UPDATE public.orgs
+SET auto_top_up_cycle_pending_intent_id = NULL
+WHERE id = (SELECT org_id FROM test_cycle_context);
+
+SELECT
+    is(
+        (SELECT attempt FROM public.try_claim_credit_cycle_top_up((SELECT org_id FROM test_cycle_context))),
+        1,
+        'claim returns the current idempotency attempt'
     );
 
 -- The next billing cycle is claimable again.

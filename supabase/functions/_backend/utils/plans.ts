@@ -662,14 +662,18 @@ export async function checkPlanStatusOnly(c: Context, orgId: string, drizzleClie
   }
 
   // Scheduled top-up first: its credits can make the threshold top-up unnecessary.
+  // While a scheduled charge may still complete, skip the threshold charge to avoid buying twice.
+  let cycleChargeInFlight = false
   try {
-    await maybeCycleTopUpCredits(c, orgId)
+    cycleChargeInFlight = (await maybeCycleTopUpCredits(c, orgId)).inFlight
   }
   catch (error) {
+    cycleChargeInFlight = true
     cloudlogErr({ requestId: c.get('requestId'), message: 'credit cycle top-up failed', orgId, error })
   }
   try {
-    await maybeAutoTopUpCredits(c, orgId)
+    if (!cycleChargeInFlight)
+      await maybeAutoTopUpCredits(c, orgId)
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'credit auto top-up failed', orgId, error })

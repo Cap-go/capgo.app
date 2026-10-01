@@ -1,5 +1,6 @@
+import Stripe from 'stripe'
 import { describe, expect, it } from 'vitest'
-import { MIN_AUTO_TOP_UP_THRESHOLD, normalizeAutoTopUpMonthlyLimit, normalizeCycleTopUpAmount, shouldAttemptAutoTopUp } from '../supabase/functions/_backend/utils/credit_auto_top_up.ts'
+import { isConfirmedNoChargeError, MIN_AUTO_TOP_UP_THRESHOLD, normalizeAutoTopUpMonthlyLimit, normalizeCycleTopUpAmount, shouldAttemptAutoTopUp } from '../supabase/functions/_backend/utils/credit_auto_top_up.ts'
 
 describe('credit auto top-up decision', () => {
   it('does not attempt when disabled', () => {
@@ -142,5 +143,18 @@ describe('scheduled top-up amount validation', () => {
     expect(normalizeCycleTopUpAmount(false)).toBeNull()
     expect(normalizeCycleTopUpAmount('')).toBeNull()
     expect(normalizeCycleTopUpAmount(1_000_000_000_000)).toBeNull()
+  })
+})
+
+describe('off-session charge failure classification', () => {
+  it.concurrent('treats card declines and invalid requests as confirmed no-charge', () => {
+    expect(isConfirmedNoChargeError(new Stripe.errors.StripeCardError({ type: 'card_error', message: 'declined' }))).toBe(true)
+    expect(isConfirmedNoChargeError(new Stripe.errors.StripeInvalidRequestError({ type: 'invalid_request_error', message: 'bad' }))).toBe(true)
+  })
+
+  it.concurrent('treats connection and API errors as unknown outcomes', () => {
+    expect(isConfirmedNoChargeError(new Stripe.errors.StripeConnectionError({ type: 'api_error', message: 'reset' }))).toBe(false)
+    expect(isConfirmedNoChargeError(new Stripe.errors.StripeAPIError({ type: 'api_error', message: '500' }))).toBe(false)
+    expect(isConfirmedNoChargeError(new Error('timeout'))).toBe(false)
   })
 })

@@ -1601,6 +1601,26 @@
       "type": "timestamp with time zone"
     },
     {
+      "default": "0",
+      "generated": "",
+      "identity": "",
+      "name": "auto_top_up_cycle_attempt",
+      "notNull": true,
+      "position": 34,
+      "table": "orgs",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "auto_top_up_cycle_pending_intent_id",
+      "notNull": false,
+      "position": 35,
+      "table": "orgs",
+      "type": "text"
+    },
+    {
       "default": "now()",
       "generated": "",
       "identity": "",

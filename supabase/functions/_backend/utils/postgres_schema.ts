@@ -137,6 +137,8 @@ export const orgs = pgTable('orgs', {
   auto_top_up_cycle_amount: numeric('auto_top_up_cycle_amount', { precision: 18, scale: 6 }).notNull().default('10'),
   auto_top_up_cycle_paid_for: timestamp('auto_top_up_cycle_paid_for', { withTimezone: true }),
   auto_top_up_cycle_last_attempt_at: timestamp('auto_top_up_cycle_last_attempt_at', { withTimezone: true }),
+  auto_top_up_cycle_attempt: integer('auto_top_up_cycle_attempt').notNull().default(0),
+  auto_top_up_cycle_pending_intent_id: text('auto_top_up_cycle_pending_intent_id'),
 })
 
 export const notifications = pgTable('notifications', {

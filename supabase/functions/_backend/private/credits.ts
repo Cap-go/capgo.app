@@ -5,6 +5,7 @@ import type { AuthInfo, MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import {
   getAutoTopUpSettings,
+  MAX_AUTO_TOP_UP_MONTHLY_LIMIT,
   MIN_AUTO_TOP_UP_THRESHOLD,
   normalizeAutoTopUpMonthlyLimit,
   normalizeAutoTopUpThreshold,
@@ -681,13 +682,19 @@ app.post('/auto-top-up', middlewareAuth, async (c) => {
   if (body.enabled !== undefined && typeof body.enabled !== 'boolean')
     throw simpleError('invalid_enabled', 'enabled must be a boolean')
 
-  const threshold = normalizeAutoTopUpThreshold(body.threshold)
-  if (threshold === null)
-    throw simpleError('invalid_threshold', `Auto top-up amount must be at least ${MIN_AUTO_TOP_UP_THRESHOLD}`)
+  // Omitted fields keep their stored value, so each section can save without overwriting the other.
+  let threshold: number | undefined
+  if (body.threshold !== undefined) {
+    const normalizedThreshold = normalizeAutoTopUpThreshold(body.threshold)
+    if (normalizedThreshold === null)
+      throw simpleError('invalid_threshold', `Auto top-up amount must be at least ${MIN_AUTO_TOP_UP_THRESHOLD}`)
+    threshold = normalizedThreshold
+  }
 
   let monthlyLimit: number | undefined
   if (body.monthlyLimit !== undefined) {
-    const normalizedLimit = normalizeAutoTopUpMonthlyLimit(body.monthlyLimit, threshold)
+    // Checked against the stored threshold in saveAutoTopUpSettings when threshold is omitted.
+    const normalizedLimit = normalizeAutoTopUpMonthlyLimit(body.monthlyLimit, threshold ?? MIN_AUTO_TOP_UP_THRESHOLD)
     if (normalizedLimit === null)
       throw simpleError('invalid_monthly_limit', 'Auto top-up monthly limit must be 0 (no limit) or at least the top-up amount')
     monthlyLimit = normalizedLimit
@@ -700,13 +707,13 @@ app.post('/auto-top-up', middlewareAuth, async (c) => {
   if (body.cycleAmount !== undefined) {
     const normalizedAmount = normalizeCycleTopUpAmount(body.cycleAmount)
     if (normalizedAmount === null)
-      throw simpleError('invalid_cycle_amount', `Scheduled top-up amount must be at least ${MIN_AUTO_TOP_UP_THRESHOLD}`)
+      throw simpleError('invalid_cycle_amount', `Scheduled top-up amount must be a whole number from ${MIN_AUTO_TOP_UP_THRESHOLD} to ${MAX_AUTO_TOP_UP_MONTHLY_LIMIT}`)
     cycleAmount = normalizedAmount
   }
 
   try {
     return c.json(await saveAutoTopUpSettings(c as AppContext, body.orgId, {
-      enabled: body.enabled === true,
+      enabled: body.enabled,
       threshold,
       monthlyLimit,
       cycleEnabled: body.cycleEnabled,

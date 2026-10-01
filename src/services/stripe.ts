@@ -247,9 +247,10 @@ export interface CreditAutoTopUpSettings {
   cycleEnd: string | null
 }
 
+// Omitted fields keep their stored value.
 export interface CreditAutoTopUpUpdate {
-  enabled: boolean
-  threshold: number
+  enabled?: boolean
+  threshold?: number
   monthlyLimit?: number
   cycleEnabled?: boolean
   cycleAmount?: number
