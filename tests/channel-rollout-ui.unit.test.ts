@@ -349,7 +349,7 @@ describe('channel information rollout and update package UX', () => {
       },
       {
         run: () => flows.promoteRollout(),
-        title: 'Complete progressive rollout?',
+        title: 'Promote to 100% of devices?',
         assert: () => expect(saveChannelChanges).toHaveBeenCalledWith(expect.objectContaining({ version: 42 })),
       },
       {
