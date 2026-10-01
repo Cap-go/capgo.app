@@ -115,6 +115,50 @@ describe('credits pricing API', () => {
     expect(fromZero.breakdown.bandwidth.cost).toBeCloseTo(2214.4, 6)
   })
 
+  it.concurrent('accepts numeric strings like the website calculator sends', async () => {
+    const response = await fetchTestRequest(getEndpointUrl('/private/credits'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        mau: '1000000',
+        bandwidth: '0',
+        storage: '0',
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    const data = await response.json() as { total_cost: number }
+    expect(data.total_cost).toBeCloseTo(3000, 6)
+  })
+
+  it.concurrent.each([
+    ['non-numeric string', { mau: 'lots' }],
+    ['empty string', { mau: '' }],
+    ['null', { mau: null }],
+    ['boolean', { bandwidth: true }],
+    ['negative number', { mau: -1 }],
+    ['negative string', { storage: '-1' }],
+  ])('rejects %s usage input', async (_label, override) => {
+    const response = await fetchTestRequest(getEndpointUrl('/private/credits'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        mau: 0,
+        bandwidth: 0,
+        storage: 0,
+        ...override,
+      }),
+    })
+
+    expect(response.status).toBe(400)
+    const data = await response.json() as { error: string }
+    expect(data.error).toBe('invalid_usage')
+  })
+
   it.concurrent('rejects negative build_time input', async () => {
     const response = await fetchTestRequest(getEndpointUrl('/private/credits'), {
       method: 'POST',
