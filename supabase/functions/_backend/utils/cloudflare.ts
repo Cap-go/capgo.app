@@ -51,6 +51,11 @@ type AiBinding = {
   run: (model: string, input: unknown) => Promise<unknown>
 }
 
+export interface ManifestCleanupQueueMessage {
+  versionId: number
+  manifestIds: number[]
+}
+
 // eslint-disable-next-line ts/consistent-type-definitions
 export type Bindings = {
   DEVICE_USAGE: AnalyticsEngineDataset
@@ -63,6 +68,7 @@ export type Bindings = {
   NOTIFICATION_EVENTS?: AnalyticsEngineDataset
   CLI_USAGE?: AnalyticsEngineDataset
   NOTIFICATION_QUEUE?: Queue
+  MANIFEST_CLEANUP_QUEUE?: Queue<ManifestCleanupQueueMessage>
   AUTH_EMAIL?: SendEmail
   DB_STOREAPPS: D1Database
   CHANNEL_SELF_STORE?: KVNamespace
