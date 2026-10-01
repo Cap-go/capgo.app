@@ -74,6 +74,7 @@ jobs:
             --path dist \
             --channel "$CHANNEL" \
             --bundle "$BUNDLE" \
+            --delta \
             --delete-linked-bundle-on-upload \
             --comment "PR preview ${HEAD_SHA}" \
             --link "$PR_URL"
