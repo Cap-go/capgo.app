@@ -2790,6 +2790,7 @@ export type Database = {
         Row: {
           auto_top_up_enabled: boolean
           auto_top_up_last_attempt_at: string | null
+          auto_top_up_monthly_limit: number
           auto_top_up_threshold: number
           created_at: string | null
           created_by: string
@@ -2820,6 +2821,7 @@ export type Database = {
         Insert: {
           auto_top_up_enabled?: boolean
           auto_top_up_last_attempt_at?: string | null
+          auto_top_up_monthly_limit?: number
           auto_top_up_threshold?: number
           created_at?: string | null
           created_by: string
@@ -2850,6 +2852,7 @@ export type Database = {
         Update: {
           auto_top_up_enabled?: boolean
           auto_top_up_last_attempt_at?: string | null
+          auto_top_up_monthly_limit?: number
           auto_top_up_threshold?: number
           created_at?: string | null
           created_by?: string
@@ -4647,6 +4650,10 @@ export type Database = {
         Returns: {
           bundle_name: string
         }[]
+      }
+      get_credit_auto_top_up_month_total: {
+        Args: { p_org_id: string }
+        Returns: number
       }
       get_current_plan_max_org: {
         Args: { orgid: string }

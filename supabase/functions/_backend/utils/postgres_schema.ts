@@ -132,6 +132,7 @@ export const orgs = pgTable('orgs', {
   auto_top_up_enabled: boolean('auto_top_up_enabled').notNull().default(false),
   auto_top_up_threshold: numeric('auto_top_up_threshold', { precision: 18, scale: 6 }).notNull().default('10'),
   auto_top_up_last_attempt_at: timestamp('auto_top_up_last_attempt_at', { withTimezone: true }),
+  auto_top_up_monthly_limit: numeric('auto_top_up_monthly_limit', { precision: 18, scale: 6 }).notNull().default('0'),
 })
 
 export const notifications = pgTable('notifications', {
