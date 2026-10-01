@@ -39,6 +39,12 @@ jobs:
             exit 0
           fi
 
+          if ! git rev-parse --verify --quiet "$BEFORE_SHA^{commit}" >/dev/null; then
+            echo 'Previous main SHA is not reachable in the checkout; skipping migration-order warnings.'
+            echo 'found=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           changed_migrations="$(git diff -M100% --name-only --diff-filter=AR "$BEFORE_SHA" "$AFTER_SHA" -- 'supabase/migrations/*.sql')"
           if [[ -z "$changed_migrations" ]]; then
             echo 'This push did not add or restamp a Supabase migration.'

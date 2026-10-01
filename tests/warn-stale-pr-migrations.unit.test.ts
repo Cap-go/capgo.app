@@ -1,32 +1,12 @@
 import { readFile } from 'node:fs/promises'
-import { createRequire } from 'node:module'
 import { describe, expect, it, vi } from 'vitest'
 import { parse } from 'yaml'
+import * as warningModule from '../scripts/warn-stale-pr-migrations.mjs'
 
 interface PullRequestFile {
   filename: string
   status: string
 }
-
-interface WarningModule {
-  COMMENT_MARKER: string
-  buildWarningBody: (input: {
-    commitUrl: string
-    latestMainMigrationPath: string
-    mainMigrationPaths: string[]
-    staleMigrationPaths: string[]
-  }) => string
-  latestMigrationPath: (paths: string[]) => null | string
-  stalePullRequestMigrations: (
-    files: PullRequestFile[],
-    latestMainMigrationPath: string,
-    mainMigrationPaths?: string[],
-  ) => string[]
-  warnStalePrMigrations: (input: Record<string, unknown>) => Promise<number>
-}
-
-const require = createRequire(import.meta.url)
-const warningModule = require('../scripts/warn-stale-pr-migrations.mjs') as WarningModule
 
 describe('stale pull request migration warnings', () => {
   it.concurrent('detects only added or restamped migrations that no longer sort after main', () => {
@@ -84,6 +64,7 @@ describe('stale pull request migration warnings', () => {
     const listFiles = vi.fn()
     const listComments = vi.fn()
     const createComment = vi.fn()
+    const deleteComment = vi.fn()
     const updateComment = vi.fn()
     const pullRequests = [
       { number: 10, updated_at: '2026-10-01T10:00:00Z' },
@@ -105,7 +86,7 @@ describe('stale pull request migration warnings', () => {
         return []
       }),
       rest: {
-        issues: { createComment, listComments, updateComment },
+        issues: { createComment, deleteComment, listComments, updateComment },
         pulls: { list: pullsList, listFiles },
       },
     }
@@ -131,7 +112,49 @@ describe('stale pull request migration warnings', () => {
       body: expect.stringContaining('Supabase will not deploy this PR correctly as-is'),
     }))
     expect(createComment).not.toHaveBeenCalled()
+    expect(deleteComment).toHaveBeenCalledOnce()
+    expect(deleteComment).toHaveBeenCalledWith(expect.objectContaining({ comment_id: 99 }))
     expect(github.paginate.mock.calls.filter(([method]) => method === listFiles)).toHaveLength(2)
+  })
+
+  it.concurrent('creates a marker comment when a stale PR has no prior warning', async () => {
+    const pullsList = vi.fn()
+    const listFiles = vi.fn()
+    const listComments = vi.fn()
+    const createComment = vi.fn()
+    const github = {
+      paginate: vi.fn(async (method) => {
+        if (method === pullsList)
+          return [{ number: 20, updated_at: '2026-10-01T10:00:00Z' }]
+        if (method === listFiles)
+          return [{ filename: 'supabase/migrations/20261001090000_stale.sql', status: 'added' }]
+        return []
+      }),
+      rest: {
+        issues: { createComment, deleteComment: vi.fn(), listComments, updateComment: vi.fn() },
+        pulls: { list: pullsList, listFiles },
+      },
+    }
+
+    const warned = await warningModule.warnStalePrMigrations({
+      github,
+      context: {
+        payload: { repository: { default_branch: 'main' } },
+        repo: { owner: 'Cap-go', repo: 'capgo.app' },
+        sha: 'abc123',
+      },
+      core: { info: vi.fn(), notice: vi.fn() },
+      mainMigrationPaths: ['supabase/migrations/20261001093410_latest.sql'],
+      latestMainMigrationPath: 'supabase/migrations/20261001093410_latest.sql',
+      now: new Date('2026-10-01T12:00:00Z'),
+    })
+
+    expect(warned).toBe(1)
+    expect(createComment).toHaveBeenCalledOnce()
+    expect(createComment).toHaveBeenCalledWith(expect.objectContaining({
+      issue_number: 20,
+      body: expect.stringContaining(warningModule.COMMENT_MARKER),
+    }))
   })
 
   it.concurrent('configures the workflow for main migration pushes with comment permissions', async () => {
@@ -165,6 +188,7 @@ describe('stale pull request migration warnings', () => {
     const findStep = steps.find(step => step.name === 'Find migrations added to main')
     expect(findStep?.run).toContain('-M100%')
     expect(findStep?.run).toContain('--diff-filter=AR')
+    expect(findStep?.run).toContain('git rev-parse --verify --quiet "$BEFORE_SHA^{commit}"')
     expect(steps.find(step => step.name === 'Warn affected pull requests')?.uses).toBe('actions/github-script@v8')
   })
 })

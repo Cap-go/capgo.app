@@ -137,17 +137,6 @@ export async function warnStalePrMigrations({
       per_page: 100,
     })
     const staleMigrationPaths = stalePullRequestMigrations(files, latestMain, currentMainMigrationPaths)
-    if (staleMigrationPaths.length === 0) {
-      core.info(`PR #${pullRequest.number} has no stale Supabase migrations.`)
-      continue
-    }
-
-    const body = buildWarningBody({
-      mainMigrationPaths: changedMainMigrations,
-      latestMainMigrationPath: latestMain,
-      staleMigrationPaths,
-      commitUrl: `https://github.com/${owner}/${repo}/commit/${context.sha}`,
-    })
     const comments = await github.paginate(github.rest.issues.listComments, {
       owner,
       repo,
@@ -158,7 +147,25 @@ export async function warnStalePrMigrations({
       comment.user?.login === 'github-actions[bot]'
       && comment.body?.startsWith(COMMENT_MARKER),
     )
+    if (staleMigrationPaths.length === 0) {
+      if (existing) {
+        await github.rest.issues.deleteComment({
+          owner,
+          repo,
+          comment_id: existing.id,
+        })
+        core.notice(`Removed resolved migration-order warning from PR #${pullRequest.number}.`)
+      }
+      core.info(`PR #${pullRequest.number} has no stale Supabase migrations.`)
+      continue
+    }
 
+    const body = buildWarningBody({
+      mainMigrationPaths: changedMainMigrations,
+      latestMainMigrationPath: latestMain,
+      staleMigrationPaths,
+      commitUrl: `https://github.com/${owner}/${repo}/commit/${context.sha}`,
+    })
     if (existing) {
       await github.rest.issues.updateComment({
         owner,
