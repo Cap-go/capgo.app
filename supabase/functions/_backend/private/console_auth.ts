@@ -2,6 +2,7 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
 import { compare, hash } from 'bcryptjs'
+import { APIError } from 'better-auth/api'
 import { verifyCaptchaToken } from '../utils/captcha.ts'
 import { CONSOLE_SESSION_PREFIX, consoleAuthHeaders, createConsoleAuth, getConsoleSession } from '../utils/console_auth.ts'
 import { getAllowedCorsOrigin, quickError } from '../utils/hono.ts'
@@ -190,7 +191,14 @@ app.post('/console-verify-email', async (c) => {
     if (!session || session.user.migrationBlocked || (session.user.twoFactorEnabled && !session.mfaVerified))
       return quickError(401, 'not_authenticated', 'Not authenticated')
     const body = await c.req.json<{ token: string }>()
-    await instance.auth.api.verifyEmailOTP({ body: { email: session.user.email, otp: body.token }, headers })
+    try {
+      await instance.auth.api.verifyEmailOTP({ body: { email: session.user.email, otp: body.token }, headers })
+    }
+    catch (error) {
+      if (error instanceof APIError && error.statusCode >= 400 && error.statusCode < 500)
+        return quickError(error.statusCode, 'email_otp_invalid', error.message)
+      throw error
+    }
     const verifiedAt = new Date().toISOString()
     await instance.database.query('SELECT public.record_email_otp_verified($1::uuid)', [session.user.id])
     return c.json({ verified_at: verifiedAt })

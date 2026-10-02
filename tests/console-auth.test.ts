@@ -46,7 +46,9 @@ describe('console Better Auth', () => {
   }
 
   beforeAll(() => {
-    vi.stubGlobal('EdgeRuntime', { waitUntil: (task: Promise<unknown>) => { void task.catch(() => {}) } })
+    vi.stubGlobal('EdgeRuntime', { waitUntil: (task: Promise<unknown>) => {
+      void task.catch(() => {})
+    } })
     vi.stubEnv('SUPABASE_DB_URL', POSTGRES_URL)
     vi.stubEnv('CONSOLE_AUTH_URL', base)
     vi.stubEnv('WEBAPP_URL', base)
@@ -146,6 +148,17 @@ describe('console Better Auth', () => {
     const removal = await request('/private/console/query', { kind: 'rpc', name: 'delete_user', args: [], operations: [] }, account.token)
     expect(removal.status).toBe(200)
     expect((await removal.json() as { error: unknown }).error).toBeNull()
+  })
+
+  it('reports invalid email OTP as a client error and records valid verification', async () => {
+    const account = await signup()
+    expect((await request('/auth/email-otp/send-verification-otp', { email: account.email, type: 'email-verification' }, account.token)).status).toBe(200)
+    const message = messages.findLast(message => message.to === account.email && message.text.startsWith('Your verification code'))!
+    const otp = message.text.match(/code is (\d+)/)![1]
+    expect((await request('/auth/console-verify-email', { token: 'invalid' }, account.token)).status).toBe(400)
+    const verified = await request('/auth/console-verify-email', { token: otp }, account.token)
+    expect(verified.status, await verified.clone().text()).toBe(200)
+    expect((await verified.json() as { verified_at: string }).verified_at).toBeTruthy()
   })
 
   it('requires TOTP after password recovery and revokes old sessions', async () => {
