@@ -74,7 +74,7 @@ describe('rbac permission infra errors', () => {
   })
 
   it('checkPermissionPg surfaces Hyperdrive connect timeouts as 503', async () => {
-    executeMock.mockRejectedValueOnce(new Error('timeout exceeded when trying to connect'))
+    executeMock.mockRejectedValue(new Error('timeout exceeded when trying to connect'))
 
     await expect(checkPermissionPg(
       makeContext(),
@@ -128,7 +128,7 @@ describe('rbac permission infra errors', () => {
         code: '57P01',
       }),
     })
-    executeMock.mockRejectedValueOnce(drizzleWrapped)
+    executeMock.mockRejectedValue(drizzleWrapped)
 
     await expect(checkPermissionPg(
       makeContext(),
@@ -205,7 +205,7 @@ describe('rbac permission infra errors', () => {
   })
 
   it('checkPermissionPg surfaces statement timeouts as 503 on the non-rbac_id path', async () => {
-    executeMock.mockRejectedValueOnce(Object.assign(
+    executeMock.mockRejectedValue(Object.assign(
       new Error('canceling statement due to statement timeout'),
       { code: '57014' },
     ))

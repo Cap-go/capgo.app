@@ -23,6 +23,7 @@ import { quickError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
 import { isTransientPgError } from './pg_errors.ts'
+import { withAuthPgRetry } from './pg_auth_retry.ts'
 
 // =============================================================================
 // Types
@@ -358,7 +359,7 @@ export async function checkPermissionPg(
       if (!apikeyString)
         return false
 
-      const rbacOnlyResult = await drizzleClient.execute(
+      const rbacOnlyResult = await withAuthPgRetry(() => drizzleClient.execute(
         sql`SELECT public.rbac_check_permission_direct(
           ${permission},
           ${userId}::uuid,
@@ -367,7 +368,7 @@ export async function checkPermissionPg(
           ${channelId}::bigint,
           ${apikeyString}
         ) AS allowed`,
-      )
+      ))
 
       const rbacOnlyAllowed = (rbacOnlyResult.rows[0] as any)?.allowed === true
       cloudlog({
@@ -381,7 +382,7 @@ export async function checkPermissionPg(
     }
 
     // Use the unified SQL function for JWT checks and non-key fallbacks.
-    const result = await drizzleClient.execute(
+    const result = await withAuthPgRetry(() => drizzleClient.execute(
       sql`SELECT public.rbac_check_permission_direct(
         ${permission},
         ${userId}::uuid,
@@ -390,7 +391,7 @@ export async function checkPermissionPg(
         ${channelId}::bigint,
         ${apikeyString ?? null}
       ) as allowed`,
-    )
+    ))
 
     const allowed = (result.rows[0] as any)?.allowed === true
 

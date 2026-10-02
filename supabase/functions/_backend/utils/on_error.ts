@@ -215,7 +215,7 @@ export function onError(functionName: string) {
         && typeof e.cause === 'object'
         && (e.cause as { suppressDiscordAlert?: unknown }).suppressDiscordAlert === true
       const suppressBackendAlert = suppressDiscordAlert || shouldSuppressQueueRetryAlert(c)
-      if (e.status === 429) {
+      if (e.status === 429 || e.status === 503) {
         // Set rate-limit headers from moreInfo when available, but DO NOT
         // overwrite the response body. Several distinct conditions reach this
         // branch — `too_many_requests` from simpleRateLimit (IP failed-auth,
