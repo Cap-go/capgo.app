@@ -45,13 +45,32 @@ env:
 jobs:
   should_run:
     runs-on: ubuntu-latest
-    permissions: {}
+    permissions:
+      pull-requests: read
     outputs:
       enabled: ${{ steps.check.outputs.enabled }}
     steps:
+      # A push to a branch with an open PR also triggers the pull_request run for the
+      # same commit. Running both doubled runner demand and left jobs queued for ~2 min,
+      # so the push run steps aside and the pull_request run covers the commit.
       - name: Enable test workflow for this event
         id: check
-        run: echo "enabled=true" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          enabled=true
+          if [ "$EVENT_NAME" = "push" ]; then
+            open_prs=$(gh api "repos/${REPOSITORY}/pulls?state=open&head=${OWNER}:${BRANCH}" --jq 'length' || echo 0)
+            if [ "${open_prs:-0}" -gt 0 ]; then
+              echo "Branch ${BRANCH} has an open pull request; its pull_request run tests this commit."
+              enabled=false
+            fi
+          fi
+          echo "enabled=${enabled}" >> "$GITHUB_OUTPUT"
 
   changes:
     needs: should_run
