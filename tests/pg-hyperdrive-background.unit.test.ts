@@ -13,6 +13,10 @@ vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
   cloudlogErr: vi.fn(),
 }))
 
+vi.mock('../supabase/functions/_backend/utils/geolocation.ts', () => ({
+  getClientDbRegionSB: () => 'EU',
+}))
+
 function createContext(options: {
   flags?: Partial<Record<'useBackgroundHyperdrive' | 'requireReadReplica', boolean>>
   env?: Record<string, unknown>
@@ -102,6 +106,20 @@ describe('Hyperdrive background routing', () => {
     })
 
     expect(getDatabaseURL(context)).toBe('postgres://direct-hyperdrive')
+  })
+
+  it.concurrent('prefers BACKGROUND_EU over read replicas for optional background reads', async () => {
+    const { getDatabaseURL } = await import('../supabase/functions/_backend/utils/pg.ts')
+    const context = createContext({
+      flags: { useBackgroundHyperdrive: true },
+      env: {
+        HYPERDRIVE_CAPGO_BACKGROUND_EU: { connectionString: 'postgres://background-hyperdrive' },
+        HYPERDRIVE_CAPGO_READ_EU: { connectionString: 'postgres://read-eu' },
+        HYPERDRIVE_CAPGO_DIRECT_EU: { connectionString: 'postgres://direct-hyperdrive' },
+      },
+    })
+
+    expect(getDatabaseURL(context, true)).toBe('postgres://background-hyperdrive')
   })
 
   it.concurrent('uses a smaller pg pool max for background work', async () => {

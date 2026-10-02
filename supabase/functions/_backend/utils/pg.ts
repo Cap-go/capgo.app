@@ -327,8 +327,7 @@ function getLocalReadOnlyDatabaseURL(c: Context): string | null {
 export function getDatabaseURL(c: Context, readOnly = false): string {
   const dbRegion = getClientDbRegionSB(c)
 
-  // For read-only queries, use region to avoid Network latency
-  if (readOnly) {
+  if (readOnly && shouldRequireReadReplica(c)) {
     const readOnlyDatabaseURL = getReadOnlyDatabaseURL(c, dbRegion)
     if (readOnlyDatabaseURL)
       return readOnlyDatabaseURL
@@ -336,9 +335,7 @@ export function getDatabaseURL(c: Context, readOnly = false): string {
     const localReadOnlyDatabaseURL = getLocalReadOnlyDatabaseURL(c)
     if (localReadOnlyDatabaseURL)
       return localReadOnlyDatabaseURL
-  }
 
-  if (readOnly && shouldRequireReadReplica(c)) {
     cloudlog({ requestId: c.get('requestId'), message: 'Read replica is required for this endpoint' })
     throw new Error('Read replica is required for this endpoint')
   }
@@ -350,6 +347,17 @@ export function getDatabaseURL(c: Context, readOnly = false): string {
       message: `Using HYPERDRIVE_CAPGO_BACKGROUND_EU for ${readOnly ? 'read-only' : 'read-write'}`,
     })
     return c.env.HYPERDRIVE_CAPGO_BACKGROUND_EU.connectionString
+  }
+
+  // For read-only queries, use region to avoid Network latency
+  if (readOnly) {
+    const readOnlyDatabaseURL = getReadOnlyDatabaseURL(c, dbRegion)
+    if (readOnlyDatabaseURL)
+      return readOnlyDatabaseURL
+
+    const localReadOnlyDatabaseURL = getLocalReadOnlyDatabaseURL(c)
+    if (localReadOnlyDatabaseURL)
+      return localReadOnlyDatabaseURL
   }
 
   if (c.env.HYPERDRIVE_CAPGO_DIRECT_EU && !shouldSkipDirectHyperdriveFallback(c)) {
