@@ -4,9 +4,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const executeMock = vi.fn()
 let pgClientSerial = 0
 const getPgClientMock = vi.fn(() => ({ clientId: ++pgClientSerial }))
-const getDrizzleClientMock = vi.fn(() => ({
-  execute: executeMock,
-}))
+const drizzlePgClientsSeen: { clientId: number }[] = []
+const getDrizzleClientMock = vi.fn((pgClient?: { clientId: number }) => {
+  if (pgClient)
+    drizzlePgClientsSeen.push(pgClient)
+  return {
+    execute: executeMock,
+  }
+})
 const closeClientMock = vi.fn()
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
@@ -53,6 +58,7 @@ describe('rbac permission infra errors', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     pgClientSerial = 0
+    drizzlePgClientsSeen.length = 0
   })
 
   it('checkPermission returns false for real ACL denials', async () => {
@@ -116,9 +122,8 @@ describe('rbac permission infra errors', () => {
     expect(getPgClientMock).toHaveBeenCalledTimes(2)
     expect(closeClientMock).toHaveBeenCalledTimes(2)
     expect(waitAuthPgRetryJitterMock).toHaveBeenCalledTimes(1)
-    const drizzlePgClients = getDrizzleClientMock.mock.calls.map(call => call[0])
-    expect(drizzlePgClients).toHaveLength(2)
-    expect(drizzlePgClients[0]).not.toBe(drizzlePgClients[1])
+    expect(drizzlePgClientsSeen).toHaveLength(2)
+    expect(drizzlePgClientsSeen[0].clientId).not.toBe(drizzlePgClientsSeen[1].clientId)
   })
 
   it('checkPermissionPgFreshRetry does not retry non-transient permission failures', async () => {
