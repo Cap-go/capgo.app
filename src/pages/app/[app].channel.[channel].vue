@@ -76,10 +76,12 @@ interface PromoteTargetChannel {
   name: string
   versionName: string | null
   rolloutActive: boolean
+  isDefault: boolean
 }
 const promoteDialogId = 'promote-channel-bundle'
 const promoteTargets = ref<PromoteTargetChannel[]>([])
 const promoteTargetId = ref<number | null>(null)
+const appHasDefaultChannel = ref(false)
 
 const main = useMainStore()
 const route = useRoute('/app/[app].channel.[channel]')
@@ -639,20 +641,23 @@ const promoteTargetPermissions = ['channel.promote_bundle', 'channel.update_sett
  */
 async function loadPromoteTargets() {
   const source = channel.value
-  if (!source?.app_id || !source.id) {
+  // Promotion is offered from non-default channels only (e.g. preprod -> production).
+  if (!source?.app_id || !source.id || source.public) {
     promoteTargets.value = []
+    appHasDefaultChannel.value = false
     return
   }
 
   const { data, error } = await supabase
     .from('channels')
-    .select('id, name, rollout_version, rollout_enabled, version:app_versions!channels_version_fkey(name)')
+    .select('id, name, public, rollout_version, rollout_enabled, version:app_versions!channels_version_fkey(name)')
     .eq('app_id', source.app_id)
     .neq('id', source.id)
     .order('name', { ascending: true })
   if (error) {
     console.error('cannot load channels to promote to', error)
     promoteTargets.value = []
+    appHasDefaultChannel.value = false
     return
   }
 
@@ -662,6 +667,7 @@ async function loadPromoteTargets() {
   // Ignore stale results if the user navigated to another channel meanwhile.
   if (channel.value?.id !== source.id)
     return
+  appHasDefaultChannel.value = (data ?? []).some(row => row.public)
   promoteTargets.value = eligible
     .filter(row => row !== null)
     .map(row => ({
@@ -669,12 +675,23 @@ async function loadPromoteTargets() {
       name: row.name,
       versionName: (row.version as { name: string } | null)?.name ?? null,
       rolloutActive: !!row.rollout_enabled && row.rollout_version != null,
+      isDefault: !!row.public,
     }))
+    // Default channels first: they are the usual promotion target.
+    .sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
 }
 
-watch(() => channel.value?.id, () => {
+watch(() => [channel.value?.id, channel.value?.public], () => {
   void loadPromoteTargets()
 }, { immediate: true })
+
+const showPromoteToChannel = computed(() =>
+  !!channel.value
+  && !channel.value.public
+  && !isInternalVersionName(channel.value.version?.name ?? '')
+  && appHasDefaultChannel.value
+  && promoteTargets.value.length > 0,
+)
 
 async function openPromoteToChannel() {
   if (!channel.value?.version)
@@ -689,7 +706,7 @@ async function openPromoteToChannel() {
     toast.error(t('promote-channel-no-target'))
     return
   }
-  promoteTargetId.value = null
+  promoteTargetId.value = promoteTargets.value.find(item => item.isDefault)?.id ?? null
 
   dialogStore.openDialog({
     id: promoteDialogId,
@@ -1441,7 +1458,7 @@ async function copyCurlCommand() {
                   <Settings class="w-4 h-4 text-gray-500 dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-400" />
                 </button>
                 <button
-                  v-if="!isInternalVersionName(channel.version.name) && promoteTargets.length > 0"
+                  v-if="showPromoteToChannel"
                   type="button"
                   class="gap-1.5 font-medium d-btn d-btn-outline d-btn-xs text-slate-700 dark:text-slate-200"
                   data-test="promote-to-channel"
@@ -2092,6 +2109,12 @@ async function copyCurlCommand() {
             <span v-if="target.rolloutActive" class="block text-xs text-amber-700 dark:text-amber-300">
               {{ t('promote-channel-rollout-cleared') }}
             </span>
+          </span>
+          <span
+            v-if="target.isDefault"
+            class="px-2 py-0.5 text-xs font-medium rounded-md bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200"
+          >
+            {{ t('channel-default-badge') }}
           </span>
           <span v-if="target.versionName === channel?.version?.name" class="text-xs text-gray-500 dark:text-gray-400">
             {{ t('promote-channel-already-serving') }}
