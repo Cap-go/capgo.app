@@ -3,6 +3,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { z } from 'zod'
+import { APIError } from 'better-auth/api'
 import { Hono } from 'hono/tiny'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { parseBody, quickError, simpleError, simpleRateLimit, useCors } from '../utils/hono.ts'
@@ -185,7 +186,12 @@ app.post('/', async (c) => {
       await instance.auth.api.verifyPassword({ headers: consoleAuthHeaders(c.req.raw.headers), body: { password: body.password } })
       signInData = { user: { id: auth.userId }, session: { access_token: c.get('authorization')!.slice(7) } }
     }
-    catch {
+    catch (error) {
+      if (!(error instanceof APIError) || error.body?.code !== 'INVALID_PASSWORD') {
+        if (error instanceof APIError && error.statusCode >= 400 && error.statusCode < 500)
+          return quickError(error.statusCode, typeof error.body?.code === 'string' ? error.body.code.toLowerCase() : 'password_verification_failed', error.message)
+        throw error
+      }
       signInError = { code: 'invalid_credentials', message: 'Invalid email or password', status: 401 }
     }
     finally {

@@ -57,8 +57,14 @@ else
   echo -e "${YELLOW}Warning: ${BASE_ENV_FILE} not found - starting with empty base env${NC}"
 fi
 
-WEBAPP_URL_FROM_BASE="$(sed -n 's/^WEBAPP_URL=//p' "${RUNTIME_ENV_FILE}" | tail -n 1 | sed -E 's/^"//; s/"$//')"
-WEBAPP_URL="${WEBAPP_URL:-${WEBAPP_URL_FROM_BASE:-http://localhost:5173}}"
+get_base_env_var() {
+  bun --cwd "${ROOT_DIR}" -e 'import { parse } from "dotenv"; import { readFileSync } from "node:fs"; process.stdout.write(parse(readFileSync(process.argv[1], "utf8"))[process.argv[2]] ?? "")' "${RUNTIME_ENV_FILE}" "$1"
+}
+WEBAPP_URL="${WEBAPP_URL:-$(get_base_env_var WEBAPP_URL)}"
+WEBAPP_URL="${WEBAPP_URL:-http://localhost:5173}"
+BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET:-$(get_base_env_var BETTER_AUTH_SECRET)}"
+JWT_SECRET="${JWT_SECRET:-$(get_base_env_var JWT_SECRET)}"
+CONSOLE_SMTP_URL="${CONSOLE_SMTP_URL:-$(get_base_env_var CONSOLE_SMTP_URL)}"
 
 SUPA_ENV="$(run_supabase_status_env || true)"
 SUPABASE_URL_FROM_STATUS="$(get_supabase_status_var 'API_URL')"
@@ -160,14 +166,14 @@ S3_ENDPOINT=${S3_ENDPOINT_TO_USE}
 S3_REWRITE_LOCAL_ENDPOINT=false
 CONSOLE_AUTH_URL=${CLOUDFLARE_FUNCTION_URL}
 CONSOLE_REQUIRE_EMAIL_VERIFICATION=false
-BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-local-console-auth-development-secret-32-characters}
-JWT_SECRET=${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
-WEBAPP_URL=${WEBAPP_URL}
-CONSOLE_SMTP_URL=${CONSOLE_SMTP_URL:-}
 RATE_LIMIT_API_KEY=999999
 RATE_LIMIT_FAILED_AUTH=999999
 RATE_LIMIT_CHANNEL_SELF_IP=999999
 ENV_EOF
+BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET:-local-console-auth-development-secret-32-characters}" \
+JWT_SECRET="${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}" \
+WEBAPP_URL="${WEBAPP_URL}" CONSOLE_SMTP_URL="${CONSOLE_SMTP_URL:-}" \
+bun --cwd "${ROOT_DIR}" -e 'import { readFileSync, writeFileSync } from "node:fs"; import { upsertEnvValue } from "./scripts/supabase-worktree.ts"; const path = process.argv[1]; let content = readFileSync(path, "utf8"); for (const key of ["BETTER_AUTH_SECRET", "JWT_SECRET", "WEBAPP_URL", "CONSOLE_SMTP_URL"]) content = upsertEnvValue(content, key, process.env[key] ?? ""); writeFileSync(path, content)' "${RUNTIME_ENV_FILE}"
 
 # Start API worker on its isolated port.
 echo -e "${GREEN}Starting API worker on port ${CLOUDFLARE_API_PORT}...${NC}"

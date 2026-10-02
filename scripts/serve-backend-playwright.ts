@@ -3,7 +3,9 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import process, { env } from 'node:process'
+import { parse } from 'dotenv'
 import { getPlaywrightStripeApiBaseUrl } from './playwright-stripe'
+import { upsertEnvValue } from './supabase-worktree'
 import { getSupabaseWorktreeConfig } from './supabase-worktree-config'
 import { getSupabaseStatus } from './supabase-worktree-status'
 
@@ -19,20 +21,8 @@ const functionsReadyTimeoutMs = Number(env.PLAYWRIGHT_BACKEND_TIMEOUT_MS || '360
 // never touches so a cold runner pulls fewer images before the stack is healthy.
 const supabaseStartExclude = env.PLAYWRIGHT_SUPABASE_EXCLUDE?.split(',').filter(service => !['mailpit', 'inbucket'].includes(service.trim())).join(',')
 
-function upsertEnvValue(content: string, key: string, value: string): string {
-  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const matcher = new RegExp(`^${escapedKey}=.*$`, 'm')
-  const line = `${key}=${value}`
-
-  if (matcher.test(content))
-    return content.replace(matcher, line)
-
-  return content.endsWith('\n') || content.length === 0
-    ? `${content}${line}\n`
-    : `${content}\n${line}\n`
-}
-
 const baseEnv = existsSync(sourceEnvPath) ? readFileSync(sourceEnvPath, 'utf8') : ''
+const baseEnvValues = parse(baseEnv)
 const overriddenEnv = [
   ['S3_ENDPOINT', `127.0.0.1:${supabaseConfig.ports.api}/storage/v1/s3`],
   ['STRIPE_SECRET_KEY', env.STRIPE_SECRET_KEY || 'sk_test_emulator'],
@@ -43,9 +33,9 @@ const overriddenEnv = [
   ['CONSOLE_AUTH_E2E', 'true'],
   ['CONSOLE_AUTH_URL', `http://127.0.0.1:${supabaseConfig.ports.api}/functions/v1`],
   ['CONSOLE_REQUIRE_EMAIL_VERIFICATION', 'false'],
-  ['BETTER_AUTH_SECRET', 'local-console-auth-development-secret-32-characters'],
-  ['JWT_SECRET', 'super-secret-jwt-token-with-at-least-32-characters-long'],
-  ['CONSOLE_SMTP_URL', 'smtp://inbucket:1025'],
+  ['BETTER_AUTH_SECRET', env.BETTER_AUTH_SECRET || baseEnvValues.BETTER_AUTH_SECRET || 'local-console-auth-development-secret-32-characters'],
+  ['JWT_SECRET', env.JWT_SECRET || baseEnvValues.JWT_SECRET || 'super-secret-jwt-token-with-at-least-32-characters-long'],
+  ['CONSOLE_SMTP_URL', env.CONSOLE_SMTP_URL || baseEnvValues.CONSOLE_SMTP_URL || 'smtp://inbucket:1025'],
 ] as const
 
 function sleep(ms: number): Promise<void> {
@@ -132,8 +122,10 @@ async function ensureSupabaseStarted() {
 
     stopSupabase()
 
-    if (attempt === maxAttempts)
-      process.exit(startResult.status ?? 1)
+    if (attempt === maxAttempts) {
+      console.error('Supabase API and mailbox did not become ready')
+      process.exit(startResult.status || 1)
+    }
 
     await sleep(attempt * 2000)
   }
