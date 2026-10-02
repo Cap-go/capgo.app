@@ -11,6 +11,7 @@ import CompatibilityBanner from '~/components/dashboard/CompatibilityBanner.vue'
 import DeploymentBanner from '~/components/dashboard/DeploymentBanner.vue'
 import DeploymentStatsCard from '~/components/dashboard/DeploymentStatsCard.vue'
 import DevicesStats from '~/components/dashboard/DevicesStats.vue'
+import NativeReleaseStatsPanel from '~/components/dashboard/NativeReleaseStatsPanel.vue'
 import ReleaseBanner from '~/components/dashboard/ReleaseBanner.vue'
 import ReleaseLivePanel from '~/components/dashboard/ReleaseLivePanel.vue'
 import UpdateStatsCard from '~/components/dashboard/UpdateStatsCard.vue'
@@ -187,6 +188,11 @@ watchEffect(async () => {
               usage-kind="native"
               :use-billing-period="false"
               :accumulated="false"
+              :force-demo="appNotFound"
+              class="col-span-full"
+            />
+            <NativeReleaseStatsPanel
+              :app-id="id"
               :force-demo="appNotFound"
               class="col-span-full"
             />

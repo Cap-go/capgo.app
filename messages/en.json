@@ -3931,5 +3931,22 @@
   "release-live-no-release": "No release on this channel yet",
   "release-live-no-release-help": "Upload a bundle and assign it to this channel to follow its rollout here.",
   "release-live-fetch-error": "Could not load live release data",
-  "release-banner-watch-live": "Watch live"
+  "release-banner-watch-live": "Watch live",
+  "bundle-install-chart-installed": "Installed",
+  "bundle-install-chart-failed": "Failed",
+  "bundle-install-chart-installs-title": "Installs and failures per bundle",
+  "bundle-install-chart-timing-title": "Install time per bundle",
+  "native-release-stats-title": "Native releases",
+  "native-release-stats-help": "Adoption of each native app version on iOS and Android, based on daily active devices. Share is relative to the version's platform on the latest day with data.",
+  "native-release-stats-fetch-error": "Could not load native release statistics",
+  "native-release-stats-no-data": "No native release data yet",
+  "native-release-stats-no-data-help": "Data appears when devices report their native app version in the selected period.",
+  "native-release-chart-title": "Daily active devices per native version",
+  "native-release-other-versions": "Other versions",
+  "native-release-platform-all": "All",
+  "native-release-version": "Native version",
+  "native-release-latest-devices": "Devices (latest day)",
+  "native-release-platform-share": "Platform share",
+  "native-release-peak-devices": "Peak daily devices",
+  "native-release-first-seen": "First seen"
 }

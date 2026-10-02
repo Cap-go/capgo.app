@@ -3930,5 +3930,22 @@
   "release-live-view-bundle": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "release-live-view-channel": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "release-live-waiting": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "release-banner-watch-live": "Used in Capgo web console areas: components/dashboard. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "release-banner-watch-live": "Used in Capgo web console areas: components/dashboard. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "bundle-install-chart-installed": "Used in Capgo web console areas: components/dashboard. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "bundle-install-chart-failed": "Used in Capgo web console areas: components/dashboard. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "bundle-install-chart-installs-title": "Used in Capgo web console areas: components/dashboard. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "bundle-install-chart-timing-title": "Used in Capgo web console areas: components/dashboard. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "native-release-stats-title": "Used in Capgo web console areas: components/dashboard. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "native-release-stats-help": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "native-release-stats-fetch-error": "Used in Capgo web console areas: components/dashboard. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "native-release-stats-no-data": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "native-release-stats-no-data-help": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "native-release-chart-title": "Used in Capgo web console areas: components/dashboard. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "native-release-other-versions": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "native-release-platform-all": "Used in Capgo web console areas: components/dashboard. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "native-release-version": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "native-release-latest-devices": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "native-release-platform-share": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "native-release-peak-devices": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "native-release-first-seen": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }
