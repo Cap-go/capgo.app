@@ -7,7 +7,8 @@ ALTER TABLE "public"."orgs"
   ADD COLUMN IF NOT EXISTS "auto_top_up_cycle_paid_for" timestamp with time zone,
   ADD COLUMN IF NOT EXISTS "auto_top_up_cycle_last_attempt_at" timestamp with time zone,
   ADD COLUMN IF NOT EXISTS "auto_top_up_cycle_attempt" integer DEFAULT 0 NOT NULL,
-  ADD COLUMN IF NOT EXISTS "auto_top_up_cycle_pending_intent_id" text;
+  ADD COLUMN IF NOT EXISTS "auto_top_up_cycle_pending_intent_id" text,
+  ADD COLUMN IF NOT EXISTS "auto_top_up_cycle_unknown_since" timestamp with time zone;
 
 ALTER TABLE "public"."orgs"
   DROP CONSTRAINT IF EXISTS "orgs_auto_top_up_cycle_amount_min";
@@ -26,6 +27,8 @@ COMMENT ON COLUMN "public"."orgs"."auto_top_up_cycle_last_attempt_at" IS 'Last s
 COMMENT ON COLUMN "public"."orgs"."auto_top_up_cycle_attempt" IS 'Attempt counter in the Stripe idempotency key. Bumped only after a charge is confirmed not taken, so retries after an unknown outcome replay the same PaymentIntent.';
 
 COMMENT ON COLUMN "public"."orgs"."auto_top_up_cycle_pending_intent_id" IS 'Scheduled top-up PaymentIntent whose outcome is not settled yet (processing, or granted credits not recorded). Reconciled by the plan-check cron; blocks new top-up charges while set.';
+
+COMMENT ON COLUMN "public"."orgs"."auto_top_up_cycle_unknown_since" IS 'Set when a scheduled charge request had an unknown outcome (no PaymentIntent returned). The cycle stays reserved until the cron finds the PaymentIntent in Stripe or confirms none was created.';
 
 -- Execution profile (service_role RPC from plan-check cron, once per org per run):
 -- Locks public.orgs by primary key FOR UPDATE, then resolves the current cycle with
@@ -61,7 +64,8 @@ BEGIN
   IF NOT FOUND
      OR NOT v_org.auto_top_up_cycle_enabled
      OR v_org.customer_id IS NULL
-     OR v_org.auto_top_up_cycle_pending_intent_id IS NOT NULL THEN
+     OR v_org.auto_top_up_cycle_pending_intent_id IS NOT NULL
+     OR v_org.auto_top_up_cycle_unknown_since IS NOT NULL THEN
     RETURN QUERY SELECT false, 0::numeric, NULL::text, NULL::timestamptz, 0;
     RETURN;
   END IF;
@@ -122,6 +126,7 @@ AS $$
   SET
     auto_top_up_cycle_paid_for = NULL,
     auto_top_up_cycle_pending_intent_id = NULL,
+    auto_top_up_cycle_unknown_since = NULL,
     auto_top_up_cycle_attempt = auto_top_up_cycle_attempt + CASE WHEN p_new_attempt THEN 1 ELSE 0 END
   WHERE id = p_org_id
     AND auto_top_up_cycle_paid_for = p_cycle_start;

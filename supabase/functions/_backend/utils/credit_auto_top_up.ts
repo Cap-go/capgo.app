@@ -473,6 +473,65 @@ async function releaseCycleTopUp(c: Context, orgId: string, cycleStart: string, 
   }
 }
 
+// How long Stripe may take to list a PaymentIntent created by a request whose response was lost.
+const UNKNOWN_CHARGE_GRACE_MS = 60 * 60 * 1000
+
+async function updateCycleState(c: Context, orgId: string, update: { auto_top_up_cycle_pending_intent_id?: string | null, auto_top_up_cycle_unknown_since?: string | null }): Promise<void> {
+  const { error } = await supabaseAdmin(c)
+    .from('orgs')
+    .update(update)
+    .eq('id', orgId)
+  if (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'credit_cycle_top_up_state_update_failed', orgId, update, error })
+    throw error
+  }
+}
+
+// Find the PaymentIntent a lost request may have created: same org, cycle and attempt.
+async function findCycleIntent(c: Context, customerId: string, orgId: string, cycleStart: string, attempt: number, since: number): Promise<Stripe.PaymentIntent | null> {
+  const stripe = getStripe(c)
+  const createdGte = Math.floor((since - 5 * 60 * 1000) / 1000)
+  for await (const paymentIntent of stripe.paymentIntents.list({ customer: customerId, created: { gte: createdGte }, limit: 100 })) {
+    const metadata = paymentIntent.metadata ?? {}
+    if (metadata.kind === CYCLE_TOP_UP_KIND && metadata.orgId === orgId && metadata.attempt === String(attempt)
+      && Date.parse(metadata.cycleStart ?? '') === Date.parse(cycleStart)) {
+      return paymentIntent
+    }
+  }
+  return null
+}
+
+// Resolve a charge whose request outcome was unknown. The cycle stays reserved meanwhile, so it
+// can never be charged again with a fresh idempotency key while a PaymentIntent might exist.
+async function reconcileUnknownCycleCharge(
+  c: Context,
+  orgId: string,
+  org: { customer_id: string | null, auto_top_up_cycle_paid_for: string | null, auto_top_up_cycle_attempt: number, auto_top_up_cycle_unknown_since: string },
+): Promise<CycleTopUpResult> {
+  const since = Date.parse(org.auto_top_up_cycle_unknown_since)
+  if (!org.customer_id || !org.auto_top_up_cycle_paid_for || !Number.isFinite(since)) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'credit_cycle_top_up_unknown_state_invalid', orgId, org })
+    return { inFlight: true }
+  }
+  let paymentIntent: Stripe.PaymentIntent | null
+  try {
+    paymentIntent = await findCycleIntent(c, org.customer_id, orgId, org.auto_top_up_cycle_paid_for, org.auto_top_up_cycle_attempt, since)
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'credit_cycle_top_up_unknown_lookup_failed', orgId, error })
+    return { inFlight: true }
+  }
+  if (paymentIntent) {
+    await updateCycleState(c, orgId, { auto_top_up_cycle_pending_intent_id: paymentIntent.id, auto_top_up_cycle_unknown_since: null })
+    return await reconcilePendingCycleIntent(c, orgId, paymentIntent.id)
+  }
+  if (Date.now() - since < UNKNOWN_CHARGE_GRACE_MS)
+    return { inFlight: true }
+  // No PaymentIntent was created: free the cycle and move to a new idempotency key.
+  await releaseCycleTopUp(c, orgId, org.auto_top_up_cycle_paid_for, true)
+  return { inFlight: false }
+}
+
 async function setCyclePendingIntent(c: Context, orgId: string, paymentIntentId: string | null, expected?: string): Promise<void> {
   let query = supabaseAdmin(c)
     .from('orgs')
@@ -534,7 +593,7 @@ export async function maybeCycleTopUpCredits(c: Context, orgId: string): Promise
 
   const { data: org, error: orgError } = await supabaseAdmin(c)
     .from('orgs')
-    .select('auto_top_up_cycle_pending_intent_id')
+    .select('customer_id, auto_top_up_cycle_enabled, auto_top_up_cycle_pending_intent_id, auto_top_up_cycle_unknown_since, auto_top_up_cycle_paid_for, auto_top_up_cycle_attempt')
     .eq('id', orgId)
     .maybeSingle()
   if (orgError) {
@@ -543,6 +602,11 @@ export async function maybeCycleTopUpCredits(c: Context, orgId: string): Promise
   }
   if (org?.auto_top_up_cycle_pending_intent_id)
     return await reconcilePendingCycleIntent(c, orgId, org.auto_top_up_cycle_pending_intent_id)
+  if (org?.auto_top_up_cycle_unknown_since)
+    return await reconcileUnknownCycleCharge(c, orgId, { ...org, auto_top_up_cycle_unknown_since: org.auto_top_up_cycle_unknown_since })
+  // Most orgs never enable the schedule: skip the locking claim RPC for them.
+  if (!org?.auto_top_up_cycle_enabled)
+    return { inFlight: false }
 
   const { data: claim, error: claimError } = await supabaseAdmin(c)
     .rpc('try_claim_credit_cycle_top_up', { p_org_id: orgId })
@@ -568,7 +632,7 @@ export async function maybeCycleTopUpCredits(c: Context, orgId: string): Promise
   const idempotencyKey = `${CYCLE_TOP_UP_KIND}:${orgId}:${cycleStart}:${claim.attempt ?? 0}`
   let charge: OffSessionChargeResult
   try {
-    charge = await chargeOffSessionCredits(c, orgId, claim.customer_id, quantity, CYCLE_TOP_UP_KIND, idempotencyKey, { cycleStart })
+    charge = await chargeOffSessionCredits(c, orgId, claim.customer_id, quantity, CYCLE_TOP_UP_KIND, idempotencyKey, { cycleStart, attempt: String(claim.attempt ?? 0) })
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'credit_cycle_top_up_charge_crashed', orgId, error })
@@ -580,8 +644,8 @@ export async function maybeCycleTopUpCredits(c: Context, orgId: string): Promise
     return { inFlight: false }
   }
   if (charge.outcome === 'unknown') {
-    // Keep the key: the retry after the cooldown returns the original PaymentIntent if one exists.
-    await releaseCycleTopUp(c, orgId, cycleStart, false)
+    // Keep the cycle reserved until Stripe shows whether a PaymentIntent was created.
+    await updateCycleState(c, orgId, { auto_top_up_cycle_unknown_since: new Date().toISOString() })
     return { inFlight: true }
   }
 

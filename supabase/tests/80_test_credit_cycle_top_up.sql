@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(12);
+SELECT plan(13);
 
 INSERT INTO public.stripe_info (
     customer_id,
@@ -144,7 +144,20 @@ SELECT
     );
 
 UPDATE public.orgs
-SET auto_top_up_cycle_pending_intent_id = NULL
+SET
+    auto_top_up_cycle_pending_intent_id = NULL,
+    auto_top_up_cycle_unknown_since = now()
+WHERE id = (SELECT org_id FROM test_cycle_context);
+
+SELECT
+    is(
+        (SELECT claimed FROM public.try_claim_credit_cycle_top_up((SELECT org_id FROM test_cycle_context))),
+        false,
+        'an unknown scheduled charge outcome blocks a new cycle claim'
+    );
+
+UPDATE public.orgs
+SET auto_top_up_cycle_unknown_since = NULL
 WHERE id = (SELECT org_id FROM test_cycle_context);
 
 SELECT

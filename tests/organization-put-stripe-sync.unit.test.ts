@@ -102,6 +102,7 @@ function createOrgRow(overrides: Partial<OrgRow> & Pick<OrgRow, 'id' | 'name' | 
     auto_top_up_cycle_last_attempt_at: null,
     auto_top_up_cycle_attempt: 0,
     auto_top_up_cycle_pending_intent_id: null,
+    auto_top_up_cycle_unknown_since: null,
     has_usage_credits: false,
     id: 'org-123',
     last_stats_updated_at: null,

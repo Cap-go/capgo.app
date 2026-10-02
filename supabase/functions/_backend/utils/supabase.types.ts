@@ -2794,6 +2794,7 @@ export type Database = {
           auto_top_up_cycle_last_attempt_at: string | null
           auto_top_up_cycle_paid_for: string | null
           auto_top_up_cycle_pending_intent_id: string | null
+          auto_top_up_cycle_unknown_since: string | null
           auto_top_up_enabled: boolean
           auto_top_up_last_attempt_at: string | null
           auto_top_up_monthly_limit: number
@@ -2831,6 +2832,7 @@ export type Database = {
           auto_top_up_cycle_last_attempt_at?: string | null
           auto_top_up_cycle_paid_for?: string | null
           auto_top_up_cycle_pending_intent_id?: string | null
+          auto_top_up_cycle_unknown_since?: string | null
           auto_top_up_enabled?: boolean
           auto_top_up_last_attempt_at?: string | null
           auto_top_up_monthly_limit?: number
@@ -2868,6 +2870,7 @@ export type Database = {
           auto_top_up_cycle_last_attempt_at?: string | null
           auto_top_up_cycle_paid_for?: string | null
           auto_top_up_cycle_pending_intent_id?: string | null
+          auto_top_up_cycle_unknown_since?: string | null
           auto_top_up_enabled?: boolean
           auto_top_up_last_attempt_at?: string | null
           auto_top_up_monthly_limit?: number
