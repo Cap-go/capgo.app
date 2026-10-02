@@ -46,7 +46,8 @@ describe('public table RLS protection', () => {
             ('mcp_oauth_requests'),
             ('org_stats_refresh_state'),
             ('updates_cache_purge_pending'),
-            ('updates_cache_purge_state')
+            ('updates_cache_purge_state'),
+            ('version_cleanup_leases')
         )
         SELECT
           target_tables.table_name,
@@ -77,6 +78,7 @@ describe('public table RLS protection', () => {
         { table_name: 'org_stats_refresh_state', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'updates_cache_purge_pending', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'updates_cache_purge_state', policy_count: 1, denies_all_direct_access: true },
+        { table_name: 'version_cleanup_leases', policy_count: 1, denies_all_direct_access: true },
       ])
     }
     finally {

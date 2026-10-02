@@ -530,12 +530,11 @@ async function trashLastReferenceEntries(c: Context, database: ManifestCleanupDa
 /**
  * Trash unreferenced R2 objects first (exist → move to deleted-after-7-days/,
  * missing → ok), then delete that DB row. Never drop DB tracking before R2 is handled.
- * Batches are committed, so a timeout mid-pass is safe to retry. Leftover rows
- * after the normal retry budget (MAX_QUEUE_READS=5) are reclaimed by
- * sweep_deleted_version_manifests. Incomplete work throws so the queue retries;
- * already-trashed paths are idempotent.
+ * Batches are committed, so stopping at the deadline is safe: the caller
+ * re-queues the version and the next pass continues with the rows left.
+ * Returns false when it stopped at the deadline with rows left.
  */
-async function deleteManifest(c: Context, record: Database['public']['Tables']['app_versions']['Row']) {
+async function deleteManifest(c: Context, record: Database['public']['Tables']['app_versions']['Row'], deadline = Number.POSITIVE_INFINITY): Promise<boolean> {
   const readPgClient = getPgClient(c, true)
   const drizzleClient = getDrizzleClient(readPgClient)
 
@@ -561,6 +560,10 @@ async function deleteManifest(c: Context, record: Database['public']['Tables']['
       const cleanupDatabase = getDrizzleClient(cleanupPool)
       await retryPendingTrashRestores(c, cleanupDatabase, record.id)
       for (let offset = 0; offset < manifestIds.length; offset += MANIFEST_CLEANUP_BATCH_SIZE) {
+        if (offset > 0 && Date.now() >= deadline) {
+          cloudlog({ requestId: c.get('requestId'), message: 'manifest cleanup reached its time budget, continuing in a new pass', id: record.id, processed: offset, total: manifestIds.length })
+          return false
+        }
         const batchIds = manifestIds.slice(offset, offset + MANIFEST_CLEANUP_BATCH_SIZE)
         const lastReferences = await releaseSharedManifestEntries(cleanupDatabase, record.id, batchIds)
         if (lastReferences.length > 0)
@@ -620,9 +623,112 @@ async function deleteManifest(c: Context, record: Database['public']['Tables']['
   finally {
     await closeClient(c, writePgClient)
   }
+  return true
 }
 
+// A pass stops starting new manifest batches after this budget, well under the
+// consumer's 300s HTTP timeout, so a large version commits its progress and
+// re-queues itself instead of timing out on every queue read.
+const VERSION_CLEANUP_TIME_BUDGET_MS = 200_000
+// Longer than one pass (budget + the last batch + bundle trash), so a lease
+// only expires on its own when the worker died mid-pass.
+const VERSION_CLEANUP_LEASE_SECONDS = 330
+// Deletes left unfinished within this window are finished when the version is
+// touched again; older ones predate the current delete flow.
+const VERSION_DELETE_FINISH_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
+
+async function withPrimaryDatabase<T>(c: Context, operation: (database: ReturnType<typeof getDrizzleClient>) => Promise<T>): Promise<T> {
+  const pool = getPgClient(c, false)
+  try {
+    return await operation(getDrizzleClient(pool))
+  }
+  finally {
+    await closeClient(c, pool)
+  }
+}
+
+/**
+ * Single-flight per version: the sweeper and the continuation touch can queue
+ * several messages for one version. Only the lease holder works; the others
+ * acknowledge immediately instead of fighting over the same manifest rows.
+ */
+async function acquireVersionCleanupLease(c: Context, versionId: number): Promise<string | null> {
+  const owner = crypto.randomUUID()
+  const result = await withPrimaryDatabase(c, database => database.execute<{ owner: string }>(sql`
+    INSERT INTO public.version_cleanup_leases (app_version_id, owner, lease_until)
+    VALUES (${versionId}, ${owner}, now() + make_interval(secs => ${VERSION_CLEANUP_LEASE_SECONDS}))
+    ON CONFLICT (app_version_id) DO UPDATE
+    SET owner = EXCLUDED.owner,
+        lease_until = EXCLUDED.lease_until
+    WHERE public.version_cleanup_leases.lease_until < now()
+    RETURNING owner
+  `))
+  return result.rows[0]?.owner === owner ? owner : null
+}
+
+async function releaseVersionCleanupLease(c: Context, versionId: number, owner: string) {
+  await withPrimaryDatabase(c, database => database.execute(sql`
+    DELETE FROM public.version_cleanup_leases
+    WHERE app_version_id = ${versionId}
+      AND owner = ${owner}
+  `))
+}
+
+// Any app_versions update enqueues on_version_update; the new message carries
+// a fresh record and continues where this pass stopped.
+async function requeueVersionCleanup(c: Context, versionId: number) {
+  await withPrimaryDatabase(c, database => database.execute(sql`
+    UPDATE public.app_versions
+    SET updated_at = now()
+    WHERE id = ${versionId}
+      AND deleted = true
+  `))
+}
+
+/**
+ * A deleted version whose message carries no manifest work may still have
+ * rows (stale counter) or an unfinished bundle cleanup (size never cleared).
+ */
+async function hasPendingDeleteWork(c: Context, record: Database['public']['Tables']['app_versions']['Row']) {
+  const result = await withPrimaryDatabase(c, database => database.execute<{ has_rows: boolean, has_size: boolean }>(sql`
+    SELECT
+      EXISTS (SELECT 1 FROM public.manifest WHERE app_version_id = ${record.id}) AS has_rows,
+      COALESCE((SELECT size FROM public.app_versions_meta WHERE id = ${record.id}), 0) > 0 AS has_size
+  `))
+  const pending = result.rows[0]
+  if (pending?.has_rows)
+    return true
+  const deletedAt = record.deleted_at ? new Date(record.deleted_at).getTime() : Number.NaN
+  return Boolean(pending?.has_size) && Date.now() - deletedAt < VERSION_DELETE_FINISH_WINDOW_MS
+}
+
+/**
+ * Runs the full, idempotent delete of a soft-deleted version under its
+ * cleanup lease. A pass that reaches its time budget re-queues the version
+ * and acknowledges, so large manifests progress instead of timing out.
+ */
 export async function deleteIt(c: Context, record: Database['public']['Tables']['app_versions']['Row']) {
+  const owner = await acquireVersionCleanupLease(c, record.id)
+  if (!owner) {
+    cloudlog({ requestId: c.get('requestId'), message: 'version cleanup already running elsewhere, skipping duplicate message', id: record.id })
+    return c.json(BRES)
+  }
+
+  let finished = false
+  try {
+    finished = await finishVersionDelete(c, record, Date.now() + VERSION_CLEANUP_TIME_BUDGET_MS)
+  }
+  finally {
+    await releaseVersionCleanupLease(c, record.id, owner)
+  }
+
+  // After the release, so the continuation message can take the lease.
+  if (!finished)
+    await requeueVersionCleanup(c, record.id)
+  return c.json(BRES)
+}
+
+async function finishVersionDelete(c: Context, record: Database['public']['Tables']['app_versions']['Row'], deadline: number): Promise<boolean> {
   cloudlog({ requestId: c.get('requestId'), message: 'Delete', r2_path: record.r2_path })
 
   await unlinkChannelsFromDeletedVersion(c, record)
@@ -641,8 +747,10 @@ export async function deleteIt(c: Context, record: Database['public']['Tables'][
     }
   }
 
-  // Manifest files: trash R2 first, then drop DB rows. Must finish before ACK.
-  await deleteManifest(c, record)
+  // Manifest files: trash R2 first, then drop DB rows. The bundle steps below
+  // only run once every manifest row is gone.
+  if (!await deleteManifest(c, record, deadline))
+    return false
 
   const { data, error: dbError } = await supabaseAdmin(c)
     .from('app_versions_meta')
@@ -652,7 +760,7 @@ export async function deleteIt(c: Context, record: Database['public']['Tables'][
   if (dbError || !data) {
     cloudlog({ requestId: c.get('requestId'), message: 'Cannot find version meta', id: record.id })
   }
-  else {
+  else if (data.size > 0) {
     const { error: errorCreateStatsMeta } = await createStatsMeta(c, record.app_id, record.id, -data.size)
     if (errorCreateStatsMeta)
       cloudlog({ requestId: c.get('requestId'), message: 'error createStatsMeta', error: errorCreateStatsMeta })
@@ -699,7 +807,7 @@ export async function deleteIt(c: Context, record: Database['public']['Tables'][
     cloudlog({ requestId: c.get('requestId'), message: 'No r2 path for deleted version', id: record.id })
   }
 
-  return c.json(BRES)
+  return true
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -722,13 +830,17 @@ app.post('/', middlewareAPISecret, triggerValidator('app_versions', 'UPDATE'), a
   const deletedVersionAction = getDeletedVersionAction(workRecord, oldRecord)
   if (deletedVersionAction === 'delete')
     return deleteIt(c, workRecord)
+  // Re-queued deletes (sweeper or continuation touch) run the full idempotent
+  // delete, so the bundle zip and storage stats are finished too.
   if (deletedVersionAction === 'cleanup_manifest') {
-    cloudlog({ requestId: c.get('requestId'), message: 'cleaning manifest for already deleted version', ...versionUpdateLogFields(workRecord, oldRecord) })
-    await deleteManifest(c, workRecord)
+    cloudlog({ requestId: c.get('requestId'), message: 'finishing delete for already deleted version', ...versionUpdateLogFields(workRecord, oldRecord) })
+    return deleteIt(c, workRecord)
+  }
+  if (deletedVersionAction === 'skip') {
+    if (await hasPendingDeleteWork(c, workRecord))
+      return deleteIt(c, workRecord)
     return c.json(BRES)
   }
-  if (deletedVersionAction === 'skip')
-    return c.json(BRES)
 
   if (!workRecord.r2_path && !workRecord.manifest) {
     cloudlog({ requestId: c.get('requestId'), message: 'no r2_path and no manifest, skipping update', ...versionUpdateLogFields(workRecord, oldRecord) })
@@ -741,6 +853,7 @@ app.post('/', middlewareAPISecret, triggerValidator('app_versions', 'UPDATE'), a
 
 export const onVersionUpdateTestUtils = {
   getDeletedVersionAction,
+  hasPendingDeleteWork,
   handleManifest,
   deleteManifest,
   unlinkChannelsFromDeletedVersion,
