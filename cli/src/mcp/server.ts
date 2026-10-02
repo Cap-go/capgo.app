@@ -529,8 +529,8 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
       description: 'Promote the bundle currently linked to one channel to another channel (for example staging to production) without knowing the bundle version',
       inputSchema: mcpPromoteChannelInputSchema,
     },
-    async ({ appId, fromChannel, toChannel, acceptIncompatible }) => {
-      const payload = parseSchema(promoteChannelOptionsSchema, { appId, fromChannel, toChannel, acceptIncompatible })
+    async ({ appId, fromChannel, toChannel, acceptIncompatible, ignoreMetadataCheck, sendUpdateNotification }) => {
+      const payload = parseSchema(promoteChannelOptionsSchema, { appId, fromChannel, toChannel, acceptIncompatible, ignoreMetadataCheck, sendUpdateNotification })
       const result = await sdk.promoteChannel(payload)
       if (!result.success) {
         return formatMcpError(result)

@@ -709,12 +709,17 @@ async function promoteBundleToChannel(target: PromoteTargetChannel) {
     return
   }
 
-  const targetVersionId = await supabase
+  const { data: targetRow, error: targetError } = await supabase
     .from('channels')
     .select('version')
     .eq('id', target.id)
     .single()
-    .then(({ data }) => data?.version ?? undefined)
+  if (targetError) {
+    console.error('cannot load target channel', targetError)
+    toast.error(t('error-fetching-channels'))
+    return
+  }
+  const targetVersionId = targetRow?.version ?? undefined
   if (!(await confirmBundleCompatibleWithChannel(appVersion, target.name, targetVersionId)))
     return
 

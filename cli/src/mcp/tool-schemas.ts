@@ -125,6 +125,8 @@ export const mcpPromoteChannelInputSchema = z.object({
   fromChannel: z.string().describe('Channel to copy the current bundle from, for example staging'),
   toChannel: z.string().describe('Channel to link that bundle to, for example production'),
   acceptIncompatible: z.boolean().describe('Link the bundle even if its native packages do not match the target channel').optional(),
+  ignoreMetadataCheck: z.boolean().describe('Skip the native package compatibility check. Cannot be combined with acceptIncompatible').optional(),
+  sendUpdateNotification: z.boolean().describe('Send a native update-check notification to devices on the target channel after linking').optional(),
 })
 
 export const mcpAddOrganizationInputSchema = z.object({
