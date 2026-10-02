@@ -48,7 +48,7 @@ const isLoading = ref(false)
 const hasError = ref(false)
 let requestToken = 0
 
-const seriesPalette = ['#119eff', '#10b981', '#f59e0b', '#8b5cf6', '#f43f5e', '#06b6d4']
+const seriesPalette = ['#119eff', '#10b981', '#f59e0b', '#8b5cf6', '#f43f5e', '#06b6d4', '#84cc16', '#ec4899', '#6366f1', '#14b8a6']
 const otherColor = '#94a3b8'
 
 const effectiveData = computed(() => {
@@ -69,6 +69,12 @@ const allSeries = computed(() => parseNativeReleaseSeries(labels.value, effectiv
 const filteredSeries = computed(() => filterNativeReleaseSeries(allSeries.value, platform.value))
 const rows = computed(() => buildNativeReleaseRows(labels.value, filteredSeries.value))
 const hasData = computed(() => rows.value.length > 0)
+// Colors follow each series' rank across all platforms, so a version keeps
+// its color when the platform filter changes.
+const seriesColorByKey = computed(() => new Map(
+  buildNativeReleaseRows(labels.value, allSeries.value)
+    .map((row, index) => [row.key, seriesPalette[index % seriesPalette.length]!] as const),
+))
 
 const periodLabel = computed(() => {
   if (days.value === 1)
@@ -87,8 +93,8 @@ const periodRangeLabel = computed(() => {
 const chartData = computed<ChartData<'bar'>>(() => {
   const { top, other } = groupNativeReleaseChartSeries(rows.value, filteredSeries.value)
   const showPlatformPrefix = platform.value === 'all'
-  const datasets: ChartData<'bar'>['datasets'] = top.map((series, index) => {
-    const color = seriesPalette[index % seriesPalette.length]!
+  const datasets: ChartData<'bar'>['datasets'] = top.map((series) => {
+    const color = seriesColorByKey.value.get(series.key) ?? otherColor
     return {
       label: showPlatformPrefix ? series.key : series.version,
       data: series.counts,
@@ -179,7 +185,8 @@ async function loadData() {
   hasError.value = false
   try {
     const { startDate, endDate } = getLastNUtcDaysRange(days.value)
-    // Same range as the native version chart above, so this hits its cache.
+    // Same range as the native version chart above; useChartData shares the
+    // cached or in-flight request, so this does not hit native_usage twice.
     const data = await useChartData(supabase, props.appId, startDate, endDate, 'native')
     if (token !== requestToken)
       return
