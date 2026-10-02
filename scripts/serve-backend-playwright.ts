@@ -42,6 +42,7 @@ const overriddenEnv = [
   ['STRIPE_API_BASE_URL', stripeApiBaseUrl],
   ['STRIPE_WEBHOOK_SECRET', env.STRIPE_WEBHOOK_SECRET || 'testsecret'],
   ['WEBAPP_URL', webAppUrl],
+  ['ENV', 'local'],
   ['CONSOLE_AUTH_URL', `http://127.0.0.1:${supabaseConfig.ports.api}/functions/v1`],
   ['CONSOLE_REQUIRE_EMAIL_VERIFICATION', 'false'],
   ['BETTER_AUTH_SECRET', 'local-console-auth-development-secret-32-characters'],

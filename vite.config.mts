@@ -42,6 +42,17 @@ function getUrl(key: 'api_domain' | 'base_domain' = 'base_domain'): string {
     return `https://${getFrontendKey(key)}`
 }
 
+// Kong's local preflight uses a wildcard origin; cookie auth needs same-origin requests.
+const localConsoleProxy = branch === 'local'
+  ? {
+      '/__console': {
+        target: getUrl('api_domain'),
+        changeOrigin: true,
+        rewrite: (requestPath: string) => requestPath.replace(/^\/__console/, ''),
+      },
+    }
+  : undefined
+
 interface FaviconTheme {
   iconPrefix: string
   maskColor: string
@@ -160,7 +171,7 @@ const frontendEnvironmentVariables: Record<string, string> = {
   VITE_SUPABASE_PROXY_PATH: useProdSupabaseProxy ? PROD_SUPABASE_PROXY_PATH : '',
   VITE_SUPABASE_URL: getFrontendKey('supa_url'),
   VITE_APP_URL: getUrl(),
-  VITE_API_HOST: getUrl('api_domain'),
+  VITE_API_HOST: branch === 'local' ? `${getUrl()}/__console` : getUrl('api_domain'),
   VITE_CAPTCHA_KEY: getFrontendKey('captcha_key'),
   VITE_BRANCH: branch,
   package_dependencies: JSON.stringify(pack.dependencies),
@@ -297,20 +308,23 @@ export default defineConfig({
     fs: {
       strict: true,
     },
-    proxy: useProdSupabaseProxy
-      ? {
-          [PROD_SUPABASE_PROXY_PATH.slice(0, -1)]: {
-            target: keys.supa_url.prod,
-            changeOrigin: true,
-            headers: {
-              origin: new URL(keys.supa_url.prod).origin,
+    proxy: {
+      ...localConsoleProxy,
+      ...(useProdSupabaseProxy
+        ? {
+            [PROD_SUPABASE_PROXY_PATH.slice(0, -1)]: {
+              target: keys.supa_url.prod,
+              changeOrigin: true,
+              headers: { origin: new URL(keys.supa_url.prod).origin },
+              rewrite: (requestPath: string) => requestPath.replace(/^\/__supabase/, ''),
+              ws: true,
             },
-            rewrite: requestPath => requestPath.replace(/^\/__supabase/, ''),
-            ws: true,
-          },
-        }
-      : undefined,
+          }
+        : {}),
+    },
   },
+
+  preview: { proxy: localConsoleProxy },
 
   optimizeDeps: {
     // Pre-scan the entire app so Playwright does not trigger late dep re-optimization
