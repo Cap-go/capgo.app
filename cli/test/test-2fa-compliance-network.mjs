@@ -12,58 +12,75 @@ import {
 } from '../src/shared/two-factor-compliance.ts'
 import { check2FAAccessForOrg } from '../src/utils.ts'
 
-function makeSupabaseWithRpcError(message) {
+const httpOptions = {
+  supaHost: 'http://localhost:54321',
+  supaAnon: 'test-anon-key',
+}
+
+function makeSupabase() {
   return {
-    rpc(name) {
-      if (name === 'reject_access_due_to_2fa_for_app' || name === 'reject_access_due_to_2fa_for_org')
-        return Promise.resolve({ data: null, error: { message } })
-      throw new Error(`Unexpected RPC call: ${name}`)
+    supabaseUrl: httpOptions.supaHost,
+    supabaseKey: httpOptions.supaAnon,
+    rest: {
+      headers: {
+        get(name) {
+          if (name.toLowerCase() === 'capgkey')
+            return 'test-2fa-key'
+          return null
+        },
+      },
     },
   }
 }
 
-function makeSupabaseWithRetryableNetworkError(succeedAfterAttempts) {
-  let attempts = 0
-  return {
-    rpc(name) {
-      if (name === 'reject_access_due_to_2fa_for_app' || name === 'reject_access_due_to_2fa_for_org') {
-        attempts += 1
-        if (attempts < succeedAfterAttempts)
-          return Promise.resolve({ data: null, error: { message: 'TypeError: fetch failed' } })
-        return Promise.resolve({ data: false, error: null })
-      }
-      throw new Error(`Unexpected RPC call: ${name}`)
-    },
-    get attempts() {
-      return attempts
-    },
+const originalFetch = globalThis.fetch
+let fetchAttempts = 0
+let fetchMode = 'ok'
+let succeedAfterAttempts = 1
+
+globalThis.fetch = async (input) => {
+  const url = String(input)
+  if (!url.includes('/private/cli/2fa/'))
+    return originalFetch(input)
+
+  fetchAttempts += 1
+
+  if (fetchMode === 'network')
+    throw new TypeError('fetch failed')
+
+  if (fetchMode === 'retry-then-ok') {
+    if (fetchAttempts < succeedAfterAttempts)
+      throw new TypeError('fetch failed')
+    return new Response(JSON.stringify({ reject: false }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
   }
+
+  if (fetchMode === 'reject') {
+    return new Response(JSON.stringify({ reject: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  if (fetchMode === 'permission-denied') {
+    return new Response(JSON.stringify({ error: 'permission denied for function reject_access_due_to_2fa_for_app' }), {
+      status: 403,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  return new Response(JSON.stringify({ reject: false }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  })
 }
 
-function makeSupabaseWithPersistentNetworkError() {
-  let attempts = 0
-  return {
-    rpc(name) {
-      if (name === 'reject_access_due_to_2fa_for_app' || name === 'reject_access_due_to_2fa_for_org') {
-        attempts += 1
-        return Promise.resolve({ data: null, error: { message: 'TypeError: fetch failed' } })
-      }
-      throw new Error(`Unexpected RPC call: ${name}`)
-    },
-    get attempts() {
-      return attempts
-    },
-  }
-}
-
-function makeSupabaseWithRejectResult() {
-  return {
-    rpc(name) {
-      if (name === 'reject_access_due_to_2fa_for_app' || name === 'reject_access_due_to_2fa_for_org')
-        return Promise.resolve({ data: true, error: null })
-      throw new Error(`Unexpected RPC call: ${name}`)
-    },
-  }
+function resetFetch(mode, succeedAfter = 1) {
+  fetchAttempts = 0
+  fetchMode = mode
+  succeedAfterAttempts = succeedAfter
 }
 
 assert.equal(isTransientNetworkError(new Error('TypeError: fetch failed')), true)
@@ -77,21 +94,21 @@ const nestedCause = new Error('TypeError: fetch failed', {
 })
 assert.equal(isTransientNetworkError(nestedCause), true)
 
-const networkSupabase = makeSupabaseWithPersistentNetworkError()
+resetFetch('network')
+await check2FAComplianceForApp(makeSupabase(), 'com.example.app', true, httpOptions)
+assert.equal(fetchAttempts, TWO_FACTOR_PREFLIGHT_MAX_ATTEMPTS)
 
-await check2FAComplianceForApp(networkSupabase, 'com.example.app', true)
-assert.equal(networkSupabase.attempts, TWO_FACTOR_PREFLIGHT_MAX_ATTEMPTS)
+resetFetch('network')
+await check2FAAccessForOrg(makeSupabase(), 'org_123', true, httpOptions)
+assert.equal(fetchAttempts, TWO_FACTOR_PREFLIGHT_MAX_ATTEMPTS)
 
-const orgNetworkSupabase = makeSupabaseWithPersistentNetworkError()
-await check2FAAccessForOrg(orgNetworkSupabase, 'org_123', true)
-assert.equal(orgNetworkSupabase.attempts, TWO_FACTOR_PREFLIGHT_MAX_ATTEMPTS)
+resetFetch('retry-then-ok', 2)
+await check2FAComplianceForApp(makeSupabase(), 'com.example.app', true, httpOptions)
+assert.equal(fetchAttempts, 2)
 
-const retrySupabase = makeSupabaseWithRetryableNetworkError(2)
-await check2FAComplianceForApp(retrySupabase, 'com.example.app', true)
-assert.equal(retrySupabase.attempts, 2)
-
+resetFetch('reject')
 await assert.rejects(
-  () => check2FAComplianceForApp(makeSupabaseWithRejectResult(), 'com.example.app', true),
+  () => check2FAComplianceForApp(makeSupabase(), 'com.example.app', true, httpOptions),
   (error) => {
     assert.equal(error instanceof Error, true)
     assert.equal(error.message, '2FA required for this organization')
@@ -100,10 +117,9 @@ await assert.rejects(
   },
 )
 
-const appErrorSupabase = makeSupabaseWithRpcError('permission denied for function reject_access_due_to_2fa_for_app')
-
+resetFetch('permission-denied')
 await assert.rejects(
-  () => check2FAComplianceForApp(appErrorSupabase, 'com.example.app', true),
+  () => check2FAComplianceForApp(makeSupabase(), 'com.example.app', true, httpOptions),
   (error) => {
     assert.equal(error instanceof Error, true)
     assert.equal(error instanceof TwoFactorComplianceNetworkError, false)
@@ -116,5 +132,7 @@ await assert.rejects(
 assert.equal(shouldCapturePosthogException(new TwoFactorComplianceNetworkError()), true)
 assert.equal(new TwoFactorComplianceNetworkError().message, TWO_FACTOR_COMPLIANCE_NETWORK_MESSAGE)
 assert.equal(new TwoFactorComplianceNetworkError() instanceof CliUserError, false)
+
+globalThis.fetch = originalFetch
 
 console.log('2FA compliance network failure tests passed')

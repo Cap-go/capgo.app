@@ -4,18 +4,26 @@ import assert from 'node:assert/strict'
 
 const { getRemoteDependencies } = await import('../src/utils.ts')
 
-function fakeSupabase(maybeSingleResult) {
-  return {
-    from: (_table) => ({
-      select: (_cols) => ({
-        eq: (_k1, _v1) => ({
-          eq: (_k2, _v2) => ({
-            maybeSingle: async () => maybeSingleResult,
-          }),
-        }),
-      }),
-    }),
-  }
+const options = {
+  apikey: 'test-remote-deps-key',
+  supaHost: 'http://localhost:54321',
+  supaAnon: 'test-anon-key',
+}
+const appId = 'com.example.app'
+const channel = 'production'
+
+const originalFetch = globalThis.fetch
+let responseStatus = 200
+let responseBody = {}
+
+globalThis.fetch = async (input) => {
+  const url = String(input)
+  if (!url.includes('channel/current-bundle'))
+    return originalFetch(input)
+  return new Response(JSON.stringify(responseBody), {
+    status: responseStatus,
+    headers: { 'Content-Type': 'application/json' },
+  })
 }
 
 let failures = 0
@@ -32,75 +40,90 @@ async function test(name, fn) {
   }
 }
 
+function setCurrentBundleResponse(body, status = 200) {
+  responseStatus = status
+  responseBody = body
+}
+
 await test('returns empty map when channel row is missing', async () => {
-  const supabase = fakeSupabase({ data: null, error: null })
-  const result = await getRemoteDependencies(supabase, 'com.example.app', 'production')
+  setCurrentBundleResponse({ error: 'cannot_find_channel', message: 'Cannot find channel' }, 404)
+  const result = await getRemoteDependencies(options.apikey, appId, channel, options)
   assert.equal(result.size, 0)
 })
 
 await test('returns empty map when channel version has no native packages', async () => {
-  const supabase = fakeSupabase({ data: { version: { native_packages: null } }, error: null })
-  const result = await getRemoteDependencies(supabase, 'com.example.app', 'production')
+  setCurrentBundleResponse({
+    disable_auto_update: 'major',
+    bundle_name: '1.0.0',
+    bundle_id: 1,
+    min_update_version: null,
+    native_packages: null,
+  })
+  const result = await getRemoteDependencies(options.apikey, appId, channel, options)
   assert.equal(result.size, 0)
 })
 
 await test('returns empty map when channel version has empty native packages', async () => {
-  const supabase = fakeSupabase({ data: { version: { native_packages: [] } }, error: null })
-  const result = await getRemoteDependencies(supabase, 'com.example.app', 'production')
+  setCurrentBundleResponse({
+    disable_auto_update: 'major',
+    bundle_name: '1.0.0',
+    bundle_id: 1,
+    min_update_version: null,
+    native_packages: [],
+  })
+  const result = await getRemoteDependencies(options.apikey, appId, channel, options)
   assert.equal(result.size, 0)
 })
 
 await test('returns empty map when channel has no linked version', async () => {
-  const supabase = fakeSupabase({ data: { version: null }, error: null })
-  const result = await getRemoteDependencies(supabase, 'com.example.app', 'production')
+  setCurrentBundleResponse({
+    disable_auto_update: 'major',
+    bundle_name: null,
+    bundle_id: null,
+    min_update_version: null,
+    native_packages: [],
+  })
+  const result = await getRemoteDependencies(options.apikey, appId, channel, options)
   assert.equal(result.size, 0)
 })
 
 await test('maps remote native packages by name', async () => {
-  const supabase = fakeSupabase({
-    data: {
-      version: {
-        native_packages: [
-          {
-            name: '@capacitor/camera',
-            version: '6.0.0',
-            requested_version: '^6.0.0',
-            ios_checksum: 'ios-hash',
-            android_checksum: 'android-hash',
-          },
-        ],
+  setCurrentBundleResponse({
+    disable_auto_update: 'major',
+    bundle_name: '1.0.0',
+    bundle_id: 1,
+    min_update_version: null,
+    native_packages: [
+      {
+        name: '@capacitor/camera',
+        version: '6.0.0',
+        requested_version: '^6.0.0',
+        ios_checksum: 'ios-hash',
+        android_checksum: 'android-hash',
       },
-    },
-    error: null,
+    ],
   })
-  const result = await getRemoteDependencies(supabase, 'com.example.app', 'production')
+  const result = await getRemoteDependencies(options.apikey, appId, channel, options)
   assert.equal(result.size, 1)
   assert.equal(result.get('@capacitor/camera')?.version, '6.0.0')
 })
 
-await test('throws a clear error for multiple channel rows instead of coerce message', async () => {
-  const supabase = fakeSupabase({
-    data: null,
-    error: { message: 'Cannot coerce the result to a single JSON object' },
-  })
+await test('returns empty map when duplicate channel rows collapse to cannot_find_channel', async () => {
+  setCurrentBundleResponse({ error: 'cannot_find_channel', message: 'Cannot find channel' }, 404)
+  const result = await getRemoteDependencies(options.apikey, appId, channel, options)
+  assert.equal(result.size, 0)
+})
+
+await test('throws when current-bundle returns an unexpected API error', async () => {
+  setCurrentBundleResponse({ error: 'cannot_access_channel', message: 'You can\'t access this channel' }, 403)
 
   await assert.rejects(
-    () => getRemoteDependencies(supabase, 'com.example.app', 'production'),
-    /Multiple channels matched/,
+    () => getRemoteDependencies(options.apikey, appId, channel, options),
+    /FunctionsHttpError|cannot_access_channel|403/,
   )
 })
 
-await test('throws a clear error when maybeSingle reports PGRST116 duplicate rows', async () => {
-  const supabase = fakeSupabase({
-    data: null,
-    error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' },
-  })
-
-  await assert.rejects(
-    () => getRemoteDependencies(supabase, 'com.example.app', 'production'),
-    /Multiple channels matched/,
-  )
-})
+globalThis.fetch = originalFetch
 
 if (failures > 0) {
   process.exit(1)

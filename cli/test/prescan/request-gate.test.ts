@@ -144,8 +144,8 @@ function installGateFetchSpy(permission: boolean): GateProbe {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
     probe.urls.push(url)
-    if (url.includes('cli_check_permission'))
-      return json(permission)
+    if (url.includes('private/cli/check-permission'))
+      return json({ allowed: permission })
     if (url.includes('/build/request')) {
       probe.postedBuildRequest = true
       return json({ jobId: 'should-never-be-reached' })

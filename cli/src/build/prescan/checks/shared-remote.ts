@@ -1,24 +1,24 @@
 // src/build/prescan/checks/shared-remote.ts
 import type { Finding, PrescanCheck, ScanContext } from '../types'
+import { hasCliPermission } from '../../../utils'
 
 export const apikeyPermission: PrescanCheck = {
   id: 'shared/apikey-permission',
   platforms: ['ios', 'android'],
   remote: true,
   async run(ctx: ScanContext): Promise<Finding[]> {
-    // mirrors hasCliPermission() (src/utils.ts) — call the RPC directly so a false result
-    // becomes a Finding instead of a thrown error
-    const { data, error } = await ctx.supabase!.rpc('cli_check_permission' as any, {
-      apikey: ctx.apikey ?? '',
-      permission_key: 'app.build_native',
-      org_id: null,
-      app_id: ctx.appId,
-      channel_id: null,
-    })
-    if (error) {
-      return [{ id: 'shared/apikey-permission', severity: 'info', title: 'Could not verify Capgo build permission (network/API error)', detail: error.message }]
+    if (!ctx.supabase || !ctx.apikey) {
+      return [{ id: 'shared/apikey-permission', severity: 'info', title: 'Could not verify Capgo build permission (missing API client)', detail: 'No Supabase client or API key in prescan context' }]
     }
-    if (data !== true) {
+    let allowed = false
+    try {
+      allowed = await hasCliPermission(ctx.supabase, ctx.apikey, 'app.build_native', { appId: ctx.appId })
+    }
+    catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      return [{ id: 'shared/apikey-permission', severity: 'info', title: 'Could not verify Capgo build permission (network/API error)', detail }]
+    }
+    if (!allowed) {
       return [{
         id: 'shared/apikey-permission',
         severity: 'error',

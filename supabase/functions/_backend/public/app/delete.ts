@@ -31,6 +31,44 @@ export async function deleteApp(c: Context<MiddlewareKeyVariables>, appId: strin
     .single()
   const appStoragePrefix = app?.owner_org ? `orgs/${app.owner_org}/apps/${appId}/` : null
 
+  // Legacy per-user Supabase storage bucket used by older CLI uploads.
+  if (apikey.user_id) {
+    try {
+      const legacyBucket = `apps/${appId}/${apikey.user_id}`
+      const { data: legacyFiles } = await supabaseAdmin(c)
+        .storage
+        .from(legacyBucket)
+        .list('')
+      const legacyPaths = (legacyFiles ?? []).map(file => file.name)
+      if (legacyPaths.length > 0) {
+        await supabaseAdmin(c)
+          .storage
+          .from(legacyBucket)
+          .remove(legacyPaths)
+        cloudlog({
+          requestId: c.get('requestId'),
+          message: 'deleted legacy user-scoped app storage',
+          count: legacyPaths.length,
+          app_id: appId,
+        })
+      }
+      else {
+        await supabaseAdmin(c)
+          .storage
+          .from(legacyBucket)
+          .remove(['versions'])
+      }
+    }
+    catch (error) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'error deleting legacy user-scoped app storage',
+        error,
+        app_id: appId,
+      })
+    }
+  }
+
   // Delete app icon from storage before deleting the app
   // App icons are stored at: images/org/{org_id}/{app_id}/icon
   // Note: Storage operations need admin access

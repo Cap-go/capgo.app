@@ -1,26 +1,34 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Options } from '../api/app'
-import type { Database } from '../types/supabase.types'
 import { intro, log, outro } from '@clack/prompts'
 import { trackEvent } from '../analytics/track'
 import { formatTable } from '../terminal-table'
-import { createSupabaseClient, findSavedKey, formatError, resolveUserIdFromApiKey } from '../utils'
+import { findSavedKey, formatError, invokeCapgoCliApi } from '../utils'
 
-export async function resolveAccountEmail(supabase: SupabaseClient<Database>): Promise<string> {
-  const emailResult = await supabase.rpc('request_actor_email_adress')
-  if (emailResult.error)
-    throw emailResult.error
-  if (!emailResult.data)
+export async function resolveAccountIdentity(
+  apikey: string,
+  options: { supaHost?: string, supaAnon?: string } = {},
+) {
+  const { data, error } = await invokeCapgoCliApi<{
+    userId?: string
+    email?: string | null
+  }>('private/cli/identity', {
+    apikey,
+    method: 'GET',
+    body: undefined,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
+
+  if (error)
+    throw error
+
+  const userId = (data?.userId || '').toString()
+  if (!userId)
+    throw new Error('Account identity not found for this API key')
+
+  const email = data?.email
+  if (!email)
     throw new Error('Account email not found for this API key')
-
-  return emailResult.data
-}
-
-export async function resolveAccountIdentity(supabase: SupabaseClient<Database>, apikey: string) {
-  const [userId, email] = await Promise.all([
-    resolveUserIdFromApiKey(supabase, apikey, true),
-    resolveAccountEmail(supabase),
-  ])
 
   return { userId, email }
 }
@@ -34,8 +42,10 @@ export async function whoami(options: Options) {
   }
 
   try {
-    const supabase = await createSupabaseClient(apikey, options.supaHost, options.supaAnon)
-    const { userId, email } = await resolveAccountIdentity(supabase, apikey)
+    const { userId, email } = await resolveAccountIdentity(apikey, {
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
+    })
 
     log.info(formatTable({
       headers: ['Account ID', 'Account email'],

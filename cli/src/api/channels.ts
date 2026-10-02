@@ -4,6 +4,7 @@ import process from 'node:process'
 import { confirm as confirmC, intro, log, outro, spinner } from '@clack/prompts'
 import { CliUserError } from '../shared/cli-user-error'
 import { formatTable, visibleWidth } from '../terminal-table'
+import type { NativePackage } from '../schemas/common'
 import { formatCapgoCliInvokeError, formatError, getCapgoCliHttpStatus, invokeCapgoCliApi, readCapgoCliApiErrorPayload } from '../utils'
 
 interface CheckVersionOptions {
@@ -327,6 +328,67 @@ export function displayChannels(data: Channel[], silent = false) {
 
   log.success('Channels')
   log.message(formatChannels(data))
+}
+
+export interface ChannelCompatibilityContext {
+  disable_auto_update: string
+  version: {
+    id: number
+    name: string
+    min_update_version: string | null
+    native_packages: NativePackage[]
+  } | null
+}
+
+export async function fetchChannelCompatibilityContext(
+  options: CapgoHttpOptions,
+  appId: string,
+  channel: string,
+): Promise<ChannelCompatibilityContext | null> {
+  const params = new URLSearchParams({
+    app_id: appId,
+    channel,
+  })
+  const { data, error } = await invokeCapgoCliApi<{
+    bundle_name?: string
+    bundle_id?: number
+    min_update_version?: string | null
+    native_packages?: NativePackage[]
+    disable_auto_update?: string
+  }>(`channel/current-bundle?${params.toString()}`, {
+    apikey: options.apikey,
+    method: 'GET',
+    body: undefined,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
+
+  if (error) {
+    const payload = await readCapgoCliApiErrorPayload(error)
+    if (payload?.error === 'cannot_find_channel')
+      return null
+    throw error
+  }
+
+  if (data?.disable_auto_update === undefined)
+    return null
+
+  if (!data.bundle_name || data.bundle_id == null) {
+    return {
+      disable_auto_update: data.disable_auto_update ?? 'none',
+      version: null,
+    }
+  }
+
+  return {
+    disable_auto_update: data.disable_auto_update ?? 'none',
+    version: {
+      id: data.bundle_id,
+      name: data.bundle_name,
+      min_update_version: data.min_update_version ?? null,
+      native_packages: Array.isArray(data.native_packages) ? data.native_packages : [],
+    },
+  }
 }
 
 export async function getActiveChannels(
