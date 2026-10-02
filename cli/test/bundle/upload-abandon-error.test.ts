@@ -122,4 +122,22 @@ describe('ManifestUploadAbandonController', () => {
 
     expect(rejections).toEqual([abandonError, abandonError])
   })
+
+  it('rejects every upload even when one TUS abort operation throws synchronously', async () => {
+    const controller = new ManifestUploadAbandonController()
+    const rejections: unknown[] = []
+    controller.register(
+      { abort: () => { throw new Error('abort failed synchronously') } },
+      error => rejections.push(error),
+    )
+    controller.register(
+      { abort: async () => {} },
+      error => rejections.push(error),
+    )
+
+    const abandonError = new ManifestUploadAbandonError('all', 'Authorization rejected.')
+    await controller.abandon(abandonError)
+
+    expect(rejections).toEqual([abandonError, abandonError])
+  })
 })

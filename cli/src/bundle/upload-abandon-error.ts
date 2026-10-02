@@ -109,7 +109,9 @@ export class ManifestUploadAbandonController {
       const activeUploads = [...this.activeUploads.entries()]
       this.activeUploads.clear()
       this.abandonPromise = (async () => {
-        await Promise.allSettled(activeUploads.map(([upload]) => Promise.resolve(upload.abort())))
+        await Promise.allSettled(activeUploads.map(async ([upload]) => {
+          await upload.abort()
+        }))
         for (const [, reject] of activeUploads)
           reject(this.abandonError)
       })()
