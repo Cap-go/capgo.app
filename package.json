@@ -87,7 +87,7 @@
     "test:all": "bun run cli:build && bun run supabase:with-env -- bunx vitest run tests/*",
     "check:plugin-runtime": "bun scripts/check_plugin_runtime_isolation.mjs",
     "check:plugin-worker-size": "bun scripts/check_plugin_worker_size.ts",
-    "test:unit": "vitest run tests/*.unit.test.ts --maxWorkers=100%",
+    "test:unit": "vitest run tests/*.unit.test.ts",
     "security:sync-headers": "bun scripts/sync-console-headers.ts",
     "security:compute-integrity": "bun scripts/compute-external-integrity.ts",
     "test:db": "bash scripts/test-db-tinbase.sh",

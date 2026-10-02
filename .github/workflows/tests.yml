@@ -61,10 +61,18 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           OWNER: ${{ github.repository_owner }}
           BRANCH: ${{ github.ref_name }}
+          IS_FORK: ${{ github.event.repository.fork }}
         run: |
           enabled=true
           if [ "$EVENT_NAME" = "push" ]; then
-            open_prs=$(gh api "repos/${REPOSITORY}/pulls?state=open&head=${OWNER}:${BRANCH}" --jq 'length' || echo 0)
+            # PRs from a fork are listed on the upstream repository, not on the fork.
+            pr_repository="$REPOSITORY"
+            if [ "$IS_FORK" = "true" ]; then
+              pr_repository=$(gh api "repos/${REPOSITORY}" --jq '.parent.full_name // empty' || true)
+              pr_repository="${pr_repository:-$REPOSITORY}"
+            fi
+            # -f fields are URL-encoded, so branch names with &, # or + are matched exactly.
+            open_prs=$(gh api -X GET "repos/${pr_repository}/pulls" -f state=open -f "head=${OWNER}:${BRANCH}" --jq 'length' || echo 0)
             if [ "${open_prs:-0}" -gt 0 ]; then
               echo "Branch ${BRANCH} has an open pull request; its pull_request run tests this commit."
               enabled=false
@@ -309,7 +317,9 @@ jobs:
       - name: Install dependencies
         run: bun install
       - name: Run unit tests
-        run: bun run test:unit
+        # Unit tests have no edge-function load, so use every runner core instead of the
+        # integration cap of 2 workers in vitest.config.ts.
+        run: bun run test:unit --maxWorkers=100%
 
   test_db:
     needs: changes

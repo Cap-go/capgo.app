@@ -4,13 +4,14 @@
  * Playwright's built-in `--shard` splits by test count, which left one shard with
  * twice the runtime of the other. This assigns whole spec files (specs stay serial
  * and stateful inside a file) with longest-first greedy packing using
- * playwright/spec-durations.json. Spec files missing from that file use a default
- * estimate, so new specs always run somewhere.
+ * playwright/spec-durations.json (keys are paths relative to playwright/e2e). Spec files
+ * missing from that file use a default estimate, so new specs always run somewhere, and
+ * the script warns so the durations file gets updated.
  *
  * Usage: bun scripts/playwright-shard-files.ts <index>/<total>
  */
 import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
@@ -42,7 +43,15 @@ function main() {
   }
 
   const durations: Record<string, number> = JSON.parse(readFileSync(join(repoRoot, 'playwright', 'spec-durations.json'), 'utf8'))
-  const specs = readdirSync(specDir).filter(file => file.endsWith('.spec.ts'))
+  const specs = readdirSync(specDir, { recursive: true, encoding: 'utf8' })
+    .map(file => file.split(sep).join('/'))
+    .filter(file => file.endsWith('.spec.ts'))
+  const missing = specs.filter(spec => durations[spec] === undefined)
+  const stale = Object.keys(durations).filter(spec => !specs.includes(spec))
+  if (missing.length > 0)
+    console.error(`::warning::playwright/spec-durations.json has no duration for ${missing.join(', ')}; using ${DEFAULT_SPEC_SECONDS}s. Add measured durations to keep shards balanced.`)
+  if (stale.length > 0)
+    console.error(`::warning::playwright/spec-durations.json lists missing specs: ${stale.join(', ')}`)
   const shard = assignSpecsToShards(specs, durations, total)[index - 1]
   if (shard.length === 0) {
     console.error(`Shard ${index}/${total} has no spec files`)

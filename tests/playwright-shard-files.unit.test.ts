@@ -11,11 +11,12 @@ describe('playwright duration-balanced shards', () => {
   })
 
   it('balances long specs across shards instead of splitting by count', () => {
-    const durations = { 'a.spec.ts': 30, 'b.spec.ts': 30, 'c.spec.ts': 20, 'd.spec.ts': 20, 'e.spec.ts': 10, 'f.spec.ts': 10 }
+    // Round-robin by name gives 65/35 and a contiguous count split 80/20; only duration packing reaches 50/50.
+    const durations = { 'a.spec.ts': 40, 'b.spec.ts': 20, 'c.spec.ts': 20, 'd.spec.ts': 10, 'e.spec.ts': 5, 'f.spec.ts': 5 }
     const shards = assignSpecsToShards(Object.keys(durations), durations, 2)
     const totals = shards.map(shard => shard.reduce((sum, spec) => sum + durations[spec as keyof typeof durations], 0))
 
-    expect(Math.abs(totals[0] - totals[1])).toBe(0)
+    expect(totals).toEqual([50, 50])
   })
 
   it('gives unknown specs a default estimate so new files still run', () => {

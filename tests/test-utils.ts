@@ -8,6 +8,7 @@ import { createClient } from '@supabase/supabase-js'
 import { Hono } from 'hono/tiny'
 import { Pool } from 'pg'
 import { getCanonicalAppVersionR2Path } from '../supabase/functions/_backend/utils/app_version_r2_path.ts'
+import { retryTransientSqlError } from './sql-retry'
 
 function normalizePostgresUrl(raw: string): string {
   // Avoid Node preferring IPv6 (::1) for localhost in some environments.
@@ -999,26 +1000,10 @@ export async function getPostgresClient(): Promise<Pool> {
   return pool
 }
 
-// Concurrent test files write the same RBAC/org rows through triggers, so Postgres can
-// pick one autocommit statement as a deadlock victim. The victim is fully rolled back,
-// so re-running that single statement is safe.
-const RETRYABLE_SQL_STATES = new Set(['40P01', '40001'])
-const SQL_RETRY_ATTEMPTS = 3
-
 export async function executeSQL<T = any>(query: string, params?: any[]): Promise<T[]> {
   const client = await getPostgresClient()
-  for (let attempt = 1; ; attempt++) {
-    try {
-      const result = await client.query(query, params || [])
-      return result.rows as T[]
-    }
-    catch (error) {
-      const code = (error as { code?: string } | null)?.code
-      if (!code || !RETRYABLE_SQL_STATES.has(code) || attempt >= SQL_RETRY_ATTEMPTS)
-        throw error
-      await new Promise(resolve => setTimeout(resolve, 50 * attempt + Math.floor(Math.random() * 50)))
-    }
-  }
+  const result = await retryTransientSqlError(() => client.query(query, params || []))
+  return result.rows as T[]
 }
 
 export async function getCronPlanQueueCount(): Promise<number> {

@@ -51,14 +51,19 @@ function runStep(name: string): Promise<StepResult> {
     const chunks: Buffer[] = []
     child.stdout.on('data', chunk => chunks.push(chunk))
     child.stderr.on('data', chunk => chunks.push(chunk))
-    child.on('close', (code, signal) => {
-      resolve({
-        name,
-        code: code ?? (signal ? 1 : 0),
-        durationMs: Date.now() - startedAt,
-        output: Buffer.concat(chunks).toString('utf8'),
-      })
+    let settled = false
+    const finish = (code: number) => {
+      if (settled)
+        return
+      settled = true
+      resolve({ name, code, durationMs: Date.now() - startedAt, output: Buffer.concat(chunks).toString('utf8') })
+    }
+    // A spawn failure (e.g. bun missing from PATH) must fail this step, not crash the suite.
+    child.on('error', (error) => {
+      chunks.push(Buffer.from(`Failed to start "bun run ${name}": ${error.message}\n`))
+      finish(1)
     })
+    child.on('close', (code, signal) => finish(code ?? (signal ? 1 : 0)))
   })
 }
 
@@ -80,9 +85,13 @@ async function main() {
   const args = process.argv.slice(2)
   const serial = args.includes('--serial')
   const concurrencyArg = args.find(arg => arg.startsWith('--concurrency='))
-  const concurrency = serial
-    ? 1
-    : Math.max(1, Number(concurrencyArg?.split('=')[1] ?? process.env.CLI_TEST_CONCURRENCY ?? availableParallelism()))
+  const requested = concurrencyArg?.split('=')[1] ?? process.env.CLI_TEST_CONCURRENCY
+  const parsed = Number(requested)
+  if (requested !== undefined && requested !== '' && (!Number.isInteger(parsed) || parsed < 1)) {
+    console.error(`Invalid test concurrency "${requested}"; expected a positive integer.`)
+    process.exit(2)
+  }
+  const concurrency = serial ? 1 : (requested ? parsed : availableParallelism())
 
   const steps = readSuiteSteps()
   const setup = steps.filter(step => SETUP_STEPS.has(step))

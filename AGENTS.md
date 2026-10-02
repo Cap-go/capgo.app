@@ -80,9 +80,10 @@ CLI identity path (`get_user_id(text)` with a valid API key must keep working).
 - `bun mobile` - Build for mobile and copy to Capacitor platforms
 - `bun dev-build` - Build with development branch configuration
 - `bun run cli:build` - Build the CLI workspace in `cli/`
-- `bun run cli:test` - Run the CLI workspace test suite (scripts listed in
-  `cli` `test:suite` run in parallel; `bun run --cwd cli test:serial` runs them
-  one by one)
+- `bun run cli:test` - Run the CLI workspace test suite (the setup steps
+  `test:helper-dce` and `test:version-detection:setup` run first, then the rest
+  of `cli` `test:suite` runs in parallel; `bun run --cwd cli test:serial` runs
+  everything one by one)
 - `bun run cli:check` - Lint, typecheck, build, and test the CLI workspace
 
 ### Testing
