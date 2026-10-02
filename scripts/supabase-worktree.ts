@@ -104,6 +104,8 @@ function rewriteConfigToml(raw: string, cfg: ReturnType<typeof getSupabaseWorktr
 
     if (line.match(/^\s*project_id\s*=/))
       out.push(`project_id = "${projectId}"`)
+    else if (section === 'local_smtp' && process.env.CONSOLE_LOCAL_SMTP === 'true' && line.match(/^\s*enabled\s*=/))
+      out.push('enabled = true')
     else if (section === 'db' && line.match(/^\s*shadow_port\s*=\s*\d+\s*$/))
       out.push(`shadow_port = ${ports.dbShadow}`)
     else if (section === 'edge_runtime' && line.match(/^\s*inspector_port\s*=\s*\d+\s*$/))

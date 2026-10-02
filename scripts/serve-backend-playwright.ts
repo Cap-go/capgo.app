@@ -7,6 +7,9 @@ import { getPlaywrightStripeApiBaseUrl } from './playwright-stripe'
 import { getSupabaseWorktreeConfig } from './supabase-worktree-config'
 import { getSupabaseStatus } from './supabase-worktree-status'
 
+// Browser password-reset tests exercise real delivery to the local mailbox.
+env.CONSOLE_LOCAL_SMTP = 'true'
+
 const repoRoot = process.cwd()
 const sourceEnvPath = resolve(repoRoot, 'supabase/functions/.env')
 const generatedEnvPath = resolve(repoRoot, '.context/playwright/supabase-functions.playwright.env')
@@ -17,7 +20,7 @@ const webAppUrl = env.WEBAPP_URL || 'http://localhost:5173'
 const functionsReadyTimeoutMs = Number(env.PLAYWRIGHT_BACKEND_TIMEOUT_MS || '360000')
 // Comma-separated Supabase services to skip (`supabase start -x`). CI skips the ones E2E
 // never touches so a cold runner pulls fewer images before the stack is healthy.
-const supabaseStartExclude = env.PLAYWRIGHT_SUPABASE_EXCLUDE?.trim()
+const supabaseStartExclude = env.PLAYWRIGHT_SUPABASE_EXCLUDE?.split(',').filter(service => !['mailpit', 'inbucket'].includes(service.trim())).join(',')
 
 function upsertEnvValue(content: string, key: string, value: string): string {
   const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')

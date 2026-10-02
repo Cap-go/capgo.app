@@ -1,14 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createConsoleClient } from '../src/services/consoleClient'
 
-const signup = vi.hoisted(() => vi.fn())
-vi.mock('better-auth/client', () => ({ createAuthClient: () => ({ signUp: { email: signup } }) }))
+const { signup, signin } = vi.hoisted(() => ({ signup: vi.fn(), signin: vi.fn() }))
+vi.mock('better-auth/client', () => ({ createAuthClient: () => ({ signUp: { email: signup }, signIn: { email: signin } }) }))
 
 beforeEach(() => { vi.stubGlobal('location', { origin: 'https://console.example.com' }) })
 
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks() })
 
 describe('console registration session', () => {
+  it('preserves the console invalid-credentials error contract', async () => {
+    signin.mockResolvedValue({ data: null, error: { code: 'INVALID_EMAIL_OR_PASSWORD', message: 'Invalid email or password', status: 401 } })
+    const client = createConsoleClient(undefined, undefined, { auth: { persistSession: false } })
+    const result = await client.auth.signInWithPassword({ email: 'wrong@example.com', password: 'wrongpass' })
+    expect(result.error).toMatchObject({ code: 'invalid_credentials', message: 'Invalid login credentials', status: 401 })
+  })
+
   it('notifies the console store when signup creates an authenticated session', async () => {
     const session = { access_token: 'capgo_session_test-token', user: { id: 'fixture-user' } }
     signup.mockResolvedValue({ data: { token: 'test-token', user: session.user }, error: null })

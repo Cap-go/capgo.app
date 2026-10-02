@@ -24,8 +24,9 @@ export class FunctionsFetchError extends Error {
 }
 
 function normalizeAuth<T>(result: { data: T, error: { message?: string, code?: string, status?: number } | null }) {
+  const invalidCredentials = result.error?.code === 'INVALID_EMAIL_OR_PASSWORD'
   const error = result.error
-    ? Object.assign(new Error(result.error.message ?? 'Authentication failed'), { name: 'AuthApiError', code: result.error.code, status: result.error.status })
+    ? Object.assign(new Error(invalidCredentials ? 'Invalid login credentials' : result.error.message ?? 'Authentication failed'), { name: 'AuthApiError', code: invalidCredentials ? 'invalid_credentials' : result.error.code, status: result.error.status })
     : null
   return { data: result.data, error }
 }
