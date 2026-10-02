@@ -4,7 +4,7 @@ import { trackEvent } from '../analytics/track'
 import { check2FAComplianceForApp } from '../api/app'
 import { CliUserError } from '../shared/cli-user-error'
 import {
-  createSupabaseClient,
+  createCapgoClient,
   findSavedKey,
   formatError,
   getAppId,
@@ -35,7 +35,7 @@ export async function currentBundleInternal(channel: string, appId: string, opti
     throw new CliUserError('Missing appId')
   }
 
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
+  const supabase = await createCapgoClient(options.apikey, options.supaHost, options.supaAnon)
   await check2FAComplianceForApp(supabase, appId, silent)
   await resolveUserIdFromApiKey(supabase, options.apikey)
 

@@ -1,9 +1,10 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { CapgoClient } from '../utils'
 import type { Database } from '../types/supabase.types'
 import { log } from '@clack/prompts'
 import { Table } from '@sauber/table'
 import { formatError, getHumanDate, invokeCapgoCliApi, readCapgoCliApiErrorPayload } from '../utils'
 import { checkVersionNotUsedInChannel } from './channels'
+import { setBundlesDeleted } from './cli-data'
 
 interface VersionOptions {
   silent?: boolean
@@ -134,28 +135,24 @@ export async function upsertAppVersion(
 }
 
 export async function deleteAppVersion(
-  supabase: SupabaseClient<Database> | null,
+  supabase: CapgoClient | null,
   appid: string,
   bundle: string,
   options: VersionOptions = {},
 ) {
   const { silent = false, apikey, supaHost, supaAnon } = options
 
-  // Soft-delete via PostgREST when a client is provided. HTTP DELETE /bundle
+  // Soft-delete through the CLI data endpoint when a client is provided. HTTP DELETE /bundle
   // rejects bundles still linked to a channel; admin channel cleanup needs this path.
   if (supabase) {
-    const { error: delAppSpecVersionError } = await supabase
-      .from('app_versions')
-      .update({ deleted: true })
-      .eq('app_id', appid)
-      .eq('deleted', false)
-      .eq('name', bundle)
-
-    if (delAppSpecVersionError) {
+    try {
+      await setBundlesDeleted(supabase, appid, [bundle], true)
+    }
+    catch (error) {
       const message = `App version ${appid}@${bundle} not found in database`
       if (!silent)
         log.error(message)
-      throw new Error(`${message}: ${formatError(delAppSpecVersionError)}`)
+      throw new Error(`${message}: ${formatError(error)}`)
     }
     return
   }
@@ -179,7 +176,7 @@ export async function deleteAppVersion(
 }
 
 export async function deleteSpecificVersion(
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoClient,
   appid: string,
   bundle: string,
   options: DeleteSpecificVersionOptions = {},
@@ -222,7 +219,7 @@ export function displayBundles(
 }
 
 export async function getActiveAppVersions(
-  apikeyOrClient: string | SupabaseClient<Database>,
+  apikeyOrClient: string | CapgoClient,
   appid: string,
   options: VersionOptions = {},
 ) {
@@ -285,7 +282,7 @@ export async function getChannelsVersion(
 }
 
 export async function getVersionData(
-  apikeyOrClient: string | SupabaseClient<Database>,
+  apikeyOrClient: string | CapgoClient,
   appid: string,
   bundle: string,
   options: VersionOptions = {},

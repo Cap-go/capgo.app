@@ -1,10 +1,11 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { CapgoClient } from '../utils'
 import type { Database } from '../types/supabase.types'
 import process from 'node:process'
 import { confirm as confirmC, intro, log, outro, spinner } from '@clack/prompts'
 import { CliUserError } from '../shared/cli-user-error'
 import { formatTable, visibleWidth } from '../terminal-table'
 import type { NativePackage } from '../schemas/common'
+import { fetchCliChannels } from './cli-data'
 import { formatCapgoCliInvokeError, formatError, getCapgoCliHttpStatus, invokeCapgoCliApi, readCapgoCliApiErrorPayload } from '../utils'
 
 interface CheckVersionOptions {
@@ -79,7 +80,7 @@ async function fetchChannelsPage(appid: string, page: number, options: CapgoHttp
 }
 
 export async function checkVersionNotUsedInChannel(
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoClient,
   appid: string,
   versionData: Database['public']['Tables']['app_versions']['Row'],
   options: CheckVersionOptions = {},
@@ -90,15 +91,12 @@ export async function checkVersionNotUsedInChannel(
     throw new Error('Missing API key for channel version check')
   }
 
-  // Channel link reads stay on PostgREST so preview keys (no app.read_channels) still work.
-  let query = supabase
-    .from('channels')
-    .select('id, name, version, rollout_version')
-    .eq('app_id', appid)
-  if (channelName)
-    query = query.eq('name', channelName)
-  const { data, error } = await query
-  if (error) {
+  // Channel link reads run with the caller key so preview keys (no app.read_channels) still work.
+  let data: Awaited<ReturnType<typeof fetchCliChannels>>
+  try {
+    data = await fetchCliChannels(supabase, appid, channelName)
+  }
+  catch (error) {
     if (!silent)
       log.error(`Cannot check Version ${appid}@${versionData.name}: ${formatError(error)}`)
     throw new Error(`Cannot check version ${appid}@${versionData.name}: ${formatError(error)}`)
@@ -207,64 +205,49 @@ export function delChannel(options: CapgoHttpOptions, name: string, appId: strin
   })
 }
 
-// Channel reads stay on PostgREST so RLS (app.read / channel.read) matches console and
-// preview-key behavior. HTTP GET /channel requires app.read_channels, which preview keys lack.
-export function findChannel(supabase: SupabaseClient<Database>, appId: string, name: string) {
-  return supabase
-    .from('channels')
-    .select()
-    .eq('app_id', appId)
-    .eq('name', name)
-    .single()
+// Channel reads run with the caller key so access matches console and preview-key
+// behavior. HTTP GET /channel requires app.read_channels, which preview keys lack.
+export async function findChannel(supabase: CapgoClient, appId: string, name: string) {
+  try {
+    const rows = await fetchCliChannels(supabase, appId, name)
+    const row = rows.find(channel => channel.name === name) ?? null
+    return { data: row, error: null }
+  }
+  catch (error) {
+    return { data: null, error: error as Error }
+  }
 }
 
 export interface ChannelLinkedVersion { id: number, name: string }
 
 export async function findVersionsLinkedToChannel(
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoClient,
   appId: string,
   name: string,
 ): Promise<{ stable: ChannelLinkedVersion | null, rollout: ChannelLinkedVersion | null }> {
-  const { data, error } = await supabase
-    .from('channels')
-    .select(`
-      id,
-      version:app_versions!channels_version_fkey(id, name),
-      rollout_version_info:app_versions!channels_rollout_version_fkey(id, name)
-    `)
-    .eq('app_id', appId)
-    .eq('name', name)
-    .maybeSingle()
-
-  if (error || !data)
+  const { data } = await findChannel(supabase, appId, name)
+  if (!data)
     return { stable: null, rollout: null }
 
-  const stable = data.version && typeof data.version === 'object' && !Array.isArray(data.version)
-    ? data.version as ChannelLinkedVersion
-    : null
-  const rollout = data.rollout_version_info && typeof data.rollout_version_info === 'object' && !Array.isArray(data.rollout_version_info)
-    ? data.rollout_version_info as ChannelLinkedVersion
-    : null
+  const stable = data.version_info ? { id: data.version_info.id, name: data.version_info.name } : null
+  const rollout = data.rollout_version_info ? { id: data.rollout_version_info.id, name: data.rollout_version_info.name } : null
   return { stable, rollout }
 }
 
 export async function isVersionLinkedToOtherChannel(
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoClient,
   appId: string,
   versionId: number,
   excludeChannelName: string,
 ): Promise<boolean> {
-  const { data, error } = await supabase
-    .from('channels')
-    .select('id')
-    .eq('app_id', appId)
-    .neq('name', excludeChannelName)
-    .or(`version.eq.${versionId},rollout_version.eq.${versionId}`)
-    .limit(1)
-
-  if (error)
+  try {
+    const rows = await fetchCliChannels(supabase, appId)
+    return rows.some(channel => channel.name !== excludeChannelName
+      && (channel.version === versionId || channel.rollout_version === versionId))
+  }
+  catch {
     return true
-  return (data?.length ?? 0) > 0
+  }
 }
 
 export type { Channel } from '../schemas/channel'

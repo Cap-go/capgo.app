@@ -1,10 +1,8 @@
-import { createSupabaseClient, invokeCapgoCliApi } from '../utils'
+import { invokeCapgoCliApi } from '../utils'
 
 const ownerOrgCache = new Map<string, Promise<string | undefined>>()
 
 export interface OrgResolverDeps {
-  /** @deprecated Prefer fetchOwnerOrg; kept for existing unit tests. */
-  createClient?: typeof createSupabaseClient
   /** Injectable for tests; defaults to GET app via invokeCapgoCliApi. */
   fetchOwnerOrg?: (apikey: string, appId: string, signal?: AbortSignal) => Promise<string | undefined>
   supaHost?: string
@@ -29,19 +27,6 @@ export function resolveOwnerOrgId(apikey: string, appId: string, deps: OrgResolv
       if (deps.fetchOwnerOrg)
         return await deps.fetchOwnerOrg(apikey, appId, signal)
 
-      // TODO(cli-http): createClient path is legacy test/compat only
-      if (deps.createClient) {
-        const supabase = await deps.createClient(apikey, deps.supaHost, deps.supaAnon, true, false)
-        let query = supabase
-          .from('apps')
-          .select('owner_org')
-          .eq('app_id', appId)
-        if (signal)
-          query = query.abortSignal(signal)
-        const { data } = await query.maybeSingle()
-        return data?.owner_org ?? undefined
-      }
-
       const { data, error } = await invokeCapgoCliApi<{ owner_org?: string }>(`app/${encodeURIComponent(appId)}`, {
         apikey,
         method: 'GET',
@@ -49,6 +34,8 @@ export function resolveOwnerOrgId(apikey: string, appId: string, deps: OrgResolv
         supaHost: deps.supaHost,
         supaAnon: deps.supaAnon,
         signal,
+        // Called while building analytics events: an instrumented call could emit perf events recursively.
+        instrument: false,
       })
       if (error || !data?.owner_org)
         return undefined

@@ -12,7 +12,7 @@ import { isAiAgentEnvironment } from '../init/onboarding-source'
 import { CliUserError } from '../shared/cli-user-error'
 import {
   assertCliPermission,
-  createSupabaseClient,
+  createCapgoClient,
   findSavedKey,
   formatCapgoApiErrorBody,
   formatError,
@@ -331,7 +331,7 @@ export async function addAppInternal(
 
   ensureOptions(appId, options, silent)
 
-  const supabase = await createSupabaseClient(options.apikey!, options.supaHost, options.supaAnon)
+  const supabase = await createCapgoClient(options.apikey!, options.supaHost, options.supaAnon)
   const userId = await resolveUserIdFromApiKey(supabase, options.apikey)
 
   if (!organization)

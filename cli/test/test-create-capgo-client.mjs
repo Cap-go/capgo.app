@@ -5,14 +5,14 @@ import { chdir, cwd } from 'node:process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CAPGO_SERVER_CONFIG_MISSING_MESSAGE, createSupabaseClient, defaultApiHost } from '../src/utils.ts'
+import { CAPGO_SERVER_CONFIG_MISSING_MESSAGE, createCapgoClient, defaultApiHost } from '../src/utils.ts'
 import { CliUserError } from '../src/shared/cli-user-error.ts'
 import { shouldCapturePosthogException } from '../src/posthog.ts'
 
 const originalFetch = globalThis.fetch
 const originalCwd = cwd()
 
-const isolatedDir = mkdtempSync(join(tmpdir(), 'capgo-create-supabase-client-'))
+const isolatedDir = mkdtempSync(join(tmpdir(), 'capgo-create-capgo-client-'))
 
 async function assertMissingConfig(fetchImpl, expectedContext, label) {
   globalThis.fetch = fetchImpl
@@ -30,8 +30,8 @@ async function assertMissingConfig(fetchImpl, expectedContext, label) {
   }
   let thrown
   try {
-    await createSupabaseClient('test-api-key', undefined, undefined, true, false, controller.signal)
-    assert.fail(`expected createSupabaseClient to throw (${label})`)
+    await createCapgoClient('test-api-key', undefined, undefined, true, controller.signal)
+    assert.fail(`expected createCapgoClient to throw (${label})`)
   }
   catch (error) {
     thrown = error
@@ -101,7 +101,7 @@ try {
     new CliUserError(CAPGO_SERVER_CONFIG_MISSING_MESSAGE, { missingSupaHost: false, missingSupaKey: true }).message,
   )
 
-  console.log('createSupabaseClient missing-config tests passed')
+  console.log('createCapgoClient missing-config tests passed')
 }
 finally {
   chdir(originalCwd)

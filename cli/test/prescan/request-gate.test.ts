@@ -124,7 +124,7 @@ describe('play-sa-access probe is gated by PLAY_CONFIG_JSON presence in the thre
 //
 // A capacitor.config.json + minimal Android credentials get the run PAST
 // getConfig and the credential-validation step so it reaches the gate/assert.
-// supaHost/supaAnon make createSupabaseClient build a real client pointed at a
+// supaHost/supaAnon make createCapgoClient build a real client pointed at a
 // fake URL whose RPC/select calls the spy answers.
 interface GateProbe {
   postedBuildRequest: boolean

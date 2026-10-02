@@ -2,9 +2,10 @@ import type { ChannelDeleteOptions } from '../schemas/channel'
 import { intro, log, outro } from '@clack/prompts'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { delChannel, findChannel, findVersionsLinkedToChannel, isVersionLinkedToOtherChannel } from '../api/channels'
+import { setBundlesDeleted } from '../api/cli-data'
 import { deleteAppVersion } from '../api/versions'
 import { CliUserError } from '../shared/cli-user-error'
-import { createSupabaseClient, findSavedKey, formatError, getAppId, getConfig, getOrganizationId, hasCliPermission, invokeCapgoCliApi, sendEvent } from '../utils'
+import { createCapgoClient, findSavedKey, formatError, getAppId, getConfig, getOrganizationId, hasCliPermission, invokeCapgoCliApi, sendEvent } from '../utils'
 
 export async function deleteChannelInternal(channelId: string, appId: string, options: ChannelDeleteOptions, silent = false) {
   if (!silent)
@@ -26,7 +27,7 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
     throw new CliUserError('Missing appId')
   }
 
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
+  const supabase = await createCapgoClient(options.apikey, options.supaHost, options.supaAnon)
   await check2FAComplianceForApp(supabase, appId, silent)
 
   const httpOptions = {
@@ -114,11 +115,7 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
     const deleteStatus = await delChannel(httpOptions, channelId, appId, false)
     if (deleteStatus.error) {
       if (softDeletedBundleNames.length) {
-        await supabase
-          .from('app_versions')
-          .update({ deleted: false })
-          .eq('app_id', appId)
-          .in('name', softDeletedBundleNames)
+        await setBundlesDeleted(supabase, appId, softDeletedBundleNames, false).catch(() => [])
       }
       if (!silent)
         log.error(`Cannot delete Channel 🙀 ${formatError(deleteStatus.error)}`)

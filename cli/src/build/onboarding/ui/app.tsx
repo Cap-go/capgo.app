@@ -483,7 +483,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
   // Buffer of telemetry events that occurred before `resolvedOrgId` landed.
   // Drained in order when the org id becomes available. Without this buffer,
   // any step transitions during the async org-id resolution (which involves
-  // two HTTP round-trips: createSupabaseClient + getOrganizationId) would be
+  // two HTTP round-trips: createCapgoClient + getOrganizationId) would be
   // dropped from the funnel.
   const pendingTelemetryRef = useRef<Array<{
     step: OnboardingStep

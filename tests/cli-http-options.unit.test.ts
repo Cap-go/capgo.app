@@ -4,12 +4,13 @@ const fetchMock = vi.hoisted(() => vi.fn())
 
 vi.stubGlobal('fetch', fetchMock)
 
-const { hasCliPermission, hostOptionsFromSupabase, resolveUserIdFromApiKey } = await import('../cli/src/utils')
+const { hasCliPermission, hostOptionsFromClient, resolveUserIdFromApiKey } = await import('../cli/src/utils')
 
-function createLocalSupabaseMock() {
+function createLocalClient() {
   return {
-    supabaseUrl: 'http://127.0.0.1:54321',
-    supabaseKey: 'test-anon-key',
+    apikey: 'test-api-key',
+    supaHost: 'http://127.0.0.1:54321',
+    supaAnon: 'test-anon-key',
   }
 }
 
@@ -18,18 +19,19 @@ describe('CLI HTTP host resolution', () => {
     vi.clearAllMocks()
   })
 
-  it('hostOptionsFromSupabase returns local host options for self-host clients', () => {
-    expect(hostOptionsFromSupabase(createLocalSupabaseMock() as any)).toEqual({
+  it('hostOptionsFromClient returns local host options for self-host clients', () => {
+    expect(hostOptionsFromClient(createLocalClient())).toEqual({
       supaHost: 'http://127.0.0.1:54321',
       supaAnon: 'test-anon-key',
     })
   })
 
-  it('hostOptionsFromSupabase ignores Capgo-managed Supabase hosts', () => {
-    expect(hostOptionsFromSupabase({
-      supabaseUrl: 'https://sb.capgo.app',
-      supabaseKey: 'anon-key',
-    } as any)).toBeUndefined()
+  it('hostOptionsFromClient ignores Capgo-managed Supabase hosts', () => {
+    expect(hostOptionsFromClient({
+      apikey: 'test-api-key',
+      supaHost: 'https://sb.capgo.app',
+      supaAnon: 'anon-key',
+    })).toBeUndefined()
   })
 
   it('hasCliPermission routes to local /functions/v1 when httpOptions are omitted', async () => {
@@ -40,7 +42,7 @@ describe('CLI HTTP host resolution', () => {
     })
 
     const allowed = await hasCliPermission(
-      createLocalSupabaseMock() as any,
+      createLocalClient(),
       'test-api-key',
       'app.upload_bundle',
       { appId: 'com.example.app' },
@@ -67,7 +69,7 @@ describe('CLI HTTP host resolution', () => {
     })
 
     const userId = await resolveUserIdFromApiKey(
-      createLocalSupabaseMock() as any,
+      createLocalClient(),
       'test-api-key',
       true,
     )

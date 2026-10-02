@@ -67,7 +67,7 @@ import { appendInternalLog, getInternalLogPath, startInternalLog } from '../supp
 import { uploadSupportLogs } from '../support/support-upload.js'
 import { offerSupportUploadBeforeAi } from '../support/support-upload-prompt.js'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
-import { assertCliPermission, canPromptInteractively, createSupabaseClient, findSavedKey, getConfig, getOrganizationId, getRemoteConfig, sendEvent, trimTrailingSlashes, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { assertCliPermission, canPromptInteractively, createCapgoClient, findSavedKey, getConfig, getOrganizationId, getRemoteConfig, sendEvent, trimTrailingSlashes, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import { getBuilderAppId } from './app-id'
 import { syncAndroidVersion } from './android-version'
 import { createBuildCancellationSignalHandler, requestBuildCancellation } from './cancellation'
@@ -1493,7 +1493,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
 
     const host = options.supaHost || 'https://api.capgo.app'
 
-    const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
+    const supabase = await createCapgoClient(options.apikey, options.supaHost, options.supaAnon)
     // NOTE: the build-permission assert was moved below (after the prescan gate) so prescan's
     // batched report — which includes shared/apikey-permission — is what users see first.
 

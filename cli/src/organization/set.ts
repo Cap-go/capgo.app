@@ -6,7 +6,7 @@ import { CliUserError } from '../shared/cli-user-error'
 import {
   assertOrgPermission,
   check2FAAccessForOrg,
-  createSupabaseClient,
+  createCapgoClient,
   fetchCliMembers2faStatus,
   fetchCliMembersPasswordPolicyStatus,
   fetchCliOrganization,
@@ -102,7 +102,7 @@ export async function setOrganizationInternal(
     throw new Error('Missing organization id')
   }
 
-  const supabase = await createSupabaseClient(
+  const supabase = await createCapgoClient(
     enrichedOptions.apikey,
     enrichedOptions.supaHost,
     enrichedOptions.supaAnon,

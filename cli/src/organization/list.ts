@@ -6,7 +6,7 @@ import { trackEvent } from '../analytics/track'
 import { checkAlerts } from '../api/update'
 import {
   consoleWebUrl,
-  createSupabaseClient,
+  createCapgoClient,
   fetchOrganizationsV7,
   findSavedKey,
   formatError,
@@ -71,7 +71,7 @@ export async function listOrganizationsInternal(options: OptionsBase, silent = f
     throw new Error('Missing API key')
   }
 
-  const supabase = await createSupabaseClient(
+  const supabase = await createCapgoClient(
     enrichedOptions.apikey,
     enrichedOptions.supaHost,
     enrichedOptions.supaAnon,

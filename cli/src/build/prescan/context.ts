@@ -1,6 +1,5 @@
 // src/build/prescan/context.ts
-import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database } from '../../types/supabase.types'
+import type { CapgoClient } from '../../utils'
 import type { Platform, ScanContext } from './types'
 import { getConfig } from '../../utils'
 import { CliUserError } from '../../shared/cli-user-error'
@@ -15,7 +14,7 @@ export interface BuildScanContextArgs {
   distributionMode?: 'app_store' | 'ad_hoc'
   androidFlavor?: string
   apikey?: string
-  supabase?: SupabaseClient<Database>
+  supabase?: CapgoClient
   /** pre-merged credentials when called from build request (avoids double work) */
   credentials?: Record<string, string>
 }

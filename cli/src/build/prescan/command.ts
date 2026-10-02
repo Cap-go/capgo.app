@@ -1,10 +1,9 @@
 // src/build/prescan/command.ts
-import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database } from '../../types/supabase.types'
+import type { CapgoClient } from '../../utils'
 import type { OutcomeOptions, Platform, PrescanReport, Severity } from './types'
 import { cwd, exit } from 'node:process'
 import { intro, log, outro } from '@clack/prompts'
-import { createSupabaseClient, findSavedKeySilent, sendEvent } from '../../utils'
+import { createCapgoClient, findSavedKeySilent, sendEvent } from '../../utils'
 import { buildScanContext } from './context'
 import { enforcedCounts, informationOnlyFindings } from './enforcement'
 import { decideOutcome, runPrescan } from './engine'
@@ -70,10 +69,10 @@ export async function executePrescan(appId: string | undefined, options: Prescan
   // findSavedKeySilent never logs: `--json` consumers parse stdout, so a clack
   // error line before the JSON report would break them.
   const apikey = options.apikey ?? findSavedKeySilent()
-  let supabase: SupabaseClient<Database> | undefined
+  let supabase: CapgoClient | undefined
   if (apikey) {
     try {
-      supabase = await createSupabaseClient(apikey, options.supaHost, options.supaAnon, true)
+      supabase = await createCapgoClient(apikey, options.supaHost, options.supaAnon, true)
     }
     catch { /* offline/invalid: remote checks will be skipped with a notice */ }
   }

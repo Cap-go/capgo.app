@@ -7,7 +7,7 @@ import { formatTable } from '../terminal-table'
 import { CliUserError } from '../shared/cli-user-error'
 import {
   checkCompatibilityCloud,
-  createSupabaseClient,
+  createCapgoClient,
   findSavedKey,
   formatError,
   getAppId,
@@ -58,7 +58,7 @@ export async function checkCompatibilityInternal(
     throw new CliUserError('Missing appId')
   }
 
-  const supabase = await createSupabaseClient(
+  const supabase = await createCapgoClient(
     enrichedOptions.apikey,
     enrichedOptions.supaHost,
     enrichedOptions.supaAnon,

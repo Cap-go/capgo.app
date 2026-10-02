@@ -55,7 +55,7 @@ describe('init browser login', () => {
     const initApp = initSource.slice(initSource.indexOf('export async function initApp('))
     const savedKeyLookup = initApp.indexOf('options.apikey = findSavedKeySilent() ?? \'\'')
     const browserGate = initApp.indexOf('shouldStartInitBrowserLogin(options.apikey, supportsBrowserLogin && canPromptInteractively({ silent: options.silent }))')
-    const authenticatedClient = initApp.indexOf('const supabase = await createSupabaseClient(options.apikey')
+    const authenticatedClient = initApp.indexOf('const supabase = await createCapgoClient(options.apikey')
 
     expect(savedKeyLookup).toBeGreaterThanOrEqual(0)
     expect(browserGate).toBeGreaterThan(savedKeyLookup)
@@ -81,7 +81,7 @@ describe('init browser login', () => {
     const initApp = initSource.slice(initSource.indexOf('export async function initApp('))
     const authenticated = initApp.indexOf('authenticatedViaLoginPrompt = true')
     const successMessage = initApp.indexOf("pLog.success('Login successful')")
-    const authenticatedClient = initApp.indexOf('const supabase = await createSupabaseClient(options.apikey')
+    const authenticatedClient = initApp.indexOf('const supabase = await createCapgoClient(options.apikey')
 
     expect(authenticated).toBeGreaterThanOrEqual(0)
     expect(successMessage).toBeGreaterThan(authenticated)

@@ -1,5 +1,5 @@
 import type { SemVer } from '@std/semver'
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { CapgoClient } from '../utils'
 import type { BundleCleanupOptions } from '../schemas/bundle'
 import type { Database } from '../types/supabase.types'
 import { confirm as confirmC, intro, isCancel, log, outro } from '@clack/prompts'
@@ -16,7 +16,7 @@ import { checkAlerts } from '../api/update'
 import { deleteSpecificVersion, displayBundles, getActiveAppVersions, getChannelsVersion } from '../api/versions'
 import { CliUserError } from '../shared/cli-user-error'
 import {
-  createSupabaseClient,
+  createCapgoClient,
   findSavedKey,
   getAppId,
   getConfig,
@@ -26,7 +26,7 @@ import {
 
 async function removeVersions(
   toRemove: Database['public']['Tables']['app_versions']['Row'][],
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoClient,
   appId: string,
   silent: boolean,
   http: { apikey: string, supaHost?: string, supaAnon?: string },
@@ -85,7 +85,7 @@ export async function cleanupBundleInternal(appId: string, options: BundleCleanu
     throw new CliUserError('Missing appId')
   }
 
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
+  const supabase = await createCapgoClient(options.apikey, options.supaHost, options.supaAnon)
   await check2FAComplianceForApp(supabase, appId, silent)
   await resolveUserIdFromApiKey(supabase, options.apikey)
   await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'bundle.delete', silent, true)

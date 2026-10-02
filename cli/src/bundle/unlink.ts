@@ -5,7 +5,7 @@ import { getVersionData } from '../api/versions'
 import { CliUserError } from '../shared/cli-user-error'
 import {
   checkPlanValid,
-  createSupabaseClient,
+  createCapgoClient,
   findSavedKey,
   formatError,
   getAppId,
@@ -70,7 +70,7 @@ export async function unlinkDeviceInternal(
       throw new Error('Missing channel')
     }
 
-    const supabase = await createSupabaseClient(
+    const supabase = await createCapgoClient(
       enrichedOptions.apikey,
       enrichedOptions.supaHost,
       enrichedOptions.supaAnon,

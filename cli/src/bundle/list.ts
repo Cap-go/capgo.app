@@ -5,7 +5,7 @@ import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '
 import { checkAlerts } from '../api/update'
 import { displayBundles, getActiveAppVersions } from '../api/versions'
 import { CliUserError } from '../shared/cli-user-error'
-import { createSupabaseClient, findSavedKey, getAppId, getConfig, resolveUserIdFromApiKey } from '../utils'
+import { createCapgoClient, findSavedKey, getAppId, getConfig, resolveUserIdFromApiKey } from '../utils'
 
 export async function listBundle(appId: string, options: OptionsBase, silent = false) {
   if (!silent)
@@ -28,7 +28,7 @@ export async function listBundle(appId: string, options: OptionsBase, silent = f
     throw new CliUserError('Missing appId')
   }
 
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
+  const supabase = await createCapgoClient(options.apikey, options.supaHost, options.supaAnon)
   await check2FAComplianceForApp(supabase, appId, silent)
   await resolveUserIdFromApiKey(supabase, options.apikey)
   await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.read_bundles', silent, true)

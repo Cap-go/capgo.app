@@ -14,6 +14,21 @@ afterEach(() => {
   globalThis.fetch = originalFetch
 })
 
+function installAppVisibleFetch(opts: { visible?: boolean, error?: Error }) {
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    if (url.includes('/private/cli/apps/visible')) {
+      if (opts.error)
+        throw opts.error
+      return new Response(JSON.stringify({ visible: opts.visible === true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return new Response(JSON.stringify({ error: 'not_found' }), { status: 404, headers: { 'Content-Type': 'application/json' } })
+  }
+}
+
 function installPermissionFetch(opts: { allowed?: boolean, error?: Error }) {
   globalThis.fetch = async (input) => {
     const url = String(input)
@@ -31,35 +46,26 @@ function installPermissionFetch(opts: { allowed?: boolean, error?: Error }) {
   }
 }
 
-function fakeSupabase(opts: { permission?: boolean, appRow?: object | null, error?: { message: string } }) {
-  return {
-    rpc: async (_fn: string, _args: object) => ({ data: opts.error ? null : (opts.permission ?? false), error: opts.error ?? null }),
-    from: (_t: string) => ({
-      select: (_c: string) => ({
-        eq: (_k: string, _v: string) => ({
-          maybeSingle: async () => ({ data: opts.error ? null : (opts.appRow ?? null), error: opts.error ?? null }),
-        }),
-      }),
-    }),
-  } as any
+function fakeClient() {
+  return { apikey: 'k', supaHost: 'http://localhost:54321', supaAnon: 'anon' }
 }
 
 describe('shared/apikey-permission', () => {
   it('errors when permission rpc returns false', async () => {
     installPermissionFetch({ allowed: false })
-    const ctx = makeCtx({ projectDir: '/tmp', apikey: 'k', supabase: fakeSupabase({ permission: false }) })
+    const ctx = makeCtx({ projectDir: '/tmp', apikey: 'k', supabase: fakeClient() })
     const findings = await apikeyPermission.run(ctx)
     expect(findings[0]?.severity).toBe('error')
     expect(findings[0]?.title).toContain('app.build_native')
   })
   it('passes when permission granted', async () => {
     installPermissionFetch({ allowed: true })
-    const ctx = makeCtx({ projectDir: '/tmp', apikey: 'k', supabase: fakeSupabase({ permission: true }) })
+    const ctx = makeCtx({ projectDir: '/tmp', apikey: 'k', supabase: fakeClient() })
     expect(await apikeyPermission.run(ctx)).toEqual([])
   })
   it('downgrades a network/API failure to info — never blocks offline users (spec)', async () => {
     installPermissionFetch({ error: new Error('fetch failed') })
-    const ctx = makeCtx({ projectDir: '/tmp', apikey: 'k', supabase: fakeSupabase({ error: { message: 'fetch failed' } }) })
+    const ctx = makeCtx({ projectDir: '/tmp', apikey: 'k', supabase: fakeClient() })
     const findings = await apikeyPermission.run(ctx)
     expect(findings[0]?.severity).toBe('info')
     expect(findings[0]?.title).toContain('Could not verify')
@@ -68,15 +74,18 @@ describe('shared/apikey-permission', () => {
 
 describe('shared/app-exists', () => {
   it('errors when app row is absent', async () => {
-    const ctx = makeCtx({ projectDir: '/tmp', supabase: fakeSupabase({ appRow: null }) })
+    installAppVisibleFetch({ visible: false })
+    const ctx = makeCtx({ projectDir: '/tmp', supabase: fakeClient() })
     expect((await appExists.run(ctx))[0]?.severity).toBe('error')
   })
   it('passes when app found', async () => {
-    const ctx = makeCtx({ projectDir: '/tmp', supabase: fakeSupabase({ appRow: { app_id: 'com.demo.app' } }) })
+    installAppVisibleFetch({ visible: true })
+    const ctx = makeCtx({ projectDir: '/tmp', supabase: fakeClient() })
     expect(await appExists.run(ctx)).toEqual([])
   })
   it('downgrades a network/API failure to info — never blocks offline users (spec)', async () => {
-    const ctx = makeCtx({ projectDir: '/tmp', supabase: fakeSupabase({ error: { message: 'fetch failed' } }) })
+    installAppVisibleFetch({ error: new Error('fetch failed') })
+    const ctx = makeCtx({ projectDir: '/tmp', supabase: fakeClient() })
     const findings = await appExists.run(ctx)
     expect(findings[0]?.severity).toBe('info')
     expect(findings[0]?.title).toContain('Could not verify')

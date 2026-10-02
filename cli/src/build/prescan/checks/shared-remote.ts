@@ -1,6 +1,7 @@
 // src/build/prescan/checks/shared-remote.ts
 import type { Finding, PrescanCheck, ScanContext } from '../types'
-import { hasCliPermission } from '../../../utils'
+import { isAppVisible } from '../../../api/cli-data'
+import { formatError, hasCliPermission } from '../../../utils'
 
 export const apikeyPermission: PrescanCheck = {
   id: 'shared/apikey-permission',
@@ -36,15 +37,14 @@ export const appExists: PrescanCheck = {
   platforms: ['ios', 'android'],
   remote: true,
   async run(ctx: ScanContext): Promise<Finding[]> {
-    const { data, error } = await ctx.supabase!
-      .from('apps')
-      .select('app_id')
-      .eq('app_id', ctx.appId)
-      .maybeSingle()
-    if (error) {
-      return [{ id: 'shared/app-exists', severity: 'info', title: 'Could not verify app existence (network/API error)', detail: error.message }]
+    let visible: boolean
+    try {
+      visible = await isAppVisible(ctx.supabase!, ctx.appId)
     }
-    if (!data) {
+    catch (error) {
+      return [{ id: 'shared/app-exists', severity: 'info', title: 'Could not verify app existence (network/API error)', detail: formatError(error) }]
+    }
+    if (!visible) {
       return [{
         id: 'shared/app-exists',
         severity: 'error',

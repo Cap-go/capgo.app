@@ -4,7 +4,7 @@ import { isCancel, log, password } from '@clack/prompts'
 import open from 'open'
 import { validateAndSaveKey } from '../auth/session'
 import { CliUserError } from '../shared/cli-user-error'
-import { consoleWebUrl, createSupabaseClient, fetchOrganizationsV7, resolveUserIdFromApiKey, sendEvent } from '../utils'
+import { consoleWebUrl, createCapgoClient, fetchOrganizationsV7, resolveUserIdFromApiKey, sendEvent } from '../utils'
 
 interface BrowserLoginOptions extends SaveKeyOptions {
   local: boolean
@@ -44,7 +44,7 @@ async function promptForKey(): Promise<string | undefined> {
 }
 
 async function listOrganizationIds(key: string, options: BrowserLoginOptions): Promise<string[]> {
-  const supabase = await createSupabaseClient(key, options.supaHost, options.supaAnon, true)
+  const supabase = await createCapgoClient(key, options.supaHost, options.supaAnon, true)
   const httpOptions = { supaHost: options.supaHost, supaAnon: options.supaAnon }
   await resolveUserIdFromApiKey(supabase, key, true, httpOptions)
   const organizations = await fetchOrganizationsV7(key, httpOptions)

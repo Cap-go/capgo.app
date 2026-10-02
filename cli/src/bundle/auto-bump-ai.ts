@@ -1,8 +1,8 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database } from '../types/supabase.types'
+import type { CapgoClient } from '../utils'
 import type { AutoBumpLevel } from '../versionHelpers'
 import { log } from '@clack/prompts'
-import { generateManifest, invokeCapgoCliApi } from '../utils'
+import { fetchBundleManifest, fetchCliChannels, fetchLatestBundle } from '../api/cli-data'
+import { formatError, generateManifest, invokeCapgoCliApi } from '../utils'
 
 export type ManifestEntry = { file: string, hash: string }
 
@@ -70,18 +70,18 @@ function limitPathsForAi(diff: ManifestDiff): ManifestDiff {
 }
 
 export async function fetchRemoteManifest(
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoClient,
   versionId: number,
 ): Promise<ManifestEntry[]> {
-  const { data, error } = await supabase
-    .from('manifest')
-    .select('file_name, file_hash')
-    .eq('app_version_id', versionId)
+  let data: Awaited<ReturnType<typeof fetchBundleManifest>>
+  try {
+    data = await fetchBundleManifest(supabase, versionId)
+  }
+  catch (error) {
+    throw new Error(`Cannot fetch remote manifest: ${formatError(error)}`)
+  }
 
-  if (error)
-    throw new Error(`Cannot fetch remote manifest: ${error.message}`)
-
-  return (data ?? [])
+  return data
     .filter(row => row.file_name && row.file_hash)
     .map(row => ({
       file: row.file_name as string,
@@ -90,43 +90,26 @@ export async function fetchRemoteManifest(
 }
 
 export async function resolveBaseVersionForAutoBump(
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoClient,
   appid: string,
   channels: string[],
 ): Promise<{ name: string, id: number } | null> {
   const primaryChannel = channels[0]
   if (primaryChannel) {
-    const { data, error } = await supabase
-      .from('channels')
-      .select('version:app_versions!channels_version_fkey( id, name, deleted )')
-      .eq('app_id', appid)
-      .eq('name', primaryChannel)
-
-    if (!error && data && data.length > 0) {
-      const version = data[0]?.version as { id: number, name: string, deleted: boolean } | null
-      if (version && !version.deleted && version.id && version.name)
-        return { name: version.name, id: version.id }
-    }
+    const rows = await fetchCliChannels(supabase, appid, primaryChannel).catch(() => [])
+    const version = rows[0]?.version_info
+    if (version && !version.deleted && version.id && version.name)
+      return { name: version.name, id: version.id }
   }
 
   // Include deleted versions for name occupancy (same semantics as auto-bump base).
-  const { data, error } = await supabase
-    .from('app_versions')
-    .select('id, name')
-    .eq('app_id', appid)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  if (error) {
-    log.warn(`Cannot fetch latest remote version for AI auto-bump: ${error.message}`)
+  try {
+    return await fetchLatestBundle(supabase, appid)
+  }
+  catch (error) {
+    log.warn(`Cannot fetch latest remote version for AI auto-bump: ${formatError(error)}`)
     return null
   }
-
-  if (!data?.id || !data.name)
-    return null
-
-  return { name: data.name, id: data.id }
 }
 
 export async function requestAiBumpLevel(options: {
@@ -165,7 +148,7 @@ export async function requestAiBumpLevel(options: {
 }
 
 export async function resolveAutoBumpLevelFromAi(ctx: {
-  supabase: SupabaseClient<Database>
+  supabase: CapgoClient
   appid: string
   channels: string[]
   path: string

@@ -42,6 +42,38 @@ const checkActionsBodySchema = z.object({
   app_id: z.string().min(1).optional(),
 })
 
+const appIdQuerySchema = z.object({
+  app_id: z.string().min(1),
+})
+
+const channelsQuerySchema = z.object({
+  app_id: z.string().min(1),
+  name: z.string().min(1).optional(),
+})
+
+const manifestQuerySchema = z.object({
+  app_version_id: z.coerce.number().int().positive(),
+})
+
+const setBundlesDeletedBodySchema = z.object({
+  app_id: z.string().min(1),
+  names: z.array(z.string().min(1)).min(1).max(100),
+  deleted: z.boolean(),
+})
+
+const createOrganizationBodySchema = z.object({
+  name: z.string().min(1),
+  management_email: z.email(),
+})
+
+// Same columns + embeds the CLI used to read directly through PostgREST. Reads run
+// with the caller API key so RLS (preview keys, channel-scoped keys) stays identical.
+const CLI_CHANNEL_SELECT = `
+  *,
+  version_info:app_versions!channels_version_fkey(id, name, deleted),
+  rollout_version_info:app_versions!channels_rollout_version_fkey(id, name, deleted)
+`
+
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.use('*', useCors)
@@ -302,4 +334,145 @@ app.get('/members/password-policy', middlewareKey(), async (c) => {
   }
 
   return c.json(data ?? [])
+})
+
+app.get('/apps/visible', middlewareKey(), async (c) => {
+  const queryParsed = safeParseSchema(appIdQuerySchema, { app_id: c.req.query('app_id') })
+  if (!queryParsed.success) {
+    throw simpleError('invalid_query', 'Invalid query', { error: queryParsed.error })
+  }
+
+  const capgkey = c.get('capgkey') as string
+  const { data, error } = await supabaseApikey(c, capgkey)
+    .from('apps')
+    .select('app_id, owner_org')
+    .eq('app_id', queryParsed.data.app_id)
+    .maybeSingle()
+  if (error) {
+    throw simpleError('cannot_get_app', 'Cannot get app', { error })
+  }
+
+  return c.json({ visible: !!data, app_id: data?.app_id ?? null, owner_org: data?.owner_org ?? null })
+})
+
+app.get('/channels', middlewareKey(), async (c) => {
+  const queryParsed = safeParseSchema(channelsQuerySchema, {
+    app_id: c.req.query('app_id'),
+    name: c.req.query('name') || undefined,
+  })
+  if (!queryParsed.success) {
+    throw simpleError('invalid_query', 'Invalid query', { error: queryParsed.error })
+  }
+
+  const capgkey = c.get('capgkey') as string
+  let query = supabaseApikey(c, capgkey)
+    .from('channels')
+    .select(CLI_CHANNEL_SELECT)
+    .eq('app_id', queryParsed.data.app_id)
+  if (queryParsed.data.name)
+    query = query.eq('name', queryParsed.data.name)
+  const { data, error } = await query.order('name')
+  if (error) {
+    throw simpleError('cannot_get_channels', 'Cannot get channels', { error })
+  }
+
+  return c.json(data ?? [])
+})
+
+app.get('/bundles/latest', middlewareKey(), async (c) => {
+  const queryParsed = safeParseSchema(appIdQuerySchema, { app_id: c.req.query('app_id') })
+  if (!queryParsed.success) {
+    throw simpleError('invalid_query', 'Invalid query', { error: queryParsed.error })
+  }
+
+  // Includes deleted bundles: callers use this for version name occupancy.
+  const capgkey = c.get('capgkey') as string
+  const { data, error } = await supabaseApikey(c, capgkey)
+    .from('app_versions')
+    .select('id, name, deleted, created_at')
+    .eq('app_id', queryParsed.data.app_id)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) {
+    throw simpleError('cannot_get_bundle', 'Cannot get latest bundle', { error })
+  }
+
+  return c.json(data ?? null)
+})
+
+app.post('/bundles/deleted', middlewareKey(), async (c) => {
+  const bodyRaw = await parseBody<unknown>(c)
+  const bodyParsed = safeParseSchema(setBundlesDeletedBodySchema, bodyRaw)
+  if (!bodyParsed.success) {
+    throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })
+  }
+
+  // Soft-delete / restore without the channel-link guard of DELETE /bundle:
+  // channel cleanup soft-deletes linked bundles before the channel is removed.
+  const capgkey = c.get('capgkey') as string
+  const body = bodyParsed.data
+  const { data, error } = await supabaseApikey(c, capgkey)
+    .from('app_versions')
+    .update({ deleted: body.deleted })
+    .eq('app_id', body.app_id)
+    .eq('deleted', !body.deleted)
+    .in('name', body.names)
+    .select('name')
+  if (error) {
+    throw simpleError('cannot_update_bundle', 'Cannot update bundle deleted state', { error })
+  }
+
+  return c.json({ updated: (data ?? []).map(row => row.name) })
+})
+
+app.get('/manifest', middlewareKey(), async (c) => {
+  const queryParsed = safeParseSchema(manifestQuerySchema, { app_version_id: c.req.query('app_version_id') })
+  if (!queryParsed.success) {
+    throw simpleError('invalid_query', 'Invalid query', { error: queryParsed.error })
+  }
+
+  const capgkey = c.get('capgkey') as string
+  const { data, error } = await supabaseApikey(c, capgkey)
+    .from('manifest')
+    .select('file_name, file_hash')
+    .eq('app_version_id', queryParsed.data.app_version_id)
+  if (error) {
+    throw simpleError('cannot_get_manifest', 'Cannot get manifest', { error })
+  }
+
+  return c.json(data ?? [])
+})
+
+app.post('/organizations', middlewareKey(), async (c) => {
+  const bodyRaw = await parseBody<unknown>(c)
+  const bodyParsed = safeParseSchema(createOrganizationBodySchema, bodyRaw)
+  if (!bodyParsed.success) {
+    throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })
+  }
+
+  const capgkey = c.get('capgkey') as string
+  const supabase = supabaseApikey(c, capgkey)
+  const { data: userId, error: userIdError } = await supabase.rpc('request_actor_user_id')
+  if (userIdError) {
+    throw simpleError('cannot_resolve_identity', 'Cannot resolve CLI identity', { error: userIdError })
+  }
+  if (!userId) {
+    return quickError(401, 'invalid_apikey', 'Invalid apikey or insufficient permissions')
+  }
+
+  const { data, error } = await supabase
+    .from('orgs')
+    .insert({
+      name: bodyParsed.data.name,
+      management_email: bodyParsed.data.management_email,
+      created_by: userId,
+    })
+    .select()
+    .single()
+  if (error) {
+    throw simpleError('cannot_create_organization', 'Cannot create organization', { error })
+  }
+
+  return c.json(data)
 })

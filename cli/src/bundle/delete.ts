@@ -3,7 +3,7 @@ import { intro, log, outro } from '@clack/prompts'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { deleteSpecificVersion } from '../api/versions'
 import { CliUserError } from '../shared/cli-user-error'
-import { createSupabaseClient, findSavedKey, getAppId, getConfig, getOrganizationId, resolveUserIdFromApiKey, sendEvent } from '../utils'
+import { createCapgoClient, findSavedKey, getAppId, getConfig, getOrganizationId, resolveUserIdFromApiKey, sendEvent } from '../utils'
 
 export async function deleteBundleInternal(bundleId: string, appId: string, options: BundleDeleteOptions, silent = false) {
   if (!silent)
@@ -31,9 +31,8 @@ export async function deleteBundleInternal(bundleId: string, appId: string, opti
     throw new Error('Missing bundleId')
   }
 
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
+  const supabase = await createCapgoClient(options.apikey, options.supaHost, options.supaAnon)
   await check2FAComplianceForApp(supabase, appId, silent)
-  // TODO(cli-http): identity still uses rpc via resolveUserIdFromApiKey
   await resolveUserIdFromApiKey(supabase, options.apikey)
   await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'bundle.delete', silent, true)
 

@@ -1,6 +1,5 @@
 // src/build/prescan/types.ts
-import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database } from '../../types/supabase.types'
+import type { CapgoClient } from '../../utils'
 import type { CapacitorConfig } from '../../schemas/config'
 
 export type Severity = 'error' | 'warning' | 'info'
@@ -36,7 +35,7 @@ export interface ScanContext {
   distributionMode?: 'app_store' | 'ad_hoc'
   androidFlavor?: string
   apikey?: string
-  supabase?: SupabaseClient<Database>
+  supabase?: CapgoClient
 }
 
 export interface PrescanCheck {

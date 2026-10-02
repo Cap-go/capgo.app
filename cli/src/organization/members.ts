@@ -6,7 +6,7 @@ import { checkAlerts } from '../api/update'
 import {
   assertOrgPermission,
   check2FAAccessForOrg,
-  createSupabaseClient,
+  createCapgoClient,
   fetchCliMembers2faStatus,
   fetchCliMembersPasswordPolicyStatus,
   fetchCliOrganization,
@@ -98,7 +98,7 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
     throw new Error('Missing organization id')
   }
 
-  const supabase = await createSupabaseClient(
+  const supabase = await createCapgoClient(
     enrichedOptions.apikey,
     enrichedOptions.supaHost,
     enrichedOptions.supaAnon,

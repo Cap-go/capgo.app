@@ -8,7 +8,7 @@ import QRCode from 'qrcode'
 import { buildPreviewWebUrl, type PreviewWebEnv } from './web-url'
 import { CliUserError } from '../shared/cli-user-error'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
-import { createSupabaseClient, findSavedKey, formatError, getAppId, getCapgoCliHttpStatus, getConfig, invokeCapgoCliApi, readCapgoCliApiErrorPayload } from '../utils'
+import { createCapgoClient, findSavedKey, formatError, getAppId, getCapgoCliHttpStatus, getConfig, invokeCapgoCliApi, readCapgoCliApiErrorPayload } from '../utils'
 
 type AppRow = Pick<Database['public']['Tables']['apps']['Row'], 'allow_preview' | 'app_id'>
 type BundleRow = Pick<Database['public']['Tables']['app_versions']['Row'], 'id' | 'name'>
@@ -334,8 +334,7 @@ export async function getPreviewQr(appId: string, target: string | undefined, op
     throw new CliUserError('Missing appId')
   }
 
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
-  // TODO(cli-http): 2FA + permission checks still use supabase RPCs
+  const supabase = await createCapgoClient(options.apikey, options.supaHost, options.supaAnon)
   await check2FAComplianceForApp(supabase, appId)
   await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.read', false, true)
 

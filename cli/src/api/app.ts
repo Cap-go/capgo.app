@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { CapgoClient } from '../utils'
 import type { Database } from '../types/supabase.types'
 import { log } from '@clack/prompts'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
@@ -9,7 +9,7 @@ import {
   throwTwoFactorComplianceRpcError,
   warnAndContinueTwoFactorPreflightNetworkFailure,
 } from '../shared/two-factor-compliance'
-import { appAddHintMessage, formatCapgoApiErrorBody, formatCapgoCliInvokeError, getCapgoCliHttpStatus, hasCliPermission, hostOptionsFromSupabase, invokeCapgoCliApi, readCapgoCliApiErrorPayload, resolveApikeyFromSupabaseClient, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
+import { appAddHintMessage, formatCapgoApiErrorBody, formatCapgoCliInvokeError, getCapgoCliHttpStatus, hasCliPermission, hostOptionsFromClient, invokeCapgoCliApi, readCapgoCliApiErrorPayload, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
 
 export async function checkAppExists(
   apikey: string,
@@ -113,7 +113,7 @@ export async function findAppInOrganization(
 }
 
 export async function completePendingOnboardingApp(
-  _supabase: SupabaseClient<Database>,
+  _supabase: CapgoClient,
   orgId: string,
   appId: string,
   apikey: string,
@@ -208,18 +208,18 @@ export async function checkAppIdsExist(
 }
 
 export async function check2FAComplianceForApp(
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoClient,
   appid: string,
   silent = false,
   httpOptions?: { supaHost?: string, supaAnon?: string },
 ): Promise<void> {
   const { data, error: rejectError } = await callTwoFactorComplianceRpcWithRetry(() =>
     invokeCapgoCliApi<{ reject?: boolean }>(`private/cli/2fa/reject-app?app_id=${encodeURIComponent(appid)}`, {
-      apikey: resolveApikeyFromSupabaseClient(supabase),
+      apikey: supabase.apikey,
       method: 'GET',
       body: undefined,
-      supaHost: httpOptions?.supaHost ?? hostOptionsFromSupabase(supabase)?.supaHost,
-      supaAnon: httpOptions?.supaAnon ?? hostOptionsFromSupabase(supabase)?.supaAnon,
+      supaHost: httpOptions?.supaHost ?? hostOptionsFromClient(supabase)?.supaHost,
+      supaAnon: httpOptions?.supaAnon ?? hostOptionsFromClient(supabase)?.supaAnon,
     }).then(({ data: responseData, error: responseError }) => ({
       data: responseData?.reject === true,
       error: responseError,
@@ -249,7 +249,7 @@ export async function check2FAComplianceForApp(
 }
 
 export async function checkAppExistsAndHasPermissionOrgErr(
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoClient,
   apikey: string,
   appid: string,
   requiredPermissionKey: string,
@@ -263,8 +263,8 @@ export async function checkAppExistsAndHasPermissionOrgErr(
   if (!skip2FACheck)
     await check2FAComplianceForApp(supabase, appid, silent)
 
-  // Keep local/self-host Capgo HTTP traffic on the same host as this supabase client.
-  if (!isChannelScopedPermission && !(await checkAppExists(apikey, appid, hostOptionsFromSupabase(supabase), silent))) {
+  // Keep local/self-host Capgo HTTP traffic on the same host as this client.
+  if (!isChannelScopedPermission && !(await checkAppExists(apikey, appid, hostOptionsFromClient(supabase), silent))) {
     const msg = appAddHintMessage(appid)
     if (!silent)
       log.error(msg)

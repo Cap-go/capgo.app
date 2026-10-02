@@ -15,24 +15,14 @@ import {
 
 vi.mock('../cli/src/utils', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../cli/src/utils')>()
-  const { createClient } = await import('@supabase/supabase-js')
 
   return {
     ...actual,
-    createSupabaseClient: async (apikey: string, supaHost?: string, supaAnon?: string) => {
+    createCapgoClient: async (apikey: string, supaHost?: string, supaAnon?: string) => {
       if (!supaHost || !supaAnon)
         throw new Error('CLI preview lifecycle test requires a local Supabase host and anon key')
 
-      return createClient(supaHost, supaAnon, {
-        auth: {
-          persistSession: false,
-        },
-        global: {
-          headers: {
-            capgkey: apikey,
-          },
-        },
-      })
+      return { apikey, supaHost, supaAnon }
     },
     checkPlanValid: async () => {},
     checkPlanValidUpload: async () => {},

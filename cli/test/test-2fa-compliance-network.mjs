@@ -19,17 +19,9 @@ const httpOptions = {
 
 function makeSupabase() {
   return {
-    supabaseUrl: httpOptions.supaHost,
-    supabaseKey: httpOptions.supaAnon,
-    rest: {
-      headers: {
-        get(name) {
-          if (name.toLowerCase() === 'capgkey')
-            return 'test-2fa-key'
-          return null
-        },
-      },
-    },
+    apikey: 'test-2fa-key',
+    supaHost: httpOptions.supaHost,
+    supaAnon: httpOptions.supaAnon,
   }
 }
 

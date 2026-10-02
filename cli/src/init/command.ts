@@ -37,7 +37,7 @@ import { copyToClipboard, revealInFinder } from '../support/clipboard'
 import { contactSupport } from '../support/contact-support'
 import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log'
 import { uploadSupportLogs } from '../support/support-upload'
-import { canPromptInteractively, consoleWebUrl, createSupabaseClient, defaultApiHost, fetchOrganizationsV7, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
+import { canPromptInteractively, consoleWebUrl, createCapgoClient, defaultApiHost, fetchOrganizationsV7, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from './app-conflict'
 import { loginInitInBrowser, shouldStartInitBrowserLogin } from './browser-login'
 import { selectOnboardingChannel } from './channel-selection'
@@ -1381,7 +1381,7 @@ export function getResumedOnboardingAccessError(
 }
 
 async function validateResumedOnboardingAccess(
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  supabase: Awaited<ReturnType<typeof createCapgoClient>>,
   apikey: string,
   resume: ResumeResult,
   hostOptions?: { supaHost?: string, supaAnon?: string },
@@ -1414,7 +1414,7 @@ async function tryResumeOnboarding(
   apikey: string,
   initialTargets: InitTargetPaths,
   initialCwd: string,
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  supabase: Awaited<ReturnType<typeof createCapgoClient>>,
   hostOptions?: { supaHost?: string, supaAnon?: string },
 ): Promise<ResumeResult | undefined> {
   try {
@@ -2200,7 +2200,7 @@ async function maybeReusePendingOnboardingApp(
   organization: Organization,
   apikey: string,
   appId: string | undefined,
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  supabase: Awaited<ReturnType<typeof createCapgoClient>>,
   options?: Pick<SuperOptions, 'supaHost' | 'supaAnon'>,
 ) {
   const pendingApps = await listPendingOnboardingApps(apikey, organization.gid, options)
@@ -2245,7 +2245,7 @@ async function maybeReusePendingOnboardingApp(
 }
 
 async function selectOrganizationForInit(
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  supabase: Awaited<ReturnType<typeof createCapgoClient>>,
   apikey: string,
   httpOptions: { supaHost?: string, supaAnon?: string } = {},
 ): Promise<Organization> {
@@ -2404,7 +2404,7 @@ async function checkPrerequisitesStep(
 type ExistingAppConflictResolution = 'use-existing' | 'recreate' | 'choose-different' | 'not-owned'
 
 async function completeExistingAppPendingOnboarding(
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  supabase: Awaited<ReturnType<typeof createCapgoClient>>,
   organization: Organization,
   appId: string,
   apikey: string,
@@ -2426,7 +2426,7 @@ async function completeExistingAppPendingOnboarding(
 }
 
 async function resolveExistingAppConflict(
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  supabase: Awaited<ReturnType<typeof createCapgoClient>>,
   organization: Organization,
   apikey: string,
   appId: string,
@@ -2483,7 +2483,7 @@ async function resolveExistingAppConflict(
 }
 
 async function askForReplacementAppId(
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  supabase: Awaited<ReturnType<typeof createCapgoClient>>,
   organization: Organization,
   apikey: string,
   baseAppId: string,
@@ -2572,7 +2572,7 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
     }
     catch (error) {
       if (isAppAlreadyExistsError(error)) {
-        const supabase = await createSupabaseClient(options.apikey ?? apikey, options.supaHost, options.supaAnon)
+        const supabase = await createCapgoClient(options.apikey ?? apikey, options.supaHost, options.supaAnon)
 
         const conflictResolution = await resolveExistingAppConflict(supabase, organization, apikey, currentAppId, options)
         if (conflictResolution === 'use-existing') {
@@ -2603,7 +2603,7 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
   }
 }
 
-async function addChannelStep(orgId: string, apikey: string, appId: string, supabase: Awaited<ReturnType<typeof createSupabaseClient>>, options: SuperOptions) {
+async function addChannelStep(orgId: string, apikey: string, appId: string, supabase: Awaited<ReturnType<typeof createCapgoClient>>, options: SuperOptions) {
   const pm = getPMAndCommand()
   pLog.success(`✅ App ${appId} added — accessible to all members of your organization`)
   pLog.info(`💡 Keep in mind: Capgo cannot deliver updates to app versions that don’t include Capacitor Updater.`)
@@ -5445,7 +5445,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     }
   }
 
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
+  const supabase = await createCapgoClient(options.apikey, options.supaHost, options.supaAnon)
   await resolveUserIdFromApiKey(supabase, options.apikey)
   flushDeferredCommandInvocation(options.apikey)
   activeInitTelemetry?.setAuth('', options.apikey)

@@ -9,7 +9,7 @@ import { addAppInternal, resolveAppGettingStartedMessage } from '../app/add'
 import { getAppListPath } from '../app/list'
 import { extractApplicationIds } from '../build/onboarding/android/gradle-parser'
 import { collectCordovaAppIdCandidates } from '../cordova/project'
-import { createSupabaseClient, findRoot, findSavedKeySilent, formatError, getAppId, getConfigForWrite, getOrganizationWithPermission, invokeCapgoCliApi, PACKNAME } from '../utils'
+import { createCapgoClient, findRoot, findSavedKeySilent, formatError, getAppId, getConfigForWrite, getOrganizationWithPermission, invokeCapgoCliApi, PACKNAME } from '../utils'
 import { writeConfigUpdater } from '../config'
 
 const APP_ID_REGEX = /^[a-z0-9]+(?:\.[\w-]+)+$/i
@@ -274,7 +274,7 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
       if (pIsCancel(entered))
         continue
       const appId = (entered as string).trim()
-      const supabase = await createSupabaseClient(resolvedApikey, options.supaHost, options.supaAnon)
+      const supabase = await createCapgoClient(resolvedApikey, options.supaHost, options.supaAnon)
       const organization = await getOrganizationWithPermission(supabase, resolvedApikey, 'org.create_app')
       await addAppInternal(appId, { apikey: resolvedApikey, supaHost: options.supaHost, supaAnon: options.supaAnon }, organization, true)
       await persistAppIdToConfig(appId)
