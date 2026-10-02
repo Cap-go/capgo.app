@@ -104,10 +104,19 @@ export async function enqueueManifestCleanup(c: Context, versionId: number) {
 
 export const manifestCleanupEnqueueApp = createHono('manifest-cleanup-enqueue', version)
 manifestCleanupEnqueueApp.post('/', middlewareAPISecret, async (c) => {
-  const body = await c.req.json<{ versionId?: unknown }>()
-  if (!Number.isInteger(body.versionId) || Number(body.versionId) <= 0)
+  let body: unknown
+  try {
+    body = await c.req.json<unknown>()
+  }
+  catch {
     throw simpleError('invalid_manifest_cleanup_enqueue_request', 'Invalid manifest cleanup enqueue request')
-  await enqueueManifestCleanup(c, Number(body.versionId))
+  }
+  if (!body || typeof body !== 'object')
+    throw simpleError('invalid_manifest_cleanup_enqueue_request', 'Invalid manifest cleanup enqueue request')
+  const versionId = (body as { versionId?: unknown }).versionId
+  if (!Number.isInteger(versionId) || Number(versionId) <= 0)
+    throw simpleError('invalid_manifest_cleanup_enqueue_request', 'Invalid manifest cleanup enqueue request')
+  await enqueueManifestCleanup(c, Number(versionId))
   return c.json(BRES)
 })
 createAllCatch(manifestCleanupEnqueueApp, 'manifest-cleanup-enqueue')
