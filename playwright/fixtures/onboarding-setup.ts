@@ -194,7 +194,9 @@ window.fetch = async (input, init) => {
     }
   }
   const response = await fixtureFetch(fixtureURL.href, { ...init, headers, method, body })
-  const data = await response.json().catch(() => null)
+  let data = await response.json().catch(() => null)
+  if (Array.isArray(data) && query.operations.some((op: { method: string }) => ['single', 'maybeSingle'].includes(op.method)))
+    data = data[0] ?? null
   return new Response(JSON.stringify({
     data: response.ok ? data : null,
     error: response.ok ? null : data,
