@@ -83,6 +83,11 @@ app.post('/console-accept-invitation', async (c) => {
     const profileError = await ensurePublicUserRowExists(c, admin, user.user.id, invitation, body.data.opt_for_newsletters)
     if (profileError)
       return profileError
+    if (createdUserId) {
+      const profile = await admin.from('users').update({ created_via_invite: true }).eq('id', createdUserId)
+      if (profile.error)
+        return quickError(500, 'profile_creation_failed', 'Unable to finalize invited profile')
+    }
     const membershipError = await ensureOrgMembership(c, admin, user.user.id, invitation)
     if (membershipError)
       return membershipError
@@ -107,7 +112,7 @@ app.post('/console-accept-invitation', async (c) => {
   finally {
     if (createdUserId && !membershipFinalized) {
       // Deleting the transitional identity also cascades native credentials.
-      await admin.auth.admin.deleteUser(createdUserId)
+      await instance.database.query('DELETE FROM auth.users WHERE id = $1', [createdUserId])
       await instance.database.query('DELETE FROM public.console_auth_user WHERE id = $1', [createdUserId])
     }
     await instance.close()

@@ -43,6 +43,7 @@ describe('console Better Auth', () => {
   }
 
   beforeAll(() => {
+    vi.stubGlobal('EdgeRuntime', { waitUntil: (task: Promise<unknown>) => { void task.catch(() => {}) } })
     vi.stubEnv('SUPABASE_DB_URL', POSTGRES_URL)
     vi.stubEnv('CONSOLE_AUTH_URL', base)
     vi.stubEnv('WEBAPP_URL', base)
@@ -59,6 +60,7 @@ describe('console Better Auth', () => {
     finally {
       await database.end()
       vi.unstubAllEnvs()
+      vi.unstubAllGlobals()
     }
   })
 
@@ -85,6 +87,42 @@ describe('console Better Auth', () => {
     expect((await request('/auth/sign-in/email', { email: first.email, password: 'incorrect-password' })).status).toBe(401)
     expect((await request('/auth/sign-out', {}, session.token)).status).toBe(200)
     expect(await (await request('/auth/console-session', undefined, session.token)).json()).toEqual({ session: null })
+  })
+
+  it('accepts an invitation with its reserved identity and rolls back failed membership', async () => {
+    const owner = await signup()
+    const database = new Pool({ connectionString: POSTGRES_URL })
+    const orgId = randomUUID()
+    const invitedId = randomUUID()
+    const rejectedId = randomUUID()
+    ids.push(invitedId, rejectedId)
+    const magic = randomUUID()
+    const rejectedMagic = randomUUID()
+    try {
+      await database.query('INSERT INTO public.orgs (id, name, management_email, created_by) VALUES ($1, $2, $3, $4)', [orgId, 'Console Invitation Test', owner.email, owner.user.id])
+      for (const [id, token, role] of [[invitedId, magic, 'org_member'], [rejectedId, rejectedMagic, 'missing_test_role']]) {
+        await database.query(`INSERT INTO public.tmp_users (email, org_id, future_uuid, invite_magic_string, first_name, last_name, rbac_role_name)
+          VALUES ($1, $2, $3, $4, 'Invited', 'Test', $5)`, [`console-invite-${id}@example.com`, orgId, id, token, role])
+      }
+      const accepted = await request('/auth/console-accept-invitation', { magic_invite_string: magic, password, opt_for_newsletters: false })
+      expect(accepted.status, await accepted.clone().text()).toBe(200)
+      const { access_token } = await accepted.json() as { access_token: string }
+      const session = await (await request('/auth/console-session', undefined, access_token.replace(CONSOLE_SESSION_PREFIX, ''))).json() as { session: { user: { id: string } } }
+      expect(session.session.user.id).toBe(invitedId)
+      expect((await database.query('SELECT created_via_invite FROM public.users WHERE id = $1', [invitedId])).rows[0].created_via_invite).toBe(true)
+      expect((await database.query('SELECT is_invite FROM public.org_users WHERE user_id = $1 AND org_id = $2', [invitedId, orgId])).rows[0].is_invite).toBe(false)
+      expect((await database.query('SELECT id FROM public.tmp_users WHERE invite_magic_string = $1', [magic])).rows).toHaveLength(0)
+      const rejected = await request('/auth/console-accept-invitation', { magic_invite_string: rejectedMagic, password, opt_for_newsletters: false })
+      expect(rejected.status).toBe(500)
+      expect((await database.query('SELECT id FROM public.console_auth_user WHERE id = $1', [rejectedId])).rows).toHaveLength(0)
+      expect((await database.query('SELECT id FROM auth.users WHERE id = $1', [rejectedId])).rows).toHaveLength(0)
+      expect((await database.query('SELECT id FROM public.tmp_users WHERE invite_magic_string = $1', [rejectedMagic])).rows).toHaveLength(1)
+    }
+    finally {
+      await database.query('DELETE FROM public.tmp_users WHERE org_id = $1', [orgId])
+      await database.query('DELETE FROM public.orgs WHERE id = $1', [orgId])
+      await database.end()
+    }
   })
 
   it('requires TOTP after password recovery and revokes old sessions', async () => {
