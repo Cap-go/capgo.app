@@ -119,11 +119,3 @@ export async function updateOrgInviteRole(options: {
     },
   })
 }
-
-export async function fetchMagicInviteLookup(lookup: string) {
-  const encodedLookup = encodeURIComponent(lookup)
-  return await invokeCapgoApi<MagicInviteLookup | null>(`private/org_members/magic-invite?lookup=${encodedLookup}`, {
-    method: 'GET',
-    allowAnonymous: true,
-  })
-}
