@@ -1,4 +1,4 @@
-import type { AuthError, SupabaseClient } from '@supabase/supabase-js'
+import type { AuthError, ConsoleClient } from '~/services/consoleClient'
 import type { Database } from '~/types/supabase.types'
 import dayjs from 'dayjs'
 import { invokeCapgoApi } from '~/services/capgoApi'
@@ -66,7 +66,7 @@ export function isRecentEmailOtpVerification(verifiedAt?: string | null) {
 }
 
 export async function getRecentEmailOtpVerification(
-  supabase: SupabaseClient<Database>,
+  supabase: ConsoleClient<Database>,
   userId: string,
 ) {
   const { data, error } = await supabase
@@ -85,7 +85,7 @@ export async function getRecentEmailOtpVerification(
 }
 
 export async function sendEmailOtpVerification(
-  supabase: SupabaseClient<Database>,
+  supabase: ConsoleClient<Database>,
   email: string,
   captchaToken?: string,
   purpose?: 'delete_account' | 'setup_2fa',
@@ -105,10 +105,10 @@ export async function sendEmailOtpVerification(
 }
 
 export async function verifyEmailOtp(
-  supabase: SupabaseClient<Database>,
+  supabase: ConsoleClient<Database>,
   token: string,
 ) {
-  return await invokeCapgoApi('private/verify_email_otp', {
+  return await invokeCapgoApi('auth/console-verify-email', {
     client: supabase,
     body: { token: token.replaceAll(' ', '') },
   })

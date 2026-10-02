@@ -119,10 +119,8 @@ app.get('/chart-refresh-state', middlewareAuth, async (c) => {
   const orgId = parseOrgId(c.req.query('org_id'))
   const supabase = getAuthedSupabase(c)
   const { data, error } = await supabase
-    .from('orgs')
-    .select('stats_updated_at, stats_refresh_requested_at')
-    .eq('id', orgId)
-    .maybeSingle()
+    .rpc('get_org_stats_refresh_state', { p_org_id: orgId })
+    .single()
 
   if (error)
     throw simpleError('org_chart_refresh_state_error', error.message)

@@ -38,10 +38,10 @@ const mainStore: any = {
   updateDashboard: mockUpdateDashboard,
 }
 
-vi.mock('~/services/supabase', () => ({
+vi.mock('~/services/console', () => ({
   isPlatformAdmin: mockIsPlatformAdmin,
   stripeEnabled: ref(true),
-  useSupabase: () => ({
+  useConsole: () => ({
     auth: {
       onAuthStateChange: vi.fn(() => ({
         data: {

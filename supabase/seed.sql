@@ -1658,3 +1658,12 @@ BEGIN
     RAISE EXCEPTION 'seed verification failed: apikey 113 missing apikey_manager binding';
   END IF;
 END $$;
+
+-- Local console users share the existing fixture identities and bcrypt hashes.
+INSERT INTO public.console_auth_user (id, name, email, "emailVerified", "createdAt", "updatedAt", "twoFactorEnabled", "userMetadata", "appMetadata", "migrationBlocked")
+SELECT id::text, email, lower(email), email_confirmed_at IS NOT NULL, created_at, updated_at, false, raw_user_meta_data, raw_app_meta_data, false
+FROM auth.users WHERE email IS NOT NULL AND deleted_at IS NULL
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO public.console_auth_account (id, "accountId", "providerId", "userId", password, "createdAt", "updatedAt")
+SELECT gen_random_uuid()::text, id::text, 'credential', id::text, encrypted_password, now(), now()
+FROM auth.users WHERE encrypted_password <> '' AND deleted_at IS NULL;

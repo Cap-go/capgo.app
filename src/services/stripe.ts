@@ -4,7 +4,7 @@ import { toast } from 'vue-sonner'
 import { i18n } from '~/modules/i18n'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { useDialogV2Store } from '~/stores/dialogv2'
-import { useSupabase } from './supabase'
+import { useConsole } from './console'
 
 async function presentActionSheetOpen(url: string) {
   const { t } = i18n.global
@@ -152,7 +152,7 @@ export async function getAffonsoReferral() {
 
 export async function openCheckout(priceId: string, successUrl: string, cancelUrl: string, isYear: boolean, orgId: string) {
   //   console.log('openCheckout')
-  const supabase = useSupabase()
+  const supabase = useConsole()
   const session = await supabase.auth.getSession()
   if (!session)
     return false

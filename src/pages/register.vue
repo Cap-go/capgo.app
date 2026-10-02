@@ -9,11 +9,11 @@ import iconEmail from '~icons/oui/email?raw'
 import iconPassword from '~icons/ph/key?raw'
 import iconName from '~icons/ph/user?raw'
 import { authGhostButtonClass, authInlineLinkClass, authPanelClass, authPrimaryButtonClass } from '~/components/auth/pageStyles'
-import { hashEmail, useSupabase } from '~/services/supabase'
+import { hashEmail, useConsole } from '~/services/console'
 import { openSupport } from '~/services/support'
 
 const router = useRouter()
-const supabase = useSupabase()
+const supabase = useConsole()
 const { t } = useI18n()
 const turnstileToken = ref('')
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
@@ -45,32 +45,14 @@ async function submit(form: { first_name: string, last_name: string, password: s
       password: form.password,
       options: {
         captchaToken: turnstileToken.value,
+        data: { first_name: form.first_name, last_name: form.last_name, opt_for_newsletters: true },
       },
     },
-    // supabase auth config
-    // http://localhost:5173/login,http://localhost:5173/forgot_password?step=2,https://capgo.app/login,https://capgo.app/forgot_password?step=2,https://capgo.app/onboarding/first_password,https://development.capgo.app/login,https://development.capgo.app/forgot_password?step=2
   )
   isLoading.value = false
   if (error || !user) {
     setErrors('register-account', [error?.message || 'user not found'], {})
     return
-  }
-
-  const newUser = user.user
-  if (newUser) {
-    const { error: profileError } = await supabase
-      .from('users')
-      .upsert({
-        id: newUser.id,
-        email: newUser.email ?? form.email,
-        first_name: form.first_name,
-        last_name: form.last_name,
-        enable_notifications: true,
-        opt_for_newsletters: true,
-      }, { onConflict: 'id' })
-
-    if (profileError)
-      console.error('Failed to seed user profile after signup', profileError)
   }
 
   router.push('/dashboard')

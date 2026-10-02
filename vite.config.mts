@@ -206,6 +206,16 @@ export default defineConfig({
       }
     : undefined,
   plugins: [
+    {
+      name: 'console-api-only',
+      apply: 'build',
+      generateBundle() {
+        for (const id of this.getModuleIds()) {
+          if (/node_modules\/.*@supabase[+/]/.test(id))
+            this.error('The console must use Capgo API instead of a Supabase SDK')
+        }
+      },
+    },
     wellKnownPasswordManagerPlugin(),
     envFaviconPlugin(),
     tailwindcss(),

@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { FunctionsHttpError } from '@supabase/supabase-js'
 import { computedAsync } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
@@ -15,12 +14,13 @@ import IconShield from '~icons/heroicons/shield-check'
 import IconUser from '~icons/heroicons/user'
 import SsoConfiguration from '~/components/organizations/SsoConfiguration.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { getCurrentPlanNameOrg, useConsole } from '~/services/console'
+import { FunctionsHttpError } from '~/services/consoleClient'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { fetchOrgSecuritySettings, updateOrganization } from '~/services/organizations'
 import { fetchOrgMembers, fetchOrgMembers2faStatus, fetchOrgMembersPasswordPolicy } from '~/services/orgMembers'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
-import { getCurrentPlanNameOrg, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
@@ -50,7 +50,7 @@ const displayStore = useDisplayStore()
 const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
 const router = useRouter()
-const supabase = useSupabase()
+const supabase = useConsole()
 const isLoading = ref(true)
 const isSaving = ref(false)
 const hideExternalPurchaseFlows = isNativeAppStoreContext()

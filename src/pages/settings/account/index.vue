@@ -14,11 +14,11 @@ import iconEmail from '~icons/heroicons/envelope?raw'
 import iconFlag from '~icons/heroicons/flag?raw'
 import iconName from '~icons/heroicons/user?raw'
 import GitHubProfileDialog from '~/components/dashboard/GitHubProfileDialog.vue'
+import { getCurrentPlanNameOrg, isPayingOrg, useConsole } from '~/services/console'
 import { getRecentEmailOtpVerification } from '~/services/emailOtp'
 import { getFormatLocaleOptions, resolveFormatLocale } from '~/services/formatLocale'
 import { fetchOrgMembersRbac } from '~/services/orgMembers'
 import { pickPhoto, takePhoto } from '~/services/photos'
-import { getCurrentPlanNameOrg, isPayingOrg, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -28,7 +28,7 @@ import { safeResetTurnstile } from '~/utils/turnstile'
 
 const version = import.meta.env.VITE_APP_VERSION
 const { locale, t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const displayStore = useDisplayStore()
 displayStore.NavTitle = t('account')
 const router = useRouter()
@@ -263,7 +263,7 @@ async function deleteAccount() {
 async function performAccountDeletion(password: string) {
   if (!main.auth || main.auth?.email == null)
     return false
-  const supabaseClient = useSupabase()
+  const supabaseClient = useConsole()
 
   if (!password) {
     toast.error(t('password-placeholder'))

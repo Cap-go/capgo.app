@@ -164,7 +164,8 @@ async function requireOrgScopedPricingAccess(c: AppContext, orgId: string, autho
     userId: claims.sub,
     authType: 'jwt',
     apikey: null,
-    jwt: authorization,
+    jwt: c.get('authorization') ?? authorization,
+    claims,
   } satisfies AuthInfo)
 
   if (!await checkPermission(c, 'org.read', { orgId })) {

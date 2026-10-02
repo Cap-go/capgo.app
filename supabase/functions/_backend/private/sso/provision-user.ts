@@ -715,8 +715,28 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
   }
 
   try {
-    // Verify the user actually authenticated via SSO (not email/password)
-    const { data: userAuth, error: userAuthError } = await admin.auth.admin.getUserById(userId)
+    const consoleAuth = auth.claims?.auth_provider === 'better-auth'
+    let userAuth: any
+    let userAuthError: unknown
+    if (consoleAuth) {
+      const provider = auth.claims?.app_metadata?.provider
+      if (typeof provider !== 'string' || !provider.startsWith('sso:'))
+        return quickError(403, 'sso_auth_required', 'Authenticate through SSO first')
+      const externalProviderId = provider.slice(4)
+      const { rows } = await getSharedPgClient().query(`SELECT u.email, u."userMetadata", a."providerProfile"
+        FROM public.console_auth_user u JOIN public.console_auth_account a ON a."userId" = u.id
+        WHERE u.id = $1 AND a."providerId" = $2`, [userId, externalProviderId])
+      if (!rows[0])
+        return quickError(403, 'sso_identity_required', 'SSO identity not found')
+      userAuth = { user: { id: userId, email: rows[0].email, user_metadata: rows[0].userMetadata ?? {},
+        app_metadata: { provider, providers: [provider] },
+        identities: [{ provider, identity_data: rows[0].providerProfile ?? {} }] } }
+    }
+    else {
+      const result = await admin.auth.admin.getUserById(userId)
+      userAuth = result.data
+      userAuthError = result.error
+    }
 
     if (userAuthError || !userAuth?.user) {
       cloudlogErr({ requestId, message: 'Failed to retrieve user auth data for SSO verification', userId, error: userAuthError })
@@ -760,7 +780,7 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
     // so a pre-signup cannot become the merge target.
     let resolvedExistingUserId: string | null = null
     try {
-      resolvedExistingUserId = await findCanonicalAuthUserIdByEmail(getSharedPgClient(), userEmail, userId, trustedSsoProviders)
+      resolvedExistingUserId = consoleAuth ? null : await findCanonicalAuthUserIdByEmail(getSharedPgClient(), userEmail, userId, trustedSsoProviders)
       if (resolvedExistingUserId) {
         cloudlog({ requestId, message: 'Canonical pre-existing auth account found — will merge SSO identity after provider authorization', userId, originalUserId: resolvedExistingUserId, email: userEmail })
       }

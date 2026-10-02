@@ -1,5 +1,5 @@
 import type { Database } from '~/types/supabase.types'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 
 export interface LinkedChannel {
   id: number
@@ -37,7 +37,7 @@ function mergeLinkedChannels(stableChannels: LinkedChannel[] = [], rolloutChanne
 }
 
 export async function fetchLinkedChannelsForVersion(appId: string, versionId: number) {
-  const supabase = useSupabase()
+  const supabase = useConsole()
   const select = 'id, name, version, rollout_version, version_info:app_versions!channels_version_fkey(name), rollout_version_info:app_versions!channels_rollout_version_fkey(name)'
   const [stableResult, rolloutResult] = await Promise.all([
     supabase
@@ -67,7 +67,7 @@ export async function unlinkLinkedChannels(unlink: LinkedChannel[]) {
   if (unlink.length === 0)
     return null
 
-  const supabase = useSupabase()
+  const supabase = useConsole()
   const results = await Promise.all(unlink.map(async (channel) => {
     const update: Database['public']['Tables']['channels']['Update'] = {}
     if (channel.stable_linked)

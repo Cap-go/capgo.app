@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { MagicInviteLookup } from '~/services/orgMembers'
+import type { Database } from '~/types/supabase.types'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import VueTurnstile from 'vue-turnstile'
@@ -9,8 +11,7 @@ import IconX from '~icons/lucide/x'
 import { authGhostButtonClass, authInsetCardClass, authPrimaryButtonClass, authSecondaryButtonClass } from '~/components/auth/pageStyles'
 import Toggle from '~/components/Toggle.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import type { MagicInviteLookup } from '~/services/orgMembers'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { openSupport } from '~/services/support'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
@@ -77,7 +78,7 @@ const organizationInitials = computed(() => {
 })
 
 onMounted(async () => {
-  const supabase = useSupabase()
+  const supabase = useConsole()
   // Sign out any existing session before the form is usable so a later
   // sign-out cannot wipe the session established after invite accept.
   const { data: claimsData } = await supabase.auth.getClaims()
@@ -129,8 +130,8 @@ async function submitForm() {
     // Show loading indicator
     isLoading.value = true
 
-    // Call the backend API to accept the invitation using Supabase Functions
-    const { data, error } = await invokeCapgoApi('private/accept_invitation', {
+    // Call the backend API to accept the invitation using the Capgo API
+    const { data, error } = await invokeCapgoApi('auth/console-accept-invitation', {
       allowAnonymous: true,
       body: {
         password: password.value,
@@ -146,7 +147,7 @@ async function submitForm() {
     }
 
     if (data?.access_token && data?.refresh_token) {
-      const supabase = useSupabase()
+      const supabase = useConsole()
       const { error: sessionError } = await supabase.auth.setSession({
         access_token: data.access_token,
         refresh_token: data.refresh_token,

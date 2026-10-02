@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const mockCreateSignedUrl = vi.fn()
 const mockFrom = vi.fn(() => ({ createSignedUrl: mockCreateSignedUrl }))
 
-vi.mock('../src/services/supabase.ts', () => ({
-  useSupabase: () => ({
+vi.mock('../src/services/console.ts', () => ({
+  useConsole: () => ({
     storage: {
       from: mockFrom,
     },

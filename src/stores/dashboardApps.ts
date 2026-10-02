@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from './organization'
 
@@ -64,7 +64,7 @@ export const useDashboardAppsStore = defineStore('dashboardApps', () => {
 
     isLoading.value = true
 
-    const supabase = useSupabase()
+    const supabase = useConsole()
     const request = (async () => {
       try {
         const { data } = await supabase

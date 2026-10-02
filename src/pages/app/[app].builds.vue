@@ -7,7 +7,7 @@ import IconAlertCircle from '~icons/lucide/alert-circle'
 import BuildChartControls from '~/components/dashboard/BuildChartControls.vue'
 import BuildStatsCard from '~/components/dashboard/BuildStatsCard.vue'
 import BuildTimeCard from '~/components/dashboard/BuildTimeCard.vue'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 
 const { t } = useI18n()
@@ -15,7 +15,7 @@ const id = ref('')
 const route = useRoute('/app/[app].builds')
 const lastPath = ref('')
 const isLoading = ref(false)
-const supabase = useSupabase()
+const supabase = useConsole()
 const displayStore = useDisplayStore()
 const app = ref<Database['public']['Tables']['apps']['Row']>()
 const showingBuildSteps = ref(false)

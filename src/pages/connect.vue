@@ -11,14 +11,14 @@ import IconKey from '~icons/heroicons/key'
 import IconLock from '~icons/heroicons/lock-closed'
 import ConnectAppPicker from '~/components/connect/ConnectAppPicker.vue'
 import { createAiApiKey } from '~/services/apikeys'
+import { useConsole } from '~/services/console'
 import { createSignedImageUrl, resolveImagePath } from '~/services/storage'
-import { useSupabase } from '~/services/supabase'
 import { isAdminRole, useOrganizationStore } from '~/stores/organization'
 
 type Role = 'admin' | 'member'
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const organizationStore = useOrganizationStore()
 
 const tokenName = ref(t('connect-token-name-default'))
@@ -304,8 +304,8 @@ function back(): void {
                 {{ t('connect-organization') }}
               </span>
               <button
-                type="button"
                 v-if="orgs.length > 1"
+                type="button"
                 class="text-xs font-semibold text-azure-500 hover:underline"
                 @click="toggleAllOrgs"
               >

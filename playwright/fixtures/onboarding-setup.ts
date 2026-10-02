@@ -14,7 +14,7 @@ import { i18n } from '../../src/modules/i18n'
 import { install as installOnboardingSetupNavigation } from '../../src/modules/onboarding-setup'
 import GettingStartedPage from '../../src/pages/app/[app].getting-started.vue'
 import { BUILDER_STEP_IDS } from '../../src/services/builderOnboardingChecklist'
-import { useSupabase } from '../../src/services/supabase'
+import { useConsole } from '../../src/services/console'
 import { useMainStore } from '../../src/stores/main'
 import { useOrganizationStore } from '../../src/stores/organization'
 import '../../src/styles/style.css'
@@ -173,7 +173,7 @@ window.fetch = async (input, init) => {
 }
 
 // Supply a fixture-only session. All fetch calls above are intercepted.
-useSupabase().auth.getSession = async () => ({ data: { session: { access_token: 'fixture-token' } as any }, error: null })
+useConsole().auth.getSession = async () => ({ data: { session: { access_token: 'fixture-token' } as any }, error: null })
 
 const app = createApp(defineComponent({
   setup() {

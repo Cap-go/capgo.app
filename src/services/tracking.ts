@@ -1,4 +1,4 @@
-import { defaultApiHost, useSupabase } from '~/services/supabase'
+import { defaultApiHost, useConsole } from '~/services/console'
 
 type TagKey = Lowercase<string>
 /** Tag Type */
@@ -52,7 +52,7 @@ interface TrackOptions {
 
 export async function sendEvent(payload: TrackOptions): Promise<null> {
   try {
-    const { data: currentSession } = await useSupabase().auth.getSession()
+    const { data: currentSession } = await useConsole().auth.getSession()
     if (!currentSession.session)
       return null
 

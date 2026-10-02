@@ -1,3 +1,4 @@
+export { ConsoleEvents } from './console_events.ts'
 import type { ExecutionContext, ScheduledController } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
 import type { Bindings } from '../../supabase/functions/_backend/utils/cloudflare.ts'
@@ -6,6 +7,10 @@ import { app as accept_invitation } from '../../supabase/functions/_backend/priv
 import { app as bundle_install_stats } from '../../supabase/functions/_backend/private/bundle_install_stats.ts'
 import { app as channel_device } from '../../supabase/functions/_backend/private/channel_device.ts'
 import { app as channel_stats } from '../../supabase/functions/_backend/private/channel_stats.ts'
+import { resolveConsoleSession } from '../../supabase/functions/_backend/utils/console_auth.ts'
+import { app as consoleDownloadLink } from '../../supabase/functions/_backend/private/download_link.ts'
+import { app as console_auth } from '../../supabase/functions/_backend/private/console_auth.ts'
+import { app as console_data } from '../../supabase/functions/_backend/private/console_data.ts'
 import { app as config } from '../../supabase/functions/_backend/private/config.ts'
 import { app as configBuilder } from '../../supabase/functions/_backend/private/config_builder.ts'
 import { app as create_device } from '../../supabase/functions/_backend/private/create_device.ts'
@@ -126,6 +131,11 @@ const functionName = 'api'
 const app = createHono(functionName, version)
 const functionNameScheduled = 'api-scheduled'
 const appScheduled = createHono(functionNameScheduled, version)
+app.use('*', async (c, next) => {
+  c.set('resolveConsoleSession', authorization => resolveConsoleSession(c, authorization))
+  await next()
+})
+app.route('/auth', console_auth)
 app.route('/ok', ok)
 app.route('/apikey', apikey)
 app.route('/bundle', bundle)
@@ -149,6 +159,8 @@ app.route('/', createMcpApp((request, c) => app.fetch(request, c.env, getExecuti
 // Private routes are bundled into this Cloudflare API worker at deploy time.
 const functionNamePrivate = 'private'
 const appPrivate = createHono(functionNamePrivate, version)
+appPrivate.route('/console', console_data)
+appPrivate.route('/download_link', consoleDownloadLink)
 appPrivate.route('/plans', plans)
 appPrivate.route('/credits', credits)
 appPrivate.route('/store_top', storeTop)

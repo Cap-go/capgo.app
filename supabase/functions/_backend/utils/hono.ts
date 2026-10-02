@@ -21,6 +21,7 @@ export interface JWTClaims {
   sub: string
   email?: string
   role?: string
+  auth_provider?: string
   aal?: string
   exp?: number
   iat?: number
@@ -47,6 +48,7 @@ export interface MiddlewareKeyVariables {
     apikey?: Database['public']['Tables']['apikeys']['Row']
     parentApikey?: Database['public']['Tables']['apikeys']['Row']
     capgkey?: string
+    resolveConsoleSession?: (authorization: string) => Promise<JWTClaims | null>
     requestId: string
     fileId?: string
     authorization?: string

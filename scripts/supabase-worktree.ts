@@ -142,6 +142,11 @@ function ensureFunctionsEnvFile(repoRoot: string, workdir: string, cfg: ReturnTy
   const source = existsSync(sourcePath) ? readFileSync(sourcePath, 'utf8') : ''
   const s3Endpoint = `127.0.0.1:${cfg.ports.api}/storage/v1/s3`
   let generated = upsertEnvValue(source, 'S3_ENDPOINT', s3Endpoint)
+  generated = upsertEnvValue(generated, 'CONSOLE_AUTH_URL', `http://127.0.0.1:${cfg.ports.api}/functions/v1`)
+  generated = upsertEnvValue(generated, 'CONSOLE_REQUIRE_EMAIL_VERIFICATION', 'false')
+  generated = upsertEnvValue(generated, 'BETTER_AUTH_SECRET', 'local-console-auth-development-secret-32-characters')
+  generated = upsertEnvValue(generated, 'JWT_SECRET', 'super-secret-jwt-token-with-at-least-32-characters-long')
+  generated = upsertEnvValue(generated, 'CONSOLE_SMTP_URL', `smtp://supabase_inbucket_${cfg.projectId}:1025`)
 
   if (process.env.CLOUDFLARE_FUNCTION_URL)
     generated = upsertEnvValue(generated, 'CLOUDFLARE_FUNCTION_URL', process.env.CLOUDFLARE_FUNCTION_URL)

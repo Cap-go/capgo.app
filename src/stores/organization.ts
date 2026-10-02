@@ -1,13 +1,13 @@
-import type { AuthChangeEvent } from '@supabase/supabase-js'
 import type { ComputedRef, Ref } from 'vue'
+import type { AuthChangeEvent } from '~/services/consoleClient'
 import type { Database } from '~/types/supabase.types'
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
+import { stripeEnabled, useConsole } from '~/services/console'
 import { addUtcDays, normalizeToUtcStartOfDay } from '~/services/date'
 import { deleteOrganization as deleteOrganizationApi, fetchOrganizationsList } from '~/services/organizations'
 import { fetchOrgMembers, fetchOrgMembersPasswordPolicy } from '~/services/orgMembers'
 import { createSignedImageUrl, getImmediateImageUrl, resolveImagePath } from '~/services/storage'
-import { stripeEnabled, useSupabase } from '~/services/supabase'
 import { clearWebsitePaidUserCookie, syncWebsitePaidUserCookieFromOrganizations } from '~/services/websiteAuthCookie'
 import { createDeferredPromise } from '../utils/promise'
 import { useDashboardAppsStore } from './dashboardApps'
@@ -136,7 +136,7 @@ function isSelectableOrganization(org: Pick<Organization, 'is_invite' | 'role'>)
   return !isPendingOrganizationInvite(org)
 }
 
-const supabase = useSupabase()
+const supabase = useConsole()
 
 export const useOrganizationStore = defineStore('organization', () => {
   const main = useMainStore()

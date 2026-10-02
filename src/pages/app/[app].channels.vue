@@ -4,7 +4,7 @@ import { ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 
 const { t } = useI18n()
@@ -12,7 +12,7 @@ const id = ref('')
 const route = useRoute('/app/[app].channels')
 const lastPath = ref('')
 const isLoading = ref(false)
-const supabase = useSupabase()
+const supabase = useConsole()
 const displayStore = useDisplayStore()
 const app = ref<Database['public']['Tables']['apps']['Row']>()
 

@@ -6,10 +6,10 @@ import ArrowDownOnSquareIcon from '~icons/heroicons/arrow-down-on-square'
 import GlobeAltIcon from '~icons/heroicons/globe-alt'
 import XCircleIcon from '~icons/heroicons/x-circle'
 import UpdateStatsChart from '~/components/dashboard/UpdateStatsChart.vue'
+import { useConsole } from '~/services/console'
 import { addUtcDays, formatUtcDateParam, normalizeToUtcStartOfDay } from '~/services/date'
 import { calculateDemoEvolution, calculateDemoTotal, generateDemoUpdateStatsData } from '~/services/demoChartData'
 import { formatNumberValue } from '~/services/formatLocale'
-import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
 import { createUndefinedArray, incrementArrayValue } from '~/utils/chartOptimizations'
@@ -121,7 +121,7 @@ const hasData = computed(() => effectiveTotalUpdates.value > 0 || isDemoMode.val
 const PAGE_SIZE = 1000
 
 async function fetchDailyVersionStats(targetAppIds: string[], startDate: string, endDate: string) {
-  const supabase = useSupabase()
+  const supabase = useConsole()
   const allRows: any[] = []
   let offset = 0
 
@@ -197,7 +197,7 @@ async function calculateStats(forceRefetch = false) {
       // Single app mode
       targetAppIds = [props.appId]
       try {
-        const { data: appRow } = await useSupabase()
+        const { data: appRow } = await useConsole()
           .from('apps')
           .select('name')
           .eq('app_id', props.appId)

@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 // tabs handled by settings layout
 
 const { t } = useI18n()
 const main = useMainStore()
-const supabase = useSupabase()
+const supabase = useConsole()
 const isLoading = ref(false)
 const enableNotifications = ref(main.user?.enable_notifications ?? true)
 const optForNewsletters = ref(main.user?.opt_for_newsletters ?? true)

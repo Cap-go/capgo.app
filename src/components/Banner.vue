@@ -3,7 +3,7 @@ import { Capacitor } from '@capacitor/core'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { stripeEnabled } from '~/services/supabase'
+import { stripeEnabled } from '~/services/console'
 import { useOrganizationStore } from '~/stores/organization'
 import { resolveOrgBillingStatus } from '~/utils/organizationBilling'
 

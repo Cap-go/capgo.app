@@ -7,12 +7,12 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import LogMetadataPopover from '~/components/tables/LogMetadataPopover.vue'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { getDateRangeForPreset, getTimeWindowPageRange, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
 import { getLogDocUrl } from '~/services/logDocLinks'
 import { extractLogOriginalMessage, logRowDisplayMetadata, parseLogVersionName } from '~/services/logTableDisplay'
 import { actionToFilter, createActionFilterState, failureActionFilterKeys, filterToAction, observeActionFilterKeys, updateActionFilterKeys } from '~/services/statsActions'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 const props = defineProps<{
   deviceId?: string
@@ -41,7 +41,7 @@ const columns: Ref<TableColumn[]> = ref<TableColumn[]>([])
 const router = useRouter()
 const route = useRoute()
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const search = ref('')
 const elements = ref<Element[]>([])
 const isLoading = ref(false)

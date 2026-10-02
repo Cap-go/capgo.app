@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { Factor } from '@supabase/supabase-js'
 import type { Ref } from 'vue'
+import type { Factor } from '~/services/consoleClient'
 import type { LoginAuthStatus } from '~/utils/loginActions'
 import { Capacitor } from '@capacitor/core'
 import { setErrors } from '@formkit/core'
@@ -18,8 +18,8 @@ import IconScanQrCode from '~icons/lucide/scan-qr-code'
 import iconEmail from '~icons/oui/email?raw'
 import iconPassword from '~icons/ph/key?raw'
 import mfaIcon from '~icons/simple-icons/2fas?raw'
+import { autoAuth, defaultApiHost, hashEmail, useConsole } from '~/services/console'
 import { hideLoader } from '~/services/loader'
-import { autoAuth, defaultApiHost, hashEmail, useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { isCapgoDomainReferrer, isDirectLoginLanding } from '~/utils/capgoReferrer'
 import { getLoginActionVisibility } from '~/utils/loginActions'
@@ -27,7 +27,7 @@ import { validateRedirectPath } from '~/utils/safeRedirect'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
 const route = useRoute('/login')
-const supabase = useSupabase()
+const supabase = useConsole()
 const isLoading = ref(false)
 const isMobile = ref(Capacitor.isNativePlatform())
 const turnstileToken = ref('')

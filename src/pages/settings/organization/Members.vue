@@ -17,6 +17,7 @@ import RoleCapabilitiesHint from '~/components/forms/RoleCapabilitiesHint.vue'
 import RoleSelect from '~/components/forms/RoleSelect.vue'
 import SearchInput from '~/components/forms/SearchInput.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { defaultApiHost, useConsole } from '~/services/console'
 import {
   fetchOrgMembersRbac,
   inviteUserToOrgRbac,
@@ -26,7 +27,6 @@ import {
 } from '~/services/orgMembers'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { getRbacRoleI18nKey, isAdminRole, isSuperAdminRole, useOrganizationStore } from '~/stores/organization'
@@ -38,7 +38,7 @@ const { t } = useI18n()
 const router = useRouter()
 const organizationStore = useOrganizationStore()
 const { currentOrganization } = storeToRefs(organizationStore)
-const supabase = useSupabase()
+const supabase = useConsole()
 const main = useMainStore()
 const search = ref('')
 const columns: Ref<TableColumn[]> = ref<TableColumn[]>([])

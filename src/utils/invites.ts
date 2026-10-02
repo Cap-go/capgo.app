@@ -1,5 +1,5 @@
-import { FunctionsHttpError } from '@supabase/supabase-js'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { FunctionsHttpError } from '~/services/consoleClient'
 
 type TranslateFn = (key: string, params?: Record<string, unknown> | string, defaultMsg?: string) => string
 

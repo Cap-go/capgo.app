@@ -13,10 +13,10 @@ import IconLayers from '~icons/lucide/layers'
 import IconSmartphone from '~icons/lucide/smartphone'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatLocalDateShort, formatLocalDateTime } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { actionToFilter } from '~/services/statsActions'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 
 interface LogInsightSummary {
@@ -75,7 +75,7 @@ interface LogInsightsResponse {
 const { t } = useI18n()
 const route = useRoute('/app/[app].observe.updater')
 const router = useRouter()
-const supabase = useSupabase()
+const supabase = useConsole()
 const displayStore = useDisplayStore()
 
 const id = ref('')

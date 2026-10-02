@@ -5,9 +5,9 @@ import { useRouter } from 'vue-router'
 import IconPackage from '~icons/lucide/package'
 import { getLatestDayVersionAdoption } from '~/services/bundleAdoption'
 import { useChartData } from '~/services/chartDataService'
+import { useConsole } from '~/services/console'
 import { getChartDateRange } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
-import { useSupabase } from '~/services/supabase'
 
 const props = defineProps<{
   appId: string
@@ -17,7 +17,7 @@ const props = defineProps<{
 
 const { t } = useI18n()
 const router = useRouter()
-const supabase = useSupabase()
+const supabase = useConsole()
 
 const loading = ref(true)
 const loadError = ref(false)

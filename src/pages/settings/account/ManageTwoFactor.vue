@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import { FormKit } from '@formkit/vue'
 import dayjs from 'dayjs'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
+import { useConsole } from '~/services/console'
 import { formatLocalDate } from '~/services/date'
 import {
   getEmailOtpSendErrorMessage,
@@ -12,14 +14,13 @@ import {
   sendEmailOtpVerification,
   verifyEmailOtp,
 } from '~/services/emailOtp'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const main = useMainStore()
 const dialogStore = useDialogV2Store()
 const displayStore = useDisplayStore()
@@ -33,6 +34,8 @@ const mfaEnabled = ref(false)
 const mfaFactorId = ref('')
 const mfaSetupDate = ref<string | null>(null)
 const otpAlreadyVerified = ref(false)
+const currentPassword = ref('')
+const passwordRequired = ref(true)
 
 // Stepper state
 const currentStep = ref(1)
@@ -188,7 +191,7 @@ async function verifyOtpForMfa() {
 }
 
 async function enrollTotp() {
-  const { data, error } = await supabase.auth.mfa.enroll({ factorType: 'totp' })
+  const { data, error } = await supabase.auth.mfa.enroll({ factorType: 'totp', password: currentPassword.value })
   if (error) {
     toast.error(t('mfa-fail'))
     console.error(error)
@@ -197,6 +200,7 @@ async function enrollTotp() {
 
   mfaQRCode.value = data.totp.qr_code
   enrolledFactorId.value = data.id
+  currentPassword.value = ''
   currentStep.value = 4
 }
 
@@ -267,7 +271,7 @@ async function disableMfa() {
     return
   }
 
-  const { error: unregisterError } = await supabase.auth.mfa.unenroll({ factorId })
+  const { error: unregisterError } = await supabase.auth.mfa.unenroll({ factorId, password: currentPassword.value })
   if (unregisterError) {
     toast.error(t('mfa-fail'))
     console.error('Cannot unregister MFA', unregisterError)
@@ -277,6 +281,7 @@ async function disableMfa() {
   mfaFactorId.value = ''
   mfaEnabled.value = false
   mfaSetupDate.value = null
+  currentPassword.value = ''
   toast.success(t('2fa-disabled'))
 }
 
@@ -325,10 +330,12 @@ async function loadOtpVerificationStatus() {
 }
 
 onMounted(async () => {
-  const [{ data: mfaFactors, error }, otpValid] = await Promise.all([
+  const [{ data: mfaFactors, error }, otpValid, accounts] = await Promise.all([
     supabase.auth.mfa.listFactors(),
     loadOtpVerificationStatus(),
+    supabase.betterAuth.listAccounts(),
   ])
+  passwordRequired.value = accounts.error ? true : !!accounts.data?.some(account => account.providerId === 'credential')
 
   if (error) {
     console.error('Cannot get MFA factors', error)
@@ -348,7 +355,7 @@ onMounted(async () => {
 
   isLoading.value = false
 
-  if (!mfaEnabled.value && otpValid) {
+  if (!mfaEnabled.value && otpValid && (!passwordRequired.value || currentPassword.value)) {
     otpAlreadyVerified.value = true
     await enrollTotp()
   }
@@ -374,6 +381,15 @@ onBeforeUnmount(async () => {
         <h2 class="mb-5 text-2xl font-bold dark:text-white text-slate-800">
           {{ t('manage-2fa') }}
         </h2>
+
+        <FormKit
+          v-if="!isLoading && passwordRequired"
+          v-model="currentPassword"
+          type="password"
+          autocomplete="current-password"
+          :label="t('current-password')"
+          validation="required"
+        />
 
         <!-- Loading -->
         <div v-if="isLoading" class="flex items-center justify-center py-12">

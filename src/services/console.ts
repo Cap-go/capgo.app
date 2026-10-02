@@ -1,14 +1,14 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
 import type { RouteLocationNormalizedLoaded } from 'vue-router'
 import type { CreditMetricType, CreditPricingStep } from './creditPricing'
+import type { ConsoleClient } from '~/services/consoleClient'
 import type { Database } from '~/types/supabase.types'
-import { createClient } from '@supabase/supabase-js'
 import subset from 'semver/ranges/subset'
 import { ref } from 'vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { createConsoleClient } from '~/services/consoleClient'
 import { sortCreditPricingSteps } from './creditPricing'
 
-let supaClient: SupabaseClient<Database> = null as any
+let supaClient: ConsoleClient<Database> = null as any
 
 export const defaultApiHost = import.meta.env.VITE_API_HOST as string
 
@@ -108,7 +108,7 @@ function isSpoofedAdminJwtUsable(jwt: string) {
 }
 
 function createSpoofAdminSupabase() {
-  return createClient<Database>(getSupabaseHost(), config.supaKey, {
+  return createConsoleClient(getSupabaseHost(), config.supaKey, {
     auth: {
       autoRefreshToken: false,
       persistSession: false,
@@ -186,7 +186,7 @@ export function resolveSupabaseHost(supaHost: string, proxyPath?: string, runtim
   return new URL(normalizedProxyPath, runtimeOrigin).href
 }
 
-export function useSupabase() {
+export function useConsole() {
   const options = {
     auth: {
       autoRefreshToken: true,
@@ -197,7 +197,7 @@ export function useSupabase() {
   if (supaClient)
     return supaClient
 
-  supaClient = createClient<Database>(getSupabaseHost(), config.supaKey, options)
+  supaClient = createConsoleClient(getSupabaseHost(), config.supaKey, options)
   return supaClient
 }
 
@@ -268,7 +268,7 @@ export async function unspoofUser() {
   if (restoredAdminSession !== spoofedAdminSession)
     saveSpoofedAdminSession(restoredAdminSession)
 
-  const supabase = useSupabase()
+  const supabase = useConsole()
   let data: { session?: unknown } | null | undefined
   let error: unknown
   try {
@@ -292,14 +292,14 @@ export async function downloadUrl(provider: string, userId: string, appId: strin
     storage_provider: provider,
     id,
   }
-  const { data: currentSession } = await useSupabase().auth.getSession()!
+  const { data: currentSession } = await useConsole().auth.getSession()!
   if (!currentSession.session)
     return ''
 
   const currentJwt = currentSession.session.access_token
 
   try {
-    const response = await fetch(`${defaultApiHost}/files/download_link`, {
+    const response = await fetch(`${defaultApiHost}/private/download_link`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${currentJwt}`,
@@ -327,7 +327,7 @@ export async function downloadUrl(provider: string, userId: string, appId: strin
 }
 
 export async function autoAuth(route: RouteLocationNormalizedLoaded) {
-  const supabase = useSupabase()
+  const supabase = useConsole()
   const { data: session } = await supabase.auth.getSession()!
   if (session.session || !route.hash)
     return null
@@ -544,7 +544,7 @@ export interface CreditCostCalculationResponse {
 
 export async function getCreditPricingSteps(orgId?: string): Promise<CreditPricingStep[]> {
   try {
-    const supabase = useSupabase()
+    const supabase = useConsole()
     const { data: currentSession } = await supabase.auth.getSession()
     const endpoint = new URL(`${defaultApiHost}/private/credits`)
 
@@ -699,7 +699,7 @@ export function convertNativePackages(nativePackages: { name: string, version: s
 }
 
 export async function getRemoteDependencies(appId: string, channel: string) {
-  const { data: remoteNativePackages, error } = await useSupabase()
+  const { data: remoteNativePackages, error } = await useConsole()
     .from('channels')
     .select(`version:app_versions!channels_version_fkey(
             native_packages

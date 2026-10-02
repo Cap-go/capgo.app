@@ -14,11 +14,11 @@ import RoleSelect from '~/components/forms/RoleSelect.vue'
 import SearchInput from '~/components/forms/SearchInput.vue'
 import RoleSelectionModal from '~/components/modals/RoleSelectionModal.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { useConsole } from '~/services/console'
 import { formatLocalDate } from '~/services/date'
 import { fetchOrgMembersRbac } from '~/services/orgMembers'
 import { checkPermissions } from '~/services/permissions'
 import { fetchAssignableRolesByScope } from '~/services/roles'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { getErrorMessage } from '~/utils/errors'
 
@@ -57,7 +57,7 @@ interface Props {
 const props = defineProps<Props>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const dialogStore = useDialogV2Store()
 const isLoading = ref(false)
 const roleBindings = ref<RoleBinding[]>([])

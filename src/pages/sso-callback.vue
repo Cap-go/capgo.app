@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Session } from '@supabase/supabase-js'
+import type { Session } from '~/services/consoleClient'
 import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -8,13 +8,13 @@ import IconLoader from '~icons/lucide/loader-2'
 import IconTriangleAlert from '~icons/lucide/triangle-alert'
 import { authGhostButtonClass, authSecondaryButtonClass } from '~/components/auth/pageStyles'
 import { useSSOProvisioning } from '~/composables/useSSOProvisioning'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { openSupport } from '~/services/support'
 import { validateRedirectPath } from '~/utils/safeRedirect'
 
 const route = useRoute()
 const router = useRouter()
-const supabase = useSupabase()
+const supabase = useConsole()
 const { t } = useI18n()
 const isLoading = ref(true)
 const errorMessage = ref('')
@@ -90,8 +90,15 @@ async function completeSsoLogin() {
       session = data.session
     }
     else {
-      isLoading.value = false
-      errorMessage.value = 'No authentication data found'
+      const result = await supabase.auth.exchangeCodeForSession('')
+      session = result.data.session
+      if (!session)
+        throw new Error('No authentication data found')
+    }
+
+    const assurance = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+    if (assurance.data.currentLevel !== assurance.data.nextLevel) {
+      await router.replace('/login')
       return
     }
 

@@ -5,11 +5,11 @@ import { setErrors } from '@formkit/core'
 import mime from 'mime'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
+import { useConsole } from './console'
 import { updateOrganization } from './organizations'
 import { createSignedImageUrl } from './storage'
-import { useSupabase } from './supabase'
 
-const supabase = useSupabase()
+const supabase = useConsole()
 const SIGNED_IMAGE_STORAGE_PATH_REGEX = /\/storage\/v1\/object\/(?:public\/|sign\/)?images\/(.+)$/
 const LEADING_SLASHES_REGEX = /^\/+/
 const IMAGES_PREFIX_REGEX = /^images\//

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { RealtimeChannel } from '@supabase/supabase-js'
 import type { CliAiPromptOrganization } from '~/services/cliAiPrompt'
+import type { RealtimeChannel } from '~/services/consoleClient'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -23,8 +23,8 @@ import {
   isValidCliLoginSession,
   prepareCliLoginKey,
 } from '~/services/cliLogin'
+import { useConsole } from '~/services/console'
 import { formatLocalDate } from '~/services/date'
-import { useSupabase } from '~/services/supabase'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
 
@@ -34,7 +34,7 @@ const hiddenKey = 'capgo_xxxxxxxxxxxxxxxxxxxx'
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
-const supabase = useSupabase()
+const supabase = useConsole()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const state = ref<PageState>('preparing')

@@ -9,14 +9,14 @@ import VueTurnstile from 'vue-turnstile'
 import iconEmail from '~icons/oui/email?raw'
 import iconPassword from '~icons/ph/key?raw'
 import { authGhostButtonClass, authPanelClass, authPrimaryButtonClass, authSecondaryButtonClass } from '~/components/auth/pageStyles'
+import { useConsole } from '~/services/console'
 import { getRecentEmailOtpVerification } from '~/services/emailOtp'
 import { hideLoader } from '~/services/loader'
-import { useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
-const supabase = useSupabase()
+const supabase = useConsole()
 const dialogStore = useDialogV2Store()
 const isLoading = ref(false)
 const pendingEmail = ref('')
@@ -79,7 +79,7 @@ async function deleteAccount() {
         text: t('button-remove'),
         role: 'danger',
         handler: async () => {
-          const supabaseClient = useSupabase()
+          const supabaseClient = useConsole()
           isLoading.value = true
 
           try {
