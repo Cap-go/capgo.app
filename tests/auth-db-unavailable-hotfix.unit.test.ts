@@ -56,6 +56,7 @@ function makeContext() {
 describe('auth database unavailable hotfix', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    getPgClientMock.mockImplementation(() => ({}))
   })
 
   it('redacts api key parameters in drizzle query logs', () => {
@@ -126,6 +127,40 @@ describe('auth database unavailable hotfix', () => {
     const body = await response.json() as { error: string }
     expect(body.error).toBe('invalid_apikey')
     expect(recordFailedAuthMock).toHaveBeenCalled()
+  })
+
+  it('middlewareKey retries when getPgClient throws a transient error', async () => {
+    getPgClientMock
+      .mockImplementationOnce(() => {
+        throw new Error('timeout exceeded when trying to connect')
+      })
+      .mockImplementation(() => ({}))
+    executeMock.mockResolvedValueOnce({
+      rows: [{
+        id: 1,
+        created_at: null,
+        user_id: '00000000-0000-0000-0000-000000000001',
+        key: 'retry-key',
+        key_hash: null,
+        rbac_id: 'rbac-1',
+        updated_at: null,
+        name: 'k',
+        expires_at: null,
+      }],
+    })
+
+    const { Hono } = await import('hono/tiny')
+    const app = new Hono()
+    app.onError(onError('test-middleware'))
+    app.get('/', middlewareKey({ usePostgres: true, readOnly: false }), c => c.json({ status: 'ok' }))
+
+    const response = await app.fetch(new Request('http://localhost/', {
+      headers: { capgkey: 'retry-key' },
+    }))
+
+    expect(response.status).toBe(200)
+    expect(getPgClientMock).toHaveBeenCalledTimes(2)
+    expect(recordFailedAuthMock).not.toHaveBeenCalled()
   })
 
   it('middlewareKey retries checkKeyPg once before succeeding', async () => {

@@ -661,8 +661,9 @@ async function resolveApiKey(
     error: new Error('resolveApiKey exhausted retries'),
   }
   for (let attempt = 0; attempt < 2; attempt++) {
-    const pgClient = getPgClient(c, readOnly)
+    let pgClient: ReturnType<typeof getPgClient> | undefined
     try {
+      pgClient = getPgClient(c, readOnly)
       const drizzleClient = getDrizzleClient(pgClient)
       const outcome = await checkKeyPg(c, key, drizzleClient)
       lastOutcome = outcome
@@ -672,8 +673,19 @@ async function resolveApiKey(
       }
       return outcome
     }
+    catch (error) {
+      if (attempt === 0 && isTransientPgError(error)) {
+        await waitAuthPgRetryJitter()
+        lastOutcome = { kind: 'db_error', error }
+        continue
+      }
+      if (isTransientPgError(error))
+        return { kind: 'db_error', error }
+      throw error
+    }
     finally {
-      await closeClient(c, pgClient)
+      if (pgClient)
+        await closeClient(c, pgClient)
     }
   }
   return lastOutcome
@@ -709,8 +721,9 @@ async function resolveSubkey(
     error: new Error('resolveSubkey exhausted retries'),
   }
   for (let attempt = 0; attempt < 2; attempt++) {
-    const subkeyPgClient = getPgClient(c, readOnly)
+    let subkeyPgClient: ReturnType<typeof getPgClient> | undefined
     try {
+      subkeyPgClient = getPgClient(c, readOnly)
       const drizzleClient = getDrizzleClient(subkeyPgClient)
       const outcome = await checkKeyByIdPg(c, subkeyId, drizzleClient, expectedUserId)
       lastOutcome = outcome
@@ -720,8 +733,19 @@ async function resolveSubkey(
       }
       return outcome
     }
+    catch (error) {
+      if (attempt === 0 && isTransientPgError(error)) {
+        await waitAuthPgRetryJitter()
+        lastOutcome = { kind: 'db_error', error }
+        continue
+      }
+      if (isTransientPgError(error))
+        return { kind: 'db_error', error }
+      throw error
+    }
     finally {
-      await closeClient(c, subkeyPgClient)
+      if (subkeyPgClient)
+        await closeClient(c, subkeyPgClient)
     }
   }
   return lastOutcome
