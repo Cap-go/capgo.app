@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 
 const poolConstructor = vi.hoisted(() => vi.fn())
 
-vi.mock('pg', () => ({
+vi.mock('pg', async (importOriginal) => ({
+  ...await importOriginal<typeof import('pg')>(),
   Pool: poolConstructor.mockImplementation(function PoolMock(this: { on: ReturnType<typeof vi.fn> }) {
     this.on = vi.fn()
   }),
