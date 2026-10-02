@@ -182,15 +182,29 @@ try {
   // 7. flush aborts in-flight telemetry so the CLI process can exit promptly
   //    (offline/firewalled users must not hang on a stuck telemetry socket).
   let capturedSignal
+  let markFetchStarted
+  const fetchStarted = new Promise((resolve) => {
+    markFetchStarted = resolve
+  })
   globalThis.fetch = async (url, init) => {
     if (String(url).endsWith('/private/config'))
       return new Response('', { status: 500 })
     capturedSignal = init?.signal
+    markFetchStarted()
     return new Promise((_resolve, reject) => {
       init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
     })
   }
   const hung = trackEvent({ apikey: 'flush-key', channel: 'cli-usage', event: 'Hang', orgId: 'o', appId: 'a' })
+  // Flush only once the request is in flight: on a loaded machine the 50ms window can
+  // otherwise expire before trackEvent reaches fetch, which is not what this case tests.
+  let fetchStartTimer
+  await Promise.race([
+    fetchStarted,
+    new Promise((_resolve, reject) => {
+      fetchStartTimer = setTimeout(() => reject(new Error('telemetry fetch never started')), 5000)
+    }),
+  ]).finally(() => clearTimeout(fetchStartTimer))
   await flushAnalytics(50)
   assert.ok(capturedSignal, 'in-flight telemetry fetch received an abort signal')
   assert.equal(capturedSignal.aborted, true, 'flush aborts in-flight telemetry past its window')
