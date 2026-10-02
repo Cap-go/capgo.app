@@ -69,6 +69,8 @@ export type Bindings = {
   PLUGIN_NOTIFICATION_QUEUE?: KVNamespace
   LOCAL_READ_REPLICA_SUPABASE_DB_URL?: string
   HYPERDRIVE_CAPGO_DIRECT_EU?: Hyperdrive
+  /** Optional dedicated Hyperdrive pool for api background work (triggers, crons, queues). */
+  HYPERDRIVE_CAPGO_BACKGROUND_EU?: Hyperdrive
   HYPERDRIVE_CAPGO_READ_NA: Hyperdrive
   HYPERDRIVE_CAPGO_READ_EU: Hyperdrive
   HYPERDRIVE_CAPGO_READ_SA: Hyperdrive
