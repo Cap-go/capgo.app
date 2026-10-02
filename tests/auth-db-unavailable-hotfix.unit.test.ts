@@ -66,6 +66,15 @@ describe('auth database unavailable hotfix', () => {
     expect(JSON.stringify(cloudlogMock.mock.calls)).not.toContain('super-secret-api-key')
   })
 
+  it('redacts rbac_check_permission_direct api key bind parameters', () => {
+    const logger = new CapgoDrizzleQueryLogger()
+    logger.logQuery('SELECT public.rbac_check_permission_direct($1, $2::uuid, $3::uuid, $4, $5::bigint, $6) AS allowed', ['capgo_secret_key'])
+    expect(cloudlogMock).toHaveBeenCalledWith({
+      message: 'Query: SELECT public.rbac_check_permission_direct($1, $2::uuid, $3::uuid, $4, $5::bigint, $6) AS allowed -- params: [redacted]',
+    })
+    expect(JSON.stringify(cloudlogMock.mock.calls)).not.toContain('capgo_secret_key')
+  })
+
   it('retries once on transient Hyperdrive pool errors', async () => {
     const operation = vi.fn()
       .mockRejectedValueOnce(new Error('Timed out while waiting for an open slot in the pool.'))
@@ -152,6 +161,7 @@ describe('auth database unavailable hotfix', () => {
   it('throwDatabaseUnavailable uses database_unavailable without transient cause rewrite', async () => {
     const { throwDatabaseUnavailable } = await import('../supabase/functions/_backend/utils/pg_auth_lookup.ts')
     const ctx = makeContext()
+    expect.assertions(4)
     try {
       throwDatabaseUnavailable(ctx, 'unit-test', new Error('Connection terminated unexpectedly'))
     }

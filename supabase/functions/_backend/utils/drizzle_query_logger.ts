@@ -1,7 +1,7 @@
 import type { Logger } from 'drizzle-orm/logger'
 import { cloudlog } from './logging.ts'
 
-const SENSITIVE_SQL_RE = /\bfind_apikey_by_value\b|\bget_user_id\s*\(/i
+const SENSITIVE_SQL_RE = /\bfind_apikey_by_value\b|\bget_user_id\s*\(|\brbac_check_permission_direct\b/i
 
 function formatParams(params: unknown[]): string {
   const stringifiedParams = params.map((p) => {
