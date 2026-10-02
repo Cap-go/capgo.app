@@ -82,7 +82,7 @@ export function createConsoleAuth(c: Context, provisionUserId?: string) {
       sendOnSignUp: getEnv(c, 'CONSOLE_REQUIRE_EMAIL_VERIFICATION') !== 'false',
       sendVerificationEmail: ({ user, url }) => send(user.email, 'Confirm your Capgo email', `Confirm your email: ${url}`),
     },
-    rateLimit: { enabled: true, storage: 'database', modelName: 'console_auth_rate_limit', window: 60, max: 30 },
+    rateLimit: { enabled: !(getEnv(c, 'ENV_NAME').endsWith('-local') && getEnv(c, 'CONSOLE_AUTH_E2E') === 'true'), storage: 'database', modelName: 'console_auth_rate_limit', window: 60, max: 30 },
     plugins: [
       bearer(),
       twoFactor({ issuer: 'Capgo', twoFactorTable: 'console_auth_two_factor', allowPasswordless: true, accountLockout: { maxFailedAttempts: 5 } }),

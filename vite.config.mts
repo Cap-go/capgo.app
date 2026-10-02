@@ -171,7 +171,7 @@ const frontendEnvironmentVariables: Record<string, string> = {
   VITE_SUPABASE_PROXY_PATH: useProdSupabaseProxy ? PROD_SUPABASE_PROXY_PATH : '',
   VITE_SUPABASE_URL: getFrontendKey('supa_url'),
   VITE_APP_URL: getUrl(),
-  VITE_API_HOST: branch === 'local' ? `${getUrl()}/__console` : getUrl('api_domain'),
+  VITE_API_HOST: branch === 'local' ? '/__console' : getUrl('api_domain'),
   VITE_CAPTCHA_KEY: getFrontendKey('captcha_key'),
   VITE_BRANCH: branch,
   package_dependencies: JSON.stringify(pack.dependencies),
