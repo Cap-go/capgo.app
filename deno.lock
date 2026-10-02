@@ -177,7 +177,7 @@
     "npm:discord-api-types@~0.38.50": "0.38.53",
     "npm:dompurify@^3.4.12": "3.4.14",
     "npm:dotenv@^17.4.2": "17.4.2",
-    "npm:drizzle-orm@1.0.0-rc.4": "1.0.0-rc.4_@cloudflare+workers-types@5.20260722.1_@types+pg@8.20.0_bun-types@1.3.14_pg@8.23.0_zod@4.4.3",
+    "npm:drizzle-orm@1.0.0-rc.4": "1.0.0-rc.4_@cloudflare+workers-types@5.20260722.1_@types+pg@8.20.0_bun-types@1.3.14_pg@8.23.0_zod@4.5.4",
     "npm:emulate@0.9.0": "0.9.0",
     "npm:eslint-plugin-format@^2.0.1": "2.0.1_eslint@10.7.0",
     "npm:eslint-plugin-oxlint@^1.75.0": "1.79.0_oxlint@1.79.0",
@@ -244,8 +244,9 @@
     "npm:wrangler@^4.113.0": "4.125.0_@cloudflare+workers-types@5.20260722.1",
     "npm:ws@^8.21.1": "8.21.3",
     "npm:yaml@^2.9.0": "2.9.0",
-    "npm:zod-compiler@^1.15.0": "1.28.0_zod@4.4.3_yaml@2.9.0",
-    "npm:zod@^4.4.3": "4.4.3"
+    "npm:zod-compiler@^1.15.0": "1.28.0_zod@4.5.4",
+    "npm:zod@4.5.4": "4.5.4",
+    "npm:zod@^4.5.4": "4.5.4"
   },
   "npm": {
     "@alcalzone/ansi-tokenize@0.3.0": {
@@ -5397,7 +5398,7 @@
     "dotenv@17.4.2": {
       "integrity": "sha512-nI4U3TottKAcAD9LLud4Cb7b2QztQMUEfHbvhTH09bqXTxnSie8WnjPALV/WMCrJZ6UV/qHJ6L03OqO3LcdYZw=="
     },
-    "drizzle-orm@1.0.0-rc.4_@cloudflare+workers-types@5.20260722.1_@types+pg@8.20.0_bun-types@1.3.14_pg@8.23.0_zod@4.4.3": {
+    "drizzle-orm@1.0.0-rc.4_@cloudflare+workers-types@5.20260722.1_@types+pg@8.20.0_bun-types@1.3.14_pg@8.23.0_zod@4.5.4": {
       "integrity": "sha512-BT+pf+qoiYHqltoA88Jmf6ilGMXPlpfE0hEJKc2adRtMCAl25Swk/t5gXcWxZNAwdtf3F5gCd2FpeOyP/pT0Hw==",
       "dependencies": [
         "@cloudflare/workers-types",
@@ -8765,11 +8766,9 @@
     "unplugin-combine@1.2.1_unplugin@1.16.1_vite@8.0.14_yaml@2.9.0": {
       "integrity": "sha512-qGkXjQo8yTq5QknP8f8p8/Aw3BJKqclTbTe8de0pC6exHzpoPBnH69Eztf00G2oc50IaIlV7KX/g4cKgzCq9BA==",
       "dependencies": [
-        "unplugin@1.16.1",
         "vite@8.0.14_@types+node@26.2.0_sass@1.101.3_yaml@2.9.0"
       ],
       "optionalPeers": [
-        "unplugin@1.16.1",
         "vite@8.0.14_@types+node@26.2.0_sass@1.101.3_yaml@2.9.0"
       ]
     },
@@ -8811,7 +8810,7 @@
         "obug",
         "picomatch@4.0.5",
         "tinyglobby",
-        "unplugin@3.3.0_vite@8.1.5_@types+node@26.2.0_jiti@2.7.0_sass@1.101.3",
+        "unplugin@3.3.0_vite@8.1.5_yaml@2.9.0",
         "unplugin-utils",
         "vue"
       ]
@@ -8876,18 +8875,6 @@
         "acorn",
         "picomatch@4.0.5",
         "webpack-virtual-modules"
-      ]
-    },
-    "unplugin@3.3.0_vite@8.1.5_@types+node@26.2.0_jiti@2.7.0_sass@1.101.3": {
-      "integrity": "sha512-qa66K+crbfyE6JK10GjvbJeRrOsuC/JpbnHctfyp/i4oBTxWOzJfRZyDiOk1PtErMFRu8JhsU/wPvOdBNWe5Rg==",
-      "dependencies": [
-        "@jridgewell/remapping",
-        "picomatch@4.0.5",
-        "vite@8.1.5_@types+node@26.2.0_jiti@2.7.0_sass@1.101.3_yaml@2.9.0",
-        "webpack-virtual-modules"
-      ],
-      "optionalPeers": [
-        "vite@8.1.5_@types+node@26.2.0_jiti@2.7.0_sass@1.101.3_yaml@2.9.0"
       ]
     },
     "unplugin@3.3.0_vite@8.1.5_yaml@2.9.0": {
@@ -9193,7 +9180,7 @@
         "pinia@4.0.2_@vue+devtools-api@8.2.1_typescript@6.0.3_vue@3.5.40",
         "scule",
         "tinyglobby",
-        "unplugin@3.3.0_vite@8.1.5_@types+node@26.2.0_jiti@2.7.0_sass@1.101.3",
+        "unplugin@3.3.0_vite@8.1.5_yaml@2.9.0",
         "unplugin-utils",
         "vite@8.1.5_@types+node@26.2.0_jiti@2.7.0_sass@1.101.3_yaml@2.9.0",
         "vue",
@@ -9479,7 +9466,7 @@
         "youch-core"
       ]
     },
-    "zod-compiler@1.28.0_zod@4.4.3_yaml@2.9.0": {
+    "zod-compiler@1.28.0_zod@4.5.4": {
       "integrity": "sha512-DGuTHsy9bVijt/uZCc4ElOSoT5bY3JOMIXxGN4LZYQDL5PFi+07Bo0o3YUAZleE4/QMhDA0KeZqc3pCeZAb5yA==",
       "dependencies": [
         "@jridgewell/remapping",
@@ -9494,8 +9481,8 @@
       ],
       "bin": true
     },
-    "zod@4.4.3": {
-      "integrity": "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="
+    "zod@4.5.4": {
+      "integrity": "sha512-sC95tT5iHHH9gtpj6A81kh+NEaRAUFN+qlUPDUbRfOMvNf5QCBqsb3WgvnpVtK5Y+4UfA6KqufotuTvMGiTlsA=="
     },
     "zwitch@2.0.4": {
       "integrity": "sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A=="
@@ -9703,7 +9690,7 @@
         "npm:wrangler@^4.113.0",
         "npm:yaml@^2.9.0",
         "npm:zod-compiler@^1.15.0",
-        "npm:zod@^4.4.3"
+        "npm:zod@4.5.4"
       ]
     },
     "members": {
@@ -9766,7 +9753,7 @@
             "npm:tus-js-client@^4.3.1",
             "npm:typescript@6.0.3",
             "npm:ws@^8.21.1",
-            "npm:zod@^4.4.3"
+            "npm:zod@^4.5.4"
           ]
         }
       },
