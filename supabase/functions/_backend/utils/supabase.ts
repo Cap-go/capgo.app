@@ -1526,6 +1526,7 @@ export async function readNativeDailyPlatformActiveSB(
 export const MAX_CHANNEL_DEVICE_OVERRIDES_FOR_COUNTS = 1000
 const CHANNEL_DEVICE_OVERRIDES_SCAN_LIMIT = 5000
 const DEVICE_ID_FILTER_CHUNK = 200
+const DEVICE_VERSION_PAGE_SIZE = 1000
 
 interface ChannelDeviceOverrideRow {
   device_id: string
@@ -1637,6 +1638,10 @@ export function pickChannelDefaultPlatforms(rows: PublicChannelRow[], channel: V
   })
 }
 
+/**
+ * Platforms where `channel` is the public default, read from the app's public
+ * channels. Returns none on error so counts fall back to reported channels.
+ */
 export async function readChannelDefaultPlatformsSB(c: Context, app_id: string, channel: VersionUsageChannel | string): Promise<ChannelDevicePlatform[]> {
   const { data, error } = await supabaseAdmin(c)
     .from('channels')
@@ -1680,39 +1685,70 @@ export function countChannelScopedDeviceVersions(
   return counts
 }
 
-export async function readDeviceVersionCountsSB(c: Context, app_id: string, channelName?: string, overrides?: ChannelDeviceOverrideIds): Promise<Record<string, number>> {
-  const supabase = supabaseAdmin(c)
-  let query = supabase
-    .from('devices')
-    .select('device_id, version_name')
-    .eq('app_id', app_id)
+interface DeviceVersionRow { device_id: string, version_name: string | null }
+type DeviceVersionPage = PromiseLike<{ data: DeviceVersionRow[] | null, error: unknown }>
 
-  if (channelName) {
-    query = query.eq('default_channel', channelName)
+/**
+ * Read every page of a device query. PostgREST caps responses at max_rows, so a
+ * single request would silently undercount large apps. Callers must order the
+ * query on a unique column to keep pages stable.
+ */
+async function readAllDeviceVersionRows(fetchPage: (from: number, to: number) => DeviceVersionPage): Promise<{ rows: DeviceVersionRow[], error: unknown }> {
+  const rows: DeviceVersionRow[] = []
+  for (let from = 0; ; from += DEVICE_VERSION_PAGE_SIZE) {
+    const { data, error } = await fetchPage(from, from + DEVICE_VERSION_PAGE_SIZE - 1)
+    if (error)
+      return { rows, error }
+    const page = data ?? []
+    rows.push(...page)
+    if (page.length < DEVICE_VERSION_PAGE_SIZE)
+      return { rows, error: null }
   }
+}
 
-  const { data, error } = await query
-  if (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading device version counts', error })
+/**
+ * Device counts per version from the devices table, scoped to the effective
+ * channel when `channelName` is set (see readDeviceVersionCounts).
+ */
+export async function readDeviceVersionCountsSB(
+  c: Context,
+  app_id: string,
+  channelName?: string,
+  overrides?: ChannelDeviceOverrideIds,
+  supabase: SupabaseClient<Database> = supabaseAdmin(c),
+): Promise<Record<string, number>> {
+  const reported = await readAllDeviceVersionRows((from, to) => {
+    let query = supabase
+      .from('devices')
+      .select('device_id, version_name')
+      .eq('app_id', app_id)
+    if (channelName)
+      query = query.eq('default_channel', channelName)
+    return query.order('id', { ascending: true }).range(from, to)
+  })
+  if (reported.error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading device version counts', error: reported.error })
     return {}
   }
 
-  const defaultChannelRows: Array<{ device_id: string, version_name: string | null }> = [...(data ?? [])]
+  const defaultChannelRows = reported.rows
   const defaultForPlatforms = channelName ? (overrides?.defaultForPlatforms ?? []) : []
   if (defaultForPlatforms.length) {
-    const { data: unreportedRows, error: unreportedError } = await supabase
+    const unreported = await readAllDeviceVersionRows((from, to) => supabase
       .from('devices')
       .select('device_id, version_name')
       .eq('app_id', app_id)
       .or('default_channel.is.null,default_channel.eq.')
       .in('platform', defaultForPlatforms)
-    if (unreportedError)
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading default channel devices for version counts', error: unreportedError })
+      .order('id', { ascending: true })
+      .range(from, to))
+    if (unreported.error)
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading default channel devices for version counts', error: unreported.error })
     else
-      defaultChannelRows.push(...(unreportedRows ?? []))
+      defaultChannelRows.push(...unreported.rows)
   }
 
-  const forcedIntoRows: Array<{ device_id: string, version_name: string | null }> = []
+  const forcedIntoRows: DeviceVersionRow[] = []
   const into = channelName ? (overrides?.into ?? []) : []
   for (let index = 0; index < into.length; index += DEVICE_ID_FILTER_CHUNK) {
     const { data: chunkRows, error: chunkError } = await supabase
