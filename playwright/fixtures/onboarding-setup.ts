@@ -182,12 +182,15 @@ window.fetch = async (input, init) => {
   let body = query.kind === 'rpc' ? JSON.stringify(query.args[0]) : undefined
   const headers = new Headers(init?.headers)
   for (const { method: operation, args } of query.operations) {
-    if (['eq', 'neq', 'is'].includes(operation))
+    if (['eq', 'neq', 'is'].includes(operation)) {
       fixtureURL.searchParams.set(args[0], `${operation}.${args[1]}`)
-    else if (operation === 'limit')
+    }
+    else if (operation === 'limit') {
       fixtureURL.searchParams.set('limit', String(args[0]))
-    else if (['single', 'maybeSingle'].includes(operation))
+    }
+    else if (['single', 'maybeSingle'].includes(operation)) {
       headers.set('Accept', 'application/vnd.pgrst.object+json')
+    }
     else if (['insert', 'update', 'delete'].includes(operation)) {
       method = operation === 'insert' ? 'POST' : operation === 'update' ? 'PATCH' : 'DELETE'
       body = args[0] ? JSON.stringify(args[0]) : undefined
