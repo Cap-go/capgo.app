@@ -35,7 +35,7 @@ describe('console Better Auth', () => {
 
   async function signup() {
     const email = `console-auth-${randomUUID()}@example.com`
-    const response = await request('/auth/sign-up/email', { email, password, name: 'Console Auth Test' })
+    const response = await request('/auth/sign-up/email', { email, password, name: 'Console Auth Test', registration_device_type: 'mobile', registration_browser: 'Firefox', registration_os: 'Android' })
     expect(response.status, await response.clone().text()).toBe(200)
     const result = await response.json() as { token: string, user: { id: string } }
     ids.push(result.user.id)
@@ -82,6 +82,8 @@ describe('console Better Auth', () => {
     try {
       const legacy = await database.query('SELECT encrypted_password FROM auth.users WHERE id = $1', [first.user.id])
       expect(legacy.rows[0].encrypted_password).toMatch(/^\$2/)
+      const metadata = await database.query('SELECT raw_user_meta_data FROM auth.users WHERE id = $1', [first.user.id])
+      expect(metadata.rows[0].raw_user_meta_data.registration_device_type).toBe('mobile')
     }
     finally { await database.end() }
     expect((await request('/auth/sign-in/email', { email: first.email, password: 'incorrect-password' })).status).toBe(401)

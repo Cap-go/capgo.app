@@ -35,6 +35,9 @@ const TOKEN_KEY = 'capgo.console.session'
 
 export function createConsoleClient(_host?: string, _key?: string, options?: { auth?: { persistSession?: boolean, autoRefreshToken?: boolean, detectSessionInUrl?: boolean } }) {
   const persist = options?.auth?.persistSession !== false
+  // Public signup shares the API cookie, which can replace a previous account.
+  if (persist && ['true', 'complete'].includes(new URLSearchParams(location.search).get('registered') ?? ''))
+    localStorage.removeItem(TOKEN_KEY)
   let token: string | null = persist ? localStorage.getItem(TOKEN_KEY) : null
   let pendingMfa = false
   const listeners = new Set<(event: AuthChangeEvent, session: Session | null) => void>()

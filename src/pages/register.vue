@@ -19,11 +19,6 @@ const turnstileToken = ref('')
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 const isLoading = ref(false)
 
-if (window.location.host === 'console.capgo.app') {
-  // do not allow to register on webapp on production
-  window.location.href = 'https://capgo.app/register/'
-}
-
 async function submit(form: { first_name: string, last_name: string, password: string, email: string }) {
   if (isLoading.value)
     return
@@ -55,7 +50,7 @@ async function submit(form: { first_name: string, last_name: string, password: s
     return
   }
 
-  router.push('/dashboard')
+  router.push(user.session ? '/dashboard' : '/login?registered=true')
 }
 </script>
 

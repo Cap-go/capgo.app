@@ -714,6 +714,13 @@ async function checkLogin() {
     const parsedUrl = new URL(route.fullPath, globalThis.location.origin)
     const params = new URLSearchParams(parsedUrl.search)
 
+    if (['true', 'complete'].includes(params.get('registered') ?? '')) {
+      parsedUrl.searchParams.delete('registered')
+      globalThis.history.replaceState({}, '', parsedUrl.toString())
+      if (params.get('registered') === 'true')
+        toast.success(t('confirm-email-sent'))
+    }
+
     if (params.get('message') === 'sso_account_linked') {
       parsedUrl.searchParams.delete('message')
       globalThis.history.replaceState({}, '', parsedUrl.toString())

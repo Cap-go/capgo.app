@@ -22,8 +22,8 @@ Configure the API worker before switching the console:
   command must use the same secret as the runtime; it encrypts TOTP factors.
 - `JWT_SECRET`: existing database JWT secret, for the server-only RLS bridge.
 - `CAPTCHA_SECRET_KEY`: existing Turnstile secret.
-- `CONSOLE_TRUSTED_ORIGINS`: optional comma-separated additional console
-  origins. Native Capacitor/Ionic localhost origins are already allowed.
+- `CONSOLE_TRUSTED_ORIGINS`: comma-separated additional auth origins. Include
+  `https://capgo.app` for the public website registration page. Native Capacitor/Ionic localhost origins are already allowed.
 - Email delivery: use the API worker's existing `AUTH_EMAIL` binding, or set
   `CONSOLE_SMTP_URL` for an SMTP deployment. Check confirmation, reset, and OTP
   deliveries in staging. Production requires email verification by default.
@@ -62,6 +62,11 @@ Supabase broadcasts continue for compatibility with older clients.
    Import writes commit per user, so a failed apply can leave a partial import;
    resolve its cause and rerun before opening the console. Switch API and
    console together after validating email delivery and IdP configuration.
+   Deploy the companion website registration change in the same window: the
+   old website creates Supabase accounts and hands off Supabase JWTs, which
+   this console intentionally does not accept. Native signup uses the shared
+   API cookie and redirects without placing session tokens in URLs. Test public
+   signup both in a fresh browser and while a different account is signed in.
 6. Existing console sessions require a fresh login. Existing published CLI
    API keys keep their RPC grants. New and changed console passwords are also
    mirrored into the transitional `auth.users` identity row so legacy password

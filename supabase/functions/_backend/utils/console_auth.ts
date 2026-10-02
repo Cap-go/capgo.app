@@ -201,6 +201,15 @@ export function createConsoleAuth(c: Context, provisionUserId?: string) {
         } },
         create: {
           before: async (user, ctx) => {
+            if (ctx?.path === '/sign-up/email') {
+              const metadata: Record<string, string> = {}
+              for (const key of ['registration_device_type', 'registration_os', 'registration_browser']) {
+                const value = ctx.body?.[key]
+                if (typeof value === 'string' && value.length <= 64)
+                  metadata[key] = value
+              }
+              return { data: { ...user, userMetadata: metadata } }
+            }
             if (ctx?.path.startsWith('/sso/') && ctx.params?.providerId) {
               const provider = await database.query(`SELECT 1 FROM public.sso_providers
                 WHERE provider_id = $1 AND domain = $2 AND status = 'active' AND dns_verified_at IS NOT NULL`, [ctx.params.providerId, user.email.split('@')[1]])
@@ -217,7 +226,7 @@ export function createConsoleAuth(c: Context, provisionUserId?: string) {
             // Better Auth owns credentials and sessions; this row is identity only.
             await database.query(`INSERT INTO auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data, created_at, updated_at, is_sso_user, email_confirmed_at)
               VALUES ($1::uuid, $2, 'authenticated', 'authenticated', $5::jsonb, $3::jsonb, $4, $4, $6, $7)
-              ON CONFLICT (id) DO NOTHING`, [user.id, user.email, JSON.stringify({ name: user.name }), user.createdAt, JSON.stringify({ provider: isSso ? `sso:${ssoProviderId}` : 'email', providers: [isSso ? `sso:${ssoProviderId}` : 'email'] }), isSso, user.emailVerified ? user.createdAt : null])
+              ON CONFLICT (id) DO NOTHING`, [user.id, user.email, JSON.stringify({ ...(typeof user.userMetadata === 'object' && user.userMetadata !== null ? user.userMetadata : {}), name: user.name }), user.createdAt, JSON.stringify({ provider: isSso ? `sso:${ssoProviderId}` : 'email', providers: [isSso ? `sso:${ssoProviderId}` : 'email'] }), isSso, user.emailVerified ? user.createdAt : null])
             await database.query(`INSERT INTO public.users (id, email, first_name, last_name, enable_notifications, opt_for_newsletters)
               VALUES ($1::uuid, $2, $3, $4, true, $5) ON CONFLICT (id) DO NOTHING`, [user.id, user.email, user.firstName ?? '', user.lastName ?? '', user.optForNewsletters ?? false])
           },
