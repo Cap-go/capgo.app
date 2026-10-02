@@ -7,6 +7,7 @@ import { getClaimsFromJWT } from './hono_jwt.ts'
 import { cloudlog } from './logging.ts'
 import type { PgAuthLookupResult } from './pg_auth_lookup.ts'
 import { throwDatabaseUnavailable } from './pg_auth_lookup.ts'
+import { waitAuthPgRetryJitter } from './pg_auth_retry.ts'
 import { isTransientPgError } from './pg_errors.ts'
 import { closeClient, getDrizzleClient, getPgClient, logPgError } from './pg.ts'
 import * as schema from './postgres_schema.ts'
@@ -655,20 +656,27 @@ async function resolveApiKey(
     return { kind: 'ok', value: row }
   }
 
+  let lastOutcome: PgAuthLookupResult<ApikeyRow> = {
+    kind: 'db_error',
+    error: new Error('resolveApiKey exhausted retries'),
+  }
   for (let attempt = 0; attempt < 2; attempt++) {
     const pgClient = getPgClient(c, readOnly)
     try {
       const drizzleClient = getDrizzleClient(pgClient)
       const outcome = await checkKeyPg(c, key, drizzleClient)
-      if (outcome.kind === 'db_error' && attempt === 0 && isTransientPgError(outcome.error))
+      lastOutcome = outcome
+      if (outcome.kind === 'db_error' && attempt === 0 && isTransientPgError(outcome.error)) {
+        await waitAuthPgRetryJitter()
         continue
+      }
       return outcome
     }
     finally {
       await closeClient(c, pgClient)
     }
   }
-  return { kind: 'db_error', error: new Error('resolveApiKey exhausted retries') }
+  return lastOutcome
 }
 
 function unwrapApiKeyLookup(
@@ -696,20 +704,27 @@ async function resolveSubkey(
     return { kind: 'ok', value: row }
   }
 
+  let lastOutcome: PgAuthLookupResult<ApikeyRow> = {
+    kind: 'db_error',
+    error: new Error('resolveSubkey exhausted retries'),
+  }
   for (let attempt = 0; attempt < 2; attempt++) {
     const subkeyPgClient = getPgClient(c, readOnly)
     try {
       const drizzleClient = getDrizzleClient(subkeyPgClient)
       const outcome = await checkKeyByIdPg(c, subkeyId, drizzleClient, expectedUserId)
-      if (outcome.kind === 'db_error' && attempt === 0 && isTransientPgError(outcome.error))
+      lastOutcome = outcome
+      if (outcome.kind === 'db_error' && attempt === 0 && isTransientPgError(outcome.error)) {
+        await waitAuthPgRetryJitter()
         continue
+      }
       return outcome
     }
     finally {
       await closeClient(c, subkeyPgClient)
     }
   }
-  return { kind: 'db_error', error: new Error('resolveSubkey exhausted retries') }
+  return lastOutcome
 }
 
 function unwrapSubkeyLookup(

@@ -13,6 +13,11 @@ function authPgRetryJitterMs() {
   return bytes[0] % AUTH_PG_RETRY_JITTER_MS
 }
 
+/** Jittered delay before reconnecting after a transient pool or Hyperdrive error. */
+export async function waitAuthPgRetryJitter(): Promise<void> {
+  await sleep(AUTH_PG_RETRY_BASE_MS + authPgRetryJitterMs())
+}
+
 /**
  * One retry with small jitter for auth-related Postgres lookups on congested Hyperdrive pools.
  */
@@ -23,8 +28,7 @@ export async function withAuthPgRetry<T>(operation: () => Promise<T>): Promise<T
   catch (firstError) {
     if (!isTransientPgError(firstError))
       throw firstError
-    const jitter = authPgRetryJitterMs()
-    await sleep(AUTH_PG_RETRY_BASE_MS + jitter)
+    await waitAuthPgRetryJitter()
     return await operation()
   }
 }
