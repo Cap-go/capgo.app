@@ -136,6 +136,8 @@ export function createConsoleClient(_host?: string, _key?: string, options?: { a
     async signUp(body: { email: string, password: string, options?: { captchaToken?: string, data?: { first_name?: string, last_name?: string, opt_for_newsletters?: boolean } } }) {
       const request = { email: body.email, password: body.password, name: `${body.options?.data?.first_name ?? ''} ${body.options?.data?.last_name ?? ''}`.trim() || body.email, firstName: body.options?.data?.first_name, lastName: body.options?.data?.last_name, optForNewsletters: body.options?.data?.opt_for_newsletters ?? false, callbackURL: `${location.origin}/login`, fetchOptions: { headers: { 'x-captcha-response': body.options?.captchaToken ?? '' } } }
       const result = await betterAuth.signUp.email(request)
+      if (result.data?.token)
+        return authResult(result)
       return normalizeAuth({ data: { user: result.data?.user as unknown as User | undefined, session: null }, error: result.error })
     },
     async signOut(options?: { scope?: 'others' | 'global' | 'local' }) {
