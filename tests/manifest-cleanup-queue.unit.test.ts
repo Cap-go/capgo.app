@@ -41,8 +41,8 @@ describe('manifest cleanup queue messages', () => {
     expect(manifestCleanupQueueTestUtils.isManifestCleanupQueueMessage({ versionId: 42, manifestIds: [1, 2, 3, 4, 5, 6] })).toBe(false)
   })
 
-  it('returns the request-validation error for missing, malformed, and null JSON bodies', async () => {
-    for (const body of ['', '{', 'null']) {
+  it('returns the request-validation error for invalid JSON bodies and version IDs', async () => {
+    for (const body of ['', '{', 'null', '{}', '{"versionId":0}']) {
       const response = await enqueueRequest(body)
       expect(response.status).toBe(400)
       await expect(response.json()).resolves.toMatchObject({ error: 'invalid_manifest_cleanup_enqueue_request' })
