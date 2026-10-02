@@ -3941,5 +3941,6 @@
   "promote-channel-select-target": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "promote-channel-no-target": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "promote-channel-no-bundle": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "promote-to-channel-success": "Used in Capgo web console areas: pages/app. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "promote-to-channel-success": "Used in Capgo web console areas: pages/app. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "promote-channel-rollout-cleared": "Used in Capgo web console areas: pages/app. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }

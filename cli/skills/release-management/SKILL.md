@@ -212,7 +212,8 @@ Use this skill for OTA update workflows in Capgo Cloud.
 - Example: `npx @capgo/cli@latest channel promote staging production com.example.app`
 - Use to ship what a channel already serves (for example a validated `staging` or `preprod` bundle) to another channel without looking up the bundle version.
 - Notes:
-  - Copies only the stable bundle linked to the source channel. Rollout state and channel settings are not copied.
+  - Copies only the stable bundle linked to the source channel. Channel settings are not copied.
+  - Like `channel set --bundle`, a new stable bundle stops any rollout in progress on the target channel; the CLI warns when that happens.
   - Runs the same native compatibility and RBAC checks as `channel set --bundle` on the target channel.
 - Key options:
   - `--ignore-metadata-check`

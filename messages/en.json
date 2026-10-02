@@ -3942,5 +3942,6 @@
   "promote-channel-select-target": "Select a channel to promote to",
   "promote-channel-no-target": "This app has no other channel to promote to",
   "promote-channel-no-bundle": "This channel has no uploaded bundle to promote",
-  "promote-to-channel-success": "Bundle {bundle} is now live on {channel}"
+  "promote-to-channel-success": "Bundle {bundle} is now live on {channel}",
+  "promote-channel-rollout-cleared": "Its rollout in progress will stop: all devices get this bundle"
 }

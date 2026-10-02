@@ -624,9 +624,7 @@ channel
 Runs the same compatibility and permission checks as channel set --bundle.
 
 Example: npx @capgo/cli@latest channel promote staging production com.example.app`)
-  .action(async (fromChannel: string, toChannel: string, appId: string, options: any) => {
-    await promoteChannel(fromChannel, toChannel, appId, options)
-  })
+  .action(promoteChannel)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
   .option('--send-update-notification', `Send a native update-check notification to devices after updating the linked channel bundle`)
   .option('--ignore-metadata-check', `Ignore checking node_modules compatibility if present in the bundle`)

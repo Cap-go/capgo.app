@@ -75,6 +75,7 @@ interface PromoteTargetChannel {
   id: number
   name: string
   versionName: string | null
+  rolloutActive: boolean
 }
 const promoteDialogId = 'promote-channel-bundle'
 const promoteTargets = ref<PromoteTargetChannel[]>([])
@@ -628,6 +629,53 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
   }
 }
 
+// Linking a bundle from the console is a direct channels UPDATE: RLS needs
+// channel.update_settings and the version trigger needs channel.promote_bundle.
+const promoteTargetPermissions = ['channel.promote_bundle', 'channel.update_settings'] as const
+
+/**
+ * Load the other channels of this app that the user can link a bundle to.
+ * The "Promote to…" action stays hidden when this list is empty.
+ */
+async function loadPromoteTargets() {
+  const source = channel.value
+  if (!source?.app_id || !source.id) {
+    promoteTargets.value = []
+    return
+  }
+
+  const { data, error } = await supabase
+    .from('channels')
+    .select('id, name, rollout_version, rollout_enabled, version:app_versions!channels_version_fkey(name)')
+    .eq('app_id', source.app_id)
+    .neq('id', source.id)
+    .order('name', { ascending: true })
+  if (error) {
+    console.error('cannot load channels to promote to', error)
+    promoteTargets.value = []
+    return
+  }
+
+  const eligible = await Promise.all((data ?? []).map(async row => (
+    await checkPermissions([...promoteTargetPermissions], { appId: source.app_id, channelId: row.id }) ? row : null
+  )))
+  // Ignore stale results if the user navigated to another channel meanwhile.
+  if (channel.value?.id !== source.id)
+    return
+  promoteTargets.value = eligible
+    .filter(row => row !== null)
+    .map(row => ({
+      id: row.id,
+      name: row.name,
+      versionName: (row.version as { name: string } | null)?.name ?? null,
+      rolloutActive: !!row.rollout_enabled && row.rollout_version != null,
+    }))
+}
+
+watch(() => channel.value?.id, () => {
+  void loadPromoteTargets()
+}, { immediate: true })
+
 async function openPromoteToChannel() {
   if (!channel.value?.version)
     return
@@ -636,27 +684,11 @@ async function openPromoteToChannel() {
     return
   }
 
-  const { data, error } = await supabase
-    .from('channels')
-    .select('id, name, version:app_versions!channels_version_fkey(name)')
-    .eq('app_id', channel.value.app_id)
-    .neq('id', channel.value.id)
-    .order('name', { ascending: true })
-  if (error) {
-    console.error('cannot load channels to promote to', error)
-    toast.error(t('error-fetching-channels'))
-    return
-  }
-  if (!data?.length) {
+  await loadPromoteTargets()
+  if (!promoteTargets.value.length) {
     toast.error(t('promote-channel-no-target'))
     return
   }
-
-  promoteTargets.value = data.map(row => ({
-    id: row.id,
-    name: row.name,
-    versionName: (row.version as { name: string } | null)?.name ?? null,
-  }))
   promoteTargetId.value = null
 
   dialogStore.openDialog({
@@ -693,7 +725,7 @@ async function promoteBundleToChannel(target: PromoteTargetChannel) {
   const source = channel.value
   if (!source?.version)
     return
-  if (!(await checkPermissions('channel.promote_bundle', { appId: source.app_id, channelId: target.id }))) {
+  if (!(await checkPermissions([...promoteTargetPermissions], { appId: source.app_id, channelId: target.id }))) {
     toast.error(t('no-permission'))
     return
   }
@@ -736,6 +768,7 @@ async function promoteBundleToChannel(target: PromoteTargetChannel) {
 
   toast.info(t('cloud-replication-delay'))
   toast.success(t('promote-to-channel-success', { bundle: appVersion.name, channel: target.name }))
+  void loadPromoteTargets()
   await askUpdateNotificationAfterBundleChange(target.name)
 }
 
@@ -1408,7 +1441,7 @@ async function copyCurlCommand() {
                   <Settings class="w-4 h-4 text-gray-500 dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-400" />
                 </button>
                 <button
-                  v-if="!isInternalVersionName(channel.version.name)"
+                  v-if="!isInternalVersionName(channel.version.name) && promoteTargets.length > 0"
                   type="button"
                   class="gap-1.5 font-medium d-btn d-btn-outline d-btn-xs text-slate-700 dark:text-slate-200"
                   data-test="promote-to-channel"
@@ -2055,6 +2088,9 @@ async function copyCurlCommand() {
             <span class="block font-medium truncate">{{ target.name }}</span>
             <span class="block text-sm text-gray-600 truncate dark:text-gray-400">
               {{ t('promote-channel-current-bundle', { bundle: target.versionName ?? t('not-configured') }) }}
+            </span>
+            <span v-if="target.rolloutActive" class="block text-xs text-amber-700 dark:text-amber-300">
+              {{ t('promote-channel-rollout-cleared') }}
             </span>
           </span>
           <span v-if="target.versionName === channel?.version?.name" class="text-xs text-gray-500 dark:text-gray-400">
