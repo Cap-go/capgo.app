@@ -63,6 +63,7 @@ const mfaQRCode = ref('')
 const enrolledFactorId = ref('')
 const mfaVerificationCode = ref('')
 const mfaVerifying = ref(false)
+const isEnrolling = ref(false)
 
 const stepLabels = computed(() => [
   t('2fa-step-captcha'),
@@ -191,17 +192,25 @@ async function verifyOtpForMfa() {
 }
 
 async function enrollTotp() {
-  const { data, error } = await supabase.auth.mfa.enroll({ factorType: 'totp', password: currentPassword.value })
-  if (error) {
-    toast.error(t('mfa-fail'))
-    console.error(error)
+  if (isEnrolling.value)
     return
-  }
+  isEnrolling.value = true
+  try {
+    const { data, error } = await supabase.auth.mfa.enroll({ factorType: 'totp', password: currentPassword.value })
+    if (error) {
+      toast.error(t('mfa-fail'))
+      console.error(error)
+      return
+    }
 
-  mfaQRCode.value = data.totp.qr_code
-  enrolledFactorId.value = data.id
-  currentPassword.value = ''
-  currentStep.value = 4
+    mfaQRCode.value = data.totp.qr_code
+    enrolledFactorId.value = data.id
+    currentPassword.value = ''
+    currentStep.value = 4
+  }
+  finally {
+    isEnrolling.value = false
+  }
 }
 
 function proceedToVerify() {
@@ -486,7 +495,7 @@ onBeforeUnmount(clearOtpSendCooldownTimer)
           <div class="max-w-lg mx-auto">
             <!-- Step 1: CAPTCHA -->
             <div v-if="currentStep === 1 && otpAlreadyVerified" class="space-y-4">
-              <button type="button" class="d-btn d-btn-primary d-btn-sm" :disabled="passwordRequired && !currentPassword" @click="enrollTotp">
+              <button type="button" class="d-btn d-btn-primary d-btn-sm" :disabled="isEnrolling || (passwordRequired && !currentPassword)" @click="enrollTotp">
                 {{ t('next') }}
               </button>
             </div>

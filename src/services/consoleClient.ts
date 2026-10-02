@@ -41,6 +41,7 @@ export function createConsoleClient(_host?: string, _key?: string, options?: { a
   if (persist && ['true', 'complete'].includes(new URLSearchParams(location.search).get('registered') ?? ''))
     localStorage.removeItem(TOKEN_KEY)
   let token: string | null = persist ? localStorage.getItem(TOKEN_KEY) : null
+  let sessionGeneration = 0
   let pendingMfa = false
   const listeners = new Set<(event: AuthChangeEvent, session: Session | null) => void>()
 
@@ -63,7 +64,9 @@ export function createConsoleClient(_host?: string, _key?: string, options?: { a
     },
   })
 
-  function saveToken(value: string | null) {
+  function saveToken(value: string | null, invalidateLookups = true) {
+    if (invalidateLookups)
+      sessionGeneration++
     token = value
     if (persist) {
       if (value !== null)
@@ -108,12 +111,15 @@ export function createConsoleClient(_host?: string, _key?: string, options?: { a
     // An empty persisted token records local logout even if cookie revocation fails.
     if (token === '')
       return { data: { session: null, user: null }, error: null }
+    const generation = sessionGeneration
     const result = await invoke<{ session: Session | null }>('auth/console-session', { method: 'GET' })
+    if (generation !== sessionGeneration)
+      return getSession()
     const session = result.data?.session ?? null
     if (session)
-      saveToken(session.access_token)
+      saveToken(session.access_token, false)
     else if (!result.error)
-      saveToken(null)
+      saveToken(null, false)
     return { data: { session, user: session?.user ?? null }, error: result.error }
   }
 
@@ -347,6 +353,7 @@ export function createConsoleClient(_host?: string, _key?: string, options?: { a
     window.addEventListener('storage', (event) => {
       if (event.key !== TOKEN_KEY)
         return
+      sessionGeneration++
       token = event.newValue
       void getSession().then((result) => {
         for (const listener of listeners)

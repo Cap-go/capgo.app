@@ -82,6 +82,36 @@ describe('console auth failure isolation', () => {
     expect(fetch).not.toHaveBeenCalled()
   })
 
+  it('ignores a session response that finishes after local logout', async () => {
+    browserStorage()
+    revoke.mockResolvedValue({ data: null, error: { message: 'Revocation unavailable' } })
+    let complete!: (response: Response) => void
+    const request = vi.fn(() => new Promise<Response>((resolve) => { complete = resolve }))
+    vi.stubGlobal('fetch', request)
+    const client = createConsoleClient()
+    const lookup = client.auth.getSession()
+    await client.auth.signOut()
+    complete(new Response(JSON.stringify({ session: { access_token: 'capgo_session_old-user', user: { id: 'old-user' } } })))
+    expect((await lookup).data.session).toBeNull()
+    expect((await createConsoleClient().auth.getSession()).data.session).toBeNull()
+    expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  it('reloads the signup cookie instead of committing an old in-flight account', async () => {
+    const storage = browserStorage()
+    let complete!: (response: Response) => void
+    const newSession = { access_token: 'capgo_session_new-user', user: { id: 'new-user' } }
+    const request = vi.fn().mockImplementationOnce(() => new Promise<Response>((resolve) => { complete = resolve })).mockResolvedValue(new Response(JSON.stringify({ session: newSession })))
+    vi.stubGlobal('fetch', request)
+    const client = createConsoleClient()
+    const lookup = client.auth.getSession()
+    client.auth.clearSession()
+    complete(new Response(JSON.stringify({ session: { access_token: 'capgo_session_old-user', user: { id: 'old-user' } } })))
+    expect((await lookup).data.session).toEqual(newSession)
+    expect(storage.get('capgo.console.session')).toBe(newSession.access_token)
+    expect(new Headers(request.mock.calls[1][1]?.headers).has('authorization')).toBe(false)
+  })
+
   it('clears an existing SPA bearer before accepting a signup cookie', async () => {
     browserStorage()
     const request = vi.fn(async (_input: unknown, _init?: RequestInit) => new Response(JSON.stringify({ session: null })))
