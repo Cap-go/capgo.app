@@ -323,20 +323,40 @@ export async function parseManifestUploadRequestBody(request: Request): Promise<
   }
 
   // Consume the original body deliberately: global error reporting must never
-  // copy a submitted 10,000-entry manifest into logs or alert payloads.
-  const bytes = await request.arrayBuffer()
-  if (bytes.byteLength > MAX_MANIFEST_UPLOAD_BODY_BYTES) {
-    manifestTooLarge({
-      field: 'body',
-      max_bytes: MAX_MANIFEST_UPLOAD_BODY_BYTES,
-      actual_bytes: bytes.byteLength,
-    })
+  // copy a submitted 10,000-entry manifest into logs or alert payloads. Read it
+  // incrementally so a chunked request cannot bypass the in-memory byte cap.
+  const chunks: Uint8Array[] = []
+  const reader = request.body?.getReader()
+  let byteLength = 0
+  if (reader) {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done)
+        break
+      byteLength += value.byteLength
+      if (byteLength > MAX_MANIFEST_UPLOAD_BODY_BYTES) {
+        await reader.cancel().catch(() => undefined)
+        manifestTooLarge({
+          field: 'body',
+          max_bytes: MAX_MANIFEST_UPLOAD_BODY_BYTES,
+          actual_bytes: byteLength,
+        })
+      }
+      chunks.push(value)
+    }
+  }
+
+  const bytes = new Uint8Array(byteLength)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
   }
 
   try {
     return {
       body: JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)),
-      byteLength: bytes.byteLength,
+      byteLength,
     }
   }
   catch {

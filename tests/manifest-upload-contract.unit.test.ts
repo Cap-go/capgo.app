@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ManifestUploadRequestError, parseManifestUploadRequestBody, validateManifestUploadRequest } from '../supabase/functions/_backend/utils/manifest_upload.ts'
+import { ManifestUploadRequestError, MAX_MANIFEST_UPLOAD_BODY_BYTES, parseManifestUploadRequestBody, validateManifestUploadRequest } from '../supabase/functions/_backend/utils/manifest_upload.ts'
 
 function entry(overrides: Record<string, unknown> = {}) {
   return {
@@ -38,6 +38,17 @@ function expectRequestError(input: Record<string, unknown>, status: number, code
   }
 }
 
+async function expectBodyError(rawRequest: Request, status: number, code: string) {
+  try {
+    await parseManifestUploadRequestBody(rawRequest)
+    throw new Error('Expected request parsing to fail')
+  }
+  catch (error) {
+    expect(error).toBeInstanceOf(ManifestUploadRequestError)
+    expect(error).toMatchObject({ status, code, moreInfo: { field: 'body' } })
+  }
+}
+
 describe('manifest upload request contract', () => {
   it('consumes the original request so error reporting cannot copy the complete manifest', async () => {
     const rawRequest = new Request('https://api.capgo.app/private/request_manifest_upload', {
@@ -46,6 +57,53 @@ describe('manifest upload request contract', () => {
     })
 
     await parseManifestUploadRequestBody(rawRequest)
+
+    expect(rawRequest.bodyUsed).toBe(true)
+  })
+
+  it('rejects an oversized declared body before reading it', async () => {
+    const rawRequest = new Request('https://api.capgo.app/private/request_manifest_upload', {
+      method: 'POST',
+      headers: { 'content-length': String(MAX_MANIFEST_UPLOAD_BODY_BYTES + 1) },
+      body: '{}',
+    })
+
+    await expectBodyError(rawRequest, 413, 'error_manifest_too_large')
+  })
+
+  it('stops reading a chunked body when it crosses the byte cap', async () => {
+    const chunk = new Uint8Array(1024 * 1024)
+    let emitted = 0
+    let cancelled = false
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(chunk)
+        emitted++
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+    const rawRequest = new Request('https://api.capgo.app/private/request_manifest_upload', {
+      method: 'POST',
+      body,
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' })
+
+    await expectBodyError(rawRequest, 413, 'error_manifest_too_large')
+
+    expect(emitted).toBe(33)
+    expect(cancelled).toBe(true)
+    expect(rawRequest.bodyUsed).toBe(true)
+  })
+
+  it('rejects malformed JSON with the invalid-request contract', async () => {
+    const rawRequest = new Request('https://api.capgo.app/private/request_manifest_upload', {
+      method: 'POST',
+      body: '{',
+    })
+
+    await expectBodyError(rawRequest, 400, 'error_manifest_upload_request_invalid')
 
     expect(rawRequest.bodyUsed).toBe(true)
   })
