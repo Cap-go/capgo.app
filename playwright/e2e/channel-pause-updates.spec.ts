@@ -35,4 +35,26 @@ test.describe('channel bundle actions (change, pause, revert)', () => {
     await page.getByRole('button', { name: 'Cancel', exact: true }).click()
     await expect(pauseButton).toHaveText('Pause updates')
   })
+
+  test('shows promote first in the bundle actions on a non-default channel', async ({ page }) => {
+    await page.route('**/private/sso/check-enforcement', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ allowed: true }),
+      })
+    })
+    await page.login('test@capgo.app', 'testtest')
+    await page.goto('/app/com.demo.app/channel/2')
+    await dismissSupportPrompt(page)
+
+    const bundleRow = page.locator('[data-test="channel-bundle-row"]')
+    await expect(bundleRow).toBeVisible({ timeout: 30000 })
+    const promote = bundleRow.locator('[data-test="promote-to-channel"]')
+    await expect(promote).toBeVisible({ timeout: 60000 })
+    await expect(bundleRow.locator('button').nth(1)).toHaveAttribute('data-test', 'promote-to-channel')
+    await promote.click()
+    await expect(page.locator('[data-test="promote-channel-targets"]')).toBeVisible({ timeout: 15000 })
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  })
 })

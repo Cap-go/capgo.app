@@ -3,7 +3,7 @@ import type { Context } from 'hono'
 import type { DeviceInfoWriteCachePayload } from './deviceComparison.ts'
 import type { StatsInsightRawAction, StatsInsightRawDaily, StatsInsightRawDevice, StatsInsightRawSummary, StatsInsightRawVersion } from './statsInsights.ts'
 import type { Database } from './supabase.types.ts'
-import type { ChannelDeviceOverrideIds, DeviceRes, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
+import type { ChannelDeviceOverrideIds, ChannelDevicePlatform, DeviceRes, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
 import { CACHE_PUT_TIMEOUT_MS, CacheHelper } from './cache.ts'
 import { canSkipDeviceInfoWrite, DEVICE_INFO_REFRESH_TTL_SECONDS, toComparableDevice } from './deviceComparison.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
@@ -877,14 +877,22 @@ function buildDeviceIdListCF(deviceIds: string[]) {
   return deviceIds.map(id => `'${escapeSqlString(id)}'`).join(', ')
 }
 
+// device_info double1: 0 = android, 1 = ios, 2 = electron
+const DEVICE_INFO_PLATFORM_VALUES: Record<ChannelDevicePlatform, number> = { android: 0, ios: 1, electron: 2 }
+
 /**
  * Channel scope for device_info rows by effective channel: the device-reported
- * default_channel, minus devices forced to another channel, plus devices forced
+ * default_channel (or no reported channel on platforms where this channel is the
+ * public default), minus devices forced to another channel, plus devices forced
  * into this channel through channel_devices. Override ids are lowercased by
  * partitionChannelDeviceOverrides, so device ids are compared lowercased too.
  */
 export function buildDeviceChannelScopeCF(channelName: string, overrides?: ChannelDeviceOverrideIds): string {
-  const defaultChannelMatch = `default_channel = '${escapeSqlString(channelName)}'`
+  const reportedMatch = `default_channel = '${escapeSqlString(channelName)}'`
+  const defaultPlatforms = (overrides?.defaultForPlatforms ?? []).map(platform => DEVICE_INFO_PLATFORM_VALUES[platform])
+  const defaultChannelMatch = defaultPlatforms.length
+    ? `(${reportedMatch} OR (default_channel = '' AND platform IN (${defaultPlatforms.join(', ')})))`
+    : reportedMatch
   const elsewhere = overrides?.elsewhere ?? []
   const into = overrides?.into ?? []
   const byDefaultChannel = elsewhere.length
@@ -905,6 +913,7 @@ FROM (
   SELECT
     argMax(blob2, timestamp) AS version_name,
     argMax(blob7, timestamp) AS default_channel,
+    argMax(double1, timestamp) AS platform,
     blob1 AS device_id
   FROM device_info
   WHERE index1 = '${escapeSqlString(app_id)}'

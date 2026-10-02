@@ -3935,6 +3935,8 @@
   "release-live-default-channel": "Used in Capgo web console areas: components/dashboard. Role: short UI label shown in parentheses after the default channel name. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "release-live-deployed": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "release-live-failures": "Used in Capgo web console areas: components/dashboard. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "release-live-failure-rate": "Used in Capgo web console areas: components/dashboard. Role: helper text under the failed attempts count; {rate} is a formatted percentage. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "release-live-failures-normal": "Used in Capgo web console areas: components/dashboard. Role: helper text explaining that some failed updates are expected. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "release-live-failed-devices": "Used in Capgo web console areas: components/dashboard. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "release-live-recovered-devices": "Used in Capgo web console areas: components/dashboard. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "release-live-stuck-devices": "Used in Capgo web console areas: components/dashboard. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
@@ -3980,5 +3982,17 @@
   "channel-resume-confirm-description": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "channel-updates-resumed": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "channel-revert-confirm-title": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "channel-reverted-to-builtin": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "channel-reverted-to-builtin": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "error-fetching-channels": "Used in Capgo web console areas: pages/app. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "promote-to-channel": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "promote-to-channel-button": "Used in Capgo web console areas: pages/app. Role: button or action label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "promote-to-channel-description": "Used in Capgo web console areas: pages/app. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "promote-channel-pick-target": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "promote-channel-current-bundle": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "promote-channel-already-serving": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "promote-channel-select-target": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "promote-channel-no-target": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "promote-channel-no-bundle": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "promote-to-channel-success": "Used in Capgo web console areas: pages/app. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "promote-channel-rollout-cleared": "Used in Capgo web console areas: pages/app. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }
