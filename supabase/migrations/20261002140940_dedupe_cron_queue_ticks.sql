@@ -15,6 +15,12 @@ AS $$
 DECLARE
   tick_pending boolean;
 BEGIN
+  -- Serialize producers per queue so concurrent callers cannot both see no
+  -- pending tick and enqueue a duplicate.
+  PERFORM pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('enqueue_cron_tick:' || queue_name, 0)
+  );
+
   EXECUTE pg_catalog.format(
     'SELECT EXISTS (SELECT 1 FROM pgmq.%I WHERE read_ct = 0 AND message = $1)',
     'q_' || queue_name

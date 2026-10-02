@@ -3,7 +3,7 @@
 -- after a failed run and the backlog grows forever.
 BEGIN;
 
-SELECT plan(6);
+SELECT plan(9);
 
 SELECT pgmq.purge_queue('cron_app_fame');
 
@@ -72,6 +72,14 @@ SELECT
     ok(
         pg_catalog.pg_get_functiondef(
             'public.process_all_cron_tasks()'::pg_catalog.regprocedure
+        ) LIKE '%public.enqueue_cron_tick(%''cron_rollout_auto_pause''%',
+        'process_all_cron_tasks enqueues the rollout tick through enqueue_cron_tick'
+    );
+
+SELECT
+    ok(
+        pg_catalog.pg_get_functiondef(
+            'public.process_all_cron_tasks()'::pg_catalog.regprocedure
         ) NOT LIKE '%pgmq.send(%',
         'process_all_cron_tasks no longer sends ticks with raw pgmq.send'
     );
@@ -82,6 +90,22 @@ SELECT
             'authenticated', 'public.enqueue_cron_tick(text, jsonb)', 'EXECUTE'
         ),
         'authenticated cannot enqueue cron ticks'
+    );
+
+SELECT
+    ok(
+        NOT pg_catalog.has_function_privilege(
+            'anon', 'public.enqueue_cron_tick(text, jsonb)', 'EXECUTE'
+        ),
+        'anon cannot enqueue cron ticks'
+    );
+
+SELECT
+    ok(
+        pg_catalog.has_function_privilege(
+            'service_role', 'public.enqueue_cron_tick(text, jsonb)', 'EXECUTE'
+        ),
+        'service_role can enqueue cron ticks'
     );
 
 SELECT * FROM finish();
