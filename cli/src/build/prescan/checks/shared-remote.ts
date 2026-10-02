@@ -13,7 +13,8 @@ export const apikeyPermission: PrescanCheck = {
     }
     let allowed = false
     try {
-      allowed = await hasCliPermission(ctx.supabase, ctx.apikey, 'app.build_native', { appId: ctx.appId })
+      // Silent: `build prescan --json` consumers parse stdout.
+      allowed = await hasCliPermission(ctx.supabase, ctx.apikey, 'app.build_native', { appId: ctx.appId }, {}, true)
     }
     catch (error) {
       const detail = error instanceof Error ? error.message : String(error)

@@ -6,7 +6,7 @@ import { CliUserError } from '../shared/cli-user-error'
 import {
   createCapgoClient,
   findSavedKey,
-  formatError,
+  formatCapgoCliInvokeError,
   getAppId,
   getConfig,
   invokeCapgoCliApi,
@@ -57,14 +57,21 @@ export async function currentBundleInternal(channel: string, appId: string, opti
     supaAnon: options.supaAnon,
   })
 
-  const bundleName = data?.bundle_name
-  if (error || !bundleName) {
+  if (error) {
+    const detail = await formatCapgoCliInvokeError(error)
     if (!silent)
-      log.error(`Error retrieving current bundle for channel ${channel}.`)
-    throw new CliUserError('Channel does not have a readable current bundle', { appId, channel, cause: error ? formatError(error) : undefined })
+      log.error(`Cannot retrieve current bundle for channel ${channel}: ${detail}`)
+    throw new CliUserError(`Cannot retrieve current bundle for channel ${channel}: ${detail}`, { appId, channel, cause: detail })
   }
 
-  void trackEvent({ channel: 'channel', event: 'Channel Current Bundle Viewed', tags: { has_bundle: true } })
+  const bundleName = data?.bundle_name
+  void trackEvent({ channel: 'channel', event: 'Channel Current Bundle Viewed', tags: { has_bundle: Boolean(bundleName) } })
+
+  if (!bundleName) {
+    if (!silent)
+      log.error(`Channel ${channel} has no readable current bundle.`)
+    throw new CliUserError('Channel does not have a readable current bundle', { appId, channel })
+  }
 
   if (!silent) {
     if (!quiet)

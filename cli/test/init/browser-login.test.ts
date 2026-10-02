@@ -98,7 +98,7 @@ describe('init browser login', () => {
   })
 
   it('resolves plain API-key identity before listing organizations', () => {
-    const resolveUserId = helperSource.indexOf('await resolveUserIdFromApiKey(supabase, key, true)')
+    const resolveUserId = helperSource.indexOf('await resolveUserIdFromApiKey(supabase, key, true, httpOptions)')
     const listOrganizations = helperSource.indexOf('await fetchOrganizationsV7(key, httpOptions)')
 
     expect(resolveUserId).toBeGreaterThanOrEqual(0)

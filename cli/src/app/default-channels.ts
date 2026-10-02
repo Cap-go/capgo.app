@@ -1,5 +1,5 @@
-import { getActiveChannels } from '../api/channels'
-import { formatError, getCapgoCliHttpStatus, invokeCapgoCliApi } from '../utils'
+import { fetchCliChannels } from '../api/cli-data'
+import { formatError, invokeCapgoCliApi } from '../utils'
 
 interface ChannelHttpOptions {
   apikey: string
@@ -7,27 +7,20 @@ interface ChannelHttpOptions {
   supaAnon?: string
 }
 
-export async function assertChannelExists(options: ChannelHttpOptions, appId: string, channelName: string) {
-  const params = new URLSearchParams({
-    app_id: appId,
-    channel: channelName,
-    page: '0',
-  })
-  const { data, error } = await invokeCapgoCliApi(`channel?${params.toString()}`, {
-    apikey: options.apikey,
-    method: 'GET',
-    body: undefined,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
-  })
-
-  if (error) {
-    if (getCapgoCliHttpStatus(error) === 404)
-      throw new Error(`Channel ${channelName} not found for app ${appId}`)
-    throw new Error(`Cannot load channel ${channelName}: ${formatError(error)}`)
+// Channel reads use the caller-key CLI route (channel.read), not GET /channel
+// (app.read_channels), so keys that could change channels before still can.
+async function loadChannels(options: ChannelHttpOptions, appId: string, channelName?: string) {
+  try {
+    return await fetchCliChannels(options, appId, channelName)
   }
+  catch (error) {
+    throw new Error(`Cannot load channel${channelName ? ` ${channelName}` : 's'}: ${formatError(error)}`)
+  }
+}
 
-  if (!data || (Array.isArray(data) && data.length === 0))
+export async function assertChannelExists(options: ChannelHttpOptions, appId: string, channelName: string) {
+  const channels = await loadChannels(options, appId, channelName)
+  if (!channels.some(channel => channel.name === channelName))
     throw new Error(`Channel ${channelName} not found for app ${appId}`)
 }
 
@@ -58,22 +51,23 @@ export async function setDefaultDownloadChannel(
   appId: string,
   channelName: string,
 ) {
-  await assertChannelExists(options, appId, channelName)
-  const channels = await getActiveChannels(options, appId)
+  const channels = await loadChannels(options, appId)
+  const target = channels.find(channel => channel.name === channelName)
+  if (!target)
+    throw new Error(`Channel ${channelName} not found for app ${appId}`)
+
+  // Enable the target first so a later failure never leaves the app without a public channel.
+  if (!target.public)
+    await setChannelPublic(options, appId, channelName, true)
 
   for (const channel of channels) {
-    if (channel.name === channelName) {
-      if (!channel.public)
-        await setChannelPublic(options, appId, channel.name, true)
-      continue
-    }
-    if (channel.public)
+    if (channel.name !== channelName && channel.public)
       await setChannelPublic(options, appId, channel.name, false)
   }
 }
 
 export async function disableDownloadChannels(options: ChannelHttpOptions, appId: string) {
-  const channels = await getActiveChannels(options, appId)
+  const channels = await loadChannels(options, appId)
   for (const channel of channels) {
     if (channel.public)
       await setChannelPublic(options, appId, channel.name, false)

@@ -81,4 +81,12 @@ describe('organization get security fields', () => {
     expect(body.enforce_hashed_api_keys).toBe(false)
     expect(body.password_policy_config).toEqual(orgRow.password_policy_config)
   })
+
+  it('accepts a stored partial password policy', async () => {
+    mockOrgSelect({ ...orgRow, password_policy_config: { enabled: true, min_length: 10 } })
+    const response = await get(createContext(), { orgId: orgRow.id }, { key: 'test-key' } as any)
+    expect(response.status).toBe(200)
+    const body = await response.json() as Record<string, unknown>
+    expect(body.password_policy_config).toEqual({ enabled: true, min_length: 10 })
+  })
 })

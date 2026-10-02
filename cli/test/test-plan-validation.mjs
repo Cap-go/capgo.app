@@ -117,10 +117,10 @@ await test('surfaces plan RPC errors instead of reporting an invalid plan', asyn
   assert(thrown.message.includes('Cannot validate plan'), `Unexpected error: ${thrown.message}`)
 })
 
-await test('falls back to organization validation when the app-aware RPC is unavailable', async () => {
+await test('does not downgrade an app-scoped 404 to an org-scoped plan check', async () => {
   fetchHandler = (url) => {
     if (url.includes('/private/cli/billing/allowed-actions')) {
-      return new Response(JSON.stringify({ error: 'not found' }), {
+      return new Response(JSON.stringify({ error: 'app_not_found' }), {
         status: 404,
         headers: { 'Content-Type': 'application/json' },
       })
@@ -131,23 +131,17 @@ await test('falls back to organization validation when the app-aware RPC is unav
     })
   }
 
-  const allowed = await utils.isAllowedPlanActions(
-    makeSupabase(),
-    'org-id',
-    ['storage'],
-    'com.example.app',
-    httpOptions,
-  )
+  let thrown
+  try {
+    await utils.isAllowedPlanActions(makeSupabase(), 'org-id', ['storage'], 'com.example.app', httpOptions)
+  }
+  catch (error) {
+    thrown = error
+  }
 
-  assertEquals(allowed, true)
-  assertEquals(httpCalls.length, 2)
-  assert(httpCalls[0].url.includes('/private/cli/billing/allowed-actions'))
-  assertEquals(httpCalls[0].body, {
-    org_id: 'org-id',
-    actions: ['storage'],
-    app_id: 'com.example.app',
-  })
-  assert(httpCalls[1].url.includes('/private/cli/billing/allowed?org_id=org-id'))
+  assert(thrown instanceof Error)
+  assert(thrown.message.includes('Cannot validate plan'))
+  assertEquals(httpCalls.length, 1)
 })
 
 await test('surfaces organization plan RPC errors instead of reporting an invalid plan', async () => {

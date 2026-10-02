@@ -241,9 +241,8 @@ export async function isVersionLinkedToOtherChannel(
   excludeChannelName: string,
 ): Promise<boolean> {
   try {
-    const rows = await fetchCliChannels(supabase, appId)
-    return rows.some(channel => channel.name !== excludeChannelName
-      && (channel.version === versionId || channel.rollout_version === versionId))
+    const rows = await fetchCliChannels(supabase, appId, undefined, { linkedVersionId: versionId })
+    return rows.some(channel => channel.name !== excludeChannelName)
   }
   catch {
     return true

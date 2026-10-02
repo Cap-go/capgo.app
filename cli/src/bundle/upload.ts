@@ -16,6 +16,7 @@ import pack from '../../package.json'
 import { trackEvent } from '../analytics/track'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { fetchChannelCompatibilityContext } from '../api/channels'
+import { fetchCliChannels, fetchLatestBundle } from '../api/cli-data'
 import { fetchBundleVersionRow, upsertAppVersion } from '../api/versions'
 import { calcKeyId, encryptChecksum, encryptChecksumV3, encryptSource, generateSessionKey } from '../api/crypto'
 import { checkAlerts } from '../api/update'
@@ -365,7 +366,7 @@ async function checkVersionExists(
   const existingVersion = await fetchBundleVersionRow(apikey, appid, bundle, {
     ...httpOptions,
     includeDeleted: true,
-  })
+  }).catch(error => uploadFail(formatError(error)))
 
   if (existingVersion) {
     if (versionExistsOk) {
@@ -926,24 +927,15 @@ async function getLatestRemoteAppVersion(
   appid: string,
   httpOptions?: { supaHost?: string, supaAnon?: string },
 ): Promise<string | null> {
-  const { data, error } = await invokeCapgoCliApi<Array<{ name?: string }>>(
-    `bundle?app_id=${encodeURIComponent(appid)}&page=0`,
-    {
-      apikey,
-      method: 'GET',
-      body: undefined,
-      supaHost: httpOptions?.supaHost,
-      supaAnon: httpOptions?.supaAnon,
-    },
-  )
-
-  if (error) {
+  // Includes deleted bundles: their names stay occupied, so they still anchor auto-bump.
+  try {
+    const latest = await fetchLatestBundle({ apikey, supaHost: httpOptions?.supaHost, supaAnon: httpOptions?.supaAnon }, appid)
+    return latest?.name ?? null
+  }
+  catch (error) {
     log.warn(`Cannot fetch latest remote version ${formatError(error)}`)
     return null
   }
-
-  const batch = Array.isArray(data) ? data : []
-  return batch[0]?.name ?? null
 }
 
 async function findFreeAutoBumpCandidate(
@@ -1079,38 +1071,23 @@ async function findUploadTargetChannel(
   failOnError = true,
   httpOptions?: { supaHost?: string, supaAnon?: string },
 ): Promise<UploadTargetChannel | null> {
-  const params = new URLSearchParams({
-    app_id: appid,
-    channel,
-    page: '0',
-  })
-  const { data, error } = await invokeCapgoCliApi<{
-    id?: number
-    public?: boolean
-    version?: number | { id?: number } | null
-    rollout_version?: number | null
-    rollout_enabled?: boolean | null
-    rollout_percentage_bps?: number | null
-  }>(`channel?${params.toString()}`, {
-    apikey,
-    method: 'GET',
-    body: undefined,
-    supaHost: httpOptions?.supaHost,
-    supaAnon: httpOptions?.supaAnon,
-  })
-
-  if (error && failOnError)
-    uploadFail(`Cannot check channel ${channel}: ${formatError(error)}`)
-  if (error)
+  // Caller-key read: upload keys with channel.promote_bundle / app.create_channel
+  // do not necessarily have app.read_channels (required by GET /channel).
+  let rows: Awaited<ReturnType<typeof fetchCliChannels>>
+  try {
+    rows = await fetchCliChannels({ apikey, supaHost: httpOptions?.supaHost, supaAnon: httpOptions?.supaAnon }, appid, channel)
+  }
+  catch (error) {
+    if (failOnError)
+      uploadFail(`Cannot check channel ${channel}: ${formatError(error)}`)
     return null
+  }
 
-  const channelRow = Array.isArray(data) ? data[0] : data
+  const channelRow = rows.find(row => row.name === channel)
   if (!channelRow?.id)
     return null
 
-  const stableVersionId = typeof channelRow.version === 'number'
-    ? channelRow.version
-    : channelRow.version?.id ?? null
+  const stableVersionId = channelRow.version ?? null
 
   return {
     id: channelRow.id,
@@ -1288,13 +1265,14 @@ async function setVersionInChannel(
     if (dbError3) {
       await uploadFailIfChannelError(dbError3, () => `Cannot set channel because this API key does not have the required RBAC permission. ${formatError(dbError3)}`)
     }
-    const channelId = Number(data?.id)
+    // POST /channel returns only { status } for existing channels; fall back to the row read earlier.
+    const channelId = Number(data?.id ?? targetChannel.id)
     if (Number.isSafeInteger(channelId)) {
       const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${channelId}`
       if (targetChannel.rollout_enabled && targetChannel.rollout_version != null) {
         log.warn('This channel has an active progressive rollout. Linking this bundle as the stable version resets that rollout, so devices receive the new bundle instead of the previous rollout target.')
       }
-      else if (data?.public) {
+      else if (data?.public ?? targetChannel.public) {
         log.info('Your update is now available in your public channel 🎉')
       }
       else {

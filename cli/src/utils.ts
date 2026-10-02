@@ -1299,14 +1299,8 @@ export async function isAllowedPlanActions(
     },
     httpOptions,
   )
-  if (error) {
-    const status = getCapgoCliHttpStatus(error)
-    // Older servers may not expose the app-aware overload yet. Preserve their
-    // org-scoped behavior without hiding permission or transport errors.
-    if (appId && status === 404)
-      return isAllowedActionOrg(supabase, orgId, httpOptions)
-    throw new Error(`Cannot validate plan: ${formatError(error)}`)
-  }
+  if (error)
+    throw new Error(`Cannot validate plan: ${formatError(error)}`, { cause: error })
 
   return data?.allowed === true
 }
@@ -2341,7 +2335,7 @@ export async function getOrganizationListWithPermission(
 ): Promise<{ allOrganizations: Organization[], allowedOrganizations: Organization[] }> {
   let allOrganizations: Organization[]
   try {
-    allOrganizations = await fetchOrganizationsV7(apikey, httpOptions)
+    allOrganizations = await fetchOrganizationsV7(apikey, resolveCliHttpOptions(supabase, httpOptions))
   }
   catch (error) {
     log.error('Cannot get the list of organizations - exiting')
@@ -2422,7 +2416,8 @@ export async function resolveUserIdFromApiKey(
   if (!userId) {
     if (!silent)
       log.error(`Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.`)
-    throw new Error('Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.')
+    // Same status as the identity endpoint's 401 so callers classify both as a bad key.
+    throw Object.assign(new Error('Capgo authentication failed: invalid Capgo API key or insufficient Capgo permissions.'), { status: 401 })
   }
   return userId
 }
@@ -2439,6 +2434,7 @@ export async function hasCliPermission(
   permissionKey: string,
   scope: CliPermissionScope = {},
   httpOptions: CliHttpOptions = {},
+  silent = false,
 ): Promise<boolean> {
   const resolvedHttpOptions = resolveCliHttpOptions(supabase, httpOptions)
   const { data, error } = await invokeCapgoCliApi<{ allowed?: boolean }>('private/cli/check-permission', {
@@ -2456,9 +2452,11 @@ export async function hasCliPermission(
   })
 
   if (error) {
-    log.error(`Cannot check permission ${permissionKey}`)
-    log.error(formatError(error))
-    throw new Error(`Cannot check permission ${permissionKey}`)
+    if (!silent) {
+      log.error(`Cannot check permission ${permissionKey}`)
+      log.error(formatError(error))
+    }
+    throw new Error(`Cannot check permission ${permissionKey}: ${formatError(error)}`, { cause: error })
   }
 
   return data?.allowed === true
@@ -2887,7 +2885,7 @@ export async function getRemoteChecksums(
     return null
 
   const { fetchBundleVersionRow } = await import('./api/versions')
-  const version = await fetchBundleVersionRow(apikey, appId, data.bundle_name, httpOptions)
+  const version = await fetchBundleVersionRow(apikey, appId, data.bundle_name, httpOptions).catch(() => null)
   return version?.checksum ?? null
 }
 

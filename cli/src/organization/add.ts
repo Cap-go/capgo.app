@@ -96,7 +96,7 @@ export async function addOrganizationInternal(options: OrganizationAddOptions, s
     outro('Done ✅')
   }
 
-  return orgData
+  return { ...orgData, name, management_email: email }
 }
 
 export async function addOrganization(options: OrganizationAddOptions) {

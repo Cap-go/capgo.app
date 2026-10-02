@@ -2,7 +2,7 @@ import type { CapgoClient } from '../utils'
 import type { Database } from '../types/supabase.types'
 import { log } from '@clack/prompts'
 import { Table } from '@sauber/table'
-import { formatError, getHumanDate, invokeCapgoCliApi, readCapgoCliApiErrorPayload } from '../utils'
+import { formatCapgoCliInvokeError, formatError, getHumanDate, invokeCapgoCliApi, readCapgoCliApiErrorPayload } from '../utils'
 import { checkVersionNotUsedInChannel } from './channels'
 import { setBundlesDeleted } from './cli-data'
 
@@ -62,8 +62,14 @@ export async function fetchBundleVersionRow(
     },
   )
 
-  if (error)
-    return null
+  if (error) {
+    // Only a definite "not found" means the version is free; anything else must stop callers
+    // (upload duplicate guard / auto-bump) from reusing an existing name.
+    const payload = await readCapgoCliApiErrorPayload(error)
+    if (payload?.error === 'cannot_find_bundle')
+      return null
+    throw new Error(`Cannot check bundle ${appId}@${version}: ${await formatCapgoCliInvokeError(error)}`, { cause: error })
+  }
   return data
 }
 

@@ -49,7 +49,11 @@ const appIdQuerySchema = z.object({
 const channelsQuerySchema = z.object({
   app_id: z.string().min(1),
   name: z.string().min(1).optional(),
+  linked_version_id: z.coerce.number().int().positive().optional(),
 })
+
+const CHANNELS_PAGE_SIZE = 1000
+const CHANNELS_MAX_PAGES = 50
 
 const manifestQuerySchema = z.object({
   app_version_id: z.coerce.number().int().positive(),
@@ -59,11 +63,6 @@ const setBundlesDeletedBodySchema = z.object({
   app_id: z.string().min(1),
   names: z.array(z.string().min(1)).min(1).max(100),
   deleted: z.boolean(),
-})
-
-const createOrganizationBodySchema = z.object({
-  name: z.string().min(1),
-  management_email: z.email(),
 })
 
 // Same columns + embeds the CLI used to read directly through PostgREST. Reads run
@@ -359,24 +358,40 @@ app.get('/channels', middlewareKey(), async (c) => {
   const queryParsed = safeParseSchema(channelsQuerySchema, {
     app_id: c.req.query('app_id'),
     name: c.req.query('name') || undefined,
+    linked_version_id: c.req.query('linked_version_id') || undefined,
   })
   if (!queryParsed.success) {
     throw simpleError('invalid_query', 'Invalid query', { error: queryParsed.error })
   }
 
   const capgkey = c.get('capgkey') as string
-  let query = supabaseApikey(c, capgkey)
-    .from('channels')
-    .select(CLI_CHANNEL_SELECT)
-    .eq('app_id', queryParsed.data.app_id)
-  if (queryParsed.data.name)
-    query = query.eq('name', queryParsed.data.name)
-  const { data, error } = await query.order('name')
-  if (error) {
-    throw simpleError('cannot_get_channels', 'Cannot get channels', { error })
+  const { app_id: appId, name, linked_version_id: linkedVersionId } = queryParsed.data
+  const supabase = supabaseApikey(c, capgkey)
+  const rows: unknown[] = []
+  // PostgREST caps responses (1000 rows); page so callers never see a truncated list.
+  for (let page = 0; page < CHANNELS_MAX_PAGES; page++) {
+    let query = supabase
+      .from('channels')
+      .select(CLI_CHANNEL_SELECT)
+      .eq('app_id', appId)
+    if (name)
+      query = query.eq('name', name)
+    if (linkedVersionId)
+      query = query.or(`version.eq.${linkedVersionId},rollout_version.eq.${linkedVersionId}`)
+    const from = page * CHANNELS_PAGE_SIZE
+    const { data, error } = await query
+      .order('name')
+      .order('id')
+      .range(from, from + CHANNELS_PAGE_SIZE - 1)
+    if (error) {
+      throw simpleError('cannot_get_channels', 'Cannot get channels', { error })
+    }
+    rows.push(...(data ?? []))
+    if ((data?.length ?? 0) < CHANNELS_PAGE_SIZE)
+      break
   }
 
-  return c.json(data ?? [])
+  return c.json(rows)
 })
 
 app.get('/bundles/latest', middlewareKey(), async (c) => {
@@ -442,37 +457,4 @@ app.get('/manifest', middlewareKey(), async (c) => {
   }
 
   return c.json(data ?? [])
-})
-
-app.post('/organizations', middlewareKey(), async (c) => {
-  const bodyRaw = await parseBody<unknown>(c)
-  const bodyParsed = safeParseSchema(createOrganizationBodySchema, bodyRaw)
-  if (!bodyParsed.success) {
-    throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })
-  }
-
-  const capgkey = c.get('capgkey') as string
-  const supabase = supabaseApikey(c, capgkey)
-  const { data: userId, error: userIdError } = await supabase.rpc('request_actor_user_id')
-  if (userIdError) {
-    throw simpleError('cannot_resolve_identity', 'Cannot resolve CLI identity', { error: userIdError })
-  }
-  if (!userId) {
-    return quickError(401, 'invalid_apikey', 'Invalid apikey or insufficient permissions')
-  }
-
-  const { data, error } = await supabase
-    .from('orgs')
-    .insert({
-      name: bodyParsed.data.name,
-      management_email: bodyParsed.data.management_email,
-      created_by: userId,
-    })
-    .select()
-    .single()
-  if (error) {
-    throw simpleError('cannot_create_organization', 'Cannot create organization', { error })
-  }
-
-  return c.json(data)
 })

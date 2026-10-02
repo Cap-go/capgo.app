@@ -23,7 +23,7 @@ const httpChannel = {
   allow_device_self_set: true, allow_emulator: false, allow_device: true,
   allow_dev: false, allow_prod: true, version: null,
 }
-const supabase = {}
+const supabase = { apikey: options.apikey, supaHost: options.supaHost, supaAnon: options.supaAnon }
 
 globalThis.fetch = async (input) => {
   const url = String(input)

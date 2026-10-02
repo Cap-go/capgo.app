@@ -25,7 +25,7 @@ vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
 }))
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseApikey: () => ({
+  supabaseAdmin: () => ({
     from: () => ({
       select: () => ({
         eq: () => ({
@@ -33,8 +33,6 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
         }),
       }),
     }),
-  }),
-  supabaseAdmin: () => ({
     storage: {
       from: () => ({
         upload: mocks.upload,
@@ -42,6 +40,23 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
     },
   }),
 }))
+
+const ORG_ID = '22222222-2222-4222-8222-222222222222'
+
+function requestIcon(overrides: Record<string, unknown> = {}) {
+  return app.request('http://local/storage/icon', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      app_id: 'com.example.app',
+      org_id: ORG_ID,
+      content_base64: btoa('icon-bytes'),
+      content_type: 'image/png',
+      upsert: true,
+      ...overrides,
+    }),
+  })
+}
 
 describe('private/cli storage icon upload', () => {
   beforeEach(() => {
@@ -90,5 +105,41 @@ describe('private/cli storage icon upload', () => {
     const body = await response.json() as { conflict?: boolean, path?: string }
     expect(body.conflict).toBe(true)
     expect(body.path).toContain('com.example.app/icon')
+  })
+
+  it.each(['image/svg+xml', 'text/html', 'application/octet-stream'])('rejects non-raster content type %s', async (contentType) => {
+    const response = await requestIcon({ content_type: contentType })
+    expect(response.status).toBe(400)
+    expect(await response.text()).toContain('Icon must be a PNG, JPEG, WebP, or GIF image')
+    expect(mocks.upload).not.toHaveBeenCalled()
+  })
+
+  it('stores the normalized raster content type', async () => {
+    const response = await requestIcon({ content_type: 'IMAGE/WEBP; charset=binary' })
+    expect(response.status).toBe(200)
+    expect(mocks.upload).toHaveBeenCalledWith(
+      `org/${ORG_ID}/com.example.app/icon`,
+      expect.any(Uint8Array),
+      { contentType: 'image/webp', upsert: true },
+    )
+  })
+
+  it('requires app.update_settings when the app already exists, even if hidden from the key', async () => {
+    mocks.maybeSingle.mockResolvedValue({ data: { app_id: 'com.example.app', owner_org: ORG_ID }, error: null })
+    mocks.checkPermission.mockImplementation(async (_c: unknown, permission: string) => permission === 'org.create_app')
+
+    const response = await requestIcon()
+    expect(response.status).toBe(403)
+    expect(mocks.checkPermission).toHaveBeenCalledWith(expect.anything(), 'app.update_settings', { appId: 'com.example.app' })
+    expect(mocks.checkPermission).not.toHaveBeenCalledWith(expect.anything(), 'org.create_app', expect.anything())
+    expect(mocks.upload).not.toHaveBeenCalled()
+  })
+
+  it('rejects uploads when the existing app belongs to another org', async () => {
+    mocks.maybeSingle.mockResolvedValue({ data: { app_id: 'com.example.app', owner_org: '33333333-3333-4333-8333-333333333333' }, error: null })
+
+    const response = await requestIcon()
+    expect(response.status).toBe(403)
+    expect(mocks.upload).not.toHaveBeenCalled()
   })
 })

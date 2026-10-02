@@ -194,11 +194,13 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
   }
 
   if (body.build_timeout_seconds !== undefined) {
-    const normalizedTimeout = normalizeBuildTimeoutSeconds(body.build_timeout_seconds)
-    if (normalizedTimeout < MIN_BUILD_TIMEOUT_SECONDS || normalizedTimeout > MAX_BUILD_TIMEOUT_SECONDS) {
+    // Validate the raw value: normalizeBuildTimeoutSeconds clamps, so checking after it never fails.
+    const rawTimeout: unknown = body.build_timeout_seconds
+    if (typeof rawTimeout !== 'number' || !Number.isFinite(rawTimeout)
+      || rawTimeout < MIN_BUILD_TIMEOUT_SECONDS || rawTimeout > MAX_BUILD_TIMEOUT_SECONDS) {
       throw quickError(400, 'invalid_build_timeout_seconds', 'Build timeout must be between 5 and 360 minutes', { build_timeout_seconds: body.build_timeout_seconds })
     }
-    body.build_timeout_seconds = normalizedTimeout
+    body.build_timeout_seconds = normalizeBuildTimeoutSeconds(rawTimeout)
   }
 
   const onboardingPatch = parseAppOnboardingPatch(body.onboarding)
@@ -287,7 +289,9 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
   ].some(value => value !== undefined)
 
   if (body.default_upload_channel !== undefined) {
-    const { data: uploadChannel, error: uploadChannelError } = await callerClient
+    // app.update_settings was verified above; validate with the admin client so a
+    // caller without channel.read can still point the setting at an existing channel.
+    const { data: uploadChannel, error: uploadChannelError } = await supabaseAdmin(c)
       .from('channels')
       .select('id')
       .eq('app_id', appId)

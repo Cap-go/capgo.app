@@ -13,12 +13,13 @@ const bodySchema = z.object({
   orgId: z.string().optional(),
   page: integerLikeSchema.refine(page => Number.isSafeInteger(page) && page >= 0, { message: 'page must be a non-negative integer' }).optional(),
 })
+// The DB only constrains min_length when present, so stored policies can be partial.
 const passwordPolicyConfigSchema = z.object({
-  enabled: z.boolean(),
-  min_length: z.number().int(),
-  require_uppercase: z.boolean(),
-  require_number: z.boolean(),
-  require_special: z.boolean(),
+  enabled: z.boolean().optional(),
+  min_length: z.number().int().optional(),
+  require_uppercase: z.boolean().optional(),
+  require_number: z.boolean().optional(),
+  require_special: z.boolean().optional(),
 })
 
 const orgSchema = z.object({

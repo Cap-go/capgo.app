@@ -21,9 +21,18 @@ export type CliChannelRow = Database['public']['Tables']['channels']['Row'] & {
   rollout_version_info: CliLinkedVersion | null
 }
 
-export async function fetchCliChannels(client: CapgoClient, appId: string, name?: string): Promise<CliChannelRow[]> {
+export async function fetchCliChannels(
+  client: CapgoClient,
+  appId: string,
+  name?: string,
+  filters: { linkedVersionId?: number } = {},
+): Promise<CliChannelRow[]> {
   const { data, error } = await invokeCliHttpFromClient<CliChannelRow[]>(client, 'private/cli/channels', {
-    query: { app_id: appId, name },
+    query: {
+      app_id: appId,
+      name,
+      linked_version_id: filters.linkedVersionId ? String(filters.linkedVersionId) : undefined,
+    },
   })
   if (error)
     throw await toCliDataError(error)
@@ -71,14 +80,15 @@ export async function createOrganization(
   client: CapgoClient,
   name: string,
   managementEmail: string,
-): Promise<Database['public']['Tables']['orgs']['Row']> {
-  const { data, error } = await invokeCliHttpFromClient<Database['public']['Tables']['orgs']['Row']>(client, 'private/cli/organizations', {
+): Promise<{ id: string }> {
+  // POST /organization accepts API keys and enforces org.create server-side.
+  const { data, error } = await invokeCliHttpFromClient<{ id?: string }>(client, 'organization', {
     method: 'POST',
-    body: { name, management_email: managementEmail },
+    body: { name, email: managementEmail },
   })
   if (error)
     throw await toCliDataError(error)
   if (!data?.id)
     throw new Error('Organization creation returned no data')
-  return data
+  return { id: data.id }
 }

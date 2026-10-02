@@ -24,9 +24,9 @@ const { checkAppExistsAndHasPermissionOrgErr } = await import('../cli/src/api/ap
 
 function createSupabaseMock() {
   return {
-    supabaseUrl: 'http://127.0.0.1:54321',
-    supabaseKey: 'test-anon',
-    rpc: vi.fn(),
+    apikey: 'test-key',
+    supaHost: 'http://127.0.0.1:54321',
+    supaAnon: 'test-anon',
   }
 }
 
@@ -42,7 +42,7 @@ describe('CLI app permission helper', () => {
     const supabase = createSupabaseMock()
 
     await expect(checkAppExistsAndHasPermissionOrgErr(
-      supabase as any,
+      supabase,
       'test-key',
       'com.test.app',
       'channel.delete',
@@ -62,7 +62,7 @@ describe('CLI app permission helper', () => {
     const supabase = createSupabaseMock()
 
     await expect(checkAppExistsAndHasPermissionOrgErr(
-      supabase as any,
+      supabase,
       'test-key',
       'com.missing.app',
       'app.delete',

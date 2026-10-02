@@ -228,8 +228,6 @@ export async function check2FAComplianceForApp(
   const shouldReject = data
 
   if (rejectError) {
-    if (!silent && !isTransientNetworkError(rejectError))
-      log.error(`Cannot check 2FA compliance: ${rejectError.message}`)
     if (isTransientNetworkError(rejectError)) {
       await warnAndContinueTwoFactorPreflightNetworkFailure({
         silent,
@@ -237,7 +235,11 @@ export async function check2FAComplianceForApp(
       })
       return
     }
-    throwTwoFactorComplianceRpcError(rejectError)
+    // Surface the API payload (status-only HTTP errors carry no useful message).
+    const detail = await formatCapgoCliInvokeError(rejectError)
+    if (!silent)
+      log.error(`Cannot check 2FA compliance: ${detail}`)
+    throwTwoFactorComplianceRpcError({ message: detail })
   }
 
   if (shouldReject) {

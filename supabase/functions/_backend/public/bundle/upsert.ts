@@ -145,7 +145,7 @@ export async function upsertBundle(
   const supabase = supabaseApikey(c, apikey.key)
   const { data: existingVersion, error: existingError } = await supabase
     .from('app_versions')
-    .select('id, deleted')
+    .select('id, deleted, session_key, key_id')
     .eq('app_id', body.app_id)
     .eq('name', body.name)
     .maybeSingle()
@@ -159,8 +159,17 @@ export async function upsertBundle(
   }
 
   const appWithOrg = await getAppOrganization(c, body.app_id)
-  if (!existingVersion) {
-    checkEncryptedBundleEnforcement(appWithOrg, body.session_key, body.key_id)
+  // New versions are always checked. Updates are checked whenever they touch the
+  // encryption fields, using the merged result, so an upsert cannot null or swap
+  // session_key/key_id past the org policy. Updates that only set other fields
+  // (e.g. r2_path after a TUS upload) keep working on pre-existing versions.
+  const touchesEncryption = body.session_key !== undefined || body.key_id !== undefined
+  if (!existingVersion || touchesEncryption) {
+    checkEncryptedBundleEnforcement(
+      appWithOrg,
+      body.session_key !== undefined ? body.session_key : existingVersion?.session_key,
+      body.key_id !== undefined ? body.key_id : existingVersion?.key_id,
+    )
   }
 
   const row = buildUpsertRow(body, appWithOrg.owner_org, apikey.user_id)

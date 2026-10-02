@@ -109,7 +109,8 @@ export function deriveSupabaseOperation(url: string, method: string): string {
     // Capgo HTTP API route: keep only static segments so ids (app ids, etc.) never leak.
     const segments: string[] = []
     for (const segment of pathname.split('/').filter(Boolean)) {
-      if (segments.length >= 3 || !/^[a-z_-]+$/.test(segment))
+      // Letters only (plus the static `2fa` route) so ids/app ids never become labels.
+      if (segments.length >= 4 || !/^(?:[a-z_-]+|2fa)$/.test(segment))
         break
       segments.push(segment)
     }

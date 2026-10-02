@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import process from 'node:process'
-import { createCapgoClient, resolveUserIdFromApiKey, sendEvent } from '../utils'
+import { createCapgoClient, getCapgoCliHttpStatus, resolveUserIdFromApiKey, sendEvent } from '../utils'
 import { appendToSafeFile, writeFileAtomic } from '../utils/safeWrites'
 
 /**
@@ -151,8 +151,11 @@ export async function getLoginState(options: { validate?: boolean } = {}): Promi
     // Only a definitively-bad key reads as logged-out; a transient failure
     // (network/server) keeps the present key as logged-in-but-unverified.
     const message = error instanceof Error ? error.message : String(error)
-    if (/invalid api key|insufficient permissions/i.test(message))
+    if (getCapgoCliHttpStatus(error) === 401
+      || (error as { status?: unknown } | null)?.status === 401
+      || /invalid (?:capgo )?api key|insufficient (?:capgo )?permissions/i.test(message)) {
       return { loggedIn: false, source }
+    }
     return { loggedIn: true, source, verified: false }
   }
 }

@@ -108,7 +108,7 @@ await test('maps remote native packages by name', async () => {
   assert.equal(result.get('@capacitor/camera')?.version, '6.0.0')
 })
 
-await test('returns empty map when duplicate channel rows collapse to cannot_find_channel', async () => {
+await test('returns empty map when the channel is missing (cannot_find_channel)', async () => {
   setCurrentBundleResponse({ error: 'cannot_find_channel', message: 'Cannot find channel' }, 404)
   const result = await getRemoteDependencies(options.apikey, appId, channel, options)
   assert.equal(result.size, 0)

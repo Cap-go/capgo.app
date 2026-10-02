@@ -21,7 +21,7 @@ function createQuery(table: string) {
   const call: QueryCall = { table, ops: [] }
   mocks.calls.push(call)
   const query: Record<string, unknown> = {}
-  for (const op of ['select', 'eq', 'in', 'order', 'limit', 'update', 'insert']) {
+  for (const op of ['select', 'eq', 'in', 'or', 'order', 'limit', 'range', 'update', 'insert']) {
     query[op] = (...args: unknown[]) => {
       call.ops.push([op, ...args])
       return query
@@ -62,8 +62,40 @@ describe('private/cli data routes', () => {
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual([{ id: 1, name: 'production', version_info: { id: 7, name: '1.0.0', deleted: false } }])
     expect(mocks.calls[0].table).toBe('channels')
+    const select = mocks.calls[0].ops.find(([op]) => op === 'select')?.[1]
+    expect(select).toContain('version_info:app_versions!channels_version_fkey')
+    expect(select).toContain('rollout_version_info:app_versions!channels_rollout_version_fkey')
     expect(mocks.calls[0].ops).toContainEqual(['eq', 'app_id', 'com.example.app'])
     expect(mocks.calls[0].ops).toContainEqual(['eq', 'name', 'production'])
+    expect(mocks.calls[0].ops).toContainEqual(['range', 0, 999])
+  })
+
+  it('GET /channels filters channels linked to a version', async () => {
+    mocks.result = { data: [], error: null }
+    const response = await app.request('http://local/channels?app_id=com.example.app&linked_version_id=7')
+    expect(response.status).toBe(200)
+    expect(mocks.calls[0].ops).toContainEqual(['or', 'version.eq.7,rollout_version.eq.7'])
+  })
+
+  it('GET /channels pages past the PostgREST row cap', async () => {
+    const fullPage = Array.from({ length: 1000 }, (_, index) => ({ id: index + 1, name: `c${index}` }))
+    let call = 0
+    mocks.result = { data: null, error: null }
+    const pages = [fullPage, [{ id: 1001, name: 'last' }]]
+    const original = mocks.result
+    Object.defineProperty(mocks, 'result', {
+      configurable: true,
+      get: () => ({ data: pages[Math.min(call++, pages.length - 1)], error: null }),
+      set: () => {},
+    })
+    try {
+      const response = await app.request('http://local/channels?app_id=com.example.app')
+      expect((await response.json() as unknown[]).length).toBe(1001)
+      expect(mocks.calls.map(entry => entry.ops.find(([op]) => op === 'range'))).toEqual([['range', 0, 999], ['range', 1000, 1999]])
+    }
+    finally {
+      Object.defineProperty(mocks, 'result', { configurable: true, writable: true, enumerable: true, value: original })
+    }
   })
 
   it('GET /channels rejects a missing app_id', async () => {
@@ -99,6 +131,7 @@ describe('private/cli data routes', () => {
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ updated: ['1.0.0'] })
     expect(mocks.calls[0].ops).toContainEqual(['update', { deleted: true }])
+    expect(mocks.calls[0].ops).toContainEqual(['eq', 'app_id', 'com.example.app'])
     expect(mocks.calls[0].ops).toContainEqual(['eq', 'deleted', false])
     expect(mocks.calls[0].ops).toContainEqual(['in', 'name', ['1.0.0']])
   })
@@ -111,21 +144,5 @@ describe('private/cli data routes', () => {
     const ok = await app.request('http://local/manifest?app_version_id=7')
     expect(await ok.json()).toEqual([{ file_name: 'index.html', file_hash: 'abc' }])
     expect(mocks.calls.at(-1)?.ops).toContainEqual(['eq', 'app_version_id', 7])
-  })
-
-  it('POST /organizations creates the org for the API key owner', async () => {
-    mocks.result = { data: { id: '33333333-3333-4333-8333-333333333333', name: 'New Org' }, error: null }
-    const response = await app.request('http://local/organizations', {
-      method: 'POST',
-      body: JSON.stringify({ name: 'New Org', management_email: 'billing@example.com' }),
-      headers: { 'Content-Type': 'application/json' },
-    })
-    expect(response.status).toBe(200)
-    expect(mocks.rpc).toHaveBeenCalledWith('request_actor_user_id')
-    expect(mocks.calls[0].ops).toContainEqual(['insert', {
-      name: 'New Org',
-      management_email: 'billing@example.com',
-      created_by: mocks.apikey.user_id,
-    }])
   })
 })

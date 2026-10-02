@@ -4,12 +4,14 @@ import type { Database } from '../../utils/supabase.types.ts'
 import { parseBody, quickError, simpleError } from '../../utils/hono.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { assertAllowedImagePath } from '../../utils/storage.ts'
-import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
+import { supabaseAdmin } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 import { z } from 'zod'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 
 const MAX_ICON_BYTES = 5 * 1024 * 1024
+// Raster formats only: never store caller-chosen types such as SVG/HTML in the images bucket.
+const ALLOWED_ICON_CONTENT_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 
 const uploadIconBodySchema = z.object({
   app_id: z.string().min(1),
@@ -21,7 +23,7 @@ const uploadIconBodySchema = z.object({
 
 export async function uploadCliAppIcon(
   c: Context<MiddlewareKeyVariables>,
-  apikey: Database['public']['Tables']['apikeys']['Row'],
+  _apikey: Database['public']['Tables']['apikeys']['Row'],
 ): Promise<Response> {
   const bodyRaw = await parseBody<unknown>(c)
   const bodyParsed = safeParseSchema(uploadIconBodySchema, bodyRaw)
@@ -32,6 +34,13 @@ export async function uploadCliAppIcon(
   const body = bodyParsed.data
   if (!isValidAppId(body.app_id)) {
     throw quickError(400, 'invalid_app_id', 'App ID must be a reverse domain string', { app_id: body.app_id })
+  }
+
+  const contentType = body.content_type.split(';')[0]?.trim().toLowerCase() ?? ''
+  if (!ALLOWED_ICON_CONTENT_TYPES.has(contentType)) {
+    throw quickError(400, 'invalid_icon_content_type', 'Icon must be a PNG, JPEG, WebP, or GIF image', {
+      allowed: [...ALLOWED_ICON_CONTENT_TYPES],
+    })
   }
 
   const iconPath = `org/${body.org_id}/${body.app_id}/icon`
@@ -58,15 +67,20 @@ export async function uploadCliAppIcon(
     })
   }
 
-  const supabase = supabaseApikey(c, apikey.key)
-  const { data: existingApp } = await supabase
+  // Resolve existence with the admin client: an app hidden by the caller's RLS must
+  // not be treated as missing, otherwise an org.create_app-only key could overwrite it.
+  const { data: existingApp, error: existingAppError } = await supabaseAdmin(c)
     .from('apps')
-    .select('app_id')
+    .select('app_id, owner_org')
     .eq('app_id', body.app_id)
     .maybeSingle()
 
+  if (existingAppError) {
+    throw simpleError('cannot_upload_icon', 'Cannot resolve app for icon upload', { error: existingAppError })
+  }
+
   const allowed = existingApp
-    ? await checkPermission(c, 'app.update_settings', { appId: body.app_id })
+    ? existingApp.owner_org === body.org_id && await checkPermission(c, 'app.update_settings', { appId: body.app_id })
     : await checkPermission(c, 'org.create_app', { orgId: body.org_id })
 
   if (!allowed) {
@@ -80,7 +94,7 @@ export async function uploadCliAppIcon(
     .storage
     .from('images')
     .upload(normalizedPath, bytes, {
-      contentType: body.content_type,
+      contentType,
       upsert: body.upsert === true,
     })
 

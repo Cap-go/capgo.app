@@ -145,7 +145,7 @@
     "test:init-monorepo-targeting": "bun run test:capacitor-config-target && bun run test:builder-app-id-config && bun run test:capacitor-config-typescript7 && bun run test:capacitor-config-native-import && bun run test:cli-user-error-config && bun test/test-init-monorepo-targeting.mjs",
     "test:prompt-preferences": "bun test/test-prompt-preferences.mjs",
     "test:esm-sdk": "node test/test-sdk-esm.mjs",
-    "test:auth-session": "bun test/test-auth-session.mjs",
+    "test:auth-session": "bun test/test-auth-session.mjs && bun test/test-auth-session-bad-key.mjs",
     "test:mcp": "node test/test-mcp.mjs",
     "test:mcp-no-key-handshake": "node test/test-mcp-no-key-handshake.mjs",
     "test:version-detection": "node test/test-get-installed-version.mjs",

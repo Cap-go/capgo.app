@@ -184,6 +184,7 @@ try {
   // Capgo cloud routes keep only static path segments (no app ids)
   assert.equal(deriveSupabaseOperation('https://api.capgo.app/app/com.demo.app', 'GET'), 'GET app')
   assert.equal(deriveSupabaseOperation('https://api.capgo.app/private/cli/channels?app_id=x', 'GET'), 'GET private/cli/channels')
+  assert.equal(deriveSupabaseOperation('https://api.capgo.app/private/cli/2fa/reject-app?app_id=x', 'GET'), 'GET private/cli/2fa/reject-app')
 
   // recursion guard: org-resolver must use an uninstrumented request
   creqs = []

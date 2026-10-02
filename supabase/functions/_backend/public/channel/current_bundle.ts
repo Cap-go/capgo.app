@@ -3,7 +3,7 @@ import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { simpleError } from '../../utils/hono.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseApikey } from '../../utils/supabase.ts'
+import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
 interface GetCurrentBundleBody {
@@ -36,16 +36,7 @@ export async function getCurrentBundle(
   const supabase = supabaseApikey(c, apikey.key)
   const { data: channelRow, error: channelError } = await supabase
     .from('channels')
-    .select(`
-      id,
-      disable_auto_update,
-      version:app_versions!channels_version_fkey(
-        id,
-        name,
-        min_update_version,
-        native_packages
-      )
-    `)
+    .select('id, disable_auto_update, version')
     .eq('app_id', body.app_id)
     .eq('name', body.channel)
     .maybeSingle()
@@ -58,7 +49,22 @@ export async function getCurrentBundle(
     throw simpleError('cannot_access_channel', 'You can\'t access this channel', { app_id: body.app_id, channel: body.channel })
   }
 
-  const version = channelRow.version as ChannelVersionRow | null
+  // The app_versions embed would be filtered by app_versions RLS (app.read_bundles),
+  // so channel.read-only callers would get a null bundle. channel.read was verified
+  // above; load the linked version with the admin client scoped to this app.
+  let version: ChannelVersionRow | null = null
+  if (channelRow.version !== null && channelRow.version !== undefined) {
+    const { data: versionRow, error: versionError } = await supabaseAdmin(c)
+      .from('app_versions')
+      .select('id, name, min_update_version, native_packages')
+      .eq('app_id', body.app_id)
+      .eq('id', channelRow.version)
+      .maybeSingle()
+    if (versionError) {
+      throw simpleError('cannot_find_bundle', 'Cannot load channel bundle', { supabaseError: versionError, app_id: body.app_id, channel: body.channel })
+    }
+    version = versionRow as ChannelVersionRow | null
+  }
 
   return c.json({
     bundle_name: version?.name ?? null,

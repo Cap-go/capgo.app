@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   createSignedImageUrl: vi.fn(),
   updatePayload: vi.fn(),
   channelSelect: vi.fn(),
+  callerChannelSelect: vi.fn(),
+  adminChannelEq: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
@@ -37,7 +39,7 @@ function createSupabaseClientMock() {
         return {
           select: vi.fn().mockReturnThis(),
           eq: vi.fn().mockReturnThis(),
-          maybeSingle: mocks.channelSelect,
+          maybeSingle: mocks.callerChannelSelect,
         }
       }
       return {
@@ -79,9 +81,28 @@ function createSupabaseClientMock() {
   }
 }
 
+function createAdminClientMock() {
+  return {
+    from: (table: string) => {
+      if (table !== 'channels')
+        throw new Error(`unexpected admin table ${table}`)
+      const query = {
+        select: vi.fn(),
+        eq: vi.fn((...args: unknown[]) => {
+          mocks.adminChannelEq(...args)
+          return query
+        }),
+        maybeSingle: mocks.channelSelect,
+      }
+      query.select.mockReturnValue(query)
+      return query
+    },
+  }
+}
+
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   supabaseWithAuth: vi.fn(() => createSupabaseClientMock()),
-  supabaseAdmin: vi.fn(),
+  supabaseAdmin: vi.fn(() => createAdminClientMock()),
   supabaseApikey: vi.fn(() => createSupabaseClientMock()),
 }))
 
@@ -103,6 +124,8 @@ describe('app put settings fields', () => {
     mocks.unlockOnboardingApp.mockResolvedValue(undefined)
     mocks.createSignedImageUrl.mockResolvedValue('')
     mocks.channelSelect.mockResolvedValue({ data: { id: 7 }, error: null })
+    // Caller RLS hides channels (no channel.read); validation must not depend on it.
+    mocks.callerChannelSelect.mockResolvedValue({ data: null, error: null })
   })
 
   it('persists allow_preview, build_timeout_seconds, and default_upload_channel', async () => {
@@ -118,5 +141,30 @@ describe('app put settings fields', () => {
       build_timeout_seconds: 1800,
       default_upload_channel: 'production',
     }))
+    expect(mocks.adminChannelEq).toHaveBeenCalledWith('app_id', 'com.example.app')
+    expect(mocks.adminChannelEq).toHaveBeenCalledWith('name', 'production')
+    expect(mocks.callerChannelSelect).not.toHaveBeenCalled()
+  })
+
+  it('rejects a default_upload_channel that does not exist for the app', async () => {
+    mocks.channelSelect.mockResolvedValue({ data: null, error: null })
+    await expect(put(createContext(), 'com.example.app', {
+      default_upload_channel: 'missing',
+    }, { key: 'test-key' } as any)).rejects.toMatchObject({ status: 400, cause: { error: 'invalid_default_upload_channel' } })
+    expect(mocks.updatePayload).not.toHaveBeenCalled()
+  })
+
+  it.each([60, 6 * 60 * 60 + 1, Number.NaN, '900'])('rejects out-of-range build_timeout_seconds %s', async (value) => {
+    await expect(put(createContext(), 'com.example.app', {
+      build_timeout_seconds: value as number,
+    }, { key: 'test-key' } as any)).rejects.toMatchObject({ status: 400, cause: { error: 'invalid_build_timeout_seconds' } })
+    expect(mocks.updatePayload).not.toHaveBeenCalled()
+  })
+
+  it('accepts build_timeout_seconds at the range bounds and truncates fractions', async () => {
+    await put(createContext(), 'com.example.app', { build_timeout_seconds: 300.9 }, { key: 'test-key' } as any)
+    expect(mocks.updatePayload).toHaveBeenLastCalledWith(expect.objectContaining({ build_timeout_seconds: 300 }))
+    await put(createContext(), 'com.example.app', { build_timeout_seconds: 21600 }, { key: 'test-key' } as any)
+    expect(mocks.updatePayload).toHaveBeenLastCalledWith(expect.objectContaining({ build_timeout_seconds: 21600 }))
   })
 })
