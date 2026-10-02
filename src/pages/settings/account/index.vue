@@ -280,10 +280,9 @@ async function performAccountDeletion(password: string) {
 
   isDeletingAccount.value = true
   try {
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email: main.auth.email,
+    const { error: signInError } = await supabase.auth.reauthenticate({
       password,
-      options: captchaKey.value ? { captchaToken: deleteAccountCaptchaToken.value } : undefined,
+      captchaToken: captchaKey.value ? deleteAccountCaptchaToken.value : undefined,
     })
     if (signInError) {
       deleteAccountCaptchaToken.value = ''

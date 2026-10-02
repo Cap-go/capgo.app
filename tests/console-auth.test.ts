@@ -125,6 +125,18 @@ describe('console Better Auth', () => {
     }
   })
 
+  it('keeps the existing verified-email and recent-auth account removal contract', async () => {
+    const account = await signup()
+    const send = await request('/auth/email-otp/send-verification-otp', { email: account.email, type: 'email-verification' }, account.token)
+    expect(send.status, await send.clone().text()).toBe(200)
+    const otp = messages.findLast(message => message.to === account.email && message.text.startsWith('Your verification'))!.text.match(/\b\d{6}\b/)![0]
+    expect((await request('/auth/console-verify-email', { token: otp }, account.token)).status).toBe(200)
+    expect((await request('/auth/console-reauthenticate', { password }, account.token)).status).toBe(200)
+    const removal = await request('/private/console/query', { kind: 'rpc', name: 'delete_user', args: [], operations: [] }, account.token)
+    expect(removal.status).toBe(200)
+    expect((await removal.json() as { error: unknown }).error).toBeNull()
+  })
+
   it('requires TOTP after password recovery and revokes old sessions', async () => {
     const account = await signup()
     const enrollment = await request('/auth/two-factor/enable', { password }, account.token)
@@ -140,6 +152,10 @@ describe('console Better Auth', () => {
     const session = await (await request('/auth/console-session', undefined, verification.headers.get('set-auth-token') ?? verified.token)).json() as { session: { mfa_verified: boolean, user: { factors: unknown[] } } }
     expect(session.session.mfa_verified).toBe(true)
     expect(session.session.user.factors).toHaveLength(1)
+    const verifiedToken = verification.headers.get('set-auth-token') ?? verified.token
+    expect((await request('/auth/console-reauthenticate', { password: 'incorrect-password' }, verifiedToken)).status).toBe(401)
+    expect((await request('/auth/console-reauthenticate', { password }, verifiedToken)).status).toBe(200)
+    expect((await (await request('/auth/console-session', undefined, verifiedToken)).json() as typeof session).session.mfa_verified).toBe(true)
 
     const reset = await request('/auth/request-password-reset', { email: account.email, redirectTo: `${base}/forgot_password` })
     expect(reset.status).toBe(200)

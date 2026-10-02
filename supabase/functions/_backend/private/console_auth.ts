@@ -6,7 +6,7 @@ import { verifyCaptchaToken } from '../utils/captcha.ts'
 import { CONSOLE_SESSION_PREFIX, consoleAuthHeaders, createConsoleAuth, getConsoleSession } from '../utils/console_auth.ts'
 import { getAllowedCorsOrigin, quickError } from '../utils/hono.ts'
 import { captureOrganizationInvitationPosthogEvent } from '../utils/organization_invitation_posthog.ts'
-import { getPasswordPolicyValidationErrors } from '../utils/password_policy.ts'
+import { getPasswordPolicyValidationErrors, getPasswordUtf8ByteLength } from '../utils/password_policy.ts'
 import { isAccountRateLimited, isIPRateLimited, recordFailedAccountAuth, recordFailedAuth } from '../utils/rate_limit.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 import { getEnv } from '../utils/utils.ts'
@@ -117,6 +117,38 @@ app.post('/console-accept-invitation', async (c) => {
     }
     await instance.close()
   }
+})
+
+app.post('/console-reauthenticate', async (c) => {
+  if ((await isIPRateLimited(c)).limited)
+    return quickError(429, 'rate_limited', 'Too many attempts')
+  const body = z.object({ password: z.string().min(1).refine(password => getPasswordUtf8ByteLength(password) <= 72), captchaToken: z.string().optional() }).safeParse(await c.req.json())
+  if (!body.success)
+    return quickError(400, 'invalid_body', 'Invalid reauthentication request')
+  const captchaSecret = getEnv(c, 'CAPTCHA_SECRET_KEY')
+  if (captchaSecret)
+    await verifyCaptchaToken(c, body.data.captchaToken ?? '', captchaSecret)
+  const instance = createConsoleAuth(c)
+  try {
+    const session = await getConsoleSession(instance, c.req.raw.headers)
+    if (!session || (session.user.twoFactorEnabled && !session.mfaVerified) || session.session.impersonatedBy)
+      return quickError(401, 'not_authenticated', 'Not authenticated')
+    if ((await isAccountRateLimited(c, session.user.email)).limited)
+      return quickError(429, 'rate_limited', 'Too many attempts')
+    try {
+      await instance.auth.api.verifyPassword({ body: { password: body.data.password }, headers: consoleAuthHeaders(c.req.raw.headers) })
+    }
+    catch {
+      await recordFailedAuth(c)
+      await recordFailedAccountAuth(c, session.user.email)
+      return quickError(401, 'invalid_password', 'Invalid password')
+    }
+    // Keep the existing deletion RPC's recent-auth proof without creating an
+    // unverified MFA login or returning the internal database JWT.
+    await instance.database.query('UPDATE auth.users SET last_sign_in_at = now() WHERE id = $1::uuid', [session.user.id])
+    return c.json({ status: 'ok' })
+  }
+  finally { await instance.close() }
 })
 
 app.get('/console-session', async (c) => {

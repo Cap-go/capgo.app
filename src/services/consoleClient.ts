@@ -130,6 +130,9 @@ export function createConsoleClient(_host?: string, _key?: string, options?: { a
       void getSession().then(result => listener('INITIAL_SESSION', result.data.session))
       return { data: { subscription: { unsubscribe: () => listeners.delete(listener) } } }
     },
+    async reauthenticate(body: { password: string, captchaToken?: string }) {
+      return invoke('auth/console-reauthenticate', { body })
+    },
     async signInWithPassword(body: { email: string, password: string, options?: { captchaToken?: string } }) {
       return authResult(await betterAuth.signIn.email({ email: body.email, password: body.password, fetchOptions: { headers: { 'x-captcha-response': body.options?.captchaToken ?? '' } } }))
     },
