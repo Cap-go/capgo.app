@@ -59,6 +59,7 @@ describe('rbac permission infra errors', () => {
     vi.clearAllMocks()
     pgClientSerial = 0
     drizzlePgClientsSeen.length = 0
+    getPgClientMock.mockImplementation(() => ({ clientId: ++pgClientSerial }))
   })
 
   it('checkPermission returns false for real ACL denials', async () => {
@@ -131,7 +132,7 @@ describe('rbac permission infra errors', () => {
       .mockImplementationOnce(() => {
         throw new Error('timeout exceeded when trying to connect')
       })
-      .mockImplementation(() => ({ clientId: ++pgClientSerial }))
+      .mockImplementationOnce(() => ({ clientId: ++pgClientSerial }))
     executeMock.mockResolvedValueOnce({ rows: [{ allowed: true }] })
 
     await expect(checkPermissionPgFreshRetry(
@@ -146,6 +147,25 @@ describe('rbac permission infra errors', () => {
     expect(getPgClientMock).toHaveBeenCalledTimes(2)
     expect(waitAuthPgRetryJitterMock).toHaveBeenCalledTimes(1)
     expect(closeClientMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('checkPermissionPgFreshRetry rethrows non-transient pool acquisition failures', async () => {
+    const configError = new Error('Missing DATABASE_URL environment variable')
+    getPgClientMock.mockImplementationOnce(() => {
+      throw configError
+    })
+
+    await expect(checkPermissionPgFreshRetry(
+      makeContext(),
+      'app.upload_bundle',
+      { appId: 'ai.offthetools.app' },
+      '00000000-0000-4000-8000-000000000001',
+      'capgo_test_key',
+      false,
+    )).rejects.toBe(configError)
+
+    expect(getPgClientMock).toHaveBeenCalledTimes(1)
+    expect(waitAuthPgRetryJitterMock).not.toHaveBeenCalled()
   })
 
   it('checkPermissionPgFreshRetry does not retry non-transient permission failures', async () => {

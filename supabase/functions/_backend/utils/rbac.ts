@@ -443,6 +443,9 @@ export async function checkPermissionPgFreshRetry(
       }
       if (error instanceof HTTPException)
         throw error
+      // Pool acquisition failures that are not transient are infra/config faults, not ACL denials.
+      if (!pgClient && !isTransientPgError(error))
+        throw error
       return handlePermissionCheckError(c, permission, scope, error, 'checkPermissionPg')
     }
     finally {
