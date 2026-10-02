@@ -1,4 +1,5 @@
 import { test as base, expect } from '@playwright/test'
+import { dismissSupportPrompt } from './dismissSupportPrompt'
 
 // Extend basic test fixture
 export const test = base.extend({
@@ -28,6 +29,8 @@ export const test = base.extend({
 
         try {
           await page.waitForURL(targetUrl, { timeout: attempt === 2 ? 30000 : 10000 })
+          if (email === 'test@capgo.app')
+            await dismissSupportPrompt(page)
           return
         }
         catch (error) {
