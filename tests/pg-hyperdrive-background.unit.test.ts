@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it, vi } from 'vitest'
 
 const poolConstructor = vi.hoisted(() => vi.fn())
 
@@ -45,7 +45,7 @@ function createContext(options: {
 }
 
 describe('Hyperdrive background routing', () => {
-  it.concurrent('uses BACKGROUND_EU for background work when the binding exists', async () => {
+  it.concurrent('uses BACKGROUND_EU for background work when the binding exists', async ({ expect }) => {
     const { getDatabaseURL } = await import('../supabase/functions/_backend/utils/pg.ts')
     const context = createContext({
       flags: { useBackgroundHyperdrive: true },
@@ -59,7 +59,7 @@ describe('Hyperdrive background routing', () => {
     expect(context.set).toHaveBeenCalledWith('databaseSource', 'HYPERDRIVE_CAPGO_BACKGROUND_EU')
   })
 
-  it.concurrent('falls back to DIRECT_EU for background work when BACKGROUND_EU is absent', async () => {
+  it.concurrent('falls back to DIRECT_EU for background work when BACKGROUND_EU is absent', async ({ expect }) => {
     const { getDatabaseURL } = await import('../supabase/functions/_backend/utils/pg.ts')
     const context = createContext({
       flags: { useBackgroundHyperdrive: true },
@@ -71,7 +71,7 @@ describe('Hyperdrive background routing', () => {
     expect(getDatabaseURL(context)).toBe('postgres://direct-hyperdrive')
   })
 
-  it.concurrent('uses DIRECT_EU for user-facing requests even when BACKGROUND_EU exists', async () => {
+  it.concurrent('uses DIRECT_EU for user-facing requests even when BACKGROUND_EU exists', async ({ expect }) => {
     const { getDatabaseURL } = await import('../supabase/functions/_backend/utils/pg.ts')
     const context = createContext({
       env: {
@@ -83,7 +83,7 @@ describe('Hyperdrive background routing', () => {
     expect(getDatabaseURL(context)).toBe('postgres://direct-hyperdrive')
   })
 
-  it.concurrent('detects background work from /triggers/ route prefix', async () => {
+  it.concurrent('detects background work from /triggers/ route prefix', async ({ expect }) => {
     const { getDatabaseURL } = await import('../supabase/functions/_backend/utils/pg.ts')
     const context = createContext({
       url: 'https://api.capgo.app/triggers/on_version_update',
@@ -96,7 +96,7 @@ describe('Hyperdrive background routing', () => {
     expect(getDatabaseURL(context)).toBe('postgres://background-hyperdrive')
   })
 
-  it.concurrent('plugin runtime pg keeps DIRECT_EU without background binding support', async () => {
+  it.concurrent('plugin runtime pg keeps DIRECT_EU without background binding support', async ({ expect }) => {
     const { getDatabaseURL } = await import('../supabase/functions/_backend/plugin_runtime/utils/pg.ts')
     const context = createContext({
       flags: { useBackgroundHyperdrive: true },
@@ -109,7 +109,7 @@ describe('Hyperdrive background routing', () => {
     expect(getDatabaseURL(context)).toBe('postgres://direct-hyperdrive')
   })
 
-  it.concurrent('prefers BACKGROUND_EU over read replicas for optional background reads', async () => {
+  it.concurrent('prefers BACKGROUND_EU over read replicas for optional background reads', async ({ expect }) => {
     const { getDatabaseURL } = await import('../supabase/functions/_backend/utils/pg.ts')
     const context = createContext({
       flags: { useBackgroundHyperdrive: true },
@@ -123,7 +123,7 @@ describe('Hyperdrive background routing', () => {
     expect(getDatabaseURL(context, true)).toBe('postgres://background-hyperdrive')
   })
 
-  it.concurrent('uses a smaller pg pool max for background work', async () => {
+  it.concurrent('uses a smaller pg pool max for background work', async ({ expect }) => {
     poolConstructor.mockClear()
     const { getPgClient } = await import('../supabase/functions/_backend/utils/pg.ts')
     getPgClient(createContext({
