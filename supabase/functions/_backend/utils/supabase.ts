@@ -5,7 +5,7 @@ import type { PoolClient } from 'pg'
 import type { BillingPlanBentoState } from './billing_bento_tags.ts'
 import type { AuthInfo } from './hono.ts'
 import type { Database } from './supabase.types.ts'
-import type { ChannelDeviceOverrideIds, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, Order, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
+import type { ChannelDeviceOverrideIds, ChannelDevicePlatform, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, Order, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
 import { createClient } from '@supabase/supabase-js'
 import { HTTPException } from 'hono/http-exception'
 import { buildBillingPlanBentoTags } from './billing_bento_tags.ts'
@@ -1611,6 +1611,48 @@ export async function readChannelDeviceOverrideIdsSB(c: Context, app_id: string,
   return { into: partitioned.into, elsewhere: partitioned.elsewhere }
 }
 
+const CHANNEL_DEVICE_PLATFORMS: ChannelDevicePlatform[] = ['ios', 'android', 'electron']
+
+interface PublicChannelRow {
+  id: number
+  name: string
+  ios: boolean
+  android: boolean
+  electron: boolean
+}
+
+/**
+ * Platforms where `channel` is the public default. /updates serves devices that
+ * report no default_channel the first public channel enabled for their platform,
+ * ordered by name then id, so `rows` must keep that order.
+ */
+export function pickChannelDefaultPlatforms(rows: PublicChannelRow[], channel: VersionUsageChannel | string): ChannelDevicePlatform[] {
+  const channelId = typeof channel === 'object' && channel.id ? Number(channel.id) : null
+  const channelName = typeof channel === 'string' ? channel : (channel.name ?? null)
+  return CHANNEL_DEVICE_PLATFORMS.filter((platform) => {
+    const fallback = rows.find(row => row[platform])
+    if (!fallback)
+      return false
+    return channelId !== null ? fallback.id === channelId : fallback.name === channelName
+  })
+}
+
+export async function readChannelDefaultPlatformsSB(c: Context, app_id: string, channel: VersionUsageChannel | string): Promise<ChannelDevicePlatform[]> {
+  const { data, error } = await supabaseAdmin(c)
+    .from('channels')
+    .select('id, name, ios, android, electron')
+    .eq('app_id', app_id)
+    .eq('public', true)
+    .order('name', { ascending: true })
+    .order('id', { ascending: true })
+
+  if (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading public channels for device counts', app_id, error })
+    return []
+  }
+  return pickChannelDefaultPlatforms(data ?? [], channel)
+}
+
 /**
  * Count devices per version for the effective channel: default_channel matches
  * minus devices forced elsewhere, plus devices forced into the channel.
@@ -1655,6 +1697,21 @@ export async function readDeviceVersionCountsSB(c: Context, app_id: string, chan
     return {}
   }
 
+  const defaultChannelRows: Array<{ device_id: string, version_name: string | null }> = [...(data ?? [])]
+  const defaultForPlatforms = channelName ? (overrides?.defaultForPlatforms ?? []) : []
+  if (defaultForPlatforms.length) {
+    const { data: unreportedRows, error: unreportedError } = await supabase
+      .from('devices')
+      .select('device_id, version_name')
+      .eq('app_id', app_id)
+      .or('default_channel.is.null,default_channel.eq.')
+      .in('platform', defaultForPlatforms)
+    if (unreportedError)
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading default channel devices for version counts', error: unreportedError })
+    else
+      defaultChannelRows.push(...(unreportedRows ?? []))
+  }
+
   const forcedIntoRows: Array<{ device_id: string, version_name: string | null }> = []
   const into = channelName ? (overrides?.into ?? []) : []
   for (let index = 0; index < into.length; index += DEVICE_ID_FILTER_CHUNK) {
@@ -1670,7 +1727,7 @@ export async function readDeviceVersionCountsSB(c: Context, app_id: string, chan
     forcedIntoRows.push(...(chunkRows ?? []))
   }
 
-  return countChannelScopedDeviceVersions(data ?? [], forcedIntoRows, channelName ? overrides : undefined)
+  return countChannelScopedDeviceVersions(defaultChannelRows, forcedIntoRows, channelName ? overrides : undefined)
 }
 
 /**

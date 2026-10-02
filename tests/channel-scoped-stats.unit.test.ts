@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import * as pluginRuntimeCloudflare from '../supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts'
 import { buildDeviceChannelScopeCF, buildDeviceVersionCountsCFQuery, buildVersionUsageChannelFilterCF } from '../supabase/functions/_backend/utils/cloudflare.ts'
-import { countChannelScopedDeviceVersions, MAX_CHANNEL_DEVICE_OVERRIDES_FOR_COUNTS, partitionChannelDeviceOverrides } from '../supabase/functions/_backend/utils/supabase.ts'
+import { countChannelScopedDeviceVersions, MAX_CHANNEL_DEVICE_OVERRIDES_FOR_COUNTS, partitionChannelDeviceOverrides, pickChannelDefaultPlatforms } from '../supabase/functions/_backend/utils/supabase.ts'
 
 describe('version_usage channel filter', () => {
   it.concurrent('matches channel id with a legacy name fallback', () => {
@@ -30,7 +30,7 @@ describe('version_usage channel filter', () => {
   it.concurrent('keeps the plugin_runtime copy in sync', () => {
     expect(pluginRuntimeCloudflare.buildVersionUsageChannelFilterCF({ id: 42, name: 'production' }))
       .toBe(buildVersionUsageChannelFilterCF({ id: 42, name: 'production' }))
-    const overrides = { into: ['a'], elsewhere: ['b'] }
+    const overrides = { into: ['a'], elsewhere: ['b'], defaultForPlatforms: ['ios' as const] }
     expect(pluginRuntimeCloudflare.buildDeviceVersionCountsCFQuery('com.app', 'production', overrides))
       .toBe(buildDeviceVersionCountsCFQuery('com.app', 'production', overrides))
   })
@@ -51,11 +51,37 @@ describe('device version counts channel scope', () => {
     expect(query).toContain('WHERE version_name != \'\' AND (default_channel = \'production\' OR lower(device_id) IN (\'in-1\'))')
   })
 
+  it.concurrent('counts devices without a reported channel on platforms where the channel is the public default', () => {
+    expect(buildDeviceChannelScopeCF('production', { into: [], elsewhere: [], defaultForPlatforms: ['ios', 'android'] }))
+      .toBe('(default_channel = \'production\' OR (default_channel = \'\' AND platform IN (1, 0)))')
+
+    const scope = buildDeviceChannelScopeCF('production', { into: ['in-1'], elsewhere: ['out-1'], defaultForPlatforms: ['electron'] })
+    expect(scope).toBe('(((default_channel = \'production\' OR (default_channel = \'\' AND platform IN (2))) AND lower(device_id) NOT IN (\'out-1\')) OR lower(device_id) IN (\'in-1\'))')
+
+    expect(buildDeviceVersionCountsCFQuery('com.app', 'production')).toContain('argMax(double1, timestamp) AS platform')
+  })
+
   it.concurrent('escapes device ids and channel names', () => {
     const scope = buildDeviceChannelScopeCF('prod\'uction', { into: ['a\'b'], elsewhere: ['c\'d'] })
     expect(scope).toContain('default_channel = \'prod\'\'uction\'')
     expect(scope).toContain('IN (\'a\'\'b\')')
     expect(scope).toContain('NOT IN (\'c\'\'d\')')
+  })
+})
+
+describe('public default channel platforms', () => {
+  // Sorted by name then id, like the /updates fallback.
+  const rows = [
+    { id: 3, name: 'android-prod', ios: false, android: true, electron: false },
+    { id: 1, name: 'production', ios: true, android: true, electron: true },
+    { id: 2, name: 'zeta', ios: true, android: false, electron: false },
+  ]
+
+  it.concurrent('returns the platforms the channel serves by default', () => {
+    expect(pickChannelDefaultPlatforms(rows, { id: 1, name: 'production' })).toEqual(['ios', 'electron'])
+    expect(pickChannelDefaultPlatforms(rows, { id: 3 })).toEqual(['android'])
+    expect(pickChannelDefaultPlatforms(rows, 'zeta')).toEqual([])
+    expect(pickChannelDefaultPlatforms([], 'production')).toEqual([])
   })
 })
 
