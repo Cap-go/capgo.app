@@ -2,10 +2,16 @@ import { HTTPException } from 'hono/http-exception'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const executeMock = vi.fn()
-const getPgClientMock = vi.fn(() => ({}))
-const getDrizzleClientMock = vi.fn(() => ({
-  execute: executeMock,
-}))
+let pgClientSerial = 0
+const getPgClientMock = vi.fn(() => ({ clientId: ++pgClientSerial }))
+const drizzlePgClientsSeen: { clientId: number }[] = []
+const getDrizzleClientMock = vi.fn((pgClient?: { clientId: number }) => {
+  if (pgClient)
+    drizzlePgClientsSeen.push(pgClient)
+  return {
+    execute: executeMock,
+  }
+})
 const closeClientMock = vi.fn()
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
@@ -19,7 +25,13 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   getPgClient: getPgClientMock,
 }))
 
-const { checkPermission, checkPermissionPg } = await import('../supabase/functions/_backend/utils/rbac.ts')
+const waitAuthPgRetryJitterMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
+
+vi.mock('../supabase/functions/_backend/utils/pg_auth_retry.ts', () => ({
+  waitAuthPgRetryJitter: waitAuthPgRetryJitterMock,
+}))
+
+const { checkPermission, checkPermissionPg, checkPermissionPgFreshRetry } = await import('../supabase/functions/_backend/utils/rbac.ts')
 
 function makeContext(auth: Record<string, unknown> | undefined = {
   userId: '00000000-0000-4000-8000-000000000001',
@@ -45,6 +57,9 @@ function makeContext(auth: Record<string, unknown> | undefined = {
 describe('rbac permission infra errors', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    pgClientSerial = 0
+    drizzlePgClientsSeen.length = 0
+    getPgClientMock.mockImplementation(() => ({ clientId: ++pgClientSerial }))
   })
 
   it('checkPermission returns false for real ACL denials', async () => {
@@ -55,7 +70,7 @@ describe('rbac permission infra errors', () => {
       .toBe(false)
   })
 
-  it('checkPermission surfaces connection failures as 503 upstream_unavailable', async () => {
+  it('checkPermission surfaces connection failures as 503 database_unavailable', async () => {
     executeMock.mockRejectedValueOnce(Object.assign(new Error('Connection terminated unexpectedly'), {
       code: 'ECONNRESET',
     }))
@@ -65,8 +80,8 @@ describe('rbac permission infra errors', () => {
       .toMatchObject({
         status: 503,
         cause: {
-          error: 'upstream_unavailable',
-          message: 'Permission check temporarily unavailable',
+        error: 'database_unavailable',
+        message: 'Database temporarily unavailable',
         },
       })
 
@@ -86,9 +101,90 @@ describe('rbac permission infra errors', () => {
     )).rejects.toMatchObject({
       status: 503,
       cause: {
-        error: 'upstream_unavailable',
+        error: 'database_unavailable',
       },
     })
+  })
+
+  it('checkPermissionPgFreshRetry retries transient failures on a fresh connection', async () => {
+    executeMock
+      .mockRejectedValueOnce(new Error('timeout exceeded when trying to connect'))
+      .mockResolvedValueOnce({ rows: [{ allowed: true }] })
+
+    await expect(checkPermissionPgFreshRetry(
+      makeContext(),
+      'app.upload_bundle',
+      { appId: 'ai.offthetools.app' },
+      '00000000-0000-4000-8000-000000000001',
+      'capgo_test_key',
+      false,
+    )).resolves.toBe(true)
+
+    expect(getPgClientMock).toHaveBeenCalledTimes(2)
+    expect(closeClientMock).toHaveBeenCalledTimes(2)
+    expect(waitAuthPgRetryJitterMock).toHaveBeenCalledTimes(1)
+    expect(drizzlePgClientsSeen).toHaveLength(2)
+    expect(drizzlePgClientsSeen[0].clientId).not.toBe(drizzlePgClientsSeen[1].clientId)
+  })
+
+  it('checkPermissionPgFreshRetry retries transient pool acquisition failures', async () => {
+    getPgClientMock
+      .mockImplementationOnce(() => {
+        throw new Error('timeout exceeded when trying to connect')
+      })
+      .mockImplementationOnce(() => ({ clientId: ++pgClientSerial }))
+    executeMock.mockResolvedValueOnce({ rows: [{ allowed: true }] })
+
+    await expect(checkPermissionPgFreshRetry(
+      makeContext(),
+      'app.upload_bundle',
+      { appId: 'ai.offthetools.app' },
+      '00000000-0000-4000-8000-000000000001',
+      'capgo_test_key',
+      false,
+    )).resolves.toBe(true)
+
+    expect(getPgClientMock).toHaveBeenCalledTimes(2)
+    expect(waitAuthPgRetryJitterMock).toHaveBeenCalledTimes(1)
+    expect(closeClientMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('checkPermissionPgFreshRetry rethrows non-transient pool acquisition failures', async () => {
+    const configError = new Error('Missing DATABASE_URL environment variable')
+    getPgClientMock.mockImplementationOnce(() => {
+      throw configError
+    })
+
+    await expect(checkPermissionPgFreshRetry(
+      makeContext(),
+      'app.upload_bundle',
+      { appId: 'ai.offthetools.app' },
+      '00000000-0000-4000-8000-000000000001',
+      'capgo_test_key',
+      false,
+    )).rejects.toBe(configError)
+
+    expect(getPgClientMock).toHaveBeenCalledTimes(1)
+    expect(waitAuthPgRetryJitterMock).not.toHaveBeenCalled()
+  })
+
+  it('checkPermissionPgFreshRetry does not retry non-transient permission failures', async () => {
+    const invalidUuidError = Object.assign(new Error('invalid input syntax for type uuid: "bad"'), {
+      code: '22P02',
+    })
+    executeMock.mockRejectedValueOnce(invalidUuidError)
+
+    await expect(checkPermissionPgFreshRetry(
+      makeContext(),
+      'org.read',
+      { orgId: 'bad' },
+      '00000000-0000-4000-8000-000000000001',
+      'capgo_test_key',
+      false,
+    )).resolves.toBe(false)
+
+    expect(getPgClientMock).toHaveBeenCalledTimes(1)
+    expect(waitAuthPgRetryJitterMock).not.toHaveBeenCalled()
   })
 
   it('checkPermissionPg treats invalid UUID cast errors as ACL deny, not 503', async () => {
@@ -139,7 +235,7 @@ describe('rbac permission infra errors', () => {
       'capgo_test_key',
     )).rejects.toMatchObject({
       status: 503,
-      cause: { error: 'upstream_unavailable' },
+      cause: { error: 'database_unavailable' },
     })
   })
 
@@ -200,7 +296,7 @@ describe('rbac permission infra errors', () => {
       { orgId: '00000000-0000-4000-8000-000000000099' },
     )).rejects.toMatchObject({
       status: 503,
-      cause: { error: 'upstream_unavailable' },
+      cause: { error: 'database_unavailable' },
     })
   })
 
@@ -223,7 +319,7 @@ describe('rbac permission infra errors', () => {
       null,
     )).rejects.toMatchObject({
       status: 503,
-      cause: { error: 'upstream_unavailable' },
+      cause: { error: 'database_unavailable' },
     })
   })
 })

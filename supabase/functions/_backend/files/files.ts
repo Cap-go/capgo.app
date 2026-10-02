@@ -14,10 +14,11 @@ import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { createManifestSizeReceipt, MANIFEST_SIZE_RECEIPT_HEADER } from '../utils/manifest_size_receipt.ts'
 import { MANIFEST_UPLOAD_CAPABILITY_HEADER, verifyManifestUploadCapability } from '../utils/manifest_upload_capability.ts'
 import { closeClient, getAppByIdPg, getDrizzleClient, getPgClient } from '../utils/pg.ts'
+import { throwDatabaseUnavailable } from '../utils/pg_auth_lookup.ts'
 import { getAppByAppIdPg, getUserIdFromApikey } from '../utils/pg_files.ts'
 import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
 import { buildRateLimitInfo, onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
-import { checkPermissionPg } from '../utils/rbac.ts'
+import { checkPermissionPgFreshRetry } from '../utils/rbac.ts'
 import { createStatsBandwidth } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 import { backgroundTask, getEnv } from '../utils/utils.ts'
@@ -26,7 +27,7 @@ import { app as files_config } from './files_config.ts'
 import { parseUploadMetadata } from './parse.ts'
 import { DEFAULT_RETRY_PARAMS, RetryBucket } from './retry.ts'
 import { supabaseTusCreateHandler, supabaseTusHeadHandler, supabaseTusPatchHandler } from './supabaseTusProxy.ts'
-import { ALLOWED_HEADERS, ALLOWED_METHODS, buildFileHttpMetadata, EXPOSED_HEADERS, getSafeAttachmentReadCandidateKeys, headFirstExistingAttachmentCandidate, isRetryableDurableObjectResetError, MAX_UPLOAD_LENGTH_BYTES, NO_TRANSFORM_CACHE_CONTROL, parseAppScopedAttachmentPath, toBase64, TUS_EXTENSIONS, TUS_VERSION, withNoTransformCacheControl, X_CHECKSUM_SHA256, X_UPLOAD_HANDLER_RETRYABLE } from './util.ts'
+import { ALLOWED_HEADERS, ALLOWED_METHODS, buildFileHttpMetadata, encodeR2KeyForUploadLocation, EXPOSED_HEADERS, getSafeAttachmentReadCandidateKeys, headFirstExistingAttachmentCandidate, isRetryableDurableObjectResetError, MAX_UPLOAD_LENGTH_BYTES, NO_TRANSFORM_CACHE_CONTROL, parseAppScopedAttachmentPath, toBase64, TUS_EXTENSIONS, TUS_VERSION, withNoTransformCacheControl, X_CHECKSUM_SHA256, X_UPLOAD_HANDLER_RETRYABLE } from './util.ts'
 
 const DO_CALL_TIMEOUT = 1000 * 60 * 30 // 30 minutes
 const DO_FETCH_RETRY_ATTEMPTS = 3
@@ -879,7 +880,16 @@ async function uploadHandler(c: Context) {
     requestInit.body = uploadBody
     requestInit.duplex = 'half'
   }
-  const request = new Request(c.req.url, requestInit)
+  const requestUrl = new URL(c.req.url)
+  if (method === 'HEAD' || method === 'PATCH') {
+    const uploadPrefix = `/upload/${ATTACHMENT_PREFIX}/`
+    const prefixIndex = requestUrl.pathname.indexOf(uploadPrefix)
+    if (prefixIndex >= 0) {
+      requestUrl.pathname = `${requestUrl.pathname.slice(0, prefixIndex + uploadPrefix.length)}${encodeR2KeyForUploadLocation(normalizedRequestId)}`
+    }
+  }
+
+  const request = new Request(requestUrl, requestInit)
   return await fetchUploadHandlerWithRetry(c, handler, request)
 }
 
@@ -1161,7 +1171,11 @@ async function checkWriteAppAccess(c: Context, next: Next) {
 
   try {
     // Get user_id from apikey using Postgres
-    const userId = await getUserIdFromApikey(c, capgkey, drizzleClient)
+    const userLookup = await getUserIdFromApikey(c, capgkey, drizzleClient)
+    if (userLookup.kind === 'db_error')
+      throwDatabaseUnavailable(c, 'checkWriteAppAccess.getUserIdFromApikey', userLookup.error, { app_id })
+
+    const userId = userLookup.kind === 'ok' ? userLookup.value : null
 
     cloudlog({
       requestId: c.get('requestId'),
@@ -1189,17 +1203,17 @@ async function checkWriteAppAccess(c: Context, next: Next) {
 
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'checkWriteAppAccess - checking app permissions via checkPermissionPg',
+      message: 'checkWriteAppAccess - checking app permissions via checkPermissionPgFreshRetry',
       userId,
       app_id,
     })
 
     // Use the new RBAC permission check
-    const hasPermission = await checkPermissionPg(c, 'app.upload_bundle', { appId: app_id }, drizzleClient, userId, capgkey)
+    const hasPermission = await checkPermissionPgFreshRetry(c, 'app.upload_bundle', { appId: app_id }, userId, capgkey, false)
 
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'checkWriteAppAccess - checkPermissionPg result',
+      message: 'checkWriteAppAccess - checkPermissionPgFreshRetry result',
       hasPermission,
     })
 
@@ -1220,7 +1234,11 @@ async function checkWriteAppAccess(c: Context, next: Next) {
     }
 
     // Get app using Postgres
-    const app = await getAppByAppIdPg(c, app_id, drizzleClient)
+    const appLookup = await getAppByAppIdPg(c, app_id, drizzleClient)
+    if (appLookup.kind === 'db_error')
+      throwDatabaseUnavailable(c, 'checkWriteAppAccess.getAppByAppIdPg', appLookup.error, { app_id })
+
+    const app = appLookup.kind === 'ok' ? appLookup.value : null
 
     if (!app) {
       cloudlog({

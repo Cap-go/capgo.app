@@ -183,6 +183,31 @@ describe('files manifest upload capabilities', () => {
     expect(doFetchMock).toHaveBeenCalledOnce()
   })
 
+  it.each(['HEAD', 'PATCH'] as const)('forwards the normalized path for %s requests that use a Supabase TUS ID', async (method) => {
+    const capability = await createToken()
+    const supabaseTusId = btoa(`capgo/${path}/00000000-0000-0000-0000-000000000002`)
+    const headers = new Headers({
+      'Tus-Resumable': '1.0.0',
+      'X-Capgo-Upload-Token': capability.token,
+    })
+    let body: string | undefined
+    if (method === 'PATCH') {
+      headers.set('Content-Type', 'application/offset+octet-stream')
+      headers.set('Upload-Offset', '0')
+      body = 'x'
+    }
+    const app = await createFilesApp()
+
+    const response = await app.fetch(new Request(
+      `http://localhost/files/upload/attachments/${encodeURIComponent(supabaseTusId)}`,
+      { method, headers, body },
+    ), buildEnv(), { waitUntil: () => {} } as any)
+
+    expect(response.status).toBe(method === 'PATCH' ? 204 : 200)
+    const forwardedRequest = doFetchMock.mock.calls[0]?.[0] as Request
+    expect(new URL(forwardedRequest.url).pathname).toBe(`/files/upload/attachments/${encodePathForRoute(path)}`)
+  })
+
   it('does not fall back to an accompanying API key when the capability is invalid', async () => {
     const app = await createFilesApp()
     const response = await app.fetch(new Request('http://localhost/files/upload/attachments', {

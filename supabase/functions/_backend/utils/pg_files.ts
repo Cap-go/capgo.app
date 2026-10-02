@@ -1,8 +1,10 @@
 import type { Context } from 'hono'
 import type { getDrizzleClient } from './pg.ts'
+import type { PgAuthLookupResult } from './pg_auth_lookup.ts'
 import { eq, sql } from 'drizzle-orm'
 import { cloudlog } from './logging.ts'
 import { logPgError } from './pg.ts'
+import { withAuthPgRetry } from './pg_auth_retry.ts'
 import * as schema from './postgres_schema.ts'
 
 /**
@@ -12,7 +14,7 @@ export async function getUserIdFromApikey(
   c: Context,
   apikey: string,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
-): Promise<string | null> {
+): Promise<PgAuthLookupResult<string>> {
   try {
     cloudlog({
       requestId: c.get('requestId'),
@@ -20,10 +22,9 @@ export async function getUserIdFromApikey(
       apikeyPrefix: apikey?.substring(0, 15),
     })
 
-    // Call the existing Postgres function
-    const result = await drizzleClient.execute<{ get_user_id: string }>(
+    const result = await withAuthPgRetry(() => drizzleClient.execute<{ get_user_id: string }>(
       sql`SELECT get_user_id(${apikey})`,
-    )
+    ))
 
     const userId = result.rows[0]?.get_user_id ?? null
 
@@ -33,11 +34,14 @@ export async function getUserIdFromApikey(
       userId,
     })
 
-    return userId
+    if (!userId)
+      return { kind: 'not_found' }
+
+    return { kind: 'ok', value: userId }
   }
   catch (e: unknown) {
     logPgError(c, 'getUserIdFromApikey', e)
-    return null
+    return { kind: 'db_error', error: e }
   }
 }
 
@@ -48,9 +52,9 @@ export async function getAppByAppIdPg(
   c: Context,
   appId: string,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
-): Promise<{ app_id: string, owner_org: string } | null> {
+): Promise<PgAuthLookupResult<{ app_id: string, owner_org: string }>> {
   try {
-    const app = await drizzleClient
+    const app = await withAuthPgRetry(() => drizzleClient
       .select({
         app_id: schema.apps.app_id,
         owner_org: schema.apps.owner_org,
@@ -58,12 +62,15 @@ export async function getAppByAppIdPg(
       .from(schema.apps)
       .where(eq(schema.apps.app_id, appId))
       .limit(1)
-      .then(data => data[0])
+      .then(data => data[0]))
 
-    return app ?? null
+    if (!app)
+      return { kind: 'not_found' }
+
+    return { kind: 'ok', value: app }
   }
   catch (e: unknown) {
     logPgError(c, 'getAppByAppIdPg', e)
-    return null
+    return { kind: 'db_error', error: e }
   }
 }

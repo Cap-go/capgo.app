@@ -332,6 +332,7 @@ describe('files attachment HEAD reads on workerd/R2', () => {
             headers: {
               'content-length': '3478395',
               'x-capgo-manifest-size-receipt': 'stale-cached-receipt',
+              'x-test-cache-hit': 'yes',
             },
           })
         },
@@ -346,6 +347,8 @@ describe('files attachment HEAD reads on workerd/R2', () => {
       { waitUntil: () => { } } as any,
     )
 
+    expect(response.status).toBe(200)
+    expect(response.headers.get('x-test-cache-hit')).toBe('yes')
     expect(response.headers.get('x-capgo-manifest-size-receipt')).toBeNull()
   })
 
