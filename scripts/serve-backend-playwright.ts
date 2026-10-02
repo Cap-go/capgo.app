@@ -7,9 +7,6 @@ import { getPlaywrightStripeApiBaseUrl } from './playwright-stripe'
 import { getSupabaseWorktreeConfig } from './supabase-worktree-config'
 import { getSupabaseStatus } from './supabase-worktree-status'
 
-// Browser password-reset tests exercise real delivery to the local mailbox.
-env.CONSOLE_LOCAL_SMTP = 'true'
-
 const repoRoot = process.cwd()
 const sourceEnvPath = resolve(repoRoot, 'supabase/functions/.env')
 const generatedEnvPath = resolve(repoRoot, '.context/playwright/supabase-functions.playwright.env')
@@ -106,8 +103,12 @@ async function ensureSupabaseStarted() {
   const maxAttempts = 4
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    if (hasHealthySupabaseApi(getSupabaseStatus()))
+    const healthy = hasHealthySupabaseApi(getSupabaseStatus())
+    const mailboxReady = await fetch(`http://127.0.0.1:${supabaseConfig.ports.inbucket}/`, { signal: AbortSignal.timeout(3000) }).then(response => response.ok).catch(() => false)
+    if (healthy && mailboxReady)
       return
+    if (healthy)
+      stopSupabase()
 
     const startResult = spawnSync('bun', ['run', 'supabase:start', ...(supabaseStartExclude ? ['-x', supabaseStartExclude] : [])], {
       cwd: repoRoot,

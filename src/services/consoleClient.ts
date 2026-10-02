@@ -66,7 +66,7 @@ export function createConsoleClient(_host?: string, _key?: string, options?: { a
   function saveToken(value: string | null) {
     token = value
     if (persist) {
-      if (value)
+      if (value !== null)
         localStorage.setItem(TOKEN_KEY, value)
       else
         localStorage.removeItem(TOKEN_KEY)
@@ -88,8 +88,15 @@ export function createConsoleClient(_host?: string, _key?: string, options?: { a
         signal: opts.signal,
         body: opts.body == null ? undefined : binary || typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body),
       })
-      if (!response.ok)
-        return { data: null, error: new FunctionsHttpError(response) }
+      if (!response.ok) {
+        const error = new FunctionsHttpError(response)
+        const body = await response.clone().json().catch(() => null) as { error?: unknown } | null
+        if (typeof body?.error === 'string') {
+          error.code = body.error
+          error.message = body.error
+        }
+        return { data: null, error }
+      }
       return { data: await response.json() as T, error: null }
     }
     catch (error) {
@@ -98,6 +105,9 @@ export function createConsoleClient(_host?: string, _key?: string, options?: { a
   }
 
   async function getSession() {
+    // An empty persisted token records local logout even if cookie revocation fails.
+    if (token === '')
+      return { data: { session: null, user: null }, error: null }
     const result = await invoke<{ session: Session | null }>('auth/console-session', { method: 'GET' })
     const session = result.data?.session ?? null
     if (session)
@@ -126,6 +136,10 @@ export function createConsoleClient(_host?: string, _key?: string, options?: { a
 
   const auth = {
     getSession,
+    getSessionCacheKey: () => token || 'anonymous',
+    clearSession() {
+      saveToken(null)
+    },
     async getClaims() {
       const result = await getSession()
       return { data: result.data.session ? { claims: { sub: result.data.session.user.id, email: result.data.session.user.email, session_id: result.data.session.access_token } } : null, error: result.error }
@@ -151,18 +165,19 @@ export function createConsoleClient(_host?: string, _key?: string, options?: { a
     async signOut(options?: { scope?: 'others' | 'global' | 'local' }) {
       if (options?.scope === 'others')
         return normalizeAuth(await betterAuth.revokeOtherSessions())
-      if (!options?.scope || options.scope === 'global') {
-        const revoked = await betterAuth.revokeSessions()
-        if (revoked.error)
-          return normalizeAuth(revoked)
+      try {
+        if (!options?.scope || options.scope === 'global') {
+          const revoked = await betterAuth.revokeSessions()
+          if (revoked.error)
+            return normalizeAuth(revoked)
+        }
+        return normalizeAuth(await betterAuth.signOut())
       }
-      const result = await betterAuth.signOut()
-      if (!result.error) {
-        saveToken(null)
+      finally {
+        saveToken('')
         for (const listener of listeners)
           listener('SIGNED_OUT', null)
       }
-      return normalizeAuth(result)
     },
     async updateUser(body: { email?: string, password?: string, current_password?: string }) {
       if (body.password) {
@@ -176,8 +191,8 @@ export function createConsoleClient(_host?: string, _key?: string, options?: { a
     async resend(body: { email: string, type: string, options?: { captchaToken?: string } }) {
       return normalizeAuth(await betterAuth.sendVerificationEmail({ email: body.email, callbackURL: `${location.origin}/login`, fetchOptions: { headers: { 'x-captcha-response': body.options?.captchaToken ?? '' } } }))
     },
-    async signInWithOtp(body: { email: string, options?: unknown }) {
-      return normalizeAuth(await betterAuth.emailOtp.sendVerificationOtp({ email: body.email, type: 'email-verification' }))
+    async signInWithOtp(body: { email: string, options?: { captchaToken?: string, shouldCreateUser?: boolean, data?: Record<string, unknown> } }) {
+      return normalizeAuth(await betterAuth.emailOtp.sendVerificationOtp({ email: body.email, type: 'email-verification', fetchOptions: { headers: { 'x-captcha-response': body.options?.captchaToken ?? '' } } }))
     },
     async signInWithSSO(body: { providerId?: string, domain?: string, options?: { redirectTo?: string, captchaToken?: string } }) {
       const result = await betterAuth.signIn.sso({ providerId: body.providerId, domain: body.domain, callbackURL: body.options?.redirectTo ?? `${location.origin}/sso-callback` })
@@ -237,10 +252,16 @@ export function createConsoleClient(_host?: string, _key?: string, options?: { a
       get(_target, method: string) {
         if (method === 'then') {
           execution ??= invoke<any>('private/console/query', { body: request, signal }).then((result) => {
-            if (result.error)
+            if (result.error) {
+              if (request.operations.some(operation => operation.method === 'throwOnError'))
+                throw result.error
               return { data: null, error: result.error, count: null }
+            }
             const value = result.data
-            return { ...value, error: value.error ? Object.assign(new Error(value.error.message), value.error) : null }
+            const error = value.error ? Object.assign(new Error(value.error.message), value.error) : null
+            if (error && request.operations.some(operation => operation.method === 'throwOnError'))
+              throw error
+            return { ...value, error }
           })
           return execution.then.bind(execution)
         }

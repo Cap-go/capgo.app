@@ -28,8 +28,7 @@ function buildCacheKey(sessionId: string, appId: string, from: Date, to: Date, k
 }
 
 async function getChartCacheSessionKey(supabase: ConsoleClient): Promise<string> {
-  const { data } = await supabase.auth.getClaims()
-  const sessionId = data?.claims?.session_id
+  const sessionId = supabase.auth.getSessionCacheKey()
   if (typeof sessionId === 'string' && sessionId.length > 0)
     return sessionId
   return 'anonymous'

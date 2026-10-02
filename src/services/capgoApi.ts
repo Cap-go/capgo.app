@@ -164,7 +164,7 @@ export async function getCapgoApiErrorCode(error: unknown): Promise<string | und
 /**
  * Call Capgo Cloudflare API with the same { data, error } shape as
  * supabase.functions.invoke. Capgo cloud console traffic uses VITE_API_HOST.
- * Self-host / local keep supabase.functions.invoke → /functions/v1.
+ * Self-host / local use the configured Capgo API host for auth and data alike.
  */
 export async function invokeCapgoApi<T = any>(
   path: string,

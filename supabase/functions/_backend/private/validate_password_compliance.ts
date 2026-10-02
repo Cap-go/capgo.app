@@ -171,8 +171,14 @@ app.post('/', async (c) => {
     if (auth.claims?.email?.toLowerCase() !== body.email.toLowerCase())
       return quickError(401, 'invalid_credentials', 'Invalid email or password')
     const captchaSecret = getEnv(c, 'CAPTCHA_SECRET_KEY')
-    if (captchaSecret)
-      await verifyCaptchaToken(c, body.captcha_token ?? '', captchaSecret)
+    if (captchaSecret) {
+      try {
+        await verifyCaptchaToken(c, body.captcha_token ?? '', captchaSecret)
+      }
+      catch {
+        return quickError(400, 'captcha_failed', 'CAPTCHA verification failed')
+      }
+    }
     const instance = createConsoleAuth(c)
     try {
       await instance.auth.api.verifyPassword({ headers: consoleAuthHeaders(c.req.raw.headers), body: { password: body.password } })

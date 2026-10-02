@@ -85,7 +85,8 @@ export async function withConsoleSsoDatabase<T>(c: Context, operation: (pool: Re
     return await operation(pool)
   }
   finally {
-    await pool.end()
+    if (getRuntimeKey() !== 'workerd')
+      await pool.end()
   }
 }
 

@@ -4,7 +4,7 @@ export interface AssignableRole {
   id: string
   name: string
   scope_type: string
-  description: string
+  description: string | null
   priority_rank: number
   is_assignable: boolean
 }

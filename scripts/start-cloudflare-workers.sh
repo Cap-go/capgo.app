@@ -135,6 +135,14 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# Only derive SMTP for the selected local stack, and never advertise a closed port.
+if [[ -z "${CONSOLE_SMTP_URL:-}" && "${SUPABASE_URL}" == "${SUPABASE_URL_FROM_STATUS}" && "${SUPABASE_URL}" =~ ^http://(127\.0\.0\.1|localhost):([0-9]+)$ ]]; then
+  LOCAL_SMTP_PORT=$((10#${BASH_REMATCH[2]} + 4))
+  if (( LOCAL_SMTP_PORT <= 65535 )) && (echo > /dev/tcp/127.0.0.1/${LOCAL_SMTP_PORT}) 2>/dev/null; then
+    CONSOLE_SMTP_URL="smtp://127.0.0.1:${LOCAL_SMTP_PORT}"
+  fi
+fi
+
 cat >> "${RUNTIME_ENV_FILE}" <<ENV_EOF
 MAIN_SUPABASE_DB_URL=${MAIN_SUPABASE_DB_URL}
 SUPABASE_DB_URL=${SUPABASE_DB_URL}
@@ -152,7 +160,7 @@ CONSOLE_REQUIRE_EMAIL_VERIFICATION=false
 BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-local-console-auth-development-secret-32-characters}
 JWT_SECRET=${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
 WEBAPP_URL=${WEBAPP_URL:-http://localhost:5173}
-CONSOLE_SMTP_URL=${CONSOLE_SMTP_URL:-smtp://127.0.0.1:$((${SUPABASE_URL##*:} + 4))}
+CONSOLE_SMTP_URL=${CONSOLE_SMTP_URL:-}
 RATE_LIMIT_API_KEY=999999
 RATE_LIMIT_FAILED_AUTH=999999
 RATE_LIMIT_CHANNEL_SELF_IP=999999

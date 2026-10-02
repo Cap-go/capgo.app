@@ -16,7 +16,7 @@ export interface OrgMemberRbacRow {
 export interface OrgMemberLegacyRow {
   uid: string
   email: string
-  image_url: string
+  image_url: string | null
   role: string
   is_tmp: boolean
   aid: number

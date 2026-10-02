@@ -606,8 +606,6 @@ async function fetchOrgAndAppNames() {
     }
     catch (err) {
       console.error('Error fetching org names:', err)
-      for (const orgId of uncachedOrgIds)
-        orgCache.value.set(orgId, 'Unknown')
     }
   }
 

@@ -93,10 +93,9 @@ async function deleteAccount() {
               return setErrors('delete-account', [t('captcha-required')], {})
             }
 
-            const { error: reauthError } = await supabase.auth.signInWithPassword({
-              email: pendingEmail.value,
+            const { error: reauthError } = await supabase.auth.reauthenticate({
               password: pendingPassword.value,
-              options: captchaKey.value ? { captchaToken: confirmCaptchaToken.value } : undefined,
+              captchaToken: captchaKey.value ? confirmCaptchaToken.value : undefined,
             })
             if (reauthError) {
               confirmCaptchaToken.value = ''
@@ -196,11 +195,14 @@ async function submit(form: { email: string, password: string }) {
     setErrors('delete-account', [t('captcha-required')], {})
     return
   }
-  const { error } = await supabase.auth.signInWithPassword({
-    email: form.email,
-    password: form.password,
-    options: captchaKey.value ? { captchaToken: turnstileToken.value } : undefined,
-  })
+  const { data: current } = await supabase.auth.getSession()
+  const { error } = current.session?.user.email?.toLowerCase() === form.email.toLowerCase()
+    ? await supabase.auth.reauthenticate({ password: form.password, captchaToken: captchaKey.value ? turnstileToken.value : undefined })
+    : await supabase.auth.signInWithPassword({
+        email: form.email,
+        password: form.password,
+        options: captchaKey.value ? { captchaToken: turnstileToken.value } : undefined,
+      })
   isLoading.value = false
   if (error) {
     console.error('error', error)
@@ -215,6 +217,10 @@ async function submit(form: { email: string, password: string }) {
   else {
     const { data: claimsData, error: claimsError } = await supabase.auth.getClaims()
     const userId = claimsData?.claims?.sub
+    if (!claimsError && !userId) {
+      await router.replace({ path: '/login', query: { to: '/delete_account' } })
+      return
+    }
     if (claimsError || !userId) {
       isLoading.value = false
       return setErrors('delete-account', [t('something-went-wrong-try-again-later')], {})

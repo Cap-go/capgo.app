@@ -18,13 +18,11 @@ const { t } = useI18n()
 const router = useRouter()
 const route = useRoute('/onboarding/set_password')
 
-async function signInUser() {
-  if (typeof route.query.token !== 'string') {
-    router.push('/login')
-  }
-}
-
 async function submit(form: { password: string }) {
+  if (typeof route.query.token !== 'string' || !route.query.token) {
+    await router.replace('/login')
+    return
+  }
   isLoading.value = true
 
   const { error: updateError } = await supabase.betterAuth.resetPassword({ token: String(route.query.token ?? ''), newPassword: form.password })
@@ -37,9 +35,9 @@ async function submit(form: { password: string }) {
   toast.success(t('changed-password-suc'))
   router.replace('/login')
 }
-watchEffect(async () => {
-  if (route && route.path === '/onboarding/set_password')
-    await signInUser()
+watchEffect(() => {
+  if (typeof route.query.token !== 'string' || !route.query.token)
+    void router.replace('/login')
 })
 </script>
 

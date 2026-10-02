@@ -306,13 +306,6 @@ function resetWizard() {
   mfaVerificationCode.value = ''
 }
 
-async function cleanupUnverifiedFactors(factors: { id: string, status: string }[]) {
-  const unverified = factors.filter(f => f.status === 'unverified')
-  if (unverified.length > 0) {
-    await Promise.all(unverified.map(f => supabase.auth.mfa.unenroll({ factorId: f.id })))
-  }
-}
-
 async function loadOtpVerificationStatus() {
   if (!main.auth?.id)
     return false
@@ -343,8 +336,6 @@ onMounted(async () => {
     return
   }
 
-  await cleanupUnverifiedFactors(mfaFactors.all)
-
   const verifiedFactor = mfaFactors.all.find(f => f.status === 'verified')
   mfaEnabled.value = !!verifiedFactor
 
@@ -355,9 +346,10 @@ onMounted(async () => {
 
   isLoading.value = false
 
-  if (!mfaEnabled.value && otpValid && (!passwordRequired.value || currentPassword.value)) {
+  if (!mfaEnabled.value && otpValid) {
     otpAlreadyVerified.value = true
-    await enrollTotp()
+    if (!passwordRequired.value)
+      await enrollTotp()
   }
 
   if (route.query.setup2fa === 'true' && !mfaEnabled.value) {
@@ -366,12 +358,8 @@ onMounted(async () => {
   }
 })
 
-onBeforeUnmount(async () => {
-  clearOtpSendCooldownTimer()
-  if (enrolledFactorId.value && !mfaEnabled.value) {
-    await supabase.auth.mfa.unenroll({ factorId: enrolledFactorId.value })
-  }
-})
+// Better Auth leaves abandoned enrollment disabled; the next enrollment replaces it.
+onBeforeUnmount(clearOtpSendCooldownTimer)
 </script>
 
 <template>
@@ -497,7 +485,12 @@ onBeforeUnmount(async () => {
           <!-- Step content -->
           <div class="max-w-lg mx-auto">
             <!-- Step 1: CAPTCHA -->
-            <div v-if="currentStep === 1" class="space-y-4">
+            <div v-if="currentStep === 1 && otpAlreadyVerified" class="space-y-4">
+              <button type="button" class="d-btn d-btn-primary d-btn-sm" :disabled="passwordRequired && !currentPassword" @click="enrollTotp">
+                {{ t('next') }}
+              </button>
+            </div>
+            <div v-else-if="currentStep === 1" class="space-y-4">
               <h4 class="text-lg font-medium dark:text-white text-slate-800">
                 {{ t('2fa-step-captcha') }}
               </h4>

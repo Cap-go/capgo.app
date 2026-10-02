@@ -22,7 +22,7 @@
     "better-auth": "npm:better-auth@1.7.7",
     "better-auth/": "npm:/better-auth@1.7.7/",
     "@better-auth/sso": "npm:@better-auth/sso@1.7.7",
-    "@better-auth/utils/": "npm:/@better-auth/utils@0.5.0/",
+    "@better-auth/utils/": "npm:/@better-auth/utils@0.4.2/",
     "otpauth": "npm:otpauth@9.5.2",
     "bcryptjs": "npm:bcryptjs@3.0.3",
     "jose": "npm:jose@6.2.4",

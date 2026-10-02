@@ -1,15 +1,15 @@
+import type { MiddlewareKeyVariables } from '../supabase/functions/_backend/utils/hono.ts'
 import { randomUUID } from 'node:crypto'
 import { base32 } from '@better-auth/utils/base32'
 import { createOTP } from '@better-auth/utils/otp'
-import { Hono } from 'hono/tiny'
 import { symmetricEncrypt } from 'better-auth/crypto'
+import { Hono } from 'hono/tiny'
 import { TOTP } from 'otpauth'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { app as authRoutes } from '../supabase/functions/_backend/private/console_auth.ts'
 import { app as dataRoutes } from '../supabase/functions/_backend/private/console_data.ts'
 import { CONSOLE_SESSION_PREFIX, IMPORTED_TOTP_PREFIX, resolveConsoleSession } from '../supabase/functions/_backend/utils/console_auth.ts'
-import type { MiddlewareKeyVariables } from '../supabase/functions/_backend/utils/hono.ts'
 import { POSTGRES_URL } from './test-utils.ts'
 
 describe('console Better Auth', () => {
@@ -78,7 +78,10 @@ describe('console Better Auth', () => {
     const session = await login.json() as { token: string, user: { id: string } }
     expect(session.user.id).toBe(first.user.id)
     const query = await request('/private/console/query', {
-      kind: 'table', name: 'users', args: [], operations: [{ method: 'select', args: ['id'] }, { method: 'in', args: ['id', [first.user.id, second.user.id]] }],
+      kind: 'table',
+      name: 'users',
+      args: [],
+      operations: [{ method: 'select', args: ['id'] }, { method: 'in', args: ['id', [first.user.id, second.user.id]] }],
     }, session.token)
     expect(query.status).toBe(200)
     const rows = await query.json() as { error: unknown, data: { id: string }[] }
@@ -181,7 +184,16 @@ describe('console Better Auth', () => {
     const nextCode = await createOTP(secret, { digits: 6, period: 30 }).totp()
     const challenge = await request('/auth/two-factor/verify-totp', { code: nextCode }, undefined, cookie)
     expect(challenge.status).toBe(200)
-    expect((await challenge.json() as { user: { id: string } }).user.id).toBe(account.user.id)
+    const authenticated = await challenge.json() as { user: { id: string }, token: string }
+    expect(authenticated.user.id).toBe(account.user.id)
+    const deletionToken = challenge.headers.get('set-auth-token') ?? authenticated.token
+    expect((await request('/auth/email-otp/send-verification-otp', { email: account.email, type: 'email-verification' }, deletionToken)).status).toBe(200)
+    const emailCode = messages.findLast(message => message.to === account.email && message.text.startsWith('Your verification'))!.text.match(/\b\d{6}\b/)![0]
+    expect((await request('/auth/console-verify-email', { token: emailCode }, deletionToken)).status).toBe(200)
+    expect((await request('/auth/console-reauthenticate', { password: `${password}2` }, deletionToken)).status).toBe(200)
+    const removal = await request('/private/console/query', { kind: 'rpc', name: 'delete_user', args: [], operations: [] }, deletionToken)
+    expect(removal.status, await removal.clone().text()).toBe(200)
+    expect((await removal.json() as { error: unknown }).error).toBeNull()
   })
 
   it('rejects banned identities and never falls back from a bad bearer to cookies', async () => {
@@ -191,7 +203,7 @@ describe('console Better Auth', () => {
     expect(await (await request('/auth/console-session', undefined, 'invalid.signed-token', cookie)).json()).toEqual({ session: null })
     const database = new Pool({ connectionString: POSTGRES_URL })
     try {
-      await database.query("UPDATE auth.users SET banned_until = now() + interval '1 hour' WHERE id = $1", [account.user.id])
+      await database.query('UPDATE auth.users SET banned_until = now() + interval \'1 hour\' WHERE id = $1', [account.user.id])
     }
     finally { await database.end() }
     expect(await (await request('/auth/console-session', undefined, account.token)).json()).toEqual({ session: null })
@@ -232,13 +244,13 @@ describe('console Better Auth', () => {
       await connection.query('UPDATE public.console_auth_user SET "twoFactorEnabled" = true WHERE id = $1', [account.user.id])
       await connection.query('SET LOCAL ROLE authenticated')
       for (const [aal, expected] of [['aal1', false], ['aal2', true]] as const) {
-        await connection.query("SELECT set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub: account.user.id, auth_provider: 'better-auth', role: 'authenticated', aal })])
+        await connection.query('SELECT set_config(\'request.jwt.claims\', $1, true)', [JSON.stringify({ sub: account.user.id, auth_provider: 'better-auth', role: 'authenticated', aal })])
         expect((await connection.query('SELECT public.verify_mfa() AS allowed')).rows[0].allowed).toBe(expected)
       }
       await connection.query('SAVEPOINT credential_read')
       await expect(connection.query('SELECT password FROM public.console_auth_account')).rejects.toMatchObject({ code: '42501' })
       await connection.query('ROLLBACK TO SAVEPOINT credential_read')
-      await connection.query("SELECT set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub: randomUUID(), auth_provider: 'better-auth', role: 'authenticated', aal: 'aal1' })])
+      await connection.query('SELECT set_config(\'request.jwt.claims\', $1, true)', [JSON.stringify({ sub: randomUUID(), auth_provider: 'better-auth', role: 'authenticated', aal: 'aal1' })])
       expect((await connection.query('SELECT public.verify_mfa() AS allowed')).rows[0].allowed).toBe(false)
     }
     finally {

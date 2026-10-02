@@ -137,17 +137,19 @@ async function fetchProviders() {
 }
 
 async function fetchSpMetadata() {
-  if (!metadataProviderId.value) {
-    spMetadata.value = null
+  const requestedId = metadataProviderId.value
+  spMetadata.value = null
+  if (!requestedId)
     return
-  }
   try {
     const headers = await getAuthHeaders()
-    const response = await fetch(`${defaultApiHost}/private/sso/sp-metadata?provider_id=${encodeURIComponent(metadataProviderId.value)}`, {
+    const response = await fetch(`${defaultApiHost}/private/sso/sp-metadata?provider_id=${encodeURIComponent(requestedId)}`, {
       method: 'GET',
       headers,
     })
 
+    if (requestedId !== metadataProviderId.value)
+      return
     if (!response.ok) {
       console.error('Failed to fetch SSO SP metadata:', response.status)
       spMetadata.value = null
@@ -161,6 +163,8 @@ async function fetchSpMetadata() {
       nameid_format: string
       sp_metadata_url?: string
     }
+    if (requestedId !== metadataProviderId.value)
+      return
     spMetadata.value = {
       acs_url: data.acs_url,
       entity_id: data.entity_id,
@@ -169,6 +173,8 @@ async function fetchSpMetadata() {
     }
   }
   catch (error) {
+    if (requestedId !== metadataProviderId.value)
+      return
     console.error('Error fetching SSO SP metadata:', error)
     spMetadata.value = null
     toast.error(t('sso-error-loading-sp-metadata'))
@@ -202,6 +208,7 @@ async function addProvider() {
 
     const created = await response.json() as SsoProvider
     providers.value.push(created)
+    metadataProviderId.value = created.id
     recentlyCreatedId.value = created.id
 
     // Reset form

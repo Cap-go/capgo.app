@@ -723,14 +723,19 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
       if (typeof provider !== 'string' || !provider.startsWith('sso:'))
         return quickError(403, 'sso_auth_required', 'Authenticate through SSO first')
       const externalProviderId = provider.slice(4)
-      const { rows } = await getSharedPgClient().query(`SELECT u.email, u."userMetadata", a."providerProfile"
-        FROM public.console_auth_user u JOIN public.console_auth_account a ON a."userId" = u.id
-        WHERE u.id = $1 AND a."providerId" = $2`, [userId, externalProviderId])
-      if (!rows[0])
-        return quickError(403, 'sso_identity_required', 'SSO identity not found')
-      userAuth = { user: { id: userId, email: rows[0].email, user_metadata: rows[0].userMetadata ?? {},
-        app_metadata: { provider, providers: [provider] },
-        identities: [{ provider, identity_data: rows[0].providerProfile ?? {} }] } }
+      try {
+        const { rows } = await getSharedPgClient().query(`SELECT u.email, u."userMetadata", a."providerProfile"
+          FROM public.console_auth_user u JOIN public.console_auth_account a ON a."userId" = u.id
+          WHERE u.id = $1 AND a."providerId" = $2`, [userId, externalProviderId])
+        if (!rows[0])
+          return quickError(403, 'sso_identity_required', 'SSO identity not found')
+        userAuth = { user: { id: userId, email: rows[0].email, user_metadata: rows[0].userMetadata ?? {},
+          app_metadata: { provider, providers: [provider] },
+          identities: [{ provider, identity_data: rows[0].providerProfile ?? {} }] } }
+      }
+      catch (error) {
+        userAuthError = error
+      }
     }
     else {
       const result = await admin.auth.admin.getUserById(userId)

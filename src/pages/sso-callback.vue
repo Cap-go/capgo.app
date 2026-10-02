@@ -97,8 +97,10 @@ async function completeSsoLogin() {
     }
 
     const assurance = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+    if (assurance.error)
+      throw assurance.error
     if (assurance.data.currentLevel !== assurance.data.nextLevel) {
-      await router.replace('/login')
+      await router.replace({ path: '/login', query: { to: validateRedirectPath(typeof route.query.to === 'string' ? route.query.to : undefined) } })
       return
     }
 

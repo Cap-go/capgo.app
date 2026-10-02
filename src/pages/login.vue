@@ -715,6 +715,7 @@ async function checkLogin() {
     const params = new URLSearchParams(parsedUrl.search)
 
     if (['true', 'complete'].includes(params.get('registered') ?? '')) {
+      supabase.auth.clearSession()
       parsedUrl.searchParams.delete('registered')
       globalThis.history.replaceState({}, '', parsedUrl.toString())
       if (params.get('registered') === 'true')

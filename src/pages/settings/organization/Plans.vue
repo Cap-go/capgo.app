@@ -13,7 +13,7 @@ import CreditsOnlyTip from '~/components/CreditsOnlyTip.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
 import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { getCurrentPlanNameOrg, useConsole } from '~/services/console'
+import { getCurrentPlanNameOrg } from '~/services/console'
 import { formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '~/services/paymentRequired'
@@ -144,11 +144,6 @@ const isCreditsOnly = computed(() => isCreditsOnlyOrg(currentOrganization?.value
 async function prefetchStripeCheckoutUrl(plan: Database['public']['Tables']['plans']['Row'], isYear: boolean) {
   if (!plan.stripe_id)
     return
-  const supabase = useConsole()
-  const session = await supabase.auth.getSession()
-  if (!session)
-    return
-
   const successUrl = `${window.location.href}?success=1`
   const cancelUrl = `${window.location.href}?cancel=1`
   const datafastAttribution = await getDatafastAttribution()

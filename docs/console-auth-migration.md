@@ -93,9 +93,12 @@ old console; do not bypass MFA to recover accounts.
 use a scalar subquery, producing one InitPlan per statement. Native identity
 lookups use `console_auth_user_pkey`; legacy factor lookups use the existing
 user-indexed MFA table. `has_2fa_enabled(uuid)` remains service-role-only and
-is also called by existing authorized org/RBAC functions. Each call uses one
-caller/principal UUID, never an enumeration of native identities. The `()`
-overload uses `auth.uid()`. Account deletion runs once per deleted identity and
+is also called by existing authorized org/RBAC functions. The authorized
+`check_org_members_2fa_enabled(uuid)` RPC calls it once per matching org role
+binding before DISTINCT. Its `role_bindings_scope_idx` lookup bounds the scan
+to the requested org; native identity and legacy MFA probes use the indexes
+above, but total work grows linearly with membership. The `()` overload uses
+`auth.uid()`. Account deletion runs once per deleted identity and
 uses native identity/session/account/factor indexes for cascades.
 
 Password login checks SSO enforcement once after credential verification using
@@ -118,3 +121,22 @@ Better Auth requires the current password for MFA changes on credential
 accounts. SSO-only accounts use their authenticated SSO session.
 
 ![MFA setup with current password, captured from the running local console](images/console-better-auth-mfa.webp)
+
+
+Self-hosted deployments configure `API_DOMAIN` (the console's `VITE_API_HOST`)
+for both Better Auth and console API traffic. Point it at the Capgo API, or the
+local `/functions/v1` gateway hosting these routes. `VITE_SUPABASE_URL` remains
+backend compatibility configuration; it no longer selects a separate browser
+transport. Local worktree startup enables and exposes its isolated SMTP mailbox.
+For hosted backends, configure `CONSOLE_SMTP_URL` explicitly rather than deriving
+a port from the backend URL.
+
+
+Local MFA membership scale check used 100,000 native identities, 100,000 legacy
+factors, and 100,000 role bindings across 91 organizations. A target org with
+10,000 members returned all rows in 55.037 ms (repeat: 55.659 ms). The inner
+query used `role_bindings_scope_idx` and 184 exact heap blocks, joining a
+20-row roles table; each MFA probe used `console_auth_user_pkey` and the
+user-leading `unique_phone_factor_per_user` index (0.009 ms, seven buffer hits).
+These rollback-only internal-role measurements show org-bounded scans and the
+per-member cost; they do not establish production or caller-permission latency.
