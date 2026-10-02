@@ -8,14 +8,15 @@ import { app as download_link } from '../private/download_link.ts'
 import { app as upload_link } from '../private/upload_link.ts'
 import { app as ok } from '../public/ok.ts'
 import { sendDiscordAlert } from '../utils/discord.ts'
-import { quickError, simpleError } from '../utils/hono.ts'
-import { onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
+import { quickError, simpleError, simpleRateLimit } from '../utils/hono.ts'
 import { middlewareKey } from '../utils/hono_middleware.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { createManifestSizeReceipt, MANIFEST_SIZE_RECEIPT_HEADER } from '../utils/manifest_size_receipt.ts'
 import { MANIFEST_UPLOAD_CAPABILITY_HEADER, verifyManifestUploadCapability } from '../utils/manifest_upload_capability.ts'
 import { closeClient, getAppByIdPg, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { getAppByAppIdPg, getUserIdFromApikey } from '../utils/pg_files.ts'
+import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
+import { buildRateLimitInfo, onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
 import { checkPermissionPg } from '../utils/rbac.ts'
 import { createStatsBandwidth } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
@@ -1038,6 +1039,11 @@ function isCapabilityBearingTusRequest(c: Context): boolean {
 
 async function authenticateAttachmentUpload(c: Context, next: Next) {
   if (isCapabilityBearingTusRequest(c)) {
+    const ipRateLimited = await isIPRateLimited(c)
+    if (ipRateLimited.limited) {
+      return simpleRateLimit({ reason: 'too_many_failed_auth_attempts', ...buildRateLimitInfo(ipRateLimited.resetAt) })
+    }
+
     await next()
     return
   }
@@ -1065,6 +1071,7 @@ async function authorizeAttachmentUpload(c: Context, next: Next) {
 
   const path = c.get('fileId') as string
   if (parseAppScopedAttachmentPath(path)?.kind !== 'scoped') {
+    await recordFailedAuth(c)
     return capabilityRejectionResponse(c, 403, 'upload_path_not_authorized', 'Upload path is not authorized')
   }
 
@@ -1089,6 +1096,7 @@ async function authorizeAttachmentUpload(c: Context, next: Next) {
       }, 401)
     }
 
+    await recordFailedAuth(c)
     return capabilityRejectionResponse(c, 401, 'upload_token_invalid', 'Upload authorization is invalid')
   }
 

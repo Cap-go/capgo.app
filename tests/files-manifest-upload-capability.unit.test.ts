@@ -5,14 +5,18 @@ const {
   closeClientMock,
   doFetchMock,
   getPgClientMock,
+  isIPRateLimitedMock,
   legacyAuthenticationMock,
+  recordFailedAuthMock,
 } = vi.hoisted(() => ({
   closeClientMock: vi.fn(),
   doFetchMock: vi.fn(),
   getPgClientMock: vi.fn(() => {
     throw new Error('capability uploads must not open a database connection')
   }),
+  isIPRateLimitedMock: vi.fn(),
   legacyAuthenticationMock: vi.fn(),
+  recordFailedAuthMock: vi.fn(),
 }))
 
 vi.mock('hono/adapter', async (importOriginal) => {
@@ -28,6 +32,11 @@ vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', () => ({
     legacyAuthenticationMock()
     await next()
   },
+}))
+
+vi.mock('../supabase/functions/_backend/utils/rate_limit.ts', () => ({
+  isIPRateLimited: isIPRateLimitedMock,
+  recordFailedAuth: recordFailedAuthMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
@@ -133,6 +142,8 @@ describe('files manifest upload capabilities', () => {
     vi.stubEnv('MANIFEST_UPLOAD_CAPABILITY_KEY_ID', keyId)
     vi.stubEnv('MANIFEST_UPLOAD_CAPABILITY_SECRET', secret)
     vi.stubEnv('MANIFEST_UPLOAD_CAPABILITY_PREVIOUS_SECRETS', '')
+    isIPRateLimitedMock.mockResolvedValue({ limited: false })
+    recordFailedAuthMock.mockResolvedValue(undefined)
     doFetchMock.mockImplementation(async (request: Request) => {
       expect(request.headers.has('X-Capgo-Upload-Token')).toBe(false)
       return new Response(null, { status: request.method === 'POST' ? 201 : request.method === 'PATCH' ? 204 : 200 })
@@ -166,6 +177,7 @@ describe('files manifest upload capabilities', () => {
     const response = await capabilityRequest(method, capability.token)
 
     expect(response.status).toBe(method === 'POST' ? 201 : method === 'PATCH' ? 204 : 200)
+    expect(isIPRateLimitedMock).toHaveBeenCalledOnce()
     expect(legacyAuthenticationMock).not.toHaveBeenCalled()
     expect(getPgClientMock).not.toHaveBeenCalled()
     expect(doFetchMock).toHaveBeenCalledOnce()
@@ -191,6 +203,18 @@ describe('files manifest upload capabilities', () => {
       abandon_explicit_error: expect.any(String),
     })
     expect(legacyAuthenticationMock).not.toHaveBeenCalled()
+    expect(recordFailedAuthMock).toHaveBeenCalledOnce()
+    expect(doFetchMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects capability requests from an IP blocked by failed-auth throttling', async () => {
+    isIPRateLimitedMock.mockResolvedValue({ limited: true, resetAt: Date.now() + 60_000 })
+    const capability = await createToken()
+
+    const response = await capabilityRequest('POST', capability.token)
+
+    expect(response.status).toBe(429)
+    expect(recordFailedAuthMock).not.toHaveBeenCalled()
     expect(doFetchMock).not.toHaveBeenCalled()
   })
 
@@ -212,6 +236,25 @@ describe('files manifest upload capabilities', () => {
     vi.stubEnv('MANIFEST_UPLOAD_CAPABILITY_KEY_ID', '2026-10-b')
     vi.stubEnv('MANIFEST_UPLOAD_CAPABILITY_SECRET', 'replacement-manifest-upload-secret-for-tests')
     vi.stubEnv('MANIFEST_UPLOAD_CAPABILITY_PREVIOUS_SECRETS', JSON.stringify({ [keyId]: secret }))
+
+    const response = await capabilityRequest('POST', capability.token)
+
+    expect(response.status).toBe(201)
+    expect(doFetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('allows one minute of issuer clock skew at the maximum token lifetime', async () => {
+    const { createManifestUploadCapability } = await import('../supabase/functions/_backend/utils/manifest_upload_capability.ts')
+    const verifierNow = Math.floor(Date.now() / 1000)
+    const issuerNow = verifierNow + 60
+    const capability = await createManifestUploadCapability({
+      expiresAt: issuerNow + 600,
+      keyId,
+      manifestUploadAutoEnabled: false,
+      path,
+      secret,
+      versionId: 12345,
+    }, issuerNow)
 
     const response = await capabilityRequest('POST', capability.token)
 

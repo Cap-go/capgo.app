@@ -6,6 +6,7 @@ export const MANIFEST_UPLOAD_CAPABILITY_SECRET_ENV = 'MANIFEST_UPLOAD_CAPABILITY
 export const MANIFEST_UPLOAD_CAPABILITY_KEY_ID_ENV = 'MANIFEST_UPLOAD_CAPABILITY_KEY_ID'
 export const MANIFEST_UPLOAD_CAPABILITY_PREVIOUS_SECRETS_ENV = 'MANIFEST_UPLOAD_CAPABILITY_PREVIOUS_SECRETS'
 export const MANIFEST_UPLOAD_CAPABILITY_MAX_LIFETIME_SECONDS = 10 * 60
+export const MANIFEST_UPLOAD_CAPABILITY_CLOCK_SKEW_SECONDS = 60
 
 const CAPABILITY_VERSION = 'v1'
 const CAPABILITY_SCOPE = 'tus-write'
@@ -226,7 +227,12 @@ export async function verifyManifestUploadCapability(
   if (!signatureIsValid)
     return { ok: false, reason: 'invalid' }
 
-  if (parsedToken.claims.expiresAt - nowUnixSeconds > MANIFEST_UPLOAD_CAPABILITY_MAX_LIFETIME_SECONDS)
+  // Issuance enforces the ten-minute lifetime. This grace only prevents small
+  // clock differences between the service issuing and verifying the token.
+  if (
+    parsedToken.claims.expiresAt - nowUnixSeconds
+    > MANIFEST_UPLOAD_CAPABILITY_MAX_LIFETIME_SECONDS + MANIFEST_UPLOAD_CAPABILITY_CLOCK_SKEW_SECONDS
+  )
     return { ok: false, reason: 'invalid' }
 
   if (parsedToken.claims.expiresAt <= nowUnixSeconds)
