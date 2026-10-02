@@ -82,6 +82,73 @@ async function mockNativeObserveStats(page: Page) {
   }))
 }
 
+const updaterInsightDays = ['2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30']
+
+// Mix of updater failures and native signals. The mock honours the `actions`
+// filter in the request, like the real endpoint does.
+const updaterInsightActionRows: Array<[string, number, number, number]> = [
+  ['webview_render_process_gone', 412, 301, 3],
+  ['download_fail', 286, 204, 4],
+  ['webview_javascript_error', 197, 88, 2],
+  ['app_killed_low_memory', 38, 35, 2],
+  ['update_fail', 24, 21, 2],
+  ['unzip_fail', 17, 15, 2],
+  ['insufficient_disk_space', 11, 9, 2],
+  ['checksum_fail', 6, 5, 1],
+  ['app_crash', 9, 7, 1],
+]
+
+async function mockUpdaterInsights(page: Page) {
+  await page.route('**/private/stats/insights', async (route) => {
+    const body = route.request().postDataJSON() as { actions?: string[] } | null
+    const allowed = body?.actions?.length ? new Set(body.actions) : null
+    const rows = updaterInsightActionRows.filter(([action]) => !allowed || allowed.has(action))
+    const total = rows.reduce((sum, [, events]) => sum + events, 0)
+    const devices = rows.reduce((sum, [, , deviceCount]) => sum + deviceCount, 0)
+    const weights = [0.12, 0.13, 0.14, 0.18, 0.15, 0.14, 0.14]
+    await route.fulfill({
+      json: {
+        summary: { total, device_count: devices, action_count: rows.length },
+        actions: rows.map(([action, events, deviceCount, versionCount]) => ({
+          action,
+          total: events,
+          device_count: deviceCount,
+          version_count: versionCount,
+          first_seen: '2026-09-24T08:12:00.000Z',
+          last_seen: '2026-09-30T17:40:00.000Z',
+          latest_version_name: '2.4.1',
+          latest_device_id: '00000000-0000-4000-8000-000000000001',
+        })),
+        daily: rows.flatMap(([action, events]) => updaterInsightDays.map((date, index) => ({
+          date,
+          action,
+          total: Math.round(events * weights[index]),
+        }))),
+        versions: rows.slice(0, 6).map(([action, events, deviceCount], index) => ({
+          action,
+          version_name: index % 2 ? '2.4.0' : '2.4.1',
+          total: Math.round(events * 0.6),
+          device_count: Math.round(deviceCount * 0.6),
+          last_seen: '2026-09-30T17:40:00.000Z',
+        })),
+        devices: rows.slice(0, 5).map(([action, events], index) => ({
+          action,
+          device_id: `00000000-0000-4000-8000-00000000000${index + 1}`,
+          total: Math.max(1, Math.round(events / 40)),
+          version_name: '2.4.1',
+          last_seen: '2026-09-30T17:40:00.000Z',
+        })),
+        period: {
+          requested_days: 7,
+          start: '2026-09-24T00:00:00.000Z',
+          end: '2026-09-30T23:59:59.999Z',
+          labels: updaterInsightDays,
+        },
+      },
+    })
+  })
+}
+
 /**
  * Console pages captured for before/after visual diffs.
  * Add routes here when a PR touches a new screen reviewers should compare.
@@ -193,6 +260,29 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     },
   },
   { slug: 'observe', path: '/app/com.demo.app/observe/updater', auth: true },
+  {
+    slug: 'observe-updater-failures',
+    path: '/app/com.demo.app/observe/updater',
+    auth: true,
+    prepare: async (page) => {
+      // Seed data has no updater failures, so fixture the insights to show the populated layout.
+      await mockUpdaterInsights(page)
+      await page.goto('/app/com.demo.app/observe/updater?days=7')
+      await page.getByRole('heading', { name: /Error categories|Failure types/ }).waitFor()
+    },
+  },
+  {
+    slug: 'observe-updater-failures-details',
+    path: '/app/com.demo.app/observe/updater',
+    auth: true,
+    prepare: async (page) => {
+      await mockUpdaterInsights(page)
+      await page.goto('/app/com.demo.app/observe/updater?days=7')
+      const heading = page.getByRole('heading', { name: /Error categories|Failure types/ })
+      await heading.waitFor()
+      await heading.evaluate(el => el.scrollIntoView({ block: 'start' }))
+    },
+  },
   {
     slug: 'observe-logs',
     path: '/app/com.demo.app/observe/logs',
