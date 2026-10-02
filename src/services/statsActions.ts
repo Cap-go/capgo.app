@@ -211,3 +211,50 @@ export function observeSignalCategory(action: string): ObserveSignalCategory {
 export function observeSignalHelpKey(action: string): string | null {
   return observeSignals[action]?.helpKey ?? null
 }
+
+/**
+ * Updater failure categories. These are the live update failures shown on the
+ * Observe > Updater page. App crashes and WebView errors belong to the Native
+ * page and are intentionally left out.
+ * - rollback: the new bundle did not call notifyAppReady() in time, so the
+ *   plugin restored the previous bundle.
+ * - bundle: the bundle was rejected or could not be served (checksum,
+ *   encryption, invalid paths, install step).
+ * - device: the device could not finish the download (network, storage,
+ *   memory). The device keeps its current bundle and retries later.
+ * - setup: the plugin setup prevents updates (server.url, old plugin).
+ */
+export type UpdaterFailureCategory = 'rollback' | 'bundle' | 'device' | 'setup'
+
+const updaterFailures: Record<string, { category: UpdaterFailureCategory, helpKey: string }> = {
+  update_fail: { category: 'rollback', helpKey: 'updater-failure-help-update-fail' },
+  set_fail: { category: 'bundle', helpKey: 'updater-failure-help-set-fail' },
+  checksum_fail: { category: 'bundle', helpKey: 'updater-failure-help-checksum-fail' },
+  decrypt_fail: { category: 'bundle', helpKey: 'updater-failure-help-decrypt-fail' },
+  cannotGetBundle: { category: 'bundle', helpKey: 'updater-failure-help-cannot-get-bundle' },
+  download_manifest_checksum_fail: { category: 'bundle', helpKey: 'updater-failure-help-checksum-fail' },
+  download_manifest_brotli_fail: { category: 'bundle', helpKey: 'updater-failure-help-brotli-fail' },
+  manifest_path_fail: { category: 'bundle', helpKey: 'updater-failure-help-path-fail' },
+  windows_path_fail: { category: 'bundle', helpKey: 'updater-failure-help-path-fail' },
+  canonical_path_fail: { category: 'bundle', helpKey: 'updater-failure-help-path-fail' },
+  directory_path_fail: { category: 'bundle', helpKey: 'updater-failure-help-path-fail' },
+  download_fail: { category: 'device', helpKey: 'updater-failure-help-download-fail' },
+  download_manifest_file_fail: { category: 'device', helpKey: 'updater-failure-help-download-fail' },
+  finish_download_fail: { category: 'device', helpKey: 'updater-failure-help-finish-download-fail' },
+  unzip_fail: { category: 'device', helpKey: 'updater-failure-help-unzip-fail' },
+  low_mem_fail: { category: 'device', helpKey: 'updater-failure-help-low-mem-fail' },
+  insufficient_disk_space: { category: 'device', helpKey: 'updater-failure-help-insufficient-disk-space' },
+  blocked_by_server_url: { category: 'setup', helpKey: 'updater-failure-help-blocked-by-server-url' },
+  backend_refusal: { category: 'setup', helpKey: 'updater-failure-help-backend-refusal' },
+}
+
+/** Actions requested by the Observe > Updater insights. */
+export const updaterInsightActions = Object.keys(updaterFailures)
+
+export function updaterFailureCategory(action: string): UpdaterFailureCategory {
+  return updaterFailures[action]?.category ?? 'bundle'
+}
+
+export function updaterFailureHelpKey(action: string): string | null {
+  return updaterFailures[action]?.helpKey ?? null
+}
