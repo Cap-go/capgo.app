@@ -9,6 +9,7 @@ import { compare, hash } from 'bcryptjs'
 import { SignJWT } from 'jose'
 import { TOTP } from 'otpauth'
 import type { JWTClaims } from './hono.ts'
+import { honoFactory } from './hono.ts'
 import { getPasswordUtf8ByteLength } from './password_policy.ts'
 import { getPgClient } from './pg.ts'
 import { getEnv } from './utils.ts'
@@ -327,3 +328,8 @@ export async function resolveConsoleSession(c: Context, authorization: string): 
     await instance.close()
   }
 }
+
+export const consoleSessionMiddleware = honoFactory.createMiddleware(async (c, next) => {
+  c.set('resolveConsoleSession', authorization => resolveConsoleSession(c, authorization))
+  await next()
+})

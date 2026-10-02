@@ -7,7 +7,7 @@ import { app as accept_invitation } from '../../supabase/functions/_backend/priv
 import { app as bundle_install_stats } from '../../supabase/functions/_backend/private/bundle_install_stats.ts'
 import { app as channel_device } from '../../supabase/functions/_backend/private/channel_device.ts'
 import { app as channel_stats } from '../../supabase/functions/_backend/private/channel_stats.ts'
-import { resolveConsoleSession } from '../../supabase/functions/_backend/utils/console_auth.ts'
+import { consoleSessionMiddleware } from '../../supabase/functions/_backend/utils/console_auth.ts'
 import { app as consoleDownloadLink } from '../../supabase/functions/_backend/private/download_link.ts'
 import { app as console_auth } from '../../supabase/functions/_backend/private/console_auth.ts'
 import { app as console_data } from '../../supabase/functions/_backend/private/console_data.ts'
@@ -131,10 +131,7 @@ const functionName = 'api'
 const app = createHono(functionName, version)
 const functionNameScheduled = 'api-scheduled'
 const appScheduled = createHono(functionNameScheduled, version)
-app.use('*', async (c, next) => {
-  c.set('resolveConsoleSession', authorization => resolveConsoleSession(c, authorization))
-  await next()
-})
+app.use('*', consoleSessionMiddleware)
 app.route('/auth', console_auth)
 app.route('/ok', ok)
 app.route('/apikey', apikey)

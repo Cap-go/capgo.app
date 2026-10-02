@@ -1,5 +1,5 @@
 import { app as console_data } from '../_backend/private/console_data.ts'
-import { resolveConsoleSession } from '../_backend/utils/console_auth.ts'
+import { consoleSessionMiddleware } from '../_backend/utils/console_auth.ts'
 import { app as accept_invitation } from '../_backend/private/accept_invitation.ts'
 import { app as bundle_install_stats } from '../_backend/private/bundle_install_stats.ts'
 import { app as channel_device } from '../_backend/private/channel_device.ts'
@@ -61,10 +61,7 @@ const functionName = 'private'
 const appGlobal = createHono(functionName, version)
 
 // Webapps API
-appGlobal.use('*', async (c, next) => {
-  c.set('resolveConsoleSession', authorization => resolveConsoleSession(c, authorization))
-  await next()
-})
+appGlobal.use('*', consoleSessionMiddleware)
 appGlobal.route('/console', console_data)
 
 appGlobal.route('/plans', plans)
