@@ -3934,6 +3934,8 @@
   "release-live-default-channel": "Used in Capgo web console areas: components/dashboard. Role: short UI label shown in parentheses after the default channel name. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "release-live-deployed": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "release-live-failures": "Used in Capgo web console areas: components/dashboard. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "release-live-failure-rate": "Used in Capgo web console areas: components/dashboard. Role: helper text under the failed attempts count; {rate} is a formatted percentage. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "release-live-failures-normal": "Used in Capgo web console areas: components/dashboard. Role: helper text explaining that some failed updates are expected. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "release-live-failed-devices": "Used in Capgo web console areas: components/dashboard. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "release-live-recovered-devices": "Used in Capgo web console areas: components/dashboard. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "release-live-stuck-devices": "Used in Capgo web console areas: components/dashboard. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
