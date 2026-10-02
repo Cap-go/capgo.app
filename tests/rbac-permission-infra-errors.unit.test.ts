@@ -19,8 +19,10 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   getPgClient: getPgClientMock,
 }))
 
+const waitAuthPgRetryJitterMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
+
 vi.mock('../supabase/functions/_backend/utils/pg_auth_retry.ts', () => ({
-  waitAuthPgRetryJitter: vi.fn().mockResolvedValue(undefined),
+  waitAuthPgRetryJitter: waitAuthPgRetryJitterMock,
 }))
 
 const { checkPermission, checkPermissionPg, checkPermissionPgFreshRetry } = await import('../supabase/functions/_backend/utils/rbac.ts')
@@ -111,6 +113,26 @@ describe('rbac permission infra errors', () => {
 
     expect(getPgClientMock).toHaveBeenCalledTimes(2)
     expect(closeClientMock).toHaveBeenCalledTimes(2)
+    expect(waitAuthPgRetryJitterMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('checkPermissionPgFreshRetry does not retry non-transient permission failures', async () => {
+    const invalidUuidError = Object.assign(new Error('invalid input syntax for type uuid: "bad"'), {
+      code: '22P02',
+    })
+    executeMock.mockRejectedValueOnce(invalidUuidError)
+
+    await expect(checkPermissionPgFreshRetry(
+      makeContext(),
+      'org.read',
+      { orgId: 'bad' },
+      '00000000-0000-4000-8000-000000000001',
+      'capgo_test_key',
+      false,
+    )).resolves.toBe(false)
+
+    expect(getPgClientMock).toHaveBeenCalledTimes(1)
+    expect(waitAuthPgRetryJitterMock).not.toHaveBeenCalled()
   })
 
   it('checkPermissionPg treats invalid UUID cast errors as ACL deny, not 503', async () => {
