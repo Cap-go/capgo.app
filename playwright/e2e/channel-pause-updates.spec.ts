@@ -1,8 +1,8 @@
 import { expect, test } from '../support/commands'
 import { dismissSupportPrompt } from '../support/dismissSupportPrompt'
 
-test.describe('channel pause updates (full revert to built-in)', () => {
-  test('shows the pause action on the channel page and confirms before reverting', async ({ page }) => {
+test.describe('channel bundle actions (change, pause, revert)', () => {
+  test('shows the actions next to the bundle and confirms before pausing or reverting', async ({ page }) => {
     await page.route('**/private/sso/check-enforcement', async (route) => {
       await route.fulfill({
         status: 200,
@@ -14,20 +14,25 @@ test.describe('channel pause updates (full revert to built-in)', () => {
     await page.goto('/app/com.demo.app/channel/1')
     await dismissSupportPrompt(page)
 
-    const pauseRow = page.locator('[data-test="channel-pause-updates"]')
-    await expect(pauseRow).toBeVisible({ timeout: 30000 })
-    await expect(pauseRow).toContainText('Pause updates (full revert)')
+    const bundleRow = page.locator('[data-test="channel-bundle-row"]')
+    await expect(bundleRow).toBeVisible({ timeout: 30000 })
+    await expect(bundleRow.locator('[data-test="channel-change-bundle"]')).toHaveText('Change bundle')
 
-    const revertButton = pauseRow.getByRole('button', { name: 'Revert all devices to built-in' })
-    await expect(revertButton).toBeEnabled({ timeout: 60000 })
-    await revertButton.click()
-
-    await expect(page.locator('h3').filter({ hasText: 'Pause updates and revert to built-in?' })).toBeVisible({ timeout: 15000 })
-    await expect(page.getByText('Capgo stops sending updates on this channel until you assign a bundle again.')).toBeVisible()
-
-    // Cancel so the shared seed channel keeps its bundle for other specs.
+    const pauseButton = bundleRow.locator('[data-test="channel-pause-toggle"]')
+    await expect(pauseButton).toHaveText('Pause updates')
+    await expect(pauseButton).toBeEnabled({ timeout: 60000 })
+    await pauseButton.click()
+    await expect(page.locator('h3').filter({ hasText: 'Pause updates on this channel?' })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText('Devices keep the bundle they already run and nothing is rolled back.', { exact: false })).toBeVisible()
+    // Cancel so the shared seed channel keeps serving for other specs.
     await page.getByRole('button', { name: 'Cancel', exact: true }).click()
-    await expect(page.locator('[data-test="channel-summary-paused"]')).toHaveCount(0)
-    await expect(revertButton).toBeVisible()
+    await expect(page.locator('[data-test="channel-paused-banner"]')).toHaveCount(0)
+
+    const revertButton = bundleRow.locator('[data-test="channel-revert-builtin"]')
+    await expect(revertButton).toBeEnabled()
+    await revertButton.click()
+    await expect(page.locator('h3').filter({ hasText: 'Revert all devices to built-in?' })).toBeVisible({ timeout: 15000 })
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(pauseButton).toHaveText('Pause updates')
   })
 })

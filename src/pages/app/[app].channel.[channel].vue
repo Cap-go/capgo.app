@@ -9,7 +9,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconCopy from '~icons/heroicons/clipboard-document-check'
 import IconCode from '~icons/heroicons/code-bracket'
-import Settings from '~icons/heroicons/cog-8-tooth'
 import IconInformation from '~icons/heroicons/information-circle'
 import IconSearch from '~icons/ic/round-search?raw'
 import IconAlertCircle from '~icons/lucide/alert-circle'
@@ -62,6 +61,7 @@ type EditableChannelKey = 'allow_dev'
   | 'auto_pause_min_failures'
   | 'auto_pause_action'
   | 'auto_pause_cooldown_minutes'
+  | 'paused_at'
   | 'version'
 
 // Bundle link dialog state
@@ -131,8 +131,9 @@ const rolloutProgressStyle = computed(() => {
   const percentage = Math.max(0, Math.min(100, rolloutPercentage.value))
   return `width: ${percentage}%`
 })
-// Stable bundle is built-in and no rollout is serving: Capgo sends no update on this channel.
-const channelUpdatesPaused = computed(() => channel.value?.version?.name === 'builtin' && !rolloutIsActive.value)
+// Paused: /updates sends nothing on this channel, devices keep their bundle.
+const channelPaused = computed(() => !!channel.value?.paused_at)
+const channelOnBuiltin = computed(() => channel.value?.version?.name === 'builtin')
 const showRolloutSettings = computed(() => !!channel.value?.rollout_enabled)
 const showRolloutEnableRow = computed(() => !!channel.value && !channel.value.rollout_enabled)
 
@@ -285,6 +286,7 @@ async function getChannel(force = false) {
           rollout_paused_at,
           rollout_pause_reason,
           rollout_cache_ttl_seconds,
+          paused_at,
           auto_pause_enabled,
           auto_pause_window_minutes,
           auto_pause_failure_rate_bps,
@@ -646,10 +648,10 @@ async function handleRevert() {
     : t('revert-to-builtin-confirm')
   await confirmConsequentialChannelChange(
     dialogStore,
-    { cancel: t('button-cancel'), confirm: t('channel-pause-updates-confirm') },
+    { cancel: t('button-cancel'), confirm: t('channel-revert-button') },
     {
       id: 'confirm-revert-to-builtin',
-      title: t('channel-pause-updates-title'),
+      title: t('channel-revert-confirm-title'),
       description,
       confirmRole: 'danger',
       onConfirm: async () => {
@@ -664,9 +666,38 @@ async function handleRevert() {
           })
         }
         if (await saveChannelChanges(changes)) {
-          toast.success(t('channel-updates-paused'))
+          toast.success(t('channel-reverted-to-builtin'))
           await askUpdateNotificationAfterBundleChange()
         }
+      },
+    },
+  )
+}
+
+async function toggleChannelPause() {
+  if (!canUpdateChannelSettings.value) {
+    toast.error(t('no-permission'))
+    return
+  }
+  if (!channel.value)
+    return
+  const resuming = channelPaused.value
+  await confirmConsequentialChannelChange(
+    dialogStore,
+    { cancel: t('button-cancel'), confirm: resuming ? t('channel-resume-updates') : t('channel-pause-updates') },
+    {
+      id: resuming ? 'confirm-resume-channel' : 'confirm-pause-channel',
+      title: resuming ? t('channel-resume-confirm-title') : t('channel-pause-confirm-title'),
+      description: resuming
+        ? t('channel-resume-confirm-description', { bundle: rolloutIsActive.value ? `${stableBundleName.value} / ${rolloutTargetName.value}` : stableBundleName.value })
+        : t('channel-pause-confirm-description'),
+      confirmRole: resuming ? 'primary' : 'danger',
+      onConfirm: async () => {
+        if (!await saveChannelChange('paused_at', resuming ? null : new Date().toISOString()))
+          return
+        toast.success(resuming ? t('channel-updates-resumed') : t('channel-updates-paused'))
+        if (resuming)
+          await askUpdateNotificationAfterBundleChange()
       },
     },
   )
@@ -1234,8 +1265,11 @@ async function copyCurlCommand() {
       <div class="w-full h-full px-0 pt-0 mx-auto mb-8 sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
         <div class="flex flex-col bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10">
           <div class="px-4 py-4 border-b sm:px-6 border-slate-200 dark:border-slate-500" data-test="channel-summary">
-            <p v-if="channelUpdatesPaused" class="text-sm font-medium text-amber-800 dark:text-amber-200" data-test="channel-summary-paused">
+            <p v-if="channelPaused" class="text-sm font-medium text-amber-800 dark:text-amber-200" data-test="channel-summary-paused">
               {{ t('channel-summary-paused') }}
+            </p>
+            <p v-else-if="channelOnBuiltin && !rolloutIsActive" class="text-sm text-slate-700 dark:text-slate-200">
+              {{ t('channel-summary-builtin') }}
             </p>
             <p v-else-if="!rolloutIsActive" class="text-sm text-slate-700 dark:text-slate-200">
               {{ t('channel-summary-serves', { bundle: channel.version.name }) }}
@@ -1263,7 +1297,20 @@ async function copyCurlCommand() {
             <InfoRow :label="t('name')">
               {{ channel.name }}
             </InfoRow>
-            <div v-if="rolloutIsActive" class="px-4 py-4 sm:px-6">
+            <div v-if="channelPaused" class="px-4 py-4 sm:px-6" data-test="channel-paused-banner">
+              <div class="flex gap-3 rounded-md border px-4 py-3 border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800/70 dark:bg-amber-950/30 dark:text-amber-100">
+                <IconWarning class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                <div class="min-w-0 space-y-1">
+                  <p class="text-sm font-semibold">
+                    {{ t('channel-paused-banner-title') }}
+                  </p>
+                  <p class="text-xs opacity-90">
+                    {{ t('channel-paused-banner-hint') }}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div v-else-if="rolloutIsActive" class="px-4 py-4 sm:px-6">
               <div class="flex gap-3 rounded-md border px-4 py-3" :class="rolloutDeliveryBannerClass">
                 <IconWarning class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                 <div class="min-w-0 space-y-1">
@@ -1276,56 +1323,56 @@ async function copyCurlCommand() {
                 </div>
               </div>
             </div>
-            <!-- Bundle assigned to this channel -->
-            <InfoRow :label="rolloutIsActive ? t('stable-fallback') : t('bundle-assigned-to-this-channel')" class="sm:items-center" label-class="text-base! leading-5 font-bold! lg:whitespace-nowrap" :is-link="channel && !isInternalVersionName((channel.version.name))">
-              <div class="flex items-center gap-3">
-                <span class="text-base leading-5 cursor-pointer" @click="openBundle()">{{ channel.version.name }}</span>
+            <!-- Bundle assigned to this channel + channel-wide actions -->
+            <div class="flex flex-col gap-3 px-4 py-4 sm:px-6 sm:py-5 lg:flex-row lg:items-center lg:justify-between" data-test="channel-bundle-row">
+              <dt class="text-base font-bold leading-5 text-gray-700 dark:text-gray-200 lg:whitespace-nowrap">
+                {{ rolloutIsActive ? t('stable-fallback') : t('bundle-assigned-to-this-channel') }}
+              </dt>
+              <dd class="flex flex-wrap items-center gap-2 lg:justify-end">
                 <button
-                  v-if="channel"
+                  v-if="!isInternalVersionName(channel.version.name)"
                   type="button"
-                  class="relative p-0 d-btn d-btn-outline size-6 min-h-6 before:absolute before:-inset-2.5 before:content-['']"
-                  :aria-label="t('select-stable-bundle')"
-                  :disabled="!canPromoteBundle"
-                  @click="openSelectStableVersion()"
+                  class="mr-1 text-base font-bold leading-5 text-blue-600 underline underline-offset-4 dark:text-blue-500"
+                  @click="openBundle()"
                 >
-                  <Settings class="w-4 h-4 text-gray-500 dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-400" />
+                  {{ channel.version.name }}
                 </button>
-              </div>
-            </InfoRow>
-            <!-- Pause updates: full revert of every device to the built-in bundle -->
-            <InfoRow :label="t('channel-pause-updates')" data-test="channel-pause-updates">
-              <div class="flex flex-col items-end gap-2 text-right">
-                <div class="flex flex-wrap items-center justify-end gap-3">
-                  <span
-                    v-if="channelUpdatesPaused"
-                    class="inline-flex items-center px-2 py-1 text-xs font-semibold rounded-md bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
-                  >
-                    {{ t('channel-updates-paused-badge') }}
-                  </span>
-                  <button
-                    v-if="channelUpdatesPaused"
-                    type="button"
-                    class="d-btn d-btn-sm d-btn-primary"
-                    :disabled="!canPromoteBundle"
-                    @click="openSelectStableVersion(true)"
-                  >
-                    {{ t('channel-resume-updates') }}
-                  </button>
-                  <button
-                    v-else
-                    type="button"
-                    class="d-btn d-btn-sm d-btn-outline d-btn-error"
-                    :disabled="!canPromoteBundle"
-                    @click="handleRevert()"
-                  >
-                    {{ t('channel-pause-updates-button') }}
-                  </button>
-                </div>
-                <p class="max-w-md text-xs text-slate-500 dark:text-slate-400">
-                  {{ channelUpdatesPaused ? t('channel-updates-paused-hint') : t('channel-pause-updates-hint') }}
-                </p>
-              </div>
-            </InfoRow>
+                <span v-else class="mr-1 text-base leading-5 text-slate-700 dark:text-slate-200">{{ t('builtin-bundle') }}</span>
+                <span
+                  v-if="channelPaused"
+                  class="inline-flex items-center px-2 py-1 mr-1 text-xs font-semibold rounded-md bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
+                >
+                  {{ t('channel-paused-badge') }}
+                </span>
+                <button
+                  type="button"
+                  class="d-btn d-btn-outline d-btn-sm"
+                  data-test="channel-change-bundle"
+                  :disabled="!canPromoteBundle"
+                  @click="openSelectStableVersion(channelOnBuiltin)"
+                >
+                  {{ t('change-bundle') }}
+                </button>
+                <button
+                  type="button"
+                  class="d-btn d-btn-outline d-btn-sm"
+                  data-test="channel-pause-toggle"
+                  :disabled="!canUpdateChannelSettings"
+                  @click="toggleChannelPause()"
+                >
+                  {{ channelPaused ? t('channel-resume-updates') : t('channel-pause-updates') }}
+                </button>
+                <button
+                  type="button"
+                  class="d-btn d-btn-outline d-btn-error d-btn-sm"
+                  data-test="channel-revert-builtin"
+                  :disabled="!canPromoteBundle || (channelOnBuiltin && !rolloutConfigured)"
+                  @click="handleRevert()"
+                >
+                  {{ t('channel-revert-button') }}
+                </button>
+              </dd>
+            </div>
             <InfoRow v-if="channel.disable_auto_update === 'version_number'" :label="t('min-update-version')">
               {{ channel.version.min_update_version ?? t('undefined-fail') }}
             </InfoRow>

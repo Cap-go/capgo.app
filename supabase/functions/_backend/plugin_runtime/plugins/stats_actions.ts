@@ -94,6 +94,7 @@ export const ALLOWED_STATS_ACTIONS = [
   'set_next',
   'os_version_changed',
   'native_app_version_changed',
+  'channelPaused',
 ] as const satisfies readonly Database['public']['Enums']['stats_action'][]
 
 export const ALLOWED_STATS_ACTIONS_SET: ReadonlySet<string> = new Set(ALLOWED_STATS_ACTIONS)
