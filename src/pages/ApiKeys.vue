@@ -601,8 +601,11 @@ async function fetchOrgAndAppNames() {
         throw error
 
       const namesById = new Map((data ?? []).map(row => [row.id, row.name]))
-      for (const orgId of uncachedOrgIds)
-        orgCache.value.set(orgId, namesById.get(orgId) ?? 'Unknown')
+      for (const orgId of uncachedOrgIds) {
+        const name = namesById.get(orgId)
+        if (name !== undefined)
+          orgCache.value.set(orgId, name)
+      }
     }
     catch (err) {
       console.error('Error fetching org names:', err)

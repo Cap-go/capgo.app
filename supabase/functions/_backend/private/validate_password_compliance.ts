@@ -176,6 +176,7 @@ app.post('/', async (c) => {
         await verifyCaptchaToken(c, body.captcha_token ?? '', captchaSecret)
       }
       catch {
+        await recordFailedAuth(c)
         return quickError(400, 'captcha_failed', 'CAPTCHA verification failed')
       }
     }

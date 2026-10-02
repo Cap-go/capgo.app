@@ -5,8 +5,8 @@ export interface OrgMemberRbacRow {
   email: string
   image_url: string | null
   role_name: string
-  role_id: string
-  binding_id: string
+  role_id: string | null
+  binding_id: string | null
   granted_at: string
   is_invite: boolean
   is_tmp: boolean

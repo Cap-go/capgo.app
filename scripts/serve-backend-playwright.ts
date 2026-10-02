@@ -99,12 +99,23 @@ async function resetSupabaseDb() {
   }
 }
 
+async function waitForMailboxReady() {
+  const deadline = Date.now() + 10000
+  while (Date.now() < deadline) {
+    const ready = await fetch(`http://127.0.0.1:${supabaseConfig.ports.inbucket}/`, { signal: AbortSignal.timeout(1000) }).then(response => response.ok).catch(() => false)
+    if (ready)
+      return true
+    await sleep(500)
+  }
+  return false
+}
+
 async function ensureSupabaseStarted() {
   const maxAttempts = 4
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const healthy = hasHealthySupabaseApi(getSupabaseStatus())
-    const mailboxReady = await fetch(`http://127.0.0.1:${supabaseConfig.ports.inbucket}/`, { signal: AbortSignal.timeout(3000) }).then(response => response.ok).catch(() => false)
+    const mailboxReady = healthy && await waitForMailboxReady()
     if (healthy && mailboxReady)
       return
     if (healthy)
@@ -116,7 +127,7 @@ async function ensureSupabaseStarted() {
       env: process.env,
     })
 
-    if ((startResult.status ?? 1) === 0 && hasHealthySupabaseApi(getSupabaseStatus()))
+    if ((startResult.status ?? 1) === 0 && hasHealthySupabaseApi(getSupabaseStatus()) && await waitForMailboxReady())
       return
 
     stopSupabase()

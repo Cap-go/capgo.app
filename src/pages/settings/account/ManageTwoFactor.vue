@@ -35,7 +35,7 @@ const mfaFactorId = ref('')
 const mfaSetupDate = ref<string | null>(null)
 const otpAlreadyVerified = ref(false)
 const currentPassword = ref('')
-const passwordRequired = ref(true)
+const passwordRequired = ref<boolean | null>(null)
 
 // Stepper state
 const currentStep = ref(1)
@@ -187,8 +187,23 @@ async function verifyOtpForMfa() {
     return
   }
 
+  otpAlreadyVerified.value = true
+  otpVerificationCode.value = ''
+  currentStep.value = 1
   toast.success(t('email-otp-verified'))
   await enrollTotp()
+}
+
+async function ensurePasswordRequirement() {
+  if (passwordRequired.value === null) {
+    const accounts = await supabase.betterAuth.listAccounts()
+    if (accounts.error) {
+      toast.error(t('mfa-fail'))
+      return false
+    }
+    passwordRequired.value = !!accounts.data?.some(account => account.providerId === 'credential')
+  }
+  return !passwordRequired.value || !!currentPassword.value
 }
 
 async function enrollTotp() {
@@ -196,6 +211,8 @@ async function enrollTotp() {
     return
   isEnrolling.value = true
   try {
+    if (!await ensurePasswordRequirement())
+      return
     const { data, error } = await supabase.auth.mfa.enroll({ factorType: 'totp', password: currentPassword.value })
     if (error) {
       toast.error(t('mfa-fail'))
@@ -261,6 +278,8 @@ async function verifyAndEnable() {
 }
 
 async function disableMfa() {
+  if (!await ensurePasswordRequirement())
+    return
   dialogStore.openDialog({
     title: t('alert-2fa-disable'),
     description: `${t('alert-not-reverse-message')} ${t('alert-disable-2fa-message')}?`,
@@ -337,7 +356,7 @@ onMounted(async () => {
     loadOtpVerificationStatus(),
     supabase.betterAuth.listAccounts(),
   ])
-  passwordRequired.value = accounts.error ? true : !!accounts.data?.some(account => account.providerId === 'credential')
+  passwordRequired.value = accounts.error ? null : !!accounts.data?.some(account => account.providerId === 'credential')
 
   if (error) {
     console.error('Cannot get MFA factors', error)
@@ -357,7 +376,7 @@ onMounted(async () => {
 
   if (!mfaEnabled.value && otpValid) {
     otpAlreadyVerified.value = true
-    if (!passwordRequired.value)
+    if (passwordRequired.value === false)
       await enrollTotp()
   }
 
@@ -495,7 +514,7 @@ onBeforeUnmount(clearOtpSendCooldownTimer)
           <div class="max-w-lg mx-auto">
             <!-- Step 1: CAPTCHA -->
             <div v-if="currentStep === 1 && otpAlreadyVerified" class="space-y-4">
-              <button type="button" class="d-btn d-btn-primary d-btn-sm" :disabled="isEnrolling || (passwordRequired && !currentPassword)" @click="enrollTotp">
+              <button type="button" class="d-btn d-btn-primary d-btn-sm" :disabled="isEnrolling || (passwordRequired === true && !currentPassword)" @click="enrollTotp">
                 {{ t('next') }}
               </button>
             </div>

@@ -3,17 +3,25 @@ import type { Context } from 'hono'
 import { getRuntimeKey } from 'hono/adapter'
 import ipaddr from 'ipaddr.js'
 import { IdentityProvider } from 'samlify'
+import { simpleError } from './hono.ts'
 import { getPgClient } from './pg.ts'
 import { getEnv } from './utils.ts'
 
 export function consoleSamlConfig(authURL: string, providerId: string, xml: string, mapping: Record<string, string> = {}): SAMLConfig {
   if (new TextEncoder().encode(xml).length > 262144 || /<!DOCTYPE|<!ENTITY/i.test(xml))
-    throw new Error('Invalid SAML metadata')
-  const idp = IdentityProvider({ metadata: xml })
-  const entryPoint = idp.entityMeta.getSingleSignOnService('redirect')
-  const cert = idp.entityMeta.getX509Certificate('signing')
-  if (!idp.entityMeta.getEntityID() || typeof entryPoint !== 'string' || !entryPoint || !cert?.length)
-    throw new Error('SAML metadata must contain an entity, redirect service, and signing certificate')
+    throw simpleError('invalid_saml_metadata', 'Invalid SAML metadata')
+  let entryPoint: string
+  try {
+    const idp = IdentityProvider({ metadata: xml })
+    const service = idp.entityMeta.getSingleSignOnService('redirect')
+    const cert = idp.entityMeta.getX509Certificate('signing')
+    if (!idp.entityMeta.getEntityID() || typeof service !== 'string' || !service || !cert?.length)
+      throw new Error('Missing SAML metadata fields')
+    entryPoint = service
+  }
+  catch {
+    throw simpleError('invalid_saml_metadata', 'SAML metadata must contain an entity, redirect service, and signing certificate')
+  }
   const base = `${authURL.replace(/\/$/, '')}/auth`
   return {
     issuer: `${base}/sso/saml2/sp/metadata?providerId=${encodeURIComponent(providerId)}`,

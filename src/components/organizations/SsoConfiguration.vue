@@ -288,6 +288,8 @@ async function deleteProvider(provider: SsoProvider) {
             }
 
             providers.value = providers.value.filter(p => p.id !== provider.id)
+            if (metadataProviderId.value === provider.id)
+              metadataProviderId.value = providers.value[0]?.id ?? ''
             if (recentlyCreatedId.value === provider.id)
               recentlyCreatedId.value = null
 
@@ -396,10 +398,7 @@ function formatDate(dateString: string): string {
 
 watch(metadataProviderId, fetchSpMetadata)
 
-onMounted(async () => {
-  await fetchProviders()
-  await fetchSpMetadata()
-})
+onMounted(fetchProviders)
 
 // Expose showAddForm so parent can control it
 defineExpose({
@@ -408,6 +407,11 @@ defineExpose({
 </script>
 
 <template>
+  <select v-if="providers.length > 1" v-model="metadataProviderId" :aria-label="t('sso-service-provider-metadata')" class="mb-3 select select-bordered">
+    <option v-for="provider in providers" :key="provider.id" :value="provider.id">
+      {{ provider.domain }}
+    </option>
+  </select>
   <!-- Service Provider Metadata (shown when available) -->
   <div
     v-if="spMetadata"
@@ -419,11 +423,7 @@ defineExpose({
     <p class="mb-3 text-sm text-slate-500 dark:text-slate-400">
       {{ t('sso-metadata-description') }}
     </p>
-    <select v-if="providers.length > 1" v-model="metadataProviderId" :aria-label="t('sso-service-provider-metadata')" class="mb-3 select select-bordered">
-      <option v-for="provider in providers" :key="provider.id" :value="provider.id">
-        {{ provider.domain }}
-      </option>
-    </select>
+
     <div class="p-3 space-y-2 font-mono text-sm bg-white border border-slate-200 rounded dark:bg-slate-800/60 dark:border-white/10">
       <div class="flex items-center justify-between gap-2">
         <p class="text-slate-600 dark:text-slate-400 min-w-0">

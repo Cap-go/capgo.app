@@ -91,6 +91,8 @@ async function completeSsoLogin() {
     }
     else {
       const result = await supabase.auth.exchangeCodeForSession('')
+      if (result.error)
+        throw result.error
       session = result.data.session
       if (!session)
         throw new Error('No authentication data found')

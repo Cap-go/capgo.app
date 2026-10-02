@@ -57,6 +57,9 @@ else
   echo -e "${YELLOW}Warning: ${BASE_ENV_FILE} not found - starting with empty base env${NC}"
 fi
 
+WEBAPP_URL_FROM_BASE="$(sed -n 's/^WEBAPP_URL=//p' "${RUNTIME_ENV_FILE}" | tail -n 1 | sed -E 's/^"//; s/"$//')"
+WEBAPP_URL="${WEBAPP_URL:-${WEBAPP_URL_FROM_BASE:-http://localhost:5173}}"
+
 SUPA_ENV="$(run_supabase_status_env || true)"
 SUPABASE_URL_FROM_STATUS="$(get_supabase_status_var 'API_URL')"
 SUPABASE_DB_URL_FROM_STATUS="$(get_supabase_status_var 'DB_URL')"
@@ -159,7 +162,7 @@ CONSOLE_AUTH_URL=${CLOUDFLARE_FUNCTION_URL}
 CONSOLE_REQUIRE_EMAIL_VERIFICATION=false
 BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-local-console-auth-development-secret-32-characters}
 JWT_SECRET=${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
-WEBAPP_URL=${WEBAPP_URL:-http://localhost:5173}
+WEBAPP_URL=${WEBAPP_URL}
 CONSOLE_SMTP_URL=${CONSOLE_SMTP_URL:-}
 RATE_LIMIT_API_KEY=999999
 RATE_LIMIT_FAILED_AUTH=999999
