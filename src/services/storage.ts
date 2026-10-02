@@ -16,6 +16,9 @@ export function resolveImagePath(raw?: string | null) {
 
   try {
     const url = new URL(trimmed)
+    if (url.pathname.endsWith('/private/console/images/read') && url.searchParams.get('path')) {
+      return { normalized: url.searchParams.get('path')!.replace(/^\/+/, ''), shouldSign: true }
+    }
     const match = STORAGE_URL_REGEX.exec(url.pathname)
     if (match?.[1]) {
       return {

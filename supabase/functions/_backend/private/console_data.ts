@@ -5,6 +5,7 @@ import { CONSOLE_RPCS, CONSOLE_TABLES } from '../utils/console_query_allowlist.t
 import { parseBody, quickError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { emptySupabase, supabaseClient } from '../utils/supabase.ts'
+import { getEnv } from '../utils/utils.ts'
 
 const operations = z.enum(['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'like', 'ilike', 'is', 'in', 'contains', 'containedBy', 'overlaps', 'not', 'or', 'filter', 'match', 'order', 'limit', 'range', 'single', 'maybeSingle', 'throwOnError'])
 const querySchema = z.object({
@@ -13,6 +14,7 @@ const querySchema = z.object({
   args: z.array(z.unknown()).max(2),
   operations: z.array(z.object({ method: operations, args: z.array(z.unknown()).max(3) })).max(64),
 })
+const imagePathSchema = z.string().min(1).max(1024).refine(path => path.split('/').every(segment => segment !== '.' && segment !== '..'))
 
 export const app = new Hono<MiddlewareKeyVariables>()
 app.use('*', useCors)
@@ -62,11 +64,40 @@ app.post('/images/upload', middlewareAuth, async (c) => {
 })
 
 app.post('/images/sign', middlewareAuth, async (c) => {
-  const body = z.object({ path: z.string().min(1).max(1024), expiresIn: z.number().int().min(1).max(604800) }).safeParse(await parseBody(c))
+  const body = z.object({ path: imagePathSchema, expiresIn: z.number().int().min(1).max(604800) }).safeParse(await parseBody(c))
   if (!body.success)
     return quickError(400, 'invalid_body', 'Invalid image request')
   const result = await supabaseClient(c, c.get('authorization')!).storage.from('images').createSignedUrl(body.data.path, body.data.expiresIn)
-  return c.json(result)
+  if (result.error || !result.data)
+    return c.json(result)
+  const token = new URL(result.data.signedUrl).searchParams.get('token')
+  if (!token)
+    return quickError(502, 'image_sign_failed', 'Unable to sign image')
+  const signedUrl = new URL(`${getEnv(c, 'CONSOLE_AUTH_URL').replace(/\/$/, '')}/private/console/images/read`)
+  signedUrl.searchParams.set('path', body.data.path)
+  signedUrl.searchParams.set('token', token)
+  return c.json({ ...result, data: { signedUrl: signedUrl.href } })
+})
+
+// The signed capability was issued with the caller's RLS; image elements do not send bearer headers.
+app.get('/images/read', async (c) => {
+  const query = z.object({ path: imagePathSchema, token: z.string().min(1).max(4096) }).safeParse(c.req.query())
+  if (!query.success)
+    return quickError(400, 'invalid_image', 'Invalid image request')
+  const path = query.data.path.split('/').map(encodeURIComponent).join('/')
+  const upstream = new URL(`/storage/v1/object/sign/images/${path}`, getEnv(c, 'SUPABASE_URL'))
+  upstream.searchParams.set('token', query.data.token)
+  const response = await fetch(upstream, { redirect: 'error', signal: AbortSignal.timeout(10000) })
+  if (!response.ok)
+    return quickError(response.status >= 500 ? 502 : response.status === 404 ? 404 : 403, 'image_unavailable', 'Image is unavailable')
+  return new Response(response.body as unknown as ReadableStream, {
+    headers: {
+      'Content-Type': response.headers.get('content-type') ?? 'application/octet-stream',
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': 'sandbox; default-src \'none\'',
+    },
+  })
 })
 
 app.post('/images/remove', middlewareAuth, async (c) => {
