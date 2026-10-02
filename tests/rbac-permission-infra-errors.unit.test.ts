@@ -2,7 +2,8 @@ import { HTTPException } from 'hono/http-exception'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const executeMock = vi.fn()
-const getPgClientMock = vi.fn(() => ({}))
+let pgClientSerial = 0
+const getPgClientMock = vi.fn(() => ({ clientId: ++pgClientSerial }))
 const getDrizzleClientMock = vi.fn(() => ({
   execute: executeMock,
 }))
@@ -51,6 +52,7 @@ function makeContext(auth: Record<string, unknown> | undefined = {
 describe('rbac permission infra errors', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    pgClientSerial = 0
   })
 
   it('checkPermission returns false for real ACL denials', async () => {
@@ -114,6 +116,9 @@ describe('rbac permission infra errors', () => {
     expect(getPgClientMock).toHaveBeenCalledTimes(2)
     expect(closeClientMock).toHaveBeenCalledTimes(2)
     expect(waitAuthPgRetryJitterMock).toHaveBeenCalledTimes(1)
+    const drizzlePgClients = getDrizzleClientMock.mock.calls.map(call => call[0])
+    expect(drizzlePgClients).toHaveLength(2)
+    expect(drizzlePgClients[0]).not.toBe(drizzlePgClients[1])
   })
 
   it('checkPermissionPgFreshRetry does not retry non-transient permission failures', async () => {
