@@ -92,7 +92,7 @@ describe('manifest upload request contract', () => {
 
     await expectBodyError(rawRequest, 413, 'error_manifest_too_large')
 
-    expect(emitted).toBe(33)
+    expect(emitted).toBe(Math.floor(MAX_MANIFEST_UPLOAD_BODY_BYTES / chunk.length) + 1)
     expect(cancelled).toBe(true)
     expect(rawRequest.bodyUsed).toBe(true)
   })
