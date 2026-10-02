@@ -3931,5 +3931,16 @@
   "release-live-no-release": "No release on this channel yet",
   "release-live-no-release-help": "Upload a bundle and assign it to this channel to follow its rollout here.",
   "release-live-fetch-error": "Could not load live release data",
-  "release-banner-watch-live": "Watch live"
+  "release-banner-watch-live": "Watch live",
+  "error-fetching-channels": "Error fetching channels! Please check the browser console and contact support",
+  "promote-to-channel": "Promote to another channel",
+  "promote-to-channel-button": "Promote to…",
+  "promote-to-channel-description": "Link bundle {bundle} from {channel} to another channel. Devices on that channel will receive it on their next update check.",
+  "promote-channel-pick-target": "Choose the channel that should serve this bundle",
+  "promote-channel-current-bundle": "Currently serving {bundle}",
+  "promote-channel-already-serving": "Already serving this bundle",
+  "promote-channel-select-target": "Select a channel to promote to",
+  "promote-channel-no-target": "This app has no other channel to promote to",
+  "promote-channel-no-bundle": "This channel has no uploaded bundle to promote",
+  "promote-to-channel-success": "Bundle {bundle} is now live on {channel}"
 }

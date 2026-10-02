@@ -15,6 +15,7 @@ import IconSearch from '~icons/ic/round-search?raw'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconWarning from '~icons/lucide/alert-triangle'
 import IconExternalLink from '~icons/lucide/external-link'
+import IconRocket from '~icons/lucide/rocket'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { formatDate, formatLocalDate } from '~/services/date'
@@ -68,6 +69,16 @@ const bundleLinkVersions = ref<Database['public']['Tables']['app_versions']['Row
 const bundleLinkSearchVal = ref('')
 const bundleLinkSearchMode = ref(false)
 const bundleLinkMode = ref<'stable' | 'rollout'>('stable')
+
+// Promote-to-channel dialog state
+interface PromoteTargetChannel {
+  id: number
+  name: string
+  versionName: string | null
+}
+const promoteDialogId = 'promote-channel-bundle'
+const promoteTargets = ref<PromoteTargetChannel[]>([])
+const promoteTargetId = ref<number | null>(null)
 
 const main = useMainStore()
 const route = useRoute('/app/[app].channel.[channel]')
@@ -455,13 +466,14 @@ async function isPushUpdateReady(appId: string) {
   }
 }
 
-async function askUpdateNotificationAfterBundleChange() {
+async function askUpdateNotificationAfterBundleChange(targetChannelName?: string) {
   if (!channel.value)
     return
 
   const routePath = route.path
   const appId = packageId.value
-  const channelName = channel.value.name
+  const pageChannelName = channel.value.name
+  const channelName = targetChannelName ?? pageChannelName
   if (!appId || !channelName)
     return
   if (!(await isPushUpdateReady(appId)))
@@ -470,7 +482,7 @@ async function askUpdateNotificationAfterBundleChange() {
     route.path !== routePath
     || !route.path.includes('/channel/')
     || packageId.value !== appId
-    || channel.value?.name !== channelName
+    || channel.value?.name !== pageChannelName
   ) {
     return
   }
@@ -526,17 +538,23 @@ const showSearchAndActions = computed(() => {
   return !bundleLinkSearchMode.value
 })
 
-async function handleVersionLink(appVersion: Database['public']['Tables']['app_versions']['Row']) {
-  if (!channel.value)
-    return
+/**
+ * Check a bundle's native packages against a channel and ask the user to accept a mismatch.
+ * Returns false when the user cancels.
+ */
+async function confirmBundleCompatibleWithChannel(
+  appVersion: Pick<Database['public']['Tables']['app_versions']['Row'], 'id' | 'app_id' | 'native_packages'>,
+  channelName: string,
+  compareVersionId?: number,
+) {
   const {
     finalCompatibility,
     localDependencies,
-  } = await checkCompatibilityNativePackages(appVersion.app_id, channel.value.name, (appVersion.native_packages as any) ?? [])
+  } = await checkCompatibilityNativePackages(appVersion.app_id, channelName, (appVersion.native_packages as any) ?? [])
 
   // Check if any package is incompatible
   if (localDependencies.length > 0 && finalCompatibility.some(x => !isCompatible(x))) {
-    toast.error(t('bundle-not-compatible-with-channel', { channel: channel.value.name }))
+    toast.error(t('bundle-not-compatible-with-channel', { channel: channelName }))
 
     dialogStore.openDialog({
       title: t('compatibility-accept-title'),
@@ -552,8 +570,7 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
           handler: () => {
             // Pre-select the channel's current bundle as the comparison baseline so the
             // Dependencies page opens already diffed against what is live on the channel.
-            const channelBundleId = channel.value?.version?.id
-            const compareQuery = channelBundleId ? `?compare=${channelBundleId}` : ''
+            const compareQuery = compareVersionId ? `?compare=${compareVersionId}` : ''
             router.push(`/app/${route.params.app}/bundle/${appVersion.id}/dependencies${compareQuery}`)
           },
         },
@@ -564,14 +581,22 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
       ],
     })
     if (await dialogStore.onDialogDismiss())
-      return
+      return false
   }
   else if (localDependencies.length === 0 || finalCompatibility.length === 0) {
     toast.info(t('ignore-compatibility'))
   }
   else {
-    toast.info(t('bundle-compatible-with-channel', { channel: channel.value.name }))
+    toast.info(t('bundle-compatible-with-channel', { channel: channelName }))
   }
+  return true
+}
+
+async function handleVersionLink(appVersion: Database['public']['Tables']['app_versions']['Row']) {
+  if (!channel.value)
+    return
+  if (!(await confirmBundleCompatibleWithChannel(appVersion, channel.value.name, channel.value.version?.id)))
+    return
   if (bundleLinkMode.value === 'rollout') {
     const applyRolloutTargetLink = async () => {
       const saved = await saveChannelChanges({
@@ -601,6 +626,112 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
     toast.success(t('linked-bundle'))
     await askUpdateNotificationAfterBundleChange()
   }
+}
+
+async function openPromoteToChannel() {
+  if (!channel.value?.version)
+    return
+  if (isInternalVersionName(channel.value.version.name)) {
+    toast.error(t('promote-channel-no-bundle'))
+    return
+  }
+
+  const { data, error } = await supabase
+    .from('channels')
+    .select('id, name, version:app_versions!channels_version_fkey(name)')
+    .eq('app_id', channel.value.app_id)
+    .neq('id', channel.value.id)
+    .order('name', { ascending: true })
+  if (error) {
+    console.error('cannot load channels to promote to', error)
+    toast.error(t('error-fetching-channels'))
+    return
+  }
+  if (!data?.length) {
+    toast.error(t('promote-channel-no-target'))
+    return
+  }
+
+  promoteTargets.value = data.map(row => ({
+    id: row.id,
+    name: row.name,
+    versionName: (row.version as { name: string } | null)?.name ?? null,
+  }))
+  promoteTargetId.value = null
+
+  dialogStore.openDialog({
+    id: promoteDialogId,
+    title: t('promote-to-channel'),
+    description: t('promote-to-channel-description', { bundle: channel.value.version.name, channel: channel.value.name }),
+    size: 'lg',
+    buttons: [
+      {
+        text: t('button-cancel'),
+        role: 'cancel',
+      },
+      {
+        text: t('promote'),
+        role: 'primary',
+        handler: () => {
+          if (promoteTargetId.value != null)
+            return true
+          toast.error(t('promote-channel-select-target'))
+          return false
+        },
+      },
+    ],
+  })
+  if (await dialogStore.onDialogDismiss())
+    return
+
+  const target = promoteTargets.value.find(item => item.id === promoteTargetId.value)
+  if (target)
+    await promoteBundleToChannel(target)
+}
+
+async function promoteBundleToChannel(target: PromoteTargetChannel) {
+  const source = channel.value
+  if (!source?.version)
+    return
+  if (!(await checkPermissions('channel.promote_bundle', { appId: source.app_id, channelId: target.id }))) {
+    toast.error(t('no-permission'))
+    return
+  }
+
+  const { data: appVersion, error: versionError } = await supabase
+    .from('app_versions')
+    .select('id, app_id, name, native_packages')
+    .eq('id', source.version.id)
+    .single()
+  if (versionError || !appVersion) {
+    console.error('cannot load bundle to promote', versionError)
+    toast.error(t('error-fetching-versions'))
+    return
+  }
+
+  const targetVersionId = await supabase
+    .from('channels')
+    .select('version')
+    .eq('id', target.id)
+    .single()
+    .then(({ data }) => data?.version ?? undefined)
+  if (!(await confirmBundleCompatibleWithChannel(appVersion, target.name, targetVersionId)))
+    return
+
+  const { data: updated, error } = await supabase
+    .from('channels')
+    .update({ version: appVersion.id })
+    .eq('id', target.id)
+    .select('id')
+  if (error || !updated?.length) {
+    console.error('cannot promote bundle', error)
+    toast.error(t(error ? (channelUpdatePackageErrorKey(error) ?? 'error-update-channel') : 'no-permission'))
+    return
+  }
+
+  toast.info(t('cloud-replication-delay'))
+  toast.success(t('promote-to-channel-success', { bundle: appVersion.name, channel: target.name }))
+  await askUpdateNotificationAfterBundleChange(target.name)
 }
 
 async function handleUnlink() {
@@ -1271,6 +1402,17 @@ async function copyCurlCommand() {
                 >
                   <Settings class="w-4 h-4 text-gray-500 dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-400" />
                 </button>
+                <button
+                  v-if="!isInternalVersionName(channel.version.name)"
+                  type="button"
+                  class="gap-1.5 font-medium d-btn d-btn-outline d-btn-xs text-slate-700 dark:text-slate-200"
+                  data-test="promote-to-channel"
+                  @click="openPromoteToChannel()"
+                >
+                  <IconRocket class="w-3.5 h-3.5" aria-hidden="true" />
+                  <!-- Nested inline-block stops the InfoRow link underline from propagating -->
+                  <span><span class="inline-block">{{ t('promote-to-channel-button') }}</span></span>
+                </button>
               </div>
             </InfoRow>
             <InfoRow v-if="channel.disable_auto_update === 'version_number'" :label="t('min-update-version')">
@@ -1883,6 +2025,39 @@ async function copyCurlCommand() {
         {{ t('back-to-channels') }}
       </button>
     </div>
+    <!-- Teleport Content for Promote To Channel Dialog -->
+    <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.id === promoteDialogId" defer to="#dialog-v2-content">
+      <fieldset class="w-full space-y-2" data-test="promote-channel-targets">
+        <legend class="mb-2 text-sm text-gray-600 dark:text-gray-400">
+          {{ t('promote-channel-pick-target') }}
+        </legend>
+        <label
+          v-for="target in promoteTargets"
+          :key="target.id"
+          class="flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors"
+          :class="promoteTargetId === target.id
+            ? 'border-primary bg-primary/5 dark:border-primary-500 dark:bg-primary/10'
+            : 'border-gray-300 hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-700'"
+        >
+          <input
+            v-model="promoteTargetId"
+            type="radio"
+            name="promote-target"
+            class="d-radio d-radio-sm d-radio-primary"
+            :value="target.id"
+          >
+          <span class="flex-1 min-w-0">
+            <span class="block font-medium truncate">{{ target.name }}</span>
+            <span class="block text-sm text-gray-600 truncate dark:text-gray-400">
+              {{ t('promote-channel-current-bundle', { bundle: target.versionName ?? t('not-configured') }) }}
+            </span>
+          </span>
+          <span v-if="target.versionName === channel?.version?.name" class="text-xs text-gray-500 dark:text-gray-400">
+            {{ t('promote-channel-already-serving') }}
+          </span>
+        </label>
+      </fieldset>
+    </Teleport>
     <!-- Teleport Content for Bundle Link Dialog -->
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('bundle-management')" defer to="#dialog-v2-content">
       <div class="w-full space-y-4">

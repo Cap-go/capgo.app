@@ -85,8 +85,8 @@ export function rejectOrAcceptIncompatibleChannelBundle(params: {
   throw new Error(params.errorMessage)
 }
 
-export async function setChannelInternal(channel: string, appId: string, options: OptionsSetChannel, silent = false) {
-  if (!silent)
+export async function setChannelInternal(channel: string, appId: string, options: OptionsSetChannel, silent = false, showFrame = true) {
+  if (!silent && showFrame)
     intro('Set channel')
 
   options.apikey = options.apikey || findSavedKey()
@@ -789,7 +789,7 @@ export async function setChannelInternal(channel: string, appId: string, options
     },
   }).catch(() => {})
 
-  if (!silent)
+  if (!silent && showFrame)
     outro('Done ✅')
 
   return true

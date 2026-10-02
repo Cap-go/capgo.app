@@ -31,6 +31,7 @@ import type {
   ObserveOptions,
   OrganizationInfo,
   ProbeOptions,
+  PromoteChannelOptions,
   RequestBuildOptions,
   SaveKeyOptions,
   SDKResult,
@@ -66,6 +67,7 @@ import { addChannelInternal } from './channel/add'
 import { currentBundleInternal } from './channel/currentBundle'
 import { deleteChannelInternal } from './channel/delete'
 import { listChannelsInternal } from './channel/list'
+import { promoteChannelInternal } from './channel/promote'
 import { setChannelInternal } from './channel/set'
 import { resolveCapacitorConfigTargetPath, withConfigWriteTarget } from './config'
 import { starAllRepositories as starAllRepositoriesInternal, starRepository } from './github'
@@ -76,7 +78,7 @@ import { addOrganizationInternal } from './organization/add'
 import { deleteOrganizationInternal } from './organization/delete'
 import { listOrganizationsInternal } from './organization/list'
 import { setOrganizationInternal } from './organization/set'
-import { requestBuildOptionsSchema, updateChannelOptionsSchema, uploadOptionsSchema } from './schemas/sdk'
+import { promoteChannelOptionsSchema, requestBuildOptionsSchema, updateChannelOptionsSchema, uploadOptionsSchema } from './schemas/sdk'
 import { CliUserError } from './shared/cli-user-error'
 import { getUserIdInternal } from './user/account'
 import { createSupabaseClient, findSavedKey, getConfig, getLocalConfig } from './utils'
@@ -930,6 +932,38 @@ export class CapgoSDK {
   }
 
   /**
+   * Promote the bundle currently linked to one channel to another channel
+   *
+   * @example
+   * ```typescript
+   * const result = await sdk.promoteChannel({
+   *   appId: 'com.example.app',
+   *   fromChannel: 'staging',
+   *   toChannel: 'production',
+   * })
+   * // result.data?.bundle === '1.2.3'
+   * ```
+   */
+  async promoteChannel(options: PromoteChannelOptions): Promise<SDKResult<{ bundle: string, fromChannel: string, toChannel: string }>> {
+    try {
+      const parsed = promoteChannelOptionsSchema.parse(options)
+      const data = await promoteChannelInternal(parsed.fromChannel, parsed.toChannel, parsed.appId, {
+        apikey: parsed.apikey || this.apikey || findSavedKey(true),
+        supaHost: parsed.supaHost || this.supaHost,
+        supaAnon: parsed.supaAnon || this.supaAnon,
+        ignoreMetadataCheck: parsed.ignoreMetadataCheck,
+        acceptIncompatible: parsed.acceptIncompatible,
+        sendUpdateNotification: parsed.sendUpdateNotification,
+      }, true)
+
+      return { success: true, data }
+    }
+    catch (error) {
+      return createErrorResult(error)
+    }
+  }
+
+  /**
    * Delete a channel
    *
    * @example
@@ -1419,6 +1453,15 @@ export async function getCurrentBundle(appId: string, channelId: string, options
   return sdk.getCurrentBundle(appId, channelId, options)
 }
 
+export async function promoteChannel(options: PromoteChannelOptions): Promise<SDKResult<{ bundle: string, fromChannel: string, toChannel: string }>> {
+  const sdk = new CapgoSDK({
+    apikey: options.apikey,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
+  return sdk.promoteChannel(options)
+}
+
 export async function updateAppSetting(path: string, options: SetSettingOptions): Promise<SDKResult> {
   const sdk = new CapgoSDK({
     apikey: options.apikey,
@@ -1680,6 +1723,7 @@ export type {
   ObserveOptions,
   OrganizationInfo,
   ProbeOptions,
+  PromoteChannelOptions,
   RequestBuildOptions,
   SaveKeyOptions,
   SDKResult,
