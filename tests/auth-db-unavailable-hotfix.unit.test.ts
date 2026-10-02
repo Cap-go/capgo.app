@@ -1,3 +1,4 @@
+/** Regression tests for files upload auth mapping transient Postgres errors to 503. */
 import { HTTPException } from 'hono/http-exception'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CapgoDrizzleQueryLogger } from '../supabase/functions/_backend/utils/drizzle_query_logger.ts'
