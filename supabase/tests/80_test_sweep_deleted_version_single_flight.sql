@@ -3,14 +3,14 @@
 -- bundle cleanup from the last 30 days, and no longer inflates manifest_count.
 BEGIN;
 
-SELECT plan(8);
+SELECT plan(9);
 
 CREATE TEMP TABLE sweep_case ON COMMIT DROP AS
 SELECT
     id,
-    (ARRAY['rows', 'leased', 'recent_touch', 'size_recent', 'size_old'])[row_number() OVER (ORDER BY id)] AS kind
+    (ARRAY['rows', 'leased', 'recent_touch', 'size_recent', 'size_old', 'leased_stale_count'])[row_number() OVER (ORDER BY id)] AS kind
 FROM (
-    SELECT id FROM public.app_versions WHERE deleted = false ORDER BY id LIMIT 5
+    SELECT id FROM public.app_versions WHERE deleted = false ORDER BY id LIMIT 6
 ) AS versions;
 
 -- Keep the explicit updated_at values below.
@@ -18,7 +18,7 @@ ALTER TABLE public.app_versions DISABLE TRIGGER handle_updated_at;
 
 UPDATE public.app_versions AS av
 SET deleted = true,
-    manifest_count = 0,
+    manifest_count = CASE WHEN c.kind = 'leased_stale_count' THEN 1 ELSE 0 END,
     deleted_at = CASE WHEN c.kind = 'size_old' THEN now() - interval '90 days' ELSE now() - interval '2 days' END,
     updated_at = CASE WHEN c.kind = 'recent_touch' THEN now() - interval '5 minutes' ELSE now() - interval '2 hours' END
 FROM sweep_case AS c
@@ -40,7 +40,7 @@ JOIN public.app_versions AS av ON av.id = c.id;
 INSERT INTO public.version_cleanup_leases (app_version_id, owner, lease_until)
 SELECT id, gen_random_uuid(), now() + interval '5 minutes'
 FROM sweep_case
-WHERE kind = 'leased';
+WHERE kind IN ('leased', 'leased_stale_count');
 
 SELECT ok(public.sweep_deleted_version_manifests(1000) >= 2, 'sweeper re-queues unfinished deletes');
 
@@ -78,6 +78,12 @@ SELECT isnt(
     (SELECT av.updated_at FROM public.app_versions AS av JOIN sweep_case AS c USING (id) WHERE c.kind = 'size_old'),
     now(),
     'unfinished delete older than 30 days is left for a reviewed repair'
+);
+
+SELECT is(
+    (SELECT av.manifest_count FROM public.app_versions AS av JOIN sweep_case AS c USING (id) WHERE c.kind = 'leased_stale_count'),
+    1,
+    'stale counter of a version under an active lease is left to the running pass'
 );
 
 SELECT ok(

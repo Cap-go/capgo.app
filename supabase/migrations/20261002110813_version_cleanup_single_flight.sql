@@ -33,7 +33,8 @@ WITH CHECK (false);
 -- The sweeper now:
 -- * skips versions under an active cleanup lease or touched in the last 30
 --   minutes (a message for them is already queued or running), instead of
---   adding a duplicate message every 15 minutes;
+--   adding a duplicate message every 15 minutes, and leaves the counter of a
+--   leased version to the running pass;
 -- * also re-queues deletes left unfinished in the last 30 days (bundle size
 --   never cleared), since the re-queued pass now runs the full delete;
 -- * touches updated_at only: any app_versions update enqueues
@@ -64,6 +65,14 @@ BEGIN
         SELECT 1
         FROM public.manifest AS m
         WHERE m.app_version_id = av.id
+      )
+      -- A running pass clears the counter itself once its last batch is
+      -- done; clearing it here too would decrement the app count twice.
+      AND NOT EXISTS (
+        SELECT 1
+        FROM public.version_cleanup_leases AS lease
+        WHERE lease.app_version_id = av.id
+          AND lease.lease_until > now()
       )
     ORDER BY av.deleted_at NULLS LAST, av.id
     LIMIT p_batch_size

@@ -456,6 +456,25 @@ describe('on_version_update deleted version cleanup', () => {
     )
     expect(callOrder).toContain('r2_trash')
     expect(callOrder).toContain('db_delete_row:1000')
+    // The stored size stays set, so the sweeper finds the unfinished delete.
+    expect(appVersionsMetaUpdate).not.toHaveBeenCalled()
+    expect(createStatsMeta).not.toHaveBeenCalled()
+  })
+
+  it('re-queues a continuation for versions deleted through deleted_at alone', async () => {
+    useManifestEntries(makeEntries(120))
+    const start = Date.now()
+    const now = vi.spyOn(Date, 'now').mockReturnValueOnce(start).mockReturnValue(start + 10 * 60 * 1000)
+
+    try {
+      await deleteIt(createContext(), createVersion({ manifest_count: 120 }))
+    }
+    finally {
+      now.mockRestore()
+    }
+
+    const requeueSql = pgQuery.mock.calls.find(([sql]) => typeof sql === 'string' && sql.includes('SET updated_at = now()'))?.[0] as string
+    expect(requeueSql).toContain('(deleted = true OR deleted_at IS NOT NULL)')
   })
 
   it('throws when rows remain after the trash/delete pass', async () => {

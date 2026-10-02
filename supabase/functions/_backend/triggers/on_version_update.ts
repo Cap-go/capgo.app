@@ -681,7 +681,7 @@ async function requeueVersionCleanup(c: Context, versionId: number) {
     UPDATE public.app_versions
     SET updated_at = now()
     WHERE id = ${versionId}
-      AND deleted = true
+      AND (deleted = true OR deleted_at IS NOT NULL)
   `))
 }
 
@@ -752,30 +752,9 @@ async function finishVersionDelete(c: Context, record: Database['public']['Table
   if (!await deleteManifest(c, record, deadline))
     return false
 
-  const { data, error: dbError } = await supabaseAdmin(c)
-    .from('app_versions_meta')
-    .select()
-    .eq('id', record.id)
-    .single()
-  if (dbError || !data) {
-    cloudlog({ requestId: c.get('requestId'), message: 'Cannot find version meta', id: record.id })
-  }
-  else if (data.size > 0) {
-    const { error: errorCreateStatsMeta } = await createStatsMeta(c, record.app_id, record.id, -data.size)
-    if (errorCreateStatsMeta)
-      cloudlog({ requestId: c.get('requestId'), message: 'error createStatsMeta', error: errorCreateStatsMeta })
-
-    const { error: errorUpdate } = await supabaseAdmin(c)
-      .from('app_versions_meta')
-      .update({ size: 0 })
-      .eq('id', record.id)
-    if (errorUpdate) {
-      cloudlog({ requestId: c.get('requestId'), message: 'error', error: errorUpdate })
-      throw simpleError('cannot_update_version_meta', 'Cannot update version metadata for deleted version', { id: record.id }, errorUpdate)
-    }
-  }
-
-  // Bundle zip: move to lifecycle trash. Retry via queue if this fails; manifests already cleared.
+  // Bundle zip: move to lifecycle trash before clearing the stored size. The
+  // size is the sweeper's marker for an unfinished delete, so a failed move
+  // stays retryable; moving an already-trashed zip again is a no-op.
   if (record.r2_path) {
     if (!isCanonicalAppVersionR2Path(record)) {
       cloudlog({
@@ -805,6 +784,29 @@ async function finishVersionDelete(c: Context, record: Database['public']['Table
   }
   else {
     cloudlog({ requestId: c.get('requestId'), message: 'No r2 path for deleted version', id: record.id })
+  }
+
+  const { data, error: dbError } = await supabaseAdmin(c)
+    .from('app_versions_meta')
+    .select()
+    .eq('id', record.id)
+    .single()
+  if (dbError || !data) {
+    cloudlog({ requestId: c.get('requestId'), message: 'Cannot find version meta', id: record.id })
+  }
+  else if (data.size > 0) {
+    const { error: errorCreateStatsMeta } = await createStatsMeta(c, record.app_id, record.id, -data.size)
+    if (errorCreateStatsMeta)
+      cloudlog({ requestId: c.get('requestId'), message: 'error createStatsMeta', error: errorCreateStatsMeta })
+
+    const { error: errorUpdate } = await supabaseAdmin(c)
+      .from('app_versions_meta')
+      .update({ size: 0 })
+      .eq('id', record.id)
+    if (errorUpdate) {
+      cloudlog({ requestId: c.get('requestId'), message: 'error', error: errorUpdate })
+      throw simpleError('cannot_update_version_meta', 'Cannot update version metadata for deleted version', { id: record.id }, errorUpdate)
+    }
   }
 
   return true
