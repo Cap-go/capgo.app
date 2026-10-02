@@ -430,20 +430,24 @@ export async function checkPermissionPgFreshRetry(
   readOnly = false,
 ): Promise<boolean> {
   for (let attempt = 0; attempt < 2; attempt++) {
-    const pgClient = getPgClient(c, readOnly)
+    let pgClient: ReturnType<typeof getPgClient> | undefined
     try {
+      pgClient = getPgClient(c, readOnly)
       const drizzleClient = getDrizzleClient(pgClient)
       return await checkPermissionPg(c, permission, scope, drizzleClient, userId, apikeyString)
     }
     catch (error) {
-      if (attempt === 0 && isDatabaseUnavailableError(error)) {
+      if (attempt === 0 && (isDatabaseUnavailableError(error) || isTransientPgError(error))) {
         await waitAuthPgRetryJitter()
         continue
       }
-      throw error
+      if (error instanceof HTTPException)
+        throw error
+      return handlePermissionCheckError(c, permission, scope, error, 'checkPermissionPg')
     }
     finally {
-      await closeClient(c, pgClient)
+      if (pgClient)
+        await closeClient(c, pgClient)
     }
   }
   return handlePermissionCheckError(

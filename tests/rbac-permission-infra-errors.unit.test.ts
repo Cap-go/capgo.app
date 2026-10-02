@@ -126,6 +126,28 @@ describe('rbac permission infra errors', () => {
     expect(drizzlePgClientsSeen[0].clientId).not.toBe(drizzlePgClientsSeen[1].clientId)
   })
 
+  it('checkPermissionPgFreshRetry retries transient pool acquisition failures', async () => {
+    getPgClientMock
+      .mockImplementationOnce(() => {
+        throw new Error('timeout exceeded when trying to connect')
+      })
+      .mockImplementation(() => ({ clientId: ++pgClientSerial }))
+    executeMock.mockResolvedValueOnce({ rows: [{ allowed: true }] })
+
+    await expect(checkPermissionPgFreshRetry(
+      makeContext(),
+      'app.upload_bundle',
+      { appId: 'ai.offthetools.app' },
+      '00000000-0000-4000-8000-000000000001',
+      'capgo_test_key',
+      false,
+    )).resolves.toBe(true)
+
+    expect(getPgClientMock).toHaveBeenCalledTimes(2)
+    expect(waitAuthPgRetryJitterMock).toHaveBeenCalledTimes(1)
+    expect(closeClientMock).toHaveBeenCalledTimes(1)
+  })
+
   it('checkPermissionPgFreshRetry does not retry non-transient permission failures', async () => {
     const invalidUuidError = Object.assign(new Error('invalid input syntax for type uuid: "bad"'), {
       code: '22P02',
