@@ -45,7 +45,7 @@ const overriddenEnv = [
   ['CONSOLE_REQUIRE_EMAIL_VERIFICATION', 'false'],
   ['BETTER_AUTH_SECRET', 'local-console-auth-development-secret-32-characters'],
   ['JWT_SECRET', 'super-secret-jwt-token-with-at-least-32-characters-long'],
-  ['CONSOLE_SMTP_URL', `smtp://supabase_inbucket_${supabaseConfig.projectId}:1025`],
+  ['CONSOLE_SMTP_URL', 'smtp://inbucket:1025'],
 ] as const
 
 function sleep(ms: number): Promise<void> {

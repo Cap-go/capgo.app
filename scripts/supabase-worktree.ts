@@ -150,7 +150,7 @@ function ensureFunctionsEnvFile(repoRoot: string, workdir: string, cfg: ReturnTy
   generated = upsertEnvValue(generated, 'CONSOLE_REQUIRE_EMAIL_VERIFICATION', 'false')
   generated = upsertEnvValue(generated, 'BETTER_AUTH_SECRET', 'local-console-auth-development-secret-32-characters')
   generated = upsertEnvValue(generated, 'JWT_SECRET', 'super-secret-jwt-token-with-at-least-32-characters-long')
-  generated = upsertEnvValue(generated, 'CONSOLE_SMTP_URL', `smtp://supabase_inbucket_${cfg.projectId}:1025`)
+  generated = upsertEnvValue(generated, 'CONSOLE_SMTP_URL', 'smtp://inbucket:1025')
 
   if (process.env.CLOUDFLARE_FUNCTION_URL)
     generated = upsertEnvValue(generated, 'CLOUDFLARE_FUNCTION_URL', process.env.CLOUDFLARE_FUNCTION_URL)
