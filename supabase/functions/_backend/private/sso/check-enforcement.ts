@@ -100,7 +100,9 @@ app.post('/', middlewareAuth, async (c) => {
     if (spoofAdminAuthorization) {
       const adminAuthorization = toBearerAuthorization(spoofAdminAuthorization)
       const adminClaims = await getClaimsFromJWT(c, adminAuthorization)
-      const validatedAdminAuthorization = c.get('authorization') ?? adminAuthorization
+      const validatedAdminAuthorization = adminAuthorization.startsWith('Bearer capgo_session_')
+        ? c.get('authorization') ?? adminAuthorization
+        : adminAuthorization
       if (authorization)
         c.set('authorization', authorization)
       const adminUserId = adminClaims?.sub

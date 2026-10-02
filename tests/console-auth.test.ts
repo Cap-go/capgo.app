@@ -25,21 +25,24 @@ describe('console Better Auth', () => {
   app.route('/auth', authRoutes)
   app.route('/private/console', dataRoutes)
 
-  async function request(path: string, body?: unknown, token?: string, cookie?: string) {
+  async function request(path: string, body?: unknown, token?: string, cookie?: string, origin = base) {
     return app.request(`${base}${path}`, {
       method: body === undefined ? 'GET' : 'POST',
-      headers: { origin: base, 'content-type': 'application/json', 'x-forwarded-for': `198.51.100.${Math.floor(Math.random() * 250) + 1}`, ...(token ? { authorization: `Bearer ${CONSOLE_SESSION_PREFIX}${token}` } : {}), ...(cookie ? { cookie } : {}) },
+      headers: { origin, 'content-type': 'application/json', 'x-forwarded-for': `198.51.100.${Math.floor(Math.random() * 250) + 1}`, ...(token ? { authorization: `Bearer ${CONSOLE_SESSION_PREFIX}${token}` } : {}), ...(cookie ? { cookie } : {}) },
       body: body === undefined ? undefined : JSON.stringify(body),
     }, { AUTH_EMAIL: { send: async (message: { to: string, text: string }) => { messages.push(message) } } })
   }
 
   async function signup() {
     const email = `console-auth-${randomUUID()}@example.com`
-    const response = await request('/auth/sign-up/email', { email, password, name: 'Console Auth Test', registration_device_type: 'mobile', registration_browser: 'Firefox', registration_os: 'Android' })
+    const response = await request('/auth/sign-up/email', { email, password, name: 'Console Auth Test', registration_device_type: 'mobile', registration_browser: 'Firefox', registration_os: 'Android' }, undefined, undefined, 'https://capgo.app')
     expect(response.status, await response.clone().text()).toBe(200)
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://capgo.app')
+    expect(response.headers.get('access-control-allow-credentials')).toBe('true')
+    const cookie = response.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')
     const result = await response.json() as { token: string, user: { id: string } }
     ids.push(result.user.id)
-    return { ...result, email } as { token: string, user: { id: string }, email: string }
+    return { ...result, email, cookie } as { token: string, user: { id: string }, email: string, cookie: string }
   }
 
   beforeAll(() => {
@@ -47,6 +50,7 @@ describe('console Better Auth', () => {
     vi.stubEnv('SUPABASE_DB_URL', POSTGRES_URL)
     vi.stubEnv('CONSOLE_AUTH_URL', base)
     vi.stubEnv('WEBAPP_URL', base)
+    vi.stubEnv('CONSOLE_TRUSTED_ORIGINS', 'https://capgo.app')
     vi.stubEnv('BETTER_AUTH_SECRET', 'console-auth-test-secret-at-least-32-characters')
     vi.stubEnv('CONSOLE_REQUIRE_EMAIL_VERIFICATION', 'false')
     vi.stubEnv('CONSOLE_SMTP_URL', '')
@@ -67,6 +71,8 @@ describe('console Better Auth', () => {
   it('owns login, keeps identity IDs, and enforces caller RLS', async () => {
     const first = await signup()
     const second = await signup()
+    const cookieSession = await (await request('/auth/console-session', undefined, undefined, first.cookie)).json() as { session: { user: { id: string } } }
+    expect(cookieSession.session.user.id).toBe(first.user.id)
     const login = await request('/auth/sign-in/email', { email: first.email, password })
     expect(login.status).toBe(200)
     const session = await login.json() as { token: string, user: { id: string } }
