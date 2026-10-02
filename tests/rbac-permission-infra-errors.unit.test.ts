@@ -55,7 +55,7 @@ describe('rbac permission infra errors', () => {
       .toBe(false)
   })
 
-  it('checkPermission surfaces connection failures as 503 upstream_unavailable', async () => {
+  it('checkPermission surfaces connection failures as 503 database_unavailable', async () => {
     executeMock.mockRejectedValueOnce(Object.assign(new Error('Connection terminated unexpectedly'), {
       code: 'ECONNRESET',
     }))
@@ -65,8 +65,8 @@ describe('rbac permission infra errors', () => {
       .toMatchObject({
         status: 503,
         cause: {
-          error: 'upstream_unavailable',
-          message: 'Permission check temporarily unavailable',
+        error: 'database_unavailable',
+        message: 'Database temporarily unavailable',
         },
       })
 
@@ -74,7 +74,7 @@ describe('rbac permission infra errors', () => {
   })
 
   it('checkPermissionPg surfaces Hyperdrive connect timeouts as 503', async () => {
-    executeMock.mockRejectedValue(new Error('timeout exceeded when trying to connect'))
+    executeMock.mockRejectedValueOnce(new Error('timeout exceeded when trying to connect'))
 
     await expect(checkPermissionPg(
       makeContext(),
@@ -86,7 +86,7 @@ describe('rbac permission infra errors', () => {
     )).rejects.toMatchObject({
       status: 503,
       cause: {
-        error: 'upstream_unavailable',
+        error: 'database_unavailable',
       },
     })
   })
@@ -128,7 +128,7 @@ describe('rbac permission infra errors', () => {
         code: '57P01',
       }),
     })
-    executeMock.mockRejectedValue(drizzleWrapped)
+    executeMock.mockRejectedValueOnce(drizzleWrapped)
 
     await expect(checkPermissionPg(
       makeContext(),
@@ -139,7 +139,7 @@ describe('rbac permission infra errors', () => {
       'capgo_test_key',
     )).rejects.toMatchObject({
       status: 503,
-      cause: { error: 'upstream_unavailable' },
+      cause: { error: 'database_unavailable' },
     })
   })
 
@@ -200,12 +200,12 @@ describe('rbac permission infra errors', () => {
       { orgId: '00000000-0000-4000-8000-000000000099' },
     )).rejects.toMatchObject({
       status: 503,
-      cause: { error: 'upstream_unavailable' },
+      cause: { error: 'database_unavailable' },
     })
   })
 
   it('checkPermissionPg surfaces statement timeouts as 503 on the non-rbac_id path', async () => {
-    executeMock.mockRejectedValue(Object.assign(
+    executeMock.mockRejectedValueOnce(Object.assign(
       new Error('canceling statement due to statement timeout'),
       { code: '57014' },
     ))
@@ -223,7 +223,7 @@ describe('rbac permission infra errors', () => {
       null,
     )).rejects.toMatchObject({
       status: 503,
-      cause: { error: 'upstream_unavailable' },
+      cause: { error: 'database_unavailable' },
     })
   })
 })

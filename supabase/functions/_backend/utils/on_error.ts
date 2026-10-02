@@ -216,23 +216,17 @@ export function onError(functionName: string) {
         && (e.cause as { suppressDiscordAlert?: unknown }).suppressDiscordAlert === true
       const suppressBackendAlert = suppressDiscordAlert || shouldSuppressQueueRetryAlert(c)
       if (e.status === 429 || e.status === 503) {
-        // Set rate-limit headers from moreInfo when available, but DO NOT
-        // overwrite the response body. Several distinct conditions reach this
-        // branch — `too_many_requests` from simpleRateLimit (IP failed-auth,
-        // API-key flood), `native_build_concurrency_limit_exceeded` from
-        // reserveNativeBuildSlot, and others — and collapsing them to a
-        // generic "You are being rate limited" string strips the actual
-        // errorCode/message/moreInfo (activeBuilds, limit, planName, reason,
-        // …) that callers need to react correctly. Fall through to
-        // `return c.json(res, e.status)` below so the thrower's real error
-        // payload is preserved.
+        // Preserve the thrower's JSON body (see `return c.json(res, e.status)` below).
+        // 429: rate limit headers from moreInfo. 503: optional Retry-After only.
         const rateLimitResetAt = typeof res.moreInfo?.rateLimitResetAt === 'number' ? res.moreInfo.rateLimitResetAt : undefined
         let retryAfterSeconds = typeof res.moreInfo?.retryAfterSeconds === 'number' ? res.moreInfo.retryAfterSeconds : undefined
-        if (typeof rateLimitResetAt === 'number' && Number.isFinite(rateLimitResetAt) && !(typeof retryAfterSeconds === 'number' && Number.isFinite(retryAfterSeconds))) {
-          retryAfterSeconds = Math.max(0, Math.ceil((rateLimitResetAt - Date.now()) / 1000))
-        }
-        if (typeof rateLimitResetAt === 'number' && Number.isFinite(rateLimitResetAt)) {
-          c.header('X-RateLimit-Reset', String(Math.ceil(rateLimitResetAt / 1000)))
+        if (e.status === 429) {
+          if (typeof rateLimitResetAt === 'number' && Number.isFinite(rateLimitResetAt) && !(typeof retryAfterSeconds === 'number' && Number.isFinite(retryAfterSeconds))) {
+            retryAfterSeconds = Math.max(0, Math.ceil((rateLimitResetAt - Date.now()) / 1000))
+          }
+          if (typeof rateLimitResetAt === 'number' && Number.isFinite(rateLimitResetAt)) {
+            c.header('X-RateLimit-Reset', String(Math.ceil(rateLimitResetAt / 1000)))
+          }
         }
         if (typeof retryAfterSeconds === 'number' && Number.isFinite(retryAfterSeconds)) {
           c.header('Retry-After', String(Math.max(0, Math.floor(retryAfterSeconds))))

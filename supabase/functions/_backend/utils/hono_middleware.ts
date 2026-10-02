@@ -7,7 +7,7 @@ import { getClaimsFromJWT } from './hono_jwt.ts'
 import { cloudlog } from './logging.ts'
 import type { PgAuthLookupResult } from './pg_auth_lookup.ts'
 import { throwDatabaseUnavailable } from './pg_auth_lookup.ts'
-import { withAuthPgRetry } from './pg_auth_retry.ts'
+import { isTransientPgError } from './pg_errors.ts'
 import { closeClient, getDrizzleClient, getPgClient, logPgError } from './pg.ts'
 import * as schema from './postgres_schema.ts'
 import { isAPIKeyRateLimited, isIPRateLimited, recordAPIKeyUsage, recordFailedAuth } from './rate_limit.ts'
@@ -84,9 +84,9 @@ async function checkKeyPg(
   drizzleClient: ReturnType<typeof getDrizzleClient>,
 ): Promise<PgAuthLookupResult<ApikeyRow>> {
   try {
-    const result = await withAuthPgRetry(() => drizzleClient.execute<FindApikeyByValueResult>(
+    const result = await drizzleClient.execute<FindApikeyByValueResult>(
       sql`SELECT * FROM find_apikey_by_value(${keyString})`,
-    ))
+    )
 
     const apiKey = result.rows[0]
     if (!apiKey) {
@@ -125,14 +125,14 @@ async function checkKeyByIdPg(
     if (expectedUserId) {
       conditions.push(eq(schema.apikeys.user_id, expectedUserId))
     }
-    const result = await withAuthPgRetry(() => drizzleClient
+    const result = await drizzleClient
       .select()
       .from(schema.apikeys)
       .where(and(
         ...conditions,
       ))
       .limit(1)
-      .then(data => data[0]))
+      .then(data => data[0])
 
     if (!result) {
       return { kind: 'not_found' }
@@ -655,17 +655,20 @@ async function resolveApiKey(
     return { kind: 'ok', value: row }
   }
 
-  let pgClient: ReturnType<typeof getPgClient> | null = null
-  try {
-    pgClient = getPgClient(c, readOnly)
-    const drizzleClient = getDrizzleClient(pgClient)
-    return await checkKeyPg(c, key, drizzleClient)
-  }
-  finally {
-    if (pgClient) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const pgClient = getPgClient(c, readOnly)
+    try {
+      const drizzleClient = getDrizzleClient(pgClient)
+      const outcome = await checkKeyPg(c, key, drizzleClient)
+      if (outcome.kind === 'db_error' && attempt === 0 && isTransientPgError(outcome.error))
+        continue
+      return outcome
+    }
+    finally {
       await closeClient(c, pgClient)
     }
   }
+  return { kind: 'db_error', error: new Error('resolveApiKey exhausted retries') }
 }
 
 function unwrapApiKeyLookup(
@@ -693,17 +696,20 @@ async function resolveSubkey(
     return { kind: 'ok', value: row }
   }
 
-  let subkeyPgClient: ReturnType<typeof getPgClient> | null = null
-  try {
-    subkeyPgClient = getPgClient(c, readOnly)
-    const drizzleClient = getDrizzleClient(subkeyPgClient)
-    return await checkKeyByIdPg(c, subkeyId, drizzleClient, expectedUserId)
-  }
-  finally {
-    if (subkeyPgClient) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const subkeyPgClient = getPgClient(c, readOnly)
+    try {
+      const drizzleClient = getDrizzleClient(subkeyPgClient)
+      const outcome = await checkKeyByIdPg(c, subkeyId, drizzleClient, expectedUserId)
+      if (outcome.kind === 'db_error' && attempt === 0 && isTransientPgError(outcome.error))
+        continue
+      return outcome
+    }
+    finally {
       await closeClient(c, subkeyPgClient)
     }
   }
+  return { kind: 'db_error', error: new Error('resolveSubkey exhausted retries') }
 }
 
 function unwrapSubkeyLookup(
