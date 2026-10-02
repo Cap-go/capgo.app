@@ -1,10 +1,11 @@
+import type { SupabaseStatus } from './supabase-worktree-status'
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import process, { env } from 'node:process'
 import { getPlaywrightStripeApiBaseUrl } from './playwright-stripe'
 import { getSupabaseWorktreeConfig } from './supabase-worktree-config'
-import { getSupabaseStatus, type SupabaseStatus } from './supabase-worktree-status'
+import { getSupabaseStatus } from './supabase-worktree-status'
 
 const repoRoot = process.cwd()
 const sourceEnvPath = resolve(repoRoot, 'supabase/functions/.env')
@@ -38,6 +39,11 @@ const overriddenEnv = [
   ['STRIPE_API_BASE_URL', stripeApiBaseUrl],
   ['STRIPE_WEBHOOK_SECRET', env.STRIPE_WEBHOOK_SECRET || 'testsecret'],
   ['WEBAPP_URL', webAppUrl],
+  ['CONSOLE_AUTH_URL', `http://127.0.0.1:${supabaseConfig.ports.api}/functions/v1`],
+  ['CONSOLE_REQUIRE_EMAIL_VERIFICATION', 'false'],
+  ['BETTER_AUTH_SECRET', 'local-console-auth-development-secret-32-characters'],
+  ['JWT_SECRET', 'super-secret-jwt-token-with-at-least-32-characters-long'],
+  ['CONSOLE_SMTP_URL', `smtp://supabase_inbucket_${supabaseConfig.projectId}:1025`],
 ] as const
 
 function sleep(ms: number): Promise<void> {
