@@ -149,6 +149,42 @@ async function mockUpdaterInsights(page: Page) {
   })
 }
 
+// Shaped like a real production rollout: a normal trickle of download
+// failures next to a healthy success rate.
+const releaseLiveInstalls = [340, 550, 660, 630, 650, 660, 570, 560, 560, 530, 480, 520, 490, 740, 660, 610, 540, 500, 460, 460, 410, 390, 365, 360, 335, 365, 305, 305, 238, 245, 190, 170, 148, 146, 98, 98, 104, 88, 106, 110, 98, 164, 205, 270, 318, 318, 330, 375, 455, 475, 465, 520, 190]
+
+async function mockReleaseLive(page: Page) {
+  const bucketMs = 30 * 60_000
+  const start = Date.parse('2026-10-01T13:30:00.000Z')
+  const series = releaseLiveInstalls.map((install, index) => {
+    const fail = Math.round(install * 0.03)
+    return { ts: new Date(start + index * bucketMs).toISOString(), get: install + fail + 20, install, fail }
+  })
+  const install = series.reduce((sum, bucket) => sum + bucket.install, 0)
+  const fail = series.reduce((sum, bucket) => sum + bucket.fail, 0)
+  const get = series.reduce((sum, bucket) => sum + bucket.get, 0)
+  const deployedAt = new Date(start).toISOString()
+  const production = { id: 1, name: 'production', is_default: true }
+  await page.route('**/private/release_live', route => route.fulfill({
+    json: {
+      release: { bundle_id: 1, version_name: '10.33.2', channel_id: 1, channel_name: 'production', deployed_at: deployedAt },
+      window: { start: deployedAt, end: new Date(start + series.length * bucketMs).toISOString(), bucket_minutes: 30, truncated: false },
+      totals: { get, install, fail, success_rate: Math.round((install / (install + fail)) * 1000) / 10 },
+      adoption: { devices_on_release: 20001, total_devices: 189574, percent: 10.6 },
+      failures: [
+        { action: 'download_fail', count: Math.round(fail * 0.88) },
+        { action: 'update_fail', count: fail - Math.round(fail * 0.88) },
+      ],
+      failed_devices: { total: 484, recovered: 15, stuck: 469 },
+      series,
+      channel: production,
+      channels: [production, { id: 2, name: 'beta', is_default: false }],
+      recent_deployments: [{ version_name: '10.33.2', channel_id: 1, channel_name: 'production', deployed_at: deployedAt }],
+      generated_at: new Date().toISOString(),
+    },
+  }))
+}
+
 /**
  * Console pages captured for before/after visual diffs.
  * Add routes here when a PR touches a new screen reviewers should compare.
@@ -205,6 +241,17 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'app-dashboard-native', path: '/app/com.demo.app/native', auth: true },
   { slug: 'app-dashboard-installs', path: '/app/com.demo.app/installs', auth: true },
   { slug: 'app-dashboard-active-bundle', path: '/app/com.demo.app/active-bundle', auth: true },
+  {
+    slug: 'app-dashboard-live-release',
+    path: '/app/com.demo.app/live',
+    auth: true,
+    prepare: async (page) => {
+      // Seed data has no recent rollout, so fixture the live release stats.
+      await mockReleaseLive(page)
+      await page.goto('/app/com.demo.app/live')
+      await page.getByText('10.33.2', { exact: true }).waitFor()
+    },
+  },
   {
     slug: 'onboarding-setup-v3',
     path: '/apps',
