@@ -4,9 +4,14 @@ import { createConsoleClient } from '../src/services/consoleClient'
 const { signup, signin } = vi.hoisted(() => ({ signup: vi.fn(), signin: vi.fn() }))
 vi.mock('better-auth/client', () => ({ createAuthClient: () => ({ signUp: { email: signup }, signIn: { email: signin } }) }))
 
-beforeEach(() => { vi.stubGlobal('location', { origin: 'https://console.example.com' }) })
+beforeEach(() => {
+  vi.stubGlobal('location', { origin: 'https://console.example.com' })
+})
 
-afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks() })
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.clearAllMocks()
+})
 
 describe('console registration session', () => {
   it('preserves the console invalid-credentials error contract', async () => {
