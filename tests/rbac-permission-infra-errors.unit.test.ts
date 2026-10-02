@@ -19,7 +19,11 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   getPgClient: getPgClientMock,
 }))
 
-const { checkPermission, checkPermissionPg } = await import('../supabase/functions/_backend/utils/rbac.ts')
+vi.mock('../supabase/functions/_backend/utils/pg_auth_retry.ts', () => ({
+  waitAuthPgRetryJitter: vi.fn().mockResolvedValue(undefined),
+}))
+
+const { checkPermission, checkPermissionPg, checkPermissionPgFreshRetry } = await import('../supabase/functions/_backend/utils/rbac.ts')
 
 function makeContext(auth: Record<string, unknown> | undefined = {
   userId: '00000000-0000-4000-8000-000000000001',
@@ -89,6 +93,24 @@ describe('rbac permission infra errors', () => {
         error: 'database_unavailable',
       },
     })
+  })
+
+  it('checkPermissionPgFreshRetry retries transient failures on a fresh connection', async () => {
+    executeMock
+      .mockRejectedValueOnce(new Error('timeout exceeded when trying to connect'))
+      .mockResolvedValueOnce({ rows: [{ allowed: true }] })
+
+    await expect(checkPermissionPgFreshRetry(
+      makeContext(),
+      'app.upload_bundle',
+      { appId: 'ai.offthetools.app' },
+      '00000000-0000-4000-8000-000000000001',
+      'capgo_test_key',
+      false,
+    )).resolves.toBe(true)
+
+    expect(getPgClientMock).toHaveBeenCalledTimes(2)
+    expect(closeClientMock).toHaveBeenCalledTimes(2)
   })
 
   it('checkPermissionPg treats invalid UUID cast errors as ACL deny, not 503', async () => {

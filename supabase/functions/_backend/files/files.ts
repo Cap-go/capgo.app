@@ -16,7 +16,7 @@ import { createManifestSizeReceipt, MANIFEST_SIZE_RECEIPT_HEADER } from '../util
 import { closeClient, getAppByIdPg, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { throwDatabaseUnavailable } from '../utils/pg_auth_lookup.ts'
 import { getAppByAppIdPg, getUserIdFromApikey } from '../utils/pg_files.ts'
-import { checkPermissionPg } from '../utils/rbac.ts'
+import { checkPermissionPgFreshRetry } from '../utils/rbac.ts'
 import { createStatsBandwidth } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 import { backgroundTask, getEnv } from '../utils/utils.ts'
@@ -1067,17 +1067,17 @@ async function checkWriteAppAccess(c: Context, next: Next) {
 
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'checkWriteAppAccess - checking app permissions via checkPermissionPg',
+      message: 'checkWriteAppAccess - checking app permissions via checkPermissionPgFreshRetry',
       userId,
       app_id,
     })
 
     // Use the new RBAC permission check
-    const hasPermission = await checkPermissionPg(c, 'app.upload_bundle', { appId: app_id }, drizzleClient, userId, capgkey)
+    const hasPermission = await checkPermissionPgFreshRetry(c, 'app.upload_bundle', { appId: app_id }, userId, capgkey, false)
 
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'checkWriteAppAccess - checkPermissionPg result',
+      message: 'checkWriteAppAccess - checkPermissionPgFreshRetry result',
       hasPermission,
     })
 
