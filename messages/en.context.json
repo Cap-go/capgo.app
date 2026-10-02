@@ -3930,5 +3930,16 @@
   "release-live-view-bundle": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "release-live-view-channel": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "release-live-waiting": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "release-banner-watch-live": "Used in Capgo web console areas: components/dashboard. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "release-banner-watch-live": "Used in Capgo web console areas: components/dashboard. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "revert-to-builtin-confirm-rollout": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "channel-pause-updates": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "channel-pause-updates-button": "Used in Capgo web console areas: pages/app. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "channel-pause-updates-hint": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "channel-pause-updates-title": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "channel-pause-updates-confirm": "Used in Capgo web console areas: pages/app. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "channel-updates-paused": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "channel-updates-paused-badge": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "channel-updates-paused-hint": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "channel-resume-updates": "Used in Capgo web console areas: pages/app. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "channel-summary-paused": "Used in Capgo web console areas: pages/app. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }
