@@ -12,10 +12,10 @@ import Tabs from '~/components/Tabs.vue'
 import { accountTabs } from '~/constants/accountTabs'
 import { organizationTabs as baseOrgTabs } from '~/constants/organizationTabs'
 import { settingsTabs } from '~/constants/settingsTabs'
+import { stripeEnabled } from '~/services/console'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
 import { openPortal } from '~/services/stripe'
-import { stripeEnabled } from '~/services/supabase'
 import { useOrganizationStore } from '~/stores/organization'
 import {
   BILLING_TAB_KEY,

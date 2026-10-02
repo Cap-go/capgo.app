@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { FormKit } from '@formkit/vue'
-import { FunctionsHttpError } from '@supabase/supabase-js'
 import { computedAsync } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
@@ -10,9 +9,10 @@ import IconCopy from '~icons/heroicons/document-duplicate'
 import iconEmail from '~icons/heroicons/envelope?raw'
 import iconName from '~icons/heroicons/user?raw'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { FunctionsHttpError } from '~/services/consoleClient'
+import { fetchOrgSupportChannel, updateOrganization } from '~/services/organizations'
 import { checkPermissions } from '~/services/permissions'
 import { pickPhoto, takePhoto } from '~/services/photos'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
@@ -22,7 +22,6 @@ const { t } = useI18n()
 const displayStore = useDisplayStore()
 const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
-const supabase = useSupabase()
 const isLoading = ref(true)
 const dialogRef = ref()
 const { currentOrganization } = storeToRefs(organizationStore)
@@ -45,11 +44,7 @@ async function loadSupportChannel(orgId: string | undefined) {
   if (!orgId)
     return
 
-  const { data, error } = await supabase
-    .from('orgs')
-    .select('support_channel_type, support_channel_url')
-    .eq('id', orgId)
-    .maybeSingle()
+  const { data, error } = await fetchOrgSupportChannel(orgId)
 
   if (sequence !== loadSupportChannelSequence)
     return
@@ -175,12 +170,9 @@ async function saveChanges(form: { orgName: string, email: string }) {
   isLoading.value = true
 
   // Update name
-  const { error } = await supabase
-    .from('orgs')
-    .update({
-      name: form.orgName,
-    })
-    .eq('id', gid)
+  const { error } = await updateOrganization(gid, {
+    name: form.orgName,
+  })
 
   if (error) {
     // TODO: INFORM USER THAT HE IS NOT ORG OWNER

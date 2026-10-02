@@ -1403,8 +1403,8 @@ async function goBack() {
 
       <section class="shrink-0 space-y-3">
         <button
-          type="button"
           v-if="isNativePlatform"
+          type="button"
           class="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-azure-500 px-4 py-3 text-sm font-semibold text-white transition-opacity active:opacity-80 disabled:cursor-not-allowed disabled:opacity-45"
           :disabled="isScanning || isLoading"
           @click="retryScanning"

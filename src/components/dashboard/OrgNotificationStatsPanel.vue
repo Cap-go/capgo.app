@@ -6,8 +6,8 @@ import IconBell from '~icons/heroicons/bell'
 import IconRefresh from '~icons/lucide/refresh-cw'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import Spinner from '~/components/Spinner.vue'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatNumberValue } from '~/services/formatLocale'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 type PeriodDayOption = 1 | 3 | 7 | 30
 
@@ -35,7 +35,7 @@ const props = withDefaults(defineProps<{
 })
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const localDays = ref<PeriodDayOption>(7)
 const stats = ref<NotificationStat[]>([])
 const overview = ref<OrgNotificationStatsResponse['overview']>({

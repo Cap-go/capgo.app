@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import IconAlertTriangle from '~icons/lucide/alert-triangle'
 import { groupCompatibilityEvents } from '~/services/compatibilityEvents'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 
 const props = defineProps<{
   appId: string
@@ -12,7 +12,7 @@ const props = defineProps<{
 
 const router = useRouter()
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 
 const unresolvedCount = ref(0)
 
@@ -57,8 +57,8 @@ watch(() => props.appId, () => {
 
 <template>
   <button
-    type="button"
     v-if="unresolvedCount > 0"
+    type="button"
     data-test="compatibility-banner"
     class="block w-full mb-4 overflow-hidden text-left transition-colors border rounded-lg cursor-pointer border-amber-200 bg-amber-50 hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:bg-amber-900/20 dark:border-amber-800 dark:hover:bg-amber-900/30"
     @click="viewCompatibility"

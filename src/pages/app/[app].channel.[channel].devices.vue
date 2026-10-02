@@ -10,7 +10,7 @@ import plusOutline from '~icons/ion/add-outline'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentionNotice.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { withBuiltinChannelVersion } from '~/services/versions'
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -28,7 +28,7 @@ const displayStore = useDisplayStore()
 const organizationStore = useOrganizationStore()
 const appDetailStore = useAppDetailStore()
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const packageId = ref<string>('')
 const id = ref<number>(0)
 const loading = ref(true)

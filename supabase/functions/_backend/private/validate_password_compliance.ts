@@ -3,6 +3,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { z } from 'zod'
+import { APIError } from 'better-auth/api'
 import { Hono } from 'hono/tiny'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { parseBody, quickError, simpleError, simpleRateLimit, useCors } from '../utils/hono.ts'
@@ -11,6 +12,9 @@ import { getEffectivePasswordMinLength, getPasswordPolicyValidationErrors } from
 import { clearFailedAccountAuth, isAccountRateLimited, isIPRateLimited, recordFailedAccountAuth, recordFailedAuth } from '../utils/rate_limit.ts'
 import { buildRateLimitInfo } from '../utils/rateLimitInfo.ts'
 import { emptySupabase, supabaseClient, supabaseAdmin as useSupabaseAdmin } from '../utils/supabase.ts'
+import { consoleAuthHeaders, createConsoleAuth } from '../utils/console_auth.ts'
+import { middlewareAuth } from '../utils/hono_jwt.ts'
+import { verifyCaptchaToken } from '../utils/captcha.ts'
 import { getEnv } from '../utils/utils.ts'
 
 interface ValidatePasswordCompliance {
@@ -160,14 +164,47 @@ app.post('/', async (c) => {
   const adminClient = useSupabaseAdmin(c)
 
   // Authenticate first to avoid leaking org existence to unauthenticated callers.
-  const loginClient = emptySupabase(c)
-  const { data: signInData, error: signInError } = await loginClient.auth.signInWithPassword({
-    email: body.email,
-    password: body.password,
-    options: body.captcha_token
-      ? { captchaToken: body.captcha_token }
-      : undefined,
-  })
+  let signInData: { user: { id: string } | null, session: { access_token: string } | null } = { user: null, session: null }
+  let signInError: { code?: string, message?: string, status?: number } | null = null
+  if (c.req.header('authorization')?.startsWith('Bearer capgo_session_')) {
+    await middlewareAuth(c, async () => {})
+    const auth = c.get('auth')!
+    if (auth.claims?.email?.toLowerCase() !== body.email.toLowerCase())
+      return quickError(401, 'invalid_credentials', 'Invalid email or password')
+    const captchaSecret = getEnv(c, 'CAPTCHA_SECRET_KEY')
+    if (captchaSecret) {
+      try {
+        await verifyCaptchaToken(c, body.captcha_token ?? '', captchaSecret)
+      }
+      catch {
+        await recordFailedAuth(c)
+        return quickError(400, 'captcha_failed', 'CAPTCHA verification failed')
+      }
+    }
+    const instance = createConsoleAuth(c)
+    try {
+      await instance.auth.api.verifyPassword({ headers: consoleAuthHeaders(c.req.raw.headers), body: { password: body.password } })
+      signInData = { user: { id: auth.userId }, session: { access_token: c.get('authorization')!.slice(7) } }
+    }
+    catch (error) {
+      if (!(error instanceof APIError) || error.body?.code !== 'INVALID_PASSWORD') {
+        if (error instanceof APIError && error.statusCode >= 400 && error.statusCode < 500)
+          return quickError(error.statusCode, typeof error.body?.code === 'string' ? error.body.code.toLowerCase() : 'password_verification_failed', error.message)
+        throw error
+      }
+      signInError = { code: 'invalid_credentials', message: 'Invalid email or password', status: 401 }
+    }
+    finally {
+      await instance.close()
+    }
+  }
+  else {
+    const loginClient = emptySupabase(c)
+    const result = await loginClient.auth.signInWithPassword({ email: body.email, password: body.password,
+      options: body.captcha_token ? { captchaToken: body.captcha_token } : undefined })
+    signInData = result.data
+    signInError = result.error
+  }
 
   if (signInError || !signInData.user || !signInData.session) {
     const errorCode = signInError?.code

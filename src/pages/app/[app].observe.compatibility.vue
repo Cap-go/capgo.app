@@ -13,11 +13,12 @@ import IconChevronRight from '~icons/lucide/chevron-right'
 import IconExternalLink from '~icons/lucide/external-link'
 import { comparePackages, hasPlatformChecksumMetadataDrift } from '~/services/bundleCompatibility'
 import { dependencyDiffPath, groupCompatibilityEvents, platformLabel } from '~/services/compatibilityEvents'
+import { getLocalConfig, useConsole } from '~/services/console'
 import { formatLocalDateTime } from '~/services/date'
+import { fetchOrgMembers } from '~/services/orgMembers'
 import { checkPermissions } from '~/services/permissions'
 import { pushEvent } from '~/services/posthog'
 import { createSignedImageUrl } from '~/services/storage'
-import { getLocalConfig, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 
@@ -26,7 +27,7 @@ const { t } = useI18n()
 // untyped useRoute() (matching the dependencies page) until the route map updates.
 const route = useRoute()
 const router = useRouter()
-const supabase = useSupabase()
+const supabase = useConsole()
 const displayStore = useDisplayStore()
 const dialogStore = useDialogV2Store()
 
@@ -417,7 +418,7 @@ async function loadMemberEmails() {
   )
   if (!orgId || resolverIds.size === 0)
     return
-  const { data, error } = await supabase.rpc('get_org_members', { guild_id: orgId })
+  const { data, error } = await fetchOrgMembers(orgId)
   if (error) {
     console.error('[Compatibility] Error loading org members:', error)
     return

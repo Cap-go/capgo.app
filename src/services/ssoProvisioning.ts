@@ -1,5 +1,5 @@
-import type { Session, User } from '@supabase/supabase-js'
-import { defaultApiHost } from '~/services/supabase'
+import type { Session, User } from '~/services/consoleClient'
+import { defaultApiHost } from '~/services/console'
 
 export interface SsoProvisioningResult {
   merged: boolean

@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
+import { parse } from 'dotenv'
 import { getSupabaseWorktreeConfig } from './supabase-worktree-config'
 
 type SupabaseCmd = { cmd: string, argsPrefix: string[] }
@@ -104,6 +105,10 @@ function rewriteConfigToml(raw: string, cfg: ReturnType<typeof getSupabaseWorktr
 
     if (line.match(/^\s*project_id\s*=/))
       out.push(`project_id = "${projectId}"`)
+    else if (section === 'local_smtp' && line.match(/^\s*enabled\s*=/))
+      out.push('enabled = true')
+    else if (section === 'local_smtp' && line.match(/^\s*#?\s*smtp_port\s*=/))
+      out.push(`smtp_port = ${ports.api + 4}`)
     else if (section === 'db' && line.match(/^\s*shadow_port\s*=\s*\d+\s*$/))
       out.push(`shadow_port = ${ports.dbShadow}`)
     else if (section === 'edge_runtime' && line.match(/^\s*inspector_port\s*=\s*\d+\s*$/))
@@ -119,17 +124,17 @@ function rewriteConfigToml(raw: string, cfg: ReturnType<typeof getSupabaseWorktr
   return out.join('\n')
 }
 
-function upsertEnvValue(content: string, key: string, value: string): string {
-  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const matcher = new RegExp(`^${escapedKey}=.*$`, 'm')
-  const line = `${key}=${value}`
-
-  if (matcher.test(content))
-    return content.replace(matcher, line)
-
-  return content.endsWith('\n') || content.length === 0
-    ? `${content}${line}\n`
-    : `${content}\n${line}\n`
+export function upsertEnvValue(content: string, key: string, value: string): string {
+  // Append an override so existing quoted/multiline assignments remain intact.
+  for (const quote of ["'", '"']) {
+    // Supabase expands dollars and escapes only inside double quotes.
+    if (value.includes(quote) || (quote === '"' && /[$\\]/.test(value)))
+      continue
+    const line = `${key}=${quote}${value}${quote}`
+    if (parse(line)[key] === value)
+      return `${content}${content.endsWith('\n') || content.length === 0 ? '' : '\n'}${line}\n`
+  }
+  throw new Error(`Cannot serialize environment variable ${key} without changing its value`)
 }
 
 /**
@@ -140,8 +145,14 @@ function ensureFunctionsEnvFile(repoRoot: string, workdir: string, cfg: ReturnTy
   const sourcePath = resolve(repoRoot, 'supabase', 'functions', '.env')
   const targetPath = resolve(workdir, 'functions.local.env')
   const source = existsSync(sourcePath) ? readFileSync(sourcePath, 'utf8') : ''
+  const sourceEnv = parse(source)
   const s3Endpoint = `127.0.0.1:${cfg.ports.api}/storage/v1/s3`
   let generated = upsertEnvValue(source, 'S3_ENDPOINT', s3Endpoint)
+  generated = upsertEnvValue(generated, 'CONSOLE_AUTH_URL', `http://127.0.0.1:${cfg.ports.api}/functions/v1`)
+  generated = upsertEnvValue(generated, 'CONSOLE_REQUIRE_EMAIL_VERIFICATION', 'false')
+  generated = upsertEnvValue(generated, 'BETTER_AUTH_SECRET', process.env.BETTER_AUTH_SECRET || sourceEnv.BETTER_AUTH_SECRET || 'local-console-auth-development-secret-32-characters')
+  generated = upsertEnvValue(generated, 'JWT_SECRET', process.env.JWT_SECRET || sourceEnv.JWT_SECRET || 'super-secret-jwt-token-with-at-least-32-characters-long')
+  generated = upsertEnvValue(generated, 'CONSOLE_SMTP_URL', process.env.CONSOLE_SMTP_URL || sourceEnv.CONSOLE_SMTP_URL || 'smtp://inbucket:1025')
 
   if (process.env.CLOUDFLARE_FUNCTION_URL)
     generated = upsertEnvValue(generated, 'CLOUDFLARE_FUNCTION_URL', process.env.CLOUDFLARE_FUNCTION_URL)

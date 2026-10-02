@@ -11,15 +11,15 @@
  */
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { getLocalConfig, useConsole } from '~/services/console'
 import { pushEvent } from '~/services/posthog'
-import { getLocalConfig, useSupabase } from '~/services/supabase'
 import { useOrganizationStore } from '~/stores/organization'
 
 const props = defineProps<{ appId: string }>()
 
 const { t } = useI18n()
 const config = getLocalConfig()
-const supabase = useSupabase()
+const supabase = useConsole()
 const organizationStore = useOrganizationStore()
 
 const open = ref(false)

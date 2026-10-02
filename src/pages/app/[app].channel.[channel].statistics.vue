@@ -15,9 +15,9 @@ import IconTrendingUp from '~icons/lucide/trending-up'
 import BundleInstallStatsPanel from '~/components/dashboard/BundleInstallStatsPanel.vue'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import { createTooltipConfig } from '~/services/chartTooltip'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDistanceToNow, formatLocalDate, formatLocalDateShort } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDisplayStore } from '~/stores/display'
 
@@ -105,7 +105,7 @@ const router = useRouter()
 const displayStore = useDisplayStore()
 const appDetailStore = useAppDetailStore()
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 
 const packageId = ref<string>('')
 const id = ref<number>(0)

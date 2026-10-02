@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { useSupabase } from '~/services/supabase'
+import { inviteUserToOrgRbac } from '~/services/orgMembers'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
@@ -33,7 +33,6 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
 const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
 
@@ -217,16 +216,8 @@ async function handleEmailSubmit() {
   updateEmailDialogButton(true)
 
   try {
-    let data: string | null = null
-    let error: unknown = null
-
-    const result = await supabase.rpc('invite_user_to_org_rbac', {
-      email,
-      org_id: orgId,
-      role_name: existingUserInviteRole,
-    })
-    data = result.data
-    error = result.error
+    const { data: inviteResult, error } = await inviteUserToOrgRbac(orgId, email, existingUserInviteRole)
+    const data = inviteResult?.code ?? null
 
     if (error) {
       console.error('Error inviting user:', error)
@@ -240,7 +231,7 @@ async function handleEmailSubmit() {
     }
 
     if (data === 'OK') {
-      const notified = await notifyExistingUserInvite(supabase, email, orgId)
+      const notified = await notifyExistingUserInvite(email, orgId)
       if (!notified) {
         console.warn('Failed to send invite email notification, but invite was created')
         toast.warning(t('org-invite-email-notification-failed'))

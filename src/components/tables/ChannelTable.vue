@@ -11,9 +11,9 @@ import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconSettings from '~icons/heroicons/cog-8-tooth'
 import IconTrash from '~icons/heroicons/trash'
+import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
-import { useSupabase } from '~/services/supabase'
 import { refetchIfPageOutOfRange } from '~/services/tablePagination'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
@@ -44,7 +44,7 @@ const offset = 10
 const { t } = useI18n()
 const dialogStore = useDialogV2Store()
 const organizationStore = useOrganizationStore()
-const supabase = useSupabase()
+const supabase = useConsole()
 const router = useRouter()
 const main = useMainStore()
 const total = ref(0)

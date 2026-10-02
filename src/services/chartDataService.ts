@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { ConsoleClient } from '~/services/consoleClient'
 import colors from 'tailwindcss/colors'
 import { ref } from 'vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
@@ -27,16 +27,15 @@ function buildCacheKey(sessionId: string, appId: string, from: Date, to: Date, k
   return `${sessionId}|${appId}|${kind}|${formatUtcDateParam(from)}|${formatUtcDateParam(to)}`
 }
 
-async function getChartCacheSessionKey(supabase: SupabaseClient): Promise<string> {
-  const { data } = await supabase.auth.getClaims()
-  const sessionId = data?.claims?.session_id
+async function getChartCacheSessionKey(supabase: ConsoleClient): Promise<string> {
+  const sessionId = supabase.auth.getSessionCacheKey()
   if (typeof sessionId === 'string' && sessionId.length > 0)
     return sessionId
   return 'anonymous'
 }
 
 export async function useChartData(
-  supabase: SupabaseClient,
+  supabase: ConsoleClient,
   appId: string,
   from: Date,
   to: Date,

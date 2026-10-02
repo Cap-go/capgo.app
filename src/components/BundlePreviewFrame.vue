@@ -254,8 +254,8 @@ async function startPreview() {
 
   <div v-else class="relative min-h-[calc(100dvh-8rem)] w-full overflow-y-auto px-3 py-4 md:px-6 md:py-6">
     <button
-      type="button"
       v-if="showBrowserPreview"
+      type="button"
       class="absolute z-10 p-2 transition-colors bg-white rounded-lg shadow-lg top-4 right-4 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700"
       :title="t('open-in-external')"
       :disabled="!previewUrl"

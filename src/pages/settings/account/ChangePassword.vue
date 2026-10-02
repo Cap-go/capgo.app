@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { setErrors } from '@formkit/core'
 import { FormKit, FormKitMessages } from '@formkit/vue'
-import { FunctionsHttpError } from '@supabase/supabase-js'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
 import iconPassword from '~icons/heroicons/key?raw'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
+import { FunctionsHttpError } from '~/services/consoleClient'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -20,7 +20,7 @@ const isLoading = ref(false)
 const isVerifying = ref(false)
 const dialogStore = useDialogV2Store()
 const displayStore = useDisplayStore()
-const supabase = useSupabase()
+const supabase = useConsole()
 const organizationStore = useOrganizationStore()
 const mainStore = useMainStore()
 const mfaCode = ref('')

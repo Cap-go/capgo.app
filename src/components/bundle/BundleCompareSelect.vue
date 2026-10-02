@@ -6,8 +6,8 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconDown from '~icons/ic/round-keyboard-arrow-down'
 import IconSearch from '~icons/ic/round-search?raw'
+import { useConsole } from '~/services/console'
 import { formatLocalDate } from '~/services/date'
-import { useSupabase } from '~/services/supabase'
 
 type VersionRow = Pick<Database['public']['Tables']['app_versions']['Row'], 'id' | 'name' | 'created_at' | 'manifest_count' | 'app_id'>
 type DeployHistoryRow = Pick<Database['public']['Tables']['deploy_history']['Row'], 'channel_id' | 'version_id' | 'created_at' | 'deployed_at'>
@@ -37,7 +37,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 
 const latestCompareVersions = ref<VersionRow[]>([])
 const preferredCompareVersions = ref<VersionRow[]>([])

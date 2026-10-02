@@ -4,9 +4,9 @@ import { storeToRefs } from 'pinia'
 import { computed, ref, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+import { useConsole } from '~/services/console'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, resolveImagePath } from '~/services/storage'
-import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -15,7 +15,7 @@ const router = useRouter()
 const organizationStore = useOrganizationStore()
 const isLoading = ref(true)
 const isTableLoading = ref(false)
-const supabase = useSupabase()
+const supabase = useConsole()
 const { t } = useI18n()
 const displayStore = useDisplayStore()
 type AppRow = Database['public']['Tables']['apps']['Row']

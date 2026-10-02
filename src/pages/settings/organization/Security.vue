@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { FunctionsHttpError } from '@supabase/supabase-js'
 import { computedAsync } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
@@ -15,10 +14,13 @@ import IconShield from '~icons/heroicons/shield-check'
 import IconUser from '~icons/heroicons/user'
 import SsoConfiguration from '~/components/organizations/SsoConfiguration.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { getCurrentPlanNameOrg, useConsole } from '~/services/console'
+import { FunctionsHttpError } from '~/services/consoleClient'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
+import { fetchOrgSecuritySettings, updateOrganization } from '~/services/organizations'
+import { fetchOrgMembers, fetchOrgMembers2faStatus, fetchOrgMembersPasswordPolicy } from '~/services/orgMembers'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
-import { getCurrentPlanNameOrg, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
@@ -48,7 +50,7 @@ const displayStore = useDisplayStore()
 const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
 const router = useRouter()
-const supabase = useSupabase()
+const supabase = useConsole()
 const isLoading = ref(true)
 const isSaving = ref(false)
 const hideExternalPurchaseFlows = isNativeAppStoreContext()
@@ -265,11 +267,7 @@ async function loadData() {
 
   try {
     // Load current org's security settings
-    const { data: orgData, error: orgError } = await supabase
-      .from('orgs')
-      .select('enforcing_2fa, enforce_hashed_api_keys, enforce_encrypted_bundles, required_encryption_key')
-      .eq('id', currentOrganization.value.gid)
-      .single()
+    const { data: orgData, error: orgError } = await fetchOrgSecuritySettings(currentOrganization.value.gid)
 
     if (orgError) {
       console.error('Error loading org settings:', orgError)
@@ -318,10 +316,7 @@ async function loadMembersWithMfaStatus() {
 
   try {
     // Get org members
-    const { data: members, error: membersError } = await supabase
-      .rpc('get_org_members', {
-        guild_id: currentOrganization.value.gid,
-      })
+    const { data: members, error: membersError } = await fetchOrgMembers(currentOrganization.value.gid)
 
     if (membersError) {
       console.error('Error loading members:', membersError)
@@ -329,10 +324,7 @@ async function loadMembersWithMfaStatus() {
     }
 
     // Get 2FA status for all members
-    const { data: mfaStatus, error: mfaError } = await supabase
-      .rpc('check_org_members_2fa_enabled', {
-        org_id: currentOrganization.value.gid,
-      })
+    const { data: mfaStatus, error: mfaError } = await fetchOrgMembers2faStatus(currentOrganization.value.gid)
 
     if (mfaError) {
       console.error('Error loading MFA status:', mfaError)
@@ -386,10 +378,7 @@ async function loadMembersWithPasswordPolicyStatus() {
 
   try {
     // Get org members
-    const { data: members, error: membersError } = await supabase
-      .rpc('get_org_members', {
-        guild_id: currentOrganization.value.gid,
-      })
+    const { data: members, error: membersError } = await fetchOrgMembers(currentOrganization.value.gid)
 
     if (membersError) {
       console.error('Error loading members:', membersError)
@@ -397,10 +386,7 @@ async function loadMembersWithPasswordPolicyStatus() {
     }
 
     // Get password policy compliance status for all members
-    const { data: complianceStatus, error: complianceError } = await supabase
-      .rpc('check_org_members_password_policy', {
-        org_id: currentOrganization.value.gid,
-      })
+    const { data: complianceStatus, error: complianceError } = await fetchOrgMembersPasswordPolicy(currentOrganization.value.gid)
 
     if (complianceError) {
       console.error('Error loading password policy compliance status:', complianceError)
@@ -907,10 +893,9 @@ async function updatePasswordPolicy() {
     require_special: requireSpecial.value,
   }
 
-  const { error } = await supabase
-    .from('orgs')
-    .update({ password_policy_config: policyConfig })
-    .eq('id', currentOrganization.value.gid)
+  const { error } = await updateOrganization(currentOrganization.value.gid, {
+    password_policy_config: policyConfig,
+  })
 
   isSaving.value = false
 

@@ -14,7 +14,7 @@ import IconRefresh from '~icons/lucide/refresh-cw'
 import IconSearch from '~icons/lucide/search'
 import IconSend from '~icons/lucide/send'
 import IconZap from '~icons/lucide/zap'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 
 interface NotificationProviderConfig {
@@ -73,7 +73,7 @@ type NotificationTab = 'dashboard' | 'broadcasts' | 'api'
 
 const { t } = useI18n()
 const route = useRoute()
-const supabase = useSupabase()
+const supabase = useConsole()
 const displayStore = useDisplayStore()
 
 const id = ref('')

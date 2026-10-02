@@ -242,6 +242,12 @@ export interface DeletePayload<T extends keyof Database['public']['Tables']> {
 }
 
 export function supabaseClient(c: Context, jwt: string) {
+  if (jwt.startsWith('Bearer capgo_session_')) {
+    const authorization = c.get('authorization')
+    if (!authorization || authorization.startsWith('Bearer capgo_session_'))
+      throw new Error('Console session must be validated before database access')
+    jwt = authorization
+  }
   const options = {
     auth: {
       autoRefreshToken: false,

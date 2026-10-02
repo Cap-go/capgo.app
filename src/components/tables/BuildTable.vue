@@ -8,8 +8,8 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconEye from '~icons/heroicons/eye'
+import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -27,7 +27,7 @@ type Platform = 'ios' | 'android'
 
 const { t } = useI18n()
 const router = useRouter()
-const supabase = useSupabase()
+const supabase = useConsole()
 const isMobile = Capacitor.isNativePlatform()
 const dialogStore = useDialogV2Store()
 const offset = 20

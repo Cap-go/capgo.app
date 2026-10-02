@@ -32,6 +32,9 @@ function getClaimsClient(supabaseUrl: string, supabaseAnonKey: string) {
  */
 export async function getClaimsFromJWT(c: Context, jwt: string): Promise<JWTClaims | null> {
   try {
+    if (jwt.startsWith('Bearer capgo_session_')) {
+      return await c.get('resolveConsoleSession')?.(jwt) ?? null
+    }
     const token = jwt.startsWith('Bearer ') ? jwt.slice(7) : jwt
     const supabaseUrl = getEnv(c, 'SUPABASE_URL').replace(/\/$/, '')
     const supabaseAnonKey = getEnv(c, 'SUPABASE_ANON_KEY')
@@ -69,7 +72,7 @@ export const middlewareAuth = honoFactory.createMiddleware(async (c, next) => {
     userId: claims.sub,
     authType: 'jwt',
     apikey: null,
-    jwt: authorization,
+    jwt: c.get('authorization') ?? authorization,
     claims,
   } as AuthInfo)
 

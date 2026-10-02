@@ -11,9 +11,9 @@ import IconWrench from '~icons/heroicons/wrench'
 import RoleCapabilitiesHint from '~/components/forms/RoleCapabilitiesHint.vue'
 import ChannelAccessPanel from '~/components/permissions/ChannelAccessPanel.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { getRbacRoleI18nKey } from '~/stores/organization'
 import { getErrorMessage } from '~/utils/errors'
@@ -70,7 +70,7 @@ interface PrincipalOption {
 
 const { t } = useI18n()
 const dialogStore = useDialogV2Store()
-const supabase = useSupabase()
+const supabase = useConsole()
 const app = ref<Database['public']['Tables']['apps']['Row']>()
 const total = ref(0)
 const search = ref('')

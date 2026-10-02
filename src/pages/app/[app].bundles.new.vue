@@ -3,13 +3,13 @@ import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import StepsBundle from '~/components/dashboard/StepsBundle.vue'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
 
 const route = useRoute('/app/[app].bundles.new')
 const router = useRouter()
-const supabase = useSupabase()
+const supabase = useConsole()
 const displayStore = useDisplayStore()
 const organizationStore = useOrganizationStore()
 const { currentOrganization } = storeToRefs(organizationStore)

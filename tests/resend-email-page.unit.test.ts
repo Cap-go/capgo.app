@@ -28,8 +28,8 @@ vi.mock('vue-router', () => ({
   useRouter: () => mocks.router,
 }))
 vi.mock('~/stores/main', () => ({ useMainStore: () => mocks.main }))
-vi.mock('~/services/supabase', () => ({
-  useSupabase: () => ({ auth: { getSession: mocks.getSession, resend: mocks.resend } }),
+vi.mock('~/services/console', () => ({
+  useConsole: () => ({ auth: { getSession: mocks.getSession, resend: mocks.resend } }),
 }))
 vi.mock('~/services/support', () => ({ openSupport: vi.fn() }))
 vi.mock('vue-sonner', () => ({ toast: mocks.toast }))

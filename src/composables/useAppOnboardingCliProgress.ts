@@ -1,8 +1,8 @@
 import type { MaybeRefOrGetter } from 'vue'
-import { FunctionsHttpError } from '@supabase/supabase-js'
 import { computed, onBeforeUnmount, onMounted, ref, toValue, watch } from 'vue'
 import { parseAppOnboarding } from '~/services/appOnboarding'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { FunctionsHttpError } from '~/services/consoleClient'
 
 interface ProgressResponse {
   onboarding: unknown

@@ -1,3 +1,5 @@
+import { app as console_data } from '../_backend/private/console_data.ts'
+import { consoleSessionMiddleware } from '../_backend/utils/console_auth.ts'
 import { app as accept_invitation } from '../_backend/private/accept_invitation.ts'
 import { app as bundle_install_stats } from '../_backend/private/bundle_install_stats.ts'
 import { app as channel_device } from '../_backend/private/channel_device.ts'
@@ -22,8 +24,11 @@ import { app as native_observe_stats } from '../_backend/private/native_observe_
 import { app as observe } from '../_backend/private/observe.ts'
 import { app as onboarding_ab_tests } from '../_backend/private/onboarding_ab_tests.ts'
 import { app as onboarding_progress } from '../_backend/private/onboarding_progress.ts'
+import { app as org_billing } from '../_backend/private/org_billing.ts'
+import { app as org_members } from '../_backend/private/org_members.ts'
 import { app as org_notification_stats } from '../_backend/private/org_notification_stats.ts'
 import { app as organization_invitation } from '../_backend/private/organization_invitation.ts'
+import { app as orgs } from '../_backend/private/orgs.ts'
 // Webapps API
 import { app as plans } from '../_backend/private/plans.ts'
 import { app as publicStats } from '../_backend/private/public_stats.ts'
@@ -56,6 +61,8 @@ const functionName = 'private'
 const appGlobal = createHono(functionName, version)
 
 // Webapps API
+appGlobal.use('*', consoleSessionMiddleware)
+appGlobal.route('/console', console_data)
 
 appGlobal.route('/plans', plans)
 appGlobal.route('/credits', credits)
@@ -73,8 +80,11 @@ appGlobal.route('/native_observe_stats', native_observe_stats)
 appGlobal.route('/observe', observe)
 appGlobal.route('/onboarding_ab_tests', onboarding_ab_tests)
 appGlobal.route('/onboarding_progress', onboarding_progress)
+appGlobal.route('/org_members', org_members)
 appGlobal.route('/org_notification_stats', org_notification_stats)
 appGlobal.route('/organization_invitation', organization_invitation)
+appGlobal.route('/org_billing', org_billing)
+appGlobal.route('/orgs', orgs)
 appGlobal.route('/download_link', download_link)
 appGlobal.route('/log_as', log_as)
 appGlobal.route('/mcp_oauth', mcp_oauth)

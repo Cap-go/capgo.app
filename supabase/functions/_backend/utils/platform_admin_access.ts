@@ -32,15 +32,17 @@ export async function validatePlatformAdminOrApiSecret(
     throw quickError(401, 'invalid_jwt', 'Invalid JWT')
   }
 
-  c.set('authorization', authorization)
+  const validatedAuthorization = c.get('authorization') ?? authorization
+  c.set('authorization', validatedAuthorization)
   c.set('auth', {
     userId: claims.sub,
     authType: 'jwt',
     apikey: null,
-    jwt: authorization,
+    jwt: validatedAuthorization,
+    claims,
   })
 
-  const userClient = supabaseClient(c, authorization)
+  const userClient = supabaseClient(c, validatedAuthorization)
   const { data: isAdmin, error: adminError } = await userClient.rpc('is_platform_admin')
   if (adminError) {
     cloudlogErr({ requestId: c.get('requestId'), message: `${options.logPrefix}_is_admin_error`, error: adminError })

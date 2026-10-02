@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { getRbacRoleI18nKey } from '~/stores/organization'
 
 type PrincipalType = 'user' | 'group' | 'apikey'
@@ -33,7 +33,7 @@ const props = withDefaults(defineProps<{
 })
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const channelOverrides = ref<Record<string, boolean>>({})
 const channelOverridesLoading = ref(false)
 const channelOverridesSearch = ref('')

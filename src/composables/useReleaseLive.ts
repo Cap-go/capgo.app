@@ -1,7 +1,7 @@
 import type { Ref } from 'vue'
 import { useDocumentVisibility, useIntervalFn } from '@vueuse/core'
 import { ref, watch } from 'vue'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
+import { defaultApiHost, useConsole } from '~/services/console'
 
 export const RELEASE_LIVE_POLL_INTERVAL_MS = 60_000
 
@@ -65,7 +65,7 @@ export function useReleaseLive(
     enabled: boolean
   },
 ) {
-  const supabase = useSupabase()
+  const supabase = useConsole()
   const data = ref<ReleaseLiveResponse | null>(null) as Ref<ReleaseLiveResponse | null>
   const loading = ref(false)
   const error = ref(false)

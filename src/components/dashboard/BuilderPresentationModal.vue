@@ -15,8 +15,8 @@ import { gsap } from 'gsap'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import { getLocalConfig } from '~/services/console'
 import { pushEvent } from '~/services/posthog'
-import { getLocalConfig } from '~/services/supabase'
 import { sanitizeHtml } from '~/utils/sanitize'
 
 const props = defineProps<{ open: boolean, appId?: string }>()
@@ -698,7 +698,7 @@ onUnmounted(() => {
           <button type="button" class="bp-ghost" :disabled="isFirst" @click="prev">
             ← {{ t('builder-promo-back') }}
           </button>
-          <button type="button" v-if="!isLast" class="bp-next" @click="next">
+          <button v-if="!isLast" type="button" class="bp-next" @click="next">
             {{ t('builder-promo-next') }} →
           </button>
           <span v-else />

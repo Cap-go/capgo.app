@@ -1,4 +1,4 @@
-import { getLocalConfig } from '~/services/supabase'
+import { getLocalConfig } from '~/services/console'
 
 const WEBSITE_PAID_USER_COOKIE_NAME = 'capgo_paid_user'
 const WEBSITE_PAID_USER_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30

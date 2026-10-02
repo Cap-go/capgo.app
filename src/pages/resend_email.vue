@@ -8,15 +8,15 @@ import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
 import iconEmail from '~icons/oui/email?raw'
 import { authGhostButtonClass, authInsetCardClass, authPanelClass, authPrimaryButtonClass } from '~/components/auth/pageStyles'
+import { useConsole } from '~/services/console'
 import { getEmailOtpSendErrorMessage, getRecentEmailOtpVerification, parseEmailOtpSendError, sendEmailOtpVerification, verifyEmailOtp } from '~/services/emailOtp'
-import { useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { useMainStore } from '~/stores/main'
 import { validateRedirectPath } from '~/utils/safeRedirect'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const route = useRoute()
 const router = useRouter()
 const main = useMainStore()

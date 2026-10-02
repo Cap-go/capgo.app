@@ -2,8 +2,8 @@ import type { Ref } from 'vue'
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { chartLabelCountForPeriodDays } from '~/services/date'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 export type UpdateDeliveryScope = 'app' | 'org' | 'platform'
 
@@ -42,7 +42,7 @@ export function useUpdateDeliveryStats(
   },
   logContext = 'update delivery stats',
 ) {
-  const supabase = useSupabase()
+  const supabase = useConsole()
   const { t } = useI18n()
   const stats = ref<UpdateDeliveryStatsResponse | null>(null) as Ref<UpdateDeliveryStatsResponse | null>
   const statsLoading = ref(false)

@@ -1,5 +1,6 @@
+import { parse } from 'dotenv'
 import { describe, expect, it } from 'vitest'
-import { getTransientSupabaseStartFailure } from '../scripts/supabase-worktree'
+import { getTransientSupabaseStartFailure, upsertEnvValue } from '../scripts/supabase-worktree'
 
 describe('getTransientSupabaseStartFailure', () => {
   it('classifies Docker port conflicts as transient', () => {
@@ -31,4 +32,33 @@ describe('getTransientSupabaseStartFailure', () => {
     expect(getTransientSupabaseStartFailure('Migration failed: relation "public.example" does not exist')).toBeNull()
     expect(getTransientSupabaseStartFailure('Test assertion failed: expected 200, received 500')).toBeNull()
   })
+})
+
+describe('generated environment values', () => {
+  it.each([
+    '$&-$$-$` private#secret',
+    'smtp://user:pass#word@example.com:1025',
+    ' spaced secret ',
+    'line one\nline two',
+    'literal\\n-value',
+    'quote`and\'value',
+  ])('preserves special characters through dotenv parsing: %s', (value) => {
+    const generated = upsertEnvValue('OTHER=untouched\nBETTER_AUTH_SECRET="old\nmultiline"\n', 'BETTER_AUTH_SECRET', value)
+    expect(parse(generated)).toEqual({ OTHER: 'untouched', BETTER_AUTH_SECRET: value })
+  })
+
+  it('preserves an already configured quoted value', () => {
+    const source = 'BETTER_AUTH_SECRET="configured#secret" # comment\n'
+    expect(parse(upsertEnvValue(source, 'BETTER_AUTH_SECRET', 'configured#secret')).BETTER_AUTH_SECRET).toBe('configured#secret')
+  })
+})
+
+it('rejects a value that cannot be represented literally in both env parsers', () => {
+  expect(() => upsertEnvValue('', 'BETTER_AUTH_SECRET', 'apostrophe\'and$dollar')).toThrow('Cannot serialize environment variable BETTER_AUTH_SECRET')
+})
+
+it.each(['fake-$MISSING-secret', 'fake\\q-secret'])('uses literal single quoting for Supabase-sensitive value %s', (value) => {
+  const generated = upsertEnvValue('BETTER_AUTH_SECRET=old\n', 'BETTER_AUTH_SECRET', value)
+  expect(generated).toContain(`BETTER_AUTH_SECRET='${value}'`)
+  expect(parse(generated).BETTER_AUTH_SECRET).toBe(value)
 })

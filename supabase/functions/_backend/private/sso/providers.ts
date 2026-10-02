@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { PoolClient } from 'pg'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { SsoRoleMapping } from './role-mapping.ts'
+import { getRuntimeKey } from 'hono/adapter'
 import { HTTPException } from 'hono/http-exception'
 import { z } from 'zod'
 import { BRES, createHono, parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts'
@@ -342,6 +343,8 @@ app.post('/', async (c) => {
   }
 
   const body = validation.data
+  if (body.metadata_url && auth.claims?.auth_provider === 'better-auth' && getRuntimeKey() !== 'workerd')
+    return quickError(400, 'invalid_saml_metadata', 'Upload SAML metadata XML on this deployment')
   const attributeMapping = parseAttributeMapping(body.attribute_mapping)
   const domain = body.domain.trim().toLowerCase()
   if (!DOMAIN_REGEX.test(domain)) {
@@ -433,6 +436,8 @@ app.patch('/:id', async (c) => {
   }
 
   const body = validation.data
+  if (body.metadata_url && auth.claims?.auth_provider === 'better-auth' && getRuntimeKey() !== 'workerd')
+    return quickError(400, 'invalid_saml_metadata', 'Upload SAML metadata XML on this deployment')
   const attributeMapping = parseAttributeMapping(body.attribute_mapping)
 
   const supabase = supabaseWithAuth(c, auth) as any

@@ -14,8 +14,8 @@ import DevicesStats from '~/components/dashboard/DevicesStats.vue'
 import ReleaseBanner from '~/components/dashboard/ReleaseBanner.vue'
 import ReleaseLivePanel from '~/components/dashboard/ReleaseLivePanel.vue'
 import UpdateStatsCard from '~/components/dashboard/UpdateStatsCard.vue'
+import { useConsole } from '~/services/console'
 import { fetchAppChartRefreshState } from '~/services/dashboardRefresh'
-import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -32,7 +32,7 @@ const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const dashboardAppsStore = useDashboardAppsStore()
 const isLoading = ref(false)
-const supabase = useSupabase()
+const supabase = useConsole()
 const displayStore = useDisplayStore()
 type AppDashboardRow = Database['public']['Tables']['apps']['Row'] & AppChartRefreshState
 

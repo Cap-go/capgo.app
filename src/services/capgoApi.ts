@@ -1,7 +1,7 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { ConsoleClient } from '~/services/consoleClient'
 import type { Database } from '~/types/supabase.types'
-import { FunctionsFetchError, FunctionsHttpError } from '@supabase/supabase-js'
-import { getLocalConfig, useSupabase } from './supabase'
+import { FunctionsFetchError, FunctionsHttpError } from '~/services/consoleClient'
+import { getLocalConfig, useConsole } from './console'
 
 export interface CapgoApiInvokeOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
@@ -10,7 +10,7 @@ export interface CapgoApiInvokeOptions {
   /** Use the anon key when there is no user session (public bootstrap endpoints). */
   allowAnonymous?: boolean
   /** Prefer caller-provided client for session/auth context. */
-  client?: SupabaseClient<Database>
+  client?: ConsoleClient<Database>
   /**
    * Number of automatic retries for transient failures (network drops, edge
    * timeouts, and 5xx/429 responses from a stressed backend). Defaults to 2 for
@@ -164,13 +164,13 @@ export async function getCapgoApiErrorCode(error: unknown): Promise<string | und
 /**
  * Call Capgo Cloudflare API with the same { data, error } shape as
  * supabase.functions.invoke. Capgo cloud console traffic uses VITE_API_HOST.
- * Self-host / local keep supabase.functions.invoke → /functions/v1.
+ * Self-host / local use the configured Capgo API host for auth and data alike.
  */
 export async function invokeCapgoApi<T = any>(
   path: string,
   options: CapgoApiInvokeOptions = {},
 ): Promise<{ data: T | null, error: Error | null }> {
-  const supabase = options.client ?? useSupabase()
+  const supabase = options.client ?? useConsole()
   const config = getLocalConfig()
 
   if (!isCapgoManagedSupabaseHost(config.supaHost)) {

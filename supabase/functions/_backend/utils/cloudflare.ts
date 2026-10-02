@@ -1,4 +1,4 @@
-import type { AnalyticsEngineDataset, D1Database, Hyperdrive, KVNamespace, Queue, SendEmail } from '@cloudflare/workers-types'
+import type { AnalyticsEngineDataset, D1Database, DurableObjectNamespace, Hyperdrive, KVNamespace, Queue, SendEmail } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
 import type { DeviceInfoWriteCachePayload } from './deviceComparison.ts'
 import type { StatsInsightRawAction, StatsInsightRawDaily, StatsInsightRawDevice, StatsInsightRawSummary, StatsInsightRawVersion } from './statsInsights.ts'
@@ -64,6 +64,7 @@ export type Bindings = {
   CLI_USAGE?: AnalyticsEngineDataset
   NOTIFICATION_QUEUE?: Queue
   AUTH_EMAIL?: SendEmail
+  CONSOLE_EVENTS?: DurableObjectNamespace
   DB_STOREAPPS: D1Database
   CHANNEL_SELF_STORE?: KVNamespace
   PLUGIN_NOTIFICATION_QUEUE?: KVNamespace

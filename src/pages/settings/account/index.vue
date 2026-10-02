@@ -14,10 +14,11 @@ import iconEmail from '~icons/heroicons/envelope?raw'
 import iconFlag from '~icons/heroicons/flag?raw'
 import iconName from '~icons/heroicons/user?raw'
 import GitHubProfileDialog from '~/components/dashboard/GitHubProfileDialog.vue'
+import { getCurrentPlanNameOrg, isPayingOrg, useConsole } from '~/services/console'
 import { getRecentEmailOtpVerification } from '~/services/emailOtp'
 import { getFormatLocaleOptions, resolveFormatLocale } from '~/services/formatLocale'
+import { fetchOrgMembersRbac } from '~/services/orgMembers'
 import { pickPhoto, takePhoto } from '~/services/photos'
-import { getCurrentPlanNameOrg, isPayingOrg, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -27,7 +28,7 @@ import { safeResetTurnstile } from '~/utils/turnstile'
 
 const version = import.meta.env.VITE_APP_VERSION
 const { locale, t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const displayStore = useDisplayStore()
 displayStore.NavTitle = t('account')
 const router = useRouter()
@@ -101,15 +102,14 @@ async function checkOrganizationImpact() {
   // Check each organization to see if user is the only super_admin
   for (const org of superAdminOrgs) {
     try {
-      const { data: members, error } = await supabase
-        .rpc('get_org_members_rbac', { p_org_id: org.gid })
+      const { data: members, error } = await fetchOrgMembersRbac(org.gid)
 
       if (error) {
         console.error('Error getting RBAC org members:', error)
         continue
       }
 
-      const superAdminCount = members.filter(member =>
+      const superAdminCount = (members ?? []).filter(member =>
         !member.is_invite && !member.is_tmp && isSuperAdminRole(member.role_name),
       ).length
 
@@ -263,7 +263,7 @@ async function deleteAccount() {
 async function performAccountDeletion(password: string) {
   if (!main.auth || main.auth?.email == null)
     return false
-  const supabaseClient = useSupabase()
+  const supabaseClient = useConsole()
 
   if (!password) {
     toast.error(t('password-placeholder'))
@@ -280,10 +280,9 @@ async function performAccountDeletion(password: string) {
 
   isDeletingAccount.value = true
   try {
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email: main.auth.email,
+    const { error: signInError } = await supabase.auth.reauthenticate({
       password,
-      options: captchaKey.value ? { captchaToken: deleteAccountCaptchaToken.value } : undefined,
+      captchaToken: captchaKey.value ? deleteAccountCaptchaToken.value : undefined,
     })
     if (signInError) {
       deleteAccountCaptchaToken.value = ''

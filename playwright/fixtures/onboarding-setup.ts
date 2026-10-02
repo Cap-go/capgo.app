@@ -14,7 +14,7 @@ import { i18n } from '../../src/modules/i18n'
 import { install as installOnboardingSetupNavigation } from '../../src/modules/onboarding-setup'
 import GettingStartedPage from '../../src/pages/app/[app].getting-started.vue'
 import { BUILDER_STEP_IDS } from '../../src/services/builderOnboardingChecklist'
-import { useSupabase } from '../../src/services/supabase'
+import { useConsole } from '../../src/services/console'
 import { useMainStore } from '../../src/stores/main'
 import { useOrganizationStore } from '../../src/stores/organization'
 import '../../src/styles/style.css'
@@ -91,7 +91,7 @@ function previewOnboarding() {
 }
 
 // This isolated component fixture never sends requests to production.
-window.fetch = async (input, init) => {
+const fixtureFetch: typeof fetch = async (input, init) => {
   const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.origin)
   const method = init?.method?.toUpperCase() ?? 'GET'
   if (url.pathname.endsWith('/apps') && method !== 'GET' && method !== 'HEAD') {
@@ -172,8 +172,44 @@ window.fetch = async (input, init) => {
   })
 }
 
+window.fetch = async (input, init) => {
+  const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.origin)
+  if (!url.pathname.endsWith('/private/console/query'))
+    return fixtureFetch(input, init)
+  const query = JSON.parse(String(init?.body))
+  const fixtureURL = new URL(`/${query.kind === 'rpc' ? 'rpc/' : ''}${query.name}`, location.origin)
+  let method = query.kind === 'rpc' ? 'POST' : 'GET'
+  let body = query.kind === 'rpc' ? JSON.stringify(query.args[0]) : undefined
+  const headers = new Headers(init?.headers)
+  for (const { method: operation, args } of query.operations) {
+    if (['eq', 'neq', 'is'].includes(operation)) {
+      fixtureURL.searchParams.set(args[0], `${operation}.${args[1]}`)
+    }
+    else if (operation === 'limit') {
+      fixtureURL.searchParams.set('limit', String(args[0]))
+    }
+    else if (['single', 'maybeSingle'].includes(operation)) {
+      headers.set('Accept', 'application/vnd.pgrst.object+json')
+    }
+    else if (['insert', 'update', 'delete'].includes(operation)) {
+      method = operation === 'insert' ? 'POST' : operation === 'update' ? 'PATCH' : 'DELETE'
+      body = args[0] ? JSON.stringify(args[0]) : undefined
+    }
+  }
+  const response = await fixtureFetch(fixtureURL.href, { ...init, headers, method, body })
+  let data = await response.json().catch(() => null)
+  if (Array.isArray(data) && query.operations.some((op: { method: string }) => ['single', 'maybeSingle'].includes(op.method)))
+    data = data[0] ?? null
+  return new Response(JSON.stringify({
+    data: response.ok ? data : null,
+    error: response.ok ? null : data,
+    status: response.status,
+    count: null,
+  }), { headers: { 'Content-Type': 'application/json' } })
+}
+
 // Supply a fixture-only session. All fetch calls above are intercepted.
-useSupabase().auth.getSession = async () => ({ data: { session: { access_token: 'fixture-token' } as any }, error: null })
+useConsole().auth.getSession = async () => ({ data: { session: { access_token: 'fixture-token' } as any }, error: null })
 
 const app = createApp(defineComponent({
   setup() {
