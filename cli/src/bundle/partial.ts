@@ -16,6 +16,7 @@ import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { encryptChecksum, encryptChecksumV3, encryptSource } from '../api/crypto'
 import { CliUserError } from '../shared/cli-user-error'
 import { appAddHintMessage, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findRoot, generateManifest, getContentType, getInstalledVersion, getLocalConfig, isAppNotFoundError, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import type { ManifestUploadRequestEntry, ResolvedManifestUpload, ResolvedManifestUploadEntry } from './manifest-upload'
 import { getUploadReporter } from './reporter'
 import { getManifestUploadAbandonError, ManifestUploadAbandonController, ManifestUploadAbandonError, parseManifestUploadAbandonBody } from './upload-abandon-error'
 
@@ -32,12 +33,29 @@ async function fileExists(localConfig: any, filename: string): Promise<{ exists:
     url.searchParams.set('nocache', `${Date.now()}`)
     const response = await fetch(url.toString(), {
       method: 'GET',
-headers: buildCliRequestHeaders({ range: 'bytes=0-0', 'cache-control': 'no-cache' }),
+      headers: buildCliRequestHeaders({ 'cache-control': 'no-cache' }),
     })
     return { exists: response.ok, receipt: response.headers.get('X-Capgo-Manifest-Size-Receipt') ?? undefined }
   }
   catch {
     return { exists: false }
+  }
+}
+
+export async function fileExistsAtUploadTarget(existenceCheckUrlPrefix: string, filename: string): Promise<{ exists: boolean, receipt?: string }> {
+  const url = new URL(`${existenceCheckUrlPrefix}${encodeURIComponent(filename)}`)
+  url.searchParams.set('nocache', `${Date.now()}`)
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers: buildCliRequestHeaders({ 'cache-control': 'no-cache' }),
+  })
+  if (response.status === 404)
+    return { exists: false }
+  if (!response.ok)
+    throw new CliUserError(`Cannot check whether manifest file exists (HTTP ${response.status})`)
+  return {
+    exists: true,
+    receipt: response.headers.get('X-Capgo-Manifest-Size-Receipt') ?? undefined,
   }
 }
 
@@ -187,9 +205,104 @@ export function buildPartialUploadPath(orgId: string, appId: string, fileHash: s
   return `orgs/${orgId}/apps/${appId}/delta/${filenameHash}_${filePathUnixSafe}`
 }
 
-interface PartialEncryptionOptions {
+export interface PartialEncryptionOptions {
   sessionKey: Buffer
   ivSessionKey: string
+}
+
+interface PreparedPartialPayload {
+  buffer: Buffer
+  fileName: string
+  compression: 'none' | 'brotli'
+  uploadedBytesSha256: string
+  uploadedBytesSize: number
+}
+
+async function validatePartialUpload(manifest: manifestType, options: OptionsUpload) {
+  const { version, supportsBrotliV2 } = await getUpdaterVersion(options)
+  if (!supportsBrotliV2) {
+    throw new CliUserError(`Your project is using an older version of @capgo/capacitor-updater (${version || 'unknown'}). To use Delta updates, please upgrade to version ${BROTLI_MIN_UPDATER_VERSION_V5} (v5), ${BROTLI_MIN_UPDATER_VERSION_V6} (v6) or ${BROTLI_MIN_UPDATER_VERSION_V7} (v7) or higher.`)
+  }
+
+  if (options.disableBrotli) {
+    log.info('Brotli compression disabled by user request')
+  }
+  else if (options.noBrotliPatterns) {
+    log.info(`Files matching patterns (${options.noBrotliPatterns}) will be excluded from brotli compression`)
+  }
+
+  const filesWithSpaces = manifest.filter(file => file.file.includes(' '))
+  if (filesWithSpaces.length > 0)
+    throw new CliUserError(`Files with spaces in their names (${filesWithSpaces.map(f => f.file).join(', ')}). Please rename the files.`)
+  if (manifest.length > MAX_MANIFEST_ENTRIES)
+    throw new CliUserError(deltaManifestTooLargeMessage(manifest.length))
+}
+
+async function preparePartialPayload(
+  file: manifestType[number],
+  path: string,
+  encryptionOptions: PartialEncryptionOptions | undefined,
+  options: OptionsUpload,
+): Promise<PreparedPartialPayload> {
+  const finalFilePath = join(path, file.file)
+  const filePathUnix = convertToUnixPath(file.file)
+  const transformed = options.disableBrotli
+    ? { buffer: await readBuffer(createReadStream(finalFilePath)), useBrotli: false }
+    : await shouldUseBrotli(finalFilePath, filePathUnix, options)
+  const buffer = encryptionOptions
+    ? encryptSource(transformed.buffer, encryptionOptions.sessionKey, encryptionOptions.ivSessionKey)
+    : transformed.buffer
+  const fileName = transformed.useBrotli ? `${filePathUnix}.br` : filePathUnix
+  return {
+    buffer,
+    fileName,
+    compression: transformed.useBrotli ? 'brotli' : 'none',
+    uploadedBytesSha256: createHash('sha256').update(buffer).digest('hex'),
+    uploadedBytesSize: buffer.byteLength,
+  }
+}
+
+export async function prepareManifestUploadEntries(
+  manifest: manifestType,
+  path: string,
+  encryptionOptions: PartialEncryptionOptions | undefined,
+  options: OptionsUpload,
+): Promise<ManifestUploadRequestEntry[]> {
+  await validatePartialUpload(manifest, options)
+  if (manifest.length === 0)
+    throw new CliUserError('Cannot request a manifest upload for an empty manifest')
+  const entries: ManifestUploadRequestEntry[] = []
+  for (const [id, file] of manifest.entries()) {
+    const payload = await preparePartialPayload(file, path, encryptionOptions, options)
+    entries.push({
+      id,
+      file_name: payload.fileName,
+      compression: payload.compression,
+      file_hash: file.hash,
+      uploaded_bytes_sha256: payload.uploadedBytesSha256,
+      uploaded_bytes_size: payload.uploadedBytesSize,
+    })
+  }
+  return entries
+}
+
+function assertPreparedPayloadMatches(entry: ResolvedManifestUploadEntry, payload: PreparedPartialPayload) {
+  if (
+    entry.request.file_name !== payload.fileName
+    || entry.request.compression !== payload.compression
+    || entry.request.uploaded_bytes_sha256 !== payload.uploadedBytesSha256
+    || entry.request.uploaded_bytes_size !== payload.uploadedBytesSize
+  ) {
+    throw new CliUserError(`Manifest file changed while preparing the upload: ${entry.request.file_name}`)
+  }
+}
+
+export function buildPartialUploadHeaders(apikey: string, manifestUploadEntry?: ResolvedManifestUploadEntry): Record<string, string> {
+  return manifestUploadEntry
+    ? buildCliRequestHeaders({
+        [manifestUploadEntry.uploadAuthorization!.headerName]: manifestUploadEntry.uploadAuthorization!.value,
+      })
+    : buildCliRequestHeaders({ Authorization: apikey })
 }
 
 export async function uploadPartial(
@@ -200,6 +313,7 @@ export async function uploadPartial(
   orgId: string,
   encryptionOptions: PartialEncryptionOptions | undefined,
   options: OptionsUpload,
+  manifestUpload?: ResolvedManifestUpload,
 ): Promise<any[] | null> {
   const spinner = getUploadReporter().spinner()
   spinner.start('Preparing delta update with TUS protocol')
@@ -211,85 +325,57 @@ export async function uploadPartial(
   // auto-enabled delta degrades to a full upload instead of aborting.
   const userRequestedDelta = !!options.userRequestedDelta
 
-  // Check the updater version and Brotli support
-  const { version, supportsBrotliV2 } = await getUpdaterVersion(options)
-
-  // Check for incompatible options with older updater versions
-  if (!supportsBrotliV2) {
-    throw new CliUserError(`Your project is using an older version of @capgo/capacitor-updater (${version || 'unknown'}). To use Delta updates, please upgrade to version ${BROTLI_MIN_UPDATER_VERSION_V5} (v5), ${BROTLI_MIN_UPDATER_VERSION_V6} (v6) or ${BROTLI_MIN_UPDATER_VERSION_V7} (v7) or higher.`)
-  }
-  else {
-    // Only newer versions can use Brotli with .br extension
-    if (options.disableBrotli) {
-      log.info('Brotli compression disabled by user request')
-    }
-    else {
-      if (options.noBrotliPatterns) {
-        log.info(`Files matching patterns (${options.noBrotliPatterns}) will be excluded from brotli compression`)
-      }
-    }
-  }
-
-  // Check if any files have spaces in their names
-  const filesWithSpaces = manifest.filter(file => file.file.includes(' '))
-
-  if (filesWithSpaces.length > 0) {
-    throw new CliUserError(`Files with spaces in their names (${filesWithSpaces.map(f => f.file).join(', ')}). Please rename the files.`)
-  }
-
-  if (manifest.length > MAX_MANIFEST_ENTRIES)
-    throw new CliUserError(deltaManifestTooLargeMessage(manifest.length))
+  if (!manifestUpload)
+    await validatePartialUpload(manifest, options)
+  if (manifestUpload && manifestUpload.entries.length !== manifest.length)
+    throw new CliUserError('Manifest upload authorization does not match the local manifest')
 
   let uploadedFiles = 0
   const totalFiles = manifest.length
-  let brFilesCount = 0
+  let brFilesCount = manifestUpload?.entries.filter(entry => entry.request.compression === 'brotli').length ?? 0
   const abandonController = new ManifestUploadAbandonController()
 
   try {
     spinner.message(`Uploading ${totalFiles} files using TUS protocol`)
 
     // Helper function to upload a single file
-    const uploadFile = async (file: manifestType[number]) => {
+    const uploadFile = async (file: manifestType[number], index: number) => {
       abandonController.throwIfAbandoned()
-      const finalFilePath = join(path, file.file)
       const filePathUnix = convertToUnixPath(file.file)
-
-      let fileBuffer: Buffer
-      let isBrotli = false
-
-      // For versions >= 7.0.37, allow user options
-      if (options.disableBrotli) {
-        // User explicitly disabled Brotli, don't compress at all
-        fileBuffer = await readBuffer(createReadStream(finalFilePath))
-        isBrotli = false
-      }
-      else {
-        // Normal case: use Brotli when appropriate
-        const result = await shouldUseBrotli(finalFilePath, filePathUnix, options)
-        fileBuffer = result.buffer
-        isBrotli = result.useBrotli
-      }
-
-      let finalBuffer = fileBuffer
-      if (encryptionOptions) {
-        finalBuffer = encryptSource(fileBuffer, encryptionOptions.sessionKey, encryptionOptions.ivSessionKey)
-      }
+      const payload = await preparePartialPayload(file, path, encryptionOptions, options)
+      const finalBuffer = payload.buffer
       abandonController.throwIfAbandoned()
 
-      // Determine the upload path (with or without .br extension)
-      let uploadPathUnix = filePathUnix
-      // Only add .br extension if file was actually compressed with brotli
-      if (isBrotli) {
-        uploadPathUnix = `${filePathUnix}.br`
+      const manifestUploadEntry = manifestUpload?.entries[index]
+      if (manifestUploadEntry) {
+        if (manifestUploadEntry.request.file_hash !== file.hash)
+          throw new CliUserError(`Manifest upload authorization does not match the local manifest entry ${index}`)
+        assertPreparedPayloadMatches(manifestUploadEntry, payload)
+      }
+      else if (payload.compression === 'brotli') {
         brFilesCount++
       }
 
-      const filename = buildPartialUploadPath(orgId, appId, file.hash, uploadPathUnix, encryptionOptions)
+      const uploadPathUnix = payload.fileName
+      const filename = manifestUploadEntry?.s3Path
+        ?? buildPartialUploadPath(orgId, appId, file.hash, uploadPathUnix, encryptionOptions)
+
+      if (manifestUploadEntry?.action === 'reuse') {
+        uploadedFiles++
+        return {
+          file_name: uploadPathUnix,
+          s3_path: filename,
+          file_hash: file.hash,
+          file_size_receipt: manifestUploadEntry.fileSizeReceipt,
+        }
+      }
 
       // Check if file already exists on server
       // Skip reuse when encryption is enabled because the session key changes per upload
       // and reusing a file encrypted with a different session key would cause decryption to fail
-      const existing = !encryptionOptions ? await fileExists(localConfig, filename) : { exists: false }
+      const existing = manifestUploadEntry?.action === 'upload_if_doesnt_exist'
+        ? await fileExistsAtUploadTarget(manifestUploadEntry.uploadTarget!.existence_check_url_prefix, filename)
+        : (!manifestUploadEntry && !encryptionOptions ? await fileExists(localConfig, filename) : { exists: false })
       abandonController.throwIfAbandoned()
       if (existing.exists) {
         uploadedFiles++
@@ -305,8 +391,9 @@ export async function uploadPartial(
         spinner.message(`Prepare upload delta file: ${filePathUnix}`)
         // Get the MIME type for this file (based on original filename, not the R2 path)
         const filetype = getContentType(uploadPathUnix)
+        const uploadHeaders = buildPartialUploadHeaders(apikey, manifestUploadEntry)
         const upload = new tus.Upload(finalBuffer as any, {
-          endpoint: `${localConfig.hostFilesApi}/files/upload/attachments/`,
+          endpoint: manifestUploadEntry?.uploadTarget?.upload_url ?? `${localConfig.hostFilesApi}/files/upload/attachments/`,
           chunkSize: options.tusChunkSize,
           retryDelays: [...TUS_UPLOAD_RETRY_DELAYS],
           removeFingerprintOnSuccess: true,
@@ -314,7 +401,7 @@ export async function uploadPartial(
             filename,
             filetype,
           },
-headers: buildCliRequestHeaders({ Authorization: apikey }),
+          headers: uploadHeaders,
           onAfterResponse(_request, response) {
             const abandonError = parseManifestUploadAbandonBody(response.getBody())
             if (abandonError)
@@ -379,7 +466,7 @@ headers: buildCliRequestHeaders({ Authorization: apikey }),
       })
     }
 
-    // Process files in batches of 1000 to avoid overwhelming the server
+    // Process files in bounded batches to avoid overwhelming the server
     const BATCH_SIZE = 500
     const results: any[] = []
 
@@ -393,10 +480,12 @@ headers: buildCliRequestHeaders({ Authorization: apikey }),
         spinner.message(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} files)`)
       }
 
-      const batchResults = await Promise.all(batch.map(file => uploadFile(file)))
+      const batchResults = await Promise.all(batch.map((file, batchIndex) => uploadFile(file, i + batchIndex)))
       results.push(...batchResults)
     }
-    if (results.some(entry => !entry.file_size_receipt))
+    if (manifestUpload && results.some(entry => !entry.file_size_receipt))
+      throw new CliUserError('Manifest upload did not return a size receipt for every file')
+    if (!manifestUpload && results.some(entry => !entry.file_size_receipt))
       results.forEach(entry => delete entry.file_size_receipt)
     const endTime = performance.now()
     const uploadTime = ((endTime - startTime) / 1000).toFixed(2)

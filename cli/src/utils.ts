@@ -830,9 +830,10 @@ export async function getRemoteConfig(silent = false, signal?: AbortSignal) {
   return run.then(finish)
 }
 
-interface CapgoFilesConfig {
+export interface CapgoFilesConfig {
   partialUpload: boolean
   partialUploadForced: boolean
+  manifestUpload: boolean
   TUSUpload: boolean
   TUSUploadForced: boolean
   maxUploadLength: number
@@ -856,6 +857,7 @@ export async function getRemoteFileConfig() {
   catch {
     return {
       partialUpload: false,
+      manifestUpload: false,
       TUSUpload: false,
       partialUploadForced: false,
       TUSUploadForced: false,
@@ -1664,7 +1666,7 @@ export async function findMainFile(silent = false, rootDir: string = cwd()) {
   return mainFile
 }
 
-export async function updateOrCreateVersion(supabase: SupabaseClient<Database>, update: Database['public']['Tables']['app_versions']['Insert']) {
+export function updateOrCreateVersion(supabase: SupabaseClient<Database>, update: Database['public']['Tables']['app_versions']['Insert']) {
   return supabase.from('app_versions')
     .upsert(update, { onConflict: 'name,app_id' })
     .eq('app_id', update.app_id)
