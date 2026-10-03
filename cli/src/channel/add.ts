@@ -1,6 +1,5 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { CapgoClient } from '../utils'
 import type { ChannelAddOptions } from '../schemas/channel'
-import type { Database } from '../types/supabase.types'
 import { intro, log, outro } from '@clack/prompts'
 import { trackEvent } from '../analytics/track'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
@@ -8,7 +7,7 @@ import { createChannel, findChannel } from '../api/channels'
 import { isChannelAlreadyExistsError } from '../init/channel-conflict'
 import { CliUserError } from '../shared/cli-user-error'
 import {
-  createSupabaseClient,
+  createCapgoClient,
   findSavedKey,
   formatCapgoCliInvokeError,
   formatError,
@@ -20,19 +19,14 @@ import {
 } from '../utils'
 
 export async function isChannelReadableByCaller(
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoClient,
   appId: string,
   channelName: string,
 ): Promise<boolean | null> {
   const { data, error } = await findChannel(supabase, appId, channelName)
-  if (!error && data)
-    return true
-
-  const code = (error as { code?: string } | null)?.code
-  if (code === 'PGRST116')
-    return false
-
-  return null
+  if (error)
+    return null
+  return !!data
 }
 
 export type ChannelAddDuplicateOutcome = 'duplicate_readable' | 'duplicate_inaccessible' | 'not_duplicate'
@@ -40,7 +34,7 @@ export type ChannelAddDuplicateOutcome = 'duplicate_readable' | 'duplicate_inacc
 export async function resolveChannelAddDuplicateOutcome(
   params: {
     createError: unknown
-    supabase: SupabaseClient<Database>
+    supabase: CapgoClient
     appId: string
     channelName: string
   },
@@ -85,9 +79,8 @@ export async function addChannelInternal(channelId: string, appId: string, optio
     throw new CliUserError('Missing appId')
   }
 
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon, silent)
+  const supabase = await createCapgoClient(options.apikey, options.supaHost, options.supaAnon, silent)
   await check2FAComplianceForApp(supabase, appId, silent)
-  // TODO(cli-http): identity still uses request_actor_user_id via resolveUserIdFromApiKey
   await resolveUserIdFromApiKey(supabase, options.apikey)
   // Creating a channel needs the exact RBAC permission. The backend and channels
   // INSERT RLS remain authoritative, so a key without app.create_channel is denied.

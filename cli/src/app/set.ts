@@ -1,14 +1,13 @@
 import type { Buffer } from 'node:buffer'
 import type { Options } from '../api/app'
-import type { Database } from '../types/supabase.types'
 import { existsSync, readFileSync } from 'node:fs'
 import { intro, log, outro } from '@clack/prompts'
-import { checkAppExistsAndHasPermissionOrgErr, getAppIconStoragePath, resolveAppSetIconPath } from '../api/app'
+import { checkAppExistsAndHasPermissionOrgErr, resolveAppSetIconPath, uploadAppIconHttp } from '../api/app'
 import { assertChannelExists, disableDownloadChannels as disableAllDownloadChannels, setDefaultDownloadChannel } from './default-channels'
 import { normalizeStoreUrl } from './store-url'
 import { CliUserError } from '../shared/cli-user-error'
 import {
-  createSupabaseClient,
+  createCapgoClient,
   findSavedKey,
   formatError,
   getAppId,
@@ -43,7 +42,7 @@ export async function setAppInternal(appId: string, options: Options, silent = f
     throw new CliUserError('Missing appId')
   }
 
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
+  const supabase = await createCapgoClient(options.apikey, options.supaHost, options.supaAnon)
   await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.update_settings', silent)
   const organizationUid = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
 
@@ -89,9 +88,14 @@ export async function setAppInternal(appId: string, options: Options, silent = f
     }
   }
 
-  // TODO(cli-http): channel existence check still uses supabase-js
+  const channelHttp = {
+    apikey: options.apikey!,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  }
+
   if (defaultUploadChannel)
-    await assertChannelExists(supabase, appId, defaultUploadChannel)
+    await assertChannelExists(channelHttp, appId, defaultUploadChannel)
 
   if (disableDownloadChannels && defaultDownloadChannel) {
     if (!silent)
@@ -101,7 +105,7 @@ export async function setAppInternal(appId: string, options: Options, silent = f
 
 
   if (defaultDownloadChannel)
-    await assertChannelExists(supabase, appId, defaultDownloadChannel)
+    await assertChannelExists(channelHttp, appId, defaultDownloadChannel)
 
   let normalizedIosStoreUrl: string | null | undefined
   let normalizedAndroidStoreUrl: string | null | undefined
@@ -112,7 +116,6 @@ export async function setAppInternal(appId: string, options: Options, silent = f
 
   let iconBuff: Buffer | undefined
   let iconType: string | undefined
-  const iconPath = getAppIconStoragePath(organizationUid, appId)
   let iconUrl: string | undefined
 
   const iconToUpload = resolveAppSetIconPath(icon)
@@ -131,21 +134,23 @@ export async function setAppInternal(appId: string, options: Options, silent = f
   }
 
   if (iconBuff && iconType) {
-    // TODO(cli-http): icon upload still requires supabase storage
-    const { error } = await supabase.storage
-      .from('images')
-      .upload(iconPath, iconBuff, {
-        contentType: iconType,
-        upsert: true,
-      })
+    const uploadResult = await uploadAppIconHttp(options.apikey!, {
+      appId,
+      orgId: organizationUid,
+      contentBase64: iconBuff.toString('base64'),
+      contentType: iconType,
+      upsert: true,
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
+    })
 
-    if (error) {
+    if (uploadResult.error || !uploadResult.path) {
       if (!silent)
-        log.error(`Could not set app ${formatError(error)}`)
-      throw new Error(`Could not set app: ${formatError(error)}`)
+        log.error(`Could not set app ${formatError(uploadResult.error)}`)
+      throw new Error(`Could not set app: ${formatError(uploadResult.error)}`)
     }
 
-    iconUrl = iconPath
+    iconUrl = uploadResult.path
   }
 
   const putBody: Record<string, unknown> = {}
@@ -161,6 +166,12 @@ export async function setAppInternal(appId: string, options: Options, silent = f
     putBody.allow_device_custom_id = allowDeviceCustomId
   if (blockProviderInfraRequests != null)
     putBody.block_provider_infra_requests = blockProviderInfraRequests
+  if (preview != null)
+    putBody.allow_preview = preview
+  if (buildTimeoutMinutes != null)
+    putBody.build_timeout_seconds = Math.trunc(Number(buildTimeoutMinutes)) * 60
+  if (defaultUploadChannel != null)
+    putBody.default_upload_channel = defaultUploadChannel
   if (iosStoreUrl !== undefined)
     putBody.ios_store_url = normalizedIosStoreUrl
   if (androidStoreUrl !== undefined)
@@ -181,33 +192,10 @@ export async function setAppInternal(appId: string, options: Options, silent = f
     }
   }
 
-  // TODO(cli-http): PUT app does not support allow_preview / build_timeout_seconds / default_upload_channel yet
-  const appUpdate: Database['public']['Tables']['apps']['Update'] = {}
-  if (preview != null)
-    appUpdate.allow_preview = preview
-  if (buildTimeoutMinutes != null)
-    appUpdate.build_timeout_seconds = Math.trunc(Number(buildTimeoutMinutes)) * 60
-  if (defaultUploadChannel != null)
-    appUpdate.default_upload_channel = defaultUploadChannel
-
-  if (Object.keys(appUpdate).length > 0) {
-    const { error: dbError } = await supabase
-      .from('apps')
-      .update(appUpdate)
-      .eq('app_id', appId)
-
-    if (dbError) {
-      if (!silent)
-        log.error(`Could not set app ${formatError(dbError)}`)
-      throw new Error(`Could not set app: ${formatError(dbError)}`)
-    }
-  }
-
-  // TODO(cli-http): download-channel defaults still use direct channel table writes
   if (disableDownloadChannels)
-    await disableAllDownloadChannels(supabase, appId)
+    await disableAllDownloadChannels(channelHttp, appId)
   else if (defaultDownloadChannel)
-    await setDefaultDownloadChannel(supabase, appId, defaultDownloadChannel)
+    await setDefaultDownloadChannel(channelHttp, appId, defaultDownloadChannel)
 
   await sendEvent(options.apikey, {
     channel: 'app',

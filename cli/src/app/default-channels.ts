@@ -1,56 +1,75 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database } from '../types/supabase.types'
-import { formatError } from '../utils'
+import { fetchCliChannels } from '../api/cli-data'
+import { formatError, invokeCapgoCliApi } from '../utils'
 
-type CapgoSupabaseClient = SupabaseClient<Database>
+interface ChannelHttpOptions {
+  apikey: string
+  supaHost?: string
+  supaAnon?: string
+}
 
-export async function assertChannelExists(supabase: CapgoSupabaseClient, appId: string, channelName: string) {
-  const { data, error } = await supabase
-    .from('channels')
-    .select('id, name')
-    .eq('app_id', appId)
-    .eq('name', channelName)
-    .maybeSingle()
+// Channel reads use the caller-key CLI route (channel.read), not GET /channel
+// (app.read_channels), so keys that could change channels before still can.
+async function loadChannels(options: ChannelHttpOptions, appId: string, channelName?: string) {
+  try {
+    return await fetchCliChannels(options, appId, channelName)
+  }
+  catch (error) {
+    throw new Error(`Cannot load channel${channelName ? ` ${channelName}` : 's'}: ${formatError(error)}`)
+  }
+}
+
+export async function assertChannelExists(options: ChannelHttpOptions, appId: string, channelName: string) {
+  const channels = await loadChannels(options, appId, channelName)
+  if (!channels.some(channel => channel.name === channelName))
+    throw new Error(`Channel ${channelName} not found for app ${appId}`)
+}
+
+async function setChannelPublic(
+  options: ChannelHttpOptions,
+  appId: string,
+  channelName: string,
+  publicChannel: boolean,
+) {
+  const { error } = await invokeCapgoCliApi('channel', {
+    apikey: options.apikey,
+    method: 'POST',
+    body: {
+      app_id: appId,
+      channel: channelName,
+      public: publicChannel,
+    },
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
 
   if (error)
-    throw new Error(`Cannot load channel ${channelName}: ${formatError(error)}`)
-  if (!data)
-    throw new Error(`Channel ${channelName} not found for app ${appId}`)
-
-  return data
+    throw new Error(`Could not update channel ${channelName}: ${formatError(error)}`)
 }
 
 export async function setDefaultDownloadChannel(
-  supabase: CapgoSupabaseClient,
+  options: ChannelHttpOptions,
   appId: string,
   channelName: string,
 ) {
-  const channel = await assertChannelExists(supabase, appId, channelName)
+  const channels = await loadChannels(options, appId)
+  const target = channels.find(channel => channel.name === channelName)
+  if (!target)
+    throw new Error(`Channel ${channelName} not found for app ${appId}`)
 
-  const { error: enableError } = await supabase
-    .from('channels')
-    .update({ public: true })
-    .eq('id', channel.id)
+  // Enable the target first so a later failure never leaves the app without a public channel.
+  if (!target.public)
+    await setChannelPublic(options, appId, channelName, true)
 
-  if (enableError)
-    throw new Error(`Could not enable default download channel: ${formatError(enableError)}`)
-
-  const { error: disableError } = await supabase
-    .from('channels')
-    .update({ public: false })
-    .eq('app_id', appId)
-    .neq('id', channel.id)
-
-  if (disableError)
-    throw new Error(`Could not update other channels: ${formatError(disableError)}`)
+  for (const channel of channels) {
+    if (channel.name !== channelName && channel.public)
+      await setChannelPublic(options, appId, channel.name, false)
+  }
 }
 
-export async function disableDownloadChannels(supabase: CapgoSupabaseClient, appId: string) {
-  const { error } = await supabase
-    .from('channels')
-    .update({ public: false })
-    .eq('app_id', appId)
-
-  if (error)
-    throw new Error(`Could not disable download channels: ${formatError(error)}`)
+export async function disableDownloadChannels(options: ChannelHttpOptions, appId: string) {
+  const channels = await loadChannels(options, appId)
+  for (const channel of channels) {
+    if (channel.public)
+      await setChannelPublic(options, appId, channel.name, false)
+  }
 }

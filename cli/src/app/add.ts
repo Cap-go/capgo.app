@@ -5,14 +5,14 @@ import { existsSync, readFileSync } from 'node:fs'
 import { intro, log, outro } from '@clack/prompts'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { getInvocationSource, trackEvent } from '../analytics/track'
-import { getAppIconStoragePath, newIconPath } from '../api/app'
+import { getAppIconStoragePath, newIconPath, uploadAppIconHttp } from '../api/app'
 import { getAppListPath } from './list'
 import { checkAlerts } from '../api/update'
 import { isAiAgentEnvironment } from '../init/onboarding-source'
 import { CliUserError } from '../shared/cli-user-error'
 import {
   assertCliPermission,
-  createSupabaseClient,
+  createCapgoClient,
   findSavedKey,
   formatCapgoApiErrorBody,
   formatError,
@@ -331,7 +331,7 @@ export async function addAppInternal(
 
   ensureOptions(appId, options, silent)
 
-  const supabase = await createSupabaseClient(options.apikey!, options.supaHost, options.supaAnon)
+  const supabase = await createCapgoClient(options.apikey!, options.supaHost, options.supaAnon)
   const userId = await resolveUserIdFromApiKey(supabase, options.apikey)
 
   if (!organization)
@@ -384,23 +384,27 @@ export async function addAppInternal(
   // Icon upload is best-effort. Storage RLS issues must not block app creation;
   // the web onboarding path already continues without an icon on upload failure.
   if (iconBuff && iconType) {
-    // TODO(cli-http): icon upload still requires supabase storage
-    const { error } = await supabase.storage
-      .from('images')
-      .upload(iconPath, iconBuff, {
-        contentType: iconType,
-        // A duplicate app add must not overwrite the existing app's icon before POST returns 409.
-        upsert: false,
-      })
+    const uploadResult = await uploadAppIconHttp(options.apikey!, {
+      appId,
+      orgId: organizationUid,
+      contentBase64: iconBuff.toString('base64'),
+      contentType: iconType,
+      upsert: false,
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
+    })
 
-    if (error && !isStorageObjectConflict(error)) {
+    if (uploadResult.error && !uploadResult.conflict) {
       if (!silent)
-        log.warn(`Could not upload app icon (${formatError(error)}). Continuing without an icon.`)
+        log.warn(`Could not upload app icon (${formatError(uploadResult.error)}). Continuing without an icon.`)
     }
-    else {
+    else if (uploadResult.path) {
       // A conflict can be an orphaned icon from an earlier attempt whose POST failed.
       // Reusing its path is safe because upsert:false did not mutate the stored object,
       // and POST /app remains authoritative for duplicate app IDs.
+      iconUrl = uploadResult.path
+    }
+    else {
       iconUrl = iconPath
     }
   }

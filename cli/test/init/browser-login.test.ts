@@ -55,7 +55,7 @@ describe('init browser login', () => {
     const initApp = initSource.slice(initSource.indexOf('export async function initApp('))
     const savedKeyLookup = initApp.indexOf('options.apikey = findSavedKeySilent() ?? \'\'')
     const browserGate = initApp.indexOf('shouldStartInitBrowserLogin(options.apikey, supportsBrowserLogin && canPromptInteractively({ silent: options.silent }))')
-    const authenticatedClient = initApp.indexOf('const supabase = await createSupabaseClient(options.apikey')
+    const authenticatedClient = initApp.indexOf('const supabase = await createCapgoClient(options.apikey')
 
     expect(savedKeyLookup).toBeGreaterThanOrEqual(0)
     expect(browserGate).toBeGreaterThan(savedKeyLookup)
@@ -81,7 +81,7 @@ describe('init browser login', () => {
     const initApp = initSource.slice(initSource.indexOf('export async function initApp('))
     const authenticated = initApp.indexOf('authenticatedViaLoginPrompt = true')
     const successMessage = initApp.indexOf("pLog.success('Login successful')")
-    const authenticatedClient = initApp.indexOf('const supabase = await createSupabaseClient(options.apikey')
+    const authenticatedClient = initApp.indexOf('const supabase = await createCapgoClient(options.apikey')
 
     expect(authenticated).toBeGreaterThanOrEqual(0)
     expect(successMessage).toBeGreaterThan(authenticated)
@@ -98,8 +98,8 @@ describe('init browser login', () => {
   })
 
   it('resolves plain API-key identity before listing organizations', () => {
-    const resolveUserId = helperSource.indexOf('await resolveUserIdFromApiKey(supabase, key, true)')
-    const listOrganizations = helperSource.indexOf("await supabase.rpc('get_orgs_v7')")
+    const resolveUserId = helperSource.indexOf('await resolveUserIdFromApiKey(supabase, key, true, httpOptions)')
+    const listOrganizations = helperSource.indexOf('await fetchOrganizationsV7(key, httpOptions)')
 
     expect(resolveUserId).toBeGreaterThanOrEqual(0)
     expect(listOrganizations).toBeGreaterThanOrEqual(0)

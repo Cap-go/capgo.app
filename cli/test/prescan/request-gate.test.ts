@@ -124,7 +124,7 @@ describe('play-sa-access probe is gated by PLAY_CONFIG_JSON presence in the thre
 //
 // A capacitor.config.json + minimal Android credentials get the run PAST
 // getConfig and the credential-validation step so it reaches the gate/assert.
-// supaHost/supaAnon make createSupabaseClient build a real client pointed at a
+// supaHost/supaAnon make createCapgoClient build a real client pointed at a
 // fake URL whose RPC/select calls the spy answers.
 interface GateProbe {
   postedBuildRequest: boolean
@@ -144,8 +144,8 @@ function installGateFetchSpy(permission: boolean): GateProbe {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
     probe.urls.push(url)
-    if (url.includes('cli_check_permission'))
-      return json(permission)
+    if (url.includes('private/cli/check-permission'))
+      return json({ allowed: permission })
     if (url.includes('/build/request')) {
       probe.postedBuildRequest = true
       return json({ jobId: 'should-never-be-reached' })

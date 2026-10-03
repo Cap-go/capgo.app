@@ -49,26 +49,30 @@ console.log('Builder app suggestion and similarity passed')
 
 {
   const calls = []
-  const request = async (path) => {
+  const request = async (path, options) => {
+    if (path === 'private/cli/check-permission') {
+      calls.push({ path, body: options?.body })
+      return { data: { allowed: true }, error: null }
+    }
     calls.push(path)
     return { data: { app_id: 'com.example.weather', name: 'Weather' }, error: null }
   }
-  const createClient = async () => ({ rpc: async (name, args) => {
-    calls.push({ name, args })
-    return { data: true, error: null }
-  } })
-  await verifyBuilderApp('test-key', 'com.example.weather', {}, { request, createClient })
+  await verifyBuilderApp('test-key', 'com.example.weather', {}, { request })
   assert.equal(calls[0], 'app/com.example.weather')
-  assert.equal(calls[1].name, 'cli_check_permission')
-  assert.equal(calls[1].args.permission_key, 'app.build_native')
-  assert.equal(calls[1].args.app_id, 'com.example.weather')
+  assert.equal(calls[1].path, 'private/cli/check-permission')
+  assert.equal(calls[1].body.permission_key, 'app.build_native')
+  assert.equal(calls[1].body.app_id, 'com.example.weather')
   await assert.rejects(verifyBuilderApp('test-key', 'com.example.weather', {}, {
-    request,
-    createClient: async () => ({ rpc: async () => ({ data: false, error: null }) }),
+    request: async (path, options) => {
+      if (path === 'private/cli/check-permission') {
+        calls.push({ path, body: options?.body })
+        return { data: { allowed: false }, error: null }
+      }
+      return { data: { app_id: 'com.example.weather', name: 'Weather' }, error: null }
+    },
   }), error => error instanceof AppSelectionError && error.code === 'build')
   await assert.rejects(verifyBuilderApp('test-key', 'com.example.weather', {}, {
     request: async () => ({ data: null, error: Object.assign(new Error('denied'), { context: { status: 401 } }) }),
-    createClient,
   }), error => error instanceof AppSelectionError && error.code === 'read')
 }
 

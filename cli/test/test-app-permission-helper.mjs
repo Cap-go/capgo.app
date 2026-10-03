@@ -5,24 +5,24 @@ import { CliUserError } from '../src/shared/cli-user-error.ts'
 import { shouldCapturePosthogException } from '../src/posthog.ts'
 
 const calls = []
-const supabase = {
-  rpc(name, args) {
-    calls.push({ name, args })
-    if (name === 'cli_check_permission') {
-      return Promise.resolve({ data: true, error: null })
-    }
-    throw new Error(`Unexpected RPC call: ${name}`)
-  },
-}
+const supabase = {}
 
 const originalFetch = globalThis.fetch
 const fetchCalls = []
 
 globalThis.fetch = async (input, init) => {
   const url = String(input)
-  fetchCalls.push({ url, method: init?.method ?? 'GET' })
+  fetchCalls.push({ url, method: init?.method ?? 'GET', body: init?.body })
   if (url.includes('/private/config')) {
     return new Response(JSON.stringify({}), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+  if (url.includes('/private/cli/check-permission')) {
+    const body = JSON.parse(String(init?.body ?? '{}'))
+    calls.push(body)
+    return new Response(JSON.stringify({ allowed: true }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     })
@@ -52,9 +52,9 @@ try {
     true,
   )
 
-  assert.deepEqual(calls.map(call => call.name), ['cli_check_permission'])
+  assert.equal(calls.length, 1)
   assert.ok(fetchCalls.some(call => /\/app\/com\.example\.app$/.test(call.url)), 'expected GET app existence check')
-  assert.deepEqual(calls[0].args, {
+  assert.deepEqual(calls[0], {
     apikey: 'ck_plain_cli_key',
     permission_key: 'app.read_bundles',
     org_id: null,
@@ -75,9 +75,9 @@ try {
     42,
   )
 
-  assert.deepEqual(calls.map(call => call.name), ['cli_check_permission'])
+  assert.equal(calls.length, 1)
   assert.equal(fetchCalls.filter(call => /\/app\//.test(call.url)).length, 0, 'channel-scoped checks skip app existence HTTP call')
-  assert.deepEqual(calls[0].args, {
+  assert.deepEqual(calls[0], {
     apikey: 'ck_channel_cli_key',
     permission_key: 'channel.delete',
     org_id: null,
@@ -97,8 +97,8 @@ try {
     77,
   )
 
-  assert.deepEqual(calls.map(call => call.name), ['cli_check_permission'])
-  assert.deepEqual(calls[0].args, {
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0], {
     apikey: 'ck_channel_update_key',
     permission_key: 'channel.update_settings',
     org_id: null,
@@ -109,19 +109,41 @@ try {
   calls.length = 0
   fetchCalls.length = 0
 
-  const deniedSupabase = {
-    rpc(name, args) {
-      calls.push({ name, args })
-      if (name === 'cli_check_permission') {
-        return Promise.resolve({ data: false, error: null })
-      }
-      throw new Error(`Unexpected RPC call: ${name}`)
-    },
+  globalThis.fetch = async (input, init) => {
+    const url = String(input)
+    fetchCalls.push({ url, method: init?.method ?? 'GET', body: init?.body })
+    if (url.includes('/private/config')) {
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    if (url.includes('/private/cli/check-permission')) {
+      const body = JSON.parse(String(init?.body ?? '{}'))
+      calls.push(body)
+      return new Response(JSON.stringify({ allowed: false }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    if (url.includes('/app/com.example.app')) {
+      return new Response(JSON.stringify({
+        app_id: 'com.example.app',
+        owner_org: 'org_123',
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return new Response(JSON.stringify({ error: 'not_found' }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' },
+    })
   }
 
   await assert.rejects(
     () => checkAppExistsAndHasPermissionOrgErr(
-      deniedSupabase,
+      supabase,
       'ck_denied_key',
       'com.example.app',
       'app.upload_bundle',
@@ -143,7 +165,7 @@ try {
     },
   )
 
-  assert.deepEqual(calls.map(call => call.name), ['cli_check_permission'])
+  assert.equal(calls.length, 1)
 
   console.log('app permission helper tests passed')
 }

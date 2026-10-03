@@ -9,7 +9,7 @@ import { sendUpdateNotificationsForChannels } from '../notifications/send-update
 import { printPreviewQrForResolvedTarget, resolveChannelPreviewTarget } from '../preview/qr'
 import { formatTable } from '../terminal-table'
 import { CliUserError } from '../shared/cli-user-error'
-import { channelUpdatePackageCliError, checkCompatibilityNativePackages, createSupabaseClient, findSavedKey, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getOrganizationId, invokeCapgoCliApi, isCompatible, resolveUserIdFromApiKey, sendEvent } from '../utils'
+import { channelUpdatePackageCliError, checkCompatibilityNativePackages, createCapgoClient, findSavedKey, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getOrganizationId, invokeCapgoCliApi, isCompatible, resolveUserIdFromApiKey, sendEvent } from '../utils'
 
 /**
  * Display a compatibility table for the given packages
@@ -118,7 +118,7 @@ export async function setChannelInternal(channel: string, appId: string, options
     throw new Error(message)
   }
 
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
+  const supabase = await createCapgoClient(options.apikey, options.supaHost, options.supaAnon)
   await check2FAComplianceForApp(supabase, appId, silent)
   const userId = await resolveUserIdFromApiKey(supabase, options.apikey)
 
@@ -297,10 +297,11 @@ export async function setChannelInternal(channel: string, appId: string, options
 
     if (!options.ignoreMetadataCheck) {
       const { finalCompatibility, localDependencies } = await checkCompatibilityNativePackages(
-        supabase,
+        options.apikey!,
         appId,
         channel,
         (data.native_packages as any) ?? [],
+        { supaHost: options.supaHost, supaAnon: options.supaAnon },
       )
 
       const incompatiblePackages = finalCompatibility.filter(item => !isCompatible(item))
@@ -345,10 +346,11 @@ export async function setChannelInternal(channel: string, appId: string, options
 
     if (!options.ignoreMetadataCheck) {
       const { finalCompatibility } = await checkCompatibilityNativePackages(
-        supabase,
+        options.apikey!,
         appId,
         channel,
         (data.native_packages as any) ?? [],
+        { supaHost: options.supaHost, supaAnon: options.supaAnon },
       )
 
       const incompatiblePackages = finalCompatibility.filter(item => !isCompatible(item))
@@ -375,10 +377,11 @@ export async function setChannelInternal(channel: string, appId: string, options
 
     if (!options.ignoreMetadataCheck) {
       const { finalCompatibility, localDependencies } = await checkCompatibilityNativePackages(
-        supabase,
+        options.apikey!,
         appId,
         channel,
         (data.native_packages as any) ?? [],
+        { supaHost: options.supaHost, supaAnon: options.supaAnon },
       )
 
       const incompatiblePackages = finalCompatibility.filter(item => !isCompatible(item))
@@ -467,10 +470,11 @@ export async function setChannelInternal(channel: string, appId: string, options
         throw new Error('Cannot find rollout version to promote')
 
       const { finalCompatibility, localDependencies } = await checkCompatibilityNativePackages(
-        supabase,
+        options.apikey!,
         appId,
         channel,
         (data.native_packages as any) ?? [],
+        { supaHost: options.supaHost, supaAnon: options.supaAnon },
       )
 
       const incompatiblePackages = finalCompatibility.filter(item => !isCompatible(item))

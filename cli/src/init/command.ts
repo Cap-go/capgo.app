@@ -37,7 +37,7 @@ import { copyToClipboard, revealInFinder } from '../support/clipboard'
 import { contactSupport } from '../support/contact-support'
 import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log'
 import { uploadSupportLogs } from '../support/support-upload'
-import { canPromptInteractively, consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
+import { canPromptInteractively, consoleWebUrl, createCapgoClient, defaultApiHost, fetchOrganizationsV7, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from './app-conflict'
 import { loginInitInBrowser, shouldStartInitBrowserLogin } from './browser-login'
 import { selectOnboardingChannel } from './channel-selection'
@@ -1381,19 +1381,20 @@ export function getResumedOnboardingAccessError(
 }
 
 async function validateResumedOnboardingAccess(
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  supabase: Awaited<ReturnType<typeof createCapgoClient>>,
   apikey: string,
   resume: ResumeResult,
   hostOptions?: { supaHost?: string, supaAnon?: string },
 ): Promise<string | undefined> {
   try {
-    const { error: orgError, data: organizations } = await supabase.rpc('get_orgs_v7')
-    if (orgError || !organizations)
+    const httpOptions = { supaHost: hostOptions?.supaHost, supaAnon: hostOptions?.supaAnon }
+    const organizations = await fetchOrganizationsV7(apikey, httpOptions).catch(() => null)
+    if (!organizations)
       return 'Could not verify whether the saved onboarding organization is still available. Starting fresh.'
 
     const organization = organizations.find(org => org.gid === resume.orgId)
     const hasCreateAppPermission = organization && !resume.appId
-      ? await hasCliPermission(supabase, apikey, 'org.create_app', { orgId: organization.gid })
+      ? await hasCliPermission(supabase, apikey, 'org.create_app', { orgId: organization.gid }, httpOptions)
       : false
     const hasAppAccess = !organization || !resume.appId
       ? true
@@ -1413,7 +1414,7 @@ async function tryResumeOnboarding(
   apikey: string,
   initialTargets: InitTargetPaths,
   initialCwd: string,
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  supabase: Awaited<ReturnType<typeof createCapgoClient>>,
   hostOptions?: { supaHost?: string, supaAnon?: string },
 ): Promise<ResumeResult | undefined> {
   try {
@@ -2199,7 +2200,7 @@ async function maybeReusePendingOnboardingApp(
   organization: Organization,
   apikey: string,
   appId: string | undefined,
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  supabase: Awaited<ReturnType<typeof createCapgoClient>>,
   options?: Pick<SuperOptions, 'supaHost' | 'supaAnon'>,
 ) {
   const pendingApps = await listPendingOnboardingApps(apikey, organization.gid, options)
@@ -2244,10 +2245,11 @@ async function maybeReusePendingOnboardingApp(
 }
 
 async function selectOrganizationForInit(
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  supabase: Awaited<ReturnType<typeof createCapgoClient>>,
   apikey: string,
+  httpOptions: { supaHost?: string, supaAnon?: string } = {},
 ): Promise<Organization> {
-  const { allOrganizations, allowedOrganizations } = await getOrganizationListWithPermission(supabase, apikey, 'org.create_app')
+  const { allOrganizations, allowedOrganizations } = await getOrganizationListWithPermission(supabase, apikey, 'org.create_app', httpOptions)
 
   const organizationUidRaw = allowedOrganizations.length > 1
     ? await pSelect({
@@ -2402,7 +2404,7 @@ async function checkPrerequisitesStep(
 type ExistingAppConflictResolution = 'use-existing' | 'recreate' | 'choose-different' | 'not-owned'
 
 async function completeExistingAppPendingOnboarding(
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  supabase: Awaited<ReturnType<typeof createCapgoClient>>,
   organization: Organization,
   appId: string,
   apikey: string,
@@ -2424,7 +2426,7 @@ async function completeExistingAppPendingOnboarding(
 }
 
 async function resolveExistingAppConflict(
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  supabase: Awaited<ReturnType<typeof createCapgoClient>>,
   organization: Organization,
   apikey: string,
   appId: string,
@@ -2481,7 +2483,7 @@ async function resolveExistingAppConflict(
 }
 
 async function askForReplacementAppId(
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  supabase: Awaited<ReturnType<typeof createCapgoClient>>,
   organization: Organization,
   apikey: string,
   baseAppId: string,
@@ -2570,7 +2572,7 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
     }
     catch (error) {
       if (isAppAlreadyExistsError(error)) {
-        const supabase = await createSupabaseClient(options.apikey ?? apikey, options.supaHost, options.supaAnon)
+        const supabase = await createCapgoClient(options.apikey ?? apikey, options.supaHost, options.supaAnon)
 
         const conflictResolution = await resolveExistingAppConflict(supabase, organization, apikey, currentAppId, options)
         if (conflictResolution === 'use-existing') {
@@ -2601,7 +2603,7 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
   }
 }
 
-async function addChannelStep(orgId: string, apikey: string, appId: string, supabase: Awaited<ReturnType<typeof createSupabaseClient>>, options: SuperOptions) {
+async function addChannelStep(orgId: string, apikey: string, appId: string, supabase: Awaited<ReturnType<typeof createCapgoClient>>, options: SuperOptions) {
   const pm = getPMAndCommand()
   pLog.success(`✅ App ${appId} added — accessible to all members of your organization`)
   pLog.info(`💡 Keep in mind: Capgo cannot deliver updates to app versions that don’t include Capacitor Updater.`)
@@ -5443,7 +5445,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     }
   }
 
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
+  const supabase = await createCapgoClient(options.apikey, options.supaHost, options.supaAnon)
   await resolveUserIdFromApiKey(supabase, options.apikey)
   flushDeferredCommandInvocation(options.apikey)
   activeInitTelemetry?.setAuth('', options.apikey)
@@ -5614,21 +5616,27 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   }
 
   let organization: Organization
+  const httpOptions = { supaHost: options.supaHost, supaAnon: options.supaAnon }
   if (resumed) {
     const resumedSnapshot = resumed
     // Fetch orgs to validate the saved one still exists and is accessible
-    const { error: orgError, data: allOrganizations } = await supabase.rpc('get_orgs_v7')
-    if (orgError || !allOrganizations) {
-      pLog.error(`Cannot verify organization access: ${orgError ? JSON.stringify(orgError) : 'no data returned'}`)
+    let allOrganizations: Organization[] | null = null
+    try {
+      allOrganizations = await fetchOrganizationsV7(options.apikey, httpOptions)
+    }
+    catch (orgError) {
+      pLog.error(`Cannot verify organization access: ${orgError instanceof Error ? orgError.message : String(orgError)}`)
+    }
+    if (!allOrganizations) {
       pLog.warn('Falling back to organization selection.')
-      organization = await selectOrganizationForInit(supabase, options.apikey)
+      organization = await selectOrganizationForInit(supabase, options.apikey, httpOptions)
       await discardResumedState()
     }
     else {
       const savedOrg = allOrganizations.find(org => org.gid === resumedSnapshot.orgId)
       const blocked2fa = savedOrg?.enforcing_2fa && !savedOrg['2fa_has_access']
       const hasCreateAppPermission = savedOrg && !resumedSnapshot.appId
-        ? await hasCliPermission(supabase, options.apikey, 'org.create_app', { orgId: savedOrg.gid })
+        ? await hasCliPermission(supabase, options.apikey, 'org.create_app', { orgId: savedOrg.gid }, httpOptions)
         : false
       const hasAppAccess = !savedOrg || !resumedSnapshot.appId
         ? true
@@ -5636,23 +5644,23 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
       if (!savedOrg) {
         pLog.warn(`Previously used organization "${resumedSnapshot.orgName}" is no longer available. Please select a new one.`)
-        organization = await selectOrganizationForInit(supabase, options.apikey)
+        organization = await selectOrganizationForInit(supabase, options.apikey, httpOptions)
         await discardResumedState()
       }
       else if (blocked2fa) {
         pLog.warn(`Organization "${savedOrg.name}" now requires 2FA. Enable it at ${consoleWebUrl('/settings/account')}`)
         pLog.warn('Please select a different organization or enable 2FA and try again.')
-        organization = await selectOrganizationForInit(supabase, options.apikey)
+        organization = await selectOrganizationForInit(supabase, options.apikey, httpOptions)
         await discardResumedState()
       }
       else if (!hasAppAccess) {
         pLog.warn(`Previously used app "${resumedSnapshot.appId}" is no longer available. Please select a different organization.`)
-        organization = await selectOrganizationForInit(supabase, options.apikey)
+        organization = await selectOrganizationForInit(supabase, options.apikey, httpOptions)
         await discardResumedState()
       }
       else if (!hasCreateAppPermission && !resumedSnapshot.appId) {
         pLog.warn(`You no longer have permission to create an app in "${savedOrg.name}". Please select a different organization.`)
-        organization = await selectOrganizationForInit(supabase, options.apikey)
+        organization = await selectOrganizationForInit(supabase, options.apikey, httpOptions)
         await discardResumedState()
       }
       else {
@@ -5662,7 +5670,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     }
   }
   else {
-    organization = await selectOrganizationForInit(supabase, options.apikey)
+    organization = await selectOrganizationForInit(supabase, options.apikey, httpOptions)
   }
 
   const orgId = organization.gid

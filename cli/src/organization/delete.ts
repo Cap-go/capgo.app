@@ -5,7 +5,7 @@ import { CliUserError } from '../shared/cli-user-error'
 import {
   assertOrgPermission,
   check2FAAccessForOrg,
-  createSupabaseClient,
+  createCapgoClient,
   findSavedKey,
   formatError,
   invokeCapgoCliApi,
@@ -39,16 +39,21 @@ export async function deleteOrganizationInternal(
     throw new Error('Missing organization id')
   }
 
-  const supabase = await createSupabaseClient(
+  const supabase = await createCapgoClient(
     enrichedOptions.apikey,
     enrichedOptions.supaHost,
     enrichedOptions.supaAnon,
   )
-  // TODO(cli-http): assertOrgPermission still uses rpc(cli_check_permission)
-  await assertOrgPermission(supabase, enrichedOptions.apikey, 'org.delete', orgId, `Insufficient permissions to delete organization ${orgId}`, silent)
+  const httpOptions = {
+    supaHost: enrichedOptions.supaHost,
+    supaAnon: enrichedOptions.supaAnon,
+  }
+  await assertOrgPermission(supabase, enrichedOptions.apikey, 'org.delete', orgId, `Insufficient permissions to delete organization ${orgId}`, silent, httpOptions)
 
-  // TODO(cli-http): check2FAAccessForOrg still uses reject_access_due_to_2fa RPCs
-  await check2FAAccessForOrg(supabase, orgId, silent)
+  await check2FAAccessForOrg(supabase, orgId, silent, {
+    supaHost: enrichedOptions.supaHost,
+    supaAnon: enrichedOptions.supaAnon,
+  })
 
   const { data: orgData, error: orgError } = await invokeCapgoCliApi<{ name?: string, created_by?: string }>(
     `organization?orgId=${encodeURIComponent(orgId)}`,

@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { CapgoClient } from '../utils'
 import type { Database } from '../types/supabase.types'
 import { log } from '@clack/prompts'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
@@ -9,7 +9,7 @@ import {
   throwTwoFactorComplianceRpcError,
   warnAndContinueTwoFactorPreflightNetworkFailure,
 } from '../shared/two-factor-compliance'
-import { appAddHintMessage, formatCapgoApiErrorBody, formatCapgoCliInvokeError, getCapgoCliHttpStatus, hasCliPermission, invokeCapgoCliApi, isCapgoManagedSupabaseHost, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
+import { appAddHintMessage, formatCapgoApiErrorBody, formatCapgoCliInvokeError, getCapgoCliHttpStatus, hasCliPermission, hostOptionsFromClient, invokeCapgoCliApi, readCapgoCliApiErrorPayload, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
 
 export async function checkAppExists(
   apikey: string,
@@ -113,7 +113,7 @@ export async function findAppInOrganization(
 }
 
 export async function completePendingOnboardingApp(
-  _supabase: SupabaseClient<Database>,
+  _supabase: CapgoClient,
   orgId: string,
   appId: string,
   apikey: string,
@@ -208,20 +208,26 @@ export async function checkAppIdsExist(
 }
 
 export async function check2FAComplianceForApp(
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoClient,
   appid: string,
   silent = false,
+  httpOptions?: { supaHost?: string, supaAnon?: string },
 ): Promise<void> {
-  // TODO(cli-http): no Capgo HTTP equivalent for reject_access_due_to_2fa_for_app yet
-  // Use the new reject_access_due_to_2fa_for_app function
-  // This handles getting the org, user identity (JWT or API key), and checking 2FA compliance
-  const { data: shouldReject, error: rejectError } = await callTwoFactorComplianceRpcWithRetry(() =>
-    supabase.rpc('reject_access_due_to_2fa_for_app', { app_id: appid }),
+  const { data, error: rejectError } = await callTwoFactorComplianceRpcWithRetry(() =>
+    invokeCapgoCliApi<{ reject?: boolean }>(`private/cli/2fa/reject-app?app_id=${encodeURIComponent(appid)}`, {
+      apikey: supabase.apikey,
+      method: 'GET',
+      body: undefined,
+      supaHost: httpOptions?.supaHost ?? hostOptionsFromClient(supabase)?.supaHost,
+      supaAnon: httpOptions?.supaAnon ?? hostOptionsFromClient(supabase)?.supaAnon,
+    }).then(({ data: responseData, error: responseError }) => ({
+      data: responseData?.reject === true,
+      error: responseError,
+    })),
   )
+  const shouldReject = data
 
   if (rejectError) {
-    if (!silent && !isTransientNetworkError(rejectError))
-      log.error(`Cannot check 2FA compliance: ${rejectError.message}`)
     if (isTransientNetworkError(rejectError)) {
       await warnAndContinueTwoFactorPreflightNetworkFailure({
         silent,
@@ -229,7 +235,11 @@ export async function check2FAComplianceForApp(
       })
       return
     }
-    throwTwoFactorComplianceRpcError(rejectError)
+    // Surface the API payload (status-only HTTP errors carry no useful message).
+    const detail = await formatCapgoCliInvokeError(rejectError)
+    if (!silent)
+      log.error(`Cannot check 2FA compliance: ${detail}`)
+    throwTwoFactorComplianceRpcError({ message: detail })
   }
 
   if (shouldReject) {
@@ -240,21 +250,8 @@ export async function check2FAComplianceForApp(
   }
 }
 
-function hostOptionsFromSupabase(supabase: SupabaseClient<Database>) {
-  // supabase-js keeps these as protected fields; local/self-host tests still
-  // need the same host when Capgo HTTP existence checks replace PostgREST RPCs.
-  // Hosted Capgo clients must keep default api.capgo.app resolution — their
-  // supabaseUrl points at PostgREST, not the public Capgo HTTP API.
-  const client = supabase as SupabaseClient<Database> & { supabaseUrl?: string, supabaseKey?: string }
-  const supaHost = typeof client.supabaseUrl === 'string' ? client.supabaseUrl : undefined
-  const supaAnon = typeof client.supabaseKey === 'string' ? client.supabaseKey : undefined
-  if (supaHost && supaAnon && !isCapgoManagedSupabaseHost(supaHost))
-    return { supaHost, supaAnon }
-  return undefined
-}
-
 export async function checkAppExistsAndHasPermissionOrgErr(
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoClient,
   apikey: string,
   appid: string,
   requiredPermissionKey: string,
@@ -268,8 +265,8 @@ export async function checkAppExistsAndHasPermissionOrgErr(
   if (!skip2FACheck)
     await check2FAComplianceForApp(supabase, appid, silent)
 
-  // Keep local/self-host Capgo HTTP traffic on the same host as this supabase client.
-  if (!isChannelScopedPermission && !(await checkAppExists(apikey, appid, hostOptionsFromSupabase(supabase), silent))) {
+  // Keep local/self-host Capgo HTTP traffic on the same host as this client.
+  if (!isChannelScopedPermission && !(await checkAppExists(apikey, appid, hostOptionsFromClient(supabase), silent))) {
     const msg = appAddHintMessage(appid)
     if (!silent)
       log.error(msg)
@@ -299,4 +296,54 @@ export function resolveAppSetIconPath(explicitIcon?: string): string | undefined
 
 export function getAppIconStoragePath(organizationUid: string, appId: string) {
   return `org/${organizationUid}/${appId}/icon`
+}
+
+export interface UploadAppIconResult {
+  path?: string
+  conflict?: boolean
+  error?: Error | null
+}
+
+export async function uploadAppIconHttp(
+  apikey: string,
+  params: {
+    appId: string
+    orgId: string
+    contentBase64: string
+    contentType: string
+    upsert?: boolean
+    supaHost?: string
+    supaAnon?: string
+  },
+): Promise<UploadAppIconResult> {
+  const { data, error } = await invokeCapgoCliApi<{ path?: string, conflict?: boolean }>(
+    'private/cli/storage/icon',
+    {
+      apikey,
+      method: 'POST',
+      body: {
+        app_id: params.appId,
+        org_id: params.orgId,
+        content_base64: params.contentBase64,
+        content_type: params.contentType,
+        upsert: params.upsert === true,
+      },
+      supaHost: params.supaHost,
+      supaAnon: params.supaAnon,
+    },
+  )
+
+  if (error) {
+    if (getCapgoCliHttpStatus(error) === 409) {
+      const payload = await readCapgoCliApiErrorPayload(error) as { path?: string } | null
+      return {
+        path: payload?.path ?? getAppIconStoragePath(params.orgId, params.appId),
+        conflict: true,
+        error: null,
+      }
+    }
+    return { error }
+  }
+
+  return { path: data?.path, conflict: data?.conflict === true, error: null }
 }

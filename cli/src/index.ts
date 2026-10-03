@@ -96,8 +96,8 @@ program
   .version(pack.version, '-v, --version', `output the current version`)
   .option('--capacitor-config <path>', optionDescriptions.capacitorConfig)
 
-// Turn on client-side Supabase perf tracking for the CLI. (Off by default so
-// the SDK bundle, which transitively imports createSupabaseClient, stays clean.)
+// Turn on client-side API perf tracking for the CLI. (Off by default so
+// the SDK bundle, which transitively imports invokeCapgoCliApi, stays clean.)
 enableSupabaseInstrumentation()
 
 let currentCommandPath = 'unknown'

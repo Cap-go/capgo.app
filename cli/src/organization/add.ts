@@ -1,9 +1,10 @@
 import type { OrganizationAddOptions } from '../schemas/organization'
 import { intro, isCancel, log, outro, text } from '@clack/prompts'
+import { createOrganization } from '../api/cli-data'
 import { checkAlerts } from '../api/update'
 import { CliUserError } from '../shared/cli-user-error'
 import {
-  createSupabaseClient,
+  createCapgoClient,
   findSavedKey,
   formatError,
   resolveUserIdFromApiKey,
@@ -27,12 +28,12 @@ export async function addOrganizationInternal(options: OrganizationAddOptions, s
     throw new Error('Missing API key')
   }
 
-  const supabase = await createSupabaseClient(
+  const supabase = await createCapgoClient(
     enrichedOptions.apikey,
     enrichedOptions.supaHost,
     enrichedOptions.supaAnon,
   )
-  const userId = await resolveUserIdFromApiKey(supabase, enrichedOptions.apikey)
+  await resolveUserIdFromApiKey(supabase, enrichedOptions.apikey)
 
   let { name, email } = enrichedOptions
 
@@ -71,17 +72,10 @@ export async function addOrganizationInternal(options: OrganizationAddOptions, s
   if (!silent)
     log.info(`Adding organization "${name}" to Capgo`)
 
-  const { data: orgData, error: dbError } = await supabase
-    .from('orgs')
-    .insert({
-      name,
-      management_email: email,
-      created_by: userId,
-    })
-    .select()
-    .single()
+  const { data: orgData, error: dbError } = await createOrganization(supabase, name, email)
+    .then(data => ({ data, error: null }), (error: unknown) => ({ data: null, error }))
 
-  if (dbError) {
+  if (dbError || !orgData) {
     if (!silent)
       log.error(`Could not add organization ${formatError(dbError)}`)
     throw new Error(`Could not add organization: ${formatError(dbError)}`)
@@ -102,7 +96,7 @@ export async function addOrganizationInternal(options: OrganizationAddOptions, s
     outro('Done ✅')
   }
 
-  return orgData
+  return { ...orgData, name, management_email: email }
 }
 
 export async function addOrganization(options: OrganizationAddOptions) {

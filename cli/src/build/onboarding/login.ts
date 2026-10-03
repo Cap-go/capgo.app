@@ -1,8 +1,8 @@
 import type { BrowserLoginSession } from '../../init/browser-login.js'
 import { validateAndSaveKey } from '../../auth/session.js'
 import { beginBrowserLogin, completeBrowserLogin } from '../../init/browser-login.js'
-import { resolveAccountEmail } from '../../user/whoami.js'
-import { createSupabaseClient, findSavedKeySilent, resolveUserIdFromApiKey } from '../../utils.js'
+import { resolveAccountIdentity } from '../../user/whoami.js'
+import { createCapgoClient, findSavedKeySilent, resolveUserIdFromApiKey } from '../../utils.js'
 
 export interface BuilderLoginOptions {
   supaHost?: string
@@ -27,12 +27,18 @@ export function createBuilderLoginServices(options: BuilderLoginOptions = {}): B
   return {
     browserAvailable: !options.supaHost && !options.supaAnon,
     validateExisting: async (key) => {
-      const client = await createSupabaseClient(key, options.supaHost, options.supaAnon, true)
-      await resolveUserIdFromApiKey(client, key, true)
+      const client = await createCapgoClient(key, options.supaHost, options.supaAnon, true)
+      await resolveUserIdFromApiKey(client, key, true, {
+        supaHost: options.supaHost,
+        supaAnon: options.supaAnon,
+      })
     },
     getAccountEmail: async (key) => {
-      const client = await createSupabaseClient(key, options.supaHost, options.supaAnon, true)
-      return resolveAccountEmail(client)
+      const { email } = await resolveAccountIdentity(key, {
+        supaHost: options.supaHost,
+        supaAnon: options.supaAnon,
+      })
+      return email
     },
     savePasted: async (key) => {
       await validateAndSaveKey(key, saveOptions)

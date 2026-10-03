@@ -23,17 +23,17 @@ const httpChannel = {
   allow_device_self_set: true, allow_emulator: false, allow_device: true,
   allow_dev: false, allow_prod: true, version: null,
 }
-const supabase = {
-  supabaseUrl: options.supaHost,
-  supabaseKey: options.supaAnon,
-  rpc(name) {
-    assert.equal(name, 'cli_check_permission')
-    return Promise.resolve({ data: false, error: null })
-  },
-}
+const supabase = { apikey: options.apikey, supaHost: options.supaHost, supaAnon: options.supaAnon }
 
 globalThis.fetch = async (input) => {
-  calls.push(String(input))
+  const url = String(input)
+  calls.push(url)
+  if (url.includes('/private/cli/check-permission')) {
+    return new Response(JSON.stringify({ allowed: false }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
   return new Response(JSON.stringify(responseBody), {
     status: responseStatus,
     headers: { 'Content-Type': 'application/json' },
@@ -163,10 +163,10 @@ try {
         return nativeFetch(input)
       if (url.includes('/private/config'))
         return Response.json({})
-      if (url.includes('/rpc/reject_access_due_to_2fa_for_app'))
-        return Response.json(false)
-      if (url.includes('/rpc/cli_check_permission'))
-        return Response.json(scenario !== 'denied-channel')
+      if (url.includes('/private/cli/2fa/reject-app'))
+        return Response.json({ reject: false })
+      if (url.includes('/private/cli/check-permission'))
+        return Response.json({ allowed: scenario !== 'denied-channel' })
       if (url.includes('/app/' + ${JSON.stringify(appId)})) {
         if (scenario === 'denied-app')
           return Response.json({ error: 'cannot_access_app' }, { status: 401 })

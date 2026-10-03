@@ -4,25 +4,29 @@ const hasCliPermissionMock = vi.hoisted(() => vi.fn())
 const invokeCapgoCliApiMock = vi.hoisted(() => vi.fn())
 const getCapgoCliHttpStatusMock = vi.hoisted(() => vi.fn())
 
-vi.mock('../cli/src/utils', () => ({
-  appAddHintMessage: (appId: string) => `App ${appId} does not exist, run first \`bunx @capgo/cli app add ${appId}\` to create it`,
-  getPMAndCommand: () => ({ runner: 'bunx' }),
-  hasCliPermission: hasCliPermissionMock,
-  invokeCapgoCliApi: invokeCapgoCliApiMock,
-  getCapgoCliHttpStatus: getCapgoCliHttpStatusMock,
-  isCapgoManagedSupabaseHost: () => false,
-  show2FADeniedError: vi.fn(() => {
-    throw new Error('2FA required')
-  }),
-}))
+vi.mock('../cli/src/utils', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../cli/src/utils')>()
+  return {
+    ...actual,
+    appAddHintMessage: (appId: string) => `App ${appId} does not exist, run first \`bunx @capgo/cli app add ${appId}\` to create it`,
+    getPMAndCommand: () => ({ runner: 'bunx' }),
+    hasCliPermission: hasCliPermissionMock,
+    invokeCapgoCliApi: invokeCapgoCliApiMock,
+    getCapgoCliHttpStatus: getCapgoCliHttpStatusMock,
+    isCapgoManagedSupabaseHost: () => false,
+    show2FADeniedError: vi.fn(() => {
+      throw new Error('2FA required')
+    }),
+  }
+})
 
 const { checkAppExistsAndHasPermissionOrgErr } = await import('../cli/src/api/app')
 
 function createSupabaseMock() {
   return {
-    supabaseUrl: 'http://127.0.0.1:54321',
-    supabaseKey: 'test-anon',
-    rpc: vi.fn(),
+    apikey: 'test-key',
+    supaHost: 'http://127.0.0.1:54321',
+    supaAnon: 'test-anon',
   }
 }
 
@@ -38,7 +42,7 @@ describe('CLI app permission helper', () => {
     const supabase = createSupabaseMock()
 
     await expect(checkAppExistsAndHasPermissionOrgErr(
-      supabase as any,
+      supabase,
       'test-key',
       'com.test.app',
       'channel.delete',
@@ -58,7 +62,7 @@ describe('CLI app permission helper', () => {
     const supabase = createSupabaseMock()
 
     await expect(checkAppExistsAndHasPermissionOrgErr(
-      supabase as any,
+      supabase,
       'test-key',
       'com.missing.app',
       'app.delete',

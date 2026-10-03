@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import process from 'node:process'
-import { createSupabaseClient, resolveUserIdFromApiKey, sendEvent } from '../utils'
+import { createCapgoClient, getCapgoCliHttpStatus, resolveUserIdFromApiKey, sendEvent } from '../utils'
 import { appendToSafeFile, writeFileAtomic } from '../utils/safeWrites'
 
 /**
@@ -107,7 +107,7 @@ export async function validateAndSaveKey(apikey: string, options: SaveKeyOptions
     throw new Error('To save a project-local key you must be inside a git repository')
 
   // Validate BEFORE writing so an invalid key never lands on disk.
-  const supabase = await createSupabaseClient(apikey, options.supaHost, options.supaAnon, true)
+  const supabase = await createCapgoClient(apikey, options.supaHost, options.supaAnon, true)
   const userId = await resolveUserIdFromApiKey(supabase, apikey, true)
 
   if (local) {
@@ -143,7 +143,7 @@ export async function getLoginState(options: { validate?: boolean } = {}): Promi
     return { loggedIn: true, source }
 
   try {
-    const supabase = await createSupabaseClient(key, undefined, undefined, true)
+    const supabase = await createCapgoClient(key, undefined, undefined, true)
     const userId = await resolveUserIdFromApiKey(supabase, key, true)
     return { loggedIn: true, userId, source, verified: true }
   }
@@ -151,8 +151,11 @@ export async function getLoginState(options: { validate?: boolean } = {}): Promi
     // Only a definitively-bad key reads as logged-out; a transient failure
     // (network/server) keeps the present key as logged-in-but-unverified.
     const message = error instanceof Error ? error.message : String(error)
-    if (/invalid api key|insufficient permissions/i.test(message))
+    if (getCapgoCliHttpStatus(error) === 401
+      || (error as { status?: unknown } | null)?.status === 401
+      || /invalid (?:capgo )?api key|insufficient (?:capgo )?permissions/i.test(message)) {
       return { loggedIn: false, source }
+    }
     return { loggedIn: true, source, verified: false }
   }
 }
