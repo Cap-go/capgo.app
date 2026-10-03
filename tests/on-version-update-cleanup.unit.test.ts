@@ -201,9 +201,33 @@ function useManifestEntries(entries: ReturnType<typeof makeEntries>) {
  * Simulates the batched cleanup SQL: the release CTE deletes rows still used by
  * another version (sharedIds) and returns the rest as last references.
  */
-function mockCleanupPg(options: { sharedIds?: Set<number>, remainingCount?: number, reReferencedPaths?: string[], pendingRestorePaths?: string[] } = {}) {
+function mockCleanupPg(options: {
+  sharedIds?: Set<number>
+  remainingCount?: number
+  reReferencedPaths?: string[]
+  pendingRestorePaths?: string[]
+  leaseHeldElsewhere?: boolean
+  pendingDeleteWork?: { has_rows: boolean, has_size: boolean }
+} = {}) {
   const sharedIds = options.sharedIds ?? new Set<number>()
   pgQuery.mockImplementation(async (sql: string, params?: any[]) => {
+    if (sql.includes('public.version_cleanup_leases')) {
+      if (sql.includes('INSERT INTO')) {
+        callOrder.push('lease_acquire')
+        // Params: version id, owner, lease seconds.
+        return options.leaseHeldElsewhere ? { rows: [], rowCount: 0 } : { rows: [{ owner: params?.[1] }], rowCount: 1 }
+      }
+      callOrder.push('lease_release')
+      return { rows: [], rowCount: 1 }
+    }
+    if (sql.includes('UPDATE public.app_versions') && sql.includes('SET updated_at = now()')) {
+      callOrder.push('requeue')
+      return { rows: [], rowCount: 1 }
+    }
+    if (sql.includes('AS has_rows')) {
+      const pending = options.pendingDeleteWork ?? { has_rows: false, has_size: false }
+      return { rows: [pending], rowCount: 1 }
+    }
     if (sql.includes('public.manifest_trash_restore_pending')) {
       if (sql.includes('INSERT INTO')) {
         for (const path of params?.[1] as string[])
@@ -432,6 +456,25 @@ describe('on_version_update deleted version cleanup', () => {
     )
     expect(callOrder).toContain('r2_trash')
     expect(callOrder).toContain('db_delete_row:1000')
+    // The stored size stays set, so the sweeper finds the unfinished delete.
+    expect(appVersionsMetaUpdate).not.toHaveBeenCalled()
+    expect(createStatsMeta).not.toHaveBeenCalled()
+  })
+
+  it('re-queues a continuation for versions deleted through deleted_at alone', async () => {
+    useManifestEntries(makeEntries(120))
+    const start = Date.now()
+    const now = vi.spyOn(Date, 'now').mockReturnValueOnce(start).mockReturnValue(start + 10 * 60 * 1000)
+
+    try {
+      await deleteIt(createContext(), createVersion({ manifest_count: 120 }))
+    }
+    finally {
+      now.mockRestore()
+    }
+
+    const requeueSql = pgQuery.mock.calls.find(([sql]) => typeof sql === 'string' && sql.includes('SET updated_at = now()'))?.[0] as string
+    expect(requeueSql).toContain('(deleted = true OR deleted_at IS NOT NULL)')
   })
 
   it('throws when rows remain after the trash/delete pass', async () => {
@@ -442,6 +485,77 @@ describe('on_version_update deleted version cleanup', () => {
       'Manifest rows still present after trash/delete pass',
     )
     expect(callOrder).toContain('rollback_entry')
+  })
+
+  it('acknowledges a duplicate message without working while another pass holds the lease', async () => {
+    useManifestEntries(makeEntries(3))
+    mockCleanupPg({ leaseHeldElsewhere: true })
+
+    const response = await deleteIt(createContext(), createVersion({ r2_path: null, manifest_count: 3 }))
+
+    expect(response.status).toBe(200)
+    expect(callOrder).toEqual(['lease_acquire'])
+    expect(moveObjectToTrash).not.toHaveBeenCalled()
+  })
+
+  it('stops at the time budget, releases the lease, then re-queues without finishing the bundle', async () => {
+    useManifestEntries(makeEntries(120))
+    const start = Date.now()
+    // First read sets the deadline; later reads are past it.
+    const now = vi.spyOn(Date, 'now').mockReturnValueOnce(start).mockReturnValue(start + 10 * 60 * 1000)
+
+    try {
+      const response = await deleteIt(createContext(), createVersion({ manifest_count: 120 }))
+
+      expect(response.status).toBe(200)
+      // One 50-file batch ran, then the pass handed over.
+      expect(callOrder.filter(v => v === 'lock')).toHaveLength(1)
+      expect(callOrder.filter(v => v.startsWith('db_delete_row:'))).toHaveLength(50)
+      expect(pgQuery).not.toHaveBeenCalledWith(expect.stringContaining('WITH prev AS'), expect.any(Array))
+      expect(appVersionsMetaUpdate).not.toHaveBeenCalled()
+      expect(moveObjectToTrash).not.toHaveBeenCalledWith(expect.anything(), 'orgs/org-1/apps/com.cleanup.test/1.0.0.zip')
+      expect(callOrder.indexOf('lease_release')).toBeLessThan(callOrder.indexOf('requeue'))
+    }
+    finally {
+      now.mockRestore()
+    }
+  })
+
+  it('releases the lease and does not re-queue when a pass fails', async () => {
+    useManifestEntries(makeEntries(1))
+    moveObjectToTrash.mockResolvedValue(false)
+
+    await expect(deleteIt(createContext(), createVersion({ r2_path: null, manifest_count: 1 }))).rejects.toThrow(
+      'Cannot move S3 object for deleted manifest file to trash',
+    )
+    expect(callOrder).toContain('lease_release')
+    expect(callOrder).not.toContain('requeue')
+  })
+
+  it('does not record a zero storage delta when the bundle size was already cleared', async () => {
+    appVersionsMetaSelectEq.mockReturnValue({
+      single: vi.fn(async () => ({ data: { size: 0 }, error: null })),
+    })
+
+    await deleteIt(createContext(), createVersion())
+
+    expect(createStatsMeta).not.toHaveBeenCalled()
+  })
+
+  it('finds pending delete work for leftover rows, or for an unfinished bundle cleanup within 30 days', async () => {
+    const recent = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    const old = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()
+
+    mockCleanupPg({ pendingDeleteWork: { has_rows: true, has_size: false } })
+    expect(await onVersionUpdateTestUtils.hasPendingDeleteWork(createContext(), createVersion({ deleted: true, deleted_at: old }))).toBe(true)
+
+    mockCleanupPg({ pendingDeleteWork: { has_rows: false, has_size: true } })
+    expect(await onVersionUpdateTestUtils.hasPendingDeleteWork(createContext(), createVersion({ deleted: true, deleted_at: recent }))).toBe(true)
+    // Older unfinished deletes predate the current flow: left for a reviewed repair.
+    expect(await onVersionUpdateTestUtils.hasPendingDeleteWork(createContext(), createVersion({ deleted: true, deleted_at: old }))).toBe(false)
+
+    mockCleanupPg({ pendingDeleteWork: { has_rows: false, has_size: false } })
+    expect(await onVersionUpdateTestUtils.hasPendingDeleteWork(createContext(), createVersion({ deleted: true, deleted_at: recent }))).toBe(false)
   })
 
   it('routes already-deleted versions with leftover counts to cleanup_manifest', () => {
@@ -587,8 +701,8 @@ describe('on_version_update manifest cleanup load', () => {
     const response = await deleteIt(createContext(), createVersion({ r2_path: null, manifest_count: 500 }))
 
     expect(response.status).toBe(200)
-    // read + cleanup + final write, not one pool per manifest file
-    expect(getPgClient).toHaveBeenCalledTimes(3)
+    // lease + read + cleanup + final write + lease release, not one pool per manifest file
+    expect(getPgClient).toHaveBeenCalledTimes(5)
     // Ten release batches plus the final metadata transaction.
     expect(drizzleTransaction).toHaveBeenCalledTimes(11)
     expect(callOrder.filter(v => v.startsWith('db_delete_row:'))).toHaveLength(500)
@@ -671,8 +785,21 @@ describe('on_version_update concurrent cleanup of versions sharing files', () =>
     const yieldToOtherCleanup = () => new Promise(resolve => setTimeout(resolve, 0))
 
     // Mirrors the cleanup statements against the store.
+    const leases = new Map<number, string>()
     const runSql = async (sql: string, params: any[] = []) => {
       await yieldToOtherCleanup()
+      if (sql.includes('public.version_cleanup_leases')) {
+        const [versionId, owner] = params as [number, string]
+        if (sql.includes('INSERT INTO')) {
+          if (leases.has(versionId))
+            return { rows: [], rowCount: 0 }
+          leases.set(versionId, owner)
+          return { rows: [{ owner }], rowCount: 1 }
+        }
+        if (leases.get(versionId) === owner)
+          leases.delete(versionId)
+        return { rows: [], rowCount: 1 }
+      }
       if (sql.includes('WITH batch AS')) {
         const [ids, versionId] = params as [number[], number]
         const batch = ids.map(id => store.get(id)).filter((row): row is StoredManifestRow => row?.app_version_id === versionId)
