@@ -16,10 +16,10 @@ const context = {} as Context
 const encoder = new TextEncoder()
 
 function base64Url(value: ArrayBuffer): string {
-  return btoa(String.fromCharCode(...new Uint8Array(value)))
+  return btoa(String.fromCodePoint(...new Uint8Array(value)))
     .replaceAll('+', '-')
     .replaceAll('/', '_')
-    .replace(/=+$/, '')
+    .replaceAll('=', '')
 }
 
 function stubCapabilityEnv(overrides: Record<string, string> = {}): void {

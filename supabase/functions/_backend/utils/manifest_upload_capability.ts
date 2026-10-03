@@ -69,10 +69,10 @@ function buildPayload(claims: ManifestUploadCapabilityClaims, path: string): Arr
 }
 
 function encodeBase64Url(value: ArrayBuffer): string {
-  return btoa(String.fromCharCode(...new Uint8Array(value)))
+  return btoa(String.fromCodePoint(...new Uint8Array(value)))
     .replaceAll('+', '-')
     .replaceAll('/', '_')
-    .replace(/=+$/, '')
+    .replaceAll('=', '')
 }
 
 function decodeBase64Url(value: string): ArrayBuffer | null {
@@ -82,7 +82,7 @@ function decodeBase64Url(value: string): ArrayBuffer | null {
   try {
     return Uint8Array.from(
       atob(value.replaceAll('-', '+').replaceAll('_', '/').padEnd(44, '=')),
-      char => char.charCodeAt(0),
+      char => char.codePointAt(0) ?? 0,
     ).buffer as ArrayBuffer
   }
   catch {
