@@ -1841,7 +1841,14 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
       }
     : undefined
   const useManifestUploadProtocol = !!(options.delta && fileConfig.manifestUpload && !options.dryUpload && !hasS3UploadConfig(options))
+  if (useManifestUploadProtocol && manifest.length === 0) {
+    if (options.userRequestedDelta)
+      uploadFail('Cannot request a manifest upload for an empty manifest')
+    log.warn('Delta upload was auto-enabled, but the generated manifest is empty; continuing with ZIP-only upload')
+    options.delta = false
+  }
   const manifestUploadEntries = useManifestUploadProtocol
+    && options.delta
     ? await prepareManifestUploadEntries(manifest, path, encryptionData, options)
     : undefined
 

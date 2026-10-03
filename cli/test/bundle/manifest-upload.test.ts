@@ -133,6 +133,17 @@ describe('manifest upload response contract', () => {
     expect(resolveManifestUploadResponse(request, expired).entries).toHaveLength(3)
   })
 
+  it('requires HTTPS for capability-bearing targets except local development loopback URLs', () => {
+    const insecure = response()
+    insecure.upload_targets[0]!.upload_url = 'http://files.example.test/files/upload/attachments/'
+    expect(() => resolveManifestUploadResponse(request, insecure)).toThrow('must use HTTPS')
+
+    const loopback = response()
+    loopback.upload_targets[0]!.upload_url = 'http://127.0.0.1:8787/files/upload/attachments/'
+    loopback.upload_targets[0]!.existence_check_url_prefix = 'http://localhost:8787/files/read/attachments/'
+    expect(resolveManifestUploadResponse(request, loopback).entries).toHaveLength(3)
+  })
+
   it('calls the private endpoint with the complete request', async () => {
     let calledPath = ''
     let calledOptions: unknown

@@ -403,6 +403,10 @@ all entries because that is compact. A future backend may return a complete
 Likewise, an entry may override `default_upload_target` with `upload_target`.
 Every referenced target ID must exist in `upload_targets`.
 
+Capability-bearing upload and existence-check URLs must use HTTPS so the
+short-lived write capability cannot be exposed or replaced in transit. Plain
+HTTP is accepted only for loopback hosts used by local development.
+
 For an uploadable entry, the CLI constructs the authorization header value by
 concatenating the resolved target's `authorization.token_prefix` and the
 entry's `upload_token` exactly as returned:
@@ -720,9 +724,8 @@ For capability-bearing upload requests:
 
 | HTTP status | Error code | Condition |
 | --- | --- | --- |
-| `401` | `upload_token_invalid` | Malformed token, unknown key ID, invalid signature, wrong scope, or wrong protocol. |
+| `401` | `upload_token_invalid` | Malformed token, unknown key ID, invalid signature, wrong scope, wrong protocol, or a normalized request path that does not match the path used to create the signature. |
 | `401` | `upload_token_expired` | Token is correctly signed but expired. The response also contains the applicable explicit abandon field; the CLI does not refresh or resume manifest upload. |
-| `403` | `upload_path_not_authorized` | The normalized request path differs from the signed path. |
 
 Errors must identify an entry by request-local `id` or array index but must not
 echo secrets, complete tokens, session keys, or large submitted values.

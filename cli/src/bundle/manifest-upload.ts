@@ -119,19 +119,22 @@ function invalidResponse(detail: string): never {
 function validHttpUrl(value: unknown, field: string, requireTrailingSlash = false): string {
   if (typeof value !== 'string')
     invalidResponse(`${field} must be a URL`)
+  let parsed: URL
   try {
-    const parsed = new URL(value)
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')
-      invalidResponse(`${field} uses an unsupported protocol`)
-    if (parsed.username || parsed.password || parsed.hash)
-      invalidResponse(`${field} contains unsupported URL components`)
-    if (requireTrailingSlash && !value.endsWith('/'))
-      invalidResponse(`${field} must end with /`)
-    return value
+    parsed = new URL(value)
   }
   catch {
     invalidResponse(`${field} must be a valid absolute URL`)
   }
+  const isLoopbackHttp = parsed.protocol === 'http:'
+    && (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]')
+  if (parsed.protocol !== 'https:' && !isLoopbackHttp)
+    invalidResponse(`${field} must use HTTPS`)
+  if (parsed.username || parsed.password || parsed.hash)
+    invalidResponse(`${field} contains unsupported URL components`)
+  if (requireTrailingSlash && !value.endsWith('/'))
+    invalidResponse(`${field} must end with /`)
+  return value
 }
 
 function validS3Path(value: string): boolean {
