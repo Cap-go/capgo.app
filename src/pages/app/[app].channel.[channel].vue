@@ -14,7 +14,6 @@ import IconSearch from '~icons/ic/round-search?raw'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconWarning from '~icons/lucide/alert-triangle'
 import IconExternalLink from '~icons/lucide/external-link'
-import IconRocket from '~icons/lucide/rocket'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { formatDate, formatLocalDate } from '~/services/date'
@@ -1533,11 +1532,10 @@ async function copyCurlCommand() {
                 <button
                   v-if="showPromoteToChannel"
                   type="button"
-                  class="gap-1.5 d-btn d-btn-primary d-btn-sm"
+                  class="d-btn d-btn-primary d-btn-sm"
                   data-test="promote-to-channel"
                   @click="openPromoteToChannel()"
                 >
-                  <IconRocket class="w-3.5 h-3.5" aria-hidden="true" />
                   {{ t('promote-to-channel-button') }}
                 </button>
                 <button
