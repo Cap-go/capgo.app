@@ -13,9 +13,9 @@ for (const field of ['dependencies', 'devDependencies', 'peerDependencies', 'opt
     assert.ok(!name.startsWith('@supabase/'), `${field} must not include ${name}`)
 }
 
-// Static imports/exports, dynamic import(), require(), and any `.rpc(` call.
+// Static and side-effect imports, re-exports, dynamic import(), require(), and any `.rpc(` call.
 const forbidden = [
-  /\bfrom\s*['"]@supabase\//,
+  /\b(?:from|import)\s*['"]@supabase\//,
   /\bimport\s*\(\s*['"`]@supabase\//,
   /\brequire\s*\(\s*['"`]@supabase\//,
   /\.rpc\s*\(/,

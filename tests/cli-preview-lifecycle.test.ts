@@ -489,7 +489,7 @@ describe('cli app preview lifecycle', () => {
       const { upload, requests } = await (async () => {
         const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
           const request = requestTrace(input, init)
-          if (createdChannelId != null && request.method === 'GET' && request.path === '/rest/v1/channels') {
+          if (createdChannelId != null && request.method === 'GET' && request.path === '/functions/v1/private/cli/channels') {
             return new Response(JSON.stringify({ message: 'Readback unavailable' }), {
               status: 503,
               headers: { 'content-type': 'application/json' },

@@ -2885,7 +2885,8 @@ export async function getRemoteChecksums(
     return null
 
   const { fetchBundleVersionRow } = await import('./api/versions')
-  const version = await fetchBundleVersionRow(apikey, appId, data.bundle_name, httpOptions).catch(() => null)
+  // Missing bundle → null; other lookup failures propagate so checksum checks are not skipped.
+  const version = await fetchBundleVersionRow(apikey, appId, data.bundle_name, httpOptions)
   return version?.checksum ?? null
 }
 

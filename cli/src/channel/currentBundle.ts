@@ -10,6 +10,7 @@ import {
   getAppId,
   getConfig,
   invokeCapgoCliApi,
+  readCapgoCliApiErrorPayload,
   resolveUserIdFromApiKey,
 } from '../utils'
 
@@ -58,6 +59,17 @@ export async function currentBundleInternal(channel: string, appId: string, opti
   })
 
   if (error) {
+    const code = (await readCapgoCliApiErrorPayload(error))?.error
+    if (code === 'cannot_find_channel') {
+      if (!silent)
+        log.error(`Error retrieving channel ${channel} for app ${appId}. Perhaps the channel does not exist?`)
+      throw new CliUserError('Channel not found for app', { appId, channel })
+    }
+    if (code === 'cannot_access_channel') {
+      if (!silent)
+        log.error(`Insufficient permissions for channel ${channel}. Required RBAC permission for this action: channel.read.`)
+      throw new CliUserError('Insufficient permissions for channel. Required RBAC permission for this action: channel.read.', { appId, channel })
+    }
     const detail = await formatCapgoCliInvokeError(error)
     if (!silent)
       log.error(`Cannot retrieve current bundle for channel ${channel}: ${detail}`)
@@ -69,8 +81,8 @@ export async function currentBundleInternal(channel: string, appId: string, opti
 
   if (!bundleName) {
     if (!silent)
-      log.error(`Channel ${channel} has no readable current bundle.`)
-    throw new CliUserError('Channel does not have a readable current bundle', { appId, channel })
+      log.error(`Channel ${channel} does not have a bundle linked.`)
+    throw new CliUserError('Channel does not have a bundle linked', { appId, channel })
   }
 
   if (!silent) {
