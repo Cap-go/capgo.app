@@ -24,15 +24,23 @@ export interface ManifestUploadCapabilityClaims {
   versionId: number
 }
 
-export interface ManifestUploadCapabilityInput extends ManifestUploadCapabilityClaims {
-  path: string
+export interface ManifestUploadCapabilitySigningInput extends ManifestUploadCapabilityClaims {
   secret: string
+}
+
+export interface ManifestUploadCapabilityInput extends ManifestUploadCapabilitySigningInput {
+  path: string
 }
 
 export interface ManifestUploadCapabilityToken {
   token: string
   tokenPrefix: string
   uploadToken: string
+}
+
+export interface ManifestUploadCapabilitySigner {
+  tokenPrefix: string
+  create: (path: string) => Promise<ManifestUploadCapabilityToken>
 }
 
 export type ManifestUploadCapabilityVerification =
@@ -61,10 +69,10 @@ function buildPayload(claims: ManifestUploadCapabilityClaims, path: string): Arr
 }
 
 function encodeBase64Url(value: ArrayBuffer): string {
-  return btoa(String.fromCharCode(...new Uint8Array(value)))
+  return btoa(String.fromCodePoint(...new Uint8Array(value)))
     .replaceAll('+', '-')
     .replaceAll('/', '_')
-    .replace(/=+$/, '')
+    .replaceAll('=', '')
 }
 
 function decodeBase64Url(value: string): ArrayBuffer | null {
@@ -74,7 +82,7 @@ function decodeBase64Url(value: string): ArrayBuffer | null {
   try {
     return Uint8Array.from(
       atob(value.replaceAll('-', '+').replaceAll('_', '/').padEnd(44, '=')),
-      char => char.charCodeAt(0),
+      char => char.codePointAt(0) ?? 0,
     ).buffer as ArrayBuffer
   }
   catch {
@@ -126,6 +134,21 @@ function parseToken(token: string): { claims: ManifestUploadCapabilityClaims, si
   }
 }
 
+function validateSigningInput(input: ManifestUploadCapabilitySigningInput, issuedAtUnixSeconds: number): void {
+  if (
+    !keyIdPattern.test(input.keyId)
+    || !isValidSecret(input.secret)
+    || !isPositiveSafeInteger(input.expiresAt)
+    || !isPositiveSafeInteger(input.versionId)
+    || !Number.isSafeInteger(issuedAtUnixSeconds)
+    || issuedAtUnixSeconds < 0
+    || input.expiresAt <= issuedAtUnixSeconds
+    || input.expiresAt - issuedAtUnixSeconds > MANIFEST_UPLOAD_CAPABILITY_MAX_LIFETIME_SECONDS
+  ) {
+    throw new Error('Cannot sign invalid manifest upload capability')
+  }
+}
+
 export function getManifestUploadCapabilitySigningKey(c: Context): { keyId: string, secret: string } | null {
   const keyId = getEnv(c, MANIFEST_UPLOAD_CAPABILITY_KEY_ID_ENV).trim()
   const secret = getEnv(c, MANIFEST_UPLOAD_CAPABILITY_SECRET_ENV)
@@ -172,36 +195,46 @@ function getManifestUploadCapabilityVerificationKey(c: Context, keyId: string): 
   }
 }
 
+/**
+ * Prepare a signer once and reuse its imported HMAC key for every path in a manifest.
+ */
+export async function createManifestUploadCapabilitySigner(
+  input: ManifestUploadCapabilitySigningInput,
+  issuedAtUnixSeconds = Math.floor(Date.now() / 1000),
+): Promise<ManifestUploadCapabilitySigner> {
+  validateSigningInput(input, issuedAtUnixSeconds)
+
+  const claims: ManifestUploadCapabilityClaims = {
+    expiresAt: input.expiresAt,
+    keyId: input.keyId,
+    manifestUploadAutoEnabled: input.manifestUploadAutoEnabled,
+    versionId: input.versionId,
+  }
+  const tokenPrefix = `${CAPABILITY_VERSION}.${claims.keyId}.${claims.expiresAt}.${claims.versionId}.${claims.manifestUploadAutoEnabled ? '1' : '0'}.`
+  const hmacKey = await importHmacKey(input.secret, 'sign')
+  return {
+    tokenPrefix,
+    create: async (path) => {
+      if (!path)
+        throw new Error('Cannot sign invalid manifest upload capability')
+
+      const signature = await crypto.subtle.sign(hmacAlgorithm, hmacKey, buildPayload(claims, path))
+      const uploadToken = encodeBase64Url(signature)
+      return {
+        token: `${tokenPrefix}${uploadToken}`,
+        tokenPrefix,
+        uploadToken,
+      }
+    },
+  }
+}
+
 export async function createManifestUploadCapability(
   input: ManifestUploadCapabilityInput,
   issuedAtUnixSeconds = Math.floor(Date.now() / 1000),
 ): Promise<ManifestUploadCapabilityToken> {
-  if (
-    !keyIdPattern.test(input.keyId)
-    || !isValidSecret(input.secret)
-    || !isPositiveSafeInteger(input.expiresAt)
-    || !isPositiveSafeInteger(input.versionId)
-    || !input.path
-    || !Number.isSafeInteger(issuedAtUnixSeconds)
-    || issuedAtUnixSeconds < 0
-    || input.expiresAt <= issuedAtUnixSeconds
-    || input.expiresAt - issuedAtUnixSeconds > MANIFEST_UPLOAD_CAPABILITY_MAX_LIFETIME_SECONDS
-  ) {
-    throw new Error('Cannot sign invalid manifest upload capability')
-  }
-
-  const tokenPrefix = `${CAPABILITY_VERSION}.${input.keyId}.${input.expiresAt}.${input.versionId}.${input.manifestUploadAutoEnabled ? '1' : '0'}.`
-  const signature = await crypto.subtle.sign(
-    hmacAlgorithm,
-    await importHmacKey(input.secret, 'sign'),
-    buildPayload(input, input.path),
-  )
-  const uploadToken = encodeBase64Url(signature)
-  return {
-    token: `${tokenPrefix}${uploadToken}`,
-    tokenPrefix,
-    uploadToken,
-  }
+  const signer = await createManifestUploadCapabilitySigner(input, issuedAtUnixSeconds)
+  return await signer.create(input.path)
 }
 
 export async function verifyManifestUploadCapability(
@@ -211,7 +244,7 @@ export async function verifyManifestUploadCapability(
   nowUnixSeconds = Math.floor(Date.now() / 1000),
 ): Promise<ManifestUploadCapabilityVerification> {
   const parsedToken = parseToken(token)
-  if (!parsedToken || !path)
+  if (!parsedToken || !path || !Number.isSafeInteger(nowUnixSeconds) || nowUnixSeconds < 0)
     return { ok: false, reason: 'invalid' }
 
   const verificationKey = getManifestUploadCapabilityVerificationKey(c, parsedToken.claims.keyId)
@@ -232,8 +265,9 @@ export async function verifyManifestUploadCapability(
   if (
     parsedToken.claims.expiresAt - nowUnixSeconds
     > MANIFEST_UPLOAD_CAPABILITY_MAX_LIFETIME_SECONDS + MANIFEST_UPLOAD_CAPABILITY_CLOCK_SKEW_SECONDS
-  )
+  ) {
     return { ok: false, reason: 'invalid' }
+  }
 
   if (parsedToken.claims.expiresAt <= nowUnixSeconds)
     return { ok: false, reason: 'expired', claims: parsedToken.claims }
