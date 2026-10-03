@@ -299,7 +299,7 @@ describe('cli app preview lifecycle', () => {
     const channelPostIndex = requests.findIndex(request => request.method === 'POST' && request.path === '/functions/v1/channel')
     expect(channelPostIndex).toBeGreaterThanOrEqual(0)
     expect(requests).not.toContainEqual({ method: 'POST', path: '/rest/v1/rpc/get_app_versions' })
-    expect(requests.slice(channelPostIndex + 1)).not.toContainEqual({ method: 'GET', path: '/rest/v1/channels' })
+    expect(requests.slice(channelPostIndex + 1)).not.toContainEqual({ method: 'GET', path: '/functions/v1/private/cli/channels' })
 
     const [createdChannel] = await executeSQL(
       `SELECT id, rbac_id::text AS rbac_id
@@ -465,7 +465,7 @@ describe('cli app preview lifecycle', () => {
     const channelPostIndex = requests.findIndex(request => request.method === 'POST' && request.path === '/functions/v1/channel')
     expect(channelPostIndex).toBeGreaterThanOrEqual(0)
     expect(requests).not.toContainEqual({ method: 'POST', path: '/rest/v1/rpc/get_app_versions' })
-    expect(requests.slice(channelPostIndex + 1)).toContainEqual({ method: 'GET', path: '/rest/v1/channels' })
+    expect(requests.slice(channelPostIndex + 1)).toContainEqual({ method: 'GET', path: '/functions/v1/private/cli/channels' })
 
     await expect(deleteChannelInternal(LEGACY_CHANNEL_NAME, APPNAME, {
       ...cliOptions,
@@ -536,7 +536,7 @@ describe('cli app preview lifecycle', () => {
         bundle: LEGACY_PARTIAL_BUNDLE_NAME,
         updatedChannels: [LEGACY_PARTIAL_CHANNEL_NAME],
       })
-      expect(requests).toContainEqual({ method: 'GET', path: '/rest/v1/channels' })
+      expect(requests).toContainEqual({ method: 'GET', path: '/functions/v1/private/cli/channels' })
       expect(logInfo).toHaveBeenCalledWith(expect.stringContaining(`Link device to this bundle to try it: `))
       expect(logInfo).toHaveBeenCalledWith(expect.stringContaining(`/app/${APPNAME}/channel/${createdChannelId}`))
     }
