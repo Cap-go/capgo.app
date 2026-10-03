@@ -85,8 +85,8 @@ export function rejectOrAcceptIncompatibleChannelBundle(params: {
   throw new Error(params.errorMessage)
 }
 
-export async function setChannelInternal(channel: string, appId: string, options: OptionsSetChannel, silent = false) {
-  if (!silent)
+export async function setChannelInternal(channel: string, appId: string, options: OptionsSetChannel, silent = false, showFrame = true) {
+  if (!silent && showFrame)
     intro('Set channel')
 
   options.apikey = options.apikey || findSavedKey()
@@ -534,6 +534,17 @@ export async function setChannelInternal(channel: string, appId: string, options
     throw new Error('Cannot set channel without a bundle version')
   }
 
+  // The refresh_channel_rollout_id trigger clears a leftover rollout when the stable bundle changes.
+  if (
+    !silent
+    && hasStableBundlePromotion
+    && rolloutBundle == null
+    && existingChannel.rollout_version != null
+    && channelPayload.version !== existingChannel.version
+  ) {
+    log.warn(`Channel ${channel} has a rollout in progress. Linking a new stable bundle stops it, so every device on the channel gets the new bundle.`)
+  }
+
   if (state != null) {
     if (state !== 'normal' && state !== 'default') {
       if (!silent)
@@ -793,7 +804,7 @@ export async function setChannelInternal(channel: string, appId: string, options
     },
   }).catch(() => {})
 
-  if (!silent)
+  if (!silent && showFrame)
     outro('Done ✅')
 
   return true
