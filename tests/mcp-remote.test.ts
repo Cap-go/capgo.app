@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { fetchTestRequest, getAuthHeaders, getEndpointUrl, ORG_ID, USER_ID } from './test-utils.ts'
@@ -10,7 +10,7 @@ const REDIRECT_URI = 'http://127.0.0.1:33418/callback'
 let jwtHeaders: Record<string, string>
 
 function pkcePair() {
-  const verifier = randomBytes(48).toString('base64url')
+  const verifier = `${randomUUID()}${randomUUID()}`
   return { verifier, challenge: createHash('sha256').update(verifier).digest('base64url') }
 }
 
