@@ -19,7 +19,7 @@
  *   2. The iOS credential SHAPE written at saving-credentials matches the TUI's
  *      doSaveCredentials map (BUILD_CERTIFICATE_BASE64 / P12_PASSWORD /
  *      CAPGO_IOS_PROVISIONING_MAP / APP_STORE_CONNECT_TEAM_ID /
- *      CAPGO_IOS_DISTRIBUTION).
+ *      CAPGO_IOS_DISTRIBUTION / detected CAPGO_IOS_TARGET).
  *   3. The tail routing reaches build-complete (requesting-build →
  *      detecting-ci-secrets → … → build-complete) reusing carried entries.
  *   4. getIosResumeStep routes a saved progress THROUGH the tail (ask-build /
@@ -628,6 +628,7 @@ const DETECTED_RELEASE_ID = 'com.real.releaseid'
 function detectedBundleIds() {
   return {
     pbxproj: { value: DETECTED_RELEASE_ID, source: 'pbxproj-release', label: 'project.pbxproj (Release config)' },
+    iosTarget: 'Dinnerish',
     debug: null,
     plist: null,
     capacitor: { value: APP_ID, source: 'capacitor-config', label: 'capacitor.config.ts (appId)' },
@@ -646,6 +647,13 @@ await test('saving-credentials keys the provisioning map by the DETECTED Release
   const map = JSON.parse(creds.CAPGO_IOS_PROVISIONING_MAP)
   assert(map[DETECTED_RELEASE_ID], `provisioning map must be keyed by the detected Release bundle id (got keys: ${Object.keys(map)})`)
   assert(!map[APP_ID], 'the Capgo app key must NOT key the provisioning map when a Release id was detected')
+})
+
+await test('saving-credentials persists the detected non-default Xcode application target for the build request', async () => {
+  const deps = makeDeps({ detectBundleIds: detectedBundleIds })
+  await runIosEffect('saving-credentials', iosProgress(), deps)
+  const creds = deps.__calls.find(c => c.name === 'updateSavedCredentials').args[2]
+  assertEquals(creds.CAPGO_IOS_TARGET, 'Dinnerish', 'the detected application target must override the Builder default of App')
 })
 
 await test('saving-credentials provisioning-map key priority: a verified iosBundleIdOverride beats the detected Release id', async () => {
