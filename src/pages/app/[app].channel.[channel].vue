@@ -828,8 +828,9 @@ async function handleRevert() {
   // Full revert: the stable bundle goes back to built-in and any progressive
   // rollout stops too, otherwise rollout devices would keep getting updates.
   const stopsRollout = !!channel.value?.rollout_version || !!channel.value?.rollout_enabled
-  const description = stopsRollout
-    ? `${t('revert-to-builtin-confirm')} ${t('revert-to-builtin-confirm-rollout', { target: rolloutTargetName.value })}`
+  const rolloutTarget = channel.value?.rollout_version_info?.name
+  const description = stopsRollout && rolloutTarget
+    ? `${t('revert-to-builtin-confirm')} ${t('revert-to-builtin-confirm-rollout', { target: rolloutTarget })}`
     : t('revert-to-builtin-confirm')
   await confirmConsequentialChannelChange(
     dialogStore,
@@ -2258,89 +2259,93 @@ async function copyCurlCommand() {
             <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t('available-versions') }}
             </h4>
-            <div
+            <button
               v-for="version in bundleLinkVersions"
               :key="version.id"
-              class="p-3 border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+              type="button"
+              class="block w-full p-3 text-left border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
               @click="handleVersionLink(version as any)"
             >
-              <div class="flex items-center justify-between">
-                <div>
-                  <div class="font-medium">
+              <span class="flex items-center justify-between">
+                <span class="block">
+                  <span class="block font-medium">
                     {{ version.name }}
-                  </div>
-                  <div class="text-sm text-gray-600 dark:text-gray-400">
+                  </span>
+                  <span class="block text-sm text-gray-600 dark:text-gray-400">
                     {{ t('created') }}: {{ version.created_at ? formatLocalDate(version.created_at) : t('unknown') }}
-                  </div>
-                </div>
-                <div class="text-blue-600 dark:text-blue-400">
+                  </span>
+                </span>
+                <span class="block text-blue-600 dark:text-blue-400">
                   →
-                </div>
-              </div>
-            </div>
+                </span>
+              </span>
+            </button>
           </div>
 
           <!-- Action Cards (when not in search mode) -->
           <div v-if="showSearchAndActions" class="space-y-3">
             <!-- Link New Bundle -->
-            <div
-              class="p-3 border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+            <button
+              type="button"
+              class="block w-full p-3 text-left border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
               @click="bundleLinkSearchMode = true"
             >
-              <div class="flex items-center justify-between">
-                <div>
-                  <div class="font-medium">
+              <span class="flex items-center justify-between">
+                <span class="block">
+                  <span class="block font-medium">
                     {{ t('link-new-bundle') }}
-                  </div>
-                  <div class="text-sm text-gray-600 dark:text-gray-400">
+                  </span>
+                  <span class="block text-sm text-gray-600 dark:text-gray-400">
                     {{ t('search-and-select-a-different-bundle') }}
-                  </div>
-                </div>
-                <div class="text-blue-600 dark:text-blue-400">
+                  </span>
+                </span>
+                <span class="block text-blue-600 dark:text-blue-400">
                   📦
-                </div>
-              </div>
-            </div>
+                </span>
+              </span>
+            </button>
 
             <!-- Unlink Bundle -->
-            <div
-              class="p-3 border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+            <button
+              type="button"
+              class="block w-full p-3 text-left border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
               @click="handleUnlink"
             >
-              <div class="flex items-center justify-between">
-                <div>
-                  <div class="font-medium">
+              <span class="flex items-center justify-between">
+                <span class="block">
+                  <span class="block font-medium">
                     {{ t('unlink-bundle') }}
-                  </div>
-                  <div class="text-sm text-gray-600 dark:text-gray-400">
+                  </span>
+                  <span class="block text-sm text-gray-600 dark:text-gray-400">
                     {{ t('remove-bundle-from-this-channel') }}
-                  </div>
-                </div>
-                <div class="text-orange-600 dark:text-orange-400">
+                  </span>
+                </span>
+                <span class="block text-orange-600 dark:text-orange-400">
                   🔓
-                </div>
-              </div>
-            </div>
+                </span>
+              </span>
+            </button>
 
             <!-- Revert to Built-in -->
-            <div
-              class="p-3 border border-red-300 rounded-lg cursor-pointer dark:border-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
+            <button
+              type="button"
+              class="block w-full p-3 text-left border border-red-300 rounded-lg cursor-pointer dark:border-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
               @click="handleRevert"
             >
-              <div class="flex items-center justify-between">
-                <div>
-                  <div class="font-medium text-red-600 dark:text-red-400">
+              <span class="flex items-center justify-between">
+                <span class="block">
+                  <span class="block font-medium text-red-600 dark:text-red-400">
                     {{ t('revert-to-builtin') }}
-                  </div>
-                  <div class="text-sm text-red-500 dark:text-red-300">
+                  </span>
+                  <span class="block text-sm text-red-500 dark:text-red-300">
                     {{ t('revert-channel-to-built-in-version') }}
-                  </div>
-                </div>
-                <div class="text-red-600 dark:text-red-400">
+                  </span>
+                </span>
+                <span class="block text-red-600 dark:text-red-400">
                   ⚠️
-                </div>
-              </div>
-            </div>
+                </span>
+              </span>
+            </button>
           </div>
 
           <!-- Empty state for search -->
