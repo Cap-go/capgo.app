@@ -9,6 +9,7 @@ import { describe, expect, it } from 'bun:test'
 import { encryptSource } from '../../src/api/crypto'
 import { isManifestUploadAutoEnabled, manifestUploadFileHashFormat, requestManifestUpload, resolveManifestUploadResponse } from '../../src/bundle/manifest-upload'
 import { buildPartialUploadHeaders, fileExistsAtUploadTarget, prepareManifestUploadEntries } from '../../src/bundle/partial'
+import { normalizeCapgoFilesConfig } from '../../src/utils'
 
 const request: ManifestUploadRequest = {
   protocol_version: 1,
@@ -104,6 +105,14 @@ describe('manifest upload response contract', () => {
     expect(isManifestUploadAutoEnabled(false, true)).toBe(true)
     expect(isManifestUploadAutoEnabled(true, true)).toBe(false)
     expect(isManifestUploadAutoEnabled(false, false)).toBe(false)
+  })
+
+  it('enables the protocol only for a literal boolean manifestUpload flag', () => {
+    const config = { manifestUpload: true } as Parameters<typeof normalizeCapgoFilesConfig>[0]
+    expect(normalizeCapgoFilesConfig(config).manifestUpload).toBe(true)
+    expect(normalizeCapgoFilesConfig({ ...config, manifestUpload: false }).manifestUpload).toBe(false)
+    expect(normalizeCapgoFilesConfig({ ...config, manifestUpload: 'false' } as unknown as typeof config).manifestUpload).toBe(false)
+    expect(normalizeCapgoFilesConfig({ ...config, manifestUpload: 1 } as unknown as typeof config).manifestUpload).toBe(false)
   })
 
   it('resolves all actions, mixed path forms, target overrides, and opaque tokens', () => {
@@ -242,9 +251,11 @@ describe('manifest upload existence probe', () => {
     const originalFetch = globalThis.fetch
     let requestedUrl = ''
     let requestedHeaders: Record<string, string> | undefined
+    let redirectMode: RequestRedirect | undefined
     globalThis.fetch = (async (input, init) => {
       requestedUrl = String(input)
       requestedHeaders = init?.headers as Record<string, string>
+      redirectMode = init?.redirect
       return new Response('', {
         status: 200,
         headers: { 'X-Capgo-Manifest-Size-Receipt': 'signed-size' },
@@ -259,6 +270,7 @@ describe('manifest upload existence probe', () => {
       expect(requestedUrl).toContain('/files/read/attachments/orgs%2Forg%2Fapps%2Fapp%2Fdelta%2Fhash_assets%2Flogo.png?nocache=')
       expect(requestedHeaders?.['x-cli-version']).toBeTruthy()
       expect(requestedHeaders?.range).toBeUndefined()
+      expect(redirectMode).toBe('error')
     }
     finally {
       globalThis.fetch = originalFetch

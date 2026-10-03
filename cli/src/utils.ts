@@ -841,6 +841,10 @@ export interface CapgoFilesConfig {
   alertUploadSize: number
 }
 
+export function normalizeCapgoFilesConfig(config: CapgoFilesConfig): CapgoFilesConfig {
+  return { ...config, manifestUpload: config.manifestUpload === true }
+}
+
 export async function getRemoteFileConfig() {
   const localConfig = await getLocalConfig()
   // call host + /api/get_config and parse the result as json using fetch
@@ -852,7 +856,8 @@ export async function getRemoteFileConfig() {
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`)
     }
-    return await response.json() as CapgoFilesConfig
+    const config = await response.json() as CapgoFilesConfig
+    return normalizeCapgoFilesConfig(config)
   }
   catch {
     return {
