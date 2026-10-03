@@ -6827,6 +6827,40 @@ $$;
 ALTER FUNCTION "public"."enqueue_credit_usage_posthog_event"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."enqueue_cron_tick"("queue_name" "text", "payload" "jsonb") RETURNS "void"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO ''
+    AS $_$
+DECLARE
+  tick_pending boolean;
+BEGIN
+  -- Serialize producers per queue so concurrent callers cannot both see no
+  -- pending tick and enqueue a duplicate.
+  PERFORM pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('enqueue_cron_tick:' || queue_name, 0)
+  );
+
+  EXECUTE pg_catalog.format(
+    'SELECT EXISTS (SELECT 1 FROM pgmq.%I WHERE read_ct = 0 AND message = $1)',
+    'q_' || queue_name
+  )
+  INTO tick_pending
+  USING payload;
+
+  IF NOT tick_pending THEN
+    PERFORM pgmq.send(queue_name, payload);
+  END IF;
+END;
+$_$;
+
+
+ALTER FUNCTION "public"."enqueue_cron_tick"("queue_name" "text", "payload" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."enqueue_cron_tick"("queue_name" "text", "payload" "jsonb") IS 'Enqueue a cron tick unless an identical unread tick is already waiting, so tick backlogs cannot accumulate.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."enqueue_global_stats_creates"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -14524,7 +14558,7 @@ BEGIN
               EXECUTE 'SELECT ' || task.target;
 
             WHEN 'queue' THEN
-              PERFORM pgmq.send(
+              PERFORM public.enqueue_cron_tick(
                 task.target,
                 COALESCE(task.payload, jsonb_build_object('function_name', task.target))
               );
@@ -14549,7 +14583,7 @@ BEGIN
     END LOOP;
 
     IF current_minute % 5 = 0 AND current_second < 10 THEN
-      PERFORM pgmq.send(
+      PERFORM public.enqueue_cron_tick(
         'cron_rollout_auto_pause',
         jsonb_build_object(
           'function_name', 'cron_rollout_auto_pause',
@@ -28988,6 +29022,11 @@ REVOKE ALL ON FUNCTION "public"."enqueue_credit_usage_alert"() FROM PUBLIC;
 
 REVOKE ALL ON FUNCTION "public"."enqueue_credit_usage_posthog_event"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."enqueue_credit_usage_posthog_event"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."enqueue_cron_tick"("queue_name" "text", "payload" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."enqueue_cron_tick"("queue_name" "text", "payload" "jsonb") TO "service_role";
 
 
 
