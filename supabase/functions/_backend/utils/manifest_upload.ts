@@ -1,4 +1,5 @@
 import { MAX_FILE_HASH_LENGTH, MAX_FILE_NAME_LENGTH, MAX_MANIFEST_ENTRIES, MAX_S3_PATH_LENGTH } from './manifest_limits.ts'
+import { createManifestUploadCapabilitySigner, MANIFEST_UPLOAD_CAPABILITY_HEADER, MANIFEST_UPLOAD_CAPABILITY_MAX_LIFETIME_SECONDS } from './manifest_upload_capability.ts'
 
 export const MAX_MANIFEST_UPLOAD_BODY_BYTES = 32 * 1024 * 1024
 
@@ -35,7 +36,7 @@ export interface ManifestUploadResponse {
     existence_check_url_prefix: string
     authorization: {
       type: 'header'
-      header_name: 'X-Capgo-Upload-Token'
+      header_name: typeof MANIFEST_UPLOAD_CAPABILITY_HEADER
       token_prefix: string
       expires_at: number
     }
@@ -77,11 +78,8 @@ const ENTRY_FIELDS = new Set([
 ])
 const LOWERCASE_SHA256 = /^[0-9a-f]{64}$/
 const RSA_V3_HEX = /^[0-9a-f]{512}$/
-const CAPABILITY_KEY_ID = /^[A-Za-z0-9_-]{1,64}$/
-const CAPABILITY_TTL_SECONDS = 10 * 60
 const DEFAULT_CRYPTO_CONCURRENCY = 32
 const encoder = new TextEncoder()
-const hmacAlgorithm = { name: 'HMAC', hash: 'SHA-256' } as const
 
 export class ManifestUploadRequestError extends Error {
   constructor(
@@ -180,13 +178,6 @@ function bytesToHex(bytes: ArrayBuffer): string {
   return Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
-function bytesToBase64Url(bytes: ArrayBuffer): string {
-  let binary = ''
-  for (const byte of new Uint8Array(bytes))
-    binary += String.fromCharCode(byte)
-  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
-}
-
 function utf8ToHex(value: string): string {
   return Array.from(encoder.encode(value), byte => byte.toString(16).padStart(2, '0')).join('')
 }
@@ -230,9 +221,6 @@ export async function createManifestUploadResponse(
   request: ManifestUploadRequest,
   options: ManifestUploadCapabilityOptions,
 ): Promise<ManifestUploadResponse> {
-  if (encoder.encode(options.secret).byteLength < 32 || !CAPABILITY_KEY_ID.test(options.keyId))
-    signingUnavailable()
-
   const publicBaseUrl = normalizeBaseUrl(options.publicBaseUrl)
   if (!publicBaseUrl)
     signingUnavailable()
@@ -254,10 +242,14 @@ export async function createManifestUploadResponse(
     signingUnavailable()
 
   const nowUnix = options.nowUnix ?? Math.floor(Date.now() / 1000)
-  const expiresAt = nowUnix + CAPABILITY_TTL_SECONDS
-  const autoEnabledBit = request.manifest_upload_auto_enabled ? 1 : 0
-  const tokenPrefix = `v1.${options.keyId}.${expiresAt}.${request.version_id}.${autoEnabledBit}.`
-  const hmacKey = await crypto.subtle.importKey('raw', encoder.encode(options.secret), hmacAlgorithm, false, ['sign'])
+  const expiresAt = nowUnix + MANIFEST_UPLOAD_CAPABILITY_MAX_LIFETIME_SECONDS
+  const capabilitySigner = await createManifestUploadCapabilitySigner({
+    expiresAt,
+    keyId: options.keyId,
+    manifestUploadAutoEnabled: request.manifest_upload_auto_enabled,
+    secret: options.secret,
+    versionId: request.version_id,
+  }, nowUnix).catch(() => signingUnavailable())
   const seenPaths = new Set<string>()
 
   const entries = await mapWithConcurrency(
@@ -272,20 +264,11 @@ export async function createManifestUploadResponse(
         invalidEntry(index, 'file_name')
       seenPaths.add(normalizedS3Path)
 
-      const payload = [
-        'capgo-manifest-upload:v1',
-        options.keyId,
-        String(expiresAt),
-        String(request.version_id),
-        String(autoEnabledBit),
-        'tus-write',
-        normalizedS3Path,
-      ].join('\n')
-      const signature = await crypto.subtle.sign(hmacAlgorithm, hmacKey, encoder.encode(payload))
+      const capability = await capabilitySigner.create(normalizedS3Path)
       return {
         id: entry.id,
         s3_path_suffix: s3PathSuffix,
-        upload_token: bytesToBase64Url(signature),
+        upload_token: capability.uploadToken,
       }
     },
   )
@@ -303,8 +286,8 @@ export async function createManifestUploadResponse(
       existence_check_url_prefix: `${publicBaseUrl}/files/read/attachments/`,
       authorization: {
         type: 'header',
-        header_name: 'X-Capgo-Upload-Token',
-        token_prefix: tokenPrefix,
+        header_name: MANIFEST_UPLOAD_CAPABILITY_HEADER,
+        token_prefix: capabilitySigner.tokenPrefix,
         expires_at: expiresAt,
       },
     }],
