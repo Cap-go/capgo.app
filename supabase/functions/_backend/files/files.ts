@@ -1097,9 +1097,11 @@ async function authorizeAttachmentUpload(c: Context, next: Next) {
     }
 
     if (verification.reason === 'expired') {
+      await recordFailedAuth(c)
       return c.json({
         error: 'upload_token_expired',
         message: 'Upload authorization expired',
+        moreInfo: { requestId: c.get('requestId') },
         ...(verification.claims.manifestUploadAutoEnabled
           ? { abandon_manifest_only_explicit_error: 'Your manifest upload has expired. Uploading manifest files took too long. Continuing with ZIP-only upload.' }
           : { abandon_explicit_error: 'Your upload has expired. Uploading files took too long. Please re-run the command' }),

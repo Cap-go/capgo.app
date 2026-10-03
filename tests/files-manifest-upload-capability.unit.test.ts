@@ -80,7 +80,11 @@ function uploadMetadata(value: string): string {
 async function createFilesApp() {
   const { app: files } = await import('../supabase/functions/_backend/files/files.ts')
   const { Hono } = await import('hono/tiny')
-  const app = new Hono()
+  const app = new Hono<{ Variables: { requestId: string } }>()
+  app.use('*', async (c, next) => {
+    c.set('requestId', 'test-request-id')
+    await next()
+  })
   app.route('/files', files)
   return app
 }
@@ -301,7 +305,9 @@ describe('files manifest upload capabilities', () => {
 
     expect(response.status).toBe(401)
     expect(body).toMatchObject({ error: 'upload_token_expired', [abandonField]: expect.any(String) })
+    expect(body).toMatchObject({ moreInfo: { requestId: 'test-request-id' } })
     expect(body[autoEnabled ? 'abandon_explicit_error' : 'abandon_manifest_only_explicit_error']).toBeUndefined()
+    expect(recordFailedAuthMock).toHaveBeenCalledOnce()
     expect(doFetchMock).not.toHaveBeenCalled()
   })
 

@@ -301,6 +301,7 @@ describe('files attachment HEAD reads on workerd/R2', () => {
             headers: {
               'content-length': '3478395',
               'x-capgo-manifest-size-receipt': 'stale-cached-receipt',
+              'x-test-cache-hit': 'yes',
             },
           })
         },
@@ -318,6 +319,8 @@ describe('files attachment HEAD reads on workerd/R2', () => {
 
     const receipt = response.headers.get('x-capgo-manifest-size-receipt')
     const { verifyManifestSizeReceipts } = await import('../supabase/functions/_backend/utils/manifest_size_receipt.ts')
+    expect(response.status).toBe(200)
+    expect(response.headers.get('x-test-cache-hit')).toBe('yes')
     expect(receipt).not.toBe('stale-cached-receipt')
     expect(await verifyManifestSizeReceipts('receipt-secret', [{ path: filePath, receipt: receipt! }])).toEqual([3_478_395])
   })
