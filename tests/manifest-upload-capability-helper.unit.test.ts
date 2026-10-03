@@ -90,7 +90,13 @@ describe('manifest upload capability helper', () => {
   })
 
   it('reuses one signer and prefix while binding each signature to one path', async () => {
-    const signer = await createManifestUploadCapabilitySigner(signingInput(), issuedAt)
+    const importKeySpy = vi.spyOn(crypto.subtle, 'importKey')
+    const input = signingInput()
+    const signer = await createManifestUploadCapabilitySigner(input, issuedAt)
+    input.keyId = 'mutated-key'
+    input.expiresAt++
+    input.versionId++
+    input.manifestUploadAutoEnabled = true
     const first = await signer.create(path)
     const secondPath = `${path}.second`
     const second = await signer.create(secondPath)
@@ -98,6 +104,10 @@ describe('manifest upload capability helper', () => {
     expect(first.tokenPrefix).toBe(signer.tokenPrefix)
     expect(second.tokenPrefix).toBe(signer.tokenPrefix)
     expect(first.uploadToken).not.toBe(second.uploadToken)
+    expect(importKeySpy).toHaveBeenCalledOnce()
+    importKeySpy.mockRestore()
+    await expect(verifyManifestUploadCapability(context, first.token, path, issuedAt + 1))
+      .resolves.toMatchObject({ ok: true })
     await expect(verifyManifestUploadCapability(context, first.token, secondPath, issuedAt + 1))
       .resolves.toEqual({ ok: false, reason: 'invalid' })
   })

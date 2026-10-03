@@ -204,7 +204,13 @@ export async function createManifestUploadCapabilitySigner(
 ): Promise<ManifestUploadCapabilitySigner> {
   validateSigningInput(input, issuedAtUnixSeconds)
 
-  const tokenPrefix = `${CAPABILITY_VERSION}.${input.keyId}.${input.expiresAt}.${input.versionId}.${input.manifestUploadAutoEnabled ? '1' : '0'}.`
+  const claims: ManifestUploadCapabilityClaims = {
+    expiresAt: input.expiresAt,
+    keyId: input.keyId,
+    manifestUploadAutoEnabled: input.manifestUploadAutoEnabled,
+    versionId: input.versionId,
+  }
+  const tokenPrefix = `${CAPABILITY_VERSION}.${claims.keyId}.${claims.expiresAt}.${claims.versionId}.${claims.manifestUploadAutoEnabled ? '1' : '0'}.`
   const hmacKey = await importHmacKey(input.secret, 'sign')
   return {
     tokenPrefix,
@@ -212,7 +218,7 @@ export async function createManifestUploadCapabilitySigner(
       if (!path)
         throw new Error('Cannot sign invalid manifest upload capability')
 
-      const signature = await crypto.subtle.sign(hmacAlgorithm, hmacKey, buildPayload(input, path))
+      const signature = await crypto.subtle.sign(hmacAlgorithm, hmacKey, buildPayload(claims, path))
       const uploadToken = encodeBase64Url(signature)
       return {
         token: `${tokenPrefix}${uploadToken}`,
