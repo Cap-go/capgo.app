@@ -38,7 +38,9 @@ import { ensureNotifyAppReadyInBuildFolder } from '../recovery/notify-app-ready'
 import { parsePackageJsonOptionPaths, resolveAppIdWithRecovery } from '../recovery/app-id'
 import { finalizeUploadedBundle } from './finalize-upload'
 import { loadUploadProjectConfig } from './upload-config'
-import { prepareBundlePartialFiles, uploadPartial } from './partial'
+import { isManifestUploadAutoEnabled, MANIFEST_UPLOAD_PROTOCOL_VERSION, manifestUploadFileHashFormat, requestManifestUpload } from './manifest-upload'
+import type { ResolvedManifestUpload } from './manifest-upload'
+import { prepareBundlePartialFiles, prepareManifestUploadEntries, uploadPartial } from './partial'
 import { clackUploadReporter, getUploadReporter, runWithUploadReporter } from './reporter'
 import { ManifestUploadAbandonError, resolveManifestUploadAbandonScope } from './upload-abandon-error'
 import { formatUploadChannels, getChannelsToAssignByChecksum, parseUploadChannels } from './upload-channels'
@@ -102,9 +104,12 @@ async function persistVersionData(
   versionData: Database['public']['Tables']['app_versions']['Insert'],
   action: 'add' | 'update',
 ) {
-  const { error } = await updateOrCreateVersion(supabase, versionData)
+  const { data, error } = await updateOrCreateVersion(supabase, versionData)
+    .select('id')
+    .single()
   if (error)
     uploadFail(`Cannot ${action} bundle ${formatError(error)}`)
+  return data.id
 }
 
 /**
@@ -1829,6 +1834,24 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
 
   const manifest: manifestType = options.delta ? await prepareBundlePartialFiles(path, apikey, orgId, appid, options.encryptDelta ? encryptionMethod : 'none', finalKeyData, supportsHexChecksum) : []
 
+  const encryptionData = versionData.session_key && options.encryptDelta && sessionKey
+    ? {
+        sessionKey,
+        ivSessionKey: versionData.session_key,
+      }
+    : undefined
+  const useManifestUploadProtocol = !!(options.delta && fileConfig.manifestUpload && !options.dryUpload && !hasS3UploadConfig(options))
+  if (useManifestUploadProtocol && manifest.length === 0) {
+    if (options.userRequestedDelta)
+      uploadFail('Cannot request a manifest upload for an empty manifest')
+    log.warn('Delta upload was auto-enabled, but the generated manifest is empty; continuing with ZIP-only upload')
+    options.delta = false
+  }
+  const manifestUploadEntries = useManifestUploadProtocol
+    && options.delta
+    ? await prepareManifestUploadEntries(manifest, path, encryptionData, options)
+    : undefined
+
   if (options.verbose && options.delta)
     log.info(`[Verbose] Delta manifest prepared with ${manifest.length} files`)
 
@@ -1839,10 +1862,41 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] Creating version record in database...`)
 
-  await persistVersionData(supabase, versionData, 'add')
+  const versionId = await persistVersionData(supabase, versionData, 'add')
 
   if (options.verbose)
     log.info(`[Verbose] Version record created successfully`)
+
+  let manifestUploadAuthorization: ResolvedManifestUpload | undefined
+  if (manifestUploadEntries) {
+    const fileHashFormat = manifestUploadFileHashFormat(!!encryptionData, supportsHexChecksum)
+    const manifestUploadAutoEnabled = isManifestUploadAutoEnabled(!!options.userRequestedDelta, shouldUploadFullZip(options))
+    try {
+      manifestUploadAuthorization = await requestManifestUpload(apikey, {
+        protocol_version: MANIFEST_UPLOAD_PROTOCOL_VERSION,
+        version_id: versionId,
+        delta_encryption: { enabled: !!encryptionData },
+        manifest_upload_auto_enabled: manifestUploadAutoEnabled,
+        file_hash_format: fileHashFormat,
+        entries: manifestUploadEntries,
+      }, options)
+    }
+    catch (error) {
+      if (manifestUploadAutoEnabled) {
+        log.warn(`Cannot authorize manifest upload; continuing with ZIP-only upload. ${formatError(error)}`)
+        options.delta = false
+      }
+      else {
+        try {
+          await deletedFailedVersion(apikey, appid, bundle, options)
+        }
+        catch (cleanupError) {
+          uploadFail(`Cannot authorize manifest upload ${formatError(error)}. Cleanup of the incomplete version also failed (${formatError(cleanupError)}); delete bundle ${bundle} manually before retrying.`)
+        }
+        uploadFail(`Cannot authorize manifest upload ${formatError(error)}`)
+      }
+    }
+  }
 
   if (options.dryUpload) {
     if (options.verbose)
@@ -1938,13 +1992,6 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
         if (options.verbose)
           log.info(`[Verbose] Dry upload mode: skipping delta upload`)
       }
-      const encryptionData = versionData.session_key && options.encryptDelta && sessionKey
-        ? {
-            sessionKey,
-            ivSessionKey: versionData.session_key,
-          }
-        : undefined
-
       if (options.verbose && options.delta) {
         log.info(`[Verbose] Starting delta file upload...`)
         log.info(`  - Manifest entries: ${manifest.length}`)
@@ -1960,6 +2007,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
             orgId,
             encryptionData,
             options,
+            manifestUploadAuthorization,
           )
         : null
 
@@ -1968,7 +2016,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     }
     catch (err) {
       if (err instanceof ManifestUploadAbandonError) {
-        const manifestUploadAutoEnabled = shouldUploadFullZip(options) && !options.userRequestedDelta
+        const manifestUploadAutoEnabled = isManifestUploadAutoEnabled(!!options.userRequestedDelta, shouldUploadFullZip(options))
         const abandonScope = resolveManifestUploadAbandonScope(err, manifestUploadAutoEnabled)
         if (abandonScope === 'manifest') {
           log.warn(err.message)
