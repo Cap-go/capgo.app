@@ -27,7 +27,7 @@ describe('manifest upload explicit abandon responses', () => {
     expect(error?.scope).toBe('all')
     expect(error?.backendMessage).toBe(backendMessage)
     expect(error?.requestId).toBe('request-123')
-    expect(error?.message).toContain(backendMessage)
+    expect(error?.message).toBe(`Abandoning manifest upload. The following error occurred: ${backendMessage}\n\nRequest ID: request-123`)
   })
 
   it('parses a manifest-only abandon response', () => {

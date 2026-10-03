@@ -25,7 +25,7 @@ export class ManifestUploadAbandonError extends CliUserError {
   constructor(scope: ManifestUploadAbandonScope, backendMessage: string, requestId?: string) {
     const safeMessage = stripTerminalControlCharacters(backendMessage)
     const safeRequestId = requestId === undefined ? undefined : stripTerminalControlCharacters(requestId)
-    const requestIdSuffix = safeRequestId ? ` Request ID: ${safeRequestId}` : ''
+    const requestIdSuffix = safeRequestId ? `\n\nRequest ID: ${safeRequestId}` : ''
     super(`Abandoning manifest upload. The following error occurred: ${safeMessage}${requestIdSuffix}`)
     this.name = 'ManifestUploadAbandonError'
     this.backendMessage = safeMessage
