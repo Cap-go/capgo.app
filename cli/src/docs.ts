@@ -66,7 +66,7 @@ function getCommandEmoji(cmdName: string): string {
     emoji = '👨‍⚕️'
   else if (cmdName.includes('login'))
     emoji = '🔑'
-  else if (cmdName.includes('init'))
+  else if (cmdName.includes('init') || cmdName === 'promote')
     emoji = '🚀'
   else if (cmdName.includes('compatibility'))
     emoji = '🧪'

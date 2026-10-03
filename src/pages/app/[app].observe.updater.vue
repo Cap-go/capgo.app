@@ -1,21 +1,26 @@
 <script setup lang="ts">
+import type { UpdaterFailureCategory } from '~/services/statsActions'
 import type { Database } from '~/types/supabase.types'
 import type { PeriodDayOption } from '~/utils/periodDays'
-import { computed, ref, useId, watch, watchEffect } from 'vue'
+import { useLocalStorage } from '@vueuse/core'
+import { computed, nextTick, ref, useId, useTemplateRef, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconActivity from '~icons/lucide/activity'
 import IconAlertCircle from '~icons/lucide/alert-circle'
-import IconBug from '~icons/lucide/bug'
+import IconAlertTriangle from '~icons/lucide/alert-triangle'
+import IconDownload from '~icons/lucide/download'
 import IconExternalLink from '~icons/lucide/external-link'
+import IconInfo from '~icons/lucide/info'
 import IconLayers from '~icons/lucide/layers'
 import IconSmartphone from '~icons/lucide/smartphone'
+import IconX from '~icons/lucide/x'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { formatLocalDateShort, formatLocalDateTime } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
-import { actionToFilter } from '~/services/statsActions'
+import { actionToFilter, updaterFailureCategory, updaterFailureHelpKey, updaterInsightActions } from '~/services/statsActions'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 
@@ -90,6 +95,22 @@ const app = ref<Database['public']['Tables']['apps']['Row']>()
 const insights = ref<LogInsightsResponse | null>(null)
 const publicChannels = ref<{ id: number, name: string, versionName: string }[]>([])
 let latestInsightsRequest = 0
+const failuresNoteDismissed = useLocalStorage('capgo:observe-updater-failures-note-dismissed', false)
+const failuresNote = useTemplateRef<HTMLElement>('failuresNote')
+
+const failureCategories: UpdaterFailureCategory[] = ['rollback', 'bundle', 'device', 'setup']
+const failureBadgeClass: Record<UpdaterFailureCategory, string> = {
+  rollback: 'border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-400/30 dark:bg-rose-400/10 dark:text-rose-200',
+  bundle: 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-200',
+  device: 'border-slate-300 bg-slate-100 text-slate-600 dark:border-white/15 dark:bg-white/5 dark:text-slate-300',
+  setup: 'border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-400/30 dark:bg-sky-400/10 dark:text-sky-200',
+}
+const failureBarClass: Record<UpdaterFailureCategory, string> = {
+  rollback: 'bg-rose-400 group-hover:bg-rose-500',
+  bundle: 'bg-amber-400 group-hover:bg-amber-500',
+  device: 'bg-slate-400 group-hover:bg-slate-500',
+  setup: 'bg-sky-400 group-hover:bg-sky-500',
+}
 
 const appRouteSegment = computed(() => {
   const match = route.path.match(/^\/app\/([^/]+)/)
@@ -142,6 +163,25 @@ const maxDailyTotal = computed(() => Math.max(1, ...dailyTotals.value.map(day =>
 function formatAction(action: string) {
   const filterKey = actionToFilter[action]
   return filterKey ? t(filterKey) : action
+}
+
+function failureLabel(action: string) {
+  return t(`updater-failure-${updaterFailureCategory(action)}`)
+}
+
+function failureHelp(action: string) {
+  const key = updaterFailureHelpKey(action)
+  return key ? t(key) : ''
+}
+
+async function showFailuresNote() {
+  failuresNoteDismissed.value = false
+  await nextTick()
+  failuresNote.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
+function openNative() {
+  router.push({ path: `/app/${appRouteSegment.value}/observe/native`, query: { days: String(selectedDays.value) } })
 }
 
 function formatCount(value: number | null | undefined) {
@@ -246,6 +286,7 @@ async function fetchInsights() {
       body: JSON.stringify({
         appId: id.value,
         days: selectedDays.value,
+        actions: updaterInsightActions,
         ...(selectedVersionName.value ? { versionName: selectedVersionName.value } : {}),
       }),
     })
@@ -404,25 +445,29 @@ watch(() => [
         <div
           class="p-4 border rounded-lg shadow-sm"
           :class="totalErrors > 0
-            ? 'bg-rose-50 border-rose-200 dark:bg-rose-950/20 dark:border-rose-800'
+            ? 'bg-white border-slate-200 dark:bg-slate-800/60 dark:border-white/10'
             : 'bg-emerald-50 border-emerald-200 dark:bg-emerald-950/20 dark:border-emerald-800'"
+          data-testid="observe-updater-summary"
         >
           <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div class="flex items-start gap-3 min-w-0">
-              <IconBug
+              <IconAlertTriangle
                 v-if="totalErrors > 0"
-                class="w-6 h-6 mt-0.5 shrink-0 text-rose-600 dark:text-rose-300"
+                class="w-6 h-6 mt-0.5 shrink-0 text-amber-500 dark:text-amber-300"
               />
               <IconActivity
                 v-else
                 class="w-6 h-6 mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-300"
               />
               <div class="min-w-0">
-                <h3 class="font-semibold" :class="totalErrors > 0 ? 'text-rose-800 dark:text-rose-100' : 'text-emerald-800 dark:text-emerald-100'">
-                  {{ totalErrors > 0 ? t('top-priority') : t('no-log-insights') }}
+                <h3 class="font-semibold" :class="totalErrors > 0 ? 'text-slate-900 dark:text-slate-100' : 'text-emerald-800 dark:text-emerald-100'">
+                  {{ totalErrors > 0 ? t('updater-insights-top-failure') : t('no-log-insights') }}
                 </h3>
-                <p class="mt-1 text-sm" :class="totalErrors > 0 ? 'text-rose-700 dark:text-rose-200' : 'text-emerald-700 dark:text-emerald-200'">
+                <p class="mt-1 text-sm" :class="totalErrors > 0 ? 'text-slate-600 dark:text-slate-300' : 'text-emerald-700 dark:text-emerald-200'">
                   {{ totalErrors > 0 ? topPriorityMessage : t('no-log-insights-help') }}
+                </p>
+                <p v-if="topAction && failureHelp(topAction.action)" class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  {{ failureHelp(topAction.action) }}
                 </p>
               </div>
             </div>
@@ -430,6 +475,50 @@ watch(() => [
               <IconExternalLink class="w-4 h-4" />
               {{ topAction ? t('view-action-logs') : t('view-logs') }}
             </button>
+          </div>
+        </div>
+
+        <div
+          v-if="totalErrors > 0 && !failuresNoteDismissed"
+          ref="failuresNote"
+          class="relative flex gap-3 p-4 pr-10 border rounded-xl border-sky-200 bg-sky-50/70 dark:border-sky-400/20 dark:bg-sky-400/5"
+          data-testid="observe-updater-failures-note"
+        >
+          <IconInfo class="w-5 h-5 mt-0.5 shrink-0 text-sky-600 dark:text-sky-300" />
+          <button
+            type="button"
+            class="absolute top-2 right-2 d-btn d-btn-ghost d-btn-xs d-btn-square text-slate-500 dark:text-slate-400"
+            :aria-label="t('updater-failures-note-dismiss')"
+            :title="t('updater-failures-note-dismiss')"
+            data-testid="observe-updater-failures-note-dismiss"
+            @click="failuresNoteDismissed = true"
+          >
+            <IconX class="w-4 h-4" />
+          </button>
+          <div class="min-w-0 text-sm">
+            <div class="font-semibold text-slate-900 dark:text-slate-100">
+              {{ t('updater-failures-note-title') }}
+            </div>
+            <p class="mt-1 text-slate-600 dark:text-slate-300">
+              {{ t('updater-failures-note-body') }}
+            </p>
+            <ul class="flex flex-col gap-2 mt-3">
+              <li v-for="category in failureCategories" :key="category" class="flex items-center gap-2">
+                <span class="px-1.5 py-0.5 text-[11px] font-medium rounded border shrink-0" :class="failureBadgeClass[category]">{{ t(`updater-failure-${category}`) }}</span>
+                <span class="text-xs text-slate-600 dark:text-slate-400">{{ t(`updater-failures-note-${category}`) }}</span>
+              </li>
+            </ul>
+            <p class="mt-3 text-xs text-slate-600 dark:text-slate-400">
+              {{ t('updater-failures-note-native') }}
+              <button
+                type="button"
+                class="ml-1 underline text-sky-700 underline-offset-2 hover:text-sky-800 dark:text-sky-300 dark:hover:text-sky-200"
+                data-testid="observe-updater-open-native"
+                @click="openNative"
+              >
+                {{ t('updater-failures-note-native-link') }}
+              </button>
+            </p>
           </div>
         </div>
 
@@ -446,7 +535,7 @@ watch(() => [
           />
           <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
             <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
-              <IconBug class="w-4 h-4" />
+              <IconDownload class="w-4 h-4" />
               {{ t('errors-in-period') }}
             </div>
             <div class="mt-2 text-lg font-semibold text-slate-900 dark:text-white">
@@ -504,6 +593,18 @@ watch(() => [
                 <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
                   {{ t('error-categories') }}
                 </h3>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                  {{ t('updater-failure-types-help') }}
+                  <button
+                    v-if="failuresNoteDismissed"
+                    type="button"
+                    class="ml-1 underline text-sky-700 underline-offset-2 hover:text-sky-800 dark:text-sky-300 dark:hover:text-sky-200"
+                    data-testid="observe-updater-failures-note-show"
+                    @click="showFailuresNote"
+                  >
+                    {{ t('updater-failures-note-show') }}
+                  </button>
+                </p>
               </div>
               <div class="space-y-4">
                 <button
@@ -514,11 +615,19 @@ watch(() => [
                   @click="openLogs(action.action)"
                 >
                   <div class="flex items-center justify-between gap-3 text-sm">
-                    <span class="font-medium text-slate-800 dark:text-slate-100 truncate">{{ formatAction(action.action) }}</span>
+                    <span class="flex items-center min-w-0 gap-2">
+                      <span class="font-medium text-slate-800 dark:text-slate-100 truncate">{{ formatAction(action.action) }}</span>
+                      <span class="px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap rounded border shrink-0" :class="failureBadgeClass[updaterFailureCategory(action.action)]">
+                        {{ failureLabel(action.action) }}
+                      </span>
+                    </span>
                     <span class="text-slate-500 dark:text-slate-400 shrink-0">{{ formatCount(action.total) }}</span>
                   </div>
+                  <div v-if="failureHelp(action.action)" class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                    {{ failureHelp(action.action) }}
+                  </div>
                   <div class="mt-2 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
-                    <div class="h-full rounded-full bg-rose-500 transition-all group-hover:bg-rose-600" :style="`width: ${Math.max(4, (action.total / totalErrors) * 100)}%`" />
+                    <div class="h-full transition-all rounded-full" :class="failureBarClass[updaterFailureCategory(action.action)]" :style="`width: ${Math.max(4, (action.total / totalErrors) * 100)}%`" />
                   </div>
                   <div class="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
                     <span>{{ t('affected-devices') }}: {{ formatCount(action.device_count) }}</span>
@@ -538,7 +647,7 @@ watch(() => [
               <div class="flex items-end gap-2 h-56">
                 <div v-for="day in dailyTotals" :key="day.date" class="flex flex-col items-center justify-end flex-1 h-full min-w-0 gap-2">
                   <div class="flex items-end w-full h-full rounded-t bg-slate-100 dark:bg-slate-700">
-                    <div class="w-full rounded-t bg-amber-500" :style="`height: ${Math.max(4, (day.total / maxDailyTotal) * 100)}%`" />
+                    <div class="w-full rounded-t bg-slate-400 dark:bg-slate-500" :style="`height: ${Math.max(4, (day.total / maxDailyTotal) * 100)}%`" />
                   </div>
                   <div class="w-full text-center text-[11px] text-slate-500 dark:text-slate-400 truncate" :title="day.topAction ? formatAction(day.topAction) : ''">
                     {{ formatLocalDateShort(day.date) }}

@@ -424,6 +424,113 @@ describe('tests CLI channel commands', () => {
     })
   })
 
+  describe.concurrent('channel promote operations', () => {
+    it.concurrent('should promote the bundle of one channel to another channel', async () => {
+      const fromChannel = generateChannelName()
+      const toChannel = generateChannelName()
+      await createChannel(fromChannel, APPNAME)
+      await createChannel(toChannel, APPNAME)
+
+      const bundle = `1.1.${Math.floor(Math.random() * 10000)}`
+      const { data: version } = await getSupabaseClient()
+        .from('app_versions')
+        .insert({
+          app_id: APPNAME,
+          name: bundle,
+          owner_org: seedOptions.orgId,
+          user_id: USER_ID,
+          storage_provider: 'r2-direct',
+        })
+        .select('id')
+        .single()
+        .throwOnError()
+      await getSupabaseClient()
+        .from('channels')
+        .update({ version: version!.id })
+        .eq('name', fromChannel)
+        .eq('app_id', APPNAME)
+        .throwOnError()
+
+      const result = await createTestSDK().promoteChannel({ appId: APPNAME, fromChannel, toChannel })
+      expect(result.success).toBe(true)
+      expect(result.data).toEqual({ bundle, fromChannel, toChannel })
+
+      const { data } = await getSupabaseClient()
+        .from('channels')
+        .select('name, version')
+        .eq('app_id', APPNAME)
+        .in('name', [fromChannel, toChannel])
+        .throwOnError()
+      expect(data?.find(row => row.name === toChannel)?.version).toBe(version!.id)
+      expect(data?.find(row => row.name === fromChannel)?.version).toBe(version!.id)
+    })
+
+    it.concurrent('should refuse to promote a channel to itself', async () => {
+      const channelName = generateChannelName()
+      const result = await createTestSDK().promoteChannel({ appId: APPNAME, fromChannel: channelName, toChannel: channelName })
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('must be different')
+    })
+
+    it.concurrent('should fail to promote from a missing channel', async () => {
+      const toChannel = generateChannelName()
+      await createChannel(toChannel, APPNAME)
+      const { data: before } = await getSupabaseClient()
+        .from('channels')
+        .select('version')
+        .eq('name', toChannel)
+        .eq('app_id', APPNAME)
+        .single()
+        .throwOnError()
+
+      const result = await createTestSDK().promoteChannel({ appId: APPNAME, fromChannel: generateChannelName(), toChannel })
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('Channel not found for app')
+
+      const { data: after } = await getSupabaseClient()
+        .from('channels')
+        .select('version')
+        .eq('name', toChannel)
+        .eq('app_id', APPNAME)
+        .single()
+        .throwOnError()
+      expect(after?.version).toBe(before?.version)
+    })
+
+    it.concurrent('should fail to promote from a channel without a bundle', async () => {
+      const fromChannel = generateChannelName()
+      const toChannel = generateChannelName()
+      await createChannel(fromChannel, APPNAME)
+      await createChannel(toChannel, APPNAME)
+      await getSupabaseClient()
+        .from('channels')
+        .update({ version: null })
+        .eq('name', fromChannel)
+        .eq('app_id', APPNAME)
+        .throwOnError()
+      const { data: before } = await getSupabaseClient()
+        .from('channels')
+        .select('version')
+        .eq('name', toChannel)
+        .eq('app_id', APPNAME)
+        .single()
+        .throwOnError()
+
+      const result = await createTestSDK().promoteChannel({ appId: APPNAME, fromChannel, toChannel })
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('Channel does not have a bundle linked')
+
+      const { data: after } = await getSupabaseClient()
+        .from('channels')
+        .select('version')
+        .eq('name', toChannel)
+        .eq('app_id', APPNAME)
+        .single()
+        .throwOnError()
+      expect(after?.version).toBe(before?.version)
+    })
+  })
+
   describe.concurrent('channel state operations', () => {
     it.concurrent('should set channel state to default', async () => {
       const channelName = generateChannelName()
