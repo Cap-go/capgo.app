@@ -41,20 +41,6 @@ export function shouldSkipDirectHyperdriveFallback(c: Context): boolean {
   return shouldRequireReadReplica(c)
 }
 
-/** Api worker background DB work: triggers, scheduled handlers, queue consumers. */
-export function isBackgroundDatabaseWork(c: Context): boolean {
-  if (getBooleanContextFlag(c, 'useBackgroundHyperdrive'))
-    return true
-
-  try {
-    const pathname = new URL(c.req.url).pathname
-    return pathname === '/triggers' || pathname.startsWith('/triggers/')
-  }
-  catch {
-    return false
-  }
-}
-
 export function shouldSkipChannelSelfPostgresFallback(c: Context): boolean {
   return getBooleanContextFlag(c, 'skipChannelSelfPostgresFallback')
 }
