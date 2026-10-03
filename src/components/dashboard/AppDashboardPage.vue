@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AppDashboardSection } from '~/constants/appDashboardTabs'
 import type { AppChartRefreshState } from '~/services/dashboardRefresh'
+import type { NativeReleaseSeriesInput } from '~/services/nativeReleaseStats'
 import type { Database } from '~/types/supabase.types'
 import { computed, ref, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
@@ -44,6 +45,7 @@ const usageComponent = ref<{
   reloadTrigger: number
 } | null>(null)
 const appNotFound = ref(false)
+const nativeUsage = ref<{ data: { labels: string[], datasets: NativeReleaseSeriesInput[] } | null, isLoading: boolean }>({ data: null, isLoading: true })
 let loadGeneration = 0
 
 const lacksSecurityAccess = computed(() => {
@@ -190,9 +192,11 @@ watchEffect(async () => {
               :accumulated="false"
               :force-demo="appNotFound"
               class="col-span-full"
+              @native-usage="nativeUsage = $event"
             />
             <NativeReleaseStatsPanel
-              :app-id="id"
+              :usage-data="nativeUsage.data"
+              :is-loading="nativeUsage.isLoading"
               :force-demo="appNotFound"
               class="col-span-full"
             />

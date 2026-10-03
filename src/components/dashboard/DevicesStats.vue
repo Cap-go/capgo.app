@@ -58,6 +58,10 @@ const props = defineProps({
   },
 })
 
+const emit = defineEmits<{
+  nativeUsage: [payload: { data: ChartApiData | null, isLoading: boolean }]
+}>()
+
 // Demo data generator for devices stats when forceDemo is true
 function generateDemoDevicesData(days: number, usageKind: string = 'bundle'): { labels: string[], datasets: { label: string, data: number[] }[] } {
   const labels: string[] = []
@@ -182,6 +186,13 @@ const tooltipClickHandler = computed<TooltipClickHandler | undefined>(() => {
   }
 })
 const isLoading = ref(true)
+
+// Native release table reuses this native_usage response instead of
+// requesting the same period a second time.
+watch([rawChartData, isLoading], ([data, loading]) => {
+  if (isNativeUsage.value)
+    emit('nativeUsage', { data, isLoading: loading })
+}, { immediate: true })
 const { days: periodDays } = usePeriodDaysQuery()
 const currentRange = ref<{ startDate: Date, endDate: Date } | null>(null)
 let requestToken = 0

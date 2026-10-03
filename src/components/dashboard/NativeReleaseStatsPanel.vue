@@ -3,29 +3,32 @@ import type { ChartData, ChartOptions } from 'chart.js'
 import type { NativeReleasePlatform, NativeReleasePlatformFilter, NativeReleaseSeriesInput } from '~/services/nativeReleaseStats'
 import { useDark } from '@vueuse/core'
 import { BarElement, CategoryScale, Chart, Legend, LinearScale, Tooltip } from 'chart.js'
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { Bar } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import Spinner from '~/components/Spinner.vue'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { createChartScales, createLegendConfig } from '~/services/chartConfig'
-import { useChartData } from '~/services/chartDataService'
 import { chartLabelCountForPeriodDays, formatLocalDateShort, formatUtcDateParam, getLastNUtcDaysRange } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import {
   buildDemoNativeReleaseData,
+  buildNativeReleaseColorMap,
   buildNativeReleaseRows,
   filterNativeReleaseSeries,
   groupNativeReleaseChartSeries,
   parseNativeReleaseSeries,
 } from '~/services/nativeReleaseStats'
-import { useSupabase } from '~/services/supabase'
 
+// The native version chart (DevicesStats) already loads native_usage for the
+// same period, so this panel renders that data instead of fetching it again.
 const props = withDefaults(defineProps<{
-  appId: string
+  usageData: { labels: string[], datasets: NativeReleaseSeriesInput[] } | null
+  isLoading?: boolean
   forceDemo?: boolean
 }>(), {
+  isLoading: false,
   forceDemo: false,
 })
 
@@ -33,7 +36,6 @@ Chart.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend)
 
 const { t } = useI18n()
 const isDark = useDark()
-const supabase = useSupabase()
 const { days } = usePeriodDaysQuery()
 
 const platform = ref<NativeReleasePlatformFilter>('all')
@@ -43,13 +45,10 @@ const platformOptions: Array<{ value: NativeReleasePlatformFilter, label: string
   { value: 'android', label: 'Android' },
 ]
 
-const rawData = ref<{ labels: string[], datasets: NativeReleaseSeriesInput[] } | null>(null)
-const isLoading = ref(false)
-const hasError = ref(false)
-let requestToken = 0
-
-const seriesPalette = ['#119eff', '#10b981', '#f59e0b', '#8b5cf6', '#f43f5e', '#06b6d4', '#84cc16', '#ec4899', '#6366f1', '#14b8a6']
 const otherColor = '#94a3b8'
+// A finished load with no payload means the native_usage request failed;
+// an empty period still returns labels and an empty datasets array.
+const hasError = computed(() => !props.forceDemo && !props.isLoading && props.usageData === null)
 
 const effectiveData = computed(() => {
   if (props.forceDemo) {
@@ -61,7 +60,7 @@ const effectiveData = computed(() => {
     })
     return buildDemoNativeReleaseData(demoLabels)
   }
-  return rawData.value
+  return props.usageData
 })
 
 const labels = computed(() => effectiveData.value?.labels ?? [])
@@ -69,12 +68,7 @@ const allSeries = computed(() => parseNativeReleaseSeries(labels.value, effectiv
 const filteredSeries = computed(() => filterNativeReleaseSeries(allSeries.value, platform.value))
 const rows = computed(() => buildNativeReleaseRows(labels.value, filteredSeries.value))
 const hasData = computed(() => rows.value.length > 0)
-// Colors follow each series' rank across all platforms, so a version keeps
-// its color when the platform filter changes.
-const seriesColorByKey = computed(() => new Map(
-  buildNativeReleaseRows(labels.value, allSeries.value)
-    .map((row, index) => [row.key, seriesPalette[index % seriesPalette.length]!] as const),
-))
+const seriesColorByKey = computed(() => buildNativeReleaseColorMap(buildNativeReleaseRows(labels.value, allSeries.value)))
 
 const periodLabel = computed(() => {
   if (days.value === 1)
@@ -176,45 +170,6 @@ function formatDay(value: string | null) {
     return '-'
   return formatLocalDateShort(value) || value
 }
-
-async function loadData() {
-  if (props.forceDemo || !props.appId)
-    return
-  const token = ++requestToken
-  isLoading.value = true
-  hasError.value = false
-  try {
-    const { startDate, endDate } = getLastNUtcDaysRange(days.value)
-    // Same range as the native version chart above; useChartData shares the
-    // cached or in-flight request, so this does not hit native_usage twice.
-    const data = await useChartData(supabase, props.appId, startDate, endDate, 'native')
-    if (token !== requestToken)
-      return
-    if (!data) {
-      hasError.value = true
-      rawData.value = null
-      return
-    }
-    rawData.value = { labels: data.labels ?? [], datasets: data.datasets ?? [] }
-  }
-  catch (error) {
-    if (token !== requestToken)
-      return
-    console.error('[NativeReleaseStatsPanel] Error fetching native release stats:', error)
-    hasError.value = true
-    rawData.value = null
-  }
-  finally {
-    if (token === requestToken)
-      isLoading.value = false
-  }
-}
-
-watch(
-  () => [props.appId, props.forceDemo, days.value] as const,
-  loadData,
-  { immediate: true },
-)
 </script>
 
 <template>
@@ -262,21 +217,18 @@ watch(
       </fieldset>
     </div>
 
-    <div v-if="isLoading && !forceDemo" class="flex items-center justify-center h-48 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+    <div v-if="props.isLoading && !forceDemo" class="flex items-center justify-center h-48 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
       <Spinner size="w-10 h-10" />
     </div>
 
     <div
-      v-else-if="hasError && !forceDemo"
+      v-else-if="hasError"
       class="flex flex-col items-center justify-center h-48 gap-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10 text-slate-500 dark:text-slate-400"
     >
       <IconAlertCircle class="w-10 h-10" />
       <p class="text-sm">
         {{ t('native-release-stats-fetch-error') }}
       </p>
-      <button type="button" class="d-btn d-btn-sm d-btn-primary" @click="loadData">
-        {{ t('update-delivery-retry') }}
-      </button>
     </div>
 
     <div

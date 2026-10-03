@@ -5,8 +5,8 @@ export type NativeReleasePlatformFilter = 'all' | 'ios' | 'android'
 
 export interface NativeReleaseSeriesInput {
   label: string
-  metaCounts?: number[]
-  metaCountValues?: number[]
+  metaCounts?: Array<number | null | undefined>
+  metaCountValues?: Array<number | null | undefined>
 }
 
 export interface NativeReleaseSeries {
@@ -105,9 +105,34 @@ export function buildNativeReleaseRows(labels: string[], series: NativeReleaseSe
     })
 }
 
+const nativeReleasePalettes: Record<NativeReleasePlatform, string[]> = {
+  ios: ['#119eff', '#6366f1', '#06b6d4', '#8b5cf6', '#1e40af', '#7dd3fc'],
+  android: ['#10b981', '#f59e0b', '#84cc16', '#0f766e', '#ea580c', '#fde047'],
+  electron: ['#a855f7', '#d946ef', '#7c3aed', '#c084fc', '#86198f', '#e9d5ff'],
+  unknown: ['#64748b', '#78716c', '#334155', '#a8a29e', '#475569', '#cbd5e1'],
+}
+
+export const NATIVE_RELEASE_CHART_MAX_SERIES = 6
+
+// Each platform has its own palette and a version's color comes from its rank
+// within its platform. The chart shows at most NATIVE_RELEASE_CHART_MAX_SERIES
+// versions, so shown versions never share a color, and a version keeps its
+// color when the platform filter changes.
+export function buildNativeReleaseColorMap(rows: NativeReleaseRow[]) {
+  const rankByPlatform = new Map<NativeReleasePlatform, number>()
+  const colors = new Map<string, string>()
+  for (const row of rows) {
+    const rank = rankByPlatform.get(row.platform) ?? 0
+    rankByPlatform.set(row.platform, rank + 1)
+    const palette = nativeReleasePalettes[row.platform]
+    colors.set(row.key, palette[rank % palette.length]!)
+  }
+  return colors
+}
+
 // Keep the chart readable: the top versions by latest devices get their own
 // stack, everything else is folded into a single "other" series.
-export function groupNativeReleaseChartSeries(rows: NativeReleaseRow[], series: NativeReleaseSeries[], maxSeries = 6) {
+export function groupNativeReleaseChartSeries(rows: NativeReleaseRow[], series: NativeReleaseSeries[], maxSeries = NATIVE_RELEASE_CHART_MAX_SERIES) {
   const byKey = new Map(series.map(item => [item.key, item]))
   const top = rows.slice(0, maxSeries).map(row => byKey.get(row.key)).filter((item): item is NativeReleaseSeries => !!item)
   const topKeys = new Set(top.map(item => item.key))

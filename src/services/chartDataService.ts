@@ -7,13 +7,9 @@ import { formatUtcDateParam, normalizeToUtcStartOfDay } from '~/services/date'
 const SKIP_COLOR = 10
 const colorKeys = Object.keys(colors)
 const chartDataCache = ref<Map<string, any>>(new Map())
-// Panels on the same dashboard tab can ask for the same range at once; share
-// the pending request instead of hitting the statistics endpoint twice.
-const pendingChartData = new Map<string, Promise<any>>()
 
 export function clearChartDataCache() {
   chartDataCache.value.clear()
-  pendingChartData.clear()
 }
 
 function clampToToday(date: Date): Date {
@@ -53,29 +49,6 @@ export async function useChartData(
   if (!options?.forceRefetch && chartDataCache.value.has(cacheKey))
     return chartDataCache.value.get(cacheKey)
 
-  const pending = pendingChartData.get(cacheKey)
-  if (pending)
-    return pending
-
-  const request = fetchChartData(supabase, appId, from, to, kind, cacheKey)
-  pendingChartData.set(cacheKey, request)
-  try {
-    return await request
-  }
-  finally {
-    if (pendingChartData.get(cacheKey) === request)
-      pendingChartData.delete(cacheKey)
-  }
-}
-
-async function fetchChartData(
-  supabase: SupabaseClient,
-  appId: string,
-  from: Date,
-  to: Date,
-  kind: VersionUsageKind,
-  cacheKey: string,
-) {
   // Clamp the 'to' date to today - we can't fetch data for future dates
   const clampedTo = clampToToday(to)
   const fromParam = formatUtcDateParam(from)

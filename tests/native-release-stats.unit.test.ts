@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildNativeReleaseColorMap,
   buildNativeReleaseRows,
   filterNativeReleaseSeries,
   groupNativeReleaseChartSeries,
@@ -62,5 +63,26 @@ describe('native release stats', () => {
     const grouped = groupNativeReleaseChartSeries(rows, iosSeries, 2)
     expect(grouped.top.map(item => item.key)).toEqual(['iOS 3', 'iOS 2'])
     expect(grouped.other).toEqual([1, 1, 1])
+  })
+})
+
+describe('native release chart colors', () => {
+  it('never repeats a color among the versions shown for a platform, and keeps colors across filters', () => {
+    const versions = Array.from({ length: 12 }, (_value, index) => index)
+    const series = parseNativeReleaseSeries(labels, [
+      ...versions.map(index => ({ label: `iOS 1.${index}.0`, metaCounts: [0, 0, 100 - index] })),
+      ...versions.map(index => ({ label: `Android 1.${index}.0`, metaCounts: [0, 0, 200 - index] })),
+    ])
+    const allRows = buildNativeReleaseRows(labels, series)
+    const colors = buildNativeReleaseColorMap(allRows)
+
+    for (const platform of ['all', 'ios', 'android'] as const) {
+      const filtered = filterNativeReleaseSeries(series, platform)
+      const { top } = groupNativeReleaseChartSeries(buildNativeReleaseRows(labels, filtered), filtered)
+      const shown = top.map(item => colors.get(item.key))
+      expect(new Set(shown).size).toBe(shown.length)
+    }
+
+    expect(colors.get('iOS 1.0.0')).not.toBe(colors.get('Android 1.0.0'))
   })
 })
