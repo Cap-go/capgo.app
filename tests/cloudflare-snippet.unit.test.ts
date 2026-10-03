@@ -68,7 +68,7 @@ describe('cloudflare plugin snippet on-prem fallback', () => {
     expect(putKeys.some(key => key.includes('/__internal__/onprem-cache-v2/'))).toBe(true)
   })
 
-  it('returns on-prem from a fallback worker when the primary fails', async () => {
+  it('returns on-prem from a fallback worker without caching when the primary fails', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const cache = buildCache()
     vi.stubGlobal('caches', { default: cache })
@@ -92,6 +92,9 @@ describe('cloudflare plugin snippet on-prem fallback', () => {
     expect(response.status).toBe(429)
     expect(response.headers.get('X-Onprem-App-Id')).toBe('com.external.app')
     expect(fetchMock).toHaveBeenCalledTimes(2)
+    // Partial outage: serve the on-prem answer but never cache it.
+    const putKeys = cache.put.mock.calls.map(([key]) => key instanceof Request ? key.url : String(key))
+    expect(putKeys.some(key => key.includes('/__internal__/onprem-cache-v2/'))).toBe(false)
   })
 
   it('passes cloud responses through after a single worker fetch', async () => {

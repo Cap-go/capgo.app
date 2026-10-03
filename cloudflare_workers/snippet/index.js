@@ -313,8 +313,9 @@ function isPlanUpgradeResponse(status, responseBody) {
   return status === 429 && responseBody?.error === 'need_plan_upgrade'
 }
 
-async function buildOnPremResponse(hostname, appId, endpoint, method, responseBody, status, responseHeaders) {
-  await setOnPremCache(hostname, appId, endpoint, method, responseBody, status, responseHeaders)
+async function buildOnPremResponse(hostname, appId, endpoint, method, responseBody, status, responseHeaders, shouldCache) {
+  if (shouldCache)
+    await setOnPremCache(hostname, appId, endpoint, method, responseBody, status, responseHeaders)
 
   const newHeaders = new Headers(responseHeaders)
   newHeaders.set('Content-Type', 'application/json')
@@ -828,11 +829,14 @@ export default {
     const pathWithQuery = url.pathname + url.search
 
     const fallbackUrls = zoneFallbackUrls[zone] || [WORKER_URL.EUROPE]
+    // Set once a worker is skipped or fails; an on-prem answer seen after that is served but not cached.
+    let fallbackFailure = false
 
     for (const workerUrl of fallbackUrls) {
       // Skip unhealthy workers (circuit is open)
       const healthy = await isHealthy(hostname, colo, workerUrl)
       if (!healthy) {
+        fallbackFailure = true
         console.log(`Skipping ${workerUrl} (circuit open for ${colo})`)
         continue
       }
@@ -852,6 +856,7 @@ export default {
 
         // Check for server errors (5xx) - infrastructure problem
         if (response.status >= 500) {
+          fallbackFailure = true
           console.log(`${workerUrl} returned ${response.status}, marking unhealthy`)
           await markUnhealthy(hostname, colo, workerUrl)
           continue // try fallback
@@ -870,10 +875,11 @@ export default {
             // Return on the first on-prem answer. Confirming with another worker costs
             // extra subrequests and blows the Enterprise snippet limit (5), which turns
             // every on-prem request into a 1101. Stale on-prem entries from replica lag
-            // are purged by tag on app/version create.
+            // are purged by tag on app/version create. During a partial outage the answer is
+            // served but not cached.
             if (isOnPremResponse(response.status, responseBody)) {
-              console.log(`On-prem detected by ${workerUrl} for ${appId}`)
-              return await buildOnPremResponse(hostname, appId, endpoint, method, responseBody, response.status, response.headers)
+              console.log(`On-prem detected by ${workerUrl} for ${appId}${fallbackFailure ? ' (after fallback failure, not caching)' : ''}`)
+              return await buildOnPremResponse(hostname, appId, endpoint, method, responseBody, response.status, response.headers, !fallbackFailure)
             }
 
             if (isPlanUpgradeResponse(response.status, responseBody)) {
@@ -900,6 +906,7 @@ export default {
       }
       catch (error) {
         // Network failure or timeout - mark unhealthy
+        fallbackFailure = true
         console.log(`${workerUrl} failed: ${error.message}, marking unhealthy`)
         await markUnhealthy(hostname, colo, workerUrl)
         // continue to next fallback
