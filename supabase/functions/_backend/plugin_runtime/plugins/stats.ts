@@ -299,8 +299,10 @@ app.post('/', async (c) => {
     if (blocked)
       return blocked
   }
+  // One decision per request: a batch follows its first event's device. A
+  // request without a device id keeps the live path (no per-device bucket).
   const firstDeviceId = (firstEvent as AppStats).device_id
-  if (shouldUseUpdatesEdgeCache(c, firstAppId, typeof firstDeviceId === 'string' ? firstDeviceId : ''))
+  if (typeof firstDeviceId === 'string' && firstDeviceId !== '' && shouldUseUpdatesEdgeCache(c, firstAppId, firstDeviceId))
     return statsWithEdgeCache(c, events, isBatch, appStatus, appStatusByAppId, requestIp)
 
   // Plugin hot path must never hit primary. Device custom_id lives in Cloudflare

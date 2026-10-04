@@ -49,8 +49,10 @@ describe('updates edge cache', () => {
   })
 
   it('builds a separate versions tag and maps purge scopes to tags', () => {
-    expect(updatesVersionsCacheTag('com.Example.App')).toBe('capgo-updates-com.example.app-versions')
-    expect(updatesCacheTagForScope('com.example.app', 'versions')).toBe('capgo-updates-com.example.app-versions')
+    expect(updatesVersionsCacheTag('com.Example.App')).toBe('capgo-updates-com.example.app:versions')
+    expect(updatesCacheTagForScope('com.example.app', 'versions')).toBe('capgo-updates-com.example.app:versions')
+    // App ids may end with "-versions": scopes of different apps never share a tag.
+    expect(updatesAppCacheTag('com.example.app-versions')).not.toBe(updatesVersionsCacheTag('com.example.app'))
     expect(updatesCacheTagForScope('com.example.app', 'app')).toBe('capgo-updates-com.example.app')
     // Rows claimed before the scope column existed purge the main tag.
     expect(updatesCacheTagForScope('com.example.app', undefined)).toBe('capgo-updates-com.example.app')
@@ -203,7 +205,7 @@ describe('updates edge cache', () => {
     expect(load).toHaveBeenCalledTimes(1)
     expect(missing).toHaveBeenCalledTimes(1)
     const entries = [...store.values()]
-    expect(entries.map(entry => entry.headers.get('Cache-Tag'))).toEqual(['capgo-updates-com.example.app-versions', 'capgo-updates-com.example.app-versions'])
+    expect(entries.map(entry => entry.headers.get('Cache-Tag'))).toEqual(['capgo-updates-com.example.app:versions', 'capgo-updates-com.example.app:versions'])
     expect(entries.map(entry => entry.headers.get('Cache-Control'))).toEqual(['public, s-maxage=3600', 'public, s-maxage=60'])
   })
 
@@ -609,6 +611,6 @@ describe('updates cache purge scopes', () => {
       : { data: null, error: null })
 
     await expect(drainUpdatesCachePurge(makeContext(), rpc)).resolves.toEqual({ purgedApps: 3 })
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body).tags).toEqual(['capgo-updates-com.a', 'capgo-updates-com.a-versions', 'capgo-updates-com.b'])
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).tags).toEqual(['capgo-updates-com.a', 'capgo-updates-com.a:versions', 'capgo-updates-com.b'])
   })
 })

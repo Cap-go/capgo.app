@@ -894,7 +894,8 @@ app.get('/', async (c) => {
     await recordChannelSelfIPRateLimitSafely(c, bodyParsed.app_id)
   }
 
-  if (shouldUseUpdatesEdgeCache(c, bodyParsed.app_id, bodyRaw.device_id ?? ''))
+  // Without a device id there is no per-device bucket: keep the live path.
+  if (bodyRaw.device_id && shouldUseUpdatesEdgeCache(c, bodyParsed.app_id, bodyRaw.device_id))
     return await runChannelSelfWithLazyPgClient(c, drizzleClient => listCompatibleChannels(c, drizzleClient, bodyParsed, appStatus, true), record)
 
   const pgClient = await getPgClient(c, true)

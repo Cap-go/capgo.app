@@ -49,6 +49,8 @@ const RELAY_PORT = Number(process.env.BENCH_RELAY_PORT ?? 18785)
 const SUPABASE_API_URL = process.env.SUPABASE_API_URL ?? 'http://127.0.0.1:54321'
 const POLL_MS = 25
 const FRESHNESS_TIMEOUT_MS = 120_000
+/** Just under the edge cache's 60s negative TTL. */
+const NEGATIVE_TTL_EXPIRY_MS = 55_000
 
 if (!DB_URL)
   throw new Error('DB_URL is required')
@@ -331,6 +333,8 @@ async function freshnessBundleUploaded(target: typeof allTargets[number]): Promi
     // Same device every time: only the bundle lookup can miss once warm.
     const deviceId = newDeviceId()
     const report = () => postJson(`${target.url}/stats`, statsRequest(deviceId, versionName, 'app_moved_to_foreground').body)
+    // The first report caches "unknown bundle" for the 60s negative TTL.
+    const unknownCachedAt = performance.now()
     for (let i = 0; i < 4; i++)
       await report()
     const [org] = await sql`SELECT owner_org FROM public.apps WHERE app_id = ${APP_ID}`
@@ -345,6 +349,9 @@ async function freshnessBundleUploaded(target: typeof allTargets[number]): Promi
     }
     if (!reread)
       throw new Error(`${target.name}: uploaded bundle not re-read by /stats within ${FRESHNESS_TIMEOUT_MS} ms`)
+    // A re-read near the negative TTL is the entry expiring, not the purge.
+    if (performance.now() - unknownCachedAt >= NEGATIVE_TTL_EXPIRY_MS)
+      throw new Error(`${target.name}: /stats re-read the bundle only after the negative TTL expired; the versions purge did not land`)
     trialsMs.push(round(performance.now() - start, 0))
   }
   return { target: target.name, scenario: 'console: bundle uploaded after devices reported it (/stats re-reads it)', trialsMs }

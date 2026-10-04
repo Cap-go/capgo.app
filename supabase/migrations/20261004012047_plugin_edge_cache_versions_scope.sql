@@ -7,9 +7,9 @@
 -- app's main tag for that would bring back the upload churn the
 -- channel-served gate avoids (every upload would evict the app's /updates
 -- entries), so version lookups carry a second tag per app
--- (capgo-updates-<app>-versions) and the purge queue says which tag to purge:
+-- (capgo-updates-<app>:versions) and the purge queue says which tag to purge:
 --   scope = 'app'      -> capgo-updates-<app>           (unchanged rules)
---   scope = 'versions' -> capgo-updates-<app>-versions  (any version identity change)
+--   scope = 'versions' -> capgo-updates-<app>:versions  (any version identity change)
 --
 -- Also adds channels.owner_org to the compared channel columns: channel
 -- lookups cached for /channel_self return it (legacy override writes use it).
