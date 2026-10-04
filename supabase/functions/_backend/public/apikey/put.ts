@@ -14,15 +14,15 @@ import { schema } from '../../utils/postgres_schema.ts'
 import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { supabaseAdmin, supabaseWithAuth, validateExpirationAgainstOrgPolicies, validateExpirationDate } from '../../utils/supabase.ts'
 import { apiKeyBindingsAllowOrgCreate, assertApiKeyCanKeepOrgCreateGrant, parseApiKeyGlobalPermissions, replaceApiKeyGlobalPermissions, validateApiKeyGlobalPermissionsForBindings } from './global_permissions.ts'
-import { assertApiKeyManagerCanAssignBindings, assertApiKeyManagerCanRotateTarget, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, requireJwtMfaForPrivilegedAction, sanitizeClientBindings, selectOwnedApiKeyByIdentifier } from './scope.ts'
+import { assertApiKeyManagerCanAssignBindings, assertApiKeyManagerCanRotateTarget, assertCallerHoldsSharedApiKeyPermissions, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, requireJwtMfaForPrivilegedAction, sanitizeClientBindings, selectManageableApiKeyByIdentifier, setApiKeyAuditActor, stampSharedApiKeySecretRecipient, withApiKeyAuditActor } from './scope.ts'
 
 const app = honoFactory.createApp()
 type ApiKeyRow = Database['public']['Tables']['apikeys']['Row']
 type ApiKeyUpdateData = Partial<Pick<Database['public']['Tables']['apikeys']['Update'], 'name' | 'expires_at'>>
-type ApiKeyLookupRow = Pick<ApiKeyRow, 'id' | 'rbac_id' | 'expires_at' | 'key' | 'key_hash'>
-type ApiKeyPublicSelectRow = Pick<ApiKeyRow, 'created_at' | 'expires_at' | 'id' | 'key_hash' | 'name' | 'rbac_id' | 'updated_at' | 'user_id'>
+type ApiKeyLookupRow = Pick<ApiKeyRow, 'id' | 'rbac_id' | 'expires_at' | 'key' | 'key_hash' | 'user_id' | 'owner_org_id'>
+type ApiKeyPublicSelectRow = Pick<ApiKeyRow, 'created_at' | 'expires_at' | 'id' | 'key_hash' | 'name' | 'owner_org_id' | 'rbac_id' | 'shared_secret_expires_at' | 'shared_secret_user_id' | 'updated_at' | 'user_id'>
 type ApiKeyPublicRow = Omit<ApiKeyPublicSelectRow, 'key_hash'> & { is_hashed_key: boolean }
-const APIKEY_PUBLIC_COLUMNS = 'created_at, expires_at, id, key_hash, name, rbac_id, updated_at, user_id'
+const APIKEY_PUBLIC_COLUMNS = 'created_at, expires_at, id, key_hash, name, owner_org_id, rbac_id, shared_secret_expires_at, shared_secret_user_id, updated_at, user_id'
 
 interface ApiKeyPut {
   id?: string | number
@@ -59,6 +59,21 @@ function parseBindingsForUpdate(body: ApiKeyPut, requestId: string): BindingInpu
   return sanitizeClientBindings(body.bindings)
 }
 
+// Shared keys stay inside their owner org and never hold global permissions.
+function assertSharedApiKeyUpdate(
+  ownerOrgId: string,
+  bindings: BindingInput[] | undefined,
+  globalPermissions: string[] | undefined,
+  requestId: string,
+) {
+  if (bindings?.some(binding => binding.org_id !== ownerOrgId)) {
+    throw simpleError('shared_apikey_single_org', 'Shared API keys can only have bindings in their owner organization', { requestId })
+  }
+  if (globalPermissions !== undefined && globalPermissions.length > 0) {
+    throw simpleError('shared_apikey_global_permissions', 'Shared API keys cannot have global permissions', { requestId })
+  }
+}
+
 function toDrizzleApiKeyUpdate(updateData: ApiKeyUpdateData): Partial<typeof schema.apikeys.$inferInsert> {
   const drizzleUpdate: Partial<typeof schema.apikeys.$inferInsert> = {}
 
@@ -75,7 +90,7 @@ function toDrizzleApiKeyUpdate(updateData: ApiKeyUpdateData): Partial<typeof sch
 async function replaceApiKeyBindings(
   c: Context<MiddlewareKeyVariables>,
   auth: AuthInfo,
-  apikey: { id: number, rbac_id: string },
+  apikey: { id: number, rbac_id: string, owner_org_id: string | null },
   currentBindingOrgIds: string[],
   bindings: BindingInput[],
   globalPermissions?: string[],
@@ -111,6 +126,7 @@ async function replaceApiKeyBindings(
 
     await drizzle.transaction(async (tx) => {
       const txDrizzle = tx as unknown as ReturnType<typeof getDrizzleClient>
+      await setApiKeyAuditActor(txDrizzle, auth)
       await lockRbacOrgs(txDrizzle, affectedOrgIds)
 
       for (const orgId of affectedOrgIds) {
@@ -122,7 +138,7 @@ async function replaceApiKeyBindings(
         const result = await tx
           .update(schema.apikeys)
           .set(toDrizzleApiKeyUpdate(updateData))
-          .where(sql`${schema.apikeys.id} = ${apikey.id} AND ${schema.apikeys.user_id} = ${auth.userId}::uuid`)
+          .where(sql`${schema.apikeys.id} = ${apikey.id}`)
           .returning({ id: schema.apikeys.id })
 
         if (result.length === 0) {
@@ -172,6 +188,10 @@ async function replaceApiKeyBindings(
       else if (!apiKeyBindingsAllowOrgCreate(bindings)) {
         // Legacy clients can omit global_permissions; keep stored grants aligned with the new bindings.
         await replaceApiKeyGlobalPermissions(tx, apikey.rbac_id, [], auth.userId)
+      }
+
+      if (apikey.owner_org_id) {
+        await assertCallerHoldsSharedApiKeyPermissions(txDrizzle, auth, apikey.rbac_id)
       }
     })
 
@@ -229,6 +249,7 @@ async function replaceApiKeyGlobalPermissionsForExistingBindings(
 
     await drizzle.transaction(async (tx) => {
       const txDrizzle = tx as unknown as ReturnType<typeof getDrizzleClient>
+      await setApiKeyAuditActor(txDrizzle, auth)
       await lockRbacOrgs(txDrizzle, currentBindingOrgIds)
 
       for (const orgId of currentBindingOrgIds) {
@@ -240,7 +261,7 @@ async function replaceApiKeyGlobalPermissionsForExistingBindings(
         const result = await tx
           .update(schema.apikeys)
           .set(toDrizzleApiKeyUpdate(updateData))
-          .where(sql`${schema.apikeys.id} = ${apikey.id} AND ${schema.apikeys.user_id} = ${auth.userId}::uuid`)
+          .where(sql`${schema.apikeys.id} = ${apikey.id}`)
           .returning({ id: schema.apikeys.id })
 
         if (result.length === 0) {
@@ -338,7 +359,7 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
   const dataSupabase = auth.authType === 'apikey' ? supabaseAdmin(c) : supabase
 
   // Check if the API key to update exists. JWT callers rely on RLS.
-  const { data: existingApikey, error: fetchError } = await selectOwnedApiKeyByIdentifier<ApiKeyLookupRow>(c, auth, resolvedId, 'id, rbac_id, expires_at, key, key_hash')
+  const { data: existingApikey, error: fetchError } = await selectManageableApiKeyByIdentifier<ApiKeyLookupRow>(c, auth, resolvedId, 'id, rbac_id, expires_at, key, key_hash, user_id, owner_org_id')
 
   if (fetchError) {
     // RLS might return an error or just no data if not found/accessible
@@ -360,7 +381,13 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
   // Validate expiration against org policies (only if expiration or scopes are changing)
   const currentBindingOrgIds = await getApiKeyBindingOrgIds(c, existingApikey.rbac_id)
   await ensureApiKeyCanManageTargetOrgIds(c, auth, authApikey, currentBindingOrgIds, 'cannot_update_apikey', { requestId })
+  if (existingApikey.owner_org_id) {
+    assertSharedApiKeyUpdate(existingApikey.owner_org_id, bindings, globalPermissions, requestId)
+  }
   if (regenerate) {
+    if (existingApikey.owner_org_id && auth.authType !== 'jwt') {
+      throw quickError(403, 'cannot_update_apikey', 'Only user sessions can regenerate shared API keys', { requestId })
+    }
     await assertApiKeyManagerCanRotateTarget(c, auth, existingApikey.rbac_id)
   }
 
@@ -381,13 +408,13 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
     await replaceApiKeyBindings(c, auth, {
       id: existingApikey.id,
       rbac_id: existingApikey.rbac_id,
+      owner_org_id: existingApikey.owner_org_id,
     }, currentBindingOrgIds, bindings, globalPermissions, hasUpdates ? updateData : undefined)
 
     const { data: updatedData, error: fetchUpdatedError } = await supabase
       .from('apikeys')
       .select(APIKEY_PUBLIC_COLUMNS)
       .eq('id', existingApikey.id)
-      .eq('user_id', auth.userId)
       .single()
 
     if (fetchUpdatedError || !updatedData) {
@@ -405,7 +432,6 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
       .from('apikeys')
       .select(APIKEY_PUBLIC_COLUMNS)
       .eq('id', existingApikey.id)
-      .eq('user_id', auth.userId)
       .single()
 
     if (fetchUpdatedError || !updatedData) {
@@ -414,30 +440,71 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
     updatedApikey = toApiKeyPublicRow(updatedData as ApiKeyPublicSelectRow)
   }
   else if (hasUpdates) {
-    const { data: updatedData, error: updateError } = await writeSupabase
+    const updatedRows = await withApiKeyAuditActor(c, auth, async (tx) => {
+      if (existingApikey.owner_org_id) {
+        await lockRbacOrgs(tx, [existingApikey.owner_org_id])
+        if (!(await checkPermissionPg(c, 'org.manage_apikeys', { orgId: existingApikey.owner_org_id }, tx, auth.userId, auth.apikey?.key ?? c.get('capgkey') ?? null))) {
+          throw quickError(403, 'cannot_update_apikey', 'API key management permission is required', { requestId })
+        }
+      }
+      return tx
+        .update(schema.apikeys)
+        .set(toDrizzleApiKeyUpdate(updateData))
+        .where(sql`${schema.apikeys.id} = ${existingApikey.id}`)
+        .returning({ id: schema.apikeys.id })
+    })
+    if (updatedRows.length === 0) {
+      throw quickError(500, 'failed_to_update_apikey', 'Failed to update API key', { requestId, apikeyId: existingApikey.id })
+    }
+
+    const { data: updatedData, error: fetchUpdatedError } = await writeSupabase
       .from('apikeys')
-      .update(updateData)
-      .eq('id', existingApikey.id) // Use the fetched ID to ensure we update the correct record
-      .eq('user_id', auth.userId)
       .select(APIKEY_PUBLIC_COLUMNS)
+      .eq('id', existingApikey.id)
       .single()
 
-    if (updateError || !updatedData) {
-      throw quickError(500, 'failed_to_update_apikey', 'Failed to update API key', { requestId, supabaseError: updateError })
+    if (fetchUpdatedError || !updatedData) {
+      throw quickError(500, 'failed_to_update_apikey', 'Failed to load updated API key', { requestId, supabaseError: fetchUpdatedError })
     }
     updatedApikey = toApiKeyPublicRow(updatedData as ApiKeyPublicSelectRow)
   }
 
   if (regenerate) {
     if (isHashedKey) {
-      const { data: regeneratedApikey, error: regenerateError } = await supabaseAdmin(c).rpc('regenerate_hashed_apikey_for_user', {
-        p_apikey_id: existingApikey.id,
-        p_user_id: auth.userId,
+      const regeneratedApikey = await withApiKeyAuditActor(c, auth, async (tx) => {
+        let attributedUserId = existingApikey.user_id
+        if (existingApikey.owner_org_id) {
+          // Use the same org -> principal lock order as binding mutations.
+          // Recheck after locking: bindings and caller membership may have
+          // changed since the initial RLS lookup.
+          await lockRbacOrgs(tx, [existingApikey.owner_org_id])
+          await tx.execute(sql`SELECT public.lock_rbac_apikey_principal(${existingApikey.rbac_id}::uuid)`)
+          const target = await tx.execute<ApiKeyLookupRow>(sql`
+            SELECT id, rbac_id, expires_at, key, key_hash, user_id, owner_org_id
+            FROM public.apikeys
+            WHERE id = ${existingApikey.id}::bigint
+              AND owner_org_id = ${existingApikey.owner_org_id}::uuid
+            FOR UPDATE`)
+          const lockedApikey = target.rows[0]
+          if (!lockedApikey?.rbac_id) {
+            throw quickError(404, 'api_key_not_found_or_access_denied', 'API key not found or access denied', { requestId })
+          }
+          if (!(await checkPermissionPg(c, 'org.manage_apikeys', { orgId: existingApikey.owner_org_id }, tx, auth.userId, auth.apikey?.key ?? c.get('capgkey') ?? null))) {
+            throw quickError(403, 'cannot_update_apikey', 'API key management permission is required', { requestId })
+          }
+          await assertCallerHoldsSharedApiKeyPermissions(tx, auth, lockedApikey.rbac_id)
+          attributedUserId = lockedApikey.user_id
+        }
+        const result = await tx.execute<ApiKeyRow>(sql`SELECT * FROM public.regenerate_hashed_apikey_for_user(${existingApikey.id}::bigint, ${attributedUserId}::uuid)`)
+        if (existingApikey.owner_org_id && result.rows[0]) {
+          await stampSharedApiKeySecretRecipient(tx, auth, existingApikey.rbac_id!)
+        }
+        return result.rows[0]
       })
-      if (regenerateError || !regeneratedApikey) {
-        throw quickError(500, 'failed_to_update_apikey', 'Failed to regenerate API key', { requestId, supabaseError: regenerateError })
+      if (!regeneratedApikey) {
+        throw quickError(500, 'failed_to_update_apikey', 'Failed to regenerate API key', { requestId, apikeyId: existingApikey.id })
       }
-      return c.json({ ...regeneratedApikey, is_hashed_key: true })
+      return c.json({ ...regeneratedApikey, id: Number(regeneratedApikey.id), is_hashed_key: true })
     }
 
     const { data: updatedData, error: updateError } = await writeSupabase
@@ -448,7 +515,6 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
       // the final key returned below is the value generated by the trigger.
       .update({ key: 'regenerate' })
       .eq('id', existingApikey.id)
-      .eq('user_id', auth.userId)
       .select()
       .single()
 

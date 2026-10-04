@@ -53,6 +53,8 @@ vi.mock('~/services/capgoApi', () => ({
         rbac_id: 'rbac-org-a',
         created_at: '2026-08-11T12:00:00.000Z',
         expires_at: null,
+        owner_org_id: null,
+        bindings: [{ id: 'binding-a', scope_type: 'org', org_id: 'org-a', app_id: null, role_name: 'org_member' }],
       },
       {
         id: 2,
@@ -62,6 +64,8 @@ vi.mock('~/services/capgoApi', () => ({
         rbac_id: 'rbac-org-b',
         created_at: '2026-08-11T11:00:00.000Z',
         expires_at: null,
+        owner_org_id: null,
+        bindings: [{ id: 'binding-b', scope_type: 'org', org_id: 'org-b', app_id: null, role_name: 'org_member' }],
       },
     ],
     error: null,
@@ -95,36 +99,17 @@ vi.mock('~/services/supabase', () => {
         error: null,
       }),
       then: (resolve: (value: unknown) => void, reject: (reason?: unknown) => void) => {
-        const data = table === 'role_bindings'
+        const data = table === 'roles'
           ? [
               {
-                id: 'binding-a',
-                principal_id: 'rbac-org-a',
+                id: 'role-org-member',
+                name: 'org_member',
                 scope_type: 'org',
-                org_id: 'org-a',
-                app_id: null,
-                roles: { name: 'org_member' },
-              },
-              {
-                id: 'binding-b',
-                principal_id: 'rbac-org-b',
-                scope_type: 'org',
-                org_id: 'org-b',
-                app_id: null,
-                roles: { name: 'org_member' },
+                description: null,
+                priority_rank: 10,
               },
             ]
-          : table === 'roles'
-            ? [
-                {
-                  id: 'role-org-member',
-                  name: 'org_member',
-                  scope_type: 'org',
-                  description: null,
-                  priority_rank: 10,
-                },
-              ]
-            : []
+          : []
 
         return Promise.resolve({ data, error: null }).then(resolve, reject)
       },

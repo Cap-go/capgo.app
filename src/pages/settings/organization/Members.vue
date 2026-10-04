@@ -732,10 +732,56 @@ async function rescindInvitation(email: string) {
   return error
 }
 
-async function didCancel() {
+interface SharedApiKeySummary {
+  id: number
+  name: string
+  owner_org_id: string | null
+  shared_secret_user_id: string | null
+}
+
+// Shared API key secrets are issued to the member who created or last
+// regenerated them; removing that member revokes them. Only callers who can
+// manage API keys can list them, so others simply get no warning.
+async function loadSharedKeysIssuedTo(member: OrganizationMemberRow): Promise<SharedApiKeySummary[]> {
+  const orgId = currentOrganization.value?.gid
+  if (!orgId || !member.uid || isInviteMember(member))
+    return []
+
+  const { data, error } = await invokeCapgoApi<SharedApiKeySummary[]>(`apikey?owner_org_id=${orgId}`, { method: 'GET' })
+  if (error || !data)
+    return []
+  return data.filter(key => key.owner_org_id === orgId && key.shared_secret_user_id === member.uid)
+}
+
+async function showSharedKeysRevokedDialog(keys: SharedApiKeySummary[]) {
+  dialogStore.openDialog({
+    title: t('shared-apikeys-revoked-title'),
+    description: `${t('shared-apikeys-revoked-description')} ${keys.map(key => key.name).join(', ')}`,
+    buttons: [
+      {
+        text: t('button-cancel'),
+        role: 'cancel',
+      },
+      {
+        text: t('shared-apikeys-revoked-open'),
+        role: 'primary',
+        id: 'shared-apikeys-revoked-open',
+        handler: () => {
+          router.push('/apikeys?ownership=shared')
+        },
+      },
+    ],
+  })
+  await dialogStore.onDialogDismiss()
+}
+
+async function didCancel(sharedKeys: SharedApiKeySummary[] = []) {
+  const sharedKeysWarning = sharedKeys.length > 0
+    ? ` ${t('member-delete-shared-apikeys-warning')} ${sharedKeys.map(key => key.name).join(', ')}.`
+    : ''
   dialogStore.openDialog({
     title: t('alert-confirm-delete'),
-    description: `${t('alert-not-reverse-message')} ${t('alert-delete-message')}?`,
+    description: `${t('alert-not-reverse-message')} ${t('alert-delete-message')}?${sharedKeysWarning}`,
     buttons: [
       {
         text: t('button-cancel'),
@@ -896,7 +942,7 @@ async function refreshAfterMemberDeletion(member: OrganizationMemberRow) {
   }
 }
 
-async function _deleteMember(member: OrganizationMemberRow) {
+async function _deleteMember(member: OrganizationMemberRow, sharedKeys: SharedApiKeySummary[] = []) {
   isLoading.value = true
 
   try {
@@ -911,6 +957,8 @@ async function _deleteMember(member: OrganizationMemberRow) {
 
     toast.success(t('member-deleted'))
     await refreshAfterMemberDeletion(member)
+    if (sharedKeys.length > 0 && member.uid !== main.user?.id)
+      await showSharedKeysRevokedDialog(sharedKeys)
   }
   catch (error) {
     console.error('Deletion failed:', error)
@@ -928,7 +976,8 @@ async function deleteMember(member: OrganizationMemberRow) {
     return
   }
 
-  else if (await didCancel()) {
+  const sharedKeys = await loadSharedKeysIssuedTo(member)
+  if (await didCancel(sharedKeys)) {
     return
   }
 
@@ -937,7 +986,7 @@ async function deleteMember(member: OrganizationMemberRow) {
     return
   }
 
-  _deleteMember(member)
+  _deleteMember(member, sharedKeys)
 }
 
 function handleRbacRoleUpdateError(error: { message?: string }) {

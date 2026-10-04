@@ -1,10 +1,10 @@
 import type { Context } from 'hono'
 import type { AuthInfo, MiddlewareKeyVariables } from '../../utils/hono.ts'
-import type { getDrizzleClient } from '../../utils/pg.ts'
 import type { Database } from '../../utils/supabase.types.ts'
+import { sql } from 'drizzle-orm'
 import { quickError } from '../../utils/hono.ts'
 import { assertJwtMfaAssurance } from '../../utils/jwt_mfa_assurance.ts'
-import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
 import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
 
@@ -83,7 +83,7 @@ async function loadApiKeyBindingOrgIdsForRbacIds(
   }
 }
 
-async function getApiKeyManageableOrgIds(
+export async function getApiKeyManageableOrgIds(
   c: Context<MiddlewareKeyVariables>,
   authApikey: ApiKeyRow | undefined,
 ): Promise<Set<string>> {
@@ -303,16 +303,35 @@ export async function filterApiKeysManageableByAuth<T extends Pick<ApiKeyRow, 'r
   })
 }
 
-export async function selectOwnedApiKeyByIdentifier<T = ApiKeyRow>(
+// Personal keys are managed by their owner. Shared keys (owner_org_id) are
+// managed by whoever holds org.manage_apikeys in the owner org; user_id is
+// attribution only. JWT callers are scoped by RLS, API-key callers by the orgs
+// the calling key can manage.
+export async function selectManageableApiKeyByIdentifier<T = ApiKeyRow>(
   c: Context<MiddlewareKeyVariables>,
   auth: AuthInfo,
   id: string,
   columns = '*',
 ) {
-  const query = (auth.authType === 'apikey' ? supabaseAdmin(c) : supabaseWithAuth(c, auth))
-    .from('apikeys')
-    .select(columns)
-    .eq('user_id', auth.userId)
+  let query
+  if (auth.authType === 'apikey') {
+    const callerApikey = c.get('apikey') as ApiKeyRow | undefined
+    const manageableOrgIds = [...await getApiKeyManageableOrgIds(c, callerApikey)]
+    const ownershipFilters = [`and(user_id.eq.${auth.userId},owner_org_id.is.null)`]
+    if (manageableOrgIds.length > 0) {
+      ownershipFilters.push(`owner_org_id.in.(${manageableOrgIds.join(',')})`)
+    }
+    const adminQuery = supabaseAdmin(c).from('apikeys').select(columns)
+    // A shared caller's user_id is attribution, never personal-key ownership.
+    query = callerApikey?.owner_org_id
+      ? adminQuery.in('owner_org_id', manageableOrgIds)
+      : adminQuery.or(ownershipFilters.join(','))
+  }
+  else {
+    query = supabaseWithAuth(c, auth)
+      .from('apikeys')
+      .select(columns)
+  }
 
   const filteredQuery = isNumericApiKeyId(id)
     ? query.eq('id', Number(id))
@@ -322,15 +341,216 @@ export async function selectOwnedApiKeyByIdentifier<T = ApiKeyRow>(
   return { data: data as T | null, error }
 }
 
-export async function deleteOwnedApiKeyByIdentifier(c: Context<MiddlewareKeyVariables>, auth: AuthInfo, id: string) {
-  const query = (auth.authType === 'apikey' ? supabaseAdmin(c) : supabaseWithAuth(c, auth))
+// Call only after selectManageableApiKeyByIdentifier authorized this key.
+// JWT callers delete through RLS (the audit trigger sees auth.uid()); API-key
+// callers delete on a service connection that carries the calling key as actor.
+export async function deleteManageableApiKeyById(c: Context<MiddlewareKeyVariables>, auth: AuthInfo, apikeyId: number): Promise<{ error: unknown }> {
+  if (auth.authType === 'apikey') {
+    try {
+      await withApiKeyAuditActor(c, auth, tx => tx.execute(sql`DELETE FROM public.apikeys WHERE id = ${apikeyId}::bigint`))
+      return { error: null }
+    }
+    catch (error) {
+      return { error }
+    }
+  }
+
+  return supabaseWithAuth(c, auth)
     .from('apikeys')
     .delete()
-    .eq('user_id', auth.userId)
+    .eq('id', apikeyId)
+}
 
-  const filteredQuery = isNumericApiKeyId(id)
-    ? query.eq('id', Number(id))
-    : query.eq('key', id)
+type DrizzleExecutor = Pick<ReturnType<typeof getDrizzleClient>, 'execute'>
 
-  return filteredQuery
+// Returns the first permission the key grants that the caller does not hold:
+// role permissions (including inherited roles, in the binding scope) and
+// channel allow-overrides on their channel. Runs on the given executor so it
+// can see bindings created earlier in the same transaction.
+async function findApiKeyPermissionMissingForCaller(
+  db: DrizzleExecutor,
+  apikeyRbacId: string,
+  callerUserId: string,
+): Promise<{ hasBindings: boolean, missingPermission: string | null }> {
+  const result = await db.execute<{ has_bindings: boolean, missing_permission: string | null }>(sql`
+      WITH RECURSIVE key_bindings AS (
+        SELECT rb.role_id, rb.scope_type, rb.org_id, a.app_id AS public_app_id, ch.id AS channel_id
+        FROM public.role_bindings rb
+        LEFT JOIN public.apps a ON a.id = rb.app_id
+        LEFT JOIN public.channels ch ON ch.rbac_id = rb.channel_id
+        WHERE rb.principal_type = public.rbac_principal_apikey()
+          AND rb.principal_id = ${apikeyRbacId}::uuid
+          AND rb.org_id IS NOT NULL
+          AND (rb.expires_at IS NULL OR rb.expires_at > now())
+      ),
+      -- Same closure as rbac_has_permission: inherited roles stay in the
+      -- scope of the binding that grants them.
+      role_closure AS (
+        SELECT key_bindings.role_id AS effective_role_id, key_bindings.scope_type, key_bindings.org_id, key_bindings.public_app_id, key_bindings.channel_id
+        FROM key_bindings
+
+        UNION
+
+        SELECT role_hierarchy.child_role_id, role_closure.scope_type, role_closure.org_id, role_closure.public_app_id, role_closure.channel_id
+        FROM role_closure
+        JOIN public.role_hierarchy ON role_hierarchy.parent_role_id = role_closure.effective_role_id
+        JOIN public.roles AS child_role
+          ON child_role.id = role_hierarchy.child_role_id
+          AND child_role.scope_type = role_closure.scope_type
+      ),
+      required_permissions AS (
+        SELECT permission.key AS permission_key, role_closure.org_id, role_closure.public_app_id, role_closure.channel_id
+        FROM role_closure
+        JOIN public.role_permissions ON role_permissions.role_id = role_closure.effective_role_id
+        JOIN public.permissions AS permission ON permission.id = role_permissions.permission_id
+
+        UNION
+
+        -- Channel allow-overrides grant permissions beyond the key's roles.
+        SELECT overrides.permission_key, channels.owner_org, channels.app_id, channels.id
+        FROM public.channel_permission_overrides AS overrides
+        JOIN public.channels AS channels ON channels.id = overrides.channel_id
+        WHERE overrides.principal_type = public.rbac_principal_apikey()
+          AND overrides.principal_id = ${apikeyRbacId}::uuid
+          AND overrides.is_allowed
+
+        UNION
+
+        -- Broad org/app roles inherit channel rights. Check the caller's
+        -- explicit denies at their concrete channel, even when the key has
+        -- no channel binding or allow-override of its own.
+        SELECT denied.permission_key, channels.owner_org, channels.app_id, channels.id
+        FROM public.channel_permission_overrides AS denied
+        JOIN public.channels ON channels.id = denied.channel_id
+        WHERE denied.principal_type = public.rbac_principal_user()
+          AND denied.principal_id = ${callerUserId}::uuid
+          AND NOT denied.is_allowed
+          AND EXISTS (SELECT 1 FROM key_bindings WHERE key_bindings.org_id = channels.owner_org)
+          AND public.rbac_has_permission(
+            public.rbac_principal_apikey(), ${apikeyRbacId}::uuid,
+            denied.permission_key, channels.owner_org, channels.app_id, channels.id
+          )
+          AND (
+            NOT public.rbac_principal_has_org_binding(
+              public.rbac_principal_apikey(), ${apikeyRbacId}::uuid, channels.owner_org
+            )
+            OR NOT EXISTS (
+              SELECT 1 FROM public.channel_permission_overrides AS key_denied
+              WHERE key_denied.principal_type = public.rbac_principal_apikey()
+                AND key_denied.principal_id = ${apikeyRbacId}::uuid
+                AND key_denied.channel_id = channels.id
+                AND key_denied.permission_key = denied.permission_key
+                AND NOT key_denied.is_allowed
+            )
+          )
+      )
+      SELECT
+        EXISTS (SELECT 1 FROM key_bindings) AS has_bindings,
+        (
+          SELECT required_permissions.permission_key
+          FROM required_permissions
+          WHERE NOT public.rbac_check_permission_direct(
+            required_permissions.permission_key,
+            ${callerUserId}::uuid,
+            required_permissions.org_id,
+            required_permissions.public_app_id,
+            required_permissions.channel_id,
+            NULL
+          )
+          LIMIT 1
+        ) AS missing_permission
+      `)
+  const row = result.rows[0]
+  return { hasBindings: row?.has_bindings === true, missingPermission: row?.missing_permission ?? null }
+}
+
+// Receiving a shared secret must not grant rights beyond the issuing user's
+// permissions, including narrower channel denies under a broad role.
+export async function assertCallerHoldsSharedApiKeyPermissions(
+  db: DrizzleExecutor,
+  auth: AuthInfo,
+  apikeyRbacId: string,
+) {
+  if (auth.authType !== 'jwt' || !auth.userId) {
+    throw quickError(403, 'cannot_update_apikey', 'Only user sessions can create or regenerate shared API keys')
+  }
+
+  const { hasBindings, missingPermission } = await findApiKeyPermissionMissingForCaller(db, apikeyRbacId, auth.userId)
+  if (!hasBindings) {
+    throw quickError(403, 'cannot_update_apikey', 'Shared API key has no active bindings')
+  }
+  if (missingPermission) {
+    throw quickError(403, 'forbidden_binding', `Forbidden - this shared API key requires the ${missingPermission} permission, which you do not hold`)
+  }
+}
+
+// Rotation replaces the only live secret, so its issuing user is its current
+// recipient. Expiring access grants bound the secret lifetime without a cron.
+export async function stampSharedApiKeySecretRecipient(
+  db: DrizzleExecutor,
+  auth: AuthInfo,
+  apikeyRbacId: string,
+) {
+  if (auth.authType !== 'jwt' || !auth.userId) {
+    throw quickError(403, 'cannot_update_apikey', 'Only user sessions can receive shared API key secrets')
+  }
+  await db.execute(sql`
+    UPDATE public.apikeys AS apikey
+    SET shared_secret_user_id = ${auth.userId}::uuid,
+        shared_secret_expires_at = (
+          SELECT min(grants.expires_at)
+          FROM (
+            SELECT rb.expires_at
+            FROM public.role_bindings rb
+            WHERE rb.principal_type = public.rbac_principal_user()
+              AND rb.principal_id = ${auth.userId}::uuid
+              AND rb.org_id = apikey.owner_org_id
+              AND rb.expires_at > now()
+
+            UNION ALL
+
+            SELECT rb.expires_at
+            FROM public.group_members gm
+            JOIN public.role_bindings rb
+              ON rb.principal_type = public.rbac_principal_group()
+              AND rb.principal_id = gm.group_id
+              AND rb.org_id = apikey.owner_org_id
+            WHERE gm.user_id = ${auth.userId}::uuid
+              AND rb.expires_at > now()
+          ) AS grants
+        )
+    WHERE apikey.rbac_id = ${apikeyRbacId}::uuid
+      AND apikey.owner_org_id IS NOT NULL
+  `)
+}
+
+// Backend writes use a service connection, so the audit trigger cannot see the
+// caller. Pass it through transaction-local settings (see audit_log_trigger).
+export async function setApiKeyAuditActor(db: DrizzleExecutor, auth: AuthInfo) {
+  const actorApiKeyId = auth.authType === 'apikey' && auth.apikey?.id ? String(auth.apikey.id) : ''
+  await db.execute(sql`SELECT
+    pg_catalog.set_config('capgo.audit_actor_user_id', ${auth.userId ?? ''}, true),
+    pg_catalog.set_config('capgo.audit_actor_apikey_id', ${actorApiKeyId}, true)`)
+}
+
+export async function withApiKeyAuditActor<T>(
+  c: Context<MiddlewareKeyVariables>,
+  auth: AuthInfo,
+  fn: (tx: ReturnType<typeof getDrizzleClient>) => Promise<T>,
+): Promise<T> {
+  let pgClient: ReturnType<typeof getPgClient> | undefined
+  try {
+    pgClient = getPgClient(c)
+    const drizzle = getDrizzleClient(pgClient)
+    return await drizzle.transaction(async (tx) => {
+      const txDrizzle = tx as unknown as ReturnType<typeof getDrizzleClient>
+      await setApiKeyAuditActor(txDrizzle, auth)
+      return fn(txDrizzle)
+    })
+  }
+  finally {
+    if (pgClient) {
+      await closeClient(c, pgClient)
+    }
+  }
 }

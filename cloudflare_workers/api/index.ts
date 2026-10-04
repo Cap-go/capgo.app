@@ -88,6 +88,7 @@ import { app as on_manifest_create } from '../../supabase/functions/_backend/tri
 import { app as on_org_update } from '../../supabase/functions/_backend/triggers/on_org_update.ts'
 import { app as on_organization_create } from '../../supabase/functions/_backend/triggers/on_organization_create.ts'
 import { app as on_organization_delete } from '../../supabase/functions/_backend/triggers/on_organization_delete.ts'
+import { app as on_shared_apikey_secret_revoked } from '../../supabase/functions/_backend/triggers/on_shared_apikey_secret_revoked.ts'
 import { app as on_user_create } from '../../supabase/functions/_backend/triggers/on_user_create.ts'
 import { app as on_user_delete } from '../../supabase/functions/_backend/triggers/on_user_delete.ts'
 import { app as on_user_org_access } from '../../supabase/functions/_backend/triggers/on_user_org_access.ts'
@@ -97,7 +98,6 @@ import { app as on_version_delete } from '../../supabase/functions/_backend/trig
 import { app as on_version_update } from '../../supabase/functions/_backend/triggers/on_version_update.ts'
 import { app as pluginNotifications } from '../../supabase/functions/_backend/triggers/plugin_notifications.ts'
 import { app as queue_consumer } from '../../supabase/functions/_backend/triggers/queue_consumer.ts'
-import { app as send_email } from './triggers/send_email.ts'
 import { app as stripe_event } from '../../supabase/functions/_backend/triggers/stripe_event.ts'
 import { app as updates_cache_purge } from '../../supabase/functions/_backend/triggers/updates_cache_purge.ts'
 import { app as webhook_delivery } from '../../supabase/functions/_backend/triggers/webhook_delivery.ts'
@@ -106,6 +106,7 @@ import { BRES, createAllCatch, createHono } from '../../supabase/functions/_back
 import { processNativeNotificationQueueBatch } from '../../supabase/functions/_backend/utils/nativeNotificationSender.ts'
 import { flushQueuedPluginNotifications } from '../../supabase/functions/_backend/utils/plugin_notification_flush.ts'
 import { version } from '../../supabase/functions/_backend/utils/version.ts'
+import { app as send_email } from './triggers/send_email.ts'
 
 function getExecutionContext(c: Context): Context['executionCtx'] | undefined {
   try {
@@ -232,6 +233,7 @@ appTriggers.route('/on_organization_delete', on_organization_delete)
 appTriggers.route('/on_user_create', on_user_create)
 appTriggers.route('/on_user_update', on_user_update)
 appTriggers.route('/on_user_delete', on_user_delete)
+appTriggers.route('/on_shared_apikey_secret_revoked', on_shared_apikey_secret_revoked)
 appTriggers.route('/on_user_org_access', on_user_org_access)
 appTriggers.route('/on_version_create', on_version_create)
 appTriggers.route('/on_version_update', on_version_update)
