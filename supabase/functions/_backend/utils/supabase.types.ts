@@ -996,6 +996,7 @@ export type Database = {
           ios: boolean
           name: string
           owner_org: string
+          paused_at: string | null
           public: boolean
           rbac_id: string
           rollout_cache_ttl_seconds: number
@@ -1036,6 +1037,7 @@ export type Database = {
           ios?: boolean
           name: string
           owner_org: string
+          paused_at?: string | null
           public?: boolean
           rbac_id?: string
           rollout_cache_ttl_seconds?: number
@@ -1076,6 +1078,7 @@ export type Database = {
           ios?: boolean
           name?: string
           owner_org?: string
+          paused_at?: string | null
           public?: boolean
           rbac_id?: string
           rollout_cache_ttl_seconds?: number
@@ -2218,6 +2221,32 @@ export type Database = {
             foreignKeyName: "manifest_per_version_version_id_fkey"
             columns: ["version_id"]
             isOneToOne: true
+            referencedRelation: "app_versions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      manifest_trash_restore_pending: {
+        Row: {
+          app_version_id: number
+          created_at: string
+          s3_path: string
+        }
+        Insert: {
+          app_version_id: number
+          created_at?: string
+          s3_path: string
+        }
+        Update: {
+          app_version_id?: number
+          created_at?: string
+          s3_path?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "manifest_trash_restore_pending_app_version_id_fkey"
+            columns: ["app_version_id"]
+            isOneToOne: false
             referencedRelation: "app_versions"
             referencedColumns: ["id"]
           },
@@ -3585,6 +3614,48 @@ export type Database = {
           },
         ]
       }
+      updates_cache_purge_pending: {
+        Row: {
+          app_id: string
+          due_at: string
+          id: number
+          initial: boolean
+          lease_token: string | null
+          leased_until: string | null
+        }
+        Insert: {
+          app_id: string
+          due_at: string
+          id?: never
+          initial?: boolean
+          lease_token?: string | null
+          leased_until?: string | null
+        }
+        Update: {
+          app_id?: string
+          due_at?: string
+          id?: never
+          initial?: boolean
+          lease_token?: string | null
+          leased_until?: string | null
+        }
+        Relationships: []
+      }
+      updates_cache_purge_state: {
+        Row: {
+          id: boolean
+          last_claim_at: string
+        }
+        Insert: {
+          id?: boolean
+          last_claim_at?: string
+        }
+        Update: {
+          id?: boolean
+          last_claim_at?: string
+        }
+        Relationships: []
+      }
       usage_credit_consumptions: {
         Row: {
           applied_at: string
@@ -4374,10 +4445,7 @@ export type Database = {
         Args: { p_app_uuid: string }
         Returns: undefined
       }
-      claim_updates_cache_purge: {
-        Args: { p_limit?: number }
-        Returns: Json
-      }
+      claim_updates_cache_purge: { Args: { p_limit?: number }; Returns: Json }
       cleanup_audit_logs_bookkeeping_noise: {
         Args: {
           batch_size?: number
@@ -4507,6 +4575,10 @@ export type Database = {
       enqueue_app_onboarding_refreshes: {
         Args: { p_limit?: number }
         Returns: number
+      }
+      enqueue_cron_tick: {
+        Args: { payload: Json; queue_name: string }
+        Returns: undefined
       }
       exist_app: { Args: { appid: string }; Returns: boolean }
       exist_app_v2: { Args: { appid: string }; Returns: boolean }
@@ -5389,6 +5461,10 @@ export type Database = {
         Args: { p_legacy_steps?: Json }
         Returns: Json
       }
+      notify_updates_edge_cache_purge: {
+        Args: { p_app_ids: string[] }
+        Returns: undefined
+      }
       null_migrated_app_version_manifests: {
         Args: {
           batch_size?: number
@@ -5976,6 +6052,7 @@ export type Database = {
         Args: { p_email: string; p_new_role_name: string; p_org_id: string }
         Returns: string
       }
+      updates_cache_purge_enabled: { Args: never; Returns: boolean }
       upsert_version_meta: {
         Args: { p_app_id: string; p_size: number; p_version_id: number }
         Returns: boolean
@@ -6000,6 +6077,8 @@ export type Database = {
       verify_email_otp_auth: { Args: never; Returns: boolean }
       verify_getting_started: { Args: { p_app_id: string }; Returns: Json }
       verify_mfa: { Args: never; Returns: boolean }
+      wake_updates_cache_purge: { Args: never; Returns: undefined }
+      wake_updates_cache_purge_if_due: { Args: never; Returns: undefined }
     }
     Enums: {
       action_type: "mau" | "storage" | "bandwidth" | "build_time"
@@ -6113,6 +6192,7 @@ export type Database = {
         | "webview_dom_content_loaded"
         | "webview_page_loaded"
         | "app_nav"
+        | "channelPaused"
       stripe_status:
         | "created"
         | "succeeded"
@@ -6394,6 +6474,7 @@ export const Constants = {
         "webview_dom_content_loaded",
         "webview_page_loaded",
         "app_nav",
+        "channelPaused",
       ],
       stripe_status: [
         "created",
