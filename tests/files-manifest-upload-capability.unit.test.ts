@@ -154,6 +154,14 @@ describe('files manifest upload capabilities', () => {
     })
   })
 
+  it('advertises manifest upload only from the Cloudflare files backend', async () => {
+    const app = await createFilesApp()
+    const response = await app.fetch(new Request('http://localhost/files/config'), buildEnv(), { waitUntil: () => {} } as any)
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ manifestUpload: true })
+  })
+
   it('returns the shared prefix and opaque suffix and enforces the ten-minute lifetime', async () => {
     const { createManifestUploadCapability } = await import('../supabase/functions/_backend/utils/manifest_upload_capability.ts')
     const issuedAt = 1_790_956_800
