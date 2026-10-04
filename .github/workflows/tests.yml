@@ -45,13 +45,40 @@ env:
 jobs:
   should_run:
     runs-on: ubuntu-latest
-    permissions: {}
+    permissions:
+      pull-requests: read
     outputs:
       enabled: ${{ steps.check.outputs.enabled }}
     steps:
+      # A push to a branch with an open PR also triggers the pull_request run for the
+      # same commit. Running both doubled runner demand and left jobs queued for ~2 min,
+      # so the push run steps aside and the pull_request run covers the commit.
       - name: Enable test workflow for this event
         id: check
-        run: echo "enabled=true" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          BRANCH: ${{ github.ref_name }}
+          IS_FORK: ${{ github.event.repository.fork }}
+        run: |
+          enabled=true
+          if [ "$EVENT_NAME" = "push" ]; then
+            # PRs from a fork are listed on the upstream repository, not on the fork.
+            pr_repository="$REPOSITORY"
+            if [ "$IS_FORK" = "true" ]; then
+              pr_repository=$(gh api "repos/${REPOSITORY}" --jq '.parent.full_name // empty' || true)
+              pr_repository="${pr_repository:-$REPOSITORY}"
+            fi
+            # -f fields are URL-encoded, so branch names with &, # or + are matched exactly.
+            open_prs=$(gh api -X GET "repos/${pr_repository}/pulls" -f state=open -f "head=${OWNER}:${BRANCH}" --jq 'length' || echo 0)
+            if [ "${open_prs:-0}" -gt 0 ]; then
+              echo "Branch ${BRANCH} has an open pull request; its pull_request run tests this commit."
+              enabled=false
+            fi
+          fi
+          echo "enabled=${enabled}" >> "$GITHUB_OUTPUT"
 
   changes:
     needs: should_run
@@ -290,7 +317,9 @@ jobs:
       - name: Install dependencies
         run: bun install
       - name: Run unit tests
-        run: bun run test:unit
+        # Unit tests have no edge-function load, so use every runner core instead of the
+        # integration cap of 2 workers in vitest.config.ts.
+        run: bun run test:unit --maxWorkers=100%
 
   test_db:
     needs: changes
@@ -320,7 +349,7 @@ jobs:
         run: bash scripts/test-db-tinbase.sh
 
   test_backend:
-    needs: [changes, lint_typecheck, dead_code]
+    needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -383,16 +412,6 @@ jobs:
         run: bun scripts/supabase-worktree.ts stop --no-backup || true
       - name: Install dependencies
         run: bun install
-      - name: Install PostgreSQL 17 client
-        run: |
-          if command -v pg_dump-17 >/dev/null 2>&1 && command -v pg_restore-17 >/dev/null 2>&1 && command -v psql-17 >/dev/null 2>&1; then
-            exit 0
-          fi
-          sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/azure-cli.sources /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/microsoft-prod.sources
-          sudo apt-get update
-          sudo apt-get install -y ca-certificates postgresql-common
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y postgresql-client-17
       - name: Run Supabase Start
         run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
       - name: Export isolated Supabase endpoints
@@ -484,13 +503,16 @@ jobs:
               kill "${pid}" 2>/dev/null || true
             fi
           done
-          bun scripts/supabase-worktree.ts stop --no-backup || true
+          # GitHub-hosted runners are discarded after the job; stopping Docker only adds ~18s.
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            bun scripts/supabase-worktree.ts stop --no-backup || true
+          fi
 
 
   # Serial plugin hot-path suite against Supabase edge (/updates, /stats, /channel_self).
   # Kept off the 6-way backend shard matrix — parallel Deno load causes intermittent 502s.
   test_backend_plugin:
-    needs: [changes, lint_typecheck, dead_code]
+    needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -595,12 +617,15 @@ jobs:
               kill "${pid}" 2>/dev/null || true
             fi
           done
-          bun scripts/supabase-worktree.ts stop --no-backup || true
+          # GitHub-hosted runners are discarded after the job; stopping Docker only adds ~18s.
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            bun scripts/supabase-worktree.ts stop --no-backup || true
+          fi
 
 
   # Keep SQL/schema checks split so each job stays focused after a cold Supabase start.
   test_backend_sql:
-    needs: [changes, lint_typecheck, dead_code]
+    needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -666,11 +691,11 @@ jobs:
       - name: Lint SQL
         run: bun scripts/supabase-worktree.ts db lint -s public --fail-on warning
       - name: Stop this job's Supabase stack
-        if: always()
+        if: always() && runner.environment != 'github-hosted'
         run: bun scripts/supabase-worktree.ts stop --no-backup || true
 
   test_backend_sql_catalog:
-    needs: [changes, lint_typecheck, dead_code]
+    needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -738,11 +763,14 @@ jobs:
               kill "${pid}" 2>/dev/null || true
             fi
           done
-          bun scripts/supabase-worktree.ts stop --no-backup || true
+          # GitHub-hosted runners are discarded after the job; stopping Docker only adds ~18s.
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            bun scripts/supabase-worktree.ts stop --no-backup || true
+          fi
 
 
   test_cloudflare:
-    needs: [changes, lint_typecheck, dead_code]
+    needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -880,12 +908,15 @@ jobs:
               kill "${pid}" 2>/dev/null || true
             fi
           done
-          bun scripts/supabase-worktree.ts stop --no-backup || true
+          # GitHub-hosted runners are discarded after the job; stopping Docker only adds ~18s.
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            bun scripts/supabase-worktree.ts stop --no-backup || true
+          fi
 
   # Serial plugin hot-path suite (/updates, /stats, /channel_self). Kept off the
   # 8-way CF shard matrix because parallel workerd load causes intermittent 503s.
   test_cloudflare_plugin:
-    needs: [changes, lint_typecheck, dead_code]
+    needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -996,10 +1027,13 @@ jobs:
               kill "${pid}" 2>/dev/null || true
             fi
           done
-          bun scripts/supabase-worktree.ts stop --no-backup || true
+          # GitHub-hosted runners are discarded after the job; stopping Docker only adds ~18s.
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            bun scripts/supabase-worktree.ts stop --no-backup || true
+          fi
 
   test_playwright:
-    needs: [changes, lint_typecheck, dead_code]
+    needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1014,10 +1048,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - shard: 1/2
+          - shard: 1/3
             supabase_port_offset: 5000
-          - shard: 2/2
+          - shard: 2/3
             supabase_port_offset: 5100
+          - shard: 3/3
+            supabase_port_offset: 5200
     env:
       SUPABASE_WORKTREE_INSTANCE: playwright-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
       SUPABASE_WORKTREE_PORT_OFFSET: ${{ matrix.supabase_port_offset }}
@@ -1082,13 +1118,9 @@ jobs:
             bun run backend:playwright" \
             > "${RUNNER_TEMP}/playwright-backend.log" 2>&1 &
           echo "backend_pid=$!" >> "$GITHUB_OUTPUT"
-          # The backend boots Supabase via the worktree wrapper (hash-derived ports). Plain status
-          # flips to exit-0 before API_URL is populated, so probe with-env itself: only start the
-          # build once the exact mechanism the real command uses can resolve the Supabase env.
-          nohup bash -c 'echo "waiting for supabase env via with-env..."
-            until bun run supabase:with-env -- bun -e "process.exit(process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY ? 0 : 1)" >/dev/null 2>&1; do sleep 2; done
-            echo "supabase env ready, building frontend"
-            bun run supabase:with-env -- bun scripts/playwright-frontend-preview.ts' \
+          # The frontend only needs the deterministic worktree API URL and local publishable key,
+          # so build it while Supabase starts instead of waiting ~70s for the backend first.
+          nohup bun scripts/playwright-frontend-preview.ts \
             > "${RUNNER_TEMP}/playwright-frontend.log" 2>&1 &
           echo "frontend_pid=$!" >> "$GITHUB_OUTPUT"
       # On cache hit nothing is installed: ubuntu-latest already ships Chromium's
@@ -1112,7 +1144,12 @@ jobs:
           # Host-side specs must hit localhost; backend uses host.docker.internal.
           STRIPE_EMULATOR_PORT: ${{ steps.start_playwright_services.outputs.stripe_port }}
           STRIPE_API_BASE_URL: http://localhost:${{ steps.start_playwright_services.outputs.stripe_port }}
-        run: bunx playwright test --shard=${{ matrix.shard }}
+        # Shards are balanced by measured spec duration (playwright/spec-durations.json);
+        # Playwright --shard splits by test count and left one shard twice as long.
+        run: |
+          specs="$(bun scripts/playwright-shard-files.ts ${{ matrix.shard }})"
+          echo "Shard ${{ matrix.shard }}: ${specs}"
+          bunx playwright test ${specs}
       - name: Show Playwright service logs after failure
         if: failure()
         run: |
@@ -1129,7 +1166,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: playwright-background-service-logs
+          name: playwright-background-service-logs-${{ strategy.job-index }}
           path: |
             ${{ runner.temp }}/playwright-stripe-emulator.log
             ${{ runner.temp }}/playwright-backend.log
@@ -1140,7 +1177,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v6 # v6
         with:
-          name: playwright-artifacts
+          name: playwright-artifacts-${{ strategy.job-index }}
           path: |
             playwright-report/
             test-results/
@@ -1154,7 +1191,10 @@ jobs:
               kill "${pid}" 2>/dev/null || true
             fi
           done
-          bun scripts/supabase-worktree.ts stop --no-backup || true
+          # GitHub-hosted runners are discarded after the job; stopping Docker only adds ~18s.
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            bun scripts/supabase-worktree.ts stop --no-backup || true
+          fi
 
   cli_node_compatibility:
     needs: changes
@@ -1262,8 +1302,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/setup-bun.ps1
-      - name: Install dependencies
-        run: bun install
+      # Only the CLI workspace is built here; the full monorepo install took 2-3 minutes on Windows.
+      - name: Install CLI dependencies
+        run: bun install --filter ./cli
       - name: Install test_upload dependencies
         run: bun install --cwd cli/test/test_upload
       - name: Build CLI
@@ -1388,10 +1429,17 @@ jobs:
         run: ls -lh
       - name: Check file size of Linux build
         run: ls -lh build-linux.zip
-      - name: Setup Swift
-        uses: swift-actions/setup-swift@v3 # v3
-      - name: Get swift version
-        run: swift --version
+      # macos-latest ships Xcode's Swift toolchain; downloading another one took ~80s.
+      - id: swift_version
+        name: Get swift version
+        run: |
+          swift --version
+          echo "hash=$(swift --version 2>&1 | shasum -a 256 | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - name: Cache Swift test build
+        uses: actions/cache@v5 # v5
+        with:
+          path: cli/test/test_zip_swift/.build
+          key: swift-zip-test-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift_version.outputs.hash }}-${{ hashFiles('cli/test/test_zip_swift/Package.swift', 'cli/test/test_zip_swift/Package.resolved', 'cli/test/test_zip_swift/Sources/**') }}
       - name: Compile test executable
         run: swift build -c release
         working-directory: ./cli/test/test_zip_swift
@@ -1443,10 +1491,10 @@ jobs:
         run: bun run --cwd cli test:esm-sdk
       - name: Run CLI help
         run: node cli/dist/index.js --help
-      - name: Setup test fixtures for version detection
-        run: ./cli/test/fixtures/setup-test-projects.sh
+      # test:run reuses the build above, sets up the version-detection fixtures, and
+      # runs the independent test scripts in parallel (one per CPU).
       - name: Run CLI validation tests
-        run: bun run cli:test
+        run: bun run --cwd cli test:run
 
   cli_capgo_integration:
     needs: changes
@@ -1536,7 +1584,10 @@ jobs:
               kill "${pid}" 2>/dev/null || true
             fi
           done
-          bun scripts/supabase-worktree.ts stop --no-backup || true
+          # GitHub-hosted runners are discarded after the job; stopping Docker only adds ~18s.
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            bun scripts/supabase-worktree.ts stop --no-backup || true
+          fi
 
   published_cli_contract:
     needs: changes
@@ -1559,8 +1610,10 @@ jobs:
           node-version: 24.x
       - name: Checkout repository
         uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
+      # Full history took ~3.5 minutes. The contract only needs the cli-* tags and
+      # their cli/src blobs, which git fetches lazily from this blob-less tag fetch.
+      - name: Fetch published CLI tags
+        run: git fetch --no-tags --depth=1 --filter=blob:none origin '+refs/tags/cli-*:refs/tags/cli-*'
       - name: Cache Deno dependencies
         uses: actions/cache@v5 # v5
         with:
@@ -1621,4 +1674,7 @@ jobs:
               kill "${pid}" 2>/dev/null || true
             fi
           done
-          bun scripts/supabase-worktree.ts stop --no-backup || true
+          # GitHub-hosted runners are discarded after the job; stopping Docker only adds ~18s.
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            bun scripts/supabase-worktree.ts stop --no-backup || true
+          fi

@@ -652,6 +652,7 @@ function getSchemaUpdatesAlias(includeMetadata = false) {
     rollout_paused_at: channelAlias.rollout_paused_at,
     rollout_pause_reason: channelAlias.rollout_pause_reason,
     rollout_cache_ttl_seconds: channelAlias.rollout_cache_ttl_seconds,
+    paused_at: channelAlias.paused_at,
   }
   const manifestSelect = sql<{ file_name: string, file_hash: string, s3_path: string }[]>`COALESCE(json_agg(
         json_build_object(
