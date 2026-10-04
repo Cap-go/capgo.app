@@ -205,7 +205,7 @@ describe('updates edge cache', () => {
     expect(load).toHaveBeenCalledTimes(1)
     expect(missing).toHaveBeenCalledTimes(1)
     const entries = [...store.values()]
-    expect(entries.map(entry => entry.headers.get('Cache-Tag'))).toEqual(['capgo-updates-com.example.app:versions', 'capgo-updates-com.example.app:versions'])
+    expect(entries.map(entry => entry.headers.get('Cache-Tag'))).toEqual(['capgo-updates-com.example.app:versions,capgo-updates-com.example.app', 'capgo-updates-com.example.app:versions,capgo-updates-com.example.app'])
     expect(entries.map(entry => entry.headers.get('Cache-Control'))).toEqual(['public, s-maxage=3600', 'public, s-maxage=60'])
   })
 
@@ -224,7 +224,7 @@ describe('updates edge cache', () => {
     expect(new Set([...store.values()].map(entry => entry.headers.get('Cache-Tag')))).toEqual(new Set(['capgo-updates-com.example.app', 'capgo-updates-com.other.app']))
   })
 
-  it('purging one tag of an app keeps the entries of its other tag', async () => {
+  it('a versions purge keeps the main entries; an app purge also evicts bundle lookups', async () => {
     const { store } = stubCaches()
     const c = makeContext({ ENV_NAME: 'capgo_plugin-local' })
     const owner = vi.fn().mockResolvedValue({ owner_org: 'org-1' })
@@ -240,10 +240,13 @@ describe('updates edge cache', () => {
     await getCachedAppVersion(c, 'com.scope.app', '1.0.0', version)
     expect(version).toHaveBeenCalledTimes(2)
 
-    // A channel or plan change (app scope) leaves bundle-name lookups alone.
-    await expect(purgeLocalTaggedKeys([updatesAppCacheTag('com.scope.app')])).resolves.toBe(1)
+    // An app-scope purge (or one from a drain that predates the versions
+    // scope and always purges the main tag) evicts bundle lookups too.
+    await expect(purgeLocalTaggedKeys([updatesAppCacheTag('com.scope.app')])).resolves.toBe(2)
     await getCachedAppVersion(c, 'com.scope.app', '1.0.0', version)
-    expect(version).toHaveBeenCalledTimes(2)
+    expect(version).toHaveBeenCalledTimes(3)
+    await getCachedAppOwner(c, 'com.scope.app', 'mau', owner)
+    expect(owner).toHaveBeenCalledTimes(2)
   })
 
   it('local purge deletes every entry of the tag', async () => {

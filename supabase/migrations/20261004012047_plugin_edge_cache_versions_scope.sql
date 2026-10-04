@@ -13,10 +13,18 @@
 --
 -- Also adds channels.owner_org to the compared channel columns: channel
 -- lookups cached for /channel_self return it (legacy override writes use it).
+-- Keeps channels.paused_at from 20261002150000_channel_pause_updates.
 --
--- Rolling deploy: a worker that predates this migration ignores `scope` and
--- purges the main tag for a versions row (an over-purge); a worker deployed
--- before this migration sees no `scope` and treats every row as 'app'.
+-- Deploy order (build_and_deploy applies migrations before workers, and the
+-- API and plugin workers deploy in parallel):
+-- - this SQL + old API worker: the old drain ignores `scope` and purges the
+--   main tag for a versions row. Bundle-name entries also carry the main tag,
+--   so that purge still evicts them (an over-purge, never a missed one);
+-- - this SQL + old plugin worker: no bundle-name entries exist yet;
+-- - claims return `scope` as an extra field and ack keeps its signature, so
+--   old workers keep working unchanged.
+-- Workers must not ship before this migration: the old trigger does not queue
+-- app_versions inserts or unserved-bundle renames.
 
 ALTER TABLE public.updates_cache_purge_pending
   ADD COLUMN scope text NOT NULL DEFAULT 'app'
@@ -197,14 +205,14 @@ BEGIN
                o.allow_device, o.allow_dev, o.allow_prod, o.disable_auto_update_under_native,
                o.disable_auto_update, o.ios, o.android, o.electron, o.update_package,
                o.rollout_version, o.rollout_percentage_bps, o.rollout_enabled, o.rollout_id,
-               o.rollout_paused_at, o.rollout_pause_reason, o.rollout_cache_ttl_seconds,
+               o.rollout_paused_at, o.rollout_pause_reason, o.rollout_cache_ttl_seconds, o.paused_at,
                o.owner_org)
           IS DISTINCT FROM
               (n.app_id, n.name, n.version, n.public, n.allow_device_self_set, n.allow_emulator,
                n.allow_device, n.allow_dev, n.allow_prod, n.disable_auto_update_under_native,
                n.disable_auto_update, n.ios, n.android, n.electron, n.update_package,
                n.rollout_version, n.rollout_percentage_bps, n.rollout_enabled, n.rollout_id,
-               n.rollout_paused_at, n.rollout_pause_reason, n.rollout_cache_ttl_seconds,
+               n.rollout_paused_at, n.rollout_pause_reason, n.rollout_cache_ttl_seconds, n.paused_at,
                n.owner_org)
         UNION
         SELECT n.app_id::text FROM old_rows o JOIN new_rows n ON n.id = o.id
@@ -292,6 +300,8 @@ BEGIN
       JOIN public.orgs org ON org.customer_id = s.customer_id
       JOIN public.apps a ON a.owner_org = org.id;
     ELSE
+      -- storage_exceeded is left out on purpose: plugin plan checks only use
+      -- the mau and bandwidth actions (see buildPlanValidationExpression).
       SELECT pg_catalog.array_agg(DISTINCT a.app_id::text) INTO app_ids
       FROM old_rows o
       JOIN new_rows n ON n.customer_id = o.customer_id

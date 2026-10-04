@@ -101,6 +101,11 @@ describe('updates cache purge scopes', () => {
       await clearPending()
       await client.query(`UPDATE public.channels SET allow_device_self_set = NOT allow_device_self_set WHERE app_id = $1 AND name = 'production'`, [APP_ID])
       expect(await pending()).toEqual(['app'])
+
+      // Channel pause (20261002150000) stays in the compared columns.
+      await clearPending()
+      await client.query(`UPDATE public.channels SET paused_at = now() WHERE app_id = $1 AND name = 'production'`, [APP_ID])
+      expect(await pending()).toEqual(['app'])
     })
   })
 

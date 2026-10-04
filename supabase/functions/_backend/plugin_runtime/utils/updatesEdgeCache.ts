@@ -132,7 +132,7 @@ export interface EdgeCacheLookup<T> {
 
 async function cachedLookup<T>(
   c: Context,
-  tag: string,
+  tags: string[],
   path: string,
   params: Record<string, string>,
   load: () => Promise<T | null | undefined>,
@@ -153,7 +153,7 @@ async function cachedLookup<T>(
   if (cap !== undefined)
     ttl = Math.max(1, Math.min(ttl, cap))
   await backgroundTask(c, helper.putJson(request, { v: value } satisfies CachedValue<T>, ttl, {
-    tags: [tag],
+    tags,
     timeoutMs: UPDATES_EDGE_CACHE_PUT_TIMEOUT_MS,
   }))
   return { value, hit: false }
@@ -177,7 +177,7 @@ export function planValidityTtlCapSeconds(owner: { plan_valid?: boolean, plan_tr
 }
 
 export function getCachedAppOwner<T extends { plan_valid?: boolean, plan_trial_at?: string | null }>(c: Context, appId: string, planKey: string, load: () => Promise<T | null>) {
-  return cachedLookup(c, updatesAppCacheTag(appId), OWNER_CACHE_PATH, { app_id: appId, plan: planKey }, load, planValidityTtlCapSeconds)
+  return cachedLookup(c, [updatesAppCacheTag(appId)], OWNER_CACHE_PATH, { app_id: appId, plan: planKey }, load, planValidityTtlCapSeconds)
 }
 
 export interface UpdatesChannelCacheKey {
@@ -189,7 +189,7 @@ export interface UpdatesChannelCacheKey {
 }
 
 export function getCachedDefaultChannel<T>(c: Context, key: UpdatesChannelCacheKey, load: () => Promise<T | null | undefined>) {
-  return cachedLookup(c, updatesAppCacheTag(key.appId), CHANNEL_CACHE_PATH, {
+  return cachedLookup(c, [updatesAppCacheTag(key.appId)], CHANNEL_CACHE_PATH, {
     app_id: key.appId,
     platform: key.platform,
     channel: key.defaultChannel,
@@ -205,14 +205,17 @@ export function getCachedDefaultChannel<T>(c: Context, key: UpdatesChannelCacheK
  * on any change of the compared channel columns.
  */
 export function getCachedChannelLookup<T>(c: Context, appId: string, lookup: string, params: Record<string, string>, load: () => Promise<T | null | undefined>) {
-  return cachedLookup(c, updatesAppCacheTag(appId), CHANNEL_LOOKUP_CACHE_PATH, { ...params, app_id: appId, lookup }, load)
+  return cachedLookup(c, [updatesAppCacheTag(appId)], CHANNEL_LOOKUP_CACHE_PATH, { ...params, app_id: appId, lookup }, load)
 }
 
 /**
  * Bundle by name (id + owner_org, deleted rows included). Carries the app's
  * versions tag: app_versions INSERT / DELETE / rename / move purge it whether
  * or not a channel serves the bundle, without evicting the app's main tag.
+ * It also carries the main tag, so any app purge (including one from a purge
+ * worker that predates the versions scope) evicts it too: an over-purge of a
+ * cheap entry, never a missed one.
  */
 export function getCachedAppVersion<T>(c: Context, appId: string, versionName: string, load: () => Promise<T | null | undefined>) {
-  return cachedLookup(c, updatesVersionsCacheTag(appId), VERSION_CACHE_PATH, { app_id: appId, name: versionName }, load)
+  return cachedLookup(c, [updatesVersionsCacheTag(appId), updatesAppCacheTag(appId)], VERSION_CACHE_PATH, { app_id: appId, name: versionName }, load)
 }
