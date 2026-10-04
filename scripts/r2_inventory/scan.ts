@@ -222,15 +222,36 @@ export async function collectInventoryTombstones(db: ClientBase, bucket: string,
     // the floor and deleting expired history are one transaction.
     await db.query(`UPDATE public.r2_inventory_checkpoints SET accepted_event_floor = greatest(accepted_event_floor, now() - $2::int * interval '1 day')
       WHERE bucket_name = $1 AND job_name = 'admission' AND partition_key = ''`, [bucket, config.tombstoneDays])
-    const deleted = await db.query(`WITH candidates AS (
-      SELECT object.bucket_name, object.r2_key FROM public.r2_objects AS object
+    const identity = [bucket, `gc:${job}`]
+    await db.query(`INSERT INTO public.r2_inventory_checkpoints (bucket_name, job_name) VALUES ($1, $2) ON CONFLICT DO NOTHING`, identity)
+    const progress = await db.query<{ checkpoint: { cursor?: { expiresAt: string, key: string } } }>(`SELECT checkpoint FROM public.r2_inventory_checkpoints
+      WHERE bucket_name = $1 AND job_name = $2 AND partition_key = '' FOR UPDATE`, identity)
+    const cursor = progress.rows[0].checkpoint.cursor
+    if (cursor) {
+      if (typeof cursor.key !== 'string' || byteLength(cursor.key) < 1 || byteLength(cursor.key) > 1024 || cursor.key.includes('\0'))
+        throw new Error('Invalid persisted tombstone cursor')
+      timestampUs(cursor.expiresAt)
+    }
+    const result = await db.query<{ deleted: number, cursor: { expiresAt: string, key: string } | null }>(`WITH candidates AS MATERIALIZED (
+      SELECT object.bucket_name, object.r2_key, object.tombstone_expires_at FROM public.r2_objects AS object
       WHERE object.bucket_name = $1 AND object.r2_state = 'deleted' AND object.tombstone_expires_at < now()
+      ${cursor ? 'AND (object.tombstone_expires_at, object.r2_key) > ($2::timestamptz, $3::text COLLATE "C")' : ''}
       ORDER BY object.tombstone_expires_at, object.r2_key LIMIT 1000 FOR UPDATE OF object SKIP LOCKED
-    ) DELETE FROM public.r2_objects AS target USING candidates, public.r2_inventory_checkpoints AS admission
+    ), removed AS (
+      DELETE FROM public.r2_objects AS target USING candidates, public.r2_inventory_checkpoints AS admission
       WHERE target.bucket_name = candidates.bucket_name AND target.r2_key = candidates.r2_key
       AND admission.bucket_name = target.bucket_name AND admission.job_name = 'admission' AND admission.partition_key = ''
       AND (target.last_event_at IS NULL OR target.last_event_at < admission.accepted_event_floor)
-      AND (target.last_reconciled_at IS NULL OR target.last_reconciled_at < admission.accepted_event_floor)`, [bucket])
-    return deleted.rowCount ?? 0
+      AND (target.last_reconciled_at IS NULL OR target.last_reconciled_at < admission.accepted_event_floor)
+      RETURNING 1
+    ) SELECT (SELECT count(*)::int FROM removed) AS deleted,
+      (SELECT jsonb_build_object('expiresAt', to_char(tombstone_expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), 'key', r2_key)
+       FROM candidates ORDER BY tombstone_expires_at DESC, r2_key DESC LIMIT 1) AS cursor`, cursor ? [bucket, cursor.expiresAt, cursor.key] : [bucket])
+    const next = result.rows[0]
+    // Advance even when all candidates are admission-protected. An empty page
+    // wraps to the beginning so protected or concurrently locked rows are revisited.
+    await db.query(`UPDATE public.r2_inventory_checkpoints SET checkpoint = $3::jsonb
+      WHERE bucket_name = $1 AND job_name = $2 AND partition_key = ''`, [...identity, JSON.stringify(next.cursor ? { cursor: next.cursor } : {})])
+    return next.deleted
   })
 }

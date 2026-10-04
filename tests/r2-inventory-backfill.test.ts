@@ -126,6 +126,21 @@ describe('resumable inventory scans', () => {
     const rows = (await db.query('SELECT r2_key, r2_state, size_bytes FROM public.r2_objects WHERE bucket_name = $1 ORDER BY r2_key', [options.bucket])).rows
     expect(rows).toEqual([{ r2_key: 'a', r2_state: 'deleted', size_bytes: null }, { r2_key: 'b', r2_state: 'present', size_bytes: '42' }, { r2_key: 'z', r2_state: 'present', size_bytes: '999' }])
   }))
+  it.concurrent('advances GC beyond a protected prefix and revisits it after wrapping', () => fixture(async (db, options) => {
+    await commitBackfillPage(db, options, { ...EMPTY_PROGRESS }, { objects: [], truncated: false }, new Date().toISOString())
+    options.mode = 'reconcile'
+    await scanInventory(db, async () => ({ objects: [], truncated: false }), options, config)
+    await db.query(`INSERT INTO public.r2_objects (bucket_name, r2_key, r2_state, last_event_at, tombstone_expires_at)
+      SELECT $1, CASE WHEN i <= 1000 THEN 'protected-' || lpad(i::text, 4, '0') ELSE 'z-eligible' END, 'deleted',
+        CASE WHEN i <= 1000 THEN now() ELSE now() - interval '10 days' END, now() - interval '1 day'
+      FROM generate_series(1, 1001) AS i`, [options.bucket])
+    expect(await collectInventoryTombstones(db, options.bucket, options.job, config)).toBe(0)
+    expect(await collectInventoryTombstones(db, options.bucket, options.job, config)).toBe(1)
+    expect((await db.query('SELECT count(*)::int AS count FROM public.r2_objects WHERE bucket_name = $1', [options.bucket])).rows[0].count).toBe(1000)
+    expect(await collectInventoryTombstones(db, options.bucket, options.job, config)).toBe(0)
+    await db.query(`UPDATE public.r2_objects SET last_event_at = now() - interval '10 days' WHERE bucket_name = $1`, [options.bucket])
+    expect(await collectInventoryTombstones(db, options.bucket, options.job, config)).toBe(1000)
+  }))
   it.concurrent('requires complete validation before collecting tombstones and rejects old replay after history is purged', () => fixture(async (db, options) => {
     await expect(collectInventoryTombstones(db, options.bucket, options.job, config)).rejects.toThrow('requires completed')
     for (const mode of ['backfill', 'reconcile']) {
