@@ -15,13 +15,15 @@ import { invalidIpInfo } from '../utils/invalids_ip.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { sendNotifOrgCached } from '../utils/notifications.ts'
 import { sendNotifToOrgMembersCached } from '../utils/org_email_notifications.ts'
-import { closeClient, deleteChannelDevicePg, getAppByIdPg, getAppOwnerPostgres, getChannelByIdPg, getChannelByNamePg, getChannelDeviceOverridePg, getChannelsPg, getCompatibleChannelsPg, getDrizzleClient, getMainChannelsPg, getPgClient, setReplicationLagHeader, upsertChannelDevicePg } from '../utils/pg.ts'
+import { closeClient, createLazyPgClient, deleteChannelDevicePg, getAppByIdPg, getAppOwnerPostgres, getChannelByIdPg, getChannelByNamePg, getChannelDeviceOverridePg, getChannelsPg, getCompatibleChannelsPg, getDatabaseURL, getDrizzleClient, getLazyPgQueryCount, getMainChannelsPg, getPgClient, refreshReplicationLag, setReplicationLagHeader, upsertChannelDevicePg } from '../utils/pg.ts'
 import { convertQueryToBody, makeDevice, parsePluginBody } from '../utils/plugin_parser.ts'
 import { sendStatsAndDevice } from '../utils/plugin_stats.ts'
 import { channelSelfGetRequestSchema, channelSelfRequestSchema, isDevicePlatform } from '../utils/plugin_validation.ts'
+import { getAppOwnerWithEdgeCache, getChannelByNameWithEdgeCache, getCompatibleChannelsWithEdgeCache } from '../utils/pluginEdgeCacheReads.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
 import { buildRateLimitInfo, onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
 import { logSkippedSupabaseWrite, shouldSkipChannelSelfPostgresFallback } from '../utils/supabase_write_guard.ts'
+import { shouldUseUpdatesEdgeCache } from '../utils/updatesEdgeCache.ts'
 import { backgroundTask, isDeprecatedPluginVersion, isLimited } from '../utils/utils.ts'
 
 // Minimum versions for local channel storage behavior
@@ -290,6 +292,7 @@ async function prepareChannelSelfDeviceRequest(
   body: DeviceLink,
   operationLabel: string,
   cachedAppStatus: AppStatusResult,
+  edgeCache = false,
 ): Promise<{ response: Response } | { appOwner: NonNullable<AppOwnerResult>, device: ReturnType<typeof makeDevice> }> {
   const { app_id, device_id } = body
   const cachedLimit = await assertChannelSelfCachedStatus(c, cachedAppStatus, app_id, makeDevice(body, cachedAppStatus.allow_device_custom_id), operationLabel.toLowerCase())
@@ -297,7 +300,9 @@ async function prepareChannelSelfDeviceRequest(
     return { response: cachedLimit }
   }
 
-  const appOwner = await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
+  const appOwner = edgeCache
+    ? (await getAppOwnerWithEdgeCache(c, app_id, drizzleClient, PLAN_MAU_ACTIONS)).value
+    : await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
   const device = makeDevice(body, appOwner?.allow_device_custom_id)
   const blockProviderInfraRequests = appOwner?.block_provider_infra_requests ?? cachedAppStatus.block_provider_infra_requests
   const blocked = await blockProviderInfrastructure(c, operationLabel, blockProviderInfraRequests)
@@ -311,11 +316,11 @@ async function prepareChannelSelfDeviceRequest(
 
   return { appOwner: ownerRes.appOwner, device }
 }
-async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient>, body: DeviceLink, cachedAppStatus: AppStatusResult): Promise<Response> {
+async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient>, body: DeviceLink, cachedAppStatus: AppStatusResult, edgeCache = false): Promise<Response> {
   const { app_id, device_id, channel } = body
   cloudlog({ requestId: c.get('requestId'), message: 'post channel self body', app_id, device_id, channel })
 
-  const requestContext = await prepareChannelSelfDeviceRequest(c, drizzleClient, body, 'POST', cachedAppStatus)
+  const requestContext = await prepareChannelSelfDeviceRequest(c, drizzleClient, body, 'POST', cachedAppStatus, edgeCache)
   if ('response' in requestContext) {
     return requestContext.response
   }
@@ -349,7 +354,9 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
   }
   // if channel set channel_override to it
   // get channel by name - Read operation can use v2 flag
-  const dataChannel = await getChannelByNamePg(c, app_id, channel, drizzleClient as ReturnType<typeof getDrizzleClient>)
+  const dataChannel = edgeCache
+    ? await getChannelByNameWithEdgeCache(c, app_id, channel, drizzleClient)
+    : await getChannelByNamePg(c, app_id, channel, drizzleClient as ReturnType<typeof getDrizzleClient>)
 
   if (!dataChannel) {
     return simpleError200(c, 'channel_not_found', `Cannot find channel`, { channel, app_id })
@@ -448,11 +455,11 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
   return c.json(BRES)
 }
 
-async function put(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient>, body: DeviceLink, cachedAppStatus: AppStatusResult): Promise<Response> {
+async function put(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient>, body: DeviceLink, cachedAppStatus: AppStatusResult, edgeCache = false): Promise<Response> {
   const { app_id, defaultChannel, device_id } = body
   cloudlog({ requestId: c.get('requestId'), message: 'put channel self body', app_id, device_id, channel: body.channel, defaultChannel })
 
-  const requestContext = await prepareChannelSelfDeviceRequest(c, drizzleClient, body, 'PUT', cachedAppStatus)
+  const requestContext = await prepareChannelSelfDeviceRequest(c, drizzleClient, body, 'PUT', cachedAppStatus, edgeCache)
   if ('response' in requestContext) {
     return requestContext.response
   }
@@ -521,7 +528,7 @@ async function put(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient
   })
 }
 
-async function deleteOverride(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient>, body: DeviceLink, cachedAppStatus: AppStatusResult): Promise<Response> {
+async function deleteOverride(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient>, body: DeviceLink, cachedAppStatus: AppStatusResult, edgeCache = false): Promise<Response> {
   const {
     app_id,
     device_id,
@@ -529,7 +536,7 @@ async function deleteOverride(c: Context, drizzleClient: ReturnType<typeof getDr
   } = body
   cloudlog({ requestId: c.get('requestId'), message: 'delete channel self body', app_id, device_id, version_build })
 
-  const requestContext = await prepareChannelSelfDeviceRequest(c, drizzleClient, body, 'DELETE', cachedAppStatus)
+  const requestContext = await prepareChannelSelfDeviceRequest(c, drizzleClient, body, 'DELETE', cachedAppStatus, edgeCache)
   if ('response' in requestContext) {
     return requestContext.response
   }
@@ -586,15 +593,17 @@ async function deleteOverride(c: Context, drizzleClient: ReturnType<typeof getDr
   return c.json(BRES)
 }
 
-async function listCompatibleChannels(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient>, body: DeviceLink, cachedAppStatus: AppStatusResult): Promise<Response> {
+async function listCompatibleChannels(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient>, body: DeviceLink, cachedAppStatus: AppStatusResult, edgeCache = false): Promise<Response> {
   const { app_id, platform, is_emulator, is_prod } = body
   const cachedLimit = await assertChannelSelfCachedStatus(c, cachedAppStatus, app_id, makeDevice(body, cachedAppStatus.allow_device_custom_id), 'list')
   if (cachedLimit) {
     return cachedLimit
   }
 
+  // With the edge cache, the cached owner answers both the existence check and the owner lookup.
+  const cachedOwner = edgeCache ? (await getAppOwnerWithEdgeCache(c, app_id, drizzleClient, PLAN_MAU_ACTIONS)).value : null
   // First check if app exists - Read operation can use v2 flag
-  const appExists = await getAppByIdPg(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
+  const appExists = edgeCache ? cachedOwner : await getAppByIdPg(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
 
   if (!appExists) {
     const blocked = await blockProviderInfrastructure(c, 'GET', true)
@@ -604,7 +613,7 @@ async function listCompatibleChannels(c: Context, drizzleClient: ReturnType<type
     // App doesn't exist in database - normalize response to avoid oracle
     return onPremiseAppResponse(c)
   }
-  const appOwner = await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
+  const appOwner = edgeCache ? cachedOwner : await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
   const device = makeDevice(body, appOwner?.allow_device_custom_id)
   const blockProviderInfraRequests = appOwner?.block_provider_infra_requests ?? cachedAppStatus.block_provider_infra_requests
   const blocked = await blockProviderInfrastructure(c, 'GET', blockProviderInfraRequests)
@@ -617,7 +626,9 @@ async function listCompatibleChannels(c: Context, drizzleClient: ReturnType<type
   }
 
   // Channels compatible with platform/device/build AND (public OR allow_device_self_set)
-  const channels = await getCompatibleChannelsPg(c, app_id, platform as 'ios' | 'android' | 'electron', is_emulator!, is_prod!, drizzleClient as ReturnType<typeof getDrizzleClient>)
+  const channels = edgeCache
+    ? await getCompatibleChannelsWithEdgeCache(c, app_id, platform as 'ios' | 'android' | 'electron', is_emulator!, is_prod!, drizzleClient)
+    : await getCompatibleChannelsPg(c, app_id, platform as 'ios' | 'android' | 'electron', is_emulator!, is_prod!, drizzleClient as ReturnType<typeof getDrizzleClient>)
 
   if (!channels || channels.length === 0) {
     return c.json([])
@@ -688,12 +699,58 @@ async function runChannelSelfWithPgClient(
   }
 }
 
+/**
+ * Read-replica /channel_self with the edge cache on (same UPDATES_EDGE_CACHE
+ * gate and device sampling as /updates): the client connects on its first
+ * query only, so a request answered from cached app-level reads opens no
+ * database connection. `X-Updates-Cache` reports hit (zero queries) or miss.
+ */
+async function runChannelSelfWithLazyPgClient(
+  c: Context,
+  run: (drizzleClient: ReturnType<typeof getDrizzleClient>) => Promise<Response>,
+  record: () => Promise<void>,
+) {
+  const lazyClient = createLazyPgClient(c, true)
+  let closeInBackground = false
+  try {
+    // Pick the replica now (no connection) so the lag lookup uses its cache key.
+    try {
+      getDatabaseURL(c, true)
+    }
+    catch {
+      // No usable replica: the first query reports it.
+    }
+    // Memory-only lag header: a cache hit must not trigger a background probe.
+    await setReplicationLagHeader(c, lazyClient.client, { probeOnMiss: false })
+    const response = await run(getDrizzleClient(lazyClient.client, { logger: false }))
+    const dbQueries = getLazyPgQueryCount(c)
+    if (lazyClient.isConnected()) {
+      // Probe lag only on requests that already use the database, then close.
+      closeInBackground = true
+      await backgroundTask(c, refreshReplicationLag(c, lazyClient.client).finally(() => lazyClient.close()))
+    }
+    try {
+      response.headers.set('X-Updates-Cache', dbQueries === 0 ? 'hit' : 'miss')
+    }
+    catch {
+      // Immutable response headers: observability only.
+    }
+    return response
+  }
+  finally {
+    if (!closeInBackground)
+      await lazyClient.close()
+    // Do not block the response on rate-limit Cache writes (P999 wall time).
+    await backgroundTask(c, record())
+  }
+}
+
 async function runChannelSelfDeviceOperation(
   c: Context,
   bodyParsed: DeviceLink,
   operation: ChannelSelfDeviceOperation,
   operationLabel: string,
-  run: (drizzleClient: ReturnType<typeof getDrizzleClient>) => Promise<Response>,
+  run: (drizzleClient: ReturnType<typeof getDrizzleClient>, edgeCache: boolean) => Promise<Response>,
   channel?: string,
 ) {
   const rateLimitStatus = await isChannelSelfRateLimited(c, bodyParsed.app_id, bodyParsed.device_id, operation, channel)
@@ -711,16 +768,22 @@ async function runChannelSelfDeviceOperation(
     return simpleError200(c, 'channel_self_server_storage_unavailable', 'Server channel_self storage unavailable')
   }
 
+  const record = async () => {
+    await recordChannelSelfRequestSafely(c, bodyParsed.app_id, bodyParsed.device_id, operation, channel)
+    await recordChannelSelfIPRateLimitSafely(c, bodyParsed.app_id)
+  }
+
+  // The edge cache only serves read-replica requests; the primary fallback is unchanged.
+  if (canUseReadReplica && shouldUseUpdatesEdgeCache(c, bodyParsed.app_id, bodyParsed.device_id))
+    return await runChannelSelfWithLazyPgClient(c, drizzleClient => run(drizzleClient, true), record)
+
   const pgClient = await getPgClient(c, canUseReadReplica)
 
   return await runChannelSelfWithPgClient(
     c,
     pgClient,
-    run,
-    async () => {
-      await recordChannelSelfRequestSafely(c, bodyParsed.app_id, bodyParsed.device_id, operation, channel)
-      await recordChannelSelfIPRateLimitSafely(c, bodyParsed.app_id)
-    },
+    drizzleClient => run(drizzleClient, false),
+    record,
   )
 }
 
@@ -752,7 +815,7 @@ app.post('/', async (c) => {
     bodyParsed,
     'set',
     'POST',
-    drizzleClient => post(c, drizzleClient, bodyParsed, appStatus),
+    (drizzleClient, edgeCache) => post(c, drizzleClient, bodyParsed, appStatus, edgeCache),
     bodyParsed.channel,
   )
 })
@@ -776,7 +839,7 @@ app.put('/', async (c) => {
     bodyParsed,
     'get',
     'PUT',
-    drizzleClient => put(c, drizzleClient, bodyParsed, appStatus),
+    (drizzleClient, edgeCache) => put(c, drizzleClient, bodyParsed, appStatus, edgeCache),
   )
 })
 
@@ -798,7 +861,7 @@ app.delete('/', async (c) => {
     bodyParsed,
     'delete',
     'DELETE',
-    drizzleClient => deleteOverride(c, drizzleClient, bodyParsed, appStatus),
+    (drizzleClient, edgeCache) => deleteOverride(c, drizzleClient, bodyParsed, appStatus, edgeCache),
   )
 })
 
@@ -823,18 +886,23 @@ app.get('/', async (c) => {
     }
   }
 
+  const record = async () => {
+    // Record the request for rate limiting (all requests to prevent abuse, if device_id is provided)
+    if (bodyRaw.device_id) {
+      await recordChannelSelfRequestSafely(c, bodyParsed.app_id, bodyRaw.device_id, 'list')
+    }
+    await recordChannelSelfIPRateLimitSafely(c, bodyParsed.app_id)
+  }
+
+  if (shouldUseUpdatesEdgeCache(c, bodyParsed.app_id, bodyRaw.device_id ?? ''))
+    return await runChannelSelfWithLazyPgClient(c, drizzleClient => listCompatibleChannels(c, drizzleClient, bodyParsed, appStatus, true), record)
+
   const pgClient = await getPgClient(c, true)
 
   return await runChannelSelfWithPgClient(
     c,
     pgClient,
     drizzleClient => listCompatibleChannels(c, drizzleClient, bodyParsed, appStatus),
-    async () => {
-      // Record the request for rate limiting (all requests to prevent abuse, if device_id is provided)
-      if (bodyRaw.device_id) {
-        await recordChannelSelfRequestSafely(c, bodyParsed.app_id, bodyRaw.device_id, 'list')
-      }
-      await recordChannelSelfIPRateLimitSafely(c, bodyParsed.app_id)
-    },
+    record,
   )
 })

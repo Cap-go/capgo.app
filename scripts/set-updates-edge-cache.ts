@@ -2,6 +2,10 @@
 /**
  * Sets UPDATES_EDGE_CACHE on the plugin workers in one go.
  *
+ * One switch for the whole plugin edge cache: /updates, /stats and
+ * /channel_self all read it, and a device sampled in by a percentage is
+ * sampled in on every endpoint (stable hash of app_id:device_id).
+ *
  * It is a worker secret (not a wrangler var), so a change applies right away,
  * without a code deploy. Values: off | on | a share of devices like 1%, 0.5, 25.
  *
