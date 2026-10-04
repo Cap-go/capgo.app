@@ -16,6 +16,7 @@ CREATE TABLE public.r2_objects (
     last_event_at timestamptz,
     last_reconciled_at timestamptz,
     tombstone_expires_at timestamptz,
+    cleanup_requested_at timestamptz,
     first_seen_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     revision bigint NOT NULL DEFAULT 1,
@@ -28,6 +29,9 @@ CREATE TABLE public.r2_objects (
     ),
     CONSTRAINT r2_objects_size_check CHECK (
         size_bytes IS NULL OR size_bytes >= 0
+    ),
+    CONSTRAINT r2_objects_cleanup_check CHECK (
+        cleanup_requested_at IS NULL OR r2_state IN ('to_be_deleted', 'deleted')
     ),
     CONSTRAINT r2_objects_revision_check CHECK (revision > 0),
     CONSTRAINT r2_objects_tombstone_check CHECK (
@@ -68,6 +72,9 @@ AS $$
 BEGIN
     IF TG_OP = 'INSERT' THEN
         NEW.revision := 1;
+        IF NEW.r2_state = 'to_be_deleted'::public.r2_object_state THEN
+            NEW.cleanup_requested_at := pg_catalog.clock_timestamp();
+        END IF;
         NEW.first_seen_at := pg_catalog.clock_timestamp();
     ELSE
         IF NEW.bucket_name IS DISTINCT FROM OLD.bucket_name
@@ -80,6 +87,15 @@ BEGIN
                'deleted'::public.r2_object_state
            ) THEN
             RAISE EXCEPTION 'R2 deletion intent cannot be reversed' USING ERRCODE = '23514';
+        END IF;
+        NEW.cleanup_requested_at := OLD.cleanup_requested_at;
+        IF NEW.r2_state = 'to_be_deleted'::public.r2_object_state THEN
+            NEW.cleanup_requested_at := COALESCE(OLD.cleanup_requested_at, pg_catalog.clock_timestamp());
+        END IF;
+        IF NEW.cleanup_requested_at IS NOT NULL AND NEW.r2_state NOT IN (
+            'to_be_deleted'::public.r2_object_state, 'deleted'::public.r2_object_state
+        ) THEN
+            RAISE EXCEPTION 'R2 cleanup retirement cannot be reversed' USING ERRCODE = '23514';
         END IF;
         NEW.revision := OLD.revision + 1;
         NEW.first_seen_at := OLD.first_seen_at;
@@ -145,3 +161,41 @@ DELETE ON TABLE public.r2_inventory_checkpoints TO service_role;
 COMMENT ON TABLE public.r2_inventory_checkpoints IS
 'Internal resumable scan checkpoints and per-bucket event-admission floors. '
 'Runtime settings remain Vault-backed.';
+
+
+-- Constant-time guards on a bounded operational table; no resource-table scan.
+CREATE FUNCTION public.r2_inventory_checkpoints_before_write()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        IF OLD.job_name = 'admission' THEN
+            RAISE EXCEPTION 'R2 admission history cannot be removed' USING ERRCODE = '23514';
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.bucket_name IS DISTINCT FROM OLD.bucket_name
+           OR NEW.job_name IS DISTINCT FROM OLD.job_name
+           OR NEW.partition_key IS DISTINCT FROM OLD.partition_key THEN
+            RAISE EXCEPTION 'R2 checkpoint identity is immutable' USING ERRCODE = '23514';
+        END IF;
+        IF OLD.accepted_event_floor IS NOT NULL AND (
+            NEW.accepted_event_floor IS NULL
+            OR NEW.accepted_event_floor < OLD.accepted_event_floor
+        ) THEN
+            RAISE EXCEPTION 'R2 admission floor cannot decrease' USING ERRCODE = '23514';
+        END IF;
+    END IF;
+    NEW.updated_at := pg_catalog.clock_timestamp();
+    RETURN NEW;
+END;
+$$;
+ALTER FUNCTION public.r2_inventory_checkpoints_before_write() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.r2_inventory_checkpoints_before_write()
+FROM public, anon, authenticated, service_role;
+CREATE TRIGGER r2_inventory_checkpoints_before_write
+BEFORE INSERT OR UPDATE OR DELETE ON public.r2_inventory_checkpoints
+FOR EACH ROW EXECUTE FUNCTION public.r2_inventory_checkpoints_before_write();

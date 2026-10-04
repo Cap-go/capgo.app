@@ -332,3 +332,5 @@ Before ingestion/backfill ships, cover these cases:
 Test normal and worst-case batches, byte ordering, JSON payload size, malformed messages, publication-before-ACK failures, and the full five-attempt budget. Use Postgres-level tests and provider integration tests for the new paths.
 
 The first milestone is complete when historical coverage is known, live ingestion stays within the measured DB budget, and recurring comparison demonstrates that discrepancies are repaired. Physical cleanup remains a later consumer of this inventory.
+
+Implementation guard: `cleanup_requested_at` persists retirement through a deleted tombstone, preventing notification or observation writes from restoring retired keys. A later presence observation queues the key for deletion again. Admission checkpoint floors cannot decrease or be removed, and checkpoint progress timestamps update automatically.

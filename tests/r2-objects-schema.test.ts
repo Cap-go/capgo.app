@@ -28,7 +28,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await admin.from('r2_objects').delete().eq('bucket_name', bucket)
-  await admin.from('r2_inventory_checkpoints').delete().eq('bucket_name', bucket)
+  await admin.from('r2_inventory_checkpoints').delete().eq('bucket_name', bucket).neq('job_name', 'admission')
   if (userId)
     await admin.auth.admin.deleteUser(userId)
 })
@@ -73,8 +73,10 @@ describe('internal R2 physical-key inventory', () => {
       r2_state: 'present',
     })
     expect(error?.code).toBe('23505')
-    const other = await insertRow('present', { r2_key: `${row.r2_key}A` })
-    expect(other.r2_key).not.toBe(row.r2_key)
+    const secondBucket = `${bucket}-other`
+    const other = await insertRow('present', { bucket_name: secondBucket, r2_key: row.r2_key })
+    expect(other.r2_key).toBe(row.r2_key)
+    await admin.from('r2_objects').delete().eq('bucket_name', secondBucket)
   })
 
   it.concurrent('increments revision and preserves discovery time on updates', async () => {
@@ -146,6 +148,21 @@ describe('internal R2 physical-key inventory', () => {
         : { bucket_name: bucket, job_name: 'backfill', partition_key: randomUUID() })
       expect(write.error?.code).toBe('42501')
     }
+  })
+
+  it.concurrent('preserves retirement after deletion and prevents changing admission history', async () => {
+    const row = await insertRow('to_be_deleted')
+    expect(row.cleanup_requested_at).not.toBeNull()
+    const deleted = await admin.from('r2_objects').update({ r2_state: 'deleted', tombstone_expires_at: '2099-01-01T00:00:00Z' }).eq('bucket_name', bucket).eq('r2_key', row.r2_key)
+    expect(deleted.error).toBeNull()
+    const restore = await admin.from('r2_objects').update({ r2_state: 'present', tombstone_expires_at: null, cleanup_requested_at: null }).eq('bucket_name', bucket).eq('r2_key', row.r2_key)
+    expect(restore.error?.code).toBe('23514')
+    const admission = await admin.from('r2_inventory_checkpoints').insert({ bucket_name: bucket, job_name: 'admission', accepted_event_floor: '2026-01-01T00:00:00Z' })
+    expect(admission.error).toBeNull()
+    const lower = await admin.from('r2_inventory_checkpoints').update({ accepted_event_floor: '2025-01-01T00:00:00Z' }).eq('bucket_name', bucket).eq('job_name', 'admission')
+    expect(lower.error?.code).toBe('23514')
+    const remove = await admin.from('r2_inventory_checkpoints').delete().eq('bucket_name', bucket).eq('job_name', 'admission')
+    expect(remove.error?.code).toBe('23514')
   })
 
   it.concurrent('stores bounded checkpoint progress separately from runtime configuration', async () => {
