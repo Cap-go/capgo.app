@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
-import { eq, sql } from 'drizzle-orm'
+import { sql } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
 import { isVersionDeleted, purgeFileReadCache } from '../files/file_read_cache.ts'
 import { isCanonicalAppVersionR2Path } from '../utils/app_version_r2_path.ts'
@@ -9,11 +9,11 @@ import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../uti
 import { cloudlog } from '../utils/logging.ts'
 import { persistVersionManifestEntries } from '../utils/manifest_persist.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
-import { manifest } from '../utils/postgres_schema.ts'
 import { getPath, s3 } from '../utils/s3.ts'
 import { createStatsMeta } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
+import { enqueueManifestCleanup } from './manifest_cleanup_queue.ts'
 
 /**
  * Resolves `owner_org` for an app version row.
@@ -339,18 +339,21 @@ async function updateIt(c: Context, record: Database['public']['Tables']['app_ve
   return c.json(BRES)
 }
 
-const MANIFEST_TRASH_CONCURRENCY = 10
-// One advisory lock per distinct file is held for the whole batch transaction.
-// The shared lock table holds max_locks_per_transaction (64) per backend, so a
-// batch below 64 locks cannot exhaust it even if every connection runs a
-// cleanup batch at once. 50 also leaves room for the relation locks.
-const MANIFEST_CLEANUP_BATCH_SIZE = 50
+const MANIFEST_TRASH_CONCURRENCY = 5
 
 interface ManifestCleanupEntry {
   id: number
   file_hash: string
   file_name: string
   s3_path: string | null
+}
+
+interface ManifestCleanupBatchRow extends Record<string, unknown> {
+  id: number | null
+  file_hash: string | null
+  file_name: string | null
+  s3_path: string | null
+  matched_count: number
 }
 
 type ManifestCleanupDatabase = ReturnType<typeof getDrizzleClient>
@@ -366,7 +369,7 @@ type ManifestCleanupDatabase = ReturnType<typeof getDrizzleClient>
  * held over the HEAD/copy/delete round trip made concurrent deletions of
  * versions sharing files queue behind each other file by file.
  */
-async function releaseSharedManifestEntries(database: ManifestCleanupDatabase, versionId: number, ids: number[]): Promise<ManifestCleanupEntry[]> {
+async function releaseSharedManifestEntries(database: ManifestCleanupDatabase, versionId: number, ids: number[]) {
   return database.transaction(async (tx) => {
     // Do NOT use chr(0) as a separator — Postgres raises 54000 "null character not permitted".
     await tx.execute(sql`
@@ -379,7 +382,7 @@ async function releaseSharedManifestEntries(database: ManifestCleanupDatabase, v
         ORDER BY 1, 2
       ) AS k
     `)
-    const lastReferences = await tx.execute<ManifestCleanupEntry & Record<string, unknown>>(sql`
+    const batchResult = await tx.execute<ManifestCleanupBatchRow>(sql`
       WITH batch AS (
         SELECT m.id, m.file_hash, m.file_name, m.s3_path,
           COALESCE(m.s3_path, '') = ''
@@ -400,12 +403,23 @@ async function releaseSharedManifestEntries(database: ManifestCleanupDatabase, v
         WHERE d.id = batch.id
           AND batch.releasable
         RETURNING d.id
+      ),
+      last_references AS (
+        SELECT id, file_hash, file_name, s3_path
+        FROM batch
+        WHERE NOT releasable
       )
-      SELECT id, file_hash, file_name, s3_path
-      FROM batch
-      WHERE NOT releasable
+      SELECT last_references.id, last_references.file_hash, last_references.file_name,
+        last_references.s3_path, stats.matched_count
+      FROM (SELECT COUNT(*)::int AS matched_count FROM batch) AS stats
+      LEFT JOIN last_references ON true
     `)
-    return lastReferences.rows.map(row => ({ ...row, id: Number(row.id) }))
+    return {
+      matchedCount: Number(batchResult.rows[0]?.matched_count ?? 0),
+      lastReferences: batchResult.rows.flatMap(row => row.id === null
+        ? []
+        : [{ id: Number(row.id), file_hash: row.file_hash!, file_name: row.file_name!, s3_path: row.s3_path }]),
+    }
   })
 }
 
@@ -527,98 +541,54 @@ async function trashLastReferenceEntries(c: Context, database: ManifestCleanupDa
   }
 }
 
-/**
- * Trash unreferenced R2 objects first (exist → move to deleted-after-7-days/,
- * missing → ok), then delete that DB row. Never drop DB tracking before R2 is handled.
- * Batches are committed, so a timeout mid-pass is safe to retry. Leftover rows
- * after the normal retry budget (MAX_QUEUE_READS=5) are reclaimed by
- * sweep_deleted_version_manifests. Incomplete work throws so the queue retries;
- * already-trashed paths are idempotent.
- */
-async function deleteManifest(c: Context, record: Database['public']['Tables']['app_versions']['Row']) {
-  const readPgClient = getPgClient(c, true)
-  const drizzleClient = getDrizzleClient(readPgClient)
-
-  let manifestIds: number[] = []
+export async function processManifestCleanupIds(c: Context, versionId: number, manifestIds: number[]) {
+  const cleanupPool = getPgClient(c, false)
   try {
-    const rows = await drizzleClient
-      .select({ id: manifest.id })
-      .from(manifest)
-      .where(eq(manifest.app_version_id, record.id))
-    manifestIds = rows.map(row => row.id)
-  }
-  finally {
-    await closeClient(c, readPgClient)
-  }
-
-  const startedWithRows = manifestIds.length > 0
-
-  if (startedWithRows) {
-    // One bounded pool for the whole pass: a pool per file meant thousands of
-    // Hyperdrive connections (and log lines) for a large bundle.
-    const cleanupPool = getPgClient(c, false)
-    try {
-      const cleanupDatabase = getDrizzleClient(cleanupPool)
-      await retryPendingTrashRestores(c, cleanupDatabase, record.id)
-      for (let offset = 0; offset < manifestIds.length; offset += MANIFEST_CLEANUP_BATCH_SIZE) {
-        const batchIds = manifestIds.slice(offset, offset + MANIFEST_CLEANUP_BATCH_SIZE)
-        const lastReferences = await releaseSharedManifestEntries(cleanupDatabase, record.id, batchIds)
-        if (lastReferences.length > 0)
-          await trashLastReferenceEntries(c, cleanupDatabase, record.id, lastReferences)
-      }
+    const database = getDrizzleClient(cleanupPool)
+    let processedRows = false
+    if (manifestIds.length > 0) {
+      await retryPendingTrashRestores(c, database, versionId)
+      const { lastReferences, matchedCount } = await releaseSharedManifestEntries(database, versionId, manifestIds)
+      processedRows = matchedCount > 0
+      if (lastReferences.length > 0)
+        await trashLastReferenceEntries(c, database, versionId, lastReferences)
     }
-    finally {
-      await closeClient(c, cleanupPool)
-    }
-  }
-
-  const writePgClient = getPgClient(c, false)
-  try {
-    await getDrizzleClient(writePgClient).transaction(async (tx) => {
-      const remaining = await tx.execute<{ count: number }>(sql`
-        SELECT COUNT(*)::int AS count
-        FROM public.manifest
-        WHERE app_version_id = ${record.id}
-      `)
-      const remainingCount = Number(remaining.rows[0]?.count ?? 0)
-      if (remainingCount > 0) {
-        throw simpleError('manifest_cleanup_incomplete', 'Manifest rows still present after trash/delete pass', {
-          id: record.id,
-          remainingCount,
-        })
-      }
-
+    await database.transaction(async (tx) => {
       await tx.execute(sql`
-        WITH prev AS (
+        WITH previous AS (
           SELECT id, app_id, manifest_count, (manifest IS NOT NULL) AS has_json
           FROM public.app_versions
-          WHERE id = ${record.id}
+          WHERE id = ${versionId}
+            AND (deleted = true OR deleted_at IS NOT NULL)
           FOR UPDATE
         ),
-        upd AS (
+        finalized AS (
           UPDATE public.app_versions AS av
           SET manifest_count = 0,
               manifest = NULL
-          FROM prev
-          WHERE av.id = prev.id
-            AND (prev.manifest_count > 0 OR prev.has_json OR ${startedWithRows}::boolean)
-          RETURNING prev.app_id, prev.manifest_count AS prev_count
+          FROM previous
+          WHERE av.id = previous.id
+            AND (previous.manifest_count > 0 OR previous.has_json OR ${processedRows})
+            AND NOT EXISTS (
+              SELECT 1 FROM public.manifest AS m WHERE m.app_version_id = av.id
+            )
+          RETURNING previous.app_id, previous.manifest_count AS previous_count
         )
         UPDATE public.apps AS a
         SET manifest_bundle_count = GREATEST(a.manifest_bundle_count - 1, 0),
             updated_at = now()
-        FROM upd
-        WHERE a.app_id = upd.app_id
-          AND (upd.prev_count > 0 OR ${startedWithRows}::boolean)
+        FROM finalized
+        WHERE a.app_id = finalized.app_id
+          AND (finalized.previous_count > 0 OR ${processedRows})
       `)
     })
   }
   catch (error) {
-    cloudlog({ requestId: c.get('requestId'), message: 'error finalizing manifest cleanup', error, id: record.id })
+    cloudlog({ requestId: c.get('requestId'), message: 'manifest cleanup queue batch failed', error, id: versionId })
     throw error
   }
   finally {
-    await closeClient(c, writePgClient)
+    await closeClient(c, cleanupPool)
   }
 }
 
@@ -641,8 +611,8 @@ export async function deleteIt(c: Context, record: Database['public']['Tables'][
     }
   }
 
-  // Manifest files: trash R2 first, then drop DB rows. Must finish before ACK.
-  await deleteManifest(c, record)
+  // Queue manifest rows before ACK. The bounded queue consumer handles R2 + DB cleanup.
+  await enqueueManifestCleanup(c, record.id)
 
   const { data, error: dbError } = await supabaseAdmin(c)
     .from('app_versions_meta')
@@ -724,7 +694,7 @@ app.post('/', middlewareAPISecret, triggerValidator('app_versions', 'UPDATE'), a
     return deleteIt(c, workRecord)
   if (deletedVersionAction === 'cleanup_manifest') {
     cloudlog({ requestId: c.get('requestId'), message: 'cleaning manifest for already deleted version', ...versionUpdateLogFields(workRecord, oldRecord) })
-    await deleteManifest(c, workRecord)
+    await enqueueManifestCleanup(c, workRecord.id)
     return c.json(BRES)
   }
   if (deletedVersionAction === 'skip')
@@ -742,6 +712,5 @@ app.post('/', middlewareAPISecret, triggerValidator('app_versions', 'UPDATE'), a
 export const onVersionUpdateTestUtils = {
   getDeletedVersionAction,
   handleManifest,
-  deleteManifest,
   unlinkChannelsFromDeletedVersion,
 }

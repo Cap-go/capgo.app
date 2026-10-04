@@ -294,9 +294,16 @@ jobs:
         run: |
           if [ "${{ needs.changes.outputs.is_alpha }}" = "true" ]; then
             echo "ENV=dev" >> $GITHUB_ENV
+            echo "QUEUE_ENV=alpha" >> $GITHUB_ENV
           else
             echo "ENV=prod" >> $GITHUB_ENV
+            echo "QUEUE_ENV=prod" >> $GITHUB_ENV
           fi
+      - name: Ensure CF Worker API queues
+        run: bun run deploy:cloudflare:api:queues ${{ env.QUEUE_ENV }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Deploy CF Worker API
         run: bun run deploy:cloudflare:api:${{ env.ENV }}
         env:

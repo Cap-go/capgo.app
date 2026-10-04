@@ -96,6 +96,10 @@
           {
             "binding": "NOTIFICATION_QUEUE",
             "queue": "capgo-native-notifications-prod"
+          },
+          {
+            "binding": "MANIFEST_CLEANUP_QUEUE",
+            "queue": "capgo-manifest-cleanup-prod"
           }
         ],
         "consumers": [
@@ -106,6 +110,14 @@
             "max_concurrency": 2,
             "max_retries": 5,
             "dead_letter_queue": "capgo-native-notifications-prod-dlq"
+          },
+          {
+            "queue": "capgo-manifest-cleanup-prod",
+            "max_batch_size": 1,
+            "max_batch_timeout": 1,
+            "max_concurrency": 10,
+            "max_retries": 5,
+            "dead_letter_queue": "capgo-manifest-cleanup-prod-dlq"
           }
         ]
       },
@@ -193,6 +205,10 @@
           {
             "binding": "NOTIFICATION_QUEUE",
             "queue": "capgo-native-notifications-preprod"
+          },
+          {
+            "binding": "MANIFEST_CLEANUP_QUEUE",
+            "queue": "capgo-manifest-cleanup-preprod"
           }
         ],
         "consumers": [
@@ -203,6 +219,14 @@
             "max_concurrency": 2,
             "max_retries": 5,
             "dead_letter_queue": "capgo-native-notifications-preprod-dlq"
+          },
+          {
+            "queue": "capgo-manifest-cleanup-preprod",
+            "max_batch_size": 1,
+            "max_batch_timeout": 1,
+            "max_concurrency": 10,
+            "max_retries": 5,
+            "dead_letter_queue": "capgo-manifest-cleanup-preprod-dlq"
           }
         ]
       },
@@ -290,6 +314,10 @@
           {
             "binding": "NOTIFICATION_QUEUE",
             "queue": "capgo-native-notifications-alpha"
+          },
+          {
+            "binding": "MANIFEST_CLEANUP_QUEUE",
+            "queue": "capgo-manifest-cleanup-alpha"
           }
         ],
         "consumers": [
@@ -300,6 +328,14 @@
             "max_concurrency": 2,
             "max_retries": 5,
             "dead_letter_queue": "capgo-native-notifications-alpha-dlq"
+          },
+          {
+            "queue": "capgo-manifest-cleanup-alpha",
+            "max_batch_size": 1,
+            "max_batch_timeout": 1,
+            "max_concurrency": 10,
+            "max_retries": 5,
+            "dead_letter_queue": "capgo-manifest-cleanup-alpha-dlq"
           }
         ]
       },
@@ -321,6 +357,10 @@
       },
       "vars": {
         "ENV_NAME": "capgo_api-local"
+      },
+      "queues": {
+        "producers": [{ "binding": "MANIFEST_CLEANUP_QUEUE", "queue": "capgo-manifest-cleanup-local" }],
+        "consumers": [{ "queue": "capgo-manifest-cleanup-local", "max_batch_size": 1, "max_batch_timeout": 1, "max_concurrency": 10, "max_retries": 5 }]
       },
       "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "local-channel-self-store" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "local-plugin-notification-queue" }]
     }
