@@ -189,4 +189,30 @@ describe('/updates paused channel', () => {
     expect(json.version).toBe('2.0.0')
     expect(json.url).toBe('https://signed.example/bundle.zip')
   })
+
+  it('pauses a device whose override channel is paused', async () => {
+    requestInfosPostgresMock.mockResolvedValue({
+      channelData: baseChannel(),
+      channelOverride: baseChannel({}, { id: 100, name: 'beta', paused_at: '2026-10-02T00:00:00Z' }),
+    })
+
+    const res = await runUpdate()
+    const json = await res.json() as { error?: string, url?: string }
+    expect(json.error).toBe('channel_paused')
+    expect(json.url).toBeUndefined()
+    expect(getBundleUrlMock).not.toHaveBeenCalled()
+  })
+
+  it('serves a device whose override channel is live while the default channel is paused', async () => {
+    requestInfosPostgresMock.mockResolvedValue({
+      channelData: baseChannel({}, { paused_at: '2026-10-02T00:00:00Z' }),
+      channelOverride: baseChannel({ id: 54321, name: '3.0.0', r2_path: 'orgs/org-1/apps/com.test.app/3.0.0.zip' }, { id: 100, name: 'beta' }),
+    })
+
+    const res = await runUpdate()
+    const json = await res.json() as { error?: string, url?: string, version?: string }
+    expect(json.error).toBeUndefined()
+    expect(json.version).toBe('3.0.0')
+    expect(json.url).toBe('https://signed.example/bundle.zip')
+  })
 })
