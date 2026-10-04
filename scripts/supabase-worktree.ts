@@ -132,19 +132,28 @@ function upsertEnvValue(content: string, key: string, value: string): string {
     : `${content}\n${line}\n`
 }
 
+export function buildFunctionsEnvFile(source: string, apiPort: number, cloudflareFunctionUrl?: string): string {
+  const s3Endpoint = `127.0.0.1:${apiPort}/storage/v1/s3`
+  let generated = upsertEnvValue(source, 'S3_ENDPOINT', s3Endpoint)
+  generated = upsertEnvValue(generated, 'FILES_PUBLIC_URL', `http://127.0.0.1:${apiPort}/functions/v1`)
+
+  if (cloudflareFunctionUrl)
+    generated = upsertEnvValue(generated, 'CLOUDFLARE_FUNCTION_URL', cloudflareFunctionUrl)
+
+  return generated
+}
+
 /**
  * The checked-in functions env uses Supabase's default API port. Generate a
- * worktree-specific copy so functions use the same isolated storage endpoint.
+ * worktree-specific copy so functions use the same isolated storage endpoint
+ * and return the externally reachable files URL rather than Docker's internal
+ * Kong hostname.
  */
 function ensureFunctionsEnvFile(repoRoot: string, workdir: string, cfg: ReturnType<typeof getSupabaseWorktreeConfig>): string {
   const sourcePath = resolve(repoRoot, 'supabase', 'functions', '.env')
   const targetPath = resolve(workdir, 'functions.local.env')
   const source = existsSync(sourcePath) ? readFileSync(sourcePath, 'utf8') : ''
-  const s3Endpoint = `127.0.0.1:${cfg.ports.api}/storage/v1/s3`
-  let generated = upsertEnvValue(source, 'S3_ENDPOINT', s3Endpoint)
-
-  if (process.env.CLOUDFLARE_FUNCTION_URL)
-    generated = upsertEnvValue(generated, 'CLOUDFLARE_FUNCTION_URL', process.env.CLOUDFLARE_FUNCTION_URL)
+  const generated = buildFunctionsEnvFile(source, cfg.ports.api, process.env.CLOUDFLARE_FUNCTION_URL)
 
   writeFileSync(targetPath, generated)
   return targetPath
