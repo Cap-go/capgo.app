@@ -224,12 +224,13 @@ export async function collectInventoryTombstones(db: ClientBase, bucket: string,
       WHERE bucket_name = $1 AND job_name = 'admission' AND partition_key = ''`, [bucket, config.tombstoneDays])
     const deleted = await db.query(`WITH candidates AS (
       SELECT object.bucket_name, object.r2_key FROM public.r2_objects AS object
-      JOIN public.r2_inventory_checkpoints AS admission ON admission.bucket_name = object.bucket_name AND admission.job_name = 'admission' AND admission.partition_key = ''
       WHERE object.bucket_name = $1 AND object.r2_state = 'deleted' AND object.tombstone_expires_at < now()
-      AND (object.last_event_at IS NULL OR object.last_event_at < admission.accepted_event_floor)
-      AND (object.last_reconciled_at IS NULL OR object.last_reconciled_at < admission.accepted_event_floor)
       ORDER BY object.tombstone_expires_at, object.r2_key LIMIT 1000 FOR UPDATE OF object SKIP LOCKED
-    ) DELETE FROM public.r2_objects AS target USING candidates WHERE target.bucket_name = candidates.bucket_name AND target.r2_key = candidates.r2_key`, [bucket])
+    ) DELETE FROM public.r2_objects AS target USING candidates, public.r2_inventory_checkpoints AS admission
+      WHERE target.bucket_name = candidates.bucket_name AND target.r2_key = candidates.r2_key
+      AND admission.bucket_name = target.bucket_name AND admission.job_name = 'admission' AND admission.partition_key = ''
+      AND (target.last_event_at IS NULL OR target.last_event_at < admission.accepted_event_floor)
+      AND (target.last_reconciled_at IS NULL OR target.last_reconciled_at < admission.accepted_event_floor)`, [bucket])
     return deleted.rowCount ?? 0
   })
 }
