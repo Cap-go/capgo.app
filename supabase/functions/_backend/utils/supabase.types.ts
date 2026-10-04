@@ -2817,6 +2817,13 @@ export type Database = {
       }
       orgs: {
         Row: {
+          auto_top_up_cycle_amount: number
+          auto_top_up_cycle_attempt: number
+          auto_top_up_cycle_enabled: boolean
+          auto_top_up_cycle_last_attempt_at: string | null
+          auto_top_up_cycle_paid_for: string | null
+          auto_top_up_cycle_pending_intent_id: string | null
+          auto_top_up_cycle_unknown_since: string | null
           auto_top_up_enabled: boolean
           auto_top_up_last_attempt_at: string | null
           auto_top_up_monthly_limit: number
@@ -2848,6 +2855,13 @@ export type Database = {
           website: string | null
         }
         Insert: {
+          auto_top_up_cycle_amount?: number
+          auto_top_up_cycle_attempt?: number
+          auto_top_up_cycle_enabled?: boolean
+          auto_top_up_cycle_last_attempt_at?: string | null
+          auto_top_up_cycle_paid_for?: string | null
+          auto_top_up_cycle_pending_intent_id?: string | null
+          auto_top_up_cycle_unknown_since?: string | null
           auto_top_up_enabled?: boolean
           auto_top_up_last_attempt_at?: string | null
           auto_top_up_monthly_limit?: number
@@ -2879,6 +2893,13 @@ export type Database = {
           website?: string | null
         }
         Update: {
+          auto_top_up_cycle_amount?: number
+          auto_top_up_cycle_attempt?: number
+          auto_top_up_cycle_enabled?: boolean
+          auto_top_up_cycle_last_attempt_at?: string | null
+          auto_top_up_cycle_paid_for?: string | null
+          auto_top_up_cycle_pending_intent_id?: string | null
+          auto_top_up_cycle_unknown_since?: string | null
           auto_top_up_enabled?: boolean
           auto_top_up_last_attempt_at?: string | null
           auto_top_up_monthly_limit?: number
@@ -5851,6 +5872,14 @@ export type Database = {
         Args: { org_id: string; user_id: string }
         Returns: boolean
       }
+      release_credit_cycle_top_up: {
+        Args: {
+          p_cycle_start: string
+          p_new_attempt?: boolean
+          p_org_id: string
+        }
+        Returns: undefined
+      }
       remove_old_jobs: { Args: never; Returns: undefined }
       request_actor_email_adress: { Args: never; Returns: string }
       request_actor_user_id: { Args: never; Returns: string }
@@ -5988,6 +6017,16 @@ export type Database = {
           available_credits: number
           claimed: boolean
           customer_id: string
+        }[]
+      }
+      try_claim_credit_cycle_top_up: {
+        Args: { p_org_id: string }
+        Returns: {
+          amount: number
+          attempt: number
+          claimed: boolean
+          customer_id: string
+          cycle_start: string
         }[]
       }
       try_complete_pending_onboarding: {

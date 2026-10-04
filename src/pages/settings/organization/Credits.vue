@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { CreditMetricType, CreditPricingStep } from '~/services/creditPricing'
+import type { CreditAutoTopUpSettings } from '~/services/stripe'
 import type { Database } from '~/types/supabase.types'
 import { FormKit } from '@formkit/vue'
 import { storeToRefs } from 'pinia'
@@ -114,6 +115,22 @@ let confirmedAutoTopUpThreshold = MIN_AUTO_TOP_UP
 const autoTopUpMonthlyLimitInput = ref('0')
 const autoTopUpMonthlyTotal = ref<number | null>(null)
 const confirmedAutoTopUpMonthlyLimit = ref(0)
+const cycleTopUpEnabled = ref(false)
+const cycleTopUpAmountInput = ref(String(MIN_AUTO_TOP_UP))
+const cycleTopUpEnd = ref<string | null>(null)
+let confirmedCycleTopUpAmount = MIN_AUTO_TOP_UP
+const cycleTopUpAmount = computed(() => {
+  const parsed = Number.parseInt(cycleTopUpAmountInput.value, 10)
+  if (Number.isNaN(parsed))
+    return null
+  return parsed
+})
+const isCycleTopUpAmountValid = computed(() => cycleTopUpAmount.value !== null && cycleTopUpAmount.value >= MIN_AUTO_TOP_UP)
+const cycleTopUpNextDate = computed(() => {
+  if (!cycleTopUpEnd.value)
+    return null
+  return formatLocalDate(cycleTopUpEnd.value) || null
+})
 const isAutoTopUpControlsDisabled = computed(() => isLoadingAutoTopUp.value || isSavingAutoTopUp.value || autoTopUpLoadFailed.value)
 const autoTopUpThreshold = computed(() => {
   const parsed = Number.parseInt(autoTopUpThresholdInput.value, 10)
@@ -441,7 +458,14 @@ async function loadPricingSteps() {
   pricingSteps.value = await getCreditPricingSteps(currentOrganization.value?.gid)
 }
 
-function applyAutoTopUpSettings(settings: { enabled?: boolean | null, threshold?: number | null, hasPaymentMethod?: boolean | null, monthlyLimit?: number | null, monthlyTotal?: number | null }) {
+function resetCycleTopUpState() {
+  cycleTopUpEnabled.value = false
+  cycleTopUpAmountInput.value = String(MIN_AUTO_TOP_UP)
+  confirmedCycleTopUpAmount = MIN_AUTO_TOP_UP
+  cycleTopUpEnd.value = null
+}
+
+function applyAutoTopUpSettings(settings: Partial<CreditAutoTopUpSettings>) {
   const threshold = Math.max(MIN_AUTO_TOP_UP, Math.floor(Number(settings?.threshold ?? MIN_AUTO_TOP_UP)))
   const monthlyLimit = Math.max(0, Math.floor(Number(settings?.monthlyLimit ?? 0)))
   confirmedAutoTopUpThreshold = threshold
@@ -451,6 +475,11 @@ function applyAutoTopUpSettings(settings: { enabled?: boolean | null, threshold?
   autoTopUpEnabled.value = Boolean(settings?.enabled)
   autoTopUpThresholdInput.value = String(threshold)
   autoTopUpHasCard.value = Boolean(settings?.hasPaymentMethod)
+  const cycleAmount = Math.max(MIN_AUTO_TOP_UP, Math.floor(Number(settings?.cycleAmount ?? MIN_AUTO_TOP_UP)))
+  confirmedCycleTopUpAmount = cycleAmount
+  cycleTopUpAmountInput.value = String(cycleAmount)
+  cycleTopUpEnabled.value = Boolean(settings?.cycleEnabled)
+  cycleTopUpEnd.value = settings?.cycleEnd ?? null
 }
 
 function resolveAutoTopUpThresholdForSave(useInput: boolean): number | null {
@@ -473,8 +502,9 @@ function resolveAutoTopUpMonthlyLimitForSave(useInput: boolean): number | null {
 
 async function loadAutoTopUpSettings() {
   const orgId = currentOrganization.value?.gid
-  // Never show the previous organization's monthly usage while the new one loads.
+  // Never show the previous organization's monthly usage or schedule while the new one loads.
   autoTopUpMonthlyTotal.value = null
+  resetCycleTopUpState()
   if (!orgId) {
     autoTopUpEnabled.value = false
     autoTopUpHasCard.value = false
@@ -503,6 +533,7 @@ async function loadAutoTopUpSettings() {
       autoTopUpMonthlyLimitInput.value = '0'
       confirmedAutoTopUpMonthlyLimit.value = 0
       autoTopUpMonthlyTotal.value = null
+      resetCycleTopUpState()
     }
   }
   finally {
@@ -552,10 +583,19 @@ async function persistAutoTopUpSettingsNow(orgId: string, enabled: boolean, reve
   autoTopUpLoadSeq += 1
   const saveSeq = autoTopUpLoadSeq
   try {
-    const settings = await saveCreditAutoTopUp(orgId, enabled, thresholdToSave, monthlyLimitToSave)
+    const settings = await saveCreditAutoTopUp(orgId, { enabled, threshold: thresholdToSave, monthlyLimit: monthlyLimitToSave })
     if (currentOrganization.value?.gid !== orgId || saveSeq !== autoTopUpLoadSeq)
       return
-    applyAutoTopUpSettings(settings ?? { enabled, threshold: thresholdToSave, hasPaymentMethod: autoTopUpHasCard.value, monthlyLimit: monthlyLimitToSave, monthlyTotal: autoTopUpMonthlyTotal.value })
+    applyAutoTopUpSettings(settings ?? {
+      enabled,
+      threshold: thresholdToSave,
+      hasPaymentMethod: autoTopUpHasCard.value,
+      monthlyLimit: monthlyLimitToSave,
+      monthlyTotal: autoTopUpMonthlyTotal.value,
+      cycleEnabled: cycleTopUpEnabled.value,
+      cycleAmount: confirmedCycleTopUpAmount,
+      cycleEnd: cycleTopUpEnd.value,
+    })
     toast.success(t('credits-auto-top-up-saved'))
   }
   catch (error) {
@@ -567,6 +607,83 @@ async function persistAutoTopUpSettingsNow(orgId: string, enabled: boolean, reve
   finally {
     isSavingAutoTopUp.value = false
   }
+}
+
+async function persistCycleTopUpSettings(cycleEnabled: boolean, revertCycleEnabledTo: boolean) {
+  const orgId = currentOrganization.value?.gid
+  if (!orgId)
+    return
+  const run = () => persistCycleTopUpSettingsNow(orgId, cycleEnabled, revertCycleEnabledTo)
+  const pending = autoTopUpPersistQueue.then(run, run)
+  autoTopUpPersistQueue = pending.then(() => undefined, () => undefined)
+  await pending
+}
+
+async function persistCycleTopUpSettingsNow(orgId: string, cycleEnabled: boolean, revertCycleEnabledTo: boolean) {
+  if (currentOrganization.value?.gid !== orgId)
+    return
+  if (!(await ensureUpdateBillingAccess())) {
+    if (currentOrganization.value?.gid === orgId)
+      cycleTopUpEnabled.value = revertCycleEnabledTo
+    return
+  }
+  if (currentOrganization.value?.gid !== orgId)
+    return
+  // An invalid draft amount must never block turning the schedule off: keep the saved amount then.
+  const draftValid = isCycleTopUpAmountValid.value && cycleTopUpAmount.value !== null
+  if (cycleEnabled && !draftValid) {
+    toast.error(t('credits-cycle-top-up-amount-invalid'))
+    cycleTopUpEnabled.value = revertCycleEnabledTo
+    return
+  }
+  if (cycleEnabled && !autoTopUpHasCard.value) {
+    toast.error(t('credits-auto-top-up-no-card'))
+    cycleTopUpEnabled.value = false
+    return
+  }
+  const cycleAmount = draftValid && cycleTopUpAmount.value !== null ? cycleTopUpAmount.value : confirmedCycleTopUpAmount
+  isSavingAutoTopUp.value = true
+  autoTopUpLoadSeq += 1
+  const saveSeq = autoTopUpLoadSeq
+  try {
+    // Partial update: the threshold top-up keeps whatever is stored, even if another tab changed it.
+    const settings = await saveCreditAutoTopUp(orgId, { cycleEnabled, cycleAmount })
+    if (currentOrganization.value?.gid !== orgId || saveSeq !== autoTopUpLoadSeq)
+      return
+    if (settings) {
+      applyAutoTopUpSettings(settings)
+    }
+    else {
+      cycleTopUpEnabled.value = cycleEnabled
+      confirmedCycleTopUpAmount = cycleAmount
+    }
+    toast.success(t('credits-auto-top-up-saved'))
+  }
+  catch (error) {
+    console.error('Failed to save scheduled top-up settings', error)
+    if (currentOrganization.value?.gid === orgId && saveSeq === autoTopUpLoadSeq)
+      cycleTopUpEnabled.value = revertCycleEnabledTo
+    toast.error(t('credits-auto-top-up-save-error'))
+  }
+  finally {
+    isSavingAutoTopUp.value = false
+  }
+}
+
+async function onCycleTopUpToggle(event: Event) {
+  const checked = (event.target as HTMLInputElement).checked
+  cycleTopUpEnabled.value = checked
+  await persistCycleTopUpSettings(checked, !checked)
+}
+
+async function onCycleTopUpAmountBlur() {
+  if (isAutoTopUpControlsDisabled.value || cycleTopUpAmount.value === confirmedCycleTopUpAmount)
+    return
+  if (!isCycleTopUpAmountValid.value) {
+    toast.error(t('credits-cycle-top-up-amount-invalid'))
+    return
+  }
+  await persistCycleTopUpSettings(cycleTopUpEnabled.value, cycleTopUpEnabled.value)
 }
 
 async function onAutoTopUpToggle(event: Event) {
@@ -1053,6 +1170,64 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
           >
             {{ t('credits-auto-top-up-add-card') }}
           </button>
+        </div>
+        <div class="mt-6 border-t border-gray-200 pt-6 dark:border-gray-700" data-test="credits-cycle-top-up">
+          <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div class="max-w-xl">
+              <h4 class="text-base font-semibold text-gray-900 dark:text-white">
+                {{ t('credits-cycle-top-up-title') }}
+              </h4>
+              <p class="mt-2 text-sm text-gray-600 dark:text-gray-300">
+                {{ t('credits-cycle-top-up-description') }}
+              </p>
+            </div>
+            <div class="flex items-center gap-3">
+              <label for="credits-cycle-top-up-enabled" class="text-sm font-medium text-gray-900 dark:text-white">
+                {{ t('credits-cycle-top-up-label') }}
+              </label>
+              <input
+                id="credits-cycle-top-up-enabled"
+                type="checkbox"
+                class="d-toggle"
+                :checked="cycleTopUpEnabled"
+                :disabled="isAutoTopUpControlsDisabled"
+                :aria-label="t('credits-cycle-top-up-label')"
+                @change="onCycleTopUpToggle"
+              >
+            </div>
+          </div>
+          <div class="mt-6 max-w-md">
+            <FormKit
+              id="credits-cycle-top-up-amount"
+              v-model="cycleTopUpAmountInput"
+              type="number"
+              name="creditsCycleTopUpAmount"
+              data-test="credits-cycle-top-up-amount"
+              inputmode="numeric"
+              min="10"
+              step="1"
+              :label="t('credits-cycle-top-up-amount-label')"
+              validation="required|min:10"
+              validation-visibility="live"
+              outer-class="w-full !mb-0"
+              :disabled="isAutoTopUpControlsDisabled"
+              @blur="onCycleTopUpAmountBlur"
+            >
+              <template #prefix>
+                $
+              </template>
+            </FormKit>
+            <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('credits-auto-top-up-min') }}
+            </p>
+            <p
+              v-if="cycleTopUpEnabled && cycleTopUpNextDate && !isLoadingAutoTopUp"
+              class="mt-1 text-xs text-gray-500 dark:text-gray-400"
+              data-test="credits-cycle-top-up-next"
+            >
+              {{ t('credits-cycle-top-up-next', { date: cycleTopUpNextDate }) }}
+            </p>
+          </div>
         </div>
       </div>
 

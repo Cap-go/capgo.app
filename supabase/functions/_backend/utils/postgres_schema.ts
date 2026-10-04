@@ -134,6 +134,13 @@ export const orgs = pgTable('orgs', {
   auto_top_up_threshold: numeric('auto_top_up_threshold', { precision: 18, scale: 6 }).notNull().default('10'),
   auto_top_up_last_attempt_at: timestamp('auto_top_up_last_attempt_at', { withTimezone: true }),
   auto_top_up_monthly_limit: numeric('auto_top_up_monthly_limit', { precision: 18, scale: 6 }).notNull().default('0'),
+  auto_top_up_cycle_enabled: boolean('auto_top_up_cycle_enabled').notNull().default(false),
+  auto_top_up_cycle_amount: numeric('auto_top_up_cycle_amount', { precision: 18, scale: 6 }).notNull().default('10'),
+  auto_top_up_cycle_paid_for: timestamp('auto_top_up_cycle_paid_for', { withTimezone: true }),
+  auto_top_up_cycle_last_attempt_at: timestamp('auto_top_up_cycle_last_attempt_at', { withTimezone: true }),
+  auto_top_up_cycle_attempt: integer('auto_top_up_cycle_attempt').notNull().default(0),
+  auto_top_up_cycle_pending_intent_id: text('auto_top_up_cycle_pending_intent_id'),
+  auto_top_up_cycle_unknown_since: timestamp('auto_top_up_cycle_unknown_since', { withTimezone: true }),
 })
 
 export const notifications = pgTable('notifications', {
