@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { PluginDistTags, PluginVersionStatus } from '~/services/pluginVersionRecommendation'
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -12,6 +12,7 @@ import IconExternalLink from '~icons/lucide/external-link'
 import IconLayers from '~icons/lucide/layers'
 import IconRocket from '~icons/lucide/rocket'
 import IconSmartphone from '~icons/lucide/smartphone'
+import InfoPopover from '~/components/InfoPopover.vue'
 import { useNativeObserveStats } from '~/composables/useNativeObserveStats'
 import { formatNumberValue } from '~/services/formatLocale'
 import {
@@ -19,7 +20,6 @@ import {
   fetchUpdaterDistTags,
   UPDATER_INSTALL_DOCS_URL,
 } from '~/services/pluginVersionRecommendation'
-import { useDisplayStore } from '~/stores/display'
 
 interface NativeObservePluginStatsResponse {
   pluginVersions: Array<{
@@ -30,7 +30,6 @@ interface NativeObservePluginStatsResponse {
 }
 
 const route = useRoute()
-const displayStore = useDisplayStore()
 const { t } = useI18n()
 const distTags = ref<PluginDistTags | null>(null)
 
@@ -112,33 +111,35 @@ async function copyInstallCommand(command: string) {
   }
 }
 
+const panel = useTemplateRef<HTMLElement>('panel')
+
 watch(packageId, async () => {
-  displayStore.NavTitle = t('observe')
-  displayStore.defaultBack = '/apps'
   const [, tags] = await Promise.all([
     fetchPluginStats(),
     fetchUpdaterDistTags(),
   ])
   distTags.value = tags
+  // The old Plugins tab redirects here with #plugins; land on this section.
+  if (route.hash === '#plugins') {
+    await nextTick()
+    panel.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 }, { immediate: true })
 </script>
 
 <template>
-  <div class="w-full h-full px-4 pt-0 mx-auto mb-8 sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
-    <div class="flex flex-col gap-6">
-      <div class="min-w-0">
-        <div class="flex flex-wrap items-center gap-2">
-          <h1 class="text-xl font-semibold text-slate-950 dark:text-white">
-            {{ t('observe') }}
-          </h1>
-          <span class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t('beta') }}</span>
-        </div>
-        <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
-          {{ t('native-observe-plugin-adoption-help') }}
-        </p>
-        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-          {{ t('native-observe-plugin-scope') }}
-        </p>
+  <section id="plugins" ref="panel" class="scroll-mt-4" data-testid="observe-plugins">
+    <div class="flex flex-col gap-4">
+      <div class="flex items-center min-w-0 gap-1">
+        <h2 class="text-base font-semibold text-slate-950 dark:text-white">
+          {{ t('plugins') }}
+        </h2>
+        <InfoPopover :label="t('plugins')">
+          <p>{{ t('native-observe-plugin-adoption-help') }}</p>
+          <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            {{ t('native-observe-plugin-scope') }}
+          </p>
+        </InfoPopover>
       </div>
 
       <div v-if="statsLoading" class="flex items-center justify-center h-80">
@@ -399,10 +400,5 @@ watch(packageId, async () => {
         </section>
       </template>
     </div>
-  </div>
+  </section>
 </template>
-
-<route lang="yaml">
-meta:
-  layout: app
-</route>

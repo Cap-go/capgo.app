@@ -238,6 +238,8 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     },
   },
   { slug: 'app-overview', path: '/app/com.demo.app', auth: true },
+  { slug: 'app-settings-usage', path: '/app/com.demo.app/settings/usage', auth: true },
+  { slug: 'observe-releases', path: '/app/com.demo.app/observe/releases', auth: true },
   { slug: 'app-dashboard-native', path: '/app/com.demo.app/native', auth: true },
   { slug: 'app-dashboard-installs', path: '/app/com.demo.app/installs', auth: true },
   { slug: 'app-dashboard-active-bundle', path: '/app/com.demo.app/active-bundle', auth: true },

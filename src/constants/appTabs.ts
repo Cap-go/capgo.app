@@ -17,7 +17,7 @@ export const appTabs: Tab[] = [
   { label: 'channels', icon: IconChannel, key: '/channels', group: 'ship', description: 'channels-description' },
   { label: 'builds', icon: IconBuild, key: '/builds', group: 'ship', description: 'builds-description' },
   { label: 'devices', icon: IconDevice, key: '/devices', group: 'monitor', description: 'devices-description' },
-  { label: 'observe', icon: IconObserve, key: '/observe/updater', badge: 'beta', group: 'monitor', description: 'observe-description' },
+  { label: 'observe', icon: IconObserve, key: '/observe/releases', badge: 'beta', group: 'monitor', description: 'observe-description' },
   { label: 'notifications', icon: IconBell, key: '/notifications', badge: 'beta', group: 'monitor', description: 'notifications-description' },
   { label: 'settings', icon: IconCog, key: '/settings', group: 'configure', description: 'app-settings-description' },
 ]

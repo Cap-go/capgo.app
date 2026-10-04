@@ -118,22 +118,27 @@ const labelClass = 'md:block text-xs md:text-sm font-medium whitespace-nowrap tr
       </ul>
     </div>
     <div class="relative -mt-px border-t bg-blue-50 dark:bg-slate-800/40 border-blue-200/60 dark:border-blue-800/70" :class="secondaryTabs?.length ? 'z-10' : 'z-0'">
-      <ul v-if="secondaryTabs?.length" :class="[ulSecondaryClass, noWrap ? noWrapClass : 'flex-wrap']">
-        <li v-for="(tab, i) in secondaryTabs" :key="i" class="mr-2">
-          <button
-            type="button"
-            :aria-current="secondaryActiveTab === tab.key ? 'page' : undefined"
-            :aria-label="t(tab.label)"
-            :title="tabTitle(tab)"
-            :class="[buttonSecondaryClass, activeTabColor(tab.key, 'secondary')]"
-            @click="emit('update:secondaryActiveTab', tab.key)"
-          >
-            <component :is="tab.icon" :class="iconClass" />
-            <span :class="[labelClass, secondaryActiveTab === tab.key || !tab.icon ? 'block' : 'hidden']">{{ t(tab.label) }}</span>
-            <span v-if="tab.badge" class="hidden px-1.5 py-0.5 text-[10px] font-semibold uppercase rounded border md:inline border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t(tab.badge) }}</span>
-          </button>
-        </li>
-      </ul>
+      <div v-if="secondaryTabs?.length" class="flex items-center justify-between gap-3 min-w-0">
+        <ul class="min-w-0" :class="[ulSecondaryClass, noWrap ? noWrapClass : 'flex-wrap']">
+          <li v-for="(tab, i) in secondaryTabs" :key="i" class="mr-2">
+            <button
+              type="button"
+              :aria-current="secondaryActiveTab === tab.key ? 'page' : undefined"
+              :aria-label="t(tab.label)"
+              :title="tabTitle(tab)"
+              :class="[buttonSecondaryClass, activeTabColor(tab.key, 'secondary')]"
+              @click="emit('update:secondaryActiveTab', tab.key)"
+            >
+              <component :is="tab.icon" :class="iconClass" />
+              <span :class="[labelClass, secondaryActiveTab === tab.key || !tab.icon ? 'block' : 'hidden']">{{ t(tab.label) }}</span>
+              <span v-if="tab.badge" class="hidden px-1.5 py-0.5 text-[10px] font-semibold uppercase rounded border md:inline border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t(tab.badge) }}</span>
+            </button>
+          </li>
+        </ul>
+        <div v-if="$slots['secondary-actions']" class="flex items-center shrink-0 pr-2 sm:pr-4">
+          <slot name="secondary-actions" />
+        </div>
+      </div>
       <ul v-if="tertiaryTabs?.length" :class="[ulTertiaryClass, noWrap ? noWrapClass : 'flex-wrap']">
         <li v-for="(tab, i) in tertiaryTabs" :key="i" class="mr-1">
           <button

@@ -11,6 +11,7 @@ import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheckCircle from '~icons/lucide/check-circle'
 import IconChevronRight from '~icons/lucide/chevron-right'
 import IconExternalLink from '~icons/lucide/external-link'
+import PluginAdoptionPanel from '~/components/observe/PluginAdoptionPanel.vue'
 import { comparePackages, hasPlatformChecksumMetadataDrift } from '~/services/bundleCompatibility'
 import { dependencyDiffPath, groupCompatibilityEvents, platformLabel } from '~/services/compatibilityEvents'
 import { formatLocalDateTime } from '~/services/date'
@@ -596,13 +597,13 @@ watchEffect(async () => {
 <template>
   <div>
     <div v-if="app || isLoading">
-      <div class="mt-0 md:mt-8">
-        <div class="w-full h-full px-0 pt-0 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
+      <div>
+        <div class="w-full h-full px-4 pt-4 mx-auto mb-8 overflow-y-auto sm:px-6 lg:px-8 max-w-9xl max-h-fit">
           <div class="flex flex-col gap-4">
             <div class="flex flex-wrap items-center justify-between gap-3">
-              <h1 class="text-xl font-semibold text-slate-900 dark:text-white">
+              <h2 class="text-base font-semibold text-slate-900 dark:text-white">
                 {{ t('compatibility-events') }}
-              </h1>
+              </h2>
               <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
                 <input
                   v-model="showUnresolvedOnly"
@@ -896,6 +897,8 @@ watchEffect(async () => {
                 </tbody>
               </table>
             </div>
+
+            <PluginAdoptionPanel v-if="app" class="mt-4" />
           </div>
         </div>
       </div>

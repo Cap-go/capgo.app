@@ -2,18 +2,18 @@
 import type { Tab } from '~/components/comp_def'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import PaymentRequiredModal from '~/components/PaymentRequiredModal.vue'
 import Tabs from '~/components/Tabs.vue'
 import UnpaidState from '~/components/UnpaidState.vue'
-import { appDashboardTabs } from '~/constants/appDashboardTabs'
+import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { appSettingsTabs } from '~/constants/appSettingsTabs'
 import { appTabs as baseAppTabs } from '~/constants/appTabs'
 import { bundleTabs } from '~/constants/bundleTabs'
 import { channelTabs } from '~/constants/channelTabs'
 import { deviceTabs } from '~/constants/deviceTabs'
-import { observeTabs } from '~/constants/observeTabs'
+import { OBSERVE_PERIOD_TABS, observeTabs } from '~/constants/observeTabs'
 import { useOrganizationStore } from '~/stores/organization'
-import { isAppDashboardPath } from '~/utils/appDashboardPath'
 
 const router = useRouter()
 const route = useRoute()
@@ -133,8 +133,6 @@ const appSectionType = computed(() => {
     return 'observe'
   if (/^\/app\/[^/]+\/settings(?:\/|$)/.test(route.path))
     return 'settings'
-  if (isAppDashboardPath(route.path))
-    return 'dashboard'
   return null
 })
 
@@ -149,8 +147,6 @@ const secondaryTabBasePath = computed(() => {
     return `/app/${appRouteSegment.value}/observe`
   if (secondaryTabType.value === 'settings')
     return `/app/${appRouteSegment.value}/settings`
-  if (secondaryTabType.value === 'dashboard')
-    return `/app/${appRouteSegment.value}`
   return ''
 })
 
@@ -161,7 +157,6 @@ const tabsConfig: Record<string, Tab[]> = {
   bundle: bundleTabs,
   observe: observeTabs,
   settings: appSettingsTabs,
-  dashboard: appDashboardTabs,
 }
 
 // Generate secondary tabs with full paths for the current resource or app section
@@ -191,11 +186,9 @@ const activeTab = computed(() => {
     return tabs.value[0]?.key ?? ''
 
   if (appSectionType.value === 'observe')
-    return `/app/${appRouteSegment.value}/observe/updater`
+    return `/app/${appRouteSegment.value}/observe/releases`
   if (appSectionType.value === 'settings')
     return `/app/${appRouteSegment.value}/settings`
-  if (appSectionType.value === 'dashboard')
-    return `/app/${appRouteSegment.value}`
   // If on a resource detail page (bundle/channel/device), keep parent tab active
   if (resourceType.value) {
     const parentTab = parentTabMap[resourceType.value]
@@ -236,8 +229,19 @@ function handleTab(key: string) {
   router.push(key)
 }
 
+// One period drives every time-scoped Observe tab, so it lives in the tab bar
+// and follows the user from tab to tab through the ?days= query.
+const { days: observeDays } = usePeriodDaysQuery()
+const showObservePeriod = computed(() => {
+  const match = route.path.match(/^\/app\/[^/]+\/observe\/([^/]+)/)
+  return !!match && (OBSERVE_PERIOD_TABS as readonly string[]).includes(match[1])
+})
+
 function handleSecondaryTab(key: string) {
-  router.push(key)
+  if (appSectionType.value === 'observe' && route.query.days)
+    router.push({ path: key, query: { days: route.query.days } })
+  else
+    router.push(key)
 }
 </script>
 
@@ -251,7 +255,11 @@ function handleSecondaryTab(key: string) {
       no-wrap
       @update:active-tab="handleTab"
       @update:secondary-active-tab="handleSecondaryTab"
-    />
+    >
+      <template v-if="showObservePeriod" #secondary-actions>
+        <PeriodDaySelector v-model="observeDays" />
+      </template>
+    </Tabs>
     <main class="relative flex flex-1 w-full min-h-0 mt-0 overflow-hidden bg-blue-50 dark:bg-slate-800/40">
       <div v-if="showUnpaidState" class="flex-1 w-full min-h-0 mx-auto overflow-y-auto">
         <UnpaidState />

@@ -7,22 +7,23 @@ test.describe('Observe sections', () => {
   })
 
   test('keeps Observe subtabs reachable on desktop and mobile', async ({ page }) => {
-    await page.goto('/app/com.demo.app/observe/updater')
+    await page.goto('/app/com.demo.app/observe/errors')
     // Dismiss support prompt so mobile tab clicks are not intercepted.
     await dismissSupportPrompt(page)
 
-    const updaterTab = page.getByRole('button', { name: 'Updater', exact: true })
-    const logsTab = page.getByRole('button', { name: 'Logs', exact: true })
+    const releasesTab = page.getByRole('button', { name: 'Releases', exact: true })
+    const errorsTab = page.getByRole('button', { name: 'Errors', exact: true })
     const nativeTab = page.getByRole('button', { name: 'Native', exact: true })
     const compatibilityTab = page.getByRole('button', { name: 'Compatibility', exact: true })
-    const pluginsTab = page.getByRole('button', { name: 'Plugins', exact: true })
+    const logsTab = page.getByRole('button', { name: 'Logs', exact: true })
 
-    await expect(updaterTab).toBeVisible()
-    await expect(logsTab).toBeVisible()
+    await expect(releasesTab).toBeVisible()
+    await expect(errorsTab).toBeVisible()
     await expect(nativeTab).toBeVisible()
     await expect(compatibilityTab).toBeVisible()
-    await expect(pluginsTab).toBeVisible()
-    await expect(updaterTab).toHaveAttribute('aria-current', 'page')
+    await expect(logsTab).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Plugins', exact: true })).toHaveCount(0)
+    await expect(errorsTab).toHaveAttribute('aria-current', 'page')
     await expect(page.locator('[data-test="observe-updater-version-filter"]')).toBeVisible()
 
     await logsTab.click()
@@ -31,55 +32,54 @@ test.describe('Observe sections', () => {
     await expect(page.locator('#custom_table thead')).toContainText(/action/i)
     await expect(page.locator('#custom_table thead')).not.toContainText(/metadata/i)
 
+    // Plugin adoption now lives under Compatibility.
     await compatibilityTab.click()
     await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/compatibility(?:\?|$)/)
     await expect(compatibilityTab).toHaveAttribute('aria-current', 'page')
-
-    await pluginsTab.click()
-    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/plugins(?:\?|$)/)
-    await expect(pluginsTab).toHaveAttribute('aria-current', 'page')
     await expect(page.locator('[data-test="observe-plugin-insights"]')).toBeVisible()
     await expect(page.locator('[data-test="observe-plugin-insights"] table').getByText('4.15.3', { exact: true })).toBeVisible()
 
-    await page.setViewportSize({ width: 375, height: 667 })
-    await expect(updaterTab).toBeVisible()
-    await expect(pluginsTab).toBeVisible()
+    await page.goto('/app/com.demo.app/observe/plugins')
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/compatibility#plugins$/)
 
-    const updaterBox = await updaterTab.boundingBox()
-    const pluginsBox = await pluginsTab.boundingBox()
-    expect(updaterBox?.x).toBeGreaterThanOrEqual(0)
-    expect((pluginsBox?.x ?? 0) + (pluginsBox?.width ?? 0)).toBeLessThanOrEqual(375)
+    await page.goto('/app/com.demo.app/observe/updater')
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/errors(?:\?|$)/)
+
+    await page.setViewportSize({ width: 375, height: 667 })
+    await expect(releasesTab).toBeVisible()
+    await expect(logsTab).toBeVisible()
+
+    const releasesBox = await releasesTab.boundingBox()
+    expect(releasesBox?.x).toBeGreaterThanOrEqual(0)
 
     // Dismiss support prompt so mobile tab clicks are not intercepted.
     await dismissSupportPrompt(page)
     await nativeTab.click()
     await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/native(?:\?|$)/)
     await expect(nativeTab).toHaveAttribute('aria-current', 'page')
-    await expect(page.getByRole('heading', { name: 'Observe', exact: true, level: 1 })).toBeVisible()
   })
 
-  test('observe updater and native default to 1 day and persist the period in the URL', async ({ page }) => {
-    const oneDayButton = () => page.locator('[data-testid="period-day-selector"]').getByRole('button', { name: '1 day', exact: true })
-    const sevenDayButton = () => page.locator('[data-testid="period-day-selector"]').getByRole('button', { name: '7 days', exact: true })
+  test('one Observe period defaults to 7 days and follows the user across tabs', async ({ page }) => {
+    const periodButton = (name: string) => page.locator('[data-testid="period-day-selector"]').getByRole('button', { name, exact: true })
 
-    await page.goto('/app/com.demo.app/observe/updater')
-    await expect(oneDayButton()).toHaveAttribute('aria-pressed', 'true')
+    await page.goto('/app/com.demo.app/observe/errors')
+    await expect(periodButton('7 days')).toHaveAttribute('aria-pressed', 'true')
 
+    await periodButton('3 days').click()
+    await expect(page).toHaveURL(/[?&]days=3(?:&|$)/)
+    await expect(periodButton('3 days')).toHaveAttribute('aria-pressed', 'true')
+
+    await page.getByRole('button', { name: 'Native', exact: true }).click()
+    await expect(page).toHaveURL(/\/observe\/native\?days=3$/)
+    await expect(periodButton('3 days')).toHaveAttribute('aria-pressed', 'true')
+
+    // Tabs without a time scope hide the selector.
+    await page.getByRole('button', { name: 'Compatibility', exact: true }).click()
+    await expect(page.locator('[data-testid="period-day-selector"]')).toHaveCount(0)
+
+    await page.goto('/app/com.demo.app/observe/native?days=1')
+    await expect(periodButton('1 day')).toHaveAttribute('aria-pressed', 'true')
     await expect.poll(async () => Number(await page.locator('[data-testid="observe-period-labels"]').getAttribute('data-count'))).toBe(2)
-
-    await sevenDayButton().click()
-    await expect(page).toHaveURL(/[?&]days=7(?:&|$)/)
-    await expect(sevenDayButton()).toHaveAttribute('aria-pressed', 'true')
-
-    await page.goto('/app/com.demo.app/observe/native')
-    await expect(oneDayButton()).toHaveAttribute('aria-pressed', 'true')
-    await expect.poll(async () => Number(await page.locator('[data-testid="observe-period-labels"]').getAttribute('data-count'))).toBe(2)
-    await sevenDayButton().click()
-    await expect(page).toHaveURL(/[?&]days=7(?:&|$)/)
-    await expect(sevenDayButton()).toHaveAttribute('aria-pressed', 'true')
-
-    await page.goto('/app/com.demo.app/observe/native?days=3')
-    await expect(page.locator('[data-testid="period-day-selector"]').getByRole('button', { name: '3 days', exact: true })).toHaveAttribute('aria-pressed', 'true')
   })
 
   test('shows a metadata info icon only on log rows that have metadata', async ({ page }) => {

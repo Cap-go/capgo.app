@@ -2,8 +2,7 @@
 import type { UpdaterFailureCategory } from '~/services/statsActions'
 import type { Database } from '~/types/supabase.types'
 import type { PeriodDayOption } from '~/utils/periodDays'
-import { useLocalStorage } from '@vueuse/core'
-import { computed, nextTick, ref, useId, useTemplateRef, watch, watchEffect } from 'vue'
+import { computed, ref, useId, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -12,11 +11,9 @@ import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconAlertTriangle from '~icons/lucide/alert-triangle'
 import IconDownload from '~icons/lucide/download'
 import IconExternalLink from '~icons/lucide/external-link'
-import IconInfo from '~icons/lucide/info'
 import IconLayers from '~icons/lucide/layers'
 import IconSmartphone from '~icons/lucide/smartphone'
-import IconX from '~icons/lucide/x'
-import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
+import InfoPopover from '~/components/InfoPopover.vue'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { formatLocalDateShort, formatLocalDateTime } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
@@ -78,7 +75,7 @@ interface LogInsightsResponse {
 }
 
 const { t } = useI18n()
-const route = useRoute('/app/[app].observe.updater')
+const route = useRoute('/app/[app].observe.errors')
 const router = useRouter()
 const supabase = useSupabase()
 const displayStore = useDisplayStore()
@@ -93,10 +90,12 @@ const bundleNames = ref<string[]>([])
 const versionFilterId = useId()
 const app = ref<Database['public']['Tables']['apps']['Row']>()
 const insights = ref<LogInsightsResponse | null>(null)
-const publicChannels = ref<{ id: number, name: string, versionName: string }[]>([])
 let latestInsightsRequest = 0
-const failuresNoteDismissed = useLocalStorage('capgo:observe-updater-failures-note-dismissed', false)
-const failuresNote = useTemplateRef<HTMLElement>('failuresNote')
+// Lists start at the top rows so the page fits one screen; "show all" expands.
+const PREVIEW_ROWS = 5
+const showAllActions = ref(false)
+const showAllVersions = ref(false)
+const showAllDevices = ref(false)
 
 const failureCategories: UpdaterFailureCategory[] = ['rollback', 'bundle', 'device', 'setup']
 const failureBadgeClass: Record<UpdaterFailureCategory, string> = {
@@ -159,6 +158,18 @@ const dailyTotals = computed(() => {
   return [...dailyByDate.values()]
 })
 const maxDailyTotal = computed(() => Math.max(1, ...dailyTotals.value.map(day => day.total)))
+const visibleActions = computed(() => {
+  const actions = insights.value?.actions ?? []
+  return showAllActions.value ? actions : actions.slice(0, PREVIEW_ROWS)
+})
+const visibleVersions = computed(() => {
+  const versions = insights.value?.versions ?? []
+  return showAllVersions.value ? versions : versions.slice(0, PREVIEW_ROWS)
+})
+const visibleDevices = computed(() => {
+  const devices = insights.value?.devices ?? []
+  return showAllDevices.value ? devices : devices.slice(0, PREVIEW_ROWS)
+})
 
 function formatAction(action: string) {
   const filterKey = actionToFilter[action]
@@ -172,12 +183,6 @@ function failureLabel(action: string) {
 function failureHelp(action: string) {
   const key = updaterFailureHelpKey(action)
   return key ? t(key) : ''
-}
-
-async function showFailuresNote() {
-  failuresNoteDismissed.value = false
-  await nextTick()
-  failuresNote.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
 
 function openNative() {
@@ -234,32 +239,9 @@ async function loadAppInfo() {
       .eq('app_id', id.value)
       .single()
     app.value = dataApp || app.value
-
-    const { data: channelsData } = await supabase
-      .from('channels')
-      .select(`
-        id,
-        name,
-        version:app_versions!channels_version_fkey(id, name)
-      `)
-      .eq('app_id', id.value)
-      .eq('public', true)
-      .order('id', { ascending: true })
-
-    const uniqueByVersion = new Map<string, { id: number, name: string, versionName: string }>()
-    for (const channel of channelsData ?? []) {
-      const version = channel.version as { id?: number, name?: string } | { id?: number, name?: string }[] | null | undefined
-      const versionRow = Array.isArray(version) ? version[0] : version
-      const versionName = versionRow?.name
-      if (!versionName || uniqueByVersion.has(versionName))
-        continue
-      uniqueByVersion.set(versionName, { id: channel.id, name: channel.name, versionName })
-    }
-    publicChannels.value = [...uniqueByVersion.values()]
   }
   catch (error) {
     console.error(error)
-    publicChannels.value = []
   }
 }
 
@@ -332,10 +314,6 @@ async function refreshData() {
   isLoading.value = false
 }
 
-async function selectPeriod(option: PeriodDayOption) {
-  selectedDays.value = option
-}
-
 async function applyVersionFilter(name: string) {
   if (selectedVersionName.value === name)
     return
@@ -397,178 +375,78 @@ watch(() => [
 <template>
   <div>
     <PageLoader v-if="isLoading" />
-    <div v-else-if="app" class="w-full h-full px-4 pt-0 mx-auto mb-8 sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
-      <div class="flex flex-col gap-6">
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div class="min-w-0">
-            <h3 class="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-              {{ t('selected-period') }}
-            </h3>
+    <div v-else-if="app" class="w-full h-full px-4 pt-4 mx-auto mb-8 sm:px-6 lg:px-8 max-w-9xl max-h-fit">
+      <div class="flex flex-col gap-4">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div class="flex flex-wrap items-center min-w-0 gap-x-3 gap-y-2">
+            <label :for="versionFilterId" class="sr-only">{{ t('version') }}</label>
+            <select
+              :id="versionFilterId"
+              class="w-full py-0 text-sm d-select d-select-bordered h-9 min-h-9 sm:w-56"
+              :value="selectedVersionName"
+              data-test="observe-updater-version-filter"
+              @change="onVersionSelectChange"
+            >
+              <option value="">
+                {{ t('all-versions') }}
+              </option>
+              <option v-for="name in bundleNames" :key="name" :value="name">
+                {{ name }}
+              </option>
+            </select>
             <p
-              class="mt-1 text-sm text-slate-600 dark:text-slate-300"
+              class="text-sm text-slate-500 dark:text-slate-400"
               data-testid="observe-period-labels"
               :data-count="insights?.period.labels.length ?? 0"
+              :title="t('log-insights-period-help')"
             >
               {{ selectedPeriodLabel }} · {{ periodRangeLabel }}
             </p>
-            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              {{ t('log-insights-period-help') }}
-            </p>
           </div>
-          <div class="flex flex-col items-stretch gap-3 sm:flex-row sm:items-end">
-            <div class="min-w-0 sm:w-56">
-              <label
-                :for="versionFilterId"
-                class="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400"
-              >
-                {{ t('version') }}
-              </label>
-              <select
-                :id="versionFilterId"
-                class="d-select d-select-bordered mt-1 h-9 min-h-9 w-full py-0 text-sm"
-                :value="selectedVersionName"
-                data-test="observe-updater-version-filter"
-                @change="onVersionSelectChange"
-              >
-                <option value="">
-                  {{ t('all-versions') }}
-                </option>
-                <option v-for="name in bundleNames" :key="name" :value="name">
-                  {{ name }}
-                </option>
-              </select>
-            </div>
-            <PeriodDaySelector :model-value="selectedDays" @update:model-value="selectPeriod" />
-          </div>
-        </div>
-
-        <div
-          class="p-4 border rounded-lg shadow-sm"
-          :class="totalErrors > 0
-            ? 'bg-white border-slate-200 dark:bg-slate-800/60 dark:border-white/10'
-            : 'bg-emerald-50 border-emerald-200 dark:bg-emerald-950/20 dark:border-emerald-800'"
-          data-testid="observe-updater-summary"
-        >
-          <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div class="flex items-start gap-3 min-w-0">
-              <IconAlertTriangle
-                v-if="totalErrors > 0"
-                class="w-6 h-6 mt-0.5 shrink-0 text-amber-500 dark:text-amber-300"
-              />
-              <IconActivity
-                v-else
-                class="w-6 h-6 mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-300"
-              />
-              <div class="min-w-0">
-                <h3 class="font-semibold" :class="totalErrors > 0 ? 'text-slate-900 dark:text-slate-100' : 'text-emerald-800 dark:text-emerald-100'">
-                  {{ totalErrors > 0 ? t('updater-insights-top-failure') : t('no-log-insights') }}
-                </h3>
-                <p class="mt-1 text-sm" :class="totalErrors > 0 ? 'text-slate-600 dark:text-slate-300' : 'text-emerald-700 dark:text-emerald-200'">
-                  {{ totalErrors > 0 ? topPriorityMessage : t('no-log-insights-help') }}
-                </p>
-                <p v-if="topAction && failureHelp(topAction.action)" class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {{ failureHelp(topAction.action) }}
-                </p>
-              </div>
-            </div>
-            <button type="button" class="gap-2 d-btn d-btn-sm d-btn-outline shrink-0" @click="openLogs(topAction?.action)">
-              <IconExternalLink class="w-4 h-4" />
-              {{ topAction ? t('view-action-logs') : t('view-logs') }}
-            </button>
-          </div>
-        </div>
-
-        <div
-          v-if="totalErrors > 0 && !failuresNoteDismissed"
-          ref="failuresNote"
-          class="relative flex gap-3 p-4 pr-10 border rounded-xl border-sky-200 bg-sky-50/70 dark:border-sky-400/20 dark:bg-sky-400/5"
-          data-testid="observe-updater-failures-note"
-        >
-          <IconInfo class="w-5 h-5 mt-0.5 shrink-0 text-sky-600 dark:text-sky-300" />
-          <button
-            type="button"
-            class="absolute top-2 right-2 d-btn d-btn-ghost d-btn-xs d-btn-square text-slate-500 dark:text-slate-400"
-            :aria-label="t('updater-failures-note-dismiss')"
-            :title="t('updater-failures-note-dismiss')"
-            data-testid="observe-updater-failures-note-dismiss"
-            @click="failuresNoteDismissed = true"
-          >
-            <IconX class="w-4 h-4" />
+          <button type="button" class="gap-2 d-btn d-btn-sm d-btn-outline shrink-0" @click="openLogs(topAction?.action)">
+            <IconExternalLink class="w-4 h-4" />
+            {{ topAction ? t('view-action-logs') : t('view-logs') }}
           </button>
-          <div class="min-w-0 text-sm">
-            <div class="font-semibold text-slate-900 dark:text-slate-100">
-              {{ t('updater-failures-note-title') }}
-            </div>
-            <p class="mt-1 text-slate-600 dark:text-slate-300">
-              {{ t('updater-failures-note-body') }}
-            </p>
-            <ul class="flex flex-col gap-2 mt-3">
-              <li v-for="category in failureCategories" :key="category" class="flex items-center gap-2">
-                <span class="px-1.5 py-0.5 text-[11px] font-medium rounded border shrink-0" :class="failureBadgeClass[category]">{{ t(`updater-failure-${category}`) }}</span>
-                <span class="text-xs text-slate-600 dark:text-slate-400">{{ t(`updater-failures-note-${category}`) }}</span>
-              </li>
-            </ul>
-            <p class="mt-3 text-xs text-slate-600 dark:text-slate-400">
-              {{ t('updater-failures-note-native') }}
-              <button
-                type="button"
-                class="ml-1 underline text-sky-700 underline-offset-2 hover:text-sky-800 dark:text-sky-300 dark:hover:text-sky-200"
-                data-testid="observe-updater-open-native"
-                @click="openNative"
-              >
-                {{ t('updater-failures-note-native-link') }}
-              </button>
-            </p>
-          </div>
         </div>
 
-        <div
-          class="grid grid-cols-1 gap-4 sm:grid-cols-2"
-          :class="publicChannels.length ? 'xl:grid-cols-5' : 'xl:grid-cols-4'"
-        >
-          <BundleAdoptionCard
-            v-for="channel in publicChannels"
-            :key="channel.id"
-            :app-id="id"
-            :version-name="channel.versionName"
-            :linked-channel-id="channel.id"
-          />
-          <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-            <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+        <div class="grid grid-cols-2 gap-3 xl:grid-cols-4" data-testid="observe-updater-summary">
+          <div class="px-4 py-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+            <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
               <IconDownload class="w-4 h-4" />
               {{ t('errors-in-period') }}
             </div>
-            <div class="mt-2 text-lg font-semibold text-slate-900 dark:text-white">
+            <div class="mt-1 text-xl font-semibold" :class="totalErrors > 0 ? 'text-slate-900 dark:text-white' : 'text-emerald-600 dark:text-emerald-400'">
               {{ formatCount(totalErrors) }}
             </div>
           </div>
-          <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-            <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+          <div class="px-4 py-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+            <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
               <IconSmartphone class="w-4 h-4" />
               {{ t('affected-devices') }}
             </div>
-            <div class="mt-2 text-lg font-semibold text-slate-900 dark:text-white">
+            <div class="mt-1 text-xl font-semibold text-slate-900 dark:text-white">
               {{ formatCount(insights?.summary.device_count) }}
             </div>
           </div>
-          <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-            <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+          <div class="px-4 py-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+            <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
               <IconLayers class="w-4 h-4" />
               {{ t('action-count') }}
             </div>
-            <div class="mt-2 text-lg font-semibold text-slate-900 dark:text-white">
+            <div class="mt-1 text-xl font-semibold text-slate-900 dark:text-white">
               {{ formatCount(insights?.summary.action_count) }}
             </div>
           </div>
-          <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-            <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
-              <IconActivity class="w-4 h-4" />
+          <div class="px-4 py-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10" :title="topPriorityMessage">
+            <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+              <IconAlertTriangle v-if="topAction" class="w-4 h-4 text-amber-500" />
+              <IconActivity v-else class="w-4 h-4" />
               {{ t('top-priority') }}
             </div>
-            <div class="mt-2 text-lg font-semibold text-slate-900 dark:text-white truncate">
+            <div class="mt-1 text-xl font-semibold truncate text-slate-900 dark:text-white">
               {{ topAction ? formatAction(topAction.action) : '-' }}
             </div>
-            <div v-if="topAction" class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            <div v-if="topAction" class="text-xs text-slate-500 dark:text-slate-400">
               {{ t('error-share', { share: formatPercent(topActionShare) }) }}
             </div>
           </div>
@@ -578,8 +456,8 @@ watch(() => [
           <Spinner size="w-12 h-12" />
         </div>
 
-        <div v-else-if="!insights || totalErrors === 0" class="flex flex-col items-center justify-center h-64 bg-white border rounded-xl shadow-sm text-slate-500 dark:bg-slate-800/60 dark:text-slate-400 border-slate-200 dark:border-white/10">
-          <IconActivity class="w-12 h-12 mb-2" />
+        <div v-else-if="!insights || totalErrors === 0" class="flex flex-col items-center justify-center h-48 bg-white border rounded-xl shadow-sm text-slate-500 dark:bg-slate-800/60 dark:text-slate-400 border-slate-200 dark:border-white/10">
+          <IconActivity class="w-10 h-10 mb-2" />
           <p>{{ t('no-log-insights') }}</p>
           <p class="mt-1 text-sm">
             {{ t('no-log-insights-help') }}
@@ -587,69 +465,86 @@ watch(() => [
         </div>
 
         <template v-else>
-          <div class="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+          <div class="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
             <section class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-              <div class="mb-4">
-                <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
+              <div class="flex items-center gap-1 mb-3">
+                <h3 class="text-base font-semibold text-slate-900 dark:text-white">
                   {{ t('error-categories') }}
                 </h3>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                  {{ t('updater-failure-types-help') }}
-                  <button
-                    v-if="failuresNoteDismissed"
-                    type="button"
-                    class="ml-1 underline text-sky-700 underline-offset-2 hover:text-sky-800 dark:text-sky-300 dark:hover:text-sky-200"
-                    data-testid="observe-updater-failures-note-show"
-                    @click="showFailuresNote"
-                  >
-                    {{ t('updater-failures-note-show') }}
-                  </button>
-                </p>
+                <InfoPopover :label="t('updater-failures-note-title')">
+                  <div data-testid="observe-updater-failures-note">
+                    <div class="font-semibold text-slate-900 dark:text-slate-100">
+                      {{ t('updater-failures-note-title') }}
+                    </div>
+                    <p class="mt-1 text-slate-600 dark:text-slate-300">
+                      {{ t('updater-failures-note-body') }}
+                    </p>
+                    <ul class="flex flex-col gap-2 mt-3">
+                      <li v-for="category in failureCategories" :key="category" class="flex items-center gap-2">
+                        <span class="px-1.5 py-0.5 text-[11px] font-medium rounded border shrink-0" :class="failureBadgeClass[category]">{{ t(`updater-failure-${category}`) }}</span>
+                        <span class="text-xs text-slate-600 dark:text-slate-400">{{ t(`updater-failures-note-${category}`) }}</span>
+                      </li>
+                    </ul>
+                    <p class="mt-3 text-xs text-slate-600 dark:text-slate-400">
+                      {{ t('updater-failures-note-native') }}
+                      <button
+                        type="button"
+                        class="ml-1 underline text-sky-700 underline-offset-2 hover:text-sky-800 dark:text-sky-300 dark:hover:text-sky-200"
+                        data-testid="observe-updater-open-native"
+                        @click="openNative"
+                      >
+                        {{ t('updater-failures-note-native-link') }}
+                      </button>
+                    </p>
+                  </div>
+                </InfoPopover>
               </div>
-              <div class="space-y-4">
+              <div class="space-y-3">
                 <button
-                  v-for="action in insights.actions"
+                  v-for="action in visibleActions"
                   :key="action.action"
                   type="button"
                   class="w-full text-left group"
+                  :title="[failureHelp(action.action), `${t('version-count')}: ${formatCount(action.version_count)}`, `${t('last-seen')}: ${formatLastSeen(action.last_seen)}`].filter(Boolean).join('\n')"
                   @click="openLogs(action.action)"
                 >
                   <div class="flex items-center justify-between gap-3 text-sm">
                     <span class="flex items-center min-w-0 gap-2">
-                      <span class="font-medium text-slate-800 dark:text-slate-100 truncate">{{ formatAction(action.action) }}</span>
+                      <span class="font-medium truncate text-slate-800 dark:text-slate-100">{{ formatAction(action.action) }}</span>
                       <span class="px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap rounded border shrink-0" :class="failureBadgeClass[updaterFailureCategory(action.action)]">
                         {{ failureLabel(action.action) }}
                       </span>
                     </span>
-                    <span class="text-slate-500 dark:text-slate-400 shrink-0">{{ formatCount(action.total) }}</span>
+                    <span class="text-xs text-slate-500 dark:text-slate-400 shrink-0">
+                      <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ formatCount(action.total) }}</span>
+                      · {{ t('affected-devices-count', { count: formatCount(action.device_count) }) }}
+                    </span>
                   </div>
-                  <div v-if="failureHelp(action.action)" class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                    {{ failureHelp(action.action) }}
-                  </div>
-                  <div class="mt-2 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
+                  <div class="mt-1.5 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
                     <div class="h-full transition-all rounded-full" :class="failureBarClass[updaterFailureCategory(action.action)]" :style="`width: ${Math.max(4, (action.total / totalErrors) * 100)}%`" />
-                  </div>
-                  <div class="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
-                    <span>{{ t('affected-devices') }}: {{ formatCount(action.device_count) }}</span>
-                    <span>{{ t('version-count') }}: {{ formatCount(action.version_count) }}</span>
-                    <span>{{ t('last-seen') }}: {{ formatLastSeen(action.last_seen) }}</span>
                   </div>
                 </button>
               </div>
+              <button
+                v-if="insights.actions.length > PREVIEW_ROWS"
+                type="button"
+                class="mt-3 text-xs font-medium text-azure-600 hover:underline dark:text-azure-300"
+                @click="showAllActions = !showAllActions"
+              >
+                {{ showAllActions ? t('show-less') : t('show-all-count', { count: insights.actions.length }) }}
+              </button>
             </section>
 
             <section class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-              <div class="mb-4">
-                <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
-                  {{ t('daily-error-trend') }}
-                </h3>
-              </div>
-              <div class="flex items-end gap-2 h-56">
+              <h3 class="mb-3 text-base font-semibold text-slate-900 dark:text-white">
+                {{ t('daily-error-trend') }}
+              </h3>
+              <div class="flex items-end gap-2 h-48">
                 <div v-for="day in dailyTotals" :key="day.date" class="flex flex-col items-center justify-end flex-1 h-full min-w-0 gap-2">
                   <div class="flex items-end w-full h-full rounded-t bg-slate-100 dark:bg-slate-700">
-                    <div class="w-full rounded-t bg-slate-400 dark:bg-slate-500" :style="`height: ${Math.max(4, (day.total / maxDailyTotal) * 100)}%`" />
+                    <div class="w-full rounded-t bg-slate-400 dark:bg-slate-500" :style="`height: ${Math.max(4, (day.total / maxDailyTotal) * 100)}%`" :title="`${formatCount(day.total)}${day.topAction ? ` · ${formatAction(day.topAction)}` : ''}`" />
                   </div>
-                  <div class="w-full text-center text-[11px] text-slate-500 dark:text-slate-400 truncate" :title="day.topAction ? formatAction(day.topAction) : ''">
+                  <div class="w-full text-center text-[11px] text-slate-500 dark:text-slate-400 truncate">
                     {{ formatLocalDateShort(day.date) }}
                   </div>
                 </div>
@@ -657,34 +552,32 @@ watch(() => [
             </section>
           </div>
 
-          <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
+          <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <section class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-              <div class="mb-4">
-                <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
-                  {{ t('top-error-versions') }}
-                </h3>
-              </div>
+              <h3 class="mb-3 text-base font-semibold text-slate-900 dark:text-white">
+                {{ t('top-error-versions') }}
+              </h3>
               <div class="overflow-x-auto">
                 <table class="min-w-full text-sm">
                   <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
                     <tr>
-                      <th class="px-0 py-2 text-left font-medium">
+                      <th class="px-0 py-2 font-medium text-left">
                         {{ t('version') }}
                       </th>
-                      <th class="px-3 py-2 text-left font-medium">
+                      <th class="px-3 py-2 font-medium text-left">
                         {{ t('action') }}
                       </th>
-                      <th class="px-3 py-2 text-right font-medium">
+                      <th class="px-3 py-2 font-medium text-right">
                         {{ t('events') }}
                       </th>
-                      <th class="px-0 py-2 text-right font-medium">
+                      <th class="px-0 py-2 font-medium text-right">
                         {{ t('devices') }}
                       </th>
                     </tr>
                   </thead>
                   <tbody class="divide-y divide-slate-100 dark:divide-white/5">
                     <tr
-                      v-for="version in insights.versions"
+                      v-for="version in visibleVersions"
                       :key="`${version.action}-${version.version_name}`"
                       :class="selectedVersionName === version.version_name ? 'bg-azure-50/70 dark:bg-azure-400/5' : ''"
                     >
@@ -711,27 +604,33 @@ watch(() => [
                   </tbody>
                 </table>
               </div>
+              <button
+                v-if="insights.versions.length > PREVIEW_ROWS"
+                type="button"
+                class="mt-3 text-xs font-medium text-azure-600 hover:underline dark:text-azure-300"
+                @click="showAllVersions = !showAllVersions"
+              >
+                {{ showAllVersions ? t('show-less') : t('show-all-count', { count: insights.versions.length }) }}
+              </button>
             </section>
 
             <section class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-              <div class="mb-4">
-                <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
-                  {{ t('top-error-devices') }}
-                </h3>
-              </div>
-              <div class="space-y-3">
+              <h3 class="mb-3 text-base font-semibold text-slate-900 dark:text-white">
+                {{ t('top-error-devices') }}
+              </h3>
+              <div class="space-y-2">
                 <button
-                  v-for="device in insights.devices"
+                  v-for="device in visibleDevices"
                   :key="`${device.action}-${device.device_id}`"
                   type="button"
-                  class="flex items-center justify-between w-full gap-3 p-3 text-left border rounded-md border-slate-200 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/40"
+                  class="flex items-center justify-between w-full gap-3 px-3 py-2 text-left border rounded-md border-slate-200 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/40"
                   @click="openDeviceLogs(device)"
                 >
                   <div class="min-w-0">
-                    <div class="font-medium truncate text-slate-900 dark:text-white">
+                    <div class="text-sm font-medium truncate text-slate-900 dark:text-white">
                       {{ device.device_id }}
                     </div>
-                    <div class="mt-1 text-xs text-slate-500 dark:text-slate-400 truncate">
+                    <div class="text-xs truncate text-slate-500 dark:text-slate-400">
                       {{ formatAction(device.action) }} · {{ device.version_name }} · {{ formatLastSeen(device.last_seen) }}
                     </div>
                   </div>
@@ -740,6 +639,14 @@ watch(() => [
                   </div>
                 </button>
               </div>
+              <button
+                v-if="insights.devices.length > PREVIEW_ROWS"
+                type="button"
+                class="mt-3 text-xs font-medium text-azure-600 hover:underline dark:text-azure-300"
+                @click="showAllDevices = !showAllDevices"
+              >
+                {{ showAllDevices ? t('show-less') : t('show-all-count', { count: insights.devices.length }) }}
+              </button>
             </section>
           </div>
         </template>

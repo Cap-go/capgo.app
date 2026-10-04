@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions, Plugin } from 'chart.js'
+import type { PropType } from 'vue'
 import type { TooltipClickHandler } from '~/services/chartTooltip'
 import type { NativeActiveDevicesSummary, NativeDailyPlatformActive } from '~/services/nativeDeviceStats'
 import type { Organization } from '~/stores/organization'
@@ -55,6 +56,12 @@ const props = defineProps({
   usageKind: {
     type: String,
     default: 'bundle',
+  },
+  // 'chart' renders only the version chart: the page owns the title, the
+  // shared period selector and the KPI tiles.
+  variant: {
+    type: String as PropType<'full' | 'chart'>,
+    default: 'full',
   },
 })
 
@@ -591,7 +598,7 @@ const iosActiveEvolution = computed(() => calculateSummaryEvolutionPercent(
   selectedPeriodActiveDevices.value?.ios,
   selectedPeriodPreviousActiveDevices.value?.ios,
 ))
-const showNativeKpis = computed(() => isNativeUsage.value)
+const showNativeKpis = computed(() => isNativeUsage.value && props.variant === 'full')
 const isThirtyDaySummaryLoading = computed(() => isFetchingThirtyDaySummary.value || (isLoading.value && isNativeUsage.value && (props.useBillingPeriod || periodDays.value !== 30)))
 
 const todayLineOptions = computed(() => {
@@ -920,7 +927,7 @@ watch(
 
 <template>
   <section class="flex flex-col gap-4">
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div v-if="props.variant === 'full'" class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
       <div class="min-w-0">
         <h2 class="text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
           {{ t(titleKey) }}
@@ -1022,7 +1029,10 @@ watch(
         :is-demo-data="isDemoMode"
       >
         <template #header>
-          <div class="flex w-full items-start justify-end">
+          <div class="flex w-full items-start" :class="props.variant === 'chart' ? 'justify-between gap-3' : 'justify-end'">
+            <h2 v-if="props.variant === 'chart'" class="min-w-0 text-base font-semibold leading-tight text-slate-900 dark:text-white">
+              {{ t(titleKey) }}
+            </h2>
             <div class="flex max-w-[11rem] flex-col items-end text-right shrink-0">
               <div
                 class="inline-flex items-center justify-center px-2 py-1 text-xs font-bold text-white rounded-full shadow-lg whitespace-nowrap bg-cyan-500"

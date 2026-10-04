@@ -264,7 +264,7 @@ watch(() => props.appId, () => {
 
 <template>
   <section class="flex flex-col gap-4" data-testid="release-live">
-    <div class="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+    <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
       <div class="min-w-0">
         <div class="flex flex-wrap items-center gap-2">
           <h2 class="text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
@@ -287,10 +287,11 @@ watch(() => props.appId, () => {
             {{ t('demo') }}
           </span>
         </div>
-        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          {{ t('release-live-help', { seconds: RELEASE_LIVE_POLL_INTERVAL_MS / 1000 }) }}
-        </p>
-        <p v-if="secondsSinceUpdate !== null" class="mt-1 text-xs tabular-nums text-slate-500 dark:text-slate-400">
+        <p
+          v-if="secondsSinceUpdate !== null"
+          class="mt-1 text-xs tabular-nums text-slate-500 dark:text-slate-400"
+          :title="t('release-live-help', { seconds: RELEASE_LIVE_POLL_INTERVAL_MS / 1000 })"
+        >
           {{ t('release-live-updated-ago', { seconds: secondsSinceUpdate }) }}
         </p>
       </div>
@@ -370,7 +371,7 @@ watch(() => props.appId, () => {
     </div>
 
     <template v-else>
-      <div class="flex flex-col gap-3 p-4 bg-white border rounded-lg shadow-sm sm:flex-row sm:items-center sm:justify-between dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+      <div class="flex flex-col gap-3 px-4 py-3 bg-white border rounded-lg shadow-sm sm:flex-row sm:items-center sm:justify-between dark:bg-slate-800 border-slate-200 dark:border-slate-700">
         <div class="min-w-0">
           <div class="flex flex-wrap items-center gap-2">
             <span class="text-lg font-semibold text-slate-900 dark:text-white">{{ release.version_name }}</span>
@@ -407,36 +408,36 @@ watch(() => props.appId, () => {
       </div>
 
       <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-          <div class="text-sm text-slate-600 dark:text-slate-400">
+        <div class="px-4 py-3 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+          <div class="text-xs text-slate-600 dark:text-slate-400">
             {{ t('release-live-adoption') }}
           </div>
-          <div class="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">
+          <div class="mt-1 text-xl font-semibold text-slate-900 dark:text-white">
             {{ formatPercent(adoption.percent) }}
           </div>
-          <div class="w-full h-1.5 mt-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
+          <div class="w-full h-1.5 mt-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
             <div class="h-full transition-all duration-500 rounded-full bg-azure-500" :style="{ width: `${Math.min(100, adoption.percent ?? 0)}%` }" />
           </div>
           <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
             {{ t('release-live-adoption-help', { onRelease: formatCount(adoption.devices_on_release), total: formatCount(adoption.total_devices) }) }}
           </p>
         </div>
-        <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-          <div class="text-sm text-slate-600 dark:text-slate-400">
+        <div class="px-4 py-3 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+          <div class="text-xs text-slate-600 dark:text-slate-400">
             {{ t('release-live-installs') }}
           </div>
-          <div class="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">
+          <div class="mt-1 text-xl font-semibold text-slate-900 dark:text-white">
             {{ formatCount(totals.install) }}
           </div>
           <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
             {{ t('release-live-served', { count: formatCount(totals.get) }) }}
           </p>
         </div>
-        <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-          <div class="text-sm text-slate-600 dark:text-slate-400">
+        <div class="px-4 py-3 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+          <div class="text-xs text-slate-600 dark:text-slate-400">
             {{ t('release-live-failures') }}
           </div>
-          <div class="mt-2 text-2xl font-semibold" :class="failureCountClass" data-testid="release-live-failure-count">
+          <div class="mt-1 text-xl font-semibold" :class="failureCountClass" data-testid="release-live-failure-count">
             {{ formatCount(totals.fail) }}
           </div>
           <p v-if="failureRate !== null" class="mt-1 text-xs text-slate-500 dark:text-slate-400">
@@ -453,11 +454,11 @@ watch(() => props.appId, () => {
             </p>
           </template>
         </div>
-        <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-          <div class="text-sm text-slate-600 dark:text-slate-400">
+        <div class="px-4 py-3 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+          <div class="text-xs text-slate-600 dark:text-slate-400">
             {{ t('bundle-install-success-rate') }}
           </div>
-          <div class="mt-2 text-2xl font-semibold" :class="successRateClass(totals.success_rate)">
+          <div class="mt-1 text-xl font-semibold" :class="successRateClass(totals.success_rate)">
             {{ formatPercent(totals.success_rate) }}
           </div>
         </div>
@@ -473,10 +474,10 @@ watch(() => props.appId, () => {
               {{ t('release-live-bucket', { minutes: live.window.bucket_minutes }) }}
             </span>
           </div>
-          <div v-if="hasActivity" class="h-64">
+          <div v-if="hasActivity" class="h-56">
             <Bar :data="chartData" :options="chartOptions" />
           </div>
-          <div v-else class="flex flex-col items-center justify-center h-64 gap-2 text-sm text-center text-slate-500 dark:text-slate-400">
+          <div v-else class="flex flex-col items-center justify-center h-56 gap-2 text-sm text-center text-slate-500 dark:text-slate-400">
             <Spinner size="w-6 h-6" />
             <p class="max-w-sm">
               {{ t('release-live-waiting') }}
@@ -484,12 +485,9 @@ watch(() => props.appId, () => {
           </div>
         </div>
         <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-          <h3 class="text-sm font-semibold text-slate-900 dark:text-white">
+          <h3 class="mb-3 text-sm font-semibold text-slate-900 dark:text-white" :title="t('release-live-failures-normal')">
             {{ t('release-live-top-failures') }}
           </h3>
-          <p class="mt-1 mb-3 text-xs text-slate-500 dark:text-slate-400">
-            {{ t('release-live-failures-normal') }}
-          </p>
           <ul v-if="failures.length" class="flex flex-col gap-2">
             <li v-for="failure in failures" :key="failure.action" class="flex items-center justify-between gap-2 text-sm">
               <code class="px-1.5 py-0.5 text-xs rounded bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200">{{ failure.action }}</code>
