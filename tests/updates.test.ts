@@ -1249,6 +1249,44 @@ describe('update scenarios', () => {
     }
   })
 
+  it('paused channel sends no update and keeps the device bundle', async () => {
+    await getSupabaseClient()
+      .from('channels')
+      .update({ paused_at: new Date().toISOString() })
+      .eq('app_id', APP_NAME_UPDATE)
+      .eq('name', 'production')
+      .throwOnError()
+
+    try {
+      const baseData = getBaseData(APP_NAME_UPDATE)
+      baseData.version_name = '1.1.0'
+
+      const response = await postUpdateAfterChannelMutation(baseData)
+      expect(response.status).toBe(200)
+      const json = await response.json<UpdateRes>()
+      expect(json.error).toBe('channel_paused')
+      expect(json.kind).toBe('up_to_date')
+      expect(json.url).toBeUndefined()
+      expect(json.version).toBeUndefined()
+    }
+    finally {
+      await getSupabaseClient()
+        .from('channels')
+        .update({ paused_at: null })
+        .eq('app_id', APP_NAME_UPDATE)
+        .eq('name', 'production')
+        .throwOnError()
+    }
+
+    const baseData = getBaseData(APP_NAME_UPDATE)
+    baseData.version_name = '1.1.0'
+    const resumed = await postUpdateAfterChannelMutation(baseData)
+    expect(resumed.status).toBe(200)
+    const resumedJson = await resumed.json<UpdateRes>()
+    expect(resumedJson.error).toBeUndefined()
+    expect(resumedJson.version).toBe('1.0.0')
+  })
+
   it('disallow device', async () => {
     await getSupabaseClient()
       .from('channels')

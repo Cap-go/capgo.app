@@ -973,6 +973,7 @@ export type Database = {
           ios: boolean
           name: string
           owner_org: string
+          paused_at: string | null
           public: boolean
           rbac_id: string
           rollout_cache_ttl_seconds: number
@@ -1013,6 +1014,7 @@ export type Database = {
           ios?: boolean
           name: string
           owner_org: string
+          paused_at?: string | null
           public?: boolean
           rbac_id?: string
           rollout_cache_ttl_seconds?: number
@@ -1053,6 +1055,7 @@ export type Database = {
           ios?: boolean
           name?: string
           owner_org?: string
+          paused_at?: string | null
           public?: boolean
           rbac_id?: string
           rollout_cache_ttl_seconds?: number
@@ -4550,6 +4553,10 @@ export type Database = {
         Args: { p_limit?: number }
         Returns: number
       }
+      enqueue_cron_tick: {
+        Args: { payload: Json; queue_name: string }
+        Returns: undefined
+      }
       exist_app: { Args: { appid: string }; Returns: boolean }
       exist_app_v2: { Args: { appid: string }; Returns: boolean }
       exist_app_versions:
@@ -6144,6 +6151,7 @@ export type Database = {
         | "webview_dom_content_loaded"
         | "webview_page_loaded"
         | "app_nav"
+        | "channelPaused"
       stripe_status:
         | "created"
         | "succeeded"
@@ -6425,6 +6433,7 @@ export const Constants = {
         "webview_dom_content_loaded",
         "webview_page_loaded",
         "app_nav",
+        "channelPaused",
       ],
       stripe_status: [
         "created",

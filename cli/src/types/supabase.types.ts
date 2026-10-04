@@ -824,6 +824,7 @@ export type Database = {
           ios: boolean
           name: string
           owner_org: string
+          paused_at: string | null
           public: boolean
           auto_pause_action: string
           auto_pause_confidence: number
@@ -864,6 +865,7 @@ export type Database = {
           ios?: boolean
           name: string
           owner_org: string
+          paused_at?: string | null
           public?: boolean
           auto_pause_action?: string
           auto_pause_confidence?: number
@@ -904,6 +906,7 @@ export type Database = {
           ios?: boolean
           name?: string
           owner_org?: string
+          paused_at?: string | null
           public?: boolean
           auto_pause_action?: string
           auto_pause_confidence?: number
@@ -4942,6 +4945,7 @@ export type Database = {
         | "os_version_changed"
         | "native_app_version_changed"
         | "app_nav"
+        | "channelPaused"
       stripe_status:
         | "created"
         | "succeeded"
@@ -5212,6 +5216,7 @@ export const Constants = {
         "os_version_changed",
         "native_app_version_changed",
         "app_nav",
+        "channelPaused",
       ],
       stripe_status: [
         "created",

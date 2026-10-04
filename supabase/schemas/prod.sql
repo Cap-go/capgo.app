@@ -341,7 +341,8 @@ CREATE TYPE "public"."stats_action" AS ENUM (
     'app_launch_timeout',
     'webview_dom_content_loaded',
     'webview_page_loaded',
-    'app_nav'
+    'app_nav',
+    'channelPaused'
 );
 
 
@@ -6827,6 +6828,40 @@ $$;
 ALTER FUNCTION "public"."enqueue_credit_usage_posthog_event"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."enqueue_cron_tick"("queue_name" "text", "payload" "jsonb") RETURNS "void"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO ''
+    AS $_$
+DECLARE
+  tick_pending boolean;
+BEGIN
+  -- Serialize producers per queue so concurrent callers cannot both see no
+  -- pending tick and enqueue a duplicate.
+  PERFORM pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('enqueue_cron_tick:' || queue_name, 0)
+  );
+
+  EXECUTE pg_catalog.format(
+    'SELECT EXISTS (SELECT 1 FROM pgmq.%I WHERE read_ct = 0 AND message = $1)',
+    'q_' || queue_name
+  )
+  INTO tick_pending
+  USING payload;
+
+  IF NOT tick_pending THEN
+    PERFORM pgmq.send(queue_name, payload);
+  END IF;
+END;
+$_$;
+
+
+ALTER FUNCTION "public"."enqueue_cron_tick"("queue_name" "text", "payload" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."enqueue_cron_tick"("queue_name" "text", "payload" "jsonb") IS 'Enqueue a cron tick unless an identical unread tick is already waiting, so tick backlogs cannot accumulate.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."enqueue_global_stats_creates"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -11127,13 +11162,13 @@ BEGIN
                o.allow_device, o.allow_dev, o.allow_prod, o.disable_auto_update_under_native,
                o.disable_auto_update, o.ios, o.android, o.electron, o.update_package,
                o.rollout_version, o.rollout_percentage_bps, o.rollout_enabled, o.rollout_id,
-               o.rollout_paused_at, o.rollout_pause_reason, o.rollout_cache_ttl_seconds)
+               o.rollout_paused_at, o.rollout_pause_reason, o.rollout_cache_ttl_seconds, o.paused_at)
           IS DISTINCT FROM
               (n.app_id, n.name, n.version, n.public, n.allow_device_self_set, n.allow_emulator,
                n.allow_device, n.allow_dev, n.allow_prod, n.disable_auto_update_under_native,
                n.disable_auto_update, n.ios, n.android, n.electron, n.update_package,
                n.rollout_version, n.rollout_percentage_bps, n.rollout_enabled, n.rollout_id,
-               n.rollout_paused_at, n.rollout_pause_reason, n.rollout_cache_ttl_seconds)
+               n.rollout_paused_at, n.rollout_pause_reason, n.rollout_cache_ttl_seconds, n.paused_at)
         UNION
         SELECT n.app_id::text FROM old_rows o JOIN new_rows n ON n.id = o.id
         WHERE o.app_id IS DISTINCT FROM n.app_id
@@ -14524,7 +14559,7 @@ BEGIN
               EXECUTE 'SELECT ' || task.target;
 
             WHEN 'queue' THEN
-              PERFORM pgmq.send(
+              PERFORM public.enqueue_cron_tick(
                 task.target,
                 COALESCE(task.payload, jsonb_build_object('function_name', task.target))
               );
@@ -14549,7 +14584,7 @@ BEGIN
     END LOOP;
 
     IF current_minute % 5 = 0 AND current_second < 10 THEN
-      PERFORM pgmq.send(
+      PERFORM public.enqueue_cron_tick(
         'cron_rollout_auto_pause',
         jsonb_build_object(
           'function_name', 'cron_rollout_auto_pause',
@@ -22154,6 +22189,7 @@ CREATE TABLE IF NOT EXISTS "public"."channels" (
     "auto_pause_last_triggered_at" timestamp with time zone,
     "auto_pause_last_checked_at" timestamp with time zone,
     "update_package" "public"."channel_update_package" DEFAULT 'all'::"public"."channel_update_package" NOT NULL,
+    "paused_at" timestamp with time zone,
     CONSTRAINT "channels_auto_pause_action_check" CHECK (("auto_pause_action" = ANY (ARRAY['pause'::"text", 'rollback'::"text", 'notify'::"text"]))),
     CONSTRAINT "channels_auto_pause_confidence_check" CHECK ((("auto_pause_confidence" > (0)::numeric) AND ("auto_pause_confidence" < (1)::numeric))),
     CONSTRAINT "channels_auto_pause_cooldown_minutes_check" CHECK ((("auto_pause_cooldown_minutes" >= 0) AND ("auto_pause_cooldown_minutes" <= 10080))),
@@ -22176,6 +22212,10 @@ COMMENT ON COLUMN "public"."channels"."rbac_id" IS 'Stable UUID to bind RBAC rol
 
 
 COMMENT ON COLUMN "public"."channels"."update_package" IS 'How /updates serves the channel bundle: all (zip+delta), zip, delta, or zip/delta only when the device is still on the store builtin version.';
+
+
+
+COMMENT ON COLUMN "public"."channels"."paused_at" IS 'When set, the channel is paused: /updates answers channel_paused and devices keep their current bundle.';
 
 
 
@@ -28988,6 +29028,11 @@ REVOKE ALL ON FUNCTION "public"."enqueue_credit_usage_alert"() FROM PUBLIC;
 
 REVOKE ALL ON FUNCTION "public"."enqueue_credit_usage_posthog_event"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."enqueue_credit_usage_posthog_event"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."enqueue_cron_tick"("queue_name" "text", "payload" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."enqueue_cron_tick"("queue_name" "text", "payload" "jsonb") TO "service_role";
 
 
 
