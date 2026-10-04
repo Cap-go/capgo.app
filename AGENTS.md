@@ -80,7 +80,10 @@ CLI identity path (`get_user_id(text)` with a valid API key must keep working).
 - `bun mobile` - Build for mobile and copy to Capacitor platforms
 - `bun dev-build` - Build with development branch configuration
 - `bun run cli:build` - Build the CLI workspace in `cli/`
-- `bun run cli:test` - Run the CLI workspace test suite
+- `bun run cli:test` - Run the CLI workspace test suite (the setup steps
+  `test:helper-dce` and `test:version-detection:setup` run first, then the rest
+  of `cli` `test:suite` runs in parallel; `bun run --cwd cli test:serial` runs
+  everything one by one)
 - `bun run cli:check` - Lint, typecheck, build, and test the CLI workspace
 
 ### Testing
@@ -102,7 +105,8 @@ CLI identity path (`get_user_id(text)` with a valid API key must keep working).
 - `bun test:cli` - Run CLI-specific tests (workspace CLI plus
   `tests/cli-compat.test.ts`, which pins `@capgo/cli` to `MIN_CLI_VERSION`)
 - `bun test:local` - Legacy alias for the default monorepo backend test run
-- `bun test:front` - Run Playwright frontend tests
+- `bun test:front` - Run Playwright frontend tests (CI shards spec files by
+  measured duration from `playwright/spec-durations.json`; add slow new specs there)
 - `bun test:all:local` - Legacy alias for `bun test:all`
 - `bun test:cli:local` - Legacy alias for `bun test:cli`
 

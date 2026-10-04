@@ -313,9 +313,9 @@ function isPlanUpgradeResponse(status, responseBody) {
   return status === 429 && responseBody?.error === 'need_plan_upgrade'
 }
 
-async function buildOnPremResponse(hostname, appId, endpoint, method, responseBody, status, responseHeaders) {
-  // Cache only after every configured fallback agrees this is an on-prem app.
-  await setOnPremCache(hostname, appId, endpoint, method, responseBody, status, responseHeaders)
+async function buildOnPremResponse(hostname, appId, endpoint, method, responseBody, status, responseHeaders, shouldCache) {
+  if (shouldCache)
+    await setOnPremCache(hostname, appId, endpoint, method, responseBody, status, responseHeaders)
 
   const newHeaders = new Headers(responseHeaders)
   newHeaders.set('Content-Type', 'application/json')
@@ -829,15 +829,10 @@ export default {
     const pathWithQuery = url.pathname + url.search
 
     const fallbackUrls = zoneFallbackUrls[zone] || [WORKER_URL.EUROPE]
-    let pendingOnPrem = null
-    let onPremConfirmations = 0
-    let successfulFallbacks = 0
+    // Set once a worker is skipped or fails; an on-prem answer seen after that is served but not cached.
     let fallbackFailure = false
-    // After first on-prem hit, confirm with at most one more healthy worker (not the full mesh).
-    let onPremConfirmPending = false
 
-    for (let index = 0; index < fallbackUrls.length; index++) {
-      const workerUrl = fallbackUrls[index]
+    for (const workerUrl of fallbackUrls) {
       // Skip unhealthy workers (circuit is open)
       const healthy = await isHealthy(hostname, colo, workerUrl)
       if (!healthy) {
@@ -869,7 +864,6 @@ export default {
 
         // Success (2xx, 3xx, 4xx) - worker is healthy
         await markHealthy(hostname, colo, workerUrl)
-        successfulFallbacks += 1
         console.log(`Request served by ${workerUrl}`)
 
         // Check if this is an on-prem response that should be cached
@@ -878,34 +872,14 @@ export default {
             const responseClone = response.clone()
             const responseBody = await responseClone.json()
 
+            // Return on the first on-prem answer. Confirming with another worker costs
+            // extra subrequests and blows the Enterprise snippet limit (5), which turns
+            // every on-prem request into a 1101. Stale on-prem entries from replica lag
+            // are purged by tag on app/version create. During a partial outage the answer is
+            // served but not cached.
             if (isOnPremResponse(response.status, responseBody)) {
-              onPremConfirmations += 1
-              pendingOnPrem = {
-                responseBody,
-                status: response.status,
-                headers: response.headers,
-                workerUrl,
-              }
-              // Confirm with one extra healthy worker when available; otherwise finalize.
-              if (onPremConfirmations === 1 && index < fallbackUrls.length - 1) {
-                onPremConfirmPending = true
-                console.log(`${workerUrl} returned on-prem for ${appId}; confirming with one fallback worker`)
-                continue
-              }
-              // Never cache after a skipped/failed configured fallback (partial outage).
-              if (fallbackFailure) {
-                console.log(`On-prem seen after fallback failure for ${appId}; not caching`)
-                continue
-              }
-              console.log(`On-prem confirmed (${onPremConfirmations}) for ${appId}`)
-              return await buildOnPremResponse(hostname, appId, endpoint, method, pendingOnPrem.responseBody, pendingOnPrem.status, pendingOnPrem.headers)
-            }
-
-            // A non-on-prem response during confirm means do not cache on-prem.
-            if (onPremConfirmPending) {
-              console.log(`${workerUrl} disagreed on on-prem for ${appId}; serving cloud response`)
-              onPremConfirmPending = false
-              pendingOnPrem = null
+              console.log(`On-prem detected by ${workerUrl} for ${appId}${fallbackFailure ? ' (after fallback failure, not caching)' : ''}`)
+              return await buildOnPremResponse(hostname, appId, endpoint, method, responseBody, response.status, response.headers, !fallbackFailure)
             }
 
             if (isPlanUpgradeResponse(response.status, responseBody)) {
@@ -939,20 +913,9 @@ export default {
       }
     }
 
-    // If we only got on-prem responses (and maybe failed to confirm), cache when all successes agreed.
-    if (pendingOnPrem && !fallbackFailure && successfulFallbacks > 0 && onPremConfirmations === successfulFallbacks) {
-      console.log(`All ${onPremConfirmations}/${successfulFallbacks} successful fallback workers returned on-prem for ${appId}`)
-      return await buildOnPremResponse(hostname, appId, endpoint, method, pendingOnPrem.responseBody, pendingOnPrem.status, pendingOnPrem.headers)
-    }
-    if (pendingOnPrem) {
-      const failureLog = fallbackFailure ? '; at least one configured fallback failed or was skipped' : ''
-      console.log(`Only ${onPremConfirmations}/${successfulFallbacks} successful fallback workers returned on-prem for ${appId}${failureLog}; falling back to original request`)
-    }
-    else {
-      console.log('All workers failed, falling back to original request')
-    }
+    console.log('All workers failed, falling back to original request')
 
-    // No worker produced a usable non-on-prem response, so try the original request as last resort.
+    // All workers failed or are unhealthy - try the original request as last resort.
     // Body was consumed into requestBody — rebuild Request when needed.
     if (requestBody) {
       return fetch(new Request(request.url, {
