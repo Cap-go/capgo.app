@@ -21,7 +21,7 @@ export function timestampUs(value: string): bigint {
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/.test(value))
     throw new Error('Invalid R2 eventTime')
   const millis = Date.parse(value)
-  if (!Number.isFinite(millis))
+  if (!Number.isFinite(millis) || value.startsWith('0000-') || new Date(millis).toISOString().slice(0, 19) !== value.slice(0, 19))
     throw new Error('Invalid R2 eventTime')
   const fraction = value.match(/\.(\d+)Z$/)?.[1] ?? ''
   return BigInt(Math.floor(millis / 1000)) * 1_000_000n + BigInt(fraction.padEnd(6, '0'))
@@ -37,7 +37,7 @@ export function parseInventoryEvent(body: unknown, bucket: string): InventoryEve
   const data = body as Record<string, unknown>
   const object = data.object as Record<string, unknown> | undefined
   if (data.bucket !== bucket || !object || typeof object.key !== 'string'
-    || encoder.encode(object.key).length < 1 || encoder.encode(object.key).length > 1024
+    || object.key.includes('\0') || encoder.encode(object.key).length < 1 || encoder.encode(object.key).length > 1024
     || typeof data.eventTime !== 'string' || typeof data.action !== 'string') {
     throw new Error('Invalid R2 notification identity')
   }
@@ -46,7 +46,7 @@ export function parseInventoryEvent(body: unknown, bucket: string): InventoryEve
   if (!state)
     throw new Error('Unsupported R2 notification action')
   if (state === 'present' && (!Number.isSafeInteger(object.size) || Number(object.size) < 0
-    || typeof object.eTag !== 'string' || object.eTag.length > 256)) {
+    || typeof object.eTag !== 'string' || object.eTag.includes('\0') || object.eTag.length > 256)) {
     throw new Error('Invalid R2 creation metadata')
   }
   return {

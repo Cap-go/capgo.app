@@ -24,12 +24,37 @@ beforeEach(() => {
 })
 
 describe('r2 inventory queue', () => {
+  it('keeps the invocation pending for its pacing interval after releasing the client', async () => {
+    vi.useFakeTimers()
+    try {
+      const f = fixture([body])
+      let finished = false
+      const consume = consumeInventoryBatch(f.batch, f.env).then(() => {
+        finished = true
+      })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(mocks.end).toHaveBeenCalledTimes(1)
+      expect(finished).toBe(false)
+      await vi.advanceTimersByTimeAsync(499)
+      expect(finished).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      await consume
+      expect(finished).toBe(true)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('normalizes creation metadata and preserves microsecond ordering', () => {
     expect(parseInventoryEvent(body, 'inventory-test')).toMatchObject({ state: 'present', size: 42, etag: 'etag' })
     expect(timestampUs(body.eventTime) - timestampUs('2026-10-01T00:00:00.123455Z')).toBe(1n)
     expect(() => parseInventoryEvent(body, 'another-bucket')).toThrow()
     expect(() => parseInventoryEvent({ ...body, object: { key: 'x', size: -1, eTag: 'a' } }, 'inventory-test')).toThrow()
     expect(() => timestampUs('yesterday')).toThrow()
+    expect(() => timestampUs('2026-09-31T12:00:00Z')).toThrow()
+    expect(() => timestampUs('0000-01-01T00:00:00Z')).toThrow()
+    expect(() => parseInventoryEvent({ ...body, object: { ...body.object, key: 'invalid\0key' } }, 'inventory-test')).toThrow()
   })
   it('requires retention beyond queue retention and enforces pacing', () => {
     expect(() => parseInventoryConfig({ enabled: true, tombstoneDays: 4, minBatchMs: 500 })).toThrow()
