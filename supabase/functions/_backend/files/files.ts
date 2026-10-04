@@ -14,8 +14,9 @@ import { middlewareKey } from '../utils/hono_middleware.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { createManifestSizeReceipt, MANIFEST_SIZE_RECEIPT_HEADER } from '../utils/manifest_size_receipt.ts'
 import { closeClient, getAppByIdPg, getDrizzleClient, getPgClient } from '../utils/pg.ts'
+import { throwDatabaseUnavailable } from '../utils/pg_auth_lookup.ts'
 import { getAppByAppIdPg, getUserIdFromApikey } from '../utils/pg_files.ts'
-import { checkPermissionPg } from '../utils/rbac.ts'
+import { checkPermissionPgFreshRetry } from '../utils/rbac.ts'
 import { createStatsBandwidth } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 import { backgroundTask, getEnv } from '../utils/utils.ts'
@@ -1034,7 +1035,11 @@ async function checkWriteAppAccess(c: Context, next: Next) {
 
   try {
     // Get user_id from apikey using Postgres
-    const userId = await getUserIdFromApikey(c, capgkey, drizzleClient)
+    const userLookup = await getUserIdFromApikey(c, capgkey, drizzleClient)
+    if (userLookup.kind === 'db_error')
+      throwDatabaseUnavailable(c, 'checkWriteAppAccess.getUserIdFromApikey', userLookup.error, { app_id })
+
+    const userId = userLookup.kind === 'ok' ? userLookup.value : null
 
     cloudlog({
       requestId: c.get('requestId'),
@@ -1062,17 +1067,17 @@ async function checkWriteAppAccess(c: Context, next: Next) {
 
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'checkWriteAppAccess - checking app permissions via checkPermissionPg',
+      message: 'checkWriteAppAccess - checking app permissions via checkPermissionPgFreshRetry',
       userId,
       app_id,
     })
 
     // Use the new RBAC permission check
-    const hasPermission = await checkPermissionPg(c, 'app.upload_bundle', { appId: app_id }, drizzleClient, userId, capgkey)
+    const hasPermission = await checkPermissionPgFreshRetry(c, 'app.upload_bundle', { appId: app_id }, userId, capgkey, false)
 
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'checkWriteAppAccess - checkPermissionPg result',
+      message: 'checkWriteAppAccess - checkPermissionPgFreshRetry result',
       hasPermission,
     })
 
@@ -1093,7 +1098,11 @@ async function checkWriteAppAccess(c: Context, next: Next) {
     }
 
     // Get app using Postgres
-    const app = await getAppByAppIdPg(c, app_id, drizzleClient)
+    const appLookup = await getAppByAppIdPg(c, app_id, drizzleClient)
+    if (appLookup.kind === 'db_error')
+      throwDatabaseUnavailable(c, 'checkWriteAppAccess.getAppByAppIdPg', appLookup.error, { app_id })
+
+    const app = appLookup.kind === 'ok' ? appLookup.value : null
 
     if (!app) {
       cloudlog({

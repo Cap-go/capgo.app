@@ -186,25 +186,6 @@ export async function getSubscriptionData(c: Context, customerId: string, subscr
   }
 }
 
-/**
- * Fetches cancellation details for a Stripe subscription, if available.
- */
-export async function getCancellationDetails(c: Context, subscriptionId: string | null): Promise<Stripe.Subscription.CancellationDetails | null> {
-  if (!subscriptionId)
-    return null
-  if (!isStripeConfigured(c))
-    return null
-
-  try {
-    const subscription = await getStripe(c).subscriptions.retrieve(subscriptionId)
-    return subscription.cancellation_details ?? null
-  }
-  catch (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'getCancellationDetails', error, subscriptionId })
-    return null
-  }
-}
-
 async function getActiveSubscription(c: Context, customerId: string, subscriptionId: string | null) {
   cloudlog({ requestId: c.get('requestId'), message: 'Stored subscription not tracked or not found, checking for others.', customerId, storedSubscriptionId: subscriptionId })
 

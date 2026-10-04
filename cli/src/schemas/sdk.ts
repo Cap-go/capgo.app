@@ -247,6 +247,24 @@ export const updateChannelOptionsSchema = updateChannelOptionsBaseSchema.superRe
 
 export type UpdateChannelOptions = z.infer<typeof updateChannelOptionsSchema>
 
+export const promoteChannelOptionsSchema = z.object({
+  appId: z.string(),
+  fromChannel: z.string().min(1).describe('Channel to copy the current bundle from'),
+  toChannel: z.string().min(1).describe('Channel to link the bundle to'),
+  ignoreMetadataCheck: z.boolean().optional(),
+  acceptIncompatible: z.boolean().optional(),
+  sendUpdateNotification: z.boolean().optional(),
+  apikey: z.string().optional(),
+  supaHost: z.string().optional(),
+  supaAnon: z.string().optional(),
+}).superRefine((value, ctx) => {
+  rejectConflictingBooleanGroup(value, ctx, ['acceptIncompatible', 'ignoreMetadataCheck'])
+  if (value.fromChannel === value.toChannel)
+    ctx.addIssue({ code: 'custom', path: ['toChannel'], message: 'Source and target channels must be different' })
+})
+
+export type PromoteChannelOptions = z.infer<typeof promoteChannelOptionsSchema>
+
 // ============================================================================
 // SDK Organization Schemas
 // ============================================================================

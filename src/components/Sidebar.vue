@@ -350,16 +350,19 @@ function tabLabel(tab: Tab) {
         <!-- Sidebar header -->
         <div class="flex border-b shrink-0 border-slate-800 lg:border-slate-700 py-4">
           <router-link
-            class="flex items-center rounded-lg cursor-pointer focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
+            class="group flex items-center rounded-lg cursor-pointer focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
             to="/apps"
             aria-label="Capgo - Go to dashboard"
           >
             <span class="flex w-12 h-11 shrink-0 items-center justify-center">
-              <img src="/capgo.webp" alt="Capgo logo" class="w-8 h-8 shrink-0">
+              <img src="/capgo.webp" alt="Capgo logo" class="w-8 h-8 shrink-0 transition-transform duration-300 ease-[cubic-bezier(0.3,1.6,0.5,1)] group-hover:rotate-90 group-hover:scale-105 motion-reduce:transition-none">
             </span>
-            <span class="text-xl font-semibold whitespace-nowrap font-prompt text-slate-200 hover:text-white lg:text-slate-200 lg:hover:text-white">
-              Capgo
-            </span>
+            <!-- The rail is 48px wide: hide the wordmark so its first letter does not peek past the logo. -->
+            <CapgoWordtype
+              class="-ml-1 h-6 w-auto shrink-0 text-slate-200 transition-[opacity,translate,color] duration-300 ease-in-out group-hover:text-white motion-reduce:transition-none"
+              :class="isRail ? 'pointer-events-none -translate-x-3 opacity-0' : 'translate-x-0 opacity-100'"
+              :aria-hidden="isRail"
+            />
           </router-link>
         </div>
 

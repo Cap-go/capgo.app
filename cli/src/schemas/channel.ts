@@ -51,6 +51,16 @@ export const channelCurrentBundleOptionsSchema = optionsBaseSchema.extend({
 
 export type ChannelCurrentBundleOptions = z.infer<typeof channelCurrentBundleOptionsSchema>
 
+export const channelPromoteOptionsSchema = optionsBaseSchema.extend({
+  ignoreMetadataCheck: z.boolean().optional(),
+  acceptIncompatible: z.boolean().optional(),
+  sendUpdateNotification: z.boolean().optional(),
+}).superRefine((value, ctx) => {
+  rejectConflictingBooleanGroup(value, ctx, ['acceptIncompatible', 'ignoreMetadataCheck'])
+})
+
+export type ChannelPromoteOptions = z.infer<typeof channelPromoteOptionsSchema>
+
 export const optionsSetChannelSchema = optionsBaseSchema.extend({
   bundle: z.string().optional(),
   state: z.string().optional(),

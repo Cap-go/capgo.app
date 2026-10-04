@@ -45,6 +45,11 @@ export interface ReleaseLiveResponse {
     percent: number | null
   }
   failures?: { action: string, count: number }[]
+  failed_devices?: {
+    total: number
+    recovered: number
+    stuck: number
+  } | null
   series?: ReleaseLiveBucket[]
   channel: ReleaseLiveChannel | null
   channels: ReleaseLiveChannel[]
@@ -215,6 +220,7 @@ export function buildDemoReleaseLive(now = Date.now()): ReleaseLiveResponse {
       { action: 'checksum_fail', count: 3 },
       { action: 'unzip_fail', count: 1 },
     ],
+    failed_devices: { total: 11, recovered: 8, stuck: 3 },
     series,
     channel: { id: 1, name: 'production', is_default: true },
     channels: [

@@ -313,9 +313,9 @@ function isPlanUpgradeResponse(status, responseBody) {
   return status === 429 && responseBody?.error === 'need_plan_upgrade'
 }
 
-async function buildOnPremResponse(hostname, appId, endpoint, method, responseBody, status, responseHeaders) {
-  // Cache only after every configured fallback agrees this is an on-prem app.
-  await setOnPremCache(hostname, appId, endpoint, method, responseBody, status, responseHeaders)
+async function buildOnPremResponse(hostname, appId, endpoint, method, responseBody, status, responseHeaders, shouldCache) {
+  if (shouldCache)
+    await setOnPremCache(hostname, appId, endpoint, method, responseBody, status, responseHeaders)
 
   const newHeaders = new Headers(responseHeaders)
   newHeaders.set('Content-Type', 'application/json')
@@ -456,9 +456,12 @@ export default {
       ABJ: ZONE.AFRICA, // Abidjan, Ivory Coast
       ABQ: ZONE.NORTH_AMERICA, // Albuquerque, USA
       ACC: ZONE.AFRICA, // Accra, Ghana
+      ACX: ZONE.HONG_KONG, // Xingyi, China
       ADB: ZONE.EUROPE, // Izmir, Turkey
       ADD: ZONE.AFRICA, // Addis Ababa, Ethiopia
       ADL: ZONE.OCEANIA, // Adelaide, Australia
+      AGR: ZONE.ASIA, // Agra, India
+      AIP: ZONE.ASIA, // Jalandhar, India
       AKL: ZONE.OCEANIA, // Auckland, New Zealand
       AKX: ZONE.ASIA, // Aktobe, Kazakhstan
       ALA: ZONE.ASIA, // Almaty, Kazakhstan
@@ -475,11 +478,15 @@ export default {
       ATH: ZONE.EUROPE, // Athens, Greece
       ATL: ZONE.NORTH_AMERICA, // Atlanta, USA
       AUS: ZONE.NORTH_AMERICA, // Austin, USA
+      AVA: ZONE.HONG_KONG, // Anshun, China
       BAH: ZONE.MIDDLE_EAST, // Manama, Bahrain
       BAQ: ZONE.SOUTH_AMERICA, // Barranquilla, Colombia
+      BBI: ZONE.ASIA, // Bhubaneswar, India
       BCN: ZONE.EUROPE, // Barcelona, Spain
+      BDQ: ZONE.ASIA, // Jamnagar (Vadodara airport code), India
       BEG: ZONE.EUROPE, // Belgrade, Serbia
       BEL: ZONE.SOUTH_AMERICA, // Belém, Brazil
+      BEY: ZONE.MIDDLE_EAST, // Beirut, Lebanon
       BGI: ZONE.NORTH_AMERICA, // Bridgetown, Barbados
       BGR: ZONE.NORTH_AMERICA, // Bangor, USA
       BGW: ZONE.MIDDLE_EAST, // Baghdad, Iraq
@@ -516,6 +523,7 @@ export default {
       CGP: ZONE.ASIA, // Chittagong, Bangladesh
       CGY: ZONE.HONG_KONG, // Cagayan de Oro, Philippines
       CHC: ZONE.OCEANIA, // Christchurch, New Zealand
+      CJB: ZONE.ASIA, // Coimbatore, India
       CKG: ZONE.HONG_KONG, // Chongqing, China
       CLE: ZONE.NORTH_AMERICA, // Cleveland, USA
       CLO: ZONE.SOUTH_AMERICA, // Cali, Colombia
@@ -531,6 +539,9 @@ export default {
       CPT: ZONE.AFRICA, // Cape Town, South Africa
       CRK: ZONE.HONG_KONG, // Tarlac City (Clark), Philippines
       CSX: ZONE.HONG_KONG, // Changsha, China
+      CTS: ZONE.JAPAN, // Sapporo, Japan
+      CTU: ZONE.HONG_KONG, // Chengdu, China
+      CVG: ZONE.NORTH_AMERICA, // Cincinnati, USA
       CWB: ZONE.SOUTH_AMERICA, // Curitiba, Brazil
       CZL: ZONE.AFRICA, // Constantine, Algeria
       CZX: ZONE.HONG_KONG, // Changzhou, China
@@ -541,6 +552,7 @@ export default {
       DEN: ZONE.NORTH_AMERICA, // Denver, USA
       DFW: ZONE.NORTH_AMERICA, // Dallas, USA
       DKR: ZONE.AFRICA, // Dakar, Senegal
+      DLA: ZONE.AFRICA, // Douala, Cameroon
       DLC: ZONE.HONG_KONG, // Dalian, China
       DME: ZONE.EUROPE, // Moscow, Russia
       DMM: ZONE.MIDDLE_EAST, // Dammam, Saudi Arabia
@@ -551,6 +563,7 @@ export default {
       DUR: ZONE.AFRICA, // Durban, South Africa
       DUS: ZONE.EUROPE, // Düsseldorf, Germany
       DXB: ZONE.MIDDLE_EAST, // Dubai, UAE
+      DYU: ZONE.ASIA, // Dushanbe, Tajikistan
       EBB: ZONE.AFRICA, // Kampala, Uganda
       EBL: ZONE.MIDDLE_EAST, // Erbil, Iraq
       EVN: ZONE.ASIA, // Yerevan, Armenia
@@ -565,10 +578,6 @@ export default {
       FRU: ZONE.ASIA, // Bishkek, Kyrgyzstan
       FSD: ZONE.NORTH_AMERICA, // Sioux Falls, USA
       FUK: ZONE.JAPAN, // Fukuoka, Japan
-      CTS: ZONE.JAPAN, // Sapporo, Japan
-      NGO: ZONE.JAPAN, // Nagoya, Japan
-      SDJ: ZONE.JAPAN, // Sendai, Japan
-      KOJ: ZONE.JAPAN, // Kagoshima, Japan
       FUO: ZONE.HONG_KONG, // Foshan, China
       GBE: ZONE.AFRICA, // Gaborone, Botswana
       GDL: ZONE.NORTH_AMERICA, // Guadalajara, Mexico
@@ -612,6 +621,7 @@ export default {
       JNB: ZONE.AFRICA, // Johannesburg, South Africa
       JOG: ZONE.HONG_KONG, // Yogyakarta, Indonesia
       JOI: ZONE.SOUTH_AMERICA, // Joinville, Brazil
+      JRG: ZONE.ASIA, // Sambalpur, India
       JXG: ZONE.HONG_KONG, // Jiaxing, China
       KBP: ZONE.EUROPE, // Kyiv, Ukraine
       KCH: ZONE.HONG_KONG, // Kuching, Malaysia
@@ -626,6 +636,7 @@ export default {
       KJA: ZONE.ASIA, // Krasnoyarsk, Russia
       KMG: ZONE.HONG_KONG, // Kunming, China
       KNU: ZONE.ASIA, // Kanpur, India
+      KOJ: ZONE.JAPAN, // Kagoshima, Japan
       KTM: ZONE.ASIA, // Kathmandu, Nepal
       KUL: ZONE.HONG_KONG, // Kuala Lumpur, Malaysia
       KWE: ZONE.HONG_KONG, // Guiyang, China
@@ -635,15 +646,20 @@ export default {
       LAX: ZONE.NORTH_AMERICA, // Los Angeles, USA
       LCA: ZONE.EUROPE, // Nicosia, Cyprus
       LED: ZONE.EUROPE, // Saint Petersburg, Russia
+      LHE: ZONE.ASIA, // Lahore, Pakistan
       LHR: ZONE.EUROPE, // London, UK
+      LHW: ZONE.HONG_KONG, // Lanzhou, China
       LIM: ZONE.SOUTH_AMERICA, // Lima, Peru
       LIS: ZONE.EUROPE, // Lisbon, Portugal
+      LJU: ZONE.EUROPE, // Ljubljana, Slovenia
       LLK: ZONE.ASIA, // Astara, Azerbaijan
       LLW: ZONE.AFRICA, // Lilongwe, Malawi
       LOS: ZONE.AFRICA, // Lagos, Nigeria
       LPB: ZONE.SOUTH_AMERICA, // La Paz, Bolivia
+      LUH: ZONE.ASIA, // Ludhiana, India
       LUN: ZONE.AFRICA, // Lusaka, Zambia
       LUX: ZONE.EUROPE, // Luxembourg City, Luxembourg
+      LYA: ZONE.HONG_KONG, // Luoyang, China
       LYS: ZONE.EUROPE, // Lyon, France
       MAA: ZONE.ASIA, // Chennai, India
       MAD: ZONE.EUROPE, // Madrid, Spain
@@ -658,7 +674,9 @@ export default {
       MEX: ZONE.NORTH_AMERICA, // Mexico City, Mexico
       MFM: ZONE.HONG_KONG, // Macau
       MIA: ZONE.NORTH_AMERICA, // Miami, USA
+      MLA: ZONE.EUROPE, // Santa Venera, Malta
       MLE: ZONE.ASIA, // Male, Maldives
+      MLG: ZONE.HONG_KONG, // Malang, Indonesia
       MNL: ZONE.HONG_KONG, // Manila, Philippines
       MPM: ZONE.AFRICA, // Maputo, Mozambique
       MRS: ZONE.EUROPE, // Marseille, France
@@ -669,6 +687,7 @@ export default {
       MXP: ZONE.EUROPE, // Milan, Italy
       NAG: ZONE.ASIA, // Nagpur, India
       NBO: ZONE.AFRICA, // Nairobi, Kenya
+      NGO: ZONE.JAPAN, // Nagoya, Japan
       NJF: ZONE.MIDDLE_EAST, // Najaf, Iraq
       NNG: ZONE.HONG_KONG, // Nanning, China
       NOU: ZONE.OCEANIA, // Noumea, New Caledonia
@@ -697,6 +716,7 @@ export default {
       PMO: ZONE.EUROPE, // Palermo, Italy
       PMW: ZONE.SOUTH_AMERICA, // Palmas, Brazil
       PNH: ZONE.HONG_KONG, // Phnom Penh, Cambodia
+      PNQ: ZONE.ASIA, // Pune, India
       POA: ZONE.SOUTH_AMERICA, // Porto Alegre, Brazil
       POS: ZONE.SOUTH_AMERICA, // Port of Spain, Trinidad
       PPT: ZONE.OCEANIA, // Tahiti, French Polynesia
@@ -715,6 +735,7 @@ export default {
       SAP: ZONE.SOUTH_AMERICA, // San Pedro Sula, Honduras
       SAT: ZONE.NORTH_AMERICA, // San Antonio, USA
       SCL: ZONE.SOUTH_AMERICA, // Santiago, Chile
+      SDJ: ZONE.JAPAN, // Sendai, Japan
       SDQ: ZONE.NORTH_AMERICA, // Santo Domingo, Dominican Republic
       SEA: ZONE.NORTH_AMERICA, // Seattle, USA
       SFO: ZONE.NORTH_AMERICA, // San Francisco, USA
@@ -756,6 +777,7 @@ export default {
       TXL: ZONE.EUROPE, // Berlin, Germany
       TYN: ZONE.HONG_KONG, // Yangquan (Taiyuan), China
       UDI: ZONE.SOUTH_AMERICA, // Uberlandia, Brazil
+      UDR: ZONE.ASIA, // Udaipur, India
       UIO: ZONE.SOUTH_AMERICA, // Quito, Ecuador
       ULN: ZONE.JAPAN, // Ulaanbaatar, Mongolia (North Asia -> Japan)
       URT: ZONE.HONG_KONG, // Surat Thani, Thailand
@@ -766,6 +788,8 @@ export default {
       VTE: ZONE.HONG_KONG, // Vientiane, Laos
       WAW: ZONE.EUROPE, // Warsaw, Poland
       WDH: ZONE.AFRICA, // Windhoek, Namibia
+      WLG: ZONE.OCEANIA, // Wellington, New Zealand
+      WRO: ZONE.EUROPE, // Wroclaw, Poland
       XAP: ZONE.SOUTH_AMERICA, // Chapeco, Brazil
       XFN: ZONE.HONG_KONG, // Xiangyang, China
       XIY: ZONE.HONG_KONG, // Baoji (Xi'an), China
@@ -805,15 +829,10 @@ export default {
     const pathWithQuery = url.pathname + url.search
 
     const fallbackUrls = zoneFallbackUrls[zone] || [WORKER_URL.EUROPE]
-    let pendingOnPrem = null
-    let onPremConfirmations = 0
-    let successfulFallbacks = 0
+    // Set once a worker is skipped or fails; an on-prem answer seen after that is served but not cached.
     let fallbackFailure = false
-    // After first on-prem hit, confirm with at most one more healthy worker (not the full mesh).
-    let onPremConfirmPending = false
 
-    for (let index = 0; index < fallbackUrls.length; index++) {
-      const workerUrl = fallbackUrls[index]
+    for (const workerUrl of fallbackUrls) {
       // Skip unhealthy workers (circuit is open)
       const healthy = await isHealthy(hostname, colo, workerUrl)
       if (!healthy) {
@@ -845,7 +864,6 @@ export default {
 
         // Success (2xx, 3xx, 4xx) - worker is healthy
         await markHealthy(hostname, colo, workerUrl)
-        successfulFallbacks += 1
         console.log(`Request served by ${workerUrl}`)
 
         // Check if this is an on-prem response that should be cached
@@ -854,34 +872,14 @@ export default {
             const responseClone = response.clone()
             const responseBody = await responseClone.json()
 
+            // Return on the first on-prem answer. Confirming with another worker costs
+            // extra subrequests and blows the Enterprise snippet limit (5), which turns
+            // every on-prem request into a 1101. Stale on-prem entries from replica lag
+            // are purged by tag on app/version create. During a partial outage the answer is
+            // served but not cached.
             if (isOnPremResponse(response.status, responseBody)) {
-              onPremConfirmations += 1
-              pendingOnPrem = {
-                responseBody,
-                status: response.status,
-                headers: response.headers,
-                workerUrl,
-              }
-              // Confirm with one extra healthy worker when available; otherwise finalize.
-              if (onPremConfirmations === 1 && index < fallbackUrls.length - 1) {
-                onPremConfirmPending = true
-                console.log(`${workerUrl} returned on-prem for ${appId}; confirming with one fallback worker`)
-                continue
-              }
-              // Never cache after a skipped/failed configured fallback (partial outage).
-              if (fallbackFailure) {
-                console.log(`On-prem seen after fallback failure for ${appId}; not caching`)
-                continue
-              }
-              console.log(`On-prem confirmed (${onPremConfirmations}) for ${appId}`)
-              return await buildOnPremResponse(hostname, appId, endpoint, method, pendingOnPrem.responseBody, pendingOnPrem.status, pendingOnPrem.headers)
-            }
-
-            // A non-on-prem response during confirm means do not cache on-prem.
-            if (onPremConfirmPending) {
-              console.log(`${workerUrl} disagreed on on-prem for ${appId}; serving cloud response`)
-              onPremConfirmPending = false
-              pendingOnPrem = null
+              console.log(`On-prem detected by ${workerUrl} for ${appId}${fallbackFailure ? ' (after fallback failure, not caching)' : ''}`)
+              return await buildOnPremResponse(hostname, appId, endpoint, method, responseBody, response.status, response.headers, !fallbackFailure)
             }
 
             if (isPlanUpgradeResponse(response.status, responseBody)) {
@@ -915,20 +913,9 @@ export default {
       }
     }
 
-    // If we only got on-prem responses (and maybe failed to confirm), cache when all successes agreed.
-    if (pendingOnPrem && !fallbackFailure && successfulFallbacks > 0 && onPremConfirmations === successfulFallbacks) {
-      console.log(`All ${onPremConfirmations}/${successfulFallbacks} successful fallback workers returned on-prem for ${appId}`)
-      return await buildOnPremResponse(hostname, appId, endpoint, method, pendingOnPrem.responseBody, pendingOnPrem.status, pendingOnPrem.headers)
-    }
-    if (pendingOnPrem) {
-      const failureLog = fallbackFailure ? '; at least one configured fallback failed or was skipped' : ''
-      console.log(`Only ${onPremConfirmations}/${successfulFallbacks} successful fallback workers returned on-prem for ${appId}${failureLog}; falling back to original request`)
-    }
-    else {
-      console.log('All workers failed, falling back to original request')
-    }
+    console.log('All workers failed, falling back to original request')
 
-    // No worker produced a usable non-on-prem response, so try the original request as last resort.
+    // All workers failed or are unhealthy - try the original request as last resort.
     // Body was consumed into requestBody — rebuild Request when needed.
     if (requestBody) {
       return fetch(new Request(request.url, {

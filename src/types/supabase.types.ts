@@ -973,6 +973,7 @@ export type Database = {
           ios: boolean
           name: string
           owner_org: string
+          paused_at: string | null
           public: boolean
           rbac_id: string
           rollout_cache_ttl_seconds: number
@@ -1013,6 +1014,7 @@ export type Database = {
           ios?: boolean
           name: string
           owner_org: string
+          paused_at?: string | null
           public?: boolean
           rbac_id?: string
           rollout_cache_ttl_seconds?: number
@@ -1053,6 +1055,7 @@ export type Database = {
           ios?: boolean
           name?: string
           owner_org?: string
+          paused_at?: string | null
           public?: boolean
           rbac_id?: string
           rollout_cache_ttl_seconds?: number
@@ -2200,6 +2203,32 @@ export type Database = {
           },
         ]
       }
+      manifest_trash_restore_pending: {
+        Row: {
+          app_version_id: number
+          created_at: string
+          s3_path: string
+        }
+        Insert: {
+          app_version_id: number
+          created_at?: string
+          s3_path: string
+        }
+        Update: {
+          app_version_id?: number
+          created_at?: string
+          s3_path?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "manifest_trash_restore_pending_app_version_id_fkey"
+            columns: ["app_version_id"]
+            isOneToOne: false
+            referencedRelation: "app_versions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       mcp_oauth_clients: {
         Row: {
           client_id: string
@@ -2790,6 +2819,7 @@ export type Database = {
         Row: {
           auto_top_up_enabled: boolean
           auto_top_up_last_attempt_at: string | null
+          auto_top_up_monthly_limit: number
           auto_top_up_threshold: number
           created_at: string | null
           created_by: string
@@ -2820,6 +2850,7 @@ export type Database = {
         Insert: {
           auto_top_up_enabled?: boolean
           auto_top_up_last_attempt_at?: string | null
+          auto_top_up_monthly_limit?: number
           auto_top_up_threshold?: number
           created_at?: string | null
           created_by: string
@@ -2850,6 +2881,7 @@ export type Database = {
         Update: {
           auto_top_up_enabled?: boolean
           auto_top_up_last_attempt_at?: string | null
+          auto_top_up_monthly_limit?: number
           auto_top_up_threshold?: number
           created_at?: string | null
           created_by?: string
@@ -3559,6 +3591,48 @@ export type Database = {
           },
         ]
       }
+      updates_cache_purge_pending: {
+        Row: {
+          app_id: string
+          due_at: string
+          id: number
+          initial: boolean
+          lease_token: string | null
+          leased_until: string | null
+        }
+        Insert: {
+          app_id: string
+          due_at: string
+          id?: never
+          initial?: boolean
+          lease_token?: string | null
+          leased_until?: string | null
+        }
+        Update: {
+          app_id?: string
+          due_at?: string
+          id?: never
+          initial?: boolean
+          lease_token?: string | null
+          leased_until?: string | null
+        }
+        Relationships: []
+      }
+      updates_cache_purge_state: {
+        Row: {
+          id: boolean
+          last_claim_at: string
+        }
+        Insert: {
+          id?: boolean
+          last_claim_at?: string
+        }
+        Update: {
+          id?: boolean
+          last_claim_at?: string
+        }
+        Relationships: []
+      }
       usage_credit_consumptions: {
         Row: {
           applied_at: string
@@ -4126,6 +4200,14 @@ export type Database = {
     }
     Functions: {
       accept_invitation_to_org: { Args: { org_id: string }; Returns: string }
+      ack_updates_cache_purge: {
+        Args: {
+          p_lease_token: string
+          p_retry_after_seconds?: number
+          p_success: boolean
+        }
+        Returns: undefined
+      }
       acknowledge_compatibility_event: {
         Args: { event_id: number; note: string }
         Returns: undefined
@@ -4152,6 +4234,7 @@ export type Database = {
           p_billing_cycle_end: string
           p_billing_cycle_start: string
           p_details?: Json
+          p_included_amount?: number
           p_metric: Database["public"]["Enums"]["credit_metric_type"]
           p_org_id: string
           p_overage_amount: number
@@ -4218,17 +4301,30 @@ export type Database = {
           is_anniversary: boolean
         }[]
       }
-      calculate_credit_cost: {
-        Args: {
-          p_metric: Database["public"]["Enums"]["credit_metric_type"]
-          p_overage_amount: number
-        }
-        Returns: {
-          credit_cost_per_unit: number
-          credit_step_id: number
-          credits_required: number
-        }[]
-      }
+      calculate_credit_cost:
+        | {
+            Args: {
+              p_metric: Database["public"]["Enums"]["credit_metric_type"]
+              p_overage_amount: number
+            }
+            Returns: {
+              credit_cost_per_unit: number
+              credit_step_id: number
+              credits_required: number
+            }[]
+          }
+        | {
+            Args: {
+              p_included_amount: number
+              p_metric: Database["public"]["Enums"]["credit_metric_type"]
+              p_overage_amount: number
+            }
+            Returns: {
+              credit_cost_per_unit: number
+              credit_step_id: number
+              credits_required: number
+            }[]
+          }
       calculate_org_metrics_cache_entry: {
         Args: { p_end_date: string; p_org_id: string; p_start_date: string }
         Returns: {
@@ -4326,6 +4422,7 @@ export type Database = {
         Args: { p_app_uuid: string }
         Returns: undefined
       }
+      claim_updates_cache_purge: { Args: { p_limit?: number }; Returns: Json }
       cleanup_audit_logs_bookkeeping_noise: {
         Args: {
           batch_size?: number
@@ -4455,6 +4552,10 @@ export type Database = {
       enqueue_app_onboarding_refreshes: {
         Args: { p_limit?: number }
         Returns: number
+      }
+      enqueue_cron_tick: {
+        Args: { payload: Json; queue_name: string }
+        Returns: undefined
       }
       exist_app: { Args: { appid: string }; Returns: boolean }
       exist_app_v2: { Args: { appid: string }; Returns: boolean }
@@ -4633,6 +4734,10 @@ export type Database = {
         Returns: {
           bundle_name: string
         }[]
+      }
+      get_credit_auto_top_up_month_total: {
+        Args: { p_org_id: string }
+        Returns: number
       }
       get_current_plan_max_org: {
         Args: { orgid: string }
@@ -5326,6 +5431,14 @@ export type Database = {
         Returns: Json
       }
       new_builder_onboarding_setup_v1: { Args: never; Returns: Json }
+      new_ota_onboarding_steps_v1: {
+        Args: { p_legacy_steps?: Json }
+        Returns: Json
+      }
+      notify_updates_edge_cache_purge: {
+        Args: { p_app_ids: string[] }
+        Returns: undefined
+      }
       null_migrated_app_version_manifests: {
         Args: {
           batch_size?: number
@@ -5898,6 +6011,7 @@ export type Database = {
         Args: { p_email: string; p_new_role_name: string; p_org_id: string }
         Returns: string
       }
+      updates_cache_purge_enabled: { Args: never; Returns: boolean }
       upsert_version_meta: {
         Args: { p_app_id: string; p_size: number; p_version_id: number }
         Returns: boolean
@@ -5922,6 +6036,8 @@ export type Database = {
       verify_email_otp_auth: { Args: never; Returns: boolean }
       verify_getting_started: { Args: { p_app_id: string }; Returns: Json }
       verify_mfa: { Args: never; Returns: boolean }
+      wake_updates_cache_purge: { Args: never; Returns: undefined }
+      wake_updates_cache_purge_if_due: { Args: never; Returns: undefined }
     }
     Enums: {
       action_type: "mau" | "storage" | "bandwidth" | "build_time"
@@ -6035,6 +6151,7 @@ export type Database = {
         | "webview_dom_content_loaded"
         | "webview_page_loaded"
         | "app_nav"
+        | "channelPaused"
       stripe_status:
         | "created"
         | "succeeded"
@@ -6316,6 +6433,7 @@ export const Constants = {
         "webview_dom_content_loaded",
         "webview_page_loaded",
         "app_nav",
+        "channelPaused",
       ],
       stripe_status: [
         "created",

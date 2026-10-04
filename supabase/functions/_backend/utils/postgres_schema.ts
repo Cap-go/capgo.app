@@ -93,6 +93,7 @@ export const channels = pgTable('channels', {
   rollout_paused_at: timestamp('rollout_paused_at', { withTimezone: true }),
   rollout_pause_reason: text('rollout_pause_reason'),
   rollout_cache_ttl_seconds: integer('rollout_cache_ttl_seconds').notNull().default(2592000),
+  paused_at: timestamp('paused_at', { withTimezone: true }),
   auto_pause_enabled: boolean('auto_pause_enabled').notNull().default(false),
   auto_pause_window_minutes: integer('auto_pause_window_minutes').notNull().default(60),
   auto_pause_failure_rate_bps: integer('auto_pause_failure_rate_bps'),
@@ -132,6 +133,7 @@ export const orgs = pgTable('orgs', {
   auto_top_up_enabled: boolean('auto_top_up_enabled').notNull().default(false),
   auto_top_up_threshold: numeric('auto_top_up_threshold', { precision: 18, scale: 6 }).notNull().default('10'),
   auto_top_up_last_attempt_at: timestamp('auto_top_up_last_attempt_at', { withTimezone: true }),
+  auto_top_up_monthly_limit: numeric('auto_top_up_monthly_limit', { precision: 18, scale: 6 }).notNull().default('0'),
 })
 
 export const notifications = pgTable('notifications', {

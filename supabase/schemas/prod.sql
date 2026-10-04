@@ -341,7 +341,8 @@ CREATE TYPE "public"."stats_action" AS ENUM (
     'app_launch_timeout',
     'webview_dom_content_loaded',
     'webview_page_loaded',
-    'app_nav'
+    'app_nav',
+    'channelPaused'
 );
 
 
@@ -545,6 +546,39 @@ ALTER FUNCTION "public"."accept_invitation_to_org"("org_id" "uuid") OWNER TO "po
 
 COMMENT ON FUNCTION "public"."accept_invitation_to_org"("org_id" "uuid") IS 'Accepts a pending org invite and creates the active RBAC binding. Kept for old clients. Acquires lock_rbac_orgs before reading the pending invite role.';
 
+
+
+CREATE OR REPLACE FUNCTION "public"."ack_updates_cache_purge"("p_lease_token" "uuid", "p_success" boolean, "p_retry_after_seconds" integer DEFAULT 5) RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_now timestamptz := pg_catalog.clock_timestamp();
+BEGIN
+  IF p_success THEN
+    WITH done AS (
+      DELETE FROM public.updates_cache_purge_pending
+      WHERE lease_token = p_lease_token
+      RETURNING app_id, initial
+    )
+    INSERT INTO public.updates_cache_purge_pending (app_id, due_at, initial)
+    SELECT apps.app_id, v_now + delays.delay, false
+    FROM (SELECT DISTINCT app_id FROM done WHERE initial) AS apps
+    CROSS JOIN (VALUES
+      (interval '10 seconds'), (interval '60 seconds'), (interval '180 seconds')
+    ) AS delays (delay);
+  ELSE
+    UPDATE public.updates_cache_purge_pending
+    SET lease_token = NULL,
+        leased_until = NULL,
+        due_at = v_now + pg_catalog.make_interval(secs => GREATEST(LEAST(p_retry_after_seconds, 300), 1))
+    WHERE lease_token = p_lease_token;
+  END IF;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."ack_updates_cache_purge"("p_lease_token" "uuid", "p_success" boolean, "p_retry_after_seconds" integer) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."acknowledge_compatibility_event"("event_id" bigint, "note" "text") RETURNS "void"
@@ -985,7 +1019,7 @@ COMMENT ON FUNCTION "public"."app_versions_readable_app_ids"() IS 'Returns app I
 
 
 
-CREATE OR REPLACE FUNCTION "public"."apply_usage_overage"("p_org_id" "uuid", "p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_billing_cycle_start" timestamp with time zone, "p_billing_cycle_end" timestamp with time zone, "p_details" "jsonb" DEFAULT NULL::"jsonb") RETURNS TABLE("overage_amount" numeric, "credits_required" numeric, "credits_applied" numeric, "credits_remaining" numeric, "credit_step_id" bigint, "overage_covered" numeric, "overage_unpaid" numeric, "overage_event_id" "uuid")
+CREATE OR REPLACE FUNCTION "public"."apply_usage_overage"("p_org_id" "uuid", "p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_billing_cycle_start" timestamp with time zone, "p_billing_cycle_end" timestamp with time zone, "p_details" "jsonb" DEFAULT NULL::"jsonb", "p_included_amount" numeric DEFAULT 0) RETURNS TABLE("overage_amount" numeric, "credits_required" numeric, "credits_applied" numeric, "credits_remaining" numeric, "credit_step_id" bigint, "overage_covered" numeric, "overage_unpaid" numeric, "overage_event_id" "uuid")
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -1005,6 +1039,13 @@ DECLARE
   v_latest_event_id uuid;
   v_latest_overage_amount numeric;
   v_needs_new_record boolean := false;
+  v_budget numeric;
+  v_start numeric;
+  v_end numeric;
+  v_slice numeric;
+  v_slice_cost numeric;
+  v_unit_factor numeric;
+  step_rec public.capgo_credits_steps%ROWTYPE;
   grant_rec public.usage_credit_grants%ROWTYPE;
 BEGIN
   -- Early exit for invalid input
@@ -1017,10 +1058,11 @@ BEGIN
   -- read below always reflects committed debits from other callers.
   PERFORM pg_advisory_xact_lock(hashtextextended('apply_usage_overage:' || p_org_id::text || ':' || p_metric::text, 0));
 
-  -- Calculate credit cost for this overage
+  -- Price the overage at the tiers of the total volume it sits in:
+  -- [p_included_amount, p_included_amount + p_overage_amount).
   SELECT *
   INTO v_calc
-  FROM public.calculate_credit_cost(p_metric, p_overage_amount)
+  FROM public.calculate_credit_cost(p_metric, p_overage_amount, COALESCE(p_included_amount, 0))
   LIMIT 1;
 
   -- If no pricing step found, create a single record and exit
@@ -1221,11 +1263,42 @@ BEGIN
     v_event_id := v_latest_event_id;
   END IF;
 
-  -- Calculate how much overage is covered by credits
-  IF v_per_unit > 0 THEN
-    v_overage_paid := LEAST(p_overage_amount, (v_applied + v_existing_credits_debited) / v_per_unit);
-  ELSE
+  -- Calculate how much overage is covered by credits. Walk the same tier
+  -- slices as calculate_credit_cost: a blended rate would overstate the
+  -- usage partial credits cover, since the cheaper tiers come last.
+  v_budget := v_applied + v_existing_credits_debited;
+  IF v_per_unit <= 0 OR v_budget >= v_required THEN
     v_overage_paid := p_overage_amount;
+  ELSE
+    v_start := GREATEST(COALESCE(p_included_amount, 0), 0);
+    v_end := v_start + p_overage_amount;
+    FOR step_rec IN
+      SELECT *
+      FROM public.capgo_credits_steps
+      WHERE type = p_metric::text
+        AND org_id IS NULL
+        AND step_max > v_start
+        AND step_min < v_end
+      ORDER BY step_min ASC
+    LOOP
+      EXIT WHEN v_budget <= 0;
+
+      v_slice := LEAST(v_end, step_rec.step_max::numeric) - GREATEST(v_start, step_rec.step_min::numeric);
+      CONTINUE WHEN v_slice <= 0 OR step_rec.price_per_unit <= 0;
+
+      v_unit_factor := GREATEST(NULLIF(step_rec.unit_factor, 0), 1)::numeric;
+      v_slice_cost := CEILING(v_slice / v_unit_factor) * step_rec.price_per_unit::numeric;
+
+      IF v_budget >= v_slice_cost THEN
+        v_overage_paid := v_overage_paid + v_slice;
+        v_budget := v_budget - v_slice_cost;
+      ELSE
+        v_overage_paid := v_overage_paid
+          + FLOOR(v_budget / step_rec.price_per_unit::numeric) * v_unit_factor;
+        v_budget := 0;
+      END IF;
+    END LOOP;
+    v_overage_paid := LEAST(v_overage_paid, p_overage_amount);
   END IF;
 
   RETURN QUERY SELECT
@@ -1241,7 +1314,7 @@ END;
 $$;
 
 
-ALTER FUNCTION "public"."apply_usage_overage"("p_org_id" "uuid", "p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_billing_cycle_start" timestamp with time zone, "p_billing_cycle_end" timestamp with time zone, "p_details" "jsonb") OWNER TO "postgres";
+ALTER FUNCTION "public"."apply_usage_overage"("p_org_id" "uuid", "p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_billing_cycle_start" timestamp with time zone, "p_billing_cycle_end" timestamp with time zone, "p_details" "jsonb", "p_included_amount" numeric) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."apps_readable_app_ids"() RETURNS character varying[]
@@ -1708,47 +1781,36 @@ BEGIN
   THEN
     v_creator := (NEW.onboarding ->> 'created_by_user_id')::uuid;
   END IF;
-  IF EXISTS (
+  v_setup := CASE WHEN pg_catalog.jsonb_typeof(NEW.onboarding -> 'setup') = 'object'
+    THEN NEW.onboarding -> 'setup' ELSE '{}'::jsonb END;
+  IF v_creator IS NOT NULL THEN
+    NEW.onboarding := COALESCE(NEW.onboarding, '{}'::jsonb)
+      || pg_catalog.jsonb_build_object('created_by_user_id', v_creator::text);
+  END IF;
+
+  IF NOT EXISTS (
     SELECT 1 FROM public.orgs AS o
     WHERE o.id = NEW.owner_org
       AND o.onboarding ->> 'intent' = 'ota'
-  ) THEN
-    v_setup := CASE WHEN pg_catalog.jsonb_typeof(NEW.onboarding -> 'setup') = 'object'
-      THEN NEW.onboarding -> 'setup' ELSE '{}'::jsonb END;
-    IF v_creator IS NOT NULL THEN
-      NEW.onboarding := COALESCE(NEW.onboarding, '{}'::jsonb)
-        || pg_catalog.jsonb_build_object('created_by_user_id', v_creator::text);
-    END IF;
-    NEW.onboarding := pg_catalog.jsonb_set(COALESCE(NEW.onboarding, '{}'::jsonb), '{setup}',
-      v_setup || pg_catalog.jsonb_build_object(
-        'todo_list_version', 4,
-        'ota_todo_list_version', '1',
-        'paths', pg_catalog.jsonb_build_array('ota'),
-        'selected_path', 'ota',
-        'steps', pg_catalog.jsonb_build_object('ota', pg_catalog.jsonb_build_object(
-          'login_cli_mcp', pg_catalog.jsonb_build_object('status', 'pending'),
-          'add_channel', pg_catalog.jsonb_build_object('status', 'pending'),
-          'add_updater', pg_catalog.jsonb_build_object('status', 'pending'),
-          'add_code', pg_catalog.jsonb_build_object('status', 'pending'),
-          'run_device', pg_catalog.jsonb_build_object('status', 'pending'),
-          'upload_bundle', pg_catalog.jsonb_build_object('status', 'pending'),
-          'test_update', pg_catalog.jsonb_build_object('status', 'pending')
-        ))
-      ), true);
-  ELSIF EXISTS (
+  ) AND EXISTS (
     SELECT 1 FROM public.users AS u
     JOIN public.orgs AS o ON o.id = NEW.owner_org
     WHERE u.id = v_creator AND o.created_by = u.id
       AND u.onboarding ->> 'intent' = 'builder'
       AND u.onboarding #>> '{abtests,builder_todo_list_v4,branch}' = 'A'
   ) THEN
-    v_setup := CASE WHEN pg_catalog.jsonb_typeof(NEW.onboarding -> 'setup') = 'object'
-      THEN NEW.onboarding -> 'setup' ELSE '{}'::jsonb END;
-    NEW.onboarding := COALESCE(NEW.onboarding, '{}'::jsonb)
-      || pg_catalog.jsonb_build_object('created_by_user_id', v_creator::text);
     NEW.onboarding := pg_catalog.jsonb_set(COALESCE(NEW.onboarding, '{}'::jsonb), '{setup}',
       (v_setup - 'ota_todo_list_version' - 'selected_builder_platform')
         || public.new_builder_onboarding_setup_v1(), true);
+  ELSE
+    NEW.onboarding := pg_catalog.jsonb_set(COALESCE(NEW.onboarding, '{}'::jsonb), '{setup}',
+      v_setup || pg_catalog.jsonb_build_object(
+        'todo_list_version', 4,
+        'ota_todo_list_version', '1',
+        'paths', pg_catalog.jsonb_build_array('ota'),
+        'selected_path', 'ota',
+        'steps', pg_catalog.jsonb_build_object('ota', public.new_ota_onboarding_steps_v1())
+      ), true);
   END IF;
   RETURN NEW;
 END;
@@ -2356,30 +2418,46 @@ ALTER FUNCTION "public"."bind_creating_apikey_to_org_on_create"() OWNER TO "post
 
 
 CREATE OR REPLACE FUNCTION "public"."calculate_credit_cost"("p_metric" "public"."credit_metric_type", "p_overage_amount" numeric) RETURNS TABLE("credit_step_id" bigint, "credit_cost_per_unit" numeric, "credits_required" numeric)
+    LANGUAGE "sql"
+    SET "search_path" TO ''
+    AS $$
+  SELECT *
+  FROM public.calculate_credit_cost(p_metric, p_overage_amount, 0::numeric);
+$$;
+
+
+ALTER FUNCTION "public"."calculate_credit_cost"("p_metric" "public"."credit_metric_type", "p_overage_amount" numeric) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."calculate_credit_cost"("p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_included_amount" numeric) RETURNS TABLE("credit_step_id" bigint, "credit_cost_per_unit" numeric, "credits_required" numeric)
     LANGUAGE "plpgsql"
     SET "search_path" TO ''
     AS $$
 DECLARE
   v_step public.capgo_credits_steps%ROWTYPE;
   v_highest public.capgo_credits_steps%ROWTYPE;
-  v_remaining numeric;
-  v_applied_range numeric;
+  v_start numeric;
+  v_end numeric;
+  v_covered numeric := 0;
+  v_slice numeric;
   v_units numeric;
+  v_unit_factor numeric;
   v_total_credits numeric := 0;
   v_last_step_id bigint := NULL;
-  v_unit_factor numeric;
 BEGIN
   IF p_overage_amount IS NULL OR p_overage_amount <= 0 THEN
     RETURN QUERY SELECT NULL::bigint, 0::numeric, 0::numeric;
     RETURN;
   END IF;
 
-  v_remaining := p_overage_amount;
+  v_start := GREATEST(COALESCE(p_included_amount, 0), 0);
+  v_end := v_start + p_overage_amount;
 
   SELECT *
   INTO v_highest
   FROM public.capgo_credits_steps
   WHERE type = p_metric::text
+    AND org_id IS NULL
   ORDER BY step_max DESC, step_min DESC
   LIMIT 1;
 
@@ -2393,54 +2471,42 @@ BEGIN
     SELECT *
     FROM public.capgo_credits_steps
     WHERE type = p_metric::text
+      AND org_id IS NULL
+      AND step_max > v_start
+      AND step_min < v_end
     ORDER BY step_min ASC
   LOOP
-    EXIT WHEN v_remaining <= 0;
+    v_slice := LEAST(v_end, v_step.step_max::numeric) - GREATEST(v_start, v_step.step_min::numeric);
 
-    IF p_overage_amount < v_step.step_min THEN
-      EXIT;
-    END IF;
-
-    v_applied_range := LEAST(
-      v_remaining,
-      (v_step.step_max - v_step.step_min)::numeric
-    );
-
-    IF v_applied_range <= 0 THEN
+    IF v_slice <= 0 THEN
       CONTINUE;
     END IF;
 
     v_unit_factor := GREATEST(NULLIF(v_step.unit_factor, 0), 1)::numeric;
-    v_units := CEILING(v_applied_range / v_unit_factor);
-
-    IF v_units <= 0 THEN
-      CONTINUE;
-    END IF;
-
+    v_units := CEILING(v_slice / v_unit_factor);
     v_total_credits := v_total_credits + (v_units * v_step.price_per_unit::numeric);
-    v_remaining := v_remaining - v_applied_range;
+    v_covered := v_covered + v_slice;
     v_last_step_id := v_step.id;
   END LOOP;
 
-  IF v_remaining > 0 THEN
+  -- Usage outside every tier range (gaps or above the top tier) is billed
+  -- at the top tier price.
+  IF v_covered < p_overage_amount THEN
     v_unit_factor := GREATEST(NULLIF(v_highest.unit_factor, 0), 1)::numeric;
-    v_units := CEILING(v_remaining / v_unit_factor);
-
-    IF v_units > 0 THEN
-      v_total_credits := v_total_credits + (v_units * v_highest.price_per_unit::numeric);
-      v_last_step_id := v_highest.id;
-    END IF;
+    v_units := CEILING((p_overage_amount - v_covered) / v_unit_factor);
+    v_total_credits := v_total_credits + (v_units * v_highest.price_per_unit::numeric);
+    v_last_step_id := COALESCE(v_last_step_id, v_highest.id);
   END IF;
 
   RETURN QUERY SELECT
-    v_last_step_id::bigint,
-    CASE WHEN p_overage_amount > 0 THEN v_total_credits / p_overage_amount ELSE 0 END,
+    v_last_step_id,
+    v_total_credits / p_overage_amount,
     v_total_credits;
 END;
 $$;
 
 
-ALTER FUNCTION "public"."calculate_credit_cost"("p_metric" "public"."credit_metric_type", "p_overage_amount" numeric) OWNER TO "postgres";
+ALTER FUNCTION "public"."calculate_credit_cost"("p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_included_amount" numeric) OWNER TO "postgres";
 
 SET default_tablespace = '';
 
@@ -4106,6 +4172,72 @@ $$;
 
 
 ALTER FUNCTION "public"."claim_legacy_onboarding_demo_data"("p_app_uuid" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."claim_updates_cache_purge"("p_limit" integer DEFAULT 100) RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_now timestamptz := pg_catalog.clock_timestamp();
+  v_last timestamptz;
+  v_min_interval constant interval := '1 second';
+  v_lease interval := '2 minutes';
+  v_token uuid := gen_random_uuid();
+  v_apps jsonb;
+BEGIN
+  IF NOT pg_catalog.pg_try_advisory_xact_lock(pg_catalog.hashtext('updates_cache_purge_claim')) THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'busy');
+  END IF;
+
+  SELECT last_claim_at INTO v_last FROM public.updates_cache_purge_state WHERE id;
+  IF v_last > v_now - v_min_interval THEN
+    RETURN pg_catalog.jsonb_build_object(
+      'status', 'throttled',
+      'wait_ms', CEIL(EXTRACT(EPOCH FROM (v_last + v_min_interval - v_now)) * 1000)::int
+    );
+  END IF;
+
+  WITH picked AS (
+    SELECT p.app_id
+    FROM public.updates_cache_purge_pending p
+    WHERE p.due_at <= v_now AND (p.lease_token IS NULL OR p.leased_until <= v_now)
+    GROUP BY p.app_id
+    ORDER BY MIN(p.due_at)
+    LIMIT GREATEST(LEAST(p_limit, 1000), 1)
+  ),
+  claimed AS (
+    UPDATE public.updates_cache_purge_pending p
+    SET lease_token = v_token, leased_until = v_now + v_lease
+    FROM picked
+    WHERE p.app_id = picked.app_id
+      AND p.due_at <= v_now
+      AND (p.lease_token IS NULL OR p.leased_until <= v_now)
+    RETURNING p.app_id, p.initial
+  )
+  SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('app_id', c.app_id, 'initial', c.initial))
+  INTO v_apps
+  FROM (SELECT app_id, bool_or(initial) AS initial FROM claimed GROUP BY app_id) AS c;
+
+  IF v_apps IS NULL THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'empty');
+  END IF;
+
+  UPDATE public.updates_cache_purge_state SET last_claim_at = v_now WHERE id;
+  RETURN pg_catalog.jsonb_build_object(
+    'status', 'ok',
+    'lease_token', v_token,
+    'apps', v_apps,
+    'has_more', EXISTS (
+      SELECT 1 FROM public.updates_cache_purge_pending
+      WHERE due_at <= v_now AND (lease_token IS NULL OR leased_until <= v_now)
+    )
+  );
+END;
+$$;
+
+
+ALTER FUNCTION "public"."claim_updates_cache_purge"("p_limit" integer) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."cleanup_apikey_role_bindings"() RETURNS "trigger"
@@ -6696,6 +6828,40 @@ $$;
 ALTER FUNCTION "public"."enqueue_credit_usage_posthog_event"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."enqueue_cron_tick"("queue_name" "text", "payload" "jsonb") RETURNS "void"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO ''
+    AS $_$
+DECLARE
+  tick_pending boolean;
+BEGIN
+  -- Serialize producers per queue so concurrent callers cannot both see no
+  -- pending tick and enqueue a duplicate.
+  PERFORM pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('enqueue_cron_tick:' || queue_name, 0)
+  );
+
+  EXECUTE pg_catalog.format(
+    'SELECT EXISTS (SELECT 1 FROM pgmq.%I WHERE read_ct = 0 AND message = $1)',
+    'q_' || queue_name
+  )
+  INTO tick_pending
+  USING payload;
+
+  IF NOT tick_pending THEN
+    PERFORM pgmq.send(queue_name, payload);
+  END IF;
+END;
+$_$;
+
+
+ALTER FUNCTION "public"."enqueue_cron_tick"("queue_name" "text", "payload" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."enqueue_cron_tick"("queue_name" "text", "payload" "jsonb") IS 'Enqueue a cron tick unless an identical unread tick is already waiting, so tick backlogs cannot accumulate.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."enqueue_global_stats_creates"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -7817,6 +7983,22 @@ ALTER FUNCTION "public"."get_channel_current_bundle_rbac"("p_app_id" character v
 
 COMMENT ON FUNCTION "public"."get_channel_current_bundle_rbac"("p_app_id" character varying, "p_channel_id" bigint) IS 'Returns only the current bundle name for a channel the caller can read, allowing channel-scoped CLI access without granting app.read_bundles.';
 
+
+
+CREATE OR REPLACE FUNCTION "public"."get_credit_auto_top_up_month_total"("p_org_id" "uuid") RETURNS numeric
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  SELECT COALESCE(SUM(grants.credits_total), 0)::numeric
+  FROM public.usage_credit_grants AS grants
+  WHERE grants.org_id = p_org_id
+    AND grants.source = 'stripe_top_up'
+    AND grants.source_ref ->> 'kind' = 'credit_auto_top_up'
+    AND grants.granted_at >= (date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC');
+$$;
+
+
+ALTER FUNCTION "public"."get_credit_auto_top_up_month_total"("p_org_id" "uuid") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."get_current_plan_max_org"("orgid" "uuid") RETURNS TABLE("mau" bigint, "bandwidth" bigint, "storage" bigint, "build_time_unit" bigint, "native_build_concurrency" integer)
@@ -10956,6 +11138,136 @@ $$;
 ALTER FUNCTION "public"."internal_request_role_names"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."invalidate_updates_edge_cache"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  app_ids text[];
+BEGIN
+  IF NOT public.updates_cache_purge_enabled() THEN
+    RETURN NULL;
+  END IF;
+
+  IF TG_TABLE_NAME = 'channels' THEN
+    IF TG_OP = 'INSERT' THEN
+      SELECT pg_catalog.array_agg(DISTINCT n.app_id::text) INTO app_ids FROM new_rows n;
+    ELSIF TG_OP = 'DELETE' THEN
+      SELECT pg_catalog.array_agg(DISTINCT o.app_id::text) INTO app_ids FROM old_rows o;
+    ELSE
+      SELECT pg_catalog.array_agg(DISTINCT changed.app_id) INTO app_ids
+      FROM (
+        SELECT o.app_id::text AS app_id FROM old_rows o JOIN new_rows n ON n.id = o.id
+        WHERE (o.app_id, o.name, o.version, o.public, o.allow_device_self_set, o.allow_emulator,
+               o.allow_device, o.allow_dev, o.allow_prod, o.disable_auto_update_under_native,
+               o.disable_auto_update, o.ios, o.android, o.electron, o.update_package,
+               o.rollout_version, o.rollout_percentage_bps, o.rollout_enabled, o.rollout_id,
+               o.rollout_paused_at, o.rollout_pause_reason, o.rollout_cache_ttl_seconds, o.paused_at)
+          IS DISTINCT FROM
+              (n.app_id, n.name, n.version, n.public, n.allow_device_self_set, n.allow_emulator,
+               n.allow_device, n.allow_dev, n.allow_prod, n.disable_auto_update_under_native,
+               n.disable_auto_update, n.ios, n.android, n.electron, n.update_package,
+               n.rollout_version, n.rollout_percentage_bps, n.rollout_enabled, n.rollout_id,
+               n.rollout_paused_at, n.rollout_pause_reason, n.rollout_cache_ttl_seconds, n.paused_at)
+        UNION
+        SELECT n.app_id::text FROM old_rows o JOIN new_rows n ON n.id = o.id
+        WHERE o.app_id IS DISTINCT FROM n.app_id
+      ) AS changed;
+    END IF;
+  ELSIF TG_TABLE_NAME = 'apps' THEN
+    IF TG_OP = 'INSERT' THEN
+      -- Clears the cached "unknown app" answer.
+      SELECT pg_catalog.array_agg(DISTINCT n.app_id::text) INTO app_ids FROM new_rows n;
+    ELSIF TG_OP = 'DELETE' THEN
+      SELECT pg_catalog.array_agg(DISTINCT o.app_id::text) INTO app_ids FROM old_rows o;
+    ELSE
+      -- Counters only gate code paths (> 0), so only zero crossings matter.
+      SELECT pg_catalog.array_agg(DISTINCT n.app_id::text) INTO app_ids
+      FROM old_rows o JOIN new_rows n ON n.app_id = o.app_id
+      WHERE (o.owner_org, o.expose_metadata, o.allow_device_custom_id, o.block_provider_infra_requests,
+             o.rollout_paused_version_names,
+             COALESCE(o.channel_device_count, 0) > 0, COALESCE(o.manifest_bundle_count, 0) > 0,
+             COALESCE(o.rollout_channel_count, 0) > 0)
+        IS DISTINCT FROM
+            (n.owner_org, n.expose_metadata, n.allow_device_custom_id, n.block_provider_infra_requests,
+             n.rollout_paused_version_names,
+             COALESCE(n.channel_device_count, 0) > 0, COALESCE(n.manifest_bundle_count, 0) > 0,
+             COALESCE(n.rollout_channel_count, 0) > 0);
+    END IF;
+  ELSIF TG_TABLE_NAME = 'app_versions' THEN
+    -- Only versions a channel serves (as version or rollout target) can be in
+    -- the cache; channel changes that start serving a version purge on their
+    -- own. This keeps uploads (manifest_count, storage_provider flips of
+    -- unlinked bundles) from evicting the app's live entries.
+    IF TG_OP = 'DELETE' THEN
+      SELECT pg_catalog.array_agg(DISTINCT o.app_id::text) INTO app_ids
+      FROM old_rows o
+      WHERE EXISTS (
+        SELECT 1 FROM public.channels c WHERE c.version = o.id OR c.rollout_version = o.id
+      );
+    ELSE
+      SELECT pg_catalog.array_agg(DISTINCT n.app_id::text) INTO app_ids
+      FROM old_rows o JOIN new_rows n ON n.id = o.id
+      WHERE EXISTS (
+        SELECT 1 FROM public.channels c WHERE c.version = n.id OR c.rollout_version = n.id
+      )
+        AND (o.app_id, o.name, o.checksum, o.session_key, o.key_id, o.storage_provider, o.external_url,
+             o.min_update_version, o.manifest_count, o.r2_path, o.deleted, o.deleted_at,
+             o.link, o.comment)
+        IS DISTINCT FROM
+            (n.app_id, n.name, n.checksum, n.session_key, n.key_id, n.storage_provider, n.external_url,
+             n.min_update_version, n.manifest_count, n.r2_path, n.deleted, n.deleted_at,
+             n.link, n.comment);
+    END IF;
+  ELSIF TG_TABLE_NAME = 'orgs' THEN
+    SELECT pg_catalog.array_agg(DISTINCT a.app_id::text) INTO app_ids
+    FROM old_rows o
+    JOIN new_rows n ON n.id = o.id
+    JOIN public.apps a ON a.owner_org = n.id
+    WHERE (o.customer_id, o.has_usage_credits, o.management_email, o.created_by)
+      IS DISTINCT FROM
+          (n.customer_id, n.has_usage_credits, n.management_email, n.created_by);
+  ELSIF TG_TABLE_NAME = 'stripe_info' THEN
+    IF TG_OP = 'INSERT' THEN
+      SELECT pg_catalog.array_agg(DISTINCT a.app_id::text) INTO app_ids
+      FROM new_rows s
+      JOIN public.orgs org ON org.customer_id = s.customer_id
+      JOIN public.apps a ON a.owner_org = org.id;
+    ELSIF TG_OP = 'DELETE' THEN
+      SELECT pg_catalog.array_agg(DISTINCT a.app_id::text) INTO app_ids
+      FROM old_rows s
+      JOIN public.orgs org ON org.customer_id = s.customer_id
+      JOIN public.apps a ON a.owner_org = org.id;
+    ELSE
+      SELECT pg_catalog.array_agg(DISTINCT a.app_id::text) INTO app_ids
+      FROM old_rows o
+      JOIN new_rows n ON n.customer_id = o.customer_id
+      JOIN public.orgs org ON org.customer_id = n.customer_id
+      JOIN public.apps a ON a.owner_org = org.id
+      WHERE (o.status, o.trial_at, o.mau_exceeded, o.bandwidth_exceeded)
+        IS DISTINCT FROM
+            (n.status, n.trial_at, n.mau_exceeded, n.bandwidth_exceeded);
+    END IF;
+  END IF;
+
+  IF app_ids IS NOT NULL THEN
+    PERFORM public.notify_updates_edge_cache_purge(app_ids);
+  END IF;
+  RETURN NULL;
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'invalidate_updates_edge_cache failed on %: %', TG_TABLE_NAME, SQLERRM;
+  RETURN NULL;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."invalidate_updates_edge_cache"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."invalidate_updates_edge_cache"() IS 'Statement-level AFTER trigger: collects app ids whose /updates answer may have changed and asks triggers/updates_cache_purge to purge their Cloudflare Cache-Tag. Runs once per statement over transition tables; lookups use finx_channels_version, idx_channels_rollout_version, idx_orgs_customer_id and finx_apps_owner_org.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."invite_user_to_org_rbac"("email" character varying, "org_id" "uuid", "role_name" "text") RETURNS character varying
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -12929,6 +13241,37 @@ $$;
 ALTER FUNCTION "public"."new_builder_onboarding_setup_v1"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."new_ota_onboarding_steps_v1"("p_legacy_steps" "jsonb" DEFAULT '{}'::"jsonb") RETURNS "jsonb"
+    LANGUAGE "sql" IMMUTABLE
+    SET "search_path" TO ''
+    AS $$
+  -- Carries done/skipped statuses (and their metadata) from a flat v1-v3 step
+  -- record. v1 named the first step add_app instead of login_cli_mcp.
+  SELECT pg_catalog.jsonb_object_agg(
+    step.id,
+    CASE
+      WHEN legacy.value ->> 'status' IN ('done', 'skipped') THEN legacy.value
+      ELSE pg_catalog.jsonb_build_object('status', 'pending')
+    END
+  )
+  FROM unnest(ARRAY[
+    'login_cli_mcp', 'add_channel', 'add_updater', 'add_code',
+    'run_device', 'upload_bundle', 'test_update'
+  ]) AS step(id)
+  LEFT JOIN LATERAL (
+    SELECT CASE
+      WHEN pg_catalog.jsonb_typeof(COALESCE(p_legacy_steps, '{}'::jsonb)) <> 'object' THEN NULL
+      WHEN pg_catalog.jsonb_typeof(p_legacy_steps -> step.id) = 'object' THEN p_legacy_steps -> step.id
+      WHEN step.id = 'login_cli_mcp' AND pg_catalog.jsonb_typeof(p_legacy_steps -> 'add_app') = 'object'
+        THEN p_legacy_steps -> 'add_app'
+    END AS value
+  ) AS legacy ON true;
+$$;
+
+
+ALTER FUNCTION "public"."new_ota_onboarding_steps_v1"("p_legacy_steps" "jsonb") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."normalize_public_channel_overlap"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -12995,6 +13338,33 @@ $$;
 
 
 ALTER FUNCTION "public"."normalize_sso_provider_domain"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."notify_updates_edge_cache_purge"("p_app_ids" "text"[]) RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  INSERT INTO public.updates_cache_purge_pending (app_id, due_at, initial)
+  SELECT app_id, pg_catalog.clock_timestamp(), true
+  FROM (
+    SELECT DISTINCT app_id FROM pg_catalog.unnest(p_app_ids) AS app_id
+    WHERE app_id IS NOT NULL AND app_id <> ''
+  ) AS apps;
+
+  -- One wake per transaction (an app delete cascades to several statements).
+  IF pg_catalog.current_setting('capgo.updates_cache_wake_sent', true) IS DISTINCT FROM 'on' THEN
+    PERFORM pg_catalog.set_config('capgo.updates_cache_wake_sent', 'on', true);
+    PERFORM public.wake_updates_cache_purge();
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  -- Cache purge is an accelerator; never fail the business write.
+  RAISE WARNING 'notify_updates_edge_cache_purge failed: %', SQLERRM;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."notify_updates_edge_cache_purge"("p_app_ids" "text"[]) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."noupdate"() RETURNS "trigger"
@@ -14189,7 +14559,7 @@ BEGIN
               EXECUTE 'SELECT ' || task.target;
 
             WHEN 'queue' THEN
-              PERFORM pgmq.send(
+              PERFORM public.enqueue_cron_tick(
                 task.target,
                 COALESCE(task.payload, jsonb_build_object('function_name', task.target))
               );
@@ -14214,7 +14584,7 @@ BEGIN
     END LOOP;
 
     IF current_minute % 5 = 0 AND current_second < 10 THEN
-      PERFORM pgmq.send(
+      PERFORM public.enqueue_cron_tick(
         'cron_rollout_auto_pause',
         jsonb_build_object(
           'function_name', 'cron_rollout_auto_pause',
@@ -20103,6 +20473,13 @@ BEGIN
     RETURN;
   END IF;
 
+  -- Stop when the next charge would push this month's auto top-ups over the cap.
+  IF v_org.auto_top_up_monthly_limit > 0
+     AND public.get_credit_auto_top_up_month_total(p_org_id) + v_org.auto_top_up_threshold > v_org.auto_top_up_monthly_limit THEN
+    RETURN QUERY SELECT false, true, v_org.auto_top_up_threshold::numeric, v_org.customer_id::text, v_available;
+    RETURN;
+  END IF;
+
   UPDATE public.orgs
   SET auto_top_up_last_attempt_at = now()
   WHERE id = p_org_id;
@@ -20469,6 +20846,29 @@ $$;
 
 
 ALTER FUNCTION "public"."update_webhook_updated_at"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."updates_cache_purge_enabled"() RETURNS boolean
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_setting text;
+BEGIN
+  SELECT decrypted_secret
+  INTO v_setting
+  FROM vault.decrypted_secrets
+  WHERE name = 'CAPGO_UPDATES_CACHE_PURGE_ENABLED'
+  LIMIT 1;
+
+  RETURN pg_catalog.lower(pg_catalog.btrim(COALESCE(v_setting, ''))) IN ('true', 'on', '1');
+EXCEPTION WHEN OTHERS THEN
+  RETURN false;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."updates_cache_purge_enabled"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."upsert_version_meta"("p_app_id" character varying, "p_version_id" bigint, "p_size" bigint) RETURNS boolean
@@ -20941,6 +21341,46 @@ ALTER FUNCTION "public"."verify_mfa"() OWNER TO "postgres";
 
 COMMENT ON FUNCTION "public"."verify_mfa"() IS 'Returns true when the current session satisfies Supabase MFA assurance. Users with verified MFA factors require aal2; users without verified factors may use aal1 or aal2. Active platform-admin impersonation sessions (log_as) also pass so support spoof of MFA users works without an OTP MFA bypass.';
 
+
+
+CREATE OR REPLACE FUNCTION "public"."wake_updates_cache_purge"() RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  PERFORM net.http_post(
+    url := public.get_db_url() || '/functions/v1/triggers/updates_cache_purge',
+    headers := pg_catalog.jsonb_build_object(
+      'Content-Type', 'application/json',
+      'apisecret', public.get_apikey()
+    ),
+    body := pg_catalog.jsonb_build_object('wake', true),
+    timeout_milliseconds := 5000
+  );
+END;
+$$;
+
+
+ALTER FUNCTION "public"."wake_updates_cache_purge"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."wake_updates_cache_purge_if_due"() RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM public.updates_cache_purge_pending
+    WHERE due_at <= pg_catalog.clock_timestamp()
+      AND (lease_token IS NULL OR leased_until <= pg_catalog.clock_timestamp())
+  ) THEN
+    PERFORM public.wake_updates_cache_purge();
+  END IF;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."wake_updates_cache_purge_if_due"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "rbac_internal"."assert_assignable_org_invite_role_exists"("p_new_role_name" "text") RETURNS "void"
@@ -21749,6 +22189,7 @@ CREATE TABLE IF NOT EXISTS "public"."channels" (
     "auto_pause_last_triggered_at" timestamp with time zone,
     "auto_pause_last_checked_at" timestamp with time zone,
     "update_package" "public"."channel_update_package" DEFAULT 'all'::"public"."channel_update_package" NOT NULL,
+    "paused_at" timestamp with time zone,
     CONSTRAINT "channels_auto_pause_action_check" CHECK (("auto_pause_action" = ANY (ARRAY['pause'::"text", 'rollback'::"text", 'notify'::"text"]))),
     CONSTRAINT "channels_auto_pause_confidence_check" CHECK ((("auto_pause_confidence" > (0)::numeric) AND ("auto_pause_confidence" < (1)::numeric))),
     CONSTRAINT "channels_auto_pause_cooldown_minutes_check" CHECK ((("auto_pause_cooldown_minutes" >= 0) AND ("auto_pause_cooldown_minutes" <= 10080))),
@@ -21771,6 +22212,10 @@ COMMENT ON COLUMN "public"."channels"."rbac_id" IS 'Stable UUID to bind RBAC rol
 
 
 COMMENT ON COLUMN "public"."channels"."update_package" IS 'How /updates serves the channel bundle: all (zip+delta), zip, delta, or zip/delta only when the device is still on the store builtin version.';
+
+
+
+COMMENT ON COLUMN "public"."channels"."paused_at" IS 'When set, the channel is paused: /updates answers channel_paused and devices keep their current bundle.';
 
 
 
@@ -22824,6 +23269,16 @@ COMMENT ON COLUMN "public"."manifest_per_version"."size_receipts_provided" IS 'T
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."manifest_trash_restore_pending" (
+    "s3_path" "text" NOT NULL,
+    "app_version_id" bigint NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."manifest_trash_restore_pending" OWNER TO "postgres";
+
+
 CREATE TABLE IF NOT EXISTS "public"."mcp_oauth_clients" (
     "client_id" "text" NOT NULL,
     "client_name" "text" NOT NULL,
@@ -23124,6 +23579,7 @@ CREATE TABLE IF NOT EXISTS "public"."orgs" (
     "support_channel_type" "text",
     "support_channel_url" "text",
     "support_channel_set_at" timestamp with time zone,
+    "auto_top_up_monthly_limit" numeric(18,6) DEFAULT 0 NOT NULL,
     CONSTRAINT "orgs_max_apikey_expiration_days_valid" CHECK ((("max_apikey_expiration_days" IS NULL) OR (("max_apikey_expiration_days" >= 1) AND ("max_apikey_expiration_days" <= 365)))),
     CONSTRAINT "orgs_password_policy_config_min_length_check" CHECK ((("password_policy_config" IS NULL) OR (("jsonb_typeof"("password_policy_config") = 'object'::"text") AND ((NOT ("password_policy_config" ? 'min_length'::"text")) OR (("jsonb_typeof"(("password_policy_config" -> 'min_length'::"text")) = 'number'::"text") AND ((("password_policy_config" ->> 'min_length'::"text"))::numeric = "trunc"((("password_policy_config" ->> 'min_length'::"text"))::numeric)) AND (((("password_policy_config" ->> 'min_length'::"text"))::numeric >= (6)::numeric) AND ((("password_policy_config" ->> 'min_length'::"text"))::numeric <= (72)::numeric))))))),
     CONSTRAINT "orgs_required_encryption_key_valid" CHECK ((("required_encryption_key" IS NULL) OR ("length"(("required_encryption_key")::"text") = ANY (ARRAY[20, 21])))),
@@ -23198,6 +23654,10 @@ COMMENT ON COLUMN "public"."orgs"."support_channel_url" IS 'HTTPS invite/link fo
 
 
 COMMENT ON COLUMN "public"."orgs"."support_channel_set_at" IS 'When the support channel was first set. Used for enterprise adoption charts.';
+
+
+
+COMMENT ON COLUMN "public"."orgs"."auto_top_up_monthly_limit" IS 'Maximum credits (USD, 1:1) that auto top-up may buy per calendar month (UTC). 0 means no limit; otherwise it must be at least auto_top_up_threshold. Auto top-up stops once the next charge would exceed it.';
 
 
 
@@ -23633,6 +24093,40 @@ ALTER TABLE "public"."trial_extension_events" ALTER COLUMN "id" ADD GENERATED BY
     CACHE 1
 );
 
+
+
+CREATE TABLE IF NOT EXISTS "public"."updates_cache_purge_pending" (
+    "id" bigint NOT NULL,
+    "app_id" "text" NOT NULL,
+    "due_at" timestamp with time zone NOT NULL,
+    "initial" boolean DEFAULT true NOT NULL,
+    "lease_token" "uuid",
+    "leased_until" timestamp with time zone
+);
+
+
+ALTER TABLE "public"."updates_cache_purge_pending" OWNER TO "postgres";
+
+
+ALTER TABLE "public"."updates_cache_purge_pending" ALTER COLUMN "id" ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME "public"."updates_cache_purge_pending_id_seq"
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."updates_cache_purge_state" (
+    "id" boolean DEFAULT true NOT NULL,
+    "last_claim_at" timestamp with time zone DEFAULT '-infinity'::timestamp with time zone NOT NULL,
+    CONSTRAINT "updates_cache_purge_state_id_check" CHECK ("id")
+);
+
+
+ALTER TABLE "public"."updates_cache_purge_state" OWNER TO "postgres";
 
 
 CREATE TABLE IF NOT EXISTS "public"."usage_credit_grants" (
@@ -24374,6 +24868,11 @@ ALTER TABLE ONLY "public"."manifest"
 
 
 
+ALTER TABLE ONLY "public"."manifest_trash_restore_pending"
+    ADD CONSTRAINT "manifest_trash_restore_pending_pkey" PRIMARY KEY ("app_version_id", "s3_path");
+
+
+
 ALTER TABLE ONLY "public"."mcp_oauth_clients"
     ADD CONSTRAINT "mcp_oauth_clients_pkey" PRIMARY KEY ("client_id");
 
@@ -24446,6 +24945,11 @@ ALTER TABLE ONLY "public"."org_stats_refresh_state"
 
 ALTER TABLE ONLY "public"."org_users"
     ADD CONSTRAINT "org_users_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE "public"."orgs"
+    ADD CONSTRAINT "orgs_auto_top_up_monthly_limit_valid" CHECK ((("auto_top_up_monthly_limit" >= (0)::numeric) AND ("auto_top_up_monthly_limit" = "trunc"("auto_top_up_monthly_limit")) AND ("auto_top_up_monthly_limit" < 'Infinity'::numeric) AND (("auto_top_up_monthly_limit" = (0)::numeric) OR ("auto_top_up_monthly_limit" >= "auto_top_up_threshold")))) NOT VALID;
 
 
 
@@ -24571,6 +25075,16 @@ ALTER TABLE ONLY "public"."channels"
 
 ALTER TABLE ONLY "public"."orgs"
     ADD CONSTRAINT "unique_name_created_by" UNIQUE ("name", "created_by");
+
+
+
+ALTER TABLE ONLY "public"."updates_cache_purge_pending"
+    ADD CONSTRAINT "updates_cache_purge_pending_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."updates_cache_purge_state"
+    ADD CONSTRAINT "updates_cache_purge_state_pkey" PRIMARY KEY ("id");
 
 
 
@@ -25186,6 +25700,10 @@ CREATE INDEX "idx_usage_credit_grants_org_remaining" ON "public"."usage_credit_g
 
 
 
+CREATE INDEX "idx_usage_credit_grants_org_top_up_granted_at" ON "public"."usage_credit_grants" USING "btree" ("org_id", "granted_at") WHERE ("source" = 'stripe_top_up'::"text");
+
+
+
 CREATE INDEX "idx_usage_credit_transactions_grant" ON "public"."usage_credit_transactions" USING "btree" ("grant_id", "occurred_at" DESC);
 
 
@@ -25363,6 +25881,14 @@ CREATE UNIQUE INDEX "unique_app_version_negative" ON "public"."version_meta" USI
 
 
 CREATE UNIQUE INDEX "unique_app_version_positive" ON "public"."version_meta" USING "btree" ("app_id", "version_id") WHERE ("size" > 0);
+
+
+
+CREATE INDEX "updates_cache_purge_pending_due_at_idx" ON "public"."updates_cache_purge_pending" USING "btree" ("due_at");
+
+
+
+CREATE INDEX "updates_cache_purge_pending_lease_idx" ON "public"."updates_cache_purge_pending" USING "btree" ("lease_token") WHERE ("lease_token" IS NOT NULL);
 
 
 
@@ -25659,6 +26185,54 @@ CREATE OR REPLACE TRIGGER "handle_updated_at" BEFORE INSERT OR UPDATE ON "public
 
 
 CREATE OR REPLACE TRIGGER "handle_updated_at" BEFORE INSERT OR UPDATE ON "public"."users" FOR EACH ROW EXECUTE FUNCTION "public"."sanitize_users_text_fields"();
+
+
+
+CREATE OR REPLACE TRIGGER "invalidate_updates_edge_cache_app_versions_del" AFTER DELETE ON "public"."app_versions" REFERENCING OLD TABLE AS "old_rows" FOR EACH STATEMENT EXECUTE FUNCTION "public"."invalidate_updates_edge_cache"();
+
+
+
+CREATE OR REPLACE TRIGGER "invalidate_updates_edge_cache_app_versions_upd" AFTER UPDATE ON "public"."app_versions" REFERENCING OLD TABLE AS "old_rows" NEW TABLE AS "new_rows" FOR EACH STATEMENT EXECUTE FUNCTION "public"."invalidate_updates_edge_cache"();
+
+
+
+CREATE OR REPLACE TRIGGER "invalidate_updates_edge_cache_apps_del" AFTER DELETE ON "public"."apps" REFERENCING OLD TABLE AS "old_rows" FOR EACH STATEMENT EXECUTE FUNCTION "public"."invalidate_updates_edge_cache"();
+
+
+
+CREATE OR REPLACE TRIGGER "invalidate_updates_edge_cache_apps_ins" AFTER INSERT ON "public"."apps" REFERENCING NEW TABLE AS "new_rows" FOR EACH STATEMENT EXECUTE FUNCTION "public"."invalidate_updates_edge_cache"();
+
+
+
+CREATE OR REPLACE TRIGGER "invalidate_updates_edge_cache_apps_upd" AFTER UPDATE ON "public"."apps" REFERENCING OLD TABLE AS "old_rows" NEW TABLE AS "new_rows" FOR EACH STATEMENT EXECUTE FUNCTION "public"."invalidate_updates_edge_cache"();
+
+
+
+CREATE OR REPLACE TRIGGER "invalidate_updates_edge_cache_channels_del" AFTER DELETE ON "public"."channels" REFERENCING OLD TABLE AS "old_rows" FOR EACH STATEMENT EXECUTE FUNCTION "public"."invalidate_updates_edge_cache"();
+
+
+
+CREATE OR REPLACE TRIGGER "invalidate_updates_edge_cache_channels_ins" AFTER INSERT ON "public"."channels" REFERENCING NEW TABLE AS "new_rows" FOR EACH STATEMENT EXECUTE FUNCTION "public"."invalidate_updates_edge_cache"();
+
+
+
+CREATE OR REPLACE TRIGGER "invalidate_updates_edge_cache_channels_upd" AFTER UPDATE ON "public"."channels" REFERENCING OLD TABLE AS "old_rows" NEW TABLE AS "new_rows" FOR EACH STATEMENT EXECUTE FUNCTION "public"."invalidate_updates_edge_cache"();
+
+
+
+CREATE OR REPLACE TRIGGER "invalidate_updates_edge_cache_orgs_upd" AFTER UPDATE ON "public"."orgs" REFERENCING OLD TABLE AS "old_rows" NEW TABLE AS "new_rows" FOR EACH STATEMENT EXECUTE FUNCTION "public"."invalidate_updates_edge_cache"();
+
+
+
+CREATE OR REPLACE TRIGGER "invalidate_updates_edge_cache_stripe_info_del" AFTER DELETE ON "public"."stripe_info" REFERENCING OLD TABLE AS "old_rows" FOR EACH STATEMENT EXECUTE FUNCTION "public"."invalidate_updates_edge_cache"();
+
+
+
+CREATE OR REPLACE TRIGGER "invalidate_updates_edge_cache_stripe_info_ins" AFTER INSERT ON "public"."stripe_info" REFERENCING NEW TABLE AS "new_rows" FOR EACH STATEMENT EXECUTE FUNCTION "public"."invalidate_updates_edge_cache"();
+
+
+
+CREATE OR REPLACE TRIGGER "invalidate_updates_edge_cache_stripe_info_upd" AFTER UPDATE ON "public"."stripe_info" REFERENCING OLD TABLE AS "old_rows" NEW TABLE AS "new_rows" FOR EACH STATEMENT EXECUTE FUNCTION "public"."invalidate_updates_edge_cache"();
 
 
 
@@ -26034,6 +26608,11 @@ ALTER TABLE ONLY "public"."manifest"
 
 ALTER TABLE ONLY "public"."manifest_per_version"
     ADD CONSTRAINT "manifest_per_version_version_id_fkey" FOREIGN KEY ("version_id") REFERENCES "public"."app_versions"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."manifest_trash_restore_pending"
+    ADD CONSTRAINT "manifest_trash_restore_pending_app_version_id_fkey" FOREIGN KEY ("app_version_id") REFERENCES "public"."app_versions"("id") ON DELETE CASCADE;
 
 
 
@@ -26623,6 +27202,42 @@ CREATE POLICY "Deny all authenticated on builder_capacity_events" ON "public"."b
 
 
 
+CREATE POLICY "Deny all direct access" ON "public"."app_onboarding" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny all direct access" ON "public"."app_stats_refresh_state" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny all direct access" ON "public"."manifest_per_version" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny all direct access" ON "public"."manifest_trash_restore_pending" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny all direct access" ON "public"."mcp_oauth_clients" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny all direct access" ON "public"."mcp_oauth_requests" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny all direct access" ON "public"."org_stats_refresh_state" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny all direct access" ON "public"."updates_cache_purge_pending" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny all direct access" ON "public"."updates_cache_purge_state" AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+
+
 CREATE POLICY "Deny all notification app settings access" ON "public"."notification_app_settings" AS RESTRICTIVE USING (false) WITH CHECK (false);
 
 
@@ -27194,6 +27809,9 @@ ALTER TABLE "public"."manifest" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."manifest_per_version" ENABLE ROW LEVEL SECURITY;
 
 
+ALTER TABLE "public"."manifest_trash_restore_pending" ENABLE ROW LEVEL SECURITY;
+
+
 ALTER TABLE "public"."mcp_oauth_clients" ENABLE ROW LEVEL SECURITY;
 
 
@@ -27384,6 +28002,12 @@ ALTER TABLE "public"."to_delete_accounts" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."trial_extension_events" ENABLE ROW LEVEL SECURITY;
+
+
+ALTER TABLE "public"."updates_cache_purge_pending" ENABLE ROW LEVEL SECURITY;
+
+
+ALTER TABLE "public"."updates_cache_purge_state" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."usage_credit_consumptions" ENABLE ROW LEVEL SECURITY;
@@ -27810,6 +28434,11 @@ GRANT ALL ON FUNCTION "public"."accept_invitation_to_org"("org_id" "uuid") TO "s
 
 
 
+REVOKE ALL ON FUNCTION "public"."ack_updates_cache_purge"("p_lease_token" "uuid", "p_success" boolean, "p_retry_after_seconds" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."ack_updates_cache_purge"("p_lease_token" "uuid", "p_success" boolean, "p_retry_after_seconds" integer) TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."acknowledge_compatibility_event"("event_id" bigint, "note" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."acknowledge_compatibility_event"("event_id" bigint, "note" "text") TO "service_role";
 GRANT ALL ON FUNCTION "public"."acknowledge_compatibility_event"("event_id" bigint, "note" "text") TO "authenticated";
@@ -27857,8 +28486,8 @@ GRANT ALL ON FUNCTION "public"."app_versions_readable_app_ids"() TO "authenticat
 
 
 
-REVOKE ALL ON FUNCTION "public"."apply_usage_overage"("p_org_id" "uuid", "p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_billing_cycle_start" timestamp with time zone, "p_billing_cycle_end" timestamp with time zone, "p_details" "jsonb") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."apply_usage_overage"("p_org_id" "uuid", "p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_billing_cycle_start" timestamp with time zone, "p_billing_cycle_end" timestamp with time zone, "p_details" "jsonb") TO "service_role";
+REVOKE ALL ON FUNCTION "public"."apply_usage_overage"("p_org_id" "uuid", "p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_billing_cycle_start" timestamp with time zone, "p_billing_cycle_end" timestamp with time zone, "p_details" "jsonb", "p_included_amount" numeric) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."apply_usage_overage"("p_org_id" "uuid", "p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_billing_cycle_start" timestamp with time zone, "p_billing_cycle_end" timestamp with time zone, "p_details" "jsonb", "p_included_amount" numeric) TO "service_role";
 
 
 
@@ -27955,6 +28584,10 @@ GRANT ALL ON FUNCTION "public"."bind_creating_apikey_to_org_on_create"() TO "ser
 
 
 REVOKE ALL ON FUNCTION "public"."calculate_credit_cost"("p_metric" "public"."credit_metric_type", "p_overage_amount" numeric) FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "public"."calculate_credit_cost"("p_metric" "public"."credit_metric_type", "p_overage_amount" numeric, "p_included_amount" numeric) FROM PUBLIC;
 
 
 
@@ -28084,6 +28717,11 @@ GRANT ALL ON FUNCTION "public"."check_revert_to_builtin_version"("appid" charact
 
 REVOKE ALL ON FUNCTION "public"."claim_legacy_onboarding_demo_data"("p_app_uuid" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."claim_legacy_onboarding_demo_data"("p_app_uuid" "uuid") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."claim_updates_cache_purge"("p_limit" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."claim_updates_cache_purge"("p_limit" integer) TO "service_role";
 
 
 
@@ -28393,6 +29031,11 @@ GRANT ALL ON FUNCTION "public"."enqueue_credit_usage_posthog_event"() TO "servic
 
 
 
+REVOKE ALL ON FUNCTION "public"."enqueue_cron_tick"("queue_name" "text", "payload" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."enqueue_cron_tick"("queue_name" "text", "payload" "jsonb") TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."enqueue_global_stats_creates"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."enqueue_global_stats_creates"() TO "service_role";
 
@@ -28532,6 +29175,11 @@ REVOKE ALL ON FUNCTION "public"."get_channel_current_bundle_rbac"("p_app_id" cha
 GRANT ALL ON FUNCTION "public"."get_channel_current_bundle_rbac"("p_app_id" character varying, "p_channel_id" bigint) TO "service_role";
 GRANT ALL ON FUNCTION "public"."get_channel_current_bundle_rbac"("p_app_id" character varying, "p_channel_id" bigint) TO "anon";
 GRANT ALL ON FUNCTION "public"."get_channel_current_bundle_rbac"("p_app_id" character varying, "p_channel_id" bigint) TO "authenticated";
+
+
+
+REVOKE ALL ON FUNCTION "public"."get_credit_auto_top_up_month_total"("p_org_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."get_credit_auto_top_up_month_total"("p_org_id" "uuid") TO "service_role";
 
 
 
@@ -28930,6 +29578,11 @@ GRANT ALL ON FUNCTION "public"."internal_request_role_names"() TO "service_role"
 
 
 
+REVOKE ALL ON FUNCTION "public"."invalidate_updates_edge_cache"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."invalidate_updates_edge_cache"() TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."invite_user_to_org_rbac"("email" character varying, "org_id" "uuid", "role_name" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."invite_user_to_org_rbac"("email" character varying, "org_id" "uuid", "role_name" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."invite_user_to_org_rbac"("email" character varying, "org_id" "uuid", "role_name" "text") TO "service_role";
@@ -29268,6 +29921,11 @@ GRANT ALL ON FUNCTION "public"."new_builder_onboarding_setup_v1"() TO "service_r
 
 
 
+REVOKE ALL ON FUNCTION "public"."new_ota_onboarding_steps_v1"("p_legacy_steps" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."new_ota_onboarding_steps_v1"("p_legacy_steps" "jsonb") TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."normalize_public_channel_overlap"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."normalize_public_channel_overlap"() TO "service_role";
 
@@ -29275,6 +29933,11 @@ GRANT ALL ON FUNCTION "public"."normalize_public_channel_overlap"() TO "service_
 
 REVOKE ALL ON FUNCTION "public"."normalize_sso_provider_domain"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."normalize_sso_provider_domain"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."notify_updates_edge_cache_purge"("p_app_ids" "text"[]) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."notify_updates_edge_cache_purge"("p_app_ids" "text"[]) TO "service_role";
 
 
 
@@ -30415,6 +31078,11 @@ REVOKE ALL ON FUNCTION "public"."update_webhook_updated_at"() FROM PUBLIC;
 
 
 
+REVOKE ALL ON FUNCTION "public"."updates_cache_purge_enabled"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."updates_cache_purge_enabled"() TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."upsert_version_meta"("p_app_id" character varying, "p_version_id" bigint, "p_size" bigint) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."upsert_version_meta"("p_app_id" character varying, "p_version_id" bigint, "p_size" bigint) TO "service_role";
 
@@ -30471,6 +31139,16 @@ REVOKE ALL ON FUNCTION "public"."verify_mfa"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."verify_mfa"() TO "anon";
 GRANT ALL ON FUNCTION "public"."verify_mfa"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."verify_mfa"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."wake_updates_cache_purge"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."wake_updates_cache_purge"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."wake_updates_cache_purge_if_due"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."wake_updates_cache_purge_if_due"() TO "service_role";
 
 
 
@@ -30859,6 +31537,10 @@ GRANT ALL ON TABLE "public"."manifest_per_version" TO "service_role";
 
 
 
+GRANT ALL ON TABLE "public"."manifest_trash_restore_pending" TO "service_role";
+
+
+
 GRANT ALL ON TABLE "public"."mcp_oauth_clients" TO "service_role";
 
 
@@ -31038,6 +31720,20 @@ GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public".
 
 
 GRANT ALL ON SEQUENCE "public"."trial_extension_events_id_seq" TO "service_role";
+
+
+
+GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."updates_cache_purge_pending" TO "service_role";
+
+
+
+GRANT ALL ON SEQUENCE "public"."updates_cache_purge_pending_id_seq" TO "anon";
+GRANT ALL ON SEQUENCE "public"."updates_cache_purge_pending_id_seq" TO "authenticated";
+GRANT ALL ON SEQUENCE "public"."updates_cache_purge_pending_id_seq" TO "service_role";
+
+
+
+GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."updates_cache_purge_state" TO "service_role";
 
 
 

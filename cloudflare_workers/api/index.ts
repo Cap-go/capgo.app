@@ -3,9 +3,6 @@ import type { Context } from 'hono'
 import type { Bindings } from '../../supabase/functions/_backend/utils/cloudflare.ts'
 import { createMcpApp } from '../../supabase/functions/_backend/mcp/index.ts'
 import { app as accept_invitation } from '../../supabase/functions/_backend/private/accept_invitation.ts'
-import { app as admin_credits } from '../../supabase/functions/_backend/private/admin_credits.ts'
-import { app as admin_org_support_channel } from '../../supabase/functions/_backend/private/admin_org_support_channel.ts'
-import { app as admin_stats } from '../../supabase/functions/_backend/private/admin_stats.ts'
 import { app as bundle_install_stats } from '../../supabase/functions/_backend/private/bundle_install_stats.ts'
 import { app as channel_device } from '../../supabase/functions/_backend/private/channel_device.ts'
 import { app as channel_stats } from '../../supabase/functions/_backend/private/channel_stats.ts'
@@ -102,6 +99,7 @@ import { app as pluginNotifications } from '../../supabase/functions/_backend/tr
 import { app as queue_consumer } from '../../supabase/functions/_backend/triggers/queue_consumer.ts'
 import { app as send_email } from './triggers/send_email.ts'
 import { app as stripe_event } from '../../supabase/functions/_backend/triggers/stripe_event.ts'
+import { app as updates_cache_purge } from '../../supabase/functions/_backend/triggers/updates_cache_purge.ts'
 import { app as webhook_delivery } from '../../supabase/functions/_backend/triggers/webhook_delivery.ts'
 import { app as webhook_dispatcher } from '../../supabase/functions/_backend/triggers/webhook_dispatcher.ts'
 import { BRES, createAllCatch, createHono } from '../../supabase/functions/_backend/utils/hono.ts'
@@ -163,9 +161,6 @@ appPrivate.route('/invite_new_user_to_org', invite_new_user_to_org)
 appPrivate.route('/invite_existing_user_to_org', invite_existing_user_to_org)
 appPrivate.route('/set_org_email', set_org_email)
 appPrivate.route('/validate_password_compliance', validate_password_compliance)
-appPrivate.route('/admin_credits', admin_credits)
-appPrivate.route('/admin_org_support_channel', admin_org_support_channel)
-appPrivate.route('/admin_stats', admin_stats)
 appPrivate.route('/stats', stats_priv)
 appPrivate.route('/channel_stats', channel_stats)
 appPrivate.route('/native_observe_stats', native_observe_stats)
@@ -244,6 +239,7 @@ appTriggers.route('/on_version_delete', on_version_delete)
 appTriggers.route('/on_manifest_create', on_manifest_create)
 appTriggers.route('/on_deploy_history_create', on_deploy_history_create)
 appTriggers.route('/stripe_event', stripe_event)
+appTriggers.route('/updates_cache_purge', updates_cache_purge)
 appTriggers.route('/on_organization_create', on_organization_create)
 appTriggers.route('/cron_stat_app', cron_stat_app)
 appTriggers.route('/cron_stat_org', cron_stat_org)

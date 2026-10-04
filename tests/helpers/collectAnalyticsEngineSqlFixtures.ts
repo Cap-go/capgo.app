@@ -9,19 +9,6 @@ import {
   countInstallSourcesCF,
   countUpdatesFromLogsCF,
   countUpdatesFromLogsExternalCF,
-  getAdminAppsTrend,
-  getAdminBandwidthTrend,
-  getAdminBundlesTrend,
-  getAdminDistributionMetrics,
-  getAdminFailureMetrics,
-  getAdminMauTrend,
-  getAdminOnboardingTelemetry,
-  getAdminOrgMetrics,
-  getAdminPlatformOverview,
-  getAdminStorageTrend,
-  getAdminSuccessRate,
-  getAdminSuccessRateTrend,
-  getAdminUploadMetrics,
   getPluginBreakdownCF,
   getPublicLiveUpdateMetricsCF,
   getUpdateStatsCF,
@@ -376,23 +363,6 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
     await captureCall('readLastMonthDevicesCF', () => readLastMonthDevicesCF(context, SAMPLE_REFERENCE_DATE))
     await captureCall('readLastMonthDevicesByPlatformCF', () => readLastMonthDevicesByPlatformCF(context, SAMPLE_REFERENCE_DATE))
     await captureCall('getUpdateStatsCF', () => getUpdateStatsCF(context))
-    await captureCall('getAdminOnboardingTelemetry', () => getAdminOnboardingTelemetry(context, [{
-      app_id: SAMPLE_APP_ID,
-      start_at: SAMPLE_START,
-      end_at: SAMPLE_END,
-    }], SAMPLE_START, SAMPLE_REFERENCE_DATE))
-    await captureCall('getAdminUploadMetrics', () => getAdminUploadMetrics(context, SAMPLE_START, SAMPLE_END, SAMPLE_APP_ID))
-    await captureCall('getAdminDistributionMetrics', () => getAdminDistributionMetrics(context, SAMPLE_START, SAMPLE_END, SAMPLE_APP_ID))
-    await captureCall('getAdminFailureMetrics', () => getAdminFailureMetrics(context, SAMPLE_START, SAMPLE_END, SAMPLE_APP_ID))
-    await captureCall('getAdminSuccessRate', () => getAdminSuccessRate(context, SAMPLE_START, SAMPLE_END, SAMPLE_APP_ID))
-    await captureCall('getAdminPlatformOverview', () => getAdminPlatformOverview(context, SAMPLE_START, SAMPLE_END, 'org-id'))
-    await captureCall('getAdminOrgMetrics', () => getAdminOrgMetrics(context, SAMPLE_START, SAMPLE_END, 10))
-    await captureCall('getAdminMauTrend', () => getAdminMauTrend(context, SAMPLE_START, SAMPLE_END))
-    await captureCall('getAdminSuccessRateTrend', () => getAdminSuccessRateTrend(context, SAMPLE_START, SAMPLE_END))
-    await captureCall('getAdminAppsTrend', () => getAdminAppsTrend(context, SAMPLE_START, SAMPLE_END))
-    await captureCall('getAdminBundlesTrend', () => getAdminBundlesTrend(context, SAMPLE_START, SAMPLE_END))
-    await captureCall('getAdminStorageTrend', () => getAdminStorageTrend(context, SAMPLE_START, SAMPLE_END))
-    await captureCall('getAdminBandwidthTrend', () => getAdminBandwidthTrend(context, SAMPLE_START, SAMPLE_END))
     await captureCall('getPluginBreakdownCF', () => getPluginBreakdownCF(context, SAMPLE_REFERENCE_DATE))
     await captureCall('getPublicLiveUpdateMetricsCF', () => getPublicLiveUpdateMetricsCF(context, SAMPLE_REFERENCE_DATE))
 

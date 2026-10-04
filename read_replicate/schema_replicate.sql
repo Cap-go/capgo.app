@@ -245,6 +245,7 @@ CREATE TABLE public.channels (
     auto_pause_last_triggered_at timestamp with time zone,
     auto_pause_last_checked_at timestamp with time zone,
     update_package public.channel_update_package DEFAULT 'all'::public.channel_update_package NOT NULL,
+    paused_at timestamp with time zone,
     CONSTRAINT channels_auto_pause_action_check CHECK ((auto_pause_action = ANY (ARRAY['pause'::text, 'rollback'::text, 'notify'::text]))),
     CONSTRAINT channels_auto_pause_confidence_check CHECK (((auto_pause_confidence > (0)::numeric) AND (auto_pause_confidence < (1)::numeric))),
     CONSTRAINT channels_auto_pause_cooldown_minutes_check CHECK (((auto_pause_cooldown_minutes >= 0) AND (auto_pause_cooldown_minutes <= 10080))),
@@ -405,6 +406,7 @@ CREATE TABLE public.orgs (
     support_channel_type text,
     support_channel_url text,
     support_channel_set_at timestamp with time zone,
+    auto_top_up_monthly_limit numeric(18,6) DEFAULT 0 NOT NULL,
     CONSTRAINT orgs_max_apikey_expiration_days_valid CHECK (((max_apikey_expiration_days IS NULL) OR ((max_apikey_expiration_days >= 1) AND (max_apikey_expiration_days <= 365)))),
     CONSTRAINT orgs_password_policy_config_min_length_check CHECK (((password_policy_config IS NULL) OR ((jsonb_typeof(password_policy_config) = 'object'::text) AND ((NOT (password_policy_config ? 'min_length'::text)) OR ((jsonb_typeof((password_policy_config -> 'min_length'::text)) = 'number'::text) AND (((password_policy_config ->> 'min_length'::text))::numeric = trunc(((password_policy_config ->> 'min_length'::text))::numeric)) AND ((((password_policy_config ->> 'min_length'::text))::numeric >= (6)::numeric) AND (((password_policy_config ->> 'min_length'::text))::numeric <= (72)::numeric))))))),
     CONSTRAINT orgs_required_encryption_key_valid CHECK (((required_encryption_key IS NULL) OR (length((required_encryption_key)::text) = ANY (ARRAY[20, 21])))),
@@ -587,6 +589,14 @@ ALTER TABLE ONLY public.onboarding_demo_data
 
 ALTER TABLE ONLY public.org_users
     ADD CONSTRAINT org_users_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: orgs orgs_auto_top_up_monthly_limit_valid; Type: CHECK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE public.orgs
+    ADD CONSTRAINT orgs_auto_top_up_monthly_limit_valid CHECK (((auto_top_up_monthly_limit >= (0)::numeric) AND (auto_top_up_monthly_limit = trunc(auto_top_up_monthly_limit)) AND (auto_top_up_monthly_limit < 'Infinity'::numeric) AND ((auto_top_up_monthly_limit = (0)::numeric) OR (auto_top_up_monthly_limit >= auto_top_up_threshold)))) NOT VALID;
 
 
 --
