@@ -127,6 +127,7 @@ export type UpdateResponseKind = 'up_to_date' | 'blocked' | 'failed'
 const UPDATE_UP_TO_DATE_CODES = new Set([
   'no_new_version_available',
   'already_on_builtin',
+  'channel_paused',
 ])
 
 const UPDATE_BLOCKED_CODES = new Set([
@@ -619,6 +620,13 @@ export async function updateWithPG(
 
   if (!channelData) {
     return updateError200(c, 'null_channel_data', 'channel data still null')
+  }
+
+  // Paused channel: send nothing, every device keeps the bundle it runs.
+  if (channelData.channels.paused_at) {
+    cloudlog({ requestId: c.get('requestId'), message: 'Channel is paused', id: device_id, channel: channelData.channels.name })
+    await sendStatsAndDevice(c, device, [{ action: 'channelPaused', versionName: version_name }])
+    return updateError200(c, 'channel_paused', `Channel ${channelData.channels.name} is paused, no update is sent`)
   }
 
   const version = channelOverride?.version ?? channelData.version

@@ -161,6 +161,23 @@ function formatPercent(value: number | null | undefined) {
   return `${formatNumberValue(value, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
 }
 
+// Some failed attempts are expected on every rollout (offline devices, app
+// closed mid-download, low storage), so failures only get a color when the
+// success rate itself needs attention.
+const failureCountClass = computed(() => {
+  const rate = totals.value.success_rate
+  if (rate === null || totals.value.install + totals.value.fail < MIN_STATUS_SAMPLES || rate >= 95)
+    return 'text-slate-900 dark:text-white'
+  if (rate >= 85)
+    return 'text-amber-600 dark:text-amber-400'
+  return 'text-rose-600 dark:text-rose-400'
+})
+
+const failureRate = computed(() => {
+  const attempts = totals.value.install + totals.value.fail
+  return attempts > 0 ? (totals.value.fail / attempts) * 100 : null
+})
+
 function successRateClass(rate: number | null) {
   if (rate === null || totals.value.install + totals.value.fail < MIN_STATUS_SAMPLES)
     return 'text-slate-900 dark:text-white'
@@ -197,7 +214,8 @@ const chartData = computed<ChartData<'bar'>>(() => ({
     {
       label: t('release-live-failures'),
       data: series.value.map(bucket => bucket.fail),
-      backgroundColor: '#f43f5e',
+      // Muted so a normal trickle of failures does not dominate the installs.
+      backgroundColor: isDark.value ? 'rgba(251, 113, 133, 0.55)' : '#fda4af',
       borderRadius: 2,
       stack: 'activity',
     },
@@ -418,17 +436,20 @@ watch(() => props.appId, () => {
           <div class="text-sm text-slate-600 dark:text-slate-400">
             {{ t('release-live-failures') }}
           </div>
-          <div class="mt-2 text-2xl font-semibold" :class="totals.fail > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-900 dark:text-white'">
+          <div class="mt-2 text-2xl font-semibold" :class="failureCountClass" data-testid="release-live-failure-count">
             {{ formatCount(totals.fail) }}
           </div>
+          <p v-if="failureRate !== null" class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            {{ t('release-live-failure-rate', { rate: formatPercent(failureRate) }) }}
+          </p>
           <template v-if="failedDevices && failedDevices.total > 0">
-            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400" data-testid="release-live-failed-devices">
+            <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400" data-testid="release-live-failed-devices">
               {{ t('release-live-failed-devices', { count: formatCount(failedDevices.total) }) }}
             </p>
-            <p class="mt-0.5 text-xs" :title="t('release-live-failed-devices-help')">
-              <span class="text-emerald-600 dark:text-emerald-400">{{ t('release-live-recovered-devices', { count: formatCount(failedDevices.recovered) }) }}</span>
+            <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400" :title="t('release-live-failed-devices-help')">
+              {{ t('release-live-recovered-devices', { count: formatCount(failedDevices.recovered) }) }}
               <span class="text-slate-400"> · </span>
-              <span :class="failedDevices.stuck > 0 ? 'font-semibold text-rose-600 dark:text-rose-400' : 'text-slate-500 dark:text-slate-400'">{{ t('release-live-stuck-devices', { count: formatCount(failedDevices.stuck) }) }}</span>
+              {{ t('release-live-stuck-devices', { count: formatCount(failedDevices.stuck) }) }}
             </p>
           </template>
         </div>
@@ -463,13 +484,16 @@ watch(() => props.appId, () => {
           </div>
         </div>
         <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-          <h3 class="mb-3 text-sm font-semibold text-slate-900 dark:text-white">
+          <h3 class="text-sm font-semibold text-slate-900 dark:text-white">
             {{ t('release-live-top-failures') }}
           </h3>
+          <p class="mt-1 mb-3 text-xs text-slate-500 dark:text-slate-400">
+            {{ t('release-live-failures-normal') }}
+          </p>
           <ul v-if="failures.length" class="flex flex-col gap-2">
             <li v-for="failure in failures" :key="failure.action" class="flex items-center justify-between gap-2 text-sm">
               <code class="px-1.5 py-0.5 text-xs rounded bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200">{{ failure.action }}</code>
-              <span class="font-semibold text-rose-600 dark:text-rose-400">{{ formatCount(failure.count) }}</span>
+              <span class="font-medium tabular-nums text-slate-700 dark:text-slate-200">{{ formatCount(failure.count) }}</span>
             </li>
           </ul>
           <p v-else class="text-sm text-slate-500 dark:text-slate-400">
