@@ -1,7 +1,7 @@
 import type { ScanOptions } from '../scripts/r2_inventory/scan.ts'
 import { Client } from 'pg'
 import { describe, expect, it, vi } from 'vitest'
-import { collectInventoryTombstones, commitBackfillPage, EMPTY_PROGRESS, loadProgress, restartCompletedScan, scanInventory } from '../scripts/r2_inventory/scan.ts'
+import { collectInventoryTombstones, commitBackfillPage, completedBackfillVersion, EMPTY_PROGRESS, loadProgress, restartCompletedScan, scanInventory } from '../scripts/r2_inventory/scan.ts'
 import { applyInventoryEvents } from '../supabase/functions/_backend/utils/r2_inventory.ts'
 import { POSTGRES_URL } from './test-utils.ts'
 
@@ -22,6 +22,34 @@ async function fixture(operation: (db: Client, options: ScanOptions) => Promise<
 }
 
 describe('resumable inventory scans', () => {
+  it.concurrent('invalidates earlier reconciliation when a completed backfill restarts', () => fixture(async (db, options) => {
+    await commitBackfillPage(db, options, { ...EMPTY_PROGRESS }, { objects: [], truncated: false }, new Date().toISOString())
+    options.mode = 'reconcile'
+    await scanInventory(db, async () => ({ objects: [], truncated: false }), options, config)
+    expect(await collectInventoryTombstones(db, options.bucket, options.job, config)).toBe(0)
+    options.mode = 'backfill'
+    await restartCompletedScan(db, options)
+    await commitBackfillPage(db, options, { ...EMPTY_PROGRESS }, { objects: [], truncated: false }, new Date().toISOString())
+    await expect(collectInventoryTombstones(db, options.bucket, options.job, config)).rejects.toThrow('requires completed')
+    options.mode = 'reconcile'
+    await expect(scanInventory(db, async () => ({ objects: [], truncated: false }), options, config)).rejects.toThrow('predates')
+    await restartCompletedScan(db, options)
+    await scanInventory(db, async () => ({ objects: [], truncated: false }), options, config)
+    expect(await collectInventoryTombstones(db, options.bucket, options.job, config)).toBe(0)
+  }))
+  it.concurrent('rejects a backfill restart racing with an in-flight reconciliation observation', () => fixture(async (db, options) => {
+    await commitBackfillPage(db, options, { ...EMPTY_PROGRESS }, { objects: [], truncated: false }, new Date().toISOString())
+    options.mode = 'reconcile'
+    const list = async () => {
+      const backfill = { ...options, mode: 'backfill' as const }
+      await restartCompletedScan(db, backfill)
+      await commitBackfillPage(db, backfill, { ...EMPTY_PROGRESS }, { objects: [], truncated: false }, new Date().toISOString())
+      return { objects: [object('a')], truncated: false }
+    }
+    await expect(scanInventory(db, list, options, config)).rejects.toMatchObject({ originalError: expect.objectContaining({ message: expect.stringContaining('Backfill changed') }) })
+    expect((await db.query('SELECT count(*)::int AS count FROM public.r2_objects WHERE bucket_name = $1', [options.bucket])).rows[0].count).toBe(0)
+  }))
+
   it.concurrent('clears historical modification metadata when a newer create replaces the key', () => fixture(async (db, options) => {
     await commitBackfillPage(db, options, { ...EMPTY_PROGRESS }, { objects: [object('a')], truncated: false }, new Date(Date.now() - 60_000).toISOString())
     await applyInventoryEvents(db, [{ bucket: options.bucket, key: 'a', state: 'present', size: 99, etag: 'replacement', eventTime: new Date().toISOString() }], config)
@@ -44,6 +72,7 @@ describe('resumable inventory scans', () => {
     const known = Array.from({ length: 1000 }, (_, i) => key(i * 2))
     await db.query(`INSERT INTO public.r2_objects (bucket_name, r2_key, r2_state) SELECT $1, key, 'present' FROM unnest($2::text[]) AS key`, [options.bucket, known])
     const remote = Array.from({ length: 1000 }, (_, i) => object(key(i * 2 + 1)))
+    await db.query(`INSERT INTO public.r2_inventory_checkpoints (bucket_name, job_name, checkpoint) VALUES ($1, 'backfill:initial', $2::jsonb) ON CONFLICT DO NOTHING`, [options.bucket, JSON.stringify({ ...EMPTY_PROGRESS, complete: true })])
     options.mode = 'reconcile'
     const list = async (request: { startAfter?: string }) => ({ objects: remote.filter(item => item.key > (request.startAfter ?? '')), truncated: false })
     const first = await scanInventory(db, list, options, config)
@@ -86,6 +115,7 @@ describe('resumable inventory scans', () => {
   }))
   it.concurrent('reconciles missing objects and unknown keys without HEAD or overwriting a concurrent event', () => fixture(async (db, options) => {
     await db.query(`INSERT INTO public.r2_objects (bucket_name, r2_key, r2_state) VALUES ($1, 'a', 'present'), ($1, 'z', 'present')`, [options.bucket])
+    await db.query(`INSERT INTO public.r2_inventory_checkpoints (bucket_name, job_name, checkpoint) VALUES ($1, 'backfill:initial', $2::jsonb) ON CONFLICT DO NOTHING`, [options.bucket, JSON.stringify({ ...EMPTY_PROGRESS, complete: true })])
     options.mode = 'reconcile'
     const list = vi.fn().mockImplementationOnce(async () => {
       await db.query(`UPDATE public.r2_objects SET size_bytes = 999 WHERE bucket_name = $1 AND r2_key = 'z'`, [options.bucket])
@@ -101,6 +131,8 @@ describe('resumable inventory scans', () => {
     for (const mode of ['backfill', 'reconcile']) {
       await db.query(`INSERT INTO public.r2_inventory_checkpoints (bucket_name, job_name, checkpoint) VALUES ($1, $2, $3::jsonb)`, [options.bucket, `${mode}:${options.job}`, JSON.stringify({ ...EMPTY_PROGRESS, complete: true })])
     }
+    const version = await completedBackfillVersion(db, options)
+    await db.query(`UPDATE public.r2_inventory_checkpoints SET checkpoint = checkpoint || jsonb_build_object('backfillVersion', $2::text) WHERE bucket_name = $1 AND job_name = 'reconcile:initial'`, [options.bucket, version])
     await db.query(`INSERT INTO public.r2_objects (bucket_name, r2_key, r2_state, last_event_at, tombstone_expires_at) VALUES ($1, 'old', 'deleted', now() - interval '10 days', now() - interval '1 day')`, [options.bucket])
     expect(await collectInventoryTombstones(db, options.bucket, options.job, config)).toBe(1)
     expect(await applyInventoryEvents(db, [{ bucket: options.bucket, key: 'old', state: 'present', size: 42, etag: 'etag', eventTime: new Date(Date.now() - 10 * 86400_000).toISOString() }], config)).toEqual([{ bucket: options.bucket, key: 'old', kind: 'verify' }])

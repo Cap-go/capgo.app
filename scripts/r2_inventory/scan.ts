@@ -1,13 +1,13 @@
 import type { ClientBase } from 'pg'
 import type { InventoryConfig, InventoryRow, ObjectObservation, ObservationSnapshot } from '../../supabase/functions/_backend/utils/r2_inventory.ts'
 import { Buffer } from 'node:buffer'
-import { applyObservations, INVENTORY_ROW_COLUMNS, inventoryTransaction } from '../../supabase/functions/_backend/utils/r2_inventory.ts'
+import { applyObservations, INVENTORY_ROW_COLUMNS, inventoryTransaction, timestampUs } from '../../supabase/functions/_backend/utils/r2_inventory.ts'
 
 export interface ListPage { objects: ObjectObservation[], truncated: boolean, token?: string }
 export interface ListRequest { prefix: string, startAfter?: string, token?: string }
 export type ListObjects = (request: ListRequest) => Promise<ListPage>
 export interface ScanOptions { bucket: string, prefix: string, job: string, mode: 'backfill' | 'reconcile', write: boolean, maxPages: number, intervalMs: number }
-export interface ScanProgress { lastKey: string, token?: string, pages: number, objects: number, skipped: number, complete: boolean }
+export interface ScanProgress { lastKey: string, token?: string, pages: number, objects: number, skipped: number, complete: boolean, backfillVersion?: string }
 export const EMPTY_PROGRESS: ScanProgress = { lastKey: '', pages: 0, objects: 0, skipped: 0, complete: false }
 const byteLength = (value: string) => Buffer.byteLength(value)
 export function compareKeys(a: string, b: string) {
@@ -31,9 +31,10 @@ export function validatePage(page: ListPage, request: ListRequest): void {
   for (const object of page.objects) {
     if (!object.key.startsWith(request.prefix) || byteLength(object.key) < 1 || byteLength(object.key) > 1024
       || compareKeys(object.key, previous) <= 0 || !Number.isSafeInteger(object.size) || object.size < 0
-      || !object.etag || object.etag.length > 256 || !Number.isFinite(Date.parse(object.lastModified))) {
+      || object.key.includes('\0') || !object.etag || object.etag.includes('\0') || object.etag.length > 256) {
       throw new Error('Invalid R2 LIST object or ordering')
     }
+    timestampUs(object.lastModified)
     previous = object.key
   }
 }
@@ -58,11 +59,22 @@ export async function loadProgress(db: ClientBase, options: ScanOptions): Promis
   }
   return data
 }
+export async function completedBackfillVersion(db: ClientBase, options: ScanOptions, lock = false): Promise<string> {
+  const result = await db.query<{ version: string }>(`SELECT (extract(epoch FROM updated_at) * 1000000)::bigint::text AS version
+    FROM public.r2_inventory_checkpoints WHERE bucket_name = $1 AND job_name = $2 AND partition_key = $3
+    AND checkpoint ->> 'complete' = 'true' ${lock ? 'FOR SHARE' : ''}`, [options.bucket, `backfill:${options.job}`, options.prefix])
+  if (!result.rows.length)
+    throw new Error('Reconciliation requires a completed backfill for the same bucket, job and prefix')
+  return result.rows[0].version
+}
+
 export async function checkpointTransaction<T>(db: ClientBase, options: ScanOptions, previous: ScanProgress, next: ScanProgress, operation: () => Promise<T>): Promise<T> {
   const identity = checkpointIdentity(options)
   return inventoryTransaction(db, async () => {
+    if (options.mode === 'reconcile' && next.backfillVersion !== await completedBackfillVersion(db, options, true))
+      throw new Error('Backfill changed during reconciliation; restart against the completed backfill')
     await db.query(`INSERT INTO public.r2_inventory_checkpoints (bucket_name, job_name, partition_key, checkpoint)
-      VALUES ($1, $2, $3, $4::jsonb) ON CONFLICT DO NOTHING`, [...identity, JSON.stringify(EMPTY_PROGRESS)])
+      VALUES ($1, $2, $3, $4::jsonb) ON CONFLICT DO NOTHING`, [...identity, JSON.stringify(previous)])
     const lock = await db.query<{ matches: boolean }>(`SELECT checkpoint = $4::jsonb AS matches FROM public.r2_inventory_checkpoints
       WHERE bucket_name = $1 AND job_name = $2 AND partition_key = $3 FOR UPDATE`, [...identity, JSON.stringify(previous)])
     if (!lock.rows[0]?.matches)
@@ -75,9 +87,10 @@ export async function checkpointTransaction<T>(db: ClientBase, options: ScanOpti
 }
 export async function restartCompletedScan(db: ClientBase, options: ScanOptions): Promise<void> {
   const previous = await loadProgress(db, options)
-  if (!previous.complete)
-    throw new Error('Only a completed scan can restart; resume incomplete scans normally')
-  await checkpointTransaction(db, options, previous, { ...EMPTY_PROGRESS }, async () => {})
+  const version = options.mode === 'reconcile' ? await completedBackfillVersion(db, options) : undefined
+  if (!previous.complete && (options.mode !== 'reconcile' || previous.backfillVersion === version || previous.pages === 0))
+    throw new Error('Only a completed scan or a pass invalidated by a new backfill can restart')
+  await checkpointTransaction(db, options, previous, { ...EMPTY_PROGRESS, ...(version ? { backfillVersion: version } : {}) }, async () => {})
 }
 
 export async function requestStartedAt(db: ClientBase): Promise<string> {
@@ -144,6 +157,12 @@ export class InventoryScanFailure extends Error {
 
 export async function scanInventory(db: ClientBase, list: ListObjects, options: ScanOptions, config: InventoryConfig, onProgress: (progress: ScanProgress) => void = () => {}, stopping: () => boolean = () => false): Promise<ScanProgress> {
   let progress = await loadProgress(db, options)
+  if (options.mode === 'reconcile') {
+    const version = await completedBackfillVersion(db, options)
+    if (progress.pages > 0 && progress.backfillVersion !== version)
+      throw new Error('Reconciliation predates this backfill; use --restart for a fresh pass')
+    progress = { ...progress, backfillVersion: version }
+  }
   for (let pageNumber = 0; !progress.complete && pageNumber < options.maxPages && !stopping(); pageNumber++) {
     const start = Date.now()
     let observedKeys: string[] = []
@@ -190,10 +209,12 @@ export async function collectInventoryTombstones(db: ClientBase, bucket: string,
   if (!/^[a-z0-9_-]{1,64}$/.test(job))
     throw new Error('Invalid inventory checkpoint job')
   return inventoryTransaction(db, async () => {
-    const prerequisites = await db.query<{ job_name: string }>(`SELECT job_name FROM public.r2_inventory_checkpoints
+    const prerequisites = await db.query<{ job_name: string, version: string, checkpoint: ScanProgress }>(`SELECT job_name, checkpoint, (extract(epoch FROM updated_at) * 1000000)::bigint::text AS version FROM public.r2_inventory_checkpoints
       WHERE bucket_name = $1 AND partition_key = '' AND job_name = ANY($2::text[])
-      AND checkpoint ->> 'complete' = 'true' AND coalesce((checkpoint ->> 'skipped')::bigint, 0) = 0`, [bucket, [`backfill:${job}`, `reconcile:${job}`]])
-    if (prerequisites.rows.length !== 2)
+      AND checkpoint ->> 'complete' = 'true' AND coalesce((checkpoint ->> 'skipped')::bigint, 0) = 0 ORDER BY job_name FOR SHARE`, [bucket, [`backfill:${job}`, `reconcile:${job}`]])
+    const backfill = prerequisites.rows.find(row => row.job_name.startsWith('backfill:'))
+    const reconciliation = prerequisites.rows.find(row => row.job_name.startsWith('reconcile:'))
+    if (prerequisites.rows.length !== 2 || reconciliation?.checkpoint.backfillVersion !== backfill?.version)
       throw new Error('Tombstone collection requires completed full-bucket backfill and reconciliation without skipped observations')
     await db.query(`INSERT INTO public.r2_inventory_checkpoints (bucket_name, job_name, accepted_event_floor)
       VALUES ($1, 'admission', now() - $2::int * interval '1 day') ON CONFLICT DO NOTHING`, [bucket, config.tombstoneDays])

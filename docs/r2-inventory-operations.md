@@ -47,7 +47,7 @@ bun scripts/backfill-r2-inventory.ts --bucket capgo-alpha --job initial --max-pa
 bun scripts/backfill-r2-inventory.ts --bucket capgo-alpha --job initial --write --max-pages 1000
 ```
 
-Resume by repeating the same command. Checkpoints are scoped by bucket, mode, job and prefix. Each page uses `ListObjectsV2` with 1,000 objects and no delimiter. The object inserts and cursor advancement commit in one transaction; existing rows win over historical discovery. Invalid continuation tokens fall back to the last committed key. Failed pages are read fresh on resume. One writer processes at most one page per second by default; tune `--interval-ms` upward when live ingestion or WAL/latency indicates pressure. SDK attempts are capped at five, provider requests at 30 seconds, and SQL statements at ten seconds. SIGINT/SIGTERM stop after the current page.
+Resume by repeating the same command. Checkpoints are scoped by bucket, mode, job and prefix. Each page uses `ListObjectsV2` with 1,000 objects and no delimiter. The object inserts and cursor advancement commit in one transaction; existing rows win over historical discovery. Invalid continuation tokens fall back to the last committed key. Failed pages are read fresh on resume. One writer processes at most one page per second by default; tune `--interval-ms` upward when live ingestion or WAL/latency indicates pressure. SDK attempts are capped at five, provider requests at 30 seconds, transaction statements at ten seconds, and standalone client queries at fifteen seconds. SIGINT/SIGTERM stop after the current page.
 
 Run a complete two-way validation pass with the same job:
 
@@ -63,11 +63,11 @@ For subsequent drift checks, explicitly restart the completed reconciliation che
 bun scripts/backfill-r2-inventory.ts --bucket capgo-alpha --job initial --mode reconcile --write --restart
 ```
 
-Use `--restart` only for the first invocation of a new pass, then resume normally. It refuses incomplete checkpoints and competing writers cannot reset active work. Arrange recurring execution through the existing operational dispatcher/scheduler after the rollout; this PR introduces a resumable script and no new Postgres cron. LIST is strongly consistent per request, but a multi-page scan is not one atomic snapshot; repeated reconciliation repairs changes behind the cursor.
+Use `--restart` only for the first invocation of a new pass, then resume normally. It refuses active incomplete checkpoints (an old reconciliation invalidated by a restarted backfill can be reset) and competing writers cannot reset active work. Arrange recurring execution through the existing operational dispatcher/scheduler after the rollout; this PR introduces a resumable script and no new Postgres cron. LIST is strongly consistent per request, but a multi-page scan is not one atomic snapshot; repeated reconciliation repairs changes behind the cursor.
 
-Failure reports default to `.context/r2-inventory-failures.jsonl`, contain bounded page keys plus the last committed progress, and stay local. They may contain private storage identifiers: never commit or publish them. A DB failure rolls the page back; provider failures leave the cursor untouched. Dry runs write neither objects nor checkpoints. A page budget exit is resumable and does not mean the bucket is fully inventoried.
+Failure reports default to `.context/r2-inventory-failures.jsonl`, contain bounded page keys plus the last committed progress, and stay local. Files are created with mode `0600`, existing files are tightened before appending, and symbolic links are refused. They may contain private storage identifiers: never commit or publish them. A DB failure rolls the page back; provider failures leave the cursor untouched. Dry runs write neither objects nor checkpoints. A page budget exit is resumable and does not mean the bucket is fully inventoried.
 
-After the full-bucket initial backfill and reconciliation complete without skipped observations, bounded tombstone collection is available explicitly:
+Reconciliation records the exact completion version of its backfill and rechecks it under a shared lock on every commit. Restarting backfill invalidates the earlier reconciliation for GC purposes. After the full-bucket initial backfill and reconciliation for the same completion version finish without skipped observations, bounded tombstone collection is available explicitly:
 
 ```sh
 bun scripts/backfill-r2-inventory.ts --bucket capgo-alpha --job initial --mode gc --write

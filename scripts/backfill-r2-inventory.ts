@@ -1,11 +1,10 @@
 import type { ScanOptions } from './r2_inventory/scan.ts'
-import { appendFile, mkdir } from 'node:fs/promises'
-import { dirname } from 'node:path'
 import process from 'node:process'
 import { parseArgs } from 'node:util'
 import { ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { Client } from 'pg'
 import { loadInventoryConfig, normalizeEtag } from '../supabase/functions/_backend/utils/r2_inventory.ts'
+import { writeFailureReport } from './r2_inventory/report.ts'
 import { collectInventoryTombstones, InventoryScanFailure, restartCompletedScan, scanInventory } from './r2_inventory/scan.ts'
 
 export async function main() {
@@ -81,9 +80,8 @@ export async function main() {
     }
   }
   catch (error) {
-    await mkdir(dirname(values.report!), { recursive: true })
     // The report stays local and may contain private storage keys. Never commit it.
-    await appendFile(values.report!, `${JSON.stringify({ time: new Date().toISOString(), bucket: values.bucket, prefix: values.prefix, job: values.job, mode: values.mode, progress: error instanceof InventoryScanFailure ? error.progress : undefined, keys: error instanceof InventoryScanFailure ? error.keys : undefined, error: error instanceof InventoryScanFailure && error.originalError instanceof Error ? error.originalError.message : error instanceof Error ? error.message : 'Unknown failure' })}\n`)
+    await writeFailureReport(values.report!, { time: new Date().toISOString(), bucket: values.bucket, prefix: values.prefix, job: values.job, mode: values.mode, progress: error instanceof InventoryScanFailure ? error.progress : undefined, keys: error instanceof InventoryScanFailure ? error.keys : undefined, error: error instanceof InventoryScanFailure && error.originalError instanceof Error ? error.originalError.message : error instanceof Error ? error.message : 'Unknown failure' })
     throw new Error(`Inventory scan failed; inspect local report ${values.report}`)
   }
   finally {
