@@ -45,7 +45,11 @@ const usageComponent = ref<{
   reloadTrigger: number
 } | null>(null)
 const appNotFound = ref(false)
-const nativeUsage = ref<{ data: { labels: string[], datasets: NativeReleaseSeriesInput[] } | null, isLoading: boolean }>({ data: null, isLoading: true })
+interface NativeUsageState {
+  data: { labels: string[], datasets: NativeReleaseSeriesInput[] } | null
+  isLoading: boolean
+}
+const nativeUsage = ref<NativeUsageState>({ data: null, isLoading: true })
 let loadGeneration = 0
 
 const lacksSecurityAccess = computed(() => {
@@ -128,6 +132,8 @@ watchEffect(async () => {
   if (nextId && lastAppId.value !== nextId) {
     lastAppId.value = nextId
     id.value = nextId
+    // Drop the previous app's native releases until DevicesStats emits for this one.
+    nativeUsage.value = { data: null, isLoading: true }
     await refreshData()
     displayStore.NavTitle = ''
     displayStore.defaultBack = '/apps'
