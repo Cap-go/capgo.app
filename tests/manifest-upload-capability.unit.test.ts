@@ -76,4 +76,35 @@ describe('manifest upload capability projection', () => {
       '',
     )).toBe('http://127.0.0.1:54321/functions/v1')
   })
+
+  it('rejects encoded paths before initializing capability signing', async () => {
+    const request = validateManifestUploadRequest({
+      protocol_version: 1,
+      version_id: 12345,
+      delta_encryption: { enabled: false },
+      manifest_upload_auto_enabled: false,
+      file_hash_format: 'sha256_hex',
+      entries: [{
+        id: 0,
+        file_name: `${'é'.repeat(400)}.js`,
+        compression: 'none',
+        file_hash: 'a'.repeat(64),
+        uploaded_bytes_sha256: 'b'.repeat(64),
+        uploaded_bytes_size: 1,
+      }],
+    })
+
+    await expect(createManifestUploadResponse(request, {
+      ownerOrg: '00000000-0000-0000-0000-000000000001',
+      appId: 'com.example.app',
+      sessionKey: null,
+      secret: 'invalid',
+      keyId: 'invalid key',
+      publicBaseUrl: 'https://uploads.example.invalid',
+    })).rejects.toMatchObject({
+      status: 422,
+      code: 'error_manifest_entry_invalid',
+      moreInfo: { field: 'entries[0].file_name', index: 0 },
+    })
+  })
 })

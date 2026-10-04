@@ -241,6 +241,13 @@ export async function createManifestUploadResponse(
   if (defaultS3PathPrefix.length > MAX_S3_PATH_LENGTH)
     signingUnavailable()
 
+  const encodedFileNames = request.entries.map((entry, index) => {
+    const encodedFileName = entry.file_name.split('/').map(segment => encodeURIComponent(segment)).join('/')
+    if (defaultS3PathPrefix.length + 64 + 1 + encodedFileName.length > MAX_S3_PATH_LENGTH)
+      invalidEntry(index, 'file_name')
+    return encodedFileName
+  })
+
   const nowUnix = options.nowUnix ?? Math.floor(Date.now() / 1000)
   const expiresAt = nowUnix + MANIFEST_UPLOAD_CAPABILITY_MAX_LIFETIME_SECONDS
   const capabilitySigner = await createManifestUploadCapabilitySigner({
@@ -257,10 +264,10 @@ export async function createManifestUploadResponse(
     Math.max(1, Math.min(options.concurrency ?? DEFAULT_CRYPTO_CONCURRENCY, DEFAULT_CRYPTO_CONCURRENCY)),
     async (entry, index) => {
       const filenameHash = bytesToHex(await crypto.subtle.digest('SHA-256', encoder.encode(entry.file_hash)))
-      const encodedFileName = entry.file_name.split('/').map(segment => encodeURIComponent(segment)).join('/')
+      const encodedFileName = encodedFileNames[index]!
       const s3PathSuffix = `${filenameHash}_${encodedFileName}`
       const normalizedS3Path = `${defaultS3PathPrefix}${s3PathSuffix}`
-      if (normalizedS3Path.length > MAX_S3_PATH_LENGTH || seenPaths.has(normalizedS3Path))
+      if (seenPaths.has(normalizedS3Path))
         invalidEntry(index, 'file_name')
       seenPaths.add(normalizedS3Path)
 
