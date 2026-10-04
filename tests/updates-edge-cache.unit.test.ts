@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { purgeLocalTaggedKeys } from '../supabase/functions/_backend/plugin_runtime/utils/cache.ts'
-import { createLazyPgClient, getLazyPgQueryCount, isLazyPgConnectError } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
-import { getCachedAppOwner, getCachedDefaultChannel, getUpdatesEdgeCacheBps, getUpdatesEdgeCacheTtlSeconds, isUpdatesEdgeCacheEnabled, planValidityTtlCapSeconds, shouldUseUpdatesEdgeCache, updatesAppCacheTag, updatesCacheTags, updatesEdgeCacheBucket } from '../supabase/functions/_backend/plugin_runtime/utils/updatesEdgeCache.ts'
+import { createLazyPgClient, getDrizzleClient, getEffectiveDeviceChannelNamePostgres, getLazyPgQueryCount, isLazyPgConnectError } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
+import { getAppOwnerWithEdgeCache, getAppVersionWithEdgeCache, getChannelByNameWithEdgeCache, getCompatibleChannelsWithEdgeCache } from '../supabase/functions/_backend/plugin_runtime/utils/pluginEdgeCacheReads.ts'
+import { updatesCacheTagForScope } from '../supabase/functions/_backend/plugin_runtime/utils/updatesCacheTag.ts'
+import { getCachedAppOwner, getCachedAppVersion, getCachedChannelLookup, getCachedDefaultChannel, getUpdatesEdgeCacheBps, getUpdatesEdgeCacheTtlSeconds, isUpdatesEdgeCacheEnabled, planValidityTtlCapSeconds, shouldUseUpdatesEdgeCache, updatesAppCacheTag, updatesCacheTags, updatesEdgeCacheBucket, updatesVersionsCacheTag } from '../supabase/functions/_backend/plugin_runtime/utils/updatesEdgeCache.ts'
 import { chunk, drainUpdatesCachePurge, purgeUpdatesCacheTags, resetPurgeZoneCache, shouldForwardPurge } from '../supabase/functions/_backend/triggers/updates_cache_purge.ts'
 
 function makeContext(env: Record<string, string> = {}) {
@@ -46,6 +48,17 @@ describe('updates edge cache', () => {
     expect(updatesAppCacheTag('com.example,app x')).toBe('capgo-updates-com.example_app_x')
   })
 
+  it('builds a separate versions tag and maps purge scopes to tags', () => {
+    expect(updatesVersionsCacheTag('com.Example.App')).toBe('capgo-updates-com.example.app:versions')
+    expect(updatesCacheTagForScope('com.example.app', 'versions')).toBe('capgo-updates-com.example.app:versions')
+    // App ids may end with "-versions": scopes of different apps never share a tag.
+    expect(updatesAppCacheTag('com.example.app-versions')).not.toBe(updatesVersionsCacheTag('com.example.app'))
+    expect(updatesCacheTagForScope('com.example.app', 'app')).toBe('capgo-updates-com.example.app')
+    // Rows claimed before the scope column existed purge the main tag.
+    expect(updatesCacheTagForScope('com.example.app', undefined)).toBe('capgo-updates-com.example.app')
+    expect(updatesCacheTagForScope('com.example.app', 'unknown')).toBe('capgo-updates-com.example.app')
+  })
+
   it('is off unless UPDATES_EDGE_CACHE=on and clamps the TTL', () => {
     const c = makeContext()
     expect(isUpdatesEdgeCacheEnabled(c)).toBe(false)
@@ -53,10 +66,15 @@ describe('updates edge cache', () => {
     vi.stubEnv('UPDATES_EDGE_CACHE', 'on')
     expect(isUpdatesEdgeCacheEnabled(c)).toBe(true)
     expect(updatesCacheTags(c, 'com.example.app')).toEqual(['capgo-updates-com.example.app'])
-    expect(getUpdatesEdgeCacheTtlSeconds(c)).toBe(300)
+    // Purges are proven: one hour by default, up to a day.
+    expect(getUpdatesEdgeCacheTtlSeconds(c)).toBe(3600)
     vi.stubEnv('UPDATES_EDGE_CACHE_TTL_SECONDS', '1')
     expect(getUpdatesEdgeCacheTtlSeconds(c)).toBe(10)
+    vi.stubEnv('UPDATES_EDGE_CACHE_TTL_SECONDS', '300')
+    expect(getUpdatesEdgeCacheTtlSeconds(c)).toBe(300)
     vi.stubEnv('UPDATES_EDGE_CACHE_TTL_SECONDS', '999999')
+    expect(getUpdatesEdgeCacheTtlSeconds(c)).toBe(86400)
+    vi.stubEnv('UPDATES_EDGE_CACHE_TTL_SECONDS', 'garbage')
     expect(getUpdatesEdgeCacheTtlSeconds(c)).toBe(3600)
   })
 
@@ -136,7 +154,7 @@ describe('updates edge cache', () => {
 
     const [stored] = [...store.values()]
     expect(stored.headers.get('Cache-Tag')).toBe('capgo-updates-com.example.app')
-    expect(stored.headers.get('Cache-Control')).toBe('public, s-maxage=300')
+    expect(stored.headers.get('Cache-Control')).toBe('public, s-maxage=3600')
   })
 
   it('caches a missing app for a shorter time', async () => {
@@ -172,6 +190,60 @@ describe('updates edge cache', () => {
     await getCachedDefaultChannel(c, { ...key, mode: 'rollout' }, load)
     await getCachedDefaultChannel(c, { ...key, includeMetadata: true }, load)
     expect(load).toHaveBeenCalledTimes(5)
+  })
+
+  it('caches bundle-name lookups under the versions tag, missing bundles for a shorter time', async () => {
+    const { store } = stubCaches()
+    const c = makeContext()
+    const load = vi.fn().mockResolvedValue({ id: 7, owner_org: 'org-1' })
+    const missing = vi.fn().mockResolvedValue(null)
+
+    await expect(getCachedAppVersion(c, 'com.example.app', '1.0.0', load)).resolves.toEqual({ value: { id: 7, owner_org: 'org-1' }, hit: false })
+    await expect(getCachedAppVersion(c, 'com.example.app', '1.0.0', load)).resolves.toEqual({ value: { id: 7, owner_org: 'org-1' }, hit: true })
+    await expect(getCachedAppVersion(c, 'com.example.app', '9.9.9', missing)).resolves.toEqual({ value: null, hit: false })
+    await expect(getCachedAppVersion(c, 'com.example.app', '9.9.9', missing)).resolves.toEqual({ value: null, hit: true })
+    expect(load).toHaveBeenCalledTimes(1)
+    expect(missing).toHaveBeenCalledTimes(1)
+    const entries = [...store.values()]
+    expect(entries.map(entry => entry.headers.get('Cache-Tag'))).toEqual(['capgo-updates-com.example.app:versions', 'capgo-updates-com.example.app:versions'])
+    expect(entries.map(entry => entry.headers.get('Cache-Control'))).toEqual(['public, s-maxage=3600', 'public, s-maxage=60'])
+  })
+
+  it('keys channel lookups by lookup kind and inputs, under the app tag', async () => {
+    const { store } = stubCaches()
+    const c = makeContext()
+    const load = vi.fn().mockResolvedValue({ id: 1, name: 'production' })
+
+    await getCachedChannelLookup(c, 'com.example.app', 'by_name', { name: 'production' }, load)
+    await getCachedChannelLookup(c, 'com.example.app', 'by_name', { name: 'production' }, load)
+    await getCachedChannelLookup(c, 'com.example.app', 'by_name', { name: 'beta' }, load)
+    await getCachedChannelLookup(c, 'com.example.app', 'effective_by_name', { name: 'production', platform: 'ios' }, load)
+    await getCachedChannelLookup(c, 'com.example.app', 'effective_by_name', { name: 'production', platform: 'android' }, load)
+    await getCachedChannelLookup(c, 'com.other.app', 'by_name', { name: 'production' }, load)
+    expect(load).toHaveBeenCalledTimes(5)
+    expect(new Set([...store.values()].map(entry => entry.headers.get('Cache-Tag')))).toEqual(new Set(['capgo-updates-com.example.app', 'capgo-updates-com.other.app']))
+  })
+
+  it('purging one tag of an app keeps the entries of its other tag', async () => {
+    const { store } = stubCaches()
+    const c = makeContext({ ENV_NAME: 'capgo_plugin-local' })
+    const owner = vi.fn().mockResolvedValue({ owner_org: 'org-1' })
+    const version = vi.fn().mockResolvedValue({ id: 3, owner_org: 'org-1' })
+    await getCachedAppOwner(c, 'com.scope.app', 'mau', owner)
+    await getCachedAppVersion(c, 'com.scope.app', '1.0.0', version)
+    expect(store.size).toBe(2)
+
+    // An upload (versions scope) leaves the owner and /updates entries alone.
+    await expect(purgeLocalTaggedKeys([updatesVersionsCacheTag('com.scope.app')])).resolves.toBe(1)
+    await getCachedAppOwner(c, 'com.scope.app', 'mau', owner)
+    expect(owner).toHaveBeenCalledTimes(1)
+    await getCachedAppVersion(c, 'com.scope.app', '1.0.0', version)
+    expect(version).toHaveBeenCalledTimes(2)
+
+    // A channel or plan change (app scope) leaves bundle-name lookups alone.
+    await expect(purgeLocalTaggedKeys([updatesAppCacheTag('com.scope.app')])).resolves.toBe(1)
+    await getCachedAppVersion(c, 'com.scope.app', '1.0.0', version)
+    expect(version).toHaveBeenCalledTimes(2)
   })
 
   it('local purge deletes every entry of the tag', async () => {
@@ -426,5 +498,119 @@ describe('edge cache safety', () => {
     expect(planValidityTtlCapSeconds({ plan_valid: true, plan_trial_at: '2026-09-30T08:00:00Z' }, now)).toBeUndefined()
     expect(planValidityTtlCapSeconds({ plan_valid: false, plan_trial_at: '2026-10-01 10:00:00+00' }, now)).toBeUndefined()
     expect(planValidityTtlCapSeconds({ plan_valid: true, plan_trial_at: null }, now)).toBeUndefined()
+  })
+})
+
+/** Drizzle over a fake pg client: every select answers `rows` (array mode). */
+function fakeDrizzle(rows: unknown[][] | Error) {
+  const query = vi.fn(async () => {
+    if (rows instanceof Error)
+      throw rows
+    return { rows, fields: [] }
+  })
+  return { query, drizzle: getDrizzleClient({ query } as any, { logger: false }) }
+}
+
+describe('edge-cached plugin reads', () => {
+  beforeEach(() => {
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'mock-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
+
+  function connectFailingDrizzle() {
+    const base = makeContext()
+    const c = { ...base, get: (key: string) => key === 'requireReadReplica' ? true : base.get(key) }
+    return getDrizzleClient(createLazyPgClient(c, true).client, { logger: false })
+  }
+
+  it('serves a bundle by name from the cache after the first read', async () => {
+    stubCaches()
+    const c = makeContext()
+    const { query, drizzle } = fakeDrizzle([[7, 'org-1']])
+    await expect(getAppVersionWithEdgeCache(c, 'com.example.app', '1.0.0', drizzle)).resolves.toEqual({ id: 7, owner_org: 'org-1' })
+    await expect(getAppVersionWithEdgeCache(c, 'com.example.app', '1.0.0', drizzle)).resolves.toEqual({ id: 7, owner_org: 'org-1' })
+    expect(query).toHaveBeenCalledTimes(1)
+  })
+
+  it('answers a failed read like the uncached helper and never caches it', async () => {
+    const { cache } = stubCaches()
+    const c = makeContext()
+    const { drizzle } = fakeDrizzle(new Error('statement timeout'))
+    await expect(getAppVersionWithEdgeCache(c, 'com.example.app', '1.0.0', drizzle)).resolves.toBeNull()
+    await expect(getAppOwnerWithEdgeCache(c, 'com.example.app', drizzle, ['mau'])).resolves.toEqual({ value: null, hit: false })
+    await expect(getChannelByNameWithEdgeCache(c, 'com.example.app', 'production', drizzle)).resolves.toBeNull()
+    await expect(getCompatibleChannelsWithEdgeCache(c, 'com.example.app', 'ios', false, true, drizzle)).resolves.toEqual([])
+    expect(cache.put).not.toHaveBeenCalled()
+  })
+
+  it('rethrows a connect failure instead of reporting a missing app, bundle or channel', async () => {
+    const { cache } = stubCaches()
+    const c = makeContext()
+    await expect(getAppOwnerWithEdgeCache(c, 'com.example.app', connectFailingDrizzle(), ['mau', 'bandwidth'])).rejects.toSatisfy(isLazyPgConnectError)
+    await expect(getAppVersionWithEdgeCache(c, 'com.example.app', '1.0.0', connectFailingDrizzle())).rejects.toSatisfy(isLazyPgConnectError)
+    await expect(getChannelByNameWithEdgeCache(c, 'com.example.app', 'production', connectFailingDrizzle())).rejects.toSatisfy(isLazyPgConnectError)
+    await expect(getCompatibleChannelsWithEdgeCache(c, 'com.example.app', 'ios', false, true, connectFailingDrizzle())).rejects.toSatisfy(isLazyPgConnectError)
+    expect(cache.put).not.toHaveBeenCalled()
+  })
+
+  it('caches the app-level channel lookups of /stats but keeps device overrides live', async () => {
+    const { store } = stubCaches()
+    const c = makeContext()
+    const { query, drizzle } = fakeDrizzle([[11, 'beta']])
+    const lookup = () => getEffectiveDeviceChannelNamePostgres(c, 'com.example.app', 'device-1', 'beta', 'ios', false, drizzle, { edgeCache: true })
+
+    await expect(lookup()).resolves.toEqual({ id: 11, name: 'beta' })
+    await expect(lookup()).resolves.toEqual({ id: 11, name: 'beta' })
+    expect(query).toHaveBeenCalledTimes(1)
+    expect([...store.values()][0].headers.get('Cache-Tag')).toBe('capgo-updates-com.example.app')
+
+    // channel_devices overrides are per device: read on every request.
+    const overrides = () => getEffectiveDeviceChannelNamePostgres(c, 'com.example.app', 'device-1', 'beta', 'ios', true, drizzle, { edgeCache: true })
+    await overrides()
+    await overrides()
+    expect(query).toHaveBeenCalledTimes(3)
+  })
+
+  it('does not touch the cache when the edge cache is not used', async () => {
+    const { cache } = stubCaches()
+    const c = makeContext()
+    const { query, drizzle } = fakeDrizzle([[11, 'beta']])
+    await getEffectiveDeviceChannelNamePostgres(c, 'com.example.app', 'device-1', 'beta', 'ios', false, drizzle)
+    await getEffectiveDeviceChannelNamePostgres(c, 'com.example.app', 'device-1', 'beta', 'ios', false, drizzle)
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(cache.match).not.toHaveBeenCalled()
+    expect(cache.put).not.toHaveBeenCalled()
+  })
+})
+
+describe('updates cache purge scopes', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+    resetPurgeZoneCache()
+  })
+
+  it('purges the tag of each claimed scope', async () => {
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
+    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const apps = [
+      { app_id: 'com.a', scope: 'app', initial: true },
+      { app_id: 'com.a', scope: 'versions', initial: true },
+      // Claimed by a database that predates the scope column.
+      { app_id: 'com.b', initial: false },
+    ]
+    const rpc = vi.fn(async (fn: string) => fn === 'claim_updates_cache_purge'
+      ? { data: { status: 'ok', lease_token: 'lease-1', has_more: false, apps }, error: null }
+      : { data: null, error: null })
+
+    await expect(drainUpdatesCachePurge(makeContext(), rpc)).resolves.toEqual({ purgedApps: 3 })
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).tags).toEqual(['capgo-updates-com.a', 'capgo-updates-com.a:versions', 'capgo-updates-com.b'])
   })
 })

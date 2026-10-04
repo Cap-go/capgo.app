@@ -19,16 +19,17 @@ import { onPremiseAppResponse } from './rateLimitInfo.ts'
 import { cloudlog } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
 import { sendNotifToOrgMembersCached } from './org_email_notifications.ts'
-import { closeClient, createLazyPgClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDatabaseURL, getDrizzleClient, getLazyPgQueryCount, getPgClient, isLazyPgConnectError, logPgError, queryAppOwnerPostgres, refreshReplicationLag, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
+import { closeClient, createLazyPgClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDatabaseURL, getDrizzleClient, getLazyPgQueryCount, getPgClient, refreshReplicationLag, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
 import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
 import { makeDevice } from './plugin_parser.ts'
 import { createStatsBandwidth, createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from './plugin_stats.ts'
+import { getAppOwnerWithEdgeCache } from './pluginEdgeCacheReads.ts'
 import { getClientIP } from './rate_limit.ts'
 import { s3 } from './s3.ts'
 import { shouldQueuePluginNotifications } from './supabase_write_guard.ts'
 import { isUpdateEnumerationLimited, recordUpdateEnumerationMiss, updateEnumerationLimitedResponse } from './updateOracleGuard.ts'
 import { canServeUpToDateFromCache, getUpdateReadCache, setUpdateReadCache } from './updateReadCache.ts'
-import { getCachedAppOwner, getCachedDefaultChannel, shouldUseUpdatesEdgeCache } from './updatesEdgeCache.ts'
+import { getCachedDefaultChannel, shouldUseUpdatesEdgeCache } from './updatesEdgeCache.ts'
 import { backgroundTask, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, fixSemver, isDeprecatedPluginVersion, isInternalVersionName, isVersionDeleted } from './utils.ts'
 
 const PLAN_LIMIT: Array<'mau' | 'bandwidth' | 'storage'> = ['mau', 'bandwidth']
@@ -314,20 +315,11 @@ async function getAppOwnerFromEdgeCache(
   drizzleClient: ReturnType<typeof getDrizzleClient>,
   pathTiming?: UpdatePathTiming,
 ) {
-  try {
-    const owner = await getCachedAppOwner(c, appId, PLAN_LIMIT.join(','), () => queryAppOwnerPostgres(c, appId, drizzleClient, PLAN_LIMIT, { includeTrialAt: true }))
-    if (pathTiming)
-      pathTiming.ownerCacheHit = owner.hit
-    return owner.value
-  }
-  catch (e: unknown) {
-    // Without the edge cache a connect failure fails the request before any
-    // lookup; keep that instead of classifying the app as on-prem.
-    if (isLazyPgConnectError(e))
-      throw e
-    logPgError(c, 'getAppOwnerPostgres', e, { appId, planActions: PLAN_LIMIT })
-    return null
-  }
+  // A connect failure is rethrown (never classified as on-prem), see pluginEdgeCacheReads.ts.
+  const owner = await getAppOwnerWithEdgeCache(c, appId, drizzleClient, PLAN_LIMIT)
+  if (pathTiming)
+    pathTiming.ownerCacheHit = owner.hit
+  return owner.value
 }
 
 export async function updateWithPG(
