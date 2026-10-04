@@ -4012,5 +4012,7 @@
   "updater-failure-help-low-mem-fail": "The device ran out of memory while preparing the bundle.",
   "updater-failure-help-insufficient-disk-space": "The device does not have enough free storage for the bundle.",
   "updater-failure-help-blocked-by-server-url": "Auto update is off because server.url is set in the Capacitor config, which is common for live reload builds.",
-  "updater-failure-help-backend-refusal": "Capgo refused the update check because this plugin version is not supported. Upgrade the updater plugin."
+  "updater-failure-help-backend-refusal": "Capgo refused the update check because this plugin version is not supported. Upgrade the updater plugin.",
+  "more-menu": "More",
+  "switch-organization": "Switch organization"
 }
