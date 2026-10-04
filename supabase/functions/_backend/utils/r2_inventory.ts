@@ -188,6 +188,7 @@ export async function applyInventoryEvents(db: ClientBase, events: InventoryEven
         THEN 'to_be_deleted'::public.r2_object_state ELSE x.state::public.r2_object_state END,
       size_bytes = CASE WHEN x.state = 'present' THEN x.size ELSE target.size_bytes END,
       etag = CASE WHEN x.state = 'present' THEN x.etag ELSE target.etag END,
+      r2_last_modified_at = CASE WHEN x.state = 'present' THEN NULL ELSE target.r2_last_modified_at END,
       last_event_at = x."eventTime"::timestamptz,
       tombstone_expires_at = CASE WHEN x.state = 'deleted' THEN now() + $3::int * interval '1 day' END
       FROM jsonb_to_recordset($2::jsonb) AS x(key text, state text, size bigint, etag text, "eventTime" text)
@@ -207,7 +208,7 @@ export async function readObservationSnapshot(db: ClientBase, bucket: string, ke
 }
 
 // Compare revisions captured before the R2 request; never overwrite a concurrent event.
-export async function applyObservations(db: ClientBase, bucket: string, snapshot: ObservationSnapshot, observations: { key: string, object: ObjectObservation | null }[], config: InventoryConfig): Promise<string[]> {
+export async function applyObservations(db: ClientBase, bucket: string, snapshot: ObservationSnapshot, observations: { key: string, object: ObjectObservation | null }[], config: InventoryConfig, alreadyInTransaction = false): Promise<string[]> {
   if (observations.length > 1000 || Date.now() - Date.parse(snapshot.startedAt) > 120_000)
     throw new Error('Observation expired or exceeded its bound')
   const previous = new Map(snapshot.rows.map(row => [row.r2_key, row]))
@@ -220,7 +221,7 @@ export async function applyObservations(db: ClientBase, bucket: string, snapshot
     revision: previous.get(item.key)?.revision ?? null,
     firstSeenUs: previous.get(item.key)?.first_seen_us ?? null,
   }))
-  return inventoryTransaction(db, async () => {
+  const operation = async () => {
     const applied = await db.query<{ r2_key: string }>(`INSERT INTO public.r2_objects AS target
       (bucket_name, r2_key, r2_state, size_bytes, etag, r2_last_modified_at, last_reconciled_at, tombstone_expires_at)
       SELECT $1, key, CASE WHEN present THEN 'present' ELSE 'deleted' END::public.r2_object_state,
@@ -243,5 +244,6 @@ export async function applyObservations(db: ClientBase, bucket: string, snapshot
       RETURNING target.r2_key`, [bucket, JSON.stringify(input), snapshot.startedAt, config.tombstoneDays])
     const keys = new Set([...applied.rows, ...updated.rows].map(row => row.r2_key))
     return observations.filter(item => !keys.has(item.key)).map(item => item.key)
-  })
+  }
+  return alreadyInTransaction ? operation() : inventoryTransaction(db, operation)
 }
