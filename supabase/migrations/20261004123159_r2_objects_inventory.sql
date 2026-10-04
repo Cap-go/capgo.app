@@ -37,6 +37,9 @@ CREATE TABLE public.r2_objects (
 );
 ALTER TABLE public.r2_objects OWNER TO postgres;
 ALTER TABLE public.r2_objects ENABLE ROW LEVEL SECURITY;
+CREATE POLICY r2_objects_service_role
+ON public.r2_objects
+TO service_role USING (TRUE) WITH CHECK (TRUE);
 REVOKE ALL ON TABLE public.r2_objects FROM public, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.r2_objects TO service_role;
 
@@ -129,6 +132,9 @@ CREATE TABLE public.r2_inventory_checkpoints (
 );
 ALTER TABLE public.r2_inventory_checkpoints OWNER TO postgres;
 ALTER TABLE public.r2_inventory_checkpoints ENABLE ROW LEVEL SECURITY;
+CREATE POLICY r2_inventory_checkpoints_service_role
+ON public.r2_inventory_checkpoints
+TO service_role USING (TRUE) WITH CHECK (TRUE);
 REVOKE ALL ON TABLE public.r2_inventory_checkpoints FROM public,
 anon,
 authenticated;
