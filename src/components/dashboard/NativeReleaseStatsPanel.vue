@@ -32,6 +32,10 @@ const props = withDefaults(defineProps<{
   forceDemo: false,
 })
 
+const emit = defineEmits<{
+  retry: []
+}>()
+
 Chart.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend)
 
 const { t } = useI18n()
@@ -229,6 +233,9 @@ function formatDay(value: string | null) {
       <p class="text-sm">
         {{ t('native-release-stats-fetch-error') }}
       </p>
+      <button type="button" class="d-btn d-btn-sm d-btn-primary" @click="emit('retry')">
+        {{ t('update-delivery-retry') }}
+      </button>
     </div>
 
     <div

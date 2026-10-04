@@ -188,10 +188,11 @@ const tooltipClickHandler = computed<TooltipClickHandler | undefined>(() => {
 const isLoading = ref(true)
 
 // Native release table reuses this native_usage response instead of
-// requesting the same period a second time.
+// requesting the same period a second time. isLoading also covers the 30-day
+// summary request, so the table only waits while the period data is missing.
 watch([rawChartData, isLoading], ([data, loading]) => {
   if (isNativeUsage.value)
-    emit('nativeUsage', { data, isLoading: loading })
+    emit('nativeUsage', { data, isLoading: loading && data === null })
 }, { immediate: true })
 const { days: periodDays } = usePeriodDaysQuery()
 const currentRange = ref<{ startDate: Date, endDate: Date } | null>(null)
@@ -822,6 +823,13 @@ async function loadData(forceRefetch = false) {
     }
   }
 }
+
+watch(activeAppId, (appId, previousAppId) => {
+  if (isNativeUsage.value && previousAppId && appId !== previousAppId)
+    emit('nativeUsage', { data: null, isLoading: true })
+})
+
+defineExpose({ reload: () => loadData(true) })
 
 watch(periodDays, async () => {
   if (activeAppId.value)

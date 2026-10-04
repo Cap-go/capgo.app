@@ -3,7 +3,7 @@ import type { AppDashboardSection } from '~/constants/appDashboardTabs'
 import type { AppChartRefreshState } from '~/services/dashboardRefresh'
 import type { NativeReleaseSeriesInput } from '~/services/nativeReleaseStats'
 import type { Database } from '~/types/supabase.types'
-import { computed, ref, watchEffect } from 'vue'
+import { computed, ref, useTemplateRef, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import AppNotFoundModal from '~/components/AppNotFoundModal.vue'
 import BundleInstallStatsPanel from '~/components/dashboard/BundleInstallStatsPanel.vue'
@@ -50,6 +50,7 @@ interface NativeUsageState {
   isLoading: boolean
 }
 const nativeUsage = ref<NativeUsageState>({ data: null, isLoading: true })
+const nativeDevicesStats = useTemplateRef<{ reload: () => Promise<void> }>('nativeDevicesStats')
 let loadGeneration = 0
 
 const lacksSecurityAccess = computed(() => {
@@ -192,6 +193,7 @@ watchEffect(async () => {
           <!-- Version mix is operational history, not billed usage. Default last 1 day. -->
           <div v-else-if="!lacksSecurityAccess && props.section === 'native'" class="grid grid-cols-1 gap-6 mb-6">
             <DevicesStats
+              ref="nativeDevicesStats"
               :app-id="id"
               usage-kind="native"
               :use-billing-period="false"
@@ -205,6 +207,7 @@ watchEffect(async () => {
               :is-loading="nativeUsage.isLoading"
               :force-demo="appNotFound"
               class="col-span-full"
+              @retry="nativeDevicesStats?.reload()"
             />
           </div>
 
