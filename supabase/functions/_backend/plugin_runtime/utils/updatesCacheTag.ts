@@ -1,6 +1,11 @@
 /** Dependency-free so the purge trigger can build tags without the plugin runtime. */
 export const UPDATES_EDGE_CACHE_TAG_PREFIX = 'capgo-updates-'
-const VERSIONS_TAG_SUFFIX = '-versions'
+/**
+ * ':' is outside the sanitized app id alphabet, so no app's main tag can
+ * equal another app's versions tag (a '-versions' suffix could: an app id may
+ * end with it).
+ */
+const VERSIONS_TAG_SUFFIX = ':versions'
 
 /**
  * Purge scope of a queued purge (`updates_cache_purge_pending.scope`):

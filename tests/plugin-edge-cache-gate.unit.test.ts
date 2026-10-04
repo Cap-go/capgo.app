@@ -178,6 +178,18 @@ describe('plugin edge cache gate (UPDATES_EDGE_CACHE)', () => {
       expect(readOnly).toBe(false)
   })
 
+  it('keeps the live path for a channel list request without a device id', async () => {
+    vi.stubEnv('UPDATES_EDGE_CACHE', 'on')
+    createLazyPgClientMock.mockClear()
+    getPgClientMock.mockClear()
+    const { device_id: _deviceId, ...body } = baseBody(deviceId(1))
+    const query = new URLSearchParams(Object.entries(body).map(([key, value]) => [key, String(value)]))
+    const { app } = await import('../supabase/functions/_backend/plugin_runtime/plugins/channel_self.ts')
+    await app.fetch(new Request(`http://plugin.example.test/?${query}`, { method: 'GET' }), {}, { waitUntil: () => {} } as any)
+    expect(createLazyPgClientMock).not.toHaveBeenCalled()
+    expect(getPgClientMock).toHaveBeenCalledTimes(1)
+  })
+
   it('applies a percentage with the same per-device decision on every endpoint', async () => {
     const { updatesEdgeCacheBucket } = await import('../supabase/functions/_backend/plugin_runtime/utils/updatesEdgeCache.ts')
     vi.stubEnv('UPDATES_EDGE_CACHE', '50%')

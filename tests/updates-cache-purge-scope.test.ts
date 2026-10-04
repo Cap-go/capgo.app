@@ -121,18 +121,24 @@ describe('updates cache purge scopes', () => {
 
       await client.query('SELECT public.ack_updates_cache_purge($1, true, 5)', [claim.lease_token])
       const { rows } = await client.query<{ scope: string, initial: boolean, delay: number }>(
-        `SELECT scope, initial, round(extract(epoch FROM due_at - clock_timestamp()))::int AS delay
+        `SELECT scope, initial, extract(epoch FROM due_at - clock_timestamp())::float8 AS delay
          FROM public.updates_cache_purge_pending WHERE app_id = $1 ORDER BY scope, due_at`,
         [APP_ID],
       )
-      expect(rows.map(row => [row.scope, row.initial, row.delay])).toEqual([
-        ['app', false, 10],
-        ['app', false, 60],
-        ['app', false, 180],
-        ['versions', false, 10],
-        ['versions', false, 60],
-        ['versions', false, 180],
+      expect(rows.map(row => [row.scope, row.initial])).toEqual([
+        ['app', false],
+        ['app', false],
+        ['app', false],
+        ['versions', false],
+        ['versions', false],
+        ['versions', false],
       ])
+      // Re-purges are scheduled +10s / +60s / +180s from the ack; allow for test latency.
+      const expected = [10, 60, 180, 10, 60, 180]
+      rows.forEach((row, index) => {
+        expect(row.delay).toBeLessThanOrEqual(expected[index])
+        expect(row.delay).toBeGreaterThan(expected[index] - 5)
+      })
     })
   })
 
