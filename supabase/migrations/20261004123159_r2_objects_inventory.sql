@@ -48,7 +48,7 @@ REVOKE ALL ON TABLE public.r2_objects FROM public, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.r2_objects TO service_role;
 
 CREATE INDEX r2_objects_expired_tombstones_idx
-ON public.r2_objects (tombstone_expires_at, bucket_name, r2_key)
+ON public.r2_objects (bucket_name, tombstone_expires_at, r2_key)
 WHERE r2_state = 'deleted'::public.r2_object_state;
 
 COMMENT ON TABLE public.r2_objects IS

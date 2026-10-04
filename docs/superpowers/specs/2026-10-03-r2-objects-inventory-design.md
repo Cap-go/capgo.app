@@ -65,7 +65,7 @@ Initial additional index:
 
 ```sql
 CREATE INDEX r2_objects_expired_tombstones_idx
-ON public.r2_objects (tombstone_expires_at, bucket_name, r2_key)
+ON public.r2_objects (bucket_name, tombstone_expires_at, r2_key)
 WHERE r2_state = 'deleted'::public.r2_object_state;
 ```
 
@@ -334,3 +334,5 @@ Test normal and worst-case batches, byte ordering, JSON payload size, malformed 
 The first milestone is complete when historical coverage is known, live ingestion stays within the measured DB budget, and recurring comparison demonstrates that discrepancies are repaired. Physical cleanup remains a later consumer of this inventory.
 
 Implementation guard: `cleanup_requested_at` persists retirement through a deleted tombstone, preventing notification or observation writes from restoring retired keys. A later presence observation queues the key for deletion again. Admission checkpoint floors cannot decrease or be removed, and checkpoint progress timestamps update automatically.
+
+Observation identity includes both `revision` and the exact original `first_seen_at`, so a purged/reinserted physical key cannot match an earlier snapshot. Tombstone collection uses a bucket-first expiry index to keep each maintenance batch bounded.
