@@ -1,0 +1,146 @@
+{
+  "name": "capgo-r2-inventory",
+  "main": "index.ts",
+  "compatibility_date": "2026-04-21",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  "observability": {
+    "enabled": true
+  },
+  "env": {
+    "prod": {
+      "name": "capgo-r2-inventory-prod",
+      "vars": {
+        "INVENTORY_BUCKET": "capgo"
+      },
+      "r2_buckets": [
+        {
+          "binding": "ATTACHMENT_BUCKET",
+          "bucket_name": "capgo"
+        }
+      ],
+      "hyperdrive": [
+        {
+          "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
+          "id": "ae1fe6178b564adc9fc9a71ccc769a35"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "REPAIR_QUEUE",
+            "queue": "capgo-r2-inventory-prod-repair"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "capgo-r2-inventory-prod",
+            "max_batch_size": 100,
+            "max_batch_timeout": 10,
+            "max_concurrency": 2,
+            "max_retries": 4,
+            "dead_letter_queue": "capgo-r2-inventory-prod-dlq"
+          },
+          {
+            "queue": "capgo-r2-inventory-prod-repair",
+            "max_batch_size": 10,
+            "max_batch_timeout": 10,
+            "max_concurrency": 1,
+            "max_retries": 4,
+            "dead_letter_queue": "capgo-r2-inventory-prod-repair-dlq"
+          }
+        ]
+      }
+    },
+    "preprod": {
+      "name": "capgo-r2-inventory-preprod",
+      "vars": {
+        "INVENTORY_BUCKET": "capgo"
+      },
+      "r2_buckets": [
+        {
+          "binding": "ATTACHMENT_BUCKET",
+          "bucket_name": "capgo"
+        }
+      ],
+      "hyperdrive": [
+        {
+          "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
+          "id": "ae1fe6178b564adc9fc9a71ccc769a35"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "REPAIR_QUEUE",
+            "queue": "capgo-r2-inventory-preprod-repair"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "capgo-r2-inventory-preprod",
+            "max_batch_size": 100,
+            "max_batch_timeout": 10,
+            "max_concurrency": 2,
+            "max_retries": 4,
+            "dead_letter_queue": "capgo-r2-inventory-preprod-dlq"
+          },
+          {
+            "queue": "capgo-r2-inventory-preprod-repair",
+            "max_batch_size": 10,
+            "max_batch_timeout": 10,
+            "max_concurrency": 1,
+            "max_retries": 4,
+            "dead_letter_queue": "capgo-r2-inventory-preprod-repair-dlq"
+          }
+        ]
+      }
+    },
+    "alpha": {
+      "name": "capgo-r2-inventory-alpha",
+      "vars": {
+        "INVENTORY_BUCKET": "capgo-alpha"
+      },
+      "r2_buckets": [
+        {
+          "binding": "ATTACHMENT_BUCKET",
+          "bucket_name": "capgo-alpha"
+        }
+      ],
+      "hyperdrive": [
+        {
+          "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
+          "id": "ae1fe6178b564adc9fc9a71ccc769a35"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "REPAIR_QUEUE",
+            "queue": "capgo-r2-inventory-alpha-repair"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "capgo-r2-inventory-alpha",
+            "max_batch_size": 100,
+            "max_batch_timeout": 10,
+            "max_concurrency": 2,
+            "max_retries": 4,
+            "dead_letter_queue": "capgo-r2-inventory-alpha-dlq"
+          },
+          {
+            "queue": "capgo-r2-inventory-alpha-repair",
+            "max_batch_size": 10,
+            "max_batch_timeout": 10,
+            "max_concurrency": 1,
+            "max_retries": 4,
+            "dead_letter_queue": "capgo-r2-inventory-alpha-repair-dlq"
+          }
+        ]
+      }
+    }
+  }
+}
