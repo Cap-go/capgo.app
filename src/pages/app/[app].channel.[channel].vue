@@ -9,13 +9,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconCopy from '~icons/heroicons/clipboard-document-check'
 import IconCode from '~icons/heroicons/code-bracket'
-import Settings from '~icons/heroicons/cog-8-tooth'
 import IconInformation from '~icons/heroicons/information-circle'
 import IconSearch from '~icons/ic/round-search?raw'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconWarning from '~icons/lucide/alert-triangle'
 import IconExternalLink from '~icons/lucide/external-link'
-import IconRocket from '~icons/lucide/rocket'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { formatDate, formatLocalDate } from '~/services/date'
@@ -27,6 +25,7 @@ import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { createChannelRolloutConfirmFlows, formatRolloutCacheTtlDisplay, formatRolloutCacheTtlHuman, isRolloutPercentageDraftChanged, parseRolloutCacheTtlSeconds } from '~/utils/channelRolloutConfirmFlows'
 import { getUpdatePackageDescription as getUpdatePackageDescriptionCopy, getUpdatePackageInfoDescription as getUpdatePackageInfoDescriptionCopy, getUpdatePackageLabel as getUpdatePackageLabelCopy } from '~/utils/channelUpdatePackageCopy'
+import { confirmConsequentialChannelChange } from '~/utils/confirmConsequentialChannelChange'
 
 interface Channel {
   version: Database['public']['Tables']['app_versions']['Row']
@@ -62,6 +61,7 @@ type EditableChannelKey = 'allow_dev'
   | 'auto_pause_min_failures'
   | 'auto_pause_action'
   | 'auto_pause_cooldown_minutes'
+  | 'paused_at'
   | 'version'
 
 // Bundle link dialog state
@@ -144,6 +144,9 @@ const rolloutProgressStyle = computed(() => {
   const percentage = Math.max(0, Math.min(100, rolloutPercentage.value))
   return `width: ${percentage}%`
 })
+// Paused: /updates sends nothing on this channel, devices keep their bundle.
+const channelPaused = computed(() => !!channel.value?.paused_at)
+const channelOnBuiltin = computed(() => channel.value?.version?.name === 'builtin')
 const showRolloutSettings = computed(() => !!channel.value?.rollout_enabled)
 const showRolloutEnableRow = computed(() => !!channel.value && !channel.value.rollout_enabled)
 
@@ -296,6 +299,7 @@ async function getChannel(force = false) {
           rollout_paused_at,
           rollout_pause_reason,
           rollout_cache_ttl_seconds,
+          paused_at,
           auto_pause_enabled,
           auto_pause_window_minutes,
           auto_pause_failure_rate_bps,
@@ -821,25 +825,68 @@ async function handleRevert() {
     toast.error(t('no-permission'))
     return
   }
-  dialogStore.openDialog({
-    title: t('revert-to-builtin'),
-    description: t('revert-to-builtin-confirm'),
-    buttons: [
-      {
-        text: t('cancel'),
-        role: 'cancel',
+  // Full revert: the stable bundle goes back to built-in and any progressive
+  // rollout stops too, otherwise rollout devices would keep getting updates.
+  const stopsRollout = !!channel.value?.rollout_version || !!channel.value?.rollout_enabled
+  const rolloutTarget = channel.value?.rollout_version_info?.name
+  const description = stopsRollout && rolloutTarget
+    ? `${t('revert-to-builtin-confirm')} ${t('revert-to-builtin-confirm-rollout', { target: rolloutTarget })}`
+    : t('revert-to-builtin-confirm')
+  await confirmConsequentialChannelChange(
+    dialogStore,
+    { cancel: t('button-cancel'), confirm: t('channel-revert-button') },
+    {
+      id: 'confirm-revert-to-builtin',
+      title: t('channel-revert-confirm-title'),
+      description,
+      confirmRole: 'danger',
+      onConfirm: async () => {
+        const changes: ChannelUpdate = { version: null }
+        if (stopsRollout) {
+          Object.assign(changes, {
+            rollout_version: null,
+            rollout_enabled: false,
+            rollout_percentage_bps: 0,
+            rollout_paused_at: null,
+            rollout_pause_reason: null,
+          })
+        }
+        if (await saveChannelChanges(changes)) {
+          toast.success(t('channel-reverted-to-builtin'))
+          await askUpdateNotificationAfterBundleChange()
+        }
       },
-      {
-        text: t('confirm'),
-        role: 'primary',
-        handler: async () => {
-          if (await saveChannelChange('version', null))
-            await askUpdateNotificationAfterBundleChange()
-        },
+    },
+  )
+}
+
+async function toggleChannelPause() {
+  if (!canUpdateChannelSettings.value) {
+    toast.error(t('no-permission'))
+    return
+  }
+  if (!channel.value)
+    return
+  const resuming = channelPaused.value
+  await confirmConsequentialChannelChange(
+    dialogStore,
+    { cancel: t('button-cancel'), confirm: resuming ? t('channel-resume-updates') : t('channel-pause-updates') },
+    {
+      id: resuming ? 'confirm-resume-channel' : 'confirm-pause-channel',
+      title: resuming ? t('channel-resume-confirm-title') : t('channel-pause-confirm-title'),
+      description: resuming
+        ? t('channel-resume-confirm-description', { bundle: rolloutIsActive.value ? `${stableBundleName.value} / ${rolloutTargetName.value}` : stableBundleName.value })
+        : t('channel-pause-confirm-description'),
+      confirmRole: resuming ? 'primary' : 'danger',
+      onConfirm: async () => {
+        if (!await saveChannelChange('paused_at', resuming ? null : new Date().toISOString()))
+          return
+        toast.success(resuming ? t('channel-updates-resumed') : t('channel-updates-paused'))
+        if (resuming)
+          await askUpdateNotificationAfterBundleChange()
       },
-    ],
-  })
-  await dialogStore.onDialogDismiss()
+    },
+  )
 }
 
 async function openSelectVersion(startInSearch = false) {
@@ -884,9 +931,9 @@ async function openSelectVersion(startInSearch = false) {
   await dialogStore.onDialogDismiss()
 }
 
-async function openSelectStableVersion() {
+async function openSelectStableVersion(startInSearch = false) {
   bundleLinkMode.value = 'stable'
-  await openSelectVersion()
+  await openSelectVersion(startInSearch)
 }
 
 async function openSelectRolloutVersion() {
@@ -1404,7 +1451,13 @@ async function copyCurlCommand() {
       <div class="w-full h-full px-0 pt-0 mx-auto mb-8 sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
         <div class="flex flex-col bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10">
           <div class="px-4 py-4 border-b sm:px-6 border-slate-200 dark:border-slate-500" data-test="channel-summary">
-            <p v-if="!rolloutIsActive" class="text-sm text-slate-700 dark:text-slate-200">
+            <p v-if="channelPaused" class="text-sm font-medium text-amber-800 dark:text-amber-200" data-test="channel-summary-paused">
+              {{ t('channel-summary-paused') }}
+            </p>
+            <p v-else-if="channelOnBuiltin && !rolloutIsActive" class="text-sm text-slate-700 dark:text-slate-200">
+              {{ t('channel-summary-builtin') }}
+            </p>
+            <p v-else-if="!rolloutIsActive" class="text-sm text-slate-700 dark:text-slate-200">
               {{ t('channel-summary-serves', { bundle: channel.version.name }) }}
             </p>
             <div class="flex flex-wrap gap-2 text-xs font-medium" :class="{ 'mt-2': !rolloutIsActive }">
@@ -1430,7 +1483,20 @@ async function copyCurlCommand() {
             <InfoRow :label="t('name')">
               {{ channel.name }}
             </InfoRow>
-            <div v-if="rolloutIsActive" class="px-4 py-4 sm:px-6">
+            <div v-if="channelPaused" class="px-4 py-4 sm:px-6" data-test="channel-paused-banner">
+              <div class="flex gap-3 rounded-md border px-4 py-3 border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800/70 dark:bg-amber-950/30 dark:text-amber-100">
+                <IconWarning class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                <div class="min-w-0 space-y-1">
+                  <p class="text-sm font-semibold">
+                    {{ t('channel-paused-banner-title') }}
+                  </p>
+                  <p class="text-xs opacity-90">
+                    {{ t('channel-paused-banner-hint') }}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div v-else-if="rolloutIsActive" class="px-4 py-4 sm:px-6">
               <div class="flex gap-3 rounded-md border px-4 py-3" :class="rolloutDeliveryBannerClass">
                 <IconWarning class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                 <div class="min-w-0 space-y-1">
@@ -1443,33 +1509,65 @@ async function copyCurlCommand() {
                 </div>
               </div>
             </div>
-            <!-- Bundle assigned to this channel -->
-            <InfoRow :label="rolloutIsActive ? t('stable-fallback') : t('bundle-assigned-to-this-channel')" class="sm:items-center" label-class="text-base! leading-5 font-bold! lg:whitespace-nowrap" :is-link="channel && !isInternalVersionName((channel.version.name))">
-              <div class="flex items-center gap-3">
-                <span class="text-base leading-5 cursor-pointer" @click="openBundle()">{{ channel.version.name }}</span>
+            <!-- Bundle assigned to this channel + channel-wide actions -->
+            <div class="flex flex-col gap-3 px-4 py-4 sm:px-6 sm:py-5 lg:flex-row lg:items-center lg:justify-between" data-test="channel-bundle-row">
+              <dt class="text-base font-bold leading-5 text-gray-700 dark:text-gray-200 lg:whitespace-nowrap">
+                {{ rolloutIsActive ? t('stable-fallback') : t('bundle-assigned-to-this-channel') }}
+              </dt>
+              <dd class="flex flex-wrap items-center gap-2 lg:justify-end">
                 <button
-                  v-if="channel"
+                  v-if="!isInternalVersionName(channel.version.name)"
                   type="button"
-                  class="relative p-0 d-btn d-btn-outline size-6 min-h-6 before:absolute before:-inset-2.5 before:content-['']"
-                  :aria-label="t('select-stable-bundle')"
-                  :disabled="!canPromoteBundle"
-                  @click="openSelectStableVersion()"
+                  class="mr-1 text-base font-bold leading-5 text-blue-600 underline underline-offset-4 dark:text-blue-500"
+                  @click="openBundle()"
                 >
-                  <Settings class="w-4 h-4 text-gray-500 dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-400" />
+                  {{ channel.version.name }}
                 </button>
+                <span v-else class="mr-1 text-base leading-5 text-slate-700 dark:text-slate-200">{{ t('builtin-bundle') }}</span>
+                <span
+                  v-if="channelPaused"
+                  class="inline-flex items-center px-2 py-1 mr-1 text-xs font-semibold rounded-md bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
+                >
+                  {{ t('channel-paused-badge') }}
+                </span>
                 <button
                   v-if="showPromoteToChannel"
                   type="button"
-                  class="gap-1.5 font-medium d-btn d-btn-outline d-btn-xs text-slate-700 dark:text-slate-200"
+                  class="d-btn d-btn-primary d-btn-sm"
                   data-test="promote-to-channel"
                   @click="openPromoteToChannel()"
                 >
-                  <IconRocket class="w-3.5 h-3.5" aria-hidden="true" />
-                  <!-- Nested inline-block stops the InfoRow link underline from propagating -->
-                  <span><span class="inline-block">{{ t('promote-to-channel-button') }}</span></span>
+                  {{ t('promote-to-channel-button') }}
                 </button>
-              </div>
-            </InfoRow>
+                <button
+                  type="button"
+                  class="d-btn d-btn-outline d-btn-sm"
+                  data-test="channel-change-bundle"
+                  :disabled="!canPromoteBundle"
+                  @click="openSelectStableVersion(channelOnBuiltin)"
+                >
+                  {{ t('change-bundle') }}
+                </button>
+                <button
+                  type="button"
+                  class="d-btn d-btn-outline d-btn-sm"
+                  data-test="channel-pause-toggle"
+                  :disabled="!canUpdateChannelSettings"
+                  @click="toggleChannelPause()"
+                >
+                  {{ channelPaused ? t('channel-resume-updates') : t('channel-pause-updates') }}
+                </button>
+                <button
+                  type="button"
+                  class="d-btn d-btn-outline d-btn-error d-btn-sm"
+                  data-test="channel-revert-builtin"
+                  :disabled="!canPromoteBundle || (channelOnBuiltin && !rolloutConfigured)"
+                  @click="handleRevert()"
+                >
+                  {{ t('channel-revert-button') }}
+                </button>
+              </dd>
+            </div>
             <InfoRow v-if="channel.disable_auto_update === 'version_number'" :label="t('min-update-version')">
               {{ channel.version.min_update_version ?? t('undefined-fail') }}
             </InfoRow>
@@ -2161,89 +2259,93 @@ async function copyCurlCommand() {
             <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t('available-versions') }}
             </h4>
-            <div
+            <button
               v-for="version in bundleLinkVersions"
               :key="version.id"
-              class="p-3 border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+              type="button"
+              class="block w-full p-3 text-left border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
               @click="handleVersionLink(version as any)"
             >
-              <div class="flex items-center justify-between">
-                <div>
-                  <div class="font-medium">
+              <span class="flex items-center justify-between">
+                <span class="block">
+                  <span class="block font-medium">
                     {{ version.name }}
-                  </div>
-                  <div class="text-sm text-gray-600 dark:text-gray-400">
+                  </span>
+                  <span class="block text-sm text-gray-600 dark:text-gray-400">
                     {{ t('created') }}: {{ version.created_at ? formatLocalDate(version.created_at) : t('unknown') }}
-                  </div>
-                </div>
-                <div class="text-blue-600 dark:text-blue-400">
+                  </span>
+                </span>
+                <span class="block text-blue-600 dark:text-blue-400">
                   →
-                </div>
-              </div>
-            </div>
+                </span>
+              </span>
+            </button>
           </div>
 
           <!-- Action Cards (when not in search mode) -->
           <div v-if="showSearchAndActions" class="space-y-3">
             <!-- Link New Bundle -->
-            <div
-              class="p-3 border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+            <button
+              type="button"
+              class="block w-full p-3 text-left border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
               @click="bundleLinkSearchMode = true"
             >
-              <div class="flex items-center justify-between">
-                <div>
-                  <div class="font-medium">
+              <span class="flex items-center justify-between">
+                <span class="block">
+                  <span class="block font-medium">
                     {{ t('link-new-bundle') }}
-                  </div>
-                  <div class="text-sm text-gray-600 dark:text-gray-400">
+                  </span>
+                  <span class="block text-sm text-gray-600 dark:text-gray-400">
                     {{ t('search-and-select-a-different-bundle') }}
-                  </div>
-                </div>
-                <div class="text-blue-600 dark:text-blue-400">
+                  </span>
+                </span>
+                <span class="block text-blue-600 dark:text-blue-400">
                   📦
-                </div>
-              </div>
-            </div>
+                </span>
+              </span>
+            </button>
 
             <!-- Unlink Bundle -->
-            <div
-              class="p-3 border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+            <button
+              type="button"
+              class="block w-full p-3 text-left border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
               @click="handleUnlink"
             >
-              <div class="flex items-center justify-between">
-                <div>
-                  <div class="font-medium">
+              <span class="flex items-center justify-between">
+                <span class="block">
+                  <span class="block font-medium">
                     {{ t('unlink-bundle') }}
-                  </div>
-                  <div class="text-sm text-gray-600 dark:text-gray-400">
+                  </span>
+                  <span class="block text-sm text-gray-600 dark:text-gray-400">
                     {{ t('remove-bundle-from-this-channel') }}
-                  </div>
-                </div>
-                <div class="text-orange-600 dark:text-orange-400">
+                  </span>
+                </span>
+                <span class="block text-orange-600 dark:text-orange-400">
                   🔓
-                </div>
-              </div>
-            </div>
+                </span>
+              </span>
+            </button>
 
             <!-- Revert to Built-in -->
-            <div
-              class="p-3 border border-red-300 rounded-lg cursor-pointer dark:border-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
+            <button
+              type="button"
+              class="block w-full p-3 text-left border border-red-300 rounded-lg cursor-pointer dark:border-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
               @click="handleRevert"
             >
-              <div class="flex items-center justify-between">
-                <div>
-                  <div class="font-medium text-red-600 dark:text-red-400">
+              <span class="flex items-center justify-between">
+                <span class="block">
+                  <span class="block font-medium text-red-600 dark:text-red-400">
                     {{ t('revert-to-builtin') }}
-                  </div>
-                  <div class="text-sm text-red-500 dark:text-red-300">
+                  </span>
+                  <span class="block text-sm text-red-500 dark:text-red-300">
                     {{ t('revert-channel-to-built-in-version') }}
-                  </div>
-                </div>
-                <div class="text-red-600 dark:text-red-400">
+                  </span>
+                </span>
+                <span class="block text-red-600 dark:text-red-400">
                   ⚠️
-                </div>
-              </div>
-            </div>
+                </span>
+              </span>
+            </button>
           </div>
 
           <!-- Empty state for search -->

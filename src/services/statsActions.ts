@@ -66,6 +66,7 @@ export const statsActionFilters = [
   ['action-disable-platform-ios', 'disablePlatformIos'],
   ['action-disable-platform-android', 'disablePlatformAndroid'],
   ['action-disable-platform-electron', 'disablePlatformElectron'],
+  ['action-channel-paused', 'channelPaused'],
   ['action-disable-auto-update-to-major', 'disableAutoUpdateToMajor'],
   ['action-cannot-update-via-private-channel', 'cannotUpdateViaPrivateChannel'],
   ['action-disable-auto-update-to-minor', 'disableAutoUpdateToMinor'],
