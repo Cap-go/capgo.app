@@ -3657,6 +3657,7 @@ export type Database = {
       ack_updates_cache_purge: {
         Args: {
           p_lease_token: string
+          p_requeue?: Json
           p_retry_after_seconds?: number
           p_success: boolean
         }

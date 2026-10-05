@@ -3600,6 +3600,7 @@ export type Database = {
           lease_token: string | null
           leased_until: string | null
           scope: string
+          zone_id: string | null
         }
         Insert: {
           app_id: string
@@ -3609,6 +3610,7 @@ export type Database = {
           lease_token?: string | null
           leased_until?: string | null
           scope?: string
+          zone_id?: string | null
         }
         Update: {
           app_id?: string
@@ -3618,6 +3620,7 @@ export type Database = {
           lease_token?: string | null
           leased_until?: string | null
           scope?: string
+          zone_id?: string | null
         }
         Relationships: []
       }
@@ -4206,6 +4209,7 @@ export type Database = {
       ack_updates_cache_purge: {
         Args: {
           p_lease_token: string
+          p_requeue?: Json
           p_retry_after_seconds?: number
           p_success: boolean
         }
