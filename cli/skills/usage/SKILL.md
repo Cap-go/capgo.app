@@ -76,7 +76,7 @@ Load `skills/release-management/SKILL.md` when working with:
 
 - `bundle upload`, `bundle list`, `bundle delete`, `bundle cleanup`
 - `bundle compatibility`, `bundle releaseType`, `bundle zip`, `bundle encrypt`, `bundle decrypt`
-- `channel add`, `channel list`, `channel delete`, `channel set`, `channel currentBundle`
+- `channel add`, `channel list`, `channel delete`, `channel set`, `channel promote`, `channel currentBundle`
 - `get-qr`
 - `key save`, `key create`, `key delete_old`
 

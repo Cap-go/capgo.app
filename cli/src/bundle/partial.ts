@@ -17,6 +17,7 @@ import { encryptChecksum, encryptChecksumV3, encryptSource } from '../api/crypto
 import { CliUserError } from '../shared/cli-user-error'
 import { appAddHintMessage, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findRoot, generateManifest, getContentType, getInstalledVersion, getLocalConfig, isAppNotFoundError, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import { getUploadReporter } from './reporter'
+import { getManifestUploadAbandonError, ManifestUploadAbandonController, ManifestUploadAbandonError, parseManifestUploadAbandonBody } from './upload-abandon-error'
 
 const log = {
   info: (message: string) => getUploadReporter().info(message),
@@ -242,12 +243,14 @@ export async function uploadPartial(
   let uploadedFiles = 0
   const totalFiles = manifest.length
   let brFilesCount = 0
+  const abandonController = new ManifestUploadAbandonController()
 
   try {
     spinner.message(`Uploading ${totalFiles} files using TUS protocol`)
 
     // Helper function to upload a single file
     const uploadFile = async (file: manifestType[number]) => {
+      abandonController.throwIfAbandoned()
       const finalFilePath = join(path, file.file)
       const filePathUnix = convertToUnixPath(file.file)
 
@@ -271,6 +274,7 @@ export async function uploadPartial(
       if (encryptionOptions) {
         finalBuffer = encryptSource(fileBuffer, encryptionOptions.sessionKey, encryptionOptions.ivSessionKey)
       }
+      abandonController.throwIfAbandoned()
 
       // Determine the upload path (with or without .br extension)
       let uploadPathUnix = filePathUnix
@@ -286,6 +290,7 @@ export async function uploadPartial(
       // Skip reuse when encryption is enabled because the session key changes per upload
       // and reusing a file encrypted with a different session key would cause decryption to fail
       const existing = !encryptionOptions ? await fileExists(localConfig, filename) : { exists: false }
+      abandonController.throwIfAbandoned()
       if (existing.exists) {
         uploadedFiles++
         return Promise.resolve({
@@ -310,7 +315,19 @@ export async function uploadPartial(
             filetype,
           },
 headers: buildCliRequestHeaders({ Authorization: apikey }),
+          onAfterResponse(_request, response) {
+            const abandonError = parseManifestUploadAbandonBody(response.getBody())
+            if (abandonError)
+              return abandonController.abandon(abandonError)
+          },
           onError: (error) => {
+            const abandonError = getManifestUploadAbandonError(error)
+            if (abandonError) {
+              void abandonController.abandon(abandonError)
+              return
+            }
+
+            abandonController.unregister(upload)
             const errorMessage = error.toString()
 
             // Turn the backend's `app_not_found` rejection into the actionable `app add`
@@ -346,6 +363,7 @@ headers: buildCliRequestHeaders({ Authorization: apikey }),
             spinner.message(`Uploading delta update: ${percentage}%`)
           },
           onSuccess({ lastResponse }) {
+            abandonController.unregister(upload)
             uploadedFiles++
             resolve({
               file_name: uploadPathUnix,
@@ -356,7 +374,8 @@ headers: buildCliRequestHeaders({ Authorization: apikey }),
           },
         })
 
-        upload.start()
+        if (abandonController.register(upload, reject))
+          upload.start()
       })
     }
 
@@ -365,6 +384,7 @@ headers: buildCliRequestHeaders({ Authorization: apikey }),
     const results: any[] = []
 
     for (let i = 0; i < manifest.length; i += BATCH_SIZE) {
+      abandonController.throwIfAbandoned()
       const batch = manifest.slice(i, i + BATCH_SIZE)
       const batchNumber = Math.floor(i / BATCH_SIZE) + 1
       const totalBatches = Math.ceil(manifest.length / BATCH_SIZE)
@@ -411,6 +431,9 @@ headers: buildCliRequestHeaders({ Authorization: apikey }),
     const endTime = performance.now()
     const uploadTime = ((endTime - startTime) / 1000).toFixed(2)
     spinner.error(`Failed to upload delta update (after ${uploadTime} seconds)`)
+
+    if (error instanceof ManifestUploadAbandonError)
+      throw error
 
     if (userRequestedDelta) {
       // User explicitly requested delta/partial updates, so we should fail

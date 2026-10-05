@@ -9,7 +9,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconCopy from '~icons/heroicons/clipboard-document-check'
 import IconCode from '~icons/heroicons/code-bracket'
-import Settings from '~icons/heroicons/cog-8-tooth'
 import IconInformation from '~icons/heroicons/information-circle'
 import IconSearch from '~icons/ic/round-search?raw'
 import IconAlertCircle from '~icons/lucide/alert-circle'
@@ -26,6 +25,7 @@ import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { createChannelRolloutConfirmFlows, formatRolloutCacheTtlDisplay, formatRolloutCacheTtlHuman, isRolloutPercentageDraftChanged, parseRolloutCacheTtlSeconds } from '~/utils/channelRolloutConfirmFlows'
 import { getUpdatePackageDescription as getUpdatePackageDescriptionCopy, getUpdatePackageInfoDescription as getUpdatePackageInfoDescriptionCopy, getUpdatePackageLabel as getUpdatePackageLabelCopy } from '~/utils/channelUpdatePackageCopy'
+import { confirmConsequentialChannelChange } from '~/utils/confirmConsequentialChannelChange'
 
 interface Channel {
   version: Database['public']['Tables']['app_versions']['Row']
@@ -61,6 +61,7 @@ type EditableChannelKey = 'allow_dev'
   | 'auto_pause_min_failures'
   | 'auto_pause_action'
   | 'auto_pause_cooldown_minutes'
+  | 'paused_at'
   | 'version'
 
 // Bundle link dialog state
@@ -68,6 +69,19 @@ const bundleLinkVersions = ref<Database['public']['Tables']['app_versions']['Row
 const bundleLinkSearchVal = ref('')
 const bundleLinkSearchMode = ref(false)
 const bundleLinkMode = ref<'stable' | 'rollout'>('stable')
+
+// Promote-to-channel dialog state
+interface PromoteTargetChannel {
+  id: number
+  name: string
+  versionName: string | null
+  rolloutActive: boolean
+  isDefault: boolean
+}
+const promoteDialogId = 'promote-channel-bundle'
+const promoteTargets = ref<PromoteTargetChannel[]>([])
+const promoteTargetId = ref<number | null>(null)
+const appHasDefaultChannel = ref(false)
 
 const main = useMainStore()
 const route = useRoute('/app/[app].channel.[channel]')
@@ -130,6 +144,9 @@ const rolloutProgressStyle = computed(() => {
   const percentage = Math.max(0, Math.min(100, rolloutPercentage.value))
   return `width: ${percentage}%`
 })
+// Paused: /updates sends nothing on this channel, devices keep their bundle.
+const channelPaused = computed(() => !!channel.value?.paused_at)
+const channelOnBuiltin = computed(() => channel.value?.version?.name === 'builtin')
 const showRolloutSettings = computed(() => !!channel.value?.rollout_enabled)
 const showRolloutEnableRow = computed(() => !!channel.value && !channel.value.rollout_enabled)
 
@@ -282,6 +299,7 @@ async function getChannel(force = false) {
           rollout_paused_at,
           rollout_pause_reason,
           rollout_cache_ttl_seconds,
+          paused_at,
           auto_pause_enabled,
           auto_pause_window_minutes,
           auto_pause_failure_rate_bps,
@@ -455,13 +473,14 @@ async function isPushUpdateReady(appId: string) {
   }
 }
 
-async function askUpdateNotificationAfterBundleChange() {
+async function askUpdateNotificationAfterBundleChange(targetChannelName?: string) {
   if (!channel.value)
     return
 
   const routePath = route.path
   const appId = packageId.value
-  const channelName = channel.value.name
+  const pageChannelName = channel.value.name
+  const channelName = targetChannelName ?? pageChannelName
   if (!appId || !channelName)
     return
   if (!(await isPushUpdateReady(appId)))
@@ -470,7 +489,7 @@ async function askUpdateNotificationAfterBundleChange() {
     route.path !== routePath
     || !route.path.includes('/channel/')
     || packageId.value !== appId
-    || channel.value?.name !== channelName
+    || channel.value?.name !== pageChannelName
   ) {
     return
   }
@@ -526,17 +545,23 @@ const showSearchAndActions = computed(() => {
   return !bundleLinkSearchMode.value
 })
 
-async function handleVersionLink(appVersion: Database['public']['Tables']['app_versions']['Row']) {
-  if (!channel.value)
-    return
+/**
+ * Check a bundle's native packages against a channel and ask the user to accept a mismatch.
+ * Returns false when the user cancels.
+ */
+async function confirmBundleCompatibleWithChannel(
+  appVersion: Pick<Database['public']['Tables']['app_versions']['Row'], 'id' | 'app_id' | 'native_packages'>,
+  channelName: string,
+  compareVersionId?: number,
+) {
   const {
     finalCompatibility,
     localDependencies,
-  } = await checkCompatibilityNativePackages(appVersion.app_id, channel.value.name, (appVersion.native_packages as any) ?? [])
+  } = await checkCompatibilityNativePackages(appVersion.app_id, channelName, (appVersion.native_packages as any) ?? [])
 
   // Check if any package is incompatible
   if (localDependencies.length > 0 && finalCompatibility.some(x => !isCompatible(x))) {
-    toast.error(t('bundle-not-compatible-with-channel', { channel: channel.value.name }))
+    toast.error(t('bundle-not-compatible-with-channel', { channel: channelName }))
 
     dialogStore.openDialog({
       title: t('compatibility-accept-title'),
@@ -552,8 +577,7 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
           handler: () => {
             // Pre-select the channel's current bundle as the comparison baseline so the
             // Dependencies page opens already diffed against what is live on the channel.
-            const channelBundleId = channel.value?.version?.id
-            const compareQuery = channelBundleId ? `?compare=${channelBundleId}` : ''
+            const compareQuery = compareVersionId ? `?compare=${compareVersionId}` : ''
             router.push(`/app/${route.params.app}/bundle/${appVersion.id}/dependencies${compareQuery}`)
           },
         },
@@ -564,14 +588,22 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
       ],
     })
     if (await dialogStore.onDialogDismiss())
-      return
+      return false
   }
   else if (localDependencies.length === 0 || finalCompatibility.length === 0) {
     toast.info(t('ignore-compatibility'))
   }
   else {
-    toast.info(t('bundle-compatible-with-channel', { channel: channel.value.name }))
+    toast.info(t('bundle-compatible-with-channel', { channel: channelName }))
   }
+  return true
+}
+
+async function handleVersionLink(appVersion: Database['public']['Tables']['app_versions']['Row']) {
+  if (!channel.value)
+    return
+  if (!(await confirmBundleCompatibleWithChannel(appVersion, channel.value.name, channel.value.version?.id)))
+    return
   if (bundleLinkMode.value === 'rollout') {
     const applyRolloutTargetLink = async () => {
       const saved = await saveChannelChanges({
@@ -601,6 +633,164 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
     toast.success(t('linked-bundle'))
     await askUpdateNotificationAfterBundleChange()
   }
+}
+
+// Linking a bundle from the console is a direct channels UPDATE: RLS needs
+// channel.update_settings and the version trigger needs channel.promote_bundle.
+const promoteTargetPermissions = ['channel.promote_bundle', 'channel.update_settings'] as const
+
+/**
+ * Load the other channels of this app that the user can link a bundle to.
+ * The "Promote to…" action stays hidden when this list is empty.
+ */
+async function loadPromoteTargets() {
+  const source = channel.value
+  // Promotion is offered from non-default channels only (e.g. preprod -> production).
+  if (!source?.app_id || !source.id || source.public) {
+    promoteTargets.value = []
+    appHasDefaultChannel.value = false
+    return
+  }
+
+  const { data, error } = await supabase
+    .from('channels')
+    .select('id, name, public, rollout_version, rollout_enabled, version:app_versions!channels_version_fkey(name)')
+    .eq('app_id', source.app_id)
+    .neq('id', source.id)
+    .order('name', { ascending: true })
+  if (error) {
+    console.error('cannot load channels to promote to', error)
+    promoteTargets.value = []
+    appHasDefaultChannel.value = false
+    return
+  }
+
+  const eligible = await Promise.all((data ?? []).map(async row => (
+    await checkPermissions([...promoteTargetPermissions], { appId: source.app_id, channelId: row.id }) ? row : null
+  )))
+  // Ignore stale results if the user navigated to another channel meanwhile.
+  if (channel.value?.id !== source.id)
+    return
+  appHasDefaultChannel.value = (data ?? []).some(row => row.public)
+  promoteTargets.value = eligible
+    .filter(row => row !== null)
+    .map(row => ({
+      id: row.id,
+      name: row.name,
+      versionName: (row.version as { name: string } | null)?.name ?? null,
+      rolloutActive: !!row.rollout_enabled && row.rollout_version != null,
+      isDefault: !!row.public,
+    }))
+    // Default channels first: they are the usual promotion target.
+    .sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
+}
+
+watch(() => [channel.value?.id, channel.value?.public], () => {
+  void loadPromoteTargets()
+}, { immediate: true })
+
+const showPromoteToChannel = computed(() =>
+  !!channel.value
+  && !channel.value.public
+  && !isInternalVersionName(channel.value.version?.name ?? '')
+  && appHasDefaultChannel.value
+  && promoteTargets.value.length > 0,
+)
+
+async function openPromoteToChannel() {
+  if (!channel.value?.version)
+    return
+  if (isInternalVersionName(channel.value.version.name)) {
+    toast.error(t('promote-channel-no-bundle'))
+    return
+  }
+
+  await loadPromoteTargets()
+  if (!promoteTargets.value.length) {
+    toast.error(t('promote-channel-no-target'))
+    return
+  }
+  promoteTargetId.value = promoteTargets.value.find(item => item.isDefault)?.id ?? null
+
+  dialogStore.openDialog({
+    id: promoteDialogId,
+    title: t('promote-to-channel'),
+    description: t('promote-to-channel-description', { bundle: channel.value.version.name, channel: channel.value.name }),
+    size: 'lg',
+    buttons: [
+      {
+        text: t('button-cancel'),
+        role: 'cancel',
+      },
+      {
+        text: t('promote'),
+        role: 'primary',
+        handler: () => {
+          if (promoteTargetId.value != null)
+            return true
+          toast.error(t('promote-channel-select-target'))
+          return false
+        },
+      },
+    ],
+  })
+  if (await dialogStore.onDialogDismiss())
+    return
+
+  const target = promoteTargets.value.find(item => item.id === promoteTargetId.value)
+  if (target)
+    await promoteBundleToChannel(target)
+}
+
+async function promoteBundleToChannel(target: PromoteTargetChannel) {
+  const source = channel.value
+  if (!source?.version)
+    return
+  if (!(await checkPermissions([...promoteTargetPermissions], { appId: source.app_id, channelId: target.id }))) {
+    toast.error(t('no-permission'))
+    return
+  }
+
+  const { data: appVersion, error: versionError } = await supabase
+    .from('app_versions')
+    .select('id, app_id, name, native_packages')
+    .eq('id', source.version.id)
+    .single()
+  if (versionError || !appVersion) {
+    console.error('cannot load bundle to promote', versionError)
+    toast.error(t('error-fetching-versions'))
+    return
+  }
+
+  const { data: targetRow, error: targetError } = await supabase
+    .from('channels')
+    .select('version')
+    .eq('id', target.id)
+    .single()
+  if (targetError) {
+    console.error('cannot load target channel', targetError)
+    toast.error(t('error-fetching-channels'))
+    return
+  }
+  const targetVersionId = targetRow?.version ?? undefined
+  if (!(await confirmBundleCompatibleWithChannel(appVersion, target.name, targetVersionId)))
+    return
+
+  const { data: updated, error } = await supabase
+    .from('channels')
+    .update({ version: appVersion.id })
+    .eq('id', target.id)
+    .select('id')
+  if (error || !updated?.length) {
+    console.error('cannot promote bundle', error)
+    toast.error(t(error ? (channelUpdatePackageErrorKey(error) ?? 'error-update-channel') : 'no-permission'))
+    return
+  }
+
+  toast.info(t('cloud-replication-delay'))
+  toast.success(t('promote-to-channel-success', { bundle: appVersion.name, channel: target.name }))
+  void loadPromoteTargets()
+  await askUpdateNotificationAfterBundleChange(target.name)
 }
 
 async function handleUnlink() {
@@ -635,25 +825,68 @@ async function handleRevert() {
     toast.error(t('no-permission'))
     return
   }
-  dialogStore.openDialog({
-    title: t('revert-to-builtin'),
-    description: t('revert-to-builtin-confirm'),
-    buttons: [
-      {
-        text: t('cancel'),
-        role: 'cancel',
+  // Full revert: the stable bundle goes back to built-in and any progressive
+  // rollout stops too, otherwise rollout devices would keep getting updates.
+  const stopsRollout = !!channel.value?.rollout_version || !!channel.value?.rollout_enabled
+  const rolloutTarget = channel.value?.rollout_version_info?.name
+  const description = stopsRollout && rolloutTarget
+    ? `${t('revert-to-builtin-confirm')} ${t('revert-to-builtin-confirm-rollout', { target: rolloutTarget })}`
+    : t('revert-to-builtin-confirm')
+  await confirmConsequentialChannelChange(
+    dialogStore,
+    { cancel: t('button-cancel'), confirm: t('channel-revert-button') },
+    {
+      id: 'confirm-revert-to-builtin',
+      title: t('channel-revert-confirm-title'),
+      description,
+      confirmRole: 'danger',
+      onConfirm: async () => {
+        const changes: ChannelUpdate = { version: null }
+        if (stopsRollout) {
+          Object.assign(changes, {
+            rollout_version: null,
+            rollout_enabled: false,
+            rollout_percentage_bps: 0,
+            rollout_paused_at: null,
+            rollout_pause_reason: null,
+          })
+        }
+        if (await saveChannelChanges(changes)) {
+          toast.success(t('channel-reverted-to-builtin'))
+          await askUpdateNotificationAfterBundleChange()
+        }
       },
-      {
-        text: t('confirm'),
-        role: 'primary',
-        handler: async () => {
-          if (await saveChannelChange('version', null))
-            await askUpdateNotificationAfterBundleChange()
-        },
+    },
+  )
+}
+
+async function toggleChannelPause() {
+  if (!canUpdateChannelSettings.value) {
+    toast.error(t('no-permission'))
+    return
+  }
+  if (!channel.value)
+    return
+  const resuming = channelPaused.value
+  await confirmConsequentialChannelChange(
+    dialogStore,
+    { cancel: t('button-cancel'), confirm: resuming ? t('channel-resume-updates') : t('channel-pause-updates') },
+    {
+      id: resuming ? 'confirm-resume-channel' : 'confirm-pause-channel',
+      title: resuming ? t('channel-resume-confirm-title') : t('channel-pause-confirm-title'),
+      description: resuming
+        ? t('channel-resume-confirm-description', { bundle: rolloutIsActive.value ? `${stableBundleName.value} / ${rolloutTargetName.value}` : stableBundleName.value })
+        : t('channel-pause-confirm-description'),
+      confirmRole: resuming ? 'primary' : 'danger',
+      onConfirm: async () => {
+        if (!await saveChannelChange('paused_at', resuming ? null : new Date().toISOString()))
+          return
+        toast.success(resuming ? t('channel-updates-resumed') : t('channel-updates-paused'))
+        if (resuming)
+          await askUpdateNotificationAfterBundleChange()
       },
-    ],
-  })
-  await dialogStore.onDialogDismiss()
+    },
+  )
 }
 
 async function openSelectVersion(startInSearch = false) {
@@ -698,9 +931,9 @@ async function openSelectVersion(startInSearch = false) {
   await dialogStore.onDialogDismiss()
 }
 
-async function openSelectStableVersion() {
+async function openSelectStableVersion(startInSearch = false) {
   bundleLinkMode.value = 'stable'
-  await openSelectVersion()
+  await openSelectVersion(startInSearch)
 }
 
 async function openSelectRolloutVersion() {
@@ -1218,7 +1451,13 @@ async function copyCurlCommand() {
       <div class="w-full h-full px-0 pt-0 mx-auto mb-8 sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
         <div class="flex flex-col bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10">
           <div class="px-4 py-4 border-b sm:px-6 border-slate-200 dark:border-slate-500" data-test="channel-summary">
-            <p v-if="!rolloutIsActive" class="text-sm text-slate-700 dark:text-slate-200">
+            <p v-if="channelPaused" class="text-sm font-medium text-amber-800 dark:text-amber-200" data-test="channel-summary-paused">
+              {{ t('channel-summary-paused') }}
+            </p>
+            <p v-else-if="channelOnBuiltin && !rolloutIsActive" class="text-sm text-slate-700 dark:text-slate-200">
+              {{ t('channel-summary-builtin') }}
+            </p>
+            <p v-else-if="!rolloutIsActive" class="text-sm text-slate-700 dark:text-slate-200">
               {{ t('channel-summary-serves', { bundle: channel.version.name }) }}
             </p>
             <div class="flex flex-wrap gap-2 text-xs font-medium" :class="{ 'mt-2': !rolloutIsActive }">
@@ -1244,7 +1483,20 @@ async function copyCurlCommand() {
             <InfoRow :label="t('name')">
               {{ channel.name }}
             </InfoRow>
-            <div v-if="rolloutIsActive" class="px-4 py-4 sm:px-6">
+            <div v-if="channelPaused" class="px-4 py-4 sm:px-6" data-test="channel-paused-banner">
+              <div class="flex gap-3 rounded-md border px-4 py-3 border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800/70 dark:bg-amber-950/30 dark:text-amber-100">
+                <IconWarning class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                <div class="min-w-0 space-y-1">
+                  <p class="text-sm font-semibold">
+                    {{ t('channel-paused-banner-title') }}
+                  </p>
+                  <p class="text-xs opacity-90">
+                    {{ t('channel-paused-banner-hint') }}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div v-else-if="rolloutIsActive" class="px-4 py-4 sm:px-6">
               <div class="flex gap-3 rounded-md border px-4 py-3" :class="rolloutDeliveryBannerClass">
                 <IconWarning class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                 <div class="min-w-0 space-y-1">
@@ -1257,22 +1509,65 @@ async function copyCurlCommand() {
                 </div>
               </div>
             </div>
-            <!-- Bundle assigned to this channel -->
-            <InfoRow :label="rolloutIsActive ? t('stable-fallback') : t('bundle-assigned-to-this-channel')" class="sm:items-center" label-class="text-base! leading-5 font-bold! lg:whitespace-nowrap" :is-link="channel && !isInternalVersionName((channel.version.name))">
-              <div class="flex items-center gap-3">
-                <span class="text-base leading-5 cursor-pointer" @click="openBundle()">{{ channel.version.name }}</span>
+            <!-- Bundle assigned to this channel + channel-wide actions -->
+            <div class="flex flex-col gap-3 px-4 py-4 sm:px-6 sm:py-5 lg:flex-row lg:items-center lg:justify-between" data-test="channel-bundle-row">
+              <dt class="text-base font-bold leading-5 text-gray-700 dark:text-gray-200 lg:whitespace-nowrap">
+                {{ rolloutIsActive ? t('stable-fallback') : t('bundle-assigned-to-this-channel') }}
+              </dt>
+              <dd class="flex flex-wrap items-center gap-2 lg:justify-end">
                 <button
-                  v-if="channel"
+                  v-if="!isInternalVersionName(channel.version.name)"
                   type="button"
-                  class="relative p-0 d-btn d-btn-outline size-6 min-h-6 before:absolute before:-inset-2.5 before:content-['']"
-                  :aria-label="t('select-stable-bundle')"
-                  :disabled="!canPromoteBundle"
-                  @click="openSelectStableVersion()"
+                  class="mr-1 text-base font-bold leading-5 text-blue-600 underline underline-offset-4 dark:text-blue-500"
+                  @click="openBundle()"
                 >
-                  <Settings class="w-4 h-4 text-gray-500 dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-400" />
+                  {{ channel.version.name }}
                 </button>
-              </div>
-            </InfoRow>
+                <span v-else class="mr-1 text-base leading-5 text-slate-700 dark:text-slate-200">{{ t('builtin-bundle') }}</span>
+                <span
+                  v-if="channelPaused"
+                  class="inline-flex items-center px-2 py-1 mr-1 text-xs font-semibold rounded-md bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
+                >
+                  {{ t('channel-paused-badge') }}
+                </span>
+                <button
+                  v-if="showPromoteToChannel"
+                  type="button"
+                  class="d-btn d-btn-primary d-btn-sm"
+                  data-test="promote-to-channel"
+                  @click="openPromoteToChannel()"
+                >
+                  {{ t('promote-to-channel-button') }}
+                </button>
+                <button
+                  type="button"
+                  class="d-btn d-btn-outline d-btn-sm"
+                  data-test="channel-change-bundle"
+                  :disabled="!canPromoteBundle"
+                  @click="openSelectStableVersion(channelOnBuiltin)"
+                >
+                  {{ t('change-bundle') }}
+                </button>
+                <button
+                  type="button"
+                  class="d-btn d-btn-outline d-btn-sm"
+                  data-test="channel-pause-toggle"
+                  :disabled="!canUpdateChannelSettings"
+                  @click="toggleChannelPause()"
+                >
+                  {{ channelPaused ? t('channel-resume-updates') : t('channel-pause-updates') }}
+                </button>
+                <button
+                  type="button"
+                  class="d-btn d-btn-outline d-btn-error d-btn-sm"
+                  data-test="channel-revert-builtin"
+                  :disabled="!canPromoteBundle || (channelOnBuiltin && !rolloutConfigured)"
+                  @click="handleRevert()"
+                >
+                  {{ t('channel-revert-button') }}
+                </button>
+              </dd>
+            </div>
             <InfoRow v-if="channel.disable_auto_update === 'version_number'" :label="t('min-update-version')">
               {{ channel.version.min_update_version ?? t('undefined-fail') }}
             </InfoRow>
@@ -1883,6 +2178,48 @@ async function copyCurlCommand() {
         {{ t('back-to-channels') }}
       </button>
     </div>
+    <!-- Teleport Content for Promote To Channel Dialog -->
+    <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.id === promoteDialogId" defer to="#dialog-v2-content">
+      <fieldset class="w-full space-y-2" data-test="promote-channel-targets">
+        <legend class="mb-2 text-sm text-gray-600 dark:text-gray-400">
+          {{ t('promote-channel-pick-target') }}
+        </legend>
+        <label
+          v-for="target in promoteTargets"
+          :key="target.id"
+          class="flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors"
+          :class="promoteTargetId === target.id
+            ? 'border-primary bg-primary/5 dark:border-primary-500 dark:bg-primary/10'
+            : 'border-gray-300 hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-700'"
+        >
+          <input
+            v-model="promoteTargetId"
+            type="radio"
+            name="promote-target"
+            class="d-radio d-radio-sm d-radio-primary"
+            :value="target.id"
+          >
+          <span class="flex-1 min-w-0">
+            <span class="block font-medium truncate">{{ target.name }}</span>
+            <span class="block text-sm text-gray-600 truncate dark:text-gray-400">
+              {{ t('promote-channel-current-bundle', { bundle: target.versionName ?? t('not-configured') }) }}
+            </span>
+            <span v-if="target.rolloutActive" class="block text-xs text-amber-700 dark:text-amber-300">
+              {{ t('promote-channel-rollout-cleared') }}
+            </span>
+          </span>
+          <span
+            v-if="target.isDefault"
+            class="px-2 py-0.5 text-xs font-medium rounded-md bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200"
+          >
+            {{ t('channel-default-badge') }}
+          </span>
+          <span v-if="target.versionName === channel?.version?.name" class="text-xs text-gray-500 dark:text-gray-400">
+            {{ t('promote-channel-already-serving') }}
+          </span>
+        </label>
+      </fieldset>
+    </Teleport>
     <!-- Teleport Content for Bundle Link Dialog -->
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('bundle-management')" defer to="#dialog-v2-content">
       <div class="w-full space-y-4">
@@ -1922,89 +2259,93 @@ async function copyCurlCommand() {
             <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t('available-versions') }}
             </h4>
-            <div
+            <button
               v-for="version in bundleLinkVersions"
               :key="version.id"
-              class="p-3 border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+              type="button"
+              class="block w-full p-3 text-left border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
               @click="handleVersionLink(version as any)"
             >
-              <div class="flex items-center justify-between">
-                <div>
-                  <div class="font-medium">
+              <span class="flex items-center justify-between">
+                <span class="block">
+                  <span class="block font-medium">
                     {{ version.name }}
-                  </div>
-                  <div class="text-sm text-gray-600 dark:text-gray-400">
+                  </span>
+                  <span class="block text-sm text-gray-600 dark:text-gray-400">
                     {{ t('created') }}: {{ version.created_at ? formatLocalDate(version.created_at) : t('unknown') }}
-                  </div>
-                </div>
-                <div class="text-blue-600 dark:text-blue-400">
+                  </span>
+                </span>
+                <span class="block text-blue-600 dark:text-blue-400">
                   →
-                </div>
-              </div>
-            </div>
+                </span>
+              </span>
+            </button>
           </div>
 
           <!-- Action Cards (when not in search mode) -->
           <div v-if="showSearchAndActions" class="space-y-3">
             <!-- Link New Bundle -->
-            <div
-              class="p-3 border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+            <button
+              type="button"
+              class="block w-full p-3 text-left border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
               @click="bundleLinkSearchMode = true"
             >
-              <div class="flex items-center justify-between">
-                <div>
-                  <div class="font-medium">
+              <span class="flex items-center justify-between">
+                <span class="block">
+                  <span class="block font-medium">
                     {{ t('link-new-bundle') }}
-                  </div>
-                  <div class="text-sm text-gray-600 dark:text-gray-400">
+                  </span>
+                  <span class="block text-sm text-gray-600 dark:text-gray-400">
                     {{ t('search-and-select-a-different-bundle') }}
-                  </div>
-                </div>
-                <div class="text-blue-600 dark:text-blue-400">
+                  </span>
+                </span>
+                <span class="block text-blue-600 dark:text-blue-400">
                   📦
-                </div>
-              </div>
-            </div>
+                </span>
+              </span>
+            </button>
 
             <!-- Unlink Bundle -->
-            <div
-              class="p-3 border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+            <button
+              type="button"
+              class="block w-full p-3 text-left border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
               @click="handleUnlink"
             >
-              <div class="flex items-center justify-between">
-                <div>
-                  <div class="font-medium">
+              <span class="flex items-center justify-between">
+                <span class="block">
+                  <span class="block font-medium">
                     {{ t('unlink-bundle') }}
-                  </div>
-                  <div class="text-sm text-gray-600 dark:text-gray-400">
+                  </span>
+                  <span class="block text-sm text-gray-600 dark:text-gray-400">
                     {{ t('remove-bundle-from-this-channel') }}
-                  </div>
-                </div>
-                <div class="text-orange-600 dark:text-orange-400">
+                  </span>
+                </span>
+                <span class="block text-orange-600 dark:text-orange-400">
                   🔓
-                </div>
-              </div>
-            </div>
+                </span>
+              </span>
+            </button>
 
             <!-- Revert to Built-in -->
-            <div
-              class="p-3 border border-red-300 rounded-lg cursor-pointer dark:border-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
+            <button
+              type="button"
+              class="block w-full p-3 text-left border border-red-300 rounded-lg cursor-pointer dark:border-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
               @click="handleRevert"
             >
-              <div class="flex items-center justify-between">
-                <div>
-                  <div class="font-medium text-red-600 dark:text-red-400">
+              <span class="flex items-center justify-between">
+                <span class="block">
+                  <span class="block font-medium text-red-600 dark:text-red-400">
                     {{ t('revert-to-builtin') }}
-                  </div>
-                  <div class="text-sm text-red-500 dark:text-red-300">
+                  </span>
+                  <span class="block text-sm text-red-500 dark:text-red-300">
                     {{ t('revert-channel-to-built-in-version') }}
-                  </div>
-                </div>
-                <div class="text-red-600 dark:text-red-400">
+                  </span>
+                </span>
+                <span class="block text-red-600 dark:text-red-400">
                   ⚠️
-                </div>
-              </div>
-            </div>
+                </span>
+              </span>
+            </button>
           </div>
 
           <!-- Empty state for search -->

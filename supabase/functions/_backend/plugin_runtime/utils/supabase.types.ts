@@ -837,6 +837,7 @@ export type Database = {
           ios: boolean
           name: string
           owner_org: string
+          paused_at: string | null
           public: boolean
           rbac_id: string
           rollout_cache_ttl_seconds: number
@@ -877,6 +878,7 @@ export type Database = {
           ios?: boolean
           name: string
           owner_org: string
+          paused_at?: string | null
           public?: boolean
           rbac_id?: string
           rollout_cache_ttl_seconds?: number
@@ -917,6 +919,7 @@ export type Database = {
           ios?: boolean
           name?: string
           owner_org?: string
+          paused_at?: string | null
           public?: boolean
           rbac_id?: string
           rollout_cache_ttl_seconds?: number
@@ -5363,6 +5366,7 @@ export type Database = {
         | "app_launch_ready"
         | "app_launch_timeout"
         | "app_nav"
+        | "channelPaused"
         | "webview_dom_content_loaded"
         | "webview_page_loaded"
       stripe_status:
@@ -5644,6 +5648,7 @@ export const Constants = {
         "app_launch_ready",
         "app_launch_timeout",
         "app_nav",
+        "channelPaused",
         "webview_dom_content_loaded",
         "webview_page_loaded",
       ],

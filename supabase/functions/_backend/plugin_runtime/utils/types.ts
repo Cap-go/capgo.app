@@ -129,7 +129,14 @@ export interface ChannelDeviceOverrideIds {
   into: string[]
   /** Devices forced to another channel of the same app. */
   elsewhere: string[]
+  /**
+   * Platforms where the channel is the public default. Devices on them that
+   * report no default_channel are served this channel, so they count here.
+   */
+  defaultForPlatforms?: ChannelDevicePlatform[]
 }
+
+export type ChannelDevicePlatform = 'ios' | 'android' | 'electron'
 
 export interface NativeVersionUsage {
   date: string
