@@ -684,7 +684,12 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
             </div>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               <template v-if="enterpriseQuote.monthlyCredits > 0">
-                {{ t('enterprise-scale-breakdown', { base: formatUsd(getPrice(p, segmentVal)), credits: formatUsd(enterpriseQuote.monthlyCredits) }) }}
+                <template v-if="isYearlyPlan(p, segmentVal) && hasYearlyDiscount(p)">
+                  {{ t('enterprise-scale-breakdown-yearly', { base: formatUsd(p.price_y), credits: formatUsd(enterpriseQuote.monthlyCredits) }) }}
+                </template>
+                <template v-else>
+                  {{ t('enterprise-scale-breakdown', { base: formatUsd(getPrice(p, segmentVal)), credits: formatUsd(enterpriseQuote.monthlyCredits) }) }}
+                </template>
               </template>
               <template v-else-if="isYearlyPlan(p, segmentVal)">
                 {{ hasYearlyDiscount(p) ? t('billed-annually-at') : t('billed-monthly-at') }} ${{ hasYearlyDiscount(p) ? p.price_y : p.price_m }}
