@@ -101,9 +101,7 @@ def main() -> None:
     graph_path = OUT_DIR / "graph.json"
     graph_data = json.loads(graph_path.read_text(encoding="utf-8"))
     graph_data.pop("built_at_commit", None)
-    # Compact generated JSON avoids expensive line matching on the large graph
-    # while preserving the exact data consumed by Graphify query tools.
-    graph_path.write_text(json.dumps(graph_data, separators=(",", ":"), ensure_ascii=False) + "\n", encoding="utf-8")
+    graph_path.write_text(json.dumps(graph_data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     print(
         f"Graphify code graph generated: {graph.number_of_nodes()} nodes, "
