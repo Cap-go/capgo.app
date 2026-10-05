@@ -11,7 +11,7 @@ describe('plugin package for OpenAI', () => {
     expect(validateOpenAiPlugin()).toEqual([])
   })
 
-  it('rejects assets outside the package, non-PNG icons and invalid URLs', () => {
+  it('rejects blank or multiline names, assets outside the package, non-PNG icons and invalid URLs', () => {
     const dir = mkdtempSync(join(tmpdir(), 'capgo-openai-plugin-'))
     try {
       cpSync(PLUGIN_DIR, dir, { recursive: true })
@@ -20,13 +20,19 @@ describe('plugin package for OpenAI', () => {
       const ui = manifest.extensions['com.openai'].interface
       ui.logo = './assets/../README.md'
       ui.composerIcon = './assets/broken.png'
+      ui.displayName = '  '
+      ui.shortDescription = 'Live updates\nfor apps'
       ui.websiteURL = 'https://?'
+      ui.supportURL = 'https://user:secret@capgo.app/support'
       ui.defaultPrompt = 'List my Capgo apps'
       ui.screenshots = './assets/logo.png'
       writeFileSync(join(dir, 'plugin.json'), JSON.stringify(manifest))
 
       expect(validateOpenAiPlugin(dir)).toEqual([
+        'displayName must be a single non-blank line',
+        'shortDescription must be a single non-blank line',
         'websiteURL must be an https URL',
+        'supportURL must be an https URL',
         'logo must point to a non-hidden file under ./assets/ so it is packaged',
         'composerIcon must be a valid PNG file',
         'screenshots must be an array of paths',

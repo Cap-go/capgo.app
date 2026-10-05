@@ -37,7 +37,8 @@ function isHttpsUrl(value: unknown): boolean {
     return false
   try {
     const url = new URL(value)
-    return url.protocol === 'https:' && url.hostname.length > 0
+    // OpenAI rejects listing URLs with embedded credentials.
+    return url.protocol === 'https:' && url.hostname.length > 0 && !url.username && !url.password
   }
   catch {
     return false
@@ -125,8 +126,11 @@ export function validateOpenAiPlugin(dir = PLUGIN_DIR): string[] {
     errors.push('extensions["com.openai"].interface is required')
     return errors
   }
-  checkLength(errors, 'displayName', ui.displayName, 30)
-  checkLength(errors, 'shortDescription', ui.shortDescription, 30)
+  for (const field of ['displayName', 'shortDescription']) {
+    checkLength(errors, field, ui[field], 30)
+    if (typeof ui[field] === 'string' && (!ui[field].trim() || /[\r\n]/.test(ui[field])))
+      errors.push(`${field} must be a single non-blank line`)
+  }
   checkLength(errors, 'longDescription', ui.longDescription, 4000)
   checkLength(errors, 'developerName', ui.developerName, 80)
   checkLength(errors, 'category', ui.category, 80)

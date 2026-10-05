@@ -12,7 +12,7 @@ Use this workflow when the user wants to ship, roll out, promote or roll back a 
    - Full deploy: `capgo_update_channel` with `version` set to the bundle name.
    - Progressive rollout: `capgo_update_channel_rollout` with `rolloutVersion`, `rolloutPercentage` and `rolloutEnabled: true`. Suggest `autoPauseEnabled: true` so the rollout pauses on failures.
      Before calling either tool, state the app, channel, bundle and percentage, and wait for the user to confirm. These calls change what real devices download.
-5. To change a running rollout, call `capgo_update_channel_rollout` with only the fields that change: `rolloutPercentage`, `rolloutPaused`, `promoteToStable: true` or `rollback: true`. Describe the change and wait for the user to confirm first, like in step 4.
+5. To change a running rollout, call `capgo_update_channel_rollout` with `appId` and `channel`, plus only the rollout fields that change: `rolloutPercentage`, `rolloutPaused`, `promoteToStable: true` or `rollback: true`. Describe the change and wait for the user to confirm first, like in step 4.
 6. After a change, call `capgo_get_channel` again and report the resulting state.
 
 Never delete bundles or channels as part of a deploy. If a call returns an error, show the error message and do not retry with different settings unless the user asks.
