@@ -46,7 +46,8 @@ describe('emailPreferencesIdentity', () => {
   })
 
   it('uses the first value when a query key is repeated', () => {
-    expect(parseEmailPreferencesQuery({ email: [VISITOR_UUID, VISITOR_UUID] })).toEqual({
+    const secondUuid = '22222222-2222-4222-8222-222222222222'
+    expect(parseEmailPreferencesQuery({ email: [VISITOR_UUID, secondUuid] })).toEqual({
       email: '',
       visitorUuid: VISITOR_UUID,
     })
