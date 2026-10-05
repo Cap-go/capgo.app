@@ -95,6 +95,7 @@ function createOrgRow(overrides: Partial<OrgRow> & Pick<OrgRow, 'id' | 'name' | 
     auto_top_up_enabled: false,
     auto_top_up_last_attempt_at: null,
     auto_top_up_threshold: 10,
+    auto_top_up_monthly_limit: 0,
     has_usage_credits: false,
     id: 'org-123',
     last_stats_updated_at: null,

@@ -19,15 +19,17 @@ import { onPremiseAppResponse } from './rateLimitInfo.ts'
 import { cloudlog } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
 import { sendNotifToOrgMembersCached } from './org_email_notifications.ts'
-import { closeClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDrizzleClient, getPgClient, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
+import { closeClient, createLazyPgClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDatabaseURL, getDrizzleClient, getLazyPgQueryCount, getPgClient, refreshReplicationLag, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
 import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
 import { makeDevice } from './plugin_parser.ts'
 import { createStatsBandwidth, createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from './plugin_stats.ts'
+import { getAppOwnerWithEdgeCache } from './pluginEdgeCacheReads.ts'
 import { getClientIP } from './rate_limit.ts'
 import { s3 } from './s3.ts'
 import { shouldQueuePluginNotifications } from './supabase_write_guard.ts'
 import { isUpdateEnumerationLimited, recordUpdateEnumerationMiss, updateEnumerationLimitedResponse } from './updateOracleGuard.ts'
 import { canServeUpToDateFromCache, getUpdateReadCache, setUpdateReadCache } from './updateReadCache.ts'
+import { getCachedDefaultChannel, shouldUseUpdatesEdgeCache } from './updatesEdgeCache.ts'
 import { backgroundTask, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, fixSemver, isDeprecatedPluginVersion, isInternalVersionName, isVersionDeleted } from './utils.ts'
 
 const PLAN_LIMIT: Array<'mau' | 'bandwidth' | 'storage'> = ['mau', 'bandwidth']
@@ -126,6 +128,7 @@ export type UpdateResponseKind = 'up_to_date' | 'blocked' | 'failed'
 const UPDATE_UP_TO_DATE_CODES = new Set([
   'no_new_version_available',
   'already_on_builtin',
+  'channel_paused',
 ])
 
 const UPDATE_BLOCKED_CODES = new Set([
@@ -303,6 +306,20 @@ export interface UpdatePathTiming {
   ownerMs?: number
   requestInfosMs?: number
   channelPrefetchHit?: boolean
+  ownerCacheHit?: boolean
+}
+
+async function getAppOwnerFromEdgeCache(
+  c: Context,
+  appId: string,
+  drizzleClient: ReturnType<typeof getDrizzleClient>,
+  pathTiming?: UpdatePathTiming,
+) {
+  // A connect failure is rethrown (never classified as on-prem), see pluginEdgeCacheReads.ts.
+  const owner = await getAppOwnerWithEdgeCache(c, appId, drizzleClient, PLAN_LIMIT)
+  if (pathTiming)
+    pathTiming.ownerCacheHit = owner.hit
+  return owner.value
 }
 
 export async function updateWithPG(
@@ -365,10 +382,31 @@ export async function updateWithPG(
   let appOwner: Awaited<ReturnType<typeof getAppOwnerPostgres>>
   let prefetchedChannel: Awaited<ReturnType<typeof requestInfosChannelPostgres>> | null = null
   const startOwner = performance.now()
-  const ownerPromise = getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT)
+  const edgeCache = shouldUseUpdatesEdgeCache(c, app_id, device_id)
+  const ownerPromise = edgeCache
+    ? getAppOwnerFromEdgeCache(c, app_id, drizzleClient, pathTiming)
+    : getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT)
   const channelPrefetchPromise = cachedStatus === 'cloud' && coerce
     ? (async () => {
         try {
+          if (edgeCache) {
+            // Lazy client: an edge cache hit answers without any connection.
+            const prefetchClient = createLazyPgClient(c, true)
+            try {
+              const drizzlePrefetch = getDrizzleClient(prefetchClient.client, { logger: false })
+              const cached = await getCachedDefaultChannel(c, {
+                appId: app_id,
+                platform,
+                defaultChannel: defaultChannel ?? '',
+                mode: 'standard',
+                includeMetadata: false,
+              }, () => requestInfosChannelPostgres(c, platform, app_id, defaultChannel, drizzlePrefetch, false, false))
+              return cached.value ?? null
+            }
+            finally {
+              await prefetchClient.close()
+            }
+          }
           const prefetchClient = await getPgClient(c, true)
           try {
             const drizzlePrefetch = getDrizzleClient(prefetchClient, { logger: false })
@@ -543,6 +581,15 @@ export async function updateWithPG(
       currentVersionName: version_name,
       includeMetadata: needsMetadata,
       channelSelfOverrideChannelId: channelSelfOverride?.channel_id.id,
+      loadDefaultChannel: edgeCache
+        ? (mode, load) => getCachedDefaultChannel(c, {
+            appId: app_id,
+            platform,
+            defaultChannel: defaultChannel ?? '',
+            mode,
+            includeMetadata: needsMetadata,
+          }, load).then(cached => cached.value)
+        : undefined,
     })
     if (pathTiming)
       pathTiming.channelPrefetchHit = false
@@ -565,6 +612,13 @@ export async function updateWithPG(
 
   if (!channelData) {
     return updateError200(c, 'null_channel_data', 'channel data still null')
+  }
+
+  // Paused channel: send nothing, every device keeps the bundle it runs.
+  if (channelData.channels.paused_at) {
+    cloudlog({ requestId: c.get('requestId'), message: 'Channel is paused', id: device_id, channel: channelData.channels.name })
+    await sendStatsAndDevice(c, device, [{ action: 'channelPaused', versionName: version_name }])
+    return updateError200(c, 'channel_paused', `Channel ${channelData.channels.name} is paused, no update is sent`)
   }
 
   const version = channelOverride?.version ?? channelData.version
@@ -851,7 +905,7 @@ export async function updateWithPG(
     // Single Promise from .execute() — do NOT await the builder twice (re-runs SQL).
     const startManifestFetch = needsDeferredManifest ? performance.now() : 0
     const deferredManifestPromise = needsDeferredManifest
-      ? requestManifestEntriesPostgres(c, version.id, drizzleClient).then((rows) => {
+      ? requestManifestEntriesPostgres(c, version.id, drizzleClient, app_id).then((rows) => {
           manifestFetchMs = Math.round(performance.now() - startManifestFetch)
           return rows
         })
@@ -927,6 +981,34 @@ export async function updateWithPG(
   return c.json(res, 200)
 }
 
+/**
+ * Up-to-date answer from the per-colo read cache, without Postgres.
+ * Accepted 60s contract: overrides and rollouts added after the write are
+ * picked up when the entry expires (or is purged). The TTL is not refreshed
+ * on a hit.
+ */
+async function upToDateFromReadCache(c: Context, body: AppInfos, appStatus: Awaited<ReturnType<typeof getAppStatus>>) {
+  const cachedRead = await getUpdateReadCache(c, {
+    appId: body.app_id,
+    platform: body.platform,
+    defaultChannel: body.defaultChannel ?? '',
+  })
+  if (!cachedRead || !canServeUpToDateFromCache(body, cachedRead, hasChannelSelfStoreBinding(c)))
+    return null
+
+  const existingUpdateEnumerationLimit = await isUpdateEnumerationLimited(c)
+  if (existingUpdateEnumerationLimit.limited)
+    return updateEnumerationLimitedResponse(c, existingUpdateEnumerationLimit.resetAt)
+
+  const device = makeDevice(body, cachedRead.allowDeviceCustomId)
+  await setAppStatus(c, body.app_id, 'cloud', cachedRead.allowDeviceCustomId, appStatus.block_provider_infra_requests)
+  await backgroundTask(c, createStatsMau(c, body.device_id, body.app_id, cachedRead.ownerOrg, body.platform, body.version_build))
+  await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: cachedRead.versionName }])
+  if (shouldUseUpdatesEdgeCache(c, body.app_id, body.device_id))
+    c.header('X-Updates-Cache', 'hit')
+  return updateError200(c, 'no_new_version_available', 'No new version available')
+}
+
 export async function update(c: Context, body: AppInfos) {
   const startUpdate = performance.now()
   const appStatus = await getAppStatus(c, body.app_id)
@@ -937,25 +1019,13 @@ export async function update(c: Context, body: AppInfos) {
       return providerBlockedResponse
   }
   if (appStatus.cacheHit && appStatus.status === 'cloud') {
-    const cachedRead = await getUpdateReadCache(c, {
-      appId: body.app_id,
-      platform: body.platform,
-      defaultChannel: body.defaultChannel ?? '',
-    })
-    // Accepted 60s contract: overrides and rollouts added after the write are
-    // picked up when the entry expires. The TTL is not refreshed on a hit.
-    if (cachedRead && canServeUpToDateFromCache(body, cachedRead, hasChannelSelfStoreBinding(c))) {
-      const existingUpdateEnumerationLimit = await isUpdateEnumerationLimited(c)
-      if (existingUpdateEnumerationLimit.limited)
-        return updateEnumerationLimitedResponse(c, existingUpdateEnumerationLimit.resetAt)
-
-      const device = makeDevice(body, cachedRead.allowDeviceCustomId)
-      await setAppStatus(c, body.app_id, 'cloud', cachedRead.allowDeviceCustomId, appStatus.block_provider_infra_requests)
-      await backgroundTask(c, createStatsMau(c, body.device_id, body.app_id, cachedRead.ownerOrg, body.platform, body.version_build))
-      await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: cachedRead.versionName }])
-      return updateError200(c, 'no_new_version_available', 'No new version available')
-    }
+    const upToDateResponse = await upToDateFromReadCache(c, body, appStatus)
+    if (upToDateResponse)
+      return upToDateResponse
   }
+  if (shouldUseUpdatesEdgeCache(c, body.app_id, body.device_id))
+    return updateWithEdgeCache(c, body, appStatus, startUpdate, appStatusMs)
+
   const startPgClient = performance.now()
   const pgClient = await getPgClient(c, true)
   // Hyperdrive: includes await client.connect(). Pool: construction only (lazy connect later).
@@ -991,5 +1061,72 @@ export async function update(c: Context, body: AppInfos) {
   }
   finally {
     await closeClient(c, pgClient)
+  }
+}
+
+/**
+ * /updates with the edge cache on: the request client connects on its first
+ * query only, so answers built from cached app-level data never open a
+ * database connection. `X-Updates-Cache` reports hit (zero queries) or miss.
+ */
+async function updateWithEdgeCache(
+  c: Context,
+  body: AppInfos,
+  appStatus: Awaited<ReturnType<typeof getAppStatus>>,
+  startUpdate: number,
+  appStatusMs: number,
+) {
+  const lazyClient = createLazyPgClient(c, true)
+  const pathTiming: UpdatePathTiming = {}
+  let closeInBackground = false
+  try {
+    // Pick the replica now (no connection) so the lag lookup uses its cache
+    // key instead of "unknown"; the lazy client connects to the same source.
+    try {
+      getDatabaseURL(c, true)
+    }
+    catch {
+      // No usable replica: the first query reports it.
+    }
+    // Memory-only lag header: a cache hit must not trigger a background probe.
+    await setReplicationLagHeader(c, lazyClient.client, { probeOnMiss: false })
+    const drizzlePg = getDrizzleClient(lazyClient.client, { logger: false })
+    const response = await updateWithPG(c, body, drizzlePg, appStatus, pathTiming)
+    const dbQueries = getLazyPgQueryCount(c)
+    if (lazyClient.isConnected()) {
+      // Probe lag only on requests that already use the database, and close
+      // the client after the probe (a Pool cannot run it once ended).
+      closeInBackground = true
+      await backgroundTask(c, refreshReplicationLag(c, lazyClient.client).finally(() => lazyClient.close()))
+    }
+    try {
+      response.headers.set('X-Updates-Cache', dbQueries === 0 ? 'hit' : 'miss')
+    }
+    catch {
+      // Immutable response headers: observability only.
+    }
+    const totalMs = Math.round(performance.now() - startUpdate)
+    if (totalMs >= 100) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'plugin_path_timing',
+        path: 'updates',
+        outcome: 'total',
+        totalMs,
+        appStatusMs,
+        ownerMs: pathTiming.ownerMs ?? 0,
+        ownerCacheHit: pathTiming.ownerCacheHit ?? false,
+        requestInfosMs: pathTiming.requestInfosMs ?? 0,
+        channelPrefetchHit: pathTiming.channelPrefetchHit ?? false,
+        dbQueries,
+        databaseSource: c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? null,
+        app_id: body.app_id,
+      })
+    }
+    return response
+  }
+  finally {
+    if (!closeInBackground)
+      await lazyClient.close()
   }
 }

@@ -5,6 +5,7 @@ import {
   buildChannelPreviewLatestOptions,
   buildDeferredPreviewInstallReferrerUrl,
   hasNativeConfirmedPreview,
+  normalizeScannedPreviewValue,
   parseChannelPreviewDeepLink,
   parsePreviewDeepLink,
   previewLinkFromInstallReferrer,
@@ -214,5 +215,31 @@ describe('channel preview deep links', () => {
     expect(parsePreviewDeepLink('capgo://preview/bundle?appId=com.example.other-user-app&versionId=1.5')).toBeNull()
     expect(parsePreviewDeepLink('capgo://preview/bundle?appId=com.example.other-user-app&versionId=-1')).toBeNull()
     expect(parsePreviewDeepLink(`capgo://preview/bundle?appId=com.example.other-user-app&versionId=${Number.MAX_SAFE_INTEGER + 1}`)).toBeNull()
+  })
+})
+
+describe('scanned preview value normalization', () => {
+  const deepLink = 'capgo://preview/channel?appId=com.example.app&channel=pr-12&channelId=7'
+
+  it.concurrent.each([
+    deepLink,
+    `  ${deepLink}\n`,
+    `"${deepLink}"`,
+    `<${deepLink}>`,
+    `Open on your phone: ${deepLink}.`,
+    `[preview](${deepLink})`,
+    `​${deepLink}﻿`,
+  ])('extracts the preview link from %j', (scanned) => {
+    const value = normalizeScannedPreviewValue(scanned)
+    expect(value).toBe(deepLink)
+    expect(parsePreviewDeepLink(value)).toMatchObject({ type: 'channel', channelName: 'pr-12', channelId: 7 })
+  })
+
+  it.concurrent('keeps https preview hosts intact', () => {
+    expect(normalizeScannedPreviewValue(' https://c7-com_u2eexample.preview.capgo.app/ ')).toBe('https://c7-com_u2eexample.preview.capgo.app/')
+  })
+
+  it.concurrent('returns non-url text trimmed', () => {
+    expect(normalizeScannedPreviewValue('  hello  ')).toBe('hello')
   })
 })

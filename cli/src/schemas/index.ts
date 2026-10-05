@@ -58,8 +58,8 @@ export type {
 } from './bundle'
 
 // Channel
-export { channelAddOptionsSchema, channelCurrentBundleOptionsSchema, channelDeleteOptionsSchema, channelSchema, optionsSetChannelSchema } from './channel'
-export type { Channel, ChannelAddOptions, ChannelCurrentBundleOptions, ChannelDeleteOptions, OptionsSetChannel } from './channel'
+export { channelAddOptionsSchema, channelCurrentBundleOptionsSchema, channelDeleteOptionsSchema, channelPromoteOptionsSchema, channelSchema, optionsSetChannelSchema } from './channel'
+export type { Channel, ChannelAddOptions, ChannelCurrentBundleOptions, ChannelDeleteOptions, ChannelPromoteOptions, OptionsSetChannel } from './channel'
 
 // Common
 export { compatibilityDetailsSchema, compatibilitySchema, incompatibilityReasonSchema, localizedReleaseNotesSchema, nativePackageSchema, parsedSecurityErrorSchema } from './common'
@@ -98,6 +98,7 @@ export {
   observeSortSchema,
   observeViewSchema,
   organizationInfoSchema,
+  promoteChannelOptionsSchema,
   saveKeyOptionsSchema,
   bundleCompatibilityOptionsSchema as sdkBundleCompatibilityOptionsSchema,
   requestBuildOptionsSchema as sdkRequestBuildOptionsSchema,
@@ -132,6 +133,7 @@ export type {
   ObserveOptions,
   ObserveView,
   OrganizationInfo,
+  PromoteChannelOptions,
   SaveKeyOptions,
   BundleCompatibilityOptions as SdkBundleCompatibilityOptions,
   RequestBuildOptions as SdkRequestBuildOptions,

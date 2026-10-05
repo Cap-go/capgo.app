@@ -40,6 +40,7 @@ import { finalizeUploadedBundle } from './finalize-upload'
 import { loadUploadProjectConfig } from './upload-config'
 import { prepareBundlePartialFiles, uploadPartial } from './partial'
 import { clackUploadReporter, getUploadReporter, runWithUploadReporter } from './reporter'
+import { ManifestUploadAbandonError, resolveManifestUploadAbandonScope } from './upload-abandon-error'
 import { formatUploadChannels, getChannelsToAssignByChecksum, parseUploadChannels } from './upload-channels'
 
 type SupabaseType = Awaited<ReturnType<typeof createSupabaseClient>>
@@ -1966,18 +1967,39 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
         log.info(`[Verbose] Delta upload complete with ${finalManifest.length} files`)
     }
     catch (err) {
+      if (err instanceof ManifestUploadAbandonError) {
+        const manifestUploadAutoEnabled = shouldUploadFullZip(options) && !options.userRequestedDelta
+        const abandonScope = resolveManifestUploadAbandonScope(err, manifestUploadAutoEnabled)
+        if (abandonScope === 'manifest') {
+          log.warn(err.message)
+          finalManifest = null
+        }
+        else {
+          const fatalError = err.scope === 'all'
+            ? err
+            : new ManifestUploadAbandonError('all', err.backendMessage, err.requestId)
+          try {
+            await deletedFailedVersion(apikey, appid, bundle, options)
+          }
+          catch (cleanupError) {
+            log.error(`Cleanup of the incomplete version failed (${formatError(cleanupError)}); delete bundle ${bundle} manually before retrying.`)
+          }
+          throw fatalError
+        }
+      }
       // If user explicitly requested delta, the error was already thrown by uploadPartial
       // and we should propagate it. Read the explicit-request flag captured before
       // `options.delta` was mutated, so an auto-enabled delta degrades gracefully.
-      if (options.userRequestedDelta) {
+      else if (options.userRequestedDelta) {
         // Error already logged in uploadPartial, just re-throw
         throw err
       }
-
-      // Auto-enabled delta that failed - not critical
-      log.info(`Failed to upload delta files to capgo cloud. Error: ${formatError(err)}. This is not a critical error, the bundle has been uploaded without the delta files`)
-      if (options.verbose)
-        log.info(`[Verbose] Delta upload error details: ${formatError(err)}`)
+      else {
+        // Auto-enabled delta that failed - not critical
+        log.info(`Failed to upload delta files to capgo cloud. Error: ${formatError(err)}. This is not a critical error, the bundle has been uploaded without the delta files`)
+        if (options.verbose)
+          log.info(`[Verbose] Delta upload error details: ${formatError(err)}`)
+      }
     }
 
     if (finalManifest?.length) {
@@ -2310,6 +2332,11 @@ async function uploadBundleWithReporter(appid: string, options: OptionsUpload): 
     return result
   }
   catch (error) {
+    if (error instanceof ManifestUploadAbandonError) {
+      log.error(error.message)
+      throw error
+    }
+
     // Show simple message by default, full error details only with --verbose
     const simpleMessage = error instanceof Error ? error.message : String(error)
     const verboseMessage = formatError(error)

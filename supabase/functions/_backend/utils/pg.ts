@@ -3,6 +3,7 @@ import type { Context } from 'hono'
 import type { PoolClient } from 'pg'
 import { and, eq, isNotNull, isNull, or, sql } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/node-postgres'
+import { CapgoDrizzleQueryLogger } from './drizzle_query_logger.ts'
 import { alias } from 'drizzle-orm/pg-core'
 import { getRuntimeKey } from 'hono/adapter'
 // @ts-types="npm:@types/pg"
@@ -423,10 +424,13 @@ export async function withPgTransaction<T>(pgPool: ReturnType<typeof getPgClient
   }
 }
 
+const capgoDrizzleQueryLogger = new CapgoDrizzleQueryLogger()
+
 export function getDrizzleClient(db: ReturnType<typeof getPgClient> | PoolClient, options?: { logger?: boolean }) {
   // Keep SQL logging on by default for API/trigger diagnostics.
   // Plugin hot paths pass `{ logger: false }` to avoid per-request log CPU/volume.
-  return drizzle({ client: db, logger: options?.logger ?? true })
+  const enableLogger = options?.logger ?? true
+  return drizzle({ client: db, logger: enableLogger ? capgoDrizzleQueryLogger : false })
 }
 
 // Keep the original driver cause, not just Drizzle's "Failed query" wrapper.
@@ -512,6 +516,7 @@ function getSchemaUpdatesAlias(includeMetadata = false) {
     rollout_paused_at: channelAlias.rollout_paused_at,
     rollout_pause_reason: channelAlias.rollout_pause_reason,
     rollout_cache_ttl_seconds: channelAlias.rollout_cache_ttl_seconds,
+    paused_at: channelAlias.paused_at,
   }
   const manifestSelect = sql<{ file_name: string, file_hash: string, s3_path: string }[]>`COALESCE(json_agg(
         json_build_object(

@@ -3,6 +3,7 @@ import type { AppInfos } from './types.ts'
 import { parse, tryParse } from '@std/semver'
 import { CacheHelper } from './cache.ts'
 import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
+import { updatesCacheTags } from './updatesEdgeCache.ts'
 import { backgroundTask, fixSemver, isDeprecatedPluginVersion } from './utils.ts'
 
 const UPDATE_READ_CACHE_PATH = '/.update-read-v2'
@@ -48,7 +49,7 @@ export async function getUpdateReadCache(c: Context, key: UpdateReadCacheKey): P
 export function setUpdateReadCache(c: Context, key: UpdateReadCacheKey, payload: UpdateReadCachePayload) {
   return backgroundTask(c, (async () => {
     const cacheEntry = buildUpdateReadRequest(c, key)
-    await cacheEntry.helper.putJson(cacheEntry.request, payload, UPDATE_READ_CACHE_TTL_SECONDS, { timeoutMs: 20 })
+    await cacheEntry.helper.putJson(cacheEntry.request, payload, UPDATE_READ_CACHE_TTL_SECONDS, { timeoutMs: 20, tags: updatesCacheTags(c, key.appId) })
   })())
 }
 
@@ -66,7 +67,8 @@ function usesLegacyChannelSelfStore(pluginVersion: string) {
  * Device overrides, rollouts, and a newer channel version still open Postgres
  * when they already existed at write time.
  * Accepted contract: an override or rollout created after the entry was written
- * is ignored until the 60s TTL. The TTL is not refreshed on hit.
+ * is ignored until the 60s TTL. The TTL is not refreshed on hit. With the
+ * /updates edge cache on, entries are tagged and purged on the change instead.
  */
 export function canServeUpToDateFromCache(
   body: Pick<AppInfos, 'app_id' | 'device_id' | 'platform' | 'version_name' | 'version_build' | 'plugin_version' | 'key_id'>,
