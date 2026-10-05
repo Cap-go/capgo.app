@@ -5,6 +5,7 @@ import { app as cron_app_fame } from '../_backend/triggers/cron_app_fame.ts'
 import { app as cron_clean_orphan_images } from '../_backend/triggers/cron_clean_orphan_images.ts'
 import { app as cron_clear_versions } from '../_backend/triggers/cron_clear_versions.ts'
 import { app as cron_email } from '../_backend/triggers/cron_email.ts'
+import { app as cron_onboarding_refresh_apps } from '../_backend/triggers/cron_onboarding_refresh_apps.ts'
 import { app as cron_reconcile_build_status } from '../_backend/triggers/cron_reconcile_build_status.ts'
 import { app as cron_rollout_auto_pause } from '../_backend/triggers/cron_rollout_auto_pause.ts'
 import { app as cron_stat_app } from '../_backend/triggers/cron_stat_app.ts'
@@ -31,6 +32,7 @@ import { app as pluginNotifications } from '../_backend/triggers/plugin_notifica
 import { app as queue_consumer } from '../_backend/triggers/queue_consumer.ts'
 import { app as send_email } from '../_backend/triggers/send_email.ts'
 import { app as stripe_event } from '../_backend/triggers/stripe_event.ts'
+import { app as updates_cache_purge } from '../_backend/triggers/updates_cache_purge.ts'
 import { app as webhook_delivery } from '../_backend/triggers/webhook_delivery.ts'
 import { app as webhook_dispatcher } from '../_backend/triggers/webhook_dispatcher.ts'
 import { createAllCatch, createHono } from '../_backend/utils/hono.ts'
@@ -72,6 +74,7 @@ appGlobal.route('/on_version_update', on_version_update)
 appGlobal.route('/on_version_delete', on_version_delete)
 appGlobal.route('/on_manifest_create', on_manifest_create)
 appGlobal.route('/stripe_event', stripe_event)
+appGlobal.route('/updates_cache_purge', updates_cache_purge)
 appGlobal.route('/on_organization_create', on_organization_create)
 appGlobal.route('/on_org_update', on_org_update)
 appGlobal.route('/cron_stat_app', cron_stat_app)
@@ -81,6 +84,7 @@ appGlobal.route('/cron_clear_versions', cron_clear_versions)
 appGlobal.route('/cron_clean_orphan_images', cron_clean_orphan_images)
 appGlobal.route('/cron_reconcile_build_status', cron_reconcile_build_status)
 appGlobal.route('/cron_rollout_auto_pause', cron_rollout_auto_pause)
+appGlobal.route('/cron_onboarding_refresh_apps', cron_onboarding_refresh_apps)
 appGlobal.route('/canceled_org_retention_alerts', canceled_org_retention_alerts)
 appGlobal.route('/credit_usage_alerts', credit_usage_alerts)
 appGlobal.route('/credit_usage_posthog', credit_usage_posthog)

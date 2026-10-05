@@ -3,6 +3,7 @@ import { env } from 'node:process'
 import pack from '../../package.json'
 import { isTruthyEnvValue } from '../posthog'
 import { findSavedKeySilent, getAppId, getConfig, sendEvent } from '../utils'
+import { getBuilderAppId } from '../build/app-id'
 import { resolveOwnerOrgId } from './org-resolver'
 import { categorizeCliError, categorizeHttpStatus } from './error-category'
 import { deriveSupabaseOperation, setSupabaseCallRecorder, SLOW_THRESHOLD_MS, withSupabaseSource } from './supabase-perf'
@@ -51,14 +52,20 @@ export async function flushAnalytics(timeoutMs = 2000): Promise<void> {
 // Keyed by apikey so events for different accounts never reuse another's org.
 const cachedContextByApiKey = new Map<string, Promise<{ appId?: string, orgId?: string }>>()
 
-export function resolveTrackingContext(apikey: string, signal?: AbortSignal): Promise<{ appId?: string, orgId?: string }> {
-  const cached = cachedContextByApiKey.get(apikey)
+export function isBuilderInvocation(commandPath: string): boolean {
+  return commandPath === 'build' || commandPath.startsWith('build ')
+    || /^mcp:(?:capgo_builder_|start_capgo_builder_|start_capgo_build$|capgo_build_|cancel_capgo_build$)/u.test(commandPath)
+}
+
+export function resolveTrackingContext(apikey: string, signal?: AbortSignal, builder = false): Promise<{ appId?: string, orgId?: string }> {
+  const cacheKey = `${apikey}\0${builder ? 'builder' : 'default'}`
+  const cached = cachedContextByApiKey.get(cacheKey)
   if (cached)
     return cached
   const promise = (async () => {
     try {
       const extConfig = await getConfig(true).catch(() => undefined)
-      const appId = getAppId('', extConfig?.config) || undefined
+      const appId = (builder ? getBuilderAppId(undefined, extConfig?.config) : getAppId('', extConfig?.config)) || undefined
       if (!appId)
         return {}
       const orgId = await resolveOwnerOrgId(apikey, appId, {}, signal)
@@ -68,7 +75,7 @@ export function resolveTrackingContext(apikey: string, signal?: AbortSignal): Pr
       return {}
     }
   })()
-  cachedContextByApiKey.set(apikey, promise)
+  cachedContextByApiKey.set(cacheKey, promise)
   return promise
 }
 
@@ -81,7 +88,9 @@ export interface TrackEventInput {
   appId?: string
   /** Explicit key; falls back to the saved key. No key => no event. */
   apikey?: string
+  timestamp?: Date
   tags?: Record<string, string | number | boolean>
+  nonPersonTags?: Record<string, unknown>
 }
 
 /**
@@ -108,7 +117,8 @@ export function trackEvent(input: TrackEventInput): Promise<void> {
       let appId = input.appId
       let orgId = input.orgId
       if (appId === undefined && orgId === undefined) {
-        const ctx = await resolveTrackingContext(apikey, controller.signal)
+        const commandPath = mcpCommandPathStore.getStore() ?? (typeof input.tags?.command_path === 'string' ? input.tags.command_path : currentCommandPath)
+        const ctx = await resolveTrackingContext(apikey, controller.signal, isBuilderInvocation(commandPath))
         appId = ctx.appId
         orgId = ctx.orgId
       }
@@ -122,8 +132,10 @@ export function trackEvent(input: TrackEventInput): Promise<void> {
         channel: input.channel,
         event: input.event,
         tracking_version: 2,
+        ...(input.timestamp ? { timestamp: input.timestamp } : {}),
         ...(orgId ? { org_id: orgId } : {}),
         tags,
+        ...(input.nonPersonTags ? { nonPersonTags: input.nonPersonTags } : {}),
       }, false, controller.signal).catch(() => {})
     }
     catch {
@@ -197,10 +209,10 @@ function emitCommandInvoked(commandPath: string, ctx: CommandContext, apikey?: s
   })
 }
 
-export function trackCommandInvoked(commandPath: string, ctx: CommandContext): void {
+export function trackCommandInvoked(commandPath: string, ctx: CommandContext, apikey?: string): void {
   commandStartedAt = Date.now()
   currentCommandPath = commandPath
-  emitCommandInvoked(commandPath, ctx)
+  emitCommandInvoked(commandPath, ctx, apikey)
 }
 
 export function deferCommandInvocation(commandPath: string, ctx: CommandContext): void {

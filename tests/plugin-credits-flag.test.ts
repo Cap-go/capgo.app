@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { executeSQL, getBaseData, getSupabaseClient, postUpdate, resetAndSeedAppData, resetAppData } from './test-utils.ts'
+import { executeSQL, getBaseData, getEndpointUrl, getSupabaseClient, postUpdate, resetAndSeedAppData, resetAppData, warmEdgeEndpoint } from './test-utils.ts'
 
 describe('plugin plan gating: credits flag', () => {
   const supabase = getSupabaseClient()
@@ -28,6 +28,13 @@ describe('plugin plan gating: credits flag', () => {
     expect(stripeRows[0]?.is_good_plan).toBe(false)
     const orgRows = await executeSQL('SELECT has_usage_credits FROM public.orgs WHERE id = $1', [orgId])
     expect(orgRows[0]?.has_usage_credits).toBe(false)
+
+    // Cold /updates isolate can 503 under Cloudflare shard load; warm before assertions.
+    await warmEdgeEndpoint(getEndpointUrl('/updates'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(getBaseData(appId)),
+    })
   })
 
   afterAll(async () => {

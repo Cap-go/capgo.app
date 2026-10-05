@@ -21,6 +21,7 @@ npx @capgo/cli@latest bundle upload
 Version must be > 0.0.0 and unique. Deleted versions cannot be reused for security.
 External option: Store only a URL link (useful for apps >200MB or privacy requirements).
 Capgo never inspects external content. Add encryption for trustless security.
+Cordova example: npx @capgo/cli@latest bundle upload com.example.app --mode cordova --path www --channel production
 
 **Example:**
 
@@ -33,7 +34,8 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **-p** | <code>string</code> | Path of the folder to upload, if not provided it will use the webDir set in capacitor.config |
+| **--mode** | <code>string</code> | Project framework mode. Use cordova for Cordova apps without capacitor.config (webDir defaults to www) |
+| **-p** | <code>string</code> | Path of the folder to upload, if not provided it will use the webDir set in capacitor.config (or www with --mode cordova) |
 | **-c** | <code>string</code> | Channel to link to. Use commas for multiple channels, for example production,beta |
 | **--rollout** | <code>string</code> | Set the uploaded bundle as this channel's rollout target at a percentage from 0 to 100 |
 | **--rollout-percentage-bps** | <code>string</code> | Set the uploaded bundle rollout percentage in basis points from 0 to 10000 |
@@ -82,7 +84,8 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | **--dry-upload** | <code>boolean</code> | Dry upload the bundle process: add the row in database without uploading files or updating channels (Used by Capgo for internal testing) |
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
 | **--node-modules** | <code>string</code> | Paths to node_modules directories for monorepos (comma-separated) |
-| **--encrypt-partial** | <code>boolean</code> | Encrypt delta update files (auto-enabled for updater > 6.14.4) |
+| **--encrypt-delta** | <code>boolean</code> | Encrypt delta update files (auto-enabled for updater >= 6.14.4) |
+| **--encrypt-partial** | <code>boolean</code> | [DEPRECATED] Use --encrypt-delta instead. Encrypt delta update files |
 | **--delete-linked-bundle-on-upload** | <code>boolean</code> | Locates the currently linked bundle in the channel you are trying to upload to, and deletes it |
 | **--no-brotli-patterns** | <code>string</code> | Files to exclude from Brotli compression (comma-separated globs, e.g., "*.jpg,*.png") |
 | **--disable-brotli** | <code>boolean</code> | Completely disable brotli compression even if updater version supports it |

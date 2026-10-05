@@ -45,118 +45,6 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
-    '/admin/dashboard/': RouteRecordInfo<
-      '/admin/dashboard/',
-      '/admin/dashboard',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/builder': RouteRecordInfo<
-      '/admin/dashboard/builder',
-      '/admin/dashboard/builder',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/channel-surfing': RouteRecordInfo<
-      '/admin/dashboard/channel-surfing',
-      '/admin/dashboard/channel-surfing',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/cli': RouteRecordInfo<
-      '/admin/dashboard/cli',
-      '/admin/dashboard/cli',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/credits': RouteRecordInfo<
-      '/admin/dashboard/credits',
-      '/admin/dashboard/credits',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/debug': RouteRecordInfo<
-      '/admin/dashboard/debug',
-      '/admin/dashboard/debug',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/famous-apps': RouteRecordInfo<
-      '/admin/dashboard/famous-apps',
-      '/admin/dashboard/famous-apps',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/frontend-onboarding': RouteRecordInfo<
-      '/admin/dashboard/frontend-onboarding',
-      '/admin/dashboard/frontend-onboarding',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/notifications': RouteRecordInfo<
-      '/admin/dashboard/notifications',
-      '/admin/dashboard/notifications',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/organizations': RouteRecordInfo<
-      '/admin/dashboard/organizations',
-      '/admin/dashboard/organizations',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/plans': RouteRecordInfo<
-      '/admin/dashboard/plans',
-      '/admin/dashboard/plans',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/plugins': RouteRecordInfo<
-      '/admin/dashboard/plugins',
-      '/admin/dashboard/plugins',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/replication': RouteRecordInfo<
-      '/admin/dashboard/replication',
-      '/admin/dashboard/replication',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/revenue': RouteRecordInfo<
-      '/admin/dashboard/revenue',
-      '/admin/dashboard/revenue',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/updates': RouteRecordInfo<
-      '/admin/dashboard/updates',
-      '/admin/dashboard/updates',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/users': RouteRecordInfo<
-      '/admin/dashboard/users',
-      '/admin/dashboard/users',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
     '/ApiKeys': RouteRecordInfo<
       '/ApiKeys',
       '/apikeys',
@@ -314,6 +202,13 @@ declare module 'vue-router/auto-routes' {
     '/app/[app].installs': RouteRecordInfo<
       '/app/[app].installs',
       '/app/:app/installs',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
+    '/app/[app].live': RouteRecordInfo<
+      '/app/[app].live',
+      '/app/:app/live',
       { app: ParamValue<true> },
       { app: ParamValue<false> },
       | never
@@ -486,6 +381,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/oauth/authorize': RouteRecordInfo<
+      '/oauth/authorize',
+      '/oauth/authorize',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/onboarding/app': RouteRecordInfo<
       '/onboarding/app',
       '/onboarding/app',
@@ -524,6 +426,13 @@ declare module 'vue-router/auto-routes' {
     '/preview/channel': RouteRecordInfo<
       '/preview/channel',
       '/preview/channel',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/preview/native-kpi': RouteRecordInfo<
+      '/preview/native-kpi',
+      '/preview/native-kpi',
       Record<never, never>,
       Record<never, never>,
       | never
@@ -713,134 +622,6 @@ declare module 'vue-router/auto-routes' {
     'src/pages/accountDisabled.vue': {
       routes:
         | '/accountDisabled'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/index.vue': {
-      routes:
-        | '/admin/dashboard/'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/builder.vue': {
-      routes:
-        | '/admin/dashboard/builder'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/channel-surfing.vue': {
-      routes:
-        | '/admin/dashboard/channel-surfing'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/cli.vue': {
-      routes:
-        | '/admin/dashboard/cli'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/credits.vue': {
-      routes:
-        | '/admin/dashboard/credits'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/debug.vue': {
-      routes:
-        | '/admin/dashboard/debug'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/famous-apps.vue': {
-      routes:
-        | '/admin/dashboard/famous-apps'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/frontend-onboarding.vue': {
-      routes:
-        | '/admin/dashboard/frontend-onboarding'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/notifications.vue': {
-      routes:
-        | '/admin/dashboard/notifications'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/organizations.vue': {
-      routes:
-        | '/admin/dashboard/organizations'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/plans.vue': {
-      routes:
-        | '/admin/dashboard/plans'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/plugins.vue': {
-      routes:
-        | '/admin/dashboard/plugins'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/replication.vue': {
-      routes:
-        | '/admin/dashboard/replication'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/revenue.vue': {
-      routes:
-        | '/admin/dashboard/revenue'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/updates.vue': {
-      routes:
-        | '/admin/dashboard/updates'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/users.vue': {
-      routes:
-        | '/admin/dashboard/users'
       views:
         | never
       pathParamNames:
@@ -1043,6 +824,14 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | 'app'
     }
+    'src/pages/app/[app].live.vue': {
+      routes:
+        | '/app/[app].live'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
     'src/pages/app/[app].native.vue': {
       routes:
         | '/app/[app].native'
@@ -1235,6 +1024,14 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | never
     }
+    'src/pages/oauth/authorize.vue': {
+      routes:
+        | '/oauth/authorize'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
     'src/pages/onboarding/app.vue': {
       routes:
         | '/onboarding/app'
@@ -1278,6 +1075,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/preview/channel.vue': {
       routes:
         | '/preview/channel'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/preview/native-kpi.vue': {
+      routes:
+        | '/preview/native-kpi'
       views:
         | never
       pathParamNames:

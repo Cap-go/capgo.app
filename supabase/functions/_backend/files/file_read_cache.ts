@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import { getRuntimeKey } from 'hono/adapter'
 import { cloudlog } from '../utils/logging.ts'
-import { getDatabaseURL, getPgClient } from '../utils/pg.ts'
+import { getPgClient } from '../utils/pg.ts'
 
 export const FILE_READ_TRACKING_QUERY_PARAMS = ['device_id'] as const
 export const DELETED_FILE_CACHE_HEADER = 'x-capgo-file-deleted'
@@ -119,16 +119,18 @@ export async function markFileDeletedInCache(fileId: string): Promise<void> {
   }))
 }
 
-let sharedDeletedLookupPool: ReturnType<typeof getPgClient> | null = null
-let sharedDeletedLookupPoolUrl: string | null = null
+// Workers forbid using I/O objects (sockets) created by another request: a
+// module-level pool shared across requests makes the second request hang until
+// the runtime cancels it. Reuse the pool only within the same request context.
+const deletedLookupPools = new WeakMap<Context, ReturnType<typeof getPgClient>>()
 
 function getDeletedLookupPgClient(c: Context): ReturnType<typeof getPgClient> {
-  const dbUrl = getDatabaseURL(c, false)
-  if (!sharedDeletedLookupPool || sharedDeletedLookupPoolUrl !== dbUrl) {
-    sharedDeletedLookupPool = getPgClient(c, false)
-    sharedDeletedLookupPoolUrl = dbUrl
+  let pool = deletedLookupPools.get(c)
+  if (!pool) {
+    pool = getPgClient(c, false)
+    deletedLookupPools.set(c, pool)
   }
-  return sharedDeletedLookupPool
+  return pool
 }
 
 function buildFileReadCacheRequestsForPath(fileId: string, checksum?: string | null): Request[] {

@@ -5,7 +5,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/server/stdio'
 import pack from '../../package.json'
 import { enableSupabaseInstrumentation, setInvocationSource, trackMcpServerStarted, withMcpToolTracking } from '../analytics/track'
 import { parseSchema } from '../schemas/schema_validation'
-import { starAllRepositoriesOptionsSchema, starRepoOptionsSchema, updateChannelOptionsSchema } from '../schemas/sdk'
+import { promoteChannelOptionsSchema, starAllRepositoriesOptionsSchema, starRepoOptionsSchema, updateChannelOptionsSchema } from '../schemas/sdk'
 import {
   mcpAddAppInputSchema,
   mcpAddChannelInputSchema,
@@ -18,6 +18,7 @@ import {
   mcpDoctorInputSchema,
   mcpGenerateEncryptionKeysInputSchema,
   mcpGetCurrentBundleInputSchema,
+  mcpPromoteChannelInputSchema,
   mcpGetStatsInputSchema,
   mcpListBundlesInputSchema,
   mcpListChannelsInputSchema,
@@ -202,6 +203,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
     async ({
       appId,
       path,
+      mode,
       bundle,
       channel,
       rollout,
@@ -219,6 +221,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
       const result = await sdk.uploadBundle({
         appId,
         path,
+        mode,
         bundle,
         channel,
         rollout,
@@ -520,6 +523,24 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
     },
   )
 
+  server.registerTool(
+    'capgo_promote_channel',
+    {
+      description: 'Promote the bundle currently linked to one channel to another channel (for example staging to production) without knowing the bundle version',
+      inputSchema: mcpPromoteChannelInputSchema,
+    },
+    async ({ appId, fromChannel, toChannel, acceptIncompatible, ignoreMetadataCheck, sendUpdateNotification }) => {
+      const payload = parseSchema(promoteChannelOptionsSchema, { appId, fromChannel, toChannel, acceptIncompatible, ignoreMetadataCheck, sendUpdateNotification })
+      const result = await sdk.promoteChannel(payload)
+      if (!result.success) {
+        return formatMcpError(result)
+      }
+      return {
+        content: [{ type: 'text' as const, text: `Successfully promoted bundle ${result.data?.bundle} from ${fromChannel} to ${toChannel}` }],
+      }
+    },
+  )
+
   // ============================================================================
   // Organization Management Tools
   // ============================================================================
@@ -674,13 +695,14 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
       description: 'Request a native iOS/Android build from Capgo Cloud',
       inputSchema: mcpRequestBuildInputSchema,
     },
-    async ({ appId, platform, path, nodeModules, cache }) => {
+    async ({ appId, platform, path, nodeModules, cache, cacheKey }) => {
       const result = await sdk.requestBuild({
         appId,
         platform,
         path,
         nodeModules,
         cache,
+        cacheKey,
         // Credentials should be pre-saved using the CLI
       })
       if (!result.success) {

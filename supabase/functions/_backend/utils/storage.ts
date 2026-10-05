@@ -151,15 +151,6 @@ function hasUnsafeImagePathSegments(normalized: string) {
 }
 
 /**
- * Every stored image path must pass ownership checks.
- * Root-level bare filenames are rejected (migrate with
- * `bun run admin:migrate-legacy-bare-image-paths --apply`).
- */
-export function isOwnershipBearingImagePath(normalized: string) {
-  return !!normalized && normalized.includes('/')
-}
-
-/**
  * Image objects must live under a caller-owned prefix:
  * - user avatar: `{userId}/...`
  * - org logo: `org/{orgId}/logo/...` (org-only scope never signs app icons)
@@ -225,7 +216,7 @@ export async function createSignedImageUrl(
   if (!normalized || hasUnsafeImagePathSegments(normalized))
     return null
 
-  // Every images object key requires a matching ownership scope before admin signing.
+  // Every images object key requires a matching ownership scope before signing.
   if (!scope || !isAllowedImagePath(normalized, scope))
     return null
 
@@ -242,43 +233,4 @@ async function signImagesObjectKey(c: Context, normalized: string) {
     return null
 
   return data.signedUrl
-}
-
-/**
- * Sign any stored images-bucket object for the platform-admin dashboard.
- * Must only be called from is_platform_admin paths. Skips org ownership so
- * admins can preview logos for apps they do not belong to.
- */
-export async function createPlatformAdminSignedImageUrl(
-  c: Context,
-  rawPath?: string | null,
-) {
-  if (!rawPath)
-    return null
-
-  const allowedOrigins = getStorageAllowedOrigins(c)
-
-  if (rawPath.includes('://')) {
-    try {
-      const url = new URL(rawPath)
-      const isOurStoragePath = isStorageImagePathname(url.pathname)
-        && allowedOrigins.includes(url.origin)
-      if (!isOurStoragePath)
-        return rawPath
-    }
-    catch {
-      return rawPath
-    }
-  }
-
-  const normalized = normalizeImagePath(rawPath, { allowedOrigins })
-  if (!normalized || hasUnsafeImagePathSegments(normalized) || !isOwnershipBearingImagePath(normalized))
-    return null
-
-  try {
-    return await signImagesObjectKey(c, normalized)
-  }
-  catch {
-    return null
-  }
 }

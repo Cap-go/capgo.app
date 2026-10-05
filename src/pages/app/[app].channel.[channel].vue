@@ -3,13 +3,12 @@ import type { Database } from '~/types/supabase.types'
 import { FormKit } from '@formkit/vue'
 import { greaterOrEqual, parse } from '@std/semver'
 import { computedAsync, onClickOutside } from '@vueuse/core'
-import { computed, ref, watchEffect } from 'vue'
+import { computed, nextTick, ref, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconCopy from '~icons/heroicons/clipboard-document-check'
 import IconCode from '~icons/heroicons/code-bracket'
-import Settings from '~icons/heroicons/cog-8-tooth'
 import IconInformation from '~icons/heroicons/information-circle'
 import IconSearch from '~icons/ic/round-search?raw'
 import IconAlertCircle from '~icons/lucide/alert-circle'
@@ -24,6 +23,9 @@ import { isInternalVersionName, withBuiltinChannelVersion } from '~/services/ver
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
+import { createChannelRolloutConfirmFlows, formatRolloutCacheTtlDisplay, formatRolloutCacheTtlHuman, isRolloutPercentageDraftChanged, parseRolloutCacheTtlSeconds } from '~/utils/channelRolloutConfirmFlows'
+import { getUpdatePackageDescription as getUpdatePackageDescriptionCopy, getUpdatePackageInfoDescription as getUpdatePackageInfoDescriptionCopy, getUpdatePackageLabel as getUpdatePackageLabelCopy } from '~/utils/channelUpdatePackageCopy'
+import { confirmConsequentialChannelChange } from '~/utils/confirmConsequentialChannelChange'
 
 interface Channel {
   version: Database['public']['Tables']['app_versions']['Row']
@@ -59,6 +61,7 @@ type EditableChannelKey = 'allow_dev'
   | 'auto_pause_min_failures'
   | 'auto_pause_action'
   | 'auto_pause_cooldown_minutes'
+  | 'paused_at'
   | 'version'
 
 // Bundle link dialog state
@@ -66,6 +69,19 @@ const bundleLinkVersions = ref<Database['public']['Tables']['app_versions']['Row
 const bundleLinkSearchVal = ref('')
 const bundleLinkSearchMode = ref(false)
 const bundleLinkMode = ref<'stable' | 'rollout'>('stable')
+
+// Promote-to-channel dialog state
+interface PromoteTargetChannel {
+  id: number
+  name: string
+  versionName: string | null
+  rolloutActive: boolean
+  isDefault: boolean
+}
+const promoteDialogId = 'promote-channel-bundle'
+const promoteTargets = ref<PromoteTargetChannel[]>([])
+const promoteTargetId = ref<number | null>(null)
+const appHasDefaultChannel = ref(false)
 
 const main = useMainStore()
 const route = useRoute('/app/[app].channel.[channel]')
@@ -79,6 +95,8 @@ const packageId = ref<string>('')
 const id = ref<number>(0)
 const loading = ref(true)
 const channel = ref<Database['public']['Tables']['channels']['Row'] & Channel>()
+const defaultUploadChannel = ref<string | null>(null)
+const isDefaultUploadChannel = computed(() => !!channel.value?.name && channel.value.name === defaultUploadChannel.value)
 const rolloutConfigured = computed(() => !!channel.value?.rollout_version)
 const rolloutPercentage = computed(() => (channel.value?.rollout_percentage_bps ?? 0) / 100)
 const rolloutIsActive = computed(() => !!channel.value?.rollout_enabled && rolloutConfigured.value)
@@ -115,22 +133,6 @@ const rolloutDeliveryBannerClass = computed(() => {
   }
   return 'border-sky-300 bg-sky-50 text-sky-900 dark:border-sky-800/70 dark:bg-sky-950/30 dark:text-sky-100'
 })
-const rolloutStatusLabel = computed(() => {
-  if (!rolloutConfigured.value)
-    return t('not-configured')
-  if (channel.value?.rollout_paused_at)
-    return t('paused')
-  return channel.value?.rollout_enabled ? t('enabled') : t('disabled')
-})
-const rolloutStatusClass = computed(() => {
-  if (!rolloutConfigured.value || !channel.value?.rollout_enabled) {
-    return 'border-slate-300 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300'
-  }
-  if (channel.value.rollout_paused_at) {
-    return 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800/70 dark:bg-amber-950/30 dark:text-amber-200'
-  }
-  return 'border-sky-300 bg-sky-50 text-sky-800 dark:border-sky-800/70 dark:bg-sky-950/30 dark:text-sky-200'
-})
 const rolloutProgressClass = computed(() => {
   if (!rolloutConfigured.value || !channel.value?.rollout_enabled)
     return 'bg-slate-300 dark:bg-slate-600'
@@ -142,6 +144,9 @@ const rolloutProgressStyle = computed(() => {
   const percentage = Math.max(0, Math.min(100, rolloutPercentage.value))
   return `width: ${percentage}%`
 })
+// Paused: /updates sends nothing on this channel, devices keep their bundle.
+const channelPaused = computed(() => !!channel.value?.paused_at)
+const channelOnBuiltin = computed(() => channel.value?.version?.name === 'builtin')
 const showRolloutSettings = computed(() => !!channel.value?.rollout_enabled)
 const showRolloutEnableRow = computed(() => !!channel.value && !channel.value.rollout_enabled)
 
@@ -165,6 +170,80 @@ const rolloutEnableDisabled = computed(() => {
     return true
   return channel.value.rollout_version ? rolloutControlsDisabled.value : !canPromoteBundle.value
 })
+const fieldInputClass = 'min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950'
+const rolloutPercentageDraft = ref('0')
+const rolloutCacheTtlDraft = ref('2592000')
+const editingRolloutSettings = ref(false)
+const rolloutPercentageInput = useTemplateRef<HTMLInputElement>('rolloutPercentageInput')
+watch(
+  () => [channel.value?.rollout_percentage_bps, channel.value?.rollout_cache_ttl_seconds] as const,
+  ([bps, ttl]) => {
+    if (editingRolloutSettings.value)
+      return
+    rolloutPercentageDraft.value = String((bps ?? 0) / 100)
+    rolloutCacheTtlDraft.value = String(ttl ?? 2592000)
+  },
+  { immediate: true },
+)
+const rolloutSettingsDraftChanged = computed(() => {
+  const ttl = parseRolloutCacheTtlSeconds(rolloutCacheTtlDraft.value)
+  return isRolloutPercentageDraftChanged(rolloutPercentageDraft.value, channel.value?.rollout_percentage_bps ?? 0)
+    || (ttl != null && ttl !== (channel.value?.rollout_cache_ttl_seconds ?? 2592000))
+})
+const rolloutCacheTtlText = computed(() => formatRolloutCacheTtlDisplay(channel.value?.rollout_cache_ttl_seconds ?? 2592000, t))
+const rolloutCacheTtlDraftHuman = computed(() => {
+  const parsed = parseRolloutCacheTtlSeconds(rolloutCacheTtlDraft.value)
+  return parsed == null ? '' : formatRolloutCacheTtlHuman(parsed, t)
+})
+
+type AutoPauseAction = 'pause' | 'rollback' | 'notify'
+interface AutoPauseDraft {
+  failureRateBps: string
+  action: AutoPauseAction
+  windowMinutes: string
+  confidence: string
+  minAttempts: string
+  minFailures: string
+  cooldownMinutes: string
+}
+function autoPauseDraftFromChannel(row: NonNullable<typeof channel.value>): AutoPauseDraft {
+  return {
+    failureRateBps: row.auto_pause_failure_rate_bps == null ? '' : String(row.auto_pause_failure_rate_bps),
+    action: (row.auto_pause_action as AutoPauseAction) || 'pause',
+    windowMinutes: String(row.auto_pause_window_minutes),
+    confidence: String(row.auto_pause_confidence),
+    minAttempts: row.auto_pause_min_attempts == null ? '' : String(row.auto_pause_min_attempts),
+    minFailures: row.auto_pause_min_failures == null ? '' : String(row.auto_pause_min_failures),
+    cooldownMinutes: String(row.auto_pause_cooldown_minutes),
+  }
+}
+const autoPauseDraft = ref<AutoPauseDraft>({
+  failureRateBps: '',
+  action: 'pause',
+  windowMinutes: '60',
+  confidence: '0.95',
+  minAttempts: '',
+  minFailures: '',
+  cooldownMinutes: '60',
+})
+const editingAutoPause = ref(false)
+watch(
+  () => channel.value && [
+    channel.value.auto_pause_failure_rate_bps,
+    channel.value.auto_pause_action,
+    channel.value.auto_pause_window_minutes,
+    channel.value.auto_pause_confidence,
+    channel.value.auto_pause_min_attempts,
+    channel.value.auto_pause_min_failures,
+    channel.value.auto_pause_cooldown_minutes,
+  ],
+  () => {
+    if (!channel.value || editingAutoPause.value)
+      return
+    autoPauseDraft.value = autoPauseDraftFromChannel(channel.value)
+  },
+  { immediate: true },
+)
 
 const showDebugSection = ref(false)
 
@@ -220,6 +299,7 @@ async function getChannel(force = false) {
           rollout_paused_at,
           rollout_pause_reason,
           rollout_cache_ttl_seconds,
+          paused_at,
           auto_pause_enabled,
           auto_pause_window_minutes,
           auto_pause_failure_rate_bps,
@@ -267,6 +347,21 @@ async function getChannel(force = false) {
   catch (error) {
     console.error(error)
   }
+}
+
+async function getDefaultUploadChannel() {
+  if (!packageId.value)
+    return
+  const { data, error } = await supabase
+    .from('apps')
+    .select('default_upload_channel')
+    .eq('app_id', packageId.value)
+    .maybeSingle()
+  if (error) {
+    console.error('cannot load default upload channel', error)
+    return
+  }
+  defaultUploadChannel.value = data?.default_upload_channel ?? null
 }
 
 async function saveChannelChanges(update: ChannelUpdate) {
@@ -378,13 +473,14 @@ async function isPushUpdateReady(appId: string) {
   }
 }
 
-async function askUpdateNotificationAfterBundleChange() {
+async function askUpdateNotificationAfterBundleChange(targetChannelName?: string) {
   if (!channel.value)
     return
 
   const routePath = route.path
   const appId = packageId.value
-  const channelName = channel.value.name
+  const pageChannelName = channel.value.name
+  const channelName = targetChannelName ?? pageChannelName
   if (!appId || !channelName)
     return
   if (!(await isPushUpdateReady(appId)))
@@ -393,7 +489,7 @@ async function askUpdateNotificationAfterBundleChange() {
     route.path !== routePath
     || !route.path.includes('/channel/')
     || packageId.value !== appId
-    || channel.value?.name !== channelName
+    || channel.value?.name !== pageChannelName
   ) {
     return
   }
@@ -429,7 +525,7 @@ watchEffect(async () => {
     loading.value = true
     packageId.value = route.params.app as string
     id.value = Number(route.params.channel as string)
-    await getChannel()
+    await Promise.all([getChannel(), getDefaultUploadChannel()])
     loading.value = false
     if (!channel.value?.name)
       displayStore.NavTitle = t('channel')
@@ -449,17 +545,23 @@ const showSearchAndActions = computed(() => {
   return !bundleLinkSearchMode.value
 })
 
-async function handleVersionLink(appVersion: Database['public']['Tables']['app_versions']['Row']) {
-  if (!channel.value)
-    return
+/**
+ * Check a bundle's native packages against a channel and ask the user to accept a mismatch.
+ * Returns false when the user cancels.
+ */
+async function confirmBundleCompatibleWithChannel(
+  appVersion: Pick<Database['public']['Tables']['app_versions']['Row'], 'id' | 'app_id' | 'native_packages'>,
+  channelName: string,
+  compareVersionId?: number,
+) {
   const {
     finalCompatibility,
     localDependencies,
-  } = await checkCompatibilityNativePackages(appVersion.app_id, channel.value.name, (appVersion.native_packages as any) ?? [])
+  } = await checkCompatibilityNativePackages(appVersion.app_id, channelName, (appVersion.native_packages as any) ?? [])
 
   // Check if any package is incompatible
   if (localDependencies.length > 0 && finalCompatibility.some(x => !isCompatible(x))) {
-    toast.error(t('bundle-not-compatible-with-channel', { channel: channel.value.name }))
+    toast.error(t('bundle-not-compatible-with-channel', { channel: channelName }))
 
     dialogStore.openDialog({
       title: t('compatibility-accept-title'),
@@ -475,8 +577,7 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
           handler: () => {
             // Pre-select the channel's current bundle as the comparison baseline so the
             // Dependencies page opens already diffed against what is live on the channel.
-            const channelBundleId = channel.value?.version?.id
-            const compareQuery = channelBundleId ? `?compare=${channelBundleId}` : ''
+            const compareQuery = compareVersionId ? `?compare=${compareVersionId}` : ''
             router.push(`/app/${route.params.app}/bundle/${appVersion.id}/dependencies${compareQuery}`)
           },
         },
@@ -487,22 +588,47 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
       ],
     })
     if (await dialogStore.onDialogDismiss())
-      return
+      return false
   }
   else if (localDependencies.length === 0 || finalCompatibility.length === 0) {
     toast.info(t('ignore-compatibility'))
   }
   else {
-    toast.info(t('bundle-compatible-with-channel', { channel: channel.value.name }))
+    toast.info(t('bundle-compatible-with-channel', { channel: channelName }))
   }
+  return true
+}
+
+async function handleVersionLink(appVersion: Database['public']['Tables']['app_versions']['Row']) {
+  if (!channel.value)
+    return
+  // Close the bundle picker once a bundle is chosen; the compatibility, rollout and
+  // notification prompts below open their own dialogs when needed.
+  if (dialogStore.showDialog && dialogStore.dialogOptions?.title === t('bundle-management'))
+    await dialogStore.closeDialog()
+  if (!(await confirmBundleCompatibleWithChannel(appVersion, channel.value.name, channel.value.version?.id)))
+    return
   if (bundleLinkMode.value === 'rollout') {
-    const saved = await saveChannelChanges({
-      rollout_version: appVersion.id,
-      rollout_enabled: true,
-    })
-    if (saved) {
-      toast.success(t('rollout-target-linked'))
-      await askUpdateNotificationAfterBundleChange()
+    const applyRolloutTargetLink = async () => {
+      const saved = await saveChannelChanges({
+        rollout_version: appVersion.id,
+        rollout_enabled: true,
+      })
+      if (saved) {
+        toast.success(t('rollout-target-linked'))
+        await askUpdateNotificationAfterBundleChange()
+      }
+    }
+    const previousRolloutVersionId = channel.value.rollout_version
+    if (previousRolloutVersionId != null && previousRolloutVersionId !== appVersion.id) {
+      await getRolloutConfirmFlows().confirmSetRolloutTarget({
+        currentTargetName: rolloutTargetName.value,
+        nextTargetName: appVersion.name,
+        onConfirm: applyRolloutTargetLink,
+      })
+    }
+    else {
+      await applyRolloutTargetLink()
     }
     return
   }
@@ -511,6 +637,164 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
     toast.success(t('linked-bundle'))
     await askUpdateNotificationAfterBundleChange()
   }
+}
+
+// Linking a bundle from the console is a direct channels UPDATE: RLS needs
+// channel.update_settings and the version trigger needs channel.promote_bundle.
+const promoteTargetPermissions = ['channel.promote_bundle', 'channel.update_settings'] as const
+
+/**
+ * Load the other channels of this app that the user can link a bundle to.
+ * The "Promote to…" action stays hidden when this list is empty.
+ */
+async function loadPromoteTargets() {
+  const source = channel.value
+  // Promotion is offered from non-default channels only (e.g. preprod -> production).
+  if (!source?.app_id || !source.id || source.public) {
+    promoteTargets.value = []
+    appHasDefaultChannel.value = false
+    return
+  }
+
+  const { data, error } = await supabase
+    .from('channels')
+    .select('id, name, public, rollout_version, rollout_enabled, version:app_versions!channels_version_fkey(name)')
+    .eq('app_id', source.app_id)
+    .neq('id', source.id)
+    .order('name', { ascending: true })
+  if (error) {
+    console.error('cannot load channels to promote to', error)
+    promoteTargets.value = []
+    appHasDefaultChannel.value = false
+    return
+  }
+
+  const eligible = await Promise.all((data ?? []).map(async row => (
+    await checkPermissions([...promoteTargetPermissions], { appId: source.app_id, channelId: row.id }) ? row : null
+  )))
+  // Ignore stale results if the user navigated to another channel meanwhile.
+  if (channel.value?.id !== source.id)
+    return
+  appHasDefaultChannel.value = (data ?? []).some(row => row.public)
+  promoteTargets.value = eligible
+    .filter(row => row !== null)
+    .map(row => ({
+      id: row.id,
+      name: row.name,
+      versionName: (row.version as { name: string } | null)?.name ?? null,
+      rolloutActive: !!row.rollout_enabled && row.rollout_version != null,
+      isDefault: !!row.public,
+    }))
+    // Default channels first: they are the usual promotion target.
+    .sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
+}
+
+watch(() => [channel.value?.id, channel.value?.public], () => {
+  void loadPromoteTargets()
+}, { immediate: true })
+
+const showPromoteToChannel = computed(() =>
+  !!channel.value
+  && !channel.value.public
+  && !isInternalVersionName(channel.value.version?.name ?? '')
+  && appHasDefaultChannel.value
+  && promoteTargets.value.length > 0,
+)
+
+async function openPromoteToChannel() {
+  if (!channel.value?.version)
+    return
+  if (isInternalVersionName(channel.value.version.name)) {
+    toast.error(t('promote-channel-no-bundle'))
+    return
+  }
+
+  await loadPromoteTargets()
+  if (!promoteTargets.value.length) {
+    toast.error(t('promote-channel-no-target'))
+    return
+  }
+  promoteTargetId.value = promoteTargets.value.find(item => item.isDefault)?.id ?? null
+
+  dialogStore.openDialog({
+    id: promoteDialogId,
+    title: t('promote-to-channel'),
+    description: t('promote-to-channel-description', { bundle: channel.value.version.name, channel: channel.value.name }),
+    size: 'lg',
+    buttons: [
+      {
+        text: t('button-cancel'),
+        role: 'cancel',
+      },
+      {
+        text: t('promote'),
+        role: 'primary',
+        handler: () => {
+          if (promoteTargetId.value != null)
+            return true
+          toast.error(t('promote-channel-select-target'))
+          return false
+        },
+      },
+    ],
+  })
+  if (await dialogStore.onDialogDismiss())
+    return
+
+  const target = promoteTargets.value.find(item => item.id === promoteTargetId.value)
+  if (target)
+    await promoteBundleToChannel(target)
+}
+
+async function promoteBundleToChannel(target: PromoteTargetChannel) {
+  const source = channel.value
+  if (!source?.version)
+    return
+  if (!(await checkPermissions([...promoteTargetPermissions], { appId: source.app_id, channelId: target.id }))) {
+    toast.error(t('no-permission'))
+    return
+  }
+
+  const { data: appVersion, error: versionError } = await supabase
+    .from('app_versions')
+    .select('id, app_id, name, native_packages')
+    .eq('id', source.version.id)
+    .single()
+  if (versionError || !appVersion) {
+    console.error('cannot load bundle to promote', versionError)
+    toast.error(t('error-fetching-versions'))
+    return
+  }
+
+  const { data: targetRow, error: targetError } = await supabase
+    .from('channels')
+    .select('version')
+    .eq('id', target.id)
+    .single()
+  if (targetError) {
+    console.error('cannot load target channel', targetError)
+    toast.error(t('error-fetching-channels'))
+    return
+  }
+  const targetVersionId = targetRow?.version ?? undefined
+  if (!(await confirmBundleCompatibleWithChannel(appVersion, target.name, targetVersionId)))
+    return
+
+  const { data: updated, error } = await supabase
+    .from('channels')
+    .update({ version: appVersion.id })
+    .eq('id', target.id)
+    .select('id')
+  if (error || !updated?.length) {
+    console.error('cannot promote bundle', error)
+    toast.error(t(error ? (channelUpdatePackageErrorKey(error) ?? 'error-update-channel') : 'no-permission'))
+    return
+  }
+
+  toast.info(t('cloud-replication-delay'))
+  toast.success(t('promote-to-channel-success', { bundle: appVersion.name, channel: target.name }))
+  void loadPromoteTargets()
+  await askUpdateNotificationAfterBundleChange(target.name)
 }
 
 async function handleUnlink() {
@@ -545,28 +829,71 @@ async function handleRevert() {
     toast.error(t('no-permission'))
     return
   }
-  dialogStore.openDialog({
-    title: t('revert-to-builtin'),
-    description: t('revert-to-builtin-confirm'),
-    buttons: [
-      {
-        text: t('cancel'),
-        role: 'cancel',
+  // Full revert: the stable bundle goes back to built-in and any progressive
+  // rollout stops too, otherwise rollout devices would keep getting updates.
+  const stopsRollout = !!channel.value?.rollout_version || !!channel.value?.rollout_enabled
+  const rolloutTarget = channel.value?.rollout_version_info?.name
+  const description = stopsRollout && rolloutTarget
+    ? `${t('revert-to-builtin-confirm')} ${t('revert-to-builtin-confirm-rollout', { target: rolloutTarget })}`
+    : t('revert-to-builtin-confirm')
+  await confirmConsequentialChannelChange(
+    dialogStore,
+    { cancel: t('button-cancel'), confirm: t('channel-revert-button') },
+    {
+      id: 'confirm-revert-to-builtin',
+      title: t('channel-revert-confirm-title'),
+      description,
+      confirmRole: 'danger',
+      onConfirm: async () => {
+        const changes: ChannelUpdate = { version: null }
+        if (stopsRollout) {
+          Object.assign(changes, {
+            rollout_version: null,
+            rollout_enabled: false,
+            rollout_percentage_bps: 0,
+            rollout_paused_at: null,
+            rollout_pause_reason: null,
+          })
+        }
+        if (await saveChannelChanges(changes)) {
+          toast.success(t('channel-reverted-to-builtin'))
+          await askUpdateNotificationAfterBundleChange()
+        }
       },
-      {
-        text: t('confirm'),
-        role: 'primary',
-        handler: async () => {
-          if (await saveChannelChange('version', null))
-            await askUpdateNotificationAfterBundleChange()
-        },
-      },
-    ],
-  })
-  await dialogStore.onDialogDismiss()
+    },
+  )
 }
 
-async function openSelectVersion() {
+async function toggleChannelPause() {
+  if (!canUpdateChannelSettings.value) {
+    toast.error(t('no-permission'))
+    return
+  }
+  if (!channel.value)
+    return
+  const resuming = channelPaused.value
+  await confirmConsequentialChannelChange(
+    dialogStore,
+    { cancel: t('button-cancel'), confirm: resuming ? t('channel-resume-updates') : t('channel-pause-updates') },
+    {
+      id: resuming ? 'confirm-resume-channel' : 'confirm-pause-channel',
+      title: resuming ? t('channel-resume-confirm-title') : t('channel-pause-confirm-title'),
+      description: resuming
+        ? t('channel-resume-confirm-description', { bundle: rolloutIsActive.value ? `${stableBundleName.value} / ${rolloutTargetName.value}` : stableBundleName.value })
+        : t('channel-pause-confirm-description'),
+      confirmRole: resuming ? 'primary' : 'danger',
+      onConfirm: async () => {
+        if (!await saveChannelChange('paused_at', resuming ? null : new Date().toISOString()))
+          return
+        toast.success(resuming ? t('channel-updates-resumed') : t('channel-updates-paused'))
+        if (resuming)
+          await askUpdateNotificationAfterBundleChange()
+      },
+    },
+  )
+}
+
+async function openSelectVersion(startInSearch = false) {
   if (!canPromoteBundle.value) {
     toast.error(t('no-permission'))
     return
@@ -591,7 +918,7 @@ async function openSelectVersion() {
 
   bundleLinkVersions.value = data ?? []
   bundleLinkSearchVal.value = ''
-  bundleLinkSearchMode.value = false
+  bundleLinkSearchMode.value = startInSearch
 
   // Open the dialog
   dialogStore.openDialog({
@@ -608,107 +935,155 @@ async function openSelectVersion() {
   await dialogStore.onDialogDismiss()
 }
 
-async function openSelectStableVersion() {
+async function openSelectStableVersion(startInSearch = false) {
   bundleLinkMode.value = 'stable'
-  await openSelectVersion()
+  await openSelectVersion(startInSearch)
 }
 
 async function openSelectRolloutVersion() {
   bundleLinkMode.value = 'rollout'
-  await openSelectVersion()
+  await openSelectVersion(true)
 }
 
 async function enableRollout() {
-  if (!channel.value)
-    return
-  if (!channel.value.rollout_version) {
-    await openSelectRolloutVersion()
-    return
-  }
-  await saveChannelChange('rollout_enabled', true as any)
+  await getRolloutConfirmFlows().enableRollout()
 }
 
-async function disableRollout() {
-  if (await saveChannelChanges({
-    rollout_enabled: false,
-    rollout_version: null,
-    rollout_paused_at: null,
-    rollout_pause_reason: null,
-  })) {
-    await askUpdateNotificationAfterBundleChange()
-  }
+function syncRolloutSettingsDraft() {
+  rolloutPercentageDraft.value = String((channel.value?.rollout_percentage_bps ?? 0) / 100)
+  rolloutCacheTtlDraft.value = String(channel.value?.rollout_cache_ttl_seconds ?? 2592000)
 }
 
-async function saveRolloutPercentage(value: string) {
-  const percentage = Number.parseFloat(value)
-  if (Number.isNaN(percentage) || percentage < 0 || percentage > 100) {
-    toast.error(t('invalid-rollout-percentage'))
-    return
-  }
-  await saveChannelChange('rollout_percentage_bps', Math.round(percentage * 100) as any)
+async function startEditRolloutSettings() {
+  syncRolloutSettingsDraft()
+  editingRolloutSettings.value = true
+  await nextTick()
+  rolloutPercentageInput.value?.focus()
+  rolloutPercentageInput.value?.select()
 }
 
-async function saveIntegerField(key: EditableChannelKey, value: string, min: number, max: number, nullable = false) {
-  const trimmedValue = value.trim()
-  if (!trimmedValue && nullable) {
-    await saveChannelChange(key, null as any)
-    return
-  }
+function cancelEditRolloutSettings() {
+  editingRolloutSettings.value = false
+  syncRolloutSettingsDraft()
+}
 
-  const parsedValue = Number(trimmedValue)
-  if (!Number.isInteger(parsedValue) || parsedValue < min || parsedValue > max) {
+async function applyRolloutSettings() {
+  await getRolloutConfirmFlows().applyRolloutSettings({
+    percentage: rolloutPercentageDraft.value,
+    cacheTtlSeconds: rolloutCacheTtlDraft.value,
+  })
+  if (!rolloutSettingsDraftChanged.value)
+    editingRolloutSettings.value = false
+}
+
+function parseOptionalInteger(value: string, min: number, max: number) {
+  const trimmed = value.trim()
+  if (!trimmed)
+    return { ok: true as const, value: null }
+  const parsed = Number(trimmed)
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max)
+    return { ok: false as const }
+  return { ok: true as const, value: parsed }
+}
+
+function parseRequiredInteger(value: string, min: number, max: number) {
+  const parsed = Number(value.trim())
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max)
+    return { ok: false as const }
+  return { ok: true as const, value: parsed }
+}
+
+function autoPauseActionLabel(action: string) {
+  if (action === 'rollback')
+    return t('rollback')
+  if (action === 'notify')
+    return t('notify')
+  return t('pause')
+}
+
+function displayOptionalNumber(value: number | null | undefined) {
+  return value == null ? t('not-configured') : String(value)
+}
+
+function buildAutoPauseChanges() {
+  const row = channel.value
+  const draft = autoPauseDraft.value
+  if (!row)
+    return null
+  const failure = parseOptionalInteger(draft.failureRateBps, 0, 10000)
+  const window = parseRequiredInteger(draft.windowMinutes, 1, 10080)
+  const confidence = Number(Number(draft.confidence.trim()).toFixed(4))
+  const minAttempts = parseOptionalInteger(draft.minAttempts, 0, Number.MAX_SAFE_INTEGER)
+  const minFailures = parseOptionalInteger(draft.minFailures, 0, Number.MAX_SAFE_INTEGER)
+  const cooldown = parseRequiredInteger(draft.cooldownMinutes, 0, 10080)
+  if (!failure.ok || !window.ok || !minAttempts.ok || !minFailures.ok || !cooldown.ok
+    || !Number.isFinite(confidence) || confidence <= 0 || confidence >= 1
+    || !['pause', 'rollback', 'notify'].includes(draft.action)) {
     toast.error(t('error-update-channel'))
-    return
+    return null
   }
-
-  await saveChannelChange(key, parsedValue as any)
+  const next = {
+    auto_pause_failure_rate_bps: failure.value,
+    auto_pause_action: draft.action,
+    auto_pause_window_minutes: window.value,
+    auto_pause_confidence: confidence,
+    auto_pause_min_attempts: minAttempts.value,
+    auto_pause_min_failures: minFailures.value,
+    auto_pause_cooldown_minutes: cooldown.value,
+  }
+  const changes: Record<string, unknown> = {}
+  if (row.auto_pause_failure_rate_bps !== next.auto_pause_failure_rate_bps)
+    changes.auto_pause_failure_rate_bps = next.auto_pause_failure_rate_bps
+  if (row.auto_pause_action !== next.auto_pause_action)
+    changes.auto_pause_action = next.auto_pause_action
+  if (row.auto_pause_window_minutes !== next.auto_pause_window_minutes)
+    changes.auto_pause_window_minutes = next.auto_pause_window_minutes
+  if (Number(row.auto_pause_confidence) !== next.auto_pause_confidence)
+    changes.auto_pause_confidence = next.auto_pause_confidence
+  if (row.auto_pause_min_attempts !== next.auto_pause_min_attempts)
+    changes.auto_pause_min_attempts = next.auto_pause_min_attempts
+  if (row.auto_pause_min_failures !== next.auto_pause_min_failures)
+    changes.auto_pause_min_failures = next.auto_pause_min_failures
+  if (row.auto_pause_cooldown_minutes !== next.auto_pause_cooldown_minutes)
+    changes.auto_pause_cooldown_minutes = next.auto_pause_cooldown_minutes
+  return changes
 }
 
-async function saveAutoPauseFailureRate(value: string) {
-  await saveIntegerField('auto_pause_failure_rate_bps', value, 0, 10000, true)
+function startEditAutoPause() {
+  if (channel.value)
+    autoPauseDraft.value = autoPauseDraftFromChannel(channel.value)
+  editingAutoPause.value = true
 }
 
-async function saveAutoPauseConfidence(value: string) {
-  const confidence = Number(value.trim())
-  if (!Number.isFinite(confidence) || confidence <= 0 || confidence >= 1) {
-    toast.error(t('error-update-channel'))
+function cancelEditAutoPause() {
+  editingAutoPause.value = false
+  if (channel.value)
+    autoPauseDraft.value = autoPauseDraftFromChannel(channel.value)
+}
+
+async function applyAutoPauseSettings() {
+  const changes = buildAutoPauseChanges()
+  if (!changes)
+    return
+  if (Object.keys(changes).length === 0) {
+    editingAutoPause.value = false
     return
   }
-
-  await saveChannelChange('auto_pause_confidence', Number(confidence.toFixed(4)) as any)
+  await getRolloutConfirmFlows().applyAutoPauseSettings(changes)
+  if (Object.keys(buildAutoPauseChanges() ?? {}).length === 0)
+    editingAutoPause.value = false
 }
 
 async function rollbackRollout() {
-  if (await saveChannelChanges({
-    rollout_version: null,
-    rollout_enabled: false,
-    rollout_percentage_bps: 0,
-    rollout_paused_at: null,
-    rollout_pause_reason: null,
-  })) {
-    await askUpdateNotificationAfterBundleChange()
-  }
+  await getRolloutConfirmFlows().rollbackRollout()
 }
 
 async function promoteRollout() {
-  if (!channel.value?.rollout_version)
-    return
-  if (await saveChannelChanges({
-    version: channel.value.rollout_version,
-    rollout_version: null,
-    rollout_enabled: false,
-    rollout_percentage_bps: 0,
-    rollout_paused_at: null,
-    rollout_pause_reason: null,
-  })) {
-    await askUpdateNotificationAfterBundleChange()
-  }
+  await getRolloutConfirmFlows().promoteRollout()
 }
 
 async function toggleRolloutPause() {
-  await saveChannelChanges(channel.value?.rollout_paused_at
-    ? { rollout_paused_at: null, rollout_pause_reason: null }
-    : { rollout_paused_at: new Date().toISOString(), rollout_pause_reason: t('manual-rollout-pause') })
+  await getRolloutConfirmFlows().toggleRolloutPause()
 }
 
 async function refreshFilteredVersions() {
@@ -766,6 +1141,86 @@ function closeUpdatePackageDropdown() {
   }
 }
 
+function openChannelInfoDialog(id: string, title: string, description: string) {
+  dialogStore.openDialog({
+    id,
+    title,
+    description,
+    size: 'lg',
+    buttons: [
+      {
+        text: t('close'),
+        role: 'primary',
+      },
+    ],
+  })
+}
+
+function openRolloutSettingsInfo() {
+  openChannelInfoDialog(
+    'rollout-settings-info',
+    t('progressive-rollout'),
+    `${t('rollout-settings-help')}\n\n${t('rollout-percentage-help')}\n\n${t('cache-ttl-help')}`,
+  )
+}
+
+function openAutoPauseInfo() {
+  openChannelInfoDialog(
+    'auto-pause-info',
+    t('auto-pause'),
+    t('auto-pause-help'),
+  )
+}
+
+function openUpdatePackageInfo() {
+  openChannelInfoDialog(
+    'update-package-info',
+    t('update-package'),
+    getUpdatePackageInfoDescriptionCopy(t, channel.value?.update_package ?? 'all'),
+  )
+}
+
+let rolloutConfirmFlows!: ReturnType<typeof createChannelRolloutConfirmFlows>
+
+function getRolloutConfirmFlows() {
+  return rolloutConfirmFlows
+}
+
+rolloutConfirmFlows = createChannelRolloutConfirmFlows({
+  dialogStore,
+  t,
+  toast,
+  canUpdateChannelSettings: () => canUpdateChannelSettings.value,
+  closeUpdatePackageDropdown,
+  getChannel: () => channel.value,
+  rolloutTargetName: () => rolloutTargetName.value,
+  stableBundleName: () => stableBundleName.value,
+  rolloutPercentageText: () => rolloutPercentageText.value,
+  saveChannelChange: async (key, value) => {
+    await saveChannelChange(key as EditableChannelKey, value as any)
+  },
+  saveChannelChanges,
+  askUpdateNotificationAfterBundleChange,
+  openSelectRolloutVersion,
+})
+
+// One-line answer to "who gets what from this channel", shown above the details.
+const channelPlatforms = computed(() => {
+  if (!channel.value)
+    return []
+  return (['ios', 'android', 'electron'] as const)
+    .filter(platform => channel.value?.[platform])
+    .map(platform => t(`platform-${platform}`))
+})
+
+const channelAudience = computed(() => {
+  if (channel.value?.public)
+    return t('channel-summary-audience-default')
+  if (channel.value?.allow_device_self_set)
+    return t('channel-summary-audience-self-set')
+  return t('channel-summary-audience-assigned')
+})
+
 function getAutoUpdateLabel(value: string) {
   switch (value) {
     case 'major':
@@ -821,28 +1276,15 @@ const updatePackageOptions = [
 ] as const satisfies Database['public']['Enums']['channel_update_package'][]
 
 function getUpdatePackageLabel(value?: Database['public']['Enums']['channel_update_package'] | null) {
-  switch (value) {
-    case 'zip':
-      return t('update-package-zip')
-    case 'delta':
-      return t('update-package-delta')
-    case 'zip_from_builtin':
-      return t('update-package-zip-from-builtin')
-    case 'delta_from_builtin':
-      return t('update-package-delta-from-builtin')
-    default:
-      return t('update-package-all')
-  }
+  return getUpdatePackageLabelCopy(t, value)
+}
+
+function getUpdatePackageDescription(value: Database['public']['Enums']['channel_update_package']) {
+  return getUpdatePackageDescriptionCopy(t, value)
 }
 
 async function onSelectUpdatePackage(value: Database['public']['Enums']['channel_update_package']) {
-  if (!canUpdateChannelSettings.value) {
-    toast.error(t('no-permission'))
-    return false
-  }
-
-  await saveChannelChange('update_package', value)
-  closeUpdatePackageDropdown()
+  await getRolloutConfirmFlows().onSelectUpdatePackage(value)
 }
 
 function openLink(url?: string): void {
@@ -1011,12 +1453,54 @@ async function copyCurlCommand() {
     <PageLoader v-if="loading" />
     <div v-else-if="channel" class="mt-0 md:mt-8">
       <div class="w-full h-full px-0 pt-0 mx-auto mb-8 sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
-        <div class="flex flex-col bg-white border shadow-lg md:rounded-lg border-slate-300 dark:border-slate-900 dark:bg-slate-800">
+        <div class="flex flex-col bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10">
+          <div class="px-4 py-4 border-b sm:px-6 border-slate-200 dark:border-slate-500" data-test="channel-summary">
+            <p v-if="channelPaused" class="text-sm font-medium text-amber-800 dark:text-amber-200" data-test="channel-summary-paused">
+              {{ t('channel-summary-paused') }}
+            </p>
+            <p v-else-if="channelOnBuiltin && !rolloutIsActive" class="text-sm text-slate-700 dark:text-slate-200">
+              {{ t('channel-summary-builtin') }}
+            </p>
+            <p v-else-if="!rolloutIsActive" class="text-sm text-slate-700 dark:text-slate-200">
+              {{ t('channel-summary-serves', { bundle: channel.version.name }) }}
+            </p>
+            <div class="flex flex-wrap gap-2 text-xs font-medium" :class="{ 'mt-2': !rolloutIsActive }">
+              <span class="px-2 py-1 rounded-md bg-slate-100 text-slate-700 dark:bg-slate-900 dark:text-slate-200">
+                {{ channelAudience }}
+              </span>
+              <span
+                v-if="isDefaultUploadChannel"
+                class="px-2 py-1 rounded-md bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200"
+                :title="t('channel-default-upload-badge-hint')"
+              >
+                {{ t('channel-summary-default-upload') }}
+              </span>
+              <span
+                class="px-2 py-1 rounded-md"
+                :class="channelPlatforms.length ? 'bg-slate-100 text-slate-700 dark:bg-slate-900 dark:text-slate-200' : 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200'"
+              >
+                {{ channelPlatforms.length ? channelPlatforms.join(' · ') : t('channel-summary-no-platform') }}
+              </span>
+            </div>
+          </div>
           <dl class="divide-y divide-slate-200 dark:divide-slate-500">
             <InfoRow :label="t('name')">
               {{ channel.name }}
             </InfoRow>
-            <div v-if="rolloutIsActive" class="px-4 py-4 sm:px-6">
+            <div v-if="channelPaused" class="px-4 py-4 sm:px-6" data-test="channel-paused-banner">
+              <div class="flex gap-3 rounded-md border px-4 py-3 border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800/70 dark:bg-amber-950/30 dark:text-amber-100">
+                <IconWarning class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                <div class="min-w-0 space-y-1">
+                  <p class="text-sm font-semibold">
+                    {{ t('channel-paused-banner-title') }}
+                  </p>
+                  <p class="text-xs opacity-90">
+                    {{ t('channel-paused-banner-hint') }}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div v-else-if="rolloutIsActive" class="px-4 py-4 sm:px-6">
               <div class="flex gap-3 rounded-md border px-4 py-3" :class="rolloutDeliveryBannerClass">
                 <IconWarning class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                 <div class="min-w-0 space-y-1">
@@ -1029,22 +1513,65 @@ async function copyCurlCommand() {
                 </div>
               </div>
             </div>
-            <!-- Bundle assigned to this channel -->
-            <InfoRow :label="rolloutIsActive ? t('stable-fallback') : t('bundle-assigned-to-this-channel')" class="sm:items-center" label-class="text-base! leading-5 font-bold! lg:whitespace-nowrap" :is-link="channel && !isInternalVersionName((channel.version.name))">
-              <div class="flex items-center gap-3">
-                <span class="text-base leading-5 cursor-pointer" @click="openBundle()">{{ channel.version.name }}</span>
+            <!-- Bundle assigned to this channel + channel-wide actions -->
+            <div class="flex flex-col gap-3 px-4 py-4 sm:px-6 sm:py-5 lg:flex-row lg:items-center lg:justify-between" data-test="channel-bundle-row">
+              <dt class="text-base font-bold leading-5 text-gray-700 dark:text-gray-200 lg:whitespace-nowrap">
+                {{ rolloutIsActive ? t('stable-fallback') : t('bundle-assigned-to-this-channel') }}
+              </dt>
+              <dd class="flex flex-wrap items-center gap-2 lg:justify-end">
+                <button
+                  v-if="!isInternalVersionName(channel.version.name)"
+                  type="button"
+                  class="mr-1 text-base font-bold leading-5 text-blue-600 underline underline-offset-4 dark:text-blue-500"
+                  @click="openBundle()"
+                >
+                  {{ channel.version.name }}
+                </button>
+                <span v-else class="mr-1 text-base leading-5 text-slate-700 dark:text-slate-200">{{ t('builtin-bundle') }}</span>
+                <span
+                  v-if="channelPaused"
+                  class="inline-flex items-center px-2 py-1 mr-1 text-xs font-semibold rounded-md bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
+                >
+                  {{ t('channel-paused-badge') }}
+                </span>
+                <button
+                  v-if="showPromoteToChannel"
+                  type="button"
+                  class="d-btn d-btn-primary d-btn-sm"
+                  data-test="promote-to-channel"
+                  @click="openPromoteToChannel()"
+                >
+                  {{ t('promote-to-channel-button') }}
+                </button>
                 <button
                   type="button"
-                  v-if="channel"
-                  class="relative p-0 d-btn d-btn-outline size-6 min-h-6 before:absolute before:-inset-2.5 before:content-['']"
-                  :aria-label="t('select-stable-bundle')"
+                  class="d-btn d-btn-outline d-btn-sm"
+                  data-test="channel-change-bundle"
                   :disabled="!canPromoteBundle"
-                  @click="openSelectStableVersion()"
+                  @click="openSelectStableVersion(channelOnBuiltin)"
                 >
-                  <Settings class="w-4 h-4 text-gray-500 dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-400" />
+                  {{ t('change-bundle') }}
                 </button>
-              </div>
-            </InfoRow>
+                <button
+                  type="button"
+                  class="d-btn d-btn-outline d-btn-sm"
+                  data-test="channel-pause-toggle"
+                  :disabled="!canUpdateChannelSettings"
+                  @click="toggleChannelPause()"
+                >
+                  {{ channelPaused ? t('channel-resume-updates') : t('channel-pause-updates') }}
+                </button>
+                <button
+                  type="button"
+                  class="d-btn d-btn-outline d-btn-error d-btn-sm"
+                  data-test="channel-revert-builtin"
+                  :disabled="!canPromoteBundle || (channelOnBuiltin && !rolloutConfigured)"
+                  @click="handleRevert()"
+                >
+                  {{ t('channel-revert-button') }}
+                </button>
+              </dd>
+            </div>
             <InfoRow v-if="channel.disable_auto_update === 'version_number'" :label="t('min-update-version')">
               {{ channel.version.min_update_version ?? t('undefined-fail') }}
             </InfoRow>
@@ -1076,42 +1603,44 @@ async function copyCurlCommand() {
             </InfoRow>
             <div v-if="showRolloutSettings" class="px-4 py-5 sm:px-6">
               <section class="space-y-6" aria-labelledby="rollout-settings-title">
-                <div class="space-y-4">
-                  <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div class="min-w-0 space-y-1">
+                <div class="space-y-2">
+                  <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div class="flex min-w-0 items-center gap-1.5">
                       <h2 id="rollout-settings-title" class="text-base font-semibold text-slate-950 dark:text-white">
                         {{ t('progressive-rollout') }}
                       </h2>
-                      <p class="text-xs text-slate-500 dark:text-slate-400">
-                        {{ t('rollout-settings-help') }}
-                      </p>
-                      <p v-if="channel.rollout_pause_reason" class="text-xs text-amber-700 dark:text-amber-300">
-                        {{ channel.rollout_pause_reason }}
-                      </p>
+                      <button
+                        type="button"
+                        class="inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+                        data-test="rollout-settings-info"
+                        :aria-label="t('rollout-settings-info')"
+                        @click="openRolloutSettingsInfo()"
+                      >
+                        <IconInformation class="h-4 w-4" aria-hidden="true" />
+                      </button>
                     </div>
-                    <span class="inline-flex min-h-9 items-center self-start rounded-md border px-3 text-xs font-semibold" :class="rolloutStatusClass">
-                      {{ rolloutStatusLabel }}
-                    </span>
+                    <div class="flex min-w-0 flex-wrap items-center justify-end gap-2">
+                      <p class="mr-1 text-sm text-slate-600 dark:text-slate-300">
+                        <span>{{ t('rollout-target') }}:</span>
+                        <span class="ml-1 font-semibold text-slate-900 dark:text-white">{{ channel?.rollout_version_info?.name ?? t('not-configured') }}</span>
+                      </p>
+                      <button type="button" class="d-btn d-btn-outline d-btn-sm" :disabled="!canPromoteBundle" @click="openSelectRolloutVersion()">
+                        {{ t('edit') }}
+                      </button>
+                      <button type="button" class="d-btn d-btn-outline d-btn-sm" :disabled="rolloutPauseDisabled" @click="toggleRolloutPause()">
+                        {{ channel.rollout_paused_at ? t('resume') : t('pause') }}
+                      </button>
+                      <button type="button" class="d-btn d-btn-primary d-btn-sm" :disabled="rolloutTargetActionsDisabled" @click="promoteRollout()">
+                        {{ t('promote') }}
+                      </button>
+                      <button type="button" class="capitalize d-btn d-btn-outline d-btn-error d-btn-sm" :disabled="rolloutTargetActionsDisabled" @click="rollbackRollout()">
+                        {{ t('rollback') }}
+                      </button>
+                    </div>
                   </div>
-
-                  <dl class="grid border-y border-slate-200 text-sm dark:border-slate-700 sm:grid-cols-2 sm:divide-x sm:divide-slate-200 sm:dark:divide-slate-700">
-                    <div class="py-3 sm:px-4 sm:first:pl-0">
-                      <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">
-                        {{ t('rollout-target') }}
-                      </dt>
-                      <dd class="mt-1 font-semibold text-slate-900 dark:text-white">
-                        {{ channel?.rollout_version_info?.name ?? t('not-configured') }}
-                      </dd>
-                    </div>
-                    <div class="border-t border-slate-200 py-3 dark:border-slate-700 sm:border-t-0 sm:px-4">
-                      <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">
-                        {{ t('rollout-percentage') }}
-                      </dt>
-                      <dd class="mt-1 font-semibold text-slate-900 dark:text-white">
-                        {{ rolloutPercentageText }}
-                      </dd>
-                    </div>
-                  </dl>
+                  <p v-if="channel.rollout_pause_reason" class="text-xs text-amber-700 dark:text-amber-300">
+                    {{ channel.rollout_pause_reason }}
+                  </p>
                 </div>
 
                 <div class="space-y-3">
@@ -1119,56 +1648,77 @@ async function copyCurlCommand() {
                     <div class="h-full rounded-full transition-[width] duration-200" :class="rolloutProgressClass" :style="rolloutProgressStyle" />
                   </div>
 
-                  <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-                    <div class="grid gap-3 sm:grid-cols-2">
-                      <label class="space-y-1.5">
-                        <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('rollout-percentage') }}</span>
-                        <div class="flex min-h-11 items-center rounded-md border border-slate-200 bg-white px-3 focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-100 dark:border-slate-700 dark:bg-slate-900 dark:focus-within:border-sky-700 dark:focus-within:ring-sky-950">
-                          <input
-                            class="w-full bg-transparent text-sm font-medium text-slate-900 outline-none disabled:cursor-not-allowed disabled:opacity-40 dark:text-white"
-                            type="number"
-                            min="0"
-                            max="100"
-                            step="0.01"
-                            :aria-label="t('rollout-percentage')"
-                            :disabled="rolloutControlsDisabled"
-                            :value="rolloutPercentage"
-                            @change="saveRolloutPercentage(($event.target as HTMLInputElement).value)"
-                          >
-                          <span class="text-sm text-slate-400 dark:text-slate-500">%</span>
-                        </div>
-                      </label>
-                      <label class="space-y-1.5">
-                        <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('cache-ttl-seconds') }}</span>
+                  <div class="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                    <div class="space-y-1.5">
+                      <label for="rollout-percentage-input" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('rollout-percentage') }}</label>
+                      <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('rollout-percentage-placeholder') }}
+                      </p>
+                      <div v-if="!editingRolloutSettings" class="min-h-11 font-semibold text-slate-900 dark:text-white">
+                        {{ rolloutPercentageText }}
+                      </div>
+                      <div v-else class="flex min-h-11 items-center rounded-md border border-slate-200 bg-white px-3 focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-100 dark:border-slate-700 dark:bg-slate-900 dark:focus-within:border-sky-700 dark:focus-within:ring-sky-950">
                         <input
-                          class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                          id="rollout-percentage-input"
+                          ref="rolloutPercentageInput"
+                          v-model="rolloutPercentageDraft"
+                          class="w-full bg-transparent text-sm font-medium text-slate-900 outline-none disabled:cursor-not-allowed disabled:opacity-40 dark:text-white"
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          :placeholder="t('rollout-percentage-placeholder')"
+                          :aria-label="t('rollout-percentage')"
+                          :disabled="rolloutControlsDisabled"
+                          @keydown.enter.prevent="applyRolloutSettings()"
+                          @keydown.escape.prevent="cancelEditRolloutSettings()"
+                        >
+                        <span class="text-sm text-slate-400 dark:text-slate-500">%</span>
+                      </div>
+                    </div>
+                    <div class="space-y-1.5">
+                      <label for="rollout-cache-ttl-input" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('cache-ttl-seconds') }}</label>
+                      <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('cache-ttl-placeholder') }}
+                      </p>
+                      <div v-if="!editingRolloutSettings" class="min-h-11 font-semibold text-slate-900 dark:text-white">
+                        {{ rolloutCacheTtlText }}
+                      </div>
+                      <div v-else class="flex min-h-11 items-center rounded-md border border-slate-200 bg-white px-3 focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-100 dark:border-slate-700 dark:bg-slate-900 dark:focus-within:border-sky-700 dark:focus-within:ring-sky-950">
+                        <input
+                          id="rollout-cache-ttl-input"
+                          v-model="rolloutCacheTtlDraft"
+                          class="w-full bg-transparent text-sm font-medium text-slate-900 outline-none disabled:cursor-not-allowed disabled:opacity-40 dark:text-white"
                           type="number"
                           min="60"
                           max="31536000"
                           step="60"
+                          :placeholder="t('cache-ttl-placeholder')"
                           :aria-label="t('cache-ttl-seconds')"
                           :disabled="rolloutControlsDisabled"
-                          :value="channel.rollout_cache_ttl_seconds"
-                          @change="saveIntegerField('rollout_cache_ttl_seconds', ($event.target as HTMLInputElement).value, 60, 31536000)"
+                          @keydown.enter.prevent="applyRolloutSettings()"
+                          @keydown.escape.prevent="cancelEditRolloutSettings()"
                         >
-                      </label>
+                        <span v-if="rolloutCacheTtlDraftHuman" class="shrink-0 pl-2 text-sm text-slate-400 dark:text-slate-500">{{ rolloutCacheTtlDraftHuman }}</span>
+                      </div>
                     </div>
-
-                    <div class="flex flex-wrap gap-2 lg:justify-end">
-                      <button type="button" class="min-h-11 d-btn d-btn-ghost" :disabled="!canPromoteBundle" @click="openSelectRolloutVersion()">
-                        {{ t('set-rollout-target') }}
+                    <div class="flex flex-wrap justify-end gap-2">
+                      <button
+                        v-if="editingRolloutSettings"
+                        type="button"
+                        class="d-btn d-btn-ghost d-btn-sm"
+                        @click="cancelEditRolloutSettings()"
+                      >
+                        {{ t('button-cancel') }}
                       </button>
-                      <button type="button" class="min-h-11 d-btn d-btn-outline" :disabled="channel.rollout_enabled ? (rolloutTargetActionsDisabled || rolloutControlsDisabled) : rolloutEnableDisabled" @click="channel.rollout_enabled ? disableRollout() : enableRollout()">
-                        {{ channel.rollout_enabled ? t('disable') : t('enable') }}
-                      </button>
-                      <button type="button" class="min-h-11 d-btn d-btn-outline" :disabled="rolloutPauseDisabled" @click="toggleRolloutPause()">
-                        {{ channel.rollout_paused_at ? t('resume') : t('pause') }}
-                      </button>
-                      <button type="button" class="min-h-11 d-btn d-btn-primary" :disabled="rolloutTargetActionsDisabled" @click="promoteRollout()">
-                        {{ t('promote') }}
-                      </button>
-                      <button type="button" class="min-h-11 capitalize d-btn d-btn-error d-btn-ghost" :disabled="rolloutTargetActionsDisabled" @click="rollbackRollout()">
-                        {{ t('rollback') }}
+                      <button
+                        type="button"
+                        class="d-btn d-btn-outline d-btn-sm"
+                        data-test="rollout-settings-edit"
+                        :disabled="rolloutControlsDisabled || (editingRolloutSettings && !rolloutSettingsDraftChanged)"
+                        @click="editingRolloutSettings ? applyRolloutSettings() : startEditRolloutSettings()"
+                      >
+                        {{ editingRolloutSettings ? t('apply') : t('edit') }}
                       </button>
                     </div>
                   </div>
@@ -1176,43 +1726,90 @@ async function copyCurlCommand() {
 
                 <div class="border-t border-slate-200 pt-5 dark:border-slate-700/80">
                   <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">
-                      {{ t('auto-pause') }}
-                    </h3>
-                    <label class="inline-flex min-h-11 items-center gap-3 text-sm font-medium text-slate-700 dark:text-slate-200">
-                      <input
-                        class="d-toggle d-toggle-sm"
-                        type="checkbox"
-                        :checked="channel.auto_pause_enabled"
-                        :disabled="rolloutControlsDisabled"
-                        @change="saveChannelChange('auto_pause_enabled', !channel.auto_pause_enabled as any)"
+                    <div class="flex items-center gap-1.5">
+                      <h3 class="text-sm font-semibold text-slate-900 dark:text-white">
+                        {{ t('auto-pause') }}
+                      </h3>
+                      <button
+                        type="button"
+                        class="inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+                        data-test="auto-pause-info"
+                        :aria-label="t('auto-pause-info')"
+                        @click="openAutoPauseInfo()"
                       >
-                      <span>{{ channel.auto_pause_enabled ? t('enabled') : t('disabled') }}</span>
-                    </label>
+                        <IconInformation class="h-4 w-4" aria-hidden="true" />
+                      </button>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <label class="inline-flex min-h-11 items-center gap-3 text-sm font-medium text-slate-700 dark:text-slate-200">
+                        <input
+                          class="d-toggle d-toggle-sm"
+                          type="checkbox"
+                          :checked="channel.auto_pause_enabled"
+                          :disabled="rolloutControlsDisabled"
+                          @change="saveChannelChange('auto_pause_enabled', !channel.auto_pause_enabled as any)"
+                        >
+                        <span>{{ channel.auto_pause_enabled ? t('enabled') : t('disabled') }}</span>
+                      </label>
+                      <template v-if="channel.auto_pause_enabled">
+                        <button
+                          v-if="editingAutoPause"
+                          type="button"
+                          class="d-btn d-btn-ghost d-btn-sm"
+                          @click="cancelEditAutoPause()"
+                        >
+                          {{ t('button-cancel') }}
+                        </button>
+                        <button
+                          type="button"
+                          class="d-btn d-btn-outline d-btn-sm"
+                          data-test="auto-pause-edit"
+                          :disabled="rolloutControlsDisabled"
+                          @click="editingAutoPause ? applyAutoPauseSettings() : startEditAutoPause()"
+                        >
+                          {{ editingAutoPause ? t('apply') : t('edit') }}
+                        </button>
+                      </template>
+                    </div>
                   </div>
 
                   <div v-if="channel.auto_pause_enabled" class="grid w-full gap-3 text-left sm:grid-cols-2 xl:grid-cols-4">
-                    <label class="space-y-1.5">
-                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('failure-rate-bps') }}</span>
+                    <div class="space-y-1.5">
+                      <label for="auto-pause-failure-rate" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('failure-rate-bps') }}</label>
+                      <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('failure-rate-placeholder') }}
+                      </p>
+                      <div v-if="!editingAutoPause" class="min-h-11 font-semibold text-slate-900 dark:text-white">
+                        {{ displayOptionalNumber(channel.auto_pause_failure_rate_bps) }}
+                      </div>
                       <input
-                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        v-else
+                        id="auto-pause-failure-rate"
+                        v-model="autoPauseDraft.failureRateBps"
+                        :class="fieldInputClass"
                         type="number"
                         min="0"
                         max="10000"
+                        :placeholder="t('failure-rate-placeholder')"
                         :aria-label="t('failure-rate-bps')"
                         :disabled="rolloutControlsDisabled"
-                        :value="channel.auto_pause_failure_rate_bps ?? ''"
-                        @change="saveAutoPauseFailureRate(($event.target as HTMLInputElement).value)"
                       >
-                    </label>
-                    <label class="space-y-1.5">
-                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('auto-pause-action') }}</span>
+                    </div>
+                    <div class="space-y-1.5">
+                      <label for="auto-pause-action" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('auto-pause-action') }}</label>
+                      <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('auto-pause-action-placeholder') }}
+                      </p>
+                      <div v-if="!editingAutoPause" class="min-h-11 font-semibold text-slate-900 dark:text-white">
+                        {{ autoPauseActionLabel(channel.auto_pause_action) }}
+                      </div>
                       <select
-                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        v-else
+                        id="auto-pause-action"
+                        v-model="autoPauseDraft.action"
+                        :class="fieldInputClass"
                         :aria-label="t('auto-pause-action')"
                         :disabled="rolloutControlsDisabled"
-                        :value="channel.auto_pause_action"
-                        @change="saveChannelChange('auto_pause_action', ($event.target as HTMLSelectElement).value as any)"
                       >
                         <option value="pause">
                           {{ t('pause') }}
@@ -1224,71 +1821,111 @@ async function copyCurlCommand() {
                           {{ t('notify') }}
                         </option>
                       </select>
-                    </label>
-                    <label class="space-y-1.5">
-                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('window-minutes') }}</span>
+                    </div>
+                    <div class="space-y-1.5">
+                      <label for="auto-pause-window" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('window-minutes') }}</label>
+                      <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('window-minutes-placeholder') }}
+                      </p>
+                      <div v-if="!editingAutoPause" class="min-h-11 font-semibold text-slate-900 dark:text-white">
+                        {{ channel.auto_pause_window_minutes }}
+                      </div>
                       <input
-                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        v-else
+                        id="auto-pause-window"
+                        v-model="autoPauseDraft.windowMinutes"
+                        :class="fieldInputClass"
                         type="number"
                         min="1"
                         max="10080"
+                        :placeholder="t('window-minutes-placeholder')"
                         :aria-label="t('window-minutes')"
                         :disabled="rolloutControlsDisabled"
-                        :value="channel.auto_pause_window_minutes"
-                        @change="saveIntegerField('auto_pause_window_minutes', ($event.target as HTMLInputElement).value, 1, 10080)"
                       >
-                    </label>
-                    <label class="space-y-1.5">
-                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('confidence') }}</span>
+                    </div>
+                    <div class="space-y-1.5">
+                      <label for="auto-pause-confidence" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('confidence') }}</label>
+                      <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('confidence-placeholder') }}
+                      </p>
+                      <div v-if="!editingAutoPause" class="min-h-11 font-semibold text-slate-900 dark:text-white">
+                        {{ channel.auto_pause_confidence }}
+                      </div>
                       <input
-                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        v-else
+                        id="auto-pause-confidence"
+                        v-model="autoPauseDraft.confidence"
+                        :class="fieldInputClass"
                         type="number"
                         min="0.0001"
                         max="0.9999"
                         step="0.0001"
+                        :placeholder="t('confidence-placeholder')"
                         :aria-label="t('confidence')"
                         :disabled="rolloutControlsDisabled"
-                        :value="channel.auto_pause_confidence"
-                        @change="saveAutoPauseConfidence(($event.target as HTMLInputElement).value)"
                       >
-                    </label>
-                    <label class="space-y-1.5">
-                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('min-attempts') }}</span>
+                    </div>
+                    <div class="space-y-1.5">
+                      <label for="auto-pause-min-attempts" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('min-attempts') }}</label>
+                      <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('min-attempts-placeholder') }}
+                      </p>
+                      <div v-if="!editingAutoPause" class="min-h-11 font-semibold text-slate-900 dark:text-white">
+                        {{ displayOptionalNumber(channel.auto_pause_min_attempts) }}
+                      </div>
                       <input
-                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        v-else
+                        id="auto-pause-min-attempts"
+                        v-model="autoPauseDraft.minAttempts"
+                        :class="fieldInputClass"
                         type="number"
                         min="0"
+                        :placeholder="t('min-attempts-placeholder')"
                         :aria-label="t('min-attempts')"
                         :disabled="rolloutControlsDisabled"
-                        :value="channel.auto_pause_min_attempts ?? ''"
-                        @change="saveIntegerField('auto_pause_min_attempts', ($event.target as HTMLInputElement).value, 0, Number.MAX_SAFE_INTEGER, true)"
                       >
-                    </label>
-                    <label class="space-y-1.5">
-                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('min-failures') }}</span>
+                    </div>
+                    <div class="space-y-1.5">
+                      <label for="auto-pause-min-failures" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('min-failures') }}</label>
+                      <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('min-failures-placeholder') }}
+                      </p>
+                      <div v-if="!editingAutoPause" class="min-h-11 font-semibold text-slate-900 dark:text-white">
+                        {{ displayOptionalNumber(channel.auto_pause_min_failures) }}
+                      </div>
                       <input
-                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        v-else
+                        id="auto-pause-min-failures"
+                        v-model="autoPauseDraft.minFailures"
+                        :class="fieldInputClass"
                         type="number"
                         min="0"
+                        :placeholder="t('min-failures-placeholder')"
                         :aria-label="t('min-failures')"
                         :disabled="rolloutControlsDisabled"
-                        :value="channel.auto_pause_min_failures ?? ''"
-                        @change="saveIntegerField('auto_pause_min_failures', ($event.target as HTMLInputElement).value, 0, Number.MAX_SAFE_INTEGER, true)"
                       >
-                    </label>
-                    <label class="space-y-1.5">
-                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('cooldown-minutes') }}</span>
+                    </div>
+                    <div class="space-y-1.5">
+                      <label for="auto-pause-cooldown" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('cooldown-minutes') }}</label>
+                      <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('cooldown-minutes-placeholder') }}
+                      </p>
+                      <div v-if="!editingAutoPause" class="min-h-11 font-semibold text-slate-900 dark:text-white">
+                        {{ channel.auto_pause_cooldown_minutes }}
+                      </div>
                       <input
-                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        v-else
+                        id="auto-pause-cooldown"
+                        v-model="autoPauseDraft.cooldownMinutes"
+                        :class="fieldInputClass"
                         type="number"
                         min="0"
                         max="10080"
+                        :placeholder="t('cooldown-minutes-placeholder')"
                         :aria-label="t('cooldown-minutes')"
                         :disabled="rolloutControlsDisabled"
-                        :value="channel.auto_pause_cooldown_minutes"
-                        @change="saveIntegerField('auto_pause_cooldown_minutes', ($event.target as HTMLInputElement).value, 0, 10080)"
                       >
-                    </label>
+                    </div>
                   </div>
                 </div>
               </section>
@@ -1317,6 +1954,25 @@ async function copyCurlCommand() {
                     <div class="absolute w-2 h-2 rotate-45 bg-gray-800 -bottom-1 right-2" />
                   </div>
                 </div>
+              </div>
+            </InfoRow>
+            <InfoRow :label="t('default-upload-channel')">
+              <div class="flex items-center justify-end w-full gap-3 text-right">
+                <span
+                  class="inline-flex items-center px-2 py-1 text-xs font-semibold rounded-md"
+                  :class="isDefaultUploadChannel
+                    ? 'bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200'
+                    : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200'"
+                >
+                  {{ isDefaultUploadChannel ? t('channel-default-upload-active') : t('channel-default-upload-inactive') }}
+                </span>
+                <button
+                  type="button"
+                  class="text-sm font-medium text-blue-600 underline dark:text-blue-400 hover:text-blue-500 decoration-dotted dark:hover:text-blue-300"
+                  @click="goToDefaultChannelSettings"
+                >
+                  {{ t('manage-default-channel') }}
+                </button>
               </div>
             </InfoRow>
             <InfoRow
@@ -1399,13 +2055,13 @@ async function copyCurlCommand() {
               </div>
             </InfoRow>
             <InfoRow :label="t('update-package')">
-              <div class="flex items-center justify-end w-full gap-3">
+              <div class="flex items-center justify-end w-full gap-2">
                 <details ref="updatePackageDropdown" class="d-dropdown d-dropdown-end">
                   <summary class="d-btn d-btn-outline d-btn-sm">
                     <span>{{ getUpdatePackageLabel(channel.update_package) }}</span>
                     <IconDown class="w-4 h-4 ml-1 fill-current" />
                   </summary>
-                  <ul class="w-64 p-2 bg-white shadow d-dropdown-content dark:bg-base-200 rounded-box z-1">
+                  <ul class="w-80 max-h-96 overflow-y-auto p-2 bg-white shadow d-dropdown-content dark:bg-base-200 rounded-box z-50">
                     <li
                       v-for="option in updatePackageOptions"
                       :key="option"
@@ -1414,20 +2070,24 @@ async function copyCurlCommand() {
                       <button
                         type="button"
                         class="block w-full px-3 py-2 text-left text-gray-900 dark:text-white"
+                        :class="{ 'bg-sky-50 dark:bg-sky-950/40': channel.update_package === option }"
                         @click="onSelectUpdatePackage(option)"
                       >
-                        {{ getUpdatePackageLabel(option) }}
+                        <span class="block text-sm font-medium">{{ getUpdatePackageLabel(option) }}</span>
+                        <span class="mt-0.5 block text-xs leading-snug text-slate-500 dark:text-slate-400">{{ getUpdatePackageDescription(option) }}</span>
                       </button>
                     </li>
                   </ul>
                 </details>
-                <div class="relative inline-flex group">
-                  <IconInformation class="w-4 h-4 transition-colors text-slate-400 cursor-help dark:text-slate-400 dark:group-hover:text-slate-200 group-hover:text-slate-600" />
-                  <div class="absolute right-0 w-64 px-3 py-2 mb-2 text-xs text-white transition-opacity duration-150 bg-gray-800 rounded-lg shadow-lg opacity-0 pointer-events-none bottom-full group-hover:opacity-100">
-                    {{ t('update-package-help') }}
-                    <div class="absolute w-2 h-2 rotate-45 bg-gray-800 -bottom-1 right-2" />
-                  </div>
-                </div>
+                <button
+                  type="button"
+                  class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+                  data-test="update-package-info"
+                  :aria-label="t('update-package-info')"
+                  @click="openUpdatePackageInfo()"
+                >
+                  <IconInformation class="h-4 w-4" aria-hidden="true" />
+                </button>
               </div>
             </InfoRow>
             <InfoRow :label="t('allow-dev-build')">
@@ -1522,12 +2182,54 @@ async function copyCurlCommand() {
         {{ t('back-to-channels') }}
       </button>
     </div>
+    <!-- Teleport Content for Promote To Channel Dialog -->
+    <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.id === promoteDialogId" defer to="#dialog-v2-content">
+      <fieldset class="w-full space-y-2" data-test="promote-channel-targets">
+        <legend class="mb-2 text-sm text-gray-600 dark:text-gray-400">
+          {{ t('promote-channel-pick-target') }}
+        </legend>
+        <label
+          v-for="target in promoteTargets"
+          :key="target.id"
+          class="flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors"
+          :class="promoteTargetId === target.id
+            ? 'border-primary bg-primary/5 dark:border-primary-500 dark:bg-primary/10'
+            : 'border-gray-300 hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-700'"
+        >
+          <input
+            v-model="promoteTargetId"
+            type="radio"
+            name="promote-target"
+            class="d-radio d-radio-sm d-radio-primary"
+            :value="target.id"
+          >
+          <span class="flex-1 min-w-0">
+            <span class="block font-medium truncate">{{ target.name }}</span>
+            <span class="block text-sm text-gray-600 truncate dark:text-gray-400">
+              {{ t('promote-channel-current-bundle', { bundle: target.versionName ?? t('not-configured') }) }}
+            </span>
+            <span v-if="target.rolloutActive" class="block text-xs text-amber-700 dark:text-amber-300">
+              {{ t('promote-channel-rollout-cleared') }}
+            </span>
+          </span>
+          <span
+            v-if="target.isDefault"
+            class="px-2 py-0.5 text-xs font-medium rounded-md bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200"
+          >
+            {{ t('channel-default-badge') }}
+          </span>
+          <span v-if="target.versionName === channel?.version?.name" class="text-xs text-gray-500 dark:text-gray-400">
+            {{ t('promote-channel-already-serving') }}
+          </span>
+        </label>
+      </fieldset>
+    </Teleport>
     <!-- Teleport Content for Bundle Link Dialog -->
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('bundle-management')" defer to="#dialog-v2-content">
       <div class="w-full space-y-4">
         <div class="text-left">
           <p class="mb-4 text-sm text-gray-600 dark:text-gray-400">
-            {{ t('select-bundle-action-for-channel') }}
+            {{ bundleLinkMode === 'rollout' ? t('search-and-select-a-different-bundle') : t('select-bundle-action-for-channel') }}
           </p>
         </div>
 
@@ -1561,89 +2263,93 @@ async function copyCurlCommand() {
             <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t('available-versions') }}
             </h4>
-            <div
+            <button
               v-for="version in bundleLinkVersions"
               :key="version.id"
-              class="p-3 border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+              type="button"
+              class="block w-full p-3 text-left border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
               @click="handleVersionLink(version as any)"
             >
-              <div class="flex items-center justify-between">
-                <div>
-                  <div class="font-medium">
+              <span class="flex items-center justify-between">
+                <span class="block">
+                  <span class="block font-medium">
                     {{ version.name }}
-                  </div>
-                  <div class="text-sm text-gray-600 dark:text-gray-400">
+                  </span>
+                  <span class="block text-sm text-gray-600 dark:text-gray-400">
                     {{ t('created') }}: {{ version.created_at ? formatLocalDate(version.created_at) : t('unknown') }}
-                  </div>
-                </div>
-                <div class="text-blue-600 dark:text-blue-400">
+                  </span>
+                </span>
+                <span class="block text-blue-600 dark:text-blue-400">
                   →
-                </div>
-              </div>
-            </div>
+                </span>
+              </span>
+            </button>
           </div>
 
           <!-- Action Cards (when not in search mode) -->
           <div v-if="showSearchAndActions" class="space-y-3">
             <!-- Link New Bundle -->
-            <div
-              class="p-3 border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+            <button
+              type="button"
+              class="block w-full p-3 text-left border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
               @click="bundleLinkSearchMode = true"
             >
-              <div class="flex items-center justify-between">
-                <div>
-                  <div class="font-medium">
+              <span class="flex items-center justify-between">
+                <span class="block">
+                  <span class="block font-medium">
                     {{ t('link-new-bundle') }}
-                  </div>
-                  <div class="text-sm text-gray-600 dark:text-gray-400">
+                  </span>
+                  <span class="block text-sm text-gray-600 dark:text-gray-400">
                     {{ t('search-and-select-a-different-bundle') }}
-                  </div>
-                </div>
-                <div class="text-blue-600 dark:text-blue-400">
+                  </span>
+                </span>
+                <span class="block text-blue-600 dark:text-blue-400">
                   📦
-                </div>
-              </div>
-            </div>
+                </span>
+              </span>
+            </button>
 
             <!-- Unlink Bundle -->
-            <div
-              class="p-3 border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+            <button
+              type="button"
+              class="block w-full p-3 text-left border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
               @click="handleUnlink"
             >
-              <div class="flex items-center justify-between">
-                <div>
-                  <div class="font-medium">
+              <span class="flex items-center justify-between">
+                <span class="block">
+                  <span class="block font-medium">
                     {{ t('unlink-bundle') }}
-                  </div>
-                  <div class="text-sm text-gray-600 dark:text-gray-400">
+                  </span>
+                  <span class="block text-sm text-gray-600 dark:text-gray-400">
                     {{ t('remove-bundle-from-this-channel') }}
-                  </div>
-                </div>
-                <div class="text-orange-600 dark:text-orange-400">
+                  </span>
+                </span>
+                <span class="block text-orange-600 dark:text-orange-400">
                   🔓
-                </div>
-              </div>
-            </div>
+                </span>
+              </span>
+            </button>
 
             <!-- Revert to Built-in -->
-            <div
-              class="p-3 border border-red-300 rounded-lg cursor-pointer dark:border-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
+            <button
+              type="button"
+              class="block w-full p-3 text-left border border-red-300 rounded-lg cursor-pointer dark:border-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
               @click="handleRevert"
             >
-              <div class="flex items-center justify-between">
-                <div>
-                  <div class="font-medium text-red-600 dark:text-red-400">
+              <span class="flex items-center justify-between">
+                <span class="block">
+                  <span class="block font-medium text-red-600 dark:text-red-400">
                     {{ t('revert-to-builtin') }}
-                  </div>
-                  <div class="text-sm text-red-500 dark:text-red-300">
+                  </span>
+                  <span class="block text-sm text-red-500 dark:text-red-300">
                     {{ t('revert-channel-to-built-in-version') }}
-                  </div>
-                </div>
-                <div class="text-red-600 dark:text-red-400">
+                  </span>
+                </span>
+                <span class="block text-red-600 dark:text-red-400">
                   ⚠️
-                </div>
-              </div>
-            </div>
+                </span>
+              </span>
+            </button>
           </div>
 
           <!-- Empty state for search -->

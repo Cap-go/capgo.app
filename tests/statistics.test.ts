@@ -151,6 +151,7 @@ describe('[GET] /statistics operations with and without subkey', () => {
   })
 
   it('should get native version usage statistics without subkey', async () => {
+    const dedicatedApp = `com.stats.native.${randomUUID().replaceAll('-', '')}`
     const prefix = `native-version-${randomUUID()}`
     const fromDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0]
     const toDate = new Date().toISOString().split('T')[0]
@@ -161,25 +162,34 @@ describe('[GET] /statistics operations with and without subkey', () => {
     const androidLabel = `Android ${versionA}`
     const electronLabel = `Electron ${versionB}`
 
-    await getSupabaseClient()
-      .from('device_usage')
-      .insert([
-        { app_id: APPNAME, device_id: `${prefix}-a`, org_id: ORG_ID_STATS, platform: 'ios', timestamp, version_build: versionA },
-        { app_id: APPNAME, device_id: `${prefix}-a`, org_id: ORG_ID_STATS, platform: 'ios', timestamp, version_build: versionA },
-        { app_id: APPNAME, device_id: `${prefix}-b`, org_id: ORG_ID_STATS, platform: 'android', timestamp, version_build: versionA },
-        { app_id: APPNAME, device_id: `${prefix}-c`, org_id: ORG_ID_STATS, platform: 'electron', timestamp, version_build: versionB },
-      ])
-      .throwOnError()
-
     try {
-      const getNativeUsage = await fetch(`${BASE_URL}/statistics/app/${APPNAME}/native_usage?from=${fromDate}&to=${toDate}`, {
+      await createStatsSiblingApp(dedicatedApp)
+
+      await getSupabaseClient()
+        .from('device_usage')
+        .insert([
+          { app_id: dedicatedApp, device_id: `${prefix}-a`, org_id: ORG_ID_STATS, platform: 'ios', timestamp, version_build: versionA },
+          { app_id: dedicatedApp, device_id: `${prefix}-a`, org_id: ORG_ID_STATS, platform: 'ios', timestamp, version_build: versionA },
+          { app_id: dedicatedApp, device_id: `${prefix}-b`, org_id: ORG_ID_STATS, platform: 'android', timestamp, version_build: versionA },
+          { app_id: dedicatedApp, device_id: `${prefix}-c`, org_id: ORG_ID_STATS, platform: 'electron', timestamp, version_build: versionB },
+        ])
+        .throwOnError()
+
+      const getNativeUsage = await fetch(`${BASE_URL}/statistics/app/${dedicatedApp}/native_usage?from=${fromDate}&to=${toDate}`, {
         method: 'GET',
         headers: headersStats,
       })
       expect(getNativeUsage.status).toBe(200)
-      const nativeUsageData = await getNativeUsage.json() as { labels: string[], datasets: Array<{ label: string, metaCounts: number[] }> }
+      const nativeUsageData = await getNativeUsage.json() as {
+        labels: string[]
+        datasets: Array<{ label: string, metaCounts: number[] }>
+        activeDevices?: { android: number, ios: number, electron: number, unknown: number, total: number }
+        dailyPlatformActive?: { android: number[], ios: number[], total: number[] }
+      }
       expect(nativeUsageData).toHaveProperty('labels')
       expect(nativeUsageData).toHaveProperty('datasets')
+      expect(nativeUsageData).toHaveProperty('activeDevices')
+      expect(nativeUsageData).toHaveProperty('dailyPlatformActive')
 
       if (process.env.USE_CLOUDFLARE_WORKERS !== 'true') {
         const dayIndex = nativeUsageData.labels.indexOf(fromDate)
@@ -190,6 +200,13 @@ describe('[GET] /statistics operations with and without subkey', () => {
         expect(iosVersion?.metaCounts[dayIndex]).toBe(1)
         expect(androidVersion?.metaCounts[dayIndex]).toBe(1)
         expect(electronVersion?.metaCounts[dayIndex]).toBe(1)
+        expect(nativeUsageData.activeDevices?.ios).toBe(1)
+        expect(nativeUsageData.activeDevices?.android).toBe(1)
+        expect(nativeUsageData.activeDevices?.electron).toBe(1)
+        expect(nativeUsageData.activeDevices?.total).toBe(3)
+        expect(nativeUsageData.dailyPlatformActive?.ios[dayIndex]).toBe(1)
+        expect(nativeUsageData.dailyPlatformActive?.android[dayIndex]).toBe(1)
+        expect(nativeUsageData.dailyPlatformActive?.total[dayIndex]).toBe(3)
       }
     }
     finally {
@@ -198,6 +215,7 @@ describe('[GET] /statistics operations with and without subkey', () => {
         .delete()
         .like('device_id', `${prefix}%`)
         .throwOnError()
+      await deleteAppByAppId(dedicatedApp)
     }
   })
 

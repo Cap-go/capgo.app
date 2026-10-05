@@ -10,6 +10,12 @@ interface BrowserLoginOptions extends SaveKeyOptions {
   local: boolean
 }
 
+export interface BrowserLoginSession {
+  session: string
+  url: string
+  browserOpened: boolean
+}
+
 interface BrowserLoginEvent {
   channel: 'user-login'
   event: 'User CLI login'
@@ -60,24 +66,30 @@ export function shouldStartInitBrowserLogin(resolvedKey: string | undefined, int
   return !resolvedKey && interactive
 }
 
-export async function loginInitInBrowser(
-  options: BrowserLoginOptions,
+export async function beginBrowserLogin(
+  onUrl: (url: string) => void,
   overrides: Partial<BrowserLoginDependencies> = {},
-): Promise<string> {
+): Promise<BrowserLoginSession> {
   const dependencies = { ...defaults, ...overrides }
   const session = dependencies.createSession()
   const url = consoleWebUrl(`/login-cli?session=${encodeURIComponent(session)}`)
-  dependencies.writeUrl(`Open this URL to create your CLI key: ${url}`)
+  onUrl(url)
   try {
     await dependencies.openUrl(url)
+    return { session, url, browserOpened: true }
   }
   catch {
-    // The printed URL is the fallback when a browser cannot be opened.
+    return { session, url, browserOpened: false }
   }
+}
 
-  const key = await dependencies.promptForKey()
-  if (!key)
-    throw new CliUserError('CLI login cancelled')
+export async function completeBrowserLogin(
+  browserSession: BrowserLoginSession,
+  key: string,
+  options: BrowserLoginOptions,
+  overrides: Partial<BrowserLoginDependencies> = {},
+): Promise<void> {
+  const dependencies = { ...defaults, ...overrides }
   await dependencies.validateKey(key, {
     local: options.local,
     supaHost: options.supaHost,
@@ -91,13 +103,27 @@ export async function loginInitInBrowser(
       event: 'User CLI login',
       tracking_version: 2,
       org_id: orgId,
-      description: `cli-login:${session}`,
+      description: `cli-login:${browserSession.session}`,
       notifyConsole: true,
     })))
   }
   catch {
     // Saving a valid key is the success condition; browser confirmation is best effort.
   }
+}
 
+export async function loginInitInBrowser(
+  options: BrowserLoginOptions,
+  overrides: Partial<BrowserLoginDependencies> = {},
+): Promise<string> {
+  const dependencies = { ...defaults, ...overrides }
+  const session = await beginBrowserLogin(
+    url => dependencies.writeUrl(`Open this URL to create your CLI key: ${url}`),
+    dependencies,
+  )
+  const key = await dependencies.promptForKey()
+  if (!key)
+    throw new CliUserError('CLI login cancelled')
+  await completeBrowserLogin(session, key, options, dependencies)
   return key
 }

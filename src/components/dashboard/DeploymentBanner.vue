@@ -495,7 +495,7 @@ defineExpose({
     to="#dialog-v2-content"
   >
     <div class="space-y-4">
-      <div class="p-3 rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/40">
+      <div class="p-3 rounded-xl border border-slate-200 bg-slate-50 dark:border-white/10 dark:bg-white/[0.03]">
         <p class="text-sm font-medium text-slate-800 dark:text-slate-100">
           {{ t('deploy-default-channels-label') }}
         </p>

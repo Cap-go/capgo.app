@@ -709,11 +709,51 @@ describe('rbac permission system', () => {
       })
 
       it('serializes preview bundle lifecycle locks across promotion and deletion transactions', async () => {
+        const slug = randomUUID().slice(0, 8)
+        const orgId = randomUUID()
+        const appId = `com.rbac.bundle-lock.${slug}`
+
+        const setup = await pool.connect()
+        let lowerBundleId: string
+        let higherBundleId: string
+        try {
+          await setup.query('BEGIN')
+          await setup.query(`
+            INSERT INTO public.orgs (id, name, management_email, created_by)
+            VALUES ($1::uuid, $2, $3, $4::uuid)
+          `, [orgId, `Bundle Lock Org ${slug}`, `bundle-lock-${slug}@capgo.app`, USER_ID])
+
+          await setup.query(`
+            INSERT INTO public.apps (app_id, name, icon_url, owner_org)
+            VALUES ($1, $2, 'https://example.com/icon.png', $3::uuid)
+          `, [appId, `Bundle Lock App ${slug}`, orgId])
+
+          const lowerBundle = await setup.query(`
+            INSERT INTO public.app_versions (app_id, name, owner_org, user_id, storage_provider)
+            VALUES ($1, $2, $3::uuid, $4::uuid, 'r2-direct')
+            RETURNING id::text
+          `, [appId, `bundle-lock-lower-${slug}`, orgId, USER_ID])
+          const higherBundle = await setup.query(`
+            INSERT INTO public.app_versions (app_id, name, owner_org, user_id, storage_provider)
+            VALUES ($1, $2, $3::uuid, $4::uuid, 'r2-direct')
+            RETURNING id::text
+          `, [appId, `bundle-lock-higher-${slug}`, orgId, USER_ID])
+
+          lowerBundleId = lowerBundle.rows[0]!.id
+          higherBundleId = higherBundle.rows[0]!.id
+          expect(BigInt(lowerBundleId) < BigInt(higherBundleId)).toBe(true)
+          await setup.query('COMMIT')
+        }
+        catch (error) {
+          await setup.query('ROLLBACK')
+          throw error
+        }
+        finally {
+          setup.release()
+        }
+
         const holder = await pool.connect()
         const waiter = await pool.connect()
-        const lockSeed = BigInt(Date.now()) * BigInt(1_000_000) + BigInt(Math.floor(Math.random() * 1_000_000))
-        const lowerBundleId = lockSeed.toString()
-        const higherBundleId = (lockSeed + BigInt(1)).toString()
 
         try {
           await holder.query('BEGIN')
@@ -734,6 +774,16 @@ describe('rbac permission system', () => {
           await waiter.query('ROLLBACK')
           holder.release()
           waiter.release()
+
+          const cleanup = await pool.connect()
+          try {
+            await cleanup.query('DELETE FROM public.app_versions WHERE app_id = $1', [appId])
+            await cleanup.query('DELETE FROM public.apps WHERE app_id = $1', [appId])
+            await cleanup.query('DELETE FROM public.orgs WHERE id = $1::uuid', [orgId])
+          }
+          finally {
+            cleanup.release()
+          }
         }
       })
 
@@ -771,6 +821,43 @@ describe('rbac permission system', () => {
         }
         await query('ROLLBACK TO SAVEPOINT channel_insert_requires_promotion')
         expect((denied as { message?: string } | undefined)?.message).toContain('PERMISSION_DENIED_CHANNEL_PROMOTE_BUNDLE')
+
+        await query('SAVEPOINT channel_insert_rollout_existing_denied')
+        let deniedRolloutExisting: unknown
+        try {
+          await query(`
+            INSERT INTO public.channels (name, app_id, version, rollout_version, created_by, owner_org)
+            VALUES ($1, $2, NULL, $3::bigint, $4::uuid, $5::uuid)
+          `, [`trigger-denied-rollout-existing-${suffix}`, target.app_id, target.version_id, requesterId, target.owner_org])
+        }
+        catch (error) {
+          deniedRolloutExisting = error
+        }
+        await query('ROLLBACK TO SAVEPOINT channel_insert_rollout_existing_denied')
+        expect((deniedRolloutExisting as { message?: string } | undefined)?.message).toContain('PERMISSION_DENIED_CHANNEL_PROMOTE_BUNDLE')
+        expect((deniedRolloutExisting as { message?: string } | undefined)?.message).not.toContain('INVALID_CHANNEL_BUNDLE')
+
+        const missingRolloutResult = await query(`
+          SELECT COALESCE(MAX(id), 0) + 9000000000000 AS missing_rollout_id
+          FROM public.app_versions
+        `)
+        const missingRolloutId = missingRolloutResult.rows[0]?.missing_rollout_id
+        expect(missingRolloutId).toBeTruthy()
+
+        await query('SAVEPOINT channel_insert_rollout_missing_denied')
+        let deniedRolloutMissing: unknown
+        try {
+          await query(`
+            INSERT INTO public.channels (name, app_id, version, rollout_version, created_by, owner_org)
+            VALUES ($1, $2, NULL, $3::bigint, $4::uuid, $5::uuid)
+          `, [`trigger-denied-rollout-missing-${suffix}`, target.app_id, missingRolloutId, requesterId, target.owner_org])
+        }
+        catch (error) {
+          deniedRolloutMissing = error
+        }
+        await query('ROLLBACK TO SAVEPOINT channel_insert_rollout_missing_denied')
+        expect((deniedRolloutMissing as { message?: string } | undefined)?.message).toContain('PERMISSION_DENIED_CHANNEL_PROMOTE_BUNDLE')
+        expect((deniedRolloutMissing as { message?: string } | undefined)?.message).not.toContain('INVALID_CHANNEL_BUNDLE')
 
         const blank = await query(`
           INSERT INTO public.channels (name, app_id, version, created_by, owner_org)

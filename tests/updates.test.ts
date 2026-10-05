@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
-import { z } from 'zod'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { z } from 'zod'
 import { parseSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
 
-import { APP_NAME, createAppVersions, getBaseData, getEndpointUrl, getSupabaseClient, getVersionFromAction, headers, ORG_ID, postUpdate, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID } from './test-utils.ts'
+import { APP_NAME, createAppVersions, getBaseData, getEndpointUrl, getSupabaseClient, getVersionFromAction, headers, ORG_ID, postUpdate, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
 
 const id = randomUUID()
 const APP_NAME_UPDATE = `${APP_NAME}.${id}`
@@ -109,6 +109,14 @@ async function postUpdateAfterChannelMutation(data: Partial<ReturnType<typeof ge
 
 beforeAll(async () => {
   await resetAndSeedAppData(APP_NAME_UPDATE)
+  if (!USE_CLOUDFLARE) {
+    // Prime the isolate only — invalid payload returns 4xx without persisting device rows.
+    await warmEdgeEndpoint(getEndpointUrl('/updates'), {
+      method: 'POST',
+      headers,
+      body: '{}',
+    })
+  }
 }, 60_000)
 afterAll(async () => {
   await resetAppData(APP_NAME_UPDATE)
@@ -808,6 +816,29 @@ describe('manifest bundle count gating', () => {
 })
 
 describe('[POST] /updates parallel tests', () => {
+  it.skipIf(USE_CLOUDFLARE)('records the running version, not the offered one', async () => {
+    const uuid = randomUUID().toLowerCase()
+    const baseData = getBaseData(APP_NAME_UPDATE)
+    baseData.device_id = uuid
+    baseData.version_name = '1.1.0'
+
+    const response = await postUpdate(baseData)
+    expect(response.status).toBe(200)
+    const json = await response.json<UpdateRes>()
+    expect(json.version).toBe('1.0.0')
+
+    const { error, data } = await getSupabaseClient()
+      .from('devices')
+      .select('version_name')
+      .eq('device_id', uuid)
+      .eq('app_id', APP_NAME_UPDATE)
+      .single()
+    expect(error).toBeNull()
+    expect(data?.version_name).toBe('1.1.0')
+
+    await getSupabaseClient().from('devices').delete().eq('device_id', uuid).eq('app_id', APP_NAME_UPDATE)
+  })
+
   it.skipIf(USE_CLOUDFLARE)('with new device', async () => {
     const uuid = randomUUID().toLowerCase()
 
@@ -1216,6 +1247,44 @@ describe('update scenarios', () => {
         .eq('name', 'production')
         .throwOnError()
     }
+  })
+
+  it('paused channel sends no update and keeps the device bundle', async () => {
+    await getSupabaseClient()
+      .from('channels')
+      .update({ paused_at: new Date().toISOString() })
+      .eq('app_id', APP_NAME_UPDATE)
+      .eq('name', 'production')
+      .throwOnError()
+
+    try {
+      const baseData = getBaseData(APP_NAME_UPDATE)
+      baseData.version_name = '1.1.0'
+
+      const response = await postUpdateAfterChannelMutation(baseData)
+      expect(response.status).toBe(200)
+      const json = await response.json<UpdateRes>()
+      expect(json.error).toBe('channel_paused')
+      expect(json.kind).toBe('up_to_date')
+      expect(json.url).toBeUndefined()
+      expect(json.version).toBeUndefined()
+    }
+    finally {
+      await getSupabaseClient()
+        .from('channels')
+        .update({ paused_at: null })
+        .eq('app_id', APP_NAME_UPDATE)
+        .eq('name', 'production')
+        .throwOnError()
+    }
+
+    const baseData = getBaseData(APP_NAME_UPDATE)
+    baseData.version_name = '1.1.0'
+    const resumed = await postUpdateAfterChannelMutation(baseData)
+    expect(resumed.status).toBe(200)
+    const resumedJson = await resumed.json<UpdateRes>()
+    expect(resumedJson.error).toBeUndefined()
+    expect(resumedJson.version).toBe('1.0.0')
   })
 
   it('disallow device', async () => {

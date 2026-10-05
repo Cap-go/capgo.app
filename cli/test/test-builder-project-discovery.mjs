@@ -268,6 +268,21 @@ try {
     assert.equal(result.candidates[0].appId, 'com.example.javascript')
   })
 
+  await test('shows the configured Builder ID in workspace candidates', async () => {
+    const root = fixture('builder-app-id')
+    writeJson(join(root, 'package.json'), { private: true, workspaces: ['apps/*'] })
+    const jsDir = addPackage(root, 'apps/javascript', '@example/javascript')
+    const jsonDir = addPackage(root, 'apps/json', '@example/json')
+    writeText(join(jsDir, 'capacitor.config.js'), "module.exports = { appId: 'com.example.native', plugins: { CapgoBuilder: { capgoBuilderAppId: 'com.example.builder' } } }\n")
+    writeJson(join(jsonDir, 'capacitor.config.json'), {
+      appId: 'com.example.native-json',
+      plugins: { CapgoBuilder: { capgoBuilderAppId: 'com.example.builder-json' } },
+    })
+
+    const result = await discoverCapacitorProjects(root)
+    assert.deepEqual(result.candidates.map(candidate => candidate.appId), ['com.example.builder', 'com.example.builder-json'])
+  })
+
   await test('reads literal appId metadata without executing candidate configuration code', async () => {
     const root = fixture('non-executing-config-discovery')
     writeJson(join(root, 'package.json'), { private: true, workspaces: ['apps/*'] })

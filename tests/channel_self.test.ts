@@ -3,7 +3,7 @@ import type { DeviceLink, HttpMethod } from './test-utils.ts'
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { fetchTestRequest, getBaseData, getSupabaseClient, PLUGIN_BASE_URL, resetAndSeedAppData, resetAppData, resetAppDataStats, warmEdgeEndpoint } from './test-utils.ts'
+import { fetchTestRequest, getBaseData, getEndpointUrl, getSupabaseClient, PLUGIN_BASE_URL, resetAndSeedAppData, resetAppData, resetAppDataStats, warmEdgeEndpoint } from './test-utils.ts'
 
 interface ChannelInfo {
   id: number
@@ -64,7 +64,7 @@ async function withSupabaseCall<T extends { error?: { message?: string } | null 
 beforeAll(async () => {
   await resetAndSeedAppData(APPNAME)
   // Cold first /channel_self request can 502 under Deno shard load; warm before assertions.
-  await warmEdgeEndpoint(`${PLUGIN_BASE_URL}/channel_self`, {
+  await warmEdgeEndpoint(getEndpointUrl('/channel_self'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(getBaseData(APPNAME)),
@@ -688,13 +688,15 @@ it.skipIf(USE_CLOUDFLARE)('[POST] /channel_self creates new channel_device with 
     // Verify channel_devices record was created with owner_org
     const { data: channelDevice, error: channelDeviceError } = await getSupabaseClient()
       .from('channel_devices')
-      .select('device_id, app_id, channel_id, owner_org')
+      .select('device_id, app_id, channel_id, owner_org, is_self_set')
       .eq('device_id', data.device_id)
       .eq('app_id', APPNAME)
       .single()
 
     expect(channelDeviceError).toBeNull()
     expect(channelDevice).toBeTruthy()
+    // Device self-assignment is the only override kind that expires after 90 days.
+    expect(channelDevice!.is_self_set).toBe(true)
     expect(channelDevice!.device_id).toBe(data.device_id)
     expect(channelDevice!.app_id).toBe(APPNAME)
     expect(channelDevice!.owner_org).toBeTruthy() // Most important: owner_org must be set

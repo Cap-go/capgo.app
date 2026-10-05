@@ -709,7 +709,7 @@ async function removeMemberFromGroup(userId: string) {
 
     <div
       v-else-if="!canShow || !canManage"
-      class="flex flex-col bg-white border shadow-lg md:p-6 md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900"
+      class="flex flex-col bg-white border shadow-sm md:p-6 md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10"
     >
       <h2 class="text-2xl font-bold dark:text-white text-slate-800">
         {{ t('groups') }}
@@ -720,7 +720,7 @@ async function removeMemberFromGroup(userId: string) {
     </div>
 
     <div v-else>
-      <div class="flex flex-col bg-white border shadow-lg md:p-8 md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
+      <div class="flex flex-col bg-white border shadow-sm md:p-8 md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
         <!-- Back link -->
         <div class="mb-6">
           <RouterLink
@@ -828,9 +828,9 @@ async function removeMemberFromGroup(userId: string) {
           <!-- Pill sub-tabs -->
           <div class="flex border-b border-slate-200 dark:border-slate-700 -mx-8 px-8 mt-2">
             <button
-              type="button"
               v-for="tab in sectionTabs"
               :key="tab.key"
+              type="button"
               class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 -mb-px transition-colors"
               :class="activeSection === tab.key
                 ? 'border-blue-500 text-blue-600 dark:text-blue-400'

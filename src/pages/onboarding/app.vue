@@ -4,18 +4,22 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconLoader from '~icons/lucide/loader-2'
 import IconLogOut from '~icons/lucide/log-out'
+import IconX from '~icons/lucide/x'
 import AppOnboardingFlow from '~/components/dashboard/AppOnboardingFlow.vue'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { clearOnboardingAppDraft } from '~/utils/onboardingAppDraft'
 
 const router = useRouter()
+const route = useRoute('/onboarding/app')
 const { t } = useI18n()
 const displayStore = useDisplayStore()
 const main = useMainStore()
 const onboardingFlow = ref<{ persistOnboardingProgress?: () => Promise<unknown> } | null>(null)
 const isReady = ref(false)
 const isLoggingOut = ref(false)
+// Existing users reach this page from "Create new organization".
+const isNewOrganization = route.query.new_org === '1'
 
 async function logoutFromOnboarding() {
   if (isLoggingOut.value)
@@ -53,6 +57,18 @@ onMounted(async () => {
   <div class="relative flex h-full min-h-0 flex-col overflow-hidden bg-slate-50 dark:bg-slate-950">
     <header class="onboarding-page-actions absolute right-0 top-0 z-20 flex shrink-0 items-center justify-end px-2 py-2 sm:px-6 sm:py-3 lg:px-10">
       <button
+        v-if="isNewOrganization"
+        type="button"
+        class="d-btn d-btn-ghost min-h-10 px-3 text-slate-600 hover:text-slate-950 sm:min-h-11 dark:text-slate-300 dark:hover:text-white"
+        data-test="onboarding-cancel-new-org"
+        :aria-label="t('button-cancel')"
+        @click="router.push('/dashboard')"
+      >
+        <IconX class="h-4 w-4" aria-hidden="true" />
+        <span class="hidden sm:inline">{{ t('button-cancel') }}</span>
+      </button>
+      <button
+        v-else
         type="button"
         class="d-btn d-btn-ghost min-h-10 px-3 text-slate-600 hover:text-slate-950 sm:min-h-11 dark:text-slate-300 dark:hover:text-white"
         data-test="onboarding-logout"
@@ -68,7 +84,7 @@ onMounted(async () => {
 
     <PageLoader v-if="!isReady" class="min-h-0 flex-1" />
     <div v-else class="min-h-0 flex-1">
-      <AppOnboardingFlow ref="onboardingFlow" pre-org onboarding />
+      <AppOnboardingFlow ref="onboardingFlow" pre-org onboarding :new-organization="isNewOrganization" />
     </div>
   </div>
 </template>

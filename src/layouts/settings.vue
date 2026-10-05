@@ -160,7 +160,7 @@ watchEffect(() => {
     billingTab.children = [
       ...(billingTab.children ?? []),
       {
-        label: 'billing',
+        label: 'billing-portal-tab',
         icon: IconBilling,
         key: '/billing',
         onClick: () => {

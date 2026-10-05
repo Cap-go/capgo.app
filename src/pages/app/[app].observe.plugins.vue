@@ -235,7 +235,7 @@ watch(packageId, async () => {
           </div>
 
           <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
               <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
                 <IconSmartphone class="w-4 h-4" aria-hidden="true" />
                 {{ t('native-observe-plugin-production-devices') }}
@@ -245,7 +245,7 @@ watch(packageId, async () => {
               </div>
             </div>
 
-            <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
               <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
                 <IconRocket class="w-4 h-4" aria-hidden="true" />
                 {{ t('native-observe-plugin-most-reported') }}
@@ -255,7 +255,7 @@ watch(packageId, async () => {
               </div>
             </div>
 
-            <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
               <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
                 <IconLayers class="w-4 h-4" aria-hidden="true" />
                 {{ t('native-observe-plugin-latest-for-major') }}
@@ -265,7 +265,7 @@ watch(packageId, async () => {
               </div>
             </div>
 
-            <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
               <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
                 <IconActivity class="w-4 h-4" aria-hidden="true" />
                 {{ t('native-observe-plugin-devices-behind') }}
@@ -279,7 +279,7 @@ watch(packageId, async () => {
           <div
             v-if="recommendation?.majors.length"
             data-test="observe-plugin-majors"
-            class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700"
+            class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10"
           >
             <h3 class="text-sm font-semibold text-slate-950 dark:text-white">
               {{ t('native-observe-plugin-majors') }}
@@ -289,7 +289,7 @@ watch(packageId, async () => {
             </p>
             <div class="mt-3 overflow-x-auto">
               <table class="w-full min-w-[640px] text-sm">
-                <thead class="text-xs uppercase text-slate-500 dark:text-slate-400">
+                <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
                   <tr>
                     <th class="px-0 py-2 font-medium text-left whitespace-nowrap">
                       {{ t('native-observe-plugin-capacitor-major') }}
@@ -308,7 +308,7 @@ watch(packageId, async () => {
                     </th>
                   </tr>
                 </thead>
-                <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                <tbody class="divide-y divide-slate-100 dark:divide-white/5">
                   <tr v-for="major in recommendation.majors" :key="major.major">
                     <td class="px-0 py-3 font-medium text-slate-900 dark:text-slate-100">
                       {{ major.major }}
@@ -334,10 +334,10 @@ watch(packageId, async () => {
             </div>
           </div>
 
-          <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+          <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
             <div v-if="recommendationRows.length" class="overflow-x-auto">
               <table class="w-full min-w-[720px] text-sm">
-                <thead class="text-xs uppercase text-slate-500 dark:text-slate-400">
+                <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
                   <tr>
                     <th class="px-0 py-2 font-medium text-left whitespace-nowrap">
                       {{ t('native-observe-plugin-version') }}
@@ -356,7 +356,7 @@ watch(packageId, async () => {
                     </th>
                   </tr>
                 </thead>
-                <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                <tbody class="divide-y divide-slate-100 dark:divide-white/5">
                   <tr v-for="version in recommendationRows" :key="version.plugin_version">
                     <td class="px-0 py-3 font-medium break-all text-slate-900 dark:text-slate-100">
                       <div class="flex items-center gap-2">

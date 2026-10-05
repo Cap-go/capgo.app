@@ -9,6 +9,8 @@ export interface DialogV2Button {
   rel?: string
   handler?: () => void | boolean | Promise<void | boolean>
   role?: 'primary' | 'secondary' | 'danger' | 'cancel'
+  /** 'start' renders the button as a quiet text action on the left of the footer (e.g. "Don't show again"). */
+  placement?: 'start' | 'end'
   preventClose?: boolean
   disabled?: boolean
   skipNavigation?: boolean
@@ -18,7 +20,7 @@ export interface DialogV2Options {
   id?: string
   title?: string
   description?: string
-  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl'
+  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl'
   buttons?: DialogV2Button[]
   preventAccidentalClose?: boolean
 }
@@ -28,8 +30,20 @@ export const useDialogV2Store = defineStore('dialogv2', () => {
   const dialogOptions = ref<DialogV2Options>({})
   const dialogCanceled = ref(false)
   const lastButtonRole = ref('')
+  const pendingDialogAction = ref(false)
+
+  const assignDialogButtonsDisabled = (disabled: boolean) => {
+    const current = dialogOptions.value
+    if (!current.buttons?.length)
+      return
+    dialogOptions.value = {
+      ...current,
+      buttons: current.buttons.map(button => ({ ...button, disabled })),
+    }
+  }
 
   const openDialog = (options: DialogV2Options) => {
+    pendingDialogAction.value = false
     dialogOptions.value = options
     showDialog.value = true
     dialogCanceled.value = false
@@ -63,19 +77,30 @@ export const useDialogV2Store = defineStore('dialogv2', () => {
   }
 
   const closeDialog = async (button?: DialogV2Button) => {
-    if (button) {
-      lastButtonRole.value = button.id ?? button.role ?? ''
-      if (button.role === 'cancel') {
-        dialogCanceled.value = true
-      }
-      else {
-        dialogCanceled.value = false
-      }
+    if (!button) {
+      // Modal dismissed without a button action (overlay, escape, close icon)
+      dialogCanceled.value = true
+      lastButtonRole.value = ''
+      showDialog.value = false
+      pendingDialogAction.value = false
+      return
+    }
 
+    if (button.disabled || pendingDialogAction.value)
+      return
+
+    pendingDialogAction.value = true
+    lastButtonRole.value = button.id ?? button.role ?? ''
+    dialogCanceled.value = button.role === 'cancel'
+    assignDialogButtonsDisabled(true)
+
+    try {
       if (button.handler) {
         const result = await button.handler()
         // If handler returns false, don't close the dialog
         if (result === false) {
+          if (showDialog.value)
+            assignDialogButtonsDisabled(false)
           return
         }
       }
@@ -84,14 +109,20 @@ export const useDialogV2Store = defineStore('dialogv2', () => {
         showDialog.value = false
         if (button.href && !button.skipNavigation)
           openButtonHref(button)
+        return
       }
-      return
-    }
 
-    // Modal dismissed without a button action (overlay, escape, close icon)
-    dialogCanceled.value = true
-    lastButtonRole.value = ''
-    showDialog.value = false
+      if (showDialog.value)
+        assignDialogButtonsDisabled(false)
+    }
+    catch (error) {
+      if (showDialog.value)
+        assignDialogButtonsDisabled(false)
+      throw error
+    }
+    finally {
+      pendingDialogAction.value = false
+    }
   }
 
   const onDialogDismiss = (): Promise<boolean> => {

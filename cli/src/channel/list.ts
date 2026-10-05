@@ -14,9 +14,10 @@ export async function listChannelsInternal(appId: string, options: OptionsBase, 
   appId = getAppId(appId, extConfig?.config)
 
   if (!options.apikey) {
+    const message = 'Missing API key. Provide an API key with --apikey or log in.'
     if (!silent)
-      log.error('Missing API key, you need to provide an API key to upload your bundle')
-    throw new Error('Missing API key')
+      log.error(message)
+    throw new CliUserError(message)
   }
 
   if (!appId) {

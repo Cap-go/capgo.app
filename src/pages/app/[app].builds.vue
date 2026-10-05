@@ -70,16 +70,19 @@ watchEffect(async () => {
 <template>
   <div>
     <div v-if="app || isLoading">
-      <div class="mt-0 md:mt-8">
-        <div class="w-full h-full px-0 pt-0 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
+      <div class="mt-0">
+        <div class="w-full h-full px-0 pt-6 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
+          <SectionIntro section="builds">
+            <template v-if="!showingBuildSteps" #actions>
+              <BuildChartControls
+                v-model:use-billing-period="useBillingPeriod"
+                v-model:show-cumulative="showCumulative"
+                :is-refreshing="chartsRefreshing"
+                @reload="reloadTrigger++"
+              />
+            </template>
+          </SectionIntro>
           <div v-if="!showingBuildSteps" class="mb-6">
-            <BuildChartControls
-              v-model:use-billing-period="useBillingPeriod"
-              v-model:show-cumulative="showCumulative"
-              :is-refreshing="chartsRefreshing"
-              class="mb-4"
-              @reload="reloadTrigger++"
-            />
             <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
               <BuildStatsCard
                 :app-id="id"

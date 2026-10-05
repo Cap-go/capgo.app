@@ -39,6 +39,81 @@ export type Database = {
   }
   public: {
     Tables: {
+      r2_inventory_checkpoints: {
+        Row: {
+          bucket_name: string
+          job_name: string
+          partition_key: string
+          accepted_event_floor: string | null
+          checkpoint: Json
+          updated_at: string
+        }
+        Insert: {
+          bucket_name: string
+          job_name: string
+          partition_key?: string
+          accepted_event_floor?: string | null
+          checkpoint?: Json
+          updated_at?: string
+        }
+        Update: {
+          bucket_name?: string
+          job_name?: string
+          partition_key?: string
+          accepted_event_floor?: string | null
+          checkpoint?: Json
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      r2_objects: {
+        Row: {
+          bucket_name: string
+          r2_key: string
+          r2_state: Database["public"]["Enums"]["r2_object_state"]
+          size_bytes: number | null
+          etag: string | null
+          r2_last_modified_at: string | null
+          last_event_at: string | null
+          last_reconciled_at: string | null
+          tombstone_expires_at: string | null
+          cleanup_requested_at: string | null
+          first_seen_at: string
+          updated_at: string
+          revision: number
+        }
+        Insert: {
+          bucket_name: string
+          r2_key: string
+          r2_state: Database["public"]["Enums"]["r2_object_state"]
+          size_bytes?: number | null
+          etag?: string | null
+          r2_last_modified_at?: string | null
+          last_event_at?: string | null
+          last_reconciled_at?: string | null
+          tombstone_expires_at?: string | null
+          cleanup_requested_at?: string | null
+          first_seen_at?: string
+          updated_at?: string
+          revision?: number
+        }
+        Update: {
+          bucket_name?: string
+          r2_key?: string
+          r2_state?: Database["public"]["Enums"]["r2_object_state"]
+          size_bytes?: number | null
+          etag?: string | null
+          r2_last_modified_at?: string | null
+          last_event_at?: string | null
+          last_reconciled_at?: string | null
+          tombstone_expires_at?: string | null
+          cleanup_requested_at?: string | null
+          first_seen_at?: string
+          updated_at?: string
+          revision?: number
+        }
+        Relationships: []
+      }
       apikey_global_permissions: {
         Row: {
           apikey_rbac_id: string
@@ -824,6 +899,7 @@ export type Database = {
           ios: boolean
           name: string
           owner_org: string
+          paused_at: string | null
           public: boolean
           auto_pause_action: string
           auto_pause_confidence: number
@@ -864,6 +940,7 @@ export type Database = {
           ios?: boolean
           name: string
           owner_org: string
+          paused_at?: string | null
           public?: boolean
           auto_pause_action?: string
           auto_pause_confidence?: number
@@ -904,6 +981,7 @@ export type Database = {
           ios?: boolean
           name?: string
           owner_org?: string
+          paused_at?: string | null
           public?: boolean
           auto_pause_action?: string
           auto_pause_confidence?: number
@@ -3402,9 +3480,13 @@ export type Database = {
     }
     Functions: {
       accept_invitation_to_org: { Args: { org_id: string }; Returns: string }
-      accept_tmp_user_invitation: {
-        Args: { p_invite_magic_string: string; p_user_id: string }
-        Returns: string
+      ack_updates_cache_purge: {
+        Args: {
+          p_lease_token: string
+          p_retry_after_seconds?: number
+          p_success: boolean
+        }
+        Returns: undefined
       }
       acknowledge_compatibility_event: {
         Args: { event_id: number; note: string }
@@ -3424,6 +3506,7 @@ export type Database = {
           p_billing_cycle_end: string
           p_billing_cycle_start: string
           p_details?: Json
+          p_included_amount?: number
           p_metric: Database["public"]["Enums"]["credit_metric_type"]
           p_org_id: string
           p_overage_amount: number
@@ -3440,17 +3523,30 @@ export type Database = {
         }[]
       }
       audit_logs_allowed_orgs: { Args: never; Returns: string[] }
-      calculate_credit_cost: {
-        Args: {
-          p_metric: Database["public"]["Enums"]["credit_metric_type"]
-          p_overage_amount: number
-        }
-        Returns: {
-          credit_cost_per_unit: number
-          credit_step_id: number
-          credits_required: number
-        }[]
-      }
+      calculate_credit_cost:
+        | {
+            Args: {
+              p_metric: Database["public"]["Enums"]["credit_metric_type"]
+              p_overage_amount: number
+            }
+            Returns: {
+              credit_cost_per_unit: number
+              credit_step_id: number
+              credits_required: number
+            }[]
+          }
+        | {
+            Args: {
+              p_included_amount: number
+              p_metric: Database["public"]["Enums"]["credit_metric_type"]
+              p_overage_amount: number
+            }
+            Returns: {
+              credit_cost_per_unit: number
+              credit_step_id: number
+              credits_required: number
+            }[]
+          }
       calculate_org_metrics_cache_entry: {
         Args: { p_end_date: string; p_org_id: string; p_start_date: string }
         Returns: {
@@ -3521,6 +3617,10 @@ export type Database = {
       claim_legacy_onboarding_demo_data: {
         Args: { p_app_uuid: string }
         Returns: undefined
+      }
+      claim_updates_cache_purge: {
+        Args: { p_limit?: number }
+        Returns: Json
       }
       cleanup_expired_apikeys: { Args: never; Returns: undefined }
       cleanup_expired_demo_apps: { Args: never; Returns: undefined }
@@ -4562,6 +4662,21 @@ export type Database = {
           version_build: string
         }[]
       }
+      read_native_active_devices_summary: {
+        Args: { p_app_id: string; p_period_end: string; p_period_start: string }
+        Returns: {
+          devices: number
+          platform: string
+        }[]
+      }
+      read_native_daily_platform_active: {
+        Args: { p_app_id: string; p_period_end: string; p_period_start: string }
+        Returns: {
+          date: string
+          devices: number
+          platform: string
+        }[]
+      }
       read_storage_usage: {
         Args: { p_app_id: string; p_period_end: string; p_period_start: string }
         Returns: {
@@ -4659,6 +4774,7 @@ export type Database = {
         Returns: boolean
       }
       remove_old_jobs: { Args: never; Returns: undefined }
+      request_actor_email_adress: { Args: never; Returns: string | null }
       request_actor_user_id: { Args: never; Returns: string }
       request_app_chart_refresh: {
         Args: { app_id: string }
@@ -4807,6 +4923,7 @@ export type Database = {
       verify_mfa: { Args: never; Returns: boolean }
     }
     Enums: {
+      r2_object_state: "to_be_uploaded" | "present" | "to_be_deleted" | "deleted"
       action_type: "mau" | "storage" | "bandwidth" | "build_time"
       channel_update_package:
         | "all"
@@ -4907,6 +5024,7 @@ export type Database = {
         | "os_version_changed"
         | "native_app_version_changed"
         | "app_nav"
+        | "channelPaused"
       stripe_status:
         | "created"
         | "succeeded"
@@ -5075,6 +5193,7 @@ export const Constants = {
   },
   public: {
     Enums: {
+      r2_object_state: ["to_be_uploaded", "present", "to_be_deleted", "deleted"],
       action_type: ["mau", "storage", "bandwidth", "build_time"],
       channel_update_package: [
         "all",
@@ -5177,6 +5296,7 @@ export const Constants = {
         "os_version_changed",
         "native_app_version_changed",
         "app_nav",
+        "channelPaused",
       ],
       stripe_status: [
         "created",

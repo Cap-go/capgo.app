@@ -1,0 +1,21 @@
+{
+  "apikeys.spec.ts": 36,
+  "app-dashboard-tabs.spec.ts": 8,
+  "auth.spec.ts": 9,
+  "bundle-adoption.spec.ts": 3,
+  "channel-rollout-ux-screenshots.spec.ts": 1,
+  "compatibility-events.spec.ts": 7,
+  "confirmation-redirect.spec.ts": 3,
+  "credits-top-up.spec.ts": 4,
+  "dependency-diff-same-version-checksum.spec.ts": 3,
+  "devices-empty-state.spec.ts": 19,
+  "email-verification.spec.ts": 4,
+  "observe-tabs.spec.ts": 24,
+  "onboarding-builder-setup.spec.ts": 5,
+  "onboarding-setup.spec.ts": 35,
+  "register.spec.ts": 24,
+  "sidebar-collapse.spec.ts": 30,
+  "sso-login.spec.ts": 8,
+  "startup-loader.spec.ts": 1,
+  "subscription-checkout.spec.ts": 4
+}

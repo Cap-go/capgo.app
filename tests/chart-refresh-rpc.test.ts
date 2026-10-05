@@ -63,7 +63,7 @@ async function countStatsRefreshAuditLogs(): Promise<number> {
 
 async function getAppRefreshState(appId: string) {
   const { data, error } = await getSupabaseClient()
-    .from('apps')
+    .from('app_stats_refresh_state')
     .select('stats_refresh_requested_at,stats_updated_at')
     .eq('app_id', appId)
     .single()
@@ -72,6 +72,57 @@ async function getAppRefreshState(appId: string) {
     throw error
 
   return data
+}
+
+async function getOrgRefreshState() {
+  const [state] = await executeSQL<{
+    manual_refresh_requested_at: string | null
+    stats_refresh_requested_at: string | null
+    stats_updated_at: string | null
+  }>(`
+    SELECT manual_refresh_requested_at::text AS manual_refresh_requested_at,
+           stats_refresh_requested_at::text AS stats_refresh_requested_at,
+           stats_updated_at::text AS stats_updated_at
+    FROM public.org_stats_refresh_state
+    WHERE org_id = $1
+  `, [orgId])
+
+  return state
+}
+
+async function getLegacyOrgRefreshState() {
+  const [state] = await executeSQL<{
+    last_stats_updated_at: string | null
+    stats_refresh_requested_at: string | null
+    stats_updated_at: string | null
+    xmin: string
+  }>(`
+    SELECT xmin::text AS xmin,
+           last_stats_updated_at::text AS last_stats_updated_at,
+           stats_refresh_requested_at::text AS stats_refresh_requested_at,
+           stats_updated_at::text AS stats_updated_at
+    FROM public.orgs
+    WHERE id = $1
+  `, [orgId])
+
+  return state
+}
+
+async function getDateRangeMetrics(scope: 'app' | 'org', metricDateText: string) {
+  if (scope === 'app') {
+    return getSupabaseClient().rpc('get_app_metrics', {
+      p_app_id: staleAppId,
+      p_end_date: metricDateText,
+      p_org_id: orgId,
+      p_start_date: metricDateText,
+    })
+  }
+
+  return getSupabaseClient().rpc('get_app_metrics', {
+    end_date: metricDateText,
+    org_id: orgId,
+    start_date: metricDateText,
+  })
 }
 
 describe('chart refresh RPCs', () => {
@@ -139,10 +190,19 @@ describe('chart refresh RPCs', () => {
       stats_refresh_requested_at: null,
       stats_updated_at: null,
     }).eq('id', orgId).throwOnError()
-    await getSupabaseClient().from('apps').update({
+    await getSupabaseClient().from('app_stats_refresh_state').update({
       stats_refresh_requested_at: null,
       stats_updated_at: null,
     }).in('app_id', [staleAppId, freshAppId]).throwOnError()
+    await executeSQL(`
+      INSERT INTO public.org_stats_refresh_state (
+        org_id, manual_refresh_requested_at, stats_refresh_requested_at, stats_updated_at
+      ) VALUES ($1, NULL, NULL, NULL)
+      ON CONFLICT (org_id) DO UPDATE SET
+        manual_refresh_requested_at = NULL,
+        stats_refresh_requested_at = NULL,
+        stats_updated_at = NULL
+    `, [orgId])
     await getSupabaseClient().from('audit_logs').delete().eq('org_id', orgId).throwOnError()
   })
 
@@ -158,9 +218,15 @@ describe('chart refresh RPCs', () => {
   })
 
   it('queue_cron_stat_app_for_app only stamps refresh_requested_at when it enqueues work', async () => {
-    await getSupabaseClient().from('apps').update({
+    await getSupabaseClient().from('app_stats_refresh_state').update({
       stats_updated_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
     }).eq('app_id', staleAppId).throwOnError()
+
+    const { data: appBefore } = await getSupabaseClient()
+      .from('apps')
+      .select('updated_at')
+      .eq('app_id', staleAppId)
+      .single()
 
     await getSupabaseClient().rpc('queue_cron_stat_app_for_app', {
       p_app_id: staleAppId,
@@ -171,7 +237,14 @@ describe('chart refresh RPCs', () => {
     expect(queuedState?.stats_refresh_requested_at).toBeTruthy()
     expect(await countCronStatAppMessages(staleAppId)).toBe(1)
 
-    await getSupabaseClient().from('apps').update({
+    const { data: appAfter } = await getSupabaseClient()
+      .from('apps')
+      .select('updated_at')
+      .eq('app_id', staleAppId)
+      .single()
+    expect(appAfter?.updated_at).toBe(appBefore?.updated_at)
+
+    await getSupabaseClient().from('app_stats_refresh_state').update({
       stats_refresh_requested_at: null,
       stats_updated_at: new Date().toISOString(),
     }).eq('app_id', freshAppId).throwOnError()
@@ -186,8 +259,22 @@ describe('chart refresh RPCs', () => {
     expect(await countCronStatAppMessages(freshAppId)).toBe(0)
   })
 
+  it('only returns app refresh state to users who can read the app', async () => {
+    const { data: authorizedState, error: authorizedError } = await authorizedClient
+      .rpc('get_app_stats_refresh_state', { p_app_id: staleAppId })
+      .single()
+    expect(authorizedError).toBeNull()
+    expect(authorizedState?.owner_org).toBe(orgId)
+
+    const { data: unauthorizedState, error: unauthorizedError } = await unauthorizedClient
+      .rpc('get_app_stats_refresh_state', { p_app_id: staleAppId })
+      .maybeSingle()
+    expect(unauthorizedError).toBeNull()
+    expect(unauthorizedState).toBeNull()
+  })
+
   it('request_app_chart_refresh queues once when stale and rejects users without access', async () => {
-    await getSupabaseClient().from('apps').update({
+    await getSupabaseClient().from('app_stats_refresh_state').update({
       stats_updated_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
     }).eq('app_id', staleAppId).throwOnError()
 
@@ -220,13 +307,14 @@ describe('chart refresh RPCs', () => {
   })
 
   it('request_org_chart_refresh stamps org refresh state and only queues stale apps', async () => {
-    await getSupabaseClient().from('apps').update({
+    await getSupabaseClient().from('app_stats_refresh_state').update({
       stats_updated_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
     }).eq('app_id', staleAppId).throwOnError()
-    await getSupabaseClient().from('apps').update({
+    await getSupabaseClient().from('app_stats_refresh_state').update({
       stats_updated_at: new Date().toISOString(),
     }).eq('app_id', freshAppId).throwOnError()
 
+    const legacyStateBefore = await getLegacyOrgRefreshState()
     const { data, error } = await authorizedClient.rpc('request_org_chart_refresh', {
       org_id: orgId,
     }).single()
@@ -237,14 +325,10 @@ describe('chart refresh RPCs', () => {
     expect(data?.skipped_count).toBe(1)
     expect(data?.requested_at).toBeTruthy()
 
-    const { data: orgState, error: orgError } = await getSupabaseClient()
-      .from('orgs')
-      .select('stats_refresh_requested_at')
-      .eq('id', orgId)
-      .single()
-
-    expect(orgError).toBeNull()
-    expect(orgState?.stats_refresh_requested_at).toBeTruthy()
+    const orgState = await getOrgRefreshState()
+    expect(orgState?.manual_refresh_requested_at).toBeTruthy()
+    expect(orgState?.stats_refresh_requested_at).toBeNull()
+    expect(await getLegacyOrgRefreshState()).toEqual(legacyStateBefore)
 
     const staleState = await getAppRefreshState(staleAppId)
     const freshState = await getAppRefreshState(freshAppId)
@@ -258,22 +342,19 @@ describe('chart refresh RPCs', () => {
   it('request_org_chart_refresh preserves the current org request marker when no apps are queued', async () => {
     const inProgressRequestedAt = new Date(Date.now() - 2 * 60 * 1000).toISOString()
 
-    await getSupabaseClient().from('orgs').update({
-      stats_refresh_requested_at: inProgressRequestedAt,
-    }).eq('id', orgId).throwOnError()
-    await getSupabaseClient().from('apps').update({
+    await executeSQL(`
+      UPDATE public.org_stats_refresh_state
+      SET manual_refresh_requested_at = $2
+      WHERE org_id = $1
+    `, [orgId, inProgressRequestedAt])
+    await getSupabaseClient().from('app_stats_refresh_state').update({
       stats_refresh_requested_at: inProgressRequestedAt,
       stats_updated_at: new Date().toISOString(),
     }).in('app_id', [staleAppId, freshAppId]).throwOnError()
 
-    const { data: beforeOrgState, error: beforeOrgError } = await getSupabaseClient()
-      .from('orgs')
-      .select('stats_refresh_requested_at')
-      .eq('id', orgId)
-      .single()
-
-    expect(beforeOrgError).toBeNull()
-    expect(beforeOrgState?.stats_refresh_requested_at).toBeTruthy()
+    const beforeOrgState = await getOrgRefreshState()
+    const legacyStateBefore = await getLegacyOrgRefreshState()
+    expect(beforeOrgState?.manual_refresh_requested_at).toBeTruthy()
 
     const { data, error } = await authorizedClient.rpc('request_org_chart_refresh', {
       org_id: orgId,
@@ -283,21 +364,176 @@ describe('chart refresh RPCs', () => {
     expect(data?.queued_app_ids).toEqual([])
     expect(data?.queued_count).toBe(0)
     expect(data?.skipped_count).toBe(2)
-    expect(data?.requested_at).toBe(beforeOrgState?.stats_refresh_requested_at)
+    expect(new Date(`${data?.requested_at}Z`).toISOString()).toBe(inProgressRequestedAt)
 
-    const { data: afterOrgState, error: afterOrgError } = await getSupabaseClient()
-      .from('orgs')
-      .select('stats_refresh_requested_at')
-      .eq('id', orgId)
-      .single()
-
-    expect(afterOrgError).toBeNull()
-    expect(afterOrgState?.stats_refresh_requested_at).toBe(beforeOrgState?.stats_refresh_requested_at)
+    const afterOrgState = await getOrgRefreshState()
+    expect(afterOrgState).toEqual(beforeOrgState)
+    expect(await getLegacyOrgRefreshState()).toEqual(legacyStateBefore)
     expect(await countCronStatAppMessages(staleAppId)).toBe(0)
     expect(await countCronStatAppMessages(freshAppId)).toBe(0)
   })
 
-  it('get_app_metrics rebuilds cache immediately when org stats_updated_at is newer than cached_at', async () => {
+  it('returns org refresh state only to callers with org.read access', async () => {
+    const updatedAt = new Date(Date.now() - 60_000).toISOString()
+    const requestedAt = new Date().toISOString()
+    await executeSQL(`
+      UPDATE public.org_stats_refresh_state
+      SET stats_updated_at = $2, manual_refresh_requested_at = $3
+      WHERE org_id = $1
+    `, [orgId, updatedAt, requestedAt])
+
+    const { data: authorizedState, error: authorizedError } = await authorizedClient
+      .rpc('get_org_stats_refresh_state', { p_org_id: orgId })
+      .single()
+    expect(authorizedError).toBeNull()
+    expect(new Date(`${authorizedState?.stats_updated_at}Z`).toISOString()).toBe(updatedAt)
+    expect(new Date(`${authorizedState?.stats_refresh_requested_at}Z`).toISOString()).toBe(requestedAt)
+
+    const { data: unauthorizedState, error: unauthorizedError } = await unauthorizedClient
+      .rpc('get_org_stats_refresh_state', { p_org_id: orgId })
+      .maybeSingle()
+    expect(unauthorizedError).toBeNull()
+    expect(unauthorizedState).toBeNull()
+
+    const { error: directReadError } = await authorizedClient
+      .from('org_stats_refresh_state')
+      .select('org_id')
+      .eq('org_id', orgId)
+    expect(directReadError).not.toBeNull()
+  })
+
+  it('keeps org refresh state private and outside logical replication publications', async () => {
+    const [privileges] = await executeSQL<{
+      anon_select: boolean
+      authenticated_select: boolean
+    }>(`
+      SELECT
+        has_table_privilege('anon', 'public.org_stats_refresh_state', 'SELECT') AS anon_select,
+        has_table_privilege('authenticated', 'public.org_stats_refresh_state', 'SELECT') AS authenticated_select
+    `)
+    const publicationRows = await executeSQL(`
+      SELECT pubname
+      FROM pg_catalog.pg_publication_tables
+      WHERE schemaname = 'public'
+        AND tablename = 'org_stats_refresh_state'
+    `)
+
+    expect(privileges).toEqual({
+      anon_select: false,
+      authenticated_select: false,
+    })
+    expect(publicationRows).toEqual([])
+  })
+
+  it('get_orgs_v7 returns state timestamps and falls back only when the state row is missing', async () => {
+    const legacyUpdatedAt = new Date(Date.now() - 10 * 60 * 1000).toISOString()
+    const legacyRequestedAt = new Date(Date.now() - 9 * 60 * 1000).toISOString()
+    const stateUpdatedAt = new Date(Date.now() - 2 * 60 * 1000).toISOString()
+    const stateRequestedAt = new Date(Date.now() - 60 * 1000).toISOString()
+
+    await getSupabaseClient().from('orgs').update({
+      stats_refresh_requested_at: legacyRequestedAt,
+      stats_updated_at: legacyUpdatedAt,
+    }).eq('id', orgId).throwOnError()
+    await executeSQL(`
+      UPDATE public.org_stats_refresh_state
+      SET stats_updated_at = $2, manual_refresh_requested_at = $3,
+          stats_refresh_requested_at = $2
+      WHERE org_id = $1
+    `, [orgId, stateUpdatedAt, stateRequestedAt])
+
+    const { data: stateRows, error: stateError } = await authorizedClient.rpc('get_orgs_v7')
+    expect(stateError).toBeNull()
+    const stateOrg = stateRows?.find(org => org.gid === orgId)
+    expect(new Date(`${stateOrg?.stats_updated_at}Z`).toISOString()).toBe(stateUpdatedAt)
+    expect(new Date(`${stateOrg?.stats_refresh_requested_at}Z`).toISOString()).toBe(stateRequestedAt)
+
+    const { data: stateUserRows, error: stateUserError } = await getSupabaseClient().rpc('get_orgs_v7', {
+      userid: USER_ID,
+    })
+    expect(stateUserError).toBeNull()
+    const stateUserOrg = stateUserRows?.find(org => org.gid === orgId)
+    expect(new Date(`${stateUserOrg?.stats_updated_at}Z`).toISOString()).toBe(stateUpdatedAt)
+    expect(new Date(`${stateUserOrg?.stats_refresh_requested_at}Z`).toISOString()).toBe(stateRequestedAt)
+
+    await executeSQL('DELETE FROM public.org_stats_refresh_state WHERE org_id = $1', [orgId])
+    const { data: fallbackRows, error: fallbackError } = await authorizedClient.rpc('get_orgs_v7')
+    expect(fallbackError).toBeNull()
+    const fallbackOrg = fallbackRows?.find(org => org.gid === orgId)
+    expect(new Date(`${fallbackOrg?.stats_updated_at}Z`).toISOString()).toBe(legacyUpdatedAt)
+    expect(new Date(`${fallbackOrg?.stats_refresh_requested_at}Z`).toISOString()).toBe(legacyRequestedAt)
+
+    const { data: fallbackUserRows, error: fallbackUserError } = await getSupabaseClient().rpc('get_orgs_v7', {
+      userid: USER_ID,
+    })
+    expect(fallbackUserError).toBeNull()
+    const fallbackUserOrg = fallbackUserRows?.find(org => org.gid === orgId)
+    expect(new Date(`${fallbackUserOrg?.stats_updated_at}Z`).toISOString()).toBe(legacyUpdatedAt)
+    expect(new Date(`${fallbackUserOrg?.stats_refresh_requested_at}Z`).toISOString()).toBe(legacyRequestedAt)
+  })
+
+  it('preserves the exact get_orgs_v7 output contract for both overloads', async () => {
+    const expectedColumns = [
+      'gid',
+      'created_by',
+      'created_at',
+      'logo',
+      'website',
+      'name',
+      'role',
+      'is_invite',
+      'paying',
+      'trial_left',
+      'can_use_more',
+      'is_canceled',
+      'app_count',
+      'subscription_start',
+      'subscription_end',
+      'management_email',
+      'is_yearly',
+      'stats_updated_at',
+      'stats_refresh_requested_at',
+      'next_stats_update_at',
+      'credit_available',
+      'credit_total',
+      'credit_next_expiration',
+      'enforcing_2fa',
+      '2fa_has_access',
+      'enforce_hashed_api_keys',
+      'password_policy_config',
+      'password_has_access',
+      'require_apikey_expiration',
+      'max_apikey_expiration_days',
+      'enforce_encrypted_bundles',
+      'required_encryption_key',
+    ]
+    const rows = await executeSQL<{ columns: string[], overload: string }>(`
+      SELECT overload, array_agg(arg_name ORDER BY ordinality) AS columns
+      FROM (
+        SELECT 'no_args' AS overload, args.arg_name, args.ordinality
+        FROM pg_catalog.pg_proc proc
+        JOIN LATERAL unnest(proc.proallargtypes, proc.proargmodes, proc.proargnames)
+          WITH ORDINALITY AS args(type_oid, arg_mode, arg_name, ordinality) ON true
+        WHERE proc.oid = 'public.get_orgs_v7()'::regprocedure
+          AND args.arg_mode = 't'
+        UNION ALL
+        SELECT 'userid' AS overload, args.arg_name, args.ordinality
+        FROM pg_catalog.pg_proc proc
+        JOIN LATERAL unnest(proc.proallargtypes, proc.proargmodes, proc.proargnames)
+          WITH ORDINALITY AS args(type_oid, arg_mode, arg_name, ordinality) ON true
+        WHERE proc.oid = 'public.get_orgs_v7(uuid)'::regprocedure
+          AND args.arg_mode = 't'
+      ) output_args
+      GROUP BY overload
+      ORDER BY overload
+    `)
+
+    expect(rows.map(row => row.overload)).toEqual(['no_args', 'userid'])
+    for (const row of rows)
+      expect(row.columns).toEqual(expectedColumns)
+  })
+
+  it.each(['org', 'app'] as const)('get_app_metrics %s date-range overload invalidates only after state completion advances', async (scope) => {
     const metricDate = new Date()
     metricDate.setHours(0, 0, 0, 0)
     const metricDateText = metricDate.toISOString().slice(0, 10)
@@ -324,11 +560,7 @@ describe('chart refresh RPCs', () => {
       onConflict: 'app_id,date',
     }).throwOnError()
 
-    const { data: initialMetrics, error: initialError } = await getSupabaseClient().rpc('get_app_metrics', {
-      org_id: orgId,
-      start_date: metricDateText,
-      end_date: metricDateText,
-    })
+    const { data: initialMetrics, error: initialError } = await getDateRangeMetrics(scope, metricDateText)
 
     expect(initialError).toBeNull()
     const initialRow = initialMetrics?.find(row => row.app_id === staleAppId && row.date === metricDateText)
@@ -342,29 +574,30 @@ describe('chart refresh RPCs', () => {
 
     await getSupabaseClient().from('daily_mau').update({ mau: 9 }).eq('app_id', staleAppId).eq('date', metricDateText).throwOnError()
 
-    const { data: cachedMetrics, error: cachedError } = await getSupabaseClient().rpc('get_app_metrics', {
-      org_id: orgId,
-      start_date: metricDateText,
-      end_date: metricDateText,
-    })
+    const { data: cachedMetrics, error: cachedError } = await getDateRangeMetrics(scope, metricDateText)
 
     expect(cachedError).toBeNull()
     const cachedRow = cachedMetrics?.find(row => row.app_id === staleAppId && row.date === metricDateText)
     expect(cachedRow?.mau).toBe(5)
+    const cacheAfterFreshRead = await executeSQL(
+      'SELECT cached_at FROM public.app_metrics_cache WHERE org_id = $1 LIMIT 1',
+      [orgId],
+    )
+    expect(cacheAfterFreshRead[0]?.cached_at).toEqual(cacheRows[0].cached_at)
 
     const refreshedAt = new Date(new Date(cacheRows[0].cached_at).getTime() + 60_000).toISOString()
-    await getSupabaseClient().from('orgs').update({
-      stats_updated_at: refreshedAt,
-    }).eq('id', orgId).throwOnError()
+    const legacyStateBefore = await getLegacyOrgRefreshState()
+    await executeSQL(`
+      UPDATE public.org_stats_refresh_state
+      SET stats_updated_at = $2
+      WHERE org_id = $1
+    `, [orgId, refreshedAt])
 
-    const { data: refreshedMetrics, error: refreshedError } = await getSupabaseClient().rpc('get_app_metrics', {
-      org_id: orgId,
-      start_date: metricDateText,
-      end_date: metricDateText,
-    })
+    const { data: refreshedMetrics, error: refreshedError } = await getDateRangeMetrics(scope, metricDateText)
 
     expect(refreshedError).toBeNull()
     const refreshedRow = refreshedMetrics?.find(row => row.app_id === staleAppId && row.date === metricDateText)
     expect(refreshedRow?.mau).toBe(9)
+    expect(await getLegacyOrgRefreshState()).toEqual(legacyStateBefore)
   })
 })

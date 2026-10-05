@@ -1,7 +1,10 @@
 import type { Context } from 'hono'
 import { TERMINAL_BUILD_STATUSES } from './build_timeout.ts'
+import { sendDiscordAlert } from './discord.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
+import { supabaseAdmin } from './supabase.ts'
 import { sendEventToTracking } from './tracking.ts'
+import { backgroundTask } from './utils.ts'
 
 export type BuildTransition = 'started' | 'succeeded' | 'failed' | 'timed_out'
 export type BuildFailureCategory = 'timeout' | 'builder_error' | 'validation_error' | 'unknown'
@@ -69,6 +72,7 @@ interface BuildRowForTracking {
 }
 
 export interface EmitBuildTransitionInput {
+  jobId?: string
   previousStatus: string
   effectiveStatus: string
   timeoutApplied: boolean
@@ -82,6 +86,49 @@ const EVENT_NAME_BY_TRANSITION: Record<BuildTransition, string> = {
   succeeded: 'Build Succeeded',
   failed: 'Build Failed',
   timed_out: 'Build Timed Out',
+}
+
+async function sendFastBuildFailureAlert(c: Context, input: EmitBuildTransitionInput, jobId: string, duration: number): Promise<void> {
+  try {
+    const { data, error } = await supabaseAdmin(c)
+      .from('users')
+      .select('email')
+      .eq('id', input.build.requested_by)
+      .maybeSingle()
+
+    if (error) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'Fast build failure email lookup failed',
+        job_id: jobId,
+        error: error.message,
+      })
+    }
+
+    await sendDiscordAlert(c, {
+      content: '🚨 **Native build failed in under 10 seconds**',
+      allowed_mentions: { parse: [] },
+      embeds: [{
+        title: 'Fast native build failure',
+        color: 0xED4245,
+        fields: [
+          { name: 'Job ID', value: jobId },
+          { name: 'Platform', value: input.build.platform, inline: true },
+          { name: 'App ID', value: input.build.app_id, inline: true },
+          { name: 'Email', value: data?.email?.trim() || 'unknown' },
+          { name: 'Runtime', value: `${duration}s`, inline: true },
+        ],
+      }],
+    })
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'Fast build failure alert failed',
+      job_id: jobId,
+      error: serializeError(error),
+    })
+  }
 }
 
 /**
@@ -144,4 +191,8 @@ export async function emitBuildTransitionEvent(c: Context, input: EmitBuildTrans
       error: serializeError(error),
     })
   }
+
+  const duration = input.effectiveBuildTimeSeconds
+  if (transition === 'failed' && input.jobId && duration !== null && duration !== undefined && duration < 10)
+    await backgroundTask(c, sendFastBuildFailureAlert(c, input, input.jobId, duration))
 }

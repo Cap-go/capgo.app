@@ -2,7 +2,7 @@ import type { FC } from 'react'
 import { Box, Text, useInput, useStdout } from 'ink'
 import Spinner from 'ink-spinner'
 // src/build/onboarding/ui/components.tsx
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import stringWidth from 'string-width'
 import { computeMaxScrollOffset, pickVisibleLines } from '../ai-fit.js'
 import type { DiffLine } from '../diff-utils.js'
@@ -254,6 +254,8 @@ export const FilteredTextInput: FC<{
    */
   transform?: (value: string) => string
   mask?: boolean
+  /** Limit only the rendered mask; the full value is still submitted. */
+  maxMaskWidth?: number
   /**
    * Pre-fills the input. Used when the user is editing an already-entered
    * value (e.g. fixing a typo in their ASC Key ID / Issuer ID after a
@@ -262,16 +264,18 @@ export const FilteredTextInput: FC<{
    */
   initialValue?: string
   onSubmit: (value: string) => void
-}> = ({ placeholder = '', filter = '=', allowedPattern, maxLength, transform, mask = false, initialValue = '', onSubmit }) => {
+}> = ({ placeholder = '', filter = '=', allowedPattern, maxLength, transform, mask = false, maxMaskWidth, initialValue = '', onSubmit }) => {
   const [value, setValue] = useState(() => applyConstraints(initialValue, { filter, allowedPattern, maxLength, transform }))
+  const valueRef = useRef(value)
 
   useInput((input, key) => {
     if (key.return) {
-      onSubmit(value)
+      onSubmit(valueRef.current)
       return
     }
     if (key.backspace || key.delete) {
-      setValue(prev => prev.slice(0, -1))
+      valueRef.current = valueRef.current.slice(0, -1)
+      setValue(valueRef.current)
       return
     }
     // Ignore control characters, arrows, etc.
@@ -280,11 +284,12 @@ export const FilteredTextInput: FC<{
     }
     // Append input then apply the full constraint pipeline (paste-safe).
     if (input) {
-      setValue(prev => applyConstraints(prev + input, { filter, allowedPattern, maxLength, transform }))
+      valueRef.current = applyConstraints(valueRef.current + input, { filter, allowedPattern, maxLength, transform })
+      setValue(valueRef.current)
     }
   })
 
-  const display = mask ? '•'.repeat(value.length) : value
+  const display = mask ? '•'.repeat(Math.min(value.length, maxMaskWidth ?? value.length)) : value
   const showCounter = maxLength !== undefined && !mask
   return (
     <Box>

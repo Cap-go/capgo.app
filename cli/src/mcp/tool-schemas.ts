@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { buildCacheOptionSchema } from '../schemas/build'
+import { CLI_PROJECT_MODES } from '../framework/mode'
+import { buildCacheKeyOptionSchema, buildCacheOptionSchema } from '../schemas/build'
 import { capacitorConfigOptionSchema, observeOptionsObjectSchema, refineObserveDeviceId } from '../schemas/sdk'
 
 export const mcpAddAppInputSchema = z.object({
@@ -22,6 +23,7 @@ export const mcpDeleteAppInputSchema = z.object({
 export const mcpUploadBundleInputSchema = z.object({
   appId: z.string(),
   path: z.string(),
+  mode: z.enum(CLI_PROJECT_MODES).optional().describe('Project framework mode. Use cordova for Cordova apps without capacitor.config'),
   bundle: z.string().optional(),
   channel: z.string().optional(),
   rollout: z.number().min(0).max(100).optional(),
@@ -118,6 +120,15 @@ export const mcpGetCurrentBundleInputSchema = z.object({
   channelId: z.string().describe('Channel name'),
 })
 
+export const mcpPromoteChannelInputSchema = z.object({
+  appId: z.string().describe('App ID'),
+  fromChannel: z.string().describe('Channel to copy the current bundle from, for example staging'),
+  toChannel: z.string().describe('Channel to link that bundle to, for example production'),
+  acceptIncompatible: z.boolean().describe('Link the bundle even if its native packages do not match the target channel').optional(),
+  ignoreMetadataCheck: z.boolean().describe('Skip the native package compatibility check. Cannot be combined with acceptIncompatible').optional(),
+  sendUpdateNotification: z.boolean().describe('Send a native update-check notification to devices on the target channel after linking').optional(),
+})
+
 export const mcpAddOrganizationInputSchema = z.object({
   name: z.string().describe('Organization name'),
   email: z.string().describe('Management email for the organization'),
@@ -147,6 +158,7 @@ export const mcpRequestBuildInputSchema = z.object({
   path: z.string().optional(),
   nodeModules: z.string().optional(),
   cache: buildCacheOptionSchema.describe('When false, disables compilation cache for this build. Omit or true to use the default (cache enabled).'),
+  cacheKey: buildCacheKeyOptionSchema.describe('Custom compilation cache key (e.g. rc, prod) to share or isolate cache between environments.'),
 })
 
 export const mcpGenerateEncryptionKeysInputSchema = z.object({

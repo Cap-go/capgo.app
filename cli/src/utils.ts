@@ -653,8 +653,10 @@ function isPresentCapacitorConfig(extConfig: ExtConfigPairs | undefined): extCon
   return !!extConfig.path && existsSync(extConfig.path)
 }
 
+export const NO_CAPACITOR_CONFIG_MESSAGE = 'No capacitor config file found, run `cap init` first'
+
 async function getConfigFrom(loader: () => Promise<ExtConfigPairs | undefined>, silent = false): Promise<ExtConfigPairs> {
-  const message = 'No capacitor config file found, run `cap init` first'
+  const message = NO_CAPACITOR_CONFIG_MESSAGE
   try {
     const extConfig = await loader()
     if (!isPresentCapacitorConfig(extConfig)) {
@@ -868,6 +870,11 @@ export function normalizeSupabaseHost(host: string): string {
   const parsed = new URL(host)
   if (!['http:', 'https:'].includes(parsed.protocol))
     throw new Error('Invalid Supabase host protocol')
+  const isLoopback = parsed.hostname === 'localhost'
+    || parsed.hostname === '127.0.0.1'
+    || parsed.hostname === '[::1]'
+  if (parsed.protocol === 'http:' && !isLoopback)
+    throw new Error('Supabase host must use HTTPS (HTTP is only allowed for localhost)')
   if (parsed.username || parsed.password)
     throw new Error('Supabase host must not include credentials')
   if (parsed.search || parsed.hash)
@@ -1025,6 +1032,7 @@ export async function invokeCapgoCliApi<T = any>(
   try {
     const response = await fetch(url, {
       method,
+      redirect: 'error',
       headers: buildCliRequestHeaders({
         'Content-Type': 'application/json',
         // Self-host Edge Functions validate the Supabase anon JWT; Capgo cloud uses the API key.
@@ -1089,7 +1097,8 @@ export async function createSupabaseClient(apikey: string, supaHost?: string, su
     config.supaKey = supaKey
   }
   if (!config.supaHost || !config.supaKey) {
-    log.error(CAPGO_SERVER_CONFIG_MISSING_MESSAGE)
+    if (!silent)
+      log.error(CAPGO_SERVER_CONFIG_MISSING_MESSAGE)
     throw new CliUserError(CAPGO_SERVER_CONFIG_MISSING_MESSAGE, {
       missingSupaHost: !config.supaHost,
       missingSupaKey: !config.supaKey,
@@ -1922,6 +1931,7 @@ export interface VersionManifestEntry {
   file_name: string
   s3_path: string
   file_hash: string
+  file_size_receipt?: string
 }
 
 /**
@@ -1992,7 +2002,7 @@ type SendEventPayload = TrackOptions & { nonPersonTags?: Record<string, unknown>
   | { notifyConsole?: false, icon?: never }
 )
 
-export async function sendEvent(capgkey: string, payload: SendEventPayload, verbose?: boolean, signal?: AbortSignal): Promise<void> {
+export async function sendEvent(capgkey: string, payload: SendEventPayload, verbose?: boolean, signal?: AbortSignal, apiHost?: string, redirect?: RequestInit['redirect']): Promise<void> {
   const telemetryDisabled = isTruthyEnvValue(env.CAPGO_DISABLE_TELEMETRY) || isTruthyEnvValue(env.CAPGO_DISABLE_POSTHOG)
   if (telemetryDisabled && !payload.notifyConsole)
     return
@@ -2019,9 +2029,9 @@ export async function sendEvent(capgkey: string, payload: SendEventPayload, verb
     if (verbose) {
       log.info(`Get remove config: for ${payload.event}`)
     }
-    // Always fetch remote config silently — sendEvent is telemetry and must
-    // not bypass an Ink-controlled stdout (e.g. during `capgo init`).
-    const config = await getRemoteConfig(true, signal)
+    // A resolved destination avoids rediscovering config in background workers.
+    // Fetch config silently when needed so telemetry cannot interrupt terminal UIs.
+    const hostApi = apiHost ?? (await getRemoteConfig(true, signal)).hostApi
     if (verbose) {
       log.info(`Sending analytics event: ${JSON.stringify(enrichedPayload)}`)
     }
@@ -2034,7 +2044,7 @@ export async function sendEvent(capgkey: string, payload: SendEventPayload, verb
       : controller.signal
 
     try {
-      const fetchResponse = await fetch(`${config.hostApi}/private/events`, {
+      const fetchResponse = await fetch(`${trimTrailingSlashes(hostApi)}/private/events`, {
         method: 'POST',
         body: JSON.stringify(enrichedPayload),
         headers: buildCliRequestHeaders({
@@ -2042,6 +2052,7 @@ export async function sendEvent(capgkey: string, payload: SendEventPayload, verb
           'capgkey': capgkey,
         }),
         signal: eventSignal,
+        redirect,
       })
 
       clearTimeout(timeoutId)

@@ -93,6 +93,7 @@ export const channels = pgTable('channels', {
   rollout_paused_at: timestamp('rollout_paused_at', { withTimezone: true }),
   rollout_pause_reason: text('rollout_pause_reason'),
   rollout_cache_ttl_seconds: integer('rollout_cache_ttl_seconds').notNull().default(2592000),
+  paused_at: timestamp('paused_at', { withTimezone: true }),
   auto_pause_enabled: boolean('auto_pause_enabled').notNull().default(false),
   auto_pause_window_minutes: integer('auto_pause_window_minutes').notNull().default(60),
   auto_pause_failure_rate_bps: integer('auto_pause_failure_rate_bps'),
@@ -114,6 +115,7 @@ export const channel_devices = pgTable('channel_devices', {
   channel_id: bigint('channel_id', { mode: 'number' }).notNull().references(() => channels.id),
   app_id: varchar('app_id').notNull().references(() => apps.name),
   owner_org: uuid('owner_org').notNull(),
+  is_self_set: boolean('is_self_set').notNull().default(false),
 })
 
 export const orgs = pgTable('orgs', {

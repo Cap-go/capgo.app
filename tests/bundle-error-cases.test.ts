@@ -90,6 +90,43 @@ describe('[GET] /bundle - Error Cases', () => {
     })
     expect(response.status).toBeGreaterThanOrEqual(400)
   })
+
+  it('should return empty array for authorized app with no bundles', async () => {
+    const emptyAppId = `com.bundle.empty.${randomUUID()}`
+    await resetAndSeedAppData(emptyAppId)
+
+    try {
+      const { error: deleteError } = await getSupabaseClient()
+        .from('app_versions')
+        .delete()
+        .eq('app_id', emptyAppId)
+      if (deleteError)
+        throw deleteError
+
+      const response = await fetch(`${BASE_URL}/bundle?app_id=${emptyAppId}`, {
+        method: 'GET',
+        headers,
+      })
+
+      expect(response.status).toBe(200)
+      const data = await response.json()
+      expect(data).toEqual([])
+    }
+    finally {
+      await resetAppData(emptyAppId)
+    }
+  })
+
+  it('should return empty array for page past the last bundle', async () => {
+    const response = await fetch(`${BASE_URL}/bundle?app_id=${APPNAME}&page=99`, {
+      method: 'GET',
+      headers,
+    })
+
+    expect(response.status).toBe(200)
+    const data = await response.json()
+    expect(data).toEqual([])
+  })
 })
 
 describe('[DELETE] /bundle - Error Cases', () => {

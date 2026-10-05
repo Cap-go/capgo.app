@@ -36,7 +36,7 @@ const canShow = computed(() =>
 
     <div
       v-else-if="!isPermissionLoading"
-      class="flex flex-col bg-white border shadow-lg md:p-6 md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900"
+      class="flex flex-col bg-white border shadow-sm md:p-6 md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10"
     >
       <h2 class="text-2xl font-bold dark:text-white text-slate-800">
         {{ t('groups') }}

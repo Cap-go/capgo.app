@@ -199,13 +199,13 @@ watch(
       </div>
     </div>
 
-    <div v-if="loading && !forceDemo && !error && !hasStats" class="flex items-center justify-center h-64 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+    <div v-if="loading && !forceDemo && !error && !hasStats" class="flex items-center justify-center h-64 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
       <Spinner size="w-10 h-10" />
     </div>
 
     <div
       v-else-if="error && !forceDemo"
-      class="flex flex-col items-center justify-center h-64 gap-3 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400"
+      class="flex flex-col items-center justify-center h-64 gap-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10 text-slate-500 dark:text-slate-400"
     >
       <IconBell class="w-12 h-12" />
       <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">
@@ -218,7 +218,7 @@ watch(
 
     <template v-else>
       <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+        <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
           <div class="text-sm truncate text-slate-600 dark:text-slate-400">
             {{ t('org-notification-total-events') }}
           </div>
@@ -226,7 +226,7 @@ watch(
             {{ formatCount(effectiveTotal) }}
           </div>
         </div>
-        <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+        <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
           <div class="text-sm truncate text-slate-600 dark:text-slate-400">
             {{ t('notification-campaigns') }}
           </div>
@@ -234,7 +234,7 @@ watch(
             {{ formatCount(effectiveOverview.campaigns) }}
           </div>
         </div>
-        <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+        <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
           <div class="text-sm truncate text-slate-600 dark:text-slate-400">
             {{ t('notification-configured-providers') }}
           </div>
@@ -242,7 +242,7 @@ watch(
             {{ formatCount(effectiveOverview.configured_providers) }}
           </div>
         </div>
-        <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+        <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
           <div class="text-sm truncate text-slate-600 dark:text-slate-400">
             {{ t('org-notification-apps') }}
           </div>
@@ -252,7 +252,7 @@ watch(
         </div>
       </div>
 
-      <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+      <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
         <div class="flex items-center justify-between gap-3 mb-4">
           <div>
             <h3 class="text-base font-semibold text-slate-950 dark:text-white">

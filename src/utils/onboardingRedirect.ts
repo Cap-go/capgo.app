@@ -1,3 +1,4 @@
+import type { OnboardingAnalyticsFlow, OnboardingAnalyticsStep } from '~/utils/onboardingProgressAnalytics'
 import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 
 // August uses Central European Summer Time (UTC+2).
@@ -14,6 +15,9 @@ interface DashboardExploration {
 // Module memory keeps the grant alive when session storage is blocked, for
 // example in private or restricted browsing contexts.
 let dashboardExplorationFallback: DashboardExploration | null = null
+let explorationGrantedThisPage = false
+let explorationReminderShownThisPage = false
+const EXPLORATION_REMINDER_DISMISSED_KEY = 'capgo:onboarding-exploration-reminder-dismissed'
 
 function webStorages(): Storage[] {
   if (typeof window === 'undefined')
@@ -110,6 +114,7 @@ export function allowOnboardingDashboardExploration(userId: string | null | unde
 
   const state: DashboardExploration = { userId, resumeAppId: resumeAppId ?? null }
   dashboardExplorationFallback = state
+  explorationGrantedThisPage = true
   writeStoredExploration(state)
 }
 
@@ -129,6 +134,64 @@ export function shouldConfirmOnboardingDashboardExploration(options: {
 
 export function getOnboardingResumeAppId(userId: string | null | undefined) {
   return matchingDashboardExploration(userId)?.resumeAppId ?? null
+}
+
+export function shouldShowOnboardingExplorationReminder(options: {
+  userId: string | null | undefined
+  appId: string
+  navigationType: string | undefined
+}) {
+  if (options.navigationType !== 'reload' || explorationGrantedThisPage || explorationReminderShownThisPage)
+    return false
+  if (getOnboardingResumeAppId(options.userId) !== options.appId)
+    return false
+  try {
+    return window.localStorage.getItem(`${EXPLORATION_REMINDER_DISMISSED_KEY}:${options.userId}`) !== 'true'
+  }
+  catch {
+    return true
+  }
+}
+
+export function markOnboardingExplorationReminderShown() {
+  explorationReminderShownThisPage = true
+}
+
+export function dismissOnboardingExplorationReminder(userId: string) {
+  try {
+    window.localStorage.setItem(`${EXPLORATION_REMINDER_DISMISSED_KEY}:${userId}`, 'true')
+  }
+  catch {
+    // Keep dashboard navigation usable when browser storage is blocked.
+  }
+}
+
+export const ONBOARDING_SETUP_HANDOFF_STATE_KEY = 'capgoOnboardingSetupHandoff'
+
+export interface OnboardingSetupHandoff {
+  appId: string
+  attemptId: string
+  flow: OnboardingAnalyticsFlow
+  previousStep: OnboardingAnalyticsStep
+  runId: string
+}
+
+export function getAppGettingStartedPath(appId: string) {
+  return `/app/${encodeURIComponent(appId)}/getting-started`
+}
+
+export function readOnboardingSetupHandoff(state: unknown, appId: string): OnboardingSetupHandoff | null {
+  if (!state || typeof state !== 'object')
+    return null
+  const handoff = (state as Record<string, unknown>)[ONBOARDING_SETUP_HANDOFF_STATE_KEY]
+  if (!handoff || typeof handoff !== 'object')
+    return null
+  const { appId: handoffAppId, attemptId, flow, previousStep, runId } = handoff as Record<string, unknown>
+  if (handoffAppId !== appId || typeof attemptId !== 'string' || typeof runId !== 'string' || typeof previousStep !== 'string')
+    return null
+  if (flow !== 'pre_org' && flow !== 'existing_org')
+    return null
+  return { appId, attemptId, flow, previousStep: previousStep as OnboardingAnalyticsStep, runId }
 }
 
 export function getOnboardingExploreBannerAppId(options: {
@@ -158,7 +221,6 @@ export function getOnboardingResumeRedirect(options: {
   createdAt: string | null | undefined
   organizationCount: number
   path: string
-  resumeAppId: string | null | undefined
   userId: string | null | undefined
 }) {
   if (canExploreOnboardingDashboard(options.userId))
@@ -167,15 +229,10 @@ export function getOnboardingResumeRedirect(options: {
     return null
   if (options.organizationCount !== 1 || options.appCount !== 1 || !options.appId)
     return null
-  if ((options.path === '/app/new' || options.path === '/onboarding/app') && options.resumeAppId === options.appId)
-    return null
   // The pending app already exists. Let the user open it, its devices, bundles,
-  // and settings without bouncing back to "create your new app".
+  // and settings without bouncing back to Getting started.
   if (matchesAppPath(options.path, options.appId))
     return null
 
-  return {
-    path: '/onboarding/app',
-    query: { resume: options.appId, step: 'setup' },
-  }
+  return { path: getAppGettingStartedPath(options.appId) }
 }

@@ -94,6 +94,36 @@ export const ALLOWED_STATS_ACTIONS = [
   'set_next',
   'os_version_changed',
   'native_app_version_changed',
+  'channelPaused',
 ] as const satisfies readonly Database['public']['Enums']['stats_action'][]
 
 export const ALLOWED_STATS_ACTIONS_SET: ReadonlySet<string> = new Set(ALLOWED_STATS_ACTIONS)
+
+// Actions whose version_name is a bundle the device is downloading, staging or
+// deleting (or failed to install), not the bundle it runs. Recording the device
+// for them would attribute it to a version it may never run.
+const TARGET_VERSION_ACTIONS: ReadonlySet<string> = new Set([
+  'download_0',
+  'download_10',
+  'download_20',
+  'download_30',
+  'download_40',
+  'download_50',
+  'download_60',
+  'download_70',
+  'download_80',
+  'download_90',
+  'download_complete',
+  'download_manifest_start',
+  'download_manifest_complete',
+  'download_zip_start',
+  'download_zip_complete',
+  'set_next',
+  'delete',
+  'checksum_required',
+  'insufficient_disk_space',
+])
+
+export function isRunningVersionAction(action: string) {
+  return !action.endsWith('_fail') && !TARGET_VERSION_ACTIONS.has(action)
+}

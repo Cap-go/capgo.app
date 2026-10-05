@@ -47,6 +47,7 @@
         "ENV_NAME": "capgo_files-prod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "enabled": true,
         "head_sampling_rate": 0.001
       },
@@ -117,10 +118,6 @@
           "pattern": "api.usecapgo.com/files*",
           "zone_name": "usecapgo.com"
         },
-        {
-          "pattern": "plugin.usecapgo.com/files*",
-          "zone_name": "usecapgo.com"
-        },
         // Custom domain for PAYG
         {
           "pattern": "updater.spencer.co/files*",
@@ -155,6 +152,7 @@
         "ENV_NAME": "capgo_files-preprod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "enabled": true
       },
       "hyperdrive": [
@@ -183,10 +181,6 @@
         },
         {
           "pattern": "api.preprod.usecapgo.com/files*",
-          "zone_name": "usecapgo.com"
-        },
-        {
-          "pattern": "plugin.preprod.usecapgo.com/files*",
           "zone_name": "usecapgo.com"
         }
       ],
@@ -218,6 +212,7 @@
         "ENV_NAME": "capgo_files-alpha"
       },
       "observability": {
+        "issues": { "enabled": true },
         "enabled": true
       },
       "routes": [
@@ -235,10 +230,6 @@
         },
         {
           "pattern": "api.dev.usecapgo.com/files*",
-          "zone_name": "usecapgo.com"
-        },
-        {
-          "pattern": "plugin.dev.usecapgo.com/files*",
           "zone_name": "usecapgo.com"
         }
       ],

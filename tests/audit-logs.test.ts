@@ -446,16 +446,15 @@ describe('audit log triggers', () => {
     expect(orgUpdatedAtError).toBeNull()
 
     const { error: appStatsError } = await getSupabaseClient()
-      .from('apps')
+      .from('app_stats_refresh_state')
       .update({ stats_updated_at: new Date().toISOString() })
       .eq('app_id', bookkeepingAppId)
     expect(appStatsError).toBeNull()
 
     const { error: appRefreshError } = await getSupabaseClient()
-      .from('apps')
+      .from('app_stats_refresh_state')
       .update({
         stats_refresh_requested_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
       })
       .eq('app_id', bookkeepingAppId)
     expect(appRefreshError).toBeNull()

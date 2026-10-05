@@ -20,7 +20,18 @@ export function isSsoUser(user: Pick<User, 'app_metadata'> | null | undefined): 
   return isSsoProvider(provider) || providers.some(isSsoProvider)
 }
 
+// A stuck backend call must fail visibly instead of hanging navigation.
+const PROVISIONING_TIMEOUT_MS = 15_000
 export async function provisionSsoUser(session: Session): Promise<SsoProvisioningResult> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  // AbortSignal.timeout is missing on older WebViews.
+  const signal = typeof AbortSignal.timeout === 'function'
+    ? AbortSignal.timeout(PROVISIONING_TIMEOUT_MS)
+    : (() => {
+        const controller = new AbortController()
+        timeout = setTimeout(() => controller.abort(), PROVISIONING_TIMEOUT_MS)
+        return controller.signal
+      })()
   try {
     const response = await fetch(`${defaultApiHost}/private/sso/provision-user`, {
       method: 'POST',
@@ -29,14 +40,16 @@ export async function provisionSsoUser(session: Session): Promise<SsoProvisionin
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({}),
+      signal,
     })
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({ error: 'Unknown error' })) as Record<string, unknown>
-      const errorMessage = typeof errorData.error === 'string'
-        ? errorData.error
-        : typeof errorData.message === 'string'
-          ? errorData.message
+      // Prefer the human readable message (e.g. no access granted by the IdP).
+      const errorMessage = typeof errorData.message === 'string'
+        ? errorData.message
+        : typeof errorData.error === 'string'
+          ? errorData.error
           : `Provisioning failed (${response.status})`
 
       return {
@@ -64,5 +77,9 @@ export async function provisionSsoUser(session: Session): Promise<SsoProvisionin
       alreadyMember: false,
       error: error instanceof Error ? error.message : 'Provisioning request failed',
     }
+  }
+  finally {
+    if (timeout)
+      clearTimeout(timeout)
   }
 }

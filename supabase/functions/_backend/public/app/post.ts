@@ -1,8 +1,9 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
-import { applyAppOnboardingPatch, isAppOnboardingSource } from '../../utils/appOnboarding.ts'
+import { getOrCreateUserABTests } from '../../utils/ab_tests.ts'
 import { addAppCreatorToOnboarding, resolveAppCreatorEmail } from '../../utils/app_creator.ts'
+import { applyAppOnboardingPatch, isAppOnboardingSource } from '../../utils/appOnboarding.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
@@ -58,6 +59,8 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
   }
   if (body.icon && !normalizedIcon)
     throw simpleError('invalid_icon_path', 'Icon path must belong to this app organization')
+  // Ensure intent-gated assignment also exists for apps created outside the wizard.
+  await getOrCreateUserABTests(c, auth.userId)
   let pgClient
   let data: Database['public']['Tables']['apps']['Row'] | undefined
   try {
@@ -87,7 +90,11 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
       }),
     }
     const result = await pgClient.query(
-      `INSERT INTO public.apps (
+      // The creator becomes app_admin of the new app when their org role does
+      // not already let them administer every app (e.g. org_member, which can
+      // create apps). Same statement, so the app never exists without it.
+      `WITH new_app AS (
+       INSERT INTO public.apps (
          owner_org,
          app_id,
          icon_url,
@@ -102,7 +109,17 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
          onboarding
        )
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
-       RETURNING *`,
+       RETURNING *
+       ),
+       creator_binding AS (
+         INSERT INTO public.role_bindings (principal_type, principal_id, role_id, scope_type, org_id, app_id, granted_by, reason, is_direct)
+         SELECT public.rbac_principal_user(), $13::uuid, r.id, public.rbac_scope_app(), new_app.owner_org, new_app.id, $13::uuid, 'App creator', true
+         FROM new_app
+         JOIN public.roles r ON r.name = public.rbac_role_app_admin() AND r.scope_type = public.rbac_scope_app()
+         WHERE NOT public.rbac_check_permission_direct(public.rbac_perm_app_update_settings(), $13::uuid, new_app.owner_org, new_app.app_id, NULL::bigint, NULL::text)
+         ON CONFLICT DO NOTHING
+       )
+       SELECT * FROM new_app`,
       [
         dataInsert.owner_org,
         dataInsert.app_id,
@@ -116,6 +133,7 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
         dataInsert.ios_store_url,
         dataInsert.android_store_url,
         JSON.stringify(dataInsert.onboarding),
+        auth.userId,
       ],
     )
     data = result.rows[0]

@@ -47,6 +47,60 @@ describe('user onboarding write queue', () => {
   })
 
   it.concurrent.each([
+    ['details', 'in_progress'],
+    ['organization', 'in_progress'],
+    ['channel', 'in_progress'],
+    ['setup', 'in_progress'],
+    ['setup', 'completed'],
+  ] as const)('preserves an existing valid intent during a non-reset %s/%s write', (step, status) => {
+    const current = {
+      flow: 'pre_org',
+      intent: 'ota',
+      status: 'in_progress',
+      step: 'organization',
+      updated_at: '2026-09-11T10:01:00.000Z',
+    }
+    const next = {
+      flow: 'pre_org',
+      status,
+      step,
+      updated_at: '2026-09-11T10:02:00.000Z',
+    }
+
+    expect(mergeUserOnboardingProgress(next, current)).toEqual({
+      ...next,
+      intent: 'ota',
+    })
+  })
+
+  it.concurrent('clears an existing intent only when explicitly requested by restart', () => {
+    const current = {
+      abtests: {
+        new_channel: {
+          assigned_at: '2026-09-11T10:00:00.000Z',
+          branch: 'A',
+        },
+      },
+      flow: 'pre_org',
+      intent: 'ota',
+      status: 'in_progress',
+      step: 'organization',
+      updated_at: '2026-09-11T10:01:00.000Z',
+    }
+    const next = {
+      flow: 'pre_org',
+      status: 'in_progress',
+      step: 'intent',
+      updated_at: '2026-09-11T10:02:00.000Z',
+    }
+
+    expect(mergeUserOnboardingProgress(next, current, { clearIntent: true })).toEqual({
+      abtests: current.abtests,
+      ...next,
+    })
+  })
+
+  it.concurrent.each([
     ['null', null],
     ['array', ['not', 'an', 'object'] as string[]],
     ['string', 'not an object'],

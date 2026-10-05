@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { buildCacheOptionSchema, buildCredentialsSchema } from './build'
+import { CLI_PROJECT_MODES } from '../framework/mode'
+import { buildCacheKeyOptionSchema, buildCacheOptionSchema, buildCredentialsSchema } from './build'
 import { localizedReleaseNotesSchema, rejectConflictingBooleanGroup } from './common'
 
 export const capacitorConfigOptionSchema = z.string().min(1).describe('Capacitor config source to update')
@@ -77,6 +78,7 @@ export type StarAllRepositoriesOptions = z.infer<typeof starAllRepositoriesOptio
 export const uploadOptionsSchema = z.object({
   appId: z.string(),
   path: z.string(),
+  mode: z.enum(CLI_PROJECT_MODES).optional(),
   bundle: z.string().optional(),
   channel: z.string().optional(),
   rollout: z.number().min(0).max(100).optional(),
@@ -245,6 +247,24 @@ export const updateChannelOptionsSchema = updateChannelOptionsBaseSchema.superRe
 
 export type UpdateChannelOptions = z.infer<typeof updateChannelOptionsSchema>
 
+export const promoteChannelOptionsSchema = z.object({
+  appId: z.string(),
+  fromChannel: z.string().min(1).describe('Channel to copy the current bundle from'),
+  toChannel: z.string().min(1).describe('Channel to link the bundle to'),
+  ignoreMetadataCheck: z.boolean().optional(),
+  acceptIncompatible: z.boolean().optional(),
+  sendUpdateNotification: z.boolean().optional(),
+  apikey: z.string().optional(),
+  supaHost: z.string().optional(),
+  supaAnon: z.string().optional(),
+}).superRefine((value, ctx) => {
+  rejectConflictingBooleanGroup(value, ctx, ['acceptIncompatible', 'ignoreMetadataCheck'])
+  if (value.fromChannel === value.toChannel)
+    ctx.addIssue({ code: 'custom', path: ['toChannel'], message: 'Source and target channels must be different' })
+})
+
+export type PromoteChannelOptions = z.infer<typeof promoteChannelOptionsSchema>
+
 // ============================================================================
 // SDK Organization Schemas
 // ============================================================================
@@ -395,6 +415,7 @@ export const requestBuildOptionsSchema = z.object({
   prescanSkip: z.array(z.string()).optional(),
   prescanWarn: z.array(z.string()).optional(),
   cache: buildCacheOptionSchema,
+  cacheKey: buildCacheKeyOptionSchema,
 })
 
 export type RequestBuildOptions = z.infer<typeof requestBuildOptionsSchema>

@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(10);
+SELECT plan(12);
 
 SELECT tests.create_supabase_user('onboarding_progress_user', 'onboarding_progress_user@test.local');
 
@@ -68,6 +68,22 @@ SELECT throws_ok(
   '23514',
   NULL,
   'invalid onboarding step is rejected'
+);
+
+SELECT lives_ok(
+  $$UPDATE public.users
+    SET onboarding = '{"status":"in_progress","step":"setup","flow":"pre_org","setup_stage":"channel-create"}'::jsonb
+    WHERE id = tests.get_supabase_uid('onboarding_progress_user')$$,
+  'valid onboarding setup stage is accepted'
+);
+
+SELECT throws_ok(
+  $$UPDATE public.users
+    SET onboarding = '{"status":"in_progress","step":"setup","flow":"pre_org","setup_stage":"unknown"}'::jsonb
+    WHERE id = tests.get_supabase_uid('onboarding_progress_user')$$,
+  '23514',
+  NULL,
+  'invalid onboarding setup stage is rejected'
 );
 
 SELECT lives_ok(

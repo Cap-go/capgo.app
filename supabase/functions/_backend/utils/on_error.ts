@@ -2,9 +2,9 @@ import type { Context } from 'hono'
 import type { SimpleErrorResponse } from './hono.ts'
 import { DrizzleError, entityKind, TransactionRollbackError } from 'drizzle-orm'
 import { sendDiscordAlert500 } from './discord.ts'
-import { cloudlogErr, serializeError } from './logging.ts'
-import { capturePosthogException } from './posthog.ts'
+import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { isTransientDatabaseError, readPgErrorCode, readQuickErrorOriginalCause } from './pg_errors.ts'
+import { capturePosthogException } from './posthog.ts'
 import { backgroundTask } from './utils.ts'
 
 const drizzleErrorNames = new Set(['DrizzleError', 'DrizzleQueryError', 'TransactionRollbackError'])
@@ -35,7 +35,7 @@ function redactSensitiveRequestBody(value: unknown): unknown {
   ]))
 }
 
-function isFilesDurableObjectStorageTimeout(functionName: string, error: unknown): boolean {
+function isFilesDurableObjectTransientError(functionName: string, error: unknown): boolean {
   if (!filesUploadFunctionNames.has(functionName) || !error || typeof error !== 'object' || !('message' in error))
     return false
 
@@ -44,8 +44,13 @@ function isFilesDurableObjectStorageTimeout(functionName: string, error: unknown
     return false
 
   const normalizedMessage = message.toLowerCase()
-  return normalizedMessage.includes('storage operation exceeded timeout')
+  const isStorageTimeout = normalizedMessage.includes('storage operation exceeded timeout')
     && normalizedMessage.includes('object to be reset')
+  // Cloudflare's generic "internal error; reference = <id>" from the upload
+  // Durable Object call is transient too; the retry loop already recovers it,
+  // so any residual occurrence should stay off the Discord alert channel.
+  const isCloudflareInternalError = normalizedMessage.includes('internal error; reference')
+  return isStorageTimeout || isCloudflareInternalError
 }
 
 function readRequestHeader(c: Context, name: string): string | undefined {
@@ -188,8 +193,10 @@ export function onError(functionName: string) {
       catch {
         // ignore errors; fall back to default
       }
-      // Single, structured error log entry
-      cloudlogErr({
+      // Single, structured log entry. 4xx are expected client errors (invalid
+      // app id, no access, ...): log them without the error console or a stack
+      // trace so Cloudflare Workers Issues only groups real backend failures.
+      const httpExceptionLog = {
         requestId: c.get('requestId'),
         functionName,
         kind: 'http_exception',
@@ -199,30 +206,27 @@ export function onError(functionName: string) {
         errorCode: res.error,
         errorMessage: res.message,
         moreInfo: res.moreInfo,
-        stack: serializeError(e)?.stack ?? 'N/A',
-      })
+      }
+      if (e.status >= 500)
+        cloudlogErr({ ...httpExceptionLog, stack: serializeError(e)?.stack ?? 'N/A' })
+      else
+        cloudlog(httpExceptionLog)
       const suppressDiscordAlert = e.cause
         && typeof e.cause === 'object'
         && (e.cause as { suppressDiscordAlert?: unknown }).suppressDiscordAlert === true
       const suppressBackendAlert = suppressDiscordAlert || shouldSuppressQueueRetryAlert(c)
-      if (e.status === 429) {
-        // Set rate-limit headers from moreInfo when available, but DO NOT
-        // overwrite the response body. Several distinct conditions reach this
-        // branch — `too_many_requests` from simpleRateLimit (IP failed-auth,
-        // API-key flood), `native_build_concurrency_limit_exceeded` from
-        // reserveNativeBuildSlot, and others — and collapsing them to a
-        // generic "You are being rate limited" string strips the actual
-        // errorCode/message/moreInfo (activeBuilds, limit, planName, reason,
-        // …) that callers need to react correctly. Fall through to
-        // `return c.json(res, e.status)` below so the thrower's real error
-        // payload is preserved.
+      if (e.status === 429 || e.status === 503) {
+        // Preserve the thrower's JSON body (see `return c.json(res, e.status)` below).
+        // 429: rate limit headers from moreInfo. 503: optional Retry-After only.
         const rateLimitResetAt = typeof res.moreInfo?.rateLimitResetAt === 'number' ? res.moreInfo.rateLimitResetAt : undefined
         let retryAfterSeconds = typeof res.moreInfo?.retryAfterSeconds === 'number' ? res.moreInfo.retryAfterSeconds : undefined
-        if (typeof rateLimitResetAt === 'number' && Number.isFinite(rateLimitResetAt) && !(typeof retryAfterSeconds === 'number' && Number.isFinite(retryAfterSeconds))) {
-          retryAfterSeconds = Math.max(0, Math.ceil((rateLimitResetAt - Date.now()) / 1000))
-        }
-        if (typeof rateLimitResetAt === 'number' && Number.isFinite(rateLimitResetAt)) {
-          c.header('X-RateLimit-Reset', String(Math.ceil(rateLimitResetAt / 1000)))
+        if (e.status === 429) {
+          if (typeof rateLimitResetAt === 'number' && Number.isFinite(rateLimitResetAt) && !(typeof retryAfterSeconds === 'number' && Number.isFinite(retryAfterSeconds))) {
+            retryAfterSeconds = Math.max(0, Math.ceil((rateLimitResetAt - Date.now()) / 1000))
+          }
+          if (typeof rateLimitResetAt === 'number' && Number.isFinite(rateLimitResetAt)) {
+            c.header('X-RateLimit-Reset', String(Math.ceil(rateLimitResetAt / 1000)))
+          }
         }
         if (typeof retryAfterSeconds === 'number' && Number.isFinite(retryAfterSeconds)) {
           c.header('Retry-After', String(Math.max(0, Math.floor(retryAfterSeconds))))
@@ -267,7 +271,7 @@ export function onError(functionName: string) {
     }
     // Non-HTTP errors: log with stack and return 500
     const suppressQueueRetryAlert = shouldSuppressQueueRetryAlert(c)
-    const suppressDiscordAlert = suppressQueueRetryAlert || isFilesDurableObjectStorageTimeout(functionName, e)
+    const suppressDiscordAlert = suppressQueueRetryAlert || isFilesDurableObjectTransientError(functionName, e)
     cloudlogErr({
       requestId: c.get('requestId'),
       functionName,

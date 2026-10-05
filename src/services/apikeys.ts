@@ -4,6 +4,31 @@ import type { DialogV2Button, DialogV2Options } from '~/stores/dialogv2'
 import type { Database } from '~/types/supabase.types'
 import { invokeCapgoApi } from '~/services/capgoApi'
 
+interface ApiKeyLoadScope {
+  userId: string
+  orgId?: string | null
+  appId?: string | null
+}
+
+const inFlightApiKeyLoads = new Map<string, Promise<string | null>>()
+
+export function shareInFlightApiKeyLoad(
+  scope: ApiKeyLoadScope,
+  load: () => Promise<string | null>,
+): Promise<string | null> {
+  const scopeKey = JSON.stringify([scope.userId, scope.orgId ?? null, scope.appId ?? null])
+  const existingLoad = inFlightApiKeyLoads.get(scopeKey)
+  if (existingLoad)
+    return existingLoad
+
+  const newLoad = Promise.resolve().then(load).finally(() => {
+    if (inFlightApiKeyLoads.get(scopeKey) === newLoad)
+      inFlightApiKeyLoads.delete(scopeKey)
+  })
+  inFlightApiKeyLoads.set(scopeKey, newLoad)
+  return newLoad
+}
+
 export async function createDefaultApiKey(
   supabase: SupabaseClient<Database>,
   name: string,

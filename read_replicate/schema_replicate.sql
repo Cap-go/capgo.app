@@ -108,8 +108,6 @@ CREATE TABLE public.apps (
     existing_app boolean DEFAULT false NOT NULL,
     ios_store_url text,
     android_store_url text,
-    stats_updated_at timestamp without time zone,
-    stats_refresh_requested_at timestamp without time zone,
     build_timeout_seconds bigint DEFAULT 900 NOT NULL,
     build_timeout_updated_at timestamp with time zone DEFAULT now() NOT NULL,
     block_provider_infra_requests boolean DEFAULT true NOT NULL,
@@ -183,7 +181,8 @@ CREATE TABLE public.channel_devices (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     device_id text NOT NULL,
     id bigint NOT NULL,
-    owner_org uuid NOT NULL
+    owner_org uuid NOT NULL,
+    is_self_set boolean DEFAULT false NOT NULL
 );
 
 ALTER TABLE ONLY public.channel_devices REPLICA IDENTITY FULL;
@@ -246,6 +245,7 @@ CREATE TABLE public.channels (
     auto_pause_last_triggered_at timestamp with time zone,
     auto_pause_last_checked_at timestamp with time zone,
     update_package public.channel_update_package DEFAULT 'all'::public.channel_update_package NOT NULL,
+    paused_at timestamp with time zone,
     CONSTRAINT channels_auto_pause_action_check CHECK ((auto_pause_action = ANY (ARRAY['pause'::text, 'rollback'::text, 'notify'::text]))),
     CONSTRAINT channels_auto_pause_confidence_check CHECK (((auto_pause_confidence > (0)::numeric) AND (auto_pause_confidence < (1)::numeric))),
     CONSTRAINT channels_auto_pause_cooldown_minutes_check CHECK (((auto_pause_cooldown_minutes >= 0) AND (auto_pause_cooldown_minutes <= 10080))),
@@ -406,8 +406,8 @@ CREATE TABLE public.orgs (
     support_channel_type text,
     support_channel_url text,
     support_channel_set_at timestamp with time zone,
+    auto_top_up_monthly_limit numeric(18,6) DEFAULT 0 NOT NULL,
     CONSTRAINT orgs_max_apikey_expiration_days_valid CHECK (((max_apikey_expiration_days IS NULL) OR ((max_apikey_expiration_days >= 1) AND (max_apikey_expiration_days <= 365)))),
-    CONSTRAINT orgs_onboarding_valid CHECK (((jsonb_typeof(onboarding) = 'object'::text) AND ((NOT (onboarding ? 'intent'::text)) OR ((onboarding ->> 'intent'::text) = ANY (ARRAY['unknown'::text, 'ota'::text, 'builder'::text, 'both'::text, 'exploring'::text]))))),
     CONSTRAINT orgs_password_policy_config_min_length_check CHECK (((password_policy_config IS NULL) OR ((jsonb_typeof(password_policy_config) = 'object'::text) AND ((NOT (password_policy_config ? 'min_length'::text)) OR ((jsonb_typeof((password_policy_config -> 'min_length'::text)) = 'number'::text) AND (((password_policy_config ->> 'min_length'::text))::numeric = trunc(((password_policy_config ->> 'min_length'::text))::numeric)) AND ((((password_policy_config ->> 'min_length'::text))::numeric >= (6)::numeric) AND (((password_policy_config ->> 'min_length'::text))::numeric <= (72)::numeric))))))),
     CONSTRAINT orgs_required_encryption_key_valid CHECK (((required_encryption_key IS NULL) OR (length((required_encryption_key)::text) = ANY (ARRAY[20, 21])))),
     CONSTRAINT orgs_support_channel_type_check CHECK (((support_channel_type IS NULL) OR (support_channel_type = ANY (ARRAY['slack'::text, 'discord'::text, 'teams'::text])))),
@@ -592,11 +592,27 @@ ALTER TABLE ONLY public.org_users
 
 
 --
+-- Name: orgs orgs_auto_top_up_monthly_limit_valid; Type: CHECK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE public.orgs
+    ADD CONSTRAINT orgs_auto_top_up_monthly_limit_valid CHECK (((auto_top_up_monthly_limit >= (0)::numeric) AND (auto_top_up_monthly_limit = trunc(auto_top_up_monthly_limit)) AND (auto_top_up_monthly_limit < 'Infinity'::numeric) AND ((auto_top_up_monthly_limit = (0)::numeric) OR (auto_top_up_monthly_limit >= auto_top_up_threshold)))) NOT VALID;
+
+
+--
 -- Name: orgs orgs_auto_top_up_threshold_min; Type: CHECK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE public.orgs
     ADD CONSTRAINT orgs_auto_top_up_threshold_min CHECK (((auto_top_up_threshold >= (10)::numeric) AND (auto_top_up_threshold = trunc(auto_top_up_threshold)) AND (auto_top_up_threshold < 'Infinity'::numeric) AND (auto_top_up_threshold > '-Infinity'::numeric))) NOT VALID;
+
+
+--
+-- Name: orgs orgs_onboarding_valid; Type: CHECK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE public.orgs
+    ADD CONSTRAINT orgs_onboarding_valid CHECK (((jsonb_typeof(onboarding) = 'object'::text) AND ((NOT (onboarding ? 'intent'::text)) OR ((onboarding ->> 'intent'::text) = ANY (ARRAY['unknown'::text, 'ota'::text, 'builder'::text, 'both'::text, 'exploring'::text, 'publish'::text]))) AND ((NOT (onboarding ? 'development_environment'::text)) OR ((jsonb_typeof((onboarding -> 'development_environment'::text)) = 'string'::text) AND ((onboarding ->> 'development_environment'::text) = ANY (ARRAY['hosted_builder'::text, 'ai_assistant'::text, 'hand_coded'::text, 'other'::text, 'local_project'::text, 'exploring'::text, 'skipped'::text])))))) NOT VALID;
 
 
 --
@@ -871,17 +887,17 @@ CREATE INDEX idx_apps_default_upload_channel ON public.apps USING btree (default
 
 
 --
+-- Name: idx_apps_onboarding_login_creator; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_apps_onboarding_login_creator ON public.apps USING btree (((onboarding ->> 'created_by_user_id'::text))) WHERE ((onboarding #>> '{setup,todo_list_version}'::text[]) = ANY (ARRAY['2'::text, '3'::text, '4'::text]));
+
+
+--
 -- Name: idx_apps_onboarding_ota_stage; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_apps_onboarding_ota_stage ON public.apps USING btree (((((onboarding -> 'features'::text) -> 'ota'::text) ->> 'stage'::text)));
-
-
---
--- Name: idx_apps_onboarding_refreshed_at; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_apps_onboarding_refreshed_at ON public.apps USING btree (COALESCE((onboarding ->> 'refreshed_at'::text), ''::text), app_id);
 
 
 --
@@ -934,10 +950,10 @@ CREATE INDEX idx_channels_rollout_version ON public.channels USING btree (rollou
 
 
 --
--- Name: idx_manifest_app_version_id; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_manifest_app_version_id_file_hash; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_manifest_app_version_id ON public.manifest USING btree (app_version_id);
+CREATE INDEX idx_manifest_app_version_id_file_hash ON public.manifest USING btree (app_version_id, file_hash) INCLUDE (file_size);
 
 
 --

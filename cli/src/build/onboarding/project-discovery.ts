@@ -107,7 +107,7 @@ function readStaticString(source: string, start: number): StaticStringToken | un
   return { end: source.length }
 }
 
-function readStaticAppId(source: string): string | undefined {
+function readStaticAppId(source: string, field = 'appId'): string | undefined {
   const values = new Set<string>()
   let index = 0
   while (index < source.length) {
@@ -125,7 +125,7 @@ function readStaticAppId(source: string): string | undefined {
       keyEnd = index + (identifier?.length ?? 1)
     }
 
-    if (key === 'appId') {
+    if (key === field) {
       const colon = skipTrivia(source, keyEnd)
       if (source[colon] === ':') {
         const valueStart = skipTrivia(source, colon + 1)
@@ -147,11 +147,14 @@ function readCapacitorAppId(directory: string): string | undefined {
   try {
     const source = readFileSync(configPath, 'utf8')
     if (configPath.endsWith('.json')) {
-      const config = JSON.parse(source) as { appId?: unknown }
+      const config = JSON.parse(source) as { appId?: unknown, plugins?: { CapgoBuilder?: { capgoBuilderAppId?: unknown } } }
+      const builderAppId = config.plugins?.CapgoBuilder?.capgoBuilderAppId
+      if (typeof builderAppId === 'string' && builderAppId.trim())
+        return builderAppId.trim()
       const appId = typeof config.appId === 'string' ? config.appId.trim() : ''
       return appId || undefined
     }
-    return readStaticAppId(source)
+    return readStaticAppId(source, 'capgoBuilderAppId') ?? readStaticAppId(source)
   }
   catch {
     // Discovery remains best-effort. The selected project's normal config load

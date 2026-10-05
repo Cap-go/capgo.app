@@ -1,11 +1,12 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import { z } from 'zod'
 import { Hono } from 'hono/tiny'
-import { safeParseSchema } from '../utils/schema_validation.ts'
+import { z } from 'zod'
 import { parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
+import { captureOrganizationInvitationPosthogEvent, sanitizeOrganizationInvitationFailureReason } from '../utils/organization_invitation_posthog.ts'
 import { getEffectivePasswordMinLength, getPasswordPolicyValidationErrors } from '../utils/password_policy.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
+import { safeParseSchema } from '../utils/schema_validation.ts'
 import { emptySupabase, supabaseAdmin as useSupabaseAdmin } from '../utils/supabase.ts'
 import { syncUserPreferenceTags } from '../utils/user_preferences.ts'
 import { getEnv } from '../utils/utils.ts'
@@ -149,15 +150,16 @@ async function ensurePublicUserRowExists(
 
 async function ensureOrgMembership(
   c: Parameters<typeof useSupabaseAdmin>[0],
+  _supabaseAdmin: ReturnType<typeof useSupabaseAdmin>,
   userId: string,
-  magicInviteString: string,
+  invitation: { invite_magic_string: string, org_id: string },
 ) {
   const pgClient = getPgClient(c)
   let status: string | undefined
   try {
     const result = await pgClient.query<{ accept_tmp_user_invitation: string }>(
       `SELECT public.accept_tmp_user_invitation($1, $2::uuid) AS accept_tmp_user_invitation`,
-      [magicInviteString, userId],
+      [invitation.invite_magic_string, userId],
     )
     status = result.rows[0]?.accept_tmp_user_invitation
   }
@@ -186,7 +188,6 @@ async function ensureOrgMembership(
     return quickError(404, 'failed_to_accept_invitation', 'Invitation not found', { error: 'Invitation not found' })
   }
 
-  // Legacy invites without invited_by_user_id must be reissued by an org admin.
   if (status === 'INVITER_NOT_FOUND') {
     return quickError(403, 'failed_to_accept_invitation', 'Invitation must be reissued before acceptance', {
       error: 'Missing invitation inviter',
@@ -213,126 +214,239 @@ async function ensureOrgMembership(
 }
 
 app.post('/', async (c) => {
-  const rawBody = await parseBody<AcceptInvitation>(c)
+  let membershipFinalized = false
+  let telemetryUserId: string | undefined
+  let telemetryInvitationId: number | undefined
 
-  // First, validate base schema (without password policy checks)
-  const baseValidationResult = safeParseSchema(baseInvitationSchema, rawBody)
-  if (!baseValidationResult.success) {
-    throw simpleError('invalid_json_body', 'Invalid request', { errors: baseValidationResult.error.message })
-  }
+  try {
+    const rawBody = await parseBody<AcceptInvitation>(c)
 
-  const baseBody = baseValidationResult.data
-  const { password: _password, captchaToken: _captchaToken, magic_invite_string: _magicInviteString, ...baseBodyWithoutSecrets } = baseBody
-  cloudlog({ requestId: c.get('requestId'), context: 'accept_invitation raw body', rawBody: baseBodyWithoutSecrets })
-
-  const supabaseAdmin = useSupabaseAdmin(c)
-
-  // Get the invitation to find the org_id
-  const { data: invitation, error: invitationError } = await supabaseAdmin.from('tmp_users')
-    .select('*')
-    .eq('invite_magic_string', baseBody.magic_invite_string)
-    .maybeSingle()
-
-  if (invitationError) {
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation get tmp_users', { error: invitationError.message })
-  }
-
-  if (!invitation) {
-    return quickError(404, 'failed_to_accept_invitation', 'Invitation not found', { error: 'Invitation not found' })
-  }
-
-  if (invitation.cancelled_at) {
-    return quickError(410, 'invitation_cancelled', 'Invitation was cancelled', { error: 'Invitation was cancelled' })
-  }
-
-  // Get the org's password policy
-  const { data: org, error: orgError } = await supabaseAdmin.from('orgs')
-    .select('password_policy_config')
-    .eq('id', invitation.org_id)
-    .single()
-
-  if (orgError) {
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to get org password policy', { error: orgError.message })
-  }
-
-  const captchaSecret = getEnv(c, 'CAPTCHA_SECRET_KEY')
-  if (captchaSecret.length > 0 && !baseBody.captchaToken) {
-    throw simpleError('invalid_request', 'Captcha token is required')
-  }
-
-  // Recovery + compatibility: if the user already exists, sign-in and finish the org membership.
-  // This also recovers from partial failures where the user was created but the invite wasn't finalized.
-  const { data: existingUser } = await supabaseAdmin
-    .from('users')
-    .select('id')
-    .eq('email', invitation.email)
-    .maybeSingle()
-
-  if (existingUser?.id) {
-    const userSupabase = emptySupabase(c)
-    const { data: session, error: sessionError } = await userSupabase.auth.signInWithPassword({
-      email: invitation.email,
-      password: baseBody.password,
-      options: captchaSecret.length > 0 && baseBody.captchaToken
-        ? { captchaToken: baseBody.captchaToken }
-        : undefined,
-    })
-
-    if (sessionError) {
-      return quickError(400, 'sign_in_failed', 'Sign in failed, please retry', { error: sessionError.message })
+    // First, validate base schema (without password policy checks)
+    const baseValidationResult = safeParseSchema(baseInvitationSchema, rawBody)
+    if (!baseValidationResult.success) {
+      throw simpleError('invalid_json_body', 'Invalid request', { errors: baseValidationResult.error.message })
     }
 
-    const userId = session.user?.id ?? existingUser.id
-    const membershipError = await ensureOrgMembership(c, userId, baseBody.magic_invite_string)
-    if (membershipError)
-      return membershipError
+    const baseBody = baseValidationResult.data
+    const { password: _password, captchaToken: _captchaToken, magic_invite_string: _magicInviteString, ...baseBodyWithoutSecrets } = baseBody
+    cloudlog({ requestId: c.get('requestId'), context: 'accept_invitation raw body', rawBody: baseBodyWithoutSecrets })
 
-    return c.json({
-      access_token: session.session?.access_token,
-      refresh_token: session.session?.refresh_token,
-    })
-  }
+    const supabaseAdmin = useSupabaseAdmin(c)
 
-  // Use org's password policy if enabled, otherwise use default (new user only)
-  const policyConfig = org?.password_policy_config as unknown as PasswordPolicy | null
-  const passwordPolicy: PasswordPolicy = policyConfig?.enabled
-    ? {
-        ...policyConfig,
-        min_length: getEffectivePasswordMinLength(policyConfig.min_length),
+    // Get the invitation to find the org_id
+    const { data: invitation, error: invitationError } = await supabaseAdmin.from('tmp_users')
+      .select('*')
+      .eq('invite_magic_string', baseBody.magic_invite_string)
+      .maybeSingle()
+
+    if (invitationError) {
+      return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation get tmp_users', { error: invitationError.message })
+    }
+
+    if (!invitation) {
+      return quickError(404, 'failed_to_accept_invitation', 'Invitation not found', { error: 'Invitation not found' })
+    }
+
+    telemetryInvitationId = invitation.id
+
+    const { data: existingUser, error: existingUserError } = await supabaseAdmin
+      .from('users')
+      .select('id')
+      .eq('email', invitation.email)
+      .maybeSingle()
+
+    if (existingUserError) {
+      return quickError(500, 'failed_to_accept_invitation', 'Failed to check existing account', { error: existingUserError.message })
+    }
+    telemetryUserId = existingUser?.id ?? invitation.future_uuid
+
+    if (invitation.cancelled_at) {
+      return quickError(410, 'invitation_cancelled', 'Invitation was cancelled', { error: 'Invitation was cancelled' })
+    }
+
+    // Get the org's password policy
+    const { data: org, error: orgError } = await supabaseAdmin.from('orgs')
+      .select('password_policy_config')
+      .eq('id', invitation.org_id)
+      .single()
+
+    if (orgError) {
+      return quickError(500, 'failed_to_accept_invitation', 'Failed to get org password policy', { error: orgError.message })
+    }
+
+    const captchaSecret = getEnv(c, 'CAPTCHA_SECRET_KEY')
+    if (captchaSecret.length > 0 && !baseBody.captchaToken) {
+      throw simpleError('invalid_request', 'Captcha token is required')
+    }
+
+    // Recovery + compatibility: if the user already exists, sign-in and finish the org membership.
+    // This also recovers from partial failures where the user was created but the invite wasn't finalized.
+    if (existingUser?.id) {
+      telemetryUserId = existingUser.id
+      const userSupabase = emptySupabase(c)
+      const { data: session, error: sessionError } = await userSupabase.auth.signInWithPassword({
+        email: invitation.email,
+        password: baseBody.password,
+        options: captchaSecret.length > 0 && baseBody.captchaToken
+          ? { captchaToken: baseBody.captchaToken }
+          : undefined,
+      })
+
+      if (sessionError) {
+        return quickError(400, 'sign_in_failed', 'Sign in failed, please retry', { error: sessionError.message })
       }
-    : DEFAULT_PASSWORD_POLICY
 
-  const passwordPolicyErrors = getPasswordPolicyValidationErrors(baseBody.password, passwordPolicy)
-  if (passwordPolicyErrors.length > 0) {
-    throw simpleError('invalid_password', 'Password does not meet requirements', {
-      errors: passwordPolicyErrors,
-      policy: {
-        min_length: passwordPolicy.min_length,
-        require_uppercase: passwordPolicy.require_uppercase,
-        require_number: passwordPolicy.require_number,
-        require_special: passwordPolicy.require_special,
-      },
+      const userId = session.user?.id ?? existingUser.id
+      const membershipError = await ensureOrgMembership(c, supabaseAdmin, userId, invitation)
+      if (membershipError)
+        return membershipError
+
+      membershipFinalized = true
+      await captureOrganizationInvitationPosthogEvent(c, {
+        accountState: 'already_existed',
+        event: 'organization_membership_invitation_accepted',
+        flow: 'new_user_magic_link',
+        invitationId: telemetryInvitationId,
+        pendingInvitationCount: 1,
+        userId,
+      })
+
+      return c.json({
+        access_token: session.session?.access_token,
+        refresh_token: session.session?.refresh_token,
+      })
+    }
+
+    // Use org's password policy if enabled, otherwise use default (new user only)
+    const policyConfig = org?.password_policy_config as unknown as PasswordPolicy | null
+    const passwordPolicy: PasswordPolicy = policyConfig?.enabled
+      ? {
+          ...policyConfig,
+          min_length: getEffectivePasswordMinLength(policyConfig.min_length),
+        }
+      : DEFAULT_PASSWORD_POLICY
+
+    const passwordPolicyErrors = getPasswordPolicyValidationErrors(baseBody.password, passwordPolicy)
+    if (passwordPolicyErrors.length > 0) {
+      throw simpleError('invalid_password', 'Password does not meet requirements', {
+        errors: passwordPolicyErrors,
+        policy: {
+          min_length: passwordPolicy.min_length,
+          require_uppercase: passwordPolicy.require_uppercase,
+          require_number: passwordPolicy.require_number,
+          require_special: passwordPolicy.require_special,
+        },
+      })
+    }
+
+    const body = {
+      ...baseBody,
+      password: baseBody.password,
+    }
+    const { password: _pwd, captchaToken: _cap, magic_invite_string: _magicInviteString2, ...bodyWithoutSecrets } = body
+    cloudlog({ requestId: c.get('requestId'), context: 'accept_invitation validated body', body: bodyWithoutSecrets })
+
+    // here the real magic happens
+    const { data: user, error: userError } = await supabaseAdmin.auth.admin.createUser({
+      email: invitation.email,
+      password: body.password,
+      email_confirm: true,
+      id: invitation.future_uuid,
     })
-  }
 
-  const body = {
-    ...baseBody,
-    password: baseBody.password,
-  }
-  const { password: _pwd, captchaToken: _cap, magic_invite_string: _magicInviteString2, ...bodyWithoutSecrets } = body
-  cloudlog({ requestId: c.get('requestId'), context: 'accept_invitation validated body', body: bodyWithoutSecrets })
-
-  // here the real magic happens
-  const { data: user, error: userError } = await supabaseAdmin.auth.admin.createUser({
-    email: invitation.email,
-    password: body.password,
-    email_confirm: true,
-    id: invitation.future_uuid,
-  })
-
-  if (userError || !user) {
-    if (isUserAlreadyExistsAuthError(userError)) {
+    if (userError || !user) {
+      if (isUserAlreadyExistsAuthError(userError)) {
       // Possible partial state: auth user exists but public.users is missing.
+        const userSupabase = emptySupabase(c)
+        const { data: session, error: sessionError } = await userSupabase.auth.signInWithPassword({
+          email: invitation.email,
+          password: body.password,
+          options: captchaSecret.length > 0 && body.captchaToken
+            ? { captchaToken: body.captchaToken }
+            : undefined,
+        })
+        if (!sessionError && session.user?.id) {
+          telemetryUserId = session.user.id
+          const publicUserError = await ensurePublicUserRowExists(c, supabaseAdmin, session.user.id, invitation, body.opt_for_newsletters)
+          if (publicUserError)
+            return publicUserError
+
+          const membershipError = await ensureOrgMembership(c, supabaseAdmin, session.user.id, invitation)
+          if (membershipError)
+            return membershipError
+
+          membershipFinalized = true
+          await captureOrganizationInvitationPosthogEvent(c, {
+            accountState: 'already_existed',
+            event: 'organization_membership_invitation_accepted',
+            flow: 'new_user_magic_link',
+            invitationId: telemetryInvitationId,
+            pendingInvitationCount: 1,
+            userId: session.user.id,
+          })
+
+          return c.json({
+            access_token: session.session?.access_token,
+            refresh_token: session.session?.refresh_token,
+          })
+        }
+
+        return quickError(409, 'user_already_exists', 'Account already exists. Please login and accept the invitation from the dashboard.', {
+          error: userError?.message ?? 'User already exists',
+        })
+      }
+      return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation createUser', { error: userError?.message ?? 'Unknown error' })
+    }
+
+    telemetryUserId = user.user.id
+
+    let didRollback = false
+    try {
+    // TODO: improve error handling
+      const insertUserPayload = {
+        id: user.user.id,
+        email: invitation.email,
+        first_name: invitation.first_name,
+        last_name: invitation.last_name,
+        enable_notifications: true,
+        opt_for_newsletters: body.opt_for_newsletters,
+        created_via_invite: true,
+      }
+
+      let {
+        error: userNormalTableError,
+        data,
+      } = await supabaseAdmin.from('users').insert(insertUserPayload).select().single()
+
+      // Log any initial error for observability during rollout
+      if (userNormalTableError) {
+        cloudlog({
+          requestId: c.get('requestId'),
+          message: 'accept_invitation: initial user insert error',
+          error: userNormalTableError,
+        })
+      }
+
+      // Backward compatible rollout: if the column doesn't exist yet, retry without it.
+      if (isMissingCreatedViaInviteColumnError(userNormalTableError)) {
+        cloudlog({
+          requestId: c.get('requestId'),
+          message: 'accept_invitation: created_via_invite column missing, retrying without it',
+        })
+        const { created_via_invite: _createdViaInvite, ...fallbackPayload } = insertUserPayload
+      ;({ error: userNormalTableError, data } = await supabaseAdmin.from('users').insert(fallbackPayload).select().single())
+      }
+
+      if (userNormalTableError) {
+        didRollback = true
+        await rollbackCreatedUser(c, user.user.id)
+        return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation insert', { error: userNormalTableError.message })
+      }
+
+      await syncUserPreferenceTags(c, invitation.email, data)
+
+      // let's now login the user in. The rough idea is that we will create a session and then return the session to the client
+      // then the client will use the session to redirect to login page.
       const userSupabase = emptySupabase(c)
       const { data: session, error: sessionError } = await userSupabase.auth.signInWithPassword({
         email: invitation.email,
@@ -341,107 +455,52 @@ app.post('/', async (c) => {
           ? { captchaToken: body.captchaToken }
           : undefined,
       })
-      if (!sessionError && session.user?.id) {
-        const publicUserError = await ensurePublicUserRowExists(c, supabaseAdmin, session.user.id, invitation, body.opt_for_newsletters)
-        if (publicUserError)
-          return publicUserError
 
-        const membershipError = await ensureOrgMembership(c, session.user.id, body.magic_invite_string)
-        if (membershipError)
-          return membershipError
-
-        return c.json({
-          access_token: session.session?.access_token,
-          refresh_token: session.session?.refresh_token,
-        })
+      if (sessionError) {
+      // Rollback so retrying the same invitation does not get stuck on `createUser`.
+        didRollback = true
+        await rollbackCreatedUser(c, user.user.id)
+        return quickError(400, 'sign_in_failed', 'Sign in failed, please retry', { error: sessionError.message })
       }
 
-      return quickError(409, 'user_already_exists', 'Account already exists. Please login and accept the invitation from the dashboard.', {
-        error: userError?.message ?? 'User already exists',
+      const membershipError = await ensureOrgMembership(c, supabaseAdmin, user.user.id, invitation)
+      if (membershipError) {
+        didRollback = true
+        await rollbackCreatedUser(c, user.user.id)
+        return membershipError
+      }
+      membershipFinalized = true
+      await captureOrganizationInvitationPosthogEvent(c, {
+        accountState: 'created',
+        event: 'organization_membership_invitation_accepted',
+        flow: 'new_user_magic_link',
+        invitationId: telemetryInvitationId,
+        pendingInvitationCount: 1,
+        userId: user.user.id,
+      })
+
+      return c.json({
+        access_token: session.session?.access_token,
+        refresh_token: session.session?.refresh_token,
       })
     }
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation createUser', { error: userError?.message ?? 'Unknown error' })
+    catch (e) {
+      if (!didRollback && !membershipFinalized) {
+        await rollbackCreatedUser(c, user.user.id)
+      }
+      throw e
+    }
   }
-
-  let didRollback = false
-  try {
-    // TODO: improve error handling
-    const insertUserPayload = {
-      id: user.user.id,
-      email: invitation.email,
-      first_name: invitation.first_name,
-      last_name: invitation.last_name,
-      enable_notifications: true,
-      opt_for_newsletters: body.opt_for_newsletters,
-      created_via_invite: true,
-    }
-
-    let {
-      error: userNormalTableError,
-      data,
-    } = await supabaseAdmin.from('users').insert(insertUserPayload).select().single()
-
-    // Log any initial error for observability during rollout
-    if (userNormalTableError) {
-      cloudlog({
-        requestId: c.get('requestId'),
-        message: 'accept_invitation: initial user insert error',
-        error: userNormalTableError,
+  catch (error) {
+    if (telemetryUserId && !membershipFinalized) {
+      await captureOrganizationInvitationPosthogEvent(c, {
+        event: 'organization_membership_invitation_failed',
+        failureReason: sanitizeOrganizationInvitationFailureReason(error, 'acceptance_failed'),
+        flow: 'new_user_magic_link',
+        pendingInvitationCount: 1,
+        userId: telemetryUserId,
       })
     }
-
-    // Backward compatible rollout: if the column doesn't exist yet, retry without it.
-    if (isMissingCreatedViaInviteColumnError(userNormalTableError)) {
-      cloudlog({
-        requestId: c.get('requestId'),
-        message: 'accept_invitation: created_via_invite column missing, retrying without it',
-      })
-      const { created_via_invite: _createdViaInvite, ...fallbackPayload } = insertUserPayload
-      ;({ error: userNormalTableError, data } = await supabaseAdmin.from('users').insert(fallbackPayload).select().single())
-    }
-
-    if (userNormalTableError) {
-      didRollback = true
-      await rollbackCreatedUser(c, user.user.id)
-      return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation insert', { error: userNormalTableError.message })
-    }
-
-    await syncUserPreferenceTags(c, invitation.email, data)
-
-    // let's now login the user in. The rough idea is that we will create a session and then return the session to the client
-    // then the client will use the session to redirect to login page.
-    const userSupabase = emptySupabase(c)
-    const { data: session, error: sessionError } = await userSupabase.auth.signInWithPassword({
-      email: invitation.email,
-      password: body.password,
-      options: captchaSecret.length > 0 && body.captchaToken
-        ? { captchaToken: body.captchaToken }
-        : undefined,
-    })
-
-    if (sessionError) {
-      // Rollback so retrying the same invitation does not get stuck on `createUser`.
-      didRollback = true
-      await rollbackCreatedUser(c, user.user.id)
-      return quickError(400, 'sign_in_failed', 'Sign in failed, please retry', { error: sessionError.message })
-    }
-
-    const membershipError = await ensureOrgMembership(c, user.user.id, body.magic_invite_string)
-    if (membershipError) {
-      didRollback = true
-      await rollbackCreatedUser(c, user.user.id)
-      return membershipError
-    }
-
-    return c.json({
-      access_token: session.session?.access_token,
-      refresh_token: session.session?.refresh_token,
-    })
-  }
-  catch (e) {
-    if (!didRollback) {
-      await rollbackCreatedUser(c, user.user.id)
-    }
-    throw e
+    throw error
   }
 })

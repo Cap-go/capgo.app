@@ -352,6 +352,49 @@ describe('public channel post', () => {
     )
   })
 
+  it('maps the metadata alias onto the version_number strategy', async () => {
+    supabaseAdmin.mockImplementation(() => buildAdminChain({
+      existingChannelId: 42,
+      existingChannelVersion: 123,
+      existingChannelPublic: true,
+    }))
+    const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
+    const c = context()
+
+    await post(c, {
+      app_id: 'com.test.disable-auto-update',
+      channel: 'production',
+      disableAutoUpdate: 'metadata' as any,
+    }, apiKey())
+
+    expect(updateOrCreateChannel).toHaveBeenCalledWith(
+      c,
+      expect.objectContaining({ disable_auto_update: 'version_number' }),
+      42,
+      true,
+    )
+  })
+
+  it('rejects an unknown disable auto update strategy with a readable error', async () => {
+    supabaseAdmin.mockImplementation(() => buildAdminChain({
+      existingChannelId: 42,
+      existingChannelVersion: 123,
+      existingChannelPublic: true,
+    }))
+    const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
+    const c = context()
+
+    await expect(post(c, {
+      app_id: 'com.test.disable-auto-update',
+      channel: 'production',
+      disableAutoUpdate: 'meta' as any,
+    }, apiKey())).rejects.toMatchObject({
+      cause: expect.objectContaining({ error: 'invalid_disable_auto_update' }),
+    })
+
+    expect(updateOrCreateChannel).not.toHaveBeenCalled()
+  })
+
   it('maps zip package mismatches from the database', async () => {
     supabaseAdmin.mockImplementation(() => buildAdminChain({
       existingChannelId: 42,

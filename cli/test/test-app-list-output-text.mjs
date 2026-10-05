@@ -47,36 +47,35 @@ finally {
 
 const keyFixture = mkdtempSync(join(tmpdir(), 'capgo-app-list-key-'))
 const projectFixture = join(keyFixture, 'project')
-const originalHome = process.env.HOME
-const originalCwd = process.cwd()
-const originalFixtureToken = process.env.CAPGO_TOKEN
 try {
   mkdirSync(projectFixture)
   writeFileSync(join(keyFixture, '.capgo'), '')
   writeFileSync(join(projectFixture, '.capgo'), 'local-output-text-token')
-  process.env.HOME = keyFixture
-  delete process.env.CAPGO_TOKEN
-  process.chdir(projectFixture)
-
-  const messages = []
-  assert.equal(findSavedKey(false, message => messages.push(message)), 'local-output-text-token')
-  assert.deepEqual(messages, ['Use local API key .capgo'])
-
-  writeFileSync(join(projectFixture, '.capgo'), '')
-  messages.length = 0
-  assert.throws(() => findSavedKey(false, message => messages.push(message)), /No Capgo API key found/)
-  assert.deepEqual(messages, [], 'does not announce an empty API-key file')
+  const childEnv = { ...process.env, HOME: keyFixture, USERPROFILE: keyFixture }
+  delete childEnv.CAPGO_TOKEN
+  const utilsUrl = new URL('../src/utils.ts', import.meta.url).href
+  const child = spawnSync(process.execPath, ['--eval', `
+    import { writeFileSync } from 'node:fs'
+    import { findSavedKey } from ${JSON.stringify(utilsUrl)}
+    const messages = []
+    const key = findSavedKey(false, message => messages.push(message))
+    const localMessages = [...messages]
+    writeFileSync('.capgo', '')
+    messages.length = 0
+    let emptyError = ''
+    try { findSavedKey(false, message => messages.push(message)) }
+    catch (error) { emptyError = error.message }
+    process.stdout.write('CAPGO_TEST_RESULT=' + JSON.stringify({ key, localMessages, messages, emptyError }))
+  `], { cwd: projectFixture, encoding: 'utf8', env: childEnv })
+  assert.equal(child.status, 0, child.stderr)
+  const marker = 'CAPGO_TEST_RESULT='
+  const result = JSON.parse(child.stdout.slice(child.stdout.lastIndexOf(marker) + marker.length))
+  assert.equal(result.key, 'local-output-text-token')
+  assert.deepEqual(result.localMessages, ['Use local API key .capgo'])
+  assert.deepEqual(result.messages, [], 'does not announce an empty API-key file')
+  assert.match(result.emptyError, /No Capgo API key found/)
 }
 finally {
-  process.chdir(originalCwd)
-  if (originalHome === undefined)
-    delete process.env.HOME
-  else
-    process.env.HOME = originalHome
-  if (originalFixtureToken === undefined)
-    delete process.env.CAPGO_TOKEN
-  else
-    process.env.CAPGO_TOKEN = originalFixtureToken
   rmSync(keyFixture, { recursive: true, force: true })
 }
 
