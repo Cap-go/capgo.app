@@ -10,13 +10,14 @@ import { backgroundTask, existInEnv, getEnv } from '../utils/utils.ts'
 import { CacheHelper } from './cache.ts'
 import { getChannelSelfOverride, isChannelSelfStoreEnabled } from './channelSelfStore.ts'
 import { getClientDbRegionSB } from './geolocation.ts'
+import { freshQueryArgs } from './hyperdriveFreshRead.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { serializePostgresError, serializePostgresLogValue } from './postgres_error.ts'
 import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { resolveRolloutDecision } from './rollout.ts'
 import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
-import { updatesCacheTags } from './updatesEdgeCache.ts'
+import { getCachedChannelLookup, updatesCacheTags } from './updatesEdgeCache.ts'
 
 /**
  * Plugin PG client handle. On Hyperdrive (workerd) this is a per-request `Client`;
@@ -35,8 +36,8 @@ const REPLICATION_LAG_CACHE_TTL_SECONDS = 60
 const REPLICATION_LAG_CACHE_TTL_MS = REPLICATION_LAG_CACHE_TTL_SECONDS * 1000
 
 type ReplicationStatus = 'ok' | 'lagging' | 'unknown'
-interface ChannelLookupResult { id: number, name: string, allow_device_self_set: boolean, public: boolean, owner_org: string }
-type PlanAction = 'mau' | 'storage' | 'bandwidth'
+export interface ChannelLookupResult { id: number, name: string, allow_device_self_set: boolean, public: boolean, owner_org: string }
+export type PlanAction = 'mau' | 'storage' | 'bandwidth'
 type ReadReplicaHyperdriveBinding
   = | 'HYPERDRIVE_CAPGO_READ_AS_JAPAN'
     | 'HYPERDRIVE_CAPGO_READ_AS_INDIA'
@@ -508,7 +509,10 @@ export function createLazyPgClient(c: Context, readOnly = false): LazyPgClient {
   const client = {
     query: (...args: unknown[]) => {
       lazyPgQueryCounts.set(c.req.raw, getLazyPgQueryCount(c) + 1)
-      return ensure().then(db => (db.query as (...queryArgs: unknown[]) => unknown)(...args))
+      // Edge cache refills skip Hyperdrive's query cache (read synchronously,
+      // while the caller's async context is still current).
+      const queryArgs = freshQueryArgs(args)
+      return ensure().then(db => (db.query as (...queryArgs: unknown[]) => unknown)(...queryArgs))
     },
   } as unknown as PluginPgClient
   return {
@@ -730,14 +734,20 @@ export async function getEffectiveDeviceChannelNamePostgres(
   platform: string,
   hasChannelDeviceOverrides: boolean,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
+  options: { edgeCache?: boolean } = {},
 ) {
   const fallback = typeof fallbackChannelName === 'string' && fallbackChannelName.trim() !== ''
     ? fallbackChannelName.trim()
     : null
   const { channelDevicesAlias, channelAlias } = getAlias()
   const platformQuery = platform === 'android' ? channelAlias.android : platform === 'electron' ? channelAlias.electron : channelAlias.ios
+  // App-level lookups (channel by id / name, public default) can come from
+  // the edge cache; per-device overrides below are always read live.
+  const appLevel = <T>(lookup: string, params: Record<string, string>, load: () => Promise<T | null>) => options.edgeCache
+    ? getCachedChannelLookup(c, app_id, lookup, { ...params, platform }, load).then(result => result.value)
+    : load()
 
-  const getChannelById = async (channelId: number) => {
+  const loadChannelById = async (channelId: number) => {
     const channelQuery = drizzleClient
       .select({ id: channelAlias.id, name: channelAlias.name })
       .from(channelAlias)
@@ -755,6 +765,7 @@ export async function getEffectiveDeviceChannelNamePostgres(
     const channel = await channelQuery.then(data => data.at(0))
     return channel?.name ? channel : null
   }
+  const getChannelById = (channelId: number) => appLevel('effective_by_id', { id: String(channelId) }, () => loadChannelById(channelId))
 
   if (isChannelSelfStoreEnabled(c as any)) {
     const storedOverride = await getChannelSelfOverride(c as any, app_id, device_id.toLowerCase())
@@ -777,7 +788,7 @@ export async function getEffectiveDeviceChannelNamePostgres(
     if (channel?.name)
       return channel
   }
-  const getChannelByName = async (channelName: string | null) => {
+  const loadChannelByName = async (channelName: string | null) => {
     const channelQuery = drizzleClient
       .select({ id: channelAlias.id, name: channelAlias.name })
       .from(channelAlias)
@@ -804,6 +815,9 @@ export async function getEffectiveDeviceChannelNamePostgres(
     const channel = await channelQuery.then(data => data.at(0))
     return channel?.name ? channel : null
   }
+  const getChannelByName = (channelName: string | null) => channelName
+    ? appLevel('effective_by_name', { name: channelName }, () => loadChannelByName(channelName))
+    : appLevel('effective_public', {}, () => loadChannelByName(null))
 
   if (fallback) {
     const channelName = await getChannelByName(fallback)
@@ -1366,6 +1380,33 @@ export async function getAppBlockProviderInfraRequestsPostgres(
   }
 }
 
+/** Bundle by name. Throws on database errors (caches must not store a failed read as missing). */
+export async function queryAppVersionPostgres(
+  appId: string,
+  versionName: string,
+  allowedDeleted: boolean | undefined,
+  drizzleClient: ReturnType<typeof getDrizzleClient>,
+): Promise<{ id: number, owner_org: string } | null> {
+  const deletedConditions: ReturnType<typeof eq>[] = []
+  if (allowedDeleted !== undefined)
+    deletedConditions.push(eq(schema.app_versions.deleted, allowedDeleted))
+
+  const appVersion = await drizzleClient
+    .select({
+      id: schema.app_versions.id,
+      owner_org: schema.app_versions.owner_org,
+    })
+    .from(schema.app_versions)
+    .where(and(
+      eq(schema.app_versions.app_id, appId),
+      eq(schema.app_versions.name, versionName),
+      ...deletedConditions,
+    ))
+    .limit(1)
+    .then(data => data[0])
+  return appVersion ?? null
+}
+
 export async function getAppVersionPostgres(
   c: Context,
   appId: string,
@@ -1374,24 +1415,7 @@ export async function getAppVersionPostgres(
   drizzleClient: ReturnType<typeof getDrizzleClient>,
 ): Promise<{ id: number, owner_org: string } | null> {
   try {
-    const deletedConditions: ReturnType<typeof eq>[] = []
-    if (allowedDeleted !== undefined)
-      deletedConditions.push(eq(schema.app_versions.deleted, allowedDeleted))
-
-    const appVersion = await drizzleClient
-      .select({
-        id: schema.app_versions.id,
-        owner_org: schema.app_versions.owner_org,
-      })
-      .from(schema.app_versions)
-      .where(and(
-        eq(schema.app_versions.app_id, appId),
-        eq(schema.app_versions.name, versionName),
-        ...deletedConditions,
-      ))
-      .limit(1)
-      .then(data => data[0])
-    return appVersion
+    return await queryAppVersionPostgres(appId, versionName, allowedDeleted, drizzleClient)
   }
   catch (e: unknown) {
     logPgError(c, 'getAppVersionPostgres', e)
@@ -1478,6 +1502,38 @@ export async function getChannelDeviceOverridePg(
   }
 }
 
+async function queryChannelByPg(
+  appId: string,
+  channelFilter: SQL,
+  drizzleClient: ReturnType<typeof getDrizzleClient>,
+): Promise<ChannelLookupResult | null> {
+  const channel = await drizzleClient
+    .select({
+      id: schema.channels.id,
+      name: schema.channels.name,
+      allow_device_self_set: schema.channels.allow_device_self_set,
+      public: schema.channels.public,
+      owner_org: schema.channels.owner_org,
+    })
+    .from(schema.channels)
+    .where(and(
+      eq(schema.channels.app_id, appId),
+      channelFilter,
+    ))
+    .limit(1)
+    .then(data => data[0])
+  return channel ?? null
+}
+
+/** Channel by name. Throws on database errors (caches must not store a failed read as missing). */
+export function queryChannelByNamePg(
+  appId: string,
+  channelName: string,
+  drizzleClient: ReturnType<typeof getDrizzleClient>,
+): Promise<ChannelLookupResult | null> {
+  return queryChannelByPg(appId, eq(schema.channels.name, channelName), drizzleClient)
+}
+
 async function getChannelByPg(
   c: Context,
   appId: string,
@@ -1486,21 +1542,7 @@ async function getChannelByPg(
   logName: string,
 ): Promise<ChannelLookupResult | null> {
   try {
-    return await drizzleClient
-      .select({
-        id: schema.channels.id,
-        name: schema.channels.name,
-        allow_device_self_set: schema.channels.allow_device_self_set,
-        public: schema.channels.public,
-        owner_org: schema.channels.owner_org,
-      })
-      .from(schema.channels)
-      .where(and(
-        eq(schema.channels.app_id, appId),
-        channelFilter,
-      ))
-      .limit(1)
-      .then(data => data[0])
+    return await queryChannelByPg(appId, channelFilter, drizzleClient)
   }
   catch (e: unknown) {
     logPgError(c, logName, e)
@@ -1668,6 +1710,8 @@ export async function getAppByIdPg(
   }
 }
 
+export interface CompatibleChannelRow { id: number, name: string, allow_device_self_set: boolean, allow_emulator: boolean, allow_device: boolean, allow_dev: boolean, allow_prod: boolean, ios: boolean, android: boolean, electron: boolean, public: boolean }
+
 export async function getCompatibleChannelsPg(
   c: Context,
   appId: string,
@@ -1675,45 +1719,56 @@ export async function getCompatibleChannelsPg(
   isEmulator: boolean,
   isProd: boolean,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
-): Promise<{ id: number, name: string, allow_device_self_set: boolean, allow_emulator: boolean, allow_device: boolean, allow_dev: boolean, allow_prod: boolean, ios: boolean, android: boolean, electron: boolean, public: boolean }[]> {
+): Promise<CompatibleChannelRow[]> {
   try {
-    const deviceCondition = isEmulator
-      ? eq(schema.channels.allow_emulator, true)
-      : eq(schema.channels.allow_device, true)
-    const buildCondition = isProd
-      ? eq(schema.channels.allow_prod, true)
-      : eq(schema.channels.allow_dev, true)
-    let platformColumn = schema.channels.android
-    if (platform === 'ios')
-      platformColumn = schema.channels.ios
-    else if (platform === 'electron')
-      platformColumn = schema.channels.electron
-    const channels = await drizzleClient
-      .select({
-        id: schema.channels.id,
-        name: schema.channels.name,
-        allow_device_self_set: schema.channels.allow_device_self_set,
-        allow_emulator: schema.channels.allow_emulator,
-        allow_device: schema.channels.allow_device,
-        allow_dev: schema.channels.allow_dev,
-        allow_prod: schema.channels.allow_prod,
-        ios: schema.channels.ios,
-        android: schema.channels.android,
-        electron: schema.channels.electron,
-        public: schema.channels.public,
-      })
-      .from(schema.channels)
-      .where(and(
-        eq(schema.channels.app_id, appId),
-        or(eq(schema.channels.allow_device_self_set, true), eq(schema.channels.public, true)),
-        deviceCondition,
-        buildCondition,
-        eq(platformColumn, true),
-      ))
-    return channels
+    return await queryCompatibleChannelsPg(appId, platform, isEmulator, isProd, drizzleClient)
   }
   catch (e: unknown) {
     logPgError(c, 'getCompatibleChannelsPg', e)
     return []
   }
+}
+
+/** Channels a device may list. Throws on database errors (caches must not store a failed read). */
+export async function queryCompatibleChannelsPg(
+  appId: string,
+  platform: 'ios' | 'android' | 'electron',
+  isEmulator: boolean,
+  isProd: boolean,
+  drizzleClient: ReturnType<typeof getDrizzleClient>,
+): Promise<CompatibleChannelRow[]> {
+  const deviceCondition = isEmulator
+    ? eq(schema.channels.allow_emulator, true)
+    : eq(schema.channels.allow_device, true)
+  const buildCondition = isProd
+    ? eq(schema.channels.allow_prod, true)
+    : eq(schema.channels.allow_dev, true)
+  let platformColumn = schema.channels.android
+  if (platform === 'ios')
+    platformColumn = schema.channels.ios
+  else if (platform === 'electron')
+    platformColumn = schema.channels.electron
+  const channels = await drizzleClient
+    .select({
+      id: schema.channels.id,
+      name: schema.channels.name,
+      allow_device_self_set: schema.channels.allow_device_self_set,
+      allow_emulator: schema.channels.allow_emulator,
+      allow_device: schema.channels.allow_device,
+      allow_dev: schema.channels.allow_dev,
+      allow_prod: schema.channels.allow_prod,
+      ios: schema.channels.ios,
+      android: schema.channels.android,
+      electron: schema.channels.electron,
+      public: schema.channels.public,
+    })
+    .from(schema.channels)
+    .where(and(
+      eq(schema.channels.app_id, appId),
+      or(eq(schema.channels.allow_device_self_set, true), eq(schema.channels.public, true)),
+      deviceCondition,
+      buildCondition,
+      eq(platformColumn, true),
+    ))
+  return channels
 }
