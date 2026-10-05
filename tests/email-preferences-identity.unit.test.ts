@@ -44,4 +44,11 @@ describe('emailPreferencesIdentity', () => {
     expect(isVisitorUuid(VISITOR_UUID)).toBe(true)
     expect(isVisitorUuid('user@example.com')).toBe(false)
   })
+
+  it('uses the first value when a query key is repeated', () => {
+    expect(parseEmailPreferencesQuery({ email: [VISITOR_UUID, VISITOR_UUID] })).toEqual({
+      email: '',
+      visitorUuid: VISITOR_UUID,
+    })
+  })
 })
