@@ -109,6 +109,7 @@ declare module 'vue' {
     OnboardingSupportUsernames: typeof import('./components/dashboard/OnboardingSupportUsernames.vue')['default']
     OnboardingToolPattern: typeof import('./components/dashboard/OnboardingToolPattern.vue')['default']
     OrganizationOnboardingInvite: typeof import('./components/dashboard/OrganizationOnboardingInvite.vue')['default']
+    OrgCustomDomain: typeof import('./components/OrgCustomDomain.vue')['default']
     OrgEmailNotificationsPanel: typeof import('./components/dashboard/OrgEmailNotificationsPanel.vue')['default']
     OrgNotificationStatsPanel: typeof import('./components/dashboard/OrgNotificationStatsPanel.vue')['default']
     PageLoader: typeof import('./components/PageLoader.vue')['default']

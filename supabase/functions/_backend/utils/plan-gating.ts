@@ -69,7 +69,7 @@ async function getActivePlanNameOrg(c: Context, orgId: string): Promise<string |
  * @param orgId - Organization ID to validate
  * @throws {HTTPException} 403 if org is not on Enterprise plan
  */
-export async function requireEnterprisePlan(c: Context, orgId: string): Promise<void> {
+export async function requireEnterprisePlan(c: Context, orgId: string, feature = 'SSO'): Promise<void> {
   try {
     const planName = await getActivePlanNameOrg(c, orgId)
 
@@ -80,7 +80,7 @@ export async function requireEnterprisePlan(c: Context, orgId: string): Promise<
         orgId,
         activePlan: planName,
       })
-      return quickError(403, 'enterprise_plan_required', 'SSO requires an active Enterprise plan', {
+      return quickError(403, 'enterprise_plan_required', `${feature} requires an active Enterprise plan`, {
         activePlan: planName,
       })
     }

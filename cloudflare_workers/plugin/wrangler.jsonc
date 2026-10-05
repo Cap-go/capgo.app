@@ -32,6 +32,10 @@
         "region": "gcp:europe-west8"
       },
       "routes": [
+        // Cloudflare for SaaS hostnames share these API routes; no per-customer deploy.
+        { "pattern": "*/updates", "zone_name": "capgo.app" },
+        { "pattern": "*/stats", "zone_name": "capgo.app" },
+        { "pattern": "*/channel_self", "zone_name": "capgo.app" },
         {
           "pattern": "plugin.capgo.app",
           "custom_domain": true
