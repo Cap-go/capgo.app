@@ -559,11 +559,11 @@ BEGIN
     WITH done AS (
       DELETE FROM public.updates_cache_purge_pending
       WHERE lease_token = p_lease_token
-      RETURNING app_id, initial
+      RETURNING app_id, scope, initial
     )
-    INSERT INTO public.updates_cache_purge_pending (app_id, due_at, initial)
-    SELECT apps.app_id, v_now + delays.delay, false
-    FROM (SELECT DISTINCT app_id FROM done WHERE initial) AS apps
+    INSERT INTO public.updates_cache_purge_pending (app_id, scope, due_at, initial)
+    SELECT pairs.app_id, pairs.scope, v_now + delays.delay, false
+    FROM (SELECT DISTINCT app_id, scope FROM done WHERE initial) AS pairs
     CROSS JOIN (VALUES
       (interval '10 seconds'), (interval '60 seconds'), (interval '180 seconds')
     ) AS delays (delay);
@@ -4198,11 +4198,12 @@ BEGIN
     );
   END IF;
 
+  -- One (app, scope) pair = one Cloudflare tag.
   WITH picked AS (
-    SELECT p.app_id
+    SELECT p.app_id, p.scope
     FROM public.updates_cache_purge_pending p
     WHERE p.due_at <= v_now AND (p.lease_token IS NULL OR p.leased_until <= v_now)
-    GROUP BY p.app_id
+    GROUP BY p.app_id, p.scope
     ORDER BY MIN(p.due_at)
     LIMIT GREATEST(LEAST(p_limit, 1000), 1)
   ),
@@ -4211,13 +4212,14 @@ BEGIN
     SET lease_token = v_token, leased_until = v_now + v_lease
     FROM picked
     WHERE p.app_id = picked.app_id
+      AND p.scope = picked.scope
       AND p.due_at <= v_now
       AND (p.lease_token IS NULL OR p.leased_until <= v_now)
-    RETURNING p.app_id, p.initial
+    RETURNING p.app_id, p.scope, p.initial
   )
-  SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('app_id', c.app_id, 'initial', c.initial))
+  SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('app_id', c.app_id, 'scope', c.scope, 'initial', c.initial))
   INTO v_apps
-  FROM (SELECT app_id, bool_or(initial) AS initial FROM claimed GROUP BY app_id) AS c;
+  FROM (SELECT app_id, scope, bool_or(initial) AS initial FROM claimed GROUP BY app_id, scope) AS c;
 
   IF v_apps IS NULL THEN
     RETURN pg_catalog.jsonb_build_object('status', 'empty');
@@ -11144,6 +11146,7 @@ CREATE OR REPLACE FUNCTION "public"."invalidate_updates_edge_cache"() RETURNS "t
     AS $$
 DECLARE
   app_ids text[];
+  version_app_ids text[];
 BEGIN
   IF NOT public.updates_cache_purge_enabled() THEN
     RETURN NULL;
@@ -11162,13 +11165,15 @@ BEGIN
                o.allow_device, o.allow_dev, o.allow_prod, o.disable_auto_update_under_native,
                o.disable_auto_update, o.ios, o.android, o.electron, o.update_package,
                o.rollout_version, o.rollout_percentage_bps, o.rollout_enabled, o.rollout_id,
-               o.rollout_paused_at, o.rollout_pause_reason, o.rollout_cache_ttl_seconds, o.paused_at)
+               o.rollout_paused_at, o.rollout_pause_reason, o.rollout_cache_ttl_seconds, o.paused_at,
+               o.owner_org)
           IS DISTINCT FROM
               (n.app_id, n.name, n.version, n.public, n.allow_device_self_set, n.allow_emulator,
                n.allow_device, n.allow_dev, n.allow_prod, n.disable_auto_update_under_native,
                n.disable_auto_update, n.ios, n.android, n.electron, n.update_package,
                n.rollout_version, n.rollout_percentage_bps, n.rollout_enabled, n.rollout_id,
-               n.rollout_paused_at, n.rollout_pause_reason, n.rollout_cache_ttl_seconds, n.paused_at)
+               n.rollout_paused_at, n.rollout_pause_reason, n.rollout_cache_ttl_seconds, n.paused_at,
+               n.owner_org)
         UNION
         SELECT n.app_id::text FROM old_rows o JOIN new_rows n ON n.id = o.id
         WHERE o.app_id IS DISTINCT FROM n.app_id
@@ -11195,16 +11200,23 @@ BEGIN
              COALESCE(n.rollout_channel_count, 0) > 0);
     END IF;
   ELSIF TG_TABLE_NAME = 'app_versions' THEN
-    -- Only versions a channel serves (as version or rollout target) can be in
-    -- the cache; channel changes that start serving a version purge on their
-    -- own. This keeps uploads (manifest_count, storage_provider flips of
-    -- unlinked bundles) from evicting the app's live entries.
-    IF TG_OP = 'DELETE' THEN
+    -- Main tag: only versions a channel serves (as version or rollout target)
+    -- can be in the /updates entries; channel changes that start serving a
+    -- version purge on their own. This keeps uploads (manifest_count,
+    -- storage_provider flips of unlinked bundles) from evicting the app's live
+    -- entries.
+    -- Versions tag: bundle-name lookups (id + owner_org by name, deleted rows
+    -- included) change on any insert, delete, rename, move or soft delete,
+    -- whether or not a channel serves the version.
+    IF TG_OP = 'INSERT' THEN
+      SELECT pg_catalog.array_agg(DISTINCT n.app_id::text) INTO version_app_ids FROM new_rows n;
+    ELSIF TG_OP = 'DELETE' THEN
       SELECT pg_catalog.array_agg(DISTINCT o.app_id::text) INTO app_ids
       FROM old_rows o
       WHERE EXISTS (
         SELECT 1 FROM public.channels c WHERE c.version = o.id OR c.rollout_version = o.id
       );
+      SELECT pg_catalog.array_agg(DISTINCT o.app_id::text) INTO version_app_ids FROM old_rows o;
     ELSE
       SELECT pg_catalog.array_agg(DISTINCT n.app_id::text) INTO app_ids
       FROM old_rows o JOIN new_rows n ON n.id = o.id
@@ -11218,6 +11230,15 @@ BEGIN
             (n.app_id, n.name, n.checksum, n.session_key, n.key_id, n.storage_provider, n.external_url,
              n.min_update_version, n.manifest_count, n.r2_path, n.deleted, n.deleted_at,
              n.link, n.comment);
+      SELECT pg_catalog.array_agg(DISTINCT changed.app_id) INTO version_app_ids
+      FROM (
+        SELECT n.app_id::text AS app_id FROM old_rows o JOIN new_rows n ON n.id = o.id
+        WHERE (o.app_id, o.name, o.owner_org, o.deleted)
+          IS DISTINCT FROM (n.app_id, n.name, n.owner_org, n.deleted)
+        UNION
+        SELECT o.app_id::text FROM old_rows o JOIN new_rows n ON n.id = o.id
+        WHERE o.app_id IS DISTINCT FROM n.app_id
+      ) AS changed;
     END IF;
   ELSIF TG_TABLE_NAME = 'orgs' THEN
     SELECT pg_catalog.array_agg(DISTINCT a.app_id::text) INTO app_ids
@@ -11239,6 +11260,8 @@ BEGIN
       JOIN public.orgs org ON org.customer_id = s.customer_id
       JOIN public.apps a ON a.owner_org = org.id;
     ELSE
+      -- storage_exceeded is left out on purpose: plugin plan checks only use
+      -- the mau and bandwidth actions (see buildPlanValidationExpression).
       SELECT pg_catalog.array_agg(DISTINCT a.app_id::text) INTO app_ids
       FROM old_rows o
       JOIN new_rows n ON n.customer_id = o.customer_id
@@ -11251,7 +11274,10 @@ BEGIN
   END IF;
 
   IF app_ids IS NOT NULL THEN
-    PERFORM public.notify_updates_edge_cache_purge(app_ids);
+    PERFORM public.notify_updates_edge_cache_purge(app_ids, 'app');
+  END IF;
+  IF version_app_ids IS NOT NULL THEN
+    PERFORM public.notify_updates_edge_cache_purge(version_app_ids, 'versions');
   END IF;
   RETURN NULL;
 EXCEPTION WHEN OTHERS THEN
@@ -11264,7 +11290,7 @@ $$;
 ALTER FUNCTION "public"."invalidate_updates_edge_cache"() OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."invalidate_updates_edge_cache"() IS 'Statement-level AFTER trigger: collects app ids whose /updates answer may have changed and asks triggers/updates_cache_purge to purge their Cloudflare Cache-Tag. Runs once per statement over transition tables; lookups use finx_channels_version, idx_channels_rollout_version, idx_orgs_customer_id and finx_apps_owner_org.';
+COMMENT ON FUNCTION "public"."invalidate_updates_edge_cache"() IS 'Statement-level AFTER trigger: collects app ids whose plugin edge cache entries may have changed and asks triggers/updates_cache_purge to purge their Cloudflare Cache-Tag (scope app: /updates, owner and channel lookups; scope versions: bundle-name lookups). Runs once per statement over transition tables; lookups use finx_channels_version, idx_channels_rollout_version, idx_orgs_customer_id and finx_apps_owner_org.';
 
 
 
@@ -13340,13 +13366,13 @@ $$;
 ALTER FUNCTION "public"."normalize_sso_provider_domain"() OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."notify_updates_edge_cache_purge"("p_app_ids" "text"[]) RETURNS "void"
+CREATE OR REPLACE FUNCTION "public"."notify_updates_edge_cache_purge"("p_app_ids" "text"[], "p_scope" "text") RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
 BEGIN
-  INSERT INTO public.updates_cache_purge_pending (app_id, due_at, initial)
-  SELECT app_id, pg_catalog.clock_timestamp(), true
+  INSERT INTO public.updates_cache_purge_pending (app_id, scope, due_at, initial)
+  SELECT app_id, COALESCE(p_scope, 'app'), pg_catalog.clock_timestamp(), true
   FROM (
     SELECT DISTINCT app_id FROM pg_catalog.unnest(p_app_ids) AS app_id
     WHERE app_id IS NOT NULL AND app_id <> ''
@@ -13364,7 +13390,7 @@ END;
 $$;
 
 
-ALTER FUNCTION "public"."notify_updates_edge_cache_purge"("p_app_ids" "text"[]) OWNER TO "postgres";
+ALTER FUNCTION "public"."notify_updates_edge_cache_purge"("p_app_ids" "text"[], "p_scope" "text") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."noupdate"() RETURNS "trigger"
@@ -24101,7 +24127,9 @@ CREATE TABLE IF NOT EXISTS "public"."updates_cache_purge_pending" (
     "due_at" timestamp with time zone NOT NULL,
     "initial" boolean DEFAULT true NOT NULL,
     "lease_token" "uuid",
-    "leased_until" timestamp with time zone
+    "leased_until" timestamp with time zone,
+    "scope" "text" DEFAULT 'app'::"text" NOT NULL,
+    CONSTRAINT "updates_cache_purge_pending_scope_check" CHECK (("scope" = ANY (ARRAY['app'::"text", 'versions'::"text"])))
 );
 
 
@@ -26189,6 +26217,10 @@ CREATE OR REPLACE TRIGGER "handle_updated_at" BEFORE INSERT OR UPDATE ON "public
 
 
 CREATE OR REPLACE TRIGGER "invalidate_updates_edge_cache_app_versions_del" AFTER DELETE ON "public"."app_versions" REFERENCING OLD TABLE AS "old_rows" FOR EACH STATEMENT EXECUTE FUNCTION "public"."invalidate_updates_edge_cache"();
+
+
+
+CREATE OR REPLACE TRIGGER "invalidate_updates_edge_cache_app_versions_ins" AFTER INSERT ON "public"."app_versions" REFERENCING NEW TABLE AS "new_rows" FOR EACH STATEMENT EXECUTE FUNCTION "public"."invalidate_updates_edge_cache"();
 
 
 
@@ -29936,8 +29968,8 @@ GRANT ALL ON FUNCTION "public"."normalize_sso_provider_domain"() TO "service_rol
 
 
 
-REVOKE ALL ON FUNCTION "public"."notify_updates_edge_cache_purge"("p_app_ids" "text"[]) FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."notify_updates_edge_cache_purge"("p_app_ids" "text"[]) TO "service_role";
+REVOKE ALL ON FUNCTION "public"."notify_updates_edge_cache_purge"("p_app_ids" "text"[], "p_scope" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."notify_updates_edge_cache_purge"("p_app_ids" "text"[], "p_scope" "text") TO "service_role";
 
 
 
