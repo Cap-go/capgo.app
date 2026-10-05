@@ -37,6 +37,7 @@ describe('r2 inventory queue', () => {
       await expect(inventoryTransaction(db as unknown as ClientBase, async () => {
         throw original
       })).rejects.toBe(original)
+      expect(db.query).toHaveBeenCalledWith('ROLLBACK')
     }
     finally {
       log.mockRestore()
