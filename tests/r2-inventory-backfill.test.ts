@@ -140,6 +140,27 @@ describe('resumable inventory scans', () => {
     const rows = (await db.query('SELECT r2_key, r2_state, size_bytes FROM public.r2_objects WHERE bucket_name = $1 ORDER BY r2_key', [options.bucket])).rows
     expect(rows).toEqual([{ r2_key: 'a', r2_state: 'deleted', size_bytes: null }, { r2_key: 'b', r2_state: 'present', size_bytes: '42' }, { r2_key: 'z', r2_state: 'present', size_bytes: '999' }])
   }))
+  it.concurrent('keeps retired keys through GC so later creates cannot restore reuse', () => fixture(async (db, options) => {
+    await commitBackfillPage(db, options, { ...EMPTY_PROGRESS }, { objects: [], truncated: false }, new Date().toISOString())
+    options.mode = 'reconcile'
+    await scanInventory(db, async () => ({ objects: [], truncated: false }), options, config)
+    await db.query(`INSERT INTO public.r2_objects (bucket_name, r2_key, r2_state) VALUES ($1, 'retired', 'to_be_deleted')`, [options.bucket])
+    await db.query(`UPDATE public.r2_objects SET r2_state = 'deleted', last_event_at = now() - interval '10 days',
+      tombstone_expires_at = now() - interval '1 day' WHERE bucket_name = $1 AND r2_key = 'retired'`, [options.bucket])
+    const retirement = (await db.query('SELECT cleanup_requested_at FROM public.r2_objects WHERE bucket_name = $1', [options.bucket])).rows[0].cleanup_requested_at
+    expect(retirement).not.toBeNull()
+    await db.query(`INSERT INTO public.r2_objects (bucket_name, r2_key, r2_state, last_event_at, tombstone_expires_at)
+      VALUES ($1, 'ordinary', 'deleted', now() - interval '10 days', now() - interval '1 day')`, [options.bucket])
+    expect(await collectInventoryTombstones(db, options.bucket, options.job, config)).toBe(1)
+    expect((await db.query('SELECT r2_key, r2_state, cleanup_requested_at FROM public.r2_objects WHERE bucket_name = $1', [options.bucket])).rows).toEqual([
+      { r2_key: 'retired', r2_state: 'deleted', cleanup_requested_at: retirement },
+    ])
+    await applyInventoryEvents(db, [{ bucket: options.bucket, key: 'retired', state: 'present', size: 42, etag: 'etag', eventTime: new Date().toISOString() }], config)
+    expect((await db.query('SELECT r2_state, cleanup_requested_at FROM public.r2_objects WHERE bucket_name = $1', [options.bucket])).rows[0]).toEqual({
+      r2_state: 'to_be_deleted',
+      cleanup_requested_at: retirement,
+    })
+  }))
   it.concurrent('advances GC beyond a protected prefix and revisits it after wrapping', () => fixture(async (db, options) => {
     await commitBackfillPage(db, options, { ...EMPTY_PROGRESS }, { objects: [], truncated: false }, new Date().toISOString())
     options.mode = 'reconcile'

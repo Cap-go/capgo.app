@@ -246,12 +246,13 @@ export async function collectInventoryTombstones(db: ClientBase, bucket: string,
     }
     const result = await db.query<{ deleted: number, cursor: { expiresAt: string, key: string } | null }>(`WITH candidates AS MATERIALIZED (
       SELECT object.bucket_name, object.r2_key, object.tombstone_expires_at FROM public.r2_objects AS object
-      WHERE object.bucket_name = $1 AND object.r2_state = 'deleted' AND object.tombstone_expires_at < now()
+      WHERE object.bucket_name = $1 AND object.r2_state = 'deleted' AND object.tombstone_expires_at < now() AND object.cleanup_requested_at IS NULL
       ${cursor ? 'AND (object.tombstone_expires_at, object.r2_key) > ($2::timestamptz, $3::text COLLATE "C")' : ''}
       ORDER BY object.tombstone_expires_at, object.r2_key LIMIT 1000 FOR UPDATE OF object SKIP LOCKED
     ), removed AS (
       DELETE FROM public.r2_objects AS target USING candidates, public.r2_inventory_checkpoints AS admission
       WHERE target.bucket_name = candidates.bucket_name AND target.r2_key = candidates.r2_key
+      AND target.cleanup_requested_at IS NULL
       AND admission.bucket_name = target.bucket_name AND admission.job_name = 'admission' AND admission.partition_key = ''
       AND (target.last_event_at IS NULL OR target.last_event_at < admission.accepted_event_floor)
       AND (target.last_reconciled_at IS NULL OR target.last_reconciled_at < admission.accepted_event_floor)
