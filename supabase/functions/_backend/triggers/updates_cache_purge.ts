@@ -1,5 +1,7 @@
-// Purges the /updates edge cache in every Cloudflare data center (zone
-// purge-by-tag, one Cloudflare call per zone per batch of up to 100 apps).
+// Purges the plugin edge cache (/updates, /stats, /channel_self) in every
+// Cloudflare data center (zone purge-by-tag, one Cloudflare call per zone per
+// batch of up to 100 tags). Each queued row names an app and a scope: 'app'
+// purges the app's main tag, 'versions' its bundle-name lookup tag.
 //
 // Woken through pg_net by public.notify_updates_edge_cache_purge() (after the
 // change commits) and by the 10s cron tick while purges are due. Each wake
@@ -21,7 +23,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { PLUGIN_ROUTE_HOSTS, PLUGIN_ROUTE_ZONE_NAMES } from '../plugin_runtime/utils/pluginRouteHosts.generated.ts'
-import { updatesAppCacheTag } from '../plugin_runtime/utils/updatesCacheTag.ts'
+import { updatesCacheTagForScope } from '../plugin_runtime/utils/updatesCacheTag.ts'
 import { BRES, middlewareAPISecret } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
@@ -198,7 +200,8 @@ interface ClaimResult {
   status: 'busy' | 'throttled' | 'empty' | 'ok'
   wait_ms?: number
   lease_token?: string
-  apps?: { app_id: string, initial: boolean }[]
+  /** `scope` is missing before the versions-scope migration: treated as 'app'. */
+  apps?: { app_id: string, scope?: string, initial: boolean }[]
   has_more?: boolean
 }
 
@@ -247,7 +250,7 @@ export async function drainUpdatesCachePurge(
     claimed = true
 
     const apps = claim.apps
-    const result = await purgeUpdatesCacheTags(c, apps.map(app => updatesAppCacheTag(app.app_id)))
+    const result = await purgeUpdatesCacheTags(c, apps.map(app => updatesCacheTagForScope(app.app_id, app.scope)))
     const ok = result.configured && result.failed === 0
     // Success deletes the leased rows (and schedules re-purges); failure
     // releases them at the Retry-After. A crash before this leaves the lease

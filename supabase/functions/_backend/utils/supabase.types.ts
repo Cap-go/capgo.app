@@ -3599,6 +3599,7 @@ export type Database = {
           initial: boolean
           lease_token: string | null
           leased_until: string | null
+          scope: string
         }
         Insert: {
           app_id: string
@@ -3607,6 +3608,7 @@ export type Database = {
           initial?: boolean
           lease_token?: string | null
           leased_until?: string | null
+          scope?: string
         }
         Update: {
           app_id?: string
@@ -3615,6 +3617,7 @@ export type Database = {
           initial?: boolean
           lease_token?: string | null
           leased_until?: string | null
+          scope?: string
         }
         Relationships: []
       }
@@ -5436,7 +5439,7 @@ export type Database = {
         Returns: Json
       }
       notify_updates_edge_cache_purge: {
-        Args: { p_app_ids: string[] }
+        Args: { p_app_ids: string[]; p_scope: string }
         Returns: undefined
       }
       null_migrated_app_version_manifests: {

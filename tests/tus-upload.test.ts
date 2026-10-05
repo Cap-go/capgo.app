@@ -117,8 +117,9 @@ describe('tus upload protocol tests', () => {
       const response = await fetch(getEndpointUrl('/files/config'))
       expect(response.status).toBe(200)
 
-      const config = await response.json() as { TUSUpload: boolean, maxUploadLength: number }
+      const config = await response.json() as { TUSUpload: boolean, manifestUpload: boolean, maxUploadLength: number }
       expect(config.TUSUpload).toBe(true)
+      expect(config.manifestUpload).toBe(USE_CLOUDFLARE)
       expect(config.maxUploadLength).toBeGreaterThan(0)
     })
   })
