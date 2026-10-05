@@ -275,6 +275,8 @@ async function deleteApp() {
   }
 }
 
+const deviceDataCollection = computed(() => parseAppRowDeviceDataCollection(appRef.value as unknown))
+
 async function submit(form: {
   app_name: string
   ios_store_url?: string
@@ -378,8 +380,6 @@ async function submit(form: {
 
   isLoading.value = false
 }
-
-const deviceDataCollection = computed(() => parseAppRowDeviceDataCollection(appRef.value as unknown))
 
 const storeImportUrl = computed(() => appRef.value?.ios_store_url || appRef.value?.android_store_url || '')
 const shouldShowStoreIconImport = computed(() => !appRef.value?.icon_url && !isAppIconLoading.value && !!storeImportUrl.value)
