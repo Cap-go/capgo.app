@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { CLI_PROJECT_MODES } from '../framework/mode'
 import { buildCacheKeyOptionSchema, buildCacheOptionSchema, buildCredentialsSchema } from './build'
 import { localizedReleaseNotesSchema, rejectConflictingBooleanGroup } from './common'
+import { deviceDataCollectionOptionsFields } from './deviceDataCollection'
 
 export const capacitorConfigOptionSchema = z.string().min(1).describe('Capacitor config source to update')
 
@@ -40,14 +41,7 @@ export const updateAppOptionsSchema = z.object({
   name: z.string().optional(),
   icon: z.string().optional(),
   retention: z.number().optional(),
-  collectCountry: z.boolean().optional(),
-  collectPlatform: z.boolean().optional(),
-  collectOsVersion: z.boolean().optional(),
-  collectPluginVersion: z.boolean().optional(),
-  collectVersionBuild: z.boolean().optional(),
-  collectIsEmulator: z.boolean().optional(),
-  collectIsProd: z.boolean().optional(),
-  collectInstallSource: z.boolean().optional(),
+  ...deviceDataCollectionOptionsFields,
   apikey: z.string().optional(),
   supaHost: z.string().optional(),
   supaAnon: z.string().optional(),
