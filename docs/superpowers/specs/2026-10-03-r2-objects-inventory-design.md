@@ -53,7 +53,7 @@ During this inventory-only stage, discovery normally creates `present` rows and 
 | `last_event_at`        | `timestamptz`            | Yes      | Latest accepted R2 notification `eventTime`; never replaced with DB processing time.                                                  |
 | `last_reconciled_at`   | `timestamptz`            | Yes      | Conservative observation boundary for the most recent successful LIST/HEAD verification applied to this row.                          |
 | `tombstone_expires_at` | `timestamptz`            | Yes      | Eligibility time for tombstone removal; NULL for other states.                                                                        |
-| `cleanup_requested_at` | `timestamptz` | Yes | Timestamp of committed cleanup intent, retained through a deleted tombstone to prevent reuse of retired keys. |
+| `cleanup_requested_at` | `timestamptz`            | Yes      | Timestamp of committed cleanup intent, retained through a deleted tombstone to prevent reuse of retired keys.                         |
 | `first_seen_at`        | `timestamptz`            | No       | First insertion into Capgo's inventory; default `now()`. This is not the object's creation time.                                      |
 | `updated_at`           | `timestamptz`            | No       | Time this row was last changed; maintained by writes.                                                                                 |
 | `revision`             | `bigint`                 | No       | Starts at 1 and increments on every accepted change. Protects reconciliation writes from intervening DB updates.                      |
