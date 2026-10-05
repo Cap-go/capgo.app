@@ -487,56 +487,104 @@ export interface StripeData {
   previousProductId: string | undefined
 }
 
-// Enterprise MAU slider: credits bought every billing period as a second
-// subscription item next to the plan. Their prices are tagged so plan
-// detection never mistakes the credit item for the plan.
-export const RECURRING_CREDIT_PRICE_KIND = 'recurring_credits'
-const RECURRING_CREDIT_LOOKUP_KEY_PREFIX = 'capgo_recurring_credits_'
-// 1 credit = $1. Caps a single checkout at $1M of credits a month.
-export const MAX_RECURRING_CREDITS_PER_MONTH = 1_000_000
+// Enterprise MAU slider: MAU above the plan allowance is a second item on the
+// subscription, billed per 1,000 MAU with graduated tiers that mirror the MAU
+// usage tiers. It raises the plan quota (stripe_info.extra_mau); it is not
+// credits. Its prices are tagged so plan detection skips the item.
+export const EXTRA_MAU_PRICE_KIND = 'extra_mau'
+const EXTRA_MAU_LOOKUP_KEY_PREFIX = 'capgo_extra_mau_'
+export const EXTRA_MAU_UNIT = 1_000
+export const MAX_EXTRA_MAU = 1_000_000_000
 
 interface TaggedPrice {
   lookup_key?: string | null
   metadata?: Stripe.Metadata | null
 }
 
-export function isRecurringCreditPrice(price: TaggedPrice | null | undefined) {
+export function isExtraMauPrice(price: TaggedPrice | null | undefined) {
   if (!price)
     return false
-  return price.metadata?.capgo_kind === RECURRING_CREDIT_PRICE_KIND
-    || (price.lookup_key?.startsWith(RECURRING_CREDIT_LOOKUP_KEY_PREFIX) ?? false)
+  return price.metadata?.capgo_kind === EXTRA_MAU_PRICE_KIND
+    || (price.lookup_key?.startsWith(EXTRA_MAU_LOOKUP_KEY_PREFIX) ?? false)
 }
 
-export function isRecurringCreditItem(item: Pick<Stripe.SubscriptionItem, 'price'>) {
-  return isRecurringCreditPrice(item.price)
+export function isExtraMauItem(item: Pick<Stripe.SubscriptionItem, 'price'>) {
+  return isExtraMauPrice(item.price)
 }
 
-// Monthly equivalent of the credits a subscription buys (yearly items count 1/12).
-export function getRecurringCreditsPerMonth(items: Array<Pick<Stripe.SubscriptionItem, 'price' | 'quantity'>>) {
-  return items.filter(isRecurringCreditItem).reduce((total, item) => {
-    const perPeriod = item.quantity ?? 0
-    return total + (item.price?.recurring?.interval === 'year' ? perPeriod / 12 : perPeriod)
-  }, 0)
+export function getExtraMau(items: Array<Pick<Stripe.SubscriptionItem, 'price' | 'quantity'>>) {
+  return items.filter(isExtraMauItem).reduce((total, item) => total + (item.quantity ?? 0) * EXTRA_MAU_UNIT, 0)
 }
 
-// $1 per credit, billed with the plan's interval. Found by lookup key, created on first use.
-async function getRecurringCreditPriceId(c: Context, creditProductId: string, interval: 'month' | 'year', taxBehavior: Stripe.Price.TaxBehavior | null) {
-  const lookupKey = `${RECURRING_CREDIT_LOOKUP_KEY_PREFIX}${interval}_${creditProductId}`
+interface MauTierStep {
+  step_min: number
+  step_max: number
+  price_per_unit: number
+}
+
+// Graduated Stripe tiers for the MAU above `includedMau`, per 1,000 MAU, in cents.
+export function buildExtraMauTiers(steps: MauTierStep[], includedMau: number, interval: 'month' | 'year') {
+  const months = interval === 'year' ? 12 : 1
+  const tiers: Stripe.PriceCreateParams.Tier[] = []
+  for (const step of [...steps].sort((a, b) => a.step_min - b.step_min)) {
+    if (step.step_max <= includedMau)
+      continue
+    // Current tiers are whole cents per 1,000 MAU ($0.60, $0.45, ...).
+    const unitCents = Math.round(step.price_per_unit * EXTRA_MAU_UNIT * 100 * months)
+    const isLast = step.step_max >= Number.MAX_SAFE_INTEGER
+    tiers.push({
+      up_to: isLast ? 'inf' : Math.ceil((step.step_max - includedMau) / EXTRA_MAU_UNIT),
+      unit_amount: unitCents,
+    })
+  }
+  if (tiers.length)
+    tiers[tiers.length - 1].up_to = 'inf'
+  return tiers
+}
+
+// Short stable hash so a tier change gets a new price (lookup keys are unique).
+function hashString(value: string) {
+  let hash = 0x811C9DC5
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return hash.toString(36)
+}
+
+// Found by lookup key, created (with its product) on first use.
+async function getExtraMauPriceId(c: Context, includedMau: number, interval: 'month' | 'year', taxBehavior: Stripe.Price.TaxBehavior | null) {
+  const { data: steps, error } = await supabaseAdmin(c)
+    .from('capgo_credits_steps')
+    .select('step_min, step_max, price_per_unit')
+    .eq('type', 'mau')
+    .is('org_id', null)
+  if (error || !steps?.length)
+    throw simpleError('mau_tiers_not_found', 'Cannot load MAU price tiers', { error })
+
+  const tiers = buildExtraMauTiers(steps, includedMau, interval)
+  const lookupKey = `${EXTRA_MAU_LOOKUP_KEY_PREFIX}${interval}_${hashString(JSON.stringify({ includedMau, tiers }))}`
   const existing = await getStripe(c).prices.list({ lookup_keys: [lookupKey], active: true, limit: 1 })
   if (existing.data[0])
     return existing.data[0].id
 
   const created = await getStripe(c).prices.create({
     currency: 'usd',
-    unit_amount: 100,
-    product: creditProductId,
-    recurring: { interval },
+    billing_scheme: 'tiered',
+    tiers_mode: 'graduated',
+    tiers,
+    recurring: { interval, usage_type: 'licensed' },
+    product_data: {
+      name: 'Enterprise extra MAU',
+      unit_label: '1,000 MAU',
+      metadata: { capgo_kind: EXTRA_MAU_PRICE_KIND },
+    },
     lookup_key: lookupKey,
-    nickname: `Recurring credits (${interval})`,
-    metadata: { capgo_kind: RECURRING_CREDIT_PRICE_KIND },
+    nickname: `Enterprise extra MAU (${interval})`,
+    metadata: { capgo_kind: EXTRA_MAU_PRICE_KIND, included_mau: String(includedMau) },
     ...(taxBehavior && taxBehavior !== 'unspecified' ? { tax_behavior: taxBehavior } : {}),
   })
-  cloudlog({ requestId: c.get('requestId'), message: 'created recurring credit price', priceId: created.id, lookupKey })
+  cloudlog({ requestId: c.get('requestId'), message: 'created extra MAU price', priceId: created.id, lookupKey })
   return created.id
 }
 
@@ -548,7 +596,7 @@ export function parsePriceIds(c: Context, prices: Stripe.SubscriptionItem[]): { 
   try {
     cloudlog({ requestId: c.get('requestId'), message: 'prices stripe', prices })
     prices.forEach((price) => {
-      if (price.plan.usage_type === 'licensed' && !isRecurringCreditItem(price)) {
+      if (price.plan.usage_type === 'licensed' && !isExtraMauItem(price)) {
         priceId = price.plan.id
         productId = price.plan.product as string
       }
@@ -575,12 +623,12 @@ function getAffonsoReferralMetadata(affonsoReferral?: string | null): Record<str
   return { affonso_referral: affonsoReferral }
 }
 
-export interface RecurringCreditsCheckout {
-  creditProductId: string
-  creditsPerMonth: number
+export interface ExtraMauCheckout {
+  includedMau: number
+  extraMau: number
 }
 
-export async function createCheckout(c: Context, customerId: string, recurrence: string, planId: string, successUrl: string, cancelUrl: string, clientReferenceId?: string, attributionId?: string, datafastAttribution?: DatafastAttribution, affonsoReferral?: string | null, recurringCredits?: RecurringCreditsCheckout) {
+export async function createCheckout(c: Context, customerId: string, recurrence: string, planId: string, successUrl: string, cancelUrl: string, clientReferenceId?: string, attributionId?: string, datafastAttribution?: DatafastAttribution, affonsoReferral?: string | null, extraMau?: ExtraMauCheckout) {
   if (!isStripeConfigured(c))
     return { url: '' }
   const prices = await getPriceIds(c, planId, recurrence)
@@ -588,15 +636,12 @@ export async function createCheckout(c: Context, customerId: string, recurrence:
   if (!prices.priceId)
     return Promise.reject(new Error('Cannot find price'))
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [{ price: prices.priceId, quantity: 1 }]
-  if (recurringCredits && recurringCredits.creditsPerMonth > 0) {
+  if (extraMau && extraMau.extraMau > 0) {
     // Same interval as the plan: Checkout bills every item of a subscription together.
     const interval = recurrence === 'year' ? 'year' : 'month'
     const planPrice = await getStripe(c).prices.retrieve(prices.priceId)
-    const creditPriceId = await getRecurringCreditPriceId(c, recurringCredits.creditProductId, interval, planPrice.tax_behavior ?? null)
-    lineItems.push({
-      price: creditPriceId,
-      quantity: recurringCredits.creditsPerMonth * (interval === 'year' ? 12 : 1),
-    })
+    const extraMauPriceId = await getExtraMauPriceId(c, extraMau.includedMau, interval, planPrice.tax_behavior ?? null)
+    lineItems.push({ price: extraMauPriceId, quantity: extraMau.extraMau / EXTRA_MAU_UNIT })
   }
   const metadata = {
     ...(attributionId ? { attribution_id: attributionId } : {}),

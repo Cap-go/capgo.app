@@ -14,7 +14,7 @@ import CreditsOnlyTip from '~/components/CreditsOnlyTip.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
 import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { ENTERPRISE_MAU_STOPS, mauForMonthlyCredits, quoteEnterpriseScale } from '~/services/enterpriseScale'
+import { ENTERPRISE_MAU_STOPS, formatMau, getOrgExtraMau, quoteEnterpriseScale } from '~/services/enterpriseScale'
 import { formatNumber, formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '~/services/paymentRequired'
@@ -165,13 +165,6 @@ const enterpriseQuote = computed(() => {
   return quoteEnterpriseScale(pricingSteps.value, plan.mau, plan.price_m, ENTERPRISE_MAU_STOPS[enterpriseMauIndex.value])
 })
 
-// "3M" reads like a plan name; locale compact notation can render "3m" or "3 Mio".
-function formatMau(value: number) {
-  if (value >= 1_000_000)
-    return `${formatNumberValue(value / 1_000_000, { maximumFractionDigits: 1 })}M`
-  return formatNumberValue(value)
-}
-
 function formatUsd(value: number) {
   return formatNumber(value, { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol', maximumFractionDigits: 0 })
 }
@@ -193,18 +186,17 @@ const currentPlanLabel = computed(() => {
 
 async function loadEnterpriseScale(orgId: string) {
   const loadSeq = ++enterpriseScaleLoadSeq
-  const [steps, billing] = await Promise.all([
+  const [steps, extraMau] = await Promise.all([
     getCreditPricingSteps(orgId),
-    useSupabase().from('orgs').select('stripe_info(recurring_credits)').eq('id', orgId).maybeSingle(),
+    getOrgExtraMau(orgId).catch(() => 0),
   ])
   // An org switch during the fetch must not leave the previous org's rates behind.
   if (loadSeq !== enterpriseScaleLoadSeq || currentOrganization.value?.gid !== orgId)
     return
   pricingSteps.value = steps
   const plan = enterprisePlan.value
-  const recurringCredits = Number(billing.data?.stripe_info?.recurring_credits ?? 0)
   currentEnterpriseMau.value = plan && currentPlan.value?.name === plan.name
-    ? mauForMonthlyCredits(steps, plan.mau, recurringCredits)
+    ? plan.mau + extraMau
     : null
   const index = ENTERPRISE_MAU_STOPS.indexOf(currentEnterpriseMau.value as typeof ENTERPRISE_MAU_STOPS[number])
   if (index >= 0)
@@ -235,9 +227,9 @@ async function prefetchStripeCheckoutUrl(plan: Database['public']['Tables']['pla
         datafastVisitorId: datafastAttribution.visitorId,
         datafastSessionId: datafastAttribution.sessionId,
         affonsoReferral,
-        // Enterprise only: credits bought every month on the same subscription.
-        ...(isEnterprisePlan(plan) && enterpriseQuote.value?.monthlyCredits
-          ? { monthlyCredits: enterpriseQuote.value.monthlyCredits }
+        // Enterprise only: MAU added to the plan quota, billed on the same subscription.
+        ...(isEnterprisePlan(plan) && enterpriseQuote.value?.extraMau
+          ? { extraMau: enterpriseQuote.value.extraMau }
           : {}),
       }),
     })
@@ -682,17 +674,17 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
           <div v-if="isEnterprisePlan(p) && enterpriseQuote" class="mb-6 shrink-0" data-test="enterprise-scale">
             <div class="flex items-baseline">
               <span class="text-3xl font-extrabold tracking-tight text-gray-900 dark:text-white">
-                {{ formatUsd(getPrice(p, segmentVal) + enterpriseQuote.monthlyCredits) }}
+                {{ formatUsd(getPrice(p, segmentVal) + enterpriseQuote.extraMauPriceMonthly) }}
               </span>
               <span class="ml-1 text-sm font-medium text-gray-500 dark:text-gray-400">/{{ t('mo') }}</span>
             </div>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              <template v-if="enterpriseQuote.monthlyCredits > 0">
+              <template v-if="enterpriseQuote.extraMau > 0">
                 <template v-if="isYearlyPlan(p, segmentVal) && hasYearlyDiscount(p)">
-                  {{ t('enterprise-scale-breakdown-yearly', { base: formatUsd(p.price_y), credits: formatUsd(enterpriseQuote.monthlyCredits * 12) }) }}
+                  {{ t('enterprise-scale-breakdown-yearly', { base: formatUsd(p.price_y), extra: formatUsd(enterpriseQuote.extraMauPriceMonthly * 12), mau: formatMau(enterpriseQuote.extraMau) }) }}
                 </template>
                 <template v-else>
-                  {{ t('enterprise-scale-breakdown', { base: formatUsd(getPrice(p, segmentVal)), credits: formatUsd(enterpriseQuote.monthlyCredits) }) }}
+                  {{ t('enterprise-scale-breakdown', { base: formatUsd(getPrice(p, segmentVal)), extra: formatUsd(enterpriseQuote.extraMauPriceMonthly), mau: formatMau(enterpriseQuote.extraMau) }) }}
                 </template>
               </template>
               <template v-else-if="isYearlyPlan(p, segmentVal)">
@@ -726,8 +718,8 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
                 <span>{{ formatMau(ENTERPRISE_MAU_STOPS[ENTERPRISE_MAU_STOPS.length - 1]) }}+</span>
               </div>
               <p class="mt-2 text-[11px] leading-4 text-gray-500 dark:text-gray-400">
-                {{ enterpriseQuote.monthlyCredits > 0
-                  ? t('enterprise-scale-credits-note', { credits: formatUsd(enterpriseQuote.monthlyCredits), extra: formatMau(enterpriseQuote.targetMau - enterpriseQuote.includedMau) })
+                {{ enterpriseQuote.extraMau > 0
+                  ? t('enterprise-scale-extra-note', { mau: formatMau(enterpriseQuote.targetMau), extra: formatMau(enterpriseQuote.extraMau) })
                   : t('enterprise-scale-included-note') }}
               </p>
             </div>
