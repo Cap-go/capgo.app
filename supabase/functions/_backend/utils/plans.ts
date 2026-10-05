@@ -423,9 +423,11 @@ async function userAbovePlan(c: Context, org: {
   }
 
   const bestPlanKey = bestPlan.toLowerCase().replace(' ', '_')
+  // Enterprise has no bigger plan: tell it to add MAU or credits instead of "upgrade to Enterprise".
+  const eventName = currentPlanName === 'Enterprise' ? 'user:enterprise_above_plan' : `user:upgrade_to_${bestPlanKey}`
   const sent = await sendNotifToOrgMembers(
     c,
-    `user:upgrade_to_${bestPlanKey}`,
+    eventName,
     'usage_limit',
     { best_plan: bestPlanKey, plan_name: currentPlanName },
     orgId,
@@ -434,10 +436,10 @@ async function userAbovePlan(c: Context, org: {
     drizzleClient,
   )
   if (sent) {
-    cloudlog({ requestId: c.get('requestId'), message: `user:upgrade_to_${bestPlanKey}`, orgId })
+    cloudlog({ requestId: c.get('requestId'), message: eventName, orgId })
     await sendEventToTracking(c, {
       channel: 'usage',
-      event: `User need upgrade to ${bestPlanKey}`,
+      event: currentPlanName === 'Enterprise' ? 'Enterprise above plan' : `User need upgrade to ${bestPlanKey}`,
       user_id: orgId,
       groups: { organization: orgId },
     }).catch()
