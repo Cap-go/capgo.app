@@ -15,7 +15,7 @@ import * as tus from 'tus-js-client'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { encryptChecksum, encryptChecksumV3, encryptSource } from '../api/crypto'
 import { CliUserError } from '../shared/cli-user-error'
-import { appAddHintMessage, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findRoot, generateManifest, getContentType, getInstalledVersion, isAppNotFoundError, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { appAddHintMessage, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findRoot, formatVerboseError, generateManifest, getContentType, getInstalledVersion, isAppNotFoundError, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import type { ManifestUploadRequestEntry, ResolvedManifestUpload, ResolvedManifestUploadEntry } from './manifest-upload'
 import { getUploadReporter } from './reporter'
 import { getManifestUploadAbandonError, ManifestUploadAbandonController, ManifestUploadAbandonError, parseManifestUploadAbandonBody } from './upload-abandon-error'
@@ -334,9 +334,15 @@ export async function uploadPartial(
       }
 
       // Follow the server-selected action and existence-check target.
-      const existing = manifestUploadEntry.action === 'upload_if_doesnt_exist'
-        ? await fileExistsAtUploadTarget(manifestUploadEntry.uploadTarget!.existence_check_url_prefix, filename)
-        : { exists: false }
+      let existing: Awaited<ReturnType<typeof fileExistsAtUploadTarget>> = { exists: false }
+      if (manifestUploadEntry.action === 'upload_if_doesnt_exist') {
+        try {
+          existing = await fileExistsAtUploadTarget(manifestUploadEntry.uploadTarget!.existence_check_url_prefix, filename)
+        }
+        catch (error) {
+          throw new Error(`Cannot check whether delta file exists: ${filePathUnix}`, { cause: error })
+        }
+      }
       abandonController.throwIfAbandoned()
       if (existing.exists) {
         uploadedFiles++
@@ -376,7 +382,7 @@ export async function uploadPartial(
             }
 
             abandonController.unregister(upload)
-            const errorMessage = error.toString()
+            const errorMessage = options.verbose ? formatVerboseError(error) : error.toString()
 
             // Turn the backend's `app_not_found` rejection into the actionable `app add`
             // hint. Without this the raw tus error object escapes as an unhandled
@@ -483,15 +489,16 @@ export async function uploadPartial(
     if (error instanceof ManifestUploadAbandonError)
       throw error
 
+    const errorMessage = options.verbose ? formatVerboseError(error) : String(error)
     if (userRequestedDelta) {
       // User explicitly requested delta/partial updates, so we should fail
-      log.error(`Error uploading delta update: ${error}`)
+      log.error(`Error uploading delta update: ${errorMessage}`)
       log.error(`Delta upload was explicitly requested but failed. Upload aborted.`)
       throw error
     }
     else {
       // Delta was auto-enabled, treat as non-critical
-      log.info(`Error uploading delta update: ${error}, This is not a critical error, the bundle has been uploaded without the delta files`)
+      log.info(`Error uploading delta update: ${errorMessage}, This is not a critical error, the bundle has been uploaded without the delta files`)
       return null
     }
   }
