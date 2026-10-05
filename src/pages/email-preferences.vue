@@ -7,6 +7,7 @@ import IconCheck from '~icons/lucide/check'
 import IconLoader from '~icons/lucide/loader-2'
 import Toggle from '~/components/Toggle.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { parseEmailPreferencesQuery } from '~/utils/emailPreferencesIdentity'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
 const PUBLIC_EMAIL_PREFERENCE_KEYS = [
@@ -85,16 +86,12 @@ const PREFERENCE_DESC_KEYS: Record<PublicEmailPreferenceKey, string> = {
   bundle_incompatible: 'notifications-bundle-incompatible-desc',
 }
 
-const VISITOR_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
 const { t } = useI18n()
 const route = useRoute('/email-preferences')
 
-const email = ref(String(route.query.email ?? '').trim())
-const visitorUuid = ref((() => {
-  const value = String(route.query.uuid ?? '').trim()
-  return VISITOR_UUID_RE.test(value) ? value : ''
-})())
+const initialQuery = parseEmailPreferencesQuery(route.query as Record<string, unknown>)
+const email = ref(initialQuery.email)
+const visitorUuid = ref(initialQuery.visitorUuid)
 const unsubscribeAll = ref(false)
 const enableNotifications = ref(true)
 const optForNewsletters = ref(true)
