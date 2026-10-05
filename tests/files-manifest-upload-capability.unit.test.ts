@@ -154,12 +154,12 @@ describe('files manifest upload capabilities', () => {
     })
   })
 
-  it('advertises manifest upload only from the Cloudflare files backend', async () => {
+  it('does not use files config to advertise manifest upload support', async () => {
     const app = await createFilesApp()
     const response = await app.fetch(new Request('http://localhost/files/config'), buildEnv(), { waitUntil: () => {} } as any)
 
     expect(response.status).toBe(200)
-    expect(await response.json()).toMatchObject({ manifestUpload: true })
+    expect(await response.json()).not.toHaveProperty('manifestUpload')
   })
 
   it('returns the shared prefix and opaque suffix and enforces the ten-minute lifetime', async () => {
