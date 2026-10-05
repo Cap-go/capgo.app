@@ -4,8 +4,8 @@ import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
-import { createCheckout } from '../utils/stripe.ts'
-import { supabaseClient } from '../utils/supabase.ts'
+import { createCheckout, MAX_RECURRING_CREDITS_PER_MONTH } from '../utils/stripe.ts'
+import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
 import { getEnv } from '../utils/utils.ts'
 
 interface CheckoutData {
@@ -19,6 +19,29 @@ interface CheckoutData {
   successUrl: string
   cancelUrl: string
   orgId: string
+  // Enterprise MAU slider: credits bought every month on the same subscription.
+  monthlyCredits?: number
+}
+
+function parseMonthlyCredits(value: unknown) {
+  if (value === undefined || value === null || value === 0)
+    return 0
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > MAX_RECURRING_CREDITS_PER_MONTH)
+    throw simpleError('invalid_monthly_credits', `monthlyCredits must be an integer between 0 and ${MAX_RECURRING_CREDITS_PER_MONTH}`)
+  return value
+}
+
+async function getRecurringCredits(c: Parameters<typeof supabaseAdmin>[0], planId: string, creditsPerMonth: number) {
+  if (creditsPerMonth <= 0)
+    return undefined
+  const { data: plan, error } = await supabaseAdmin(c)
+    .from('plans')
+    .select('credit_id')
+    .eq('stripe_id', planId)
+    .single()
+  if (error || !plan?.credit_id)
+    throw simpleError('credit_product_not_found', 'No credit product for this plan', { planId })
+  return { creditProductId: plan.credit_id, creditsPerMonth }
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -28,6 +51,7 @@ app.use('/', useCors)
 app.post('/', middlewareAuth, async (c) => {
   const body = await parseBody<CheckoutData>(c)
   cloudlog({ requestId: c.get('requestId'), message: 'post stripe checkout body', body })
+  const monthlyCredits = parseMonthlyCredits(body.monthlyCredits)
 
   if (!body.orgId)
     throw simpleError('no_org_id_provided', 'No org_id provided')
@@ -59,9 +83,11 @@ app.post('/', middlewareAuth, async (c) => {
     throw simpleError('not_authorize', 'Not authorize')
 
   cloudlog({ requestId: c.get('requestId'), message: 'user', org })
-  const checkout = await createCheckout(c, org.customer_id, body.recurrence ?? 'month', body.priceId ?? 'price_1KkINoGH46eYKnWwwEi97h1B', body.successUrl ?? `${getEnv(c, 'WEBAPP_URL')}/app/usage`, body.cancelUrl ?? `${getEnv(c, 'WEBAPP_URL')}/app/usage`, body.clientReferenceId, body.attributionId, {
+  const planId = body.priceId ?? 'price_1KkINoGH46eYKnWwwEi97h1B'
+  const recurringCredits = await getRecurringCredits(c, planId, monthlyCredits)
+  const checkout = await createCheckout(c, org.customer_id, body.recurrence ?? 'month', planId, body.successUrl ?? `${getEnv(c, 'WEBAPP_URL')}/app/usage`, body.cancelUrl ?? `${getEnv(c, 'WEBAPP_URL')}/app/usage`, body.clientReferenceId, body.attributionId, {
     visitorId: body.datafastVisitorId,
     sessionId: body.datafastSessionId,
-  }, body.affonsoReferral)
+  }, body.affonsoReferral, recurringCredits)
   return c.json({ url: checkout.url })
 })

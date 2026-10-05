@@ -487,6 +487,59 @@ export interface StripeData {
   previousProductId: string | undefined
 }
 
+// Enterprise MAU slider: credits bought every billing period as a second
+// subscription item next to the plan. Their prices are tagged so plan
+// detection never mistakes the credit item for the plan.
+export const RECURRING_CREDIT_PRICE_KIND = 'recurring_credits'
+const RECURRING_CREDIT_LOOKUP_KEY_PREFIX = 'capgo_recurring_credits_'
+// 1 credit = $1. Caps a single checkout at $1M of credits a month.
+export const MAX_RECURRING_CREDITS_PER_MONTH = 1_000_000
+
+interface TaggedPrice {
+  lookup_key?: string | null
+  metadata?: Stripe.Metadata | null
+}
+
+export function isRecurringCreditPrice(price: TaggedPrice | null | undefined) {
+  if (!price)
+    return false
+  return price.metadata?.capgo_kind === RECURRING_CREDIT_PRICE_KIND
+    || (price.lookup_key?.startsWith(RECURRING_CREDIT_LOOKUP_KEY_PREFIX) ?? false)
+}
+
+export function isRecurringCreditItem(item: Pick<Stripe.SubscriptionItem, 'price'>) {
+  return isRecurringCreditPrice(item.price)
+}
+
+// Monthly equivalent of the credits a subscription buys (yearly items count 1/12).
+export function getRecurringCreditsPerMonth(items: Array<Pick<Stripe.SubscriptionItem, 'price' | 'quantity'>>) {
+  return items.filter(isRecurringCreditItem).reduce((total, item) => {
+    const perPeriod = item.quantity ?? 0
+    return total + (item.price?.recurring?.interval === 'year' ? perPeriod / 12 : perPeriod)
+  }, 0)
+}
+
+// $1 per credit, billed with the plan's interval. Found by lookup key, created on first use.
+async function getRecurringCreditPriceId(c: Context, creditProductId: string, interval: 'month' | 'year', taxBehavior: Stripe.Price.TaxBehavior | null) {
+  const lookupKey = `${RECURRING_CREDIT_LOOKUP_KEY_PREFIX}${interval}_${creditProductId}`
+  const existing = await getStripe(c).prices.list({ lookup_keys: [lookupKey], active: true, limit: 1 })
+  if (existing.data[0])
+    return existing.data[0].id
+
+  const created = await getStripe(c).prices.create({
+    currency: 'usd',
+    unit_amount: 100,
+    product: creditProductId,
+    recurring: { interval },
+    lookup_key: lookupKey,
+    nickname: `Recurring credits (${interval})`,
+    metadata: { capgo_kind: RECURRING_CREDIT_PRICE_KIND },
+    ...(taxBehavior && taxBehavior !== 'unspecified' ? { tax_behavior: taxBehavior } : {}),
+  })
+  cloudlog({ requestId: c.get('requestId'), message: 'created recurring credit price', priceId: created.id, lookupKey })
+  return created.id
+}
+
 export function parsePriceIds(c: Context, prices: Stripe.SubscriptionItem[]): { priceId: string | null, productId: string | null } {
   let priceId: string | null = null
   let productId: string | null = null
@@ -495,7 +548,7 @@ export function parsePriceIds(c: Context, prices: Stripe.SubscriptionItem[]): { 
   try {
     cloudlog({ requestId: c.get('requestId'), message: 'prices stripe', prices })
     prices.forEach((price) => {
-      if (price.plan.usage_type === 'licensed') {
+      if (price.plan.usage_type === 'licensed' && !isRecurringCreditItem(price)) {
         priceId = price.plan.id
         productId = price.plan.product as string
       }
@@ -522,13 +575,29 @@ function getAffonsoReferralMetadata(affonsoReferral?: string | null): Record<str
   return { affonso_referral: affonsoReferral }
 }
 
-export async function createCheckout(c: Context, customerId: string, recurrence: string, planId: string, successUrl: string, cancelUrl: string, clientReferenceId?: string, attributionId?: string, datafastAttribution?: DatafastAttribution, affonsoReferral?: string | null) {
+export interface RecurringCreditsCheckout {
+  creditProductId: string
+  creditsPerMonth: number
+}
+
+export async function createCheckout(c: Context, customerId: string, recurrence: string, planId: string, successUrl: string, cancelUrl: string, clientReferenceId?: string, attributionId?: string, datafastAttribution?: DatafastAttribution, affonsoReferral?: string | null, recurringCredits?: RecurringCreditsCheckout) {
   if (!isStripeConfigured(c))
     return { url: '' }
   const prices = await getPriceIds(c, planId, recurrence)
   cloudlog({ requestId: c.get('requestId'), message: 'prices', prices })
   if (!prices.priceId)
     return Promise.reject(new Error('Cannot find price'))
+  const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [{ price: prices.priceId, quantity: 1 }]
+  if (recurringCredits && recurringCredits.creditsPerMonth > 0) {
+    // Same interval as the plan: Checkout bills every item of a subscription together.
+    const interval = recurrence === 'year' ? 'year' : 'month'
+    const planPrice = await getStripe(c).prices.retrieve(prices.priceId)
+    const creditPriceId = await getRecurringCreditPriceId(c, recurringCredits.creditProductId, interval, planPrice.tax_behavior ?? null)
+    lineItems.push({
+      price: creditPriceId,
+      quantity: recurringCredits.creditsPerMonth * (interval === 'year' ? 12 : 1),
+    })
+  }
   const metadata = {
     ...(attributionId ? { attribution_id: attributionId } : {}),
     ...getDatafastAttributionMetadata(datafastAttribution),
@@ -551,12 +620,7 @@ export async function createCheckout(c: Context, customerId: string, recurrence:
       name: 'auto',
     },
     tax_id_collection: { enabled: true },
-    line_items: [
-      {
-        price: prices.priceId,
-        quantity: 1,
-      },
-    ],
+    line_items: lineItems,
   })
   return { url: session.url }
 }

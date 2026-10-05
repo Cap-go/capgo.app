@@ -3464,6 +3464,7 @@ export type Database = {
           plan_usage: number | null
           price_id: string | null
           product_id: string
+          recurring_credits: number
           status: Database["public"]["Enums"]["stripe_status"] | null
           storage_exceeded: boolean | null
           subscription_anchor_end: string
@@ -3492,6 +3493,7 @@ export type Database = {
           plan_usage?: number | null
           price_id?: string | null
           product_id: string
+          recurring_credits?: number
           status?: Database["public"]["Enums"]["stripe_status"] | null
           storage_exceeded?: boolean | null
           subscription_anchor_end?: string
@@ -3520,6 +3522,7 @@ export type Database = {
           plan_usage?: number | null
           price_id?: string | null
           product_id?: string
+          recurring_credits?: number
           status?: Database["public"]["Enums"]["stripe_status"] | null
           storage_exceeded?: boolean | null
           subscription_anchor_end?: string

@@ -92,6 +92,7 @@ const STRIPE_INFO_TRANSACTION_COLUMNS = [
   'plan_usage',
   'price_id',
   'product_id',
+  'recurring_credits',
   'status',
   'storage_exceeded',
   'subscription_anchor_end',
@@ -982,6 +983,68 @@ async function handleCheckoutSessionCompleted(
   return c.json(BRES)
 }
 
+// Enterprise MAU slider: every paid subscription invoice grants the credits
+// bought by its recurring credit lines. 1 credit = $1, so the line amount
+// also covers proration lines after a mid-cycle MAU change.
+export function getRecurringCreditInvoiceAmount(invoice: Pick<Stripe.Invoice, 'lines'>, creditProductIds: Set<string>) {
+  return invoice.lines.data.reduce((total, line) => {
+    if (!line.parent?.subscription_item_details)
+      return total
+    const productId = line.pricing?.price_details?.product
+    if (!productId || !creditProductIds.has(productId))
+      return total
+    return total + Math.max(line.amount, 0) / 100
+  }, 0)
+}
+
+async function handleRecurringCreditInvoicePaid(c: Context, stripeEvent: Stripe.InvoicePaidEvent, org: Org) {
+  const invoice = stripeEvent.data.object
+  if (!invoice.lines.data.some(line => line.parent?.subscription_item_details))
+    return c.json(BRES)
+
+  const { data: plans, error: plansError } = await supabaseAdmin(c)
+    .from('plans')
+    .select('credit_id')
+  if (plansError)
+    throw simpleError('failed_to_get_plans', 'Failed to load credit products', { plansError })
+
+  const creditProductIds = new Set((plans ?? []).map(plan => plan.credit_id).filter(Boolean))
+  const creditAmount = getRecurringCreditInvoiceAmount(invoice, creditProductIds)
+  if (creditAmount <= 0)
+    return c.json(BRES)
+
+  // sessionId carries the invoice id: top_up_usage_credits dedupes on it, so
+  // webhook retries for the same invoice grant once.
+  const sourceRef = {
+    sessionId: invoice.id,
+    invoiceId: invoice.id,
+    subscriptionId: typeof invoice.parent?.subscription_details?.subscription === 'string'
+      ? invoice.parent.subscription_details.subscription
+      : invoice.parent?.subscription_details?.subscription?.id ?? null,
+  }
+  const { data: grant, error: rpcError } = await supabaseAdmin(c)
+    .rpc('top_up_usage_credits', {
+      p_org_id: org.id,
+      p_amount: creditAmount,
+      p_source: 'stripe_top_up',
+      p_notes: 'Stripe subscription recurring credits',
+      p_source_ref: sourceRef,
+    })
+    .single()
+  if (rpcError)
+    throw simpleError('top_up_failed', 'Failed to grant recurring credits', { rpcError, invoiceId: invoice.id })
+
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'recurring_credits_granted',
+    orgId: org.id,
+    invoiceId: invoice.id,
+    creditAmount,
+    grantId: grant?.grant_id ?? null,
+  })
+  return c.json(BRES)
+}
+
 async function customerSourceCreated(c: Context, org: Org, stripeEvent: Stripe.CustomerSourceCreatedEvent) {
   const card = stripeEvent.data.object as any
   const expirationDate = card.exp_month && card.exp_year ? `${card.exp_month}/${card.exp_year}` : 'unknown'
@@ -1085,17 +1148,23 @@ async function invoiceUpcoming(c: Context, org: Org, stripeEvent: Stripe.Invoice
   const invoice = stripeEvent.data.object as any
   let planName = null
   let planType = 'monthly'
-  if (stripeData.data.product_id) {
-    const { data: plan } = await supabaseAdmin(c)
+  // The first line can be the recurring credit item: match any line against the plans.
+  const lineProductIds = (invoice.lines?.data ?? [])
+    .map((line: any) => line.pricing?.price_details?.product)
+    .filter((productId: unknown): productId is string => typeof productId === 'string')
+  const productIds = [...new Set([stripeData.data.product_id, ...lineProductIds].filter((id): id is string => !!id))]
+  if (productIds.length) {
+    const { data: plans } = await supabaseAdmin(c)
       .from('plans')
-      .select('name, price_y_id')
-      .eq('stripe_id', stripeData.data.product_id)
-      .single()
+      .select('name, stripe_id, price_y_id')
+      .in('stripe_id', productIds)
+    const plan = plans?.[0]
     if (!plan) {
       throw simpleError('failed_to_get_plan', 'failed to get plan', { stripeData })
     }
     planName = plan.name
-    if (plan.price_y_id === stripeData.data.price_id) {
+    const linePriceIds = (invoice.lines?.data ?? []).map((line: any) => line.pricing?.price_details?.price)
+    if (plan.price_y_id === stripeData.data.price_id || linePriceIds.includes(plan.price_y_id)) {
       planType = 'yearly'
     }
   }
@@ -1494,6 +1563,9 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
     await handleAutoTopUpPaymentIntent(c, stripeEvent, org.id)
     return c.json(BRES)
   }
+
+  if (stripeEvent.type === 'invoice.paid')
+    return handleRecurringCreditInvoicePaid(c, stripeEvent, org)
 
   const { data: customer } = await supabaseAdmin(c)
     .from('stripe_info')
