@@ -131,6 +131,7 @@ BEGIN
 
   UPDATE public.tmp_users
   SET rbac_role_name = p_new_role_name,
+      invited_by_user_id = COALESCE(public.request_actor_user_id(), invited_by_user_id),
       updated_at = now()
   WHERE org_id = p_org_id
     AND email = p_email
@@ -207,6 +208,15 @@ BEGIN
   IF NOT FOUND THEN
     RAISE EXCEPTION 'NO_INVITATION';
   END IF;
+
+  UPDATE public.role_bindings rb
+  SET granted_by = COALESCE(public.request_actor_user_id(), rb.granted_by),
+      role_id = update_org_invite_role_rbac.role_id
+  WHERE rb.principal_type = public.rbac_principal_user()
+    AND rb.principal_id = p_user_id
+    AND rb.org_id = p_org_id
+    AND rb.scope_type = public.rbac_scope_org()
+    AND rb.reason IN ('Pending invitation', 'Invited via invite_user_to_org_rbac');
 
   RETURN 'OK';
 END;

@@ -138,6 +138,38 @@ describe('invite role escalation guards', () => {
     expect(invite.rows[0]?.rbac_role_name).toBe('org_member')
   })
 
+  it('allows accepting a tmp_users invite after a super admin promotes an admin-created invitation', async () => {
+    const orgId = await createOrgOwnedByUser(query, USER_ID, 'Tmp invite promote then accept org')
+    await bindOrgRole(orgId, USER_ID_2, 'org_admin')
+    const email = `tmp-promote-accept-${randomUUID()}@capgo.app`
+    const magicString = await insertTmpInvite({
+      orgId,
+      email,
+      roleName: 'org_member',
+      invitedBy: USER_ID_2,
+    })
+
+    await setAuthenticatedClaim(query, USER_ID)
+    const promoteResult = await query(
+      `SELECT public.update_tmp_invite_role_rbac($1::uuid, $2, $3) AS status`,
+      [orgId, email, 'org_super_admin'],
+    )
+    expect(promoteResult.rows[0]?.status).toBe('OK')
+
+    await setServiceRoleClaim(query)
+    const inviter = await query(
+      `SELECT invited_by_user_id FROM public.tmp_users WHERE invite_magic_string = $1`,
+      [magicString],
+    )
+    expect(inviter.rows[0]?.invited_by_user_id).toBe(USER_ID)
+
+    const acceptResult = await query(
+      `SELECT public.accept_tmp_user_invitation($1, $2::uuid) AS status`,
+      [magicString, USER_ID_NONMEMBER],
+    )
+    expect(acceptResult.rows[0]?.status).toBe('OK')
+  })
+
   it('allows org_super_admin to set a tmp_users invite role to org_super_admin', async () => {
     const orgId = await createOrgOwnedByUser(query, USER_ID, 'Tmp invite super admin org')
     const email = `tmp-super-${randomUUID()}@capgo.app`
