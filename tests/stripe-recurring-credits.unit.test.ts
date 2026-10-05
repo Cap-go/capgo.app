@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getRecurringCreditInvoiceAmount } from '../supabase/functions/_backend/triggers/stripe_event.ts'
+import { getRecurringCreditGrants } from '../supabase/functions/_backend/triggers/stripe_event.ts'
 import { getRecurringCreditsPerMonth, isRecurringCreditPrice } from '../supabase/functions/_backend/utils/stripe.ts'
 import { extractDataEvent } from '../supabase/functions/_backend/utils/stripe_event.ts'
 
@@ -69,27 +69,50 @@ describe('recurring credit subscription items', () => {
 
 describe('recurring credit invoices', () => {
   const creditProductIds = new Set(['prod_credits'])
-  const line = (product: string, amount: number, subscription = true) => ({
+  const OCT_1 = Date.UTC(2026, 9, 1) / 1000
+  const NOV_1 = Date.UTC(2026, 10, 1) / 1000
+  const NEXT_OCT_1 = Date.UTC(2027, 9, 1) / 1000
+  const line = (id: string, product: string, amount: number, start = OCT_1, end = NOV_1, subscription = true) => ({
+    id,
     amount,
+    period: { start, end },
     parent: subscription ? { subscription_item_details: { subscription: 'sub_1' } } : null,
     pricing: { price_details: { product, price: `price_${product}` } },
   })
 
-  it.concurrent('grants the paid amount of subscription credit lines only', () => {
+  it.concurrent('grants monthly credit lines once, expiring at the end of the month', () => {
     const invoice = {
+      id: 'in_1',
       lines: {
         data: [
-          line('prod_enterprise', 23_900),
-          line('prod_credits', 120_000),
-          line('prod_credits', 5_000, false),
+          line('il_plan', 'prod_enterprise', 23_900),
+          line('il_credits', 'prod_credits', 120_000),
+          line('il_one_off', 'prod_credits', 5_000, OCT_1, NOV_1, false),
         ],
       },
     } as any
-    expect(getRecurringCreditInvoiceAmount(invoice, creditProductIds)).toBe(1200)
+    expect(getRecurringCreditGrants(invoice, creditProductIds)).toEqual([
+      { amount: 1200, expiresAt: '2026-11-01T00:00:00.000Z', key: 'in_1:il_credits:0' },
+    ])
   })
 
-  it.concurrent('ignores negative proration lines after a downgrade', () => {
-    const invoice = { lines: { data: [line('prod_credits', -40_000), line('prod_credits', 60_000)] } } as any
-    expect(getRecurringCreditInvoiceAmount(invoice, creditProductIds)).toBe(600)
+  it.concurrent('splits a yearly credit line into 12 grants that expire month by month', () => {
+    const invoice = { id: 'in_y', lines: { data: [line('il_y', 'prod_credits', 1_440_000, OCT_1, NEXT_OCT_1)] } } as any
+    const grants = getRecurringCreditGrants(invoice, creditProductIds)
+    expect(grants).toHaveLength(12)
+    expect(grants.every(grant => grant.amount === 1200)).toBe(true)
+    expect(grants[0].expiresAt).toBe('2026-11-01T00:00:00.000Z')
+    expect(grants[11].expiresAt).toBe('2027-10-01T00:00:00.000Z')
+    expect(new Set(grants.map(grant => grant.key)).size).toBe(12)
+  })
+
+  it.concurrent('ignores negative proration lines and keeps uneven splits exact', () => {
+    const invoice = {
+      id: 'in_p',
+      lines: { data: [line('il_neg', 'prod_credits', -40_000), line('il_pos', 'prod_credits', 100_000, OCT_1, Date.UTC(2027, 0, 1) / 1000)] },
+    } as any
+    const grants = getRecurringCreditGrants(invoice, creditProductIds)
+    expect(grants.map(grant => grant.amount)).toEqual([333.33, 333.33, 333.34])
+    expect(grants.reduce((total, grant) => total + grant.amount, 0)).toBeCloseTo(1000)
   })
 })
