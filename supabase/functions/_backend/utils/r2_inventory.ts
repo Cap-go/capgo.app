@@ -1,4 +1,5 @@
 import type { ClientBase } from 'pg'
+import { cloudlogErr } from './logging.ts'
 
 export type InventoryState = 'to_be_uploaded' | 'present' | 'to_be_deleted' | 'deleted'
 export interface InventoryEvent {
@@ -87,7 +88,7 @@ export async function inventoryTransaction<T>(db: ClientBase, operation: () => P
   }
   catch (error) {
     await db.query('ROLLBACK').catch((rollbackError) => {
-      console.error(JSON.stringify({ event: 'r2_inventory_rollback_failed', error: rollbackError instanceof Error ? rollbackError.message : 'Unknown error' }))
+      cloudlogErr({ event: 'r2_inventory_rollback_failed', error: rollbackError instanceof Error ? rollbackError.message : 'Unknown error' })
     })
     throw error
   }
