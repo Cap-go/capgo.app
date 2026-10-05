@@ -986,15 +986,49 @@ async function handleCheckoutSessionCompleted(
 // Enterprise MAU slider: every paid subscription invoice grants the credits
 // bought by its recurring credit lines. 1 credit = $1, so the line amount
 // also covers proration lines after a mid-cycle MAU change.
-export function getRecurringCreditInvoiceAmount(invoice: Pick<Stripe.Invoice, 'lines'>, creditProductIds: Set<string>) {
-  return invoice.lines.data.reduce((total, line) => {
+// These credits expire each month, unlike one-off top-ups (1 year): a yearly
+// line becomes one grant per month of its period, each expiring at the end of
+// its month. Usage spends the soonest-expiring credits first.
+export interface RecurringCreditGrant {
+  amount: number
+  expiresAt: string
+  // Unique per grant so top_up_usage_credits dedupes webhook retries.
+  key: string
+}
+
+function addUtcMonths(date: Date, months: number) {
+  const next = new Date(date)
+  next.setUTCMonth(next.getUTCMonth() + months)
+  return next
+}
+
+export function getRecurringCreditGrants(invoice: Pick<Stripe.Invoice, 'id' | 'lines'>, creditProductIds: Set<string>): RecurringCreditGrant[] {
+  return invoice.lines.data.flatMap((line, lineIndex) => {
     if (!line.parent?.subscription_item_details)
-      return total
+      return []
     const productId = line.pricing?.price_details?.product
     if (!productId || !creditProductIds.has(productId))
-      return total
-    return total + Math.max(line.amount, 0) / 100
-  }, 0)
+      return []
+    const amount = Math.max(line.amount, 0) / 100
+    if (amount <= 0)
+      return []
+
+    const start = new Date(line.period.start * 1000)
+    const end = new Date(line.period.end * 1000)
+    let months = 1
+    while (addUtcMonths(start, months) < end)
+      months++
+    // Whole cents per month; the last month takes the rounding remainder.
+    const perMonth = Math.floor((amount / months) * 100) / 100
+    return Array.from({ length: months }, (_, month) => {
+      const monthEnd = month === months - 1 ? end : addUtcMonths(start, month + 1)
+      return {
+        amount: month === months - 1 ? Math.round((amount - perMonth * (months - 1)) * 100) / 100 : perMonth,
+        expiresAt: monthEnd.toISOString(),
+        key: `${invoice.id}:${line.id ?? lineIndex}:${month}`,
+      }
+    })
+  })
 }
 
 async function handleRecurringCreditInvoicePaid(c: Context, stripeEvent: Stripe.InvoicePaidEvent, org: Org) {
@@ -1009,39 +1043,36 @@ async function handleRecurringCreditInvoicePaid(c: Context, stripeEvent: Stripe.
     throw simpleError('failed_to_get_plans', 'Failed to load credit products', { plansError })
 
   const creditProductIds = new Set((plans ?? []).map(plan => plan.credit_id).filter(Boolean))
-  const creditAmount = getRecurringCreditInvoiceAmount(invoice, creditProductIds)
-  if (creditAmount <= 0)
-    return c.json(BRES)
+  const grants = getRecurringCreditGrants(invoice, creditProductIds)
+  const subscriptionId = typeof invoice.parent?.subscription_details?.subscription === 'string'
+    ? invoice.parent.subscription_details.subscription
+    : invoice.parent?.subscription_details?.subscription?.id ?? null
 
-  // sessionId carries the invoice id: top_up_usage_credits dedupes on it, so
-  // webhook retries for the same invoice grant once.
-  const sourceRef = {
-    sessionId: invoice.id,
-    invoiceId: invoice.id,
-    subscriptionId: typeof invoice.parent?.subscription_details?.subscription === 'string'
-      ? invoice.parent.subscription_details.subscription
-      : invoice.parent?.subscription_details?.subscription?.id ?? null,
+  for (const grant of grants) {
+    // sessionId carries the grant key: top_up_usage_credits dedupes on it.
+    const { error: rpcError } = await supabaseAdmin(c)
+      .rpc('top_up_usage_credits', {
+        p_org_id: org.id,
+        p_amount: grant.amount,
+        p_expires_at: grant.expiresAt,
+        p_source: 'stripe_top_up',
+        p_notes: 'Stripe subscription recurring credits',
+        p_source_ref: { sessionId: grant.key, invoiceId: invoice.id, subscriptionId },
+      })
+      .single()
+    if (rpcError)
+      throw simpleError('top_up_failed', 'Failed to grant recurring credits', { rpcError, invoiceId: invoice.id, grantKey: grant.key })
   }
-  const { data: grant, error: rpcError } = await supabaseAdmin(c)
-    .rpc('top_up_usage_credits', {
-      p_org_id: org.id,
-      p_amount: creditAmount,
-      p_source: 'stripe_top_up',
-      p_notes: 'Stripe subscription recurring credits',
-      p_source_ref: sourceRef,
-    })
-    .single()
-  if (rpcError)
-    throw simpleError('top_up_failed', 'Failed to grant recurring credits', { rpcError, invoiceId: invoice.id })
 
-  cloudlog({
-    requestId: c.get('requestId'),
-    message: 'recurring_credits_granted',
-    orgId: org.id,
-    invoiceId: invoice.id,
-    creditAmount,
-    grantId: grant?.grant_id ?? null,
-  })
+  if (grants.length) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'recurring_credits_granted',
+      orgId: org.id,
+      invoiceId: invoice.id,
+      grants,
+    })
+  }
   return c.json(BRES)
 }
 
