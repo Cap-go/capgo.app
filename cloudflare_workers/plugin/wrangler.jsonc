@@ -17,8 +17,9 @@
     "prod_eu": {
       "name": "capgo_plugin-eu-prod",
       "vars": {
-        // UPDATES_EDGE_CACHE (/updates edge cache: off | on | share like 1%) is a
-        // worker secret so it changes without a deploy:
+        // UPDATES_EDGE_CACHE (edge cache of /updates, /stats and /channel_self:
+        // off | on | share of devices like 1%) is a worker secret so it changes
+        // without a deploy:
         //   bun run updates-edge-cache:set 1%
         "ENV_NAME": "capgo_plugin-eu-prod"
       },
@@ -37,14 +38,6 @@
         },
         {
           "pattern": "plugin.eu.capgo.app",
-          "custom_domain": true
-        },
-        {
-          "pattern": "plugin.eu.usecapgo.com",
-          "custom_domain": true
-        },
-        {
-          "pattern": "plugin.usecapgo.com",
           "custom_domain": true
         },
         {
@@ -164,10 +157,6 @@
         {
           "pattern": "plugin.me.capgo.app",
           "custom_domain": true
-        },
-        {
-          "pattern": "plugin.me.usecapgo.com",
-          "custom_domain": true
         }
       ],
       "analytics_engine_datasets": [
@@ -259,10 +248,6 @@
       "routes": [
         {
           "pattern": "plugin.hk.capgo.app",
-          "custom_domain": true
-        },
-        {
-          "pattern": "plugin.hk.usecapgo.com",
           "custom_domain": true
         }
       ],
@@ -356,10 +341,6 @@
         {
           "pattern": "plugin.jp.capgo.app",
           "custom_domain": true
-        },
-        {
-          "pattern": "plugin.jp.usecapgo.com",
-          "custom_domain": true
         }
       ],
       "analytics_engine_datasets": [
@@ -451,10 +432,6 @@
       "routes": [
         {
           "pattern": "plugin.as.capgo.app",
-          "custom_domain": true
-        },
-        {
-          "pattern": "plugin.as.usecapgo.com",
           "custom_domain": true
         }
       ],
@@ -548,10 +525,6 @@
         {
           "pattern": "plugin.na.capgo.app",
           "custom_domain": true
-        },
-        {
-          "pattern": "plugin.na.usecapgo.com",
-          "custom_domain": true
         }
       ],
       "analytics_engine_datasets": [
@@ -643,10 +616,6 @@
       "routes": [
         {
           "pattern": "plugin.af.capgo.app",
-          "custom_domain": true
-        },
-        {
-          "pattern": "plugin.af.usecapgo.com",
           "custom_domain": true
         }
       ],
@@ -740,10 +709,6 @@
         {
           "pattern": "plugin.oc.capgo.app",
           "custom_domain": true
-        },
-        {
-          "pattern": "plugin.oc.usecapgo.com",
-          "custom_domain": true
         }
       ],
       "analytics_engine_datasets": [
@@ -836,10 +801,6 @@
         {
           "pattern": "plugin.sa.capgo.app",
           "custom_domain": true
-        },
-        {
-          "pattern": "plugin.sa.usecapgo.com",
-          "custom_domain": true
         }
       ],
       "analytics_engine_datasets": [
@@ -916,10 +877,6 @@
       "routes": [
         {
           "pattern": "plugin.preprod.capgo.app",
-          "custom_domain": true
-        },
-        {
-          "pattern": "plugin.preprod.usecapgo.com",
           "custom_domain": true
         }
       ],
@@ -1008,10 +965,6 @@
       "routes": [
         {
           "pattern": "plugin.dev.capgo.app",
-          "custom_domain": true
-        },
-        {
-          "pattern": "api.dev.usecapgo.com",
           "custom_domain": true
         }
       ],

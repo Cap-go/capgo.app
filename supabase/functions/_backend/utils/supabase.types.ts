@@ -3087,6 +3087,81 @@ export type Database = {
         }
         Relationships: []
       }
+      r2_inventory_checkpoints: {
+        Row: {
+          accepted_event_floor: string | null
+          bucket_name: string
+          checkpoint: Json
+          job_name: string
+          partition_key: string
+          updated_at: string
+        }
+        Insert: {
+          accepted_event_floor?: string | null
+          bucket_name: string
+          checkpoint?: Json
+          job_name: string
+          partition_key?: string
+          updated_at?: string
+        }
+        Update: {
+          accepted_event_floor?: string | null
+          bucket_name?: string
+          checkpoint?: Json
+          job_name?: string
+          partition_key?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      r2_objects: {
+        Row: {
+          bucket_name: string
+          cleanup_requested_at: string | null
+          etag: string | null
+          first_seen_at: string
+          last_event_at: string | null
+          last_reconciled_at: string | null
+          r2_key: string
+          r2_last_modified_at: string | null
+          r2_state: Database["public"]["Enums"]["r2_object_state"]
+          revision: number
+          size_bytes: number | null
+          tombstone_expires_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          bucket_name: string
+          cleanup_requested_at?: string | null
+          etag?: string | null
+          first_seen_at?: string
+          last_event_at?: string | null
+          last_reconciled_at?: string | null
+          r2_key: string
+          r2_last_modified_at?: string | null
+          r2_state: Database["public"]["Enums"]["r2_object_state"]
+          revision?: number
+          size_bytes?: number | null
+          tombstone_expires_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          bucket_name?: string
+          cleanup_requested_at?: string | null
+          etag?: string | null
+          first_seen_at?: string
+          last_event_at?: string | null
+          last_reconciled_at?: string | null
+          r2_key?: string
+          r2_last_modified_at?: string | null
+          r2_state?: Database["public"]["Enums"]["r2_object_state"]
+          revision?: number
+          size_bytes?: number | null
+          tombstone_expires_at?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       role_bindings: {
         Row: {
           app_id: string | null
@@ -3620,6 +3695,7 @@ export type Database = {
           initial: boolean
           lease_token: string | null
           leased_until: string | null
+          scope: string
         }
         Insert: {
           app_id: string
@@ -3628,6 +3704,7 @@ export type Database = {
           initial?: boolean
           lease_token?: string | null
           leased_until?: string | null
+          scope?: string
         }
         Update: {
           app_id?: string
@@ -3636,6 +3713,7 @@ export type Database = {
           initial?: boolean
           lease_token?: string | null
           leased_until?: string | null
+          scope?: string
         }
         Relationships: []
       }
@@ -5457,7 +5535,7 @@ export type Database = {
         Returns: Json
       }
       notify_updates_edge_cache_purge: {
-        Args: { p_app_ids: string[] }
+        Args: { p_app_ids: string[]; p_scope: string }
         Returns: undefined
       }
       null_migrated_app_version_manifests: {
@@ -6097,6 +6175,11 @@ export type Database = {
       cron_task_type: "function" | "queue" | "function_queue"
       disable_update: "major" | "minor" | "patch" | "version_number" | "none"
       platform_os: "ios" | "android" | "electron"
+      r2_object_state:
+        | "to_be_uploaded"
+        | "present"
+        | "to_be_deleted"
+        | "deleted"
       stats_action:
         | "delete"
         | "reset"
@@ -6379,6 +6462,12 @@ export const Constants = {
       cron_task_type: ["function", "queue", "function_queue"],
       disable_update: ["major", "minor", "patch", "version_number", "none"],
       platform_os: ["ios", "android", "electron"],
+      r2_object_state: [
+        "to_be_uploaded",
+        "present",
+        "to_be_deleted",
+        "deleted",
+      ],
       stats_action: [
         "delete",
         "reset",

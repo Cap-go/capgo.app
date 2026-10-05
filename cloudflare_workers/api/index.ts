@@ -31,6 +31,7 @@ import { app as plans } from '../../supabase/functions/_backend/private/plans.ts
 import { app as publicStats } from '../../supabase/functions/_backend/private/public_stats.ts'
 import { app as release_live } from '../../supabase/functions/_backend/private/release_live.ts'
 import { app as replay } from '../../supabase/functions/_backend/private/replay.ts'
+import { app as request_manifest_upload } from '../../supabase/functions/_backend/private/request_manifest_upload.ts'
 import { app as role_bindings } from '../../supabase/functions/_backend/private/role_bindings.ts'
 // Manifest finalization validates size receipts issued by the files worker.
 import { app as set_manifest } from '../../supabase/functions/_backend/private/set_manifest.ts'
@@ -176,6 +177,7 @@ appPrivate.route('/stripe_checkout', stripe_checkout)
 appPrivate.route('/stripe_portal', stripe_portal)
 appPrivate.route('/verify_email_otp', verify_email_otp)
 appPrivate.route('/delete_failed_version', deleted_failed_version)
+appPrivate.route('/request_manifest_upload', request_manifest_upload)
 appPrivate.route('/set_manifest', set_manifest)
 appPrivate.route('/create_device', create_device)
 appPrivate.route('/latency', latency)

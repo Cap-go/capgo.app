@@ -7,12 +7,12 @@ const TB = 1024 ** 4
 
 const mauSteps = [
   [0, 1_000_000, 0.003],
-  [1_000_000, 3_000_000, 0.0006],
-  [3_000_000, 6_000_000, 0.00045],
-  [6_000_000, 10_000_000, 0.00035],
-  [10_000_000, 25_000_000, 0.00025],
-  [25_000_000, 100_000_000, 0.00018],
-  [100_000_000, MAX, 0.00012],
+  [1_000_000, 3_000_000, 0.0003],
+  [3_000_000, 6_000_000, 0.00025],
+  [6_000_000, 10_000_000, 0.0002],
+  [10_000_000, 25_000_000, 0.00018],
+  [25_000_000, 100_000_000, 0.00015],
+  [100_000_000, MAX, 0.0001],
 ].map(([step_min, step_max, price_per_unit], id) => ({ id, step_min, step_max, price_per_unit, unit_factor: 1 }))
 
 const bandwidthSteps = [
@@ -36,16 +36,16 @@ describe('priceCreditTiers', () => {
 
   it('prices the overage above the included amount, not from 0', () => {
     // 2M MAU on a 1M plan
-    expect(priceCreditTiers(mauSteps, 1_000_000, 1_000_000).cost).toBeCloseTo(600, 9)
+    expect(priceCreditTiers(mauSteps, 1_000_000, 1_000_000).cost).toBeCloseTo(300, 9)
     // Same overage with nothing included
     expect(priceCreditTiers(mauSteps, 1_000_000).cost).toBeCloseTo(3000, 9)
   })
 
   it('splits an overage across every tier it covers', () => {
-    // 5M MAU on a 1M plan: 2M at $0.0006 + 2M at $0.00045
+    // 5M MAU on a 1M plan: 2M at $0.0003 + 2M at $0.00025
     const result = priceCreditTiers(mauSteps, 4_000_000, 1_000_000)
     expect(result.tiers.map(tier => tier.units_used)).toEqual([2_000_000, 2_000_000])
-    expect(result.cost).toBeCloseTo(2100, 9)
+    expect(result.cost).toBeCloseTo(1100, 9)
   })
 
   it('keeps overage cost per MAU going down with volume above 1M', () => {

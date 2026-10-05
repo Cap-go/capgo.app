@@ -19,7 +19,8 @@ describe('plugin route hosts', () => {
 
   it('selects only zones the plugin worker is routed on', () => {
     expect(isPluginZone('capgo.app')).toBe(true)
-    expect(isPluginZone('usecapgo.com')).toBe(true)
+    // No plugin route on usecapgo.com any more: never purged.
+    expect(isPluginZone('usecapgo.com')).toBe(false)
     expect(isPluginZone('Capgo.App')).toBe(true)
     expect(isPluginZone('capgo.io')).toBe(false)
     expect(isPluginZone('example.com')).toBe(false)

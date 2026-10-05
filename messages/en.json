@@ -4018,5 +4018,16 @@
   "updater-failure-help-low-mem-fail": "The device ran out of memory while preparing the bundle.",
   "updater-failure-help-insufficient-disk-space": "The device does not have enough free storage for the bundle.",
   "updater-failure-help-blocked-by-server-url": "Auto update is off because server.url is set in the Capacitor config, which is common for live reload builds.",
-  "updater-failure-help-backend-refusal": "Capgo refused the update check because this plugin version is not supported. Upgrade the updater plugin."
+  "updater-failure-help-backend-refusal": "Capgo refused the update check because this plugin version is not supported. Upgrade the updater plugin.",
+  "current-plan-label": "Current plan: {plan}",
+  "enterprise-scale-plan-name": "Enterprise {mau}",
+  "enterprise-scale-get": "Get Enterprise {mau}",
+  "enterprise-scale-change": "Switch to Enterprise {mau}",
+  "enterprise-scale-breakdown": "{base} Enterprise + {credits} credits, billed monthly",
+  "enterprise-scale-slider-label": "Monthly active users",
+  "enterprise-scale-mau-short": "MAU",
+  "enterprise-scale-credits-note": "{credits} of credits a month cover {extra} extra MAU. Bandwidth, storage and builds above the plan use the same credit balance.",
+  "enterprise-scale-included-note": "1M MAU included. Slide to scale: extra MAU are paid with monthly credits, no custom contract.",
+  "enterprise-scale-request": "Request Enterprise {mau}",
+  "enterprise-scale-breakdown-yearly": "Enterprise billed annually at {base} + {credits} credits billed monthly"
 }
