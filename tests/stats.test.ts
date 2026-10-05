@@ -491,13 +491,24 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
           expect(responseData.status).toBe('ok')
 
           if (!isDroppedStatsLogAction(action)) {
-            const { error: statsError, data: statsData } = await getSupabaseClient()
-              .from('stats')
-              .select()
-              .eq('device_id', uuid)
-              .eq('app_id', appId)
-              .eq('action', action)
-              .single()
+            let statsError: { code?: string } | null = { code: 'PGRST116' }
+            let statsData: Record<string, unknown> | null = null
+            for (let attempt = 0; attempt < 8; attempt++) {
+              const result = await getSupabaseClient()
+                .from('stats')
+                .select()
+                .eq('device_id', uuid)
+                .eq('app_id', appId)
+                .eq('action', action)
+                .single()
+              statsError = result.error
+              statsData = result.data
+              if (!statsError)
+                break
+              if (statsError.code !== 'PGRST116')
+                break
+              await new Promise(resolve => setTimeout(resolve, 150))
+            }
 
             expect(statsError).toBeNull()
             expect(statsData).toBeTruthy()
