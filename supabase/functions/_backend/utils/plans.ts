@@ -11,6 +11,7 @@ import { buildOnboardingIntentBentoEventData, parseOrgOnboardingIntent } from '.
 import { syncSubscriptionData } from './stripe.ts'
 import {
   getCurrentPlanNameOrg,
+  getOrgExtraMau,
   getPlanUsageAndFit,
   getPlanUsageAndFitUncached,
   getPlanUsagePercent,
@@ -359,9 +360,10 @@ async function userAbovePlan(c: Context, org: {
 
   const billingCycle = await getBillingCycleRange(c, orgId)
   const planId = currentPlan?.id
+  const extraMau = creditOnlyMode ? 0 : await getOrgExtraMau(c, orgId)
 
   const metrics: Array<{ key: CreditMetric, usage: number, limit: number | null | undefined }> = [
-    { key: 'mau', usage: Number(totalStats.mau ?? 0), limit: creditOnlyMode ? 0 : currentPlan?.mau },
+    { key: 'mau', usage: Number(totalStats.mau ?? 0), limit: creditOnlyMode ? 0 : (currentPlan?.mau == null ? currentPlan?.mau : currentPlan.mau + extraMau) },
     { key: 'storage', usage: Number(totalStats.storage ?? 0), limit: creditOnlyMode ? 0 : currentPlan?.storage },
     { key: 'bandwidth', usage: Number(totalStats.bandwidth ?? 0), limit: creditOnlyMode ? 0 : currentPlan?.bandwidth },
     { key: 'build_time', usage: Number(totalStats.build_time_unit ?? 0), limit: creditOnlyMode ? 0 : currentPlan?.build_time_unit },

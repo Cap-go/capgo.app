@@ -10,9 +10,10 @@ import CreditsCta from '~/components/CreditsCta.vue'
 import PageLoader from '~/components/PageLoader.vue'
 import { bytesToGb } from '~/services/conversion'
 import { formatLocalDate, formatLocalDateTime, formatUtcDateTimeAsLocal } from '~/services/date'
+import { formatMau, getOrgExtraMau, quoteEnterpriseScale } from '~/services/enterpriseScale'
 import { formatNumber, formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
-import { calculateCreditCost, getCurrentPlanNameOrg, getPlans, getPlanUsagePercent, getTotalStorage, getUsageCreditDeductions } from '~/services/supabase'
+import { calculateCreditCost, getCreditPricingSteps, getCurrentPlanNameOrg, getPlans, getPlanUsagePercent, getTotalStorage, getUsageCreditDeductions } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { isCreditsOnlyOrg } from '~/utils/organizationBilling'
@@ -78,7 +79,10 @@ async function getUsage(orgId: string) {
   const usage = main.dashboard
 
   const planCurrent = await getCurrentPlanNameOrg(orgId)
-  const currentPlan = plans.value.find((p: Database['public']['Tables']['plans']['Row']) => p.name === planCurrent)
+  const basePlan = plans.value.find((p: Database['public']['Tables']['plans']['Row']) => p.name === planCurrent)
+  // Enterprise extra MAU is part of the plan quota and billed with the plan.
+  const extraMau = basePlan?.name === 'Enterprise' ? await getOrgExtraMau(orgId).catch(() => 0) : 0
+  const currentPlan = basePlan && extraMau > 0 ? { ...basePlan, mau: basePlan.mau + extraMau } : basePlan
 
   // Get usage percentages
   let detailPlanUsage: PlanUsageDetailed = {
@@ -161,7 +165,9 @@ async function getUsage(orgId: string) {
     totalStorage,
   })
 
-  const basePrice = currentPlan?.price_m ?? 0
+  const basePrice = basePlan && extraMau > 0
+    ? quoteEnterpriseScale(await getCreditPricingSteps(orgId), basePlan.mau, basePlan.price_m, basePlan.mau + extraMau).totalMonthly
+    : currentPlan?.price_m ?? 0
 
   const estimatedUsagePrice = currentPlan
     ? await estimateOverageCost(orgId, currentPlan, {
@@ -181,6 +187,8 @@ async function getUsage(orgId: string) {
 
   return {
     currentPlan,
+    extraMau,
+    basePrice,
     totalPrice,
     totalUsagePrice,
     totalMau,
@@ -205,6 +213,8 @@ const isCreditsOnly = computed(() => isCreditsOnlyOrg(currentOrganization.value)
 const currentPlanLabel = computed(() => {
   if (isCreditsOnly.value)
     return t('credits')
+  if (currentPlan.value && planUsage.value?.extraMau)
+    return t('enterprise-scale-plan-name', { mau: formatMau(currentPlan.value.mau + planUsage.value.extraMau) })
   return currentPlan.value?.name || t('loading')
 })
 
@@ -416,7 +426,7 @@ function nextRunDate() {
                 {{ t('base') }}
               </div>
               <div class="text-2xl font-bold text-gray-900 dark:text-white">
-                {{ formatMonthlyPrice(currentPlan?.price_m) }}
+                {{ formatMonthlyPrice(planUsage?.basePrice ?? currentPlan?.price_m) }}
               </div>
             </div>
             <div v-if="!hideExternalPurchaseFlows && isCreditsOnly" class="flex flex-col">

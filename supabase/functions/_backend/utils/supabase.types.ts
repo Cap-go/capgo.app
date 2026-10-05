@@ -3453,6 +3453,7 @@ export type Database = {
           created_at: string
           customer_country: string | null
           customer_id: string
+          extra_mau: number
           id: number
           is_above_plan: boolean | null
           is_good_plan: boolean | null
@@ -3464,7 +3465,6 @@ export type Database = {
           plan_usage: number | null
           price_id: string | null
           product_id: string
-          recurring_credits: number
           status: Database["public"]["Enums"]["stripe_status"] | null
           storage_exceeded: boolean | null
           subscription_anchor_end: string
@@ -3482,6 +3482,7 @@ export type Database = {
           created_at?: string
           customer_country?: string | null
           customer_id: string
+          extra_mau?: number
           id?: number
           is_above_plan?: boolean | null
           is_good_plan?: boolean | null
@@ -3493,7 +3494,6 @@ export type Database = {
           plan_usage?: number | null
           price_id?: string | null
           product_id: string
-          recurring_credits?: number
           status?: Database["public"]["Enums"]["stripe_status"] | null
           storage_exceeded?: boolean | null
           subscription_anchor_end?: string
@@ -3511,6 +3511,7 @@ export type Database = {
           created_at?: string
           customer_country?: string | null
           customer_id?: string
+          extra_mau?: number
           id?: number
           is_above_plan?: boolean | null
           is_good_plan?: boolean | null
@@ -3522,7 +3523,6 @@ export type Database = {
           plan_usage?: number | null
           price_id?: string | null
           product_id?: string
-          recurring_credits?: number
           status?: Database["public"]["Enums"]["stripe_status"] | null
           storage_exceeded?: boolean | null
           subscription_anchor_end?: string

@@ -1,9 +1,11 @@
 import type { CreditPricingStep } from '~/services/creditPricing'
+import { formatNumberValue } from '~/services/formatLocale'
+import { useSupabase } from '~/services/supabase'
 
 // Enterprise is the only plan that scales past its included MAU. Instead of a
-// separate "custom plan", the MAU above the Enterprise allowance is paid with
-// credits bought every month on the same subscription. The UI shows it as
-// "Enterprise 3M" even though only the Enterprise base is a real plan.
+// separate "custom plan", the org buys extra MAU as a second item on the same
+// Stripe subscription (priced on the MAU usage tiers). The extra MAU is part of
+// the plan quota (stripe_info.extra_mau), so the UI shows "Enterprise 3M".
 export const ENTERPRISE_MAU_STOPS = [
   1_000_000,
   2_000_000,
@@ -46,31 +48,40 @@ export function priceMauSlice(steps: CreditPricingStep[], included: number, targ
 export interface EnterpriseScaleQuote {
   targetMau: number
   includedMau: number
+  extraMau: number
   basePriceMonthly: number
-  monthlyCredits: number
+  extraMauPriceMonthly: number
   totalMonthly: number
 }
 
-// Credits are bought in whole dollars, so round up: the org never ends the
-// month short of the MAU it picked.
+// Stripe bills the extra MAU per 1,000 with the same tiers, so this matches the invoice.
 export function quoteEnterpriseScale(steps: CreditPricingStep[], includedMau: number, basePriceMonthly: number, targetMau: number): EnterpriseScaleQuote {
-  const monthlyCredits = Math.ceil(priceMauSlice(steps, includedMau, targetMau))
+  const extraMauPriceMonthly = Math.round(priceMauSlice(steps, includedMau, targetMau) * 100) / 100
   return {
     targetMau,
     includedMau,
+    extraMau: Math.max(targetMau - includedMau, 0),
     basePriceMonthly,
-    monthlyCredits,
-    totalMonthly: basePriceMonthly + monthlyCredits,
+    extraMauPriceMonthly,
+    totalMonthly: basePriceMonthly + extraMauPriceMonthly,
   }
 }
 
-// Label for an org already on Enterprise: the biggest stop its recurring
-// monthly credits fully cover (stripe_info.recurring_credits).
-export function mauForMonthlyCredits(steps: CreditPricingStep[], includedMau: number, monthlyCredits: number) {
-  let best = includedMau
-  for (const stop of ENTERPRISE_MAU_STOPS) {
-    if (stop > includedMau && Math.ceil(priceMauSlice(steps, includedMau, stop)) <= monthlyCredits)
-      best = stop
-  }
-  return best
+// MAU bought on top of the plan allowance, synced from the Stripe subscription.
+export async function getOrgExtraMau(orgId: string) {
+  const { data, error } = await useSupabase()
+    .from('orgs')
+    .select('stripe_info(extra_mau)')
+    .eq('id', orgId)
+    .maybeSingle()
+  if (error)
+    throw error
+  return Number(data?.stripe_info?.extra_mau ?? 0)
+}
+
+// "3M" reads like a plan name; locale compact notation can render "3m" or "3 Mio".
+export function formatMau(value: number) {
+  if (value >= 1_000_000)
+    return `${formatNumberValue(value / 1_000_000, { maximumFractionDigits: 1 })}M`
+  return formatNumberValue(value)
 }

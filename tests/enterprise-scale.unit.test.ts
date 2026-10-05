@@ -1,6 +1,6 @@
 import type { CreditPricingStep } from '../src/services/creditPricing'
 import { describe, expect, it } from 'vitest'
-import { mauForMonthlyCredits, priceMauSlice, quoteEnterpriseScale } from '../src/services/enterpriseScale'
+import { priceMauSlice, quoteEnterpriseScale } from '../src/services/enterpriseScale'
 
 const OPEN = Number.MAX_SAFE_INTEGER
 const steps: CreditPricingStep[] = [
@@ -19,19 +19,14 @@ describe('enterprise scale pricing', () => {
     expect(priceMauSlice(steps, 1_000_000, 10_000_000)).toBeCloseTo(3950)
   })
 
-  it('quotes base plan plus whole-dollar monthly credits', () => {
+  it('quotes base plan plus the extra MAU price', () => {
     expect(quoteEnterpriseScale(steps, 1_000_000, 239, 3_000_000)).toEqual({
       targetMau: 3_000_000,
       includedMau: 1_000_000,
+      extraMau: 2_000_000,
       basePriceMonthly: 239,
-      monthlyCredits: 1200,
+      extraMauPriceMonthly: 1200,
       totalMonthly: 1439,
     })
-  })
-
-  it('maps recurring monthly credits back to the biggest covered MAU stop', () => {
-    expect(mauForMonthlyCredits(steps, 1_000_000, 0)).toBe(1_000_000)
-    expect(mauForMonthlyCredits(steps, 1_000_000, 1200)).toBe(3_000_000)
-    expect(mauForMonthlyCredits(steps, 1_000_000, 1199)).toBe(2_000_000)
   })
 })
