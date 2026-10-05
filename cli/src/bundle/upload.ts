@@ -1412,10 +1412,11 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   }
 
   // Record whether the user explicitly asked for a delta/partial upload BEFORE
-  // any mutation of `options.delta`. The instant-update auto-enable below and
-  // the flag fold later both set `options.delta = true`, so reading it back
-  // afterwards cannot tell an auto-enabled delta from an explicit `--delta`.
-  options.userRequestedDelta = !!(options.partial || options.delta || options.partialOnly || options.deltaOnly)
+  // any mutation of `options.delta`, while preserving the captured value across
+  // recursive version-bump retries. The instant-update auto-enable below and the
+  // flag fold later both set `options.delta = true`, so reading it back afterwards
+  // cannot tell an auto-enabled delta from an explicit `--delta`.
+  options.userRequestedDelta ??= !!(options.partial || options.delta || options.partialOnly || options.deltaOnly)
 
   // Check if instant updates are enabled and auto-enable delta updates.
   const instantUpdateEnabled = usesAlwaysDirectUpdate(extConfig?.config?.plugins?.CapacitorUpdater)
