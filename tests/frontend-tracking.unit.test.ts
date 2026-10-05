@@ -55,6 +55,57 @@ describe('frontend analytics tracking', () => {
     )
   })
 
+  it('uses an ordinary fetch when the event exceeds the keepalive body limit', async () => {
+    getSessionMock.mockResolvedValue({
+      data: { session: { access_token: 'test-access-token' } },
+    })
+    fetchMock.mockResolvedValue({ ok: true })
+
+    await sendEvent({
+      channel: 'usage',
+      event: 'Oversized Event',
+      value: 'x'.repeat(64 * 1024),
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.capgo.test/private/events',
+      expect.objectContaining({ keepalive: false }),
+    )
+  })
+
+  it('uses an ordinary fetch when concurrent events exhaust the keepalive body budget', async () => {
+    let finishFirstRequest: (() => void) | undefined
+    const firstRequest = new Promise<{ ok: boolean }>((resolve) => {
+      finishFirstRequest = () => resolve({ ok: true })
+    })
+    getSessionMock.mockResolvedValue({
+      data: { session: { access_token: 'test-access-token' } },
+    })
+    fetchMock
+      .mockReturnValueOnce(firstRequest)
+      .mockResolvedValueOnce({ ok: true })
+
+    const firstEvent = sendEvent({
+      channel: 'usage',
+      event: 'First Concurrent Event',
+      value: 'x'.repeat(40 * 1024),
+    })
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+
+    const secondEvent = sendEvent({
+      channel: 'usage',
+      event: 'Second Concurrent Event',
+      value: 'x'.repeat(40 * 1024),
+    })
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+
+    expect(fetchMock.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ keepalive: true }))
+    expect(fetchMock.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ keepalive: false }))
+
+    finishFirstRequest?.()
+    await Promise.all([firstEvent, secondEvent])
+  })
+
   it('does not send an event without an authenticated session', async () => {
     getSessionMock.mockResolvedValue({ data: { session: null } })
 
