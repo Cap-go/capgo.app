@@ -64,7 +64,7 @@ describe('frontend analytics tracking', () => {
     await sendEvent({
       channel: 'usage',
       event: 'Oversized Event',
-      value: 'x'.repeat(64 * 1024),
+      description: 'x'.repeat(64 * 1024),
     })
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -88,14 +88,14 @@ describe('frontend analytics tracking', () => {
     const firstEvent = sendEvent({
       channel: 'usage',
       event: 'First Concurrent Event',
-      value: 'x'.repeat(40 * 1024),
+      description: 'x'.repeat(40 * 1024),
     })
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
 
     const secondEvent = sendEvent({
       channel: 'usage',
       event: 'Second Concurrent Event',
-      value: 'x'.repeat(40 * 1024),
+      description: 'x'.repeat(40 * 1024),
     })
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
 
