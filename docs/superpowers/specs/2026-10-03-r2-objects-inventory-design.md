@@ -53,6 +53,7 @@ During this inventory-only stage, discovery normally creates `present` rows and 
 | `last_event_at`        | `timestamptz`            | Yes      | Latest accepted R2 notification `eventTime`; never replaced with DB processing time.                                                  |
 | `last_reconciled_at`   | `timestamptz`            | Yes      | Conservative observation boundary for the most recent successful LIST/HEAD verification applied to this row.                          |
 | `tombstone_expires_at` | `timestamptz`            | Yes      | Eligibility time for tombstone removal; NULL for other states.                                                                        |
+| `cleanup_requested_at` | `timestamptz` | Yes | Timestamp of committed cleanup intent, retained through a deleted tombstone to prevent reuse of retired keys. |
 | `first_seen_at`        | `timestamptz`            | No       | First insertion into Capgo's inventory; default `now()`. This is not the object's creation time.                                      |
 | `updated_at`           | `timestamptz`            | No       | Time this row was last changed; maintained by writes.                                                                                 |
 | `revision`             | `bigint`                 | No       | Starts at 1 and increments on every accepted change. Protects reconciliation writes from intervening DB updates.                      |
@@ -70,6 +71,8 @@ WHERE r2_state = 'deleted'::public.r2_object_state;
 ```
 
 Enforce that `tombstone_expires_at` is populated only for `deleted` rows, and require it for those rows. Pending uploads and delete events can have unknown size and ETag.
+
+`cleanup_requested_at` may be non-NULL only in `to_be_deleted` or `deleted`. The write trigger stamps it when cleanup is first committed and preserves it on subsequent updates, including while a deleted tombstone remains. Updates cannot clear or replace it. A retained tombstone with this field populated cannot transition to `present` or `to_be_uploaded`; an ordinary deletion notification leaves it NULL so a later unmanaged recreation can be accepted.
 
 Keep access internal: RLS enabled, no public or authenticated-user inventory access, and narrowly permissioned internal writes. Any new SQL helper must have an explicit owner, `search_path = ''`, fully qualified references, and explicit grants/revocations.
 
