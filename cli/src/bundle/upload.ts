@@ -474,6 +474,35 @@ function hasCompleteS3UploadConfig(options: OptionsUpload): boolean {
   return !!(options.s3BucketName && options.s3Endpoint && options.s3Region && options.s3Apikey && options.s3Apisecret && options.s3Port)
 }
 
+interface CompleteS3UploadConfig {
+  s3Region: string
+  s3Apikey: string
+  s3Apisecret: string
+  s3BucketName: string
+  s3Endpoint: string
+  s3Port: number
+  s3SSL: boolean | undefined
+}
+
+function resolveS3UploadConfig(options: OptionsUpload): CompleteS3UploadConfig | undefined {
+  if (!hasS3UploadConfig(options))
+    return undefined
+
+  const { s3Region, s3Apikey, s3Apisecret, s3BucketName, s3Endpoint, s3Port, s3SSL } = options
+  if (!s3BucketName || !s3Endpoint || !s3Region || !s3Apikey || !s3Apisecret || !s3Port)
+    uploadFail('Missing argument, for S3 upload you need to provide a bucket name, endpoint, region, port, API key, and API secret')
+
+  return {
+    s3Region,
+    s3Apikey,
+    s3Apisecret,
+    s3BucketName,
+    s3Endpoint,
+    s3Port,
+    s3SSL,
+  }
+}
+
 function shouldUploadFullZip(options: OptionsUpload): boolean {
   return !options.partialOnly && !options.deltaOnly
 }
@@ -1356,9 +1385,8 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     getUploadReporter().intro(`Uploading with CLI version ${pack.version}`)
   let sessionKey: Buffer | undefined
   const pm = getPMAndCommand()
+  const s3UploadConfig = resolveS3UploadConfig(options)
   await checkAlerts(getUploadReporter())
-
-  const { s3Region, s3Apikey, s3Apisecret, s3BucketName, s3Endpoint, s3Port, s3SSL } = options
 
   if (options.verbose) {
     log.info(`[Verbose] Starting upload process with options:`)
@@ -1840,7 +1868,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
         ivSessionKey: versionData.session_key,
       }
     : undefined
-  const shouldRequestManifestUpload = !!(options.delta && !options.dryUpload && !hasS3UploadConfig(options))
+  const shouldRequestManifestUpload = !!(options.delta && !options.dryUpload && !s3UploadConfig)
   if (shouldRequestManifestUpload && manifest.length === 0) {
     if (options.userRequestedDelta)
       uploadFail('Cannot request a manifest upload for an empty manifest')
@@ -1925,10 +1953,8 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] TUS chunk size: ${Math.floor(options.tusChunkSize / 1024 / 1024)} MB`)
 
-  if (zipped && hasS3UploadConfig(options)) {
-    if (!s3BucketName || !s3Endpoint || !s3Region || !s3Apikey || !s3Apisecret || !s3Port)
-      uploadFail('Missing argument, for S3 upload you need to provide a bucket name, endpoint, region, port, API key, and API secret')
-
+  if (zipped && s3UploadConfig) {
+    const { s3Region, s3Apikey, s3Apisecret, s3BucketName, s3Endpoint, s3Port, s3SSL } = s3UploadConfig
     log.info('Uploading to S3')
     if (options.verbose) {
       log.info(`[Verbose] S3 configuration:`)
@@ -2300,6 +2326,7 @@ export function checkValidOptions(options: OptionsUpload) {
   if (options.external && (options.s3Region || options.s3Apikey || options.s3Apisecret || options.s3Endpoint || options.s3BucketName || options.s3Port || options.s3SSL)) {
     uploadFail('You cannot set S3 options if you are uploading to an external url, it\'s automatically handled')
   }
+  resolveS3UploadConfig(options)
   // cannot set --encrypted-checksum if not external
   if (options.encryptedChecksum && !options.external) {
     uploadFail('You cannot set the --encrypted-checksum option if you are not uploading to an external url')
