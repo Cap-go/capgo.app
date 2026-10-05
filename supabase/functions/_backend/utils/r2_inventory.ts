@@ -86,7 +86,9 @@ export async function inventoryTransaction<T>(db: ClientBase, operation: () => P
     return result
   }
   catch (error) {
-    await db.query('ROLLBACK')
+    await db.query('ROLLBACK').catch((rollbackError) => {
+      console.error(JSON.stringify({ event: 'r2_inventory_rollback_failed', error: rollbackError instanceof Error ? rollbackError.message : 'Unknown error' }))
+    })
     throw error
   }
 }

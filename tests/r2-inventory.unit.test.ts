@@ -1,6 +1,7 @@
+import type { ClientBase } from 'pg'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { consumeInventoryBatch } from '../cloudflare_workers/r2_inventory/index.ts'
-import { parseInventoryConfig, parseInventoryEvent, timestampUs } from '../supabase/functions/_backend/utils/r2_inventory.ts'
+import { inventoryTransaction, parseInventoryConfig, parseInventoryEvent, timestampUs } from '../supabase/functions/_backend/utils/r2_inventory.ts'
 
 const mocks = vi.hoisted(() => ({ apply: vi.fn(), end: vi.fn(), head: vi.fn(), publish: vi.fn(), config: { enabled: true, tombstoneDays: 7, minBatchMs: 500 } }))
 vi.mock('pg', () => ({ Client: class { connect = vi.fn(); end = mocks.end } }))
@@ -24,6 +25,24 @@ beforeEach(() => {
 })
 
 describe('r2 inventory queue', () => {
+  it('preserves the original batch failure when rollback also fails', async () => {
+    const original = new Error('Batch constraint violation')
+    const db = { query: vi.fn(async (statement: string) => {
+      if (statement === 'ROLLBACK')
+        throw new Error('Connection lost during rollback')
+      return { rows: [] }
+    }) }
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await expect(inventoryTransaction(db as unknown as ClientBase, async () => {
+        throw original
+      })).rejects.toBe(original)
+    }
+    finally {
+      log.mockRestore()
+    }
+  })
+
   it('keeps the invocation pending for its pacing interval after releasing the client', async () => {
     vi.useFakeTimers()
     try {
