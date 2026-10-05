@@ -187,7 +187,7 @@ describe('manifest upload response contract', () => {
 describe('manifest upload request entries', () => {
   it('marks local delta validation failures separately from file preparation failures', async () => {
     await expect(prepareManifestUploadEntries(
-      [{ file: 'not supported.txt', hash: 'a'.repeat(64) }],
+      [{ file: 'file with spaces.txt', hash: 'a'.repeat(64) }],
       tmpdir(),
       undefined,
       {} as OptionsUpload,
