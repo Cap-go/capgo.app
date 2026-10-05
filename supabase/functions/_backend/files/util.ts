@@ -7,6 +7,7 @@ import { Buffer } from 'node:buffer'
 import { HTTPException } from 'hono/http-exception'
 import { cloudlog } from '../utils/logging.ts'
 import { MANIFEST_SIZE_RECEIPT_HEADER } from '../utils/manifest_size_receipt.ts'
+import { MANIFEST_UPLOAD_CAPABILITY_HEADER } from '../utils/manifest_upload_capability.ts'
 
 export const REQUEST_METHODS = ['POST', 'HEAD', 'PATCH', 'OPTIONS', 'DELETE'] as const
 
@@ -28,6 +29,7 @@ export const HEADERS = [
   'X-Forwarded-Host',
   'X-Forwarded-Proto',
   'Forwarded',
+  MANIFEST_UPLOAD_CAPABILITY_HEADER,
 ] as const
 
 export const HEADERS_LOWERCASE = HEADERS.map((header) => {

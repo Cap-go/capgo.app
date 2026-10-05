@@ -1,16 +1,20 @@
 #!/usr/bin/env bun
 /**
- * End-to-end benchmark: /updates edge cache vs the current path.
+ * End-to-end benchmark: plugin edge cache (/updates, /stats, /channel_self)
+ * vs the current path.
  *
  * Measures, against two locally running plugin workers sharing one local
  * Supabase database:
- * - Postgres statements executed per /updates request (pg_stat_statements)
+ * - Postgres statements executed per request (pg_stat_statements) on
+ *   /updates, /stats and /channel_self
  * - client-observed response time
  * - time until a device receives a change made in the console / API
- *   (channel version switch, first device override) or through channel_self
+ *   (channel version switch, first device override, channel self-assign
+ *   allowed, bundle uploaded after devices reported it) or through channel_self
  *
  * Setup (see PR description for the exact commands):
- * - BASE_URL: plugin worker built from main          (default http://127.0.0.1:18798)
+ * - BASE_URL: plugin worker with UPDATES_EDGE_CACHE=off (main, or this branch:
+ *             off is the unchanged path)            (default http://127.0.0.1:18798)
  * - EDGE_URL: plugin worker from this branch with UPDATES_EDGE_CACHE=on
  *             and UPDATES_CACHE_LOCAL_PURGE_URL=<EDGE_URL>/cache_purge_local
  *                                                     (default http://127.0.0.1:18788)
@@ -20,8 +24,11 @@
  *
  * - BENCH_DOCKER_NETWORK: docker network of the local Supabase stack
  * - SUPABASE_API_URL: local Supabase API (kong) URL, receives the other triggers
+ * - BENCH_RELAY_ONLY=1: only run the trigger relay (with purges on) until
+ *   Ctrl+C, e.g. to run the plugin tests against EDGE_URL with the cache on
  * - optional: BENCH_REQUESTS (300), BENCH_FRESHNESS_TRIALS (3), BENCH_ONLY_EDGE,
- *   BENCH_SKIP_LOAD, BENCH_DEBUG (prints top statements and timed-out answers)
+ *   BENCH_SKIP_LOAD, BENCH_SKIP_UPDATES_LOAD, BENCH_SKIP_FRESHNESS,
+ *   BENCH_DEBUG (prints top statements and timed-out answers)
  *
  * The script temporarily points the vault `db_url` (used by pg_net triggers)
  * at a mailbox container that relays /functions/v1/triggers/* to API_URL, and
@@ -42,14 +49,16 @@ const RELAY_PORT = Number(process.env.BENCH_RELAY_PORT ?? 18785)
 const SUPABASE_API_URL = process.env.SUPABASE_API_URL ?? 'http://127.0.0.1:54321'
 const POLL_MS = 25
 const FRESHNESS_TIMEOUT_MS = 120_000
+/** Just under the edge cache's 60s negative TTL. */
+const NEGATIVE_TTL_EXPIRY_MS = 55_000
 
 if (!DB_URL)
   throw new Error('DB_URL is required')
 
 const sql = new SQL(DB_URL)
 const allTargets = [
-  { name: 'main (current)', url: BASE_URL },
-  { name: 'edge cache', url: EDGE_URL },
+  { name: 'flag off (current path)', url: BASE_URL },
+  { name: 'flag on (edge cache)', url: EDGE_URL },
 ] as const
 const targets = process.env.BENCH_ONLY_EDGE ? allTargets.slice(1) : allTargets
 
@@ -78,15 +87,25 @@ function updateBody(deviceId: string, versionName: string, extra: Record<string,
 
 const REQUEST_TIMEOUT_MS = 15_000
 
-async function postJson(url: string, body: unknown) {
+async function postJson(url: string, body: unknown, method = 'POST') {
   // A hung worker must not stall the benchmark past its own deadlines.
   const response = await fetch(url, {
-    method: 'POST',
+    method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
   return { response, json: await response.json() as Record<string, any> }
+}
+
+interface PluginRequest {
+  path: '/updates' | '/stats' | '/channel_self'
+  method?: 'POST' | 'PUT'
+  body: Record<string, unknown>
+}
+
+function statsRequest(deviceId: string, versionName: string, action: string, extra: Record<string, unknown> = {}): PluginRequest {
+  return { path: '/stats', body: { ...updateBody(deviceId, versionName), action, ...extra } }
 }
 
 async function versionIdOf(name: string) {
@@ -137,9 +156,14 @@ interface LoadResult {
   meanMs: number
 }
 
-async function runLoad(target: typeof allTargets[number], scenario: string, versionName: string, expect: (json: Record<string, any>) => boolean): Promise<LoadResult> {
+function runLoad(target: typeof allTargets[number], scenario: string, versionName: string, expect: (json: Record<string, any>) => boolean): Promise<LoadResult> {
+  return runRequestLoad(target, scenario, deviceId => ({ path: '/updates', body: updateBody(deviceId, versionName) }), expect)
+}
+
+async function runRequestLoad(target: typeof allTargets[number], scenario: string, makeRequest: (deviceId: string) => PluginRequest, expect: (json: Record<string, any>) => boolean): Promise<LoadResult> {
+  const send = (request: PluginRequest) => postJson(`${target.url}${request.path}`, request.body, request.method)
   // Warm-up request so both targets start from the same cache state.
-  await postJson(`${target.url}/updates`, updateBody(newDeviceId(), versionName))
+  await send(makeRequest(newDeviceId()))
   await Bun.sleep(300)
   await sql.unsafe('SELECT extensions.pg_stat_statements_reset()')
   const before = await updatePathStatementCount()
@@ -147,8 +171,9 @@ async function runLoad(target: typeof allTargets[number], scenario: string, vers
   let hits = 0
   let cacheHeaderSeen = false
   for (let i = 0; i < REQUESTS; i++) {
+    const request = makeRequest(newDeviceId())
     const start = performance.now()
-    const { response, json } = await postJson(`${target.url}/updates`, updateBody(newDeviceId(), versionName))
+    const { response, json } = await send(request)
     latencies.push(performance.now() - start)
     if (!expect(json))
       throw new Error(`${target.name} ${scenario}: unexpected answer ${JSON.stringify(json).slice(0, 200)}`)
@@ -258,6 +283,78 @@ async function freshnessChannelSelf(target: typeof allTargets[number], pluginVer
     trialsMs.push(round(performance.now() - start, 0))
   }
   return { target: target.name, scenario, trialsMs }
+}
+
+/** Console allows device self-assignment on a channel that refused it (channel_self POST, cached channel lookup). */
+async function freshnessSelfAssignAllowed(target: typeof allTargets[number]): Promise<FreshnessResult> {
+  const trialsMs: number[] = []
+  const setAllowed = (allowed: boolean) => sql`UPDATE public.channels SET allow_device_self_set = ${allowed} WHERE app_id = ${APP_ID} AND name = 'beta'`
+  const post = () => postJson(`${target.url}/channel_self`, { ...updateBody(newDeviceId(), '1.0.1'), channel: 'beta' })
+  for (let trial = 0; trial < FRESHNESS_TRIALS; trial++) {
+    await setAllowed(false)
+    const start0 = performance.now()
+    while ((await post()).json.error !== 'channel_self_set_not_allowed') {
+      if (performance.now() - start0 > FRESHNESS_TIMEOUT_MS)
+        throw new Error(`${target.name}: refusal not served`)
+      await Bun.sleep(POLL_MS)
+    }
+    for (let i = 0; i < 3; i++)
+      await post()
+
+    await setAllowed(true) // commit = t0
+    const start = performance.now()
+    let last: Record<string, any> = {}
+    while (performance.now() - start < FRESHNESS_TIMEOUT_MS) {
+      last = (await post()).json
+      if (last.status === 'ok')
+        break
+      await Bun.sleep(POLL_MS)
+    }
+    if (last.status !== 'ok')
+      throw new Error(`${target.name}: self-assign not allowed within ${FRESHNESS_TIMEOUT_MS} ms, last answer ${JSON.stringify(last).slice(0, 300)}`)
+    trialsMs.push(round(performance.now() - start, 0))
+  }
+  await setAllowed(true)
+  return { target: target.name, scenario: 'console: channel allows device self-assign (channel_self POST)', trialsMs }
+}
+
+/**
+ * A device reports a bundle before it exists (cached as unknown), then the
+ * bundle is uploaded: time until /stats reads the bundle again. The worker
+ * writes version usage to Analytics Engine locally, so the signal is the
+ * read itself: the live path reads on every request (first request after the
+ * commit), the cached path once the versions-tag purge evicted the unknown
+ * answer (first `X-Updates-Cache: miss`).
+ */
+async function freshnessBundleUploaded(target: typeof allTargets[number]): Promise<FreshnessResult> {
+  const trialsMs: number[] = []
+  for (let trial = 0; trial < FRESHNESS_TRIALS; trial++) {
+    const versionName = `1.0.${900 + trial}-r${Date.now() % 1_000_000}`
+    // Same device every time: only the bundle lookup can miss once warm.
+    const deviceId = newDeviceId()
+    const report = () => postJson(`${target.url}/stats`, statsRequest(deviceId, versionName, 'app_moved_to_foreground').body)
+    // The first report caches "unknown bundle" for the 60s negative TTL.
+    const unknownCachedAt = performance.now()
+    for (let i = 0; i < 4; i++)
+      await report()
+    const [org] = await sql`SELECT owner_org FROM public.apps WHERE app_id = ${APP_ID}`
+    await sql`INSERT INTO public.app_versions (app_id, name, owner_org, storage_provider) VALUES (${APP_ID}, ${versionName}, ${org.owner_org}, 'r2-direct')` // commit = t0
+    const start = performance.now()
+    let reread = false
+    while (!reread && performance.now() - start < FRESHNESS_TIMEOUT_MS) {
+      const cacheHeader = (await report()).response.headers.get('X-Updates-Cache')
+      reread = cacheHeader === null || cacheHeader === 'miss'
+      if (!reread)
+        await Bun.sleep(POLL_MS)
+    }
+    if (!reread)
+      throw new Error(`${target.name}: uploaded bundle not re-read by /stats within ${FRESHNESS_TIMEOUT_MS} ms`)
+    // A re-read near the negative TTL is the entry expiring, not the purge.
+    if (performance.now() - unknownCachedAt >= NEGATIVE_TTL_EXPIRY_MS)
+      throw new Error(`${target.name}: /stats re-read the bundle only after the negative TTL expired; the versions purge did not land`)
+    trialsMs.push(round(performance.now() - start, 0))
+  }
+  return { target: target.name, scenario: 'console: bundle uploaded after devices reported it (/stats re-reads it)', trialsMs }
 }
 
 // pg_net runs inside the Supabase Postgres container, which usually cannot
@@ -371,12 +468,27 @@ function median(values: number[]) {
 }
 
 async function main() {
+  if (process.env.BENCH_RELAY_ONLY) {
+    // Keeps the trigger relay and the purge switch up (until Ctrl+C) so other
+    // suites, e.g. the plugin tests, can run against EDGE_URL with purges.
+    console.log('Trigger relay up, purges reach API_URL. Ctrl+C restores Vault.')
+    await withTriggerRelay(() => new Promise<never>(() => {}))
+    return
+  }
   await sql`SELECT public.reset_and_seed_app_data(${APP_ID})`
   const load: LoadResult[] = []
   const freshness: FreshnessResult[] = []
   await withTriggerRelay(async () => {
+    const ok = (json: Record<string, any>) => json.status === 'ok'
     for (const target of process.env.BENCH_SKIP_LOAD ? [] : targets) {
       await resetState()
+      load.push(await runRequestLoad(target, '/stats: app_moved_to_foreground', deviceId => statsRequest(deviceId, '1.0.1', 'app_moved_to_foreground'), ok))
+      load.push(await runRequestLoad(target, '/stats: set (install, previous bundle known)', deviceId => statsRequest(deviceId, '1.0.1', 'set', { old_version_name: '1.0.0' }), ok))
+      load.push(await runRequestLoad(target, '/stats: unknown bundle', deviceId => statsRequest(deviceId, '9.9.9-unknown', 'app_moved_to_foreground'), ok))
+      load.push(await runRequestLoad(target, '/channel_self PUT (get channel)', deviceId => ({ path: '/channel_self', method: 'PUT', body: updateBody(deviceId, '1.0.1') }), json => json.status === 'default'))
+      load.push(await runRequestLoad(target, '/channel_self POST (set channel)', deviceId => ({ path: '/channel_self', body: { ...updateBody(deviceId, '1.0.1'), channel: 'beta' } }), ok))
+      if (process.env.BENCH_SKIP_UPDATES_LOAD)
+        continue
       load.push(await runLoad(target, 'device up to date', '1.0.1', json => json.error === 'no_new_version_available'))
       load.push(await runLoad(target, 'device gets new bundle', '1.0.0', json => json.version === '1.0.1'))
       const [beta] = await sql`SELECT id, owner_org FROM public.channels WHERE app_id = ${APP_ID} AND name = 'beta'`
@@ -387,7 +499,11 @@ async function main() {
       await Bun.sleep(65_000)
       load.push(await runLoad(target, 'app with device overrides, up to date', '1.0.1', json => json.error === 'no_new_version_available'))
     }
-    for (const target of targets) {
+    for (const target of process.env.BENCH_SKIP_FRESHNESS ? [] : targets) {
+      await resetState()
+      freshness.push(await freshnessSelfAssignAllowed(target))
+      await resetState()
+      freshness.push(await freshnessBundleUploaded(target))
       await resetState()
       freshness.push(await freshnessChannelSwitch(target))
       await resetState()
