@@ -18,7 +18,6 @@ import {
   invokeCapgoCliApi,
   sendEvent,
 } from '../utils'
-import { DEVICE_DATA_COLLECTION_KEYS } from '../../../supabase/functions/_backend/utils/deviceDataCollection.ts'
 
 
 const MIN_BUILD_TIMEOUT_MINUTES = 5
@@ -168,19 +167,18 @@ export async function setAppInternal(appId: string, options: Options, silent = f
     putBody.expose_metadata = exposeMetadata
   if (allowDeviceCustomId != null)
     putBody.allow_device_custom_id = allowDeviceCustomId
-  const collectByKey: Record<typeof DEVICE_DATA_COLLECTION_KEYS[number], boolean | null | undefined> = {
-    country: collectCountry,
-    platform: collectPlatform,
-    os_version: collectOsVersion,
-    plugin_version: collectPluginVersion,
-    version_build: collectVersionBuild,
-    is_emulator: collectIsEmulator,
-    is_prod: collectIsProd,
-    install_source: collectInstallSource,
-  }
-  const deviceDataCollection: Partial<Record<typeof DEVICE_DATA_COLLECTION_KEYS[number], boolean>> = {}
-  for (const key of DEVICE_DATA_COLLECTION_KEYS) {
-    const value = collectByKey[key]
+  const deviceDataCollection: Record<string, boolean> = {}
+  const collectPatches: Array<[string, boolean | null | undefined]> = [
+    ['country', collectCountry],
+    ['platform', collectPlatform],
+    ['os_version', collectOsVersion],
+    ['plugin_version', collectPluginVersion],
+    ['version_build', collectVersionBuild],
+    ['is_emulator', collectIsEmulator],
+    ['is_prod', collectIsProd],
+    ['install_source', collectInstallSource],
+  ]
+  for (const [key, value] of collectPatches) {
     if (value != null)
       deviceDataCollection[key] = value
   }
