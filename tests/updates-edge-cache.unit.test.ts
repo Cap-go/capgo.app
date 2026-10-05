@@ -287,8 +287,8 @@ describe('updates cache purge trigger', () => {
     vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', '')
     const fetchMock = vi.fn(async (url: string) => {
       if (url.includes('/zones?'))
-        return new Response(JSON.stringify({ result: [{ id: 'zone-1', name: 'capgo.app' }, { id: 'zone-2', name: 'usecapgo.com' }, { id: 'zone-3', name: 'unrelated.example' }], result_info: { total_pages: 1 } }), { status: 200 })
-      return new Response('{}', { status: 200 })
+        return new Response(JSON.stringify({ result: [{ id: 'zone-1', name: 'capgo.app' }, { id: 'zone-2', name: 'capgo.com.cn' }, { id: 'zone-3', name: 'unrelated.example' }], result_info: { total_pages: 1 } }), { status: 200 })
+      return new Response(JSON.stringify({ success: true }), { status: 200 })
     })
     vi.stubGlobal('fetch', fetchMock)
 
@@ -308,7 +308,7 @@ describe('updates cache purge trigger', () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (url.includes('/zones?'))
         return new Response(JSON.stringify({ result: [{ id: 'zone-1', name: 'capgo.app' }], result_info: { total_pages: 1 } }), { status: 200 })
-      return new Response('{}', { status: 200 })
+      return new Response(JSON.stringify({ success: true }), { status: 200 })
     })
     vi.stubGlobal('fetch', fetchMock)
 
@@ -323,7 +323,7 @@ describe('updates cache purge trigger', () => {
   it('falls back to the existing analytics token', async () => {
     vi.stubEnv('CF_ANALYTICS_TOKEN', 'analytics-token')
     vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
-    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }))
+    const fetchMock = vi.fn(async (_url: string, _init?: any) => new Response(JSON.stringify({ success: true }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     await expect(purgeUpdatesCacheTags(makeContext(), ['capgo-updates-a'])).resolves.toMatchObject({ calls: 1, failed: 0 })
     expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer analytics-token')
@@ -348,7 +348,7 @@ describe('updates cache purge trigger', () => {
   it('purges every zone in chunks of 100 tags', async () => {
     vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
     vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a, zone-b')
-    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }))
+    const fetchMock = vi.fn(async (_url: string, _init?: any) => new Response(JSON.stringify({ success: true }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     const tags = Array.from({ length: 150 }, (_, i) => `capgo-updates-app${i}`)
 
@@ -410,7 +410,7 @@ describe('updates cache purge drain', () => {
   it('waits out the claim throttle, purges, and settles each lease', async () => {
     vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
     vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })))
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, _init?: any) => new Response(JSON.stringify({ success: true }), { status: 200 })))
     const sleep = vi.fn(async () => {})
     const { rpc, calls } = rpcFrom([
       { status: 'throttled', wait_ms: 400 },
@@ -445,6 +445,16 @@ describe('updates cache purge drain', () => {
     const { rpc, calls } = rpcFrom([{ status: 'ok', lease_token: 'lease-1', apps: [{ app_id: 'com.a', initial: true }], has_more: false }])
 
     await drainUpdatesCachePurge(makeContext(), rpc)
+    expect(calls.find(call => call.fn === 'ack_updates_cache_purge')?.args).toMatchObject({ p_lease_token: 'lease-1', p_success: false })
+  })
+
+  it('treats a 200 answer without a success flag as a failed purge', async () => {
+    vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
+    vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })))
+    const { rpc, calls } = rpcFrom([{ status: 'ok', lease_token: 'lease-1', apps: [{ app_id: 'com.a', initial: true }], has_more: false }])
+
+    await expect(drainUpdatesCachePurge(makeContext(), rpc)).resolves.toEqual({ purgedApps: 0 })
     expect(calls.find(call => call.fn === 'ack_updates_cache_purge')?.args).toMatchObject({ p_lease_token: 'lease-1', p_success: false })
   })
 
@@ -601,7 +611,7 @@ describe('updates cache purge scopes', () => {
   it('purges the tag of each claimed scope', async () => {
     vi.stubEnv('CF_CACHE_PURGE_TOKEN', 'token')
     vi.stubEnv('CF_CACHE_PURGE_ZONE_IDS', 'zone-a')
-    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }))
+    const fetchMock = vi.fn(async (_url: string, _init?: any) => new Response(JSON.stringify({ success: true }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     const apps = [
       { app_id: 'com.a', scope: 'app', initial: true },
