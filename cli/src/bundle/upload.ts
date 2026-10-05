@@ -1840,7 +1840,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
         ivSessionKey: versionData.session_key,
       }
     : undefined
-  const shouldRequestManifestUpload = !!(options.delta && !options.dryUpload)
+  const shouldRequestManifestUpload = !!(options.delta && !options.dryUpload && !hasS3UploadConfig(options))
   if (shouldRequestManifestUpload && manifest.length === 0) {
     if (options.userRequestedDelta)
       uploadFail('Cannot request a manifest upload for an empty manifest')
