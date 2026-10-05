@@ -38,7 +38,7 @@ Repair publication is awaited before acknowledging the source batch. Ambiguous r
 
 ## Historical backfill and drift reconciliation
 
-Enable and test notifications first so new changes are captured before scanning historical data. The script requires `R2_INVENTORY_DATABASE_URL` (internal writer connection), `R2_ENDPOINT` (the private R2 S3 endpoint), `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY`. R2 credentials need LIST access only; the script never requests object bodies, copies/deletes objects, or performs HEAD.
+Enable and test notifications first so new changes are captured before scanning historical data. All modes require `R2_INVENTORY_DATABASE_URL` (internal writer connection); backfill and reconciliation also require `R2_ENDPOINT` (the private R2 S3 endpoint), `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY`. Database-only GC does not require R2 credentials. R2 credentials need LIST access only; the script never requests object bodies, copies/deletes objects, or performs HEAD.
 
 Preview a bounded page without writes, then backfill:
 

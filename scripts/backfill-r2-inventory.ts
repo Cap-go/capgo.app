@@ -74,7 +74,7 @@ export async function main() {
             throw new Error('R2 LIST returned incomplete object metadata')
           return { key: object.Key, size: object.Size, etag: normalizeEtag(object.ETag), lastModified: object.LastModified.toISOString() }
         }) }
-      }, options, config, progress => console.log(JSON.stringify({ mode: values.mode, dryRun: !values.write, ...progress })), () => stopping, shutdown.signal)
+      }, options, config, progress => console.log(JSON.stringify({ mode: values.mode, dryRun: !values.write, pages: progress.pages, objects: progress.objects, skipped: progress.skipped, complete: progress.complete })), () => stopping, shutdown.signal)
       console.log(JSON.stringify({ event: stopping ? 'stopped' : result.complete ? 'complete' : 'page_budget_reached', dryRun: !values.write }))
     }
     finally {
