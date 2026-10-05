@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(13);
+SELECT plan(14);
 
 INSERT INTO public.stripe_info (
     customer_id,
@@ -90,6 +90,13 @@ SELECT
     );
 
 SELECT
+    isnt(
+        (SELECT auto_top_up_cycle_unknown_since FROM public.orgs WHERE id = (SELECT org_id FROM test_cycle_context)),
+        NULL,
+        'a claim marks the attempt in progress so a crashed worker is reconciled'
+    );
+
+SELECT
     is(
         (SELECT claimed FROM public.try_claim_credit_cycle_top_up((SELECT org_id FROM test_cycle_context))),
         false,
@@ -171,7 +178,8 @@ SELECT
 UPDATE public.orgs
 SET
     auto_top_up_cycle_paid_for = now() - interval '40 days',
-    auto_top_up_cycle_last_attempt_at = now() - interval '7 hours'
+    auto_top_up_cycle_last_attempt_at = now() - interval '7 hours',
+    auto_top_up_cycle_unknown_since = NULL
 WHERE id = (SELECT org_id FROM test_cycle_context);
 
 SELECT

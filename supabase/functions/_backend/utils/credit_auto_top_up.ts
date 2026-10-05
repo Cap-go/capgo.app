@@ -556,11 +556,13 @@ async function settleSucceededCycleIntent(c: Context, orgId: string, paymentInte
   }
   catch {
     if (!pendingKnown)
-      await setCyclePendingIntent(c, orgId, paymentIntent.id)
+      await updateCycleState(c, orgId, { auto_top_up_cycle_pending_intent_id: paymentIntent.id, auto_top_up_cycle_unknown_since: null })
     return { inFlight: true }
   }
   if (pendingKnown)
     await setCyclePendingIntent(c, orgId, null, paymentIntent.id)
+  else
+    await updateCycleState(c, orgId, { auto_top_up_cycle_unknown_since: null })
   return { inFlight: false }
 }
 
@@ -644,8 +646,8 @@ export async function maybeCycleTopUpCredits(c: Context, orgId: string): Promise
     return { inFlight: false }
   }
   if (charge.outcome === 'unknown') {
-    // Keep the cycle reserved until Stripe shows whether a PaymentIntent was created.
-    await updateCycleState(c, orgId, { auto_top_up_cycle_unknown_since: new Date().toISOString() })
+    // The claim already set unknown_since: the cycle stays reserved until Stripe shows
+    // whether a PaymentIntent was created.
     return { inFlight: true }
   }
 
@@ -657,7 +659,7 @@ export async function maybeCycleTopUpCredits(c: Context, orgId: string): Promise
     return { inFlight: false }
   }
   // processing: settled by the webhook or the next run's reconciliation.
-  await setCyclePendingIntent(c, orgId, paymentIntent.id)
+  await updateCycleState(c, orgId, { auto_top_up_cycle_pending_intent_id: paymentIntent.id, auto_top_up_cycle_unknown_since: null })
   return { inFlight: true }
 }
 

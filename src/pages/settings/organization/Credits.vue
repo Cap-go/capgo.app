@@ -120,10 +120,11 @@ const cycleTopUpAmountInput = ref(String(MIN_AUTO_TOP_UP))
 const cycleTopUpEnd = ref<string | null>(null)
 let confirmedCycleTopUpAmount = MIN_AUTO_TOP_UP
 const cycleTopUpAmount = computed(() => {
-  const parsed = Number.parseInt(cycleTopUpAmountInput.value, 10)
-  if (Number.isNaN(parsed))
+  // Whole dollars only: reject 10.99 instead of silently charging 10.
+  const raw = String(cycleTopUpAmountInput.value ?? '').trim()
+  if (!/^\d+$/.test(raw))
     return null
-  return parsed
+  return Number.parseInt(raw, 10)
 })
 const isCycleTopUpAmountValid = computed(() => cycleTopUpAmount.value !== null && cycleTopUpAmount.value >= MIN_AUTO_TOP_UP)
 const cycleTopUpNextDate = computed(() => {

@@ -179,11 +179,11 @@ describe('credit auto top-up API', () => {
   it('saves the scheduled top-up without touching the threshold settings', async () => {
     const headers = await getAuthHeaders()
     const endpoint = getEndpointUrl('/private/credits/auto-top-up')
-    expect((await fetchTestRequest(endpoint, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ orgId: ORG_ID_CREDIT_AUTO_TOP_UP, enabled: false, threshold: 30, monthlyLimit: 0 }),
-    })).status).toBe(200)
+    // Enabled directly in SQL: the seed org has no saved card, so the API would refuse to enable it.
+    await executeSQL(
+      'UPDATE public.orgs SET auto_top_up_enabled = true, auto_top_up_threshold = 30, auto_top_up_monthly_limit = 0 WHERE id = $1',
+      [ORG_ID_CREDIT_AUTO_TOP_UP],
+    )
     const response = await fetchTestRequest(endpoint, {
       method: 'POST',
       headers,
@@ -191,6 +191,7 @@ describe('credit auto top-up API', () => {
     })
     expect(response.status).toBe(200)
     const data = await response.json() as AutoTopUpSettings
+    expect(data.enabled).toBe(true)
     expect(data.threshold).toBe(30)
     expect(data.cycleAmount).toBe(50)
   })

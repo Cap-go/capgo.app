@@ -28,7 +28,7 @@ COMMENT ON COLUMN "public"."orgs"."auto_top_up_cycle_attempt" IS 'Attempt counte
 
 COMMENT ON COLUMN "public"."orgs"."auto_top_up_cycle_pending_intent_id" IS 'Scheduled top-up PaymentIntent whose outcome is not settled yet (processing, or granted credits not recorded). Reconciled by the plan-check cron; blocks new top-up charges while set.';
 
-COMMENT ON COLUMN "public"."orgs"."auto_top_up_cycle_unknown_since" IS 'Set when a scheduled charge request had an unknown outcome (no PaymentIntent returned). The cycle stays reserved until the cron finds the PaymentIntent in Stripe or confirms none was created.';
+COMMENT ON COLUMN "public"."orgs"."auto_top_up_cycle_unknown_since" IS 'Set when a scheduled charge is claimed and kept until its outcome is recorded. If the outcome stays unknown (lost Stripe response, worker crash), the cycle remains reserved until the cron finds the PaymentIntent in Stripe or confirms none was created.';
 
 -- Execution profile (service_role RPC from plan-check cron, once per org per run):
 -- Locks public.orgs by primary key FOR UPDATE, then resolves the current cycle with
@@ -92,10 +92,13 @@ BEGIN
     RETURN;
   END IF;
 
+  -- unknown_since marks the attempt as in progress until the caller records its outcome, so a
+  -- worker crash after this commit is reconciled (and the cycle freed) instead of silently skipped.
   UPDATE public.orgs
   SET
     auto_top_up_cycle_paid_for = v_cycle_start,
-    auto_top_up_cycle_last_attempt_at = now()
+    auto_top_up_cycle_last_attempt_at = now(),
+    auto_top_up_cycle_unknown_since = now()
   WHERE id = p_org_id;
 
   RETURN QUERY SELECT true, v_org.auto_top_up_cycle_amount::numeric, v_org.customer_id::text, v_cycle_start, v_org.auto_top_up_cycle_attempt;
