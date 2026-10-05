@@ -166,3 +166,4 @@ GRANT EXECUTE ON FUNCTION public.update_tmp_invite_role_rbac(
 GRANT EXECUTE ON FUNCTION public.update_tmp_invite_role_rbac(
   uuid, text, text
 ) TO service_role;
+
