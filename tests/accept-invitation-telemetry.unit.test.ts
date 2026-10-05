@@ -283,11 +283,11 @@ describe('magic-link invitation acceptance telemetry', () => {
   })
 
   it.each([
-    ['INVITER_NOT_FOUND', 403, 'failed_to_accept_invitation'],
-    ['ALREADY_MEMBER', 409, 'already_org_member'],
-    ['MEMBERSHIP_NOT_FINALIZED', 409, 'failed_to_accept_invitation'],
-    ['ROLE_NOT_FOUND', 500, 'failed_to_accept_invitation'],
-  ] as const)('maps accept_tmp_user_invitation status %s to HTTP %s', async (status, httpStatus, errorCode) => {
+    ['INVITER_NOT_FOUND', 403, 'Invitation must be reissued before acceptance'],
+    ['ALREADY_MEMBER', 409, 'already a member of this organization'],
+    ['MEMBERSHIP_NOT_FINALIZED', 409, 'could not be finalized'],
+    ['ROLE_NOT_FOUND', 500, 'Failed to resolve RBAC role'],
+  ] as const)('maps accept_tmp_user_invitation status %s to HTTP %s', async (status, httpStatus, messageFragment) => {
     supabaseAdminMock.mockReturnValue(buildAdmin({ existingUserId: EXISTING_USER_ID }))
     getPgClientMock.mockReturnValue(buildPgPool([status]))
     signInMock.mockResolvedValue({
@@ -302,7 +302,7 @@ describe('magic-link invitation acceptance telemetry', () => {
 
     expect(response.status).toBe(httpStatus)
     const bodyText = await response.text()
-    expect(bodyText).toContain(errorCode)
+    expect(bodyText).toContain(messageFragment)
   })
 
   it('maps privilege escalation errors to HTTP 403', async () => {
