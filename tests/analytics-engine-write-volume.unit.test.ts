@@ -41,6 +41,13 @@ const device = {
   plugin_version: '8.0.0',
 } as any
 
+function mockRandomUint32(value: number) {
+  vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation(((array: Uint32Array) => {
+    array[0] = value
+    return array
+  }) as typeof crypto.getRandomValues)
+}
+
 afterEach(() => {
   vi.restoreAllMocks()
 })
@@ -65,11 +72,11 @@ describe('analytics engine write volume', () => {
     const writeDataPoint = vi.fn()
     const c = createContext({ APP_LOG_EXTERNAL: { writeDataPoint } })
 
-    vi.spyOn(Math, 'random').mockReturnValue(0.99)
+    mockRandomUint32(1)
     await trackLogsCFExternal(c, 'com.example.app', 'device-1', 'get', '1.0.0')
     expect(writeDataPoint).not.toHaveBeenCalled()
 
-    vi.spyOn(Math, 'random').mockReturnValue(0)
+    mockRandomUint32(APP_LOG_EXTERNAL_SAMPLE_RATE * 3)
     await trackLogsCFExternal(c, 'com.example.app', 'device-1', 'get', '1.0.0')
     expect(writeDataPoint).toHaveBeenCalledWith(expect.objectContaining({
       doubles: [0, APP_LOG_EXTERNAL_SAMPLE_RATE],
@@ -79,7 +86,7 @@ describe('analytics engine write volume', () => {
 
   it('only logs real update checks from on-prem apps to APP_LOG_EXTERNAL', async () => {
     const { onPremStats } = await import('../supabase/functions/_backend/plugin_runtime/utils/plugin_stats.ts')
-    vi.spyOn(Math, 'random').mockReturnValue(0)
+    mockRandomUint32(0)
     const writeDataPoint = vi.fn()
     const c = createContext({ APP_LOG_EXTERNAL: { writeDataPoint } })
 
@@ -93,10 +100,10 @@ describe('analytics engine write volume', () => {
 
   it('scales the external update count by the stored sample rate', async () => {
     const { countUpdatesFromLogsExternalCF } = await import('../supabase/functions/_backend/utils/cloudflare.ts')
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ meta: [{ name: 'count', type: 'Float64' }], data: [{ count: 1234.0 }] })))
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ meta: [{ name: 'count', type: 'Float64' }], data: [{ count: 1236.7 }] })))
     const c = createContext({ CF_ACCOUNT_ANALYTICS_ID: 'account', CF_ANALYTICS_TOKEN: 'token' })
 
-    await expect(countUpdatesFromLogsExternalCF(c)).resolves.toBe(1234)
+    await expect(countUpdatesFromLogsExternalCF(c)).resolves.toBe(1237)
     const body = String(fetchMock.mock.calls[0][1]?.body)
     expect(body).toContain('SUM(_sample_interval * if(double2 > 0, double2, 1.0))')
   })

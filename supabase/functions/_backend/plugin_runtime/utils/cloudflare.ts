@@ -288,7 +288,7 @@ export const APP_LOG_EXTERNAL_SAMPLE_RATE = 10
 export function trackLogsCFExternal(c: Context, app_id: string, device_id: string, action: Database['public']['Enums']['stats_action'], version_name: string, metadata?: StatsMetadata, dimensions?: AppLogDimensions) {
   if (!c.env.APP_LOG_EXTERNAL)
     return Promise.resolve()
-  if (Math.random() >= 1 / APP_LOG_EXTERNAL_SAMPLE_RATE)
+  if (crypto.getRandomValues(new Uint32Array(1))[0] % APP_LOG_EXTERNAL_SAMPLE_RATE !== 0)
     return Promise.resolve()
 
   const durationMs = parseStatsDurationMs(metadata)
