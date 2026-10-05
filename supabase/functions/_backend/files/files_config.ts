@@ -19,7 +19,6 @@ app.get('/', (c) => {
       alertUploadSize: ALERT_UPLOAD_SIZE_BYTES,
       TUSUpload: true,
       TUSUploadForced: false,
-      manifestUpload: false,
     })
   }
   // force partial and tus for 20% of the requests
@@ -36,6 +35,5 @@ app.get('/', (c) => {
     alertUploadSize: ALERT_UPLOAD_SIZE_BYTES,
     TUSUpload: true,
     TUSUploadForced: true, // TODO: remove this when fix the issue with normal upload
-    manifestUpload: true,
   })
 })
