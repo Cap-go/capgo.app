@@ -1,9 +1,12 @@
--- MAU tiers above 1M: never charge more per MAU than the plan.
+-- MAU tiers above 1M: stop the price jump after the Enterprise plan.
 --
 -- The Enterprise plan includes 1M MAU for $249 ($0.000249/MAU), but the
--- next tier charged $0.0006/MAU. 2M MAU cost $849 and 3M cost $1,449, so
--- the price per MAU went up as a customer grew. Each tier above 1M is now
--- priced close to the plan rate and keeps going down with volume.
+-- next tier charged $0.0006/MAU, 2.4x the plan rate. 2M MAU cost $849 and
+-- 3M cost $1,449, so the average price per MAU nearly doubled as a
+-- customer grew. The 1M-3M tier now costs $0.0003/MAU, 1.2x the plan rate
+-- (2M = $549, 3M = $849), and every tier after it is cheaper. The average
+-- price per MAU stays between $0.000249 and $0.000283 up to 6M, then goes
+-- down.
 --
 -- The 0-1M tier stays at $0.003/MAU. Tiers follow total volume, so an org
 -- without a plan still pays $3,000 for its first 1M MAU and can never
