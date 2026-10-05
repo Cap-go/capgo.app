@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import { CacheHelper } from './cache.ts'
+import { withFreshReads } from './hyperdriveFreshRead.ts'
 import { updatesAppCacheTag, updatesVersionsCacheTag } from './updatesCacheTag.ts'
 import { backgroundTask, getEnv } from './utils.ts'
 
@@ -145,7 +146,9 @@ async function cachedLookup<T>(
     return { value: cached.v, hit: true }
 
   // Loader errors propagate: a failed read must never be cached as "missing".
-  const value = (await load()) ?? null
+  // The refill reads the replica itself, past Hyperdrive's query cache: right
+  // after a purge that cache can still hold the pre-change rows.
+  const value = (await withFreshReads(load)) ?? null
   let ttl = getUpdatesEdgeCacheTtlSeconds(c)
   if (value === null)
     ttl = Math.min(ttl, UPDATES_EDGE_CACHE_NEGATIVE_TTL_SECONDS)

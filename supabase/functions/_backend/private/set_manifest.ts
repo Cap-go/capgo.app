@@ -5,6 +5,7 @@ import { Hono } from 'hono/tiny'
 import { BRES, parseBody, quickError, simpleError } from '../utils/hono.ts'
 import { middlewareKey } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
+import { MAX_FILE_HASH_LENGTH, MAX_FILE_NAME_LENGTH, MAX_MANIFEST_ENTRIES, MAX_S3_PATH_LENGTH } from '../utils/manifest_limits.ts'
 import { persistVersionManifestEntries } from '../utils/manifest_persist.ts'
 import { verifyManifestSizeReceipts } from '../utils/manifest_size_receipt.ts'
 import { checkPermission } from '../utils/rbac.ts'
@@ -16,12 +17,6 @@ interface DataSetManifest {
   name: string
   manifest?: ManifestPersistEntry[]
 }
-
-// Prod max is ~7.5k files per version; keep modest headroom without unbounded payloads.
-const MAX_MANIFEST_ENTRIES = 10_000
-const MAX_FILE_NAME_LENGTH = 2048
-const MAX_S3_PATH_LENGTH = 2048
-const MAX_FILE_HASH_LENGTH = 512
 
 export const app = new Hono<MiddlewareKeyVariables>()
 

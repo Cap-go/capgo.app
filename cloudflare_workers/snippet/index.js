@@ -1,7 +1,6 @@
 // Rules to match requests this Snippet will handle
 // Expression
-// (http.host eq "plugin.usecapgo.com")
-// or (http.host eq "plugin.capgo.app")
+// (http.host eq "plugin.capgo.app")
 // or (http.host eq "updater.capgo.com.cn")
 // or (http.host eq "updater.spencer.co")
 // or (http.request.full_uri wildcard "*api.capgo.app/updates*")

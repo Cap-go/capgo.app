@@ -119,6 +119,7 @@ describe('tus upload protocol tests', () => {
 
       const config = await response.json() as { TUSUpload: boolean, maxUploadLength: number }
       expect(config.TUSUpload).toBe(true)
+      expect(config).not.toHaveProperty('manifestUpload')
       expect(config.maxUploadLength).toBeGreaterThan(0)
     })
   })

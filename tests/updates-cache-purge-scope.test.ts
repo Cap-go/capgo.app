@@ -134,15 +134,19 @@ describe('updates cache purge scopes', () => {
         ['app', false],
         ['app', false],
         ['app', false],
+        ['app', false],
+        ['versions', false],
         ['versions', false],
         ['versions', false],
         ['versions', false],
       ])
-      // Re-purges are scheduled +10s / +60s / +180s from the ack; allow for test latency.
-      const expected = [10, 60, 180, 10, 60, 180]
+      // Re-purges are scheduled +3s / +10s / +60s / +180s from the ack. Test
+      // latency only shortens the remaining delay; 1s of slack keeps the +3s
+      // entry from passing as an immediate re-purge.
+      const expected = [3, 10, 60, 180, 3, 10, 60, 180]
       rows.forEach((row, index) => {
         expect(row.delay).toBeLessThanOrEqual(expected[index])
-        expect(row.delay).toBeGreaterThan(expected[index] - 5)
+        expect(row.delay).toBeGreaterThan(expected[index] - 1)
       })
     })
   })

@@ -249,6 +249,17 @@ CREATE TYPE "public"."platform_os" AS ENUM (
 ALTER TYPE "public"."platform_os" OWNER TO "postgres";
 
 
+CREATE TYPE "public"."r2_object_state" AS ENUM (
+    'to_be_uploaded',
+    'present',
+    'to_be_deleted',
+    'deleted'
+);
+
+
+ALTER TYPE "public"."r2_object_state" OWNER TO "postgres";
+
+
 CREATE TYPE "public"."stats_action" AS ENUM (
     'delete',
     'reset',
@@ -559,13 +570,13 @@ BEGIN
     WITH done AS (
       DELETE FROM public.updates_cache_purge_pending
       WHERE lease_token = p_lease_token
-      RETURNING app_id, initial
+      RETURNING app_id, scope, initial
     )
-    INSERT INTO public.updates_cache_purge_pending (app_id, due_at, initial)
-    SELECT apps.app_id, v_now + delays.delay, false
-    FROM (SELECT DISTINCT app_id FROM done WHERE initial) AS apps
+    INSERT INTO public.updates_cache_purge_pending (app_id, scope, due_at, initial)
+    SELECT pairs.app_id, pairs.scope, v_now + delays.delay, false
+    FROM (SELECT DISTINCT app_id, scope FROM done WHERE initial) AS pairs
     CROSS JOIN (VALUES
-      (interval '10 seconds'), (interval '60 seconds'), (interval '180 seconds')
+      (interval '3 seconds'), (interval '10 seconds'), (interval '60 seconds'), (interval '180 seconds')
     ) AS delays (delay);
   ELSE
     UPDATE public.updates_cache_purge_pending
@@ -4198,11 +4209,12 @@ BEGIN
     );
   END IF;
 
+  -- One (app, scope) pair = one Cloudflare tag.
   WITH picked AS (
-    SELECT p.app_id
+    SELECT p.app_id, p.scope
     FROM public.updates_cache_purge_pending p
     WHERE p.due_at <= v_now AND (p.lease_token IS NULL OR p.leased_until <= v_now)
-    GROUP BY p.app_id
+    GROUP BY p.app_id, p.scope
     ORDER BY MIN(p.due_at)
     LIMIT GREATEST(LEAST(p_limit, 1000), 1)
   ),
@@ -4211,13 +4223,14 @@ BEGIN
     SET lease_token = v_token, leased_until = v_now + v_lease
     FROM picked
     WHERE p.app_id = picked.app_id
+      AND p.scope = picked.scope
       AND p.due_at <= v_now
       AND (p.lease_token IS NULL OR p.leased_until <= v_now)
-    RETURNING p.app_id, p.initial
+    RETURNING p.app_id, p.scope, p.initial
   )
-  SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('app_id', c.app_id, 'initial', c.initial))
+  SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('app_id', c.app_id, 'scope', c.scope, 'initial', c.initial))
   INTO v_apps
-  FROM (SELECT app_id, bool_or(initial) AS initial FROM claimed GROUP BY app_id) AS c;
+  FROM (SELECT app_id, scope, bool_or(initial) AS initial FROM claimed GROUP BY app_id, scope) AS c;
 
   IF v_apps IS NULL THEN
     RETURN pg_catalog.jsonb_build_object('status', 'empty');
@@ -11144,6 +11157,7 @@ CREATE OR REPLACE FUNCTION "public"."invalidate_updates_edge_cache"() RETURNS "t
     AS $$
 DECLARE
   app_ids text[];
+  version_app_ids text[];
 BEGIN
   IF NOT public.updates_cache_purge_enabled() THEN
     RETURN NULL;
@@ -11162,13 +11176,15 @@ BEGIN
                o.allow_device, o.allow_dev, o.allow_prod, o.disable_auto_update_under_native,
                o.disable_auto_update, o.ios, o.android, o.electron, o.update_package,
                o.rollout_version, o.rollout_percentage_bps, o.rollout_enabled, o.rollout_id,
-               o.rollout_paused_at, o.rollout_pause_reason, o.rollout_cache_ttl_seconds, o.paused_at)
+               o.rollout_paused_at, o.rollout_pause_reason, o.rollout_cache_ttl_seconds, o.paused_at,
+               o.owner_org)
           IS DISTINCT FROM
               (n.app_id, n.name, n.version, n.public, n.allow_device_self_set, n.allow_emulator,
                n.allow_device, n.allow_dev, n.allow_prod, n.disable_auto_update_under_native,
                n.disable_auto_update, n.ios, n.android, n.electron, n.update_package,
                n.rollout_version, n.rollout_percentage_bps, n.rollout_enabled, n.rollout_id,
-               n.rollout_paused_at, n.rollout_pause_reason, n.rollout_cache_ttl_seconds, n.paused_at)
+               n.rollout_paused_at, n.rollout_pause_reason, n.rollout_cache_ttl_seconds, n.paused_at,
+               n.owner_org)
         UNION
         SELECT n.app_id::text FROM old_rows o JOIN new_rows n ON n.id = o.id
         WHERE o.app_id IS DISTINCT FROM n.app_id
@@ -11195,16 +11211,23 @@ BEGIN
              COALESCE(n.rollout_channel_count, 0) > 0);
     END IF;
   ELSIF TG_TABLE_NAME = 'app_versions' THEN
-    -- Only versions a channel serves (as version or rollout target) can be in
-    -- the cache; channel changes that start serving a version purge on their
-    -- own. This keeps uploads (manifest_count, storage_provider flips of
-    -- unlinked bundles) from evicting the app's live entries.
-    IF TG_OP = 'DELETE' THEN
+    -- Main tag: only versions a channel serves (as version or rollout target)
+    -- can be in the /updates entries; channel changes that start serving a
+    -- version purge on their own. This keeps uploads (manifest_count,
+    -- storage_provider flips of unlinked bundles) from evicting the app's live
+    -- entries.
+    -- Versions tag: bundle-name lookups (id + owner_org by name, deleted rows
+    -- included) change on any insert, delete, rename, move or soft delete,
+    -- whether or not a channel serves the version.
+    IF TG_OP = 'INSERT' THEN
+      SELECT pg_catalog.array_agg(DISTINCT n.app_id::text) INTO version_app_ids FROM new_rows n;
+    ELSIF TG_OP = 'DELETE' THEN
       SELECT pg_catalog.array_agg(DISTINCT o.app_id::text) INTO app_ids
       FROM old_rows o
       WHERE EXISTS (
         SELECT 1 FROM public.channels c WHERE c.version = o.id OR c.rollout_version = o.id
       );
+      SELECT pg_catalog.array_agg(DISTINCT o.app_id::text) INTO version_app_ids FROM old_rows o;
     ELSE
       SELECT pg_catalog.array_agg(DISTINCT n.app_id::text) INTO app_ids
       FROM old_rows o JOIN new_rows n ON n.id = o.id
@@ -11218,6 +11241,15 @@ BEGIN
             (n.app_id, n.name, n.checksum, n.session_key, n.key_id, n.storage_provider, n.external_url,
              n.min_update_version, n.manifest_count, n.r2_path, n.deleted, n.deleted_at,
              n.link, n.comment);
+      SELECT pg_catalog.array_agg(DISTINCT changed.app_id) INTO version_app_ids
+      FROM (
+        SELECT n.app_id::text AS app_id FROM old_rows o JOIN new_rows n ON n.id = o.id
+        WHERE (o.app_id, o.name, o.owner_org, o.deleted)
+          IS DISTINCT FROM (n.app_id, n.name, n.owner_org, n.deleted)
+        UNION
+        SELECT o.app_id::text FROM old_rows o JOIN new_rows n ON n.id = o.id
+        WHERE o.app_id IS DISTINCT FROM n.app_id
+      ) AS changed;
     END IF;
   ELSIF TG_TABLE_NAME = 'orgs' THEN
     SELECT pg_catalog.array_agg(DISTINCT a.app_id::text) INTO app_ids
@@ -11239,6 +11271,8 @@ BEGIN
       JOIN public.orgs org ON org.customer_id = s.customer_id
       JOIN public.apps a ON a.owner_org = org.id;
     ELSE
+      -- storage_exceeded is left out on purpose: plugin plan checks only use
+      -- the mau and bandwidth actions (see buildPlanValidationExpression).
       SELECT pg_catalog.array_agg(DISTINCT a.app_id::text) INTO app_ids
       FROM old_rows o
       JOIN new_rows n ON n.customer_id = o.customer_id
@@ -11251,7 +11285,10 @@ BEGIN
   END IF;
 
   IF app_ids IS NOT NULL THEN
-    PERFORM public.notify_updates_edge_cache_purge(app_ids);
+    PERFORM public.notify_updates_edge_cache_purge(app_ids, 'app');
+  END IF;
+  IF version_app_ids IS NOT NULL THEN
+    PERFORM public.notify_updates_edge_cache_purge(version_app_ids, 'versions');
   END IF;
   RETURN NULL;
 EXCEPTION WHEN OTHERS THEN
@@ -11264,7 +11301,7 @@ $$;
 ALTER FUNCTION "public"."invalidate_updates_edge_cache"() OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."invalidate_updates_edge_cache"() IS 'Statement-level AFTER trigger: collects app ids whose /updates answer may have changed and asks triggers/updates_cache_purge to purge their Cloudflare Cache-Tag. Runs once per statement over transition tables; lookups use finx_channels_version, idx_channels_rollout_version, idx_orgs_customer_id and finx_apps_owner_org.';
+COMMENT ON FUNCTION "public"."invalidate_updates_edge_cache"() IS 'Statement-level AFTER trigger: collects app ids whose plugin edge cache entries may have changed and asks triggers/updates_cache_purge to purge their Cloudflare Cache-Tag (scope app: /updates, owner and channel lookups; scope versions: bundle-name lookups). Runs once per statement over transition tables; lookups use finx_channels_version, idx_channels_rollout_version, idx_orgs_customer_id and finx_apps_owner_org.';
 
 
 
@@ -13340,13 +13377,13 @@ $$;
 ALTER FUNCTION "public"."normalize_sso_provider_domain"() OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."notify_updates_edge_cache_purge"("p_app_ids" "text"[]) RETURNS "void"
+CREATE OR REPLACE FUNCTION "public"."notify_updates_edge_cache_purge"("p_app_ids" "text"[], "p_scope" "text") RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
 BEGIN
-  INSERT INTO public.updates_cache_purge_pending (app_id, due_at, initial)
-  SELECT app_id, pg_catalog.clock_timestamp(), true
+  INSERT INTO public.updates_cache_purge_pending (app_id, scope, due_at, initial)
+  SELECT app_id, COALESCE(p_scope, 'app'), pg_catalog.clock_timestamp(), true
   FROM (
     SELECT DISTINCT app_id FROM pg_catalog.unnest(p_app_ids) AS app_id
     WHERE app_id IS NOT NULL AND app_id <> ''
@@ -13364,7 +13401,7 @@ END;
 $$;
 
 
-ALTER FUNCTION "public"."notify_updates_edge_cache_purge"("p_app_ids" "text"[]) OWNER TO "postgres";
+ALTER FUNCTION "public"."notify_updates_edge_cache_purge"("p_app_ids" "text"[], "p_scope" "text") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."noupdate"() RETURNS "trigger"
@@ -15663,6 +15700,83 @@ END; $$;
 
 
 ALTER FUNCTION "public"."queue_legacy_manifest_size_lookup_compat"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."r2_inventory_checkpoints_before_write"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        IF OLD.job_name = 'admission' THEN
+            RAISE EXCEPTION 'R2 admission history cannot be removed' USING ERRCODE = '23514';
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.bucket_name IS DISTINCT FROM OLD.bucket_name
+           OR NEW.job_name IS DISTINCT FROM OLD.job_name
+           OR NEW.partition_key IS DISTINCT FROM OLD.partition_key THEN
+            RAISE EXCEPTION 'R2 checkpoint identity is immutable' USING ERRCODE = '23514';
+        END IF;
+        IF OLD.accepted_event_floor IS NOT NULL AND (
+            NEW.accepted_event_floor IS NULL
+            OR NEW.accepted_event_floor < OLD.accepted_event_floor
+        ) THEN
+            RAISE EXCEPTION 'R2 admission floor cannot decrease' USING ERRCODE = '23514';
+        END IF;
+    END IF;
+    NEW.updated_at := pg_catalog.clock_timestamp();
+    RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."r2_inventory_checkpoints_before_write"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."r2_objects_before_write"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        NEW.revision := 1;
+        IF NEW.r2_state = 'to_be_deleted'::public.r2_object_state THEN
+            NEW.cleanup_requested_at := pg_catalog.clock_timestamp();
+        END IF;
+        NEW.first_seen_at := pg_catalog.clock_timestamp();
+    ELSE
+        IF NEW.bucket_name IS DISTINCT FROM OLD.bucket_name
+           OR NEW.r2_key IS DISTINCT FROM OLD.r2_key THEN
+            RAISE EXCEPTION 'R2 physical key identity is immutable' USING ERRCODE = '23514';
+        END IF;
+        IF OLD.r2_state = 'to_be_deleted'::public.r2_object_state
+           AND NEW.r2_state NOT IN (
+               'to_be_deleted'::public.r2_object_state,
+               'deleted'::public.r2_object_state
+           ) THEN
+            RAISE EXCEPTION 'R2 deletion intent cannot be reversed' USING ERRCODE = '23514';
+        END IF;
+        NEW.cleanup_requested_at := OLD.cleanup_requested_at;
+        IF NEW.r2_state = 'to_be_deleted'::public.r2_object_state THEN
+            NEW.cleanup_requested_at := COALESCE(OLD.cleanup_requested_at, pg_catalog.clock_timestamp());
+        END IF;
+        IF NEW.cleanup_requested_at IS NOT NULL AND NEW.r2_state NOT IN (
+            'to_be_deleted'::public.r2_object_state, 'deleted'::public.r2_object_state
+        ) THEN
+            RAISE EXCEPTION 'R2 cleanup retirement cannot be reversed' USING ERRCODE = '23514';
+        END IF;
+        NEW.revision := OLD.revision + 1;
+        NEW.first_seen_at := OLD.first_seen_at;
+    END IF;
+    NEW.updated_at := pg_catalog.clock_timestamp();
+    RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."r2_objects_before_write"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."rbac_check_permission"("p_permission_key" "text", "p_org_id" "uuid" DEFAULT NULL::"uuid", "p_app_id" character varying DEFAULT NULL::character varying, "p_channel_id" bigint DEFAULT NULL::bigint) RETURNS boolean
@@ -23750,6 +23864,70 @@ COMMENT ON TABLE "public"."processed_stripe_events" IS 'Idempotency ledger for S
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."r2_inventory_checkpoints" (
+    "bucket_name" "text" NOT NULL,
+    "job_name" "text" NOT NULL,
+    "partition_key" "text" DEFAULT ''::"text" NOT NULL COLLATE "pg_catalog"."C",
+    "accepted_event_floor" timestamp with time zone,
+    "checkpoint" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "r2_inventory_checkpoints_bucket_check" CHECK ((("octet_length"("bucket_name") >= 1) AND ("octet_length"("bucket_name") <= 256))),
+    CONSTRAINT "r2_inventory_checkpoints_data_check" CHECK ((("jsonb_typeof"("checkpoint") = 'object'::"text") AND ("pg_column_size"("checkpoint") <= 65536))),
+    CONSTRAINT "r2_inventory_checkpoints_floor_check" CHECK (((("job_name" = 'admission'::"text") AND ("partition_key" = ''::"text") AND ("accepted_event_floor" IS NOT NULL)) OR (("job_name" <> 'admission'::"text") AND ("accepted_event_floor" IS NULL)))),
+    CONSTRAINT "r2_inventory_checkpoints_job_check" CHECK ((("octet_length"("job_name") >= 1) AND ("octet_length"("job_name") <= 256))),
+    CONSTRAINT "r2_inventory_checkpoints_partition_check" CHECK (("octet_length"("partition_key") <= 1024))
+);
+
+
+ALTER TABLE "public"."r2_inventory_checkpoints" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."r2_inventory_checkpoints" IS 'Internal resumable scan checkpoints and per-bucket event-admission floors. Runtime settings remain Vault-backed.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."r2_objects" (
+    "bucket_name" "text" NOT NULL,
+    "r2_key" "text" NOT NULL COLLATE "pg_catalog"."C",
+    "r2_state" "public"."r2_object_state" NOT NULL,
+    "size_bytes" bigint,
+    "etag" "text",
+    "r2_last_modified_at" timestamp with time zone,
+    "last_event_at" timestamp with time zone,
+    "last_reconciled_at" timestamp with time zone,
+    "tombstone_expires_at" timestamp with time zone,
+    "cleanup_requested_at" timestamp with time zone,
+    "first_seen_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "revision" bigint DEFAULT 1 NOT NULL,
+    CONSTRAINT "r2_objects_bucket_check" CHECK ((("octet_length"("bucket_name") >= 1) AND ("octet_length"("bucket_name") <= 256))),
+    CONSTRAINT "r2_objects_cleanup_check" CHECK ((("cleanup_requested_at" IS NULL) OR ("r2_state" = ANY (ARRAY['to_be_deleted'::"public"."r2_object_state", 'deleted'::"public"."r2_object_state"])))),
+    CONSTRAINT "r2_objects_key_check" CHECK ((("octet_length"("r2_key") >= 1) AND ("octet_length"("r2_key") <= 1024))),
+    CONSTRAINT "r2_objects_revision_check" CHECK (("revision" > 0)),
+    CONSTRAINT "r2_objects_size_check" CHECK ((("size_bytes" IS NULL) OR ("size_bytes" >= 0))),
+    CONSTRAINT "r2_objects_tombstone_check" CHECK (((("r2_state" = 'deleted'::"public"."r2_object_state") AND ("tombstone_expires_at" IS NOT NULL)) OR (("r2_state" <> 'deleted'::"public"."r2_object_state") AND ("tombstone_expires_at" IS NULL))))
+);
+
+
+ALTER TABLE "public"."r2_objects" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."r2_objects" IS 'Internal physical-key inventory, including unreferenced objects. Excluded from regional publications; manifest references remain separate.';
+
+
+
+COMMENT ON COLUMN "public"."r2_objects"."r2_state" IS 'Four-state lifecycle; to_be_deleted is irreversible. Worker progress belongs to its queue.';
+
+
+
+COMMENT ON COLUMN "public"."r2_objects"."last_event_at" IS 'Latest accepted R2 eventTime, not the notification processing time.';
+
+
+
+COMMENT ON COLUMN "public"."r2_objects"."last_reconciled_at" IS 'Conservative request-start boundary of an applied direct R2 observation.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."role_bindings" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "principal_type" "text" NOT NULL,
@@ -24101,7 +24279,9 @@ CREATE TABLE IF NOT EXISTS "public"."updates_cache_purge_pending" (
     "due_at" timestamp with time zone NOT NULL,
     "initial" boolean DEFAULT true NOT NULL,
     "lease_token" "uuid",
-    "leased_until" timestamp with time zone
+    "leased_until" timestamp with time zone,
+    "scope" "text" DEFAULT 'app'::"text" NOT NULL,
+    CONSTRAINT "updates_cache_purge_pending_scope_check" CHECK (("scope" = ANY (ARRAY['app'::"text", 'versions'::"text"])))
 );
 
 
@@ -24998,6 +25178,16 @@ ALTER TABLE ONLY "public"."processed_stripe_events"
 
 
 
+ALTER TABLE ONLY "public"."r2_inventory_checkpoints"
+    ADD CONSTRAINT "r2_inventory_checkpoints_pkey" PRIMARY KEY ("bucket_name", "job_name", "partition_key");
+
+
+
+ALTER TABLE ONLY "public"."r2_objects"
+    ADD CONSTRAINT "r2_objects_pkey" PRIMARY KEY ("bucket_name", "r2_key");
+
+
+
 ALTER TABLE ONLY "public"."role_bindings"
     ADD CONSTRAINT "role_bindings_pkey" PRIMARY KEY ("id");
 
@@ -25816,6 +26006,10 @@ CREATE INDEX "processed_stripe_events_customer_id_date_id_idx" ON "public"."proc
 
 
 
+CREATE INDEX "r2_objects_expired_tombstones_idx" ON "public"."r2_objects" USING "btree" ("bucket_name", "tombstone_expires_at", "r2_key") WHERE (("r2_state" = 'deleted'::"public"."r2_object_state") AND ("cleanup_requested_at" IS NULL));
+
+
+
 CREATE UNIQUE INDEX "role_bindings_app_scope_uniq" ON "public"."role_bindings" USING "btree" ("principal_type", "principal_id", "app_id", "scope_type") WHERE ("scope_type" = "public"."rbac_scope_app"());
 
 
@@ -26192,6 +26386,10 @@ CREATE OR REPLACE TRIGGER "invalidate_updates_edge_cache_app_versions_del" AFTER
 
 
 
+CREATE OR REPLACE TRIGGER "invalidate_updates_edge_cache_app_versions_ins" AFTER INSERT ON "public"."app_versions" REFERENCING NEW TABLE AS "new_rows" FOR EACH STATEMENT EXECUTE FUNCTION "public"."invalidate_updates_edge_cache"();
+
+
+
 CREATE OR REPLACE TRIGGER "invalidate_updates_edge_cache_app_versions_upd" AFTER UPDATE ON "public"."app_versions" REFERENCING OLD TABLE AS "old_rows" NEW TABLE AS "new_rows" FOR EACH STATEMENT EXECUTE FUNCTION "public"."invalidate_updates_edge_cache"();
 
 
@@ -26341,6 +26539,14 @@ CREATE OR REPLACE TRIGGER "prevent_role_binding_priority_escalation" BEFORE INSE
 
 
 CREATE OR REPLACE TRIGGER "protect_apps_onboarding" BEFORE INSERT OR UPDATE ON "public"."apps" FOR EACH ROW EXECUTE FUNCTION "public"."protect_apps_onboarding"();
+
+
+
+CREATE OR REPLACE TRIGGER "r2_inventory_checkpoints_before_write" BEFORE INSERT OR DELETE OR UPDATE ON "public"."r2_inventory_checkpoints" FOR EACH ROW EXECUTE FUNCTION "public"."r2_inventory_checkpoints_before_write"();
+
+
+
+CREATE OR REPLACE TRIGGER "r2_objects_before_write" BEFORE INSERT OR UPDATE ON "public"."r2_objects" FOR EACH ROW EXECUTE FUNCTION "public"."r2_objects_before_write"();
 
 
 
@@ -27883,6 +28089,20 @@ ALTER TABLE "public"."platform_impersonation_sessions" ENABLE ROW LEVEL SECURITY
 ALTER TABLE "public"."processed_stripe_events" ENABLE ROW LEVEL SECURITY;
 
 
+ALTER TABLE "public"."r2_inventory_checkpoints" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "r2_inventory_checkpoints_service_role" ON "public"."r2_inventory_checkpoints" TO "service_role" USING (true) WITH CHECK (true);
+
+
+
+ALTER TABLE "public"."r2_objects" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "r2_objects_service_role" ON "public"."r2_objects" TO "service_role" USING (true) WITH CHECK (true);
+
+
+
 ALTER TABLE "public"."role_bindings" ENABLE ROW LEVEL SECURITY;
 
 
@@ -28116,6 +28336,11 @@ GRANT USAGE ON SCHEMA "public" TO "pganalyze";
 
 GRANT USAGE ON SCHEMA "rbac_internal" TO "authenticated";
 GRANT USAGE ON SCHEMA "rbac_internal" TO "service_role";
+
+
+
+REVOKE ALL ON TYPE "public"."r2_object_state" FROM PUBLIC;
+GRANT ALL ON TYPE "public"."r2_object_state" TO "service_role";
 
 
 
@@ -29936,8 +30161,8 @@ GRANT ALL ON FUNCTION "public"."normalize_sso_provider_domain"() TO "service_rol
 
 
 
-REVOKE ALL ON FUNCTION "public"."notify_updates_edge_cache_purge"("p_app_ids" "text"[]) FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."notify_updates_edge_cache_purge"("p_app_ids" "text"[]) TO "service_role";
+REVOKE ALL ON FUNCTION "public"."notify_updates_edge_cache_purge"("p_app_ids" "text"[], "p_scope" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."notify_updates_edge_cache_purge"("p_app_ids" "text"[], "p_scope" "text") TO "service_role";
 
 
 
@@ -30156,6 +30381,14 @@ GRANT ALL ON FUNCTION "public"."queue_cron_stat_org_for_org"("org_id" "uuid", "c
 
 REVOKE ALL ON FUNCTION "public"."queue_legacy_manifest_size_lookup_compat"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."queue_legacy_manifest_size_lookup_compat"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."r2_inventory_checkpoints_before_write"() FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "public"."r2_objects_before_write"() FROM PUBLIC;
 
 
 
@@ -31622,6 +31855,14 @@ GRANT ALL ON TABLE "public"."platform_impersonation_sessions" TO "service_role";
 
 
 GRANT ALL ON TABLE "public"."processed_stripe_events" TO "service_role";
+
+
+
+GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."r2_inventory_checkpoints" TO "service_role";
+
+
+
+GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."r2_objects" TO "service_role";
 
 
 
