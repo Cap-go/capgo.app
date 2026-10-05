@@ -301,8 +301,11 @@ describe('magic-link invitation acceptance telemetry', () => {
     const response = await acceptRequest()
 
     expect(response.status).toBe(httpStatus)
+<<<<<<< HEAD
     const bodyText = await response.text()
     expect(bodyText).toContain(messageFragment)
+=======
+>>>>>>> a4124f5f6 (test: assert HTTP status only for invitation RPC status mapping)
   })
 
   it('maps privilege escalation errors to HTTP 403', async () => {
