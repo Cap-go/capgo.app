@@ -100,8 +100,21 @@ describe('r2 inventory queue', () => {
   it('acknowledges only after awaited repair publication', async () => {
     const f = fixture([body])
     mocks.apply.mockResolvedValue([{ bucket: 'inventory-test', key: 'legacy/file', kind: 'verify' }])
-    await consumeInventoryBatch(f.batch, f.env)
-    expect(mocks.publish.mock.invocationCallOrder[0]).toBeLessThan(f.messages[0].ack.mock.invocationCallOrder[0])
+    let finishPublication: () => void = () => {}
+    const publication = new Promise<void>((resolve) => {
+      finishPublication = resolve
+    })
+    mocks.publish.mockReturnValue(publication)
+    const consuming = consumeInventoryBatch(f.batch, f.env)
+    try {
+      await vi.waitFor(() => expect(mocks.publish).toHaveBeenCalledTimes(1))
+      expect(f.messages[0].ack).not.toHaveBeenCalled()
+    }
+    finally {
+      finishPublication()
+      await consuming
+    }
+    expect(f.messages[0].ack).toHaveBeenCalledTimes(1)
   })
   it('isolates malformed messages and fails closed when ingestion is disabled', async () => {
     const f = fixture([body, { broken: true }])
