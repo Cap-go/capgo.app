@@ -602,6 +602,10 @@ async function confirmBundleCompatibleWithChannel(
 async function handleVersionLink(appVersion: Database['public']['Tables']['app_versions']['Row']) {
   if (!channel.value)
     return
+  // Close the bundle picker once a bundle is chosen; the compatibility, rollout and
+  // notification prompts below open their own dialogs when needed.
+  if (dialogStore.showDialog && dialogStore.dialogOptions?.title === t('bundle-management'))
+    await dialogStore.closeDialog()
   if (!(await confirmBundleCompatibleWithChannel(appVersion, channel.value.name, channel.value.version?.id)))
     return
   if (bundleLinkMode.value === 'rollout') {
