@@ -4,6 +4,7 @@ import { env } from 'node:process'
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ALLOWED_STATS_ACTIONS, isRunningVersionAction } from '../supabase/functions/_backend/plugin_runtime/plugins/stats_actions.ts'
+import { isDroppedStatsLogAction } from '../supabase/functions/_backend/plugin_runtime/utils/plugin_stats.ts'
 import { APP_NAME, createAppVersions, executeSQL, fetchTestRequest, getBaseData, getSupabaseClient, getVersionFromAction, headers, ORG_ID, PLUGIN_BASE_URL, resetAndSeedAppData, resetAndSeedAppDataStats, resetAppData, resetAppDataStats, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
 
 const id = randomUUID()
@@ -489,19 +490,21 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
           expect(response.status).toBe(200)
           expect(responseData.status).toBe('ok')
 
-          // Verify stats entry
-          const { error: statsError, data: statsData } = await getSupabaseClient()
-            .from('stats')
-            .select()
-            .eq('device_id', uuid)
-            .eq('app_id', appId)
-            .eq('action', action)
-            .single()
+          // Verify stats entry (intermediate download_*0 progress is not persisted)
+          if (!isDroppedStatsLogAction(action)) {
+            const { error: statsError, data: statsData } = await getSupabaseClient()
+              .from('stats')
+              .select()
+              .eq('device_id', uuid)
+              .eq('app_id', appId)
+              .eq('action', action)
+              .single()
 
-          expect(statsError).toBeNull()
-          expect(statsData).toBeTruthy()
-          expect(statsData?.action).toBe(action)
-          expect(statsData?.device_id).toBe(uuid)
+            expect(statsError).toBeNull()
+            expect(statsData).toBeTruthy()
+            expect(statsData?.action).toBe(action)
+            expect(statsData?.device_id).toBe(uuid)
+          }
 
           // Verify device state - fail, download, staging and delete actions should NOT
           // create/update device records: their version_name is not the running version

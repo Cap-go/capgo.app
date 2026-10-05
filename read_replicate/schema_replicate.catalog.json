@@ -526,7 +526,7 @@
       "identity": "",
       "name": "device_data_collection",
       "notNull": true,
-      "position": 32,
+      "position": 30,
       "table": "apps",
       "type": "jsonb"
     },

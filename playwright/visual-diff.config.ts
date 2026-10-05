@@ -273,22 +273,14 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     },
   },
   { slug: 'app-getting-started', path: '/app/com.demo.app/getting-started', auth: true },
-  { slug: 'app-settings', path: '/app/com.demo.app/settings', auth: true },
   {
-    slug: 'app-settings-device-data',
+    slug: 'app-settings',
     path: '/app/com.demo.app/settings',
     auth: true,
     prepare: async (page) => {
-      await dismissSupportPrompt(page)
       const fieldset = page.locator('[data-test="device-data-collection"]')
-      try {
-        await fieldset.waitFor({ state: 'visible', timeout: 5000 })
-      }
-      catch {
-        // Base does not have the collection fieldset yet.
-        return
-      }
-      await fieldset.scrollIntoViewIfNeeded()
+      if (await fieldset.isVisible().catch(() => false))
+        await fieldset.scrollIntoViewIfNeeded()
     },
   },
   { slug: 'app-settings-access', path: '/app/com.demo.app/settings/access', auth: true },
