@@ -78,15 +78,15 @@ SELECT
 SELECT
     results_eq(
         $$SELECT credits_required FROM public.calculate_credit_cost('mau', 1000000, 1000000)$$,
-        $$VALUES (600.0::numeric)$$,
-        '2M MAU on a 1M plan costs $600 of overage'
+        $$VALUES (300.0::numeric)$$,
+        '2M MAU on a 1M plan costs $300 of overage'
     );
 
--- 1M included, 4M extra: 2M at $0.0006 + 2M at $0.00045.
+-- 1M included, 4M extra: 2M at $0.0003 + 2M at $0.00025.
 SELECT
     results_eq(
         $$SELECT credits_required FROM public.calculate_credit_cost('mau', 4000000, 1000000)$$,
-        $$VALUES (2100.0::numeric)$$,
+        $$VALUES (1100.0::numeric)$$,
         '5M MAU on a 1M plan spans two tiers'
     );
 
@@ -94,7 +94,7 @@ SELECT
 SELECT
     results_eq(
         $$SELECT credits_required FROM public.calculate_credit_cost('mau', 2000000)$$,
-        $$VALUES (3600.0::numeric)$$,
+        $$VALUES (3300.0::numeric)$$,
         'two-argument form prices from 0'
     );
 
@@ -136,7 +136,7 @@ SELECT
               '{"usage": 2000000, "limit": 1000000}'::jsonb,
               1000000
           )$$,
-        $$VALUES (600.0::numeric)$$,
+        $$VALUES (300.0::numeric)$$,
         'apply_usage_overage prices overage above the included amount'
     );
 
@@ -153,7 +153,7 @@ SELECT
     results_eq(
         $$SELECT credits_required
           FROM public.calculate_credit_cost('mau', 1000000, 1000000)$$,
-        $$VALUES (600.0::numeric)$$,
+        $$VALUES (300.0::numeric)$$,
         'billing ignores org-scoped tiers'
     );
 
@@ -161,9 +161,9 @@ DELETE FROM public.capgo_credits_steps
 WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid;
 
 -- Partial credits: covered usage follows the tier slices, not a blended
--- rate. 4M MAU above a 1M plan costs 2M x $0.0006 + 2M x $0.00045 = $2100.
--- $900 of credits covers 1.5M MAU of the first slice; a blended rate
--- would claim about 1.71M.
+-- rate. 4M MAU above a 1M plan costs 2M x $0.0003 + 2M x $0.00025 = $1100.
+-- $450 of credits covers 1.5M MAU of the first slice; a blended rate
+-- would claim about 1.64M.
 DO $$
 BEGIN
   PERFORM tests.create_supabase_user('tier_credits_user', 'tier-credits@example.com', '555-555-0178');
@@ -204,7 +204,7 @@ grant_insert AS (
     )
     SELECT
         org_insert.id,
-        900,
+        450,
         0,
         now(),
         now() + interval '1 year',
@@ -232,7 +232,7 @@ FROM tier_ctx,
 SELECT
     results_eq(
         $$SELECT credits_required, credits_applied FROM tier_result$$,
-        $$VALUES (2100.0::numeric, 900.0::numeric)$$,
+        $$VALUES (1100.0::numeric, 450.0::numeric)$$,
         'partial credits are fully applied against the tiered cost'
     );
 

@@ -1,20 +1,27 @@
 import type { Context } from 'hono'
 import { CacheHelper } from './cache.ts'
-import { updatesAppCacheTag } from './updatesCacheTag.ts'
+import { withFreshReads } from './hyperdriveFreshRead.ts'
+import { updatesAppCacheTag, updatesVersionsCacheTag } from './updatesCacheTag.ts'
 import { backgroundTask, getEnv } from './utils.ts'
 
-export { updatesAppCacheTag } from './updatesCacheTag.ts'
+export { updatesAppCacheTag, updatesVersionsCacheTag } from './updatesCacheTag.ts'
 
 /**
- * Edge cache for the app-level part of /updates (app owner + plan, default
- * channel row, manifest rows).
+ * Edge cache for the app-level reads of the plugin endpoints (/updates,
+ * /stats, /channel_self): app owner + plan, channel rows and channel-by-name
+ * lookups, bundle-name lookups, manifest rows.
  *
  * Entries live in the Cloudflare Cache API (free, per data center) and carry
- * a per-app `Cache-Tag`. Any database write that changes what /updates would
- * answer fires a statement-level trigger -> pg_net -> triggers/updates_cache_purge,
- * which purges the tag in every data center through the zone purge API, then
+ * a per-app `Cache-Tag` (bundle-name lookups use a second per-app tag, see
+ * updatesCacheTag.ts). Any database write that changes a cached read fires a
+ * statement-level trigger -> pg_net -> triggers/updates_cache_purge, which
+ * purges the tag in every data center through the zone purge API, then
  * purges again once read replicas caught up. The TTL is only the backstop for
  * a lost purge.
+ *
+ * One switch for every endpoint: `UPDATES_EDGE_CACHE` (off | on | N%), and
+ * one per-device decision (shouldUseUpdatesEdgeCache), so a device sampled in
+ * for /updates is also sampled in for /stats and /channel_self.
  *
  * Per-device data (channel_devices overrides, legacy channel_self store,
  * rollout decisions) is never cached here.
@@ -22,9 +29,12 @@ export { updatesAppCacheTag } from './updatesCacheTag.ts'
 
 const OWNER_CACHE_PATH = '/.updates-edge-owner-v1'
 const CHANNEL_CACHE_PATH = '/.updates-edge-channel-v1'
-export const UPDATES_EDGE_CACHE_DEFAULT_TTL_SECONDS = 300
+const CHANNEL_LOOKUP_CACHE_PATH = '/.updates-edge-channel-lookup-v1'
+const VERSION_CACHE_PATH = '/.updates-edge-version-v1'
+/** Purges are proven in production, so the TTL only covers a lost purge. */
+export const UPDATES_EDGE_CACHE_DEFAULT_TTL_SECONDS = 3600
 const UPDATES_EDGE_CACHE_MIN_TTL_SECONDS = 10
-const UPDATES_EDGE_CACHE_MAX_TTL_SECONDS = 3600
+const UPDATES_EDGE_CACHE_MAX_TTL_SECONDS = 86400
 /** Unknown apps are cached shorter: an apps INSERT purges them anyway. */
 const UPDATES_EDGE_CACHE_NEGATIVE_TTL_SECONDS = 60
 /** Puts run under waitUntil; bound them so they cannot pin the isolate. */
@@ -37,7 +47,8 @@ interface CachedValue<T> {
 }
 
 /**
- * Share of /updates requests served through the edge cache, in basis points
+ * Share of plugin requests (/updates, /stats, /channel_self) served through
+ * the edge cache, in basis points
  * (0-10000). `UPDATES_EDGE_CACHE` accepts `off`, `on`, or a percentage such
  * as `1%`, `0.5` or `25` for a progressive rollout.
  *
@@ -68,7 +79,7 @@ export function getUpdatesEdgeCacheBps(c: Context) {
 
 /**
  * True as soon as any share of traffic uses the edge cache. Tagging (and so
- * purging) then applies to every /updates cache entry, whichever path wrote it.
+ * purging) then applies to every plugin cache entry, whichever path wrote it.
  */
 export function isUpdatesEdgeCacheEnabled(c: Context) {
   return getUpdatesEdgeCacheBps(c) > 0
@@ -88,8 +99,10 @@ export function updatesEdgeCacheBucket(appId: string, deviceId: string) {
 const sampledRequests = new WeakMap<object, boolean>()
 
 /**
- * Decides once per request whether this device uses the edge cache, and
- * remembers it for the rest of the request.
+ * The single edge cache gate of every plugin endpoint (/updates, /stats,
+ * /channel_self). Decides once per request whether this device uses the edge
+ * cache, and remembers it for the rest of the request. The bucket depends on
+ * app id + device id only, so a device gets the same answer on every endpoint.
  */
 export function shouldUseUpdatesEdgeCache(c: Context, appId: string, deviceId: string) {
   const known = sampledRequests.get(c.req.raw)
@@ -120,7 +133,7 @@ export interface EdgeCacheLookup<T> {
 
 async function cachedLookup<T>(
   c: Context,
-  appId: string,
+  tags: string[],
   path: string,
   params: Record<string, string>,
   load: () => Promise<T | null | undefined>,
@@ -133,7 +146,9 @@ async function cachedLookup<T>(
     return { value: cached.v, hit: true }
 
   // Loader errors propagate: a failed read must never be cached as "missing".
-  const value = (await load()) ?? null
+  // The refill reads the replica itself, past Hyperdrive's query cache: right
+  // after a purge that cache can still hold the pre-change rows.
+  const value = (await withFreshReads(load)) ?? null
   let ttl = getUpdatesEdgeCacheTtlSeconds(c)
   if (value === null)
     ttl = Math.min(ttl, UPDATES_EDGE_CACHE_NEGATIVE_TTL_SECONDS)
@@ -141,7 +156,7 @@ async function cachedLookup<T>(
   if (cap !== undefined)
     ttl = Math.max(1, Math.min(ttl, cap))
   await backgroundTask(c, helper.putJson(request, { v: value } satisfies CachedValue<T>, ttl, {
-    tags: [updatesAppCacheTag(appId)],
+    tags,
     timeoutMs: UPDATES_EDGE_CACHE_PUT_TIMEOUT_MS,
   }))
   return { value, hit: false }
@@ -165,7 +180,7 @@ export function planValidityTtlCapSeconds(owner: { plan_valid?: boolean, plan_tr
 }
 
 export function getCachedAppOwner<T extends { plan_valid?: boolean, plan_trial_at?: string | null }>(c: Context, appId: string, planKey: string, load: () => Promise<T | null>) {
-  return cachedLookup(c, appId, OWNER_CACHE_PATH, { app_id: appId, plan: planKey }, load, planValidityTtlCapSeconds)
+  return cachedLookup(c, [updatesAppCacheTag(appId)], OWNER_CACHE_PATH, { app_id: appId, plan: planKey }, load, planValidityTtlCapSeconds)
 }
 
 export interface UpdatesChannelCacheKey {
@@ -177,11 +192,33 @@ export interface UpdatesChannelCacheKey {
 }
 
 export function getCachedDefaultChannel<T>(c: Context, key: UpdatesChannelCacheKey, load: () => Promise<T | null | undefined>) {
-  return cachedLookup(c, key.appId, CHANNEL_CACHE_PATH, {
+  return cachedLookup(c, [updatesAppCacheTag(key.appId)], CHANNEL_CACHE_PATH, {
     app_id: key.appId,
     platform: key.platform,
     channel: key.defaultChannel,
     mode: key.mode,
     meta: key.includeMetadata ? '1' : '0',
   }, load)
+}
+
+/**
+ * App-level channel lookups of /stats and /channel_self (channel by id or
+ * name, public default channel, compatible channel list). `lookup` names the
+ * query shape and `params` its inputs; the channels trigger purges the app tag
+ * on any change of the compared channel columns.
+ */
+export function getCachedChannelLookup<T>(c: Context, appId: string, lookup: string, params: Record<string, string>, load: () => Promise<T | null | undefined>) {
+  return cachedLookup(c, [updatesAppCacheTag(appId)], CHANNEL_LOOKUP_CACHE_PATH, { ...params, app_id: appId, lookup }, load)
+}
+
+/**
+ * Bundle by name (id + owner_org, deleted rows included). Carries the app's
+ * versions tag: app_versions INSERT / DELETE / rename / move purge it whether
+ * or not a channel serves the bundle, without evicting the app's main tag.
+ * It also carries the main tag, so any app purge (including one from a purge
+ * worker that predates the versions scope) evicts it too: an over-purge of a
+ * cheap entry, never a missed one.
+ */
+export function getCachedAppVersion<T>(c: Context, appId: string, versionName: string, load: () => Promise<T | null | undefined>) {
+  return cachedLookup(c, [updatesVersionsCacheTag(appId), updatesAppCacheTag(appId)], VERSION_CACHE_PATH, { app_id: appId, name: versionName }, load)
 }
