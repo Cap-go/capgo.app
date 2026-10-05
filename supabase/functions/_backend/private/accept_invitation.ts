@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
@@ -154,9 +155,11 @@ async function ensureOrgMembership(
   userId: string,
   invitation: { invite_magic_string: string, org_id: string },
 ) {
-  const pgClient = getPgClient(c)
+  const pgPool = getPgClient(c, false)
+  let pgClient: PoolClient | null = null
   let status: string | undefined
   try {
+    pgClient = await pgPool.connect()
     const result = await pgClient.query<{ accept_tmp_user_invitation: string }>(
       `SELECT public.accept_tmp_user_invitation($1, $2::uuid) AS accept_tmp_user_invitation`,
       [invitation.invite_magic_string, userId],
@@ -178,7 +181,8 @@ async function ensureOrgMembership(
     return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation', { error: message })
   }
   finally {
-    await closeClient(c, pgClient)
+    pgClient?.release()
+    await closeClient(c, pgPool)
   }
 
   if (status === 'OK')
