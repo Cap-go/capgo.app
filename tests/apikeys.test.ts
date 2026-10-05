@@ -183,8 +183,12 @@ async function postApiKey(
           existingIdsForName = new Set(idsBeforePost)
       }
 
+      const postRemainingMs = deadline - Date.now()
+      if (postRemainingMs <= 0)
+        throw new Error('POST /apikey timed out after 15s waiting for gateway response')
+
       const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), remainingMs)
+      const timeout = setTimeout(() => controller.abort(), postRemainingMs)
 
       let response: Response
       let responseBody = ''
