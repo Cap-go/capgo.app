@@ -1,6 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { bypassHyperdriveCache, freshQueryArgs, inFreshReads, withFreshReads } from '../supabase/functions/_backend/plugin_runtime/utils/hyperdriveFreshRead.ts'
+import { createLazyPgClient, getDrizzleClient } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
 import { getCachedAppOwner } from '../supabase/functions/_backend/plugin_runtime/utils/updatesEdgeCache.ts'
+
+/** SQL text each query reached the driver with (pg is mocked below). */
+const sentQueries = vi.hoisted(() => [] as string[])
+
+vi.mock('pg', () => {
+  class FakePool {
+    on() {}
+    async query(config: string | { text: string }) {
+      sentQueries.push(typeof config === 'string' ? config : config.text)
+      return { rows: [], fields: [], rowCount: 0, command: 'SELECT' }
+    }
+
+    async end() {}
+  }
+  return { Pool: FakePool, Client: FakePool, default: { Pool: FakePool, Client: FakePool } }
+})
 
 function makeContext() {
   const raw = new Request('https://plugin.capgo.test/updates', { method: 'POST' })
@@ -58,6 +75,26 @@ describe('edge cache refills', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
     vi.unstubAllEnvs()
+  })
+
+  it('send the refill SQL with the uncacheable CTE, other queries unchanged', async () => {
+    vi.stubEnv('MAIN_SUPABASE_DB_URL', 'postgresql://user:pass@127.0.0.1:5432/postgres')
+    sentQueries.length = 0
+    const c = makeContext()
+    const lazy = createLazyPgClient(c)
+    const db = getDrizzleClient(lazy.client, { logger: false })
+    const load = async () => {
+      await db.execute('select 1 as refill')
+      return { owner_org: 'org-1', plan_valid: true }
+    }
+    await getCachedAppOwner(c, 'com.example.app', 'mau', load)
+    await db.execute('select 2 as live')
+    await lazy.close()
+
+    expect(sentQueries).toEqual([
+      'WITH capgo_fresh_read AS (SELECT now()) select 1 as refill',
+      'select 2 as live',
+    ])
   })
 
   it('run their loader past the Hyperdrive query cache', async () => {

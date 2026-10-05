@@ -39,6 +39,81 @@ export type Database = {
   }
   public: {
     Tables: {
+      r2_inventory_checkpoints: {
+        Row: {
+          bucket_name: string
+          job_name: string
+          partition_key: string
+          accepted_event_floor: string | null
+          checkpoint: Json
+          updated_at: string
+        }
+        Insert: {
+          bucket_name: string
+          job_name: string
+          partition_key?: string
+          accepted_event_floor?: string | null
+          checkpoint?: Json
+          updated_at?: string
+        }
+        Update: {
+          bucket_name?: string
+          job_name?: string
+          partition_key?: string
+          accepted_event_floor?: string | null
+          checkpoint?: Json
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      r2_objects: {
+        Row: {
+          bucket_name: string
+          r2_key: string
+          r2_state: Database["public"]["Enums"]["r2_object_state"]
+          size_bytes: number | null
+          etag: string | null
+          r2_last_modified_at: string | null
+          last_event_at: string | null
+          last_reconciled_at: string | null
+          tombstone_expires_at: string | null
+          cleanup_requested_at: string | null
+          first_seen_at: string
+          updated_at: string
+          revision: number
+        }
+        Insert: {
+          bucket_name: string
+          r2_key: string
+          r2_state: Database["public"]["Enums"]["r2_object_state"]
+          size_bytes?: number | null
+          etag?: string | null
+          r2_last_modified_at?: string | null
+          last_event_at?: string | null
+          last_reconciled_at?: string | null
+          tombstone_expires_at?: string | null
+          cleanup_requested_at?: string | null
+          first_seen_at?: string
+          updated_at?: string
+          revision?: number
+        }
+        Update: {
+          bucket_name?: string
+          r2_key?: string
+          r2_state?: Database["public"]["Enums"]["r2_object_state"]
+          size_bytes?: number | null
+          etag?: string | null
+          r2_last_modified_at?: string | null
+          last_event_at?: string | null
+          last_reconciled_at?: string | null
+          tombstone_expires_at?: string | null
+          cleanup_requested_at?: string | null
+          first_seen_at?: string
+          updated_at?: string
+          revision?: number
+        }
+        Relationships: []
+      }
       apikey_global_permissions: {
         Row: {
           apikey_rbac_id: string
@@ -3600,7 +3675,6 @@ export type Database = {
           lease_token: string | null
           leased_until: string | null
           scope: string
-          zone_id: string | null
         }
         Insert: {
           app_id: string
@@ -3610,7 +3684,6 @@ export type Database = {
           lease_token?: string | null
           leased_until?: string | null
           scope?: string
-          zone_id?: string | null
         }
         Update: {
           app_id?: string
@@ -3620,7 +3693,6 @@ export type Database = {
           lease_token?: string | null
           leased_until?: string | null
           scope?: string
-          zone_id?: string | null
         }
         Relationships: []
       }
@@ -4209,7 +4281,6 @@ export type Database = {
       ack_updates_cache_purge: {
         Args: {
           p_lease_token: string
-          p_requeue?: Json
           p_retry_after_seconds?: number
           p_success: boolean
         }
@@ -6047,6 +6118,7 @@ export type Database = {
       wake_updates_cache_purge_if_due: { Args: never; Returns: undefined }
     }
     Enums: {
+      r2_object_state: "to_be_uploaded" | "present" | "to_be_deleted" | "deleted"
       action_type: "mau" | "storage" | "bandwidth" | "build_time"
       channel_update_package:
         | "all"
@@ -6327,6 +6399,7 @@ export const Constants = {
   },
   public: {
     Enums: {
+      r2_object_state: ["to_be_uploaded", "present", "to_be_deleted", "deleted"],
       action_type: ["mau", "storage", "bandwidth", "build_time"],
       channel_update_package: [
         "all",

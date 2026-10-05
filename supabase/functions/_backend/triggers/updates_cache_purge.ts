@@ -9,13 +9,9 @@
 //   claim_updates_cache_purge() -> purge -> ack_updates_cache_purge()
 // Claims are limited to one per second across all callers, so the Cloudflare
 // rate stays bounded whatever the backlog. A successful first purge schedules
-// re-purges (+3s / +10s / +60s / +180s) for replica lag. Zones are settled
-// independently: a failed zone call requeues only that zone's tags at their
-// Retry-After, and Free-plan zones (5 purge calls per minute) are never called
-// inline: their tags are queued on a shared slot every SLOW_ZONE_SLOT_SECONDS,
-// so all changes of a slot share one call. Claims lease rows, so a crash
-// before the ack only delays them. Every failure is soft: the cache TTL is the
-// backstop.
+// re-purges (+3s / +10s / +60s / +180s) for replica lag; failed apps go back to the
+// queue at their Retry-After. Claims lease rows, so a crash before the ack
+// only delays them. Every failure is soft: the cache TTL is the backstop.
 //
 // Token: CF_CACHE_PURGE_TOKEN, else the existing CF_ANALYTICS_TOKEN once it is
 // granted Zone Read + Cache Purge. Zones are the plugin worker's own zones,
@@ -44,8 +40,6 @@ const ZONE_DISCOVERY_RETRY_SECONDS = 30
 const DRAIN_BUDGET_MS = 20_000
 const MAX_THROTTLE_WAIT_MS = 1500
 const ZONE_LIST_TTL_MS = 60 * 60 * 1000
-/** Free-plan zones allow 5 purge calls per minute: one shared call per slot leaves headroom. */
-export const SLOW_ZONE_SLOT_SECONDS = 15
 const FORWARDED_HEADER = 'x-capgo-purge-forwarded'
 
 /** Dedicated purge token, else the account's existing Cloudflare API token. */
@@ -53,13 +47,7 @@ export function getPurgeToken(c: Context) {
   return getEnv(c, 'CF_CACHE_PURGE_TOKEN') || getEnv(c, 'CF_ANALYTICS_TOKEN')
 }
 
-export interface PurgeZone {
-  id: string
-  /** Free plan: purge calls are paced through shared slots. */
-  slow: boolean
-}
-
-let zoneListCache: { token: string, zones: PurgeZone[], expiresAt: number } | null = null
+let zoneListCache: { token: string, zoneIds: string[], expiresAt: number } | null = null
 
 /**
  * True when a Cloudflare zone can hold plugin cache entries: it is named by a
@@ -71,8 +59,8 @@ export function isPluginZone(zoneName: string, hosts: readonly string[] = PLUGIN
 }
 
 /** Pages through the account zones the token can read and keeps the plugin's zones. */
-async function fetchPluginZones(token: string): Promise<PurgeZone[]> {
-  const zones: PurgeZone[] = []
+async function fetchPluginZoneIds(token: string): Promise<string[]> {
+  const zoneIds: string[] = []
   for (let page = 1, totalPages = 1; page <= Math.min(totalPages, 20); page++) {
     const response = await fetch(`https://api.cloudflare.com/client/v4/zones?status=active&per_page=50&page=${page}`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -80,45 +68,41 @@ async function fetchPluginZones(token: string): Promise<PurgeZone[]> {
     })
     if (!response.ok)
       throw new Error(`zone list HTTP ${response.status}`)
-    const body = await response.json() as { result?: { id?: string, name?: string, plan?: { legacy_id?: string } }[], result_info?: { total_pages?: number } }
+    const body = await response.json() as { result?: { id?: string, name?: string }[], result_info?: { total_pages?: number } }
     totalPages = body.result_info?.total_pages ?? 1
-    for (const zone of body.result ?? []) {
-      if (zone.id && zone.name && isPluginZone(zone.name))
-        zones.push({ id: zone.id, slow: zone.plan?.legacy_id === 'free' })
-    }
+    zoneIds.push(...(body.result ?? []).filter(zone => zone.id && zone.name && isPluginZone(zone.name)).map(zone => zone.id as string))
   }
-  return zones
+  return zoneIds
 }
 
-let zoneListInflight: { token: string, promise: Promise<PurgeZone[]> } | null = null
+let zoneListInflight: { token: string, promise: Promise<string[]> } | null = null
 
 /**
- * Zones to purge: the explicit override (treated as fast zones), else the
- * zones of the account the plugin worker is routed on (from
- * cloudflare_workers/plugin/wrangler.jsonc) with their plan, looked up once per
- * hour. Concurrent callers share one lookup. A token scoped to all zones purges
- * only those.
+ * Zone ids to purge: the explicit override, else the zones of the account
+ * the plugin worker is routed on (from cloudflare_workers/plugin/wrangler.jsonc),
+ * looked up once per hour. Concurrent callers share one lookup. A token scoped
+ * to all zones purges only those.
  */
-export async function resolvePurgeZones(c: Context, token: string): Promise<PurgeZone[]> {
+export async function resolvePurgeZoneIds(c: Context, token: string): Promise<string[]> {
   const override = parseCsv(getEnv(c, 'CF_CACHE_PURGE_ZONE_IDS'))
   if (override.length > 0)
-    return override.map(id => ({ id, slow: false }))
+    return override
   if (zoneListCache?.token === token && zoneListCache.expiresAt > Date.now())
-    return zoneListCache.zones
+    return zoneListCache.zoneIds
   if (zoneListInflight?.token !== token)
-    zoneListInflight = { token, promise: fetchPluginZones(token) }
+    zoneListInflight = { token, promise: fetchPluginZoneIds(token) }
   const inflight = zoneListInflight
 
   try {
-    const zones = await inflight.promise
-    zoneListCache = { token, zones, expiresAt: Date.now() + ZONE_LIST_TTL_MS }
-    if (zones.length === 0)
+    const zoneIds = await inflight.promise
+    zoneListCache = { token, zoneIds, expiresAt: Date.now() + ZONE_LIST_TTL_MS }
+    if (zoneIds.length === 0)
       cloudlog({ requestId: c.get('requestId'), message: 'updates cache purge found no plugin zone for the token' })
-    return zones
+    return zoneIds
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge zone discovery failed', error: serializeError(error) })
-    return zoneListCache?.token === token ? zoneListCache.zones : []
+    return zoneListCache?.token === token ? zoneListCache.zoneIds : []
   }
   finally {
     if (zoneListInflight === inflight)
@@ -143,41 +127,13 @@ export function parseCsv(raw: string): string[] {
   return raw.split(',').map(value => value.trim()).filter(Boolean)
 }
 
-/** One claimed row: an (app, scope) pair, for every zone or for one zone. */
-export interface PurgeRow {
-  app_id: string
-  /** Missing before the versions-scope migration: treated as 'app'. */
-  scope?: string
-  /** Missing or null: every zone. */
-  zone_id?: string | null
-}
-
-/** A per-zone row for ack_updates_cache_purge(p_requeue). */
-export interface ZoneRequeue {
-  app_id: string
-  scope: string
-  zone_id: string
-  delay_seconds: number
-  /** Due time rounded up to a multiple of this (0: exact). */
-  slot_seconds: number
-}
-
 export interface PurgeResult {
   /** A purge target exists (token or local purge URL). */
   configured: boolean
   calls: number
   failed: number
-  /** The whole batch must go back to the queue (zone discovery or local purge failed). */
-  retryAll: boolean
-  /** Retry-After for `retryAll`, in seconds. */
+  /** Largest Retry-After seen on a failed call, in seconds. */
   retryAfterSeconds: number
-  /** Per-zone rows to queue: failed zone calls and slow-zone deferrals. */
-  requeue: ZoneRequeue[]
-}
-
-interface PurgePair {
-  app_id: string
-  scope: string
 }
 
 function parseRetryAfterSeconds(response: Response) {
@@ -185,93 +141,55 @@ function parseRetryAfterSeconds(response: Response) {
   return Number.isFinite(value) && value > 0 ? Math.ceil(value) : DEFAULT_RETRY_AFTER_SECONDS
 }
 
-/** Distinct (app, scope) pairs of the matching rows, keyed by their tag. */
-function pairsByTag(rows: PurgeRow[], match: (row: PurgeRow) => boolean) {
-  const pairs = new Map<string, PurgePair>()
-  for (const row of rows) {
-    if (!match(row))
-      continue
-    const scope = row.scope ?? 'app'
-    pairs.set(updatesCacheTagForScope(row.app_id, scope), { app_id: row.app_id, scope })
-  }
-  return pairs
-}
-
 /**
- * Purges the tags in chunks of 100. No in-worker retries: returns the pairs
- * of the failed calls with their Retry-After.
+ * One call per zone (and to the local emulator when set), sequentially. No
+ * in-worker retries: failures are reported so the caller can requeue them at
+ * their Retry-After.
  */
-async function purgeTarget(c: Context, result: PurgeResult, target: { url: string, headers: Record<string, string> }, pairs: Map<string, PurgePair>) {
-  const failed: { pair: PurgePair, retryAfterSeconds: number }[] = []
-  for (const tagChunk of chunk([...pairs.keys()], PURGE_TAGS_PER_CALL)) {
-    result.calls++
-    let retryAfterSeconds = 0
-    try {
-      const response = await fetch(target.url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...target.headers },
-        body: JSON.stringify({ tags: tagChunk }),
-        signal: AbortSignal.timeout(PURGE_TIMEOUT_MS),
-      })
-      // Cloudflare can answer 200 with { success: false }: only an explicit
-      // success counts as purged.
-      const body = await response.json().catch(() => null) as { success?: boolean } | null
-      if (!response.ok || body?.success === false) {
-        retryAfterSeconds = parseRetryAfterSeconds(response)
-        cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge failed', url: target.url, status: response.status, cfSuccess: body?.success, tags: tagChunk.length })
-      }
-    }
-    catch (error) {
-      retryAfterSeconds = DEFAULT_RETRY_AFTER_SECONDS
-      cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge error', url: target.url, error: serializeError(error) })
-    }
-    if (retryAfterSeconds > 0) {
-      result.failed++
-      for (const tag of tagChunk)
-        failed.push({ pair: pairs.get(tag) as PurgePair, retryAfterSeconds })
-    }
-  }
-  return failed
-}
-
-/**
- * Purges claimed rows: one call per fast zone (rows for every zone or for
- * that zone), then the local emulator when set. Slow zones only get their
- * own rows; rows for every zone are deferred to their next slot instead.
- */
-export async function purgeUpdatesCacheRows(c: Context, rows: PurgeRow[]): Promise<PurgeResult> {
+export async function purgeUpdatesCacheTags(c: Context, tags: string[]): Promise<PurgeResult> {
   const token = getPurgeToken(c)
   const localPurgeUrl = getEnv(c, 'UPDATES_CACHE_LOCAL_PURGE_URL')
-  const result: PurgeResult = { configured: Boolean(token || localPurgeUrl), calls: 0, failed: 0, retryAll: false, retryAfterSeconds: 0, requeue: [] }
+  const result: PurgeResult = { configured: Boolean(token || localPurgeUrl), calls: 0, failed: 0, retryAfterSeconds: 0 }
+  const targets: { url: string, headers: Record<string, string>, cloudflare: boolean }[] = []
 
   if (token) {
-    const zones = await resolvePurgeZones(c, token)
-    if (zones.length === 0) {
+    const zoneIds = await resolvePurgeZoneIds(c, token)
+    if (zoneIds.length === 0) {
       // Discovery failed or the token sees no plugin zone: retry later.
       result.failed++
-      result.retryAll = true
       result.retryAfterSeconds = ZONE_DISCOVERY_RETRY_SECONDS
     }
-    for (const zone of zones) {
-      const slotSeconds = zone.slow ? SLOW_ZONE_SLOT_SECONDS : 0
-      if (zone.slow) {
-        for (const pair of pairsByTag(rows, row => !row.zone_id).values())
-          result.requeue.push({ ...pair, zone_id: zone.id, delay_seconds: 0, slot_seconds: slotSeconds })
-      }
-      const pairs = pairsByTag(rows, row => row.zone_id === zone.id || (!zone.slow && !row.zone_id))
-      const failed = await purgeTarget(c, result, {
-        url: `https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(zone.id)}/purge_cache`,
-        headers: { Authorization: `Bearer ${token}` },
-      }, pairs)
-      for (const { pair, retryAfterSeconds } of failed)
-        result.requeue.push({ ...pair, zone_id: zone.id, delay_seconds: retryAfterSeconds, slot_seconds: slotSeconds })
-    }
+    for (const zoneId of zoneIds)
+      targets.push({ url: `https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(zoneId)}/purge_cache`, headers: { Authorization: `Bearer ${token}` }, cloudflare: true })
   }
-  if (localPurgeUrl) {
-    const failed = await purgeTarget(c, result, { url: localPurgeUrl, headers: { apisecret: getEnv(c, 'API_SECRET') } }, pairsByTag(rows, row => !row.zone_id))
-    if (failed.length > 0) {
-      result.retryAll = true
-      result.retryAfterSeconds = Math.max(result.retryAfterSeconds, ...failed.map(entry => entry.retryAfterSeconds))
+  if (localPurgeUrl)
+    targets.push({ url: localPurgeUrl, headers: { apisecret: getEnv(c, 'API_SECRET') }, cloudflare: false })
+
+  for (const target of targets) {
+    for (const tagChunk of chunk(tags, PURGE_TAGS_PER_CALL)) {
+      result.calls++
+      try {
+        const response = await fetch(target.url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...target.headers },
+          body: JSON.stringify({ tags: tagChunk }),
+          signal: AbortSignal.timeout(PURGE_TIMEOUT_MS),
+        })
+        // Cloudflare can answer 200 without a success flag or with
+        // { success: false }: only an explicit success counts as purged. The
+        // local emulator answers its own { status: 'ok' } contract.
+        const body = await response.json().catch(() => null) as { success?: boolean } | null
+        if (!response.ok || (target.cloudflare && body?.success !== true)) {
+          result.failed++
+          result.retryAfterSeconds = Math.max(result.retryAfterSeconds, parseRetryAfterSeconds(response))
+          cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge failed', url: target.url, status: response.status, cfSuccess: body?.success, tags: tagChunk.length })
+        }
+      }
+      catch (error) {
+        result.failed++
+        result.retryAfterSeconds = Math.max(result.retryAfterSeconds, DEFAULT_RETRY_AFTER_SECONDS)
+        cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge error', url: target.url, error: serializeError(error) })
+      }
     }
   }
   return result
@@ -283,7 +201,8 @@ interface ClaimResult {
   status: 'busy' | 'throttled' | 'empty' | 'ok'
   wait_ms?: number
   lease_token?: string
-  apps?: (PurgeRow & { initial: boolean })[]
+  /** `scope` is missing before the versions-scope migration: treated as 'app'. */
+  apps?: { app_id: string, scope?: string, initial: boolean }[]
   has_more?: boolean
 }
 
@@ -332,20 +251,19 @@ export async function drainUpdatesCachePurge(
     claimed = true
 
     const apps = claim.apps
-    const result = await purgeUpdatesCacheRows(c, apps)
-    const ok = result.configured && !result.retryAll
-    // Success deletes the leased rows (and schedules re-purges) and queues the
-    // per-zone rows; failure releases them at the Retry-After. A crash before
-    // this leaves the lease to expire, so the rows are claimed again.
+    const result = await purgeUpdatesCacheTags(c, apps.map(app => updatesCacheTagForScope(app.app_id, app.scope)))
+    const ok = result.configured && result.failed === 0
+    // Success deletes the leased rows (and schedules re-purges); failure
+    // releases them at the Retry-After. A crash before this leaves the lease
+    // to expire, so the rows are claimed again.
     const { error: ackError } = await rpc('ack_updates_cache_purge', {
       p_lease_token: claim.lease_token,
       p_success: ok,
       p_retry_after_seconds: result.retryAfterSeconds || DEFAULT_RETRY_AFTER_SECONDS,
-      ...(ok && result.requeue.length > 0 ? { p_requeue: result.requeue } : {}),
     })
     if (ackError)
       cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge ack failed', error: serializeError(ackError) })
-    cloudlog({ requestId: c.get('requestId'), message: 'updates cache purged', apps: apps.length, calls: result.calls, failed: result.failed, requeued: result.requeue.length })
+    cloudlog({ requestId: c.get('requestId'), message: 'updates cache purged', apps: apps.length, calls: result.calls, failed: result.failed })
     if (ok)
       purgedApps += apps.length
     if (!claim.has_more)

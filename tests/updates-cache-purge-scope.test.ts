@@ -140,57 +140,14 @@ describe('updates cache purge scopes', () => {
         ['versions', false],
         ['versions', false],
       ])
-      // Re-purges are scheduled +3s / +10s / +60s / +180s from the ack; allow for test latency.
+      // Re-purges are scheduled +3s / +10s / +60s / +180s from the ack. Test
+      // latency only shortens the remaining delay; 1s of slack keeps the +3s
+      // entry from passing as an immediate re-purge.
       const expected = [3, 10, 60, 180, 3, 10, 60, 180]
       rows.forEach((row, index) => {
         expect(row.delay).toBeLessThanOrEqual(expected[index])
-        expect(row.delay).toBeGreaterThan(expected[index] - 5)
+        expect(row.delay).toBeGreaterThan(expected[index] - 1)
       })
-    })
-  })
-
-  it('queues per-zone rows on their slot and claims them apart from every-zone rows', async () => {
-    const fastZone = 'a'.repeat(32)
-    const slowZone = 'b'.repeat(32)
-    await inTransaction(async () => {
-      await client.query('DELETE FROM public.updates_cache_purge_pending')
-      await client.query(`UPDATE public.updates_cache_purge_state SET last_claim_at = '-infinity'`)
-      await client.query(`UPDATE public.channels SET allow_emulator = NOT allow_emulator WHERE app_id = $1 AND name = 'production'`, [APP_ID])
-
-      const { rows: [{ claim }] } = await client.query<{ claim: { lease_token: string, apps: { app_id: string, zone_id: string | null }[] } }>(
-        'SELECT public.claim_updates_cache_purge(100) AS claim',
-      )
-      expect(claim.apps).toEqual([{ app_id: APP_ID, scope: 'app', zone_id: null, initial: true }])
-
-      await client.query('SELECT public.ack_updates_cache_purge($1, true, 5, $2::jsonb)', [claim.lease_token, JSON.stringify([
-        // Slow zone deferral: due on the next 15s slot.
-        { app_id: APP_ID, scope: 'app', zone_id: slowZone, delay_seconds: 0, slot_seconds: 15 },
-        // Failed fast zone call: due after its Retry-After.
-        { app_id: APP_ID, scope: 'app', zone_id: fastZone, delay_seconds: 7, slot_seconds: 0 },
-        // Invalid rows are ignored.
-        { app_id: APP_ID, scope: 'app', zone_id: 'not-a-zone', delay_seconds: 0, slot_seconds: 0 },
-        { app_id: APP_ID, scope: 'bogus', zone_id: fastZone, delay_seconds: 0, slot_seconds: 0 },
-      ])])
-
-      const { rows } = await client.query<{ zone_id: string, delay: number, slot_aligned: boolean }>(
-        `SELECT zone_id, extract(epoch FROM due_at - clock_timestamp())::float8 AS delay,
-                extract(epoch FROM due_at)::numeric % 15 = 0 AS slot_aligned
-         FROM public.updates_cache_purge_pending WHERE app_id = $1 AND zone_id IS NOT NULL ORDER BY zone_id`,
-        [APP_ID],
-      )
-      expect(rows.map(row => row.zone_id)).toEqual([fastZone, slowZone])
-      expect(rows[0].delay).toBeGreaterThan(2)
-      expect(rows[0].delay).toBeLessThanOrEqual(7)
-      expect(rows[1].slot_aligned).toBe(true)
-      expect(rows[1].delay).toBeLessThanOrEqual(15)
-
-      // Due zone rows are claimed per zone, next to the every-zone rows.
-      await client.query(`UPDATE public.updates_cache_purge_pending SET due_at = clock_timestamp() - interval '1 second' WHERE app_id = $1`, [APP_ID])
-      await client.query(`UPDATE public.updates_cache_purge_state SET last_claim_at = '-infinity'`)
-      const { rows: [{ claim: next }] } = await client.query<{ claim: { apps: { app_id: string, zone_id: string | null }[] } }>(
-        'SELECT public.claim_updates_cache_purge(100) AS claim',
-      )
-      expect(next.apps.map(app => app.zone_id).sort()).toEqual([fastZone, slowZone, null].sort())
     })
   })
 
