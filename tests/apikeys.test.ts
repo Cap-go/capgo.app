@@ -105,27 +105,42 @@ async function withFetchDeadline<T>(
   }
 }
 
-async function deleteApiKeysByName(
+async function listApiKeyIdsByName(
   name: string,
   headers: Record<string, string>,
   deadlineMs: number,
+): Promise<number[] | null> {
+  const listed = await withFetchDeadline(deadlineMs, async (signal) => {
+    const listResponse = await fetch(`${BASE_URL}/apikey`, { headers, signal })
+    if (!listResponse.ok)
+      return null
+    return await listResponse.json() as Array<{ id: number, name: string }>
+  })
+  if (listed === null)
+    return null
+  return listed.filter(key => key.name === name).map(key => key.id)
+}
+
+async function deleteNewApiKeysByName(
+  name: string,
+  headers: Record<string, string>,
+  deadlineMs: number,
+  existingIds: ReadonlySet<number>,
 ): Promise<boolean> {
   try {
-    const listed = await withFetchDeadline(deadlineMs, async (signal) => {
-      const listResponse = await fetch(`${BASE_URL}/apikey`, { headers, signal })
-      if (!listResponse.ok)
-        return null
-      return await listResponse.json() as Array<{ id: number, name: string }>
-    })
-    if (listed === null)
+    const ids = await listApiKeyIdsByName(name, headers, deadlineMs)
+    if (ids === null)
       return false
 
-    const matchingKeys = listed.filter(key => key.name === name)
-    const results = await Promise.allSettled(matchingKeys.map(async (key) => {
+    const newIds = ids.filter(id => !existingIds.has(id))
+    if (newIds.length === 0)
+      return true
+
+    const results = await Promise.allSettled(newIds.map(async (id) => {
       await withFetchDeadline(deadlineMs, async (signal) => {
-        const deleteResponse = await fetch(`${BASE_URL}/apikey/${key.id}`, { method: 'DELETE', headers, signal })
+        const deleteResponse = await fetch(`${BASE_URL}/apikey/${id}`, { method: 'DELETE', headers, signal })
         if (!deleteResponse.ok)
-          throw new Error(`DELETE /apikey/${key.id} failed with ${deleteResponse.status}`)
+          throw new Error(`DELETE /apikey/${id} failed with ${deleteResponse.status}`)
       })
     }))
     return results.every(result => result.status === 'fulfilled')
@@ -159,6 +174,15 @@ async function postApiKey(
       if (remainingMs <= 0)
         throw new Error('POST /apikey timed out after 15s waiting for gateway response')
 
+      let existingIdsForName: Set<number> | undefined
+      if (keyName) {
+        const idsBeforePost = await listApiKeyIdsByName(keyName, headers, deadline)
+        if (idsBeforePost === null)
+          existingIdsForName = undefined
+        else
+          existingIdsForName = new Set(idsBeforePost)
+      }
+
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), remainingMs)
 
@@ -185,8 +209,12 @@ async function postApiKey(
         return response
 
       // Create-safe retry: a 502 may have persisted the key without returning 200.
-      if (keyName && !await deleteApiKeysByName(keyName, headers, deadline))
-        return response
+      if (keyName) {
+        if (existingIdsForName === undefined)
+          return response
+        if (!await deleteNewApiKeysByName(keyName, headers, deadline, existingIdsForName))
+          return response
+      }
 
       if (Date.now() >= deadline)
         return response
