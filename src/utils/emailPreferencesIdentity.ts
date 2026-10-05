@@ -11,13 +11,15 @@ function readQueryParam(value: unknown): string {
     return ''
   if (Array.isArray(value)) {
     for (const entry of value) {
-      const trimmed = String(entry ?? '').trim()
+      const trimmed = typeof entry === 'string' ? entry.trim() : ''
       if (trimmed)
         return trimmed
     }
     return ''
   }
-  return String(value).trim()
+  if (typeof value === 'string')
+    return value.trim()
+  return ''
 }
 
 export function parseEmailPreferencesQuery(query: Record<string, unknown>): {

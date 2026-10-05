@@ -123,7 +123,7 @@ Legacy URL (already-sent emails; still works):
 https://console.capgo.app/email-preferences?email={{ visitor.email }}
 ```
 
-Do **not** use `?email={{ visitor.uuid }}` — the console treats UUID-shaped `email` values as a Bento visitor id and resolves them server-side, but the field will stay empty until lookup completes. Use the `uuid` query param for new footers.
+Do **not** use `?email={{ visitor.uuid }}` — the console treats UUID-shaped `email` values as a Bento visitor id and resolves them server-side, but the Email field stays empty unless that lookup returns an address. Use the `uuid` query param for new footers.
 
 - Prefills the address only — the visitor chooses what to disable
 - `uuid` is resolved server-side via Bento `GET /fetch/subscribers` so the email never appears in the page URL
