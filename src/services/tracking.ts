@@ -72,6 +72,7 @@ export async function sendEvent(payload: TrackOptions): Promise<null> {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(payload),
+          keepalive: true,
           signal: controller.signal,
         })
 
