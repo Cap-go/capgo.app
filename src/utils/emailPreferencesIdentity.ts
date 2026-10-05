@@ -5,6 +5,7 @@ export function isVisitorUuid(value: string): boolean {
   return VISITOR_UUID_RE.test(value.trim())
 }
 
+/** Vue Router may supply string[] when a query key is repeated. */
 function readQueryParam(value: unknown): string {
   if (value == null)
     return ''
