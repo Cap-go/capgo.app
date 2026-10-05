@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import type { StripeData } from './stripe.ts'
 import Stripe from 'stripe'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { getStripe, parsePriceIds } from './stripe.ts'
+import { getRecurringCreditsPerMonth, getStripe, isRecurringCreditItem, parsePriceIds } from './stripe.ts'
 import { getEnv } from './utils.ts'
 
 export function parseStripeEvent(c: Context, body: string, signature: string) {
@@ -17,8 +17,10 @@ export function parseStripeEvent(c: Context, body: string, signature: string) {
   )
 }
 
+// The plan item: recurring credit items are licensed too, so skip them.
 function getLicensedSubscriptionItem(items: Stripe.SubscriptionItem[] | undefined) {
-  return items?.find(item => item.plan.usage_type === 'licensed') ?? items?.[0]
+  const planItems = items?.filter(item => !isRecurringCreditItem(item))
+  return planItems?.find(item => item.plan.usage_type === 'licensed') ?? planItems?.[0]
 }
 
 function getSubscriptionInterval(item: Stripe.SubscriptionItem | undefined) {
@@ -87,6 +89,7 @@ function subscriptionUpdated(c: Context, event: Stripe.CustomerSubscriptionCreat
   }
   data.subscription_id = subscription.id
   data.customer_id = String(subscription.customer)
+  data.recurring_credits = getRecurringCreditsPerMonth(subscription.items.data)
 
   // Only treat a billing cadence change from monthly to yearly as an upgrade.
   if (previousInterval === 'month' && currentInterval === 'year') {
@@ -250,6 +253,9 @@ export function extractDataEvent(c: Context, event: Stripe.Event): StripeData {
     const session = event.data.object as Stripe.Checkout.Session
     data.customer_id = getStripeCustomerId(session.customer)
     data.status = 'succeeded'
+  }
+  else if (event.type === 'invoice.paid') {
+    data.customer_id = getStripeCustomerId(event.data.object.customer)
   }
   else if (event.type === 'payment_intent.succeeded') {
     const paymentIntent = event.data.object as Stripe.PaymentIntent

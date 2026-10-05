@@ -63,3 +63,14 @@ export function quoteEnterpriseScale(steps: CreditPricingStep[], includedMau: nu
     totalMonthly: basePriceMonthly + monthlyCredits,
   }
 }
+
+// Label for an org already on Enterprise: the biggest stop its recurring
+// monthly credits fully cover (stripe_info.recurring_credits).
+export function mauForMonthlyCredits(steps: CreditPricingStep[], includedMau: number, monthlyCredits: number) {
+  let best = includedMau
+  for (const stop of ENTERPRISE_MAU_STOPS) {
+    if (stop > includedMau && Math.ceil(priceMauSlice(steps, includedMau, stop)) <= monthlyCredits)
+      best = stop
+  }
+  return best
+}
