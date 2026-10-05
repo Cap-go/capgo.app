@@ -211,7 +211,14 @@ BEGIN
 
   UPDATE public.role_bindings rb
   SET granted_by = COALESCE(public.request_actor_user_id(), rb.granted_by),
-      role_id = update_org_invite_role_rbac.role_id
+      role_id = (
+        SELECT r.id
+        FROM public.roles r
+        WHERE r.name = p_new_role_name
+          AND r.scope_type = public.rbac_scope_org()
+          AND r.is_assignable = true
+        LIMIT 1
+      )
   WHERE rb.principal_type = public.rbac_principal_user()
     AND rb.principal_id = p_user_id
     AND rb.org_id = p_org_id

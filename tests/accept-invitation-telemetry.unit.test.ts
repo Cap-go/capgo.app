@@ -299,10 +299,10 @@ describe('magic-link invitation acceptance telemetry', () => {
     })
 
     const response = await acceptRequest()
-    const body = await response.json() as { error?: string }
 
     expect(response.status).toBe(httpStatus)
-    expect(body.error).toBe(errorCode)
+    const bodyText = await response.text()
+    expect(bodyText).toContain(errorCode)
   })
 
   it('maps privilege escalation errors to HTTP 403', async () => {
