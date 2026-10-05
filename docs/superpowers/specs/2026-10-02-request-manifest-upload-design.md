@@ -923,10 +923,9 @@ signatures fit the runtime is not sufficient.
 
 1. Add and test capability verification to the upload handler while keeping the
    legacy API-key branch unchanged.
-2. Add `request_manifest_upload` behind the boolean `manifestUpload` capability
-   returned by `/files/config`. New CLIs use this protocol only when that field
-   is exactly `true`; a missing or false field keeps the existing client-derived
-   path and API-key upload flow.
+2. Deploy `request_manifest_upload` and capability verification before releasing
+   the adopting CLI. The adopting CLI always uses this protocol for Capgo delta
+   uploads and does not retain the client-derived path or API-key upload flow.
 3. Shadow-generate server paths in tests and prove byte-for-byte equality with
    the current CLI for:
    - unencrypted SHA-256 entries;
@@ -951,10 +950,11 @@ signatures fit the runtime is not sufficient.
 8. Add CLI contract tests for all three actions, complete and prefixed paths,
    target overrides, arbitrary opaque prefix/suffix lengths, expiry without
    refresh, full-abandon cleanup behavior, and manifest-only ZIP fallback.
-9. Release a CLI that opts into the endpoint only when the backend advertises
-   support.
-10. Retain the existing direct path derivation and API-key upload flow for
-   already-published CLI versions.
+9. Release the adopting CLI only after the endpoint and Files capability
+   verification are deployed.
+10. Keep the Files backend's legacy API-key branch for already-published CLI
+   versions, while removing direct path derivation and API-key delta uploads
+   from the adopting CLI.
 11. Observe endpoint latency, token failures, expiration frequency, request and
    response sizes, TUS completion rate, ZIP fallback rate, and receipt
    completeness before making it the default for a newly published CLI.

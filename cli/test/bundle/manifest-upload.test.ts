@@ -9,7 +9,6 @@ import { describe, expect, it } from 'bun:test'
 import { encryptSource } from '../../src/api/crypto'
 import { isManifestUploadAutoEnabled, manifestUploadFileHashFormat, requestManifestUpload, resolveManifestUploadResponse } from '../../src/bundle/manifest-upload'
 import { buildPartialUploadHeaders, fileExistsAtUploadTarget, prepareManifestUploadEntries } from '../../src/bundle/partial'
-import { normalizeCapgoFilesConfig } from '../../src/utils'
 
 const request: ManifestUploadRequest = {
   protocol_version: 1,
@@ -107,14 +106,6 @@ describe('manifest upload response contract', () => {
     expect(isManifestUploadAutoEnabled(false, false)).toBe(false)
   })
 
-  it('enables the protocol only for a literal boolean manifestUpload flag', () => {
-    const config = { manifestUpload: true } as Parameters<typeof normalizeCapgoFilesConfig>[0]
-    expect(normalizeCapgoFilesConfig(config).manifestUpload).toBe(true)
-    expect(normalizeCapgoFilesConfig({ ...config, manifestUpload: false }).manifestUpload).toBe(false)
-    expect(normalizeCapgoFilesConfig({ ...config, manifestUpload: 'false' } as unknown as typeof config).manifestUpload).toBe(false)
-    expect(normalizeCapgoFilesConfig({ ...config, manifestUpload: 1 } as unknown as typeof config).manifestUpload).toBe(false)
-  })
-
   it('resolves all actions, mixed path forms, target overrides, and opaque tokens', () => {
     const resolved = resolveManifestUploadResponse(request, response())
 
@@ -130,7 +121,7 @@ describe('manifest upload response contract', () => {
     expect(resolved.entries[2]!.uploadTarget?.id).toBe('secondary')
     expect(resolved.entries[2]!.uploadAuthorization?.value).toBe('future-token-format')
 
-    const headers = buildPartialUploadHeaders('must-not-be-sent', resolved.entries[2])
+    const headers = buildPartialUploadHeaders(resolved.entries[2])
     expect(headers['X-Future-Capability']).toBe('future-token-format')
     expect(headers.Authorization).toBeUndefined()
     expect(headers['x-cli-version']).toBeTruthy()

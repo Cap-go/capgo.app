@@ -15,7 +15,7 @@ import * as tus from 'tus-js-client'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { encryptChecksum, encryptChecksumV3, encryptSource } from '../api/crypto'
 import { CliUserError } from '../shared/cli-user-error'
-import { appAddHintMessage, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findRoot, generateManifest, getContentType, getInstalledVersion, getLocalConfig, isAppNotFoundError, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { appAddHintMessage, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findRoot, generateManifest, getContentType, getInstalledVersion, isAppNotFoundError, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import type { ManifestUploadRequestEntry, ResolvedManifestUpload, ResolvedManifestUploadEntry } from './manifest-upload'
 import { getUploadReporter } from './reporter'
 import { getManifestUploadAbandonError, ManifestUploadAbandonController, ManifestUploadAbandonError, parseManifestUploadAbandonBody } from './upload-abandon-error'
@@ -24,22 +24,6 @@ const log = {
   info: (message: string) => getUploadReporter().info(message),
   warn: (message: string) => getUploadReporter().warn(message),
   error: (message: string) => getUploadReporter().error(message),
-}
-
-// Check if file already exists on server (bypass cache and force storage lookup)
-async function fileExists(localConfig: any, filename: string): Promise<{ exists: boolean, receipt?: string }> {
-  try {
-    const url = new URL(`${localConfig.hostFilesApi}/files/read/attachments/${encodeURIComponent(filename)}`)
-    url.searchParams.set('nocache', `${Date.now()}`)
-    const response = await fetch(url.toString(), {
-      method: 'GET',
-      headers: buildCliRequestHeaders({ 'cache-control': 'no-cache' }),
-    })
-    return { exists: response.ok, receipt: response.headers.get('X-Capgo-Manifest-Size-Receipt') ?? undefined }
-  }
-  catch {
-    return { exists: false }
-  }
 }
 
 export async function fileExistsAtUploadTarget(existenceCheckUrlPrefix: string, filename: string): Promise<{ exists: boolean, receipt?: string }> {
@@ -189,23 +173,6 @@ function convertToUnixPath(windowsPath: string): string {
   return normalizedPath.split(win32.sep).join(posix.sep)
 }
 
-function encodePathSegments(path: string): string {
-  return path.split('/').map(segment => encodeURIComponent(segment)).join('/')
-}
-
-export function buildPartialUploadPath(orgId: string, appId: string, fileHash: string, filePathUnix: string, encryptionOptions?: { ivSessionKey: string }) {
-  // Keep the storage prefix short while preserving the full hash in manifest verification.
-  const filenameHash = createHash('sha256').update(fileHash).digest('hex')
-  const filePathUnixSafe = encodePathSegments(filePathUnix)
-
-  if (encryptionOptions) {
-    const ivSessionKeyHex = Buffer.from(encryptionOptions.ivSessionKey).toString('hex')
-    return `orgs/${orgId}/apps/${appId}/delta/${ivSessionKeyHex}/${filenameHash}_${filePathUnixSafe}`
-  }
-
-  return `orgs/${orgId}/apps/${appId}/delta/${filenameHash}_${filePathUnixSafe}`
-}
-
 export interface PartialEncryptionOptions {
   sessionKey: Buffer
   ivSessionKey: string
@@ -298,12 +265,10 @@ function assertPreparedPayloadMatches(entry: ResolvedManifestUploadEntry, payloa
   }
 }
 
-export function buildPartialUploadHeaders(apikey: string, manifestUploadEntry?: ResolvedManifestUploadEntry): Record<string, string> {
-  return manifestUploadEntry
-    ? buildCliRequestHeaders({
-        [manifestUploadEntry.uploadAuthorization!.headerName]: manifestUploadEntry.uploadAuthorization!.value,
-      })
-    : buildCliRequestHeaders({ Authorization: apikey })
+export function buildPartialUploadHeaders(manifestUploadEntry: ResolvedManifestUploadEntry): Record<string, string> {
+  return buildCliRequestHeaders({
+    [manifestUploadEntry.uploadAuthorization!.headerName]: manifestUploadEntry.uploadAuthorization!.value,
+  })
 }
 
 export async function uploadPartial(
@@ -314,26 +279,22 @@ export async function uploadPartial(
   orgId: string,
   encryptionOptions: PartialEncryptionOptions | undefined,
   options: OptionsUpload,
-  manifestUpload?: ResolvedManifestUpload,
+  manifestUpload: ResolvedManifestUpload,
 ): Promise<any[] | null> {
   const spinner = getUploadReporter().spinner()
   spinner.start('Preparing delta update with TUS protocol')
   const startTime = performance.now()
-  const localConfig = await getLocalConfig()
-
   // Determine if user explicitly requested delta updates. Read the flag captured
   // before `options.delta` was mutated by the instant-update auto-enable, so an
   // auto-enabled delta degrades to a full upload instead of aborting.
   const userRequestedDelta = !!options.userRequestedDelta
 
-  if (!manifestUpload)
-    await validatePartialUpload(manifest, options)
-  if (manifestUpload && manifestUpload.entries.length !== manifest.length)
+  if (manifestUpload.entries.length !== manifest.length)
     throw new CliUserError('Manifest upload authorization does not match the local manifest')
 
   let uploadedFiles = 0
   const totalFiles = manifest.length
-  let brFilesCount = manifestUpload?.entries.filter(entry => entry.request.compression === 'brotli').length ?? 0
+  const brFilesCount = manifestUpload.entries.filter(entry => entry.request.compression === 'brotli').length
   const abandonController = new ManifestUploadAbandonController()
 
   try {
@@ -347,21 +308,15 @@ export async function uploadPartial(
       const finalBuffer = payload.buffer
       abandonController.throwIfAbandoned()
 
-      const manifestUploadEntry = manifestUpload?.entries[index]
-      if (manifestUploadEntry) {
-        if (manifestUploadEntry.request.file_hash !== file.hash)
-          throw new CliUserError(`Manifest upload authorization does not match the local manifest entry ${index}`)
-        assertPreparedPayloadMatches(manifestUploadEntry, payload)
-      }
-      else if (payload.compression === 'brotli') {
-        brFilesCount++
-      }
+      const manifestUploadEntry = manifestUpload.entries[index]!
+      if (manifestUploadEntry.request.file_hash !== file.hash)
+        throw new CliUserError(`Manifest upload authorization does not match the local manifest entry ${index}`)
+      assertPreparedPayloadMatches(manifestUploadEntry, payload)
 
       const uploadPathUnix = payload.fileName
-      const filename = manifestUploadEntry?.s3Path
-        ?? buildPartialUploadPath(orgId, appId, file.hash, uploadPathUnix, encryptionOptions)
+      const filename = manifestUploadEntry.s3Path
 
-      if (manifestUploadEntry?.action === 'reuse') {
+      if (manifestUploadEntry.action === 'reuse') {
         uploadedFiles++
         return {
           file_name: uploadPathUnix,
@@ -371,12 +326,10 @@ export async function uploadPartial(
         }
       }
 
-      // Check if file already exists on server
-      // Skip reuse when encryption is enabled because the session key changes per upload
-      // and reusing a file encrypted with a different session key would cause decryption to fail
-      const existing = manifestUploadEntry?.action === 'upload_if_doesnt_exist'
+      // Follow the server-selected action and existence-check target.
+      const existing = manifestUploadEntry.action === 'upload_if_doesnt_exist'
         ? await fileExistsAtUploadTarget(manifestUploadEntry.uploadTarget!.existence_check_url_prefix, filename)
-        : (!manifestUploadEntry && !encryptionOptions ? await fileExists(localConfig, filename) : { exists: false })
+        : { exists: false }
       abandonController.throwIfAbandoned()
       if (existing.exists) {
         uploadedFiles++
@@ -392,9 +345,9 @@ export async function uploadPartial(
         spinner.message(`Prepare upload delta file: ${filePathUnix}`)
         // Get the MIME type for this file (based on original filename, not the R2 path)
         const filetype = getContentType(uploadPathUnix)
-        const uploadHeaders = buildPartialUploadHeaders(apikey, manifestUploadEntry)
+        const uploadHeaders = buildPartialUploadHeaders(manifestUploadEntry)
         const upload = new tus.Upload(finalBuffer as any, {
-          endpoint: manifestUploadEntry?.uploadTarget?.upload_url ?? `${localConfig.hostFilesApi}/files/upload/attachments/`,
+          endpoint: manifestUploadEntry.uploadTarget!.upload_url,
           chunkSize: options.tusChunkSize,
           retryDelays: [...TUS_UPLOAD_RETRY_DELAYS],
           removeFingerprintOnSuccess: true,
@@ -484,10 +437,8 @@ export async function uploadPartial(
       const batchResults = await Promise.all(batch.map((file, batchIndex) => uploadFile(file, i + batchIndex)))
       results.push(...batchResults)
     }
-    if (manifestUpload && results.some(entry => !entry.file_size_receipt))
+    if (results.some(entry => !entry.file_size_receipt))
       throw new CliUserError('Manifest upload did not return a size receipt for every file')
-    if (!manifestUpload && results.some(entry => !entry.file_size_receipt))
-      results.forEach(entry => delete entry.file_size_receipt)
     const endTime = performance.now()
     const uploadTime = ((endTime - startTime) / 1000).toFixed(2)
     spinner.stop(`Delta update uploaded successfully 💪 in (${uploadTime} seconds)`)

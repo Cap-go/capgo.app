@@ -1840,15 +1840,14 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
         ivSessionKey: versionData.session_key,
       }
     : undefined
-  const useManifestUploadProtocol = !!(options.delta && fileConfig.manifestUpload && !options.dryUpload && !hasS3UploadConfig(options))
-  if (useManifestUploadProtocol && manifest.length === 0) {
+  const shouldRequestManifestUpload = !!(options.delta && !options.dryUpload)
+  if (shouldRequestManifestUpload && manifest.length === 0) {
     if (options.userRequestedDelta)
       uploadFail('Cannot request a manifest upload for an empty manifest')
     log.warn('Delta upload was auto-enabled, but the generated manifest is empty; continuing with ZIP-only upload')
     options.delta = false
   }
-  const manifestUploadEntries = useManifestUploadProtocol
-    && options.delta
+  const manifestUploadEntries = shouldRequestManifestUpload && options.delta
     ? await prepareManifestUploadEntries(manifest, path, encryptionData, options)
     : undefined
 
@@ -1998,18 +1997,20 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
         log.info(`  - Encryption: ${encryptionData ? 'enabled' : 'disabled'}`)
       }
 
-      finalManifest = options.delta
-        ? await uploadPartial(
-            apikey,
-            manifest,
-            path,
-            appid,
-            orgId,
-            encryptionData,
-            options,
-            manifestUploadAuthorization,
-          )
-        : null
+      if (options.delta) {
+        if (!manifestUploadAuthorization)
+          uploadFail('Cannot upload delta files without manifest upload authorization')
+        finalManifest = await uploadPartial(
+          apikey,
+          manifest,
+          path,
+          appid,
+          orgId,
+          encryptionData,
+          options,
+          manifestUploadAuthorization,
+        )
+      }
 
       if (options.verbose && finalManifest)
         log.info(`[Verbose] Delta upload complete with ${finalManifest.length} files`)

@@ -833,16 +833,11 @@ export async function getRemoteConfig(silent = false, signal?: AbortSignal) {
 export interface CapgoFilesConfig {
   partialUpload: boolean
   partialUploadForced: boolean
-  manifestUpload: boolean
   TUSUpload: boolean
   TUSUploadForced: boolean
   maxUploadLength: number
   maxChunkSize: number
   alertUploadSize: number
-}
-
-export function normalizeCapgoFilesConfig(config: CapgoFilesConfig): CapgoFilesConfig {
-  return { ...config, manifestUpload: config.manifestUpload === true }
 }
 
 export async function getRemoteFileConfig() {
@@ -856,13 +851,11 @@ export async function getRemoteFileConfig() {
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`)
     }
-    const config = await response.json() as CapgoFilesConfig
-    return normalizeCapgoFilesConfig(config)
+    return await response.json() as CapgoFilesConfig
   }
   catch {
     return {
       partialUpload: false,
-      manifestUpload: false,
       TUSUpload: false,
       partialUploadForced: false,
       TUSUploadForced: false,
