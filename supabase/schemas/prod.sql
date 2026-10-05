@@ -576,7 +576,7 @@ BEGIN
     SELECT pairs.app_id, pairs.scope, v_now + delays.delay, false
     FROM (SELECT DISTINCT app_id, scope FROM done WHERE initial) AS pairs
     CROSS JOIN (VALUES
-      (interval '10 seconds'), (interval '60 seconds'), (interval '180 seconds')
+      (interval '3 seconds'), (interval '10 seconds'), (interval '60 seconds'), (interval '180 seconds')
     ) AS delays (delay);
   ELSE
     UPDATE public.updates_cache_purge_pending
