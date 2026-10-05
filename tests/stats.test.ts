@@ -496,12 +496,18 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
             .eq('device_id', uuid)
             .eq('app_id', appId)
             .eq('action', action)
-            .single()
+            .maybeSingle()
 
           expect(statsError).toBeNull()
-          expect(statsData).toBeTruthy()
-          expect(statsData?.action).toBe(action)
-          expect(statsData?.device_id).toBe(uuid)
+          // Intermediate download progress is accepted but deliberately not logged.
+          if (/^download_[1-9]0$/.test(action)) {
+            expect(statsData).toBeNull()
+          }
+          else {
+            expect(statsData).toBeTruthy()
+            expect(statsData?.action).toBe(action)
+            expect(statsData?.device_id).toBe(uuid)
+          }
 
           // Verify device state - fail, download, staging and delete actions should NOT
           // create/update device records: their version_name is not the running version
