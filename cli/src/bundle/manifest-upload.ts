@@ -1,6 +1,8 @@
 import type { CapgoCliInvokeOptions } from '../utils'
+import type { UploadSpinner } from './reporter'
 import { CliUserError } from '../shared/cli-user-error'
 import { formatCapgoCliInvokeError, invokeCapgoCliApi } from '../utils'
+import { getUploadReporter } from './reporter'
 
 export const MANIFEST_UPLOAD_PROTOCOL_VERSION = 1 as const
 
@@ -304,13 +306,30 @@ export async function requestManifestUpload(
   options: Pick<CapgoCliInvokeOptions, 'supaHost' | 'supaAnon'> = {},
   invoke: ManifestUploadInvoke = invokeCapgoCliApi,
 ): Promise<ResolvedManifestUpload> {
-  const { data, error } = await invoke<unknown>('private/request_manifest_upload', {
-    apikey,
-    body: request,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
-  })
-  if (error)
-    throw new CliUserError(`Cannot request manifest upload: ${await formatCapgoCliInvokeError(error)}`)
-  return resolveManifestUploadResponse(request, data)
+  let spinner: UploadSpinner | undefined
+  const spinnerTimer = setTimeout(() => {
+    spinner = getUploadReporter().spinner()
+    spinner.start('Requesting delta upload authorization')
+  }, 500)
+
+  try {
+    const { data, error } = await invoke<unknown>('private/request_manifest_upload', {
+      apikey,
+      body: request,
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
+    })
+    if (error)
+      throw new CliUserError(`Cannot request manifest upload: ${await formatCapgoCliInvokeError(error)}`)
+    const resolved = resolveManifestUploadResponse(request, data)
+    spinner?.stop('Delta upload authorized')
+    return resolved
+  }
+  catch (error) {
+    spinner?.error('Cannot authorize delta upload')
+    throw error
+  }
+  finally {
+    clearTimeout(spinnerTimer)
+  }
 }

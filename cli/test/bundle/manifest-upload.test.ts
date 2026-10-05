@@ -1,4 +1,5 @@
 import type { ManifestUploadRequest, ManifestUploadResponse } from '../../src/bundle/manifest-upload'
+import type { UploadReporter } from '../../src/bundle/reporter'
 import type { OptionsUpload } from '../../src/bundle/upload_interface'
 import { createHash } from 'node:crypto'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -9,6 +10,7 @@ import { describe, expect, it } from 'bun:test'
 import { encryptSource } from '../../src/api/crypto'
 import { isManifestUploadAutoEnabled, manifestUploadFileHashFormat, requestManifestUpload, resolveManifestUploadResponse } from '../../src/bundle/manifest-upload'
 import { buildPartialUploadHeaders, fileExistsAtUploadTarget, PartialUploadValidationError, prepareManifestUploadEntries } from '../../src/bundle/partial'
+import { runWithUploadReporter } from '../../src/bundle/reporter'
 
 const request: ManifestUploadRequest = {
   protocol_version: 1,
@@ -96,6 +98,23 @@ function response(): ManifestUploadResponse {
   }
 }
 
+function recordingReporter(events: string[]): UploadReporter {
+  return {
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    success: () => {},
+    intro: () => {},
+    outro: () => {},
+    spinner: () => ({
+      start: message => events.push(`start:${message}`),
+      message: message => events.push(`message:${message}`),
+      stop: message => events.push(`stop:${message ?? ''}`),
+      error: message => events.push(`error:${message}`),
+    }),
+  }
+}
+
 describe('manifest upload response contract', () => {
   it('selects request hash metadata and fallback mode from the actual upload mode', () => {
     expect(manifestUploadFileHashFormat(false, false)).toBe('sha256_hex')
@@ -161,6 +180,35 @@ describe('manifest upload response contract', () => {
       supaAnon: 'anon',
     })
     expect(resolved.entries).toHaveLength(3)
+  })
+
+  it('only shows the authorization spinner when the request takes longer than 500 ms', async () => {
+    const fastEvents: string[] = []
+    await runWithUploadReporter(recordingReporter(fastEvents), async () => requestManifestUpload('api-key', request, {}, async () => ({
+      data: response(),
+      error: null,
+    })))
+    expect(fastEvents).toEqual([])
+
+    const slowEvents: string[] = []
+    let resolveRequest!: () => void
+    const requestPending = new Promise<void>((resolve) => {
+      resolveRequest = resolve
+    })
+    const slowRequest = runWithUploadReporter(recordingReporter(slowEvents), async () => requestManifestUpload('api-key', request, {}, async () => {
+      await requestPending
+      return { data: response(), error: null }
+    }))
+
+    await Bun.sleep(550)
+    expect(slowEvents).toEqual(['start:Requesting delta upload authorization'])
+
+    resolveRequest()
+    await slowRequest
+    expect(slowEvents).toEqual([
+      'start:Requesting delta upload authorization',
+      'stop:Delta upload authorized',
+    ])
   })
 
   it.each([
