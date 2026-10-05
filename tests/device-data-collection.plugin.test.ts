@@ -54,15 +54,17 @@ describe('device data collection on plugin paths', () => {
   it('omits disabled device fields from Postgres after /stats set', async () => {
     const deviceId = randomUUID().toLowerCase()
     const version = await createAppVersions('2.0.0', APP_ID)
-    const base = getBaseData(APP_ID)
-    base.device_id = deviceId
-    base.action = 'set'
-    base.platform = 'ios'
-    base.version_name = version.name
-    base.version_build = '2.0.0'
-    base.version_os = '17.0'
-    base.plugin_version = '7.0.0'
-    base.install_source = 'testflight'
+    const base = {
+      ...getBaseData(APP_ID),
+      device_id: deviceId,
+      action: 'set',
+      platform: 'ios',
+      version_name: version.name,
+      version_build: '2.0.0',
+      version_os: '17.0',
+      plugin_version: '7.0.0',
+      install_source: 'testflight',
+    }
 
     const response = await fetchTestRequest(`${PLUGIN_BASE_URL}/stats`, {
       method: 'POST',

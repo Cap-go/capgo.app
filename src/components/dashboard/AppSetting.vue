@@ -360,15 +360,16 @@ async function submit(form: {
   }
 
   try {
+    const currentCollection = deviceDataCollection.value
     await updateDeviceDataCollection({
-      country: form.collect_country !== false,
-      platform: form.collect_platform !== false,
-      os_version: form.collect_os_version !== false,
-      plugin_version: form.collect_plugin_version !== false,
-      version_build: form.collect_version_build !== false,
-      is_emulator: form.collect_is_emulator !== false,
-      is_prod: form.collect_is_prod !== false,
-      install_source: form.collect_install_source !== false,
+      country: typeof form.collect_country === 'boolean' ? form.collect_country : currentCollection.country,
+      platform: typeof form.collect_platform === 'boolean' ? form.collect_platform : currentCollection.platform,
+      os_version: typeof form.collect_os_version === 'boolean' ? form.collect_os_version : currentCollection.os_version,
+      plugin_version: typeof form.collect_plugin_version === 'boolean' ? form.collect_plugin_version : currentCollection.plugin_version,
+      version_build: typeof form.collect_version_build === 'boolean' ? form.collect_version_build : currentCollection.version_build,
+      is_emulator: typeof form.collect_is_emulator === 'boolean' ? form.collect_is_emulator : currentCollection.is_emulator,
+      is_prod: typeof form.collect_is_prod === 'boolean' ? form.collect_is_prod : currentCollection.is_prod,
+      install_source: typeof form.collect_install_source === 'boolean' ? form.collect_install_source : currentCollection.install_source,
     })
   }
   catch (error) {
@@ -619,16 +620,17 @@ async function updateAllowDeviceCustomId(newAllowDeviceCustomId: boolean) {
 
 async function updateDeviceDataCollection(next: DeviceDataCollection) {
   const current = parseAppRowDeviceDataCollection(appRef.value as unknown)
-  if (DEVICE_DATA_COLLECTION_KEYS.every(key => current[key] === next[key]))
+  const merged = { ...current, ...next }
+  if (DEVICE_DATA_COLLECTION_KEYS.every(key => current[key] === merged[key]))
     return Promise.resolve()
 
-  const { error } = await supabase.from('apps').update({ device_data_collection: next }).eq('app_id', props.appId)
+  const { error } = await supabase.from('apps').update({ device_data_collection: merged }).eq('app_id', props.appId)
   if (error)
     return Promise.reject(t('cannot-change-device-data-collection'))
 
   toast.success(t('changed-device-data-collection'))
   if (appRef.value)
-    Object.assign(appRef.value, { device_data_collection: next })
+    Object.assign(appRef.value, { device_data_collection: merged })
 }
 
 async function updateBlockProviderInfraRequests(enabled: boolean) {

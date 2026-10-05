@@ -18,6 +18,7 @@ import {
   invokeCapgoCliApi,
   sendEvent,
 } from '../utils'
+import { DEVICE_DATA_COLLECTION_KEYS } from '../../../supabase/functions/_backend/utils/deviceDataCollection.ts'
 
 
 const MIN_BUILD_TIMEOUT_MINUTES = 5
@@ -167,23 +168,22 @@ export async function setAppInternal(appId: string, options: Options, silent = f
     putBody.expose_metadata = exposeMetadata
   if (allowDeviceCustomId != null)
     putBody.allow_device_custom_id = allowDeviceCustomId
-  const deviceDataCollection: Record<string, boolean> = {}
-  if (collectCountry != null)
-    deviceDataCollection.country = collectCountry
-  if (collectPlatform != null)
-    deviceDataCollection.platform = collectPlatform
-  if (collectOsVersion != null)
-    deviceDataCollection.os_version = collectOsVersion
-  if (collectPluginVersion != null)
-    deviceDataCollection.plugin_version = collectPluginVersion
-  if (collectVersionBuild != null)
-    deviceDataCollection.version_build = collectVersionBuild
-  if (collectIsEmulator != null)
-    deviceDataCollection.is_emulator = collectIsEmulator
-  if (collectIsProd != null)
-    deviceDataCollection.is_prod = collectIsProd
-  if (collectInstallSource != null)
-    deviceDataCollection.install_source = collectInstallSource
+  const collectByKey: Record<typeof DEVICE_DATA_COLLECTION_KEYS[number], boolean | null | undefined> = {
+    country: collectCountry,
+    platform: collectPlatform,
+    os_version: collectOsVersion,
+    plugin_version: collectPluginVersion,
+    version_build: collectVersionBuild,
+    is_emulator: collectIsEmulator,
+    is_prod: collectIsProd,
+    install_source: collectInstallSource,
+  }
+  const deviceDataCollection: Partial<Record<typeof DEVICE_DATA_COLLECTION_KEYS[number], boolean>> = {}
+  for (const key of DEVICE_DATA_COLLECTION_KEYS) {
+    const value = collectByKey[key]
+    if (value != null)
+      deviceDataCollection[key] = value
+  }
   if (Object.keys(deviceDataCollection).length > 0)
     putBody.device_data_collection = deviceDataCollection
   if (blockProviderInfraRequests != null)

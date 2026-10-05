@@ -7,8 +7,10 @@ import { useSupabase } from '~/services/supabase'
 export function useDeviceDataCollection(appId: MaybeRefOrGetter<string>) {
   const supabase = useSupabase()
   const collection = ref<DeviceDataCollection>({ ...DEFAULT_DEVICE_DATA_COLLECTION })
+  let loadGeneration = 0
 
   async function load() {
+    const generation = ++loadGeneration
     const id = toValue(appId)
     if (!id)
       return
@@ -17,6 +19,8 @@ export function useDeviceDataCollection(appId: MaybeRefOrGetter<string>) {
       .select('device_data_collection')
       .eq('app_id', id)
       .maybeSingle()
+    if (generation !== loadGeneration)
+      return
     collection.value = parseAppRowDeviceDataCollection(data as unknown)
   }
 
