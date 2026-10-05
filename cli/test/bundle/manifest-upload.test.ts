@@ -8,7 +8,7 @@ import { brotliCompressSync } from 'node:zlib'
 import { describe, expect, it } from 'bun:test'
 import { encryptSource } from '../../src/api/crypto'
 import { isManifestUploadAutoEnabled, manifestUploadFileHashFormat, requestManifestUpload, resolveManifestUploadResponse } from '../../src/bundle/manifest-upload'
-import { buildPartialUploadHeaders, fileExistsAtUploadTarget, prepareManifestUploadEntries } from '../../src/bundle/partial'
+import { buildPartialUploadHeaders, fileExistsAtUploadTarget, PartialUploadValidationError, prepareManifestUploadEntries } from '../../src/bundle/partial'
 
 const request: ManifestUploadRequest = {
   protocol_version: 1,
@@ -185,6 +185,15 @@ describe('manifest upload response contract', () => {
 })
 
 describe('manifest upload request entries', () => {
+  it('marks local delta validation failures separately from file preparation failures', async () => {
+    await expect(prepareManifestUploadEntries(
+      [{ file: 'not supported.txt', hash: 'a'.repeat(64) }],
+      tmpdir(),
+      undefined,
+      {} as OptionsUpload,
+    )).rejects.toBeInstanceOf(PartialUploadValidationError)
+  })
+
   it('hashes and sizes the exact bytes produced after compression and encryption', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'capgo-manifest-upload-'))
     try {

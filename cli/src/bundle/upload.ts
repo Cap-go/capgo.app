@@ -40,7 +40,7 @@ import { finalizeUploadedBundle } from './finalize-upload'
 import { loadUploadProjectConfig } from './upload-config'
 import { isManifestUploadAutoEnabled, MANIFEST_UPLOAD_PROTOCOL_VERSION, manifestUploadFileHashFormat, requestManifestUpload } from './manifest-upload'
 import type { ResolvedManifestUpload } from './manifest-upload'
-import { prepareBundlePartialFiles, prepareManifestUploadEntries, uploadPartial } from './partial'
+import { PartialUploadValidationError, prepareBundlePartialFiles, prepareManifestUploadEntries, uploadPartial } from './partial'
 import { clackUploadReporter, getUploadReporter, runWithUploadReporter } from './reporter'
 import { ManifestUploadAbandonError, resolveManifestUploadAbandonScope } from './upload-abandon-error'
 import { formatUploadChannels, getChannelsToAssignByChecksum, parseUploadChannels } from './upload-channels'
@@ -1869,15 +1869,25 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
       }
     : undefined
   const shouldRequestManifestUpload = !!(options.delta && !options.dryUpload && !s3UploadConfig)
+  const manifestUploadAutoEnabled = isManifestUploadAutoEnabled(!!options.userRequestedDelta, shouldUploadFullZip(options))
   if (shouldRequestManifestUpload && manifest.length === 0) {
     if (options.userRequestedDelta)
       uploadFail('Cannot request a manifest upload for an empty manifest')
     log.warn('Delta upload was auto-enabled, but the generated manifest is empty; continuing with ZIP-only upload')
     options.delta = false
   }
-  const manifestUploadEntries = shouldRequestManifestUpload && options.delta
-    ? await prepareManifestUploadEntries(manifest, path, encryptionData, options)
-    : undefined
+  let manifestUploadEntries: Awaited<ReturnType<typeof prepareManifestUploadEntries>> | undefined
+  if (shouldRequestManifestUpload && options.delta) {
+    try {
+      manifestUploadEntries = await prepareManifestUploadEntries(manifest, path, encryptionData, options)
+    }
+    catch (error) {
+      if (!manifestUploadAutoEnabled || !(error instanceof PartialUploadValidationError))
+        throw error
+      log.warn(`${error.message} Continuing with ZIP-only upload.`)
+      options.delta = false
+    }
+  }
 
   if (options.verbose && options.delta)
     log.info(`[Verbose] Delta manifest prepared with ${manifest.length} files`)
@@ -1897,7 +1907,6 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   let manifestUploadAuthorization: ResolvedManifestUpload | undefined
   if (manifestUploadEntries) {
     const fileHashFormat = manifestUploadFileHashFormat(!!encryptionData, supportsHexChecksum)
-    const manifestUploadAutoEnabled = isManifestUploadAutoEnabled(!!options.userRequestedDelta, shouldUploadFullZip(options))
     try {
       manifestUploadAuthorization = await requestManifestUpload(apikey, {
         protocol_version: MANIFEST_UPLOAD_PROTOCOL_VERSION,
@@ -2043,7 +2052,6 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     }
     catch (err) {
       if (err instanceof ManifestUploadAbandonError) {
-        const manifestUploadAutoEnabled = isManifestUploadAutoEnabled(!!options.userRequestedDelta, shouldUploadFullZip(options))
         const abandonScope = resolveManifestUploadAbandonScope(err, manifestUploadAutoEnabled)
         if (abandonScope === 'manifest') {
           log.warn(err.message)

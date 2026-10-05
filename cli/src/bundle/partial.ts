@@ -186,10 +186,17 @@ interface PreparedPartialPayload {
   uploadedBytesSize: number
 }
 
+export class PartialUploadValidationError extends CliUserError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'PartialUploadValidationError'
+  }
+}
+
 async function validatePartialUpload(manifest: manifestType, options: OptionsUpload) {
   const { version, supportsBrotliV2 } = await getUpdaterVersion(options)
   if (!supportsBrotliV2) {
-    throw new CliUserError(`Your project is using an older version of @capgo/capacitor-updater (${version || 'unknown'}). To use Delta updates, please upgrade to version ${BROTLI_MIN_UPDATER_VERSION_V5} (v5), ${BROTLI_MIN_UPDATER_VERSION_V6} (v6) or ${BROTLI_MIN_UPDATER_VERSION_V7} (v7) or higher.`)
+    throw new PartialUploadValidationError(`Your project is using an older version of @capgo/capacitor-updater (${version || 'unknown'}). To use Delta updates, please upgrade to version ${BROTLI_MIN_UPDATER_VERSION_V5} (v5), ${BROTLI_MIN_UPDATER_VERSION_V6} (v6) or ${BROTLI_MIN_UPDATER_VERSION_V7} (v7) or higher.`)
   }
 
   if (options.disableBrotli) {
@@ -201,9 +208,9 @@ async function validatePartialUpload(manifest: manifestType, options: OptionsUpl
 
   const filesWithSpaces = manifest.filter(file => file.file.includes(' '))
   if (filesWithSpaces.length > 0)
-    throw new CliUserError(`Files with spaces in their names (${filesWithSpaces.map(f => f.file).join(', ')}). Please rename the files.`)
+    throw new PartialUploadValidationError(`Files with spaces in their names (${filesWithSpaces.map(f => f.file).join(', ')}). Please rename the files.`)
   if (manifest.length > MAX_MANIFEST_ENTRIES)
-    throw new CliUserError(deltaManifestTooLargeMessage(manifest.length))
+    throw new PartialUploadValidationError(deltaManifestTooLargeMessage(manifest.length))
 }
 
 async function preparePartialPayload(
