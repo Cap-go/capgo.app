@@ -6,6 +6,14 @@ import { useDialogV2Store } from '~/stores/dialogv2'
 const dialogStore = useDialogV2Store()
 const { t } = useI18n()
 const { logAsInput, submitLogAsDialog } = useAppNavigation()
+
+function onEnter(event: KeyboardEvent) {
+  // Enter that commits an IME composition must not submit the pre-composition value.
+  if (event.isComposing)
+    return
+  event.preventDefault()
+  submitLogAsDialog()
+}
 </script>
 
 <template>
@@ -19,7 +27,7 @@ const { logAsInput, submitLogAsDialog } = useAppNavigation()
         :placeholder="t('user-email-or-org-id')"
         :aria-label="t('user-email-or-org-id')"
         class="p-3 w-full rounded-lg border border-gray-300 dark:text-white dark:bg-gray-800 dark:border-gray-600"
-        @keydown.enter.prevent="submitLogAsDialog"
+        @keydown.enter="onEnter"
       >
     </div>
   </Teleport>

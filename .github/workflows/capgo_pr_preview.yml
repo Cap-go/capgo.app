@@ -2,7 +2,8 @@ name: Capgo PR preview
 
 # Ships every PR's web bundle to its own Capgo channel (pr-<number>) so the
 # change can be tested in the Capgo mobile app from a preview deep link.
-# Each push replaces the channel bundle; closing the PR deletes the channel.
+# Each push replaces the channel bundle. capgo_pr_preview_cleanup.yml deletes
+# the channel when the PR closes (no paths filter there, so it always runs).
 
 concurrency:
   group: capgo-pr-preview-${{ github.event.pull_request.number }}
@@ -10,7 +11,7 @@ concurrency:
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened]
     paths:
       - "src/**"
       - "public/**"
@@ -31,7 +32,7 @@ env:
 jobs:
   deploy:
     # Fork PRs have no access to CAPGO_TOKEN.
-    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -48,7 +49,7 @@ jobs:
         with:
           bun-version: latest
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
       - name: Build
         run: bun run build
         env:
@@ -82,14 +83,16 @@ jobs:
         id: links
         env:
           CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}
+        # get-qr needs preview enabled on the app. If it fails, fall back to the
+        # deep link alone; the channel id is optional for channel previews.
         run: |
-          output="$(bunx @capgo/cli@latest get-qr "$APP_ID" --channel "$CHANNEL" --url)"
+          output="$(bunx @capgo/cli@latest get-qr "$APP_ID" --channel "$CHANNEL" --url 2>&1 || true)"
           echo "$output"
-          deep_link="$(printf '%s\n' "$output" | grep -m1 '^capgo://' || true)"
-          web_url="$(printf '%s\n' "$output" | grep -m1 '^https://' || true)"
+          deep_link="$(printf '%s\n' "$output" | grep -oE 'capgo://preview/channel[^[:space:]]+' | head -n1 || true)"
+          web_url="$(printf '%s\n' "$output" | grep -oE 'https://[^[:space:]]+\.preview\.capgo\.app/[^[:space:]]*' | head -n1 || true)"
           if [ -z "$deep_link" ]; then
-            echo "Could not resolve the preview deep link" >&2
-            exit 1
+            echo "::warning::get-qr did not return a deep link; is preview enabled for $APP_ID?"
+            deep_link="capgo://preview/channel?appId=${APP_ID}&channel=${CHANNEL}"
           fi
           echo "deep_link=$deep_link" >> "$GITHUB_OUTPUT"
           echo "web_url=$web_url" >> "$GITHUB_OUTPUT"
@@ -125,23 +128,3 @@ jobs:
             else
               await github.rest.issues.createComment({ owner, repo, issue_number, body })
 
-  cleanup:
-    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24
-      - name: Setup bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-      - name: Delete the PR channel and its bundle
-        env:
-          CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}
-        run: bunx @capgo/cli@latest channel delete "$CHANNEL" "$APP_ID" --delete-bundle --success-if-not-found

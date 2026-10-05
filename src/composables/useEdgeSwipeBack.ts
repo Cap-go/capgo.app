@@ -27,6 +27,14 @@ export function useEdgeSwipeBack(target: Ref<HTMLElement | null | undefined>, op
   let startY = 0
   let startTime = 0
   let deltaX = 0
+  let settleTimer: number | undefined
+
+  function clearSettleTimer() {
+    if (settleTimer !== undefined) {
+      window.clearTimeout(settleTimer)
+      settleTimer = undefined
+    }
+  }
 
   function setStyle(el: HTMLElement, transform: string, transition: string) {
     el.style.transition = transition
@@ -45,6 +53,8 @@ export function useEdgeSwipeBack(target: Ref<HTMLElement | null | undefined>, op
     const touch = event.touches[0]
     if (event.touches.length !== 1 || !touch || touch.clientX > EDGE_WIDTH || !options.canGoBack())
       return
+    // A new gesture owns the transform: a pending settle reset must not snap it back.
+    clearSettleTimer()
     tracking = true
     startX = touch.clientX
     startY = touch.clientY
@@ -63,7 +73,7 @@ export function useEdgeSwipeBack(target: Ref<HTMLElement | null | undefined>, op
 
     if (!dragging) {
       // Vertical scroll wins until the finger clearly moves sideways.
-      if (Math.abs(deltaY) > 10 && Math.abs(deltaY) > deltaX) {
+      if (Math.abs(deltaY) > 10 && Math.abs(deltaY) > Math.abs(deltaX)) {
         tracking = false
         return
       }
@@ -74,6 +84,25 @@ export function useEdgeSwipeBack(target: Ref<HTMLElement | null | undefined>, op
 
     event.preventDefault()
     setStyle(el, `translate3d(${Math.max(0, deltaX)}px, 0, 0)`, 'none')
+  }
+
+  function settleBack(el: HTMLElement) {
+    setStyle(el, 'translate3d(0, 0, 0)', `transform ${SETTLE_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1)`)
+    clearSettleTimer()
+    settleTimer = window.setTimeout(() => {
+      settleTimer = undefined
+      reset(el)
+    }, SETTLE_MS)
+  }
+
+  // An interrupted gesture (system takeover, incoming call) never navigates.
+  function onTouchCancel() {
+    const el = target.value
+    const wasDragging = dragging
+    tracking = false
+    dragging = false
+    if (el && wasDragging)
+      settleBack(el)
   }
 
   async function onTouchEnd() {
@@ -90,8 +119,7 @@ export function useEdgeSwipeBack(target: Ref<HTMLElement | null | undefined>, op
     const shouldComplete = deltaX > width * COMPLETE_RATIO || (velocity > COMPLETE_VELOCITY && deltaX > 40)
 
     if (!shouldComplete) {
-      setStyle(el, 'translate3d(0, 0, 0)', `transform ${SETTLE_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1)`)
-      window.setTimeout(() => reset(el), SETTLE_MS)
+      settleBack(el)
       return
     }
 
@@ -111,14 +139,15 @@ export function useEdgeSwipeBack(target: Ref<HTMLElement | null | undefined>, op
     document.addEventListener('touchstart', onTouchStart, { passive: true })
     document.addEventListener('touchmove', onTouchMove, { passive: false })
     document.addEventListener('touchend', onTouchEnd, { passive: true })
-    document.addEventListener('touchcancel', onTouchEnd, { passive: true })
+    document.addEventListener('touchcancel', onTouchCancel, { passive: true })
   })
 
   onBeforeUnmount(() => {
     document.removeEventListener('touchstart', onTouchStart)
     document.removeEventListener('touchmove', onTouchMove)
     document.removeEventListener('touchend', onTouchEnd)
-    document.removeEventListener('touchcancel', onTouchEnd)
+    document.removeEventListener('touchcancel', onTouchCancel)
+    clearSettleTimer()
     if (target.value)
       reset(target.value)
   })

@@ -77,7 +77,8 @@ export function useNativeChrome() {
   const title = computed(() => {
     if (displayStore.NavTitle)
       return displayStore.NavTitle
-    const last = displayStore.pathTitle.at(-1)
+    // Index access instead of .at(): older native WebViews lack Array.prototype.at.
+    const last = displayStore.pathTitle[displayStore.pathTitle.length - 1]
     if (!last)
       return ''
     const name = last.translate === false ? last.name : t(last.name)
@@ -91,6 +92,8 @@ export function useNativeChrome() {
       return 'dashboard'
     if (isNavigationPathActive('/apps', route.path) && !route.path.startsWith('/app/modules'))
       return 'apps'
+    if (isNavigationPathActive('/scan', route.path))
+      return 'preview'
     return 'more'
   })
 
@@ -221,9 +224,19 @@ export function useNativeChrome() {
     if (!isNativeChromeEnabled)
       return
     active = true
+    // The layout can unmount while these awaits are pending: drop late handles.
+    const register = async (pending: Promise<PluginListenerHandle>) => {
+      const handle = await pending
+      if (active)
+        listeners.push(handle)
+      else
+        void handle.remove()
+    }
     await NativeNavigation.configure({ enabled: true, contentInsetMode: 'css' })
-    listeners.push(
-      await NativeNavigation.addListener('tabSelect', ({ id }) => {
+    if (!active)
+      return
+    await Promise.all([
+      register(NativeNavigation.addListener('tabSelect', ({ id }) => {
         if (id === 'more') {
           void openMoreMenu()
           return
@@ -231,15 +244,15 @@ export function useNativeChrome() {
         const tab = PRIMARY_TABS[id as PrimaryTabId]
         if (tab)
           void openTab(tab).finally(() => renderTabbar())
-      }),
-      await NativeNavigation.addListener('navbarBack', () => {
+      })),
+      register(NativeNavigation.addListener('navbarBack', () => {
         void goBack()
-      }),
-      await NativeNavigation.addListener('navbarItemTap', ({ id }) => {
+      })),
+      register(NativeNavigation.addListener('navbarItemTap', ({ id }) => {
         if (id === 'billing')
           void router.push('/settings/organization/usage')
-      }),
-    )
+      })),
+    ])
     await Promise.all([renderNavbar(), renderTabbar(), renderStatusBar()])
   })
 

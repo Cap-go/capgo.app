@@ -1,6 +1,7 @@
 import type { Tab } from '~/components/comp_def'
+import { Browser } from '@capacitor/browser'
 import { Capacitor } from '@capacitor/core'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -59,6 +60,15 @@ export function isNavigationPathActive(tabKey: string, path: string) {
   })
 }
 
+// Capacitor WebViews do not reliably hand window.open to the system browser.
+function openExternalUrl(url: string) {
+  if (Capacitor.isNativePlatform()) {
+    void Browser.open({ url })
+    return
+  }
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
+
 export function isSpoofTab(tab: Tab) {
   return tab.key === '#log-as' || tab.key === '#unspoof'
 }
@@ -76,6 +86,11 @@ export function useAppNavigation(options: { onNavigate?: () => void } = {}) {
   const route = useRoute()
   const { t } = useI18n()
   const isNativePlatform = Capacitor.isNativePlatform()
+
+  // Logout and login change the persisted spoof session outside this module.
+  watch(() => main.auth?.id, () => {
+    spoofed.value = isSpoofed()
+  })
 
   async function openLogAsDialog() {
     let identifier = ''
@@ -195,7 +210,7 @@ export function useAppNavigation(options: { onNavigate?: () => void } = {}) {
     if (tab.onClick)
       tab.onClick(tab.key)
     else
-      router.push(tab.key)
+      await router.push(tab.key)
     options.onNavigate?.()
   }
 
@@ -227,28 +242,28 @@ export function useAppNavigation(options: { onNavigate?: () => void } = {}) {
         label: 'documentation',
         icon: IconDoc,
         key: '#',
-        onClick: () => window.open('https://capgo.app/docs', '_blank', 'noopener,noreferrer'),
+        onClick: () => openExternalUrl('https://capgo.app/docs'),
         redirect: true,
       },
       {
         label: 'discord',
         icon: IconDiscord,
         key: '#',
-        onClick: () => window.open('https://discord.capgo.app', '_blank', 'noopener,noreferrer'),
+        onClick: () => openExternalUrl('https://discord.capgo.app'),
         redirect: true,
       },
       {
         label: 'support',
         icon: IconHeadset,
         key: '#support',
-        onClick: () => window.open('https://support.capgo.app', '_blank', 'noopener,noreferrer'),
+        onClick: () => openExternalUrl('https://support.capgo.app'),
         redirect: true,
       },
       {
         label: 'refer-and-earn',
         icon: IconGift,
         key: '#refer-and-earn',
-        onClick: () => window.open('https://capgo.affonso.io', '_blank', 'noopener,noreferrer'),
+        onClick: () => openExternalUrl('https://capgo.affonso.io'),
         redirect: true,
       },
       ...(isNativePlatform
@@ -273,7 +288,7 @@ export function useAppNavigation(options: { onNavigate?: () => void } = {}) {
         label: 'admin-dashboard',
         icon: IconShield,
         key: '#admin-dashboard',
-        onClick: () => window.open(ADMIN_DASHBOARD_URL, '_blank', 'noopener,noreferrer'),
+        onClick: () => openExternalUrl(ADMIN_DASHBOARD_URL),
         redirect: true,
       })
     }
