@@ -516,12 +516,22 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
             expect(statsData?.device_id).toBe(uuid)
           }
           else {
-            const { count, error: statsError } = await getSupabaseClient()
-              .from('stats')
-              .select('*', { count: 'exact', head: true })
-              .eq('device_id', uuid)
-              .eq('app_id', appId)
-              .eq('action', action)
+            let count: number | null = 0
+            let statsError: { code?: string } | null = null
+            for (let attempt = 0; attempt < 8; attempt++) {
+              const result = await getSupabaseClient()
+                .from('stats')
+                .select('*', { count: 'exact', head: true })
+                .eq('device_id', uuid)
+                .eq('app_id', appId)
+                .eq('action', action)
+              count = result.count
+              statsError = result.error
+              if (statsError || count !== 0)
+                break
+              if (attempt < 7)
+                await new Promise(resolve => setTimeout(resolve, 150))
+            }
             expect(statsError).toBeNull()
             expect(count).toBe(0)
           }
