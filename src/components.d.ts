@@ -12,6 +12,7 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     AccessTable: typeof import('./components/tables/AccessTable.vue')['default']
+    AlertsMenu: typeof import('./components/dashboard/AlertsMenu.vue')['default']
     ApiKeyHiddenScopeNotice: typeof import('./components/ApiKeyHiddenScopeNotice.vue')['default']
     AppAccess: typeof import('./components/dashboard/AppAccess.vue')['default']
     AppDashboardPage: typeof import('./components/dashboard/AppDashboardPage.vue')['default']

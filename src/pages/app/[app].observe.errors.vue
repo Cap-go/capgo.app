@@ -13,6 +13,7 @@ import IconDownload from '~icons/lucide/download'
 import IconExternalLink from '~icons/lucide/external-link'
 import IconLayers from '~icons/lucide/layers'
 import IconSmartphone from '~icons/lucide/smartphone'
+import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import InfoPopover from '~/components/InfoPopover.vue'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { formatLocalDateShort, formatLocalDateTime } from '~/services/date'
@@ -403,10 +404,13 @@ watch(() => [
               {{ selectedPeriodLabel }} · {{ periodRangeLabel }}
             </p>
           </div>
-          <button type="button" class="gap-2 d-btn d-btn-sm d-btn-outline shrink-0" @click="openLogs(topAction?.action)">
-            <IconExternalLink class="w-4 h-4" />
-            {{ topAction ? t('view-action-logs') : t('view-logs') }}
-          </button>
+          <div class="flex flex-wrap items-center gap-3">
+            <button type="button" class="gap-2 d-btn d-btn-sm d-btn-outline shrink-0" @click="openLogs(topAction?.action)">
+              <IconExternalLink class="w-4 h-4" />
+              {{ topAction ? t('view-action-logs') : t('view-logs') }}
+            </button>
+            <PeriodDaySelector v-model="selectedDays" />
+          </div>
         </div>
 
         <div class="grid grid-cols-2 gap-3 xl:grid-cols-4" data-testid="observe-updater-summary">

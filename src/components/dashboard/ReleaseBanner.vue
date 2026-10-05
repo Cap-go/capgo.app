@@ -58,40 +58,25 @@ function viewLive() {
     v-if="hasRecentRelease"
     type="button"
     data-test="release-banner"
-    class="block w-full mb-4 overflow-hidden text-left transition-colors border rounded-lg cursor-pointer border-emerald-200 bg-emerald-50 hover:bg-emerald-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 dark:bg-emerald-900/20 dark:border-emerald-800 dark:hover:bg-emerald-900/30"
+    class="flex items-center justify-between w-full gap-3 px-4 py-2 mb-4 text-left transition-colors border rounded-lg cursor-pointer min-h-11 border-emerald-200 bg-emerald-50 hover:bg-emerald-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 dark:bg-emerald-900/20 dark:border-emerald-800 dark:hover:bg-emerald-900/30"
     @click="viewLive"
   >
-    <div class="flex items-center justify-between p-4">
-      <div class="flex items-center gap-3">
-        <div class="flex items-center justify-center flex-shrink-0 w-10 h-10 rounded-full bg-emerald-100 dark:bg-emerald-900/50">
-          <IconCheckCircle class="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-        </div>
-
-        <div class="flex items-center gap-4">
-          <div>
-            <p class="font-semibold text-emerald-900 dark:text-emerald-100">
-              {{ t('new-release-available') }}
-            </p>
-            <p class="text-sm text-emerald-700 dark:text-emerald-300">
-              {{ t('version') }} {{ release?.version_name }}<template v-if="release?.channel_name">
-                ({{ release.channel_name }})
-              </template> — {{ t('released') }} {{ lastReleaseDisplay }}
-              <template v-if="adoptionPercentLabel">
-                · {{ t('release-banner-adoption', { percent: adoptionPercentLabel }) }}
-              </template>
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <!-- Visual affordance only: the whole card is the button, so this is a span. -->
-      <span
-        data-test="release-banner-view"
-        class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-md bg-emerald-600 shrink-0"
-      >
-        <IconTrendingUp class="w-4 h-4" />
-        {{ t('release-banner-watch-live') }}
+    <span class="flex items-center min-w-0 gap-3">
+      <IconCheckCircle class="w-5 h-5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+      <span class="min-w-0 text-sm">
+        <span class="font-semibold text-emerald-900 dark:text-emerald-100">{{ t('new-release-available') }}</span>
+        <span class="text-emerald-700 dark:text-emerald-300">
+          · {{ t('version') }} {{ release?.version_name }}<template v-if="release?.channel_name"> ({{ release.channel_name }})</template> — {{ t('released') }} {{ lastReleaseDisplay }}<template v-if="adoptionPercentLabel"> · {{ t('release-banner-adoption', { percent: adoptionPercentLabel }) }}</template>
+        </span>
       </span>
-    </div>
+    </span>
+    <!-- Visual affordance only: the whole banner is the button, so this is a span. -->
+    <span
+      data-test="release-banner-view"
+      class="inline-flex items-center gap-1.5 px-3 py-1 text-sm font-medium text-white rounded-md shrink-0 bg-emerald-600"
+    >
+      <IconTrendingUp class="w-4 h-4" />
+      {{ t('release-banner-watch-live') }}
+    </span>
   </button>
 </template>

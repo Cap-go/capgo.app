@@ -243,7 +243,7 @@ const router = createRouter({
     { path: '/app/:app/logs/insights', redirect: redirectAppPath('/observe/errors') },
     { path: '/app/:app/logs', redirect: redirectAppPath('/observe/logs') },
     { path: '/app/:app/compatibility', redirect: redirectAppPath('/observe/compatibility') },
-    { path: '/app/:app/observe', redirect: redirectAppPath('/observe/releases') },
+    { path: '/app/:app/observe', redirect: redirectAppPath('') },
     // Legacy overview sub-tabs and Observe tabs after the overview/observe regrouping
     { path: '/app/:app/live', redirect: redirectAppPath('/observe/releases') },
     { path: '/app/:app/installs', redirect: redirectAppPath('/observe/releases') },

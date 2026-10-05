@@ -13,6 +13,8 @@ const props = defineProps<{
   appId: string
   versionName: string
   linkedChannelId?: number | null
+  // One-line pill for dense pages such as Observe > Releases.
+  inline?: boolean
 }>()
 
 const { t } = useI18n()
@@ -103,6 +105,19 @@ watch(() => [props.appId, props.versionName] as const, () => {
 
 <template>
   <button
+    v-if="inline"
+    type="button"
+    data-test="bundle-adoption-card"
+    class="inline-flex items-center max-w-full gap-2 px-3 text-sm text-left bg-white border rounded-lg shadow-sm cursor-pointer h-9 dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/40"
+    :title="detailLabel"
+    @click="openAnalytics"
+  >
+    <IconPackage class="w-4 h-4 shrink-0 text-slate-500 dark:text-slate-400" />
+    <span class="font-semibold tabular-nums text-slate-900 dark:text-white">{{ valueLabel }}</span>
+    <span class="truncate text-slate-500 dark:text-slate-400">{{ detailLabel }}</span>
+  </button>
+  <button
+    v-else
     type="button"
     data-test="bundle-adoption-card"
     class="p-4 text-left bg-white border rounded-lg shadow-sm cursor-pointer dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/40"

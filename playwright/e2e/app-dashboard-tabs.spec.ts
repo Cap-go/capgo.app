@@ -15,6 +15,9 @@ test.describe('App overview', () => {
     await page.goto('/app/com.demo.app')
 
     await expect(page.locator('[data-testid="app-overview"]')).toBeVisible()
+    // Summary is the landing sub-tab of the single Observe main tab.
+    await expect(page.getByRole('button', { name: 'Observe', exact: true })).toHaveAttribute('aria-current', 'page')
+    await expect(page.getByRole('button', { name: 'Summary', exact: true })).toHaveAttribute('aria-current', 'page')
     await expect(page.locator('[data-testid="overview-kpis"] a')).toHaveCount(6)
     await expect(page.getByRole('button', { name: 'Installs', exact: true })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Active Bundle', exact: true })).toHaveCount(0)
@@ -51,7 +54,7 @@ test.describe('App overview', () => {
     await expect(page.locator('#mau-stat')).toBeVisible()
   })
 
-  test('releases period defaults to 7 days and drives the version chart', async ({ page }) => {
+  test('overview period defaults to 7 days and drives the version chart', async ({ page }) => {
     function daySpan(from: string | null, to: string | null) {
       if (!from || !to)
         return Number.NaN
@@ -63,7 +66,7 @@ test.describe('App overview', () => {
     const periodButton = (name: string) => page.locator('[data-testid="period-day-selector"]').getByRole('button', { name, exact: true })
     const range = page.locator('[data-testid="version-chart-range"]')
 
-    await page.goto('/app/com.demo.app/observe/releases')
+    await page.goto('/app/com.demo.app')
     await expect(periodButton('7 days')).toHaveAttribute('aria-pressed', 'true')
     await expect.poll(async () => daySpan(await range.getAttribute('data-from'), await range.getAttribute('data-to'))).toBe(6)
 

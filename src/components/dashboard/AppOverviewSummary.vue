@@ -11,7 +11,7 @@ import IconCheckCircle from '~icons/lucide/check-circle'
 import IconPuzzle from '~icons/lucide/puzzle'
 import IconRocket from '~icons/lucide/rocket'
 import IconSmartphone from '~icons/lucide/smartphone'
-import AttentionBar from '~/components/dashboard/AttentionBar.vue'
+import AlertsMenu from '~/components/dashboard/AlertsMenu.vue'
 import { provideChartCardCompact } from '~/components/dashboard/chartCardDensity'
 import DevicesStats from '~/components/dashboard/DevicesStats.vue'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
@@ -337,16 +337,15 @@ const chartOptions = computed<ChartOptions<'bar'>>(() => {
 
 <template>
   <div class="flex flex-col gap-4" data-testid="app-overview">
-    <div class="flex flex-col gap-3 lg:flex-row lg:items-start">
-      <AttentionBar
+    <div class="flex flex-wrap items-center justify-end gap-3">
+      <AlertsMenu
         v-if="!forceDemo"
-        class="flex-1"
         :app-id="appId"
         :release="release"
         :adoption-percent="adoption?.percent ?? null"
         @deployed="emit('deployed')"
       />
-      <PeriodDaySelector v-model="days" class="self-end lg:ml-auto lg:self-start" />
+      <PeriodDaySelector v-model="days" />
     </div>
 
     <div class="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6" data-testid="overview-kpis">

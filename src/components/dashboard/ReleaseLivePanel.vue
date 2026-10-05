@@ -18,8 +18,12 @@ import { formatNumberValue } from '~/services/formatLocale'
 const props = withDefaults(defineProps<{
   appId: string
   forceDemo?: boolean
+  // Folds the KPI tiles into the release row and shortens the chart so
+  // Observe > Releases fits one screen.
+  dense?: boolean
 }>(), {
   forceDemo: false,
+  dense: false,
 })
 
 registerDashboardCharts()
@@ -263,7 +267,7 @@ watch(() => props.appId, () => {
 </script>
 
 <template>
-  <section class="flex flex-col gap-4" data-testid="release-live">
+  <section class="flex flex-col" :class="dense ? 'gap-3' : 'gap-4'" data-testid="release-live">
     <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
       <div class="min-w-0">
         <div class="flex flex-wrap items-center gap-2">
@@ -286,9 +290,16 @@ watch(() => props.appId, () => {
           >
             {{ t('demo') }}
           </span>
+          <span
+            v-if="dense && secondsSinceUpdate !== null"
+            class="text-xs tabular-nums text-slate-500 dark:text-slate-400"
+            :title="t('release-live-help', { seconds: RELEASE_LIVE_POLL_INTERVAL_MS / 1000 })"
+          >
+            {{ t('release-live-updated-ago', { seconds: secondsSinceUpdate }) }}
+          </span>
         </div>
         <p
-          v-if="secondsSinceUpdate !== null"
+          v-if="!dense && secondsSinceUpdate !== null"
           class="mt-1 text-xs tabular-nums text-slate-500 dark:text-slate-400"
           :title="t('release-live-help', { seconds: RELEASE_LIVE_POLL_INTERVAL_MS / 1000 })"
         >
@@ -389,6 +400,40 @@ watch(() => props.appId, () => {
             </template>
           </p>
         </div>
+        <dl v-if="dense" class="flex flex-wrap items-center gap-x-6 gap-y-2" data-testid="release-live-dense-stats">
+          <div :title="t('release-live-adoption-help', { onRelease: formatCount(adoption.devices_on_release), total: formatCount(adoption.total_devices) })">
+            <dt class="text-xs text-slate-500 dark:text-slate-400">
+              {{ t('release-live-adoption') }}
+            </dt>
+            <dd class="text-lg font-semibold text-slate-900 dark:text-white">
+              {{ formatPercent(adoption.percent) }}
+            </dd>
+          </div>
+          <div :title="t('release-live-served', { count: formatCount(totals.get) })">
+            <dt class="text-xs text-slate-500 dark:text-slate-400">
+              {{ t('release-live-installs') }}
+            </dt>
+            <dd class="text-lg font-semibold text-slate-900 dark:text-white">
+              {{ formatCount(totals.install) }}
+            </dd>
+          </div>
+          <div :title="failureRate !== null ? t('release-live-failure-rate', { rate: formatPercent(failureRate) }) : ''">
+            <dt class="text-xs text-slate-500 dark:text-slate-400">
+              {{ t('release-live-failures') }}
+            </dt>
+            <dd class="text-lg font-semibold" :class="failureCountClass" data-testid="release-live-failure-count">
+              {{ formatCount(totals.fail) }}
+            </dd>
+          </div>
+          <div>
+            <dt class="text-xs text-slate-500 dark:text-slate-400">
+              {{ t('bundle-install-success-rate') }}
+            </dt>
+            <dd class="text-lg font-semibold" :class="successRateClass(totals.success_rate)">
+              {{ formatPercent(totals.success_rate) }}
+            </dd>
+          </div>
+        </dl>
         <div class="flex flex-wrap gap-2">
           <RouterLink
             v-if="release.bundle_id && !forceDemo"
@@ -407,7 +452,7 @@ watch(() => props.appId, () => {
         </div>
       </div>
 
-      <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div v-if="!dense" class="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <div class="px-4 py-3 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
           <div class="text-xs text-slate-600 dark:text-slate-400">
             {{ t('release-live-adoption') }}
@@ -474,10 +519,10 @@ watch(() => props.appId, () => {
               {{ t('release-live-bucket', { minutes: live.window.bucket_minutes }) }}
             </span>
           </div>
-          <div v-if="hasActivity" class="h-56">
+          <div v-if="hasActivity" :class="dense ? 'h-40' : 'h-56'">
             <Bar :data="chartData" :options="chartOptions" />
           </div>
-          <div v-else class="flex flex-col items-center justify-center h-56 gap-2 text-sm text-center text-slate-500 dark:text-slate-400">
+          <div v-else class="flex flex-col items-center justify-center gap-2 text-sm text-center text-slate-500 dark:text-slate-400" :class="dense ? 'h-40' : 'h-56'">
             <Spinner size="w-6 h-6" />
             <p class="max-w-sm">
               {{ t('release-live-waiting') }}

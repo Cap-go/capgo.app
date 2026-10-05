@@ -26,12 +26,15 @@ const props = withDefaults(defineProps<{
   days?: number
   hidePeriodSelector?: boolean
   compact?: boolean
+  // Timing chart only, for dense pages such as Observe > Releases.
+  dense?: boolean
 }>(), {
   channelId: undefined,
   versionName: '',
   forceDemo: false,
   hidePeriodSelector: false,
   compact: false,
+  dense: false,
 })
 
 Chart.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend)
@@ -235,7 +238,7 @@ watch(
 
 <template>
   <section class="flex flex-col gap-4" data-testid="bundle-install-stats">
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div v-if="!dense" class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
       <div class="min-w-0">
         <div class="flex flex-wrap items-center gap-2">
           <h2 class="text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
@@ -264,7 +267,7 @@ watch(
     </div>
 
     <div
-      v-if="effectiveStats?.totals && hasData && !compact"
+      v-if="effectiveStats?.totals && hasData && !compact && !dense"
       class="grid grid-cols-1 gap-3 sm:grid-cols-2"
     >
       <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
@@ -319,7 +322,25 @@ watch(
 
     <template v-else>
       <div
-        v-if="!compact"
+        v-if="dense"
+        class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10"
+        data-testid="bundle-install-charts"
+      >
+        <div class="flex items-center justify-between gap-3 mb-3" :title="t('bundle-install-stats-help')">
+          <h3 class="text-base font-semibold truncate text-slate-950 dark:text-white">
+            {{ t('bundle-install-chart-timing-title') }}
+          </h3>
+          <span v-if="effectiveStats?.totals" class="text-xs shrink-0 text-slate-500 dark:text-slate-400">
+            {{ t('bundle-install-success-rate') }}
+            <span class="font-semibold" :class="successRateClass(effectiveStats.totals.success_rate)">{{ formatPercent(effectiveStats.totals.success_rate) }}</span>
+          </span>
+        </div>
+        <div class="relative h-40">
+          <Bar :data="timingChartData" :options="timingChartOptions" />
+        </div>
+      </div>
+      <div
+        v-else-if="!compact"
         class="grid grid-cols-1 gap-4 lg:grid-cols-2"
         data-testid="bundle-install-charts"
       >
@@ -342,6 +363,7 @@ watch(
       </div>
 
       <div
+        v-if="!dense"
         class="overflow-x-auto bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10"
       >
         <table class="min-w-full text-sm">

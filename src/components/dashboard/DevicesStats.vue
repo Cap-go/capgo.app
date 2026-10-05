@@ -1042,7 +1042,7 @@ watch(
               <div
                 v-if="latestVersion"
                 class="font-bold leading-tight break-words dark:text-white text-slate-600"
-                :class="isNativeUsage ? 'text-xl sm:text-2xl' : 'text-3xl'"
+                :class="props.variant === 'chart' ? 'text-lg' : (isNativeUsage ? 'text-xl sm:text-2xl' : 'text-3xl')"
               >
                 {{ latestVersion.name }}
               </div>

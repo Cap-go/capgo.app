@@ -10,13 +10,12 @@ import { Bar, Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconActivity from '~icons/lucide/activity'
-import IconAlertTriangle from '~icons/lucide/alert-triangle'
 import IconExternalLink from '~icons/lucide/external-link'
-import IconRocket from '~icons/lucide/rocket'
 import IconTimer from '~icons/lucide/timer'
 import { provideChartCardCompact } from '~/components/dashboard/chartCardDensity'
 import DevicesStats from '~/components/dashboard/DevicesStats.vue'
 import NativeReleaseStatsPanel from '~/components/dashboard/NativeReleaseStatsPanel.vue'
+import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import VersionGroupSelector from '~/components/dashboard/VersionGroupSelector.vue'
 import InfoPopover from '~/components/InfoPopover.vue'
 import { useNativeObserveStats } from '~/composables/useNativeObserveStats'
@@ -115,6 +114,9 @@ interface NativeUsageState {
 const nativeUsage = ref<NativeUsageState>({ data: null, isLoading: true })
 const nativeDevicesStats = useTemplateRef<{ reload: () => Promise<void> }>('nativeDevicesStats')
 
+type NativeDetailTab = 'versions' | 'actions' | 'releases'
+const detailTab = ref<NativeDetailTab>('versions')
+
 // Tables show their top rows so the page fits one screen; "show all" expands.
 const PREVIEW_ROWS = 5
 const showAllVersions = ref(false)
@@ -158,6 +160,17 @@ const versionHealthHelp = computed(() => {
     return t('native-observe-version-health-help-platform')
   return t('native-observe-version-health-help')
 })
+const detailTabs = computed(() => {
+  const tabs: Array<{ key: NativeDetailTab, label: string, help: string }> = []
+  if (hasData.value) {
+    tabs.push({ key: 'versions', label: t('native-observe-version-health'), help: versionHealthHelp.value })
+    tabs.push({ key: 'actions', label: t('native-observe-action-breakdown'), help: t('native-observe-action-breakdown-help') })
+  }
+  tabs.push({ key: 'releases', label: t('native-release-stats-title'), help: t('native-release-stats-help') })
+  return tabs
+})
+// Without native observe events only the native release adoption tab exists.
+const activeDetailTab = computed<NativeDetailTab>(() => detailTabs.value.some(tab => tab.key === detailTab.value) ? detailTab.value : 'releases')
 const versionTableMinWidth = computed(() => {
   if (showChannelColumn.value)
     return 'min-w-[980px]'
@@ -390,39 +403,42 @@ watch([packageId, days, versionGroup], async () => {
 <template>
   <div class="w-full h-full px-4 pt-4 mx-auto mb-8 sm:px-6 lg:px-8 max-w-9xl max-h-fit">
     <div class="flex flex-col gap-4">
-      <div class="flex items-center min-w-0 gap-1">
-        <p
-          class="text-sm truncate text-slate-500 dark:text-slate-400"
-          data-testid="observe-period-labels"
-          :data-count="stats?.labels.length ?? 0"
-          :title="observeOverviewHelp"
-        >
-          {{ observeScopeLabel }}
-        </p>
-        <InfoPopover :label="t('native-observe-signals-note-title')">
-          <div data-testid="observe-signals-note">
-            <div class="font-semibold text-slate-900 dark:text-slate-100">
-              {{ t('native-observe-signals-note-title') }}
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="flex items-center min-w-0 gap-1">
+          <p
+            class="text-sm truncate text-slate-500 dark:text-slate-400"
+            data-testid="observe-period-labels"
+            :data-count="stats?.labels.length ?? 0"
+            :title="observeOverviewHelp"
+          >
+            {{ observeScopeLabel }}
+          </p>
+          <InfoPopover :label="t('native-observe-signals-note-title')">
+            <div data-testid="observe-signals-note">
+              <div class="font-semibold text-slate-900 dark:text-slate-100">
+                {{ t('native-observe-signals-note-title') }}
+              </div>
+              <p class="mt-1 text-slate-600 dark:text-slate-300">
+                {{ t('native-observe-subtitle') }} {{ t('native-observe-signals-note-body') }}
+              </p>
+              <ul class="flex flex-col gap-2 mt-3">
+                <li class="flex items-center gap-2">
+                  <span class="px-1.5 py-0.5 text-[11px] font-medium rounded border shrink-0" :class="signalBadgeClass.crash">{{ t('native-observe-signal-crash') }}</span>
+                  <span class="text-xs text-slate-600 dark:text-slate-400">{{ t('native-observe-signals-note-crash') }}</span>
+                </li>
+                <li class="flex items-center gap-2">
+                  <span class="px-1.5 py-0.5 text-[11px] font-medium rounded border shrink-0" :class="signalBadgeClass.web">{{ t('native-observe-signal-web') }}</span>
+                  <span class="text-xs text-slate-600 dark:text-slate-400">{{ t('native-observe-signals-note-web') }}</span>
+                </li>
+                <li class="flex items-center gap-2">
+                  <span class="px-1.5 py-0.5 text-[11px] font-medium rounded border shrink-0" :class="signalBadgeClass.system">{{ t('native-observe-signal-system') }}</span>
+                  <span class="text-xs text-slate-600 dark:text-slate-400">{{ t('native-observe-signals-note-system') }}</span>
+                </li>
+              </ul>
             </div>
-            <p class="mt-1 text-slate-600 dark:text-slate-300">
-              {{ t('native-observe-subtitle') }} {{ t('native-observe-signals-note-body') }}
-            </p>
-            <ul class="flex flex-col gap-2 mt-3">
-              <li class="flex items-center gap-2">
-                <span class="px-1.5 py-0.5 text-[11px] font-medium rounded border shrink-0" :class="signalBadgeClass.crash">{{ t('native-observe-signal-crash') }}</span>
-                <span class="text-xs text-slate-600 dark:text-slate-400">{{ t('native-observe-signals-note-crash') }}</span>
-              </li>
-              <li class="flex items-center gap-2">
-                <span class="px-1.5 py-0.5 text-[11px] font-medium rounded border shrink-0" :class="signalBadgeClass.web">{{ t('native-observe-signal-web') }}</span>
-                <span class="text-xs text-slate-600 dark:text-slate-400">{{ t('native-observe-signals-note-web') }}</span>
-              </li>
-              <li class="flex items-center gap-2">
-                <span class="px-1.5 py-0.5 text-[11px] font-medium rounded border shrink-0" :class="signalBadgeClass.system">{{ t('native-observe-signal-system') }}</span>
-                <span class="text-xs text-slate-600 dark:text-slate-400">{{ t('native-observe-signals-note-system') }}</span>
-              </li>
-            </ul>
-          </div>
-        </InfoPopover>
+          </InfoPopover>
+        </div>
+        <PeriodDaySelector v-model="days" />
       </div>
 
       <div v-if="statsLoading && !stats" class="flex items-center justify-center h-80">
@@ -441,7 +457,7 @@ watch([packageId, days, versionGroup], async () => {
           </div>
         </div>
 
-        <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <div class="grid grid-cols-1 gap-4 xl:grid-cols-3">
           <DevicesStats
             ref="nativeDevicesStats"
             :app-id="packageId"
@@ -451,206 +467,200 @@ watch([packageId, days, versionGroup], async () => {
             :accumulated="false"
             @native-usage="nativeUsage = $event"
           />
-          <div v-if="hasData" class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+          <div v-if="hasData" class="flex flex-col h-[320px] p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
             <div class="flex items-center justify-between gap-3 mb-3">
               <h2 class="text-base font-semibold text-slate-950 dark:text-white" :title="t('native-observe-performance-help')">
                 {{ t('native-observe-performance') }}
               </h2>
               <IconTimer class="w-5 h-5 text-sky-500" />
             </div>
-            <div class="relative h-56">
+            <div class="relative flex-1 min-h-0">
               <Line :data="performanceChartData" :options="performanceChartOptions" />
             </div>
           </div>
-        </div>
-
-        <div v-if="statsLoading" class="flex items-center justify-center h-10 text-sm text-slate-500 dark:text-slate-400">
-          <Spinner size="w-5 h-5" />
-        </div>
-
-        <div v-if="!hasData" class="flex flex-col items-center justify-center h-72 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10 text-slate-500 dark:text-slate-400">
-          <IconActivity class="w-12 h-12 mb-3" />
-          <h2 class="text-lg font-semibold text-slate-800 dark:text-slate-100">
-            {{ t('native-observe-no-data') }}
-          </h2>
-          <p class="mt-1 text-sm text-center text-slate-500 dark:text-slate-400">
-            {{ t('native-observe-no-data-help') }}
-          </p>
-        </div>
-
-        <template v-else>
-          <div class="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)]">
-            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-              <div class="flex flex-col gap-3 mb-3 sm:flex-row sm:items-center sm:justify-between">
-                <div class="flex items-center min-w-0 gap-2">
-                  <h2 class="text-base font-semibold text-slate-950 dark:text-white" :title="versionHealthHelp">
-                    {{ t('native-observe-version-health') }}
-                  </h2>
-                  <IconRocket class="w-5 h-5 text-sky-500 shrink-0" />
-                </div>
-                <VersionGroupSelector :model-value="versionGroup" @update:model-value="selectVersionGroup" />
-              </div>
-              <div class="overflow-x-auto">
-                <table class="d-table d-table-sm w-full" :class="versionTableMinWidth">
-                  <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
-                    <tr>
-                      <th class="whitespace-nowrap">
-                        {{ t('native-observe-version') }}
-                      </th>
-                      <th v-if="showPlatformColumn" class="whitespace-nowrap">
-                        {{ t('native-observe-platform') }}
-                      </th>
-                      <th v-if="showChannelColumn" class="whitespace-nowrap">
-                        {{ t('native-observe-channel') }}
-                      </th>
-                      <th class="whitespace-nowrap">
-                        {{ t('events') }}
-                      </th>
-                      <th class="whitespace-nowrap">
-                        {{ t('devices') }}
-                      </th>
-                      <th class="whitespace-nowrap">
-                        {{ t('native-observe-issue-free-rate') }}
-                      </th>
-                      <th class="whitespace-nowrap">
-                        {{ t('native-observe-launch-p90') }}
-                      </th>
-                      <th class="whitespace-nowrap">
-                        {{ t('native-observe-webview-p90') }}
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="version in visibleVersions" :key="versionRowKey(version)">
-                      <td class="font-medium text-slate-900 dark:text-slate-100">
-                        {{ version.version_name }}
-                      </td>
-                      <td v-if="showPlatformColumn">
-                        {{ version.platform || '-' }}
-                      </td>
-                      <td v-if="showChannelColumn">
-                        {{ version.channel_name || '-' }}
-                      </td>
-                      <td>{{ formatCount(version.events) }}</td>
-                      <td>{{ formatCount(version.devices) }}</td>
-                      <td>{{ formatPercent(version.issue_free_rate) }}</td>
-                      <td>{{ formatDuration(version.launch_p90_ms) }}</td>
-                      <td>{{ formatDuration(version.webview_load_p90_ms) }}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-              <button
-                v-if="topVersions.length > PREVIEW_ROWS"
-                type="button"
-                class="mt-3 text-xs font-medium text-azure-600 hover:underline dark:text-azure-300"
-                @click="showAllVersions = !showAllVersions"
-              >
-                {{ showAllVersions ? t('show-less') : t('show-all-count', { count: topVersions.length }) }}
-              </button>
+          <div v-if="hasData" class="flex flex-col h-[320px] p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+            <div class="flex items-center justify-between gap-3 mb-3">
+              <h2 class="text-base font-semibold text-slate-950 dark:text-white" :title="t('native-observe-volume-help')">
+                {{ t('native-observe-volume') }}
+              </h2>
+              <IconActivity class="w-5 h-5 text-emerald-500" />
             </div>
-
-            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-              <div class="flex items-center justify-between gap-3 mb-3">
-                <h2 class="text-base font-semibold text-slate-950 dark:text-white" :title="t('native-observe-volume-help')">
-                  {{ t('native-observe-volume') }}
-                </h2>
-                <IconActivity class="w-5 h-5 text-emerald-500" />
-              </div>
-              <div class="relative h-56">
-                <Bar :data="eventChartData" :options="eventChartOptions" />
-              </div>
+            <div class="relative flex-1 min-h-0">
+              <Bar :data="eventChartData" :options="eventChartOptions" />
             </div>
           </div>
+          <div v-if="!hasData && !statsLoading" class="flex flex-col items-center justify-center h-[320px] bg-white border rounded-xl shadow-sm xl:col-span-2 dark:bg-slate-800/60 border-slate-200 dark:border-white/10 text-slate-500 dark:text-slate-400">
+            <IconActivity class="w-12 h-12 mb-3" />
+            <h2 class="text-lg font-semibold text-slate-800 dark:text-slate-100">
+              {{ t('native-observe-no-data') }}
+            </h2>
+            <p class="mt-1 text-sm text-center text-slate-500 dark:text-slate-400">
+              {{ t('native-observe-no-data-help') }}
+            </p>
+          </div>
+        </div>
 
-          <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-            <div class="flex items-center justify-between gap-3 mb-3">
-              <h2 class="text-base font-semibold text-slate-950 dark:text-white" :title="t('native-observe-action-breakdown-help')">
-                {{ t('native-observe-action-breakdown') }}
-              </h2>
-              <IconAlertTriangle class="w-5 h-5 text-amber-500" />
-            </div>
-            <div class="overflow-x-auto">
-              <table class="d-table d-table-sm w-full min-w-[820px]">
-                <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
-                  <tr>
-                    <th class="whitespace-nowrap">
-                      {{ t('action') }}
-                    </th>
-                    <th class="whitespace-nowrap">
-                      {{ t('type') }}
-                    </th>
-                    <th class="whitespace-nowrap">
-                      {{ t('events') }}
-                    </th>
-                    <th class="whitespace-nowrap">
-                      {{ t('devices') }}
-                    </th>
-                    <th class="whitespace-nowrap">
-                      {{ t('native-observe-p50') }}
-                    </th>
-                    <th class="whitespace-nowrap">
-                      {{ t('native-observe-p90') }}
-                    </th>
-                    <th class="whitespace-nowrap">
-                      {{ t('native-observe-p99') }}
-                    </th>
-                    <th class="text-right whitespace-nowrap">
-                      {{ t('logs') }}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="action in visibleActions" :key="action.action">
-                    <td class="min-w-[220px] max-w-[380px]">
-                      <div class="font-medium text-slate-900 dark:text-slate-100">
-                        {{ formatAction(action.action) }}
-                      </div>
-                      <div v-if="signalHelp(action.action)" class="mt-0.5 text-xs font-normal whitespace-normal text-slate-500 dark:text-slate-400">
-                        {{ signalHelp(action.action) }}
-                      </div>
-                    </td>
-                    <td>
-                      <span class="inline-block px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap rounded border" :class="signalBadgeClass[observeSignalCategory(action.action)]">
-                        {{ signalLabel(action.action) }}
-                      </span>
-                    </td>
-                    <td class="whitespace-nowrap">
-                      {{ formatCount(action.events) }}
-                    </td>
-                    <td class="whitespace-nowrap">
-                      {{ formatCount(action.devices) }}
-                    </td>
-                    <td class="whitespace-nowrap">
-                      {{ formatDuration(action.p50_ms) }}
-                    </td>
-                    <td class="whitespace-nowrap">
-                      {{ formatDuration(action.p90_ms) }}
-                    </td>
-                    <td class="whitespace-nowrap">
-                      {{ formatDuration(action.p99_ms) }}
-                    </td>
-                    <td class="text-right">
-                      <button type="button" class="d-btn d-btn-ghost d-btn-xs" :title="t('native-observe-open-logs')" @click="openLogs(action.action)">
-                        <IconExternalLink class="w-4 h-4" />
-                      </button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+        <!-- One detail table at a time keeps the page on one screen. -->
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div role="tablist" class="inline-flex p-1 rounded-lg bg-slate-200/70 dark:bg-slate-800" data-testid="native-detail-tabs">
             <button
-              v-if="topActions.length > PREVIEW_ROWS"
+              v-for="tab in detailTabs"
+              :key="tab.key"
               type="button"
-              class="mt-3 text-xs font-medium text-azure-600 hover:underline dark:text-azure-300"
-              @click="showAllActions = !showAllActions"
+              role="tab"
+              :aria-selected="activeDetailTab === tab.key"
+              :title="tab.help"
+              class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors"
+              :class="activeDetailTab === tab.key ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'"
+              @click="detailTab = tab.key"
             >
-              {{ showAllActions ? t('show-less') : t('show-all-count', { count: topActions.length }) }}
+              {{ tab.label }}
             </button>
           </div>
-        </template>
+          <VersionGroupSelector v-if="activeDetailTab === 'versions'" :model-value="versionGroup" @update:model-value="selectVersionGroup" />
+        </div>
 
+        <div v-if="activeDetailTab === 'versions'" class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+          <div class="overflow-x-auto">
+            <table class="d-table d-table-sm w-full" :class="versionTableMinWidth">
+              <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
+                <tr>
+                  <th class="whitespace-nowrap">
+                    {{ t('native-observe-version') }}
+                  </th>
+                  <th v-if="showPlatformColumn" class="whitespace-nowrap">
+                    {{ t('native-observe-platform') }}
+                  </th>
+                  <th v-if="showChannelColumn" class="whitespace-nowrap">
+                    {{ t('native-observe-channel') }}
+                  </th>
+                  <th class="whitespace-nowrap">
+                    {{ t('events') }}
+                  </th>
+                  <th class="whitespace-nowrap">
+                    {{ t('devices') }}
+                  </th>
+                  <th class="whitespace-nowrap">
+                    {{ t('native-observe-issue-free-rate') }}
+                  </th>
+                  <th class="whitespace-nowrap">
+                    {{ t('native-observe-launch-p90') }}
+                  </th>
+                  <th class="whitespace-nowrap">
+                    {{ t('native-observe-webview-p90') }}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="version in visibleVersions" :key="versionRowKey(version)">
+                  <td class="font-medium text-slate-900 dark:text-slate-100">
+                    {{ version.version_name }}
+                  </td>
+                  <td v-if="showPlatformColumn">
+                    {{ version.platform || '-' }}
+                  </td>
+                  <td v-if="showChannelColumn">
+                    {{ version.channel_name || '-' }}
+                  </td>
+                  <td>{{ formatCount(version.events) }}</td>
+                  <td>{{ formatCount(version.devices) }}</td>
+                  <td>{{ formatPercent(version.issue_free_rate) }}</td>
+                  <td>{{ formatDuration(version.launch_p90_ms) }}</td>
+                  <td>{{ formatDuration(version.webview_load_p90_ms) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <button
+            v-if="topVersions.length > PREVIEW_ROWS"
+            type="button"
+            class="mt-3 text-xs font-medium text-azure-600 hover:underline dark:text-azure-300"
+            @click="showAllVersions = !showAllVersions"
+          >
+            {{ showAllVersions ? t('show-less') : t('show-all-count', { count: topVersions.length }) }}
+          </button>
+        </div>
+        <div v-else-if="activeDetailTab === 'actions'" class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+          <div class="overflow-x-auto">
+            <table class="d-table d-table-sm w-full min-w-[820px]">
+              <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
+                <tr>
+                  <th class="whitespace-nowrap">
+                    {{ t('action') }}
+                  </th>
+                  <th class="whitespace-nowrap">
+                    {{ t('type') }}
+                  </th>
+                  <th class="whitespace-nowrap">
+                    {{ t('events') }}
+                  </th>
+                  <th class="whitespace-nowrap">
+                    {{ t('devices') }}
+                  </th>
+                  <th class="whitespace-nowrap">
+                    {{ t('native-observe-p50') }}
+                  </th>
+                  <th class="whitespace-nowrap">
+                    {{ t('native-observe-p90') }}
+                  </th>
+                  <th class="whitespace-nowrap">
+                    {{ t('native-observe-p99') }}
+                  </th>
+                  <th class="text-right whitespace-nowrap">
+                    {{ t('logs') }}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="action in visibleActions" :key="action.action">
+                  <td class="min-w-[220px] max-w-[380px]">
+                    <div class="font-medium text-slate-900 dark:text-slate-100">
+                      {{ formatAction(action.action) }}
+                    </div>
+                    <div v-if="signalHelp(action.action)" class="mt-0.5 text-xs font-normal whitespace-normal text-slate-500 dark:text-slate-400">
+                      {{ signalHelp(action.action) }}
+                    </div>
+                  </td>
+                  <td>
+                    <span class="inline-block px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap rounded border" :class="signalBadgeClass[observeSignalCategory(action.action)]">
+                      {{ signalLabel(action.action) }}
+                    </span>
+                  </td>
+                  <td class="whitespace-nowrap">
+                    {{ formatCount(action.events) }}
+                  </td>
+                  <td class="whitespace-nowrap">
+                    {{ formatCount(action.devices) }}
+                  </td>
+                  <td class="whitespace-nowrap">
+                    {{ formatDuration(action.p50_ms) }}
+                  </td>
+                  <td class="whitespace-nowrap">
+                    {{ formatDuration(action.p90_ms) }}
+                  </td>
+                  <td class="whitespace-nowrap">
+                    {{ formatDuration(action.p99_ms) }}
+                  </td>
+                  <td class="text-right">
+                    <button type="button" class="d-btn d-btn-ghost d-btn-xs" :title="t('native-observe-open-logs')" @click="openLogs(action.action)">
+                      <IconExternalLink class="w-4 h-4" />
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <button
+            v-if="topActions.length > PREVIEW_ROWS"
+            type="button"
+            class="mt-3 text-xs font-medium text-azure-600 hover:underline dark:text-azure-300"
+            @click="showAllActions = !showAllActions"
+          >
+            {{ showAllActions ? t('show-less') : t('show-all-count', { count: topActions.length }) }}
+          </button>
+        </div>
         <NativeReleaseStatsPanel
+          v-else
           :usage-data="nativeUsage.data"
           :is-loading="nativeUsage.isLoading"
           @retry="nativeDevicesStats?.reload()"
