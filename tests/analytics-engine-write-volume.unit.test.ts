@@ -165,7 +165,7 @@ describe('analytics engine write volume', () => {
       install_source: false,
     }) as typeof source
 
-    await trackDevicesCF(createContext({ DEVICE_INFO: { writeDataPoint } }), stored)
+    await trackDevicesCF(createContext({ DEVICE_INFO: { writeDataPoint } }), stored as any)
     expect(writeDataPoint).toHaveBeenCalledWith(expect.objectContaining({
       blobs: ['device-1', '1.0.0', '', '', 'cid', 'builtin', 'production', '', '', ''],
       doubles: [-1, -1, -1],

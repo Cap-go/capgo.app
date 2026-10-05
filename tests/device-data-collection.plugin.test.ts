@@ -5,7 +5,6 @@ import { z } from 'zod'
 import { parseSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
 import type { DeviceDataCollection } from '../supabase/functions/_backend/utils/deviceDataCollection.ts'
 import {
-  APP_NAME,
   createAppVersions,
   drainUpdatesEdgeCachePurge,
   executeSQL,
