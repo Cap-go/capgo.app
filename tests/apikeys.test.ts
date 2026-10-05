@@ -64,10 +64,14 @@ async function warmEdgeEndpointWithDeadline(
     if (Date.now() >= deadlineMs)
       throw new Error(`[warmEdgeEndpoint] timed out before attempt ${attempt} url=${url}`)
 
-    const response = await withFetchDeadline(deadlineMs, signal =>
-      fetch(url, { ...options, signal }),
-    )
-    await response.text().catch(() => undefined)
+    const response = await withFetchDeadline(deadlineMs, async (signal) => {
+      const response = await fetch(url, { ...options, signal })
+      await response.text().catch((error) => {
+        if (signal.aborted)
+          throw error
+      })
+      return response
+    })
     lastStatus = response.status
     if (response.status !== 502 && response.status !== 503)
       return
@@ -105,7 +109,7 @@ async function deleteApiKeysByName(
   name: string,
   headers: Record<string, string>,
   deadlineMs: number,
-) {
+): Promise<boolean> {
   try {
     const listed = await withFetchDeadline(deadlineMs, async (signal) => {
       const listResponse = await fetch(`${BASE_URL}/apikey`, { headers, signal })
@@ -114,19 +118,20 @@ async function deleteApiKeysByName(
       return await listResponse.json() as Array<{ id: number, name: string }>
     })
     if (listed === null)
-      return
+      return false
 
     const matchingKeys = listed.filter(key => key.name === name)
-    await Promise.allSettled(matchingKeys.map(async (key) => {
+    const results = await Promise.allSettled(matchingKeys.map(async (key) => {
       await withFetchDeadline(deadlineMs, async (signal) => {
         const deleteResponse = await fetch(`${BASE_URL}/apikey/${key.id}`, { method: 'DELETE', headers, signal })
         if (!deleteResponse.ok)
           throw new Error(`DELETE /apikey/${key.id} failed with ${deleteResponse.status}`)
       })
     }))
+    return results.every(result => result.status === 'fulfilled')
   }
   catch {
-    // Best-effort cleanup before a create-safe retry; do not block the caller.
+    return false
   }
 }
 
@@ -180,8 +185,8 @@ async function postApiKey(
         return response
 
       // Create-safe retry: a 502 may have persisted the key without returning 200.
-      if (keyName)
-        await deleteApiKeysByName(keyName, headers, deadline)
+      if (keyName && !await deleteApiKeysByName(keyName, headers, deadline))
+        return response
 
       if (Date.now() >= deadline)
         return response

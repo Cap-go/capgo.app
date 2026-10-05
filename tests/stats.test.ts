@@ -515,6 +515,16 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
             expect(statsData?.action).toBe(action)
             expect(statsData?.device_id).toBe(uuid)
           }
+          else {
+            const { count, error: statsError } = await getSupabaseClient()
+              .from('stats')
+              .select('*', { count: 'exact', head: true })
+              .eq('device_id', uuid)
+              .eq('app_id', appId)
+              .eq('action', action)
+            expect(statsError).toBeNull()
+            expect(count).toBe(0)
+          }
 
           // Verify device state - fail, download, staging and delete actions should NOT
           // create/update device records: their version_name is not the running version
