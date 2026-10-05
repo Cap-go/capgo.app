@@ -1,0 +1,2 @@
+# Keep the generated graph queryable without computing enormous text diffs.
+graphify-out/graph.json -diff linguist-generated=true
