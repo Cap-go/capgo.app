@@ -67,7 +67,8 @@ Initial additional index:
 ```sql
 CREATE INDEX r2_objects_expired_tombstones_idx
 ON public.r2_objects (bucket_name, tombstone_expires_at, r2_key)
-WHERE r2_state = 'deleted'::public.r2_object_state;
+WHERE r2_state = 'deleted'::public.r2_object_state
+AND cleanup_requested_at IS NULL;
 ```
 
 Enforce that `tombstone_expires_at` is populated only for `deleted` rows, and require it for those rows. Pending uploads and delete events can have unknown size and ETag.
@@ -191,7 +192,7 @@ Keep this bookkeeping in the primary database. A small `r2_inventory_checkpoints
 
 Event application reads that bucket's admission record under a short shared transaction lock. GC exclusively advances the record and waits for earlier admission transactions to finish before discarding protected tombstones. This prevents an in-flight batch from using an old cutoff after GC has removed its comparison row. There is no R2 I/O while holding these locks, and ingestion batches can hold shared locks concurrently.
 
-GC removes expired tombstones in indexed, bounded batches. Purge only when their deletion/absence observation is behind the accepted-event floor. Do not enable tombstone GC during the initial scan; enable it after a completed backfill and validation pass.
+GC removes expired ordinary inventory tombstones in indexed, bounded batches. Rows with `cleanup_requested_at` set retain their retirement marker and are excluded from both GC and its partial candidate index, even after expiry. A durable replacement for those retirement markers is required before they can be removed. Purge ordinary tombstones only when their deletion/absence observation is behind the accepted-event floor. Do not enable tombstone GC during the initial scan; enable it after a completed backfill and validation pass.
 
 The approximate retained row count is:
 
