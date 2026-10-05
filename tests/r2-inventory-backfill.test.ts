@@ -22,6 +22,20 @@ async function fixture(operation: (db: Client, options: ScanOptions) => Promise<
 }
 
 describe('resumable inventory scans', () => {
+  it.concurrent('stops during pacing after committing the current page and its resume cursor', () => fixture(async (db, options) => {
+    options.maxPages = 2
+    options.intervalMs = 60_000
+    const shutdown = new AbortController()
+    const list = vi.fn().mockResolvedValue({ objects: [object('a')], truncated: true, token: 'next' })
+    const progress = await scanInventory(db, list, options, config, () => {
+      setTimeout(() => shutdown.abort(), 0)
+    }, () => false, shutdown.signal)
+    expect(list).toHaveBeenCalledTimes(1)
+    expect(progress).toMatchObject({ lastKey: 'a', pages: 1, complete: false })
+    expect(await loadProgress(db, options)).toEqual(progress)
+    expect((await db.query('SELECT count(*)::int AS count FROM public.r2_objects WHERE bucket_name = $1', [options.bucket])).rows[0].count).toBe(1)
+  }))
+
   it.concurrent('invalidates earlier reconciliation when a completed backfill restarts', () => fixture(async (db, options) => {
     await commitBackfillPage(db, options, { ...EMPTY_PROGRESS }, { objects: [], truncated: false }, new Date().toISOString())
     options.mode = 'reconcile'

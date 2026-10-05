@@ -30,9 +30,11 @@ export async function main() {
   if (!databaseUrl)
     throw new Error('Set R2_INVENTORY_DATABASE_URL to an internal writer connection')
   const db = new Client({ connectionString: databaseUrl, connectionTimeoutMillis: 5000, query_timeout: 15000 })
+  const shutdown = new AbortController()
   let stopping = false
   const stop = () => {
     stopping = true
+    shutdown.abort()
   }
   process.on('SIGINT', stop)
   process.on('SIGTERM', stop)
@@ -72,7 +74,7 @@ export async function main() {
             throw new Error('R2 LIST returned incomplete object metadata')
           return { key: object.Key, size: object.Size, etag: normalizeEtag(object.ETag), lastModified: object.LastModified.toISOString() }
         }) }
-      }, options, config, progress => console.log(JSON.stringify({ mode: values.mode, dryRun: !values.write, ...progress })), () => stopping)
+      }, options, config, progress => console.log(JSON.stringify({ mode: values.mode, dryRun: !values.write, ...progress })), () => stopping, shutdown.signal)
       console.log(JSON.stringify({ event: stopping ? 'stopped' : result.complete ? 'complete' : 'page_budget_reached', dryRun: !values.write }))
     }
     finally {

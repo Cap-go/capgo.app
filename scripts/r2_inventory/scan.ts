@@ -1,6 +1,7 @@
 import type { ClientBase } from 'pg'
 import type { InventoryConfig, InventoryRow, ObjectObservation, ObservationSnapshot } from '../../supabase/functions/_backend/utils/r2_inventory.ts'
 import { Buffer } from 'node:buffer'
+import { setTimeout as delay } from 'node:timers/promises'
 import { applyObservations, INVENTORY_ROW_COLUMNS, inventoryTransaction, timestampUs } from '../../supabase/functions/_backend/utils/r2_inventory.ts'
 
 export interface ListPage { objects: ObjectObservation[], truncated: boolean, token?: string }
@@ -155,7 +156,18 @@ export class InventoryScanFailure extends Error {
   }
 }
 
-export async function scanInventory(db: ClientBase, list: ListObjects, options: ScanOptions, config: InventoryConfig, onProgress: (progress: ScanProgress) => void = () => {}, stopping: () => boolean = () => false): Promise<ScanProgress> {
+export async function waitForPacing(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  try {
+    await delay(milliseconds, undefined, { signal })
+  }
+  catch (error) {
+    if (error instanceof Error && error.name === 'AbortError' && signal?.aborted)
+      return
+    throw error
+  }
+}
+
+export async function scanInventory(db: ClientBase, list: ListObjects, options: ScanOptions, config: InventoryConfig, onProgress: (progress: ScanProgress) => void = () => {}, stopping: () => boolean = () => false, signal?: AbortSignal): Promise<ScanProgress> {
   let progress = await loadProgress(db, options)
   if (options.mode === 'reconcile') {
     const version = await completedBackfillVersion(db, options)
@@ -163,7 +175,7 @@ export async function scanInventory(db: ClientBase, list: ListObjects, options: 
       throw new Error('Reconciliation predates this backfill; use --restart for a fresh pass')
     progress = { ...progress, backfillVersion: version }
   }
-  for (let pageNumber = 0; !progress.complete && pageNumber < options.maxPages && !stopping(); pageNumber++) {
+  for (let pageNumber = 0; !progress.complete && pageNumber < options.maxPages && !stopping() && !signal?.aborted; pageNumber++) {
     const start = Date.now()
     let observedKeys: string[] = []
     try {
@@ -199,8 +211,8 @@ export async function scanInventory(db: ClientBase, list: ListObjects, options: 
       throw new InventoryScanFailure(progress, observedKeys, error)
     }
     const remaining = options.intervalMs - (Date.now() - start)
-    if (remaining > 0 && !progress.complete && pageNumber + 1 < options.maxPages && !stopping())
-      await new Promise(resolve => setTimeout(resolve, remaining))
+    if (remaining > 0 && !progress.complete && pageNumber + 1 < options.maxPages && !stopping() && !signal?.aborted)
+      await waitForPacing(remaining, signal)
   }
   return progress
 }

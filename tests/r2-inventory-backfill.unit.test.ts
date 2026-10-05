@@ -4,13 +4,20 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { writeFailureReport } from '../scripts/r2_inventory/report.ts'
-import { compareKeys, listWithCursorFallback, prefixUpperBound, reconcileRange, validatePage } from '../scripts/r2_inventory/scan.ts'
+import { compareKeys, listWithCursorFallback, prefixUpperBound, reconcileRange, validatePage, waitForPacing } from '../scripts/r2_inventory/scan.ts'
 
 const object = (key: string) => ({ key, size: 42, etag: 'etag', lastModified: '2026-01-01T00:00:00Z' })
 const row = (key: string): InventoryRow => ({ r2_key: key, r2_state: 'present', size_bytes: '42', etag: 'etag', revision: '1', event_us: null, reconciled_us: null, first_seen_us: '1', cleanup_requested_at: null })
 const snapshot = (keys: string[]) => ({ startedAt: new Date().toISOString(), rows: keys.map(row) })
 
 describe('r2 LIST scan boundaries', () => {
+  it.concurrent('interrupts a long pacing delay immediately on shutdown', async () => {
+    const shutdown = new AbortController()
+    const waiting = waitForPacing(60_000, shutdown.signal)
+    shutdown.abort()
+    await expect(waiting).resolves.toBeUndefined()
+  })
+
   it('restricts both new and existing local failure reports to the owner', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'r2-report-test-'))
     const path = join(dir, 'failures.jsonl')
