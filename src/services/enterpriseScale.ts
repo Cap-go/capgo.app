@@ -63,16 +63,3 @@ export function quoteEnterpriseScale(steps: CreditPricingStep[], includedMau: nu
     totalMonthly: basePriceMonthly + monthlyCredits,
   }
 }
-
-// Inverse used to label an existing org: the biggest stop its monthly credit
-// budget fully covers.
-export function mauForMonthlyCredits(steps: CreditPricingStep[], includedMau: number, monthlyCredits: number) {
-  let best = includedMau
-  for (const stop of ENTERPRISE_MAU_STOPS) {
-    if (stop <= includedMau)
-      continue
-    if (Math.ceil(priceMauSlice(steps, includedMau, stop)) <= monthlyCredits)
-      best = stop
-  }
-  return best
-}
