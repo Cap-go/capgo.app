@@ -250,14 +250,16 @@ export async function getCreditAutoTopUp(orgId: string) {
     threshold: number
     hasPaymentMethod: boolean
     availableCredits: number
+    monthlyLimit: number
+    monthlyTotal: number | null
   } | null
 }
 
-export async function saveCreditAutoTopUp(orgId: string, enabled: boolean, threshold: number) {
+export async function saveCreditAutoTopUp(orgId: string, enabled: boolean, threshold: number, monthlyLimit: number) {
   if (!orgId)
     return null
   const { data, error } = await invokeCapgoApi('private/credits/auto-top-up', {
-    body: JSON.stringify({ orgId, enabled, threshold }),
+    body: JSON.stringify({ orgId, enabled, threshold, monthlyLimit }),
   })
   if (error) {
     console.error('Failed to save credit auto top-up', error)
@@ -268,5 +270,7 @@ export async function saveCreditAutoTopUp(orgId: string, enabled: boolean, thres
     threshold: number
     hasPaymentMethod: boolean
     availableCredits: number
+    monthlyLimit: number
+    monthlyTotal: number | null
   } | null
 }

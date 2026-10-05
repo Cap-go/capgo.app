@@ -99,6 +99,7 @@ declare module 'vue' {
     LogTable: typeof import('./components/tables/LogTable.vue')['default']
     NativeDeviceMetricCard: typeof import('./components/dashboard/NativeDeviceMetricCard.vue')['default']
     NativePlatformTrendChart: typeof import('./components/dashboard/NativePlatformTrendChart.vue')['default']
+    NativeReleaseStatsPanel: typeof import('./components/dashboard/NativeReleaseStatsPanel.vue')['default']
     Navbar: typeof import('./components/Navbar.vue')['default']
     OnboardingExploreBanner: typeof import('./components/dashboard/OnboardingExploreBanner.vue')['default']
     OnboardingExploreReminder: typeof import('./components/dashboard/OnboardingExploreReminder.vue')['default']

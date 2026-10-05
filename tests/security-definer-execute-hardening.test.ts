@@ -37,6 +37,7 @@ const SERVICE_ONLY_PROCS = [
   'public.queue_canceled_org_retention_alerts(text, integer, integer)',
   'public.delete_apps_for_long_canceled_orgs(integer)',
   'public.enqueue_credit_usage_posthog_event()',
+  'public.enqueue_cron_tick(text, jsonb)',
   'public.generate_org_user_stripe_info_on_org_create()',
   'public.get_apikey()',
   'public.get_org_members(uuid, uuid)',

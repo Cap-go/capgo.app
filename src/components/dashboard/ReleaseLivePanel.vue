@@ -2,7 +2,7 @@
 import type { ChartData, ChartOptions } from 'chart.js'
 import type { ReleaseLiveChannel, ReleaseLiveDeployment } from '~/composables/useReleaseLive'
 import { useDark, useDocumentVisibility, useNow } from '@vueuse/core'
-import { computed, ref, useId, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Bar } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -28,10 +28,9 @@ const { t } = useI18n()
 const isDark = useDark()
 const visibility = useDocumentVisibility()
 const now = useNow({ interval: 1000 })
-const channelSelectId = useId()
-// Native select with our own chevron: daisyUI's select-sm chevron overlaps long labels.
-const pickerClass = 'block h-9 w-full min-w-40 max-w-xs appearance-none truncate rounded-md border border-slate-300 bg-white py-0 pl-3 pr-9 text-sm text-slate-900 shadow-sm transition-colors hover:border-slate-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:hover:border-slate-500'
-const releaseSelectId = useId()
+// Toolbar segments: a muted label plus a borderless native select and our own chevron.
+const segmentClass = 'relative flex flex-1 sm:flex-none items-center min-w-0 h-9 gap-1.5 pl-3 pr-7 text-xs font-medium rounded-md bg-white shadow-sm cursor-pointer focus-within:ring-2 focus-within:ring-primary/40 dark:bg-gray-700'
+const segmentSelectClass = 'min-w-0 sm:max-w-48 flex-1 appearance-none truncate bg-transparent p-0 border-0 text-xs font-medium text-gray-900 cursor-pointer focus:outline-none focus:ring-0 disabled:cursor-not-allowed dark:text-white'
 
 const route = useRoute()
 const router = useRouter()
@@ -75,6 +74,7 @@ const series = computed(() => live.value?.series ?? [])
 const totals = computed(() => live.value?.totals ?? { get: 0, install: 0, fail: 0, success_rate: null })
 const adoption = computed(() => live.value?.adoption ?? { devices_on_release: 0, total_devices: 0, percent: null })
 const failures = computed(() => live.value?.failures ?? [])
+const failedDevices = computed(() => live.value?.failed_devices ?? null)
 const hasActivity = computed(() => totals.value.get + totals.value.install + totals.value.fail > 0)
 const isPolling = computed(() => !props.forceDemo && visibility.value === 'visible')
 
@@ -161,6 +161,23 @@ function formatPercent(value: number | null | undefined) {
   return `${formatNumberValue(value, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
 }
 
+// Some failed attempts are expected on every rollout (offline devices, app
+// closed mid-download, low storage), so failures only get a color when the
+// success rate itself needs attention.
+const failureCountClass = computed(() => {
+  const rate = totals.value.success_rate
+  if (rate === null || totals.value.install + totals.value.fail < MIN_STATUS_SAMPLES || rate >= 95)
+    return 'text-slate-900 dark:text-white'
+  if (rate >= 85)
+    return 'text-amber-600 dark:text-amber-400'
+  return 'text-rose-600 dark:text-rose-400'
+})
+
+const failureRate = computed(() => {
+  const attempts = totals.value.install + totals.value.fail
+  return attempts > 0 ? (totals.value.fail / attempts) * 100 : null
+})
+
 function successRateClass(rate: number | null) {
   if (rate === null || totals.value.install + totals.value.fail < MIN_STATUS_SAMPLES)
     return 'text-slate-900 dark:text-white'
@@ -197,7 +214,8 @@ const chartData = computed<ChartData<'bar'>>(() => ({
     {
       label: t('release-live-failures'),
       data: series.value.map(bucket => bucket.fail),
-      backgroundColor: '#f43f5e',
+      // Muted so a normal trickle of failures does not dominate the installs.
+      backgroundColor: isDark.value ? 'rgba(251, 113, 133, 0.55)' : '#fda4af',
       borderRadius: 2,
       stack: 'activity',
     },
@@ -246,7 +264,7 @@ watch(() => props.appId, () => {
 
 <template>
   <section class="flex flex-col gap-4" data-testid="release-live">
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div class="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
       <div class="min-w-0">
         <div class="flex flex-wrap items-center gap-2">
           <h2 class="text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
@@ -272,64 +290,57 @@ watch(() => props.appId, () => {
         <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
           {{ t('release-live-help', { seconds: RELEASE_LIVE_POLL_INTERVAL_MS / 1000 }) }}
         </p>
+        <p v-if="secondsSinceUpdate !== null" class="mt-1 text-xs tabular-nums text-slate-500 dark:text-slate-400">
+          {{ t('release-live-updated-ago', { seconds: secondsSinceUpdate }) }}
+        </p>
       </div>
-      <div class="flex flex-wrap items-end gap-2">
-        <div v-if="channelOptions.length" class="flex flex-col min-w-0 gap-1">
-          <label :for="channelSelectId" class="text-xs font-medium text-slate-600 dark:text-slate-400">
-            {{ t('release-live-select-channel') }}
-          </label>
-          <div class="relative">
-            <select
-              :id="channelSelectId"
-              v-model="selectedChannelId"
-              :class="pickerClass"
-              :disabled="forceDemo"
-              data-testid="release-live-channel"
-            >
-              <option v-for="option in channelOptions" :key="option.id" :value="option.id">
-                {{ option.label }}
-              </option>
-            </select>
-            <IconChevronDown class="absolute w-4 h-4 -translate-y-1/2 pointer-events-none right-2.5 top-1/2 text-slate-400" aria-hidden="true" />
-          </div>
-        </div>
-        <div v-if="deploymentOptions.length" class="flex flex-col min-w-0 gap-1">
-          <label :for="releaseSelectId" class="text-xs font-medium text-slate-600 dark:text-slate-400">
-            {{ t('release-live-select-release') }}
-          </label>
-          <div class="relative">
-            <select
-              :id="releaseSelectId"
-              v-model="selectedVersion"
-              :class="pickerClass"
-              :disabled="forceDemo"
-              data-testid="release-live-release"
-            >
-              <option value="">
-                {{ t('release-live-latest') }}
-              </option>
-              <option v-for="option in deploymentOptions" :key="option.value" :value="option.value">
-                {{ option.label }}
-              </option>
-            </select>
-            <IconChevronDown class="absolute w-4 h-4 -translate-y-1/2 pointer-events-none right-2.5 top-1/2 text-slate-400" aria-hidden="true" />
-          </div>
-        </div>
+      <!-- Same gray toolbar as PeriodDaySelector on the other dashboard tabs. -->
+      <div class="flex items-center w-full gap-1 p-1 bg-gray-200 rounded-lg sm:w-auto sm:self-start xl:self-auto shrink-0 dark:bg-gray-800">
+        <label v-if="channelOptions.length" :class="segmentClass" data-testid="release-live-channel-segment">
+          <span class="hidden text-gray-500 shrink-0 sm:inline dark:text-gray-400">{{ t('release-live-select-channel') }}</span>
+          <select
+            v-model="selectedChannelId"
+            :class="segmentSelectClass"
+            :aria-label="t('release-live-select-channel')"
+            :disabled="forceDemo"
+            data-testid="release-live-channel"
+          >
+            <option v-for="option in channelOptions" :key="option.id" :value="option.id">
+              {{ option.label }}
+            </option>
+          </select>
+          <IconChevronDown class="absolute w-3.5 h-3.5 -translate-y-1/2 pointer-events-none right-2 top-1/2 text-gray-400" aria-hidden="true" />
+        </label>
+        <label v-if="deploymentOptions.length" :class="segmentClass" data-testid="release-live-release-segment">
+          <span class="hidden text-gray-500 shrink-0 sm:inline dark:text-gray-400">{{ t('release-live-select-release') }}</span>
+          <select
+            v-model="selectedVersion"
+            :class="segmentSelectClass"
+            :aria-label="t('release-live-select-release')"
+            :disabled="forceDemo"
+            data-testid="release-live-release"
+          >
+            <option value="">
+              {{ t('release-live-latest') }}
+            </option>
+            <option v-for="option in deploymentOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+          <IconChevronDown class="absolute w-3.5 h-3.5 -translate-y-1/2 pointer-events-none right-2 top-1/2 text-gray-400" aria-hidden="true" />
+        </label>
         <button
           type="button"
-          class="h-9 min-h-9 d-btn d-btn-sm d-btn-ghost"
+          class="flex items-center justify-center w-9 h-9 transition-colors rounded-md cursor-pointer shrink-0 text-gray-600 hover:bg-white hover:text-gray-900 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
           :disabled="loading || forceDemo"
           :aria-label="t('refresh')"
+          :title="t('refresh')"
           @click="refresh"
         >
           <IconRefresh class="w-4 h-4" :class="{ 'animate-spin': loading }" />
-          <span v-if="secondsSinceUpdate !== null" class="text-xs font-normal text-slate-500 dark:text-slate-400">
-            {{ t('release-live-updated-ago', { seconds: secondsSinceUpdate }) }}
-          </span>
         </button>
       </div>
     </div>
-
     <div v-if="loading && !live && !error" class="flex items-center justify-center h-48 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
       <Spinner size="w-10 h-10" />
     </div>
@@ -363,7 +374,7 @@ watch(() => props.appId, () => {
         <div class="min-w-0">
           <div class="flex flex-wrap items-center gap-2">
             <span class="text-lg font-semibold text-slate-900 dark:text-white">{{ release.version_name }}</span>
-            <span v-if="release.channel_name" class="px-2 py-0.5 text-xs font-medium rounded bg-azure-50 text-azure-700 dark:bg-azure-900/30 dark:text-azure-300">
+            <span v-if="release.channel_name" class="px-2 py-0.5 text-xs font-medium rounded bg-azure-500/10 text-blue-800 dark:bg-azure-900/30 dark:text-azure-300">
               {{ release.channel_name }}
             </span>
             <span v-if="status" class="px-2 py-0.5 text-xs font-semibold rounded" :class="status.class">
@@ -425,9 +436,22 @@ watch(() => props.appId, () => {
           <div class="text-sm text-slate-600 dark:text-slate-400">
             {{ t('release-live-failures') }}
           </div>
-          <div class="mt-2 text-2xl font-semibold" :class="totals.fail > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-900 dark:text-white'">
+          <div class="mt-2 text-2xl font-semibold" :class="failureCountClass" data-testid="release-live-failure-count">
             {{ formatCount(totals.fail) }}
           </div>
+          <p v-if="failureRate !== null" class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            {{ t('release-live-failure-rate', { rate: formatPercent(failureRate) }) }}
+          </p>
+          <template v-if="failedDevices && failedDevices.total > 0">
+            <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400" data-testid="release-live-failed-devices">
+              {{ t('release-live-failed-devices', { count: formatCount(failedDevices.total) }) }}
+            </p>
+            <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400" :title="t('release-live-failed-devices-help')">
+              {{ t('release-live-recovered-devices', { count: formatCount(failedDevices.recovered) }) }}
+              <span class="text-slate-400"> · </span>
+              {{ t('release-live-stuck-devices', { count: formatCount(failedDevices.stuck) }) }}
+            </p>
+          </template>
         </div>
         <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
           <div class="text-sm text-slate-600 dark:text-slate-400">
@@ -460,13 +484,16 @@ watch(() => props.appId, () => {
           </div>
         </div>
         <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-          <h3 class="mb-3 text-sm font-semibold text-slate-900 dark:text-white">
+          <h3 class="text-sm font-semibold text-slate-900 dark:text-white">
             {{ t('release-live-top-failures') }}
           </h3>
+          <p class="mt-1 mb-3 text-xs text-slate-500 dark:text-slate-400">
+            {{ t('release-live-failures-normal') }}
+          </p>
           <ul v-if="failures.length" class="flex flex-col gap-2">
             <li v-for="failure in failures" :key="failure.action" class="flex items-center justify-between gap-2 text-sm">
               <code class="px-1.5 py-0.5 text-xs rounded bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200">{{ failure.action }}</code>
-              <span class="font-semibold text-rose-600 dark:text-rose-400">{{ formatCount(failure.count) }}</span>
+              <span class="font-medium tabular-nums text-slate-700 dark:text-slate-200">{{ formatCount(failure.count) }}</span>
             </li>
           </ul>
           <p v-else class="text-sm text-slate-500 dark:text-slate-400">

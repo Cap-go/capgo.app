@@ -455,12 +455,35 @@ describe('public email preferences endpoint', () => {
     expect(getBentoSubscriberEmailByUuidMock).not.toHaveBeenCalled()
   })
 
-  it('does not look up GET by email', async () => {
+  it('does not look up GET by email address', async () => {
     const response = await getPreferences('?email=user@example.com')
 
     expect(response.status).toBe(400)
     await expect(response.json()).resolves.toMatchObject({ error: 'invalid_payload' })
     expect(getBentoSubscriberEmailByUuidMock).not.toHaveBeenCalled()
+  })
+
+  it('resolves GET when a visitor uuid was sent as the legacy email query param', async () => {
+    getBentoSubscriberEmailByUuidMock.mockResolvedValue('user@example.com')
+
+    const response = await getPreferences(`?email=${VISITOR_UUID}`)
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ status: 'ok', email: 'user@example.com' })
+    expect(getBentoSubscriberEmailByUuidMock).toHaveBeenCalledWith(expect.anything(), VISITOR_UUID)
+  })
+
+  it('accepts POST when uuid was sent in the email field by mistake', async () => {
+    getBentoSubscriberEmailByUuidMock.mockResolvedValue('user@example.com')
+
+    const response = await postPreferences({
+      email: VISITOR_UUID,
+      unsubscribe_all: true,
+    })
+
+    expect(response.status).toBe(200)
+    expect(getBentoSubscriberEmailByUuidMock).toHaveBeenCalledWith(expect.anything(), VISITOR_UUID)
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'user@example.com')
   })
 
   it('returns a retryable error on GET when Bento lookup fails', async () => {

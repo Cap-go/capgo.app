@@ -4,7 +4,7 @@ import type { VersionUsageChannel } from '../utils/types.ts'
 import { HTTPException } from 'hono/http-exception'
 import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
-import { buildVersionUsageChannelFilterCF, escapeSqlString, formatDateCF, runQueryToCFA } from '../utils/cloudflare.ts'
+import { buildVersionUsageChannelFilterCF, escapeSqlString, formatDateCF, PUBLIC_FAILURE_ACTIONS, runQueryToCFA } from '../utils/cloudflare.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
@@ -88,8 +88,18 @@ export interface ReleaseLiveResponse extends ReleaseLiveChannelContext {
     percent: number | null
   }
   failures: { action: string, count: number }[]
+  // Distinct devices that reported a bundle-level failure for this release.
+  // recovered = installed it (set) after their first failure, stuck = not yet.
+  // null when the breakdown could not be read.
+  failed_devices: ReleaseLiveFailedDevices | null
   series: ReleaseLiveBucket[]
   generated_at: string
+}
+
+export interface ReleaseLiveFailedDevices {
+  total: number
+  recovered: number
+  stuck: number
 }
 
 export interface ReleaseLiveEmptyResponse extends ReleaseLiveChannelContext {
@@ -118,6 +128,11 @@ interface RawBucketRow {
 interface RawFailureRow {
   action: string
   count: number | string
+}
+
+interface RawFailedDevicesRow {
+  recovered: RawCount
+  stuck: RawCount
 }
 
 type Relation<T> = T | T[] | null | undefined
@@ -251,8 +266,81 @@ ORDER BY count DESC
 LIMIT ${MAX_FAILURE_ACTIONS}`
 }
 
+// Per-device outcome after a failure: did the device install the release
+// (`set`) at or after its first bundle-level failure? `set` logs carry no
+// channel, so only the failure side is channel scoped; the set side only needs
+// to match the same device and version. File-level failures ("1.2.3:main.js")
+// never match the exact version name. Timestamps are compared in whole seconds
+// (Analytics Engine precision): a set in the same second as the first failure
+// counts as recovered.
+const NO_FAILURE_TS = 4102444800 // 2100-01-01, sentinel for "no failure"
+// Bundle failures are every `*_fail` action plus these, as in the public metrics.
+const EXTRA_FAILURE_ACTIONS: string[] = PUBLIC_FAILURE_ACTIONS.filter(action => !action.endsWith('_fail'))
+const EXTRA_FAILURE_ACTIONS_CF = EXTRA_FAILURE_ACTIONS.map(action => `'${escapeSqlString(action)}'`).join(', ')
+
+function buildFailedDevicesQueryCF(appId: string, versionName: string, startMs: number, endMs: number, channel: VersionUsageChannel) {
+  return `SELECT
+  sum(if(last_set >= first_fail, 1, 0)) AS recovered,
+  sum(if(last_set >= first_fail, 0, 1)) AS stuck
+FROM (
+  SELECT
+    blob1 AS device_id,
+    min(if(blob2 = 'set', ${NO_FAILURE_TS}, toUnixTimestamp(timestamp))) AS first_fail,
+    max(if(blob2 = 'set', toUnixTimestamp(timestamp), 0)) AS last_set
+  FROM app_log
+  WHERE
+    index1 = '${escapeSqlString(appId)}'
+    AND blob3 = '${escapeSqlString(versionName)}'
+    AND timestamp >= toDateTime('${formatDateCF(new Date(startMs))}')
+    AND timestamp < toDateTime('${formatDateCF(new Date(endMs))}')
+    AND (blob2 = 'set' OR ((blob2 LIKE '%_fail' OR blob2 IN (${EXTRA_FAILURE_ACTIONS_CF})) ${buildFailureChannelFilterCF(channel)}))
+  GROUP BY device_id
+)
+WHERE first_fail < ${NO_FAILURE_TS}`
+}
+
+// Postgres fallback of buildFailedDevicesQueryCF: same failure set, same
+// failure-only channel scope, and whole seconds like Analytics Engine.
+// $1 app, $2 version, $3/$4 window, $5 channel name, $6 EXTRA_FAILURE_ACTIONS.
+const FAILED_DEVICES_QUERY_SB = String.raw`SELECT
+  count(*) FILTER (WHERE d.last_set >= d.first_fail) AS recovered,
+  count(*) FILTER (WHERE d.last_set IS NULL OR d.last_set < d.first_fail) AS stuck
+FROM (
+  SELECT
+    s.device_id,
+    min(date_trunc('second', s.created_at)) FILTER (WHERE s.action <> 'set') AS first_fail,
+    max(date_trunc('second', s.created_at)) FILTER (WHERE s.action = 'set') AS last_set
+  FROM public.stats s
+  WHERE s.app_id = $1
+    AND s.version_name = $2
+    AND s.created_at >= $3::timestamptz
+    AND s.created_at < $4::timestamptz
+    AND (
+      s.action = 'set'
+      OR (
+        (s.action::text LIKE '%\_fail' OR s.action::text = ANY($6::text[]))
+        AND EXISTS (
+          SELECT 1 FROM public.devices dv
+          WHERE dv.app_id = s.app_id
+            AND dv.device_id = s.device_id
+            AND dv.default_channel = $5::text
+        )
+      )
+    )
+  GROUP BY s.device_id
+) d
+WHERE d.first_fail IS NOT NULL`
+
+function toFailedDevices(rows: RawFailedDevicesRow[] | null): ReleaseLiveFailedDevices | null {
+  if (!rows)
+    return null
+  const recovered = toCount(rows[0]?.recovered)
+  const stuck = toCount(rows[0]?.stuck)
+  return { total: recovered + stuck, recovered, stuck }
+}
+
 async function readActivityCF(c: Context, appId: string, versionName: string, startMs: number, endMs: number, bucketMinutes: number, channel: VersionUsageChannel) {
-  const [seriesRows, failureRows] = await Promise.all([
+  const [seriesRows, failureRows, failedDeviceRows] = await Promise.all([
     c.env.VERSION_USAGE
       ? runQueryToCFA<RawBucketRow>(c, buildSeriesQueryCF(appId, versionName, startMs, endMs, bucketMinutes, channel))
       : Promise.resolve([] as RawBucketRow[]),
@@ -264,8 +352,15 @@ async function readActivityCF(c: Context, appId: string, versionName: string, st
             return [] as RawFailureRow[]
           })
       : Promise.resolve([] as RawFailureRow[]),
+    c.env.APP_LOG
+      ? runQueryToCFA<RawFailedDevicesRow>(c, buildFailedDevicesQueryCF(appId, versionName, startMs, endMs, channel))
+          .catch((error) => {
+            cloudlogErr({ requestId: c.get('requestId'), message: 'release_live failed devices query failed', error: serializeError(error) })
+            return null
+          })
+      : Promise.resolve(null),
   ])
-  return { seriesRows, failureRows }
+  return { seriesRows, failureRows, failedDevices: toFailedDevices(failedDeviceRows) }
 }
 
 async function readActivitySB(c: Context, appId: string, versionName: string, startMs: number, endMs: number, bucketMinutes: number, channel: VersionUsageChannel) {
@@ -273,7 +368,7 @@ async function readActivitySB(c: Context, appId: string, versionName: string, st
   try {
     const start = new Date(startMs).toISOString()
     const end = new Date(endMs).toISOString()
-    const [series, failures] = await Promise.all([
+    const [series, failures, failedDevices] = await Promise.all([
       db.query<RawBucketRow>(
         `SELECT
   extract(epoch FROM date_bin(make_interval(mins => $5::int), vu.timestamp, TIMESTAMP '1970-01-01'))::bigint AS bucket,
@@ -313,8 +408,17 @@ ORDER BY count DESC
 LIMIT ${MAX_FAILURE_ACTIONS}`,
         [appId, versionName, start, end, channel.name ?? ''],
       ),
+      // Optional breakdown: never fail the whole view on it. Only failures are
+      // channel scoped, matching the Analytics Engine query.
+      db.query<RawFailedDevicesRow>(
+        FAILED_DEVICES_QUERY_SB,
+        [appId, versionName, start, end, channel.name ?? '', EXTRA_FAILURE_ACTIONS],
+      ).catch((error) => {
+        logPgError(c, 'release_live failed devices', error)
+        return null
+      }),
     ])
-    return { seriesRows: series.rows, failureRows: failures.rows }
+    return { seriesRows: series.rows, failureRows: failures.rows, failedDevices: toFailedDevices(failedDevices?.rows ?? null) }
   }
   catch (error) {
     logPgError(c, 'release_live readActivitySB', error)
@@ -596,6 +700,7 @@ async function readReleaseLive(
     failures: activity.failureRows
       .map(row => ({ action: String(row.action), count: toCount(row.count) }))
       .filter(row => row.count > 0),
+    failed_devices: activity.failedDevices,
     series,
     generated_at: now.toISOString(),
   }
@@ -646,5 +751,9 @@ export const releaseLiveTestUtils = {
   computeSuccessRate,
   buildSeriesQueryCF,
   buildFailuresQueryCF,
+  buildFailedDevicesQueryCF,
+  FAILED_DEVICES_QUERY_SB,
+  EXTRA_FAILURE_ACTIONS,
+  toFailedDevices,
   toChannelContext,
 }

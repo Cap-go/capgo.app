@@ -1,15 +1,15 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
-import { eq, inArray, sql } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
 import { isVersionDeleted, purgeFileReadCache } from '../files/file_read_cache.ts'
+import { isCanonicalAppVersionR2Path } from '../utils/app_version_r2_path.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { persistVersionManifestEntries } from '../utils/manifest_persist.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { manifest } from '../utils/postgres_schema.ts'
-import { isCanonicalAppVersionR2Path } from '../utils/app_version_r2_path.ts'
 import { getPath, s3 } from '../utils/s3.ts'
 import { createStatsMeta } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
@@ -339,124 +339,192 @@ async function updateIt(c: Context, record: Database['public']['Tables']['app_ve
   return c.json(BRES)
 }
 
-const MANIFEST_TRASH_BATCH_SIZE = 5
+const MANIFEST_TRASH_CONCURRENCY = 10
+// One advisory lock per distinct file is held for the whole batch transaction.
+// The shared lock table holds max_locks_per_transaction (64) per backend, so a
+// batch below 64 locks cannot exhaust it even if every connection runs a
+// cleanup batch at once. 50 also leaves room for the relation locks.
+const MANIFEST_CLEANUP_BATCH_SIZE = 50
 
-type ManifestCleanupEntry = {
+interface ManifestCleanupEntry {
   id: number
   file_hash: string
   file_name: string
   s3_path: string | null
 }
 
-type ManifestCleanupLockMode = 'try' | 'wait'
+type ManifestCleanupDatabase = ReturnType<typeof getDrizzleClient>
 
-type ManifestCleanupBatchResult = {
-  deferred: ManifestCleanupEntry[]
-  failures: ManifestCleanupFailure[]
-}
-
-type ManifestCleanupFailure = {
-  entry: ManifestCleanupEntry
-  cause?: unknown
-}
-
-function compareManifestCleanupEntries(a: ManifestCleanupEntry, b: ManifestCleanupEntry) {
-  return a.file_hash.localeCompare(b.file_hash)
-    || a.file_name.localeCompare(b.file_name)
-    || a.id - b.id
-}
-
-async function cleanupManifestBatch(
-  c: Context,
-  database: ReturnType<typeof getDrizzleClient>,
-  appVersionId: number,
-  batch: ManifestCleanupEntry[],
-  lockMode: ManifestCleanupLockMode,
-): Promise<ManifestCleanupBatchResult> {
+/**
+ * Locks every file of the batch, deletes the rows whose file is still used by
+ * another version (or has no R2 object), and returns the rows that hold the
+ * last reference so their R2 object can be trashed before the row is dropped.
+ *
+ * Locks use the same hashtext(file_hash), hashtext(file_name) keys as before,
+ * are taken in sorted order (no deadlock between concurrent batches), and are
+ * held only for these two statements, never across an R2 call. A per-file lock
+ * held over the HEAD/copy/delete round trip made concurrent deletions of
+ * versions sharing files queue behind each other file by file.
+ */
+async function releaseSharedManifestEntries(database: ManifestCleanupDatabase, versionId: number, ids: number[]): Promise<ManifestCleanupEntry[]> {
   return database.transaction(async (tx) => {
-    const acquired: ManifestCleanupEntry[] = []
-    const deferred: ManifestCleanupEntry[] = []
-    const lockResults = new Map<string, boolean>()
-
-    for (const entry of batch) {
-      const lockKey = JSON.stringify([entry.file_hash, entry.file_name])
-      let locked = lockResults.get(lockKey)
-      if (locked === undefined) {
-        if (lockMode === 'try') {
-          const result = await tx.execute<{ locked: boolean }>(sql`
-            SELECT pg_try_advisory_xact_lock(hashtext(${entry.file_hash}::text), hashtext(${entry.file_name}::text)) AS locked
-          `)
-          locked = result.rows[0]?.locked === true
-        }
-        else {
-          await tx.execute(sql`
-            SELECT pg_advisory_xact_lock(hashtext(${entry.file_hash}::text), hashtext(${entry.file_name}::text))
-          `)
-          locked = true
-        }
-        lockResults.set(lockKey, locked)
-      }
-
-      if (locked)
-        acquired.push(entry)
-      else
-        deferred.push(entry)
-    }
-
-    const handled: ManifestCleanupEntry[] = []
-    const trashByPath = new Map<string, ManifestCleanupEntry[]>()
-
-    for (const entry of acquired) {
-      if (!entry.s3_path) {
-        handled.push(entry)
-        continue
-      }
-
-      const refs = await tx.execute<{ ok: number }>(sql`
-        SELECT 1 AS ok
+    // Do NOT use chr(0) as a separator — Postgres raises 54000 "null character not permitted".
+    await tx.execute(sql`
+      SELECT pg_advisory_xact_lock(k.hash_key, k.name_key)
+      FROM (
+        SELECT DISTINCT hashtext(file_hash::text) AS hash_key, hashtext(file_name::text) AS name_key
         FROM public.manifest
-        WHERE file_hash = ${entry.file_hash}
-          AND file_name = ${entry.file_name}
-          AND app_version_id <> ${appVersionId}
-        LIMIT 1
-      `)
-
-      if (refs.rows.length > 0) {
-        handled.push(entry)
-        continue
-      }
-
-      const samePathEntries = trashByPath.get(entry.s3_path) ?? []
-      samePathEntries.push(entry)
-      trashByPath.set(entry.s3_path, samePathEntries)
-    }
-
-    const failures: ManifestCleanupFailure[] = []
-    const trashGroups = [...trashByPath.entries()]
-    const trashResults = await Promise.allSettled(
-      trashGroups.map(([path]) => s3.moveObjectToTrash(c, path)),
-    )
-
-    for (const [index, result] of trashResults.entries()) {
-      const [s3Path, entries] = trashGroups[index]
-      if (result.status === 'fulfilled' && result.value) {
-        handled.push(...entries)
-        continue
-      }
-
-      failures.push({
-        entry: { ...entries[0], s3_path: s3Path },
-        cause: result.status === 'rejected' ? result.reason : undefined,
-      })
-    }
-
-    if (handled.length > 0) {
-      const handledIds = handled.map(entry => entry.id)
-      await tx.delete(manifest).where(inArray(manifest.id, handledIds))
-    }
-
-    return { deferred, failures }
+        WHERE id = ANY(${sql.param(ids)}::bigint[])
+          AND app_version_id = ${versionId}
+        ORDER BY 1, 2
+      ) AS k
+    `)
+    const lastReferences = await tx.execute<ManifestCleanupEntry & Record<string, unknown>>(sql`
+      WITH batch AS (
+        SELECT m.id, m.file_hash, m.file_name, m.s3_path,
+          COALESCE(m.s3_path, '') = ''
+            OR EXISTS (
+              SELECT 1
+              FROM public.manifest AS other
+              WHERE other.file_hash = m.file_hash
+                AND other.file_name = m.file_name
+                AND other.app_version_id <> m.app_version_id
+            ) AS releasable
+        FROM public.manifest AS m
+        WHERE m.id = ANY(${sql.param(ids)}::bigint[])
+          AND m.app_version_id = ${versionId}
+      ),
+      released AS (
+        DELETE FROM public.manifest AS d
+        USING batch
+        WHERE d.id = batch.id
+          AND batch.releasable
+        RETURNING d.id
+      )
+      SELECT id, file_hash, file_name, s3_path
+      FROM batch
+      WHERE NOT releasable
+    `)
+    return lastReferences.rows.map(row => ({ ...row, id: Number(row.id) }))
   })
+}
+
+/**
+ * Upload registration (`/private/set_manifest`) does not take the cleanup
+ * locks, so a new version can start referencing an object between the batch
+ * commit and its trash move. Recheck after the move and copy those objects
+ * back; the rows of this version are then dropped like any shared file.
+ *
+ * A failed restore is persisted before raising: on the retry the new row makes
+ * this version's row look shared, so it would be released without another
+ * restore attempt. retryPendingTrashRestores runs before any release.
+ */
+async function restoreReReferencedObjects(c: Context, database: ManifestCleanupDatabase, versionId: number, entries: ManifestCleanupEntry[]) {
+  const reReferenced = await database.execute<{ s3_path: string }>(sql`
+    SELECT DISTINCT s3_path
+    FROM public.manifest
+    WHERE file_hash = ANY(${sql.param([...new Set(entries.map(entry => entry.file_hash))])}::text[])
+      AND s3_path = ANY(${sql.param(entries.map(entry => entry.s3_path!))}::text[])
+      AND NOT (id = ANY(${sql.param(entries.map(entry => entry.id))}::bigint[]))
+  `)
+  const failedPaths: string[] = []
+  for (const { s3_path } of reReferenced.rows) {
+    cloudlog({ requestId: c.get('requestId'), message: 'manifest object re-referenced during trash, restoring', s3_path })
+    if (!await s3.restoreObjectFromTrash(c, s3_path))
+      failedPaths.push(s3_path)
+  }
+  if (failedPaths.length > 0) {
+    await database.execute(sql`
+      INSERT INTO public.manifest_trash_restore_pending (s3_path, app_version_id)
+      SELECT pending.s3_path, ${versionId}
+      FROM unnest(${sql.param(failedPaths)}::text[]) AS pending(s3_path)
+      ON CONFLICT (app_version_id, s3_path) DO NOTHING
+    `)
+    simpleError('cannot_restore_manifest_s3_from_trash', 'Cannot restore re-referenced manifest file from trash', {
+      s3_path: failedPaths[0],
+      failedCount: failedPaths.length,
+    })
+  }
+}
+
+/**
+ * Retries restores that failed on an earlier pass for this version. Raises
+ * while any is still failing, so no manifest row is released before its
+ * re-referenced object is back.
+ */
+async function retryPendingTrashRestores(c: Context, database: ManifestCleanupDatabase, versionId: number) {
+  const pending = await database.execute<{ s3_path: string }>(sql`
+    SELECT s3_path
+    FROM public.manifest_trash_restore_pending
+    WHERE app_version_id = ${versionId}
+  `)
+  if (pending.rows.length === 0)
+    return
+
+  const restoredPaths: string[] = []
+  const failedPaths: string[] = []
+  for (const { s3_path } of pending.rows) {
+    if (await s3.restoreObjectFromTrash(c, s3_path))
+      restoredPaths.push(s3_path)
+    else
+      failedPaths.push(s3_path)
+  }
+  if (restoredPaths.length > 0) {
+    await database.execute(sql`
+      DELETE FROM public.manifest_trash_restore_pending
+      WHERE app_version_id = ${versionId}
+        AND s3_path = ANY(${sql.param(restoredPaths)}::text[])
+    `)
+  }
+  if (failedPaths.length > 0) {
+    simpleError('cannot_restore_manifest_s3_from_trash', 'Cannot restore re-referenced manifest file from trash', {
+      s3_path: failedPaths[0],
+      failedCount: failedPaths.length,
+    })
+  }
+}
+
+/**
+ * Trashes the R2 objects of last-reference rows, then deletes only the rows
+ * whose object was handled. Rows whose trash failed stay tracked for the retry.
+ */
+async function trashLastReferenceEntries(c: Context, database: ManifestCleanupDatabase, versionId: number, entries: ManifestCleanupEntry[]) {
+  const trashed: ManifestCleanupEntry[] = []
+  const failures: { entry: ManifestCleanupEntry, cause?: unknown }[] = []
+  let nextEntry = 0
+  const workers = Array.from({ length: Math.min(MANIFEST_TRASH_CONCURRENCY, entries.length) }, async () => {
+    while (nextEntry < entries.length) {
+      const entry = entries[nextEntry++]!
+      try {
+        if (await s3.moveObjectToTrash(c, entry.s3_path!))
+          trashed.push(entry)
+        else
+          failures.push({ entry })
+      }
+      catch (cause) {
+        failures.push({ entry, cause })
+      }
+    }
+  })
+  await Promise.all(workers)
+
+  if (trashed.length > 0) {
+    await restoreReReferencedObjects(c, database, versionId, trashed)
+    await database.execute(sql`
+      DELETE FROM public.manifest
+      WHERE id = ANY(${sql.param(trashed.map(entry => entry.id))}::bigint[])
+        AND app_version_id = ${versionId}
+    `)
+  }
+
+  const failure = failures[0]
+  if (failure) {
+    simpleError('cannot_move_manifest_s3_to_trash', 'Cannot move S3 object for deleted manifest file to trash', {
+      id: failure.entry.id,
+      s3_path: failure.entry.s3_path,
+      failedCount: failures.length,
+    }, failure.cause)
+  }
 }
 
 /**
@@ -471,63 +539,32 @@ async function deleteManifest(c: Context, record: Database['public']['Tables']['
   const readPgClient = getPgClient(c, true)
   const drizzleClient = getDrizzleClient(readPgClient)
 
-  let manifestEntries: ManifestCleanupEntry[] = []
+  let manifestIds: number[] = []
   try {
-    manifestEntries = await drizzleClient
-      .select({
-        id: manifest.id,
-        file_hash: manifest.file_hash,
-        file_name: manifest.file_name,
-        s3_path: manifest.s3_path,
-      })
+    const rows = await drizzleClient
+      .select({ id: manifest.id })
       .from(manifest)
       .where(eq(manifest.app_version_id, record.id))
+    manifestIds = rows.map(row => row.id)
   }
   finally {
     await closeClient(c, readPgClient)
   }
 
-  const startedWithRows = manifestEntries.length > 0
+  const startedWithRows = manifestIds.length > 0
 
   if (startedWithRows) {
+    // One bounded pool for the whole pass: a pool per file meant thousands of
+    // Hyperdrive connections (and log lines) for a large bundle.
     const cleanupPool = getPgClient(c, false)
     try {
       const cleanupDatabase = getDrizzleClient(cleanupPool)
-      const orderedEntries = [...manifestEntries].sort(compareManifestCleanupEntries)
-      const deferred: ManifestCleanupEntry[] = []
-      const cleanupFailures: ManifestCleanupFailure[] = []
-
-      // Avoid waiting behind active uploads/deletes until every entry has had
-      // one chance to make progress. The second pass waits for any contention.
-      for (let i = 0; i < orderedEntries.length; i += MANIFEST_TRASH_BATCH_SIZE) {
-        const result = await cleanupManifestBatch(
-          c,
-          cleanupDatabase,
-          record.id,
-          orderedEntries.slice(i, i + MANIFEST_TRASH_BATCH_SIZE),
-          'try',
-        )
-        deferred.push(...result.deferred)
-        cleanupFailures.push(...result.failures)
-      }
-
-      for (let i = 0; i < deferred.length; i += MANIFEST_TRASH_BATCH_SIZE) {
-        const result = await cleanupManifestBatch(
-          c,
-          cleanupDatabase,
-          record.id,
-          deferred.slice(i, i + MANIFEST_TRASH_BATCH_SIZE),
-          'wait',
-        )
-        cleanupFailures.push(...result.failures)
-      }
-
-      if (cleanupFailures.length > 0) {
-        const failure = cleanupFailures[0]
-        simpleError('cannot_move_manifest_s3_to_trash', 'Cannot move S3 object for deleted manifest file to trash', {
-          id: failure.entry.id,
-          s3_path: failure.entry.s3_path,
-        }, failure.cause)
+      await retryPendingTrashRestores(c, cleanupDatabase, record.id)
+      for (let offset = 0; offset < manifestIds.length; offset += MANIFEST_CLEANUP_BATCH_SIZE) {
+        const batchIds = manifestIds.slice(offset, offset + MANIFEST_CLEANUP_BATCH_SIZE)
+        const lastReferences = await releaseSharedManifestEntries(cleanupDatabase, record.id, batchIds)
+        if (lastReferences.length > 0)
+          await trashLastReferenceEntries(c, cleanupDatabase, record.id, lastReferences)
       }
     }
     finally {

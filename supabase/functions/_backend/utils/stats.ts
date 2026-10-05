@@ -4,7 +4,7 @@ import type { VersionUsageChannelFilterOptions } from './cloudflare.ts'
 import type { MiddlewareKeyVariables } from './hono.ts'
 import type { StatsLogDimensions, VersionAction } from './plugin_stats.ts'
 import type { Database } from './supabase.types.ts'
-import type { DeviceRes, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, ReadDevicesParams, ReadDevicesResponse, ReadStatsInsightsParams, ReadStatsParams, StatsActions, StatsInsightAction, StatsInsightDaily, StatsInsightDevice, StatsInsightsResult, StatsInsightVersion, StatsMetadata, VersionCompareFilter, VersionUsage, VersionUsageChannel } from './types.ts'
+import type { ChannelDeviceOverrideIds, DeviceRes, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, ReadDevicesParams, ReadDevicesResponse, ReadStatsInsightsParams, ReadStatsParams, StatsActions, StatsInsightAction, StatsInsightDaily, StatsInsightDevice, StatsInsightsResult, StatsInsightVersion, StatsMetadata, VersionCompareFilter, VersionUsage, VersionUsageChannel } from './types.ts'
 import { getRuntimeKey } from 'hono/adapter'
 import { countDevicesCF, countInstallSourcesCF, countUpdatesFromLogsCF, countUpdatesFromLogsExternalCF, getAppsFromCF, getUpdateStatsCF, readBandwidthUsageCF, readDevicesCF, readDeviceUsageCF, readDeviceVersionCountsCF, readNativeActiveDevicesSummaryCF, readNativeDailyPlatformActiveCF, readNativeVersionUsageCF, readStatsCF, readStatsInsightsCF, readStatsVersionCF, trackDevicesCF } from './cloudflare.ts'
 import { isDemoApp } from './demo.ts'
@@ -17,11 +17,12 @@ import {
   createStatsLogsExternal as createStatsLogsExternalCF,
   createStatsMau as createStatsMauCF,
   createStatsVersion as createStatsVersionCF,
+  isDroppedStatsLogAction,
   normalizeStatsMetadata,
   onPremStats,
 } from './plugin_stats.ts'
 import { normalizeStatsInsightDate, normalizeStatsInsightNumber, sortStatsInsightTotals } from './statsInsights.ts'
-import { countDevicesSB, countInstallSourcesSB, getAppsFromSB, getUpdateStatsSB, readBandwidthUsageSB, readChannelDeviceOverrideIdsSB, readDevicesSB, readDeviceUsageSB, readDeviceVersionCountsSB, readNativeActiveDevicesSummarySB, readNativeDailyPlatformActiveSB, readNativeVersionUsageSB, readStatsInsightsSB, readStatsSB, readStatsStorageSB, readStatsVersionSB, supabaseWithAuth, trackBandwidthUsageSB, trackDevicesSB, trackDeviceUsageSB, trackLogsSB, trackMetaSB, trackVersionUsageSB } from './supabase.ts'
+import { countDevicesSB, countInstallSourcesSB, getAppsFromSB, getUpdateStatsSB, readBandwidthUsageSB, readChannelDefaultPlatformsSB, readChannelDeviceOverrideIdsSB, readDevicesSB, readDeviceUsageSB, readDeviceVersionCountsSB, readNativeActiveDevicesSummarySB, readNativeDailyPlatformActiveSB, readNativeVersionUsageSB, readStatsInsightsSB, readStatsSB, readStatsStorageSB, readStatsVersionSB, supabaseWithAuth, trackBandwidthUsageSB, trackDevicesSB, trackDeviceUsageSB, trackLogsSB, trackMetaSB, trackVersionUsageSB } from './supabase.ts'
 import { logSkippedSupabaseWrite, shouldSkipSupabaseStatsFallback } from './supabase_write_guard.ts'
 import { DEFAULT_LIMIT } from './types.ts'
 import { backgroundTask, getEnv, isInternalVersionName } from './utils.ts'
@@ -85,6 +86,8 @@ export function createStatsLogsExternal(c: Context, app_id: string, device_id: s
 }
 
 export function createStatsLogs(c: Context, app_id: string, device_id: string, action: Database['public']['Enums']['stats_action'], versionName?: string, metadata?: StatsMetadata, dimensions?: StatsLogDimensions) {
+  if (isDroppedStatsLogAction(action))
+    return Promise.resolve()
   if (c.env.APP_LOG)
     return createStatsLogsCF(c, app_id, device_id, action, versionName, metadata, dimensions)
 
@@ -230,14 +233,20 @@ function assertAnalyticsEngineReadConfig(c: Context, metricName: string): void {
 
 /**
  * Device counts per version. With a channel, devices are scoped by effective
- * channel: the reported default_channel, adjusted by channel_devices overrides
- * (forced into this channel are added, forced elsewhere are removed).
+ * channel: the reported default_channel (devices reporting none count on the
+ * public default channel of their platform), adjusted by channel_devices
+ * overrides (forced into this channel are added, forced elsewhere are removed).
  */
 export async function readDeviceVersionCounts(c: Context, app_id: string, channel?: VersionUsageChannel | string): Promise<Record<string, number>> {
   const channelName = (typeof channel === 'string' ? channel : channel?.name) || undefined
-  const overrides = channel && channelName
-    ? await readChannelDeviceOverrideIdsSB(c, app_id, channel)
-    : undefined
+  let overrides: ChannelDeviceOverrideIds | undefined
+  if (channel && channelName) {
+    const [deviceOverrides, defaultForPlatforms] = await Promise.all([
+      readChannelDeviceOverrideIdsSB(c, app_id, channel),
+      readChannelDefaultPlatformsSB(c, app_id, channel),
+    ])
+    overrides = { into: deviceOverrides?.into ?? [], elsewhere: deviceOverrides?.elsewhere ?? [], defaultForPlatforms }
+  }
   if (!shouldUseAnalyticsEngine(c))
     return readDeviceVersionCountsSB(c, app_id, channelName, overrides)
   return readDeviceVersionCountsCF(c, app_id, channelName, overrides)
