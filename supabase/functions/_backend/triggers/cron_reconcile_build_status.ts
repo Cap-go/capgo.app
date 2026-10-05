@@ -14,6 +14,7 @@ import {
 } from '../utils/build_timeout.ts'
 import { emitBuildTransitionEvent } from '../utils/build_tracking.ts'
 import { isoFromBuilderTimestamp } from '../utils/builder_capacity.ts'
+import { persistBuilderBuildOutcome } from '../utils/builder_onboarding_checklist.ts'
 import { BRES, middlewareAPISecret } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { recordBuildTime, supabaseAdmin } from '../utils/supabase.ts'
@@ -34,6 +35,12 @@ interface BuilderStatusResponse {
 const STALE_THRESHOLD_MINUTES = 5
 const ORPHAN_THRESHOLD_HOURS = 1
 const BATCH_LIMIT = 500
+
+const MISSING_BUILDER_JOB_ERROR = 'Build job no longer exists in builder'
+
+function isMissingBuilderJob(status: number, body: string): boolean {
+  return (status === 404 || status === 500) && /job not found/i.test(body)
+}
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -57,6 +64,7 @@ app.post('/', middlewareAPISecret, async (c) => {
   let reconciled = 0
   let timedOut = 0
   let orphaned = 0
+  let missing = 0
   let errors = 0
 
   const supabase = supabaseAdmin(c)
@@ -94,7 +102,7 @@ app.post('/', middlewareAPISecret, async (c) => {
 
   const orphanResults = await Promise.allSettled(
     orphanBuilds.map(async (build) => {
-      const { error: updateError } = await supabase
+      const { data: updatedRows, error: updateError } = await supabase
         .from('build_requests')
         .update({
           status: BUILD_TIMEOUT_STATUS,
@@ -102,18 +110,27 @@ app.post('/', middlewareAPISecret, async (c) => {
           updated_at: new Date().toISOString(),
         })
         .eq('id', build.id)
+        .eq('status', build.status)
+        .select('id')
 
       if (updateError)
         throw new Error(updateError.message)
+      if (!updatedRows?.length)
+        return false
+      if (build.platform === 'ios' || build.platform === 'android')
+        await persistBuilderBuildOutcome(c, { appId: build.app_id, platform: build.platform, status: BUILD_TIMEOUT_STATUS })
+      return true
     }),
   )
 
   for (let i = 0; i < orphanResults.length; i++) {
-    if (orphanResults[i].status === 'fulfilled') {
-      orphaned++
+    const result = orphanResults[i]
+    if (result.status === 'fulfilled') {
+      if (result.value)
+        orphaned++
     }
     else {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to mark orphan build as failed', buildId: orphanBuilds[i].id, error: (orphanResults[i] as PromiseRejectedResult).reason })
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to mark orphan build as failed', buildId: orphanBuilds[i].id, error: result.reason })
       errors++
     }
   }
@@ -139,6 +156,30 @@ app.post('/', middlewareAPISecret, async (c) => {
     }
   }
 
+  // Builder answers 500 "job not found" once a job is purged from its
+  // database. Such a build can never be reconciled, so settle it as failed
+  // instead of retrying it on every cron run forever.
+  async function markMissingBuilderJobFailed(build: typeof builderBuilds[number]) {
+    const { data: updatedRows, error: updateError } = await supabase
+      .from('build_requests')
+      .update({
+        status: BUILD_TIMEOUT_STATUS,
+        last_error: MISSING_BUILDER_JOB_ERROR,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', build.id)
+      .eq('status', build.status)
+      .select('id')
+
+    if (updateError)
+      throw new Error(updateError.message)
+    if (!updatedRows?.length)
+      return
+    missing++
+    if (build.platform === 'ios' || build.platform === 'android')
+      await persistBuilderBuildOutcome(c, { appId: build.app_id, platform: build.platform, status: BUILD_TIMEOUT_STATUS })
+  }
+
   const builderResults = await Promise.allSettled(
     builderBuilds.map(async (build) => {
       const response = await fetch(`${builderUrl}/jobs/${build.builder_job_id}`, {
@@ -146,8 +187,14 @@ app.post('/', middlewareAPISecret, async (c) => {
         headers: { 'x-api-key': builderApiKey },
       })
 
-      if (!response.ok)
-        throw new Error(`Builder status fetch failed: ${response.status}`)
+      if (!response.ok) {
+        // Always drain the body: unread responses pin one of the few concurrent
+        // connection slots and Workers cancels them as a stalled deadlock.
+        const errorText = await response.text().catch(() => '')
+        if (isMissingBuilderJob(response.status, errorText) && new Date(build.created_at).getTime() < orphanCutoff)
+          return await markMissingBuilderJobFailed(build)
+        throw new Error(`Builder status fetch failed: ${response.status} ${errorText.slice(0, 200)}`.trim())
+      }
 
       const builderJob = await response.json() as BuilderStatusResponse
       const jobStatus = builderJob.job.status
@@ -174,6 +221,7 @@ app.post('/', middlewareAPISecret, async (c) => {
         try {
           const cancelResponse = await cancelTimedOutBuilderJob(builderUrl, builderApiKey, build.builder_job_id!)
           if (cancelResponse.ok) {
+            await cancelResponse.body?.cancel()
             timeoutApplied = true
           }
           else {
@@ -239,6 +287,9 @@ app.post('/', middlewareAPISecret, async (c) => {
 
       const transitionApplied = !!updatedRows && updatedRows.length > 0
 
+      if (transitionApplied && (build.platform === 'ios' || build.platform === 'android'))
+        await persistBuilderBuildOutcome(c, { appId: build.app_id, platform: build.platform, status: effectiveStatus })
+
       // recordBuildTime stays unconditional on terminal status: it's idempotent
       // at the DB layer, and skipping it on the CAS-lost branch would let
       // billing miss a build (worse than the rare duplicate).
@@ -267,6 +318,7 @@ app.post('/', middlewareAPISecret, async (c) => {
 
       if (transitionApplied) {
         await emitBuildTransitionEvent(c, {
+          jobId: build.builder_job_id!,
           previousStatus,
           effectiveStatus,
           timeoutApplied,
@@ -304,6 +356,7 @@ app.post('/', middlewareAPISecret, async (c) => {
     reconciled,
     timed_out: timedOut,
     orphaned,
+    missing,
     errors,
   })
 

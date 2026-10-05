@@ -6,6 +6,8 @@ import type { Context } from 'hono'
 import { Buffer } from 'node:buffer'
 import { HTTPException } from 'hono/http-exception'
 import { cloudlog } from '../utils/logging.ts'
+import { MANIFEST_SIZE_RECEIPT_HEADER } from '../utils/manifest_size_receipt.ts'
+import { MANIFEST_UPLOAD_CAPABILITY_HEADER } from '../utils/manifest_upload_capability.ts'
 
 export const REQUEST_METHODS = ['POST', 'HEAD', 'PATCH', 'OPTIONS', 'DELETE'] as const
 
@@ -27,6 +29,7 @@ export const HEADERS = [
   'X-Forwarded-Host',
   'X-Forwarded-Proto',
   'Forwarded',
+  MANIFEST_UPLOAD_CAPABILITY_HEADER,
 ] as const
 
 export const HEADERS_LOWERCASE = HEADERS.map((header) => {
@@ -60,7 +63,7 @@ export const UPLOAD_INFO_KEY = 'upload-info'
 
 export const ALLOWED_HEADERS = HEADERS.join(', ')
 export const ALLOWED_METHODS = REQUEST_METHODS.join(', ')
-export const EXPOSED_HEADERS = HEADERS.join(', ')
+export const EXPOSED_HEADERS = [...HEADERS, MANIFEST_SIZE_RECEIPT_HEADER].join(', ')
 
 export type AppScopedAttachmentPath = | { kind: 'scoped', app_id: string, owner_org: string } | { kind: 'invalid_scoped' }
 
@@ -193,6 +196,10 @@ export function isRetryableDurableObjectResetError(error: unknown): boolean {
     'moved to a different machine',
     'storage operation exceeded timeout',
     'caused object to be reset',
+    // Cloudflare raises a generic "internal error; reference = <id>" when the
+    // Worker call to the upload Durable Object fails at the infrastructure
+    // level. It is transient, so retry it instead of failing the upload.
+    'internal error; reference',
   ].some(fragment => message.includes(fragment))
 }
 

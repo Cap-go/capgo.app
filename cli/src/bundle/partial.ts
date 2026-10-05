@@ -17,6 +17,7 @@ import { encryptChecksum, encryptChecksumV3, encryptSource } from '../api/crypto
 import { CliUserError } from '../shared/cli-user-error'
 import { appAddHintMessage, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findRoot, generateManifest, getContentType, getInstalledVersion, getLocalConfig, isAppNotFoundError, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import { getUploadReporter } from './reporter'
+import { getManifestUploadAbandonError, ManifestUploadAbandonController, ManifestUploadAbandonError, parseManifestUploadAbandonBody } from './upload-abandon-error'
 
 const log = {
   info: (message: string) => getUploadReporter().info(message),
@@ -25,7 +26,7 @@ const log = {
 }
 
 // Check if file already exists on server (bypass cache and force storage lookup)
-async function fileExists(localConfig: any, filename: string): Promise<boolean> {
+async function fileExists(localConfig: any, filename: string): Promise<{ exists: boolean, receipt?: string }> {
   try {
     const url = new URL(`${localConfig.hostFilesApi}/files/read/attachments/${encodeURIComponent(filename)}`)
     url.searchParams.set('nocache', `${Date.now()}`)
@@ -33,10 +34,10 @@ async function fileExists(localConfig: any, filename: string): Promise<boolean> 
       method: 'GET',
 headers: buildCliRequestHeaders({ range: 'bytes=0-0', 'cache-control': 'no-cache' }),
     })
-    return response.ok
+    return { exists: response.ok, receipt: response.headers.get('X-Capgo-Manifest-Size-Receipt') ?? undefined }
   }
   catch {
-    return false
+    return { exists: false }
   }
 }
 
@@ -201,7 +202,7 @@ export async function uploadPartial(
   options: OptionsUpload,
 ): Promise<any[] | null> {
   const spinner = getUploadReporter().spinner()
-  spinner.start('Preparing partial update with TUS protocol')
+  spinner.start('Preparing delta update with TUS protocol')
   const startTime = performance.now()
   const localConfig = await getLocalConfig()
 
@@ -242,12 +243,14 @@ export async function uploadPartial(
   let uploadedFiles = 0
   const totalFiles = manifest.length
   let brFilesCount = 0
+  const abandonController = new ManifestUploadAbandonController()
 
   try {
     spinner.message(`Uploading ${totalFiles} files using TUS protocol`)
 
     // Helper function to upload a single file
     const uploadFile = async (file: manifestType[number]) => {
+      abandonController.throwIfAbandoned()
       const finalFilePath = join(path, file.file)
       const filePathUnix = convertToUnixPath(file.file)
 
@@ -271,6 +274,7 @@ export async function uploadPartial(
       if (encryptionOptions) {
         finalBuffer = encryptSource(fileBuffer, encryptionOptions.sessionKey, encryptionOptions.ivSessionKey)
       }
+      abandonController.throwIfAbandoned()
 
       // Determine the upload path (with or without .br extension)
       let uploadPathUnix = filePathUnix
@@ -285,17 +289,20 @@ export async function uploadPartial(
       // Check if file already exists on server
       // Skip reuse when encryption is enabled because the session key changes per upload
       // and reusing a file encrypted with a different session key would cause decryption to fail
-      if (!encryptionOptions && await fileExists(localConfig, filename)) {
+      const existing = !encryptionOptions ? await fileExists(localConfig, filename) : { exists: false }
+      abandonController.throwIfAbandoned()
+      if (existing.exists) {
         uploadedFiles++
         return Promise.resolve({
           file_name: uploadPathUnix,
           s3_path: filename,
           file_hash: file.hash,
+          file_size_receipt: existing.receipt,
         })
       }
 
       return new Promise((resolve, reject) => {
-        spinner.message(`Prepare upload partial file: ${filePathUnix}`)
+        spinner.message(`Prepare upload delta file: ${filePathUnix}`)
         // Get the MIME type for this file (based on original filename, not the R2 path)
         const filetype = getContentType(uploadPathUnix)
         const upload = new tus.Upload(finalBuffer as any, {
@@ -308,7 +315,19 @@ export async function uploadPartial(
             filetype,
           },
 headers: buildCliRequestHeaders({ Authorization: apikey }),
+          onAfterResponse(_request, response) {
+            const abandonError = parseManifestUploadAbandonBody(response.getBody())
+            if (abandonError)
+              return abandonController.abandon(abandonError)
+          },
           onError: (error) => {
+            const abandonError = getManifestUploadAbandonError(error)
+            if (abandonError) {
+              void abandonController.abandon(abandonError)
+              return
+            }
+
+            abandonController.unregister(upload)
             const errorMessage = error.toString()
 
             // Turn the backend's `app_not_found` rejection into the actionable `app add`
@@ -341,19 +360,22 @@ headers: buildCliRequestHeaders({ Authorization: apikey }),
           },
           onProgress() {
             const percentage = ((uploadedFiles / totalFiles) * 100).toFixed(2)
-            spinner.message(`Uploading partial update: ${percentage}%`)
+            spinner.message(`Uploading delta update: ${percentage}%`)
           },
-          onSuccess() {
+          onSuccess({ lastResponse }) {
+            abandonController.unregister(upload)
             uploadedFiles++
             resolve({
               file_name: uploadPathUnix,
               s3_path: filename,
               file_hash: file.hash,
+              file_size_receipt: lastResponse.getHeader('X-Capgo-Manifest-Size-Receipt') ?? undefined,
             })
           },
         })
 
-        upload.start()
+        if (abandonController.register(upload, reject))
+          upload.start()
       })
     }
 
@@ -362,6 +384,7 @@ headers: buildCliRequestHeaders({ Authorization: apikey }),
     const results: any[] = []
 
     for (let i = 0; i < manifest.length; i += BATCH_SIZE) {
+      abandonController.throwIfAbandoned()
       const batch = manifest.slice(i, i + BATCH_SIZE)
       const batchNumber = Math.floor(i / BATCH_SIZE) + 1
       const totalBatches = Math.ceil(manifest.length / BATCH_SIZE)
@@ -373,9 +396,11 @@ headers: buildCliRequestHeaders({ Authorization: apikey }),
       const batchResults = await Promise.all(batch.map(file => uploadFile(file)))
       results.push(...batchResults)
     }
+    if (results.some(entry => !entry.file_size_receipt))
+      results.forEach(entry => delete entry.file_size_receipt)
     const endTime = performance.now()
     const uploadTime = ((endTime - startTime) / 1000).toFixed(2)
-    spinner.stop(`Partial update uploaded successfully 💪 in (${uploadTime} seconds)`)
+    spinner.stop(`Delta update uploaded successfully 💪 in (${uploadTime} seconds)`)
 
     if (brFilesCount > 0) {
       log.info(`${brFilesCount} of ${totalFiles} files were compressed with brotli and use .br extension`)
@@ -405,17 +430,20 @@ headers: buildCliRequestHeaders({ Authorization: apikey }),
   catch (error) {
     const endTime = performance.now()
     const uploadTime = ((endTime - startTime) / 1000).toFixed(2)
-    spinner.error(`Failed to upload Partial bundle (after ${uploadTime} seconds)`)
+    spinner.error(`Failed to upload delta update (after ${uploadTime} seconds)`)
+
+    if (error instanceof ManifestUploadAbandonError)
+      throw error
 
     if (userRequestedDelta) {
       // User explicitly requested delta/partial updates, so we should fail
-      log.error(`Error uploading partial update: ${error}`)
-      log.error(`Delta/partial upload was explicitly requested but failed. Upload aborted.`)
+      log.error(`Error uploading delta update: ${error}`)
+      log.error(`Delta upload was explicitly requested but failed. Upload aborted.`)
       throw error
     }
     else {
       // Delta was auto-enabled, treat as non-critical
-      log.info(`Error uploading partial update: ${error}, This is not a critical error, the bundle has been uploaded without the partial files`)
+      log.info(`Error uploading delta update: ${error}, This is not a critical error, the bundle has been uploaded without the delta files`)
       return null
     }
   }

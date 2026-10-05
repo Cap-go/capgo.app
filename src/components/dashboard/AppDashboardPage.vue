@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import type { AppDashboardSection } from '~/constants/appDashboardTabs'
+import type { AppChartRefreshState } from '~/services/dashboardRefresh'
+import type { NativeReleaseSeriesInput } from '~/services/nativeReleaseStats'
 import type { Database } from '~/types/supabase.types'
-import { computed, ref, watchEffect } from 'vue'
+import { computed, ref, useTemplateRef, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import AppNotFoundModal from '~/components/AppNotFoundModal.vue'
 import BundleInstallStatsPanel from '~/components/dashboard/BundleInstallStatsPanel.vue'
@@ -10,8 +12,11 @@ import CompatibilityBanner from '~/components/dashboard/CompatibilityBanner.vue'
 import DeploymentBanner from '~/components/dashboard/DeploymentBanner.vue'
 import DeploymentStatsCard from '~/components/dashboard/DeploymentStatsCard.vue'
 import DevicesStats from '~/components/dashboard/DevicesStats.vue'
+import NativeReleaseStatsPanel from '~/components/dashboard/NativeReleaseStatsPanel.vue'
 import ReleaseBanner from '~/components/dashboard/ReleaseBanner.vue'
+import ReleaseLivePanel from '~/components/dashboard/ReleaseLivePanel.vue'
 import UpdateStatsCard from '~/components/dashboard/UpdateStatsCard.vue'
+import { fetchAppChartRefreshState } from '~/services/dashboardRefresh'
 import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDisplayStore } from '~/stores/display'
@@ -31,13 +36,21 @@ const dashboardAppsStore = useDashboardAppsStore()
 const isLoading = ref(false)
 const supabase = useSupabase()
 const displayStore = useDisplayStore()
-const app = ref<Database['public']['Tables']['apps']['Row']>()
+type AppDashboardRow = Database['public']['Tables']['apps']['Row'] & AppChartRefreshState
+
+const app = ref<AppDashboardRow>()
 const usageComponent = ref<{
   useBillingPeriod: boolean
   showCumulative: boolean
   reloadTrigger: number
 } | null>(null)
 const appNotFound = ref(false)
+interface NativeUsageState {
+  data: { labels: string[], datasets: NativeReleaseSeriesInput[] } | null
+  isLoading: boolean
+}
+const nativeUsage = ref<NativeUsageState>({ data: null, isLoading: true })
+const nativeDevicesStats = useTemplateRef<{ reload: () => Promise<void> }>('nativeDevicesStats')
 let loadGeneration = 0
 
 const lacksSecurityAccess = computed(() => {
@@ -63,11 +76,10 @@ async function loadAppInfo(requestedId: string, generation: number) {
     if (generation !== loadGeneration || id.value !== requestedId)
       return
 
-    const { data: dataApp, error } = await supabase
-      .from('apps')
-      .select()
-      .eq('app_id', requestedId)
-      .single()
+    const [{ data: dataApp, error }, refreshState] = await Promise.all([
+      supabase.from('apps').select().eq('app_id', requestedId).single(),
+      fetchAppChartRefreshState(requestedId),
+    ])
 
     if (generation !== loadGeneration || id.value !== requestedId)
       return
@@ -78,7 +90,7 @@ async function loadAppInfo(requestedId: string, generation: number) {
     }
 
     appNotFound.value = false
-    app.value = dataApp
+    app.value = { ...dataApp, ...refreshState }
     dashboardAppsStore.upsertApp({
       app_id: requestedId,
       name: dataApp.name ?? null,
@@ -121,6 +133,8 @@ watchEffect(async () => {
   if (nextId && lastAppId.value !== nextId) {
     lastAppId.value = nextId
     id.value = nextId
+    // Drop the previous app's native releases until DevicesStats emits for this one.
+    nativeUsage.value = { data: null, isLoading: true }
     await refreshData()
     displayStore.NavTitle = ''
     displayStore.defaultBack = '/apps'
@@ -136,7 +150,7 @@ watchEffect(async () => {
 
         <div :class="{ 'blur-sm pointer-events-none select-none': appNotFound }">
           <DeploymentBanner v-if="!appNotFound" :app-id="id" @deployed="refreshData" />
-          <ReleaseBanner v-if="!appNotFound" :app-id="id" />
+          <ReleaseBanner v-if="!appNotFound && props.section !== 'live'" :app-id="id" />
           <CompatibilityBanner v-if="!appNotFound" :app-id="id" />
 
           <template v-if="!lacksSecurityAccess && props.section === 'usage'">
@@ -179,12 +193,21 @@ watchEffect(async () => {
           <!-- Version mix is operational history, not billed usage. Default last 1 day. -->
           <div v-else-if="!lacksSecurityAccess && props.section === 'native'" class="grid grid-cols-1 gap-6 mb-6">
             <DevicesStats
+              ref="nativeDevicesStats"
               :app-id="id"
               usage-kind="native"
               :use-billing-period="false"
               :accumulated="false"
               :force-demo="appNotFound"
               class="col-span-full"
+              @native-usage="nativeUsage = $event"
+            />
+            <NativeReleaseStatsPanel
+              :usage-data="nativeUsage.data"
+              :is-loading="nativeUsage.isLoading"
+              :force-demo="appNotFound"
+              class="col-span-full"
+              @retry="nativeDevicesStats?.reload()"
             />
           </div>
 
@@ -204,6 +227,13 @@ watchEffect(async () => {
               :accumulated="false"
               :force-demo="appNotFound"
               class="col-span-full"
+            />
+          </div>
+
+          <div v-else-if="!lacksSecurityAccess && props.section === 'live'" class="mb-6">
+            <ReleaseLivePanel
+              :app-id="id"
+              :force-demo="appNotFound"
             />
           </div>
         </div>

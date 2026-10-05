@@ -21,8 +21,9 @@ import { sql } from 'drizzle-orm'
 import { HTTPException } from 'hono/http-exception'
 import { quickError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { isTransientPgError } from './pg_errors.ts'
 import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
+import { waitAuthPgRetryJitter } from './pg_auth_retry.ts'
+import { isTransientPgError } from './pg_errors.ts'
 
 // =============================================================================
 // Types
@@ -61,6 +62,7 @@ export type Permission
     | 'app.build_native'
     | 'app.read_audit'
     | 'app.update_user_roles'
+    | 'app.manage_apikeys'
     // Bundle permissions
     | 'bundle.delete'
     // Channel permissions
@@ -120,15 +122,22 @@ function handlePermissionCheckError(
   if (transient) {
     quickError(
       503,
-      'upstream_unavailable',
-      'Permission check temporarily unavailable',
-      { permission, scope },
-      error,
+      'database_unavailable',
+      'Database temporarily unavailable',
+      { retryAfterSeconds: 2, permission, scope },
+      undefined,
       { alert: false },
     )
   }
 
   return false
+}
+
+function isDatabaseUnavailableError(error: unknown): boolean {
+  if (!(error instanceof HTTPException) || error.status !== 503)
+    return false
+  const cause = error.cause as { error?: string } | undefined
+  return cause?.error === 'database_unavailable'
 }
 
 // =============================================================================
@@ -327,7 +336,7 @@ export async function checkPermissionPg(
   c: Context<MiddlewareKeyVariables>,
   permission: Permission,
   scope: PermissionScope,
-  drizzleClient: ReturnType<typeof getDrizzleClient>,
+  drizzleClient: Pick<ReturnType<typeof getDrizzleClient>, 'execute'>,
   userId: string,
   apikeyString?: string | null,
 ): Promise<boolean> {
@@ -406,6 +415,51 @@ export async function checkPermissionPg(
   catch (e) {
     return handlePermissionCheckError(c, permission, scope, e, 'checkPermissionPg')
   }
+}
+
+/**
+ * checkPermissionPg on a fresh pool connection, with one jittered retry on transient failures.
+ * Use on hot upload paths; do not use inside an open transaction drizzle client.
+ */
+export async function checkPermissionPgFreshRetry(
+  c: Context<MiddlewareKeyVariables>,
+  permission: Permission,
+  scope: PermissionScope,
+  userId: string,
+  apikeyString?: string | null,
+  readOnly = false,
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let pgClient: ReturnType<typeof getPgClient> | undefined
+    try {
+      pgClient = getPgClient(c, readOnly)
+      const drizzleClient = getDrizzleClient(pgClient)
+      return await checkPermissionPg(c, permission, scope, drizzleClient, userId, apikeyString)
+    }
+    catch (error) {
+      if (attempt === 0 && (isDatabaseUnavailableError(error) || isTransientPgError(error))) {
+        await waitAuthPgRetryJitter()
+        continue
+      }
+      if (error instanceof HTTPException)
+        throw error
+      // Pool acquisition failures that are not transient are infra/config faults, not ACL denials.
+      if (!pgClient && !isTransientPgError(error))
+        throw error
+      return handlePermissionCheckError(c, permission, scope, error, 'checkPermissionPg')
+    }
+    finally {
+      if (pgClient)
+        await closeClient(c, pgClient)
+    }
+  }
+  return handlePermissionCheckError(
+    c,
+    permission,
+    scope,
+    new Error('checkPermissionPgFreshRetry exhausted retries'),
+    'checkPermissionPg',
+  )
 }
 
 // =============================================================================

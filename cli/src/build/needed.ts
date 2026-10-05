@@ -14,11 +14,11 @@ import {
   createSupabaseClient,
   findSavedKey,
   formatError,
-  getAppId,
   getCompatibilityDetails,
   getConfig,
   isCompatible,
 } from '../utils'
+import { getBuilderAppId } from './app-id'
 
 type VersionChangeType = 'major' | 'minor' | 'patch' | 'prerelease' | 'changed' | 'same' | 'new' | 'removed'
 
@@ -260,7 +260,7 @@ export async function getBuildNeeded(
     configError = error
   }
 
-  const resolvedAppId = getAppId(appId, extConfig?.config)
+  const resolvedAppId = getBuilderAppId(appId, extConfig?.config)
   if (!resolvedAppId) {
     if (configError instanceof Error)
       throw configError

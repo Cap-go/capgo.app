@@ -1,29 +1,14 @@
 import type { Context } from 'hono'
 import {
+  buildDeviceVersionCountsCFQuery,
   buildNativeObservePluginTotalDevicesCFQuery,
   buildNativeObservePluginVersionsCFQuery,
-  buildPlatformUpdateDeliveryDailyCFQuery,
-  buildPlatformUpdateDeliveryDeviceCountCFQuery,
-  buildPlatformUpdateDeliveryOverviewCFQuery,
   buildReadDevicesCFQuery,
   buildUpdateDeliveryTimingEventsCFQuery,
   countDevicesCF,
   countInstallSourcesCF,
   countUpdatesFromLogsCF,
   countUpdatesFromLogsExternalCF,
-  getAdminAppsTrend,
-  getAdminBandwidthTrend,
-  getAdminBundlesTrend,
-  getAdminDistributionMetrics,
-  getAdminFailureMetrics,
-  getAdminMauTrend,
-  getAdminOnboardingTelemetry,
-  getAdminOrgMetrics,
-  getAdminPlatformOverview,
-  getAdminStorageTrend,
-  getAdminSuccessRate,
-  getAdminSuccessRateTrend,
-  getAdminUploadMetrics,
   getPluginBreakdownCF,
   getPublicLiveUpdateMetricsCF,
   getUpdateStatsCF,
@@ -236,6 +221,13 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
 
     const staticFixtures: AnalyticsEngineSqlFixture[] = [
       {
+        name: 'buildDeviceVersionCountsCFQuery.channelOverrides',
+        query: buildDeviceVersionCountsCFQuery(SAMPLE_APP_ID, 'production', {
+          into: [SAMPLE_DEVICE_ID],
+          elsewhere: ['22222222-2222-4222-8222-222222222222'],
+        }),
+      },
+      {
         name: 'buildNotificationStatsQuery.app',
         query: buildNotificationStatsQuery({
           dataset: 'notification_events',
@@ -272,37 +264,18 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
         }),
       },
       {
-        name: 'buildUpdateDeliveryTimingEventsCFQuery.platformRequireDuration',
+        name: 'buildUpdateDeliveryTimingEventsCFQuery.platformPairing',
         query: buildUpdateDeliveryTimingEventsCFQuery({
           start_date: SAMPLE_START,
           end_date: SAMPLE_END,
-          actions: ['download_complete', 'download_zip_complete'],
-          require_duration: true,
+          actions: [
+            'download_complete',
+            'download_zip_complete',
+            'download_0',
+            'download_zip_start',
+            'download_manifest_start',
+          ],
           limit: 50_000,
-        }),
-      },
-      {
-        name: 'buildPlatformUpdateDeliveryDailyCFQuery.platform',
-        query: buildPlatformUpdateDeliveryDailyCFQuery({
-          query_start: '2026-05-31T22:00:00.000Z',
-          period_start: SAMPLE_START,
-          end_date: SAMPLE_END,
-        }),
-      },
-      {
-        name: 'buildPlatformUpdateDeliveryOverviewCFQuery.platform',
-        query: buildPlatformUpdateDeliveryOverviewCFQuery({
-          query_start: '2026-05-31T22:00:00.000Z',
-          period_start: SAMPLE_START,
-          end_date: SAMPLE_END,
-        }),
-      },
-      {
-        name: 'buildPlatformUpdateDeliveryDeviceCountCFQuery.platform',
-        query: buildPlatformUpdateDeliveryDeviceCountCFQuery({
-          query_start: '2026-05-31T22:00:00.000Z',
-          period_start: SAMPLE_START,
-          end_date: SAMPLE_END,
         }),
       },
       {
@@ -353,6 +326,8 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
     await captureCall('readDeviceUsageCF', () => readDeviceUsageCF(context, SAMPLE_APP_ID, SAMPLE_START, SAMPLE_END))
     await captureCall('readBandwidthUsageCF', () => readBandwidthUsageCF(context, SAMPLE_APP_ID, SAMPLE_START, SAMPLE_END))
     await captureCall('readStatsVersionCF', () => readStatsVersionCF(context, SAMPLE_APP_ID, SAMPLE_START, SAMPLE_END))
+    await captureCall('readStatsVersionCF.channel', () => readStatsVersionCF(context, SAMPLE_APP_ID, SAMPLE_START, SAMPLE_END, { id: 42, name: 'production' }))
+    await captureCall('readStatsVersionCF.channelWithLegacyGets', () => readStatsVersionCF(context, SAMPLE_APP_ID, SAMPLE_START, SAMPLE_END, { id: 42, name: 'production' }, { includeUnattributedGets: true }))
     await captureCall('readNativeVersionUsageCF', () => readNativeVersionUsageCF(context, SAMPLE_APP_ID, SAMPLE_START, SAMPLE_END))
     await captureCall('readDeviceVersionCountsCF', () => readDeviceVersionCountsCF(context, SAMPLE_APP_ID, 'production'))
     await captureCall('countInstallSourcesCF', () => countInstallSourcesCF(context, SAMPLE_APP_ID))
@@ -388,23 +363,6 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
     await captureCall('readLastMonthDevicesCF', () => readLastMonthDevicesCF(context, SAMPLE_REFERENCE_DATE))
     await captureCall('readLastMonthDevicesByPlatformCF', () => readLastMonthDevicesByPlatformCF(context, SAMPLE_REFERENCE_DATE))
     await captureCall('getUpdateStatsCF', () => getUpdateStatsCF(context))
-    await captureCall('getAdminOnboardingTelemetry', () => getAdminOnboardingTelemetry(context, [{
-      app_id: SAMPLE_APP_ID,
-      start_at: SAMPLE_START,
-      end_at: SAMPLE_END,
-    }], SAMPLE_START, SAMPLE_REFERENCE_DATE))
-    await captureCall('getAdminUploadMetrics', () => getAdminUploadMetrics(context, SAMPLE_START, SAMPLE_END, SAMPLE_APP_ID))
-    await captureCall('getAdminDistributionMetrics', () => getAdminDistributionMetrics(context, SAMPLE_START, SAMPLE_END, SAMPLE_APP_ID))
-    await captureCall('getAdminFailureMetrics', () => getAdminFailureMetrics(context, SAMPLE_START, SAMPLE_END, SAMPLE_APP_ID))
-    await captureCall('getAdminSuccessRate', () => getAdminSuccessRate(context, SAMPLE_START, SAMPLE_END, SAMPLE_APP_ID))
-    await captureCall('getAdminPlatformOverview', () => getAdminPlatformOverview(context, SAMPLE_START, SAMPLE_END, 'org-id'))
-    await captureCall('getAdminOrgMetrics', () => getAdminOrgMetrics(context, SAMPLE_START, SAMPLE_END, 10))
-    await captureCall('getAdminMauTrend', () => getAdminMauTrend(context, SAMPLE_START, SAMPLE_END))
-    await captureCall('getAdminSuccessRateTrend', () => getAdminSuccessRateTrend(context, SAMPLE_START, SAMPLE_END))
-    await captureCall('getAdminAppsTrend', () => getAdminAppsTrend(context, SAMPLE_START, SAMPLE_END))
-    await captureCall('getAdminBundlesTrend', () => getAdminBundlesTrend(context, SAMPLE_START, SAMPLE_END))
-    await captureCall('getAdminStorageTrend', () => getAdminStorageTrend(context, SAMPLE_START, SAMPLE_END))
-    await captureCall('getAdminBandwidthTrend', () => getAdminBandwidthTrend(context, SAMPLE_START, SAMPLE_END))
     await captureCall('getPluginBreakdownCF', () => getPluginBreakdownCF(context, SAMPLE_REFERENCE_DATE))
     await captureCall('getPublicLiveUpdateMetricsCF', () => getPublicLiveUpdateMetricsCF(context, SAMPLE_REFERENCE_DATE))
 

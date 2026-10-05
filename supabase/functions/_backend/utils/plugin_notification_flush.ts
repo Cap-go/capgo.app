@@ -60,7 +60,9 @@ async function postPluginNotificationBatch(c: Context, items: PluginNotification
   if (c.get('deliverPluginNotificationsInProcess')) {
     const result = await deliverQueuedPluginNotifications(c, items)
     if (result.failed > 0) {
-      cloudlogErr({
+      // Summary only: each failed item already logged its own cause. Keep this
+      // off the error console so Workers Issues groups the real cause, not this.
+      cloudlog({
         requestId: c.get('requestId'),
         message: 'Plugin notification in-process transfer failed',
         failed: result.failed,

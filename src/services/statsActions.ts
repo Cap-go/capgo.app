@@ -66,6 +66,7 @@ export const statsActionFilters = [
   ['action-disable-platform-ios', 'disablePlatformIos'],
   ['action-disable-platform-android', 'disablePlatformAndroid'],
   ['action-disable-platform-electron', 'disablePlatformElectron'],
+  ['action-channel-paused', 'channelPaused'],
   ['action-disable-auto-update-to-major', 'disableAutoUpdateToMajor'],
   ['action-cannot-update-via-private-channel', 'cannotUpdateViaPrivateChannel'],
   ['action-disable-auto-update-to-minor', 'disableAutoUpdateToMinor'],
@@ -173,4 +174,88 @@ export const updateActionFilterKeys = statsActionFilters
 
 export function createActionFilterState(): Record<string, boolean> {
   return Object.fromEntries(statsActionFilters.map(([filterKey]) => [filterKey, false]))
+}
+
+/**
+ * Observe signal categories. None of these come from Capgo itself: the updater
+ * plugin only relays what the OS and the WebView report about the host app.
+ * - crash: the app process failed (crash, ANR, startup failure, launch timeout).
+ * - web: an error thrown or triggered by the app's own web code.
+ * - system: the OS reclaimed memory or restarted the WebView. Often expected,
+ *   especially while the app sits in the background.
+ * - context: informational events (launches, page loads, navigation).
+ */
+export type ObserveSignalCategory = 'crash' | 'web' | 'system' | 'context'
+
+const observeSignals: Record<string, { category: ObserveSignalCategory, helpKey: string }> = {
+  app_crash: { category: 'crash', helpKey: 'observe-signal-help-app-crash' },
+  app_crash_native: { category: 'crash', helpKey: 'observe-signal-help-app-crash-native' },
+  app_anr: { category: 'crash', helpKey: 'observe-signal-help-app-anr' },
+  app_initialization_failure: { category: 'crash', helpKey: 'observe-signal-help-app-initialization-failure' },
+  app_launch_timeout: { category: 'crash', helpKey: 'observe-signal-help-app-launch-timeout' },
+  webview_javascript_error: { category: 'web', helpKey: 'observe-signal-help-webview-javascript-error' },
+  webview_unhandled_rejection: { category: 'web', helpKey: 'observe-signal-help-webview-unhandled-rejection' },
+  webview_resource_error: { category: 'web', helpKey: 'observe-signal-help-webview-resource-error' },
+  webview_security_policy_violation: { category: 'web', helpKey: 'observe-signal-help-webview-security-policy-violation' },
+  app_killed_low_memory: { category: 'system', helpKey: 'observe-signal-help-app-killed-low-memory' },
+  app_killed_excessive_resource_usage: { category: 'system', helpKey: 'observe-signal-help-app-killed-excessive-resource-usage' },
+  app_memory_warning: { category: 'system', helpKey: 'observe-signal-help-app-memory-warning' },
+  webview_unclean_restart: { category: 'system', helpKey: 'observe-signal-help-webview-unclean-restart' },
+  webview_render_process_gone: { category: 'system', helpKey: 'observe-signal-help-webview-render-process-gone' },
+  webview_content_process_terminated: { category: 'system', helpKey: 'observe-signal-help-webview-content-process-terminated' },
+}
+
+export function observeSignalCategory(action: string): ObserveSignalCategory {
+  return observeSignals[action]?.category ?? 'context'
+}
+
+export function observeSignalHelpKey(action: string): string | null {
+  return observeSignals[action]?.helpKey ?? null
+}
+
+/**
+ * Updater failure categories. These are the live update failures shown on the
+ * Observe > Updater page. App crashes and WebView errors belong to the Native
+ * page and are intentionally left out.
+ * - rollback: the new bundle did not call notifyAppReady() in time, so the
+ *   plugin restored the previous bundle.
+ * - bundle: the bundle was rejected or could not be served (checksum,
+ *   encryption, invalid paths, install step).
+ * - device: the device could not finish the download (network, storage,
+ *   memory). The device keeps its current bundle and retries later.
+ * - setup: the plugin setup prevents updates (server.url, old plugin).
+ */
+export type UpdaterFailureCategory = 'rollback' | 'bundle' | 'device' | 'setup'
+
+const updaterFailures: Record<string, { category: UpdaterFailureCategory, helpKey: string }> = {
+  update_fail: { category: 'rollback', helpKey: 'updater-failure-help-update-fail' },
+  set_fail: { category: 'bundle', helpKey: 'updater-failure-help-set-fail' },
+  checksum_fail: { category: 'bundle', helpKey: 'updater-failure-help-checksum-fail' },
+  decrypt_fail: { category: 'bundle', helpKey: 'updater-failure-help-decrypt-fail' },
+  cannotGetBundle: { category: 'bundle', helpKey: 'updater-failure-help-cannot-get-bundle' },
+  download_manifest_checksum_fail: { category: 'bundle', helpKey: 'updater-failure-help-checksum-fail' },
+  download_manifest_brotli_fail: { category: 'bundle', helpKey: 'updater-failure-help-brotli-fail' },
+  manifest_path_fail: { category: 'bundle', helpKey: 'updater-failure-help-path-fail' },
+  windows_path_fail: { category: 'bundle', helpKey: 'updater-failure-help-path-fail' },
+  canonical_path_fail: { category: 'bundle', helpKey: 'updater-failure-help-path-fail' },
+  directory_path_fail: { category: 'bundle', helpKey: 'updater-failure-help-path-fail' },
+  download_fail: { category: 'device', helpKey: 'updater-failure-help-download-fail' },
+  download_manifest_file_fail: { category: 'device', helpKey: 'updater-failure-help-download-fail' },
+  finish_download_fail: { category: 'device', helpKey: 'updater-failure-help-finish-download-fail' },
+  unzip_fail: { category: 'device', helpKey: 'updater-failure-help-unzip-fail' },
+  low_mem_fail: { category: 'device', helpKey: 'updater-failure-help-low-mem-fail' },
+  insufficient_disk_space: { category: 'device', helpKey: 'updater-failure-help-insufficient-disk-space' },
+  blocked_by_server_url: { category: 'setup', helpKey: 'updater-failure-help-blocked-by-server-url' },
+  backend_refusal: { category: 'setup', helpKey: 'updater-failure-help-backend-refusal' },
+}
+
+/** Actions requested by the Observe > Updater insights. */
+export const updaterInsightActions = Object.keys(updaterFailures)
+
+export function updaterFailureCategory(action: string): UpdaterFailureCategory {
+  return updaterFailures[action]?.category ?? 'bundle'
+}
+
+export function updaterFailureHelpKey(action: string): string | null {
+  return updaterFailures[action]?.helpKey ?? null
 }

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Modify Admin Dashboard"
+  short_description: "Route admin dashboard work to its private repo"
+  default_prompt: "Use $modify-admin-dashboard to make this admin dashboard change in the private dashboard repository."

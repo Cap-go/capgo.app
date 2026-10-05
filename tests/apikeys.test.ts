@@ -8,6 +8,7 @@ import {
   appApiKeyBindings,
   BASE_URL,
   executeSQL,
+  fetchTestRequest,
   getAuthHeaders,
   getAuthHeadersForCredentials,
   getSupabaseClient,
@@ -23,6 +24,7 @@ import {
 const id = randomUUID()
 const APPNAME = `com.app.key.${id}`
 let authHeaders: Record<string, string>
+let warmupApiKeyId: number | null = null
 
 const TRANSIENT_GATEWAY_MARKERS = [
   'An invalid response was received from the upstream server',
@@ -196,16 +198,87 @@ async function postApiKey(
 beforeAll(async () => {
   authHeaders = await getAuthHeaders()
   await resetAndSeedAppData(APPNAME)
-  // Warm GET and POST handlers before concurrent key creation in this file.
-  await warmEdgeEndpointWithDeadline('/apikey', { method: 'GET', headers: authHeaders }, Date.now() + 15000)
-  await warmEdgeEndpointWithDeadline('/apikey', {
+  // Load the apikey isolate before concurrent POSTs from this file.
+  const warmupDeadline = Date.now() + 15000
+  await warmEdgeEndpointWithDeadline('/apikey', { method: 'GET', headers: authHeaders }, warmupDeadline)
+  const warmupPostResponse = await fetch(`${BASE_URL}/apikey`, {
     method: 'POST',
-    headers: authHeaders,
-    body: JSON.stringify({}),
-  }, Date.now() + 15000)
+    headers: {
+      ...authHeaders,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(orgKeyBody(`warmup-post-${id.slice(0, 8)}`)),
+  })
+  if (warmupPostResponse.ok) {
+    const warmupName = `warmup-post-${id.slice(0, 8)}`
+    const warmupBody = await warmupPostResponse.text()
+    try {
+      const warmupData = JSON.parse(warmupBody) as { id?: number }
+      if (typeof warmupData.id === 'number') {
+        warmupApiKeyId = warmupData.id
+      }
+    }
+    catch (error) {
+      console.warn('apikey beforeAll warmup parse failed', error)
+    }
+    if (warmupApiKeyId !== null) {
+      try {
+        const deleteResponse = await fetch(`${BASE_URL}/apikey/${warmupApiKeyId}`, {
+          method: 'DELETE',
+          headers: authHeaders,
+        })
+        if (!deleteResponse.ok) {
+          console.warn(`apikey beforeAll warmup cleanup delete ${warmupApiKeyId} status=${deleteResponse.status}`)
+        }
+      }
+      catch (error) {
+        console.warn(`apikey beforeAll warmup cleanup delete ${warmupApiKeyId} failed`, error)
+      }
+    }
+    else {
+      try {
+        const [deletedKey] = await executeSQL(
+          `DELETE FROM public.apikeys WHERE name = $1 RETURNING id`,
+          [warmupName],
+        )
+        if (deletedKey?.id) {
+          warmupApiKeyId = Number(deletedKey.id)
+        }
+      }
+      catch (error) {
+        console.warn(`apikey beforeAll warmup sql cleanup ${warmupName} failed`, error)
+      }
+    }
+  }
+  else {
+    await warmEdgeEndpointWithDeadline('/apikey', {
+      method: 'POST',
+      headers: {
+        ...authHeaders,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name: `warmup-post-fallback-${id.slice(0, 8)}` }),
+    }, warmupDeadline)
+  }
 })
 
 afterAll(async () => {
+  if (warmupApiKeyId !== null) {
+    await fetch(`${BASE_URL}/apikey/${warmupApiKeyId}`, {
+      method: 'DELETE',
+      headers: authHeaders,
+    }).catch(() => undefined)
+    try {
+      const { error } = await getSupabaseClient().from('apikeys').delete().eq('id', warmupApiKeyId)
+      if (error) {
+        console.warn(`apikey afterAll warmup sql cleanup ${warmupApiKeyId}`, error)
+      }
+    }
+    catch (error) {
+      console.warn(`apikey afterAll warmup sql cleanup ${warmupApiKeyId} failed`, error)
+    }
+    warmupApiKeyId = null
+  }
   await resetAppData(APPNAME)
 })
 
@@ -274,7 +347,7 @@ describe('[GET] /apikey operations', () => {
   })
 
   it('get api key with invalid id', async () => {
-    const response = await fetch(`${BASE_URL}/apikey/424242`, {
+    const response = await fetchTestRequest(`${BASE_URL}/apikey/424242`, {
       method: 'GET',
       headers: authHeaders,
     })

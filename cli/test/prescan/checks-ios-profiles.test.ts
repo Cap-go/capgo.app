@@ -8,6 +8,7 @@ import {
   profileExpiry,
   profileTypeVsMode,
   targetsCovered,
+  wildcardProfileTargets,
 } from '../../src/build/prescan/checks/ios-profiles'
 import { makeCtx, makeP12, makeProfileXml, makeProfileXmlWithCert, makeProject } from './helpers'
 
@@ -167,6 +168,7 @@ describe('ios/targets-covered', () => {
     expect(f[0]?.severity).toBe('error')
     expect(f[0]?.title).toContain('1 signable target')
     expect(f[0]?.detail).toContain('Widget')
+    expect(f[0]?.fix).toContain('npx @capgo/cli@latest build credentials ios-provisioning')
   })
   it('passes when every signable target bundle id is covered', async () => {
     const dir = makeProject({ 'ios/App/App.xcodeproj/project.pbxproj': TWO_TARGET_PBXPROJ })
@@ -176,5 +178,72 @@ describe('ios/targets-covered', () => {
     })
     const ctx = makeCtx({ projectDir: dir, platform: 'ios', credentials: { CAPGO_IOS_PROVISIONING_MAP: map } })
     expect(await targetsCovered.run(ctx)).toEqual([])
+  })
+
+  it('reports present empty, malformed, and invalid maps without suggesting the command', async () => {
+    const dir = makeProject({ 'ios/App/App.xcodeproj/project.pbxproj': TWO_TARGET_PBXPROJ })
+    for (const raw of ['{}', 'not json', JSON.stringify({ bad: { profile: 'not-a-profile' } })]) {
+      const ctx = makeCtx({ projectDir: dir, platform: 'ios', credentials: { CAPGO_IOS_PROVISIONING_MAP: raw } })
+      const findings = await targetsCovered.run(ctx)
+      expect(findings[0]?.severity).toBe('error')
+      expect(findings[0]?.fix).toContain('Save or update')
+      expect(findings[0]?.fix).not.toContain('ios-provisioning')
+    }
+  })
+
+  it('keeps generic repair guidance for a single-target project', async () => {
+    const singleTarget = TWO_TARGET_PBXPROJ
+      .replace(/    AA11BB22CC33DD44[\s\S]*?    };\n    13B07F931A680F5B00A75B9A/, '    13B07F931A680F5B00A75B9A')
+      .replace(/    AA11BB22CC33DD55[\s\S]*?    };\n  };/, '  };')
+    const dir = makeProject({ 'ios/App/App.xcodeproj/project.pbxproj': singleTarget })
+    const map = JSON.stringify({ other: { profile: b64(makeProfileXml({ bundleId: 'com.other.app' })), name: 'Other' } })
+    const findings = await targetsCovered.run(makeCtx({ projectDir: dir, platform: 'ios', credentials: { CAPGO_IOS_PROVISIONING_MAP: map } }))
+    expect(findings[0]?.fix).toContain('--ios-provisioning-profile')
+    expect(findings[0]?.fix).not.toContain('build credentials ios-provisioning')
+  })
+})
+
+describe('ios/wildcard-profile-targets', () => {
+  it('owns matching wildcard targets and recommends the repair command', async () => {
+    const dir = makeProject({ 'ios/App/App.xcodeproj/project.pbxproj': TWO_TARGET_PBXPROJ })
+    const wildcard = b64(makeProfileXml({ bundleId: 'com.demo.*' }))
+    const map = JSON.stringify({
+      'com.demo.app': { profile: b64(makeProfileXml()), name: 'App' },
+      wildcard: { profile: wildcard, name: 'Wildcard' },
+    })
+    const ctx = makeCtx({ projectDir: dir, platform: 'ios', credentials: { CAPGO_IOS_PROVISIONING_MAP: map } })
+
+    const findings = await wildcardProfileTargets.run(ctx)
+    expect(findings[0]?.severity).toBe('error')
+    expect(findings[0]?.detail).toContain('Widget')
+    expect(findings[0]?.fix).toContain('npx @capgo/cli@latest build credentials ios-provisioning')
+    expect(await targetsCovered.run(ctx)).toEqual([])
+  })
+
+  it('fails unsupported when different wildcard profiles match', async () => {
+    const dir = makeProject({ 'ios/App/App.xcodeproj/project.pbxproj': TWO_TARGET_PBXPROJ })
+    const map = JSON.stringify({
+      'com.demo.app': { profile: b64(makeProfileXml()), name: 'App' },
+      broad: { profile: b64(makeProfileXml({ bundleId: '*' })), name: 'Broad' },
+      prefix: { profile: b64(makeProfileXml({ bundleId: 'com.demo.*' })), name: 'Prefix' },
+    })
+    const findings = await wildcardProfileTargets.run(makeCtx({ projectDir: dir, platform: 'ios', credentials: { CAPGO_IOS_PROVISIONING_MAP: map } }))
+    expect(findings[0]?.title).toBe('Sorry, multiple matching wildcard provisioning profiles are not supported')
+    expect(findings[0]?.fix).toContain('Remove or replace')
+  })
+
+  it('deduplicates identical wildcard bytes and ignores exact-complete or nonmatching maps', async () => {
+    const dir = makeProject({ 'ios/App/App.xcodeproj/project.pbxproj': TWO_TARGET_PBXPROJ })
+    const wildcard = b64(makeProfileXml({ bundleId: 'com.demo.*' }))
+    const duplicateMap = JSON.stringify({ first: wildcard, second: { profile: wildcard, name: 'Duplicate' } })
+    const duplicateFindings = await wildcardProfileTargets.run(makeCtx({ projectDir: dir, platform: 'ios', credentials: { CAPGO_IOS_PROVISIONING_MAP: duplicateMap } }))
+    expect(duplicateFindings[0]?.title).not.toContain('multiple')
+
+    const exactMap = JSON.stringify({
+      'com.demo.app': b64(makeProfileXml()),
+      'com.demo.app.widget': b64(makeProfileXml({ bundleId: 'com.demo.app.widget' })),
+      wildcard: b64(makeProfileXml({ bundleId: 'org.other.*' })),
+    })
+    expect(await wildcardProfileTargets.run(makeCtx({ projectDir: dir, platform: 'ios', credentials: { CAPGO_IOS_PROVISIONING_MAP: exactMap } }))).toEqual([])
   })
 })

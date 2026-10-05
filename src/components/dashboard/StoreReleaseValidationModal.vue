@@ -642,7 +642,7 @@ onUnmounted(() => {
 
             <ul class="space-y-3 text-sm text-slate-700 dark:text-slate-200">
               <li v-for="item in validationItems" :key="item.key" class="flex gap-3">
-                <span class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full" :class="item.enabled ? 'bg-azure-50 text-azure-600 dark:bg-azure-400/15 dark:text-azure-200' : 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500'">
+                <span class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full" :class="item.enabled ? 'bg-azure-500/10 text-azure-600 dark:bg-azure-400/15 dark:text-azure-200' : 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500'">
                   <IconCheck v-if="item.enabled" class="h-3.5 w-3.5" />
                   <IconCircleDot v-else class="h-3.5 w-3.5" />
                 </span>

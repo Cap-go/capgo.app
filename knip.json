@@ -65,6 +65,7 @@
     "cli": {
       "entry": [
         "src/index.ts!",
+        "src/notify-app-ready-worker.ts!",
         "src/sdk.ts!",
         "src/mcp/server.ts!"
       ],

@@ -329,6 +329,12 @@ t('init updater config always starts from native version 0.0.0', () => {
   })
 })
 
+t('init updater config downloads from the channel selected during onboarding', () => {
+  for (const directInstall of [false, true]) {
+    assert.equal(getInitUpdaterPluginConfig('com.example.app', directInstall, 'staging').defaultChannel, 'staging')
+  }
+})
+
 t('instant updates install splash-screen matching Capacitor major', () => {
   assert.equal(getSplashScreenVersionToInstall('7.4.0'), '^7.0.0')
   assert.equal(getSplashScreenVersionToInstall('8.0.0'), 'latest')

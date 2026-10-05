@@ -337,12 +337,12 @@ onUnmounted(() => {
   <section class="h-full py-12 overflow-y-auto sm:py-16 lg:py-20 max-h-fit">
     <div class="px-4 mx-auto max-w-7xl sm:px-6 lg:px-8">
       <div class="flex items-center justify-items-center place-content-center">
-        <button type="button" v-if="!onboarding" class="mr-6 text-white bg-gray-800 d-btn d-btn-outline" @click="emit('closeStep')">
+        <button v-if="!onboarding" type="button" class="mr-6 text-white bg-gray-800 d-btn d-btn-outline" @click="emit('closeStep')">
           <arrowBack />
         </button>
         <div v-if="props.onboarding" class="text-center">
           <h2 class="text-3xl font-bold text-gray-900 sm:text-4xl xl:text-5xl dark:text-gray-50 font-pj">
-            {{ t('start-using-capgo') }} <span class="font-prompt">Capgo</span> !
+            {{ t('start-using-capgo') }} Capgo !
           </h2>
           <p class="mx-auto mt-6 text-lg font-normal text-gray-600 dark:text-gray-200 font-pj">
             {{ t('add-your-first-app-t') }}

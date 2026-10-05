@@ -10,6 +10,7 @@ import { authGhostButtonClass, authSecondaryButtonClass } from '~/components/aut
 import { useSSOProvisioning } from '~/composables/useSSOProvisioning'
 import { useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
+import { validateRedirectPath } from '~/utils/safeRedirect'
 
 const route = useRoute()
 const router = useRouter()
@@ -18,25 +19,6 @@ const { t } = useI18n()
 const isLoading = ref(true)
 const errorMessage = ref('')
 const { provisionUser, error: provisionError } = useSSOProvisioning()
-
-function validateRedirectPath(path: string | undefined): string {
-  // Default fallback
-  if (!path) {
-    return '/dashboard'
-  }
-
-  // Only allow relative paths starting with / but not //
-  if (!path.startsWith('/') || path.startsWith('//')) {
-    return '/dashboard'
-  }
-
-  // Reject paths containing scheme-like patterns (http:, https:, javascript:, etc.)
-  if (/^[a-z][a-z0-9+.-]*:/i.test(path)) {
-    return '/dashboard'
-  }
-
-  return path
-}
 
 function getSsoCallbackParams() {
   const hashParams = new URLSearchParams(globalThis.location.hash.replace('#', ''))

@@ -17,9 +17,14 @@
     "prod_eu": {
       "name": "capgo_plugin-eu-prod",
       "vars": {
+        // UPDATES_EDGE_CACHE (edge cache of /updates, /stats and /channel_self:
+        // off | on | share of devices like 1%) is a worker secret so it changes
+        // without a deploy:
+        //   bun run updates-edge-cache:set 1%
         "ENV_NAME": "capgo_plugin-eu-prod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -33,14 +38,6 @@
         },
         {
           "pattern": "plugin.eu.capgo.app",
-          "custom_domain": true
-        },
-        {
-          "pattern": "plugin.eu.usecapgo.com",
-          "custom_domain": true
-        },
-        {
-          "pattern": "plugin.usecapgo.com",
           "custom_domain": true
         },
         {
@@ -149,6 +146,7 @@
         "ENV_NAME": "capgo_plugin-me-prod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -158,10 +156,6 @@
       "routes": [
         {
           "pattern": "plugin.me.capgo.app",
-          "custom_domain": true
-        },
-        {
-          "pattern": "plugin.me.usecapgo.com",
           "custom_domain": true
         }
       ],
@@ -244,6 +238,7 @@
         "ENV_NAME": "capgo_plugin-hk-prod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -253,10 +248,6 @@
       "routes": [
         {
           "pattern": "plugin.hk.capgo.app",
-          "custom_domain": true
-        },
-        {
-          "pattern": "plugin.hk.usecapgo.com",
           "custom_domain": true
         }
       ],
@@ -339,6 +330,7 @@
         "ENV_NAME": "capgo_plugin-jp-prod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -348,10 +340,6 @@
       "routes": [
         {
           "pattern": "plugin.jp.capgo.app",
-          "custom_domain": true
-        },
-        {
-          "pattern": "plugin.jp.usecapgo.com",
           "custom_domain": true
         }
       ],
@@ -434,6 +422,7 @@
         "ENV_NAME": "capgo_plugin-as-prod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -443,10 +432,6 @@
       "routes": [
         {
           "pattern": "plugin.as.capgo.app",
-          "custom_domain": true
-        },
-        {
-          "pattern": "plugin.as.usecapgo.com",
           "custom_domain": true
         }
       ],
@@ -529,6 +514,7 @@
         "ENV_NAME": "capgo_plugin-na-prod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -538,10 +524,6 @@
       "routes": [
         {
           "pattern": "plugin.na.capgo.app",
-          "custom_domain": true
-        },
-        {
-          "pattern": "plugin.na.usecapgo.com",
           "custom_domain": true
         }
       ],
@@ -627,16 +609,13 @@
         "region": "gcp:africa-south1"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
       "routes": [
         {
           "pattern": "plugin.af.capgo.app",
-          "custom_domain": true
-        },
-        {
-          "pattern": "plugin.af.usecapgo.com",
           "custom_domain": true
         }
       ],
@@ -719,6 +698,7 @@
         "ENV_NAME": "capgo_plugin-oc-prod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -728,10 +708,6 @@
       "routes": [
         {
           "pattern": "plugin.oc.capgo.app",
-          "custom_domain": true
-        },
-        {
-          "pattern": "plugin.oc.usecapgo.com",
           "custom_domain": true
         }
       ],
@@ -814,6 +790,7 @@
         "ENV_NAME": "capgo_plugin-sa-prod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 0.001,
         "enabled": true
       },
@@ -823,10 +800,6 @@
       "routes": [
         {
           "pattern": "plugin.sa.capgo.app",
-          "custom_domain": true
-        },
-        {
-          "pattern": "plugin.sa.usecapgo.com",
           "custom_domain": true
         }
       ],
@@ -897,16 +870,13 @@
         "ENV_NAME": "capgo_plugin-eu-preprod"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 1,
         "enabled": true
       },
       "routes": [
         {
           "pattern": "plugin.preprod.capgo.app",
-          "custom_domain": true
-        },
-        {
-          "pattern": "plugin.preprod.usecapgo.com",
           "custom_domain": true
         }
       ],
@@ -988,16 +958,13 @@
         "ENV_NAME": "capgo_plugin-alpha"
       },
       "observability": {
+        "issues": { "enabled": true },
         "head_sampling_rate": 1,
         "enabled": true
       },
       "routes": [
         {
           "pattern": "plugin.dev.capgo.app",
-          "custom_domain": true
-        },
-        {
-          "pattern": "api.dev.usecapgo.com",
           "custom_domain": true
         }
       ],

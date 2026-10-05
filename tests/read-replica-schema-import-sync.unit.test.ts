@@ -23,11 +23,25 @@ const safeColumnStatement: ReadReplicaSchemaSyncStatement = {
   sql: 'ALTER TABLE public."apps" ADD COLUMN IF NOT EXISTS "read_replica_import_unit" boolean',
 }
 
+const unsupportedTableStatement: ReadReplicaSchemaSyncStatement = {
+  kind: 'table',
+  table: 'manifest_per_version',
+  name: 'manifest_per_version',
+  sql: 'CREATE TABLE public."manifest_per_version" ("version_id" bigint NOT NULL)',
+}
+
 const safeIndexStatement: ReadReplicaSchemaSyncStatement = {
   kind: 'index',
   table: 'apps',
   name: 'read_replica_import_unit_index',
   sql: 'CREATE INDEX CONCURRENTLY IF NOT EXISTS "read_replica_import_unit_index" ON public."apps" ("app_id")',
+}
+
+const jsonPathIndexStatement: ReadReplicaSchemaSyncStatement = {
+  kind: 'index',
+  table: 'apps',
+  name: 'idx_apps_onboarding_v2_creator',
+  sql: 'CREATE INDEX CONCURRENTLY IF NOT EXISTS "idx_apps_onboarding_v2_creator" ON public."apps" (((onboarding ->> \'created_by_user_id\'::text))) WHERE ((onboarding #>> \'{setup,todo_list_version}\'::text[]) = \'2\'::text)',
 }
 
 const spacedIndexStatement: ReadReplicaSchemaSyncStatement = {
@@ -51,6 +65,11 @@ function plan(
 }
 
 describe('read-replica Cloud SQL server-side import', () => {
+  it.concurrent('never creates the excluded manifest table on a subscriber', () => {
+    expect(() => assertGoogleReadReplicaSchemaPlan(plan([unsupportedTableStatement])))
+      .toThrow('rejected non-subscriber table manifest_per_version')
+  })
+
   it.concurrent('renders reviewed DDL as one postgres-owned atomic import transaction', () => {
     assertGoogleReadReplicaSchemaPlan(plan([safeColumnStatement]))
 
@@ -72,6 +91,14 @@ describe('read-replica Cloud SQL server-side import', () => {
     expect(() => {
       renderReadReplicaImportTransaction([safeIndexStatement])
     }).toThrow('cannot atomically apply')
+  })
+
+  it.concurrent('imports partial indexes using PostgreSQL JSON path operators', () => {
+    assertGoogleReadReplicaSchemaPlan(plan([jsonPathIndexStatement]))
+
+    expect(renderReadReplicaIndexImport([jsonPathIndexStatement])).toContain(
+      'onboarding #>> \'{setup,todo_list_version}\'::text[]',
+    )
   })
 
   it.concurrent('strips only the leading CONCURRENTLY keyword from index DDL', () => {

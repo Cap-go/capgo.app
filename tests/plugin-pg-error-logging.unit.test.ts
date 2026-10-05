@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { logPgError, serializePostgresError } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
+import { logPgError } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
+import { serializePostgresError } from '../supabase/functions/_backend/plugin_runtime/utils/postgres_error.ts'
 
 const { cloudlogErrMock } = vi.hoisted(() => ({
   cloudlogErrMock: vi.fn(),

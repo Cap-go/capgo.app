@@ -50,6 +50,17 @@ describe('buildTrustedManifestRows', () => {
     expect(rows.every(row => row.file_size === 0)).toBe(true)
   })
 
+  it.concurrent('keeps server-verified file sizes when explicitly trusted', () => {
+    const rows = buildTrustedManifestRows(42, [{
+      file_name: 'index.html',
+      s3_path: 'orgs/org/apps/com.app/delta/h_index.html',
+      file_hash: 'abc',
+      file_size: 321,
+    }], 'orgs/org/apps/com.app/', true)
+
+    expect(rows[0]?.file_size).toBe(321)
+  })
+
   it.concurrent('normalizes legacy percent-encoded file names', () => {
     const rows = buildTrustedManifestRows(9, [{
       file_name: 'assets/img/sad_post_grey%402x.png',
@@ -99,5 +110,3 @@ describe('buildTrustedManifestRows', () => {
     ])
   })
 })
-
-

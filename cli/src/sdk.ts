@@ -31,6 +31,7 @@ import type {
   ObserveOptions,
   OrganizationInfo,
   ProbeOptions,
+  PromoteChannelOptions,
   RequestBuildOptions,
   SaveKeyOptions,
   SDKResult,
@@ -66,6 +67,7 @@ import { addChannelInternal } from './channel/add'
 import { currentBundleInternal } from './channel/currentBundle'
 import { deleteChannelInternal } from './channel/delete'
 import { listChannelsInternal } from './channel/list'
+import { promoteChannelInternal } from './channel/promote'
 import { setChannelInternal } from './channel/set'
 import { resolveCapacitorConfigTargetPath, withConfigWriteTarget } from './config'
 import { starAllRepositories as starAllRepositoriesInternal, starRepository } from './github'
@@ -76,7 +78,7 @@ import { addOrganizationInternal } from './organization/add'
 import { deleteOrganizationInternal } from './organization/delete'
 import { listOrganizationsInternal } from './organization/list'
 import { setOrganizationInternal } from './organization/set'
-import { updateChannelOptionsSchema, uploadOptionsSchema } from './schemas/sdk'
+import { promoteChannelOptionsSchema, requestBuildOptionsSchema, updateChannelOptionsSchema, uploadOptionsSchema } from './schemas/sdk'
 import { CliUserError } from './shared/cli-user-error'
 import { getUserIdInternal } from './user/account'
 import { createSupabaseClient, findSavedKey, getConfig, getLocalConfig } from './utils'
@@ -551,6 +553,7 @@ export class CapgoSDK {
           supaHost: parsed.supaHost || this.supaHost,
           supaAnon: parsed.supaAnon || this.supaAnon,
           path: parsed.path,
+          mode: parsed.mode,
           bundle: parsed.bundle,
           channel: parsed.channel,
           rollout: parsed.rollout,
@@ -734,16 +737,18 @@ export class CapgoSDK {
    */
   async requestBuild(options: RequestBuildOptions): Promise<SDKResult<{ jobId: string, uploadUrl: string, status: string }>> {
     try {
+      const parsed = requestBuildOptionsSchema.parse(options)
+
       // Convert BuildCredentials object to flattened CLI-compatible format
-      const creds = options.credentials
+      const creds = parsed.credentials
       const internalOptions: InternalBuildRequestOptions = {
-        apikey: options.apikey || this.apikey || findSavedKey(true),
-        supaHost: options.supaHost || this.supaHost,
-        supaAnon: options.supaAnon || this.supaAnon,
-        path: options.path,
-        nodeModules: options.nodeModules,
-        platform: options.platform,
-        userId: options.userId,
+        apikey: parsed.apikey || this.apikey || findSavedKey(true),
+        supaHost: parsed.supaHost || this.supaHost,
+        supaAnon: parsed.supaAnon || this.supaAnon,
+        path: parsed.path,
+        nodeModules: parsed.nodeModules,
+        platform: parsed.platform,
+        userId: parsed.userId,
         // Flatten BuildCredentials to individual fields
         buildCertificateBase64: creds?.BUILD_CERTIFICATE_BASE64,
         p12Password: creds?.P12_PASSWORD,
@@ -763,24 +768,25 @@ export class CapgoSDK {
         keystoreKeyPassword: creds?.KEYSTORE_KEY_PASSWORD,
         keystoreStorePassword: creds?.KEYSTORE_STORE_PASSWORD,
         playConfigJson: creds?.PLAY_CONFIG_JSON,
-        androidTrack: options.androidTrack ?? (creds?.PLAY_STORE_TRACK as 'internal' | 'alpha' | 'beta' | 'production' | undefined),
-        androidReleaseStatus: options.androidReleaseStatus ?? (creds?.PLAY_STORE_RELEASE_STATUS as 'draft' | 'completed' | 'inProgress' | 'halted' | undefined),
-        submitToStoreReview: options.submitToStoreReview ?? (creds?.CAPGO_STORE_SUBMIT_REVIEW === undefined ? undefined : creds.CAPGO_STORE_SUBMIT_REVIEW === 'true'),
-        storeReleaseName: options.storeReleaseName ?? creds?.CAPGO_STORE_RELEASE_NAME,
-        storeReleaseNotes: options.storeReleaseNotes ?? creds?.CAPGO_STORE_RELEASE_NOTES,
-        storeReleaseNotesLocalized: options.storeReleaseNotesLocalized ?? parseStoreReleaseNotesLocalizedJson(creds?.CAPGO_STORE_RELEASE_NOTES_LOCALIZED),
-        iosTestflightGroups: options.iosTestflightGroups ?? creds?.CAPGO_IOS_TESTFLIGHT_GROUPS,
-        iosAutomaticRelease: options.iosAutomaticRelease ?? (creds?.CAPGO_IOS_AUTOMATIC_RELEASE === undefined ? undefined : creds.CAPGO_IOS_AUTOMATIC_RELEASE === 'true'),
+        androidTrack: parsed.androidTrack ?? (creds?.PLAY_STORE_TRACK as 'internal' | 'alpha' | 'beta' | 'production' | undefined),
+        androidReleaseStatus: parsed.androidReleaseStatus ?? (creds?.PLAY_STORE_RELEASE_STATUS as 'draft' | 'completed' | 'inProgress' | 'halted' | undefined),
+        submitToStoreReview: parsed.submitToStoreReview ?? (creds?.CAPGO_STORE_SUBMIT_REVIEW === undefined ? undefined : creds.CAPGO_STORE_SUBMIT_REVIEW === 'true'),
+        storeReleaseName: parsed.storeReleaseName ?? creds?.CAPGO_STORE_RELEASE_NAME,
+        storeReleaseNotes: parsed.storeReleaseNotes ?? creds?.CAPGO_STORE_RELEASE_NOTES,
+        storeReleaseNotesLocalized: parsed.storeReleaseNotesLocalized ?? parseStoreReleaseNotesLocalizedJson(creds?.CAPGO_STORE_RELEASE_NOTES_LOCALIZED),
+        iosTestflightGroups: parsed.iosTestflightGroups ?? creds?.CAPGO_IOS_TESTFLIGHT_GROUPS,
+        iosAutomaticRelease: parsed.iosAutomaticRelease ?? (creds?.CAPGO_IOS_AUTOMATIC_RELEASE === undefined ? undefined : creds.CAPGO_IOS_AUTOMATIC_RELEASE === 'true'),
         // Prescan escape hatch: SDK callers own their output channel and cannot
         // pass CLI flags, so expose the gate controls directly.
-        prescan: options.prescan,
-        prescanIgnoreFatal: options.prescanIgnoreFatal,
-        prescanSkip: options.prescanSkip,
-        prescanWarn: options.prescanWarn,
-        cache: options.cache,
+        prescan: parsed.prescan,
+        prescanIgnoreFatal: parsed.prescanIgnoreFatal,
+        prescanSkip: parsed.prescanSkip,
+        prescanWarn: parsed.prescanWarn,
+        cache: parsed.cache,
+        cacheKey: parsed.cacheKey,
       }
 
-      const result = await requestBuildInternal(options.appId, internalOptions, true)
+      const result = await requestBuildInternal(parsed.appId, internalOptions, true)
 
       if (result.success && result.jobId) {
         return {
@@ -919,6 +925,38 @@ export class CapgoSDK {
       await setChannelInternal(parsed.channelId, parsed.appId, internalOptions, true)
 
       return { success: true }
+    }
+    catch (error) {
+      return createErrorResult(error)
+    }
+  }
+
+  /**
+   * Promote the bundle currently linked to one channel to another channel
+   *
+   * @example
+   * ```typescript
+   * const result = await sdk.promoteChannel({
+   *   appId: 'com.example.app',
+   *   fromChannel: 'staging',
+   *   toChannel: 'production',
+   * })
+   * // result.data?.bundle === '1.2.3'
+   * ```
+   */
+  async promoteChannel(options: PromoteChannelOptions): Promise<SDKResult<{ bundle: string, fromChannel: string, toChannel: string }>> {
+    try {
+      const parsed = promoteChannelOptionsSchema.parse(options)
+      const data = await promoteChannelInternal(parsed.fromChannel, parsed.toChannel, parsed.appId, {
+        apikey: parsed.apikey || this.apikey || findSavedKey(true),
+        supaHost: parsed.supaHost || this.supaHost,
+        supaAnon: parsed.supaAnon || this.supaAnon,
+        ignoreMetadataCheck: parsed.ignoreMetadataCheck,
+        acceptIncompatible: parsed.acceptIncompatible,
+        sendUpdateNotification: parsed.sendUpdateNotification,
+      }, true)
+
+      return { success: true, data }
     }
     catch (error) {
       return createErrorResult(error)
@@ -1415,6 +1453,15 @@ export async function getCurrentBundle(appId: string, channelId: string, options
   return sdk.getCurrentBundle(appId, channelId, options)
 }
 
+export async function promoteChannel(options: PromoteChannelOptions): Promise<SDKResult<{ bundle: string, fromChannel: string, toChannel: string }>> {
+  const sdk = new CapgoSDK({
+    apikey: options.apikey,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
+  return sdk.promoteChannel(options)
+}
+
 export async function updateAppSetting(path: string, options: SetSettingOptions): Promise<SDKResult> {
   const sdk = new CapgoSDK({
     apikey: options.apikey,
@@ -1676,6 +1723,7 @@ export type {
   ObserveOptions,
   OrganizationInfo,
   ProbeOptions,
+  PromoteChannelOptions,
   RequestBuildOptions,
   SaveKeyOptions,
   SDKResult,

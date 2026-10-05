@@ -97,7 +97,7 @@ test.describe('Desktop sidebar collapse', () => {
 
     await page.locator('[data-test="sidebar-mobile-toggle"]').click()
     await expect(page.locator('#sidebar')).toBeInViewport()
-    await expect(page.locator('#sidebar')).toContainText(/pages/i)
+    await expect(page.locator('#sidebar')).toContainText(/workspace/i)
     await expect(page.locator('#sidebar [data-test="org-switcher"]')).toBeVisible()
   })
 

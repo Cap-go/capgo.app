@@ -48,25 +48,33 @@ async function getTypeGenTarget() {
   )
 }
 
-async function main() {
-  try {
-    const args = ['supabase', 'gen', 'types', 'typescript', ...await getTypeGenTarget()]
-    const { stdout, stderr } = await execFile('bunx', args)
-    await writeFile('src/types/supabase.types.ts', stdout)
-    if (stderr)
-      console.error(stderr)
-    else
-      console.log('Type generated ✅')
-  }
-  catch (e) {
-    console.error(e) // should contain code (exit code) and signal (that caused the termination).
-  }
-  try {
-    await copyFile('src/types/supabase.types.ts', 'supabase/functions/_backend/utils/supabase.types.ts')
-    console.log('Copy done ✅')
-  }
-  catch (e) {
-    console.error(e) // should contain code (exit code) and signal (that caused the termination).
-  }
+/**
+ * @typedef {object} TypeGenerationDependencies
+ * @property {(source: string, destination: string) => Promise<void>} [copy]
+ * @property {(file: string, args: string[]) => Promise<{ stdout: string, stderr: string }>} [execute]
+ * @property {() => Promise<string[]>} [resolveTarget]
+ * @property {(file: string, contents: string) => Promise<void>} [write]
+ */
+
+/** @param {TypeGenerationDependencies} [dependencies] */
+export async function generateTypes(dependencies = {}) {
+  const {
+    copy = copyFile,
+    execute = execFile,
+    resolveTarget = getTypeGenTarget,
+    write = writeFile,
+  } = dependencies
+  const args = ['supabase', 'gen', 'types', 'typescript', ...await resolveTarget()]
+  const { stdout, stderr } = await execute('bunx', args)
+  await write('src/types/supabase.types.ts', stdout)
+  if (stderr)
+    console.error(stderr)
+  else
+    console.log('Type generated ✅')
+
+  await copy('src/types/supabase.types.ts', 'supabase/functions/_backend/utils/supabase.types.ts')
+  console.log('Copy done ✅')
 }
-main()
+
+if (import.meta.main)
+  await generateTypes()

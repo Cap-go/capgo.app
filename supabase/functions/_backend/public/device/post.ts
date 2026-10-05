@@ -49,6 +49,8 @@ export async function post(c: Context<MiddlewareKeyVariables, any, object>, body
       channel_id: dataChannel.id,
       app_id: body.app_id,
       owner_org: dataChannel.owner_org,
+      // Public API override: never expires (only /channel_self rows are self-set).
+      is_self_set: false,
     })
     if (channelDeviceError) {
       throw quickError(500, 'channel_device_error', 'Error setting channel override', { channelDeviceError })

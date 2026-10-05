@@ -10,11 +10,17 @@ import IconLoader from '~icons/lucide/loader-2'
 import IconUserPlus from '~icons/lucide/user-plus'
 import IconX from '~icons/lucide/x'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
+import {
+  captureOrganizationInvitationEvent,
+  runTrackedOrganizationInvitationMutation,
+  sanitizeOrganizationInvitationClientFailureReason,
+} from '~/services/organizationInvitationTelemetry'
 import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
 import { clearPendingInviteSkip, rememberPendingInviteSkip } from '~/utils/pendingInviteSkip'
+import { validateRedirectPath } from '~/utils/safeRedirect'
 
 const route = useRoute()
 const router = useRouter()
@@ -40,13 +46,11 @@ const title = computed(() => hasMultipleInvitations.value
 const subtitle = computed(() => hasMultipleInvitations.value
   ? t('pending-invite-subtitle-multiple')
   : t('pending-invite-subtitle'))
-const targetPath = computed(() => {
-  const target = typeof route.query.to === 'string' ? route.query.to : ''
-  const isOnboardingTarget = /^\/onboarding(?:\/|\?|$)/.test(target)
-  if (target.startsWith('/') && !isOnboardingTarget)
-    return target
-  return '/dashboard'
-})
+const targetPath = computed(() => validateRedirectPath(
+  typeof route.query.to === 'string' ? route.query.to : '',
+  '/dashboard',
+  { blockedPrefixes: ['/onboarding'] },
+))
 
 function getPendingInviteOrganizations() {
   return organizationStore.organizations.filter(org => isPendingOrganizationInvite(org))
@@ -90,8 +94,19 @@ async function loadPendingInvitations() {
   try {
     await organizationStore.fetchOrganizations()
     invitations.value = getPendingInviteOrganizations()
-    if (invitations.value.length === 0)
+    if (invitations.value.length === 0) {
       await continueAfterInvitationsResolved()
+    }
+    else {
+      const userId = getCurrentUserId()
+      if (userId) {
+        captureOrganizationInvitationEvent({
+          event: 'organization_membership_invitation_viewed',
+          pendingInvitationCount: invitations.value.length,
+          userId,
+        })
+      }
+    }
   }
   catch (error) {
     console.error('Failed to load pending organization invitations', error)
@@ -102,7 +117,24 @@ async function loadPendingInvitations() {
   }
 }
 
-async function acceptInvitation(invitation: Organization) {
+async function acceptInvitation(invitation: Organization): Promise<string> {
+  const userId = getCurrentUserId()
+  if (!userId)
+    throw new Error('missing_user')
+
+  const { data: pendingMembership, error: pendingMembershipError } = await supabase
+    .from('org_users')
+    .select('id')
+    .eq('org_id', invitation.gid)
+    .eq('user_id', userId)
+    .eq('is_invite', true)
+    .maybeSingle()
+
+  if (pendingMembershipError)
+    throw pendingMembershipError
+  if (!pendingMembership)
+    throw new Error('NO_INVITE')
+
   const { data, error } = await supabase.rpc('accept_invitation_to_org', {
     org_id: invitation.gid,
   })
@@ -110,25 +142,30 @@ async function acceptInvitation(invitation: Organization) {
   if (error)
     throw error
   if (data !== 'OK')
-    throw new Error(typeof data === 'string' ? data : 'failed_to_accept_invitation')
+    throw new Error(typeof data === 'string' ? data : 'FAILED_TO_ACCEPT_INVITATION')
 
-  await organizationStore.fetchOrganizations()
-  organizationStore.setCurrentOrganization(invitation.gid)
+  return String(pendingMembership.id)
 }
 
-async function declineInvitation(invitation: Organization) {
+async function declineInvitation(invitation: Organization): Promise<string> {
   const userId = getCurrentUserId()
   if (!userId)
     throw new Error('missing_user')
 
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('org_users')
     .delete()
     .eq('org_id', invitation.gid)
     .eq('user_id', userId)
+    .eq('is_invite', true)
+    .select('id')
 
   if (error)
     throw error
+  if (!data.length)
+    throw new Error('NO_INVITE')
+
+  return String(data[0].id)
 }
 
 async function resolveInvitation(invitation: Organization, action: 'accept' | 'decline') {
@@ -136,14 +173,31 @@ async function resolveInvitation(invitation: Organization, action: 'accept' | 'd
   resolvingInvitationAction.value = action
   errorMessage.value = ''
   try {
-    clearPendingInviteSkip(getCurrentUserId())
+    const userId = getCurrentUserId()
+    if (!userId)
+      throw new Error('missing_user')
+
+    const pendingInvitationCount = invitations.value.length
+    clearPendingInviteSkip(userId)
 
     if (action === 'accept') {
-      await acceptInvitation(invitation)
+      await runTrackedOrganizationInvitationMutation({
+        failureReason: 'acceptance_failed',
+        pendingInvitationCount,
+        successEvent: 'organization_membership_invitation_accepted',
+        userId,
+      }, () => acceptInvitation(invitation))
+      await organizationStore.fetchOrganizations()
+      organizationStore.setCurrentOrganization(invitation.gid)
       toast.success(t('pending-invite-joined'))
     }
     else {
-      await declineInvitation(invitation)
+      await runTrackedOrganizationInvitationMutation({
+        failureReason: 'decline_failed',
+        pendingInvitationCount,
+        successEvent: 'organization_membership_invitation_declined',
+        userId,
+      }, () => declineInvitation(invitation))
       await organizationStore.fetchOrganizations()
       toast.success(t('pending-invite-declined'))
     }
@@ -165,21 +219,39 @@ async function resolveInvitation(invitation: Organization, action: 'accept' | 'd
 async function declineAllInvitations() {
   isDecliningAll.value = true
   errorMessage.value = ''
+  const pendingInvitationCount = invitations.value.length
+  const userId = getCurrentUserId()
+  let mutationsCompleted = false
   try {
-    const userId = getCurrentUserId()
     if (!userId)
       throw new Error('missing_user')
 
     clearPendingInviteSkip(userId)
 
     const inviteOrgIds = invitations.value.map(invitation => invitation.gid)
-    const { error } = await supabase
-      .from('org_users')
-      .delete()
-      .eq('user_id', userId)
-      .in('org_id', inviteOrgIds)
-    if (error)
-      throw error
+    for (let offset = 0; offset < inviteOrgIds.length; offset += 100) {
+      const { data, error } = await supabase
+        .from('org_users')
+        .delete()
+        .eq('user_id', userId)
+        .eq('is_invite', true)
+        .in('org_id', inviteOrgIds.slice(offset, offset + 100))
+        .select('id')
+      if (error)
+        throw error
+      if (!data.length)
+        throw new Error('NO_INVITE')
+
+      for (const invitation of data) {
+        captureOrganizationInvitationEvent({
+          event: 'organization_membership_invitation_declined',
+          invitationId: String(invitation.id),
+          pendingInvitationCount,
+          userId,
+        })
+      }
+    }
+    mutationsCompleted = true
 
     await organizationStore.fetchOrganizations()
     invitations.value = getPendingInviteOrganizations()
@@ -188,6 +260,16 @@ async function declineAllInvitations() {
       await continueAfterInvitationsResolved()
   }
   catch (error) {
+    if (userId && !mutationsCompleted) {
+      captureOrganizationInvitationEvent({
+        event: 'organization_membership_invitation_failed',
+        failureReason: sanitizeOrganizationInvitationClientFailureReason(error, 'decline_failed'),
+        pendingInvitationCount,
+        userId,
+      })
+      await organizationStore.fetchOrganizations().catch(() => {})
+      invitations.value = getPendingInviteOrganizations()
+    }
     console.error('Failed to decline pending organization invitations', error)
     errorMessage.value = t('pending-invite-decline-failed')
   }
@@ -200,7 +282,16 @@ async function skipInvitations() {
   isSkipping.value = true
   errorMessage.value = ''
   try {
-    rememberPendingInviteSkip(getCurrentUserId())
+    const userId = getCurrentUserId()
+    if (!userId)
+      throw new Error('missing_user')
+
+    rememberPendingInviteSkip(userId)
+    captureOrganizationInvitationEvent({
+      event: 'organization_membership_invitation_skipped',
+      pendingInvitationCount: invitations.value.length,
+      userId,
+    })
     await continueAfterInvitationsResolved()
   }
   catch (error) {

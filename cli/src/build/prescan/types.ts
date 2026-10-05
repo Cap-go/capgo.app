@@ -24,6 +24,8 @@ export interface Finding {
 
 export interface ScanContext {
   appId: string
+  /** Native bundle/package id for local checks; defaults to appId for legacy scans. */
+  nativeAppId?: string
   platform: Platform
   /** Operating system running the prescan, used for host-specific local checks. */
   hostPlatform: NodeJS.Platform

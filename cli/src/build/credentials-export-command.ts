@@ -1,4 +1,4 @@
-import type { SavedCredentials } from '../schemas/build'
+import type { CredentialsPlatform, CredentialsStoreName, CredentialsStores } from './credentials-store-selection'
 import type { FileHandle } from 'node:fs/promises'
 import { link, mkdtemp, open, rmdir, unlink } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
@@ -8,18 +8,15 @@ import { canPromptInteractively, formatError } from '../utils'
 import { getGlobalCredentialsPath, getLocalCredentialsPath, loadSavedCredentials } from './credentials'
 import { canDecodeCredentialBase64, decodeCredentialBase64 } from './credentials-base64'
 import { quoteCredentialsExportTerminalValue, writeCredentialsExportStderr } from './credentials-export-terminal'
+import { credentialsPlatformFields, hasConfiguredCredentials, resolveCredentialsStore } from './credentials-store-selection'
 
-type Platform = 'ios' | 'android'
-type Store = 'local' | 'global'
 type CredentialsExportOptions = { appId?: string, platform?: string, local?: boolean, global?: boolean, file?: string, raw?: boolean, decodeBase64?: boolean }
-type CredentialsExportStores = Record<Store, SavedCredentials | null>
-type ResolvedCredentialsExport = { value: string, source: Store, platforms: Platform[] }
+type ResolvedCredentialsExport = { value: string, source: CredentialsStoreName, platforms: CredentialsPlatform[] }
 type FileValue = { data: string | Buffer, decoded: boolean, warnLiteral: boolean }
 type FileHandleForExport = Pick<FileHandle, 'writeFile' | 'chmod' | 'close'>
 type FileWriterDependencies = { mkdtemp?: typeof mkdtemp, open?: typeof open, link?: typeof link, unlink?: typeof unlink, rmdir?: typeof rmdir }
 
-const platforms: Platform[] = ['ios', 'android']
-const stores: Store[] = ['local', 'global']
+const platforms: CredentialsPlatform[] = ['ios', 'android']
 
 export function isCredentialsExportInvocation(argv: readonly string[]): boolean {
   for (let commandIndex = 2; commandIndex < argv.length - 2; commandIndex++) {
@@ -47,30 +44,16 @@ export function isCredentialsExportInvocation(argv: readonly string[]): boolean 
   return false
 }
 
-function record(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
-}
-
-function platformFields(saved: SavedCredentials | null, platform: Platform): Record<string, unknown> | undefined {
-  const app = record(saved)
-  return app && Object.hasOwn(app, platform) ? record(app[platform]) : undefined
-}
-
-function configured(saved: SavedCredentials | null, platform?: Platform): boolean {
-  const fields = platform === undefined ? platforms.map(item => platformFields(saved, item)) : [platformFields(saved, platform)]
-  return fields.some(field => Object.values(field ?? {}).some(value => typeof value === 'string'))
-}
-
-function storedValue(saved: SavedCredentials, platform: Platform, variable: string): string | undefined {
-  const fields = platformFields(saved, platform)
+function storedValue(saved: CredentialsStores[CredentialsStoreName], platform: CredentialsPlatform, variable: string): string | undefined {
+  const fields = credentialsPlatformFields(saved, platform)
   const value = fields && Object.hasOwn(fields, variable) ? fields[variable] : undefined
   return typeof value === 'string' ? value : undefined
 }
 
 const quoted = (value: string | undefined) => quoteCredentialsExportTerminalValue(value)
 
-function resolvedFor(saved: SavedCredentials, source: Store, platform: Platform, variable: string): ResolvedCredentialsExport {
-  if (!configured(saved, platform))
+function resolvedFor(saved: NonNullable<CredentialsStores[CredentialsStoreName]>, source: CredentialsStoreName, platform: CredentialsPlatform, variable: string): ResolvedCredentialsExport {
+  if (!hasConfiguredCredentials(saved, platform))
     throw new Error(`${platform} is not configured in the ${source} store`)
   const value = storedValue(saved, platform, variable)
   if (value === undefined)
@@ -78,26 +61,16 @@ function resolvedFor(saved: SavedCredentials, source: Store, platform: Platform,
   return { value, source, platforms: [platform] }
 }
 
-export function resolveCredentialsExport(variable: string, options: CredentialsExportOptions, savedStores: CredentialsExportStores): ResolvedCredentialsExport {
-  if (options.local && options.global)
-    throw new Error('Cannot use --local and --global together')
-  if (options.platform !== undefined && !platforms.includes(options.platform as Platform))
+export function resolveCredentialsExport(variable: string, options: CredentialsExportOptions, savedStores: CredentialsStores): ResolvedCredentialsExport {
+  if (options.platform !== undefined && !platforms.includes(options.platform as CredentialsPlatform))
     throw new Error('--platform must be ios or android')
 
-  const available = stores.filter(source => configured(savedStores[source]))
-  const source = options.local || options.global ? options.local ? 'local' : 'global' : available[0]
-  if (source === undefined)
-    throw new Error(`No saved Builder credentials for ${quoted(options.appId)}`)
-  if (!configured(savedStores[source]))
-    throw new Error(`No saved Builder credentials for ${quoted(options.appId)} in the ${source} store`)
-  if (!options.local && !options.global && available.length > 1)
-    throw new Error('Saved Builder credentials exist in both stores; pass --local or --global')
-  const saved = savedStores[source]!
-  const selected = options.platform as Platform | undefined
+  const { source, saved } = resolveCredentialsStore(options, savedStores)
+  const selected = options.platform as CredentialsPlatform | undefined
   if (selected)
     return resolvedFor(saved, source, selected, variable)
 
-  const configuredPlatforms = platforms.filter(platform => configured(saved, platform))
+  const configuredPlatforms = platforms.filter(platform => hasConfiguredCredentials(saved, platform))
   if (configuredPlatforms.length === 1)
     return resolvedFor(saved, source, configuredPlatforms[0]!, variable)
   const [first, second] = configuredPlatforms

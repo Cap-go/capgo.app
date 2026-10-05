@@ -203,8 +203,8 @@ subject = "[Capgo]: Multi-factor authentication method removed from your Capgo.a
 content_path = "./templates/mfa_factor_unenrolled_notification.html"
 
 # Custom email templates kept in ./templates for consistency, but not managed by Supabase.
-# Auth templates above are GoTrue fallbacks. Live auth mail uses Bento events from
-# the Send Email hook (see supabase/templates/bento/auth_*.html).
+# Auth templates above are GoTrue fallbacks. Live auth mail uses the Cloudflare
+# Worker Send Email hook (see cloudflare_workers/api/email_templates/).
 # Other Bento templates:
 # - invite_new_user_to_org.html
 #   subject = "[Capgo]: Join {{ event.details.org_name }} org & create account"
@@ -232,7 +232,7 @@ max_frequency = "5s"
 # Force log out if the user has been inactive longer than the specified duration.
 # inactivity_timeout = "8h"
 
-# Auth emails are enqueued by this hook and sent as Bento transactional events.
+# Auth emails are enqueued by this hook and sent by the Cloudflare Worker.
 # Production: enable the same Send Email hook in the dashboard, pointing at
 # pg-functions://postgres/public/hook_send_email. Do not use SMTP.
 [auth.hook.send_email]

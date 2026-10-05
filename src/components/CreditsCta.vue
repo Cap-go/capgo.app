@@ -63,7 +63,7 @@ function goToCredits() {
   <button
     v-else
     type="button"
-    class="d-btn flex h-auto min-h-[4.5rem] items-center w-full p-4 text-left transition-all duration-200 border cursor-pointer bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-700 rounded-xl group"
+    class="d-btn flex h-auto min-h-[4.5rem] items-center w-full p-4 text-left transition-all duration-200 border cursor-pointer bg-slate-50 dark:bg-white/[0.03] border-slate-200 dark:border-white/10 hover:border-blue-300 dark:hover:border-blue-700 rounded-xl group"
     @click="goToCredits"
   >
     <!-- Icon -->

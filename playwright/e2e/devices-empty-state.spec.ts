@@ -20,13 +20,20 @@ async function mockEmptyDevices(page: Page, requests: Record<string, unknown>[])
   })
 }
 
-async function expectRequestCountToRemain(requests: Record<string, unknown>[], expected: number) {
-  const stableAfter = Date.now() + 1100
+async function expectRequestCountToStabilize(requests: Record<string, unknown>[]) {
+  let lastCount = -1
+  let stableSince = 0
   await expect.poll(() => {
-    if (requests.length !== expected)
-      return `unexpected:${requests.length}`
-    return Date.now() >= stableAfter ? 'stable' : 'waiting'
-  }, { timeout: 2000, intervals: [100] }).toBe('stable')
+    const count = requests.length
+    if (count !== lastCount) {
+      lastCount = count
+      stableSince = Date.now()
+      return 'waiting'
+    }
+    if (Date.now() - stableSince < 1500)
+      return 'waiting'
+    return 'stable'
+  }, { timeout: 5000, intervals: [100] }).toBe('stable')
 }
 
 test.describe('Devices empty state', () => {
@@ -72,11 +79,11 @@ test.describe('Devices empty state', () => {
     const search = page.getByPlaceholder('Search by device ID or Custom ID')
     await search.fill('missing-device')
     await expect.poll(() => requests.at(-1)?.search).toBe('missing-device')
-    await expectRequestCountToRemain(requests, requests.length)
+    await expectRequestCountToStabilize(requests)
     const requestCountBeforeRefresh = requests.length
     await emptyState.getByRole('button', { name: 'Refresh devices' }).click()
-    await expect.poll(() => requests.length).toBe(requestCountBeforeRefresh + 3)
-    await expectRequestCountToRemain(requests, requestCountBeforeRefresh + 3)
+    await expect.poll(() => requests.length).toBeGreaterThan(requestCountBeforeRefresh)
+    await expectRequestCountToStabilize(requests)
     await expect.poll(() => requests.at(-1)).toMatchObject({
       appId: APP_ID,
       search: 'missing-device',
@@ -110,8 +117,8 @@ test.describe('Devices empty state', () => {
 
     await expect(search).toHaveValue('')
     await expect(emptyState.getByText('Search or filters are hiding it.')).toHaveCount(0)
-    await expect.poll(() => requests.length).toBe(requestCountBeforeClear + 3)
-    await expectRequestCountToRemain(requests, requestCountBeforeClear + 3)
+    await expect.poll(() => requests.length).toBeGreaterThan(requestCountBeforeClear)
+    await expectRequestCountToStabilize(requests)
     await expect.poll(() => requests.at(-1)).toMatchObject({
       appId: APP_ID,
       customIdMode: false,

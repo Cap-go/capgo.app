@@ -3,6 +3,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCompass from '~icons/lucide/compass'
+import { getAppGettingStartedPath } from '~/utils/onboardingRedirect'
 
 const props = defineProps<{
   appId: string
@@ -12,7 +13,7 @@ const { t } = useI18n()
 const router = useRouter()
 
 function continueOnboarding() {
-  router.push(`/app/new?resume=${encodeURIComponent(props.appId)}`)
+  router.push(getAppGettingStartedPath(props.appId))
 }
 </script>
 

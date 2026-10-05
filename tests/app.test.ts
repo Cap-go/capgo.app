@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { parseAppOnboarding } from '../supabase/functions/_backend/utils/appOnboarding.ts'
-import { BASE_URL, createDirectApiKeyWithBindings, executeSQL, fetchTestRequest, getAuthHeaders, getSupabaseClient, headers, ORG_ID, ORG_ID_2, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID, USER_ID_2 } from './test-utils.ts'
+import { BASE_URL, createDirectApiKeyWithBindings, executeSQL, fetchTestRequest, getAuthHeaders, getAuthHeadersForCredentials, getSupabaseClient, headers, ORG_ID, ORG_ID_2, resetAndSeedAppData, resetAppData, resetAppDataStats, SUPABASE_ANON_KEY, USER_EMAIL_NONMEMBER, USER_ID, USER_ID_2, USER_PASSWORD_NONMEMBER } from './test-utils.ts'
 
 function isDuplicateAppCreationError(body: any): boolean {
   if (!body || typeof body !== 'object')
@@ -107,9 +107,10 @@ describe('[GET] /app operations with subkey', () => {
 
   it('should create app and subkey with limited rights', async () => {
     // Create a test app
-    const createApp = await fetch(`${BASE_URL}/app`, {
+    const createApp = await fetchTestRequest(`${BASE_URL}/app`, {
       method: 'POST',
       headers,
+      retryUnsafe: true,
       body: JSON.stringify({
         owner_org: ORG_ID,
         app_id: APPNAME,
@@ -157,6 +158,7 @@ describe('[GET] /app operations with subkey', () => {
     const createOtherApp = await fetchTestRequest(`${BASE_URL}/app`, {
       method: 'POST',
       headers,
+      retryUnsafe: true,
       body: JSON.stringify({
         owner_org: ORG_ID,
         app_id: OTHER_APPNAME,
@@ -193,6 +195,7 @@ describe('[GET] /app operations with subkey', () => {
     const updateApp = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
       method: 'PUT',
       headers: { ...headers, ...subkeyHeaders },
+      retryUnsafe: true,
       body: JSON.stringify({
         name: APPNAME,
         icon: 'https://cdn.example/updated-icon.png',
@@ -215,6 +218,7 @@ describe('[GET] /app operations with subkey', () => {
     const deleteApp = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
       method: 'DELETE',
       headers: { ...headers, ...subkeyHeaders },
+      retryUnsafe: true,
     })
     expect(deleteApp.status).toBe(400)
     const deleteAppData = await deleteApp.json() as { error: string }
@@ -552,6 +556,9 @@ describe('[POST]/[PUT] /app onboarding progress', () => {
     const created = parseAppOnboarding((await createApp.json() as { onboarding?: unknown }).onboarding)
     expect(created.source).toBe('manual')
     expect(created.outcome).toBe('in_progress')
+    // Every new non-Builder app starts on the seven-step OTA checklist.
+    expect(created.todo_list_version).toBe(4)
+    expect(created.ota_todo_list_version).toBe('1')
 
     const firstPut = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
       method: 'PUT',
@@ -560,7 +567,7 @@ describe('[POST]/[PUT] /app onboarding progress', () => {
         onboarding: {
           source: 'cli',
           steps: {
-            add_app: { status: 'done' },
+            login_cli_mcp: { status: 'done' },
           },
         },
       }),
@@ -568,7 +575,7 @@ describe('[POST]/[PUT] /app onboarding progress', () => {
     expect(firstPut.status).toBe(200)
     const afterCli = parseAppOnboarding((await firstPut.json() as { onboarding?: unknown }).onboarding)
     expect(afterCli.source).toBe('cli')
-    expect(afterCli.steps.add_app?.status).toBe('done')
+    expect(afterCli.steps.login_cli_mcp?.status).toBe('done')
 
     const skipPut = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
       method: 'PUT',
@@ -577,7 +584,7 @@ describe('[POST]/[PUT] /app onboarding progress', () => {
         onboarding: {
           source: 'ai',
           steps: {
-            add_app: { status: 'skipped' },
+            login_cli_mcp: { status: 'skipped' },
             add_channel: { status: 'skipped' },
           },
         },
@@ -586,9 +593,61 @@ describe('[POST]/[PUT] /app onboarding progress', () => {
     expect(skipPut.status).toBe(200)
     const afterSkip = parseAppOnboarding((await skipPut.json() as { onboarding?: unknown }).onboarding)
     expect(afterSkip.source).toBe('cli')
-    expect(afterSkip.steps.add_app?.status).toBe('done')
+    expect(afterSkip.steps.login_cli_mcp?.status).toBe('done')
     expect(afterSkip.steps.add_channel?.status).toBe('skipped')
     // Partial CLI progress stays in_progress. Missing steps are not skipped.
     expect(afterSkip.outcome).toBe('in_progress')
+  })
+
+  it('updates app settings and onboarding progress with an authenticated JWT', async () => {
+    const jwtHeaders = await getAuthHeaders()
+    const jwtPut = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
+      method: 'PUT',
+      headers: jwtHeaders,
+      body: JSON.stringify({
+        name: `JWT ${APPNAME}`,
+        onboarding: {
+          outcome: 'switched_to_manual',
+        },
+      }),
+    })
+
+    const updated = await jwtPut.json() as { name?: string, onboarding?: unknown }
+    expect(jwtPut.status, JSON.stringify(updated)).toBe(200)
+    expect(updated.name).toBe(`JWT ${APPNAME}`)
+    expect(parseAppOnboarding(updated.onboarding).outcome).toBe('switched_to_manual')
+  })
+
+  it('rejects an app update from an authenticated non-member', async () => {
+    const nonMemberHeaders = await getAuthHeadersForCredentials(USER_EMAIL_NONMEMBER, USER_PASSWORD_NONMEMBER)
+    const deniedPut = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
+      method: 'PUT',
+      headers: nonMemberHeaders,
+      body: JSON.stringify({
+        name: `Denied ${APPNAME}`,
+      }),
+    })
+
+    const denied = await deniedPut.json() as { error?: string }
+    expect(deniedPut.status, JSON.stringify(denied)).toBe(401)
+    expect(denied.error).toBe('cannot_access_app')
+  })
+
+  it('prefers an explicit Capgo key over a simultaneous project bearer token', async () => {
+    const cliPut = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'capgkey': headers.Authorization,
+      },
+      body: JSON.stringify({
+        name: `CLI ${APPNAME}`,
+      }),
+    })
+
+    const updated = await cliPut.json() as { name?: string }
+    expect(cliPut.status, JSON.stringify(updated)).toBe(200)
+    expect(updated.name).toBe(`CLI ${APPNAME}`)
   })
 })

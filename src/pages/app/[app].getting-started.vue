@@ -1,33 +1,15 @@
 <script setup lang="ts">
-import type { GettingStartedStep } from '~/utils/appOnboardingProgress'
-import { computed, ref, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
-import { toast } from 'vue-sonner'
-import IconCheck from '~icons/lucide/check'
-import IconRefreshCw from '~icons/lucide/refresh-cw'
-import IconX from '~icons/lucide/x'
-import AppOnboardingCliSteps from '~/components/dashboard/AppOnboardingCliSteps.vue'
+import AppOnboardingFlow from '~/components/dashboard/AppOnboardingFlow.vue'
 import AppPageFrame from '~/components/dashboard/AppPageFrame.vue'
 import { useAppPage } from '~/composables/useAppPage'
-import { useSupabase } from '~/services/supabase'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
-import {
-  buildGettingStartedSteps,
-  gettingStartedProgress,
-  parseAppOnboardingLedger,
-  withGettingStartedDismissed,
-  withoutGettingStartedDismissed,
-} from '~/utils/appOnboardingProgress'
-import {
-  isStoreReleaseValidated,
-  markStoreReleaseValidated,
-} from '~/utils/gettingStartedDismiss'
+import { readOnboardingSetupHandoff } from '~/utils/onboardingRedirect'
+import { parseUserOnboardingProgress } from '~/utils/userOnboardingProgress'
 
 const { t } = useI18n()
-const router = useRouter()
-const supabase = useSupabase()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const { id, app, isLoading } = useAppPage({
@@ -35,186 +17,17 @@ const { id, app, isLoading } = useAppPage({
   navTitle: t('getting-started'),
 })
 
-const storeModal = useTemplateRef<{ openModal: () => void }>('storeModal')
-const builderModalOpen = ref(false)
-const builderDone = ref(false)
-const isVerifying = ref(false)
-const isDismissing = ref(false)
-let builderReqToken = 0
-let verifyReqToken = 0
+// Getting started always renders the onboarding setup UI inside the dashboard
+// shell. Read once per app: the flow reads its analytics flow at mount.
+const setupFlowAppId = ref('')
+const setupPreOrg = ref(false)
 
-const orgApp = computed(() => id.value ? organizationStore.getAppByAppId(id.value) : undefined)
-const appName = computed(() => app.value?.name || orgApp.value?.name || id.value)
-const appIcon = computed(() => orgApp.value?.icon_url || '')
-const iconLoading = computed(() => orgApp.value?.icon_url_loading === true)
-
-const ledger = computed(() => parseAppOnboardingLedger(app.value?.onboarding))
-const userId = computed(() => main.user?.id ?? main.auth?.id ?? '')
-const steps = computed(() => buildGettingStartedSteps(ledger.value, {
-  builderDone: builderDone.value,
-  storeReleaseValidated: isStoreReleaseValidated(userId.value, id.value),
-}))
-const progress = computed(() => gettingStartedProgress(steps.value))
-const stepGroups = computed(() => {
-  const essential = steps.value.filter(step => step.group === 'essential')
-  const grow = steps.value.filter(step => step.group === 'grow')
-  return [
-    { id: 'essential', titleKey: 'getting-started-essential', steps: essential, doneCount: essential.filter(step => step.done).length },
-    { id: 'grow', titleKey: 'getting-started-grow', steps: grow, doneCount: grow.filter(step => step.done).length },
-  ]
-})
-const allDone = computed(() => progress.value.done === progress.value.total && progress.value.total > 0)
-
-function acronym(name: string) {
-  const trimmed = name.trim()
-  if (!trimmed)
-    return '?'
-  const parts = trimmed.split(/\s+/)
-  const first = parts[0]?.[0] ?? ''
-  const second = parts.length > 1 ? (parts[1]?.[0] ?? '') : (parts[0]?.[1] ?? '')
-  return (first + second).toUpperCase()
-}
-
-function applyOnboarding(onboarding: unknown, needOnboarding?: boolean, targetAppId = id.value) {
-  if (!targetAppId)
-    return
-  const currentApp = app.value
-  if (id.value === targetAppId && currentApp && currentApp.app_id === targetAppId) {
-    app.value = {
-      ...currentApp,
-      onboarding: onboarding as typeof currentApp.onboarding,
-      ...(needOnboarding === undefined ? {} : { need_onboarding: needOnboarding }),
-    }
-  }
-  organizationStore.updateAppOnboarding(targetAppId, onboarding as NonNullable<typeof app.value>['onboarding'])
-  if (needOnboarding !== undefined)
-    organizationStore.updateAppNeedOnboarding(targetAppId, needOnboarding)
-}
-
-async function refreshNeedOnboarding(appId: string) {
-  const { data } = await supabase
-    .from('apps')
-    .select('need_onboarding')
-    .eq('app_id', appId)
-    .maybeSingle()
-  if (!data)
-    return
-  const currentApp = app.value
-  if (currentApp?.app_id === appId)
-    app.value = { ...currentApp, need_onboarding: data.need_onboarding }
-  organizationStore.updateAppNeedOnboarding(appId, data.need_onboarding)
-}
-
-async function checkBuilderDone(appId: string) {
-  const token = ++builderReqToken
-  builderDone.value = false
-  try {
-    await organizationStore.awaitInitialLoad()
-    const orgId = organizationStore.getOrgByAppId(appId)?.gid
-    if (!orgId)
-      return
-    const { count, error } = await supabase
-      .from('build_requests')
-      .select('id', { count: 'exact', head: true })
-      .eq('owner_org', orgId)
-      .eq('app_id', appId)
-      .in('status', ['succeeded', 'released'])
-    if (token !== builderReqToken || error)
-      return
-    builderDone.value = (count ?? 0) > 0
-  }
-  catch (error) {
-    console.error('Cannot load getting started builder status', error)
-  }
-}
-
-async function verifySteps(options: { silent?: boolean } = {}) {
-  if (!id.value || isVerifying.value)
-    return
-  const appId = id.value
-  const token = ++verifyReqToken
-  isVerifying.value = true
-  try {
-    const { data, error } = await supabase.rpc('verify_getting_started', {
-      p_app_id: appId,
-    })
-    if (token !== verifyReqToken)
-      return
-    if (error)
-      throw error
-    if (data)
-      applyOnboarding(data, undefined, appId)
-    await refreshNeedOnboarding(appId)
-    if (!options.silent)
-      toast.success(t('getting-started-verify-done'))
-  }
-  catch (error) {
-    console.error('Cannot verify getting started', error)
-    if (!options.silent)
-      toast.error(t('getting-started-verify-error'))
-  }
-  finally {
-    if (token === verifyReqToken)
-      isVerifying.value = false
-  }
-}
-
-async function hideGettingStarted() {
-  if (!id.value || !app.value || isDismissing.value)
-    return
-  const appId = id.value
-  const current = app.value.onboarding ?? {}
-  const previousNeed = app.value.need_onboarding
-  isDismissing.value = true
-  applyOnboarding(withGettingStartedDismissed(current), false, appId)
-  try {
-    const { data, error } = await supabase.rpc('dismiss_getting_started', {
-      p_app_id: appId,
-    })
-    if (error)
-      throw error
-    applyOnboarding(
-      withGettingStartedDismissed(current, parseAppOnboardingLedger(data).getting_started_dismissed_at ?? undefined),
-      undefined,
-      appId,
-    )
-    await refreshNeedOnboarding(appId)
-    if (id.value === appId)
-      await router.push(`/app/${encodeURIComponent(appId)}`)
-  }
-  catch (error) {
-    console.error('Failed to hide getting started', error)
-    applyOnboarding(withoutGettingStartedDismissed(current), previousNeed, appId)
-    toast.error(t('getting-started-dismiss-error'))
-  }
-  finally {
-    isDismissing.value = false
-  }
-}
-
-function runStep(step: GettingStartedStep) {
-  if (step.done)
-    return
-  if (step.id === 'cli_install') {
-    if (app.value?.need_onboarding)
-      void router.push({ path: '/app/new', query: { resume: id.value } })
-    else
-      void router.push(`/app/${encodeURIComponent(id.value)}/devices`)
-    return
-  }
-  if (step.id === 'live_update') {
-    void router.push(`/app/${encodeURIComponent(id.value)}/bundles`)
-    return
-  }
-  if (step.id === 'store_release') {
-    storeModal.value?.openModal()
-    return
-  }
-  builderModalOpen.value = true
-}
-
-function onStoreReleaseApplied(appId: string) {
-  markStoreReleaseValidated(userId.value, appId)
+function resolveSetupPreOrg(appId: string) {
+  const handoff = readOnboardingSetupHandoff(window.history.state, appId)
+  if (handoff)
+    return handoff.flow === 'pre_org'
+  const saved = parseUserOnboardingProgress(main.user?.onboarding)
+  return saved?.status === 'in_progress' && saved.flow === 'pre_org' && saved.app_id === appId
 }
 
 watch(() => id.value, async (appId) => {
@@ -224,207 +37,25 @@ watch(() => id.value, async (appId) => {
   const appOrganization = organizationStore.getOrgByAppId(appId)
   if (appOrganization && organizationStore.currentOrganization?.gid !== appOrganization.gid)
     organizationStore.setCurrentOrganization(appOrganization.gid)
-  void checkBuilderDone(appId)
 }, { immediate: true })
 
 watch(() => app.value?.app_id, (appId) => {
-  if (!appId)
+  if (!appId || setupFlowAppId.value === appId)
     return
-  void verifySteps({ silent: true })
-})
+  setupPreOrg.value = resolveSetupPreOrg(appId)
+  setupFlowAppId.value = appId
+}, { immediate: true })
 </script>
 
 <template>
   <AppPageFrame :found="!!app" :loading="isLoading">
-    <div v-if="app" class="mx-auto max-w-3xl px-4 py-6 sm:px-0" data-test="getting-started-page">
-      <div
-        v-if="allDone"
-        class="mb-6 flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 dark:border-emerald-800 dark:bg-emerald-950/40"
-        role="status"
-      >
-        <span class="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white">
-          <IconCheck class="size-3.5" />
-        </span>
-        <div>
-          <p class="font-semibold text-emerald-900 dark:text-emerald-100">
-            {{ t('getting-started-complete') }}
-          </p>
-          <p class="text-sm text-emerald-800 dark:text-emerald-200">
-            {{ t('getting-started-complete-desc') }}
-          </p>
-        </div>
-      </div>
-
-      <div class="flex items-center gap-3">
-        <img
-          v-if="appIcon"
-          :src="appIcon"
-          :alt="`${appName} icon`"
-          class="size-12 rounded-lg object-cover d-mask d-mask-squircle"
-          width="48"
-          height="48"
-        >
-        <span
-          v-else-if="iconLoading"
-          class="flex size-12 items-center justify-center rounded-lg bg-slate-200 dark:bg-slate-800 d-mask d-mask-squircle"
-        >
-          <span class="size-5 rounded-full border-2 border-azure-500 border-t-transparent animate-spin" />
-          <span class="sr-only">{{ t('loading') }}</span>
-        </span>
-        <span
-          v-else
-          class="flex size-12 items-center justify-center rounded-lg bg-slate-200 text-lg font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200 d-mask d-mask-squircle"
-          aria-hidden="true"
-        >
-          {{ acronym(appName) }}
-        </span>
-        <div class="min-w-0">
-          <p class="truncate text-lg font-semibold text-slate-950 dark:text-white">
-            {{ appName }}
-          </p>
-          <p class="truncate font-mono text-sm text-slate-500 dark:text-slate-400">
-            {{ id }}
-          </p>
-        </div>
-      </div>
-
-      <div class="mt-6 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 class="text-2xl font-semibold text-slate-950 dark:text-white">
-            {{ t('getting-started') }}
-          </h1>
-          <p class="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-            {{ t('getting-started-description') }}
-          </p>
-        </div>
-        <div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
-          <button
-            type="button"
-            class="d-btn d-btn-ghost d-btn-sm h-11 min-h-11 px-3"
-            data-test="getting-started-verify"
-            :disabled="isVerifying || isDismissing"
-            :aria-label="t('getting-started-verify')"
-            @click="verifySteps()"
-          >
-            <IconRefreshCw class="size-4" :class="isVerifying ? 'animate-spin' : ''" />
-            {{ t('getting-started-verify') }}
-          </button>
-          <button
-            type="button"
-            class="d-btn d-btn-ghost d-btn-sm h-11 min-h-11 px-3"
-            data-test="getting-started-hide"
-            :disabled="isVerifying || isDismissing"
-            :aria-label="t('getting-started-dont-show-again')"
-            @click="hideGettingStarted"
-          >
-            <IconX class="size-4" />
-            {{ t('getting-started-dont-show-again') }}
-          </button>
-          <p class="tabular-nums text-sm font-medium text-slate-500 dark:text-slate-400">
-            {{ t('getting-started-count', { done: progress.done, total: progress.total }) }}
-          </p>
-        </div>
-      </div>
-
-      <div class="mt-4">
-        <div class="mb-1 flex justify-end">
-          <span class="tabular-nums text-xs font-semibold text-azure-700 dark:text-azure-300">
-            {{ t('getting-started-percent', { percent: progress.percent }) }}
-          </span>
-        </div>
-        <div
-          class="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800"
-          role="progressbar"
-          :aria-valuenow="progress.percent"
-          aria-valuemin="0"
-          aria-valuemax="100"
-          :aria-label="t('getting-started-count', { done: progress.done, total: progress.total })"
-        >
-          <div
-            class="h-full rounded-full bg-azure-500 transition-transform duration-200 ease-out motion-reduce:transition-none"
-            :style="{ transform: `scaleX(${progress.percent / 100})`, transformOrigin: 'left center' }"
-          />
-        </div>
-      </div>
-
-      <section
-        v-for="(group, index) in stepGroups"
-        :key="group.id"
-        :class="index === 0 ? 'mt-8' : 'mt-6'"
-      >
-        <details class="group" open>
-          <summary class="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg py-2 text-sm font-semibold uppercase tracking-wide text-slate-500 marker:content-none focus:outline-none focus:ring-2 focus:ring-azure-500 dark:text-slate-400 [&::-webkit-details-marker]:hidden">
-            <span class="flex items-center gap-2">
-              <IconCheck
-                v-if="group.doneCount === group.steps.length"
-                class="size-4 text-emerald-600 dark:text-emerald-300"
-              />
-              {{ t(group.titleKey) }}
-              {{ group.doneCount }}/{{ group.steps.length }}
-            </span>
-          </summary>
-          <ul class="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white shadow-sm dark:divide-white/10 dark:border-white/10 dark:bg-slate-800 dark:shadow-none dark:inset-ring dark:inset-ring-white/5">
-            <li
-              v-for="step in group.steps"
-              :key="step.id"
-              class="px-4 py-3"
-              :data-test="`getting-started-step-${step.id}`"
-            >
-              <div class="flex items-center gap-3">
-                <span
-                  class="flex size-6 shrink-0 items-center justify-center rounded-full"
-                  :class="step.done ? 'bg-emerald-600 text-white' : 'border-2 border-slate-300 dark:border-slate-600'"
-                  :aria-hidden="true"
-                >
-                  <IconCheck v-if="step.done" class="size-3.5" />
-                </span>
-                <div class="min-w-0 flex-1">
-                  <p class="font-semibold text-slate-950 dark:text-white">
-                    {{ t(step.titleKey) }}
-                  </p>
-                  <p class="text-sm leading-5 text-slate-500 dark:text-slate-400">
-                    {{ t(step.descKey) }}
-                  </p>
-                </div>
-                <span
-                  v-if="step.done"
-                  class="shrink-0 text-sm font-medium text-slate-400 dark:text-slate-500"
-                >
-                  {{ t('getting-started-done') }}
-                </span>
-                <button
-                  v-else
-                  type="button"
-                  class="d-btn d-btn-ghost d-btn-sm h-11 min-h-11 shrink-0 px-3 text-azure-700 dark:text-azure-300"
-                  data-test="getting-started-step-action"
-                  @click="runStep(step)"
-                >
-                  {{ t(step.actionKey) }}
-                </button>
-              </div>
-              <AppOnboardingCliSteps
-                v-if="step.id === 'cli_install'"
-                :key="id"
-                class="mt-3"
-                :app-id="id"
-                :initial-onboarding="app.onboarding"
-              />
-            </li>
-          </ul>
-        </details>
-      </section>
-    </div>
-
-    <StoreReleaseValidationModal
-      v-if="id"
-      ref="storeModal"
-      :app-id="id"
-      @applied="onStoreReleaseApplied"
-    />
-    <BuilderPresentationModal
-      :open="builderModalOpen"
-      :app-id="id"
-      @close="builderModalOpen = false"
+    <AppOnboardingFlow
+      v-if="app && setupFlowAppId === app.app_id"
+      :key="setupFlowAppId"
+      data-test="getting-started-setup"
+      :setup-app-id="setupFlowAppId"
+      :pre-org="setupPreOrg"
+      onboarding
     />
   </AppPageFrame>
 </template>

@@ -17,6 +17,8 @@ export interface PosthogReadResult {
 
 export interface PosthogReadOptions {
   maxResponseBytes?: number
+  requiredColumns?: string[]
+  signal?: AbortSignal
 }
 
 interface PosthogReadConfig {
@@ -92,7 +94,7 @@ export async function queryPosthogHogql(c: Context, query: string, options: Post
       method: 'POST',
       headers: { 'Authorization': `Bearer ${config.key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ query: { kind: 'HogQLQuery', query } }),
-      signal: AbortSignal.timeout(20_000),
+      signal: options.signal ? AbortSignal.any([AbortSignal.timeout(20_000), options.signal]) : AbortSignal.timeout(20_000),
     })
     if (!response.ok) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'posthog_query_failed', status: response.status })
@@ -107,7 +109,18 @@ export async function queryPosthogHogql(c: Context, query: string, options: Post
     if (responseBody === null)
       return { configured: true, connected: true, failureReason: 'too_large', rows: [] }
 
-    const json = JSON.parse(responseBody) as { columns?: string[], results?: unknown[][] }
+    const json = JSON.parse(responseBody) as { columns?: string[], results?: unknown[][], has_more?: boolean, next?: unknown }
+    // Authoritative callers opt in; keep legacy analytics response handling unchanged.
+    if (options.requiredColumns && (
+      !json || !Array.isArray(json.columns) || !json.columns.every(column => typeof column === 'string')
+      || new Set(json.columns).size !== json.columns.length
+      || !options.requiredColumns.every(column => json.columns!.includes(column))
+      || !Array.isArray(json.results) || !json.results.every(row => Array.isArray(row) && row.length === json.columns!.length)
+      || (json.has_more !== undefined && json.has_more !== false)
+      || (json.next !== undefined && json.next !== null && json.next !== '')
+    )) {
+      return { configured: true, connected: true, failureReason: 'unavailable', rows: [] }
+    }
     const columns = json.columns ?? []
     const rows = (json.results ?? []).map((result) => {
       const row: Record<string, unknown> = {}

@@ -3,6 +3,19 @@
 This file provides guidance to AI agents (Claude Code, Cursor, Copilot, etc.)
 when working with code in this repository.
 
+## MUST NOT — modify the admin dashboard in this repository
+
+The admin dashboard is maintained in the private
+[`Cap-go/capgo_admin_dashboard`](https://github.com/Cap-go/capgo_admin_dashboard)
+repository and deployed at `admin.capgo.app`. The web app only links to it. Do
+not add dashboard code or open dashboard pull requests here.
+
+For admin dashboard work, load
+`.agents/skills/modify-admin-dashboard/SKILL.md` and make the change and pull
+request in `Cap-go/capgo_admin_dashboard`. Shared backend producers that serve
+other Capgo features can still be changed here when the requested work genuinely
+belongs to shared infrastructure. See `docs/admin-dashboard.md`.
+
 ## MUST NOT — never publish private customer data
 
 **This repository is public.** Chat, tickets, and internal messages may contain
@@ -67,7 +80,10 @@ CLI identity path (`get_user_id(text)` with a valid API key must keep working).
 - `bun mobile` - Build for mobile and copy to Capacitor platforms
 - `bun dev-build` - Build with development branch configuration
 - `bun run cli:build` - Build the CLI workspace in `cli/`
-- `bun run cli:test` - Run the CLI workspace test suite
+- `bun run cli:test` - Run the CLI workspace test suite (the setup steps
+  `test:helper-dce` and `test:version-detection:setup` run first, then the rest
+  of `cli` `test:suite` runs in parallel; `bun run --cwd cli test:serial` runs
+  everything one by one)
 - `bun run cli:check` - Lint, typecheck, build, and test the CLI workspace
 
 ### Testing
@@ -89,7 +105,8 @@ CLI identity path (`get_user_id(text)` with a valid API key must keep working).
 - `bun test:cli` - Run CLI-specific tests (workspace CLI plus
   `tests/cli-compat.test.ts`, which pins `@capgo/cli` to `MIN_CLI_VERSION`)
 - `bun test:local` - Legacy alias for the default monorepo backend test run
-- `bun test:front` - Run Playwright frontend tests
+- `bun test:front` - Run Playwright frontend tests (CI shards spec files by
+  measured duration from `playwright/spec-durations.json`; add slow new specs there)
 - `bun test:all:local` - Legacy alias for `bun test:all`
 - `bun test:cli:local` - Legacy alias for `bun test:cli`
 
@@ -1196,6 +1213,41 @@ The deployment happens automatically after GitHub CI/CD on main branch.
 You are not allowed to deploy on your own, unless if asked. Same for git you
 never git push on main branch, add or commit unless asked.
 You can do it in others branches
+
+### Release and deployment retry contract
+
+Release generation and production deployment are handled by
+`.github/workflows/bump_version.yml` and `.github/workflows/build_and_deploy.yml`.
+When changing either workflow or the helpers below, preserve this contract:
+
+- The complete post-merge test workflow remains mandatory before any release
+  commit or tag is published.
+- Release scope is cumulative per component: pending work is calculated from the
+  latest successful component tag (`capgo-*`, `cli-*`, `notifications-*`) to the
+  tested commit, not from the push event range.
+- Release publication uses `scripts/publish-release.ts` with an atomic push and
+  compare-and-swap semantics. Do not reintroduce `git pull` merges into generated
+  release output.
+- Failed production deployments recover with GitHub **Re-run all jobs**, not
+  **Re-run failed jobs**. Full reruns re-resolve the newest stable or alpha Capgo
+  tag through `scripts/resolve-deploy-tag.ts` and deploy that immutable target.
+- Design reference: `docs/superpowers/specs/2026-09-09-reliable-release-retries-design.md`
+
+## Frontend security operations
+
+Console CSP, SRI maintenance, sanitization helpers, and redirect validation are
+documented in [docs/frontend-security.md](docs/frontend-security.md). Review
+that checklist when touching `public/_headers`, external scripts, or user-controlled
+HTML/URL rendering.
+
+## Billing usage retention
+
+Deleted-app usage stays billable for 35 days, a deleted app ID recreated by
+another org in that window shares its usage rows (both orgs billed, new owner
+can read them), and app transfers count MAU for each org. These are intentional
+anti-fraud behaviors documented in
+[docs/billing-usage-retention.md](docs/billing-usage-retention.md). Do not
+change them without a product decision.
 
 ## Graphify
 

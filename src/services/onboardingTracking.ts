@@ -8,6 +8,11 @@ interface PostHogBrowserClient {
 }
 
 const AI_INSTRUCTIONS_COPIED_EVENT = 'onboarding_ai_instructions_copied'
+export const APP_ONBOARDING_READY_EVENT = 'app:onboarding_ready'
+const APP_SCOPED_BENTO_EVENTS = new Set([
+  AI_INSTRUCTIONS_COPIED_EVENT,
+  APP_ONBOARDING_READY_EVENT,
+])
 
 function sanitizedUrl(value: string) {
   try {
@@ -69,9 +74,9 @@ export function sendOnboardingEvent(event: string, properties: OnboardingEventPr
       ...getPostHogBrowserContext(),
     },
     ...(orgId ? { org_id: orgId } : {}),
-    // The existing Bento mapper requires a verified app tag for this one event.
+    // Bento mappers use this verified app tag for authoritative backend lookups.
     // Every onboarding property still remains event-only in nonPersonTags.
-    ...(event === AI_INSTRUCTIONS_COPIED_EVENT && appId ? { tags: { app_id: appId } } : {}),
+    ...(APP_SCOPED_BENTO_EVENTS.has(event) && appId ? { tags: { app_id: appId } } : {}),
     timestamp: Date.now(),
     tracking_version: 2,
   }).catch(() => {})

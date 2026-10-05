@@ -54,6 +54,7 @@ export type Permission
     | 'app.build_native'
     | 'app.read_audit'
     | 'app.update_user_roles'
+    | 'app.manage_apikeys'
     | 'app.transfer'
   // Bundle permissions
     | 'bundle.delete'

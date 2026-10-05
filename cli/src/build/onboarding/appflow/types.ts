@@ -53,7 +53,7 @@ export interface AppflowProgress {
   appflowAccount?: string
   orgSlug?: string
   appId?: string // the SELECTED Appflow app id (hex), used for the Appflow API only
-  capgoAppId?: string // the Capgo app id (Capacitor config appId), used for the build + credential store
+  capgoAppId?: string // the resolved Capgo Builder app id, used for the build + credential store
   appSlug?: string
   ios?: Record<string, string> // mapped Capgo iOS creds collected so far
   android?: Record<string, string> // mapped Capgo Android creds collected so far

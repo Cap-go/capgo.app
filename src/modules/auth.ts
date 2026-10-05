@@ -1,7 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NavigationGuardNext, RouteLocationNormalized } from 'vue-router'
 import type { UserModule } from '~/types'
-import { isCliLoginPath } from '~/services/cliLogin'
+import { ADMIN_DASHBOARD_URL } from '~/constants/adminDashboard'
+import { clearChartDataCache } from '~/services/chartDataService'
+import { isCliLoginPath, isMcpAuthorizePath } from '~/services/cliLogin'
 import { hideLoader } from '~/services/loader'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { setUser } from '~/services/posthog'
@@ -9,13 +11,14 @@ import { isSsoUser, provisionSsoUser } from '~/services/ssoProvisioning'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { getLocalConfig, useSupabase } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
-import { clearWebsitePaidUserCookie, setWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
+import { clearWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
 import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 import { getOnboardingResumeRedirect, isNewOnboardingUser } from '~/utils/onboardingRedirect'
 import { hasPendingInviteSkip } from '~/utils/pendingInviteSkip'
-import { getPlans, isPlatformAdmin } from './../services/supabase'
+import { validateRedirectPath } from '~/utils/safeRedirect'
+import { getPlans } from './../services/supabase'
 
 async function updateUser(
   main: ReturnType<typeof useMainStore>,
@@ -173,9 +176,7 @@ function getAccountDisabledRedirect(to: RouteLocationNormalized) {
 
 function getPostRestorePath(to: RouteLocationNormalized) {
   const target = typeof to.query.to === 'string' ? to.query.to : ''
-  if (target.startsWith('/') && target !== '/accountDisabled')
-    return target
-  return '/dashboard'
+  return validateRedirectPath(target, '/dashboard', { blockedPrefixes: ['/accountDisabled'] })
 }
 
 async function guard(
@@ -194,8 +195,7 @@ async function guard(
   const inviteOrgId = typeof to.query.invite_org === 'string' && to.query.invite_org.length > 0
     ? to.query.invite_org
     : null
-  const isAdminRoute = to.path.startsWith('/admin')
-  const isCliLoginRoute = isCliLoginPath(to.path)
+  const isCliLoginRoute = isCliLoginPath(to.path) || isMcpAuthorizePath(to.path)
   const organizationFetchOptions = { loadImages: !isCliLoginRoute }
 
   async function tryLoadOrganizations(fetcher: () => Promise<void>) {
@@ -214,6 +214,16 @@ async function guard(
       return
 
     main.plans = await getPlans()
+  }
+
+  async function resolvePlatformAdminStatus() {
+    try {
+      await main.resolvePlatformAdminStatus()
+    }
+    catch (error) {
+      console.error('Failed to resolve platform admin status:', error)
+      main.isAdmin = false
+    }
   }
 
   function shouldRedirectToOrgOnboarding() {
@@ -247,6 +257,9 @@ async function guard(
   async function getPendingOnboardingRedirect(organizationsLoaded: boolean) {
     if (isCliLoginRoute)
       return null
+    // Creating another organization must not bounce back to pending setup.
+    if (to.path === '/onboarding/app' && to.query.new_org === '1')
+      return null
     if (!organizationsLoaded)
       return null
     if (!isNewOnboardingUser(sessionUser?.created_at))
@@ -276,7 +289,6 @@ async function guard(
       createdAt: sessionUser?.created_at,
       organizationCount: selectableOrganizations.length,
       path: to.path,
-      resumeAppId: typeof to.query.resume === 'string' ? to.query.resume : null,
       userId: sessionUser?.id,
     })
   }
@@ -355,43 +367,20 @@ async function guard(
       })
     }
 
-    if (organizationsLoaded && isAdminRoute) {
-      try {
-        main.isAdmin = await isPlatformAdmin()
-        if (main.isAdmin)
-          setWebsitePaidUserCookie(true)
-      }
-      catch (error) {
-        console.error('Failed to resolve platform admin status:', error)
-        main.isAdmin = false
-      }
-    }
+    await resolvePlatformAdminStatus()
 
-    if (organizationsLoaded && !organizationStore.hasOrganizations && shouldRedirectToOrgOnboarding()) {
-      if (!isAdminRoute || !main.isAdmin) {
-        return next({
-          path: '/onboarding/app',
-          query: {
-            to: to.fullPath,
-          },
-        })
-      }
+    if (organizationsLoaded && !organizationStore.hasOrganizations && !main.isAdmin && shouldRedirectToOrgOnboarding()) {
+      return next({
+        path: '/onboarding/app',
+        query: {
+          to: to.fullPath,
+        },
+      })
     }
 
     const onboardingRedirect = await getPendingOnboardingRedirect(organizationsLoaded)
     if (onboardingRedirect)
       return next(onboardingRedirect)
-
-    try {
-      // isPlatformAdmin() is the only frontend admin-rights source.
-      main.isAdmin = await isPlatformAdmin()
-      if (main.isAdmin)
-        setWebsitePaidUserCookie(true)
-    }
-    catch (error) {
-      console.error('Failed to resolve platform admin status:', error)
-      main.isAdmin = false
-    }
 
     next()
     hideLoader()
@@ -441,7 +430,9 @@ async function guard(
       organizationsLoaded = await tryLoadOrganizations(() => organizationStore.fetchOrganizations(organizationFetchOptions))
     }
 
-    if (organizationsLoaded && !organizationStore.hasOrganizations && shouldRedirectToOrgOnboarding()) {
+    await resolvePlatformAdminStatus()
+
+    if (organizationsLoaded && !organizationStore.hasOrganizations && !main.isAdmin && shouldRedirectToOrgOnboarding()) {
       return next({
         path: '/onboarding/app',
         query: {
@@ -453,26 +444,6 @@ async function guard(
     const onboardingRedirect = await getPendingOnboardingRedirect(organizationsLoaded)
     if (onboardingRedirect)
       return next(onboardingRedirect)
-
-    // Check if user is trying to access admin routes
-    if (isAdminRoute) {
-      try {
-        // Re-check via the single approved frontend path for admin-rights.
-        main.isAdmin = await isPlatformAdmin()
-        if (main.isAdmin)
-          setWebsitePaidUserCookie(true)
-      }
-      catch (error) {
-        console.error('Failed to resolve platform admin status:', error)
-        main.isAdmin = false
-      }
-
-      // Redirect non-admin users to dashboard
-      if (!main.isAdmin) {
-        console.warn('Non-admin user attempted to access admin route:', to.path)
-        return next('/dashboard')
-      }
-    }
 
     hideLoader()
     next()
@@ -494,12 +465,19 @@ export const install: UserModule = ({ router }) => {
 
   if (typeof supabase.auth.onAuthStateChange === 'function') {
     supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session)
+      if (!session) {
         clearWebsitePaidUserCookie()
+        clearChartDataCache()
+      }
     })
   }
 
   router.beforeEach(async (to, from, next) => {
+    // The admin dashboard moved to its own app; send old bookmarks there.
+    if (to.path === '/admin' || to.path.startsWith('/admin/')) {
+      window.location.replace(ADMIN_DASHBOARD_URL)
+      return next(false)
+    }
     if (to.meta.middleware) {
       await guard(next, to, from)
     }

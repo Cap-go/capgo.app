@@ -5,11 +5,13 @@ const {
   backgroundTaskMock,
   capturePosthogExceptionMock,
   cloudlogErrMock,
+  cloudlogMock,
   sendDiscordAlert500Mock,
 } = vi.hoisted(() => ({
   backgroundTaskMock: vi.fn(),
   capturePosthogExceptionMock: vi.fn(),
   cloudlogErrMock: vi.fn(),
+  cloudlogMock: vi.fn(),
   sendDiscordAlert500Mock: vi.fn(),
 }))
 
@@ -26,6 +28,7 @@ vi.mock('../supabase/functions/_backend/utils/posthog.ts', () => ({
 }))
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
+  cloudlog: cloudlogMock,
   cloudlogErr: cloudlogErrMock,
   serializeError: (error: unknown) => ({
     cause: error instanceof Error ? error.cause : undefined,
@@ -58,6 +61,7 @@ afterEach(() => {
   backgroundTaskMock.mockReset()
   capturePosthogExceptionMock.mockReset()
   cloudlogErrMock.mockReset()
+  cloudlogMock.mockReset()
   sendDiscordAlert500Mock.mockReset()
 })
 
@@ -104,6 +108,57 @@ describe('onError PostHog capture', () => {
     expect(alertBody).not.toContain('invite-secret')
     expect(alertBody).not.toContain('NestedPassword1!')
     expect(alertBody).not.toContain('Password1!')
+  })
+
+  it('logs 4xx HTTP exceptions without console.error or stack so they stay out of Workers Issues', async () => {
+    const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
+
+    const error = new HTTPException(400, {
+      message: 'App ID must be a reverse domain string',
+      cause: {
+        error: 'invalid_app_id',
+        message: 'App ID must be a reverse domain string',
+        moreInfo: { app_id: 'bad' },
+      },
+    })
+
+    const response = await onError('app')(error, createContext())
+
+    expect(cloudlogErrMock).not.toHaveBeenCalled()
+    expect(cloudlogMock).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'http_exception',
+      status: 400,
+      errorCode: 'invalid_app_id',
+      errorMessage: 'App ID must be a reverse domain string',
+    }))
+    expect(cloudlogMock.mock.calls[0]?.[0]).not.toHaveProperty('stack')
+    expect(sendDiscordAlert500Mock).not.toHaveBeenCalled()
+    expect(capturePosthogExceptionMock).not.toHaveBeenCalled()
+    expect(response).toEqual({
+      body: {
+        error: 'invalid_app_id',
+        message: 'App ID must be a reverse domain string',
+        moreInfo: { app_id: 'bad' },
+      },
+      status: 400,
+    })
+  })
+
+  it('logs 5xx HTTP exceptions with console.error and stack', async () => {
+    const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
+
+    const error = new HTTPException(500, {
+      cause: { error: 'internal_error', message: 'Something broke', moreInfo: {} },
+    })
+
+    await onError('app')(error, createContext())
+
+    expect(cloudlogMock).not.toHaveBeenCalled()
+    expect(cloudlogErrMock).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'http_exception',
+      status: 500,
+      stack: expect.any(String),
+    }))
   })
 
   it('captures backend HTTP exceptions in PostHog', async () => {
@@ -416,6 +471,20 @@ describe('onError PostHog capture', () => {
     expect(sendDiscordAlert500Mock).not.toHaveBeenCalled()
     expect(capturePosthogExceptionMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       functionName: 'TUS handler',
+      kind: 'unhandled_error',
+      status: 500,
+    }))
+    expect(response.status).toBe(500)
+  })
+
+  it('skips Discord for Cloudflare internal errors on the files upload path', async () => {
+    const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
+
+    const response = await onError('files')(new Error('internal error; reference = 0123abcd-4567-89ef'), createContext())
+
+    expect(sendDiscordAlert500Mock).not.toHaveBeenCalled()
+    expect(capturePosthogExceptionMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      functionName: 'files',
       kind: 'unhandled_error',
       status: 500,
     }))

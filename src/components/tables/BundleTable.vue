@@ -6,13 +6,14 @@ import type { ChannelPromotionTarget } from '~/services/channelPromotion'
 import type { Database } from '~/types/supabase.types'
 import { Capacitor } from '@capacitor/core'
 import { computedAsync, useEventBus } from '@vueuse/core'
-import { computed, ref, watch } from 'vue'
+import { computed, h, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconSettings from '~icons/heroicons/cog-8-tooth'
 import IconTrash from '~icons/heroicons/trash'
-import { fetchLinkedChannelsForVersion, formatLinkedChannel, unlinkLinkedChannels } from '~/services/bundleLinkedChannels'
+import BundleChannelsPopover from '~/components/tables/BundleChannelsPopover.vue'
+import { fetchLinkedChannelsForVersion, formatBundleListChannels, formatLinkedChannel, mergeBundleListChannels, unlinkLinkedChannels } from '~/services/bundleLinkedChannels'
 import { findChannelsWithoutPromotionPermission, formatChannelPromotionTargets } from '~/services/channelPromotion'
 import { formatBytes } from '~/services/conversion'
 import { formatDate } from '~/services/date'
@@ -53,7 +54,7 @@ const filters = ref({
   'deleted': false,
   'encrypted': false,
 })
-const channelCache = ref<Record<number, { name: string, id?: number }>>({})
+const channelCache = ref<Record<number, { id: number, name: string }[]>>({})
 
 const currentVersionsNumber = computed(() => {
   return (currentPage.value - 1) * offset
@@ -286,8 +287,9 @@ async function fetchChannelsForVersions(versions: Element[]) {
   }
   const channelData = [...(stableResult.data ?? []), ...(rolloutResult.data ?? [])]
   versionIds.forEach((id) => {
-    const channel = channelData?.find(c => c.version === id || c.rollout_version === id)
-    channelCache.value[id] = channel ? { name: channel.name, id: channel.id } : { name: '' }
+    const linked = channelData.filter(c => c.version === id || c.rollout_version === id)
+      .map(c => ({ id: c.id, name: c.name }))
+    channelCache.value[id] = mergeBundleListChannels(linked)
   })
 }
 
@@ -415,12 +417,18 @@ columns.value = [
     displayFunction: (elem: Element) => {
       if (elem.deleted)
         return t('deleted')
-      return channelCache.value[elem.id]?.name ?? ''
+      return formatBundleListChannels(channelCache.value[elem.id] ?? []).label
     },
-    onClick: async (elem: Element) => {
-      if (elem.deleted || !channelCache.value[elem.id] || !channelCache.value[elem.id].id)
-        return
-      router.push(`/app/${props.appId}/channel/${channelCache.value[elem.id].id}`)
+    renderFunction: (elem: Element) => {
+      if (elem.deleted)
+        return t('deleted')
+      const channels = channelCache.value[elem.id] ?? []
+      if (!channels.length)
+        return ''
+      return h(BundleChannelsPopover, {
+        appId: props.appId,
+        channels,
+      })
     },
   },
   {
@@ -604,20 +612,21 @@ watch(props, async () => {
   <div>
     <div
       v-if="totalAllBundles !== null && totalAllBundles === 0 && !search"
-      class="p-6 mb-6 bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900"
+      class="p-6 mb-6 bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10"
     >
       <h2 class="text-xl font-semibold text-slate-900 dark:text-slate-50">
-        {{ t('feel-magic-of-capgo') }} <span class="font-prompt">Capgo</span> !
+        {{ t('bundles-empty-title') }}
       </h2>
-      <p class="mt-2 text-slate-600 dark:text-slate-200">
-        {{ t('add-your-first-bundle') }}
+      <p class="mt-2 max-w-2xl text-slate-600 dark:text-slate-200">
+        {{ t('bundles-empty-description') }}
       </p>
+      <code class="block mt-4 w-fit max-w-full overflow-x-auto px-3 py-2 font-mono text-sm rounded-md bg-slate-100 text-slate-800 dark:bg-slate-900 dark:text-slate-200">npx @capgo/cli@latest bundle upload</code>
       <button type="button" class="mt-4 d-btn d-btn-primary" @click="addOne()">
-        {{ t('add-another-bundle') }}
+        {{ t('bundles-empty-cta') }}
       </button>
     </div>
 
-    <div class="flex overflow-hidden overflow-y-auto flex-col bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
+    <div class="flex overflow-hidden overflow-y-auto flex-col bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10">
       <DataTable
         v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
         :total="total"

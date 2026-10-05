@@ -40,6 +40,7 @@ function createTestContext() {
     user: undefined as any,
     isAdmin: false,
     plans: [] as any[],
+    resolvePlatformAdminStatus: vi.fn<() => Promise<boolean>>(),
   }
 
   const organizationStore = {
@@ -98,6 +99,13 @@ function createTestContext() {
   const mockGetPlans = vi.fn<() => Promise<any[]>>(async () => [])
   const mockIsPlatformAdmin = vi.fn(async () => false)
   const mockSetWebsitePaidUserCookie = vi.fn()
+  mainStore.resolvePlatformAdminStatus.mockImplementation(async () => {
+    const status = await mockIsPlatformAdmin()
+    mainStore.isAdmin = status
+    if (status)
+      mockSetWebsitePaidUserCookie(true)
+    return status
+  })
   const mockFetch = vi.fn<(...args: unknown[]) => Promise<MockFetchResponse>>(async () => ({
     ok: true,
     json: async () => ({ success: true }),
@@ -281,8 +289,7 @@ describe('auth guard SSO provisioning', () => {
       )
 
       expect(next).toHaveBeenCalledWith({
-        path: '/onboarding/app',
-        query: { resume: 'com.test.pending-onboarding', step: 'setup' },
+        path: '/app/com.test.pending-onboarding/getting-started',
       })
     })
   })
@@ -316,8 +323,7 @@ describe('auth guard SSO provisioning', () => {
       )
 
       expect(next).toHaveBeenCalledWith({
-        path: '/onboarding/app',
-        query: { resume: 'com.test.pending-onboarding', step: 'setup' },
+        path: '/app/com.test.pending-onboarding/getting-started',
       })
       expect(context.mockGetPlans).toHaveBeenCalledOnce()
       expect(context.mainStore.plans).toEqual(loadedPlans)
@@ -351,8 +357,7 @@ describe('auth guard SSO provisioning', () => {
       )
 
       expect(next).toHaveBeenCalledWith({
-        path: '/onboarding/app',
-        query: { resume: 'com.test.pending-onboarding', step: 'setup' },
+        path: '/app/com.test.pending-onboarding/getting-started',
       })
       expect(context.mockSendEvent).toHaveBeenCalledOnce()
       expect(context.mockSendEvent).toHaveBeenCalledWith(expect.objectContaining({
@@ -458,6 +463,84 @@ describe('auth guard SSO provisioning', () => {
           to: '/dashboard',
         },
       })
+    })
+  })
+
+  it.concurrent.each([
+    { cachedAuth: false, result: 'admin' },
+    { cachedAuth: true, result: 'admin' },
+    { cachedAuth: false, result: 'member' },
+    { cachedAuth: true, result: 'member' },
+    { cachedAuth: false, result: 'error' },
+    { cachedAuth: true, result: 'error' },
+  ])('resolves $result access without organizations (cached auth: $cachedAuth)', async ({ cachedAuth, result }) => {
+    await withTestContext(async (context) => {
+      const user = {
+        id: 'user-123',
+        email: 'user@managed.test',
+        email_confirmed_at: '2026-04-15T10:00:00.000Z',
+        app_metadata: { provider: 'email', providers: ['email'] },
+      }
+      context.mockGetSession.mockResolvedValue({
+        data: { session: { access_token: 'token-123', user } },
+      })
+      if (cachedAuth)
+        context.mainStore.auth = user
+      context.mainStore.isAdmin = true
+      context.organizationStore.fetchOrganizations = vi.fn(async () => {
+        context.organizationStore.organizations = []
+        context.organizationStore.hasOrganizations = false
+      })
+      if (result === 'error')
+        context.mockIsPlatformAdmin.mockRejectedValue(new Error('Admin lookup failed'))
+      else
+        context.mockIsPlatformAdmin.mockResolvedValue(result === 'admin')
+
+      const guard = await getGuard()
+      const next = vi.fn()
+      await guard(
+        { path: '/dashboard', fullPath: '/dashboard', meta: { middleware: 'auth' }, query: {} },
+        { path: '/login', fullPath: '/login', meta: {}, query: {} },
+        next,
+      )
+
+      expect(context.mockIsPlatformAdmin).toHaveBeenCalledOnce()
+      expect(context.mainStore.isAdmin).toBe(result === 'admin')
+      if (result === 'admin') {
+        expect(next).toHaveBeenCalledWith()
+        expect(context.mockSetWebsitePaidUserCookie).toHaveBeenCalledWith(true)
+      }
+      else {
+        expect(next).toHaveBeenCalledWith({ path: '/onboarding/app', query: { to: '/dashboard' } })
+        expect(context.mockSetWebsitePaidUserCookie).not.toHaveBeenCalled()
+      }
+    })
+  })
+
+  it.concurrent('resolves platform-admin access for users with organizations', async () => {
+    await withTestContext(async (context) => {
+      const user = {
+        id: 'user-123',
+        email: 'user@managed.test',
+        email_confirmed_at: '2026-04-15T10:00:00.000Z',
+        app_metadata: { provider: 'email', providers: ['email'] },
+      }
+      context.mainStore.auth = user
+      context.organizationStore.organizations = [{ gid: 'org-123', role: 'read' }]
+      context.organizationStore.hasOrganizations = true
+      context.mockIsPlatformAdmin.mockResolvedValue(true)
+
+      const guard = await getGuard()
+      const next = vi.fn()
+      await guard(
+        { path: '/dashboard', fullPath: '/dashboard', meta: { middleware: 'auth' }, query: {} },
+        { path: '/dashboard', fullPath: '/dashboard', meta: { middleware: 'auth' }, query: {} },
+        next,
+      )
+
+      expect(context.mockIsPlatformAdmin).toHaveBeenCalledOnce()
+      expect(context.mainStore.isAdmin).toBe(true)
+      expect(next).toHaveBeenCalledWith()
     })
   })
 

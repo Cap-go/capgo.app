@@ -38,6 +38,7 @@ Use this skill for OTA update workflows in Capgo Cloud.
 
 - Alias: `u`
 - Example: `npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel production,beta`
+- Cordova example: `npx @capgo/cli@latest bundle upload com.example.app --mode cordova --path www --channel production`
 - Progressive rollout example: `npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel production --rollout 10`
 - Advance an existing rollout: `npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel production --rollout-advance`
 - Key behavior:
@@ -52,6 +53,7 @@ Use this skill for OTA update workflows in Capgo Cloud.
   - Use `--qr-preview` to print a terminal QR code for the uploaded bundle after a successful upload. App preview must be enabled first.
   - Use `--send-update-notification` to queue native update-check notifications for channels whose linked bundle changed. Native notifications and push update notifications must be enabled for the app.
 - Important options:
+  - `--mode <framework>` (`cordova` for Cordova apps without `capacitor.config`; webDir defaults to `www`)
   - `-p, --path <path>`
   - `-c, --channel <channel[,channel...]>`
   - `--rollout <percentage>`
@@ -82,7 +84,7 @@ Use this skill for OTA update workflows in Capgo Cloud.
   - `--dry-upload`
   - `--package-json <packageJson>`
   - `--node-modules <nodeModules>`
-  - `--encrypt-partial`
+  - `--encrypt-delta`
   - `--delete-linked-bundle-on-upload`
   - `--no-brotli-patterns <patterns>`
   - `--disable-brotli`
@@ -92,7 +94,7 @@ Use this skill for OTA update workflows in Capgo Cloud.
   - `--send-update-notification`
   - S3 options: `--s3-region`, `--s3-apikey`, `--s3-apisecret`, `--s3-endpoint`, `--s3-bucket-name`, `--s3-port`, `--no-s3-ssl`
   - Signing options: `--key-v2`, `--key-data-v2`, `--bundle-url`, `--no-key`, `--display-iv-session`
-  - Deprecated options still supported: `--multipart`, `--partial`, `--partial-only`
+  - Deprecated options still supported: `--multipart`, `--partial`, `--partial-only`, `--encrypt-partial`
 
 ### `bundle compatibility [appId]`
 
@@ -187,6 +189,8 @@ Use this skill for OTA update workflows in Capgo Cloud.
 
 - Alias: `l`
 - Example: `npx @capgo/cli@latest channel list com.example.app`
+- Requires a valid API key with `app.read` and `app.read_channels` permission for the app. Permission failures identify the required permission.
+- Displays Yes/No settings and marks channels without a bundle as Unlinked. Narrow terminals show each channel as a Setting/Value table.
 
 ### `channel delete [channelId] [appId]`
 
@@ -202,6 +206,19 @@ Use this skill for OTA update workflows in Capgo Cloud.
 - Key options:
   - `-c, --channel <channel>`
   - `--quiet`
+
+### `channel promote [fromChannel] [toChannel] [appId]`
+
+- Example: `npx @capgo/cli@latest channel promote staging production com.example.app`
+- Use to ship what a channel already serves (for example a validated `staging` or `preprod` bundle) to another channel without looking up the bundle version.
+- Notes:
+  - Copies only the stable bundle linked to the source channel. Channel settings are not copied.
+  - Like `channel set --bundle`, a new stable bundle stops any rollout in progress on the target channel; the CLI warns when that happens.
+  - Runs the same native compatibility and RBAC checks as `channel set --bundle` on the target channel.
+- Key options:
+  - `--ignore-metadata-check`
+  - `--accept-incompatible` (cannot be combined with `--ignore-metadata-check`)
+  - `--send-update-notification`
 
 ### `channel set [channelId] [appId]`
 

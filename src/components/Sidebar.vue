@@ -18,12 +18,15 @@ import IconScanQrCode from '~icons/lucide/scan-qr-code'
 import IconVenetianMask from '~icons/lucide/venetian-mask'
 import IconApiKey from '~icons/mdi/shield-key'
 import IconAppStore from '~icons/simple-icons/appstore'
+import { ADMIN_DASHBOARD_URL } from '~/constants/adminDashboard'
 import { logAsUser } from '~/services/logAs'
 import { isSpoofed, unspoofUser } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
+import { useOrganizationStore } from '~/stores/organization'
 import {
   allowOnboardingDashboardExploration,
+  getAppGettingStartedPath,
   getOnboardingResumeAppId,
   ONBOARDING_DASHBOARD_EXPLORED_EVENT,
   shouldConfirmOnboardingDashboardExploration,
@@ -38,6 +41,7 @@ const props = defineProps<{
 
 const emit = defineEmits(['closeSidebar'])
 const main = useMainStore()
+const organizationStore = useOrganizationStore()
 const isRail = computed(() => !!props.sidebarCollapsed)
 const dialogStore = useDialogV2Store()
 const router = useRouter()
@@ -68,6 +72,7 @@ async function openLogAsDialog() {
       },
       {
         text: t('log-as'),
+        role: 'primary',
         handler: () => {
           identifier = logAsInput.value
         },
@@ -147,11 +152,13 @@ async function openTab(tab: Tab) {
     return
 
   const onboardingUserId = main.user?.id ?? main.auth?.id
-  const resumeQueryAppId = typeof route.query.resume === 'string' ? route.query.resume : null
-  const isPendingOnboardingResume = route.path === '/app/new'
-    && !!resumeQueryAppId
+  const gettingStartedAppId = route.name === '/app/[app].getting-started' && typeof route.params.app === 'string'
+    ? route.params.app
+    : null
+  const isPendingOnboardingResume = !!gettingStartedAppId
+    && organizationStore.getAppByAppId(gettingStartedAppId)?.need_onboarding === true
   const onboardingResumeAppId = isPendingOnboardingResume
-    ? resumeQueryAppId
+    ? gettingStartedAppId
     : getOnboardingResumeAppId(onboardingUserId)
   const requiresOnboardingExplorationConfirmation = shouldConfirmOnboardingDashboardExploration({
     destination: tab.key,
@@ -175,8 +182,8 @@ async function openTab(tab: Tab) {
     const wasCanceled = await dialogStore.onDialogDismiss()
     if (wasCanceled)
       return
-    if (dialogStore.lastButtonRole === 'secondary') {
-      return router.push({ path: '/app/new', query: { resume: onboardingResumeAppId } })
+    if (dialogStore.lastButtonRole === 'secondary' && onboardingResumeAppId) {
+      return router.push(getAppGettingStartedPath(onboardingResumeAppId))
     }
     if (dialogStore.lastButtonRole !== 'primary')
       return
@@ -266,7 +273,9 @@ const tabs = computed<Tab[]>(() => {
     baseTabs.splice(2, 0, {
       label: 'admin-dashboard',
       icon: IconShield,
-      key: '/admin/dashboard',
+      key: '#admin-dashboard',
+      onClick: () => window.open(ADMIN_DASHBOARD_URL, '_blank', 'noopener,noreferrer'),
+      redirect: true,
     })
   }
 
@@ -294,6 +303,13 @@ const tabs = computed<Tab[]>(() => {
 
   return baseTabs
 })
+
+// Group destinations the way capgo.app groups products: where you work first,
+// then help and community links that open outside the console.
+const navGroups = computed(() => [
+  { key: 'workspace', label: 'section-group-workspace', tabs: tabs.value.filter(tab => !tab.redirect) },
+  { key: 'help', label: 'sidebar-group-help', tabs: tabs.value.filter(tab => tab.redirect) },
+].filter(group => group.tabs.length))
 
 function tabLabel(tab: Tab) {
   if (tab.key === '/app/modules_test')
@@ -334,16 +350,19 @@ function tabLabel(tab: Tab) {
         <!-- Sidebar header -->
         <div class="flex border-b shrink-0 border-slate-800 lg:border-slate-700 py-4">
           <router-link
-            class="flex items-center rounded-lg cursor-pointer focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
+            class="group flex items-center rounded-lg cursor-pointer focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
             to="/apps"
             aria-label="Capgo - Go to dashboard"
           >
             <span class="flex w-12 h-11 shrink-0 items-center justify-center">
-              <img src="/capgo.webp" alt="Capgo logo" class="w-8 h-8 shrink-0">
+              <img src="/capgo.webp" alt="Capgo logo" class="w-8 h-8 shrink-0 transition-transform duration-300 ease-[cubic-bezier(0.3,1.6,0.5,1)] group-hover:rotate-90 group-hover:scale-105 motion-reduce:transition-none">
             </span>
-            <span class="text-xl font-semibold whitespace-nowrap font-prompt text-slate-200 hover:text-white lg:text-slate-200 lg:hover:text-white">
-              Capgo
-            </span>
+            <!-- The rail is 48px wide: hide the wordmark so its first letter does not peek past the logo. -->
+            <CapgoWordtype
+              class="-ml-1 h-6 w-auto shrink-0 text-slate-200 transition-[opacity,translate,color] duration-300 ease-in-out group-hover:text-white motion-reduce:transition-none"
+              :class="isRail ? 'pointer-events-none -translate-x-3 opacity-0' : 'translate-x-0 opacity-100'"
+              :aria-hidden="isRail"
+            />
           </router-link>
         </div>
 
@@ -354,18 +373,23 @@ function tabLabel(tab: Tab) {
           <dropdown-organization v-if="main.user" :compact="isRail" />
         </div>
 
-        <!-- Navigation -->
-        <div class="flex-1 space-y-4 overflow-y-auto py-2">
-          <div>
-            <h3 class="pl-12 pr-3 mb-3 text-xs font-semibold uppercase whitespace-nowrap text-slate-500 lg:mb-4 lg:tracking-wider lg:text-slate-500">
-              {{ t('pages') }}
+        <!-- Navigation: product areas first, help and community links after -->
+        <nav class="flex-1 space-y-5 overflow-y-auto py-2" :aria-label="t('pages')">
+          <div v-for="group in navGroups" :key="group.key" :data-test="`sidebar-group-${group.key}`">
+            <h3
+              class="pl-12 pr-3 mb-2 font-mono text-[11px] font-semibold tracking-widest uppercase whitespace-nowrap text-slate-500 transition-opacity duration-300"
+              :class="isRail ? 'opacity-0' : 'opacity-100'"
+            >
+              {{ t(group.label) }}
             </h3>
-            <ul class="space-y-1 lg:space-y-2">
-              <li v-for="tab, i in tabs" :key="i">
+            <ul class="space-y-1">
+              <li v-for="tab, i in group.tabs" :key="i">
                 <button
                   type="button"
-                  class="d-btn d-btn-ghost flex justify-start items-center w-full h-auto min-h-11 p-0 rounded-md border-none shadow-none transition-colors duration-150 cursor-pointer lg:rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-200 lg:text-slate-200 lg:hover:bg-slate-700/50 hover:bg-slate-700/50 focus:ring-offset-slate-800"
+                  class="relative d-btn d-btn-ghost flex justify-start items-center w-full h-auto p-0 rounded-md border-none shadow-none transition-colors duration-150 cursor-pointer lg:rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500 text-slate-200 lg:text-slate-200 lg:hover:bg-slate-700/50 hover:bg-slate-700/50"
                   :class="{
+                    'min-h-11': !tab.redirect,
+                    'min-h-10': tab.redirect,
                     'hover:bg-slate-700/50 lg:hover:bg-slate-700/50': !isTabActive(tab.key),
                     'bg-slate-700 text-white lg:bg-slate-700 lg:text-white': isTabActive(tab.key),
                     'cursor-default': isTabActive(tab.key),
@@ -377,15 +401,20 @@ function tabLabel(tab: Tab) {
                   :aria-current="isTabActive(tab.key) ? 'page' : undefined"
                   @click="openTab(tab)"
                 >
-                  <span class="flex w-12 h-11 shrink-0 items-center justify-center">
+                  <span
+                    v-if="isTabActive(tab.key)"
+                    class="absolute left-1 w-1 h-5 -translate-y-1/2 rounded-full top-1/2 bg-azure-500"
+                    aria-hidden="true"
+                  />
+                  <span class="flex w-12 h-10 shrink-0 items-center justify-center">
                     <Spinner v-if="isSpoofTab(tab) && spoofLoading" size="w-5 h-5" />
                     <component :is="tab.icon" v-else class="w-5 h-5 transition-colors duration-150 shrink-0" :class="{ 'text-blue-500 lg:text-blue-500': isTabActive(tab.key), 'text-slate-400 group-hover:text-slate-300 lg:text-slate-400 lg:group-hover:text-slate-300': !isTabActive(tab.key) }" />
                   </span>
                   <span
-                    class="flex items-center pr-3 text-sm font-medium capitalize whitespace-nowrap"
+                    class="flex items-center pr-3 font-medium capitalize whitespace-nowrap"
                     :class="[
                       isTabActive(tab.key) ? 'text-blue-500 lg:text-blue-500' : 'text-slate-400 group-hover:text-slate-300 lg:text-slate-400 lg:group-hover:text-slate-300',
-                      tab.redirect ? 'underline' : '',
+                      tab.redirect ? 'text-[13px]' : 'text-sm',
                     ]"
                   >
                     {{ isSpoofTab(tab) && spoofLoading ? t('loading') : tabLabel(tab) }}
@@ -398,7 +427,7 @@ function tabLabel(tab: Tab) {
               </li>
             </ul>
           </div>
-        </div>
+        </nav>
 
         <!-- User menu -->
         <div class="mt-auto shrink-0 pt-2 lg:border-t lg:border-slate-700 lg:mt-0">

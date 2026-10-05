@@ -1,5 +1,6 @@
+import type { LogMetadata } from '~/services/logTableDisplay'
 import { describe, expect, it } from 'vitest'
-import { logRowDisplayMetadata, parseLogVersionName } from '~/services/logTableDisplay'
+import { extractLogOriginalMessage, logRowDisplayMetadata, parseLogVersionName } from '~/services/logTableDisplay'
 
 describe('parseLogVersionName', () => {
   it.concurrent('keeps a plain version unchanged', () => {
@@ -46,5 +47,29 @@ describe('logRowDisplayMetadata', () => {
       error: 'timeout',
       filename: 'assets/main.js',
     })
+  })
+})
+
+describe('extractLogOriginalMessage', () => {
+  it.concurrent('prefers message over other metadata fields', () => {
+    expect(extractLogOriginalMessage({
+      error_type: 'javascript_error',
+      message: 'Uncaught ReferenceError: foo is not defined',
+      href: 'capacitor://localhost/',
+    })).toBe('Uncaught ReferenceError: foo is not defined')
+  })
+
+  it.concurrent('falls back to error when message is absent', () => {
+    expect(extractLogOriginalMessage({ error: 'network timeout' })).toBe('network timeout')
+  })
+
+  it.concurrent('returns null when metadata has no known error keys', () => {
+    expect(extractLogOriginalMessage({ source: 'notify_app_ready' })).toBeNull()
+  })
+
+  it.concurrent('ignores non-string message and error values', () => {
+    expect(extractLogOriginalMessage({ message: { text: 'boom' } } as unknown as LogMetadata)).toBeNull()
+    expect(extractLogOriginalMessage({ error: 404 } as unknown as LogMetadata)).toBeNull()
+    expect(extractLogOriginalMessage({ reason: 'ok', error: 404 } as unknown as LogMetadata)).toBe('ok')
   })
 })

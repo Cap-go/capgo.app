@@ -1,9 +1,9 @@
 import type { ExecutionContext, ScheduledController } from '@cloudflare/workers-types'
+import type { Context } from 'hono'
 import type { Bindings } from '../../supabase/functions/_backend/utils/cloudflare.ts'
+import { createMcpApp } from '../../supabase/functions/_backend/mcp/index.ts'
 import { app as accept_invitation } from '../../supabase/functions/_backend/private/accept_invitation.ts'
-import { app as admin_credits } from '../../supabase/functions/_backend/private/admin_credits.ts'
-import { app as admin_org_support_channel } from '../../supabase/functions/_backend/private/admin_org_support_channel.ts'
-import { app as admin_stats } from '../../supabase/functions/_backend/private/admin_stats.ts'
+import { app as bundle_install_stats } from '../../supabase/functions/_backend/private/bundle_install_stats.ts'
 import { app as channel_device } from '../../supabase/functions/_backend/private/channel_device.ts'
 import { app as channel_stats } from '../../supabase/functions/_backend/private/channel_stats.ts'
 import { app as config } from '../../supabase/functions/_backend/private/config.ts'
@@ -14,18 +14,26 @@ import { app as deleted_failed_version } from '../../supabase/functions/_backend
 import { app as devices_priv } from '../../supabase/functions/_backend/private/devices.ts'
 import { app as emailPreferences } from '../../supabase/functions/_backend/private/email_preferences.ts'
 import { app as events } from '../../supabase/functions/_backend/private/events.ts'
+import { app as finalize_bundle_upload } from '../../supabase/functions/_backend/private/finalize_bundle_upload.ts'
 import { app as groups } from '../../supabase/functions/_backend/private/groups.ts'
 import { app as invite_existing_user_to_org } from '../../supabase/functions/_backend/private/invite_existing_user_to_org.ts'
 import { app as invite_new_user_to_org } from '../../supabase/functions/_backend/private/invite_new_user_to_org.ts'
 import { app as latency } from '../../supabase/functions/_backend/private/latency.ts'
 import { app as log_as } from '../../supabase/functions/_backend/private/log_as.ts'
+import { app as mcp_oauth } from '../../supabase/functions/_backend/private/mcp_oauth.ts'
 import { app as native_observe_stats } from '../../supabase/functions/_backend/private/native_observe_stats.ts'
 import { app as observe } from '../../supabase/functions/_backend/private/observe.ts'
+import { app as onboarding_ab_tests } from '../../supabase/functions/_backend/private/onboarding_ab_tests.ts'
+import { app as onboarding_progress } from '../../supabase/functions/_backend/private/onboarding_progress.ts'
 import { app as org_notification_stats } from '../../supabase/functions/_backend/private/org_notification_stats.ts'
+import { app as organization_invitation } from '../../supabase/functions/_backend/private/organization_invitation.ts'
 import { app as plans } from '../../supabase/functions/_backend/private/plans.ts'
 import { app as publicStats } from '../../supabase/functions/_backend/private/public_stats.ts'
+import { app as release_live } from '../../supabase/functions/_backend/private/release_live.ts'
 import { app as replay } from '../../supabase/functions/_backend/private/replay.ts'
+import { app as request_manifest_upload } from '../../supabase/functions/_backend/private/request_manifest_upload.ts'
 import { app as role_bindings } from '../../supabase/functions/_backend/private/role_bindings.ts'
+// Manifest finalization validates size receipts issued by the files worker.
 import { app as set_manifest } from '../../supabase/functions/_backend/private/set_manifest.ts'
 import { app as set_org_email } from '../../supabase/functions/_backend/private/set_org_email.ts'
 import { app as sso_check_domain } from '../../supabase/functions/_backend/private/sso/check-domain.ts'
@@ -40,7 +48,6 @@ import { app as stats_priv } from '../../supabase/functions/_backend/private/sta
 import { app as storeTop } from '../../supabase/functions/_backend/private/store_top.ts'
 import { app as stripe_checkout } from '../../supabase/functions/_backend/private/stripe_checkout.ts'
 import { app as stripe_portal } from '../../supabase/functions/_backend/private/stripe_portal.ts'
-import { app as bundle_install_stats } from '../../supabase/functions/_backend/private/bundle_install_stats.ts'
 import { app as update_delivery_stats } from '../../supabase/functions/_backend/private/update_delivery_stats.ts'
 import { app as validate_password_compliance } from '../../supabase/functions/_backend/private/validate_password_compliance.ts'
 import { app as verify_email_otp } from '../../supabase/functions/_backend/private/verify_email_otp.ts'
@@ -62,10 +69,12 @@ import { app as statistics } from '../../supabase/functions/_backend/public/stat
 import { app as translation } from '../../supabase/functions/_backend/public/translation.ts'
 import { app as webhooks } from '../../supabase/functions/_backend/public/webhooks/index.ts'
 import { app as credit_usage_alerts } from '../../supabase/functions/_backend/triggers/credit_usage_alerts.ts'
+import { app as credit_usage_posthog } from '../../supabase/functions/_backend/triggers/credit_usage_posthog.ts'
 import { app as cron_app_fame } from '../../supabase/functions/_backend/triggers/cron_app_fame.ts'
 import { app as cron_clean_orphan_images } from '../../supabase/functions/_backend/triggers/cron_clean_orphan_images.ts'
 import { app as cron_clear_versions } from '../../supabase/functions/_backend/triggers/cron_clear_versions.ts'
 import { app as cron_email } from '../../supabase/functions/_backend/triggers/cron_email.ts'
+import { app as cron_onboarding_refresh_apps } from '../../supabase/functions/_backend/triggers/cron_onboarding_refresh_apps.ts'
 import { app as cron_reconcile_build_status } from '../../supabase/functions/_backend/triggers/cron_reconcile_build_status.ts'
 import { app as cron_rollout_auto_pause } from '../../supabase/functions/_backend/triggers/cron_rollout_auto_pause.ts'
 import { app as cron_stat_app } from '../../supabase/functions/_backend/triggers/cron_stat_app.ts'
@@ -90,14 +99,25 @@ import { app as on_version_delete } from '../../supabase/functions/_backend/trig
 import { app as on_version_update } from '../../supabase/functions/_backend/triggers/on_version_update.ts'
 import { app as pluginNotifications } from '../../supabase/functions/_backend/triggers/plugin_notifications.ts'
 import { app as queue_consumer } from '../../supabase/functions/_backend/triggers/queue_consumer.ts'
-import { app as send_email } from '../../supabase/functions/_backend/triggers/send_email.ts'
+import { app as send_email } from './triggers/send_email.ts'
 import { app as stripe_event } from '../../supabase/functions/_backend/triggers/stripe_event.ts'
+import { app as updates_cache_purge } from '../../supabase/functions/_backend/triggers/updates_cache_purge.ts'
 import { app as webhook_delivery } from '../../supabase/functions/_backend/triggers/webhook_delivery.ts'
 import { app as webhook_dispatcher } from '../../supabase/functions/_backend/triggers/webhook_dispatcher.ts'
 import { BRES, createAllCatch, createHono } from '../../supabase/functions/_backend/utils/hono.ts'
 import { processNativeNotificationQueueBatch } from '../../supabase/functions/_backend/utils/nativeNotificationSender.ts'
 import { flushQueuedPluginNotifications } from '../../supabase/functions/_backend/utils/plugin_notification_flush.ts'
 import { version } from '../../supabase/functions/_backend/utils/version.ts'
+
+function getExecutionContext(c: Context): Context['executionCtx'] | undefined {
+  try {
+    return c.executionCtx
+  }
+  catch {
+    // Unit tests call app.fetch without an execution context.
+    return undefined
+  }
+}
 
 // Public API
 const functionName = 'api'
@@ -120,8 +140,11 @@ app.route('/queue_health', queue_health)
 app.route('/check_cpu_usage', check_cpu_usage)
 app.route('/translation', translation)
 app.route('/plugin_regions', pluginRegions)
+// Hosted MCP server (POST /mcp) + OAuth discovery/endpoints. Tools replay public API requests
+// through this same worker with the caller's API key, so RBAC and rate limits apply unchanged.
+app.route('/', createMcpApp((request, c) => app.fetch(request, c.env, getExecutionContext(c))))
 
-// Private API
+// Private routes are bundled into this Cloudflare API worker at deploy time.
 const functionNamePrivate = 'private'
 const appPrivate = createHono(functionNamePrivate, version)
 appPrivate.route('/plans', plans)
@@ -135,29 +158,33 @@ appPrivate.route('/email_preferences', emailPreferences)
 appPrivate.route('/devices', devices_priv)
 appPrivate.route('/channel_device', channel_device)
 appPrivate.route('/log_as', log_as)
+appPrivate.route('/mcp_oauth', mcp_oauth)
 appPrivate.route('/invite_new_user_to_org', invite_new_user_to_org)
 appPrivate.route('/invite_existing_user_to_org', invite_existing_user_to_org)
 appPrivate.route('/set_org_email', set_org_email)
 appPrivate.route('/validate_password_compliance', validate_password_compliance)
-appPrivate.route('/admin_credits', admin_credits)
-appPrivate.route('/admin_org_support_channel', admin_org_support_channel)
-appPrivate.route('/admin_stats', admin_stats)
 appPrivate.route('/stats', stats_priv)
 appPrivate.route('/channel_stats', channel_stats)
 appPrivate.route('/native_observe_stats', native_observe_stats)
 appPrivate.route('/observe', observe)
+appPrivate.route('/onboarding_ab_tests', onboarding_ab_tests)
+appPrivate.route('/onboarding_progress', onboarding_progress)
 appPrivate.route('/org_notification_stats', org_notification_stats)
+appPrivate.route('/organization_invitation', organization_invitation)
 appPrivate.route('/update_delivery_stats', update_delivery_stats)
 appPrivate.route('/bundle_install_stats', bundle_install_stats)
+appPrivate.route('/release_live', release_live)
 appPrivate.route('/stripe_checkout', stripe_checkout)
 appPrivate.route('/stripe_portal', stripe_portal)
 appPrivate.route('/verify_email_otp', verify_email_otp)
 appPrivate.route('/delete_failed_version', deleted_failed_version)
+appPrivate.route('/request_manifest_upload', request_manifest_upload)
 appPrivate.route('/set_manifest', set_manifest)
 appPrivate.route('/create_device', create_device)
 appPrivate.route('/latency', latency)
 appPrivate.route('/replay', replay)
 appPrivate.route('/events', events)
+appPrivate.route('/finalize_bundle_upload', finalize_bundle_upload)
 appPrivate.route('/groups', groups)
 appPrivate.route('/role_bindings', role_bindings)
 appPrivate.route('/website_preview', website_preview)
@@ -180,6 +207,7 @@ appTriggers.route('/cron_clear_versions', cron_clear_versions)
 appTriggers.route('/cron_clean_orphan_images', cron_clean_orphan_images)
 appTriggers.route('/cron_reconcile_build_status', cron_reconcile_build_status)
 appTriggers.route('/credit_usage_alerts', credit_usage_alerts)
+appTriggers.route('/credit_usage_posthog', credit_usage_posthog)
 appTriggers.route('/global_stats', global_stats)
 appTriggers.route('/global_stats_core', globalStatsShardApps.core)
 appTriggers.route('/global_stats_usage', globalStatsLegacyUsageApp)
@@ -215,11 +243,14 @@ appTriggers.route('/on_version_delete', on_version_delete)
 appTriggers.route('/on_manifest_create', on_manifest_create)
 appTriggers.route('/on_deploy_history_create', on_deploy_history_create)
 appTriggers.route('/stripe_event', stripe_event)
+appTriggers.route('/updates_cache_purge', updates_cache_purge)
 appTriggers.route('/on_organization_create', on_organization_create)
 appTriggers.route('/cron_stat_app', cron_stat_app)
 appTriggers.route('/cron_stat_org', cron_stat_org)
 appTriggers.route('/cron_sync_sub', cron_sync_sub)
 appTriggers.route('/cron_rollout_auto_pause', cron_rollout_auto_pause)
+// The queue dispatcher sends onboarding refresh batches to this Cloudflare route.
+appTriggers.route('/cron_onboarding_refresh_apps', cron_onboarding_refresh_apps)
 appTriggers.route('/queue_consumer', queue_consumer)
 appTriggers.route('/send_email', send_email)
 appTriggers.route('/webhook_delivery', webhook_delivery)

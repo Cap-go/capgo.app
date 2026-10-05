@@ -40,7 +40,7 @@ import { uploadSupportLogs } from '../support/support-upload'
 import { canPromptInteractively, consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from './app-conflict'
 import { loginInitInBrowser, shouldStartInitBrowserLogin } from './browser-login'
-import { isChannelAlreadyExistsError } from './channel-conflict'
+import { selectOnboardingChannel } from './channel-selection'
 import { createMissingExecutableError, getAvailablePackageManagers, getMissingPackageManagerExecutable, getPackageManagerInfo, preparePackageManagerCommandEnvironment, probeExecutable, probePackageManagerCommand, resolveExecutableProbeError, waitForCommandResult } from './command-execution'
 import { reportInitOnboardingStep } from './onboarding-report'
 import { cancel as pCancel, confirm as pConfirm, intro as pIntro, isCancel as pIsCancel, log as pLog, outro as pOutro, select as pSelect, spinner as pSpinner, text as pText } from './prompts'
@@ -48,6 +48,7 @@ import { finishActiveCliReplay, getActiveCliReplaySessionId, isCliTelemetryDisab
 import { appendInitStreamingLine, clearInitStreamingOutput, INIT_CANCEL, pushInitLog, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus, waitForInitLogSkip, waitForInitStreamingContinue } from './runtime'
 import { createInitTelemetry, mergeInitProgressTelemetry, parseInitProgressTelemetry } from './telemetry'
 import { formatInitResumeMessage, initOnboardingSteps, renderInitOnboardingComplete, renderInitOnboardingFrame, renderInitOnboardingWelcome } from './ui'
+import { formatBundleUploadRunnerCommand, getBundleUploadFailureRecoveryOptions, mergeMonorepoRootUploadPaths, MONOREPO_ROOT_PATHS_NOTE } from './upload-recovery'
 import { CAPACITOR_SPLASH_SCREEN_PACKAGE, CAPGO_UPDATER_PACKAGE, getSplashScreenInstallState, getUpdaterInstallState } from './updater'
 
 interface SuperOptions extends Options {
@@ -155,6 +156,7 @@ let globalMainFilePath: string | undefined
 
 let tmpObject: tmp.FileResult['name'] | undefined
 let globalPathToPackageJson: string | undefined
+let globalUploadPackageJsonPath: string | undefined
 let globalNodeModulesPath: string | undefined
 let globalChannelName = defaultChannel
 let globalPlatform: 'ios' | 'android' = 'ios'
@@ -372,10 +374,11 @@ export function getGitRepoStatus(startDir = cwd()): GitRepoStatus {
   }
 }
 
-export function getInitUpdaterPluginConfig(appId: string, directInstall: boolean) {
+export function getInitUpdaterPluginConfig(appId: string, directInstall: boolean, channelName?: string) {
   return {
     version: initNativeBundleVersion,
     appId,
+    ...(channelName ? { defaultChannel: channelName } : {}),
     autoUpdate: directInstall ? 'always' : 'atBackground',
     ...(directInstall
       ? {
@@ -1322,6 +1325,7 @@ function markStepDone(step: number, pathToPackageJson?: string, channelName?: st
       encryptionSummary: globalEncryptionSummary,
       autoTestChange: globalAutoTestChange,
       nodeModulesPath: globalNodeModulesPath,
+      uploadPackageJsonPath: globalUploadPackageJsonPath,
     }
     writeFileSync(getTmpObjectPath(), JSON.stringify(mergeInitProgressTelemetry(progress, activeInitTelemetry?.getProgressMetadata())))
     if (pathToPackageJson) {
@@ -1428,6 +1432,7 @@ async function tryResumeOnboarding(
       configLoadDir,
       mainFilePath,
       nodeModulesPath,
+      uploadPackageJsonPath,
       channelName,
       platform,
       delta,
@@ -1513,6 +1518,9 @@ async function tryResumeOnboarding(
       setConfigWriteTarget(globalCapacitorConfigPath)
       if (typeof nodeModulesPath === 'string' && nodeModulesPath.length > 0) {
         globalNodeModulesPath = nodeModulesPath
+      }
+      if (typeof uploadPackageJsonPath === 'string' && uploadPackageJsonPath.length > 0) {
+        globalUploadPackageJsonPath = uploadPackageJsonPath
       }
       if (channelName) {
         globalChannelName = channelName
@@ -1607,6 +1615,7 @@ async function tryResumeOnboarding(
     setInitEncryptionSummary(undefined)
     globalAutoTestChange = undefined
     globalNodeModulesPath = undefined
+    globalUploadPackageJsonPath = undefined
     return undefined
   }
   catch (err) {
@@ -1619,6 +1628,7 @@ async function tryResumeOnboarding(
     setInitEncryptionSummary(undefined)
     globalAutoTestChange = undefined
     globalNodeModulesPath = undefined
+    globalUploadPackageJsonPath = undefined
     return undefined
   }
 }
@@ -1626,6 +1636,7 @@ async function tryResumeOnboarding(
 function cleanupStepsDone() {
   globalAutoTestChange = undefined
   globalNodeModulesPath = undefined
+  globalUploadPackageJsonPath = undefined
   if (!tmpObject) {
     return
   }
@@ -1728,6 +1739,48 @@ async function askForExistingDirectoryPath(orgId: string, apikey: string, messag
   }
 
   return (selectedPath as string).trim()
+}
+
+async function askForExistingPackageJsonPath(orgId: string, apikey: string, message: string, placeholder?: string): Promise<string> {
+  const selectedPath = await pText({
+    message,
+    placeholder,
+    validate: validatePackageJsonPath,
+  })
+
+  if (pIsCancel(selectedPath)) {
+    await cancelCommand(selectedPath, orgId, apikey)
+  }
+
+  return (selectedPath as string).trim()
+}
+
+async function promptForMonorepoRootUploadPaths(
+  orgId: string,
+  apikey: string,
+  currentPackageJson?: string,
+  currentNodeModules?: string,
+): Promise<{ packageJson?: string, nodeModules?: string }> {
+  pLog.info(MONOREPO_ROOT_PATHS_NOTE)
+  const rootDir = findRoot(cwd())
+  const packageJson = await askForExistingPackageJsonPath(
+    orgId,
+    apikey,
+    'Monorepo root package.json path:',
+    join(rootDir, PACKNAME),
+  )
+  const nodeModules = await askForExistingDirectoryPath(
+    orgId,
+    apikey,
+    'Monorepo root node_modules path:',
+    join(rootDir, 'node_modules'),
+  )
+  const promptCwd = cwd()
+  return mergeMonorepoRootUploadPaths(
+    { packageJson, nodeModules },
+    { packageJson: currentPackageJson, nodeModules: currentNodeModules },
+    promptCwd,
+  )
 }
 
 /**
@@ -2548,7 +2601,7 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
   }
 }
 
-async function addChannelStep(orgId: string, apikey: string, appId: string) {
+async function addChannelStep(orgId: string, apikey: string, appId: string, supabase: Awaited<ReturnType<typeof createSupabaseClient>>, options: SuperOptions) {
   const pm = getPMAndCommand()
   pLog.success(`✅ App ${appId} added — accessible to all members of your organization`)
   pLog.info(`💡 Keep in mind: Capgo cannot deliver updates to app versions that don’t include Capacitor Updater.`)
@@ -2556,69 +2609,64 @@ async function addChannelStep(orgId: string, apikey: string, appId: string) {
   pLog.info(`A channel is a release track that controls which users get which updates.`)
   pLog.info(`Most apps only need one: "production". You can add more later.`)
   pLog.info(`Learn more: https://capgo.app/docs/live-updates/channels/`)
-  while (true) {
-    let channelName = globalChannelName
-    const channelChoice = await pSelect({
-      message: 'Which channel name do you want to use?',
-      options: [
-        { value: 'default', label: `✅ Use "${defaultChannel}"` },
-        { value: 'custom', label: '✏️ Choose a custom name' },
-      ],
-    })
-    await cancelCommand(channelChoice, orgId, apikey)
-
-    if (channelChoice === 'default') {
-      channelName = defaultChannel
-    }
-    else {
+  const channelName = await selectOnboardingChannel(supabase, appId, globalChannelName, {
+    reuseChannel: async (name) => {
+      const choice = await pSelect({
+        message: `A channel named "${name}" already exists, do you want to use it or do you want to create a new channel?`,
+        options: [
+          { value: 'use-existing', label: 'Yes, use it' },
+          { value: 'create-new', label: 'No, create a new one' },
+        ],
+      })
+      await cancelCommand(choice, orgId, apikey)
+      if (choice === 'use-existing') {
+        pLog.success(`Using existing channel "${name}" ✅`)
+        return true
+      }
+      return false
+    },
+    chooseName: async (existingNames) => {
+      if (!existingNames.includes(defaultChannel)) {
+        const channelChoice = await pSelect({
+          message: 'Which channel name do you want to use?',
+          options: [
+            { value: 'default', label: `✅ Use "${defaultChannel}"` },
+            { value: 'custom', label: '✏️ Choose a custom name' },
+          ],
+        })
+        await cancelCommand(channelChoice, orgId, apikey)
+        if (channelChoice === 'default')
+          return defaultChannel
+      }
       const selectedChannelName = await pText({
         message: 'Enter the channel name to use for onboarding:',
         placeholder: 'e.g. staging, beta, dev',
         validate: validateChannelName,
       })
       await cancelCommand(selectedChannelName, orgId, apikey)
-      channelName = (selectedChannelName as string).trim()
-    }
-
-    globalChannelName = channelName
-    const s = pSpinner()
-    s.start(`Running: ${pm.runner} @capgo/cli@latest channel add ${channelName} ${appId} --default`)
-    try {
-      const addChannelRes = await addChannelInternal(channelName, appId, {
-        default: true,
-        apikey,
-      }, true)
-      if (!addChannelRes)
-        s.stop(`Channel already added ✅`)
-      else
+      return (selectedChannelName as string).trim()
+    },
+    createChannel: async (name) => {
+      const s = pSpinner()
+      s.start(`Running: ${pm.runner} @capgo/cli@latest channel add ${name} ${appId} --default`)
+      try {
+        await addChannelInternal(name, appId, {
+          default: true,
+          apikey,
+          supaHost: options.supaHost,
+          supaAnon: options.supaAnon,
+        }, true)
         s.stop(`Channel add done ✅`)
-      await markStep(orgId, apikey, 'add-channel', appId)
-      return channelName
-    }
-    catch (error) {
-      if (!isChannelAlreadyExistsError(error)) {
+      }
+      catch (error) {
         s.stop(`Channel creation failed ❌`)
         throw error
       }
-
-      s.stop(`Channel already exists`)
-
-      const existingChannelChoice = await pSelect({
-        message: `The channel "${channelName}" already exists. What would you like to do?`,
-        options: [
-          { value: 'use-existing', label: '✅ Use the existing channel' },
-          { value: 'change', label: '✏️ Choose a different channel name' },
-        ],
-      })
-      await cancelCommand(existingChannelChoice, orgId, apikey)
-
-      if (existingChannelChoice === 'use-existing') {
-        pLog.success(`Using existing channel "${channelName}" ✅`)
-        await markStep(orgId, apikey, 'add-channel', appId)
-        return channelName
-      }
-    }
-  }
+    },
+  })
+  globalChannelName = channelName
+  await markStep(orgId, apikey, 'add-channel', appId)
+  return channelName
 }
 
 function rememberPackageJsonPath(packageJsonPath: string): void {
@@ -2638,6 +2686,8 @@ function validatePackageJsonPath(value: string | undefined): string | undefined 
     return 'Path is required.'
   if (!existsSync(trimmedValue))
     return `Path ${trimmedValue} does not exist`
+  if (!statSync(trimmedValue).isFile())
+    return 'Selected path is not a file'
   if (path.basename(trimmedValue) !== PACKNAME)
     return 'Selected a file that is not a package.json file'
 }
@@ -3034,7 +3084,7 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
       if (doDirectInstall) {
         await updateConfigbyKey('SplashScreen', { launchAutoHide: false })
       }
-      return updateConfigUpdater(getInitUpdaterPluginConfig(appId, delta))
+      return updateConfigUpdater(getInitUpdaterPluginConfig(appId, delta, globalChannelName))
     })
     s.stop(`Updated ${formatInitFilePath(updatedConfig.path)} ✅`)
     break
@@ -4919,14 +4969,13 @@ async function maybeOfferAutoTestCleanup(orgId: string, apikey: string, appId: s
 
   const pm = getPMAndCommand()
   const cleanupVersion = getSuggestedCleanupBundleVersion(currentVersion)
-  const cleanupUploadCommand = [
-    `${pm.runner} @capgo/cli@latest bundle upload ${appId}`,
-    `--bundle ${cleanupVersion}`,
-    `--channel ${globalChannelName}`,
-    delta ? '--delta-only' : '',
-    globalPathToPackageJson ? `--package-json ${globalPathToPackageJson}` : '',
-    globalNodeModulesPath ? `--node-modules ${globalNodeModulesPath}` : '',
-  ].filter(Boolean).join(' ')
+  const cleanupUploadCommand = formatBundleUploadRunnerCommand(pm.runner, appId, {
+    bundle: cleanupVersion,
+    channel: globalChannelName,
+    deltaOnly: delta,
+    packageJson: globalUploadPackageJsonPath ?? globalPathToPackageJson,
+    nodeModules: globalNodeModulesPath,
+  })
 
   pLog.info(reverted
     ? 'Build and upload one more cleanup bundle so the onboarding test change disappears from the installed app.'
@@ -4943,25 +4992,60 @@ async function uploadStep(orgId: string, apikey: string, appId: string, newVersi
   const doBundle = await pConfirm({ message: `Upload the updated ${appId} bundle (v${newVersion}) to Capgo?` })
   await cancelCommand(doBundle, orgId, apikey)
   if (doBundle) {
-    let nodeModulesPath: string | undefined
+    let nodeModulesPath: string | undefined = globalNodeModulesPath
+    let uploadPackageJsonPath = globalUploadPackageJsonPath ?? selectedPackageJsonPath
     const isMonorepo = projectIsMonorepo(cwd())
+    let warnedMonorepo = false
+
+    const recoverFromUploadFailure = async (failureText: string): Promise<'cancel' | 'retry'> => {
+      const continueResult = await waitForInitStreamingContinue('Press Enter to continue, or Ctrl+C to cancel.')
+      clearInitStreamingOutput()
+      if (pIsCancel(continueResult)) {
+        await cancelCommand(continueResult, orgId, apikey)
+        return 'cancel'
+      }
+      const choice = await selectRecoveryOption(
+        orgId,
+        apikey,
+        `Upload failed: ${failureText}\nWhat do you want to do?`,
+        getBundleUploadFailureRecoveryOptions(),
+        failureText,
+        supportPlatform,
+      )
+      if (choice === 'retry-with-monorepo-paths') {
+        const paths = await promptForMonorepoRootUploadPaths(orgId, apikey, uploadPackageJsonPath, nodeModulesPath)
+        uploadPackageJsonPath = paths.packageJson
+        nodeModulesPath = paths.nodeModules
+        globalUploadPackageJsonPath = uploadPackageJsonPath
+        globalNodeModulesPath = nodeModulesPath
+        // Persist the selected paths on the existing step-9 checkpoint so
+        // resume can restore them if this retry fails and the user exits.
+        // Do not mark step 10 complete until upload succeeds.
+        markStepDone(9)
+      }
+      return 'retry'
+    }
+
     while (true) {
       const s = pSpinner()
       s.start(`Running: ${pm.runner} @capgo/cli@latest bundle upload ${delta ? '--delta-only' : ''}`)
-      if (globalPathToPackageJson && isMonorepo) {
-        pLog.warn(`You are most likely using a monorepo, please provide the path to your package.json file AND node_modules path folder when uploading your bundle`)
-        pLog.warn(`Example: ${pm.runner} @capgo/cli@latest bundle upload --package-json ./packages/my-app/package.json --node-modules ./packages/my-app/node_modules ${delta ? '--delta-only' : ''}`)
+      if (isMonorepo && !warnedMonorepo) {
+        warnedMonorepo = true
+        pLog.warn('This project looks like a monorepo. Bundle upload needs the monorepo root package.json and the hoisted root node_modules folder.')
+        pLog.info(MONOREPO_ROOT_PATHS_NOTE)
+        pLog.warn(`Example: ${pm.runner} @capgo/cli@latest bundle upload --package-json ./package.json --node-modules ./node_modules ${delta ? '--delta-only' : ''}`)
         nodeModulesPath ||= join(findRoot(cwd()), 'node_modules')
-        pLog.warn(`Using node modules path: ${nodeModulesPath}`)
-        if (!existsSync(nodeModulesPath)) {
+        pLog.warn(`Using monorepo root node_modules path: ${nodeModulesPath}`)
+        const firstNodeModulesPath = nodeModulesPath.split(',')[0]?.trim()
+        if (firstNodeModulesPath && !existsSync(firstNodeModulesPath)) {
           s.stop('Upload blocked ❌')
-          pLog.error(`Node modules path does not exist`)
-          nodeModulesPath = await askForExistingDirectoryPath(orgId, apikey, 'Enter the path to the correct node_modules directory:', nodeModulesPath)
+          pLog.error('Monorepo root node_modules path does not exist')
+          nodeModulesPath = await askForExistingDirectoryPath(orgId, apikey, 'Monorepo root node_modules path:', nodeModulesPath)
           continue
         }
       }
 
-      globalNodeModulesPath = isMonorepo ? nodeModulesPath : undefined
+      globalNodeModulesPath = nodeModulesPath
 
       let uploadRes: Awaited<ReturnType<typeof uploadBundleInternal>> | undefined
       const appendUploadOutput = (message: string, prefix = '') => {
@@ -5002,8 +5086,8 @@ async function uploadStep(orgId: string, apikey: string, appId: string, newVersi
           uploadRes = await uploadBundleInternal(appId, {
             channel: globalChannelName,
             apikey,
-            packageJson: isMonorepo ? selectedPackageJsonPath : undefined,
-            nodeModules: isMonorepo ? nodeModulesPath : undefined,
+            packageJson: uploadPackageJsonPath,
+            nodeModules: nodeModulesPath,
             deltaOnly: delta,
             bundle: newVersion,
             ignoreChecksumCheck: true,
@@ -5026,27 +5110,15 @@ async function uploadStep(orgId: string, apikey: string, appId: string, newVersi
       catch (error) {
         const failureText = formatError(error)
         updateInitStreamingStatus('error', failureText)
-        const continueResult = await waitForInitStreamingContinue('Press Enter to continue, or Ctrl+C to cancel.')
-        clearInitStreamingOutput()
-        if (pIsCancel(continueResult)) {
-          await cancelCommand(continueResult, orgId, apikey)
+        const recovery = await recoverFromUploadFailure(failureText)
+        if (recovery === 'cancel')
           return
-        }
-        await selectRecoveryOption(orgId, apikey, `Upload failed: ${failureText}\nWhat do you want to do?`, [
-          { value: 'retry', label: 'Retry bundle upload' },
-        ], failureText, supportPlatform)
         continue
       }
       if (!uploadRes?.success) {
-        const continueResult = await waitForInitStreamingContinue('Press Enter to continue, or Ctrl+C to cancel.')
-        clearInitStreamingOutput()
-        if (pIsCancel(continueResult)) {
-          await cancelCommand(continueResult, orgId, apikey)
+        const recovery = await recoverFromUploadFailure('Bundle upload did not complete successfully.')
+        if (recovery === 'cancel')
           return
-        }
-        await selectRecoveryOption(orgId, apikey, 'Bundle upload failed. What do you want to do?', [
-          { value: 'retry', label: 'Retry bundle upload' },
-        ], 'Bundle upload did not complete successfully.', supportPlatform)
         continue
       }
 
@@ -5076,15 +5148,17 @@ async function uploadStep(orgId: string, apikey: string, appId: string, newVersi
     }
   }
   else {
-    const manualUploadCommandParts = [
-      `${pm.runner} @capgo/cli@latest bundle upload ${appId}`,
-      `--bundle ${newVersion}`,
-      `--channel ${globalChannelName}`,
-      delta ? '--delta-only' : '',
-      globalPathToPackageJson ? `--package-json ${globalPathToPackageJson}` : '',
-    ]
-    const manualUploadCommand = manualUploadCommandParts.filter(Boolean).join(' ')
+    const manualUploadCommand = formatBundleUploadRunnerCommand(pm.runner, appId, {
+      bundle: newVersion,
+      channel: globalChannelName,
+      deltaOnly: delta,
+      packageJson: globalUploadPackageJsonPath ?? globalPathToPackageJson,
+      nodeModules: globalNodeModulesPath,
+    })
     pLog.info(`Upload yourself from ${selectedProjectDir} with command: ${manualUploadCommand}`)
+    if (projectIsMonorepo(cwd())) {
+      pLog.info(MONOREPO_ROOT_PATHS_NOTE)
+    }
   }
   await markStep(orgId, apikey, 'upload', appId)
 }
@@ -5514,6 +5588,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     stepToSkip = 0
     resumed = undefined
     globalNodeModulesPath = undefined
+    globalUploadPackageJsonPath = undefined
     globalChannelName = defaultChannel
     globalPlatform = 'ios'
     globalDelta = false
@@ -5649,7 +5724,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
     if (stepToSkip < 2) {
       renderCurrentStep(2)
-      channelName = await addChannelStep(orgId, options.apikey, appId)
+      channelName = await addChannelStep(orgId, options.apikey, appId, supabase, options)
       globalChannelName = channelName
       markStepDone(2, undefined, channelName)
     }

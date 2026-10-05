@@ -412,6 +412,15 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
   if (body.updatePackage != null && !updatePackages.includes(body.updatePackage)) {
     throw simpleError('invalid_update_package', 'Update package must be all, zip, delta, zip_from_builtin, or delta_from_builtin', { updatePackage: body.updatePackage })
   }
+  const disableAutoUpdates = ['major', 'minor', 'patch', 'version_number', 'none'] as const
+  if (body.disableAutoUpdate != null) {
+    // The CLI and docs call the version_number strategy "metadata"; accept that alias here.
+    if ((body.disableAutoUpdate as string) === 'metadata')
+      body.disableAutoUpdate = 'version_number'
+    if (!disableAutoUpdates.includes(body.disableAutoUpdate)) {
+      throw simpleError('invalid_disable_auto_update', 'Disable auto update must be major, minor, patch, version_number, metadata, or none', { disableAutoUpdate: body.disableAutoUpdate })
+    }
+  }
   const disablesRollout = body.rolloutEnabled === false && !body.rollback && !body.promoteToStable && !body.advanceRollout
   // Clearing rollout_version (disable unlink / explicit target / rollback / promote) is gated by the DB trigger with channel.promote_bundle.
   const changesRolloutTarget = body.rolloutVersion !== undefined
