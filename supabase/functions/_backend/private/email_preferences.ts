@@ -72,6 +72,28 @@ export function escapeIlikeExact(value: string) {
   return value.replace(/\\/g, String.raw`\\`).replace(/%/g, String.raw`\%`).replace(/_/g, String.raw`\_`)
 }
 
+/** Accept `uuid`, or a UUID mistakenly sent as legacy `email` / `id` query params. */
+export function resolveVisitorUuidFromRequestQuery(getQuery: (key: string) => string | undefined): string | null {
+  for (const key of ['uuid', 'email', 'id'] as const) {
+    const value = getQuery(key)?.trim() ?? ''
+    if (visitorUuidSchema.safeParse(value).success)
+      return value
+  }
+  return null
+}
+
+/** Bento footers sometimes still use `email={{ visitor.uuid }}`; treat that as uuid, not an address. */
+export function normalizeEmailPreferencesBody(raw: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...raw }
+  const email = typeof out.email === 'string' ? out.email.trim() : ''
+  const uuid = typeof out.uuid === 'string' ? out.uuid.trim() : ''
+  if (!uuid && email && visitorUuidSchema.safeParse(email).success) {
+    out.uuid = email
+    delete out.email
+  }
+  return out
+}
+
 /**
  * Public footer form is opt-out only: keep allowlisted keys set to `false`.
  * Never re-enable preferences from this unauthenticated path.
@@ -156,7 +178,8 @@ app.get('/', async (c) => {
   if (c.req.raw.method === 'HEAD')
     return c.json(BRES)
 
-  const parsed = uuidQuerySchema.safeParse({ uuid: c.req.query('uuid') })
+  const visitorUuid = resolveVisitorUuidFromRequestQuery(key => c.req.query(key))
+  const parsed = uuidQuerySchema.safeParse({ uuid: visitorUuid })
   if (!parsed.success) {
     return simpleErrorWithStatus(c, 400, 'invalid_payload', 'Invalid email preferences payload')
   }
@@ -180,7 +203,7 @@ app.get('/', async (c) => {
  */
 app.post('/', async (c) => {
   const raw = await parseBody<Record<string, unknown>>(c)
-  const parsed = bodySchema.safeParse(raw)
+  const parsed = bodySchema.safeParse(normalizeEmailPreferencesBody(raw))
   if (!parsed.success) {
     // Validation errors are allowed — they do not reveal whether an account exists.
     return c.json({ error: 'invalid_payload', status: 'Error', message: 'Invalid email preferences payload' }, 400)
