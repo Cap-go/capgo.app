@@ -249,6 +249,17 @@ CREATE TYPE "public"."platform_os" AS ENUM (
 ALTER TYPE "public"."platform_os" OWNER TO "postgres";
 
 
+CREATE TYPE "public"."r2_object_state" AS ENUM (
+    'to_be_uploaded',
+    'present',
+    'to_be_deleted',
+    'deleted'
+);
+
+
+ALTER TYPE "public"."r2_object_state" OWNER TO "postgres";
+
+
 CREATE TYPE "public"."stats_action" AS ENUM (
     'delete',
     'reset',
@@ -15691,6 +15702,83 @@ END; $$;
 ALTER FUNCTION "public"."queue_legacy_manifest_size_lookup_compat"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."r2_inventory_checkpoints_before_write"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        IF OLD.job_name = 'admission' THEN
+            RAISE EXCEPTION 'R2 admission history cannot be removed' USING ERRCODE = '23514';
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.bucket_name IS DISTINCT FROM OLD.bucket_name
+           OR NEW.job_name IS DISTINCT FROM OLD.job_name
+           OR NEW.partition_key IS DISTINCT FROM OLD.partition_key THEN
+            RAISE EXCEPTION 'R2 checkpoint identity is immutable' USING ERRCODE = '23514';
+        END IF;
+        IF OLD.accepted_event_floor IS NOT NULL AND (
+            NEW.accepted_event_floor IS NULL
+            OR NEW.accepted_event_floor < OLD.accepted_event_floor
+        ) THEN
+            RAISE EXCEPTION 'R2 admission floor cannot decrease' USING ERRCODE = '23514';
+        END IF;
+    END IF;
+    NEW.updated_at := pg_catalog.clock_timestamp();
+    RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."r2_inventory_checkpoints_before_write"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."r2_objects_before_write"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        NEW.revision := 1;
+        IF NEW.r2_state = 'to_be_deleted'::public.r2_object_state THEN
+            NEW.cleanup_requested_at := pg_catalog.clock_timestamp();
+        END IF;
+        NEW.first_seen_at := pg_catalog.clock_timestamp();
+    ELSE
+        IF NEW.bucket_name IS DISTINCT FROM OLD.bucket_name
+           OR NEW.r2_key IS DISTINCT FROM OLD.r2_key THEN
+            RAISE EXCEPTION 'R2 physical key identity is immutable' USING ERRCODE = '23514';
+        END IF;
+        IF OLD.r2_state = 'to_be_deleted'::public.r2_object_state
+           AND NEW.r2_state NOT IN (
+               'to_be_deleted'::public.r2_object_state,
+               'deleted'::public.r2_object_state
+           ) THEN
+            RAISE EXCEPTION 'R2 deletion intent cannot be reversed' USING ERRCODE = '23514';
+        END IF;
+        NEW.cleanup_requested_at := OLD.cleanup_requested_at;
+        IF NEW.r2_state = 'to_be_deleted'::public.r2_object_state THEN
+            NEW.cleanup_requested_at := COALESCE(OLD.cleanup_requested_at, pg_catalog.clock_timestamp());
+        END IF;
+        IF NEW.cleanup_requested_at IS NOT NULL AND NEW.r2_state NOT IN (
+            'to_be_deleted'::public.r2_object_state, 'deleted'::public.r2_object_state
+        ) THEN
+            RAISE EXCEPTION 'R2 cleanup retirement cannot be reversed' USING ERRCODE = '23514';
+        END IF;
+        NEW.revision := OLD.revision + 1;
+        NEW.first_seen_at := OLD.first_seen_at;
+    END IF;
+    NEW.updated_at := pg_catalog.clock_timestamp();
+    RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."r2_objects_before_write"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."rbac_check_permission"("p_permission_key" "text", "p_org_id" "uuid" DEFAULT NULL::"uuid", "p_app_id" character varying DEFAULT NULL::character varying, "p_channel_id" bigint DEFAULT NULL::bigint) RETURNS boolean
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -23776,6 +23864,70 @@ COMMENT ON TABLE "public"."processed_stripe_events" IS 'Idempotency ledger for S
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."r2_inventory_checkpoints" (
+    "bucket_name" "text" NOT NULL,
+    "job_name" "text" NOT NULL,
+    "partition_key" "text" DEFAULT ''::"text" NOT NULL COLLATE "pg_catalog"."C",
+    "accepted_event_floor" timestamp with time zone,
+    "checkpoint" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "r2_inventory_checkpoints_bucket_check" CHECK ((("octet_length"("bucket_name") >= 1) AND ("octet_length"("bucket_name") <= 256))),
+    CONSTRAINT "r2_inventory_checkpoints_data_check" CHECK ((("jsonb_typeof"("checkpoint") = 'object'::"text") AND ("pg_column_size"("checkpoint") <= 65536))),
+    CONSTRAINT "r2_inventory_checkpoints_floor_check" CHECK (((("job_name" = 'admission'::"text") AND ("partition_key" = ''::"text") AND ("accepted_event_floor" IS NOT NULL)) OR (("job_name" <> 'admission'::"text") AND ("accepted_event_floor" IS NULL)))),
+    CONSTRAINT "r2_inventory_checkpoints_job_check" CHECK ((("octet_length"("job_name") >= 1) AND ("octet_length"("job_name") <= 256))),
+    CONSTRAINT "r2_inventory_checkpoints_partition_check" CHECK (("octet_length"("partition_key") <= 1024))
+);
+
+
+ALTER TABLE "public"."r2_inventory_checkpoints" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."r2_inventory_checkpoints" IS 'Internal resumable scan checkpoints and per-bucket event-admission floors. Runtime settings remain Vault-backed.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."r2_objects" (
+    "bucket_name" "text" NOT NULL,
+    "r2_key" "text" NOT NULL COLLATE "pg_catalog"."C",
+    "r2_state" "public"."r2_object_state" NOT NULL,
+    "size_bytes" bigint,
+    "etag" "text",
+    "r2_last_modified_at" timestamp with time zone,
+    "last_event_at" timestamp with time zone,
+    "last_reconciled_at" timestamp with time zone,
+    "tombstone_expires_at" timestamp with time zone,
+    "cleanup_requested_at" timestamp with time zone,
+    "first_seen_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "revision" bigint DEFAULT 1 NOT NULL,
+    CONSTRAINT "r2_objects_bucket_check" CHECK ((("octet_length"("bucket_name") >= 1) AND ("octet_length"("bucket_name") <= 256))),
+    CONSTRAINT "r2_objects_cleanup_check" CHECK ((("cleanup_requested_at" IS NULL) OR ("r2_state" = ANY (ARRAY['to_be_deleted'::"public"."r2_object_state", 'deleted'::"public"."r2_object_state"])))),
+    CONSTRAINT "r2_objects_key_check" CHECK ((("octet_length"("r2_key") >= 1) AND ("octet_length"("r2_key") <= 1024))),
+    CONSTRAINT "r2_objects_revision_check" CHECK (("revision" > 0)),
+    CONSTRAINT "r2_objects_size_check" CHECK ((("size_bytes" IS NULL) OR ("size_bytes" >= 0))),
+    CONSTRAINT "r2_objects_tombstone_check" CHECK (((("r2_state" = 'deleted'::"public"."r2_object_state") AND ("tombstone_expires_at" IS NOT NULL)) OR (("r2_state" <> 'deleted'::"public"."r2_object_state") AND ("tombstone_expires_at" IS NULL))))
+);
+
+
+ALTER TABLE "public"."r2_objects" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."r2_objects" IS 'Internal physical-key inventory, including unreferenced objects. Excluded from regional publications; manifest references remain separate.';
+
+
+
+COMMENT ON COLUMN "public"."r2_objects"."r2_state" IS 'Four-state lifecycle; to_be_deleted is irreversible. Worker progress belongs to its queue.';
+
+
+
+COMMENT ON COLUMN "public"."r2_objects"."last_event_at" IS 'Latest accepted R2 eventTime, not the notification processing time.';
+
+
+
+COMMENT ON COLUMN "public"."r2_objects"."last_reconciled_at" IS 'Conservative request-start boundary of an applied direct R2 observation.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."role_bindings" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "principal_type" "text" NOT NULL,
@@ -25026,6 +25178,16 @@ ALTER TABLE ONLY "public"."processed_stripe_events"
 
 
 
+ALTER TABLE ONLY "public"."r2_inventory_checkpoints"
+    ADD CONSTRAINT "r2_inventory_checkpoints_pkey" PRIMARY KEY ("bucket_name", "job_name", "partition_key");
+
+
+
+ALTER TABLE ONLY "public"."r2_objects"
+    ADD CONSTRAINT "r2_objects_pkey" PRIMARY KEY ("bucket_name", "r2_key");
+
+
+
 ALTER TABLE ONLY "public"."role_bindings"
     ADD CONSTRAINT "role_bindings_pkey" PRIMARY KEY ("id");
 
@@ -25844,6 +26006,10 @@ CREATE INDEX "processed_stripe_events_customer_id_date_id_idx" ON "public"."proc
 
 
 
+CREATE INDEX "r2_objects_expired_tombstones_idx" ON "public"."r2_objects" USING "btree" ("bucket_name", "tombstone_expires_at", "r2_key") WHERE (("r2_state" = 'deleted'::"public"."r2_object_state") AND ("cleanup_requested_at" IS NULL));
+
+
+
 CREATE UNIQUE INDEX "role_bindings_app_scope_uniq" ON "public"."role_bindings" USING "btree" ("principal_type", "principal_id", "app_id", "scope_type") WHERE ("scope_type" = "public"."rbac_scope_app"());
 
 
@@ -26373,6 +26539,14 @@ CREATE OR REPLACE TRIGGER "prevent_role_binding_priority_escalation" BEFORE INSE
 
 
 CREATE OR REPLACE TRIGGER "protect_apps_onboarding" BEFORE INSERT OR UPDATE ON "public"."apps" FOR EACH ROW EXECUTE FUNCTION "public"."protect_apps_onboarding"();
+
+
+
+CREATE OR REPLACE TRIGGER "r2_inventory_checkpoints_before_write" BEFORE INSERT OR DELETE OR UPDATE ON "public"."r2_inventory_checkpoints" FOR EACH ROW EXECUTE FUNCTION "public"."r2_inventory_checkpoints_before_write"();
+
+
+
+CREATE OR REPLACE TRIGGER "r2_objects_before_write" BEFORE INSERT OR UPDATE ON "public"."r2_objects" FOR EACH ROW EXECUTE FUNCTION "public"."r2_objects_before_write"();
 
 
 
@@ -27915,6 +28089,20 @@ ALTER TABLE "public"."platform_impersonation_sessions" ENABLE ROW LEVEL SECURITY
 ALTER TABLE "public"."processed_stripe_events" ENABLE ROW LEVEL SECURITY;
 
 
+ALTER TABLE "public"."r2_inventory_checkpoints" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "r2_inventory_checkpoints_service_role" ON "public"."r2_inventory_checkpoints" TO "service_role" USING (true) WITH CHECK (true);
+
+
+
+ALTER TABLE "public"."r2_objects" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "r2_objects_service_role" ON "public"."r2_objects" TO "service_role" USING (true) WITH CHECK (true);
+
+
+
 ALTER TABLE "public"."role_bindings" ENABLE ROW LEVEL SECURITY;
 
 
@@ -28148,6 +28336,11 @@ GRANT USAGE ON SCHEMA "public" TO "pganalyze";
 
 GRANT USAGE ON SCHEMA "rbac_internal" TO "authenticated";
 GRANT USAGE ON SCHEMA "rbac_internal" TO "service_role";
+
+
+
+REVOKE ALL ON TYPE "public"."r2_object_state" FROM PUBLIC;
+GRANT ALL ON TYPE "public"."r2_object_state" TO "service_role";
 
 
 
@@ -30191,6 +30384,14 @@ GRANT ALL ON FUNCTION "public"."queue_legacy_manifest_size_lookup_compat"() TO "
 
 
 
+REVOKE ALL ON FUNCTION "public"."r2_inventory_checkpoints_before_write"() FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "public"."r2_objects_before_write"() FROM PUBLIC;
+
+
+
 REVOKE ALL ON FUNCTION "public"."rbac_check_permission"("p_permission_key" "text", "p_org_id" "uuid", "p_app_id" character varying, "p_channel_id" bigint) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."rbac_check_permission"("p_permission_key" "text", "p_org_id" "uuid", "p_app_id" character varying, "p_channel_id" bigint) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."rbac_check_permission"("p_permission_key" "text", "p_org_id" "uuid", "p_app_id" character varying, "p_channel_id" bigint) TO "service_role";
@@ -31654,6 +31855,14 @@ GRANT ALL ON TABLE "public"."platform_impersonation_sessions" TO "service_role";
 
 
 GRANT ALL ON TABLE "public"."processed_stripe_events" TO "service_role";
+
+
+
+GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."r2_inventory_checkpoints" TO "service_role";
+
+
+
+GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."r2_objects" TO "service_role";
 
 
 
