@@ -64,7 +64,11 @@ async function fetchStats() {
       failed.value = true
       return
     }
-    stats.value = await response.json() as ChannelStatsResponse
+    const payload = await response.json() as ChannelStatsResponse
+    // A slower, older request must not overwrite the current period.
+    if (requestId !== latestRequest)
+      return
+    stats.value = payload
   }
   catch (error) {
     console.error('Error fetching channel stats:', error)

@@ -3,7 +3,7 @@ import type { ChartData, ChartOptions } from 'chart.js'
 import type { PeriodDayOption } from '~/utils/periodDays'
 import { useDark } from '@vueuse/core'
 import { BarElement, CategoryScale, Chart, Legend, LinearScale, Tooltip } from 'chart.js'
-import { computed, ref, watch } from 'vue'
+import { computed, ref, useId, watch } from 'vue'
 import { Bar } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -38,7 +38,10 @@ const props = withDefaults(defineProps<{
   dense: false,
 })
 
-const denseView = ref<'chart' | 'table'>('chart')
+type DenseView = 'chart' | 'table'
+const DENSE_VIEWS: readonly DenseView[] = ['chart', 'table']
+const denseView = ref<DenseView>('chart')
+const denseViewId = useId()
 
 Chart.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend)
 
@@ -64,6 +67,33 @@ const effectiveStats = computed(() => props.forceDemo ? demoStats.value : stats.
 
 const bundles = computed(() => effectiveStats.value?.bundles ?? [])
 const hasData = computed(() => bundles.value.some(bundle => bundle.install + bundle.fail > 0 || bundle.timing.samples > 0))
+// Without timing samples the chart would be empty while installs and failures
+// exist, so the dense card opens on the per-bundle table instead.
+const hasTimingData = computed(() => bundles.value.some(bundle => bundle.timing.samples > 0))
+const activeDenseView = computed<DenseView>(() => denseView.value === 'chart' && !hasTimingData.value ? 'table' : denseView.value)
+
+function selectDenseView(view: DenseView, focus = false) {
+  denseView.value = view
+  if (focus)
+    document.getElementById(`${denseViewId}-tab-${view}`)?.focus()
+}
+
+function onDenseViewKeydown(event: KeyboardEvent) {
+  const index = DENSE_VIEWS.indexOf(activeDenseView.value)
+  let next: number | null = null
+  if (event.key === 'ArrowRight')
+    next = (index + 1) % DENSE_VIEWS.length
+  else if (event.key === 'ArrowLeft')
+    next = (index - 1 + DENSE_VIEWS.length) % DENSE_VIEWS.length
+  else if (event.key === 'Home')
+    next = 0
+  else if (event.key === 'End')
+    next = DENSE_VIEWS.length - 1
+  if (next === null)
+    return
+  event.preventDefault()
+  selectDenseView(DENSE_VIEWS[next], true)
+}
 
 const chartBundles = computed(() => bundles.value.slice(0, maxChartBundles))
 
@@ -333,28 +363,48 @@ watch(
       >
         <div class="flex items-center justify-between gap-3 mb-3" :title="t('bundle-install-stats-help')">
           <h3 class="text-base font-semibold truncate text-slate-950 dark:text-white">
-            {{ denseView === 'table' ? t('bundle-install-stats-title') : t('bundle-install-chart-timing-title') }}
+            {{ activeDenseView === 'table' ? t('bundle-install-stats-title') : t('bundle-install-chart-timing-title') }}
           </h3>
-          <div role="tablist" class="inline-flex p-0.5 rounded-md shrink-0 bg-slate-100 dark:bg-slate-700/60" data-testid="bundle-install-dense-view">
+          <span
+            v-if="forceDemo"
+            class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-slate-300 bg-slate-100 text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300"
+          >{{ t('demo') }}</span>
+          <div role="tablist" class="inline-flex p-0.5 ml-auto rounded-md shrink-0 bg-slate-100 dark:bg-slate-700/60" data-testid="bundle-install-dense-view" @keydown="onDenseViewKeydown">
             <button
-              v-for="view in (['chart', 'table'] as const)"
+              v-for="view in DENSE_VIEWS"
+              :id="`${denseViewId}-tab-${view}`"
               :key="view"
               type="button"
               role="tab"
-              :aria-selected="denseView === view"
+              :aria-selected="activeDenseView === view"
+              :aria-controls="`${denseViewId}-panel-${view}`"
+              :tabindex="activeDenseView === view ? 0 : -1"
               class="px-2 py-0.5 text-xs font-medium rounded"
-              :class="denseView === view ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-600 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'"
-              @click="denseView = view"
+              :class="activeDenseView === view ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-600 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'"
+              @click="selectDenseView(view)"
             >
               {{ view === 'chart' ? t('bundle-install-view-chart') : t('bundle-install-view-table') }}
             </button>
           </div>
         </div>
-        <div v-if="denseView === 'chart'" class="relative flex-1 min-h-0">
+        <div
+          v-if="activeDenseView === 'chart'"
+          :id="`${denseViewId}-panel-chart`"
+          role="tabpanel"
+          :aria-labelledby="`${denseViewId}-tab-chart`"
+          class="relative flex-1 min-h-0"
+        >
           <Bar :data="timingChartData" :options="timingChartOptions" />
         </div>
         <!-- Per-bundle success rate and install time, e.g. rollout target vs fallback. -->
-        <div v-else class="flex-1 min-h-0 overflow-auto" data-testid="bundle-install-dense-table">
+        <div
+          v-else
+          :id="`${denseViewId}-panel-table`"
+          role="tabpanel"
+          :aria-labelledby="`${denseViewId}-tab-table`"
+          class="flex-1 min-h-0 overflow-auto"
+          data-testid="bundle-install-dense-table"
+        >
           <table class="min-w-full text-xs">
             <thead class="sticky top-0 font-semibold tracking-wider uppercase text-[10px] text-slate-500 bg-white dark:bg-slate-800 dark:text-slate-400">
               <tr class="text-left">

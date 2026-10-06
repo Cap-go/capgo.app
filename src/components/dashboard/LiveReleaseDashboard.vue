@@ -62,6 +62,7 @@ async function fetchInsights() {
   const requestId = ++insightsRequest
   if (!props.appId || props.forceDemo || isChannelView.value) {
     insights.value = null
+    insightsLoading.value = false
     return
   }
   insightsLoading.value = true
@@ -79,7 +80,11 @@ async function fetchInsights() {
     })
     if (requestId !== insightsRequest)
       return
-    insights.value = response.ok ? await response.json() as InsightsResponse : null
+    const payload = response.ok ? await response.json() as InsightsResponse : null
+    // A slower, older request must not overwrite the current period.
+    if (requestId !== insightsRequest)
+      return
+    insights.value = payload
   }
   catch (error) {
     console.error('Failed to fetch live release insights:', error)

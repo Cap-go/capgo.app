@@ -56,7 +56,9 @@ watch(id, async (appId) => {
         :app-stats-refresh-requested-at="refreshState?.stats_refresh_requested_at ?? null"
       />
 
-      <div class="grid grid-cols-1 gap-6 mb-6 sm:grid-cols-12">
+      <!-- Mount once Usage has settled its period, so these cards do not start
+           a billing-period load that a later 30-day load races against. -->
+      <div v-if="usageComponent" class="grid grid-cols-1 gap-6 mb-6 sm:grid-cols-12">
         <BundleUploadsCard
           :app-id="id"
           :use-billing-period="chartPeriodProps.useBillingPeriod"
