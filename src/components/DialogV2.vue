@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { WatchStopHandle } from 'vue'
-import type { DialogV2Button } from '~/stores/dialogv2'
+import type { DialogCloseReason, DialogV2Button } from '~/stores/dialogv2'
 import { computed, nextTick, onMounted, onUnmounted, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconClose from '~icons/lucide/x'
@@ -11,6 +11,9 @@ const route = useRoute()
 const { t } = useI18n()
 const titleId = 'dialog-v2-title'
 const panelRef = useTemplateRef<HTMLDialogElement>('panelRef')
+const iframeRef = useTemplateRef<HTMLIFrameElement>('iframeRef')
+let embedReady = false
+let embedTimer: ReturnType<typeof setTimeout> | undefined
 let returnFocusEl: HTMLElement | null = null
 
 let escapeHandler: ((event: KeyboardEvent) => void) | null = null
@@ -80,7 +83,7 @@ function getFocusable() {
   if (!panel)
     return [] as HTMLElement[]
   return Array.from(panel.querySelectorAll<HTMLElement>(
-    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    'button:not([disabled]), iframe, [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
   )).filter(el => el.offsetParent !== null)
 }
 
@@ -109,12 +112,21 @@ function trapTab(event: KeyboardEvent) {
 
 // Move focus into the dialog on open and give it back to the opener on close.
 watch(() => dialogStore.showDialog, async (open) => {
+  clearTimeout(embedTimer)
   if (open) {
+    embedReady = false
     returnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null
     // Custom content teleports in after the panel mounts; let it settle (and autofocus) first.
     await nextTick()
     await nextTick()
     const panel = panelRef.value
+    if (dialogStore.dialogOptions.embed && panel && !panel.open) {
+      panel.showModal()
+      embedTimer = setTimeout(() => {
+        if (!embedReady)
+          void dialogStore.closeDialog(undefined, 'load_failed')
+      }, 20_000)
+    }
     if (!panel || panel.contains(document.activeElement))
       return
     const firstField = getFocusable().find(el => el.matches('input:not([type="checkbox"]):not([type="radio"]), select, textarea'))
@@ -128,8 +140,31 @@ watch(() => dialogStore.showDialog, async (open) => {
     target.focus({ preventScroll: true })
 })
 
-function close(button?: DialogV2Button) {
-  dialogStore.closeDialog(button)
+function close(button?: DialogV2Button, reason: DialogCloseReason = 'close_button') {
+  void dialogStore.closeDialog(button, reason)
+}
+
+function handleEmbedMessage(event: MessageEvent) {
+  const embed = dialogStore.dialogOptions.embed
+  if (!dialogStore.showDialog || !embed || event.source !== iframeRef.value?.contentWindow || event.origin !== new URL(embed.url).origin)
+    return
+  if (event.data?.type === 'inbox:ready' && !embedReady) {
+    embedReady = true
+    clearTimeout(embedTimer)
+    dialogStore.dialogOptions.onEmbedReady?.()
+  }
+  else if (event.data?.type === 'inbox:escape') {
+    close(undefined, 'escape')
+  }
+}
+
+function handlePanelClick(event: MouseEvent) {
+  const panel = panelRef.value
+  if (!dialogStore.dialogOptions.embed || dialogStore.dialogOptions.preventAccidentalClose || event.target !== panel || !panel)
+    return
+  const bounds = panel.getBoundingClientRect()
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom)
+    close(undefined, 'backdrop')
 }
 
 function handleButtonClick(button: DialogV2Button, event?: Event) {
@@ -169,7 +204,7 @@ onMounted(() => {
   // Close dialog on route change
   stopRouteWatch = watch(route, () => {
     if (dialogStore.showDialog) {
-      dialogStore.closeDialog()
+      void dialogStore.closeDialog(undefined, 'navigation')
     }
   })
 
@@ -182,13 +217,16 @@ onMounted(() => {
       return
     }
     if (event.key === 'Escape' && !dialogStore.dialogOptions?.preventAccidentalClose) {
-      dialogStore.closeDialog()
+      void dialogStore.closeDialog(undefined, 'escape')
     }
   }
   addEventListener('keydown', escapeHandler)
+  addEventListener('message', handleEmbedMessage)
 })
 
 onUnmounted(() => {
+  clearTimeout(embedTimer)
+  removeEventListener('message', handleEmbedMessage)
   stopRouteWatch?.()
   stopRouteWatch = undefined
 
@@ -207,22 +245,44 @@ onUnmounted(() => {
         class="dialog-v2-backdrop fixed inset-0 bg-slate-950/60"
         :class="{ 'cursor-pointer': !dialogStore.dialogOptions?.preventAccidentalClose }"
         aria-hidden="true"
-        @click="!dialogStore.dialogOptions?.preventAccidentalClose && close()"
+        @click="!dialogStore.dialogOptions?.preventAccidentalClose && close(undefined, 'backdrop')"
       />
 
       <!-- Dialog -->
       <dialog
         ref="panelRef"
-        open
+        :open="dialogStore.dialogOptions.embed ? undefined : true"
         tabindex="-1"
         aria-modal="true"
         :aria-labelledby="dialogStore.dialogOptions?.title ? titleId : undefined"
+        :aria-label="dialogStore.dialogOptions.embed?.title"
         class="dialog-v2-panel relative m-0 flex w-full flex-col overflow-hidden rounded-xl border border-slate-200 bg-base-100 p-0 text-base-content shadow-2xl outline-none max-h-[calc(100dvh-2rem)] sm:max-h-[90vh] dark:border-slate-700"
         :class="[
-          sizeClasses[dialogStore.dialogOptions?.size || 'md'],
+          dialogStore.dialogOptions.embed ? 'max-w-none' : sizeClasses[dialogStore.dialogOptions?.size || 'md'],
         ]"
+        :style="dialogStore.dialogOptions.embed ? { width: `${dialogStore.dialogOptions.embed.preferred_width + 2}px`, maxWidth: 'calc(100vw - 2rem)' } : undefined"
+        @cancel.prevent="close(undefined, 'escape')"
+        @click="handlePanelClick"
       >
-        <div class="overflow-y-auto overscroll-contain">
+        <template v-if="dialogStore.dialogOptions.embed">
+          <div class="flex h-14 shrink-0 items-center justify-end px-3">
+            <button type="button" class="d-btn d-btn-ghost d-btn-square d-btn-sm" :aria-label="t('close-dialog')" @click="close()">
+              <IconClose class="size-5" />
+            </button>
+          </div>
+          <iframe
+            ref="iframeRef"
+            :src="dialogStore.dialogOptions.embed.url"
+            :title="dialogStore.dialogOptions.embed.title"
+            sandbox="allow-scripts allow-same-origin"
+            allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+            referrerpolicy="no-referrer"
+            class="block w-full min-h-0 border-0"
+            :style="{ height: `min(${dialogStore.dialogOptions.embed.preferred_height}px, calc(100dvh - 6rem))` }"
+            @error="close(undefined, 'load_failed')"
+          />
+        </template>
+        <div v-else class="overflow-y-auto overscroll-contain">
           <!-- Header -->
           <div
             v-if="dialogStore.dialogOptions?.title"
@@ -311,3 +371,9 @@ onUnmounted(() => {
     </div>
   </Teleport>
 </template>
+
+<style scoped>
+dialog::backdrop {
+  background: transparent;
+}
+</style>

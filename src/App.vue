@@ -4,6 +4,7 @@ import { defineAsyncComponent, watch } from 'vue'
 const Toast = defineAsyncComponent(() => import('~/components/Toast.vue'))
 const DialogV2 = defineAsyncComponent(() => import('~/components/DialogV2.vue'))
 const SupportUsernamesPrompt = defineAsyncComponent(() => import('~/components/dashboard/SupportUsernamesPrompt.vue'))
+const InboxMessages = defineAsyncComponent(() => import('~/components/InboxMessages.vue'))
 
 const route = useRoute()
 const display = useDisplayStore()
@@ -23,5 +24,6 @@ watch(
     <Toast />
     <DialogV2 />
     <SupportUsernamesPrompt />
+    <InboxMessages />
   </div>
 </template>

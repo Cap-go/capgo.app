@@ -23,7 +23,12 @@ export interface DialogV2Options {
   size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl'
   buttons?: DialogV2Button[]
   preventAccidentalClose?: boolean
+  embed?: { url: string, title: string, preferred_width: number, preferred_height: number }
+  onClose?: (reason: DialogCloseReason) => void
+  onEmbedReady?: () => void
 }
+
+export type DialogCloseReason = 'close_button' | 'escape' | 'backdrop' | 'navigation' | 'replaced' | 'programmatic' | 'action' | 'load_failed'
 
 export const useDialogV2Store = defineStore('dialogv2', () => {
   const showDialog = ref(false)
@@ -43,6 +48,8 @@ export const useDialogV2Store = defineStore('dialogv2', () => {
   }
 
   const openDialog = (options: DialogV2Options) => {
+    if (showDialog.value)
+      dialogOptions.value.onClose?.('replaced')
     pendingDialogAction.value = false
     dialogOptions.value = options
     showDialog.value = true
@@ -76,13 +83,16 @@ export const useDialogV2Store = defineStore('dialogv2', () => {
       window.location.assign(button.href)
   }
 
-  const closeDialog = async (button?: DialogV2Button) => {
+  const closeDialog = async (button?: DialogV2Button, reason: DialogCloseReason = 'programmatic') => {
+    if (!showDialog.value)
+      return
     if (!button) {
       // Modal dismissed without a button action (overlay, escape, close icon)
       dialogCanceled.value = true
       lastButtonRole.value = ''
       showDialog.value = false
       pendingDialogAction.value = false
+      dialogOptions.value.onClose?.(reason)
       return
     }
 
@@ -107,6 +117,7 @@ export const useDialogV2Store = defineStore('dialogv2', () => {
 
       if (!button.preventClose) {
         showDialog.value = false
+        dialogOptions.value.onClose?.('action')
         if (button.href && !button.skipNavigation)
           openButtonHref(button)
         return

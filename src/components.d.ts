@@ -91,6 +91,7 @@ declare module 'vue' {
     GroupsRbacManager: typeof import('./components/organization/GroupsRbacManager.vue')['default']
     HistoryTable: typeof import('./components/tables/HistoryTable.vue')['default']
     IIonCopyOutline: typeof import('~icons/ion/copy-outline')['default']
+    InboxMessages: typeof import('./components/InboxMessages.vue')['default']
     InfoRow: typeof import('./components/package/InfoRow.vue')['default']
     InviteTeammateModal: typeof import('./components/dashboard/InviteTeammateModal.vue')['default']
     LangSelector: typeof import('./components/LangSelector.vue')['default']
