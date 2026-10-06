@@ -15,7 +15,7 @@ import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { sendEmailToOrgMembers } from '../utils/org_email_notifications.ts'
 import { findBestPlan } from '../utils/plans.ts'
 import { readDeviceVersionCounts, readStatsVersion } from '../utils/stats.ts'
-import { getCurrentPlanNameOrg, supabaseAdmin } from '../utils/supabase.ts'
+import { getCurrentPlanNameOrg, getOrgExtraMau, supabaseAdmin } from '../utils/supabase.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -509,7 +509,8 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
   })
 
   // Calculate usage percentages against current plan limits
-  const mauPercent = currentPlan?.mau ? Math.round((mau / currentPlan.mau) * 100) : 0
+  const mauLimit = currentPlan?.mau ? currentPlan.mau + await getOrgExtraMau(c, orgId) : 0
+  const mauPercent = mauLimit ? Math.round((mau / mauLimit) * 100) : 0
   const bandwidthPercent = currentPlan?.bandwidth ? Math.round((bandwidth / currentPlan.bandwidth) * 100) : 0
   const storagePercent = currentPlan?.storage ? Math.round((storage / currentPlan.storage) * 100) : 0
   const buildTimePercent = currentPlan?.build_time_unit ? Math.round((buildTimeUnit / currentPlan.build_time_unit) * 100) : 0

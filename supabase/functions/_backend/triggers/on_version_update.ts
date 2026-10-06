@@ -7,13 +7,11 @@ import { isVersionDeleted, purgeFileReadCache } from '../files/file_read_cache.t
 import { isCanonicalAppVersionR2Path } from '../utils/app_version_r2_path.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { persistVersionManifestEntries } from '../utils/manifest_persist.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { manifest } from '../utils/postgres_schema.ts'
 import { getPath, s3 } from '../utils/s3.ts'
 import { createStatsMeta } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
-import { sendEventToTracking } from '../utils/tracking.ts'
 
 /**
  * Resolves `owner_org` for an app version row.
@@ -244,46 +242,6 @@ async function ensureVersionManifest(
 }
 
 /**
- * Legacy path: CLI wrote jsonb onto app_versions.manifest; migrate into public.manifest.
- * New CLIs call /private/set_manifest directly and skip this jsonb hop.
- */
-async function handleManifest(c: Context, record: Database['public']['Tables']['app_versions']['Row']) {
-  cloudlog({ requestId: c.get('requestId'), message: 'manifest', manifest: record.manifest })
-  const manifestEntries = record.manifest as Database['public']['CompositeTypes']['manifest_entry'][]
-  if (!Array.isArray(manifestEntries))
-    return
-
-  const ownerOrg = await resolveOwnerOrg(c, record)
-  const s3PathPrefix = ownerOrg && record.app_id
-    ? `orgs/${ownerOrg}/apps/${record.app_id}/`
-    : null
-
-  const { inserted, alreadyPresent } = await persistVersionManifestEntries(
-    c,
-    { id: record.id, app_id: record.app_id },
-    manifestEntries,
-    { clearAppVersionsManifest: true, s3PathPrefix },
-  )
-
-  if (alreadyPresent || inserted === 0)
-    return
-
-  await sendEventToTracking(c, {
-    channel: 'bundle',
-    event: 'Legacy Bundle Manifest Migrated',
-    user_id: record.user_id ?? undefined,
-    ...(ownerOrg ? { groups: { organization: ownerOrg } } : {}),
-    nonPersonTags: {
-      $insert_id: `legacy-manifest:${record.id}`,
-      app_id: record.app_id,
-      cli_version: record.cli_version ?? 'unknown',
-      entry_count: inserted,
-      version_id: record.id,
-    },
-  })
-}
-
-/**
  * Handles app version metadata updates after insert/update trigger execution.
  */
 async function updateIt(c: Context, record: Database['public']['Tables']['app_versions']['Row']) {
@@ -327,13 +285,6 @@ async function updateIt(c: Context, record: Database['public']['Tables']['app_ve
     else {
       cloudlog({ requestId: c.get('requestId'), message: 'app_versions_meta zero size upserted', ...versionUpdateLogFields(record), metadataBranch, owner_org: ownerOrg, size: 0 })
     }
-  }
-
-  // In-progress r2-direct uploads must use POST /private/set_manifest instead.
-  if (record.storage_provider !== 'r2-direct') {
-    const recordWithManifest = await ensureVersionManifest(c, record)
-    if (recordWithManifest.manifest)
-      await handleManifest(c, recordWithManifest)
   }
 
   return c.json(BRES)
@@ -741,7 +692,6 @@ app.post('/', middlewareAPISecret, triggerValidator('app_versions', 'UPDATE'), a
 
 export const onVersionUpdateTestUtils = {
   getDeletedVersionAction,
-  handleManifest,
   deleteManifest,
   unlinkChannelsFromDeletedVersion,
 }

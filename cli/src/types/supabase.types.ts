@@ -2726,6 +2726,7 @@ export type Database = {
           created_at: string
           customer_country: string | null
           customer_id: string
+          extra_mau: number
           id: number
           is_good_plan: boolean | null
           last_stripe_event_at: string | null
@@ -2753,6 +2754,7 @@ export type Database = {
           created_at?: string
           customer_country?: string | null
           customer_id: string
+          extra_mau?: number
           id?: number
           is_good_plan?: boolean | null
           last_stripe_event_at?: string | null
@@ -2780,6 +2782,7 @@ export type Database = {
           created_at?: string
           customer_country?: string | null
           customer_id?: string
+          extra_mau?: number
           id?: number
           is_good_plan?: boolean | null
           last_stripe_event_at?: string | null
