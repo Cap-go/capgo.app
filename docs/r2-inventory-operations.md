@@ -8,7 +8,11 @@ The dedicated Worker uses one database connection per event batch, releases it b
 
 Inventory configuration is the `INVENTORY_CONFIG` constant in `supabase/functions/_backend/utils/r2_inventory.ts`; tombstones are retained for seven days. No Vault secret or runtime enablement switch is required. To pause a deployed consumer for maintenance, pause delivery in Cloudflare so messages do not burn their five-delivery budget.
 
-Deployment commands (run after the schema exists):
+Capgo releases deploy the inventory consumer through the `Deploy R2 inventory consumer` job in `.github/workflows/build_and_deploy.yml`. It waits for any required schema deployments, creates missing inventory queues, then deploys the Worker from the resolved immutable release tag. Stable releases use `prod`; alpha releases use `alpha`. Both queue provisioning and Worker deployment reject stale release targets. The Cloudflare deployment token requires Workers and Queues write permissions.
+
+Bucket event notification rules remain a manual activation step. You can deploy and validate the consumer before connecting the bucket; until a rule is created, R2 notifications do not enter the event queue.
+
+Manual deployment commands (run after the schema exists, when not using the release workflow):
 
 ```sh
 bun scripts/ensure-r2-inventory-queues.ts alpha
@@ -16,7 +20,7 @@ bunx wrangler deploy --config cloudflare_workers/r2_inventory/wrangler.jsonc --e
 bunx wrangler r2 bucket notification create capgo-alpha --event-types object-create object-delete --queue capgo-r2-inventory-alpha --description capgo-r2-inventory
 ```
 
-Use `prod`/`capgo` only for the reviewed production rollout. Queue creation is idempotent, but notification-rule creation is not: inspect existing rules before creating one. All four queues retain messages for four days. Existing queues require verifying their retention manually; the setup script does not silently change shared infrastructure.
+The release workflow does not create the bucket notification rule. For a reviewed production activation, inspect existing rules and use `prod`/`capgo` in the manual notification command. Queue creation is idempotent, but notification-rule creation is not: inspect existing rules before creating one. All four queues retain messages for four days. Existing queues require verifying their retention manually; the setup script does not silently change shared infrastructure.
 
 The event consumer has batch size 100, timeout 10 seconds, concurrency one, and four retries (at most five deliveries). The repair queue has batches of ten and concurrency one. Each invocation opens at most one database connection at a time, so both queues together use at most two active inventory database connections per environment. Repairs release the database connection before issuing up to two concurrent HEAD requests; ordinary uploads never perform HEAD. Consumer handlers return as soon as their work finishes, with no artificial pacing delay. The ten-second timeout coalesces small batches; it is not a minimum batch size or a rate limiter. Measure actual throughput, database WAL/latency and backlog.
 
