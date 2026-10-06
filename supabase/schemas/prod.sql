@@ -3593,9 +3593,9 @@ BEGIN
   RETURN QUERY
   SELECT DISTINCT
     rb.principal_id AS user_id,
-    au.email::text,
-    u.first_name::text,
-    u.last_name::text,
+    NULL::text AS email,
+    NULL::text AS first_name,
+    NULL::text AS last_name,
     public.user_meets_password_policy(
       rb.principal_id,
       check_org_members_password_policy.org_id
@@ -3603,8 +3603,6 @@ BEGIN
   FROM public.role_bindings rb
   JOIN public.roles r ON r.id = rb.role_id
     AND r.scope_type = rb.scope_type
-  JOIN auth.users au ON au.id = rb.principal_id
-  LEFT JOIN public.users u ON u.id = rb.principal_id
   WHERE rb.principal_type = public.rbac_principal_user()
     AND rb.scope_type = public.rbac_scope_org()
     AND rb.org_id = check_org_members_password_policy.org_id
