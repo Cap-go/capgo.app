@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import { quickError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
+import { getSubscriptionData } from './stripe.ts'
 import { getCurrentPlanNameOrg, supabaseAdmin } from './supabase.ts'
 
 function isActivePlanStatus(status: string | null | undefined): boolean {
@@ -25,7 +26,7 @@ async function getActivePlanNameOrg(c: Context, orgId: string, requirePaid = fal
 
   const { data: stripeInfo, error: stripeError } = await supabaseAdmin(c)
     .from('stripe_info')
-    .select('status, is_good_plan, product_id, paid_at, past_due_at')
+    .select('status, is_good_plan, product_id, subscription_id, past_due_at')
     .eq('customer_id', org.customer_id)
     .single()
   if (stripeError || !stripeInfo?.product_id) {
@@ -39,9 +40,13 @@ async function getActivePlanNameOrg(c: Context, orgId: string, requirePaid = fal
     return null
   }
 
-  if (!isActivePlanStatus(stripeInfo.status) || stripeInfo.is_good_plan !== true
-    || (requirePaid && (!stripeInfo.paid_at || stripeInfo.past_due_at))) {
+  if (!isActivePlanStatus(stripeInfo.status) || stripeInfo.is_good_plan !== true)
     return null
+
+  if (requirePaid) {
+    const subscription = await getSubscriptionData(c, org.customer_id, stripeInfo.subscription_id)
+    if (stripeInfo.past_due_at || subscription?.status !== 'active' || subscription.productId !== stripeInfo.product_id)
+      return null
   }
 
   const { data: plan, error: planError } = await supabaseAdmin(c)
@@ -69,6 +74,8 @@ async function getActivePlanNameOrg(c: Context, orgId: string, requirePaid = fal
  *
  * @param c - Hono context
  * @param orgId - Organization ID to validate
+ * @param feature Feature name for the permission error
+ * @param requirePaid Also verify the live Stripe subscription is active, with the same product and no past-due balance
  * @throws {HTTPException} 403 if org is not on Enterprise plan
  */
 export async function requireEnterprisePlan(c: Context, orgId: string, feature = 'SSO', requirePaid = false): Promise<void> {
