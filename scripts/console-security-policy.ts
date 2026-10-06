@@ -144,6 +144,12 @@ export function buildConsoleContentSecurityPolicy(options: ConsoleCspOptions = {
       : []),
   ])
 
+  const messageSources = new Set<string>()
+  for (const env of dev ? ['prod', 'preprod', 'development', 'local'] as const : ['prod'] as const)
+    addConnectOrigin(messageSources, configs.supa_url[env])
+  if (process.env.SUPA_URL)
+    addConnectOrigin(messageSources, process.env.SUPA_URL)
+
   const frameSrc = joinSources([
     '\'self\'',
     'https://challenges.cloudflare.com', // Turnstile widget
@@ -151,6 +157,7 @@ export function buildConsoleContentSecurityPolicy(options: ConsoleCspOptions = {
     'https://billing.stripe.com',
     'https://js.stripe.com',
     ...PREVIEW_CONNECT_SOURCES,
+    ...[...messageSources].filter(source => source.startsWith('https:')),
   ])
 
   const directives = [

@@ -118,6 +118,7 @@
         "@vuepic/vue-datepicker": "^14.0.0",
         "@vueuse/core": "^14.3.0",
         "better-qr": "^0.1.2",
+        "bowser": "^2.14.1",
         "chart.js": "^4.5.1",
         "chartjs-chart-funnel": "^4.2.5",
         "country-code-to-flag-emoji": "^2.1.0",

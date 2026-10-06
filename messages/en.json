@@ -1,4 +1,5 @@
 {
+  "inbox-message": "Message",
   "$schema": "https://inlang.com/schema/inlang-message-format",
   "2fa": "Manage 2FA",
   "2fa-all-members-compliant": "All organization members have 2FA enabled.",

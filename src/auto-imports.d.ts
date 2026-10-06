@@ -367,7 +367,7 @@ declare global {
   export type { UpdateDeliveryScope, UpdateDeliveryStatsResponse } from './composables/useUpdateDeliveryStats'
   import('./composables/useUpdateDeliveryStats')
   // @ts-ignore
-  export type { DialogV2Button, DialogV2Options } from './stores/dialogv2'
+  export type { DialogV2Button, DialogV2Options, DialogCloseReason } from './stores/dialogv2'
   import('./stores/dialogv2')
   // @ts-ignore
   export type { BreadcrumbItem } from './stores/display'
