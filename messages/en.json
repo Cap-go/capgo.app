@@ -4037,7 +4037,7 @@
   "native-observe-signal-devices": "Devices reporting signals",
   "native-observe-signal-devices-count": "Devices reporting: {count}",
   "native-observe-signals-help": "Events that iOS, Android and the WebView report about your app, such as JavaScript errors or WebView reloads. Most apps report some, so compare them between releases.",
-  "version-chart-others": "+{count} more",
+  "version-chart-other": "Other",
   "custom-domain-title": "Custom domain",
   "custom-domain-description": "Use your own hostname for Live Updates API requests. Requires an active Enterprise plan. Bundle download domains are managed separately.",
   "custom-domain-hostname": "Hostname",

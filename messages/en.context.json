@@ -3978,7 +3978,7 @@
   "verify-password": "Used in Capgo web console areas: pages/settings/account. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "version": "Used in Capgo web console areas: components/bundle, components/dashboard, components/tables, pages/app, services. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "version-builtin": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "version-chart-others": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "version-chart-other": "Used in Capgo web console areas: components/dashboard. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "version-compare-eq": "Used in Capgo web console areas: components/tables. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "version-compare-gt": "Used in Capgo web console areas: components/tables. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "version-compare-gte": "Used in Capgo web console areas: components/tables. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
