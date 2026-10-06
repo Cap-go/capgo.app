@@ -145,7 +145,7 @@ it('keeps notifyConsole login events out of the user Bento state', async () => {
   })
 
   expect(response.status).toBe(200)
-  expect(await response.json()).toEqual({ status: 'ok' })
+  expect(await response.json()).toEqual({ status: 'ok', event_id: expect.any(String) })
   expect(await readOnboarding()).not.toHaveProperty('bento_events')
 })
 
@@ -159,7 +159,7 @@ it('records legacy org-scoped events on the authenticated actor', async () => {
   })
 
   expect(response.status).toBe(200)
-  expect(await response.json()).toEqual({ status: 'ok' })
+  expect(await response.json()).toEqual({ status: 'ok', event_id: expect.any(String) })
   expect(await readOnboarding()).toMatchObject({
     legacy_actor: { keep: true },
     bento_events: {
@@ -186,7 +186,7 @@ it('omits an unverified app id from actor Bento event details', async () => {
   })
 
   expect(response.status).toBe(200)
-  expect(await response.json()).toEqual({ status: 'ok' })
+  expect(await response.json()).toEqual({ status: 'ok', event_id: expect.any(String) })
   const onboarding = await readOnboarding()
   expect(onboarding).toMatchObject({ unverified_app: { keep: true } })
   const commandDetail = onboarding.bento_events?.['cli:command_invoked']?.details[0]
@@ -209,7 +209,7 @@ it('keeps a verified app id in actor Bento event details', async () => {
   })
 
   expect(response.status).toBe(200)
-  expect(await response.json()).toEqual({ status: 'ok' })
+  expect(await response.json()).toEqual({ status: 'ok', event_id: expect.any(String) })
   expect(await readOnboarding()).toMatchObject({
     verified_app: { keep: true },
     bento_events: {
@@ -275,7 +275,7 @@ it('records only mapped CLI Bento events for the authenticated actor', async () 
   for (const payload of payloads) {
     const response = await postEvent(payload)
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ status: 'ok' })
+    expect(await response.json()).toEqual({ status: 'ok', event_id: expect.any(String) })
   }
 
   const onboarding = await readOnboarding()
