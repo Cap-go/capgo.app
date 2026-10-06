@@ -207,6 +207,7 @@ const healthTiles = computed(() => {
           :app-id="appId"
           :release="live?.release ?? null"
           :adoption-percent="live?.adoption?.percent ?? null"
+          :rollout="live?.rollout ?? null"
           @deployed="emit('deployed')"
         />
         <PeriodDaySelector v-model="days" />

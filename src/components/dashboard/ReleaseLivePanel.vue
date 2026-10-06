@@ -87,6 +87,51 @@ const release = computed(() => live.value?.release ?? null)
 const series = computed(() => live.value?.series ?? [])
 const totals = computed(() => live.value?.totals ?? { get: 0, install: 0, fail: 0, success_rate: null })
 const adoption = computed(() => live.value?.adoption ?? { devices_on_release: 0, total_devices: 0, percent: null })
+// Below this many outcomes the success rate is too noisy to label the release.
+const MIN_STATUS_SAMPLES = 20
+// Progressive rollout: the target only goes to a share of the channel, so
+// reach (devices on target / devices targeted) replaces raw adoption, and the
+// stable fallback is the baseline for the success rate.
+const rollout = computed(() => live.value?.rollout ?? null)
+const rolloutBadge = computed(() => {
+  const value = rollout.value
+  if (!value)
+    return null
+  if (value.status === 'paused')
+    return { label: t('release-live-rollout-paused', { percent: formatPercent(value.percentage) }), class: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' }
+  if (value.status === 'zero')
+    return { label: t('release-live-rollout-zero'), class: 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300' }
+  return { label: t('release-live-rollout-badge', { percent: formatPercent(value.percentage) }), class: 'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300' }
+})
+const reachStat = computed(() => {
+  const value = rollout.value
+  if (!value) {
+    return {
+      label: t('release-live-adoption'),
+      value: adoption.value.total_devices > 0 ? formatPercent(adoption.value.percent) : '-',
+      help: t('release-live-adoption-help', { onRelease: formatCount(adoption.value.devices_on_release), total: formatCount(adoption.value.total_devices) }),
+      progress: adoption.value.percent ?? 0,
+    }
+  }
+  return {
+    label: t('release-live-rollout-reach'),
+    value: formatPercent(value.reach_percent),
+    help: t('release-live-rollout-reach-help', {
+      onTarget: formatCount(value.devices_on_target),
+      expected: formatCount(value.expected_on_target),
+      percent: formatPercent(value.percentage),
+      total: formatCount(value.total_devices),
+    }),
+    progress: value.reach_percent ?? 0,
+  }
+})
+const fallbackRate = computed(() => {
+  const totalsOnFallback = rollout.value?.fallback_totals
+  if (!totalsOnFallback || totalsOnFallback.install + totalsOnFallback.fail < MIN_STATUS_SAMPLES)
+    return null
+  return totalsOnFallback.success_rate
+})
+
 const failures = computed(() => live.value?.failures ?? [])
 const failedDevices = computed(() => live.value?.failed_devices ?? null)
 const hasActivity = computed(() => totals.value.get + totals.value.install + totals.value.fail > 0)
@@ -152,13 +197,20 @@ const secondsSinceUpdate = computed(() => {
   return Math.max(0, Math.floor((now.value.getTime() - updatedAt) / 1000))
 })
 
-// Below this many outcomes the success rate is too noisy to label the release.
-const MIN_STATUS_SAMPLES = 20
-
 const status = computed(() => {
   const rate = totals.value.success_rate
   if (rate === null || totals.value.install + totals.value.fail < MIN_STATUS_SAMPLES)
     return null
+  // During a rollout the question is "is the target worse than what the other
+  // devices get?", so it is judged against the fallback, not a fixed bar.
+  if (fallbackRate.value !== null) {
+    const gap = fallbackRate.value - rate
+    if (gap <= 2)
+      return { label: t('release-live-status-healthy'), class: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' }
+    if (gap <= 5)
+      return { label: t('release-live-status-watch'), class: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' }
+    return { label: t('release-live-status-risk'), class: 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300' }
+  }
   if (rate >= 95)
     return { label: t('release-live-status-healthy'), class: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' }
   if (rate >= 85)
@@ -405,24 +457,30 @@ watch(() => props.appId, () => {
             <span v-if="release.channel_name" class="px-2 py-0.5 text-xs font-medium rounded bg-azure-500/10 text-blue-800 dark:bg-azure-900/30 dark:text-azure-300">
               {{ release.channel_name }}
             </span>
+            <span v-if="rolloutBadge" class="px-2 py-0.5 text-xs font-semibold rounded" :class="rolloutBadge.class" data-testid="release-live-rollout-badge" :title="rollout?.pause_reason ?? undefined">
+              {{ rolloutBadge.label }}
+            </span>
             <span v-if="status" class="px-2 py-0.5 text-xs font-semibold rounded" :class="status.class">
               {{ status.label }}
             </span>
           </div>
           <p class="mt-1 text-xs text-slate-500 dark:text-slate-400" :title="formatLocalDateTime(release.deployed_at)">
-            {{ t('release-live-deployed', { time: formatDistanceToNow(release.deployed_at) }) }}
+            <template v-if="rollout?.fallback_version">
+              {{ t('release-live-rollout-fallback', { version: rollout.fallback_version, percent: formatPercent(100 - rollout.percentage) }) }} ·
+            </template>
+            {{ rollout ? t('release-live-uploaded', { time: formatDistanceToNow(release.deployed_at) }) : t('release-live-deployed', { time: formatDistanceToNow(release.deployed_at) }) }}
             <template v-if="live?.window?.truncated">
               · {{ t('release-live-truncated') }}
             </template>
           </p>
         </div>
         <dl v-if="dense" class="flex flex-wrap items-center gap-x-6 gap-y-2" data-testid="release-live-dense-stats">
-          <div :title="t('release-live-adoption-help', { onRelease: formatCount(adoption.devices_on_release), total: formatCount(adoption.total_devices) })">
+          <div :title="reachStat.help" data-testid="release-live-reach">
             <dt class="text-xs text-slate-500 dark:text-slate-400">
-              {{ t('release-live-adoption') }}
+              {{ reachStat.label }}
             </dt>
             <dd class="text-lg font-semibold text-slate-900 dark:text-white">
-              {{ formatPercent(adoption.percent) }}
+              {{ reachStat.value }}
             </dd>
           </div>
           <div :title="t('release-live-served', { count: formatCount(totals.get) })">
@@ -447,6 +505,9 @@ watch(() => props.appId, () => {
             </dt>
             <dd class="text-lg font-semibold" :class="successRateClass(totals.success_rate)">
               {{ formatPercent(totals.success_rate) }}
+              <span v-if="fallbackRate !== null && rollout?.fallback_version" class="text-xs font-normal text-slate-500 dark:text-slate-400" data-testid="release-live-fallback-rate">
+                {{ t('release-live-vs-fallback', { rate: formatPercent(fallbackRate), version: rollout.fallback_version }) }}
+              </span>
             </dd>
           </div>
         </dl>
@@ -471,16 +532,16 @@ watch(() => props.appId, () => {
       <div v-if="!dense" class="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <div class="px-4 py-3 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
           <div class="text-xs text-slate-600 dark:text-slate-400">
-            {{ t('release-live-adoption') }}
+            {{ reachStat.label }}
           </div>
           <div class="mt-1 text-xl font-semibold text-slate-900 dark:text-white">
-            {{ formatPercent(adoption.percent) }}
+            {{ reachStat.value }}
           </div>
           <div class="w-full h-1.5 mt-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
-            <div class="h-full transition-all duration-500 rounded-full bg-azure-500" :style="{ width: `${Math.min(100, adoption.percent ?? 0)}%` }" />
+            <div class="h-full transition-all duration-500 rounded-full bg-azure-500" :style="{ width: `${Math.min(100, reachStat.progress)}%` }" />
           </div>
           <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            {{ t('release-live-adoption-help', { onRelease: formatCount(adoption.devices_on_release), total: formatCount(adoption.total_devices) }) }}
+            {{ reachStat.help }}
           </p>
         </div>
         <div class="px-4 py-3 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
