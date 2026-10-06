@@ -9,7 +9,7 @@
 //   claim_updates_cache_purge() -> purge -> ack_updates_cache_purge()
 // Claims are limited to one per second across all callers, so the Cloudflare
 // rate stays bounded whatever the backlog. A successful first purge schedules
-// re-purges (+10s / +60s / +180s) for replica lag; failed apps go back to the
+// re-purges (+3s / +10s / +60s / +180s) for replica lag; failed apps go back to the
 // queue at their Retry-After. Claims lease rows, so a crash before the ack
 // only delays them. Every failure is soft: the cache TTL is the backstop.
 //
@@ -150,7 +150,7 @@ export async function purgeUpdatesCacheTags(c: Context, tags: string[]): Promise
   const token = getPurgeToken(c)
   const localPurgeUrl = getEnv(c, 'UPDATES_CACHE_LOCAL_PURGE_URL')
   const result: PurgeResult = { configured: Boolean(token || localPurgeUrl), calls: 0, failed: 0, retryAfterSeconds: 0 }
-  const targets: { url: string, headers: Record<string, string> }[] = []
+  const targets: { url: string, headers: Record<string, string>, cloudflare: boolean }[] = []
 
   if (token) {
     const zoneIds = await resolvePurgeZoneIds(c, token)
@@ -160,10 +160,10 @@ export async function purgeUpdatesCacheTags(c: Context, tags: string[]): Promise
       result.retryAfterSeconds = ZONE_DISCOVERY_RETRY_SECONDS
     }
     for (const zoneId of zoneIds)
-      targets.push({ url: `https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(zoneId)}/purge_cache`, headers: { Authorization: `Bearer ${token}` } })
+      targets.push({ url: `https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(zoneId)}/purge_cache`, headers: { Authorization: `Bearer ${token}` }, cloudflare: true })
   }
   if (localPurgeUrl)
-    targets.push({ url: localPurgeUrl, headers: { apisecret: getEnv(c, 'API_SECRET') } })
+    targets.push({ url: localPurgeUrl, headers: { apisecret: getEnv(c, 'API_SECRET') }, cloudflare: false })
 
   for (const target of targets) {
     for (const tagChunk of chunk(tags, PURGE_TAGS_PER_CALL)) {
@@ -175,10 +175,11 @@ export async function purgeUpdatesCacheTags(c: Context, tags: string[]): Promise
           body: JSON.stringify({ tags: tagChunk }),
           signal: AbortSignal.timeout(PURGE_TIMEOUT_MS),
         })
-        // Cloudflare can answer 200 with { success: false }: only an explicit
-        // success counts as purged.
+        // Cloudflare can answer 200 without a success flag or with
+        // { success: false }: only an explicit success counts as purged. The
+        // local emulator answers its own { status: 'ok' } contract.
         const body = await response.json().catch(() => null) as { success?: boolean } | null
-        if (!response.ok || body?.success === false) {
+        if (!response.ok || (target.cloudflare && body?.success !== true)) {
           result.failed++
           result.retryAfterSeconds = Math.max(result.retryAfterSeconds, parseRetryAfterSeconds(response))
           cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge failed', url: target.url, status: response.status, cfSuccess: body?.success, tags: tagChunk.length })

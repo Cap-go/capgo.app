@@ -17,6 +17,7 @@ import {
   createStatsLogsExternal as createStatsLogsExternalCF,
   createStatsMau as createStatsMauCF,
   createStatsVersion as createStatsVersionCF,
+  isDroppedStatsLogAction,
   normalizeStatsMetadata,
   onPremStats,
 } from './plugin_stats.ts'
@@ -85,6 +86,8 @@ export function createStatsLogsExternal(c: Context, app_id: string, device_id: s
 }
 
 export function createStatsLogs(c: Context, app_id: string, device_id: string, action: Database['public']['Enums']['stats_action'], versionName?: string, metadata?: StatsMetadata, dimensions?: StatsLogDimensions) {
+  if (isDroppedStatsLogAction(action))
+    return Promise.resolve()
   if (c.env.APP_LOG)
     return createStatsLogsCF(c, app_id, device_id, action, versionName, metadata, dimensions)
 
