@@ -292,13 +292,14 @@ watch(
       </div>
     </div>
 
-    <div v-if="statsLoading && !forceDemo && !stats && !statsError" class="flex items-center justify-center h-48 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+    <div v-if="statsLoading && !forceDemo && !stats && !statsError" class="flex items-center justify-center bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10" :class="dense ? 'h-[256px]' : 'h-48'">
       <Spinner size="w-10 h-10" />
     </div>
 
     <div
       v-else-if="statsError && !forceDemo"
-      class="flex flex-col items-center justify-center h-48 gap-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10 text-slate-500 dark:text-slate-400"
+      :class="dense ? 'h-[256px]' : 'h-48'"
+      class="flex flex-col items-center justify-center gap-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10 text-slate-500 dark:text-slate-400"
     >
       <IconAlertCircle class="w-10 h-10" />
       <p class="text-sm">
@@ -311,7 +312,8 @@ watch(
 
     <div
       v-else-if="!hasData"
-      class="flex flex-col items-center justify-center h-48 gap-2 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10 text-slate-500 dark:text-slate-400"
+      :class="dense ? 'h-[256px]' : 'h-48'"
+      class="flex flex-col items-center justify-center gap-2 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10 text-slate-500 dark:text-slate-400"
     >
       <IconAlertCircle class="w-10 h-10" />
       <p>{{ t('bundle-install-stats-no-data') }}</p>
@@ -323,7 +325,7 @@ watch(
     <template v-else>
       <div
         v-if="dense"
-        class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10"
+        class="flex flex-col h-[256px] p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10"
         data-testid="bundle-install-charts"
       >
         <div class="flex items-center justify-between gap-3 mb-3" :title="t('bundle-install-stats-help')">
@@ -335,7 +337,7 @@ watch(
             <span class="font-semibold" :class="successRateClass(effectiveStats.totals.success_rate)">{{ formatPercent(effectiveStats.totals.success_rate) }}</span>
           </span>
         </div>
-        <div class="relative h-40">
+        <div class="relative flex-1 min-h-0">
           <Bar :data="timingChartData" :options="timingChartOptions" />
         </div>
       </div>

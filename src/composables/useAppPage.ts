@@ -5,7 +5,7 @@ import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 
 interface UseAppPageOptions {
-  routeName: '/app/[app].settings' | '/app/[app].settings.access' | '/app/[app].settings.usage' | '/app/[app].observe.logs' | '/app/[app].observe.releases' | '/app/[app].getting-started'
+  routeName: '/app/[app].settings' | '/app/[app].settings.access' | '/app/[app].settings.usage' | '/app/[app].observe.logs' | '/app/[app].getting-started'
   navTitle?: string
 }
 

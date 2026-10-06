@@ -3,7 +3,7 @@ import type { Database } from '~/types/supabase.types'
 import { computed, ref, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import AppNotFoundModal from '~/components/AppNotFoundModal.vue'
-import AppOverviewSummary from '~/components/dashboard/AppOverviewSummary.vue'
+import LiveReleaseDashboard from '~/components/dashboard/LiveReleaseDashboard.vue'
 import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDisplayStore } from '~/stores/display'
@@ -107,7 +107,7 @@ watchEffect(async () => {
         <FailedCard v-if="lacksSecurityAccess" />
 
         <div :class="{ 'blur-sm pointer-events-none select-none': appNotFound }">
-          <AppOverviewSummary
+          <LiveReleaseDashboard
             v-if="!lacksSecurityAccess && id"
             :app-id="id"
             :force-demo="appNotFound"

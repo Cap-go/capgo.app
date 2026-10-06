@@ -11,13 +11,13 @@ test.describe('Observe sections', () => {
     // Dismiss support prompt so mobile tab clicks are not intercepted.
     await dismissSupportPrompt(page)
 
-    const releasesTab = page.getByRole('button', { name: 'Releases', exact: true })
+    const liveReleaseTab = page.getByRole('button', { name: 'Live release', exact: true })
     const errorsTab = page.getByRole('button', { name: 'Errors', exact: true })
     const nativeTab = page.getByRole('button', { name: 'Native', exact: true })
     const compatibilityTab = page.getByRole('button', { name: 'Compatibility', exact: true })
     const logsTab = page.getByRole('button', { name: 'Logs', exact: true })
 
-    await expect(releasesTab).toBeVisible()
+    await expect(liveReleaseTab).toBeVisible()
     await expect(errorsTab).toBeVisible()
     await expect(nativeTab).toBeVisible()
     await expect(compatibilityTab).toBeVisible()
@@ -36,20 +36,22 @@ test.describe('Observe sections', () => {
     await compatibilityTab.click()
     await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/compatibility(?:\?|$)/)
     await expect(compatibilityTab).toHaveAttribute('aria-current', 'page')
+    await page.getByRole('tab', { name: 'Plugins', exact: true }).click()
     await expect(page.locator('[data-test="observe-plugin-insights"]')).toBeVisible()
     await expect(page.locator('[data-test="observe-plugin-insights"] table').getByText('4.15.3', { exact: true })).toBeVisible()
 
     await page.goto('/app/com.demo.app/observe/plugins')
     await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/compatibility#plugins$/)
+    await expect(page.locator('[data-test="observe-plugin-insights"]')).toBeVisible()
 
     await page.goto('/app/com.demo.app/observe/updater')
     await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/errors(?:\?|$)/)
 
     await page.setViewportSize({ width: 375, height: 667 })
-    await expect(releasesTab).toBeVisible()
+    await expect(liveReleaseTab).toBeVisible()
     await expect(logsTab).toBeVisible()
 
-    const releasesBox = await releasesTab.boundingBox()
+    const releasesBox = await liveReleaseTab.boundingBox()
     expect(releasesBox?.x).toBeGreaterThanOrEqual(0)
 
     // Dismiss support prompt so mobile tab clicks are not intercepted.

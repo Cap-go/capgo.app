@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions } from 'chart.js'
-import type { ReleaseLiveChannel, ReleaseLiveDeployment } from '~/composables/useReleaseLive'
+import type { ReleaseLiveChannel, ReleaseLiveDeployment, ReleaseLiveResponse } from '~/composables/useReleaseLive'
 import { useDark, useDocumentVisibility, useNow } from '@vueuse/core'
 import { computed, ref, watch } from 'vue'
 import { Bar } from 'vue-chartjs'
@@ -21,10 +21,20 @@ const props = withDefaults(defineProps<{
   // Folds the KPI tiles into the release row and shortens the chart so
   // Observe > Releases fits one screen.
   dense?: boolean
+  // Locks the panel to one channel (channel statistics page): the channel
+  // picker is hidden and only that channel's deployments are offered.
+  channelId?: number
 }>(), {
   forceDemo: false,
   dense: false,
+  channelId: undefined,
 })
+
+const emit = defineEmits<{
+  // Lets the page reuse the release and adoption it shows (alerts banner)
+  // instead of polling release_live a second time.
+  live: [value: ReleaseLiveResponse | null]
+}>()
 
 registerDashboardCharts()
 
@@ -47,7 +57,7 @@ function queryString(value: unknown) {
 // falls back to the app's default channel) and ?version= a deployment on it
 // (empty means the latest one). The release banner links with ?version= only.
 const selected = computed(() => {
-  const channelId = Number(queryString(route.query.channel))
+  const channelId = props.channelId ?? Number(queryString(route.query.channel))
   return {
     channel_id: Number.isInteger(channelId) && channelId > 0 ? channelId : undefined,
     version_name: queryString(route.query.version),
@@ -58,7 +68,7 @@ function selectRelease(channelId: number | undefined, versionName: string | unde
   void router.replace({
     query: {
       ...route.query,
-      channel: channelId ? String(channelId) : undefined,
+      channel: props.channelId || !channelId ? undefined : String(channelId),
       version: versionName || undefined,
     },
   })
@@ -87,6 +97,7 @@ const channels = ref<ReleaseLiveChannel[]>([])
 const activeChannel = ref<ReleaseLiveChannel | null>(null)
 const recentDeployments = ref<ReleaseLiveDeployment[]>([])
 watch(live, (value) => {
+  emit('live', value)
   if (!value)
     return
   channels.value = value.channels
@@ -271,7 +282,8 @@ watch(() => props.appId, () => {
     <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
       <div class="min-w-0">
         <div class="flex flex-wrap items-center gap-2">
-          <h2 class="text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
+          <!-- Dense pages already name this view in their tab, so the title goes. -->
+          <h2 v-if="!dense" class="text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
             {{ t('release-live-title') }}
           </h2>
           <span
@@ -306,51 +318,55 @@ watch(() => props.appId, () => {
           {{ t('release-live-updated-ago', { seconds: secondsSinceUpdate }) }}
         </p>
       </div>
-      <!-- Same gray toolbar as PeriodDaySelector on the other dashboard tabs. -->
-      <div class="flex items-center w-full gap-1 p-1 bg-gray-200 rounded-lg sm:w-auto sm:self-start xl:self-auto shrink-0 dark:bg-gray-800">
-        <label v-if="channelOptions.length" :class="segmentClass" data-testid="release-live-channel-segment">
-          <span class="hidden text-gray-500 shrink-0 sm:inline dark:text-gray-400">{{ t('release-live-select-channel') }}</span>
-          <select
-            v-model="selectedChannelId"
-            :class="segmentSelectClass"
-            :aria-label="t('release-live-select-channel')"
-            :disabled="forceDemo"
-            data-testid="release-live-channel"
+      <div class="flex flex-wrap items-center justify-end gap-2">
+        <!-- Page-level controls (alerts, period) sit on the same row. -->
+        <slot name="actions" />
+        <!-- Same gray toolbar as PeriodDaySelector on the other dashboard tabs. -->
+        <div class="flex items-center w-full gap-1 p-1 bg-gray-200 rounded-lg sm:w-auto shrink-0 dark:bg-gray-800">
+          <label v-if="channelOptions.length && !props.channelId" :class="segmentClass" data-testid="release-live-channel-segment">
+            <span class="hidden text-gray-500 shrink-0 sm:inline dark:text-gray-400">{{ t('release-live-select-channel') }}</span>
+            <select
+              v-model="selectedChannelId"
+              :class="segmentSelectClass"
+              :aria-label="t('release-live-select-channel')"
+              :disabled="forceDemo"
+              data-testid="release-live-channel"
+            >
+              <option v-for="option in channelOptions" :key="option.id" :value="option.id">
+                {{ option.label }}
+              </option>
+            </select>
+            <IconChevronDown class="absolute w-3.5 h-3.5 -translate-y-1/2 pointer-events-none right-2 top-1/2 text-gray-400" aria-hidden="true" />
+          </label>
+          <label v-if="deploymentOptions.length" :class="segmentClass" data-testid="release-live-release-segment">
+            <span class="hidden text-gray-500 shrink-0 sm:inline dark:text-gray-400">{{ t('release-live-select-release') }}</span>
+            <select
+              v-model="selectedVersion"
+              :class="segmentSelectClass"
+              :aria-label="t('release-live-select-release')"
+              :disabled="forceDemo"
+              data-testid="release-live-release"
+            >
+              <option value="">
+                {{ t('release-live-latest') }}
+              </option>
+              <option v-for="option in deploymentOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+            <IconChevronDown class="absolute w-3.5 h-3.5 -translate-y-1/2 pointer-events-none right-2 top-1/2 text-gray-400" aria-hidden="true" />
+          </label>
+          <button
+            type="button"
+            class="flex items-center justify-center w-9 h-9 transition-colors rounded-md cursor-pointer shrink-0 text-gray-600 hover:bg-white hover:text-gray-900 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+            :disabled="loading || forceDemo"
+            :aria-label="t('refresh')"
+            :title="t('refresh')"
+            @click="refresh"
           >
-            <option v-for="option in channelOptions" :key="option.id" :value="option.id">
-              {{ option.label }}
-            </option>
-          </select>
-          <IconChevronDown class="absolute w-3.5 h-3.5 -translate-y-1/2 pointer-events-none right-2 top-1/2 text-gray-400" aria-hidden="true" />
-        </label>
-        <label v-if="deploymentOptions.length" :class="segmentClass" data-testid="release-live-release-segment">
-          <span class="hidden text-gray-500 shrink-0 sm:inline dark:text-gray-400">{{ t('release-live-select-release') }}</span>
-          <select
-            v-model="selectedVersion"
-            :class="segmentSelectClass"
-            :aria-label="t('release-live-select-release')"
-            :disabled="forceDemo"
-            data-testid="release-live-release"
-          >
-            <option value="">
-              {{ t('release-live-latest') }}
-            </option>
-            <option v-for="option in deploymentOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-          <IconChevronDown class="absolute w-3.5 h-3.5 -translate-y-1/2 pointer-events-none right-2 top-1/2 text-gray-400" aria-hidden="true" />
-        </label>
-        <button
-          type="button"
-          class="flex items-center justify-center w-9 h-9 transition-colors rounded-md cursor-pointer shrink-0 text-gray-600 hover:bg-white hover:text-gray-900 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
-          :disabled="loading || forceDemo"
-          :aria-label="t('refresh')"
-          :title="t('refresh')"
-          @click="refresh"
-        >
-          <IconRefresh class="w-4 h-4" :class="{ 'animate-spin': loading }" />
-        </button>
+            <IconRefresh class="w-4 h-4" :class="{ 'animate-spin': loading }" />
+          </button>
+        </div>
       </div>
     </div>
     <div v-if="loading && !live && !error" class="flex items-center justify-center h-48 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
@@ -443,7 +459,7 @@ watch(() => props.appId, () => {
             {{ t('release-live-view-bundle') }}
           </RouterLink>
           <RouterLink
-            v-if="release.channel_id && !forceDemo"
+            v-if="release.channel_id && !forceDemo && !props.channelId"
             :to="`/app/${appId}/channel/${release.channel_id}/statistics`"
             class="d-btn d-btn-sm d-btn-outline"
           >
@@ -519,10 +535,10 @@ watch(() => props.appId, () => {
               {{ t('release-live-bucket', { minutes: live.window.bucket_minutes }) }}
             </span>
           </div>
-          <div v-if="hasActivity" :class="dense ? 'h-40' : 'h-56'">
+          <div v-if="hasActivity" :class="dense ? 'h-32' : 'h-56'">
             <Bar :data="chartData" :options="chartOptions" />
           </div>
-          <div v-else class="flex flex-col items-center justify-center gap-2 text-sm text-center text-slate-500 dark:text-slate-400" :class="dense ? 'h-40' : 'h-56'">
+          <div v-else class="flex flex-col items-center justify-center gap-2 text-sm text-center text-slate-500 dark:text-slate-400" :class="dense ? 'h-32' : 'h-56'">
             <Spinner size="w-6 h-6" />
             <p class="max-w-sm">
               {{ t('release-live-waiting') }}

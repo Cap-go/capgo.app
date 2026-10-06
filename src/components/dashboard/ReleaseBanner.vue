@@ -44,7 +44,7 @@ function viewLive() {
   if (!props.release)
     return
   router.push({
-    path: `/app/${encodeURIComponent(props.appId)}/observe/releases`,
+    path: `/app/${encodeURIComponent(props.appId)}`,
     query: {
       version: props.release.version_name,
       ...(props.release.channel_id ? { channel: String(props.release.channel_id) } : {}),

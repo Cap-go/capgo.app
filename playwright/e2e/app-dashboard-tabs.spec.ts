@@ -10,39 +10,43 @@ test.describe('App overview', () => {
     }, TEST_USER_ID)
   })
 
-  test('shows a one-screen summary without dashboard subtabs', async ({ page }) => {
+  test('shows the one-screen Live release landing page', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto('/app/com.demo.app')
 
     await expect(page.locator('[data-testid="app-overview"]')).toBeVisible()
-    // Summary is the landing sub-tab of the single Observe main tab.
+    // Live release is the landing sub-tab of the single Observe main tab.
     await expect(page.getByRole('button', { name: 'Observe', exact: true })).toHaveAttribute('aria-current', 'page')
-    await expect(page.getByRole('button', { name: 'Summary', exact: true })).toHaveAttribute('aria-current', 'page')
-    await expect(page.locator('[data-testid="overview-kpis"] a')).toHaveCount(6)
+    await expect(page.getByRole('button', { name: 'Live release', exact: true })).toHaveAttribute('aria-current', 'page')
+    await expect(page.locator('[data-testid="overview-kpis"] a')).toHaveCount(3)
+    await expect(page.locator('[data-testid="release-live"]')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Installs', exact: true })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Active Bundle', exact: true })).toHaveCount(0)
     await expect(page.getByRole('heading', { name: 'Active bundle' })).toBeVisible()
 
     // The whole summary fits above the fold.
-    const issues = page.locator('[data-testid="overview-top-issues"]')
-    await expect(issues).toBeVisible()
-    const box = await issues.boundingBox()
+    const lastPanel = page.locator('[data-testid="update-delivery-latency"]')
+    await expect(lastPanel).toBeVisible()
+    const box = await lastPanel.boundingBox()
     expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(900)
 
     await page.locator('[data-testid="overview-kpi-errors"]').click()
     await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/errors\?days=7/)
   })
 
-  test('redirects the old overview subtabs to Observe and billing usage to Settings', async ({ page }) => {
+  test('redirects the old overview and releases tabs to Live release and billing usage to Settings', async ({ page }) => {
     await page.goto('/app/com.demo.app/installs')
-    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/releases(?:\?|$)/)
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app(?:\?|$)/)
     await expect(page.locator('[data-testid="bundle-install-stats"]')).toBeVisible()
 
     await page.goto('/app/com.demo.app/active-bundle')
-    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/releases(?:\?|$)/)
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app(?:\?|$)/)
+
+    await page.goto('/app/com.demo.app/observe/releases')
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app(?:\?|$)/)
 
     await page.goto('/app/com.demo.app/live?version=1.0.0')
-    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/releases\?version=1\.0\.0/)
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app\?version=1\.0\.0/)
     await expect(page.locator('[data-testid="release-live"]')).toBeVisible()
 
     await page.goto('/app/com.demo.app/native')

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useChartCardCompact } from '~/components/dashboard/chartCardDensity'
+import { useChartCardCompact, useChartCardDensity } from '~/components/dashboard/chartCardDensity'
 import Spinner from '~/components/Spinner.vue'
 import { formatNumberValue } from '~/services/formatLocale'
 
@@ -46,6 +46,12 @@ const props = defineProps({
 
 const { t } = useI18n()
 const compact = useChartCardCompact()
+const density = useChartCardDensity()
+const heightClass = computed(() => {
+  if (density.value === 'dense')
+    return 'h-[256px]'
+  return density.value === 'compact' ? 'h-[320px]' : 'min-h-[460px]'
+})
 
 const showEvolutionBadge = computed(() => props.lastDayEvolution !== undefined && props.lastDayEvolution !== null)
 const displayNoDataMessage = computed(() => props.noDataMessage ?? t('no-data'))
@@ -55,7 +61,7 @@ const displayNoDataMessage = computed(() => props.noDataMessage ?? t('no-data'))
   <div
     data-test="chart-card"
     class="relative col-span-full flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-800/60"
-    :class="compact ? 'h-[320px]' : 'min-h-[460px]'"
+    :class="heightClass"
   >
     <!-- Header with title and stats -->
     <div data-test="chart-card-header" class="relative overflow-hidden px-5" :class="compact ? 'pt-4' : 'pt-5'">

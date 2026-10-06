@@ -227,13 +227,6 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
-    '/app/[app].observe.releases': RouteRecordInfo<
-      '/app/[app].observe.releases',
-      '/app/:app/observe/releases',
-      { app: ParamValue<true> },
-      { app: ParamValue<false> },
-      | never
-    >,
     '/app/[app].settings': RouteRecordInfo<
       '/app/[app].settings',
       '/app/:app/settings',
@@ -822,14 +815,6 @@ declare module 'vue-router/auto-routes' {
     'src/pages/app/[app].observe.native.vue': {
       routes:
         | '/app/[app].observe.native'
-      views:
-        | never
-      pathParamNames:
-        | 'app'
-    }
-    'src/pages/app/[app].observe.releases.vue': {
-      routes:
-        | '/app/[app].observe.releases'
       views:
         | never
       pathParamNames:

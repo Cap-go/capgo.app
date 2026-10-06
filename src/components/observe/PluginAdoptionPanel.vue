@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { PluginDistTags, PluginVersionStatus } from '~/services/pluginVersionRecommendation'
-import { computed, nextTick, ref, useTemplateRef, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -111,24 +111,17 @@ async function copyInstallCommand(command: string) {
   }
 }
 
-const panel = useTemplateRef<HTMLElement>('panel')
-
 watch(packageId, async () => {
   const [, tags] = await Promise.all([
     fetchPluginStats(),
     fetchUpdaterDistTags(),
   ])
   distTags.value = tags
-  // The old Plugins tab redirects here with #plugins; land on this section.
-  if (route.hash === '#plugins') {
-    await nextTick()
-    panel.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
 }, { immediate: true })
 </script>
 
 <template>
-  <section id="plugins" ref="panel" class="scroll-mt-4" data-testid="observe-plugins">
+  <section id="plugins" data-testid="observe-plugins">
     <div class="flex flex-col gap-4">
       <div class="flex items-center min-w-0 gap-1">
         <h2 class="text-base font-semibold text-slate-950 dark:text-white">
@@ -224,54 +217,49 @@ watch(packageId, async () => {
 
         <section data-test="observe-plugin-insights" class="flex flex-col gap-4">
           <div class="flex items-center justify-between gap-3">
-            <div>
-              <h2 class="text-base font-semibold text-slate-950 dark:text-white">
-                {{ t('native-observe-plugin-distribution') }}
-              </h2>
-              <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                {{ t('native-observe-plugin-distribution-help') }}
-              </p>
-            </div>
+            <h2 class="text-base font-semibold text-slate-950 dark:text-white" :title="t('native-observe-plugin-distribution-help')">
+              {{ t('native-observe-plugin-distribution') }}
+            </h2>
             <IconRocket class="w-5 h-5 text-violet-500" aria-hidden="true" />
           </div>
 
-          <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-              <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+          <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
+            <div class="px-4 py-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+              <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
                 <IconSmartphone class="w-4 h-4" aria-hidden="true" />
                 {{ t('native-observe-plugin-production-devices') }}
               </div>
-              <div class="mt-2 text-2xl font-semibold tabular-nums text-slate-950 dark:text-white">
+              <div class="mt-1 text-xl font-semibold tabular-nums text-slate-950 dark:text-white">
                 {{ formatCount(pluginFleetDevices) }}
               </div>
             </div>
 
-            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-              <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+            <div class="px-4 py-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+              <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
                 <IconRocket class="w-4 h-4" aria-hidden="true" />
                 {{ t('native-observe-plugin-most-reported') }}
               </div>
-              <div class="mt-2 text-2xl font-semibold break-words text-slate-950 dark:text-white">
+              <div class="mt-1 text-xl font-semibold break-words text-slate-950 dark:text-white">
                 {{ dominantPluginVersion?.plugin_version ?? '-' }}
               </div>
             </div>
 
-            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-              <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+            <div class="px-4 py-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+              <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
                 <IconLayers class="w-4 h-4" aria-hidden="true" />
                 {{ t('native-observe-plugin-latest-for-major') }}
               </div>
-              <div class="mt-2 text-2xl font-semibold break-words text-slate-950 dark:text-white">
+              <div class="mt-1 text-xl font-semibold break-words text-slate-950 dark:text-white">
                 {{ recommendation?.recommendedVersion ?? '-' }}
               </div>
             </div>
 
-            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-              <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+            <div class="px-4 py-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+              <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
                 <IconActivity class="w-4 h-4" aria-hidden="true" />
                 {{ t('native-observe-plugin-devices-behind') }}
               </div>
-              <div class="mt-2 text-2xl font-semibold tabular-nums text-slate-950 dark:text-white">
+              <div class="mt-1 text-xl font-semibold tabular-nums text-slate-950 dark:text-white">
                 {{ behindDevicesDisplay === null ? '-' : formatCount(behindDevicesDisplay) }}
               </div>
             </div>
@@ -335,7 +323,7 @@ watch(packageId, async () => {
             </div>
           </div>
 
-          <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+          <div class="px-4 py-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
             <div v-if="recommendationRows.length" class="overflow-x-auto">
               <table class="w-full min-w-[720px] text-sm">
                 <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">

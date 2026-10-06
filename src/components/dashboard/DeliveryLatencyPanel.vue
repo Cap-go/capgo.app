@@ -211,7 +211,7 @@ watch(
     <div
       v-if="statsLoading && !forceDemo && !stats && !statsError"
       class="flex items-center justify-center bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10"
-      :class="dense ? 'h-56' : 'h-64'"
+      :class="dense ? 'h-[256px]' : 'h-64'"
     >
       <Spinner size="w-10 h-10" />
     </div>
@@ -219,7 +219,7 @@ watch(
     <div
       v-else-if="statsError && !forceDemo"
       class="flex flex-col items-center justify-center gap-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10 text-slate-500 dark:text-slate-400"
-      :class="dense ? 'h-56' : 'h-64'"
+      :class="dense ? 'h-[256px]' : 'h-64'"
     >
       <IconTimer class="w-12 h-12" />
       <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">
@@ -265,7 +265,7 @@ watch(
         </div>
       </div>
 
-      <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+      <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10" :class="dense ? 'flex flex-col h-[256px]' : ''">
         <div class="flex items-center justify-between gap-3" :class="dense ? 'mb-3' : 'mb-4'">
           <div v-if="dense" class="flex items-center min-w-0 gap-2" :title="`${t('update-delivery-latency-help')} ${t('update-delivery-trend-help')}`">
             <h3 class="text-base font-semibold truncate text-slate-950 dark:text-white">
@@ -288,7 +288,7 @@ watch(
           <Spinner size="w-5 h-5" />
         </div>
 
-        <div v-if="!hasData" class="flex flex-col items-center justify-center text-slate-500 dark:text-slate-400" :class="dense ? 'h-40' : 'h-72'">
+        <div v-if="!hasData" class="flex flex-col items-center justify-center text-slate-500 dark:text-slate-400" :class="dense ? 'flex-1' : 'h-72'">
           <IconTimer class="w-12 h-12 mb-3" />
           <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">
             {{ t('update-delivery-no-data') }}
@@ -297,7 +297,7 @@ watch(
             {{ t(emptyHelpKey) }}
           </p>
         </div>
-        <div v-else class="relative" :class="dense ? 'h-40' : 'h-80'">
+        <div v-else class="relative" :class="dense ? 'flex-1 min-h-0' : 'h-80'">
           <Line :data="chartData" :options="chartOptions" />
         </div>
       </div>

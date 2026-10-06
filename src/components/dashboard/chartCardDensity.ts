@@ -1,14 +1,21 @@
 import type { InjectionKey, Ref } from 'vue'
-import { inject, provide, ref } from 'vue'
+import { computed, inject, provide, ref } from 'vue'
 
-// Pages that must fit several chart cards above the fold provide a compact
+export type ChartCardDensity = 'normal' | 'compact' | 'dense'
+
+// Pages that must fit several chart cards above the fold provide a smaller
 // density; every ChartCard below them shrinks its height and type scale.
-const chartCardCompactKey: InjectionKey<Ref<boolean>> = Symbol('chartCardCompact')
+const chartCardDensityKey: InjectionKey<Ref<ChartCardDensity>> = Symbol('chartCardDensity')
 
-export function provideChartCardCompact(compact: Ref<boolean> = ref(true)) {
-  provide(chartCardCompactKey, compact)
+export function provideChartCardCompact(density: ChartCardDensity = 'compact') {
+  provide(chartCardDensityKey, ref(density))
+}
+
+export function useChartCardDensity() {
+  return inject(chartCardDensityKey, ref<ChartCardDensity>('normal'))
 }
 
 export function useChartCardCompact() {
-  return inject(chartCardCompactKey, ref(false))
+  const density = useChartCardDensity()
+  return computed(() => density.value !== 'normal')
 }
