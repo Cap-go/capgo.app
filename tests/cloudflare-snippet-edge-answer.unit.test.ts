@@ -228,7 +228,7 @@ describe('cloudflare snippet edge answers', () => {
   it('keeps every path within the 5 subrequest snippet budget', async () => {
     let failPrimary = true
     const fetchMock = vi.fn(async (url: unknown) => {
-      if (failPrimary && String(url).startsWith('https://plugin.eu.capgo.app'))
+      if (failPrimary && new URL(String(url)).origin === 'https://plugin.eu.capgo.app')
         return new Response('upstream error', { status: 502 })
       return new Response(JSON.stringify(NO_NEW_BODY), { status: 200, headers: { 'X-Capgo-Edge-Fill': updatesFill } })
     })
