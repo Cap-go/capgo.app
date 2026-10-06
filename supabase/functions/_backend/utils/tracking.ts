@@ -9,7 +9,9 @@ import { backgroundTask } from './utils.ts'
 
 export interface TrackOptions {
   client_event_id?: string
+  /** Server-owned canonical identity; /private/events replaces client values. */
   event_id?: string
+  /** Frozen times for provider delivery and eventual replay, independent of request retries. */
   occurred_at?: string
   accepted_at?: string
   channel: string
