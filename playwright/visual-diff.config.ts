@@ -356,7 +356,8 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       // Seed data has no native observe events, so fixture the stats to show the populated layout.
       await mockNativeObserveStats(page)
       await page.goto('/app/com.demo.app/observe/native')
-      await page.getByRole('heading', { name: 'Action breakdown' }).waitFor()
+      // Base renders "Action breakdown" as a heading, head as a detail tab.
+      await page.getByRole('heading', { name: 'Action breakdown' }).or(page.getByRole('tab', { name: 'Action breakdown' })).first().waitFor()
     },
   },
   {
@@ -367,8 +368,13 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await mockNativeObserveStats(page)
       await page.goto('/app/com.demo.app/observe/native')
       const heading = page.getByRole('heading', { name: 'Action breakdown' })
-      await heading.waitFor()
-      await heading.evaluate(el => el.scrollIntoView({ block: 'start' }))
+      const tab = page.getByRole('tab', { name: 'Action breakdown' })
+      await heading.or(tab).first().waitFor()
+      // Head shows one detail table at a time behind tabs; base stacks them.
+      if (await tab.isVisible())
+        await tab.click()
+      else
+        await heading.evaluate(el => el.scrollIntoView({ block: 'start' }))
     },
   },
   { slug: 'observe-compatibility', path: '/app/com.demo.app/observe/compatibility', auth: true },
