@@ -23,13 +23,17 @@ beforeAll(async () => {
   writeFileSync(join(dir, 'busy.mjs'), 'setInterval(() => {}, 10_000)')
   writeFileSync(join(dir, 'quick.mjs'), 'setTimeout(() => {}, 300)')
   writeFileSync(join(dir, 'slow.mjs'), 'setTimeout(() => {}, 900)')
+  writeFileSync(join(dir, 'released.mjs'), "import { parentPort } from 'node:worker_threads'; parentPort.once('message', () => process.exit(0))")
 })
 
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
-function run({ commandPath = 'app list', options = {}, tty = true, stdinTty = tty, stdoutTty = tty, ci = false, workers = ['busy.mjs'], foregroundMs = 0, previousInterrupt = false, telemetry = 'ok', disabled = false } = {}) {
+function run({ commandPath = 'app list', options = {}, tty = true, stdinTty = tty, stdoutTty = tty, ci = false, workers = ['busy.mjs'], foregroundMs = 0, previousInterrupt = false, telemetry = 'ok', disabled = false, controlledClock = false } = {}) {
   const source = `
+    import assert from 'node:assert/strict'
     import { performance } from 'node:perf_hooks'
+    import { mock } from 'node:test'
+    import { setImmediate as nextTurn } from 'node:timers/promises'
     import { startOnboardingCheck, waitForOnboardingChecks, getPendingOnboardingChecks } from ${JSON.stringify(harness)}
     Object.defineProperty(process.stdin, 'isTTY', { value: ${stdinTty} })
     Object.defineProperty(process.stdout, 'isTTY', { value: ${stdoutTty} })
@@ -59,9 +63,39 @@ function run({ commandPath = 'app list', options = {}, tty = true, stdinTty = tt
     }
     await new Promise(resolve => setTimeout(resolve, ${foregroundMs}))
     console.log('interrupt-count-before-wait:' + foregroundInterrupts)
-    const started = performance.now()
-    await waitForOnboardingChecks(command, ${JSON.stringify(commandPath)})
-    console.log('foreground-finished:' + Math.round(performance.now() - started))
+    if (${controlledClock}) mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+    const now = ${controlledClock} ? Date.now : () => performance.now()
+    const started = now()
+    let finished = false
+    const completion = waitForOnboardingChecks(command, ${JSON.stringify(commandPath)}).then(() => { finished = true })
+    if (${controlledClock}) {
+      // Keep real workers and telemetry, but advance the shared deadline without
+      // measuring how quickly a busy CI runner schedules this child process.
+      if (${JSON.stringify(telemetry)} === 'hang') {
+        // Mock timers cannot keep the process alive. Release real workers only
+        // after shutdown starts, then prove telemetry alone waits for the deadline.
+        const checks = [...getPendingOnboardingChecks()]
+        for (const [worker] of checks) {
+          worker.ref()
+          worker.postMessage('finish')
+        }
+        await Promise.all(checks.map(([, check]) => check.completion))
+      }
+      await nextTurn()
+      mock.timers.tick(4_999)
+      await nextTurn()
+      assert.equal(finished, false, 'shutdown completed before the shared deadline')
+      mock.timers.tick(1)
+      await nextTurn()
+      mock.timers.tick(0)
+      await completion
+      assert.equal(finished, true, 'shutdown did not complete at the shared deadline')
+    }
+    else {
+      await completion
+    }
+    console.log('foreground-finished:' + Math.round(now() - started))
+    if (${controlledClock}) mock.timers.reset()
   `
   const runner = join(dir, `run-${++runnerCount}.mjs`)
   writeFileSync(runner, source)
@@ -96,10 +130,10 @@ function waitEvents(result) {
 }
 
 test.concurrent('both workers share one five-second shutdown budget', async () => {
-  const { completion } = run({ workers: ['busy.mjs', 'busy.mjs'] })
+  const { completion } = run({ workers: ['busy.mjs', 'busy.mjs'], controlledClock: true })
   const result = await completion
   const duration = waitedMs(result)
-  assert.ok(duration >= 4_900 && duration < 6_000, `shared wait was ${duration}ms`)
+  assert.equal(duration, 5_000, 'workers must share one five-second deadline')
   assert.equal(result.text.match(/Waiting for background checks/g)?.length, 1)
   const events = waitEvents(result)
   assert.equal(events.length, 1)
@@ -176,9 +210,9 @@ test.concurrent('telemetry opt-out and delivery errors preserve the wait and ear
 })
 
 test.concurrent('hanging telemetry is aborted within the same five-second budget', async () => {
-  const result = await run({ workers: ['quick.mjs'], telemetry: 'hang' }).completion
+  const result = await run({ workers: ['released.mjs'], telemetry: 'hang', controlledClock: true }).completion
   const duration = waitedMs(result)
-  assert.ok(duration >= 4_900 && duration < 6_000, `telemetry wait was ${duration}ms`)
+  assert.equal(duration, 5_000, 'telemetry must share the worker deadline')
   assert.equal(waitEvents(result).length, 1)
   assert.ok(result.output.includes('telemetry-aborted'))
 }, 12_000)

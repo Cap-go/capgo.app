@@ -53,14 +53,17 @@ function addCapacitorApp(root, relativeDir, name, appId) {
   return dir
 }
 
-function makeStdout(cols = 100, rows = 50) {
+function makeStdout(cols = 100, rows = 50, beforeWrite = () => {}) {
   const stream = new EventEmitter()
   stream.columns = cols
   stream.rows = rows
   stream.isTTY = true
   stream.frames = []
+  stream.frameTimes = []
   stream.lastFrame = ''
   stream.write = (frame) => {
+    beforeWrite(frame)
+    stream.frameTimes.push(Date.now())
     stream.frames.push(frame)
     stream.lastFrame = frame
     return true
@@ -134,50 +137,61 @@ try {
     }
   })
 
-  await test('keeps delayed search status visible for its configured minimum duration', async () => {
-    const candidate = {
-      dir: '/workspace/apps/mobile',
-      relativeDir: 'apps/mobile',
-      packageName: '@example/mobile',
-      appId: 'com.example.mobile',
-    }
-    let resolveDiscovery
-    const discoveryPromise = new Promise((resolve) => {
-      resolveDiscovery = resolve
-    })
-    const stdout = makeStdout()
-    const instance = render(
-      React.createElement(BuilderProjectDiscoveryApp, {
-        searchRoot: '/workspace',
-        onDecision: () => {},
-        discoverProjects: () => discoveryPromise,
-        timing: {
-          searchStatusDelayMs: 20,
-          minimumSearchStatusMs: 80,
-          timeoutMs: 500,
+  for (const renderDelayMs of [0, 120]) {
+    await test(`keeps search status visible for its minimum duration after ${renderDelayMs}ms render delay`, async () => {
+      const candidate = {
+        dir: '/workspace/apps/mobile',
+        relativeDir: 'apps/mobile',
+        packageName: '@example/mobile',
+        appId: 'com.example.mobile',
+      }
+      let resolveDiscovery
+      const discoveryPromise = new Promise((resolve) => {
+        resolveDiscovery = resolve
+      })
+      let delayed = false
+      const stdout = makeStdout(100, 50, (frame) => {
+        if (delayed || !/Looking for a Capacitor app/.test(frame))
+          return
+        delayed = true
+        // Simulate a slow terminal commit, before the status becomes visible.
+        const until = Date.now() + renderDelayMs
+        while (Date.now() < until) {}
+      })
+      const instance = render(
+        React.createElement(BuilderProjectDiscoveryApp, {
+          searchRoot: '/workspace',
+          onDecision: () => {},
+          discoverProjects: () => discoveryPromise,
+          timing: {
+            searchStatusDelayMs: 20,
+            minimumSearchStatusMs: 80,
+            timeoutMs: 5000,
+          },
+        }),
+        {
+          stdout,
+          stderr: makeStdout(),
+          stdin: makeStdin(),
+          debug: true,
+          exitOnCtrlC: false,
+          patchConsole: false,
         },
-      }),
-      {
-        stdout,
-        stderr: makeStdout(),
-        stdin: makeStdin(),
-        debug: true,
-        exitOnCtrlC: false,
-        patchConsole: false,
-      },
-    )
+      )
 
-    try {
-      await waitForFrame(stdout, /Looking for a Capacitor app/, 300)
-      const statusShownAt = Date.now()
-      resolveDiscovery({ candidates: [candidate], nxDetected: false })
-      await waitForFrame(stdout, /Is this the correct app\?/, 500)
-      assert.ok(Date.now() - statusShownAt >= 70, 'search status disappeared before its minimum display time')
-    }
-    finally {
-      instance.unmount()
-    }
-  })
+      try {
+        await waitForFrame(stdout, /Looking for a Capacitor app/, 2000)
+        const statusShownAt = stdout.frameTimes[stdout.frames.findIndex(frame => /Looking for a Capacitor app/.test(frame))]
+        resolveDiscovery({ candidates: [candidate], nxDetected: false })
+        await waitForFrame(stdout, /Is this the correct app\?/, 2000)
+        const selectionShownAt = stdout.frameTimes[stdout.frames.findIndex(frame => /Is this the correct app\?/.test(frame))]
+        assert.ok(selectionShownAt - statusShownAt >= 70, 'search status disappeared before its minimum display time')
+      }
+      finally {
+        instance.unmount()
+      }
+    })
+  }
 
   await test('stops project discovery after five seconds', async () => {
     assert.deepEqual(DEFAULT_BUILDER_PROJECT_DISCOVERY_TIMING, {
