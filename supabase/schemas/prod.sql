@@ -9420,7 +9420,7 @@ DECLARE
     v_is_good_plan boolean;
 BEGIN
     SELECT
-        p.mau,
+        p.mau + COALESCE(si.extra_mau, 0),
         p.bandwidth,
         p.storage,
         p.build_time_unit,
@@ -9445,9 +9445,7 @@ BEGIN
     percent_storage := public.convert_number_to_percent(total_stats.storage, v_plan_storage);
     percent_build_time := public.convert_number_to_percent(total_stats.build_time_unit, v_plan_build_time);
 
-    IF v_plan_name = 'Enterprise' THEN
-        v_is_good_plan := TRUE;
-    ELSIF v_plan_name IS NULL THEN
+    IF v_plan_name IS NULL THEN
         v_is_good_plan := FALSE;
     ELSE
         v_is_good_plan := v_plan_mau >= total_stats.mau
@@ -9490,7 +9488,7 @@ DECLARE
     v_is_good_plan boolean;
 BEGIN
     SELECT
-        p.mau,
+        p.mau + COALESCE(si.extra_mau, 0),
         p.bandwidth,
         p.storage,
         p.build_time_unit,
@@ -9515,9 +9513,7 @@ BEGIN
     percent_storage := public.convert_number_to_percent(total_stats.storage, v_plan_storage);
     percent_build_time := public.convert_number_to_percent(total_stats.build_time_unit, v_plan_build_time);
 
-    IF v_plan_name = 'Enterprise' THEN
-        v_is_good_plan := TRUE;
-    ELSIF v_plan_name IS NULL THEN
+    IF v_plan_name IS NULL THEN
         v_is_good_plan := FALSE;
     ELSE
         v_is_good_plan := v_plan_mau >= total_stats.mau
@@ -9570,7 +9566,7 @@ BEGIN
   END IF;
 
   SELECT
-    p.mau,
+    p.mau + COALESCE(si.extra_mau, 0),
     p.bandwidth,
     p.storage,
     p.build_time_unit
@@ -9644,7 +9640,7 @@ BEGIN
     RETURN;
   END IF;
 
-  SELECT p.mau, p.bandwidth, p.storage, p.build_time_unit
+  SELECT p.mau + COALESCE(si.extra_mau, 0), p.bandwidth, p.storage, p.build_time_unit
   INTO v_plan_mau, v_plan_bandwidth, v_plan_storage, v_plan_build_time
   FROM public.orgs o
   JOIN public.stripe_info si ON o.customer_id = si.customer_id
@@ -11918,6 +11914,7 @@ DECLARE
   v_start_date date;
   v_end_date date;
   v_plan_name text;
+  v_extra_mau bigint;
   total_metrics record;
 BEGIN
   IF NOT public.is_internal_request_role(public.current_request_role())
@@ -11926,8 +11923,8 @@ BEGIN
     RETURN false;
   END IF;
 
-  SELECT si.product_id
-  INTO v_product_id
+  SELECT si.product_id, COALESCE(si.extra_mau, 0)
+  INTO v_product_id, v_extra_mau
   FROM public.orgs o
   LEFT JOIN public.stripe_info si ON o.customer_id = si.customer_id
   WHERE o.id = orgid;
@@ -11942,10 +11939,6 @@ BEGIN
   FROM public.plans p
   WHERE p.stripe_id = v_product_id;
 
-  IF v_plan_name = 'Enterprise' THEN
-    RETURN true;
-  END IF;
-
   SELECT * INTO total_metrics
   FROM public.get_total_metrics(orgid, v_start_date, v_end_date);
 
@@ -11953,7 +11946,7 @@ BEGIN
     SELECT 1
     FROM public.plans p
     WHERE p.name = v_plan_name
-      AND p.mau >= total_metrics.mau
+      AND p.mau + v_extra_mau >= total_metrics.mau
       AND p.bandwidth >= total_metrics.bandwidth
       AND p.storage >= total_metrics.storage
       AND p.build_time_unit >= COALESCE(total_metrics.build_time_unit, 0)
@@ -24117,7 +24110,8 @@ CREATE TABLE IF NOT EXISTS "public"."stripe_info" (
     "last_stripe_event_at" timestamp with time zone,
     "past_due_at" timestamp with time zone,
     "churn_reason" "text",
-    "is_above_plan" boolean
+    "is_above_plan" boolean,
+    "extra_mau" bigint DEFAULT 0 NOT NULL
 );
 
 ALTER TABLE ONLY "public"."stripe_info" REPLICA IDENTITY FULL;
@@ -24159,6 +24153,10 @@ COMMENT ON COLUMN "public"."stripe_info"."churn_reason" IS 'Internal churn reaso
 
 
 COMMENT ON COLUMN "public"."stripe_info"."is_above_plan" IS 'Raw plan-fit result before usage credits are applied; null until the next plan-status refresh.';
+
+
+
+COMMENT ON COLUMN "public"."stripe_info"."extra_mau" IS 'MAU bought on top of the plan allowance (Enterprise extra MAU subscription item). 0 when none.';
 
 
 
