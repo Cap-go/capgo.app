@@ -32,6 +32,14 @@
           {
             "binding": "REPAIR_QUEUE",
             "queue": "capgo-r2-inventory-prod-repair"
+          },
+          {
+            "binding": "EVENT_DLQ",
+            "queue": "capgo-r2-inventory-prod-dlq"
+          },
+          {
+            "binding": "REPAIR_DLQ",
+            "queue": "capgo-r2-inventory-prod-repair-dlq"
           }
         ],
         "consumers": [
@@ -76,6 +84,14 @@
           {
             "binding": "REPAIR_QUEUE",
             "queue": "capgo-r2-inventory-preprod-repair"
+          },
+          {
+            "binding": "EVENT_DLQ",
+            "queue": "capgo-r2-inventory-preprod-dlq"
+          },
+          {
+            "binding": "REPAIR_DLQ",
+            "queue": "capgo-r2-inventory-preprod-repair-dlq"
           }
         ],
         "consumers": [
@@ -120,6 +136,14 @@
           {
             "binding": "REPAIR_QUEUE",
             "queue": "capgo-r2-inventory-alpha-repair"
+          },
+          {
+            "binding": "EVENT_DLQ",
+            "queue": "capgo-r2-inventory-alpha-dlq"
+          },
+          {
+            "binding": "REPAIR_DLQ",
+            "queue": "capgo-r2-inventory-alpha-repair-dlq"
           }
         ],
         "consumers": [
