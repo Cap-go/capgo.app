@@ -7,6 +7,7 @@ import { getSupabaseClient, SUPABASE_ANON_KEY, SUPABASE_BASE_URL } from './test-
 const admin = getSupabaseClient() as SupabaseClient
 const orgIds = [randomUUID(), randomUUID()]
 const hostname = `updates-${randomUUID()}.example.com`
+const routeId = randomUUID()
 const anon = createClient(SUPABASE_BASE_URL, SUPABASE_ANON_KEY)
 const authenticated = createClient(SUPABASE_BASE_URL, SUPABASE_ANON_KEY)
 let userId: string | undefined
@@ -40,12 +41,14 @@ afterAll(async () => {
 
 describe('organization custom domain storage', () => {
   it('stores one hostname per organization and reserves it across organizations', async () => {
-    const inserted = await admin.from('org_custom_domains').insert({ org_id: orgIds[0], hostname, provider_id: randomUUID() })
+    const inserted = await admin.from('org_custom_domains').insert({ org_id: orgIds[0], hostname, provider_id: randomUUID(), provider_route_id: routeId })
     expect(inserted.error).toBeNull()
     const sameOrg = await admin.from('org_custom_domains').insert({ org_id: orgIds[0], hostname: `another-${hostname}` })
     expect(sameOrg.error?.code).toBe('23505')
     const sameHostname = await admin.from('org_custom_domains').insert({ org_id: orgIds[1], hostname })
     expect(sameHostname.error?.code).toBe('23505')
+    const sameRoute = await admin.from('org_custom_domains').insert({ org_id: orgIds[1], hostname: `route-${hostname}`, provider_route_id: routeId })
+    expect(sameRoute.error?.code).toBe('23505')
     const invalid = await admin.from('org_custom_domains').insert({ org_id: orgIds[1], hostname: 'UPDATES.example.com' })
     expect(invalid.error?.code).toBe('23514')
     const deleteOrg = await admin.from('orgs').delete().eq('id', orgIds[0])

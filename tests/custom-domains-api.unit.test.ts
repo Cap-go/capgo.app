@@ -28,7 +28,7 @@ beforeEach(() => {
   mocks.permission.mockResolvedValue(true)
   mocks.enterprise.mockResolvedValue(undefined)
   mocks.query.mockResolvedValue({ rows: [] })
-  mocks.provider.mockResolvedValue({ id: 'provider-id', hostname: 'updates.example.com', status: 'pending' })
+  mocks.provider.mockResolvedValue({ id: 'provider-id', worker_route_id: 'route-id', hostname: 'updates.example.com', status: 'pending' })
 })
 
 describe('private organization custom domain API', () => {
@@ -50,7 +50,7 @@ describe('private organization custom domain API', () => {
     expect(response.status).toBe(200)
     expect(mocks.enterprise).toHaveBeenCalled()
     expect(mocks.provider).toHaveBeenCalledWith(expect.anything(), 'POST', '', 'updates.example.com')
-    expect(mocks.query).toHaveBeenLastCalledWith(expect.stringContaining('SET provider_id'), [orgId, 'provider-id'])
+    expect(mocks.query).toHaveBeenLastCalledWith(expect.stringContaining('SET provider_id'), [orgId, 'provider-id', 'route-id'])
   })
 
   it('never provisions a hostname reserved by another organization', async () => {
@@ -62,11 +62,18 @@ describe('private organization custom domain API', () => {
   it('removes provider state if persistence fails after creation', async () => {
     mocks.query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [{ org_id: orgId }] }).mockRejectedValueOnce(new Error('database unavailable'))
     expect((await app.request(`/${orgId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hostname: 'updates.example.com' }) })).status).toBe(500)
-    expect(mocks.provider).toHaveBeenLastCalledWith(expect.anything(), 'DELETE', 'provider-id')
+    expect(mocks.provider).toHaveBeenLastCalledWith(expect.anything(), 'DELETE', 'provider-id', undefined, 'route-id')
+  })
+
+  it('passes the saved route ID to provider cleanup before deleting local state', async () => {
+    mocks.query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [{ provider_id: 'provider-id', provider_route_id: 'route-id' }] })
+    expect((await app.request(`/${orgId}`, { method: 'DELETE' })).status).toBe(200)
+    expect(mocks.provider).toHaveBeenCalledWith(expect.anything(), 'DELETE', 'provider-id', undefined, 'route-id')
+    expect(mocks.query).toHaveBeenLastCalledWith('DELETE FROM public.org_custom_domains WHERE org_id = $1', [orgId])
   })
 
   it('allows deletion after a downgrade and keeps the row when provider deletion fails', async () => {
-    mocks.query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [{ provider_id: 'provider-id' }] })
+    mocks.query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [{ provider_id: 'provider-id', provider_route_id: 'route-id' }] })
     mocks.provider.mockRejectedValueOnce(new Error('provider unavailable'))
     expect((await app.request(`/${orgId}`, { method: 'DELETE' })).status).toBe(500)
     expect(mocks.enterprise).not.toHaveBeenCalled()

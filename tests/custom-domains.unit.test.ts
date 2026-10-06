@@ -43,9 +43,11 @@ describe('custom Live Updates domains', () => {
   })
 
   it('creates a DNS-validated TLS hostname through the configured zone', async () => {
-    const fetchMock = vi.fn().mockResolvedValueOnce(zoneResponse()).mockResolvedValueOnce(new Response(JSON.stringify({ success: true, result: { id: 'provider-id', hostname: 'updates.example.com' } })))
+    const fetchMock = vi.fn().mockResolvedValueOnce(zoneResponse()).mockResolvedValueOnce(new Response(JSON.stringify({ success: true, result: { id: 'provider-id', hostname: 'updates.example.com' } }))).mockResolvedValueOnce(new Response(JSON.stringify({ success: true, result: { id: 'route-id' } })))
     vi.stubGlobal('fetch', fetchMock)
-    await cloudflareCustomHostname(context, 'POST', '', 'updates.example.com')
+    const host = await cloudflareCustomHostname(context, 'POST', '', 'updates.example.com')
+    expect(host?.worker_route_id).toBe('route-id')
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({ pattern: 'updates.example.com/*', script: 'capgo_plugin-eu-prod' })
     expect(fetchMock.mock.calls[0][0]).toBe('https://api.cloudflare.com/client/v4/zones?name=capgo.app&status=active')
     expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer test-token')
     expect(fetchMock.mock.calls[1][0]).toBe(`https://api.cloudflare.com/client/v4/zones/${'a'.repeat(32)}/custom_hostnames`)
@@ -60,10 +62,40 @@ describe('custom Live Updates domains', () => {
     await expect(cloudflareCustomHostname(context, 'DELETE', 'provider-id')).resolves.toBeNull()
   })
 
+  it('cleans up the hostname when Worker route creation fails', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(zoneResponse()).mockResolvedValueOnce(new Response(JSON.stringify({ success: true, result: { id: 'provider-id', hostname: 'updates.example.com' } }))).mockResolvedValueOnce(new Response(JSON.stringify({ success: false }), { status: 403 })).mockResolvedValueOnce(new Response(JSON.stringify({ success: true })))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(cloudflareCustomHostname(context, 'POST', '', 'updates.example.com')).rejects.toMatchObject({ status: 502 })
+    expect(fetchMock.mock.calls[3][0]).toBe(`https://api.cloudflare.com/client/v4/zones/${'a'.repeat(32)}/custom_hostnames/provider-id`)
+    expect(fetchMock.mock.calls[3][1].method).toBe('DELETE')
+  })
+
+  it('deletes the saved route before its hostname and tolerates already-deleted resources', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(zoneResponse()).mockResolvedValueOnce(new Response('', { status: 404 })).mockResolvedValueOnce(new Response('', { status: 404 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(cloudflareCustomHostname(context, 'DELETE', 'provider-id', undefined, 'route-id')).resolves.toBeNull()
+    expect(fetchMock.mock.calls.slice(1).map(([url, options]) => [url, options.method])).toEqual([
+      [`https://api.cloudflare.com/client/v4/zones/${'a'.repeat(32)}/workers/routes/route-id`, 'DELETE'],
+      [`https://api.cloudflare.com/client/v4/zones/${'a'.repeat(32)}/custom_hostnames/provider-id`, 'DELETE'],
+    ])
+  })
+
+  it('keeps the provider hostname when deleting its route fails', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(zoneResponse()).mockResolvedValueOnce(new Response(JSON.stringify({ success: false }), { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(cloudflareCustomHostname(context, 'DELETE', 'provider-id', undefined, 'route-id')).rejects.toMatchObject({ status: 502 })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('sanitizes network failures', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('private network details')))
+    await expect(cloudflareCustomHostname(context, 'GET', 'provider-id')).rejects.toMatchObject({ status: 502, cause: { error: 'custom_domain_provider_error' } })
+  })
+
   it('does not provision a hostname when the existing token cannot read the zone', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ success: false }), { status: 403 }))
     vi.stubGlobal('fetch', fetchMock)
-    await expect(cloudflareCustomHostname(context, 'POST', '', 'updates.example.com')).rejects.toThrow('Unable to access the custom domain zone')
+    await expect(cloudflareCustomHostname(context, 'POST', '', 'updates.example.com')).rejects.toThrow('Unable to update the custom domain')
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 

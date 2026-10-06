@@ -48,6 +48,7 @@ app.post('/:orgId', async (c) => {
   const config = customDomainConfig(c)
   const pool = getPgClient(c)
   let createdId: string | undefined
+  let createdRouteId: string | undefined
   try {
     const result = await withPgTransaction(pool, async (client) => {
       // Serialize create/delete for this org without scanning other tenants.
@@ -62,14 +63,15 @@ app.post('/:orgId', async (c) => {
         quickError(409, 'custom_domain_exists', 'This hostname is unavailable.')
       const host = await cloudflareCustomHostname(c, 'POST', '', parsed.data)
       createdId = host!.id
-      await client.query('UPDATE public.org_custom_domains SET provider_id = $2 WHERE org_id = $1', [orgId, createdId])
+      createdRouteId = host!.worker_route_id
+      await client.query('UPDATE public.org_custom_domains SET provider_id = $2, provider_route_id = $3 WHERE org_id = $1', [orgId, createdId, createdRouteId])
       return customDomainInstructions(host!, config.target)
     })
     return c.json({ domain: result })
   }
   catch (error) {
     if (createdId) {
-      await cloudflareCustomHostname(c, 'DELETE', createdId).catch(cleanupError => cloudlogErr({ requestId: c.get('requestId'), message: 'Custom hostname rollback cleanup failed', error: cleanupError }))
+      await cloudflareCustomHostname(c, 'DELETE', createdId, undefined, createdRouteId).catch(cleanupError => cloudlogErr({ requestId: c.get('requestId'), message: 'Custom hostname rollback cleanup failed', error: cleanupError }))
     }
     throw error
   }
@@ -85,9 +87,9 @@ app.delete('/:orgId', async (c) => {
   try {
     await withPgTransaction(pool, async (client) => {
       await client.query('SELECT id FROM public.orgs WHERE id = $1 FOR UPDATE', [orgId])
-      const { rows } = await client.query<{ provider_id: string }>('SELECT provider_id FROM public.org_custom_domains WHERE org_id = $1 FOR UPDATE', [orgId])
+      const { rows } = await client.query<{ provider_id: string, provider_route_id: string }>('SELECT provider_id, provider_route_id FROM public.org_custom_domains WHERE org_id = $1 FOR UPDATE', [orgId])
       if (rows[0]?.provider_id)
-        await cloudflareCustomHostname(c, 'DELETE', rows[0].provider_id)
+        await cloudflareCustomHostname(c, 'DELETE', rows[0].provider_id, undefined, rows[0].provider_route_id)
       await client.query('DELETE FROM public.org_custom_domains WHERE org_id = $1', [orgId])
     })
     return c.json(BRES)
