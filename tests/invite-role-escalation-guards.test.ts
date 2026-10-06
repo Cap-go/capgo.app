@@ -262,6 +262,7 @@ describe('invite role escalation guards', () => {
     await setAuthenticatedClaim(query, USER_ID_NONMEMBER)
 
     let thrown: unknown
+    await query('SAVEPOINT accept_org_invite_escalation')
     try {
       await query(
         `SELECT public.accept_invitation_to_org($1::uuid) AS status`,
@@ -270,6 +271,7 @@ describe('invite role escalation guards', () => {
     }
     catch (error) {
       thrown = error
+      await query('ROLLBACK TO SAVEPOINT accept_org_invite_escalation')
     }
 
     expect(thrown).toBeTruthy()
@@ -397,6 +399,7 @@ describe('invite role escalation guards', () => {
 
     await setServiceRoleClaim(query)
     let thrown: unknown
+    await query('SAVEPOINT assert_grant_org_role_escalation')
     try {
       await query(
         `
@@ -412,6 +415,7 @@ describe('invite role escalation guards', () => {
     }
     catch (error) {
       thrown = error
+      await query('ROLLBACK TO SAVEPOINT assert_grant_org_role_escalation')
     }
 
     expect(thrown).toBeTruthy()
