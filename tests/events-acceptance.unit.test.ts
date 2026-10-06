@@ -18,7 +18,9 @@ const { state, sendTracking, cloudlog, checkPermission, broadcast, recordBento, 
 vi.mock('../supabase/functions/_backend/utils/hono.ts', () => ({
   BRES: { status: 'ok' },
   parseBody: (c: Context) => c.req.json(),
-  quickError: (status: number, error: string) => { throw new HTTPException(status as 400, { res: Response.json({ error }, { status }) }) },
+  quickError: (status: number, error: string, message: string, moreInfo: Record<string, unknown> = {}) => {
+    throw new HTTPException(status as 400, { res: Response.json(Object.keys(moreInfo).length ? { error, message, moreInfo } : { error }, { status }) })
+  },
   simpleError: () => { throw new HTTPException(400) },
   useCors: (_c: Context, next: () => Promise<void>) => next(),
 }))
@@ -249,6 +251,31 @@ describe('queue persistence boundary', () => {
     expect((await request({ tags: { keep: 'original' }, nonPersonTags: { nested: { keep: 'original' } } })).status).toBe(200)
     expect(queueSend.mock.calls[0][0].payload.tags.keep).toBe('original')
     expect(queueSend.mock.calls[0][0].payload.nonPersonTags.nested.keep).toBe('original')
+  })
+
+  it.each([undefined, clientEventId])('preserves the original retry identity when the derived enqueue fails (client ID: %s)', async (client_event_id) => {
+    queueSend.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('derived queue unavailable'))
+    const payload = { event: 'Bundle Incompatible', org_id: 'org-a', client_event_id, tags: { app_id: 'com.example.queue', channel_overwritten: true, incompatibility_accepted: true } }
+    const response = await request(payload)
+    expect(response.status).toBe(503)
+    const failure = await response.json() as { error: string, message: string, moreInfo: { client_event_id: string, event_id: string, timestamp: number, primary_event_queued: boolean, derived_event_queued: boolean } }
+    const primary = queueSend.mock.calls[0][0]
+    const derived = queueSend.mock.calls[1][0]
+    expect(failure).toEqual({
+      error: 'event_queue_unavailable',
+      message: 'Primary event was queued but the derived event was not; retry with this client_event_id and timestamp',
+      moreInfo: { client_event_id: client_event_id ?? expect.stringMatching(/^[0-9a-f-]{36}$/), event_id: primary.event_id, timestamp: acceptedAt, primary_event_queued: true, derived_event_queued: false },
+    })
+    expect(failure.moreInfo.client_event_id).not.toBe(primary.event_id)
+    expect(sendTracking).not.toHaveBeenCalled()
+    expect(markChecklist).not.toHaveBeenCalled()
+    expect(markLogin).not.toHaveBeenCalled()
+    expect(recordBento).not.toHaveBeenCalled()
+    vi.spyOn(Date, 'now').mockReturnValue(acceptedAt + 10000)
+    const retry = await request({ ...payload, client_event_id: failure.moreInfo.client_event_id, timestamp: failure.moreInfo.timestamp })
+    expect(retry.status).toBe(200)
+    expect(queueSend.mock.calls[2][0]).toMatchObject({ event_id: primary.event_id, payload: { timestamp: primary.payload.timestamp } })
+    expect(queueSend.mock.calls[3][0]).toMatchObject({ event_id: derived.event_id, payload: { timestamp: derived.payload.timestamp } })
   })
 
   it('queues the existing derived email outcome with stable identity and the same frozen time', async () => {

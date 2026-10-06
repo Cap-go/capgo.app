@@ -354,7 +354,7 @@ async function trackBundleIncompatibleEmail(
   c: Context<MiddlewareKeyVariables>,
   input: {
     userId: unknown
-    identity: TrackOptions
+    identity: AcceptedEventIdentity
     orgId: string
     appId: string
     channelName: string | undefined
@@ -377,8 +377,8 @@ async function trackBundleIncompatibleEmail(
     actorId: 'bundle_incompatible_email',
     clientEventId: input.identity.event_id,
     orgId: input.orgId,
-    timestamp: Date.parse(input.identity.occurred_at!),
-    acceptedAt: Date.parse(input.identity.accepted_at!),
+    timestamp: Date.parse(input.identity.occurred_at),
+    acceptedAt: Date.parse(input.identity.accepted_at),
   })
   return enqueueTrackingSnapshot(c, {
     ...identity,
@@ -389,7 +389,7 @@ async function trackBundleIncompatibleEmail(
     groups: { organization: input.orgId },
     tags,
     nonPersonTags: input.apikeyId === undefined ? undefined : { apikey_id: input.apikeyId },
-  })
+  }, input.identity)
 }
 
 async function lookupChannelUpdateStrategy(
@@ -433,6 +433,7 @@ async function buildBundleIncompatibleBentoEvent(
   onboardingOrgId: string | undefined,
   appId: string | undefined,
   trackedBody: TrackOptions,
+  identity: AcceptedEventIdentity,
 ) {
   const channelOverwritten = isCliTrueTag(trackedBody.tags?.channel_overwritten)
   if (!onboardingOrgId || !appId || trackedBody.event !== BUNDLE_INCOMPATIBLE_EVENT || !channelOverwritten)
@@ -444,7 +445,7 @@ async function buildBundleIncompatibleBentoEvent(
   const apikeyId = toIdString(c.get('apikey')?.id)
   const emailBase = {
     userId: trackedBody.user_id,
-    identity: trackedBody,
+    identity,
     orgId: onboardingOrgId,
     appId,
     channelName: incompatibleChannel,
@@ -515,6 +516,7 @@ async function buildBundleIncompatibleBentoEvent(
 async function enqueueTrackingSnapshot(
   c: Context<MiddlewareKeyVariables>,
   payload: SendEventToTrackingPayload & { setPersonProperties?: boolean },
+  primaryIdentity?: AcceptedEventIdentity,
 ) {
   try {
     await enqueuePostHog(c.env?.POSTHOG_QUEUE, {
@@ -545,6 +547,15 @@ async function enqueueTrackingSnapshot(
       throw quickError(413, 'event_too_large', 'Event exceeds the analytics size limit')
     if (reason === 'invalid_payload')
       throw quickError(400, 'invalid_event_payload', 'Invalid analytics payload')
+    if (primaryIdentity) {
+      throw quickError(503, 'event_queue_unavailable', 'Primary event was queued but the derived event was not; retry with this client_event_id and timestamp', {
+        client_event_id: primaryIdentity.client_event_id,
+        event_id: primaryIdentity.event_id,
+        timestamp: Date.parse(primaryIdentity.occurred_at),
+        primary_event_queued: true,
+        derived_event_queued: false,
+      })
+    }
     throw quickError(503, 'event_queue_unavailable', 'Event could not be persisted; retry with the same client_event_id')
   }
 }
@@ -643,7 +654,7 @@ app.post('/', middlewareAuth(), async (c) => {
   // build, the breaking change was done correctly and the calmer
   // `bundle_incompatible_expected` event is emitted instead of the crash warning.
   // All three outcomes are recorded in PostHog (sent vs sent_expected vs skipped_accepted).
-  const bundleIncompatibleBentoEvent: BentoTrackingPayload | undefined = await buildBundleIncompatibleBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody)
+  const bundleIncompatibleBentoEvent: BentoTrackingPayload | undefined = await buildBundleIncompatibleBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody, identity)
   const aiInstructionsCopiedBentoEvent = buildAiInstructionsCopiedBentoEvent({
     appId,
     event: trackedBody.event,

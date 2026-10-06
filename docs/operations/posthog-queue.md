@@ -15,8 +15,12 @@ disabled in the common tracking call. The existing derived bundle-compatibility
 email-outcome event also uses this queue. Its canonical identity is deterministically
 derived from the accepted parent ID in a separate namespace, and its timestamps
 come from the parent. It is produced when existing enrichment determines the
-outcome, after the primary event is durable. Other direct PostHog callers keep
-the Hono wrapper and its legacy boolean contract.
+outcome, after the primary event is durable. If this derived send fails, the
+503 response states that the primary event was queued and the derived event
+was not. Its `moreInfo` returns the original `client_event_id` (including the
+generated value for older clients) and frozen numeric `timestamp`; retry the
+same request with both values to preserve the primary and derived identities.
+Other direct PostHog callers keep the Hono wrapper and its legacy boolean contract.
 
 ## Direct production cutover
 
