@@ -448,7 +448,7 @@ export async function uploadPartial(
     }
 
     // Process files in bounded batches to avoid overwhelming the server
-    const BATCH_SIZE = 50
+    const BATCH_SIZE = options.deltaUploadConcurrency ?? 50
     const results: any[] = []
 
     for (let i = 0; i < manifest.length; i += BATCH_SIZE) {

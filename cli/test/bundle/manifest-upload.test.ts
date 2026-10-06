@@ -360,7 +360,7 @@ describe('manifest upload existence probe', () => {
 })
 
 describe('manifest upload concurrency', () => {
-  it('limits simultaneous file existence probes', async () => {
+  async function measureMaxActiveProbes(deltaUploadConcurrency?: number): Promise<number> {
     const directory = await mkdtemp(join(tmpdir(), 'capgo-manifest-upload-concurrency-'))
     const originalFetch = globalThis.fetch
     const originalDisableTelemetry = env.CAPGO_DISABLE_TELEMETRY
@@ -429,10 +429,10 @@ describe('manifest upload concurrency', () => {
         'com.example.app',
         'org-id',
         undefined,
-        { disableBrotli: true, userRequestedDelta: true } as OptionsUpload,
+        { disableBrotli: true, userRequestedDelta: true, deltaUploadConcurrency } as OptionsUpload,
         manifestUpload,
       ))
-      expect(maxActiveProbes).toBeLessThanOrEqual(50)
+      return maxActiveProbes
     }
     finally {
       globalThis.fetch = originalFetch
@@ -442,5 +442,13 @@ describe('manifest upload concurrency', () => {
         env.CAPGO_DISABLE_TELEMETRY = originalDisableTelemetry
       await rm(directory, { recursive: true, force: true })
     }
+  }
+
+  it('limits simultaneous file existence probes to 50 by default', async () => {
+    expect(await measureMaxActiveProbes()).toBeLessThanOrEqual(50)
+  })
+
+  it('uses the requested delta upload concurrency', async () => {
+    expect(await measureMaxActiveProbes(20)).toBeLessThanOrEqual(20)
   })
 })
