@@ -123,24 +123,17 @@ const showAllVersions = ref(false)
 const showAllActions = ref(false)
 
 const hasData = computed(() => (stats.value?.overview.total_events ?? 0) > 0)
-function issueFreeRateClass(rate: number | null | undefined, neutral: string) {
-  if (rate == null)
-    return neutral
-  if (rate >= 99)
-    return 'text-emerald-600 dark:text-emerald-400'
-  if (rate >= 95)
-    return 'text-amber-600 dark:text-amber-400'
-  return 'text-rose-600 dark:text-rose-400'
-}
 const kpiTiles = computed(() => {
   const overview = stats.value?.overview
   const neutral = 'text-slate-950 dark:text-white'
   return [
-    { label: t('native-observe-tracked-devices'), value: formatCount(overview?.total_devices), class: neutral },
+    { label: t('native-observe-tracked-devices'), value: formatCount(overview?.total_devices), class: neutral, help: undefined as string | undefined },
     {
       label: t('native-observe-issue-free-rate'),
       value: formatPercent(overview?.issue_free_rate),
-      class: issueFreeRateClass(overview?.issue_free_rate, neutral),
+      // Informational, not a score: signals include noisy, often harmless events.
+      class: neutral,
+      help: t('native-observe-issue-free-rate-help'),
     },
     { label: t('native-observe-launch-p90'), value: formatDuration(overview?.launch_p90_ms), class: neutral },
     { label: t('native-observe-webview-p90'), value: formatDuration(overview?.webview_load_p90_ms), class: neutral },
@@ -447,7 +440,7 @@ watch([packageId, days, versionGroup], async () => {
 
       <template v-else>
         <div v-if="hasData" class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
-          <div v-for="tile in kpiTiles" :key="tile.label" class="px-4 py-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+          <div v-for="tile in kpiTiles" :key="tile.label" :title="tile.help" class="px-4 py-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
             <div class="text-xs truncate text-slate-600 dark:text-slate-400">
               {{ tile.label }}
             </div>

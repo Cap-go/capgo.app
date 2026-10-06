@@ -145,16 +145,6 @@ function formatAction(action: string) {
   return filterKey ? t(filterKey) : action
 }
 
-function rateClass(rate: number | null | undefined, good: number, watchFrom: number) {
-  if (rate === null || rate === undefined)
-    return 'text-slate-900 dark:text-white'
-  if (rate >= good)
-    return 'text-emerald-600 dark:text-emerald-400'
-  if (rate >= watchFrom)
-    return 'text-amber-600 dark:text-amber-400'
-  return 'text-rose-600 dark:text-rose-400'
-}
-
 // App-wide health next to the release: what is failing, how the native app
 // behaves, and whether native dependencies drifted. Each tile opens its tab.
 const healthTiles = computed(() => {
@@ -171,6 +161,7 @@ const healthTiles = computed(() => {
         ? `${formatAction(topError.action)} · ${t('affected-devices-count', { count: formatCount(insights.value?.summary.device_count ?? 0) })}`
         : t('affected-devices-count', { count: formatCount(insights.value?.summary.device_count ?? 0) }),
       valueClass: errorTotal ? 'text-amber-600 dark:text-amber-400' : (errorTotal === 0 ? 'text-emerald-600 dark:text-emerald-400' : neutral),
+      help: undefined as string | undefined,
       to: { path: `${basePath.value}/observe/errors`, query: periodQuery.value },
       loading: insightsLoading.value && !insights.value,
     },
@@ -179,7 +170,11 @@ const healthTiles = computed(() => {
       label: t('native-observe-issue-free-rate'),
       value: formatPercent(issueFree),
       detail: t('overview-kpi-native-issues', { count: formatCount(nativeStats.value?.overview.issue_count ?? 0) }),
-      valueClass: rateClass(issueFree, 99, 95),
+      // Health signals include noisy, often harmless events (JavaScript and
+      // resource errors, memory warnings), so this share is informational and
+      // stays neutral instead of reading as a pass/fail score.
+      valueClass: neutral,
+      help: t('native-observe-issue-free-rate-help'),
       to: { path: `${basePath.value}/observe/native`, query: periodQuery.value },
       loading: nativeLoading.value && !nativeStats.value,
     },
@@ -189,6 +184,7 @@ const healthTiles = computed(() => {
       value: compatibilityCount.value === null ? '-' : formatCount(compatibilityCount.value),
       detail: t('overview-kpi-unresolved'),
       valueClass: compatibilityCount.value ? 'text-amber-600 dark:text-amber-400' : (compatibilityCount.value === 0 ? 'text-emerald-600 dark:text-emerald-400' : neutral),
+      help: undefined as string | undefined,
       to: { path: `${basePath.value}/observe/compatibility` },
       loading: false,
     },
@@ -224,6 +220,7 @@ const healthTiles = computed(() => {
         :to="tile.to"
         class="flex items-center justify-between min-w-0 gap-3 px-4 py-2 transition-colors bg-white border shadow-sm group rounded-xl border-slate-200 hover:border-azure-400 dark:bg-slate-800/60 dark:border-white/10 dark:hover:border-azure-500/60"
         :data-testid="`overview-kpi-${tile.key}`"
+        :title="tile.help"
       >
         <span class="flex flex-col min-w-0">
           <span class="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">

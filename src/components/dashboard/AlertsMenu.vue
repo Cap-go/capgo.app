@@ -9,8 +9,8 @@ import DeploymentBanner from '~/components/dashboard/DeploymentBanner.vue'
 import ReleaseBanner from '~/components/dashboard/ReleaseBanner.vue'
 
 // The deploy, release and compatibility banners used to stack above the
-// overview and push the data below the fold. They now live behind one bell
-// button with a count; the banners stay mounted so each keeps loading its own
+// overview and push the data below the fold. They now live behind one calm
+// "Activity" button with a count; the banners stay mounted so each keeps loading its own
 // state and the count stays accurate.
 defineProps<{
   appId: string
@@ -71,16 +71,17 @@ onClickOutside(panel, () => {
       v-show="alertCount > 0"
       ref="toggle"
       type="button"
-      class="relative inline-flex items-center gap-2 px-3 text-sm font-medium transition-colors border rounded-lg h-11 border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:border-amber-700/70 dark:bg-amber-900/20 dark:text-amber-200 dark:hover:bg-amber-900/30"
+      class="relative inline-flex items-center gap-2 px-3 text-sm font-medium transition-colors bg-white border rounded-lg h-11 border-slate-200 text-slate-700 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 dark:border-white/10 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
       :aria-expanded="open"
       :aria-controls="panelId"
+      :title="t('activity')"
       data-testid="alerts-menu-toggle"
       @click="toggleOpen"
       @keydown.escape="open = false"
     >
       <IconBell class="w-4 h-4" />
-      {{ t('alerts') }}
-      <span class="inline-flex items-center justify-center min-w-5 h-5 px-1.5 text-xs font-semibold text-white rounded-full bg-amber-600">
+      <span class="sr-only">{{ t('activity') }}</span>
+      <span class="inline-flex items-center justify-center min-w-5 h-5 px-1.5 text-xs font-semibold text-white rounded-full bg-azure-500">
         {{ alertCount }}
       </span>
     </button>

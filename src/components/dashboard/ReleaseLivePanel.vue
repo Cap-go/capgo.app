@@ -304,7 +304,7 @@ watch(() => props.appId, () => {
           </span>
           <span
             v-if="dense && secondsSinceUpdate !== null"
-            class="text-xs tabular-nums text-slate-500 dark:text-slate-400"
+            class="text-xs tabular-nums whitespace-nowrap text-slate-500 dark:text-slate-400"
             :title="t('release-live-help', { seconds: RELEASE_LIVE_POLL_INTERVAL_MS / 1000 })"
           >
             {{ t('release-live-updated-ago', { seconds: secondsSinceUpdate }) }}
