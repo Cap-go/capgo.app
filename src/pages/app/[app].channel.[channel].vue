@@ -1563,7 +1563,7 @@ async function copyCurlCommand() {
                 </button>
                 <button
                   type="button"
-                  class="d-btn d-btn-outline d-btn-error d-btn-sm"
+                  class="d-btn d-btn-outline d-btn-error d-btn-sm hover:border-error hover:bg-red-50 hover:text-red-700 dark:hover:bg-error/20 dark:hover:text-white"
                   data-test="channel-revert-builtin"
                   :disabled="!canPromoteBundle || (channelOnBuiltin && !rolloutConfigured)"
                   @click="handleRevert()"
@@ -1633,7 +1633,7 @@ async function copyCurlCommand() {
                       <button type="button" class="d-btn d-btn-primary d-btn-sm" :disabled="rolloutTargetActionsDisabled" @click="promoteRollout()">
                         {{ t('promote') }}
                       </button>
-                      <button type="button" class="capitalize d-btn d-btn-outline d-btn-error d-btn-sm" :disabled="rolloutTargetActionsDisabled" @click="rollbackRollout()">
+                      <button type="button" class="capitalize d-btn d-btn-outline d-btn-error d-btn-sm hover:border-error hover:bg-red-50 hover:text-red-700 dark:hover:bg-error/20 dark:hover:text-white" :disabled="rolloutTargetActionsDisabled" @click="rollbackRollout()">
                         {{ t('rollback') }}
                       </button>
                     </div>
