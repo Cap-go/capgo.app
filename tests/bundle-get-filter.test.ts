@@ -18,10 +18,10 @@ const APP_B = `com.test.bundle.lookup.b.${fixtureId}`
 const VERSION_NAME = `9.8.7-lookup-${fixtureId}`
 
 let versionIdOnA: number
-let deniedHeaders: Record<string, string>
+let deniedHeaders: typeof headers
 let deniedKeyId: number
 
-async function getBundles(query: Record<string, string>, requestHeaders = headers) {
+async function getBundles(query: Record<string, string>, requestHeaders: typeof headers = headers) {
   const params = new URLSearchParams(query)
   const response = await fetch(`${BASE_URL}/bundle?${params.toString()}`, {
     method: 'GET',
@@ -51,7 +51,7 @@ beforeAll(async () => {
   deniedKeyId = deniedKey.id
   deniedHeaders = {
     'Content-Type': 'application/json',
-    capgkey: deniedKey.key,
+    Authorization: deniedKey.key,
   }
 })
 
