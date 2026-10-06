@@ -1,4 +1,6 @@
-import type { ClientBase } from 'pg'
+import type { Client, ClientBase } from 'pg'
+import { sql } from 'drizzle-orm'
+import { drizzle } from 'drizzle-orm/node-postgres'
 import { cloudlogErr } from './logging.ts'
 
 export type InventoryState = 'to_be_uploaded' | 'present' | 'to_be_deleted' | 'deleted'
@@ -61,19 +63,26 @@ export function parseInventoryEvent(body: unknown, bucket: string): InventoryEve
 }
 
 export async function inventoryTransaction<T>(db: ClientBase, operation: () => Promise<T>): Promise<T> {
-  await db.query('BEGIN')
+  let failure: { error: unknown } | undefined
   try {
-    await db.query(`SET LOCAL statement_timeout = '10s'`)
-    await db.query(`SET LOCAL lock_timeout = '5s'`)
-    const result = await operation()
-    await db.query('COMMIT')
-    return result
+    // Reuse the caller's connected client; transaction control belongs to Drizzle.
+    return await drizzle({ client: db as Client }).transaction(async (tx) => {
+      try {
+        await tx.execute(sql`SET LOCAL statement_timeout = '10s'`)
+        await tx.execute(sql`SET LOCAL lock_timeout = '5s'`)
+        return await operation()
+      }
+      catch (error) {
+        failure = { error }
+        throw error
+      }
+    })
   }
   catch (error) {
-    await db.query('ROLLBACK').catch((rollbackError) => {
-      cloudlogErr({ event: 'r2_inventory_rollback_failed', error: rollbackError instanceof Error ? rollbackError.message : 'Unknown error' })
-    })
-    throw error
+    // Drizzle can replace the operation error if its rollback also fails.
+    if (failure && error !== failure.error)
+      cloudlogErr({ event: 'r2_inventory_rollback_failed', error: error instanceof Error ? error.message : 'Unknown error' })
+    throw failure ? failure.error : error
   }
 }
 

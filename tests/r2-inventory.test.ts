@@ -2,7 +2,7 @@ import type { ClientBase } from 'pg'
 import type { InventoryEvent } from '../supabase/functions/_backend/utils/r2_inventory.ts'
 import { Client } from 'pg'
 import { describe, expect, it } from 'vitest'
-import { applyInventoryEvents, applyObservations, readObservationSnapshot } from '../supabase/functions/_backend/utils/r2_inventory.ts'
+import { applyInventoryEvents, applyObservations, inventoryTransaction, readObservationSnapshot } from '../supabase/functions/_backend/utils/r2_inventory.ts'
 import { POSTGRES_URL } from './test-utils.ts'
 
 const config = { tombstoneDays: 7 }
@@ -23,6 +23,19 @@ async function fixture(operation: (db: ClientBase, bucket: string, event: (key: 
 }
 
 describe('r2 inventory atomic ingestion', () => {
+  it.concurrent('rolls back failed writes on the existing client and can commit a subsequent batch', () => fixture(async (db, bucket, event) => {
+    const original = new Error('Synthetic inventory transaction failure')
+    await expect(inventoryTransaction(db, async () => {
+      const settings = await db.query(`SELECT current_setting('statement_timeout') AS statement_timeout, current_setting('lock_timeout') AS lock_timeout`)
+      expect(settings.rows[0]).toEqual({ statement_timeout: '10s', lock_timeout: '5s' })
+      await db.query(`INSERT INTO public.r2_objects (bucket_name, r2_key, r2_state) VALUES ($1, 'failed', 'present')`, [bucket])
+      throw original
+    })).rejects.toBe(original)
+    expect((await db.query('SELECT count(*)::int AS count FROM public.r2_objects WHERE bucket_name = $1', [bucket])).rows[0].count).toBe(0)
+    await applyInventoryEvents(db, [event('committed')], config)
+    expect((await db.query('SELECT r2_key FROM public.r2_objects WHERE bucket_name = $1', [bucket])).rows).toEqual([{ r2_key: 'committed' }])
+  }))
+
   it.concurrent('does not overwrite a purged and reinserted key with the same revision', () => fixture(async (db, bucket, event) => {
     await applyInventoryEvents(db, [event('key')], config)
     const snapshot = await readObservationSnapshot(db, bucket, ['key'])

@@ -1,11 +1,14 @@
-import type { ClientBase } from 'pg'
+import type { ClientBase, QueryConfig } from 'pg'
 import { readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { consumeInventoryBatch } from '../cloudflare_workers/r2_inventory/index.ts'
 import { INVENTORY_CONFIG, inventoryTransaction, parseInventoryEvent, timestampUs } from '../supabase/functions/_backend/utils/r2_inventory.ts'
 
 const mocks = vi.hoisted(() => ({ apply: vi.fn(), end: vi.fn(), head: vi.fn(), publish: vi.fn(), eventDlq: vi.fn(), repairDlq: vi.fn(), snapshot: vi.fn(), observe: vi.fn() }))
-vi.mock('pg', () => ({ Client: class { connect = vi.fn(); end = mocks.end } }))
+vi.mock('pg', async importOriginal => ({
+  ...await importOriginal<object>(),
+  Client: class { connect = vi.fn(); end = mocks.end },
+}))
 vi.mock('../supabase/functions/_backend/utils/r2_inventory.ts', async importOriginal => ({
   ...await importOriginal<object>(),
   applyInventoryEvents: mocks.apply,
@@ -33,8 +36,8 @@ beforeEach(() => {
 describe('r2 inventory queue', () => {
   it('preserves the original batch failure when rollback also fails', async () => {
     const original = new Error('Batch constraint violation')
-    const db = { query: vi.fn(async (statement: string) => {
-      if (statement === 'ROLLBACK')
+    const db = { query: vi.fn(async (statement: string | QueryConfig) => {
+      if ((typeof statement === 'string' ? statement : statement.text).toLowerCase() === 'rollback')
         throw new Error('Connection lost during rollback')
       return { rows: [] }
     }) }
@@ -43,7 +46,7 @@ describe('r2 inventory queue', () => {
       await expect(inventoryTransaction(db as unknown as ClientBase, async () => {
         throw original
       })).rejects.toBe(original)
-      expect(db.query).toHaveBeenCalledWith('ROLLBACK')
+      expect(db.query).toHaveBeenCalledWith(expect.objectContaining({ text: 'rollback' }), [])
     }
     finally {
       log.mockRestore()
