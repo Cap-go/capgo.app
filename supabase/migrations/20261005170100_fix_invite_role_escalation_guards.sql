@@ -79,20 +79,6 @@ ALTER TABLE public.tmp_users
 COMMENT ON COLUMN public.tmp_users.invited_by_user_id IS
   'User who created or last legitimately updated the invitation role. NULL on legacy rows without attribution; those invites return INVITER_NOT_FOUND until reissued or updated via update_tmp_invite_role_rbac.';
 
--- Backfill pending org_users invitation bindings only when org ownership gives a reliable grantor.
-UPDATE public.role_bindings rb
-SET granted_by = orgs.created_by
-FROM public.org_users ou
-INNER JOIN public.orgs orgs ON orgs.id = ou.org_id
-WHERE rb.principal_type = public.rbac_principal_user()
-  AND rb.principal_id = ou.user_id
-  AND rb.org_id = ou.org_id
-  AND rb.scope_type = public.rbac_scope_org()
-  AND ou.is_invite IS TRUE
-  AND rb.granted_by IS NULL
-  AND rb.reason IN ('Pending invitation', 'Invited via invite_user_to_org_rbac')
-  AND orgs.created_by IS NOT NULL;
-
 CREATE OR REPLACE FUNCTION public.update_tmp_invite_role_rbac(
   p_org_id uuid,
   p_email text,
