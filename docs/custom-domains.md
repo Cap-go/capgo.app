@@ -6,7 +6,9 @@ Enterprise organizations can manage one Live Updates API hostname in Organizatio
 
 Reuse the existing Cloudflare for SaaS fallback on the `capgo.app` zone. Customers point their CNAME to `plugin.capgo.app`. The API looks up the zone by name using the existing `CF_ANALYTICS_TOKEN`; no new environment variables or token are required.
 
-Add Zone Read and SSL and Certificates write permissions for `capgo.app` to that token. Deploy the shared plugin routes for `/updates`, `/stats`, and `/channel_self`, then verify provisioning and routing with a test hostname. New customer hostnames require no individual Wrangler edits. Existing explicit routes remain in place. DNS-only CNAME records are recommended for customers using Cloudflare unless their SaaS zone has an explicit orange-to-orange configuration.
+Add Zone Read and SSL and Certificates write permissions for `capgo.app` to that token. Before enabling self-service in production, verify that the existing SaaS routing sends new customer hostnames to the production plugin Worker. Cloudflare documents a `*/*` route on the SaaS zone for this. It also captures the zone’s own hosts, so preserve their routing with more-specific exclusions (Worker set to None) and retain existing plugin/file routes. Configure this once in the Cloudflare dashboard; do not deploy a catch-all without checking those exclusions. This PR leaves Wrangler routes unchanged. Once shared SaaS routing is configured, new customer hostnames require no individual Wrangler edits.
+
+Verify provisioning and the `/updates`, `/stats`, and `/channel_self` endpoints with a test hostname before rollout; hostname and TLS activation alone do not verify Worker routing. DNS-only CNAME records are recommended for customers using Cloudflare unless their SaaS zone has an explicit orange-to-orange configuration.
 
 Reference: [Cloudflare Worker as fallback origin](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/start/advanced-settings/worker-as-origin/) and [custom hostname API](https://developers.cloudflare.com/api/resources/custom_hostnames/methods/create/).
 

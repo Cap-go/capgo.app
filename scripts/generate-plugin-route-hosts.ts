@@ -95,9 +95,8 @@ export function collectPluginRouteHosts(config: unknown) {
   const envs = Object.values((config as { env?: Record<string, { routes?: Route[] }> }).env ?? {})
   for (const env of envs) {
     for (const route of env.routes ?? []) {
-      const hostname = route.pattern?.split('/')[0].toLowerCase()
-      if (hostname && !hostname.includes('*'))
-        hosts.add(hostname)
+      if (route.pattern)
+        hosts.add(route.pattern.split('/')[0].toLowerCase())
       if (route.zone_name)
         zoneNames.add(route.zone_name.toLowerCase())
     }
