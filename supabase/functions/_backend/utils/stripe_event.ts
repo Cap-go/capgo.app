@@ -89,7 +89,8 @@ function subscriptionUpdated(c: Context, event: Stripe.CustomerSubscriptionCreat
   }
   data.subscription_id = subscription.id
   data.customer_id = String(subscription.customer)
-  data.extra_mau = getExtraMau(subscription.items.data)
+  // A deleted subscription still lists its items: its extra MAU is gone.
+  data.extra_mau = event.type === 'customer.subscription.deleted' ? 0 : getExtraMau(subscription.items.data)
 
   // Only treat a billing cadence change from monthly to yearly as an upgrade.
   if (previousInterval === 'month' && currentInterval === 'year') {

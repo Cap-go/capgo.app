@@ -165,9 +165,14 @@ async function getUsage(orgId: string) {
     totalStorage,
   })
 
-  const basePrice = basePlan && extraMau > 0
-    ? quoteEnterpriseScale(await getCreditPricingSteps(orgId), basePlan.mau, basePlan.price_m, basePlan.mau + extraMau).totalMonthly
-    : currentPlan?.price_m ?? 0
+  // Extra MAU is priced on the global MAU tiers, like the Stripe item. null = price unavailable.
+  let basePrice: number | null = currentPlan?.price_m ?? 0
+  if (basePlan && extraMau > 0) {
+    const mauSteps = (await getCreditPricingSteps()).filter(step => step.type === 'mau')
+    basePrice = mauSteps.length
+      ? quoteEnterpriseScale(mauSteps, basePlan.mau, basePlan.price_m, basePlan.mau + extraMau).totalMonthly
+      : null
+  }
 
   const estimatedUsagePrice = currentPlan
     ? await estimateOverageCost(orgId, currentPlan, {
@@ -181,7 +186,7 @@ async function getUsage(orgId: string) {
   const totalUsagePrice = creditDeductionsInCycle.length > 0
     ? roundNumber(totalCreditDeductions)
     : estimatedUsagePrice
-  const totalPrice = totalUsagePrice !== null && currentPlan
+  const totalPrice = totalUsagePrice !== null && basePrice !== null && currentPlan
     ? roundNumber(basePrice + totalUsagePrice)
     : null
 
@@ -426,7 +431,7 @@ function nextRunDate() {
                 {{ t('base') }}
               </div>
               <div class="text-2xl font-bold text-gray-900 dark:text-white">
-                {{ formatMonthlyPrice(planUsage?.basePrice ?? currentPlan?.price_m) }}
+                {{ formatMonthlyPrice(planUsage ? planUsage.basePrice : currentPlan?.price_m) }}
               </div>
             </div>
             <div v-if="!hideExternalPurchaseFlows && isCreditsOnly" class="flex flex-col">

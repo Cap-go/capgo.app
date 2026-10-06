@@ -78,4 +78,26 @@ describe('enterprise extra MAU item', () => {
     expect(data.product_id).toBe('prod_enterprise')
     expect(data.extra_mau).toBe(2_000_000)
   })
+
+  it.concurrent('drops the extra MAU when the subscription is deleted', () => {
+    const { data } = extractDataEvent(mockContext, {
+      type: 'customer.subscription.deleted',
+      data: {
+        object: {
+          id: 'sub_enterprise_3m',
+          customer: 'cus_enterprise_3m',
+          status: 'canceled',
+          items: {
+            data: [
+              subscriptionItem('price_enterprise_month', 'prod_enterprise', { lookup_key: null, metadata: {}, recurring: { interval: 'month' } }),
+              subscriptionItem('price_extra_mau_month', 'prod_extra_mau', extraMauPrice, 2000),
+            ],
+          },
+        },
+        previous_attributes: {},
+      },
+    } as any)
+
+    expect(data.extra_mau).toBe(0)
+  })
 })

@@ -187,7 +187,8 @@ const currentPlanLabel = computed(() => {
 async function loadEnterpriseScale(orgId: string) {
   const loadSeq = ++enterpriseScaleLoadSeq
   const [steps, extraMau] = await Promise.all([
-    getCreditPricingSteps(orgId),
+    // Global tiers: checkout prices the extra MAU item from them too.
+    getCreditPricingSteps(),
     getOrgExtraMau(orgId).catch(() => 0),
   ])
   // An org switch during the fetch must not leave the previous org's rates behind.
@@ -543,6 +544,9 @@ function buttonName(p: Database['public']['Tables']['plans']['Row']) {
 
 function isDisabled(plan: Database['public']['Tables']['plans']['Row']) {
   // Disabled if: current plan (already subscribed) or mobile
+  // Above the allowance, checkout needs the MAU price to add the extra MAU item.
+  if (isEnterprisePlan(plan) && enterpriseMauIndex.value > 0 && !enterpriseQuote.value)
+    return true
   if (isEnterprisePlan(plan) && !isCurrentEnterpriseScale(plan))
     return isMobile
   return (currentPlan.value?.name === plan.name && currentOrganization.value?.paying && currentOrganization.value?.is_yearly === isYearly.value) || isMobile

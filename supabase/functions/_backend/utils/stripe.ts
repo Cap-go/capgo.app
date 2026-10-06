@@ -110,8 +110,10 @@ export function getStripe(c: Context): Stripe {
   })
 }
 
+// The plan item: the Enterprise extra MAU item is licensed too, so skip it.
 function getLicensedSubscriptionItem(items: Stripe.SubscriptionItem[] | undefined) {
-  return items?.find(item => item.plan.usage_type === 'licensed') ?? items?.[0] ?? null
+  const planItems = items?.filter(item => !isExtraMauItem(item))
+  return planItems?.find(item => item.plan.usage_type === 'licensed') ?? planItems?.[0] ?? null
 }
 
 function getSubscriptionProductId(c: Context, item: Stripe.SubscriptionItem | null) {
@@ -166,6 +168,7 @@ export async function getSubscriptionData(c: Context, customerId: string, subscr
 
     return {
       productId,
+      extraMau: getExtraMau(subscription.items.data),
       status: subscription.status,
       cycleStart,
       cycleEnd,
@@ -277,6 +280,8 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
     }
     if (subscriptionData)
       updateData.canceled_at = subscriptionData.canceledAt ?? null
+    // Extra MAU only counts while the subscription that bought it is live.
+    updateData.extra_mau = dbStatus === 'succeeded' ? subscriptionData?.extraMau ?? 0 : 0
 
     const { error: updateError } = await supabaseAdmin(c)
       .from('stripe_info')
@@ -568,22 +573,32 @@ async function getExtraMauPriceId(c: Context, includedMau: number, interval: 'mo
   if (existing.data[0])
     return existing.data[0].id
 
-  const created = await getStripe(c).prices.create({
-    currency: 'usd',
-    billing_scheme: 'tiered',
-    tiers_mode: 'graduated',
-    tiers,
-    recurring: { interval, usage_type: 'licensed' },
-    product_data: {
-      name: 'Enterprise extra MAU',
-      unit_label: '1,000 MAU',
-      metadata: { capgo_kind: EXTRA_MAU_PRICE_KIND },
-    },
-    lookup_key: lookupKey,
-    nickname: `Enterprise extra MAU (${interval})`,
-    metadata: { capgo_kind: EXTRA_MAU_PRICE_KIND, included_mau: String(includedMau) },
-    ...(taxBehavior && taxBehavior !== 'unspecified' ? { tax_behavior: taxBehavior } : {}),
-  })
+  let created: Stripe.Price
+  try {
+    created = await getStripe(c).prices.create({
+      currency: 'usd',
+      billing_scheme: 'tiered',
+      tiers_mode: 'graduated',
+      tiers,
+      recurring: { interval, usage_type: 'licensed' },
+      product_data: {
+        name: 'Enterprise extra MAU',
+        unit_label: '1,000 MAU',
+        metadata: { capgo_kind: EXTRA_MAU_PRICE_KIND },
+      },
+      lookup_key: lookupKey,
+      nickname: `Enterprise extra MAU (${interval})`,
+      metadata: { capgo_kind: EXTRA_MAU_PRICE_KIND, included_mau: String(includedMau) },
+      ...(taxBehavior && taxBehavior !== 'unspecified' ? { tax_behavior: taxBehavior } : {}),
+    })
+  }
+  catch (error) {
+    // A concurrent first checkout may have created the same lookup key: reuse its price.
+    const raced = await getStripe(c).prices.list({ lookup_keys: [lookupKey], active: true, limit: 1 })
+    if (raced.data[0])
+      return raced.data[0].id
+    throw error
+  }
   cloudlog({ requestId: c.get('requestId'), message: 'created extra MAU price', priceId: created.id, lookupKey })
   return created.id
 }
