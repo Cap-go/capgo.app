@@ -25,6 +25,26 @@ export interface ReleaseLiveBucket {
   fail: number
 }
 
+export interface ReleaseLiveRollout {
+  target_version: string
+  fallback_version: string | null
+  fallback_bundle_id: number | null
+  percentage: number
+  status: 'running' | 'paused' | 'zero'
+  paused_at: string | null
+  pause_reason: string | null
+  devices_on_target: number
+  devices_on_fallback: number
+  total_devices: number
+  expected_on_target: number
+  reach_percent: number | null
+  fallback_totals: {
+    install: number
+    fail: number
+    success_rate: number | null
+  } | null
+}
+
 export interface ReleaseLiveResponse {
   release: (ReleaseLiveDeployment & { bundle_id: number | null }) | null
   window?: {
@@ -51,6 +71,8 @@ export interface ReleaseLiveResponse {
     stuck: number
   } | null
   series?: ReleaseLiveBucket[]
+  // Set when the release is the target of a progressive rollout.
+  rollout?: ReleaseLiveRollout | null
   channel: ReleaseLiveChannel | null
   channels: ReleaseLiveChannel[]
   recent_deployments: ReleaseLiveDeployment[]

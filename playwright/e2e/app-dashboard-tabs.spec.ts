@@ -2,7 +2,7 @@ import { expect, test } from '../support/commands'
 
 const TEST_USER_ID = '6aa76066-55ef-4238-ade6-0b32334a4097'
 
-test.describe('App dashboard sections', () => {
+test.describe('App overview', () => {
   test.beforeEach(async ({ page }) => {
     await page.login('test@capgo.app', 'testtest')
     await page.evaluate((userId) => {
@@ -10,48 +10,55 @@ test.describe('App dashboard sections', () => {
     }, TEST_USER_ID)
   })
 
-  test('moves native, installs, and active bundle into dashboard subtabs', async ({ page }) => {
+  test('shows the one-screen Live release landing page', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto('/app/com.demo.app')
 
-    const usageTab = page.getByRole('button', { name: 'Usage', exact: true })
-    const nativeTab = page.getByRole('button', { name: 'Native', exact: true })
-    const installsTab = page.getByRole('button', { name: 'Installs', exact: true })
-    const activeBundleTab = page.getByRole('button', { name: 'Active Bundle', exact: true })
-
-    await expect(usageTab).toBeVisible()
-    await expect(nativeTab).toBeVisible()
-    await expect(installsTab).toBeVisible()
-    await expect(activeBundleTab).toBeVisible()
-    await expect(usageTab).toHaveAttribute('aria-current', 'page')
-    await expect(page.locator('[data-testid="bundle-install-stats"]')).toHaveCount(0)
-    await expect(page.getByRole('heading', { name: 'Native build by platform' })).toHaveCount(0)
-    await expect(page.getByRole('heading', { name: 'Active bundle' })).toHaveCount(0)
-    await expect(page.getByRole('heading', { name: 'Bundle install performance' })).toHaveCount(0)
-
-    await nativeTab.click()
-    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/native(?:\?|$)/)
-    await expect(nativeTab).toHaveAttribute('aria-current', 'page')
-    await expect(page.getByRole('heading', { name: 'Native build by platform' })).toBeVisible()
-    await expect(page.getByText('Active Android devices').first()).toBeVisible()
-    await expect(page.getByText('Active iOS devices').first()).toBeVisible()
-    await expect(page.getByText('Total active devices').first()).toBeVisible()
-    await expect(page.getByText('Android vs iOS active devices')).toBeVisible()
-    await expect(page.locator('[data-testid="bundle-install-stats"]')).toHaveCount(0)
-
-    await installsTab.click()
-    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/installs(?:\?|$)/)
-    await expect(installsTab).toHaveAttribute('aria-current', 'page')
-    await expect(page.locator('[data-testid="bundle-install-stats"]')).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Bundle install performance' })).toBeVisible()
-
-    await activeBundleTab.click()
-    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/active-bundle(?:\?|$)/)
-    await expect(activeBundleTab).toHaveAttribute('aria-current', 'page')
+    await expect(page.locator('[data-testid="app-overview"]')).toBeVisible()
+    // Live release is the landing sub-tab of the single Observe main tab.
+    await expect(page.getByRole('button', { name: 'Observe', exact: true })).toHaveAttribute('aria-current', 'page')
+    await expect(page.getByRole('button', { name: 'Live release', exact: true })).toHaveAttribute('aria-current', 'page')
+    await expect(page.locator('[data-testid="overview-kpis"] a')).toHaveCount(3)
+    await expect(page.locator('[data-testid="release-live"]')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Installs', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Active Bundle', exact: true })).toHaveCount(0)
     await expect(page.getByRole('heading', { name: 'Active bundle' })).toBeVisible()
-    await expect(page.locator('[data-testid="bundle-install-stats"]')).toHaveCount(0)
+
+    // The whole summary fits above the fold.
+    const lastPanel = page.locator('[data-testid="update-delivery-latency"]')
+    await expect(lastPanel).toBeVisible()
+    const box = await lastPanel.boundingBox()
+    expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(900)
+
+    await page.locator('[data-testid="overview-kpi-errors"]').click()
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/errors\?days=7/)
   })
 
-  test('native, installs, and active bundle default to the 1 day period', async ({ page }) => {
+  test('redirects the old overview and releases tabs to Live release and billing usage to Settings', async ({ page }) => {
+    await page.goto('/app/com.demo.app/installs')
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app(?:\?|$)/)
+    await expect(page.locator('[data-testid="bundle-install-stats"]')).toBeVisible()
+
+    await page.goto('/app/com.demo.app/active-bundle')
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app(?:\?|$)/)
+
+    await page.goto('/app/com.demo.app/observe/releases')
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app(?:\?|$)/)
+
+    await page.goto('/app/com.demo.app/live?version=1.0.0')
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app\?version=1\.0\.0/)
+    await expect(page.locator('[data-testid="release-live"]')).toBeVisible()
+
+    await page.goto('/app/com.demo.app/native')
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/native(?:\?|$)/)
+    await expect(page.getByRole('heading', { name: 'Native build by platform' })).toBeVisible()
+
+    await page.goto('/app/com.demo.app/settings/usage')
+    await expect(page.getByRole('button', { name: 'Usage', exact: true })).toHaveAttribute('aria-current', 'page')
+    await expect(page.locator('#mau-stat')).toBeVisible()
+  })
+
+  test('overview period defaults to 7 days and drives the version chart', async ({ page }) => {
     function daySpan(from: string | null, to: string | null) {
       if (!from || !to)
         return Number.NaN
@@ -60,62 +67,19 @@ test.describe('App dashboard sections', () => {
       return Math.round((toDate.getTime() - fromDate.getTime()) / (24 * 60 * 60 * 1000))
     }
 
-    function expectedDaySpan(days: number) {
-      return days === 1 ? 1 : days - 1
-    }
-
-    function assertDayWindow(from: string | null, to: string | null, days: number) {
-      expect(from).toBeTruthy()
-      expect(to).toBeTruthy()
-      const toDate = new Date(`${to}T00:00:00.000Z`)
-      const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000
-      expect(toDate.getTime()).toBeGreaterThanOrEqual(twoDaysAgo)
-      expect(toDate.getTime()).toBeLessThanOrEqual(Date.now())
-      expect(daySpan(from, to)).toBe(expectedDaySpan(days))
-    }
-
-    function isUsageWindow(url: string, path: string, days: number) {
-      if (!url.includes(`/${path}?`))
-        return false
-      const parsed = new URL(url)
-      return daySpan(parsed.searchParams.get('from'), parsed.searchParams.get('to')) === expectedDaySpan(days)
-    }
-
-    const oneDayButton = (locator = page.locator('[data-testid="period-day-selector"]')) =>
-      locator.getByRole('button', { name: '1 day', exact: true })
-
-    const nativeRequest = page.waitForRequest(request => isUsageWindow(request.url(), 'native_usage', 1))
-    await page.goto('/app/com.demo.app/native')
-    const nativeUrl = new URL((await nativeRequest).url())
-    assertDayWindow(nativeUrl.searchParams.get('from'), nativeUrl.searchParams.get('to'), 1)
-    await expect(oneDayButton()).toHaveAttribute('aria-pressed', 'true')
-
-    await page.goto('/app/com.demo.app/installs')
-    await expect(page.locator('[data-testid="period-day-selector"]')).toBeVisible()
-    await expect(oneDayButton()).toHaveAttribute('aria-pressed', 'true')
-    await page.locator('[data-testid="period-day-selector"]').getByRole('button', { name: '7 days', exact: true }).click()
-    await expect(page).toHaveURL(/[?&]days=7(?:&|$)/)
-
-    const bundleRequest = page.waitForRequest(request => isUsageWindow(request.url(), 'bundle_usage', 1))
-    await page.goto('/app/com.demo.app/active-bundle')
-    const bundleUrl = new URL((await bundleRequest).url())
-    assertDayWindow(bundleUrl.searchParams.get('from'), bundleUrl.searchParams.get('to'), 1)
-    await expect(oneDayButton()).toHaveAttribute('aria-pressed', 'true')
-
-    const maxButton = page.locator('[data-testid="period-day-selector"]').getByRole('button', { name: 'Max', exact: true })
+    const periodButton = (name: string) => page.locator('[data-testid="period-day-selector"]').getByRole('button', { name, exact: true })
     const range = page.locator('[data-testid="version-chart-range"]')
-    await maxButton.click()
-    await expect(page).toHaveURL(/[?&]days=30(?:&|$)/)
-    await expect(maxButton).toHaveAttribute('aria-pressed', 'true')
-    await expect.poll(async () => {
-      return daySpan(await range.getAttribute('data-from'), await range.getAttribute('data-to'))
-    }).toBe(29)
-    assertDayWindow(await range.getAttribute('data-from'), await range.getAttribute('data-to'), 30)
 
-    await oneDayButton().click()
+    await page.goto('/app/com.demo.app')
+    await expect(periodButton('7 days')).toHaveAttribute('aria-pressed', 'true')
+    await expect.poll(async () => daySpan(await range.getAttribute('data-from'), await range.getAttribute('data-to'))).toBe(6)
+
+    await periodButton('30 days').click()
+    await expect(page).toHaveURL(/[?&]days=30(?:&|$)/)
+    await expect.poll(async () => daySpan(await range.getAttribute('data-from'), await range.getAttribute('data-to'))).toBe(29)
+
+    await periodButton('1 day').click()
     await expect(page).toHaveURL(/[?&]days=1(?:&|$)/)
-    await expect.poll(async () => {
-      return daySpan(await range.getAttribute('data-from'), await range.getAttribute('data-to'))
-    }).toBe(1)
+    await expect.poll(async () => daySpan(await range.getAttribute('data-from'), await range.getAttribute('data-to'))).toBe(1)
   })
 })

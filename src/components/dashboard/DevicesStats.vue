@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions, Plugin } from 'chart.js'
+import type { PropType } from 'vue'
 import type { TooltipClickHandler } from '~/services/chartTooltip'
 import type { NativeActiveDevicesSummary, NativeDailyPlatformActive } from '~/services/nativeDeviceStats'
 import type { Organization } from '~/stores/organization'
@@ -55,6 +56,12 @@ const props = defineProps({
   usageKind: {
     type: String,
     default: 'bundle',
+  },
+  // 'chart' renders only the version chart: the page owns the title, the
+  // shared period selector and the KPI tiles.
+  variant: {
+    type: String as PropType<'full' | 'chart'>,
+    default: 'full',
   },
 })
 
@@ -343,6 +350,11 @@ function generateDayLabels(_totalLength: number) {
   return generateChartDayLabels(startDate, endDate)
 }
 
+const CHART_VARIANT_PALETTE = ['#119eff', '#22c55e', '#f59e0b', '#a855f7', '#f43f5e', '#14b8a6', '#64748b', '#eab308']
+function chartVariantColor(index: number) {
+  return CHART_VARIANT_PALETTE[index % CHART_VARIANT_PALETTE.length]
+}
+
 const processedChartData = computed<ChartData<'line'> | null>(() => {
   if (!rawChartData.value)
     return null
@@ -427,6 +439,20 @@ const processedChartData = computed<ChartData<'line'> | null>(() => {
   const formattedLabels = generateDayLabels(targetLength)
   const datasets: ChartData<'line'>['datasets'] = []
 
+  // Compact card: stack the smallest bundles at the bottom so a new bundle
+  // grows up from the baseline and the dominant one fills the top.
+  if (props.variant === 'chart') {
+    const lastShare = (values: Array<number | undefined>) => {
+      for (let index = values.length - 1; index >= 0; index--) {
+        const value = values[index]
+        if (typeof value === 'number' && value > 0)
+          return value
+      }
+      return 0
+    }
+    normalizedDatasets.sort((a, b) => lastShare(a.normalizedValues) - lastShare(b.normalizedValues))
+  }
+
   normalizedDatasets.forEach(({ dataset, normalizedValues, normalizedCountValues }, datasetIndex) => {
     // Pad with nulls at the start if needed (when billing period starts before API data)
     const paddedValues = Array.from({ length: targetLength }, (_val, index) => {
@@ -498,6 +524,15 @@ const processedChartData = computed<ChartData<'line'> | null>(() => {
       pointRadius: props.accumulated ? 0 : 2,
       pointBorderWidth: 0,
       borderWidth: 2,
+      // The compact card gives every bundle its own clear color so the stacked
+      // areas and the legend match.
+      ...(props.variant === 'chart'
+        ? {
+            borderColor: chartVariantColor(datasetIndex),
+            backgroundColor: `${chartVariantColor(datasetIndex)}59`,
+            borderWidth: 1.5,
+          }
+        : {}),
     } as ChartData<'line'>['datasets'][number]
     Object.assign(chartDataset, {
       metaBaseValues: tooltipBaseValues,
@@ -523,6 +558,41 @@ const isDemoMode = computed(() => shouldShowDashboardDemoData({
 }))
 
 const hasData = computed(() => !!(processedChartData.value && processedChartData.value.datasets.length > 0) || isDemoMode.value)
+
+// Compact card legend: the bundles with the largest share on the latest day,
+// in the same colors as the chart.
+const CHART_VARIANT_LEGEND_SIZE = 3
+const chartVariantLegend = computed(() => {
+  const datasets = processedChartData.value?.datasets ?? []
+  // Latest day where bundles hold a share; today can still be empty.
+  const baseValues = datasets.map(dataset => (dataset as { metaBaseValues?: Array<number | null> }).metaBaseValues ?? [])
+  const length = Math.max(0, ...baseValues.map(values => values.length))
+  let lastIndex = -1
+  for (let index = length - 1; index >= 0 && lastIndex < 0; index--) {
+    if (baseValues.some(values => (values[index] ?? 0) > 0))
+      lastIndex = index
+  }
+  if (lastIndex < 0)
+    return { items: [], others: 0 }
+  const entries = datasets.map((dataset, index) => {
+    const base = (dataset as { metaBaseValues?: Array<number | null> }).metaBaseValues ?? []
+    const counts = (dataset as { metaCountValues?: Array<number | undefined> }).metaCountValues ?? []
+    return {
+      name: String(dataset.label ?? ''),
+      color: chartVariantColor(index),
+      share: typeof base[lastIndex] === 'number' ? base[lastIndex] as number : 0,
+      count: counts[lastIndex] ?? 0,
+    }
+  }).filter(entry => entry.share > 0).sort((a, b) => b.share - a.share)
+  return {
+    items: entries.slice(0, CHART_VARIANT_LEGEND_SIZE).map(entry => ({
+      ...entry,
+      shareLabel: `${formatNumberValue(entry.share, { maximumFractionDigits: 1 })}%`,
+      countLabel: formatNumberValue(entry.count),
+    })),
+    others: Math.max(0, entries.length - CHART_VARIANT_LEGEND_SIZE),
+  }
+})
 
 const selectedPeriodActiveDevices = computed((): NativeActiveDevicesSummary | null => {
   if (isDemoMode.value)
@@ -591,7 +661,7 @@ const iosActiveEvolution = computed(() => calculateSummaryEvolutionPercent(
   selectedPeriodActiveDevices.value?.ios,
   selectedPeriodPreviousActiveDevices.value?.ios,
 ))
-const showNativeKpis = computed(() => isNativeUsage.value)
+const showNativeKpis = computed(() => isNativeUsage.value && props.variant === 'full')
 const isThirtyDaySummaryLoading = computed(() => isFetchingThirtyDaySummary.value || (isLoading.value && isNativeUsage.value && (props.useBillingPeriod || periodDays.value !== 30)))
 
 const todayLineOptions = computed(() => {
@@ -628,7 +698,9 @@ const todayLineOptions = computed(() => {
 
 const chartOptions = computed<ChartOptions<'line'>>(() => {
   const hasMultipleDatasets = (processedChartData.value?.datasets.length ?? 0) > 1
-  const tooltipOptions = createTooltipConfig(hasMultipleDatasets, props.accumulated, props.useBillingPeriod ? currentRange.value?.startDate : false, hasMultipleDatasets ? tooltipClickHandler.value : undefined)
+  // Dates come from the range actually shown (billing period or the 1-30 day
+  // window); the tooltip's fallback assumes a 30-day window.
+  const tooltipOptions = createTooltipConfig(hasMultipleDatasets, props.accumulated, currentRange.value?.startDate ?? false, hasMultipleDatasets ? tooltipClickHandler.value : undefined)
 
   const pluginOptions = {
     legend: {
@@ -644,9 +716,11 @@ const chartOptions = computed<ChartOptions<'line'>>(() => {
 
   return {
     maintainAspectRatio: false,
+    // Filled areas have no points to hit, so hover by x position.
+    ...(props.variant === 'chart' ? { interaction: { mode: 'index' as const, intersect: false } } : {}),
     scales: (() => {
       const scales = createChartScales(isDark.value, {
-        max: props.accumulated ? 110 : 100,
+        max: props.accumulated && props.variant !== 'chart' ? 110 : 100,
         xStacked: props.accumulated,
         yStacked: props.accumulated,
         yTickCallback: (tickValue: string | number) => {
@@ -920,7 +994,7 @@ watch(
 
 <template>
   <section class="flex flex-col gap-4">
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div v-if="props.variant === 'full'" class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
       <div class="min-w-0">
         <h2 class="text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
           {{ t(titleKey) }}
@@ -1022,7 +1096,22 @@ watch(
         :is-demo-data="isDemoMode"
       >
         <template #header>
-          <div class="flex w-full items-start justify-end">
+          <div v-if="props.variant === 'chart'" class="flex items-start justify-between w-full gap-3">
+            <h2 class="min-w-0 text-base font-semibold leading-tight text-slate-900 dark:text-white">
+              {{ t(titleKey) }}
+            </h2>
+            <ul class="flex flex-col items-end gap-0.5 text-xs shrink-0" data-testid="version-chart-legend">
+              <li v-for="item in chartVariantLegend.items" :key="item.name" class="flex items-center gap-1.5" :title="`${item.countLabel} ${t('devices')}`">
+                <span class="inline-block w-2 h-2 rounded-full" :style="{ backgroundColor: item.color }" />
+                <span class="font-medium truncate max-w-28 text-slate-700 dark:text-slate-200">{{ item.name }}</span>
+                <span class="tabular-nums text-slate-500 dark:text-slate-400">{{ item.shareLabel }}</span>
+              </li>
+              <li v-if="chartVariantLegend.others > 0" class="text-slate-400 dark:text-slate-500">
+                {{ t('version-chart-others', { count: chartVariantLegend.others }) }}
+              </li>
+            </ul>
+          </div>
+          <div v-else class="flex w-full items-start justify-end">
             <div class="flex max-w-[11rem] flex-col items-end text-right shrink-0">
               <div
                 class="inline-flex items-center justify-center px-2 py-1 text-xs font-bold text-white rounded-full shadow-lg whitespace-nowrap bg-cyan-500"

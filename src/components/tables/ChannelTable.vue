@@ -12,6 +12,7 @@ import { toast } from 'vue-sonner'
 import IconSettings from '~icons/heroicons/cog-8-tooth'
 import IconTrash from '~icons/heroicons/trash'
 import { formatDate } from '~/services/date'
+import { formatNumberValue } from '~/services/formatLocale'
 import { checkPermissions } from '~/services/permissions'
 import { useSupabase } from '~/services/supabase'
 import { refetchIfPageOutOfRange } from '~/services/tablePagination'
@@ -332,7 +333,8 @@ columns.value = [
       const target = elem.rollout_version_info?.name
       if (!servingRollout || !target)
         return stable
-      return t('channel-version-with-rollout', { fallback: stable, target })
+      const percent = `${formatNumberValue((elem.rollout_percentage_bps ?? 0) / 100, { maximumFractionDigits: 2 })}%`
+      return t('channel-version-with-rollout', { fallback: stable, target, percent })
     },
     onClick: (elem: Element) => openOneVersion(elem),
   },
