@@ -45,6 +45,14 @@ describe('private organization custom domain API', () => {
     expect(mocks.permission).not.toHaveBeenCalled()
   })
 
+  it('does not query Cloudflare for an incomplete support-managed row', async () => {
+    mocks.query.mockResolvedValueOnce({ rows: [{ provider_id: null }] })
+    const response = await app.request(`/${orgId}`)
+    expect(response.status).toBe(409)
+    expect(await response.text()).toContain('This domain needs support review')
+    expect(mocks.provider).not.toHaveBeenCalled()
+  })
+
   it('denies creation before provisioning when the paid Enterprise check fails', async () => {
     mocks.enterprise.mockRejectedValueOnce(new HTTPException(403))
     expect((await app.request(`/${orgId}`, { method: 'POST' })).status).toBe(403)

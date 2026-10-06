@@ -27,9 +27,11 @@ app.get('/:orgId', async (c) => {
   const orgId = await authorize(c)
   const pool = getPgClient(c)
   try {
-    const { rows } = await pool.query<{ provider_id: string }>('SELECT provider_id FROM public.org_custom_domains WHERE org_id = $1', [orgId])
+    const { rows } = await pool.query<{ provider_id: string | null }>('SELECT provider_id FROM public.org_custom_domains WHERE org_id = $1', [orgId])
     if (!rows[0])
       return c.json({ domain: null })
+    if (!rows[0].provider_id)
+      quickError(409, 'custom_domain_incomplete', 'This domain needs support review. Contact support.')
     const host = await cloudflareCustomHostname(c, 'GET', rows[0].provider_id)
     return c.json({ domain: customDomainInstructions(host!, customDomainConfig(c).target) })
   }
