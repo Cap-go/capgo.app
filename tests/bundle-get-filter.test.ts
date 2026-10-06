@@ -87,6 +87,15 @@ describe('[GET] /bundle version and id filters', () => {
     expect(data).toEqual([])
   })
 
+  it.concurrent('rejects unsafe bundle id query values', async () => {
+    const { response, data } = await getBundles({
+      app_id: APP_A,
+      id: '99999999999999999999',
+    })
+    expect(response.status).toBe(400)
+    expect((data as { error: string }).error).toBe('invalid_query')
+  })
+
   it.concurrent('returns one bundle when id exists on the app', async () => {
     const { response, data } = await getBundles({
       app_id: APP_A,

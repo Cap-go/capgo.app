@@ -11,7 +11,7 @@ import { fetchLimit, isValidAppId } from '../../utils/utils.ts'
 export const getBundleQuerySchema = z.object({
   app_id: z.string().optional(),
   version: z.string().min(1).optional(),
-  id: integerLikeSchema.optional(),
+  id: integerLikeSchema.refine(Number.isSafeInteger, { message: 'id must be a safe integer' }).optional(),
   page: numberLikeSchema.optional(),
 })
 
