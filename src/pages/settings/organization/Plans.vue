@@ -14,7 +14,7 @@ import CreditsOnlyTip from '~/components/CreditsOnlyTip.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
 import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { ENTERPRISE_MAU_STOPS, quoteEnterpriseScale } from '~/services/enterpriseScale'
+import { ENTERPRISE_MAU_STOPS, formatMau, getOrgExtraMau, quoteEnterpriseScale } from '~/services/enterpriseScale'
 import { formatNumber, formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '~/services/paymentRequired'
@@ -148,8 +148,7 @@ const isCreditsOnly = computed(() => isCreditsOnlyOrg(currentOrganization?.value
 const ENTERPRISE_PLAN_NAME = 'Enterprise'
 const pricingSteps = ref<CreditPricingStep[]>([])
 const enterpriseMauIndex = ref(2)
-// MAU the org currently runs on Enterprise, null when not on Enterprise.
-// Until the recurring credit line is stored on the subscription, this is the plan allowance.
+// MAU the org currently runs on Enterprise (allowance + recurring credits), null when not on Enterprise.
 const currentEnterpriseMau = ref<number | null>(null)
 let enterpriseScaleLoadSeq = 0
 
@@ -165,13 +164,6 @@ const enterpriseQuote = computed(() => {
     return null
   return quoteEnterpriseScale(pricingSteps.value, plan.mau, plan.price_m, ENTERPRISE_MAU_STOPS[enterpriseMauIndex.value])
 })
-
-// "3M" reads like a plan name; locale compact notation can render "3m" or "3 Mio".
-function formatMau(value: number) {
-  if (value >= 1_000_000)
-    return `${formatNumberValue(value / 1_000_000, { maximumFractionDigits: 1 })}M`
-  return formatNumberValue(value)
-}
 
 function formatUsd(value: number) {
   return formatNumber(value, { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol', maximumFractionDigits: 0 })
@@ -194,13 +186,19 @@ const currentPlanLabel = computed(() => {
 
 async function loadEnterpriseScale(orgId: string) {
   const loadSeq = ++enterpriseScaleLoadSeq
-  const steps = await getCreditPricingSteps(orgId)
+  const [steps, extraMau] = await Promise.all([
+    // Global tiers: checkout prices the extra MAU item from them too.
+    getCreditPricingSteps(),
+    getOrgExtraMau(orgId).catch(() => 0),
+  ])
   // An org switch during the fetch must not leave the previous org's rates behind.
   if (loadSeq !== enterpriseScaleLoadSeq || currentOrganization.value?.gid !== orgId)
     return
   pricingSteps.value = steps
   const plan = enterprisePlan.value
-  currentEnterpriseMau.value = plan && currentPlan.value?.name === plan.name ? plan.mau : null
+  currentEnterpriseMau.value = plan && currentPlan.value?.name === plan.name
+    ? plan.mau + extraMau
+    : null
   const index = ENTERPRISE_MAU_STOPS.indexOf(currentEnterpriseMau.value as typeof ENTERPRISE_MAU_STOPS[number])
   if (index >= 0)
     enterpriseMauIndex.value = index
@@ -230,6 +228,10 @@ async function prefetchStripeCheckoutUrl(plan: Database['public']['Tables']['pla
         datafastVisitorId: datafastAttribution.visitorId,
         datafastSessionId: datafastAttribution.sessionId,
         affonsoReferral,
+        // Enterprise only: MAU added to the plan quota, billed on the same subscription.
+        ...(isEnterprisePlan(plan) && enterpriseQuote.value?.extraMau
+          ? { extraMau: enterpriseQuote.value.extraMau }
+          : {}),
       }),
     })
 
@@ -306,12 +308,9 @@ async function openChangePlan(plan: Database['public']['Tables']['plans']['Row']
     return
   }
 
-  // Recurring Enterprise credits are not provisioned by checkout yet: tiers above
-  // the plan allowance go through support so nobody pays for credits they don't get.
-  if (isEnterprisePlan(plan) && (enterpriseQuote.value?.monthlyCredits ?? 0) > 0) {
-    openSupport()
+  // Above the allowance the quote must be loaded, or checkout would skip the credits.
+  if (isEnterprisePlan(plan) && enterpriseMauIndex.value > 0 && !enterpriseQuote.value)
     return
-  }
 
   // get the current url
   isSubscribeLoading.value[index] = true
@@ -528,8 +527,6 @@ function buttonName(p: Database['public']['Tables']['plans']['Row']) {
   if (isEnterprisePlan(p) && enterpriseQuote.value) {
     if (isCurrentEnterpriseScale(p) && currentOrganization.value?.paying && currentOrganization.value?.is_yearly === isYearly.value)
       return t('Current')
-    if (enterpriseQuote.value.monthlyCredits > 0)
-      return t('enterprise-scale-request', { mau: formatMau(enterpriseQuote.value.targetMau) })
     if (currentEnterpriseMau.value)
       return t('enterprise-scale-change', { mau: formatMau(enterpriseQuote.value.targetMau) })
     return t('enterprise-scale-get', { mau: formatMau(enterpriseQuote.value.targetMau) })
@@ -547,6 +544,9 @@ function buttonName(p: Database['public']['Tables']['plans']['Row']) {
 
 function isDisabled(plan: Database['public']['Tables']['plans']['Row']) {
   // Disabled if: current plan (already subscribed) or mobile
+  // Above the allowance, checkout needs the MAU price to add the extra MAU item.
+  if (isEnterprisePlan(plan) && enterpriseMauIndex.value > 0 && !enterpriseQuote.value)
+    return true
   if (isEnterprisePlan(plan) && !isCurrentEnterpriseScale(plan))
     return isMobile
   return (currentPlan.value?.name === plan.name && currentOrganization.value?.paying && currentOrganization.value?.is_yearly === isYearly.value) || isMobile
@@ -678,17 +678,17 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
           <div v-if="isEnterprisePlan(p) && enterpriseQuote" class="mb-6 shrink-0" data-test="enterprise-scale">
             <div class="flex items-baseline">
               <span class="text-3xl font-extrabold tracking-tight text-gray-900 dark:text-white">
-                {{ formatUsd(getPrice(p, segmentVal) + enterpriseQuote.monthlyCredits) }}
+                {{ formatUsd(getPrice(p, segmentVal) + enterpriseQuote.extraMauPriceMonthly) }}
               </span>
               <span class="ml-1 text-sm font-medium text-gray-500 dark:text-gray-400">/{{ t('mo') }}</span>
             </div>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              <template v-if="enterpriseQuote.monthlyCredits > 0">
+              <template v-if="enterpriseQuote.extraMau > 0">
                 <template v-if="isYearlyPlan(p, segmentVal) && hasYearlyDiscount(p)">
-                  {{ t('enterprise-scale-breakdown-yearly', { base: formatUsd(p.price_y), credits: formatUsd(enterpriseQuote.monthlyCredits) }) }}
+                  {{ t('enterprise-scale-breakdown-yearly', { base: formatUsd(p.price_y), extra: formatUsd(enterpriseQuote.extraMauPriceMonthly * 12), mau: formatMau(enterpriseQuote.extraMau) }) }}
                 </template>
                 <template v-else>
-                  {{ t('enterprise-scale-breakdown', { base: formatUsd(getPrice(p, segmentVal)), credits: formatUsd(enterpriseQuote.monthlyCredits) }) }}
+                  {{ t('enterprise-scale-breakdown', { base: formatUsd(getPrice(p, segmentVal)), extra: formatUsd(enterpriseQuote.extraMauPriceMonthly), mau: formatMau(enterpriseQuote.extraMau) }) }}
                 </template>
               </template>
               <template v-else-if="isYearlyPlan(p, segmentVal)">
@@ -722,8 +722,8 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
                 <span>{{ formatMau(ENTERPRISE_MAU_STOPS[ENTERPRISE_MAU_STOPS.length - 1]) }}+</span>
               </div>
               <p class="mt-2 text-[11px] leading-4 text-gray-500 dark:text-gray-400">
-                {{ enterpriseQuote.monthlyCredits > 0
-                  ? t('enterprise-scale-credits-note', { credits: formatUsd(enterpriseQuote.monthlyCredits), extra: formatMau(enterpriseQuote.targetMau - enterpriseQuote.includedMau) })
+                {{ enterpriseQuote.extraMau > 0
+                  ? t('enterprise-scale-extra-note', { mau: formatMau(enterpriseQuote.targetMau), extra: formatMau(enterpriseQuote.extraMau) })
                   : t('enterprise-scale-included-note') }}
               </p>
             </div>

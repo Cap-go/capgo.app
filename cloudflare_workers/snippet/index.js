@@ -312,10 +312,7 @@ function isPlanUpgradeResponse(status, responseBody) {
   return status === 429 && responseBody?.error === 'need_plan_upgrade'
 }
 
-async function buildOnPremResponse(hostname, appId, endpoint, method, responseBody, status, responseHeaders, shouldCache) {
-  if (shouldCache)
-    await setOnPremCache(hostname, appId, endpoint, method, responseBody, status, responseHeaders)
-
+function buildOnPremResponse(appId, responseBody, status, responseHeaders) {
   const newHeaders = new Headers(responseHeaders)
   newHeaders.set('Content-Type', 'application/json')
   newHeaders.set('X-Onprem-Cached', 'false')
@@ -878,7 +875,9 @@ export default {
             // served but not cached.
             if (isOnPremResponse(response.status, responseBody)) {
               console.log(`On-prem detected by ${workerUrl} for ${appId}${fallbackFailure ? ' (after fallback failure, not caching)' : ''}`)
-              return await buildOnPremResponse(hostname, appId, endpoint, method, responseBody, response.status, response.headers, !fallbackFailure)
+              if (!fallbackFailure)
+                await setOnPremCache(hostname, appId, endpoint, method, responseBody, response.status, response.headers)
+              return buildOnPremResponse(appId, responseBody, response.status, response.headers)
             }
 
             if (isPlanUpgradeResponse(response.status, responseBody)) {
