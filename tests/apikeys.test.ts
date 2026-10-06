@@ -176,11 +176,15 @@ async function postApiKey(
 
       let existingIdsForName: Set<number> | undefined
       if (keyName) {
-        const idsBeforePost = await listApiKeyIdsByName(keyName, headers, deadline)
-        if (idsBeforePost === null)
-          existingIdsForName = undefined
-        else
-          existingIdsForName = new Set(idsBeforePost)
+        try {
+          const preflightDeadline = Math.min(deadline, Date.now() + 5000)
+          const idsBeforePost = await listApiKeyIdsByName(keyName, headers, preflightDeadline)
+          if (idsBeforePost !== null)
+            existingIdsForName = new Set(idsBeforePost)
+        }
+        catch {
+          // Without a snapshot, send the POST without create-safe retries.
+        }
       }
 
       const postRemainingMs = deadline - Date.now()
@@ -421,8 +425,13 @@ describe('[POST] /apikey operations', () => {
 
       const samples: number[] = []
       for (let index = 0; index < 5; index += 1) {
+        const body = orgKeyBody(`latency-${id.slice(0, 8)}-${index}`)
         const startedAt = performance.now()
-        const response = await postApiKey(orgKeyBody(`latency-${id.slice(0, 8)}-${index}`))
+        const response = await fetch(`${BASE_URL}/apikey`, {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify(body),
+        })
         samples.push(performance.now() - startedAt)
         expect(response.status).toBe(200)
         const data = await response.json<{ id: number }>()
