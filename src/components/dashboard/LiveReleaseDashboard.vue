@@ -94,7 +94,7 @@ async function fetchInsights() {
 
 // Native health for the selected period.
 interface NativeOverviewResponse {
-  overview: { issue_free_rate: number | null, issue_count: number }
+  overview: { issue_count: number, affected_devices: number }
 }
 const { stats: nativeStats, statsLoading: nativeLoading, fetchStats: fetchNativeStats } = useNativeObserveStats<NativeOverviewResponse>(
   () => props.appId,
@@ -134,12 +134,6 @@ function formatCount(value: number | null | undefined) {
   return value === null || value === undefined ? '-' : formatNumberValue(Math.round(value))
 }
 
-function formatPercent(value: number | null | undefined) {
-  if (value === null || value === undefined || !Number.isFinite(value))
-    return '-'
-  return `${formatNumberValue(value, { maximumFractionDigits: 1 })}%`
-}
-
 function formatAction(action: string) {
   const filterKey = actionToFilter[action]
   return filterKey ? t(filterKey) : action
@@ -151,7 +145,6 @@ const healthTiles = computed(() => {
   const neutral = 'text-slate-900 dark:text-white'
   const errorTotal = insights.value?.summary.total ?? null
   const topError = insights.value?.actions[0]
-  const issueFree = nativeStats.value?.overview.issue_free_rate ?? null
   return [
     {
       key: 'errors',
@@ -160,21 +153,21 @@ const healthTiles = computed(() => {
       detail: topError
         ? `${formatAction(topError.action)} · ${t('affected-devices-count', { count: formatCount(insights.value?.summary.device_count ?? 0) })}`
         : t('affected-devices-count', { count: formatCount(insights.value?.summary.device_count ?? 0) }),
-      valueClass: errorTotal ? 'text-amber-600 dark:text-amber-400' : (errorTotal === 0 ? 'text-emerald-600 dark:text-emerald-400' : neutral),
+      valueClass: neutral,
       help: undefined as string | undefined,
       to: { path: `${basePath.value}/observe/errors`, query: periodQuery.value },
       loading: insightsLoading.value && !insights.value,
     },
     {
       key: 'native',
-      label: t('native-observe-issue-free-rate'),
-      value: formatPercent(issueFree),
-      detail: t('overview-kpi-native-issues', { count: formatCount(nativeStats.value?.overview.issue_count ?? 0) }),
-      // Health signals include noisy, often harmless events (JavaScript and
-      // resource errors, memory warnings), so this share is informational and
-      // stays neutral instead of reading as a pass/fail score.
+      label: t('native-observe-issues'),
+      value: formatCount(nativeStats.value?.overview.issue_count),
+      detail: t('native-observe-signal-devices-count', { count: formatCount(nativeStats.value?.overview.affected_devices ?? 0) }),
+      // Signals include routine events (JavaScript errors, WebView reloads), so
+      // they are shown as plain counts to compare between releases, never as a
+      // score or in warning colors.
       valueClass: neutral,
-      help: t('native-observe-issue-free-rate-help'),
+      help: t('native-observe-signals-help'),
       to: { path: `${basePath.value}/observe/native`, query: periodQuery.value },
       loading: nativeLoading.value && !nativeStats.value,
     },

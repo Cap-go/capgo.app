@@ -129,11 +129,11 @@ const kpiTiles = computed(() => {
   return [
     { label: t('native-observe-tracked-devices'), value: formatCount(overview?.total_devices), class: neutral, help: undefined as string | undefined },
     {
-      label: t('native-observe-issue-free-rate'),
-      value: formatPercent(overview?.issue_free_rate),
-      // Informational, not a score: signals include noisy, often harmless events.
+      label: t('native-observe-signal-devices'),
+      value: formatCount(overview?.affected_devices),
+      // Plain count, not a score: signals include routine, often harmless events.
       class: neutral,
-      help: t('native-observe-issue-free-rate-help'),
+      help: t('native-observe-signals-help'),
     },
     { label: t('native-observe-launch-p90'), value: formatDuration(overview?.launch_p90_ms), class: neutral },
     { label: t('native-observe-webview-p90'), value: formatDuration(overview?.webview_load_p90_ms), class: neutral },
@@ -315,12 +315,6 @@ function formatShortDate(value: string | null | undefined) {
 
 function formatCount(value: number | null | undefined) {
   return formatNumberValue(Math.round(value ?? 0))
-}
-
-function formatPercent(value: number | null | undefined) {
-  if (value === null || value === undefined)
-    return '-'
-  return `${formatNumberValue(value, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
 }
 
 function formatDuration(value: number | null | undefined) {
@@ -534,7 +528,7 @@ watch([packageId, days, versionGroup], async () => {
                     {{ t('devices') }}
                   </th>
                   <th class="whitespace-nowrap">
-                    {{ t('native-observe-issue-free-rate') }}
+                    {{ t('native-observe-signal-devices') }}
                   </th>
                   <th class="whitespace-nowrap">
                     {{ t('native-observe-launch-p90') }}
@@ -557,7 +551,7 @@ watch([packageId, days, versionGroup], async () => {
                   </td>
                   <td>{{ formatCount(version.events) }}</td>
                   <td>{{ formatCount(version.devices) }}</td>
-                  <td>{{ formatPercent(version.issue_free_rate) }}</td>
+                  <td>{{ formatCount(version.affected_devices) }}</td>
                   <td>{{ formatDuration(version.launch_p90_ms) }}</td>
                   <td>{{ formatDuration(version.webview_load_p90_ms) }}</td>
                 </tr>

@@ -1980,7 +1980,6 @@
   "native-observe-group-version-platform": "Version + platform",
   "native-observe-group-version-platform-channel": "Version + platform + channel",
   "native-observe-issues": "App health signals",
-  "native-observe-issue-free-rate": "Devices without health signals",
   "native-observe-launch-p50": "Launch P50",
   "native-observe-launch-p90": "Launch P90",
   "native-observe-launches": "Launches",
@@ -4010,11 +4009,9 @@
   "observe-tab-errors": "Errors",
   "show-less": "Show less",
   "activity": "Activity",
-  "native-observe-issue-free-rate-help": "Share of devices that reported no crash, ANR, memory warning, JavaScript error or WebView restart in this period. Most apps report some signals, so compare this between releases instead of reading it as a health score.",
   "show-all-count": "Show all ({count})",
   "overview-kpi-update-errors": "Update errors",
   "affected-devices-count": "{count} devices affected",
-  "overview-kpi-native-issues": "{count} native issues",
   "overview-kpi-unresolved": "Unresolved events",
   "current-plan-label": "Current plan: {plan}",
   "enterprise-scale-plan-name": "Enterprise {mau}",
@@ -4038,5 +4035,8 @@
   "release-banner-rollout": "Version {version} ({channel}) goes to {percent} of devices",
   "release-banner-rollout-reach": "{percent} reached",
   "bundle-install-view-chart": "Chart",
-  "bundle-install-view-table": "By bundle"
+  "bundle-install-view-table": "By bundle",
+  "native-observe-signal-devices": "Devices reporting signals",
+  "native-observe-signal-devices-count": "Reported by {count} devices",
+  "native-observe-signals-help": "Events that iOS, Android and the WebView report about your app, such as JavaScript errors or WebView reloads. Most apps report some, so compare them between releases."
 }
