@@ -49,6 +49,10 @@ Each tool is a typed zod schema over an existing public API route. The route is 
 
 Tool annotations tell clients how careful to be:
 - `readOnlyHint` marks tools that only read data.
-- `destructiveHint` marks tools that delete data. Clients should ask the user for confirmation before calling them.
+- `destructiveHint` marks tools that delete, cancel or overwrite data (channel deploys, rollouts, settings updates). Clients should ask the user for confirmation before calling them.
 
 Code: `supabase/functions/_backend/mcp/` (transport, protocol, tools and OAuth) and `supabase/functions/_backend/private/mcp_oauth.ts` (consent API). The console page is `src/pages/oauth/authorize.vue`.
+
+## ChatGPT / Codex plugin
+
+The OpenAI plugin package for this server lives in `integrations/openai-plugin/`. Build the submission ZIP with `bun scripts/build-openai-plugin.ts`. OpenAI domain verification is served from `/.well-known/openai-apps-challenge` using the `OPENAI_APPS_CHALLENGE_TOKEN` worker secret.

@@ -4023,11 +4023,10 @@
   "enterprise-scale-plan-name": "Enterprise {mau}",
   "enterprise-scale-get": "Get Enterprise {mau}",
   "enterprise-scale-change": "Switch to Enterprise {mau}",
-  "enterprise-scale-breakdown": "{base} Enterprise + {credits} credits, billed monthly",
+  "enterprise-scale-breakdown": "{base} Enterprise + {extra} for {mau} extra MAU, billed monthly",
   "enterprise-scale-slider-label": "Monthly active users",
   "enterprise-scale-mau-short": "MAU",
-  "enterprise-scale-credits-note": "{credits} of credits a month cover {extra} extra MAU. Bandwidth, storage and builds above the plan use the same credit balance.",
-  "enterprise-scale-included-note": "1M MAU included. Slide to scale: extra MAU are paid with monthly credits, no custom contract.",
-  "enterprise-scale-request": "Request Enterprise {mau}",
-  "enterprise-scale-breakdown-yearly": "Enterprise billed annually at {base} + {credits} credits billed monthly"
+  "enterprise-scale-included-note": "1M MAU included. Slide to add MAU to your plan, billed with it. No custom contract.",
+  "enterprise-scale-breakdown-yearly": "{base} Enterprise + {extra} for {mau} extra MAU, billed annually",
+  "enterprise-scale-extra-note": "Your plan includes {mau} MAU: the Enterprise 1M plus {extra} extra MAU, billed with the plan. Usage above the plan still uses credits."
 }

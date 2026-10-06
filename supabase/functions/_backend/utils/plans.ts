@@ -11,6 +11,7 @@ import { buildOnboardingIntentBentoEventData, parseOrgOnboardingIntent } from '.
 import { syncSubscriptionData } from './stripe.ts'
 import {
   getCurrentPlanNameOrg,
+  getOrgExtraMau,
   getPlanUsageAndFit,
   getPlanUsageAndFitUncached,
   getPlanUsagePercent,
@@ -359,9 +360,10 @@ async function userAbovePlan(c: Context, org: {
 
   const billingCycle = await getBillingCycleRange(c, orgId)
   const planId = currentPlan?.id
+  const extraMau = creditOnlyMode ? 0 : await getOrgExtraMau(c, orgId)
 
   const metrics: Array<{ key: CreditMetric, usage: number, limit: number | null | undefined }> = [
-    { key: 'mau', usage: Number(totalStats.mau ?? 0), limit: creditOnlyMode ? 0 : currentPlan?.mau },
+    { key: 'mau', usage: Number(totalStats.mau ?? 0), limit: creditOnlyMode ? 0 : (currentPlan?.mau == null ? currentPlan?.mau : currentPlan.mau + extraMau) },
     { key: 'storage', usage: Number(totalStats.storage ?? 0), limit: creditOnlyMode ? 0 : currentPlan?.storage },
     { key: 'bandwidth', usage: Number(totalStats.bandwidth ?? 0), limit: creditOnlyMode ? 0 : currentPlan?.bandwidth },
     { key: 'build_time', usage: Number(totalStats.build_time_unit ?? 0), limit: creditOnlyMode ? 0 : currentPlan?.build_time_unit },
@@ -421,9 +423,11 @@ async function userAbovePlan(c: Context, org: {
   }
 
   const bestPlanKey = bestPlan.toLowerCase().replace(' ', '_')
+  // Enterprise has no bigger plan: tell it to add MAU or credits instead of "upgrade to Enterprise".
+  const eventName = currentPlanName === 'Enterprise' ? 'user:enterprise_above_plan' : `user:upgrade_to_${bestPlanKey}`
   const sent = await sendNotifToOrgMembers(
     c,
-    `user:upgrade_to_${bestPlanKey}`,
+    eventName,
     'usage_limit',
     { best_plan: bestPlanKey, plan_name: currentPlanName },
     orgId,
@@ -432,10 +436,10 @@ async function userAbovePlan(c: Context, org: {
     drizzleClient,
   )
   if (sent) {
-    cloudlog({ requestId: c.get('requestId'), message: `user:upgrade_to_${bestPlanKey}`, orgId })
+    cloudlog({ requestId: c.get('requestId'), message: eventName, orgId })
     await sendEventToTracking(c, {
       channel: 'usage',
-      event: `User need upgrade to ${bestPlanKey}`,
+      event: currentPlanName === 'Enterprise' ? 'Enterprise above plan' : `User need upgrade to ${bestPlanKey}`,
       user_id: orgId,
       groups: { organization: orgId },
     }).catch()

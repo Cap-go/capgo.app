@@ -1,0 +1,40 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "capgo",
+  "version": "1.0.0",
+  "description": "Manage Capgo live updates for Capacitor apps: apps, bundles, channels, progressive rollouts, devices, update health, native builds, webhooks and push notifications.",
+  "author": {
+    "name": "Capgo",
+    "email": "support@capgo.app",
+    "url": "https://capgo.app"
+  },
+  "homepage": "https://capgo.app/docs/",
+  "repository": "https://github.com/Cap-go/capgo",
+  "license": "AGPL-3.0",
+  "keywords": ["capacitor", "live-updates", "ota", "mobile", "deployment"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Capgo",
+        "shortDescription": "Live updates for mobile apps",
+        "longDescription": "Capgo ships over-the-air (OTA) live updates to Capacitor iOS, Android and Electron apps. This plugin connects ChatGPT to your Capgo account so you can list apps and bundles, deploy a bundle to a channel, run and control progressive rollouts (pause, promote, roll back), inspect devices and pin them to a channel, read update health from Capgo Observe and usage statistics, follow native cloud build status and logs, manage webhooks, and send push notifications.\n\nIntended for mobile developers and release managers who already use Capgo. You sign in with your Capgo account and choose which organizations to share; the plugin receives a dedicated, expiring API key that you can revoke at any time from the Capgo console. Every action goes through the public Capgo API, so your organization roles, key restrictions, rate limits and audit logs apply unchanged.\n\nLimitations: the plugin cannot read files on your computer, so it cannot upload a new bundle build or start a native build. Use the Capgo CLI for those (npx @capgo/cli@latest bundle upload / build request), then manage the result here. Deleting data and changing live channels ask for confirmation first.",
+        "developerName": "Capgo",
+        "category": "Developer Tools",
+        "capabilities": ["Read", "Write"],
+        "websiteURL": "https://capgo.app",
+        "supportURL": "https://capgo.app/docs/getting-help/",
+        "privacyPolicyURL": "https://capgo.app/privacy/",
+        "termsOfServiceURL": "https://capgo.app/tos/",
+        "defaultPrompt": [
+          "Which bundle is live on the production channel of my app, and how healthy is it?",
+          "Roll out my latest bundle to 10% of production devices with auto-pause on failures.",
+          "Why did my last native build fail? Show me the relevant log lines."
+        ],
+        "brandColor": "#119EFF",
+        "brandColorDark": "#119EFF",
+        "logo": "./assets/logo.png",
+        "composerIcon": "./assets/composer-icon.png"
+      }
+    }
+  }
+}

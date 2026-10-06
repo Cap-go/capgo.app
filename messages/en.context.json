@@ -4025,8 +4025,7 @@
   "enterprise-scale-breakdown": "Used in Capgo web console areas: pages/settings/organization. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "enterprise-scale-slider-label": "Used in Capgo web console areas: pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "enterprise-scale-mau-short": "Used in Capgo web console areas: pages/settings/organization. Role: short UI label (abbreviation of monthly active users). Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "enterprise-scale-credits-note": "Used in Capgo web console areas: pages/settings/organization. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "enterprise-scale-included-note": "Used in Capgo web console areas: pages/settings/organization. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "enterprise-scale-request": "Used in Capgo web console areas: pages/settings/organization. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "enterprise-scale-breakdown-yearly": "Used in Capgo web console areas: pages/settings/organization. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "enterprise-scale-breakdown-yearly": "Used in Capgo web console areas: pages/settings/organization. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "enterprise-scale-extra-note": "Used in Capgo web console areas: pages/settings/organization. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }
