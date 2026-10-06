@@ -10,7 +10,7 @@ import { appTabs as baseAppTabs } from '~/constants/appTabs'
 import { bundleTabs } from '~/constants/bundleTabs'
 import { channelTabs } from '~/constants/channelTabs'
 import { deviceTabs } from '~/constants/deviceTabs'
-import { observeTabs } from '~/constants/observeTabs'
+import { observeTabs, observeViewTabs } from '~/constants/observeTabs'
 import { useOrganizationStore } from '~/stores/organization'
 
 const router = useRouter()
@@ -235,6 +235,24 @@ function handleTab(key: string) {
   router.push(key)
 }
 
+// Third row: views inside an Observe page (?view=), e.g. Native > Actions.
+const observePage = computed(() => route.path.match(/^\/app\/[^/]+\/observe\/([^/]+)/)?.[1] ?? '')
+const tertiaryTabs = computed<Tab[]>(() => (observeViewTabs[observePage.value] ?? []).map(tab => ({
+  ...tab,
+  key: `${route.path}?view=${tab.key}`,
+})))
+const activeTertiaryTab = computed(() => {
+  const views = observeViewTabs[observePage.value] ?? []
+  const requested = typeof route.query.view === 'string' ? route.query.view : ''
+  const view = views.some(tab => tab.key === requested) ? requested : views[0]?.key
+  return view ? `${route.path}?view=${view}` : ''
+})
+
+function handleTertiaryTab(key: string) {
+  const view = new URLSearchParams(key.split('?')[1] ?? '').get('view') ?? undefined
+  void router.replace({ query: { ...route.query, view } })
+}
+
 // Keep the selected period when moving between Observe tabs.
 function handleSecondaryTab(key: string) {
   if (appSectionType.value === 'observe' && route.query.days)
@@ -252,8 +270,11 @@ function handleSecondaryTab(key: string) {
       :secondary-tabs="secondaryTabs"
       :secondary-active-tab="activeSecondaryTab"
       no-wrap
+      :tertiary-tabs="tertiaryTabs"
+      :tertiary-active-tab="activeTertiaryTab"
       @update:active-tab="handleTab"
       @update:secondary-active-tab="handleSecondaryTab"
+      @update:tertiary-active-tab="handleTertiaryTab"
     />
     <main class="relative flex flex-1 w-full min-h-0 mt-0 overflow-hidden bg-blue-50 dark:bg-slate-800/40">
       <div v-if="showUnpaidState" class="flex-1 w-full min-h-0 mx-auto overflow-y-auto">

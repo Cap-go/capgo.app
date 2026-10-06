@@ -112,7 +112,7 @@ test.describe('Compatibility events', () => {
 
     await page.goto(`/app/${APP_ID}/observe/compatibility`)
 
-    await expect(page.getByRole('tab', { name: 'Compatibility events' })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByRole('button', { name: 'Compatibility events', exact: true })).toHaveAttribute('aria-current', 'page')
 
     const row = page.locator(`[data-test="compatibility-row"][data-event-id="${EVENT_ID}"]`)
     await expect(row).toHaveCount(1)

@@ -299,7 +299,8 @@ const guidanceOpen = ref(typeof localStorage !== 'undefined' && localStorage.get
 // at a time so neither pushes the other below the fold. #plugins (old Plugins
 // tab URL) opens the plugin view.
 type CompatibilityView = 'events' | 'plugins'
-const compatibilityView = ref<CompatibilityView>(route.hash === '#plugins' ? 'plugins' : 'events')
+// Picked from the third-level tabs in the layout (?view=).
+const compatibilityView = computed<CompatibilityView>(() => route.query.view === 'plugins' || route.hash === '#plugins' ? 'plugins' : 'events')
 
 function toggleGuidance() {
   guidanceOpen.value = !guidanceOpen.value
@@ -607,22 +608,8 @@ watchEffect(async () => {
       <div>
         <div class="w-full h-full px-4 pt-4 mx-auto mb-8 overflow-y-auto sm:px-6 lg:px-8 max-w-9xl max-h-fit">
           <div class="flex flex-col gap-4">
-            <div class="flex flex-wrap items-center justify-between gap-3">
-              <div role="tablist" class="inline-flex p-1 rounded-lg bg-slate-200/70 dark:bg-slate-800" data-testid="compatibility-view-tabs">
-                <button
-                  v-for="view in (['events', 'plugins'] as const)"
-                  :key="view"
-                  type="button"
-                  role="tab"
-                  :aria-selected="compatibilityView === view"
-                  class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors"
-                  :class="compatibilityView === view ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'"
-                  @click="compatibilityView = view"
-                >
-                  {{ view === 'events' ? t('compatibility-events') : t('plugins') }}
-                </button>
-              </div>
-              <label v-if="compatibilityView === 'events'" class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+            <div v-if="compatibilityView === 'events'" class="flex flex-wrap items-center justify-end gap-3">
+              <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
                 <input
                   v-model="showUnresolvedOnly"
                   data-test="compatibility-filter-unresolved"

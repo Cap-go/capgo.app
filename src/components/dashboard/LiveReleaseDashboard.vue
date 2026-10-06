@@ -238,7 +238,7 @@ const healthTiles = computed(() => {
         usage-kind="bundle"
         variant="chart"
         :use-billing-period="false"
-        :accumulated="false"
+        :accumulated="true"
         :force-demo="forceDemo"
       />
       <BundleInstallStatsPanel :app-id="appId" :channel-id="channelId" :days="days" :force-demo="forceDemo" hide-period-selector dense />

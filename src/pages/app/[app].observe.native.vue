@@ -115,7 +115,11 @@ const nativeUsage = ref<NativeUsageState>({ data: null, isLoading: true })
 const nativeDevicesStats = useTemplateRef<{ reload: () => Promise<void> }>('nativeDevicesStats')
 
 type NativeDetailTab = 'versions' | 'actions' | 'releases'
-const detailTab = ref<NativeDetailTab>('versions')
+// Picked from the third-level tabs in the layout (?view=).
+const detailTab = computed<NativeDetailTab>(() => {
+  const view = route.query.view
+  return view === 'actions' || view === 'releases' ? view : 'versions'
+})
 
 // Tables show their top rows so the page fits one screen; "show all" expands.
 const PREVIEW_ROWS = 5
@@ -153,17 +157,8 @@ const versionHealthHelp = computed(() => {
     return t('native-observe-version-health-help-platform')
   return t('native-observe-version-health-help')
 })
-const detailTabs = computed(() => {
-  const tabs: Array<{ key: NativeDetailTab, label: string, help: string }> = []
-  if (hasData.value) {
-    tabs.push({ key: 'versions', label: t('native-observe-version-health'), help: versionHealthHelp.value })
-    tabs.push({ key: 'actions', label: t('native-observe-action-breakdown'), help: t('native-observe-action-breakdown-help') })
-  }
-  tabs.push({ key: 'releases', label: t('native-release-stats-title'), help: t('native-release-stats-help') })
-  return tabs
-})
-// Without native observe events only the native release adoption tab exists.
-const activeDetailTab = computed<NativeDetailTab>(() => detailTabs.value.some(tab => tab.key === detailTab.value) ? detailTab.value : 'releases')
+// Without native observe events only the native release adoption view has data.
+const activeDetailTab = computed<NativeDetailTab>(() => hasData.value ? detailTab.value : 'releases')
 const versionTableMinWidth = computed(() => {
   if (showChannelColumn.value)
     return 'min-w-[980px]'
@@ -425,7 +420,11 @@ watch([packageId, days, versionGroup], async () => {
             </div>
           </InfoPopover>
         </div>
-        <PeriodDaySelector v-model="days" />
+        <div class="flex flex-wrap items-center gap-2">
+          <!-- Grouping only applies to the Version breakdown table. -->
+          <VersionGroupSelector v-if="activeDetailTab === 'versions'" :title="versionHealthHelp" :model-value="versionGroup" @update:model-value="selectVersionGroup" />
+          <PeriodDaySelector v-model="days" />
+        </div>
       </div>
 
       <div v-if="statsLoading && !stats" class="flex items-center justify-center h-80">
@@ -451,7 +450,7 @@ watch([packageId, days, versionGroup], async () => {
             usage-kind="native"
             variant="chart"
             :use-billing-period="false"
-            :accumulated="false"
+            :accumulated="true"
             @native-usage="nativeUsage = $event"
           />
           <div v-if="hasData" class="flex flex-col h-[320px] p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
@@ -487,25 +486,7 @@ watch([packageId, days, versionGroup], async () => {
           </div>
         </div>
 
-        <!-- One detail table at a time keeps the page on one screen. -->
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div role="tablist" class="inline-flex p-1 rounded-lg bg-slate-200/70 dark:bg-slate-800" data-testid="native-detail-tabs">
-            <button
-              v-for="tab in detailTabs"
-              :key="tab.key"
-              type="button"
-              role="tab"
-              :aria-selected="activeDetailTab === tab.key"
-              :title="tab.help"
-              class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors"
-              :class="activeDetailTab === tab.key ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'"
-              @click="detailTab = tab.key"
-            >
-              {{ tab.label }}
-            </button>
-          </div>
-          <VersionGroupSelector v-if="activeDetailTab === 'versions'" :model-value="versionGroup" @update:model-value="selectVersionGroup" />
-        </div>
+        <!-- One detail table at a time (third-level tabs) keeps the page on one screen. -->
 
         <div v-if="activeDetailTab === 'versions'" class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
           <div class="overflow-x-auto">

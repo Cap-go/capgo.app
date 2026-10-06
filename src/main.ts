@@ -251,7 +251,7 @@ const router = createRouter({
     { path: '/app/:app/native', redirect: redirectAppPath('/observe/native') },
     { path: '/app/:app/observe/releases', redirect: redirectAppPath('') },
     { path: '/app/:app/observe/updater', redirect: redirectAppPath('/observe/errors') },
-    { path: '/app/:app/observe/plugins', redirect: to => ({ ...redirectAppPath('/observe/compatibility')(to), hash: '#plugins' }) },
+    { path: '/app/:app/observe/plugins', redirect: to => ({ ...redirectAppPath('/observe/compatibility')(to), query: { ...to.query, view: 'plugins' } }) },
     ...setupLayouts(newRoutes),
   ],
   history: createWebHistory(import.meta.env.BASE_URL),

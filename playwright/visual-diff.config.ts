@@ -357,7 +357,7 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await mockNativeObserveStats(page)
       await page.goto('/app/com.demo.app/observe/native')
       // Base renders "Action breakdown" as a heading, head as a detail tab.
-      await page.getByRole('heading', { name: 'Action breakdown' }).or(page.getByRole('tab', { name: 'Action breakdown' })).first().waitFor()
+      await page.getByRole('heading', { name: 'Action breakdown' }).or(page.getByRole('button', { name: 'Action breakdown', exact: true })).first().waitFor()
     },
   },
   {
@@ -368,9 +368,9 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await mockNativeObserveStats(page)
       await page.goto('/app/com.demo.app/observe/native')
       const heading = page.getByRole('heading', { name: 'Action breakdown' })
-      const tab = page.getByRole('tab', { name: 'Action breakdown' })
+      const tab = page.getByRole('button', { name: 'Action breakdown', exact: true })
       await heading.or(tab).first().waitFor()
-      // Head shows one detail table at a time behind tabs; base stacks them.
+      // Head shows one detail table at a time behind third-level tabs; base stacks them.
       if (await tab.isVisible())
         await tab.click()
       else

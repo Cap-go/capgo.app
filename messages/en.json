@@ -4037,6 +4037,7 @@
   "bundle-install-view-chart": "Chart",
   "bundle-install-view-table": "By bundle",
   "native-observe-signal-devices": "Devices reporting signals",
-  "native-observe-signal-devices-count": "Reported by {count} devices",
-  "native-observe-signals-help": "Events that iOS, Android and the WebView report about your app, such as JavaScript errors or WebView reloads. Most apps report some, so compare them between releases."
+  "native-observe-signal-devices-count": "Devices reporting: {count}",
+  "native-observe-signals-help": "Events that iOS, Android and the WebView report about your app, such as JavaScript errors or WebView reloads. Most apps report some, so compare them between releases.",
+  "version-chart-others": "+{count} more"
 }

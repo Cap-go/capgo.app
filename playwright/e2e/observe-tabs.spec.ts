@@ -36,12 +36,14 @@ test.describe('Observe sections', () => {
     await compatibilityTab.click()
     await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/compatibility(?:\?|$)/)
     await expect(compatibilityTab).toHaveAttribute('aria-current', 'page')
-    await page.getByRole('tab', { name: 'Plugins', exact: true }).click()
+    // Plugin adoption is a third-level view of Compatibility.
+    await page.getByRole('button', { name: 'Plugins', exact: true }).click()
+    await expect(page).toHaveURL(/[?&]view=plugins(?:&|$)/)
     await expect(page.locator('[data-test="observe-plugin-insights"]')).toBeVisible()
     await expect(page.locator('[data-test="observe-plugin-insights"] table').getByText('4.15.3', { exact: true })).toBeVisible()
 
     await page.goto('/app/com.demo.app/observe/plugins')
-    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/compatibility#plugins$/)
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/compatibility\?view=plugins$/)
     await expect(page.locator('[data-test="observe-plugin-insights"]')).toBeVisible()
 
     await page.goto('/app/com.demo.app/observe/updater')
