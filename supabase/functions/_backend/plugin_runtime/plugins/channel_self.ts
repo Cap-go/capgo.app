@@ -598,6 +598,7 @@ async function deleteOverride(c: Context, drizzleClient: ReturnType<typeof getDr
 
 async function listCompatibleChannels(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient>, body: DeviceLink, cachedAppStatus: AppStatusResult, edgeCache = false): Promise<Response> {
   const { app_id, platform, is_emulator, is_prod } = body
+  c.set('deviceDataCollection', parseDeviceDataCollection(cachedAppStatus.device_data_collection))
   const cachedLimit = await assertChannelSelfCachedStatus(c, cachedAppStatus, app_id, makeDevice(body, cachedAppStatus.allow_device_custom_id), 'list')
   if (cachedLimit) {
     return cachedLimit

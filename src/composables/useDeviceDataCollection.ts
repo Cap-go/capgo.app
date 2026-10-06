@@ -1,12 +1,18 @@
 import type { MaybeRefOrGetter } from 'vue'
 import type { DeviceDataCollection } from '~/services/deviceDataCollection'
 import { ref, toValue, watch } from 'vue'
-import { DEFAULT_DEVICE_DATA_COLLECTION, parseAppRowDeviceDataCollection } from '~/services/deviceDataCollection'
+import { DEVICE_DATA_COLLECTION_KEYS, parseAppRowDeviceDataCollection } from '~/services/deviceDataCollection'
 import { useSupabase } from '~/services/supabase'
+
+function hiddenDeviceDataCollection(): DeviceDataCollection {
+  return Object.fromEntries(
+    DEVICE_DATA_COLLECTION_KEYS.map(key => [key, false]),
+  ) as DeviceDataCollection
+}
 
 export function useDeviceDataCollection(appId: MaybeRefOrGetter<string>) {
   const supabase = useSupabase()
-  const collection = ref<DeviceDataCollection>({ ...DEFAULT_DEVICE_DATA_COLLECTION })
+  const collection = ref<DeviceDataCollection>(hiddenDeviceDataCollection())
   let loadGeneration = 0
 
   async function load() {
@@ -14,12 +20,15 @@ export function useDeviceDataCollection(appId: MaybeRefOrGetter<string>) {
     const id = toValue(appId)
     if (!id)
       return
-    const { data } = await supabase
+    collection.value = hiddenDeviceDataCollection()
+    const { data, error } = await supabase
       .from('apps')
       .select('device_data_collection')
       .eq('app_id', id)
       .maybeSingle()
     if (generation !== loadGeneration)
+      return
+    if (error || !data)
       return
     collection.value = parseAppRowDeviceDataCollection(data as unknown)
   }

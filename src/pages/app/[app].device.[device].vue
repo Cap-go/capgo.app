@@ -367,7 +367,10 @@ const deviceSummary = computed(() => {
   if (!device.value)
     return ''
   const bundle = device.value.version_name ?? t('unknown')
-  const platform = [device.value.platform, device.value.os_version].filter(Boolean).join(' ')
+  const platform = [
+    collection.value.platform ? device.value.platform : null,
+    collection.value.os_version ? device.value.os_version : null,
+  ].filter(Boolean).join(' ')
   return platform
     ? t('device-summary-runs-on', { bundle, platform })
     : t('device-summary-runs', { bundle })
