@@ -2,17 +2,11 @@
 
 Enterprise organizations can manage one Live Updates API hostname in Organization settings. The private API provisions a Cloudflare for SaaS hostname and returns DNS ownership and certificate validation records. Refresh fetches live provider status; updater URLs are offered only when both the hostname and TLS certificate are active. Bundle download URLs are unchanged.
 
-## One-time operator setup
+## Existing Cloudflare setup
 
-Enable Cloudflare for SaaS on the configured zone and configure its fallback origin and CNAME target before enabling the feature. The plugin worker has shared zone routes for `/updates`, `/stats`, and `/channel_self`, so new customer hostnames require no Wrangler changes. Existing explicit routes remain in place. Confirm these routes and the fallback work together before enabling the API.
+Reuse the existing Cloudflare for SaaS fallback on the `capgo.app` zone. Customers point their CNAME to `plugin.capgo.app`. The API looks up the zone by name using the existing `CF_ANALYTICS_TOKEN`; no new environment variables or token are required.
 
-Publish the following runtime secrets to the API worker (and the Supabase functions environment when used there):
-
-- `CF_CUSTOM_DOMAINS_TOKEN`: scoped to the configured zone with SSL and Certificates write permission.
-- `CF_CUSTOM_DOMAINS_ZONE_ID`: the Cloudflare for SaaS zone ID.
-- `CF_CUSTOM_DOMAINS_CNAME_TARGET`: the hostname customers must point their CNAME to.
-
-Use a dedicated token; do not reuse cache purge credentials. Without these settings, domain creation returns `custom_domains_unavailable`. Leave the feature disabled until the shared routes are deployed and the fallback origin is verified. DNS-only CNAME records are recommended for customers using Cloudflare unless their SaaS zone has an explicit orange-to-orange configuration.
+Add Zone Read and SSL and Certificates write permissions for `capgo.app` to that token. Deploy the shared plugin routes for `/updates`, `/stats`, and `/channel_self`, then verify provisioning and routing with a test hostname. New customer hostnames require no individual Wrangler edits. Existing explicit routes remain in place. DNS-only CNAME records are recommended for customers using Cloudflare unless their SaaS zone has an explicit orange-to-orange configuration.
 
 Reference: [Cloudflare Worker as fallback origin](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/start/advanced-settings/worker-as-origin/) and [custom hostname API](https://developers.cloudflare.com/api/resources/custom_hostnames/methods/create/).
 

@@ -20,16 +20,22 @@ export interface CustomHostname {
 }
 
 export function customDomainConfig(c: Context) {
-  const token = getEnv(c, 'CF_CUSTOM_DOMAINS_TOKEN')
-  const zoneId = getEnv(c, 'CF_CUSTOM_DOMAINS_ZONE_ID')
-  const target = getEnv(c, 'CF_CUSTOM_DOMAINS_CNAME_TARGET').trim().toLowerCase()
-  if (!token || !/^[a-f0-9]{32}$/.test(zoneId) || !dnsHostnameSchema.safeParse(target).success)
+  const token = getEnv(c, 'CF_ANALYTICS_TOKEN')
+  if (!token)
     quickError(503, 'custom_domains_unavailable', 'Custom domains are not configured. Contact support.')
-  return { token, zoneId, target }
+  return { token, target: 'plugin.capgo.app' }
 }
 
 export async function cloudflareCustomHostname(c: Context, method: 'GET' | 'POST' | 'DELETE', id = '', hostname?: string): Promise<CustomHostname | null> {
-  const { token, zoneId } = customDomainConfig(c)
+  const { token } = customDomainConfig(c)
+  const zoneResponse = await fetch('https://api.cloudflare.com/client/v4/zones?name=capgo.app&status=active', {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(8000),
+  })
+  const zones = await zoneResponse.json() as { success: boolean, result?: Array<{ id: string, name: string }> }
+  const zoneId = zones.result?.find(zone => zone.name === 'capgo.app')?.id
+  if (!zoneResponse.ok || !zones.success || !zoneId)
+    quickError(502, 'custom_domain_provider_error', 'Unable to access the custom domain zone. Please contact support.')
   const response = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/custom_hostnames${id ? `/${encodeURIComponent(id)}` : ''}`, {
     method,
     headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
