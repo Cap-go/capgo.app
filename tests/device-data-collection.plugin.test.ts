@@ -54,6 +54,19 @@ async function postStats(data: object) {
   })
 }
 
+async function getProductionChannelVersionName(appId: string) {
+  const { data, error } = await getSupabaseClient()
+    .from('channels')
+    .select('version:app_versions!channels_version_fkey(name)')
+    .eq('app_id', appId)
+    .eq('name', 'production')
+    .single()
+  expect(error).toBeNull()
+  const version = data?.version as { name?: string } | null
+  expect(version?.name).toBeTruthy()
+  return version!.name!
+}
+
 async function setDeviceDataCollection(appId: string, collection: DeviceDataCollection) {
   const { error } = await getSupabaseClient()
     .from('apps')
@@ -106,7 +119,8 @@ describe('device_data_collection plugin integration', () => {
     const json = await response.json<{ error?: string, version?: string }>()
     expect(json.error).toBeUndefined()
     expect(() => parseSchema(updateNewScheme, json)).not.toThrow()
-    expect(json.version).toBe('1.0.0')
+    const servedVersion = await getProductionChannelVersionName(APP_ID)
+    expect(json.version).toBe(servedVersion)
   })
 
   describe.skipIf(USE_CLOUDFLARE)('primary database device writes', () => {
@@ -143,9 +157,9 @@ describe('device_data_collection plugin integration', () => {
       expect(deviceData).toMatchObject({
         platform: null,
         country_code: null,
-        os_version: null,
+        os_version: '',
         plugin_version: '',
-        version_build: '',
+        version_build: 'builtin',
         is_emulator: null,
         is_prod: null,
         install_source: null,
