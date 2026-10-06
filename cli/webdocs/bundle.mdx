@@ -77,6 +77,7 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | **--delta** | <code>boolean</code> | Upload delta updates (only changed files) for instant, super-fast updates instead of big zip downloads. Capgo refuses delta uploads over 10,000 files (delta tracks each file); use --no-delta for a full zip, or reduce files in your web build. |
 | **--delta-only** | <code>boolean</code> | Upload only delta updates without full bundle for maximum speed (useful for large apps) |
 | **--no-delta** | <code>boolean</code> | Disable delta updates even if instant updates are enabled |
+| **--delta-upload-concurrency** | <code>string</code> | Maximum number of delta files processed concurrently (1-500) |
 | **--encrypted-checksum** | <code>string</code> | An encrypted checksum (signature). Used only when uploading an external bundle. |
 | **--auto-set-bundle** | <code>boolean</code> | Set the bundle version in Capacitor config |
 | **--auto-bump** | <code>string</code> | Auto-increment bundle version from the latest remote channel/app version. Level: major, minor (default), patch|fix, metadata (prerelease), or ai |

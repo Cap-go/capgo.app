@@ -1,6 +1,6 @@
 # Organization custom domains
 
-Enterprise organizations can manage one Live Updates API hostname in Organization settings. The private API provisions a Cloudflare for SaaS hostname and returns DNS ownership and certificate validation records. Refresh fetches live provider status; updater URLs are offered only when both the hostname and TLS certificate are active. Bundle download URLs are unchanged.
+Paying Enterprise organizations can manage one Live Updates API hostname in Organization settings. The private API provisions a Cloudflare for SaaS hostname and returns DNS ownership and certificate validation records. Refresh fetches live provider status; updater URLs are offered only when both the hostname and TLS certificate are active. Bundle download URLs are unchanged.
 
 ## Existing Cloudflare setup
 
@@ -14,7 +14,9 @@ Reference: [Workers Routes API](https://developers.cloudflare.com/api/resources/
 
 ## Data and permissions
 
-The service-managed `org_custom_domains` table has a primary key on `org_id` and unique indexes on hostname, provider hostname ID, and Worker route ID. Direct anonymous/authenticated access is denied for every operation. API requests require `org.update_settings`; only creation additionally requires an active Enterprise plan, so downgraded organizations can remove their domain. Creation and deletion serialize using an indexed organization row lock. No plugin hot-path database lookups or new cron jobs are introduced.
+The service-managed `org_custom_domains` table has a primary key on `org_id` and unique indexes on hostname, provider hostname ID, and Worker route ID. Direct anonymous/authenticated access is denied for every operation. API requests require `org.update_settings`; only creation additionally requires an active Enterprise plan with a recorded payment (`paid_at`) and no overdue balance (`past_due_at`), so downgraded organizations can remove their domain. Creation and deletion serialize using an indexed organization row lock. No plugin hot-path database lookups or new cron jobs are introduced.
+
+An organization with a saved domain gets HTTP 409 when adding another; a hostname reserved by another organization also returns 409. Existing manually configured Cloudflare hostnames remain untouched and are not automatically imported. If Cloudflare rejects creation of an existing hostname, the API returns a provider error and rolls back its local reservation; support must verify ownership before migrating that hostname.
 
 Remove the custom domain before deleting its organization. Remove operations delete the Worker route and provider hostname before deleting the local row; a failed provider deletion keeps the row so it can be retried. Creation rolls back and attempts provider cleanup if persistence fails. If a provider create request times out after Cloudflare accepts it, support must reconcile the hostname and its Worker route in Cloudflare before retrying; do not adopt an existing provider hostname without verifying ownership.
 

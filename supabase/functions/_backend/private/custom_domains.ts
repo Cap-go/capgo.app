@@ -40,7 +40,7 @@ app.get('/:orgId', async (c) => {
 
 app.post('/:orgId', async (c) => {
   const orgId = await authorize(c)
-  await requireEnterprisePlan(c, orgId, 'Custom domains')
+  await requireEnterprisePlan(c, orgId, 'Custom domains', true)
   const body = await parseBody<{ hostname?: string }>(c)
   const parsed = hostnameSchema.safeParse(body.hostname)
   if (!parsed.success)

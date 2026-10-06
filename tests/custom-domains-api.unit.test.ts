@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { HTTPException } from 'hono/http-exception'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { app } from '../supabase/functions/_backend/private/custom_domains.ts'
 
@@ -44,11 +45,26 @@ describe('private organization custom domain API', () => {
     expect(mocks.permission).not.toHaveBeenCalled()
   })
 
+  it('denies creation before provisioning when the paid Enterprise check fails', async () => {
+    mocks.enterprise.mockRejectedValueOnce(new HTTPException(403))
+    expect((await app.request(`/${orgId}`, { method: 'POST' })).status).toBe(403)
+    expect(mocks.query).not.toHaveBeenCalled()
+    expect(mocks.provider).not.toHaveBeenCalled()
+  })
+
+  it('keeps an existing organization domain when another add is attempted', async () => {
+    mocks.query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [{ org_id: orgId }] })
+    const response = await app.request(`/${orgId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hostname: 'updates.example.com' }) })
+    expect(response.status).toBe(409)
+    expect(mocks.query).toHaveBeenCalledTimes(2)
+    expect(mocks.provider).not.toHaveBeenCalled()
+  })
+
   it('normalizes hostname creation and stores the provider ID after reserving it', async () => {
     mocks.query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [{ org_id: orgId }] }).mockResolvedValueOnce({ rows: [] })
     const response = await app.request(`/${orgId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hostname: ' Updates.Example.com ' }) })
     expect(response.status).toBe(200)
-    expect(mocks.enterprise).toHaveBeenCalled()
+    expect(mocks.enterprise).toHaveBeenCalledWith(expect.anything(), orgId, 'Custom domains', true)
     expect(mocks.provider).toHaveBeenCalledWith(expect.anything(), 'POST', '', 'updates.example.com')
     expect(mocks.query).toHaveBeenLastCalledWith(expect.stringContaining('SET provider_id'), [orgId, 'provider-id', 'route-id'])
   })

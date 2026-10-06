@@ -87,6 +87,14 @@ describe('custom Live Updates domains', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
+  it('leaves an existing provider hostname untouched when creation is rejected', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(zoneResponse()).mockResolvedValueOnce(new Response(JSON.stringify({ success: false }), { status: 409 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(cloudflareCustomHostname(context, 'POST', '', 'updates.example.com')).rejects.toMatchObject({ status: 502 })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'DELETE')).toBe(false)
+  })
+
   it('sanitizes network failures', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('private network details')))
     await expect(cloudflareCustomHostname(context, 'GET', 'provider-id')).rejects.toMatchObject({ status: 502, cause: { error: 'custom_domain_provider_error' } })

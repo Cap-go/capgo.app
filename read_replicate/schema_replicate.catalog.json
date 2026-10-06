@@ -1829,6 +1829,16 @@
       "position": 26,
       "table": "stripe_info",
       "type": "boolean"
+    },
+    {
+      "default": "0",
+      "generated": "",
+      "identity": "",
+      "name": "extra_mau",
+      "notNull": true,
+      "position": 27,
+      "table": "stripe_info",
+      "type": "bigint"
     }
   ],
   "constraints": [

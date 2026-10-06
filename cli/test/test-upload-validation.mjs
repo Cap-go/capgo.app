@@ -107,6 +107,28 @@ for (const options of invalidRolloutOptions) {
 if (allPassed)
   console.log('  ✅ Invalid rollout upload options are rejected\n')
 
+console.log('✓ Testing delta upload concurrency...\n')
+
+const validDeltaUploadConcurrency = safeParseSchema(optionsUploadSchema, {
+  apikey: 'test-key',
+  deltaUploadConcurrency: 500,
+})
+if (!validDeltaUploadConcurrency.success || validDeltaUploadConcurrency.data.deltaUploadConcurrency !== 500) {
+  console.error('  ❌ Delta upload concurrency should accept and preserve 500')
+  allPassed = false
+}
+
+for (const deltaUploadConcurrency of [0, -1, 1.5, 501]) {
+  const result = safeParseSchema(optionsUploadSchema, { apikey: 'test-key', deltaUploadConcurrency })
+  if (result.success) {
+    console.error(`  ❌ Expected delta upload concurrency ${deltaUploadConcurrency} to be rejected`)
+    allPassed = false
+  }
+}
+
+if (allPassed)
+  console.log('  ✅ Delta upload concurrency accepts integers from 1 through 500\n')
+
 console.log('✓ Testing standard-upload timeout message...\n')
 
 // The message must tell the user a timeout fired and point at the workarounds,

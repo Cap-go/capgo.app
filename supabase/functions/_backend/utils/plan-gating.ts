@@ -7,7 +7,7 @@ function isActivePlanStatus(status: string | null | undefined): boolean {
   return status === 'succeeded'
 }
 
-async function getActivePlanNameOrg(c: Context, orgId: string): Promise<string | null> {
+async function getActivePlanNameOrg(c: Context, orgId: string, requirePaid = false): Promise<string | null> {
   const { data: org, error: orgError } = await supabaseAdmin(c)
     .from('orgs')
     .select('customer_id')
@@ -25,7 +25,7 @@ async function getActivePlanNameOrg(c: Context, orgId: string): Promise<string |
 
   const { data: stripeInfo, error: stripeError } = await supabaseAdmin(c)
     .from('stripe_info')
-    .select('status, is_good_plan, product_id')
+    .select('status, is_good_plan, product_id, paid_at, past_due_at')
     .eq('customer_id', org.customer_id)
     .single()
   if (stripeError || !stripeInfo?.product_id) {
@@ -39,8 +39,10 @@ async function getActivePlanNameOrg(c: Context, orgId: string): Promise<string |
     return null
   }
 
-  if (!isActivePlanStatus(stripeInfo.status) || stripeInfo.is_good_plan !== true)
+  if (!isActivePlanStatus(stripeInfo.status) || stripeInfo.is_good_plan !== true
+    || (requirePaid && (!stripeInfo.paid_at || stripeInfo.past_due_at))) {
     return null
+  }
 
   const { data: plan, error: planError } = await supabaseAdmin(c)
     .from('plans')
@@ -69,9 +71,9 @@ async function getActivePlanNameOrg(c: Context, orgId: string): Promise<string |
  * @param orgId - Organization ID to validate
  * @throws {HTTPException} 403 if org is not on Enterprise plan
  */
-export async function requireEnterprisePlan(c: Context, orgId: string, feature = 'SSO'): Promise<void> {
+export async function requireEnterprisePlan(c: Context, orgId: string, feature = 'SSO', requirePaid = false): Promise<void> {
   try {
-    const planName = await getActivePlanNameOrg(c, orgId)
+    const planName = await getActivePlanNameOrg(c, orgId, requirePaid)
 
     if (planName !== 'Enterprise') {
       cloudlog({

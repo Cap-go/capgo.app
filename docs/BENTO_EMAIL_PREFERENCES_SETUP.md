@@ -44,7 +44,7 @@ For each automation listed below, add a segment filter:
 
 #### 1. Usage Limit Alerts (50%, 70%, 90%)
 
-**Events**: `user:usage_50_percent_of_plan`, `user:usage_70_percent_of_plan`, `user:usage_90_percent_of_plan`, `user:upgrade_to_*`, `user:native_build_concurrency_limit`
+**Events**: `user:usage_50_percent_of_plan`, `user:usage_70_percent_of_plan`, `user:usage_90_percent_of_plan`, `user:upgrade_to_*`, `user:enterprise_above_plan`, `user:native_build_concurrency_limit`
 
 **Filter to add**:
 
