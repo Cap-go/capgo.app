@@ -103,26 +103,14 @@ These are conservative starting values for load testing, not a claim that produc
 | --------------------------- | ---------------------------------------- | -------------------------------------------------------------- |
 | `max_batch_size`            | `100`                                    | Coalesce writes during upload bursts.                          |
 | `max_batch_timeout`         | `10` seconds                             | Flush small batches when traffic is quiet.                     |
-| `max_concurrency`           | `2`                                      | Cap simultaneous ingestion invocations.                        |
+| `max_concurrency`           | `1` per queue                            | One event writer plus one repair writer.                        |
 | `max_retries`               | `4`                                      | One initial delivery plus four retries: at most five attempts. |
 | `dead_letter_queue`         | Dedicated inventory DLQ                  | Preserve failed work for investigation and repair.             |
 | Message retention           | Explicitly configure four days initially | Establish a known recovery budget.                             |
-| Minimum invocation duration | `500 ms` initially                       | Pace transaction frequency under a full backlog.               |
 
-The size or timeout threshold triggers delivery first. Therefore, the ten-second timeout is not a throughput limiter under a backlog. Fixed concurrency limits parallel work; explicit pacing also limits sustained transaction frequency. [Batching](https://developers.cloudflare.com/queues/configuration/batching-retries/), [concurrency](https://developers.cloudflare.com/queues/configuration/consumer-concurrency/)
+The size or timeout threshold triggers delivery first. The ten-second timeout coalesces small batches; full batches can run immediately. Fixed concurrency limits parallel work to one event consumer and one repair consumer, each with at most one active database connection. There is no artificial delay or transaction-frequency limit. [Batching](https://developers.cloudflare.com/queues/configuration/batching-retries/), [concurrency](https://developers.cloudflare.com/queues/configuration/consumer-concurrency/)
 
-Use one checked-out DB connection and one short bulk transaction per valid batch. Release it before any pacing delay or provider request. Do not open a connection or issue a statement per object.
-
-With two invocations, batches of 100, and a minimum 0.5-second invocation duration, the approximate sustained ceiling is:
-
-```text
-transactions/second ≈ 2 / max(actual batch duration, 0.5 seconds)
-events/second       ≈ transactions/second × actual batch size
-```
-
-This gives up to about four batch transactions and 400 events per second under full batches. It permits short bursts in transaction timing; it is not a strict global sliding-window rate limiter.
-
-Pacing belongs inside the awaited handler before completion. Keep it configurable through the project's runtime configuration mechanisms. Deployment settings such as consumer concurrency belong in Wrangler.
+Use one checked-out DB connection and one short bulk transaction per valid batch. Release it before queue publication or provider requests. Do not open a connection or issue a statement per object. Tombstone retention is a seven-day code constant; no Vault configuration or runtime enablement switch is needed. Pause Cloudflare delivery for maintenance.
 
 Use the existing background Postgres path when provisioned. The code already supports a background Hyperdrive binding and short transactions in `supabase/functions/_backend/utils/pg.ts`. Verify its production deployment rather than assuming that the binding is configured everywhere.
 
@@ -280,7 +268,7 @@ Run reconciliation continuously in bounded chunks through the existing task disp
 
 ## 8. Capacity, failure handling, and health
 
-The starting limits permit at most two ingestion transactions, one backfill transaction, and one repair transaction concurrently from these components. Pool and Hyperdrive connection budgets must be configured and verified separately; an invocation cap is not a guarantee about all physical DB connections.
+The queue limits permit one event writer plus one repair writer: at most two active queue database connections per environment. A separately run backfill holds another connection; pause queue delivery during backfill if the same two-connection budget must cover it. Pool and Hyperdrive connection budgets must be configured and verified separately; an invocation cap is not a guarantee about all physical DB connections.
 
 Measure the sustained event arrival rate, upload burst size/duration, deletion rate, batch fill, commit p95/p99, and drain rate while unrelated production-like queries run.
 
@@ -289,7 +277,7 @@ backlog growth = incoming events/second − processed events/second
 burst drain    = burst backlog / (drain capacity − continuing arrivals)
 ```
 
-For illustration, a 10,000-event backlog at 400 events/second with no new arrivals takes about 25 seconds to drain. A sustained 500 events/second cannot be served by a 400-event/second consumer. Benchmark and increase the bounded budget, improve the write path, or revise the capacity plan before deployment.
+Calculate drain time from measured batch duration and fill; concurrency alone does not imply a fixed events-per-second ceiling. If arrivals exceed sustained drain capacity, improve the bulk write path or revise the capacity plan within the connection budget before deployment.
 
 On sustained DB failure, pause consumer delivery through the operational circuit breaker and alert. Do not burn repeated retries as a substitute for waiting out an outage. Failed work remains in the source queue or DLQ and is replayed through normal age checks and repair.
 

@@ -10,6 +10,7 @@ const {
   cloudlogMock: vi.fn(),
   envState: {
     posthogApiHost: 'https://eu.i.posthog.com',
+    configured: true,
   },
   fetchMock: vi.fn(),
 }))
@@ -26,7 +27,7 @@ vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
 }))
 
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
-  existInEnv: () => true,
+  existInEnv: () => envState.configured,
   getEnv: (_c: unknown, key: string) => {
     if (key === 'POSTHOG_API_KEY')
       return 'posthog-key'
@@ -55,11 +56,9 @@ function createContext() {
 }
 
 beforeEach(() => {
+  envState.configured = true
   envState.posthogApiHost = 'https://eu.i.posthog.com'
-  fetchMock.mockResolvedValue({
-    ok: true,
-    text: vi.fn().mockResolvedValue(''),
-  })
+  fetchMock.mockImplementation(async () => new Response('{"status":1}', { status: 200 }))
   vi.stubGlobal('fetch', fetchMock)
 })
 
@@ -436,5 +435,96 @@ describe('posthog helper', () => {
       message: 'Invalid PostHog host',
       host: '://bad-host',
     }))
+  })
+})
+
+describe('postHog delivery outcomes', () => {
+  const payload = { channel: 'usage', event: 'Tracked Event', event_id: '031c6527-7d90-842d-9abd-17f442067e20', timestamp: '2026-10-06T10:00:00.000Z' }
+
+  it.each([
+    [200, '{"status":1}', 'delivered'],
+    [201, '{"status":1,"quota_limited":[]}', 'delivered'],
+    [204, null, 'delivered'],
+    [200, '1', 'delivered'],
+    [200, '{"status":1,"quota_limited":["events"]}', 'quota_limited'],
+    [200, '{"quota_limited":true}', 'quota_limited'],
+    [200, '{"status":0}', 'permanent_failure'],
+    [429, 'rate limited', 'retryable'],
+    [500, 'unavailable', 'retryable'],
+    [503, 'unavailable', 'retryable'],
+    [400, 'bad request', 'permanent_failure'],
+    [401, 'unauthorized', 'permanent_failure'],
+    [200, 'malformed', 'ambiguous'],
+  ])('classifies HTTP %s with %s as %s without changing the boolean contract', async (status, body, outcome) => {
+    const { deliverPosthogEvent, trackPosthogEvent } = await import('../supabase/functions/_backend/utils/posthog.ts')
+    fetchMock.mockImplementation(async () => new Response(body, { status }))
+    expect(await deliverPosthogEvent(createContext(), payload)).toMatchObject({ outcome, http_status: status, legacy_success: status < 300, duration_ms: expect.any(Number) })
+    expect(await trackPosthogEvent(createContext(), payload)).toBe(status < 300)
+  })
+
+  it('forwards deterministic UUID and insert ID with frozen event time', async () => {
+    const { deliverPosthogEvent } = await import('../supabase/functions/_backend/utils/posthog.ts')
+    await deliverPosthogEvent(createContext(), { ...payload, tags: { $insert_id: 'spoofed' } })
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.uuid).toBe(payload.event_id)
+    expect(body.properties.$insert_id).toBe(payload.event_id)
+    expect(body.properties.$set).not.toHaveProperty('event_id')
+    expect(body.timestamp).toBe(payload.timestamp)
+  })
+
+  it('reports network failures as ambiguous rather than proving rejection', async () => {
+    const { deliverPosthogEvent } = await import('../supabase/functions/_backend/utils/posthog.ts')
+    fetchMock.mockRejectedValue(new TypeError('fetch failed: private-provider-context'))
+    expect(await deliverPosthogEvent(createContext(), payload)).toMatchObject({ outcome: 'ambiguous', reason: 'network', http_status: null, legacy_success: false })
+  })
+
+  it('reports timeouts as ambiguous with no additional attempt', async () => {
+    const { deliverPosthogEvent } = await import('../supabase/functions/_backend/utils/posthog.ts')
+    vi.useFakeTimers()
+    fetchMock.mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+    }))
+    const request = deliverPosthogEvent(createContext(), { ...payload, timeoutMs: 50 })
+    await vi.advanceTimersByTimeAsync(50)
+    expect(await request).toMatchObject({ outcome: 'ambiguous', reason: 'timeout', legacy_success: false })
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('bounds successful response body inspection without changing legacy success', async () => {
+    const { deliverPosthogEvent } = await import('../supabase/functions/_backend/utils/posthog.ts')
+    vi.useFakeTimers()
+    fetchMock.mockResolvedValue(new Response(new ReadableStream()))
+    const request = deliverPosthogEvent(createContext(), payload)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(await request).toMatchObject({ outcome: 'ambiguous', reason: 'timeout', http_status: 200, legacy_success: true })
+  })
+
+  it('bounds oversized provider bodies', async () => {
+    const { deliverPosthogEvent } = await import('../supabase/functions/_backend/utils/posthog.ts')
+    fetchMock.mockResolvedValue(new Response('x'.repeat(17 * 1024)))
+    expect(await deliverPosthogEvent(createContext(), payload)).toMatchObject({ outcome: 'ambiguous', reason: 'invalid_response', legacy_success: true })
+  })
+
+  it('reports configuration failures as permanent without attempting delivery', async () => {
+    const { deliverPosthogEvent } = await import('../supabase/functions/_backend/utils/posthog.ts')
+    envState.configured = false
+    expect(await deliverPosthogEvent(createContext(), payload)).toMatchObject({ outcome: 'permanent_failure', reason: 'not_configured' })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('immediately logs quota limiting with only allowlisted structured fields', async () => {
+    const { deliverPosthogEvent } = await import('../supabase/functions/_backend/utils/posthog.ts')
+    fetchMock.mockResolvedValue(new Response('{"quota_limited":["events"],"email":"provider-secret@example.com"}'))
+    await deliverPosthogEvent(createContext(), {
+      ...payload,
+      event: 'customer-secret@example.com',
+      user_id: 'private-actor',
+      tags: { email: 'customer-secret@example.com', authorization: 'jwt-secret', arbitrary: 'complete-tags-secret' },
+      description: 'private-description',
+    })
+    expect(cloudlogErrMock).toHaveBeenCalledWith({ requestId: 'request-id', message: 'tracking_provider_delivery', provider: 'posthog', event_id: payload.event_id, outcome: 'quota_limited', duration_ms: expect.any(Number), http_status: 200 })
+    const logs = JSON.stringify([...cloudlogMock.mock.calls, ...cloudlogErrMock.mock.calls])
+    for (const sensitive of ['@example.com', 'jwt-secret', 'complete-tags-secret', 'private-description', 'private-actor', 'quota_limited":['])
+      expect(logs).not.toContain(sensitive)
   })
 })

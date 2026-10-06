@@ -1,7 +1,7 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "13.7.1",
+  "version": "13.11.0",
   "private": true,
   "workspaces": [
     "cli",
@@ -170,7 +170,7 @@
     "deploy:cloudflare:plugins:prod": "bun run deploy:cloudflare:plugin_as:prod && bun run deploy:cloudflare:plugin_na:prod && bun run deploy:cloudflare:plugin_eu:prod && bun run deploy:cloudflare:plugin_af:prod && bun run deploy:cloudflare:plugin_oc:prod && bun run deploy:cloudflare:plugin_sa:prod && bun run deploy:cloudflare:plugin_me:prod && bun run deploy:cloudflare:plugin_hk:prod && bun run deploy:cloudflare:plugin_jp:prod",
     "deploy:cloudflare:plugin_as:prod": "bunx wrangler deploy --config cloudflare_workers/plugin/wrangler.jsonc --env=prod_as --minify",
     "deploy:cloudflare:plugin_na:prod": "bunx wrangler deploy --config cloudflare_workers/plugin/wrangler.jsonc --env=prod_na --minify",
-    "deploy:cloudflare:plugin_eu:prod": "bunx wrangler deploy --config cloudflare_workers/plugin/wrangler.jsonc --env=prod_eu --minify",
+    "deploy:cloudflare:plugin_eu:prod": "bun scripts/deploy-plugin-eu.ts",
     "deploy:cloudflare:plugin_af:prod": "bunx wrangler deploy --config cloudflare_workers/plugin/wrangler.jsonc --env=prod_af --minify",
     "deploy:cloudflare:plugin_oc:prod": "bunx wrangler deploy --config cloudflare_workers/plugin/wrangler.jsonc --env=prod_oc --minify",
     "deploy:cloudflare:plugin_sa:prod": "bunx wrangler deploy --config cloudflare_workers/plugin/wrangler.jsonc --env=prod_sa --minify",

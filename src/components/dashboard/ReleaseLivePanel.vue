@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions } from 'chart.js'
-import type { ReleaseLiveChannel, ReleaseLiveDeployment } from '~/composables/useReleaseLive'
+import type { ReleaseLiveChannel, ReleaseLiveDeployment, ReleaseLiveResponse } from '~/composables/useReleaseLive'
 import { useDark, useDocumentVisibility, useNow } from '@vueuse/core'
 import { computed, ref, watch } from 'vue'
 import { Bar } from 'vue-chartjs'
@@ -14,13 +14,28 @@ import { buildDemoReleaseLive, RELEASE_LIVE_POLL_INTERVAL_MS, useReleaseLive } f
 import { registerDashboardCharts } from '~/services/dashboardChartRegister'
 import { formatDistanceToNow, formatLocalDateShort, formatLocalDateTime, formatLocalTime } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
+import { useSupabase } from '~/services/supabase'
 
 const props = withDefaults(defineProps<{
   appId: string
   forceDemo?: boolean
+  // Folds the KPI tiles into the release row and shortens the chart so
+  // Observe > Releases fits one screen.
+  dense?: boolean
+  // Locks the panel to one channel (channel statistics page): the channel
+  // picker is hidden and only that channel's deployments are offered.
+  channelId?: number
 }>(), {
   forceDemo: false,
+  dense: false,
+  channelId: undefined,
 })
+
+const emit = defineEmits<{
+  // Lets the page reuse the release and adoption it shows (alerts banner)
+  // instead of polling release_live a second time.
+  live: [value: ReleaseLiveResponse | null]
+}>()
 
 registerDashboardCharts()
 
@@ -43,7 +58,7 @@ function queryString(value: unknown) {
 // falls back to the app's default channel) and ?version= a deployment on it
 // (empty means the latest one). The release banner links with ?version= only.
 const selected = computed(() => {
-  const channelId = Number(queryString(route.query.channel))
+  const channelId = props.channelId ?? Number(queryString(route.query.channel))
   return {
     channel_id: Number.isInteger(channelId) && channelId > 0 ? channelId : undefined,
     version_name: queryString(route.query.version),
@@ -54,7 +69,7 @@ function selectRelease(channelId: number | undefined, versionName: string | unde
   void router.replace({
     query: {
       ...route.query,
-      channel: channelId ? String(channelId) : undefined,
+      channel: props.channelId || !channelId ? undefined : String(channelId),
       version: versionName || undefined,
     },
   })
@@ -73,6 +88,99 @@ const release = computed(() => live.value?.release ?? null)
 const series = computed(() => live.value?.series ?? [])
 const totals = computed(() => live.value?.totals ?? { get: 0, install: 0, fail: 0, success_rate: null })
 const adoption = computed(() => live.value?.adoption ?? { devices_on_release: 0, total_devices: 0, percent: null })
+// Below this many outcomes the success rate is too noisy to label the release.
+const MIN_STATUS_SAMPLES = 20
+// Progressive rollout: the target only goes to a share of the channel, so
+// reach (devices on target / devices targeted) replaces raw adoption, and the
+// stable fallback is the baseline for the success rate.
+const rollout = computed(() => live.value?.rollout ?? null)
+
+// The channel's rollout settings, read straight from the channel so the
+// rollout is visible even when release_live does not return a summary (older
+// API, or a release other than the rollout target is selected).
+interface ChannelRolloutState {
+  target_version: string
+  fallback_version: string | null
+  percentage: number
+  status: 'running' | 'paused' | 'zero'
+}
+const supabase = useSupabase()
+const channelRollout = ref<ChannelRolloutState | null>(null)
+let channelRolloutRequest = 0
+type VersionRelation = { name?: string } | { name?: string }[] | null | undefined
+function relationName(value: VersionRelation) {
+  return (Array.isArray(value) ? value[0] : value)?.name ?? null
+}
+async function loadChannelRollout(channelId: number | undefined) {
+  const requestId = ++channelRolloutRequest
+  if (!channelId || props.forceDemo) {
+    channelRollout.value = null
+    return
+  }
+  const { data, error } = await supabase
+    .from('channels')
+    .select('rollout_enabled, rollout_percentage_bps, rollout_paused_at, version:app_versions!channels_version_fkey(name), rollout_version_info:app_versions!channels_rollout_version_fkey(name)')
+    .eq('id', channelId)
+    .maybeSingle()
+  if (requestId !== channelRolloutRequest)
+    return
+  const target = relationName(data?.rollout_version_info as VersionRelation)
+  if (error || !data?.rollout_enabled || !target) {
+    channelRollout.value = null
+    return
+  }
+  const percentage = Math.min(100, Math.max(0, (data.rollout_percentage_bps ?? 0) / 100))
+  channelRollout.value = {
+    target_version: target,
+    fallback_version: relationName(data.version as VersionRelation),
+    percentage,
+    status: data.rollout_paused_at ? 'paused' : percentage > 0 ? 'running' : 'zero',
+  }
+}
+// The backend summary wins when present; the channel read covers the rest.
+const rolloutInfo = computed<ChannelRolloutState | null>(() => rollout.value ?? channelRollout.value)
+// The rollout runs on the channel but another bundle is on screen.
+const watchingOtherThanRolloutTarget = computed(() => !!rolloutInfo.value && !!release.value && release.value.version_name !== rolloutInfo.value.target_version)
+
+const rolloutBadge = computed(() => {
+  const value = rolloutInfo.value
+  if (!value)
+    return null
+  if (value.status === 'paused')
+    return { label: t('release-live-rollout-paused', { percent: formatPercent(value.percentage) }), class: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' }
+  if (value.status === 'zero')
+    return { label: t('release-live-rollout-zero'), class: 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300' }
+  return { label: t('release-live-rollout-badge', { percent: formatPercent(value.percentage) }), class: 'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300' }
+})
+const reachStat = computed(() => {
+  const value = rollout.value
+  if (!value) {
+    return {
+      label: t('release-live-adoption'),
+      value: adoption.value.total_devices > 0 ? formatPercent(adoption.value.percent) : '-',
+      help: t('release-live-adoption-help', { onRelease: formatCount(adoption.value.devices_on_release), total: formatCount(adoption.value.total_devices) }),
+      progress: adoption.value.percent ?? 0,
+    }
+  }
+  return {
+    label: t('release-live-rollout-reach'),
+    value: formatPercent(value.reach_percent),
+    help: t('release-live-rollout-reach-help', {
+      onTarget: formatCount(value.devices_on_target),
+      expected: formatCount(value.expected_on_target),
+      percent: formatPercent(value.percentage),
+      total: formatCount(value.total_devices),
+    }),
+    progress: value.reach_percent ?? 0,
+  }
+})
+const fallbackRate = computed(() => {
+  const totalsOnFallback = rollout.value?.fallback_totals
+  if (!totalsOnFallback || totalsOnFallback.install + totalsOnFallback.fail < MIN_STATUS_SAMPLES)
+    return null
+  return totalsOnFallback.success_rate
+})
+
 const failures = computed(() => live.value?.failures ?? [])
 const failedDevices = computed(() => live.value?.failed_devices ?? null)
 const hasActivity = computed(() => totals.value.get + totals.value.install + totals.value.fail > 0)
@@ -83,12 +191,22 @@ const channels = ref<ReleaseLiveChannel[]>([])
 const activeChannel = ref<ReleaseLiveChannel | null>(null)
 const recentDeployments = ref<ReleaseLiveDeployment[]>([])
 watch(live, (value) => {
+  emit('live', value)
   if (!value)
     return
   channels.value = value.channels
   activeChannel.value = value.channel
   recentDeployments.value = value.recent_deployments
 })
+// Re-read on each poll: a rollout can be widened or paused at any time.
+watch(() => [activeChannel.value?.id, lastUpdatedAt.value] as const, ([channelId]) => {
+  void loadChannelRollout(channelId)
+}, { immediate: true })
+
+function watchRolloutTarget() {
+  if (rolloutInfo.value)
+    selectRelease(activeChannel.value?.id, rolloutInfo.value.target_version)
+}
 
 const channelOptions = computed(() => channels.value.map(channel => ({
   id: channel.id,
@@ -137,13 +255,20 @@ const secondsSinceUpdate = computed(() => {
   return Math.max(0, Math.floor((now.value.getTime() - updatedAt) / 1000))
 })
 
-// Below this many outcomes the success rate is too noisy to label the release.
-const MIN_STATUS_SAMPLES = 20
-
 const status = computed(() => {
   const rate = totals.value.success_rate
   if (rate === null || totals.value.install + totals.value.fail < MIN_STATUS_SAMPLES)
     return null
+  // During a rollout the question is "is the target worse than what the other
+  // devices get?", so it is judged against the fallback, not a fixed bar.
+  if (fallbackRate.value !== null) {
+    const gap = fallbackRate.value - rate
+    if (gap <= 2)
+      return { label: t('release-live-status-healthy'), class: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' }
+    if (gap <= 5)
+      return { label: t('release-live-status-watch'), class: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' }
+    return { label: t('release-live-status-risk'), class: 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300' }
+  }
   if (rate >= 95)
     return { label: t('release-live-status-healthy'), class: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' }
   if (rate >= 85)
@@ -263,11 +388,12 @@ watch(() => props.appId, () => {
 </script>
 
 <template>
-  <section class="flex flex-col gap-4" data-testid="release-live">
-    <div class="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+  <section class="flex flex-col" :class="dense ? 'gap-3' : 'gap-4'" data-testid="release-live">
+    <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
       <div class="min-w-0">
         <div class="flex flex-wrap items-center gap-2">
-          <h2 class="text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
+          <!-- Dense pages already name this view in their tab, so the title goes. -->
+          <h2 v-if="!dense" class="text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
             {{ t('release-live-title') }}
           </h2>
           <span
@@ -286,59 +412,71 @@ watch(() => props.appId, () => {
           >
             {{ t('demo') }}
           </span>
+          <span
+            v-if="dense && secondsSinceUpdate !== null"
+            class="text-xs tabular-nums whitespace-nowrap text-slate-500 dark:text-slate-400"
+            :title="t('release-live-help', { seconds: RELEASE_LIVE_POLL_INTERVAL_MS / 1000 })"
+          >
+            {{ t('release-live-updated-ago', { seconds: secondsSinceUpdate }) }}
+          </span>
         </div>
-        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          {{ t('release-live-help', { seconds: RELEASE_LIVE_POLL_INTERVAL_MS / 1000 }) }}
-        </p>
-        <p v-if="secondsSinceUpdate !== null" class="mt-1 text-xs tabular-nums text-slate-500 dark:text-slate-400">
+        <p
+          v-if="!dense && secondsSinceUpdate !== null"
+          class="mt-1 text-xs tabular-nums text-slate-500 dark:text-slate-400"
+          :title="t('release-live-help', { seconds: RELEASE_LIVE_POLL_INTERVAL_MS / 1000 })"
+        >
           {{ t('release-live-updated-ago', { seconds: secondsSinceUpdate }) }}
         </p>
       </div>
-      <!-- Same gray toolbar as PeriodDaySelector on the other dashboard tabs. -->
-      <div class="flex items-center w-full gap-1 p-1 bg-gray-200 rounded-lg sm:w-auto sm:self-start xl:self-auto shrink-0 dark:bg-gray-800">
-        <label v-if="channelOptions.length" :class="segmentClass" data-testid="release-live-channel-segment">
-          <span class="hidden text-gray-500 shrink-0 sm:inline dark:text-gray-400">{{ t('release-live-select-channel') }}</span>
-          <select
-            v-model="selectedChannelId"
-            :class="segmentSelectClass"
-            :aria-label="t('release-live-select-channel')"
-            :disabled="forceDemo"
-            data-testid="release-live-channel"
+      <div class="flex flex-wrap items-center justify-end gap-2">
+        <!-- Page-level controls (alerts, period) sit on the same row. -->
+        <slot name="actions" />
+        <!-- Same gray toolbar as PeriodDaySelector on the other dashboard tabs. -->
+        <div class="flex items-center w-full gap-1 p-1 bg-gray-200 rounded-lg sm:w-auto shrink-0 dark:bg-gray-800">
+          <label v-if="channelOptions.length && !props.channelId" :class="segmentClass" data-testid="release-live-channel-segment">
+            <span class="hidden text-gray-500 shrink-0 sm:inline dark:text-gray-400">{{ t('release-live-select-channel') }}</span>
+            <select
+              v-model="selectedChannelId"
+              :class="segmentSelectClass"
+              :aria-label="t('release-live-select-channel')"
+              :disabled="forceDemo"
+              data-testid="release-live-channel"
+            >
+              <option v-for="option in channelOptions" :key="option.id" :value="option.id">
+                {{ option.label }}
+              </option>
+            </select>
+            <IconChevronDown class="absolute w-3.5 h-3.5 -translate-y-1/2 pointer-events-none right-2 top-1/2 text-gray-400" aria-hidden="true" />
+          </label>
+          <label v-if="deploymentOptions.length" :class="segmentClass" data-testid="release-live-release-segment">
+            <span class="hidden text-gray-500 shrink-0 sm:inline dark:text-gray-400">{{ t('release-live-select-release') }}</span>
+            <select
+              v-model="selectedVersion"
+              :class="segmentSelectClass"
+              :aria-label="t('release-live-select-release')"
+              :disabled="forceDemo"
+              data-testid="release-live-release"
+            >
+              <option value="">
+                {{ t('release-live-latest') }}
+              </option>
+              <option v-for="option in deploymentOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+            <IconChevronDown class="absolute w-3.5 h-3.5 -translate-y-1/2 pointer-events-none right-2 top-1/2 text-gray-400" aria-hidden="true" />
+          </label>
+          <button
+            type="button"
+            class="flex items-center justify-center w-9 h-9 transition-colors rounded-md cursor-pointer shrink-0 text-gray-600 hover:bg-white hover:text-gray-900 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+            :disabled="loading || forceDemo"
+            :aria-label="t('refresh')"
+            :title="t('refresh')"
+            @click="refresh"
           >
-            <option v-for="option in channelOptions" :key="option.id" :value="option.id">
-              {{ option.label }}
-            </option>
-          </select>
-          <IconChevronDown class="absolute w-3.5 h-3.5 -translate-y-1/2 pointer-events-none right-2 top-1/2 text-gray-400" aria-hidden="true" />
-        </label>
-        <label v-if="deploymentOptions.length" :class="segmentClass" data-testid="release-live-release-segment">
-          <span class="hidden text-gray-500 shrink-0 sm:inline dark:text-gray-400">{{ t('release-live-select-release') }}</span>
-          <select
-            v-model="selectedVersion"
-            :class="segmentSelectClass"
-            :aria-label="t('release-live-select-release')"
-            :disabled="forceDemo"
-            data-testid="release-live-release"
-          >
-            <option value="">
-              {{ t('release-live-latest') }}
-            </option>
-            <option v-for="option in deploymentOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-          <IconChevronDown class="absolute w-3.5 h-3.5 -translate-y-1/2 pointer-events-none right-2 top-1/2 text-gray-400" aria-hidden="true" />
-        </label>
-        <button
-          type="button"
-          class="flex items-center justify-center w-9 h-9 transition-colors rounded-md cursor-pointer shrink-0 text-gray-600 hover:bg-white hover:text-gray-900 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
-          :disabled="loading || forceDemo"
-          :aria-label="t('refresh')"
-          :title="t('refresh')"
-          @click="refresh"
-        >
-          <IconRefresh class="w-4 h-4" :class="{ 'animate-spin': loading }" />
-        </button>
+            <IconRefresh class="w-4 h-4" :class="{ 'animate-spin': loading }" />
+          </button>
+        </div>
       </div>
     </div>
     <div v-if="loading && !live && !error" class="flex items-center justify-center h-48 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
@@ -370,24 +508,90 @@ watch(() => props.appId, () => {
     </div>
 
     <template v-else>
-      <div class="flex flex-col gap-3 p-4 bg-white border rounded-lg shadow-sm sm:flex-row sm:items-center sm:justify-between dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+      <div class="flex flex-col gap-3 px-4 py-3 bg-white border rounded-lg shadow-sm sm:flex-row sm:items-center sm:justify-between dark:bg-slate-800 border-slate-200 dark:border-slate-700">
         <div class="min-w-0">
           <div class="flex flex-wrap items-center gap-2">
             <span class="text-lg font-semibold text-slate-900 dark:text-white">{{ release.version_name }}</span>
             <span v-if="release.channel_name" class="px-2 py-0.5 text-xs font-medium rounded bg-azure-500/10 text-blue-800 dark:bg-azure-900/30 dark:text-azure-300">
               {{ release.channel_name }}
             </span>
+            <span v-if="rolloutBadge" class="px-2 py-0.5 text-xs font-semibold rounded" :class="rolloutBadge.class" data-testid="release-live-rollout-badge" :title="rollout?.pause_reason ?? undefined">
+              {{ rolloutBadge.label }}
+            </span>
             <span v-if="status" class="px-2 py-0.5 text-xs font-semibold rounded" :class="status.class">
               {{ status.label }}
             </span>
           </div>
-          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400" :title="formatLocalDateTime(release.deployed_at)">
+          <!-- Progressive rollout split: share on the target vs the fallback. -->
+          <div
+            v-if="rolloutInfo"
+            class="flex flex-wrap items-center mt-1.5 text-xs gap-x-2 gap-y-1 text-slate-500 dark:text-slate-400"
+            data-testid="release-live-rollout-split"
+            :title="t('release-live-deployed', { time: formatDistanceToNow(release.deployed_at) })"
+          >
+            <span class="flex w-28 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700" aria-hidden="true">
+              <span class="h-full bg-violet-500" :style="{ width: `${rolloutInfo.percentage}%` }" />
+            </span>
+            <span>
+              <span class="font-medium text-violet-700 dark:text-violet-300">{{ rolloutInfo.target_version }} {{ formatPercent(rolloutInfo.percentage) }}</span>
+              <template v-if="rolloutInfo.fallback_version">
+                · {{ rolloutInfo.fallback_version }} {{ formatPercent(100 - rolloutInfo.percentage) }}
+              </template>
+            </span>
+            <button
+              v-if="watchingOtherThanRolloutTarget"
+              type="button"
+              class="font-medium text-azure-600 hover:underline dark:text-azure-300"
+              data-testid="release-live-watch-rollout"
+              @click="watchRolloutTarget"
+            >
+              {{ t('release-live-watch-rollout', { version: rolloutInfo.target_version }) }}
+            </button>
+          </div>
+          <p v-else class="mt-1 text-xs text-slate-500 dark:text-slate-400" :title="formatLocalDateTime(release.deployed_at)">
             {{ t('release-live-deployed', { time: formatDistanceToNow(release.deployed_at) }) }}
             <template v-if="live?.window?.truncated">
               · {{ t('release-live-truncated') }}
             </template>
           </p>
         </div>
+        <dl v-if="dense" class="flex flex-wrap items-center gap-x-6 gap-y-2" data-testid="release-live-dense-stats">
+          <div :title="reachStat.help" data-testid="release-live-reach">
+            <dt class="text-xs text-slate-500 dark:text-slate-400">
+              {{ reachStat.label }}
+            </dt>
+            <dd class="text-lg font-semibold text-slate-900 dark:text-white">
+              {{ reachStat.value }}
+            </dd>
+          </div>
+          <div :title="t('release-live-served', { count: formatCount(totals.get) })">
+            <dt class="text-xs text-slate-500 dark:text-slate-400">
+              {{ t('release-live-installs') }}
+            </dt>
+            <dd class="text-lg font-semibold text-slate-900 dark:text-white">
+              {{ formatCount(totals.install) }}
+            </dd>
+          </div>
+          <div :title="failureRate !== null ? t('release-live-failure-rate', { rate: formatPercent(failureRate) }) : ''">
+            <dt class="text-xs text-slate-500 dark:text-slate-400">
+              {{ t('release-live-failures') }}
+            </dt>
+            <dd class="text-lg font-semibold" :class="failureCountClass" data-testid="release-live-failure-count">
+              {{ formatCount(totals.fail) }}
+            </dd>
+          </div>
+          <div>
+            <dt class="text-xs text-slate-500 dark:text-slate-400">
+              {{ t('bundle-install-success-rate') }}
+            </dt>
+            <dd class="text-lg font-semibold" :class="successRateClass(totals.success_rate)">
+              {{ formatPercent(totals.success_rate) }}
+              <span v-if="fallbackRate !== null && rollout?.fallback_version" class="text-xs font-normal text-slate-500 dark:text-slate-400" data-testid="release-live-fallback-rate">
+                {{ t('release-live-vs-fallback', { rate: formatPercent(fallbackRate), version: rollout.fallback_version }) }}
+              </span>
+            </dd>
+          </div>
+        </dl>
         <div class="flex flex-wrap gap-2">
           <RouterLink
             v-if="release.bundle_id && !forceDemo"
@@ -397,7 +601,7 @@ watch(() => props.appId, () => {
             {{ t('release-live-view-bundle') }}
           </RouterLink>
           <RouterLink
-            v-if="release.channel_id && !forceDemo"
+            v-if="release.channel_id && !forceDemo && !props.channelId"
             :to="`/app/${appId}/channel/${release.channel_id}/statistics`"
             class="d-btn d-btn-sm d-btn-outline"
           >
@@ -406,37 +610,37 @@ watch(() => props.appId, () => {
         </div>
       </div>
 
-      <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-          <div class="text-sm text-slate-600 dark:text-slate-400">
-            {{ t('release-live-adoption') }}
+      <div v-if="!dense" class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div class="px-4 py-3 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+          <div class="text-xs text-slate-600 dark:text-slate-400">
+            {{ reachStat.label }}
           </div>
-          <div class="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">
-            {{ formatPercent(adoption.percent) }}
+          <div class="mt-1 text-xl font-semibold text-slate-900 dark:text-white">
+            {{ reachStat.value }}
           </div>
-          <div class="w-full h-1.5 mt-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
-            <div class="h-full transition-all duration-500 rounded-full bg-azure-500" :style="{ width: `${Math.min(100, adoption.percent ?? 0)}%` }" />
+          <div class="w-full h-1.5 mt-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
+            <div class="h-full transition-all duration-500 rounded-full bg-azure-500" :style="{ width: `${Math.min(100, reachStat.progress)}%` }" />
           </div>
           <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            {{ t('release-live-adoption-help', { onRelease: formatCount(adoption.devices_on_release), total: formatCount(adoption.total_devices) }) }}
+            {{ reachStat.help }}
           </p>
         </div>
-        <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-          <div class="text-sm text-slate-600 dark:text-slate-400">
+        <div class="px-4 py-3 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+          <div class="text-xs text-slate-600 dark:text-slate-400">
             {{ t('release-live-installs') }}
           </div>
-          <div class="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">
+          <div class="mt-1 text-xl font-semibold text-slate-900 dark:text-white">
             {{ formatCount(totals.install) }}
           </div>
           <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
             {{ t('release-live-served', { count: formatCount(totals.get) }) }}
           </p>
         </div>
-        <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-          <div class="text-sm text-slate-600 dark:text-slate-400">
+        <div class="px-4 py-3 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+          <div class="text-xs text-slate-600 dark:text-slate-400">
             {{ t('release-live-failures') }}
           </div>
-          <div class="mt-2 text-2xl font-semibold" :class="failureCountClass" data-testid="release-live-failure-count">
+          <div class="mt-1 text-xl font-semibold" :class="failureCountClass" data-testid="release-live-failure-count">
             {{ formatCount(totals.fail) }}
           </div>
           <p v-if="failureRate !== null" class="mt-1 text-xs text-slate-500 dark:text-slate-400">
@@ -453,11 +657,11 @@ watch(() => props.appId, () => {
             </p>
           </template>
         </div>
-        <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-          <div class="text-sm text-slate-600 dark:text-slate-400">
+        <div class="px-4 py-3 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+          <div class="text-xs text-slate-600 dark:text-slate-400">
             {{ t('bundle-install-success-rate') }}
           </div>
-          <div class="mt-2 text-2xl font-semibold" :class="successRateClass(totals.success_rate)">
+          <div class="mt-1 text-xl font-semibold" :class="successRateClass(totals.success_rate)">
             {{ formatPercent(totals.success_rate) }}
           </div>
         </div>
@@ -473,10 +677,10 @@ watch(() => props.appId, () => {
               {{ t('release-live-bucket', { minutes: live.window.bucket_minutes }) }}
             </span>
           </div>
-          <div v-if="hasActivity" class="h-64">
+          <div v-if="hasActivity" :class="dense ? 'h-32' : 'h-56'">
             <Bar :data="chartData" :options="chartOptions" />
           </div>
-          <div v-else class="flex flex-col items-center justify-center h-64 gap-2 text-sm text-center text-slate-500 dark:text-slate-400">
+          <div v-else class="flex flex-col items-center justify-center gap-2 text-sm text-center text-slate-500 dark:text-slate-400" :class="dense ? 'h-32' : 'h-56'">
             <Spinner size="w-6 h-6" />
             <p class="max-w-sm">
               {{ t('release-live-waiting') }}
@@ -484,12 +688,9 @@ watch(() => props.appId, () => {
           </div>
         </div>
         <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-          <h3 class="text-sm font-semibold text-slate-900 dark:text-white">
+          <h3 class="mb-3 text-sm font-semibold text-slate-900 dark:text-white" :title="t('release-live-failures-normal')">
             {{ t('release-live-top-failures') }}
           </h3>
-          <p class="mt-1 mb-3 text-xs text-slate-500 dark:text-slate-400">
-            {{ t('release-live-failures-normal') }}
-          </p>
           <ul v-if="failures.length" class="flex flex-col gap-2">
             <li v-for="failure in failures" :key="failure.action" class="flex items-center justify-between gap-2 text-sm">
               <code class="px-1.5 py-0.5 text-xs rounded bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200">{{ failure.action }}</code>

@@ -9420,7 +9420,7 @@ DECLARE
     v_is_good_plan boolean;
 BEGIN
     SELECT
-        p.mau,
+        p.mau + COALESCE(si.extra_mau, 0),
         p.bandwidth,
         p.storage,
         p.build_time_unit,
@@ -9445,9 +9445,7 @@ BEGIN
     percent_storage := public.convert_number_to_percent(total_stats.storage, v_plan_storage);
     percent_build_time := public.convert_number_to_percent(total_stats.build_time_unit, v_plan_build_time);
 
-    IF v_plan_name = 'Enterprise' THEN
-        v_is_good_plan := TRUE;
-    ELSIF v_plan_name IS NULL THEN
+    IF v_plan_name IS NULL THEN
         v_is_good_plan := FALSE;
     ELSE
         v_is_good_plan := v_plan_mau >= total_stats.mau
@@ -9490,7 +9488,7 @@ DECLARE
     v_is_good_plan boolean;
 BEGIN
     SELECT
-        p.mau,
+        p.mau + COALESCE(si.extra_mau, 0),
         p.bandwidth,
         p.storage,
         p.build_time_unit,
@@ -9515,9 +9513,7 @@ BEGIN
     percent_storage := public.convert_number_to_percent(total_stats.storage, v_plan_storage);
     percent_build_time := public.convert_number_to_percent(total_stats.build_time_unit, v_plan_build_time);
 
-    IF v_plan_name = 'Enterprise' THEN
-        v_is_good_plan := TRUE;
-    ELSIF v_plan_name IS NULL THEN
+    IF v_plan_name IS NULL THEN
         v_is_good_plan := FALSE;
     ELSE
         v_is_good_plan := v_plan_mau >= total_stats.mau
@@ -9570,7 +9566,7 @@ BEGIN
   END IF;
 
   SELECT
-    p.mau,
+    p.mau + COALESCE(si.extra_mau, 0),
     p.bandwidth,
     p.storage,
     p.build_time_unit
@@ -9644,7 +9640,7 @@ BEGIN
     RETURN;
   END IF;
 
-  SELECT p.mau, p.bandwidth, p.storage, p.build_time_unit
+  SELECT p.mau + COALESCE(si.extra_mau, 0), p.bandwidth, p.storage, p.build_time_unit
   INTO v_plan_mau, v_plan_bandwidth, v_plan_storage, v_plan_build_time
   FROM public.orgs o
   JOIN public.stripe_info si ON o.customer_id = si.customer_id
@@ -11918,6 +11914,7 @@ DECLARE
   v_start_date date;
   v_end_date date;
   v_plan_name text;
+  v_extra_mau bigint;
   total_metrics record;
 BEGIN
   IF NOT public.is_internal_request_role(public.current_request_role())
@@ -11926,8 +11923,8 @@ BEGIN
     RETURN false;
   END IF;
 
-  SELECT si.product_id
-  INTO v_product_id
+  SELECT si.product_id, COALESCE(si.extra_mau, 0)
+  INTO v_product_id, v_extra_mau
   FROM public.orgs o
   LEFT JOIN public.stripe_info si ON o.customer_id = si.customer_id
   WHERE o.id = orgid;
@@ -11942,10 +11939,6 @@ BEGIN
   FROM public.plans p
   WHERE p.stripe_id = v_product_id;
 
-  IF v_plan_name = 'Enterprise' THEN
-    RETURN true;
-  END IF;
-
   SELECT * INTO total_metrics
   FROM public.get_total_metrics(orgid, v_start_date, v_end_date);
 
@@ -11953,7 +11946,7 @@ BEGIN
     SELECT 1
     FROM public.plans p
     WHERE p.name = v_plan_name
-      AND p.mau >= total_metrics.mau
+      AND p.mau + v_extra_mau >= total_metrics.mau
       AND p.bandwidth >= total_metrics.bandwidth
       AND p.storage >= total_metrics.storage
       AND p.build_time_unit >= COALESCE(total_metrics.build_time_unit, 0)
@@ -23596,6 +23589,23 @@ COMMENT ON COLUMN "public"."onboarding_demo_data"."row_key" IS 'Primary-row iden
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."org_custom_domains" (
+    "org_id" "uuid" NOT NULL,
+    "hostname" "text" NOT NULL,
+    "provider_id" "text",
+    "provider_route_id" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "org_custom_domains_hostname" CHECK ((("hostname" = "lower"("hostname")) AND ("length"("hostname") <= 253)))
+);
+
+
+ALTER TABLE "public"."org_custom_domains" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."org_custom_domains" IS 'Provider-managed Live Updates hostnames. Private API checks org.update_settings before indexed service-role access.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."org_id_tombstones" (
     "org_id" "uuid" NOT NULL,
     "deleted_at" timestamp with time zone DEFAULT "now"() NOT NULL
@@ -24117,7 +24127,8 @@ CREATE TABLE IF NOT EXISTS "public"."stripe_info" (
     "last_stripe_event_at" timestamp with time zone,
     "past_due_at" timestamp with time zone,
     "churn_reason" "text",
-    "is_above_plan" boolean
+    "is_above_plan" boolean,
+    "extra_mau" bigint DEFAULT 0 NOT NULL
 );
 
 ALTER TABLE ONLY "public"."stripe_info" REPLICA IDENTITY FULL;
@@ -24159,6 +24170,10 @@ COMMENT ON COLUMN "public"."stripe_info"."churn_reason" IS 'Internal churn reaso
 
 
 COMMENT ON COLUMN "public"."stripe_info"."is_above_plan" IS 'Raw plan-fit result before usage credits are applied; null until the next plan-status refresh.';
+
+
+
+COMMENT ON COLUMN "public"."stripe_info"."extra_mau" IS 'MAU bought on top of the plan allowance (Enterprise extra MAU subscription item). 0 when none.';
 
 
 
@@ -25105,6 +25120,26 @@ ALTER TABLE ONLY "public"."old_apps"
 
 ALTER TABLE ONLY "public"."onboarding_demo_data"
     ADD CONSTRAINT "onboarding_demo_data_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."org_custom_domains"
+    ADD CONSTRAINT "org_custom_domains_hostname_key" UNIQUE ("hostname");
+
+
+
+ALTER TABLE ONLY "public"."org_custom_domains"
+    ADD CONSTRAINT "org_custom_domains_pkey" PRIMARY KEY ("org_id");
+
+
+
+ALTER TABLE ONLY "public"."org_custom_domains"
+    ADD CONSTRAINT "org_custom_domains_provider_id_key" UNIQUE ("provider_id");
+
+
+
+ALTER TABLE ONLY "public"."org_custom_domains"
+    ADD CONSTRAINT "org_custom_domains_provider_route_id_key" UNIQUE ("provider_route_id");
 
 
 
@@ -26887,6 +26922,11 @@ ALTER TABLE ONLY "public"."onboarding_demo_data"
 
 
 
+ALTER TABLE ONLY "public"."org_custom_domains"
+    ADD CONSTRAINT "org_custom_domains_org_id_fkey" FOREIGN KEY ("org_id") REFERENCES "public"."orgs"("id") ON DELETE RESTRICT;
+
+
+
 ALTER TABLE ONLY "public"."org_metrics_cache"
     ADD CONSTRAINT "org_metrics_cache_org_id_fkey" FOREIGN KEY ("org_id") REFERENCES "public"."orgs"("id") ON DELETE CASCADE;
 
@@ -27464,11 +27504,19 @@ CREATE POLICY "Deny anon select on apikeys" ON "public"."apikeys" AS RESTRICTIVE
 
 
 
+CREATE POLICY "Deny client delete" ON "public"."org_custom_domains" FOR DELETE TO "anon", "authenticated" USING (false);
+
+
+
 CREATE POLICY "Deny client delete on org_id_tombstones" ON "public"."org_id_tombstones" AS RESTRICTIVE FOR DELETE TO "anon", "authenticated" USING (false);
 
 
 
 CREATE POLICY "Deny client delete on sso_providers" ON "public"."sso_providers" AS RESTRICTIVE FOR DELETE TO "anon", "authenticated" USING (false);
+
+
+
+CREATE POLICY "Deny client insert" ON "public"."org_custom_domains" FOR INSERT TO "anon", "authenticated" WITH CHECK (false);
 
 
 
@@ -27484,7 +27532,15 @@ CREATE POLICY "Deny client insert on sso_providers" ON "public"."sso_providers" 
 
 
 
+CREATE POLICY "Deny client select" ON "public"."org_custom_domains" FOR SELECT TO "anon", "authenticated" USING (false);
+
+
+
 CREATE POLICY "Deny client select on org_id_tombstones" ON "public"."org_id_tombstones" AS RESTRICTIVE FOR SELECT TO "anon", "authenticated" USING (false);
+
+
+
+CREATE POLICY "Deny client update" ON "public"."org_custom_domains" FOR UPDATE TO "anon", "authenticated" USING (false) WITH CHECK (false);
 
 
 
@@ -28040,6 +28096,9 @@ ALTER TABLE "public"."old_apps" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."onboarding_demo_data" ENABLE ROW LEVEL SECURITY;
+
+
+ALTER TABLE "public"."org_custom_domains" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."org_id_tombstones" ENABLE ROW LEVEL SECURITY;
@@ -31809,6 +31868,10 @@ GRANT ALL ON SEQUENCE "public"."old_apps_id_seq" TO "service_role";
 
 
 GRANT ALL ON TABLE "public"."onboarding_demo_data" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."org_custom_domains" TO "service_role";
 
 
 

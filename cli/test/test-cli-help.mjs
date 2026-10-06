@@ -60,5 +60,21 @@ for (const help of [buildHelp, credentialsHelp, requestHelp, saveHelp, updateHel
 const bundleUploadHelp = getHelp('bundle', 'upload')
 assert.match(bundleUploadHelp, /--mode <framework>/)
 assert.match(bundleUploadHelp, /cordova/)
+assert.match(bundleUploadHelp, /--delta-upload-concurrency <count>/)
+assert.match(bundleUploadHelp, /default: 50/)
+
+const invalidDeltaUploadConcurrency = spawnSync(process.execPath, [
+  'dist/index.js',
+  'bundle',
+  'upload',
+  'com.example.app',
+  '--delta-upload-concurrency',
+  '0',
+], {
+  cwd: cliDir,
+  encoding: 'utf8',
+})
+assert.notEqual(invalidDeltaUploadConcurrency.status, 0)
+assert.match(`${invalidDeltaUploadConcurrency.stdout}${invalidDeltaUploadConcurrency.stderr}`, /must be an integer between 1 and 500/)
 
 console.log('✅ CLI help readability checks passed')
