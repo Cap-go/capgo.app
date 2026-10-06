@@ -490,7 +490,19 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
           expect(response.status).toBe(200)
           expect(responseData.status).toBe('ok')
 
-          if (!isDroppedStatsLogAction(action)) {
+          // Verify stats entry. Intermediate download progress is intentionally
+          // not stored (see isDroppedStatsLogAction in plugin_stats.ts).
+          if (isDroppedStatsLogAction(action)) {
+            const { count, error: statsError } = await getSupabaseClient()
+              .from('stats')
+              .select('*', { count: 'exact', head: true })
+              .eq('device_id', uuid)
+              .eq('app_id', appId)
+              .eq('action', action)
+            expect(statsError).toBeNull()
+            expect(count).toBe(0)
+          }
+          else {
             const { error: statsError, data: statsData } = await getSupabaseClient()
               .from('stats')
               .select()
