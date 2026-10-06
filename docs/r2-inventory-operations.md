@@ -31,3 +31,44 @@ A batch collapses duplicate/older notifications per key, preserves conflicting e
 Admission checkpoints protect the event horizon. Requests lock the bucket admission record in shared mode; any tombstone collector must exclusively advance its durable floor before purging history. Old notifications without covering history request verification. Revision comparisons prevent observations from overwriting concurrent events. Observations are limited to two minutes, use database request-start time and a five-second event-clock safety band, and preserve deletion intent through `cleanup_requested_at`, including after a tombstone. Compare-and-swap checks both revision and the original discovery timestamp, so a purged/reinserted key cannot be mistaken for the captured row. Near-boundary conflicting events are repaired conservatively.
 
 Repair publication is awaited before acknowledging the source batch. Ambiguous rows stay unchanged, so a publication failure can safely replay and retry publication. Malformed messages retry independently and reach the DLQ within the same five-delivery budget; they do not block valid peers.
+
+## Historical backfill and drift reconciliation
+
+Enable and test notifications first so new changes are captured before scanning historical data. All modes require `R2_INVENTORY_DATABASE_URL` (internal writer connection); backfill and reconciliation also require `R2_ENDPOINT` (the private R2 S3 endpoint), `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY`. Database-only GC does not require R2 credentials. R2 credentials need LIST access only; the script never requests object bodies, copies/deletes objects, or performs HEAD.
+
+Preview a bounded page without writes, then backfill:
+
+```sh
+bun scripts/backfill-r2-inventory.ts --bucket capgo-alpha --job initial --max-pages 1
+bun scripts/backfill-r2-inventory.ts --bucket capgo-alpha --job initial --write --max-pages 1000
+```
+
+Resume by repeating the same command. Checkpoints are scoped by bucket, mode, job and prefix. Each page uses `ListObjectsV2` with 1,000 objects and no delimiter. The object inserts and cursor advancement commit in one transaction; existing rows win over historical discovery. Invalid continuation tokens fall back to the last committed key. Failed pages are read fresh on resume. One writer processes at most one page per second by default; tune `--interval-ms` upward when live ingestion or WAL/latency indicates pressure. SDK attempts are capped at five, provider requests at 30 seconds, transaction statements at ten seconds, and standalone client queries at fifteen seconds. SIGINT/SIGTERM stop after the current page.
+
+Run a complete two-way validation pass with the same job:
+
+```sh
+bun scripts/backfill-r2-inventory.ts --bucket capgo-alpha --job initial --mode reconcile --write --max-pages 1000
+```
+
+Repeat until `complete` is true. Reconciliation reads an indexed chunk of at most 1,000 database keys before one fresh R2 LIST page. It compares only the fully covered range, including unknown objects and absent known objects. A range can require up to 2,000 observations, written in two bounded chunks inside the page/checkpoint transaction. It preserves concurrent events using revision and discovery-time comparisons and counts skipped conflicts. A truncated/failed page never proves absence beyond its covered range. Pending reservations remain intact. The final provider-only tail is scanned as well.
+
+For subsequent drift checks, explicitly restart the completed reconciliation checkpoint:
+
+```sh
+bun scripts/backfill-r2-inventory.ts --bucket capgo-alpha --job initial --mode reconcile --write --restart
+```
+
+Use `--restart` only for the first invocation of a new pass, then resume normally. It refuses active incomplete checkpoints (an old reconciliation invalidated by a restarted backfill can be reset) and competing writers cannot reset active work. Arrange recurring execution through the existing operational dispatcher/scheduler after the rollout; this PR introduces a resumable script and no new Postgres cron. LIST is strongly consistent per request, but a multi-page scan is not one atomic snapshot; repeated reconciliation repairs changes behind the cursor.
+
+Failure reports default to `.context/r2-inventory-failures.jsonl`, contain bounded page keys plus the last committed progress, and stay local. Files are created with mode `0600`, existing files are tightened before appending, and symbolic links are refused. They may contain private storage identifiers: never commit or publish them. A DB failure rolls the page back; provider failures leave the cursor untouched. Dry runs write neither objects nor checkpoints. A page budget exit is resumable and does not mean the bucket is fully inventoried.
+
+Reconciliation records the exact completion version of its backfill and rechecks it under a shared lock on every commit. Restarting backfill invalidates the earlier reconciliation for GC purposes. After the full-bucket initial backfill and reconciliation for the same completion version finish without skipped observations, bounded tombstone collection is available explicitly:
+
+```sh
+bun scripts/backfill-r2-inventory.ts --bucket capgo-alpha --job initial --mode gc --write
+```
+
+Each run examines at most 1,000 expired ordinary inventory tombstones and removes eligible history, using the bucket-first partial expiry index. Rows with `cleanup_requested_at` set are excluded from collection and the index so committed retirement cannot be forgotten; removing those rows requires a durable replacement for their retirement markers. It advances the monotonic admission floor in the same transaction and waits for in-flight event transactions before forgetting history. A durable cursor advances past admission-protected candidates and wraps after reaching the end, so later eligible rows are still visited and protected rows are retried on the next pass. Cursor advancement and deletion commit together. Zero deletions can mean age guards applied or the cursor wrapped; repeat runs to cover the full expiry index. It never deletes R2 objects. If a replay predates the floor after its tombstone is gone, ingestion requests verification instead of recreating a row blindly. Large old-event recovery should use LIST reconciliation, rather than re-driving millions of notifications through individual HEAD repairs. Physical cleanup and manifest leases remain future work.
+
+Creation events have no separate LastModified field. When a newer creation replaces a known key, its historical modification timestamp becomes unknown until the next direct observation; ingestion does not carry metadata from the replaced object forward.
