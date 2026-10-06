@@ -7,6 +7,7 @@
   "compatibility-events.spec.ts": 7,
   "confirmation-redirect.spec.ts": 3,
   "credits-top-up.spec.ts": 4,
+  "custom-domains.spec.ts": 10,
   "dependency-diff-same-version-checksum.spec.ts": 3,
   "devices-empty-state.spec.ts": 19,
   "email-verification.spec.ts": 4,

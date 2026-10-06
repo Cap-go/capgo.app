@@ -230,6 +230,16 @@ app.get(`/.well-known/oauth-protected-resource${MCP_PATH}`, c => c.json(protecte
 app.get('/.well-known/oauth-authorization-server', c => c.json(authorizationServerMetadata(c)))
 app.get(`/.well-known/oauth-authorization-server${MCP_PATH}`, c => c.json(authorizationServerMetadata(c)))
 
+// OpenAI plugin domain verification: the dashboard issues a token that must be served verbatim
+// (plain text, no JSON) from the MCP hostname before the server can be connected.
+app.get('/.well-known/openai-apps-challenge', (c) => {
+  const token = getEnv(c, 'OPENAI_APPS_CHALLENGE_TOKEN').trim()
+  c.header('Cache-Control', 'no-store')
+  if (!token)
+    return c.text('Not found', 404)
+  return c.text(token)
+})
+
 // ---------------------------------------------------------------------------
 // RFC 7591 Dynamic Client Registration (public clients only, PKCE required).
 // ---------------------------------------------------------------------------
