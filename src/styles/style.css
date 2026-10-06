@@ -319,6 +319,38 @@ html {
   background-color: #f1f5f9;
 }
 
+/* Colored outline buttons: daisyUI fills them with the theme color on hover and
+   switches to white text, unreadable on the light error/warning/success colors.
+   Hover with a soft tint and darker text instead. */
+@media (hover: hover) {
+  .d-btn-outline.d-btn-error:not(:disabled):hover {
+    --outline-hover-color: var(--color-error);
+    color: #b91c1c;
+  }
+
+  .d-btn-outline.d-btn-warning:not(:disabled):hover {
+    --outline-hover-color: var(--color-warning);
+    color: #c2410c;
+  }
+
+  .d-btn-outline.d-btn-success:not(:disabled):hover {
+    --outline-hover-color: var(--color-success);
+    color: #047857;
+  }
+
+  .d-btn-outline:is(.d-btn-error, .d-btn-warning, .d-btn-success):not(:disabled):hover {
+    background-color: color-mix(in oklab, var(--outline-hover-color) 12%, transparent);
+    border-color: var(--outline-hover-color);
+  }
+}
+
+@media (hover: hover) and (prefers-color-scheme: dark) {
+  .d-btn-outline:is(.d-btn-error, .d-btn-warning, .d-btn-success):not(:disabled):hover {
+    background-color: color-mix(in oklab, var(--outline-hover-color) 25%, transparent);
+    color: #ffffff;
+  }
+}
+
 /* DialogV2 enter motion. Enter-only on purpose: a leave transition would keep
    the old #dialog-v2-content teleport target alive while a chained dialog mounts. */
 @keyframes dialog-v2-backdrop-in {
