@@ -66,4 +66,16 @@ describe('custom Live Updates domains', () => {
     await expect(cloudflareCustomHostname(context, 'POST', '', 'updates.example.com')).rejects.toThrow('Unable to access the custom domain zone')
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+
+  it.each(['zone', 'hostname'].flatMap(stage => ['', '<html>Unavailable</html>'].map(body => ({ stage, body }))))('maps malformed $stage responses to the provider 502', async ({ stage, body }) => {
+    const fetchMock = vi.fn()
+    if (stage === 'hostname')
+      fetchMock.mockResolvedValueOnce(zoneResponse())
+    fetchMock.mockResolvedValueOnce(new Response(body, { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(cloudflareCustomHostname(context, 'GET', 'provider-id')).rejects.toMatchObject({
+      status: 502,
+      cause: { error: 'custom_domain_provider_error' },
+    })
+  })
 })

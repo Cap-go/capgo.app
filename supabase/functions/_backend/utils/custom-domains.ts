@@ -32,7 +32,7 @@ export async function cloudflareCustomHostname(c: Context, method: 'GET' | 'POST
     headers: { Authorization: `Bearer ${token}` },
     signal: AbortSignal.timeout(5000),
   })
-  const zones = await zoneResponse.json() as { success: boolean, result?: Array<{ id: string, name: string }> }
+  const zones = await zoneResponse.json().catch(() => ({ success: false })) as { success: boolean, result?: Array<{ id: string, name: string }> }
   const zoneId = zones.result?.find(zone => zone.name === 'capgo.app')?.id
   if (!zoneResponse.ok || !zones.success || !zoneId)
     quickError(502, 'custom_domain_provider_error', 'Unable to access the custom domain zone. Please contact support.')
@@ -44,7 +44,7 @@ export async function cloudflareCustomHostname(c: Context, method: 'GET' | 'POST
   })
   if (method === 'DELETE' && response.status === 404)
     return null
-  const data = await response.json() as { success: boolean, result?: CustomHostname }
+  const data = await response.json().catch(() => ({ success: false })) as { success: boolean, result?: CustomHostname }
   if (!response.ok || !data.success)
     quickError(502, 'custom_domain_provider_error', 'Unable to update the custom domain. Please retry or contact support.')
   if (method !== 'DELETE' && (!data.result?.id || !data.result.hostname))
