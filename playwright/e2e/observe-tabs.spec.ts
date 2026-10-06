@@ -12,7 +12,7 @@ test.describe('Observe sections', () => {
     await dismissSupportPrompt(page)
 
     const liveReleaseTab = page.getByRole('button', { name: 'Live release', exact: true })
-    const errorsTab = page.getByRole('button', { name: 'Errors', exact: true })
+    const errorsTab = page.getByRole('button', { name: 'Update health', exact: true })
     const nativeTab = page.getByRole('button', { name: 'Native', exact: true })
     const compatibilityTab = page.getByRole('button', { name: 'Compatibility', exact: true })
     const logsTab = page.getByRole('button', { name: 'Logs', exact: true })

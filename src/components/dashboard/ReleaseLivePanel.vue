@@ -14,6 +14,7 @@ import { buildDemoReleaseLive, RELEASE_LIVE_POLL_INTERVAL_MS, useReleaseLive } f
 import { registerDashboardCharts } from '~/services/dashboardChartRegister'
 import { formatDistanceToNow, formatLocalDateShort, formatLocalDateTime, formatLocalTime } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
+import { useSupabase } from '~/services/supabase'
 
 const props = withDefaults(defineProps<{
   appId: string
@@ -93,8 +94,56 @@ const MIN_STATUS_SAMPLES = 20
 // reach (devices on target / devices targeted) replaces raw adoption, and the
 // stable fallback is the baseline for the success rate.
 const rollout = computed(() => live.value?.rollout ?? null)
+
+// The channel's rollout settings, read straight from the channel so the
+// rollout is visible even when release_live does not return a summary (older
+// API, or a release other than the rollout target is selected).
+interface ChannelRolloutState {
+  target_version: string
+  fallback_version: string | null
+  percentage: number
+  status: 'running' | 'paused' | 'zero'
+}
+const supabase = useSupabase()
+const channelRollout = ref<ChannelRolloutState | null>(null)
+let channelRolloutRequest = 0
+type VersionRelation = { name?: string } | { name?: string }[] | null | undefined
+function relationName(value: VersionRelation) {
+  return (Array.isArray(value) ? value[0] : value)?.name ?? null
+}
+async function loadChannelRollout(channelId: number | undefined) {
+  const requestId = ++channelRolloutRequest
+  if (!channelId || props.forceDemo) {
+    channelRollout.value = null
+    return
+  }
+  const { data, error } = await supabase
+    .from('channels')
+    .select('rollout_enabled, rollout_percentage_bps, rollout_paused_at, version:app_versions!channels_version_fkey(name), rollout_version_info:app_versions!channels_rollout_version_fkey(name)')
+    .eq('id', channelId)
+    .maybeSingle()
+  if (requestId !== channelRolloutRequest)
+    return
+  const target = relationName(data?.rollout_version_info as VersionRelation)
+  if (error || !data?.rollout_enabled || !target) {
+    channelRollout.value = null
+    return
+  }
+  const percentage = Math.min(100, Math.max(0, (data.rollout_percentage_bps ?? 0) / 100))
+  channelRollout.value = {
+    target_version: target,
+    fallback_version: relationName(data.version as VersionRelation),
+    percentage,
+    status: data.rollout_paused_at ? 'paused' : percentage > 0 ? 'running' : 'zero',
+  }
+}
+// The backend summary wins when present; the channel read covers the rest.
+const rolloutInfo = computed<ChannelRolloutState | null>(() => rollout.value ?? channelRollout.value)
+// The rollout runs on the channel but another bundle is on screen.
+const watchingOtherThanRolloutTarget = computed(() => !!rolloutInfo.value && !!release.value && release.value.version_name !== rolloutInfo.value.target_version)
+
 const rolloutBadge = computed(() => {
-  const value = rollout.value
+  const value = rolloutInfo.value
   if (!value)
     return null
   if (value.status === 'paused')
@@ -149,6 +198,15 @@ watch(live, (value) => {
   activeChannel.value = value.channel
   recentDeployments.value = value.recent_deployments
 })
+// Re-read on each poll: a rollout can be widened or paused at any time.
+watch(() => [activeChannel.value?.id, lastUpdatedAt.value] as const, ([channelId]) => {
+  void loadChannelRollout(channelId)
+}, { immediate: true })
+
+function watchRolloutTarget() {
+  if (rolloutInfo.value)
+    selectRelease(activeChannel.value?.id, rolloutInfo.value.target_version)
+}
 
 const channelOptions = computed(() => channels.value.map(channel => ({
   id: channel.id,
@@ -464,11 +522,34 @@ watch(() => props.appId, () => {
               {{ status.label }}
             </span>
           </div>
-          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400" :title="formatLocalDateTime(release.deployed_at)">
-            <template v-if="rollout?.fallback_version">
-              {{ t('release-live-rollout-fallback', { version: rollout.fallback_version, percent: formatPercent(100 - rollout.percentage) }) }} ·
-            </template>
-            {{ rollout ? t('release-live-uploaded', { time: formatDistanceToNow(release.deployed_at) }) : t('release-live-deployed', { time: formatDistanceToNow(release.deployed_at) }) }}
+          <!-- Progressive rollout split: share on the target vs the fallback. -->
+          <div
+            v-if="rolloutInfo"
+            class="flex flex-wrap items-center mt-1.5 text-xs gap-x-2 gap-y-1 text-slate-500 dark:text-slate-400"
+            data-testid="release-live-rollout-split"
+            :title="t('release-live-deployed', { time: formatDistanceToNow(release.deployed_at) })"
+          >
+            <span class="flex w-28 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700" aria-hidden="true">
+              <span class="h-full bg-violet-500" :style="{ width: `${rolloutInfo.percentage}%` }" />
+            </span>
+            <span>
+              <span class="font-medium text-violet-700 dark:text-violet-300">{{ rolloutInfo.target_version }} {{ formatPercent(rolloutInfo.percentage) }}</span>
+              <template v-if="rolloutInfo.fallback_version">
+                · {{ rolloutInfo.fallback_version }} {{ formatPercent(100 - rolloutInfo.percentage) }}
+              </template>
+            </span>
+            <button
+              v-if="watchingOtherThanRolloutTarget"
+              type="button"
+              class="font-medium text-azure-600 hover:underline dark:text-azure-300"
+              data-testid="release-live-watch-rollout"
+              @click="watchRolloutTarget"
+            >
+              {{ t('release-live-watch-rollout', { version: rolloutInfo.target_version }) }}
+            </button>
+          </div>
+          <p v-else class="mt-1 text-xs text-slate-500 dark:text-slate-400" :title="formatLocalDateTime(release.deployed_at)">
+            {{ t('release-live-deployed', { time: formatDistanceToNow(release.deployed_at) }) }}
             <template v-if="live?.window?.truncated">
               · {{ t('release-live-truncated') }}
             </template>

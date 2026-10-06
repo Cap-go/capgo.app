@@ -4006,11 +4006,11 @@
   "updater-failure-help-insufficient-disk-space": "The device does not have enough free storage for the bundle.",
   "updater-failure-help-blocked-by-server-url": "Auto update is off because server.url is set in the Capacitor config, which is common for live reload builds.",
   "updater-failure-help-backend-refusal": "Capgo refused the update check because this plugin version is not supported. Upgrade the updater plugin.",
-  "observe-tab-errors": "Errors",
+  "observe-tab-errors": "Update health",
   "show-less": "Show less",
   "activity": "Activity",
   "show-all-count": "Show all ({count})",
-  "overview-kpi-update-errors": "Update errors",
+  "overview-kpi-update-errors": "Failed update attempts",
   "affected-devices-count": "{count} devices affected",
   "overview-kpi-unresolved": "Unresolved events",
   "current-plan-label": "Current plan: {plan}",
@@ -4026,11 +4026,9 @@
   "release-live-rollout-badge": "Progressive rollout · {percent}",
   "release-live-rollout-paused": "Rollout paused at {percent}",
   "release-live-rollout-zero": "Rollout at 0%",
-  "release-live-rollout-fallback": "Fallback {version} for the other {percent}",
   "release-live-rollout-reach": "Rollout reach",
   "release-live-rollout-reach-help": "{onTarget} of about {expected} targeted devices run this bundle ({percent} of {total} devices on this channel).",
   "release-live-vs-fallback": "vs {rate} on {version}",
-  "release-live-uploaded": "Uploaded {time}",
   "release-banner-rollout-title": "Progressive rollout running",
   "release-banner-rollout": "Version {version} ({channel}) goes to {percent} of devices",
   "release-banner-rollout-reach": "{percent} reached",
@@ -4060,5 +4058,6 @@
   "custom-domain-remove": "Remove domain",
   "custom-domain-confirm-remove": "Confirm removal",
   "custom-domain-error": "Unable to load or update this domain. Check your Enterprise plan and permissions, then retry or contact support.",
-  "custom-domain-guide": "Custom domain setup guide"
+  "custom-domain-guide": "Custom domain setup guide",
+  "release-live-watch-rollout": "Watch {version}"
 }
