@@ -354,7 +354,8 @@ export async function uploadPartial(
           existing = await fileExistsAtUploadTarget(manifestUploadEntry.uploadTarget!.existence_check_url_prefix, filename)
         }
         catch (error) {
-          throw new Error(`Cannot check whether delta file exists: ${filePathUnix}`, { cause: error })
+          const reason = error instanceof Error ? error.message : String(error)
+          throw new Error(`Cannot check whether delta file exists: ${filePathUnix}: ${reason}`, { cause: error })
         }
       }
       abandonController.throwIfAbandoned()

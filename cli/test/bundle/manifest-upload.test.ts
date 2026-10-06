@@ -357,6 +357,80 @@ describe('manifest upload existence probe', () => {
       globalThis.fetch = originalFetch
     }
   })
+
+  it('includes the immediate probe failure reason without verbose output', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'capgo-manifest-upload-probe-error-'))
+    const originalFetch = globalThis.fetch
+    const originalDisableTelemetry = env.CAPGO_DISABLE_TELEMETRY
+    const contents = Buffer.from('probe failure fixture')
+    const hash = createHash('sha256').update(contents).digest('hex')
+    const requestEntry = {
+      id: 0,
+      file_name: 'payload.txt',
+      compression: 'none' as const,
+      file_hash: hash,
+      uploaded_bytes_sha256: hash,
+      uploaded_bytes_size: contents.byteLength,
+    }
+    const uploadTarget = {
+      id: 'primary',
+      protocol: 'tus' as const,
+      upload_url: 'https://files.example.test/upload/',
+      existence_check_url_prefix: 'https://files.example.test/read/',
+      authorization: {
+        type: 'header' as const,
+        header_name: 'X-Capgo-Upload-Token',
+        token_prefix: '',
+        expires_at: Date.now() + 60_000,
+      },
+    }
+    const manifestUpload: ResolvedManifestUpload = {
+      response: {
+        protocol_version: 1,
+        version_id: 123,
+        default_action: 'upload_if_doesnt_exist',
+        default_s3_path_prefix: 'orgs/org/apps/app/delta/',
+        default_upload_target: 'primary',
+        upload_targets: [uploadTarget],
+        entries: [],
+      },
+      entries: [{
+        request: requestEntry,
+        action: 'upload_if_doesnt_exist',
+        s3Path: 'orgs/org/apps/app/delta/payload.txt',
+        uploadTarget,
+        uploadAuthorization: { headerName: 'X-Capgo-Upload-Token', value: 'token' },
+      }],
+    }
+    const events: string[] = []
+    const reporter = recordingReporter(events)
+    reporter.error = message => events.push(`error:${message}`)
+    globalThis.fetch = (async () => new Response('', { status: 503 })) as typeof fetch
+    env.CAPGO_DISABLE_TELEMETRY = '1'
+
+    try {
+      await writeFile(join(directory, 'payload.txt'), contents)
+      await expect(runWithUploadReporter(reporter, () => uploadPartial(
+        'api-key',
+        [{ file: 'payload.txt', hash }],
+        directory,
+        'com.example.app',
+        'org-id',
+        undefined,
+        { disableBrotli: true, userRequestedDelta: true, verbose: false } as OptionsUpload,
+        manifestUpload,
+      ))).rejects.toThrow('Cannot check whether delta file exists: payload.txt')
+      expect(events.find(event => event.includes('Error uploading delta update'))).toContain('HTTP 503')
+    }
+    finally {
+      globalThis.fetch = originalFetch
+      if (originalDisableTelemetry === undefined)
+        delete env.CAPGO_DISABLE_TELEMETRY
+      else
+        env.CAPGO_DISABLE_TELEMETRY = originalDisableTelemetry
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('manifest upload concurrency', () => {
