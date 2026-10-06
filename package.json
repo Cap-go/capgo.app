@@ -146,6 +146,8 @@
     "types": "bun ./scripts/getTypes.mjs",
     "generate:plugin-route-hosts": "bun scripts/generate-plugin-route-hosts.ts",
     "updates-edge-cache:set": "bun scripts/set-updates-edge-cache.ts",
+    "snippet-edge-answer:set": "bun scripts/set-updates-edge-cache.ts --secret=SNIPPET_EDGE_ANSWER",
+    "snippet-edge-stats:setup": "bun scripts/setup-snippet-edge-stats.ts",
     "types:dev": "BRANCH=development bun ./scripts/getTypes.mjs",
     "types:local": "BRANCH=local bun ./scripts/getTypes.mjs",
     "typecheck:backend": "tsgo --project tsconfig.backend.tsgo.json --noEmit",

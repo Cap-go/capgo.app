@@ -65,7 +65,7 @@ describe('cloudflare plugin snippet on-prem fallback', () => {
     expect(String(fetchMock.mock.calls[0][0])).toContain('https://plugin.na.capgo.app/updates')
     await expect(new Response(fetchMock.mock.calls[0][1]?.body).json()).resolves.toEqual(body)
     const putKeys = cache.put.mock.calls.map(([key]) => key instanceof Request ? key.url : String(key))
-    expect(putKeys.some(key => key.includes('/__internal__/onprem-cache-v2/'))).toBe(true)
+    expect(putKeys.some(key => key.includes('/__internal__/edge-v3/'))).toBe(true)
   })
 
   it('returns on-prem from a fallback worker without caching when the primary fails', async () => {
@@ -94,7 +94,7 @@ describe('cloudflare plugin snippet on-prem fallback', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
     // Partial outage: serve the on-prem answer but never cache it.
     const putKeys = cache.put.mock.calls.map(([key]) => key instanceof Request ? key.url : String(key))
-    expect(putKeys.some(key => key.includes('/__internal__/onprem-cache-v2/'))).toBe(false)
+    expect(putKeys.some(key => key.includes('/__internal__/edge-v3/'))).toBe(false)
   })
 
   it('passes cloud responses through after a single worker fetch', async () => {
@@ -111,7 +111,7 @@ describe('cloudflare plugin snippet on-prem fallback', () => {
     expect(await response.json()).toEqual({ status: 'ok' })
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const putKeys = cache.put.mock.calls.map(([key]) => key instanceof Request ? key.url : String(key))
-    expect(putKeys.some(key => key.includes('/__internal__/onprem-cache-v2/'))).toBe(false)
+    expect(putKeys.some(key => key.includes('/__internal__/edge-v3/'))).toBe(false)
   })
 
   it('retains Retry-After on cached on-prem responses and skips the worker', async () => {

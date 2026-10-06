@@ -14,7 +14,7 @@ import {
 import { getRuntimeKey } from 'hono/adapter'
 import { getAppStatus, setAppStatus } from './appStatus.ts'
 import { getBundleUrl, getManifestUrl } from './downloadUrl.ts'
-import { simpleError200 } from './hono.ts'
+import { BRES, simpleError200 } from './hono.ts'
 import { onPremiseAppResponse } from './rateLimitInfo.ts'
 import { cloudlog } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
@@ -26,6 +26,7 @@ import { createStatsBandwidth, createStatsMau, createStatsVersion, onPremStats, 
 import { getAppOwnerWithEdgeCache } from './pluginEdgeCacheReads.ts'
 import { getClientIP } from './rate_limit.ts'
 import { s3 } from './s3.ts'
+import { setSnippetUpdatesFill } from './snippetEdgeAnswer.ts'
 import { shouldQueuePluginNotifications } from './supabase_write_guard.ts'
 import { isUpdateEnumerationLimited, recordUpdateEnumerationMiss, updateEnumerationLimitedResponse } from './updateOracleGuard.ts'
 import { canServeUpToDateFromCache, getUpdateReadCache, setUpdateReadCache } from './updateReadCache.ts'
@@ -673,7 +674,7 @@ export async function updateWithPG(
 
   // Do not write while an override or rollout is already active.
   // A change created after this write shows up within the 60s TTL.
-  if (
+  const readCachePayload = (
     !channelOverride
     && !channelSelfOverride
     && !shouldUseRolloutPath
@@ -681,17 +682,20 @@ export async function updateWithPG(
     && (appOwner.channel_device_count ?? 0) === 0
     && version?.name
     && (isInternalVersionName(version.name) || !isVersionDeleted(version))
-  ) {
+  )
+    ? {
+        ownerOrg: appOwner.owner_org,
+        allowDeviceCustomId: Boolean(appOwner.allow_device_custom_id),
+        versionName: version.name,
+        keyId: version.key_id ?? null,
+      }
+    : null
+  if (readCachePayload) {
     void setUpdateReadCache(c, {
       appId: app_id,
       platform,
       defaultChannel: defaultChannel ?? '',
-    }, {
-      ownerOrg: appOwner.owner_org,
-      allowDeviceCustomId: Boolean(appOwner.allow_device_custom_id),
-      versionName: version.name,
-      keyId: version.key_id ?? null,
-    })
+    }, readCachePayload)
   }
 
   // cloudlog(c.get('requestId'), 'signedURL', device_id, version_name, version.name)
@@ -709,6 +713,14 @@ export async function updateWithPG(
     }
     // TODO: check why this event is send with wrong version_name
     await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: version.name }])
+    // Same contract as the read cache: the answer holds for every device of
+    // this (app, platform, defaultChannel) already on this bundle.
+    if (readCachePayload) {
+      setSnippetUpdatesFill(c, app_id, readCachePayload, {
+        blockProviderInfraRequests: Boolean(appOwner.block_provider_infra_requests),
+        legacyChannelSelfStore: hasChannelSelfStoreBinding(c),
+      })
+    }
     return updateError200(c, 'no_new_version_available', 'No new version available')
   }
 
@@ -1006,7 +1018,24 @@ async function upToDateFromReadCache(c: Context, body: AppInfos, appStatus: Awai
   await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: cachedRead.versionName }])
   if (shouldUseUpdatesEdgeCache(c, body.app_id, body.device_id))
     c.header('X-Updates-Cache', 'hit')
+  setSnippetUpdatesFill(c, body.app_id, cachedRead, {
+    blockProviderInfraRequests: Boolean(appStatus.block_provider_infra_requests),
+    legacyChannelSelfStore: hasChannelSelfStoreBinding(c),
+  })
   return updateError200(c, 'no_new_version_available', 'No new version available')
+}
+
+/**
+ * Stats of an up-to-date answer the Cloudflare Snippet served without a
+ * worker (snippetEdgeAnswer.ts), replayed from Logpush. Writes what
+ * upToDateFromReadCache writes for the same answer; the decision itself was
+ * made by the snippet and is not recomputed.
+ */
+export async function recordSnippetUpToDate(c: Context, body: AppInfos, answer: { ownerOrg: string, allowDeviceCustomId: boolean, versionName: string }) {
+  const device = makeDevice(body, answer.allowDeviceCustomId)
+  await backgroundTask(c, createStatsMau(c, body.device_id, body.app_id, answer.ownerOrg, body.platform, body.version_build))
+  await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: answer.versionName }])
+  return c.json(BRES)
 }
 
 export async function update(c: Context, body: AppInfos) {

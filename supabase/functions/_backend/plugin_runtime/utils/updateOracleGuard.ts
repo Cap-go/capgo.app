@@ -5,6 +5,7 @@ import { cloudlog } from './logging.ts'
 import { getClientIP } from './rate_limit.ts'
 import { getEnv } from './utils.ts'
 import { buildRateLimitInfo } from './rateLimitInfo.ts'
+import { setSnippetIpLimitHeader } from './snippetEdgeAnswer.ts'
 
 const UPDATE_ENUMERATION_SLOT_PATH = '/rate-limit/update-enumeration/slot'
 const UPDATE_ENUMERATION_LIMIT_PATH = '/rate-limit/update-enumeration/limited'
@@ -229,6 +230,7 @@ export function updateEnumerationLimitedResponse(c: Context, resetAt?: number) {
   c.header('Retry-After', String(Math.max(0, Math.floor(retryAfterSeconds))))
   c.header('X-RateLimit-Reset', String(Math.ceil(resolvedResetAt / 1000)))
   c.header('Cache-Control', 'private, no-store')
+  setSnippetIpLimitHeader(c, resolvedResetAt)
 
   return c.json({
     error: 'on_premise_app',

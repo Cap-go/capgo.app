@@ -16,6 +16,7 @@ import { statsRequestSchema } from '../utils/plugin_validation.ts'
 import { getAppOwnerWithEdgeCache, getAppVersionWithEdgeCache } from '../utils/pluginEdgeCacheReads.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
 import { onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
+import { setSnippetStatsFill } from '../utils/snippetEdgeAnswer.ts'
 import { shouldUseUpdatesEdgeCache } from '../utils/updatesEdgeCache.ts'
 import { backgroundTask, INVALID_STRING_APP_ID, isInternalVersionName, isLimited, MISSING_STRING_APP_ID, reverseDomainRegex } from '../utils/utils.ts'
 import { isRunningVersionAction } from './stats_actions.ts'
@@ -62,6 +63,8 @@ interface PostResult {
   message?: string
   isOnprem?: boolean
   moreInfo?: Record<string, unknown>
+  /** Cloud app, valid plan, no provider IP check: the snippet may answer its /stats. */
+  edgeAnswerable?: boolean
 }
 
 function normalizeStatsChannelName(channelName: string | null | undefined): string | null {
@@ -153,7 +156,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     // when there was no update to download, so skip version validation too.
     await backgroundTask(c, createStatsMau(c, device.device_id, app_id, appOwner.owner_org, device.platform, device.version_build))
     await sendStatsAndDevice(c, device, statsActions, !isRunningVersionAction(action))
-    return { success: true }
+    return { success: true, edgeAnswerable: !blockProviderInfraRequests }
   }
 
   // Client body.channel is ignored for version_usage; only defaultChannel and
@@ -215,7 +218,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
 
   await backgroundTask(c, createStatsMau(c, device.device_id, app_id, appOwner.owner_org, device.platform, device.version_build))
   await sendStatsAndDevice(c, device, statsActions, !isRunningVersionAction(action))
-  return { success: true }
+  return { success: true, edgeAnswerable: !blockProviderInfraRequests }
 }
 
 // Plugin endpoints are intentionally public device endpoints: their responses are
@@ -386,6 +389,8 @@ async function processStatsEvents(
       return onPremiseAppResponse(c)
     }
     if (result.success) {
+      if (result.edgeAnswerable)
+        setSnippetStatsFill(c, bodyParsed.app_id, false)
       return c.json(BRES)
     }
     if (result.error === 'need_plan_upgrade') {
@@ -396,6 +401,7 @@ async function processStatsEvents(
 
   // For batch, collect results and handle errors per event
   const results: BatchStatsResult[] = []
+  let edgeAnswerable = true
 
   for (let i = 0; i < events.length; i++) {
     const event = events[i]
@@ -427,6 +433,7 @@ async function processStatsEvents(
         })
       }
       else if (result.success) {
+        edgeAnswerable &&= result.edgeAnswerable === true
         results.push({ status: 'ok', index: i })
       }
       else if (result.error === 'need_plan_upgrade') {
@@ -454,6 +461,9 @@ async function processStatsEvents(
   }
 
   // For batch, return array of results
+  const firstAppId = (events[0] as AppStats | undefined)?.app_id
+  if (firstAppId && results.length > 0 && edgeAnswerable && results.every(result => result.status === 'ok'))
+    setSnippetStatsFill(c, firstAppId, false)
   return c.json({ status: 'ok', results })
 }
 
