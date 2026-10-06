@@ -1,15 +1,16 @@
-import type { ManifestUploadRequest, ManifestUploadResponse } from '../../src/bundle/manifest-upload'
+import type { ManifestUploadRequest, ManifestUploadResponse, ResolvedManifestUpload } from '../../src/bundle/manifest-upload'
 import type { UploadReporter } from '../../src/bundle/reporter'
 import type { OptionsUpload } from '../../src/bundle/upload_interface'
 import { createHash } from 'node:crypto'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { env } from 'node:process'
 import { brotliCompressSync } from 'node:zlib'
 import { describe, expect, it } from 'bun:test'
 import { encryptSource } from '../../src/api/crypto'
 import { isManifestUploadAutoEnabled, manifestUploadFileHashFormat, requestManifestUpload, resolveManifestUploadResponse } from '../../src/bundle/manifest-upload'
-import { buildPartialUploadHeaders, fileExistsAtUploadTarget, PartialUploadValidationError, prepareManifestUploadEntries } from '../../src/bundle/partial'
+import { buildPartialUploadHeaders, fileExistsAtUploadTarget, PartialUploadValidationError, prepareManifestUploadEntries, uploadPartial } from '../../src/bundle/partial'
 import { runWithUploadReporter } from '../../src/bundle/reporter'
 
 const request: ManifestUploadRequest = {
@@ -336,6 +337,110 @@ describe('manifest upload existence probe', () => {
     }
     finally {
       globalThis.fetch = originalFetch
+    }
+  })
+
+  it('retries a transient transport failure', async () => {
+    const originalFetch = globalThis.fetch
+    let attempts = 0
+    globalThis.fetch = (async () => {
+      attempts++
+      if (attempts === 1)
+        throw new TypeError('fetch failed', { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }) })
+      return new Response('', { status: 404 })
+    }) as typeof fetch
+    try {
+      await expect(fileExistsAtUploadTarget('https://files.example.test/read/', 'orgs/org/apps/app/delta/file')).resolves.toEqual({ exists: false })
+      expect(attempts).toBe(2)
+    }
+    finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
+
+describe('manifest upload concurrency', () => {
+  it('limits simultaneous file existence probes', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'capgo-manifest-upload-concurrency-'))
+    const originalFetch = globalThis.fetch
+    const originalDisableTelemetry = env.CAPGO_DISABLE_TELEMETRY
+    const contents = Buffer.from('changed stress-test content')
+    const hash = createHash('sha256').update(contents).digest('hex')
+    const manifest = Array.from({ length: 60 }, () => ({ file: 'payload.txt', hash }))
+    const uploadTarget = {
+      id: 'primary',
+      protocol: 'tus' as const,
+      upload_url: 'https://files.example.test/upload/',
+      existence_check_url_prefix: 'https://files.example.test/read/',
+      authorization: {
+        type: 'header' as const,
+        header_name: 'X-Capgo-Upload-Token',
+        token_prefix: '',
+        expires_at: Date.now() + 60_000,
+      },
+    }
+    const requestEntries = manifest.map((entry, id) => ({
+      id,
+      file_name: entry.file,
+      compression: 'none' as const,
+      file_hash: entry.hash,
+      uploaded_bytes_sha256: hash,
+      uploaded_bytes_size: contents.byteLength,
+    }))
+    const manifestUpload: ResolvedManifestUpload = {
+      response: {
+        protocol_version: 1,
+        version_id: 123,
+        default_action: 'upload_if_doesnt_exist',
+        default_s3_path_prefix: 'orgs/org/apps/app/delta/',
+        default_upload_target: 'primary',
+        upload_targets: [uploadTarget],
+        entries: [],
+      },
+      entries: requestEntries.map(requestEntry => ({
+        request: requestEntry,
+        action: 'upload_if_doesnt_exist',
+        s3Path: `orgs/org/apps/app/delta/${requestEntry.id}_payload.txt`,
+        uploadTarget,
+        uploadAuthorization: { headerName: 'X-Capgo-Upload-Token', value: 'token' },
+      })),
+    }
+
+    let activeProbes = 0
+    let maxActiveProbes = 0
+    globalThis.fetch = (async () => {
+      activeProbes++
+      maxActiveProbes = Math.max(maxActiveProbes, activeProbes)
+      await new Promise(resolve => setTimeout(resolve, 5))
+      activeProbes--
+      return new Response('', {
+        status: 200,
+        headers: { 'X-Capgo-Manifest-Size-Receipt': 'signed-size' },
+      })
+    }) as typeof fetch
+    env.CAPGO_DISABLE_TELEMETRY = '1'
+
+    try {
+      await writeFile(join(directory, 'payload.txt'), contents)
+      await runWithUploadReporter(recordingReporter([]), () => uploadPartial(
+        'api-key',
+        manifest,
+        directory,
+        'com.example.app',
+        'org-id',
+        undefined,
+        { disableBrotli: true, userRequestedDelta: true } as OptionsUpload,
+        manifestUpload,
+      ))
+      expect(maxActiveProbes).toBeLessThanOrEqual(50)
+    }
+    finally {
+      globalThis.fetch = originalFetch
+      if (originalDisableTelemetry === undefined)
+        delete env.CAPGO_DISABLE_TELEMETRY
+      else
+        env.CAPGO_DISABLE_TELEMETRY = originalDisableTelemetry
+      await rm(directory, { recursive: true, force: true })
     }
   })
 })

@@ -15,6 +15,7 @@ import * as tus from 'tus-js-client'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { encryptChecksum, encryptChecksumV3, encryptSource } from '../api/crypto'
 import { CliUserError } from '../shared/cli-user-error'
+import { isTransientNetworkError } from '../shared/network-error'
 import { appAddHintMessage, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findRoot, formatVerboseError, generateManifest, getContentType, getInstalledVersion, isAppNotFoundError, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import type { ManifestUploadRequestEntry, ResolvedManifestUpload, ResolvedManifestUploadEntry } from './manifest-upload'
 import { getUploadReporter } from './reporter'
@@ -28,19 +29,32 @@ const log = {
 
 export async function fileExistsAtUploadTarget(existenceCheckUrlPrefix: string, filename: string): Promise<{ exists: boolean, receipt?: string }> {
   const url = new URL(`${existenceCheckUrlPrefix}${encodeURIComponent(filename)}`)
-  url.searchParams.set('nocache', `${Date.now()}`)
-  const response = await fetch(url.toString(), {
-    method: 'GET',
-    redirect: 'error',
-    headers: buildCliRequestHeaders({ 'cache-control': 'no-cache' }),
-  })
-  if (response.status === 404)
-    return { exists: false }
-  if (!response.ok)
-    throw new CliUserError(`Cannot check whether manifest file exists (HTTP ${response.status})`)
-  return {
-    exists: true,
-    receipt: response.headers.get('X-Capgo-Manifest-Size-Receipt') ?? undefined,
+  const retryDelays = TUS_UPLOAD_RETRY_DELAYS.slice(0, 3)
+
+  for (let attempt = 0; ; attempt++) {
+    url.searchParams.set('nocache', `${Date.now()}`)
+    try {
+      const response = await fetch(url.toString(), {
+        method: 'GET',
+        redirect: 'error',
+        headers: buildCliRequestHeaders({ 'cache-control': 'no-cache' }),
+      })
+      if (response.status === 404)
+        return { exists: false }
+      if (!response.ok)
+        throw new CliUserError(`Cannot check whether manifest file exists (HTTP ${response.status})`)
+      return {
+        exists: true,
+        receipt: response.headers.get('X-Capgo-Manifest-Size-Receipt') ?? undefined,
+      }
+    }
+    catch (error) {
+      const retryDelay = retryDelays[attempt]
+      if (!isTransientNetworkError(error) || retryDelay === undefined)
+        throw error
+      if (retryDelay > 0)
+        await new Promise(resolve => setTimeout(resolve, retryDelay))
+    }
   }
 }
 
@@ -434,7 +448,7 @@ export async function uploadPartial(
     }
 
     // Process files in bounded batches to avoid overwhelming the server
-    const BATCH_SIZE = 500
+    const BATCH_SIZE = 50
     const results: any[] = []
 
     for (let i = 0; i < manifest.length; i += BATCH_SIZE) {
