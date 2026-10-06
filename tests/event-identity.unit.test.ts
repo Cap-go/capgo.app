@@ -31,6 +31,24 @@ describe('accepted event identity', () => {
     expect(await acceptEventIdentity({ ...input, timestamp })).toMatchObject({ occurred_at: new Date(acceptedAt - 1000).toISOString(), timestamp_source: 'client' })
   })
 
+  it('accepts explicit ISO offsets without changing the instant', async () => {
+    expect(await acceptEventIdentity({ ...input, timestamp: '2026-10-06T12:00:00+02:00' })).toMatchObject({ occurred_at: new Date(acceptedAt).toISOString(), timestamp_source: 'client' })
+  })
+
+  it.each([
+    '2026-10-06T10:00:00',
+    '2026-10-06T10:00:00Z\n',
+    '2026-10-06T24:00:00Z',
+    '2026-10-06T10:00:00+25:00',
+    '2026-02-30T10:00:00Z',
+    '2026-09-31T10:00:00+02:00',
+  ])('replaces timezone-free or invalid calendar/time values: %s', async (timestamp) => {
+    // Keep normalized calendar dates within the allowed age window so this
+    // asserts validation rather than merely observing age clamping.
+    const reference = timestamp.includes('2026-02') ? Date.parse('2026-03-02T10:00:00Z') : acceptedAt
+    expect(await acceptEventIdentity({ ...input, acceptedAt: reference, timestamp })).toMatchObject({ occurred_at: new Date(reference).toISOString(), timestamp_source: 'server' })
+  })
+
   it.each([null, true, {}, '', 'invalid', Number.NaN, Number.POSITIVE_INFINITY, 8.64e15 + 1])('replaces malformed timestamp %s with acceptance time', async (timestamp) => {
     expect(await acceptEventIdentity({ ...input, timestamp })).toMatchObject({ occurred_at: new Date(acceptedAt).toISOString(), timestamp_source: 'server' })
   })

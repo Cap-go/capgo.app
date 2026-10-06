@@ -2,6 +2,21 @@
 const CLIENT_EVENT_ID = /^[\da-f]{8}-[\da-f]{4}-[1-8][\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i
 const MAX_EVENT_AGE_MS = 30 * 24 * 60 * 60 * 1000
 const MAX_FUTURE_SKEW_MS = 5 * 60 * 1000
+const ISO_TIMESTAMP = /^(\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/
+
+function parseIsoTimestamp(value: unknown): number {
+  if (typeof value !== 'string')
+    return Number.NaN
+  const match = ISO_TIMESTAMP.exec(value)
+  if (!match || match[0] !== value)
+    return Number.NaN
+  // Date.parse normalizes impossible calendar dates. Verify the local date
+  // independently of the explicit timezone before converting the whole instant.
+  const calendarDate = new Date(`${match[1]}T00:00:00Z`)
+  if (!Number.isFinite(calendarDate.getTime()) || calendarDate.toISOString().slice(0, 10) !== match[1])
+    return Number.NaN
+  return Date.parse(value)
+}
 
 export function isValidClientEventId(value: unknown): value is string {
   return typeof value === 'string' && value.length === 36 && CLIENT_EVENT_ID.test(value)
@@ -39,9 +54,7 @@ export async function acceptEventIdentity(input: {
   // Accept the numeric millisecond contract and ISO dates serialized by old clients.
   const timestamp = typeof input.timestamp === 'number'
     ? input.timestamp
-    : typeof input.timestamp === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(input.timestamp)
-      ? Date.parse(input.timestamp)
-      : Number.NaN
+    : parseIsoTimestamp(input.timestamp)
   const validTimestamp = Number.isFinite(timestamp) && Number.isFinite(new Date(timestamp).getTime())
   const reasonableTimestamp = validTimestamp
     && timestamp >= input.acceptedAt - MAX_EVENT_AGE_MS
