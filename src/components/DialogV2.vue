@@ -260,7 +260,7 @@ onUnmounted(() => {
         :class="[
           dialogStore.dialogOptions.embed ? 'max-w-none' : sizeClasses[dialogStore.dialogOptions?.size || 'md'],
         ]"
-        :style="dialogStore.dialogOptions.embed ? { width: `${dialogStore.dialogOptions.embed.preferred_width + 2}px`, maxWidth: 'calc(100vw - 2rem)' } : undefined"
+        :style="dialogStore.dialogOptions.embed ? { width: `${dialogStore.dialogOptions.embed.preferred_width + 2}px`, maxWidth: 'calc(100vw - 2rem)', position: 'fixed', inset: '0', margin: 'auto' } : undefined"
         @cancel.prevent="close(undefined, 'escape')"
         @click="handlePanelClick"
       >

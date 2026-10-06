@@ -15,6 +15,12 @@ test('embedded dialog keeps preferred content size and an accessible host close 
   const frame = page.locator('dialog iframe')
   await expect.poll(async () => (await frame.boundingBox())?.width).toBe(720)
   await expect.poll(async () => (await frame.boundingBox())?.height).toBe(520)
+  await expect.poll(async () => {
+    const bounds = await page.getByRole('dialog').boundingBox()
+    const viewport = page.viewportSize()!
+    return Math.abs(bounds!.x + bounds!.width / 2 - viewport.width / 2)
+      + Math.abs(bounds!.y + bounds!.height / 2 - viewport.height / 2)
+  }).toBeLessThan(2)
   await page.getByRole('button', { name: 'Close dialog' }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Open message' })).toBeFocused()
