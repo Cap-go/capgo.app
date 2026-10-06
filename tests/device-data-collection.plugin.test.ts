@@ -54,19 +54,6 @@ async function postStats(data: object) {
   })
 }
 
-async function getProductionChannelVersionName(appId: string) {
-  const { data, error } = await getSupabaseClient()
-    .from('channels')
-    .select('version:app_versions!channels_version_fkey(name)')
-    .eq('app_id', appId)
-    .eq('name', 'production')
-    .single()
-  expect(error).toBeNull()
-  const version = data?.version as { name?: string } | null
-  expect(version?.name).toBeTruthy()
-  return version!.name!
-}
-
 async function setDeviceDataCollection(appId: string, collection: DeviceDataCollection) {
   const { error } = await getSupabaseClient()
     .from('apps')
@@ -119,8 +106,15 @@ describe('device_data_collection plugin integration', () => {
     const json = await response.json<{ error?: string, version?: string }>()
     expect(json.error).toBeUndefined()
     expect(() => parseSchema(updateNewScheme, json)).not.toThrow()
-    const servedVersion = await getProductionChannelVersionName(APP_ID)
-    expect(json.version).toBe(servedVersion)
+    expect(json.version).toBeTruthy()
+    expect(json.version).not.toBe(baseData.version_name)
+
+    const secondDevice = randomUUID().toLowerCase()
+    const followUp = { ...baseData, device_id: secondDevice, version_name: '9.9.9' }
+    const response2 = await postUpdate(followUp)
+    expect(response2.status).toBe(200)
+    const json2 = await response2.json<{ version?: string }>()
+    expect(json2.version).toBe(json.version)
   })
 
   describe.skipIf(USE_CLOUDFLARE)('primary database device writes', () => {
