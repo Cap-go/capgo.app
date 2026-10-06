@@ -1,8 +1,11 @@
 <script setup lang="ts">
+import type { ChartData, ChartOptions } from 'chart.js'
 import type { UpdaterFailureCategory } from '~/services/statsActions'
 import type { Database } from '~/types/supabase.types'
 import type { PeriodDayOption } from '~/utils/periodDays'
+import { useDark } from '@vueuse/core'
 import { computed, ref, useId, watch, watchEffect } from 'vue'
+import { Bar } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -16,6 +19,7 @@ import IconSmartphone from '~icons/lucide/smartphone'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import InfoPopover from '~/components/InfoPopover.vue'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
+import { registerDashboardCharts } from '~/services/dashboardChartRegister'
 import { formatLocalDateShort, formatLocalDateTime } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { actionToFilter, updaterFailureCategory, updaterFailureHelpKey, updaterInsightActions } from '~/services/statsActions'
@@ -76,6 +80,8 @@ interface LogInsightsResponse {
 }
 
 const { t } = useI18n()
+const isDark = useDark()
+registerDashboardCharts()
 const route = useRoute('/app/[app].observe.errors')
 const router = useRouter()
 const supabase = useSupabase()
@@ -141,24 +147,60 @@ const topPriorityMessage = computed(() => {
     share: formatPercent(topActionShare.value),
   })
 })
-const dailyTotals = computed(() => {
+// Daily failures stacked by failure type, so the tooltip gives each day's
+// count and what it was made of.
+const failureChartColor: Record<UpdaterFailureCategory, string> = {
+  rollback: '#fb7185',
+  bundle: '#fbbf24',
+  device: '#94a3b8',
+  setup: '#38bdf8',
+}
+const dailyChartData = computed<ChartData<'bar'>>(() => {
   const labels = insights.value?.period.labels ?? []
-  const dailyByDate = new Map<string, { date: string, total: number, topAction: string, topActionTotal: number }>()
-  labels.forEach((date) => {
-    dailyByDate.set(date, { date, total: 0, topAction: '', topActionTotal: 0 })
-  })
+  const indexByDate = new Map(labels.map((date, index) => [date, index]))
+  const series = new Map<UpdaterFailureCategory, number[]>(failureCategories.map(category => [category, labels.map(() => 0)]))
   insights.value?.daily.forEach((row) => {
-    const entry = dailyByDate.get(row.date) ?? { date: row.date, total: 0, topAction: '', topActionTotal: 0 }
-    entry.total += row.total
-    if (row.total > entry.topActionTotal) {
-      entry.topAction = row.action
-      entry.topActionTotal = row.total
-    }
-    dailyByDate.set(row.date, entry)
+    const index = indexByDate.get(row.date)
+    if (index === undefined)
+      return
+    series.get(updaterFailureCategory(row.action))![index] += row.total
   })
-  return [...dailyByDate.values()]
+  return {
+    labels: labels.map(date => formatLocalDateShort(date)),
+    datasets: failureCategories
+      .filter(category => series.get(category)!.some(value => value > 0))
+      .map(category => ({
+        label: t(`updater-failure-${category}`),
+        data: series.get(category)!,
+        backgroundColor: failureChartColor[category],
+        borderRadius: 2,
+        stack: 'failures',
+      })),
+  }
 })
-const maxDailyTotal = computed(() => Math.max(1, ...dailyTotals.value.map(day => day.total)))
+const dailyChartOptions = computed<ChartOptions<'bar'>>(() => {
+  const tickColor = isDark.value ? '#94a3b8' : '#64748b'
+  const gridColor = isDark.value ? 'rgba(148, 163, 184, 0.12)' : 'rgba(100, 116, 139, 0.12)'
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: true, position: 'bottom', labels: { color: tickColor, boxWidth: 12 } },
+      tooltip: {
+        enabled: true,
+        callbacks: {
+          footer: items => `${t('errors-in-period')}: ${formatCount(items.reduce((sum, item) => sum + Number(item.raw ?? 0), 0))}`,
+        },
+      },
+    },
+    scales: {
+      x: { stacked: true, grid: { display: false }, ticks: { color: tickColor, maxRotation: 0, autoSkip: true, maxTicksLimit: 10 } },
+      y: { stacked: true, beginAtZero: true, grid: { color: gridColor }, ticks: { color: tickColor, precision: 0 } },
+    },
+  }
+})
 const visibleActions = computed(() => {
   const actions = insights.value?.actions ?? []
   return showAllActions.value ? actions : actions.slice(0, PREVIEW_ROWS)
@@ -539,19 +581,12 @@ watch(() => [
               </button>
             </section>
 
-            <section class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+            <section class="flex flex-col p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
               <h3 class="mb-3 text-base font-semibold text-slate-900 dark:text-white">
                 {{ t('daily-error-trend') }}
               </h3>
-              <div class="flex items-end gap-2 h-48">
-                <div v-for="day in dailyTotals" :key="day.date" class="flex flex-col items-center justify-end flex-1 h-full min-w-0 gap-2">
-                  <div class="flex items-end w-full h-full rounded-t bg-slate-100 dark:bg-slate-700">
-                    <div class="w-full rounded-t bg-slate-400 dark:bg-slate-500" :style="`height: ${Math.max(4, (day.total / maxDailyTotal) * 100)}%`" :title="`${formatCount(day.total)}${day.topAction ? ` · ${formatAction(day.topAction)}` : ''}`" />
-                  </div>
-                  <div class="w-full text-center text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                    {{ formatLocalDateShort(day.date) }}
-                  </div>
-                </div>
+              <div class="relative flex-1 min-h-56" data-testid="observe-daily-failures-chart">
+                <Bar :data="dailyChartData" :options="dailyChartOptions" />
               </div>
             </section>
           </div>
