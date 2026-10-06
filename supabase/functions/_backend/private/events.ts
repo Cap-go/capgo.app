@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { AcceptedEventIdentity } from '../utils/event_identity.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import type { BentoTrackingPayload, TrackOptions } from '../utils/tracking.ts'
+import type { BentoTrackingPayload, SendEventToTrackingPayload, TrackOptions } from '../utils/tracking.ts'
 import { Hono } from 'hono/tiny'
 import { markAppOnboardingLoginFromTracking } from '../utils/app_onboarding_login.ts'
 import { APP_TOO_LARGE_EVENT, buildAppTooLargeBentoEvent } from '../utils/app_too_large_tracking.ts'
@@ -11,10 +11,10 @@ import { buildBundleCompatibilityBentoEvent, BUNDLE_INCOMPATIBLE_EVENT, bundleIn
 import { acceptEventIdentity, isValidClientEventId } from '../utils/event_identity.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
-import { cloudlog } from '../utils/logging.ts'
+import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { APP_ONBOARDING_READY_EVENT, buildAppOnboardingReadyBentoEvent } from '../utils/onboarding_app_ready_tracking.ts'
 import { buildAiInstructionsCopiedBentoEvent } from '../utils/onboarding_copy_tracking.ts'
-import { trackPosthogEvent } from '../utils/posthog.ts'
+import { enqueuePostHog, PostHogQueueError, snapshotProperties } from '../utils/posthog_queue.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { broadcastCLIEvent } from '../utils/realtime_broadcast.ts'
 import { supabaseWithAuth } from '../utils/supabase.ts'
@@ -350,10 +350,11 @@ function optionalNonEmptyTagString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
-function trackBundleIncompatibleEmail(
+async function trackBundleIncompatibleEmail(
   c: Context<MiddlewareKeyVariables>,
   input: {
     userId: unknown
+    identity: TrackOptions
     orgId: string
     appId: string
     channelName: string | undefined
@@ -363,7 +364,7 @@ function trackBundleIncompatibleEmail(
     apikeyId: string | undefined
   },
 ) {
-  const tags: Record<string, unknown> = {
+  const tags: Record<string, string | number | boolean> = {
     outcome: bundleIncompatibleEmailOutcome(input.incompatibilityAccepted, input.gatedByStrategy),
     app_id: input.appId,
   }
@@ -372,7 +373,15 @@ function trackBundleIncompatibleEmail(
   if (input.channelName)
     tags.channel_name = input.channelName
 
-  return backgroundTask(c, trackPosthogEvent(c, {
+  const identity = await acceptEventIdentity({
+    actorId: 'bundle_incompatible_email',
+    clientEventId: input.identity.event_id,
+    orgId: input.orgId,
+    timestamp: Date.parse(input.identity.occurred_at!),
+    acceptedAt: Date.parse(input.identity.accepted_at!),
+  })
+  return enqueueTrackingSnapshot(c, {
+    ...identity,
     event: BUNDLE_INCOMPATIBLE_EMAIL_EVENT,
     user_id: typeof input.userId === 'string' ? input.userId : undefined,
     channel: 'bundle',
@@ -380,7 +389,7 @@ function trackBundleIncompatibleEmail(
     groups: { organization: input.orgId },
     tags,
     nonPersonTags: input.apikeyId === undefined ? undefined : { apikey_id: input.apikeyId },
-  }))
+  })
 }
 
 async function lookupChannelUpdateStrategy(
@@ -435,6 +444,7 @@ async function buildBundleIncompatibleBentoEvent(
   const apikeyId = toIdString(c.get('apikey')?.id)
   const emailBase = {
     userId: trackedBody.user_id,
+    identity: trackedBody,
     orgId: onboardingOrgId,
     appId,
     channelName: incompatibleChannel,
@@ -502,6 +512,43 @@ async function buildBundleIncompatibleBentoEvent(
   })
 }
 
+async function enqueueTrackingSnapshot(
+  c: Context<MiddlewareKeyVariables>,
+  payload: SendEventToTrackingPayload & { setPersonProperties?: boolean },
+) {
+  try {
+    await enqueuePostHog(c.env?.POSTHOG_QUEUE, {
+      version: 1,
+      source: 'private_events',
+      event_id: payload.event_id,
+      accepted_at: payload.accepted_at,
+      request_id: c.get('requestId'),
+      payload: {
+        event: payload.event,
+        channel: payload.channel,
+        description: payload.description,
+        distinct_id: payload.user_id || c.get('auth')!.userId,
+        tags: snapshotProperties(payload.tags),
+        nonPersonTags: snapshotProperties(payload.nonPersonTags),
+        groups: payload.groups,
+        ip: c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for')?.split(',')[0]?.trim(),
+        timestamp: payload.occurred_at,
+        setPersonProperties: payload.setPersonProperties,
+      },
+    })
+    cloudlog({ requestId: c.get('requestId'), message: 'posthog_queue_enqueue', event_id: payload.event_id, outcome: 'persisted' })
+  }
+  catch (error) {
+    const reason = error instanceof PostHogQueueError ? error.code : 'unavailable'
+    cloudlogErr({ requestId: c.get('requestId'), message: 'posthog_queue_enqueue', event_id: payload.event_id, outcome: reason })
+    if (reason === 'oversized')
+      throw quickError(413, 'event_too_large', 'Event exceeds the analytics size limit')
+    if (reason === 'invalid_payload')
+      throw quickError(400, 'invalid_event_payload', 'Invalid analytics payload')
+    throw quickError(503, 'event_queue_unavailable', 'Event could not be persisted; retry with the same client_event_id')
+  }
+}
+
 function logAcceptedEvent(c: Context, identity: AcceptedEventIdentity, acceptedAt: number) {
   cloudlog({
     requestId: c.get('requestId'),
@@ -557,6 +604,12 @@ app.post('/', middlewareAuth(), async (c) => {
     return c.json({ ...BRES, event_id: identity.event_id })
   }
 
+  const apikeyId = c.get('apikey')?.id
+  await enqueueTrackingSnapshot(c, addAuthenticatedApiKeyIdToTrackingPayload({
+    ...trackedBody,
+    groups: verifiedOrgId ? { organization: verifiedOrgId } : undefined,
+  }, apikeyId))
+
   const supabase = supabaseWithAuth(c, c.get('auth')!)
 
   // Resolve the org from the verified org id (v2) or the legacy user_id-as-org
@@ -606,13 +659,12 @@ app.post('/', middlewareAuth(), async (c) => {
 
   // Exactly one of these is ever set (distinct event names); `??` picks the active one.
   const bentoEvent = appOnboardingReadyBentoEvent ?? onboardingBentoEvent ?? builderBentoEvent ?? bundleIncompatibleBentoEvent ?? aiInstructionsCopiedBentoEvent ?? appTooLargeBentoEvent
-  const apikeyId = c.get('apikey')?.id
   await sendEventToTracking(c, addAuthenticatedApiKeyIdToTrackingPayload({
     ...trackedBody,
     bento: bentoEvent === bundleIncompatibleBentoEvent && bentoEvent?.data.gated ? { ...bentoEvent, event: 'bundle_safe_expected' } : bentoEvent,
     sentToBento: Boolean(bentoEvent),
     groups: verifiedOrgId ? { organization: verifiedOrgId } : undefined,
-  }, apikeyId))
+  }, apikeyId), { posthog: false })
 
   await markBuilderChecklistFromAnalytics(c, appId, trackedBody)
 
@@ -626,7 +678,7 @@ app.post('/', middlewareAuth(), async (c) => {
     appId: verifiedOrgId ? appId : undefined,
   })
 
-  // Acceptance is distinct from provider delivery (which remains best effort).
+  // Acceptance confirms durable PostHog persistence, independently of provider delivery.
   logAcceptedEvent(c, identity, acceptedAt)
   return c.json({ ...BRES, event_id: identity.event_id })
 })
