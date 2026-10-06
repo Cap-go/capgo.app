@@ -1,6 +1,6 @@
 import type { InventoryConfig, InventoryEvent, RepairTask } from '../../supabase/functions/_backend/utils/r2_inventory.ts'
 import { Client } from 'pg'
-import { applyInventoryEvents, applyObservations, loadInventoryConfig, normalizeEtag, parseInventoryEvent, readObservationSnapshot } from '../../supabase/functions/_backend/utils/r2_inventory.ts'
+import { applyInventoryEvents, applyObservations, INVENTORY_CONFIG, normalizeEtag, parseInventoryEvent, readObservationSnapshot } from '../../supabase/functions/_backend/utils/r2_inventory.ts'
 
 export interface InventoryEnv {
   INVENTORY_BUCKET: string
@@ -49,15 +49,8 @@ export async function repairInventoryBatch(env: InventoryEnv, tasks: RepairTask[
 }
 
 export async function consumeInventoryBatch(batch: MessageBatch<unknown>, env: InventoryEnv) {
-  const started = Date.now()
-  let minBatchMs = 500
   try {
-    let config: InventoryConfig
     if (batch.queue.endsWith('-repair')) {
-      config = await withDatabase(env, loadInventoryConfig)
-      minBatchMs = config.minBatchMs
-      if (!config.enabled)
-        throw new Error('R2 inventory ingestion is disabled in Vault')
       const valid = batch.messages.flatMap((message) => {
         try {
           return [parseRepairTask(message.body, env.INVENTORY_BUCKET)]
@@ -68,7 +61,7 @@ export async function consumeInventoryBatch(batch: MessageBatch<unknown>, env: I
         }
       })
       if (valid.length)
-        await repairInventoryBatch(env, valid, config)
+        await repairInventoryBatch(env, valid, INVENTORY_CONFIG)
       for (const message of batch.messages) {
         try {
           parseRepairTask(message.body, env.INVENTORY_BUCKET)
@@ -85,13 +78,7 @@ export async function consumeInventoryBatch(batch: MessageBatch<unknown>, env: I
         }
         catch { message.retry({ delaySeconds: 60 }) }
       }
-      const repairs = await withDatabase(env, async (db) => {
-        config = await loadInventoryConfig(db)
-        minBatchMs = config.minBatchMs
-        if (!config.enabled)
-          throw new Error('R2 inventory ingestion is disabled in Vault')
-        return applyInventoryEvents(db, valid.map(item => item.event), config)
-      })
+      const repairs = await withDatabase(env, db => applyInventoryEvents(db, valid.map(item => item.event), INVENTORY_CONFIG))
       // Publication must succeed before acknowledging the source. Ambiguous events
       // remain unmodified, so replay retries publication rather than losing repair.
       if (repairs.length)
@@ -104,13 +91,6 @@ export async function consumeInventoryBatch(batch: MessageBatch<unknown>, env: I
   catch (error) {
     console.error(JSON.stringify({ event: 'r2_inventory_batch_failed', error: error instanceof Error ? error.message : 'Unknown error' }))
     batch.retryAll({ delaySeconds: 30 })
-  }
-  finally {
-    // Full batches bypass max_batch_timeout. Pacing bounds batch-start frequency
-    // even during a sustained backlog; the connection has already been released.
-    const remaining = minBatchMs - (Date.now() - started)
-    if (remaining > 0)
-      await new Promise(resolve => setTimeout(resolve, remaining))
   }
 }
 
