@@ -3,7 +3,7 @@ import process from 'node:process'
 import { parseArgs } from 'node:util'
 import { ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { Client } from 'pg'
-import { loadInventoryConfig, normalizeEtag } from '../supabase/functions/_backend/utils/r2_inventory.ts'
+import { INVENTORY_CONFIG, normalizeEtag } from '../supabase/functions/_backend/utils/r2_inventory.ts'
 import { writeFailureReport } from './r2_inventory/report.ts'
 import { collectInventoryTombstones, InventoryScanFailure, restartCompletedScan, scanInventory } from './r2_inventory/scan.ts'
 
@@ -40,9 +40,7 @@ export async function main() {
   process.on('SIGTERM', stop)
   try {
     await db.connect()
-    const config = await loadInventoryConfig(db)
-    if (values.write && !config.enabled)
-      throw new Error('Enable r2_inventory_config in Vault after checking queue health before writing inventory')
+    const config = INVENTORY_CONFIG
     if (values.mode === 'gc') {
       if (!values.write || values.prefix || values.restart)
         throw new Error('GC requires --write and full-bucket checkpoints')

@@ -8,10 +8,6 @@ const mocks = vi.hoisted(() => ({
 }))
 vi.mock('pg', () => ({ Client: class { connect = vi.fn(); end = mocks.end } }))
 vi.mock('@aws-sdk/client-s3', () => ({ S3Client: class { destroy = vi.fn() }, ListObjectsV2Command: class {} }))
-vi.mock('../supabase/functions/_backend/utils/r2_inventory.ts', async importOriginal => ({
-  ...await importOriginal<object>(),
-  loadInventoryConfig: async () => ({ enabled: true, tombstoneDays: 7, minBatchMs: 500 }),
-}))
 vi.mock('../scripts/r2_inventory/scan.ts', async importOriginal => ({
   ...await importOriginal<object>(),
   scanInventory: async (_db: unknown, _list: unknown, _options: unknown, _config: unknown, onProgress: (progress: typeof mocks.progress) => void) => {

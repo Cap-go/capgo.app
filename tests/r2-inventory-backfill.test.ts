@@ -5,7 +5,7 @@ import { collectInventoryTombstones, commitBackfillPage, completedBackfillVersio
 import { applyInventoryEvents } from '../supabase/functions/_backend/utils/r2_inventory.ts'
 import { POSTGRES_URL } from './test-utils.ts'
 
-const config = { enabled: true, tombstoneDays: 7, minBatchMs: 500 }
+const config = { tombstoneDays: 7 }
 const object = (key: string) => ({ key, size: 42, etag: 'etag', lastModified: '2026-01-01T00:00:00Z' })
 async function fixture(operation: (db: Client, options: ScanOptions) => Promise<void>) {
   const db = new Client({ connectionString: POSTGRES_URL })
