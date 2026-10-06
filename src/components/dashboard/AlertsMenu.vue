@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { ReleaseLiveDeployment } from '~/composables/useReleaseLive'
-import { onClickOutside, useMutationObserver } from '@vueuse/core'
-import { onMounted, ref, useId, useTemplateRef } from 'vue'
+import { onClickOutside, useElementBounding, useMutationObserver, useWindowSize } from '@vueuse/core'
+import { computed, onMounted, ref, useId, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconBell from '~icons/lucide/bell'
 import CompatibilityBanner from '~/components/dashboard/CompatibilityBanner.vue'
@@ -26,8 +26,29 @@ const { t } = useI18n()
 const open = ref(false)
 const alertCount = ref(0)
 const panelId = useId()
-const root = useTemplateRef<HTMLElement>('root')
+const toggle = useTemplateRef<HTMLElement>('toggle')
+const panel = useTemplateRef<HTMLElement>('panel')
 const stack = useTemplateRef<HTMLElement>('stack')
+
+// The panel lives in a fixed layer on <body>: page containers clip overflow,
+// so an absolutely positioned dropdown got cut when the button sits mid-row.
+// It is placed under the button and clamped to the viewport.
+const PANEL_MAX_WIDTH = 640
+const VIEWPORT_GUTTER = 16
+const { bottom: toggleBottom, left: toggleLeft, update: updateToggleBounds } = useElementBounding(toggle)
+const { width: viewportWidth } = useWindowSize()
+const panelStyle = computed(() => {
+  const width = Math.min(PANEL_MAX_WIDTH, viewportWidth.value - VIEWPORT_GUTTER * 2)
+  const maxLeft = viewportWidth.value - width - VIEWPORT_GUTTER
+  // Opens rightward from the button, into the page rather than over the sidebar.
+  const left = Math.min(Math.max(toggleLeft.value, VIEWPORT_GUTTER), maxLeft)
+  return { top: `${toggleBottom.value + 8}px`, left: `${left}px`, width: `${width}px` }
+})
+
+function toggleOpen() {
+  updateToggleBounds()
+  open.value = !open.value
+}
 
 function countAlerts() {
   // Hidden banners render as comment nodes, so element children are the
@@ -39,21 +60,22 @@ function countAlerts() {
 
 useMutationObserver(stack, countAlerts, { childList: true })
 onMounted(countAlerts)
-onClickOutside(root, () => {
+onClickOutside(panel, () => {
   open.value = false
-})
+}, { ignore: [toggle] })
 </script>
 
 <template>
-  <div ref="root" class="relative" data-testid="alerts-menu">
+  <div class="relative" data-testid="alerts-menu">
     <button
       v-show="alertCount > 0"
+      ref="toggle"
       type="button"
       class="relative inline-flex items-center gap-2 px-3 text-sm font-medium transition-colors border rounded-lg h-11 border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:border-amber-700/70 dark:bg-amber-900/20 dark:text-amber-200 dark:hover:bg-amber-900/30"
       :aria-expanded="open"
       :aria-controls="panelId"
       data-testid="alerts-menu-toggle"
-      @click="open = !open"
+      @click="toggleOpen"
       @keydown.escape="open = false"
     >
       <IconBell class="w-4 h-4" />
@@ -62,17 +84,22 @@ onClickOutside(root, () => {
         {{ alertCount }}
       </span>
     </button>
-    <div
-      v-show="open"
-      :id="panelId"
-      class="absolute right-0 z-30 mt-2 top-full w-[min(640px,calc(100vw-32px))] p-2 bg-white border shadow-xl rounded-xl border-slate-200 dark:bg-slate-800 dark:border-white/10"
-      data-testid="alerts-menu-panel"
-    >
-      <div ref="stack" class="flex flex-col gap-2 [&>*]:mb-0!">
-        <CompatibilityBanner :app-id="appId" />
-        <DeploymentBanner :app-id="appId" @deployed="emit('deployed')" />
-        <ReleaseBanner :app-id="appId" :release="release" :adoption-percent="adoptionPercent" />
+    <Teleport to="body">
+      <div
+        v-show="open"
+        :id="panelId"
+        ref="panel"
+        class="fixed z-50 p-2 bg-white border shadow-xl rounded-xl border-slate-200 dark:bg-slate-800 dark:border-white/10"
+        :style="panelStyle"
+        data-testid="alerts-menu-panel"
+        @keydown.escape="open = false"
+      >
+        <div ref="stack" class="flex flex-col gap-2 [&>*]:mb-0!">
+          <CompatibilityBanner :app-id="appId" />
+          <DeploymentBanner :app-id="appId" @deployed="emit('deployed')" />
+          <ReleaseBanner :app-id="appId" :release="release" :adoption-percent="adoptionPercent" />
+        </div>
       </div>
-    </div>
+    </Teleport>
   </div>
 </template>
