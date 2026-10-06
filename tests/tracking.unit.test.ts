@@ -66,6 +66,22 @@ afterEach(() => {
 })
 
 describe('sendEventToTracking', () => {
+  it('forwards the accepted canonical ID and frozen time to PostHog', async () => {
+    const { sendEventToTracking } = await import('../supabase/functions/_backend/utils/tracking.ts')
+    await sendEventToTracking(createContext(), {
+      channel: 'usage',
+      event: 'Frozen Event',
+      event_id: '031c6527-7d90-842d-9abd-17f442067e20',
+      occurred_at: '2026-10-06T10:00:00.000Z',
+      accepted_at: '2026-10-06T10:00:01.000Z',
+      timestamp: Date.parse('2026-10-06T10:10:00.000Z'),
+    }, { background: false })
+    expect(posthogMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      event_id: '031c6527-7d90-842d-9abd-17f442067e20',
+      timestamp: '2026-10-06T10:00:00.000Z',
+    }))
+  })
+
   it('uses the authenticated API key ID instead of a caller-provided tag', async () => {
     const { addAuthenticatedApiKeyIdToTrackingPayload } = await import('../supabase/functions/_backend/utils/tracking.ts')
 
