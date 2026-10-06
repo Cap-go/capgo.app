@@ -147,6 +147,9 @@ describe('stripe redirect URL allowlist', () => {
       success_url: 'https://capgo.test/app/success?success=true',
       cancel_url: 'https://capgo.test/app/cancel',
       client_reference_id: 'org_123',
+      saved_payment_method_options: {
+        allow_redisplay_filters: ['always', 'limited', 'unspecified'],
+      },
       metadata: {
         attribution_id: 'legacy_visitor_123',
         datafast_visitor_id: 'visitor_123',
@@ -326,6 +329,9 @@ describe('stripe redirect URL allowlist', () => {
     )
 
     expect(createSession).toHaveBeenCalledWith(expect.objectContaining({
+      saved_payment_method_options: {
+        allow_redisplay_filters: ['always', 'limited', 'unspecified'],
+      },
       line_items: [
         expect.not.objectContaining({
           adjustable_quantity: expect.anything(),
