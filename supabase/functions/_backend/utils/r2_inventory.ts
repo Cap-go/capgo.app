@@ -11,8 +11,8 @@ export interface InventoryEvent {
   etag: string | null
 }
 export interface RepairTask { bucket: string, key: string, kind: 'verify' }
-export interface InventoryConfig { enabled: boolean, tombstoneDays: number, minBatchMs: number }
-export const DEFAULT_INVENTORY_CONFIG: InventoryConfig = { enabled: false, tombstoneDays: 7, minBatchMs: 500 }
+export interface InventoryConfig { readonly tombstoneDays: number }
+export const INVENTORY_CONFIG: InventoryConfig = Object.freeze({ tombstoneDays: 7 })
 const encoder = new TextEncoder()
 const createActions = new Set(['PutObject', 'CopyObject', 'CompleteMultipartUpload'])
 const deleteActions = new Set(['DeleteObject', 'LifecycleDeletion'])
@@ -58,23 +58,6 @@ export function parseInventoryEvent(body: unknown, bucket: string): InventoryEve
     size: state === 'present' ? Number(object.size) : null,
     etag: state === 'present' ? normalizeEtag(String(object.eTag)) : null,
   }
-}
-
-export function parseInventoryConfig(value: unknown): InventoryConfig {
-  const data = value as Partial<InventoryConfig> | null
-  if (!data || typeof data.enabled !== 'boolean' || !Number.isInteger(data.tombstoneDays)
-    || data.tombstoneDays! < 7 || data.tombstoneDays! > 30
-    || !Number.isInteger(data.minBatchMs) || data.minBatchMs! < 500 || data.minBatchMs! > 30_000) {
-    throw new Error('Invalid Vault R2 inventory configuration')
-  }
-  return data as InventoryConfig
-}
-
-export async function loadInventoryConfig(db: ClientBase): Promise<InventoryConfig> {
-  const result = await db.query<{ decrypted_secret: string }>(
-    `SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'r2_inventory_config' LIMIT 1`,
-  )
-  return result.rows.length ? parseInventoryConfig(JSON.parse(result.rows[0].decrypted_secret)) : DEFAULT_INVENTORY_CONFIG
 }
 
 export async function inventoryTransaction<T>(db: ClientBase, operation: () => Promise<T>): Promise<T> {

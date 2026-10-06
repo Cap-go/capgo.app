@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { applyInventoryEvents, applyObservations, readObservationSnapshot } from '../supabase/functions/_backend/utils/r2_inventory.ts'
 import { POSTGRES_URL } from './test-utils.ts'
 
-const config = { enabled: true, tombstoneDays: 7, minBatchMs: 500 }
+const config = { tombstoneDays: 7 }
 async function fixture(operation: (db: ClientBase, bucket: string, event: (key: string, delta?: number, state?: 'present' | 'deleted') => InventoryEvent) => Promise<void>) {
   const db = new Client({ connectionString: POSTGRES_URL })
   await db.connect()

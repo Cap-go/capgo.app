@@ -10,6 +10,7 @@ import { backgroundTask, existInEnv, getEnv } from '../utils/utils.ts'
 import { CacheHelper } from './cache.ts'
 import { getChannelSelfOverride, isChannelSelfStoreEnabled } from './channelSelfStore.ts'
 import { getClientDbRegionSB } from './geolocation.ts'
+import { freshQueryArgs } from './hyperdriveFreshRead.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { serializePostgresError, serializePostgresLogValue } from './postgres_error.ts'
 import * as schema from './postgres_schema.ts'
@@ -508,7 +509,10 @@ export function createLazyPgClient(c: Context, readOnly = false): LazyPgClient {
   const client = {
     query: (...args: unknown[]) => {
       lazyPgQueryCounts.set(c.req.raw, getLazyPgQueryCount(c) + 1)
-      return ensure().then(db => (db.query as (...queryArgs: unknown[]) => unknown)(...args))
+      // Edge cache refills skip Hyperdrive's query cache (read synchronously,
+      // while the caller's async context is still current).
+      const queryArgs = freshQueryArgs(args)
+      return ensure().then(db => (db.query as (...queryArgs: unknown[]) => unknown)(...queryArgs))
     },
   } as unknown as PluginPgClient
   return {

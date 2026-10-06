@@ -1,13 +1,13 @@
 import type { ClientBase } from 'pg'
+import { readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { consumeInventoryBatch } from '../cloudflare_workers/r2_inventory/index.ts'
-import { inventoryTransaction, parseInventoryConfig, parseInventoryEvent, timestampUs } from '../supabase/functions/_backend/utils/r2_inventory.ts'
+import { INVENTORY_CONFIG, inventoryTransaction, parseInventoryEvent, timestampUs } from '../supabase/functions/_backend/utils/r2_inventory.ts'
 
-const mocks = vi.hoisted(() => ({ apply: vi.fn(), end: vi.fn(), head: vi.fn(), publish: vi.fn(), config: { enabled: true, tombstoneDays: 7, minBatchMs: 500 } }))
+const mocks = vi.hoisted(() => ({ apply: vi.fn(), end: vi.fn(), head: vi.fn(), publish: vi.fn() }))
 vi.mock('pg', () => ({ Client: class { connect = vi.fn(); end = mocks.end } }))
 vi.mock('../supabase/functions/_backend/utils/r2_inventory.ts', async importOriginal => ({
   ...await importOriginal<object>(),
-  loadInventoryConfig: async () => mocks.config,
   applyInventoryEvents: mocks.apply,
 }))
 const body = { bucket: 'inventory-test', action: 'PutObject', eventTime: '2026-10-01T00:00:00.123456Z', object: { key: 'legacy/file', size: 42, eTag: '"etag"' } }
@@ -21,7 +21,6 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.apply.mockResolvedValue([])
   mocks.publish.mockResolvedValue(undefined)
-  mocks.config.enabled = true
 })
 
 describe('r2 inventory queue', () => {
@@ -44,25 +43,26 @@ describe('r2 inventory queue', () => {
     }
   })
 
-  it('keeps the invocation pending for its pacing interval after releasing the client', async () => {
+  it('finishes a committed batch without a pacing timer or configuration query', async () => {
     vi.useFakeTimers()
     try {
       const f = fixture([body])
-      let finished = false
-      const consume = consumeInventoryBatch(f.batch, f.env).then(() => {
-        finished = true
-      })
-      await vi.advanceTimersByTimeAsync(0)
+      await consumeInventoryBatch(f.batch, f.env)
       expect(mocks.end).toHaveBeenCalledTimes(1)
-      expect(finished).toBe(false)
-      await vi.advanceTimersByTimeAsync(499)
-      expect(finished).toBe(false)
-      await vi.advanceTimersByTimeAsync(1)
-      await consume
-      expect(finished).toBe(true)
+      expect(f.messages[0].ack).toHaveBeenCalledTimes(1)
+      expect(mocks.apply.mock.calls[0][2]).toBe(INVENTORY_CONFIG)
+      expect(vi.getTimerCount()).toBe(0)
     }
     finally {
       vi.useRealTimers()
+    }
+  })
+
+  it('caps the combined event and repair consumer concurrency at two in every environment', () => {
+    const wrangler = JSON.parse(readFileSync(new URL('../cloudflare_workers/r2_inventory/wrangler.jsonc', import.meta.url), 'utf8'))
+    for (const environment of Object.values(wrangler.env) as { queues: { consumers: { max_concurrency: number }[] } }[]) {
+      expect(environment.queues.consumers).toHaveLength(2)
+      expect(environment.queues.consumers.map(consumer => consumer.max_concurrency)).toEqual([1, 1])
     }
   })
 
@@ -75,10 +75,6 @@ describe('r2 inventory queue', () => {
     expect(() => timestampUs('2026-09-31T12:00:00Z')).toThrow()
     expect(() => timestampUs('0000-01-01T00:00:00Z')).toThrow()
     expect(() => parseInventoryEvent({ ...body, object: { ...body.object, key: 'invalid\0key' } }, 'inventory-test')).toThrow()
-  })
-  it('requires retention beyond queue retention and enforces pacing', () => {
-    expect(() => parseInventoryConfig({ enabled: true, tombstoneDays: 4, minBatchMs: 500 })).toThrow()
-    expect(() => parseInventoryConfig({ enabled: true, tombstoneDays: 7, minBatchMs: 0 })).toThrow()
   })
   it('batches legacy creates without making HEAD calls and releases before acknowledgement', async () => {
     const f = fixture(Array.from({ length: 100 }, (_, i) => ({ ...body, object: { ...body.object, key: `file-${i}` } })))
@@ -116,16 +112,11 @@ describe('r2 inventory queue', () => {
     }
     expect(f.messages[0].ack).toHaveBeenCalledTimes(1)
   })
-  it('isolates malformed messages and fails closed when ingestion is disabled', async () => {
+  it('isolates malformed messages', async () => {
     const f = fixture([body, { broken: true }])
     await consumeInventoryBatch(f.batch, f.env)
     expect(f.messages[0].ack).toHaveBeenCalled()
     expect(f.messages[1].ack).not.toHaveBeenCalled()
     expect(f.messages[1].retry).toHaveBeenCalled()
-    mocks.config.enabled = false
-    const disabled = fixture([body])
-    await consumeInventoryBatch(disabled.batch, disabled.env)
-    expect(disabled.messages[0].ack).not.toHaveBeenCalled()
-    expect(disabled.retryAll).toHaveBeenCalled()
   })
 })

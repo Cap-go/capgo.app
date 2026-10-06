@@ -4,15 +4,9 @@ Merge the schema PR first, then the queue consumer, then the historical scanner.
 
 ## Queue consumer
 
-The dedicated Worker uses one database connection per event batch, releases it before publication/pacing, and awaits all work before returning. Configure a Hyperdrive connection with query caching **disabled**; stale inventory/configuration reads are unsafe. Existing environment bindings follow the files Worker. Preproduction currently shares the production `capgo` bucket: use an isolated bucket and matching `INVENTORY_BUCKET`/R2 binding when testing there; do not attach a second notification rule to production casually.
+The dedicated Worker uses one database connection per event batch, releases it before publication, and awaits all work before returning. Configure a Hyperdrive connection with query caching **disabled**; stale inventory reads are unsafe. Existing environment bindings follow the files Worker. Preproduction currently shares the production `capgo` bucket: use an isolated bucket and matching `INVENTORY_BUCKET`/R2 binding when testing there; do not attach a second notification rule to production casually.
 
-Runtime configuration is a Vault secret named `r2_inventory_config`, containing:
-
-```json
-{ "enabled": true, "tombstoneDays": 7, "minBatchMs": 500 }
-```
-
-Missing configuration disables ingestion. A malformed secret fails closed. Use the existing Vault administration workflow to set it; no new configuration table is introduced. Set it before notifications are enabled. To pause a deployed consumer for maintenance, pause delivery in Cloudflare so messages do not burn their five-delivery budget while disabled.
+Inventory configuration is the `INVENTORY_CONFIG` constant in `supabase/functions/_backend/utils/r2_inventory.ts`; tombstones are retained for seven days. No Vault secret or runtime enablement switch is required. To pause a deployed consumer for maintenance, pause delivery in Cloudflare so messages do not burn their five-delivery budget.
 
 Deployment commands (run after the schema exists):
 
@@ -24,7 +18,9 @@ bunx wrangler r2 bucket notification create capgo-alpha --event-types object-cre
 
 Use `prod`/`capgo` only for the reviewed production rollout. Queue creation is idempotent, but notification-rule creation is not: inspect existing rules before creating one. All four queues retain messages for four days. Existing queues require verifying their retention manually; the setup script does not silently change shared infrastructure.
 
-The event consumer has batch size 100, timeout 10 seconds, concurrency 2, and four retries (at most five deliveries). Each invocation lasts at least 500ms, including pacing after the connection closes. Full-batch capacity starts around 400 events/s, with at most two concurrent event writers plus one repair writer; measure database WAL/latency and backlog before changing it. Timeout is not a minimum batch size or a global rate limiter. The repair queue has batches of ten, concurrency one, and two concurrent HEAD requests; ordinary uploads never perform HEAD.
+The event consumer has batch size 100, timeout 10 seconds, concurrency one, and four retries (at most five deliveries). The repair queue has batches of ten and concurrency one. Each invocation opens at most one database connection at a time, so both queues together use at most two active inventory database connections per environment. Repairs release the database connection before issuing up to two concurrent HEAD requests; ordinary uploads never perform HEAD. Consumer handlers return as soon as their work finishes, with no artificial pacing delay. The ten-second timeout coalesces small batches; it is not a minimum batch size or a rate limiter. Measure actual throughput, database WAL/latency and backlog.
+
+This bound applies to queue consumers. A separately run backfill holds another connection; pause queue delivery during a backfill if the same two-connection budget must cover that operation. Hyperdrive's retained pool connections and other application traffic have separate connection budgets.
 
 Test a synthetic creation and deletion, then confirm the row transitions and queue acknowledgement. Monitor source/repair backlog, oldest-message age, failed batches and both DLQs. A maximum event timestamp is not a watermark because delivery can be out of order. Re-drive expired events through repair/reconciliation, never blind replay. Tombstone collection stays off until an initial backfill and complete reconciliation are verified.
 
