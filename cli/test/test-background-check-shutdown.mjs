@@ -12,6 +12,7 @@ let harness
 let runnerCount = 0
 
 beforeAll(async () => {
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ type: 'module' }))
   writeFileSync(join(dir, 'entry.ts'), `
     export { startOnboardingCheck } from ${JSON.stringify(fileURLToPath(new URL('../src/onboarding/background.ts', import.meta.url)))}
     export { waitForOnboardingChecks } from ${JSON.stringify(fileURLToPath(new URL('../src/onboarding/background-shutdown.ts', import.meta.url)))}
@@ -32,7 +33,7 @@ function run({ commandPath = 'app list', options = {}, tty = true, stdinTty = tt
   const source = `
     import assert from 'node:assert/strict'
     import { performance } from 'node:perf_hooks'
-    import { mock } from 'node:test'
+    import FakeTimers from ${JSON.stringify(import.meta.resolve('@sinonjs/fake-timers'))}
     import { setImmediate as nextTurn } from 'node:timers/promises'
     import { startOnboardingCheck, waitForOnboardingChecks, getPendingOnboardingChecks } from ${JSON.stringify(harness)}
     Object.defineProperty(process.stdin, 'isTTY', { value: ${stdinTty} })
@@ -63,7 +64,7 @@ function run({ commandPath = 'app list', options = {}, tty = true, stdinTty = tt
     }
     await new Promise(resolve => setTimeout(resolve, ${foregroundMs}))
     console.log('interrupt-count-before-wait:' + foregroundInterrupts)
-    if (${controlledClock}) mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+    const clock = ${controlledClock} ? FakeTimers.install({ now: Date.now(), toFake: ['setTimeout', 'clearTimeout', 'Date'] }) : undefined
     const now = ${controlledClock} ? Date.now : () => performance.now()
     const started = now()
     let finished = false
@@ -82,12 +83,12 @@ function run({ commandPath = 'app list', options = {}, tty = true, stdinTty = tt
         await Promise.all(checks.map(([, check]) => check.completion))
       }
       await nextTurn()
-      mock.timers.tick(4_999)
+      clock.tick(4_999)
       await nextTurn()
       assert.equal(finished, false, 'shutdown completed before the shared deadline')
-      mock.timers.tick(1)
+      clock.tick(1)
       await nextTurn()
-      mock.timers.tick(0)
+      clock.tick(0)
       await completion
       assert.equal(finished, true, 'shutdown did not complete at the shared deadline')
     }
@@ -95,7 +96,7 @@ function run({ commandPath = 'app list', options = {}, tty = true, stdinTty = tt
       await completion
     }
     console.log('foreground-finished:' + Math.round(now() - started))
-    if (${controlledClock}) mock.timers.reset()
+    if (${controlledClock}) clock.uninstall()
   `
   const runner = join(dir, `run-${++runnerCount}.mjs`)
   writeFileSync(runner, source)

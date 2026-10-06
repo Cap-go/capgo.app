@@ -86,9 +86,9 @@ function makeStdin() {
 
 async function waitForFrame(stdout, pattern, timeoutMs = 2000) {
   const deadline = Date.now() + timeoutMs
-  while (!pattern.test(stdout.lastFrame) && Date.now() < deadline)
+  while (!stdout.frames.some(frame => pattern.test(frame)) && Date.now() < deadline)
     await new Promise(resolve => setTimeout(resolve, 5))
-  assert.match(stdout.lastFrame, pattern)
+  assert.ok(stdout.frames.some(frame => pattern.test(frame)), `No frame matched ${pattern}`)
 }
 
 async function test(name, run) {
@@ -137,8 +137,13 @@ try {
     }
   })
 
-  for (const renderDelayMs of [0, 120]) {
-    await test(`keeps search status visible for its minimum duration after ${renderDelayMs}ms render delay`, async () => {
+  for (const { renderDelayMs, debug } of [
+    { renderDelayMs: 0, debug: true },
+    { renderDelayMs: 120, debug: true },
+    { renderDelayMs: 0, debug: false },
+    { renderDelayMs: 120, debug: false },
+  ]) {
+    await test(`keeps search status visible after ${renderDelayMs}ms delay with debug=${debug}`, async () => {
       const candidate = {
         dir: '/workspace/apps/mobile',
         relativeDir: 'apps/mobile',
@@ -173,7 +178,8 @@ try {
           stdout,
           stderr: makeStdout(),
           stdin: makeStdin(),
-          debug: true,
+          debug,
+          interactive: true,
           exitOnCtrlC: false,
           patchConsole: false,
         },
@@ -185,7 +191,7 @@ try {
         resolveDiscovery({ candidates: [candidate], nxDetected: false })
         await waitForFrame(stdout, /Is this the correct app\?/, 2000)
         const selectionShownAt = stdout.frameTimes[stdout.frames.findIndex(frame => /Is this the correct app\?/.test(frame))]
-        assert.ok(selectionShownAt - statusShownAt >= 70, 'search status disappeared before its minimum display time')
+        assert.ok(selectionShownAt - statusShownAt >= 70, `search status was visible for only ${selectionShownAt - statusShownAt}ms`)
       }
       finally {
         instance.unmount()
