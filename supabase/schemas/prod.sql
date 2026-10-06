@@ -23589,6 +23589,23 @@ COMMENT ON COLUMN "public"."onboarding_demo_data"."row_key" IS 'Primary-row iden
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."org_custom_domains" (
+    "org_id" "uuid" NOT NULL,
+    "hostname" "text" NOT NULL,
+    "provider_id" "text",
+    "provider_route_id" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "org_custom_domains_hostname" CHECK ((("hostname" = "lower"("hostname")) AND ("length"("hostname") <= 253)))
+);
+
+
+ALTER TABLE "public"."org_custom_domains" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."org_custom_domains" IS 'Provider-managed Live Updates hostnames. Private API checks org.update_settings before indexed service-role access.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."org_id_tombstones" (
     "org_id" "uuid" NOT NULL,
     "deleted_at" timestamp with time zone DEFAULT "now"() NOT NULL
@@ -25103,6 +25120,26 @@ ALTER TABLE ONLY "public"."old_apps"
 
 ALTER TABLE ONLY "public"."onboarding_demo_data"
     ADD CONSTRAINT "onboarding_demo_data_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."org_custom_domains"
+    ADD CONSTRAINT "org_custom_domains_hostname_key" UNIQUE ("hostname");
+
+
+
+ALTER TABLE ONLY "public"."org_custom_domains"
+    ADD CONSTRAINT "org_custom_domains_pkey" PRIMARY KEY ("org_id");
+
+
+
+ALTER TABLE ONLY "public"."org_custom_domains"
+    ADD CONSTRAINT "org_custom_domains_provider_id_key" UNIQUE ("provider_id");
+
+
+
+ALTER TABLE ONLY "public"."org_custom_domains"
+    ADD CONSTRAINT "org_custom_domains_provider_route_id_key" UNIQUE ("provider_route_id");
 
 
 
@@ -26885,6 +26922,11 @@ ALTER TABLE ONLY "public"."onboarding_demo_data"
 
 
 
+ALTER TABLE ONLY "public"."org_custom_domains"
+    ADD CONSTRAINT "org_custom_domains_org_id_fkey" FOREIGN KEY ("org_id") REFERENCES "public"."orgs"("id") ON DELETE RESTRICT;
+
+
+
 ALTER TABLE ONLY "public"."org_metrics_cache"
     ADD CONSTRAINT "org_metrics_cache_org_id_fkey" FOREIGN KEY ("org_id") REFERENCES "public"."orgs"("id") ON DELETE CASCADE;
 
@@ -27462,11 +27504,19 @@ CREATE POLICY "Deny anon select on apikeys" ON "public"."apikeys" AS RESTRICTIVE
 
 
 
+CREATE POLICY "Deny client delete" ON "public"."org_custom_domains" FOR DELETE TO "anon", "authenticated" USING (false);
+
+
+
 CREATE POLICY "Deny client delete on org_id_tombstones" ON "public"."org_id_tombstones" AS RESTRICTIVE FOR DELETE TO "anon", "authenticated" USING (false);
 
 
 
 CREATE POLICY "Deny client delete on sso_providers" ON "public"."sso_providers" AS RESTRICTIVE FOR DELETE TO "anon", "authenticated" USING (false);
+
+
+
+CREATE POLICY "Deny client insert" ON "public"."org_custom_domains" FOR INSERT TO "anon", "authenticated" WITH CHECK (false);
 
 
 
@@ -27482,7 +27532,15 @@ CREATE POLICY "Deny client insert on sso_providers" ON "public"."sso_providers" 
 
 
 
+CREATE POLICY "Deny client select" ON "public"."org_custom_domains" FOR SELECT TO "anon", "authenticated" USING (false);
+
+
+
 CREATE POLICY "Deny client select on org_id_tombstones" ON "public"."org_id_tombstones" AS RESTRICTIVE FOR SELECT TO "anon", "authenticated" USING (false);
+
+
+
+CREATE POLICY "Deny client update" ON "public"."org_custom_domains" FOR UPDATE TO "anon", "authenticated" USING (false) WITH CHECK (false);
 
 
 
@@ -28038,6 +28096,9 @@ ALTER TABLE "public"."old_apps" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."onboarding_demo_data" ENABLE ROW LEVEL SECURITY;
+
+
+ALTER TABLE "public"."org_custom_domains" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."org_id_tombstones" ENABLE ROW LEVEL SECURITY;
@@ -31807,6 +31868,10 @@ GRANT ALL ON SEQUENCE "public"."old_apps_id_seq" TO "service_role";
 
 
 GRANT ALL ON TABLE "public"."onboarding_demo_data" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."org_custom_domains" TO "service_role";
 
 
 
