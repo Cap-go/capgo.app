@@ -93,7 +93,38 @@ export interface ReleaseLiveResponse extends ReleaseLiveChannelContext {
   // null when the breakdown could not be read.
   failed_devices: ReleaseLiveFailedDevices | null
   series: ReleaseLiveBucket[]
+  // Set when the release is the target of a progressive rollout on the
+  // channel: the target only reaches a share of devices, so raw adoption
+  // against every device would always look low.
+  rollout: ReleaseLiveRollout | null
   generated_at: string
+}
+
+export type ReleaseLiveRolloutStatus = 'running' | 'paused' | 'zero'
+
+export interface ReleaseLiveRollout {
+  target_version: string
+  fallback_version: string | null
+  fallback_bundle_id: number | null
+  // Share of the channel's devices the target is served to, 0-100.
+  percentage: number
+  status: ReleaseLiveRolloutStatus
+  paused_at: string | null
+  pause_reason: string | null
+  devices_on_target: number
+  devices_on_fallback: number
+  total_devices: number
+  // Devices the target should reach at this percentage.
+  expected_on_target: number
+  // devices_on_target / expected_on_target, capped at 100. null without devices.
+  reach_percent: number | null
+  // Same window, same channel, for the fallback bundle: the baseline the
+  // target's success rate is compared to.
+  fallback_totals: {
+    install: number
+    fail: number
+    success_rate: number | null
+  } | null
 }
 
 export interface ReleaseLiveFailedDevices {
@@ -212,6 +243,44 @@ function computeAdoption(counts: Record<string, number>, versionName: string) {
     devices_on_release: onRelease,
     total_devices: total,
     percent: total > 0 ? Math.round((onRelease / total) * 1000) / 10 : null,
+  }
+}
+
+function rolloutStatus(rollout: CandidateRollout): ReleaseLiveRolloutStatus {
+  if (rollout.paused_at)
+    return 'paused'
+  return rollout.percentage_bps > 0 ? 'running' : 'zero'
+}
+
+function computeRollout(
+  rollout: CandidateRollout,
+  fallback: ResolvedRelease | null,
+  counts: Record<string, number>,
+  fallbackTotals: { install: number, fail: number } | null,
+): ReleaseLiveRollout {
+  let total = 0
+  for (const count of Object.values(counts))
+    total += toCount(count)
+  const onTarget = toCount(counts[rollout.target.version_name])
+  const onFallback = fallback ? toCount(counts[fallback.version_name]) : 0
+  const percentage = Math.min(100, Math.max(0, rollout.percentage_bps / 100))
+  const expected = Math.round(total * percentage / 100)
+  return {
+    target_version: rollout.target.version_name,
+    fallback_version: fallback?.version_name ?? null,
+    fallback_bundle_id: fallback?.bundle_id ?? null,
+    percentage,
+    status: rolloutStatus(rollout),
+    paused_at: rollout.paused_at,
+    pause_reason: rollout.pause_reason,
+    devices_on_target: onTarget,
+    devices_on_fallback: onFallback,
+    total_devices: total,
+    expected_on_target: expected,
+    reach_percent: expected > 0 ? Math.min(100, Math.round((onTarget / expected) * 1000) / 10) : null,
+    fallback_totals: fallbackTotals
+      ? { ...fallbackTotals, success_rate: computeSuccessRate(fallbackTotals.install, fallbackTotals.fail) }
+      : null,
   }
 }
 
@@ -429,12 +498,23 @@ LIMIT ${MAX_FAILURE_ACTIONS}`,
   }
 }
 
+interface CandidateRollout {
+  // Rollout target; deployed_at is its upload time (rollouts have no start
+  // timestamp, and the live window is capped anyway).
+  target: ResolvedRelease
+  percentage_bps: number
+  paused_at: string | null
+  pause_reason: string | null
+}
+
 interface CandidateChannel {
   id: number
   name: string
   public: boolean
   // Bundle the channel currently serves, used when deploy history has no row.
+  // During a progressive rollout this is the stable fallback.
   current: ResolvedRelease | null
+  rollout: CandidateRollout | null
 }
 
 interface ReleaseCandidates {
@@ -450,7 +530,7 @@ function cacheBucket(ttlSeconds: number, nowMs = Date.now()) {
 // read with the admin client (after checkPermission) and shared through the cache.
 async function loadReleaseCandidates(c: Context<MiddlewareKeyVariables>, appId: string): Promise<ReleaseCandidates> {
   const cache = new CacheHelper(c)
-  const cacheKey = cache.buildRequest(CANDIDATES_CACHE_PATH, { appId, v: '2', bucket: cacheBucket(CANDIDATES_CACHE_TTL_SECONDS) })
+  const cacheKey = cache.buildRequest(CANDIDATES_CACHE_PATH, { appId, v: '3', bucket: cacheBucket(CANDIDATES_CACHE_TTL_SECONDS) })
   const cached = await cache.matchJson<ReleaseCandidates>(cacheKey)
   if (cached)
     return cached
@@ -459,7 +539,7 @@ async function loadReleaseCandidates(c: Context<MiddlewareKeyVariables>, appId: 
   const [{ data: channelRows, error: channelError }, { data: deployRows, error: deployError }] = await Promise.all([
     supabase
       .from('channels')
-      .select('id, name, public, version:app_versions!channels_version_fkey(id, name, created_at)')
+      .select('id, name, public, rollout_enabled, rollout_percentage_bps, rollout_paused_at, rollout_pause_reason, version:app_versions!channels_version_fkey(id, name, created_at), rollout_version_info:app_versions!channels_rollout_version_fkey(id, name, created_at)')
       .eq('app_id', appId)
       .order('name', { ascending: true })
       .order('id', { ascending: true }),
@@ -486,7 +566,22 @@ async function loadReleaseCandidates(c: Context<MiddlewareKeyVariables>, appId: 
         deployed_at: version.created_at,
       } satisfies ResolvedRelease
       : null
-    return { id: row.id, name: row.name, public: row.public, current } satisfies CandidateChannel
+    const rolloutVersion = one(row.rollout_version_info as Relation<{ id: number, name: string, created_at: string | null }>)
+    const rollout = row.rollout_enabled && rolloutVersion?.name && rolloutVersion.created_at && !INTERNAL_VERSION_NAMES.has(rolloutVersion.name)
+      ? {
+        target: {
+          bundle_id: rolloutVersion.id,
+          version_name: rolloutVersion.name,
+          channel_id: row.id,
+          channel_name: row.name,
+          deployed_at: rolloutVersion.created_at,
+        },
+        percentage_bps: toCount(row.rollout_percentage_bps),
+        paused_at: row.rollout_paused_at ?? null,
+        pause_reason: row.rollout_pause_reason ?? null,
+      } satisfies CandidateRollout
+      : null
+    return { id: row.id, name: row.name, public: row.public, current, rollout } satisfies CandidateChannel
   })
 
   const deployments = (deployRows ?? []).flatMap((row) => {
@@ -549,6 +644,11 @@ function pickChannel(candidates: ReleaseCandidates, channelId?: number, versionN
 }
 
 function pickRelease(candidates: ReleaseCandidates, channel: CandidateChannel, versionName?: string): ResolvedRelease | null {
+  // A progressive rollout is the release in flight on the channel: watch its
+  // target unless another bundle is named explicitly.
+  const rolloutTarget = channel.rollout?.target
+  if (rolloutTarget && (!versionName || versionName === rolloutTarget.version_name))
+    return { ...rolloutTarget, channel_name: channel.name }
   const onChannel = candidates.deployments.filter(deployment => deployment.channel_id === channel.id)
   const release = versionName
     ? onChannel.find(deployment => deployment.version_name === versionName)
@@ -627,8 +727,10 @@ function toChannelContext(candidates: ReleaseCandidates, channel: CandidateChann
     channel: channel ? { id: channel.id, name: channel.name, is_default: channel.id === defaultChannel?.id } : null,
     channels: candidates.channels.map(item => ({ id: item.id, name: item.name, is_default: item.id === defaultChannel?.id })),
     recent_deployments: channel
-      ? candidates.deployments
-          .filter(deployment => deployment.channel_id === channel.id)
+      ? [
+          ...(channel.rollout ? [channel.rollout.target] : []),
+          ...candidates.deployments.filter(deployment => deployment.channel_id === channel.id),
+        ]
           .slice(0, RECENT_DEPLOYMENTS_LIMIT)
           .map(({ bundle_id: _bundleId, ...rest }) => ({ ...rest, channel_name: channel.name }))
       : [],
@@ -656,11 +758,17 @@ async function readReleaseLive(
   const window = resolveWindow(release.deployed_at, now)
   const channelScope: VersionUsageChannel = { id: channel.id, name: channel.name }
   const cache = new CacheHelper(c)
+  const rollout = channel.rollout?.target.version_name === release.version_name ? channel.rollout : null
+  // Comparing against the fallback only makes sense when it is another bundle.
+  const fallback = rollout && channel.current && channel.current.version_name !== release.version_name ? channel.current : null
   const cacheKey = cache.buildRequest(ACTIVITY_CACHE_PATH, {
     appId,
     channelId: String(channel.id),
     version: release.version_name,
     since: release.deployed_at,
+    // Rollout state changes the summary, so a new percentage or a pause is
+    // reflected on the next poll instead of after the cache expires.
+    rollout: rollout ? `${rollout.percentage_bps}:${rollout.paused_at ?? ''}:${fallback?.version_name ?? ''}` : '',
     bucket: cacheBucket(ACTIVITY_CACHE_TTL_SECONDS, now.getTime()),
   })
   const cached = await cache.matchJson<ReleaseLiveActivity>(cacheKey)
@@ -670,12 +778,27 @@ async function readReleaseLive(
   // No Postgres fallback when Analytics Engine is bound: if AE is down, every
   // polling tab would otherwise move its load onto the database. The client
   // keeps showing its last snapshot and retries on the next poll.
-  const [activity, deviceCounts] = await Promise.all([
-    c.env.VERSION_USAGE
-      ? readActivityCF(c, appId, release.version_name, window.startMs, window.endMs, window.bucketMinutes, channelScope)
-      : readActivitySB(c, appId, release.version_name, window.startMs, window.endMs, window.bucketMinutes, channelScope),
+  const readActivity = (version: string) => c.env.VERSION_USAGE
+    ? readActivityCF(c, appId, version, window.startMs, window.endMs, window.bucketMinutes, channelScope)
+    : readActivitySB(c, appId, version, window.startMs, window.endMs, window.bucketMinutes, channelScope)
+  const [activity, deviceCounts, fallbackActivity] = await Promise.all([
+    readActivity(release.version_name),
     readAdoption(c, appId, channelScope),
+    // The baseline is optional: never fail the whole view on it.
+    fallback
+      ? readActivity(fallback.version_name).catch((error) => {
+          cloudlogErr({ requestId: c.get('requestId'), message: 'release_live fallback activity failed', error: serializeError(error) })
+          return null
+        })
+      : Promise.resolve(null),
   ])
+  const fallbackTotals = fallbackActivity
+    ? fillBuckets(fallbackActivity.seriesRows, window.startMs, window.endMs, window.bucketMinutes).reduce((acc, bucket) => {
+        acc.install += bucket.install
+        acc.fail += bucket.fail
+        return acc
+      }, { install: 0, fail: 0 })
+    : null
 
   const series = fillBuckets(activity.seriesRows, window.startMs, window.endMs, window.bucketMinutes)
   const totals = series.reduce((acc, bucket) => {
@@ -702,6 +825,7 @@ async function readReleaseLive(
       .filter(row => row.count > 0),
     failed_devices: activity.failedDevices,
     series,
+    rollout: rollout ? computeRollout(rollout, fallback, deviceCounts, fallbackTotals) : null,
     generated_at: now.toISOString(),
   }
 
@@ -748,6 +872,7 @@ export const releaseLiveTestUtils = {
   resolveWindow,
   fillBuckets,
   computeAdoption,
+  computeRollout,
   computeSuccessRate,
   buildSeriesQueryCF,
   buildFailuresQueryCF,

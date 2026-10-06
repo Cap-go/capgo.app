@@ -26,7 +26,8 @@ const props = withDefaults(defineProps<{
   days?: number
   hidePeriodSelector?: boolean
   compact?: boolean
-  // Timing chart only, for dense pages such as Observe > Releases.
+  // One card with a chart / per-bundle table switch, for dense pages such as
+  // Observe > Live release.
   dense?: boolean
 }>(), {
   channelId: undefined,
@@ -36,6 +37,8 @@ const props = withDefaults(defineProps<{
   compact: false,
   dense: false,
 })
+
+const denseView = ref<'chart' | 'table'>('chart')
 
 Chart.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend)
 
@@ -330,15 +333,70 @@ watch(
       >
         <div class="flex items-center justify-between gap-3 mb-3" :title="t('bundle-install-stats-help')">
           <h3 class="text-base font-semibold truncate text-slate-950 dark:text-white">
-            {{ t('bundle-install-chart-timing-title') }}
+            {{ denseView === 'table' ? t('bundle-install-stats-title') : t('bundle-install-chart-timing-title') }}
           </h3>
-          <span v-if="effectiveStats?.totals" class="text-xs shrink-0 text-slate-500 dark:text-slate-400">
-            {{ t('bundle-install-success-rate') }}
-            <span class="font-semibold" :class="successRateClass(effectiveStats.totals.success_rate)">{{ formatPercent(effectiveStats.totals.success_rate) }}</span>
-          </span>
+          <div role="tablist" class="inline-flex p-0.5 rounded-md shrink-0 bg-slate-100 dark:bg-slate-700/60" data-testid="bundle-install-dense-view">
+            <button
+              v-for="view in (['chart', 'table'] as const)"
+              :key="view"
+              type="button"
+              role="tab"
+              :aria-selected="denseView === view"
+              class="px-2 py-0.5 text-xs font-medium rounded"
+              :class="denseView === view ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-600 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'"
+              @click="denseView = view"
+            >
+              {{ view === 'chart' ? t('bundle-install-view-chart') : t('bundle-install-view-table') }}
+            </button>
+          </div>
         </div>
-        <div class="relative flex-1 min-h-0">
+        <div v-if="denseView === 'chart'" class="relative flex-1 min-h-0">
           <Bar :data="timingChartData" :options="timingChartOptions" />
+        </div>
+        <!-- Per-bundle success rate and install time, e.g. rollout target vs fallback. -->
+        <div v-else class="flex-1 min-h-0 overflow-auto" data-testid="bundle-install-dense-table">
+          <table class="min-w-full text-xs">
+            <thead class="sticky top-0 font-semibold tracking-wider uppercase text-[10px] text-slate-500 bg-white dark:bg-slate-800 dark:text-slate-400">
+              <tr class="text-left">
+                <th scope="col" class="py-1.5 pr-3 font-semibold">
+                  {{ t('bundle') }}
+                </th>
+                <th scope="col" class="py-1.5 pr-3 font-semibold">
+                  {{ t('bundle-install-success-rate') }}
+                </th>
+                <th scope="col" class="py-1.5 pr-3 font-semibold">
+                  {{ t('installed') }} / {{ t('failed') }}
+                </th>
+                <th scope="col" class="py-1.5 pr-3 font-semibold">
+                  {{ t('bundle-install-p50') }}
+                </th>
+                <th scope="col" class="py-1.5 font-semibold">
+                  {{ t('bundle-install-p90') }}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="bundle in bundles" :key="bundle.version_name" class="border-t border-slate-100 dark:border-slate-700/70">
+                <td class="py-1.5 pr-3">
+                  <button type="button" class="font-medium text-left text-azure-600 hover:underline dark:text-azure-400" @click="navigateToBundle(bundle.version_name)">
+                    {{ bundle.version_name }}
+                  </button>
+                </td>
+                <td class="py-1.5 pr-3 font-semibold" :class="successRateClass(bundle.success_rate)">
+                  {{ formatPercent(bundle.success_rate) }}
+                </td>
+                <td class="py-1.5 pr-3 text-slate-700 dark:text-slate-200">
+                  {{ formatCount(bundle.install) }} / {{ formatCount(bundle.fail) }}
+                </td>
+                <td class="py-1.5 pr-3 text-slate-700 dark:text-slate-200">
+                  {{ formatDuration(bundle.timing.p50_ms) }}
+                </td>
+                <td class="py-1.5 text-slate-700 dark:text-slate-200">
+                  {{ formatDuration(bundle.timing.p90_ms) }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
       <div

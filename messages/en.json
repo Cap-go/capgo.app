@@ -3414,7 +3414,7 @@
   "set-rollout-target": "Set target",
   "rollout-target": "Target",
   "stable-fallback": "Stable fallback",
-  "channel-version-with-rollout": "{fallback} · serving {target}",
+  "channel-version-with-rollout": "{fallback} · progressive rollout of {target} ({percent})",
   "rollout-settings-info": "Progressive rollout information",
   "rollout-settings-help": "Stable fallback stays for most devices. A sticky share of devices, picked from a stable hash of each device ID, receives the rollout target until you promote or roll back. A new rollout target picks a new share.",
   "rollout-delivery-all-title": "All devices receive {target}",
@@ -4025,5 +4025,18 @@
   "enterprise-scale-mau-short": "MAU",
   "enterprise-scale-included-note": "1M MAU included. Slide to add MAU to your plan, billed with it. No custom contract.",
   "enterprise-scale-breakdown-yearly": "{base} Enterprise + {extra} for {mau} extra MAU, billed annually",
-  "enterprise-scale-extra-note": "Your plan includes {mau} MAU: the Enterprise 1M plus {extra} extra MAU, billed with the plan. Usage above the plan still uses credits."
+  "enterprise-scale-extra-note": "Your plan includes {mau} MAU: the Enterprise 1M plus {extra} extra MAU, billed with the plan. Usage above the plan still uses credits.",
+  "release-live-rollout-badge": "Progressive rollout · {percent}",
+  "release-live-rollout-paused": "Rollout paused at {percent}",
+  "release-live-rollout-zero": "Rollout at 0%",
+  "release-live-rollout-fallback": "Fallback {version} for the other {percent}",
+  "release-live-rollout-reach": "Rollout reach",
+  "release-live-rollout-reach-help": "{onTarget} of about {expected} targeted devices run this bundle ({percent} of {total} devices on this channel).",
+  "release-live-vs-fallback": "vs {rate} on {version}",
+  "release-live-uploaded": "Uploaded {time}",
+  "release-banner-rollout-title": "Progressive rollout running",
+  "release-banner-rollout": "Version {version} ({channel}) goes to {percent} of devices",
+  "release-banner-rollout-reach": "{percent} reached",
+  "bundle-install-view-chart": "Chart",
+  "bundle-install-view-table": "By bundle"
 }

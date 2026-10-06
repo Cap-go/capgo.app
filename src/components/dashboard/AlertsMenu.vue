@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ReleaseLiveDeployment } from '~/composables/useReleaseLive'
+import type { ReleaseLiveDeployment, ReleaseLiveRollout } from '~/composables/useReleaseLive'
 import { onClickOutside, useElementBounding, useMutationObserver, useWindowSize } from '@vueuse/core'
 import { computed, onMounted, ref, useId, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -16,6 +16,7 @@ defineProps<{
   appId: string
   release: ReleaseLiveDeployment | null
   adoptionPercent: number | null
+  rollout?: ReleaseLiveRollout | null
 }>()
 
 const emit = defineEmits<{
@@ -98,7 +99,7 @@ onClickOutside(panel, () => {
         <div ref="stack" class="flex flex-col gap-2 [&>*]:mb-0!">
           <CompatibilityBanner :app-id="appId" />
           <DeploymentBanner :app-id="appId" @deployed="emit('deployed')" />
-          <ReleaseBanner :app-id="appId" :release="release" :adoption-percent="adoptionPercent" />
+          <ReleaseBanner :app-id="appId" :release="release" :adoption-percent="adoptionPercent" :rollout="rollout" />
         </div>
       </div>
     </Teleport>
