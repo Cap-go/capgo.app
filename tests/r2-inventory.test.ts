@@ -100,6 +100,22 @@ describe('r2 inventory atomic ingestion', () => {
     expect(await applyObservations(db, bucket, snapshot, [{ key: 'key', object }], config)).toEqual(['key'])
     expect((await db.query('SELECT r2_state FROM public.r2_objects WHERE bucket_name = $1', [bucket])).rows[0].r2_state).toBe('deleted')
   }))
+  it.concurrent('commits successful observations while returning only concurrently changed keys', () => fixture(async (db, bucket, event) => {
+    await applyInventoryEvents(db, [event('healthy'), event('conflict')], config)
+    const snapshot = await readObservationSnapshot(db, bucket, ['healthy', 'conflict'])
+    await applyInventoryEvents(db, [event('conflict', 1000, 'deleted')], config)
+    const object = { size: 84, etag: 'observed-etag', lastModified: new Date().toISOString() }
+    expect(await applyObservations(db, bucket, snapshot, [
+      { key: 'healthy', object: { ...object, key: 'healthy' } },
+      { key: 'conflict', object: { ...object, key: 'conflict' } },
+    ], config)).toEqual(['conflict'])
+    const result = await db.query('SELECT r2_key, r2_state, size_bytes FROM public.r2_objects WHERE bucket_name = $1 ORDER BY r2_key', [bucket])
+    expect(result.rows).toEqual([
+      { r2_key: 'conflict', r2_state: 'deleted', size_bytes: '42' },
+      { r2_key: 'healthy', r2_state: 'present', size_bytes: '84' },
+    ])
+  }))
+
   it.concurrent('rejects inserting over a key created after a missing-key observation', () => fixture(async (db, bucket, event) => {
     const snapshot = await readObservationSnapshot(db, bucket, ['key'])
     await applyInventoryEvents(db, [event('key')], config)

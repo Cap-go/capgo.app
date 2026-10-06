@@ -41,23 +41,36 @@ function parseRepairTask(body: unknown, bucket: string): RepairTask {
   return data as RepairTask
 }
 
-export async function repairInventoryBatch(env: InventoryEnv, tasks: RepairTask[], config: InventoryConfig) {
+export async function repairInventoryBatch(env: InventoryEnv, tasks: RepairTask[], config: InventoryConfig): Promise<Set<string>> {
   const keys = [...new Set(tasks.map(task => task.key))]
   if (keys.length > 10)
     throw new Error('Repair batch exceeds 10 keys')
   const snapshot = await withDatabase(env, db => readObservationSnapshot(db, env.INVENTORY_BUCKET, keys))
   const observations: Parameters<typeof applyObservations>[3] = []
+  const failed = new Set<string>()
   // Only two HEAD requests can be in flight, and no DB connection is held during them.
   for (let offset = 0; offset < keys.length; offset += 2) {
-    const pair = await Promise.all(keys.slice(offset, offset + 2).map(async (key) => {
+    const pairKeys = keys.slice(offset, offset + 2)
+    const pair = await Promise.allSettled(pairKeys.map(async (key) => {
       const object = await env.ATTACHMENT_BUCKET.head(key)
       return { key, object: object ? { key, size: object.size, etag: normalizeEtag(object.etag), lastModified: object.uploaded.toISOString() } : null }
     }))
-    observations.push(...pair)
+    for (const [index, result] of pair.entries()) {
+      if (result.status === 'fulfilled') {
+        observations.push(result.value)
+      }
+      else {
+        failed.add(pairKeys[index])
+        console.error(JSON.stringify({ event: 'r2_inventory_head_failed', key: pairKeys[index], error: result.reason instanceof Error ? result.reason.message : 'Unknown error' }))
+      }
+    }
   }
-  const conflicts = await withDatabase(env, db => applyObservations(db, env.INVENTORY_BUCKET, snapshot, observations, config))
-  if (conflicts.length)
-    throw new Error('Concurrent inventory changes require another observation')
+  if (observations.length) {
+    const conflicts = await withDatabase(env, db => applyObservations(db, env.INVENTORY_BUCKET, snapshot, observations, config))
+    for (const key of conflicts)
+      failed.add(key)
+  }
+  return failed
 }
 
 function parseMessages<T>(messages: readonly Message<unknown>[], parse: (body: unknown) => T) {
@@ -115,10 +128,20 @@ export async function consumeInventoryBatch(batch: MessageBatch<unknown>, env: I
     if (batch.queue.endsWith('-repair')) {
       const { valid, invalid } = parseMessages(batch.messages, body => parseRepairTask(body, env.INVENTORY_BUCKET))
       await publishInvalidMessages(batch, invalid, env.REPAIR_DLQ)
-      if (valid.length)
-        await repairInventoryBatch(env, valid.map(item => item.value), INVENTORY_CONFIG)
-      for (const { message } of valid)
-        message.ack()
+      const failed = valid.length
+        ? await repairInventoryBatch(env, valid.map(item => item.value), INVENTORY_CONFIG)
+        : new Set<string>()
+      let retried = 0
+      for (const { message, value } of valid) {
+        if (failed.has(value.key)) {
+          message.retry({ delaySeconds: 30 })
+          retried++
+        }
+        else {
+          message.ack()
+        }
+      }
+      console.log(JSON.stringify({ event: 'r2_inventory_repair_batch', received: batch.messages.length, acknowledged: valid.length - retried, rejected: invalid.length, retried }))
     }
     else {
       const { valid, invalid } = parseMessages(batch.messages, body => parseInventoryEvent(body, env.INVENTORY_BUCKET))
@@ -126,11 +149,26 @@ export async function consumeInventoryBatch(batch: MessageBatch<unknown>, env: I
       const repairs = valid.length
         ? await withDatabase(env, db => applyInventoryEvents(db, valid.map(item => item.value), INVENTORY_CONFIG))
         : []
-      // Publication must succeed before acknowledging the source. Ambiguous events
-      // remain unmodified, so replay retries publication rather than losing repair.
-      if (repairs.length)
-        await env.REPAIR_QUEUE.sendBatch(repairs.map(body => ({ body, contentType: 'json' })))
-      for (const { message } of valid)
+      const repairKeys = new Set(repairs.map(task => task.key))
+      const pending = valid.filter(item => repairKeys.has(item.value.key))
+      for (const { message, value } of valid) {
+        if (!repairKeys.has(value.key))
+          message.ack()
+      }
+      // Ambiguous events need durable repair publication before acknowledgement.
+      // Other notifications have committed and do not need publication retries.
+      if (repairs.length) {
+        try {
+          await env.REPAIR_QUEUE.sendBatch(repairs.map(body => ({ body, contentType: 'json' })))
+        }
+        catch (error) {
+          console.error(JSON.stringify({ event: 'r2_inventory_repair_publish_failed', repairs: repairs.length, retried: pending.length, error: error instanceof Error ? error.message : 'Unknown error' }))
+          for (const { message } of pending)
+            message.retry({ delaySeconds: 30 })
+          return
+        }
+      }
+      for (const { message } of pending)
         message.ack()
       console.log(JSON.stringify({ event: 'r2_inventory_batch', received: batch.messages.length, accepted: valid.length, rejected: invalid.length, repairs: repairs.length }))
     }

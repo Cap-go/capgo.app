@@ -23,7 +23,7 @@ function fixture(bodies: unknown[], repair = false) {
   return { messages, batch: batch as unknown as MessageBatch<unknown>, env: env as unknown as Parameters<typeof consumeInventoryBatch>[1], retryAll: batch.retryAll }
 }
 beforeEach(() => {
-  vi.clearAllMocks()
+  vi.resetAllMocks()
   mocks.apply.mockResolvedValue([])
   mocks.publish.mockResolvedValue(undefined)
   mocks.eventDlq.mockResolvedValue(undefined)
@@ -104,7 +104,8 @@ describe('r2 inventory queue', () => {
     mocks.publish.mockRejectedValue(new Error('Queue unavailable'))
     await consumeInventoryBatch(f.batch, f.env)
     expect(f.messages[0].ack).not.toHaveBeenCalled()
-    expect(f.retryAll).toHaveBeenCalled()
+    expect(f.messages[0].retry).toHaveBeenCalledWith({ delaySeconds: 30 })
+    expect(f.retryAll).not.toHaveBeenCalled()
   })
   it('acknowledges only after awaited repair publication', async () => {
     const f = fixture([body])
@@ -125,6 +126,124 @@ describe('r2 inventory queue', () => {
     }
     expect(f.messages[0].ack).toHaveBeenCalledTimes(1)
   })
+  it('acknowledges committed notifications while retrying only failed repair publication', async () => {
+    const healthy = { ...body, object: { ...body.object, key: 'healthy' } }
+    const f = fixture([healthy, body, body])
+    mocks.apply.mockResolvedValue([{ bucket: 'inventory-test', key: 'legacy/file', kind: 'verify' }])
+    mocks.publish.mockRejectedValue(new Error('Repair queue unavailable'))
+    await consumeInventoryBatch(f.batch, f.env)
+    expect(f.messages[0].ack).toHaveBeenCalledTimes(1)
+    expect(f.messages[0].retry).not.toHaveBeenCalled()
+    for (const message of f.messages.slice(1)) {
+      expect(message.ack).not.toHaveBeenCalled()
+      expect(message.retry).toHaveBeenCalledWith({ delaySeconds: 30 })
+    }
+    expect(mocks.publish.mock.calls[0][0]).toHaveLength(1)
+    expect(f.retryAll).not.toHaveBeenCalled()
+  })
+
+  it('keeps normal notification acknowledgements independent of pending repair publication', async () => {
+    const healthy = { ...body, object: { ...body.object, key: 'healthy' } }
+    const f = fixture([healthy, body])
+    mocks.apply.mockResolvedValue([{ bucket: 'inventory-test', key: 'legacy/file', kind: 'verify' }])
+    let finishPublication: () => void = () => {}
+    mocks.publish.mockReturnValue(new Promise<void>((resolve) => {
+      finishPublication = resolve
+    }))
+    const consuming = consumeInventoryBatch(f.batch, f.env)
+    try {
+      await vi.waitFor(() => expect(mocks.publish).toHaveBeenCalledTimes(1))
+      expect(f.messages[0].ack).toHaveBeenCalledTimes(1)
+      expect(f.messages[1].ack).not.toHaveBeenCalled()
+      expect(mocks.end.mock.invocationCallOrder[0]).toBeLessThan(f.messages[0].ack.mock.invocationCallOrder[0])
+    }
+    finally {
+      finishPublication()
+      await consuming
+    }
+    expect(f.messages.every(message => message.ack.mock.calls.length === 1)).toBe(true)
+    expect(f.retryAll).not.toHaveBeenCalled()
+  })
+
+  it('acknowledges committed repair keys and retries only conflicting keys, including duplicate messages', async () => {
+    const task = (key: string) => ({ bucket: 'inventory-test', key, kind: 'verify' })
+    const f = fixture([task('healthy'), task('conflict'), task('conflict')], true)
+    let finishObservations: (keys: string[]) => void = () => {}
+    mocks.observe.mockReturnValue(new Promise<string[]>((resolve) => {
+      finishObservations = resolve
+    }))
+    const consuming = consumeInventoryBatch(f.batch, f.env)
+    try {
+      await vi.waitFor(() => expect(mocks.observe).toHaveBeenCalledTimes(1))
+      expect(f.messages.every(message => message.ack.mock.calls.length === 0 && message.retry.mock.calls.length === 0)).toBe(true)
+    }
+    finally {
+      finishObservations(['conflict'])
+      await consuming
+    }
+    expect(mocks.head).toHaveBeenCalledTimes(2)
+    expect(mocks.observe.mock.calls[0][3].map((item: { key: string }) => item.key)).toEqual(['healthy', 'conflict'])
+    expect(f.messages[0].ack).toHaveBeenCalledTimes(1)
+    expect(f.messages[0].retry).not.toHaveBeenCalled()
+    expect(mocks.end.mock.invocationCallOrder[1]).toBeLessThan(f.messages[0].ack.mock.invocationCallOrder[0])
+    for (const message of f.messages.slice(1)) {
+      expect(message.ack).not.toHaveBeenCalled()
+      expect(message.retry).toHaveBeenCalledWith({ delaySeconds: 30 })
+    }
+    expect(f.retryAll).not.toHaveBeenCalled()
+  })
+
+  it('isolates a failed HEAD, waits for its peer, and applies successful observations in later pairs', async () => {
+    const tasks = ['failed', 'slow', 'later-a', 'later-b'].map(key => ({ bucket: 'inventory-test', key, kind: 'verify' }))
+    const f = fixture(tasks, true)
+    let finishSlow: () => void = () => {}
+    mocks.head.mockImplementation(async (key: string) => {
+      if (key === 'failed')
+        throw new Error('Synthetic R2 HEAD failure')
+      if (key === 'slow')
+        await new Promise<void>((resolve) => { finishSlow = resolve })
+      return null
+    })
+    const consuming = consumeInventoryBatch(f.batch, f.env)
+    try {
+      await vi.waitFor(() => expect(mocks.head).toHaveBeenCalledTimes(2))
+      expect(mocks.observe).not.toHaveBeenCalled()
+      expect(f.messages.every(message => message.ack.mock.calls.length === 0 && message.retry.mock.calls.length === 0)).toBe(true)
+    }
+    finally {
+      finishSlow()
+      await consuming
+    }
+    expect(mocks.head).toHaveBeenCalledTimes(4)
+    expect(mocks.observe.mock.calls[0][3]).toEqual(tasks.slice(1).map(({ key }) => ({ key, object: null })))
+    expect(f.messages[0].ack).not.toHaveBeenCalled()
+    expect(f.messages[0].retry).toHaveBeenCalledWith({ delaySeconds: 30 })
+    expect(f.messages.slice(1).every(message => message.ack.mock.calls.length === 1 && message.retry.mock.calls.length === 0)).toBe(true)
+    expect(f.retryAll).not.toHaveBeenCalled()
+  })
+
+  it('retries all failed HEAD messages individually without opening a write connection', async () => {
+    const f = fixture(['a', 'b'].map(key => ({ bucket: 'inventory-test', key, kind: 'verify' })), true)
+    mocks.head.mockRejectedValue(new Error('Synthetic R2 outage'))
+    await consumeInventoryBatch(f.batch, f.env)
+    expect(mocks.observe).not.toHaveBeenCalled()
+    expect(mocks.end).toHaveBeenCalledTimes(1)
+    for (const message of f.messages) {
+      expect(message.ack).not.toHaveBeenCalled()
+      expect(message.retry).toHaveBeenCalledWith({ delaySeconds: 30 })
+    }
+    expect(f.retryAll).not.toHaveBeenCalled()
+  })
+
+  it.each(['snapshot', 'observe'] as const)('retries unconfirmed repair results when the database %s fails', async (stage) => {
+    const f = fixture(['a', 'b'].map(key => ({ bucket: 'inventory-test', key, kind: 'verify' })), true)
+    mocks[stage].mockRejectedValue(new Error('Synthetic database failure'))
+    await consumeInventoryBatch(f.batch, f.env)
+    expect(f.messages.every(message => message.ack.mock.calls.length === 0)).toBe(true)
+    expect(f.retryAll).toHaveBeenCalledWith({ delaySeconds: 30 })
+    expect(mocks.head).toHaveBeenCalledTimes(stage === 'snapshot' ? 0 : 2)
+  })
+
   it.each([false, true])('batches malformed messages into the matching DLQ without retrying (repair=%s)', async (repair) => {
     const validBody = repair ? { bucket: 'inventory-test', key: 'legacy/file', kind: 'verify' } : body
     const invalidBodies = [{ broken: true }, null]
