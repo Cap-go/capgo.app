@@ -439,6 +439,20 @@ const processedChartData = computed<ChartData<'line'> | null>(() => {
   const formattedLabels = generateDayLabels(targetLength)
   const datasets: ChartData<'line'>['datasets'] = []
 
+  // Compact card: stack the smallest bundles at the bottom so a new bundle
+  // grows up from the baseline and the dominant one fills the top.
+  if (props.variant === 'chart') {
+    const lastShare = (values: Array<number | undefined>) => {
+      for (let index = values.length - 1; index >= 0; index--) {
+        const value = values[index]
+        if (typeof value === 'number' && value > 0)
+          return value
+      }
+      return 0
+    }
+    normalizedDatasets.sort((a, b) => lastShare(a.normalizedValues) - lastShare(b.normalizedValues))
+  }
+
   normalizedDatasets.forEach(({ dataset, normalizedValues, normalizedCountValues }, datasetIndex) => {
     // Pad with nulls at the start if needed (when billing period starts before API data)
     const paddedValues = Array.from({ length: targetLength }, (_val, index) => {
@@ -684,7 +698,9 @@ const todayLineOptions = computed(() => {
 
 const chartOptions = computed<ChartOptions<'line'>>(() => {
   const hasMultipleDatasets = (processedChartData.value?.datasets.length ?? 0) > 1
-  const tooltipOptions = createTooltipConfig(hasMultipleDatasets, props.accumulated, props.useBillingPeriod ? currentRange.value?.startDate : false, hasMultipleDatasets ? tooltipClickHandler.value : undefined)
+  // Dates come from the range actually shown (billing period or the 1-30 day
+  // window); the tooltip's fallback assumes a 30-day window.
+  const tooltipOptions = createTooltipConfig(hasMultipleDatasets, props.accumulated, currentRange.value?.startDate ?? false, hasMultipleDatasets ? tooltipClickHandler.value : undefined)
 
   const pluginOptions = {
     legend: {
@@ -700,9 +716,11 @@ const chartOptions = computed<ChartOptions<'line'>>(() => {
 
   return {
     maintainAspectRatio: false,
+    // Filled areas have no points to hit, so hover by x position.
+    ...(props.variant === 'chart' ? { interaction: { mode: 'index' as const, intersect: false } } : {}),
     scales: (() => {
       const scales = createChartScales(isDark.value, {
-        max: props.accumulated ? 110 : 100,
+        max: props.accumulated && props.variant !== 'chart' ? 110 : 100,
         xStacked: props.accumulated,
         yStacked: props.accumulated,
         yTickCallback: (tickValue: string | number) => {
