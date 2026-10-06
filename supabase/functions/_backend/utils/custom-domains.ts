@@ -30,7 +30,7 @@ export async function cloudflareCustomHostname(c: Context, method: 'GET' | 'POST
   const { token } = customDomainConfig(c)
   const zoneResponse = await fetch('https://api.cloudflare.com/client/v4/zones?name=capgo.app&status=active', {
     headers: { Authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(8000),
+    signal: AbortSignal.timeout(5000),
   })
   const zones = await zoneResponse.json() as { success: boolean, result?: Array<{ id: string, name: string }> }
   const zoneId = zones.result?.find(zone => zone.name === 'capgo.app')?.id
