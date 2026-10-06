@@ -38,11 +38,8 @@ BEGIN
     -- raise notice '%s %s', plan.name, usage;
     RETURN NEXT IS(usage.storage_percent, (SELECT CAST ('200' AS DOUBLE PRECISION)), format('Storage usage = 200%% for "%s" plan', plan.name));
 
-    IF plan.name IS DISTINCT FROM 'Enterprise' THEN
-      RETURN NEXT ok(is_good_plan_v5_org('046a36ac-e03c-4590-9257-bd6c9dba9ee8') = false, format('(NOT) is_good_plan_v5_org for "%s" plan', plan.name));
-    ELSE
-      RETURN NEXT ok(is_good_plan_v5_org('046a36ac-e03c-4590-9257-bd6c9dba9ee8'), 'Is good plan for "pay as you go" even after storage is > 100%');
-    END IF;
+    -- Enterprise is no longer exempt: above its allowance it is blocked like every plan.
+    RETURN NEXT ok(is_good_plan_v5_org('046a36ac-e03c-4590-9257-bd6c9dba9ee8') = false, format('(NOT) is_good_plan_v5_org for "%s" plan', plan.name));
   END LOOP;  
 END;
 $$ LANGUAGE plpgsql;

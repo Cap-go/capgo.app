@@ -2168,6 +2168,20 @@ export async function countDevicesSB(
 
 const DEFAULT_PLAN_NAME = 'Solo'
 
+// Enterprise MAU slider: MAU bought on top of the plan allowance (part of the plan quota).
+export async function getOrgExtraMau(c: Context, orgId: string): Promise<number> {
+  const { data, error } = await supabaseAdmin(c)
+    .from('orgs')
+    .select('stripe_info(extra_mau)')
+    .eq('id', orgId)
+    .maybeSingle()
+  if (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'getOrgExtraMau', orgId, error })
+    return 0
+  }
+  return Number(data?.stripe_info?.extra_mau ?? 0)
+}
+
 export async function getCurrentPlanNameOrg(c: Context, orgId?: string): Promise<string> {
   if (!orgId)
     return DEFAULT_PLAN_NAME
