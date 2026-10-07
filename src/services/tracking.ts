@@ -22,6 +22,8 @@ type Tags = Record<TagKey, string | number | boolean>
  * Options for publishing analytics events
  */
 interface TrackOptions {
+  /** Stable identity for this event across delivery attempts. */
+  client_event_id?: string
   /**
    * Channel name
    * example: "waitlist"
@@ -72,7 +74,9 @@ export async function sendEvent(payload: TrackOptions): Promise<null> {
       return null
 
     const currentJwt = currentSession.session.access_token
-    const body = JSON.stringify(payload)
+    const clientEventId = payload.client_event_id ?? crypto.randomUUID()
+    const timestamp = payload.timestamp instanceof Date ? payload.timestamp.getTime() : payload.timestamp ?? Date.now()
+    const body = JSON.stringify({ ...payload, client_event_id: clientEventId, timestamp })
     const bodySize = new TextEncoder().encode(body).byteLength
 
     // Implement retry logic (3 attempts)

@@ -283,7 +283,12 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     existing_app: body.existing_app,
     block_provider_infra_requests: body.block_provider_infra_requests,
     device_data_collection: body.device_data_collection !== undefined
-      ? mergeDeviceDataCollection(previousApp.device_data_collection, body.device_data_collection)
+      ? (() => {
+          const patch = body.device_data_collection
+          if (patch === null || typeof patch !== 'object' || Array.isArray(patch))
+            throw simpleError('invalid_device_data_collection', 'device_data_collection must be an object')
+          return mergeDeviceDataCollection(previousApp.device_data_collection, patch)
+        })()
       : undefined,
     ios_store_url: body.ios_store_url,
     android_store_url: body.android_store_url,

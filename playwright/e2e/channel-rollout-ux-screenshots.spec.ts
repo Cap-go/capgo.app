@@ -116,8 +116,8 @@ test.describe('PR 3340 channel UX screenshots', () => {
       fullPage: false,
     })
 
-    await page.getByRole('button', { name: 'rollback', exact: true }).click()
-    await expect(page.locator('h3').filter({ hasText: 'Roll back progressive rollout?' })).toBeVisible({ timeout: 15000 })
+    await page.locator('[data-test="rollout-revert"]').click()
+    await expect(page.locator('h3').filter({ hasText: /^Revert rollout to / })).toBeVisible({ timeout: 15000 })
     await page.screenshot({
       path: resolve(screenshotDir, '07-rollout-rollback-confirm.png'),
     })

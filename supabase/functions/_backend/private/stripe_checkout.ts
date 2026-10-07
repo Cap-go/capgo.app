@@ -4,8 +4,8 @@ import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
-import { createCheckout } from '../utils/stripe.ts'
-import { supabaseClient } from '../utils/supabase.ts'
+import { createCheckout, EXTRA_MAU_UNIT, MAX_EXTRA_MAU } from '../utils/stripe.ts'
+import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
 import { getEnv } from '../utils/utils.ts'
 
 interface CheckoutData {
@@ -19,6 +19,30 @@ interface CheckoutData {
   successUrl: string
   cancelUrl: string
   orgId: string
+  // Enterprise MAU slider: MAU bought on top of the plan allowance.
+  extraMau?: number
+}
+
+function parseExtraMau(value: unknown) {
+  if (value === undefined || value === null || value === 0)
+    return 0
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > MAX_EXTRA_MAU || value % EXTRA_MAU_UNIT !== 0)
+    throw simpleError('invalid_extra_mau', `extraMau must be a multiple of ${EXTRA_MAU_UNIT} between 0 and ${MAX_EXTRA_MAU}`)
+  return value
+}
+
+// Only Enterprise sells extra MAU.
+async function getExtraMauCheckout(c: Parameters<typeof supabaseAdmin>[0], planId: string, extraMau: number) {
+  if (extraMau <= 0)
+    return undefined
+  const { data: plan, error } = await supabaseAdmin(c)
+    .from('plans')
+    .select('name, mau')
+    .eq('stripe_id', planId)
+    .single()
+  if (error || plan?.name !== 'Enterprise')
+    throw simpleError('extra_mau_not_allowed', 'Extra MAU is only available on the Enterprise plan', { planId })
+  return { includedMau: plan.mau, extraMau }
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -28,6 +52,7 @@ app.use('/', useCors)
 app.post('/', middlewareAuth, async (c) => {
   const body = await parseBody<CheckoutData>(c)
   cloudlog({ requestId: c.get('requestId'), message: 'post stripe checkout body', body })
+  const extraMau = parseExtraMau(body.extraMau)
 
   if (!body.orgId)
     throw simpleError('no_org_id_provided', 'No org_id provided')
@@ -59,9 +84,11 @@ app.post('/', middlewareAuth, async (c) => {
     throw simpleError('not_authorize', 'Not authorize')
 
   cloudlog({ requestId: c.get('requestId'), message: 'user', org })
-  const checkout = await createCheckout(c, org.customer_id, body.recurrence ?? 'month', body.priceId ?? 'price_1KkINoGH46eYKnWwwEi97h1B', body.successUrl ?? `${getEnv(c, 'WEBAPP_URL')}/app/usage`, body.cancelUrl ?? `${getEnv(c, 'WEBAPP_URL')}/app/usage`, body.clientReferenceId, body.attributionId, {
+  const planId = body.priceId ?? 'price_1KkINoGH46eYKnWwwEi97h1B'
+  const extraMauCheckout = await getExtraMauCheckout(c, planId, extraMau)
+  const checkout = await createCheckout(c, org.customer_id, body.recurrence ?? 'month', planId, body.successUrl ?? `${getEnv(c, 'WEBAPP_URL')}/app/usage`, body.cancelUrl ?? `${getEnv(c, 'WEBAPP_URL')}/app/usage`, body.clientReferenceId, body.attributionId, {
     visitorId: body.datafastVisitorId,
     sessionId: body.datafastSessionId,
-  }, body.affonsoReferral)
+  }, body.affonsoReferral, extraMauCheckout)
   return c.json({ url: checkout.url })
 })

@@ -1005,7 +1005,7 @@ async function upToDateFromReadCache(c: Context, body: AppInfos, appStatus: Awai
     return updateEnumerationLimitedResponse(c, existingUpdateEnumerationLimit.resetAt)
 
   const device = makeDevice(body, cachedRead.allowDeviceCustomId)
-  const deviceDataCollection = parseDeviceDataCollection(appStatus.device_data_collection)
+  const deviceDataCollection = appStatus.device_data_collection
   c.set('deviceDataCollection', deviceDataCollection)
   await setAppStatus(c, body.app_id, 'cloud', cachedRead.allowDeviceCustomId, appStatus.block_provider_infra_requests, deviceDataCollection)
   await backgroundTask(c, createStatsMau(c, body.device_id, body.app_id, cachedRead.ownerOrg, mauPlatformForCollection(body.platform, deviceDataCollection), mauVersionBuildForCollection(body.version_build, deviceDataCollection)))

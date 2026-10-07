@@ -5,15 +5,13 @@ import { useRoute, useRouter } from 'vue-router'
 import PaymentRequiredModal from '~/components/PaymentRequiredModal.vue'
 import Tabs from '~/components/Tabs.vue'
 import UnpaidState from '~/components/UnpaidState.vue'
-import { appDashboardTabs } from '~/constants/appDashboardTabs'
 import { appSettingsTabs } from '~/constants/appSettingsTabs'
 import { appTabs as baseAppTabs } from '~/constants/appTabs'
 import { bundleTabs } from '~/constants/bundleTabs'
 import { channelTabs } from '~/constants/channelTabs'
 import { deviceTabs } from '~/constants/deviceTabs'
-import { observeTabs } from '~/constants/observeTabs'
+import { observeTabs, observeViewTabs } from '~/constants/observeTabs'
 import { useOrganizationStore } from '~/stores/organization'
-import { isAppDashboardPath } from '~/utils/appDashboardPath'
 
 const router = useRouter()
 const route = useRoute()
@@ -128,13 +126,19 @@ const tabs = computed<Tab[]>(() => {
     key: tab.key ? `/app/${appRouteSegment.value}${tab.key}` : `/app/${appRouteSegment.value}`,
   }))
 })
+// The app root is the overview, the landing sub-tab of Observe. Some fixed
+// pages also live directly under /app/ and are not apps.
+const NON_APP_SEGMENTS = new Set(['new', 'plugins', 'modules', 'modules_test'])
+const isAppOverviewPath = computed(() => {
+  const match = route.path.match(/^\/app\/([^/]+)\/?$/)
+  return !!match && !NON_APP_SEGMENTS.has(match[1])
+})
+
 const appSectionType = computed(() => {
-  if (/^\/app\/[^/]+\/observe(?:\/|$)/.test(route.path))
+  if (/^\/app\/[^/]+\/observe(?:\/|$)/.test(route.path) || isAppOverviewPath.value)
     return 'observe'
   if (/^\/app\/[^/]+\/settings(?:\/|$)/.test(route.path))
     return 'settings'
-  if (isAppDashboardPath(route.path))
-    return 'dashboard'
   return null
 })
 
@@ -146,11 +150,9 @@ const secondaryTabBasePath = computed(() => {
   if (resourceType.value && resourceId.value)
     return `/app/${appRouteSegment.value}/${resourceType.value}/${resourceId.value}`
   if (secondaryTabType.value === 'observe')
-    return `/app/${appRouteSegment.value}/observe`
+    return `/app/${appRouteSegment.value}`
   if (secondaryTabType.value === 'settings')
     return `/app/${appRouteSegment.value}/settings`
-  if (secondaryTabType.value === 'dashboard')
-    return `/app/${appRouteSegment.value}`
   return ''
 })
 
@@ -161,7 +163,6 @@ const tabsConfig: Record<string, Tab[]> = {
   bundle: bundleTabs,
   observe: observeTabs,
   settings: appSettingsTabs,
-  dashboard: appDashboardTabs,
 }
 
 // Generate secondary tabs with full paths for the current resource or app section
@@ -191,11 +192,9 @@ const activeTab = computed(() => {
     return tabs.value[0]?.key ?? ''
 
   if (appSectionType.value === 'observe')
-    return `/app/${appRouteSegment.value}/observe/updater`
+    return `/app/${appRouteSegment.value}`
   if (appSectionType.value === 'settings')
     return `/app/${appRouteSegment.value}/settings`
-  if (appSectionType.value === 'dashboard')
-    return `/app/${appRouteSegment.value}`
   // If on a resource detail page (bundle/channel/device), keep parent tab active
   if (resourceType.value) {
     const parentTab = parentTabMap[resourceType.value]
@@ -236,8 +235,30 @@ function handleTab(key: string) {
   router.push(key)
 }
 
+// Third row: views inside an Observe page (?view=), e.g. Native > Actions.
+const observePage = computed(() => route.path.match(/^\/app\/[^/]+\/observe\/([^/]+)/)?.[1] ?? '')
+const tertiaryTabs = computed<Tab[]>(() => (observeViewTabs[observePage.value] ?? []).map(tab => ({
+  ...tab,
+  key: `${route.path}?view=${tab.key}`,
+})))
+const activeTertiaryTab = computed(() => {
+  const views = observeViewTabs[observePage.value] ?? []
+  const requested = typeof route.query.view === 'string' ? route.query.view : ''
+  const view = views.some(tab => tab.key === requested) ? requested : views[0]?.key
+  return view ? `${route.path}?view=${view}` : ''
+})
+
+function handleTertiaryTab(key: string) {
+  const view = new URLSearchParams(key.split('?')[1] ?? '').get('view') ?? undefined
+  void router.replace({ query: { ...route.query, view } })
+}
+
+// Keep the selected period when moving between Observe tabs.
 function handleSecondaryTab(key: string) {
-  router.push(key)
+  if (appSectionType.value === 'observe' && route.query.days)
+    router.push({ path: key, query: { days: route.query.days } })
+  else
+    router.push(key)
 }
 </script>
 
@@ -249,15 +270,19 @@ function handleSecondaryTab(key: string) {
       :secondary-tabs="secondaryTabs"
       :secondary-active-tab="activeSecondaryTab"
       no-wrap
+      :tertiary-tabs="tertiaryTabs"
+      :tertiary-active-tab="activeTertiaryTab"
       @update:active-tab="handleTab"
       @update:secondary-active-tab="handleSecondaryTab"
+      @update:tertiary-active-tab="handleTertiaryTab"
     />
     <main class="relative flex flex-1 w-full min-h-0 mt-0 overflow-hidden bg-blue-50 dark:bg-slate-800/40">
-      <div v-if="showUnpaidState" class="flex-1 w-full min-h-0 mx-auto overflow-y-auto">
+      <div v-if="showUnpaidState" data-native-scroll class="flex-1 w-full min-h-0 mx-auto overflow-y-auto">
         <UnpaidState />
       </div>
       <template v-else>
         <div
+          data-native-scroll
           class="flex-1 w-full min-h-0 mx-auto"
           :class="showPaymentOverlay ? 'overflow-hidden blur-sm pointer-events-none select-none' : 'overflow-y-auto'"
         >

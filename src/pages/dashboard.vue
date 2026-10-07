@@ -118,6 +118,7 @@ function handleTab(key: string) {
     <main class="relative flex flex-1 w-full min-h-0 mt-0 overflow-hidden bg-blue-50 dark:bg-slate-800/40">
       <div
         ref="scrollContainer"
+        data-native-scroll
         class="relative flex-1 w-full min-h-0 px-4 pt-2 mx-auto mb-8 sm:px-6 md:pt-8 lg:px-8 max-w-9xl"
         :class="shouldBlurContent ? 'overflow-hidden' : 'overflow-y-auto'"
       >

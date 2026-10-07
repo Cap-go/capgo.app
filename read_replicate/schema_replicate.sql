@@ -448,7 +448,8 @@ CREATE TABLE public.stripe_info (
     last_stripe_event_at timestamp with time zone,
     past_due_at timestamp with time zone,
     churn_reason text,
-    is_above_plan boolean
+    is_above_plan boolean,
+    extra_mau bigint DEFAULT 0 NOT NULL
 );
 
 ALTER TABLE ONLY public.stripe_info REPLICA IDENTITY FULL;

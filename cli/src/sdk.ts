@@ -78,7 +78,7 @@ import { addOrganizationInternal } from './organization/add'
 import { deleteOrganizationInternal } from './organization/delete'
 import { listOrganizationsInternal } from './organization/list'
 import { setOrganizationInternal } from './organization/set'
-import { promoteChannelOptionsSchema, requestBuildOptionsSchema, updateChannelOptionsSchema, uploadOptionsSchema } from './schemas/sdk'
+import { promoteChannelOptionsSchema, requestBuildOptionsSchema, updateAppOptionsSchema, updateChannelOptionsSchema, uploadOptionsSchema } from './schemas/sdk'
 import { CliUserError } from './shared/cli-user-error'
 import { getUserIdInternal } from './user/account'
 import { createSupabaseClient, findSavedKey, getConfig, getLocalConfig } from './utils'
@@ -255,24 +255,25 @@ export class CapgoSDK {
    */
   async updateApp(options: UpdateAppOptions): Promise<SDKResult> {
     try {
+      const parsed = updateAppOptionsSchema.parse(options)
       const internalOptions: AppOptions = {
-        apikey: options.apikey || this.apikey || findSavedKey(true),
-        supaHost: options.supaHost || this.supaHost,
-        supaAnon: options.supaAnon || this.supaAnon,
-        name: options.name,
-        icon: options.icon,
-        retention: options.retention,
-        collectCountry: options.collectCountry,
-        collectPlatform: options.collectPlatform,
-        collectOsVersion: options.collectOsVersion,
-        collectPluginVersion: options.collectPluginVersion,
-        collectVersionBuild: options.collectVersionBuild,
-        collectIsEmulator: options.collectIsEmulator,
-        collectIsProd: options.collectIsProd,
-        collectInstallSource: options.collectInstallSource,
+        apikey: parsed.apikey || this.apikey || findSavedKey(true),
+        supaHost: parsed.supaHost || this.supaHost,
+        supaAnon: parsed.supaAnon || this.supaAnon,
+        name: parsed.name,
+        icon: parsed.icon,
+        retention: parsed.retention,
+        collectCountry: parsed.collectCountry,
+        collectPlatform: parsed.collectPlatform,
+        collectOsVersion: parsed.collectOsVersion,
+        collectPluginVersion: parsed.collectPluginVersion,
+        collectVersionBuild: parsed.collectVersionBuild,
+        collectIsEmulator: parsed.collectIsEmulator,
+        collectIsProd: parsed.collectIsProd,
+        collectInstallSource: parsed.collectInstallSource,
       }
 
-      await setAppInternal(options.appId, internalOptions, true)
+      await setAppInternal(parsed.appId, internalOptions, true)
 
       return { success: true }
     }

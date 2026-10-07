@@ -238,6 +238,7 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     },
   },
   { slug: 'app-overview', path: '/app/com.demo.app', auth: true },
+  { slug: 'app-settings-usage', path: '/app/com.demo.app/settings/usage', auth: true },
   { slug: 'app-dashboard-native', path: '/app/com.demo.app/native', auth: true },
   { slug: 'app-dashboard-installs', path: '/app/com.demo.app/installs', auth: true },
   { slug: 'app-dashboard-active-bundle', path: '/app/com.demo.app/active-bundle', auth: true },
@@ -371,7 +372,8 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       // Seed data has no native observe events, so fixture the stats to show the populated layout.
       await mockNativeObserveStats(page)
       await page.goto('/app/com.demo.app/observe/native')
-      await page.getByRole('heading', { name: 'Action breakdown' }).waitFor()
+      // Base renders "Action breakdown" as a heading, head as a detail tab.
+      await page.getByRole('heading', { name: 'Action breakdown' }).or(page.getByRole('button', { name: 'Action breakdown', exact: true })).first().waitFor()
     },
   },
   {
@@ -382,8 +384,13 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await mockNativeObserveStats(page)
       await page.goto('/app/com.demo.app/observe/native')
       const heading = page.getByRole('heading', { name: 'Action breakdown' })
-      await heading.waitFor()
-      await heading.evaluate(el => el.scrollIntoView({ block: 'start' }))
+      const tab = page.getByRole('button', { name: 'Action breakdown', exact: true })
+      await heading.or(tab).first().waitFor()
+      // Head shows one detail table at a time behind third-level tabs; base stacks them.
+      if (await tab.isVisible())
+        await tab.click()
+      else
+        await heading.evaluate(el => el.scrollIntoView({ block: 'start' }))
     },
   },
   { slug: 'observe-compatibility', path: '/app/com.demo.app/observe/compatibility', auth: true },

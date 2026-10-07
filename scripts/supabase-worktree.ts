@@ -288,7 +288,7 @@ function parseInlineEnvAssignments(args: string[]): { env: Record<string, string
 /**
  * Run a Supabase CLI command against the current worktree's generated `--workdir`.
  */
-function buildSupabaseInvocation(args: string[], repoRoot: string): { cmd: string, args: string[] } {
+function buildSupabaseInvocation(args: string[], repoRoot: string): { cmd: string, args: string[], env: NodeJS.ProcessEnv } {
   const { workdir, cfg } = ensureWorktreeSupabaseDir(repoRoot)
   const supa = getSupabaseCmd(repoRoot)
   const commandArgs = [...args]
@@ -297,6 +297,17 @@ function buildSupabaseInvocation(args: string[], repoRoot: string): { cmd: strin
 
   if (isFunctionsServe && !hasEnvFile)
     commandArgs.push('--env-file', ensureFunctionsEnvFile(repoRoot, workdir, cfg))
+
+  // `functions serve` writes its main script under $TMPDIR and bind-mounts it to
+  // /root/index.ts. On macOS $TMPDIR is /var/folders/..., which Docker Desktop
+  // does not share, so the container sees an empty directory and edge-runtime
+  // crashes with "Is a directory (os error 21)". Keep it inside the workdir.
+  const env = { ...process.env }
+  if (isFunctionsServe) {
+    const tmpDir = resolve(workdir, 'tmp')
+    mkdirSync(tmpDir, { recursive: true })
+    env.TMPDIR = tmpDir
+  }
 
   // Supabase CLI 2.109+ plpgsql_check warns on intentional STABLE helpers that
   // call auth.uid()/request headers. Keep emitting warnings, but do not fail CI
@@ -312,14 +323,14 @@ function buildSupabaseInvocation(args: string[], repoRoot: string): { cmd: strin
     }
   }
 
-  return { cmd: supa.cmd, args: [...supa.argsPrefix, ...commandArgs, '--workdir', workdir] }
+  return { cmd: supa.cmd, args: [...supa.argsPrefix, ...commandArgs, '--workdir', workdir], env }
 }
 
 function runSupabase(args: string[], repoRoot: string): number {
   const invocation = buildSupabaseInvocation(args, repoRoot)
   const res = spawnSync(invocation.cmd, invocation.args, {
     stdio: 'inherit',
-    env: process.env,
+    env: invocation.env,
   })
   return res.status ?? 1
 }
@@ -334,7 +345,7 @@ function runSupabaseStreaming(args: string[], repoRoot: string): Promise<{ statu
   return new Promise((resolvePromise) => {
     const child = spawn(invocation.cmd, invocation.args, {
       stdio: ['inherit', 'pipe', 'pipe'],
-      env: process.env,
+      env: invocation.env,
     })
     let output = ''
     child.stdout.on('data', (chunk: Buffer) => {

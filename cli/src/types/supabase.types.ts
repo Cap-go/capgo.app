@@ -1598,7 +1598,7 @@ export type Database = {
           is_prod?: boolean | null
           key_id?: string | null
           os_version?: string | null
-          platform?: Database["public"]["Enums"]["platform_os"]
+          platform?: Database["public"]["Enums"]["platform_os"] | null
           plugin_version?: string
           updated_at?: string
           version?: number | null
@@ -2729,6 +2729,7 @@ export type Database = {
           created_at: string
           customer_country: string | null
           customer_id: string
+          extra_mau: number
           id: number
           is_good_plan: boolean | null
           last_stripe_event_at: string | null
@@ -2756,6 +2757,7 @@ export type Database = {
           created_at?: string
           customer_country?: string | null
           customer_id: string
+          extra_mau?: number
           id?: number
           is_good_plan?: boolean | null
           last_stripe_event_at?: string | null
@@ -2783,6 +2785,7 @@ export type Database = {
           created_at?: string
           customer_country?: string | null
           customer_id?: string
+          extra_mau?: number
           id?: number
           is_good_plan?: boolean | null
           last_stripe_event_at?: string | null
