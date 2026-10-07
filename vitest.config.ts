@@ -45,6 +45,7 @@ export default defineConfig(({ mode }) => ({
     alias: {
       '@capgo/cli/sdk': path.resolve(cwd(), 'cli/src/sdk.ts'),
       '~/': `${path.resolve(cwd(), 'src')}/`,
+      '@capgo/capacitor-notifications': path.resolve(cwd(), 'packages/capacitor-notifications/src/index.ts'),
     },
   },
   test: {

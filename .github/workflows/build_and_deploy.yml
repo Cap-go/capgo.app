@@ -532,6 +532,7 @@ jobs:
       - name: Prepare mobile project
         run: |
           bun run ${{ env.BUILD_SCRIPT }}
+          bash scripts/vendor-workspace-native-plugins.sh
           bunx cap sync ios
       - name: Request iOS build through Capgo CLI
         env:
@@ -584,6 +585,7 @@ jobs:
       - name: Prepare mobile project
         run: |
           bun run ${{ env.BUILD_SCRIPT }}
+          bash scripts/vendor-workspace-native-plugins.sh
           bunx cap sync android
       - name: Add Firebase config for push notifications
         # google-services.json is gitignored. Without it the google-services Gradle

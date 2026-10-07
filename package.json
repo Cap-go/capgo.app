@@ -288,7 +288,7 @@
     "@capgo/capacitor-nativegeocoder": "^8.0.51",
     "@capgo/capacitor-navigation-bar": "^8.2.10",
     "@capgo/capacitor-nfc": "^8.2.10",
-    "@capgo/capacitor-notifications": "npm:@capgo/capacitor-notifications@0.1.13",
+    "@capgo/capacitor-notifications": "workspace:*",
     "@capgo/capacitor-pdf-generator": "^8.0.39",
     "@capgo/capacitor-pedometer": "^8.0.43",
     "@capgo/capacitor-persistent-account": "^8.0.41",

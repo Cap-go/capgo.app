@@ -55,6 +55,7 @@ jobs:
         # regenerate it here before `capgo build request` uploads the workspace.
         run: |
           bun run build
+          bash scripts/vendor-workspace-native-plugins.sh
           bunx cap sync android
       - name: Add Firebase config for push notifications
         # google-services.json is gitignored. Without it the google-services Gradle

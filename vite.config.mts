@@ -191,6 +191,8 @@ export default defineConfig({
   resolve: {
     alias: {
       '~/': `${path.resolve(__dirname, 'src')}/`,
+      // Workspace plugin: bundle its TypeScript sources so the app never needs its dist build.
+      '@capgo/capacitor-notifications': path.resolve(__dirname, 'packages/capacitor-notifications/src/index.ts'),
     },
   },
   // CI serves a built preview; include browser fixtures only in that test build.

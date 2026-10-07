@@ -17,7 +17,7 @@ public class CapgoMessagingService extends FirebaseMessagingService {
     @Override
     public void onMessageReceived(@NonNull RemoteMessage remoteMessage) {
         super.onMessageReceived(remoteMessage);
-        CapgoNotificationsPlugin.sendRemoteMessage(remoteMessage);
+        CapgoNotificationsPlugin.sendRemoteMessage(this, remoteMessage);
         PushNotificationsPlugin.sendRemoteMessage(remoteMessage);
     }
 

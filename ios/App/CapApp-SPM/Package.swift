@@ -81,7 +81,7 @@ let package = Package(
         .package(name: "CapgoCapacitorNativegeocoder", path: "../../../node_modules/@capgo/capacitor-nativegeocoder"),
         .package(name: "CapgoCapacitorNavigationBar", path: "../../../node_modules/@capgo/capacitor-navigation-bar"),
         .package(name: "CapgoCapacitorNfc", path: "../../../node_modules/@capgo/capacitor-nfc"),
-        .package(name: "CapgoCapacitorNotifications", path: "../../../node_modules/@capgo/capacitor-notifications"),
+        .package(name: "CapgoCapacitorNotifications", path: "../../../packages/capacitor-notifications"),
         .package(name: "CapgoCapacitorPdfGenerator", path: "../../../node_modules/@capgo/capacitor-pdf-generator"),
         .package(name: "CapgoCapacitorPedometer", path: "../../../node_modules/@capgo/capacitor-pedometer"),
         .package(name: "CapgoCapacitorPersistentAccount", path: "../../../node_modules/@capgo/capacitor-persistent-account"),
