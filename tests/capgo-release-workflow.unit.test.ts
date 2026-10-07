@@ -1,9 +1,11 @@
+/* eslint-disable no-template-curly-in-string -- Tests assert literal GitHub Actions expressions. */
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 
 interface WorkflowStep {
   if?: string
+  env?: Record<string, string>
   name?: string
   run?: string
   uses?: string
@@ -20,7 +22,7 @@ interface WorkflowJob {
 interface WorkflowDefinition {
   concurrency?: {
     'cancel-in-progress'?: boolean
-    group?: string
+    'group'?: string
   }
   jobs?: Record<string, WorkflowJob>
 }
@@ -56,13 +58,13 @@ describe('native-aware Capgo release workflow', () => {
 
     expect(workflow.concurrency?.['cancel-in-progress']).toBe(true)
     expect(workflow.concurrency?.group).toContain('github.run_attempt == 1')
-    expect(workflow.concurrency?.group).toContain("!startsWith(github.event.head_commit.message, 'chore(release):')")
-    expect(workflow.concurrency?.group).toContain("!startsWith(github.event.head_commit.message, 'chore(auto-sync):')")
+    expect(workflow.concurrency?.group).toContain('!startsWith(github.event.head_commit.message, \'chore(release):\')')
+    expect(workflow.concurrency?.group).toContain('!startsWith(github.event.head_commit.message, \'chore(auto-sync):\')')
     expect(workflow.concurrency?.group).toContain('github.ref')
     expect(workflow.concurrency?.group).toContain('github.run_id')
     expect(workflow.concurrency?.group).toContain('github.run_attempt')
-    expect(workflow.jobs?.changes?.if).not.toContain("chore(auto-sync):")
-    expect(workflow.jobs?.['bump-version']?.if).not.toContain("chore(auto-sync):")
+    expect(workflow.jobs?.changes?.if).not.toContain('chore(auto-sync):')
+    expect(workflow.jobs?.['bump-version']?.if).not.toContain('chore(auto-sync):')
   })
 
   it.concurrent('allows only unpublished reruns for the current branch tip', async () => {
@@ -79,8 +81,8 @@ describe('native-aware Capgo release workflow', () => {
       expect(guard?.run).toContain('current_sha" != "$GITHUB_SHA')
       expect(guard?.run).toContain('git fetch --force --prune --prune-tags origin')
       expect(guard?.run).toContain('all_release_tags="$(git tag --contains "$GITHUB_SHA"')
-      expect(guard?.run).toContain("printf '%s\\n' \"$all_release_tags\" | grep -v -- '-alpha\\.' || true")
-      expect(guard?.run).toContain("'capgo-*-alpha.*'")
+      expect(guard?.run).toContain('printf \'%s\\n\' "$all_release_tags" | grep -v -- \'-alpha\\.\' || true')
+      expect(guard?.run).toContain('\'capgo-*-alpha.*\'')
       expect(guard?.run).toContain('A release tag already contains')
       expect(guard?.run).toContain('exit 1')
       expect(steps.indexOf(guard!)).toBeGreaterThan(checkoutIndex)
@@ -97,6 +99,7 @@ describe('native-aware Capgo release workflow', () => {
       'read_replica_schema',
       'deploy_webapp',
       'deploy_api',
+      'deploy_r2_inventory',
       'deploy_translation_worker',
       'deploy_files',
       'deploy_plugin_regions',
@@ -109,7 +112,7 @@ describe('native-aware Capgo release workflow', () => {
       .flatMap(job => job.steps ?? [])
       .filter(step => step.uses?.startsWith('actions/checkout@'))
 
-    expect(workflowSource).toContain("group: ${{ github.workflow }}-${{ contains(github.ref_name, '-alpha.') && 'alpha' || 'production' }}")
+    expect(workflowSource).toContain('group: ${{ github.workflow }}-${{ contains(github.ref_name, \'-alpha.\') && \'alpha\' || \'production\' }}')
     expect(workflowSource).toContain('cancel-in-progress: false')
     expect(workflowSource).toContain('deploy_tag: ${{ steps.target.outputs.deploy_tag }}')
     expect(workflowSource).toContain('deploy_sha: ${{ steps.target.outputs.deploy_sha }}')
@@ -140,10 +143,43 @@ describe('native-aware Capgo release workflow', () => {
     for (const checkout of allCheckoutSteps)
       expect(checkout.uses).toBe('actions/checkout@v6')
     expect(workflowSource).toContain('tag_name: ${{ needs.changes.outputs.deploy_tag }}')
-    expect(workflowSource).toContain("prerelease: ${{ needs.changes.outputs.is_alpha == 'true' }}")
+    expect(workflowSource).toContain('prerelease: ${{ needs.changes.outputs.is_alpha == \'true\' }}')
     const supabaseDeployIndex = workflowSource.indexOf('  supabase_deploy:')
     expect(supabaseDeployIndex).toBeGreaterThan(-1)
     expect(workflowSource.slice(supabaseDeployIndex)).not.toContain('github.ref')
+  })
+
+  it.concurrent('provisions inventory queues before deploying the consumer without enabling bucket notifications', async () => {
+    const source = await readWorkflow(workflowPaths.deploy)
+    const workflow = parseWorkflow(source)
+    const job = workflow.jobs?.deploy_r2_inventory
+    const steps = job?.steps ?? []
+    const provision = steps.find(step => step.name === 'Ensure R2 inventory queues')
+    const deploy = steps.find(step => step.name === 'Deploy CF Worker R2 inventory')
+    const environment = steps.find(step => step.name === 'Select inventory environment')
+
+    expect(source).toContain('r2_inventory: ${{ steps.scope.outputs.r2_inventory }}')
+    expect(job?.needs).toEqual(['changes', 'supabase_deploy', 'read_replica_schema'])
+    expect(job?.if).toContain('needs.changes.outputs.r2_inventory == \'true\'')
+    expect(job?.if).toContain('needs.supabase_deploy.result == \'success\'')
+    expect(job?.if).toContain('needs.changes.outputs.supabase != \'true\'')
+    expect(job?.if).toContain('needs.read_replica_schema.result == \'success\'')
+    expect(job?.if).toContain('needs.changes.outputs.is_alpha == \'true\'')
+    expect(job?.permissions).toEqual({ contents: 'read' })
+    expect(environment?.run).toContain('needs.changes.outputs.is_alpha')
+    expect(environment?.run).toContain('INVENTORY_ENV=alpha')
+    expect(environment?.run).toContain('INVENTORY_ENV=prod')
+    expect(provision?.run).toContain('ensure-r2-inventory-queues.ts "${{ env.INVENTORY_ENV }}"')
+    expect(deploy?.run).toContain('wrangler deploy --config cloudflare_workers/r2_inventory/wrangler.jsonc --env="${{ env.INVENTORY_ENV }}"')
+    expect(steps.indexOf(provision!)).toBeLessThan(steps.indexOf(deploy!))
+    for (const step of [provision, deploy]) {
+      expect(step?.run?.split('\n')[0]).toBe('bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"')
+      expect(step?.env).toEqual({
+        CLOUDFLARE_API_TOKEN: '${{ secrets.CLOUDFLARE_API_TOKEN }}',
+        CLOUDFLARE_ACCOUNT_ID: '${{ secrets.CLOUDFLARE_ACCOUNT_ID }}',
+      })
+    }
+    expect(steps.map(step => step.run ?? '').join('\n')).not.toContain('notification create')
   })
 
   it.concurrent('keeps post-merge tests and publishes release refs atomically', async () => {
@@ -152,7 +188,7 @@ describe('native-aware Capgo release workflow', () => {
     expect(workflow).toContain('test:\n    needs: changes')
     expect(workflow).toContain('uses: ./.github/workflows/tests.yml')
     expect(workflow).toContain('needs: [changes, test]')
-    expect(workflow).toContain("needs.test.result == 'success'")
+    expect(workflow).toContain('needs.test.result == \'success\'')
     expect(workflow).toContain('--latest-stable')
     expect(workflow).toContain('--latest-alpha')
     expect(workflow).toContain('release-base-sha')
@@ -174,10 +210,10 @@ describe('native-aware Capgo release workflow', () => {
     expect(bumpSource).not.toContain('has_migration_changes')
     expect(bumpSource).not.toContain('migration_scope')
     expect(syncJob?.needs).toEqual(['changes', 'read_replica_schema', 'supabase_deploy'])
-    expect(syncJob?.if).toContain("needs.changes.outputs.is_alpha != 'true'")
-    expect(syncJob?.if).toContain("needs.changes.outputs.requires_schema_types_sync == 'true'")
-    expect(syncJob?.if).toContain("needs.read_replica_schema.result == 'success'")
-    expect(syncJob?.if).toContain("needs.supabase_deploy.result == 'success'")
+    expect(syncJob?.if).toContain('needs.changes.outputs.is_alpha != \'true\'')
+    expect(syncJob?.if).toContain('needs.changes.outputs.requires_schema_types_sync == \'true\'')
+    expect(syncJob?.if).toContain('needs.read_replica_schema.result == \'success\'')
+    expect(syncJob?.if).toContain('needs.supabase_deploy.result == \'success\'')
     expect(syncJob?.permissions?.contents).toBe('write')
     expect(syncStep?.run).toContain('for attempt in 1 2 3')
     expect(syncStep?.run).toContain('refs/remotes/schema-sync/main')
@@ -197,7 +233,7 @@ describe('native-aware Capgo release workflow', () => {
     const decision = getStep(workflow, 'Resolve Capgo native release bump')
 
     expect(workflow).toContain('needs: [changes, test]')
-    expect(workflow).toContain("needs.test.result == 'success'")
+    expect(workflow).toContain('needs.test.result == \'success\'')
     expect(workflow.indexOf('Resolve Capgo native release bump')).toBeLessThan(
       workflow.indexOf('Create version bumps'),
     )
@@ -215,14 +251,14 @@ describe('native-aware Capgo release workflow', () => {
       previousTagGuardIndex,
     )
     const releaseLineElseIndex = releaseLineLookup.indexOf('else')
-    const stableTagMatcherIndex = releaseLineLookup.indexOf("--match 'capgo-*' --exclude '*-alpha.*'")
+    const stableTagMatcherIndex = releaseLineLookup.indexOf('--match \'capgo-*\' --exclude \'*-alpha.*\'')
     expect(stableTagMatcherIndex).toBeGreaterThan(-1)
     expect(stableTagMatcherIndex).toBeLessThan(releaseLineElseIndex)
-    expect(releaseLineLookup.indexOf("--match 'capgo-*-alpha.*'")).toBeGreaterThan(releaseLineElseIndex)
+    expect(releaseLineLookup.indexOf('--match \'capgo-*-alpha.*\'')).toBeGreaterThan(releaseLineElseIndex)
 
     const guardedReleaseLookup = decision.slice(previousTagGuardIndex, releaseAsMajorIndex)
     expect(guardedReleaseLookup).toContain('gh release view "$previous_tag"')
-    expect(guardedReleaseLookup).toContain("--json isDraft --jq '.isDraft'")
+    expect(guardedReleaseLookup).toContain('--json isDraft --jq \'.isDraft\'')
     expect(guardedReleaseLookup).toContain('if [ "$release_is_draft" != "false" ]')
     expect(decision.slice(0, previousTagGuardIndex)).not.toContain('gh release view "$previous_tag"')
     expect(decision.slice(releaseAsMajorIndex)).not.toContain('gh release view "$previous_tag"')

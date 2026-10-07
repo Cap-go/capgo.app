@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions, Plugin } from 'chart.js'
+import type { PropType } from 'vue'
 import type { TooltipClickHandler } from '~/services/chartTooltip'
 import type { NativeActiveDevicesSummary, NativeDailyPlatformActive } from '~/services/nativeDeviceStats'
 import type { Organization } from '~/stores/organization'
@@ -55,6 +56,12 @@ const props = defineProps({
   usageKind: {
     type: String,
     default: 'bundle',
+  },
+  // 'chart' renders only the version chart: the page owns the title, the
+  // shared period selector and the KPI tiles.
+  variant: {
+    type: String as PropType<'full' | 'chart'>,
+    default: 'full',
   },
 })
 
@@ -524,6 +531,130 @@ const isDemoMode = computed(() => shouldShowDashboardDemoData({
 
 const hasData = computed(() => !!(processedChartData.value && processedChartData.value.datasets.length > 0) || isDemoMode.value)
 
+// Compact card (variant "chart"): a readable bundle mix even with dozens of
+// bundles. Each day is normalized from device counts so it always adds up to
+// 100%, a day without data keeps the previous mix instead of dropping to 0,
+// and only the top bundles get a color; the rest are grouped as "Other".
+const COMPACT_TOP_BUNDLES = 4
+const COMPACT_PALETTE = ['#119eff', '#22c55e', '#f59e0b', '#a855f7']
+const COMPACT_OTHER_COLOR = '#94a3b8'
+const compactChart = computed(() => {
+  const source = processedChartData.value
+  const empty = { data: { labels: [], datasets: [] } as ChartData<'line'>, legend: [] as Array<{ name: string, color: string, share: string, devices: string }>, counts: [] as number[] }
+  if (!source || props.variant !== 'chart')
+    return empty
+  const labels = (source.labels ?? []) as string[]
+  const series = source.datasets.map((dataset) => {
+    const base = (dataset as { metaBaseValues?: Array<number | null> }).metaBaseValues ?? []
+    const counts = (dataset as { metaCountValues?: Array<number | undefined> }).metaCountValues ?? []
+    return { name: String(dataset.label ?? ''), base, counts }
+  })
+  const hasCounts = series.some(entry => entry.counts.some(value => (value ?? 0) > 0))
+  // Raw weight per bundle and day: device counts when known, else the share.
+  const weight = (entry: typeof series[number], index: number) => Math.max(0, Number(hasCounts ? entry.counts[index] ?? 0 : entry.base[index] ?? 0) || 0)
+
+  const days = labels.length
+  const shares: number[][] = series.map(() => Array.from<number>({ length: days }).fill(0))
+  const devicesPerDay: number[] = Array.from<number>({ length: days }).fill(0)
+  let lastKnown: number[] | null = null
+  const hasDay: boolean[] = []
+  for (let day = 0; day < days; day++) {
+    const weights = series.map(entry => weight(entry, day))
+    const total = weights.reduce((sum, value) => sum + value, 0)
+    if (total > 0) {
+      lastKnown = weights.map(value => (value / total) * 100)
+      devicesPerDay[day] = hasCounts ? total : 0
+    }
+    hasDay[day] = !!lastKnown
+    if (lastKnown) {
+      for (let entry = 0; entry < series.length; entry++)
+        shares[entry][day] = lastKnown[entry]
+    }
+  }
+  const lastDay = hasDay.lastIndexOf(true)
+  if (lastDay < 0)
+    return empty
+
+  const ranked = series
+    .map((entry, index) => ({ ...entry, index, latest: shares[index][lastDay] }))
+    .filter(entry => shares[entry.index].some(value => value > 0))
+    .sort((a, b) => b.latest - a.latest)
+  const top = ranked.slice(0, COMPACT_TOP_BUNDLES)
+  const rest = ranked.slice(COMPACT_TOP_BUNDLES)
+  const valuesFor = (indexes: number[]) => Array.from({ length: days }, (_value, day) => hasDay[day]
+    ? indexes.reduce((sum, index) => sum + shares[index][day], 0)
+    : null)
+  const countsFor = (indexes: number[]) => Array.from({ length: days }, (_value, day) => indexes.reduce((sum, index) => sum + Math.max(0, Number(series[index].counts[day] ?? 0) || 0), 0))
+
+  const groups = [
+    ...top.map((entry, rank) => ({ name: entry.name, color: COMPACT_PALETTE[rank], indexes: [entry.index] })),
+    ...(rest.length ? [{ name: t('version-chart-other'), color: COMPACT_OTHER_COLOR, indexes: rest.map(entry => entry.index) }] : []),
+  ]
+  // Bottom to top: Other, then the top bundles from smallest to largest, so a
+  // new bundle grows from the baseline and the dominant one fills the top.
+  const stackOrder = [...groups].reverse()
+  const datasets = stackOrder.map((group, position) => ({
+    label: group.name,
+    data: valuesFor(group.indexes),
+    borderColor: group.color,
+    backgroundColor: `${group.color}66`,
+    borderWidth: 1.5,
+    fill: position === 0 ? 'origin' : '-1',
+    pointRadius: 0,
+    pointHoverRadius: 3,
+    tension: 0.25,
+    cubicInterpolationMode: 'monotone' as const,
+    metaCounts: countsFor(group.indexes),
+  }))
+  return {
+    data: { labels, datasets } as ChartData<'line'>,
+    legend: groups.map(group => ({
+      name: group.name,
+      color: group.color,
+      share: `${formatNumberValue(valuesFor(group.indexes)[lastDay] ?? 0, { maximumFractionDigits: 1 })}%`,
+      devices: formatNumberValue(countsFor(group.indexes)[lastDay] ?? 0),
+    })),
+    counts: devicesPerDay,
+  }
+})
+
+const compactChartOptions = computed<ChartOptions<'line'>>(() => {
+  const tickColor = isDark.value ? '#94a3b8' : '#64748b'
+  const gridColor = isDark.value ? 'rgba(148, 163, 184, 0.12)' : 'rgba(100, 116, 139, 0.12)'
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    // Filled areas have no points to hit, so hover by x position.
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        enabled: true,
+        itemSort: (a, b) => Number(b.raw ?? 0) - Number(a.raw ?? 0),
+        callbacks: {
+          label: (item) => {
+            const counts = (item.dataset as { metaCounts?: number[] }).metaCounts ?? []
+            const devices = counts[item.dataIndex] ?? 0
+            const share = `${formatNumberValue(Number(item.raw ?? 0), { maximumFractionDigits: 1 })}%`
+            return devices > 0 ? `${item.dataset.label}: ${share} (${formatNumberValue(devices)} ${t('devices')})` : `${item.dataset.label}: ${share}`
+          },
+        },
+      },
+    },
+    scales: {
+      x: { grid: { display: false }, ticks: { color: tickColor, maxRotation: 0, autoSkip: true, maxTicksLimit: 6 } },
+      y: {
+        stacked: true,
+        min: 0,
+        max: 100,
+        grid: { color: gridColor },
+        ticks: { color: tickColor, stepSize: 25, callback: value => `${value}%` },
+      },
+    },
+  }
+})
+
 const selectedPeriodActiveDevices = computed((): NativeActiveDevicesSummary | null => {
   if (isDemoMode.value)
     return generateDemoNativeActiveSummary(periodDays.value)
@@ -591,7 +722,7 @@ const iosActiveEvolution = computed(() => calculateSummaryEvolutionPercent(
   selectedPeriodActiveDevices.value?.ios,
   selectedPeriodPreviousActiveDevices.value?.ios,
 ))
-const showNativeKpis = computed(() => isNativeUsage.value)
+const showNativeKpis = computed(() => isNativeUsage.value && props.variant === 'full')
 const isThirtyDaySummaryLoading = computed(() => isFetchingThirtyDaySummary.value || (isLoading.value && isNativeUsage.value && (props.useBillingPeriod || periodDays.value !== 30)))
 
 const todayLineOptions = computed(() => {
@@ -628,7 +759,9 @@ const todayLineOptions = computed(() => {
 
 const chartOptions = computed<ChartOptions<'line'>>(() => {
   const hasMultipleDatasets = (processedChartData.value?.datasets.length ?? 0) > 1
-  const tooltipOptions = createTooltipConfig(hasMultipleDatasets, props.accumulated, props.useBillingPeriod ? currentRange.value?.startDate : false, hasMultipleDatasets ? tooltipClickHandler.value : undefined)
+  // Dates come from the range actually shown (billing period or the 1-30 day
+  // window); the tooltip's fallback assumes a 30-day window.
+  const tooltipOptions = createTooltipConfig(hasMultipleDatasets, props.accumulated, currentRange.value?.startDate ?? false, hasMultipleDatasets ? tooltipClickHandler.value : undefined)
 
   const pluginOptions = {
     legend: {
@@ -920,7 +1053,7 @@ watch(
 
 <template>
   <section class="flex flex-col gap-4">
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div v-if="props.variant === 'full'" class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
       <div class="min-w-0">
         <h2 class="text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
           {{ t(titleKey) }}
@@ -1022,7 +1155,12 @@ watch(
         :is-demo-data="isDemoMode"
       >
         <template #header>
-          <div class="flex w-full items-start justify-end">
+          <div v-if="props.variant === 'chart'" class="flex items-start justify-between w-full gap-3">
+            <h2 class="min-w-0 text-base font-semibold leading-tight text-slate-900 dark:text-white">
+              {{ t(titleKey) }}
+            </h2>
+          </div>
+          <div v-else class="flex w-full items-start justify-end">
             <div class="flex max-w-[11rem] flex-col items-end text-right shrink-0">
               <div
                 class="inline-flex items-center justify-center px-2 py-1 text-xs font-bold text-white rounded-full shadow-lg whitespace-nowrap bg-cyan-500"
@@ -1043,7 +1181,20 @@ watch(
           </div>
         </template>
 
-        <Line class="h-full w-full" :data="processedChartData!" :options="chartOptions" :plugins="chartPlugins" />
+        <div v-if="props.variant === 'chart'" class="flex flex-col w-full h-full gap-2">
+          <div class="relative flex-1 min-h-0">
+            <Line class="w-full h-full" :data="compactChart.data" :options="compactChartOptions" />
+          </div>
+          <!-- Legend under the chart so the chart keeps its height. -->
+          <ul class="flex flex-wrap justify-center text-xs gap-x-3 gap-y-1" data-testid="version-chart-legend">
+            <li v-for="item in compactChart.legend" :key="item.name" class="flex items-center gap-1.5" :title="`${item.devices} ${t('devices')}`">
+              <span class="inline-block w-2 h-2 rounded-full" :style="{ backgroundColor: item.color }" />
+              <span class="font-medium text-slate-700 dark:text-slate-200">{{ item.name }}</span>
+              <span class="tabular-nums text-slate-500 dark:text-slate-400">{{ item.share }}</span>
+            </li>
+          </ul>
+        </div>
+        <Line v-else class="h-full w-full" :data="processedChartData!" :options="chartOptions" :plugins="chartPlugins" />
       </ChartCard>
     </div>
   </section>

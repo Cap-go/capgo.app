@@ -13,6 +13,7 @@ import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '~/serv
 import { dailyChartBaseProps } from '~/services/dailyChartProps'
 import { registerDashboardCharts } from '~/services/dashboardChartRegister'
 import { generateMonthDays } from '~/services/date'
+import { useChartCardCompact } from './chartCardDensity'
 import { createChartLegendItems } from './chartLegend'
 import ChartLegend from './ChartLegend.vue'
 
@@ -185,11 +186,13 @@ const barChartOptions = computed(() => chartOptions.value as unknown as ChartOpt
 const sharedPlugins = [verticalLinePlugin, todayLinePlugin]
 const linePlugins = sharedPlugins as unknown as Plugin<'line'>[]
 const barPlugins = sharedPlugins as unknown as Plugin<'bar'>[]
+
+const compact = useChartCardCompact()
 </script>
 
 <template>
-  <div class="flex min-h-full flex-col">
-    <div class="min-h-[16rem] flex-1">
+  <div class="flex flex-col" :class="compact ? 'h-full' : 'min-h-full'">
+    <div class="flex-1" :class="compact ? 'relative min-h-0' : 'min-h-[16rem]'">
       <Line
         v-if="accumulated"
         :data="chartData"

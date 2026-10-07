@@ -84,6 +84,14 @@ describe('release scope matching', () => {
     expect(matchesComponent('notifications', files)).toBe(false)
   })
 
+  it.concurrent('releases inventory queue provisioning changes as Capgo-only', () => {
+    const files = ['scripts/ensure-r2-inventory-queues.ts']
+
+    expect(matchesComponent('capgo', files)).toBe(true)
+    expect(matchesComponent('cli', files)).toBe(false)
+    expect(matchesComponent('notifications', files)).toBe(false)
+  })
+
   it.concurrent('treats notifications package changes as notifications-only releases', () => {
     const files = ['packages/capacitor-notifications/src/index.ts']
 

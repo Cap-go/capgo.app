@@ -10,6 +10,7 @@ import { app as config } from '../../supabase/functions/_backend/private/config.
 import { app as configBuilder } from '../../supabase/functions/_backend/private/config_builder.ts'
 import { app as create_device } from '../../supabase/functions/_backend/private/create_device.ts'
 import { app as credits } from '../../supabase/functions/_backend/private/credits.ts'
+import { app as customDomains } from '../../supabase/functions/_backend/private/custom_domains.ts'
 import { app as deleted_failed_version } from '../../supabase/functions/_backend/private/delete_failed_version.ts'
 import { app as devices_priv } from '../../supabase/functions/_backend/private/devices.ts'
 import { app as emailPreferences } from '../../supabase/functions/_backend/private/email_preferences.ts'
@@ -99,7 +100,6 @@ import { app as on_version_delete } from '../../supabase/functions/_backend/trig
 import { app as on_version_update } from '../../supabase/functions/_backend/triggers/on_version_update.ts'
 import { app as pluginNotifications } from '../../supabase/functions/_backend/triggers/plugin_notifications.ts'
 import { app as queue_consumer } from '../../supabase/functions/_backend/triggers/queue_consumer.ts'
-import { app as send_email } from './triggers/send_email.ts'
 import { app as stripe_event } from '../../supabase/functions/_backend/triggers/stripe_event.ts'
 import { app as updates_cache_purge } from '../../supabase/functions/_backend/triggers/updates_cache_purge.ts'
 import { app as webhook_delivery } from '../../supabase/functions/_backend/triggers/webhook_delivery.ts'
@@ -108,6 +108,7 @@ import { BRES, createAllCatch, createHono } from '../../supabase/functions/_back
 import { processNativeNotificationQueueBatch } from '../../supabase/functions/_backend/utils/nativeNotificationSender.ts'
 import { flushQueuedPluginNotifications } from '../../supabase/functions/_backend/utils/plugin_notification_flush.ts'
 import { version } from '../../supabase/functions/_backend/utils/version.ts'
+import { app as send_email } from './triggers/send_email.ts'
 
 function getExecutionContext(c: Context): Context['executionCtx'] | undefined {
   try {
@@ -153,6 +154,7 @@ appPrivate.route('/store_top', storeTop)
 appPrivate.route('/website_stats', publicStats)
 appPrivate.route('/config', config)
 appPrivate.route('/config/builder', configBuilder)
+appPrivate.route('/custom_domains', customDomains)
 appPrivate.route('/accept_invitation', accept_invitation)
 appPrivate.route('/email_preferences', emailPreferences)
 appPrivate.route('/devices', devices_priv)

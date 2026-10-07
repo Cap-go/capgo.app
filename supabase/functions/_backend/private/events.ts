@@ -1,4 +1,5 @@
 import type { Context } from 'hono'
+import type { AcceptedEventIdentity } from '../utils/event_identity.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { BentoTrackingPayload, TrackOptions } from '../utils/tracking.ts'
 import { Hono } from 'hono/tiny'
@@ -7,11 +8,12 @@ import { APP_TOO_LARGE_EVENT, buildAppTooLargeBentoEvent } from '../utils/app_to
 import { markBuilderChecklistFromAnalytics } from '../utils/builder_onboarding_checklist.ts'
 import { buildBuilderOnboardingBentoEvent, BUILDER_RECOVERY_MILESTONES } from '../utils/builder_onboarding_recovery.ts'
 import { buildBundleCompatibilityBentoEvent, BUNDLE_INCOMPATIBLE_EVENT, bundleIncompatibleEmailOutcome, isBreakingChangeGatedByChannelStrategy, isCliTrueTag } from '../utils/bundle_compatibility_recovery.ts'
+import { acceptEventIdentity, isValidClientEventId } from '../utils/event_identity.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { buildAiInstructionsCopiedBentoEvent } from '../utils/onboarding_copy_tracking.ts'
 import { APP_ONBOARDING_READY_EVENT, buildAppOnboardingReadyBentoEvent } from '../utils/onboarding_app_ready_tracking.ts'
+import { buildAiInstructionsCopiedBentoEvent } from '../utils/onboarding_copy_tracking.ts'
 import { trackPosthogEvent } from '../utils/posthog.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { broadcastCLIEvent } from '../utils/realtime_broadcast.ts'
@@ -500,9 +502,26 @@ async function buildBundleIncompatibleBentoEvent(
   })
 }
 
+function logAcceptedEvent(c: Context, identity: AcceptedEventIdentity, acceptedAt: number) {
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'tracking_event_accepted',
+    event_id: identity.event_id,
+    occurred_at: identity.occurred_at,
+    accepted_at: identity.accepted_at,
+    id_source: identity.id_source,
+    timestamp_source: identity.timestamp_source,
+    duration_ms: Date.now() - acceptedAt,
+  })
+}
+
 app.post('/', middlewareAuth(), async (c) => {
+  const acceptedAt = Date.now()
   const body = await parseBody<TrackEventBody>(c)
+  if (body.client_event_id !== undefined && !isValidClientEventId(body.client_event_id))
+    throw quickError(400, 'invalid_client_event_id', 'client_event_id must be a UUID')
   const {
+    client_event_id: clientEventId,
     icon,
     notify: _notify,
     notifyConsole = false,
@@ -516,12 +535,26 @@ app.post('/', middlewareAuth(), async (c) => {
   const requestedUserId = typeof body.user_id === 'string' ? body.user_id : undefined
   const appId = getAppId(body)
   const { trackingUserId, orgId: verifiedOrgId } = await resolveTrackingUserId(c, requestedUserId, requestedOrgId, appId, trackingV2, Boolean(body.notifyConsole))
-  const trackedBody = buildTrackedBody(trackingV2, verifiedOrgId, requestedUserId, trackingUserId, trackOptions)
+  const identity = await acceptEventIdentity({
+    actorId: c.get('auth')!.userId,
+    orgId: verifiedOrgId,
+    clientEventId,
+    timestamp: body.timestamp,
+    acceptedAt,
+  })
+  const trackedBody = buildTrackedBody(trackingV2, verifiedOrgId, requestedUserId, trackingUserId, {
+    ...trackOptions,
+    event_id: identity.event_id,
+    occurred_at: identity.occurred_at,
+    accepted_at: identity.accepted_at,
+    timestamp: Date.parse(identity.occurred_at),
+  })
 
   // notifyConsole: broadcast to Supabase Realtime only, skip all tracking
   if (notifyConsole) {
     await handleNotifyConsole(c, trackedBody, icon, appId, verifiedOrgId)
-    return c.json(BRES)
+    logAcceptedEvent(c, identity, acceptedAt)
+    return c.json({ ...BRES, event_id: identity.event_id })
   }
 
   const supabase = supabaseWithAuth(c, c.get('auth')!)
@@ -593,5 +626,7 @@ app.post('/', middlewareAuth(), async (c) => {
     appId: verifiedOrgId ? appId : undefined,
   })
 
-  return c.json(BRES)
+  // Acceptance is distinct from provider delivery (which remains best effort).
+  logAcceptedEvent(c, identity, acceptedAt)
+  return c.json({ ...BRES, event_id: identity.event_id })
 })
