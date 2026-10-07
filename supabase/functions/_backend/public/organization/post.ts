@@ -54,8 +54,9 @@ async function getInitialPlanForMau(c: Context<MiddlewareKeyVariables>, estimate
   return plan
 }
 
-// A plan without US Stripe ids must not block org creation: bill it on EE instead.
-function resolvePlanBillingAccount(c: Context<MiddlewareKeyVariables>, plan: { name: string, stripe_id: string, stripe_id_us: string | null }, billingAccount: BillingAccount): BillingAccount {
+// A plan without US Stripe ids must not block org creation when US was only suggested: bill it on EE instead.
+// An explicit US choice must not be silently moved to another billing entity.
+function resolvePlanBillingAccount(c: Context<MiddlewareKeyVariables>, plan: { name: string, stripe_id: string, stripe_id_us: string | null }, billingAccount: BillingAccount, explicit: boolean): BillingAccount {
   if (billingAccount !== 'us')
     return billingAccount
   try {
@@ -63,14 +64,16 @@ function resolvePlanBillingAccount(c: Context<MiddlewareKeyVariables>, plan: { n
     return 'us'
   }
   catch {
+    if (explicit)
+      throw simpleError('cannot_get_plan', 'Cannot get plan', { plan: plan.name, billingAccount })
     cloudlogErr({ requestId: c.get('requestId'), message: 'Plan missing US Stripe ids, falling back to ee', plan: plan.name })
     return 'ee'
   }
 }
 
-async function createPendingStripeInfo(c: Context<MiddlewareKeyVariables>, orgId: string, estimatedMau: number, requestedBillingAccount: BillingAccount) {
+async function createPendingStripeInfo(c: Context<MiddlewareKeyVariables>, orgId: string, estimatedMau: number, requestedBillingAccount: BillingAccount, explicit: boolean) {
   const plan = await getInitialPlanForMau(c, estimatedMau)
-  const billingAccount = resolvePlanBillingAccount(c, plan, requestedBillingAccount)
+  const billingAccount = resolvePlanBillingAccount(c, plan, requestedBillingAccount, explicit)
   const pendingCustomerId = `pending_${orgId}`
   const trialAt = new Date()
   trialAt.setDate(trialAt.getDate() + 15)
@@ -292,7 +295,7 @@ export async function post(
   const ownerEmail = await getOwnerEmail(c, auth)
   const orgId = crypto.randomUUID()
   const billingAccount = resolveNewOrgBillingAccount(c, body.billingAccount)
-  const pendingCustomerId = await createPendingStripeInfo(c, orgId, estimatedMau, billingAccount)
+  const pendingCustomerId = await createPendingStripeInfo(c, orgId, estimatedMau, billingAccount, body.billingAccount === 'us')
   const onboarding = {
     intent: parseOrgOnboardingIntent({ intent: body.intent }),
     starting_out: body.startingOut ?? false,
