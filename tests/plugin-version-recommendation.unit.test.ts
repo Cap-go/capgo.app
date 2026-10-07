@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildPluginVersionRecommendation,
+  deliveryTimingMinVersion,
   fetchUpdaterDistTags,
   installCommandForPackage,
   latestTagForMajor,
   MIN_SUPPORTED_PLUGIN_MAJOR,
   pluginMajorFromVersion,
   resetUpdaterDistTagCache,
+  supportsDeliveryTiming,
   UPDATER_PACKAGE_NAME,
 } from '../src/services/pluginVersionRecommendation.ts'
 
@@ -214,5 +216,28 @@ describe('fetchUpdaterDistTags', () => {
     finally {
       Object.defineProperty(AbortSignal, 'timeout', { configurable: true, value: originalTimeout })
     }
+  })
+})
+
+describe('supportsDeliveryTiming', () => {
+  it('requires the first release of each major that sends download start events', () => {
+    expect(supportsDeliveryTiming('5.50.0')).toBe(false)
+    expect(supportsDeliveryTiming('5.50.1')).toBe(true)
+    expect(supportsDeliveryTiming('6.25.1')).toBe(false)
+    expect(supportsDeliveryTiming('6.25.2')).toBe(true)
+    expect(supportsDeliveryTiming('7.25.9')).toBe(false)
+    expect(supportsDeliveryTiming('7.26.0')).toBe(true)
+    expect(supportsDeliveryTiming('8.1.9')).toBe(false)
+    expect(supportsDeliveryTiming('8.2.0')).toBe(true)
+    expect(supportsDeliveryTiming('8.52.1')).toBe(true)
+    expect(supportsDeliveryTiming('9.0.0')).toBe(true)
+    expect(supportsDeliveryTiming('4.43.5')).toBe(false)
+    expect(supportsDeliveryTiming('unknown')).toBe(false)
+  })
+
+  it('suggests the minimum version for the same major', () => {
+    expect(deliveryTimingMinVersion(7)).toBe('7.26.0')
+    expect(deliveryTimingMinVersion(4)).toBe('8.2.0')
+    expect(deliveryTimingMinVersion(null)).toBe('8.2.0')
   })
 })
