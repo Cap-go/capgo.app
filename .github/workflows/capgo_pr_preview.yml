@@ -1,0 +1,146 @@
+name: Capgo PR preview
+
+# Ships every PR's web bundle to its own Capgo channel (pr-<number>) so the
+# change can be tested in the Capgo mobile app from a preview deep link.
+# Each push replaces the channel bundle. capgo_pr_preview_cleanup.yml deletes
+# the channel when the PR closes (no paths filter there, so it always runs).
+
+concurrency:
+  group: capgo-pr-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "src/**"
+      - "public/**"
+      - "messages/**"
+      - "index.html"
+      - "package.json"
+      - "bun.lock"
+      - "vite.config.mts"
+      - "capacitor.config.ts"
+      - ".github/workflows/capgo_pr_preview.yml"
+
+permissions: {}
+
+env:
+  APP_ID: ee.forgr.capacitor_go
+  CHANNEL: pr-${{ github.event.pull_request.number }}
+  # Pinned: the CLI runs with CAPGO_TOKEN, so a new release must not change it silently.
+  CAPGO_CLI: "@capgo/cli@8.73.0"
+
+jobs:
+  deploy:
+    # Fork PRs have no access to CAPGO_TOKEN.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Read-only: PR code runs in install/build. Commenting happens in a separate job.
+    permissions:
+      contents: read
+    outputs:
+      bundle: ${{ steps.version.outputs.bundle }}
+      deep_link: ${{ steps.links.outputs.deep_link }}
+      web_url: ${{ steps.links.outputs.web_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Build
+        run: bun run build
+        env:
+          VITE_VAPID_KEY: ${{ secrets.VITE_VAPID_KEY }}
+          VITE_FIREBASE_CONFIG: ${{ secrets.VITE_FIREBASE_CONFIG }}
+      - name: Resolve preview bundle version
+        id: version
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          base_version="$(bun -e 'console.log(require("./package.json").version)')"
+          echo "bundle=${base_version}-pr.${PR_NUMBER}.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - name: Upload bundle to the PR channel
+        env:
+          CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}
+          BUNDLE: ${{ steps.version.outputs.bundle }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        # --delete-linked-bundle-on-upload drops the previous PR bundle so the
+        # channel always serves the latest commit only.
+        run: |
+          bunx "$CAPGO_CLI" bundle upload "$APP_ID" \
+            --path dist \
+            --channel "$CHANNEL" \
+            --bundle "$BUNDLE" \
+            --delta \
+            --delete-linked-bundle-on-upload \
+            --comment "PR preview ${HEAD_SHA}" \
+            --link "$PR_URL"
+      - name: Resolve preview links
+        id: links
+        env:
+          CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}
+        # get-qr needs preview enabled on the app. If it fails, fall back to the
+        # deep link alone; the channel id is optional for channel previews.
+        run: |
+          output="$(bunx "$CAPGO_CLI" get-qr "$APP_ID" --channel "$CHANNEL" --url 2>&1 || true)"
+          echo "$output"
+          deep_link="$(printf '%s\n' "$output" | grep -oE 'capgo://preview/channel[^[:space:]]+' | head -n1 || true)"
+          web_url="$(printf '%s\n' "$output" | grep -oE 'https://[^[:space:]]+\.preview\.capgo\.app/[^[:space:]]*' | head -n1 || true)"
+          if [ -z "$deep_link" ]; then
+            echo "::warning::get-qr did not return a deep link; is preview enabled for $APP_ID?"
+            deep_link="capgo://preview/channel?appId=${APP_ID}&channel=${CHANNEL}"
+          fi
+          echo "deep_link=$deep_link" >> "$GITHUB_OUTPUT"
+          echo "web_url=$web_url" >> "$GITHUB_OUTPUT"
+
+  comment:
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Comment preview links on the PR
+        uses: actions/github-script@v8
+        env:
+          DEEP_LINK: ${{ needs.deploy.outputs.deep_link }}
+          WEB_URL: ${{ needs.deploy.outputs.web_url }}
+          BUNDLE: ${{ needs.deploy.outputs.bundle }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        with:
+          script: |
+            const marker = '<!-- capgo-pr-preview -->'
+            const { DEEP_LINK, WEB_URL, BUNDLE, HEAD_SHA, CHANNEL } = process.env
+            const lines = [
+              marker,
+              '### 📱 Capgo mobile preview',
+              '',
+              `Channel \`${CHANNEL}\` serves bundle \`${BUNDLE}\` (${HEAD_SHA.slice(0, 7)}).`,
+              '',
+              `- Deep link (open on the phone with the Capgo app): ${DEEP_LINK}`,
+            ]
+            if (WEB_URL)
+              lines.push(`- Preview page / QR: ${WEB_URL}`)
+            lines.push('', 'Every push replaces the bundle. The channel is deleted when the PR closes; after that, leave the preview from the Capgo app to return to your normal bundle.')
+            const body = lines.join('\n')
+            const { owner, repo } = context.repo
+            const issue_number = context.payload.pull_request.number
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 })
+            const existing = comments.find(comment => comment.body?.includes(marker))
+            if (existing)
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body })
+            else
+              await github.rest.issues.createComment({ owner, repo, issue_number, body })
+

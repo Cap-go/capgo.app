@@ -12,6 +12,7 @@ import IconExternalLink from '~icons/lucide/external-link'
 import IconLayers from '~icons/lucide/layers'
 import IconRocket from '~icons/lucide/rocket'
 import IconSmartphone from '~icons/lucide/smartphone'
+import InfoPopover from '~/components/InfoPopover.vue'
 import { useNativeObserveStats } from '~/composables/useNativeObserveStats'
 import { formatNumberValue } from '~/services/formatLocale'
 import {
@@ -19,7 +20,6 @@ import {
   fetchUpdaterDistTags,
   UPDATER_INSTALL_DOCS_URL,
 } from '~/services/pluginVersionRecommendation'
-import { useDisplayStore } from '~/stores/display'
 
 interface NativeObservePluginStatsResponse {
   pluginVersions: Array<{
@@ -30,7 +30,6 @@ interface NativeObservePluginStatsResponse {
 }
 
 const route = useRoute()
-const displayStore = useDisplayStore()
 const { t } = useI18n()
 const distTags = ref<PluginDistTags | null>(null)
 
@@ -113,8 +112,6 @@ async function copyInstallCommand(command: string) {
 }
 
 watch(packageId, async () => {
-  displayStore.NavTitle = t('observe')
-  displayStore.defaultBack = '/apps'
   const [, tags] = await Promise.all([
     fetchPluginStats(),
     fetchUpdaterDistTags(),
@@ -124,21 +121,18 @@ watch(packageId, async () => {
 </script>
 
 <template>
-  <div class="w-full h-full px-4 pt-0 mx-auto mb-8 sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
-    <div class="flex flex-col gap-6">
-      <div class="min-w-0">
-        <div class="flex flex-wrap items-center gap-2">
-          <h1 class="text-xl font-semibold text-slate-950 dark:text-white">
-            {{ t('observe') }}
-          </h1>
-          <span class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t('beta') }}</span>
-        </div>
-        <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
-          {{ t('native-observe-plugin-adoption-help') }}
-        </p>
-        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-          {{ t('native-observe-plugin-scope') }}
-        </p>
+  <section id="plugins" data-testid="observe-plugins">
+    <div class="flex flex-col gap-4">
+      <div class="flex items-center min-w-0 gap-1">
+        <h2 class="text-base font-semibold text-slate-950 dark:text-white">
+          {{ t('plugins') }}
+        </h2>
+        <InfoPopover :label="t('plugins')">
+          <p>{{ t('native-observe-plugin-adoption-help') }}</p>
+          <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            {{ t('native-observe-plugin-scope') }}
+          </p>
+        </InfoPopover>
       </div>
 
       <div v-if="statsLoading" class="flex items-center justify-center h-80">
@@ -223,54 +217,49 @@ watch(packageId, async () => {
 
         <section data-test="observe-plugin-insights" class="flex flex-col gap-4">
           <div class="flex items-center justify-between gap-3">
-            <div>
-              <h2 class="text-base font-semibold text-slate-950 dark:text-white">
-                {{ t('native-observe-plugin-distribution') }}
-              </h2>
-              <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                {{ t('native-observe-plugin-distribution-help') }}
-              </p>
-            </div>
+            <h2 class="text-base font-semibold text-slate-950 dark:text-white" :title="t('native-observe-plugin-distribution-help')">
+              {{ t('native-observe-plugin-distribution') }}
+            </h2>
             <IconRocket class="w-5 h-5 text-violet-500" aria-hidden="true" />
           </div>
 
-          <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-              <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+          <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
+            <div class="px-4 py-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+              <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
                 <IconSmartphone class="w-4 h-4" aria-hidden="true" />
                 {{ t('native-observe-plugin-production-devices') }}
               </div>
-              <div class="mt-2 text-2xl font-semibold tabular-nums text-slate-950 dark:text-white">
+              <div class="mt-1 text-xl font-semibold tabular-nums text-slate-950 dark:text-white">
                 {{ formatCount(pluginFleetDevices) }}
               </div>
             </div>
 
-            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-              <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+            <div class="px-4 py-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+              <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
                 <IconRocket class="w-4 h-4" aria-hidden="true" />
                 {{ t('native-observe-plugin-most-reported') }}
               </div>
-              <div class="mt-2 text-2xl font-semibold break-words text-slate-950 dark:text-white">
+              <div class="mt-1 text-xl font-semibold break-words text-slate-950 dark:text-white">
                 {{ dominantPluginVersion?.plugin_version ?? '-' }}
               </div>
             </div>
 
-            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-              <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+            <div class="px-4 py-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+              <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
                 <IconLayers class="w-4 h-4" aria-hidden="true" />
                 {{ t('native-observe-plugin-latest-for-major') }}
               </div>
-              <div class="mt-2 text-2xl font-semibold break-words text-slate-950 dark:text-white">
+              <div class="mt-1 text-xl font-semibold break-words text-slate-950 dark:text-white">
                 {{ recommendation?.recommendedVersion ?? '-' }}
               </div>
             </div>
 
-            <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-              <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+            <div class="px-4 py-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+              <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
                 <IconActivity class="w-4 h-4" aria-hidden="true" />
                 {{ t('native-observe-plugin-devices-behind') }}
               </div>
-              <div class="mt-2 text-2xl font-semibold tabular-nums text-slate-950 dark:text-white">
+              <div class="mt-1 text-xl font-semibold tabular-nums text-slate-950 dark:text-white">
                 {{ behindDevicesDisplay === null ? '-' : formatCount(behindDevicesDisplay) }}
               </div>
             </div>
@@ -334,7 +323,7 @@ watch(packageId, async () => {
             </div>
           </div>
 
-          <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+          <div class="px-4 py-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
             <div v-if="recommendationRows.length" class="overflow-x-auto">
               <table class="w-full min-w-[720px] text-sm">
                 <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
@@ -399,10 +388,5 @@ watch(packageId, async () => {
         </section>
       </template>
     </div>
-  </div>
+  </section>
 </template>
-
-<route lang="yaml">
-meta:
-  layout: app
-</route>

@@ -19,10 +19,10 @@ test.describe('channel bundle actions (change, pause, revert)', () => {
 
     const bundleRow = page.locator('[data-test="channel-bundle-row"]')
     await expect(bundleRow).toBeVisible({ timeout: 30000 })
-    await expect(bundleRow.locator('[data-test="channel-change-bundle"]')).toHaveText('Change bundle')
+    await expect(bundleRow.locator('[data-test="channel-change-bundle"]')).toHaveText('Edit')
 
     const pauseButton = bundleRow.locator('[data-test="channel-pause-toggle"]')
-    await expect(pauseButton).toHaveText('Pause updates')
+    await expect(pauseButton).toHaveText('Pause')
     await expect(pauseButton).toBeEnabled({ timeout: 60000 })
     await pauseButton.click()
     await expect(page.locator('h3').filter({ hasText: 'Pause updates on this channel?' })).toBeVisible({ timeout: 15000 })
@@ -34,9 +34,11 @@ test.describe('channel bundle actions (change, pause, revert)', () => {
     const revertButton = bundleRow.locator('[data-test="channel-revert-builtin"]')
     await expect(revertButton).toBeEnabled()
     await revertButton.click()
-    await expect(page.locator('h3').filter({ hasText: 'Revert all devices to built-in?' })).toBeVisible({ timeout: 15000 })
+    await expect(page.locator('h3').filter({ hasText: 'Revert this channel?' })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('button', { name: 'Select another bundle', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Revert to store version', exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Cancel', exact: true }).click()
-    await expect(pauseButton).toHaveText('Pause updates')
+    await expect(pauseButton).toHaveText('Pause')
   })
 
   test('shows promote first in the bundle actions on a non-default channel', async ({ page }) => {
@@ -122,7 +124,7 @@ test.describe('channel pause and revert are saved (isolated app)', () => {
     await expect(pausedBanner).toBeVisible({ timeout: 15000 })
     await page.reload()
     await expect(pausedBanner).toBeVisible({ timeout: 30000 })
-    await expect(pauseButton).toHaveText('Resume updates')
+    await expect(pauseButton).toHaveText('Resume')
     expect((await readChannel()).paused_at).not.toBeNull()
 
     // Resume clears the pause.
@@ -131,13 +133,13 @@ test.describe('channel pause and revert are saved (isolated app)', () => {
     await expect(pausedBanner).toHaveCount(0, { timeout: 15000 })
     await expect.poll(async () => (await readChannel()).paused_at).toBeNull()
 
-    // Revert sends devices to built-in and stops the rollout.
+    // Revert sends devices to the store version and stops the rollout.
     await bundleRow.locator('[data-test="channel-revert-builtin"]').click()
     await expect(page.getByText('The progressive rollout to 1.360.0 is stopped as well.', { exact: false })).toBeVisible({ timeout: 15000 })
-    await confirmAndSkipNotification(page, 'Revert all devices to built-in?', 'Revert to built-in')
-    await expect(bundleRow).toContainText('Built-in (native app)', { timeout: 15000 })
+    await confirmAndSkipNotification(page, 'Revert this channel?', 'Revert to store version')
+    await expect(bundleRow).toContainText('Store version (embedded in the app)', { timeout: 15000 })
     await page.reload()
-    await expect(bundleRow).toContainText('Built-in (native app)', { timeout: 30000 })
+    await expect(bundleRow).toContainText('Store version (embedded in the app)', { timeout: 30000 })
     const reverted = await readChannel()
     expect(reverted.version).toBeNull()
     expect(reverted.rollout_version).toBeNull()

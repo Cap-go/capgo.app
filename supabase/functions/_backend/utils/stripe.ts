@@ -638,6 +638,12 @@ function getAffonsoReferralMetadata(affonsoReferral?: string | null): Record<str
   return { affonso_referral: affonsoReferral }
 }
 
+// Checkout only offers saved cards with allow_redisplay "always" by default. Cards added
+// through the billing portal are "limited"/"unspecified", so customers were asked for a card again.
+const CHECKOUT_SAVED_PAYMENT_METHOD_OPTIONS: Stripe.Checkout.SessionCreateParams.SavedPaymentMethodOptions = {
+  allow_redisplay_filters: ['always', 'limited', 'unspecified'],
+}
+
 export interface ExtraMauCheckout {
   includedMau: number
   extraMau: number
@@ -680,6 +686,7 @@ export async function createCheckout(c: Context, customerId: string, recurrence:
       name: 'auto',
     },
     tax_id_collection: { enabled: true },
+    saved_payment_method_options: CHECKOUT_SAVED_PAYMENT_METHOD_OPTIONS,
     line_items: lineItems,
   })
   return { url: session.url }
@@ -745,6 +752,7 @@ export async function createOneTimeCheckout(
       name: 'auto',
     },
     tax_id_collection: { enabled: true },
+    saved_payment_method_options: CHECKOUT_SAVED_PAYMENT_METHOD_OPTIONS,
     invoice_creation: { enabled: true },
     line_items: [
       {
