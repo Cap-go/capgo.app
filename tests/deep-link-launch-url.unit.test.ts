@@ -29,7 +29,7 @@ describe('installDeepLinkHandler launch URL', () => {
 
   it('routes the launch URL once even when the handler is installed again after a bundle reload', async () => {
     const { installDeepLinkHandler } = await import('../src/services/deepLinks.ts')
-    const push = vi.fn(async () => {})
+    const push = vi.fn(async (_location: unknown) => {})
     const router = { push } as any
 
     await installDeepLinkHandler(router)
@@ -41,7 +41,7 @@ describe('installDeepLinkHandler launch URL', () => {
 
   it('routes the launch URL again after a cold start clears session storage', async () => {
     const { installDeepLinkHandler } = await import('../src/services/deepLinks.ts')
-    const push = vi.fn(async () => {})
+    const push = vi.fn(async (_location: unknown) => {})
     const router = { push } as any
 
     await installDeepLinkHandler(router)

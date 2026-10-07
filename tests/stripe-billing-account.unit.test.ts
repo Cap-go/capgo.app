@@ -137,21 +137,12 @@ describe('stripe billing account helpers', () => {
     expect(() => getPlanProductId({ ...SOLO_PLAN, stripe_id_us: '   ' }, 'us')).toThrow(IncompleteUsPlanConfigError)
   })
 
-  it('defaults to ee when admin client is unavailable but throws on lookup errors', async () => {
+  it('throws on billing account lookup errors', async () => {
     const context = createContext()
     const lookupError = { message: 'connection refused', code: 'PGRST000' }
 
     const adminModule = await import('../supabase/functions/_backend/utils/supabase.ts')
     const billingModule = await import('../supabase/functions/_backend/utils/stripe_billing.ts')
-
-    mockedEnv.STRIPE_NEW_CUSTOMERS_ACCOUNT = 'ee'
-    const missingAdminSpy = vi.spyOn(adminModule, 'supabaseAdmin').mockReturnValueOnce(undefined as any)
-    try {
-      await expect(billingModule.getBillingAccountForCustomer(context, 'cus_test')).resolves.toBe('ee')
-    }
-    finally {
-      missingAdminSpy.mockRestore()
-    }
 
     const lookupErrorSpy = vi.spyOn(adminModule, 'supabaseAdmin').mockReturnValueOnce({
       from: () => ({
@@ -167,6 +158,20 @@ describe('stripe billing account helpers', () => {
     }
     finally {
       lookupErrorSpy.mockRestore()
+    }
+  })
+
+  it('rejects US checkout for products missing from plans', async () => {
+    const adminModule = await import('../supabase/functions/_backend/utils/supabase.ts')
+    const spy = vi.spyOn(adminModule, 'supabaseAdmin').mockReturnValue({
+      from: () => ({ select: () => ({ or: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }),
+    } as any)
+    try {
+      await expect(resolveCheckoutPlanProductId(createContext(), 'prod_unknown', 'us')).rejects.toBeInstanceOf(IncompleteUsPlanConfigError)
+      await expect(resolveCheckoutPlanProductId(createContext(), 'prod_unknown', 'ee')).resolves.toBe('prod_unknown')
+    }
+    finally {
+      spy.mockRestore()
     }
   })
 

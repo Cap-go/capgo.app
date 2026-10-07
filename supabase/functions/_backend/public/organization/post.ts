@@ -5,6 +5,7 @@ import type { Database } from '../../utils/supabase.types.ts'
 import { z } from 'zod'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { assertJwtMfaAssurance } from '../../utils/jwt_mfa_assurance.ts'
+import { cloudlogErr } from '../../utils/logging.ts'
 import { parseOrgOnboardingDevelopmentEnvironment, parseOrgOnboardingIntent } from '../../utils/org_onboarding_intent.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
@@ -36,7 +37,7 @@ interface PgTransactionClient {
   release: () => void
 }
 
-async function getInitialPlanForMau(c: Context<MiddlewareKeyVariables>, estimatedMau: number, billingAccount: BillingAccount) {
+async function getInitialPlanForMau(c: Context<MiddlewareKeyVariables>, estimatedMau: number) {
   const adminClient = supabaseAdmin(c)
   const { data: plan, error } = await adminClient
     .from('plans')
@@ -47,21 +48,29 @@ async function getInitialPlanForMau(c: Context<MiddlewareKeyVariables>, estimate
     .single()
 
   if (error || !plan) {
-    throw simpleError('cannot_get_plan', 'Cannot get plan', { error: error?.message, estimatedMau, billingAccount })
-  }
-
-  try {
-    getPlanProductId(plan, billingAccount)
-  }
-  catch {
-    throw simpleError('cannot_get_plan', 'Cannot get plan', { estimatedMau, billingAccount, plan: plan.name })
+    throw simpleError('cannot_get_plan', 'Cannot get plan', { error: error?.message, estimatedMau })
   }
 
   return plan
 }
 
-async function createPendingStripeInfo(c: Context<MiddlewareKeyVariables>, orgId: string, estimatedMau: number, billingAccount: BillingAccount) {
-  const plan = await getInitialPlanForMau(c, estimatedMau, billingAccount)
+// A plan without US Stripe ids must not block org creation: bill it on EE instead.
+function resolvePlanBillingAccount(c: Context<MiddlewareKeyVariables>, plan: { name: string, stripe_id: string, stripe_id_us: string | null }, billingAccount: BillingAccount): BillingAccount {
+  if (billingAccount !== 'us')
+    return billingAccount
+  try {
+    getPlanProductId(plan, 'us')
+    return 'us'
+  }
+  catch {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Plan missing US Stripe ids, falling back to ee', plan: plan.name })
+    return 'ee'
+  }
+}
+
+async function createPendingStripeInfo(c: Context<MiddlewareKeyVariables>, orgId: string, estimatedMau: number, requestedBillingAccount: BillingAccount) {
+  const plan = await getInitialPlanForMau(c, estimatedMau)
+  const billingAccount = resolvePlanBillingAccount(c, plan, requestedBillingAccount)
   const pendingCustomerId = `pending_${orgId}`
   const trialAt = new Date()
   trialAt.setDate(trialAt.getDate() + 15)

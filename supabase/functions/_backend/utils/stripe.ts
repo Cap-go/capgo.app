@@ -533,18 +533,11 @@ export async function cancelSubscription(c: Context, customerId: string) {
 
 async function getStoredPlanPriceId(c: Context, planId: string, recurrence: string, billingAccount: BillingAccount): Promise<string | null> {
   try {
-    const admin = supabaseAdmin(c)
-    if (!admin?.from)
-      return null
-
-    const baseQuery = admin
+    const { data, error } = await supabaseAdmin(c)
       .from('plans')
       .select('price_m_id, price_y_id, price_m_id_us, price_y_id_us, stripe_id, stripe_id_us')
-
-    const { data, error } = await (typeof baseQuery.or === 'function'
-      ? baseQuery.or(planProductIdOrFilter(planId))
-      : baseQuery.eq('stripe_id', planId)
-    ).single()
+      .or(planProductIdOrFilter(planId))
+      .single()
 
     if (error) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'getStoredPlanPriceId', planId, recurrence, error })

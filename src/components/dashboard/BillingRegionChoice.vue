@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconCheck from '~icons/lucide/check'
 import IconLandmark from '~icons/lucide/landmark'
@@ -17,10 +17,10 @@ const model = defineModel<BillingAccount | undefined>()
 const { t } = useI18n()
 const visible = ref(false)
 
-const options: Array<{ value: BillingAccount, title: string, description: string }> = [
+const options = computed<Array<{ value: BillingAccount, title: string, description: string }>>(() => [
   { value: 'us', title: t('billing-region-option-us'), description: t('billing-region-option-us-desc') },
   { value: 'ee', title: t('billing-region-option-ee'), description: t('billing-region-option-ee-desc') },
-]
+])
 
 onMounted(async () => {
   const { data, error } = await invokeCapgoApi<BillingRegionSuggestion>('private/billing_region', { method: 'GET' })

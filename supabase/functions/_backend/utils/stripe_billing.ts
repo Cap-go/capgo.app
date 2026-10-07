@@ -96,19 +96,7 @@ function requireUsPlanField(value: string | null | undefined, field: string): st
 }
 
 export async function getBillingAccountForCustomer(c: Context, customerId: string): Promise<BillingAccount> {
-  const admin = supabaseAdmin(c)
-  if (!admin?.from) {
-    // Unit/emulator tests stub supabaseAdmin without a client. Production always
-    // has service-role access; default to ee here instead of failing checkout.
-    cloudlogErr({
-      requestId: c.get('requestId'),
-      message: 'getBillingAccountForCustomer unavailable admin client, defaulting to ee',
-      customerId,
-    })
-    return 'ee'
-  }
-
-  const { data, error } = await admin
+  const { data, error } = await supabaseAdmin(c)
     .from('stripe_info')
     .select('billing_account')
     .eq('customer_id', customerId)
@@ -167,11 +155,7 @@ export function planProductIdOrFilter(productId: string): string {
 
 export async function findPlanByProductId(c: Context, productId: string) {
   try {
-    const admin = supabaseAdmin(c)
-    if (!admin?.from)
-      return { data: null, error: null }
-
-    return await admin
+    return await supabaseAdmin(c)
       .from('plans')
       .select('*')
       .or(planProductIdOrFilter(productId))
@@ -180,7 +164,7 @@ export async function findPlanByProductId(c: Context, productId: string) {
   catch (error) {
     cloudlogErr({
       requestId: c.get('requestId'),
-      message: 'findPlanByProductId unavailable admin client',
+      message: 'findPlanByProductId',
       productId,
       error,
     })
@@ -196,7 +180,11 @@ export async function resolveCheckoutPlanProductId(
   const { data: plan, error } = await findPlanByProductId(c, planProductId)
   if (error)
     throw error
-  if (!plan)
+  if (!plan) {
+    // US webhooks only accept products listed in plans.stripe_id_us.
+    if (billingAccount === 'us')
+      throw new IncompleteUsPlanConfigError('stripe_id_us')
     return planProductId
+  }
   return getPlanProductId(plan, billingAccount)
 }

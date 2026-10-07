@@ -1,27 +1,9 @@
 -- Dual Stripe billing: EE (legacy) + US (new orgs). Existing rows stay on EE.
 
+-- Constant default: PostgreSQL fills existing rows without a table rewrite.
 ALTER TABLE public.stripe_info
-  ADD COLUMN IF NOT EXISTS billing_account text;
-
-ALTER TABLE public.stripe_info
-  ALTER COLUMN billing_account SET DEFAULT 'ee';
-
-ALTER TABLE public.stripe_info
-  DROP CONSTRAINT IF EXISTS stripe_info_billing_account_check;
-
-ALTER TABLE public.stripe_info
-  ADD CONSTRAINT stripe_info_billing_account_check
-  CHECK (billing_account IN ('ee', 'us')) NOT VALID;
-
-UPDATE public.stripe_info
-SET billing_account = 'ee'
-WHERE billing_account IS NULL;
-
-ALTER TABLE public.stripe_info
-  VALIDATE CONSTRAINT stripe_info_billing_account_check;
-
-ALTER TABLE public.stripe_info
-  ALTER COLUMN billing_account SET NOT NULL;
+  ADD COLUMN IF NOT EXISTS billing_account text NOT NULL DEFAULT 'ee'
+  CONSTRAINT stripe_info_billing_account_check CHECK (billing_account IN ('ee', 'us'));
 
 COMMENT ON COLUMN public.stripe_info.billing_account IS
   'Stripe account: ee (Capgo OÜ legacy) or us (CodepushGo LLC).';

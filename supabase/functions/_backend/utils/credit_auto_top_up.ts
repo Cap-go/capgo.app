@@ -1,8 +1,9 @@
 import type { Context } from 'hono'
+import type { BillingAccount } from './stripe.ts'
 import Stripe from 'stripe'
 import { getFallbackCreditProductId } from './credits.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { getBillingAccountForCustomer, getOneTimePriceId, getStripe, isStripeEmulatorEnabled, isStripeConfiguredForAccount, planProductIdOrFilter, resolvePlanCreditProductId, type BillingAccount } from './stripe.ts'
+import { getBillingAccountForCustomer, getOneTimePriceId, getStripe, isStripeConfiguredForAccount, isStripeEmulatorEnabled, planProductIdOrFilter, resolvePlanCreditProductId } from './stripe.ts'
 import { supabaseAdmin } from './supabase.ts'
 
 export const MIN_AUTO_TOP_UP_THRESHOLD = 10
@@ -366,19 +367,13 @@ export async function maybeAutoTopUpCredits(c: Context, orgId: string): Promise<
   if (!isStripeConfiguredForAccount(c, billingAccount))
     return
 
+  // DB-only lookup here; the Stripe price lookup waits until the claim succeeds.
   let productId: string
-  let priceId: string | null
   try {
     productId = await getCreditProductIdForCustomer(c, org.customer_id, billingAccount)
-    priceId = await getOneTimePriceId(c, productId, billingAccount)
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_product_lookup_failed', orgId, error })
-    return
-  }
-
-  if (!priceId) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_missing_price', orgId, productId })
     return
   }
 
@@ -397,6 +392,12 @@ export async function maybeAutoTopUpCredits(c: Context, orgId: string): Promise<
   const quantity = Math.floor(Number(claim.auto_top_up_threshold ?? 0))
   if (quantity < MIN_AUTO_TOP_UP_THRESHOLD)
     return
+
+  const priceId = await getOneTimePriceId(c, productId, billingAccount)
+  if (!priceId) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_missing_price', orgId, productId })
+    return
+  }
 
   const paymentIntent = await chargeOffSessionCredits(c, orgId, claim.customer_id, quantity, billingAccount, productId, priceId)
   if (!paymentIntent || paymentIntent.status !== 'succeeded')
