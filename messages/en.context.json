@@ -2582,6 +2582,7 @@
   "notification-create-success": "Used in Capgo web console. Role: toast or status message about \"notification create success\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "notification-dashboard": "Used in Capgo web console areas: pages/app. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "notification-device-results": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "notification-device-results-hint": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "notification-events-30d": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "notification-invalid-json": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "notification-load-error": "Used in Capgo web console areas: components/dashboard, pages/app. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
