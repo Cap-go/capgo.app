@@ -155,16 +155,22 @@ const columns = ref<TableColumn[]>([
     renderFunction: (item) => {
       const avatar = renderAvatar(item)
 
-      return h('div', { class: 'flex flex-wrap items-center text-slate-800 dark:text-white' }, [
-        avatar,
-        h('div', { class: 'max-w-max' }, item.name),
+      // Phones: list-row layout (icon, name, version as subtitle); the version column is desktop only.
+      return h('div', { class: 'flex items-center gap-1 text-slate-800 md:flex-wrap dark:text-white' }, [
+        h('div', { class: 'shrink-0' }, [avatar]),
+        h('div', { class: 'min-w-0' }, [
+          h('div', { class: 'line-clamp-2 md:line-clamp-none md:max-w-max' }, item.name),
+          item.last_version
+            ? h('div', { class: 'mt-0.5 text-xs font-normal text-slate-500 truncate md:hidden dark:text-slate-400' }, item.last_version)
+            : null,
+        ]),
       ])
     },
   },
   {
     label: t('last-version'),
     key: 'last_version',
-    mobile: true,
+    mobile: false,
     sortable: true,
     onClick: item => openOneVersion(item),
   },
