@@ -14,6 +14,10 @@ on:
         description: "Submit the uploaded build for store review"
         type: boolean
         default: false
+      release_notes:
+        description: "Store release notes (required by App Store review)"
+        required: false
+        default: ""
 
 permissions: {}
 
@@ -71,9 +75,13 @@ jobs:
           BUILD_OUTPUT_UPLOAD_ENABLED: "true"
           BUILD_OUTPUT_RETENTION_SECONDS: "604800"
           SUBMIT_TO_REVIEW: ${{ github.event.inputs.submit_to_review }}
+          RELEASE_NOTES: ${{ github.event.inputs.release_notes }}
         run: |
           review_args=()
           if [ "$SUBMIT_TO_REVIEW" = "true" ]; then
             review_args+=(--submit-to-store-review --ios-automatic-release)
+          fi
+          if [ -n "$RELEASE_NOTES" ]; then
+            review_args+=(--store-release-notes "$RELEASE_NOTES")
           fi
           bunx @capgo/cli@latest build request --platform ios --path . --sync-ios-version --ai-analytics "${review_args[@]}"
