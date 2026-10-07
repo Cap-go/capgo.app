@@ -271,11 +271,11 @@ const updateMode = ref<OnboardingUpdateMode>('capgo')
 const updateModeTouched = ref(false)
 const websiteLiveUrlInput = ref('')
 const showWebsiteLiveChoice = computed(() => props.preOrg && selectedIntent.value !== 'builder')
-const qualifiesForWebsiteLive = computed(() => showWebsiteLiveChoice.value && (
-  selectedDevelopmentEnvironment.value === 'hosted_builder'
-  || selectedDevelopmentEnvironment.value === 'ai_assistant'
-  || selectedIntent.value === 'publish'
-))
+// The publish intent keeps its own WebNativeApp recommendation experiment, so
+// Website Live is only recommended to live-update intents built with AI tools.
+const qualifiesForWebsiteLive = computed(() => showWebsiteLiveChoice.value
+  && (selectedIntent.value === 'ota' || selectedIntent.value === 'both')
+  && (selectedDevelopmentEnvironment.value === 'hosted_builder' || selectedDevelopmentEnvironment.value === 'ai_assistant'))
 const isWebsiteLiveSelected = computed(() => showWebsiteLiveChoice.value && updateMode.value === 'website')
 const normalizedWebsiteLiveUrl = computed(() => normalizeWebsiteLiveUrl(websiteLiveUrlInput.value))
 watch(qualifiesForWebsiteLive, (qualified) => {

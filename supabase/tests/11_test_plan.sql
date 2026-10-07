@@ -11,6 +11,7 @@ SELECT
                 SELECT count(*)
                 FROM
                     plans
+                WHERE kind = 'full'
             )::integer * 13
         ) + 6
     );
@@ -100,8 +101,9 @@ BEGIN
 
   -- raise notice '%', mau_count;
 
+  -- Website Live has no usage limits; these checks cover usage-based plans.
   FOR plan IN
-    SELECT * FROM plans
+    SELECT * FROM plans WHERE kind = 'full'
   LOOP
     -- Force demo app to have the given plan
     UPDATE stripe_info set product_id=plan.stripe_id where customer_id='cus_Q38uE91NP8Ufqc';
