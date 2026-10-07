@@ -58,6 +58,7 @@ import {
   replaceUserOnboardingIfUnchanged,
   serializeUserOnboardingWrite,
 } from '~/services/userOnboardingWriteQueue'
+import { normalizeWebsiteLiveUrl, useAppUpdateModeStore } from '~/stores/appUpdateMode'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
@@ -263,6 +264,33 @@ const isImportingOrganizationWebsite = ref(false)
 const organizationWebsiteInput = ref('')
 const websitePreview = ref<OrganizationWebsitePreview | null>(null)
 const showOrganizationInvite = ref(false)
+// Website Live qualification: teams without a dedicated mobile developer who
+// already deploy their app as a website can update straight from that website.
+type OnboardingUpdateMode = 'capgo' | 'website'
+const updateMode = ref<OnboardingUpdateMode>('capgo')
+const updateModeTouched = ref(false)
+const websiteLiveUrlInput = ref('')
+const showWebsiteLiveChoice = computed(() => props.preOrg && selectedIntent.value !== 'builder')
+const qualifiesForWebsiteLive = computed(() => showWebsiteLiveChoice.value && (
+  selectedDevelopmentEnvironment.value === 'hosted_builder'
+  || selectedDevelopmentEnvironment.value === 'ai_assistant'
+  || selectedIntent.value === 'publish'
+))
+const isWebsiteLiveSelected = computed(() => showWebsiteLiveChoice.value && updateMode.value === 'website')
+const normalizedWebsiteLiveUrl = computed(() => normalizeWebsiteLiveUrl(websiteLiveUrlInput.value))
+watch(qualifiesForWebsiteLive, (qualified) => {
+  if (!updateModeTouched.value)
+    updateMode.value = qualified ? 'website' : 'capgo'
+}, { immediate: true })
+watch(() => websitePreview.value?.website ?? '', (website) => {
+  if (website && !websiteLiveUrlInput.value.trim())
+    websiteLiveUrlInput.value = website
+})
+
+function selectUpdateMode(mode: OnboardingUpdateMode) {
+  updateMode.value = mode
+  updateModeTouched.value = true
+}
 
 const standardIntentOptions = [
   { value: 'ota', icon: IconRefresh },
@@ -590,6 +618,8 @@ const showWebNativeRecommendation = computed(() => shouldShowWebNativeRecommenda
 const canCreatePreOrgOrganization = computed(() => {
   if (!orgNameInput.value.trim() || isImportingOrganizationWebsite.value)
     return false
+  if (isWebsiteLiveSelected.value)
+    return normalizedWebsiteLiveUrl.value !== null
   return selectedUserCountStop.value !== null && !showWebNativeRecommendation.value
 })
 const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-title') : t('unified-onboarding-setup-ota-title'))
@@ -2058,13 +2088,19 @@ async function createOrganizationAndApp() {
     return
   }
 
-  const selectedStop = selectedUserCountStop.value
+  const websiteLive = isWebsiteLiveSelected.value
+  if (websiteLive && !normalizedWebsiteLiveUrl.value) {
+    toast.error(t('website-live-invalid-url'))
+    return
+  }
+  // Website Live has no MAU tiers, so the user-count question is skipped.
+  const selectedStop = websiteLive ? startingOutUserCountStop : selectedUserCountStop.value
   if (!selectedStop) {
     toast.error(t('organization-onboarding-user-scale-required'))
     return
   }
   const estimatedMau = selectedStop.value
-  const shouldInvite = selectedStop.planName !== 'Solo'
+  const shouldInvite = !websiteLive && selectedStop.planName !== 'Solo'
 
   isSubmitting.value = true
   try {
@@ -2078,6 +2114,7 @@ async function createOrganizationAndApp() {
         startingOut: selectedStop.startingOut === true,
         developmentEnvironment: selectedDevelopmentEnvironment.value ?? 'skipped',
         website: websitePreview.value?.website,
+        updateMode: websiteLive ? 'website' : 'capgo',
       },
     })
 
@@ -2094,6 +2131,8 @@ async function createOrganizationAndApp() {
       intent: selectedIntent.value,
       estimated_mau: estimatedMau,
       org_id: data.id,
+      update_mode: websiteLive ? 'website' : 'capgo',
+      website_live_qualified: qualifiesForWebsiteLive.value,
     })
 
     try {
@@ -2332,6 +2371,16 @@ async function createAppRecord(options?: { nextStep?: 'organization' }): Promise
     const restoredLocalIconSource = localIconPreview.value.startsWith('data:image/') ? localIconPreview.value : ''
     const importedIconSource = canUseStoreImportPreview.value ? storeIconPreview.value : ''
     await uploadIcon(appId, restoredLocalIconSource || importedIconSource)
+    if (isWebsiteLiveSelected.value && normalizedWebsiteLiveUrl.value) {
+      try {
+        await useAppUpdateModeStore().save(appId, { updateMode: 'website', websiteUrl: normalizedWebsiteLiveUrl.value })
+      }
+      catch (updateModeError) {
+        // The app exists; the user can still set the website from app settings.
+        console.error('Cannot enable Website Live on onboarding app', updateModeError)
+        toast.error(t('website-live-url-save-error'))
+      }
+    }
     const { data: refreshed } = await supabase
       .from('apps')
       .select()
@@ -3377,7 +3426,103 @@ defineExpose({
                 </div>
               </div>
 
-              <div v-if="existingApp === true">
+              <div v-if="showWebsiteLiveChoice" data-test="onboarding-update-mode">
+                <p id="update-mode-label" class="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-slate-200">
+                  <IconGlobe class="h-4 w-4 text-primary-500" />
+                  {{ t('website-live-onboarding-question') }}
+                </p>
+                <p class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                  {{ t('website-live-onboarding-helper') }}
+                </p>
+                <div class="mt-3 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-labelledby="update-mode-label">
+                  <label class="group cursor-pointer" data-test="onboarding-update-mode-website">
+                    <input
+                      type="radio"
+                      name="update-mode"
+                      class="peer sr-only"
+                      value="website"
+                      :checked="updateMode === 'website'"
+                      @change="selectUpdateMode('website')"
+                    >
+                    <span
+                      class="flex h-full flex-col gap-1 rounded-xl border p-3 text-left transition peer-focus-visible:ring-2 peer-focus-visible:ring-primary-500"
+                      :class="updateMode === 'website'
+                        ? 'border-primary-500 bg-slate-100 text-slate-950 ring-2 ring-primary-500/15 dark:border-primary-500/80 dark:bg-primary-500/25 dark:text-white'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200'"
+                    >
+                      <span class="flex items-center justify-between gap-2 text-sm font-semibold">
+                        {{ t('website-live-onboarding-option-title') }}
+                        <span v-if="qualifiesForWebsiteLive" class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300">
+                          {{ t('website-live-onboarding-recommended') }}
+                        </span>
+                      </span>
+                      <span class="text-xs text-slate-500 dark:text-slate-400">{{ t('website-live-onboarding-option-desc') }}</span>
+                    </span>
+                  </label>
+                  <label class="group cursor-pointer" data-test="onboarding-update-mode-capgo">
+                    <input
+                      type="radio"
+                      name="update-mode"
+                      class="peer sr-only"
+                      value="capgo"
+                      :checked="updateMode === 'capgo'"
+                      @change="selectUpdateMode('capgo')"
+                    >
+                    <span
+                      class="flex h-full flex-col gap-1 rounded-xl border p-3 text-left transition peer-focus-visible:ring-2 peer-focus-visible:ring-primary-500"
+                      :class="updateMode === 'capgo'
+                        ? 'border-primary-500 bg-slate-100 text-slate-950 ring-2 ring-primary-500/15 dark:border-primary-500/80 dark:bg-primary-500/25 dark:text-white'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200'"
+                    >
+                      <span class="text-sm font-semibold">{{ t('website-live-onboarding-full-title') }}</span>
+                      <span class="text-xs text-slate-500 dark:text-slate-400">{{ t('website-live-onboarding-full-desc') }}</span>
+                    </span>
+                  </label>
+                </div>
+
+                <div v-if="isWebsiteLiveSelected" class="mt-4 space-y-4 rounded-xl border border-amber-300/60 bg-amber-50 p-4 dark:border-amber-400/30 dark:bg-amber-500/10" data-test="onboarding-website-live-details">
+                  <div>
+                    <label for="onboarding-website-live-url" class="text-sm font-medium text-slate-800 dark:text-slate-200">
+                      {{ t('website-live-url-label') }}
+                    </label>
+                    <input
+                      id="onboarding-website-live-url"
+                      v-model="websiteLiveUrlInput"
+                      type="url"
+                      inputmode="url"
+                      placeholder="https://app.example.com"
+                      data-test="onboarding-website-live-url"
+                      class="d-input mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-950 outline-none sm:text-sm dark:border-white/20 dark:bg-slate-950/90 dark:text-white"
+                    >
+                    <p class="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">
+                      {{ t('website-live-onboarding-url-help') }}
+                    </p>
+                  </div>
+                  <div>
+                    <p class="text-sm font-semibold text-slate-900 dark:text-white">
+                      {{ t('website-live-onboarding-tradeoff-title') }}
+                    </p>
+                    <ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700 dark:text-slate-200">
+                      <li>{{ t('website-live-hidden-channels') }}</li>
+                      <li>{{ t('website-live-hidden-stats') }}</li>
+                      <li>{{ t('website-live-hidden-bundles') }}</li>
+                      <li>{{ t('website-live-hidden-encryption') }}</li>
+                      <li>{{ t('website-live-hidden-builds') }}</li>
+                    </ul>
+                    <p class="mt-2 text-sm text-slate-700 dark:text-slate-200">
+                      {{ t('website-live-onboarding-requirement') }}
+                    </p>
+                    <p class="mt-2 text-sm font-medium text-slate-900 dark:text-white">
+                      {{ t('website-live-onboarding-price') }}
+                    </p>
+                    <p class="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                      {{ t('website-live-onboarding-upgrade-later') }}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="existingApp === true && !isWebsiteLiveSelected">
                 <p id="estimated-users-label" class="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-slate-200">
                   <IconUsers class="h-4 w-4 text-primary-500" />
                   {{ t('organization-onboarding-existing-users-label') }}

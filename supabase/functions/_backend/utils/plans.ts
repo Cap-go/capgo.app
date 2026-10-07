@@ -289,6 +289,8 @@ async function applyCreditsForMetric(
 
 function planToInt(plan: string) {
   switch (plan) {
+    case 'Website Live':
+      return 0
     case 'Solo':
       return 1
     case 'Maker':

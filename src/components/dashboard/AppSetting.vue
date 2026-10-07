@@ -13,12 +13,14 @@ import Pencil from '~icons/heroicons/pencil-square'
 import transfer from '~icons/mingcute/transfer-horizontal-line?raw&width=36&height=36'
 import gearSix from '~icons/ph/gear-six?raw'
 import iconName from '~icons/ph/user?raw'
+import WebsiteLiveSettings from '~/components/dashboard/WebsiteLiveSettings.vue'
 import Toggle from '~/components/Toggle.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { useSupabase } from '~/services/supabase'
+import { useAppUpdateModeStore } from '~/stores/appUpdateMode'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { getAppDeletionTrackingProperties } from '~/utils/appDeletionFeedback'
 
@@ -44,6 +46,8 @@ const dialogStore = useDialogV2Store()
 const forceBump = ref(0)
 const forceDownloadBump = ref(0)
 const organizationStore = useOrganizationStore()
+const appUpdateModeStore = useAppUpdateModeStore()
+const isWebsiteMode = computed(() => appUpdateModeStore.isWebsiteMode(props.appId))
 const transferAppIdInput = ref('')
 const selectedChannel = ref('')
 const uploadSearch = ref('')
@@ -302,6 +306,12 @@ async function submit(form: {
   }
   catch (error) {
     toast.error(error as string)
+  }
+
+  // Website Live apps do not render the classic options below.
+  if (isWebsiteMode.value) {
+    isLoading.value = false
+    return
   }
 
   try {
@@ -1326,6 +1336,7 @@ async function transferAppOwnership() {
         <div class="text-sm dark:text-gray-100">
           {{ t('app-info-desc') }}
         </div>
+        <WebsiteLiveSettings :app-id="props.appId" />
         <!-- Picture -->
         <section>
           <div class="flex items-center">
@@ -1407,163 +1418,166 @@ async function transferAppOwnership() {
               <div v-else-if="!appRef?.icon_url" class="mb-3 rounded-2xl border border-dashed border-slate-300 p-4 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-300">
                 Add an App Store or Google Play link to auto-import the app icon if you do not want to upload one manually.
               </div>
-              <div
-                :key="forceBump"
-                class="flex flex-row cursor-pointer"
-                role="button"
-                tabindex="0"
-                @click="setDefaultChannel"
-                @keydown.enter.prevent="setDefaultChannel"
-                @keydown.space.prevent="setDefaultChannel"
-              >
-                <FormKit
-                  type="text"
-                  name="default_upload_channel"
-                  class="flex-1 min-w-0"
-                  :prefix-icon="ArrowUpTray"
-                  :value="appRef?.default_upload_channel ?? t('not-set')"
-                  :label="t('default-upload-channel')"
-                  :sections-schema="{
-                    suffix: {
-                      children: [
-                        '$slots.suffix',
-                      ],
-                    },
-                    input: {
-                      attrs: {
-                        readonly: true,
-                        class: 'cursor-pointer w-full truncate',
-                      },
-                    },
-                  }"
+              <!-- Channels, retention and device options do not apply to Website Live apps. -->
+              <template v-if="!isWebsiteMode">
+                <div
+                  :key="forceBump"
+                  class="flex flex-row cursor-pointer"
+                  role="button"
+                  tabindex="0"
+                  @click="setDefaultChannel"
+                  @keydown.enter.prevent="setDefaultChannel"
+                  @keydown.space.prevent="setDefaultChannel"
                 >
-                  <template #suffix>
-                    <button type="button" class="w-6 h-6 ml-auto mr-1" @click.stop="setDefaultChannel">
-                      <Pencil width="24px" height="24px" />
-                    </button>
-                  </template>
-                </FormKit>
-              </div>
-              <div
-                :key="`download-${forceDownloadBump}`"
-                class="flex flex-row mt-3 cursor-pointer"
-                role="button"
-                tabindex="0"
-                @click="openDefaultDownloadChannelDialog"
-                @keydown.enter.prevent="openDefaultDownloadChannelDialog"
-                @keydown.space.prevent="openDefaultDownloadChannelDialog"
-              >
-                <FormKit
-                  type="text"
-                  name="default_download_channel"
-                  class="flex-1 min-w-0"
-                  :prefix-icon="ArrowDownTray"
-                  :value="downloadChannelLabel"
-                  :label="t('default-download-channel')"
-                  :sections-schema="{
-                    suffix: {
-                      children: [
-                        '$slots.suffix',
-                      ],
-                    },
-                    help: {
-                      children: [
-                        '$slots.help',
-                      ],
-                    },
-                    input: {
-                      attrs: {
-                        readonly: true,
-                        class: 'cursor-pointer w-full truncate',
+                  <FormKit
+                    type="text"
+                    name="default_upload_channel"
+                    class="flex-1 min-w-0"
+                    :prefix-icon="ArrowUpTray"
+                    :value="appRef?.default_upload_channel ?? t('not-set')"
+                    :label="t('default-upload-channel')"
+                    :sections-schema="{
+                      suffix: {
+                        children: [
+                          '$slots.suffix',
+                        ],
                       },
-                    },
-                  }"
+                      input: {
+                        attrs: {
+                          readonly: true,
+                          class: 'cursor-pointer w-full truncate',
+                        },
+                      },
+                    }"
+                  >
+                    <template #suffix>
+                      <button type="button" class="w-6 h-6 ml-auto mr-1" @click.stop="setDefaultChannel">
+                        <Pencil width="24px" height="24px" />
+                      </button>
+                    </template>
+                  </FormKit>
+                </div>
+                <div
+                  :key="`download-${forceDownloadBump}`"
+                  class="flex flex-row mt-3 cursor-pointer"
+                  role="button"
+                  tabindex="0"
+                  @click="openDefaultDownloadChannelDialog"
+                  @keydown.enter.prevent="openDefaultDownloadChannelDialog"
+                  @keydown.space.prevent="openDefaultDownloadChannelDialog"
                 >
-                  <template #suffix>
-                    <button type="button" class="w-6 h-6 ml-auto mr-1" @click.stop="openDefaultDownloadChannelDialog">
-                      <Pencil width="24px" height="24px" />
-                    </button>
-                  </template>
-                  <template #help>
-                    <span class="block text-xs text-slate-500 dark:text-slate-300">
-                      {{ t('default-download-channel-help') }}
-                    </span>
-                    <span
-                      v-if="downloadChannelWarning"
-                      class="block mt-1 text-xs font-medium text-amber-600 dark:text-amber-400"
-                    >
-                      {{ downloadChannelWarning }}
-                    </span>
-                  </template>
-                </FormKit>
-              </div>
-              <!-- Bundle Retention Setting -->
-              <FormKit
-                v-model="selectedRetentionPreset"
-                type="select"
-                name="retention_preset"
-                :prefix-icon="gearSix"
-                :label="t('retention-label')"
-                :options="retentionOptions"
-              />
-              <div v-if="isCustomRetention">
+                  <FormKit
+                    type="text"
+                    name="default_download_channel"
+                    class="flex-1 min-w-0"
+                    :prefix-icon="ArrowDownTray"
+                    :value="downloadChannelLabel"
+                    :label="t('default-download-channel')"
+                    :sections-schema="{
+                      suffix: {
+                        children: [
+                          '$slots.suffix',
+                        ],
+                      },
+                      help: {
+                        children: [
+                          '$slots.help',
+                        ],
+                      },
+                      input: {
+                        attrs: {
+                          readonly: true,
+                          class: 'cursor-pointer w-full truncate',
+                        },
+                      },
+                    }"
+                  >
+                    <template #suffix>
+                      <button type="button" class="w-6 h-6 ml-auto mr-1" @click.stop="openDefaultDownloadChannelDialog">
+                        <Pencil width="24px" height="24px" />
+                      </button>
+                    </template>
+                    <template #help>
+                      <span class="block text-xs text-slate-500 dark:text-slate-300">
+                        {{ t('default-download-channel-help') }}
+                      </span>
+                      <span
+                        v-if="downloadChannelWarning"
+                        class="block mt-1 text-xs font-medium text-amber-600 dark:text-amber-400"
+                      >
+                        {{ downloadChannelWarning }}
+                      </span>
+                    </template>
+                  </FormKit>
+                </div>
+                <!-- Bundle Retention Setting -->
                 <FormKit
-                  v-model="customRetentionValue"
+                  v-model="selectedRetentionPreset"
+                  type="select"
+                  name="retention_preset"
+                  :prefix-icon="gearSix"
+                  :label="t('retention-label')"
+                  :options="retentionOptions"
+                />
+                <div v-if="isCustomRetention">
+                  <FormKit
+                    v-model="customRetentionValue"
+                    type="number"
+                    number="integer"
+                    name="custom_retention"
+                    :prefix-icon="gearSix"
+                    :label="t('retention-custom-value')"
+                    :help="t('retention-custom-help')"
+                    :min="0"
+                    :max="63113903"
+                  />
+                </div>
+                <p v-if="effectiveRetentionValue === 0" class="text-xs font-medium text-amber-600 dark:text-amber-400">
+                  {{ t('retention-immediate-warning') }}
+                </p>
+                <p v-if="effectiveRetentionValue >= 63113904" class="text-xs font-medium text-blue-600 dark:text-blue-400">
+                  {{ t('retention-never-info') }}
+                </p>
+                <FormKit
                   type="number"
                   number="integer"
-                  name="custom_retention"
+                  name="build_timeout_minutes"
                   :prefix-icon="gearSix"
-                  :label="t('retention-custom-value')"
-                  :help="t('retention-custom-help')"
-                  :min="0"
-                  :max="63113903"
+                  :value="buildTimeoutMinutes"
+                  :label="t('build-timeout-label')"
+                  :help="t('build-timeout-help')"
+                  :min="MIN_BUILD_TIMEOUT_MINUTES"
+                  :max="MAX_BUILD_TIMEOUT_MINUTES"
                 />
-              </div>
-              <p v-if="effectiveRetentionValue === 0" class="text-xs font-medium text-amber-600 dark:text-amber-400">
-                {{ t('retention-immediate-warning') }}
-              </p>
-              <p v-if="effectiveRetentionValue >= 63113904" class="text-xs font-medium text-blue-600 dark:text-blue-400">
-                {{ t('retention-never-info') }}
-              </p>
-              <FormKit
-                type="number"
-                number="integer"
-                name="build_timeout_minutes"
-                :prefix-icon="gearSix"
-                :value="buildTimeoutMinutes"
-                :label="t('build-timeout-label')"
-                :help="t('build-timeout-help')"
-                :min="MIN_BUILD_TIMEOUT_MINUTES"
-                :max="MAX_BUILD_TIMEOUT_MINUTES"
-              />
-              <FormKit
-                type="checkbox"
-                name="expose_metadata"
-                :value="appRef?.expose_metadata ?? false"
-                :label="t('expose-metadata')"
-                :help="t('expose-metadata-help')"
-              />
-              <FormKit
-                type="checkbox"
-                name="allow_preview"
-                :value="appRef?.allow_preview ?? false"
-                :label="t('allow-preview')"
-                :help="t('allow-preview-help')"
-              />
-              <FormKit
-                type="checkbox"
-                name="allow_device_custom_id"
-                :value="appRef?.allow_device_custom_id ?? false"
-                :label="t('allow-device-custom-id')"
-                :help="t('allow-device-custom-id-help')"
-              />
-              <FormKit
-                type="checkbox"
-                name="block_provider_infra_requests"
-                :value="appRef?.block_provider_infra_requests ?? false"
-                :label="t('block-provider-infra-requests')"
-                :help="t('block-provider-infra-requests-help')"
-              />
+                <FormKit
+                  type="checkbox"
+                  name="expose_metadata"
+                  :value="appRef?.expose_metadata ?? false"
+                  :label="t('expose-metadata')"
+                  :help="t('expose-metadata-help')"
+                />
+                <FormKit
+                  type="checkbox"
+                  name="allow_preview"
+                  :value="appRef?.allow_preview ?? false"
+                  :label="t('allow-preview')"
+                  :help="t('allow-preview-help')"
+                />
+                <FormKit
+                  type="checkbox"
+                  name="allow_device_custom_id"
+                  :value="appRef?.allow_device_custom_id ?? false"
+                  :label="t('allow-device-custom-id')"
+                  :help="t('allow-device-custom-id-help')"
+                />
+                <FormKit
+                  type="checkbox"
+                  name="block_provider_infra_requests"
+                  :value="appRef?.block_provider_infra_requests ?? false"
+                  :label="t('block-provider-infra-requests')"
+                  :help="t('block-provider-infra-requests-help')"
+                />
+              </template>
               <FormKit
                 type="button"
                 :label="t('transfer-app-ownership')"

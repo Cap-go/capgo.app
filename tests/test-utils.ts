@@ -189,7 +189,7 @@ export function getEndpointUrl(path: string): string {
     return `${CLOUDFLARE_FILES_URL}${path}`
 
   // Plugin endpoints
-  const pluginEndpoints = ['/updates', '/channel_self', '/stats', '/ok', '/latency', '/plugin/']
+  const pluginEndpoints = ['/updates', '/channel_self', '/stats', '/website_live', '/ok', '/latency', '/plugin/']
   const isPluginEndpoint = pluginEndpoints.some(endpoint => path.startsWith(endpoint))
 
   return isPluginEndpoint ? `${CLOUDFLARE_PLUGIN_URL}${path}` : `${CLOUDFLARE_API_URL}${path}`
@@ -1086,7 +1086,7 @@ export async function setServiceRoleClaim(query: SqlQueryFn): Promise<void> {
   await query('SET LOCAL ROLE service_role')
 }
 
-type AuthContextSnapshot = {
+interface AuthContextSnapshot {
   sqlRole: string
   jwtRole: string | null
   jwtClaims: string | null

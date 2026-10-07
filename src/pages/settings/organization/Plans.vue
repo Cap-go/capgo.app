@@ -85,6 +85,15 @@ const planFeatureLabelKeysByPlan: Record<string, string[]> = {
 }
 
 function planFeatures(plan: Database['public']['Tables']['plans']['Row']) {
+  // Website Live has no usage limits: list what it does instead of zero quotas.
+  if (plan.kind === 'website') {
+    return [
+      planFeature(t('plan-feature-website-live-unlimited')),
+      planFeature(t('plan-feature-website-live-source')),
+      planFeature(t('plan-feature-website-live-rollback')),
+      planFeature(t('plan-feature-website-live-no-channels')),
+    ]
+  }
   // Convert build time from seconds to hours or minutes for display
   const buildTimeSeconds = plan.build_time_unit || 0
   const buildTimeHours = Math.floor(buildTimeSeconds / 3600)
@@ -639,7 +648,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
       </div>
 
       <!-- Plans Grid -->
-      <div class="grid content-start min-h-0 grid-cols-1 gap-4 p-1 overflow-y-auto md:grid-cols-2 xl:grid-cols-4 grow">
+      <div class="grid content-start min-h-0 grid-cols-1 gap-4 p-1 overflow-y-auto md:grid-cols-2 grow" :class="mainStore.plans.length > 4 ? 'xl:grid-cols-3 2xl:grid-cols-5' : 'xl:grid-cols-4'">
         <div
           v-for="(p, index) in mainStore.plans"
           :key="p.price_m"

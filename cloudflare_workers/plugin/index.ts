@@ -1,6 +1,7 @@
 import { app as channel_self } from '../../supabase/functions/_backend/plugin_runtime/plugins/channel_self.ts'
 import { app as stats } from '../../supabase/functions/_backend/plugin_runtime/plugins/stats.ts'
 import { app as updates } from '../../supabase/functions/_backend/plugin_runtime/plugins/updates.ts'
+import { app as website_live } from '../../supabase/functions/_backend/plugin_runtime/plugins/website_live.ts'
 import { app as cache_purge_local } from '../../supabase/functions/_backend/plugin_runtime/private/cache_purge_local.ts'
 import { app as latency } from '../../supabase/functions/_backend/plugin_runtime/private/latency.ts'
 import { app as ok } from '../../supabase/functions/_backend/plugin_runtime/public/ok.ts'
@@ -31,6 +32,7 @@ app.route('/plugin/stats', stats)
 app.route('/channel_self', channel_self)
 app.route('/updates', updates)
 app.route('/stats', stats)
+app.route('/website_live', website_live)
 app.route('/ok', ok)
 app.route('/latency', latency)
 // Local-only purge-by-tag emulation for the /updates edge cache.

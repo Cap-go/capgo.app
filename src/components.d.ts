@@ -162,6 +162,8 @@ declare module 'vue' {
     VersionGroupSelector: typeof import('./components/dashboard/VersionGroupSelector.vue')['default']
     WebhookDeliveryLog: typeof import('./components/WebhookDeliveryLog.vue')['default']
     WebhookForm: typeof import('./components/WebhookForm.vue')['default']
+    WebsiteLiveAppOverview: typeof import('./components/dashboard/WebsiteLiveAppOverview.vue')['default']
+    WebsiteLiveSettings: typeof import('./components/dashboard/WebsiteLiveSettings.vue')['default']
     WelcomeBanner: typeof import('./components/dashboard/WelcomeBanner.vue')['default']
   }
 }

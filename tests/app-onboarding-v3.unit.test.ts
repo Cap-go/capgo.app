@@ -255,7 +255,7 @@ describe('pre-organization onboarding v3', () => {
   })
 
   it.concurrent('keeps the organization website tooltip clear of the panel and viewport edges', () => {
-    const organizationImport = sliceBetween(onboardingSource, 'id="onboarding-org-name-input"', '<div v-if="existingApp === true">')
+    const organizationImport = sliceBetween(onboardingSource, 'id="onboarding-org-name-input"', '<div v-if="showWebsiteLiveChoice" data-test="onboarding-update-mode">')
 
     expect(organizationImport).not.toContain('class="overflow-hidden rounded-xl')
     expect(organizationImport).toContain('class="relative flex items-center gap-2"')

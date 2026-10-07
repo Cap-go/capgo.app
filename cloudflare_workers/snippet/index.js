@@ -30,6 +30,57 @@ function getPlanUpgradeCacheKey(hostname, appId, endpoint, method) {
 // Endpoints that should be checked for on-prem caching
 const ONPREM_CACHEABLE_ENDPOINTS = ['/updates', '/stats', '/channel_self']
 
+// Website Live answers are the same for every device of an app, so the
+// snippet serves them from cache before routing (keyed by app_id only).
+const WEBSITE_LIVE_PATH = '/website_live'
+
+function getWebsiteLiveCacheKey(hostname, appId) {
+  return `https://${hostname}/__internal__/website-live-v1/${encodeURIComponent(appId)}`
+}
+
+// Same tag as updatesAppCacheTag() so the app purge queue also clears it.
+function getWebsiteLiveCacheTag(appId) {
+  return `capgo-updates-${appId.toLowerCase().replace(/[^a-z0-9._-]/g, '_')}`
+}
+
+function getWebsiteLiveAppId(request, url) {
+  if (request.method !== 'GET' || url.pathname !== WEBSITE_LIVE_PATH)
+    return null
+  const appId = url.searchParams.get('app_id')
+  return appId && appId.length <= 256 ? appId : null
+}
+
+async function getWebsiteLiveCache(hostname, appId) {
+  try {
+    const cached = await caches.default.match(getWebsiteLiveCacheKey(hostname, appId))
+    return cached ? cached.clone() : null
+  }
+  catch {
+    return null
+  }
+}
+
+async function setWebsiteLiveCache(hostname, appId, response) {
+  try {
+    if (response.status !== 200)
+      return
+    const cacheTtl = getCacheTtlSeconds(response.headers, null)
+    if (!cacheTtl)
+      return
+    const headers = new Headers(response.headers)
+    headers.set('Content-Type', 'application/json')
+    headers.set('Cache-Tag', getWebsiteLiveCacheTag(appId))
+    headers.set('X-Website-Live-Edge-Cache', 'hit')
+    await caches.default.put(getWebsiteLiveCacheKey(hostname, appId), new Response(await response.clone().text(), {
+      status: 200,
+      headers,
+    }))
+  }
+  catch (e) {
+    console.log(`Failed to cache website_live response: ${e.message}`)
+  }
+}
+
 // Cache helper functions for circuit breaker
 async function markUnhealthy(hostname, colo, workerUrl) {
   try {
@@ -399,6 +450,13 @@ export default {
     const requestBody = method === 'POST' || method === 'PUT'
       ? await request.arrayBuffer()
       : undefined
+
+    const websiteLiveAppId = getWebsiteLiveAppId(request, url)
+    if (websiteLiveAppId) {
+      const cachedWebsiteLive = await getWebsiteLiveCache(hostname, websiteLiveAppId)
+      if (cachedWebsiteLive)
+        return cachedWebsiteLive
+    }
 
     // Check on-prem cache for cacheable endpoints BEFORE routing to workers
     let appId = null
@@ -861,6 +919,9 @@ export default {
         // Success (2xx, 3xx, 4xx) - worker is healthy
         await markHealthy(hostname, colo, workerUrl)
         console.log(`Request served by ${workerUrl}`)
+
+        if (websiteLiveAppId && !fallbackFailure)
+          await setWebsiteLiveCache(hostname, websiteLiveAppId, response)
 
         // Check if this is an on-prem response that should be cached
         if (appId && endpoint) {

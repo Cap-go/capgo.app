@@ -2,6 +2,7 @@
 import type { Tab } from '~/components/comp_def'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import WebsiteLiveAppOverview from '~/components/dashboard/WebsiteLiveAppOverview.vue'
 import PaymentRequiredModal from '~/components/PaymentRequiredModal.vue'
 import Tabs from '~/components/Tabs.vue'
 import UnpaidState from '~/components/UnpaidState.vue'
@@ -11,11 +12,13 @@ import { bundleTabs } from '~/constants/bundleTabs'
 import { channelTabs } from '~/constants/channelTabs'
 import { deviceTabs } from '~/constants/deviceTabs'
 import { observeTabs, observeViewTabs } from '~/constants/observeTabs'
+import { useAppUpdateModeStore } from '~/stores/appUpdateMode'
 import { useOrganizationStore } from '~/stores/organization'
 
 const router = useRouter()
 const route = useRoute()
 const organizationStore = useOrganizationStore()
+const appUpdateModeStore = useAppUpdateModeStore()
 const isResolvingAppOrganization = ref(false)
 
 // Decoded app ID from the route. Use this for data lookups.
@@ -61,7 +64,21 @@ watch(appId, async (targetAppId) => {
   }
 }, { immediate: true })
 
-const appTabs = computed<Tab[]>(() => baseAppTabs)
+watch(appId, (targetAppId) => {
+  if (targetAppId)
+    void appUpdateModeStore.load(targetAppId)
+}, { immediate: true })
+
+// Website Live apps update from their website: bundles, channels, builds,
+// devices, notifications and stats do not exist for them, so only the
+// overview (Website Live status) and settings stay visible.
+const isWebsiteMode = computed(() => !!appId.value && appUpdateModeStore.isWebsiteMode(appId.value))
+const WEBSITE_MODE_TAB_KEYS = new Set(['', '/settings'])
+const appTabs = computed<Tab[]>(() => isWebsiteMode.value
+  ? baseAppTabs
+      .filter(tab => WEBSITE_MODE_TAB_KEYS.has(tab.key))
+      .map(tab => tab.key === '' ? { ...tab, label: 'website-live', description: 'website-live-tab-description' } : tab)
+  : baseAppTabs)
 
 // Check if org payment has failed - only show settings tab in this case
 const isOrgUnpaid = computed(() => {
@@ -170,7 +187,12 @@ const secondaryTabs = computed<Tab[]>(() => {
   if (!secondaryTabBasePath.value || !secondaryTabType.value)
     return []
 
-  const baseTabs = tabsConfig[secondaryTabType.value] || []
+  if (isWebsiteMode.value && secondaryTabType.value !== 'settings')
+    return []
+  const configuredTabs = tabsConfig[secondaryTabType.value] || []
+  const baseTabs = isWebsiteMode.value
+    ? configuredTabs.filter(tab => tab.key !== '/usage')
+    : configuredTabs
 
   return baseTabs.map(tab => ({
     ...tab,
@@ -231,6 +253,15 @@ const activeSecondaryTab = computed(() => {
   return tab?.key ?? secondaryTabBasePath.value
 })
 
+// Hidden feature routes stay reachable by URL; send them to the overview.
+const isWebsiteModeAllowedRoute = computed(() => isAppOverviewPath.value
+  || /^\/app\/[^/]+\/settings(?:\/access)?\/?$/.test(route.path))
+const showWebsiteLiveOverview = computed(() => isWebsiteMode.value && isAppOverviewPath.value)
+watch([isWebsiteMode, () => route.path], ([websiteMode]) => {
+  if (websiteMode && appRouteSegment.value && !isWebsiteModeAllowedRoute.value)
+    void router.replace(`/app/${appRouteSegment.value}`)
+}, { immediate: true })
+
 function handleTab(key: string) {
   router.push(key)
 }
@@ -286,7 +317,8 @@ function handleSecondaryTab(key: string) {
           class="flex-1 w-full min-h-0 mx-auto"
           :class="showPaymentOverlay ? 'overflow-hidden blur-sm pointer-events-none select-none' : 'overflow-y-auto'"
         >
-          <RouterView class="w-full" />
+          <WebsiteLiveAppOverview v-if="showWebsiteLiveOverview" :app-id="appId" class="w-full" />
+          <RouterView v-else class="w-full" />
         </div>
         <PaymentRequiredModal v-if="showPaymentOverlay" />
       </template>
