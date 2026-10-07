@@ -1834,6 +1834,7 @@
   "email-preferences-captcha-required": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "email-preferences-description": "Used in Capgo web console areas: pages. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "email-preferences-invalid-email": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "email-preferences-load-failed": "Used in Capgo web console areas: pages. Role: toast or status message when Bento visitor id lookup fails on the public email preferences page. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "email-preferences-save": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "email-preferences-save-failed": "Used in Capgo web console areas: pages. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "email-preferences-saved": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
