@@ -10,7 +10,6 @@ import IconChart from '~icons/heroicons/chart-bar'
 import IconShield from '~icons/heroicons/shield-check'
 import IconDiscord from '~icons/ic/round-discord'
 import IconBoxes from '~icons/lucide/boxes'
-import IconFlask from '~icons/lucide/flask-conical'
 import IconGift from '~icons/lucide/gift'
 import IconHeadset from '~icons/lucide/headset'
 import IconScanQrCode from '~icons/lucide/scan-qr-code'
@@ -269,14 +268,9 @@ export function useAppNavigation(options: { onNavigate?: () => void } = {}) {
       ...(isNativePlatform
         ? [
             {
-              label: 'module-heading',
+              label: 'plugins',
               icon: IconBoxes,
-              key: '/app/modules',
-            },
-            {
-              label: 'tests',
-              icon: IconFlask,
-              key: '/app/modules_test',
+              key: '/app/plugins',
             },
           ]
         : []),
@@ -319,8 +313,6 @@ export function useAppNavigation(options: { onNavigate?: () => void } = {}) {
   })
 
   function tabLabel(tab: Tab) {
-    if (tab.key === '/app/modules_test')
-      return `${t('module-heading')} ${t('tests')}`
     return t(tab.label)
   }
 

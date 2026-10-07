@@ -10,19 +10,17 @@ import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { isNavigationPathActive, useAppNavigation } from '~/composables/useAppNavigation'
-import { stripeEnabled } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
-import { orgBillingStatusLabelKey, resolveOrgBillingStatus } from '~/utils/organizationBilling'
 
-type PrimaryTabId = 'dashboard' | 'apps' | 'preview' | 'settings'
+type PrimaryTabId = 'dashboard' | 'apps' | 'preview' | 'apikeys'
 type NativeTabId = PrimaryTabId | 'more'
 
 const PRIMARY_TABS: Record<PrimaryTabId, Tab> = {
   dashboard: { label: 'dashboard', key: '/dashboard' },
   apps: { label: 'apps', key: '/apps' },
   preview: { label: 'test-preview', key: '/scan' },
-  settings: { label: 'settings', key: '/settings/account' },
+  apikeys: { label: 'api-keys', key: '/apikeys' },
 }
 
 // Lucide paths: Android renders these SVGs, iOS uses the SF Symbol.
@@ -39,9 +37,9 @@ const TAB_ICONS: Record<NativeTabId, NativeNavigationTab['icon']> = {
     svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><rect x="7" y="7" width="10" height="10" rx="1"/></svg>',
     ios: { sfSymbol: 'qrcode.viewfinder' },
   },
-  settings: {
-    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3"/><path d="M12 19v3"/><path d="M2 12h3"/><path d="M19 12h3"/><path d="m4.9 4.9 2.1 2.1"/><path d="m17 17 2.1 2.1"/><path d="m4.9 19.1 2.1-2.1"/><path d="m17 7 2.1-2.1"/></svg>',
-    ios: { sfSymbol: 'gearshape' },
+  apikeys: {
+    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg>',
+    ios: { sfSymbol: 'key' },
   },
   more: {
     svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>',
@@ -49,7 +47,7 @@ const TAB_ICONS: Record<NativeTabId, NativeNavigationTab['icon']> = {
   },
 }
 
-const ROOT_PATHS = ['/dashboard', '/apps', '/settings/account']
+const ROOT_PATHS = ['/dashboard', '/apps', '/apikeys']
 
 const BRAND_TINT = '#119EFF'
 const DARK_COLORS = { background: '#0F172A', foreground: '#F8FAFC', inactiveTint: '#94A3B8' }
@@ -86,11 +84,11 @@ export function useNativeChrome() {
   })
 
   const selectedTabId = computed<NativeTabId>(() => {
-    if (route.path.startsWith('/settings'))
-      return 'settings'
+    if (isNavigationPathActive('/apikeys', route.path))
+      return 'apikeys'
     if (isNavigationPathActive('/dashboard', route.path))
       return 'dashboard'
-    if (isNavigationPathActive('/apps', route.path) && !route.path.startsWith('/app/modules'))
+    if (isNavigationPathActive('/apps', route.path) && !route.path.startsWith('/app/plugins'))
       return 'apps'
     if (isNavigationPathActive('/scan', route.path))
       return 'preview'
@@ -99,20 +97,16 @@ export function useNativeChrome() {
 
   const showBack = computed(() => !ROOT_PATHS.includes(route.path.replace(/\/+$/, '')) && !!router.options.history.state.back)
 
-  const billingLabel = computed(() => {
-    const org = organizationStore.currentOrganization
-    const lacks2FA = org?.enforcing_2fa === true && org?.['2fa_has_access'] === false
-    const lacksPassword = org?.password_policy_config?.enabled === true && org?.password_has_access === false
-    const status = resolveOrgBillingStatus(org, {
-      stripeEnabled: !!stripeEnabled.value,
-      lacksSecurityAccess: lacks2FA || lacksPassword,
-      organizationFailed: !!organizationStore.currentOrganizationFailed,
-    })
-    const key = orgBillingStatusLabelKey(status.kind)
-    return key ? t(key) : ''
+  // The navbar's trailing button shows the current organization and opens the switcher.
+  const organizationLabel = computed(() => {
+    const name = organizationStore.currentOrganization?.name ?? ''
+    return name.length > 18 ? `${name.slice(0, 17)}…` : name
   })
 
-  const moreTabs = computed(() => tabs.value.filter(tab => !Object.values(PRIMARY_TABS).some(primary => primary.key === tab.key)))
+  const moreTabs = computed<Tab[]>(() => [
+    { label: 'settings', key: '/settings/account' },
+    ...tabs.value.filter(tab => !Object.values(PRIMARY_TABS).some(primary => primary.key === tab.key)),
+  ])
   const selectableOrganizations = computed(() => organizationStore.organizations.filter(org => !isPendingOrganizationInvite(org)))
 
   function palette() {
@@ -126,7 +120,7 @@ export function useNativeChrome() {
     await NativeNavigation.setNavbar({
       title: title.value,
       backButton: { visible: showBack.value },
-      rightItems: billingLabel.value ? [{ id: 'billing', title: billingLabel.value }] : [],
+      rightItems: organizationLabel.value ? [{ id: 'organization', title: organizationLabel.value }] : [],
       colors: { ...colors, tint: BRAND_TINT },
       animated: true,
     })
@@ -136,7 +130,7 @@ export function useNativeChrome() {
     if (!active)
       return
     const colors = palette()
-    const ids: NativeTabId[] = ['dashboard', 'apps', 'preview', 'settings', 'more']
+    const ids: NativeTabId[] = ['dashboard', 'apps', 'preview', 'apikeys', 'more']
     await NativeNavigation.setTabbar({
       selectedId: selectedTabId.value,
       labelVisibilityMode: 'labeled',
@@ -161,9 +155,14 @@ export function useNativeChrome() {
       title: t('switch-organization'),
       options: [
         ...orgs.map(org => ({ title: org.gid === organizationStore.currentOrganization?.gid ? `✓ ${org.name}` : org.name })),
+        { title: t('organization') },
         { title: t('button-cancel'), style: ActionSheetButtonStyle.Cancel },
       ],
     })
+    if (index === orgs.length) {
+      await router.push('/settings/organization')
+      return
+    }
     const org = orgs[index]
     if (!org || org.gid === organizationStore.currentOrganization?.gid)
       return
@@ -177,22 +176,15 @@ export function useNativeChrome() {
       return
     moreMenuOpen = true
     try {
-      const canSwitchOrg = selectableOrganizations.value.length > 1
       const entries = moreTabs.value
-      const offset = canSwitchOrg ? 1 : 0
       const { index } = await ActionSheet.showActions({
         title: organizationStore.currentOrganization?.name,
         options: [
-          ...(canSwitchOrg ? [{ title: t('switch-organization') }] : []),
           ...entries.map(tab => ({ title: tabLabel(tab) })),
           { title: t('button-cancel'), style: ActionSheetButtonStyle.Cancel },
         ],
       })
-      if (canSwitchOrg && index === 0) {
-        await chooseOrganization()
-        return
-      }
-      const tab = entries[index - offset]
+      const tab = entries[index]
       if (tab)
         await openTab(tab)
     }
@@ -249,14 +241,14 @@ export function useNativeChrome() {
         void goBack()
       })),
       register(NativeNavigation.addListener('navbarItemTap', ({ id }) => {
-        if (id === 'billing')
-          void router.push('/settings/organization/usage')
+        if (id === 'organization')
+          void chooseOrganization()
       })),
     ])
     await Promise.all([renderNavbar(), renderTabbar(), renderStatusBar()])
   })
 
-  watch([title, showBack, billingLabel, isDark], () => {
+  watch([title, showBack, organizationLabel, isDark], () => {
     void renderNavbar()
   })
   watch([selectedTabId, isDark, () => t('more-menu')], () => {

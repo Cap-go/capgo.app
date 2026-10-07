@@ -128,7 +128,7 @@ const tabs = computed<Tab[]>(() => {
 })
 // The app root is the overview, the landing sub-tab of Observe. Some fixed
 // pages also live directly under /app/ and are not apps.
-const NON_APP_SEGMENTS = new Set(['new', 'modules', 'modules_test'])
+const NON_APP_SEGMENTS = new Set(['new', 'plugins', 'modules', 'modules_test'])
 const isAppOverviewPath = computed(() => {
   const match = route.path.match(/^\/app\/([^/]+)\/?$/)
   return !!match && !NON_APP_SEGMENTS.has(match[1])

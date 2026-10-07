@@ -248,23 +248,16 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
-    '/app/modules': RouteRecordInfo<
-      '/app/modules',
-      '/app/modules',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/app/modules_test': RouteRecordInfo<
-      '/app/modules_test',
-      '/app/modules_test',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
     '/app/new': RouteRecordInfo<
       '/app/new',
       '/app/new',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/app/plugins': RouteRecordInfo<
+      '/app/plugins',
+      '/app/plugins',
       Record<never, never>,
       Record<never, never>,
       | never
@@ -844,25 +837,17 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | 'app'
     }
-    'src/pages/app/modules.vue': {
-      routes:
-        | '/app/modules'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/app/modules_test.vue': {
-      routes:
-        | '/app/modules_test'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
     'src/pages/app/new.vue': {
       routes:
         | '/app/new'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/app/plugins.vue': {
+      routes:
+        | '/app/plugins'
       views:
         | never
       pathParamNames:

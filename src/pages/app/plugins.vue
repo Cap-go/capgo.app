@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Browser } from '@capacitor/browser'
 import { registerPlugin } from '@capacitor/core'
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -23,6 +24,21 @@ interface PluginNote {
 }
 
 type NativePlugin = Record<string, (...args: unknown[]) => Promise<unknown>>
+
+interface InstalledPlugin {
+  name: string
+  version: string
+  url: string
+}
+
+const dependencies = JSON.parse((import.meta.env.package_dependencies as string) || '{}') as Record<string, string>
+const installedPlugins: InstalledPlugin[] = Object.keys(dependencies)
+  .filter(dep => dep.includes('capacitor'))
+  .map(dep => ({ name: dep, version: dependencies[dep], url: `https://www.npmjs.com/package/${dep}` }))
+
+function openLink(url: string) {
+  void Browser.open({ url })
+}
 
 const pluginCache = new Map<string, NativePlugin>()
 const lastResults = ref<Record<string, string>>({})
@@ -218,16 +234,25 @@ async function runMethod(m: PluginTest) {
     toast.error(`${m.label}: ${result}`)
   }
 }
-displayStore.NavTitle = `${t('module-heading')} ${t('tests')}`
+displayStore.NavTitle = t('plugins')
 displayStore.defaultBack = '/apps'
-// console.log('modules', modules.value)
 </script>
 
 <template>
   <div>
     <div class="flex overflow-y-auto flex-col bg-white shadow-sm md:mx-auto md:mt-5 md:w-2/3 md:rounded-xl md:border border-slate-200 dark:border-white/10 dark:bg-slate-800/60">
       <dl class="divide-y divide-slate-200 dark:divide-slate-500">
-        <InfoRow :label="t('available-in-the-san')" />
+        <InfoRow :label="t('discover-module-in-a')" :is-link="true" @click="openLink('https://github.com/riderx/awesome-capacitor')">
+          <button type="button" class="ml-auto w-7 h-7 bg-transparent">
+            <IconNext />
+          </button>
+        </InfoRow>
+        <InfoRow :label="t('available-in-the-san')" :value="String(installedPlugins.length)" />
+        <InfoRow v-for="plugin in installedPlugins" :key="plugin.name" :label="`${plugin.name}@${plugin.version}`" :is-link="true" @click="openLink(plugin.url)">
+          <button type="button" class="ml-auto w-7 h-7 bg-transparent">
+            <IconNext />
+          </button>
+        </InfoRow>
         <InfoRow :label="t('plugin-sandbox-native-bridge-tests')" :value="String(pluginTests.length)" />
         <InfoRow v-for="module in pluginTests" :key="pluginKey(module)" :value="lastResults[pluginKey(module)] ?? module.packageName" :label="`${module.label}@${module.method}`" :is-link="true" @click="runMethod(module)">
           <button type="button" class="d-btn d-btn-ghost d-btn-sm ml-auto w-7 h-7 p-0">

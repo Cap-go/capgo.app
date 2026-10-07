@@ -555,7 +555,7 @@ function getSkeletonWidth(columnIndex?: number) {
 const isReloading = computed(() => props.isLoading || pendingReset.value)
 const isAdding = computed(() => props.isLoading || pendingAdd.value)
 const paginationClass = computed(() => props.mobileFixedPagination
-  ? 'fixed bottom-0 left-0 z-40 flex items-center justify-between w-full px-4 py-3 border-t border-slate-200 bg-white/95 backdrop-blur md:relative md:border-t-0 md:bg-transparent md:backdrop-blur-none dark:border-white/10 dark:bg-slate-900/95 dark:md:bg-transparent'
+  ? 'native-bottom-offset fixed bottom-0 left-0 z-40 flex items-center justify-between w-full px-4 py-3 border-t border-slate-200 bg-white/95 backdrop-blur md:relative md:border-t-0 md:bg-transparent md:backdrop-blur-none dark:border-white/10 dark:bg-slate-900/95 dark:md:bg-transparent'
   : 'flex items-center justify-between w-full px-4 py-3 md:bg-transparent')
 </script>
 
