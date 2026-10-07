@@ -6,8 +6,10 @@ import { POSTGRES_URL } from './test-utils.ts'
 interface ProcState {
   anon_exec: boolean
   auth_exec: boolean
+  public_exec: boolean
   proc: string
   prosecdef: boolean
+  service_exec: boolean
 }
 
 const INVOKER_PROCS = [
@@ -148,7 +150,9 @@ describe('security definer execute hardening', () => {
         requested.proc,
         p.prosecdef,
         has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_exec,
-        has_function_privilege('authenticated', p.oid, 'EXECUTE') AS auth_exec
+        has_function_privilege('authenticated', p.oid, 'EXECUTE') AS auth_exec,
+        has_function_privilege('service_role', p.oid, 'EXECUTE') AS service_exec,
+        has_function_privilege('PUBLIC', p.oid, 'EXECUTE') AS public_exec
       FROM requested
       LEFT JOIN pg_proc AS p
         ON p.oid = requested.proc_oid
@@ -272,7 +276,9 @@ describe('security definer execute hardening', () => {
       assertProcExists(states, proc)
       const state = states.get(proc)
       expect(state?.anon_exec, proc).toBe(false)
+      expect(state?.public_exec, proc).toBe(false)
       expect(state?.auth_exec, proc).toBe(true)
+      expect(state?.service_exec, proc).toBe(true)
     }
   })
 })

@@ -133,14 +133,22 @@ ALTER FUNCTION public.check_org_members_password_policy(uuid) OWNER TO postgres;
 -- valid capgkey and do not distinguish missing apps from denied access.
 -- ---------------------------------------------------------------------------
 
+REVOKE ALL ON FUNCTION public.get_org_members_rbac(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.get_org_members_rbac(uuid) FROM anon;
 
+REVOKE ALL ON FUNCTION public.is_member_of_org(uuid, uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.is_member_of_org(uuid, uuid) FROM anon;
 
 REVOKE ALL ON FUNCTION public.update_org_invite_role_rbac(
   uuid, uuid, text
+) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.update_org_invite_role_rbac(
+  uuid, uuid, text
 ) FROM anon;
 
+REVOKE ALL ON FUNCTION public.update_tmp_invite_role_rbac(
+  uuid, text, text
+) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.update_tmp_invite_role_rbac(
   uuid, text, text
 ) FROM anon;
