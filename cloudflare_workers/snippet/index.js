@@ -68,6 +68,11 @@ async function setWebsiteLiveCache(hostname, appId, response) {
     if (!cacheTtl)
       return
     const headers = new Headers(response.headers)
+    // The body is stored decoded: drop transfer headers that no longer match
+    // it, and never replay cookies to other devices.
+    headers.delete('Content-Encoding')
+    headers.delete('Content-Length')
+    headers.delete('Set-Cookie')
     headers.set('Content-Type', 'application/json')
     headers.set('Cache-Tag', getWebsiteLiveCacheTag(appId))
     headers.set('X-Website-Live-Edge-Cache', 'hit')

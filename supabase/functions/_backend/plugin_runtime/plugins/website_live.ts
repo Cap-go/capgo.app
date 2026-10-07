@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import { eq, sql } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
 import { quickError } from '../utils/hono.ts'
@@ -43,10 +43,11 @@ export interface WebsiteLiveResponse {
 export function buildWebsiteLiveResponse(row: WebsiteLiveAppRow | null, stripeConfigured = true): WebsiteLiveResponse {
   if (!row || row.update_mode !== 'website')
     return { allowed: false, mode: 'capgo', reason: 'full_capgo' }
+  // Denials carry the interval too, so blocked devices back off as well.
   if (!row.website_url)
-    return { allowed: false, mode: 'website', reason: 'missing_website_url' }
+    return { allowed: false, mode: 'website', reason: 'missing_website_url', check_interval_seconds: WEBSITE_LIVE_CHECK_INTERVAL_SECONDS }
   if (!row.plan_valid && stripeConfigured)
-    return { allowed: false, mode: 'website', reason: 'need_plan_upgrade' }
+    return { allowed: false, mode: 'website', reason: 'need_plan_upgrade', check_interval_seconds: WEBSITE_LIVE_CHECK_INTERVAL_SECONDS }
   return {
     allowed: true,
     mode: 'website',
@@ -62,12 +63,12 @@ async function queryWebsiteLiveApp(c: Context, appId: string): Promise<WebsiteLi
     // No usage action: Website Live is unlimited, only the subscription
     // (trial, paid, or credits) must be active.
     const planValid = buildPlanValidationExpression([], schema.apps.owner_org)
-    // to_jsonb keeps the query valid on a replica that has not received the
-    // new columns yet (they read as NULL, i.e. classic Capgo).
+    // Release CI adds the columns to the replica subscriber before the
+    // primary migration runs, so they can be selected directly.
     const row = await drizzleClient
       .select({
-        update_mode: sql<string | null>`(to_jsonb(${schema.apps}) ->> 'update_mode')`,
-        website_url: sql<string | null>`(to_jsonb(${schema.apps}) ->> 'website_url')`,
+        update_mode: schema.apps.update_mode,
+        website_url: schema.apps.website_url,
         plan_valid: planValid,
       })
       .from(schema.apps)
@@ -81,8 +82,12 @@ async function queryWebsiteLiveApp(c: Context, appId: string): Promise<WebsiteLi
   }
 }
 
-function cacheHeaders(ttlSeconds: number) {
-  return { 'Cache-Control': `public, max-age=${ttlSeconds}, s-maxage=${ttlSeconds}` }
+function cacheHeaders(appId: string, ttlSeconds: number) {
+  return {
+    'Cache-Control': `public, max-age=${ttlSeconds}, s-maxage=${ttlSeconds}`,
+    // Same tag as the app purge queue, for any CDN layer that stores the response.
+    'Cache-Tag': updatesAppCacheTag(appId),
+  }
 }
 
 app.get('/', async (c) => {
@@ -95,7 +100,7 @@ app.get('/', async (c) => {
   const cached = await cache.matchJson<WebsiteLiveResponse>(cacheKey)
   if (cached) {
     c.header('X-Website-Live-Cache', 'hit')
-    return c.json(cached, 200, cacheHeaders(WEBSITE_LIVE_CACHE_TTL_SECONDS))
+    return c.json(cached, 200, cacheHeaders(appId, WEBSITE_LIVE_CACHE_TTL_SECONDS))
   }
 
   let row: WebsiteLiveAppRow | null
@@ -112,5 +117,5 @@ app.get('/', async (c) => {
   cloudlog({ requestId: c.get('requestId'), message: 'website_live', app_id: appId, allowed: response.allowed, mode: response.mode, reason: response.reason })
   await cache.putJson(cacheKey, response, WEBSITE_LIVE_CACHE_TTL_SECONDS, { tags: [updatesAppCacheTag(appId)] })
   c.header('X-Website-Live-Cache', 'miss')
-  return c.json(response, 200, cacheHeaders(WEBSITE_LIVE_CACHE_TTL_SECONDS))
+  return c.json(response, 200, cacheHeaders(appId, WEBSITE_LIVE_CACHE_TTL_SECONDS))
 })

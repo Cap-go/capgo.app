@@ -11,16 +11,16 @@ import IconLoader from '~icons/lucide/loader-circle'
 import { checkPermissions } from '~/services/permissions'
 import { useSupabase } from '~/services/supabase'
 import { normalizeWebsiteLiveUrl, useAppUpdateModeStore } from '~/stores/appUpdateMode'
+import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 
 const props = defineProps<{ appId: string }>()
-
-const WEBSITE_LIVE_PLAN_NAME = 'Website Live'
 
 const { t } = useI18n()
 const router = useRouter()
 const appUpdateModeStore = useAppUpdateModeStore()
 const organizationStore = useOrganizationStore()
+const mainStore = useMainStore()
 
 const state = computed(() => appUpdateModeStore.get(props.appId))
 const isWebsiteMode = computed(() => state.value?.updateMode === 'website')
@@ -51,14 +51,19 @@ const currentPlanName = computedAsync(async () => {
 }, null, isPlanLoading)
 const isPlanUnreadable = computed(() => !isPlanLoading.value && currentPlanName.value === null)
 const isPlanKnown = computed(() => !isPlanLoading.value && currentPlanName.value !== null)
-const needsFullPlan = computed(() => currentPlanName.value === WEBSITE_LIVE_PLAN_NAME)
+// Website Live is identified by plan kind, not by its display name.
+const websitePlanNames = computed(() => new Set(mainStore.plans.filter(plan => plan.kind === 'website').map(plan => plan.name)))
+const needsFullPlan = computed(() => !!currentPlanName.value && websitePlanNames.value.has(currentPlanName.value))
 // Recovery path: a classic-mode app in a Website Live org (for example when
 // onboarding could not save the website) can still be switched to the website.
 const showEnableWebsiteLive = computed(() => !!state.value && !isWebsiteMode.value && needsFullPlan.value)
 
 watch(() => props.appId, appId => void appUpdateModeStore.load(appId, true), { immediate: true })
+// Keep what the user is typing; only sync from the store while untouched.
+const isUrlDirty = ref(false)
 watch(state, (value) => {
-  websiteUrlInput.value = value?.websiteUrl ?? ''
+  if (!isUrlDirty.value)
+    websiteUrlInput.value = value?.websiteUrl ?? ''
 }, { immediate: true })
 
 const upgradeSteps = computed(() => [
@@ -81,6 +86,8 @@ async function saveWebsiteUrl() {
   isSavingUrl.value = true
   try {
     await appUpdateModeStore.save(props.appId, { updateMode: 'website', websiteUrl })
+    isUrlDirty.value = false
+    websiteUrlInput.value = websiteUrl
     toast.success(t('website-live-url-saved'))
   }
   catch (error) {
@@ -156,6 +163,7 @@ async function upgradeToFullCapgo() {
           data-test="website-live-url"
           :disabled="!canUpdateSettings"
           class="d-input min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+          @input="isUrlDirty = true"
           @keydown.enter.prevent="saveWebsiteUrl"
         >
         <button
@@ -258,6 +266,7 @@ async function upgradeToFullCapgo() {
         data-test="website-live-enable-url"
         :disabled="!canUpdateSettings"
         class="d-input min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+        @input="isUrlDirty = true"
         @keydown.enter.prevent="saveWebsiteUrl"
       >
       <button

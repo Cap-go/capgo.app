@@ -284,10 +284,6 @@ watch(qualifiesForWebsiteLive, (qualified) => {
   if (!updateModeTouched.value)
     updateMode.value = qualified ? 'website' : 'capgo'
 }, { immediate: true })
-watch(() => websitePreview.value?.website ?? '', (website) => {
-  if (website && !websiteLiveUrlInput.value.trim())
-    websiteLiveUrlInput.value = website
-})
 
 function selectUpdateMode(mode: OnboardingUpdateMode) {
   updateMode.value = mode
@@ -3505,6 +3501,9 @@ defineExpose({
                     >
                     <p class="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">
                       {{ t('website-live-onboarding-url-help') }}
+                    </p>
+                    <p v-if="normalizedWebsiteLiveUrl" class="mt-1 text-xs font-medium text-slate-800 dark:text-slate-100" data-test="onboarding-website-live-url-preview">
+                      {{ t('website-live-onboarding-url-preview', { url: normalizedWebsiteLiveUrl }) }}
                     </p>
                   </div>
                   <div>

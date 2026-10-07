@@ -23,13 +23,13 @@ describe('buildWebsiteLiveResponse', () => {
 
   it('blocks website apps without an active plan unless Stripe is not configured', () => {
     const row = { update_mode: 'website', website_url: 'https://a.example.com/', plan_valid: false }
-    expect(buildWebsiteLiveResponse(row)).toEqual({ allowed: false, mode: 'website', reason: 'need_plan_upgrade' })
+    expect(buildWebsiteLiveResponse(row)).toEqual({ allowed: false, mode: 'website', reason: 'need_plan_upgrade', check_interval_seconds: 600 })
     expect(buildWebsiteLiveResponse(row, false).allowed).toBe(true)
   })
 
   it('blocks website apps without a URL', () => {
     expect(buildWebsiteLiveResponse({ update_mode: 'website', website_url: null, plan_valid: true }))
-      .toEqual({ allowed: false, mode: 'website', reason: 'missing_website_url' })
+      .toEqual({ allowed: false, mode: 'website', reason: 'missing_website_url', check_interval_seconds: 600 })
   })
 })
 
@@ -46,6 +46,9 @@ describe('normalizeWebsiteLiveUrl', () => {
   it('rejects non https and invalid hosts', () => {
     expect(normalizeWebsiteLiveUrl('http://app.example.com')).toBeNull()
     expect(normalizeWebsiteLiveUrl('localhost')).toBeNull()
+    expect(normalizeWebsiteLiveUrl('https://127.0.0.1')).toBeNull()
+    expect(normalizeWebsiteLiveUrl('https://169.254.169.254/')).toBeNull()
+    expect(normalizeWebsiteLiveUrl('https://xn--80ak6aa92e.xn--p1ai')).toBe('https://xn--80ak6aa92e.xn--p1ai/')
     expect(normalizeWebsiteLiveUrl('https://user:pass@app.example.com')).toBeNull()
     expect(normalizeWebsiteLiveUrl('   ')).toBeNull()
   })

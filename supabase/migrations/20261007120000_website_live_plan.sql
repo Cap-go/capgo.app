@@ -92,7 +92,8 @@ ALTER TABLE public.apps
     OR (
       pg_catalog.length(website_url) <= 2048
       -- Root of the domain only: the updater stores files relative to the bundle root.
-      AND website_url ~ '^https://[A-Za-z0-9.-]+(:[0-9]+)?/?$'
+      -- Public domain names only (no IP literals, localhost or single-label hosts).
+      AND website_url ~ '^https://([A-Za-z0-9-]+\.)+([A-Za-z]{2,}|xn--[A-Za-z0-9-]+)(:[0-9]{1,5})?/?$'
     )
   );
 

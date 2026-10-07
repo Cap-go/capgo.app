@@ -4116,5 +4116,6 @@
   "website-live-enable-description": "Your organization is on the Website Live plan, but this app still uses classic Capgo updates. Add your website address to turn on Website Live for it.",
   "website-live-enable-cta": "Turn on Website Live",
   "website-live-onboarding-save-error": "Your app was created, but Website Live could not be turned on. Open the app settings to add your website address.",
-  "website-live-upgrade-plan-unknown": "We could not check your organization plan. Ask an organization admin with billing access to make this switch."
+  "website-live-upgrade-plan-unknown": "We could not check your organization plan. Ask an organization admin with billing access to make this switch.",
+  "website-live-onboarding-url-preview": "Installed apps will download and run the website at {url}"
 }
