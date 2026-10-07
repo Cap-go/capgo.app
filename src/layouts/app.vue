@@ -277,11 +277,12 @@ function handleSecondaryTab(key: string) {
       @update:tertiary-active-tab="handleTertiaryTab"
     />
     <main class="relative flex flex-1 w-full min-h-0 mt-0 overflow-hidden bg-blue-50 dark:bg-slate-800/40">
-      <div v-if="showUnpaidState" class="flex-1 w-full min-h-0 mx-auto overflow-y-auto">
+      <div v-if="showUnpaidState" data-native-scroll class="flex-1 w-full min-h-0 mx-auto overflow-y-auto">
         <UnpaidState />
       </div>
       <template v-else>
         <div
+          data-native-scroll
           class="flex-1 w-full min-h-0 mx-auto"
           :class="showPaymentOverlay ? 'overflow-hidden blur-sm pointer-events-none select-none' : 'overflow-y-auto'"
         >

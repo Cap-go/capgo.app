@@ -109,7 +109,7 @@ useEdgeSwipeBack(contentShell, {
       <OnboardingExploreBanner v-if="pendingOnboardingAppId" :app-id="pendingOnboardingAppId" />
       <OnboardingExploreReminder v-if="pendingOnboardingAppId" :app-id="pendingOnboardingAppId" />
       <main class="w-full h-full overflow-hidden">
-        <RouterView class="h-full overflow-y-auto grow" />
+        <RouterView class="native-route-scroll h-full overflow-y-auto grow" />
       </main>
     </div>
     <LogAsDialogField />

@@ -348,16 +348,21 @@ html {
 
 /* Capacitor dashboard shell. The top inset reserves the native navbar. The
    bottom is not padded on the shell: content scrolls under the floating native
-   tabbar, and only the innermost scroll containers get end padding so their
-   last rows can scroll clear of it. */
+   tabbar, and a spacer at the end of the scroll container lets the last rows
+   scroll clear of it. Scroll containers are the nested layouts' marked
+   [data-native-scroll] element, or the route root for pages without one. */
 .native-chrome-content {
   padding-top: var(--cap-native-navigation-top, var(--safe-area-top));
   padding-right: var(--cap-native-navigation-right, var(--safe-area-right));
   padding-left: var(--cap-native-navigation-left, var(--safe-area-left));
 }
 
-.native-chrome-content main .overflow-y-auto:not(:has(.overflow-y-auto)):not([class*='max-h-']) {
-  padding-bottom: var(--cap-native-navigation-bottom, var(--safe-area-bottom));
+.native-chrome-content [data-native-scroll]::after,
+.native-chrome-content .native-route-scroll:not(:has([data-native-scroll]))::after {
+  content: '';
+  display: block;
+  flex-shrink: 0;
+  height: calc(var(--cap-native-navigation-bottom, var(--safe-area-bottom)) + 1rem);
 }
 
 /* Mobile table pagination bars are fixed to the viewport bottom: lift them
