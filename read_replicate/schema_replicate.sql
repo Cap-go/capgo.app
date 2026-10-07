@@ -121,7 +121,7 @@ CREATE TABLE public.apps (
     CONSTRAINT apps_build_timeout_seconds_check CHECK (((build_timeout_seconds >= 300) AND (build_timeout_seconds <= 21600))),
     CONSTRAINT apps_update_mode_check CHECK ((update_mode = ANY (ARRAY['capgo'::text, 'website'::text]))),
     CONSTRAINT apps_website_mode_requires_url CHECK (((update_mode <> 'website'::text) OR (website_url IS NOT NULL))),
-    CONSTRAINT apps_website_url_check CHECK (((website_url IS NULL) OR ((length(website_url) <= 2048) AND (website_url ~ '^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[^[:space:]]*)?$'::text))))
+    CONSTRAINT apps_website_url_check CHECK (((website_url IS NULL) OR ((length(website_url) <= 2048) AND (website_url ~ '^https://[A-Za-z0-9.-]+(:[0-9]+)?/?$'::text))))
 );
 
 ALTER TABLE ONLY public.apps REPLICA IDENTITY FULL;

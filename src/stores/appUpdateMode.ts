@@ -90,8 +90,9 @@ export function normalizeWebsiteLiveUrl(input: string): string | null {
   }
   if (url.protocol !== 'https:' || !url.hostname.includes('.') || url.username || url.password)
     return null
-  url.hash = ''
-  url.search = ''
-  const normalized = url.toString()
-  return normalized.length <= 2048 ? normalized : null
+  // The updater stores files relative to the bundle root, so the app must be
+  // served from the root of the domain.
+  if (url.pathname !== '/' && url.pathname !== '/index.html')
+    return null
+  return `${url.origin}/`
 }

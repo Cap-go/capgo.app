@@ -34,8 +34,13 @@ describe('buildWebsiteLiveResponse', () => {
 })
 
 describe('normalizeWebsiteLiveUrl', () => {
-  it('adds https and drops query and hash', () => {
-    expect(normalizeWebsiteLiveUrl('app.example.com/path?x=1#y')).toBe('https://app.example.com/path')
+  it('adds https and keeps only the origin', () => {
+    expect(normalizeWebsiteLiveUrl('app.example.com?x=1#y')).toBe('https://app.example.com/')
+    expect(normalizeWebsiteLiveUrl('https://app.example.com/index.html')).toBe('https://app.example.com/')
+  })
+
+  it('rejects websites served from a sub path', () => {
+    expect(normalizeWebsiteLiveUrl('https://example.com/app/')).toBeNull()
   })
 
   it('rejects non https and invalid hosts', () => {

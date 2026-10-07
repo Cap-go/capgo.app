@@ -67,6 +67,14 @@ describe('apps website mode constraints', () => {
     expect(error?.code).toBe('23514')
   })
 
+  it('rejects websites served from a sub path', async () => {
+    const { error } = await getSupabaseClient()
+      .from('apps')
+      .update({ website_url: 'https://example.com/app/' })
+      .eq('app_id', CLASSIC_APP)
+    expect(error?.code).toBe('23514')
+  })
+
   it('rejects non https website URLs', async () => {
     const { error } = await getSupabaseClient()
       .from('apps')
