@@ -1,5 +1,22 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import {
+  getNewCustomersBillingAccount,
+  getPlanCreditProductId,
+  getPlanPriceId,
+  getPlanProductId,
+  getRequestCountry,
+  getStripeSecretKeyEnvName,
+  getStripeWebhookSecretEnvName,
+  getSuggestedBillingAccount,
+  IncompleteUsPlanConfigError,
+  normalizeBillingAccount,
+  planProductIdOrFilter,
+  resolveCheckoutPlanProductId,
+  resolveNewOrgBillingAccount,
+  resolvePlanCreditProductId,
+} from '../supabase/functions/_backend/utils/stripe_billing.ts'
+
 const mockedEnv: Record<string, string> = {
   STRIPE_NEW_CUSTOMERS_ACCOUNT: 'ee',
 }
@@ -12,28 +29,25 @@ vi.mock('hono/adapter', async (importOriginal) => {
   }
 })
 
-import {
-  getNewCustomersBillingAccount,
-  getPlanCreditProductId,
-  getPlanPriceId,
-  getPlanProductId,
-  IncompleteUsPlanConfigError,
-  getStripeSecretKeyEnvName,
-  getStripeWebhookSecretEnvName,
-  normalizeBillingAccount,
-  planProductIdOrFilter,
-  resolveCheckoutPlanProductId,
-  resolvePlanCreditProductId,
-} from '../supabase/functions/_backend/utils/stripe_billing.ts'
-
 function createContext() {
   return {
     get: (key: string) => key === 'requestId' ? 'stripe-billing-test' : undefined,
   } as any
 }
 
+function createGeoContext(country?: string, header?: string) {
+  return {
+    get: () => undefined,
+    req: {
+      raw: country ? { cf: { country } } : {},
+      header: (name: string) => name === 'cf-ipcountry' ? header : undefined,
+    },
+  } as any
+}
+
 afterEach(() => {
   mockedEnv.STRIPE_NEW_CUSTOMERS_ACCOUNT = 'ee'
+  delete mockedEnv.STRIPE_SECRET_KEY_US
 })
 
 const SOLO_PLAN = {
@@ -176,5 +190,32 @@ describe('stripe billing account helpers', () => {
     finally {
       lookupErrorSpy.mockRestore()
     }
+  })
+})
+
+describe('new org billing account from location', () => {
+  it('reads the request country from Cloudflare or the cf-ipcountry header', () => {
+    expect(getRequestCountry(createGeoContext('US'))).toBe('US')
+    expect(getRequestCountry(createGeoContext(undefined, 'us'))).toBe('US')
+    expect(getRequestCountry(createGeoContext(undefined, 'XX1'))).toBeNull()
+    expect(getRequestCountry(createGeoContext())).toBeNull()
+  })
+
+  it('suggests us for US visitors only when the US account is configured', () => {
+    expect(getSuggestedBillingAccount(createGeoContext('US'))).toBe('ee')
+    mockedEnv.STRIPE_SECRET_KEY_US = 'sk_test_us'
+    expect(getSuggestedBillingAccount(createGeoContext('US'))).toBe('us')
+    expect(getSuggestedBillingAccount(createGeoContext('FR'))).toBe('ee')
+  })
+
+  it('lets the user choice override the suggestion', () => {
+    mockedEnv.STRIPE_SECRET_KEY_US = 'sk_test_us'
+    expect(resolveNewOrgBillingAccount(createGeoContext('US'), 'ee')).toBe('ee')
+    expect(resolveNewOrgBillingAccount(createGeoContext('FR'), 'us')).toBe('us')
+    expect(resolveNewOrgBillingAccount(createGeoContext('US'))).toBe('us')
+  })
+
+  it('falls back to ee when us is requested but not configured', () => {
+    expect(resolveNewOrgBillingAccount(createGeoContext('US'), 'us')).toBe('ee')
   })
 })

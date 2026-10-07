@@ -1,11 +1,11 @@
 import type { Context } from 'hono'
+import type { BillingAccount } from './stripe_billing.ts'
 import type { Database } from './supabase.types.ts'
 import Stripe from 'stripe'
 import { simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { supabaseAdmin } from './supabase.ts'
 import {
-  type BillingAccount,
+
   getBillingAccountForCustomer,
   getPlanPriceId,
   getStripeSecretKey,
@@ -13,6 +13,7 @@ import {
   planProductIdOrFilter,
   resolveCheckoutPlanProductId,
 } from './stripe_billing.ts'
+import { supabaseAdmin } from './supabase.ts'
 import { getEnv, isStripeConfigured, trimTrailingSlashes } from './utils.ts'
 
 export type { BillingAccount } from './stripe_billing.ts'
@@ -22,11 +23,11 @@ export {
   getNewCustomersBillingAccount,
   getPlanCreditProductId,
   getPlanProductId,
-  resolvePlanCreditProductId,
   getStripeWebhookSecret,
   isStripeConfiguredForAccount,
   normalizeBillingAccount,
   planProductIdOrFilter,
+  resolvePlanCreditProductId,
 } from './stripe_billing.ts'
 
 const TRACKED_STRIPE_SUBSCRIPTION_STATUSES = ['active', 'trialing', 'past_due'] as const

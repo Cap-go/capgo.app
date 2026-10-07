@@ -133,7 +133,7 @@ const TRANSFER_INVOICE_PAYMENT_METHOD_TYPES = new Set([
   'ach_credit_transfer',
 ])
 
-type TransferInvoiceShape = {
+interface TransferInvoiceShape {
   collection_method?: Stripe.Invoice.CollectionMethod | null
   payment_settings?: {
     payment_method_types?: string[] | null

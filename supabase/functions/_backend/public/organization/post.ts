@@ -1,14 +1,16 @@
 import type { Context } from 'hono'
 import type { AuthInfo, MiddlewareKeyVariables } from '../../utils/hono.ts'
+import type { BillingAccount } from '../../utils/stripe_billing.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { z } from 'zod'
-import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
-import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { assertJwtMfaAssurance } from '../../utils/jwt_mfa_assurance.ts'
-import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
 import { parseOrgOnboardingDevelopmentEnvironment, parseOrgOnboardingIntent } from '../../utils/org_onboarding_intent.ts'
-import { getNewCustomersBillingAccount, getPlanProductId } from '../../utils/stripe.ts'
+import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { safeParseSchema } from '../../utils/schema_validation.ts'
+import { getPlanProductId } from '../../utils/stripe.ts'
+import { resolveNewOrgBillingAccount } from '../../utils/stripe_billing.ts'
+import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
 import { normalizeWebsiteUrl } from './website.ts'
 
 const MAX_ESTIMATED_MAU = 1_000_000
@@ -26,16 +28,15 @@ const bodySchema = z.object({
   intent: z.enum(['ota', 'builder', 'both', 'exploring', 'publish', 'unknown']).optional(),
   startingOut: z.boolean().optional(),
   developmentEnvironment: z.enum(['hosted_builder', 'ai_assistant', 'hand_coded', 'other', 'local_project', 'exploring', 'skipped']).optional(),
+  billingAccount: z.enum(['ee', 'us']).optional(),
 })
-
 
 interface PgTransactionClient {
   query: <T = unknown>(text: string, params?: unknown[]) => Promise<{ rows: T[], rowCount?: number | null }>
   release: () => void
 }
 
-async function getInitialPlanForMau(c: Context<MiddlewareKeyVariables>, estimatedMau: number) {
-  const billingAccount = getNewCustomersBillingAccount(c)
+async function getInitialPlanForMau(c: Context<MiddlewareKeyVariables>, estimatedMau: number, billingAccount: BillingAccount) {
   const adminClient = supabaseAdmin(c)
   const { data: plan, error } = await adminClient
     .from('plans')
@@ -59,9 +60,8 @@ async function getInitialPlanForMau(c: Context<MiddlewareKeyVariables>, estimate
   return plan
 }
 
-async function createPendingStripeInfo(c: Context<MiddlewareKeyVariables>, orgId: string, estimatedMau: number) {
-  const billingAccount = getNewCustomersBillingAccount(c)
-  const plan = await getInitialPlanForMau(c, estimatedMau)
+async function createPendingStripeInfo(c: Context<MiddlewareKeyVariables>, orgId: string, estimatedMau: number, billingAccount: BillingAccount) {
+  const plan = await getInitialPlanForMau(c, estimatedMau, billingAccount)
   const pendingCustomerId = `pending_${orgId}`
   const trialAt = new Date()
   trialAt.setDate(trialAt.getDate() + 15)
@@ -282,7 +282,8 @@ export async function post(
   await ensureApiKeyCanCreateOrganization(c, auth)
   const ownerEmail = await getOwnerEmail(c, auth)
   const orgId = crypto.randomUUID()
-  const pendingCustomerId = await createPendingStripeInfo(c, orgId, estimatedMau)
+  const billingAccount = resolveNewOrgBillingAccount(c, body.billingAccount)
+  const pendingCustomerId = await createPendingStripeInfo(c, orgId, estimatedMau, billingAccount)
   const onboarding = {
     intent: parseOrgOnboardingIntent({ intent: body.intent }),
     starting_out: body.startingOut ?? false,

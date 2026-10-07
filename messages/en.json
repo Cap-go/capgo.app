@@ -4055,5 +4055,11 @@
   "custom-domain-confirm-remove": "Confirm removal",
   "custom-domain-error": "Unable to load or update this domain. Check your Enterprise plan and permissions, then retry or contact support.",
   "custom-domain-guide": "Custom domain setup guide",
-  "release-live-watch-rollout": "Watch {version}"
+  "release-live-watch-rollout": "Watch {version}",
+  "billing-region-label": "Billing entity",
+  "billing-region-us-detected": "You seem to be in the United States, so we'll bill you from our US company. Is that OK?",
+  "billing-region-option-us": "Yes, bill me from the US",
+  "billing-region-option-us-desc": "CodepushGo LLC · US invoices and sales tax",
+  "billing-region-option-ee": "No, bill me from Europe",
+  "billing-region-option-ee-desc": "Capgo OÜ (Estonia) · EU VAT invoices"
 }

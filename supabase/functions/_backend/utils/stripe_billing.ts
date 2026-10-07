@@ -29,6 +29,30 @@ export function getNewCustomersBillingAccount(c: Context): BillingAccount {
   throw new Error(`Invalid STRIPE_NEW_CUSTOMERS_ACCOUNT value: ${JSON.stringify(flag)}`)
 }
 
+export function getRequestCountry(c: Context): string | null {
+  // Cloudflare sets request.cf.country; the header covers Supabase/proxied requests.
+  const raw = (c.req.raw as { cf?: { country?: unknown } } | undefined)?.cf?.country ?? c.req.header('cf-ipcountry')
+  if (typeof raw !== 'string')
+    return null
+  const country = raw.trim().toUpperCase()
+  return /^[A-Z]{2}$/.test(country) ? country : null
+}
+
+export function getSuggestedBillingAccount(c: Context): BillingAccount {
+  if (getRequestCountry(c) === 'US' && isStripeConfiguredForAccount(c, 'us'))
+    return 'us'
+  return getNewCustomersBillingAccount(c)
+}
+
+// New orgs: an explicit user choice wins, otherwise fall back to the geo suggestion.
+export function resolveNewOrgBillingAccount(c: Context, requested?: BillingAccount | null): BillingAccount {
+  if (requested === 'us')
+    return isStripeConfiguredForAccount(c, 'us') ? 'us' : getNewCustomersBillingAccount(c)
+  if (requested === 'ee')
+    return 'ee'
+  return getSuggestedBillingAccount(c)
+}
+
 export function getStripeSecretKeyEnvName(account: BillingAccount): string {
   return account === 'us' ? 'STRIPE_SECRET_KEY_US' : 'STRIPE_SECRET_KEY'
 }
@@ -61,7 +85,7 @@ export class IncompleteUsPlanConfigError extends Error {
 
 function normalizeUsPlanField(value: string | null | undefined): string | null {
   const trimmed = value?.trim()
-  return trimmed ? trimmed : null
+  return trimmed || null
 }
 
 function requireUsPlanField(value: string | null | undefined, field: string): string {
@@ -132,7 +156,7 @@ export function getPlanCreditProductId(plan: PlanStripeIds, account: BillingAcco
 }
 
 // Stripe product ids: prod_ + alphanumeric/underscore/hyphen (see Stripe 2018-05-21 id rules).
-const STRIPE_PRODUCT_ID_REGEX = /^prod_[A-Za-z0-9_-]+$/
+const STRIPE_PRODUCT_ID_REGEX = /^prod_[\w-]+$/
 
 export function planProductIdOrFilter(productId: string): string {
   if (!STRIPE_PRODUCT_ID_REGEX.test(productId))

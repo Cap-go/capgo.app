@@ -160,7 +160,7 @@ async function readPlanConcurrencyLimit(client: PgClient, orgId: string): Promis
         COALESCE(current_plan.native_build_concurrency, solo_plan.native_build_concurrency) AS native_build_concurrency
       FROM public.orgs o
       LEFT JOIN public.stripe_info si ON o.customer_id = si.customer_id
-      LEFT JOIN public.plans current_plan ON si.product_id = current_plan.stripe_id
+      LEFT JOIN public.plans current_plan ON si.product_id IN (current_plan.stripe_id, current_plan.stripe_id_us)
       LEFT JOIN public.plans solo_plan ON solo_plan.name = 'Solo'
       WHERE o.id = $1
       LIMIT 1
