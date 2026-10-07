@@ -59,7 +59,10 @@ async function handleBackgroundNotification({ notification, finish }: CapgoBackg
     // Plugin 8.x runs the updater natively and reports it here: nothing left to do.
     const nativeStatus = getStringData(notification.data, 'capgoNativeUpdateCheck')
     if (nativeStatus && nativeStatus !== 'unsupported') {
-      result = nativeStatus === 'queued' ? 'newData' : nativeStatus === 'failed' ? 'failed' : 'noData'
+      if (nativeStatus === 'queued')
+        result = 'newData'
+      else if (nativeStatus === 'failed')
+        result = 'failed'
       return
     }
     const requested = getStringData(notification.data, 'capgoUpdateInstallMode', 'capgo_update_install_mode')
