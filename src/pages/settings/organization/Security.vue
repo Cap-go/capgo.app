@@ -830,14 +830,14 @@ async function copyPasswordPolicyEmailList() {
 }
 
 // Check impact before enabling password policy
-async function checkPasswordPolicyImpact() {
+async function checkPasswordPolicyImpact(): Promise<boolean> {
   if (!currentOrganization.value)
-    return
+    return false
 
   affectedMembers.value = []
   const impact = await organizationStore.checkPasswordPolicyImpact(currentOrganization.value.gid)
   if (!impact)
-    return
+    return false
 
   const { data: members, error } = await supabase.rpc('get_org_members', {
     guild_id: currentOrganization.value.gid,
@@ -845,11 +845,11 @@ async function checkPasswordPolicyImpact() {
   if (error) {
     console.error('Failed to load member identities:', error)
     toast.error(t('error-loading-settings'))
-    return
+    return false
   }
 
   const membersById = new Map((members ?? []).map(member => [member.uid, member]))
-  affectedMembers.value = impact.nonCompliantUsers
+  const resolvedMembers = impact.nonCompliantUsers
     .map((user) => {
       const member = membersById.get(user.user_id)
       if (!member)
@@ -862,6 +862,15 @@ async function checkPasswordPolicyImpact() {
       }
     })
     .filter((member): member is NonNullable<typeof member> => member !== null)
+
+  if (resolvedMembers.length !== impact.nonCompliantUsers.length) {
+    console.error('Impacted users missing from org member list')
+    toast.error(t('error-loading-settings'))
+    return false
+  }
+
+  affectedMembers.value = resolvedMembers
+  return true
 }
 
 // Handle password policy toggle
@@ -874,7 +883,11 @@ async function handlePolicyToggle() {
 
   if (policyEnabled.value) {
     // Enabling policy - show impact warning
-    await checkPasswordPolicyImpact()
+    const impactReady = await checkPasswordPolicyImpact()
+    if (!impactReady) {
+      policyEnabled.value = false
+      return
+    }
 
     if (affectedMembers.value.length > 0) {
       // Show warning dialog
