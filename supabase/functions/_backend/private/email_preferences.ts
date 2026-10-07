@@ -231,16 +231,10 @@ app.post('/', async (c) => {
   const email = await resolvePreferenceEmail(c, parsed.data.email, parsed.data.uuid)
   if (email === undefined)
     return simpleErrorWithStatus(c, 503, 'email_preferences_unavailable', 'Could not resolve email preferences')
-  if (email === null)
+  if (email === null && parsed.data.uuid)
     return simpleErrorWithStatus(c, 404, 'email_preferences_not_found', 'Email preferences could not be found')
 
-  const hasCapgoPreferenceChanges = unsubscribeAll
-    || Object.keys(preferenceOptOuts).length > 0
-    || parsed.data.enable_notifications === false
-    || parsed.data.opt_for_newsletters === false
-
   try {
-    let capgoUpdated = false
     const admin = supabaseAdmin(c)
     const { data: user, error } = await admin
       .from('users')
@@ -300,10 +294,8 @@ app.post('/', async (c) => {
       }
 
       await syncUserPreferenceTags(c, email, updated, previous, email)
-      capgoUpdated = true
     }
 
-    let bentoUnsubscribed = false
     if (unsubscribeAll) {
       const unsubscribed = await unsubscribeBento(c, email)
       if (unsubscribed === false) {
@@ -314,20 +306,6 @@ app.post('/', async (c) => {
         if (isBentoConfigured(c))
           return simpleErrorWithStatus(c, 503, 'email_preferences_unavailable', 'Could not save email preferences')
       }
-      else if (unsubscribed === true) {
-        bentoUnsubscribed = true
-      }
-    }
-
-    if (!capgoUpdated) {
-      if (unsubscribeAll && bentoUnsubscribed)
-        capgoUpdated = true
-      else if (hasCapgoPreferenceChanges)
-        return simpleErrorWithStatus(c, 404, 'email_preferences_not_found', 'Email preferences could not be found')
-      else if (unsubscribeAll && isBentoConfigured(c))
-        return simpleErrorWithStatus(c, 503, 'email_preferences_unavailable', 'Could not save email preferences')
-      else
-        return simpleErrorWithStatus(c, 404, 'email_preferences_not_found', 'Email preferences could not be found')
     }
 
     cloudlog({

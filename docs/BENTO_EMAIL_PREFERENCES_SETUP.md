@@ -127,7 +127,7 @@ Do **not** use `?email={{ visitor.uuid }}` — the console treats UUID-shaped `e
 
 - Prefills the address only — the visitor chooses what to disable
 - `uuid` is resolved server-side via Bento `GET /fetch/subscribers` so the email never appears in the page URL
-- Save returns an error when the visitor id or email cannot be updated (unknown subscriber, or no Capgo user for partial opt-outs)
+- Save returns an error when a Bento visitor id cannot be resolved; explicit email saves always return the same success shape (no Capgo account oracle)
 - This public path is **opt-out only** (cannot re-enable prefs; use logged-in settings for that)
 - “Unsubscribe from all” calls Bento unsubscribe for that address
 - Cloudflare Turnstile required when `CAPTCHA_SECRET_KEY` / `VITE_CAPTCHA_KEY` are set (same as invite/login)

@@ -78,8 +78,16 @@ await capture('email-preferences-load-error.webp', `/email-preferences?uuid=${vi
   })
 })
 
-await capture('email-preferences-save-error.webp', `/email-preferences?email=user@example.com`, async (page) => {
+await capture('email-preferences-save-error.webp', `/email-preferences?uuid=${visitorHex}`, async (page) => {
   await page.route('**/private/email_preferences**', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'email_preferences_not_found', status: 'Error' }),
+      })
+      return
+    }
     if (route.request().method() === 'POST') {
       await route.fulfill({
         status: 404,
