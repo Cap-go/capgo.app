@@ -20,4 +20,4 @@ WEBSITE_DIR=../website BASE_URL=http://localhost:5173 bun run screenshots:market
 
 All data is fake. Teammates use `@example.com` addresses. Never point this at a real account.
 
-When a page layout changes, adjust its `prepare` step or crop in `shots.ts`, rerun, and check the PNGs in `.context/marketing-screenshots/png/` before opening the website PR.
+When a page layout changes, adjust its `prepare` step or crop in `shots.ts`, rerun, and check the raw captures in `.context/marketing-screenshots/png/` before opening the website PR.

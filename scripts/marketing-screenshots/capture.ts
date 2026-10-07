@@ -9,7 +9,7 @@
  *   BASE_URL     frontend URL (default http://localhost:5173)
  *   DB_URL       local Postgres, set by `supabase:with-env`; seeding is skipped without it
  *   WEBSITE_DIR  website repo root; webp files are written to apps/web/public/landing-demos
- *   OUT_DIR      raw PNG + webp output (default .context/marketing-screenshots)
+ *   OUT_DIR      raw png + webp output (default .context/marketing-screenshots)
  *
  * Seeds fake demo data into the LOCAL stack only and refuses any non-local database.
  */
@@ -42,7 +42,8 @@ async function seed() {
     console.log(skipSeed ? 'Skipping seed (--no-seed).' : 'DB_URL not set: skipping seed. Run through `bun run screenshots:marketing`.')
     return
   }
-  const host = new URL(dbUrl).hostname
+  // IPv6 hosts come back bracketed (`[::1]`) from URL.hostname.
+  const host = new URL(dbUrl).hostname.replace(/^\[|\]$/g, '')
   if (!['127.0.0.1', 'localhost', '::1'].includes(host))
     throw new Error(`Refusing to seed non-local database host "${host}".`)
   const client = new Client({ connectionString: dbUrl })
@@ -137,7 +138,7 @@ async function main() {
   }
 
   await browser.close()
-  console.log(`Done. PNGs in ${resolve(outDir, 'png')}${websiteDir ? `, webp written to ${websiteDir}` : ''}.`)
+  console.log(`Done. Raw captures in ${resolve(outDir, 'png')}${websiteDir ? `, webp written to ${websiteDir}` : ''}.`)
 }
 
 main().catch((error) => {
