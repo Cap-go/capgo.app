@@ -789,7 +789,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
                   } ${col.onClick
                     ? 'cursor-pointer hover:underline clickable-cell'
                     : ''
-                  }`" scope="row" class="px-4 py-3 font-medium text-slate-900 whitespace-nowrap md:py-3.5 md:px-6 dark:text-white"
+                  }`" scope="row" class="px-4 py-3 font-medium text-slate-900 break-words md:whitespace-nowrap md:py-3.5 md:px-6 dark:text-white"
                   @click.stop="col.onClick ? col.onClick(elem) : () => { }"
                 >
                   <RenderCell v-if="col.renderFunction" :renderer="col.renderFunction" :item="elem" />
@@ -844,7 +844,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
                 </td>
                 <td
                   v-else
-                  class="overflow-hidden text-ellipsis whitespace-nowrap px-4 py-3 md:py-3.5 md:px-6"
+                  class="break-words md:overflow-hidden md:text-ellipsis md:whitespace-nowrap px-4 py-3 md:py-3.5 md:px-6"
                   :class="`${col.class ?? ''} ${!col.mobile ? 'hidden md:table-cell' : ''
                   } ${col.onClick
                     ? 'cursor-pointer hover:underline clickable-cell'

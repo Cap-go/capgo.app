@@ -49,11 +49,11 @@ function openGitHubProfileDialog() {
 
 <template>
   <section
-    class="overflow-hidden rounded-2xl border border-primary-500/20 bg-linear-to-br from-primary-500/5 via-white to-slate-50 shadow-sm dark:border-primary-500/30 dark:from-primary-500/10 dark:via-slate-950/90 dark:to-slate-950"
+    class="overflow-hidden sm:rounded-2xl sm:border sm:border-primary-500/20 sm:bg-linear-to-br sm:from-primary-500/5 sm:via-white sm:to-slate-50 sm:shadow-sm sm:dark:border-primary-500/30 sm:dark:from-primary-500/10 sm:dark:via-slate-950/90 sm:dark:to-slate-950"
     :class="{ 'shadow-none': compact }"
     aria-labelledby="onboarding-support-usernames-title"
   >
-    <div class="space-y-4 p-4 sm:p-5">
+    <div class="space-y-4 sm:p-5">
       <div :class="hideIntro ? 'sr-only' : 'flex items-start gap-3'">
         <span v-if="!hideIntro" class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary-500 text-white shadow-sm shadow-primary-500/30">
           <IconHeadset class="h-5 w-5" aria-hidden="true" />
@@ -89,7 +89,7 @@ function openGitHubProfileDialog() {
       </ul>
 
       <div class="grid gap-3 sm:grid-cols-2">
-        <div class="rounded-xl border border-slate-200 bg-white p-3 dark:border-white/15 dark:bg-slate-950/80">
+        <div class="sm:rounded-xl sm:border sm:border-slate-200 sm:bg-white sm:p-3 sm:dark:border-white/15 sm:dark:bg-slate-950/80">
           <label for="onboarding-discord-username" class="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-slate-200">
             <IconDiscord class="h-4 w-4 text-primary-500" aria-hidden="true" />
             <span>{{ t('discord-username') }}</span>
@@ -118,7 +118,7 @@ function openGitHubProfileDialog() {
           </p>
         </div>
 
-        <div class="rounded-xl border border-slate-200 bg-white p-3 dark:border-white/15 dark:bg-slate-950/80">
+        <div class="sm:rounded-xl sm:border sm:border-slate-200 sm:bg-white sm:p-3 sm:dark:border-white/15 sm:dark:bg-slate-950/80">
           <label for="onboarding-github-username" class="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-slate-200">
             <IconGithub class="h-4 w-4 text-primary-500" aria-hidden="true" />
             <span>{{ t('github-username') }}</span>
