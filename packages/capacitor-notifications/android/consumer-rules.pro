@@ -3,3 +3,6 @@
 -keepclassmembers class ee.forgr.capacitor_updater.CapacitorUpdaterPlugin {
     public java.lang.String triggerBackgroundUpdateCheck();
 }
+-keep class ee.forgr.capacitor_updater.HeadlessUpdateWorker {
+    public static void enqueue(android.content.Context);
+}

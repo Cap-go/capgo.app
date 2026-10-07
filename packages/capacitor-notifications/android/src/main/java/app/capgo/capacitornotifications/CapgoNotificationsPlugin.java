@@ -326,10 +326,22 @@ public class CapgoNotificationsPlugin extends Plugin {
     }
 
     public static void sendRemoteMessage(RemoteMessage remoteMessage) {
+        sendRemoteMessage(null, remoteMessage);
+    }
+
+    /**
+     * Pass the messaging service as context: when the app has no running bridge (killed app woken
+     * by FCM), an update-check push then starts the updater's headless update right away instead
+     * of waiting for the next launch.
+     */
+    public static void sendRemoteMessage(Context context, RemoteMessage remoteMessage) {
         CapgoNotificationsPlugin plugin = CapgoNotificationsPlugin.getCapgoNotificationsInstance();
         if (plugin != null) {
             plugin.fireNotification(remoteMessage);
         } else {
+            if (context != null && isCapgoUpdateCheckMessage(remoteMessage)) {
+                enqueueHeadlessUpdateCheck(context);
+            }
             synchronized (pendingMessagesLock) {
                 if (pendingMessages.size() >= MAX_PENDING_MESSAGES) {
                     pendingMessages.poll();
@@ -413,6 +425,20 @@ public class CapgoNotificationsPlugin extends Plugin {
     private static boolean isCapgoUpdateCheckMessage(RemoteMessage remoteMessage) {
         String action = capgoAction(remoteMessage);
         return "update_check".equals(action) || "capgo_update_check".equals(action);
+    }
+
+    /**
+     * Start @capgo/capacitor-updater's headless update (no Activity, no bridge). Reflection keeps
+     * the updater optional; older updaters without HeadlessUpdateWorker update on next launch.
+     */
+    static boolean enqueueHeadlessUpdateCheck(Context context) {
+        try {
+            Class<?> worker = Class.forName("ee.forgr.capacitor_updater.HeadlessUpdateWorker");
+            worker.getMethod("enqueue", Context.class).invoke(null, context.getApplicationContext());
+            return true;
+        } catch (Exception exception) {
+            return false;
+        }
     }
 
     /**

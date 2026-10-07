@@ -79,7 +79,7 @@ With an older updater the native call reports `unsupported` and the JavaScript l
 Limits:
 
 - iOS background pushes are best-effort and can be throttled by the OS.
-- Android delivers the push to a killed app without starting an Activity, so no Capacitor bridge or updater exists yet. The push is kept in memory and replayed as soon as the app opens in the same process; otherwise the updater's own launch check applies the update.
+- Android delivers the push to a killed app without starting an Activity, so no Capacitor bridge exists. Pass the messaging service as context (`CapgoNotificationsPlugin.sendRemoteMessage(this, message)`, done by the bundled service) and the plugin starts the updater's `HeadlessUpdateWorker`: it downloads the bundle and makes it current for the next launch. Updaters without this worker apply the update at the next launch instead.
 
 ## Versioning
 
