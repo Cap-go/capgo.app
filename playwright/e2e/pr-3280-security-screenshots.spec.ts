@@ -68,5 +68,8 @@ test.describe('PR 3280 organization security screenshots', () => {
       })
       await policyToggle.click({ force: true })
     }
+    else {
+      expect(false, 'Password policy toggle did not show the warning dialog or enable the policy').toBe(true)
+    }
   })
 })

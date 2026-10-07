@@ -152,7 +152,7 @@ describe('security definer execute hardening', () => {
         has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_exec,
         has_function_privilege('authenticated', p.oid, 'EXECUTE') AS auth_exec,
         has_function_privilege('service_role', p.oid, 'EXECUTE') AS service_exec,
-        has_function_privilege('PUBLIC', p.oid, 'EXECUTE') AS public_exec
+        has_function_privilege('public', p.oid, 'EXECUTE') AS public_exec
       FROM requested
       LEFT JOIN pg_proc AS p
         ON p.oid = requested.proc_oid

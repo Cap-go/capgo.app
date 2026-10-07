@@ -5,15 +5,17 @@ export PATH="${HOME}/.bun/bin:${PATH}"
 cd "$(dirname "$0")/.."
 
 PORT="${TINBASE_PORT:-55321}"
-LOG="${TINBASE_LOG:-${TMPDIR:-/tmp}/tinbase-pr-3280.log}"
+RUN_DIR="$(mktemp -d)"
+LOG="${RUN_DIR}/tinbase.log"
+VITE_LOG="${RUN_DIR}/vite.log"
+TINBASE_DIR="${RUN_DIR}/tinbase"
 
-rm -rf .tinbase
-bunx tinbase start --dir . -p "$PORT" > "$LOG" 2>&1 &
+bunx tinbase start --dir "$TINBASE_DIR" -p "$PORT" > "$LOG" 2>&1 &
 TINBASE_PID=$!
 cleanup() {
   kill "$TINBASE_PID" 2>/dev/null || true
   kill "$VITE_PID" 2>/dev/null || true
-  rm -rf .tinbase 2>/dev/null || true
+  rm -rf "$RUN_DIR"
 }
 trap cleanup EXIT
 
@@ -50,7 +52,7 @@ curl -sf -X PUT "${SUPABASE_URL}/auth/v1/admin/users/${TEST_USER_ID}" \
   -d '{"password":"testtest","email_confirm":true}' >/dev/null
 
 ENV=local SUPA_URL="$SUPABASE_URL" SUPA_ANON="$ANON_KEY" API_DOMAIN="$API_DOMAIN" CAPTCHA_KEY='' \
-  bun run serve:local > /tmp/vite-pr-3280.log 2>&1 &
+  bun run serve:local > "$VITE_LOG" 2>&1 &
 VITE_PID=$!
 
 for _ in $(seq 1 120); do
