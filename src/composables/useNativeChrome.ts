@@ -88,7 +88,7 @@ export function useNativeChrome() {
       return 'apikeys'
     if (isNavigationPathActive('/dashboard', route.path))
       return 'dashboard'
-    if (isNavigationPathActive('/apps', route.path) && !route.path.startsWith('/app/plugins'))
+    if (isNavigationPathActive('/apps', route.path))
       return 'apps'
     if (isNavigationPathActive('/scan', route.path))
       return 'preview'

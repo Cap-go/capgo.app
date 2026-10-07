@@ -237,9 +237,10 @@ const router = createRouter({
         hash: to.hash,
       }),
     },
-    // Mobile modules and modules test pages merged into Plugins
-    { path: '/app/modules', redirect: '/app/plugins' },
-    { path: '/app/modules_test', redirect: '/app/plugins' },
+    // Removed mobile modules / plugins pages
+    { path: '/app/modules', redirect: '/apps' },
+    { path: '/app/modules_test', redirect: '/apps' },
+    { path: '/app/plugins', redirect: '/apps' },
     // Legacy app tab URLs after settings/observe revamp
     { path: '/app/:app/info', redirect: redirectAppPath('/settings') },
     { path: '/app/:app/access', redirect: redirectAppPath('/settings/access') },

@@ -9,7 +9,6 @@ import IconDoc from '~icons/gg/loadbar-doc'
 import IconChart from '~icons/heroicons/chart-bar'
 import IconShield from '~icons/heroicons/shield-check'
 import IconDiscord from '~icons/ic/round-discord'
-import IconBoxes from '~icons/lucide/boxes'
 import IconGift from '~icons/lucide/gift'
 import IconHeadset from '~icons/lucide/headset'
 import IconScanQrCode from '~icons/lucide/scan-qr-code'
@@ -258,22 +257,16 @@ export function useAppNavigation(options: { onNavigate?: () => void } = {}) {
         onClick: () => openExternalUrl('https://support.capgo.app'),
         redirect: true,
       },
-      {
-        label: 'refer-and-earn',
-        icon: IconGift,
-        key: '#refer-and-earn',
-        onClick: () => openExternalUrl('https://capgo.affonso.io'),
-        redirect: true,
-      },
+      // Referral program is web only: no affiliate links in the store app.
       ...(isNativePlatform
-        ? [
-            {
-              label: 'plugins',
-              icon: IconBoxes,
-              key: '/app/plugins',
-            },
-          ]
-        : []),
+        ? []
+        : [{
+            label: 'refer-and-earn',
+            icon: IconGift,
+            key: '#refer-and-earn',
+            onClick: () => openExternalUrl('https://capgo.affonso.io'),
+            redirect: true,
+          }]),
     ]
 
     // Add admin dashboard link if user is admin
