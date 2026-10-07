@@ -3953,7 +3953,6 @@
   "channel-revert-button": "Revert to store version",
   "channel-revert-select-bundle": "Select another bundle",
   "revert": "Revert",
-  "change-bundle": "Change bundle",
   "builtin-bundle": "Store version (embedded in the app)",
   "channel-paused-badge": "Paused",
   "channel-paused-banner-title": "Updates paused",
