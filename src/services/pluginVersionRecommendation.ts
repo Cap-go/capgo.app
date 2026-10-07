@@ -53,6 +53,8 @@ export interface PluginVersionRecommendation {
   currentDevices: number
   fleetDevices: number
   statusResolved: boolean
+  /** True when at least one major has a known latest version, so `behindDevices` counts real devices. */
+  behindResolved: boolean
   majors: PluginMajorStats[]
   rows: PluginVersionRecommendationRow[]
 }
@@ -242,6 +244,7 @@ export function buildPluginVersionRecommendation(
     currentDevices,
     fleetDevices,
     statusResolved,
+    behindResolved: majors.some(major => major.statusResolved),
     majors,
     rows,
   }
