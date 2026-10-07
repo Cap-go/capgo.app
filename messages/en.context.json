@@ -4084,6 +4084,7 @@
   "website-live-upgrade-done": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "website-live-upgrade-error": "Used in Capgo web console areas: components/dashboard. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "website-live-upgrade-plan-required": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "website-live-upgrade-plan-unknown": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "website-live-upgrade-step-cli": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "website-live-upgrade-step-plan": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "website-live-upgrade-step-plugin": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

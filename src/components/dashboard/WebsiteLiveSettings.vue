@@ -9,7 +9,7 @@ import IconCheck from '~icons/lucide/check'
 import IconGlobe from '~icons/lucide/globe'
 import IconLoader from '~icons/lucide/loader-circle'
 import { checkPermissions } from '~/services/permissions'
-import { getCurrentPlanNameOrg } from '~/services/supabase'
+import { useSupabase } from '~/services/supabase'
 import { normalizeWebsiteLiveUrl, useAppUpdateModeStore } from '~/stores/appUpdateMode'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -37,11 +37,19 @@ const canUpdateSettings = computedAsync(async () => {
 // The app's owner org, not the selected org: app URLs can point to another org.
 const appOrgId = computed(() => organizationStore.getOrgByAppId(props.appId)?.gid ?? organizationStore.currentOrganization?.gid ?? '')
 const isPlanLoading = ref(false)
+// Read the plan directly: the shared helper falls back to 'Solo' when the
+// user cannot read billing, which would wrongly look like a full plan.
 const currentPlanName = computedAsync(async () => {
   if (!appOrgId.value)
     return null
-  return await getCurrentPlanNameOrg(appOrgId.value)
+  const { data, error } = await useSupabase()
+    .rpc('get_current_plan_name_org', { orgid: appOrgId.value })
+    .single()
+  if (error || typeof data !== 'string' || !data)
+    return null
+  return data
 }, null, isPlanLoading)
+const isPlanUnreadable = computed(() => !isPlanLoading.value && currentPlanName.value === null)
 const isPlanKnown = computed(() => !isPlanLoading.value && currentPlanName.value !== null)
 const needsFullPlan = computed(() => currentPlanName.value === WEBSITE_LIVE_PLAN_NAME)
 // Recovery path: a classic-mode app in a Website Live org (for example when
@@ -198,6 +206,9 @@ async function upgradeToFullCapgo() {
             <span class="pt-0.5">{{ step.title }}</span>
           </li>
         </ol>
+        <p v-if="isPlanUnreadable" class="mt-3 text-sm text-amber-700 dark:text-amber-300" data-test="website-live-plan-unreadable">
+          {{ t('website-live-upgrade-plan-unknown') }}
+        </p>
         <p v-if="needsFullPlan" class="mt-3 text-sm text-amber-700 dark:text-amber-300">
           {{ t('website-live-upgrade-plan-required') }}
         </p>
