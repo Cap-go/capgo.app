@@ -1539,6 +1539,7 @@
   "email-preferences-captcha-required": "Complete the captcha before saving",
   "email-preferences-description": "Choose which Capgo emails you want to receive. Changes apply to this email address.",
   "email-preferences-invalid-email": "Enter a valid email address",
+  "email-preferences-load-failed": "Could not load preferences for this link. Check the link or try again.",
   "email-preferences-save": "Save preferences",
   "email-preferences-saved": "Preferences saved",
   "email-preferences-save-failed": "Could not save preferences. Try again.",

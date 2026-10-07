@@ -1,7 +1,8 @@
 import type { EmailPreferenceKey, EmailPreferences } from '../utils/org_email_notifications.ts'
 import type { Json } from '../utils/supabase.types.ts'
 import { z } from 'zod'
-import { getBentoSubscriberEmailByUuid, unsubscribeBento } from '../utils/bento.ts'
+import { getBentoSubscriberEmailByUuid, isBentoConfigured, unsubscribeBento } from '../utils/bento.ts'
+import { isBentoVisitorId, normalizeBentoVisitorId } from '../utils/bento_visitor_id.ts'
 import { CacheHelper } from '../utils/cache.ts'
 import { verifyCaptchaToken } from '../utils/captcha.ts'
 import { BRES, createHono, parseBody, simpleErrorWithStatus, simpleRateLimit, useCors } from '../utils/hono.ts'
@@ -34,10 +35,10 @@ type PublicEmailPreferenceKey = typeof PUBLIC_EMAIL_PREFERENCE_KEYS[number]
 
 const preferenceValueSchema = z.record(z.string(), z.boolean())
 
-/** Bento `{{ visitor.uuid }}` is UUID-shaped; keep this looser than RFC version checks. */
-export const visitorUuidSchema = z.string().trim().regex(
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-)
+export const visitorUuidSchema = z.string().trim().refine(
+  value => isBentoVisitorId(value),
+  { message: 'invalid visitor id' },
+).transform(value => normalizeBentoVisitorId(value)!)
 
 const bodySchema = z.object({
   email: z.string().trim().pipe(z.email().max(320)).optional(),
@@ -72,12 +73,13 @@ export function escapeIlikeExact(value: string) {
   return value.replace(/\\/g, String.raw`\\`).replace(/%/g, String.raw`\%`).replace(/_/g, String.raw`\_`)
 }
 
-/** Accept `uuid`, or a UUID mistakenly sent as legacy `email` / `id` query params. */
+/** Accept `uuid`, or a visitor id mistakenly sent as legacy `email` / `id` query params. */
 export function resolveVisitorUuidFromRequestQuery(getQuery: (key: string) => string | undefined): string | null {
   for (const key of ['uuid', 'email', 'id'] as const) {
     const value = getQuery(key)?.trim() ?? ''
-    if (visitorUuidSchema.safeParse(value).success)
-      return value
+    const normalized = normalizeBentoVisitorId(value)
+    if (normalized)
+      return normalized
   }
   return null
 }
@@ -87,8 +89,9 @@ export function normalizeEmailPreferencesBody(raw: Record<string, unknown>): Rec
   const out = { ...raw }
   const email = typeof out.email === 'string' ? out.email.trim() : ''
   const uuid = typeof out.uuid === 'string' ? out.uuid.trim() : ''
-  if (!uuid && email && visitorUuidSchema.safeParse(email).success) {
-    out.uuid = email
+  const normalizedEmailAsUuid = email ? normalizeBentoVisitorId(email) : null
+  if (!uuid && normalizedEmailAsUuid) {
+    out.uuid = normalizedEmailAsUuid
     delete out.email
   }
   return out
@@ -190,6 +193,8 @@ app.get('/', async (c) => {
   const email = await getBentoSubscriberEmailByUuid(c, parsed.data.uuid)
   if (email === undefined)
     return simpleErrorWithStatus(c, 503, 'email_preferences_unavailable', 'Could not resolve email preferences')
+  if (email === null)
+    return simpleErrorWithStatus(c, 404, 'email_preferences_not_found', 'Email preferences could not be found')
   return c.json({ ...BRES, email })
 })
 
@@ -226,75 +231,103 @@ app.post('/', async (c) => {
   const email = await resolvePreferenceEmail(c, parsed.data.email, parsed.data.uuid)
   if (email === undefined)
     return simpleErrorWithStatus(c, 503, 'email_preferences_unavailable', 'Could not resolve email preferences')
+  if (email === null)
+    return simpleErrorWithStatus(c, 404, 'email_preferences_not_found', 'Email preferences could not be found')
+
+  const hasCapgoPreferenceChanges = unsubscribeAll
+    || Object.keys(preferenceOptOuts).length > 0
+    || parsed.data.enable_notifications === false
+    || parsed.data.opt_for_newsletters === false
 
   try {
-    if (email) {
-      const admin = supabaseAdmin(c)
-      const { data: user, error } = await admin
+    let capgoUpdated = false
+    const admin = supabaseAdmin(c)
+    const { data: user, error } = await admin
+      .from('users')
+      .select('id, email, enable_notifications, opt_for_newsletters, email_preferences')
+      .ilike('email', escapeIlikeExact(email))
+      .maybeSingle()
+
+    if (error) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'email_preferences lookup failed',
+        error: serializeError(error),
+      })
+      return simpleErrorWithStatus(c, 503, 'email_preferences_unavailable', 'Could not resolve email preferences')
+    }
+
+    if (user) {
+      const previous = {
+        ...user,
+        email_preferences: (user.email_preferences ?? {}) as EmailPreferences,
+      }
+      const nextPrefs: EmailPreferences = unsubscribeAll
+        ? allPreferencesDisabled()
+        : {
+            ...previous.email_preferences,
+            ...preferenceOptOuts,
+          }
+
+      const update = {
+        email_preferences: nextPrefs as Json,
+        // Opt-out only for general flags too — never force them back on.
+        enable_notifications: unsubscribeAll || parsed.data.enable_notifications === false
+          ? false
+          : previous.enable_notifications,
+        opt_for_newsletters: unsubscribeAll || parsed.data.opt_for_newsletters === false
+          ? false
+          : previous.opt_for_newsletters,
+      }
+
+      const { data: updated, error: updateError } = await admin
         .from('users')
+        .update(update)
+        .eq('id', user.id)
         .select('id, email, enable_notifications, opt_for_newsletters, email_preferences')
-        .ilike('email', escapeIlikeExact(email))
         .maybeSingle()
 
-      if (error) {
+      if (updateError) {
         cloudlogErr({
           requestId: c.get('requestId'),
-          message: 'email_preferences lookup failed',
-          error: serializeError(error),
+          message: 'email_preferences update failed',
+          error: serializeError(updateError),
         })
+        return simpleErrorWithStatus(c, 503, 'email_preferences_unavailable', 'Could not save email preferences')
       }
-      else if (user) {
-        const previous = {
-          ...user,
-          email_preferences: (user.email_preferences ?? {}) as EmailPreferences,
-        }
-        const nextPrefs: EmailPreferences = unsubscribeAll
-          ? allPreferencesDisabled()
-          : {
-              ...previous.email_preferences,
-              ...preferenceOptOuts,
-            }
-
-        const update = {
-          email_preferences: nextPrefs as Json,
-          // Opt-out only for general flags too — never force them back on.
-          enable_notifications: unsubscribeAll || parsed.data.enable_notifications === false
-            ? false
-            : previous.enable_notifications,
-          opt_for_newsletters: unsubscribeAll || parsed.data.opt_for_newsletters === false
-            ? false
-            : previous.opt_for_newsletters,
-        }
-
-        const { data: updated, error: updateError } = await admin
-          .from('users')
-          .update(update)
-          .eq('id', user.id)
-          .select('id, email, enable_notifications, opt_for_newsletters, email_preferences')
-          .maybeSingle()
-
-        if (updateError) {
-          cloudlogErr({
-            requestId: c.get('requestId'),
-            message: 'email_preferences update failed',
-            error: serializeError(updateError),
-          })
-        }
-        else {
-          await syncUserPreferenceTags(c, email, updated ?? { ...user, ...update }, previous, email)
-        }
+      if (!updated) {
+        return simpleErrorWithStatus(c, 503, 'email_preferences_unavailable', 'Could not save email preferences')
       }
 
-      if (unsubscribeAll) {
-        // Always attempt Bento unsubscribe, even when Capgo user lookup failed.
-        const unsubscribed = await unsubscribeBento(c, email)
-        if (unsubscribed === false) {
-          cloudlogErr({
-            requestId: c.get('requestId'),
-            message: 'email_preferences bento unsubscribe failed',
-          })
-        }
+      await syncUserPreferenceTags(c, email, updated, previous, email)
+      capgoUpdated = true
+    }
+
+    let bentoUnsubscribed = false
+    if (unsubscribeAll) {
+      const unsubscribed = await unsubscribeBento(c, email)
+      if (unsubscribed === false) {
+        cloudlogErr({
+          requestId: c.get('requestId'),
+          message: 'email_preferences bento unsubscribe failed',
+        })
+        if (isBentoConfigured(c))
+          return simpleErrorWithStatus(c, 503, 'email_preferences_unavailable', 'Could not save email preferences')
       }
+      else if (unsubscribed === true) {
+        bentoUnsubscribed = true
+      }
+    }
+
+    if (!capgoUpdated) {
+      if (unsubscribeAll && bentoUnsubscribed)
+        capgoUpdated = true
+      else if (hasCapgoPreferenceChanges)
+        return simpleErrorWithStatus(c, 404, 'email_preferences_not_found', 'Email preferences could not be found')
+      else if (unsubscribeAll && isBentoConfigured(c))
+        return simpleErrorWithStatus(c, 503, 'email_preferences_unavailable', 'Could not save email preferences')
+      else
+        return simpleErrorWithStatus(c, 404, 'email_preferences_not_found', 'Email preferences could not be found')
     }
 
     cloudlog({
@@ -303,6 +336,7 @@ app.post('/', async (c) => {
       unsubscribeAll,
       preferenceKeys: Object.keys(preferenceOptOuts),
     })
+    return c.json(BRES)
   }
   catch (error) {
     cloudlogErr({
@@ -310,7 +344,6 @@ app.post('/', async (c) => {
       message: 'email_preferences unexpected error',
       error: serializeError(error),
     })
+    return simpleErrorWithStatus(c, 503, 'email_preferences_unavailable', 'Could not save email preferences')
   }
-
-  return c.json(BRES)
 })

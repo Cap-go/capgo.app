@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { isVisitorUuid, parseEmailPreferencesQuery } from '../src/utils/emailPreferencesIdentity'
 
 const VISITOR_UUID = '11111111-1111-4111-8111-111111111111'
+const VISITOR_UUID_HEX = '11111111111141118111111111111111'
 
 describe('emailPreferencesIdentity', () => {
   it('treats uuid query param as visitor uuid', () => {
@@ -42,7 +43,19 @@ describe('emailPreferencesIdentity', () => {
 
   it('classifies visitor uuids', () => {
     expect(isVisitorUuid(VISITOR_UUID)).toBe(true)
+    expect(isVisitorUuid(VISITOR_UUID_HEX)).toBe(true)
     expect(isVisitorUuid('user@example.com')).toBe(false)
+  })
+
+  it('treats 32-hex visitor ids in uuid and legacy email params', () => {
+    expect(parseEmailPreferencesQuery({ uuid: VISITOR_UUID_HEX })).toEqual({
+      email: '',
+      visitorUuid: VISITOR_UUID_HEX,
+    })
+    expect(parseEmailPreferencesQuery({ email: VISITOR_UUID_HEX })).toEqual({
+      email: '',
+      visitorUuid: VISITOR_UUID_HEX,
+    })
   })
 
   it('uses the first value when a query key is repeated', () => {
