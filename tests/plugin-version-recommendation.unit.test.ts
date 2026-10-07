@@ -228,6 +228,7 @@ describe('supportsDeliveryTiming', () => {
     expect(supportsDeliveryTiming('7.25.9')).toBe(false)
     expect(supportsDeliveryTiming('7.26.0')).toBe(true)
     expect(supportsDeliveryTiming('8.1.9')).toBe(false)
+    expect(supportsDeliveryTiming('8.2.0')).toBe(true)
     expect(supportsDeliveryTiming('8.52.1')).toBe(true)
     expect(supportsDeliveryTiming('9.0.0')).toBe(true)
     expect(supportsDeliveryTiming('4.43.5')).toBe(false)

@@ -63,16 +63,27 @@ const { stats: pluginStats, fetchStats: fetchPluginStats } = useNativeObserveSta
   () => ({ view: 'plugins' }),
   'delivery latency plugin versions',
 )
+// Versions are stored with the app that produced them so a stale or failed lookup never advises another app.
+const checkedPluginVersions = ref<{ appId: string, versions: PluginVersionRow[] } | null>(null)
 const outdatedPlugin = computed(() => {
-  const versions = pluginStats.value?.pluginVersions ?? []
-  if (hasData.value || versions.length === 0 || versions.some(row => supportsDeliveryTiming(row.plugin_version)))
+  const checked = checkedPluginVersions.value
+  if (hasData.value || !checked || checked.appId !== pluginCheckAppId.value)
     return null
-  const current = versions[0].plugin_version
-  return { current, required: deliveryTimingMinVersion(pluginMajorFromVersion(current)) }
+  const versions = checked.versions
+  if (versions.length === 0 || versions.some(row => supportsDeliveryTiming(row.plugin_version)))
+    return null
+  // Each major has its own minimum, so list one target per major present (rows are sorted by devices).
+  const required = [...new Set(versions.map(row => deliveryTimingMinVersion(pluginMajorFromVersion(row.plugin_version))))]
+  return { current: versions[0].plugin_version, required: required.join(', '), single: versions.length === 1 }
 })
-const emptyHelp = computed(() => outdatedPlugin.value
-  ? t('update-delivery-no-data-outdated-plugin', outdatedPlugin.value)
-  : t('update-delivery-no-data-help'))
+const emptyHelp = computed(() => {
+  if (!outdatedPlugin.value)
+    return t('update-delivery-no-data-help')
+  const { current, required, single } = outdatedPlugin.value
+  return single
+    ? t('update-delivery-no-data-outdated-plugin', { current, required })
+    : t('update-delivery-no-data-outdated-plugins', { required })
+})
 const chartLabels = computed(() => (effectiveStats.value?.labels ?? []).map(label => formatLocalDateShort(label) || label))
 
 const chartData = computed<ChartData<'line'>>(() => ({
@@ -188,14 +199,17 @@ function selectPeriod(option: PeriodDayOption) {
   localDays.value = option
 }
 
-let pluginCheckedFor = ''
 watch(
   () => [pluginCheckAppId.value, stats.value, hasData.value] as const,
   async ([appId, currentStats, withData]) => {
-    if (!appId || !currentStats || withData || pluginCheckedFor === appId)
+    if (!appId || !currentStats || withData || checkedPluginVersions.value?.appId === appId)
       return
-    pluginCheckedFor = appId
+    // Only a successful response for the still-current app counts as checked; failures retry on the next stats refresh.
+    pluginStats.value = null
     await fetchPluginStats()
+    const fetched = pluginStats.value as { pluginVersions?: PluginVersionRow[] } | null
+    if (fetched && pluginCheckAppId.value === appId)
+      checkedPluginVersions.value = { appId, versions: fetched.pluginVersions ?? [] }
   },
 )
 
@@ -321,14 +335,16 @@ watch(
           <Spinner size="w-5 h-5" />
         </div>
 
-        <div v-if="!hasData" class="flex flex-col items-center justify-center overflow-hidden text-slate-500 dark:text-slate-400" :class="dense ? 'flex-1 min-h-0' : 'h-72'">
-          <IconTimer class="shrink-0" :class="dense ? 'w-8 h-8 mb-2' : 'w-12 h-12 mb-3'" />
-          <h3 class="font-semibold text-center text-slate-800 dark:text-slate-100" :class="dense ? 'text-base' : 'text-lg'">
-            {{ t('update-delivery-no-data') }}
-          </h3>
-          <p class="mt-1 text-sm text-center text-slate-500 dark:text-slate-400 max-w-lg line-clamp-3" :title="emptyHelp">
-            {{ emptyHelp }}
-          </p>
+        <div v-if="!hasData" class="flex flex-col overflow-y-auto text-slate-500 dark:text-slate-400" :class="dense ? 'flex-1 min-h-0' : 'h-72'">
+          <div class="flex flex-col items-center m-auto">
+            <IconTimer class="shrink-0" :class="dense ? 'w-8 h-8 mb-2' : 'w-12 h-12 mb-3'" />
+            <h3 class="font-semibold text-center text-slate-800 dark:text-slate-100" :class="dense ? 'text-base' : 'text-lg'">
+              {{ t('update-delivery-no-data') }}
+            </h3>
+            <p class="mt-1 text-sm text-center text-slate-500 dark:text-slate-400 max-w-lg">
+              {{ emptyHelp }}
+            </p>
+          </div>
         </div>
         <div v-else class="relative" :class="dense ? 'flex-1 min-h-0' : 'h-80'">
           <Line :data="chartData" :options="chartOptions" />
