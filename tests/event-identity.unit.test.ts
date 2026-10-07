@@ -18,12 +18,15 @@ describe('accepted event identity', () => {
     expect(new Set([first.event_id, ...otherScopes.map(value => value.event_id)]).size).toBe(4)
     expect(isValidClientEventId(first.event_id)).toBe(true)
     expect(first.event_id).not.toBe(clientEventId)
+    expect(first.client_event_id).toBe(clientEventId)
   })
 
   it('generates independent fallback IDs and server timing for old clients', async () => {
     const first = await acceptEventIdentity({ actorId: 'actor-a', acceptedAt })
     const second = await acceptEventIdentity({ actorId: 'actor-a', acceptedAt })
     expect(first.event_id).not.toBe(second.event_id)
+    expect(isValidClientEventId(first.client_event_id)).toBe(true)
+    expect((await acceptEventIdentity({ actorId: 'actor-a', clientEventId: first.client_event_id, acceptedAt })).event_id).toBe(first.event_id)
     expect(first).toMatchObject({ id_source: 'server', timestamp_source: 'server', accepted_at: new Date(acceptedAt).toISOString(), occurred_at: new Date(acceptedAt).toISOString() })
   })
 
