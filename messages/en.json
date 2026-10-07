@@ -1121,7 +1121,7 @@
   "close": "Close",
   "close-dialog": "Close dialog",
   "close-sidebar": "Close sidebar",
-  "cloud-replication-delay": "Changes will take up to 60 seconds to propagate globally",
+  "cloud-replication-delay": "Changes will take up to 30 seconds to propagate globally",
   "collapse-sidebar": "Collapse sidebar",
   "commands": "commands",
   "comment": "Comment",
