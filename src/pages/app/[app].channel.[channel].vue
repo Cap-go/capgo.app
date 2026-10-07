@@ -836,32 +836,50 @@ async function handleRevert() {
   const description = stopsRollout && rolloutTarget
     ? `${t('revert-to-builtin-confirm')} ${t('revert-to-builtin-confirm-rollout', { target: rolloutTarget })}`
     : t('revert-to-builtin-confirm')
-  await confirmConsequentialChannelChange(
-    dialogStore,
-    { cancel: t('button-cancel'), confirm: t('channel-revert-button') },
-    {
-      id: 'confirm-revert-to-builtin',
-      title: t('channel-revert-confirm-title'),
-      description,
-      confirmRole: 'danger',
-      onConfirm: async () => {
-        const changes: ChannelUpdate = { version: null }
-        if (stopsRollout) {
-          Object.assign(changes, {
-            rollout_version: null,
-            rollout_enabled: false,
-            rollout_percentage_bps: 0,
-            rollout_paused_at: null,
-            rollout_pause_reason: null,
-          })
-        }
-        if (await saveChannelChanges(changes)) {
-          toast.success(t('channel-reverted-to-builtin'))
-          await askUpdateNotificationAfterBundleChange()
-        }
+  let selectAnotherBundle = false
+  dialogStore.openDialog({
+    id: 'confirm-revert-to-builtin',
+    title: t('channel-revert-confirm-title'),
+    description,
+    size: 'xl',
+    preventAccidentalClose: true,
+    buttons: [
+      {
+        text: t('button-cancel'),
+        role: 'cancel',
       },
-    },
-  )
+      {
+        text: t('channel-revert-select-bundle'),
+        role: 'secondary',
+        handler: () => {
+          selectAnotherBundle = true
+        },
+      },
+      {
+        text: t('channel-revert-button'),
+        role: 'danger',
+        handler: async () => {
+          const changes: ChannelUpdate = { version: null }
+          if (stopsRollout) {
+            Object.assign(changes, {
+              rollout_version: null,
+              rollout_enabled: false,
+              rollout_percentage_bps: 0,
+              rollout_paused_at: null,
+              rollout_pause_reason: null,
+            })
+          }
+          if (await saveChannelChanges(changes)) {
+            toast.success(t('channel-reverted-to-builtin'))
+            await askUpdateNotificationAfterBundleChange()
+          }
+        },
+      },
+    ],
+  })
+  await dialogStore.onDialogDismiss()
+  if (selectAnotherBundle)
+    await openSelectStableVersion(true)
 }
 
 async function toggleChannelPause() {
@@ -1550,7 +1568,7 @@ async function copyCurlCommand() {
                   :disabled="!canPromoteBundle"
                   @click="openSelectStableVersion(channelOnBuiltin)"
                 >
-                  {{ t('change-bundle') }}
+                  {{ t('edit') }}
                 </button>
                 <button
                   type="button"
@@ -1559,7 +1577,7 @@ async function copyCurlCommand() {
                   :disabled="!canUpdateChannelSettings"
                   @click="toggleChannelPause()"
                 >
-                  {{ channelPaused ? t('channel-resume-updates') : t('channel-pause-updates') }}
+                  {{ channelPaused ? t('resume') : t('pause') }}
                 </button>
                 <button
                   type="button"
@@ -1568,7 +1586,7 @@ async function copyCurlCommand() {
                   :disabled="!canPromoteBundle || (channelOnBuiltin && !rolloutConfigured)"
                   @click="handleRevert()"
                 >
-                  {{ t('channel-revert-button') }}
+                  {{ t('revert') }}
                 </button>
               </dd>
             </div>
@@ -1633,8 +1651,8 @@ async function copyCurlCommand() {
                       <button type="button" class="d-btn d-btn-primary d-btn-sm" :disabled="rolloutTargetActionsDisabled" @click="promoteRollout()">
                         {{ t('promote') }}
                       </button>
-                      <button type="button" class="capitalize d-btn d-btn-outline d-btn-error d-btn-sm" :disabled="rolloutTargetActionsDisabled" @click="rollbackRollout()">
-                        {{ t('rollback') }}
+                      <button type="button" class="d-btn d-btn-outline d-btn-error d-btn-sm" data-test="rollout-revert" :disabled="rolloutTargetActionsDisabled" @click="rollbackRollout()">
+                        {{ t('revert') }}
                       </button>
                     </div>
                   </div>
