@@ -61,25 +61,35 @@ describe('[GET] /bundle - Error Cases', () => {
     expect(data.error).toBe('missing_app_id')
   })
 
-  it('should return 400 when user cannot access the app', async () => {
-    const response = await fetch(`${BASE_URL}/bundle?app_id=nonexistent.app`, {
+  it('should return 401 when the API key is missing', async () => {
+    const response = await fetch(`${BASE_URL}/bundle?app_id=${APPNAME}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    })
+    expect(response.status).toBe(401)
+  })
+
+  it('should return 404 when the app does not exist', async () => {
+    const response = await fetch(`${BASE_URL}/bundle?app_id=com.nonexistent.${id}.app`, {
       method: 'GET',
       headers,
     })
-    expect(response.status).toBe(400)
+    expect(response.status).toBe(404)
     const data = await response.json() as { error: string }
-    expect(data.error).toBe('cannot_get_bundle')
+    expect(data.error).toBe('app_not_found')
   })
 
-  it('should return 400 when bundle cannot be retrieved', async () => {
+  it('should return 404 when the app id is not visible to the caller', async () => {
     const response = await fetch(`${BASE_URL}/bundle?app_id=${APPNAME}_no`, {
       method: 'GET',
       headers,
     })
 
-    expect(response.status).toBe(400)
+    expect(response.status).toBe(404)
     const data = await response.json() as { error: string }
-    expect(data.error).toBe('cannot_get_bundle')
+    expect(data.error).toBe('app_not_found')
   })
 
   it('should handle invalid JSON body', async () => {

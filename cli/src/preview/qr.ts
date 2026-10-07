@@ -8,7 +8,7 @@ import QRCode from 'qrcode'
 import { buildPreviewWebUrl, type PreviewWebEnv } from './web-url'
 import { CliUserError } from '../shared/cli-user-error'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
-import { createSupabaseClient, findSavedKey, formatError, getAppId, getCapgoCliHttpStatus, getConfig, invokeCapgoCliApi, readCapgoCliApiErrorPayload } from '../utils'
+import { createSupabaseClient, findSavedKey, formatError, getAppId, getCapgoCliHttpStatus, getConfig, invokeCapgoCliApi } from '../utils'
 
 type AppRow = Pick<Database['public']['Tables']['apps']['Row'], 'allow_preview' | 'app_id'>
 type BundleRow = Pick<Database['public']['Tables']['app_versions']['Row'], 'id' | 'name'>
@@ -113,12 +113,8 @@ async function listBundles(options: CapgoPreviewHttpOptions, appId: string): Pro
   let page = 0
   while (true) {
     const { data, error } = await previewInvoke<BundleRow[]>(options, `bundle?app_id=${encodeURIComponent(appId)}&page=${page}`)
-    if (error) {
-      const payload = await readCapgoCliApiErrorPayload(error)
-      if (payload?.error === 'cannot_get_bundle' && payload?.message === 'Cannot get bundle')
-        return all
+    if (error)
       throw new Error(`Cannot load bundles for ${appId}: ${formatError(error)}`)
-    }
     const batch = Array.isArray(data) ? data : []
     if (!batch.length)
       break

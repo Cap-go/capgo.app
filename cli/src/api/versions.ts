@@ -2,7 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '../types/supabase.types'
 import { log } from '@clack/prompts'
 import { Table } from '@sauber/table'
-import { formatError, getHumanDate, invokeCapgoCliApi, readCapgoCliApiErrorPayload } from '../utils'
+import { CliUserError } from '../shared/cli-user-error'
+import { formatError, formatCapgoCliInvokeError, getCapgoCliHttpStatus, getHumanDate, invokeCapgoCliApi, readCapgoCliApiErrorPayload } from '../utils'
 import { checkVersionNotUsedInChannel } from './channels'
 
 interface VersionOptions {
@@ -27,9 +28,53 @@ interface CapgoHttpOptions {
 
 const BUNDLE_PAGE_SIZE = 50
 
-async function isEmptyBundleListError(error: unknown) {
+async function isBundleAccessDeniedError(error: unknown) {
+  const status = getCapgoCliHttpStatus(error)
   const payload = await readCapgoCliApiErrorPayload(error)
-  return payload?.error === 'cannot_get_bundle' && payload?.message === 'Cannot get bundle'
+  if (status === 401 || status === 403 || payload?.error === 'cannot_access_app')
+    return true
+  return payload?.error === 'cannot_get_bundle'
+    && typeof payload.message === 'string'
+    && payload.message.toLowerCase().includes('access')
+}
+
+async function throwBundleHttpInvokeError(
+  appid: string,
+  error: unknown,
+  action: 'list' | 'delete' | 'channels',
+  silent: boolean,
+  requiredPermissionKey: string,
+): Promise<never> {
+  if (await isBundleAccessDeniedError(error)) {
+    const message = action === 'channels'
+      ? 'Cannot list channels. Check that your API key is valid and has app.read_channels permission for this app.'
+      : action === 'delete'
+        ? `Cannot delete bundles for app ${appid}. Check that your API key is valid and has the required bundle permissions for this app.`
+        : `Cannot list bundles for app ${appid}. Check that your API key is valid and has app.read_bundles permission for this app.`
+    if (!silent)
+      log.error(message)
+    throw new CliUserError(message, { appId: appid, requiredPermissionKey })
+  }
+
+  const details = await formatCapgoCliInvokeError(error)
+  const payload = await readCapgoCliApiErrorPayload(error)
+  const status = getCapgoCliHttpStatus(error)
+  if (status === 404 || payload?.error === 'app_not_found') {
+    const message = `App ${appid} not found in database`
+    if (!silent)
+      log.error(message)
+    throw new Error(`${message}: ${details}`, { cause: error })
+  }
+
+  const actionLabel = action === 'list'
+    ? 'list bundles'
+    : action === 'channels'
+      ? 'list channel bundle versions'
+      : 'delete bundle'
+  const message = `Could not ${actionLabel} for app ${appid}: ${details}`
+  if (!silent)
+    log.error(message)
+  throw new Error(message, { cause: error })
 }
 
 async function fetchBundlePages(appid: string, options: CapgoHttpOptions & Pick<VersionOptions, 'invoke'>) {
@@ -48,11 +93,8 @@ async function fetchBundlePages(appid: string, options: CapgoHttpOptions & Pick<
         supaAnon: options.supaAnon,
       },
     )
-    if (error) {
-      if (await isEmptyBundleListError(error))
-        return all
-      throw error
-    }
+    if (error)
+      await throwBundleHttpInvokeError(appid, error, 'list', !!options.silent, 'app.read_bundles')
     const batch = Array.isArray(data) ? data : []
     if (!batch.length)
       break
@@ -163,21 +205,13 @@ export async function getActiveAppVersions(
     throw new Error('Missing API key for bundle list')
   }
 
-  try {
-    return await fetchBundlePages(appid, {
-      apikey,
-      silent,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
-      invoke: options.invoke,
-    })
-  }
-  catch (vError) {
-    const message = `App ${appid} not found in database`
-    if (!silent)
-      log.error(message)
-    throw new Error(`${message}: ${formatError(vError)}`)
-  }
+  return await fetchBundlePages(appid, {
+    apikey,
+    silent,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+    invoke: options.invoke,
+  })
 }
 
 export async function getChannelsVersion(
