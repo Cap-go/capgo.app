@@ -78,27 +78,37 @@ await capture('email-preferences-load-error.webp', `/email-preferences?uuid=${vi
   })
 })
 
-await capture('email-preferences-save-error.webp', `/email-preferences?uuid=${visitorHex}`, async (page) => {
-  await page.route('**/private/email_preferences**', async (route) => {
-    if (route.request().method() === 'GET') {
-      await route.fulfill({
-        status: 404,
-        contentType: 'application/json',
-        body: JSON.stringify({ error: 'email_preferences_not_found', status: 'Error' }),
-      })
-      return
-    }
-    if (route.request().method() === 'POST') {
-      await route.fulfill({
-        status: 404,
-        contentType: 'application/json',
-        body: JSON.stringify({ error: 'email_preferences_not_found', status: 'Error' }),
-      })
-      return
-    }
-    await route.continue()
-  })
+const saveErrorPage = await context.newPage()
+await saveErrorPage.route('**/private/email_preferences**', async (route) => {
+  if (route.request().method() === 'GET') {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ status: 'ok', email: 'demo@example.com' }),
+    })
+    return
+  }
+  if (route.request().method() === 'POST') {
+    await route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'email_preferences_not_found', status: 'Error' }),
+    })
+    return
+  }
+  await route.continue()
 })
+await saveErrorPage.goto(`${baseUrl}/email-preferences?uuid=${visitorHex}`, { waitUntil: 'networkidle' })
+await saveErrorPage.getByRole('button', { name: /save preferences/i }).click()
+await saveErrorPage.getByRole('alert').waitFor({ timeout: 15000 })
+await saveErrorPage.waitForTimeout(300)
+const saveErrorPng = `${outputDir}/email-preferences-save-error.webp.tmp.png`
+await saveErrorPage.screenshot({ path: saveErrorPng, type: 'png', fullPage: true })
+const saveErrorFfmpeg = spawnSync('ffmpeg', ['-y', '-i', saveErrorPng, `${outputDir}/email-preferences-save-error.webp`], { stdio: 'pipe' })
+await unlink(saveErrorPng).catch(() => {})
+if (saveErrorFfmpeg.status !== 0)
+  throw new Error(`ffmpeg failed for save error: ${saveErrorFfmpeg.stderr?.toString() || saveErrorFfmpeg.status}`)
+await saveErrorPage.close()
 
 const savePage = await context.newPage()
 await savePage.route('**/private/email_preferences**', async (route) => {
