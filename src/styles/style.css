@@ -416,6 +416,21 @@ html {
   }
 }
 
+/* Native tables: the scroll spacer already clears the floating pagination, so
+   drop the bottom padding tables reserve for the old fixed strip, and render the
+   wrapping card flat so short lists don't end in a half-empty box. */
+@media (max-width: 767px) {
+  .native-chrome-content .native-table-pad {
+    padding-bottom: 0;
+  }
+
+  .native-chrome-content .shadow-sm:has(#custom_table) {
+    border-color: transparent;
+    background: transparent;
+    box-shadow: none;
+  }
+}
+
 @media (max-width: 767px) and (prefers-color-scheme: dark) {
   .native-chrome-content .native-bottom-offset > * {
     border-color: rgb(255 255 255 / 0.1);
