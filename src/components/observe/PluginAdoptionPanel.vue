@@ -60,8 +60,10 @@ const recommendationRows = computed(() => {
     status: 'unknown' as const,
   }))
 })
+// Match the banner and the per-major table: count the devices behind on every
+// major we can resolve, instead of hiding the total when one major is unknown.
 const behindDevicesDisplay = computed(() => {
-  if (!recommendation.value?.statusResolved)
+  if (!recommendation.value?.behindResolved)
     return null
   return recommendation.value.behindDevices
 })

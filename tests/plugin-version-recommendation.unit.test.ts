@@ -155,6 +155,25 @@ describe('buildPluginVersionRecommendation', () => {
     expect(recommendation?.rows[0]?.status).toBe('unknown')
   })
 
+  it.concurrent('counts devices behind on resolved majors when another major has no dist-tag', () => {
+    const recommendation = buildPluginVersionRecommendation([
+      { plugin_version: '8.40.0', devices: 6, total_devices: 10 },
+      { plugin_version: '9.1.0', devices: 4, total_devices: 10 },
+    ], distTags)
+
+    expect(recommendation?.statusResolved).toBe(false)
+    expect(recommendation?.behindResolved).toBe(true)
+    expect(recommendation?.behindDevices).toBe(6)
+  })
+
+  it.concurrent('reports behind devices as unresolved when no major has a dist-tag', () => {
+    const recommendation = buildPluginVersionRecommendation([
+      { plugin_version: '6.14.0', devices: 4, total_devices: 4 },
+    ], null)
+
+    expect(recommendation?.behindResolved).toBe(false)
+  })
+
   it.concurrent('returns null when there is no plugin version data', () => {
     expect(buildPluginVersionRecommendation([], distTags)).toBeNull()
   })
