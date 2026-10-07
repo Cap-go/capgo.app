@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import { getActiveAppVersions } from '../src/api/versions.ts'
+import { CliUserError } from '../src/shared/cli-user-error.ts'
 
 function makeBundleRow(index: number) {
   return {
@@ -58,6 +59,23 @@ describe('fetchBundlePages pagination', () => {
         }),
       }),
     })).rejects.toThrow(/Could not list bundles for app com\.test\.app: cannot_get_bundle \| Cannot get bundle/)
+  })
+
+  it('throws CliUserError with upstream cause when the API returns 403', async () => {
+    const upstream = makeBundleApiError({ error: 'cannot_get_bundle', message: 'Access denied' }, 403)
+    try {
+      await getActiveAppVersions('test-key', 'com.test.app', {
+        invoke: createInvokeStub({
+          0: async () => ({ data: null, error: upstream }),
+        }),
+      })
+      throw new Error('expected rejection')
+    }
+    catch (error) {
+      expect(error).toBeInstanceOf(CliUserError)
+      expect((error as CliUserError).cause).toBe(upstream)
+      expect((error as Error).message).toMatch(/lacks the required permission/)
+    }
   })
 
   it('throws when the API returns 404 app_not_found', async () => {
