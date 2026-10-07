@@ -403,6 +403,12 @@ html {
     padding: 0.25rem;
   }
 
+  /* Flex drops the whitespace between "1-10", "of" and "122": space them with gap. */
+  .native-chrome-content .native-bottom-offset > span {
+    gap: 0.3em;
+    white-space: nowrap;
+  }
+
   .native-chrome-content .native-bottom-offset > ul button,
   .native-chrome-content .native-bottom-offset > ul [aria-current] {
     border-radius: 9999px;
