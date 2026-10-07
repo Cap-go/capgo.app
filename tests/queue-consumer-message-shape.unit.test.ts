@@ -162,6 +162,8 @@ describe('queue_consumer legacy message compatibility', () => {
     expect(__queueConsumerTestUtils__.getQueueMaxReads('on_version_update')).toBe(MAX_QUEUE_READS)
     expect(__queueConsumerTestUtils__.getQueueMaxReads('on_manifest_create')).toBe(MAX_QUEUE_READS)
     expect(__queueConsumerTestUtils__.getQueueHttpTimeoutMs('cron_email')).toBe(15_000)
+    expect(__queueConsumerTestUtils__.getQueueHttpTimeoutMs('on_channel_update')).toBe(15_000)
+    expect(__queueConsumerTestUtils__.getQueueHttpTimeoutMs('on_app_delete')).toBe(15_000)
     expect(__queueConsumerTestUtils__.shouldRunQueueSyncInBackground('on_manifest_create')).toBe(false)
     expect(__queueConsumerTestUtils__.shouldRunQueueSyncInBackground('cron_email')).toBe(true)
   })
