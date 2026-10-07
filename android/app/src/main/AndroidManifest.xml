@@ -40,6 +40,21 @@
 
         </activity>
 
+        <!-- One FCM entry point for both push plugins: see CapgoMessagingService. -->
+        <service
+            android:name=".CapgoMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+        <service
+            android:name="app.capgo.capacitornotifications.MessagingService"
+            tools:node="remove" />
+        <service
+            android:name="com.capacitorjs.plugins.pushnotifications.MessagingService"
+            tools:node="remove" />
+
         <!-- Single FileProvider serving every authority used in the app. Three sources declare
              androidx.core.content.FileProvider: the app + @capgo/capacitor-inappbrowser (both
              ${applicationId}.fileprovider) and @capgo/capacitor-pdf-generator

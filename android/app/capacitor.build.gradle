@@ -77,6 +77,7 @@ dependencies {
     implementation project(':capgo-capacitor-nativegeocoder')
     implementation project(':capgo-capacitor-navigation-bar')
     implementation project(':capgo-capacitor-nfc')
+    implementation project(':capgo-capacitor-notifications')
     implementation project(':capgo-capacitor-pdf-generator')
     implementation project(':capgo-capacitor-pedometer')
     implementation project(':capgo-capacitor-persistent-account')

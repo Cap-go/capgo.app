@@ -78,6 +78,7 @@
         "@capgo/capacitor-nativegeocoder": "^8.0.51",
         "@capgo/capacitor-navigation-bar": "^8.2.10",
         "@capgo/capacitor-nfc": "^8.2.10",
+        "@capgo/capacitor-notifications": "npm:@capgo/capacitor-notifications@0.1.13",
         "@capgo/capacitor-pdf-generator": "^8.0.39",
         "@capgo/capacitor-pedometer": "^8.0.43",
         "@capgo/capacitor-persistent-account": "^8.0.41",
@@ -212,7 +213,7 @@
     },
     "cli": {
       "name": "@capgo/cli",
-      "version": "8.75.0",
+      "version": "8.75.1",
       "bin": {
         "capgo": "dist/index.js",
       },
@@ -284,22 +285,6 @@
         "@capgo/cli-helper-darwin-x64": "^1.1.1",
         "node-pty": "^1.1.0",
       },
-    },
-    "packages/capacitor-notifications": {
-      "name": "@capgo/capacitor-notifications",
-      "version": "0.1.15",
-      "devDependencies": {
-        "@capacitor/android": "^8.4.2",
-        "@capacitor/ios": "^8.4.2",
-        "typescript": "6.0.3",
-      },
-      "peerDependencies": {
-        "@capacitor/core": "^8.4.2",
-        "@capgo/capacitor-updater": "^8.51.2",
-      },
-      "optionalPeers": [
-        "@capgo/capacitor-updater",
-      ],
     },
   },
   "trustedDependencies": [
@@ -566,7 +551,7 @@
 
     "@capgo/capacitor-nfc": ["@capgo/capacitor-nfc@8.2.10", "", { "peerDependencies": { "@capacitor/core": ">=8.0.0" } }, "sha512-Qzhn4eK6ijqIFmVosSxNzJGYuElI6OY6T1f3w8BGwOySr/MDwRZ0gi0Uy7tGzEikp0sZ6lDogYAQi7k0O/a4+Q=="],
 
-    "@capgo/capacitor-notifications": ["@capgo/capacitor-notifications@workspace:packages/capacitor-notifications"],
+    "@capgo/capacitor-notifications": ["@capgo/capacitor-notifications@0.1.13", "", { "peerDependencies": { "@capacitor/core": "^8.0.0", "@capgo/capacitor-updater": "^8.0.0" }, "optionalPeers": ["@capgo/capacitor-updater"] }, "sha512-3Y1UXCIG8XGy9w8kd01gvItcvEGBPlAbTQc6PMn4wjzSIYqJOX+R72S1ZaBi3rs9FnUmlKPc3AVGgZpo7aK1AQ=="],
 
     "@capgo/capacitor-pdf-generator": ["@capgo/capacitor-pdf-generator@8.0.39", "", { "peerDependencies": { "@capacitor/core": ">=8.0.0" } }, "sha512-HPpk1H5yYQ+fNSSTHINBmaSxK4OikyK1djav/bpDDzJTKENkQydoGd24KytQUbGc6DjSR1SYqOMhX0fwMRL39g=="],
 

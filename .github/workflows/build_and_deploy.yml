@@ -248,7 +248,9 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Deploy OTA bundle to Capgo
-        run: bunx @capgo/cli@latest bundle upload --channel ${{ env.CHANNEL }} --delta
+        # --send-update-notification wakes installed apps with a silent push so they
+        # download this bundle in the background instead of waiting for the next launch.
+        run: bunx @capgo/cli@latest bundle upload --channel ${{ env.CHANNEL }} --delta --send-update-notification
         env:
           CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}
       - name: Create GitHub release
@@ -583,6 +585,17 @@ jobs:
         run: |
           bun run ${{ env.BUILD_SCRIPT }}
           bunx cap sync android
+      - name: Add Firebase config for push notifications
+        # google-services.json is gitignored. Without it the google-services Gradle
+        # plugin is skipped and FCM (Capgo update pushes) cannot start on Android.
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON" > android/app/google-services.json
+          else
+            echo "::warning::GOOGLE_SERVICES_JSON secret is missing; Android push notifications are disabled in this build"
+          fi
       - name: Request Android build through Capgo CLI
         env:
           CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}

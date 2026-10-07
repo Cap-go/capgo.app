@@ -206,6 +206,9 @@ project(':capgo-capacitor-navigation-bar').projectDir = new File('../node_module
 include ':capgo-capacitor-nfc'
 project(':capgo-capacitor-nfc').projectDir = new File('../node_modules/@capgo/capacitor-nfc/android')
 
+include ':capgo-capacitor-notifications'
+project(':capgo-capacitor-notifications').projectDir = new File('../node_modules/@capgo/capacitor-notifications/android')
+
 include ':capgo-capacitor-pdf-generator'
 project(':capgo-capacitor-pdf-generator').projectDir = new File('../node_modules/@capgo/capacitor-pdf-generator/android')
 

@@ -23,6 +23,7 @@ import { app as latency } from '../../supabase/functions/_backend/private/latenc
 import { app as log_as } from '../../supabase/functions/_backend/private/log_as.ts'
 import { app as mcp_oauth } from '../../supabase/functions/_backend/private/mcp_oauth.ts'
 import { app as native_observe_stats } from '../../supabase/functions/_backend/private/native_observe_stats.ts'
+import { app as notification_self_proof } from '../../supabase/functions/_backend/private/notification_self_proof.ts'
 import { app as observe } from '../../supabase/functions/_backend/private/observe.ts'
 import { app as onboarding_ab_tests } from '../../supabase/functions/_backend/private/onboarding_ab_tests.ts'
 import { app as onboarding_progress } from '../../supabase/functions/_backend/private/onboarding_progress.ts'
@@ -171,6 +172,7 @@ appPrivate.route('/native_observe_stats', native_observe_stats)
 appPrivate.route('/observe', observe)
 appPrivate.route('/onboarding_ab_tests', onboarding_ab_tests)
 appPrivate.route('/onboarding_progress', onboarding_progress)
+appPrivate.route('/notification_self_proof', notification_self_proof)
 appPrivate.route('/org_notification_stats', org_notification_stats)
 appPrivate.route('/organization_invitation', organization_invitation)
 appPrivate.route('/update_delivery_stats', update_delivery_stats)
