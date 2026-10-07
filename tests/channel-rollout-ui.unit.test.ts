@@ -63,7 +63,7 @@ function findDialogButton(container: HTMLElement, label: string) {
   return match
 }
 
-async function dismissDialog(container: HTMLElement, label: 'Cancel' | 'Confirm') {
+async function dismissDialog(container: HTMLElement, label: 'Cancel' | 'Confirm' | 'Revert') {
   findDialogButton(container, label).click()
   await nextTick()
   await nextTick()
@@ -117,7 +117,7 @@ function createTestFlows(options: {
     askUpdateNotificationAfterBundleChange,
     toast,
     openSelectRolloutVersion,
-    dismiss: (label: 'Cancel' | 'Confirm') => dismissDialog(options.container, label),
+    dismiss: (label: 'Cancel' | 'Confirm' | 'Revert') => dismissDialog(options.container, label),
   }
 }
 
