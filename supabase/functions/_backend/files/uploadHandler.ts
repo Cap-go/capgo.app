@@ -171,7 +171,9 @@ export class UploadHandler extends DurableObject {
   }
 
   override fetch(request: Request): Response | Promise<Response> {
-    return this.router.fetch(request)
+    // Pass env + DO state so shared middleware (onError alerts, backgroundTask)
+    // gets bindings and a waitUntil-capable context instead of throwing.
+    return this.router.fetch(request, this.env, this.ctx as unknown as Parameters<typeof this.router.fetch>[2])
   }
 
   override async alarm() {

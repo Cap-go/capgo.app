@@ -82,8 +82,8 @@ async function copyOrgId() {
             {{ t('update-password-now') }}
           </button>
           <button
-            type="button"
             v-if="showCopyOrgId"
+            type="button"
             class="py-3 px-8 text-base font-semibold text-[#973C00] bg-transparent border border-[#973C00] rounded-lg transition-colors duration-200 hover:bg-orange-100 focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:outline-none"
             @click="copyOrgId"
           >
@@ -118,8 +118,8 @@ async function copyOrgId() {
             {{ t('setup-2fa-now') }}
           </button>
           <button
-            type="button"
             v-if="showCopyOrgId"
+            type="button"
             class="py-3 px-8 text-base font-semibold text-[#973C00] bg-transparent border border-[#973C00] rounded-lg transition-colors duration-200 hover:bg-orange-100 focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:outline-none"
             @click="copyOrgId"
           >

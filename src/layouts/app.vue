@@ -128,7 +128,7 @@ const tabs = computed<Tab[]>(() => {
 })
 // The app root is the overview, the landing sub-tab of Observe. Some fixed
 // pages also live directly under /app/ and are not apps.
-const NON_APP_SEGMENTS = new Set(['new', 'modules', 'modules_test'])
+const NON_APP_SEGMENTS = new Set(['new', 'plugins', 'modules', 'modules_test'])
 const isAppOverviewPath = computed(() => {
   const match = route.path.match(/^\/app\/([^/]+)\/?$/)
   return !!match && !NON_APP_SEGMENTS.has(match[1])
@@ -277,11 +277,12 @@ function handleSecondaryTab(key: string) {
       @update:tertiary-active-tab="handleTertiaryTab"
     />
     <main class="relative flex flex-1 w-full min-h-0 mt-0 overflow-hidden bg-blue-50 dark:bg-slate-800/40">
-      <div v-if="showUnpaidState" class="flex-1 w-full min-h-0 mx-auto overflow-y-auto">
+      <div v-if="showUnpaidState" data-native-scroll class="flex-1 w-full min-h-0 mx-auto overflow-y-auto">
         <UnpaidState />
       </div>
       <template v-else>
         <div
+          data-native-scroll
           class="flex-1 w-full min-h-0 mx-auto"
           :class="showPaymentOverlay ? 'overflow-hidden blur-sm pointer-events-none select-none' : 'overflow-y-auto'"
         >

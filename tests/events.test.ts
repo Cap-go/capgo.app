@@ -27,7 +27,7 @@ afterAll(async () => {
   await resetAppDataStats(APPNAME_EVENT)
 })
 
-describe('[POST] /private/events operations', () => {
+describe.runIf(process.env.USE_CLOUDFLARE_WORKERS === 'true')('[POST] /private/events operations', () => {
   it('track event with apikey', async () => {
     const response = await fetch(`${BASE_URL}/private/events`, {
       method: 'POST',
