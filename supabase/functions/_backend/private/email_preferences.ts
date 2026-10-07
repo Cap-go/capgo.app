@@ -231,15 +231,20 @@ app.post('/', async (c) => {
   const email = await resolvePreferenceEmail(c, parsed.data.email, parsed.data.uuid)
   if (email === undefined)
     return simpleErrorWithStatus(c, 503, 'email_preferences_unavailable', 'Could not resolve email preferences')
-  if (email === null && parsed.data.uuid)
-    return simpleErrorWithStatus(c, 404, 'email_preferences_not_found', 'Email preferences could not be found')
+  if (email === null) {
+    if (parsed.data.uuid)
+      return simpleErrorWithStatus(c, 404, 'email_preferences_not_found', 'Email preferences could not be found')
+    return simpleErrorWithStatus(c, 503, 'email_preferences_unavailable', 'Could not resolve email preferences')
+  }
+
+  const resolvedEmail = email
 
   try {
     const admin = supabaseAdmin(c)
     const { data: user, error } = await admin
       .from('users')
       .select('id, email, enable_notifications, opt_for_newsletters, email_preferences')
-      .ilike('email', escapeIlikeExact(email))
+      .ilike('email', escapeIlikeExact(resolvedEmail))
       .maybeSingle()
 
     if (error) {
@@ -293,11 +298,11 @@ app.post('/', async (c) => {
         return simpleErrorWithStatus(c, 503, 'email_preferences_unavailable', 'Could not save email preferences')
       }
 
-      await syncUserPreferenceTags(c, email, updated, previous, email)
+      await syncUserPreferenceTags(c, resolvedEmail, updated, previous, resolvedEmail)
     }
 
     if (unsubscribeAll) {
-      const unsubscribed = await unsubscribeBento(c, email)
+      const unsubscribed = await unsubscribeBento(c, resolvedEmail)
       if (unsubscribed === false) {
         cloudlogErr({
           requestId: c.get('requestId'),
