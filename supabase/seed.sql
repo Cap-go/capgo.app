@@ -1675,6 +1675,8 @@ DECLARE
   v_apps text[] := ARRAY['com.acme.shop', 'com.acme.driver', 'com.acme.internal'];
   v_today date := (pg_catalog.now() AT TIME ZONE 'UTC')::date;
 BEGIN
+  -- Temp tables below are created at runtime, so plpgsql_check cannot resolve them statically.
+  PERFORM extensions.plpgsql_check_pragma('disable:check');
   SET LOCAL client_min_messages = WARNING;
   -- Deterministic pseudo-random data so screenshots and reviewer accounts are stable.
   PERFORM pg_catalog.setseed(0.4242);
@@ -1739,7 +1741,7 @@ BEGIN
     pg_catalog.md5(s.app_id || ':device:' || s.n::text)::uuid::text AS device_id,
     -- 82% active in the last few days, the rest churned at some point after they started
     CASE WHEN s.r_churn < 0.82
-      THEN pg_catalog.now() - interval '1 minute' * (5 + s.r_last * s.r_last * 5760)
+      THEN GREATEST(s.first_seen, pg_catalog.now() - interval '1 minute' * (5 + s.r_last * s.r_last * 5760))
       ELSE GREATEST(s.first_seen, pg_catalog.now() - interval '60 days') + (pg_catalog.now() - GREATEST(s.first_seen, pg_catalog.now() - interval '60 days')) * (0.15 + 0.7 * s.r_last)
     END AS last_seen,
     s.r_rollout < 0.25 AS in_rollout,
