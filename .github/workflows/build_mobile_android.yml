@@ -10,6 +10,10 @@ on:
       tag:
         description: "Tag to build (e.g., v1.0.0)"
         required: true
+      submit_to_review:
+        description: "Submit the uploaded build for store review"
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -66,4 +70,10 @@ jobs:
           KEYSTORE_STORE_PASSWORD: ${{ secrets.KEYSTORE_STORE_PASSWORD }}
           BUILD_OUTPUT_UPLOAD_ENABLED: "true"
           BUILD_OUTPUT_RETENTION_SECONDS: "604800"
-        run: bunx @capgo/cli@latest build request --platform android --path . --sync-android-version --ai-analytics
+          SUBMIT_TO_REVIEW: ${{ github.event.inputs.submit_to_review }}
+        run: |
+          review_args=()
+          if [ "$SUBMIT_TO_REVIEW" = "true" ]; then
+            review_args+=(--submit-to-store-review)
+          fi
+          bunx @capgo/cli@latest build request --platform android --path . --sync-android-version --ai-analytics "${review_args[@]}"
