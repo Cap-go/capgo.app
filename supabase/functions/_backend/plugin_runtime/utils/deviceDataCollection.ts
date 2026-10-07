@@ -46,7 +46,7 @@ export function mergeDeviceDataCollection(current: unknown, patch: unknown): Dev
   if (patch === undefined)
     return undefined
   if (!patch || typeof patch !== 'object' || Array.isArray(patch))
-    return parseDeviceDataCollection(patch)
+    return parseDeviceDataCollection(current)
 
   const next = parseDeviceDataCollection(current)
   const source = patch as Record<string, unknown>

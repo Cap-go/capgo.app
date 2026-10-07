@@ -202,7 +202,14 @@ async function getDevice() {
 }
 
 function minVersion(val: string, min = '4.6.99') {
-  return greaterThan(parse(val), parse(min))
+  if (!val)
+    return false
+  try {
+    return greaterThan(parse(val), parse(min))
+  }
+  catch {
+    return false
+  }
 }
 
 async function loadData() {

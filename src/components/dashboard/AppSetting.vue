@@ -619,7 +619,15 @@ async function updateAllowDeviceCustomId(newAllowDeviceCustomId: boolean) {
 }
 
 async function updateDeviceDataCollection(next: DeviceDataCollection) {
-  const current = parseAppRowDeviceDataCollection(appRef.value as unknown)
+  const { data: freshRow, error: readError } = await supabase
+    .from('apps')
+    .select('device_data_collection')
+    .eq('app_id', props.appId)
+    .single()
+  if (readError)
+    return Promise.reject(t('cannot-change-device-data-collection'))
+
+  const current = parseAppRowDeviceDataCollection(freshRow)
   const merged = { ...current, ...next }
   if (DEVICE_DATA_COLLECTION_KEYS.every(key => current[key] === merged[key]))
     return Promise.resolve()

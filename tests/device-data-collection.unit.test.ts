@@ -66,7 +66,10 @@ describe('device data collection', () => {
       country: true,
       platform: false,
     })
-    expect(mergeDeviceDataCollection({ country: false }, null)).toEqual(DEFAULT_DEVICE_DATA_COLLECTION)
+    expect(mergeDeviceDataCollection({ country: false }, null)).toEqual({
+      ...DEFAULT_DEVICE_DATA_COLLECTION,
+      country: false,
+    })
   })
 
   it.concurrent('strips disabled fields before persist and keeps update-routing fields on the source object', () => {
