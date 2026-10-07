@@ -133,23 +133,22 @@ async function ensureSupabaseStarted() {
 
 async function waitForFunctionsReady(timeoutMs: number) {
   const apiUrl = getSupabaseStatus()?.API_URL || `http://127.0.0.1:${supabaseConfig.ports.api}`
-  const targetUrl = `${apiUrl}/functions/v1/ok`
+  const targets = ['/ok', '/auth/console-session', '/private/config'].map(path => `${apiUrl}/functions/v1${path}`)
   const startedAt = Date.now()
 
   while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const response = await fetch(targetUrl)
-      if (response.ok)
-        return
-    }
-    catch {
-      // Keep polling until the edge runtime serves requests again.
-    }
-
+    const responses = await Promise.allSettled(targets.map(async (url) => {
+      const response = await fetch(url, { signal: AbortSignal.timeout(Math.min(10000, Math.max(1, timeoutMs - (Date.now() - startedAt)))) })
+      await response.arrayBuffer()
+      return response.ok
+    }))
+    if (responses.every(result => result.status === 'fulfilled' && result.value))
+      return
+    console.log('Waiting for Playwright functions:', responses.map((result, index) => `${targets[index]}: ${result.status === 'fulfilled' ? result.value : String(result.reason)}`).join(', '))
     await sleep(1000)
   }
 
-  throw new Error(`Timed out waiting for Supabase functions at ${targetUrl}`)
+  throw new Error(`Timed out waiting for Supabase functions at ${targets.join(', ')}`)
 }
 
 async function stopChildProcess(child: ReturnType<typeof spawn>, signal: NodeJS.Signals = 'SIGTERM') {
