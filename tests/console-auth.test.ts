@@ -35,7 +35,7 @@ describe('console Better Auth', () => {
 
   async function signup() {
     const email = `console-auth-${randomUUID()}@example.com`
-    const response = await request('/auth/sign-up/email', { email, password, name: 'Console Auth Test', registration_device_type: 'mobile', registration_browser: 'Firefox', registration_os: 'Android' }, undefined, undefined, 'https://capgo.app')
+    const response = await request('/auth/sign-up/email', { email, password, name: 'Console Auth Test', registration_device_type: 'mobile', registration_browser: 'Firefox', registration_os: 'Android', website_design_experiment: 'website-design-test', website_design_visitor_id: 'fake-visitor', website_design_variant: 'test', website_design_anonymous_id: 'a'.repeat(100) }, undefined, undefined, 'https://capgo.app')
     expect(response.status, await response.clone().text()).toBe(200)
     expect(response.headers.get('access-control-allow-origin')).toBe('https://capgo.app')
     expect(response.headers.get('access-control-allow-credentials')).toBe('true')
@@ -95,6 +95,9 @@ describe('console Better Auth', () => {
       expect(legacy.rows[0].encrypted_password).toMatch(/^\$2/)
       const metadata = await database.query('SELECT raw_user_meta_data FROM auth.users WHERE id = $1', [first.user.id])
       expect(metadata.rows[0].raw_user_meta_data.registration_device_type).toBe('mobile')
+      expect(metadata.rows[0].raw_user_meta_data.website_design_anonymous_id).toBe('a'.repeat(100))
+      const authSession = await (await request('/auth/console-session', undefined, session.token)).json() as { session: { user: { user_metadata: Record<string, string> } } }
+      expect(authSession.session.user.user_metadata.website_design_visitor_id).toBe('fake-visitor')
     }
     finally { await database.end() }
     expect((await request('/auth/sign-in/email', { email: first.email, password: 'incorrect-password' })).status).toBe(401)
