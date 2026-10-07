@@ -27,6 +27,9 @@ function edgeResponse(path: string, url: URL, body: any): unknown {
     return { allowed: true }
   if (path === '/private/sso/check-domain')
     return { has_sso: false }
+  // Production builds fetch remote config; an empty object keeps the local defaults.
+  if (path === '/private/config')
+    return {}
   if (path === '/private/plans')
     return []
   if (path.startsWith('/statistics/org/'))

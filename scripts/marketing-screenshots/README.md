@@ -9,8 +9,13 @@ WEBSITE_DIR=../website BASE_URL=http://localhost:5173 bun run screenshots:market
 ```
 
 - `bun run screenshots:marketing -- console-` captures only shots whose name starts with `console-`.
+- `--videos` also records the looping videos (`video-*` flows in `videos.ts`): mp4 + webm + webp poster per flow. Needs `ffmpeg` with libx264 and libvpx.
 - `--no-seed` skips `seed.sql` when the demo data is already in place.
 - Without `WEBSITE_DIR`, webp files land in `.context/marketing-screenshots/webp/`.
+
+## Weekly refresh
+
+`.github/workflows/marketing_screenshots.yml` runs every Monday (or on demand from the Actions tab) against a production build of the frontend. With the `WEBSITE_REPO_TOKEN` secret (push + pull request access to Cap-go/website) it opens or updates a `chore/refresh-console-screenshots` PR there. Without the secret it only uploads the captures as an artifact.
 
 ## What it does
 
