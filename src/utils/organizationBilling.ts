@@ -117,3 +117,22 @@ export function resolveOrgBillingStatus(
     cta: 'go_plans',
   }
 }
+
+/** i18n key for the short billing status label shown in the console chrome. */
+export function orgBillingStatusLabelKey(kind: OrgBillingStatusKind): string {
+  switch (kind) {
+    case 'trial':
+      return 'free-trial'
+    case 'trial_over':
+      return 'trial-over'
+    case 'plan_active':
+      return 'plan-active'
+    case 'using_credits':
+    case 'limit_reached_credits':
+      return 'using-credits'
+    case 'limit_reached':
+      return 'plan-limit-reached'
+    default:
+      return ''
+  }
+}

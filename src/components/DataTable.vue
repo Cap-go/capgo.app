@@ -555,12 +555,12 @@ function getSkeletonWidth(columnIndex?: number) {
 const isReloading = computed(() => props.isLoading || pendingReset.value)
 const isAdding = computed(() => props.isLoading || pendingAdd.value)
 const paginationClass = computed(() => props.mobileFixedPagination
-  ? 'fixed bottom-0 left-0 z-40 flex items-center justify-between w-full px-4 py-3 border-t border-slate-200 bg-white/95 backdrop-blur md:relative md:border-t-0 md:bg-transparent md:backdrop-blur-none dark:border-white/10 dark:bg-slate-900/95 dark:md:bg-transparent'
+  ? 'native-bottom-offset fixed bottom-0 left-0 z-40 flex items-center justify-between w-full px-4 py-3 border-t border-slate-200 bg-white/95 backdrop-blur md:relative md:border-t-0 md:bg-transparent md:backdrop-blur-none dark:border-white/10 dark:bg-slate-900/95 dark:md:bg-transparent'
   : 'flex items-center justify-between w-full px-4 py-3 md:bg-transparent')
 </script>
 
 <template>
-  <div class="pb-4 overflow-x-auto md:pb-0">
+  <div class="native-table-pad pb-4 overflow-x-auto md:pb-0">
     <div class="flex flex-wrap items-center justify-between gap-2 px-4 py-3 overflow-visible md:flex-nowrap">
       <div class="flex h-10 shrink-0 items-center gap-2">
         <button
@@ -746,7 +746,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
     </div>
     <slot name="table-notice" />
     <div class="block">
-      <table id="custom_table" class="w-full text-sm text-left text-slate-600 pb-14 md:pb-0 dark:text-slate-300">
+      <table id="custom_table" class="native-table-pad w-full text-sm text-left text-slate-600 pb-14 md:pb-0 dark:text-slate-300">
         <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
           <tr>
             <th v-if="props.massSelect" class="px-4 md:px-6" />

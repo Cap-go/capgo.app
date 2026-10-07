@@ -101,6 +101,7 @@ declare module 'vue' {
     LangSelector: typeof import('./components/LangSelector.vue')['default']
     LineChartStats: typeof import('./components/dashboard/LineChartStats.vue')['default']
     LiveReleaseDashboard: typeof import('./components/dashboard/LiveReleaseDashboard.vue')['default']
+    LogAsDialogField: typeof import('./components/LogAsDialogField.vue')['default']
     LogMetadataPopover: typeof import('./components/tables/LogMetadataPopover.vue')['default']
     LogTable: typeof import('./components/tables/LogTable.vue')['default']
     NativeDeviceMetricCard: typeof import('./components/dashboard/NativeDeviceMetricCard.vue')['default']

@@ -301,7 +301,7 @@ const filteredApps = computed(() => {
 </script>
 
 <template>
-  <div class="block w-full pb-14 md:pb-0">
+  <div class="native-table-pad block w-full pb-14 md:pb-0">
     <div
       class="w-full col-span-full xl:col-span-16"
     >
