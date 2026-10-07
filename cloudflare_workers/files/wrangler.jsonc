@@ -118,10 +118,6 @@
           "pattern": "api.usecapgo.com/files*",
           "zone_name": "usecapgo.com"
         },
-        {
-          "pattern": "plugin.usecapgo.com/files*",
-          "zone_name": "usecapgo.com"
-        },
         // Custom domain for PAYG
         {
           "pattern": "updater.spencer.co/files*",
@@ -186,10 +182,6 @@
         {
           "pattern": "api.preprod.usecapgo.com/files*",
           "zone_name": "usecapgo.com"
-        },
-        {
-          "pattern": "plugin.preprod.usecapgo.com/files*",
-          "zone_name": "usecapgo.com"
         }
       ],
       "r2_buckets": [
@@ -238,10 +230,6 @@
         },
         {
           "pattern": "api.dev.usecapgo.com/files*",
-          "zone_name": "usecapgo.com"
-        },
-        {
-          "pattern": "plugin.dev.usecapgo.com/files*",
           "zone_name": "usecapgo.com"
         }
       ],

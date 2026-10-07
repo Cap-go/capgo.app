@@ -15,6 +15,7 @@ import { useOrganizationStore } from '~/stores/organization'
 import { createUndefinedArray, incrementArrayValue } from '~/utils/chartOptimizations'
 import { shouldShowDashboardDemoData } from '~/utils/dashboardDemoMode'
 import ChartCard from './ChartCard.vue'
+import { useChartCardCompact } from './chartCardDensity'
 
 const props = defineProps({
   useBillingPeriod: {
@@ -42,6 +43,7 @@ const props = defineProps({
 // Removed filterToBillingPeriod - no longer needed as we work with correct date range from the start
 
 const { t } = useI18n()
+const compact = useChartCardCompact()
 const organizationStore = useOrganizationStore()
 const effectiveOrganization = computed(() => {
   if (props.appId)
@@ -378,7 +380,7 @@ onMounted(async () => {
   >
     <template #header>
       <div class="flex flex-col gap-2 justify-between items-start">
-        <h2 class="flex-1 min-w-0 text-2xl font-semibold leading-tight dark:text-white text text-slate-600">
+        <h2 class="flex-1 min-w-0 font-semibold leading-tight dark:text-white text text-slate-600" :class="compact ? 'text-base' : 'text-2xl'">
           {{ t('update_statistics') }}
         </h2>
         <div class="flex flex-wrap gap-2 items-center text-xs sm:gap-3 sm:text-sm">

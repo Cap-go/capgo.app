@@ -43,6 +43,7 @@ import { addChannel } from './channel/add'
 import { currentBundle } from './channel/currentBundle'
 import { deleteChannel } from './channel/delete'
 import { listChannels } from './channel/list'
+import { promoteChannel } from './channel/promote'
 import { setChannel } from './channel/set'
 import { getConfigWriteTarget, resolveCapacitorConfigTargetPath, setConfigWriteTarget } from './config'
 import { generateDocs } from './docs'
@@ -297,6 +298,14 @@ Cordova example: npx @capgo/cli@latest bundle upload com.example.app --mode cord
   .option('--delta', `Upload delta updates (only changed files) for instant, super-fast updates instead of big zip downloads. Capgo refuses delta uploads over 10,000 files (delta tracks each file); use --no-delta for a full zip, or reduce files in your web build.`)
   .option('--delta-only', `Upload only delta updates without full bundle for maximum speed (useful for large apps)`)
   .option('--no-delta', `Disable delta updates even if instant updates are enabled`)
+  .addOption(new Option('--delta-upload-concurrency <count>', `Maximum number of delta files processed concurrently (1-500)`)
+    .default(50)
+    .argParser((value: string) => {
+      const concurrency = Number(value)
+      if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 500)
+        throw new InvalidArgumentError('Delta upload concurrency must be an integer between 1 and 500')
+      return concurrency
+    }))
   .option('--encrypted-checksum <encryptedChecksum>', `An encrypted checksum (signature). Used only when uploading an external bundle.`)
   .option('--auto-set-bundle', `Set the bundle version in Capacitor config`)
   .addOption(new Option('--auto-bump [level]', `Auto-increment bundle version from the latest remote channel/app version. Level: major, minor (default), patch|fix, metadata (prerelease), or ai`)
@@ -613,6 +622,21 @@ Example: npx @capgo/cli@latest channel currentBundle production com.example.app`
   .option('-c, --channel <channel>', `Channel to get the current bundle from`)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
   .option('--quiet', `Only print the bundle version`)
+  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
+  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+
+channel
+  .command('promote [fromChannel] [toChannel] [appId]')
+  .description(`🚀 Promote the bundle currently linked to one channel to another channel, for example from staging to production, without typing the bundle version.
+
+Runs the same compatibility and permission checks as channel set --bundle.
+
+Example: npx @capgo/cli@latest channel promote staging production com.example.app`)
+  .action(promoteChannel)
+  .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+  .option('--send-update-notification', `Send a native update-check notification to devices after updating the linked channel bundle`)
+  .option('--ignore-metadata-check', `Ignore checking node_modules compatibility if present in the bundle`)
+  .option('--accept-incompatible', `${optionDescriptions.acceptIncompatibleChannel} Cannot be combined with --ignore-metadata-check.`)
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
 
@@ -1506,7 +1530,7 @@ Selected tools exposed via MCP:
   - capgo_list_apps, capgo_add_app, capgo_update_app, capgo_delete_app
   - capgo_upload_bundle, capgo_list_bundles, capgo_delete_bundle, capgo_cleanup_bundles
   - capgo_list_channels, capgo_add_channel, capgo_update_channel, capgo_delete_channel
-  - capgo_get_current_bundle, capgo_check_compatibility
+  - capgo_get_current_bundle, capgo_promote_channel, capgo_check_compatibility
   - capgo_list_organizations, capgo_add_organization
   - capgo_star_repository
   - capgo_star_all_repositories

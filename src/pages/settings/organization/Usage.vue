@@ -8,9 +8,10 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import CreditsCta from '~/components/CreditsCta.vue'
 import PageLoader from '~/components/PageLoader.vue'
-import { calculateCreditCost, getCurrentPlanNameOrg, getPlans, getPlanUsagePercent, getTotalStorage, getUsageCreditDeductions } from '~/services/console'
+import { calculateCreditCost, getCreditPricingSteps, getCurrentPlanNameOrg, getPlans, getPlanUsagePercent, getTotalStorage, getUsageCreditDeductions } from '~/services/console'
 import { bytesToGb } from '~/services/conversion'
 import { formatLocalDate, formatLocalDateTime, formatUtcDateTimeAsLocal } from '~/services/date'
+import { formatMau, getOrgExtraMau, quoteEnterpriseScale } from '~/services/enterpriseScale'
 import { formatNumber, formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -78,7 +79,10 @@ async function getUsage(orgId: string) {
   const usage = main.dashboard
 
   const planCurrent = await getCurrentPlanNameOrg(orgId)
-  const currentPlan = plans.value.find((p: Database['public']['Tables']['plans']['Row']) => p.name === planCurrent)
+  const basePlan = plans.value.find((p: Database['public']['Tables']['plans']['Row']) => p.name === planCurrent)
+  // Enterprise extra MAU is part of the plan quota and billed with the plan.
+  const extraMau = basePlan?.name === 'Enterprise' ? await getOrgExtraMau(orgId).catch(() => 0) : 0
+  const currentPlan = basePlan && extraMau > 0 ? { ...basePlan, mau: basePlan.mau + extraMau } : basePlan
 
   // Get usage percentages
   let detailPlanUsage: PlanUsageDetailed = {
@@ -161,7 +165,14 @@ async function getUsage(orgId: string) {
     totalStorage,
   })
 
-  const basePrice = currentPlan?.price_m ?? 0
+  // Extra MAU is priced on the global MAU tiers, like the Stripe item. null = price unavailable.
+  let basePrice: number | null = currentPlan?.price_m ?? 0
+  if (basePlan && extraMau > 0) {
+    const mauSteps = (await getCreditPricingSteps()).filter(step => step.type === 'mau')
+    basePrice = mauSteps.length
+      ? quoteEnterpriseScale(mauSteps, basePlan.mau, basePlan.price_m, basePlan.mau + extraMau).totalMonthly
+      : null
+  }
 
   const estimatedUsagePrice = currentPlan
     ? await estimateOverageCost(orgId, currentPlan, {
@@ -175,12 +186,14 @@ async function getUsage(orgId: string) {
   const totalUsagePrice = creditDeductionsInCycle.length > 0
     ? roundNumber(totalCreditDeductions)
     : estimatedUsagePrice
-  const totalPrice = totalUsagePrice !== null && currentPlan
+  const totalPrice = totalUsagePrice !== null && basePrice !== null && currentPlan
     ? roundNumber(basePrice + totalUsagePrice)
     : null
 
   return {
     currentPlan,
+    extraMau,
+    basePrice,
     totalPrice,
     totalUsagePrice,
     totalMau,
@@ -205,6 +218,8 @@ const isCreditsOnly = computed(() => isCreditsOnlyOrg(currentOrganization.value)
 const currentPlanLabel = computed(() => {
   if (isCreditsOnly.value)
     return t('credits')
+  if (currentPlan.value && planUsage.value?.extraMau)
+    return t('enterprise-scale-plan-name', { mau: formatMau(currentPlan.value.mau + planUsage.value.extraMau) })
   return currentPlan.value?.name || t('loading')
 })
 
@@ -366,7 +381,7 @@ function nextRunDate() {
 </script>
 
 <template>
-  <div class="flex flex-col pb-8 bg-white border shadow-sm md:p-8 md:pb-0 md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+  <div class="flex flex-col px-4 pt-4 pb-8 bg-white border shadow-sm md:p-8 md:pb-0 md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
     <div v-if="!isLoading" class="flex flex-col w-full">
       <!-- Header -->
       <div class="flex flex-col justify-between gap-4 mb-8 md:flex-row md:items-center shrink-0">
@@ -399,8 +414,8 @@ function nextRunDate() {
       <div class="grid grid-cols-1 gap-6 mb-8 lg:grid-cols-3 shrink-0">
         <!-- Current Plan -->
         <div class="flex flex-col justify-between p-5 border border-slate-200 shadow-sm lg:col-span-2 bg-slate-50 rounded-xl dark:bg-white/[0.03] dark:border-white/10">
-          <div class="flex flex-row justify-between">
-            <div class="flex flex-col">
+          <div class="grid grid-cols-2 gap-4 sm:flex sm:flex-row sm:justify-between">
+            <div class="flex flex-col min-w-0">
               <div class="mb-1 text-sm text-gray-500 dark:text-gray-400">
                 {{ t('plan') }}
               </div>
@@ -416,7 +431,7 @@ function nextRunDate() {
                 {{ t('base') }}
               </div>
               <div class="text-2xl font-bold text-gray-900 dark:text-white">
-                {{ formatMonthlyPrice(currentPlan?.price_m) }}
+                {{ formatMonthlyPrice(planUsage ? planUsage.basePrice : currentPlan?.price_m) }}
               </div>
             </div>
             <div v-if="!hideExternalPurchaseFlows && isCreditsOnly" class="flex flex-col">

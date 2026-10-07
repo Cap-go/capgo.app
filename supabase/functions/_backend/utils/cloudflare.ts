@@ -3,7 +3,7 @@ import type { Context } from 'hono'
 import type { DeviceInfoWriteCachePayload } from './deviceComparison.ts'
 import type { StatsInsightRawAction, StatsInsightRawDaily, StatsInsightRawDevice, StatsInsightRawSummary, StatsInsightRawVersion } from './statsInsights.ts'
 import type { Database } from './supabase.types.ts'
-import type { ChannelDeviceOverrideIds, DeviceRes, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
+import type { ChannelDeviceOverrideIds, ChannelDevicePlatform, DeviceRes, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
 import { CACHE_PUT_TIMEOUT_MS, CacheHelper } from './cache.ts'
 import { canSkipDeviceInfoWrite, DEVICE_INFO_REFRESH_TTL_SECONDS, toComparableDevice } from './deviceComparison.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
@@ -62,6 +62,11 @@ export type Bindings = {
   NOTIFICATION_REGISTRY?: AnalyticsEngineDataset
   NOTIFICATION_EVENTS?: AnalyticsEngineDataset
   CLI_USAGE?: AnalyticsEngineDataset
+  POSTHOG_QUEUE?: Queue
+  POSTHOG_DLQ?: Queue
+  POSTHOG_API_KEY?: string
+  POSTHOG_API_HOST?: string
+  ENV_NAME?: string
   NOTIFICATION_QUEUE?: Queue
   AUTH_EMAIL?: SendEmail
   CONSOLE_EVENTS?: DurableObjectNamespace
@@ -284,14 +289,21 @@ export function trackLogsCF(c: Context, app_id: string, device_id: string, actio
   return Promise.resolve()
 }
 
+// app_log_external only feeds the global on-prem update total, so it is sampled
+// client-side: one write per APP_LOG_EXTERNAL_SAMPLE_RATE events, with the rate
+// stored in double2 so countUpdatesFromLogsExternalCF scales the total back up.
+export const APP_LOG_EXTERNAL_SAMPLE_RATE = 10
+
 export function trackLogsCFExternal(c: Context, app_id: string, device_id: string, action: Database['public']['Enums']['stats_action'], version_name: string, metadata?: StatsMetadata, dimensions?: AppLogDimensions) {
   if (!c.env.APP_LOG_EXTERNAL)
+    return Promise.resolve()
+  if (crypto.getRandomValues(new Uint32Array(1))[0] % APP_LOG_EXTERNAL_SAMPLE_RATE !== 0)
     return Promise.resolve()
 
   const durationMs = parseStatsDurationMs(metadata)
   c.env.APP_LOG_EXTERNAL.writeDataPoint({
     blobs: [device_id, action, version_name, serializeStatsMetadata(metadata), ...appLogDimensionBlobs(dimensions)],
-    ...(durationMs !== null ? { doubles: [durationMs] } : {}),
+    doubles: [durationMs ?? 0, APP_LOG_EXTERNAL_SAMPLE_RATE],
     indexes: [app_id],
   })
 
@@ -876,14 +888,22 @@ function buildDeviceIdListCF(deviceIds: string[]) {
   return deviceIds.map(id => `'${escapeSqlString(id)}'`).join(', ')
 }
 
+// device_info double1: 0 = android, 1 = ios, 2 = electron
+const DEVICE_INFO_PLATFORM_VALUES: Record<ChannelDevicePlatform, number> = { android: 0, ios: 1, electron: 2 }
+
 /**
  * Channel scope for device_info rows by effective channel: the device-reported
- * default_channel, minus devices forced to another channel, plus devices forced
+ * default_channel (or no reported channel on platforms where this channel is the
+ * public default), minus devices forced to another channel, plus devices forced
  * into this channel through channel_devices. Override ids are lowercased by
  * partitionChannelDeviceOverrides, so device ids are compared lowercased too.
  */
 export function buildDeviceChannelScopeCF(channelName: string, overrides?: ChannelDeviceOverrideIds): string {
-  const defaultChannelMatch = `default_channel = '${escapeSqlString(channelName)}'`
+  const reportedMatch = `default_channel = '${escapeSqlString(channelName)}'`
+  const defaultPlatforms = (overrides?.defaultForPlatforms ?? []).map(platform => DEVICE_INFO_PLATFORM_VALUES[platform])
+  const defaultChannelMatch = defaultPlatforms.length
+    ? `(${reportedMatch} OR (default_channel = '' AND platform IN (${defaultPlatforms.join(', ')})))`
+    : reportedMatch
   const elsewhere = overrides?.elsewhere ?? []
   const into = overrides?.into ?? []
   const byDefaultChannel = elsewhere.length
@@ -904,6 +924,7 @@ FROM (
   SELECT
     argMax(blob2, timestamp) AS version_name,
     argMax(blob7, timestamp) AS default_channel,
+    argMax(double1, timestamp) AS platform,
     blob1 AS device_id
   FROM device_info
   WHERE index1 = '${escapeSqlString(app_id)}'
@@ -1925,12 +1946,13 @@ export async function countUpdatesFromLogsCF(c: Context, referenceDate?: Date): 
 
 export async function countUpdatesFromLogsExternalCF(c: Context, referenceDate?: Date): Promise<number> {
   const endFilter = referenceDate ? ` AND timestamp < toDateTime('${formatDateCF(referenceDate)}')` : ''
-  const query = `SELECT SUM(_sample_interval) AS count FROM app_log_external WHERE blob2 = 'get'${endFilter}`
+  // double2 holds the client-side sample rate; rows written before sampling have 0.
+  const query = `SELECT SUM(_sample_interval * if(double2 > 0, double2, 1.0)) AS count FROM app_log_external WHERE blob2 = 'get'${endFilter}`
 
   cloudlog({ requestId: c.get('requestId'), message: 'countUpdatesFromLogsExternalCF query', query })
   try {
     const readAnalytics = await runQueryToCFA<{ count: number }>(c, query)
-    return readAnalytics[0].count
+    return Math.round(Number(readAnalytics[0].count))
   }
   catch (e) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error counting updates from external logs', error: serializeError(e) })

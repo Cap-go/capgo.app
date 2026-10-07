@@ -95,6 +95,7 @@ async function createFilesApp(routePrefix = '/files') {
 
 const filePath = 'orgs/test-org/apps/com.test.app/bundle.zip'
 const readUrl = `http://localhost/files/read/attachments/${filePath}?device_id=device-1&nocache=test`
+const plainReadUrl = `http://localhost/files/read/attachments/${filePath}?device_id=device-1`
 const objectSize = 1_000
 
 async function fetchHead(appGlobal: Awaited<ReturnType<typeof createFilesApp>>, range?: string) {
@@ -245,6 +246,113 @@ describe('files attachment HEAD reads on workerd/R2', () => {
     expect(await response.text()).toBe('')
     expect((await response.arrayBuffer()).byteLength).toBe(0)
     expect(createStatsBandwidthMock).not.toHaveBeenCalled()
+  })
+
+  it('adds a complete-size receipt for a CLI HEAD without nocache', async () => {
+    retryHeadMock.mockResolvedValue(createR2HeadObject(3_478_395))
+    const appGlobal = await createFilesApp()
+
+    const response = await appGlobal.fetch(
+      new Request(plainReadUrl, { method: 'HEAD', headers: { 'x-cli-version': '7.0.0' } }),
+      { MANIFEST_SIZE_RECEIPT_SECRET: 'receipt-secret', ATTACHMENT_BUCKET: {} },
+      { waitUntil: () => { } } as any,
+    )
+
+    const receipt = response.headers.get('x-capgo-manifest-size-receipt')
+    const { verifyManifestSizeReceipts } = await import('../supabase/functions/_backend/utils/manifest_size_receipt.ts')
+    expect(await verifyManifestSizeReceipts('receipt-secret', [{ path: filePath, receipt: receipt! }])).toEqual([3_478_395])
+  })
+
+  it('adds a complete-size receipt for a CLI GET without nocache', async () => {
+    retryGetMock.mockResolvedValue(createR2Object(12))
+    const appGlobal = await createFilesApp()
+
+    const response = await appGlobal.fetch(
+      new Request(plainReadUrl, { headers: { 'x-cli-version': '7.0.0' } }),
+      { MANIFEST_SIZE_RECEIPT_SECRET: 'receipt-secret', ATTACHMENT_BUCKET: {} },
+      { waitUntil: () => { } } as any,
+    )
+
+    const receipt = response.headers.get('x-capgo-manifest-size-receipt')
+    const { verifyManifestSizeReceipts } = await import('../supabase/functions/_backend/utils/manifest_size_receipt.ts')
+    expect(await verifyManifestSizeReceipts('receipt-secret', [{ path: filePath, receipt: receipt! }])).toEqual([12])
+  })
+
+  it('treats an empty nocache query parameter as a receipt request', async () => {
+    retryHeadMock.mockResolvedValue(createR2HeadObject(12))
+    const appGlobal = await createFilesApp()
+
+    const response = await appGlobal.fetch(
+      new Request(`${plainReadUrl}&nocache=`, { method: 'HEAD' }),
+      { MANIFEST_SIZE_RECEIPT_SECRET: 'receipt-secret', ATTACHMENT_BUCKET: {} },
+      { waitUntil: () => { } } as any,
+    )
+
+    expect(response.headers.get('x-capgo-manifest-size-receipt')).not.toBeNull()
+  })
+
+  it('adds a complete-size receipt to CLI cache hits', async () => {
+    globalThis.caches = {
+      default: {
+        match: async (request: Request) => {
+          if (new URL(request.url).pathname.startsWith('/deleted/'))
+            return null
+          return new Response('cached zip bytes', {
+            headers: {
+              'content-length': '3478395',
+              'x-capgo-manifest-size-receipt': 'stale-cached-receipt',
+              'x-test-cache-hit': 'yes',
+            },
+          })
+        },
+        put: async () => { },
+      },
+    } as any
+    retryHeadMock.mockResolvedValue(createR2HeadObject(3_478_395))
+    const appGlobal = await createFilesApp()
+
+    const response = await appGlobal.fetch(
+      new Request(plainReadUrl, { method: 'HEAD', headers: { 'x-cli-version': '7.0.0' } }),
+      { MANIFEST_SIZE_RECEIPT_SECRET: 'receipt-secret', ATTACHMENT_BUCKET: {} },
+      { waitUntil: () => { } } as any,
+    )
+
+    const receipt = response.headers.get('x-capgo-manifest-size-receipt')
+    const { verifyManifestSizeReceipts } = await import('../supabase/functions/_backend/utils/manifest_size_receipt.ts')
+    expect(response.status).toBe(200)
+    expect(response.headers.get('x-test-cache-hit')).toBe('yes')
+    expect(receipt).not.toBe('stale-cached-receipt')
+    expect(await verifyManifestSizeReceipts('receipt-secret', [{ path: filePath, receipt: receipt! }])).toEqual([3_478_395])
+  })
+
+  it('does not expose a cached receipt to normal native reads', async () => {
+    globalThis.caches = {
+      default: {
+        match: async (request: Request) => {
+          if (new URL(request.url).pathname.startsWith('/deleted/'))
+            return null
+          return new Response('cached zip bytes', {
+            headers: {
+              'content-length': '3478395',
+              'x-capgo-manifest-size-receipt': 'stale-cached-receipt',
+              'x-test-cache-hit': 'yes',
+            },
+          })
+        },
+        put: async () => { },
+      },
+    } as any
+    const appGlobal = await createFilesApp()
+
+    const response = await appGlobal.fetch(
+      new Request(plainReadUrl, { method: 'HEAD' }),
+      { MANIFEST_SIZE_RECEIPT_SECRET: 'receipt-secret', ATTACHMENT_BUCKET: {} },
+      { waitUntil: () => { } } as any,
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('x-test-cache-hit')).toBe('yes')
+    expect(response.headers.get('x-capgo-manifest-size-receipt')).toBeNull()
   })
 
   it('still returns body bytes for GET on R2 miss', async () => {

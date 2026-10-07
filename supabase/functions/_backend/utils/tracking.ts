@@ -8,6 +8,12 @@ import { trackPosthogEvent } from './posthog.ts'
 import { backgroundTask } from './utils.ts'
 
 export interface TrackOptions {
+  client_event_id?: string
+  /** Server-owned canonical identity; /private/events replaces client values. */
+  event_id?: string
+  /** Frozen times for provider delivery and eventual replay, independent of request retries. */
+  occurred_at?: string
+  accepted_at?: string
   channel: string
   event: string
   description?: string
@@ -114,6 +120,7 @@ async function executeTracking(c: Context, payload: SendEventToTrackingPayload, 
 
   await runTrackedCall(c, 'posthog', () => trackPosthogEvent(c, {
     event: payload.event,
+    event_id: payload.event_id,
     user_id: payload.user_id,
     tags: payload.tags,
     nonPersonTags: payload.nonPersonTags,
@@ -121,7 +128,7 @@ async function executeTracking(c: Context, payload: SendEventToTrackingPayload, 
     description: payload.description,
     groups: payload.groups,
     ip: getTrackingIp(c, options.ip),
-    timestamp: getTrackingTimestamp(payload.timestamp),
+    timestamp: payload.occurred_at ?? getTrackingTimestamp(payload.timestamp),
   }), options.strict)
 }
 

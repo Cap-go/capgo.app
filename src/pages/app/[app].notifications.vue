@@ -15,6 +15,7 @@ import IconSearch from '~icons/lucide/search'
 import IconSend from '~icons/lucide/send'
 import IconZap from '~icons/lucide/zap'
 import { defaultApiHost, useConsole } from '~/services/console'
+import { formatNumber, formatNumberValue } from '~/services/formatLocale'
 import { useDisplayStore } from '~/stores/display'
 
 interface NotificationProviderConfig {
@@ -709,7 +710,7 @@ watch(activeNotificationTab, () => {
                   {{ t('notification-configured-providers') }}
                 </div>
                 <div class="mt-1 text-2xl font-semibold text-slate-950 dark:text-white">
-                  {{ configuredProviders }}
+                  {{ formatNumber(configuredProviders) }}
                 </div>
               </div>
               <div class="p-4">
@@ -717,7 +718,7 @@ watch(activeNotificationTab, () => {
                   {{ t('notification-events-30d') }}
                 </div>
                 <div class="mt-1 text-2xl font-semibold text-slate-950 dark:text-white">
-                  {{ totalEvents }}
+                  {{ formatNumber(totalEvents) }}
                 </div>
               </div>
               <div class="p-4">
@@ -725,7 +726,7 @@ watch(activeNotificationTab, () => {
                   {{ t('notification-campaigns') }}
                 </div>
                 <div class="mt-1 text-2xl font-semibold text-slate-950 dark:text-white">
-                  {{ campaigns.length }}
+                  {{ formatNumber(campaigns.length) }}
                 </div>
               </div>
               <div class="p-4">
@@ -733,7 +734,7 @@ watch(activeNotificationTab, () => {
                   {{ t('notification-device-results') }}
                 </div>
                 <div class="mt-1 text-2xl font-semibold text-slate-950 dark:text-white">
-                  {{ devices.length }}
+                  {{ formatNumber(devices.length) }}
                 </div>
               </div>
             </div>
@@ -897,7 +898,7 @@ watch(activeNotificationTab, () => {
                   </h2>
                   <div>
                     <div class="text-3xl font-semibold text-slate-950 dark:text-white">
-                      {{ totalEvents }}
+                      {{ formatNumber(totalEvents) }}
                     </div>
                     <div class="mt-1 text-sm text-slate-500 dark:text-slate-400">
                       {{ t('notification-events-30d') }}
@@ -907,7 +908,7 @@ watch(activeNotificationTab, () => {
                     <div v-for="stat in stats" :key="stat.event" class="space-y-1">
                       <div class="flex items-center justify-between gap-3 text-sm">
                         <span class="font-medium text-slate-700 dark:text-slate-200">{{ stat.event }}</span>
-                        <span class="font-mono text-slate-950 dark:text-white">{{ stat.count }}</span>
+                        <span class="font-mono text-slate-950 dark:text-white">{{ formatNumberValue(stat.count) }}</span>
                       </div>
                       <progress class="w-full h-1.5 d-progress d-progress-secondary" :value="stat.count" :max="totalEvents || 1" />
                     </div>
@@ -966,7 +967,7 @@ watch(activeNotificationTab, () => {
                       {{ activeNotificationTab === 'broadcasts' ? t('notification-broadcasts') : t('notification-api-sends') }}
                     </h2>
                     <span class="text-sm text-slate-500 dark:text-slate-400">
-                      {{ activeNotificationTab === 'broadcasts' ? broadcastCampaigns.length : apiCampaigns.length }} {{ t('notification-campaigns') }}
+                      {{ formatNumber(activeNotificationTab === 'broadcasts' ? broadcastCampaigns.length : apiCampaigns.length) }} {{ t('notification-campaigns') }}
                     </span>
                   </div>
                 </section>
@@ -1111,7 +1112,7 @@ watch(activeNotificationTab, () => {
 
                   <div>
                     <div class="text-3xl font-semibold text-slate-950 dark:text-white">
-                      {{ selectedCampaignTotalEvents }}
+                      {{ formatNumber(selectedCampaignTotalEvents) }}
                     </div>
                     <div class="mt-1 text-sm text-slate-500 dark:text-slate-400">
                       {{ t('notification-events-30d') }}
@@ -1126,7 +1127,7 @@ watch(activeNotificationTab, () => {
                     <div v-for="stat in selectedCampaignStats" :key="stat.event" class="space-y-1">
                       <div class="flex items-center justify-between gap-3 text-sm">
                         <span class="font-medium text-slate-700 dark:text-slate-200">{{ stat.event }}</span>
-                        <span class="font-mono text-slate-950 dark:text-white">{{ stat.count }}</span>
+                        <span class="font-mono text-slate-950 dark:text-white">{{ formatNumberValue(stat.count) }}</span>
                       </div>
                       <progress class="w-full h-1.5 d-progress d-progress-secondary" :value="stat.count" :max="selectedCampaignTotalEvents || 1" />
                     </div>

@@ -720,7 +720,7 @@ async function removeMemberFromGroup(userId: string) {
     </div>
 
     <div v-else>
-      <div class="flex flex-col bg-white border shadow-sm md:p-8 md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+      <div class="flex flex-col px-4 pt-4 bg-white border shadow-sm md:p-8 md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
         <!-- Back link -->
         <div class="mb-6">
           <RouterLink

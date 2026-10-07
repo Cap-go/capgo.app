@@ -63,7 +63,7 @@ function findDialogButton(container: HTMLElement, label: string) {
   return match
 }
 
-async function dismissDialog(container: HTMLElement, label: 'Cancel' | 'Confirm') {
+async function dismissDialog(container: HTMLElement, label: 'Cancel' | 'Confirm' | 'Revert') {
   findDialogButton(container, label).click()
   await nextTick()
   await nextTick()
@@ -117,7 +117,7 @@ function createTestFlows(options: {
     askUpdateNotificationAfterBundleChange,
     toast,
     openSelectRolloutVersion,
-    dismiss: (label: 'Cancel' | 'Confirm') => dismissDialog(options.container, label),
+    dismiss: (label: 'Cancel' | 'Confirm' | 'Revert') => dismissDialog(options.container, label),
   }
 }
 
@@ -340,21 +340,25 @@ describe('channel information rollout and update package UX', () => {
       {
         run: () => flows.enableRollout(),
         title: 'Enable progressive rollout?',
+        confirm: 'Confirm',
         assert: () => expect(saveChannelChange).toHaveBeenCalledWith('rollout_enabled', true),
       },
       {
         run: () => flows.rollbackRollout(),
-        title: 'Roll back progressive rollout?',
+        title: 'Revert rollout to Stable bundle?',
+        confirm: 'Revert',
         assert: () => expect(saveChannelChanges).toHaveBeenCalledWith(expect.objectContaining({ rollout_percentage_bps: 0 })),
       },
       {
         run: () => flows.promoteRollout(),
         title: 'Promote to 100% of devices?',
+        confirm: 'Confirm',
         assert: () => expect(saveChannelChanges).toHaveBeenCalledWith(expect.objectContaining({ version: 42 })),
       },
       {
         run: () => flows.toggleRolloutPause(),
         title: 'Pause rollout?',
+        confirm: 'Confirm',
         assert: () => expect(saveChannelChanges).toHaveBeenCalledWith(expect.objectContaining({ rollout_paused_at: expect.any(String) })),
       },
     ] as const
@@ -372,7 +376,7 @@ describe('channel information rollout and update package UX', () => {
 
       const confirmFlow = testCase.run()
       await nextTick()
-      await dismiss('Confirm')
+      await dismiss(testCase.confirm)
       await confirmFlow
       testCase.assert()
     }

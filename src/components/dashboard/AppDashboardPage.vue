@@ -1,29 +1,14 @@
 <script setup lang="ts">
-import type { AppDashboardSection } from '~/constants/appDashboardTabs'
-import type { AppChartRefreshState } from '~/services/dashboardRefresh'
 import type { Database } from '~/types/supabase.types'
 import { computed, ref, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import AppNotFoundModal from '~/components/AppNotFoundModal.vue'
-import BundleInstallStatsPanel from '~/components/dashboard/BundleInstallStatsPanel.vue'
-import BundleUploadsCard from '~/components/dashboard/BundleUploadsCard.vue'
-import CompatibilityBanner from '~/components/dashboard/CompatibilityBanner.vue'
-import DeploymentBanner from '~/components/dashboard/DeploymentBanner.vue'
-import DeploymentStatsCard from '~/components/dashboard/DeploymentStatsCard.vue'
-import DevicesStats from '~/components/dashboard/DevicesStats.vue'
-import ReleaseBanner from '~/components/dashboard/ReleaseBanner.vue'
-import ReleaseLivePanel from '~/components/dashboard/ReleaseLivePanel.vue'
-import UpdateStatsCard from '~/components/dashboard/UpdateStatsCard.vue'
+import LiveReleaseDashboard from '~/components/dashboard/LiveReleaseDashboard.vue'
 import { useConsole } from '~/services/console'
-import { fetchAppChartRefreshState } from '~/services/dashboardRefresh'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
-
-const props = defineProps<{
-  section: AppDashboardSection
-}>()
 
 const id = ref('')
 const route = useRoute()
@@ -34,14 +19,9 @@ const dashboardAppsStore = useDashboardAppsStore()
 const isLoading = ref(false)
 const supabase = useConsole()
 const displayStore = useDisplayStore()
-type AppDashboardRow = Database['public']['Tables']['apps']['Row'] & AppChartRefreshState
+type AppDashboardRow = Database['public']['Tables']['apps']['Row']
 
 const app = ref<AppDashboardRow>()
-const usageComponent = ref<{
-  useBillingPeriod: boolean
-  showCumulative: boolean
-  reloadTrigger: number
-} | null>(null)
 const appNotFound = ref(false)
 let loadGeneration = 0
 
@@ -52,15 +32,6 @@ const lacksSecurityAccess = computed(() => {
   return lacks2FA || lacksPassword
 })
 
-const chartPeriodProps = computed(() => {
-  const useBillingPeriod = usageComponent.value?.useBillingPeriod ?? true
-  return {
-    useBillingPeriod,
-    accumulated: useBillingPeriod && (usageComponent.value?.showCumulative ?? false),
-    reloadTrigger: usageComponent.value?.reloadTrigger ?? 0,
-  }
-})
-
 async function loadAppInfo(requestedId: string, generation: number) {
   app.value = undefined
   try {
@@ -68,10 +39,7 @@ async function loadAppInfo(requestedId: string, generation: number) {
     if (generation !== loadGeneration || id.value !== requestedId)
       return
 
-    const [{ data: dataApp, error }, refreshState] = await Promise.all([
-      supabase.from('apps').select().eq('app_id', requestedId).single(),
-      fetchAppChartRefreshState(requestedId),
-    ])
+    const { data: dataApp, error } = await supabase.from('apps').select().eq('app_id', requestedId).single()
 
     if (generation !== loadGeneration || id.value !== requestedId)
       return
@@ -82,7 +50,7 @@ async function loadAppInfo(requestedId: string, generation: number) {
     }
 
     appNotFound.value = false
-    app.value = { ...dataApp, ...refreshState }
+    app.value = dataApp
     dashboardAppsStore.upsertApp({
       app_id: requestedId,
       name: dataApp.name ?? null,
@@ -139,84 +107,12 @@ watchEffect(async () => {
         <FailedCard v-if="lacksSecurityAccess" />
 
         <div :class="{ 'blur-sm pointer-events-none select-none': appNotFound }">
-          <DeploymentBanner v-if="!appNotFound" :app-id="id" @deployed="refreshData" />
-          <ReleaseBanner v-if="!appNotFound && props.section !== 'live'" :app-id="id" />
-          <CompatibilityBanner v-if="!appNotFound" :app-id="id" />
-
-          <template v-if="!lacksSecurityAccess && props.section === 'usage'">
-            <Usage
-              ref="usageComponent"
-              :app-id="id"
-              :app-stats-updated-at="app?.stats_updated_at ?? null"
-              :app-stats-refresh-requested-at="app?.stats_refresh_requested_at ?? null"
-              :force-demo="appNotFound"
-            />
-
-            <div class="grid grid-cols-1 gap-6 mb-6 sm:grid-cols-12">
-              <BundleUploadsCard
-                :app-id="id"
-                :use-billing-period="chartPeriodProps.useBillingPeriod"
-                :accumulated="chartPeriodProps.accumulated"
-                :reload-trigger="chartPeriodProps.reloadTrigger"
-                :force-demo="appNotFound"
-                class="col-span-full sm:col-span-6 xl:col-span-4"
-              />
-              <UpdateStatsCard
-                :app-id="id"
-                :use-billing-period="chartPeriodProps.useBillingPeriod"
-                :accumulated="chartPeriodProps.accumulated"
-                :reload-trigger="chartPeriodProps.reloadTrigger"
-                :force-demo="appNotFound"
-                class="col-span-full sm:col-span-6 xl:col-span-4"
-              />
-              <DeploymentStatsCard
-                :app-id="id"
-                :use-billing-period="chartPeriodProps.useBillingPeriod"
-                :accumulated="chartPeriodProps.accumulated"
-                :reload-trigger="chartPeriodProps.reloadTrigger"
-                :force-demo="appNotFound"
-                class="col-span-full sm:col-span-6 xl:col-span-4"
-              />
-            </div>
-          </template>
-
-          <!-- Version mix is operational history, not billed usage. Default last 1 day. -->
-          <div v-else-if="!lacksSecurityAccess && props.section === 'native'" class="grid grid-cols-1 gap-6 mb-6">
-            <DevicesStats
-              :app-id="id"
-              usage-kind="native"
-              :use-billing-period="false"
-              :accumulated="false"
-              :force-demo="appNotFound"
-              class="col-span-full"
-            />
-          </div>
-
-          <div v-else-if="!lacksSecurityAccess && props.section === 'installs'" class="mb-6">
-            <BundleInstallStatsPanel
-              :app-id="id"
-              :force-demo="appNotFound"
-            />
-          </div>
-
-          <!-- Same period selector as Native. Default last 1 day. -->
-          <div v-else-if="!lacksSecurityAccess && props.section === 'active-bundle'" class="grid grid-cols-1 gap-6 mb-6">
-            <DevicesStats
-              :app-id="id"
-              usage-kind="bundle"
-              :use-billing-period="false"
-              :accumulated="false"
-              :force-demo="appNotFound"
-              class="col-span-full"
-            />
-          </div>
-
-          <div v-else-if="!lacksSecurityAccess && props.section === 'live'" class="mb-6">
-            <ReleaseLivePanel
-              :app-id="id"
-              :force-demo="appNotFound"
-            />
-          </div>
+          <LiveReleaseDashboard
+            v-if="!lacksSecurityAccess && id"
+            :app-id="id"
+            :force-demo="appNotFound"
+            @deployed="refreshData"
+          />
         </div>
 
         <AppNotFoundModal v-if="appNotFound" />

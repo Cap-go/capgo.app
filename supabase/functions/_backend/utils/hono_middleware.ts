@@ -5,6 +5,10 @@ import { and, eq, isNull, or, sql } from 'drizzle-orm'
 import { honoFactory, quickError, simpleRateLimit } from './hono.ts'
 import { getClaimsFromJWT } from './hono_jwt.ts'
 import { cloudlog } from './logging.ts'
+import type { PgAuthLookupResult } from './pg_auth_lookup.ts'
+import { throwDatabaseUnavailable } from './pg_auth_lookup.ts'
+import { waitAuthPgRetryJitter } from './pg_auth_retry.ts'
+import { isTransientPgError } from './pg_errors.ts'
 import { closeClient, getDrizzleClient, getPgClient, logPgError } from './pg.ts'
 import * as schema from './postgres_schema.ts'
 import { isAPIKeyRateLimited, isIPRateLimited, recordAPIKeyUsage, recordFailedAuth } from './rate_limit.ts'
@@ -59,13 +63,28 @@ type FindApikeyByValueResult = {
  * Check API key using Postgres/Drizzle instead of Supabase SDK
  * Uses find_apikey_by_value SQL function to look up both plain-text and hashed keys
  */
+type ApikeyRow = Database['public']['Tables']['apikeys']['Row']
+
+function mapFindApikeyRow(apiKey: FindApikeyByValueResult): ApikeyRow {
+  return {
+    id: Number(apiKey.id),
+    created_at: apiKey.created_at,
+    user_id: apiKey.user_id,
+    key: apiKey.key,
+    key_hash: apiKey.key_hash,
+    rbac_id: apiKey.rbac_id,
+    updated_at: apiKey.updated_at,
+    name: apiKey.name,
+    expires_at: apiKey.expires_at,
+  } as ApikeyRow
+}
+
 async function checkKeyPg(
   _c: Context,
   keyString: string,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
-): Promise<Database['public']['Tables']['apikeys']['Row'] | null> {
+): Promise<PgAuthLookupResult<ApikeyRow>> {
   try {
-    // Use find_apikey_by_value SQL function to look up both plain-text and hashed keys
     const result = await drizzleClient.execute<FindApikeyByValueResult>(
       sql`SELECT * FROM find_apikey_by_value(${keyString})`,
     )
@@ -73,33 +92,19 @@ async function checkKeyPg(
     const apiKey = result.rows[0]
     if (!apiKey) {
       cloudlog({ requestId: _c.get('requestId'), message: 'Invalid apikey (pg)', keyStringPrefix: keyString?.substring(0, 8) })
-      return null
+      return { kind: 'not_found' }
     }
 
-    // Check if key is expired
     if (apiKey.expires_at && new Date(apiKey.expires_at) < new Date()) {
       cloudlog({ requestId: _c.get('requestId'), message: 'Apikey expired (pg)', keyStringPrefix: keyString?.substring(0, 8) })
-      return null
+      return { kind: 'not_found' }
     }
 
-    // Convert to the expected format.
-    // drizzle execute can return numeric ids as strings; keep number so
-    // authApikey.id === existingApikey.id self-update checks work.
-    return {
-      id: Number(apiKey.id),
-      created_at: apiKey.created_at,
-      user_id: apiKey.user_id,
-      key: apiKey.key,
-      key_hash: apiKey.key_hash,
-      rbac_id: apiKey.rbac_id,
-      updated_at: apiKey.updated_at,
-      name: apiKey.name,
-      expires_at: apiKey.expires_at,
-    } as Database['public']['Tables']['apikeys']['Row']
+    return { kind: 'ok', value: mapFindApikeyRow(apiKey) }
   }
   catch (e: unknown) {
     logPgError(_c, 'checkKeyPg', e)
-    return null
+    return { kind: 'db_error', error: e }
   }
 }
 
@@ -112,7 +117,7 @@ async function checkKeyByIdPg(
   id: number,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
   expectedUserId?: string,
-): Promise<Database['public']['Tables']['apikeys']['Row'] | null> {
+): Promise<PgAuthLookupResult<ApikeyRow>> {
   try {
     const conditions = [
       eq(schema.apikeys.id, id),
@@ -121,7 +126,6 @@ async function checkKeyByIdPg(
     if (expectedUserId) {
       conditions.push(eq(schema.apikeys.user_id, expectedUserId))
     }
-    // Expiration check is done in SQL: expires_at IS NULL OR expires_at > now()
     const result = await drizzleClient
       .select()
       .from(schema.apikeys)
@@ -132,25 +136,27 @@ async function checkKeyByIdPg(
       .then(data => data[0])
 
     if (!result) {
-      return null
+      return { kind: 'not_found' }
     }
 
-    // Convert to the expected format, ensuring arrays are properly handled
     return {
-      id: result.id,
-      created_at: result.created_at?.toISOString() || null,
-      user_id: result.user_id,
-      key: result.key,
-      key_hash: result.key_hash,
-      rbac_id: result.rbac_id,
-      updated_at: result.updated_at?.toISOString() || null,
-      name: result.name,
-      expires_at: result.expires_at?.toISOString() || null,
-    } as Database['public']['Tables']['apikeys']['Row']
+      kind: 'ok',
+      value: {
+        id: result.id,
+        created_at: result.created_at?.toISOString() || null,
+        user_id: result.user_id,
+        key: result.key,
+        key_hash: result.key_hash,
+        rbac_id: result.rbac_id,
+        updated_at: result.updated_at?.toISOString() || null,
+        name: result.name,
+        expires_at: result.expires_at?.toISOString() || null,
+      } as ApikeyRow,
+    }
   }
   catch (e: unknown) {
     logPgError(_c, 'checkKeyByIdPg', e)
-    return null
+    return { kind: 'db_error', error: e }
   }
 }
 
@@ -642,22 +648,58 @@ async function resolveApiKey(
   key: string,
   usePostgres: boolean,
   readOnly = true,
-) {
+): Promise<PgAuthLookupResult<ApikeyRow>> {
   if (!usePostgres) {
-    return checkKey(c, key, supabaseAdmin(c))
+    const row = await checkKey(c, key, supabaseAdmin(c))
+    if (!row)
+      return { kind: 'not_found' }
+    return { kind: 'ok', value: row }
   }
 
-  let pgClient: ReturnType<typeof getPgClient> | null = null
-  try {
-    pgClient = getPgClient(c, readOnly)
-    const drizzleClient = getDrizzleClient(pgClient)
-    return await checkKeyPg(c, key, drizzleClient)
+  let lastOutcome: PgAuthLookupResult<ApikeyRow> = {
+    kind: 'db_error',
+    error: new Error('resolveApiKey exhausted retries'),
   }
-  finally {
-    if (pgClient) {
-      await closeClient(c, pgClient)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let pgClient: ReturnType<typeof getPgClient> | undefined
+    try {
+      pgClient = getPgClient(c, readOnly)
+      const drizzleClient = getDrizzleClient(pgClient)
+      const outcome = await checkKeyPg(c, key, drizzleClient)
+      lastOutcome = outcome
+      if (outcome.kind === 'db_error' && attempt === 0 && isTransientPgError(outcome.error)) {
+        await waitAuthPgRetryJitter()
+        continue
+      }
+      return outcome
+    }
+    catch (error) {
+      if (attempt === 0 && isTransientPgError(error)) {
+        await waitAuthPgRetryJitter()
+        lastOutcome = { kind: 'db_error', error }
+        continue
+      }
+      if (isTransientPgError(error))
+        return { kind: 'db_error', error }
+      throw error
+    }
+    finally {
+      if (pgClient)
+        await closeClient(c, pgClient)
     }
   }
+  return lastOutcome
+}
+
+function unwrapApiKeyLookup(
+  c: Context,
+  outcome: PgAuthLookupResult<ApikeyRow>,
+): ApikeyRow | null {
+  if (outcome.kind === 'db_error')
+    throwDatabaseUnavailable(c, 'resolveApiKey', outcome.error)
+  if (outcome.kind === 'not_found')
+    return null
+  return outcome.value
 }
 
 async function resolveSubkey(
@@ -666,22 +708,58 @@ async function resolveSubkey(
   usePostgres: boolean,
   expectedUserId?: string,
   readOnly = true,
-) {
+): Promise<PgAuthLookupResult<ApikeyRow>> {
   if (!usePostgres) {
-    return checkKeyById(c, subkeyId, supabaseAdmin(c), expectedUserId)
+    const row = await checkKeyById(c, subkeyId, supabaseAdmin(c), expectedUserId)
+    if (!row)
+      return { kind: 'not_found' }
+    return { kind: 'ok', value: row }
   }
 
-  let subkeyPgClient: ReturnType<typeof getPgClient> | null = null
-  try {
-    subkeyPgClient = getPgClient(c, readOnly)
-    const drizzleClient = getDrizzleClient(subkeyPgClient)
-    return await checkKeyByIdPg(c, subkeyId, drizzleClient, expectedUserId)
+  let lastOutcome: PgAuthLookupResult<ApikeyRow> = {
+    kind: 'db_error',
+    error: new Error('resolveSubkey exhausted retries'),
   }
-  finally {
-    if (subkeyPgClient) {
-      await closeClient(c, subkeyPgClient)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let subkeyPgClient: ReturnType<typeof getPgClient> | undefined
+    try {
+      subkeyPgClient = getPgClient(c, readOnly)
+      const drizzleClient = getDrizzleClient(subkeyPgClient)
+      const outcome = await checkKeyByIdPg(c, subkeyId, drizzleClient, expectedUserId)
+      lastOutcome = outcome
+      if (outcome.kind === 'db_error' && attempt === 0 && isTransientPgError(outcome.error)) {
+        await waitAuthPgRetryJitter()
+        continue
+      }
+      return outcome
+    }
+    catch (error) {
+      if (attempt === 0 && isTransientPgError(error)) {
+        await waitAuthPgRetryJitter()
+        lastOutcome = { kind: 'db_error', error }
+        continue
+      }
+      if (isTransientPgError(error))
+        return { kind: 'db_error', error }
+      throw error
+    }
+    finally {
+      if (subkeyPgClient)
+        await closeClient(c, subkeyPgClient)
     }
   }
+  return lastOutcome
+}
+
+function unwrapSubkeyLookup(
+  c: Context,
+  outcome: PgAuthLookupResult<ApikeyRow>,
+): ApikeyRow | null {
+  if (outcome.kind === 'db_error')
+    throwDatabaseUnavailable(c, 'resolveSubkey', outcome.error)
+  if (outcome.kind === 'not_found')
+    return null
+  return outcome.value
 }
 
 /**
@@ -699,7 +777,7 @@ async function foundAPIKey(c: Context, capgkeyString: string) {
   // returns upstream errors that were previously misclassified as invalid_apikey 401
   // (flaky organization-api on backend shard 5/6). readOnly=false avoids replica lag
   // right after key creation.
-  const apikey = await resolveApiKey(c, capgkeyString, true, false)
+  const apikey = unwrapApiKeyLookup(c, await resolveApiKey(c, capgkeyString, true, false))
   if (!apikey) {
     cloudlog({ requestId: c.get('requestId'), message: 'Invalid apikey', capgkeyPrefix: maskSecret(capgkeyString) })
     // Record failed auth attempt - await to ensure accurate counting
@@ -721,7 +799,7 @@ async function foundAPIKey(c: Context, capgkeyString: string) {
   setApiKeyAuthContext(c, apikey, capgkeyString)
   if (subkey_id !== null) {
     cloudlog({ requestId: c.get('requestId'), message: 'Subkey id provided', subkey_id })
-    const subkey = await resolveSubkey(c, subkey_id, false, apikey.user_id)
+    const subkey = unwrapSubkeyLookup(c, await resolveSubkey(c, subkey_id, false, apikey.user_id))
     if (!subkey) {
       cloudlog({ requestId: c.get('requestId'), message: 'Invalid subkey', subkey_id })
       return quickError(401, 'invalid_subkey', 'Invalid subkey')
@@ -873,7 +951,7 @@ export function middlewareKey(
       return quickError(401, 'no_key_provided', 'No key provided')
     }
 
-    const apikey = await resolveApiKey(c, key, usePostgres, readOnly)
+    const apikey = unwrapApiKeyLookup(c, await resolveApiKey(c, key, usePostgres, readOnly))
 
     if (!apikey) {
       cloudlog({ requestId: c.get('requestId'), message: 'Invalid apikey', keyPrefix: maskSecret(key), method: c.req.method, url: c.req.url })
@@ -896,7 +974,7 @@ export function middlewareKey(
     setApiKeyAuthContext(c, apikey, key)
 
     if (subkey_id !== null) {
-      const subkey = await resolveSubkey(c, subkey_id, usePostgres, apikey.user_id, readOnly)
+      const subkey = unwrapSubkeyLookup(c, await resolveSubkey(c, subkey_id, usePostgres, apikey.user_id, readOnly))
 
       if (!subkey) {
         cloudlog({ requestId: c.get('requestId'), message: 'Invalid subkey', subkey_id })

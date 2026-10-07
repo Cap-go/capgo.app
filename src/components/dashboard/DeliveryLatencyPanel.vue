@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions } from 'chart.js'
 import type { UpdateDeliveryScope, UpdateDeliveryStatsResponse } from '~/composables/useUpdateDeliveryStats'
+import type { PluginVersionRow } from '~/services/pluginVersionRecommendation'
 import { CategoryScale, Chart, Legend, LinearScale, LineElement, PointElement, Tooltip } from 'chart.js'
 import { computed, ref, watch } from 'vue'
 import { Line } from 'vue-chartjs'
@@ -8,9 +9,11 @@ import { useI18n } from 'vue-i18n'
 import IconTimer from '~icons/lucide/timer'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import Spinner from '~/components/Spinner.vue'
+import { useNativeObserveStats } from '~/composables/useNativeObserveStats'
 import { buildDemoUpdateDeliveryStats, useUpdateDeliveryStats } from '~/composables/useUpdateDeliveryStats'
 import { formatLocalDateShort } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
+import { deliveryTimingMinVersion, pluginMajorFromVersion, supportsDeliveryTiming } from '~/services/pluginVersionRecommendation'
 
 type PeriodDayOption = 1 | 3 | 7 | 30
 
@@ -21,11 +24,14 @@ const props = withDefaults(defineProps<{
   forceDemo?: boolean
   days?: number
   hidePeriodSelector?: boolean
+  // Chart-only card for dense pages such as Observe > Releases.
+  dense?: boolean
 }>(), {
   appId: '',
   orgId: '',
   forceDemo: false,
   hidePeriodSelector: false,
+  dense: false,
 })
 
 Chart.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend)
@@ -49,9 +55,35 @@ const effectiveStats = computed<UpdateDeliveryStatsResponse | null>(() => {
 })
 
 const hasData = computed(() => (effectiveStats.value?.overview.samples ?? 0) > 0)
-const emptyHelpKey = computed(() => props.scope === 'platform'
-  ? 'update-delivery-no-data-help-platform'
-  : 'update-delivery-no-data-help')
+
+// App scope only: the plugin versions in the DB tell whether devices can report delivery timing at all.
+const pluginCheckAppId = computed(() => props.scope === 'app' && !props.forceDemo ? props.appId : '')
+const { stats: pluginStats, fetchStats: fetchPluginStats } = useNativeObserveStats<{ pluginVersions: PluginVersionRow[] }>(
+  pluginCheckAppId,
+  () => ({ view: 'plugins' }),
+  'delivery latency plugin versions',
+)
+// Versions are stored with the app that produced them so a stale or failed lookup never advises another app.
+const checkedPluginVersions = ref<{ appId: string, versions: PluginVersionRow[] } | null>(null)
+const outdatedPlugin = computed(() => {
+  const checked = checkedPluginVersions.value
+  if (hasData.value || !checked || checked.appId !== pluginCheckAppId.value)
+    return null
+  const versions = checked.versions
+  if (versions.length === 0 || versions.some(row => supportsDeliveryTiming(row.plugin_version)))
+    return null
+  // Each major has its own minimum, so list one target per major present (rows are sorted by devices).
+  const required = [...new Set(versions.map(row => deliveryTimingMinVersion(pluginMajorFromVersion(row.plugin_version))))]
+  return { current: versions[0].plugin_version, required: required.join(', '), single: versions.length === 1 }
+})
+const emptyHelp = computed(() => {
+  if (!outdatedPlugin.value)
+    return t('update-delivery-no-data-help')
+  const { current, required, single } = outdatedPlugin.value
+  return single
+    ? t('update-delivery-no-data-outdated-plugin', { current, required })
+    : t('update-delivery-no-data-outdated-plugins', { required })
+})
 const chartLabels = computed(() => (effectiveStats.value?.labels ?? []).map(label => formatLocalDateShort(label) || label))
 
 const chartData = computed<ChartData<'line'>>(() => ({
@@ -168,6 +200,20 @@ function selectPeriod(option: PeriodDayOption) {
 }
 
 watch(
+  () => [pluginCheckAppId.value, stats.value, hasData.value] as const,
+  async ([appId, currentStats, withData]) => {
+    if (!appId || !currentStats || withData || checkedPluginVersions.value?.appId === appId)
+      return
+    // Only a successful response for the still-current app counts as checked; failures retry on the next stats refresh.
+    pluginStats.value = null
+    await fetchPluginStats()
+    const fetched = pluginStats.value as { pluginVersions?: PluginVersionRow[] } | null
+    if (fetched && pluginCheckAppId.value === appId)
+      checkedPluginVersions.value = { appId, versions: fetched.pluginVersions ?? [] }
+  },
+)
+
+watch(
   () => [props.scope, props.appId, props.orgId, props.forceDemo, days.value] as const,
   async () => {
     if (props.forceDemo)
@@ -180,7 +226,7 @@ watch(
 
 <template>
   <section class="flex flex-col gap-4" data-testid="update-delivery-latency">
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div v-if="!dense" class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
       <div class="min-w-0">
         <div class="flex flex-wrap items-center gap-2">
           <h2 class="text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
@@ -205,13 +251,18 @@ watch(
       />
     </div>
 
-    <div v-if="statsLoading && !forceDemo && !stats && !statsError" class="flex items-center justify-center h-64 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+    <div
+      v-if="statsLoading && !forceDemo && !stats && !statsError"
+      class="flex items-center justify-center bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10"
+      :class="dense ? 'h-[256px]' : 'h-64'"
+    >
       <Spinner size="w-10 h-10" />
     </div>
 
     <div
       v-else-if="statsError && !forceDemo"
-      class="flex flex-col items-center justify-center h-64 gap-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10 text-slate-500 dark:text-slate-400"
+      class="flex flex-col items-center justify-center gap-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10 text-slate-500 dark:text-slate-400"
+      :class="dense ? 'h-[256px]' : 'h-64'"
     >
       <IconTimer class="w-12 h-12" />
       <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">
@@ -226,7 +277,7 @@ watch(
     </div>
 
     <template v-else>
-      <div class="grid grid-cols-2 gap-3 xl:grid-cols-6">
+      <div v-if="!dense" class="grid grid-cols-2 gap-3 xl:grid-cols-6">
         <div
           v-for="card in percentileCards"
           :key="card.key"
@@ -257,9 +308,19 @@ watch(
         </div>
       </div>
 
-      <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-        <div class="flex items-center justify-between gap-3 mb-4">
-          <div>
+      <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10" :class="dense ? 'flex flex-col h-[256px]' : ''">
+        <div class="flex items-center justify-between gap-3" :class="dense ? 'mb-3' : 'mb-4'">
+          <div v-if="dense" class="flex items-center min-w-0 gap-2" :title="`${t('update-delivery-latency-help')} ${t('update-delivery-trend-help')}`">
+            <h3 class="text-base font-semibold truncate text-slate-950 dark:text-white">
+              {{ t('update-delivery-latency') }}
+            </h3>
+            <span class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t('beta') }}</span>
+            <span
+              v-if="forceDemo"
+              class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-slate-300 bg-slate-100 text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300"
+            >{{ t('demo') }}</span>
+          </div>
+          <div v-else>
             <h3 class="text-base font-semibold text-slate-950 dark:text-white">
               {{ t('update-delivery-trend') }}
             </h3>
@@ -274,16 +335,18 @@ watch(
           <Spinner size="w-5 h-5" />
         </div>
 
-        <div v-if="!hasData" class="flex flex-col items-center justify-center h-72 text-slate-500 dark:text-slate-400">
-          <IconTimer class="w-12 h-12 mb-3" />
-          <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">
-            {{ t('update-delivery-no-data') }}
-          </h3>
-          <p class="mt-1 text-sm text-center text-slate-500 dark:text-slate-400 max-w-lg">
-            {{ t(emptyHelpKey) }}
-          </p>
+        <div v-if="!hasData" class="flex flex-col overflow-y-auto text-slate-500 dark:text-slate-400" :class="dense ? 'flex-1 min-h-0' : 'h-72'">
+          <div class="flex flex-col items-center m-auto">
+            <IconTimer class="shrink-0" :class="dense ? 'w-8 h-8 mb-2' : 'w-12 h-12 mb-3'" />
+            <h3 class="font-semibold text-center text-slate-800 dark:text-slate-100" :class="dense ? 'text-base' : 'text-lg'">
+              {{ t('update-delivery-no-data') }}
+            </h3>
+            <p class="mt-1 text-sm text-center text-slate-500 dark:text-slate-400 max-w-lg">
+              {{ emptyHelp }}
+            </p>
+          </div>
         </div>
-        <div v-else class="relative h-80">
+        <div v-else class="relative" :class="dense ? 'flex-1 min-h-0' : 'h-80'">
           <Line :data="chartData" :options="chartOptions" />
         </div>
       </div>

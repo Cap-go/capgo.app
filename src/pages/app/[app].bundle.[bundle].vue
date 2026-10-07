@@ -971,7 +971,7 @@ async function deleteBundle() {
                 </InfoRow>
                 <!-- version.external_url -->
                 <InfoRow
-                  v-if="version.external_url" :label="t('url')" :is-link="true"
+                  v-if="version.external_url" :label="t('url')" :is-link="true" stacked
                   @click="copyToast(version?.external_url ?? '')"
                 >
                   {{ version.external_url }}

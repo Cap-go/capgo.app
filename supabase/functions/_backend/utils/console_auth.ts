@@ -204,9 +204,9 @@ export function createConsoleAuth(c: Context, provisionUserId?: string) {
           before: async (user, ctx) => {
             if (ctx?.path === '/sign-up/email') {
               const metadata: Record<string, string> = {}
-              for (const key of ['registration_device_type', 'registration_os', 'registration_browser']) {
+              for (const key of ['registration_device_type', 'registration_os', 'registration_browser', 'website_design_experiment', 'website_design_visitor_id', 'website_design_variant', 'website_design_anonymous_id']) {
                 const value = ctx.body?.[key]
-                if (typeof value === 'string' && value.length <= 64)
+                if (typeof value === 'string' && value.length <= (key === 'website_design_anonymous_id' ? 200 : 64))
                   metadata[key] = value
               }
               return { data: { ...user, userMetadata: metadata } }

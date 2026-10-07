@@ -164,6 +164,31 @@ test('--accept-incompatible alone does not trigger a conflict', () => {
   assert.doesNotThrow(() => checkValidOptions({ acceptIncompatible: true }))
 })
 
+test('partial S3 configuration is rejected before upload side effects', () => {
+  assert.throws(
+    () => checkValidOptions({ s3BucketName: 'bundle-bucket' }),
+    /for S3 upload you need to provide/,
+  )
+})
+
+test('complete S3 configuration passes upload option validation', () => {
+  assert.doesNotThrow(() => checkValidOptions({
+    s3Apikey: 'access-key',
+    s3Apisecret: 'secret-key',
+    s3BucketName: 'bundle-bucket',
+    s3Endpoint: 's3.example.test',
+    s3Port: 443,
+    s3Region: 'test-region',
+  }))
+})
+
+test('dry uploads also reject incomplete S3 configuration', () => {
+  assert.throws(
+    () => checkValidOptions({ dryUpload: true, s3BucketName: 'bundle-bucket' }),
+    /for S3 upload you need to provide/,
+  )
+})
+
 test('SDK uploadOptionsSchema rejects acceptIncompatible with ignoreCompatibilityCheck', () => {
   const result = uploadOptionsSchema.safeParse({
     appId: 'com.example.app',

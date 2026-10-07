@@ -157,6 +157,7 @@ Capgo continues to load the root config while writing only the selected source. 
   - [Delete](#channel-delete)
   - [List](#channel-list)
   - [CurrentBundle](#channel-currentBundle)
+  - [Promote](#channel-promote)
   - [Set](#channel-set)
 - 🔐 [Key](#key)
   - [Save](#key-save)
@@ -447,6 +448,7 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | **--delta** | <code>boolean</code> | Upload delta updates (only changed files) for instant, super-fast updates instead of big zip downloads. Capgo refuses delta uploads over 10,000 files (delta tracks each file); use --no-delta for a full zip, or reduce files in your web build. |
 | **--delta-only** | <code>boolean</code> | Upload only delta updates without full bundle for maximum speed (useful for large apps) |
 | **--no-delta** | <code>boolean</code> | Disable delta updates even if instant updates are enabled |
+| **--delta-upload-concurrency** | <code>string</code> | Maximum number of delta files processed concurrently (1-500) |
 | **--encrypted-checksum** | <code>string</code> | An encrypted checksum (signature). Used only when uploading an external bundle. |
 | **--auto-set-bundle** | <code>boolean</code> | Set the bundle version in Capacitor config |
 | **--auto-bump** | <code>string</code> | Auto-increment bundle version from the latest remote channel/app version. Level: major, minor (default), patch|fix, metadata (prerelease), or ai |
@@ -968,6 +970,32 @@ npx @capgo/cli@latest channel currentBundle production com.example.app
 | **-c** | <code>string</code> | Channel to get the current bundle from |
 | **-a** | <code>string</code> | API key to link to your account |
 | **--quiet** | <code>boolean</code> | Only print the bundle version |
+| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
+| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+
+### <a id="channel-promote"></a> 🚀 **Promote**
+
+```bash
+npx @capgo/cli@latest channel promote
+```
+
+🚀 Promote the bundle currently linked to one channel to another channel, for example from staging to production, without typing the bundle version.
+Runs the same compatibility and permission checks as channel set --bundle.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest channel promote staging production com.example.app
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--send-update-notification** | <code>boolean</code> | Send a native update-check notification to devices after updating the linked channel bundle |
+| **--ignore-metadata-check** | <code>boolean</code> | Ignore checking node_modules compatibility if present in the bundle |
+| **--accept-incompatible** | <code>boolean</code> | Accept native-package incompatibility as handled (still checks and warns, sets the channel instead of failing). Use this when your app already guards missing plugins at runtime. Cannot be combined with --ignore-metadata-check. |
 | **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
 | **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
 
@@ -2161,7 +2189,7 @@ Selected tools exposed via MCP:
   - capgo_list_apps, capgo_add_app, capgo_update_app, capgo_delete_app
   - capgo_upload_bundle, capgo_list_bundles, capgo_delete_bundle, capgo_cleanup_bundles
   - capgo_list_channels, capgo_add_channel, capgo_update_channel, capgo_delete_channel
-  - capgo_get_current_bundle, capgo_check_compatibility
+  - capgo_get_current_bundle, capgo_promote_channel, capgo_check_compatibility
   - capgo_list_organizations, capgo_add_organization
   - capgo_star_repository
   - capgo_star_all_repositories

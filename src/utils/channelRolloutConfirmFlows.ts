@@ -206,9 +206,9 @@ export function createChannelRolloutConfirmFlows(deps: ChannelRolloutConfirmFlow
   }
 
   async function rollbackRollout() {
-    await confirm({
+    await confirmConsequentialChannelChange(deps.dialogStore, { cancel: deps.t('button-cancel'), confirm: deps.t('revert') }, {
       id: 'confirm-rollback-rollout',
-      title: deps.t('confirm-rollback-rollout-title'),
+      title: deps.t('confirm-rollback-rollout-title', { fallback: deps.stableBundleName() }),
       description: deps.t('confirm-rollback-rollout-description', {
         target: deps.rolloutTargetName(),
         fallback: deps.stableBundleName(),

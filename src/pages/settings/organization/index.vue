@@ -8,6 +8,7 @@ import { toast } from 'vue-sonner'
 import IconCopy from '~icons/heroicons/document-duplicate'
 import iconEmail from '~icons/heroicons/envelope?raw'
 import iconName from '~icons/heroicons/user?raw'
+import OrgCustomDomain from '~/components/OrgCustomDomain.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { FunctionsHttpError } from '~/services/consoleClient'
 import { fetchOrgSupportChannel, updateOrganization } from '~/services/organizations'
@@ -357,6 +358,8 @@ async function copyOrganizationId() {
               {{ t('support-channel-open') }} ({{ supportChannelLabel(supportChannelType) }})
             </a>
           </section>
+
+          <OrgCustomDomain v-if="canUpdateOrgSettings && currentOrganization" :key="currentOrganization.gid" :org-id="currentOrganization.gid" />
 
           <footer class="mt-auto">
             <div class="flex flex-col px-2 py-5 border-t md:px-6 border-slate-300">

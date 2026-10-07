@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 
 import { stripeEnabled } from '~/services/console'
 import { useOrganizationStore } from '~/stores/organization'
-import { resolveOrgBillingStatus } from '~/utils/organizationBilling'
+import { orgBillingStatusLabelKey, resolveOrgBillingStatus } from '~/utils/organizationBilling'
 
 const props = defineProps({
   text: { type: String, default: '' },
@@ -46,21 +46,8 @@ const showBanner = computed(() => status.value.kind !== 'hidden')
 const showCta = computed(() => status.value.cta !== 'none')
 
 const statusLabel = computed(() => {
-  switch (status.value.kind) {
-    case 'trial':
-      return t('free-trial')
-    case 'trial_over':
-      return t('trial-over')
-    case 'plan_active':
-      return t('plan-active')
-    case 'using_credits':
-    case 'limit_reached_credits':
-      return t('using-credits')
-    case 'limit_reached':
-      return t('plan-limit-reached')
-    default:
-      return ''
-  }
+  const key = orgBillingStatusLabelKey(status.value.kind)
+  return key ? t(key) : ''
 })
 
 const statusDetail = computed(() => {

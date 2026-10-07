@@ -60,32 +60,22 @@ watch(() => props.appId, () => {
     v-if="unresolvedCount > 0"
     type="button"
     data-test="compatibility-banner"
-    class="block w-full mb-4 overflow-hidden text-left transition-colors border rounded-lg cursor-pointer border-amber-200 bg-amber-50 hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:bg-amber-900/20 dark:border-amber-800 dark:hover:bg-amber-900/30"
+    class="flex items-center justify-between w-full gap-3 px-4 py-2 mb-4 text-left transition-colors border rounded-lg cursor-pointer min-h-11 border-amber-200 bg-amber-50 hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:bg-amber-900/20 dark:border-amber-800 dark:hover:bg-amber-900/30"
     @click="viewCompatibility"
   >
-    <div class="flex items-center justify-between p-4">
-      <div class="flex items-center gap-3">
-        <div class="flex items-center justify-center flex-shrink-0 w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-900/50">
-          <IconAlertTriangle class="w-5 h-5 text-amber-600 dark:text-amber-400" />
-        </div>
-
-        <div>
-          <p class="font-semibold text-amber-900 dark:text-amber-100">
-            {{ t('compatibility-events') }}
-          </p>
-          <p class="text-sm text-amber-700 dark:text-amber-300">
-            {{ t('compatibility-unresolved-banner', { count: unresolvedCount }) }}
-          </p>
-        </div>
-      </div>
-
-      <!-- Visual affordance only: the whole card is the button, so this is a span. -->
-      <span
-        data-test="compatibility-banner-view"
-        class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-md bg-amber-600 shrink-0"
-      >
-        {{ t('compatibility-view-details') }}
+    <span class="flex items-center min-w-0 gap-3">
+      <IconAlertTriangle class="w-5 h-5 shrink-0 text-amber-600 dark:text-amber-400" />
+      <span class="min-w-0 text-sm">
+        <span class="font-semibold text-amber-900 dark:text-amber-100">{{ t('compatibility-events') }}</span>
+        <span class="text-amber-700 dark:text-amber-300"> · {{ t('compatibility-unresolved-banner', { count: unresolvedCount }) }}</span>
       </span>
-    </div>
+    </span>
+    <!-- Visual affordance only: the whole banner is the button, so this is a span. -->
+    <span
+      data-test="compatibility-banner-view"
+      class="px-3 py-1 text-sm font-medium text-white rounded-md shrink-0 bg-amber-600"
+    >
+      {{ t('compatibility-view-details') }}
+    </span>
   </button>
 </template>

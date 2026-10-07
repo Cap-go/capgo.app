@@ -54,7 +54,7 @@ vi.mock('../supabase/functions/_backend/plugin_runtime/utils/plugin_stats.ts', (
   sendStatsAndDevice: sendStatsAndDeviceMock,
 }))
 
-function baseChannel(versionOverrides: Record<string, unknown> = {}) {
+function baseChannel(versionOverrides: Record<string, unknown> = {}, channelOverrides: Record<string, unknown> = {}) {
   return {
     channels: {
       id: 99,
@@ -64,12 +64,15 @@ function baseChannel(versionOverrides: Record<string, unknown> = {}) {
       allow_dev: true,
       allow_prod: true,
       allow_emulator: true,
+      allow_device: true,
       ios: true,
       android: true,
       electron: true,
       disable_auto_update: 'none',
       disable_auto_update_under_native: false,
       update_package: 'zip',
+      paused_at: null,
+      ...channelOverrides,
     },
     version: {
       id: 12345,
@@ -92,39 +95,41 @@ function baseChannel(versionOverrides: Record<string, unknown> = {}) {
   }
 }
 
-describe('/updates deleted bundle guard', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    getBundleUrlMock.mockResolvedValue('https://signed.example/bundle.zip')
-    getAppOwnerPostgresMock.mockResolvedValue({
-      allow_device_custom_id: true,
-      channel_device_count: 0,
-      expose_metadata: false,
-      manifest_bundle_count: 1,
-      owner_org: 'org-1',
-      orgs: { management_email: 'owner@example.com' },
-      plan_valid: true,
-    })
+function resetUpdateMocks() {
+  vi.clearAllMocks()
+  getBundleUrlMock.mockResolvedValue('https://signed.example/bundle.zip')
+  getAppOwnerPostgresMock.mockResolvedValue({
+    allow_device_custom_id: true,
+    channel_device_count: 0,
+    expose_metadata: false,
+    manifest_bundle_count: 1,
+    owner_org: 'org-1',
+    orgs: { management_email: 'owner@example.com' },
+    plan_valid: true,
   })
+}
 
-  async function runUpdate() {
-    const { updateWithPG } = await import('../supabase/functions/_backend/plugin_runtime/utils/update.ts')
-    const app = new Hono()
-    const body = {
-      app_id: 'com.test.app',
-      device_id: '11111111-1111-4111-8111-111111111111',
-      platform: 'ios',
-      version_build: '1.0.0',
-      version_name: '1.0.0',
-      version_os: '17.0',
-      plugin_version: '7.34.0',
-      defaultChannel: '',
-      is_emulator: false,
-      is_prod: true,
-    }
-    app.get('/', c => updateWithPG(c, body as any, {} as any))
-    return app.fetch(new Request('http://localhost/'), {}, { waitUntil: () => {} } as any)
+async function runUpdate() {
+  const { updateWithPG } = await import('../supabase/functions/_backend/plugin_runtime/utils/update.ts')
+  const app = new Hono()
+  const body = {
+    app_id: 'com.test.app',
+    device_id: '11111111-1111-4111-8111-111111111111',
+    platform: 'ios',
+    version_build: '1.0.0',
+    version_name: '1.0.0',
+    version_os: '17.0',
+    plugin_version: '7.34.0',
+    defaultChannel: '',
+    is_emulator: false,
+    is_prod: true,
   }
+  app.get('/', c => updateWithPG(c, body as any, {} as any))
+  return app.fetch(new Request('http://localhost/'), {}, { waitUntil: () => {} } as any)
+}
+
+describe('/updates deleted bundle guard', () => {
+  beforeEach(resetUpdateMocks)
 
   it.concurrent('does not sign r2_path when deleted=true', async () => {
     requestInfosPostgresMock.mockResolvedValue({
@@ -150,5 +155,64 @@ describe('/updates deleted bundle guard', () => {
     expect(json.error).toBe('no_bundle')
     expect(json.url).toBeUndefined()
     expect(getBundleUrlMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('/updates paused channel', () => {
+  beforeEach(resetUpdateMocks)
+
+  it('sends no bundle while the channel is paused', async () => {
+    requestInfosPostgresMock.mockResolvedValue({
+      channelData: baseChannel({}, { paused_at: '2026-10-02T00:00:00Z' }),
+      channelOverride: undefined,
+    })
+
+    const res = await runUpdate()
+    const json = await res.json() as { error?: string, kind?: string, url?: string, version?: string }
+    expect(json.error).toBe('channel_paused')
+    expect(json.kind).toBe('up_to_date')
+    expect(json.url).toBeUndefined()
+    expect(json.version).toBeUndefined()
+    expect(getBundleUrlMock).not.toHaveBeenCalled()
+    expect(sendStatsAndDeviceMock).toHaveBeenCalledWith(expect.anything(), expect.anything(), [{ action: 'channelPaused', versionName: '1.0.0' }])
+  })
+
+  it('serves the channel bundle once the channel is resumed', async () => {
+    requestInfosPostgresMock.mockResolvedValue({
+      channelData: baseChannel(),
+      channelOverride: undefined,
+    })
+
+    const res = await runUpdate()
+    const json = await res.json() as { error?: string, url?: string, version?: string }
+    expect(json.error).toBeUndefined()
+    expect(json.version).toBe('2.0.0')
+    expect(json.url).toBe('https://signed.example/bundle.zip')
+  })
+
+  it('pauses a device whose override channel is paused', async () => {
+    requestInfosPostgresMock.mockResolvedValue({
+      channelData: baseChannel(),
+      channelOverride: baseChannel({}, { id: 100, name: 'beta', paused_at: '2026-10-02T00:00:00Z' }),
+    })
+
+    const res = await runUpdate()
+    const json = await res.json() as { error?: string, url?: string }
+    expect(json.error).toBe('channel_paused')
+    expect(json.url).toBeUndefined()
+    expect(getBundleUrlMock).not.toHaveBeenCalled()
+  })
+
+  it('serves a device whose override channel is live while the default channel is paused', async () => {
+    requestInfosPostgresMock.mockResolvedValue({
+      channelData: baseChannel({}, { paused_at: '2026-10-02T00:00:00Z' }),
+      channelOverride: baseChannel({ id: 54321, name: '3.0.0', r2_path: 'orgs/org-1/apps/com.test.app/3.0.0.zip' }, { id: 100, name: 'beta' }),
+    })
+
+    const res = await runUpdate()
+    const json = await res.json() as { error?: string, url?: string, version?: string }
+    expect(json.error).toBeUndefined()
+    expect(json.version).toBe('3.0.0')
+    expect(json.url).toBe('https://signed.example/bundle.zip')
   })
 })
