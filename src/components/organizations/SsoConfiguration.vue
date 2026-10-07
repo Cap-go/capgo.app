@@ -160,13 +160,17 @@ async function copyToClipboard(text: string, label: string) {
 }
 
 async function fetchProviders() {
+  // A response for an org the user already switched away from is ignored.
+  const orgId = props.orgId
   isLoading.value = true
   try {
     const headers = await getAuthHeaders()
-    const response = await fetch(`${defaultApiHost}/private/sso/providers/${props.orgId}`, {
+    const response = await fetch(`${defaultApiHost}/private/sso/providers/${orgId}`, {
       method: 'GET',
       headers,
     })
+    if (orgId !== props.orgId)
+      return
 
     if (!response.ok) {
       console.error('Failed to fetch SSO providers:', response.status)
@@ -175,29 +179,36 @@ async function fetchProviders() {
     }
 
     const data = await response.json() as SsoProvider[]
-    providers.value = data
+    if (orgId === props.orgId)
+      providers.value = data
   }
   catch (error) {
     console.error('Error fetching SSO providers:', error)
     toast.error(t('sso-error-loading'))
   }
   finally {
-    isLoading.value = false
+    if (orgId === props.orgId)
+      isLoading.value = false
   }
 }
 
 async function fetchLinks() {
+  const orgId = props.orgId
   try {
     const headers = await getAuthHeaders()
-    const response = await fetch(`${defaultApiHost}/private/sso/providers/${props.orgId}/links`, {
+    const response = await fetch(`${defaultApiHost}/private/sso/providers/${orgId}/links`, {
       method: 'GET',
       headers,
     })
+    if (orgId !== props.orgId)
+      return
     if (!response.ok) {
       console.error('Failed to fetch shared SSO providers:', response.status)
       return
     }
     const data = await response.json() as { shared: SharedLink[], linked: LinkedProvider[] }
+    if (orgId !== props.orgId)
+      return
     sharedLinks.value = data.shared
     linkedProviders.value = data.linked
   }
@@ -541,6 +552,12 @@ watch(() => props.orgId, async () => {
   sharedLinks.value = []
   linkedProviders.value = []
   recentlyCreatedId.value = null
+  // The add form creates the provider in the current org: drop a draft
+  // started in the previous one.
+  showAddForm.value = false
+  newDomain.value = ''
+  newMetadataUrl.value = ''
+  newMetadataXml.value = ''
   await Promise.all([fetchProviders(), fetchLinks()])
 })
 

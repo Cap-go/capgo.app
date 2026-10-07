@@ -904,10 +904,13 @@ app.delete('/:id/links/:orgId', async (c) => {
   if (!await isOrgSuperAdmin(c, orgId) && !await isOrgSuperAdmin(c, provider.org_id))
     quickError(403, 'link_requires_super_admin', 'Only super admins of either organization can stop sharing an SSO provider')
 
-  const deleted = await withPgPool(c, async (pool) => {
-    const result = await pool.query('delete from public.sso_provider_org_links where sso_provider_id = $1 and org_id = $2', [id, orgId])
+  const deleted = await withPgPool(c, pool => withPgTransaction(pool, async (client) => {
+    const result = await client.query('delete from public.sso_provider_org_links where sso_provider_id = $1 and org_id = $2', [id, orgId])
+    // Like a mapping save: invalidates provider PATCHes computed with this link.
+    if ((result.rowCount ?? 0) > 0)
+      await client.query('update public.sso_providers set updated_at = now() where id = $1', [id])
     return result.rowCount ?? 0
-  })
+  }))
   if (deleted === 0)
     quickError(404, 'link_not_found', 'The SSO provider is not shared with this organization')
   return c.json(BRES)
