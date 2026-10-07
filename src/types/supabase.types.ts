@@ -973,6 +973,7 @@ export type Database = {
           ios: boolean
           name: string
           owner_org: string
+          paused_at: string | null
           public: boolean
           rbac_id: string
           rollout_cache_ttl_seconds: number
@@ -1013,6 +1014,7 @@ export type Database = {
           ios?: boolean
           name: string
           owner_org: string
+          paused_at?: string | null
           public?: boolean
           rbac_id?: string
           rollout_cache_ttl_seconds?: number
@@ -1053,6 +1055,7 @@ export type Database = {
           ios?: boolean
           name?: string
           owner_org?: string
+          paused_at?: string | null
           public?: boolean
           rbac_id?: string
           rollout_cache_ttl_seconds?: number
@@ -2647,6 +2650,38 @@ export type Database = {
           },
         ]
       }
+      org_custom_domains: {
+        Row: {
+          created_at: string
+          hostname: string
+          org_id: string
+          provider_id: string | null
+          provider_route_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          hostname: string
+          org_id: string
+          provider_id?: string | null
+          provider_route_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          hostname?: string
+          org_id?: string
+          provider_id?: string | null
+          provider_route_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "org_custom_domains_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: true
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       org_id_tombstones: {
         Row: {
           deleted_at: string
@@ -3063,6 +3098,81 @@ export type Database = {
         }
         Relationships: []
       }
+      r2_inventory_checkpoints: {
+        Row: {
+          accepted_event_floor: string | null
+          bucket_name: string
+          checkpoint: Json
+          job_name: string
+          partition_key: string
+          updated_at: string
+        }
+        Insert: {
+          accepted_event_floor?: string | null
+          bucket_name: string
+          checkpoint?: Json
+          job_name: string
+          partition_key?: string
+          updated_at?: string
+        }
+        Update: {
+          accepted_event_floor?: string | null
+          bucket_name?: string
+          checkpoint?: Json
+          job_name?: string
+          partition_key?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      r2_objects: {
+        Row: {
+          bucket_name: string
+          cleanup_requested_at: string | null
+          etag: string | null
+          first_seen_at: string
+          last_event_at: string | null
+          last_reconciled_at: string | null
+          r2_key: string
+          r2_last_modified_at: string | null
+          r2_state: Database["public"]["Enums"]["r2_object_state"]
+          revision: number
+          size_bytes: number | null
+          tombstone_expires_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          bucket_name: string
+          cleanup_requested_at?: string | null
+          etag?: string | null
+          first_seen_at?: string
+          last_event_at?: string | null
+          last_reconciled_at?: string | null
+          r2_key: string
+          r2_last_modified_at?: string | null
+          r2_state: Database["public"]["Enums"]["r2_object_state"]
+          revision?: number
+          size_bytes?: number | null
+          tombstone_expires_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          bucket_name?: string
+          cleanup_requested_at?: string | null
+          etag?: string | null
+          first_seen_at?: string
+          last_event_at?: string | null
+          last_reconciled_at?: string | null
+          r2_key?: string
+          r2_last_modified_at?: string | null
+          r2_state?: Database["public"]["Enums"]["r2_object_state"]
+          revision?: number
+          size_bytes?: number | null
+          tombstone_expires_at?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       role_bindings: {
         Row: {
           app_id: string | null
@@ -3375,6 +3485,7 @@ export type Database = {
           created_at: string
           customer_country: string | null
           customer_id: string
+          extra_mau: number
           id: number
           is_above_plan: boolean | null
           is_good_plan: boolean | null
@@ -3403,6 +3514,7 @@ export type Database = {
           created_at?: string
           customer_country?: string | null
           customer_id: string
+          extra_mau?: number
           id?: number
           is_above_plan?: boolean | null
           is_good_plan?: boolean | null
@@ -3431,6 +3543,7 @@ export type Database = {
           created_at?: string
           customer_country?: string | null
           customer_id?: string
+          extra_mau?: number
           id?: number
           is_above_plan?: boolean | null
           is_good_plan?: boolean | null
@@ -3596,6 +3709,7 @@ export type Database = {
           initial: boolean
           lease_token: string | null
           leased_until: string | null
+          scope: string
         }
         Insert: {
           app_id: string
@@ -3604,6 +3718,7 @@ export type Database = {
           initial?: boolean
           lease_token?: string | null
           leased_until?: string | null
+          scope?: string
         }
         Update: {
           app_id?: string
@@ -3612,6 +3727,7 @@ export type Database = {
           initial?: boolean
           lease_token?: string | null
           leased_until?: string | null
+          scope?: string
         }
         Relationships: []
       }
@@ -4550,6 +4666,10 @@ export type Database = {
         Args: { p_limit?: number }
         Returns: number
       }
+      enqueue_cron_tick: {
+        Args: { payload: Json; queue_name: string }
+        Returns: undefined
+      }
       exist_app: { Args: { appid: string }; Returns: boolean }
       exist_app_v2: { Args: { appid: string }; Returns: boolean }
       exist_app_versions:
@@ -5429,7 +5549,7 @@ export type Database = {
         Returns: Json
       }
       notify_updates_edge_cache_purge: {
-        Args: { p_app_ids: string[] }
+        Args: { p_app_ids: string[]; p_scope: string }
         Returns: undefined
       }
       null_migrated_app_version_manifests: {
@@ -6051,6 +6171,11 @@ export type Database = {
       cron_task_type: "function" | "queue" | "function_queue"
       disable_update: "major" | "minor" | "patch" | "version_number" | "none"
       platform_os: "ios" | "android" | "electron"
+      r2_object_state:
+        | "to_be_uploaded"
+        | "present"
+        | "to_be_deleted"
+        | "deleted"
       stats_action:
         | "delete"
         | "reset"
@@ -6144,6 +6269,7 @@ export type Database = {
         | "webview_dom_content_loaded"
         | "webview_page_loaded"
         | "app_nav"
+        | "channelPaused"
       stripe_status:
         | "created"
         | "succeeded"
@@ -6332,6 +6458,12 @@ export const Constants = {
       cron_task_type: ["function", "queue", "function_queue"],
       disable_update: ["major", "minor", "patch", "version_number", "none"],
       platform_os: ["ios", "android", "electron"],
+      r2_object_state: [
+        "to_be_uploaded",
+        "present",
+        "to_be_deleted",
+        "deleted",
+      ],
       stats_action: [
         "delete",
         "reset",
@@ -6425,6 +6557,7 @@ export const Constants = {
         "webview_dom_content_loaded",
         "webview_page_loaded",
         "app_nav",
+        "channelPaused",
       ],
       stripe_status: [
         "created",

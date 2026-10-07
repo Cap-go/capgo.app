@@ -44,7 +44,7 @@ For each automation listed below, add a segment filter:
 
 #### 1. Usage Limit Alerts (50%, 70%, 90%)
 
-**Events**: `user:usage_50_percent_of_plan`, `user:usage_70_percent_of_plan`, `user:usage_90_percent_of_plan`, `user:upgrade_to_*`, `user:native_build_concurrency_limit`
+**Events**: `user:usage_50_percent_of_plan`, `user:usage_70_percent_of_plan`, `user:usage_90_percent_of_plan`, `user:upgrade_to_*`, `user:enterprise_above_plan`, `user:native_build_concurrency_limit`
 
 **Filter to add**:
 
@@ -122,6 +122,8 @@ Legacy URL (already-sent emails; still works):
 ```text
 https://console.capgo.app/email-preferences?email={{ visitor.email }}
 ```
+
+Do **not** use `?email={{ visitor.uuid }}` — the console treats UUID-shaped `email` values as a Bento visitor id and resolves them server-side, but the Email field stays empty unless that lookup returns an address. Use the `uuid` query param for new footers.
 
 - Prefills the address only — the visitor chooses what to disable
 - `uuid` is resolved server-side via Bento `GET /fetch/subscribers` so the email never appears in the page URL

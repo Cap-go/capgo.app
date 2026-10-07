@@ -67,6 +67,15 @@ function canUseSupabaseFallback(c: Context) {
   return Boolean(supabaseFallbacks) && !shouldSkipSupabaseStatsFallback(c)
 }
 
+// Intermediate download progress (download_10 ... download_90) is not read by
+// any stats query and was ~28% of APP_LOG writes. download_0, download_complete
+// and failure actions are still recorded.
+const DROPPED_DOWNLOAD_PROGRESS_ACTION = /^download_[1-9]0$/
+
+export function isDroppedStatsLogAction(action: string) {
+  return DROPPED_DOWNLOAD_PROGRESS_ACTION.test(action)
+}
+
 export function normalizeStatsMetadata(metadata?: StatsMetadata): StatsMetadata | undefined {
   if (!metadata)
     return undefined
@@ -124,15 +133,19 @@ export async function onPremStats(c: Context, app_id: string, action: string, de
       await updateStoreApp(c, app_id, 1)
   })
 
-  await createStatsLogsExternal(
-    c,
-    device.app_id,
-    device.device_id,
-    'get',
-    device.version_name,
-    metadata,
-    getStatsLogDimensions(c, device),
-  )
+  // Only real update checks feed the external update count. /stats lifecycle
+  // events (foreground, background, ...) used to be logged as 'get' too.
+  if (action === 'get') {
+    await createStatsLogsExternal(
+      c,
+      device.app_id,
+      device.device_id,
+      'get',
+      device.version_name,
+      metadata,
+      getStatsLogDimensions(c, device),
+    )
+  }
   cloudlog({ requestId: c.get('requestId'), message: 'App is external (onPremise), returning 429', app_id: device.app_id, country: c.req.raw.cf?.country, user_agent: c.req.raw.headers.get('user-agent') })
   return onPremiseAppResponse(c)
 }
@@ -183,6 +196,8 @@ export function createStatsLogsExternal(c: Context, app_id: string, device_id: s
 }
 
 export function createStatsLogs(c: Context, app_id: string, device_id: string, action: Database['public']['Enums']['stats_action'], versionName?: string, metadata?: StatsMetadata, dimensions?: StatsLogDimensions) {
+  if (isDroppedStatsLogAction(action))
+    return Promise.resolve()
   const lowerDeviceId = device_id
   const finalVersionName = versionName && versionName !== '' ? versionName : 'unknown'
   const finalMetadata = normalizeStatsMetadata(metadata)

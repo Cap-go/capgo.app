@@ -8,6 +8,7 @@ import { createClient } from '@supabase/supabase-js'
 import { Hono } from 'hono/tiny'
 import { Pool } from 'pg'
 import { getCanonicalAppVersionR2Path } from '../supabase/functions/_backend/utils/app_version_r2_path.ts'
+import { retryTransientSqlError } from './sql-retry'
 
 function normalizePostgresUrl(raw: string): string {
   // Avoid Node preferring IPv6 (::1) for localhost in some environments.
@@ -1001,7 +1002,7 @@ export async function getPostgresClient(): Promise<Pool> {
 
 export async function executeSQL<T = any>(query: string, params?: any[]): Promise<T[]> {
   const client = await getPostgresClient()
-  const result = await client.query(query, params || [])
+  const result = await retryTransientSqlError(() => client.query(query, params || []))
   return result.rows as T[]
 }
 

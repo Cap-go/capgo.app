@@ -20,6 +20,11 @@ interface StatsRes {
 
 type StatsAction = Database['public']['Enums']['stats_action']
 
+// Mirrors isDroppedStatsLogAction: download_10..download_90 are not stored.
+function isDroppedDownloadProgressAction(action: string) {
+  return /^download_[1-9]0$/.test(action)
+}
+
 interface StatsPayload extends ReturnType<typeof getBaseData> {
   action: StatsAction
   install_source?: string
@@ -489,19 +494,32 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
           expect(response.status).toBe(200)
           expect(responseData.status).toBe('ok')
 
-          // Verify stats entry
-          const { error: statsError, data: statsData } = await getSupabaseClient()
-            .from('stats')
-            .select()
-            .eq('device_id', uuid)
-            .eq('app_id', appId)
-            .eq('action', action)
-            .single()
+          // Verify stats entry. Intermediate download progress is intentionally
+          // not stored (see isDroppedStatsLogAction in plugin_stats.ts).
+          if (isDroppedDownloadProgressAction(action)) {
+            const { count, error: statsError } = await getSupabaseClient()
+              .from('stats')
+              .select('*', { count: 'exact', head: true })
+              .eq('device_id', uuid)
+              .eq('app_id', appId)
+              .eq('action', action)
+            expect(statsError).toBeNull()
+            expect(count).toBe(0)
+          }
+          else {
+            const { error: statsError, data: statsData } = await getSupabaseClient()
+              .from('stats')
+              .select()
+              .eq('device_id', uuid)
+              .eq('app_id', appId)
+              .eq('action', action)
+              .single()
 
-          expect(statsError).toBeNull()
-          expect(statsData).toBeTruthy()
-          expect(statsData?.action).toBe(action)
-          expect(statsData?.device_id).toBe(uuid)
+            expect(statsError).toBeNull()
+            expect(statsData).toBeTruthy()
+            expect(statsData?.action).toBe(action)
+            expect(statsData?.device_id).toBe(uuid)
+          }
 
           // Verify device state - fail, download, staging and delete actions should NOT
           // create/update device records: their version_name is not the running version

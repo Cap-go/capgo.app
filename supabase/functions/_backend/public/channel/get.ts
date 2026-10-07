@@ -47,6 +47,7 @@ async function getAll(c: Context, body: GetDevice, apikey: Database['public']['T
       rollout_paused_at,
       rollout_pause_reason,
       rollout_cache_ttl_seconds,
+      paused_at,
       auto_pause_enabled,
       auto_pause_window_minutes,
       auto_pause_failure_rate_bps,
@@ -73,7 +74,7 @@ async function getAll(c: Context, body: GetDevice, apikey: Database['public']['T
     throw simpleError('cannot_find_channels', 'Cannot find channels', { supabaseError: dbError })
   }
   return c.json(dataChannels.map((o) => {
-    const { disable_auto_update_under_native, disable_auto_update, update_package, rollout_percentage_bps, rollout_enabled, rollout_paused_at, rollout_pause_reason, rollout_cache_ttl_seconds, auto_pause_enabled, auto_pause_window_minutes, auto_pause_failure_rate_bps, auto_pause_confidence, auto_pause_min_attempts, auto_pause_min_failures, auto_pause_action, auto_pause_cooldown_minutes, auto_pause_last_triggered_at, auto_pause_last_checked_at, ...rest } = o
+    const { disable_auto_update_under_native, disable_auto_update, update_package, rollout_percentage_bps, rollout_enabled, rollout_paused_at, rollout_pause_reason, rollout_cache_ttl_seconds, paused_at, auto_pause_enabled, auto_pause_window_minutes, auto_pause_failure_rate_bps, auto_pause_confidence, auto_pause_min_attempts, auto_pause_min_failures, auto_pause_action, auto_pause_cooldown_minutes, auto_pause_last_triggered_at, auto_pause_last_checked_at, ...rest } = o
     return {
       ...rest,
       disableAutoUpdateUnderNative: disable_auto_update_under_native,
@@ -84,6 +85,7 @@ async function getAll(c: Context, body: GetDevice, apikey: Database['public']['T
       rolloutPausedAt: rollout_paused_at,
       rolloutPauseReason: rollout_pause_reason,
       rolloutCacheTtlSeconds: rollout_cache_ttl_seconds,
+      pausedAt: paused_at,
       autoPauseEnabled: auto_pause_enabled,
       autoPauseWindowMinutes: auto_pause_window_minutes,
       autoPauseFailureRateBps: auto_pause_failure_rate_bps,
@@ -129,6 +131,7 @@ async function getOne(c: Context, body: GetDevice, apikey: Database['public']['T
         rollout_paused_at,
         rollout_pause_reason,
         rollout_cache_ttl_seconds,
+        paused_at,
         auto_pause_enabled,
         auto_pause_window_minutes,
         auto_pause_failure_rate_bps,
@@ -155,7 +158,7 @@ async function getOne(c: Context, body: GetDevice, apikey: Database['public']['T
     throw simpleError('cannot_find_version', 'Cannot find version', { supabaseError: dbError })
   }
 
-  const { disable_auto_update_under_native, disable_auto_update, update_package, rollout_percentage_bps, rollout_enabled, rollout_paused_at, rollout_pause_reason, rollout_cache_ttl_seconds, auto_pause_enabled, auto_pause_window_minutes, auto_pause_failure_rate_bps, auto_pause_confidence, auto_pause_min_attempts, auto_pause_min_failures, auto_pause_action, auto_pause_cooldown_minutes, auto_pause_last_triggered_at, auto_pause_last_checked_at, ...rest } = dataChannel
+  const { disable_auto_update_under_native, disable_auto_update, update_package, rollout_percentage_bps, rollout_enabled, rollout_paused_at, rollout_pause_reason, rollout_cache_ttl_seconds, paused_at, auto_pause_enabled, auto_pause_window_minutes, auto_pause_failure_rate_bps, auto_pause_confidence, auto_pause_min_attempts, auto_pause_min_failures, auto_pause_action, auto_pause_cooldown_minutes, auto_pause_last_triggered_at, auto_pause_last_checked_at, ...rest } = dataChannel
   const newObject = {
     ...rest,
     disableAutoUpdateUnderNative: disable_auto_update_under_native,
@@ -166,6 +169,7 @@ async function getOne(c: Context, body: GetDevice, apikey: Database['public']['T
     rolloutPausedAt: rollout_paused_at,
     rolloutPauseReason: rollout_pause_reason,
     rolloutCacheTtlSeconds: rollout_cache_ttl_seconds,
+    pausedAt: paused_at,
     autoPauseEnabled: auto_pause_enabled,
     autoPauseWindowMinutes: auto_pause_window_minutes,
     autoPauseFailureRateBps: auto_pause_failure_rate_bps,

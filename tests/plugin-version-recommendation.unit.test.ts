@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildPluginVersionRecommendation,
+  deliveryTimingMinVersion,
   fetchUpdaterDistTags,
   installCommandForPackage,
   latestTagForMajor,
   MIN_SUPPORTED_PLUGIN_MAJOR,
   pluginMajorFromVersion,
   resetUpdaterDistTagCache,
+  supportsDeliveryTiming,
   UPDATER_PACKAGE_NAME,
 } from '../src/services/pluginVersionRecommendation.ts'
 
@@ -153,6 +155,25 @@ describe('buildPluginVersionRecommendation', () => {
     expect(recommendation?.rows[0]?.status).toBe('unknown')
   })
 
+  it.concurrent('counts devices behind on resolved majors when another major has no dist-tag', () => {
+    const recommendation = buildPluginVersionRecommendation([
+      { plugin_version: '8.40.0', devices: 6, total_devices: 10 },
+      { plugin_version: '9.1.0', devices: 4, total_devices: 10 },
+    ], distTags)
+
+    expect(recommendation?.statusResolved).toBe(false)
+    expect(recommendation?.behindResolved).toBe(true)
+    expect(recommendation?.behindDevices).toBe(6)
+  })
+
+  it.concurrent('reports behind devices as unresolved when no major has a dist-tag', () => {
+    const recommendation = buildPluginVersionRecommendation([
+      { plugin_version: '6.14.0', devices: 4, total_devices: 4 },
+    ], null)
+
+    expect(recommendation?.behindResolved).toBe(false)
+  })
+
   it.concurrent('returns null when there is no plugin version data', () => {
     expect(buildPluginVersionRecommendation([], distTags)).toBeNull()
   })
@@ -214,5 +235,28 @@ describe('fetchUpdaterDistTags', () => {
     finally {
       Object.defineProperty(AbortSignal, 'timeout', { configurable: true, value: originalTimeout })
     }
+  })
+})
+
+describe('supportsDeliveryTiming', () => {
+  it('requires the first release of each major that sends download start events', () => {
+    expect(supportsDeliveryTiming('5.50.0')).toBe(false)
+    expect(supportsDeliveryTiming('5.50.1')).toBe(true)
+    expect(supportsDeliveryTiming('6.25.1')).toBe(false)
+    expect(supportsDeliveryTiming('6.25.2')).toBe(true)
+    expect(supportsDeliveryTiming('7.25.9')).toBe(false)
+    expect(supportsDeliveryTiming('7.26.0')).toBe(true)
+    expect(supportsDeliveryTiming('8.1.9')).toBe(false)
+    expect(supportsDeliveryTiming('8.2.0')).toBe(true)
+    expect(supportsDeliveryTiming('8.52.1')).toBe(true)
+    expect(supportsDeliveryTiming('9.0.0')).toBe(true)
+    expect(supportsDeliveryTiming('4.43.5')).toBe(false)
+    expect(supportsDeliveryTiming('unknown')).toBe(false)
+  })
+
+  it('suggests the minimum version for the same major', () => {
+    expect(deliveryTimingMinVersion(7)).toBe('7.26.0')
+    expect(deliveryTimingMinVersion(4)).toBe('8.2.0')
+    expect(deliveryTimingMinVersion(null)).toBe('8.2.0')
   })
 })

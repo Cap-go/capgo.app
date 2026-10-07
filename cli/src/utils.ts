@@ -43,6 +43,7 @@ import {
   throwTwoFactorComplianceRpcError,
   warnAndContinueTwoFactorPreflightNetworkFailure,
 } from './shared/two-factor-compliance'
+import { redactSecrets } from './support/redact'
 import { formatApiErrorForCli, parseSecurityPolicyError } from './utils/security_policy_errors'
 
 export { trimTrailingSlashes }
@@ -194,6 +195,104 @@ export function formatError(error: any): string {
 
   // Fall back to prettyjson for other errors
   return `\n${prettyjson.render(error)}`
+}
+
+const MAX_VERBOSE_ERROR_NODES = 12
+const MAX_VERBOSE_ERROR_MESSAGE_LENGTH = 2_000
+
+type VerboseErrorLike = {
+  name?: unknown
+  message?: unknown
+  code?: unknown
+  errno?: unknown
+  syscall?: unknown
+  address?: unknown
+  port?: unknown
+  cause?: unknown
+  causingError?: unknown
+  errors?: unknown
+}
+
+function verboseErrorField(value: unknown): string | undefined {
+  if (typeof value !== 'string' && typeof value !== 'number')
+    return undefined
+  return redactSecrets(String(value)).slice(0, MAX_VERBOSE_ERROR_MESSAGE_LENGTH)
+}
+
+function describeVerboseError(error: unknown): string {
+  if (typeof error === 'string')
+    return redactSecrets(error).slice(0, MAX_VERBOSE_ERROR_MESSAGE_LENGTH)
+
+  if (!error || typeof error !== 'object')
+    return String(error)
+
+  const errorLike = error as VerboseErrorLike
+  const name = verboseErrorField(errorLike.name)
+  const message = verboseErrorField(errorLike.message)
+  const description = name && message
+    ? `${name}: ${message}`
+    : message || name || Object.prototype.toString.call(error)
+  const metadata = [
+    ['code', errorLike.code],
+    ['errno', errorLike.errno],
+    ['syscall', errorLike.syscall],
+    ['address', errorLike.address],
+    ['port', errorLike.port],
+  ]
+    .map(([key, value]) => {
+      const rendered = verboseErrorField(value)
+      return rendered ? `${key}=${rendered}` : undefined
+    })
+    .filter(Boolean)
+
+  return `${description}${metadata.length > 0 ? ` (${metadata.join(', ')})` : ''}`
+}
+
+/**
+ * Render the safe, diagnostic part of an error chain for --verbose output.
+ *
+ * tus-js-client stores its underlying transport error in `causingError`, while
+ * native fetch/Undici uses `cause`. Only known diagnostic fields are included;
+ * request objects and headers are deliberately ignored, then the result passes
+ * through the CLI's secret redactor as a final safeguard.
+ */
+export function formatVerboseError(error: unknown): string {
+  const lines: string[] = []
+  const seen = new Set<object>()
+  let visitedNodes = 0
+
+  const visit = (current: unknown, label: string, depth: number) => {
+    if (visitedNodes >= MAX_VERBOSE_ERROR_NODES)
+      return
+
+    if (current && typeof current === 'object') {
+      if (seen.has(current))
+        return
+      seen.add(current)
+    }
+
+    visitedNodes++
+    const indent = '  '.repeat(depth)
+    lines.push(`${indent}${label}${describeVerboseError(current)}`)
+
+    if (!current || typeof current !== 'object')
+      return
+
+    const errorLike = current as VerboseErrorLike
+    const causes = [errorLike.causingError, errorLike.cause]
+      .filter((cause, index, all) => cause !== undefined && cause !== null && all.indexOf(cause) === index)
+    for (const cause of causes)
+      visit(cause, 'Caused by: ', depth + 1)
+
+    if (Array.isArray(errorLike.errors)) {
+      errorLike.errors.forEach((nestedError, index) => {
+        visit(nestedError, `Contained error ${index + 1}: `, depth + 1)
+      })
+    }
+  }
+
+  visit(error, '', 0)
+  return redactSecrets(lines.join('\n'))
 }
 
 export async function check2FAAccessForOrg(
@@ -843,7 +942,7 @@ export async function getRemoteConfig(silent = false, signal?: AbortSignal) {
   return run.then(finish)
 }
 
-interface CapgoFilesConfig {
+export interface CapgoFilesConfig {
   partialUpload: boolean
   partialUploadForced: boolean
   TUSUpload: boolean

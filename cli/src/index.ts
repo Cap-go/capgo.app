@@ -298,6 +298,14 @@ Cordova example: npx @capgo/cli@latest bundle upload com.example.app --mode cord
   .option('--delta', `Upload delta updates (only changed files) for instant, super-fast updates instead of big zip downloads. Capgo refuses delta uploads over 10,000 files (delta tracks each file); use --no-delta for a full zip, or reduce files in your web build.`)
   .option('--delta-only', `Upload only delta updates without full bundle for maximum speed (useful for large apps)`)
   .option('--no-delta', `Disable delta updates even if instant updates are enabled`)
+  .addOption(new Option('--delta-upload-concurrency <count>', `Maximum number of delta files processed concurrently (1-500)`)
+    .default(50)
+    .argParser((value: string) => {
+      const concurrency = Number(value)
+      if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 500)
+        throw new InvalidArgumentError('Delta upload concurrency must be an integer between 1 and 500')
+      return concurrency
+    }))
   .option('--encrypted-checksum <encryptedChecksum>', `An encrypted checksum (signature). Used only when uploading an external bundle.`)
   .option('--auto-set-bundle', `Set the bundle version in Capacitor config`)
   .addOption(new Option('--auto-bump [level]', `Auto-increment bundle version from the latest remote channel/app version. Level: major, minor (default), patch|fix, metadata (prerelease), or ai`)

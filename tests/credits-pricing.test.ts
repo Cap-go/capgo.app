@@ -105,7 +105,7 @@ describe('credits pricing API', () => {
 
     // 1M MAU and 100 TB included: the overage starts on the high-volume tiers.
     const abovePlan = await calculate({ mau: 1_000_000, bandwidth: 109_951_162_777_600 })
-    expect(abovePlan.breakdown.mau.cost).toBeCloseTo(600, 6)
+    expect(abovePlan.breakdown.mau.cost).toBeCloseTo(300, 6)
     expect(abovePlan.breakdown.bandwidth.cost).toBeCloseTo(819.2, 6)
 
     // Nothing included: priced from the bottom of the ladder.

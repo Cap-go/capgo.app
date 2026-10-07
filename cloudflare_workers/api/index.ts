@@ -11,6 +11,7 @@ import { app as config } from '../../supabase/functions/_backend/private/config.
 import { app as configBuilder } from '../../supabase/functions/_backend/private/config_builder.ts'
 import { app as create_device } from '../../supabase/functions/_backend/private/create_device.ts'
 import { app as credits } from '../../supabase/functions/_backend/private/credits.ts'
+import { app as customDomains } from '../../supabase/functions/_backend/private/custom_domains.ts'
 import { app as deleted_failed_version } from '../../supabase/functions/_backend/private/delete_failed_version.ts'
 import { app as devices_priv } from '../../supabase/functions/_backend/private/devices.ts'
 import { app as emailPreferences } from '../../supabase/functions/_backend/private/email_preferences.ts'
@@ -32,6 +33,7 @@ import { app as plans } from '../../supabase/functions/_backend/private/plans.ts
 import { app as publicStats } from '../../supabase/functions/_backend/private/public_stats.ts'
 import { app as release_live } from '../../supabase/functions/_backend/private/release_live.ts'
 import { app as replay } from '../../supabase/functions/_backend/private/replay.ts'
+import { app as request_manifest_upload } from '../../supabase/functions/_backend/private/request_manifest_upload.ts'
 import { app as role_bindings } from '../../supabase/functions/_backend/private/role_bindings.ts'
 // Manifest finalization validates size receipts issued by the files worker.
 import { app as set_manifest } from '../../supabase/functions/_backend/private/set_manifest.ts'
@@ -69,6 +71,7 @@ import { app as statistics } from '../../supabase/functions/_backend/public/stat
 import { app as translation } from '../../supabase/functions/_backend/public/translation.ts'
 import { app as webhooks } from '../../supabase/functions/_backend/public/webhooks/index.ts'
 import { app as credit_usage_alerts } from '../../supabase/functions/_backend/triggers/credit_usage_alerts.ts'
+import { app as credit_usage_posthog } from '../../supabase/functions/_backend/triggers/credit_usage_posthog.ts'
 import { app as cron_app_fame } from '../../supabase/functions/_backend/triggers/cron_app_fame.ts'
 import { app as cron_clean_orphan_images } from '../../supabase/functions/_backend/triggers/cron_clean_orphan_images.ts'
 import { app as cron_clear_versions } from '../../supabase/functions/_backend/triggers/cron_clear_versions.ts'
@@ -98,15 +101,15 @@ import { app as on_version_delete } from '../../supabase/functions/_backend/trig
 import { app as on_version_update } from '../../supabase/functions/_backend/triggers/on_version_update.ts'
 import { app as pluginNotifications } from '../../supabase/functions/_backend/triggers/plugin_notifications.ts'
 import { app as queue_consumer } from '../../supabase/functions/_backend/triggers/queue_consumer.ts'
-import { app as send_email } from './triggers/send_email.ts'
 import { app as stripe_event } from '../../supabase/functions/_backend/triggers/stripe_event.ts'
 import { app as updates_cache_purge } from '../../supabase/functions/_backend/triggers/updates_cache_purge.ts'
 import { app as webhook_delivery } from '../../supabase/functions/_backend/triggers/webhook_delivery.ts'
 import { app as webhook_dispatcher } from '../../supabase/functions/_backend/triggers/webhook_dispatcher.ts'
 import { BRES, createAllCatch, createHono } from '../../supabase/functions/_backend/utils/hono.ts'
-import { processNativeNotificationQueueBatch } from '../../supabase/functions/_backend/utils/nativeNotificationSender.ts'
 import { flushQueuedPluginNotifications } from '../../supabase/functions/_backend/utils/plugin_notification_flush.ts'
 import { version } from '../../supabase/functions/_backend/utils/version.ts'
+import { processApiQueueBatch } from './queue.ts'
+import { app as send_email } from './triggers/send_email.ts'
 
 function getExecutionContext(c: Context): Context['executionCtx'] | undefined {
   try {
@@ -153,6 +156,7 @@ appPrivate.route('/website_stats', publicStats)
 appPrivate.route('/cli', cli)
 appPrivate.route('/config', config)
 appPrivate.route('/config/builder', configBuilder)
+appPrivate.route('/custom_domains', customDomains)
 appPrivate.route('/accept_invitation', accept_invitation)
 appPrivate.route('/email_preferences', emailPreferences)
 appPrivate.route('/devices', devices_priv)
@@ -178,6 +182,7 @@ appPrivate.route('/stripe_checkout', stripe_checkout)
 appPrivate.route('/stripe_portal', stripe_portal)
 appPrivate.route('/verify_email_otp', verify_email_otp)
 appPrivate.route('/delete_failed_version', deleted_failed_version)
+appPrivate.route('/request_manifest_upload', request_manifest_upload)
 appPrivate.route('/set_manifest', set_manifest)
 appPrivate.route('/create_device', create_device)
 appPrivate.route('/latency', latency)
@@ -206,6 +211,7 @@ appTriggers.route('/cron_clear_versions', cron_clear_versions)
 appTriggers.route('/cron_clean_orphan_images', cron_clean_orphan_images)
 appTriggers.route('/cron_reconcile_build_status', cron_reconcile_build_status)
 appTriggers.route('/credit_usage_alerts', credit_usage_alerts)
+appTriggers.route('/credit_usage_posthog', credit_usage_posthog)
 appTriggers.route('/global_stats', global_stats)
 appTriggers.route('/global_stats_core', globalStatsShardApps.core)
 appTriggers.route('/global_stats_usage', globalStatsLegacyUsageApp)
@@ -281,7 +287,7 @@ createAllCatch(appScheduled, functionNameScheduled)
 
 export default {
   fetch: app.fetch,
-  queue: processNativeNotificationQueueBatch,
+  queue: processApiQueueBatch,
   scheduled(_controller: ScheduledController, env: Bindings, ctx: ExecutionContext) {
     ctx.waitUntil(runScheduledPluginNotificationFlush(env, ctx))
   },

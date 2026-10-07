@@ -64,7 +64,6 @@ export interface MiddlewareKeyVariables {
     deliverPluginNotificationsInProcess?: boolean
     skipChannelSelfPostgresFallback?: boolean
     requireReadReplica?: boolean
-    useBackgroundHyperdrive?: boolean
   }
 }
 
@@ -290,11 +289,7 @@ export function createHono(functionName: string, _version: string) {
     || functionName === 'stats'
     || functionName === 'channel_self'
 
-  const backgroundDatabaseWork = functionName === 'triggers' || functionName === 'api-scheduled'
-
   appGlobal.use('*', (c, next): Promise<any> => {
-    if (backgroundDatabaseWork)
-      c.set('useBackgroundHyperdrive', true)
     // ADD HEADER TO IDENTIFY WORKER SOURCE
     const name = `${getEnv(c, 'ENV_NAME') || functionName}-${CapgoVersion}`
     c.header('X-Worker-Source', name)

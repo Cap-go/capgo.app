@@ -245,6 +245,7 @@ CREATE TABLE public.channels (
     auto_pause_last_triggered_at timestamp with time zone,
     auto_pause_last_checked_at timestamp with time zone,
     update_package public.channel_update_package DEFAULT 'all'::public.channel_update_package NOT NULL,
+    paused_at timestamp with time zone,
     CONSTRAINT channels_auto_pause_action_check CHECK ((auto_pause_action = ANY (ARRAY['pause'::text, 'rollback'::text, 'notify'::text]))),
     CONSTRAINT channels_auto_pause_confidence_check CHECK (((auto_pause_confidence > (0)::numeric) AND (auto_pause_confidence < (1)::numeric))),
     CONSTRAINT channels_auto_pause_cooldown_minutes_check CHECK (((auto_pause_cooldown_minutes >= 0) AND (auto_pause_cooldown_minutes <= 10080))),
@@ -446,7 +447,8 @@ CREATE TABLE public.stripe_info (
     last_stripe_event_at timestamp with time zone,
     past_due_at timestamp with time zone,
     churn_reason text,
-    is_above_plan boolean
+    is_above_plan boolean,
+    extra_mau bigint DEFAULT 0 NOT NULL
 );
 
 ALTER TABLE ONLY public.stripe_info REPLICA IDENTITY FULL;

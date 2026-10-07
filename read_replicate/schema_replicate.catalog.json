@@ -981,6 +981,16 @@
       "type": "channel_update_package"
     },
     {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "paused_at",
+      "notNull": false,
+      "position": 39,
+      "table": "channels",
+      "type": "timestamp with time zone"
+    },
+    {
       "default": "nextval('manifest_id_seq'::regclass)",
       "generated": "",
       "identity": "",
@@ -1819,6 +1829,16 @@
       "position": 26,
       "table": "stripe_info",
       "type": "boolean"
+    },
+    {
+      "default": "0",
+      "generated": "",
+      "identity": "",
+      "name": "extra_mau",
+      "notNull": true,
+      "position": 27,
+      "table": "stripe_info",
+      "type": "bigint"
     }
   ],
   "constraints": [

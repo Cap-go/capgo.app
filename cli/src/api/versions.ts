@@ -113,7 +113,7 @@ export async function upsertAppVersion(
   versionData: UpsertAppVersionInput,
   options: VersionOptions = {},
 ) {
-  const { error } = await invokeCapgoCliApi<Database['public']['Tables']['app_versions']['Row']>('bundle/upsert', {
+  const { data, error } = await invokeCapgoCliApi<Database['public']['Tables']['app_versions']['Row']>('bundle/upsert', {
     apikey,
     method: 'POST',
     body: {
@@ -138,6 +138,9 @@ export async function upsertAppVersion(
 
   if (error)
     throw error
+  if (typeof data?.id !== 'number')
+    throw new Error('bundle/upsert did not return a version id')
+  return data.id
 }
 
 export async function deleteAppVersion(

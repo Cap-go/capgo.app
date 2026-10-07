@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import { createDirectApiKeyWithBindings, executeSQL, getEndpointUrl, ORG_ID, USER_PASSWORD_HASH } from './test-utils.ts'
 
+// Private event persistence is supported only by the Cloudflare API Worker.
+const itWorker = it.runIf(process.env.USE_CLOUDFLARE_WORKERS === 'true')
+
 interface OnboardingRow {
   onboarding: Record<string, unknown> & {
     bento_events?: Record<string, {
@@ -110,7 +113,7 @@ async function readChecklistOnboarding() {
   return rows[0]?.onboarding
 }
 
-it('marks the version 2 login step from authenticated CLI and MCP PostHog signals', async () => {
+itWorker('marks the version 2 login step from authenticated CLI and MCP PostHog signals', async () => {
   for (const signal of [
     { channel: 'user-login', event: 'User CLI login', source: 'cli' },
     { channel: 'cli-usage', event: 'CLI Command Invoked', source: 'cli' },
@@ -134,7 +137,7 @@ it('marks the version 2 login step from authenticated CLI and MCP PostHog signal
   }
 })
 
-it('keeps notifyConsole login events out of the user Bento state', async () => {
+itWorker('keeps notifyConsole login events out of the user Bento state', async () => {
   await setOnboarding({})
   const response = await postEvent({
     channel: 'user-login',
@@ -145,11 +148,11 @@ it('keeps notifyConsole login events out of the user Bento state', async () => {
   })
 
   expect(response.status).toBe(200)
-  expect(await response.json()).toEqual({ status: 'ok' })
+  expect(await response.json()).toEqual({ status: 'ok', event_id: expect.any(String) })
   expect(await readOnboarding()).not.toHaveProperty('bento_events')
 })
 
-it('records legacy org-scoped events on the authenticated actor', async () => {
+itWorker('records legacy org-scoped events on the authenticated actor', async () => {
   await setOnboarding({ legacy_actor: { keep: true } })
 
   const response = await postEvent({
@@ -159,7 +162,7 @@ it('records legacy org-scoped events on the authenticated actor', async () => {
   })
 
   expect(response.status).toBe(200)
-  expect(await response.json()).toEqual({ status: 'ok' })
+  expect(await response.json()).toEqual({ status: 'ok', event_id: expect.any(String) })
   expect(await readOnboarding()).toMatchObject({
     legacy_actor: { keep: true },
     bento_events: {
@@ -172,7 +175,7 @@ it('records legacy org-scoped events on the authenticated actor', async () => {
   expect(await readOnboardingForUser(ORG_ID)).toBeUndefined()
 })
 
-it('omits an unverified app id from actor Bento event details', async () => {
+itWorker('omits an unverified app id from actor Bento event details', async () => {
   await setOnboarding({ unverified_app: { keep: true } })
 
   const response = await postEvent({
@@ -186,7 +189,7 @@ it('omits an unverified app id from actor Bento event details', async () => {
   })
 
   expect(response.status).toBe(200)
-  expect(await response.json()).toEqual({ status: 'ok' })
+  expect(await response.json()).toEqual({ status: 'ok', event_id: expect.any(String) })
   const onboarding = await readOnboarding()
   expect(onboarding).toMatchObject({ unverified_app: { keep: true } })
   const commandDetail = onboarding.bento_events?.['cli:command_invoked']?.details[0]
@@ -194,7 +197,7 @@ it('omits an unverified app id from actor Bento event details', async () => {
   expect(commandDetail).not.toHaveProperty('app_id')
 })
 
-it('keeps a verified app id in actor Bento event details', async () => {
+itWorker('keeps a verified app id in actor Bento event details', async () => {
   await setOnboarding({ verified_app: { keep: true } })
 
   const response = await postEvent({
@@ -209,7 +212,7 @@ it('keeps a verified app id in actor Bento event details', async () => {
   })
 
   expect(response.status).toBe(200)
-  expect(await response.json()).toEqual({ status: 'ok' })
+  expect(await response.json()).toEqual({ status: 'ok', event_id: expect.any(String) })
   expect(await readOnboarding()).toMatchObject({
     verified_app: { keep: true },
     bento_events: {
@@ -224,7 +227,7 @@ it('keeps a verified app id in actor Bento event details', async () => {
   })
 })
 
-it('records only mapped CLI Bento events for the authenticated actor', async () => {
+itWorker('records only mapped CLI Bento events for the authenticated actor', async () => {
   const initialOnboarding = {
     status: 'in_progress',
     step: 'details',
@@ -275,7 +278,7 @@ it('records only mapped CLI Bento events for the authenticated actor', async () 
   for (const payload of payloads) {
     const response = await postEvent(payload)
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ status: 'ok' })
+    expect(await response.json()).toEqual({ status: 'ok', event_id: expect.any(String) })
   }
 
   const onboarding = await readOnboarding()
