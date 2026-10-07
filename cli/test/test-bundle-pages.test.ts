@@ -72,6 +72,6 @@ describe('fetchBundlePages empty-list EOF', () => {
         0: async () => ({ data: firstPage, error: null }),
         1: async () => ({ data: null, error: makeCannotGetBundleError('Database unavailable', 503) }),
       }),
-    })).rejects.toThrow(/Could not list bundles/)
+    })).rejects.toThrow(/Could not list bundles for app com\.test\.app: cannot_get_bundle \| Database unavailable/)
   })
 })
