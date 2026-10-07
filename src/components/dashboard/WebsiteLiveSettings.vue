@@ -50,7 +50,8 @@ const currentPlanName = computedAsync(async () => {
   return data
 }, null, isPlanLoading)
 const isPlanUnreadable = computed(() => !isPlanLoading.value && currentPlanName.value === null)
-const isPlanKnown = computed(() => !isPlanLoading.value && currentPlanName.value !== null)
+// Both the current plan and the plan catalog (to know which plans are Website Live) must be loaded.
+const isPlanKnown = computed(() => !isPlanLoading.value && currentPlanName.value !== null && mainStore.plans.length > 0)
 // Website Live is identified by plan kind, not by its display name.
 const websitePlanNames = computed(() => new Set(mainStore.plans.filter(plan => plan.kind === 'website').map(plan => plan.name)))
 const needsFullPlan = computed(() => !!currentPlanName.value && websitePlanNames.value.has(currentPlanName.value))
@@ -58,9 +59,17 @@ const needsFullPlan = computed(() => !!currentPlanName.value && websitePlanNames
 // onboarding could not save the website) can still be switched to the website.
 const showEnableWebsiteLive = computed(() => !!state.value && !isWebsiteMode.value && needsFullPlan.value)
 
-watch(() => props.appId, appId => void appUpdateModeStore.load(appId, true), { immediate: true })
 // Keep what the user is typing; only sync from the store while untouched.
 const isUrlDirty = ref(false)
+watch(() => props.appId, (appId) => {
+  // The component is reused across apps: drop the previous app's draft.
+  isUrlDirty.value = false
+  websiteUrlInput.value = appUpdateModeStore.get(appId)?.websiteUrl ?? ''
+  showUpgrade.value = false
+  upgradeAcknowledged.value = false
+  void appUpdateModeStore.load(appId, true)
+})
+void appUpdateModeStore.load(props.appId, true)
 watch(state, (value) => {
   if (!isUrlDirty.value)
     websiteUrlInput.value = value?.websiteUrl ?? ''
@@ -86,8 +95,11 @@ async function saveWebsiteUrl() {
   isSavingUrl.value = true
   try {
     await appUpdateModeStore.save(props.appId, { updateMode: 'website', websiteUrl })
-    isUrlDirty.value = false
-    websiteUrlInput.value = websiteUrl
+    // Keep anything typed while the save was in flight.
+    if (normalizeWebsiteLiveUrl(websiteUrlInput.value) === websiteUrl) {
+      isUrlDirty.value = false
+      websiteUrlInput.value = websiteUrl
+    }
     toast.success(t('website-live-url-saved'))
   }
   catch (error) {
