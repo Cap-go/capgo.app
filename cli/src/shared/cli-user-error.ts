@@ -16,8 +16,8 @@
  */
 export class CliUserError extends Error {
   readonly context?: Record<string, unknown>
-  constructor(message: string, context?: Record<string, unknown>) {
-    super(message)
+  constructor(message: string, context?: Record<string, unknown>, cause?: unknown) {
+    super(message, cause !== undefined ? { cause } : undefined)
     this.name = 'CliUserError'
     this.context = context
   }
