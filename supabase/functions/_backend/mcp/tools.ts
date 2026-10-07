@@ -78,7 +78,8 @@ export function apiResult(response: McpApiResponse): McpToolResult {
 
 const READ = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } satisfies McpToolAnnotations
 const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } satisfies McpToolAnnotations
-const UPSERT = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } satisfies McpToolAnnotations
+// Deletes, cancellations and overwrites of existing settings. OpenAI plugin guidelines count
+// overwrites as destructive even when they can be undone, so clients ask before running them.
 const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false } satisfies McpToolAnnotations
 const EXTERNAL = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } satisfies McpToolAnnotations
 
@@ -189,7 +190,7 @@ const accountTools: McpTool[] = [
       required_encryption_key: z.string().nullable().optional(),
       enforcing_2fa: z.boolean().optional(),
     },
-    annotations: UPSERT,
+    annotations: DESTRUCTIVE,
     request: input => ({ method: 'PUT', path: '/organization', body: compact(input) }),
   }),
   apiTool({
@@ -318,7 +319,7 @@ const appTools: McpTool[] = [
       ios_store_url: z.string().nullable().optional(),
       android_store_url: z.string().nullable().optional(),
     },
-    annotations: UPSERT,
+    annotations: DESTRUCTIVE,
     request: ({ appId: id, ...rest }) => ({ method: 'PUT', path: `/app/${enc(id)}`, body: compact(rest) }),
   }),
   apiTool({
@@ -384,7 +385,7 @@ const bundleTools: McpTool[] = [
       link: z.string().optional(),
       comment: z.string().optional(),
     },
-    annotations: UPSERT,
+    annotations: DESTRUCTIVE,
     request: ({ appId: id, ...rest }) => ({ method: 'POST', path: '/bundle/metadata', body: compact({ app_id: id, ...rest }) }),
   }),
   apiTool({
@@ -392,7 +393,7 @@ const bundleTools: McpTool[] = [
     title: 'Set bundle to channel',
     description: 'Point a channel to a bundle by numeric ids (from capgo_list_bundles and capgo_list_channels). capgo_update_channel with a version name does the same by name.',
     input: { appId, version_id: z.number().int().positive(), channel_id: z.number().int().positive() },
-    annotations: UPSERT,
+    annotations: DESTRUCTIVE,
     request: ({ appId: id, ...rest }) => ({ method: 'PUT', path: '/bundle', body: { app_id: id, ...rest } }),
   }),
   apiTool({
@@ -445,7 +446,7 @@ const channelTools: McpTool[] = [
     title: 'Create channel',
     description: 'Create a channel (or update it if it already exists).',
     input: { appId, channel: z.string().min(1).describe('Channel name, e.g. production or beta'), ...channelSettings },
-    annotations: UPSERT,
+    annotations: DESTRUCTIVE,
     request: ({ appId: id, ...rest }) => ({ method: 'POST', path: '/channel', body: compact({ app_id: id, ...rest }) }),
   }),
   apiTool({
@@ -453,7 +454,7 @@ const channelTools: McpTool[] = [
     title: 'Update channel',
     description: 'Change channel settings or deploy a bundle to it by setting version. For progressive rollouts use capgo_update_channel_rollout.',
     input: { appId, channel: z.string().min(1), ...channelSettings },
-    annotations: UPSERT,
+    annotations: DESTRUCTIVE,
     request: ({ appId: id, ...rest }) => ({ method: 'POST', path: '/channel', body: compact({ app_id: id, ...rest }) }),
   }),
   apiTool({
@@ -479,7 +480,7 @@ const channelTools: McpTool[] = [
       autoPauseAction: z.enum(['pause', 'rollback', 'notify']).optional(),
       autoPauseCooldownMinutes: z.number().int().min(0).max(10080).optional(),
     },
-    annotations: WRITE,
+    annotations: { ...WRITE, destructiveHint: true },
     request: ({ appId: id, ...rest }) => ({ method: 'POST', path: '/channel', body: compact({ app_id: id, ...rest }) }),
   }),
   apiTool({
@@ -529,7 +530,7 @@ const deviceTools: McpTool[] = [
     title: 'Force device channel',
     description: 'Force a device onto a (non default) channel, e.g. to test a bundle on one phone.',
     input: { appId, device_id: z.string().min(1), channel: z.string().min(1) },
-    annotations: UPSERT,
+    annotations: DESTRUCTIVE,
     request: input => ({ method: 'POST', path: '/device', body: { app_id: input.appId, device_id: input.device_id, channel: input.channel } }),
   }),
   apiTool({
@@ -688,7 +689,7 @@ const webhookTools: McpTool[] = [
       events: webhookEvents.optional(),
       enabled: z.boolean().optional(),
     },
-    annotations: UPSERT,
+    annotations: DESTRUCTIVE,
     request: input => ({ method: 'PUT', path: '/webhooks', body: compact(input) }),
   }),
   apiTool({
@@ -747,7 +748,7 @@ const notificationTools: McpTool[] = [
       pushUpdateInstallMode: z.enum(['next', 'set']).optional().describe('next = install on next launch, set = apply immediately'),
       pushUpdateChannel: z.string().max(128).nullable().optional(),
     },
-    annotations: UPSERT,
+    annotations: DESTRUCTIVE,
     request: input => ({ method: 'PUT', path: '/notifications/settings', body: compact(input) }),
   }),
   apiTool({

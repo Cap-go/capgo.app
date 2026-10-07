@@ -96,7 +96,9 @@
           {
             "binding": "NOTIFICATION_QUEUE",
             "queue": "capgo-native-notifications-prod"
-          }
+          },
+          { "binding": "POSTHOG_QUEUE", "queue": "capgo-posthog-events-prod" },
+          { "binding": "POSTHOG_DLQ", "queue": "capgo-posthog-events-prod-dlq" }
         ],
         "consumers": [
           {
@@ -106,6 +108,14 @@
             "max_concurrency": 2,
             "max_retries": 5,
             "dead_letter_queue": "capgo-native-notifications-prod-dlq"
+          },
+          {
+            "queue": "capgo-posthog-events-prod",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_concurrency": 2,
+            "max_retries": 5,
+            "dead_letter_queue": "capgo-posthog-events-prod-dlq"
           }
         ]
       },
@@ -193,7 +203,9 @@
           {
             "binding": "NOTIFICATION_QUEUE",
             "queue": "capgo-native-notifications-preprod"
-          }
+          },
+          { "binding": "POSTHOG_QUEUE", "queue": "capgo-posthog-events-preprod" },
+          { "binding": "POSTHOG_DLQ", "queue": "capgo-posthog-events-preprod-dlq" }
         ],
         "consumers": [
           {
@@ -203,6 +215,14 @@
             "max_concurrency": 2,
             "max_retries": 5,
             "dead_letter_queue": "capgo-native-notifications-preprod-dlq"
+          },
+          {
+            "queue": "capgo-posthog-events-preprod",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_concurrency": 2,
+            "max_retries": 5,
+            "dead_letter_queue": "capgo-posthog-events-preprod-dlq"
           }
         ]
       },
@@ -290,7 +310,9 @@
           {
             "binding": "NOTIFICATION_QUEUE",
             "queue": "capgo-native-notifications-alpha"
-          }
+          },
+          { "binding": "POSTHOG_QUEUE", "queue": "capgo-posthog-events-alpha" },
+          { "binding": "POSTHOG_DLQ", "queue": "capgo-posthog-events-alpha-dlq" }
         ],
         "consumers": [
           {
@@ -300,6 +322,14 @@
             "max_concurrency": 2,
             "max_retries": 5,
             "dead_letter_queue": "capgo-native-notifications-alpha-dlq"
+          },
+          {
+            "queue": "capgo-posthog-events-alpha",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_concurrency": 2,
+            "max_retries": 5,
+            "dead_letter_queue": "capgo-posthog-events-alpha-dlq"
           }
         ]
       },
@@ -313,6 +343,13 @@
     },
     "local": {
       "name": "capgo_api-local",
+      "queues": {
+        "producers": [
+          { "binding": "POSTHOG_QUEUE", "queue": "capgo-posthog-events-local" },
+          { "binding": "POSTHOG_DLQ", "queue": "capgo-posthog-events-local-dlq" }
+        ],
+        "consumers": [{ "queue": "capgo-posthog-events-local", "max_batch_size": 10, "max_batch_timeout": 5, "max_concurrency": 2, "max_retries": 5, "dead_letter_queue": "capgo-posthog-events-local-dlq" }]
+      },
       "triggers": {
         "crons": ["* * * * *"]
       },

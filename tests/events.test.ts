@@ -27,7 +27,7 @@ afterAll(async () => {
   await resetAppDataStats(APPNAME_EVENT)
 })
 
-describe('[POST] /private/events operations', () => {
+describe.runIf(process.env.USE_CLOUDFLARE_WORKERS === 'true')('[POST] /private/events operations', () => {
   it('track event with apikey', async () => {
     const response = await fetch(`${BASE_URL}/private/events`, {
       method: 'POST',
@@ -45,9 +45,34 @@ describe('[POST] /private/events operations', () => {
       }),
     })
 
-    const data = await response.json() as { status: string }
+    const data = await response.json() as { status: string, event_id: string }
     expect(response.status).toBe(200)
     expect(data.status).toBe('ok')
+    expect(data.event_id).toMatch(/^[\da-f]{8}-[\da-f]{4}-8[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/)
+  })
+
+  it.concurrent('returns a stable accepted event ID across authenticated client retries', async () => {
+    const clientEventId = randomUUID()
+    const body = JSON.stringify({
+      channel: 'test',
+      event: 'stable_identity_test',
+      tracking_version: 2,
+      org_id: ORG_ID,
+      client_event_id: clientEventId,
+      timestamp: Date.now(),
+      tags: { app_id: APPNAME_EVENT },
+    })
+    const responses = await Promise.all(Array.from({ length: 2 }, () => fetch(`${BASE_URL}/private/events`, {
+      method: 'POST',
+      headers: { capgkey: headers.Authorization },
+      body,
+    })))
+    for (const response of responses)
+      expect(response.status).toBe(200)
+    const accepted = await Promise.all(responses.map(response => response.json() as Promise<{ status: string, event_id: string }>))
+    expect(accepted[0]).toEqual({ status: 'ok', event_id: expect.any(String) })
+    expect(accepted[1]).toEqual(accepted[0])
+    expect(accepted[0].event_id).not.toBe(clientEventId)
   })
 
   it('tracks v2 events with actor user and organization context', async () => {

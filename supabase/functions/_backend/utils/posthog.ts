@@ -1,6 +1,8 @@
 import type { Context } from 'hono'
+import type { PostHogCapturePayload, PostHogDeliveryResult } from './posthog_delivery.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { drizzleErrorFingerprintSegment, readPgErrorCode } from './pg_errors.ts'
+import { captureProperties, deliverPosthogCapture, getPostHogCaptureUrl, stripPostHogEndpoint } from './posthog_delivery.ts'
 import { existInEnv, getEnv, trimTrailingSlashes } from './utils.ts'
 
 const POSTHOG_CAPTURE_URL = 'https://eu.i.posthog.com/capture/'
@@ -10,91 +12,29 @@ const POSTHOG_DELIVERY_TIMEOUT_MS = 5000
 const POSTHOG_IDENTIFY_TIMEOUT_MS = 250
 const RRWEB_META_EVENT_TYPE = 4
 
-export type PostHogGroups = Record<string, string>
+export type { PostHogDeliveryResult, PostHogGroups } from './posthog_delivery.ts'
 
-interface PostHogCapturePayload {
-  channel: string
-  description?: string
-  distinct_id?: string
-  event: string
-  groups?: PostHogGroups
-  ip?: string
-  personProperties?: Record<string, unknown>
-  setPersonProperties?: boolean
-  tags?: Record<string, unknown>
-  nonPersonTags?: Record<string, unknown>
-  timestamp?: string
-  timeoutMs?: number
-  user_id?: string
-}
-
-function captureProperties(payload: PostHogCapturePayload) {
-  const hasGroups = payload.groups && Object.keys(payload.groups).length > 0
-  return {
-    ...(payload.nonPersonTags || {}),
-    ...(payload.tags || {}),
-    channel: payload.channel,
-    description: payload.description,
-    ...(payload.setPersonProperties === false ? {} : { $set: { ...payload.tags, ...payload.personProperties } }),
-    ...(hasGroups ? { $groups: payload.groups } : {}),
-  }
+export async function deliverPosthogEvent(c: Context, payload: PostHogCapturePayload): Promise<PostHogDeliveryResult> {
+  const delivery = await deliverPosthogCapture({
+    apiKey: existInEnv(c, 'POSTHOG_API_KEY') ? getEnv(c, 'POSTHOG_API_KEY') : undefined,
+    host: getEnv(c, 'POSTHOG_API_HOST'),
+  }, payload)
+  const log = delivery.outcome === 'delivered' ? cloudlog : cloudlogErr
+  log({
+    requestId: c.get('requestId'),
+    message: 'tracking_provider_delivery',
+    provider: 'posthog',
+    event_id: payload.event_id,
+    outcome: delivery.outcome,
+    duration_ms: delivery.duration_ms,
+    http_status: delivery.http_status,
+    ...('reason' in delivery ? { reason: delivery.reason } : {}),
+  })
+  return delivery
 }
 
 export async function trackPosthogEvent(c: Context, payload: PostHogCapturePayload) {
-  const apiKey = getEnv(c, 'POSTHOG_API_KEY')
-  if (!apiKey || !existInEnv(c, 'POSTHOG_API_KEY')) {
-    cloudlog({ requestId: c.get('requestId'), message: 'PostHog not configured' })
-    return false
-  }
-
-  const host = getEnv(c, 'POSTHOG_API_HOST') || POSTHOG_CAPTURE_URL
-  const distinctId = payload.user_id || payload.distinct_id || 'anonymous'
-
-  // `tags` become BOTH event properties and PostHog person properties ($set).
-  // `nonPersonTags` are event properties ONLY — never $set — for volatile
-  // per-event context (e.g. the CLI's global runtime props) that must not
-  // become last-write-wins identity traits on the actor.
-  const properties = captureProperties(payload)
-
-  const body = {
-    api_key: apiKey,
-    event: payload.event,
-    distinct_id: distinctId,
-    properties,
-    ip: payload.ip,
-    timestamp: payload.timestamp ?? new Date().toISOString(),
-  }
-
-  const controller = payload.timeoutMs ? new AbortController() : undefined
-  const timeoutId = controller ? setTimeout(() => controller.abort(), payload.timeoutMs) : undefined
-  try {
-    const posthogUrl = getPostHogCaptureUrl(host)
-    const res = await fetch(posthogUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-      signal: controller?.signal,
-    })
-
-    if (!res.ok) {
-      const error = await res.text()
-      cloudlogErr({ requestId: c.get('requestId'), message: 'PostHog error', status: res.status, error, event: payload.event, distinctId })
-      return false
-    }
-
-    cloudlog({ requestId: c.get('requestId'), message: 'PostHog event sent', event: payload.event, distinctId })
-    return true
-  }
-  catch (e) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'PostHog fetch failed', error: serializeError(e), event: payload.event, distinctId })
-    return false
-  }
-  finally {
-    if (timeoutId)
-      clearTimeout(timeoutId)
-  }
+  return (await deliverPosthogEvent(c, payload)).legacy_success
 }
 
 // Queue batches can complete many steps at once. Send their events in one
@@ -145,19 +85,6 @@ export async function trackPosthogEventBatch(c: Context, payloads: PostHogCaptur
   finally {
     clearTimeout(timeoutId)
   }
-}
-
-function stripPostHogEndpoint(host: string) {
-  for (const suffix of ['/i/v0/e', '/capture', '/s', '/e']) {
-    if (host.endsWith(suffix))
-      return `${host.slice(0, -suffix.length)}/`
-  }
-  return host
-}
-
-function getPostHogCaptureUrl(host: string) {
-  const normalizedHost = stripPostHogEndpoint(trimTrailingSlashes(host))
-  return new URL('capture/', normalizedHost.endsWith('/') ? normalizedHost : `${normalizedHost}/`).toString()
 }
 
 function getPostHogSnapshotUrl(host: string) {
