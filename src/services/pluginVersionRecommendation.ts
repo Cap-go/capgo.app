@@ -53,6 +53,8 @@ export interface PluginVersionRecommendation {
   currentDevices: number
   fleetDevices: number
   statusResolved: boolean
+  /** True when at least one major has a known latest version, so `behindDevices` counts real devices. */
+  behindResolved: boolean
   majors: PluginMajorStats[]
   rows: PluginVersionRecommendationRow[]
 }
@@ -112,6 +114,30 @@ export function isPluginVersionBehind(version: string, latestVersion: string): b
   if (!current || !latest)
     return false
   return lessThan(current, latest)
+}
+
+// First release per major that sends download_zip_start / download_manifest_start,
+// which update_delivery_stats pairs with download_complete to measure delivery time.
+const DELIVERY_TIMING_MIN_VERSION_BY_MAJOR: Record<number, string> = {
+  5: '5.50.1',
+  6: '6.25.2',
+  7: '7.26.0',
+  8: '8.2.0',
+}
+const DELIVERY_TIMING_LATEST_MAJOR = 8
+
+export function deliveryTimingMinVersion(major: number | null): string {
+  if (major !== null && major > DELIVERY_TIMING_LATEST_MAJOR)
+    return `${major}.0.0`
+  return DELIVERY_TIMING_MIN_VERSION_BY_MAJOR[major ?? DELIVERY_TIMING_LATEST_MAJOR]
+    ?? DELIVERY_TIMING_MIN_VERSION_BY_MAJOR[DELIVERY_TIMING_LATEST_MAJOR]
+}
+
+export function supportsDeliveryTiming(version: string): boolean {
+  const parsed = parsePluginVersion(version)
+  if (!parsed || parsed.major < MIN_SUPPORTED_PLUGIN_MAJOR)
+    return false
+  return !isPluginVersionBehind(version, deliveryTimingMinVersion(parsed.major))
 }
 
 function rowStatus(
@@ -218,6 +244,7 @@ export function buildPluginVersionRecommendation(
     currentDevices,
     fleetDevices,
     statusResolved,
+    behindResolved: majors.some(major => major.statusResolved),
     majors,
     rows,
   }

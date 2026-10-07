@@ -4,6 +4,7 @@ import { app as channel_device } from '../_backend/private/channel_device.ts'
 import { app as channel_stats } from '../_backend/private/channel_stats.ts'
 import { app as config } from '../_backend/private/config.ts'
 import { app as configBuilder } from '../_backend/private/config_builder.ts'
+import { app as customDomains } from '../_backend/private/custom_domains.ts'
 import { app as create_device } from '../_backend/private/create_device.ts'
 import { app as credits } from '../_backend/private/credits.ts'
 import { app as deleted_failed_version } from '../_backend/private/delete_failed_version.ts'
@@ -59,6 +60,7 @@ const appGlobal = createHono(functionName, version)
 // Webapps API
 
 appGlobal.route('/plans', plans)
+appGlobal.route('/custom_domains', customDomains)
 appGlobal.route('/credits', credits)
 appGlobal.route('/store_top', storeTop)
 appGlobal.route('/website_stats', publicStats)

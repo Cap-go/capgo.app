@@ -62,6 +62,11 @@ export type Bindings = {
   NOTIFICATION_REGISTRY?: AnalyticsEngineDataset
   NOTIFICATION_EVENTS?: AnalyticsEngineDataset
   CLI_USAGE?: AnalyticsEngineDataset
+  POSTHOG_QUEUE?: Queue
+  POSTHOG_DLQ?: Queue
+  POSTHOG_API_KEY?: string
+  POSTHOG_API_HOST?: string
+  ENV_NAME?: string
   NOTIFICATION_QUEUE?: Queue
   AUTH_EMAIL?: SendEmail
   DB_STOREAPPS: D1Database

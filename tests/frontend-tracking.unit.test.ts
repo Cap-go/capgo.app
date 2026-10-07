@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { sendEvent } from '~/services/tracking'
 
 const { fetchMock, getSessionMock } = vi.hoisted(() => ({
@@ -22,6 +22,12 @@ describe('frontend analytics tracking', () => {
     vi.stubGlobal('fetch', fetchMock)
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
   it('keeps the analytics request alive when the document unloads', async () => {
     getSessionMock.mockResolvedValue({
       data: {
@@ -40,10 +46,7 @@ describe('frontend analytics tracking', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       'https://api.capgo.test/private/events',
       expect.objectContaining({
-        body: JSON.stringify({
-          channel: 'usage',
-          event: 'Navigation Started',
-        }),
+        body: expect.any(String),
         headers: {
           'Authorization': 'Bearer test-access-token',
           'Content-Type': 'application/json',
@@ -53,6 +56,12 @@ describe('frontend analytics tracking', () => {
         signal: expect.any(AbortSignal),
       }),
     )
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
+      channel: 'usage',
+      event: 'Navigation Started',
+      client_event_id: expect.any(String),
+      timestamp: expect.any(Number),
+    })
   })
 
   it('uses an ordinary fetch when the event exceeds the keepalive body limit', async () => {
@@ -130,6 +139,48 @@ describe('frontend analytics tracking', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3)
     expect(readFirstError).toHaveBeenCalledOnce()
     expect(readSecondError).toHaveBeenCalledOnce()
+  })
+
+  it('freezes one ID, timestamp, and serialized body across server and network retries', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-06T10:00:00Z'))
+    const randomUUID = vi.spyOn(crypto, 'randomUUID')
+    const stringify = vi.spyOn(JSON, 'stringify')
+    getSessionMock.mockResolvedValue({ data: { session: { access_token: 'test-access-token' } } })
+    const payload = { channel: 'usage', event: 'Stable Retry', tags: { step: 1 } }
+    fetchMock.mockImplementationOnce(async () => {
+      payload.tags.step = 2
+      vi.setSystemTime(new Date('2026-10-06T10:01:00Z'))
+      return { ok: false, status: 503, text: async () => '' }
+    }).mockRejectedValueOnce(new Error('fetch failed')).mockResolvedValueOnce({ ok: true })
+
+    await sendEvent(payload)
+
+    expect(randomUUID).toHaveBeenCalledOnce()
+    expect(stringify).toHaveBeenCalledOnce()
+    const bodies = fetchMock.mock.calls.map(call => call[1].body)
+    expect(bodies).toHaveLength(3)
+    expect(new Set(bodies).size).toBe(1)
+    expect(JSON.parse(bodies[0])).toEqual({
+      channel: 'usage',
+      event: 'Stable Retry',
+      tags: { step: 1 },
+      client_event_id: randomUUID.mock.results[0].value,
+      timestamp: Date.parse('2026-10-06T10:00:00Z'),
+    })
+  })
+
+  it('freezes a supplied Date and event ID without regenerating them', async () => {
+    getSessionMock.mockResolvedValue({ data: { session: { access_token: 'test-access-token' } } })
+    fetchMock.mockResolvedValue({ ok: true })
+    const timestamp = new Date('2026-10-06T09:00:00Z')
+    const clientEventId = '031c6527-7d90-442d-9abd-17f442067e20'
+    const randomUUID = vi.spyOn(crypto, 'randomUUID')
+
+    await sendEvent({ channel: 'usage', event: 'Supplied Identity', timestamp, client_event_id: clientEventId })
+
+    expect(randomUUID).not.toHaveBeenCalled()
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ timestamp: timestamp.getTime(), client_event_id: clientEventId })
   })
 
   it('does not retry a client error', async () => {

@@ -48,6 +48,7 @@ vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   getCurrentPlanNameOrg: vi.fn(),
+  getOrgExtraMau: vi.fn(async () => 0),
   getPlanUsageAndFit: vi.fn(),
   getPlanUsageAndFitUncached: getPlanUsageAndFitUncachedMock,
   getPlanUsagePercent: getPlanUsagePercentMock,

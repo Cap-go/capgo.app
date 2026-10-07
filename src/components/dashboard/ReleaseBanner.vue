@@ -1,137 +1,61 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import type { ReleaseLiveDeployment, ReleaseLiveRollout } from '~/composables/useReleaseLive'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import IconCheckCircle from '~icons/lucide/check-circle'
 import IconTrendingUp from '~icons/lucide/trending-up'
-import { getLatestDayVersionAdoption } from '~/services/bundleAdoption'
-import { useChartData } from '~/services/chartDataService'
-import { formatDistanceToNow, getChartDateRange } from '~/services/date'
+import { formatDistanceToNow } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
-import { useSupabase } from '~/services/supabase'
-import { useOrganizationStore } from '~/stores/organization'
 
+// Fed by the overview's release_live data so the banner, the KPI tile and the
+// Releases tab all show the same release and the same adoption: devices on the
+// release's channel that run it, not a share of every active device.
 const props = defineProps<{
   appId: string
+  release: ReleaseLiveDeployment | null
+  adoptionPercent: number | null
+  // Set when the release is a progressive rollout target.
+  rollout?: ReleaseLiveRollout | null
 }>()
 
 const router = useRouter()
 const { t } = useI18n()
-const supabase = useSupabase()
-const organizationStore = useOrganizationStore()
 
-const isLoading = ref(false)
-const lastVersion = ref<string>('')
-const lastReleaseDate = ref<string | null>(null)
-const adoptionPercent = ref<number | null>(null)
-let requestToken = 0
-
-const HOURS_48_IN_DAYS = 2
+const RECENT_RELEASE_MS = 48 * 60 * 60 * 1000
 
 const lastReleaseDisplay = computed(() => {
-  if (!lastReleaseDate.value)
+  if (!props.release)
     return t('never')
-  return formatDistanceToNow(new Date(lastReleaseDate.value))
+  return formatDistanceToNow(new Date(props.release.deployed_at))
 })
 
 const adoptionPercentLabel = computed(() => {
-  if (adoptionPercent.value === null)
+  if (props.adoptionPercent === null)
     return ''
-  return `${formatNumberValue(adoptionPercent.value, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+  return `${formatNumberValue(props.adoptionPercent, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
 })
 
 const hasRecentRelease = computed(() => {
-  if (!lastReleaseDate.value || isLoading.value)
+  if (!props.release)
     return false
-  const releaseDate = new Date(lastReleaseDate.value)
-  const now = new Date()
-  const daysSinceRelease = (now.getTime() - releaseDate.getTime()) / (1000 * 60 * 60 * 24)
-  return daysSinceRelease <= HOURS_48_IN_DAYS
+  // A running rollout is the release in flight, however old its upload is.
+  if (props.rollout?.status === 'running')
+    return true
+  return Date.now() - Date.parse(props.release.deployed_at) <= RECENT_RELEASE_MS
 })
 
-async function fetchReleaseInfo() {
-  if (!props.appId) {
-    return
-  }
-
-  const currentToken = ++requestToken
-  isLoading.value = true
-  try {
-    await organizationStore.awaitInitialLoad()
-    if (currentToken !== requestToken)
-      return
-    const orgId = organizationStore.currentOrganization?.gid
-
-    if (!orgId) {
-      lastVersion.value = ''
-      lastReleaseDate.value = null
-      adoptionPercent.value = null
-      return
-    }
-
-    const { data: versionsData } = await supabase
-      .from('app_versions')
-      .select('name, created_at')
-      .eq('app_id', props.appId)
-      .eq('deleted', false)
-      .order('created_at', { ascending: false })
-      .limit(1)
-
-    if (currentToken !== requestToken)
-      return
-
-    const latestVersion = versionsData?.[0]
-
-    if (latestVersion) {
-      lastVersion.value = latestVersion.name
-      lastReleaseDate.value = latestVersion.created_at
-      try {
-        const { startDate, endDate } = getChartDateRange(false)
-        const chartData = await useChartData(supabase, props.appId, startDate, endDate, 'bundle')
-        if (currentToken !== requestToken)
-          return
-        if (!chartData) {
-          adoptionPercent.value = null
-        }
-        else {
-          const adoption = getLatestDayVersionAdoption(chartData.datasets ?? [], latestVersion.name)
-          adoptionPercent.value = adoption && adoption.total > 0 ? adoption.percent : null
-        }
-      }
-      catch (error) {
-        console.error('Error fetching bundle adoption:', error)
-        if (currentToken !== requestToken)
-          return
-        adoptionPercent.value = null
-      }
-    }
-    else {
-      lastVersion.value = ''
-      lastReleaseDate.value = null
-      adoptionPercent.value = null
-    }
-  }
-  catch (error) {
-    if (currentToken !== requestToken)
-      return
-    console.error('Error fetching release info:', error)
-  }
-  finally {
-    if (currentToken === requestToken)
-      isLoading.value = false
-  }
-}
-
 function viewLive() {
+  if (!props.release)
+    return
   router.push({
-    path: `/app/${props.appId}/live`,
-    query: lastVersion.value ? { version: lastVersion.value } : {},
+    path: `/app/${encodeURIComponent(props.appId)}`,
+    query: {
+      version: props.release.version_name,
+      ...(props.release.channel_id ? { channel: String(props.release.channel_id) } : {}),
+    },
   })
 }
-
-watch(() => [props.appId, organizationStore.currentOrganization?.gid], () => {
-  fetchReleaseInfo()
-}, { immediate: true })
 </script>
 
 <template>
@@ -139,38 +63,33 @@ watch(() => [props.appId, organizationStore.currentOrganization?.gid], () => {
     v-if="hasRecentRelease"
     type="button"
     data-test="release-banner"
-    class="block w-full mb-4 overflow-hidden text-left transition-colors border rounded-lg cursor-pointer border-emerald-200 bg-emerald-50 hover:bg-emerald-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 dark:bg-emerald-900/20 dark:border-emerald-800 dark:hover:bg-emerald-900/30"
+    class="flex items-center justify-between w-full gap-3 px-4 py-2 mb-4 text-left transition-colors border rounded-lg cursor-pointer min-h-11 border-emerald-200 bg-emerald-50 hover:bg-emerald-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 dark:bg-emerald-900/20 dark:border-emerald-800 dark:hover:bg-emerald-900/30"
     @click="viewLive"
   >
-    <div class="flex items-center justify-between p-4">
-      <div class="flex items-center gap-3">
-        <div class="flex items-center justify-center flex-shrink-0 w-10 h-10 rounded-full bg-emerald-100 dark:bg-emerald-900/50">
-          <IconCheckCircle class="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-        </div>
-
-        <div class="flex items-center gap-4">
-          <div>
-            <p class="font-semibold text-emerald-900 dark:text-emerald-100">
-              {{ t('new-release-available') }}
-            </p>
-            <p class="text-sm text-emerald-700 dark:text-emerald-300">
-              {{ t('version') }} {{ lastVersion }} — {{ t('released') }} {{ lastReleaseDisplay }}
-              <template v-if="adoptionPercentLabel">
-                · {{ t('release-banner-adoption', { percent: adoptionPercentLabel }) }}
-              </template>
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <!-- Visual affordance only: the whole card is the button, so this is a span. -->
-      <span
-        data-test="release-banner-view"
-        class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-md bg-emerald-600 shrink-0"
-      >
-        <IconTrendingUp class="w-4 h-4" />
-        {{ t('release-banner-watch-live') }}
+    <span class="flex items-center min-w-0 gap-3">
+      <IconCheckCircle class="w-5 h-5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+      <span class="min-w-0 text-sm">
+        <template v-if="rollout">
+          <span class="font-semibold text-emerald-900 dark:text-emerald-100">{{ t('release-banner-rollout-title') }}</span>
+          <span class="text-emerald-700 dark:text-emerald-300">
+            · {{ t('release-banner-rollout', { version: release?.version_name, channel: release?.channel_name ?? '', percent: `${formatNumberValue(rollout.percentage, { maximumFractionDigits: 2 })}%` }) }}<template v-if="rollout.reach_percent !== null"> · {{ t('release-banner-rollout-reach', { percent: `${formatNumberValue(rollout.reach_percent, { maximumFractionDigits: 1 })}%` }) }}</template>
+          </span>
+        </template>
+        <template v-else>
+          <span class="font-semibold text-emerald-900 dark:text-emerald-100">{{ t('new-release-available') }}</span>
+          <span class="text-emerald-700 dark:text-emerald-300">
+            · {{ t('version') }} {{ release?.version_name }}<template v-if="release?.channel_name"> ({{ release.channel_name }})</template> — {{ t('released') }} {{ lastReleaseDisplay }}<template v-if="adoptionPercentLabel"> · {{ t('release-banner-adoption', { percent: adoptionPercentLabel }) }}</template>
+          </span>
+        </template>
       </span>
-    </div>
+    </span>
+    <!-- Visual affordance only: the whole banner is the button, so this is a span. -->
+    <span
+      data-test="release-banner-view"
+      class="inline-flex items-center gap-1.5 px-3 py-1 text-sm font-medium text-white rounded-md shrink-0 bg-emerald-600"
+    >
+      <IconTrendingUp class="w-4 h-4" />
+      {{ t('release-banner-watch-live') }}
+    </span>
   </button>
 </template>

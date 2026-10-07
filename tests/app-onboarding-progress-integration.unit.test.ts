@@ -117,7 +117,7 @@ vi.mock('~/stores/organization', () => ({ useOrganizationStore: () => writerMock
 
 const onboardingSource = readFileSync(new NodeUrl('../src/components/dashboard/AppOnboardingFlow.vue', import.meta.url), 'utf8')
 const optionsSource = readFileSync(new NodeUrl('../src/components/dashboard/onboardingDevelopmentEnvironmentOptions.ts', import.meta.url), 'utf8')
-const sidebarSource = readFileSync(new NodeUrl('../src/components/Sidebar.vue', import.meta.url), 'utf8')
+const sidebarSource = readFileSync(new NodeUrl('../src/composables/useAppNavigation.ts', import.meta.url), 'utf8')
 const englishMessages = JSON.parse(readFileSync(new NodeUrl('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
 function sourceBetween(start: string, end: string) {
