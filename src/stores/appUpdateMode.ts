@@ -107,7 +107,7 @@ export function normalizeWebsiteLiveUrl(input: string): string | null {
     return null
   }
   // Public domain names only: no IP literals, localhost or single-label hosts.
-  if (url.protocol !== 'https:' || !/^(?:[a-z0-9-]+\.)+(?:[a-z]{2,}|xn--[a-z0-9-]+)$/i.test(url.hostname) || url.username || url.password)
+  if (url.protocol !== 'https:' || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$/i.test(url.hostname) || url.username || url.password)
     return null
   // The updater stores files relative to the bundle root, so the app must be
   // served from the root of the domain.

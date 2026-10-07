@@ -47,6 +47,8 @@ describe('normalizeWebsiteLiveUrl', () => {
     expect(normalizeWebsiteLiveUrl('http://app.example.com')).toBeNull()
     expect(normalizeWebsiteLiveUrl('localhost')).toBeNull()
     expect(normalizeWebsiteLiveUrl('https://127.0.0.1')).toBeNull()
+    expect(normalizeWebsiteLiveUrl('https://-bad.example.com')).toBeNull()
+    expect(normalizeWebsiteLiveUrl('https://bad-.example.com')).toBeNull()
     expect(normalizeWebsiteLiveUrl('https://169.254.169.254/')).toBeNull()
     expect(normalizeWebsiteLiveUrl('https://xn--80ak6aa92e.xn--p1ai')).toBe('https://xn--80ak6aa92e.xn--p1ai/')
     expect(normalizeWebsiteLiveUrl('https://user:pass@app.example.com')).toBeNull()
