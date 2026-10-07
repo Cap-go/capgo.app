@@ -28,6 +28,7 @@ const DEFAULT_SERVER_URL = 'https://api.capgo.app'
 const MAX_EVENT_QUEUE_SIZE = 512
 const MAX_EVENT_FLUSH_ATTEMPTS = 12
 const EVENT_QUEUE_FLUSH_LIMIT = 50
+const NATIVE_UPDATE_CHECK_KEY = 'capgoNativeUpdateCheck'
 
 interface UpdaterTriggerResult {
   status?: string
@@ -372,8 +373,13 @@ function normalizeUpdaterResult(result: UpdaterTriggerResult): CapgoUpdateCheckR
       error: result.error || result.message,
     }
   }
+  if (result.status === 'queued' || result.status === 'already_running') {
+    return { status: result.status, version: result.version }
+  }
+  if (result.status === 'preview_session')
+    return { status: 'disabled', error: 'A preview session is active' }
   return {
-    status: result.queued ? 'installed' : 'failed',
+    status: result.queued ? 'queued' : 'failed',
     version: result.version,
     bundleId: result.bundleId || result.id,
     error: result.error || result.message || 'Update check failed',
@@ -430,6 +436,15 @@ function isUpdateCheckNotification(notification?: CapgoPushNotificationSchema) {
   const data = notificationData(notification)
   const action = getStringData(data, 'capgoAction', 'capgo_action', 'action')
   return action === 'update_check' || action === 'capgo_update_check'
+}
+
+/**
+ * Native code triggers the updater itself when an update_check push arrives and
+ * records the outcome in the payload, so JavaScript must not download it again.
+ */
+function nativeUpdateCheckStatus(notification?: CapgoPushNotificationSchema) {
+  const status = getStringData(notificationData(notification), NATIVE_UPDATE_CHECK_KEY)
+  return status && status !== 'unsupported' ? status : ''
 }
 
 function notifyListeners<T>(listeners: Set<(event: T) => void>, event: T) {
@@ -799,9 +814,17 @@ async function maybeRunUpdateCheck(notification?: CapgoPushNotificationSchema) {
     }
   }
 
+  const nativeStatus = nativeUpdateCheckStatus(notification)
   const updateCheck = (async () => {
     const startedEvent = eventFromNotification(notification, 'background_started')
     await trackEvent('background_started', startedEvent)
+    if (nativeStatus) {
+      await trackEvent('background_finished', {
+        ...eventFromNotification(notification, 'background_finished'),
+        error: nativeStatus === 'failed' ? 'Native update check failed' : undefined,
+      })
+      return
+    }
     const result = await CapgoNotifications.runUpdateCheck(updateOptionsFromNotification(notification))
     await trackEvent('background_finished', {
       ...eventFromNotification(notification, 'background_finished'),

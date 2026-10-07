@@ -1,8 +1,14 @@
 {
   "name": "@capgo/capacitor-notifications",
-  "version": "0.1.15",
+  "version": "8.0.0",
   "description": "Capgo native push notifications, badge, and live-update trigger plugin for Capacitor apps.",
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Cap-go/capgo.app",
+    "directory": "packages/capacitor-notifications"
+  },
+  "homepage": "https://github.com/Cap-go/capgo.app/tree/main/packages/capacitor-notifications#readme",
   "type": "module",
   "main": "dist/index.js",
   "module": "dist/index.js",
@@ -11,6 +17,7 @@
     "android/src/main/",
     "android/build.gradle",
     "android/gradle.properties",
+    "android/consumer-rules.pro",
     "dist/",
     "ios/Sources/",
     "CapgoCapacitorNotifications.podspec",
