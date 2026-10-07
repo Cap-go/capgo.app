@@ -381,7 +381,7 @@ function nextRunDate() {
 </script>
 
 <template>
-  <div class="flex flex-col pb-8 bg-white border shadow-sm md:p-8 md:pb-0 md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
+  <div class="flex flex-col px-4 pt-4 pb-8 bg-white border shadow-sm md:p-8 md:pb-0 md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
     <div v-if="!isLoading" class="flex flex-col w-full">
       <!-- Header -->
       <div class="flex flex-col justify-between gap-4 mb-8 md:flex-row md:items-center shrink-0">
@@ -414,8 +414,8 @@ function nextRunDate() {
       <div class="grid grid-cols-1 gap-6 mb-8 lg:grid-cols-3 shrink-0">
         <!-- Current Plan -->
         <div class="flex flex-col justify-between p-5 border border-slate-200 shadow-sm lg:col-span-2 bg-slate-50 rounded-xl dark:bg-white/[0.03] dark:border-white/10">
-          <div class="flex flex-row justify-between">
-            <div class="flex flex-col">
+          <div class="grid grid-cols-2 gap-4 sm:flex sm:flex-row sm:justify-between">
+            <div class="flex flex-col min-w-0">
               <div class="mb-1 text-sm text-gray-500 dark:text-gray-400">
                 {{ t('plan') }}
               </div>

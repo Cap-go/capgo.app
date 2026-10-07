@@ -30,7 +30,7 @@ function select(option: VersionGroupOption) {
 
 <template>
   <fieldset
-    class="flex flex-wrap items-center p-1 space-x-1 shrink-0 bg-gray-200 rounded-lg dark:bg-gray-800"
+    class="grid grid-cols-3 gap-1 p-1 min-w-0 w-full bg-gray-200 rounded-lg sm:flex sm:flex-wrap sm:items-center sm:w-auto sm:shrink-0 dark:bg-gray-800"
     data-testid="version-group-selector"
   >
     <legend class="sr-only">
@@ -42,7 +42,7 @@ function select(option: VersionGroupOption) {
       type="button"
       :aria-pressed="props.modelValue === option"
       :aria-label="t(labels[option])"
-      class="flex justify-center items-center h-9 min-h-9 min-w-[2.75rem] px-2.5 sm:px-3 py-1.5 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors duration-150 cursor-pointer"
+      class="flex justify-center items-center min-h-9 min-w-[2.75rem] px-2.5 sm:px-3 py-1.5 text-xs font-medium leading-tight text-center rounded-md sm:h-9 sm:whitespace-nowrap transition-colors duration-150 cursor-pointer"
       :class="props.modelValue === option
         ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
         : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'"

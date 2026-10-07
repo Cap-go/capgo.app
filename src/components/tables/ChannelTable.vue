@@ -298,13 +298,13 @@ columns.value = [
         // Download default = where new devices land; upload default = where CLI uploads go.
         elem.public
           ? h('span', {
-              class: 'ml-2 px-1.5 py-0.5 text-[10px] font-semibold uppercase align-middle rounded border border-azure-500/40 bg-azure-500/10 text-blue-700 dark:text-azure-300',
+              class: 'ml-2 my-0.5 inline-block whitespace-nowrap px-1.5 py-0.5 text-[10px] font-semibold uppercase align-middle rounded border border-azure-500/40 bg-azure-500/10 text-blue-700 dark:text-azure-300',
               title: t('channel-default-badge-hint'),
             }, t('channel-default-badge'))
           : null,
         defaultUploadChannel.value === elem.name
           ? h('span', {
-              class: 'ml-2 px-1.5 py-0.5 text-[10px] font-semibold uppercase align-middle rounded border border-violet-500/40 bg-violet-500/10 text-violet-700 dark:text-violet-300',
+              class: 'ml-2 my-0.5 inline-block whitespace-nowrap px-1.5 py-0.5 text-[10px] font-semibold uppercase align-middle rounded border border-violet-500/40 bg-violet-500/10 text-violet-700 dark:text-violet-300',
               title: t('channel-default-upload-badge-hint'),
             }, t('channel-default-upload-badge'))
           : null,
