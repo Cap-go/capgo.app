@@ -273,6 +273,17 @@ describe('private Endpoint Error Cases', () => {
     expect(data.error).toBe('invalid_jwt')
   })
 
+  it('should return 401 for stripe_past_due without authorization', async () => {
+    const response = await fetch(`${BASE_URL}/private/stripe_past_due`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({}),
+    })
+    expect(response.status).toBe(401)
+    const data = await response.json() as { error: string }
+    expect(data.error).toBe('invalid_jwt')
+  })
+
   it('should return 401 for stripe_checkout without org_id', async () => {
     const response = await fetch(`${BASE_URL}/private/stripe_checkout`, {
       method: 'POST',

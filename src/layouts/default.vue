@@ -5,6 +5,7 @@ import { computed, ref, useTemplateRef, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import OnboardingExploreBanner from '~/components/dashboard/OnboardingExploreBanner.vue'
 import OnboardingExploreReminder from '~/components/dashboard/OnboardingExploreReminder.vue'
+import PastDueBanner from '~/components/dashboard/PastDueBanner.vue'
 import LogAsDialogField from '~/components/LogAsDialogField.vue'
 import { useEdgeSwipeBack } from '~/composables/useEdgeSwipeBack'
 import { isNativeChromeEnabled, useNativeChrome } from '~/composables/useNativeChrome'
@@ -106,6 +107,7 @@ useEdgeSwipeBack(contentShell, {
     class="native-chrome-shell h-full overflow-hidden bg-slate-100 dark:bg-slate-900"
   >
     <div ref="contentShell" class="native-chrome-content flex flex-col h-full overflow-hidden bg-slate-100 dark:bg-slate-900">
+      <PastDueBanner />
       <OnboardingExploreBanner v-if="pendingOnboardingAppId" :app-id="pendingOnboardingAppId" />
       <OnboardingExploreReminder v-if="pendingOnboardingAppId" :app-id="pendingOnboardingAppId" />
       <main class="w-full h-full overflow-hidden">
@@ -140,6 +142,7 @@ useEdgeSwipeBack(contentShell, {
           @toggle-sidebar-collapse="toggleSidebarCollapse"
         />
         <!-- App and settings layouts are nested inside this shared dashboard shell. -->
+        <PastDueBanner />
         <OnboardingExploreBanner v-if="pendingOnboardingAppId" :app-id="pendingOnboardingAppId" />
         <OnboardingExploreReminder v-if="pendingOnboardingAppId" :app-id="pendingOnboardingAppId" />
         <main class="w-full h-full overflow-hidden">
