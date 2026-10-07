@@ -45,18 +45,19 @@ async function throwBundleHttpInvokeError(
   silent: boolean,
   requiredPermissionKey: string,
 ): Promise<never> {
+  const details = await formatCapgoCliInvokeError(error)
+
   if (await isBundleAccessDeniedError(error)) {
-    const message = action === 'channels'
+    const baseMessage = action === 'channels'
       ? 'Cannot list channels. Check that your API key is valid and has app.read_channels permission for this app.'
       : action === 'delete'
         ? `Cannot delete bundles for app ${appid}. Check that your API key is valid and has the required bundle permissions for this app.`
         : `Cannot list bundles for app ${appid}. Check that your API key is valid and has app.read_bundles permission for this app.`
+    const message = `${baseMessage} (${details})`
     if (!silent)
       log.error(message)
-    throw new CliUserError(message, { appId: appid, requiredPermissionKey })
+    throw new CliUserError(message, { appId: appid, requiredPermissionKey, httpStatus: getCapgoCliHttpStatus(error) })
   }
-
-  const details = await formatCapgoCliInvokeError(error)
   const payload = await readCapgoCliApiErrorPayload(error)
   const status = getCapgoCliHttpStatus(error)
   if (status === 404 || payload?.error === 'app_not_found') {
