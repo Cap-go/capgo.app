@@ -20,7 +20,7 @@ interface StatsRes {
 
 type StatsAction = Database['public']['Enums']['stats_action']
 
-// Mirrors isDroppedStatsLogAction: download_10..download_90 are not stored.
+// Matches main isDroppedDownloadProgressAction: download_10..download_90 are not stored.
 function isDroppedDownloadProgressAction(action: string) {
   return /^download_[1-9]0$/.test(action)
 }

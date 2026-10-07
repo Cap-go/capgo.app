@@ -18,6 +18,7 @@ import NativeReleaseStatsPanel from '~/components/dashboard/NativeReleaseStatsPa
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import VersionGroupSelector from '~/components/dashboard/VersionGroupSelector.vue'
 import InfoPopover from '~/components/InfoPopover.vue'
+import { useDeviceDataCollection } from '~/composables/useDeviceDataCollection'
 import { useNativeObserveStats } from '~/composables/useNativeObserveStats'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { formatLocalDateShort } from '~/services/date'
@@ -100,6 +101,7 @@ const packageId = computed(() => {
 const appRouteSegment = computed(() => route.path.match(/^\/app\/([^/]+)/)?.[1] ?? encodeURIComponent(packageId.value))
 const { days } = usePeriodDaysQuery()
 const versionGroup = ref<VersionGroupOption>('version')
+const { collection } = useDeviceDataCollection(packageId)
 const { stats, statsLoading, fetchStats } = useNativeObserveStats<NativeObserveStatsResponse>(
   packageId,
   () => ({ days: days.value, version_group: versionGroup.value }),
@@ -148,7 +150,7 @@ const topActions = computed(() => stats.value?.actionBreakdown.slice(0, 10) ?? [
 const topVersions = computed(() => stats.value?.versions.slice(0, versionGroup.value === 'version' ? 8 : 24) ?? [])
 const visibleVersions = computed(() => showAllVersions.value ? topVersions.value : topVersions.value.slice(0, PREVIEW_ROWS))
 const visibleActions = computed(() => showAllActions.value ? topActions.value : topActions.value.slice(0, PREVIEW_ROWS))
-const showPlatformColumn = computed(() => versionGroup.value !== 'version')
+const showPlatformColumn = computed(() => collection.value.platform && versionGroup.value !== 'version')
 const showChannelColumn = computed(() => versionGroup.value === 'version_platform_channel')
 const versionHealthHelp = computed(() => {
   if (versionGroup.value === 'version_platform_channel')

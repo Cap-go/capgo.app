@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { DeviceDataCollection } from '~/services/deviceDataCollection'
 import type { Database } from '~/types/supabase.types'
 import type { AppDeletionDetail, AppDeletionReason } from '~/utils/appDeletionFeedback'
 import { Camera } from '@capacitor/camera'
@@ -15,6 +16,7 @@ import gearSix from '~icons/ph/gear-six?raw'
 import iconName from '~icons/ph/user?raw'
 import Toggle from '~/components/Toggle.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { DEVICE_DATA_COLLECTION_KEYS, parseAppRowDeviceDataCollection } from '~/services/deviceDataCollection'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
@@ -273,6 +275,8 @@ async function deleteApp() {
   }
 }
 
+const deviceDataCollection = computed(() => parseAppRowDeviceDataCollection(appRef.value as unknown))
+
 async function submit(form: {
   app_name: string
   ios_store_url?: string
@@ -281,6 +285,14 @@ async function submit(form: {
   allow_preview: boolean
   allow_device_custom_id: boolean
   block_provider_infra_requests: boolean
+  collect_country: boolean
+  collect_platform: boolean
+  collect_os_version: boolean
+  collect_plugin_version: boolean
+  collect_version_build: boolean
+  collect_is_emulator: boolean
+  collect_is_prod: boolean
+  collect_install_source: boolean
   build_timeout_minutes?: number | string
 }) {
   isLoading.value = true
@@ -344,6 +356,23 @@ async function submit(form: {
   try {
     if (typeof form.block_provider_infra_requests === 'boolean')
       await updateBlockProviderInfraRequests(form.block_provider_infra_requests)
+  }
+  catch (error) {
+    toast.error(error as string)
+  }
+
+  try {
+    const currentCollection = deviceDataCollection.value
+    await updateDeviceDataCollection({
+      country: typeof form.collect_country === 'boolean' ? form.collect_country : currentCollection.country,
+      platform: typeof form.collect_platform === 'boolean' ? form.collect_platform : currentCollection.platform,
+      os_version: typeof form.collect_os_version === 'boolean' ? form.collect_os_version : currentCollection.os_version,
+      plugin_version: typeof form.collect_plugin_version === 'boolean' ? form.collect_plugin_version : currentCollection.plugin_version,
+      version_build: typeof form.collect_version_build === 'boolean' ? form.collect_version_build : currentCollection.version_build,
+      is_emulator: typeof form.collect_is_emulator === 'boolean' ? form.collect_is_emulator : currentCollection.is_emulator,
+      is_prod: typeof form.collect_is_prod === 'boolean' ? form.collect_is_prod : currentCollection.is_prod,
+      install_source: typeof form.collect_install_source === 'boolean' ? form.collect_install_source : currentCollection.install_source,
+    })
   }
   catch (error) {
     toast.error(error as string)
@@ -587,6 +616,29 @@ async function updateAllowDeviceCustomId(newAllowDeviceCustomId: boolean) {
   toast.success(t('changed-allow-device-custom-id'))
   if (appRef.value)
     appRef.value.allow_device_custom_id = newAllowDeviceCustomId
+}
+
+async function updateDeviceDataCollection(next: DeviceDataCollection) {
+  const { data: freshRow, error: readError } = await supabase
+    .from('apps')
+    .select('device_data_collection')
+    .eq('app_id', props.appId)
+    .single()
+  if (readError)
+    return Promise.reject(t('cannot-change-device-data-collection'))
+
+  const current = parseAppRowDeviceDataCollection(freshRow)
+  const merged = { ...current, ...next }
+  if (DEVICE_DATA_COLLECTION_KEYS.every(key => current[key] === merged[key]))
+    return Promise.resolve()
+
+  const { error } = await supabase.from('apps').update({ device_data_collection: merged }).eq('app_id', props.appId)
+  if (error)
+    return Promise.reject(t('cannot-change-device-data-collection'))
+
+  toast.success(t('changed-device-data-collection'))
+  if (appRef.value)
+    Object.assign(appRef.value, { device_data_collection: merged })
 }
 
 async function updateBlockProviderInfraRequests(enabled: boolean) {
@@ -1564,6 +1616,78 @@ async function transferAppOwnership() {
                 :label="t('block-provider-infra-requests')"
                 :help="t('block-provider-infra-requests-help')"
               />
+              <fieldset class="pt-2" data-test="device-data-collection">
+                <legend class="mb-1 text-sm font-medium text-slate-800 dark:text-slate-100">
+                  {{ t('device-data-collection') }}
+                </legend>
+                <p class="mb-3 text-sm text-neutral-700 dark:text-neutral-300">
+                  {{ t('device-data-collection-help') }}
+                </p>
+                <FormKit
+                  id="collect-country"
+                  type="checkbox"
+                  name="collect_country"
+                  :value="deviceDataCollection.country"
+                  :label="t('collect-country')"
+                  :help="t('collect-country-help')"
+                />
+                <FormKit
+                  id="collect-platform"
+                  type="checkbox"
+                  name="collect_platform"
+                  :value="deviceDataCollection.platform"
+                  :label="t('collect-platform')"
+                  :help="t('collect-platform-help')"
+                />
+                <FormKit
+                  id="collect-os-version"
+                  type="checkbox"
+                  name="collect_os_version"
+                  :value="deviceDataCollection.os_version"
+                  :label="t('collect-os-version')"
+                  :help="t('collect-os-version-help')"
+                />
+                <FormKit
+                  id="collect-plugin-version"
+                  type="checkbox"
+                  name="collect_plugin_version"
+                  :value="deviceDataCollection.plugin_version"
+                  :label="t('collect-plugin-version')"
+                  :help="t('collect-plugin-version-help')"
+                />
+                <FormKit
+                  id="collect-version-build"
+                  type="checkbox"
+                  name="collect_version_build"
+                  :value="deviceDataCollection.version_build"
+                  :label="t('collect-version-build')"
+                  :help="t('collect-version-build-help')"
+                />
+                <FormKit
+                  id="collect-is-emulator"
+                  type="checkbox"
+                  name="collect_is_emulator"
+                  :value="deviceDataCollection.is_emulator"
+                  :label="t('collect-is-emulator')"
+                  :help="t('collect-is-emulator-help')"
+                />
+                <FormKit
+                  id="collect-is-prod"
+                  type="checkbox"
+                  name="collect_is_prod"
+                  :value="deviceDataCollection.is_prod"
+                  :label="t('collect-is-prod')"
+                  :help="t('collect-is-prod-help')"
+                />
+                <FormKit
+                  id="collect-install-source"
+                  type="checkbox"
+                  name="collect_install_source"
+                  :value="deviceDataCollection.install_source"
+                  :label="t('collect-install-source')"
+                  :help="t('collect-install-source-help')"
+                />
+              </fieldset>
               <FormKit
                 type="button"
                 :label="t('transfer-app-ownership')"

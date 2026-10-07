@@ -54,6 +54,14 @@ export async function setAppInternal(appId: string, options: Options, silent = f
     exposeMetadata,
     preview,
     allowDeviceCustomId,
+    collectCountry,
+    collectPlatform,
+    collectOsVersion,
+    collectPluginVersion,
+    collectVersionBuild,
+    collectIsEmulator,
+    collectIsProd,
+    collectInstallSource,
     blockProviderInfraRequests,
     buildTimeoutMinutes,
     iosStoreUrl,
@@ -159,6 +167,23 @@ export async function setAppInternal(appId: string, options: Options, silent = f
     putBody.expose_metadata = exposeMetadata
   if (allowDeviceCustomId != null)
     putBody.allow_device_custom_id = allowDeviceCustomId
+  const deviceDataCollection: Record<string, boolean> = {}
+  const collectPatches: Array<[string, boolean | null | undefined]> = [
+    ['country', collectCountry],
+    ['platform', collectPlatform],
+    ['os_version', collectOsVersion],
+    ['plugin_version', collectPluginVersion],
+    ['version_build', collectVersionBuild],
+    ['is_emulator', collectIsEmulator],
+    ['is_prod', collectIsProd],
+    ['install_source', collectInstallSource],
+  ]
+  for (const [key, value] of collectPatches) {
+    if (value != null)
+      deviceDataCollection[key] = value
+  }
+  if (Object.keys(deviceDataCollection).length > 0)
+    putBody.device_data_collection = deviceDataCollection
   if (blockProviderInfraRequests != null)
     putBody.block_provider_infra_requests = blockProviderInfraRequests
   if (iosStoreUrl !== undefined)

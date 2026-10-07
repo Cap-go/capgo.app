@@ -13,6 +13,7 @@ import IconLayers from '~icons/lucide/layers'
 import IconRocket from '~icons/lucide/rocket'
 import IconSmartphone from '~icons/lucide/smartphone'
 import InfoPopover from '~/components/InfoPopover.vue'
+import { useDeviceDataCollection } from '~/composables/useDeviceDataCollection'
 import { useNativeObserveStats } from '~/composables/useNativeObserveStats'
 import { formatNumberValue } from '~/services/formatLocale'
 import {
@@ -37,6 +38,7 @@ const packageId = computed(() => {
   const app = (route.params as Record<string, string | string[] | undefined>).app
   return Array.isArray(app) ? app[0] ?? '' : String(app ?? '')
 })
+const { collection } = useDeviceDataCollection(packageId)
 const { stats, statsLoading, fetchStats: fetchPluginStats } = useNativeObserveStats<NativeObservePluginStatsResponse>(
   packageId,
   () => ({ view: 'plugins' }),
@@ -137,7 +139,14 @@ watch(packageId, async () => {
         </InfoPopover>
       </div>
 
-      <div v-if="statsLoading" class="flex items-center justify-center h-80">
+      <div
+        v-if="!collection.plugin_version"
+        class="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600 dark:border-slate-700 dark:bg-gray-800 dark:text-slate-300"
+        data-test="observe-plugin-collection-disabled"
+      >
+        {{ t('device-data-collection-chart-disabled') }}
+      </div>
+      <div v-else-if="statsLoading" class="flex items-center justify-center h-80">
         <Spinner size="w-12 h-12" />
       </div>
 

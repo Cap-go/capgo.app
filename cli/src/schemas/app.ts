@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { optionsBaseSchema } from './base'
+import { deviceDataCollectionOptionsFields } from './deviceDataCollection'
 
 // ============================================================================
 // App Options Schemas
@@ -12,6 +13,7 @@ export const appOptionsSchema = optionsBaseSchema.extend({
   exposeMetadata: z.boolean().optional(),
   preview: z.boolean().optional(),
   allowDeviceCustomId: z.boolean().optional(),
+  ...deviceDataCollectionOptionsFields,
   blockProviderInfraRequests: z.boolean().optional(),
   buildTimeoutMinutes: z.number().optional(),
   iosStoreUrl: z.string().optional(),

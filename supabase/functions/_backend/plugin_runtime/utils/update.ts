@@ -13,9 +13,9 @@ import {
 } from '@std/semver'
 import { getRuntimeKey } from 'hono/adapter'
 import { getAppStatus, setAppStatus } from './appStatus.ts'
+import { mauPlatformForCollection, mauVersionBuildForCollection, parseDeviceDataCollection } from './deviceDataCollection.ts'
 import { getBundleUrl, getManifestUrl } from './downloadUrl.ts'
 import { simpleError200 } from './hono.ts'
-import { onPremiseAppResponse } from './rateLimitInfo.ts'
 import { cloudlog } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
 import { sendNotifToOrgMembersCached } from './org_email_notifications.ts'
@@ -25,6 +25,7 @@ import { makeDevice } from './plugin_parser.ts'
 import { createStatsBandwidth, createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from './plugin_stats.ts'
 import { getAppOwnerWithEdgeCache } from './pluginEdgeCacheReads.ts'
 import { getClientIP } from './rate_limit.ts'
+import { onPremiseAppResponse } from './rateLimitInfo.ts'
 import { s3 } from './s3.ts'
 import { shouldQueuePluginNotifications } from './supabase_write_guard.ts'
 import { isUpdateEnumerationLimited, recordUpdateEnumerationMiss, updateEnumerationLimitedResponse } from './updateOracleGuard.ts'
@@ -348,10 +349,12 @@ export async function updateWithPG(
       return updateEnumerationLimitedResponse(c, updateEnumerationLimit.resetAt)
 
     const device = makeDevice(body, cachedAppStatus.allow_device_custom_id)
+    c.set('deviceDataCollection', parseDeviceDataCollection(cachedAppStatus.device_data_collection))
     return onPremStats(c, app_id, 'get', device)
   }
   if (cachedStatus === 'cancelled') {
     const device = makeDevice(body, cachedAppStatus.allow_device_custom_id)
+    c.set('deviceDataCollection', parseDeviceDataCollection(cachedAppStatus.device_data_collection))
     cloudlog({ requestId: c.get('requestId'), message: 'Cannot update, upgrade plan to continue to update', id: app_id })
     await sendStatsAndDevice(c, device, [{ action: 'needPlanUpgrade' }])
     return onPremiseAppResponse(c)
@@ -379,7 +382,6 @@ export async function updateWithPG(
   // client when app-status cache already says cloud. Cuts Request Duration by
   // one serial replica RTT on the common path (CF chart != waitUntil).
   // Prefetch failures must never block owner — degrade to serial requestInfos.
-  let appOwner: Awaited<ReturnType<typeof getAppOwnerPostgres>>
   let prefetchedChannel: Awaited<ReturnType<typeof requestInfosChannelPostgres>> | null = null
   const startOwner = performance.now()
   const edgeCache = shouldUseUpdatesEdgeCache(c, app_id, device_id)
@@ -429,17 +431,19 @@ export async function updateWithPG(
         }
       })()
     : Promise.resolve(null)
-  appOwner = await ownerPromise
+  const appOwner = await ownerPromise
   if (pathTiming)
     pathTiming.ownerMs = Math.round(performance.now() - startOwner)
   // if version_build is not semver, then make it semver
   const device = makeDevice(body, appOwner?.allow_device_custom_id)
+  const deviceDataCollection = parseDeviceDataCollection(appOwner?.device_data_collection ?? cachedAppStatus.device_data_collection)
+  c.set('deviceDataCollection', deviceDataCollection)
   if (!appOwner) {
     const updateEnumerationLimit = await recordUpdateEnumerationMiss(c, app_id)
     if (updateEnumerationLimit.limited)
       return updateEnumerationLimitedResponse(c, updateEnumerationLimit.resetAt)
 
-    await setAppStatus(c, app_id, 'onprem', true, cachedAppStatus.block_provider_infra_requests)
+    await setAppStatus(c, app_id, 'onprem', true, cachedAppStatus.block_provider_infra_requests, deviceDataCollection)
     return onPremStats(c, app_id, 'get', device)
   }
   const providerBlockedResponse = await providerInfrastructureBlockResponse(c, appOwner.block_provider_infra_requests)
@@ -447,7 +451,7 @@ export async function updateWithPG(
     return providerBlockedResponse
 
   if (!appOwner.plan_valid) {
-    await setAppStatus(c, app_id, 'cancelled', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests)
+    await setAppStatus(c, app_id, 'cancelled', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests, deviceDataCollection)
     cloudlog({ requestId: c.get('requestId'), message: 'Cannot update, upgrade plan to continue to update', id: app_id })
     await sendStatsAndDevice(c, device, [{ action: 'needPlanUpgrade' }])
     // Send weekly notification about missing payment (not configurable - payment related)
@@ -464,6 +468,7 @@ export async function updateWithPG(
     'cloud',
     appOwner.allow_device_custom_id,
     appOwner.block_provider_infra_requests,
+    deviceDataCollection,
   )
   const pluginVersion = parse(plugin_version)
   const shouldUseChannelSelfStore = usesLegacyChannelSelfStoreVersion(pluginVersion) && hasChannelSelfStoreBinding(c)
@@ -479,7 +484,7 @@ export async function updateWithPG(
   const isDeprecated = isDeprecatedPluginVersion(pluginVersion)
   // Ensure there is manifest and the plugin version support manifest fetching (v5.10.0+, v6.25.0+, v7.0.35+)
   const fetchManifestEntries = manifestBundleCount > 0 && !isDeprecatedPluginVersion(pluginVersion, undefined, undefined, BROTLI_MIN_UPDATER_VERSION_V7)
-    if (!coerce) {
+  if (!coerce) {
     // get app owner with app_id
     await backgroundTask(c, sendNotifOrgCached(c, 'user:semver_issue', {
       app_id,
@@ -511,8 +516,7 @@ export async function updateWithPG(
       app_id_url: app_id,
     }, appOwner.owner_org, app_id, '0 0 * * 1', appOwner.orgs.management_email, drizzleClient))
   }
-  await backgroundTask(c, createStatsMau(c, device_id, app_id, appOwner.owner_org, platform, version_build))
-
+  await backgroundTask(c, createStatsMau(c, device_id, app_id, appOwner.owner_org, mauPlatformForCollection(platform, deviceDataCollection), mauVersionBuildForCollection(version_build, deviceDataCollection)))
 
   // Only query link/comment if plugin supports it (v5.35.0+, v6.35.0+, v7.35.0+, v8.35.0+) AND app has expose_metadata enabled
   const needsMetadata = appOwner.expose_metadata && !isDeprecatedPluginVersion(pluginVersion, '5.35.0', '6.35.0', '7.35.0', '8.35.0')
@@ -1001,9 +1005,11 @@ async function upToDateFromReadCache(c: Context, body: AppInfos, appStatus: Awai
     return updateEnumerationLimitedResponse(c, existingUpdateEnumerationLimit.resetAt)
 
   const device = makeDevice(body, cachedRead.allowDeviceCustomId)
-  await setAppStatus(c, body.app_id, 'cloud', cachedRead.allowDeviceCustomId, appStatus.block_provider_infra_requests)
-  await backgroundTask(c, createStatsMau(c, body.device_id, body.app_id, cachedRead.ownerOrg, body.platform, body.version_build))
-  await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: cachedRead.versionName }])
+  const deviceDataCollection = appStatus.device_data_collection
+  c.set('deviceDataCollection', deviceDataCollection)
+  await setAppStatus(c, body.app_id, 'cloud', cachedRead.allowDeviceCustomId, appStatus.block_provider_infra_requests, deviceDataCollection)
+  await backgroundTask(c, createStatsMau(c, body.device_id, body.app_id, cachedRead.ownerOrg, mauPlatformForCollection(body.platform, deviceDataCollection), mauVersionBuildForCollection(body.version_build, deviceDataCollection)))
+  await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: cachedRead.versionName }], false, deviceDataCollection)
   if (shouldUseUpdatesEdgeCache(c, body.app_id, body.device_id))
     c.header('X-Updates-Cache', 'hit')
   return updateError200(c, 'no_new_version_available', 'No new version available')

@@ -5,6 +5,7 @@ import type { AppStats, StatsActions } from '../utils/types.ts'
 import { greaterOrEqual, parse, tryParse } from '@std/semver'
 import { Hono } from 'hono/tiny'
 import { getAppStatus, setAppStatus } from '../utils/appStatus.ts'
+import { mauPlatformForCollection, mauVersionBuildForCollection, parseDeviceDataCollection } from '../utils/deviceDataCollection.ts'
 import { BRES, simpleError, simpleError200, simpleRateLimit } from '../utils/hono.ts'
 import { invalidIpInfo } from '../utils/invalids_ip.ts'
 import { cloudlog } from '../utils/logging.ts'
@@ -93,6 +94,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
   const cachedStatus = cachedAppStatus.status
   if (cachedStatus === 'onprem') {
     const device = makeDevice(body, cachedAppStatus.allow_device_custom_id)
+    c.set('deviceDataCollection', parseDeviceDataCollection(cachedAppStatus.device_data_collection))
     await onPremStats(c, app_id, action, device, metadata)
     return { success: true, isOnprem: true }
   }
@@ -106,6 +108,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     if (allowDeviceCustomId === false && typeof body.custom_id === 'string' && body.custom_id.trim() !== '') {
       statsActions.push({ action: 'customIdBlocked' })
     }
+    c.set('deviceDataCollection', parseDeviceDataCollection(cachedAppStatus.device_data_collection))
     await sendStatsAndDevice(c, device, statsActions)
     return { success: false, error: 'need_plan_upgrade', message: PLAN_ERROR }
   }
@@ -115,24 +118,26 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     : await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, planActions)
   const allowDeviceCustomId = appOwner?.allow_device_custom_id
   const device = makeDevice(body, allowDeviceCustomId)
+  const deviceDataCollection = parseDeviceDataCollection(appOwner?.device_data_collection ?? cachedAppStatus.device_data_collection)
+  c.set('deviceDataCollection', deviceDataCollection)
   const blockProviderInfraRequests = appOwner?.block_provider_infra_requests ?? cachedAppStatus.block_provider_infra_requests
   const blocked = await blockProviderInfrastructure(c, blockProviderInfraRequests)
   if (blocked)
     return { success: false, response: blocked }
 
   if (!appOwner) {
-    await setAppStatus(c, app_id, 'onprem', true, cachedAppStatus.block_provider_infra_requests)
+    await setAppStatus(c, app_id, 'onprem', true, cachedAppStatus.block_provider_infra_requests, deviceDataCollection)
     await onPremStats(c, app_id, action, device, metadata)
     return { success: true, isOnprem: true }
   }
   if (!appOwner.plan_valid) {
-    await setAppStatus(c, app_id, 'cancelled', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests)
+    await setAppStatus(c, app_id, 'cancelled', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests, deviceDataCollection)
     cloudlog({ requestId: c.get('requestId'), message: 'Cannot update, upgrade plan to continue to update', id: app_id })
     const upgradeActions: StatsActions[] = [{ action: 'needPlanUpgrade' }]
     if (allowDeviceCustomId === false && typeof body.custom_id === 'string' && body.custom_id.trim() !== '') {
       upgradeActions.push({ action: 'customIdBlocked' })
     }
-    await sendStatsAndDevice(c, device, upgradeActions)
+    await sendStatsAndDevice(c, device, upgradeActions, false, deviceDataCollection)
     // Send weekly notification about missing payment (not configurable - payment related)
     backgroundTask(c, sendNotifOrgCached(c, 'org:missing_payment', {
       app_id,
@@ -141,7 +146,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     }, appOwner.owner_org, app_id, '0 0 * * 1', appOwner.orgs.management_email, drizzleClient)) // Weekly on Monday
     return { success: false, error: 'need_plan_upgrade', message: 'Cannot update, upgrade plan to continue to update' }
   }
-  await setAppStatus(c, app_id, 'cloud', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests)
+  await setAppStatus(c, app_id, 'cloud', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests, deviceDataCollection)
   const statsActions: StatsActions[] = []
   if (allowDeviceCustomId === false && typeof body.custom_id === 'string' && body.custom_id.trim() !== '') {
     statsActions.push({ action: 'customIdBlocked' })
@@ -151,8 +156,8 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
   if (!shouldRecordAction) {
     // Legacy plugins can report download_fail for a non-existent target version
     // when there was no update to download, so skip version validation too.
-    await backgroundTask(c, createStatsMau(c, device.device_id, app_id, appOwner.owner_org, device.platform, device.version_build))
-    await sendStatsAndDevice(c, device, statsActions, !isRunningVersionAction(action))
+    await backgroundTask(c, createStatsMau(c, device.device_id, app_id, appOwner.owner_org, mauPlatformForCollection(device.platform, deviceDataCollection), mauVersionBuildForCollection(device.version_build, deviceDataCollection)))
+    await sendStatsAndDevice(c, device, statsActions, !isRunningVersionAction(action), deviceDataCollection)
     return { success: true }
   }
 
@@ -160,7 +165,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
   // server-side overrides (channel_devices / channel_self store) may attribute installs.
   let effectiveStatsChannelPromise: ReturnType<typeof getEffectiveDeviceChannelNamePostgres> | undefined
   const getEffectiveStatsChannel = () => {
-    effectiveStatsChannelPromise ??= getEffectiveDeviceChannelNamePostgres(c, app_id, device.device_id, normalizeStatsChannelName(device.default_channel), device.platform, appOwner.channel_device_count > 0, drizzleClient as ReturnType<typeof getDrizzleClient>, { edgeCache })
+    effectiveStatsChannelPromise ??= getEffectiveDeviceChannelNamePostgres(c, app_id, device.device_id, normalizeStatsChannelName(device.default_channel), device.platform ?? '', appOwner.channel_device_count > 0, drizzleClient as ReturnType<typeof getDrizzleClient>, { edgeCache })
     return effectiveStatsChannelPromise
   }
 
@@ -213,8 +218,8 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     statsActions.push({ action: action as Database['public']['Enums']['stats_action'], metadata, channel: failureChannel })
   }
 
-  await backgroundTask(c, createStatsMau(c, device.device_id, app_id, appOwner.owner_org, device.platform, device.version_build))
-  await sendStatsAndDevice(c, device, statsActions, !isRunningVersionAction(action))
+  await backgroundTask(c, createStatsMau(c, device.device_id, app_id, appOwner.owner_org, mauPlatformForCollection(device.platform, deviceDataCollection), mauVersionBuildForCollection(device.version_build, deviceDataCollection)))
+  await sendStatsAndDevice(c, device, statsActions, !isRunningVersionAction(action), deviceDataCollection)
   return { success: true }
 }
 

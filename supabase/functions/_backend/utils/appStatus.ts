@@ -1,13 +1,15 @@
 import type { Context } from 'hono'
+import type { DeviceDataCollection } from './deviceDataCollection.ts'
 import { CacheHelper } from './cache.ts'
+import { DEFAULT_DEVICE_DATA_COLLECTION, parseDeviceDataCollection } from './deviceDataCollection.ts'
 import { backgroundTask, isStripeConfigured } from './utils.ts'
 
 const APP_STATUS_CACHE_PATH = '/.app-status-v3'
 const APP_STATUS_CACHE_TTL_SECONDS = 60
 
 export type AppStatus = 'cloud' | 'onprem' | 'cancelled'
-interface AppStatusCachePayload { status: AppStatus, allow_device_custom_id: boolean, block_provider_infra_requests: boolean }
-export interface AppStatusResult { status: AppStatus | null, allow_device_custom_id: boolean, block_provider_infra_requests: boolean, cacheHit: boolean }
+interface AppStatusCachePayload { status: AppStatus, allow_device_custom_id: boolean, block_provider_infra_requests: boolean, device_data_collection?: DeviceDataCollection }
+export interface AppStatusResult { status: AppStatus | null, allow_device_custom_id: boolean, block_provider_infra_requests: boolean, device_data_collection: DeviceDataCollection, cacheHit: boolean }
 
 function buildAppStatusRequest(c: Context, appId: string) {
   const helper = new CacheHelper(c)
@@ -22,17 +24,18 @@ function buildAppStatusRequest(c: Context, appId: string) {
 export async function getAppStatus(c: Context, appId: string): Promise<AppStatusResult> {
   const cacheEntry = buildAppStatusRequest(c, appId)
   if (!cacheEntry)
-    return { status: null, allow_device_custom_id: true, block_provider_infra_requests: false, cacheHit: false }
+    return { status: null, allow_device_custom_id: true, block_provider_infra_requests: false, device_data_collection: DEFAULT_DEVICE_DATA_COLLECTION, cacheHit: false }
   const payload = await cacheEntry.helper.matchJson<AppStatusCachePayload>(cacheEntry.request)
   if (!payload)
-    return { status: null, allow_device_custom_id: true, block_provider_infra_requests: false, cacheHit: false }
+    return { status: null, allow_device_custom_id: true, block_provider_infra_requests: false, device_data_collection: DEFAULT_DEVICE_DATA_COLLECTION, cacheHit: false }
   const blockProviderInfraRequests = payload.block_provider_infra_requests ?? false
+  const deviceDataCollection = parseDeviceDataCollection(payload.device_data_collection)
   if (payload.status === 'cancelled' && !isStripeConfigured(c))
-    return { status: 'cloud', allow_device_custom_id: payload.allow_device_custom_id, block_provider_infra_requests: blockProviderInfraRequests, cacheHit: true }
-  return { status: payload.status, allow_device_custom_id: payload.allow_device_custom_id, block_provider_infra_requests: blockProviderInfraRequests, cacheHit: true }
+    return { status: 'cloud', allow_device_custom_id: payload.allow_device_custom_id, block_provider_infra_requests: blockProviderInfraRequests, device_data_collection: deviceDataCollection, cacheHit: true }
+  return { status: payload.status, allow_device_custom_id: payload.allow_device_custom_id, block_provider_infra_requests: blockProviderInfraRequests, device_data_collection: deviceDataCollection, cacheHit: true }
 }
 
-export function setAppStatus(c: Context, appId: string, status: AppStatus, allowDeviceCustomId: boolean, blockProviderInfraRequests = false) {
+export function setAppStatus(c: Context, appId: string, status: AppStatus, allowDeviceCustomId: boolean, blockProviderInfraRequests = false, deviceDataCollection: DeviceDataCollection = DEFAULT_DEVICE_DATA_COLLECTION) {
   return backgroundTask(c, async () => {
     const cacheEntry = buildAppStatusRequest(c, appId)
     if (!cacheEntry)
@@ -41,6 +44,7 @@ export function setAppStatus(c: Context, appId: string, status: AppStatus, allow
       status,
       allow_device_custom_id: allowDeviceCustomId,
       block_provider_infra_requests: blockProviderInfraRequests,
+      device_data_collection: parseDeviceDataCollection(deviceDataCollection),
     }
     await cacheEntry.helper.putJson(cacheEntry.request, payload, APP_STATUS_CACHE_TTL_SECONDS)
   })

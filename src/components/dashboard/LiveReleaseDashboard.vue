@@ -12,6 +12,7 @@ import DevicesStats from '~/components/dashboard/DevicesStats.vue'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import ReleaseLivePanel from '~/components/dashboard/ReleaseLivePanel.vue'
 import Spinner from '~/components/Spinner.vue'
+import { useDeviceDataCollection } from '~/composables/useDeviceDataCollection'
 import { useNativeObserveStats } from '~/composables/useNativeObserveStats'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { groupCompatibilityEvents } from '~/services/compatibilityEvents'
@@ -41,6 +42,7 @@ provideChartCardCompact('dense')
 const { t } = useI18n()
 const supabase = useSupabase()
 const { days } = usePeriodDaysQuery()
+const { collection: deviceDataCollection } = useDeviceDataCollection(() => props.appId)
 
 const isChannelView = computed(() => props.channelId !== undefined)
 const basePath = computed(() => `/app/${encodeURIComponent(props.appId)}`)
@@ -245,6 +247,7 @@ const healthTiles = computed(() => {
         :use-billing-period="false"
         :accumulated="false"
         :force-demo="forceDemo"
+        :device-data-collection="deviceDataCollection"
       />
       <BundleInstallStatsPanel :app-id="appId" :channel-id="channelId" :days="days" :force-demo="forceDemo" hide-period-selector dense />
       <DeliveryLatencyPanel :key="appId" scope="app" :app-id="appId" :days="days" :force-demo="forceDemo" hide-period-selector dense />

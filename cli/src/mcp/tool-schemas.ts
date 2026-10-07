@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { CLI_PROJECT_MODES } from '../framework/mode'
 import { buildCacheKeyOptionSchema, buildCacheOptionSchema } from '../schemas/build'
+import { deviceDataCollectionOptionsFields } from '../schemas/deviceDataCollection'
 import { capacitorConfigOptionSchema, observeOptionsObjectSchema, refineObserveDeviceId } from '../schemas/sdk'
 
 export const mcpAddAppInputSchema = z.object({
@@ -14,6 +15,7 @@ export const mcpUpdateAppInputSchema = z.object({
   name: z.string().optional(),
   icon: z.string().optional(),
   retention: z.number().optional(),
+  ...deviceDataCollectionOptionsFields,
 })
 
 export const mcpDeleteAppInputSchema = z.object({

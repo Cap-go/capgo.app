@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { CLI_PROJECT_MODES } from '../framework/mode'
 import { buildCacheKeyOptionSchema, buildCacheOptionSchema, buildCredentialsSchema } from './build'
 import { localizedReleaseNotesSchema, rejectConflictingBooleanGroup } from './common'
+import { deviceDataCollectionOptionsSchema } from './deviceDataCollection'
 
 export const capacitorConfigOptionSchema = z.string().min(1).describe('Capacitor config source to update')
 
@@ -43,7 +44,7 @@ export const updateAppOptionsSchema = z.object({
   apikey: z.string().optional(),
   supaHost: z.string().optional(),
   supaAnon: z.string().optional(),
-})
+}).merge(deviceDataCollectionOptionsSchema)
 
 export type UpdateAppOptions = z.infer<typeof updateAppOptionsSchema>
 

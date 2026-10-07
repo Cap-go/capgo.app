@@ -2,6 +2,14 @@ import type { DeviceWithoutCreatedAt } from './types.ts'
 
 const normalizeOptionalString = (value: string | null | undefined) => (value === undefined || value === null || value === '' ? null : value)
 
+function normalizeOptionalBool(value: boolean | number | null | undefined): boolean | null {
+  if (value === undefined)
+    return false
+  if (value === null)
+    return null
+  return Boolean(value)
+}
+
 export function normalizeDeviceCountryCode(countryCode: string | null | undefined) {
   const normalized = normalizeOptionalString(countryCode)?.trim().toUpperCase()
   return normalized && /^[A-Z]{2}$/.test(normalized) ? normalized : null
@@ -15,8 +23,8 @@ export interface DeviceComparable {
   version_build: string // DB schema: DEFAULT 'builtin'
   custom_id: string // DB schema: DEFAULT '' NOT NULL
   version_name: string | null // DB schema: text (NULLABLE)
-  is_prod: boolean
-  is_emulator: boolean
+  is_prod: boolean | null
+  is_emulator: boolean | null
   install_source?: string | null
   default_channel: string | null // DB schema: TEXT (NULLABLE)
   key_id: string | null
@@ -65,8 +73,8 @@ export function toComparableDevice(device: DeviceWithoutCreatedAt): DeviceCompar
     custom_id: normalizedCustomId ?? '',
     // DB schema: version_name text (NULLABLE - allows NULL!)
     version_name: normalizedVersionName,
-    is_prod: device.is_prod ?? false,
-    is_emulator: device.is_emulator ?? false,
+    is_prod: normalizeOptionalBool(device.is_prod),
+    is_emulator: normalizeOptionalBool(device.is_emulator),
     // DB schema: default_channel TEXT (NULLABLE - allows NULL!)
     default_channel: normalizedDefaultChannel,
     key_id: normalizedKeyId,
@@ -103,8 +111,8 @@ export function toComparableExisting(existing: DeviceExistingRowLike): DeviceCom
     custom_id: normalizedCustomId ?? '',
     // DB schema: version_name text (NULLABLE - allows NULL!)
     version_name: normalizedVersionName,
-    is_prod: existing?.is_prod === undefined || existing?.is_prod === null ? false : Boolean(existing.is_prod),
-    is_emulator: existing?.is_emulator === undefined || existing?.is_emulator === null ? false : Boolean(existing.is_emulator),
+    is_prod: normalizeOptionalBool(existing?.is_prod),
+    is_emulator: normalizeOptionalBool(existing?.is_emulator),
     // DB schema: default_channel TEXT (NULLABLE - allows NULL!)
     default_channel: normalizedDefaultChannel,
     key_id: normalizedKeyId,

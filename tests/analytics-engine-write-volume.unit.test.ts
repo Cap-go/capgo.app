@@ -98,6 +98,81 @@ describe('analytics engine write volume', () => {
     expect(writeDataPoint.mock.calls[0][0].blobs[1]).toBe('get')
   })
 
+  it('omits APP_LOG dimension blobs when device data collection flags are off', async () => {
+    const { sendStatsAndDevice } = await import('../supabase/functions/_backend/plugin_runtime/utils/plugin_stats.ts')
+    const { DEFAULT_DEVICE_DATA_COLLECTION } = await import('../supabase/functions/_backend/plugin_runtime/utils/deviceDataCollection.ts')
+    const writeDataPoint = vi.fn()
+    const collection = {
+      ...DEFAULT_DEVICE_DATA_COLLECTION,
+      country: false,
+      platform: false,
+      plugin_version: false,
+    }
+    await sendStatsAndDevice(
+      createContext({ APP_LOG: { writeDataPoint } }),
+      {
+        app_id: 'com.example.app',
+        device_id: 'device-1',
+        version_name: '1.0.0',
+        platform: 'ios',
+        plugin_version: '8.0.0',
+        os_version: '18.0',
+        version_build: '2.0.0',
+        custom_id: '',
+        is_prod: true,
+        is_emulator: false,
+        install_source: 'app_store',
+        country_code: 'US',
+      } as any,
+      [{ action: 'set' }],
+      true,
+      collection,
+    )
+    expect(writeDataPoint).toHaveBeenCalledWith(expect.objectContaining({
+      blobs: ['device-1', 'set', '1.0.0', '', '', '', '', '', ''],
+    }))
+  })
+
+  it('omits DEVICE_INFO blobs for disabled collection fields', async () => {
+    const { trackDevicesCF } = await import('../supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts')
+    const { applyDeviceDataCollectionToDevice, DEFAULT_DEVICE_DATA_COLLECTION } = await import('../supabase/functions/_backend/plugin_runtime/utils/deviceDataCollection.ts')
+    const writeDataPoint = vi.fn()
+    const source = {
+      app_id: 'com.example.app',
+      device_id: 'device-1',
+      version_name: '1.0.0',
+      platform: 'ios',
+      plugin_version: '8.0.0',
+      os_version: '18.0',
+      custom_id: 'cid',
+      version_build: '2.0.0',
+      default_channel: 'production',
+      key_id: '',
+      install_source: 'app_store',
+      country_code: 'US',
+      is_prod: true,
+      is_emulator: false,
+    }
+    const stored = applyDeviceDataCollectionToDevice(source, {
+      ...DEFAULT_DEVICE_DATA_COLLECTION,
+      country: false,
+      platform: false,
+      os_version: false,
+      plugin_version: false,
+      version_build: false,
+      is_emulator: false,
+      is_prod: false,
+      install_source: false,
+    }) as typeof source
+
+    await trackDevicesCF(createContext({ DEVICE_INFO: { writeDataPoint } }), stored as any)
+    expect(writeDataPoint).toHaveBeenCalledWith(expect.objectContaining({
+      blobs: ['device-1', '1.0.0', '', '', 'cid', 'builtin', 'production', '', '', ''],
+      doubles: [-1, -1, -1],
+      indexes: ['com.example.app'],
+    }))
+  })
+
   it('scales the external update count by the stored sample rate', async () => {
     const { countUpdatesFromLogsExternalCF } = await import('../supabase/functions/_backend/utils/cloudflare.ts')
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ meta: [{ name: 'count', type: 'Float64' }], data: [{ count: 1236.7 }] })))

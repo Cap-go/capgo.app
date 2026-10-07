@@ -612,6 +612,29 @@ export async function fetchTestRequest(
  * Warm a local edge/trigger endpoint until it stops returning gateway 502/503.
  * Does not assert business status — only readiness of the Deno/workerd isolate.
  */
+/**
+ * Drain the updates edge cache purge queue so plugin owner/status caches reflect
+ * recent apps row changes (device_data_collection, channels, etc.).
+ */
+export async function drainUpdatesEdgeCachePurge(maxRounds = 3): Promise<void> {
+  try {
+    const url = getEndpointUrl('/triggers/updates_cache_purge')
+    for (let round = 1; round <= maxRounds; round++) {
+      const response = await fetchTestRequest(url, {
+        method: 'POST',
+        headers: headersInternal,
+        body: JSON.stringify({}),
+      })
+      await response.text().catch(() => '')
+      if (response.ok)
+        await new Promise(resolve => setTimeout(resolve, 150 * round))
+    }
+  }
+  catch {
+    // Best-effort: tests that disable collection before the first plugin hit still read DB on cache miss.
+  }
+}
+
 export async function warmEdgeEndpoint(
   path: string,
   options: RequestInit = { method: 'POST', headers: { 'Content-Type': 'application/json', 'apisecret': API_SECRET }, body: '{}' },
