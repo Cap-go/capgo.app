@@ -9,6 +9,8 @@ const props = defineProps<{
   isLink?: boolean
   labelClass?: string
   readonly?: boolean
+  /** Force the stacked phone layout; use when a long value comes through the default slot. */
+  stacked?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -19,7 +21,7 @@ const emit = defineEmits<{
 const computedValue = reactive({ value: props.value })
 // Sentence-like values (descriptions) read badly right-aligned next to the label on
 // phones: drop them under the label, left-aligned, with any control kept at the end.
-const isLongText = computed(() => !props.editable && (props.value?.length ?? 0) > 40)
+const isLongText = computed(() => !!props.stacked || (!props.editable && (props.value?.length ?? 0) > 40))
 const rowInput = ref(props.value)
 watch(rowInput, useDebounceFn(() => {
   emit('update:value', rowInput.value)
@@ -35,7 +37,7 @@ watch(rowInput, useDebounceFn(() => {
       </dt>
     </dl>
     <dd
-      class="min-w-0 text-sm sm:col-span-2 sm:text-left"
+      class="min-w-0 text-sm break-words sm:col-span-2 sm:text-left"
       :class="{
         'basis-full text-left': isLongText,
         'flex-[1_1_12rem] text-right': !isLongText,
