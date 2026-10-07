@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions } from 'chart.js'
 import type { UpdateDeliveryScope, UpdateDeliveryStatsResponse } from '~/composables/useUpdateDeliveryStats'
+import type { PluginVersionRow } from '~/services/pluginVersionRecommendation'
 import { CategoryScale, Chart, Legend, LinearScale, LineElement, PointElement, Tooltip } from 'chart.js'
 import { computed, ref, watch } from 'vue'
 import { Line } from 'vue-chartjs'
@@ -8,9 +9,11 @@ import { useI18n } from 'vue-i18n'
 import IconTimer from '~icons/lucide/timer'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import Spinner from '~/components/Spinner.vue'
+import { useNativeObserveStats } from '~/composables/useNativeObserveStats'
 import { buildDemoUpdateDeliveryStats, useUpdateDeliveryStats } from '~/composables/useUpdateDeliveryStats'
 import { formatLocalDateShort } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
+import { deliveryTimingMinVersion, pluginMajorFromVersion, supportsDeliveryTiming } from '~/services/pluginVersionRecommendation'
 
 type PeriodDayOption = 1 | 3 | 7 | 30
 
@@ -52,9 +55,24 @@ const effectiveStats = computed<UpdateDeliveryStatsResponse | null>(() => {
 })
 
 const hasData = computed(() => (effectiveStats.value?.overview.samples ?? 0) > 0)
-const emptyHelpKey = computed(() => props.scope === 'platform'
-  ? 'update-delivery-no-data-help-platform'
-  : 'update-delivery-no-data-help')
+
+// App scope only: the plugin versions in the DB tell whether devices can report delivery timing at all.
+const pluginCheckAppId = computed(() => props.scope === 'app' && !props.forceDemo ? props.appId : '')
+const { stats: pluginStats, fetchStats: fetchPluginStats } = useNativeObserveStats<{ pluginVersions: PluginVersionRow[] }>(
+  pluginCheckAppId,
+  () => ({ view: 'plugins' }),
+  'delivery latency plugin versions',
+)
+const outdatedPlugin = computed(() => {
+  const versions = pluginStats.value?.pluginVersions ?? []
+  if (hasData.value || versions.length === 0 || versions.some(row => supportsDeliveryTiming(row.plugin_version)))
+    return null
+  const current = versions[0].plugin_version
+  return { current, required: deliveryTimingMinVersion(pluginMajorFromVersion(current)) }
+})
+const emptyHelp = computed(() => outdatedPlugin.value
+  ? t('update-delivery-no-data-outdated-plugin', outdatedPlugin.value)
+  : t('update-delivery-no-data-help'))
 const chartLabels = computed(() => (effectiveStats.value?.labels ?? []).map(label => formatLocalDateShort(label) || label))
 
 const chartData = computed<ChartData<'line'>>(() => ({
@@ -169,6 +187,17 @@ function selectPeriod(option: PeriodDayOption) {
     return
   localDays.value = option
 }
+
+let pluginCheckedFor = ''
+watch(
+  () => [pluginCheckAppId.value, stats.value, hasData.value] as const,
+  async ([appId, currentStats, withData]) => {
+    if (!appId || !currentStats || withData || pluginCheckedFor === appId)
+      return
+    pluginCheckedFor = appId
+    await fetchPluginStats()
+  },
+)
 
 watch(
   () => [props.scope, props.appId, props.orgId, props.forceDemo, days.value] as const,
@@ -292,13 +321,13 @@ watch(
           <Spinner size="w-5 h-5" />
         </div>
 
-        <div v-if="!hasData" class="flex flex-col items-center justify-center text-slate-500 dark:text-slate-400" :class="dense ? 'flex-1' : 'h-72'">
-          <IconTimer class="w-12 h-12 mb-3" />
-          <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">
+        <div v-if="!hasData" class="flex flex-col items-center justify-center overflow-hidden text-slate-500 dark:text-slate-400" :class="dense ? 'flex-1 min-h-0' : 'h-72'">
+          <IconTimer class="shrink-0" :class="dense ? 'w-8 h-8 mb-2' : 'w-12 h-12 mb-3'" />
+          <h3 class="font-semibold text-center text-slate-800 dark:text-slate-100" :class="dense ? 'text-base' : 'text-lg'">
             {{ t('update-delivery-no-data') }}
           </h3>
-          <p class="mt-1 text-sm text-center text-slate-500 dark:text-slate-400 max-w-lg">
-            {{ t(emptyHelpKey) }}
+          <p class="mt-1 text-sm text-center text-slate-500 dark:text-slate-400 max-w-lg line-clamp-3" :title="emptyHelp">
+            {{ emptyHelp }}
           </p>
         </div>
         <div v-else class="relative" :class="dense ? 'flex-1 min-h-0' : 'h-80'">
