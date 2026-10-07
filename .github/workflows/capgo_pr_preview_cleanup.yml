@@ -1,0 +1,60 @@
+name: Capgo PR preview cleanup
+
+# Separate from capgo_pr_preview.yml so its paths filter never skips cleanup:
+# every closed or merged PR deletes its pr-<number> channel and preview comment.
+
+# Same group as capgo_pr_preview.yml: closing the PR cancels an in-flight
+# deploy so it cannot recreate the channel after cleanup deletes it.
+concurrency:
+  group: capgo-pr-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions: {}
+
+env:
+  APP_ID: ee.forgr.capacitor_go
+  CHANNEL: pr-${{ github.event.pull_request.number }}
+  CAPGO_CLI: "@capgo/cli@8.73.0"
+
+jobs:
+  cleanup:
+    # Fork PRs never get a preview channel and have no access to CAPGO_TOKEN.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # The CLI reads capacitor.config.ts. Use the base commit: it always
+      # exists (unlike the merge ref of a conflicting PR) and runs no PR code.
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Delete the PR channel and its bundle
+        env:
+          CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}
+        run: bunx "$CAPGO_CLI" channel delete "$CHANNEL" "$APP_ID" --delete-bundle --success-if-not-found
+      - name: Delete the preview comment
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const marker = '<!-- capgo-pr-preview -->'
+            const { owner, repo } = context.repo
+            const issue_number = context.payload.pull_request.number
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 })
+            for (const comment of comments.filter(comment => comment.body?.includes(marker)))
+              await github.rest.issues.deleteComment({ owner, repo, comment_id: comment.id })

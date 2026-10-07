@@ -58,12 +58,12 @@ describe('builder checklist v4 database initialization', () => {
   })
 
   it.concurrent.each([
-    ['builder', 'A', true, 4],
-    ['builder', null, true, 2],
-    ['builder', 'B', true, 2],
-    ['ota', 'A', true, 2],
-    ['builder', 'A', false, 2],
-  ] as const)('assigns creator intent %s, branch %s, creator-owned org %s to version %s', async (intent, branch, ownOrg, expectedVersion) => {
+    ['builder', 'A', true, 'builder'],
+    ['builder', null, true, 'ota'],
+    ['builder', 'B', true, 'ota'],
+    ['ota', 'A', true, 'ota'],
+    ['builder', 'A', false, 'ota'],
+  ] as const)('assigns creator intent %s, branch %s, creator-owned org %s to the %s checklist', async (intent, branch, ownOrg, expectedPath) => {
     const email = `builder-v4-${randomUUID()}@example.com`
     const orgId = randomUUID()
     const appId = `com.test.builder.v4.${randomUUID()}`
@@ -97,11 +97,14 @@ describe('builder checklist v4 database initialization', () => {
       }).select('onboarding').single()
       expect(app.error).toBeNull()
       const setup = (app.data!.onboarding as any).setup
-      expect(setup.todo_list_version).toBe(expectedVersion)
+      expect(setup.todo_list_version).toBe(4)
       expect((app.data!.onboarding as any).created_by_user_id).toBe(userId)
-      if (expectedVersion === 2) {
+      if (expectedPath === 'ota') {
         expect(setup.steps?.builder).toBeUndefined()
         expect(setup.builder_todo_list_version).toBeUndefined()
+        expect(setup.ota_todo_list_version).toBe('1')
+        expect(setup.paths).toEqual(['ota'])
+        expect(Object.keys(setup.steps.ota)).toHaveLength(7)
       }
       else {
         expect(setup.builder_todo_list_version).toBe('1')
@@ -113,8 +116,10 @@ describe('builder checklist v4 database initialization', () => {
           expect(Object.values(setup.steps.builder[platform])).toEqual(expectedSteps.map(() => ({ status: 'pending' })))
         }
       }
-      expect(setup.ota_todo_list_version).toBeUndefined()
-      expect(setup.steps.ota).toBeUndefined()
+      if (expectedPath === 'builder') {
+        expect(setup.ota_todo_list_version).toBeUndefined()
+        expect(setup.steps.ota).toBeUndefined()
+      }
 
       expect((await admin.from('users').update({ onboarding: { intent: 'builder', abtests: {} } }).eq('id', userId)).error).toBeNull()
       expect((await admin.from('orgs').update({ onboarding: { intent: 'ota' } }).eq('id', orgId)).error).toBeNull()

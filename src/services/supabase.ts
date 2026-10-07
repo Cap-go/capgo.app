@@ -521,6 +521,8 @@ export interface CreditCostCalculationRequest {
   storage: number
   build_time?: number
   org_id?: string
+  // Plan-included usage per metric; overage is priced from this point of the tier ladder.
+  included?: Partial<Record<'mau' | 'bandwidth' | 'storage' | 'build_time', number>>
 }
 
 export interface CreditCostCalculationResponse {

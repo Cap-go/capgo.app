@@ -147,6 +147,19 @@ describe('private analytics route validation', () => {
     }))
   })
 
+  it('defaults /private/stats/insights to updater failures without native signals', async () => {
+    const response = await statsApp.request(postJson('http://local/insights', {
+      appId: 'com.example.app',
+      days: 7,
+    }))
+
+    expect(response.status).toBe(200)
+    const params = readStatsInsightsMock.mock.calls.at(-1)?.[1] as { actions: string[] }
+    expect(params.actions).toContain('download_fail')
+    expect(params.actions).toContain('update_fail')
+    expect(params.actions.some(action => action.startsWith('app_') || action.startsWith('webview_'))).toBe(false)
+  })
+
   it('rejects control characters in versionName on /private/stats/insights', async () => {
     const response = await statsApp.request(postJson('http://local/insights', {
       appId: 'com.example.app',

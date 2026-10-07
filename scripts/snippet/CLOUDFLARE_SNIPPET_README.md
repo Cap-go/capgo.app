@@ -276,3 +276,10 @@ For issues or questions:
 - Check [Cloudflare Snippets Documentation](https://developers.cloudflare.com/rules/snippets/)
 - Review [Cloudflare Workers KV Documentation](https://developers.cloudflare.com/kv/)
 - Open an issue in this repository
+
+## Minified build (32 KB limit)
+
+Cloudflare Snippets are limited to 32 KB. Deploy `cloudflare_workers/snippet/index.min.js`, not `index.js`.
+
+- `bun run build:snippet` regenerates `index.min.js` (header carries app version + source hash).
+- `bun run check:snippet` fails if `index.min.js` is stale or over 32 KB (enforced by `tests/cloudflare-snippet-build.unit.test.ts`).

@@ -118,12 +118,12 @@ const STRIPE_INFO_TRANSACTION_COLUMNS = [
   'canceled_at',
   'churn_reason',
   'customer_country',
+  'extra_mau',
   'is_good_plan',
   'last_stripe_event_at',
   'mau_exceeded',
   'paid_at',
   'past_due_at',
-  'plan_calculated_at',
   'plan_usage',
   'price_id',
   'product_id',
@@ -1134,17 +1134,24 @@ async function invoiceUpcoming(c: Context, org: Org, stripeEvent: Stripe.Invoice
   const invoice = stripeEvent.data.object as any
   let planName = null
   let planType = 'monthly'
-  if (stripeData.data.product_id) {
-    const { data: plan } = await supabaseAdmin(c)
+  // The first line can be the extra MAU item: match any line against the plans.
+  const lineProductIds = (invoice.lines?.data ?? [])
+    .map((line: any) => line.pricing?.price_details?.product)
+    .filter((productId: unknown): productId is string => typeof productId === 'string')
+  const productIds = [...new Set([stripeData.data.product_id, ...lineProductIds].filter((id): id is string => !!id))]
+  if (productIds.length) {
+    const { data: plans } = await supabaseAdmin(c)
       .from('plans')
-      .select('name, price_y_id, price_y_id_us')
-      .or(planProductIdOrFilter(stripeData.data.product_id))
-      .single()
+      .select('name, stripe_id, stripe_id_us, price_y_id, price_y_id_us')
+      .or(productIds.map(productId => planProductIdOrFilter(productId)).join(','))
+    const plan = plans?.[0]
     if (!plan) {
       throw simpleError('failed_to_get_plan', 'failed to get plan', { stripeData })
     }
     planName = plan.name
-    if (plan.price_y_id === stripeData.data.price_id || plan.price_y_id_us === stripeData.data.price_id) {
+    const linePriceIds = (invoice.lines?.data ?? []).map((line: any) => line.pricing?.price_details?.price)
+    const yearlyPriceIds = [plan.price_y_id, plan.price_y_id_us].filter((id): id is string => !!id)
+    if (yearlyPriceIds.includes(stripeData.data.price_id ?? '') || linePriceIds.some((id: unknown) => typeof id === 'string' && yearlyPriceIds.includes(id))) {
       planType = 'yearly'
     }
   }

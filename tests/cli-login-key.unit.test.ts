@@ -2,13 +2,18 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   aggregateCliKeyPolicy,
   canonicalizeCliBindings,
+  createMcpOAuthKey,
   getCliLoginDestination,
   isCliAiQuery,
   isCliLoginPath,
   isMatchingCliLoginEvent,
+  isMcpAuthorizePath,
   isValidCliLoginSession,
+  mcpOAuthKeyExpiresAt,
+  mcpOAuthKeyName,
   nextManagedCliKeyName,
   prepareCliLoginKey,
+  resolveCliKeyEligibility,
   roleForCliKey,
   shouldShowCliLoginGuidance,
 } from '../src/services/cliLogin'
@@ -17,17 +22,17 @@ const now = new Date('2026-08-15T12:00:00.000Z')
 
 function org(overrides: Record<string, unknown> = {}) {
   return {
-    gid: 'org-a',
-    name: 'Alpha',
-    role: 'org_admin',
-    is_invite: false,
-    enforcing_2fa: false,
+    'gid': 'org-a',
+    'name': 'Alpha',
+    'role': 'org_admin',
+    'is_invite': false,
+    'enforcing_2fa': false,
     '2fa_has_access': true,
-    password_policy_config: null,
-    password_has_access: true,
-    enforce_hashed_api_keys: false,
-    require_apikey_expiration: false,
-    max_apikey_expiration_days: null,
+    'password_policy_config': null,
+    'password_has_access': true,
+    'enforce_hashed_api_keys': false,
+    'require_apikey_expiration': false,
+    'max_apikey_expiration_days': null,
     ...overrides,
   }
 }
@@ -43,7 +48,7 @@ function dependencies(overrides: Record<string, unknown> = {}) {
   }
 }
 
-describe('CLI login key model', () => {
+describe('cLI login key model', () => {
   it.concurrent.each([
     ['owner', 'org_super_admin'],
     ['org_super_admin', 'org_super_admin'],
@@ -135,7 +140,7 @@ describe('CLI login key model', () => {
   it.concurrent('offers onboarding only for one accepted org and one pending app', () => {
     expect(getCliLoginDestination(1, [
       { app_id: 'com.demo.app', need_onboarding: true },
-    ])).toBe('/app/new?resume=com.demo.app')
+    ])).toBe('/app/com.demo.app/getting-started')
     expect(getCliLoginDestination(2, [
       { app_id: 'com.demo.app', need_onboarding: true },
     ])).toBe('/dashboard')
@@ -154,7 +159,7 @@ describe('prepareCliLoginKey', () => {
       org(),
       org({ gid: 'member', name: 'Member', role: 'org_member' }),
       org({ gid: 'invite', name: 'Invite', is_invite: true }),
-      org({ gid: 'security', name: 'Security', enforcing_2fa: true, '2fa_has_access': false }),
+      org({ 'gid': 'security', 'name': 'Security', 'enforcing_2fa': true, '2fa_has_access': false }),
       org({ gid: 'blocked', name: 'Blocked' }),
     ], io, now)
 
@@ -304,5 +309,54 @@ describe('prepareCliLoginKey', () => {
     })
     expect(io.listMetadata).not.toHaveBeenCalled()
     expect(io.createKey).not.toHaveBeenCalled()
+  })
+})
+
+describe('mCP OAuth key model', () => {
+  it.concurrent('only offers organizations that pass the CLI key eligibility rules', async () => {
+    const result = await resolveCliKeyEligibility([
+      org(),
+      org({ gid: 'org-b', name: 'Beta', role: 'org_member' }),
+      org({ gid: 'org-c', name: 'Gamma', is_invite: true }),
+    ], dependencies())
+    expect(result.eligible.map(organization => organization.gid)).toEqual(['org-a'])
+    expect(result.skippedOrganizations).toEqual([{ id: 'org-b', name: 'Beta' }, { id: 'org-c', name: 'Gamma' }])
+  })
+
+  it.concurrent('mints a dedicated key per client bound to the selected organizations and policy', async () => {
+    const deps = dependencies()
+    const key = await createMcpOAuthKey([
+      org(),
+      org({ gid: 'org-b', role: 'owner', enforce_hashed_api_keys: true, require_apikey_expiration: true, max_apikey_expiration_days: 30 }),
+    ], deps, 'Lovable', now)
+    expect(key).toBe('new-secret')
+    expect(deps.createKey).toHaveBeenCalledWith({
+      name: 'MCP · Lovable',
+      hashed: true,
+      expires_at: aggregateCliKeyPolicy([org({ require_apikey_expiration: true, max_apikey_expiration_days: 30 })], now).expiresAt,
+      bindings: [
+        { role_name: 'org_admin', scope_type: 'org', org_id: 'org-a' },
+        { role_name: 'org_super_admin', scope_type: 'org', org_id: 'org-b' },
+      ],
+      global_permissions: [],
+    })
+  })
+
+  it.concurrent('always gives OAuth keys a lifetime of at most 90 days', () => {
+    expect(mcpOAuthKeyExpiresAt([org()], now)).toBe(new Date(now.getTime() + 90 * 86_400_000 - 60_000).toISOString())
+    expect(mcpOAuthKeyExpiresAt([org({ require_apikey_expiration: true, max_apikey_expiration_days: 7 })], now))
+      .toBe(new Date(now.getTime() + 7 * 86_400_000 - 60_000).toISOString())
+    expect(mcpOAuthKeyExpiresAt([org({ require_apikey_expiration: true, max_apikey_expiration_days: 365 })], now))
+      .toBe(new Date(now.getTime() + 90 * 86_400_000 - 60_000).toISOString())
+  })
+
+  it.concurrent('refuses to mint a key without organizations', async () => {
+    await expect(createMcpOAuthKey([], dependencies(), 'Lovable', now)).rejects.toThrow()
+  })
+
+  it.concurrent('names keys and recognizes the consent route', () => {
+    expect(mcpOAuthKeyName('  ')).toBe('MCP · client')
+    expect(isMcpAuthorizePath('/oauth/authorize/')).toBe(true)
+    expect(isMcpAuthorizePath('/oauth')).toBe(false)
   })
 })

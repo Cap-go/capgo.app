@@ -1,35 +1,12 @@
 <script setup lang="ts">
-import type { Tab } from './comp_def'
-import { Capacitor } from '@capacitor/core'
 import { onClickOutside } from '@vueuse/core'
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRoute, useRouter } from 'vue-router'
-import { toast } from 'vue-sonner'
-import IconDoc from '~icons/gg/loadbar-doc'
-import IconChart from '~icons/heroicons/chart-bar'
-import IconShield from '~icons/heroicons/shield-check'
-import IconDiscord from '~icons/ic/round-discord'
-import IconBoxes from '~icons/lucide/boxes'
-import IconFlask from '~icons/lucide/flask-conical'
-import IconGift from '~icons/lucide/gift'
-import IconHeadset from '~icons/lucide/headset'
-import IconScanQrCode from '~icons/lucide/scan-qr-code'
-import IconVenetianMask from '~icons/lucide/venetian-mask'
-import IconApiKey from '~icons/mdi/shield-key'
-import IconAppStore from '~icons/simple-icons/appstore'
-import { logAsUser } from '~/services/logAs'
-import { isSpoofed, unspoofUser } from '~/services/supabase'
-import { useDialogV2Store } from '~/stores/dialogv2'
+import { isSpoofTab, useAppNavigation } from '~/composables/useAppNavigation'
 import { useMainStore } from '~/stores/main'
-import {
-  allowOnboardingDashboardExploration,
-  getOnboardingResumeAppId,
-  ONBOARDING_DASHBOARD_EXPLORED_EVENT,
-  shouldConfirmOnboardingDashboardExploration,
-} from '~/utils/onboardingRedirect'
 import DropdownProfile from '../components/dashboard/DropdownProfile.vue'
 import GettingStartedNav from '../components/dashboard/GettingStartedNav.vue'
+import LogAsDialogField from './LogAsDialogField.vue'
 
 const props = defineProps<{
   sidebarOpen: boolean
@@ -39,267 +16,24 @@ const props = defineProps<{
 const emit = defineEmits(['closeSidebar'])
 const main = useMainStore()
 const isRail = computed(() => !!props.sidebarCollapsed)
-const dialogStore = useDialogV2Store()
-const router = useRouter()
 const { t } = useI18n()
 const sidebar = useTemplateRef('sidebar')
-const route = useRoute()
-const isNativePlatform = Capacitor.isNativePlatform()
-const spoofed = ref(isSpoofed())
-const spoofLoading = ref(false)
-const logAsInput = ref('')
+const {
+  tabs,
+  openTab,
+  isTabActive,
+  tabLabel,
+  spoofLoading,
+} = useAppNavigation({ onNavigate: () => emit('closeSidebar') })
 
 onClickOutside(sidebar, () => emit('closeSidebar'))
 
-function isSpoofTab(tab: Tab) {
-  return tab.key === '#log-as' || tab.key === '#unspoof'
-}
-
-async function openLogAsDialog() {
-  let identifier = ''
-  logAsInput.value = ''
-
-  dialogStore.openDialog({
-    title: t('log-as'),
-    buttons: [
-      {
-        text: t('button-cancel'),
-        role: 'cancel',
-      },
-      {
-        text: t('log-as'),
-        handler: () => {
-          identifier = logAsInput.value
-        },
-      },
-    ],
-  })
-  await dialogStore.onDialogDismiss()
-
-  if (identifier) {
-    spoofLoading.value = true
-    try {
-      await logAsUser(identifier, router)
-    }
-    catch {
-      // logAsUser already shows an error toast
-    }
-    finally {
-      spoofLoading.value = false
-    }
-  }
-}
-
-function submitLogAsDialog() {
-  const logAsButton = dialogStore.dialogOptions?.buttons?.find(button => button.text === t('log-as') && button.role !== 'cancel')
-  if (logAsButton)
-    void dialogStore.closeDialog(logAsButton)
-}
-
-async function resetSpoofedUser() {
-  spoofLoading.value = true
-  try {
-    const restored = await unspoofUser()
-    spoofed.value = isSpoofed()
-
-    if (!restored) {
-      if (!spoofed.value)
-        toast.error(t('spoof-session-cleared'))
-      return
-    }
-
-    toast.success(t('spoof-stopped-reload'))
-    setTimeout(() => {
-      router.replace('/dashboard').then(() => {
-        globalThis.location.reload()
-      })
-    }, 1000)
-  }
-  finally {
-    spoofLoading.value = false
-  }
-}
-
-function normalizeSidebarPath(path: string) {
-  let normalizedPath = path
-
-  while (normalizedPath.length > 1 && normalizedPath.endsWith('/'))
-    normalizedPath = normalizedPath.slice(0, -1)
-
-  return normalizedPath || '/'
-}
-
-function isTabActive(tab: string) {
-  if (tab === '#')
-    return false
-
-  const currentPath = normalizeSidebarPath(route.path)
-  const activePaths = tab === '/apps' ? ['/apps', '/app'] : [tab]
-
-  return activePaths.some((activePath) => {
-    const tabPath = normalizeSidebarPath(activePath)
-
-    return currentPath === tabPath || currentPath.startsWith(`${tabPath}/`)
-  })
-}
-async function openTab(tab: Tab) {
-  if (isSpoofTab(tab) && spoofLoading.value)
-    return
-
-  const onboardingUserId = main.user?.id ?? main.auth?.id
-  const resumeQueryAppId = typeof route.query.resume === 'string' ? route.query.resume : null
-  const isPendingOnboardingResume = route.path === '/app/new'
-    && !!resumeQueryAppId
-  const onboardingResumeAppId = isPendingOnboardingResume
-    ? resumeQueryAppId
-    : getOnboardingResumeAppId(onboardingUserId)
-  const requiresOnboardingExplorationConfirmation = shouldConfirmOnboardingDashboardExploration({
-    destination: tab.key,
-    resumeAppId: onboardingResumeAppId,
-    userId: onboardingUserId,
-  })
-
-  if (tab.key === '/apikeys' && isPendingOnboardingResume)
-    allowOnboardingDashboardExploration(onboardingUserId, onboardingResumeAppId)
-
-  if (requiresOnboardingExplorationConfirmation) {
-    emit('closeSidebar')
-    dialogStore.openDialog({
-      title: t('app-onboarding-explore-dashboard-confirm-title'),
-      description: t('app-onboarding-explore-dashboard-confirm-description'),
-      buttons: [
-        { text: t('app-onboarding-continue-setup'), role: 'secondary' },
-        { text: t('app-onboarding-explore-dashboard'), role: 'primary' },
-      ],
-    })
-    const wasCanceled = await dialogStore.onDialogDismiss()
-    if (wasCanceled)
-      return
-    if (dialogStore.lastButtonRole === 'secondary') {
-      return router.push({ path: '/app/new', query: { resume: onboardingResumeAppId } })
-    }
-    if (dialogStore.lastButtonRole !== 'primary')
-      return
-
-    window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
-    allowOnboardingDashboardExploration(onboardingUserId, onboardingResumeAppId)
-  }
-
-  if (tab.onClick)
-    tab.onClick(tab.key)
-  else
-    router.push(tab.key)
-  emit('closeSidebar')
-}
-
-// Computed tabs list that includes admin link if user is admin
-const tabs = computed<Tab[]>(() => {
-  const baseTabs: Tab[] = [
-    {
-      label: 'dashboard',
-      icon: IconChart,
-      key: '/dashboard',
-    },
-    {
-      label: 'apps',
-      icon: IconAppStore,
-      key: '/apps',
-    },
-    ...(isNativePlatform
-      ? [{
-          label: 'test-preview',
-          icon: IconScanQrCode,
-          key: '/scan',
-        }]
-      : []),
-    {
-      label: 'api-keys',
-      icon: IconApiKey,
-      key: '/apikeys',
-    },
-    {
-      label: 'documentation',
-      icon: IconDoc,
-      key: '#',
-      onClick: () => window.open('https://capgo.app/docs', '_blank', 'noopener,noreferrer'),
-      redirect: true,
-    },
-    {
-      label: 'discord',
-      icon: IconDiscord,
-      key: '#',
-      onClick: () => window.open('https://discord.capgo.app', '_blank', 'noopener,noreferrer'),
-      redirect: true,
-    },
-    {
-      label: 'support',
-      icon: IconHeadset,
-      key: '#support',
-      onClick: () => window.open('https://support.capgo.app', '_blank', 'noopener,noreferrer'),
-      redirect: true,
-    },
-    {
-      label: 'refer-and-earn',
-      icon: IconGift,
-      key: '#refer-and-earn',
-      onClick: () => window.open('https://capgo.affonso.io', '_blank', 'noopener,noreferrer'),
-      redirect: true,
-    },
-    ...(isNativePlatform
-      ? [
-          {
-            label: 'module-heading',
-            icon: IconBoxes,
-            key: '/app/modules',
-          },
-          {
-            label: 'tests',
-            icon: IconFlask,
-            key: '/app/modules_test',
-          },
-        ]
-      : []),
-  ]
-
-  // Add admin dashboard link if user is admin
-  if (main.isAdmin) {
-    baseTabs.splice(2, 0, {
-      label: 'admin-dashboard',
-      icon: IconShield,
-      key: '/admin/dashboard',
-    })
-  }
-
-  if (main.isAdmin && !spoofed.value) {
-    baseTabs.push({
-      label: 'log-as',
-      icon: IconVenetianMask,
-      key: '#log-as',
-      onClick: () => {
-        void openLogAsDialog()
-      },
-    })
-  }
-
-  if (spoofed.value) {
-    baseTabs.push({
-      label: 'reset-spoofed-user',
-      icon: IconVenetianMask,
-      key: '#unspoof',
-      onClick: () => {
-        void resetSpoofedUser()
-      },
-    })
-  }
-
-  return baseTabs
-})
-
-function tabLabel(tab: Tab) {
-  if (tab.key === '/app/modules_test')
-    return `${t('module-heading')} ${t('tests')}`
-  return t(tab.label)
-}
+// Group destinations the way capgo.app groups products: where you work first,
+// then help and community links that open outside the console.
+const navGroups = computed(() => [
+  { key: 'workspace', label: 'section-group-workspace', tabs: tabs.value.filter(tab => !tab.redirect) },
+  { key: 'help', label: 'sidebar-group-help', tabs: tabs.value.filter(tab => tab.redirect) },
+].filter(group => group.tabs.length))
 </script>
 
 <template>
@@ -334,16 +68,19 @@ function tabLabel(tab: Tab) {
         <!-- Sidebar header -->
         <div class="flex border-b shrink-0 border-slate-800 lg:border-slate-700 py-4">
           <router-link
-            class="flex items-center rounded-lg cursor-pointer focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
+            class="group flex items-center rounded-lg cursor-pointer focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
             to="/apps"
             aria-label="Capgo - Go to dashboard"
           >
             <span class="flex w-12 h-11 shrink-0 items-center justify-center">
-              <img src="/capgo.webp" alt="Capgo logo" class="w-8 h-8 shrink-0">
+              <img src="/capgo.webp" alt="Capgo logo" class="w-8 h-8 shrink-0 transition-transform duration-300 ease-[cubic-bezier(0.3,1.6,0.5,1)] group-hover:rotate-90 group-hover:scale-105 motion-reduce:transition-none">
             </span>
-            <span class="text-xl font-semibold whitespace-nowrap font-prompt text-slate-200 hover:text-white lg:text-slate-200 lg:hover:text-white">
-              Capgo
-            </span>
+            <!-- The rail is 48px wide: hide the wordmark so its first letter does not peek past the logo. -->
+            <CapgoWordtype
+              class="-ml-1 h-6 w-auto shrink-0 text-slate-200 transition-[opacity,translate,color] duration-300 ease-in-out group-hover:text-white motion-reduce:transition-none"
+              :class="isRail ? 'pointer-events-none -translate-x-3 opacity-0' : 'translate-x-0 opacity-100'"
+              :aria-hidden="isRail"
+            />
           </router-link>
         </div>
 
@@ -354,18 +91,23 @@ function tabLabel(tab: Tab) {
           <dropdown-organization v-if="main.user" :compact="isRail" />
         </div>
 
-        <!-- Navigation -->
-        <div class="flex-1 space-y-4 overflow-y-auto py-2">
-          <div>
-            <h3 class="pl-12 pr-3 mb-3 text-xs font-semibold uppercase whitespace-nowrap text-slate-500 lg:mb-4 lg:tracking-wider lg:text-slate-500">
-              {{ t('pages') }}
+        <!-- Navigation: product areas first, help and community links after -->
+        <nav class="flex-1 space-y-5 overflow-y-auto py-2" :aria-label="t('pages')">
+          <div v-for="group in navGroups" :key="group.key" :data-test="`sidebar-group-${group.key}`">
+            <h3
+              class="pl-12 pr-3 mb-2 font-mono text-[11px] font-semibold tracking-widest uppercase whitespace-nowrap text-slate-500 transition-opacity duration-300"
+              :class="isRail ? 'opacity-0' : 'opacity-100'"
+            >
+              {{ t(group.label) }}
             </h3>
-            <ul class="space-y-1 lg:space-y-2">
-              <li v-for="tab, i in tabs" :key="i">
+            <ul class="space-y-1">
+              <li v-for="tab, i in group.tabs" :key="i">
                 <button
                   type="button"
-                  class="d-btn d-btn-ghost flex justify-start items-center w-full h-auto min-h-11 p-0 rounded-md border-none shadow-none transition-colors duration-150 cursor-pointer lg:rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-200 lg:text-slate-200 lg:hover:bg-slate-700/50 hover:bg-slate-700/50 focus:ring-offset-slate-800"
+                  class="relative d-btn d-btn-ghost flex justify-start items-center w-full h-auto p-0 rounded-md border-none shadow-none transition-colors duration-150 cursor-pointer lg:rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500 text-slate-200 lg:text-slate-200 lg:hover:bg-slate-700/50 hover:bg-slate-700/50"
                   :class="{
+                    'min-h-11': !tab.redirect,
+                    'min-h-10': tab.redirect,
                     'hover:bg-slate-700/50 lg:hover:bg-slate-700/50': !isTabActive(tab.key),
                     'bg-slate-700 text-white lg:bg-slate-700 lg:text-white': isTabActive(tab.key),
                     'cursor-default': isTabActive(tab.key),
@@ -377,15 +119,20 @@ function tabLabel(tab: Tab) {
                   :aria-current="isTabActive(tab.key) ? 'page' : undefined"
                   @click="openTab(tab)"
                 >
-                  <span class="flex w-12 h-11 shrink-0 items-center justify-center">
+                  <span
+                    v-if="isTabActive(tab.key)"
+                    class="absolute left-1 w-1 h-5 -translate-y-1/2 rounded-full top-1/2 bg-azure-500"
+                    aria-hidden="true"
+                  />
+                  <span class="flex w-12 h-10 shrink-0 items-center justify-center">
                     <Spinner v-if="isSpoofTab(tab) && spoofLoading" size="w-5 h-5" />
                     <component :is="tab.icon" v-else class="w-5 h-5 transition-colors duration-150 shrink-0" :class="{ 'text-blue-500 lg:text-blue-500': isTabActive(tab.key), 'text-slate-400 group-hover:text-slate-300 lg:text-slate-400 lg:group-hover:text-slate-300': !isTabActive(tab.key) }" />
                   </span>
                   <span
-                    class="flex items-center pr-3 text-sm font-medium capitalize whitespace-nowrap"
+                    class="flex items-center pr-3 font-medium capitalize whitespace-nowrap"
                     :class="[
                       isTabActive(tab.key) ? 'text-blue-500 lg:text-blue-500' : 'text-slate-400 group-hover:text-slate-300 lg:text-slate-400 lg:group-hover:text-slate-300',
-                      tab.redirect ? 'underline' : '',
+                      tab.redirect ? 'text-[13px]' : 'text-sm',
                     ]"
                   >
                     {{ isSpoofTab(tab) && spoofLoading ? t('loading') : tabLabel(tab) }}
@@ -398,7 +145,7 @@ function tabLabel(tab: Tab) {
               </li>
             </ul>
           </div>
-        </div>
+        </nav>
 
         <!-- User menu -->
         <div class="mt-auto shrink-0 pt-2 lg:border-t lg:border-slate-700 lg:mt-0">
@@ -408,19 +155,6 @@ function tabLabel(tab: Tab) {
         </div>
       </div>
     </div>
-    <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('log-as')" to="#dialog-v2-content" defer>
-      <div class="w-full">
-        <label for="log-as-input" class="sr-only">{{ t('user-email-or-org-id') }}</label>
-        <input
-          id="log-as-input"
-          v-model="logAsInput"
-          type="text"
-          :placeholder="t('user-email-or-org-id')"
-          :aria-label="t('user-email-or-org-id')"
-          class="p-3 w-full rounded-lg border border-gray-300 dark:text-white dark:bg-gray-800 dark:border-gray-600"
-          @keydown.enter.prevent="submitLogAsDialog"
-        >
-      </div>
-    </Teleport>
+    <LogAsDialogField />
   </div>
 </template>

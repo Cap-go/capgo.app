@@ -13,6 +13,7 @@ import ChevronDownIcon from '~icons/heroicons/chevron-down'
 import CloudIcon from '~icons/heroicons/cloud'
 import ScaleIcon from '~icons/heroicons/scale'
 import UserGroupIcon from '~icons/heroicons/user-group'
+import CreditsOnlyTip from '~/components/CreditsOnlyTip.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
 import { creditPricingMetricOrder, formatCreditPricingPrice, formatCreditPricingTierLabel } from '~/services/creditPricing'
 import { formatLocalDate } from '~/services/date'
@@ -23,6 +24,7 @@ import { completeCreditTopUp, getCreditAutoTopUp, openPortal, saveCreditAutoTopU
 import { getCreditPricingSteps, useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
+import { isCreditsOnlyOrg } from '~/utils/organizationBilling'
 
 interface UsageCreditLedgerRow {
   id: number
@@ -64,6 +66,7 @@ const { t } = useI18n()
 const supabase = useSupabase()
 const organizationStore = useOrganizationStore()
 const { currentOrganization } = storeToRefs(organizationStore)
+const isCreditsOnly = computed(() => isCreditsOnlyOrg(currentOrganization.value))
 const displayStore = useDisplayStore()
 const isMobile = isNativeAppStoreContext()
 
@@ -108,6 +111,9 @@ const autoTopUpLoadFailed = ref(false)
 let autoTopUpPersistQueue = Promise.resolve()
 let autoTopUpLoadSeq = 0
 let confirmedAutoTopUpThreshold = MIN_AUTO_TOP_UP
+const autoTopUpMonthlyLimitInput = ref('0')
+const autoTopUpMonthlyTotal = ref<number | null>(null)
+const confirmedAutoTopUpMonthlyLimit = ref(0)
 const isAutoTopUpControlsDisabled = computed(() => isLoadingAutoTopUp.value || isSavingAutoTopUp.value || autoTopUpLoadFailed.value)
 const autoTopUpThreshold = computed(() => {
   const parsed = Number.parseInt(autoTopUpThresholdInput.value, 10)
@@ -116,6 +122,24 @@ const autoTopUpThreshold = computed(() => {
   return parsed
 })
 const isAutoTopUpThresholdValid = computed(() => autoTopUpThreshold.value !== null && autoTopUpThreshold.value >= MIN_AUTO_TOP_UP)
+const autoTopUpMonthlyLimit = computed(() => {
+  const parsed = Number.parseInt(autoTopUpMonthlyLimitInput.value, 10)
+  if (Number.isNaN(parsed))
+    return null
+  return parsed
+})
+// 0 means no limit; otherwise the limit must allow at least one top-up.
+const isAutoTopUpMonthlyLimitValid = computed(() => {
+  const limit = autoTopUpMonthlyLimit.value
+  if (limit === null || limit < 0)
+    return false
+  return limit === 0 || (autoTopUpThreshold.value !== null && limit >= autoTopUpThreshold.value)
+})
+const isAutoTopUpMonthlyLimitReached = computed(() => {
+  const limit = confirmedAutoTopUpMonthlyLimit.value
+  const total = autoTopUpMonthlyTotal.value
+  return !isLoadingAutoTopUp.value && autoTopUpEnabled.value && limit > 0 && total !== null && total + confirmedAutoTopUpThreshold > limit
+})
 
 const creditTotal = computed(() => Number(currentOrganization.value?.credit_total ?? 0))
 const creditAvailable = computed(() => Number(currentOrganization.value?.credit_available ?? 0))
@@ -417,16 +441,20 @@ async function loadPricingSteps() {
   pricingSteps.value = await getCreditPricingSteps(currentOrganization.value?.gid)
 }
 
-function applyAutoTopUpSettings(settings: { enabled?: boolean | null, threshold?: number | null, hasPaymentMethod?: boolean | null }) {
+function applyAutoTopUpSettings(settings: { enabled?: boolean | null, threshold?: number | null, hasPaymentMethod?: boolean | null, monthlyLimit?: number | null, monthlyTotal?: number | null }) {
   const threshold = Math.max(MIN_AUTO_TOP_UP, Math.floor(Number(settings?.threshold ?? MIN_AUTO_TOP_UP)))
+  const monthlyLimit = Math.max(0, Math.floor(Number(settings?.monthlyLimit ?? 0)))
   confirmedAutoTopUpThreshold = threshold
+  confirmedAutoTopUpMonthlyLimit.value = monthlyLimit
+  autoTopUpMonthlyLimitInput.value = String(monthlyLimit)
+  autoTopUpMonthlyTotal.value = settings?.monthlyTotal == null ? null : Number(settings.monthlyTotal)
   autoTopUpEnabled.value = Boolean(settings?.enabled)
   autoTopUpThresholdInput.value = String(threshold)
   autoTopUpHasCard.value = Boolean(settings?.hasPaymentMethod)
 }
 
-function resolveAutoTopUpThresholdForSave(enabled: boolean): number | null {
-  if (enabled) {
+function resolveAutoTopUpThresholdForSave(useInput: boolean): number | null {
+  if (useInput) {
     if (!isAutoTopUpThresholdValid.value || autoTopUpThreshold.value === null)
       return null
     return autoTopUpThreshold.value
@@ -434,8 +462,19 @@ function resolveAutoTopUpThresholdForSave(enabled: boolean): number | null {
   return confirmedAutoTopUpThreshold
 }
 
+function resolveAutoTopUpMonthlyLimitForSave(useInput: boolean): number | null {
+  if (useInput) {
+    if (!isAutoTopUpMonthlyLimitValid.value || autoTopUpMonthlyLimit.value === null)
+      return null
+    return autoTopUpMonthlyLimit.value
+  }
+  return confirmedAutoTopUpMonthlyLimit.value
+}
+
 async function loadAutoTopUpSettings() {
   const orgId = currentOrganization.value?.gid
+  // Never show the previous organization's monthly usage while the new one loads.
+  autoTopUpMonthlyTotal.value = null
   if (!orgId) {
     autoTopUpEnabled.value = false
     autoTopUpHasCard.value = false
@@ -461,6 +500,9 @@ async function loadAutoTopUpSettings() {
       autoTopUpHasCard.value = false
       autoTopUpThresholdInput.value = String(MIN_AUTO_TOP_UP)
       confirmedAutoTopUpThreshold = MIN_AUTO_TOP_UP
+      autoTopUpMonthlyLimitInput.value = '0'
+      confirmedAutoTopUpMonthlyLimit.value = 0
+      autoTopUpMonthlyTotal.value = null
     }
   }
   finally {
@@ -469,17 +511,17 @@ async function loadAutoTopUpSettings() {
   }
 }
 
-async function persistAutoTopUpSettings(enabled: boolean, revertEnabledTo: boolean = !enabled) {
+async function persistAutoTopUpSettings(enabled: boolean, revertEnabledTo: boolean = !enabled, useInputs: boolean = enabled) {
   const orgId = currentOrganization.value?.gid
   if (!orgId)
     return
-  const run = () => persistAutoTopUpSettingsNow(orgId, enabled, revertEnabledTo)
+  const run = () => persistAutoTopUpSettingsNow(orgId, enabled, revertEnabledTo, useInputs)
   const pending = autoTopUpPersistQueue.then(run, run)
   autoTopUpPersistQueue = pending.then(() => undefined, () => undefined)
   await pending
 }
 
-async function persistAutoTopUpSettingsNow(orgId: string, enabled: boolean, revertEnabledTo: boolean) {
+async function persistAutoTopUpSettingsNow(orgId: string, enabled: boolean, revertEnabledTo: boolean, useInputs: boolean) {
   if (currentOrganization.value?.gid !== orgId)
     return
   if (!(await ensureUpdateBillingAccess())) {
@@ -489,9 +531,15 @@ async function persistAutoTopUpSettingsNow(orgId: string, enabled: boolean, reve
   }
   if (currentOrganization.value?.gid !== orgId)
     return
-  const thresholdToSave = resolveAutoTopUpThresholdForSave(enabled)
+  const thresholdToSave = resolveAutoTopUpThresholdForSave(useInputs)
   if (thresholdToSave === null) {
     toast.error(t('credits-auto-top-up-threshold-invalid'))
+    autoTopUpEnabled.value = revertEnabledTo
+    return
+  }
+  const monthlyLimitToSave = resolveAutoTopUpMonthlyLimitForSave(useInputs)
+  if (monthlyLimitToSave === null) {
+    toast.error(t('credits-auto-top-up-monthly-limit-invalid'))
     autoTopUpEnabled.value = revertEnabledTo
     return
   }
@@ -504,10 +552,10 @@ async function persistAutoTopUpSettingsNow(orgId: string, enabled: boolean, reve
   autoTopUpLoadSeq += 1
   const saveSeq = autoTopUpLoadSeq
   try {
-    const settings = await saveCreditAutoTopUp(orgId, enabled, thresholdToSave)
+    const settings = await saveCreditAutoTopUp(orgId, enabled, thresholdToSave, monthlyLimitToSave)
     if (currentOrganization.value?.gid !== orgId || saveSeq !== autoTopUpLoadSeq)
       return
-    applyAutoTopUpSettings(settings ?? { enabled, threshold: thresholdToSave, hasPaymentMethod: autoTopUpHasCard.value })
+    applyAutoTopUpSettings(settings ?? { enabled, threshold: thresholdToSave, hasPaymentMethod: autoTopUpHasCard.value, monthlyLimit: monthlyLimitToSave, monthlyTotal: autoTopUpMonthlyTotal.value })
     toast.success(t('credits-auto-top-up-saved'))
   }
   catch (error) {
@@ -527,10 +575,27 @@ async function onAutoTopUpToggle(event: Event) {
   await persistAutoTopUpSettings(checked)
 }
 
-async function onAutoTopUpThresholdBlur() {
-  if (!autoTopUpEnabled.value)
+async function onAutoTopUpFieldBlur() {
+  if (autoTopUpEnabled.value) {
+    await persistAutoTopUpSettings(true, true)
     return
-  await persistAutoTopUpSettings(true, true)
+  }
+  // While disabled, save edited values so they survive a reload. Never save over an in-flight load or save.
+  if (isAutoTopUpControlsDisabled.value)
+    return
+  const unchanged = autoTopUpThreshold.value === confirmedAutoTopUpThreshold
+    && autoTopUpMonthlyLimit.value === confirmedAutoTopUpMonthlyLimit.value
+  if (unchanged)
+    return
+  if (!isAutoTopUpThresholdValid.value) {
+    toast.error(t('credits-auto-top-up-threshold-invalid'))
+    return
+  }
+  if (!isAutoTopUpMonthlyLimitValid.value) {
+    toast.error(t('credits-auto-top-up-monthly-limit-invalid'))
+    return
+  }
+  await persistAutoTopUpSettings(false, false, true)
 }
 
 async function openBillingPortalForCard() {
@@ -733,7 +798,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
       :class="{ 'blur-sm pointer-events-none select-none': showAdminModal && adminModalPermission === 'org.update_billing' }"
     >
       <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
-        <div class="flex h-full flex-col justify-between rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div class="flex h-full flex-col justify-between rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-slate-800/60">
           <div class="flex items-start justify-between gap-4">
             <div>
               <div class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
@@ -773,7 +838,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
           </div>
         </div>
 
-        <div class="flex h-full flex-col justify-between rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div class="flex h-full flex-col justify-between rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-slate-800/60">
           <div>
             <div class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
               <BanknotesIcon class="h-4 w-4" />
@@ -806,6 +871,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             <p class="mt-2 max-w-xl text-sm opacity-90 font-medium text-gray-900 dark:text-white">
               {{ t('credits-cta-description') }}
             </p>
+            <CreditsOnlyTip v-if="!isCreditsOnly" class="mt-4" />
           </div>
           <form class="flex w-full flex-col p-3 sm:flex-row sm:items-center sm:justify-between" @submit.prevent="handleBuyCredits">
             <div class="flex w-full flex-col gap-3 sm:max-w-md">
@@ -871,7 +937,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
         </div>
       </div>
 
-      <div class="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800" data-test="credits-auto-top-up">
+      <div class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-slate-800/60" data-test="credits-auto-top-up">
         <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div class="max-w-xl">
             <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
@@ -926,7 +992,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             validation-visibility="live"
             outer-class="w-full !mb-0"
             :disabled="isAutoTopUpControlsDisabled"
-            @blur="onAutoTopUpThresholdBlur"
+            @blur="onAutoTopUpFieldBlur"
           >
             <template #prefix>
               $
@@ -934,6 +1000,50 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
           </FormKit>
           <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
             {{ t('credits-auto-top-up-min') }}
+          </p>
+          <FormKit
+            id="credits-auto-top-up-monthly-limit"
+            v-model="autoTopUpMonthlyLimitInput"
+            type="number"
+            name="creditsAutoTopUpMonthlyLimit"
+            data-test="credits-auto-top-up-monthly-limit"
+            inputmode="numeric"
+            min="0"
+            step="1"
+            :label="t('credits-auto-top-up-monthly-limit-label')"
+            validation="required|min:0"
+            validation-visibility="live"
+            outer-class="w-full !mb-0 mt-4"
+            :disabled="isAutoTopUpControlsDisabled"
+            @blur="onAutoTopUpFieldBlur"
+          >
+            <template #prefix>
+              $
+            </template>
+          </FormKit>
+          <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('credits-auto-top-up-monthly-limit-help') }}
+          </p>
+          <p
+            v-if="!isLoadingAutoTopUp && confirmedAutoTopUpMonthlyLimit > 0 && autoTopUpMonthlyTotal !== null"
+            class="mt-1 text-xs text-gray-500 dark:text-gray-400"
+            data-test="credits-auto-top-up-monthly-usage"
+          >
+            {{ t('credits-auto-top-up-monthly-usage', { used: formatCurrency(autoTopUpMonthlyTotal ?? 0), limit: formatCurrency(confirmedAutoTopUpMonthlyLimit) }) }}
+          </p>
+          <p
+            v-if="!isLoadingAutoTopUp && !autoTopUpLoadFailed && confirmedAutoTopUpMonthlyLimit > 0 && autoTopUpMonthlyTotal === null"
+            class="mt-1 text-xs text-gray-500 dark:text-gray-400"
+            data-test="credits-auto-top-up-monthly-usage-unavailable"
+          >
+            {{ t('credits-auto-top-up-monthly-usage-unavailable') }}
+          </p>
+          <p
+            v-if="isAutoTopUpMonthlyLimitReached"
+            class="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300"
+            data-test="credits-auto-top-up-monthly-limit-reached"
+          >
+            {{ t('credits-auto-top-up-monthly-limit-reached') }}
           </p>
           <button
             v-if="!autoTopUpHasCard"
@@ -946,7 +1056,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
         </div>
       </div>
 
-      <details id="credit-pricing" class="group rounded-3xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800" :open="isCreditPricingOpen" @toggle="handleCreditPricingToggle">
+      <details id="credit-pricing" class="group rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-800/60" :open="isCreditPricingOpen" @toggle="handleCreditPricingToggle">
         <summary class="flex w-full cursor-pointer items-center justify-between gap-4 p-6 text-left [&::-webkit-details-marker]:hidden">
           <div>
             <h2 class="text-2xl font-semibold text-gray-900 dark:text-white">
@@ -965,7 +1075,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             <div
               v-for="section in creditPricingSections"
               :key="section.title"
-              class="flex h-full flex-col rounded-2xl border border-gray-200 bg-gray-50 p-6 shadow-sm dark:border-gray-700 dark:bg-gray-900/40"
+              class="flex h-full flex-col rounded-2xl border border-gray-200 bg-gray-50 p-6 shadow-sm dark:border-white/10 dark:bg-white/[0.03]"
             >
               <div class="flex items-start gap-3">
                 <div class="flex h-10 w-20 items-center justify-center rounded-full" :class="section.accentClass">
@@ -1006,7 +1116,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
           </div>
         </div>
       </details>
-      <div class="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+      <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-800/60">
         <div class="flex items-center justify-between border-b border-gray-200 px-6 py-4 dark:border-gray-700">
           <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
             {{ t('credits-transactions') }}
@@ -1023,8 +1133,8 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             {{ t('credits-empty-state') }}
           </div>
           <div v-else class="-mx-4 overflow-x-auto sm:mx-0">
-            <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
-              <thead class="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:bg-gray-900 dark:text-gray-400">
+            <table class="min-w-full text-sm">
+              <thead class="text-[11px] font-semibold tracking-wider uppercase border-y border-slate-200 text-slate-500 bg-slate-50 dark:border-white/10 dark:text-slate-400 dark:bg-white/[0.03]">
                 <tr>
                   <th scope="col" class="px-4 py-3">
                     {{ t('credit-transaction-occurred-at') }}
@@ -1037,9 +1147,9 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
                   </th>
                 </tr>
               </thead>
-              <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+              <tbody class="divide-y divide-slate-100 dark:divide-white/5">
                 <template v-for="day in paginatedDailyTransactions" :key="day.dateKey">
-                  <tr class="bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-white">
+                  <tr class="bg-slate-50 text-slate-900 dark:bg-white/[0.02] dark:text-white">
                     <td class="px-4 py-3 font-semibold">
                       {{ day.dateLabel }}
                     </td>

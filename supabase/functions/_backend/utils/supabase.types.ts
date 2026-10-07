@@ -210,6 +210,68 @@ export type Database = {
           },
         ]
       }
+      app_onboarding: {
+        Row: {
+          app_id: string
+          queued_refresh_at: string | null
+          refreshed_at: string | null
+        }
+        Insert: {
+          app_id: string
+          queued_refresh_at?: string | null
+          refreshed_at?: string | null
+        }
+        Update: {
+          app_id?: string
+          queued_refresh_at?: string | null
+          refreshed_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "app_onboarding_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: true
+            referencedRelation: "apps"
+            referencedColumns: ["app_id"]
+          },
+        ]
+      }
+      app_stats_refresh_state: {
+        Row: {
+          app_id: string
+          owner_org: string
+          stats_refresh_requested_at: string | null
+          stats_updated_at: string | null
+        }
+        Insert: {
+          app_id: string
+          owner_org: string
+          stats_refresh_requested_at?: string | null
+          stats_updated_at?: string | null
+        }
+        Update: {
+          app_id?: string
+          owner_org?: string
+          stats_refresh_requested_at?: string | null
+          stats_updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "app_stats_refresh_state_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: true
+            referencedRelation: "apps"
+            referencedColumns: ["app_id"]
+          },
+          {
+            foreignKeyName: "app_stats_refresh_state_owner_org_fkey"
+            columns: ["owner_org"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       app_versions: {
         Row: {
           app_id: string
@@ -389,8 +451,6 @@ export type Database = {
           retention: number
           rollout_channel_count: number
           rollout_paused_version_names: string[]
-          stats_refresh_requested_at: string | null
-          stats_updated_at: string | null
           transfer_history: Json[] | null
           updated_at: string | null
           user_id: string | null
@@ -422,8 +482,6 @@ export type Database = {
           retention?: number
           rollout_channel_count?: number
           rollout_paused_version_names?: string[]
-          stats_refresh_requested_at?: string | null
-          stats_updated_at?: string | null
           transfer_history?: Json[] | null
           updated_at?: string | null
           user_id?: string | null
@@ -455,8 +513,6 @@ export type Database = {
           retention?: number
           rollout_channel_count?: number
           rollout_paused_version_names?: string[]
-          stats_refresh_requested_at?: string | null
-          stats_updated_at?: string | null
           transfer_history?: Json[] | null
           updated_at?: string | null
           user_id?: string | null
@@ -796,6 +852,7 @@ export type Database = {
           created_at: string | null
           device_id: string
           id: number
+          is_self_set: boolean
           owner_org: string
           updated_at: string
         }
@@ -805,6 +862,7 @@ export type Database = {
           created_at?: string | null
           device_id: string
           id?: number
+          is_self_set?: boolean
           owner_org: string
           updated_at?: string
         }
@@ -814,6 +872,7 @@ export type Database = {
           created_at?: string | null
           device_id?: string
           id?: number
+          is_self_set?: boolean
           owner_org?: string
           updated_at?: string
         }
@@ -914,6 +973,7 @@ export type Database = {
           ios: boolean
           name: string
           owner_org: string
+          paused_at: string | null
           public: boolean
           rbac_id: string
           rollout_cache_ttl_seconds: number
@@ -954,6 +1014,7 @@ export type Database = {
           ios?: boolean
           name: string
           owner_org: string
+          paused_at?: string | null
           public?: boolean
           rbac_id?: string
           rollout_cache_ttl_seconds?: number
@@ -994,6 +1055,7 @@ export type Database = {
           ios?: boolean
           name?: string
           owner_org?: string
+          paused_at?: string | null
           public?: boolean
           rbac_id?: string
           rollout_cache_ttl_seconds?: number
@@ -1258,15 +1320,7 @@ export type Database = {
           build_time_unit?: number
           date?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "daily_build_time_app_id_fkey"
-            columns: ["app_id"]
-            isOneToOne: false
-            referencedRelation: "apps"
-            referencedColumns: ["app_id"]
-          },
-        ]
+        Relationships: []
       }
       daily_mau: {
         Row: {
@@ -2102,6 +2156,186 @@ export type Database = {
           },
         ]
       }
+      manifest_per_version: {
+        Row: {
+          created_at: string
+          entry_count: number
+          format_version: number
+          manifest: string
+          manifest_size: string | null
+          manifest_size_payload_hash: string | null
+          payload_hash: string
+          size_receipts_provided: boolean
+          total_file_size: number
+          version_id: number
+        }
+        Insert: {
+          created_at?: string
+          entry_count: number
+          format_version: number
+          manifest: string
+          manifest_size?: string | null
+          manifest_size_payload_hash?: string | null
+          payload_hash: string
+          size_receipts_provided?: boolean
+          total_file_size: number
+          version_id: number
+        }
+        Update: {
+          created_at?: string
+          entry_count?: number
+          format_version?: number
+          manifest?: string
+          manifest_size?: string | null
+          manifest_size_payload_hash?: string | null
+          payload_hash?: string
+          size_receipts_provided?: boolean
+          total_file_size?: number
+          version_id?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "manifest_per_version_version_id_fkey"
+            columns: ["version_id"]
+            isOneToOne: true
+            referencedRelation: "app_versions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      manifest_trash_restore_pending: {
+        Row: {
+          app_version_id: number
+          created_at: string
+          s3_path: string
+        }
+        Insert: {
+          app_version_id: number
+          created_at?: string
+          s3_path: string
+        }
+        Update: {
+          app_version_id?: number
+          created_at?: string
+          s3_path?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "manifest_trash_restore_pending_app_version_id_fkey"
+            columns: ["app_version_id"]
+            isOneToOne: false
+            referencedRelation: "app_versions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mcp_oauth_clients: {
+        Row: {
+          client_id: string
+          client_name: string
+          client_uri: string | null
+          created_at: string
+          ip_hash: string | null
+          last_used_at: string | null
+          logo_uri: string | null
+          redirect_uris: string[]
+        }
+        Insert: {
+          client_id: string
+          client_name: string
+          client_uri?: string | null
+          created_at?: string
+          ip_hash?: string | null
+          last_used_at?: string | null
+          logo_uri?: string | null
+          redirect_uris: string[]
+        }
+        Update: {
+          client_id?: string
+          client_name?: string
+          client_uri?: string | null
+          created_at?: string
+          ip_hash?: string | null
+          last_used_at?: string | null
+          logo_uri?: string | null
+          redirect_uris?: string[]
+        }
+        Relationships: []
+      }
+      mcp_oauth_requests: {
+        Row: {
+          apikey_id: number | null
+          client_id: string
+          client_name: string
+          code_challenge: string
+          code_expires_at: string | null
+          code_hash: string | null
+          created_at: string
+          encrypted_token: string | null
+          exchanged_at: string | null
+          expires_at: string
+          id: string
+          ip_hash: string | null
+          issuer: string
+          redirect_uri: string
+          resource: string | null
+          scope: string | null
+          state: string | null
+          status: string
+          user_id: string | null
+        }
+        Insert: {
+          apikey_id?: number | null
+          client_id: string
+          client_name: string
+          code_challenge: string
+          code_expires_at?: string | null
+          code_hash?: string | null
+          created_at?: string
+          encrypted_token?: string | null
+          exchanged_at?: string | null
+          expires_at: string
+          id?: string
+          ip_hash?: string | null
+          issuer: string
+          redirect_uri: string
+          resource?: string | null
+          scope?: string | null
+          state?: string | null
+          status?: string
+          user_id?: string | null
+        }
+        Update: {
+          apikey_id?: number | null
+          client_id?: string
+          client_name?: string
+          code_challenge?: string
+          code_expires_at?: string | null
+          code_hash?: string | null
+          created_at?: string
+          encrypted_token?: string | null
+          exchanged_at?: string | null
+          expires_at?: string
+          id?: string
+          ip_hash?: string | null
+          issuer?: string
+          redirect_uri?: string
+          resource?: string | null
+          scope?: string | null
+          state?: string | null
+          status?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mcp_oauth_requests_apikey_id_fkey"
+            columns: ["apikey_id"]
+            isOneToOne: false
+            referencedRelation: "apikeys"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       notification_app_settings: {
         Row: {
           app_id: string
@@ -2416,6 +2650,38 @@ export type Database = {
           },
         ]
       }
+      org_custom_domains: {
+        Row: {
+          created_at: string
+          hostname: string
+          org_id: string
+          provider_id: string | null
+          provider_route_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          hostname: string
+          org_id: string
+          provider_id?: string | null
+          provider_route_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          hostname?: string
+          org_id?: string
+          provider_id?: string | null
+          provider_route_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "org_custom_domains_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: true
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       org_id_tombstones: {
         Row: {
           deleted_at: string
@@ -2477,6 +2743,38 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "org_metrics_cache_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: true
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      org_stats_refresh_state: {
+        Row: {
+          manual_refresh_requested_at: string | null
+          org_id: string
+          plan_calculated_at: string | null
+          stats_refresh_requested_at: string | null
+          stats_updated_at: string | null
+        }
+        Insert: {
+          manual_refresh_requested_at?: string | null
+          org_id: string
+          plan_calculated_at?: string | null
+          stats_refresh_requested_at?: string | null
+          stats_updated_at?: string | null
+        }
+        Update: {
+          manual_refresh_requested_at?: string | null
+          org_id?: string
+          plan_calculated_at?: string | null
+          stats_refresh_requested_at?: string | null
+          stats_updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "org_stats_refresh_state_org_id_fkey"
             columns: ["org_id"]
             isOneToOne: true
             referencedRelation: "orgs"
@@ -2553,6 +2851,7 @@ export type Database = {
         Row: {
           auto_top_up_enabled: boolean
           auto_top_up_last_attempt_at: string | null
+          auto_top_up_monthly_limit: number
           auto_top_up_threshold: number
           created_at: string | null
           created_by: string
@@ -2583,6 +2882,7 @@ export type Database = {
         Insert: {
           auto_top_up_enabled?: boolean
           auto_top_up_last_attempt_at?: string | null
+          auto_top_up_monthly_limit?: number
           auto_top_up_threshold?: number
           created_at?: string | null
           created_by: string
@@ -2613,6 +2913,7 @@ export type Database = {
         Update: {
           auto_top_up_enabled?: boolean
           auto_top_up_last_attempt_at?: string | null
+          auto_top_up_monthly_limit?: number
           auto_top_up_threshold?: number
           created_at?: string | null
           created_by?: string
@@ -2806,6 +3107,81 @@ export type Database = {
           customer_id?: string
           date_id?: string
           event_id?: string
+        }
+        Relationships: []
+      }
+      r2_inventory_checkpoints: {
+        Row: {
+          accepted_event_floor: string | null
+          bucket_name: string
+          checkpoint: Json
+          job_name: string
+          partition_key: string
+          updated_at: string
+        }
+        Insert: {
+          accepted_event_floor?: string | null
+          bucket_name: string
+          checkpoint?: Json
+          job_name: string
+          partition_key?: string
+          updated_at?: string
+        }
+        Update: {
+          accepted_event_floor?: string | null
+          bucket_name?: string
+          checkpoint?: Json
+          job_name?: string
+          partition_key?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      r2_objects: {
+        Row: {
+          bucket_name: string
+          cleanup_requested_at: string | null
+          etag: string | null
+          first_seen_at: string
+          last_event_at: string | null
+          last_reconciled_at: string | null
+          r2_key: string
+          r2_last_modified_at: string | null
+          r2_state: Database["public"]["Enums"]["r2_object_state"]
+          revision: number
+          size_bytes: number | null
+          tombstone_expires_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          bucket_name: string
+          cleanup_requested_at?: string | null
+          etag?: string | null
+          first_seen_at?: string
+          last_event_at?: string | null
+          last_reconciled_at?: string | null
+          r2_key: string
+          r2_last_modified_at?: string | null
+          r2_state: Database["public"]["Enums"]["r2_object_state"]
+          revision?: number
+          size_bytes?: number | null
+          tombstone_expires_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          bucket_name?: string
+          cleanup_requested_at?: string | null
+          etag?: string | null
+          first_seen_at?: string
+          last_event_at?: string | null
+          last_reconciled_at?: string | null
+          r2_key?: string
+          r2_last_modified_at?: string | null
+          r2_state?: Database["public"]["Enums"]["r2_object_state"]
+          revision?: number
+          size_bytes?: number | null
+          tombstone_expires_at?: string | null
+          updated_at?: string
         }
         Relationships: []
       }
@@ -3009,8 +3385,10 @@ export type Database = {
           enforce_sso: boolean
           id: string
           metadata_url: string | null
+          metadata_xml: string | null
           org_id: string
           provider_id: string | null
+          role_mapping: Json | null
           status: string
           updated_at: string
         }
@@ -3023,8 +3401,10 @@ export type Database = {
           enforce_sso?: boolean
           id?: string
           metadata_url?: string | null
+          metadata_xml?: string | null
           org_id: string
           provider_id?: string | null
+          role_mapping?: Json | null
           status?: string
           updated_at?: string
         }
@@ -3037,8 +3417,10 @@ export type Database = {
           enforce_sso?: boolean
           id?: string
           metadata_url?: string | null
+          metadata_xml?: string | null
           org_id?: string
           provider_id?: string | null
+          role_mapping?: Json | null
           status?: string
           updated_at?: string
         }
@@ -3116,6 +3498,7 @@ export type Database = {
           created_at: string
           customer_country: string | null
           customer_id: string
+          extra_mau: number
           id: number
           is_above_plan: boolean | null
           is_good_plan: boolean | null
@@ -3145,6 +3528,7 @@ export type Database = {
           created_at?: string
           customer_country?: string | null
           customer_id: string
+          extra_mau?: number
           id?: number
           is_above_plan?: boolean | null
           is_good_plan?: boolean | null
@@ -3174,6 +3558,7 @@ export type Database = {
           created_at?: string
           customer_country?: string | null
           customer_id?: string
+          extra_mau?: number
           id?: number
           is_above_plan?: boolean | null
           is_good_plan?: boolean | null
@@ -3322,6 +3707,51 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      updates_cache_purge_pending: {
+        Row: {
+          app_id: string
+          due_at: string
+          id: number
+          initial: boolean
+          lease_token: string | null
+          leased_until: string | null
+          scope: string
+        }
+        Insert: {
+          app_id: string
+          due_at: string
+          id?: never
+          initial?: boolean
+          lease_token?: string | null
+          leased_until?: string | null
+          scope?: string
+        }
+        Update: {
+          app_id?: string
+          due_at?: string
+          id?: never
+          initial?: boolean
+          lease_token?: string | null
+          leased_until?: string | null
+          scope?: string
+        }
+        Relationships: []
+      }
+      updates_cache_purge_state: {
+        Row: {
+          id: boolean
+          last_claim_at: string
+        }
+        Insert: {
+          id?: boolean
+          last_claim_at?: string
+        }
+        Update: {
+          id?: boolean
+          last_claim_at?: string
+        }
+        Relationships: []
       }
       usage_credit_consumptions: {
         Row: {
@@ -3890,6 +4320,14 @@ export type Database = {
     }
     Functions: {
       accept_invitation_to_org: { Args: { org_id: string }; Returns: string }
+      ack_updates_cache_purge: {
+        Args: {
+          p_lease_token: string
+          p_retry_after_seconds?: number
+          p_success: boolean
+        }
+        Returns: undefined
+      }
       acknowledge_compatibility_event: {
         Args: { event_id: number; note: string }
         Returns: undefined
@@ -3916,6 +4354,7 @@ export type Database = {
           p_billing_cycle_end: string
           p_billing_cycle_start: string
           p_details?: Json
+          p_included_amount?: number
           p_metric: Database["public"]["Enums"]["credit_metric_type"]
           p_org_id: string
           p_overage_amount: number
@@ -3963,6 +4402,17 @@ export type Database = {
         Returns: undefined
       }
       audit_logs_allowed_orgs: { Args: never; Returns: string[] }
+      billing_cycle_anchor: {
+        Args: { p_period_end: string; p_period_start: string }
+        Returns: string
+      }
+      billing_cycle_for_anchor: {
+        Args: { p_now?: string; p_period_end: string; p_period_start: string }
+        Returns: {
+          cycle_end: string
+          cycle_start: string
+        }[]
+      }
       billing_period_completed_cycle: {
         Args: { p_anchor_start: string; p_as_of?: string }
         Returns: {
@@ -3971,17 +4421,30 @@ export type Database = {
           is_anniversary: boolean
         }[]
       }
-      calculate_credit_cost: {
-        Args: {
-          p_metric: Database["public"]["Enums"]["credit_metric_type"]
-          p_overage_amount: number
-        }
-        Returns: {
-          credit_cost_per_unit: number
-          credit_step_id: number
-          credits_required: number
-        }[]
-      }
+      calculate_credit_cost:
+        | {
+            Args: {
+              p_metric: Database["public"]["Enums"]["credit_metric_type"]
+              p_overage_amount: number
+            }
+            Returns: {
+              credit_cost_per_unit: number
+              credit_step_id: number
+              credits_required: number
+            }[]
+          }
+        | {
+            Args: {
+              p_included_amount: number
+              p_metric: Database["public"]["Enums"]["credit_metric_type"]
+              p_overage_amount: number
+            }
+            Returns: {
+              credit_cost_per_unit: number
+              credit_step_id: number
+              credits_required: number
+            }[]
+          }
       calculate_org_metrics_cache_entry: {
         Args: { p_end_date: string; p_org_id: string; p_start_date: string }
         Returns: {
@@ -4079,6 +4542,7 @@ export type Database = {
         Args: { p_app_uuid: string }
         Returns: undefined
       }
+      claim_updates_cache_purge: { Args: { p_limit?: number }; Returns: Json }
       cleanup_audit_logs_bookkeeping_noise: {
         Args: {
           batch_size?: number
@@ -4209,6 +4673,10 @@ export type Database = {
         Args: { p_limit?: number }
         Returns: number
       }
+      enqueue_cron_tick: {
+        Args: { payload: Json; queue_name: string }
+        Returns: undefined
+      }
       exist_app: { Args: { appid: string }; Returns: boolean }
       exist_app_v2: { Args: { appid: string }; Returns: boolean }
       exist_app_versions:
@@ -4287,8 +4755,6 @@ export type Database = {
           retention: number
           rollout_channel_count: number
           rollout_paused_version_names: string[]
-          stats_refresh_requested_at: string | null
-          stats_updated_at: string | null
           transfer_history: Json[] | null
           updated_at: string | null
           user_id: string | null
@@ -4371,6 +4837,14 @@ export type Database = {
               uninstall: number
             }[]
           }
+      get_app_stats_refresh_state: {
+        Args: { p_app_id: string }
+        Returns: {
+          owner_org: string
+          stats_refresh_requested_at: string
+          stats_updated_at: string
+        }[]
+      }
       get_app_versions: {
         Args: { apikey: string; appid: string; name_version: string }
         Returns: number
@@ -4380,6 +4854,10 @@ export type Database = {
         Returns: {
           bundle_name: string
         }[]
+      }
+      get_credit_auto_top_up_month_total: {
+        Args: { p_org_id: string }
+        Returns: number
       }
       get_current_plan_max_org: {
         Args: { orgid: string }
@@ -4505,6 +4983,13 @@ export type Database = {
           user_id: string
         }[]
       }
+      get_org_billing_cycle: {
+        Args: { orgid: string }
+        Returns: {
+          cycle_end: string
+          cycle_start: string
+        }[]
+      }
       get_org_build_time_unit: {
         Args: { p_end_date: string; p_org_id: string; p_start_date: string }
         Returns: {
@@ -4561,6 +5046,13 @@ export type Database = {
       get_org_perm_for_apikey_v2: {
         Args: { apikey: string; app_id: string }
         Returns: string
+      }
+      get_org_stats_refresh_state: {
+        Args: { p_org_id: string }
+        Returns: {
+          stats_refresh_requested_at: string
+          stats_updated_at: string
+        }[]
       }
       get_org_user_access_rbac: {
         Args: { p_org_id: string; p_user_id: string }
@@ -5034,6 +5526,10 @@ export type Database = {
         Args: { p_app_id: string; p_feature_key: string }
         Returns: Json
       }
+      mark_org_stats_refreshed: {
+        Args: { p_org_id: string; p_stats_target_at?: string }
+        Returns: string
+      }
       mass_edit_queue_messages_cf_ids: {
         Args: {
           updates: Database["public"]["CompositeTypes"]["message_update"][]
@@ -5055,6 +5551,14 @@ export type Database = {
         Returns: Json
       }
       new_builder_onboarding_setup_v1: { Args: never; Returns: Json }
+      new_ota_onboarding_steps_v1: {
+        Args: { p_legacy_steps?: Json }
+        Returns: Json
+      }
+      notify_updates_edge_cache_purge: {
+        Args: { p_app_ids: string[]; p_scope: string }
+        Returns: undefined
+      }
       null_migrated_app_version_manifests: {
         Args: {
           batch_size?: number
@@ -5104,6 +5608,10 @@ export type Database = {
       process_billing_period_stats_email: { Args: never; Returns: undefined }
       process_channel_device_counts_queue: {
         Args: { batch_size?: number }
+        Returns: number
+      }
+      process_cron_stat_org_jobs: {
+        Args: { p_batch_size?: number; p_org_id?: string }
         Returns: number
       }
       process_cron_stats_jobs: { Args: never; Returns: undefined }
@@ -5219,6 +5727,7 @@ export type Database = {
       rbac_perm_app_build_native: { Args: never; Returns: string }
       rbac_perm_app_create_channel: { Args: never; Returns: string }
       rbac_perm_app_delete: { Args: never; Returns: string }
+      rbac_perm_app_manage_apikeys: { Args: never; Returns: string }
       rbac_perm_app_manage_devices: { Args: never; Returns: string }
       rbac_perm_app_read: { Args: never; Returns: string }
       rbac_perm_app_read_audit: { Args: never; Returns: string }
@@ -5622,6 +6131,7 @@ export type Database = {
         Args: { p_email: string; p_new_role_name: string; p_org_id: string }
         Returns: string
       }
+      updates_cache_purge_enabled: { Args: never; Returns: boolean }
       upsert_version_meta: {
         Args: { p_app_id: string; p_size: number; p_version_id: number }
         Returns: boolean
@@ -5646,6 +6156,8 @@ export type Database = {
       verify_email_otp_auth: { Args: never; Returns: boolean }
       verify_getting_started: { Args: { p_app_id: string }; Returns: Json }
       verify_mfa: { Args: never; Returns: boolean }
+      wake_updates_cache_purge: { Args: never; Returns: undefined }
+      wake_updates_cache_purge_if_due: { Args: never; Returns: undefined }
     }
     Enums: {
       action_type: "mau" | "storage" | "bandwidth" | "build_time"
@@ -5666,6 +6178,11 @@ export type Database = {
       cron_task_type: "function" | "queue" | "function_queue"
       disable_update: "major" | "minor" | "patch" | "version_number" | "none"
       platform_os: "ios" | "android" | "electron"
+      r2_object_state:
+        | "to_be_uploaded"
+        | "present"
+        | "to_be_deleted"
+        | "deleted"
       stats_action:
         | "delete"
         | "reset"
@@ -5759,6 +6276,7 @@ export type Database = {
         | "webview_dom_content_loaded"
         | "webview_page_loaded"
         | "app_nav"
+        | "channelPaused"
       stripe_status:
         | "created"
         | "succeeded"
@@ -5947,6 +6465,12 @@ export const Constants = {
       cron_task_type: ["function", "queue", "function_queue"],
       disable_update: ["major", "minor", "patch", "version_number", "none"],
       platform_os: ["ios", "android", "electron"],
+      r2_object_state: [
+        "to_be_uploaded",
+        "present",
+        "to_be_deleted",
+        "deleted",
+      ],
       stats_action: [
         "delete",
         "reset",
@@ -6040,6 +6564,7 @@ export const Constants = {
         "webview_dom_content_loaded",
         "webview_page_loaded",
         "app_nav",
+        "channelPaused",
       ],
       stripe_status: [
         "created",

@@ -50,6 +50,7 @@ export const componentMatchers: Record<Component, RegExp[]> = {
     /^read_replicate\//,
     /^scriptable\//,
     /^scripts\/ensure-native-notification-queues\.ts$/,
+    /^scripts\/ensure-r2-inventory-queues\.ts$/,
     /^shared\//,
     /^sql\//,
     /^src\//,

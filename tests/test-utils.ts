@@ -1,11 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { PoolClient } from 'pg'
 import type { Database } from '../src/types/supabase.types'
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import process, { env } from 'node:process'
 import { createClient } from '@supabase/supabase-js'
-import { type PoolClient, Pool } from 'pg'
+import { Hono } from 'hono/tiny'
+import { Pool } from 'pg'
 import { getCanonicalAppVersionR2Path } from '../supabase/functions/_backend/utils/app_version_r2_path.ts'
+import { retryTransientSqlError } from './sql-retry'
+
 function normalizePostgresUrl(raw: string): string {
   // Avoid Node preferring IPv6 (::1) for localhost in some environments.
   return raw.replace('localhost', '127.0.0.1')
@@ -20,6 +24,37 @@ function getPostgresUrlFromEnv(): string {
 }
 
 export let POSTGRES_URL = getPostgresUrlFromEnv()
+
+type DirectDatabaseTestApp = Hono<{ Bindings: { SUPABASE_DB_URL: string } }>
+
+export async function requestDirectDatabaseRoute<T>(registerRoute: (app: DirectDatabaseTestApp) => void, path = '/'): Promise<T> {
+  const globalWithEdgeRuntime = globalThis as typeof globalThis & {
+    EdgeRuntime?: { waitUntil: (promise: Promise<unknown>) => void }
+  }
+  const previousEdgeRuntime = globalWithEdgeRuntime.EdgeRuntime
+  const previousSupabaseDbUrl = process.env.SUPABASE_DB_URL
+  globalWithEdgeRuntime.EdgeRuntime = undefined
+  process.env.SUPABASE_DB_URL = POSTGRES_URL
+
+  try {
+    const app = new Hono<{ Bindings: { SUPABASE_DB_URL: string } }>()
+    registerRoute(app)
+
+    const response = await app.request(new URL(path, 'http://local').toString(), undefined, { SUPABASE_DB_URL: POSTGRES_URL })
+    if (!response.ok) {
+      const body = await response.text()
+      throw new Error(`Direct database test route failed with ${response.status}: ${body}`)
+    }
+    return await response.json() as T
+  }
+  finally {
+    if (previousSupabaseDbUrl === undefined)
+      delete process.env.SUPABASE_DB_URL
+    else
+      process.env.SUPABASE_DB_URL = previousSupabaseDbUrl
+    globalWithEdgeRuntime.EdgeRuntime = previousEdgeRuntime
+  }
+}
 
 export function normalizeLocalhostUrl(raw: string | undefined): string | undefined {
   if (!raw)
@@ -128,6 +163,7 @@ export const SUPABASE_BASE_URL = normalizeLocalhostUrl(env.SUPABASE_URL) ?? ''
 export const BASE_URL = USE_CLOUDFLARE ? CLOUDFLARE_API_URL : `${SUPABASE_BASE_URL}/functions/v1`
 export const PLUGIN_BASE_URL = USE_CLOUDFLARE ? CLOUDFLARE_PLUGIN_URL : `${SUPABASE_BASE_URL}/functions/v1`
 export const API_SECRET = 'testsecret'
+export const MANIFEST_SIZE_RECEIPT_SECRET = 'manifest-size-receipt-testsecret'
 export const SUPABASE_ANON_KEY = env.SUPABASE_ANON_KEY ?? ''
 
 /**
@@ -981,7 +1017,7 @@ export async function getPostgresClient(): Promise<Pool> {
 
 export async function executeSQL<T = any>(query: string, params?: any[]): Promise<T[]> {
   const client = await getPostgresClient()
-  const result = await client.query(query, params || [])
+  const result = await retryTransientSqlError(() => client.query(query, params || []))
   return result.rows as T[]
 }
 

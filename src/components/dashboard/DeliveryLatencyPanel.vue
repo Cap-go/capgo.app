@@ -21,11 +21,14 @@ const props = withDefaults(defineProps<{
   forceDemo?: boolean
   days?: number
   hidePeriodSelector?: boolean
+  // Chart-only card for dense pages such as Observe > Releases.
+  dense?: boolean
 }>(), {
   appId: '',
   orgId: '',
   forceDemo: false,
   hidePeriodSelector: false,
+  dense: false,
 })
 
 Chart.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend)
@@ -180,7 +183,7 @@ watch(
 
 <template>
   <section class="flex flex-col gap-4" data-testid="update-delivery-latency">
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div v-if="!dense" class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
       <div class="min-w-0">
         <div class="flex flex-wrap items-center gap-2">
           <h2 class="text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
@@ -205,13 +208,18 @@ watch(
       />
     </div>
 
-    <div v-if="statsLoading && !forceDemo && !stats && !statsError" class="flex items-center justify-center h-64 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+    <div
+      v-if="statsLoading && !forceDemo && !stats && !statsError"
+      class="flex items-center justify-center bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10"
+      :class="dense ? 'h-[256px]' : 'h-64'"
+    >
       <Spinner size="w-10 h-10" />
     </div>
 
     <div
       v-else-if="statsError && !forceDemo"
-      class="flex flex-col items-center justify-center h-64 gap-3 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400"
+      class="flex flex-col items-center justify-center gap-3 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10 text-slate-500 dark:text-slate-400"
+      :class="dense ? 'h-[256px]' : 'h-64'"
     >
       <IconTimer class="w-12 h-12" />
       <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">
@@ -226,11 +234,11 @@ watch(
     </div>
 
     <template v-else>
-      <div class="grid grid-cols-2 gap-3 xl:grid-cols-6">
+      <div v-if="!dense" class="grid grid-cols-2 gap-3 xl:grid-cols-6">
         <div
           v-for="card in percentileCards"
           :key="card.key"
-          class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700"
+          class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10"
         >
           <div class="text-sm truncate text-slate-600 dark:text-slate-400">
             {{ card.label }}
@@ -239,7 +247,7 @@ watch(
             {{ formatDuration(card.value) }}
           </div>
         </div>
-        <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+        <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
           <div class="text-sm truncate text-slate-600 dark:text-slate-400">
             {{ t('update-delivery-samples') }}
           </div>
@@ -247,7 +255,7 @@ watch(
             {{ formatCount(effectiveStats?.overview.samples) }}
           </div>
         </div>
-        <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+        <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
           <div class="text-sm truncate text-slate-600 dark:text-slate-400">
             {{ t('update-delivery-devices') }}
           </div>
@@ -257,9 +265,19 @@ watch(
         </div>
       </div>
 
-      <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-        <div class="flex items-center justify-between gap-3 mb-4">
-          <div>
+      <div class="p-4 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10" :class="dense ? 'flex flex-col h-[256px]' : ''">
+        <div class="flex items-center justify-between gap-3" :class="dense ? 'mb-3' : 'mb-4'">
+          <div v-if="dense" class="flex items-center min-w-0 gap-2" :title="`${t('update-delivery-latency-help')} ${t('update-delivery-trend-help')}`">
+            <h3 class="text-base font-semibold truncate text-slate-950 dark:text-white">
+              {{ t('update-delivery-latency') }}
+            </h3>
+            <span class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t('beta') }}</span>
+            <span
+              v-if="forceDemo"
+              class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-slate-300 bg-slate-100 text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300"
+            >{{ t('demo') }}</span>
+          </div>
+          <div v-else>
             <h3 class="text-base font-semibold text-slate-950 dark:text-white">
               {{ t('update-delivery-trend') }}
             </h3>
@@ -274,7 +292,7 @@ watch(
           <Spinner size="w-5 h-5" />
         </div>
 
-        <div v-if="!hasData" class="flex flex-col items-center justify-center h-72 text-slate-500 dark:text-slate-400">
+        <div v-if="!hasData" class="flex flex-col items-center justify-center text-slate-500 dark:text-slate-400" :class="dense ? 'flex-1' : 'h-72'">
           <IconTimer class="w-12 h-12 mb-3" />
           <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">
             {{ t('update-delivery-no-data') }}
@@ -283,7 +301,7 @@ watch(
             {{ t(emptyHelpKey) }}
           </p>
         </div>
-        <div v-else class="relative h-80">
+        <div v-else class="relative" :class="dense ? 'flex-1 min-h-0' : 'h-80'">
           <Line :data="chartData" :options="chartOptions" />
         </div>
       </div>

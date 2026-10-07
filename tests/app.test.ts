@@ -556,7 +556,9 @@ describe('[POST]/[PUT] /app onboarding progress', () => {
     const created = parseAppOnboarding((await createApp.json() as { onboarding?: unknown }).onboarding)
     expect(created.source).toBe('manual')
     expect(created.outcome).toBe('in_progress')
-    expect(created.todo_list_version).toBe(2)
+    // Every new non-Builder app starts on the seven-step OTA checklist.
+    expect(created.todo_list_version).toBe(4)
+    expect(created.ota_todo_list_version).toBe('1')
 
     const firstPut = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
       method: 'PUT',

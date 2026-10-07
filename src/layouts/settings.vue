@@ -160,7 +160,7 @@ watchEffect(() => {
     billingTab.children = [
       ...(billingTab.children ?? []),
       {
-        label: 'billing',
+        label: 'billing-portal-tab',
         icon: IconBilling,
         key: '/billing',
         onClick: () => {
@@ -267,6 +267,7 @@ function handleTertiary(val: string) {
     />
     <main class="flex relative flex-1 w-full min-h-0 mt-0 overflow-hidden bg-blue-50 dark:bg-slate-800/40">
       <div
+        data-native-scroll
         class="flex-1 w-full min-h-0 px-0 pt-0 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-16 lg:px-8 max-w-9xl"
         :class="{ 'blur-sm pointer-events-none select-none': showAdminOnlyModal }"
       >

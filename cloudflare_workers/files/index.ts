@@ -8,6 +8,7 @@ import { app as ok } from '../../supabase/functions/_backend/public/ok.ts'
 import { createAllCatch, createHono } from '../../supabase/functions/_backend/utils/hono.ts'
 import { version } from '../../supabase/functions/_backend/utils/version.ts'
 
+// Upload handlers issue size receipts consumed by manifest finalization.
 export { AttachmentUploadHandler, UploadHandler } from '../../supabase/functions/_backend/files/uploadHandler.ts'
 
 const functionName = 'files'

@@ -1,6 +1,6 @@
 export type PeriodDayOption = 1 | 3 | 7 | 30
 export const PERIOD_DAY_OPTIONS: PeriodDayOption[] = [1, 3, 7, 30]
-export const DEFAULT_PERIOD_DAYS: PeriodDayOption = 1
+export const DEFAULT_PERIOD_DAYS: PeriodDayOption = 7
 
 export function parsePeriodDays(value: unknown): PeriodDayOption | null {
   const raw = Array.isArray(value) ? value[0] : value

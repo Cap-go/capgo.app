@@ -116,4 +116,12 @@ describe('bundle install stats helpers', () => {
       { version_name: '2.0.0', install: 3, fail: 0 },
     ])
   })
+
+  it.concurrent('reads channel-scoped success rates from version_usage for every period', () => {
+    // daily_version has no channel dimension, so channel requests must not use it.
+    expect(bundleInstallStatsTestUtils.readsSuccessFromVersionUsage(30, { id: 1, name: 'production' })).toBe(true)
+    expect(bundleInstallStatsTestUtils.readsSuccessFromVersionUsage(7, { id: 1, name: 'production' })).toBe(true)
+    expect(bundleInstallStatsTestUtils.readsSuccessFromVersionUsage(1)).toBe(true)
+    expect(bundleInstallStatsTestUtils.readsSuccessFromVersionUsage(30)).toBe(false)
+  })
 })

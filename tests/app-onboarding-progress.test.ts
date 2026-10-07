@@ -398,6 +398,13 @@ describe('app onboarding progress', () => {
   })
 
   it('completes pending onboarding when CLI/AI setup reports completed', async () => {
+    // Legacy v2 checklists complete on the reported outcome alone; new apps
+    // start on OTA v4, so pin this app to the legacy list first.
+    const { error: seedError } = await serviceRoleSupabase
+      .from('apps')
+      .update({ onboarding: { setup: { todo_list_version: 2, source: 'manual', outcome: 'in_progress', steps: {} } } })
+      .eq('app_id', APP_SETUP)
+    expect(seedError).toBeNull()
     const response = await fetchTestRequest(`${BASE_URL}/app/${APP_SETUP}`, {
       method: 'PUT',
       headers: await getAuthHeaders(),

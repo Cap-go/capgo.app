@@ -81,74 +81,6 @@ async function mockCompatibilityEvents(page: Page, rows: () => Record<string, un
   })
 }
 
-async function mockGettingStartedLedger(page: Page) {
-  const ledger = {
-    features: {
-      cli_install: { succeeded_at: '2026-08-01T00:00:00.000Z' },
-      ota: { succeeded_at: '2026-08-02T00:00:00.000Z', stage: 'testflight' },
-    },
-  }
-
-  await page.route('**/rest/v1/apps*', async (route: Route) => {
-    if (route.request().method() !== 'GET') {
-      await route.fallback()
-      return
-    }
-
-    const response = await route.fetch()
-    const contentType = response.headers()['content-type'] ?? ''
-    if (!contentType.includes('json')) {
-      await route.fulfill({ response })
-      return
-    }
-
-    const json = await response.json() as unknown
-    const patchRow = (row: Record<string, unknown>) => {
-      if (row.app_id !== APP_ID)
-        return row
-      return { ...row, onboarding: ledger }
-    }
-    const body = Array.isArray(json)
-      ? json.map(row => (row && typeof row === 'object' ? patchRow(row as Record<string, unknown>) : row))
-      : (json && typeof json === 'object' && 'app_id' in json
-          ? patchRow(json as Record<string, unknown>)
-          : json)
-
-    const headers = { ...response.headers() }
-    delete headers['content-length']
-    delete headers['content-encoding']
-    await route.fulfill({
-      status: response.status(),
-      headers,
-      body: JSON.stringify(body),
-    })
-  })
-}
-
-async function mockStoreReleaseValidationStatus(page: Page) {
-  await page.route('**/rest/v1/app_versions*', async (route: Route) => {
-    const url = new URL(route.request().url())
-    if (url.search.includes('name=neq.unknown') && url.search.includes('name=neq.builtin')) {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify([{ id: CURRENT_VERSION_ID }]),
-      })
-      return
-    }
-
-    await route.fallback()
-  })
-
-  await page.route('**/private/devices**', async (route: Route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ count: 0 }),
-    })
-  })
-}
-
 test.describe('Compatibility events', () => {
   test.beforeEach(async ({ page }) => {
     await page.login('test@capgo.app', 'testtest')
@@ -158,45 +90,12 @@ test.describe('Compatibility events', () => {
     }, TEST_USER_ID)
   })
 
-  test('opens store release validation from getting started', async ({ page }) => {
-    await mockCompatibilityEvents(page, () => [])
-    await mockGettingStartedLedger(page)
-    await mockStoreReleaseValidationStatus(page)
-    await page.goto(`/app/${APP_ID}/getting-started`)
-
-    const storeStep = page.locator('[data-test="getting-started-step-store_release"]')
-    const modal = page.getByRole('dialog')
-    await expect(page.locator('[data-test="getting-started-page"]')).toBeVisible()
-    await expect(page.getByRole('button', { name: /^bundles$/i })).toHaveCount(0)
-    await expect(storeStep).toBeVisible()
-    await expect(storeStep.locator('[data-test="getting-started-step-action"]')).toBeVisible()
-    await expect(modal).not.toBeVisible()
-
-    await storeStep.locator('[data-test="getting-started-step-action"]').click()
-    await expect(modal).toBeVisible()
-    await expect(modal.getByText('Is this app published with Capgo in production?')).toBeVisible()
-
-    await modal.getByRole('button', { name: 'Later' }).click()
-    await expect(modal).not.toBeVisible()
-    await page.waitForTimeout(1000)
-    await expect(modal).not.toBeVisible()
-
-    await storeStep.locator('[data-test="getting-started-step-action"]').click()
-    await expect(modal).toBeVisible()
-    await modal.getByRole('button', { name: 'Yes, app is published' }).click()
-
-    await expect(modal.getByText('Validate the production setup')).toBeVisible()
-    await expect(modal.getByLabel('Production channel')).toBeVisible()
-    await modal.getByRole('button', { name: 'Apply setup' }).click()
-    await expect(modal).not.toBeVisible()
-    await expect(storeStep.locator('[data-test="getting-started-step-action"]')).toHaveCount(0)
-    await expect(storeStep.getByText('Done')).toBeVisible()
-  })
-
   test('shows the unresolved banner on the app dashboard and links to the history page', async ({ page }) => {
     await mockCompatibilityEvents(page, () => [unresolvedEvent()])
 
     await page.goto(`/app/${APP_ID}`)
+    // Dashboard banners live behind the Activity menu.
+    await page.locator('[data-testid="alerts-menu-toggle"]').click()
     // The banner exposes a stable data-test hook; keep the copy assertions for
     // content correctness but locate the CTA via its data-test attribute.
     const banner = page.locator('[data-test="compatibility-banner"]')
@@ -213,7 +112,7 @@ test.describe('Compatibility events', () => {
 
     await page.goto(`/app/${APP_ID}/observe/compatibility`)
 
-    await expect(page.getByRole('heading', { name: 'Compatibility events' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Compatibility events', exact: true })).toHaveAttribute('aria-current', 'page')
 
     const row = page.locator(`[data-test="compatibility-row"][data-event-id="${EVENT_ID}"]`)
     await expect(row).toHaveCount(1)

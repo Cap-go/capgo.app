@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { ALLOWED_STATS_ACTIONS } from '../supabase/functions/_backend/plugin_runtime/plugins/stats_actions.ts'
+import { ALLOWED_STATS_ACTIONS, isRunningVersionAction } from '../supabase/functions/_backend/plugin_runtime/plugins/stats_actions.ts'
 import { APP_NAME, createAppVersions, executeSQL, fetchTestRequest, getBaseData, getSupabaseClient, getVersionFromAction, headers, ORG_ID, PLUGIN_BASE_URL, resetAndSeedAppData, resetAndSeedAppDataStats, resetAppData, resetAppDataStats, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
 
 const id = randomUUID()
@@ -19,6 +19,11 @@ interface StatsRes {
 }
 
 type StatsAction = Database['public']['Enums']['stats_action']
+
+// Mirrors isDroppedStatsLogAction: download_10..download_90 are not stored.
+function isDroppedDownloadProgressAction(action: string) {
+  return /^download_[1-9]0$/.test(action)
+}
 
 interface StatsPayload extends ReturnType<typeof getBaseData> {
   action: StatsAction
@@ -257,7 +262,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
     await getSupabaseClient().from('devices').delete().eq('device_id', uuid).eq('app_id', APP_NAME_STATS)
   })
 
-  it.concurrent('does not recreate unknown placeholder rows for missing versions', async () => {
+  it.concurrent('records missing versions without recreating unknown placeholder rows', async () => {
     const uuid = randomUUID().toLowerCase()
     const appId = `${APP_NAME}.deleted.unknown.${randomUUID().split('-')[0]}`
     await resetAndSeedAppData(appId)
@@ -272,7 +277,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
 
       const response = await postStats(baseData)
       expect(response.status).toBe(200)
-      expect(await response.json<StatsRes>()).toMatchObject({ error: 'version_not_found' })
+      expect(await response.json<StatsRes>()).toEqual({ status: 'ok' })
 
       const { count, error } = await getSupabaseClient()
         .from('app_versions')
@@ -282,6 +287,24 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
 
       expect(error).toBeNull()
       expect(count).toBe(0)
+
+      // The device still reports and is recorded, but no version_usage row is created.
+      const { data: deviceData, error: deviceError } = await getSupabaseClient()
+        .from('devices')
+        .select('version_name')
+        .eq('device_id', uuid)
+        .eq('app_id', appId)
+        .single()
+      expect(deviceError).toBeNull()
+      expect(deviceData?.version_name).toBe('1.0.0-missing.1')
+
+      const { count: usageCount, error: usageError } = await getSupabaseClient()
+        .from('version_usage')
+        .select('*', { count: 'exact', head: true })
+        .eq('app_id', appId)
+        .eq('version_name', '1.0.0-missing.1')
+      expect(usageError).toBeNull()
+      expect(usageCount).toBe(0)
     }
     finally {
       await getSupabaseClient().from('devices').delete().eq('device_id', uuid).eq('app_id', appId)
@@ -471,23 +494,45 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
           expect(response.status).toBe(200)
           expect(responseData.status).toBe('ok')
 
-          // Verify stats entry
-          const { error: statsError, data: statsData } = await getSupabaseClient()
-            .from('stats')
-            .select()
-            .eq('device_id', uuid)
-            .eq('app_id', appId)
-            .eq('action', action)
-            .single()
+          // Verify stats entry. Intermediate download progress is intentionally
+          // not stored (see isDroppedStatsLogAction in plugin_stats.ts).
+          if (isDroppedDownloadProgressAction(action)) {
+            const { count, error: statsError } = await getSupabaseClient()
+              .from('stats')
+              .select('*', { count: 'exact', head: true })
+              .eq('device_id', uuid)
+              .eq('app_id', appId)
+              .eq('action', action)
+            expect(statsError).toBeNull()
+            expect(count).toBe(0)
+          }
+          else {
+            const { error: statsError, data: statsData } = await getSupabaseClient()
+              .from('stats')
+              .select()
+              .eq('device_id', uuid)
+              .eq('app_id', appId)
+              .eq('action', action)
+              .single()
 
-          expect(statsError).toBeNull()
-          expect(statsData).toBeTruthy()
-          expect(statsData?.action).toBe(action)
-          expect(statsData?.device_id).toBe(uuid)
+            expect(statsError).toBeNull()
+            expect(statsData).toBeTruthy()
+            expect(statsData?.action).toBe(action)
+            expect(statsData?.device_id).toBe(uuid)
+          }
 
-          // Verify device state - fail actions should NOT create/update device records
-          // because the version_name in fail requests is the failed version, not the actual running version
-          if (!action.endsWith('_fail')) {
+          // Verify device state - fail, download, staging and delete actions should NOT
+          // create/update device records: their version_name is not the running version
+          if (!isRunningVersionAction(action)) {
+            const { count, error: deviceError } = await getSupabaseClient()
+              .from('devices')
+              .select('*', { count: 'exact', head: true })
+              .eq('device_id', uuid)
+              .eq('app_id', appId)
+            expect(deviceError).toBeNull()
+            expect(count).toBe(0)
+          }
+          else {
             const { error: deviceError, data: deviceData } = await getSupabaseClient()
               .from('devices')
               .select()
@@ -1217,5 +1262,134 @@ batchTestDescribe('[POST] /stats batch operations', () => {
     expect(responseData.results![0].error).toBe('on_premise_app')
     expect(responseData.results![1].status).toBe('error')
     expect(responseData.results![1].error).toBe('on_premise_app')
+  })
+})
+
+describe.skipIf(USE_CLOUDFLARE)('[POST] /stats device version attribution', () => {
+  it('keeps the running version when a new bundle is downloading', async () => {
+    const shortId = randomUUID().split('-')[0]
+    const appId = `${APP_NAME}.dlver.${shortId}`
+    await resetAndSeedAppData(appId)
+    await resetAndSeedAppDataStats(appId)
+    const uuid = randomUUID().toLowerCase()
+
+    try {
+      const running = await createAppVersions(`1.0.0-running-${shortId}.1`, appId)
+      const target = await createAppVersions(`1.0.0-target-${shortId}.2`, appId)
+
+      const setData = getBaseData(appId) as StatsPayload
+      setData.device_id = uuid
+      setData.action = 'set'
+      setData.version_name = running.name
+      expect((await postStats(setData)).status).toBe(200)
+
+      for (const action of ['download_zip_start', 'download_complete', 'set_next', 'insufficient_disk_space'] as StatsAction[]) {
+        const data = getBaseData(appId) as StatsPayload
+        data.device_id = uuid
+        data.action = action
+        data.version_name = target.name
+        const response = await postStats(data)
+        expect(response.status).toBe(200)
+        expect(await response.json<StatsRes>()).toEqual({ status: 'ok' })
+      }
+
+      const { data: deviceData, error } = await getSupabaseClient()
+        .from('devices')
+        .select('version_name')
+        .eq('device_id', uuid)
+        .eq('app_id', appId)
+        .single()
+      expect(error).toBeNull()
+      expect(deviceData?.version_name).toBe(running.name)
+    }
+    finally {
+      await resetAppData(appId)
+      await resetAppDataStats(appId)
+    }
+  })
+
+  it('records devices still running a deleted bundle', async () => {
+    const shortId = randomUUID().split('-')[0]
+    const appId = `${APP_NAME}.delver.${shortId}`
+    await resetAndSeedAppData(appId)
+    await resetAndSeedAppDataStats(appId)
+    const uuid = randomUUID().toLowerCase()
+
+    try {
+      const version = await createAppVersions(`1.0.0-deleted-${shortId}.1`, appId)
+      const { error: deleteError } = await getSupabaseClient()
+        .from('app_versions')
+        .update({ deleted: true })
+        .eq('id', version.id)
+      expect(deleteError).toBeNull()
+
+      const data = getBaseData(appId) as StatsPayload
+      data.device_id = uuid
+      data.action = 'app_moved_to_foreground'
+      data.version_name = version.name
+      const response = await postStats(data)
+      expect(response.status).toBe(200)
+      expect(await response.json<StatsRes>()).toEqual({ status: 'ok' })
+
+      const { data: deviceData, error } = await getSupabaseClient()
+        .from('devices')
+        .select('version_name')
+        .eq('device_id', uuid)
+        .eq('app_id', appId)
+        .single()
+      expect(error).toBeNull()
+      expect(deviceData?.version_name).toBe(version.name)
+
+      const { count, error: statsError } = await getSupabaseClient()
+        .from('stats')
+        .select('*', { count: 'exact', head: true })
+        .eq('device_id', uuid)
+        .eq('app_id', appId)
+        .eq('action', 'app_moved_to_foreground')
+      expect(statsError).toBeNull()
+      expect(count).toBe(1)
+    }
+    finally {
+      await resetAppData(appId)
+      await resetAppDataStats(appId)
+    }
+  })
+
+  it('counts one version fail per failed update, not per failed file', async () => {
+    const shortId = randomUUID().split('-')[0]
+    const appId = `${APP_NAME}.filefail.${shortId}`
+    await resetAndSeedAppData(appId)
+    await resetAndSeedAppDataStats(appId)
+
+    try {
+      const version = await createAppVersions(`1.0.0-filefail-${shortId}.1`, appId)
+      const uuid = randomUUID().toLowerCase()
+      for (const [action, versionName] of [
+        ['download_manifest_file_fail', `${version.name}:main.js`],
+        ['download_manifest_file_fail', `${version.name}:vendor.js`],
+        ['download_fail', version.name],
+      ] as [StatsAction, string][]) {
+        const data = getBaseData(appId) as StatsPayload
+        data.device_id = uuid
+        data.action = action
+        data.plugin_version = '7.17.0'
+        data.version_name = versionName
+        const response = await postStats(data)
+        expect(response.status).toBe(200)
+      }
+
+      const { data, error } = await getSupabaseClient()
+        .from('version_usage')
+        .select('action')
+        .eq('app_id', appId)
+        .eq('version_name', version.name)
+        .eq('action', 'fail')
+      expect(error).toBeNull()
+      expect(data).toHaveLength(1)
+    }
+    finally {
+      await resetAppData(appId)
+      await resetAppDataStats(appId)
+    }
   })
 })

@@ -1,12 +1,10 @@
 import { app as accept_invitation } from '../_backend/private/accept_invitation.ts'
-import { app as admin_credits } from '../_backend/private/admin_credits.ts'
-import { app as admin_org_support_channel } from '../_backend/private/admin_org_support_channel.ts'
-import { app as admin_stats } from '../_backend/private/admin_stats.ts'
 import { app as bundle_install_stats } from '../_backend/private/bundle_install_stats.ts'
 import { app as channel_device } from '../_backend/private/channel_device.ts'
 import { app as channel_stats } from '../_backend/private/channel_stats.ts'
 import { app as config } from '../_backend/private/config.ts'
 import { app as configBuilder } from '../_backend/private/config_builder.ts'
+import { app as customDomains } from '../_backend/private/custom_domains.ts'
 import { app as create_device } from '../_backend/private/create_device.ts'
 import { app as credits } from '../_backend/private/credits.ts'
 import { app as deleted_failed_version } from '../_backend/private/delete_failed_version.ts'
@@ -14,20 +12,25 @@ import { app as devices_priv } from '../_backend/private/devices.ts'
 import { app as download_link } from '../_backend/private/download_link.ts'
 import { app as emailPreferences } from '../_backend/private/email_preferences.ts'
 import { app as events } from '../_backend/private/events.ts'
+import { app as finalize_bundle_upload } from '../_backend/private/finalize_bundle_upload.ts'
 import { app as groups } from '../_backend/private/groups.ts'
 import { app as invite_existing_user_to_org } from '../_backend/private/invite_existing_user_to_org.ts'
 import { app as invite_new_user_to_org } from '../_backend/private/invite_new_user_to_org.ts'
 import { app as latency } from '../_backend/private/latency.ts'
 import { app as log_as } from '../_backend/private/log_as.ts'
+import { app as mcp_oauth } from '../_backend/private/mcp_oauth.ts'
 import { app as native_observe_stats } from '../_backend/private/native_observe_stats.ts'
 import { app as observe } from '../_backend/private/observe.ts'
 import { app as onboarding_ab_tests } from '../_backend/private/onboarding_ab_tests.ts'
 import { app as onboarding_progress } from '../_backend/private/onboarding_progress.ts'
 import { app as org_notification_stats } from '../_backend/private/org_notification_stats.ts'
+import { app as organization_invitation } from '../_backend/private/organization_invitation.ts'
 // Webapps API
 import { app as plans } from '../_backend/private/plans.ts'
 import { app as publicStats } from '../_backend/private/public_stats.ts'
+import { app as release_live } from '../_backend/private/release_live.ts'
 import { app as replay } from '../_backend/private/replay.ts'
+import { app as request_manifest_upload } from '../_backend/private/request_manifest_upload.ts'
 import { app as role_bindings } from '../_backend/private/role_bindings.ts'
 import { app as roles } from '../_backend/private/roles.ts'
 import { app as set_manifest } from '../_backend/private/set_manifest.ts'
@@ -57,6 +60,7 @@ const appGlobal = createHono(functionName, version)
 // Webapps API
 
 appGlobal.route('/plans', plans)
+appGlobal.route('/custom_domains', customDomains)
 appGlobal.route('/credits', credits)
 appGlobal.route('/store_top', storeTop)
 appGlobal.route('/website_stats', publicStats)
@@ -67,26 +71,28 @@ appGlobal.route('/channel_device', channel_device)
 appGlobal.route('/create_device', create_device)
 appGlobal.route('/channel_stats', channel_stats)
 appGlobal.route('/bundle_install_stats', bundle_install_stats)
+appGlobal.route('/release_live', release_live)
 appGlobal.route('/native_observe_stats', native_observe_stats)
 appGlobal.route('/observe', observe)
 appGlobal.route('/onboarding_ab_tests', onboarding_ab_tests)
 appGlobal.route('/onboarding_progress', onboarding_progress)
 appGlobal.route('/org_notification_stats', org_notification_stats)
+appGlobal.route('/organization_invitation', organization_invitation)
 appGlobal.route('/download_link', download_link)
 appGlobal.route('/log_as', log_as)
-appGlobal.route('/admin_credits', admin_credits)
-appGlobal.route('/admin_org_support_channel', admin_org_support_channel)
-appGlobal.route('/admin_stats', admin_stats)
+appGlobal.route('/mcp_oauth', mcp_oauth)
 appGlobal.route('/stats', stats_priv)
 appGlobal.route('/stripe_checkout', stripe_checkout)
 appGlobal.route('/stripe_portal', stripe_portal)
 appGlobal.route('/upload_link', upload_link)
+appGlobal.route('/request_manifest_upload', request_manifest_upload)
 appGlobal.route('/set_manifest', set_manifest)
 appGlobal.route('/delete_failed_version', deleted_failed_version)
 appGlobal.route('/set_org_email', set_org_email)
 appGlobal.route('/latency', latency)
 appGlobal.route('/replay', replay)
 appGlobal.route('/events', events)
+appGlobal.route('/finalize_bundle_upload', finalize_bundle_upload)
 appGlobal.route('/groups', groups)
 appGlobal.route('/role_bindings', role_bindings)
 appGlobal.route('/roles', roles)

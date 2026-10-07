@@ -466,7 +466,7 @@ defineExpose({
    -->
   <div
     v-if="showBanner"
-    class="mb-4 flex flex-col gap-4 rounded-lg border border-blue-200/80 bg-blue-100/40 px-5 py-3 shadow-sm animate-fade-in dark:border-blue-700/70 dark:bg-[#121b3a] sm:flex-row sm:items-center sm:justify-between"
+    class="mb-4 flex min-h-11 flex-col gap-2 rounded-lg border border-blue-200/80 bg-blue-100/40 px-4 py-2 shadow-sm animate-fade-in dark:border-blue-700/70 dark:bg-[#121b3a] sm:flex-row sm:items-center sm:justify-between"
   >
     <!-- Left side: Info icon and message -->
     <div class="flex items-center gap-3">
@@ -480,7 +480,7 @@ defineExpose({
     <button
       type="button"
       :disabled="deploying"
-      class="flex-shrink-0 inline-flex items-center justify-center rounded-md bg-blue-500 px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-blue-100/40 dark:focus:ring-offset-[#121b3a] disabled:opacity-50 disabled:cursor-not-allowed"
+      class="flex-shrink-0 inline-flex items-center justify-center rounded-md bg-blue-500 px-3 py-1 text-sm font-semibold text-white transition-colors hover:bg-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-blue-100/40 dark:focus:ring-offset-[#121b3a] disabled:opacity-50 disabled:cursor-not-allowed"
       @click="handleDeploy"
     >
       <!-- Button text changes during deployment -->
@@ -495,7 +495,7 @@ defineExpose({
     to="#dialog-v2-content"
   >
     <div class="space-y-4">
-      <div class="p-3 rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/40">
+      <div class="p-3 rounded-xl border border-slate-200 bg-slate-50 dark:border-white/10 dark:bg-white/[0.03]">
         <p class="text-sm font-medium text-slate-800 dark:text-slate-100">
           {{ t('deploy-default-channels-label') }}
         </p>

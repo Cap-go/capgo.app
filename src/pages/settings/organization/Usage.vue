@@ -10,9 +10,10 @@ import CreditsCta from '~/components/CreditsCta.vue'
 import PageLoader from '~/components/PageLoader.vue'
 import { bytesToGb } from '~/services/conversion'
 import { formatLocalDate, formatLocalDateTime, formatUtcDateTimeAsLocal } from '~/services/date'
+import { formatMau, getOrgExtraMau, quoteEnterpriseScale } from '~/services/enterpriseScale'
 import { formatNumber, formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
-import { calculateCreditCost, getCurrentPlanNameOrg, getPlans, getPlanUsagePercent, getTotalStorage, getUsageCreditDeductions } from '~/services/supabase'
+import { calculateCreditCost, getCreditPricingSteps, getCurrentPlanNameOrg, getPlans, getPlanUsagePercent, getTotalStorage, getUsageCreditDeductions } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { isCreditsOnlyOrg } from '~/utils/organizationBilling'
@@ -45,11 +46,43 @@ watchEffect(async () => {
   }
 })
 
+type UsageTotals = Record<'mau' | 'bandwidth' | 'storage' | 'build_time', number>
+
+async function estimateOverageCost(orgId: string, plan: Database['public']['Tables']['plans']['Row'], usage: UsageTotals) {
+  // Credit-only orgs have no plan allowance: billing prices all usage
+  // from the bottom of the tier ladder.
+  const creditsOnly = isCreditsOnlyOrg(organizationStore.currentOrganization)
+  const included: UsageTotals = {
+    mau: creditsOnly ? 0 : plan.mau,
+    bandwidth: creditsOnly ? 0 : Math.round(plan.bandwidth * 1073741824),
+    storage: creditsOnly ? 0 : Math.round(plan.storage * 1073741824),
+    build_time: creditsOnly ? 0 : plan.build_time_unit,
+  }
+  try {
+    const overageCost = await calculateCreditCost({
+      org_id: orgId,
+      mau: Math.max(usage.mau - included.mau, 0),
+      bandwidth: Math.max(usage.bandwidth - included.bandwidth, 0),
+      storage: Math.max(usage.storage - included.storage, 0),
+      build_time: Math.max(usage.build_time - included.build_time, 0),
+      included,
+    })
+    return roundNumber(overageCost.total_cost)
+  }
+  catch (err) {
+    console.error('Error estimating credit overage cost:', err)
+    return null
+  }
+}
+
 async function getUsage(orgId: string) {
   const usage = main.dashboard
 
   const planCurrent = await getCurrentPlanNameOrg(orgId)
-  const currentPlan = plans.value.find((p: Database['public']['Tables']['plans']['Row']) => p.name === planCurrent)
+  const basePlan = plans.value.find((p: Database['public']['Tables']['plans']['Row']) => p.name === planCurrent)
+  // Enterprise extra MAU is part of the plan quota and billed with the plan.
+  const extraMau = basePlan?.name === 'Enterprise' ? await getOrgExtraMau(orgId).catch(() => 0) : 0
+  const currentPlan = basePlan && extraMau > 0 ? { ...basePlan, mau: basePlan.mau + extraMau } : basePlan
 
   // Get usage percentages
   let detailPlanUsage: PlanUsageDetailed = {
@@ -132,34 +165,35 @@ async function getUsage(orgId: string) {
     totalStorage,
   })
 
-  const basePrice = currentPlan?.price_m ?? 0
-  let estimatedUsagePrice: number | null = null
-
-  if (currentPlan) {
-    try {
-      const overageCost = await calculateCreditCost({
-        org_id: orgId,
-        mau: Math.max(totalMau - currentPlan.mau, 0),
-        bandwidth: Math.max(totalBandwidthBytes - Math.round(currentPlan.bandwidth * 1073741824), 0),
-        storage: Math.max(totalStorageBytes - Math.round(currentPlan.storage * 1073741824), 0),
-        build_time: Math.max(totalBuildTime - currentPlan.build_time_unit, 0),
-      })
-      estimatedUsagePrice = roundNumber(overageCost.total_cost)
-    }
-    catch (err) {
-      console.error('Error estimating credit overage cost:', err)
-    }
+  // Extra MAU is priced on the global MAU tiers, like the Stripe item. null = price unavailable.
+  let basePrice: number | null = currentPlan?.price_m ?? 0
+  if (basePlan && extraMau > 0) {
+    const mauSteps = (await getCreditPricingSteps()).filter(step => step.type === 'mau')
+    basePrice = mauSteps.length
+      ? quoteEnterpriseScale(mauSteps, basePlan.mau, basePlan.price_m, basePlan.mau + extraMau).totalMonthly
+      : null
   }
+
+  const estimatedUsagePrice = currentPlan
+    ? await estimateOverageCost(orgId, currentPlan, {
+        mau: totalMau,
+        bandwidth: totalBandwidthBytes,
+        storage: totalStorageBytes,
+        build_time: totalBuildTime,
+      })
+    : null
 
   const totalUsagePrice = creditDeductionsInCycle.length > 0
     ? roundNumber(totalCreditDeductions)
     : estimatedUsagePrice
-  const totalPrice = totalUsagePrice !== null && currentPlan
+  const totalPrice = totalUsagePrice !== null && basePrice !== null && currentPlan
     ? roundNumber(basePrice + totalUsagePrice)
     : null
 
   return {
     currentPlan,
+    extraMau,
+    basePrice,
     totalPrice,
     totalUsagePrice,
     totalMau,
@@ -184,6 +218,8 @@ const isCreditsOnly = computed(() => isCreditsOnlyOrg(currentOrganization.value)
 const currentPlanLabel = computed(() => {
   if (isCreditsOnly.value)
     return t('credits')
+  if (currentPlan.value && planUsage.value?.extraMau)
+    return t('enterprise-scale-plan-name', { mau: formatMau(currentPlan.value.mau + planUsage.value.extraMau) })
   return currentPlan.value?.name || t('loading')
 })
 
@@ -345,7 +381,7 @@ function nextRunDate() {
 </script>
 
 <template>
-  <div class="flex flex-col pb-8 bg-white border shadow-lg md:p-8 md:pb-0 md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
+  <div class="flex flex-col pb-8 bg-white border shadow-sm md:p-8 md:pb-0 md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
     <div v-if="!isLoading" class="flex flex-col w-full">
       <!-- Header -->
       <div class="flex flex-col justify-between gap-4 mb-8 md:flex-row md:items-center shrink-0">
@@ -366,7 +402,7 @@ function nextRunDate() {
           </div>
         </div>
 
-        <div class="flex gap-2 items-center py-1.5 px-3 text-sm bg-gray-50 rounded-lg border border-gray-200 shadow-sm dark:bg-gray-900 dark:border-gray-700">
+        <div class="flex gap-2 items-center py-1.5 px-3 text-sm bg-slate-50 rounded-lg border border-slate-200 shadow-sm dark:bg-white/[0.03] dark:border-white/10">
           <span class="text-gray-500 dark:text-gray-400">{{ t('billing-cycle') }}:</span>
           <span class="font-medium text-gray-900 dark:text-white">{{ planUsage?.cycle.subscription_anchor_start }}</span>
           <span class="text-gray-400">→</span>
@@ -377,7 +413,7 @@ function nextRunDate() {
       <!-- Plan & Cost Overview -->
       <div class="grid grid-cols-1 gap-6 mb-8 lg:grid-cols-3 shrink-0">
         <!-- Current Plan -->
-        <div class="flex flex-col justify-between p-5 border border-gray-200 shadow-sm lg:col-span-2 bg-gray-50 rounded-xl dark:bg-gray-900 dark:border-gray-700">
+        <div class="flex flex-col justify-between p-5 border border-slate-200 shadow-sm lg:col-span-2 bg-slate-50 rounded-xl dark:bg-white/[0.03] dark:border-white/10">
           <div class="flex flex-row justify-between">
             <div class="flex flex-col">
               <div class="mb-1 text-sm text-gray-500 dark:text-gray-400">
@@ -395,7 +431,7 @@ function nextRunDate() {
                 {{ t('base') }}
               </div>
               <div class="text-2xl font-bold text-gray-900 dark:text-white">
-                {{ formatMonthlyPrice(currentPlan?.price_m) }}
+                {{ formatMonthlyPrice(planUsage ? planUsage.basePrice : currentPlan?.price_m) }}
               </div>
             </div>
             <div v-if="!hideExternalPurchaseFlows && isCreditsOnly" class="flex flex-col">
@@ -447,7 +483,7 @@ function nextRunDate() {
             </button>
           </div>
         </div>
-        <div v-else class="flex items-center justify-center p-5 text-sm italic text-gray-400 border border-gray-200 bg-gray-50 rounded-xl dark:text-gray-500 dark:bg-gray-900 dark:border-gray-700">
+        <div v-else class="flex items-center justify-center p-5 text-sm italic text-gray-400 border border-slate-200 bg-slate-50 rounded-xl dark:text-gray-500 dark:bg-white/[0.03] dark:border-white/10">
           {{ t('good') }}
         </div>
       </div>
@@ -461,7 +497,7 @@ function nextRunDate() {
       </h2>
       <div class="grid grid-cols-1 gap-6 mb-8 md:grid-cols-2 xl:grid-cols-4 shrink-0">
         <!-- MAU -->
-        <div class="p-5 transition-shadow border border-gray-200 shadow-sm bg-gray-50 rounded-xl dark:bg-gray-900 dark:border-gray-700 hover:shadow-md">
+        <div class="p-5 transition-shadow border border-slate-200 shadow-sm bg-slate-50 rounded-xl dark:bg-white/[0.03] dark:border-white/10 hover:shadow-md">
           <div class="flex items-start justify-between mb-4">
             <div class="text-sm font-medium text-gray-500 dark:text-gray-400">
               {{ t('monthly-active-users') }}
@@ -486,7 +522,7 @@ function nextRunDate() {
         </div>
 
         <!-- Storage -->
-        <div class="p-5 transition-shadow border border-gray-200 shadow-sm bg-gray-50 rounded-xl dark:bg-gray-900 dark:border-gray-700 hover:shadow-md">
+        <div class="p-5 transition-shadow border border-slate-200 shadow-sm bg-slate-50 rounded-xl dark:bg-white/[0.03] dark:border-white/10 hover:shadow-md">
           <div class="flex items-start justify-between mb-4">
             <div class="text-sm font-medium text-gray-500 dark:text-gray-400">
               {{ t('Storage') }}
@@ -511,7 +547,7 @@ function nextRunDate() {
         </div>
 
         <!-- Bandwidth -->
-        <div class="p-5 transition-shadow border border-gray-200 shadow-sm bg-gray-50 rounded-xl dark:bg-gray-900 dark:border-gray-700 hover:shadow-md">
+        <div class="p-5 transition-shadow border border-slate-200 shadow-sm bg-slate-50 rounded-xl dark:bg-white/[0.03] dark:border-white/10 hover:shadow-md">
           <div class="flex items-start justify-between mb-4">
             <div class="text-sm font-medium text-gray-500 dark:text-gray-400">
               {{ t('Bandwidth') }}
@@ -536,7 +572,7 @@ function nextRunDate() {
         </div>
 
         <!-- Build Time -->
-        <div class="p-5 transition-shadow border border-gray-200 shadow-sm bg-gray-50 rounded-xl dark:bg-gray-900 dark:border-gray-700 hover:shadow-md">
+        <div class="p-5 transition-shadow border border-slate-200 shadow-sm bg-slate-50 rounded-xl dark:bg-white/[0.03] dark:border-white/10 hover:shadow-md">
           <div class="flex items-start justify-between mb-4">
             <div class="text-sm font-medium text-gray-500 dark:text-gray-400">
               {{ t('build-time') }}

@@ -186,7 +186,8 @@ function googleDataApiClient(
         indexStatements,
         postIndexAtomicStatements,
       } = partitionReadReplicaImportStatements(plan.statements)
-      // Columns/types/sequences first, then indexes, then USING INDEX attaches.
+      // New tables and columns/types/sequences first, then indexes, then
+      // USING INDEX attaches.
       // Index DDL is imported outside BEGIN/COMMIT and without CONCURRENTLY
       // because Cloud SQL managed SQL import is transactional.
       if (preIndexAtomicStatements.length) {
@@ -256,6 +257,11 @@ function assertGoogleReadReplicaSchemaStatement(
   }
 
   switch (statement.kind) {
+    case 'table':
+      assertSelectedReplicaTable(statement)
+      throw new Error(
+        `Cloud SQL server-side import cannot create unsupported table ${statement.table}.`,
+      )
     case 'column':
       assertSelectedReplicaTable(statement)
       assertColumnStatement(statement)

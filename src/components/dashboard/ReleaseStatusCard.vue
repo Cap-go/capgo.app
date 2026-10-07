@@ -257,8 +257,8 @@ onMounted(async () => {
 
         <!-- Action button -->
         <button
-          type="button"
           v-if="defaultChannelId"
+          type="button"
           class="flex items-center justify-center w-full gap-2 px-4 py-2 mt-auto text-sm font-medium text-white transition-colors rounded-md"
           :class="{
             'bg-emerald-600 hover:bg-emerald-700': status === 'recent',

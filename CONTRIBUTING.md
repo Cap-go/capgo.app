@@ -9,6 +9,14 @@ the relevant section before making your contribution. It will make it a lot
 easier for us maintainers and smooth out the experience for all involved. The
 community looks forward to your contributions. 🎉
 
+## Admin dashboard changes
+
+The admin dashboard is maintained in the private
+[`Cap-go/capgo_admin_dashboard`](https://github.com/Cap-go/capgo_admin_dashboard)
+repository. Do not modify dashboard code in this repository. Open dashboard pull
+requests in the private repository and read
+[`docs/admin-dashboard.md`](docs/admin-dashboard.md) for the ownership boundary.
+
 ## Do not break already-published CLI versions
 
 **Never ship backend or database changes that break the Capgo CLI version customers

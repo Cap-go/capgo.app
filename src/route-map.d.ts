@@ -45,125 +45,6 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
-    '/admin/dashboard/': RouteRecordInfo<
-      '/admin/dashboard/',
-      '/admin/dashboard',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/ab-tests': RouteRecordInfo<
-      '/admin/dashboard/ab-tests',
-      '/admin/dashboard/ab-tests',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/builder': RouteRecordInfo<
-      '/admin/dashboard/builder',
-      '/admin/dashboard/builder',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/channel-surfing': RouteRecordInfo<
-      '/admin/dashboard/channel-surfing',
-      '/admin/dashboard/channel-surfing',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/cli': RouteRecordInfo<
-      '/admin/dashboard/cli',
-      '/admin/dashboard/cli',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/credits': RouteRecordInfo<
-      '/admin/dashboard/credits',
-      '/admin/dashboard/credits',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/debug': RouteRecordInfo<
-      '/admin/dashboard/debug',
-      '/admin/dashboard/debug',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/famous-apps': RouteRecordInfo<
-      '/admin/dashboard/famous-apps',
-      '/admin/dashboard/famous-apps',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/frontend-onboarding': RouteRecordInfo<
-      '/admin/dashboard/frontend-onboarding',
-      '/admin/dashboard/frontend-onboarding',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/notifications': RouteRecordInfo<
-      '/admin/dashboard/notifications',
-      '/admin/dashboard/notifications',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/organizations': RouteRecordInfo<
-      '/admin/dashboard/organizations',
-      '/admin/dashboard/organizations',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/plans': RouteRecordInfo<
-      '/admin/dashboard/plans',
-      '/admin/dashboard/plans',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/plugins': RouteRecordInfo<
-      '/admin/dashboard/plugins',
-      '/admin/dashboard/plugins',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/replication': RouteRecordInfo<
-      '/admin/dashboard/replication',
-      '/admin/dashboard/replication',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/revenue': RouteRecordInfo<
-      '/admin/dashboard/revenue',
-      '/admin/dashboard/revenue',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/updates': RouteRecordInfo<
-      '/admin/dashboard/updates',
-      '/admin/dashboard/updates',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/admin/dashboard/users': RouteRecordInfo<
-      '/admin/dashboard/users',
-      '/admin/dashboard/users',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
     '/ApiKeys': RouteRecordInfo<
       '/ApiKeys',
       '/apikeys',
@@ -174,13 +55,6 @@ declare module 'vue-router/auto-routes' {
     '/app/[app]': RouteRecordInfo<
       '/app/[app]',
       '/app/:app',
-      { app: ParamValue<true> },
-      { app: ParamValue<false> },
-      | never
-    >,
-    '/app/[app].active-bundle': RouteRecordInfo<
-      '/app/[app].active-bundle',
-      '/app/:app/active-bundle',
       { app: ParamValue<true> },
       { app: ParamValue<false> },
       | never
@@ -318,20 +192,6 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
-    '/app/[app].installs': RouteRecordInfo<
-      '/app/[app].installs',
-      '/app/:app/installs',
-      { app: ParamValue<true> },
-      { app: ParamValue<false> },
-      | never
-    >,
-    '/app/[app].native': RouteRecordInfo<
-      '/app/[app].native',
-      '/app/:app/native',
-      { app: ParamValue<true> },
-      { app: ParamValue<false> },
-      | never
-    >,
     '/app/[app].notifications': RouteRecordInfo<
       '/app/[app].notifications',
       '/app/:app/notifications',
@@ -342,6 +202,13 @@ declare module 'vue-router/auto-routes' {
     '/app/[app].observe.compatibility': RouteRecordInfo<
       '/app/[app].observe.compatibility',
       '/app/:app/observe/compatibility',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
+    '/app/[app].observe.errors': RouteRecordInfo<
+      '/app/[app].observe.errors',
+      '/app/:app/observe/errors',
       { app: ParamValue<true> },
       { app: ParamValue<false> },
       | never
@@ -360,20 +227,6 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
-    '/app/[app].observe.plugins': RouteRecordInfo<
-      '/app/[app].observe.plugins',
-      '/app/:app/observe/plugins',
-      { app: ParamValue<true> },
-      { app: ParamValue<false> },
-      | never
-    >,
-    '/app/[app].observe.updater': RouteRecordInfo<
-      '/app/[app].observe.updater',
-      '/app/:app/observe/updater',
-      { app: ParamValue<true> },
-      { app: ParamValue<false> },
-      | never
-    >,
     '/app/[app].settings': RouteRecordInfo<
       '/app/[app].settings',
       '/app/:app/settings',
@@ -388,18 +241,11 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
-    '/app/modules': RouteRecordInfo<
-      '/app/modules',
-      '/app/modules',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/app/modules_test': RouteRecordInfo<
-      '/app/modules_test',
-      '/app/modules_test',
-      Record<never, never>,
-      Record<never, never>,
+    '/app/[app].settings.usage': RouteRecordInfo<
+      '/app/[app].settings.usage',
+      '/app/:app/settings/usage',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
       | never
     >,
     '/app/new': RouteRecordInfo<
@@ -489,6 +335,13 @@ declare module 'vue-router/auto-routes' {
     '/login-cli': RouteRecordInfo<
       '/login-cli',
       '/login-cli',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/oauth/authorize': RouteRecordInfo<
+      '/oauth/authorize',
+      '/oauth/authorize',
       Record<never, never>,
       Record<never, never>,
       | never
@@ -732,142 +585,6 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | never
     }
-    'src/pages/admin/dashboard/index.vue': {
-      routes:
-        | '/admin/dashboard/'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/ab-tests.vue': {
-      routes:
-        | '/admin/dashboard/ab-tests'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/builder.vue': {
-      routes:
-        | '/admin/dashboard/builder'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/channel-surfing.vue': {
-      routes:
-        | '/admin/dashboard/channel-surfing'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/cli.vue': {
-      routes:
-        | '/admin/dashboard/cli'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/credits.vue': {
-      routes:
-        | '/admin/dashboard/credits'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/debug.vue': {
-      routes:
-        | '/admin/dashboard/debug'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/famous-apps.vue': {
-      routes:
-        | '/admin/dashboard/famous-apps'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/frontend-onboarding.vue': {
-      routes:
-        | '/admin/dashboard/frontend-onboarding'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/notifications.vue': {
-      routes:
-        | '/admin/dashboard/notifications'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/organizations.vue': {
-      routes:
-        | '/admin/dashboard/organizations'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/plans.vue': {
-      routes:
-        | '/admin/dashboard/plans'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/plugins.vue': {
-      routes:
-        | '/admin/dashboard/plugins'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/replication.vue': {
-      routes:
-        | '/admin/dashboard/replication'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/revenue.vue': {
-      routes:
-        | '/admin/dashboard/revenue'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/updates.vue': {
-      routes:
-        | '/admin/dashboard/updates'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/admin/dashboard/users.vue': {
-      routes:
-        | '/admin/dashboard/users'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
     'src/pages/ApiKeys.vue': {
       routes:
         | '/ApiKeys'
@@ -879,14 +596,6 @@ declare module 'vue-router/auto-routes' {
     'src/pages/app/[app].vue': {
       routes:
         | '/app/[app]'
-      views:
-        | never
-      pathParamNames:
-        | 'app'
-    }
-    'src/pages/app/[app].active-bundle.vue': {
-      routes:
-        | '/app/[app].active-bundle'
       views:
         | never
       pathParamNames:
@@ -1057,22 +766,6 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | 'app'
     }
-    'src/pages/app/[app].installs.vue': {
-      routes:
-        | '/app/[app].installs'
-      views:
-        | never
-      pathParamNames:
-        | 'app'
-    }
-    'src/pages/app/[app].native.vue': {
-      routes:
-        | '/app/[app].native'
-      views:
-        | never
-      pathParamNames:
-        | 'app'
-    }
     'src/pages/app/[app].notifications.vue': {
       routes:
         | '/app/[app].notifications'
@@ -1084,6 +777,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/app/[app].observe.compatibility.vue': {
       routes:
         | '/app/[app].observe.compatibility'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
+    'src/pages/app/[app].observe.errors.vue': {
+      routes:
+        | '/app/[app].observe.errors'
       views:
         | never
       pathParamNames:
@@ -1105,22 +806,6 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | 'app'
     }
-    'src/pages/app/[app].observe.plugins.vue': {
-      routes:
-        | '/app/[app].observe.plugins'
-      views:
-        | never
-      pathParamNames:
-        | 'app'
-    }
-    'src/pages/app/[app].observe.updater.vue': {
-      routes:
-        | '/app/[app].observe.updater'
-      views:
-        | never
-      pathParamNames:
-        | 'app'
-    }
     'src/pages/app/[app].settings.vue': {
       routes:
         | '/app/[app].settings'
@@ -1137,21 +822,13 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | 'app'
     }
-    'src/pages/app/modules.vue': {
+    'src/pages/app/[app].settings.usage.vue': {
       routes:
-        | '/app/modules'
+        | '/app/[app].settings.usage'
       views:
         | never
       pathParamNames:
-        | never
-    }
-    'src/pages/app/modules_test.vue': {
-      routes:
-        | '/app/modules_test'
-      views:
-        | never
-      pathParamNames:
-        | never
+        | 'app'
     }
     'src/pages/app/new.vue': {
       routes:
@@ -1252,6 +929,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/login-cli.vue': {
       routes:
         | '/login-cli'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/oauth/authorize.vue': {
+      routes:
+        | '/oauth/authorize'
       views:
         | never
       pathParamNames:

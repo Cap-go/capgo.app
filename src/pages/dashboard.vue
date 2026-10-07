@@ -118,6 +118,7 @@ function handleTab(key: string) {
     <main class="relative flex flex-1 w-full min-h-0 mt-0 overflow-hidden bg-blue-50 dark:bg-slate-800/40">
       <div
         ref="scrollContainer"
+        data-native-scroll
         class="relative flex-1 w-full min-h-0 px-4 pt-2 mx-auto mb-8 sm:px-6 md:pt-8 lg:px-8 max-w-9xl"
         :class="shouldBlurContent ? 'overflow-hidden' : 'overflow-y-auto'"
       >
@@ -153,7 +154,7 @@ function handleTab(key: string) {
           v-if="hasNoApps"
           class="flex absolute inset-0 z-10 flex-col justify-center items-center bg-white/60 dark:bg-gray-900/60"
         >
-          <div class="p-8 text-center bg-white rounded-xl border shadow-lg dark:bg-gray-800 dark:border-gray-700">
+          <div class="p-8 text-center bg-white rounded-xl border shadow-sm dark:bg-slate-800/60 dark:border-white/10">
             <h2 class="mb-2 text-2xl font-bold text-gray-900 dark:text-white">
               {{ t('no-apps-yet') }}
             </h2>

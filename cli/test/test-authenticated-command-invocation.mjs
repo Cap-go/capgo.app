@@ -37,6 +37,8 @@ const indexSource = readFileSync(join(testDir, '../src/index.ts'), 'utf8')
 const loginSource = readFileSync(join(testDir, '../src/login.ts'), 'utf8')
 const initSource = readFileSync(join(testDir, '../src/init/command.ts'), 'utf8')
 const builderSource = readFileSync(join(testDir, '../src/build/onboarding/command.ts'), 'utf8')
+const bundleUploadSource = readFileSync(join(testDir, '../src/bundle/upload-command.ts'), 'utf8')
+const credentialsManageSource = readFileSync(join(testDir, '../src/build/credentials-manage.ts'), 'utf8')
 
 function sourceBetween(source, start, end) {
   const startIndex = source.indexOf(start)
@@ -83,5 +85,16 @@ assert.ok(initInvocationIndex > initValidationIndex, 'init invocation is emitted
 const builderAuthCallback = sourceBetween(builderSource, 'onAuthenticated: (key, metadata) => {', 'onBeforeExit: finishBuildReplay')
 assert.match(builderAuthCallback, /flushDeferredCommandInvocation\(key\)/)
 assert.match(builderAuthCallback, /if \(metadata\.method\)/)
+
+const builderInitCommandSource = sourceBetween(indexSource, ".command('init')", ".command('request [appId]')")
+assert.match(builderInitCommandSource, /enableSelfUpdate: true/)
+assert.match(builderSource, /const analyticsEnabled = options\.enableSelfUpdate === true/)
+assert.match(builderSource, /action: 'start_setup'/)
+assert.match(builderSource, /startSetupLookupInFlight/)
+assert.match(builderSource, /step: firstSetupStep/)
+assert.match(builderSource, /supaHost: options\.supaHost/)
+assert.match(builderSource, /resolveOwnerOrgId\(apikey, appId, \{[\s\S]*?supaHost: options\.supaHost,[\s\S]*?supaAnon: options\.supaAnon,[\s\S]*?\}, controller\.signal\)/)
+assert.doesNotMatch(bundleUploadSource, /enableSelfUpdate/)
+assert.doesNotMatch(credentialsManageSource, /enableSelfUpdate/)
 
 console.log('✅ authenticated command invocation tests passed')

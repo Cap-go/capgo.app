@@ -51,6 +51,8 @@ import {
 } from '../ai/analyze'
 import {
   appendCapturedLine,
+  flushCapturedLogs,
+  readCapturedLog,
   registerCleanupHandlers,
   shouldCaptureLogs,
   startCaptureForJob,
@@ -58,7 +60,6 @@ import {
 import { renderMarkdown } from '../ai/render-markdown'
 import { createStreamingMarkdownRenderer } from '../ai/stream-markdown'
 import { aiAnalysisResultFromPostAnalyze, trackAiAnalysisChoice, trackAiAnalysisResult } from '../ai/telemetry'
-import { type SupportBundleFiles, writeSupportBundleFiles } from '../onboarding-support.js'
 import { CliUserError } from '../shared/cli-user-error'
 import { copyToClipboard, revealInFinder } from '../support/clipboard.js'
 import { contactSupport } from '../support/contact-support.js'
@@ -77,6 +78,7 @@ import { syncIosMarketingVersion } from './ios-marketing-version'
 import { writeBuildOutputRecord } from './output-record'
 import { getPlatformDirFromCapacitorConfig, normalizeNativeDependencyPathsInText } from './platform-paths'
 import { handleCustomMsg } from './qr.js'
+import { prepareBuildSupportLogBundle } from './support-log-bundle.js'
 import { trackBuilderUpload } from './telemetry.js'
 
 /**
@@ -2076,7 +2078,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       buildLog: (msg: string) => {
         log.buildLog(msg)
         if (captureEnabled && capturedJobId) {
-          void appendCapturedLine(capturedJobId, msg)
+          appendCapturedLine(capturedJobId, msg)
         }
       },
     }
@@ -2428,19 +2430,29 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       // - 'auto-prompt'    → existing interactive / CI matrix via
       //                      decideAnalyzeBehavior + clack prompts.
       if (finalStatus === 'failed' && captureEnabled && capturedJobId && aiAnalysisMode === 'caller-handled') {
-        // Preserve the captured log until the caller calls
-        // releaseCapturedLogs(jobId) explicitly. Without this, the cleanup
-        // handlers registered above would remove it on process exit before
-        // the caller had a chance to read it.
-        keepPromptFile = true
-        const logsPath = `${process.env.CAPGO_AI_LOG_BASE_DIR || '/tmp/capgo-builds'}/${capturedJobId}.log`
-        aiAnalysisInfo = {
-          jobId: capturedJobId,
-          capturedLogPath: logsPath,
-          ready: true,
+        try {
+          // Do not hand another caller a path until every streamed line is on
+          // disk. A failed drain means the path is not a valid AI input.
+          await flushCapturedLogs(capturedJobId)
+          // Preserve the captured log until the caller calls
+          // releaseCapturedLogs(jobId) explicitly. Without this, the cleanup
+          // handlers registered above would remove it on process exit before
+          // the caller had a chance to read it.
+          keepPromptFile = true
+          const logsPath = `${process.env.CAPGO_AI_LOG_BASE_DIR || '/tmp/capgo-builds'}/${capturedJobId}.log`
+          aiAnalysisInfo = {
+            jobId: capturedJobId,
+            capturedLogPath: logsPath,
+            ready: true,
+          }
+        }
+        catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          process.stderr.write(`AI analysis unavailable because the captured Builder log could not be finalized: ${message}\n`)
         }
       }
       else if (finalStatus === 'failed' && captureEnabled && capturedJobId && aiAnalysisMode === 'auto-prompt') {
+        const failedJobId = capturedJobId
         const behavior = decideAnalyzeBehavior({
           isTTY: process.stdout.isTTY === true,
           aiAnalyticsFlag: options.aiAnalytics === true,
@@ -2449,6 +2461,11 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
 
         const AI_WARNING = '⚠ AI can make mistakes. Always verify the diagnosis against the full log before applying the suggested fix.'
 
+        const prepareSupportLogBundle = async () => prepareBuildSupportLogBundle({
+          appId,
+          jobId: failedJobId,
+          internalLogPath: getInternalLogPath(),
+        })
 
         const runCapgoAi = async (choice: 'capgo_ai' | 'auto_upload', triggeredBy: 'menu' | 'ci_flag'): Promise<void> => {
           await trackAiAnalysisChoice({
@@ -2472,34 +2489,18 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
                 const answer = await confirm({ message, initialValue: true })
                 return answer === true
               },
-              buildFiles: () => {
+              buildFiles: async () => {
                 const s = spinnerC()
                 s.start('Preparing your logs to send to Capgo support…')
                 try {
-                  let internalLines: string[] = []
-                  const internalLogPath = getInternalLogPath()
-                  if (internalLogPath) {
-                    try { internalLines = readFileSync(internalLogPath, 'utf8').split('\n') }
-                    catch { /* best-effort */ }
-                  }
-                  let buildLogLines: string[] = []
-                  try {
-                    const logsPath = `${process.env.CAPGO_AI_LOG_BASE_DIR || '/tmp/capgo-builds'}/${capturedJobId}.log`
-                    buildLogLines = readFileSync(logsPath, 'utf8').split('\n')
-                  }
-                  catch { /* best-effort */ }
-                  const built = writeSupportBundleFiles({
-                    kind: 'build-request',
-                    appId,
-                    error: `Cloud build ${capturedJobId} failed`,
-                    logs: buildLogLines,
-                    sections: internalLines.length > 0 ? [{ title: 'Internal log', lines: internalLines }] : [],
-                  })
+                  const built = await prepareSupportLogBundle()
                   s.stop(built ? 'Logs ready.' : 'Couldn\'t prepare logs.')
                   return built
                 }
-                catch {
+                catch (error) {
                   s.stop('Couldn\'t prepare logs.')
+                  const message = error instanceof Error ? error.message : String(error)
+                  process.stderr.write(`Could not prepare support logs because the captured Builder log is unavailable: ${message}\n`)
                   return null
                 }
               },
@@ -2517,8 +2518,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
           const logsPath = `${process.env.CAPGO_AI_LOG_BASE_DIR || '/tmp/capgo-builds'}/${capturedJobId}.log`
           let logs = ''
           try {
-            const { readFile } = await import('node:fs/promises')
-            logs = await readFile(logsPath, 'utf8')
+            logs = await readCapturedLog(failedJobId)
           }
           catch (err) {
             // Don't crash the CLI on a missing/unreadable log file, but DO tell
@@ -2642,41 +2642,8 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
 
         // Spec: at a build failure, "Email Capgo support" comes first — the same
         // contact-support flow as the onboarding wizard, with clack-flavored deps.
-        // Shared bundle prep for both the interactive email flow and the CI/CD
-        // --send-logs flow: read the internal log + the full persisted build log
-        // (both best-effort) and render/gzip them into a support bundle. The
-        // bundle is gzipped + uploaded/attached, so size isn't a concern here —
-        // support needs the full build log, not a tail.
-        const prepareSupportLogBundle = ({
-          capturedJobId,
-          appId,
-        }: {
-          capturedJobId: string | null
-          appId: string
-        }): SupportBundleFiles | null => {
-          const internalLogPath = getInternalLogPath()
-          let internalLines: string[] = []
-          if (internalLogPath) {
-            try {
-              internalLines = readFileSync(internalLogPath, 'utf8').split('\n')
-            }
-            catch { /* best-effort */ }
-          }
-          let buildLogLines: string[] = []
-          try {
-            const logsPath = `${process.env.CAPGO_AI_LOG_BASE_DIR || '/tmp/capgo-builds'}/${capturedJobId}.log`
-            buildLogLines = readFileSync(logsPath, 'utf8').split('\n')
-          }
-          catch { /* best-effort */ }
-          return writeSupportBundleFiles({
-            kind: 'build-request',
-            appId,
-            error: `Cloud build ${capturedJobId} failed`,
-            logs: buildLogLines,
-            sections: internalLines.length > 0 ? [{ title: 'Internal log', lines: internalLines }] : [],
-          })
-        }
-
+        // Shared bundle prep drains the persisted Builder log before reading it;
+        // the optional internal log remains best-effort.
         const runEmailSupport = async (): Promise<void> => {
           await contactSupport({
             subject: `Capgo Builder support — ${appId} (${platform})`,
@@ -2702,18 +2669,20 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
                 return true
               }
             },
-            buildFiles: () => {
+            buildFiles: async () => {
               // The build log can be large; show a spinner while we render + gzip
               // (and trim to fit the 10 MB cap) so it doesn't look frozen.
               const s = spinnerC()
               s.start('Preparing your logs to send…')
               try {
-                const built = prepareSupportLogBundle({ capturedJobId, appId })
+                const built = await prepareSupportLogBundle()
                 s.stop(built ? 'Logs ready.' : 'Couldn\'t prepare logs.')
                 return built
               }
-              catch {
+              catch (error) {
                 s.stop('Couldn\'t prepare logs.')
+                const message = error instanceof Error ? error.message : String(error)
+                process.stderr.write(`Could not prepare support logs because the captured Builder log is unavailable: ${message}\n`)
                 return null
               }
             },
@@ -2738,7 +2707,15 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
         // process or changes the exit code: any failure prints a graceful note
         // pointing at support@capgo.app.
         const runSendLogs = async (): Promise<void> => {
-          const files = prepareSupportLogBundle({ capturedJobId, appId })
+          let files: Awaited<ReturnType<typeof prepareSupportLogBundle>>
+          try {
+            files = await prepareSupportLogBundle()
+          }
+          catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            process.stderr.write(`Could not prepare your build logs to upload because the captured Builder log is unavailable: ${message}\nPlease email support@capgo.app and describe the issue (job ${capturedJobId}).\n`)
+            return
+          }
           if (!files) {
             process.stderr.write(`Could not prepare your build logs to upload. Please email support@capgo.app and describe the issue (job ${capturedJobId}).\n`)
             return

@@ -222,6 +222,55 @@ describe('onboarding progress endpoint', () => {
     const context = contextFor({ userId: 'user', authType: 'jwt' })
     expect((await persistObservedProgress(context, 'com.test.onboarding', { add_channel: false }) as any).setup.steps.add_channel).toBeUndefined()
   })
+  it.each(['app.update_settings', 'org.create_app'])('allows every requested observation through normal %s permission', async (permission) => {
+    lockedRow(mocks.row.onboarding)
+    mocks.permissionPg.mockImplementation(async (_c, requested) => requested === permission)
+    const result = await persistObservedProgress(contextFor({ userId: 'user', authType: 'apikey', apikey: { key: 'fixture-key' } }), 'com.test.onboarding', { login_cli_mcp: true, add_channel: true, run_device: true, upload_bundle: true, test_update: true }) as any
+    expect(Object.values(result.setup.steps).map((step: any) => step.status)).toEqual(Array.from({ length: 5 }).fill('done'))
+    expect(result.setup.source).toBe('cli')
+    expect(mocks.permissionPg.mock.calls.map(call => call[1])).toEqual(permission === 'app.update_settings' ? ['app.update_settings'] : ['app.update_settings', 'org.create_app'])
+  })
+  it('limits the login override to login across a mixed observation request', async () => {
+    lockedRow(mocks.row.onboarding)
+    mocks.permissionPg.mockImplementation(async (_c, permission) => permission === 'app.read')
+    const result = await persistObservedProgress(contextFor({ userId: 'user', authType: 'apikey', apikey: { key: 'fixture-key' } }), 'com.test.onboarding', { login_cli_mcp: true, add_channel: true, run_device: true, upload_bundle: true, test_update: true }) as any
+    expect(Object.keys(result.setup.steps)).toEqual(['login_cli_mcp'])
+    expect(mocks.track).toHaveBeenCalledOnce()
+  })
+  it('emits observed history after commit with the same timestamp, and never on a commit failure', async () => {
+    lockedRow(mocks.row.onboarding)
+    let committed = false
+    mocks.transaction.mockImplementation(async (callback: any) => {
+      const result = await callback({ execute: mocks.execute })
+      expect(mocks.track).not.toHaveBeenCalled()
+      committed = true
+      return result
+    })
+    mocks.track.mockImplementation(async () => expect(committed).toBe(true))
+    const result = await persistObservedProgress(contextFor(mocks.auth), 'com.test.onboarding', { run_device: true }) as any
+    expect(mocks.track.mock.calls[0][1]).toMatchObject({ timestamp: result.setup.updated_at, groups: { organization: 'org' }, nonPersonTags: { step_id: 'run_device', history_length: 1, onboarding_source: 'manual', todo_list_version: 3 } })
+    expect(result.setup.steps.run_device).toEqual({ status: 'done', at: result.setup.updated_at, update_history: [{ status: 'done', at: result.setup.updated_at }] })
+    mocks.track.mockReset()
+    lockedRow(mocks.row.onboarding)
+    mocks.transaction.mockImplementation(async (callback: any) => {
+      await callback({ execute: mocks.execute })
+      throw new Error('commit failed')
+    })
+    await expect(persistObservedProgress(contextFor(mocks.auth), 'com.test.onboarding', { run_device: true })).rejects.toThrow('commit failed')
+    expect(mocks.track).not.toHaveBeenCalled()
+    expect(mocks.close).toHaveBeenCalledTimes(2)
+  })
+  it('preserves skipped outcomes and promotes the login source without rewriting its timestamp', async () => {
+    lockedRow({ setup: { todo_list_version: 3, outcome: 'skipped', steps: {} } })
+    expect(await persistObservedProgress(contextFor(mocks.auth), 'com.test.onboarding', { run_device: true })).toBeUndefined()
+    expect(mocks.execute).toHaveBeenCalledTimes(3)
+    const step = { status: 'done', at: 'old', update_history: [{ status: 'done', at: 'old' }] }
+    lockedRow({ setup: { todo_list_version: 3, source: 'ai', steps: { login_cli_mcp: step } } })
+    const result = await persistObservedProgress(contextFor(mocks.auth), 'com.test.onboarding', { login_cli_mcp: true }) as any
+    expect(result.setup.source).toBe('cli')
+    expect(result.setup.steps.login_cli_mcp).toEqual(step)
+    expect(mocks.track).not.toHaveBeenCalled()
+  })
   it('returns a deleted v4 channel to pending without removing its OTA step', async () => {
     const onboarding = { setup: { todo_list_version: 4, ota_todo_list_version: '1', paths: ['ota'], steps: { ota: { add_channel: { status: 'done' }, add_code: { status: 'pending' } } } } }
     lockedRow(onboarding)

@@ -169,9 +169,9 @@ function formatJson(data: any): string {
       <div class="flex items-center gap-4 p-4 border-b border-gray-200 dark:border-gray-700 shrink-0">
         <div class="flex gap-2">
           <button
-            type="button"
             v-for="filter in statusFilters"
             :key="filter.value ?? 'all'"
+            type="button"
             class="px-3 py-1.5 text-sm font-medium rounded-lg"
             :class="[
               statusFilter === filter.value
@@ -266,8 +266,8 @@ function formatJson(data: any): string {
 
               <!-- Actions -->
               <button
-                type="button"
                 v-if="delivery.status === 'failed'"
+                type="button"
                 class="flex items-center gap-1 px-3 py-1.5 min-h-11 text-xs font-medium text-blue-600 rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
                 :disabled="retryingDeliveryId === delivery.id"
                 @click="retryDelivery(delivery)"

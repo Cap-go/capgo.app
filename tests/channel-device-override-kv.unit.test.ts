@@ -254,12 +254,14 @@ describe('channel device override KV sync', () => {
       channel_id: 42,
       device_id: '11111111-1111-4111-8111-111111111111',
       owner_org: 'org-test',
+      is_self_set: false,
     }, { onConflict: 'app_id,device_id' })
     expect(syncLegacyChannelSelfOverrideForDeviceMock).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
       app_id: 'com.test.app',
       channel_id: 42,
       device_id: '11111111-1111-4111-8111-111111111111',
       owner_org: 'org-test',
+      is_self_set: false,
     })
   })
 

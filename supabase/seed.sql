@@ -83,7 +83,7 @@ BEGIN
 
     INSERT INTO "public"."plans" ("created_at", "updated_at", "name", "description", "price_m", "price_y", "stripe_id", "credit_id", "id", "price_m_id", "price_y_id", "stripe_id_us", "price_m_id_us", "price_y_id_us", "credit_id_us", "storage", "bandwidth", "mau", "market_desc", "build_time_unit", "native_build_concurrency") VALUES
     (NOW(), NOW(), 'Maker', 'plan.maker.desc', 39, 396, 'prod_LQIs1Yucml9ChU', 'prod_TJRd2hFHZsBIPK', '440cfd69-0cfd-486e-b59b-cb99f7ae76a0', 'price_1KjSGyGH46eYKnWwL4h14DsK', 'price_1KjSKIGH46eYKnWwFG9u4tNi', 'prod_VDt2cnktX7IDVV', 'price_1UDRGQLr632EP5z4YI3A5cPV', 'price_1UDRGSLr632EP5z45R9qxkU8', 'prod_VDt2YB5GrYFnII', 3221225472, 268435456000, 10000, 'Best for small business owners', 7200, 3),
-    (NOW(), NOW(), 'Enterprise', 'plan.payasyougo.desc', 239, 2490, 'prod_MH5Jh6ajC9e7ZH', 'prod_TJRd2hFHZsBIPK', '745d7ab3-6cd6-4d65-b257-de6782d5ba50', 'price_1LYX8yGH46eYKnWwzeBjISvW', 'price_1LYX8yGH46eYKnWwzeBjISvW', 'prod_VDt2pia049SqpU', 'price_1UDRGaLr632EP5z4D02F4rLu', 'price_1UDRGcLr632EP5z4IxDyZuUK', 'prod_VDt2YB5GrYFnII', 12884901888, 3221225472000, 1000000, 'Best for scalling enterprises', 1200000, 6),
+    (NOW(), NOW(), 'Enterprise', 'plan.payasyougo.desc', 249, 2490, 'prod_MH5Jh6ajC9e7ZH', 'prod_TJRd2hFHZsBIPK', '745d7ab3-6cd6-4d65-b257-de6782d5ba50', 'price_1LYX8yGH46eYKnWwzeBjISvW', 'price_1LYX8yGH46eYKnWwzeBjISvW', 'prod_VDt2pia049SqpU', 'price_1UDRGaLr632EP5z4D02F4rLu', 'price_1UDRGcLr632EP5z4IxDyZuUK', 'prod_VDt2YB5GrYFnII', 12884901888, 3221225472000, 1000000, 'Best for scalling enterprises', 1200000, 6),
     (NOW(), NOW(), 'Solo', 'plan.solo.desc', 14, 146, 'prod_LQIregjtNduh4q', 'prod_TJRd2hFHZsBIPK', '526e11d8-3c51-4581-ac92-4770c602f47c', 'price_1LVvuZGH46eYKnWwuGKOf4DK', 'price_1LVvuIGH46eYKnWwHMDCrxcH', 'prod_VDt1FTF7XJxyMR', 'price_1UDRGPLr632EP5z4ufTRBBzf', 'price_1UDRGULr632EP5z4OcZr5xpe', 'prod_VDt2YB5GrYFnII', 1073741824, 13958643712, 2000, 'Best for independent developers', 3600, 2),
     (NOW(), NOW(), 'Team', 'plan.team.desc', 99, 998, 'prod_LQIugvJcPrxhda', 'prod_TJRd2hFHZsBIPK', 'abd76414-8f90-49a5-b3a4-8ff4d2e12c77', 'price_1KjSIUGH46eYKnWwWHvg8XYs', 'price_1KjSLlGH46eYKnWwAwMW2wiW', 'prod_VDt2xM7OyLzhqV', 'price_1UDRGSLr632EP5z4n0Npf7P1', 'price_1UDRGSLr632EP5z4jYu6vC42', 'prod_VDt2YB5GrYFnII', 6442450944, 536870912000, 100000, 'Best for medium enterprises', 36000, 4);
 
@@ -98,13 +98,12 @@ BEGIN
       )
     VALUES
       ('mau', 0, 1000000, 0.003, 1, NULL),
-      ('mau', 1000000, 3000000, 0.0022, 1, NULL),
-      ('mau', 3000000, 10000000, 0.0016, 1, NULL),
-      ('mau', 10000000, 15000000, 0.0014, 1, NULL),
-      ('mau', 15000000, 25000000, 0.0011, 1, NULL),
-      ('mau', 25000000, 40000000, 0.001, 1, NULL),
-      ('mau', 40000000, 100000000, 0.0009, 1, NULL),
-      ('mau', 100000000, 9223372036854775807, 0.0007, 1, NULL),
+      ('mau', 1000000, 3000000, 0.0003, 1, NULL),
+      ('mau', 3000000, 6000000, 0.00025, 1, NULL),
+      ('mau', 6000000, 10000000, 0.0002, 1, NULL),
+      ('mau', 10000000, 25000000, 0.00018, 1, NULL),
+      ('mau', 25000000, 100000000, 0.00015, 1, NULL),
+      ('mau', 100000000, 9223372036854775807, 0.0001, 1, NULL),
       ('bandwidth', 0, 1099511627776, 0.06, 1073741824, NULL), -- 0–1 TB
       (
         'bandwidth',
@@ -149,19 +148,43 @@ BEGIN
       (
         'bandwidth',
         69269232549888,
-        139637976727552,
+        109951162777600,
         0.015,
         1073741824,
         NULL
-      ), -- 63–127 TB
+      ), -- 63–100 TB
       (
         'bandwidth',
-        139637976727552,
-        9223372036854775807,
-        0.01,
+        109951162777600,
+        274877906944000,
+        0.008,
         1073741824,
         NULL
-      ), -- 127+ TB
+      ), -- 100–250 TB
+      (
+        'bandwidth',
+        274877906944000,
+        549755813888000,
+        0.006,
+        1073741824,
+        NULL
+      ), -- 250–500 TB
+      (
+        'bandwidth',
+        549755813888000,
+        1125899906842624,
+        0.005,
+        1073741824,
+        NULL
+      ), -- 500 TB–1 PB
+      (
+        'bandwidth',
+        1125899906842624,
+        9223372036854775807,
+        0.004,
+        1073741824,
+        NULL
+      ), -- 1+ PB
       ('storage', 0, 1073741824, 0.09, 1073741824, NULL), -- 0–1 GiB
       (
         'storage',
@@ -1243,6 +1266,7 @@ BEGIN
       (public.rbac_perm_org_invite_user(), public.rbac_scope_org(), 'Invite or add members to org'),
       (public.rbac_perm_org_update_user_roles(), public.rbac_scope_org(), 'Change org/member roles'),
       (public.rbac_perm_org_manage_apikeys(), public.rbac_scope_org(), 'Manage API keys for the org without assigning user roles'),
+      (public.rbac_perm_app_manage_apikeys(), public.rbac_scope_app(), 'Create, update and delete API keys limited to this app'),
       (public.rbac_perm_org_read_billing(), public.rbac_scope_org(), 'Read org billing settings'),
       (public.rbac_perm_org_update_billing(), public.rbac_scope_org(), 'Update org billing settings'),
       (public.rbac_perm_org_read_invoices(), public.rbac_scope_org(), 'Read invoices'),
@@ -1285,7 +1309,7 @@ BEGIN
       public.rbac_perm_app_read(), public.rbac_perm_app_update_settings(), public.rbac_perm_app_delete(), public.rbac_perm_app_read_bundles(), public.rbac_perm_app_upload_bundle(),
       public.rbac_perm_app_create_channel(), public.rbac_perm_app_read_channels(), public.rbac_perm_app_read_logs(), public.rbac_perm_app_manage_devices(), public.rbac_perm_app_read_devices(),
       'app.manage_notifications',
-      public.rbac_perm_app_build_native(), public.rbac_perm_app_read_audit(), public.rbac_perm_app_update_user_roles(), public.rbac_perm_app_transfer(), public.rbac_perm_bundle_delete(),
+      public.rbac_perm_app_build_native(), public.rbac_perm_app_read_audit(), public.rbac_perm_app_update_user_roles(), public.rbac_perm_app_manage_apikeys(), public.rbac_perm_app_transfer(), public.rbac_perm_bundle_delete(),
       public.rbac_perm_channel_read(), public.rbac_perm_channel_update_settings(), public.rbac_perm_channel_delete(), public.rbac_perm_channel_read_history(),
       public.rbac_perm_channel_promote_bundle(), public.rbac_perm_channel_rollback_bundle(), public.rbac_perm_channel_manage_forced_devices(), public.rbac_perm_channel_read_forced_devices(), public.rbac_perm_channel_read_audit()
     )
@@ -1301,7 +1325,7 @@ BEGIN
       public.rbac_perm_app_read(), public.rbac_perm_app_update_settings(), public.rbac_perm_app_read_bundles(), public.rbac_perm_app_upload_bundle(),
       public.rbac_perm_app_create_channel(), public.rbac_perm_app_read_channels(), public.rbac_perm_app_read_logs(), public.rbac_perm_app_manage_devices(), public.rbac_perm_app_read_devices(),
       'app.manage_notifications',
-      public.rbac_perm_app_build_native(), public.rbac_perm_app_read_audit(), public.rbac_perm_app_update_user_roles(),
+      public.rbac_perm_app_build_native(), public.rbac_perm_app_read_audit(), public.rbac_perm_app_update_user_roles(), public.rbac_perm_app_manage_apikeys(),
       public.rbac_perm_channel_read(), public.rbac_perm_channel_update_settings(), public.rbac_perm_channel_read_history(),
       public.rbac_perm_channel_promote_bundle(), public.rbac_perm_channel_rollback_bundle(), public.rbac_perm_channel_manage_forced_devices(), public.rbac_perm_channel_read_forced_devices(), public.rbac_perm_channel_read_audit()
     )
@@ -1365,7 +1389,7 @@ BEGIN
       public.rbac_perm_app_read(), public.rbac_perm_app_update_settings(), public.rbac_perm_app_read_bundles(), public.rbac_perm_app_upload_bundle(),
       public.rbac_perm_app_create_channel(), public.rbac_perm_app_read_channels(), public.rbac_perm_app_read_logs(), public.rbac_perm_app_manage_devices(),
       'app.manage_notifications',
-      public.rbac_perm_app_read_devices(), public.rbac_perm_app_build_native(), public.rbac_perm_app_read_audit(), public.rbac_perm_app_update_user_roles(), public.rbac_perm_bundle_delete(),
+      public.rbac_perm_app_read_devices(), public.rbac_perm_app_build_native(), public.rbac_perm_app_read_audit(), public.rbac_perm_app_update_user_roles(), public.rbac_perm_app_manage_apikeys(), public.rbac_perm_bundle_delete(),
       public.rbac_perm_channel_read(), public.rbac_perm_channel_update_settings(), public.rbac_perm_channel_delete(), public.rbac_perm_channel_read_history(),
       public.rbac_perm_channel_promote_bundle(), public.rbac_perm_channel_rollback_bundle(), public.rbac_perm_channel_manage_forced_devices(), public.rbac_perm_channel_read_forced_devices(), public.rbac_perm_channel_read_audit()
     )

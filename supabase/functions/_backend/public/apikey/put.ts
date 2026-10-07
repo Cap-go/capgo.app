@@ -92,6 +92,9 @@ async function replaceApiKeyBindings(
 
   await assertApiKeyManagerCanAssignBindings(c, auth, bindings)
 
+  // Intentionally stricter than POST /apikey: app admins (app.manage_apikeys)
+  // may create app-scoped keys but not re-scope existing ones. Relaxing this
+  // must re-run the escalation checks of assertCanManageApiKeyBindingsPg.
   for (const orgId of affectedOrgIds) {
     if (!(await checkPermission(c, 'org.update_user_roles', { orgId }))) {
       throw quickError(403, 'forbidden_binding', `Forbidden - Admin rights required for org ${orgId}`, { requestId: c.get('requestId'), orgId })

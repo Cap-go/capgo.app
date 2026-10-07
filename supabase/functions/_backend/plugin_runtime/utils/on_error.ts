@@ -2,9 +2,9 @@ import type { Context } from 'hono'
 import type { SimpleErrorResponse } from './hono.ts'
 import { DrizzleError, entityKind, TransactionRollbackError } from 'drizzle-orm'
 import { sendDiscordAlert500 } from './discord.ts'
-import { cloudlogErr, serializeError } from './logging.ts'
-import { capturePosthogException } from './posthog.ts'
+import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { isTransientDatabaseError, readPgErrorCode, readQuickErrorOriginalCause } from './pg_errors.ts'
+import { capturePosthogException } from './posthog.ts'
 import { backgroundTask } from './utils.ts'
 
 const drizzleErrorNames = new Set(['DrizzleError', 'DrizzleQueryError', 'TransactionRollbackError'])
@@ -188,8 +188,10 @@ export function onError(functionName: string) {
       catch {
         // ignore errors; fall back to default
       }
-      // Single, structured error log entry
-      cloudlogErr({
+      // Single, structured log entry. 4xx are expected client errors (invalid
+      // app id, no access, ...): log them without the error console or a stack
+      // trace so Cloudflare Workers Issues only groups real backend failures.
+      const httpExceptionLog = {
         requestId: c.get('requestId'),
         functionName,
         kind: 'http_exception',
@@ -199,8 +201,11 @@ export function onError(functionName: string) {
         errorCode: res.error,
         errorMessage: res.message,
         moreInfo: res.moreInfo,
-        stack: serializeError(e)?.stack ?? 'N/A',
-      })
+      }
+      if (e.status >= 500)
+        cloudlogErr({ ...httpExceptionLog, stack: serializeError(e)?.stack ?? 'N/A' })
+      else
+        cloudlog(httpExceptionLog)
       const suppressDiscordAlert = e.cause
         && typeof e.cause === 'object'
         && (e.cause as { suppressDiscordAlert?: unknown }).suppressDiscordAlert === true

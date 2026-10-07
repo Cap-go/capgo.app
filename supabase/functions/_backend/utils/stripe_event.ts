@@ -3,7 +3,7 @@ import type { StripeData } from './stripe.ts'
 import type { BillingAccount } from './stripe_billing.ts'
 import Stripe from 'stripe'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { getStripe, parsePriceIds } from './stripe.ts'
+import { getExtraMau, getStripe, isExtraMauItem, parsePriceIds } from './stripe.ts'
 import { getStripeWebhookSecret } from './stripe_billing.ts'
 
 export function parseStripeEvent(c: Context, body: string, signature: string, billingAccount: BillingAccount = 'ee') {
@@ -18,8 +18,10 @@ export function parseStripeEvent(c: Context, body: string, signature: string, bi
   )
 }
 
+// The plan item: extra MAU items are licensed too, so skip them.
 function getLicensedSubscriptionItem(items: Stripe.SubscriptionItem[] | undefined) {
-  return items?.find(item => item.plan.usage_type === 'licensed') ?? items?.[0]
+  const planItems = items?.filter(item => !isExtraMauItem(item))
+  return planItems?.find(item => item.plan.usage_type === 'licensed') ?? planItems?.[0]
 }
 
 function getSubscriptionInterval(item: Stripe.SubscriptionItem | undefined) {
@@ -88,6 +90,8 @@ function subscriptionUpdated(c: Context, event: Stripe.CustomerSubscriptionCreat
   }
   data.subscription_id = subscription.id
   data.customer_id = String(subscription.customer)
+  // A deleted subscription still lists its items: its extra MAU is gone.
+  data.extra_mau = event.type === 'customer.subscription.deleted' ? 0 : getExtraMau(subscription.items.data)
 
   // Only treat a billing cadence change from monthly to yearly as an upgrade.
   if (previousInterval === 'month' && currentInterval === 'year') {

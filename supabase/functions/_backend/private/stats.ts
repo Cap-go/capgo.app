@@ -63,6 +63,8 @@ const statsInsightsSchema = z.object({
 const insightPeriodDays = [1, 3, 7, 30] as const
 type InsightPeriodDays = typeof insightPeriodDays[number]
 
+// Live update failures only. App crashes and WebView signals come from the host
+// app and are reported by /private/native_observe_stats instead.
 const defaultInsightActions = [
   'set_fail',
   'update_fail',
@@ -79,19 +81,6 @@ const defaultInsightActions = [
   'manifest_path_fail',
   'decrypt_fail',
   'insufficient_disk_space',
-  'app_crash',
-  'app_crash_native',
-  'app_anr',
-  'app_killed_low_memory',
-  'app_killed_excessive_resource_usage',
-  'app_initialization_failure',
-  'webview_javascript_error',
-  'webview_unhandled_rejection',
-  'webview_resource_error',
-  'webview_security_policy_violation',
-  'webview_unclean_restart',
-  'webview_render_process_gone',
-  'webview_content_process_terminated',
   'cannotGetBundle',
   'checksum_fail',
   'blocked_by_server_url',

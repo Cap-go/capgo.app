@@ -30,7 +30,8 @@ const DEPLOYMENT_REGIONS: DeploymentRegion[] = [
   { code: 'aws:sa-east-1', label: 'South America (São Paulo)' },
 ]
 
-const TOTAL_REPLICATION_MS = 60_000
+// Update distribution got faster: the walkthrough over all regions takes 30s.
+const TOTAL_REPLICATION_MS = 30_000
 const UPDATE_INTERVAL_MS = 500
 const REPLICATION_TOAST_CLASSES = {
   content: 'w-full min-w-0',
@@ -130,31 +131,23 @@ function buildActionButton(actionLabel?: string, onAction?: () => void): VNode |
   ])
 }
 
-function buildStatusList(regions: DeploymentRegion[], completed: number): VNode[] {
-  return regions.map((region, index) => {
-    const isDone = index < completed
-    const isActive = index === completed && completed < regions.length
-    const statusClass = isDone
-      ? 'bg-emerald-500 text-emerald-500'
-      : isActive
-        ? 'bg-amber-500 text-amber-500'
-        : 'bg-slate-300 text-slate-300'
-
-    return h('li', { class: 'flex min-w-0 w-full items-start gap-1.5 pr-0' }, [
-      h('span', {
-        class: [`inline-block h-2 w-2 shrink-0 rounded-full border-2 border-current ${statusClass} mt-1`].join(' '),
-      }),
-      h('span', {
-        class: `min-w-0 flex-1 text-xs ${isDone ? 'text-green-700' : isActive ? 'text-amber-700' : 'text-slate-700'}`,
-      }, region.label),
-    ])
-  })
+// One segment per region: done, in progress (pulsing), pending.
+function buildStepBar(total: number, completed: number): VNode {
+  return h('div', { 'class': 'flex w-full gap-1', 'aria-hidden': 'true' }, Array.from({ length: total }, (_, index) => {
+    const state = index < completed
+      ? 'bg-emerald-500'
+      : index === completed
+        ? 'bg-amber-400 animate-pulse'
+        : 'bg-slate-200'
+    return h('span', { class: `h-1.5 flex-1 rounded-full ${state}` })
+  }))
 }
 
 function getToastTitle() {
   return i18n.global.t('replication-toast-title')
 }
 
+// Shows only the region being replicated now, so the toast stays compact on phones.
 function buildDescription(
   regions: DeploymentRegion[],
   completed: number,
@@ -164,23 +157,20 @@ function buildDescription(
 ): VNode {
   const total = regions.length
   const safeCompleted = Math.min(completed, total)
-  const percent = Math.min(100, Math.round((safeCompleted / total) * 100))
-  const regionRows = buildStatusList(regions, safeCompleted)
+  const current = regions[Math.min(safeCompleted, total - 1)]
   const actionButton = buildActionButton(actionLabel, onAction)
 
-  return h('div', { class: 'w-full flex flex-col gap-1.5' }, [
-    h('div', { class: 'text-sm text-slate-700' }, i18n.global.t('replication-toast-regions-replicated', {
-      completed: safeCompleted,
-      total,
-    })),
-    h('div', { class: 'text-xs text-slate-600' }, formatDuration(Math.max(0, Math.ceil(remainingMs / 1000)))),
-    h('div', { class: 'h-1.5 w-full rounded bg-slate-200 overflow-hidden' }, [
-      h('div', {
-        class: 'h-full rounded bg-emerald-400 transition-all',
-        style: `width: ${percent}%`,
-      }),
+  return h('div', { class: 'w-full flex flex-col gap-2' }, [
+    h('div', { class: 'flex items-center gap-2 min-w-0' }, [
+      h('span', { class: 'inline-block h-2 w-2 shrink-0 rounded-full bg-amber-400 animate-pulse' }),
+      h('span', { class: 'min-w-0 flex-1 truncate text-sm font-medium text-slate-800' }, current?.label ?? ''),
+      h('span', { class: 'shrink-0 text-xs tabular-nums text-slate-500' }, `${Math.min(safeCompleted + 1, total)}/${total}`),
     ]),
-    h('ul', { class: 'w-full space-y-0.5 list-none pl-0 pr-0' }, regionRows),
+    buildStepBar(total, safeCompleted),
+    h('div', { class: 'flex justify-between gap-2 text-xs text-slate-500' }, [
+      h('span', i18n.global.t('replication-toast-regions-replicated', { completed: safeCompleted, total })),
+      h('span', { class: 'tabular-nums' }, formatDuration(Math.max(0, Math.ceil(remainingMs / 1000)))),
+    ]),
     ...(actionButton ? [actionButton] : []),
   ])
 }
@@ -188,9 +178,9 @@ function buildDescription(
 function buildDoneDescription(regions: DeploymentRegion[], actionLabel?: string, onAction?: () => void): VNode {
   const actionButton = buildActionButton(actionLabel, onAction)
 
-  return h('div', { class: 'w-full flex flex-col gap-1.5' }, [
-    h('div', { class: 'text-sm text-slate-700' }, i18n.global.t('replication-toast-complete')),
-    h('ul', { class: 'w-full space-y-0.5 list-none pl-0 pr-0' }, buildStatusList(regions, regions.length)),
+  return h('div', { class: 'w-full flex flex-col gap-2' }, [
+    buildStepBar(regions.length, regions.length),
+    h('div', { class: 'text-xs text-slate-600' }, i18n.global.t('replication-toast-complete')),
     ...(actionButton ? [actionButton] : []),
   ])
 }

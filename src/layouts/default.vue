@@ -1,9 +1,13 @@
 <script setup lang="ts">
+import { Capacitor } from '@capacitor/core'
 import { useLocalStorage, useMediaQuery } from '@vueuse/core'
-import { computed, ref, watch } from 'vue'
+import { computed, ref, useTemplateRef, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import OnboardingExploreBanner from '~/components/dashboard/OnboardingExploreBanner.vue'
 import OnboardingExploreReminder from '~/components/dashboard/OnboardingExploreReminder.vue'
+import LogAsDialogField from '~/components/LogAsDialogField.vue'
+import { useEdgeSwipeBack } from '~/composables/useEdgeSwipeBack'
+import { isNativeChromeEnabled, useNativeChrome } from '~/composables/useNativeChrome'
 import { useRealtimeCLIFeed } from '~/composables/useRealtimeCLIFeed'
 import { useSupabase } from '~/services/supabase'
 import { useMainStore } from '~/stores/main'
@@ -36,7 +40,7 @@ async function refreshPendingOnboardingApp() {
   const lookupRun = ++onboardingLookupRun
   pendingOnboardingAppId.value = ''
 
-  if (/^\/app\/new\/?$/.test(route.path) || route.path === '/onboarding' || route.path.startsWith('/onboarding/'))
+  if (/^\/app\/new\/?$/.test(route.path) || /^\/app\/[^/]+\/getting-started\/?$/.test(route.path) || route.path === '/onboarding' || route.path.startsWith('/onboarding/'))
     return
 
   await organizationStore.awaitInitialLoad()
@@ -82,10 +86,36 @@ watch([
 
 // Initialize realtime CLI activity feed (toasts for CLI actions)
 useRealtimeCLIFeed()
+
+// In the Capacitor app the native navbar/tabbar replace the web header and
+// sidebar, and the page content sits between them via the plugin CSS insets.
+const nativeChrome = isNativeChromeEnabled
+const contentShell = useTemplateRef<HTMLElement>('contentShell')
+const { goBack, canGoBack } = useNativeChrome()
+useEdgeSwipeBack(contentShell, {
+  enabled: nativeChrome && Capacitor.getPlatform() === 'ios',
+  canGoBack,
+  onBack: goBack,
+})
 </script>
 
 <template>
-  <div class="flex h-full overflow-hidden bg-slate-800 pt-safe safe-areas">
+  <div
+    v-if="nativeChrome"
+    data-test="dashboard-shell"
+    class="native-chrome-shell h-full overflow-hidden bg-slate-100 dark:bg-slate-900"
+  >
+    <div ref="contentShell" class="native-chrome-content flex flex-col h-full overflow-hidden bg-slate-100 dark:bg-slate-900">
+      <OnboardingExploreBanner v-if="pendingOnboardingAppId" :app-id="pendingOnboardingAppId" />
+      <OnboardingExploreReminder v-if="pendingOnboardingAppId" :app-id="pendingOnboardingAppId" />
+      <main class="w-full h-full overflow-hidden">
+        <RouterView class="native-route-scroll h-full overflow-y-auto grow" />
+      </main>
+    </div>
+    <LogAsDialogField />
+  </div>
+  <!-- Below lg the sidebar is an overlay drawer, so the safe areas take the content color instead of the sidebar color. -->
+  <div v-else class="flex h-full overflow-hidden bg-slate-100 dark:bg-slate-900 lg:bg-slate-800 lg:dark:bg-slate-800 pt-safe safe-areas">
     <!-- Sidebar -->
     <Sidebar
       :sidebar-open="sidebarOpen"
@@ -99,7 +129,7 @@ useRealtimeCLIFeed()
       :class="sidebarCollapsed ? 'lg:px-0 lg:py-0' : 'lg:px-3 lg:py-3'"
     >
       <div
-        class="flex flex-col h-full overflow-hidden border border-gray-200 dark:border-gray-700 bg-slate-100 dark:bg-slate-900 transition-[border-radius,box-shadow,border-color] duration-500 ease-in-out motion-reduce:!transition-none"
+        class="flex flex-col h-full overflow-hidden lg:border border-gray-200 dark:border-gray-700 bg-slate-100 dark:bg-slate-900 transition-[border-radius,box-shadow,border-color] duration-500 ease-in-out motion-reduce:!transition-none"
         :class="sidebarCollapsed ? 'lg:rounded-none lg:border-transparent lg:dark:border-transparent lg:shadow-none' : 'lg:rounded-xl lg:shadow-sm'"
       >
         <!-- Site header -->

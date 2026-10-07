@@ -441,32 +441,12 @@
       "type": "text"
     },
     {
-      "default": null,
-      "generated": "",
-      "identity": "",
-      "name": "stats_updated_at",
-      "notNull": false,
-      "position": 22,
-      "table": "apps",
-      "type": "timestamp without time zone"
-    },
-    {
-      "default": null,
-      "generated": "",
-      "identity": "",
-      "name": "stats_refresh_requested_at",
-      "notNull": false,
-      "position": 23,
-      "table": "apps",
-      "type": "timestamp without time zone"
-    },
-    {
       "default": "900",
       "generated": "",
       "identity": "",
       "name": "build_timeout_seconds",
       "notNull": true,
-      "position": 24,
+      "position": 22,
       "table": "apps",
       "type": "bigint"
     },
@@ -476,7 +456,7 @@
       "identity": "",
       "name": "build_timeout_updated_at",
       "notNull": true,
-      "position": 25,
+      "position": 23,
       "table": "apps",
       "type": "timestamp with time zone"
     },
@@ -486,7 +466,7 @@
       "identity": "",
       "name": "block_provider_infra_requests",
       "notNull": true,
-      "position": 26,
+      "position": 24,
       "table": "apps",
       "type": "boolean"
     },
@@ -496,7 +476,7 @@
       "identity": "",
       "name": "rollout_channel_count",
       "notNull": true,
-      "position": 27,
+      "position": 25,
       "table": "apps",
       "type": "bigint"
     },
@@ -506,7 +486,7 @@
       "identity": "",
       "name": "rollout_paused_version_names",
       "notNull": true,
-      "position": 28,
+      "position": 26,
       "table": "apps",
       "type": "character varying[]"
     },
@@ -516,7 +496,7 @@
       "identity": "",
       "name": "created_from_onboarding",
       "notNull": true,
-      "position": 29,
+      "position": 27,
       "table": "apps",
       "type": "boolean"
     },
@@ -526,7 +506,7 @@
       "identity": "",
       "name": "onboarding_completed_at",
       "notNull": false,
-      "position": 30,
+      "position": 28,
       "table": "apps",
       "type": "timestamp with time zone"
     },
@@ -536,7 +516,7 @@
       "identity": "",
       "name": "onboarding",
       "notNull": true,
-      "position": 31,
+      "position": 29,
       "table": "apps",
       "type": "jsonb"
     },
@@ -609,6 +589,16 @@
       "position": 7,
       "table": "channel_devices",
       "type": "uuid"
+    },
+    {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "is_self_set",
+      "notNull": true,
+      "position": 8,
+      "table": "channel_devices",
+      "type": "boolean"
     },
     {
       "default": null,
@@ -989,6 +979,16 @@
       "position": 38,
       "table": "channels",
       "type": "channel_update_package"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "paused_at",
+      "notNull": false,
+      "position": 39,
+      "table": "channels",
+      "type": "timestamp with time zone"
     },
     {
       "default": "nextval('manifest_id_seq'::regclass)",
@@ -1561,6 +1561,16 @@
       "type": "timestamp with time zone"
     },
     {
+      "default": "0",
+      "generated": "",
+      "identity": "",
+      "name": "auto_top_up_monthly_limit",
+      "notNull": true,
+      "position": 29,
+      "table": "orgs",
+      "type": "numeric(18,6)"
+    },
+    {
       "default": "now()",
       "generated": "",
       "identity": "",
@@ -1821,12 +1831,22 @@
       "type": "boolean"
     },
     {
+      "default": "0",
+      "generated": "",
+      "identity": "",
+      "name": "extra_mau",
+      "notNull": true,
+      "position": 27,
+      "table": "stripe_info",
+      "type": "bigint"
+    },
+    {
       "default": "'ee'::text",
       "generated": "",
       "identity": "",
       "name": "billing_account",
       "notNull": true,
-      "position": 27,
+      "position": 28,
       "table": "stripe_info",
       "type": "text"
     }
@@ -2006,6 +2026,13 @@
       "table": "org_users",
       "type": "p",
       "valid": true
+    },
+    {
+      "definition": "CHECK (auto_top_up_monthly_limit >= 0::numeric AND auto_top_up_monthly_limit = trunc(auto_top_up_monthly_limit) AND auto_top_up_monthly_limit < 'Infinity'::numeric AND (auto_top_up_monthly_limit = 0::numeric OR auto_top_up_monthly_limit >= auto_top_up_threshold)) NOT VALID",
+      "name": "orgs_auto_top_up_monthly_limit_valid",
+      "table": "orgs",
+      "type": "c",
+      "valid": false
     },
     {
       "definition": "CHECK (auto_top_up_threshold >= 10::numeric AND auto_top_up_threshold = trunc(auto_top_up_threshold) AND auto_top_up_threshold < 'Infinity'::numeric AND auto_top_up_threshold > '-Infinity'::numeric) NOT VALID",
@@ -2284,20 +2311,6 @@
     },
     {
       "constraintOwned": false,
-      "definition": "CREATE INDEX idx_apps_onboarding_queued_refresh_at ON public.apps USING btree (COALESCE((onboarding ->> 'queued_refresh_at'::text), ''::text), COALESCE((onboarding ->> 'refreshed_at'::text), ''::text), app_id)",
-      "name": "idx_apps_onboarding_queued_refresh_at",
-      "table": "apps",
-      "valid": true
-    },
-    {
-      "constraintOwned": false,
-      "definition": "CREATE INDEX idx_apps_onboarding_refreshed_at ON public.apps USING btree (COALESCE((onboarding ->> 'refreshed_at'::text), ''::text), app_id)",
-      "name": "idx_apps_onboarding_refreshed_at",
-      "table": "apps",
-      "valid": true
-    },
-    {
-      "constraintOwned": false,
       "definition": "CREATE UNIQUE INDEX idx_apps_owner_org_app_id ON public.apps USING btree (owner_org, app_id)",
       "name": "idx_apps_owner_org_app_id",
       "table": "apps",
@@ -2438,8 +2451,8 @@
     },
     {
       "constraintOwned": false,
-      "definition": "CREATE INDEX idx_manifest_app_version_id ON public.manifest USING btree (app_version_id)",
-      "name": "idx_manifest_app_version_id",
+      "definition": "CREATE INDEX idx_manifest_app_version_id_file_hash ON public.manifest USING btree (app_version_id, file_hash) INCLUDE (file_size)",
+      "name": "idx_manifest_app_version_id_file_hash",
       "table": "manifest",
       "valid": true
     },

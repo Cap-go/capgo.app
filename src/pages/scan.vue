@@ -21,7 +21,7 @@ import IconPlay from '~icons/heroicons/play-20-solid'
 import IconQrCode from '~icons/heroicons/qr-code-20-solid'
 import IconRectangleStack from '~icons/heroicons/rectangle-stack-20-solid'
 import IconTrash from '~icons/heroicons/trash-20-solid'
-import { buildChannelPreviewLatestOptions, parsePreviewDeepLink } from '~/services/previewLinks'
+import { buildChannelPreviewLatestOptions, normalizeScannedPreviewValue, parsePreviewDeepLink } from '~/services/previewLinks'
 import { useDisplayStore } from '~/stores/display'
 import { buildChannelPreviewSubdomain, buildPreviewSubdomain, parsePreviewHostname } from '../../shared/preview-subdomain.ts'
 
@@ -806,7 +806,7 @@ async function startScanner() {
 }
 
 async function handleBarcodeScan(scannedValue: string, source: PreviewLoadSource = 'link', options: HandleBarcodeScanOptions = {}) {
-  const value = scannedValue.trim()
+  const value = normalizeScannedPreviewValue(scannedValue)
   const shouldStartNativeConfirmedPreview = isNativePlatform && source === 'link' && options.nativeConfirmed === true
   debugLog('handleBarcodeScan called', { nativeConfirmed: shouldStartNativeConfirmedPreview, source, value })
   const previewLink = parsePreviewDeepLink(value)
@@ -852,7 +852,8 @@ async function handleBarcodeScan(scannedValue: string, source: PreviewLoadSource
 
   if (!isHttpUrl(value)) {
     debugWarn('scan value is unsupported', value)
-    errorMessage.value = 'This QR code is not a Capgo preview link or an HTTPS bundle URL.'
+    // Show what was scanned so unsupported codes can be diagnosed from the device.
+    errorMessage.value = `This QR code is not a Capgo preview link or an HTTPS bundle URL: ${value.slice(0, 160)}`
     manualUrl.value = value
     toast.error('Scanned QR code is not a supported preview link')
     return
@@ -1402,8 +1403,8 @@ async function goBack() {
 
       <section class="shrink-0 space-y-3">
         <button
-          type="button"
           v-if="isNativePlatform"
+          type="button"
           class="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-azure-500 px-4 py-3 text-sm font-semibold text-white transition-opacity active:opacity-80 disabled:cursor-not-allowed disabled:opacity-45"
           :disabled="isScanning || isLoading"
           @click="retryScanning"

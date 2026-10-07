@@ -53,6 +53,10 @@ export interface Tab<T = TableRow> {
   icon?: FunctionalComponent | ShallowRef<FunctionalComponent>
   key: string
   badge?: string
+  /** i18n key for a one-line, plain-language explanation of the destination. */
+  description?: string
+  /** Tabs sharing a group are rendered together, with a divider between groups. */
+  group?: string
   onClick?: (elem: T | undefined) => void
   redirect?: boolean
   children?: Tab<T>[]

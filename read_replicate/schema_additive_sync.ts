@@ -84,7 +84,8 @@ interface SchemaCatalog {
 }
 
 type SyncStatementKind
-  = | 'column'
+  = | 'table'
+    | 'column'
     | 'check_constraint'
     | 'constraint'
     | 'drop_check_constraint'
@@ -95,7 +96,7 @@ type SyncStatementKind
     | 'sequence'
     | 'type'
 
-type SyncObjectKind = 'column' | 'constraint' | 'function' | 'index' | 'sequence' | 'type'
+type SyncObjectKind = 'table' | 'column' | 'constraint' | 'function' | 'index' | 'sequence' | 'type'
 
 export interface ReadReplicaSchemaSyncStatement {
   kind: SyncStatementKind

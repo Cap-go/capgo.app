@@ -47,6 +47,7 @@ export const optionsUploadSchema = optionsBaseSchema.extend({
   partialOnly: z.boolean().optional(),
   delta: z.boolean().optional(),
   deltaOnly: z.boolean().optional(),
+  deltaUploadConcurrency: z.number().int().min(1).max(500).optional(),
   // Internal: records whether the user explicitly asked for a delta/partial
   // upload, captured before `delta` is mutated by the instant-update
   // auto-enable. Not a CLI flag.
@@ -56,6 +57,7 @@ export const optionsUploadSchema = optionsBaseSchema.extend({
   packageJson: z.string().optional(),
   dryUpload: z.boolean().optional(),
   nodeModules: z.string().optional(),
+  encryptDelta: z.boolean().optional(),
   encryptPartial: z.boolean().optional(),
   deleteLinkedBundleOnUpload: z.boolean().optional(),
   tusChunkSize: z.number().optional(),

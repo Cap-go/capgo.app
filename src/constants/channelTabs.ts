@@ -6,8 +6,8 @@ import IconEye from '~icons/heroicons/eye'
 import IconInfo from '~icons/heroicons/information-circle'
 
 export const channelTabs: Tab[] = [
-  { label: 'dashboard', icon: IconChartBar, key: '/statistics' },
   { label: 'info', icon: IconInfo, key: '' },
+  { label: 'statistics', icon: IconChartBar, key: '/statistics' },
   { label: 'devices', icon: IconDevice, key: '/devices' },
   { label: 'history', icon: IconHistory, key: '/history' },
   { label: 'preview-tab', icon: IconEye, key: '/preview' },

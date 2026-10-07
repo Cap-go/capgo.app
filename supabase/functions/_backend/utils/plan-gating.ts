@@ -1,14 +1,14 @@
 import type { Context } from 'hono'
 import { quickError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { planProductIdOrFilter } from './stripe.ts'
+import { getSubscriptionData, planProductIdOrFilter } from './stripe.ts'
 import { getCurrentPlanNameOrg, supabaseAdmin } from './supabase.ts'
 
 function isActivePlanStatus(status: string | null | undefined): boolean {
   return status === 'succeeded'
 }
 
-async function getActivePlanNameOrg(c: Context, orgId: string): Promise<string | null> {
+async function getActivePlanNameOrg(c: Context, orgId: string, requirePaid = false): Promise<string | null> {
   const { data: org, error: orgError } = await supabaseAdmin(c)
     .from('orgs')
     .select('customer_id')
@@ -26,7 +26,7 @@ async function getActivePlanNameOrg(c: Context, orgId: string): Promise<string |
 
   const { data: stripeInfo, error: stripeError } = await supabaseAdmin(c)
     .from('stripe_info')
-    .select('status, is_good_plan, product_id')
+    .select('status, is_good_plan, product_id, subscription_id, past_due_at')
     .eq('customer_id', org.customer_id)
     .single()
   if (stripeError || !stripeInfo?.product_id) {
@@ -42,6 +42,12 @@ async function getActivePlanNameOrg(c: Context, orgId: string): Promise<string |
 
   if (!isActivePlanStatus(stripeInfo.status) || stripeInfo.is_good_plan !== true)
     return null
+
+  if (requirePaid) {
+    const subscription = await getSubscriptionData(c, org.customer_id, stripeInfo.subscription_id)
+    if (stripeInfo.past_due_at || subscription?.status !== 'active' || subscription.productId !== stripeInfo.product_id)
+      return null
+  }
 
   const { data: plan, error: planError } = await supabaseAdmin(c)
     .from('plans')
@@ -68,11 +74,13 @@ async function getActivePlanNameOrg(c: Context, orgId: string): Promise<string |
  *
  * @param c - Hono context
  * @param orgId - Organization ID to validate
+ * @param feature Feature name for the permission error
+ * @param requirePaid Also verify the live Stripe subscription is active, with the same product and no past-due balance
  * @throws {HTTPException} 403 if org is not on Enterprise plan
  */
-export async function requireEnterprisePlan(c: Context, orgId: string): Promise<void> {
+export async function requireEnterprisePlan(c: Context, orgId: string, feature = 'SSO', requirePaid = false): Promise<void> {
   try {
-    const planName = await getActivePlanNameOrg(c, orgId)
+    const planName = await getActivePlanNameOrg(c, orgId, requirePaid)
 
     if (planName !== 'Enterprise') {
       cloudlog({
@@ -81,7 +89,7 @@ export async function requireEnterprisePlan(c: Context, orgId: string): Promise<
         orgId,
         activePlan: planName,
       })
-      return quickError(403, 'enterprise_plan_required', 'SSO requires an active Enterprise plan', {
+      return quickError(403, 'enterprise_plan_required', `${feature} requires an active Enterprise plan`, {
         activePlan: planName,
       })
     }

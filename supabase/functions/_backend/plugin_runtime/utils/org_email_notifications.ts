@@ -341,7 +341,7 @@ async function getEligibleOrgMemberEmails(
     }
     catch (error) {
       resolutionFailed = true
-      cloudlog({ requestId: c.get('requestId'), message: 'getEligibleOrgMemberEmails users error', orgId, error })
+      logPgError(c, 'getEligibleOrgMemberEmails users', error)
       return { emails: [], resolutionFailed }
     }
 
@@ -366,7 +366,7 @@ async function getEligibleOrgMemberEmails(
     return { emails: eligibleEmails, resolutionFailed }
   }
   catch (error) {
-    cloudlog({ requestId: c.get('requestId'), message: 'getEligibleOrgMemberEmails users error', orgId, error })
+    logPgError(c, 'getEligibleOrgMemberEmails', error)
     return { emails: [], resolutionFailed: true }
   }
 }

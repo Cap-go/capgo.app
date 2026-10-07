@@ -5,8 +5,8 @@ import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { addUtcDays, normalizeToUtcStartOfDay } from '~/services/date'
 import { createSignedImageUrl, getImmediateImageUrl, resolveImagePath } from '~/services/storage'
-import { isPlatformAdmin, stripeEnabled, useSupabase } from '~/services/supabase'
-import { clearWebsitePaidUserCookie, setWebsitePaidUserCookie, syncWebsitePaidUserCookieFromOrganizations } from '~/services/websiteAuthCookie'
+import { stripeEnabled, useSupabase } from '~/services/supabase'
+import { clearWebsitePaidUserCookie, syncWebsitePaidUserCookieFromOrganizations } from '~/services/websiteAuthCookie'
 import { createDeferredPromise } from '../utils/promise'
 import { useDashboardAppsStore } from './dashboardApps'
 import { useDisplayStore } from './display'
@@ -491,6 +491,29 @@ export const useOrganizationStore = defineStore('organization', () => {
     return _initialLoadPromise.value.promise
   }
 
+  // Index an app created in this session so app-scoped UI (Getting started
+  // nav, app lookups) sees it without refetching every organization.
+  const upsertOrganizationApp = (app: Parameters<typeof appWithImmediateIcon>[0]) => {
+    const org = organizations.value.find(organization => organization.gid === app.owner_org)
+    if (!org)
+      return
+
+    const indexedApp = appWithImmediateIcon(app)
+    const nextAppsByAppId = new Map(_appsByAppId.value)
+    nextAppsByAppId.set(indexedApp.app_id, indexedApp)
+    const nextOrganizationsByAppId = new Map(_organizationsByAppId.value)
+    nextOrganizationsByAppId.set(indexedApp.app_id, org)
+    const nextAppsByOrgId = new Map(_appsByOrgId.value)
+    const orgApps = (nextAppsByOrgId.get(indexedApp.owner_org) ?? []).filter(orgApp => orgApp.app_id !== indexedApp.app_id)
+    orgApps.push(indexedApp)
+    orgApps.sort((a, b) => (a.name || a.app_id).localeCompare(b.name || b.app_id))
+    nextAppsByOrgId.set(indexedApp.owner_org, orgApps)
+
+    _appsByAppId.value = nextAppsByAppId
+    _organizationsByAppId.value = nextOrganizationsByAppId
+    _appsByOrgId.value = nextAppsByOrgId
+  }
+
   const appOnboardingWriteGen = new Map<string, number>()
 
   const writeAppFields = (appId: string, patch: Partial<OrganizationApp>) => {
@@ -638,6 +661,8 @@ export const useOrganizationStore = defineStore('organization', () => {
     if (!userId)
       return
 
+    main.invalidatePlatformAdminStatus()
+
     if (!_initialized.value) {
       const listener = supabase.auth.onAuthStateChange((event: AuthChangeEvent) => {
         if (event === 'SIGNED_OUT') {
@@ -681,12 +706,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     })
 
     syncWebsitePaidUserCookieFromOrganizations(mappedData)
-    isPlatformAdmin()
-      .then((isAdmin) => {
-        main.isAdmin = isAdmin
-        if (isAdmin)
-          setWebsitePaidUserCookie(true)
-      })
+    main.resolvePlatformAdminStatus()
       .catch((error) => {
         console.error('Failed to resolve platform admin status:', error)
       })
@@ -880,6 +900,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     getOrgByAppId,
     getAppByAppId,
     getAppsByOrgId,
+    upsertOrganizationApp,
     awaitInitialLoad,
     updateAppOnboarding,
     updateAppNeedOnboarding,

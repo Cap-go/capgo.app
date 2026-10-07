@@ -5,21 +5,18 @@ import { Hono } from 'hono/tiny'
 import { BRES, parseBody, quickError, simpleError } from '../utils/hono.ts'
 import { middlewareKey } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
+import { MAX_FILE_HASH_LENGTH, MAX_FILE_NAME_LENGTH, MAX_MANIFEST_ENTRIES, MAX_S3_PATH_LENGTH } from '../utils/manifest_limits.ts'
 import { persistVersionManifestEntries } from '../utils/manifest_persist.ts'
+import { verifyManifestSizeReceipts } from '../utils/manifest_size_receipt.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { supabaseAdmin, supabaseApikey } from '../utils/supabase.ts'
+import { getEnv } from '../utils/utils.ts'
 
 interface DataSetManifest {
   app_id: string
   name: string
   manifest?: ManifestPersistEntry[]
 }
-
-// Prod max is ~7.5k files per version; keep modest headroom without unbounded payloads.
-const MAX_MANIFEST_ENTRIES = 10_000
-const MAX_FILE_NAME_LENGTH = 2048
-const MAX_S3_PATH_LENGTH = 2048
-const MAX_FILE_HASH_LENGTH = 512
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -87,6 +84,18 @@ app.post('/', middlewareKey(), async (c) => {
     })
   }
 
+  const receiptMode = body.manifest.some(entry => entry.file_size_receipt != null)
+  let trustFileSizes = false
+  if (receiptMode) {
+    if (body.manifest.some(entry => typeof entry.file_size_receipt !== 'string' || entry.file_size_receipt.length > 128))
+      return quickError(400, 'error_manifest_size_receipt_invalid', 'Every manifest entry must include a valid size receipt')
+    const sizes = await verifyManifestSizeReceipts(getEnv(c, 'MANIFEST_SIZE_RECEIPT_SECRET'), body.manifest.map(entry => ({ path: entry.s3_path!, receipt: entry.file_size_receipt! })))
+    if (!sizes)
+      return quickError(400, 'error_manifest_size_receipt_invalid', 'Manifest size receipt verification failed')
+    body.manifest = body.manifest.map((entry, index) => ({ ...entry, file_size: sizes[index] }))
+    trustFileSizes = true
+  }
+
   // After storage_provider flips to r2, only idempotent retries are allowed.
   if (version.storage_provider === 'r2') {
     const { data: existingEntries, error: existingError } = await supabaseAdmin(c)
@@ -115,7 +124,7 @@ app.post('/', middlewareKey(), async (c) => {
       c,
       { id: version.id, app_id: version.app_id },
       body.manifest,
-      { s3PathPrefix },
+      { s3PathPrefix, trustFileSizes },
     )
 
     cloudlog({

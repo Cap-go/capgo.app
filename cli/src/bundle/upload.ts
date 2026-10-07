@@ -25,7 +25,7 @@ import { showReplicationProgress } from '../replicationProgress'
 import { CliUserError } from '../shared/cli-user-error'
 import { formatTable } from '../terminal-table'
 import { usesAlwaysDirectUpdate } from '../updaterConfig'
-import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, channelUpdatePackageCliError, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getBundleVersion, getCompatibilityDetails, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
+import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, channelUpdatePackageCliError, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, formatVerboseError, getBundleVersion, getCompatibilityDetails, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
 import type { AutoBumpLevel } from '../versionHelpers'
 import { autoBumpVersionBy, getVersionSuggestions, interactiveVersionBump, normalizeAutoBumpInput } from '../versionHelpers'
 import { resolveAutoBumpLevelFromAi } from './auto-bump-ai'
@@ -36,9 +36,13 @@ import { CORDOVA_DEFAULT_WEB_DIR } from '../cordova/project'
 import { isCordovaMode } from '../framework/mode'
 import { ensureNotifyAppReadyInBuildFolder } from '../recovery/notify-app-ready'
 import { parsePackageJsonOptionPaths, resolveAppIdWithRecovery } from '../recovery/app-id'
+import { finalizeUploadedBundle } from './finalize-upload'
 import { loadUploadProjectConfig } from './upload-config'
-import { prepareBundlePartialFiles, uploadPartial } from './partial'
+import { isManifestUploadAutoEnabled, MANIFEST_UPLOAD_PROTOCOL_VERSION, manifestUploadFileHashFormat, requestManifestUpload } from './manifest-upload'
+import type { ResolvedManifestUpload } from './manifest-upload'
+import { PartialUploadValidationError, prepareBundlePartialFiles, prepareManifestUploadEntries, uploadPartial } from './partial'
 import { clackUploadReporter, getUploadReporter, runWithUploadReporter } from './reporter'
+import { ManifestUploadAbandonError, resolveManifestUploadAbandonScope } from './upload-abandon-error'
 import { formatUploadChannels, getChannelsToAssignByChecksum, parseUploadChannels } from './upload-channels'
 
 type SupabaseType = Awaited<ReturnType<typeof createSupabaseClient>>
@@ -100,9 +104,12 @@ async function persistVersionData(
   versionData: Database['public']['Tables']['app_versions']['Insert'],
   action: 'add' | 'update',
 ) {
-  const { error } = await updateOrCreateVersion(supabase, versionData)
+  const { data, error } = await updateOrCreateVersion(supabase, versionData)
+    .select('id')
+    .single()
   if (error)
     uploadFail(`Cannot ${action} bundle ${formatError(error)}`)
+  return data.id
 }
 
 /**
@@ -465,6 +472,35 @@ function hasS3UploadConfig(options: OptionsUpload): boolean {
 
 function hasCompleteS3UploadConfig(options: OptionsUpload): boolean {
   return !!(options.s3BucketName && options.s3Endpoint && options.s3Region && options.s3Apikey && options.s3Apisecret && options.s3Port)
+}
+
+interface CompleteS3UploadConfig {
+  s3Region: string
+  s3Apikey: string
+  s3Apisecret: string
+  s3BucketName: string
+  s3Endpoint: string
+  s3Port: number
+  s3SSL: boolean | undefined
+}
+
+function resolveS3UploadConfig(options: OptionsUpload): CompleteS3UploadConfig | undefined {
+  if (!hasS3UploadConfig(options))
+    return undefined
+
+  const { s3Region, s3Apikey, s3Apisecret, s3BucketName, s3Endpoint, s3Port, s3SSL } = options
+  if (!s3BucketName || !s3Endpoint || !s3Region || !s3Apikey || !s3Apisecret || !s3Port)
+    uploadFail('Missing argument, for S3 upload you need to provide a bucket name, endpoint, region, port, API key, and API secret')
+
+  return {
+    s3Region,
+    s3Apikey,
+    s3Apisecret,
+    s3BucketName,
+    s3Endpoint,
+    s3Port,
+    s3SSL,
+  }
 }
 
 function shouldUploadFullZip(options: OptionsUpload): boolean {
@@ -1349,9 +1385,8 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     getUploadReporter().intro(`Uploading with CLI version ${pack.version}`)
   let sessionKey: Buffer | undefined
   const pm = getPMAndCommand()
+  const s3UploadConfig = resolveS3UploadConfig(options)
   await checkAlerts(getUploadReporter())
-
-  const { s3Region, s3Apikey, s3Apisecret, s3BucketName, s3Endpoint, s3Port, s3SSL } = options
 
   if (options.verbose) {
     log.info(`[Verbose] Starting upload process with options:`)
@@ -1377,10 +1412,11 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   }
 
   // Record whether the user explicitly asked for a delta/partial upload BEFORE
-  // any mutation of `options.delta`. The instant-update auto-enable below and
-  // the flag fold later both set `options.delta = true`, so reading it back
-  // afterwards cannot tell an auto-enabled delta from an explicit `--delta`.
-  options.userRequestedDelta = !!(options.partial || options.delta || options.partialOnly || options.deltaOnly)
+  // any mutation of `options.delta`, while preserving the captured value across
+  // recursive version-bump retries. The instant-update auto-enable below and the
+  // flag fold later both set `options.delta = true`, so reading it back afterwards
+  // cannot tell an auto-enabled delta from an explicit `--delta`.
+  options.userRequestedDelta ??= !!(options.partial || options.delta || options.partialOnly || options.deltaOnly)
 
   // Check if instant updates are enabled and auto-enable delta updates.
   const instantUpdateEnabled = usesAlwaysDirectUpdate(extConfig?.config?.plugins?.CapacitorUpdater)
@@ -1416,7 +1452,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     log.info(`  - Alert upload size: ${Math.floor(fileConfig.alertUploadSize / 1024 / 1024)} MB`)
     log.info(`  - TUS upload: ${fileConfig.TUSUpload ? 'enabled' : 'disabled'}`)
     log.info(`  - TUS upload forced: ${fileConfig.TUSUploadForced ? 'yes' : 'no'}`)
-    log.info(`  - Partial upload: ${fileConfig.partialUpload ? 'enabled' : 'disabled'}`)
+    log.info(`  - Delta upload: ${fileConfig.partialUpload ? 'enabled' : 'disabled'}`)
     log.info(`  - Max chunk size: ${Math.floor(fileConfig.maxChunkSize / 1024 / 1024)} MB`)
   }
 
@@ -1765,8 +1801,12 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
       log.info(`[Verbose] Delta updates: ${options.delta ? 'enabled' : 'disabled'}`)
   }
 
-  if (options.encryptPartial && encryptionMethod === 'v1')
-    uploadFail('You cannot encrypt the partial update if you are not using the v2 encryption method')
+  // --encrypt-partial is the deprecated alias of --encrypt-delta
+  options.encryptDelta = options.encryptDelta || options.encryptPartial
+
+  // Never upload delta files unencrypted when encryption was explicitly requested
+  if (options.encryptDelta && encryptionMethod !== 'v2')
+    uploadFail('You cannot encrypt the delta update if you are not using the v2 encryption method')
 
   // Minimum versions that support hex checksum format
   const HEX_CHECKSUM_MIN_VERSION_V5 = '5.30.0'
@@ -1776,8 +1816,8 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   // Check if updater supports hex checksum format
   let supportsHexChecksum = false
 
-  // Auto-encrypt partial updates for updater versions > 6.14.5 if encryption method is v2
-  if (options.delta && encryptionMethod === 'v2' && !options.encryptPartial) {
+  // Auto-encrypt delta updates for updater versions >= 6.14.4 if encryption method is v2
+  if (options.delta && encryptionMethod === 'v2' && !options.encryptDelta) {
     // Check updater version
     const root = findRoot(cwd())
     const updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
@@ -1790,15 +1830,15 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     }
 
     if (updaterVersion && coerced && greaterOrEqual(coerced, parse('6.14.4'))) {
-      log.info(`Auto-enabling partial update encryption for updater version ${coerced} (> 6.14.4)`)
+      log.info(`Auto-enabling delta update encryption for updater version ${coerced} (>= 6.14.4)`)
       if (options.verbose)
-        log.info(`[Verbose] Partial encryption auto-enabled for updater >= 6.14.4`)
-      options.encryptPartial = true
+        log.info(`[Verbose] Delta encryption auto-enabled for updater >= 6.14.4`)
+      options.encryptDelta = true
     }
   }
 
   // Check if updater supports hex checksum format (for delta updates with encryption)
-  if (options.delta && (options.encryptPartial || encryptionMethod === 'v2')) {
+  if (options.delta && (options.encryptDelta || encryptionMethod === 'v2')) {
     const root = findRoot(cwd())
     const updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
     let coerced
@@ -1819,9 +1859,36 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   }
 
   if (options.verbose && options.delta)
-    log.info(`[Verbose] Preparing delta/partial update manifest...`)
+    log.info(`[Verbose] Preparing delta update manifest...`)
 
-  const manifest: manifestType = options.delta ? await prepareBundlePartialFiles(path, apikey, orgId, appid, options.encryptPartial ? encryptionMethod : 'none', finalKeyData, supportsHexChecksum) : []
+  const manifest: manifestType = options.delta ? await prepareBundlePartialFiles(path, apikey, orgId, appid, options.encryptDelta ? encryptionMethod : 'none', finalKeyData, supportsHexChecksum) : []
+
+  const encryptionData = versionData.session_key && options.encryptDelta && sessionKey
+    ? {
+        sessionKey,
+        ivSessionKey: versionData.session_key,
+      }
+    : undefined
+  const shouldRequestManifestUpload = !!(options.delta && !options.dryUpload && !s3UploadConfig)
+  const manifestUploadAutoEnabled = isManifestUploadAutoEnabled(!!options.userRequestedDelta, shouldUploadFullZip(options))
+  if (shouldRequestManifestUpload && manifest.length === 0) {
+    if (options.userRequestedDelta)
+      uploadFail('Cannot request a manifest upload for an empty manifest')
+    log.warn('Delta upload was auto-enabled, but the generated manifest is empty; continuing with ZIP-only upload')
+    options.delta = false
+  }
+  let manifestUploadEntries: Awaited<ReturnType<typeof prepareManifestUploadEntries>> | undefined
+  if (shouldRequestManifestUpload && options.delta) {
+    try {
+      manifestUploadEntries = await prepareManifestUploadEntries(manifest, path, encryptionData, options)
+    }
+    catch (error) {
+      if (!manifestUploadAutoEnabled || !(error instanceof PartialUploadValidationError))
+        throw error
+      log.warn(`${error.message} Continuing with ZIP-only upload.`)
+      options.delta = false
+    }
+  }
 
   if (options.verbose && options.delta)
     log.info(`[Verbose] Delta manifest prepared with ${manifest.length} files`)
@@ -1833,10 +1900,40 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] Creating version record in database...`)
 
-  await persistVersionData(supabase, versionData, 'add')
+  const versionId = await persistVersionData(supabase, versionData, 'add')
 
   if (options.verbose)
     log.info(`[Verbose] Version record created successfully`)
+
+  let manifestUploadAuthorization: ResolvedManifestUpload | undefined
+  if (manifestUploadEntries) {
+    const fileHashFormat = manifestUploadFileHashFormat(!!encryptionData, supportsHexChecksum)
+    try {
+      manifestUploadAuthorization = await requestManifestUpload(apikey, {
+        protocol_version: MANIFEST_UPLOAD_PROTOCOL_VERSION,
+        version_id: versionId,
+        delta_encryption: { enabled: !!encryptionData },
+        manifest_upload_auto_enabled: manifestUploadAutoEnabled,
+        file_hash_format: fileHashFormat,
+        entries: manifestUploadEntries,
+      }, options)
+    }
+    catch (error) {
+      if (manifestUploadAutoEnabled) {
+        log.warn(`Cannot authorize manifest upload; continuing with ZIP-only upload. ${formatError(error)}`)
+        options.delta = false
+      }
+      else {
+        try {
+          await deletedFailedVersion(apikey, appid, bundle, options)
+        }
+        catch (cleanupError) {
+          uploadFail(`Cannot authorize manifest upload ${formatError(error)}. Cleanup of the incomplete version also failed (${formatError(cleanupError)}); delete bundle ${bundle} manually before retrying.`)
+        }
+        uploadFail(`Cannot authorize manifest upload ${formatError(error)}`)
+      }
+    }
+  }
 
   if (options.dryUpload) {
     if (options.verbose)
@@ -1866,10 +1963,8 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] TUS chunk size: ${Math.floor(options.tusChunkSize / 1024 / 1024)} MB`)
 
-  if (zipped && hasS3UploadConfig(options)) {
-    if (!s3BucketName || !s3Endpoint || !s3Region || !s3Apikey || !s3Apisecret || !s3Port)
-      uploadFail('Missing argument, for S3 upload you need to provide a bucket name, endpoint, region, port, API key, and API secret')
-
+  if (zipped && s3UploadConfig) {
+    const { s3Region, s3Apikey, s3Apisecret, s3BucketName, s3Endpoint, s3Port, s3SSL } = s3UploadConfig
     log.info('Uploading to S3')
     if (options.verbose) {
       log.info(`[Verbose] S3 configuration:`)
@@ -1932,47 +2027,63 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
         if (options.verbose)
           log.info(`[Verbose] Dry upload mode: skipping delta upload`)
       }
-      const encryptionData = versionData.session_key && options.encryptPartial && sessionKey
-        ? {
-            sessionKey,
-            ivSessionKey: versionData.session_key,
-          }
-        : undefined
-
       if (options.verbose && options.delta) {
-        log.info(`[Verbose] Starting delta/partial file upload...`)
+        log.info(`[Verbose] Starting delta file upload...`)
         log.info(`  - Manifest entries: ${manifest.length}`)
         log.info(`  - Encryption: ${encryptionData ? 'enabled' : 'disabled'}`)
       }
 
-      finalManifest = options.delta
-        ? await uploadPartial(
-            apikey,
-            manifest,
-            path,
-            appid,
-            orgId,
-            encryptionData,
-            options,
-          )
-        : null
+      if (options.delta) {
+        if (!manifestUploadAuthorization)
+          uploadFail('Cannot upload delta files without manifest upload authorization')
+        finalManifest = await uploadPartial(
+          apikey,
+          manifest,
+          path,
+          appid,
+          orgId,
+          encryptionData,
+          options,
+          manifestUploadAuthorization,
+        )
+      }
 
       if (options.verbose && finalManifest)
         log.info(`[Verbose] Delta upload complete with ${finalManifest.length} files`)
     }
     catch (err) {
+      if (err instanceof ManifestUploadAbandonError) {
+        const abandonScope = resolveManifestUploadAbandonScope(err, manifestUploadAutoEnabled)
+        if (abandonScope === 'manifest') {
+          log.warn(err.message)
+          finalManifest = null
+        }
+        else {
+          const fatalError = err.scope === 'all'
+            ? err
+            : new ManifestUploadAbandonError('all', err.backendMessage, err.requestId)
+          try {
+            await deletedFailedVersion(apikey, appid, bundle, options)
+          }
+          catch (cleanupError) {
+            log.error(`Cleanup of the incomplete version failed (${formatError(cleanupError)}); delete bundle ${bundle} manually before retrying.`)
+          }
+          throw fatalError
+        }
+      }
       // If user explicitly requested delta, the error was already thrown by uploadPartial
       // and we should propagate it. Read the explicit-request flag captured before
       // `options.delta` was mutated, so an auto-enabled delta degrades gracefully.
-      if (options.userRequestedDelta) {
+      else if (options.userRequestedDelta) {
         // Error already logged in uploadPartial, just re-throw
         throw err
       }
-
-      // Auto-enabled delta that failed - not critical
-      log.info(`Failed to upload partial files to capgo cloud. Error: ${formatError(err)}. This is not a critical error, the bundle has been uploaded without the partial files`)
-      if (options.verbose)
-        log.info(`[Verbose] Delta upload error details: ${formatError(err)}`)
+      else {
+        // Auto-enabled delta that failed - not critical
+        log.info(`Failed to upload delta files to capgo cloud. Error: ${formatError(err)}. This is not a critical error, the bundle has been uploaded without the delta files`)
+        if (options.verbose)
+          log.info(`[Verbose] Delta upload error details: ${formatError(err)}`)
+      }
     }
 
     if (finalManifest?.length) {
@@ -2003,7 +2114,16 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     if (options.verbose)
       log.info(`[Verbose] Updating version record with storage provider...`)
 
-    await persistVersionData(supabase, versionData, 'update')
+    await finalizeUploadedBundle({
+      apikey,
+      appId: appid,
+      bundle,
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
+      reporter: getUploadReporter(),
+    }, async () => {
+      await persistVersionData(supabase, versionData, 'update')
+    })
 
     if (options.verbose)
       log.info(`[Verbose] Version record updated successfully`)
@@ -2192,7 +2312,7 @@ export function checkValidOptions(options: OptionsUpload) {
     uploadFail('You need to provide an external url if you want to use the --encrypted-checksum option')
   }
   if ((options.partial || options.delta || options.partialOnly || options.deltaOnly) && options.external) {
-    uploadFail('You cannot use the --partial/--delta/--partial-only/--delta-only option with an external url')
+    uploadFail('You cannot use delta upload options (--delta/--delta-only, or deprecated --partial/--partial-only) with an external url')
   }
   if (options.tus && options.external) {
     uploadFail('You cannot use the --tus option with an external url')
@@ -2215,6 +2335,7 @@ export function checkValidOptions(options: OptionsUpload) {
   if (options.external && (options.s3Region || options.s3Apikey || options.s3Apisecret || options.s3Endpoint || options.s3BucketName || options.s3Port || options.s3SSL)) {
     uploadFail('You cannot set S3 options if you are uploading to an external url, it\'s automatically handled')
   }
+  resolveS3UploadConfig(options)
   // cannot set --encrypted-checksum if not external
   if (options.encryptedChecksum && !options.external) {
     uploadFail('You cannot set the --encrypted-checksum option if you are not uploading to an external url')
@@ -2296,9 +2417,14 @@ async function uploadBundleWithReporter(appid: string, options: OptionsUpload): 
     return result
   }
   catch (error) {
+    if (error instanceof ManifestUploadAbandonError) {
+      log.error(error.message)
+      throw error
+    }
+
     // Show simple message by default, full error details only with --verbose
     const simpleMessage = error instanceof Error ? error.message : String(error)
-    const verboseMessage = formatError(error)
+    const verboseMessage = formatVerboseError(error)
 
     if (simpleMessage === UPLOAD_CANCELLED_BY_USER)
       throw error instanceof Error ? error : new Error(String(error))

@@ -1,8 +1,13 @@
 <script setup lang="ts">
+import type { Component } from 'vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import IconRollback from '~icons/heroicons/arrow-uturn-left'
+import IconDevice from '~icons/heroicons/device-phone-mobile'
+import IconTeam from '~icons/heroicons/user-group'
 
 interface HighlightItem {
+  icon?: Component
   title: string
   description: string
 }
@@ -42,14 +47,17 @@ const heroChips = computed(() => props.chips ?? [
 ])
 const heroHighlights = computed(() => props.heroHighlights ?? [
   {
+    icon: IconRollback,
     title: t('login-highlight-rollouts-title'),
     description: t('login-highlight-rollouts-description'),
   },
   {
+    icon: IconDevice,
     title: t('login-highlight-observability-title'),
     description: t('login-highlight-observability-description'),
   },
   {
+    icon: IconTeam,
     title: t('login-highlight-team-title'),
     description: t('login-highlight-team-description'),
   },
@@ -89,7 +97,7 @@ const heroHighlights = computed(() => props.heroHighlights ?? [
               <p class="text-xs font-semibold tracking-[0.26em] text-slate-500 uppercase dark:text-slate-300">
                 {{ heroKickerValue }}
               </p>
-              <h1 class="mt-4 text-4xl font-semibold leading-tight text-slate-950 dark:text-white xl:text-5xl">
+              <h1 class="mt-4 text-4xl font-semibold leading-tight text-balance text-slate-950 dark:text-white xl:text-5xl">
                 {{ heroTitleValue }}
               </h1>
               <p class="mt-5 max-w-xl text-base leading-7 text-slate-600 dark:text-slate-300 xl:text-lg">
@@ -104,7 +112,9 @@ const heroHighlights = computed(() => props.heroHighlights ?? [
               :key="highlight.title"
               class="rounded-3xl border border-white/70 bg-white/78 p-5 shadow-[0_20px_50px_-30px_rgba(15,23,42,0.45)] backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/72"
             >
-              <div class="mb-3 h-2 w-12 rounded-full bg-gradient-to-r from-sky-500 via-sky-400 to-indigo-500" />
+              <span class="mb-4 inline-flex h-9 w-9 items-center justify-center rounded-lg bg-azure-500/10 text-blue-700 ring-1 ring-azure-500/20 dark:text-azure-400" aria-hidden="true">
+                <component :is="highlight.icon" class="h-5 w-5" />
+              </span>
               <h2 class="text-base font-semibold text-slate-900 dark:text-white">
                 {{ highlight.title }}
               </h2>

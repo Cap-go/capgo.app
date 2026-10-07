@@ -12,6 +12,7 @@ const noBackendDeploys = {
   plugins: false,
   supabase: false,
   translation: false,
+  r2_inventory: false,
 }
 
 describe('deploy scope matching', () => {
@@ -31,6 +32,7 @@ describe('deploy scope matching', () => {
         plugins: true,
         supabase: true,
         translation: true,
+        r2_inventory: true,
       },
     })).toBe(true)
   })
@@ -54,6 +56,7 @@ describe('deploy scope matching', () => {
       plugins: false,
       supabase: true,
       translation: false,
+      r2_inventory: false,
     })
   })
 
@@ -64,6 +67,7 @@ describe('deploy scope matching', () => {
       plugins: false,
       supabase: true,
       translation: true,
+      r2_inventory: false,
     })
   })
 
@@ -74,6 +78,7 @@ describe('deploy scope matching', () => {
       plugins: true,
       supabase: true,
       translation: false,
+      r2_inventory: false,
     })
   })
 
@@ -84,16 +89,29 @@ describe('deploy scope matching', () => {
       plugins: false,
       supabase: true,
       translation: false,
+      r2_inventory: false,
     })
   })
 
-  it.concurrent('deploys shared Hono utilities to API/files workers but not isolated plugins', () => {
+  it.concurrent('deploys hosted MCP server changes with the API worker', () => {
+    expect(resolveDeployScopeFromFiles(['supabase/functions/_backend/mcp/tools.ts'])).toEqual({
+      api: true,
+      files: false,
+      plugins: false,
+      supabase: true,
+      translation: false,
+      r2_inventory: false,
+    })
+  })
+
+  it.concurrent('deploys shared Hono utilities to API/files/inventory workers but not isolated plugins', () => {
     expect(resolveDeployScopeFromFiles(['supabase/functions/_backend/utils/hono.ts'])).toEqual({
       api: true,
       files: true,
       plugins: false,
       supabase: true,
       translation: false,
+      r2_inventory: true,
     })
   })
 
@@ -104,6 +122,7 @@ describe('deploy scope matching', () => {
       plugins: true,
       supabase: true,
       translation: false,
+      r2_inventory: false,
     })
   })
 
@@ -114,9 +133,9 @@ describe('deploy scope matching', () => {
       plugins: false,
       supabase: true,
       translation: false,
+      r2_inventory: false,
     })
   })
-
 
   it.concurrent('deploys files worker when the shared preview subdomain helper changes', () => {
     expect(resolveDeployScopeFromFiles(['supabase/functions/shared/preview-subdomain.ts'])).toEqual({
@@ -125,6 +144,7 @@ describe('deploy scope matching', () => {
       plugins: false,
       supabase: true,
       translation: false,
+      r2_inventory: false,
     })
   })
 
@@ -135,6 +155,7 @@ describe('deploy scope matching', () => {
       plugins: false,
       supabase: true,
       translation: false,
+      r2_inventory: false,
     })
   })
 
@@ -145,6 +166,20 @@ describe('deploy scope matching', () => {
       plugins: true,
       supabase: false,
       translation: true,
+      r2_inventory: true,
+    })
+  })
+
+  it.concurrent.each([
+    'cloudflare_workers/r2_inventory/index.ts',
+    'cloudflare_workers/r2_inventory/wrangler.jsonc',
+    'scripts/ensure-r2-inventory-queues.ts',
+    'scripts/deploy-scope.ts',
+    '.github/workflows/build_and_deploy.yml',
+  ])('deploys the inventory consumer for %s', (file) => {
+    expect(resolveDeployScopeFromFiles([file])).toEqual({
+      ...noBackendDeploys,
+      r2_inventory: true,
     })
   })
 
@@ -200,6 +235,7 @@ describe('deploy scope matching', () => {
         plugins: true,
         supabase: true,
         translation: false,
+        r2_inventory: false,
       },
     })
   })
@@ -231,6 +267,7 @@ describe('deploy scope matching', () => {
         plugins: false,
         supabase: false,
         translation: true,
+        r2_inventory: false,
       },
     })
   })
@@ -260,6 +297,7 @@ describe('deploy scope matching', () => {
         plugins: true,
         supabase: true,
         translation: true,
+        r2_inventory: true,
       },
     })
   })
@@ -270,6 +308,7 @@ describe('deploy scope matching', () => {
     ['translation', 'cloudflare_workers/translation/index.ts'],
     ['files', 'cloudflare_workers/files/index.ts'],
     ['plugins', 'cloudflare_workers/plugin/index.ts'],
+    ['r2_inventory', 'cloudflare_workers/r2_inventory/index.ts'],
   ] as const)('deploys %s when a matched file is deleted', (target, file) => {
     const run = (args: string[]) => {
       const key = args.join(' ')

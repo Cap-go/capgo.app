@@ -698,7 +698,7 @@ onUnmounted(() => {
           <button type="button" class="bp-ghost" :disabled="isFirst" @click="prev">
             ← {{ t('builder-promo-back') }}
           </button>
-          <button type="button" v-if="!isLast" class="bp-next" @click="next">
+          <button v-if="!isLast" type="button" class="bp-next" @click="next">
             {{ t('builder-promo-next') }} →
           </button>
           <span v-else />

@@ -1,14 +1,18 @@
 import type { Context } from 'hono'
+import type { AcceptedEventIdentity } from '../utils/event_identity.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { BentoTrackingPayload, TrackOptions } from '../utils/tracking.ts'
 import { Hono } from 'hono/tiny'
-import { APP_TOO_LARGE_EVENT, buildAppTooLargeBentoEvent } from '../utils/app_too_large_tracking.ts'
 import { markAppOnboardingLoginFromTracking } from '../utils/app_onboarding_login.ts'
+import { APP_TOO_LARGE_EVENT, buildAppTooLargeBentoEvent } from '../utils/app_too_large_tracking.ts'
+import { markBuilderChecklistFromAnalytics } from '../utils/builder_onboarding_checklist.ts'
 import { buildBuilderOnboardingBentoEvent, BUILDER_RECOVERY_MILESTONES } from '../utils/builder_onboarding_recovery.ts'
-import { BUNDLE_INCOMPATIBLE_EVENT, buildBundleCompatibilityBentoEvent, bundleIncompatibleEmailOutcome, isBreakingChangeGatedByChannelStrategy, isCliTrueTag } from '../utils/bundle_compatibility_recovery.ts'
+import { buildBundleCompatibilityBentoEvent, BUNDLE_INCOMPATIBLE_EVENT, bundleIncompatibleEmailOutcome, isBreakingChangeGatedByChannelStrategy, isCliTrueTag } from '../utils/bundle_compatibility_recovery.ts'
+import { acceptEventIdentity, isValidClientEventId } from '../utils/event_identity.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
+import { APP_ONBOARDING_READY_EVENT, buildAppOnboardingReadyBentoEvent } from '../utils/onboarding_app_ready_tracking.ts'
 import { buildAiInstructionsCopiedBentoEvent } from '../utils/onboarding_copy_tracking.ts'
 import { trackPosthogEvent } from '../utils/posthog.ts'
 import { checkPermission } from '../utils/rbac.ts'
@@ -231,6 +235,42 @@ async function buildOnboardingBentoEvent(
       },
     }
   })
+}
+
+async function buildTrackedAppOnboardingReadyBentoEvent(
+  c: Context<MiddlewareKeyVariables>,
+  supabase: ReturnType<typeof supabaseWithAuth>,
+  onboardingOrgId: string | undefined,
+  appId: string | undefined,
+  trackedBody: TrackOptions,
+) {
+  if (!onboardingOrgId || !appId || trackedBody.event !== APP_ONBOARDING_READY_EVENT)
+    return undefined
+
+  const [orgResult, appResult] = await Promise.all([
+    supabase
+      .from('orgs')
+      .select('id, name, onboarding, website')
+      .eq('id', onboardingOrgId)
+      .single(),
+    supabase
+      .from('apps')
+      .select('app_id, existing_app, name, need_onboarding, onboarding')
+      .eq('app_id', appId)
+      .single(),
+  ])
+
+  if (orgResult.error || !orgResult.data || appResult.error || !appResult.data) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'app onboarding ready Bento lookup failed; skipping signal',
+      org: orgResult.error,
+      app: appResult.error,
+    })
+    return undefined
+  }
+
+  return buildAppOnboardingReadyBentoEvent(c, trackedBody.event, orgResult.data, appResult.data)
 }
 
 async function buildBuilderBentoEvent(
@@ -462,9 +502,26 @@ async function buildBundleIncompatibleBentoEvent(
   })
 }
 
+function logAcceptedEvent(c: Context, identity: AcceptedEventIdentity, acceptedAt: number) {
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'tracking_event_accepted',
+    event_id: identity.event_id,
+    occurred_at: identity.occurred_at,
+    accepted_at: identity.accepted_at,
+    id_source: identity.id_source,
+    timestamp_source: identity.timestamp_source,
+    duration_ms: Date.now() - acceptedAt,
+  })
+}
+
 app.post('/', middlewareAuth(), async (c) => {
+  const acceptedAt = Date.now()
   const body = await parseBody<TrackEventBody>(c)
+  if (body.client_event_id !== undefined && !isValidClientEventId(body.client_event_id))
+    throw quickError(400, 'invalid_client_event_id', 'client_event_id must be a UUID')
   const {
+    client_event_id: clientEventId,
     icon,
     notify: _notify,
     notifyConsole = false,
@@ -478,12 +535,26 @@ app.post('/', middlewareAuth(), async (c) => {
   const requestedUserId = typeof body.user_id === 'string' ? body.user_id : undefined
   const appId = getAppId(body)
   const { trackingUserId, orgId: verifiedOrgId } = await resolveTrackingUserId(c, requestedUserId, requestedOrgId, appId, trackingV2, Boolean(body.notifyConsole))
-  const trackedBody = buildTrackedBody(trackingV2, verifiedOrgId, requestedUserId, trackingUserId, trackOptions)
+  const identity = await acceptEventIdentity({
+    actorId: c.get('auth')!.userId,
+    orgId: verifiedOrgId,
+    clientEventId,
+    timestamp: body.timestamp,
+    acceptedAt,
+  })
+  const trackedBody = buildTrackedBody(trackingV2, verifiedOrgId, requestedUserId, trackingUserId, {
+    ...trackOptions,
+    event_id: identity.event_id,
+    occurred_at: identity.occurred_at,
+    accepted_at: identity.accepted_at,
+    timestamp: Date.parse(identity.occurred_at),
+  })
 
   // notifyConsole: broadcast to Supabase Realtime only, skip all tracking
   if (notifyConsole) {
     await handleNotifyConsole(c, trackedBody, icon, appId, verifiedOrgId)
-    return c.json(BRES)
+    logAcceptedEvent(c, identity, acceptedAt)
+    return c.json({ ...BRES, event_id: identity.event_id })
   }
 
   const supabase = supabaseWithAuth(c, c.get('auth')!)
@@ -495,6 +566,11 @@ app.post('/', middlewareAuth(), async (c) => {
   const onboardingOrgId = verifiedOrgId
     ?? (!trackingV2 && typeof trackedBody.user_id === 'string' ? trackedBody.user_id : undefined)
   const onboardingBentoEvent: BentoTrackingPayload | undefined = await buildOnboardingBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody)
+
+  // The setup screen is the first point where the pending app is ready for CLI
+  // work. Keep this separate from app:created, which remains a later completion
+  // signal after the CLI clears need_onboarding.
+  const appOnboardingReadyBentoEvent: BentoTrackingPayload | undefined = await buildTrackedAppOnboardingReadyBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody)
 
   // Builder native-build onboarding (capgo build init): emit start/finish signal
   // events to Bento so a later automation can recover users who started but never
@@ -529,7 +605,7 @@ app.post('/', middlewareAuth(), async (c) => {
   const appTooLargeBentoEvent: BentoTrackingPayload | undefined = await buildAppTooLargeTrackedBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody)
 
   // Exactly one of these is ever set (distinct event names); `??` picks the active one.
-  const bentoEvent = onboardingBentoEvent ?? builderBentoEvent ?? bundleIncompatibleBentoEvent ?? aiInstructionsCopiedBentoEvent ?? appTooLargeBentoEvent
+  const bentoEvent = appOnboardingReadyBentoEvent ?? onboardingBentoEvent ?? builderBentoEvent ?? bundleIncompatibleBentoEvent ?? aiInstructionsCopiedBentoEvent ?? appTooLargeBentoEvent
   const apikeyId = c.get('apikey')?.id
   await sendEventToTracking(c, addAuthenticatedApiKeyIdToTrackingPayload({
     ...trackedBody,
@@ -537,6 +613,8 @@ app.post('/', middlewareAuth(), async (c) => {
     sentToBento: Boolean(bentoEvent),
     groups: verifiedOrgId ? { organization: verifiedOrgId } : undefined,
   }, apikeyId))
+
+  await markBuilderChecklistFromAnalytics(c, appId, trackedBody)
 
   await markAppOnboardingLoginFromTracking(c, trackedBody.channel, trackedBody.event)
 
@@ -548,5 +626,7 @@ app.post('/', middlewareAuth(), async (c) => {
     appId: verifiedOrgId ? appId : undefined,
   })
 
-  return c.json(BRES)
+  // Acceptance is distinct from provider delivery (which remains best effort).
+  logAcceptedEvent(c, identity, acceptedAt)
+  return c.json({ ...BRES, event_id: identity.event_id })
 })

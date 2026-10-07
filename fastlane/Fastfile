@@ -32,7 +32,7 @@ platform :ios do
 end
 
 platform :android do
-  desc 'Upload Google Play screenshots'
+  desc 'Upload Google Play screenshots, icon, and feature graphic'
   lane :upload_screenshots do
     metadata_path = File.expand_path('metadata/android', __dir__)
     screenshot_paths = %w[
@@ -63,7 +63,7 @@ platform :android do
       skip_upload_aab: true,
       skip_upload_metadata: true,
       skip_upload_changelogs: true,
-      skip_upload_images: true,
+      skip_upload_images: false,
       skip_upload_screenshots: false,
       sync_image_upload: true
     )

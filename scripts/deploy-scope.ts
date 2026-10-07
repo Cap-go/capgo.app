@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import process from 'node:process'
 import { TextDecoder } from 'node:util'
 
-export type DeployTarget = 'supabase' | 'api' | 'translation' | 'files' | 'plugins'
+export type DeployTarget = 'supabase' | 'api' | 'translation' | 'files' | 'plugins' | 'r2_inventory'
 export type DeployScope = Record<DeployTarget, boolean>
 type GitRunner = (args: string[]) => string
 
@@ -13,7 +13,7 @@ export interface DeployScopeResult {
   scope: DeployScope
 }
 
-const deployTargets = ['supabase', 'api', 'translation', 'files', 'plugins'] as const satisfies readonly DeployTarget[]
+const deployTargets = ['supabase', 'api', 'translation', 'files', 'plugins', 'r2_inventory'] as const satisfies readonly DeployTarget[]
 
 const workerDependencyMatchers = [
   /^package\.json$/,
@@ -49,6 +49,7 @@ export const deployMatchers: Record<DeployTarget, RegExp[]> = {
     ...backendUtilityMatchers,
     /^cloudflare_workers\/api\//,
     /^supabase\/functions\/_backend\/files\/util\.ts$/,
+    /^supabase\/functions\/_backend\/mcp\//,
     /^supabase\/functions\/_backend\/private\//,
     /^supabase\/functions\/_backend\/public\//,
     /^supabase\/functions\/_backend\/triggers\//,
@@ -68,6 +69,15 @@ export const deployMatchers: Record<DeployTarget, RegExp[]> = {
     /^supabase\/functions\/_backend\/private\/(download_link|upload_link)\.ts$/,
     /^supabase\/functions\/_backend\/public\/ok\.ts$/,
     /^supabase\/functions\/shared\/preview-subdomain\.ts$/,
+  ],
+  r2_inventory: [
+    ...workerDependencyMatchers,
+    ...backendDependencyMatchers,
+    ...backendUtilityMatchers,
+    /^cloudflare_workers\/r2_inventory\//,
+    /^scripts\/ensure-r2-inventory-queues\.ts$/,
+    /^scripts\/deploy-scope\.ts$/,
+    /^\.github\/workflows\/build_and_deploy\.yml$/,
   ],
   plugins: [
     ...workerDependencyMatchers,
