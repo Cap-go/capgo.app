@@ -15,21 +15,12 @@ ALTER TABLE public.plans
 COMMENT ON COLUMN public.plans.kind IS
   'full: classic Capgo plan (channels, stats, bundles). website: Website Live plan, updates come from the app website_url and usage-based limits are zero.';
 
--- Usage limits are zero on purpose: any classic Capgo usage (MAU, bundles,
--- bandwidth) on this plan marks the org as exceeded, so classic updates stay
--- gated, while /website_live only checks that the subscription is active.
--- Stripe ids must be replaced with the live Stripe product/prices before the
--- plan is sold (see PR description).
-INSERT INTO public.plans (
-  name, description, price_m, price_y, stripe_id, credit_id,
-  price_m_id, price_y_id, storage, bandwidth, mau,
-  market_desc, build_time_unit, native_build_concurrency, kind
-)
-SELECT
-  'Website Live', 'plan.website_live.desc', 12, 120, 'prod_website_live_todo', 'prod_TJRd2hFHZsBIPK',
-  'price_website_live_month_todo', 'price_website_live_year_todo', 0, 0, 0,
-  'Best for teams shipping from their website', 0, 1, 'website'
-WHERE NOT EXISTS (SELECT 1 FROM public.plans WHERE name = 'Website Live');
+-- The Website Live plan row itself is not inserted here: it needs the live
+-- Stripe product/price ids and ships in a follow-up migration once they exist.
+-- Until then the console hides Website Live (no plan with kind = 'website').
+-- Its usage limits must be zero (mau, storage, bandwidth, build_time_unit), so
+-- any classic Capgo usage on this plan marks the org as exceeded, while
+-- /website_live only checks that the subscription is active.
 
 CREATE OR REPLACE FUNCTION public.find_best_plan_v3(
   mau bigint,

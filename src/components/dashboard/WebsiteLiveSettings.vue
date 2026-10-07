@@ -34,13 +34,19 @@ const canUpdateSettings = computedAsync(async () => {
   return await checkPermissions('app.update_settings', { appId: props.appId })
 }, false)
 
+// The app's owner org, not the selected org: app URLs can point to another org.
+const appOrgId = computed(() => organizationStore.getOrgByAppId(props.appId)?.gid ?? organizationStore.currentOrganization?.gid ?? '')
+const isPlanLoading = ref(false)
 const currentPlanName = computedAsync(async () => {
-  const orgId = organizationStore.currentOrganization?.gid
-  if (!orgId || !showUpgrade.value)
+  if (!appOrgId.value)
     return null
-  return await getCurrentPlanNameOrg(orgId)
-}, null)
+  return await getCurrentPlanNameOrg(appOrgId.value)
+}, null, isPlanLoading)
+const isPlanKnown = computed(() => !isPlanLoading.value && currentPlanName.value !== null)
 const needsFullPlan = computed(() => currentPlanName.value === WEBSITE_LIVE_PLAN_NAME)
+// Recovery path: a classic-mode app in a Website Live org (for example when
+// onboarding could not save the website) can still be switched to the website.
+const showEnableWebsiteLive = computed(() => !!state.value && !isWebsiteMode.value && needsFullPlan.value)
 
 watch(() => props.appId, appId => void appUpdateModeStore.load(appId, true), { immediate: true })
 watch(state, (value) => {
@@ -83,7 +89,7 @@ async function upgradeToFullCapgo() {
     toast.error(t('no-permission'))
     return
   }
-  if (!upgradeAcknowledged.value)
+  if (!upgradeAcknowledged.value || !isPlanKnown.value)
     return
   // Classic updates need a full plan: switching first would stop website
   // updates until the plan changes, so send the user to the plans page first.
@@ -207,7 +213,7 @@ async function upgradeToFullCapgo() {
             type="button"
             class="d-btn d-btn-primary min-h-10"
             data-test="website-live-confirm-upgrade"
-            :disabled="!upgradeAcknowledged || isUpgrading || !canUpdateSettings"
+            :disabled="!upgradeAcknowledged || isUpgrading || !canUpdateSettings || !isPlanKnown"
             @click="upgradeToFullCapgo"
           >
             <IconLoader v-if="isUpgrading" class="h-4 w-4 animate-spin" aria-hidden="true" />
@@ -215,6 +221,44 @@ async function upgradeToFullCapgo() {
           </button>
         </div>
       </div>
+    </div>
+  </section>
+  <section
+    v-else-if="showEnableWebsiteLive"
+    class="rounded-2xl border border-amber-300/60 bg-amber-50 p-5 dark:border-amber-400/30 dark:bg-amber-500/10"
+    data-test="website-live-enable"
+  >
+    <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
+      {{ t('website-live-enable-title') }}
+    </h3>
+    <p class="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+      {{ t('website-live-enable-description') }}
+    </p>
+    <label for="website-live-enable-url" class="mt-4 block text-sm font-medium text-slate-800 dark:text-slate-200">
+      {{ t('website-live-url-label') }}
+    </label>
+    <div class="mt-2 flex flex-col gap-2 sm:flex-row">
+      <input
+        id="website-live-enable-url"
+        v-model="websiteUrlInput"
+        type="url"
+        inputmode="url"
+        placeholder="https://app.example.com"
+        data-test="website-live-enable-url"
+        :disabled="!canUpdateSettings"
+        class="d-input min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+        @keydown.enter.prevent="saveWebsiteUrl"
+      >
+      <button
+        type="button"
+        class="d-btn d-btn-primary min-h-10"
+        data-test="website-live-enable-save"
+        :disabled="isSavingUrl || !canUpdateSettings"
+        @click="saveWebsiteUrl"
+      >
+        <IconLoader v-if="isSavingUrl" class="h-4 w-4 animate-spin" aria-hidden="true" />
+        {{ t('website-live-enable-cta') }}
+      </button>
     </div>
   </section>
 </template>

@@ -4111,5 +4111,9 @@
   "website-live-upgrade-confirm": "Switch and start onboarding",
   "website-live-upgrade-confirm-plan": "Choose a full plan",
   "website-live-upgrade-done": "App switched to full Capgo",
-  "website-live-upgrade-error": "Could not switch the app to full Capgo"
+  "website-live-upgrade-error": "Could not switch the app to full Capgo",
+  "website-live-enable-title": "Update this app from your website",
+  "website-live-enable-description": "Your organization is on the Website Live plan, but this app still uses classic Capgo updates. Add your website address to turn on Website Live for it.",
+  "website-live-enable-cta": "Turn on Website Live",
+  "website-live-onboarding-save-error": "Your app was created, but Website Live could not be turned on. Open the app settings to add your website address."
 }

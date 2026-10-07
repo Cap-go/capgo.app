@@ -270,7 +270,9 @@ type OnboardingUpdateMode = 'capgo' | 'website'
 const updateMode = ref<OnboardingUpdateMode>('capgo')
 const updateModeTouched = ref(false)
 const websiteLiveUrlInput = ref('')
-const showWebsiteLiveChoice = computed(() => props.preOrg && selectedIntent.value !== 'builder')
+// Hidden until the Website Live plan exists (it is created once its Stripe prices exist).
+const hasWebsiteLivePlan = computed(() => main.plans.some(plan => plan.kind === 'website'))
+const showWebsiteLiveChoice = computed(() => props.preOrg && hasWebsiteLivePlan.value && selectedIntent.value !== 'builder')
 // The publish intent keeps its own WebNativeApp recommendation experiment, so
 // Website Live is only recommended to live-update intents built with AI tools.
 const qualifiesForWebsiteLive = computed(() => showWebsiteLiveChoice.value
@@ -2372,13 +2374,20 @@ async function createAppRecord(options?: { nextStep?: 'organization' }): Promise
     const importedIconSource = canUseStoreImportPreview.value ? storeIconPreview.value : ''
     await uploadIcon(appId, restoredLocalIconSource || importedIconSource)
     if (isWebsiteLiveSelected.value && normalizedWebsiteLiveUrl.value) {
+      const websiteState = { updateMode: 'website' as const, websiteUrl: normalizedWebsiteLiveUrl.value }
       try {
-        await useAppUpdateModeStore().save(appId, { updateMode: 'website', websiteUrl: normalizedWebsiteLiveUrl.value })
+        await useAppUpdateModeStore().save(appId, websiteState)
       }
-      catch (updateModeError) {
-        // The app exists; the user can still set the website from app settings.
-        console.error('Cannot enable Website Live on onboarding app', updateModeError)
-        toast.error(t('website-live-url-save-error'))
+      catch (firstError) {
+        console.warn('Retrying Website Live save on onboarding app', firstError)
+        try {
+          await useAppUpdateModeStore().save(appId, websiteState)
+        }
+        catch (updateModeError) {
+          // The app exists; app settings offer the website again for Website Live orgs.
+          console.error('Cannot enable Website Live on onboarding app', updateModeError)
+          toast.error(t('website-live-onboarding-save-error'))
+        }
       }
     }
     const { data: refreshed } = await supabase
