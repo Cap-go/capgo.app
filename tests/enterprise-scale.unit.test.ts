@@ -19,12 +19,13 @@ describe('enterprise scale pricing', () => {
     expect(priceMauSlice(steps, 1_000_000, 10_000_000)).toBeCloseTo(3950)
   })
 
-  it('quotes base plan plus whole-dollar monthly credits', () => {
+  it('quotes base plan plus the extra MAU price', () => {
     expect(quoteEnterpriseScale(steps, 1_000_000, 239, 3_000_000)).toEqual({
       targetMau: 3_000_000,
       includedMau: 1_000_000,
+      extraMau: 2_000_000,
       basePriceMonthly: 239,
-      monthlyCredits: 1200,
+      extraMauPriceMonthly: 1200,
       totalMonthly: 1439,
     })
   })

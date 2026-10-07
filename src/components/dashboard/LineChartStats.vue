@@ -14,6 +14,7 @@ import { registerDashboardCharts } from '~/services/dashboardChartRegister'
 import { generateMonthDays, getCurrentDayMonth, getDaysInCurrentUtcMonth } from '~/services/date'
 import { inlineAnnotationPlugin } from '../../services/chartAnnotations'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '../../services/chartTooltip'
+import { useChartCardCompact } from './chartCardDensity'
 import { createChartLegendItems } from './chartLegend'
 import ChartLegend from './ChartLegend.vue'
 
@@ -380,11 +381,13 @@ const chartOptions = computed<ChartOptions & { plugins: { inlineAnnotationPlugin
 const sharedPlugins = [inlineAnnotationPlugin, verticalLinePlugin, todayLinePlugin]
 const linePlugins = sharedPlugins as unknown as Plugin<'line'>[]
 const barPlugins = sharedPlugins as unknown as Plugin<'bar'>[]
+
+const compact = useChartCardCompact()
 </script>
 
 <template>
-  <div class="flex min-h-full flex-col">
-    <div class="min-h-[16rem] flex-1">
+  <div class="flex flex-col" :class="compact ? 'h-full' : 'min-h-full'">
+    <div class="flex-1" :class="compact ? 'relative min-h-0' : 'min-h-[16rem]'">
       <Line v-if="accumulated" :data="chartData as any" height="auto" :options="(chartOptions as any)" :plugins="linePlugins" />
       <Bar v-else :data="chartData as any" height="auto" :options="(chartOptions as any)" :plugins="barPlugins" />
     </div>

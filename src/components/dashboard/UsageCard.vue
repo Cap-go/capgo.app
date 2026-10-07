@@ -14,6 +14,7 @@ import { hasPositiveSeriesData, resolveUsageDisplaySeries, sumSeries } from '~/s
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { shouldShowDashboardDemoData } from '~/utils/dashboardDemoMode'
 import ChartCard from './ChartCard.vue'
+import { useChartCardCompact } from './chartCardDensity'
 import LineChartStats from './LineChartStats.vue'
 
 const props = defineProps({
@@ -59,6 +60,8 @@ const props = defineProps({
     default: '',
   },
 })
+
+const compact = useChartCardCompact()
 
 // Get the appropriate data generator based on chart type
 function getDataGenerator(title: string) {
@@ -148,7 +151,7 @@ const hasChartData = computed(() => {
     <template #header>
       <slot name="header">
         <div class="min-w-0">
-          <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
+          <h2 class="font-semibold leading-tight text-slate-900 dark:text-white" :class="compact ? 'text-base' : 'text-xl sm:text-2xl'">
             {{ title }}
           </h2>
         </div>

@@ -2650,6 +2650,38 @@ export type Database = {
           },
         ]
       }
+      org_custom_domains: {
+        Row: {
+          created_at: string
+          hostname: string
+          org_id: string
+          provider_id: string | null
+          provider_route_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          hostname: string
+          org_id: string
+          provider_id?: string | null
+          provider_route_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          hostname?: string
+          org_id?: string
+          provider_id?: string | null
+          provider_route_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "org_custom_domains_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: true
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       org_id_tombstones: {
         Row: {
           deleted_at: string
@@ -3498,6 +3530,7 @@ export type Database = {
           created_at: string
           customer_country: string | null
           customer_id: string
+          extra_mau: number
           id: number
           is_above_plan: boolean | null
           is_good_plan: boolean | null
@@ -3526,6 +3559,7 @@ export type Database = {
           created_at?: string
           customer_country?: string | null
           customer_id: string
+          extra_mau?: number
           id?: number
           is_above_plan?: boolean | null
           is_good_plan?: boolean | null
@@ -3554,6 +3588,7 @@ export type Database = {
           created_at?: string
           customer_country?: string | null
           customer_id?: string
+          extra_mau?: number
           id?: number
           is_above_plan?: boolean | null
           is_good_plan?: boolean | null

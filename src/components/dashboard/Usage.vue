@@ -31,6 +31,7 @@ import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
+import { useChartCardCompact } from './chartCardDensity'
 import DeploymentStatsCard from './DeploymentStatsCard.vue'
 import UpdateStatsCard from './UpdateStatsCard.vue'
 import UsageCard from './UsageCard.vue'
@@ -44,6 +45,7 @@ const props = defineProps<{
 
 const plans = ref<Database['public']['Tables']['plans']['Row'][]>([])
 const { t } = useI18n()
+const compact = useChartCardCompact()
 
 const noData = computed(() => false)
 const loadedAlready = ref(false)
@@ -1119,7 +1121,7 @@ onBeforeUnmount(() => {
     >
       <template #header>
         <div class="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <h2 class="min-w-0 text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
+          <h2 class="min-w-0 font-semibold leading-tight text-slate-900 dark:text-white" :class="compact ? 'text-base' : 'text-xl sm:text-2xl'">
             {{ t('Storage') }}
           </h2>
           <div class="inline-flex shrink-0 items-center rounded-lg bg-slate-100 p-1 dark:bg-slate-800" :aria-label="t('storage-chart-mode')">
