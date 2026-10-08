@@ -1666,6 +1666,24 @@ GRANT ALL ON FUNCTION "public"."seed_demo_customer_account" () TO "service_role"
 
 -- Demo customer, part 2: device fleet, usage, update events and Observe telemetry over 60 days.
 -- Always rebuilt from scratch (test helpers truncate these shared tables).
+-- Tinbase may apply seed without the plpgsql_check extension; provide a no-op stub for pragma calls.
+DO $seed_plpgsql_check_stub$
+BEGIN
+  IF pg_catalog.to_regnamespace('extensions') IS NULL THEN
+    EXECUTE 'CREATE SCHEMA extensions';
+  END IF;
+  IF pg_catalog.to_regprocedure('extensions.plpgsql_check_pragma(text)') IS NULL THEN
+    EXECUTE $exec$
+      CREATE FUNCTION extensions.plpgsql_check_pragma(text)
+      RETURNS void
+      LANGUAGE sql
+      IMMUTABLE
+      AS $body$ SELECT $body$
+    $exec$;
+  END IF;
+END
+$seed_plpgsql_check_stub$;
+
 CREATE SCHEMA IF NOT EXISTS seed_helpers;
 
 CREATE OR REPLACE FUNCTION "seed_helpers"."seed_demo_customer_telemetry" () RETURNS "void" LANGUAGE "plpgsql"
@@ -1678,9 +1696,7 @@ DECLARE
   v_today date := (pg_catalog.now() AT TIME ZONE 'UTC')::date;
 BEGIN
   -- Temp tables below are created at runtime, so plpgsql_check cannot resolve them statically.
-  IF pg_catalog.to_regprocedure('extensions.plpgsql_check_pragma(text)') IS NOT NULL THEN
-    PERFORM extensions.plpgsql_check_pragma('disable:check');
-  END IF;
+  PERFORM extensions.plpgsql_check_pragma('disable:check');
   SET LOCAL client_min_messages = WARNING;
   -- Deterministic pseudo-random data so screenshots and reviewer accounts are stable.
   PERFORM pg_catalog.setseed(0.4242);

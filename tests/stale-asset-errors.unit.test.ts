@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { getErrorMessage, isComponentResolutionErrorMessage, isInjectedDocumentCodeException, isKnownCrawlerNoiseErrorMessage, isStaleAssetErrorMessage, isTransientNetworkErrorMessage, shouldSuppressPostHogExceptionEvent } from '../src/services/staleAssetErrors'
+import { getErrorMessage, isComponentResolutionErrorMessage, isInjectedDocumentCodeException, isKnownCrawlerNoiseErrorMessage, isLocalDevHost, isStaleAssetErrorMessage, isTransientNetworkErrorMessage, shouldSuppressPostHogExceptionEvent } from '../src/services/staleAssetErrors'
 
 describe('stale asset error helpers', () => {
   it('matches the stale asset errors currently seen in PostHog', () => {
@@ -147,6 +147,52 @@ describe('stale asset error helpers', () => {
             frames: [{ filename: 'https://console.capgo.app/apps', function: '', lineno: 62, in_app: true }],
           },
         }],
+      },
+    })).toBe(false)
+  })
+
+  it('matches local dev-server hosts regardless of port', () => {
+    expect(isLocalDevHost('localhost:5175')).toBe(true)
+    expect(isLocalDevHost('localhost')).toBe(true)
+    expect(isLocalDevHost('127.0.0.1:5173')).toBe(true)
+    expect(isLocalDevHost('capgo.local')).toBe(true)
+    expect(isLocalDevHost('capgo.local:3000')).toBe(true)
+  })
+
+  it('does not match production hosts or malformed values', () => {
+    expect(isLocalDevHost('console.capgo.app')).toBe(false)
+    expect(isLocalDevHost('capgo.app:443')).toBe(false)
+    expect(isLocalDevHost('notlocalhost.com')).toBe(false)
+    expect(isLocalDevHost('')).toBe(false)
+    expect(isLocalDevHost(undefined)).toBe(false)
+  })
+
+  it('suppresses dev-server exception events by page host', () => {
+    // The $host property carries the dev-server host with its port
+    expect(shouldSuppressPostHogExceptionEvent({
+      event: '$exception',
+      properties: {
+        $host: 'localhost:5175',
+        $exception_list: [{ value: 'ReferenceError: disableRollout is not defined' }],
+      },
+    })).toBe(true)
+
+    // Falls back to the host parsed from $current_url when $host is absent
+    expect(shouldSuppressPostHogExceptionEvent({
+      event: '$exception',
+      properties: {
+        $current_url: 'http://localhost:5175/app/1234/channel/production',
+        $exception_list: [{ value: 'ReferenceError: disableRollout is not defined' }],
+      },
+    })).toBe(true)
+
+    // The same exception from the production host is kept
+    expect(shouldSuppressPostHogExceptionEvent({
+      event: '$exception',
+      properties: {
+        $host: 'console.capgo.app',
+        $current_url: 'https://console.capgo.app/app/1234/channel/production',
+        $exception_list: [{ value: 'ReferenceError: disableRollout is not defined' }],
       },
     })).toBe(false)
   })
