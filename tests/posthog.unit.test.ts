@@ -443,10 +443,13 @@ describe('postHog delivery outcomes', () => {
 
   it.each([
     [200, '{"status":1}', 'delivered'],
+    [200, '{"status":"Ok"}', 'delivered'],
+    [200, '{"status":"Ok","quota_limited":[]}', 'delivered'],
     [201, '{"status":1,"quota_limited":[]}', 'delivered'],
     [204, null, 'delivered'],
     [200, '1', 'delivered'],
     [200, '{"status":1,"quota_limited":["events"]}', 'quota_limited'],
+    [200, '{"status":"Ok","quota_limited":["events"]}', 'quota_limited'],
     [200, '{"quota_limited":true}', 'quota_limited'],
     [200, '{"status":0}', 'permanent_failure'],
     [429, 'rate limited', 'retryable'],

@@ -4316,6 +4316,10 @@ export type Database = {
     }
     Functions: {
       accept_invitation_to_org: { Args: { org_id: string }; Returns: string }
+      accept_tmp_user_invitation: {
+        Args: { p_invite_magic_string: string; p_user_id: string }
+        Returns: string
+      }
       ack_updates_cache_purge: {
         Args: {
           p_lease_token: string
@@ -4387,6 +4391,15 @@ export type Database = {
       }
       assert_preview_bundle_owner: {
         Args: { p_app_id: string; p_owner_org: string; p_version_id: number }
+        Returns: undefined
+      }
+      assert_principal_can_grant_org_role: {
+        Args: {
+          p_mutation: string
+          p_org_id: string
+          p_principal_id: string
+          p_role_name: string
+        }
         Returns: undefined
       }
       assert_request_principal_rank: {

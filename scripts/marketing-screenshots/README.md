@@ -15,7 +15,7 @@ WEBSITE_DIR=../website BASE_URL=http://localhost:5173 bun run screenshots:market
 
 ## Weekly refresh
 
-`.github/workflows/marketing_screenshots.yml` runs every Monday (or on demand from the Actions tab) against a production build of the frontend. With the `WEBSITE_REPO_TOKEN` secret (push + pull request access to Cap-go/website) it opens or updates a `chore/refresh-console-screenshots` PR there. Without the secret it only uploads the captures as an artifact.
+`.github/workflows/marketing_screenshots.yml` runs every Monday (or on demand from the Actions tab) against a production build of the frontend. Using the `PERSONAL_ACCESS_TOKEN` secret (needs push + pull request access to Cap-go/website) it opens or updates a `chore/refresh-console-screenshots` PR there. Without the secret it only uploads the captures as an artifact.
 
 ## What it does
 
