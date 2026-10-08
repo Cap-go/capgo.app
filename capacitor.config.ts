@@ -25,6 +25,13 @@ const config: CapacitorConfig = {
       autoSplashscreen: true,
       version: pkg.version,
     },
+    Env: {
+      DEMO_API_URL: 'https://api.example.com',
+      DEMO_TENANT_ID: 'capgo-plugin-preview',
+    },
+    DeviceIntegrity: {
+      cloudProjectNumber: '123456789012',
+    },
   },
   android: {
     webContentsDebuggingEnabled: true,
