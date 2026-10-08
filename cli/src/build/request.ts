@@ -80,6 +80,7 @@ import { getPlatformDirFromCapacitorConfig, normalizeNativeDependencyPathsInText
 import { handleCustomMsg } from './qr.js'
 import { prepareBuildSupportLogBundle } from './support-log-bundle.js'
 import { trackBuilderUpload } from './telemetry.js'
+import { buildQueuePriorityUserLines } from './queue-priority'
 
 /**
  * Callback interface for build logging.
@@ -2043,7 +2044,6 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     log.success(`Build job created: ${buildRequest.job_id}`)
     log.info(`Status: ${buildRequest.status}`)
     if (buildRequest.queue_priority_tier && typeof buildRequest.queue_priority === 'number') {
-      const { buildQueuePriorityUserLines } = await import('./queue-priority.ts')
       const config = await getRemoteConfig()
       for (const line of buildQueuePriorityUserLines({
         queue_priority: buildRequest.queue_priority,

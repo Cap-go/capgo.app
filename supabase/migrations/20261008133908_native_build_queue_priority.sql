@@ -147,6 +147,8 @@ ALTER FUNCTION public.get_org_native_build_queue_priority(uuid) OWNER TO postgre
 REVOKE ALL ON FUNCTION public.get_org_native_build_queue_priority(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.get_org_native_build_queue_priority(uuid) TO service_role;
 
+DROP FUNCTION IF EXISTS public.get_current_plan_max_org(uuid);
+
 CREATE OR REPLACE FUNCTION public.get_current_plan_max_org(orgid uuid)
 RETURNS TABLE(
   mau bigint,
@@ -189,4 +191,6 @@ $$;
 
 ALTER FUNCTION public.get_current_plan_max_org(uuid) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.get_current_plan_max_org(uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.get_current_plan_max_org(uuid) TO authenticated, service_role;
+REVOKE ALL ON FUNCTION public.get_current_plan_max_org(uuid) FROM anon;
+GRANT EXECUTE ON FUNCTION public.get_current_plan_max_org(uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.get_current_plan_max_org(uuid) TO service_role;
