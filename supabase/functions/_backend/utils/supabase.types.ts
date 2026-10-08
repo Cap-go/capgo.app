@@ -6018,6 +6018,7 @@ export type Database = {
         Args: { email: string; org_id: string }
         Returns: string
       }
+      reset_and_seed_demo_customer_data: { Args: never; Returns: undefined }
       reset_onboarding_demo_app_data: {
         Args: { p_app_uuid: string }
         Returns: undefined

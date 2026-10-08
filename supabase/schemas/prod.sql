@@ -48,6 +48,12 @@ CREATE SCHEMA IF NOT EXISTS "rbac_internal";
 ALTER SCHEMA "rbac_internal" OWNER TO "postgres";
 
 
+CREATE SCHEMA IF NOT EXISTS "seed_helpers";
+
+
+ALTER SCHEMA "seed_helpers" OWNER TO "postgres";
+
+
 CREATE EXTENSION IF NOT EXISTS "http" WITH SCHEMA "extensions";
 
 
@@ -4483,8 +4489,8 @@ CREATE OR REPLACE FUNCTION "public"."claim_updates_cache_purge"("p_limit" intege
 DECLARE
   v_now timestamptz := pg_catalog.clock_timestamp();
   v_last timestamptz;
-  v_min_interval constant interval := '1 second';
-  v_lease interval := '2 minutes';
+  v_min_interval constant interval := INTERVAL '1 second';
+  v_lease interval := INTERVAL '2 minutes';
   v_token uuid := gen_random_uuid();
   v_apps jsonb;
 BEGIN
@@ -4500,7 +4506,6 @@ BEGIN
     );
   END IF;
 
-  -- One (app, scope) pair = one Cloudflare tag.
   WITH picked AS (
     SELECT p.app_id, p.scope
     FROM public.updates_cache_purge_pending p
@@ -19249,6 +19254,22 @@ $$;
 ALTER FUNCTION "public"."rescind_invitation"("email" "text", "org_id" "uuid") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."reset_and_seed_demo_customer_data"() RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM public.orgs WHERE id = 'acde0000-0000-4000-8000-0000000000a1'::uuid) THEN
+    PERFORM public.seed_demo_customer_account();
+  END IF;
+  PERFORM seed_helpers.seed_demo_customer_telemetry();
+END;
+$$;
+
+
+ALTER FUNCTION "public"."reset_and_seed_demo_customer_data"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."reset_onboarding_demo_app_data"("p_app_uuid" "uuid") RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -31573,6 +31594,11 @@ GRANT ALL ON FUNCTION "public"."request_principal_max_role_priority"("p_org_id" 
 REVOKE ALL ON FUNCTION "public"."rescind_invitation"("email" "text", "org_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."rescind_invitation"("email" "text", "org_id" "uuid") TO "service_role";
 GRANT ALL ON FUNCTION "public"."rescind_invitation"("email" "text", "org_id" "uuid") TO "authenticated";
+
+
+
+REVOKE ALL ON FUNCTION "public"."reset_and_seed_demo_customer_data"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."reset_and_seed_demo_customer_data"() TO "service_role";
 
 
 
