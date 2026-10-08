@@ -12,9 +12,10 @@ TINBASE_DIR="${RUN_DIR}/tinbase"
 
 bunx tinbase start --dir "$TINBASE_DIR" -p "$PORT" > "$LOG" 2>&1 &
 TINBASE_PID=$!
+VITE_PID=""
 cleanup() {
   kill "$TINBASE_PID" 2>/dev/null || true
-  kill "$VITE_PID" 2>/dev/null || true
+  [ -n "$VITE_PID" ] && kill "$VITE_PID" 2>/dev/null || true
   rm -rf "$RUN_DIR"
 }
 trap cleanup EXIT

@@ -42,6 +42,7 @@ test.describe('PR 3280 organization security screenshots', () => {
     await page.screenshot({
       path: resolve(screenshotDir, 'organization-security-password-policy.png'),
       fullPage: false,
+      animations: 'disabled',
     })
 
     const policyToggle = page.getByRole('checkbox', { name: 'Enforce Password Policy' })
@@ -56,6 +57,7 @@ test.describe('PR 3280 organization security screenshots', () => {
     if (await warningTitle.isVisible({ timeout: 10000 }).catch(() => false)) {
       await page.screenshot({
         path: resolve(screenshotDir, 'password-policy-enable-warning-dialog.png'),
+        animations: 'disabled',
       })
       const cancel = page.getByRole('button', { name: 'Cancel', exact: true })
       if (await cancel.isVisible().catch(() => false))
@@ -65,6 +67,7 @@ test.describe('PR 3280 organization security screenshots', () => {
       await expect(page.locator('#password-policy-min-length')).toBeVisible()
       await page.screenshot({
         path: resolve(screenshotDir, 'password-policy-enabled-options.png'),
+        animations: 'disabled',
       })
       await policyToggle.click({ force: true })
     }
