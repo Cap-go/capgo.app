@@ -7,7 +7,6 @@ import { useRouter } from 'vue-router'
 import VueTurnstile from 'vue-turnstile'
 import iconEmail from '~icons/oui/email?raw'
 import iconPassword from '~icons/ph/key?raw'
-import iconName from '~icons/ph/user?raw'
 import { authGhostButtonClass, authInlineLinkClass, authPanelClass, authPrimaryButtonClass } from '~/components/auth/pageStyles'
 import { hashEmail, useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
@@ -24,7 +23,7 @@ if (window.location.host === 'console.capgo.app') {
   window.location.href = 'https://capgo.app/register/'
 }
 
-async function submit(form: { first_name: string, last_name: string, password: string, email: string }) {
+async function submit(form: { password: string, email: string }) {
   if (isLoading.value)
     return
 
@@ -63,8 +62,6 @@ async function submit(form: { first_name: string, last_name: string, password: s
       .upsert({
         id: newUser.id,
         email: newUser.email ?? form.email,
-        first_name: form.first_name,
-        last_name: form.last_name,
         enable_notifications: true,
         opt_for_newsletters: true,
       }, { onConflict: 'id' })
@@ -94,6 +91,7 @@ async function submit(form: { first_name: string, last_name: string, password: s
             type="email"
             name="email"
             :prefix-icon="iconEmail"
+            autofocus
             autocomplete="email"
             inputmode="email"
             enterkeyhint="next"
@@ -105,30 +103,6 @@ async function submit(form: { first_name: string, last_name: string, password: s
             }"
           />
         </div>
-
-        <FormKit
-          type="text"
-          name="first_name"
-          :disabled="isLoading"
-          :prefix-icon="iconName"
-          :label="t('first-name')"
-          autocomplete="given-name"
-          validation="required:trim"
-          enterkeyhint="next"
-          data-test="first_name"
-          autofocus
-        />
-        <FormKit
-          type="text"
-          name="last_name"
-          :label="t('last-name')"
-          autocomplete="family-name"
-          :prefix-icon="iconName"
-          :disabled="isLoading"
-          validation="required:trim"
-          enterkeyhint="next"
-          data-test="last_name"
-        />
 
         <FormKit
           type="password"

@@ -82,7 +82,8 @@ jobs:
         run: ln -sfn supabase/templates templates
 
       - name: Run visual diff pipeline
-        timeout-minutes: 15
+        # Full before/after captures can take 15 minutes before stack cleanup.
+        timeout-minutes: 30
         run: |
           bun scripts/visual-diff.ts run \
             --base "${{ github.event.pull_request.base.sha }}" \

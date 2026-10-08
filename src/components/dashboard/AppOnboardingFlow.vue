@@ -40,6 +40,7 @@ import IconSparkles from '~icons/lucide/sparkles'
 import IconStore from '~icons/lucide/store'
 import IconTrash from '~icons/lucide/trash-2'
 import IconUsers from '~icons/lucide/users-round'
+import OnboardingProfile from '~/components/OnboardingProfile.vue'
 import { createDefaultApiKey, findUsablePlainApiKey, shareInFlightApiKeyLoad } from '~/services/apikeys'
 import {
   hasSupportedOtaTodoList,
@@ -251,6 +252,7 @@ const onboardingTelemetry = createOnboardingTelemetryIdentity({
 })
 const webNativeRecommendationDismissed = ref(false)
 const orgNameInput = ref('')
+const profileForm = ref<InstanceType<typeof OnboardingProfile> | null>(null)
 const hasEditedOrgName = ref(false)
 const estimatedUsersIndex = ref<number | null>(null)
 const isStoreImportOpen = ref(false)
@@ -1943,20 +1945,32 @@ function continueFromIntent() {
 }
 
 async function continueFromGoal() {
+  if (isSubmitting.value || !profileForm.value?.isValid)
+    return
+
   if (!selectedIntent.value) {
     toast.error(t('organization-onboarding-intent-required'))
     return
   }
-  await persistOnboardingProgress()
-  await waitForOnboardingABTests({ force: true })
-  if (webNativeDevelopmentEnvironmentTreatment.value) {
-    ensurePublishAppQuestionStepTracked()
-    completeAndViewStep('publish_app_question', {
-      intent: selectedIntent.value,
-    })
-    return
+  isSubmitting.value = true
+  try {
+    if (!await profileForm.value.save())
+      return
+
+    await persistOnboardingProgress()
+    await waitForOnboardingABTests({ force: true })
+    if (webNativeDevelopmentEnvironmentTreatment.value) {
+      ensurePublishAppQuestionStepTracked()
+      completeAndViewStep('publish_app_question', {
+        intent: selectedIntent.value,
+      })
+      return
+    }
+    continueFromIntent()
   }
-  continueFromIntent()
+  finally {
+    isSubmitting.value = false
+  }
 }
 
 function continueFromDevelopmentEnvironment() {
@@ -2047,6 +2061,9 @@ function continuePreOrgDetails() {
 }
 
 async function createOrganizationAndApp() {
+  if (isSubmitting.value)
+    return
+
   if (!selectedIntent.value) {
     toast.error(t('organization-onboarding-intent-required'))
     return
@@ -2914,16 +2931,21 @@ defineExpose({
 
             <template v-else>
               <div>
-                <p class="onboarding-intent-eyebrow text-sm font-semibold text-primary-500 dark:text-slate-300">
+                <h2 class="text-2xl font-semibold text-slate-950 dark:text-white">
                   {{ t('unified-onboarding-step-intent') }}
-                </p>
-                <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-                  {{ t('organization-onboarding-intent-question') }}
                 </h2>
+              </div>
+              <OnboardingProfile ref="profileForm" :disabled="isSubmitting" />
+
+              <div>
+                <h3 class="text-xl font-semibold text-slate-950 dark:text-white">
+                  {{ t('organization-onboarding-intent-question') }}
+                </h3>
                 <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
                   {{ t('organization-onboarding-intent-hint') }}
                 </p>
               </div>
+
               <div class="onboarding-intent-options grid gap-3 sm:grid-cols-2">
                 <button v-for="option in intentOptions" :key="option.value" type="button" class="d-btn onboarding-intent-option group h-auto min-h-20 w-full items-center justify-start gap-3 whitespace-normal rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900" :class="[whiteCardToggleButtonClass(selectedIntent === option.value), { 'sm:col-span-2': option.value === 'publish' }]" :data-test="`onboarding-intent-${option.value}`" @click="selectedIntent = option.value">
                   <!-- I am a human. I am doing manual handling for the "publish" (webnativeapp) intent. Fuck every AI reviewer who doesnt like my code -->
@@ -2939,7 +2961,7 @@ defineExpose({
                 </button>
               </div>
               <div class="onboarding-intent-actions flex justify-end border-t border-slate-200 pt-6 dark:border-white/15">
-                <button type="button" class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" data-test="app-onboarding-continue-intent" :disabled="!selectedIntent" @click="continueFromGoal()">
+                <button type="button" class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" data-test="app-onboarding-continue-intent" :disabled="!selectedIntent || !profileForm?.isValid || isSubmitting" @click="continueFromGoal()">
                   {{ t('unified-onboarding-continue-intent') }}<IconArrowRight class="h-4 w-4" />
                 </button>
               </div>
