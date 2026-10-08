@@ -404,6 +404,8 @@ async function loadMembersWithPasswordPolicyStatus() {
 
     if (complianceError) {
       console.error('Error loading password policy compliance status:', complianceError)
+      membersWithPasswordPolicyStatus.value = []
+      nonCompliantPasswordMembers.value = []
       return
     }
 
