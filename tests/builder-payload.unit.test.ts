@@ -86,6 +86,7 @@ describe('builder payload shape', () => {
       platform: 'ios',
       buildOptions: { foo: 'bar' },
       buildCredentials: { baz: 'qux' },
+      priority: 10,
     })
 
     const keys = Object.keys(payload).sort()

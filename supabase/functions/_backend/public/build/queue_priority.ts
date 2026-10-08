@@ -60,6 +60,6 @@ export async function resolveOrgNativeBuildQueuePriority(c: Context, orgId: stri
     return await readOrgNativeBuildQueuePriority(client, orgId)
   }
   finally {
-    closeClient(client)
+    closeClient(c, client)
   }
 }
