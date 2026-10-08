@@ -4,6 +4,8 @@
  *   bun run serve:worktree                      # frontend for this worktree
  *   bun run screenshots:marketing               # seed + capture + export
  *   bun run screenshots:marketing -- observe-   # only shots whose name starts with "observe-"
+ *   bun run screenshots:marketing -- --videos   # also record the looping videos (needs ffmpeg)
+ *   bun run screenshots:marketing -- video-     # only the videos
  *
  * Env:
  *   BASE_URL     frontend URL (default http://localhost:5173)
@@ -13,15 +15,19 @@
  *
  * Seeds fake demo data into the LOCAL stack only and refuses any non-local database.
  */
-import type { Browser, Page } from '@playwright/test'
+import type { Browser, BrowserContext, Page } from '@playwright/test'
 import type { Shot } from './shots'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import type { VideoFlow } from './videos'
+import { spawnSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import process from 'node:process'
 import { chromium } from '@playwright/test'
 import { Client } from 'pg'
 import { installMocks, maskIdentities } from './mocks'
 import { shots } from './shots'
+import { CURSOR_SCRIPT, videoFlows } from './videos'
 
 const repoRoot = resolve(import.meta.dir, '../..')
 const baseUrl = (process.env.BASE_URL ?? 'http://localhost:5173').replace(/\/$/, '')
@@ -29,6 +35,8 @@ const outDir = resolve(process.env.OUT_DIR ?? resolve(repoRoot, '.context/market
 const websiteDir = process.env.WEBSITE_DIR ? resolve(process.env.WEBSITE_DIR) : null
 const filters = process.argv.slice(2).filter(arg => !arg.startsWith('--'))
 const skipSeed = process.argv.includes('--no-seed')
+const withVideos = process.argv.includes('--videos')
+const selectedByName = (name: string) => filters.length === 0 || filters.some(filter => name.startsWith(filter))
 
 const HIDE_CHROME_CSS = `
   #__vue-devtools-container__, [id^="vue-devtools"], vite-error-overlay { display: none !important; }
@@ -99,6 +107,63 @@ async function encodeWebp(browser: Browser, png: Buffer, exp: NonNullable<Shot['
   }
 }
 
+function writeOutput(file: string, data: Buffer) {
+  const targets = [resolve(outDir, 'webp', file)]
+  if (websiteDir)
+    targets.push(resolve(websiteDir, 'apps/web/public/landing-demos', file))
+  for (const target of targets) {
+    mkdirSync(dirname(target), { recursive: true })
+    writeFileSync(target, data)
+  }
+}
+
+function ffmpeg(args: string[]) {
+  const result = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', ...args], { stdio: 'inherit' })
+  if (result.status !== 0)
+    throw new Error(`ffmpeg failed: ${args.join(' ')}`)
+}
+
+/** Record one flow in its own context (video needs it), then trim, fade, and encode mp4 + webm + poster. */
+async function recordVideo(browser: Browser, storageState: Awaited<ReturnType<BrowserContext['storageState']>>, flow: VideoFlow) {
+  const workDir = mkdtempSync(resolve(tmpdir(), 'capgo-video-'))
+  const context = await browser.newContext({
+    storageState,
+    viewport: flow.viewport,
+    colorScheme: 'dark',
+    locale: 'en-US',
+    timezoneId: 'UTC',
+    recordVideo: { dir: workDir, size: flow.viewport },
+  })
+  await context.addInitScript(CURSOR_SCRIPT)
+  const page = await context.newPage()
+  const recordingStart = Date.now()
+  await installMocks(page)
+  await page.goto(baseUrl + flow.path)
+  await settle(page, 3000)
+  await maskIdentities(page)
+  const start = (Date.now() - recordingStart) / 1000
+  await flow.run(page)
+  const duration = (Date.now() - recordingStart) / 1000 - start
+  const video = page.video()
+  await context.close()
+  const raw = await video!.path()
+
+  const fade = `fade=t=in:st=0:d=0.3,fade=t=out:st=${Math.max(0, duration - 0.4).toFixed(2)}:d=0.4`
+  const trim = ['-ss', start.toFixed(2), '-t', duration.toFixed(2), '-i', raw]
+  const mp4 = resolve(workDir, 'out.mp4')
+  const webm = resolve(workDir, 'out.webm')
+  const poster = resolve(workDir, 'poster.png')
+  ffmpeg([...trim, '-vf', `fps=30,${fade}`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '24', '-preset', 'slow', '-movflags', '+faststart', '-an', mp4])
+  ffmpeg([...trim, '-vf', `fps=30,${fade}`, '-c:v', 'libvpx-vp9', '-crf', '36', '-b:v', '0', '-an', webm])
+  ffmpeg(['-ss', (start + 0.5).toFixed(2), '-i', raw, '-frames:v', '1', poster])
+
+  writeOutput(`${flow.file}.mp4`, readFileSync(mp4))
+  writeOutput(`${flow.file}.webm`, readFileSync(webm))
+  writeOutput(`${flow.file}-poster.webp`, await encodeWebp(browser, readFileSync(poster), { file: '', width: flow.viewport.width, quality: 0.8 }))
+  rmSync(workDir, { recursive: true, force: true })
+  console.log(`recorded ${flow.name} (${duration.toFixed(1)}s) -> ${flow.file}.{mp4,webm}`)
+}
+
 async function main() {
   const reachable = await fetch(`${baseUrl}/login/`).then(res => res.ok, () => false)
   if (!reachable)
@@ -114,7 +179,7 @@ async function main() {
   await installMocks(page)
   await login(page)
 
-  const selected = shots.filter(shot => filters.length === 0 || filters.some(filter => shot.name.startsWith(filter)))
+  const selected = shots.filter(shot => selectedByName(shot.name))
   for (const shot of selected) {
     await page.setViewportSize(shot.viewport)
     await page.goto(baseUrl + shot.path)
@@ -124,17 +189,18 @@ async function main() {
     const png = await page.screenshot()
     writeFileSync(resolve(outDir, 'png', `${shot.name}.png`), png)
 
-    for (const exp of shot.exports ?? []) {
-      const webp = await encodeWebp(browser, png, exp)
-      const targets = [resolve(outDir, 'webp', exp.file)]
-      if (websiteDir)
-        targets.push(resolve(websiteDir, 'apps/web/public/landing-demos', exp.file))
-      for (const target of targets) {
-        mkdirSync(dirname(target), { recursive: true })
-        writeFileSync(target, webp)
-      }
-    }
+    for (const exp of shot.exports ?? [])
+      writeOutput(exp.file, await encodeWebp(browser, png, exp))
     console.log(`captured ${shot.name}${shot.exports?.length ? ` -> ${shot.exports.map(exp => exp.file).join(', ')}` : ''}`)
+  }
+
+  // Videos run with --videos, or when a filter names them (e.g. `video-`); other filters still apply.
+  const wantVideos = withVideos || filters.some(filter => filter.startsWith('video'))
+  const flows = wantVideos ? videoFlows.filter(flow => selectedByName(flow.name)) : []
+  if (flows.length > 0) {
+    const storageState = await context.storageState()
+    for (const flow of flows)
+      await recordVideo(browser, storageState, flow)
   }
 
   await browser.close()
