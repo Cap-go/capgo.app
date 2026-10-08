@@ -3,7 +3,100 @@ import type {
 } from 'discord-api-types/v10'
 import type { Context } from 'hono'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { getEnv } from './utils.ts'
+import { backgroundTask, getEnv } from './utils.ts'
+
+const ERROR_FIXER_WEBHOOK_TIMEOUT_MS = 8000
+const ERROR_FIXER_THROTTLE_MS = 10 * 60 * 1000
+const ERROR_FIXER_MAX_FIELD_LENGTH = 2000
+
+const errorFixerWebhookLastSent = new Map<string, number>()
+
+export function resetErrorFixerWebhookThrottleForTests() {
+  errorFixerWebhookLastSent.clear()
+}
+
+function firstMessageLine(message: string): string {
+  const line = message.split('\n')[0]
+  return line ?? message
+}
+
+function errorFixerThrottleKey(functionName: string, errorName: string, message: string): string {
+  return `${functionName}\0${errorName}\0${firstMessageLine(message)}`
+}
+
+function shouldSkipErrorFixerWebhook(key: string): boolean {
+  const lastSent = errorFixerWebhookLastSent.get(key)
+  if (lastSent === undefined)
+    return false
+  return Date.now() - lastSent < ERROR_FIXER_THROTTLE_MS
+}
+
+export function buildErrorFixerWebhookPayload(params: {
+  functionName: string
+  errorName: string
+  message: string
+  stack: string
+  method: string
+  url: string
+  requestId: string
+  timestamp: string
+  environment: string
+  userAgent: string
+  body: string
+}) {
+  return {
+    functionName: params.functionName,
+    errorName: params.errorName,
+    message: params.message,
+    stack: params.stack.substring(0, ERROR_FIXER_MAX_FIELD_LENGTH),
+    method: params.method,
+    url: params.url,
+    requestId: params.requestId,
+    timestamp: params.timestamp,
+    environment: params.environment,
+    userAgent: params.userAgent,
+    body: params.body.substring(0, ERROR_FIXER_MAX_FIELD_LENGTH),
+  }
+}
+
+export async function sendErrorFixerWebhookAlert(
+  c: Context,
+  payload: ReturnType<typeof buildErrorFixerWebhookPayload>,
+): Promise<void> {
+  const webhookUrl = getEnv(c, 'ERROR_FIXER_WEBHOOK_URL')
+  if (!webhookUrl)
+    return
+
+  const throttleKey = errorFixerThrottleKey(payload.functionName, payload.errorName, payload.message)
+  if (shouldSkipErrorFixerWebhook(throttleKey))
+    return
+
+  errorFixerWebhookLastSent.set(throttleKey, Date.now())
+
+  const key = getEnv(c, 'ERROR_FIXER_WEBHOOK_KEY')
+  const requestId = payload.requestId
+
+  try {
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${key}`,
+        'X-Automation-Key': key,
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(ERROR_FIXER_WEBHOOK_TIMEOUT_MS),
+    })
+
+    if (!response.ok) {
+      await response.text()
+      cloudlogErr({ requestId, message: 'Error fixer webhook failed', status: response.status })
+    }
+  }
+  catch (error) {
+    cloudlogErr({ requestId, message: 'Error fixer webhook error', error })
+  }
+}
 
 // Fields that should be completely removed from logs (never logged)
 const REMOVED_FIELDS = ['password']
@@ -111,6 +204,19 @@ export function sendDiscordAlert500(c: Context, functionName: string, body: stri
   const errorName = e?.name ?? 'Error'
   // Defense-in-depth: remove/sanitize sensitive fields from body string
   const safeBody = sanitizeSensitiveFromString(body)
+  void backgroundTask(c, sendErrorFixerWebhookAlert(c, buildErrorFixerWebhookPayload({
+    functionName,
+    errorName,
+    message: errorMessage,
+    stack: errorStack,
+    method,
+    url,
+    requestId,
+    timestamp,
+    environment: getEnv(c, 'ENVIRONMENT') || 'unknown',
+    userAgent,
+    body: safeBody,
+  })))
   return sendDiscordAlert(c, {
     content: `🚨 **${functionName}** Error Alert`,
     embeds: [
