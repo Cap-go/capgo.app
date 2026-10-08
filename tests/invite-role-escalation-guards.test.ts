@@ -318,9 +318,25 @@ describe('invite role escalation guards', () => {
     expect(invite.rows.length).toBe(1)
   })
 
-  it('rejects accept_tmp_user_invitation when invited_by_user_id is null', async () => {
-    const orgId = await createOrgOwnedByUser(query, USER_ID, 'Legacy tmp invite org')
-    const email = `legacy-invite-${randomUUID()}@capgo.app`
+  async function backfillLegacyTmpInviter(orgId: string) {
+    await query(
+      `
+        UPDATE public.tmp_users tu
+        SET invited_by_user_id = o.created_by
+        FROM public.orgs o
+        WHERE tu.org_id = o.id
+          AND tu.org_id = $1::uuid
+          AND tu.invited_by_user_id IS NULL
+          AND tu.cancelled_at IS NULL
+          AND o.created_by IS NOT NULL
+      `,
+      [orgId],
+    )
+  }
+
+  it('accepts tmp_users invite when invited_by_user_id is null using org creator attribution', async () => {
+    const orgId = await createOrgOwnedByUser(query, USER_ID, 'Legacy tmp invite runtime org')
+    const email = `legacy-runtime-${randomUUID()}@capgo.app`
     const magicString = await insertTmpInvite({
       orgId,
       email,
@@ -329,11 +345,45 @@ describe('invite role escalation guards', () => {
     })
 
     await setServiceRoleClaim(query)
-    const result = await query(
+    const acceptResult = await query(
       `SELECT public.accept_tmp_user_invitation($1, $2::uuid) AS status`,
       [magicString, USER_ID_NONMEMBER],
     )
-    expect(result.rows[0]?.status).toBe('INVITER_NOT_FOUND')
+    expect(acceptResult.rows[0]?.status).toBe('OK')
+  })
+
+  it('accepts legacy tmp_users invite after invited_by_user_id backfill from org creator', async () => {
+    const orgId = await createOrgOwnedByUser(query, USER_ID, 'Legacy tmp invite backfill org')
+    const email = `legacy-backfill-${randomUUID()}@capgo.app`
+    const magicString = await insertTmpInvite({
+      orgId,
+      email,
+      roleName: 'org_member',
+      invitedBy: null,
+    })
+
+    await setServiceRoleClaim(query)
+    await backfillLegacyTmpInviter(orgId)
+
+    const acceptResult = await query(
+      `SELECT public.accept_tmp_user_invitation($1, $2::uuid) AS status`,
+      [magicString, USER_ID_NONMEMBER],
+    )
+    expect(acceptResult.rows[0]?.status).toBe('OK')
+
+    const binding = await query(
+      `
+        SELECT granted_by
+        FROM public.role_bindings
+        WHERE principal_type = public.rbac_principal_user()
+          AND principal_id = $1::uuid
+          AND org_id = $2::uuid
+          AND scope_type = public.rbac_scope_org()
+          AND reason = 'Accepted invitation'
+      `,
+      [USER_ID_NONMEMBER, orgId],
+    )
+    expect(binding.rows[0]?.granted_by).toBe(USER_ID)
   })
 
   it('rejects accept_tmp_user_invitation when the invitee is already an active org member', async () => {
@@ -359,6 +409,39 @@ describe('invite role escalation guards', () => {
       [magicString],
     )
     expect(invite.rows.length).toBe(1)
+  })
+
+  it('records the inviter as granted_by when accepting an org_users invitation', async () => {
+    const orgId = await createOrgOwnedByUser(query, USER_ID, 'Org invite granted_by org')
+    await setServiceRoleClaim(query)
+    await insertPendingOrgInvitation(query, {
+      orgId,
+      inviteeId: USER_ID_NONMEMBER,
+      roleName: 'org_member',
+      grantedBy: USER_ID,
+    })
+
+    await setAuthenticatedClaim(query, USER_ID_NONMEMBER)
+    const acceptResult = await query(
+      `SELECT public.accept_invitation_to_org($1::uuid) AS status`,
+      [orgId],
+    )
+    expect(acceptResult.rows[0]?.status).toBe('OK')
+
+    await setServiceRoleClaim(query)
+    const binding = await query(
+      `
+        SELECT granted_by
+        FROM public.role_bindings
+        WHERE principal_type = public.rbac_principal_user()
+          AND principal_id = $1::uuid
+          AND org_id = $2::uuid
+          AND scope_type = public.rbac_scope_org()
+          AND reason = 'Accepted invitation'
+      `,
+      [USER_ID_NONMEMBER, orgId],
+    )
+    expect(binding.rows[0]?.granted_by).toBe(USER_ID)
   })
 
   it('records the inviter as granted_by when accepting a tmp_users invitation', async () => {
