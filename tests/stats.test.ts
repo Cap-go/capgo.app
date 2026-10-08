@@ -4,6 +4,7 @@ import { env } from 'node:process'
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ALLOWED_STATS_ACTIONS, isRunningVersionAction } from '../supabase/functions/_backend/plugin_runtime/plugins/stats_actions.ts'
+import { isDroppedStatsLogAction } from '../supabase/functions/_backend/plugin_runtime/utils/plugin_stats.ts'
 import { APP_NAME, createAppVersions, executeSQL, fetchTestRequest, getBaseData, getSupabaseClient, getVersionFromAction, headers, ORG_ID, PLUGIN_BASE_URL, resetAndSeedAppData, resetAndSeedAppDataStats, resetAppData, resetAppDataStats, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
 
 const id = randomUUID()
@@ -19,11 +20,6 @@ interface StatsRes {
 }
 
 type StatsAction = Database['public']['Enums']['stats_action']
-
-// Mirrors isDroppedStatsLogAction: download_10..download_90 are not stored.
-function isDroppedDownloadProgressAction(action: string) {
-  return /^download_[1-9]0$/.test(action)
-}
 
 interface StatsPayload extends ReturnType<typeof getBaseData> {
   action: StatsAction
@@ -496,7 +492,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
 
           // Verify stats entry. Intermediate download progress is intentionally
           // not stored (see isDroppedStatsLogAction in plugin_stats.ts).
-          if (isDroppedDownloadProgressAction(action)) {
+          if (isDroppedStatsLogAction(action)) {
             const { count, error: statsError } = await getSupabaseClient()
               .from('stats')
               .select('*', { count: 'exact', head: true })
