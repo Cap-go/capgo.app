@@ -34,6 +34,7 @@ function shouldSkipErrorFixerWebhook(key: string): boolean {
 
 function rememberErrorFixerWebhookSend(key: string) {
   const now = Date.now()
+  errorFixerWebhookLastSent.delete(key)
   errorFixerWebhookLastSent.set(key, now)
   for (const [existingKey, sentAt] of errorFixerWebhookLastSent) {
     if (now - sentAt >= ERROR_FIXER_THROTTLE_MS)
@@ -85,10 +86,10 @@ export async function sendErrorFixerWebhookAlert(
 
   const outboundPayload = buildErrorFixerWebhookPayload({
     ...payload,
-    message: sanitizeSensitiveFromString(payload.message),
-    stack: sanitizeSensitiveFromString(payload.stack),
+    message: sanitizeSensitiveInPlainText(payload.message),
+    stack: sanitizeSensitiveInPlainText(payload.stack),
     url: sanitizeSensitiveUrl(payload.url),
-    body: sanitizeSensitiveFromString(payload.body),
+    body: sanitizeSensitiveInPlainText(payload.body),
   })
 
   const throttleKey = errorFixerThrottleKey(outboundPayload.functionName, outboundPayload.errorName, outboundPayload.message)
@@ -158,6 +159,12 @@ function sanitizeSensitiveFromString(str: string): string {
     })
   }
 
+  return result
+}
+
+function sanitizeSensitiveInPlainText(str: string): string {
+  let result = sanitizeSensitiveFromString(str)
+  result = result.replace(/https?:\/\/[^\s"'<>]+/gi, match => sanitizeSensitiveUrl(match))
   return result
 }
 

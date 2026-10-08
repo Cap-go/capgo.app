@@ -34,6 +34,7 @@ function shouldSkipErrorFixerWebhook(key: string): boolean {
 
 function rememberErrorFixerWebhookSend(key: string) {
   const now = Date.now()
+  errorFixerWebhookLastSent.delete(key)
   errorFixerWebhookLastSent.set(key, now)
   for (const [existingKey, sentAt] of errorFixerWebhookLastSent) {
     if (now - sentAt >= ERROR_FIXER_THROTTLE_MS)

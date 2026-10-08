@@ -127,6 +127,26 @@ describe('error fixer webhook', () => {
     ].sort())
   })
 
+  it('redacts sensitive query parameters embedded in error message text', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const payload = buildErrorFixerWebhookPayload({
+      ...basePayload(),
+      message: 'Request failed for https://api.example.test/reset?token=supersecretvalue',
+      stack: 'Error: failed at https://api.example.test/reset?token=supersecretvalue',
+    })
+
+    await sendErrorFixerWebhookAlert(createContext({
+      ERROR_FIXER_WEBHOOK_URL: 'https://fixer.example.test/hook',
+      ERROR_FIXER_WEBHOOK_KEY: 'automation-key',
+    }), payload)
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body)) as { message: string, stack: string }
+    expect(body.message).not.toContain('supersecretvalue')
+    expect(body.stack).not.toContain('supersecretvalue')
+  })
+
   it('redacts sensitive query parameters from the forwarded URL', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
