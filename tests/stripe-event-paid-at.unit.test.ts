@@ -2,16 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { stripeEventTestUtils } from '../supabase/functions/_backend/triggers/stripe_event.ts'
 
 describe('stripe paid_at tracking', () => {
-  it.concurrent('sets paid_at when a subscription is first created', () => {
-    const eventOccurredAtIso = '2026-03-24T12:00:00.000Z'
-
+  it.concurrent('does not set paid_at on subscription created before payment succeeds', () => {
     expect(
       stripeEventTestUtils.getPaidAtUpdate(
         { paid_at: null, status: null },
         'created',
-        eventOccurredAtIso,
+        '2026-03-24T12:00:00.000Z',
       ),
-    ).toBe(eventOccurredAtIso)
+    ).toBeUndefined()
   })
 
   it.concurrent('sets paid_at when an org becomes paying for the first time', () => {
