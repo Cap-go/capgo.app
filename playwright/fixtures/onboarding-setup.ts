@@ -84,7 +84,7 @@ function previewOnboarding() {
       ...(assignment === 'builder-only' ? {} : { selected_path: selectedPath }),
       ...(state.selectedBuilderPlatform ? { selected_builder_platform: state.selectedBuilderPlatform } : {}),
       steps: {
-        ...(hasOta ? { ota: {} } : {}),
+        ...(hasOta ? { ota: state.steps } : {}),
         ...(hasBuilder ? { builder: state.builderSteps } : {}),
       },
       outcome: state.outcome,
@@ -119,7 +119,7 @@ window.fetch = async (input, init) => {
     return new Response(JSON.stringify(state.error
       ? { message: 'Progress unavailable' }
       : {
-          onboarding: { setup: { todo_list_version: state.version, steps: state.steps, outcome: state.outcome } },
+          onboarding: previewOnboarding(),
           ...(checkChannel && !channelError ? { hasChannel } : {}),
           checkErrors: checkChannel && channelError ? ['add_channel'] : [],
         }), { status: state.error ? 503 : 200, headers: { 'Content-Type': 'application/json' } })
