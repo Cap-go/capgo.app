@@ -108,6 +108,9 @@ function planFeatures(plan: Database['public']['Tables']['plans']['Row']) {
   const nativeBuildConcurrencyFeature = plan.native_build_concurrency
     ? planFeature(t('plan-native-build-concurrency', { count: formatNumberValue(plan.native_build_concurrency) }))
     : null
+  const nativeBuildQueuePriorityFeature = plan.native_build_queue_priority
+    ? planFeature(t('plan-native-build-queue-priority', { tier: formatNativeBuildQueueTierLabel(plan.native_build_queue_priority) }))
+    : null
 
   const planName = plan.name?.toLowerCase() ?? ''
   const extraFeatures = (planFeatureLabelKeysByPlan[planName] ?? [])
@@ -119,8 +122,19 @@ function planFeatures(plan: Database['public']['Tables']['plans']['Row']) {
     planFeature(bandwidthFeature),
     buildTimeFeature,
     nativeBuildConcurrencyFeature,
+    nativeBuildQueuePriorityFeature,
     ...extraFeatures,
   ].filter((feature): feature is PlanFeature => !!feature)
+}
+
+function formatNativeBuildQueueTierLabel(priority: number): string {
+  if (priority >= 100)
+    return t('plan-native-build-queue-tier-highest')
+  if (priority >= 40)
+    return t('plan-native-build-queue-tier-high')
+  if (priority >= 20)
+    return t('plan-native-build-queue-tier-elevated')
+  return t('plan-native-build-queue-tier-standard')
 }
 
 function convertKey(key: string) {

@@ -2035,10 +2035,24 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       upload_url: string
       upload_expires_at: string
       status: string
+      queue_priority?: number
+      queue_priority_tier?: 'standard' | 'elevated' | 'high' | 'highest'
+      upgrade_url?: string
     }
 
     log.success(`Build job created: ${buildRequest.job_id}`)
     log.info(`Status: ${buildRequest.status}`)
+    if (buildRequest.queue_priority_tier && typeof buildRequest.queue_priority === 'number') {
+      const { buildQueuePriorityUserLines } = await import('./queue-priority.ts')
+      const config = await getRemoteConfig()
+      for (const line of buildQueuePriorityUserLines({
+        queue_priority: buildRequest.queue_priority,
+        queue_priority_tier: buildRequest.queue_priority_tier,
+        upgrade_url: buildRequest.upgrade_url || `${config.hostWeb}/settings/organization/plans`,
+      })) {
+        log.info(line)
+      }
+    }
     if (verbose) {
       log.info(`Upload URL: ${buildRequest.upload_url}`)
       log.info(`Upload expires: ${buildRequest.upload_expires_at}`)

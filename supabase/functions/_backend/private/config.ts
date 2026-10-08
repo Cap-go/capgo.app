@@ -2,6 +2,11 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { resolveCliUsageIdentity, trackCliUsage } from '../utils/cli_usage.ts'
 import { MIN_CLI_VERSION, MIN_CLI_VERSION_REASON } from '../utils/cliMinVersion.ts'
+import {
+  NATIVE_BUILD_QUEUE_AGING_INTERVAL_SECONDS,
+  NATIVE_BUILD_QUEUE_AGING_POINTS_PER_INTERVAL,
+  NATIVE_BUILD_QUEUE_MAX_AGING_BONUS,
+} from '../utils/native_build_queue_priority.ts'
 import { useCors } from '../utils/hono.ts'
 import { backgroundTask, existInEnv, getEnv, isStripeConfigured } from '../utils/utils.ts'
 
@@ -41,5 +46,15 @@ app.get('/', async (c) => {
     minCliVersion: MIN_CLI_VERSION,
     minCliVersionReason: MIN_CLI_VERSION_REASON,
     useNewFinalizeBundleUpload: USE_NEW_FINALIZE_BUNDLE_UPLOAD,
+    nativeBuildQueue: {
+      agingIntervalSeconds: NATIVE_BUILD_QUEUE_AGING_INTERVAL_SECONDS,
+      agingPointsPerInterval: NATIVE_BUILD_QUEUE_AGING_POINTS_PER_INTERVAL,
+      maxAgingBonus: NATIVE_BUILD_QUEUE_MAX_AGING_BONUS,
+      tierThresholds: {
+        elevated: 20,
+        high: 40,
+        highest: 100,
+      },
+    },
   })
 })
