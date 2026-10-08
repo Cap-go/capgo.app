@@ -493,23 +493,44 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
           // Verify stats entry. Intermediate download progress is intentionally
           // not stored (see isDroppedStatsLogAction in plugin_stats.ts).
           if (isDroppedStatsLogAction(action)) {
-            const { count, error: statsError } = await getSupabaseClient()
-              .from('stats')
-              .select('*', { count: 'exact', head: true })
-              .eq('device_id', uuid)
-              .eq('app_id', appId)
-              .eq('action', action)
+            let count: number | null = 0
+            let statsError: { code?: string } | null = null
+            for (let attempt = 0; attempt < 8; attempt++) {
+              const result = await getSupabaseClient()
+                .from('stats')
+                .select('*', { count: 'exact', head: true })
+                .eq('device_id', uuid)
+                .eq('app_id', appId)
+                .eq('action', action)
+              count = result.count
+              statsError = result.error
+              if (statsError || count !== 0)
+                break
+              if (attempt < 7)
+                await new Promise(resolve => setTimeout(resolve, 150))
+            }
             expect(statsError).toBeNull()
             expect(count).toBe(0)
           }
           else {
-            const { error: statsError, data: statsData } = await getSupabaseClient()
-              .from('stats')
-              .select()
-              .eq('device_id', uuid)
-              .eq('app_id', appId)
-              .eq('action', action)
-              .single()
+            let statsError: { code?: string } | null = { code: 'PGRST116' }
+            let statsData: Record<string, unknown> | null = null
+            for (let attempt = 0; attempt < 8; attempt++) {
+              const result = await getSupabaseClient()
+                .from('stats')
+                .select()
+                .eq('device_id', uuid)
+                .eq('app_id', appId)
+                .eq('action', action)
+                .single()
+              statsError = result.error
+              statsData = result.data
+              if (!statsError)
+                break
+              if (statsError.code !== 'PGRST116')
+                break
+              await new Promise(resolve => setTimeout(resolve, 150))
+            }
 
             expect(statsError).toBeNull()
             expect(statsData).toBeTruthy()
