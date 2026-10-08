@@ -2,9 +2,10 @@ import { spawn } from 'node:child_process'
 import { argv, env, exit, stderr, stdout } from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 
-export type TransientTestFailure = 'kong_upstream' | 'workerd_restart' | 'gateway_502_503'
+export type TransientTestFailure = 'kong_upstream' | 'workerd_restart' | 'gateway_502_503' | 'postgrest_schema_cache'
 
 const TRANSIENT_FAILURE_PATTERNS: ReadonlyArray<readonly [TransientTestFailure, RegExp]> = [
+  ['postgrest_schema_cache', /PGRST002[\s\S]*Could not query the database for the schema cache\. Retrying\./],
   ['kong_upstream', /An invalid response was received from the upstream server/],
   ['workerd_restart', /Your worker restarted mid-request/],
   ['gateway_502_503', /AssertionError: expected 50[23] to be \d+/],
