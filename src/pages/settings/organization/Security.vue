@@ -404,7 +404,7 @@ async function loadMembersWithPasswordPolicyStatus() {
 
     if (complianceError) {
       console.error('Error loading password policy compliance status:', complianceError)
-      // Still continue with members, just mark compliance as unknown
+      return
     }
 
     const complianceMap = new Map<string, boolean>()
