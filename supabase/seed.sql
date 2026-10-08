@@ -1666,7 +1666,9 @@ GRANT ALL ON FUNCTION "public"."seed_demo_customer_account" () TO "service_role"
 
 -- Demo customer, part 2: device fleet, usage, update events and Observe telemetry over 60 days.
 -- Always rebuilt from scratch (test helpers truncate these shared tables).
-CREATE OR REPLACE FUNCTION "public"."seed_demo_customer_telemetry" () RETURNS "void" LANGUAGE "plpgsql"
+CREATE SCHEMA IF NOT EXISTS seed_helpers;
+
+CREATE OR REPLACE FUNCTION "seed_helpers"."seed_demo_customer_telemetry" () RETURNS "void" LANGUAGE "plpgsql"
 SET
   search_path = '' SECURITY DEFINER AS $_$
 DECLARE
@@ -1677,7 +1679,7 @@ DECLARE
 BEGIN
   -- Temp tables below are created at runtime, so plpgsql_check cannot resolve them statically.
   IF pg_catalog.to_regprocedure('extensions.plpgsql_check_pragma(text)') IS NOT NULL THEN
-    PERFORM extensions.plpgsql_check_pragma('disable:all');
+    PERFORM extensions.plpgsql_check_pragma('disable:check');
   END IF;
   SET LOCAL client_min_messages = WARNING;
   -- Deterministic pseudo-random data so screenshots and reviewer accounts are stable.
@@ -2048,13 +2050,13 @@ BEGIN
 END;
 $_$;
 
-ALTER FUNCTION "public"."seed_demo_customer_telemetry" () OWNER TO "postgres";
+ALTER FUNCTION "seed_helpers"."seed_demo_customer_telemetry" () OWNER TO "postgres";
 
-REVOKE ALL ON FUNCTION "public"."seed_demo_customer_telemetry" ()
+REVOKE ALL ON FUNCTION "seed_helpers"."seed_demo_customer_telemetry" ()
 FROM
   PUBLIC;
 
-GRANT ALL ON FUNCTION "public"."seed_demo_customer_telemetry" () TO "service_role";
+GRANT ALL ON FUNCTION "seed_helpers"."seed_demo_customer_telemetry" () TO "service_role";
 
 CREATE OR REPLACE FUNCTION "public"."reset_and_seed_demo_customer_data" () RETURNS "void" LANGUAGE "plpgsql"
 SET
@@ -2063,7 +2065,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM public.orgs WHERE id = 'acde0000-0000-4000-8000-0000000000a1'::uuid) THEN
     PERFORM public.seed_demo_customer_account();
   END IF;
-  PERFORM public.seed_demo_customer_telemetry();
+  PERFORM seed_helpers.seed_demo_customer_telemetry();
 END;
 $_$;
 
