@@ -2161,6 +2161,10 @@ async function completePreOrgAppCreation(organizationId: string, shouldInvite: b
   clearOnboardingAppDraft(onboardingUserId.value)
   await uploadImportedOrganizationLogo(organizationId)
   removeBeforeUnloadWarning()
+  if (useAppUpdateModeStore().isWebsiteMode(createdApp.value.app_id)) {
+    await finishWebsiteLiveOnboarding(completionProperties)
+    return
+  }
   if (!shouldInvite) {
     await handOffToGettingStarted(completionProperties)
     return
@@ -2168,6 +2172,32 @@ async function completePreOrgAppCreation(organizationId: string, shouldInvite: b
 
   showOrganizationInvite.value = true
   trackOrganizationEvent('onboarding_organization_invite_viewed')
+}
+
+// Website Live has no CLI setup, channel or first upload: the app overview
+// shows the plugin config, so onboarding ends as soon as the app exists.
+async function finishWebsiteLiveOnboarding(completionProperties: OnboardingStepCompletionProperties) {
+  const app = createdApp.value
+  if (!app)
+    return
+  progressTracker?.completeStep(analyticsStepFor(flowStep.value), completionProperties)
+  try {
+    const { data, error } = await supabase.rpc('dismiss_getting_started', { p_app_id: app.app_id })
+    if (error)
+      throw error
+    if (data != null)
+      organizationStore.updateAppOnboarding(app.app_id, data)
+    organizationStore.updateAppNeedOnboarding(app.app_id, false)
+  }
+  catch (error) {
+    // The overview still works; the getting-started page redirects Website Live apps.
+    console.error('Cannot dismiss getting started for Website Live app', error)
+  }
+  window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
+  allowOnboardingDashboardExploration(onboardingUserId.value, app.app_id)
+  await persistOnboardingProgress('completed')
+  onboardingProgressPersistence.abort()
+  await router.replace(`/app/${encodeURIComponent(app.app_id)}`)
 }
 
 function onOrganizationInviteOpened() {

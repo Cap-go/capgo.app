@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import AppOnboardingFlow from '~/components/dashboard/AppOnboardingFlow.vue'
 import AppPageFrame from '~/components/dashboard/AppPageFrame.vue'
 import { useAppPage } from '~/composables/useAppPage'
+import { useAppUpdateModeStore } from '~/stores/appUpdateMode'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import { readOnboardingSetupHandoff } from '~/utils/onboardingRedirect'
@@ -12,6 +14,8 @@ import { parseUserOnboardingProgress } from '~/utils/userOnboardingProgress'
 const { t } = useI18n()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
+const appUpdateModeStore = useAppUpdateModeStore()
+const router = useRouter()
 const { id, app, isLoading } = useAppPage({
   routeName: '/app/[app].getting-started',
   navTitle: t('getting-started'),
@@ -39,9 +43,18 @@ watch(() => id.value, async (appId) => {
     organizationStore.setCurrentOrganization(appOrganization.gid)
 }, { immediate: true })
 
-watch(() => app.value?.app_id, (appId) => {
+watch(() => app.value?.app_id, async (appId) => {
   if (!appId || setupFlowAppId.value === appId)
     return
+  // Website Live apps never install a bundle pipeline, so the full Capgo
+  // checklist does not apply: their overview is the setup page.
+  const mode = await appUpdateModeStore.load(appId)
+  if (app.value?.app_id !== appId)
+    return
+  if (mode?.updateMode === 'website') {
+    await router.replace(`/app/${encodeURIComponent(appId)}`)
+    return
+  }
   setupPreOrg.value = resolveSetupPreOrg(appId)
   setupFlowAppId.value = appId
 }, { immediate: true })
