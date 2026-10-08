@@ -1693,8 +1693,6 @@ DECLARE
   v_apps text[] := ARRAY['com.acme.shop', 'com.acme.driver', 'com.acme.internal'];
   v_today date := (pg_catalog.now() AT TIME ZONE 'UTC')::date;
 BEGIN
-  -- Temp tables below are created at runtime, so plpgsql_check cannot resolve them statically.
-  PERFORM extensions.plpgsql_check_pragma('disable:check');
   SET LOCAL client_min_messages = WARNING;
   -- Deterministic pseudo-random data so screenshots and reviewer accounts are stable.
   PERFORM pg_catalog.setseed(0.4242);
@@ -1714,6 +1712,9 @@ BEGIN
   -- version_usage, stats) are the source of truth, daily_* rollups are derived
   -- from them with the same rules cron_stat_app uses, so the cron keeps them stable.
   -- ------------------------------------------------------------------
+  -- Temp tables are created at runtime, so plpgsql_check cannot resolve them statically.
+  -- String-form pragmas work without the extension and apply to the remaining statements.
+  PERFORM 'pragma:disable:check';
   DROP TABLE IF EXISTS pg_temp.demo_devices;
   DROP TABLE IF EXISTS pg_temp.demo_releases;
   DROP TABLE IF EXISTS pg_temp.demo_transitions;
