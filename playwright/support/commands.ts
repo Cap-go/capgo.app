@@ -6,7 +6,9 @@ export const test = base.extend({
   page: async ({ page }, use) => {
     // Add custom commands to page
     page.login = async (email: string, password: string, targetUrl = /\/(apps|dashboard)(\/|$)/) => {
-      await page.goto('/login/')
+      // Reuse the login page after logout instead of interrupting its navigation.
+      if (!/\/login\/?$/.test(new URL(page.url()).pathname))
+        await page.goto('/login/')
       await page.fill('[data-test="email"]', email)
       await page.locator('[data-test="submit"]').waitFor({ state: 'visible', timeout: 10000 })
       await page.fill('[data-test="password"]', password)

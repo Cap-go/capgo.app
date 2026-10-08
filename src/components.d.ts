@@ -110,6 +110,7 @@ declare module 'vue' {
     Navbar: typeof import('./components/Navbar.vue')['default']
     OnboardingExploreBanner: typeof import('./components/dashboard/OnboardingExploreBanner.vue')['default']
     OnboardingExploreReminder: typeof import('./components/dashboard/OnboardingExploreReminder.vue')['default']
+    OnboardingProfile: typeof import('./components/OnboardingProfile.vue')['default']
     OnboardingPublishIntentIcon: typeof import('./components/dashboard/OnboardingPublishIntentIcon.vue')['default']
     OnboardingPublishIntentIconMobileApp: typeof import('./components/dashboard/OnboardingPublishIntentIconMobileApp.vue')['default']
     OnboardingPublishIntentIconWebPage: typeof import('./components/dashboard/OnboardingPublishIntentIconWebPage.vue')['default']

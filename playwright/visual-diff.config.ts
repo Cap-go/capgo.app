@@ -9,6 +9,24 @@ export interface VisualDiffRoute {
   prepare?: (page: Page) => Promise<void>
 }
 
+async function prepareProfileGoalScreenshot(page: Page) {
+  await page.route('**/rest/v1/users?*', async (route) => {
+    if (route.request().method() !== 'GET')
+      return route.fulfill({ json: [] })
+    const response = await route.fetch()
+    const json = await response.json()
+    const profile = (row: any) => ({ ...row, first_name: '', last_name: '', onboarding: null })
+    await route.fulfill({ response, json: Array.isArray(json) ? json.map(profile) : profile(json) })
+  })
+  await page.reload()
+  const welcome = page.locator('[data-test="onboarding-welcome-continue"]')
+  const goal = page.locator('[data-test="onboarding-intent-ota"]')
+  await welcome.or(goal).waitFor()
+  if (await welcome.isVisible())
+    await welcome.click()
+  await goal.click()
+}
+
 const nativeObserveDays = ['2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30']
 
 const nativeObserveActionRows: Array<[string, number, number, number | null, number | null, number | null, boolean]> = [
@@ -191,6 +209,70 @@ async function mockReleaseLive(page: Page) {
  */
 export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'login', path: '/login/', auth: false },
+  { slug: 'register', path: '/register/', auth: false },
+  {
+    slug: 'onboarding-profile-goal',
+    path: '/onboarding/app',
+    auth: true,
+    prepare: prepareProfileGoalScreenshot,
+  },
+  {
+    slug: 'onboarding-profile-goal-mobile',
+    path: '/onboarding/app',
+    auth: true,
+    prepare: async (page) => {
+      await page.setViewportSize({ width: 390, height: 844 })
+      await prepareProfileGoalScreenshot(page)
+    },
+  },
+  {
+    slug: 'onboarding-organization-profile-legacy',
+    path: '/onboarding/organization?source=org-switcher',
+    auth: true,
+    prepare: async (page) => {
+      await page.route('**/rest/v1/users?*', async (route) => {
+        const response = await route.fetch()
+        const json = await response.json()
+        const profile = (row: any) => ({ ...row, first_name: '', last_name: '' })
+        await route.fulfill({ response, json: Array.isArray(json) ? json.map(profile) : profile(json) })
+      })
+      await page.reload()
+      await page.locator('[data-test="onboarding-intent-ota"]').click()
+      await page.locator('[data-test="onboarding-mode-name"]').click()
+      await page.locator('[data-test="onboarding-org-name"]').scrollIntoViewIfNeeded()
+    },
+  },
+  {
+    slug: 'onboarding-organization-profile',
+    path: '/onboarding/app',
+    auth: true,
+    prepare: async (page) => {
+      await page.route('**/rest/v1/users?*', async (route) => {
+        if (route.request().method() !== 'GET')
+          return route.fulfill({ json: [] })
+        const response = await route.fetch()
+        const json = await response.json()
+        const profile = (row: any) => ({ ...row, first_name: 'Example', last_name: 'User', onboarding: null })
+        await route.fulfill({ response, json: Array.isArray(json) ? json.map(profile) : profile(json) })
+      })
+      await page.reload()
+      await page.locator('[data-test="onboarding-welcome-continue"]').click()
+      await page.locator('[data-test="onboarding-intent-ota"]').click()
+      await page.locator('[data-test="app-onboarding-continue-intent"]').click()
+      const assistant = page.locator('[data-test="onboarding-development-environment-ai_assistant"]')
+      const appName = page.locator('[data-test="app-onboarding-name"]')
+      await assistant.or(appName).waitFor()
+      if (await assistant.isVisible()) {
+        await assistant.click()
+        await page.locator('[data-test="app-onboarding-continue-development-environment"]').click()
+      }
+      await appName.fill('Example App')
+      await page.locator('[data-test="app-onboarding-continue"]').click()
+      await page.locator('[data-test="app-onboarding-skip-app-id"]').click()
+      await page.locator('[data-test="app-onboarding-continue"]').click()
+      await page.locator('[data-test="onboarding-org-name"]').waitFor()
+    },
+  },
   { slug: 'dashboard', path: '/dashboard', auth: true },
   { slug: 'account-settings', path: '/settings/account', auth: true },
   {
