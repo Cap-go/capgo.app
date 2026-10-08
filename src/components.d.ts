@@ -33,6 +33,7 @@ declare module 'vue' {
     AuditLogTable: typeof import('./components/tables/AuditLogTable.vue')['default']
     AuthPageShell: typeof import('./components/auth/AuthPageShell.vue')['default']
     Banner: typeof import('./components/Banner.vue')['default']
+    BillingRegionChoice: typeof import('./components/dashboard/BillingRegionChoice.vue')['default']
     BlurBg: typeof import('./components/BlurBg.vue')['default']
     BuildChartControls: typeof import('./components/dashboard/BuildChartControls.vue')['default']
     BuilderPresentationModal: typeof import('./components/dashboard/BuilderPresentationModal.vue')['default']

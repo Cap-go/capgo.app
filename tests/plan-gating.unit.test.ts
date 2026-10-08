@@ -4,10 +4,10 @@ import { requireEnterprisePlan } from '../supabase/functions/_backend/utils/plan
 
 const mocks = vi.hoisted(() => ({ single: vi.fn(), subscription: vi.fn() }))
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: () => ({ from: () => ({ select: () => ({ eq: () => ({ single: mocks.single }) }) }) }),
+  supabaseAdmin: () => ({ from: () => ({ select: () => ({ eq: () => ({ single: mocks.single }), or: () => ({ single: mocks.single }) }) }) }),
   getCurrentPlanNameOrg: vi.fn(),
 }))
-vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({ getSubscriptionData: mocks.subscription }))
+vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({ getSubscriptionData: mocks.subscription, planProductIdOrFilter: (productId: string) => `stripe_id.eq.${productId},stripe_id_us.eq.${productId}` }))
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({ cloudlog: vi.fn(), cloudlogErr: vi.fn() }))
 const context = { get: () => 'request-id' } as unknown as Context
 const paidPlan = { status: 'succeeded', is_good_plan: true, product_id: 'enterprise-product', subscription_id: 'subscription-id', paid_at: '2026-01-01T00:00:00Z', past_due_at: null }

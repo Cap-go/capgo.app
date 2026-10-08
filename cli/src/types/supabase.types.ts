@@ -2345,6 +2345,7 @@ export type Database = {
           build_time_unit: number
           created_at: string
           credit_id: string
+          credit_id_us: string | null
           description: string
           id: string
           market_desc: string | null
@@ -2355,8 +2356,11 @@ export type Database = {
           price_m_id: string
           price_y: number
           price_y_id: string
+          price_y_id_us: string | null
+          price_m_id_us: string | null
           storage: number
           stripe_id: string
+          stripe_id_us: string | null
           updated_at: string
         }
         Insert: {
@@ -2364,6 +2368,7 @@ export type Database = {
           build_time_unit?: number
           created_at?: string
           credit_id: string
+          credit_id_us?: string | null
           description?: string
           id?: string
           market_desc?: string | null
@@ -2374,8 +2379,11 @@ export type Database = {
           price_m_id: string
           price_y?: number
           price_y_id: string
+          price_y_id_us?: string | null
+          price_m_id_us?: string | null
           storage: number
           stripe_id?: string
+          stripe_id_us?: string | null
           updated_at?: string
         }
         Update: {
@@ -2383,6 +2391,7 @@ export type Database = {
           build_time_unit?: number
           created_at?: string
           credit_id?: string
+          credit_id_us?: string | null
           description?: string
           id?: string
           market_desc?: string | null
@@ -2393,8 +2402,11 @@ export type Database = {
           price_m_id?: string
           price_y?: number
           price_y_id?: string
+          price_y_id_us?: string | null
+          price_m_id_us?: string | null
           storage?: number
           stripe_id?: string
+          stripe_id_us?: string | null
           updated_at?: string
         }
         Relationships: []
@@ -2720,6 +2732,7 @@ export type Database = {
       stripe_info: {
         Row: {
           bandwidth_exceeded: boolean | null
+          billing_account: string
           build_time_exceeded: boolean | null
           canceled_at: string | null
           churn_reason: string | null
@@ -2748,6 +2761,7 @@ export type Database = {
         }
         Insert: {
           bandwidth_exceeded?: boolean | null
+          billing_account?: string
           build_time_exceeded?: boolean | null
           canceled_at?: string | null
           churn_reason?: string | null
@@ -2776,6 +2790,7 @@ export type Database = {
         }
         Update: {
           bandwidth_exceeded?: boolean | null
+          billing_account?: string
           build_time_exceeded?: boolean | null
           canceled_at?: string | null
           churn_reason?: string | null
@@ -2802,15 +2817,7 @@ export type Database = {
           updated_at?: string
           upgraded_at?: string | null
         }
-        Relationships: [
-          {
-            foreignKeyName: "stripe_info_product_id_fkey"
-            columns: ["product_id"]
-            isOneToOne: false
-            referencedRelation: "plans"
-            referencedColumns: ["stripe_id"]
-          },
-        ]
+        Relationships: []
       }
       trial_extension_events: {
         Row: {

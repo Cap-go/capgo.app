@@ -970,21 +970,22 @@ async function calculateRevenue(c: Context, referenceDate?: Date): Promise<PlanR
       SELECT
         lower(p.name) AS plan_key,
         si.price_id,
-        p.price_m_id,
-        p.price_y_id,
+        CASE WHEN si.billing_account = 'us' THEN p.price_m_id_us ELSE p.price_m_id END AS price_m_id,
+        CASE WHEN si.billing_account = 'us' THEN p.price_y_id_us ELSE p.price_y_id END AS price_y_id,
         p.price_m,
         p.price_y,
         si.subscription_anchor_start,
         si.subscription_anchor_end
       FROM public.stripe_info si
-      INNER JOIN public.plans p ON p.stripe_id = si.product_id
+      INNER JOIN public.plans p ON si.product_id IN (p.stripe_id, p.stripe_id_us)
       WHERE si.is_good_plan = true
         AND p.name IN ('Solo', 'Maker', 'Team', 'Enterprise')
         AND si.paid_at IS NOT NULL
         AND si.paid_at < ${snapshotExclusiveEndIso}::timestamptz
         AND si.trial_at <= ${snapshotExclusiveEndIso}::timestamptz
         AND (
-          ${referenceDate ? sql`
+          ${referenceDate
+            ? sql`
             si.created_at < ${snapshotExclusiveEndIso}::timestamptz
             AND si.status IN (
               'succeeded'::public.stripe_status,
@@ -993,7 +994,8 @@ async function calculateRevenue(c: Context, referenceDate?: Date): Promise<PlanR
             )
             AND (si.canceled_at IS NULL OR si.canceled_at >= ${snapshotExclusiveEndIso}::timestamptz)
             AND si.subscription_anchor_end > ${snapshotExclusiveEndIso}::timestamptz
-          ` : sql`
+          `
+            : sql`
             si.status = 'succeeded'::public.stripe_status
           `}
         )
@@ -1262,13 +1264,13 @@ async function getLtvStats(c: Context, window: CurrentDayWindow): Promise<LtvSta
       WITH source AS (
         SELECT
           CASE
-            WHEN si.price_id = p.price_y_id THEN p.price_y::double precision
-            WHEN si.price_id = p.price_m_id THEN p.price_m::double precision
+            WHEN si.price_id IN (p.price_y_id, p.price_y_id_us) THEN p.price_y::double precision
+            WHEN si.price_id IN (p.price_m_id, p.price_m_id_us) THEN p.price_m::double precision
             ELSE 0::double precision
           END AS amount,
           CASE
-            WHEN si.price_id = p.price_y_id THEN 12::double precision
-            WHEN si.price_id = p.price_m_id THEN 1::double precision
+            WHEN si.price_id IN (p.price_y_id, p.price_y_id_us) THEN 12::double precision
+            WHEN si.price_id IN (p.price_m_id, p.price_m_id_us) THEN 1::double precision
             ELSE NULL::double precision
           END AS period_months,
           si.paid_at AS paid_start,
@@ -1280,7 +1282,7 @@ async function getLtvStats(c: Context, window: CurrentDayWindow): Promise<LtvSta
             END
           ) AS known_end
         FROM public.stripe_info si
-        INNER JOIN public.plans p ON p.stripe_id = si.product_id
+        INNER JOIN public.plans p ON si.product_id IN (p.stripe_id, p.stripe_id_us)
         WHERE si.is_good_plan = true
           AND si.paid_at IS NOT NULL
       ),
@@ -2453,7 +2455,7 @@ async function getBillingSnapshotCounts(c: Context, snapshotExclusiveEnd: Date):
           si.price_id,
           p.name::character varying AS plan_name
         FROM public.stripe_info si
-        INNER JOIN public.plans p ON p.stripe_id = si.product_id
+        INNER JOIN public.plans p ON si.product_id IN (p.stripe_id, p.stripe_id_us)
         WHERE si.is_good_plan = true
           AND si.created_at < ${snapshotExclusiveEndIso}::timestamptz
           AND si.paid_at IS NOT NULL
@@ -2514,8 +2516,8 @@ async function getBillingSnapshotCounts(c: Context, snapshotExclusiveEnd: Date):
       ),
       customer_counts AS (
         SELECT
-          COUNT(CASE WHEN price_id IN (SELECT price_y_id FROM public.plans WHERE price_y_id IS NOT NULL) THEN 1 END)::int AS yearly,
-          COUNT(CASE WHEN price_id IN (SELECT price_m_id FROM public.plans WHERE price_m_id IS NOT NULL) THEN 1 END)::int AS monthly,
+          COUNT(CASE WHEN price_id IN (SELECT price_y_id FROM public.plans WHERE price_y_id IS NOT NULL UNION ALL SELECT price_y_id_us FROM public.plans WHERE price_y_id_us IS NOT NULL) THEN 1 END)::int AS yearly,
+          COUNT(CASE WHEN price_id IN (SELECT price_m_id FROM public.plans WHERE price_m_id IS NOT NULL UNION ALL SELECT price_m_id_us FROM public.plans WHERE price_m_id_us IS NOT NULL) THEN 1 END)::int AS monthly,
           COUNT(*)::int AS total
         FROM active_subscriptions
       ),
@@ -2641,7 +2643,7 @@ async function getCoreSnapshotCounts(c: Context, snapshotExclusiveEnd: Date): Pr
         LEFT JOIN public.org_stats_refresh_state plan_state
           ON plan_state.org_id = o.id
         INNER JOIN public.plans p
-          ON p.stripe_id = si.product_id
+          ON si.product_id IN (p.stripe_id, p.stripe_id_us)
         WHERE si.is_above_plan = true
           AND p.name <> 'Enterprise'
           AND si.created_at < ${snapshotExclusiveEndIso}::timestamptz
@@ -3053,7 +3055,7 @@ async function getUpgradeRate12m(
         (
           SELECT COUNT(DISTINCT si.customer_id)::int
           FROM public.stripe_info si
-          INNER JOIN public.plans p ON p.stripe_id = si.product_id
+          INNER JOIN public.plans p ON si.product_id IN (p.stripe_id, p.stripe_id_us)
           WHERE si.is_good_plan = true
             AND si.created_at < ${snapshotEndIso}::timestamptz
             AND si.paid_at IS NOT NULL

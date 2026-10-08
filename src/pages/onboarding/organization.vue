@@ -16,6 +16,7 @@ import IconSparkles from '~icons/lucide/sparkles'
 import IconUpload from '~icons/lucide/upload-cloud'
 import IconUsers from '~icons/lucide/users-round'
 import IconBack from '~icons/material-symbols/arrow-back-ios-rounded'
+import BillingRegionChoice from '~/components/dashboard/BillingRegionChoice.vue'
 import OnboardingSupportUsernames from '~/components/dashboard/OnboardingSupportUsernames.vue'
 import OrganizationOnboardingInvite from '~/components/dashboard/OrganizationOnboardingInvite.vue'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
@@ -83,6 +84,7 @@ const estimatedUsersIndex = ref<number | null>(null)
 // `development_environment` is also stored on orgs.onboarding. This extra-org
 // flow does not ask that question, so it is persisted as `skipped`.
 const selectedIntent = ref<string | null>(null)
+const billingAccount = ref<'ee' | 'us' | undefined>()
 const intentOptions = [
   { value: 'ota', icon: IconRefresh },
   { value: 'builder', icon: IconSmartphone },
@@ -434,6 +436,7 @@ async function createOrganization() {
         website: normalizedWebsite,
         intent: selectedIntent.value,
         developmentEnvironment: 'skipped',
+        billingAccount: billingAccount.value,
       },
     })
 
@@ -1027,6 +1030,8 @@ onUnmounted(() => {
                     </label>
                   </div>
                 </div>
+
+                <BillingRegionChoice v-model="billingAccount" />
 
                 <OnboardingSupportUsernames v-model:discord-username="discordUsername" :is-new-user-onboarding="!isAdditionalOrgFlow" />
 
