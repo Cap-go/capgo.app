@@ -211,6 +211,12 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'login', path: '/login/', auth: false },
   { slug: 'register', path: '/register/', auth: false },
   {
+    slug: 'register-mobile',
+    path: '/register/',
+    auth: false,
+    prepare: page => page.setViewportSize({ width: 390, height: 844 }),
+  },
+  {
     slug: 'onboarding-profile-goal',
     path: '/onboarding/app',
     auth: true,
