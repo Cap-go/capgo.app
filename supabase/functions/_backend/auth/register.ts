@@ -222,7 +222,7 @@ app.post('/', async (c) => {
     first_name: body.first_name,
     last_name: body.last_name,
     enable_notifications: true,
-    opt_for_newsletters: true,
+    opt_for_newsletters: false,
   }, { onConflict: 'id' })
 
   if (profileError) {
