@@ -135,16 +135,20 @@ async function resolveVisitorEmail() {
 
   isResolvingEmail.value = true
   try {
-    const { data } = await invokeCapgoApi<{ email?: string | null }>(
+    const { data, error } = await invokeCapgoApi<{ email?: string | null, status?: string }>(
       `private/email_preferences?uuid=${encodeURIComponent(visitorUuid.value)}`,
       { allowAnonymous: true, method: 'GET' },
     )
+    if (error || data?.status !== 'ok') {
+      formError.value = t('email-preferences-load-failed')
+      return
+    }
     const resolved = String(data?.email ?? '').trim()
     if (resolved)
       email.value = resolved
   }
   catch {
-    // Save still works with uuid when lookup misses.
+    formError.value = t('email-preferences-load-failed')
   }
   finally {
     isResolvingEmail.value = false
