@@ -2,9 +2,11 @@ import type { PluginListenerHandle } from '@capacitor/core'
 import type { NativeNavigationTab } from '@capgo/capacitor-native-navigation'
 import type { Tab } from '~/components/comp_def'
 import { ActionSheet, ActionSheetButtonStyle } from '@capacitor/action-sheet'
+import { App } from '@capacitor/app'
 import { Capacitor } from '@capacitor/core'
 import { StatusBar, Style } from '@capacitor/status-bar'
 import { NativeNavigation } from '@capgo/capacitor-native-navigation'
+import { NavigationBar } from '@capgo/capacitor-navigation-bar'
 import { useMediaQuery } from '@vueuse/core'
 import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -55,6 +57,8 @@ const DARK_COLORS = { background: '#0F172A', foreground: '#F8FAFC', inactiveTint
 const LIGHT_COLORS = { background: '#F1F5F9', foreground: '#0F172A', inactiveTint: '#64748B' }
 
 export const isNativeChromeEnabled = Capacitor.isNativePlatform()
+// The floating tabbar replaces the Android system navigation bar while the dashboard shell is shown.
+const hideSystemNavigationBar = Capacitor.getPlatform() === 'android'
 
 /**
  * Drives the native Capacitor navbar and tabbar from the router so the
@@ -142,6 +146,12 @@ export function useNativeChrome() {
         icon: TAB_ICONS[id],
       })),
     })
+  }
+
+  async function hideNavigationBar() {
+    if (!active || !hideSystemNavigationBar)
+      return
+    await NavigationBar.hide().catch(() => {})
   }
 
   async function renderStatusBar() {
@@ -245,8 +255,10 @@ export function useNativeChrome() {
         if (id === 'organization')
           void chooseOrganization()
       })),
+      // Android shows the system bars again when the app comes back to the foreground.
+      ...(hideSystemNavigationBar ? [register(App.addListener('resume', () => void hideNavigationBar()))] : []),
     ])
-    await Promise.all([renderNavbar(), renderTabbar(), renderStatusBar()])
+    await Promise.all([renderNavbar(), renderTabbar(), renderStatusBar(), hideNavigationBar()])
   })
 
   watch([title, showBack, organizationLabel, isDark], () => {
@@ -266,6 +278,8 @@ export function useNativeChrome() {
     listeners.splice(0).forEach(listener => void listener.remove())
     void NativeNavigation.setNavbar({ hidden: true })
     void NativeNavigation.setTabbar({ hidden: true })
+    if (hideSystemNavigationBar)
+      void NavigationBar.show().catch(() => {})
   })
 
   return { goBack, canGoBack: () => showBack.value }
