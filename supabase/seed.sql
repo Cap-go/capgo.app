@@ -1666,6 +1666,22 @@ GRANT ALL ON FUNCTION "public"."seed_demo_customer_account" () TO "service_role"
 
 -- Demo customer, part 2: device fleet, usage, update events and Observe telemetry over 60 days.
 -- Always rebuilt from scratch (test helpers truncate these shared tables).
+DO $seed_plpgsql_check_stub$
+BEGIN
+  IF pg_catalog.to_regprocedure('extensions.plpgsql_check_pragma(text)') IS NULL THEN
+    EXECUTE $exec$
+      CREATE FUNCTION extensions.plpgsql_check_pragma(text)
+      RETURNS integer
+      LANGUAGE sql
+      IMMUTABLE
+      PARALLEL SAFE
+      SET search_path = ''
+      AS $fn$ SELECT 0; $fn$;
+    $exec$;
+  END IF;
+END;
+$seed_plpgsql_check_stub$;
+
 CREATE OR REPLACE FUNCTION "public"."seed_demo_customer_telemetry" () RETURNS "void" LANGUAGE "plpgsql"
 SET
   search_path = '' SECURITY DEFINER AS $_$
@@ -1676,9 +1692,7 @@ DECLARE
   v_today date := (pg_catalog.now() AT TIME ZONE 'UTC')::date;
 BEGIN
   -- Temp tables below are created at runtime, so plpgsql_check cannot resolve them statically.
-  IF pg_catalog.to_regprocedure('extensions.plpgsql_check_pragma(text)') IS NOT NULL THEN
-    PERFORM extensions.plpgsql_check_pragma('disable:check');
-  END IF;
+  PERFORM extensions.plpgsql_check_pragma('disable:check');
   SET LOCAL client_min_messages = WARNING;
   -- Deterministic pseudo-random data so screenshots and reviewer accounts are stable.
   PERFORM pg_catalog.setseed(0.4242);
