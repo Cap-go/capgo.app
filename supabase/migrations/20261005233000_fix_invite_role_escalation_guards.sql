@@ -77,17 +77,7 @@ ALTER TABLE public.tmp_users
   ADD COLUMN IF NOT EXISTS invited_by_user_id uuid;
 
 COMMENT ON COLUMN public.tmp_users.invited_by_user_id IS
-  'User who created or last legitimately updated the invitation role. Legacy pending rows were backfilled from orgs.created_by when available; rows still NULL cannot be accepted safely and return INVITER_NOT_FOUND.';
-
--- Pending tmp_users invites predate invited_by_user_id. Attribute them to the org
--- creator for rank re-validation at accept time (no other durable inviter source exists).
-UPDATE public.tmp_users tu
-SET invited_by_user_id = o.created_by
-FROM public.orgs o
-WHERE tu.org_id = o.id
-  AND tu.invited_by_user_id IS NULL
-  AND tu.cancelled_at IS NULL
-  AND o.created_by IS NOT NULL;
+  'User who created or last legitimately updated the invitation role. Legacy pending rows without durable grantor evidence stay NULL; accept_tmp_user_invitation returns INVITER_NOT_FOUND until the invite is reissued or updated via update_tmp_invite_role_rbac.';
 
 CREATE OR REPLACE FUNCTION public.update_tmp_invite_role_rbac(
   p_org_id uuid,
@@ -290,13 +280,6 @@ BEGIN
   END IF;
 
   v_inviter_id := v_invite.invited_by_user_id;
-  IF v_inviter_id IS NULL THEN
-    SELECT o.created_by
-    INTO v_inviter_id
-    FROM public.orgs o
-    WHERE o.id = v_invite.org_id;
-  END IF;
-
   IF v_inviter_id IS NULL THEN
     RETURN 'INVITER_NOT_FOUND';
   END IF;
