@@ -2,7 +2,7 @@ name: Refresh website console screenshots
 
 # Regenerates the console screenshots shown on capgo.app from a local stack with
 # fake demo data (scripts/marketing-screenshots) and opens a PR on Cap-go/website.
-# Requires the WEBSITE_REPO_TOKEN secret: a token that can push branches and open
+# Uses the PERSONAL_ACCESS_TOKEN secret (shared with release workflows) to push and open
 # pull requests on Cap-go/website. Without it the job captures and uploads the
 # images as an artifact only.
 
@@ -33,7 +33,7 @@ jobs:
     timeout-minutes: 45
     env:
       SUPABASE_WORKTREE_INSTANCE: marketing-screenshots-${{ github.run_id }}
-      WEBSITE_REPO_TOKEN: ${{ secrets.WEBSITE_REPO_TOKEN }}
+      WEBSITE_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
     steps:
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -70,11 +70,11 @@ jobs:
       - name: Wait for frontend
         run: bunx wait-on@8.0.1 http-get://localhost:5173 --timeout 600000 --interval 1000
       - name: Checkout website
-        if: env.WEBSITE_REPO_TOKEN != ''
+        if: env.WEBSITE_TOKEN != ''
         uses: actions/checkout@v6
         with:
           repository: Cap-go/website
-          token: ${{ secrets.WEBSITE_REPO_TOKEN }}
+          token: ${{ env.WEBSITE_TOKEN }}
           path: website
       - name: Install ffmpeg
         if: inputs.videos
@@ -83,7 +83,7 @@ jobs:
         env:
           BASE_URL: http://localhost:5173
           OUT_DIR: ${{ runner.temp }}/marketing-screenshots
-          WEBSITE_DIR: ${{ env.WEBSITE_REPO_TOKEN != '' && format('{0}/website', github.workspace) || '' }}
+          WEBSITE_DIR: ${{ env.WEBSITE_TOKEN != '' && format('{0}/website', github.workspace) || '' }}
           # Passed through env, not interpolated into the script, so the input cannot inject shell.
           FILTER: ${{ inputs.filter }}
           VIDEOS: ${{ inputs.videos && 'true' || 'false' }}
@@ -100,9 +100,9 @@ jobs:
           path: ${{ runner.temp }}/marketing-screenshots
           retention-days: 14
       - name: Open website pull request
-        if: env.WEBSITE_REPO_TOKEN != ''
+        if: env.WEBSITE_TOKEN != ''
         env:
-          GH_TOKEN: ${{ secrets.WEBSITE_REPO_TOKEN }}
+          GH_TOKEN: ${{ env.WEBSITE_TOKEN }}
         working-directory: website
         run: |
           if git diff --quiet -- apps/web/public/landing-demos && [ -z "$(git status --porcelain -- apps/web/public/landing-demos)" ]; then
