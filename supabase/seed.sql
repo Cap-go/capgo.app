@@ -1684,7 +1684,9 @@ BEGIN
 END
 $seed_plpgsql_check_stub$;
 
-CREATE OR REPLACE FUNCTION "public"."seed_demo_customer_telemetry" () RETURNS "void" LANGUAGE "plpgsql"
+CREATE SCHEMA IF NOT EXISTS seed_helpers;
+
+CREATE OR REPLACE FUNCTION "seed_helpers"."seed_demo_customer_telemetry" () RETURNS "void" LANGUAGE "plpgsql"
 SET
   search_path = '' SECURITY DEFINER AS $_$
 DECLARE
@@ -2065,13 +2067,13 @@ BEGIN
 END;
 $_$;
 
-ALTER FUNCTION "public"."seed_demo_customer_telemetry" () OWNER TO "postgres";
+ALTER FUNCTION "seed_helpers"."seed_demo_customer_telemetry" () OWNER TO "postgres";
 
-REVOKE ALL ON FUNCTION "public"."seed_demo_customer_telemetry" ()
+REVOKE ALL ON FUNCTION "seed_helpers"."seed_demo_customer_telemetry" ()
 FROM
   PUBLIC;
 
-GRANT ALL ON FUNCTION "public"."seed_demo_customer_telemetry" () TO "service_role";
+GRANT ALL ON FUNCTION "seed_helpers"."seed_demo_customer_telemetry" () TO "service_role";
 
 CREATE OR REPLACE FUNCTION "public"."reset_and_seed_demo_customer_data" () RETURNS "void" LANGUAGE "plpgsql"
 SET
@@ -2080,7 +2082,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM public.orgs WHERE id = 'acde0000-0000-4000-8000-0000000000a1'::uuid) THEN
     PERFORM public.seed_demo_customer_account();
   END IF;
-  PERFORM public.seed_demo_customer_telemetry();
+  PERFORM seed_helpers.seed_demo_customer_telemetry();
 END;
 $_$;
 
