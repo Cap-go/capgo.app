@@ -69,11 +69,14 @@ const previewUserOnboarding = {
 Object.assign(window, { onboardingSetupPreview: preview })
 
 function previewOnboarding() {
+  const features = params.get('otaInstalled') === '1'
+    ? { ota: { succeeded_at: '2026-09-01T00:00:00.000Z' } }
+    : {}
   const selectedPath = assignment === 'both-ota' || assignment === 'ota-only' ? 'ota' : 'builder'
   const hasBuilder = builderComponentView || assignment === 'builder-only' || assignment === 'both-builder' || assignment === 'both-ota'
   const hasOta = assignment === 'ota-only' || assignment === 'both-builder' || assignment === 'both-ota'
   if (hasBuilder || hasOta) {
-    return { setup: {
+    return { features, setup: {
       todo_list_version: 4,
       ...(hasBuilder ? { builder_todo_list_version: '1' } : {}),
       ...(hasOta ? { ota_todo_list_version: '1' } : {}),
@@ -87,7 +90,7 @@ function previewOnboarding() {
       outcome: state.outcome,
     } }
   }
-  return { setup: { todo_list_version: state.version, steps: state.steps, outcome: state.outcome } }
+  return { features, setup: { todo_list_version: state.version, steps: state.steps, outcome: state.outcome } }
 }
 
 // This isolated component fixture never sends requests to production.
@@ -120,6 +123,10 @@ window.fetch = async (input, init) => {
           ...(checkChannel && !channelError ? { hasChannel } : {}),
           checkErrors: checkChannel && channelError ? ['add_channel'] : [],
         }), { status: state.error ? 503 : 200, headers: { 'Content-Type': 'application/json' } })
+  }
+  if (url.pathname.endsWith('/rpc/verify_getting_started')) {
+    events.push('getting-started-verified')
+    return new Response(JSON.stringify(previewOnboarding()), { headers: { 'Content-Type': 'application/json' } })
   }
   if (url.pathname.includes('/rpc/')) {
     return new Response(JSON.stringify(state.channelPermissions), { headers: { 'Content-Type': 'application/json' } })
