@@ -28,7 +28,13 @@ vi.mock('~/services/supabase', () => ({
   useSupabase: () => ({}),
 }))
 vi.mock('~/stores/display', () => ({ useDisplayStore: () => ({ NavTitle: '', defaultBack: '' }) }))
-vi.mock('~/stores/main', () => ({ useMainStore: () => ({ auth: { id: 'user-1', email: 'user@example.com' }, plans: [] }) }))
+vi.mock('~/stores/main', () => ({
+  useMainStore: () => ({
+    auth: { id: 'user-1', email: 'user@example.com' },
+    user: { id: 'user-1', first_name: 'Example', last_name: 'User' },
+    plans: [],
+  }),
+}))
 vi.mock('~/stores/organization', () => {
   const store = reactive({ currentOrganization: null, organizations: [], fetchOrganizations: vi.fn(), setCurrentOrganization: vi.fn() })
   return { useOrganizationStore: () => store }
