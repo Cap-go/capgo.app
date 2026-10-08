@@ -1678,7 +1678,12 @@ DECLARE
   v_today date := (pg_catalog.now() AT TIME ZONE 'UTC')::date;
 BEGIN
   -- Temp tables below are created at runtime, so plpgsql_check cannot resolve them statically.
-  PERFORM extensions.plpgsql_check_pragma('disable:check');
+  BEGIN
+    PERFORM extensions.plpgsql_check_pragma('disable:check');
+  EXCEPTION WHEN undefined_function THEN
+    -- Tinbase does not provide the optional lint extension.
+    NULL;
+  END;
   SET LOCAL client_min_messages = WARNING;
   -- Deterministic pseudo-random data so screenshots and reviewer accounts are stable.
   PERFORM pg_catalog.setseed(0.4242);
