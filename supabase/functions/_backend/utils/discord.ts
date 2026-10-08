@@ -8,6 +8,7 @@ import { backgroundTask, getEnv } from './utils.ts'
 const ERROR_FIXER_WEBHOOK_TIMEOUT_MS = 8000
 const ERROR_FIXER_THROTTLE_MS = 10 * 60 * 1000
 const ERROR_FIXER_MAX_FIELD_LENGTH = 2000
+const ERROR_FIXER_THROTTLE_MAX_ENTRIES = 500
 
 const errorFixerWebhookLastSent = new Map<string, number>()
 
@@ -29,6 +30,21 @@ function shouldSkipErrorFixerWebhook(key: string): boolean {
   if (lastSent === undefined)
     return false
   return Date.now() - lastSent < ERROR_FIXER_THROTTLE_MS
+}
+
+function rememberErrorFixerWebhookSend(key: string) {
+  const now = Date.now()
+  errorFixerWebhookLastSent.set(key, now)
+  for (const [existingKey, sentAt] of errorFixerWebhookLastSent) {
+    if (now - sentAt >= ERROR_FIXER_THROTTLE_MS)
+      errorFixerWebhookLastSent.delete(existingKey)
+  }
+  while (errorFixerWebhookLastSent.size > ERROR_FIXER_THROTTLE_MAX_ENTRIES) {
+    const oldestKey = errorFixerWebhookLastSent.keys().next().value
+    if (oldestKey === undefined)
+      break
+    errorFixerWebhookLastSent.delete(oldestKey)
+  }
 }
 
 export function buildErrorFixerWebhookPayload(params: {
@@ -67,11 +83,19 @@ export async function sendErrorFixerWebhookAlert(
   if (!webhookUrl)
     return
 
-  const throttleKey = errorFixerThrottleKey(payload.functionName, payload.errorName, payload.message)
+  const outboundPayload = buildErrorFixerWebhookPayload({
+    ...payload,
+    message: sanitizeSensitiveFromString(payload.message),
+    stack: sanitizeSensitiveFromString(payload.stack),
+    url: sanitizeSensitiveUrl(payload.url),
+    body: sanitizeSensitiveFromString(payload.body),
+  })
+
+  const throttleKey = errorFixerThrottleKey(outboundPayload.functionName, outboundPayload.errorName, outboundPayload.message)
   if (shouldSkipErrorFixerWebhook(throttleKey))
     return
 
-  errorFixerWebhookLastSent.set(throttleKey, Date.now())
+  rememberErrorFixerWebhookSend(throttleKey)
 
   const key = getEnv(c, 'ERROR_FIXER_WEBHOOK_KEY')
   const requestId = payload.requestId
@@ -84,7 +108,7 @@ export async function sendErrorFixerWebhookAlert(
         'Authorization': `Bearer ${key}`,
         'X-Automation-Key': key,
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(outboundPayload),
       signal: AbortSignal.timeout(ERROR_FIXER_WEBHOOK_TIMEOUT_MS),
     })
 
@@ -135,6 +159,25 @@ function sanitizeSensitiveFromString(str: string): string {
   }
 
   return result
+}
+
+function sanitizeSensitiveUrl(url: string): string {
+  try {
+    const parsed = new URL(url)
+    for (const [paramName, paramValue] of [...parsed.searchParams.entries()]) {
+      const lowerName = paramName.toLowerCase()
+      if (REMOVED_FIELDS.some(field => lowerName.includes(field))) {
+        parsed.searchParams.delete(paramName)
+        continue
+      }
+      if (PARTIALLY_REDACTED_FIELDS.some(field => lowerName.includes(field)))
+        parsed.searchParams.set(paramName, partialRedact(paramValue))
+    }
+    return parsed.toString()
+  }
+  catch {
+    return sanitizeSensitiveFromString(url)
+  }
 }
 
 // Sanitize sensitive headers - remove or redact
@@ -204,7 +247,7 @@ export function sendDiscordAlert500(c: Context, functionName: string, body: stri
   const errorName = e?.name ?? 'Error'
   // Defense-in-depth: remove/sanitize sensitive fields from body string
   const safeBody = sanitizeSensitiveFromString(body)
-  void backgroundTask(c, sendErrorFixerWebhookAlert(c, buildErrorFixerWebhookPayload({
+  const errorFixerTask = backgroundTask(c, sendErrorFixerWebhookAlert(c, buildErrorFixerWebhookPayload({
     functionName,
     errorName,
     message: errorMessage,
@@ -217,7 +260,8 @@ export function sendDiscordAlert500(c: Context, functionName: string, body: stri
     userAgent,
     body: safeBody,
   })))
-  return sendDiscordAlert(c, {
+  return Promise.all([
+    sendDiscordAlert(c, {
     content: `🚨 **${functionName}** Error Alert`,
     embeds: [
       {
@@ -262,7 +306,9 @@ export function sendDiscordAlert500(c: Context, functionName: string, body: stri
         },
       },
     ],
-  }).catch((e: any) => {
-    cloudlogErr({ requestId, functionName, message: 'sendDiscordAlert500 failed', error: e })
-  })
+    }).catch((e: any) => {
+      cloudlogErr({ requestId, functionName, message: 'sendDiscordAlert500 failed', error: e })
+    }),
+    errorFixerTask,
+  ]).then(([discordResult]) => discordResult)
 }

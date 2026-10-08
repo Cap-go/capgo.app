@@ -127,6 +127,25 @@ describe('error fixer webhook', () => {
     ].sort())
   })
 
+  it('redacts sensitive query parameters from the forwarded URL', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const payload = buildErrorFixerWebhookPayload({
+      ...basePayload(),
+      url: 'https://api.example.test/reset?token=supersecretvalue&ok=1',
+    })
+
+    await sendErrorFixerWebhookAlert(createContext({
+      ERROR_FIXER_WEBHOOK_URL: 'https://fixer.example.test/hook',
+      ERROR_FIXER_WEBHOOK_KEY: 'automation-key',
+    }), payload)
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body)) as { url: string }
+    expect(body.url).not.toContain('supersecretvalue')
+    expect(body.url).toContain('ok=1')
+  })
+
   it('truncates stack and body to 2000 characters', () => {
     const long = 'x'.repeat(2500)
     const payload = buildErrorFixerWebhookPayload({
