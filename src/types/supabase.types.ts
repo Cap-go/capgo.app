@@ -6287,6 +6287,7 @@ export type Database = {
         | "webview_page_loaded"
         | "app_nav"
         | "channelPaused"
+        | "update_check_error"
       stripe_status:
         | "created"
         | "succeeded"
@@ -6575,6 +6576,7 @@ export const Constants = {
         "webview_page_loaded",
         "app_nav",
         "channelPaused",
+        "update_check_error",
       ],
       stripe_status: [
         "created",
