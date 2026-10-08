@@ -258,6 +258,54 @@ test.describe('Registration', () => {
     await expect(page.locator('[data-test="onboarding-first-name"]')).toHaveCount(0)
   })
 
+  test('should save an incomplete profile before creating a standalone organization', async ({ page }) => {
+    const email = `standalone-profile-e2e-${Date.now()}@example.com`
+    const password = 'Password123!'
+    const supabase = createClient(localSupabaseUrl, localSupabaseAnonKey)
+    const { data: signedUp, error: signUpError } = await supabase.auth.signUp({ email, password })
+    expect(signUpError).toBeNull()
+    const { error: updateError } = await supabase.from('users')
+      .upsert({ id: signedUp.user!.id, email, first_name: 'Example', last_name: '' }, { onConflict: 'id' })
+    expect(updateError).toBeNull()
+    await supabase.auth.signOut()
+
+    await loginToOnboarding(page, email, password)
+    await page.goto('/onboarding/organization?source=org-switcher')
+    await page.click('[data-test="onboarding-intent-ota"]')
+    await page.click('[data-test="onboarding-mode-name"]')
+    await expect(page.locator('[data-test="onboarding-first-name"]')).toHaveValue('Example')
+    await expect(page.locator('[data-test="onboarding-last-name"]')).toHaveValue('')
+    await page.fill('[data-test="onboarding-org-name"]', `Standalone Profile Org ${Date.now()}`)
+    await page.locator('[data-test="onboarding-estimated-users-option"]').first().click()
+    const createOrganization = page.locator('[data-test="onboarding-create-org"]')
+    await expect(createOrganization).toBeDisabled()
+    await page.fill('[data-test="onboarding-last-name"]', '   ')
+    await expect(createOrganization).toBeDisabled()
+    await page.fill('[data-test="onboarding-last-name"]', '  User  ')
+    await expect(createOrganization).toBeEnabled()
+
+    const writes: string[] = []
+    page.on('request', (request) => {
+      if (request.method() === 'PATCH' && request.url().includes('/rest/v1/users?') && request.postDataJSON()?.last_name === 'User')
+        writes.push('profile')
+      if (request.method() === 'POST' && /\/organization(?:\?|$)/.test(request.url()))
+        writes.push('organization')
+    })
+    await createOrganization.click()
+    await expect(page.locator('[data-test="onboarding-logo-action"]')).toBeVisible({ timeout: 60000 })
+    expect(writes).toEqual(['profile', 'organization'])
+
+    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password })
+    expect(signInError).toBeNull()
+    const { data: profile, error: profileError } = await supabase.from('users')
+      .select('first_name, last_name')
+      .eq('id', signedUp.user!.id)
+      .single()
+    expect(profileError).toBeNull()
+    expect(profile).toEqual({ first_name: 'Example', last_name: 'User' })
+    await supabase.auth.signOut()
+  })
+
   test('should complete a partial profile and skip both names for subsequent organizations', async ({ page }) => {
     const email = `partial-profile-e2e-${Date.now()}@example.com`
     const password = 'Password123!'
