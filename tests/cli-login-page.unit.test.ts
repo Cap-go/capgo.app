@@ -47,8 +47,8 @@ vi.mock('vue-sonner', () => ({
 
 vi.mock('~/services/cliLogin', () => cliLoginMocks)
 
-vi.mock('~/services/supabase', () => ({
-  useSupabase: () => supabase,
+vi.mock('~/services/console', () => ({
+  useConsole: () => supabase,
 }))
 
 vi.mock('~/stores/main', () => ({

@@ -11,6 +11,7 @@ import CalendarDaysIcon from '~icons/heroicons/calendar-days'
 import ChartBarIcon from '~icons/heroicons/chart-bar'
 import InformationInfo from '~icons/heroicons/information-circle'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { getPlans } from '~/services/console'
 import { bytesToGb, getDaysBetweenDates } from '~/services/conversion'
 import {
   CHART_REFRESH_POLL_MS,
@@ -26,7 +27,6 @@ import {
 } from '~/services/dashboardRefresh'
 import { addUtcDays, formatLocalDate, formatLocalDateTime, formatUtcDateTimeAsLocal, normalizeToUtcStartOfDay } from '~/services/date'
 import { DEMO_APP_NAMES, generateDemoBandwidthData, generateDemoMauData, generateDemoStorageData } from '~/services/demoChartData'
-import { getPlans } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'

@@ -18,6 +18,16 @@
     "@supabase/supabase-js": "npm:@supabase/supabase-js@2.106.2",
     "@std/semver": "jsr:@std/semver@1.0.8",
     "@bradenmacdonald/s3-lite-client": "jsr:@bradenmacdonald/s3-lite-client@0.9.6",
-    "discord-api-types/": "npm:/discord-api-types@^0.38.48/"
+    "discord-api-types/": "npm:/discord-api-types@^0.38.48/",
+    "better-auth": "npm:better-auth@1.7.7",
+    "better-auth/": "npm:/better-auth@1.7.7/",
+    "@better-auth/sso": "npm:@better-auth/sso@1.7.7",
+    "@better-auth/utils/": "npm:/@better-auth/utils@0.4.2/",
+    "otpauth": "npm:otpauth@9.5.2",
+    "bcryptjs": "npm:bcryptjs@3.0.3",
+    "jose": "npm:jose@6.2.4",
+    "ipaddr.js": "npm:ipaddr.js@2.5.0",
+    "samlify": "npm:samlify@2.13.1",
+    "nodemailer": "npm:nodemailer@10.0.13"
   }
 }

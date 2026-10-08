@@ -1,15 +1,15 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NavigationGuardNext, RouteLocationNormalized } from 'vue-router'
+import type { ConsoleClient } from '~/services/consoleClient'
 import type { UserModule } from '~/types'
 import { ADMIN_DASHBOARD_URL } from '~/constants/adminDashboard'
 import { clearChartDataCache } from '~/services/chartDataService'
 import { isCliLoginPath, isMcpAuthorizePath } from '~/services/cliLogin'
+import { getLocalConfig, useConsole } from '~/services/console'
 import { hideLoader } from '~/services/loader'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { setUser } from '~/services/posthog'
 import { isSsoUser, provisionSsoUser } from '~/services/ssoProvisioning'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
-import { getLocalConfig, useSupabase } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
 import { clearWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
 import { useMainStore } from '~/stores/main'
@@ -18,11 +18,11 @@ import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 import { getOnboardingResumeRedirect, isNewOnboardingUser } from '~/utils/onboardingRedirect'
 import { hasPendingInviteSkip } from '~/utils/pendingInviteSkip'
 import { validateRedirectPath } from '~/utils/safeRedirect'
-import { getPlans } from './../services/supabase'
+import { getPlans } from './../services/console'
 
 async function updateUser(
   main: ReturnType<typeof useMainStore>,
-  supabase: SupabaseClient,
+  supabase: ConsoleClient,
 ) {
   const config = getLocalConfig()
   // console.log('set auth', auth)
@@ -30,7 +30,7 @@ async function updateUser(
     const { data, error } = await supabase
       .from('users')
       .select()
-      .eq('id', main.auth?.id)
+      .eq('id', main.auth?.id ?? '')
       .maybeSingle()
 
     let userRecord = data ?? null
@@ -68,7 +68,7 @@ async function updateUser(
       const { error: updateError } = await supabase
         .from('users')
         .update({ email: main.auth?.email })
-        .eq('id', main.auth?.id)
+        .eq('id', main.auth?.id ?? '')
       if (updateError)
         console.error('update error', updateError)
       userRecord.email = main.auth?.email
@@ -118,8 +118,8 @@ async function updateUser(
 }
 
 async function maybeProvisionSsoMembership(
-  supabase: SupabaseClient,
-  session: Awaited<ReturnType<SupabaseClient['auth']['getSession']>>['data']['session'] | null,
+  supabase: ConsoleClient,
+  session: Awaited<ReturnType<ConsoleClient['auth']['getSession']>>['data']['session'] | null,
 ): Promise<'continue' | 'redirect_login' | 'abort_navigation'> {
   if (!session || !isSsoUser(session.user))
     return 'continue'
@@ -144,7 +144,7 @@ async function maybeProvisionSsoMembership(
   return 'continue'
 }
 
-async function isDisabledAccount(supabase: SupabaseClient, userId: string | null | undefined) {
+async function isDisabledAccount(supabase: ConsoleClient, userId: string | null | undefined) {
   if (!userId)
     return false
 
@@ -184,7 +184,7 @@ async function guard(
   to: RouteLocationNormalized,
   from: RouteLocationNormalized,
 ) {
-  const supabase = useSupabase()
+  const supabase = useConsole()
   const main = useMainStore()
   const organizationStore = useOrganizationStore()
   const { data: claimsData } = await supabase.auth.getClaims()
@@ -300,11 +300,6 @@ async function guard(
     }
   }
 
-  // TOTP means the user was force logged using the "email" tactic
-  // In practice this means the user is being spoofed by an admin
-  const isAdminForced
-    = !!sessionUser?.factors?.find(f => f.factor_type === 'totp') || false
-
   const { data: mfaData, error: mfaError }
     = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
   if (mfaError) {
@@ -315,7 +310,6 @@ async function guard(
   if (
     mfaData.currentLevel === 'aal1'
     && mfaData.nextLevel === 'aal2'
-    && !isAdminForced
   ) {
     return next({
       path: '/login',
@@ -455,7 +449,7 @@ async function guard(
 }
 
 export const install: UserModule = ({ router }) => {
-  const supabase = useSupabase()
+  const supabase = useConsole()
   supabase.auth.getSession()
     .then(({ data }) => {
       if (!data.session)

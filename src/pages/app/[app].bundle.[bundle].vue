@@ -20,10 +20,10 @@ import IconPencil from '~icons/lucide/pencil'
 import { fetchLinkedChannelsForVersion, formatLinkedChannel, unlinkLinkedChannels } from '~/services/bundleLinkedChannels'
 import { findChannelsWithoutPromotionPermission, formatChannelPromotionTargets } from '~/services/channelPromotion'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
+import { checkCompatibilityNativePackages, isCompatible, useConsole } from '~/services/console'
 import { formatBytes, getChecksumInfo } from '~/services/conversion'
 import { formatDate, formatLocalDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
-import { checkCompatibilityNativePackages, isCompatible, useSupabase } from '~/services/supabase'
 import { openVersion } from '~/services/versions'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
@@ -35,7 +35,7 @@ const router = useRouter()
 const dialogStore = useDialogV2Store()
 const displayStore = useDisplayStore()
 const main = useMainStore()
-const supabase = useSupabase()
+const supabase = useConsole()
 const packageId = ref<string>('')
 const id = ref<number>()
 const loading = ref(true)

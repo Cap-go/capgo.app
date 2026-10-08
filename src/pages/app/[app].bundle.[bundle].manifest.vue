@@ -5,8 +5,8 @@ import { computed, h, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatBytes } from '~/services/conversion'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 
 type ManifestEntry = Database['public']['Tables']['manifest']['Row']
@@ -30,7 +30,7 @@ const route = useRoute('/app/[app].bundle.[bundle].manifest')
 const router = useRouter()
 const displayStore = useDisplayStore()
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const packageId = ref<string>('')
 const id = ref<number>(0)
 const loading = ref(true)

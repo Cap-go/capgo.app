@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import LiveReleaseDashboard from '~/components/dashboard/LiveReleaseDashboard.vue'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDisplayStore } from '~/stores/display'
 
@@ -19,7 +19,7 @@ const router = useRouter()
 const displayStore = useDisplayStore()
 const appDetailStore = useAppDetailStore()
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 
 const packageId = ref<string>('')
 const id = ref<number>(0)

@@ -1,11 +1,13 @@
-import type { AuthChangeEvent } from '@supabase/supabase-js'
 import type { ComputedRef, Ref } from 'vue'
+import type { AuthChangeEvent } from '~/services/consoleClient'
 import type { Database } from '~/types/supabase.types'
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
+import { stripeEnabled, useConsole } from '~/services/console'
 import { addUtcDays, normalizeToUtcStartOfDay } from '~/services/date'
+import { deleteOrganization as deleteOrganizationApi, fetchOrganizationsList } from '~/services/organizations'
+import { fetchOrgMembers, fetchOrgMembersPasswordPolicy } from '~/services/orgMembers'
 import { createSignedImageUrl, getImmediateImageUrl, resolveImagePath } from '~/services/storage'
-import { stripeEnabled, useSupabase } from '~/services/supabase'
 import { clearWebsitePaidUserCookie, syncWebsitePaidUserCookieFromOrganizations } from '~/services/websiteAuthCookie'
 import { createDeferredPromise } from '../utils/promise'
 import { useDashboardAppsStore } from './dashboardApps'
@@ -134,7 +136,7 @@ function isSelectableOrganization(org: Pick<Organization, 'is_invite' | 'role'>)
   return !isPendingOrganizationInvite(org)
 }
 
-const supabase = useSupabase()
+const supabase = useConsole()
 
 export const useOrganizationStore = defineStore('organization', () => {
   const main = useMainStore()
@@ -625,10 +627,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     if (!currentOrgId)
       return []
 
-    const { data, error } = await supabase
-      .rpc('get_org_members', {
-        guild_id: currentOrgId,
-      })
+    const { data, error } = await fetchOrgMembers(currentOrgId)
 
     if (error || data === null) {
       return []
@@ -681,10 +680,7 @@ export const useOrganizationStore = defineStore('organization', () => {
       _initialized.value = true
     }
 
-    // We have RLS that ensure that we only select rows where we are member or owner
-    // Using get_orgs_v7 which includes 2FA and password policy fields
-    const { data, error } = await supabase
-      .rpc('get_orgs_v7')
+    const { data, error } = await fetchOrganizationsList()
 
     if (error) {
       console.error('Cannot get orgs!', error)
@@ -693,7 +689,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     }
 
     const logoLoadRun = ++organizationLogoLoadRun
-    const mappedData = data.map((item, id) => {
+    const mappedData = (data ?? []).map((item, id) => {
       const { normalized: logoStoragePath, shouldSign: shouldSignLogo } = resolveImagePath(item.logo)
       return {
         id,
@@ -831,11 +827,9 @@ export const useOrganizationStore = defineStore('organization', () => {
 
   // Check password policy compliance for all org members in org admin previews.
   const checkPasswordPolicyImpact = async (orgId: string) => {
-    const { data, error } = await supabase.rpc('check_org_members_password_policy', {
-      org_id: orgId,
-    })
+    const { data, error } = await fetchOrgMembersPasswordPolicy(orgId)
 
-    if (error) {
+    if (error || !data) {
       console.error('Failed to check password policy impact:', error)
       return null
     }
@@ -870,13 +864,11 @@ export const useOrganizationStore = defineStore('organization', () => {
       return { data: null, error: new Error('Insufficient permissions') }
     }
 
-    const { data, error } = await supabase.from('orgs')
-      .delete()
-      .eq('id', orgId)
+    const { data, error } = await deleteOrganizationApi(orgId)
 
     if (error) {
       console.error('Organization deletion failed:', error.message)
-      return { data, error }
+      return { data: null, error }
     }
 
     return { data, error: null }

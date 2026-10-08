@@ -13,9 +13,9 @@ import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
 import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentionNotice.vue'
 import { useDeviceUpdateFormat } from '~/composables/useDeviceUpdateFormat'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate, formatDistanceToNow } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDisplayStore } from '~/stores/display'
 
@@ -27,7 +27,7 @@ const displayStore = useDisplayStore()
 const { t } = useI18n()
 const router = useRouter()
 const route = useRoute('/app/[app].device.[device]')
-const supabase = useSupabase()
+const supabase = useConsole()
 const packageId = ref<string>('')
 const id = ref<string>()
 const isLoading = ref(true)

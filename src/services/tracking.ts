@@ -1,4 +1,4 @@
-import { defaultApiHost, useSupabase } from '~/services/supabase'
+import { defaultApiHost, useConsole } from '~/services/console'
 
 const KEEPALIVE_BODY_LIMIT = 64 * 1024
 let reservedKeepaliveBytes = 0
@@ -69,7 +69,7 @@ interface TrackOptions {
 
 export async function sendEvent(payload: TrackOptions): Promise<null> {
   try {
-    const { data: currentSession } = await useSupabase().auth.getSession()
+    const { data: currentSession } = await useConsole().auth.getSession()
     if (!currentSession.session)
       return null
 

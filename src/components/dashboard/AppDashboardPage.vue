@@ -4,7 +4,7 @@ import { computed, ref, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import AppNotFoundModal from '~/components/AppNotFoundModal.vue'
 import LiveReleaseDashboard from '~/components/dashboard/LiveReleaseDashboard.vue'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -17,7 +17,7 @@ const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const dashboardAppsStore = useDashboardAppsStore()
 const isLoading = ref(false)
-const supabase = useSupabase()
+const supabase = useConsole()
 const displayStore = useDisplayStore()
 type AppDashboardRow = Database['public']['Tables']['apps']['Row']
 

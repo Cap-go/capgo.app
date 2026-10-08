@@ -95,7 +95,7 @@ async function rollbackCreatedUser(c: Parameters<typeof useSupabaseAdmin>[0], us
   catch {}
 }
 
-async function ensurePublicUserRowExists(
+export async function ensurePublicUserRowExists(
   c: Parameters<typeof useSupabaseAdmin>[0],
   supabaseAdmin: ReturnType<typeof useSupabaseAdmin>,
   userId: string,
@@ -190,7 +190,7 @@ async function acquireRbacOrgLockWithRetry(pgClient: PoolClient, orgId: string):
   }
 }
 
-async function ensureOrgMembership(
+export async function ensureOrgMembership(
   c: Parameters<typeof useSupabaseAdmin>[0],
   _supabaseAdmin: ReturnType<typeof useSupabaseAdmin>,
   userId: string,

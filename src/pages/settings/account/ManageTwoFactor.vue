@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import { FormKit } from '@formkit/vue'
 import dayjs from 'dayjs'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
+import { useConsole } from '~/services/console'
 import { formatLocalDate } from '~/services/date'
 import {
   getEmailOtpSendErrorMessage,
@@ -12,14 +14,13 @@ import {
   sendEmailOtpVerification,
   verifyEmailOtp,
 } from '~/services/emailOtp'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const main = useMainStore()
 const dialogStore = useDialogV2Store()
 const displayStore = useDisplayStore()
@@ -33,6 +34,8 @@ const mfaEnabled = ref(false)
 const mfaFactorId = ref('')
 const mfaSetupDate = ref<string | null>(null)
 const otpAlreadyVerified = ref(false)
+const currentPassword = ref('')
+const passwordRequired = ref<boolean | null>(null)
 
 // Stepper state
 const currentStep = ref(1)
@@ -60,6 +63,7 @@ const mfaQRCode = ref('')
 const enrolledFactorId = ref('')
 const mfaVerificationCode = ref('')
 const mfaVerifying = ref(false)
+const isEnrolling = ref(false)
 
 const stepLabels = computed(() => [
   t('2fa-step-captcha'),
@@ -183,21 +187,47 @@ async function verifyOtpForMfa() {
     return
   }
 
+  otpAlreadyVerified.value = true
+  otpVerificationCode.value = ''
+  currentStep.value = 1
   toast.success(t('email-otp-verified'))
   await enrollTotp()
 }
 
-async function enrollTotp() {
-  const { data, error } = await supabase.auth.mfa.enroll({ factorType: 'totp' })
-  if (error) {
-    toast.error(t('mfa-fail'))
-    console.error(error)
-    return
+async function ensurePasswordRequirement() {
+  if (passwordRequired.value === null) {
+    const accounts = await supabase.betterAuth.listAccounts()
+    if (accounts.error) {
+      toast.error(t('mfa-fail'))
+      return false
+    }
+    passwordRequired.value = !!accounts.data?.some(account => account.providerId === 'credential')
   }
+  return !passwordRequired.value || !!currentPassword.value
+}
 
-  mfaQRCode.value = data.totp.qr_code
-  enrolledFactorId.value = data.id
-  currentStep.value = 4
+async function enrollTotp() {
+  if (isEnrolling.value)
+    return
+  isEnrolling.value = true
+  try {
+    if (!await ensurePasswordRequirement())
+      return
+    const { data, error } = await supabase.auth.mfa.enroll({ factorType: 'totp', password: currentPassword.value })
+    if (error) {
+      toast.error(t('mfa-fail'))
+      console.error(error)
+      return
+    }
+
+    mfaQRCode.value = data.totp.qr_code
+    enrolledFactorId.value = data.id
+    currentPassword.value = ''
+    currentStep.value = 4
+  }
+  finally {
+    isEnrolling.value = false
+  }
 }
 
 function proceedToVerify() {
@@ -248,6 +278,8 @@ async function verifyAndEnable() {
 }
 
 async function disableMfa() {
+  if (!await ensurePasswordRequirement())
+    return
   dialogStore.openDialog({
     title: t('alert-2fa-disable'),
     description: `${t('alert-not-reverse-message')} ${t('alert-disable-2fa-message')}?`,
@@ -267,7 +299,7 @@ async function disableMfa() {
     return
   }
 
-  const { error: unregisterError } = await supabase.auth.mfa.unenroll({ factorId })
+  const { error: unregisterError } = await supabase.auth.mfa.unenroll({ factorId, password: currentPassword.value })
   if (unregisterError) {
     toast.error(t('mfa-fail'))
     console.error('Cannot unregister MFA', unregisterError)
@@ -277,6 +309,7 @@ async function disableMfa() {
   mfaFactorId.value = ''
   mfaEnabled.value = false
   mfaSetupDate.value = null
+  currentPassword.value = ''
   toast.success(t('2fa-disabled'))
 }
 
@@ -301,13 +334,6 @@ function resetWizard() {
   mfaVerificationCode.value = ''
 }
 
-async function cleanupUnverifiedFactors(factors: { id: string, status: string }[]) {
-  const unverified = factors.filter(f => f.status === 'unverified')
-  if (unverified.length > 0) {
-    await Promise.all(unverified.map(f => supabase.auth.mfa.unenroll({ factorId: f.id })))
-  }
-}
-
 async function loadOtpVerificationStatus() {
   if (!main.auth?.id)
     return false
@@ -325,18 +351,18 @@ async function loadOtpVerificationStatus() {
 }
 
 onMounted(async () => {
-  const [{ data: mfaFactors, error }, otpValid] = await Promise.all([
+  const [{ data: mfaFactors, error }, otpValid, accounts] = await Promise.all([
     supabase.auth.mfa.listFactors(),
     loadOtpVerificationStatus(),
+    supabase.betterAuth.listAccounts(),
   ])
+  passwordRequired.value = accounts.error ? null : !!accounts.data?.some(account => account.providerId === 'credential')
 
   if (error) {
     console.error('Cannot get MFA factors', error)
     isLoading.value = false
     return
   }
-
-  await cleanupUnverifiedFactors(mfaFactors.all)
 
   const verifiedFactor = mfaFactors.all.find(f => f.status === 'verified')
   mfaEnabled.value = !!verifiedFactor
@@ -350,7 +376,8 @@ onMounted(async () => {
 
   if (!mfaEnabled.value && otpValid) {
     otpAlreadyVerified.value = true
-    await enrollTotp()
+    if (passwordRequired.value === false)
+      await enrollTotp()
   }
 
   if (route.query.setup2fa === 'true' && !mfaEnabled.value) {
@@ -359,12 +386,8 @@ onMounted(async () => {
   }
 })
 
-onBeforeUnmount(async () => {
-  clearOtpSendCooldownTimer()
-  if (enrolledFactorId.value && !mfaEnabled.value) {
-    await supabase.auth.mfa.unenroll({ factorId: enrolledFactorId.value })
-  }
-})
+// Better Auth leaves abandoned enrollment disabled; the next enrollment replaces it.
+onBeforeUnmount(clearOtpSendCooldownTimer)
 </script>
 
 <template>
@@ -374,6 +397,15 @@ onBeforeUnmount(async () => {
         <h2 class="mb-5 text-2xl font-bold dark:text-white text-slate-800">
           {{ t('manage-2fa') }}
         </h2>
+
+        <FormKit
+          v-if="!isLoading && passwordRequired"
+          v-model="currentPassword"
+          type="password"
+          autocomplete="current-password"
+          :label="t('current-password')"
+          validation="required"
+        />
 
         <!-- Loading -->
         <div v-if="isLoading" class="flex items-center justify-center py-12">
@@ -481,7 +513,12 @@ onBeforeUnmount(async () => {
           <!-- Step content -->
           <div class="max-w-lg mx-auto">
             <!-- Step 1: CAPTCHA -->
-            <div v-if="currentStep === 1" class="space-y-4">
+            <div v-if="currentStep === 1 && otpAlreadyVerified" class="space-y-4">
+              <button type="button" class="d-btn d-btn-primary d-btn-sm" :disabled="isEnrolling || (passwordRequired === true && !currentPassword)" @click="enrollTotp">
+                {{ t('next') }}
+              </button>
+            </div>
+            <div v-else-if="currentStep === 1" class="space-y-4">
               <h4 class="text-lg font-medium dark:text-white text-slate-800">
                 {{ t('2fa-step-captcha') }}
               </h4>

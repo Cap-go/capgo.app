@@ -462,3 +462,7 @@ import_map = "./functions/deno.json"
 [functions.queue_health]
 verify_jwt = false
 import_map = "./functions/deno.json"
+
+[functions.auth]
+verify_jwt = false
+import_map = "./functions/deno.json"

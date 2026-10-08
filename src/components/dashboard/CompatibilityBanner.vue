@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import IconAlertTriangle from '~icons/lucide/alert-triangle'
 import { groupCompatibilityEvents } from '~/services/compatibilityEvents'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 
 const props = defineProps<{
   appId: string
@@ -12,7 +12,7 @@ const props = defineProps<{
 
 const router = useRouter()
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 
 const unresolvedCount = ref(0)
 

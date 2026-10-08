@@ -14,8 +14,8 @@ import IconSortUp from '~icons/lucide/chevron-up'
 import IconSort from '~icons/lucide/chevrons-up-down'
 import IconFilter from '~icons/system-uicons/filtering'
 import IconReload from '~icons/tabler/reload'
+import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -51,7 +51,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
 

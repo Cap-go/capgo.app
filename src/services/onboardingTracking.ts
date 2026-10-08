@@ -1,4 +1,4 @@
-import { getLocalConfig, isLocal } from '~/services/supabase'
+import { getLocalConfig, isLocal } from '~/services/console'
 import { sendEvent } from '~/services/tracking'
 
 type OnboardingEventProperties = Record<string, string | number | boolean>

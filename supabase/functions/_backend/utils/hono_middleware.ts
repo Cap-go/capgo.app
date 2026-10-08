@@ -832,7 +832,7 @@ async function foundJWT(c: Context, jwt: string) {
   c.set('auth', {
     userId: claims.sub,
     authType: 'jwt',
-    jwt,
+    jwt: c.get('authorization') ?? jwt,
     apikey: null,
     claims,
   })

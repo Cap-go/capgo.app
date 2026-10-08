@@ -40,7 +40,7 @@ async function expectApiKeyRow(page: Page, keyName: string) {
 }
 
 async function selectOnlyOrgForCreation(page: Page, dialog: Locator, orgId: string) {
-  await dialog.locator('[data-test="create-key-org-dropdown"]').click()
+  await openOrganizationDropdown(dialog)
   const orgCheckboxes = dialog.locator('[data-test="create-key-org-checkbox"]')
   await expect(orgCheckboxes.first()).toBeVisible()
 
@@ -64,6 +64,15 @@ async function selectOnlyOrgForCreation(page: Page, dialog: Locator, orgId: stri
   await expect(selectedOrg).toBeChecked()
   await page.mouse.click(5, 5)
   await expect(dialog.locator('.fixed.inset-0.z-10')).toHaveCount(0)
+}
+
+async function openOrganizationDropdown(dialog: Locator) {
+  const dropdown = dialog.locator('[data-test="create-key-org-dropdown"]')
+  await expect(async () => {
+    if (await dropdown.getAttribute('aria-expanded') !== 'true')
+      await dropdown.click()
+    await expect(dialog.locator('[data-test="create-key-org-checkbox"]').first()).toBeVisible({ timeout: 1000 })
+  }).toPass({ timeout: 5000 })
 }
 
 async function fillApiKeyName(page: Page, dialog: Locator, keyName: string) {
@@ -204,6 +213,8 @@ test.describe('API Key Management', () => {
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(({ orgId, userId }) => {
       localStorage.setItem('capgo_current_org_id', orgId)
+      // Keep the delayed support prompt from covering the API key dialogs.
+      localStorage.setItem(`capgo.supportUsernames.dismissed.${userId}`, '1')
       sessionStorage.setItem('sso_enforcement_checked', JSON.stringify({
         timestamp: Date.now(),
         cachedUserId: userId,
@@ -224,7 +235,7 @@ test.describe('API Key Management', () => {
   test('should select all manageable organizations by default with member role', async ({ page }) => {
     const dialog = await openCreateKeyDialog(page)
 
-    await dialog.locator('[data-test="create-key-org-dropdown"]').click()
+    await openOrganizationDropdown(dialog)
     const orgCheckboxes = dialog.locator('[data-test="create-key-org-checkbox"]:not(:disabled)')
     await expect(orgCheckboxes.first()).toBeVisible()
 

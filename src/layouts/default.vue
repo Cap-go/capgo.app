@@ -9,7 +9,7 @@ import LogAsDialogField from '~/components/LogAsDialogField.vue'
 import { useEdgeSwipeBack } from '~/composables/useEdgeSwipeBack'
 import { isNativeChromeEnabled, useNativeChrome } from '~/composables/useNativeChrome'
 import { useRealtimeCLIFeed } from '~/composables/useRealtimeCLIFeed'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
 import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
@@ -28,7 +28,7 @@ function toggleSidebarCollapse() {
 
 const pendingOnboardingAppId = ref('')
 const route = useRoute()
-const supabase = useSupabase()
+const supabase = useConsole()
 const organizationStore = useOrganizationStore()
 const main = useMainStore()
 let onboardingLookupRun = 0

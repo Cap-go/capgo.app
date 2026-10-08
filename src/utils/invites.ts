@@ -1,7 +1,5 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database } from '~/types/supabase.types'
-import { FunctionsHttpError } from '@supabase/supabase-js'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { FunctionsHttpError } from '~/services/consoleClient'
 
 type TranslateFn = (key: string, params?: Record<string, unknown> | string, defaultMsg?: string) => string
 
@@ -40,12 +38,10 @@ export async function resolveInviteNewUserErrorMessage(
 }
 
 export async function notifyExistingUserInvite(
-  supabase: SupabaseClient<Database>,
   email: string,
   orgId: string,
 ): Promise<boolean> {
   const { error } = await invokeCapgoApi('private/invite_existing_user_to_org', {
-    client: supabase,
     body: {
       email,
       org_id: orgId,

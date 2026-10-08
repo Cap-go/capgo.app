@@ -19,11 +19,11 @@ import IconBack from '~icons/material-symbols/arrow-back-ios-rounded'
 import OnboardingSupportUsernames from '~/components/dashboard/OnboardingSupportUsernames.vue'
 import OrganizationOnboardingInvite from '~/components/dashboard/OrganizationOnboardingInvite.vue'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
+import { useConsole } from '~/services/console'
 import { formatNumberValue } from '~/services/formatLocale'
 import { createOnboardingAppFromDraft } from '~/services/onboardingAppCreate'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { uploadOrgLogoFile } from '~/services/photos'
-import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
@@ -50,7 +50,7 @@ interface UserCountStop {
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const main = useMainStore()
 const displayStore = useDisplayStore()
 const organizationStore = useOrganizationStore()

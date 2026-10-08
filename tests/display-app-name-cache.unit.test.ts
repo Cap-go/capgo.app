@@ -6,8 +6,8 @@ const mockEq = vi.fn(() => ({ maybeSingle: mockMaybeSingle }))
 const mockSelect = vi.fn(() => ({ eq: mockEq }))
 const mockFrom = vi.fn(() => ({ select: mockSelect }))
 
-vi.mock('~/services/supabase', () => ({
-  useSupabase: () => ({ from: mockFrom }),
+vi.mock('~/services/console', () => ({
+  useConsole: () => ({ from: mockFrom }),
 }))
 
 interface LookupResult {

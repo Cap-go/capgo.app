@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
+import { CONSOLE_SESSION_PREFIX, createConsoleAuth } from '../utils/console_auth.ts'
 import { z } from 'zod'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
@@ -241,6 +242,34 @@ app.post('/', middlewareAuth, async (c) => {
 
   const identifier = resolveLogAsIdentifier(parsedBodyResult.data)
   const userEmail = await resolveUserEmail(c, supabaseAdmin, identifier)
+
+  if (authToken.startsWith(`Bearer ${CONSOLE_SESSION_PREFIX}`)) {
+    const instance = createConsoleAuth(c)
+    try {
+      const context = await instance.auth.$context
+      const target = await context.internalAdapter.findUserByEmail(userEmail)
+      if (!target)
+        throw simpleError('account_not_migrated', 'Target account has not been migrated')
+      const adminUserId = c.get('auth')!.userId
+      const session = await context.internalAdapter.createSession(target.user.id, true, { impersonatedBy: adminUserId }, true)
+      if (!session)
+        throw simpleError('session_creation_failed', 'Unable to create support session')
+      try {
+        await instance.database.query(`INSERT INTO public.platform_impersonation_sessions
+          (session_id, target_user_id, admin_user_id, expires_at) VALUES ($1::uuid, $2::uuid, $3::uuid, $4)`,
+        [session.id, target.user.id, adminUserId, session.expiresAt])
+      }
+      catch (error) {
+        await context.internalAdapter.deleteSession(session.token)
+        throw error
+      }
+      const token = `${CONSOLE_SESSION_PREFIX}${session.token}`
+      return c.json({ jwt: token, refreshToken: token })
+    }
+    finally {
+      await instance.close()
+    }
+  }
 
   const { data: magicLink, error: magicError } = await supabaseAdmin.auth.admin.generateLink({
     type: 'magiclink',

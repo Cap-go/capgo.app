@@ -16,9 +16,9 @@ import IconWarning from '~icons/lucide/alert-triangle'
 import IconExternalLink from '~icons/lucide/external-link'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
+import { checkCompatibilityNativePackages, defaultApiHost, isCompatible, useConsole } from '~/services/console'
 import { formatDate, formatLocalDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
-import { checkCompatibilityNativePackages, defaultApiHost, isCompatible, useSupabase } from '~/services/supabase'
 import { isInternalVersionName, withBuiltinChannelVersion } from '~/services/versions'
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -90,7 +90,7 @@ const dialogStore = useDialogV2Store()
 const displayStore = useDisplayStore()
 const appDetailStore = useAppDetailStore()
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const packageId = ref<string>('')
 const id = ref<number>(0)
 const loading = ref(true)

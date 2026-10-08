@@ -1,12 +1,9 @@
 import type { Page } from '@playwright/test'
-import { env } from 'node:process'
-import { createClient } from '@supabase/supabase-js'
 import { getSupabaseWorktreeConfig } from '../../scripts/supabase-worktree-config'
 import { expect, test } from '../support/commands'
 
 const { ports: supabasePorts } = getSupabaseWorktreeConfig()
 const localSupabaseUrl = `http://127.0.0.1:${supabasePorts.api}`
-const localSupabaseAnonKey = env.SUPABASE_ANON_KEY || 'sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH'
 
 async function loginToOnboarding(page: Page, email: string, password: string) {
   await page.login(email, password, /\/onboarding\/app/)
@@ -52,18 +49,32 @@ async function continuePastChannelOnboardingIfShown(page: Page) {
 }
 
 async function forceWebNativeOnboardingTreatments(email: string, password: string) {
-  const supabase = createClient(localSupabaseUrl, localSupabaseAnonKey)
-  const { data: sessionData, error: signInError } = await supabase.auth.signInWithPassword({ email, password })
-  if (signInError || !sessionData.user)
-    throw signInError ?? new Error('Cannot sign in treatment user')
-
-  const { data: profile, error: profileError } = await supabase
-    .from('users')
-    .select('onboarding')
-    .eq('id', sessionData.user.id)
-    .single()
-  if (profileError)
-    throw profileError
+  const apiURL = `${localSupabaseUrl}/functions/v1`
+  const loginResponse = await fetch(`${apiURL}/auth/sign-in/email`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'origin': 'http://localhost:5173' },
+    body: JSON.stringify({ email, password }),
+  })
+  const session = await loginResponse.json()
+  if (!loginResponse.ok || !session.user || !session.token)
+    throw new Error(session.message ?? 'Cannot sign in treatment user')
+  const headers = { 'content-type': 'application/json', 'authorization': `Bearer capgo_session_${session.token}` }
+  const query = async (operations: { method: string, args: unknown[] }[]) => {
+    const response = await fetch(`${apiURL}/private/console/query`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ kind: 'table', name: 'users', args: [], operations }),
+    })
+    const result = await response.json()
+    if (!response.ok || result.error)
+      throw new Error(result.error?.message ?? 'Cannot update treatment user')
+    return result.data
+  }
+  const profile = await query([
+    { method: 'select', args: ['onboarding'] },
+    { method: 'eq', args: ['id', session.user.id] },
+    { method: 'single', args: [] },
+  ])
 
   const onboarding = profile.onboarding && typeof profile.onboarding === 'object' && !Array.isArray(profile.onboarding)
     ? profile.onboarding
@@ -71,29 +82,23 @@ async function forceWebNativeOnboardingTreatments(email: string, password: strin
   const abtests = onboarding.abtests && typeof onboarding.abtests === 'object' && !Array.isArray(onboarding.abtests)
     ? onboarding.abtests
     : {}
-  const { error: updateError } = await supabase
-    .from('users')
-    .update({
-      onboarding: {
-        ...onboarding,
-        abtests: {
-          ...abtests,
-          webnativeapp_publish_intent: {
-            assigned_at: new Date().toISOString(),
-            branch: 'A',
-          },
-          webnativeapp_development_environment: {
-            assigned_at: new Date().toISOString(),
-            branch: 'C',
-          },
+  await query([{ method: 'update', args: [{
+    onboarding: {
+      ...onboarding,
+      abtests: {
+        ...abtests,
+        webnativeapp_publish_intent: {
+          assigned_at: new Date().toISOString(),
+          branch: 'A',
+        },
+        webnativeapp_development_environment: {
+          assigned_at: new Date().toISOString(),
+          branch: 'C',
         },
       },
-    })
-    .eq('id', sessionData.user.id)
-  if (updateError)
-    throw updateError
-
-  await supabase.auth.signOut()
+    },
+  }] }, { method: 'eq', args: ['id', session.user.id] }])
+  await fetch(`${apiURL}/auth/sign-out`, { method: 'POST', headers, body: '{}' })
 }
 
 async function expectProtectedRouteRedirect(page: Page, targetPath: string, expectedUrl: RegExp, expectedSelector: string) {
@@ -210,9 +215,11 @@ test.describe('Registration', () => {
     await continueFromAppNameToIcon(page)
     await Promise.all([
       page.waitForResponse((response) => {
-        if (!response.url().includes('/rest/v1/users') || response.request().method() !== 'PATCH' || !response.ok())
+        if (!response.url().includes('/private/console/query') || !response.ok())
           return false
-        return (response.request().postData() ?? '').includes('"step":"organization"')
+        const query = response.request().postDataJSON()
+        return query.kind === 'table' && query.name === 'users'
+          && query.operations.some((op: { method: string, args: any[] }) => op.method === 'update' && op.args[0]?.onboarding?.step === 'organization')
       }),
       page.click('[data-test="app-onboarding-continue"]'),
     ])
@@ -305,7 +312,7 @@ test.describe('Registration', () => {
     await page.fill('[data-test="password"]', 'Password123!')
     await page.fill('[data-test="confirm-password"]', 'Password123!')
     await page.click('[data-test="submit"]')
-    await expect(page.locator('[data-test="form-error"]')).toContainText('User already registered')
+    await expect(page.locator('[data-test="form-error"]')).toContainText('User already exists. Use another email.')
   })
 
   test('should show error for deleted account email', async ({ page }) => {

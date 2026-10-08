@@ -9,7 +9,7 @@ import IconCircleDot from '~icons/lucide/circle-dot'
 import IconSettings from '~icons/lucide/settings-2'
 import IconSmartphone from '~icons/lucide/smartphone'
 import IconStore from '~icons/lucide/store'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { sendEvent } from '~/services/tracking'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -38,7 +38,7 @@ type ReleaseChannel = Pick<ChannelRow, ReleaseChannelKey>
 type ChannelUpdate = Database['public']['Tables']['channels']['Update']
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const organizationStore = useOrganizationStore()
 
 const isLoading = ref(true)

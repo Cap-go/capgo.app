@@ -1,5 +1,5 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
 import type { TableColumn } from '~/components/comp_def'
+import type { ConsoleClient } from '~/services/consoleClient'
 import type { DialogV2Button, DialogV2Options } from '~/stores/dialogv2'
 import type { Database } from '~/types/supabase.types'
 import { invokeCapgoApi } from '~/services/capgoApi'
@@ -30,7 +30,7 @@ export function shareInFlightApiKeyLoad(
 }
 
 export async function createDefaultApiKey(
-  supabase: SupabaseClient<Database>,
+  supabase: ConsoleClient<Database>,
   name: string,
   options: {
     orgId?: string | null
@@ -102,7 +102,7 @@ export async function createDefaultApiKey(
 }
 
 export async function createAiApiKey(
-  supabase: SupabaseClient<Database>,
+  supabase: ConsoleClient<Database>,
   name: string,
   options: {
     /** Organizations used for admin bindings or to validate each selected app's owner. */
@@ -160,7 +160,7 @@ export async function createAiApiKey(
 }
 
 export async function findUsablePlainApiKey(
-  supabase: SupabaseClient<Database>,
+  supabase: ConsoleClient<Database>,
   userId: string,
   orgId?: string | null,
   appId?: string | null,

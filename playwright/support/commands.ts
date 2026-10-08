@@ -1,4 +1,5 @@
 import { test as base, expect } from '@playwright/test'
+import { dismissSupportPrompt } from './dismissSupportPrompt'
 
 // Extend basic test fixture
 export const test = base.extend({
@@ -28,14 +29,17 @@ export const test = base.extend({
 
         try {
           await page.waitForURL(targetUrl, { timeout: attempt === 2 ? 30000 : 10000 })
-          return
         }
         catch (error) {
           const formError = await page.locator('[data-test="form-error"]').textContent({ timeout: 1000 }).catch(() => '')
           if (!formError?.includes('schema cache') || attempt === 2)
             throw error
           await page.waitForTimeout(1000)
+          continue
         }
+        if (email === 'test@capgo.app')
+          await dismissSupportPrompt(page)
+        return
       }
     }
 

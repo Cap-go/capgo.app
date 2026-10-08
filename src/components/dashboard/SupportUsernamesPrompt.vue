@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { toast } from 'vue-sonner'
 import OnboardingSupportUsernames from '~/components/dashboard/OnboardingSupportUsernames.vue'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import {
   dismissSupportUsernamesPromptForever,
   isOnboardingOrganizationSet,
@@ -20,7 +20,7 @@ const PROMPT_DELAY_MS = 2500
 const { t } = useI18n()
 const route = useRoute()
 const main = useMainStore()
-const supabase = useSupabase()
+const supabase = useConsole()
 const dialogStore = useDialogV2Store()
 const organizationStore = useOrganizationStore()
 

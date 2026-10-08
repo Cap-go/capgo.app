@@ -6,8 +6,8 @@ import { computed, h, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import IconSettings from '~icons/heroicons/cog-8-tooth'
+import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
-import { useSupabase } from '~/services/supabase'
 import { useMainStore } from '~/stores/main'
 import { getRbacRoleI18nKey, useOrganizationStore } from '~/stores/organization'
 
@@ -33,7 +33,7 @@ const emit = defineEmits([
 ])
 const { t } = useI18n()
 const isMobile = Capacitor.isNativePlatform()
-const supabase = useSupabase()
+const supabase = useConsole()
 const router = useRouter()
 const internalSearch = ref(props.search || '')
 const internalCurrentPage = ref(props.currentPage || 1)

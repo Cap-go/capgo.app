@@ -6,8 +6,8 @@ import arrowBack from '~icons/ion/arrow-back?width=2em&height=2em'
 import IconLoader from '~icons/lucide/loader-2'
 import InviteTeammateModal from '~/components/dashboard/InviteTeammateModal.vue'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
+import { getLocalConfig, isLocal, useConsole } from '~/services/console'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
-import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
@@ -27,7 +27,7 @@ const latestBundleId = ref<string>()
 const realtimeListener = ref(false)
 const pollTimer = ref<number | null>(null)
 const initialCount = ref<number | null>(null)
-const supabase = useSupabase()
+const supabase = useConsole()
 const main = useMainStore()
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()

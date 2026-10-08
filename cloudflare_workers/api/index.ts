@@ -1,3 +1,4 @@
+export { ConsoleEvents } from './console_events.ts'
 import type { ExecutionContext, ScheduledController } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
 import type { Bindings } from '../../supabase/functions/_backend/utils/cloudflare.ts'
@@ -6,6 +7,10 @@ import { app as accept_invitation } from '../../supabase/functions/_backend/priv
 import { app as bundle_install_stats } from '../../supabase/functions/_backend/private/bundle_install_stats.ts'
 import { app as channel_device } from '../../supabase/functions/_backend/private/channel_device.ts'
 import { app as channel_stats } from '../../supabase/functions/_backend/private/channel_stats.ts'
+import { consoleSessionMiddleware } from '../../supabase/functions/_backend/utils/console_auth.ts'
+import { app as consoleDownloadLink } from '../../supabase/functions/_backend/private/download_link.ts'
+import { app as console_auth } from '../../supabase/functions/_backend/private/console_auth.ts'
+import { app as console_data } from '../../supabase/functions/_backend/private/console_data.ts'
 import { app as config } from '../../supabase/functions/_backend/private/config.ts'
 import { app as configBuilder } from '../../supabase/functions/_backend/private/config_builder.ts'
 import { app as create_device } from '../../supabase/functions/_backend/private/create_device.ts'
@@ -26,8 +31,11 @@ import { app as native_observe_stats } from '../../supabase/functions/_backend/p
 import { app as observe } from '../../supabase/functions/_backend/private/observe.ts'
 import { app as onboarding_ab_tests } from '../../supabase/functions/_backend/private/onboarding_ab_tests.ts'
 import { app as onboarding_progress } from '../../supabase/functions/_backend/private/onboarding_progress.ts'
+import { app as org_billing } from '../../supabase/functions/_backend/private/org_billing.ts'
+import { app as org_members } from '../../supabase/functions/_backend/private/org_members.ts'
 import { app as org_notification_stats } from '../../supabase/functions/_backend/private/org_notification_stats.ts'
 import { app as organization_invitation } from '../../supabase/functions/_backend/private/organization_invitation.ts'
+import { app as orgs } from '../../supabase/functions/_backend/private/orgs.ts'
 import { app as plans } from '../../supabase/functions/_backend/private/plans.ts'
 import { app as publicStats } from '../../supabase/functions/_backend/private/public_stats.ts'
 import { app as release_live } from '../../supabase/functions/_backend/private/release_live.ts'
@@ -35,6 +43,7 @@ import { app as replay } from '../../supabase/functions/_backend/private/replay.
 import { app as request_manifest_upload } from '../../supabase/functions/_backend/private/request_manifest_upload.ts'
 import { app as role_bindings } from '../../supabase/functions/_backend/private/role_bindings.ts'
 // Manifest finalization validates size receipts issued by the files worker.
+import { app as roles } from '../../supabase/functions/_backend/private/roles.ts'
 import { app as set_manifest } from '../../supabase/functions/_backend/private/set_manifest.ts'
 import { app as set_org_email } from '../../supabase/functions/_backend/private/set_org_email.ts'
 import { app as sso_check_domain } from '../../supabase/functions/_backend/private/sso/check-domain.ts'
@@ -126,6 +135,8 @@ const functionName = 'api'
 const app = createHono(functionName, version)
 const functionNameScheduled = 'api-scheduled'
 const appScheduled = createHono(functionNameScheduled, version)
+app.use('*', consoleSessionMiddleware)
+app.route('/auth', console_auth)
 app.route('/ok', ok)
 app.route('/apikey', apikey)
 app.route('/bundle', bundle)
@@ -149,6 +160,8 @@ app.route('/', createMcpApp((request, c) => app.fetch(request, c.env, getExecuti
 // Private routes are bundled into this Cloudflare API worker at deploy time.
 const functionNamePrivate = 'private'
 const appPrivate = createHono(functionNamePrivate, version)
+appPrivate.route('/console', console_data)
+appPrivate.route('/download_link', consoleDownloadLink)
 appPrivate.route('/plans', plans)
 appPrivate.route('/credits', credits)
 appPrivate.route('/store_top', storeTop)
@@ -172,8 +185,11 @@ appPrivate.route('/native_observe_stats', native_observe_stats)
 appPrivate.route('/observe', observe)
 appPrivate.route('/onboarding_ab_tests', onboarding_ab_tests)
 appPrivate.route('/onboarding_progress', onboarding_progress)
+appPrivate.route('/org_members', org_members)
 appPrivate.route('/org_notification_stats', org_notification_stats)
 appPrivate.route('/organization_invitation', organization_invitation)
+appPrivate.route('/org_billing', org_billing)
+appPrivate.route('/orgs', orgs)
 appPrivate.route('/update_delivery_stats', update_delivery_stats)
 appPrivate.route('/bundle_install_stats', bundle_install_stats)
 appPrivate.route('/release_live', release_live)
@@ -190,6 +206,7 @@ appPrivate.route('/events', events)
 appPrivate.route('/finalize_bundle_upload', finalize_bundle_upload)
 appPrivate.route('/groups', groups)
 appPrivate.route('/role_bindings', role_bindings)
+appPrivate.route('/roles', roles)
 appPrivate.route('/website_preview', website_preview)
 appPrivate.route('/sso/check-domain', sso_check_domain)
 appPrivate.route('/sso/check-enforcement', sso_check_enforcement)

@@ -5,7 +5,7 @@ import { toast } from 'vue-sonner'
 import IconPlus from '~icons/heroicons/plus'
 import IconTrash from '~icons/heroicons/trash'
 import IconXMark from '~icons/heroicons/x-mark'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { getRbacRoleI18nKey } from '~/stores/organization'
 
@@ -38,7 +38,7 @@ const controlClass = 'd-select d-select-bordered min-h-10 w-full rounded-md bg-w
 const inputClass = 'd-input d-input-bordered min-h-10 w-full rounded-md bg-white text-sm text-slate-900 dark:bg-slate-900 dark:text-slate-100'
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const dialogStore = useDialogV2Store()
 
 const providerId = ref('')

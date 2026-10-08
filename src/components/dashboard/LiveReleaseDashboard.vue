@@ -15,9 +15,9 @@ import Spinner from '~/components/Spinner.vue'
 import { useNativeObserveStats } from '~/composables/useNativeObserveStats'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { groupCompatibilityEvents } from '~/services/compatibilityEvents'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatNumberValue } from '~/services/formatLocale'
 import { actionToFilter, updaterInsightActions } from '~/services/statsActions'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 // The app landing page (Observe > Live release) and the channel statistics
 // page share this one screen. On a channel page it is locked to that channel:
@@ -39,7 +39,7 @@ const emit = defineEmits<{
 provideChartCardCompact('dense')
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const { days } = usePeriodDaysQuery()
 
 const isChannelView = computed(() => props.channelId !== undefined)

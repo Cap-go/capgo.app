@@ -1,5 +1,5 @@
 import type { UserModule } from '~/types'
-import { defaultApiHost, getSpoofedAdminJwt, useSupabase } from '~/services/supabase'
+import { defaultApiHost, getSpoofedAdminJwt, useConsole } from '~/services/console'
 
 interface SsoEnforcementResponse {
   allowed: boolean
@@ -57,7 +57,7 @@ export const install: UserModule = ({ router }) => {
     if (isPublicRoute(to.path))
       return next()
 
-    const supabase = useSupabase()
+    const supabase = useConsole()
     const { data: { session } } = await supabase.auth.getSession()
 
     if (!session)

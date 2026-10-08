@@ -508,7 +508,6 @@ jobs:
             bun scripts/supabase-worktree.ts stop --no-backup || true
           fi
 
-
   # Serial plugin hot-path suite against Supabase edge (/updates, /stats, /channel_self).
   # Kept off the 6-way backend shard matrix — parallel Deno load causes intermittent 502s.
   test_backend_plugin:
@@ -621,7 +620,6 @@ jobs:
           if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
             bun scripts/supabase-worktree.ts stop --no-backup || true
           fi
-
 
   # Keep SQL/schema checks split so each job stays focused after a cold Supabase start.
   test_backend_sql:
@@ -767,7 +765,6 @@ jobs:
           if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
             bun scripts/supabase-worktree.ts stop --no-backup || true
           fi
-
 
   test_cloudflare:
     needs: changes
@@ -1048,12 +1045,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - shard: 1/3
+          - shard: 1/4
             supabase_port_offset: 5000
-          - shard: 2/3
+          - shard: 2/4
             supabase_port_offset: 5100
-          - shard: 3/3
+          - shard: 3/4
             supabase_port_offset: 5200
+          - shard: 4/4
+            supabase_port_offset: 5300
     env:
       SUPABASE_WORKTREE_INSTANCE: playwright-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
       SUPABASE_WORKTREE_PORT_OFFSET: ${{ matrix.supabase_port_offset }}

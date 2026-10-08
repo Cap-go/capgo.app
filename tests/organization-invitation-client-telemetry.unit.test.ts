@@ -9,7 +9,7 @@ vi.mock('~/services/posthog', () => ({
   pushEventForUser: pushEventForUserMock,
 }))
 
-vi.mock('~/services/supabase', () => ({
+vi.mock('~/services/console', () => ({
   getLocalConfig: () => ({ supaHost: 'https://sb.capgo.app' }),
 }))
 
