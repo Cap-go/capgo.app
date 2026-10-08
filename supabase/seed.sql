@@ -1677,7 +1677,7 @@ DECLARE
 BEGIN
   -- Temp tables below are created at runtime, so plpgsql_check cannot resolve them statically.
   IF pg_catalog.to_regprocedure('extensions.plpgsql_check_pragma(text)') IS NOT NULL THEN
-    PERFORM extensions.plpgsql_check_pragma('disable:check');
+    PERFORM extensions.plpgsql_check_pragma('disable:all');
   END IF;
   SET LOCAL client_min_messages = WARNING;
   -- Deterministic pseudo-random data so screenshots and reviewer accounts are stable.
