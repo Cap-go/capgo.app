@@ -74,7 +74,7 @@
         "@capgo/capacitor-native-audio": "^8.4.30",
         "@capgo/capacitor-native-biometric": "^8.7.0",
         "@capgo/capacitor-native-market": "^8.0.47",
-        "@capgo/capacitor-native-navigation": "^8.4.0",
+        "@capgo/capacitor-native-navigation": "^8.4.2",
         "@capgo/capacitor-nativegeocoder": "^8.0.51",
         "@capgo/capacitor-navigation-bar": "^8.2.10",
         "@capgo/capacitor-nfc": "^8.2.10",
@@ -212,7 +212,7 @@
     },
     "cli": {
       "name": "@capgo/cli",
-      "version": "8.75.0",
+      "version": "8.75.1",
       "bin": {
         "capgo": "dist/index.js",
       },
@@ -558,7 +558,7 @@
 
     "@capgo/capacitor-native-market": ["@capgo/capacitor-native-market@8.0.47", "", { "peerDependencies": { "@capacitor/core": ">=8.0.0" } }, "sha512-8LCzsAtY/RcHvYL6Zd1mK/sPg3+Se5TgStIW0oqYwEsgFh/2kyT6kanoU1++qZZ46N1hmPw5Xh3ko/MQ+aohBQ=="],
 
-    "@capgo/capacitor-native-navigation": ["@capgo/capacitor-native-navigation@8.4.0", "", { "peerDependencies": { "@capacitor/core": ">=8.0.0" } }, "sha512-fa2+LmA/B9gPUOCUh+dmHtYiX2s9L2xdkd3wAVKvXMBRM95xKwCDXIjuMKcE562klZsZsW9Rq2uYLEIIRYMA5Q=="],
+    "@capgo/capacitor-native-navigation": ["@capgo/capacitor-native-navigation@8.4.2", "", { "peerDependencies": { "@capacitor/core": ">=8.0.0" } }, "sha512-8A8ot94G6oyY+XZNGGaA6t9xitjGwRVd+MSN8Ej2EC7AETN6RCXtBwn8Qli3DOUfSZZTOR9ZNrPGqdsyRYaS2A=="],
 
     "@capgo/capacitor-nativegeocoder": ["@capgo/capacitor-nativegeocoder@8.0.51", "", { "peerDependencies": { "@capacitor/core": ">=8.0.0" } }, "sha512-4qK/mAhoL/c+hM9vRVAXjfpP1CCFJ1qbWOsdSsj+Ok7rXX8j7dVtjq4gPku2J16EmNBoJxnb2qIWb8CYRXtAZg=="],
 
