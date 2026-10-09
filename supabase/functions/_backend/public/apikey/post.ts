@@ -105,7 +105,7 @@ function parseOwnerOrgId(value: unknown): string | null {
 // A shared key belongs to one org: every binding must stay inside it, and it
 // cannot carry global permissions such as org.create.
 function assertSharedApiKeyBindings(ownerOrgId: string, bindings: BindingInput[], globalPermissions: string[]) {
-  if (bindings.some(binding => binding.org_id !== ownerOrgId)) {
+  if (bindings.some(binding => binding.org_id.toLowerCase() !== ownerOrgId.toLowerCase())) {
     throw simpleError('shared_apikey_single_org', 'Shared API keys can only have bindings in their owner organization')
   }
   if (globalPermissions.length > 0) {
@@ -263,7 +263,8 @@ app.post('/', middlewareAuth(), async (c) => {
       // its secret, and losing access must invalidate that secret.
       if (ownerOrgId !== null) {
         await assertCallerHoldsSharedApiKeyPermissions(txDrizzle, auth, apikeyData.rbac_id)
-        await stampSharedApiKeySecretRecipient(txDrizzle, auth, apikeyData.rbac_id)
+        const stamped = await stampSharedApiKeySecretRecipient(txDrizzle, auth, apikeyData.rbac_id)
+        apikeyData = { ...apikeyData, ...stamped }
       }
     })
 

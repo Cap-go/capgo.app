@@ -211,7 +211,11 @@ BEGIN
     WHERE apikeys.user_id = p_user_id
       AND apikeys.owner_org_id IS NOT NULL
       AND (p_org_id IS NULL OR apikeys.owner_org_id = p_org_id)
+    ORDER BY apikeys.owner_org_id
   LOOP
+    -- Serialize with concurrent admin removal so the chosen successor is
+    -- still eligible when the keys are reassigned.
+    PERFORM public.lock_rbac_orgs(v_org_id);
     v_successor_id := public.org_owned_apikey_successor_user_id(v_org_id, p_user_id);
 
     IF v_successor_id IS NULL THEN
@@ -1282,8 +1286,9 @@ EXECUTE FUNCTION public.audit_log_trigger();
 COMMENT ON TABLE public.audit_logs IS
 'Audit log for tracking changes to orgs, apps, channels, app_versions, org_users, shared (org-owned) apikeys, and their role_bindings';
 
--- Legacy ownership probe: for a shared key the owner is its org, not the
--- attributed user, so the answer does not change when user_id is transferred.
+-- Legacy ownership probe: for a shared key the answer comes from the key's own
+-- effective RBAC bindings on that app in its owner org, not from the attributed
+-- user, so it neither changes on user_id transfer nor widens app-scoped keys.
 CREATE OR REPLACE FUNCTION public.is_app_owner(apikey text, appid character varying)
 RETURNS boolean
 LANGUAGE plpgsql
@@ -1303,11 +1308,22 @@ BEGIN
       RETURN false;
     END IF;
 
-    RETURN EXISTS (
+    IF NOT EXISTS (
       SELECT 1
       FROM public.apps
       WHERE apps.app_id = appid
         AND apps.owner_org = v_api_key.owner_org_id
+    ) THEN
+      RETURN false;
+    END IF;
+
+    RETURN public.rbac_has_permission(
+      public.rbac_principal_apikey(),
+      v_api_key.rbac_id,
+      public.rbac_perm_app_read(),
+      v_api_key.owner_org_id,
+      appid,
+      NULL::bigint
     );
   END IF;
 

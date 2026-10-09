@@ -7,8 +7,10 @@ const mocks = vi.hoisted(() => ({
   ceiling: vi.fn(),
   lockOrgs: vi.fn(),
   execute: vi.fn(),
+  update: vi.fn(),
   withActor: vi.fn(),
   stampRecipient: vi.fn(),
+  replaceGlobalPermissions: vi.fn(),
 }))
 
 const ORG_ID = '00000000-0000-4000-8000-000000000111'
@@ -38,6 +40,11 @@ vi.mock('../supabase/functions/_backend/private/role_bindings.ts', () => ({
   createRoleBindingForPrincipal: vi.fn(),
   lockRbacOrgs: mocks.lockOrgs,
 }))
+vi.mock('../supabase/functions/_backend/public/apikey/global_permissions.ts', async importOriginal => ({
+  ...await importOriginal<typeof import('../supabase/functions/_backend/public/apikey/global_permissions.ts')>(),
+  assertApiKeyCanKeepOrgCreateGrant: mocks.replaceGlobalPermissions,
+  replaceApiKeyGlobalPermissions: mocks.replaceGlobalPermissions,
+}))
 vi.mock('../supabase/functions/_backend/public/apikey/scope.ts', () => ({
   assertApiKeyManagerCanAssignBindings: vi.fn(),
   assertApiKeyManagerCanRotateTarget: vi.fn(),
@@ -61,25 +68,35 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   validateExpirationDate: vi.fn(),
 }))
 
-async function rotate() {
+async function rotate(body: Record<string, unknown> = {}) {
   const { default: app } = await import('../supabase/functions/_backend/public/apikey/put.ts')
   return app.request('/', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: 41, regenerate: true }),
+    body: JSON.stringify({ id: 41, regenerate: true, ...body }),
   })
 }
 
 describe('shared API key rotation authorization transaction', () => {
   let events: string[]
   let rotated: boolean
-  let transaction: { execute: typeof mocks.execute }
+  let transaction: { execute: typeof mocks.execute, update: typeof mocks.update }
 
   beforeEach(() => {
     vi.clearAllMocks()
     events = []
     rotated = false
-    transaction = { execute: mocks.execute }
+    transaction = { execute: mocks.execute, update: mocks.update }
+    mocks.update.mockImplementation(() => ({
+      set: () => ({
+        where: () => ({
+          returning: async () => {
+            events.push('metadata-update')
+            return [{ id: 41 }]
+          },
+        }),
+      }),
+    }))
     mocks.withActor.mockImplementation(async (_c, _auth, callback) => {
       events.push('transaction')
       return callback(transaction)
@@ -143,6 +160,39 @@ describe('shared API key rotation authorization transaction', () => {
     expect(rotated).toBe(false)
     expect(events).toContain('principal-lock')
     expect(mocks.ceiling).toHaveBeenCalledWith(transaction, auth, RBAC_ID)
+  })
+
+  it('applies metadata only after the rotation rechecks pass', async () => {
+    const response = await rotate({ expires_at: null, name: 'renamed' })
+    expect(response.status).toBe(200)
+    expect(events).toEqual(['transaction', 'org-lock', 'principal-lock', 'row-lock', 'management-recheck', 'ceiling-recheck', 'metadata-update', 'rotate', 'stamp-recipient'])
+  })
+
+  it('does not write metadata when a combined rotation fails the permission ceiling', async () => {
+    mocks.ceiling.mockRejectedValue(new HTTPException(403, { cause: { error: 'forbidden_binding' } }))
+    const response = await rotate({ expires_at: null })
+    expect(response.status).toBe(403)
+    expect(rotated).toBe(false)
+    expect(mocks.update).not.toHaveBeenCalled()
+    expect(events).not.toContain('metadata-update')
+  })
+
+  it('does not write global permissions or metadata before a failed combined rotation', async () => {
+    mocks.ceiling.mockRejectedValue(new HTTPException(403, { cause: { error: 'forbidden_binding' } }))
+    const response = await rotate({ global_permissions: [], name: 'renamed' })
+    expect(response.status).toBe(403)
+    expect(rotated).toBe(false)
+    expect(mocks.update).not.toHaveBeenCalled()
+    expect(mocks.replaceGlobalPermissions).not.toHaveBeenCalled()
+    expect(events).toEqual(['transaction', 'org-lock', 'principal-lock', 'row-lock', 'management-recheck'])
+  })
+
+  it('returns the stamped shared secret recipient', async () => {
+    const stampedExpiry = '2030-01-01T00:00:00.000Z'
+    mocks.stampRecipient.mockResolvedValue({ shared_secret_user_id: USER_ID, shared_secret_expires_at: stampedExpiry })
+    const response = await rotate()
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ key: 'new-secret', shared_secret_user_id: USER_ID, shared_secret_expires_at: stampedExpiry })
   })
 
   it('does not issue a secret when the key was deleted after the initial lookup', async () => {

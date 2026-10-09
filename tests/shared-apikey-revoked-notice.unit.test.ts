@@ -30,6 +30,8 @@ const apiWorker = (await import('../cloudflare_workers/api/index.ts')).default
 const API_SECRET = 'test-secret'
 const ORG_ID = '22222222-2222-4222-8222-222222222222'
 const REMOVED_USER_ID = '11111111-1111-4111-8111-111111111111'
+// Below every fixture member id, so the page models rows the cursor query can return.
+const PAGE_CURSOR_USER_ID = '00000000-0000-4000-8000-000000000000'
 const originalApiSecret = process.env.API_SECRET
 
 function sendRevocation(record: unknown) {
@@ -53,6 +55,7 @@ describe('on_shared_apikey_secret_revoked trigger', () => {
     trackBentoRecipientEventsMock.mockResolvedValue(true)
     isBentoConfiguredMock.mockReturnValue(true)
     queryMock.mockReset()
+    closeClientMock.mockClear()
     queryMock.mockImplementation(async (text: string) => {
       if (text.includes('FROM public.orgs'))
         return { rows: [{ name: 'Acme CI' }] }
@@ -86,7 +89,7 @@ describe('on_shared_apikey_secret_revoked trigger', () => {
     expect(queryMock).toHaveBeenCalledTimes(2)
     expect(queryMock.mock.calls[1][0]).toContain('rb.scope_type = public.rbac_scope_org()')
     expect(queryMock.mock.calls[1][1]).toEqual([ORG_ID, null, 101])
-    expect(closeClientMock).toHaveBeenCalled()
+    expect(closeClientMock).toHaveBeenCalledTimes(1)
   })
 
   it('returns a retryable failure without advancing the cursor when Bento fails', async () => {
@@ -102,10 +105,10 @@ describe('on_shared_apikey_secret_revoked trigger', () => {
       email: `member-${index}@example.com`,
     }))
     queryMock.mockImplementation(async (text: string) => text.includes('FROM public.orgs') ? { rows: [{ name: 'Acme CI' }] } : { rows })
-    const response = await sendRevocation({ owner_org_id: ORG_ID, after_user_id: REMOVED_USER_ID })
+    const response = await sendRevocation({ owner_org_id: ORG_ID, after_user_id: PAGE_CURSOR_USER_ID })
     expect(response.status).toBe(200)
     expect((trackBentoRecipientEventsMock.mock.calls[0] as unknown[])[1]).toHaveLength(100)
-    expect(queryMock.mock.calls[1][1]).toEqual([ORG_ID, REMOVED_USER_ID, 101])
+    expect(queryMock.mock.calls[1][1]).toEqual([ORG_ID, PAGE_CURSOR_USER_ID, 101])
     const sendCall = queryMock.mock.calls.find(call => call[0].includes('pgmq.send'))!
     expect(sendCall[1][0]).toBe('on_shared_apikey_secret_revoked')
     expect(JSON.parse(sendCall[1][1]).payload.record).toEqual({ owner_org_id: ORG_ID, after_user_id: rows[99].id })

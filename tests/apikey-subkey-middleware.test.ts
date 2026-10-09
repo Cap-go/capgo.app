@@ -257,6 +257,20 @@ describe('x-limited-key-id delegation containment', () => {
     await expect(response.json()).resolves.toMatchObject({ error: 'invalid_subkey' })
   })
 
+  it.concurrent('rejects a shared parent adopting a personal same-user subkey', async () => {
+    const response = await fetch(`${BASE_URL}/app/${appA}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'capgkey': sharedParentKey,
+        'x-limited-key-id': String(limitedChildId),
+      },
+      body: JSON.stringify({ name: `Shared parent personal child ${runId}` }),
+    })
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toMatchObject({ error: 'invalid_subkey' })
+  })
+
   it.concurrent('rejects a personal parent adopting a shared subkey', async () => {
     const response = await fetch(`${BASE_URL}/app/${appA}`, {
       method: 'PUT',

@@ -83,7 +83,7 @@ vi.mock('../supabase/functions/_backend/public/apikey/global_permissions.ts', ()
 vi.mock('../supabase/functions/_backend/public/apikey/scope.ts', () => ({
   assertApiKeyManagerCanAssignBindings: assertApiKeyManagerCanAssignBindingsMock,
   assertApiKeyManagerCanRotateTarget: vi.fn(),
-  assertCallerCanTakeOverSharedApiKey: vi.fn(),
+  assertCallerHoldsSharedApiKeyPermissions: vi.fn(),
   ensureApiKeyCanManageTargetOrgIds: vi.fn(),
   ensureApiKeyManagementAllowed: ensureApiKeyManagementAllowedMock,
   getApiKeyBindingOrgIds: getApiKeyBindingOrgIdsMock,
@@ -93,6 +93,7 @@ vi.mock('../supabase/functions/_backend/public/apikey/scope.ts', () => ({
   sanitizeClientBindings: sanitizeClientBindingsMock,
   selectManageableApiKeyByIdentifier: selectManageableApiKeyByIdentifierMock,
   setApiKeyAuditActor: vi.fn(),
+  stampSharedApiKeySecretRecipient: vi.fn(),
   withApiKeyAuditActor: vi.fn(),
 }))
 

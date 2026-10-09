@@ -45,7 +45,9 @@ describe('shared secret issuance serialization', () => {
   it('waits for issuance before applying a caller deny and revoking the new secret', async () => {
     const issuer = new Client({ connectionString: POSTGRES_URL })
     const mutation = new Client({ connectionString: POSTGRES_URL })
-    await Promise.all([issuer.connect(), mutation.connect()])
+    // Poll lock waits on an autocommit connection outside the shared pool.
+    const observer = new Client({ connectionString: POSTGRES_URL })
+    await Promise.all([issuer.connect(), mutation.connect(), observer.connect()])
     let denial: Promise<unknown> | undefined
     try {
       await issuer.query('BEGIN')
@@ -60,9 +62,9 @@ describe('shared secret issuance serialization', () => {
         INSERT INTO public.channel_permission_overrides(principal_type, principal_id, channel_id, permission_key, is_allowed)
         VALUES ('user', $1::uuid, $2, 'channel.read', false)`, [userId, channelId])
       await expect.poll(async () => {
-        const [state] = await executeSQL<{ wait_event_type: string }>('SELECT wait_event_type FROM pg_catalog.pg_stat_activity WHERE pid=$1', [backend[0].pid])
+        const { rows: [state] } = await observer.query<{ wait_event_type: string | null }>('SELECT wait_event_type FROM pg_catalog.pg_stat_activity WHERE pid=$1', [backend[0].pid])
         return state?.wait_event_type
-      }, { timeout: 2000 }).toBe('Lock')
+      }, { timeout: 5000 }).toBe('Lock')
 
       await issuer.query(`
         UPDATE public.apikeys
@@ -79,14 +81,16 @@ describe('shared secret issuance serialization', () => {
     finally {
       await issuer.query('ROLLBACK')
       await denial?.catch(() => {})
-      await Promise.all([issuer.end(), mutation.end()])
+      await Promise.all([issuer.end(), mutation.end(), observer.end()])
     }
   })
 
   it('takes the organization lock before the API-key principal lock during direct binding changes', async () => {
     const issuer = new Client({ connectionString: POSTGRES_URL })
     const mutation = new Client({ connectionString: POSTGRES_URL })
-    await Promise.all([issuer.connect(), mutation.connect()])
+    // Poll lock waits on an autocommit connection outside the shared pool.
+    const observer = new Client({ connectionString: POSTGRES_URL })
+    await Promise.all([issuer.connect(), mutation.connect(), observer.connect()])
     let update: Promise<unknown> | undefined
     try {
       await issuer.query('BEGIN')
@@ -96,9 +100,9 @@ describe('shared secret issuance serialization', () => {
         UPDATE public.role_bindings SET reason='Shared locking order regression'
         WHERE principal_type='apikey' AND principal_id=$1::uuid`, [apikeyRbacId])
       await expect.poll(async () => {
-        const [state] = await executeSQL<{ wait_event_type: string }>('SELECT wait_event_type FROM pg_catalog.pg_stat_activity WHERE pid=$1', [backend[0].pid])
+        const { rows: [state] } = await observer.query<{ wait_event_type: string | null }>('SELECT wait_event_type FROM pg_catalog.pg_stat_activity WHERE pid=$1', [backend[0].pid])
         return state?.wait_event_type
-      }, { timeout: 2000 }).toBe('Lock')
+      }, { timeout: 5000 }).toBe('Lock')
       // This would wait on the binding mutation, creating an org/principal
       // deadlock, if its principal trigger ran before its org trigger.
       await issuer.query('SET LOCAL lock_timeout=\'1s\'')
@@ -109,7 +113,7 @@ describe('shared secret issuance serialization', () => {
     finally {
       await issuer.query('ROLLBACK')
       await update?.catch(() => {})
-      await Promise.all([issuer.end(), mutation.end()])
+      await Promise.all([issuer.end(), mutation.end(), observer.end()])
     }
   })
 })

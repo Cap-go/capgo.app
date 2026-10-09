@@ -723,22 +723,31 @@ const callerOrgPriorityByOrgId = computed(() => new Map(
   organizationStore.organizations.map(org => [org.gid, getRolePriority(org.role)]),
 ))
 
+// New shared keys only need org.manage_apikeys in their owner org, not
+// org.update_user_roles; roles reserved to role managers stay filtered below.
+const orgBindingManageableOrgIds = computed(() => createAsShared.value
+  ? new Set([...manageableOrgIds.value, ...sharedKeyOrgIds.value])
+  : manageableOrgIds.value)
+const ORG_ROLES_RESERVED_TO_ROLE_MANAGERS = new Set(['org_super_admin', 'org_admin'])
+
 const selectedOrgMinimumPriority = computed(() => {
-  const selectedManageableOrgIds = selectedOrgsForCreation.value.filter(orgId => manageableOrgIds.value.has(orgId))
+  const selectedManageableOrgIds = selectedOrgsForCreation.value.filter(orgId => orgBindingManageableOrgIds.value.has(orgId))
   if (selectedManageableOrgIds.length === 0)
     return 0
   return Math.min(...selectedManageableOrgIds.map(orgId => callerOrgPriorityByOrgId.value.get(orgId) ?? 0))
 })
 
-const orgRoleOptions = computed(() =>
-  orgRoles.value
+const orgRoleOptions = computed(() => {
+  const selectsNonRoleManagerOrg = selectedOrgsForCreation.value.some(orgId => !manageableOrgIds.value.has(orgId))
+  return orgRoles.value
     .filter(r => r.name !== 'org_super_admin' && r.priority_rank <= selectedOrgMinimumPriority.value)
-    .map(r => ({ id: r.id, name: r.name, description: getRoleDisplayName(r.name) })),
-)
+    .filter(r => !selectsNonRoleManagerOrg || !ORG_ROLES_RESERVED_TO_ROLE_MANAGERS.has(r.name))
+    .map(r => ({ id: r.id, name: r.name, description: getRoleDisplayName(r.name) }))
+})
 
 // Selected orgs where the caller only manages keys for some apps: the key must
 // be app-scoped and cannot carry roles reserved to role managers.
-const requiresAppOnlyScope = computed(() => selectedOrgsForCreation.value.some(orgId => !manageableOrgIds.value.has(orgId)))
+const requiresAppOnlyScope = computed(() => selectedOrgsForCreation.value.some(orgId => !orgBindingManageableOrgIds.value.has(orgId)))
 const APP_ROLES_RESERVED_TO_ROLE_MANAGERS = new Set(['app_admin', 'app_preview'])
 
 // Also re-applied when the modal resets appOnlyScope on open.
@@ -777,7 +786,7 @@ const filteredAppsForSelectedOrgs = computed(() => {
     return []
   return availableApps.value.filter(app =>
     selectedOrgsForCreation.value.includes(app.owner_org)
-    && (manageableOrgIds.value.has(app.owner_org) || appKeyManageableAppIds.value.has(app.id)),
+    && (orgBindingManageableOrgIds.value.has(app.owner_org) || appKeyManageableAppIds.value.has(app.id)),
   )
 })
 

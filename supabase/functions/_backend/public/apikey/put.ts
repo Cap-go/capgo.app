@@ -66,7 +66,7 @@ function assertSharedApiKeyUpdate(
   globalPermissions: string[] | undefined,
   requestId: string,
 ) {
-  if (bindings?.some(binding => binding.org_id !== ownerOrgId)) {
+  if (bindings?.some(binding => binding.org_id.toLowerCase() !== ownerOrgId.toLowerCase())) {
     throw simpleError('shared_apikey_single_org', 'Shared API keys can only have bindings in their owner organization', { requestId })
   }
   if (globalPermissions !== undefined && globalPermissions.length > 0) {
@@ -133,6 +133,11 @@ async function replaceApiKeyBindings(
         if (!(await checkPermissionPg(c, 'org.update_user_roles', { orgId }, txDrizzle, auth.userId))) {
           throw quickError(403, 'forbidden_binding', `Forbidden - Admin rights required for org ${orgId}`, { requestId: c.get('requestId'), orgId })
         }
+      }
+      // Shared keys are managed through org.manage_apikeys on their owner org;
+      // recheck it under the org lock before replacing their privileges.
+      if (apikey.owner_org_id && !(await checkPermissionPg(c, 'org.manage_apikeys', { orgId: apikey.owner_org_id }, txDrizzle, auth.userId, auth.apikey?.key ?? c.get('capgkey') ?? null))) {
+        throw quickError(403, 'cannot_update_apikey', 'API key management permission is required', { requestId: c.get('requestId') })
       }
       if (updateData && Object.keys(updateData).length > 0) {
         const result = await tx
@@ -380,7 +385,8 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
 
   // Validate expiration against org policies (only if expiration or scopes are changing)
   const currentBindingOrgIds = await getApiKeyBindingOrgIds(c, existingApikey.rbac_id)
-  await ensureApiKeyCanManageTargetOrgIds(c, auth, authApikey, currentBindingOrgIds, 'cannot_update_apikey', { requestId })
+  // Shared keys belong to their owner org even when their bindings expired.
+  await ensureApiKeyCanManageTargetOrgIds(c, auth, authApikey, existingApikey.owner_org_id ? [existingApikey.owner_org_id] : currentBindingOrgIds, 'cannot_update_apikey', { requestId })
   if (existingApikey.owner_org_id) {
     assertSharedApiKeyUpdate(existingApikey.owner_org_id, bindings, globalPermissions, requestId)
   }
@@ -400,6 +406,12 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
   }
 
   const isHashedKey = existingApikey.key_hash !== null
+  // A shared rotation must authorize before any write, so its name/expires_at
+  // change is applied inside the rotation transaction after the rechecks.
+  // Shared keys only accept empty global_permissions and never hold any, so
+  // that write is a no-op and is skipped rather than committed early.
+  const isSharedRotation = !!regenerate && !!existingApikey.owner_org_id
+  const writeMetadataInRotation = isSharedRotation && isHashedKey && hasUpdates && !hasBindingUpdates
 
   const writeSupabase = supabaseAdmin(c)
 
@@ -422,7 +434,7 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
     }
     updatedApikey = toApiKeyPublicRow(updatedData as ApiKeyPublicSelectRow)
   }
-  else if (hasGlobalPermissionUpdates) {
+  else if (hasGlobalPermissionUpdates && !isSharedRotation) {
     await replaceApiKeyGlobalPermissionsForExistingBindings(c, auth, {
       id: existingApikey.id,
       rbac_id: existingApikey.rbac_id,
@@ -439,7 +451,7 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
     }
     updatedApikey = toApiKeyPublicRow(updatedData as ApiKeyPublicSelectRow)
   }
-  else if (hasUpdates) {
+  else if (hasUpdates && !writeMetadataInRotation) {
     const updatedRows = await withApiKeyAuditActor(c, auth, async (tx) => {
       if (existingApikey.owner_org_id) {
         await lockRbacOrgs(tx, [existingApikey.owner_org_id])
@@ -494,12 +506,25 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
           }
           await assertCallerHoldsSharedApiKeyPermissions(tx, auth, lockedApikey.rbac_id)
           attributedUserId = lockedApikey.user_id
+          if (writeMetadataInRotation) {
+            const updatedRows = await tx
+              .update(schema.apikeys)
+              .set(toDrizzleApiKeyUpdate(updateData))
+              .where(sql`${schema.apikeys.id} = ${existingApikey.id}`)
+              .returning({ id: schema.apikeys.id })
+            if (updatedRows.length === 0) {
+              throw quickError(500, 'failed_to_update_apikey', 'Failed to update API key', { requestId, apikeyId: existingApikey.id })
+            }
+          }
         }
         const result = await tx.execute<ApiKeyRow>(sql`SELECT * FROM public.regenerate_hashed_apikey_for_user(${existingApikey.id}::bigint, ${attributedUserId}::uuid)`)
-        if (existingApikey.owner_org_id && result.rows[0]) {
-          await stampSharedApiKeySecretRecipient(tx, auth, existingApikey.rbac_id!)
+        const rotatedApikey = result.rows[0]
+        if (existingApikey.owner_org_id && rotatedApikey) {
+          // The rotation row predates the stamp; answer with the stamped values.
+          const stamped = await stampSharedApiKeySecretRecipient(tx, auth, existingApikey.rbac_id!)
+          return { ...rotatedApikey, ...stamped }
         }
-        return result.rows[0]
+        return rotatedApikey
       })
       if (!regeneratedApikey) {
         throw quickError(500, 'failed_to_update_apikey', 'Failed to regenerate API key', { requestId, apikeyId: existingApikey.id })

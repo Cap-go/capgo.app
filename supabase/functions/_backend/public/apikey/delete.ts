@@ -32,9 +32,13 @@ app.delete('/:id', middlewareAuth(), async (c) => {
   if (auth.authType === 'apikey' && authApikey?.id === apikey.id) {
     throw quickError(401, 'cannot_delete_apikey', 'API keys cannot delete themselves', { apikeyId: authApikey.id })
   }
-  await ensureApiKeyCanManageTargetOrgIds(c, auth, authApikey, apikey.rbac_id ? await getApiKeyBindingOrgIds(c, apikey.rbac_id) : [], 'cannot_delete_apikey')
+  // Shared keys belong to their owner org even when their bindings expired.
+  const targetOrgIds = apikey.owner_org_id
+    ? [apikey.owner_org_id]
+    : (apikey.rbac_id ? await getApiKeyBindingOrgIds(c, apikey.rbac_id) : [])
+  await ensureApiKeyCanManageTargetOrgIds(c, auth, authApikey, targetOrgIds, 'cannot_delete_apikey')
 
-  const { error } = await deleteManageableApiKeyById(c, auth, apikey.id)
+  const { error } = await deleteManageableApiKeyById(c, auth, apikey)
 
   if (error) {
     throw quickError(500, 'failed_to_delete_apikey', 'Failed to delete API key', { supabaseError: error })

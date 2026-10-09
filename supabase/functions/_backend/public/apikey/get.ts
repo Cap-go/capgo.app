@@ -29,6 +29,8 @@ interface ApiKeyBindingSummary {
   scope_type: string
   org_id: string | null
   app_id: string | null
+  // channels.rbac_id, the same id PUT /apikey accepts as a binding channel_id.
+  channel_id: string | null
   role_name: string
 }
 
@@ -55,7 +57,7 @@ async function withGlobalPermissionsAndBindings<T extends { rbac_id: string | nu
         [rbacIds],
       ),
       pgClient.query<ApiKeyBindingSummary & { principal_id: string }>(
-        `SELECT rb.id::text, rb.principal_id::text, rb.scope_type, rb.org_id::text, rb.app_id::text, r.name AS role_name
+        `SELECT rb.id::text, rb.principal_id::text, rb.scope_type, rb.org_id::text, rb.app_id::text, rb.channel_id::text, r.name AS role_name
          FROM public.role_bindings rb
          JOIN public.roles r ON r.id = rb.role_id
          WHERE rb.principal_type = public.rbac_principal_apikey()
@@ -165,7 +167,11 @@ app.get('/:id', middlewareAuth(), async (c) => {
   if (error || !fetchedApikey) {
     throw quickError(404, 'failed_to_get_apikey', 'Failed to get API key', { supabaseError: error })
   }
-  await ensureApiKeyCanManageTargetOrgIds(c, auth, authApikey, fetchedApikey.rbac_id ? await getApiKeyBindingOrgIds(c, fetchedApikey.rbac_id) : [], 'cannot_get_apikey')
+  // Shared keys belong to their owner org even when their bindings expired.
+  const targetOrgIds = fetchedApikey.owner_org_id
+    ? [fetchedApikey.owner_org_id]
+    : (fetchedApikey.rbac_id ? await getApiKeyBindingOrgIds(c, fetchedApikey.rbac_id) : [])
+  await ensureApiKeyCanManageTargetOrgIds(c, auth, authApikey, targetOrgIds, 'cannot_get_apikey')
   const [apikeyWithPermissions] = await withGlobalPermissionsAndBindings(c, [toApiKeyPublicRow(fetchedApikey)])
   return c.json(apikeyWithPermissions)
 })

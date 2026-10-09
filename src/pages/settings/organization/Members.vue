@@ -775,10 +775,14 @@ async function showSharedKeysRevokedDialog(keys: SharedApiKeySummary[]) {
   await dialogStore.onDialogDismiss()
 }
 
-async function didCancel(sharedKeys: SharedApiKeySummary[] = []) {
-  const sharedKeysWarning = sharedKeys.length > 0
+function sharedKeysRevocationWarning(sharedKeys: SharedApiKeySummary[]) {
+  return sharedKeys.length > 0
     ? ` ${t('member-delete-shared-apikeys-warning')} ${sharedKeys.map(key => key.name).join(', ')}.`
     : ''
+}
+
+async function didCancel(sharedKeys: SharedApiKeySummary[] = []) {
+  const sharedKeysWarning = sharedKeysRevocationWarning(sharedKeys)
   dialogStore.openDialog({
     title: t('alert-confirm-delete'),
     description: `${t('alert-not-reverse-message')} ${t('alert-delete-message')}?${sharedKeysWarning}`,
@@ -799,6 +803,10 @@ async function didCancel(sharedKeys: SharedApiKeySummary[] = []) {
 }
 
 async function cannotDeleteOwner() {
+  // Delegating removes the current super admin, revoking the shared key
+  // secrets issued to them; warn before the transfer like a regular removal.
+  const currentUserMember = members.value.find(m => m.uid === main.user?.id)
+  const sharedKeys = currentUserMember ? await loadSharedKeysIssuedTo(currentUserMember) : []
   dialogStore.openDialog({
     title: t('alert-cannot-delete-owner-title'),
     description: `${t('alert-cannot-delete-owner-body')}`,
@@ -821,7 +829,7 @@ async function cannotDeleteOwner() {
         handler: () => {
           dialogStore.openDialog({
             title: t('delegate-super-admin-title'),
-            description: t('select-user-delegate-admin'),
+            description: `${t('select-user-delegate-admin')}${sharedKeysRevocationWarning(sharedKeys)}`,
             size: 'xl',
             buttons: [
               {
@@ -847,7 +855,7 @@ async function cannotDeleteOwner() {
 
                   _changeMemberPermission(selectedUser, 'org_super_admin')
                   selectedUserToDelegateAdmin.value = null
-                  _deleteMember(currentMember)
+                  _deleteMember(currentMember, sharedKeys)
                   // redirect to /app
                   router.push('/apps')
 
@@ -976,13 +984,13 @@ async function deleteMember(member: OrganizationMemberRow) {
     return
   }
 
-  const sharedKeys = await loadSharedKeysIssuedTo(member)
-  if (await didCancel(sharedKeys)) {
+  if (member.aid === 0) {
+    toast.error(t('cannot-delete-owner'))
     return
   }
 
-  else if (member.aid === 0) {
-    toast.error(t('cannot-delete-owner'))
+  const sharedKeys = await loadSharedKeysIssuedTo(member)
+  if (await didCancel(sharedKeys)) {
     return
   }
 

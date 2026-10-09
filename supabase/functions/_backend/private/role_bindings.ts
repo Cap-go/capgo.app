@@ -316,7 +316,7 @@ async function validateApiKeyPrincipalAccess(
 
   // Shared keys belong to their org, not to the attributed user.
   if (apiKey.owner_org_id) {
-    if (apiKey.owner_org_id === orgId) {
+    if (apiKey.owner_org_id.toLowerCase() === orgId.toLowerCase()) {
       return { ok: true, data: null }
     }
     cloudlogErr({

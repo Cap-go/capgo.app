@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { AuthInfo, MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { sql } from 'drizzle-orm'
+import { getErrorStatus } from '../../utils/errors.ts'
 import { quickError } from '../../utils/hono.ts'
 import { assertJwtMfaAssurance } from '../../utils/jwt_mfa_assurance.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
@@ -278,7 +279,7 @@ export async function ensureApiKeyCanManageTargetOrgIds(
     throw quickError(401, errorCode, 'API key cannot manage this API key', { ...moreInfo, apikeyId: authApikey?.id ?? auth.apikey?.id })
   }
 }
-export async function filterApiKeysManageableByAuth<T extends Pick<ApiKeyRow, 'rbac_id'>>(
+export async function filterApiKeysManageableByAuth<T extends Pick<ApiKeyRow, 'rbac_id'> & Partial<Pick<ApiKeyRow, 'owner_org_id'>>>(
   c: Context<MiddlewareKeyVariables>,
   auth: AuthInfo,
   authApikey: ApiKeyRow | undefined,
@@ -296,6 +297,10 @@ export async function filterApiKeysManageableByAuth<T extends Pick<ApiKeyRow, 'r
   const apikeyRbacIds = apikeys.map(apikey => apikey.rbac_id).filter((rbacId): rbacId is string => !!rbacId)
   const orgIdsByRbacId = await loadApiKeyBindingOrgIdsForRbacIds(c, apikeyRbacIds)
   return apikeys.filter((apikey) => {
+    // Shared keys belong to their owner org even when their bindings expired.
+    if (apikey.owner_org_id) {
+      return manageableOrgIds.has(apikey.owner_org_id)
+    }
     if (!apikey.rbac_id) {
       return false
     }
@@ -343,14 +348,31 @@ export async function selectManageableApiKeyByIdentifier<T = ApiKeyRow>(
 
 // Call only after selectManageableApiKeyByIdentifier authorized this key.
 // JWT callers delete through RLS (the audit trigger sees auth.uid()); API-key
-// callers delete on a service connection that carries the calling key as actor.
-export async function deleteManageableApiKeyById(c: Context<MiddlewareKeyVariables>, auth: AuthInfo, apikeyId: number): Promise<{ error: unknown }> {
+// callers delete on a service connection that carries the calling key as actor,
+// so shared keys recheck org.manage_apikeys under the owner-org lock.
+export async function deleteManageableApiKeyById(
+  c: Context<MiddlewareKeyVariables>,
+  auth: AuthInfo,
+  apikey: Pick<ApiKeyRow, 'id' | 'owner_org_id'>,
+): Promise<{ error: unknown }> {
   if (auth.authType === 'apikey') {
     try {
-      await withApiKeyAuditActor(c, auth, tx => tx.execute(sql`DELETE FROM public.apikeys WHERE id = ${apikeyId}::bigint`))
+      await withApiKeyAuditActor(c, auth, async (tx) => {
+        if (apikey.owner_org_id) {
+          // Same advisory lock as lockRbacOrgs in private/role_bindings.ts.
+          await tx.execute(sql`SELECT public.lock_rbac_orgs(${apikey.owner_org_id}::uuid)`)
+          if (!(await checkPermissionPg(c, 'org.manage_apikeys', { orgId: apikey.owner_org_id }, tx, auth.userId, auth.apikey?.key ?? c.get('capgkey') ?? null))) {
+            throw quickError(403, 'cannot_delete_apikey', 'API key management permission is required')
+          }
+        }
+        await tx.execute(sql`DELETE FROM public.apikeys WHERE id = ${apikey.id}::bigint`)
+      })
       return { error: null }
     }
     catch (error) {
+      if (getErrorStatus(error)) {
+        throw error
+      }
       return { error }
     }
   }
@@ -358,7 +380,7 @@ export async function deleteManageableApiKeyById(c: Context<MiddlewareKeyVariabl
   return supabaseWithAuth(c, auth)
     .from('apikeys')
     .delete()
-    .eq('id', apikeyId)
+    .eq('id', apikey.id)
 }
 
 type DrizzleExecutor = Pick<ReturnType<typeof getDrizzleClient>, 'execute'>
@@ -486,15 +508,16 @@ export async function assertCallerHoldsSharedApiKeyPermissions(
 
 // Rotation replaces the only live secret, so its issuing user is its current
 // recipient. Expiring access grants bound the secret lifetime without a cron.
+// Returns the stamped columns so callers can answer with the fresh values.
 export async function stampSharedApiKeySecretRecipient(
   db: DrizzleExecutor,
   auth: AuthInfo,
   apikeyRbacId: string,
-) {
+): Promise<Pick<ApiKeyRow, 'shared_secret_user_id' | 'shared_secret_expires_at'> | undefined> {
   if (auth.authType !== 'jwt' || !auth.userId) {
     throw quickError(403, 'cannot_update_apikey', 'Only user sessions can receive shared API key secrets')
   }
-  await db.execute(sql`
+  const result = await db.execute<Pick<ApiKeyRow, 'shared_secret_user_id' | 'shared_secret_expires_at'>>(sql`
     UPDATE public.apikeys AS apikey
     SET shared_secret_user_id = ${auth.userId}::uuid,
         shared_secret_expires_at = (
@@ -521,7 +544,9 @@ export async function stampSharedApiKeySecretRecipient(
         )
     WHERE apikey.rbac_id = ${apikeyRbacId}::uuid
       AND apikey.owner_org_id IS NOT NULL
+    RETURNING apikey.shared_secret_user_id, apikey.shared_secret_expires_at
   `)
+  return result.rows[0]
 }
 
 // Backend writes use a service connection, so the audit trigger cannot see the

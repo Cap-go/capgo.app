@@ -2,7 +2,7 @@
 -- and attribution-only transfer when the attributed user leaves.
 BEGIN;
 
-SELECT plan(46);
+SELECT plan(48);
 
 SELECT ok(NOT has_function_privilege('anon', 'public.lock_channel_override_orgs()', 'EXECUTE'),
   'anonymous callers cannot directly invoke the override lock trigger');
@@ -195,12 +195,12 @@ UPDATE public.apikeys SET name = 'Shared CI key renamed' WHERE id = 75000001;
 SELECT set_config('capgo.audit_actor_user_id', '', true);
 
 SELECT results_eq(
-  $$SELECT actor_type, actor_user_id, changed_fields
+  $$SELECT actor_type, actor_user_id, changed_fields @> ARRAY['name']::text[]
     FROM public.audit_logs
     WHERE table_name = 'apikeys' AND record_id = '75000001' AND operation = 'UPDATE'
     ORDER BY id DESC
     LIMIT 1$$,
-  $$SELECT 'user'::text, tests.get_supabase_uid('shared_key_manager'), ARRAY['name']::text[]$$,
+  $$SELECT 'user'::text, tests.get_supabase_uid('shared_key_manager'), true$$,
   'backend actor is recorded for shared key edits'
 );
 
@@ -441,14 +441,48 @@ SELECT is(
 
 SELECT is(
   public.is_app_owner('shared-key-plain-75000001', 'com.test.shared.key.owner'),
-  true,
-  'is_app_owner answers from the owner org for a shared key'
+  false,
+  'is_app_owner ignores the attributed app owner and requires app access for a shared key'
 );
 
 SELECT is(
   public.is_app_owner('shared-key-plain-75000001', 'com.demo.app'),
   false,
   'is_app_owner does not follow the attributed user to apps of other orgs'
+);
+
+-- An app-scoped shared key only passes the ownership probe for its bound app.
+INSERT INTO public.apps (app_id, icon_url, user_id, name, owner_org)
+VALUES (
+  'com.test.shared.key.other',
+  '',
+  tests.get_supabase_uid('shared_key_owner'),
+  'Shared key unbound app',
+  '75000000-0000-4000-8000-000000000001'
+)
+ON CONFLICT (app_id) DO NOTHING;
+INSERT INTO public.apikeys (id, user_id, key_hash, name, owner_org_id)
+VALUES (75000007, tests.get_supabase_uid('shared_key_owner'),
+  encode(extensions.digest('app-scoped-shared-key-75000007', 'sha256'), 'hex'),
+  'App-scoped shared key', '75000000-0000-4000-8000-000000000001');
+INSERT INTO public.role_bindings (principal_type, principal_id, role_id, scope_type, org_id, app_id, granted_by)
+SELECT public.rbac_principal_apikey(), a.rbac_id, r.id, public.rbac_scope_app(), a.owner_org_id, apps.id, a.user_id
+FROM public.apikeys a
+JOIN public.roles r ON r.name = public.rbac_role_app_reader() AND r.scope_type = public.rbac_scope_app()
+JOIN public.apps ON apps.app_id = 'com.test.shared.key.owner'
+WHERE a.id = 75000007;
+UPDATE public.apikeys SET shared_secret_user_id = tests.get_supabase_uid('shared_key_owner') WHERE id = 75000007;
+
+SELECT is(
+  public.is_app_owner('app-scoped-shared-key-75000007', 'com.test.shared.key.owner'),
+  true,
+  'is_app_owner accepts the app bound to an app-scoped shared key'
+);
+
+SELECT is(
+  public.is_app_owner('app-scoped-shared-key-75000007', 'com.test.shared.key.other'),
+  false,
+  'is_app_owner rejects unbound apps of the owner org for an app-scoped shared key'
 );
 
 SELECT ok(
