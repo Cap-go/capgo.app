@@ -1708,7 +1708,11 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       // Write normalized value back so splitPayload picks it up
       mergedCredentials.CAPGO_IOS_DISTRIBUTION = distributionMode
       const rawXcodeVersion = mergedCredentials.CAPGO_IOS_XCODE_VERSION
-      if (rawXcodeVersion !== undefined) {
+      // An empty saved value means "any machine", same as unset.
+      if (rawXcodeVersion !== undefined && !rawXcodeVersion.trim()) {
+        delete mergedCredentials.CAPGO_IOS_XCODE_VERSION
+      }
+      else if (rawXcodeVersion !== undefined) {
         const xcodeVersion = normalizeMachineVersion(rawXcodeVersion)
         if (xcodeVersion) {
           mergedCredentials.CAPGO_IOS_XCODE_VERSION = xcodeVersion
