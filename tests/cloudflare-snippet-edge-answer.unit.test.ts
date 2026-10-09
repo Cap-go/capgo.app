@@ -225,6 +225,25 @@ describe('cloudflare snippet edge answers', () => {
     expect(await answered.json()).toEqual({ status: 'ok' })
   })
 
+  it('sends /stats to the worker when the stat header would be cut by Logpush', async () => {
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const events = JSON.parse(new TextDecoder().decode(init?.body as ArrayBuffer)) as unknown[]
+      return new Response(JSON.stringify({ status: 'ok', results: events.map((_, index) => ({ status: 'ok', index })) }), {
+        status: 200,
+        headers: { 'X-Capgo-Edge-Fill': statsFill },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await snippet.fetch(buildRequest('/stats', [statsEvent()]))
+
+    // Under the 6000 byte body cap, but JSON escaping plus base64 passes 8000.
+    const batch = Array.from({ length: 28 }, () => statsEvent())
+    expect(JSON.stringify(batch).length).toBeLessThan(6000)
+    const response = await snippet.fetch(buildRequest('/stats', batch))
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(response.headers.get('X-Capgo-Edge-Stat')).toBeNull()
+  })
+
   it('keeps every path within the 5 subrequest snippet budget', async () => {
     let failPrimary = true
     const fetchMock = vi.fn(async (url: unknown) => {

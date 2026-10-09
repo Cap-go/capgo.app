@@ -33,6 +33,9 @@ const MAX_EDGE_VARIANTS = 32
 const MAX_EDGE_ACTIONS = 64
 // Logpush header fields and the replay queue messages stay small.
 const MAX_EDGE_STAT_BODY_BYTES = 6000
+// Logpush cuts response header fields at 8192 bytes (measured); a cut stat
+// can't be decoded, so bigger ones go to the worker.
+const MAX_EDGE_STAT_HEADER_BYTES = 8000
 const APP_ID_RE = /^[a-z0-9]+(?:\.[\w-]+)+$/i
 const DEVICE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const PLAIN_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
@@ -501,13 +504,19 @@ function base64UrlEncode(text) {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
-function edgeAnswerResponse(body, stat) {
+/** Encodes the stat for Logpush, or returns null when it would be cut. */
+function edgeStatHeader(stat) {
+  const value = base64UrlEncode(JSON.stringify(stat))
+  return value.length <= MAX_EDGE_STAT_HEADER_BYTES ? value : null
+}
+
+function edgeAnswerResponse(body, statHeader) {
   return new Response(body, {
     status: 200,
     headers: {
       'Content-Type': 'application/json',
       'X-Capgo-Edge': 'answer',
-      [EDGE_STAT_HEADER]: base64UrlEncode(JSON.stringify(stat)),
+      [EDGE_STAT_HEADER]: statHeader,
     },
   })
 }
@@ -525,11 +534,12 @@ async function tryEdgeAnswer(budget, request, hostname, endpoint, appId, body, r
     // An up-to-date answer confirms the bundle name: never give it to an IP
     // the worker's update enumeration guard limited.
     const ip = request.headers.get('cf-connecting-ip')
-    if (!ip || !canSpend(budget, 1, 2))
+    const statHeader = edgeStatHeader({ e: 'updates', b: rawBody, o: fill.o, a: fill.a, n: fill.n })
+    if (!ip || !statHeader || !canSpend(budget, 1, 2))
       return null
     if (await cacheMatch(budget, getIpLimitCacheKey(hostname, ip)))
       return null
-    return edgeAnswerResponse(fill.r, { e: 'updates', b: rawBody, o: fill.o, a: fill.a, n: fill.n })
+    return edgeAnswerResponse(fill.r, statHeader)
   }
 
   if (endpoint === 'stats') {
@@ -539,10 +549,13 @@ async function tryEdgeAnswer(budget, request, hostname, endpoint, appId, body, r
       return null
     if (!events.every(event => isAnswerableStatsEvent(event, appId, fill.actions)))
       return null
+    const statHeader = edgeStatHeader({ e: 'stats', b: rawBody })
+    if (!statHeader)
+      return null
     const answer = Array.isArray(body)
       ? { status: 'ok', results: events.map((_, index) => ({ status: 'ok', index })) }
       : { status: 'ok' }
-    return edgeAnswerResponse(JSON.stringify(answer), { e: 'stats', b: rawBody })
+    return edgeAnswerResponse(JSON.stringify(answer), statHeader)
   }
 
   return null

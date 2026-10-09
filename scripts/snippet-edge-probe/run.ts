@@ -17,8 +17,8 @@
  *   5. real snippet end to end: learn, answer without origin, purge, IP limit
  *
  * Env: CLOUDFLARE_API_TOKEN with, on capgo.app: Snippets Edit, DNS Edit,
- * Cache Purge, Logs Edit, Zone Read (+ the account-level Workers/R2 rights
- * for wrangler, or a wrangler login). Optional CLOUDFLARE_ACCOUNT_ID.
+ * Cache Purge, Logs Edit, Zone Read. Wrangler (Worker deploy, R2 bucket)
+ * runs on the local wrangler login. Optional CLOUDFLARE_ACCOUNT_ID.
  *
  *   bun scripts/snippet-edge-probe/run.ts setup [--dry-run]
  *   bun scripts/snippet-edge-probe/run.ts test
@@ -79,7 +79,9 @@ async function cf<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 function wrangler(args: string[], input?: string) {
   console.log(`$ wrangler ${args.join(' ')}`)
-  const child = spawnSync('bunx', ['wrangler', ...args], { cwd: DIR, input, encoding: 'utf8' })
+  // The zone token has no Workers/R2 rights: wrangler runs on its own login.
+  const { CLOUDFLARE_API_TOKEN: _zoneToken, ...env } = process.env
+  const child = spawnSync('bunx', ['wrangler', ...args], { cwd: DIR, input, encoding: 'utf8', env })
   const output = `${child.stdout}${child.stderr}`
   if (child.status !== 0 && !/already exists|already been taken|10004|not found|does not exist/i.test(output))
     throw new Error(output)
