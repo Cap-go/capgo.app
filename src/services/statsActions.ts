@@ -6,6 +6,7 @@ export const statsActionFilters = [
   ['action-get', 'get'],
   ['action-set-fail', 'set_fail'],
   ['action-update-fail', 'update_fail'],
+  ['action-update-check-error', 'update_check_error'],
   ['action-download-fail', 'download_fail'],
   ['action-windows-path-fail', 'windows_path_fail'],
   ['action-canonical-path-fail', 'canonical_path_fail'],

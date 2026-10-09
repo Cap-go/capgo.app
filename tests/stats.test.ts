@@ -4,6 +4,7 @@ import { env } from 'node:process'
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ALLOWED_STATS_ACTIONS, isRunningVersionAction } from '../supabase/functions/_backend/plugin_runtime/plugins/stats_actions.ts'
+import { isDroppedStatsLogAction } from '../supabase/functions/_backend/plugin_runtime/utils/plugin_stats.ts'
 import { APP_NAME, createAppVersions, executeSQL, fetchTestRequest, getBaseData, getSupabaseClient, getVersionFromAction, headers, ORG_ID, PLUGIN_BASE_URL, resetAndSeedAppData, resetAndSeedAppDataStats, resetAppData, resetAppDataStats, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
 
 const id = randomUUID()
@@ -19,11 +20,6 @@ interface StatsRes {
 }
 
 type StatsAction = Database['public']['Enums']['stats_action']
-
-// Mirrors isDroppedStatsLogAction: download_10..download_90 are not stored.
-function isDroppedDownloadProgressAction(action: string) {
-  return /^download_[1-9]0$/.test(action)
-}
 
 interface StatsPayload extends ReturnType<typeof getBaseData> {
   action: StatsAction
@@ -496,24 +492,45 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
 
           // Verify stats entry. Intermediate download progress is intentionally
           // not stored (see isDroppedStatsLogAction in plugin_stats.ts).
-          if (isDroppedDownloadProgressAction(action)) {
-            const { count, error: statsError } = await getSupabaseClient()
-              .from('stats')
-              .select('*', { count: 'exact', head: true })
-              .eq('device_id', uuid)
-              .eq('app_id', appId)
-              .eq('action', action)
+          if (isDroppedStatsLogAction(action)) {
+            let count: number | null = 0
+            let statsError: { code?: string } | null = null
+            for (let attempt = 0; attempt < 8; attempt++) {
+              const result = await getSupabaseClient()
+                .from('stats')
+                .select('*', { count: 'exact', head: true })
+                .eq('device_id', uuid)
+                .eq('app_id', appId)
+                .eq('action', action)
+              count = result.count
+              statsError = result.error
+              if (statsError || count !== 0)
+                break
+              if (attempt < 7)
+                await new Promise(resolve => setTimeout(resolve, 150))
+            }
             expect(statsError).toBeNull()
             expect(count).toBe(0)
           }
           else {
-            const { error: statsError, data: statsData } = await getSupabaseClient()
-              .from('stats')
-              .select()
-              .eq('device_id', uuid)
-              .eq('app_id', appId)
-              .eq('action', action)
-              .single()
+            let statsError: { code?: string } | null = { code: 'PGRST116' }
+            let statsData: Record<string, unknown> | null = null
+            for (let attempt = 0; attempt < 8; attempt++) {
+              const result = await getSupabaseClient()
+                .from('stats')
+                .select()
+                .eq('device_id', uuid)
+                .eq('app_id', appId)
+                .eq('action', action)
+                .single()
+              statsError = result.error
+              statsData = result.data
+              if (!statsError)
+                break
+              if (statsError.code !== 'PGRST116')
+                break
+              await new Promise(resolve => setTimeout(resolve, 150))
+            }
 
             expect(statsError).toBeNull()
             expect(statsData).toBeTruthy()

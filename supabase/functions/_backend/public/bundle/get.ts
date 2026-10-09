@@ -1,19 +1,31 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
-import { quickError, simpleError } from '../../utils/hono.ts'
+import { z } from 'zod'
+import { simpleError } from '../../utils/hono.ts'
 import { checkPermission } from '../../utils/rbac.ts'
+import { integerLikeSchema, numberLikeSchema, safeParseSchema } from '../../utils/schema_validation.ts'
 import { supabaseApikey } from '../../utils/supabase.ts'
 import { fetchLimit, isValidAppId } from '../../utils/utils.ts'
 
-export interface GetLatest {
-  app_id: string
-  version?: string
-  page?: number
-  include_deleted?: boolean | string
-}
+export const getBundleQuerySchema = z.object({
+  app_id: z.string().optional(),
+  version: z.string().min(1).optional(),
+  id: integerLikeSchema.refine(Number.isSafeInteger, { message: 'id must be a safe integer' }).optional(),
+  page: numberLikeSchema.optional(),
+  // Version/id lookups only: also match soft-deleted bundles (name occupancy checks).
+  include_deleted: z.union([z.boolean(), z.enum(['true', 'false', '1', '0'])]).optional(),
+})
 
-export async function get(c: Context<MiddlewareKeyVariables>, body: GetLatest, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
+export type GetLatest = z.infer<typeof getBundleQuerySchema> & { app_id: string }
+
+export async function get(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
+  const bodyParsed = safeParseSchema(getBundleQuerySchema, bodyRaw)
+  if (!bodyParsed.success) {
+    throw simpleError('invalid_query', 'Invalid query', { error: bodyParsed.error })
+  }
+  const body = bodyParsed.data
+
   if (!body.app_id) {
     throw simpleError('missing_app_id', 'Missing app_id', { body })
   }
@@ -25,28 +37,33 @@ export async function get(c: Context<MiddlewareKeyVariables>, body: GetLatest, a
     throw simpleError('cannot_get_bundle', 'You can\'t access this app', { app_id: body.app_id })
   }
 
-  if (body.version) {
-    const includeDeleted = body.include_deleted === true
-      || body.include_deleted === 'true'
-      || body.include_deleted === '1'
-    let query = supabaseApikey(c, apikey.key)
+  const supabase = supabaseApikey(c, apikey.key)
+  const hasVersionFilter = body.version !== undefined
+  const hasIdFilter = body.id !== undefined
+
+  if (hasVersionFilter || hasIdFilter) {
+    const includeDeleted = body.include_deleted === true || body.include_deleted === 'true' || body.include_deleted === '1'
+    let query = supabase
       .from('app_versions')
-      .select('id, name, checksum, deleted, created_at')
+      .select()
       .eq('app_id', body.app_id)
-      .eq('name', body.version)
+      .limit(1)
+      .order('created_at', { ascending: false })
     if (!includeDeleted)
       query = query.eq('deleted', false)
-    const { data, error: versionError } = await query.maybeSingle()
-    if (versionError) {
-      throw simpleError('cannot_get_bundle', 'Cannot get bundle', { supabaseError: versionError })
+
+    if (hasVersionFilter)
+      query = query.eq('name', body.version!)
+    if (hasIdFilter)
+      query = query.eq('id', body.id!)
+
+    const { data: dataBundles, error: dbError } = await query
+    if (dbError) {
+      throw simpleError('cannot_get_bundle', 'Cannot get bundle', { supabaseError: dbError })
     }
-    if (!data) {
-      return quickError(404, 'cannot_find_bundle', 'Cannot find bundle', {
-        app_id: body.app_id,
-        version: body.version,
-      })
-    }
-    return c.json(data)
+
+    const rows = dataBundles ?? []
+    return c.json(rows.length ? [rows[0]] : [])
   }
 
   // GET callers send page as a query string; coerce so (page + 1) is not string concatenation.
@@ -54,7 +71,7 @@ export async function get(c: Context<MiddlewareKeyVariables>, body: GetLatest, a
   const fetchOffset = Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 0
   const from = fetchOffset * fetchLimit
   const to = (fetchOffset + 1) * fetchLimit - 1
-  const { data: dataBundles, error: dbError } = await supabaseApikey(c, apikey.key)
+  const { data: dataBundles, error: dbError } = await supabase
     .from('app_versions')
     .select()
     .eq('app_id', body.app_id)

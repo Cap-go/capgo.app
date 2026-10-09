@@ -224,7 +224,9 @@ test.describe('API Key Management', () => {
   test('should select all manageable organizations by default with member role', async ({ page }) => {
     const dialog = await openCreateKeyDialog(page)
 
-    await dialog.locator('[data-test="create-key-org-dropdown"]').click()
+    const orgDropdown = dialog.locator('[data-test="create-key-org-dropdown"]')
+    await orgDropdown.click()
+    await expect(orgDropdown).toHaveAttribute('aria-expanded', 'true')
     const orgCheckboxes = dialog.locator('[data-test="create-key-org-checkbox"]:not(:disabled)')
     await expect(orgCheckboxes.first()).toBeVisible()
 
