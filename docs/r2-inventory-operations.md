@@ -4,7 +4,7 @@ Merge the schema PR first, then the queue consumer, then the historical scanner.
 
 ## Queue consumer
 
-The dedicated Worker uses one database connection per event batch, releases it before publication, and awaits all work before returning. Configure a Hyperdrive connection with query caching **disabled**; stale inventory reads are unsafe. Existing environment bindings follow the files Worker. Preproduction currently shares the production `capgo` bucket: use an isolated bucket and matching `INVENTORY_BUCKET`/R2 binding when testing there; do not attach a second notification rule to production casually.
+The dedicated Worker uses one database connection per event batch, releases it before publication, and awaits all work before returning. Configure a Hyperdrive connection with query caching **disabled**; stale inventory reads are unsafe. The dedicated `HYPERDRIVE_R2_INVENTORY` binding selects the inventory database independently of the files Worker. Preproduction currently shares the production `capgo` bucket: use an isolated bucket and matching `INVENTORY_BUCKET`/R2 binding when testing there; do not attach a second notification rule to production casually.
 
 Inventory configuration is the `INVENTORY_CONFIG` constant in `supabase/functions/_backend/utils/r2_inventory.ts`; tombstones are retained for seven days. No Vault secret or runtime enablement switch is required. To pause a deployed consumer for maintenance, pause delivery in Cloudflare so messages do not burn their five-delivery budget.
 
@@ -27,6 +27,28 @@ The event consumer has batch size 100, timeout 10 seconds, concurrency one, and 
 This bound applies to queue consumers. A separately run backfill holds another connection; pause queue delivery during a backfill if the same two-connection budget must cover that operation. Hyperdrive's retained pool connections and other application traffic have separate connection budgets.
 
 Test a synthetic creation and deletion, then confirm the row transitions and queue acknowledgement. Monitor source/repair backlog, oldest-message age, failed batches and both DLQs. A maximum event timestamp is not a watermark because delivery can be out of order. Re-drive expired events through repair/reconciliation, never blind replay. Tombstone collection stays off until an initial backfill and complete reconciliation are verified.
+
+## PlanetScale production destination
+
+Production notifications and repairs both write to the standalone PlanetScale Postgres database `capgo/capgo-r2-inventory`, branch `main`, database `postgres`. The production inventory Worker binds Hyperdrive `capgo-r2-inventory-planetscale-prod` with caching disabled. Alpha and preproduction keep their existing database origins. There is no fallback to the primary database: a missing inventory binding fails the batch and leaves valid messages available for retry.
+
+The standalone database needs `r2_objects`, its lifecycle trigger and enum, and `r2_inventory_checkpoints`. Its `manifest` table is reserved for a separate replication setup; the notification consumer does not access it. The checkpoint schema is recorded in `cloudflare_workers/r2_inventory/sql/20261009_checkpoints.sql` and was prepared on the target before this binding change. This is a standalone database setup, not a Supabase migration. Run it only once against an empty checkpoint schema, with a separately created runtime role; rerunning it fails atomically rather than silently accepting a different schema.
+
+The Hyperdrive origin uses the `r2_inventory_consumer` role. It can select, insert and update the two inventory tables and use the object-state enum. It has no inherited database-wide or administrative roles, no access to `manifest`, and no delete or schema-creation permission. Runtime credentials are stored in Hyperdrive, never in repository files. These explicit grants were verified on the target, and Cloudflare accepted the restricted origin connection.
+
+### Starting without the old inventory history
+
+This change starts a new inventory; it does not import existing Supabase inventory rows or historical R2 objects. The first insertion of a bucket's admission checkpoint records the database statement-start time as its initial event floor. That floor is preserved on subsequent `ON CONFLICT DO NOTHING` insertions. The existing guard prevents moving it backwards or deleting it.
+
+Notifications older than this initial boundary need verification against R2 when no newer event or observation covers them. This prevents a delayed pre-cutover creation from resurrecting an object whose deletion was recorded only in the old database. The first batch can therefore generate repairs. Ordinary notifications created after the boundary follow the usual batched SQL path without a HEAD per upload. Historic coverage still requires the separate backfill, and file cleanup must remain disabled until both inventory coverage and manifest replication are verified.
+
+Each queue retains concurrency one, so at most two inventory application connections are active per environment. Hyperdrive's origin pool has a soft limit of five; it may retain idle connections and this is not a hard two-connection limit on Postgres.
+
+### Release and rollback
+
+The normal Capgo release workflow deploys the changed inventory binding. The bucket's existing notification rule and four queues are reused, so no bucket reconfiguration or new application secret is needed. After deployment, verify the deployed Hyperdrive binding, both queue backlogs and DLQs, successful batch logs, and new inventory rows in PlanetScale. Source ingestion in Supabase stops when the old consumer is replaced.
+
+If a cutover fails, pause delivery of both inventory queues before exhausting their five-delivery budget, inspect the failure and repair the target. Do not simply point back to Supabase after successful PlanetScale acknowledgements: Supabase then lacks the acknowledged interval. A rollback needs a resumable reconciliation of that interval (including deletions) before the old inventory can be trusted again. No data is automatically deleted by this PR.
 
 ## Ordering and repair
 

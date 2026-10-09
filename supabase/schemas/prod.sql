@@ -359,7 +359,8 @@ CREATE TYPE "public"."stats_action" AS ENUM (
     'webview_dom_content_loaded',
     'webview_page_loaded',
     'app_nav',
-    'channelPaused'
+    'channelPaused',
+    'update_check_error'
 );
 
 
@@ -28738,6 +28739,12 @@ CREATE PUBLICATION "capgo_google_eu_2_pub" WITH (publish = 'insert, update, dele
 ALTER PUBLICATION "capgo_google_eu_2_pub" OWNER TO "postgres";
 
 
+CREATE PUBLICATION "capgo_planetscale_r2_pub" WITH (publish = 'insert, update, delete, truncate');
+
+
+ALTER PUBLICATION "capgo_planetscale_r2_pub" OWNER TO "postgres";
+
+
 
 
 ALTER PUBLICATION "supabase_realtime" OWNER TO "postgres";
@@ -28764,6 +28771,10 @@ ALTER PUBLICATION "capgo_google_eu_2_pub" ADD TABLE ONLY "public"."channels";
 
 
 ALTER PUBLICATION "capgo_google_eu_2_pub" ADD TABLE ONLY "public"."manifest";
+
+
+
+ALTER PUBLICATION "capgo_planetscale_r2_pub" ADD TABLE ONLY "public"."manifest";
 
 
 
