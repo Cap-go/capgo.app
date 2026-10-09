@@ -29,6 +29,8 @@ const isSavingUrl = ref(false)
 const showUpgrade = ref(false)
 const upgradeAcknowledged = ref(false)
 const isUpgrading = ref(false)
+// Both writes set update_mode: never run them at the same time.
+const isModeWritePending = computed(() => isSavingUrl.value || isUpgrading.value)
 
 const canUpdateSettings = computedAsync(async () => {
   return await checkPermissions('app.update_settings', { appId: props.appId })
@@ -92,6 +94,8 @@ async function saveWebsiteUrl() {
     toast.error(t('website-live-invalid-url'))
     return
   }
+  if (isModeWritePending.value)
+    return
   isSavingUrl.value = true
   try {
     await appUpdateModeStore.save(props.appId, { updateMode: 'website', websiteUrl })
@@ -116,7 +120,7 @@ async function upgradeToFullCapgo() {
     toast.error(t('no-permission'))
     return
   }
-  if (!upgradeAcknowledged.value || !isPlanKnown.value)
+  if (!upgradeAcknowledged.value || !isPlanKnown.value || isModeWritePending.value)
     return
   // Classic updates need a full plan: switching first would stop website
   // updates until the plan changes, so send the user to the plans page first.
@@ -182,7 +186,7 @@ async function upgradeToFullCapgo() {
           type="button"
           class="d-btn d-btn-primary min-h-10"
           data-test="website-live-save-url"
-          :disabled="isSavingUrl || !canUpdateSettings"
+          :disabled="isModeWritePending || !canUpdateSettings"
           @click="saveWebsiteUrl"
         >
           <IconLoader v-if="isSavingUrl" class="h-4 w-4 animate-spin" aria-hidden="true" />
@@ -244,7 +248,7 @@ async function upgradeToFullCapgo() {
             type="button"
             class="d-btn d-btn-primary min-h-10"
             data-test="website-live-confirm-upgrade"
-            :disabled="!upgradeAcknowledged || isUpgrading || !canUpdateSettings || !isPlanKnown"
+            :disabled="!upgradeAcknowledged || isModeWritePending || !canUpdateSettings || !isPlanKnown"
             @click="upgradeToFullCapgo"
           >
             <IconLoader v-if="isUpgrading" class="h-4 w-4 animate-spin" aria-hidden="true" />
@@ -285,7 +289,7 @@ async function upgradeToFullCapgo() {
         type="button"
         class="d-btn d-btn-primary min-h-10"
         data-test="website-live-enable-save"
-        :disabled="isSavingUrl || !canUpdateSettings"
+        :disabled="isModeWritePending || !canUpdateSettings"
         @click="saveWebsiteUrl"
       >
         <IconLoader v-if="isSavingUrl" class="h-4 w-4 animate-spin" aria-hidden="true" />

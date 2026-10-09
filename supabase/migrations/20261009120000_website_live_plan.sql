@@ -269,3 +269,5 @@ COMMENT ON FUNCTION public.invalidate_updates_edge_cache() IS
   'scope versions: bundle-name lookups). Runs once per statement over '
   'transition tables; lookups use finx_channels_version, '
   'idx_channels_rollout_version, idx_orgs_customer_id and finx_apps_owner_org.';
+
+COMMENT ON COLUMN "public"."users"."onboarding" IS 'Persisted create-app onboarding wizard progress for resume and admin drop-off. Keys: status, step, flow, final_step, development_environment, intent, details_step, setup_stage, app_name, app_id, existing_app, existing_app_setup, store_url, imported_store_app_id, org_name, estimated_users_index, update_mode, website_url, onboarding_attempt_id, last_run_id, abtests, updated_at, completed_at.';

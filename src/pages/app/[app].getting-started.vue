@@ -25,6 +25,9 @@ const { id, app, isLoading } = useAppPage({
 // shell. Read once per app: the flow reads its analytics flow at mount.
 const setupFlowAppId = ref('')
 const setupPreOrg = ref(false)
+// A failed mode read must not fall back to the Full Capgo checklist.
+const modeLoadFailedAppId = ref('')
+const isRetryingModeLoad = ref(false)
 
 function resolveSetupPreOrg(appId: string) {
   const handoff = readOnboardingSetupHandoff(window.history.state, appId)
@@ -43,7 +46,7 @@ watch(() => id.value, async (appId) => {
     organizationStore.setCurrentOrganization(appOrganization.gid)
 }, { immediate: true })
 
-watch(() => app.value?.app_id, async (appId) => {
+async function selectSetupFlow(appId: string | undefined) {
   if (!appId || setupFlowAppId.value === appId)
     return
   // Website Live apps never install a bundle pipeline, so the full Capgo
@@ -51,13 +54,30 @@ watch(() => app.value?.app_id, async (appId) => {
   const mode = await appUpdateModeStore.load(appId)
   if (app.value?.app_id !== appId)
     return
-  if (mode?.updateMode === 'website') {
+  if (!mode) {
+    modeLoadFailedAppId.value = appId
+    return
+  }
+  modeLoadFailedAppId.value = ''
+  if (mode.updateMode === 'website') {
     await router.replace(`/app/${encodeURIComponent(appId)}`)
     return
   }
   setupPreOrg.value = resolveSetupPreOrg(appId)
   setupFlowAppId.value = appId
-}, { immediate: true })
+}
+
+async function retryModeLoad() {
+  isRetryingModeLoad.value = true
+  try {
+    await selectSetupFlow(app.value?.app_id)
+  }
+  finally {
+    isRetryingModeLoad.value = false
+  }
+}
+
+watch(() => app.value?.app_id, selectSetupFlow, { immediate: true })
 </script>
 
 <template>
@@ -70,5 +90,17 @@ watch(() => app.value?.app_id, async (appId) => {
       :pre-org="setupPreOrg"
       onboarding
     />
+    <div
+      v-else-if="app && modeLoadFailedAppId === app.app_id"
+      class="mx-auto mt-10 flex max-w-md flex-col items-center gap-4 text-center"
+      data-test="getting-started-mode-error"
+    >
+      <p class="text-sm text-slate-600 dark:text-slate-300">
+        {{ t('website-live-mode-load-error') }}
+      </p>
+      <button type="button" class="d-btn d-btn-primary min-h-10" :disabled="isRetryingModeLoad" @click="retryModeLoad">
+        {{ t('retry') }}
+      </button>
+    </div>
   </AppPageFrame>
 </template>

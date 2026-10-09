@@ -821,6 +821,8 @@ function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress'
     importedStoreAppId: importedStoreAppId.value,
     orgName: orgNameInput.value,
     estimatedUsersIndex: estimatedUsersIndex.value,
+    updateMode: updateModeTouched.value ? updateMode.value : null,
+    websiteUrl: websiteLiveUrlInput.value,
     onboardingAttemptId: telemetry.onboardingAttemptId,
     lastRunId: telemetry.lastRunId,
   })
@@ -1033,6 +1035,10 @@ function applyOnboardingProgress(progress: ReturnType<typeof parseUserOnboarding
   }
   if (typeof progress.estimated_users_index === 'number')
     estimatedUsersIndex.value = progress.estimated_users_index
+  if (progress.update_mode)
+    selectUpdateMode(progress.update_mode)
+  if (progress.website_url)
+    websiteLiveUrlInput.value = progress.website_url
 }
 
 function applyDefaultPreOrgDetails() {
@@ -2864,7 +2870,7 @@ watch(appName, (value) => {
   schedulePersistOnboardingProgress()
 }, { immediate: true })
 
-watch([orgNameInput, storeUrl, selectedDevelopmentEnvironment, selectedIntent, existingAppSetup, estimatedUsersIndex, manualAppId, importedStoreAppId], () => {
+watch([orgNameInput, storeUrl, selectedDevelopmentEnvironment, selectedIntent, existingAppSetup, estimatedUsersIndex, manualAppId, importedStoreAppId, updateMode, websiteLiveUrlInput], () => {
   schedulePersistOnboardingProgress()
 })
 

@@ -35,6 +35,9 @@ export interface UserOnboardingProgress {
   imported_store_app_id?: string
   org_name?: string
   estimated_users_index?: number | null
+  // Only stored once the user picks a mode, so resume does not override the default.
+  update_mode?: 'capgo' | 'website'
+  website_url?: string
   onboarding_attempt_id?: string
   last_run_id?: string
   updated_at: string
@@ -62,7 +65,9 @@ export const USER_ONBOARDING_PROGRESS_FIELDS = {
   status: true,
   step: true,
   store_url: true,
+  update_mode: true,
   updated_at: true,
+  website_url: true,
 } as const satisfies Record<keyof UserOnboardingProgress, true>
 
 export interface UserOnboardingProgressInput {
@@ -83,6 +88,8 @@ export interface UserOnboardingProgressInput {
   importedStoreAppId?: string
   orgName?: string
   estimatedUsersIndex?: number | null
+  updateMode?: 'capgo' | 'website' | null
+  websiteUrl?: string
   onboardingAttemptId?: string
   lastRunId?: string
   updatedAt?: string
@@ -204,6 +211,13 @@ function applyOptionalUserOnboardingFields(
   if (estimatedUsersIndex !== undefined)
     progress.estimated_users_index = estimatedUsersIndex
 
+  if (raw.update_mode === 'capgo' || raw.update_mode === 'website')
+    progress.update_mode = raw.update_mode
+
+  const websiteUrl = optionalTrimmedString(raw.website_url)
+  if (websiteUrl)
+    progress.website_url = websiteUrl
+
   const completedAt = optionalTrimmedString(raw.completed_at)
   if (completedAt)
     progress.completed_at = completedAt
@@ -297,6 +311,13 @@ export function buildUserOnboardingProgress(input: UserOnboardingProgressInput):
 
   if (input.estimatedUsersIndex !== undefined)
     progress.estimated_users_index = input.estimatedUsersIndex
+
+  if (input.updateMode)
+    progress.update_mode = input.updateMode
+
+  const websiteUrl = optionalTrimmedString(input.websiteUrl)
+  if (websiteUrl)
+    progress.website_url = websiteUrl
 
   if (input.onboardingAttemptId && onboardingAttemptIdPattern.test(input.onboardingAttemptId))
     progress.onboarding_attempt_id = input.onboardingAttemptId
