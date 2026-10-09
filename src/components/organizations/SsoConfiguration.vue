@@ -219,6 +219,7 @@ async function fetchLinks() {
 
 async function shareProvider(): Promise<boolean> {
   const provider = shareProviderTarget.value
+  const ownerOrgId = props.orgId
   const org = organizationStore.organizations.find(candidate => candidate.gid === shareOrgId.value)
   if (!provider || !org)
     return false
@@ -234,6 +235,8 @@ async function shareProvider(): Promise<boolean> {
       return false
     }
     const link = await response.json() as { created_at: string }
+    if (ownerOrgId !== props.orgId)
+      return true
     sharedLinks.value.push({ provider_id: provider.id, org_id: org.gid, org_name: org.name, has_role_mapping: false, created_at: link.created_at })
     toast.success(t('sso-shared', { org: org.name }))
     return true
