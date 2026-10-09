@@ -79,7 +79,7 @@ const requireNumber = ref(true)
 const requireSpecial = ref(true)
 
 // Members to be affected when enabling password policy
-const affectedMembers = ref<Array<{ email: string, first_name: string | null, last_name: string | null }>>([])
+const affectedMembers = ref<Array<{ user_id: string, email: string, first_name: string | null, last_name: string | null }>>([])
 
 // Password policy compliance tracking
 const membersWithPasswordPolicyStatus = ref<MemberWithPasswordPolicyStatus[]>([])
@@ -404,18 +404,15 @@ async function loadMembersWithPasswordPolicyStatus() {
 
     if (complianceError) {
       console.error('Error loading password policy compliance status:', complianceError)
-      // Still continue with members, just mark compliance as unknown
+      membersWithPasswordPolicyStatus.value = []
+      nonCompliantPasswordMembers.value = []
+      return
     }
 
-    // Create a map of user_id to compliance status
-    const complianceMap = new Map<string, { compliant: boolean, first_name: string | null, last_name: string | null }>()
+    const complianceMap = new Map<string, boolean>()
     if (complianceStatus) {
       for (const status of complianceStatus) {
-        complianceMap.set(status.user_id, {
-          compliant: status.password_policy_compliant,
-          first_name: status.first_name,
-          last_name: status.last_name,
-        })
+        complianceMap.set(status.user_id, status.password_policy_compliant)
       }
     }
 
@@ -423,17 +420,16 @@ async function loadMembersWithPasswordPolicyStatus() {
     const imageSources: MemberImageSource[] = []
     // Merge members with password policy compliance status
     membersWithPasswordPolicyStatus.value = (members || []).map((member) => {
-      const compliance = complianceMap.get(member.uid)
       imageSources.push({ key: member.uid, imageUrl: member.image_url })
       return {
         uid: member.uid,
         email: member.email,
-        first_name: compliance?.first_name || null,
-        last_name: compliance?.last_name || null,
+        first_name: null,
+        last_name: null,
         image_url: getImmediateImageUrl(member.image_url) || '',
         role: member.role,
         is_tmp: member.is_tmp,
-        password_policy_compliant: compliance?.compliant ?? false,
+        password_policy_compliant: complianceMap.get(member.uid) ?? false,
       }
     })
 
@@ -836,18 +832,47 @@ async function copyPasswordPolicyEmailList() {
 }
 
 // Check impact before enabling password policy
-async function checkPasswordPolicyImpact() {
+async function checkPasswordPolicyImpact(): Promise<boolean> {
   if (!currentOrganization.value)
-    return
+    return false
 
+  affectedMembers.value = []
   const impact = await organizationStore.checkPasswordPolicyImpact(currentOrganization.value.gid)
-  if (impact) {
-    affectedMembers.value = impact.nonCompliantUsers.map(u => ({
-      email: u.email,
-      first_name: u.first_name,
-      last_name: u.last_name,
-    }))
+  if (!impact)
+    return false
+
+  const { data: members, error } = await supabase.rpc('get_org_members', {
+    guild_id: currentOrganization.value.gid,
+  })
+  if (error) {
+    console.error('Failed to load member identities:', error)
+    toast.error(t('error-loading-settings'))
+    return false
   }
+
+  const membersById = new Map((members ?? []).map(member => [member.uid, member]))
+  const resolvedMembers = impact.nonCompliantUsers
+    .map((user) => {
+      const member = membersById.get(user.user_id)
+      if (!member)
+        return null
+      return {
+        user_id: user.user_id,
+        email: member.email,
+        first_name: user.first_name,
+        last_name: user.last_name,
+      }
+    })
+    .filter((member): member is NonNullable<typeof member> => member !== null)
+
+  if (resolvedMembers.length !== impact.nonCompliantUsers.length) {
+    console.error('Impacted users missing from org member list')
+    toast.error(t('error-loading-settings'))
+    return false
+  }
+
+  affectedMembers.value = resolvedMembers
+  return true
 }
 
 // Handle password policy toggle
@@ -860,7 +885,11 @@ async function handlePolicyToggle() {
 
   if (policyEnabled.value) {
     // Enabling policy - show impact warning
-    await checkPasswordPolicyImpact()
+    const impactReady = await checkPasswordPolicyImpact()
+    if (!impactReady) {
+      policyEnabled.value = false
+      return
+    }
 
     if (affectedMembers.value.length > 0) {
       // Show warning dialog
@@ -1643,7 +1672,7 @@ onMounted(async () => {
           {{ t('users-will-be-locked-out') }} ({{ affectedMembers.length }}):
         </h4>
         <ul class="space-y-2 overflow-y-auto max-h-48">
-          <li v-for="member in affectedMembers" :key="member.email" class="flex items-center text-red-700 dark:text-red-300">
+          <li v-for="member in affectedMembers" :key="member.user_id" class="flex items-center text-red-700 dark:text-red-300">
             <span class="w-2 h-2 mr-3 bg-red-500 rounded-full" />
             <div>
               <span v-if="member.first_name || member.last_name" class="font-medium">
