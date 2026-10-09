@@ -1,5 +1,7 @@
 // Stripe amounts are integers in the currency's smallest unit. Most currencies
 // use 100 minor units, but Stripe treats some as zero-decimal or three-decimal.
+// ISK and UGX are zero-decimal in practice but Stripe still sends them as
+// two-decimal amounts, so they stay on the default divisor.
 // https://docs.stripe.com/currencies#special-cases
 const ZERO_DECIMAL_CURRENCIES = new Set([
   'bif',
@@ -12,7 +14,6 @@ const ZERO_DECIMAL_CURRENCIES = new Set([
   'mga',
   'pyg',
   'rwf',
-  'ugx',
   'vnd',
   'vuv',
   'xaf',

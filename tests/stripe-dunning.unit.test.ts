@@ -37,6 +37,8 @@ describe('open subscription invoice helpers', () => {
     expect(stripeAmountToMajorUnits(1400, 'usd')).toBe(14)
     expect(stripeAmountToMajorUnits(1400, 'JPY')).toBe(1400)
     expect(stripeAmountToMajorUnits(14000, 'kwd')).toBe(14)
+    expect(stripeAmountToMajorUnits(500, 'ugx')).toBe(5)
+    expect(stripeAmountToMajorUnits(500, 'isk')).toBe(5)
   })
 
   it.concurrent('maps only the public pay-link fields', () => {
