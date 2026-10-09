@@ -1,5 +1,5 @@
 -- Checkpoint schema for a fresh standalone Postgres inventory database.
--- Apply once as an administrator after creating the inventory-only runtime role.
+-- Apply once as an administrator after creating the restricted runtime role.
 -- Credentials and role creation are managed separately; no secrets belong here.
 -- Target: PlanetScale capgo/capgo-r2-inventory, branch main, database postgres.
 DO $setup$
