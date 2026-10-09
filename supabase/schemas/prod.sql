@@ -23360,7 +23360,9 @@ CREATE TABLE IF NOT EXISTS "public"."global_stats" (
     "apps_with_preview" bigint DEFAULT 0 NOT NULL,
     "plan_credits" integer DEFAULT 0 NOT NULL,
     "users_with_2fa" bigint DEFAULT 0 NOT NULL,
-    "apps_with_store_url" bigint DEFAULT 0 NOT NULL
+    "apps_with_store_url" bigint DEFAULT 0 NOT NULL,
+    "refunds_count" bigint DEFAULT 0 NOT NULL,
+    "refunds_amount" double precision DEFAULT 0 NOT NULL
 );
 
 
@@ -23688,6 +23690,14 @@ COMMENT ON COLUMN "public"."global_stats"."users_with_2fa" IS 'Snapshot of users
 
 
 COMMENT ON COLUMN "public"."global_stats"."apps_with_store_url" IS 'Number of apps with at least one App Store or Google Play link at snapshot day end.';
+
+
+
+COMMENT ON COLUMN "public"."global_stats"."refunds_count" IS 'Number of Stripe refunds created on the snapshot UTC day (failed and canceled refunds excluded).';
+
+
+
+COMMENT ON COLUMN "public"."global_stats"."refunds_amount" IS 'Total USD amount refunded on the snapshot UTC day, in dollars (failed and canceled refunds excluded).';
 
 
 
@@ -24596,6 +24606,39 @@ ALTER SEQUENCE "public"."stripe_info_id_seq" OWNER TO "postgres";
 
 
 ALTER SEQUENCE "public"."stripe_info_id_seq" OWNED BY "public"."stripe_info"."id";
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."stripe_refunds" (
+    "id" character varying NOT NULL,
+    "charge_id" character varying NOT NULL,
+    "customer_id" character varying,
+    "amount" bigint NOT NULL,
+    "currency" character varying NOT NULL,
+    "status" character varying NOT NULL,
+    "reason" character varying,
+    "refunded_at" timestamp with time zone NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."stripe_refunds" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."stripe_refunds" IS 'Stripe refunds synced from the charge.refunded webhook, used for daily refund stats.';
+
+
+
+COMMENT ON COLUMN "public"."stripe_refunds"."id" IS 'Stripe refund id (re_...).';
+
+
+
+COMMENT ON COLUMN "public"."stripe_refunds"."amount" IS 'Refunded amount in the smallest currency unit (cents for USD).';
+
+
+
+COMMENT ON COLUMN "public"."stripe_refunds"."refunded_at" IS 'Stripe refund creation time.';
 
 
 
@@ -25684,6 +25727,11 @@ ALTER TABLE ONLY "public"."stripe_info"
 
 
 
+ALTER TABLE ONLY "public"."stripe_refunds"
+    ADD CONSTRAINT "stripe_refunds_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."tmp_users"
     ADD CONSTRAINT "tmp_users_pkey" PRIMARY KEY ("id");
 
@@ -26497,6 +26545,14 @@ CREATE INDEX "si_customer_status_trial_idx" ON "public"."stripe_info" USING "btr
 
 
 CREATE INDEX "stripe_info_paid_at_idx" ON "public"."stripe_info" USING "btree" ("paid_at") WHERE ("paid_at" IS NOT NULL);
+
+
+
+CREATE INDEX "stripe_refunds_charge_id_idx" ON "public"."stripe_refunds" USING "btree" ("charge_id");
+
+
+
+CREATE INDEX "stripe_refunds_refunded_at_idx" ON "public"."stripe_refunds" USING "btree" ("refunded_at");
 
 
 
@@ -27847,6 +27903,10 @@ CREATE POLICY "Deny all access" ON "public"."processed_stripe_events" USING (fal
 
 
 
+CREATE POLICY "Deny all access" ON "public"."stripe_refunds" USING (false) WITH CHECK (false);
+
+
+
 CREATE POLICY "Deny all access" ON "public"."to_delete_accounts" USING (false) WITH CHECK (false);
 
 
@@ -28683,6 +28743,9 @@ ALTER TABLE "public"."storage_usage" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."stripe_info" ENABLE ROW LEVEL SECURITY;
+
+
+ALTER TABLE "public"."stripe_refunds" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."tmp_users" ENABLE ROW LEVEL SECURITY;
@@ -32424,6 +32487,10 @@ GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public".
 GRANT ALL ON SEQUENCE "public"."stripe_info_id_seq" TO "anon";
 GRANT ALL ON SEQUENCE "public"."stripe_info_id_seq" TO "authenticated";
 GRANT ALL ON SEQUENCE "public"."stripe_info_id_seq" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."stripe_refunds" TO "service_role";
 
 
 
