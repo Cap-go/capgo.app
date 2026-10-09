@@ -108,6 +108,7 @@ Examples:
 | **--app-store-connect-team-id** | <code>string</code> | iOS: App Store Connect Team ID |
 | **--ios-scheme** | <code>string</code> | iOS: Xcode scheme to build (default: App) |
 | **--ios-target** | <code>string</code> | iOS: Xcode target for reading build settings (default: same as scheme) |
+| **--xcode-version** | <code>string</code> | iOS: build on a machine with this Xcode version (e.g. 26, 26.0.1). A major version accepts any minor. Default: any machine. Precedence: CLI > env (CAPGO_IOS_XCODE_VERSION) > saved credentials |
 | **--ios-distribution** | <code>string</code> | iOS: Distribution mode. app_store (default) uploads to TestFlight/App Store; ad_hoc skips store upload and builds an Ad Hoc IPA for device install. Use ad_hoc with --output-upload when the App Store app does not exist yet or you only need an IPA download. |
 | **--ios-provisioning-profile** | <code>string</code> | iOS: Provisioning profile path or bundleId=path mapping (repeatable) |
 | **--no-cache** | <code>boolean</code> | Disable Xcode compilation cache for this build (default: cache enabled) |

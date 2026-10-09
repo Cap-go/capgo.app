@@ -50,7 +50,7 @@ function assertDeepEquals(actual, expected, message) {
 function testVal(/** @type {string} */ v) { return String(v) }
 
 // Import from TypeScript source (requires bun)
-const { splitPayload, NON_CREDENTIAL_KEYS, parseStoreReleaseNotesLocaleEntries } = await import('../src/build/request.ts')
+const { splitPayload, NON_CREDENTIAL_KEYS, normalizeMachineVersion, parseStoreReleaseNotesLocaleEntries } = await import('../src/build/request.ts')
 const { MIN_OUTPUT_RETENTION_SECONDS } = await import('../src/build/credentials.ts')
 
 // ─── Test: iOS secrets stay in credentials ─────────────────────────────────────
@@ -287,6 +287,7 @@ await test('NON_CREDENTIAL_KEYS covers all non-secret fields', async () => {
     'CAPGO_IOS_SCHEME',
     'CAPGO_IOS_TARGET',
     'CAPGO_IOS_DISTRIBUTION',
+    'CAPGO_IOS_XCODE_VERSION',
     'BUILD_OUTPUT_UPLOAD_ENABLED',
     'BUILD_OUTPUT_RETENTION_SECONDS',
     'SKIP_BUILD_NUMBER_BUMP',
@@ -395,6 +396,27 @@ await test('Full iOS payload: all fields correctly split', async () => {
   for (const key of expectedCredKeys) {
     assert(key in buildCredentials, `Missing expected credential: ${key}`)
   }
+})
+
+await test('Xcode machine version goes to buildOptions on iOS only', async () => {
+  const merged = {
+    CAPGO_IOS_XCODE_VERSION: '26.0.1',
+    BUILD_CERTIFICATE_BASE64: 'cert',
+  }
+  const ios = splitPayload(merged, 'ios', 'release', '7.83.0')
+  assertEquals(ios.buildOptions.iosXcodeVersion, '26.0.1')
+  assert(!('CAPGO_IOS_XCODE_VERSION' in ios.buildCredentials), 'Xcode version must not be sent as a credential')
+
+  const android = splitPayload(merged, 'android', 'release', '7.83.0')
+  assertEquals(android.buildOptions.iosXcodeVersion, undefined)
+})
+
+await test('normalizeMachineVersion accepts dotted versions only', async () => {
+  assertEquals(normalizeMachineVersion('26'), '26')
+  assertEquals(normalizeMachineVersion(' Xcode 26.0.1 '), '26.0.1')
+  assertEquals(normalizeMachineVersion('macOS 27'), undefined)
+  assertEquals(normalizeMachineVersion('latest'), undefined)
+  assertEquals(normalizeMachineVersion('26.1.2.3'), undefined)
 })
 
 // ─── Summary ────────────────────────────────────────────────────────────────────

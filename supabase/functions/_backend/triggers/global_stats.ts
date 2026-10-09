@@ -948,6 +948,10 @@ function isMissingAppsWithStoreUrlColumnError(error: unknown): boolean {
   return isMissingSchemaColumnError(error, ['apps_with_store_url'])
 }
 
+function isMissingRefundsColumnError(error: unknown): boolean {
+  return isMissingSchemaColumnError(error, ['refunds_count', 'refunds_amount'])
+}
+
 async function calculateRevenue(c: Context, referenceDate?: Date): Promise<PlanRevenue> {
   const pgClient = getPgClient(c, false)
   const drizzleClient = getDrizzleClient(pgClient)
@@ -1721,10 +1725,11 @@ async function ensureGlobalStatsSnapshotRows(c: Context, dateIds: readonly strin
 async function updateGlobalStatsSnapshot(c: Context, dateId: string, patch: GlobalStatsSnapshotPatch): Promise<void> {
   await ensureGlobalStatsSnapshotRow(c, dateId)
 
-  const { orgs, apps_with_preview, users_with_2fa, apps_with_store_url, ...globalStatsPatch } = patch
+  const { orgs, apps_with_preview, users_with_2fa, apps_with_store_url, refunds_count, refunds_amount, ...globalStatsPatch } = patch
   let includePreview = apps_with_preview !== undefined
   let includeUsersWith2fa = users_with_2fa !== undefined
   let includeStoreUrl = apps_with_store_url !== undefined
+  let includeRefunds = refunds_count !== undefined || refunds_amount !== undefined
 
   while (true) {
     const updatePayload = {
@@ -1732,6 +1737,7 @@ async function updateGlobalStatsSnapshot(c: Context, dateId: string, patch: Glob
       ...(includePreview ? { apps_with_preview } : {}),
       ...(includeUsersWith2fa ? { users_with_2fa } : {}),
       ...(includeStoreUrl ? { apps_with_store_url } : {}),
+      ...(includeRefunds ? { refunds_count, refunds_amount } : {}),
     } as GlobalStatsUpdate
     const { error } = await supabaseAdmin(c)
       .from('global_stats')
@@ -1744,7 +1750,8 @@ async function updateGlobalStatsSnapshot(c: Context, dateId: string, patch: Glob
     const missingPreview = includePreview && isMissingAppsWithPreviewColumnError(error)
     const missingUsersWith2fa = includeUsersWith2fa && isMissingUsersWith2faColumnError(error)
     const missingStoreUrl = includeStoreUrl && isMissingAppsWithStoreUrlColumnError(error)
-    if (!missingPreview && !missingUsersWith2fa && !missingStoreUrl)
+    const missingRefunds = includeRefunds && isMissingRefundsColumnError(error)
+    if (!missingPreview && !missingUsersWith2fa && !missingStoreUrl && !missingRefunds)
       throw error
 
     cloudlog({
@@ -1754,6 +1761,7 @@ async function updateGlobalStatsSnapshot(c: Context, dateId: string, patch: Glob
       missingPreview,
       missingUsersWith2fa,
       missingStoreUrl,
+      missingRefunds,
       error,
     })
 
@@ -1763,6 +1771,8 @@ async function updateGlobalStatsSnapshot(c: Context, dateId: string, patch: Glob
       includeUsersWith2fa = false
     if (missingStoreUrl)
       includeStoreUrl = false
+    if (missingRefunds)
+      includeRefunds = false
   }
 
   if (orgs !== undefined)
@@ -3090,6 +3100,23 @@ async function getUpgradeRate12m(
   }
 }
 
+// Pending refunds count: Stripe usually settles them, and failed/canceled ones never left the account.
+const REFUND_EXCLUDED_STATUSES = new Set(['failed', 'canceled'])
+
+function summarizeRefunds(rows: Array<{ amount: number | null, currency: string | null, status: string | null }>) {
+  let refunds_count = 0
+  let refundCents = 0
+  for (const row of rows) {
+    if (REFUND_EXCLUDED_STATUSES.has(row.status ?? ''))
+      continue
+    refunds_count++
+    // Capgo bills in USD; other currencies are counted but not summed into the USD amount.
+    if ((row.currency ?? '').toLowerCase() === 'usd')
+      refundCents += Number(row.amount) || 0
+  }
+  return { refunds_count, refunds_amount: roundRevenueMoney(refundCents / 100) }
+}
+
 async function runRevenueGlobalStatsShard(c: Context, window: DailyWindow): Promise<void> {
   const supabase = supabaseAdmin(c)
   const metricWindow = getMetricWindowFromDailyWindow(window)
@@ -3108,6 +3135,7 @@ async function runRevenueGlobalStatsShard(c: Context, window: DailyWindow): Prom
     subscriptionAccessCounts,
     credits_bought,
     credits_consumed,
+    refunds,
   ] = await Promise.all([
     calculateRevenue(c, window.prevDayEnd),
     Promise.all([
@@ -3206,6 +3234,18 @@ async function runRevenueGlobalStatsShard(c: Context, window: DailyWindow): Prom
         }
         return (res.data || []).reduce((sum, row) => sum + (Number(row.credits_used) || 0), 0)
       }),
+    supabase
+      .from('stripe_refunds')
+      .select('amount, currency, status')
+      .gte('refunded_at', dayStartIso)
+      .lt('refunded_at', nextDayStartIso)
+      .then((res) => {
+        if (res.error) {
+          cloudlog({ requestId: c.get('requestId'), message: 'refunds error', error: res.error })
+          return summarizeRefunds([])
+        }
+        return summarizeRefunds(res.data || [])
+      }),
   ])
 
   const upgrade_rate_12m = await getUpgradeRate12m(c, window, upgraded_orgs)
@@ -3216,6 +3256,8 @@ async function runRevenueGlobalStatsShard(c: Context, window: DailyWindow): Prom
     credits_consumed: Math.round(credits_consumed),
     mrr: revenue.mrr,
     new_paying_orgs,
+    refunds_amount: refunds.refunds_amount,
+    refunds_count: refunds.refunds_count,
     plan_enterprise_monthly: revenue.plan_enterprise_monthly,
     plan_enterprise_yearly: revenue.plan_enterprise_yearly,
     plan_maker_monthly: revenue.plan_maker_monthly,
@@ -3616,6 +3658,7 @@ export const globalStatsTestUtils = {
   shouldRefreshMutablePastDueStats,
   calculateChurnRevenue,
   calculateConversionRate,
+  summarizeRefunds,
   calculateNrr,
   getPlanConversionRates,
   getPaidPlanTotal,
