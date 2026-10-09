@@ -578,7 +578,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
 </script>
 
 <template>
-  <div class="flex flex-col bg-white border shadow-sm md:p-8 md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10" :class="thankYouPage ? 'pb-0' : 'pb-8'">
+  <div class="flex flex-col px-4 pt-4 bg-white border shadow-sm md:p-8 md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10" :class="thankYouPage ? 'pb-0' : 'pb-8'">
     <div v-if="!thankYouPage" class="flex flex-col w-full h-full">
       <!-- Header Section -->
       <div class="flex flex-col items-center justify-between gap-4 mb-6 sm:flex-row shrink-0">

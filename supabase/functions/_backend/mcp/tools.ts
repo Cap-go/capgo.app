@@ -356,9 +356,18 @@ const bundleTools: McpTool[] = [
     name: 'capgo_list_bundles',
     title: 'List bundles',
     description: 'List the uploaded bundles (live update versions) of an app, newest first.',
-    input: { appId, page },
+    input: {
+      appId,
+      page,
+      version: z.string().min(1).optional().describe('Exact bundle version name (app_versions.name), e.g. 1.2.3'),
+      id: z.number().int().positive().optional().describe('Numeric bundle id (app_versions.id)'),
+    },
     annotations: READ,
-    request: input => ({ method: 'GET', path: '/bundle', query: { app_id: input.appId, page: input.page } }),
+    request: input => ({
+      method: 'GET',
+      path: '/bundle',
+      query: compact({ app_id: input.appId, page: input.page, version: input.version, id: input.id }),
+    }),
   }),
   apiTool({
     name: 'capgo_create_bundle_from_url',

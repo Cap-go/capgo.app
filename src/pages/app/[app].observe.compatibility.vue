@@ -808,7 +808,7 @@ watchEffect(async () => {
                       <span v-else>{{ group.representative.channel_name }}</span>
                     </td>
                     <td class="px-4 py-3 font-mono text-xs text-slate-700 dark:text-slate-200">
-                      <div class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 dark:bg-slate-800 whitespace-nowrap">
+                      <div class="inline-flex flex-wrap items-center max-w-56 gap-x-1.5 gap-y-0.5 px-3 py-1 rounded-2xl bg-slate-100 wrap-anywhere dark:bg-slate-800">
                         <button
                           v-if="group.representative.previous_version_id !== null && existingVersionIds.has(group.representative.previous_version_id)"
                           type="button"
@@ -833,7 +833,7 @@ watchEffect(async () => {
                       </div>
                     </td>
                     <td class="px-4 py-3">
-                      <div v-if="group.representative.offenders && group.representative.offenders.length > 0" class="flex flex-wrap gap-1" :title="group.representative.offenders.join(', ')">
+                      <div v-if="group.representative.offenders && group.representative.offenders.length > 0" class="flex flex-wrap gap-1 max-w-64" :title="group.representative.offenders.join(', ')">
                         <span
                           v-for="offender in group.representative.offenders.slice(0, 3)"
                           :key="offender"
@@ -866,7 +866,7 @@ watchEffect(async () => {
                         </span>
                         <button
                           type="button"
-                          class="text-xs text-left text-slate-500 dark:text-slate-400 line-clamp-2 max-w-xs cursor-pointer hover:underline underline-offset-2"
+                          class="text-xs text-left text-slate-500 dark:text-slate-400 line-clamp-2 max-w-48 cursor-pointer hover:underline underline-offset-2"
                           :title="resolutionLabel(group.representative)"
                           data-test="compatibility-resolution-detail"
                           @click="openResolutionDialog(group)"
@@ -876,7 +876,7 @@ watchEffect(async () => {
                       </div>
                     </td>
                     <td class="px-4 py-3 text-right whitespace-nowrap">
-                      <div class="flex items-center justify-end gap-2">
+                      <div class="flex flex-col items-end gap-1.5">
                         <button
                           v-if="dependencyDiffPath(id, group.representative)"
                           type="button"

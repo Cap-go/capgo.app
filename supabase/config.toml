@@ -362,6 +362,10 @@ s3_secret_key = "env(S3_SECRET_KEY)"
 verify_jwt = false
 import_map = "./functions/deno.json"
 
+[functions.auth]
+verify_jwt = false
+import_map = "./functions/deno.json"
+
 [functions.bundle]
 verify_jwt = false
 import_map = "./functions/deno.json"

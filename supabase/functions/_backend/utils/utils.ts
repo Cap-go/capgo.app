@@ -203,13 +203,27 @@ export function isLimited(c: Context, id: string) {
   return Math.random() < app.ignore
 }
 
+// Hono's `c.executionCtx` getter throws when the app was fetched without one
+// (e.g. a Hono router running inside a Durable Object).
+function getExecutionCtx(c: Context): Context['executionCtx'] | undefined {
+  try {
+    return c.executionCtx
+  }
+  catch {
+    return undefined
+  }
+}
+
 export function backgroundTask(c: Context, p: any) {
   const waitForCompletion = c.req.header(WAIT_FOR_COMPLETION_HEADER) === 'true' && Boolean(c.get('APISecret'))
   if (waitForCompletion || getEnv(c, 'CAPGO_PREVENT_BACKGROUND_FUNCTIONS') === 'true') {
     return p
   }
   if (getRuntimeKey() === 'workerd') {
-    c.executionCtx.waitUntil(p)
+    const executionCtx = getExecutionCtx(c)
+    if (!executionCtx)
+      return p
+    executionCtx.waitUntil(p)
     return Promise.resolve(null)
   }
   if (EdgeRuntime?.waitUntil) {
