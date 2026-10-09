@@ -86,3 +86,20 @@ describe('stats action filters', () => {
     )
   })
 })
+
+describe('update check error action', () => {
+  it('is accepted, filterable, and never counted as a bundle failure', async () => {
+    const { isRunningVersionAction } = await import('../supabase/functions/_backend/plugin_runtime/plugins/stats_actions.ts')
+    const { PUBLIC_FAILURE_ACTIONS } = await import('../supabase/functions/_backend/utils/cloudflare.ts')
+
+    expect(ALLOWED_STATS_ACTIONS).toContain('update_check_error')
+    expect(filterToAction[actionToFilter.update_check_error]).toBe('update_check_error')
+    expect(updateActionFilterKeys).toContain(actionToFilter.update_check_error)
+    // The /stats version-failure path and the release live view treat every
+    // "*_fail" action as a failed bundle. A failed check downloaded nothing.
+    expect('update_check_error'.endsWith('_fail')).toBe(false)
+    expect(PUBLIC_FAILURE_ACTIONS).not.toContain('update_check_error')
+    // version_name is the bundle the device runs, so the device row stays current.
+    expect(isRunningVersionAction('update_check_error')).toBe(true)
+  })
+})

@@ -5028,6 +5028,7 @@ export type Database = {
         | "native_app_version_changed"
         | "app_nav"
         | "channelPaused"
+        | "update_check_error"
       stripe_status:
         | "created"
         | "succeeded"
@@ -5300,6 +5301,7 @@ export const Constants = {
         "native_app_version_changed",
         "app_nav",
         "channelPaused",
+        "update_check_error",
       ],
       stripe_status: [
         "created",

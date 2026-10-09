@@ -5449,6 +5449,7 @@ export type Database = {
         | "app_launch_timeout"
         | "app_nav"
         | "channelPaused"
+        | "update_check_error"
         | "webview_dom_content_loaded"
         | "webview_page_loaded"
       stripe_status:
@@ -5732,6 +5733,7 @@ export const Constants = {
         "app_launch_timeout",
         "app_nav",
         "channelPaused",
+        "update_check_error",
         "webview_dom_content_loaded",
         "webview_page_loaded",
       ],
