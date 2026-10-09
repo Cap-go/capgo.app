@@ -166,7 +166,13 @@ test.describe('Registration', () => {
     await expectProtectedRouteRedirect(page, '/apps', /\/onboarding\/app/, '[data-test="onboarding-logout"]')
 
     await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveValue(appName)
-    await page.locator('[data-test="onboarding-estimated-users-option"]').nth(1).click()
+    // Website Live can be preselected (AI-assisted live updates); this flow covers full Capgo.
+    const websiteLiveDetails = page.locator('[data-test="onboarding-website-live-details"]')
+    const estimatedUsersOption = page.locator('[data-test="onboarding-estimated-users-option"]').nth(1)
+    await expect(websiteLiveDetails.or(estimatedUsersOption)).toBeVisible()
+    if (await websiteLiveDetails.isVisible())
+      await page.click('[data-test="onboarding-update-mode-capgo"]')
+    await estimatedUsersOption.click()
     await returnFromOrganizationToAppName(page)
     await page.fill('[data-test="app-onboarding-name"]', editedAppName)
     await continueFromAppNameToOrganization(page)

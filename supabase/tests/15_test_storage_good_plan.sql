@@ -13,8 +13,9 @@ BEGIN
   TRUNCATE TABLE "public"."daily_mau" CASCADE;
   TRUNCATE TABLE "public"."daily_bandwidth" CASCADE;
 
+  -- Website Live has no usage limits; these checks cover usage-based plans.
   FOR plan IN
-    SELECT * FROM plans
+    SELECT * FROM plans WHERE kind = 'full'
   LOOP
     TRUNCATE TABLE "public"."app_versions_meta" CASCADE;
 

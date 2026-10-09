@@ -31,6 +31,8 @@ export const apps = pgTable('apps', {
   existing_app: boolean('existing_app').notNull().default(false),
   ios_store_url: text('ios_store_url'),
   android_store_url: text('android_store_url'),
+  update_mode: text('update_mode').notNull().default('capgo'),
+  website_url: text('website_url'),
 })
 
 export const app_versions = pgTable('app_versions', {

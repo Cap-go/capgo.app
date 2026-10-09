@@ -87,6 +87,9 @@ BEGIN
     (NOW(), NOW(), 'Solo', 'plan.solo.desc', 14, 146, 'prod_LQIregjtNduh4q', 'prod_TJRd2hFHZsBIPK', '526e11d8-3c51-4581-ac92-4770c602f47c', 'price_1LVvuZGH46eYKnWwuGKOf4DK', 'price_1LVvuIGH46eYKnWwHMDCrxcH', 1073741824, 13958643712, 2000, 'Best for independent developers', 3600, 2),
     (NOW(), NOW(), 'Team', 'plan.team.desc', 99, 998, 'prod_LQIugvJcPrxhda', 'prod_TJRd2hFHZsBIPK', 'abd76414-8f90-49a5-b3a4-8ff4d2e12c77', 'price_1KjSIUGH46eYKnWwWHvg8XYs', 'price_1KjSLlGH46eYKnWwAwMW2wiW', 6442450944, 536870912000, 100000, 'Best for medium enterprises', 36000, 4);
 
+    INSERT INTO "public"."plans" ("created_at", "updated_at", "name", "description", "price_m", "price_y", "stripe_id", "credit_id", "id", "price_m_id", "price_y_id", "storage", "bandwidth", "mau", "market_desc", "build_time_unit", "native_build_concurrency", "kind") VALUES
+    (NOW(), NOW(), 'Website Live', 'plan.website_live.desc', 12, 120, 'prod_website_live_todo', 'prod_TJRd2hFHZsBIPK', '0c7e3a54-5b2f-4f4e-9d77-3f0d2b6c1a11', 'price_website_live_month_todo', 'price_website_live_year_todo', 0, 0, 0, 'Best for teams shipping from their website', 0, 1, 'website');
+
     INSERT INTO
       "public"."capgo_credits_steps" (
         type,

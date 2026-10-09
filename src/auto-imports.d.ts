@@ -68,6 +68,7 @@ declare global {
   const markRaw: typeof import('vue').markRaw
   const nextTick: typeof import('vue').nextTick
   const normalizeNavigationPath: typeof import('./composables/useAppNavigation').normalizeNavigationPath
+  const normalizeWebsiteLiveUrl: typeof import('./stores/appUpdateMode').normalizeWebsiteLiveUrl
   const onActivated: typeof import('vue').onActivated
   const onBeforeMount: typeof import('vue').onBeforeMount
   const onBeforeRouteLeave: typeof import('vue-router').onBeforeRouteLeave
@@ -139,6 +140,7 @@ declare global {
   const useAppNavigation: typeof import('./composables/useAppNavigation').useAppNavigation
   const useAppOnboardingCliProgress: typeof import('./composables/useAppOnboardingCliProgress').useAppOnboardingCliProgress
   const useAppPage: typeof import('./composables/useAppPage').useAppPage
+  const useAppUpdateModeStore: typeof import('./stores/appUpdateMode').useAppUpdateModeStore
   const useArrayDifference: typeof import('@vueuse/core').useArrayDifference
   const useArrayEvery: typeof import('@vueuse/core').useArrayEvery
   const useArrayFilter: typeof import('@vueuse/core').useArrayFilter
@@ -374,6 +376,9 @@ declare global {
   export type { UpdateDeliveryScope, UpdateDeliveryStatsResponse } from './composables/useUpdateDeliveryStats'
   import('./composables/useUpdateDeliveryStats')
   // @ts-ignore
+  export type { AppUpdateMode, AppUpdateModeState } from './stores/appUpdateMode'
+  import('./stores/appUpdateMode')
+  // @ts-ignore
   export type { DialogV2Button, DialogV2Options } from './stores/dialogv2'
   import('./stores/dialogv2')
   // @ts-ignore
@@ -453,6 +458,7 @@ declare module 'vue' {
     readonly markRaw: UnwrapRef<typeof import('vue')['markRaw']>
     readonly nextTick: UnwrapRef<typeof import('vue')['nextTick']>
     readonly normalizeNavigationPath: UnwrapRef<typeof import('./composables/useAppNavigation')['normalizeNavigationPath']>
+    readonly normalizeWebsiteLiveUrl: UnwrapRef<typeof import('./stores/appUpdateMode')['normalizeWebsiteLiveUrl']>
     readonly onActivated: UnwrapRef<typeof import('vue')['onActivated']>
     readonly onBeforeMount: UnwrapRef<typeof import('vue')['onBeforeMount']>
     readonly onBeforeRouteLeave: UnwrapRef<typeof import('vue-router')['onBeforeRouteLeave']>
@@ -522,6 +528,7 @@ declare module 'vue' {
     readonly useAppNavigation: UnwrapRef<typeof import('./composables/useAppNavigation')['useAppNavigation']>
     readonly useAppOnboardingCliProgress: UnwrapRef<typeof import('./composables/useAppOnboardingCliProgress')['useAppOnboardingCliProgress']>
     readonly useAppPage: UnwrapRef<typeof import('./composables/useAppPage')['useAppPage']>
+    readonly useAppUpdateModeStore: UnwrapRef<typeof import('./stores/appUpdateMode')['useAppUpdateModeStore']>
     readonly useArrayDifference: UnwrapRef<typeof import('@vueuse/core')['useArrayDifference']>
     readonly useArrayEvery: UnwrapRef<typeof import('@vueuse/core')['useArrayEvery']>
     readonly useArrayFilter: UnwrapRef<typeof import('@vueuse/core')['useArrayFilter']>

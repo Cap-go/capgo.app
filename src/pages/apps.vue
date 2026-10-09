@@ -46,6 +46,8 @@ function normalizeAppRow(app: AppIconSource): AppRow {
     onboarding_completed_at: 'onboarding_completed_at' in app ? app.onboarding_completed_at : null,
     rollout_channel_count: 'rollout_channel_count' in app ? app.rollout_channel_count : 0,
     rollout_paused_version_names: 'rollout_paused_version_names' in app ? app.rollout_paused_version_names : [],
+    update_mode: 'update_mode' in app ? app.update_mode : 'capgo',
+    website_url: 'website_url' in app ? app.website_url : null,
   }
 }
 

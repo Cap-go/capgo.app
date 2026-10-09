@@ -601,7 +601,7 @@ async function getRevenuePlans(c: Context): Promise<RevenuePlanRow[]> {
   const { data: plans, error } = await supabaseAdmin(c)
     .from('plans')
     .select('name, stripe_id, price_m, price_y, price_m_id, price_y_id')
-    .in('name', ['Solo', 'Maker', 'Team', 'Enterprise'])
+    .in('name', ['Website Live', 'Solo', 'Maker', 'Team', 'Enterprise'])
 
   if (error) {
     cloudlog({
