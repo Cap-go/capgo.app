@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { builderPayloadTestUtils } from '../supabase/functions/_backend/public/build/request.ts'
 
-const { buildBuilderPayload } = builderPayloadTestUtils
+const { buildBuilderPayload, parseMachineVersionUnavailable } = builderPayloadTestUtils
 
 const baseInput = {
   orgId: 'org-123',
@@ -189,5 +189,23 @@ describe('builder payload shape', () => {
 
     expect(payload.buildOptions).toEqual(complexOptions)
     expect(payload.buildCredentials).toEqual(complexCredentials)
+  })
+})
+
+describe('builder machine version rejection', () => {
+  it.concurrent('forwards only the builder runner_version_unavailable message', () => {
+    const body = JSON.stringify({ error: 'No build machine has Xcode 27. Available: macOS 26.1 · Xcode 26.0.1.', code: 'runner_version_unavailable' })
+    expect(parseMachineVersionUnavailable(400, body)).toBe('No build machine has Xcode 27. Available: macOS 26.1 · Xcode 26.0.1.')
+    expect(parseMachineVersionUnavailable(500, body)).toBeNull()
+    expect(parseMachineVersionUnavailable(400, JSON.stringify({ error: 'invalid payload' }))).toBeNull()
+    expect(parseMachineVersionUnavailable(400, 'not json')).toBeNull()
+  })
+
+  it.concurrent('passes the requested machine versions through to the builder', () => {
+    const payload = buildBuilderPayload({
+      ...baseInput,
+      buildOptions: { platform: 'ios', iosXcodeVersion: '26', iosMacosVersion: '26.1' },
+    })
+    expect(payload.buildOptions).toMatchObject({ iosXcodeVersion: '26', iosMacosVersion: '26.1' })
   })
 })

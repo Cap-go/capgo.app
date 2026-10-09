@@ -1292,10 +1292,21 @@ export async function zipDirectory(projectDir: string, outputPath: string, platf
  */
 
 /** Keys that are non-secret build options and should NOT be sent in the credentials blob. */
+/**
+ * Normalize a requested build machine macOS / Xcode version ("Xcode 26.0" → "26.0").
+ * Returns undefined when it is not a dotted version the builder can route on.
+ */
+export function normalizeMachineVersion(value: string): string | undefined {
+  const trimmed = value.trim().replace(/^(?:macos|xcode)\s*/i, '')
+  return /^\d{1,3}(?:\.\d{1,3}){0,2}$/.test(trimmed) ? trimmed : undefined
+}
+
 export const NON_CREDENTIAL_KEYS = new Set([
   'CAPGO_IOS_SCHEME',
   'CAPGO_IOS_TARGET',
   'CAPGO_IOS_DISTRIBUTION',
+  'CAPGO_IOS_MACOS_VERSION',
+  'CAPGO_IOS_XCODE_VERSION',
   'BUILD_OUTPUT_UPLOAD_ENABLED',
   'BUILD_OUTPUT_RETENTION_SECONDS',
   'SKIP_BUILD_NUMBER_BUMP',
@@ -1397,6 +1408,8 @@ export function splitPayload(
     iosScheme: mergedCredentials.CAPGO_IOS_SCHEME,
     iosTarget: mergedCredentials.CAPGO_IOS_TARGET,
     iosDistribution: mergedCredentials.CAPGO_IOS_DISTRIBUTION as 'app_store' | 'ad_hoc' | undefined,
+    iosMacosVersion: platform === 'ios' ? mergedCredentials.CAPGO_IOS_MACOS_VERSION : undefined,
+    iosXcodeVersion: platform === 'ios' ? mergedCredentials.CAPGO_IOS_XCODE_VERSION : undefined,
     iosSourceDir: mergedCredentials.CAPGO_IOS_SOURCE_DIR,
     iosAppDir: mergedCredentials.CAPGO_IOS_APP_DIR,
     iosProjectDir: mergedCredentials.CAPGO_IOS_PROJECT_DIR,
@@ -1550,6 +1563,10 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       cliCredentials.CAPGO_IOS_TARGET = options.iosTarget
     if (options.iosDistribution)
       cliCredentials.CAPGO_IOS_DISTRIBUTION = options.iosDistribution
+    if (options.xcodeVersion)
+      cliCredentials.CAPGO_IOS_XCODE_VERSION = options.xcodeVersion
+    if (options.macosVersion)
+      cliCredentials.CAPGO_IOS_MACOS_VERSION = options.macosVersion
     if (options.iosProvisioningProfile && options.iosProvisioningProfile.length > 0) {
       const provMap = buildProvisioningMap(options.iosProvisioningProfile, resolve(options.path || cwd()))
       cliCredentials.CAPGO_IOS_PROVISIONING_MAP = JSON.stringify(provMap)
@@ -1694,6 +1711,22 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       }
       // Write normalized value back so splitPayload picks it up
       mergedCredentials.CAPGO_IOS_DISTRIBUTION = distributionMode
+      for (const [key, label, flag] of [
+        ['CAPGO_IOS_XCODE_VERSION', 'Xcode', '--xcode-version'],
+        ['CAPGO_IOS_MACOS_VERSION', 'macOS', '--macos-version'],
+      ] as const) {
+        const raw = mergedCredentials[key]
+        if (raw === undefined)
+          continue
+        const version = normalizeMachineVersion(raw)
+        if (version) {
+          mergedCredentials[key] = version
+          log.info(`ℹ️  Building on a machine with ${label} ${version}`)
+        }
+        else {
+          missingCreds.push(`Invalid ${flag} / ${key} value: '${raw}'. Use a version like 26, 26.1 or 16.4.1`)
+        }
+      }
       if (mergedCredentials.CAPGO_STORE_SUBMIT_REVIEW === 'true' && distributionMode !== 'app_store') {
         missingCreds.push('--submit-to-store-review on iOS requires --ios-distribution app_store')
       }
@@ -2021,6 +2054,14 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     if (!response.ok) {
       const errorText = await response.text()
       await throwIfBuildPlanLimitError(response.status, errorText, 'request', log)
+      if (errorText.includes('build_machine_version_unavailable')) {
+        let message = errorText
+        try {
+          message = (JSON.parse(errorText) as { message?: string }).message || errorText
+        }
+        catch {}
+        throw new Error(`${message} Change or drop --xcode-version / --macos-version.`)
+      }
       const isCapgoAuth = response.status === 401 || response.status === 403
         || /invalid_apikey|unauthorized|no_key_provided|invalid_jwt|no_jwt/i.test(errorText)
       throw new Error(

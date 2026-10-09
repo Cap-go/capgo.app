@@ -761,6 +761,8 @@ export class CapgoSDK {
         appleAppId: creds?.APPLE_APP_ID,
         iosScheme: creds?.CAPGO_IOS_SCHEME,
         iosTarget: creds?.CAPGO_IOS_TARGET,
+        xcodeVersion: parsed.xcodeVersion ?? creds?.CAPGO_IOS_XCODE_VERSION,
+        macosVersion: parsed.macosVersion ?? creds?.CAPGO_IOS_MACOS_VERSION,
         iosDistribution: creds?.CAPGO_IOS_DISTRIBUTION as 'app_store' | 'ad_hoc' | undefined,
         iosProvisioningMap: creds?.CAPGO_IOS_PROVISIONING_MAP,
         androidKeystoreFile: creds?.ANDROID_KEYSTORE_FILE,

@@ -1032,6 +1032,8 @@ Examples:
   .option('--app-store-connect-team-id <id>', 'iOS: App Store Connect Team ID')
   .option('--ios-scheme <scheme>', 'iOS: Xcode scheme to build (default: App)')
   .option('--ios-target <target>', 'iOS: Xcode target for reading build settings (default: same as scheme)')
+  .option('--xcode-version <version>', 'iOS: build on a machine with this Xcode version (e.g. 26, 26.0.1). A major version accepts any minor. Default: any machine. Precedence: CLI > env (CAPGO_IOS_XCODE_VERSION) > saved credentials')
+  .option('--macos-version <version>', 'iOS: build on a machine with this macOS version (e.g. 26, 27). A major version accepts any minor. Default: any machine. Precedence: CLI > env (CAPGO_IOS_MACOS_VERSION) > saved credentials')
   .addOption(new Option('--ios-distribution <mode>', 'iOS: Distribution mode. app_store (default) uploads to TestFlight/App Store; ad_hoc skips store upload and builds an Ad Hoc IPA for device install. Use ad_hoc with --output-upload when the App Store app does not exist yet or you only need an IPA download.').choices(['app_store', 'ad_hoc']).default('app_store'))
   .option('--ios-provisioning-profile <mapping>', 'iOS: Provisioning profile path or bundleId=path mapping (repeatable)', collect, [])
   .option('--no-cache', 'Disable Xcode compilation cache for this build (default: cache enabled)')
