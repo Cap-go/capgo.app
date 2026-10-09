@@ -112,16 +112,48 @@ async function routeDeferredPreviewLink(router: Router) {
   }
 }
 
+// getLaunchUrl() returns the last opened URL for the whole app process, and a
+// preview reloads the WebView into another bundle that runs this handler again.
+// Without this guard a tapped preview link (already natively confirmed) restarts
+// the preview on every reload, in a loop. sessionStorage is shared across bundle
+// reloads (same origin and WebView) but cleared on a cold start, so opening the
+// same link again later still works.
+const HANDLED_LAUNCH_URL_KEY = 'capgo.handled_launch_url'
+
+function readHandledLaunchUrl() {
+  try {
+    return sessionStorage.getItem(HANDLED_LAUNCH_URL_KEY)
+  }
+  catch {
+    return null
+  }
+}
+
+function markLaunchUrlHandled(url: string) {
+  try {
+    sessionStorage.setItem(HANDLED_LAUNCH_URL_KEY, url)
+  }
+  catch {
+    // Storage unavailable: the link is still handled once for this page load.
+  }
+}
+
 export async function installDeepLinkHandler(router: Router) {
   if (!Capacitor.isNativePlatform())
     return
 
   await CapacitorApp.addListener('appUrlOpen', (event) => {
+    // A warm open also becomes the process launch URL replayed after reloads.
+    markLaunchUrlHandled(event.url)
     handleDeepLink(router, event.url)
   })
 
-  const launchUrl = await CapacitorApp.getLaunchUrl()
-  const handledLaunchUrl = launchUrl?.url ? handleDeepLink(router, launchUrl.url) : false
+  const launchUrl = (await CapacitorApp.getLaunchUrl())?.url
+  if (launchUrl && readHandledLaunchUrl() === launchUrl)
+    return
+  if (launchUrl)
+    markLaunchUrlHandled(launchUrl)
+  const handledLaunchUrl = launchUrl ? handleDeepLink(router, launchUrl) : false
   if (!handledLaunchUrl)
     await routeDeferredPreviewLink(router)
 }

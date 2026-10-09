@@ -15,6 +15,7 @@ import { cloudlog, cloudlogErr } from './logging.ts'
 import { closeClient, getPgClient } from './pg.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
 import { Constants } from './supabase.types.ts'
+import { getClientIP } from './rate_limit.ts'
 import { getEnv, isStripeConfigured } from './utils.ts'
 import { buildVersionCompareSql } from './versionCompare.ts'
 
@@ -273,6 +274,22 @@ export function emptySupabase(c: Context) {
       persistSession: false,
       detectSessionInUrl: false,
     },
+  }
+  return createClient<Database>(getEnv(c, 'SUPABASE_URL'), getEnv(c, 'SUPABASE_ANON_KEY'), options)
+}
+
+/** Anon GoTrue client that forwards the trusted client IP for auth rate limiting. */
+export function emptySupabaseWithClientIP(c: Context) {
+  const clientIp = getClientIP(c)
+  const options = {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+      detectSessionInUrl: false,
+    },
+    ...(clientIp !== 'unknown'
+      ? { global: { headers: { 'X-Forwarded-For': clientIp } } }
+      : {}),
   }
   return createClient<Database>(getEnv(c, 'SUPABASE_URL'), getEnv(c, 'SUPABASE_ANON_KEY'), options)
 }
@@ -2167,6 +2184,20 @@ export async function countDevicesSB(
 }
 
 const DEFAULT_PLAN_NAME = 'Solo'
+
+// Enterprise MAU slider: MAU bought on top of the plan allowance (part of the plan quota).
+export async function getOrgExtraMau(c: Context, orgId: string): Promise<number> {
+  const { data, error } = await supabaseAdmin(c)
+    .from('orgs')
+    .select('stripe_info(extra_mau)')
+    .eq('id', orgId)
+    .maybeSingle()
+  if (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'getOrgExtraMau', orgId, error })
+    return 0
+  }
+  return Number(data?.stripe_info?.extra_mau ?? 0)
+}
 
 export async function getCurrentPlanNameOrg(c: Context, orgId?: string): Promise<string> {
   if (!orgId)

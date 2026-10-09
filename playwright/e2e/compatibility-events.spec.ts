@@ -94,6 +94,8 @@ test.describe('Compatibility events', () => {
     await mockCompatibilityEvents(page, () => [unresolvedEvent()])
 
     await page.goto(`/app/${APP_ID}`)
+    // Dashboard banners live behind the Activity menu.
+    await page.locator('[data-testid="alerts-menu-toggle"]').click()
     // The banner exposes a stable data-test hook; keep the copy assertions for
     // content correctness but locate the CTA via its data-test attribute.
     const banner = page.locator('[data-test="compatibility-banner"]')
@@ -110,7 +112,7 @@ test.describe('Compatibility events', () => {
 
     await page.goto(`/app/${APP_ID}/observe/compatibility`)
 
-    await expect(page.getByRole('heading', { name: 'Compatibility events' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Compatibility events', exact: true })).toHaveAttribute('aria-current', 'page')
 
     const row = page.locator(`[data-test="compatibility-row"][data-event-id="${EVENT_ID}"]`)
     await expect(row).toHaveCount(1)

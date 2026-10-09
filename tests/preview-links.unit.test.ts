@@ -243,3 +243,22 @@ describe('scanned preview value normalization', () => {
     expect(normalizeScannedPreviewValue('  hello  ')).toBe('hello')
   })
 })
+
+describe('scanned preview value edge cases', () => {
+  it.concurrent('keeps a clean payload verbatim, including a channel name ending in a dot', () => {
+    const link = 'capgo://preview/channel?appId=com.example.app&channel=v1.&channelId=3'
+    expect(normalizeScannedPreviewValue(link)).toBe(link)
+    expect(normalizeScannedPreviewValue(`  ${link}\n`)).toBe(link)
+  })
+
+  it.concurrent('prefers a later capgo link over an earlier https URL', () => {
+    const link = 'capgo://preview/channel?appId=io.demo&channel=main'
+    expect(normalizeScannedPreviewValue(`See https://capgo.app for help, then: ${link}`)).toBe(link)
+  })
+
+  it.concurrent('keeps balanced parentheses inside the URL', () => {
+    const link = 'capgo://preview/bundle?appId=x&versionId=7&url=https://example.com/foo(bar)'
+    expect(normalizeScannedPreviewValue(link)).toBe(link)
+    expect(normalizeScannedPreviewValue(`(open ${link})`)).toBe(link)
+  })
+})

@@ -63,15 +63,17 @@ const invitation = {
   rbac_role_name: 'org_member',
 }
 
-function buildPgPool(existingMembership: boolean) {
+function buildPgPool(acceptStatuses: string[] = ['OK'], acceptError?: Error) {
+  let callCount = 0
   const pgClient = {
     query: vi.fn(async (query: string) => {
-      if (query.includes('SELECT invite_role.rbac_role_name'))
-        return { rows: [{ rbac_role_name: 'org_member' }] }
-      if (query.includes('SELECT public.roles.id'))
-        return { rows: [{ id: '4b1e16bd-50c5-4f64-a81a-2b87b8a0fda4' }] }
-      if (query.includes('SELECT public.org_users.id'))
-        return { rows: existingMembership ? [{ id: 'membership-id' }] : [] }
+      if (query.includes('accept_tmp_user_invitation')) {
+        if (acceptError)
+          throw acceptError
+        const status = acceptStatuses[Math.min(callCount, acceptStatuses.length - 1)]
+        callCount += 1
+        return { rows: [{ accept_tmp_user_invitation: status }] }
+      }
       return { rows: [] }
     }),
     release: vi.fn(),
@@ -177,7 +179,7 @@ describe('magic-link invitation acceptance telemetry', () => {
 
   it('emits created only after a new account membership is finalized', async () => {
     supabaseAdminMock.mockReturnValue(buildAdmin({}))
-    getPgClientMock.mockReturnValue(buildPgPool(false))
+    getPgClientMock.mockReturnValue(buildPgPool())
     createUserMock.mockResolvedValue({ data: { user: { id: FUTURE_USER_ID } }, error: null })
 
     const response = await acceptRequest()
@@ -194,7 +196,7 @@ describe('magic-link invitation acceptance telemetry', () => {
 
   it('accepts for an already-existing account and emits already_existed', async () => {
     supabaseAdminMock.mockReturnValue(buildAdmin({ existingUserId: EXISTING_USER_ID }))
-    getPgClientMock.mockReturnValue(buildPgPool(true))
+    getPgClientMock.mockReturnValue(buildPgPool())
     signInMock.mockResolvedValue({
       data: {
         session: { access_token: 'access-token', refresh_token: 'refresh-token' },
@@ -214,12 +216,11 @@ describe('magic-link invitation acceptance telemetry', () => {
     }))
   })
 
-  it('reports accepted rather than failed when cleanup fails after membership finalization', async () => {
+  it('accepts when tmp invite finalization is handled atomically in Postgres', async () => {
     supabaseAdminMock.mockReturnValue(buildAdmin({
-      deleteInvitationError: { message: 'cleanup failed' },
       existingUserId: EXISTING_USER_ID,
     }))
-    getPgClientMock.mockReturnValue(buildPgPool(true))
+    getPgClientMock.mockReturnValue(buildPgPool())
     signInMock.mockResolvedValue({
       data: {
         session: { access_token: 'access-token', refresh_token: 'refresh-token' },
@@ -230,7 +231,7 @@ describe('magic-link invitation acceptance telemetry', () => {
 
     const response = await acceptRequest()
 
-    expect(response.status).toBe(500)
+    expect(response.status).toBe(200)
     expect(captureInvitationEventMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       event: 'organization_membership_invitation_accepted',
       invitationId: invitation.id,
@@ -241,16 +242,14 @@ describe('magic-link invitation acceptance telemetry', () => {
     }))
   })
 
-  it('keeps a newly created membership finalized when invitation cleanup fails', async () => {
-    supabaseAdminMock.mockReturnValue(buildAdmin({
-      deleteInvitationError: { message: 'cleanup failed' },
-    }))
-    getPgClientMock.mockReturnValue(buildPgPool(false))
+  it('keeps a newly created membership finalized when acceptance succeeds in Postgres', async () => {
+    supabaseAdminMock.mockReturnValue(buildAdmin({}))
+    getPgClientMock.mockReturnValue(buildPgPool())
     createUserMock.mockResolvedValue({ data: { user: { id: FUTURE_USER_ID } }, error: null })
 
     const response = await acceptRequest()
 
-    expect(response.status).toBe(500)
+    expect(response.status).toBe(200)
     expect(deleteUserMock).not.toHaveBeenCalled()
     expect(captureInvitationEventMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       accountState: 'created',
@@ -266,7 +265,7 @@ describe('magic-link invitation acceptance telemetry', () => {
   it('does not emit accepted again when the completed magic-link request is retried', async () => {
     const invitationAvailable = { value: true }
     supabaseAdminMock.mockReturnValue(buildAdmin({ existingUserId: EXISTING_USER_ID, invitationAvailable }))
-    getPgClientMock.mockReturnValue(buildPgPool(true))
+    getPgClientMock.mockReturnValue(buildPgPool(['OK', 'NO_INVITE']))
     signInMock.mockResolvedValue({
       data: {
         session: { access_token: 'access-token', refresh_token: 'refresh-token' },
@@ -283,9 +282,63 @@ describe('magic-link invitation acceptance telemetry', () => {
     expect(captureInvitationEventMock.mock.calls.filter(([, event]) => event.event === 'organization_membership_invitation_accepted')).toHaveLength(1)
   })
 
+  it.each([
+    ['INVITER_NOT_FOUND', 403, 'Invitation must be reissued before acceptance'],
+    ['ALREADY_MEMBER', 409, 'already a member of this organization'],
+    ['MEMBERSHIP_NOT_FINALIZED', 409, 'could not be finalized'],
+    ['ROLE_NOT_FOUND', 500, 'Failed to resolve RBAC role'],
+  ] as const)('maps accept_tmp_user_invitation status %s to HTTP %s', async (status, httpStatus, messageFragment) => {
+    supabaseAdminMock.mockReturnValue(buildAdmin({ existingUserId: EXISTING_USER_ID }))
+    getPgClientMock.mockReturnValue(buildPgPool([status]))
+    signInMock.mockResolvedValue({
+      data: {
+        session: { access_token: 'access-token', refresh_token: 'refresh-token' },
+        user: { id: EXISTING_USER_ID },
+      },
+      error: null,
+    })
+
+    const response = await acceptRequest()
+
+    expect(response.status).toBe(httpStatus)
+    const bodyText = await response.text()
+    expect(bodyText).toContain(messageFragment)
+  })
+
+  it('maps privilege escalation errors to HTTP 403', async () => {
+    supabaseAdminMock.mockReturnValue(buildAdmin({ existingUserId: EXISTING_USER_ID }))
+    getPgClientMock.mockReturnValue(buildPgPool(
+      ['OK'],
+      new Error('Admins cannot elevate privileges!'),
+    ))
+    signInMock.mockResolvedValue({
+      data: {
+        session: { access_token: 'access-token', refresh_token: 'refresh-token' },
+        user: { id: EXISTING_USER_ID },
+      },
+      error: null,
+    })
+
+    const response = await acceptRequest()
+
+    expect(response.status).toBe(403)
+    expect(deleteUserMock).not.toHaveBeenCalled()
+  })
+
+  it('rolls back a newly created user when acceptance is rejected in Postgres', async () => {
+    supabaseAdminMock.mockReturnValue(buildAdmin({}))
+    getPgClientMock.mockReturnValue(buildPgPool(['INVITER_NOT_FOUND']))
+    createUserMock.mockResolvedValue({ data: { user: { id: FUTURE_USER_ID } }, error: null })
+
+    const response = await acceptRequest()
+
+    expect(response.status).toBe(403)
+    expect(deleteUserMock).toHaveBeenCalledWith(FUTURE_USER_ID)
+  })
+
   it('emits failed and never accepted when existing-account authentication fails', async () => {
     supabaseAdminMock.mockReturnValue(buildAdmin({ existingUserId: EXISTING_USER_ID }))
-    getPgClientMock.mockReturnValue(buildPgPool(true))
+    getPgClientMock.mockReturnValue(buildPgPool())
     signInMock.mockResolvedValue({ data: { session: null, user: null }, error: { message: 'Invalid credentials' } })
 
     const response = await acceptRequest()

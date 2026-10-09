@@ -130,9 +130,9 @@ describe('release live helpers', () => {
   const beta = { bundle_id: 3, version_name: '1.2.0-beta', channel_id: 2, channel_name: 'beta', deployed_at: '2026-09-29T11:00:00.000Z' }
   const prodOld = { bundle_id: 1, version_name: '1.0.0', channel_id: 1, channel_name: 'production', deployed_at: '2026-09-20T10:00:00.000Z' }
   const betaCurrent = { bundle_id: 5, version_name: '1.3.0', channel_id: 2, channel_name: 'beta', deployed_at: '2026-09-29T12:00:00.000Z' }
-  const production = { id: 1, name: 'production', public: true, current: { ...prodNew } }
-  const betaChannel = { id: 2, name: 'beta', public: false, current: betaCurrent }
-  const staging = { id: 3, name: 'staging', public: false, current: null }
+  const production = { id: 1, name: 'production', public: true, current: { ...prodNew }, rollout: null }
+  const betaChannel = { id: 2, name: 'beta', public: false, current: betaCurrent, rollout: null }
+  const staging = { id: 3, name: 'staging', public: false, current: null, rollout: null }
   const candidates = { channels: [betaChannel, production, staging], deployments: [beta, prodNew, prodOld] }
 
   it.concurrent('defaults to the public channel', () => {
@@ -176,5 +176,58 @@ describe('release live helpers', () => {
       { version_name: '1.2.0-beta', channel_id: 2, channel_name: 'beta', deployed_at: beta.deployed_at },
     ])
     expect(releaseLiveTestUtils.toChannelContext({ channels: [], deployments: [] }, null)).toEqual({ channel: null, channels: [], recent_deployments: [] })
+  })
+
+  const rolloutTarget = { bundle_id: 9, version_name: '1.2.0', channel_id: 1, channel_name: 'production', deployed_at: '2026-09-29T13:00:00.000Z' }
+  const rolloutProduction = {
+    ...production,
+    rollout: { target: rolloutTarget, percentage_bps: 2500, paused_at: null, pause_reason: null },
+  }
+  const rolloutCandidates = { channels: [betaChannel, rolloutProduction, staging], deployments: [beta, prodNew, prodOld] }
+
+  it.concurrent('watches the progressive rollout target, not the last full deployment', () => {
+    expect(releaseLiveTestUtils.pickRelease(rolloutCandidates, rolloutProduction)).toEqual(rolloutTarget)
+    expect(releaseLiveTestUtils.pickRelease(rolloutCandidates, rolloutProduction, '1.2.0')).toEqual(rolloutTarget)
+    // Naming another bundle still opens it.
+    expect(releaseLiveTestUtils.pickRelease(rolloutCandidates, rolloutProduction, '1.0.0')).toEqual(prodOld)
+    // The target leads the release picker of its channel.
+    const context = releaseLiveTestUtils.toChannelContext(rolloutCandidates, rolloutProduction)
+    expect(context.recent_deployments[0]).toMatchObject({ version_name: '1.2.0', channel_name: 'production' })
+    expect(context.recent_deployments.map(deployment => deployment.version_name)).toEqual(['1.2.0', '1.1.0', '1.0.0'])
+  })
+
+  it.concurrent('measures rollout reach against the targeted share of devices', () => {
+    const rollout = releaseLiveTestUtils.computeRollout(
+      rolloutProduction.rollout,
+      prodNew,
+      { '1.2.0': 20, '1.1.0': 70, '1.0.0': 10 },
+      { install: 990, fail: 10 },
+    )
+    expect(rollout).toEqual({
+      target_version: '1.2.0',
+      fallback_version: '1.1.0',
+      fallback_bundle_id: 2,
+      percentage: 25,
+      status: 'running',
+      paused_at: null,
+      pause_reason: null,
+      devices_on_target: 20,
+      devices_on_fallback: 70,
+      total_devices: 100,
+      expected_on_target: 25,
+      reach_percent: 80,
+      fallback_totals: { install: 990, fail: 10, success_rate: 99 },
+    })
+
+    const paused = releaseLiveTestUtils.computeRollout(
+      { ...rolloutProduction.rollout, paused_at: '2026-09-29T14:00:00.000Z', pause_reason: 'auto' },
+      null,
+      {},
+      null,
+    )
+    expect(paused).toMatchObject({ status: 'paused', total_devices: 0, expected_on_target: 0, reach_percent: null, fallback_totals: null })
+    expect(releaseLiveTestUtils.computeRollout({ ...rolloutProduction.rollout, percentage_bps: 0 }, prodNew, { '1.1.0': 5 }, null).status).toBe('zero')
+    // Reach is capped: sticky devices from an earlier, wider rollout can exceed the share.
+    expect(releaseLiveTestUtils.computeRollout(rolloutProduction.rollout, prodNew, { '1.2.0': 60, '1.1.0': 40 }, null).reach_percent).toBe(100)
   })
 })

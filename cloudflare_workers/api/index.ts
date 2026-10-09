@@ -1,6 +1,7 @@
 import type { ExecutionContext, ScheduledController } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
 import type { Bindings } from '../../supabase/functions/_backend/utils/cloudflare.ts'
+import { app as register } from '../../supabase/functions/_backend/auth/register.ts'
 import { createMcpApp } from '../../supabase/functions/_backend/mcp/index.ts'
 import { app as accept_invitation } from '../../supabase/functions/_backend/private/accept_invitation.ts'
 import { app as bundle_install_stats } from '../../supabase/functions/_backend/private/bundle_install_stats.ts'
@@ -10,6 +11,7 @@ import { app as config } from '../../supabase/functions/_backend/private/config.
 import { app as configBuilder } from '../../supabase/functions/_backend/private/config_builder.ts'
 import { app as create_device } from '../../supabase/functions/_backend/private/create_device.ts'
 import { app as credits } from '../../supabase/functions/_backend/private/credits.ts'
+import { app as customDomains } from '../../supabase/functions/_backend/private/custom_domains.ts'
 import { app as deleted_failed_version } from '../../supabase/functions/_backend/private/delete_failed_version.ts'
 import { app as devices_priv } from '../../supabase/functions/_backend/private/devices.ts'
 import { app as emailPreferences } from '../../supabase/functions/_backend/private/email_preferences.ts'
@@ -68,6 +70,7 @@ import { app as replication } from '../../supabase/functions/_backend/public/rep
 import { app as statistics } from '../../supabase/functions/_backend/public/statistics/index.ts'
 import { app as translation } from '../../supabase/functions/_backend/public/translation.ts'
 import { app as webhooks } from '../../supabase/functions/_backend/public/webhooks/index.ts'
+import { app as canceled_org_retention_alerts } from '../../supabase/functions/_backend/triggers/canceled_org_retention_alerts.ts'
 import { app as credit_usage_alerts } from '../../supabase/functions/_backend/triggers/credit_usage_alerts.ts'
 import { app as credit_usage_posthog } from '../../supabase/functions/_backend/triggers/credit_usage_posthog.ts'
 import { app as cron_app_fame } from '../../supabase/functions/_backend/triggers/cron_app_fame.ts'
@@ -105,9 +108,9 @@ import { app as updates_cache_purge } from '../../supabase/functions/_backend/tr
 import { app as webhook_delivery } from '../../supabase/functions/_backend/triggers/webhook_delivery.ts'
 import { app as webhook_dispatcher } from '../../supabase/functions/_backend/triggers/webhook_dispatcher.ts'
 import { BRES, createAllCatch, createHono } from '../../supabase/functions/_backend/utils/hono.ts'
-import { processNativeNotificationQueueBatch } from '../../supabase/functions/_backend/utils/nativeNotificationSender.ts'
 import { flushQueuedPluginNotifications } from '../../supabase/functions/_backend/utils/plugin_notification_flush.ts'
 import { version } from '../../supabase/functions/_backend/utils/version.ts'
+import { processApiQueueBatch } from './queue.ts'
 import { app as send_email } from './triggers/send_email.ts'
 
 function getExecutionContext(c: Context): Context['executionCtx'] | undefined {
@@ -141,6 +144,7 @@ app.route('/queue_health', queue_health)
 app.route('/check_cpu_usage', check_cpu_usage)
 app.route('/translation', translation)
 app.route('/plugin_regions', pluginRegions)
+app.route('/auth/register', register)
 // Hosted MCP server (POST /mcp) + OAuth discovery/endpoints. Tools replay public API requests
 // through this same worker with the caller's API key, so RBAC and rate limits apply unchanged.
 app.route('/', createMcpApp((request, c) => app.fetch(request, c.env, getExecutionContext(c))))
@@ -154,6 +158,7 @@ appPrivate.route('/store_top', storeTop)
 appPrivate.route('/website_stats', publicStats)
 appPrivate.route('/config', config)
 appPrivate.route('/config/builder', configBuilder)
+appPrivate.route('/custom_domains', customDomains)
 appPrivate.route('/accept_invitation', accept_invitation)
 appPrivate.route('/email_preferences', emailPreferences)
 appPrivate.route('/devices', devices_priv)
@@ -207,6 +212,7 @@ appTriggers.route('/cron_email', cron_email)
 appTriggers.route('/cron_clear_versions', cron_clear_versions)
 appTriggers.route('/cron_clean_orphan_images', cron_clean_orphan_images)
 appTriggers.route('/cron_reconcile_build_status', cron_reconcile_build_status)
+appTriggers.route('/canceled_org_retention_alerts', canceled_org_retention_alerts)
 appTriggers.route('/credit_usage_alerts', credit_usage_alerts)
 appTriggers.route('/credit_usage_posthog', credit_usage_posthog)
 appTriggers.route('/global_stats', global_stats)
@@ -285,7 +291,7 @@ createAllCatch(appScheduled, functionNameScheduled)
 
 export default {
   fetch: app.fetch,
-  queue: processNativeNotificationQueueBatch,
+  queue: processApiQueueBatch,
   scheduled(_controller: ScheduledController, env: Bindings, ctx: ExecutionContext) {
     ctx.waitUntil(runScheduledPluginNotificationFlush(env, ctx))
   },

@@ -685,4 +685,23 @@ test.describe('Dashboard exploration and returning to v3 setup', () => {
       expect(await page.evaluate(() => (window as any).onboardingSetupPreview.events)).toContain('getting-started-mounted')
     }
   })
+
+  for (const scenario of [
+    { name: 'v3 OTA', query: 'version=3', checklist: '[data-test="onboarding-setup-cli"]', pollsProgress: true },
+    { name: 'v4 OTA', query: 'version=4&assignment=ota-only', checklist: '[data-test="onboarding-setup-cli"]', pollsProgress: true },
+    { name: 'v4 Builder', query: 'version=4&assignment=builder-only', checklist: '[data-test="builder-checklist"]', pollsProgress: false },
+  ]) {
+    test(`keeps pending ${scenario.name} setup open after an OTA install`, async ({ page }) => {
+      await page.goto(`/app/${appId}?${scenario.query}&otaInstalled=1`)
+      const link = page.locator('[data-test="getting-started-nav-link"]')
+      await expect(link).toBeVisible()
+      await link.click()
+      if (scenario.pollsProgress)
+        await expect.poll(() => page.evaluate(() => (window as any).onboardingSetupPreview.state.polls.length)).toBeGreaterThan(1)
+      await expect(page.locator(scenario.checklist)).toBeVisible()
+      await expect(page).toHaveURL(new RegExp(`/app/${appId}/getting-started$`))
+      expect(await page.evaluate(() => (window as any).onboardingSetupPreview.events)).toContain('getting-started-verified')
+      await expect(page.locator('[data-test="preview-app-dashboard"]')).toHaveCount(0)
+    })
+  }
 })

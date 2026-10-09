@@ -2673,6 +2673,38 @@ export type Database = {
           },
         ]
       }
+      org_custom_domains: {
+        Row: {
+          created_at: string
+          hostname: string
+          org_id: string
+          provider_id: string | null
+          provider_route_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          hostname: string
+          org_id: string
+          provider_id?: string | null
+          provider_route_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          hostname?: string
+          org_id?: string
+          provider_id?: string | null
+          provider_route_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "org_custom_domains_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: true
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       org_id_tombstones: {
         Row: {
           deleted_at: string
@@ -3476,6 +3508,7 @@ export type Database = {
           created_at: string
           customer_country: string | null
           customer_id: string
+          extra_mau: number
           id: number
           is_above_plan: boolean | null
           is_good_plan: boolean | null
@@ -3504,6 +3537,7 @@ export type Database = {
           created_at?: string
           customer_country?: string | null
           customer_id: string
+          extra_mau?: number
           id?: number
           is_above_plan?: boolean | null
           is_good_plan?: boolean | null
@@ -3532,6 +3566,7 @@ export type Database = {
           created_at?: string
           customer_country?: string | null
           customer_id?: string
+          extra_mau?: number
           id?: number
           is_above_plan?: boolean | null
           is_good_plan?: boolean | null
@@ -3571,6 +3606,7 @@ export type Database = {
           future_uuid: string
           id: number
           invite_magic_string: string
+          invited_by_user_id: string | null
           last_name: string
           org_id: string
           rbac_role_name: string
@@ -3584,6 +3620,7 @@ export type Database = {
           future_uuid?: string
           id?: number
           invite_magic_string?: string
+          invited_by_user_id?: string | null
           last_name: string
           org_id: string
           rbac_role_name?: string
@@ -3597,6 +3634,7 @@ export type Database = {
           future_uuid?: string
           id?: number
           invite_magic_string?: string
+          invited_by_user_id?: string | null
           last_name?: string
           org_id?: string
           rbac_role_name?: string
@@ -4301,6 +4339,10 @@ export type Database = {
     }
     Functions: {
       accept_invitation_to_org: { Args: { org_id: string }; Returns: string }
+      accept_tmp_user_invitation: {
+        Args: { p_invite_magic_string: string; p_user_id: string }
+        Returns: string
+      }
       ack_updates_cache_purge: {
         Args: {
           p_lease_token: string
@@ -4372,6 +4414,15 @@ export type Database = {
       }
       assert_preview_bundle_owner: {
         Args: { p_app_id: string; p_owner_org: string; p_version_id: number }
+        Returns: undefined
+      }
+      assert_principal_can_grant_org_role: {
+        Args: {
+          p_mutation: string
+          p_org_id: string
+          p_principal_id: string
+          p_role_name: string
+        }
         Returns: undefined
       }
       assert_request_principal_rank: {
@@ -6004,6 +6055,7 @@ export type Database = {
         Args: { email: string; org_id: string }
         Returns: string
       }
+      reset_and_seed_demo_customer_data: { Args: never; Returns: undefined }
       reset_onboarding_demo_app_data: {
         Args: { p_app_uuid: string }
         Returns: undefined

@@ -319,6 +319,38 @@ html {
   background-color: #f1f5f9;
 }
 
+/* Colored outline buttons: daisyUI fills them with the theme color on hover and
+   switches to white text, unreadable on the light error/warning/success colors.
+   Hover with a soft tint and darker text instead. */
+@media (hover: hover) {
+  .d-btn-outline.d-btn-error:not(:disabled):hover {
+    --outline-hover-color: var(--color-error);
+    color: #b91c1c;
+  }
+
+  .d-btn-outline.d-btn-warning:not(:disabled):hover {
+    --outline-hover-color: var(--color-warning);
+    color: #c2410c;
+  }
+
+  .d-btn-outline.d-btn-success:not(:disabled):hover {
+    --outline-hover-color: var(--color-success);
+    color: #047857;
+  }
+
+  .d-btn-outline:is(.d-btn-error, .d-btn-warning, .d-btn-success):not(:disabled):hover {
+    background-color: color-mix(in oklab, var(--outline-hover-color) 12%, transparent);
+    border-color: var(--outline-hover-color);
+  }
+}
+
+@media (hover: hover) and (prefers-color-scheme: dark) {
+  .d-btn-outline:is(.d-btn-error, .d-btn-warning, .d-btn-success):not(:disabled):hover {
+    background-color: color-mix(in oklab, var(--outline-hover-color) 25%, transparent);
+    color: #ffffff;
+  }
+}
+
 /* DialogV2 enter motion. Enter-only on purpose: a leave transition would keep
    the old #dialog-v2-content teleport target alive while a chained dialog mounts. */
 @keyframes dialog-v2-backdrop-in {
@@ -343,5 +375,109 @@ html {
   .dialog-v2-backdrop,
   .dialog-v2-panel {
     animation: none;
+  }
+}
+
+/* Capacitor dashboard shell. The top inset reserves the native navbar. The
+   bottom is not padded on the shell: content scrolls under the floating native
+   tabbar, and a spacer at the end of the scroll container lets the last rows
+   scroll clear of it. Scroll containers are the nested layouts' marked
+   [data-native-scroll] element, or the route root for pages without one. */
+.native-chrome-content {
+  padding-top: var(--cap-native-navigation-top, var(--safe-area-top));
+  padding-right: var(--cap-native-navigation-right, var(--safe-area-right));
+  padding-left: var(--cap-native-navigation-left, var(--safe-area-left));
+}
+
+/* Scroll containers run to the screen bottom under the tabbar (some use mb-8 on web). */
+.native-chrome-content [data-native-scroll] {
+  margin-bottom: 0;
+}
+
+.native-chrome-content [data-native-scroll]::after,
+.native-chrome-content .native-route-scroll:not(:has([data-native-scroll]))::after {
+  content: '';
+  display: block;
+  flex-shrink: 0;
+  height: calc(var(--cap-native-navigation-bottom, var(--safe-area-bottom)) + 1rem);
+}
+
+/* Mobile table pagination bars are fixed to the viewport bottom. In the
+   native shell they float above the native tabbar as rounded glass islands
+   (one per child: range label, page buttons) instead of a full-width strip,
+   matching the Liquid Glass tabbar. They become static from md up. */
+@media (max-width: 767px) {
+  .native-chrome-content .native-bottom-offset {
+    bottom: calc(var(--cap-native-navigation-bottom, var(--safe-area-bottom)) + 0.5rem);
+    padding: 0 1rem;
+    gap: 0.5rem;
+    border: 0;
+    background: transparent;
+    backdrop-filter: none;
+    pointer-events: none;
+  }
+
+  .native-chrome-content .native-bottom-offset > * {
+    pointer-events: auto;
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.75rem;
+    padding: 0.375rem 0.875rem;
+    border-radius: 9999px;
+    border: 1px solid rgb(15 23 42 / 0.08);
+    background: rgb(255 255 255 / 0.72);
+    box-shadow: 0 8px 24px rgb(15 23 42 / 0.16);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+  }
+
+  .native-chrome-content .native-bottom-offset > ul {
+    padding: 0.25rem;
+  }
+
+  /* Flex drops the whitespace between "1-10", "of" and "122": space them with gap. */
+  .native-chrome-content .native-bottom-offset > span {
+    gap: 0.3em;
+    white-space: nowrap;
+  }
+
+  .native-chrome-content .native-bottom-offset > ul button,
+  .native-chrome-content .native-bottom-offset > ul [aria-current] {
+    border-radius: 9999px;
+    border-color: transparent;
+    background: transparent;
+  }
+
+  .native-chrome-content .native-bottom-offset > ul [aria-current] {
+    background: rgb(17 158 255 / 0.15);
+  }
+
+  /* Leave room for the floating islands in addition to the tabbar. */
+  .native-chrome-content:has(.native-bottom-offset) [data-native-scroll]::after,
+  .native-chrome-content:has(.native-bottom-offset) .native-route-scroll:not(:has([data-native-scroll]))::after {
+    height: calc(var(--cap-native-navigation-bottom, var(--safe-area-bottom)) + 5rem);
+  }
+}
+
+/* Native tables: the scroll spacer already clears the floating pagination, so
+   drop the bottom padding tables reserve for the old fixed strip, and render the
+   wrapping card flat so short lists don't end in a half-empty box. */
+@media (max-width: 767px) {
+  .native-chrome-content .native-table-pad {
+    padding-bottom: 0;
+  }
+
+  .native-chrome-content .shadow-sm:has(#custom_table) {
+    border-color: transparent;
+    background: transparent;
+    box-shadow: none;
+  }
+}
+
+@media (max-width: 767px) and (prefers-color-scheme: dark) {
+  .native-chrome-content .native-bottom-offset > * {
+    border-color: rgb(255 255 255 / 0.1);
+    background: rgb(30 41 59 / 0.62);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
   }
 }

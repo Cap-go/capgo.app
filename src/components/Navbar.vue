@@ -1,10 +1,8 @@
 <script setup lang="ts">
-import { Capacitor } from '@capacitor/core'
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import IconPanelLeft from '~icons/lucide/panel-left'
-import IconBack from '~icons/material-symbols/arrow-back-ios-rounded'
 import IconMenu from '~icons/material-symbols/menu-rounded'
 import { useDisplayStore } from '~/stores/display'
 import Banner from './Banner.vue'
@@ -21,10 +19,6 @@ const props = defineProps({
 })
 
 defineEmits(['toggleSidebar', 'toggleSidebarCollapse'])
-const isMobile = ref(Capacitor.isNativePlatform())
-
-const router = useRouter()
-
 const displayStore = useDisplayStore()
 const { t } = useI18n()
 const showNavTitle = computed(() => displayStore.NavTitle && displayStore.pathTitle.length === 0)
@@ -49,12 +43,6 @@ const mobileTitle = computed(() => {
     return ''
   return last.translate === false ? last.name : t(last.name)
 })
-function back() {
-  if (window.history.length > 2)
-    router.back()
-  else
-    router.push(displayStore.defaultBack)
-}
 </script>
 
 <template>
@@ -63,17 +51,6 @@ function back() {
       <div class="relative flex items-center justify-between h-16 -mb-px">
         <!-- Header: Left side -->
         <div class="flex items-center space-x-4 lg:space-x-3">
-          <div v-if="displayStore.NavTitle && isMobile" class="pr-2">
-            <button
-              type="button"
-              class="flex p-2 rounded-sm dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:bg-slate-600 hover:bg-slate-300"
-              :aria-label="t('button-back')"
-              @click="back()"
-            >
-              <IconBack class="w-6 h-6 fill-current" />
-              <span class="hidden md:block">{{ t('button-back') }}</span>
-            </button>
-          </div>
           <div class="hidden lg:block">
             <button
               type="button"

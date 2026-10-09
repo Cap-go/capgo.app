@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useChartCardCompact, useChartCardDensity } from '~/components/dashboard/chartCardDensity'
 import Spinner from '~/components/Spinner.vue'
 import { formatNumberValue } from '~/services/formatLocale'
 
@@ -44,6 +45,13 @@ const props = defineProps({
 })
 
 const { t } = useI18n()
+const compact = useChartCardCompact()
+const density = useChartCardDensity()
+const heightClass = computed(() => {
+  if (density.value === 'dense')
+    return 'h-[256px]'
+  return density.value === 'compact' ? 'h-[320px]' : 'min-h-[460px]'
+})
 
 const showEvolutionBadge = computed(() => props.lastDayEvolution !== undefined && props.lastDayEvolution !== null)
 const displayNoDataMessage = computed(() => props.noDataMessage ?? t('no-data'))
@@ -52,17 +60,18 @@ const displayNoDataMessage = computed(() => props.noDataMessage ?? t('no-data'))
 <template>
   <div
     data-test="chart-card"
-    class="relative col-span-full flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-800/60 min-h-[460px]"
+    class="relative col-span-full flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-800/60"
+    :class="heightClass"
   >
     <!-- Header with title and stats -->
-    <div data-test="chart-card-header" class="relative overflow-hidden px-5 pt-5">
+    <div data-test="chart-card-header" class="relative overflow-hidden px-5" :class="compact ? 'pt-4' : 'pt-5'">
       <!-- Custom header slot or default header -->
-      <div class="flex flex-col gap-4">
+      <div class="flex flex-col" :class="compact ? 'gap-2' : 'gap-4'">
         <div data-test="chart-card-header-row" class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div class="min-w-0 flex-1">
             <slot name="header">
               <div class="min-w-0">
-                <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
+                <h2 class="font-semibold leading-tight text-slate-900 dark:text-white" :class="compact ? 'text-base' : 'text-xl sm:text-2xl'">
                   {{ title }}
                 </h2>
               </div>
@@ -82,7 +91,7 @@ const displayNoDataMessage = computed(() => props.noDataMessage ?? t('no-data'))
         </div>
 
         <div v-if="total !== undefined" class="flex items-end gap-2">
-          <div class="max-w-full text-3xl font-semibold leading-none tracking-tight break-words text-slate-900 dark:text-white sm:text-4xl">
+          <div class="max-w-full font-semibold leading-none tracking-tight break-words text-slate-900 dark:text-white" :class="compact ? 'text-2xl' : 'text-3xl sm:text-4xl'">
             {{ formatNumberValue(total) }}
           </div>
           <span v-if="unit" class="pb-1 text-sm font-semibold tracking-[0.2em] text-slate-400 uppercase dark:text-slate-500">
@@ -93,7 +102,7 @@ const displayNoDataMessage = computed(() => props.noDataMessage ?? t('no-data'))
     </div>
 
     <!-- Chart content area -->
-    <div data-test="chart-card-content" class="relative flex min-h-0 flex-1 flex-col px-5 pb-5 pt-4">
+    <div data-test="chart-card-content" class="relative flex min-h-0 flex-1 flex-col px-5" :class="compact ? 'pb-4 pt-2' : 'pb-5 pt-4'">
       <!-- Loading state -->
       <div v-if="isLoading" class="flex h-full items-center justify-center">
         <Spinner size="w-24 h-24" />

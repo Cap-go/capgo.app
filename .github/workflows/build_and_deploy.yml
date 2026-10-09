@@ -29,6 +29,7 @@ jobs:
       plugins: ${{ steps.scope.outputs.plugins }}
       supabase: ${{ steps.scope.outputs.supabase }}
       translation: ${{ steps.scope.outputs.translation }}
+      r2_inventory: ${{ steps.scope.outputs.r2_inventory }}
       deploy_tag: ${{ steps.target.outputs.deploy_tag }}
       deploy_sha: ${{ steps.target.outputs.deploy_sha }}
       is_alpha: ${{ steps.target.outputs.is_alpha }}
@@ -299,6 +300,54 @@ jobs:
           fi
       - name: Deploy CF Worker API
         run: bun run deploy:cloudflare:api:${{ env.ENV }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  deploy_r2_inventory:
+    needs: [changes, supabase_deploy, read_replica_schema]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.r2_inventory == 'true' && (needs.supabase_deploy.result == 'success' || (needs.supabase_deploy.result == 'skipped' && needs.changes.outputs.supabase != 'true')) && (needs.read_replica_schema.result == 'success' || (needs.read_replica_schema.result == 'skipped' && (needs.changes.outputs.supabase != 'true' || needs.changes.outputs.is_alpha == 'true'))) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    name: Deploy R2 inventory consumer
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.changes.outputs.deploy_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Reject stale deployment retry
+        if: ${{ github.run_attempt > 1 }}
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+      - name: Install dependencies
+        run: bun install
+      - name: Select inventory environment
+        run: |
+          if [ "${{ needs.changes.outputs.is_alpha }}" = "true" ]; then
+            echo "INVENTORY_ENV=alpha" >> "$GITHUB_ENV"
+          else
+            echo "INVENTORY_ENV=prod" >> "$GITHUB_ENV"
+          fi
+      - name: Ensure R2 inventory queues
+        run: |
+          bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+          bun scripts/ensure-r2-inventory-queues.ts "${{ env.INVENTORY_ENV }}"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Deploy CF Worker R2 inventory
+        run: |
+          bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+          bunx wrangler deploy --config cloudflare_workers/r2_inventory/wrangler.jsonc --env="${{ env.INVENTORY_ENV }}" --minify
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

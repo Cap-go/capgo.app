@@ -1,15 +1,15 @@
 import type { FC } from 'react'
 import type { BuilderProjectDiscovery, CapacitorProjectCandidate } from '../project-discovery.js'
 import { Select } from '@inkjs/ui'
-import { Box, Text, useInput } from 'ink'
+import { Box, Text, useApp, useInput } from 'ink'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { PICKER_MIN_COLS, PICKER_MIN_ROWS, terminalFitsPicker } from '../min-terminal-size.js'
 import { discoverCapacitorProjects } from '../project-discovery.js'
 import { projectCandidateLabel } from '../project-selection.js'
-import { PICKER_MIN_COLS, PICKER_MIN_ROWS, terminalFitsPicker } from '../min-terminal-size.js'
 import { Header, SpinnerLine } from './components.js'
 import { pickPlatformLayout } from './frame-fit.js'
-import { CardChooser } from './platform-picker.js'
 import { TerminalTooSmallPrompt } from './min-size-gate.js'
+import { CardChooser } from './platform-picker.js'
 import { useTerminalSize } from './shell.js'
 
 export type BuilderProjectDecision
@@ -48,9 +48,11 @@ export const BuilderProjectDiscoveryApp: FC<BuilderProjectDiscoveryAppProps> = (
   timing,
 }) => {
   const { cols, rows } = useTerminalSize()
+  const { waitUntilRenderFlush } = useApp()
   const [discovery, setDiscovery] = useState<BuilderProjectDiscovery | null>(null)
   const [showSearchStatus, setShowSearchStatus] = useState(false)
   const decided = useRef(false)
+  const markSearchStatusShown = useRef<((shownAt: number) => void) | undefined>(undefined)
   const searchStatusDelayMs = timing?.searchStatusDelayMs ?? DEFAULT_BUILDER_PROJECT_DISCOVERY_TIMING.searchStatusDelayMs
   const minimumSearchStatusMs = timing?.minimumSearchStatusMs ?? DEFAULT_BUILDER_PROJECT_DISCOVERY_TIMING.minimumSearchStatusMs
   const timeoutMs = timing?.timeoutMs ?? DEFAULT_BUILDER_PROJECT_DISCOVERY_TIMING.timeoutMs
@@ -63,13 +65,22 @@ export const BuilderProjectDiscoveryApp: FC<BuilderProjectDiscoveryAppProps> = (
   }, [onDecision])
 
   useEffect(() => {
+    if (showSearchStatus) {
+      // Flush after React commits the status, including Ink's throttled output.
+      void waitUntilRenderFlush().then(() => markSearchStatusShown.current?.(Date.now()))
+    }
+  }, [showSearchStatus, waitUntilRenderFlush])
+
+  useEffect(() => {
     let active = true
     let settled = false
-    let searchStatusShownAt: number | undefined
+    let searchStatusShownAt: Promise<number> | undefined
     let completionTimer: ReturnType<typeof setTimeout> | undefined
     const searchStatusTimer = setTimeout(() => {
       if (active) {
-        searchStatusShownAt = Date.now()
+        searchStatusShownAt = new Promise((resolve) => {
+          markSearchStatusShown.current = resolve
+        })
         setShowSearchStatus(true)
       }
     }, searchStatusDelayMs)
@@ -81,7 +92,7 @@ export const BuilderProjectDiscoveryApp: FC<BuilderProjectDiscoveryAppProps> = (
         clearTimeout(completionTimer)
       decide({ kind: 'timed-out' })
     }, timeoutMs)
-    void discoverProjects(searchRoot).then((result) => {
+    void discoverProjects(searchRoot).then(async (result) => {
       if (!active || settled)
         return
       clearTimeout(searchStatusTimer)
@@ -98,9 +109,12 @@ export const BuilderProjectDiscoveryApp: FC<BuilderProjectDiscoveryAppProps> = (
         setDiscovery(result)
       }
 
-      const remainingStatusMs = searchStatusShownAt === undefined
+      const shownAt = await searchStatusShownAt
+      if (!active || settled)
+        return
+      const remainingStatusMs = shownAt === undefined
         ? 0
-        : Math.max(0, minimumSearchStatusMs - (Date.now() - searchStatusShownAt))
+        : Math.max(0, minimumSearchStatusMs - (Date.now() - shownAt))
       if (remainingStatusMs > 0)
         completionTimer = setTimeout(finishDiscovery, remainingStatusMs)
       else

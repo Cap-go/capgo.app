@@ -53,17 +53,21 @@ declare global {
   const injectLocal: typeof import('@vueuse/core').injectLocal
   const isAdminRole: typeof import('./stores/organization').isAdminRole
   const isDefined: typeof import('@vueuse/core').isDefined
+  const isNativeChromeEnabled: typeof import('./composables/useNativeChrome').isNativeChromeEnabled
+  const isNavigationPathActive: typeof import('./composables/useAppNavigation').isNavigationPathActive
   const isPendingOrganizationInvite: typeof import('./stores/organization').isPendingOrganizationInvite
   const isProxy: typeof import('vue').isProxy
   const isReactive: typeof import('vue').isReactive
   const isReadonly: typeof import('vue').isReadonly
   const isRef: typeof import('vue').isRef
   const isShallow: typeof import('vue').isShallow
+  const isSpoofTab: typeof import('./composables/useAppNavigation').isSpoofTab
   const isSuperAdminRole: typeof import('./stores/organization').isSuperAdminRole
   const makeDestructurable: typeof import('@vueuse/core').makeDestructurable
   const manualResetRef: typeof import('@vueuse/core').manualResetRef
   const markRaw: typeof import('vue').markRaw
   const nextTick: typeof import('vue').nextTick
+  const normalizeNavigationPath: typeof import('./composables/useAppNavigation').normalizeNavigationPath
   const onActivated: typeof import('vue').onActivated
   const onBeforeMount: typeof import('vue').onBeforeMount
   const onBeforeRouteLeave: typeof import('vue-router').onBeforeRouteLeave
@@ -132,6 +136,7 @@ declare global {
   const useAnchorPopover: typeof import('./composables/useAnchorPopover').useAnchorPopover
   const useAnimate: typeof import('@vueuse/core').useAnimate
   const useAppDetailStore: typeof import('./stores/appDetail').useAppDetailStore
+  const useAppNavigation: typeof import('./composables/useAppNavigation').useAppNavigation
   const useAppOnboardingCliProgress: typeof import('./composables/useAppOnboardingCliProgress').useAppOnboardingCliProgress
   const useAppPage: typeof import('./composables/useAppPage').useAppPage
   const useArrayDifference: typeof import('@vueuse/core').useArrayDifference
@@ -192,6 +197,7 @@ declare global {
   const useDocumentVisibility: typeof import('@vueuse/core').useDocumentVisibility
   const useDraggable: typeof import('@vueuse/core').useDraggable
   const useDropZone: typeof import('@vueuse/core').useDropZone
+  const useEdgeSwipeBack: typeof import('./composables/useEdgeSwipeBack').useEdgeSwipeBack
   const useElementBounding: typeof import('@vueuse/core').useElementBounding
   const useElementByPoint: typeof import('@vueuse/core').useElementByPoint
   const useElementHover: typeof import('@vueuse/core').useElementHover
@@ -237,6 +243,7 @@ declare global {
   const useMouseInElement: typeof import('@vueuse/core').useMouseInElement
   const useMousePressed: typeof import('@vueuse/core').useMousePressed
   const useMutationObserver: typeof import('@vueuse/core').useMutationObserver
+  const useNativeChrome: typeof import('./composables/useNativeChrome').useNativeChrome
   const useNativeObserveStats: typeof import('./composables/useNativeObserveStats').useNativeObserveStats
   const useNavigatorLanguage: typeof import('@vueuse/core').useNavigatorLanguage
   const useNetwork: typeof import('@vueuse/core').useNetwork
@@ -358,7 +365,7 @@ declare global {
   export type { UpdateEndpointRequest } from './composables/useDeviceUpdateFormat'
   import('./composables/useDeviceUpdateFormat')
   // @ts-ignore
-  export type { ReleaseLiveDeployment, ReleaseLiveChannel, ReleaseLiveBucket, ReleaseLiveResponse } from './composables/useReleaseLive'
+  export type { ReleaseLiveDeployment, ReleaseLiveChannel, ReleaseLiveBucket, ReleaseLiveRollout, ReleaseLiveResponse } from './composables/useReleaseLive'
   import('./composables/useReleaseLive')
   // @ts-ignore
   export type { CheckDomainResponse } from './composables/useSSORouting'
@@ -432,16 +439,20 @@ declare module 'vue' {
     readonly injectLocal: UnwrapRef<typeof import('@vueuse/core')['injectLocal']>
     readonly isAdminRole: UnwrapRef<typeof import('./stores/organization')['isAdminRole']>
     readonly isDefined: UnwrapRef<typeof import('@vueuse/core')['isDefined']>
+    readonly isNativeChromeEnabled: UnwrapRef<typeof import('./composables/useNativeChrome')['isNativeChromeEnabled']>
+    readonly isNavigationPathActive: UnwrapRef<typeof import('./composables/useAppNavigation')['isNavigationPathActive']>
     readonly isPendingOrganizationInvite: UnwrapRef<typeof import('./stores/organization')['isPendingOrganizationInvite']>
     readonly isProxy: UnwrapRef<typeof import('vue')['isProxy']>
     readonly isReactive: UnwrapRef<typeof import('vue')['isReactive']>
     readonly isReadonly: UnwrapRef<typeof import('vue')['isReadonly']>
     readonly isRef: UnwrapRef<typeof import('vue')['isRef']>
     readonly isShallow: UnwrapRef<typeof import('vue')['isShallow']>
+    readonly isSpoofTab: UnwrapRef<typeof import('./composables/useAppNavigation')['isSpoofTab']>
     readonly isSuperAdminRole: UnwrapRef<typeof import('./stores/organization')['isSuperAdminRole']>
     readonly makeDestructurable: UnwrapRef<typeof import('@vueuse/core')['makeDestructurable']>
     readonly markRaw: UnwrapRef<typeof import('vue')['markRaw']>
     readonly nextTick: UnwrapRef<typeof import('vue')['nextTick']>
+    readonly normalizeNavigationPath: UnwrapRef<typeof import('./composables/useAppNavigation')['normalizeNavigationPath']>
     readonly onActivated: UnwrapRef<typeof import('vue')['onActivated']>
     readonly onBeforeMount: UnwrapRef<typeof import('vue')['onBeforeMount']>
     readonly onBeforeRouteLeave: UnwrapRef<typeof import('vue-router')['onBeforeRouteLeave']>
@@ -508,6 +519,7 @@ declare module 'vue' {
     readonly useAnchorPopover: UnwrapRef<typeof import('./composables/useAnchorPopover')['useAnchorPopover']>
     readonly useAnimate: UnwrapRef<typeof import('@vueuse/core')['useAnimate']>
     readonly useAppDetailStore: UnwrapRef<typeof import('./stores/appDetail')['useAppDetailStore']>
+    readonly useAppNavigation: UnwrapRef<typeof import('./composables/useAppNavigation')['useAppNavigation']>
     readonly useAppOnboardingCliProgress: UnwrapRef<typeof import('./composables/useAppOnboardingCliProgress')['useAppOnboardingCliProgress']>
     readonly useAppPage: UnwrapRef<typeof import('./composables/useAppPage')['useAppPage']>
     readonly useArrayDifference: UnwrapRef<typeof import('@vueuse/core')['useArrayDifference']>
@@ -568,6 +580,7 @@ declare module 'vue' {
     readonly useDocumentVisibility: UnwrapRef<typeof import('@vueuse/core')['useDocumentVisibility']>
     readonly useDraggable: UnwrapRef<typeof import('@vueuse/core')['useDraggable']>
     readonly useDropZone: UnwrapRef<typeof import('@vueuse/core')['useDropZone']>
+    readonly useEdgeSwipeBack: UnwrapRef<typeof import('./composables/useEdgeSwipeBack')['useEdgeSwipeBack']>
     readonly useElementBounding: UnwrapRef<typeof import('@vueuse/core')['useElementBounding']>
     readonly useElementByPoint: UnwrapRef<typeof import('@vueuse/core')['useElementByPoint']>
     readonly useElementHover: UnwrapRef<typeof import('@vueuse/core')['useElementHover']>
@@ -613,6 +626,7 @@ declare module 'vue' {
     readonly useMouseInElement: UnwrapRef<typeof import('@vueuse/core')['useMouseInElement']>
     readonly useMousePressed: UnwrapRef<typeof import('@vueuse/core')['useMousePressed']>
     readonly useMutationObserver: UnwrapRef<typeof import('@vueuse/core')['useMutationObserver']>
+    readonly useNativeChrome: UnwrapRef<typeof import('./composables/useNativeChrome')['useNativeChrome']>
     readonly useNativeObserveStats: UnwrapRef<typeof import('./composables/useNativeObserveStats')['useNativeObserveStats']>
     readonly useNavigatorLanguage: UnwrapRef<typeof import('@vueuse/core')['useNavigatorLanguage']>
     readonly useNetwork: UnwrapRef<typeof import('@vueuse/core')['useNetwork']>

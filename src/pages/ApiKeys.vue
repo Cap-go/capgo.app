@@ -2018,6 +2018,8 @@ getKeys()
       <Teleport v-if="dialogStore.showDialog && (dialogStore.dialogOptions?.title === t('alert-add-new-key') || dialogStore.dialogOptions?.title === t('edit-api-key'))" defer to="#dialog-v2-content">
         <div class="space-y-6">
           <!-- API Key Name -->
+          <!-- The dialog autofocuses this field. Showing "required" on blur would push the -->
+          <!-- form down between mousedown and mouseup and swallow the first click below it. -->
           <div>
             <FormKit
               v-model="newApiKeyName"
@@ -2026,6 +2028,7 @@ getKeys()
               :label="t('name')"
               :placeholder="t('type-new-name')"
               validation="required|length:1,32"
+              validation-visibility="dirty"
               :validation-messages="{
                 length: t('name-length-error'),
               }"

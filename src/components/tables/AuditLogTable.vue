@@ -129,7 +129,7 @@ const columns: Ref<TableColumn[]> = ref<TableColumn[]>([
     key: 'created_at',
     mobile: true,
     sortable: 'desc',
-    class: 'truncate max-w-8',
+    class: 'truncate max-w-8 md:max-w-none',
   },
   {
     label: 'resource',
@@ -150,7 +150,8 @@ const columns: Ref<TableColumn[]> = ref<TableColumn[]>([
     key: 'actor',
     mobile: false,
     sortable: false,
-    class: 'truncate max-w-8',
+    // Emails and API key names need room; the full value is also exposed via the cell title.
+    class: 'truncate min-w-48 max-w-64',
   },
   {
     label: 'changed-fields',
@@ -303,6 +304,14 @@ function getChangedFieldsDisplay(item: ExtendedAuditLog): string {
     return '-'
   }
   return item.changed_fields.slice(0, 3).join(', ') + (item.changed_fields.length > 3 ? '...' : '')
+}
+
+function getCellTitle(elem: ExtendedAuditLog, col: TableColumn): string | undefined {
+  if (col.key === 'actor')
+    return getActorDisplay(elem)
+  if (col.key === 'changed_fields' && elem.changed_fields?.length)
+    return elem.changed_fields.join(', ')
+  return undefined
 }
 
 function displayValueKey(elem: ExtendedAuditLog, col: TableColumn): string {
@@ -588,6 +597,7 @@ onUnmounted(() => {
               <td
                 :class="`${col.class} ${!col.mobile ? 'hidden md:table-cell' : ''} ${col.key === 'details' ? 'cursor-pointer hover:underline clickable-cell' : ''}`"
                 class="px-1 py-1 md:py-4 md:px-6"
+                :title="getCellTitle(elem, col)"
                 @click.stop="col.key === 'details' ? openDetails(elem) : undefined"
               >
                 {{ displayValueKey(elem, col) }}
@@ -612,7 +622,7 @@ onUnmounted(() => {
       </table>
     </div>
 
-    <nav class="fixed bottom-0 left-0 z-40 flex items-center justify-between w-full p-4 bg-white md:relative md:pt-4 md:bg-transparent dark:bg-gray-900 dark:md:bg-transparent" aria-label="Table navigation">
+    <nav class="native-bottom-offset fixed bottom-0 left-0 z-40 flex items-center justify-between w-full p-4 bg-white md:relative md:pt-4 md:bg-transparent dark:bg-gray-900 dark:md:bg-transparent" aria-label="Table navigation">
       <button
         v-if="auditLogs.length < total"
         type="button"

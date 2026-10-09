@@ -59,13 +59,6 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
-    '/app/[app].active-bundle': RouteRecordInfo<
-      '/app/[app].active-bundle',
-      '/app/:app/active-bundle',
-      { app: ParamValue<true> },
-      { app: ParamValue<false> },
-      | never
-    >,
     '/app/[app].builds': RouteRecordInfo<
       '/app/[app].builds',
       '/app/:app/builds',
@@ -199,27 +192,6 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
-    '/app/[app].installs': RouteRecordInfo<
-      '/app/[app].installs',
-      '/app/:app/installs',
-      { app: ParamValue<true> },
-      { app: ParamValue<false> },
-      | never
-    >,
-    '/app/[app].live': RouteRecordInfo<
-      '/app/[app].live',
-      '/app/:app/live',
-      { app: ParamValue<true> },
-      { app: ParamValue<false> },
-      | never
-    >,
-    '/app/[app].native': RouteRecordInfo<
-      '/app/[app].native',
-      '/app/:app/native',
-      { app: ParamValue<true> },
-      { app: ParamValue<false> },
-      | never
-    >,
     '/app/[app].notifications': RouteRecordInfo<
       '/app/[app].notifications',
       '/app/:app/notifications',
@@ -230,6 +202,13 @@ declare module 'vue-router/auto-routes' {
     '/app/[app].observe.compatibility': RouteRecordInfo<
       '/app/[app].observe.compatibility',
       '/app/:app/observe/compatibility',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
+    '/app/[app].observe.errors': RouteRecordInfo<
+      '/app/[app].observe.errors',
+      '/app/:app/observe/errors',
       { app: ParamValue<true> },
       { app: ParamValue<false> },
       | never
@@ -248,20 +227,6 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
-    '/app/[app].observe.plugins': RouteRecordInfo<
-      '/app/[app].observe.plugins',
-      '/app/:app/observe/plugins',
-      { app: ParamValue<true> },
-      { app: ParamValue<false> },
-      | never
-    >,
-    '/app/[app].observe.updater': RouteRecordInfo<
-      '/app/[app].observe.updater',
-      '/app/:app/observe/updater',
-      { app: ParamValue<true> },
-      { app: ParamValue<false> },
-      | never
-    >,
     '/app/[app].settings': RouteRecordInfo<
       '/app/[app].settings',
       '/app/:app/settings',
@@ -276,18 +241,11 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
-    '/app/modules': RouteRecordInfo<
-      '/app/modules',
-      '/app/modules',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
-    '/app/modules_test': RouteRecordInfo<
-      '/app/modules_test',
-      '/app/modules_test',
-      Record<never, never>,
-      Record<never, never>,
+    '/app/[app].settings.usage': RouteRecordInfo<
+      '/app/[app].settings.usage',
+      '/app/:app/settings/usage',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
       | never
     >,
     '/app/new': RouteRecordInfo<
@@ -643,14 +601,6 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | 'app'
     }
-    'src/pages/app/[app].active-bundle.vue': {
-      routes:
-        | '/app/[app].active-bundle'
-      views:
-        | never
-      pathParamNames:
-        | 'app'
-    }
     'src/pages/app/[app].builds.vue': {
       routes:
         | '/app/[app].builds'
@@ -816,30 +766,6 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | 'app'
     }
-    'src/pages/app/[app].installs.vue': {
-      routes:
-        | '/app/[app].installs'
-      views:
-        | never
-      pathParamNames:
-        | 'app'
-    }
-    'src/pages/app/[app].live.vue': {
-      routes:
-        | '/app/[app].live'
-      views:
-        | never
-      pathParamNames:
-        | 'app'
-    }
-    'src/pages/app/[app].native.vue': {
-      routes:
-        | '/app/[app].native'
-      views:
-        | never
-      pathParamNames:
-        | 'app'
-    }
     'src/pages/app/[app].notifications.vue': {
       routes:
         | '/app/[app].notifications'
@@ -851,6 +777,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/app/[app].observe.compatibility.vue': {
       routes:
         | '/app/[app].observe.compatibility'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
+    'src/pages/app/[app].observe.errors.vue': {
+      routes:
+        | '/app/[app].observe.errors'
       views:
         | never
       pathParamNames:
@@ -872,22 +806,6 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | 'app'
     }
-    'src/pages/app/[app].observe.plugins.vue': {
-      routes:
-        | '/app/[app].observe.plugins'
-      views:
-        | never
-      pathParamNames:
-        | 'app'
-    }
-    'src/pages/app/[app].observe.updater.vue': {
-      routes:
-        | '/app/[app].observe.updater'
-      views:
-        | never
-      pathParamNames:
-        | 'app'
-    }
     'src/pages/app/[app].settings.vue': {
       routes:
         | '/app/[app].settings'
@@ -904,21 +822,13 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | 'app'
     }
-    'src/pages/app/modules.vue': {
+    'src/pages/app/[app].settings.usage.vue': {
       routes:
-        | '/app/modules'
+        | '/app/[app].settings.usage'
       views:
         | never
       pathParamNames:
-        | never
-    }
-    'src/pages/app/modules_test.vue': {
-      routes:
-        | '/app/modules_test'
-      views:
-        | never
-      pathParamNames:
-        | never
+        | 'app'
     }
     'src/pages/app/new.vue': {
       routes:

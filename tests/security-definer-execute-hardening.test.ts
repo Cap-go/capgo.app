@@ -6,8 +6,10 @@ import { POSTGRES_URL } from './test-utils.ts'
 interface ProcState {
   anon_exec: boolean
   auth_exec: boolean
+  public_exec: boolean
   proc: string
   prosecdef: boolean
+  service_exec: boolean
 }
 
 const INVOKER_PROCS = [
@@ -23,6 +25,8 @@ const SERVICE_ONLY_PROCS = [
   'public.apikeys_force_server_key()',
   'public.apikeys_strip_plain_key_for_hashed()',
   'public.assert_effective_super_admin_binding_removal(uuid, text)',
+  'public.assert_principal_can_grant_org_role(uuid, uuid, text, text)',
+  'public.accept_tmp_user_invitation(text, uuid)',
   'public.prevent_role_binding_priority_escalation()',
   'public.check_encrypted_bundle_on_insert()',
   'public.check_org_hashed_key_enforcement(uuid, public.apikeys)',
@@ -70,7 +74,6 @@ const ANON_ALLOWED_PROCS = [
   'public.check_org_members_2fa_enabled(uuid)',
   'public.check_org_members_password_policy(uuid)',
   'public.get_org_members(uuid)',
-  'public.get_org_members_rbac(uuid)',
   'public.get_channel_current_bundle_rbac(character varying, bigint)',
   'public.get_total_app_storage_size_orgs(uuid, character varying)',
   'public.get_total_storage_size_org(uuid)',
@@ -90,9 +93,14 @@ const ANON_ALLOWED_PROCS = [
   'public.request_actor_user_id()',
   'public.request_actor_email_adress()',
   'public.get_user_id(text)',
+  'public.verify_mfa()',
+] as const
+
+const ANON_ORACLE_REVOKED_PROCS = [
+  'public.get_org_members_rbac(uuid)',
+  'public.is_member_of_org(uuid, uuid)',
   'public.update_org_invite_role_rbac(uuid, uuid, text)',
   'public.update_tmp_invite_role_rbac(uuid, text, text)',
-  'public.verify_mfa()',
 ] as const
 
 const AUTHENTICATED_ONLY_PROCS = [
@@ -106,14 +114,18 @@ const AUTHENTICATED_ONLY_PROCS = [
   'public.get_account_removal_date()',
   'public.get_app_access_rbac(uuid)',
   'public.get_app_metrics(uuid)',
+  'public.get_org_members_rbac(uuid)',
   'public.get_org_perm_for_apikey(text, text)',
   'public.get_org_perm_for_apikey_v2(text, text)',
   'public.get_org_user_access_rbac(uuid, uuid)',
   'public.get_user_id(text, text)',
   'public.invite_user_to_org_rbac(character varying, uuid, text)',
+  'public.is_member_of_org(uuid, uuid)',
   'public.rbac_check_permission(text, uuid, character varying, bigint)',
   'public.rbac_check_permission_no_password_policy(text, uuid, character varying, bigint)',
+  'public.update_org_invite_role_rbac(uuid, uuid, text)',
   'public.update_org_member_role(uuid, uuid, text)',
+  'public.update_tmp_invite_role_rbac(uuid, text, text)',
   'public.verify_email_otp_auth()',
 ] as const
 
@@ -140,7 +152,9 @@ describe('security definer execute hardening', () => {
         requested.proc,
         p.prosecdef,
         has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_exec,
-        has_function_privilege('authenticated', p.oid, 'EXECUTE') AS auth_exec
+        has_function_privilege('authenticated', p.oid, 'EXECUTE') AS auth_exec,
+        has_function_privilege('service_role', p.oid, 'EXECUTE') AS service_exec,
+        has_function_privilege('public', p.oid, 'EXECUTE') AS public_exec
       FROM requested
       LEFT JOIN pg_proc AS p
         ON p.oid = requested.proc_oid
@@ -252,6 +266,21 @@ describe('security definer execute hardening', () => {
       const state = states.get(proc)
       expect(state?.anon_exec, proc).toBe(false)
       expect(state?.auth_exec, proc).toBe(true)
+    }
+  })
+
+  it.concurrent('blocks anonymous execute on org/member oracle RPCs', async () => {
+    const states = await getProcStates(ANON_ORACLE_REVOKED_PROCS)
+
+    expect(states.size).toBe(ANON_ORACLE_REVOKED_PROCS.length)
+
+    for (const proc of ANON_ORACLE_REVOKED_PROCS) {
+      assertProcExists(states, proc)
+      const state = states.get(proc)
+      expect(state?.anon_exec, proc).toBe(false)
+      expect(state?.public_exec, proc).toBe(false)
+      expect(state?.auth_exec, proc).toBe(true)
+      expect(state?.service_exec, proc).toBe(true)
     }
   })
 })

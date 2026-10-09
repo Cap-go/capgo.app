@@ -2726,6 +2726,7 @@ export type Database = {
           created_at: string
           customer_country: string | null
           customer_id: string
+          extra_mau: number
           id: number
           is_good_plan: boolean | null
           last_stripe_event_at: string | null
@@ -2753,6 +2754,7 @@ export type Database = {
           created_at?: string
           customer_country?: string | null
           customer_id: string
+          extra_mau?: number
           id?: number
           is_good_plan?: boolean | null
           last_stripe_event_at?: string | null
@@ -2780,6 +2782,7 @@ export type Database = {
           created_at?: string
           customer_country?: string | null
           customer_id?: string
+          extra_mau?: number
           id?: number
           is_good_plan?: boolean | null
           last_stripe_event_at?: string | null
@@ -2863,6 +2866,7 @@ export type Database = {
           future_uuid: string
           id: number
           invite_magic_string: string
+          invited_by_user_id: string | null
           last_name: string
           org_id: string
           rbac_role_name: string
@@ -2876,6 +2880,7 @@ export type Database = {
           future_uuid?: string
           id?: number
           invite_magic_string?: string
+          invited_by_user_id?: string | null
           last_name: string
           org_id: string
           rbac_role_name?: string
@@ -2889,6 +2894,7 @@ export type Database = {
           future_uuid?: string
           id?: number
           invite_magic_string?: string
+          invited_by_user_id?: string | null
           last_name?: string
           org_id?: string
           rbac_role_name?: string
