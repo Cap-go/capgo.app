@@ -270,7 +270,6 @@ export function loadCredentialsFromEnv(): Partial<BuildCredentials> {
   const capgoIosScheme = readRuntimeEnv('CAPGO_IOS_SCHEME')
   const capgoIosTarget = readRuntimeEnv('CAPGO_IOS_TARGET')
   const capgoIosXcodeVersion = readRuntimeEnv('CAPGO_IOS_XCODE_VERSION')
-  const capgoIosMacosVersion = readRuntimeEnv('CAPGO_IOS_MACOS_VERSION')
   // Provisioning map can be supplied as raw JSON (CAPGO_IOS_PROVISIONING_MAP) or
   // base64-encoded JSON (CAPGO_IOS_PROVISIONING_MAP_BASE64). The base64 form
   // avoids quoting/newline pitfalls when storing the stringified JSON in CI secrets.
@@ -339,8 +338,6 @@ export function loadCredentialsFromEnv(): Partial<BuildCredentials> {
     credentials.CAPGO_IOS_TARGET = capgoIosTarget
   if (capgoIosXcodeVersion?.trim())
     credentials.CAPGO_IOS_XCODE_VERSION = capgoIosXcodeVersion.trim()
-  if (capgoIosMacosVersion?.trim())
-    credentials.CAPGO_IOS_MACOS_VERSION = capgoIosMacosVersion.trim()
   if (capgoIosDistribution)
     credentials.CAPGO_IOS_DISTRIBUTION = capgoIosDistribution as 'app_store' | 'ad_hoc'
   if (capgoIosProvisioningMap)

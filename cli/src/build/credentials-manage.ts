@@ -168,12 +168,6 @@ const CREDENTIAL_KNOWLEDGE: Record<string, FieldKnowledge> = {
     category: 'configuration',
     explain: 'Build only on a Capgo machine with this Xcode version (e.g. 26 or 26.0.1). A major version accepts any minor. Leave unset to use any machine. Same as --xcode-version.',
   },
-  CAPGO_IOS_MACOS_VERSION: {
-    scope: 'ios',
-    type: 'string',
-    category: 'configuration',
-    explain: 'Build only on a Capgo machine with this macOS version (e.g. 26 or 27). A major version accepts any minor. Leave unset to use any machine. Same as --macos-version.',
-  },
   BUILD_PROVISION_PROFILE_BASE64: {
     scope: 'ios',
     type: 'base64',

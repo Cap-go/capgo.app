@@ -400,8 +400,6 @@ export const requestBuildOptionsSchema = z.object({
   credentials: buildCredentialsSchema.optional(),
   /** iOS: build on a machine with this Xcode version (e.g. 26, 26.0.1). */
   xcodeVersion: z.string().min(1).optional(),
-  /** iOS: build on a machine with this macOS version (e.g. 26, 27). */
-  macosVersion: z.string().min(1).optional(),
   androidTrack: z.enum(['internal', 'alpha', 'beta', 'production']).optional(),
   androidReleaseStatus: z.enum(['draft', 'completed', 'inProgress', 'halted']).optional(),
   submitToStoreReview: z.boolean().optional(),
