@@ -315,6 +315,11 @@ export function shouldSkipOnboardingResume(onboarding: unknown): boolean {
   const ledger = parseAppOnboardingLedger(onboarding)
   if (ledger.getting_started_dismissed_at)
     return true
+  const checklist = parseAppOnboarding(onboarding)
+  // Keep versioned checklists reachable whenever the sidebar shows them.
+  // Feature timestamps and summary outcomes must not override pending items.
+  if (checklist.todo_list_version === 3 || checklist.todo_list_version === 4)
+    return !shouldShowGettingStartedNav(onboarding)
   // started_at is set when the user opens OTA setup, and refresh also copies
   // first-bundle time into it. succeeded_at is first device install. Do not
   // skip on started_at or opening OTA setup would hide Getting Started.

@@ -173,6 +173,7 @@ function post(body: unknown) {
 
 describe('on_channel_update compatibility events (integration)', () => {
   beforeEach(() => {
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
     vi.clearAllMocks()
     eventStore.length = 0
     supabaseAdmin.mockImplementation(() => ({

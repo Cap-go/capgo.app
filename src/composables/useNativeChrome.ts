@@ -2,9 +2,11 @@ import type { PluginListenerHandle } from '@capacitor/core'
 import type { NativeNavigationTab } from '@capgo/capacitor-native-navigation'
 import type { Tab } from '~/components/comp_def'
 import { ActionSheet, ActionSheetButtonStyle } from '@capacitor/action-sheet'
+import { App } from '@capacitor/app'
 import { Capacitor } from '@capacitor/core'
 import { StatusBar, Style } from '@capacitor/status-bar'
 import { NativeNavigation } from '@capgo/capacitor-native-navigation'
+import { NavigationBar } from '@capgo/capacitor-navigation-bar'
 import { useMediaQuery } from '@vueuse/core'
 import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -23,26 +25,27 @@ const PRIMARY_TABS: Record<PrimaryTabId, Tab> = {
   apikeys: { label: 'api-keys', key: '/apikeys' },
 }
 
-// Lucide paths: Android renders these SVGs, iOS uses the SF Symbol.
+// iOS uses SF Symbols. The plugin prefers any SVG over the SF Symbol, so the
+// Lucide SVGs live under android only.
 const TAB_ICONS: Record<NativeTabId, NativeNavigationTab['icon']> = {
   dashboard: {
-    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>',
+    android: { svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>' },
     ios: { sfSymbol: 'chart.bar' },
   },
   apps: {
-    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>',
+    android: { svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>' },
     ios: { sfSymbol: 'square.grid.2x2' },
   },
   preview: {
-    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><rect x="7" y="7" width="10" height="10" rx="1"/></svg>',
+    android: { svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><rect x="7" y="7" width="10" height="10" rx="1"/></svg>' },
     ios: { sfSymbol: 'qrcode.viewfinder' },
   },
   apikeys: {
-    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg>',
+    android: { svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>' },
     ios: { sfSymbol: 'key' },
   },
   more: {
-    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>',
+    android: { svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>' },
     ios: { sfSymbol: 'ellipsis.circle' },
   },
 }
@@ -54,6 +57,8 @@ const DARK_COLORS = { background: '#0F172A', foreground: '#F8FAFC', inactiveTint
 const LIGHT_COLORS = { background: '#F1F5F9', foreground: '#0F172A', inactiveTint: '#64748B' }
 
 export const isNativeChromeEnabled = Capacitor.isNativePlatform()
+// The floating tabbar replaces the Android system navigation bar while the dashboard shell is shown.
+const hideSystemNavigationBar = Capacitor.getPlatform() === 'android'
 
 /**
  * Drives the native Capacitor navbar and tabbar from the router so the
@@ -141,6 +146,12 @@ export function useNativeChrome() {
         icon: TAB_ICONS[id],
       })),
     })
+  }
+
+  async function hideNavigationBar() {
+    if (!active || !hideSystemNavigationBar)
+      return
+    await NavigationBar.hide().catch(() => {})
   }
 
   async function renderStatusBar() {
@@ -244,8 +255,10 @@ export function useNativeChrome() {
         if (id === 'organization')
           void chooseOrganization()
       })),
+      // Android shows the system bars again when the app comes back to the foreground.
+      ...(hideSystemNavigationBar ? [register(App.addListener('resume', () => void hideNavigationBar()))] : []),
     ])
-    await Promise.all([renderNavbar(), renderTabbar(), renderStatusBar()])
+    await Promise.all([renderNavbar(), renderTabbar(), renderStatusBar(), hideNavigationBar()])
   })
 
   watch([title, showBack, organizationLabel, isDark], () => {
@@ -265,6 +278,8 @@ export function useNativeChrome() {
     listeners.splice(0).forEach(listener => void listener.remove())
     void NativeNavigation.setNavbar({ hidden: true })
     void NativeNavigation.setTabbar({ hidden: true })
+    if (hideSystemNavigationBar)
+      void NavigationBar.show().catch(() => {})
   })
 
   return { goBack, canGoBack: () => showBack.value }

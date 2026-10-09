@@ -12,6 +12,7 @@ import type {
 } from './compatibility_events.ts'
 import { Hono } from 'hono/tiny'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
+import { backgroundTask } from '../utils/utils.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { retryWithBackoff } from '../utils/retry.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
@@ -471,9 +472,9 @@ app.post('/', middlewareAPISecret, triggerValidator('channels', 'UPDATE'), async
     }
   }
 
-  // Compute + persist compatibility events. Fully guarded so it can never break
-  // the channel winner reconciliation above.
-  await persistCompatibilityEvents(c, record, oldRecord, previousDefaultChannelByPlatform)
+  // Compatibility work can scan hundreds of rows; run after the demotion updates
+  // so queue HTTP posts return before the 15s consumer abort.
+  await backgroundTask(c, persistCompatibilityEvents(c, record, oldRecord, previousDefaultChannelByPlatform))
 
   return c.json(BRES)
 })

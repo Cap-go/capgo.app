@@ -178,10 +178,32 @@ export function parsePreviewDeepLink(value: string): PreviewDeepLink | null {
  */
 export function normalizeScannedPreviewValue(value: string) {
   const trimmed = value.replace(/[\u200B-\u200D\uFEFF]/g, '').trim()
-  const match = trimmed.match(/(?:capgo|https?):\/\/[^\s"'<>`)\]]+/i)
+  // A capgo:// link wins over any earlier https:// URL in the surrounding text.
+  const match = trimmed.match(/capgo:\/\/[^\s"'<>`]+/i) ?? trimmed.match(/https?:\/\/[^\s"'<>`]+/i)
   if (!match)
     return trimmed
-  return match[0].replace(/[.,;:!?]+$/, '')
+  // A clean payload is kept verbatim: channel names may legitimately end in "."
+  if (match[0] === trimmed)
+    return trimmed
+
+  // Wrapped in text: drop sentence punctuation and closers that are not part of the URL.
+  let url = match[0]
+  for (;;) {
+    const last = url[url.length - 1]
+    if (last && '.,;:!?'.includes(last)) {
+      url = url.slice(0, -1)
+      continue
+    }
+    if (last === ')' && url.split('(').length < url.split(')').length) {
+      url = url.slice(0, -1)
+      continue
+    }
+    if (last === ']' && url.split('[').length < url.split(']').length) {
+      url = url.slice(0, -1)
+      continue
+    }
+    return url
+  }
 }
 
 export function hasNativeConfirmedPreview(value: string) {

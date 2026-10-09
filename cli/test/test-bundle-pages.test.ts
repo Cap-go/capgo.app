@@ -11,8 +11,13 @@ function makeBundleRow(index: number) {
   }
 }
 
-function makeCannotGetBundleError(message = 'Cannot get bundle') {
-  const response = new Response(JSON.stringify({ error: 'cannot_get_bundle', message }), { status: 400 })
+function makeCannotGetBundleError(message = 'Cannot get bundle', status = 400) {
+  const response = new Response(JSON.stringify({ error: 'cannot_get_bundle', message }), { status })
+  return Object.assign(new Error('Edge Function returned a non-2xx status code'), { context: response })
+}
+
+function makeCannotAccessAppError() {
+  const response = new Response(JSON.stringify({ error: 'cannot_get_bundle', message: 'You can\'t access this app' }), { status: 403 })
   return Object.assign(new Error('Edge Function returned a non-2xx status code'), { context: response })
 }
 
@@ -50,23 +55,23 @@ describe('fetchBundlePages empty-list EOF', () => {
     expect(versions[49]?.name).toBe('1.0.49')
   })
 
-  it('still throws when cannot_get_bundle has a different message', async () => {
+  it('throws a permission message when cannot_get_bundle means access denied', async () => {
     const firstPage = Array.from({ length: 50 }, (_, index) => makeBundleRow(index))
     await expect(getActiveAppVersions('test-key', 'com.test.app', {
       invoke: createInvokeStub({
         0: async () => ({ data: firstPage, error: null }),
-        1: async () => ({ data: null, error: makeCannotGetBundleError('Access denied') }),
+        1: async () => ({ data: null, error: makeCannotAccessAppError() }),
       }),
-    })).rejects.toThrow(/not found in database/)
+    })).rejects.toThrow(/Cannot list bundles/)
   })
 
-  it('still throws for unrelated errors on later pages', async () => {
+  it('throws a service error message for unrelated failures on later pages', async () => {
     const firstPage = Array.from({ length: 50 }, (_, index) => makeBundleRow(index))
     await expect(getActiveAppVersions('test-key', 'com.test.app', {
       invoke: createInvokeStub({
         0: async () => ({ data: firstPage, error: null }),
-        1: async () => ({ data: null, error: new Error('upstream failure') }),
+        1: async () => ({ data: null, error: makeCannotGetBundleError('Database unavailable', 503) }),
       }),
-    })).rejects.toThrow(/not found in database/)
+    })).rejects.toThrow(/Could not list bundles for app com\.test\.app: cannot_get_bundle \| Database unavailable/)
   })
 })

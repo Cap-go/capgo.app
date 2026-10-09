@@ -23,6 +23,7 @@ export function isValidClientEventId(value: unknown): value is string {
 }
 
 export interface AcceptedEventIdentity {
+  client_event_id: string
   event_id: string
   occurred_at: string
   accepted_at: string
@@ -60,6 +61,7 @@ export async function acceptEventIdentity(input: {
     && timestamp >= input.acceptedAt - MAX_EVENT_AGE_MS
     && timestamp <= input.acceptedAt + MAX_FUTURE_SKEW_MS
   return {
+    client_event_id: clientEventId,
     event_id: eventId,
     occurred_at: new Date(reasonableTimestamp ? timestamp : input.acceptedAt).toISOString(),
     accepted_at: new Date(input.acceptedAt).toISOString(),

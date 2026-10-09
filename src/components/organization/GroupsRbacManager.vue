@@ -95,7 +95,7 @@ const dynamicColumns = computed<TableColumn[]>(() => {
     {
       label: t('description'),
       key: 'description',
-      mobile: true,
+      mobile: false,
       displayFunction: (group: GroupRow) => group.description || t('none'),
     },
     {
@@ -107,7 +107,7 @@ const dynamicColumns = computed<TableColumn[]>(() => {
     {
       label: t('granted-at'),
       key: 'created_at',
-      mobile: true,
+      mobile: false,
       displayFunction: (group: GroupRow) => formatDate(group.created_at),
     },
   ]
@@ -319,7 +319,7 @@ async function reload() {
 <template>
   <div>
     <div class="flex flex-col h-full pb-8 overflow-hidden overflow-y-auto bg-white border shadow-sm md:p-8 md:pb-0 max-h-fit grow md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-      <div class="flex justify-between w-full mb-5 ml-2 md:ml-0">
+      <div class="flex justify-between gap-3 w-full mb-5 px-2 md:px-0">
         <h2 class="text-2xl font-bold dark:text-white text-slate-800">
           {{ t('groups') }}
         </h2>

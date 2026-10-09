@@ -1,4 +1,6 @@
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import apiWorker from '../cloudflare_workers/api/index.ts'
 
 const {
   cloudlogMock,
@@ -182,6 +184,25 @@ describe('canceled_org_retention_alerts', () => {
       }),
       { background: false, strict: true },
     )
+  })
+
+  it('registers the trigger on Cloudflare and Supabase routers', () => {
+    const cloudflareRouter = readFileSync(new URL('../cloudflare_workers/api/index.ts', import.meta.url), 'utf8')
+    const supabaseRouter = readFileSync(new URL('../supabase/functions/triggers/index.ts', import.meta.url), 'utf8')
+    const route = "route('/canceled_org_retention_alerts', canceled_org_retention_alerts)"
+
+    expect(cloudflareRouter).toContain(route)
+    expect(supabaseRouter).toContain(route)
+  })
+
+  it('serves POST /triggers/canceled_org_retention_alerts on the Cloudflare API worker', async () => {
+    const response = await apiWorker.fetch(new Request('https://api.capgo.app/triggers/canceled_org_retention_alerts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    }))
+
+    expect(response.status).not.toBe(404)
   })
 
   it('falls back to unknown uniqId for non-string access_end', async () => {

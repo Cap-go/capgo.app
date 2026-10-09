@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import {
   APIKEY_TEST_ORG_SUPER_ADMIN,
   getAuthHeadersForCredentials,
+  getSupabaseClient,
   ORG_ID,
   USER_EMAIL,
   USER_ID,
@@ -53,6 +54,14 @@ function createAnonymousApiKeyClient(apikey: string) {
 
 function isPermissionDenied(error: { code?: string, message?: string } | null) {
   return error?.code === '42501' || /permission denied/i.test(error?.message ?? '')
+}
+
+function isNoRights(error: { message?: string } | null) {
+  return /NO_RIGHTS/i.test(error?.message ?? '')
+}
+
+function isOrgNotFound(error: { message?: string } | null) {
+  return /ORG_NOT_FOUND/i.test(error?.message ?? '')
 }
 
 describe('anonymous oracle RPC hardening', () => {
@@ -129,6 +138,69 @@ describe('anonymous oracle RPC hardening', () => {
     expect(invalidKeyResult.data).toBeNull()
   })
 
+  it.concurrent('blocks anonymous execute on member/org oracle RPCs', async () => {
+    const client = createAnonymousClient()
+    const missingOrgId = randomUUID()
+
+    const revokedCalls = await Promise.all([
+      client.rpc('get_org_members_rbac', { p_org_id: ORG_ID }),
+      client.rpc('get_org_members_rbac', { p_org_id: missingOrgId }),
+      client.rpc('is_member_of_org', { user_id: USER_ID, org_id: ORG_ID }),
+      client.rpc('is_member_of_org', { user_id: USER_ID, org_id: missingOrgId }),
+      client.rpc('update_org_invite_role_rbac', {
+        p_org_id: ORG_ID,
+        p_user_id: USER_ID,
+        p_new_role_name: 'org_member',
+      }),
+      client.rpc('update_tmp_invite_role_rbac', {
+        p_org_id: ORG_ID,
+        p_email: 'oracle-test@capgo.app',
+        p_new_role_name: 'org_member',
+      }),
+    ])
+
+    for (const result of revokedCalls) {
+      expect(isPermissionDenied(result.error)).toBe(true)
+      expect(result.data).toBeNull()
+    }
+  })
+
+  it.concurrent('does not leak org existence through check_org_members_2fa_enabled', async () => {
+    const client = createAnonymousClient()
+    const missingOrgId = randomUUID()
+
+    const existingOrgResult = await client.rpc('check_org_members_2fa_enabled', {
+      org_id: ORG_ID,
+    })
+    const missingOrgResult = await client.rpc('check_org_members_2fa_enabled', {
+      org_id: missingOrgId,
+    })
+
+    expect(isNoRights(existingOrgResult.error)).toBe(true)
+    expect(isNoRights(missingOrgResult.error)).toBe(true)
+    expect(existingOrgResult.error?.message).toBe(missingOrgResult.error?.message)
+    expect(existingOrgResult.data).toBeNull()
+    expect(missingOrgResult.data).toBeNull()
+  })
+
+  it.concurrent('does not leak org existence through check_org_members_password_policy', async () => {
+    const client = createAnonymousClient()
+    const missingOrgId = randomUUID()
+
+    const existingOrgResult = await client.rpc('check_org_members_password_policy', {
+      org_id: ORG_ID,
+    })
+    const missingOrgResult = await client.rpc('check_org_members_password_policy', {
+      org_id: missingOrgId,
+    })
+
+    expect(isNoRights(existingOrgResult.error)).toBe(true)
+    expect(isNoRights(missingOrgResult.error)).toBe(true)
+    expect(existingOrgResult.error?.message).toBe(missingOrgResult.error?.message)
+    expect(existingOrgResult.data).toBeNull()
+    expect(missingOrgResult.data).toBeNull()
+  })
+
   it.concurrent('keeps invite_user_to_org_rbac callable for authenticated callers', async () => {
     const authHeaders = await getAuthHeadersForCredentials(USER_EMAIL, USER_PASSWORD)
     const client = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -149,5 +221,114 @@ describe('anonymous oracle RPC hardening', () => {
     expect(error).toBeNull()
     // Unknown email is read-only and proves authenticated execute still works.
     expect(data).toBe('NO_EMAIL')
+  })
+
+  it.concurrent('keeps revoked member/org oracle RPCs callable for authenticated callers', async () => {
+    const authHeaders = await getAuthHeadersForCredentials(USER_EMAIL, USER_PASSWORD)
+    const client = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: {
+        headers: authHeaders,
+      },
+      auth: {
+        persistSession: false,
+      },
+    })
+
+    const members = await client.rpc('get_org_members_rbac', { p_org_id: ORG_ID })
+    expect(isPermissionDenied(members.error)).toBe(false)
+    expect(members.error).toBeNull()
+    expect(Array.isArray(members.data)).toBe(true)
+    expect((members.data ?? []).length).toBeGreaterThan(0)
+
+    const membership = await client.rpc('is_member_of_org', {
+      user_id: USER_ID,
+      org_id: ORG_ID,
+    })
+    expect(isPermissionDenied(membership.error)).toBe(false)
+    expect(membership.error).toBeNull()
+    expect(membership.data).toBe(true)
+
+    // Missing invite/user must not be EXECUTE denial — proves re-grant path.
+    const missingUserId = randomUUID()
+    const missingInviteEmail = `oracle-missing-invite-${randomUUID()}@capgo.app`
+    const orgInviteUpdate = await client.rpc('update_org_invite_role_rbac', {
+      p_org_id: ORG_ID,
+      p_user_id: missingUserId,
+      p_new_role_name: 'org_member',
+    })
+    const tmpInviteUpdate = await client.rpc('update_tmp_invite_role_rbac', {
+      p_org_id: ORG_ID,
+      p_email: missingInviteEmail,
+      p_new_role_name: 'org_member',
+    })
+
+    expect(isPermissionDenied(orgInviteUpdate.error)).toBe(false)
+    expect(isPermissionDenied(tmpInviteUpdate.error)).toBe(false)
+
+    const orgInviteOutcome = orgInviteUpdate.error?.message ?? orgInviteUpdate.data
+    const tmpInviteOutcome = tmpInviteUpdate.error?.message ?? tmpInviteUpdate.data
+    expect(String(orgInviteOutcome)).toMatch(/NO_INVITATION|ROLE_NOT_FOUND/i)
+    expect(String(tmpInviteOutcome)).toMatch(/NO_INVITATION|ROLE_NOT_FOUND/i)
+  })
+})
+
+describe('internal missing-org distinction on org-member helpers', () => {
+  it.concurrent('raises ORG_NOT_FOUND for service_role on missing org (2fa)', async () => {
+    const client = getSupabaseClient()
+    const missingOrgId = randomUUID()
+
+    const missing = await client.rpc('check_org_members_2fa_enabled', {
+      org_id: missingOrgId,
+    })
+    expect(isOrgNotFound(missing.error)).toBe(true)
+    expect(missing.data).toBeNull()
+
+    const existing = await client.rpc('check_org_members_2fa_enabled', {
+      org_id: ORG_ID,
+    })
+    expect(existing.error).toBeNull()
+    expect(Array.isArray(existing.data)).toBe(true)
+  })
+
+  it.concurrent('raises ORG_NOT_FOUND for service_role on missing org (password policy)', async () => {
+    const client = getSupabaseClient()
+    const missingOrgId = randomUUID()
+
+    const missing = await client.rpc('check_org_members_password_policy', {
+      org_id: missingOrgId,
+    })
+    expect(isOrgNotFound(missing.error)).toBe(true)
+    expect(missing.data).toBeNull()
+
+    const existing = await client.rpc('check_org_members_password_policy', {
+      org_id: ORG_ID,
+    })
+    expect(existing.error).toBeNull()
+    expect(Array.isArray(existing.data)).toBe(true)
+  })
+
+  it.concurrent('keeps authenticated missing-org as NO_RIGHTS (anon oracle closed)', async () => {
+    const authHeaders = await getAuthHeadersForCredentials(USER_EMAIL, USER_PASSWORD)
+    const client = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: {
+        headers: authHeaders,
+      },
+      auth: {
+        persistSession: false,
+      },
+    })
+    const missingOrgId = randomUUID()
+
+    const twoFa = await client.rpc('check_org_members_2fa_enabled', {
+      org_id: missingOrgId,
+    })
+    const password = await client.rpc('check_org_members_password_policy', {
+      org_id: missingOrgId,
+    })
+
+    expect(isNoRights(twoFa.error)).toBe(true)
+    expect(isNoRights(password.error)).toBe(true)
+    expect(isOrgNotFound(twoFa.error)).toBe(false)
+    expect(isOrgNotFound(password.error)).toBe(false)
   })
 })
