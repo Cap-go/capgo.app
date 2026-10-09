@@ -2,7 +2,7 @@
 process.env.CAPGO_DISABLE_POSTHOG = '1'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { checkAppExists, checkAppExistsAndHasPermissionOrgErr } from '../src/api/app.ts'
@@ -162,10 +162,12 @@ try {
       const url = input?.url ?? String(input)
       if (!url.startsWith('http') || url.includes('.wasm'))
         return nativeFetch(input)
+      if (process.env.CAPGO_URL_LOG)
+        (await import('node:fs')).appendFileSync(process.env.CAPGO_URL_LOG, url + '\\n')
       if (url.includes('/private/config'))
         return Response.json({})
       if (url.includes('/private/cli/preflight')) {
-        if (!url.startsWith('http://localhost:54321/functions/v1/'))
+        if (!url.startsWith(process.env.CAPGO_EXPECTED_API ?? 'http://localhost:54321/functions/v1/'))
           return Response.json({ error: 'wrong_host' }, { status: 500 })
         if (scenario === 'denied-app')
           return Response.json({ error: 'cannot_access_app' }, { status: 401 })
@@ -210,6 +212,19 @@ try {
       assert.match(output, /Android\s+│ No/)
     }
   }
+  // A non-Supabase backend (local worker, custom domain) gets every request; nothing reaches Capgo cloud.
+  const urlLog = join(fixture, 'urls.log')
+  const custom = spawnSync('node', [
+    '--import', preload, new URL('../dist/index.js', import.meta.url).pathname,
+    'channel', 'list', appId, '-a', options.apikey, '--api-host', 'http://127.0.0.1:8787',
+  ], {
+    encoding: 'utf8', timeout: 15000,
+    env: { ...process.env, CAPGO_CHANNEL_LIST_SCENARIO: 'allowed', CAPGO_URL_LOG: urlLog, CAPGO_EXPECTED_API: 'http://127.0.0.1:8787/', CAPGO_DISABLE_TELEMETRY: '1', CAPGO_DISABLE_POSTHOG: '1' },
+  })
+  assert.equal(custom.status, 0, custom.stdout + custom.stderr)
+  const urls = readFileSync(urlLog, 'utf8').trim().split('\n')
+  assert.ok(urls.some(url => url.startsWith('http://127.0.0.1:8787/private/cli/preflight')), urls.join('\n'))
+  assert.deepEqual(urls.filter(url => !url.startsWith('http://127.0.0.1:8787/')), [], 'custom --api-host must not leak requests to Capgo cloud')
   console.log('Built CLI prints permission failures and readable channel settings')
 }
 finally {

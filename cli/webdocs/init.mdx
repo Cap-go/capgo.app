@@ -31,7 +31,8 @@ npx @capgo/cli@latest init YOUR_API_KEY com.example.app
 | **-a** | <code>string</code> | API key to link to your account |
 | **-n** | <code>string</code> | App name for display in Capgo Cloud |
 | **-i** | <code>string</code> | App icon path for display in Capgo Cloud |
-| **--api-host** | <code>string</code> | Custom Capgo API URL (for self-hosting or Capgo development), e.g. https://<project>.supabase.co/functions/v1 |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://<project>.supabase.co/functions/v1 or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 | **--supa-host** | <code>string</code> | Deprecated: use --api-host <supaHost>/functions/v1 |
 | **--supa-anon** | <code>string</code> | Deprecated: no longer needed |
 | **--package-json** | <code>string</code> | Package JSON for the Capacitor app to onboard (useful in monorepos) |

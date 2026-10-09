@@ -24,7 +24,8 @@ npx @capgo/cli@latest organisation list
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--api-host** | <code>string</code> | Custom Capgo API URL (for self-hosting or Capgo development), e.g. https://<project>.supabase.co/functions/v1 |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://<project>.supabase.co/functions/v1 or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 | **--supa-host** | <code>string</code> | Deprecated: use --api-host <supaHost>/functions/v1 |
 | **--supa-anon** | <code>string</code> | Deprecated: no longer needed |
 
@@ -45,7 +46,8 @@ npx @capgo/cli@latest organisation add
 | **-n** | <code>string</code> | Organization name |
 | **-e** | <code>string</code> | Management email for the organization |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--api-host** | <code>string</code> | Custom Capgo API URL (for self-hosting or Capgo development), e.g. https://<project>.supabase.co/functions/v1 |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://<project>.supabase.co/functions/v1 or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 | **--supa-host** | <code>string</code> | Deprecated: use --api-host <supaHost>/functions/v1 |
 | **--supa-anon** | <code>string</code> | Deprecated: no longer needed |
 
@@ -82,7 +84,8 @@ npx @capgo/cli@latest organisation set
 | **--enforce-hashed-api-keys** | <code>boolean</code> | Enforce hashed/secure API keys (key value stored as hash, shown only once) |
 | **--no-enforce-hashed-api-keys** | <code>boolean</code> | Allow plain-text API keys |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--api-host** | <code>string</code> | Custom Capgo API URL (for self-hosting or Capgo development), e.g. https://<project>.supabase.co/functions/v1 |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://<project>.supabase.co/functions/v1 or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 | **--supa-host** | <code>string</code> | Deprecated: use --api-host <supaHost>/functions/v1 |
 | **--supa-anon** | <code>string</code> | Deprecated: no longer needed |
 
@@ -101,7 +104,8 @@ npx @capgo/cli@latest organisation delete
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--api-host** | <code>string</code> | Custom Capgo API URL (for self-hosting or Capgo development), e.g. https://<project>.supabase.co/functions/v1 |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://<project>.supabase.co/functions/v1 or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 | **--supa-host** | <code>string</code> | Deprecated: use --api-host <supaHost>/functions/v1 |
 | **--supa-anon** | <code>string</code> | Deprecated: no longer needed |
 

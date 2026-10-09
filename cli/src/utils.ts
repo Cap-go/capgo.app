@@ -799,16 +799,63 @@ export async function getLocalConfig(silent = false) {
       if (!extConfig?.config?.plugins?.CapacitorUpdater?.localApiFiles)
         capConfig.hostFilesApi = legacyApiHost
     }
-    return capConfig
+    return applyCapgoHostOverride(capConfig)
   }
   catch {
-    return {
+    return applyCapgoHostOverride({
       host: defaultHost,
       hostWeb: defaultHostWeb,
       hostFilesApi: defaultFileHost,
       hostApi: defaultApiHost,
-    }
+    })
   }
+}
+
+interface CapgoHostOverride {
+  apiHost?: string
+  filesHost?: string
+}
+
+let capgoHostOverride: CapgoHostOverride = {}
+
+/**
+ * Pin the Capgo API for this process (--api-host / --files-host, or an SDK client).
+ * Every host lookup (HTTP calls, remote config, files config, TUS uploads) then
+ * uses it, so tests and self-hosted backends never leak traffic to Capgo cloud.
+ */
+export function setCapgoHostOverride(hosts: CapgoHostOverride) {
+  const next: CapgoHostOverride = {
+    apiHost: hosts.apiHost ? normalizeCapgoApiHost(hosts.apiHost) : undefined,
+    filesHost: hosts.filesHost ? normalizeCapgoApiHost(hosts.filesHost) : undefined,
+  }
+  if (next.apiHost === capgoHostOverride.apiHost && next.filesHost === capgoHostOverride.filesHost)
+    return
+  capgoHostOverride = next
+  // Remote config is per host.
+  cachedRemoteConfig = null
+}
+
+function envHost(name: 'CAPGO_API_HOST' | 'CAPGO_FILES_HOST'): string | undefined {
+  const value = env[name]?.trim()
+  return value ? normalizeCapgoApiHost(value) : undefined
+}
+
+/**
+ * Host precedence: --api-host / --files-host (or SDK), then CAPGO_API_HOST /
+ * CAPGO_FILES_HOST, then capacitor config, then Capgo cloud. A custom API host
+ * also serves files unless a files host is given: self-hosted backends (Edge
+ * Functions, a single worker, a test server) expose both on one origin.
+ */
+function applyCapgoHostOverride<T extends { hostApi: string, hostFilesApi: string }>(config: T): T {
+  const apiHost = capgoHostOverride.apiHost ?? envHost('CAPGO_API_HOST')
+  const filesHost = capgoHostOverride.filesHost ?? envHost('CAPGO_FILES_HOST')
+  if (apiHost) {
+    config.hostApi = apiHost
+    config.hostFilesApi = apiHost
+  }
+  if (filesHost)
+    config.hostFilesApi = filesHost
+  return config
 }
 // eslint-disable-next-line regexp/no-unused-capturing-group
 const nativeFileRegex = /([A-Za-z0-9]+)\.(java|swift|kt|scala)$/
@@ -1022,8 +1069,10 @@ function warnLegacySupabaseHost(source: string, apiHost: string) {
 
 /** Options that select the Capgo API. `supaHost` / `supaAnon` are deprecated aliases. */
 export interface CapgoHostOptions {
-  /** Capgo API base URL (`--api-host`), e.g. `https://<project>.supabase.co/functions/v1` when self-hosting. */
+  /** Capgo API base URL (`--api-host`): any Capgo backend, e.g. `https://<project>.supabase.co/functions/v1` or `http://127.0.0.1:8787`. */
   apiHost?: string
+  /** Capgo files API base URL (`--files-host`); defaults to apiHost when apiHost is set. */
+  filesHost?: string
   /** @deprecated Supabase project URL; mapped to `<supaHost>/functions/v1`. */
   supaHost?: string
   /** @deprecated Ignored: the Capgo API authenticates with the API key only. */
@@ -1071,18 +1120,16 @@ export interface CapgoApiHosts {
 }
 
 /**
- * Resolve Capgo API hosts: explicit `--api-host`, then capacitor config (`localApi`,
- * legacy `localSupa`), then Capgo cloud.
+ * Resolve Capgo API hosts: explicit apiHost/filesHost, then the process override,
+ * env and capacitor config (see applyCapgoHostOverride), then Capgo cloud.
  */
-export async function resolveCapgoApiHosts(apiHost?: string, silent = true): Promise<CapgoApiHosts> {
+export async function resolveCapgoApiHosts(apiHost?: string, silent = true, filesHost?: string): Promise<CapgoApiHosts> {
   const localConfig = await getLocalConfig(silent)
-  if (!apiHost)
-    return { apiHost: localConfig.hostApi, filesHost: localConfig.hostFilesApi }
-  const normalized = normalizeCapgoApiHost(apiHost)
-  return {
-    apiHost: normalized,
-    filesHost: normalized.endsWith('/functions/v1') ? normalized : localConfig.hostFilesApi,
-  }
+  const resolvedApi = apiHost ? normalizeCapgoApiHost(apiHost) : localConfig.hostApi
+  const resolvedFiles = filesHost
+    ? normalizeCapgoApiHost(filesHost)
+    : apiHost && resolvedApi !== localConfig.hostApi ? resolvedApi : localConfig.hostFilesApi
+  return { apiHost: resolvedApi, filesHost: resolvedFiles }
 }
 
 export interface CapgoCliInvokeOptions {
@@ -1196,10 +1243,14 @@ export interface CapgoClient extends CapgoApiHosts {
   apikey: string
 }
 
-export async function createCapgoClient(apikey: string, apiHost?: string, silent = false, signal?: AbortSignal): Promise<CapgoClient> {
+export async function createCapgoClient(apikey: string, apiHost?: string, silent = false, signal?: AbortSignal, filesHost?: string): Promise<CapgoClient> {
+  // A client pinned to a custom backend pins the whole process: remote config,
+  // files config and uploads must not fall back to Capgo cloud.
+  if (apiHost || filesHost)
+    setCapgoHostOverride({ apiHost: apiHost ?? capgoHostOverride.apiHost, filesHost: filesHost ?? capgoHostOverride.filesHost })
   // Enforces the API-published minimum CLI version before any command runs.
   await getRemoteConfig(silent, signal)
-  const hosts = await resolveCapgoApiHosts(apiHost, silent)
+  const hosts = await resolveCapgoApiHosts(undefined, silent)
   if (apiHost && !silent)
     log.info(`Using custom Capgo API ${hosts.apiHost}`)
   return {

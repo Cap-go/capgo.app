@@ -30,6 +30,7 @@ export const addAppOptionsSchema = z.object({
   icon: z.string().optional(),
   apikey: z.string().optional(),
   apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
   /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
   /** @deprecated ignored */
@@ -45,6 +46,7 @@ export const updateAppOptionsSchema = z.object({
   retention: z.number().optional(),
   apikey: z.string().optional(),
   apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
   /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
   /** @deprecated ignored */
@@ -95,6 +97,7 @@ export const uploadOptionsSchema = z.object({
   encrypt: z.boolean().optional(),
   encryptionKey: z.string().optional(),
   apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
   /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
   /** @deprecated ignored */
@@ -158,6 +161,7 @@ export const cleanupOptionsSchema = z.object({
   ignoreChannel: z.boolean().optional(),
   apikey: z.string().optional(),
   apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
   /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
   /** @deprecated ignored */
@@ -206,6 +210,7 @@ export const addChannelOptionsSchema = z.object({
   selfAssign: z.boolean().optional(),
   apikey: z.string().optional(),
   apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
   /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
   /** @deprecated ignored */
@@ -251,6 +256,7 @@ export const updateChannelOptionsBaseSchema = z.object({
   acceptIncompatible: z.boolean().optional(),
   apikey: z.string().optional(),
   apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
   /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
   /** @deprecated ignored */
@@ -274,6 +280,7 @@ export const promoteChannelOptionsSchema = z.object({
   sendUpdateNotification: z.boolean().optional(),
   apikey: z.string().optional(),
   apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
   /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
   /** @deprecated ignored */
@@ -293,6 +300,7 @@ export type PromoteChannelOptions = z.infer<typeof promoteChannelOptionsSchema>
 export const accountIdOptionsSchema = z.object({
   apikey: z.string().optional(),
   apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
   /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
   /** @deprecated ignored */
@@ -345,6 +353,7 @@ export const loginOptionsSchema = z.object({
   apikey: z.string(),
   local: z.boolean().optional(),
   apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
   /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
   /** @deprecated ignored */
@@ -371,6 +380,7 @@ export const bundleCompatibilityOptionsSchema = z.object({
   textOutput: z.boolean().optional(),
   apikey: z.string().optional(),
   apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
   /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
   /** @deprecated ignored */
@@ -439,6 +449,7 @@ export const requestBuildOptionsSchema = z.object({
   userId: z.string().optional(),
   apikey: z.string().optional(),
   apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
   /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
   /** @deprecated ignored */
@@ -492,6 +503,7 @@ export const getStatsOptionsSchema = z.object({
   after: z.string().nullable().optional(),
   apikey: z.string().optional(),
   apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
   /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
   /** @deprecated ignored */
@@ -526,6 +538,7 @@ export const observeOptionsObjectSchema = z.object({
   limit: z.number().int().min(1).max(100).optional().describe('Max rows to return (default 20, max 100)'),
   apikey: z.string().optional(),
   apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
   /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
   /** @deprecated ignored */

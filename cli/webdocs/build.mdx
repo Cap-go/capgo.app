@@ -38,7 +38,8 @@ Example:
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
 | **--node-modules** | <code>string</code> | Paths to node_modules directories for monorepos (comma-separated) |
 | **--verbose** | <code>boolean</code> | Enable verbose output with detailed logging |
-| **--api-host** | <code>string</code> | Custom Capgo API URL (for self-hosting or Capgo development), e.g. https://<project>.supabase.co/functions/v1 |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://<project>.supabase.co/functions/v1 or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 | **--supa-host** | <code>string</code> | Deprecated: use --api-host <supaHost>/functions/v1 |
 | **--supa-anon** | <code>string</code> | Deprecated: no longer needed |
 
@@ -58,7 +59,8 @@ Set up build credentials interactively (iOS: certificates + profiles automated; 
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
 | **-p** | <code>string</code> | Platform to onboard (ios or android). If omitted, auto-detects when only one native folder exists; prompts otherwise. |
-| **--api-host** | <code>string</code> | Custom Capgo API URL (for self-hosting or Capgo development), e.g. https://<project>.supabase.co/functions/v1 |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://<project>.supabase.co/functions/v1 or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 | **--supa-host** | <code>string</code> | Deprecated: use --api-host <supaHost>/functions/v1 |
 | **--supa-anon** | <code>string</code> | Deprecated: no longer needed |
 | **--no-analytics** | <code>boolean</code> | Disable build onboarding analytics and terminal replay for this run |
@@ -151,7 +153,8 @@ Examples:
 | **--send-logs** | <code>boolean</code> | Deprecated alias for --send-logs-to-support |
 | **--verbose** | <code>boolean</code> | Enable verbose output with detailed logging |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--api-host** | <code>string</code> | Custom Capgo API URL (for self-hosting or Capgo development), e.g. https://<project>.supabase.co/functions/v1 |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://<project>.supabase.co/functions/v1 or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 | **--supa-host** | <code>string</code> | Deprecated: use --api-host <supaHost>/functions/v1 |
 | **--supa-anon** | <code>string</code> | Deprecated: no longer needed |
 
@@ -210,7 +213,8 @@ Example:
 | **--skip** | <code>string</code> | Skip specific check(s) by id (repeatable or comma-separated). Alias of --prescan-skip on build request. |
 | **--warn** | <code>string</code> | Downgrade specific check(s) to warning by id (repeatable or comma-separated). Alias of --prescan-warn on build request. |
 | **--verbose** | <code>boolean</code> | Enable verbose output with detailed logging |
-| **--api-host** | <code>string</code> | Custom Capgo API URL (for self-hosting or Capgo development), e.g. https://<project>.supabase.co/functions/v1 |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://<project>.supabase.co/functions/v1 or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 | **--supa-host** | <code>string</code> | Deprecated: use --api-host <supaHost>/functions/v1 |
 | **--supa-anon** | <code>string</code> | Deprecated: no longer needed |
 

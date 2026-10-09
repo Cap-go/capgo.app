@@ -81,7 +81,7 @@ import { setOrganizationInternal } from './organization/set'
 import { promoteChannelOptionsSchema, requestBuildOptionsSchema, updateChannelOptionsSchema, uploadOptionsSchema } from './schemas/sdk'
 import { CliUserError } from './shared/cli-user-error'
 import { getUserIdInternal } from './user/account'
-import { createCapgoClient, findSavedKey, getConfig, getLocalConfig, normalizeCapgoHostOptions } from './utils'
+import { createCapgoClient, findSavedKey, getConfig, getLocalConfig, normalizeCapgoHostOptions, setCapgoHostOverride } from './utils'
 import { parseSecurityPolicyError } from './utils/security_policy_errors'
 import { normalizeAutoBumpInput } from './versionHelpers'
 
@@ -159,8 +159,10 @@ export class CapgoSDK {
 
   constructor(options?: {
     apikey?: string
-    /** Capgo API base URL, e.g. `https://<project>.supabase.co/functions/v1` when self-hosting. */
+    /** Capgo API base URL for self-hosting or tests, e.g. `https://<project>.supabase.co/functions/v1` or `http://127.0.0.1:8787`. */
     apiHost?: string
+    /** Capgo files API base URL when it differs from apiHost. */
+    filesHost?: string
     /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
     supaHost?: string
     /** @deprecated ignored */
@@ -168,6 +170,9 @@ export class CapgoSDK {
   }) {
     this.apikey = options?.apikey
     this.apiHost = normalizeCapgoHostOptions(options ?? {}, true).apiHost
+    // Uploads, files config and remote config read the process-wide host.
+    if (this.apiHost || options?.filesHost)
+      setCapgoHostOverride({ apiHost: this.apiHost, filesHost: options?.filesHost })
   }
 
   /** Per-call apiHost (or deprecated supaHost) overrides the SDK-wide one. */
@@ -1719,7 +1724,7 @@ export type {
   ZipBundleOptions,
 } from './schemas/sdk'
 export type { Database } from './types/supabase.types'
-export { createCapgoClient } from './utils'
+export { createCapgoClient, setCapgoHostOverride } from './utils'
 export {
   formatApiErrorForCli,
   getSecurityPolicyMessage,

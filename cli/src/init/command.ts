@@ -5463,9 +5463,10 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   const reloadSelectedProjectConfig = async () => {
     selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
     selectedProjectDir = dirname(selectedPackageJsonPath)
-    // Self-hosted Capgo on Supabase Edge Functions: point the updater at it too.
-    const selfHostedApi = options.apiHost?.endsWith('/functions/v1') ? options.apiHost : undefined
-    if (!selfHostedApi) {
+    // Custom Capgo backend (--api-host): remember it in capacitor config so later
+    // commands use it too. Supabase Edge Functions also serve the updater endpoints.
+    const customApi = options.apiHost
+    if (!customApi) {
       try {
         extConfig = await withTemporaryCwd(getInitConfigLoadDir(selectedProjectDir), () => getConfig())
       }
@@ -5474,13 +5475,18 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
       }
     }
     else {
+      const edgeFunctions = customApi.endsWith('/functions/v1')
       extConfig = await withTemporaryCwd(getInitConfigLoadDir(selectedProjectDir), () => updateConfigUpdater({
-        statsUrl: `${selfHostedApi}/stats`,
-        channelUrl: `${selfHostedApi}/channel_self`,
-        updateUrl: `${selfHostedApi}/updates`,
-        localApi: selfHostedApi,
-        localApiFiles: selfHostedApi,
-        localS3: true,
+        ...(edgeFunctions
+          ? {
+              statsUrl: `${customApi}/stats`,
+              channelUrl: `${customApi}/channel_self`,
+              updateUrl: `${customApi}/updates`,
+              localS3: true,
+            }
+          : {}),
+        localApi: customApi,
+        localApiFiles: options.filesHost || customApi,
       }))
     }
   }
