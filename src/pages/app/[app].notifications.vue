@@ -85,6 +85,8 @@ const providers = ref<NotificationProviderConfig[]>([])
 const campaigns = ref<NotificationCampaign[]>([])
 const stats = ref<NotificationStat[]>([])
 const devices = ref<NotificationDevice[]>([])
+// Devices only exist as recipient lookup results; there is no app-wide device count here.
+const hasRecipientLookup = ref(false)
 const activeNotificationTab = ref<NotificationTab>('dashboard')
 const broadcastSearch = ref('')
 const apiSearch = ref('')
@@ -522,6 +524,7 @@ async function lookupRecipient() {
       body: JSON.stringify({ appId: id.value, externalId: lookupExternalId.value.trim() }),
     })
     devices.value = response.devices || []
+    hasRecipientLookup.value = true
     toast.success(t('notification-lookup-success'))
   }
   catch (error) {
@@ -621,12 +624,13 @@ watch(() => {
 }, async (appParam) => {
   const refreshId = ++activeRefreshId
   id.value = appParam
+  devices.value = []
+  hasRecipientLookup.value = false
   if (!appParam) {
     app.value = undefined
     providers.value = []
     campaigns.value = []
     stats.value = []
-    devices.value = []
     selectedCampaign.value = null
     selectedCampaignStats.value = []
     selectedCampaignStatsLoading.value = false
@@ -734,7 +738,10 @@ watch(activeNotificationTab, () => {
                   {{ t('notification-device-results') }}
                 </div>
                 <div class="mt-1 text-2xl font-semibold text-slate-950 dark:text-white">
-                  {{ formatNumber(devices.length) }}
+                  {{ hasRecipientLookup ? formatNumber(devices.length) : '-' }}
+                </div>
+                <div v-if="!hasRecipientLookup" class="mt-1 text-xs truncate text-slate-500 dark:text-slate-400">
+                  {{ t('notification-device-results-hint') }}
                 </div>
               </div>
             </div>

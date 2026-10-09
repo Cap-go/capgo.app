@@ -155,7 +155,8 @@ export async function deliverPosthogCapture(config: PostHogDeliveryConfig, paylo
       if (response.status === 0 || response.status === 'error')
         return finish({ outcome: 'permanent_failure', reason: 'rejected', http_status: res.status, legacy_success: true })
     }
-    if (text.trim() && response !== 1 && !(response && typeof response === 'object' && (response.status === 1 || response.status === 'ok')))
+    // PostHog Cloud acknowledges successful captures with the case-sensitive status "Ok".
+    if (text.trim() && response !== 1 && !(response && typeof response === 'object' && (response.status === 1 || response.status === 'ok' || response.status === 'Ok')))
       return finish({ outcome: 'ambiguous', reason: 'invalid_response', http_status: res.status, legacy_success: true })
     return finish({ outcome: 'delivered', http_status: res.status, legacy_success: true })
   }

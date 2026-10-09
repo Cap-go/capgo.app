@@ -141,9 +141,9 @@ export async function processPostHogQueueBatch(batch: MessageBatch<unknown>, env
       duration_ms: Date.now() - startedAt,
       ...extra,
     })
-    const retry = (outcome: string) => {
+    const retry = (outcome: string, extra: Record<string, string | number | null> = {}) => {
       entry.retry({ delaySeconds: POSTHOG_RETRY_DELAYS[Math.min(Math.max(entry.attempts - 1, 0), 4)] })
-      log(outcome)
+      log(outcome, extra)
     }
     try {
       message = parsePostHogMessage(entry.body)
@@ -160,7 +160,7 @@ export async function processPostHogQueueBatch(batch: MessageBatch<unknown>, env
         return
       }
       if (delivery?.outcome === 'retryable' || delivery?.outcome === 'ambiguous') {
-        retry(delivery.outcome)
+        retry(delivery.outcome, { http_status: delivery.http_status, ...('reason' in delivery ? { reason: delivery.reason } : {}) })
         return
       }
       const envelope: PostHogDlqEnvelope = {

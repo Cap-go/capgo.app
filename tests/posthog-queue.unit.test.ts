@@ -44,7 +44,8 @@ afterEach(() => {
 })
 
 describe('postHog queue consumer', () => {
-  it('delivers once per message using current credentials and immutable identity/time then acks', async () => {
+  it.each(['{"status":1}', '{"status":"ok"}', '{"status":"Ok"}', '{"status":"Ok","quota_limited":[]}'])('acks successful capture response %s using current credentials and immutable identity/time', async (response) => {
+    fetchMock.mockResolvedValue(new Response(response))
     const message = entry()
     await processPostHogQueueBatch(batch([message]), env)
     expect(message.ack).toHaveBeenCalledOnce()
@@ -62,6 +63,7 @@ describe('postHog queue consumer', () => {
     [200, 'malformed', 'ambiguous'],
     [200, 'false', 'ambiguous'],
     [200, '{}', 'ambiguous'],
+    [200, '{"status":"unexpected","secret":"provider-secret"}', 'ambiguous'],
   ])('retries HTTP %s / %s rather than acknowledging', async (status, response, outcome) => {
     fetchMock.mockResolvedValue(new Response(response, { status }))
     const message = entry()
@@ -69,7 +71,8 @@ describe('postHog queue consumer', () => {
     expect(message.ack).not.toHaveBeenCalled()
     expect(message.retry).toHaveBeenCalledWith({ delaySeconds: 30 })
     expect(sendDlq).not.toHaveBeenCalled()
-    expect(log).toHaveBeenCalledWith(expect.objectContaining({ outcome }))
+    expect(log).toHaveBeenCalledWith(expect.objectContaining({ outcome, http_status: status, ...(outcome === 'ambiguous' ? { reason: 'invalid_response' } : {}) }))
+    expect(JSON.stringify(log.mock.calls)).not.toContain('provider-secret')
   })
 
   it('retries ambiguous network failures and timeouts with the frozen insert ID', async () => {
@@ -78,6 +81,7 @@ describe('postHog queue consumer', () => {
     await processPostHogQueueBatch(batch([message]), env)
     expect(message.retry).toHaveBeenCalledWith({ delaySeconds: 120 })
     expect(message.ack).not.toHaveBeenCalled()
+    expect(log).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'ambiguous', reason: 'network', http_status: null }))
     expect(JSON.stringify(log.mock.calls)).not.toContain('private provider details')
     vi.useFakeTimers()
     fetchMock.mockImplementation((_url, init) => new Promise((_resolve, reject) => {
@@ -89,10 +93,13 @@ describe('postHog queue consumer', () => {
     await processing
     expect(timed.retry).toHaveBeenCalledOnce()
     expect(timed.ack).not.toHaveBeenCalled()
+    expect(log).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'ambiguous', reason: 'timeout', http_status: null }))
   })
 
   it.each([
     [200, '{"quota_limited":["events"]}', 'quota_limited'],
+    [200, '{"status":"Ok","quota_limited":["events"]}', 'quota_limited'],
+    [200, '{"status":"Ok","quota_limited":true}', 'quota_limited'],
     [200, '{"status":0}', 'permanent_failure'],
     [400, 'invalid payload', 'permanent_failure'],
     [401, 'invalid key', 'permanent_failure'],

@@ -107,7 +107,11 @@ Recovery understands original V1 and explicit envelopes, and refuses invalid dat
 
 `posthog_queue_enqueue` logs persistence/failure status and canonical correlation
 IDs. `posthog_queue_delivery` logs action/outcome, HTTP status when available,
-attempt count, queue age, and duration. No new logs contain event names,
+attempt count, queue age, and duration. Provider retries retain `http_status`
+(including `null` before a response arrives); ambiguous deliveries also include
+`reason`: `timeout`, `network`, or `invalid_response`. A successful HTTP response
+with `{"status":"Ok"}` is acknowledged unless it reports a quota limitation.
+No new logs contain event names,
 user/org/app IDs, IPs, descriptions, tags, provider response bodies, errors with
 arbitrary provider details, or authentication material. No provider result is
 returned to the client; success remains `{ status: 'ok', event_id }`.

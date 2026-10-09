@@ -1,8 +1,10 @@
-/** Bento `{{ visitor.uuid }}` is UUID-shaped; keep this looser than RFC version checks. */
-export const VISITOR_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+/** Bento visitor ids are UUID-shaped (dashed) or 32 hex chars (footer unsubscribe links). */
+const VISITOR_UUID_DASHED_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const VISITOR_UUID_HEX32_RE = /^[0-9a-f]{32}$/i
 
 export function isVisitorUuid(value: string): boolean {
-  return VISITOR_UUID_RE.test(value.trim())
+  const trimmed = value.trim()
+  return VISITOR_UUID_DASHED_RE.test(trimmed) || VISITOR_UUID_HEX32_RE.test(trimmed)
 }
 
 /** Vue Router may supply string[] when a query key is repeated. */
