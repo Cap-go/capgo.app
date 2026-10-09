@@ -299,7 +299,7 @@
     "@capgo/capacitor-native-biometric": "^8.7.0",
     "@capgo/capacitor-native-loader": "^8.1.7",
     "@capgo/capacitor-native-market": "^8.0.47",
-    "@capgo/capacitor-native-navigation": "^8.4.2",
+    "@capgo/capacitor-native-navigation": "^8.6.0",
     "@capgo/capacitor-nativegeocoder": "^8.0.51",
     "@capgo/capacitor-navigation-bar": "^8.2.10",
     "@capgo/capacitor-network-diagnostics": "^8.0.11",
