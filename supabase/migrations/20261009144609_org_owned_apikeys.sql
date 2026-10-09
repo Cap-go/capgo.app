@@ -28,6 +28,12 @@ ALTER TABLE public.apikeys
 ADD CONSTRAINT apikeys_org_owned_requires_hash
 CHECK (owner_org_id IS NULL OR key_hash IS NOT NULL);
 
+-- The secret holder is the user a shared key acts as (2FA, password policy,
+-- audit actor, legacy identity checks), so the two can never diverge.
+ALTER TABLE public.apikeys
+ADD CONSTRAINT apikeys_shared_secret_holder_is_user
+CHECK (owner_org_id IS NULL OR shared_secret_user_id IS NULL OR shared_secret_user_id = user_id);
+
 CREATE INDEX apikeys_owner_org_id_idx
 ON public.apikeys USING btree (owner_org_id)
 WHERE owner_org_id IS NOT NULL;
@@ -100,6 +106,77 @@ REVOKE ALL ON FUNCTION public.enforce_org_owned_apikey_binding_org() FROM anon, 
 CREATE TRIGGER enforce_org_owned_apikey_binding_org
 BEFORE INSERT OR UPDATE OF principal_type, principal_id, org_id ON public.role_bindings
 FOR EACH ROW EXECUTE FUNCTION public.enforce_org_owned_apikey_binding_org();
+
+-- Shared key access changes only through the backend (PUT /apikey), which
+-- requires org.manage_apikeys + org.update_user_roles on the owner org and
+-- caps the key at the caller's own permissions. Direct client writes would let
+-- anyone with app.update_user_roles rebind or revoke every shared key.
+CREATE OR REPLACE FUNCTION public.deny_client_org_owned_apikey_binding_writes()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_principal_type text;
+  v_principal_id uuid;
+  v_org_id uuid;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    v_principal_type := OLD.principal_type;
+    v_principal_id := OLD.principal_id;
+    v_org_id := OLD.org_id;
+  ELSE
+    v_principal_type := NEW.principal_type;
+    v_principal_id := NEW.principal_id;
+    v_org_id := NEW.org_id;
+  END IF;
+
+  -- Nested writes (apikey delete cleanup, FK cascades) and org deletion are
+  -- not direct client edits.
+  IF COALESCE(auth.role(), '') IN ('anon', 'authenticated')
+    AND pg_catalog.pg_trigger_depth() = 1
+    AND NOT public.is_org_delete_cascade(v_org_id)
+    AND (
+      (
+        v_principal_type = public.rbac_principal_apikey()
+        AND EXISTS (
+          SELECT 1
+          FROM public.apikeys
+          WHERE apikeys.rbac_id = v_principal_id
+            AND apikeys.owner_org_id IS NOT NULL
+        )
+      )
+      OR (
+        TG_OP = 'UPDATE'
+        AND OLD.principal_type = public.rbac_principal_apikey()
+        AND EXISTS (
+          SELECT 1
+          FROM public.apikeys
+          WHERE apikeys.rbac_id = OLD.principal_id
+            AND apikeys.owner_org_id IS NOT NULL
+        )
+      )
+    )
+  THEN
+    RAISE EXCEPTION 'ORG_OWNED_APIKEY_BINDING_CLIENT_WRITE_DENIED'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+ALTER FUNCTION public.deny_client_org_owned_apikey_binding_writes() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.deny_client_org_owned_apikey_binding_writes() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.deny_client_org_owned_apikey_binding_writes() FROM anon, authenticated;
+
+CREATE TRIGGER deny_client_org_owned_apikey_binding_writes
+BEFORE INSERT OR UPDATE OR DELETE ON public.role_bindings
+FOR EACH ROW EXECUTE FUNCTION public.deny_client_org_owned_apikey_binding_writes();
 
 -- Global permissions (org.create) create new orgs outside the owner org.
 CREATE OR REPLACE FUNCTION public.deny_org_owned_apikey_global_permissions()
@@ -223,8 +300,17 @@ BEGIN
       WHERE apikeys.user_id = p_user_id
         AND apikeys.owner_org_id = v_org_id;
     ELSE
+      -- The departing user held any live secret (holder = user_id), so the
+      -- successor gets the key without a working secret.
       UPDATE public.apikeys
-      SET user_id = v_successor_id
+      SET user_id = v_successor_id,
+          key = NULL,
+          key_hash = CASE
+            WHEN apikeys.shared_secret_user_id IS NULL THEN apikeys.key_hash
+            ELSE pg_catalog.encode(extensions.digest(pg_catalog.gen_random_uuid()::text, 'sha256'), 'hex')
+          END,
+          shared_secret_user_id = NULL,
+          shared_secret_expires_at = NULL
       WHERE apikeys.user_id = p_user_id
         AND apikeys.owner_org_id = v_org_id;
     END IF;
@@ -732,6 +818,16 @@ BEGIN
   )
   ON CONFLICT ("account_id") DO NOTHING
   RETURNING 1 INTO did_schedule;
+
+  -- Shared keys stay with their org until the final purge, but a user leaving
+  -- the platform must not keep a working secret during the grace period.
+  UPDATE "public"."apikeys"
+  SET "key" = NULL,
+      "key_hash" = pg_catalog.encode(extensions.digest(pg_catalog.gen_random_uuid()::text, 'sha256'), 'hex'),
+      "shared_secret_user_id" = NULL,
+      "shared_secret_expires_at" = NULL
+  WHERE "public"."apikeys"."shared_secret_user_id" = user_id_fn
+    AND "public"."apikeys"."owner_org_id" IS NOT NULL;
 
   IF did_schedule IS NULL THEN
     RETURN;

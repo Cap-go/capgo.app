@@ -116,7 +116,8 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
          SELECT public.rbac_principal_user(), $13::uuid, r.id, public.rbac_scope_app(), new_app.owner_org, new_app.id, $13::uuid, 'App creator', true
          FROM new_app
          JOIN public.roles r ON r.name = public.rbac_role_app_admin() AND r.scope_type = public.rbac_scope_app()
-         WHERE NOT public.rbac_check_permission_direct(public.rbac_perm_app_update_settings(), $13::uuid, new_app.owner_org, new_app.app_id, NULL::bigint, NULL::text)
+         WHERE $14::boolean
+           AND NOT public.rbac_check_permission_direct(public.rbac_perm_app_update_settings(), $13::uuid, new_app.owner_org, new_app.app_id, NULL::bigint, NULL::text)
          ON CONFLICT DO NOTHING
        )
        SELECT * FROM new_app`,
@@ -134,6 +135,8 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
         dataInsert.android_store_url,
         JSON.stringify(dataInsert.onboarding),
         auth.userId,
+        // A shared key acts for the org, so no person gets app_admin from it.
+        !auth.apikey?.owner_org_id,
       ],
     )
     data = result.rows[0]

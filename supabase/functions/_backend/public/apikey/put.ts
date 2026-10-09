@@ -173,6 +173,7 @@ async function replaceApiKeyBindings(
           auth.userId,
           'jwt',
           auth.userId,
+          { allowSharedApiKey: true },
         )
 
         if (!result.ok) {

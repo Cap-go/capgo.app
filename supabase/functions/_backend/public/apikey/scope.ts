@@ -507,19 +507,22 @@ export async function assertCallerHoldsSharedApiKeyPermissions(
 }
 
 // Rotation replaces the only live secret, so its issuing user is its current
-// recipient. Expiring access grants bound the secret lifetime without a cron.
+// recipient and the user the key acts as (user_id, enforced by
+// apikeys_shared_secret_holder_is_user). Expiring access grants bound the
+// secret lifetime without a cron.
 // Returns the stamped columns so callers can answer with the fresh values.
 export async function stampSharedApiKeySecretRecipient(
   db: DrizzleExecutor,
   auth: AuthInfo,
   apikeyRbacId: string,
-): Promise<Pick<ApiKeyRow, 'shared_secret_user_id' | 'shared_secret_expires_at'> | undefined> {
+): Promise<Pick<ApiKeyRow, 'user_id' | 'shared_secret_user_id' | 'shared_secret_expires_at'> | undefined> {
   if (auth.authType !== 'jwt' || !auth.userId) {
     throw quickError(403, 'cannot_update_apikey', 'Only user sessions can receive shared API key secrets')
   }
-  const result = await db.execute<Pick<ApiKeyRow, 'shared_secret_user_id' | 'shared_secret_expires_at'>>(sql`
+  const result = await db.execute<Pick<ApiKeyRow, 'user_id' | 'shared_secret_user_id' | 'shared_secret_expires_at'>>(sql`
     UPDATE public.apikeys AS apikey
     SET shared_secret_user_id = ${auth.userId}::uuid,
+        user_id = ${auth.userId}::uuid,
         shared_secret_expires_at = (
           SELECT min(grants.expires_at)
           FROM (
@@ -544,7 +547,7 @@ export async function stampSharedApiKeySecretRecipient(
         )
     WHERE apikey.rbac_id = ${apikeyRbacId}::uuid
       AND apikey.owner_org_id IS NOT NULL
-    RETURNING apikey.shared_secret_user_id, apikey.shared_secret_expires_at
+    RETURNING apikey.user_id, apikey.shared_secret_user_id, apikey.shared_secret_expires_at
   `)
   return result.rows[0]
 }

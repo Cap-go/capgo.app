@@ -1,15 +1,20 @@
 import { randomUUID } from 'node:crypto'
+import { env } from 'node:process'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   BASE_URL,
   executeSQL,
+  fetchTestRequest,
   getAuthHeadersForCredentials,
+  getEndpointUrl,
   getSupabaseClient,
   SUPABASE_ANON_KEY,
   SUPABASE_BASE_URL,
   USER_PASSWORD,
 } from './test-utils.ts'
 
+const USE_CLOUDFLARE = env.USE_CLOUDFLARE_WORKERS === 'true'
+const SHARED_APIKEY_BINDING_ERROR = 'Shared API key access can only be changed through the API key settings'
 const TEST_ID = randomUUID()
 const ORG_ID = randomUUID()
 const OTHER_ORG_ID = randomUUID()
@@ -65,6 +70,14 @@ function apiRequest(path: string, headers: Record<string, string>, init: { metho
 
 function orgMemberBinding(orgId = ORG_ID) {
   return { role_name: 'org_member', scope_type: 'org', org_id: orgId }
+}
+
+async function sharedKeyIdentity(keyId: number) {
+  const [row] = await executeSQL<{ user_id: string, holder: string | null }>(
+    'SELECT user_id::text AS user_id, shared_secret_user_id::text AS holder FROM public.apikeys WHERE id = $1',
+    [keyId],
+  )
+  return row
 }
 
 beforeAll(async () => {
@@ -217,10 +230,11 @@ describe('org-owned (shared) API keys', () => {
       expect(created.status).toBe(200)
       const issued = await created.json() as ApiKeyResponse
       issuedKeyId = issued.id
-      const [recipient] = await executeSQL<{ user_id: string, expiry: Date }>(`
-        SELECT shared_secret_user_id::text AS user_id, shared_secret_expires_at AS expiry
+      const [recipient] = await executeSQL<{ user_id: string, acts_as: string, expiry: Date }>(`
+        SELECT shared_secret_user_id::text AS user_id, user_id::text AS acts_as, shared_secret_expires_at AS expiry
         FROM public.apikeys WHERE id = $1`, [issued.id])
       expect(recipient?.user_id).toBe(managerUserId)
+      expect(recipient?.acts_as).toBe(managerUserId)
       expect(new Date(recipient!.expiry).toISOString()).toBe(expiry)
       const beforeChange = await apiRequest('/organization', { capgkey: issued.key! })
       expect(beforeChange.status).toBe(200)
@@ -331,6 +345,41 @@ describe('org-owned (shared) API keys', () => {
     const oldKey = await apiRequest('/organization', { capgkey: sharedKeySecret })
     expect(oldKey.status).toBe(401)
     sharedKeySecret = body.key!
+    await expect(sharedKeyIdentity(sharedKeyId)).resolves.toEqual({ user_id: adminUserId, holder: adminUserId })
+  })
+
+  it('makes the key manager who regenerates a shared key the user it acts as', async () => {
+    const created = await apiRequest('/apikey', adminHeaders, {
+      method: 'POST',
+      body: {
+        name: `shared-manager-rotation-${TEST_ID.slice(0, 8)}`,
+        owner_org_id: ORG_ID,
+        bindings: [{ role_name: 'apikey_manager', scope_type: 'org', org_id: ORG_ID }],
+      },
+    })
+    expect(created.status).toBe(200)
+    const key = await created.json() as ApiKeyResponse
+    try {
+      await expect(sharedKeyIdentity(key.id)).resolves.toEqual({ user_id: adminUserId, holder: adminUserId })
+
+      const rotated = await apiRequest(`/apikey/${key.id}`, managerHeaders, {
+        method: 'PUT',
+        body: { regenerate: true },
+      })
+      expect(rotated.status).toBe(200)
+      const body = await rotated.json() as ApiKeyResponse & { shared_secret_user_id: string | null }
+      expect(body.user_id).toBe(managerUserId)
+      expect(body.shared_secret_user_id).toBe(managerUserId)
+      // user_id drives 2FA/password policy and the audit actor, so it must
+      // follow the holder instead of staying on the creator.
+      await expect(sharedKeyIdentity(key.id)).resolves.toEqual({ user_id: managerUserId, holder: managerUserId })
+
+      const previousSecret = await apiRequest('/organization', { capgkey: key.key! })
+      expect(previousSecret.status).toBe(401)
+    }
+    finally {
+      await getSupabaseClient().from('apikeys').delete().eq('id', key.id)
+    }
   })
 
   it('lets a key manager rename the shared key', async () => {
@@ -349,6 +398,111 @@ describe('org-owned (shared) API keys', () => {
     })
     expect(response.status).toBe(400)
     await expect(response.json()).resolves.toMatchObject({ error: 'shared_apikey_single_org' })
+  })
+
+  it('lets an org admin change a shared key\'s bindings through PUT /apikey', async () => {
+    const created = await apiRequest('/apikey', adminHeaders, {
+      method: 'POST',
+      body: {
+        name: `shared-rebind-${TEST_ID.slice(0, 8)}`,
+        owner_org_id: ORG_ID,
+        bindings: [orgMemberBinding(ORG_ID)],
+      },
+    })
+    expect(created.status).toBe(200)
+    const key = await created.json() as ApiKeyResponse
+    try {
+      const updated = await apiRequest(`/apikey/${key.id}`, adminHeaders, {
+        method: 'PUT',
+        body: { bindings: [{ role_name: 'apikey_manager', scope_type: 'org', org_id: ORG_ID }] },
+      })
+      expect(updated.status).toBe(200)
+
+      const roles = await executeSQL<{ role_name: string }>(`
+        SELECT r.name AS role_name
+        FROM public.role_bindings rb
+        JOIN public.roles r ON r.id = rb.role_id
+        JOIN public.apikeys a ON a.rbac_id = rb.principal_id
+        WHERE rb.principal_type = public.rbac_principal_apikey() AND a.id = $1
+      `, [key.id])
+      expect(roles.map(row => row.role_name)).toEqual(['apikey_manager'])
+
+      // Any access change revokes the issued secret until it is regenerated.
+      const previousSecret = await apiRequest('/organization', { capgkey: key.key! })
+      expect(previousSecret.status).toBe(401)
+    }
+    finally {
+      await getSupabaseClient().from('apikeys').delete().eq('id', key.id)
+    }
+  })
+
+  // /private/role_bindings is served by the Supabase private functions stack only.
+  it.skipIf(USE_CLOUDFLARE)('rejects shared key binding changes through /private/role_bindings even for an org admin', async () => {
+    const supabase = getSupabaseClient()
+    const appId = `com.shared.key.bindings.${TEST_ID.slice(0, 8)}`
+    const { data: app, error: appError } = await supabase.from('apps').insert({
+      app_id: appId,
+      owner_org: ORG_ID,
+      icon_url: 'shared-key-bindings-icon',
+      name: 'Shared key bindings app',
+      user_id: ownerUserId,
+    }).select('id').single()
+    expect(appError).toBeNull()
+
+    const bindingsOf = () => executeSQL<{ id: string, role_name: string, scope_type: string }>(`
+      SELECT rb.id::text AS id, r.name AS role_name, rb.scope_type
+      FROM public.role_bindings rb
+      JOIN public.roles r ON r.id = rb.role_id
+      JOIN public.apikeys a ON a.rbac_id = rb.principal_id
+      WHERE rb.principal_type = public.rbac_principal_apikey() AND a.id = $1
+      ORDER BY rb.id
+    `, [sharedKeyId])
+
+    try {
+      const [{ rbac_id: rbacId }] = await executeSQL<{ rbac_id: string }>(
+        'SELECT rbac_id::text AS rbac_id FROM public.apikeys WHERE id = $1',
+        [sharedKeyId],
+      )
+      const before = await bindingsOf()
+      expect(before).toEqual([expect.objectContaining({ role_name: 'org_member', scope_type: 'org' })])
+
+      const created = await fetchTestRequest(getEndpointUrl('/private/role_bindings'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...adminHeaders },
+        body: JSON.stringify({
+          principal_type: 'apikey',
+          principal_id: rbacId,
+          role_name: 'app_reader',
+          scope_type: 'app',
+          org_id: ORG_ID,
+          app_id: app!.id,
+        }),
+      })
+      expect(created.status).toBe(403)
+      await expect(created.json()).resolves.toMatchObject({ error: SHARED_APIKEY_BINDING_ERROR })
+
+      const patched = await fetchTestRequest(getEndpointUrl(`/private/role_bindings/${before[0]!.id}`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...adminHeaders },
+        body: JSON.stringify({ role_name: 'org_admin' }),
+      })
+      expect(patched.status).toBe(403)
+      await expect(patched.json()).resolves.toMatchObject({ error: SHARED_APIKEY_BINDING_ERROR })
+
+      const deleted = await fetchTestRequest(getEndpointUrl(`/private/role_bindings/${before[0]!.id}`), {
+        method: 'DELETE',
+        headers: adminHeaders,
+      })
+      expect(deleted.status).toBe(403)
+      await expect(deleted.json()).resolves.toMatchObject({ error: SHARED_APIKEY_BINDING_ERROR })
+
+      await expect(bindingsOf()).resolves.toEqual(before)
+      const stillWorks = await apiRequest('/organization', { capgkey: sharedKeySecret })
+      expect(stillWorks.status).toBe(200)
+    }
+    finally {
+      await supabase.from('apps').delete().eq('app_id', appId)
+    }
   })
 
   it('requires channel allow-overrides of the shared key before regenerating it', async () => {

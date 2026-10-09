@@ -1013,7 +1013,7 @@ export async function createApiKey(c: Context, userId: string) {
     }
 
     const totalResult = await pgClient.query<{ count: string }>(
-      'SELECT count(*)::text AS count FROM public.apikeys WHERE user_id = $1::uuid',
+      'SELECT count(*)::text AS count FROM public.apikeys WHERE user_id = $1::uuid AND owner_org_id IS NULL',
       [userId],
     )
     const total = Number(totalResult.rows[0]?.count ?? '0')

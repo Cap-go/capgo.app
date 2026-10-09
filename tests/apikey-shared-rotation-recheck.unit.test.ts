@@ -187,12 +187,18 @@ describe('shared API key rotation authorization transaction', () => {
     expect(events).toEqual(['transaction', 'org-lock', 'principal-lock', 'row-lock', 'management-recheck'])
   })
 
-  it('returns the stamped shared secret recipient', async () => {
+  it('returns the stamped shared secret recipient as the user the key acts as', async () => {
     const stampedExpiry = '2030-01-01T00:00:00.000Z'
-    mocks.stampRecipient.mockResolvedValue({ shared_secret_user_id: USER_ID, shared_secret_expires_at: stampedExpiry })
+    const baseExecute = mocks.execute.getMockImplementation()!
+    // The rotation row still carries the previous attribution until the stamp.
+    mocks.execute.mockImplementation(async (query) => {
+      const result = await baseExecute(query)
+      return result.rows[0]?.key === 'new-secret' ? { rows: [{ ...result.rows[0], user_id: SUCCESSOR_ID }] } : result
+    })
+    mocks.stampRecipient.mockResolvedValue({ user_id: USER_ID, shared_secret_user_id: USER_ID, shared_secret_expires_at: stampedExpiry })
     const response = await rotate()
     expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toMatchObject({ key: 'new-secret', shared_secret_user_id: USER_ID, shared_secret_expires_at: stampedExpiry })
+    await expect(response.json()).resolves.toMatchObject({ key: 'new-secret', user_id: USER_ID, shared_secret_user_id: USER_ID, shared_secret_expires_at: stampedExpiry })
   })
 
   it('does not issue a secret when the key was deleted after the initial lookup', async () => {
