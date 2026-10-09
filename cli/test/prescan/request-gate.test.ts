@@ -43,8 +43,7 @@ describe('build request rejects contradictory prescan flags', () => {
         // proving it got PAST flag validation
         path: makeProject({}),
         apikey: 'fake-key-for-test',
-        supaHost: 'https://fake.supabase.co',
-        supaAnon: 'fake-anon',
+        apiHost: 'https://fake.supabase.co/functions/v1',
       } as BuildRequestOptions,
       true,
     )
@@ -124,7 +123,7 @@ describe('play-sa-access probe is gated by PLAY_CONFIG_JSON presence in the thre
 //
 // A capacitor.config.json + minimal Android credentials get the run PAST
 // getConfig and the credential-validation step so it reaches the gate/assert.
-// supaHost/supaAnon make createCapgoClient build a real client pointed at a
+// apiHost makes createCapgoClient build a real client pointed at a
 // fake URL whose RPC/select calls the spy answers.
 interface GateProbe {
   postedBuildRequest: boolean
@@ -144,13 +143,13 @@ function installGateFetchSpy(permission: boolean): GateProbe {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
     probe.urls.push(url)
-    if (url.includes('private/cli/check-permission'))
-      return json({ allowed: permission })
+    if (url.includes('private/cli/permissions'))
+      return json({ permissions: { 'app.build_native': permission } })
     if (url.includes('/build/request')) {
       probe.postedBuildRequest = true
       return json({ jobId: 'should-never-be-reached' })
     }
-    // apps select (getOrganizationId), getRemoteConfig, and any other supabase
+    // app lookup (getOrganizationId), getRemoteConfig, and any other Capgo API
     // call: a benign empty payload. getOrganizationId's empty result is
     // swallowed (orgId=''), exactly as in production.
     return json({})
@@ -174,8 +173,7 @@ function gateOptions(extra: Partial<BuildRequestOptions>): BuildRequestOptions {
   return {
     platform: 'android',
     apikey: 'fake-key-for-test',
-    supaHost: 'https://fake.supabase.co',
-    supaAnon: 'fake-anon',
+    apiHost: 'https://fake.supabase.co/functions/v1',
     androidKeystoreFile: '/tmp/fake.keystore',
     keystoreKeyAlias: 'alias',
     keystoreKeyPassword: 'pass',

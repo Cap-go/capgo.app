@@ -81,9 +81,8 @@ assert.equal(
 )
 
 assert.equal(
-  await withTempProject('cli-supa-host', {}, () => resolveAppGettingStartedMessage(appId, {
-    supaHost: 'https://supabase.example.com',
-    supaAnon: 'anon-key',
+  await withTempProject('cli-api-host', {}, () => resolveAppGettingStartedMessage(appId, {
+    apiHost: 'https://supabase.example.com/functions/v1',
   })),
   null,
 )

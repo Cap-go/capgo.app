@@ -14,7 +14,7 @@ export interface BuildScanContextArgs {
   distributionMode?: 'app_store' | 'ad_hoc'
   androidFlavor?: string
   apikey?: string
-  supabase?: CapgoClient
+  client?: CapgoClient
   /** pre-merged credentials when called from build request (avoids double work) */
   credentials?: Record<string, string>
 }
@@ -48,6 +48,6 @@ export async function buildScanContext(args: BuildScanContextArgs): Promise<Scan
     distributionMode: args.distributionMode ?? validDistributionMode(credentials?.CAPGO_IOS_DISTRIBUTION),
     androidFlavor: args.androidFlavor ?? credentials?.CAPGO_ANDROID_FLAVOR,
     apikey: args.apikey,
-    supabase: args.supabase,
+    client: args.client,
   }
 }

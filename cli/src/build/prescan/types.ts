@@ -35,7 +35,7 @@ export interface ScanContext {
   distributionMode?: 'app_store' | 'ad_hoc'
   androidFlavor?: string
   apikey?: string
-  supabase?: CapgoClient
+  client?: CapgoClient
 }
 
 export interface PrescanCheck {
@@ -43,7 +43,7 @@ export interface PrescanCheck {
   platforms: Platform[]
   /** Findings from this check stay information-only until this UTC instant. */
   enforceAfter?: string
-  /** requires ctx.supabase; skipped (with notice) when absent */
+  /** requires ctx.client; skipped (with notice) when absent */
   remote?: boolean
   appliesTo?: (ctx: ScanContext) => boolean
   run: (ctx: ScanContext) => Promise<Finding[]>

@@ -2,10 +2,9 @@ import type { OptionsBase } from '../schemas/base'
 import { intro, log, outro } from '@clack/prompts'
 import { Table } from '@sauber/table'
 import { trackEvent } from '../analytics/track'
+import { runCliPreflight } from '../api/preflight'
 import { checkAlerts } from '../api/update'
 import {
-  assertOrgPermission,
-  check2FAAccessForOrg,
   createCapgoClient,
   fetchCliMembers2faStatus,
   fetchCliMembersPasswordPolicyStatus,
@@ -98,17 +97,14 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
     throw new Error('Missing organization id')
   }
 
-  const supabase = await createCapgoClient(
+  const client = await createCapgoClient(
     enrichedOptions.apikey,
-    enrichedOptions.supaHost,
-    enrichedOptions.supaAnon,
+    enrichedOptions.apiHost,
   )
   const httpOptions = {
-    supaHost: enrichedOptions.supaHost,
-    supaAnon: enrichedOptions.supaAnon,
+    apiHost: enrichedOptions.apiHost,
   }
-  await assertOrgPermission(supabase, enrichedOptions.apikey, 'org.read_members', orgId, `Insufficient permissions to list members of organization ${orgId}`, silent, httpOptions)
-  await check2FAAccessForOrg(supabase, orgId, silent)
+  await runCliPreflight(client, { orgId, permission: 'org.read_members' }, { silent, permissionDeniedMessage: `Insufficient permissions to list members of organization ${orgId}` })
 
   let orgData: Awaited<ReturnType<typeof fetchCliOrganization>>
   try {
@@ -136,8 +132,7 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
     apikey: enrichedOptions.apikey!,
     method: 'GET',
     body: undefined,
-    supaHost: enrichedOptions.supaHost,
-    supaAnon: enrichedOptions.supaAnon,
+    apiHost: enrichedOptions.apiHost,
   })
 
   if (membersError) {

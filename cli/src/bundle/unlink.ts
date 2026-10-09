@@ -1,10 +1,9 @@
 import { intro, log, outro } from '@clack/prompts'
-import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { checkVersionNotUsedInChannel } from '../api/channels'
+import { runCliPreflight } from '../api/preflight'
 import { getVersionData } from '../api/versions'
 import { CliUserError } from '../shared/cli-user-error'
 import {
-  checkPlanValid,
   createCapgoClient,
   findSavedKey,
   formatError,
@@ -19,8 +18,7 @@ interface BundleUnlinkOptions {
   bundle?: string
   packageJson?: string
   apikey?: string
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
 }
 
 export async function unlinkDeviceInternal(
@@ -70,40 +68,32 @@ export async function unlinkDeviceInternal(
       throw new Error('Missing channel')
     }
 
-    const supabase = await createCapgoClient(
+    const client = await createCapgoClient(
       enrichedOptions.apikey,
-      enrichedOptions.supaHost,
-      enrichedOptions.supaAnon,
+      enrichedOptions.apiHost,
     )
-    await check2FAComplianceForApp(supabase, resolvedAppId, silent)
-
-    const orgId = await getOrganizationId(enrichedOptions.apikey!, resolvedAppId, { supaHost: enrichedOptions.supaHost, supaAnon: enrichedOptions.supaAnon })
-
-    await checkAppExistsAndHasPermissionOrgErr(
-      supabase,
-      enrichedOptions.apikey,
-      resolvedAppId,
-      'bundle.delete',
+    const preflight = await runCliPreflight(client, {
+      appId: resolvedAppId,
+      permission: 'bundle.delete',
+      plan: 'all',
+    }, {
       silent,
-      true,
-    )
-
-    await checkPlanValid(supabase, orgId, resolvedAppId)
+      permissionDeniedMessage: `Insufficient permissions for app ${resolvedAppId}. Required RBAC permission for this action: bundle.delete.`,
+    })
+    const orgId = preflight?.orgId ?? await getOrganizationId(enrichedOptions.apikey!, resolvedAppId, { apiHost: enrichedOptions.apiHost })
 
     const versionData = await getVersionData(enrichedOptions.apikey!, resolvedAppId, bundle, {
       silent,
       apikey: enrichedOptions.apikey!,
-      supaHost: enrichedOptions.supaHost,
-      supaAnon: enrichedOptions.supaAnon,
+      apiHost: enrichedOptions.apiHost,
     })
-    await checkVersionNotUsedInChannel(supabase, resolvedAppId, versionData, {
+    await checkVersionNotUsedInChannel(client, resolvedAppId, versionData, {
       silent,
       autoUnlink: true,
       channelName: channel,
       requireMatch: true,
       apikey: enrichedOptions.apikey!,
-      supaHost: enrichedOptions.supaHost,
-      supaAnon: enrichedOptions.supaAnon,
+      apiHost: enrichedOptions.apiHost,
     })
 
     await sendEvent(enrichedOptions.apikey, {

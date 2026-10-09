@@ -6,7 +6,7 @@
 // Fastlane's exact upload path, so endpoint-specific denials stay warnings.
 //
 // They are NOT marked `remote: true`: the engine's remote-skip predicate keys
-// off `ctx.supabase` (Capgo's backend), which is the wrong signal here. Instead
+// off `ctx.client` (Capgo's backend), which is the wrong signal here. Instead
 // they gate on intent-to-upload via `appliesTo` (willUploadToPlay /
 // willUploadToAppStore) and self-classify offline/transport failures as warnings
 // so users see that verification did not complete without treating it as proof

@@ -6,39 +6,30 @@ vi.stubGlobal('fetch', fetchMock)
 
 const { hasCliPermission, hostOptionsFromClient, resolveUserIdFromApiKey } = await import('../cli/src/utils')
 
+const LOCAL_API = 'http://127.0.0.1:54321/functions/v1'
+
 function createLocalClient() {
   return {
     apikey: 'test-api-key',
-    supaHost: 'http://127.0.0.1:54321',
-    supaAnon: 'test-anon-key',
+    apiHost: LOCAL_API,
+    filesHost: LOCAL_API,
   }
 }
 
-describe('CLI HTTP host resolution', () => {
+describe('cLI HTTP host resolution', () => {
   afterEach(() => {
     vi.clearAllMocks()
   })
 
-  it('hostOptionsFromClient returns local host options for self-host clients', () => {
-    expect(hostOptionsFromClient(createLocalClient())).toEqual({
-      supaHost: 'http://127.0.0.1:54321',
-      supaAnon: 'test-anon-key',
-    })
+  it('hostOptionsFromClient forwards the client API host', () => {
+    expect(hostOptionsFromClient(createLocalClient())).toEqual({ apiHost: LOCAL_API })
   })
 
-  it('hostOptionsFromClient ignores Capgo-managed Supabase hosts', () => {
-    expect(hostOptionsFromClient({
-      apikey: 'test-api-key',
-      supaHost: 'https://sb.capgo.app',
-      supaAnon: 'anon-key',
-    })).toBeUndefined()
-  })
-
-  it('hasCliPermission routes to local /functions/v1 when httpOptions are omitted', async () => {
+  it('hasCliPermission uses the client host and only the API key', async () => {
     fetchMock.mockResolvedValue({
       ok: true,
       headers: { get: () => 'application/json' },
-      json: async () => ({ allowed: true }),
+      json: async () => ({ permissions: { 'app.upload_bundle': true } }),
     })
 
     const allowed = await hasCliPermission(
@@ -50,18 +41,20 @@ describe('CLI HTTP host resolution', () => {
 
     expect(allowed).toBe(true)
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:54321/functions/v1/private/cli/check-permission',
+      `${LOCAL_API}/private/cli/permissions`,
       expect.objectContaining({
         method: 'POST',
+        body: JSON.stringify({ permissions: ['app.upload_bundle'], app_id: 'com.example.app' }),
         headers: expect.objectContaining({
-          Authorization: 'Bearer test-anon-key',
+          Authorization: 'test-api-key',
           capgkey: 'test-api-key',
+          capgo_api: '2025-10-01',
         }),
       }),
     )
   })
 
-  it('resolveUserIdFromApiKey routes to local /functions/v1 when httpOptions are omitted', async () => {
+  it('resolveUserIdFromApiKey uses the client host', async () => {
     fetchMock.mockResolvedValue({
       ok: true,
       headers: { get: () => 'application/json' },
@@ -76,11 +69,11 @@ describe('CLI HTTP host resolution', () => {
 
     expect(userId).toBe('11111111-1111-4111-8111-111111111111')
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:54321/functions/v1/private/cli/identity',
+      `${LOCAL_API}/private/cli/identity`,
       expect.objectContaining({
         method: 'GET',
         headers: expect.objectContaining({
-          Authorization: 'Bearer test-anon-key',
+          Authorization: 'test-api-key',
           capgkey: 'test-api-key',
         }),
       }),

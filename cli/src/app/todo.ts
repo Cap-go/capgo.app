@@ -220,7 +220,7 @@ export async function appTodo(appId: string | undefined, options: Partial<Option
     throw new CliUserError(message)
   }
 
-  const supabase = await createCapgoClient(apikey, options.supaHost, options.supaAnon)
+  const client = await createCapgoClient(apikey, options.apiHost)
   const loading = stdin.isTTY && stdout.isTTY ? spinner() : null
   if (loading)
     loading.start('Loading the todo list')
@@ -229,7 +229,7 @@ export async function appTodo(appId: string | undefined, options: Partial<Option
 
   let progress: AppTodoProgress
   try {
-    await check2FAComplianceForApp(supabase, appId)
+    await check2FAComplianceForApp(client, appId)
     progress = await readAppTodoProgress(appId, { ...options, apikey })
     loading?.stop('Todo list loaded')
   }

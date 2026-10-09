@@ -12,7 +12,7 @@ import { visibleWidth } from '../src/terminal-table.ts'
 import { shouldCapturePosthogException } from '../src/posthog.ts'
 
 const appId = 'com.example.channel.list'
-const options = { apikey: 'test-channel-list-key', supaHost: 'http://localhost:54321', supaAnon: 'test-anon-key', silent: true }
+const options = { apikey: 'test-channel-list-key', apiHost: 'http://localhost:54321/functions/v1', silent: true }
 const originalFetch = globalThis.fetch
 const calls = []
 let responseStatus = 200
@@ -23,14 +23,15 @@ const httpChannel = {
   allow_device_self_set: true, allow_emulator: false, allow_device: true,
   allow_dev: false, allow_prod: true, version: null,
 }
-const supabase = { apikey: options.apikey, supaHost: options.supaHost, supaAnon: options.supaAnon }
+const client = { apikey: options.apikey, apiHost: 'http://localhost:54321/functions/v1', filesHost: 'http://localhost:54321/functions/v1' }
 
 globalThis.fetch = async (input) => {
   const url = String(input)
   calls.push(url)
-  if (url.includes('/private/cli/check-permission')) {
-    return new Response(JSON.stringify({ allowed: false }), {
-      status: 200,
+  // Preflight: forward access errors, otherwise deny the requested permission.
+  if (url.includes('/private/cli/preflight') && responseStatus === 200) {
+    return new Response(JSON.stringify({ error: 'permission_denied', message: 'Missing permission' }), {
+      status: 403,
       headers: { 'Content-Type': 'application/json' },
     })
   }
@@ -57,7 +58,7 @@ try {
     responseBody = { error: 'cannot_access_app', message: "You can't access this app" }
     await assert.rejects(() => checkAppExists(options.apikey, appId, options), permissionError('app.read'))
     await assert.rejects(
-      () => checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.read_channels', true, true),
+      () => checkAppExistsAndHasPermissionOrgErr(client, options.apikey, appId, 'app.read_channels', true, true),
       permissionError('app.read'),
     )
   }
@@ -65,7 +66,7 @@ try {
   responseStatus = 200
   responseBody = { app_id: appId }
   await assert.rejects(
-    () => checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.read_channels', true, true),
+    () => checkAppExistsAndHasPermissionOrgErr(client, options.apikey, appId, 'app.read_channels', true, true),
     permissionError('app.read_channels'),
   )
 
@@ -163,10 +164,15 @@ try {
         return nativeFetch(input)
       if (url.includes('/private/config'))
         return Response.json({})
-      if (url.includes('/private/cli/2fa/reject-app'))
-        return Response.json({ reject: false })
-      if (url.includes('/private/cli/check-permission'))
-        return Response.json({ allowed: scenario !== 'denied-channel' })
+      if (url.includes('/private/cli/preflight')) {
+        if (!url.startsWith('http://localhost:54321/functions/v1/'))
+          return Response.json({ error: 'wrong_host' }, { status: 500 })
+        if (scenario === 'denied-app')
+          return Response.json({ error: 'cannot_access_app' }, { status: 401 })
+        if (scenario === 'denied-channel')
+          return Response.json({ error: 'permission_denied', message: 'Missing permission app.read_channels' }, { status: 403 })
+        return Response.json({ user_id: 'u1', org_id: 'test-org', app_id: ${JSON.stringify(appId)}, trial_days_left: null, warnings: [] })
+      }
       if (url.includes('/app/' + ${JSON.stringify(appId)})) {
         if (scenario === 'denied-app')
           return Response.json({ error: 'cannot_access_app' }, { status: 401 })
@@ -185,7 +191,8 @@ try {
     const child = spawnSync('node', [
       '--import', preload, new URL('../dist/index.js', import.meta.url).pathname,
       'channel', 'list', appId, '-a', options.apikey,
-      '--supa-host', options.supaHost, '--supa-anon', options.supaAnon,
+      // Deprecated self-host flags still route to <supa-host>/functions/v1.
+      '--supa-host', 'http://localhost:54321', '--supa-anon', 'test-anon-key',
     ], {
       encoding: 'utf8', timeout: 15000,
       env: { ...process.env, CAPGO_CHANNEL_LIST_SCENARIO: scenario },

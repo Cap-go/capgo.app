@@ -11,7 +11,7 @@ import {
   parse,
 } from '@std/semver'
 import { trackEvent } from '../analytics/track'
-import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
+import { checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { checkAlerts } from '../api/update'
 import { deleteSpecificVersion, displayBundles, getActiveAppVersions, getChannelsVersion } from '../api/versions'
 import { CliUserError } from '../shared/cli-user-error'
@@ -21,24 +21,22 @@ import {
   getAppId,
   getConfig,
   getHumanDate,
-  resolveUserIdFromApiKey,
-} from '../utils'
+  } from '../utils'
 
 async function removeVersions(
   toRemove: Database['public']['Tables']['app_versions']['Row'][],
-  supabase: CapgoClient,
+  client: CapgoClient,
   appId: string,
   silent: boolean,
-  http: { apikey: string, supaHost?: string, supaAnon?: string },
+  http: { apikey: string, apiHost?: string },
 ) {
   for await (const row of toRemove) {
     if (!silent)
       log.warn(`Removing ${row.name} created on ${getHumanDate(row.created_at)}`)
-    await deleteSpecificVersion(supabase, appId, row.name, {
+    await deleteSpecificVersion(client, appId, row.name, {
       silent,
       apikey: http.apikey,
-      supaHost: http.supaHost,
-      supaAnon: http.supaAnon,
+      apiHost: http.apiHost,
     })
   }
 }
@@ -85,16 +83,14 @@ export async function cleanupBundleInternal(appId: string, options: BundleCleanu
     throw new CliUserError('Missing appId')
   }
 
-  const supabase = await createCapgoClient(options.apikey, options.supaHost, options.supaAnon)
-  await check2FAComplianceForApp(supabase, appId, silent)
-  await resolveUserIdFromApiKey(supabase, options.apikey)
-  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'bundle.delete', silent, true)
+  const client = await createCapgoClient(options.apikey, options.apiHost)
+  await checkAppExistsAndHasPermissionOrgErr(client, options.apikey, appId, 'bundle.delete', silent)
 
   if (!silent)
     log.info('Querying all available versions in Capgo')
 
-  let allVersions: (Database['public']['Tables']['app_versions']['Row'] & { keep?: string })[] = await getActiveAppVersions(options.apikey!, appId, { silent, apikey: options.apikey!, supaHost: options.supaHost, supaAnon: options.supaAnon })
-  const versionInUse = await getChannelsVersion({ apikey: options.apikey!, silent, supaHost: options.supaHost, supaAnon: options.supaAnon }, appId)
+  let allVersions: (Database['public']['Tables']['app_versions']['Row'] & { keep?: string })[] = await getActiveAppVersions(options.apikey!, appId, { silent, apikey: options.apikey!, apiHost: options.apiHost })
+  const versionInUse = await getChannelsVersion({ apikey: options.apikey!, silent, apiHost: options.apiHost }, appId)
 
   if (!silent)
     log.info(`Total active versions in Capgo: ${allVersions?.length ?? 0}`)
@@ -159,7 +155,7 @@ export async function cleanupBundleInternal(appId: string, options: BundleCleanu
   if (!silent)
     log.success('You have confirmed removal, removing versions now')
 
-  await removeVersions(toRemove, supabase, appId, silent, { apikey: options.apikey!, supaHost: options.supaHost, supaAnon: options.supaAnon })
+  await removeVersions(toRemove, client, appId, silent, { apikey: options.apikey!, apiHost: options.apiHost })
 
   void trackEvent({ channel: 'bundle', event: 'Bundles Cleaned', tags: { kept_count: kept, deleted_count: toRemove.length } })
 

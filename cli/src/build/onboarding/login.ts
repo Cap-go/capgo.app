@@ -5,8 +5,7 @@ import { resolveAccountIdentity } from '../../user/whoami.js'
 import { createCapgoClient, findSavedKeySilent, resolveUserIdFromApiKey } from '../../utils.js'
 
 export interface BuilderLoginOptions {
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
 }
 
 export interface BuilderLoginServices {
@@ -23,20 +22,18 @@ export function resolveBuilderCandidateKey(explicitKey?: string): string | undef
 }
 
 export function createBuilderLoginServices(options: BuilderLoginOptions = {}): BuilderLoginServices {
-  const saveOptions = { local: false, supaHost: options.supaHost, supaAnon: options.supaAnon }
+  const saveOptions = { local: false, apiHost: options.apiHost }
   return {
-    browserAvailable: !options.supaHost && !options.supaAnon,
+    browserAvailable: !options.apiHost,
     validateExisting: async (key) => {
-      const client = await createCapgoClient(key, options.supaHost, options.supaAnon, true)
+      const client = await createCapgoClient(key, options.apiHost, true)
       await resolveUserIdFromApiKey(client, key, true, {
-        supaHost: options.supaHost,
-        supaAnon: options.supaAnon,
+        apiHost: options.apiHost,
       })
     },
     getAccountEmail: async (key) => {
       const { email } = await resolveAccountIdentity(key, {
-        supaHost: options.supaHost,
-        supaAnon: options.supaAnon,
+        apiHost: options.apiHost,
       })
       return email
     },

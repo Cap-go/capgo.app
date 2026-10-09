@@ -11,8 +11,7 @@ export interface BuilderVisibleApp {
 }
 
 export interface BuilderAppApiOptions {
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
 }
 
 export type AppSelectionErrorCode = 'list' | 'read' | 'missing' | 'build' | 'permission' | 'config' | 'api'
@@ -77,8 +76,7 @@ export async function listVisibleBuilderApps(
       apikey,
       method: 'GET',
       body: undefined,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
     })
     if (error)
       throw new AppSelectionError('list', `Could not load apps: ${await formatCapgoCliInvokeError(error)}`, { cause: error })
@@ -101,8 +99,7 @@ export async function verifyBuilderApp(
     apikey,
     method: 'GET',
     body: undefined,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
   if (error) {
     const status = getCapgoCliHttpStatus(error)
@@ -115,22 +112,18 @@ export async function verifyBuilderApp(
   if (!data || data.app_id !== appId)
     throw new AppSelectionError('missing', `${appId} is no longer available. Check the app list again.`)
 
-  const { data: permissionData, error: permissionError } = await request<{ allowed?: boolean }>('private/cli/check-permission', {
+  const { data: permissionData, error: permissionError } = await request<{ permissions?: Record<string, boolean> }>('private/cli/permissions', {
     apikey,
     method: 'POST',
     body: {
-      apikey,
-      permission_key: 'app.build_native',
-      org_id: null,
+      permissions: ['app.build_native'],
       app_id: appId,
-      channel_id: null,
     },
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
   if (permissionError)
     throw new AppSelectionError('permission', 'Could not check app.build_native permission. Please retry.', { cause: permissionError })
-  if (permissionData?.allowed !== true)
+  if (permissionData?.permissions?.['app.build_native'] !== true)
     throw new AppSelectionError('build', `This API key needs app.build_native permission for ${appId}.`)
 }
 
@@ -171,7 +164,7 @@ export interface BuilderAppSelectionServices {
 }
 
 export function createBuilderAppSelectionServices(options: BuilderAppApiOptions = {}): BuilderAppSelectionServices {
-  const dashboardAvailable = !options.supaHost && !options.supaAnon
+  const dashboardAvailable = !options.apiHost
   return {
     list: key => listVisibleBuilderApps(key, options),
     verify: (key, appId) => verifyBuilderApp(key, appId, options),

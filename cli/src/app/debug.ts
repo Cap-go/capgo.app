@@ -376,7 +376,7 @@ export async function debugApp(appId: string, options: AppDebugOptions) {
     throw new CliUserError('Missing appId')
   }
 
-  const orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
+  const orgId = await getOrganizationId(options.apikey!, appId, { apiHost: options.apiHost })
 
   const doRun = await confirmC({ message: `Automatic check if update working in device ?` })
   await cancelCommand('debug', doRun, orgId, options.apikey)

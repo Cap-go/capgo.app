@@ -24,7 +24,7 @@ for (const [label, status, body] of [
     globalThis.fetch = async (input) => {
       const url = String(input)
       if (url.includes('/private/config'))
-        return new Response(JSON.stringify({ supaHost: 'https://self-host.example.test', supaKey: 'anon' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+        return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } })
       if (url.includes('/private/cli/identity'))
         return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
       return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })

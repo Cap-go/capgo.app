@@ -76,13 +76,13 @@ export function collectAppIdCandidates(
   return [...candidates]
 }
 
-async function fetchCapgoApps(apikey: string, supaHost?: string, supaAnon?: string) {
+async function fetchCapgoApps(apikey: string, apiHost?: string) {
   const all: Database['public']['Tables']['apps']['Row'][] = []
   let page = 0
   while (true) {
     const { data, error } = await invokeCapgoCliApi<Database['public']['Tables']['apps']['Row'][]>(
       getAppListPath(page),
-      { apikey, method: 'GET', body: undefined, supaHost, supaAnon },
+      { apikey, method: 'GET', body: undefined, apiHost },
     )
     if (error)
       throw new Error(`Cannot list Capgo apps: ${formatError(error)}`)
@@ -122,8 +122,7 @@ export interface ResolveAppIdOptions {
   packageJsonPaths?: string[]
   interactive?: boolean
   json?: boolean
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
 }
 
 function buildCiAppIdMessage() {
@@ -190,7 +189,7 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
     let remoteApps: Database['public']['Tables']['apps']['Row'][] = []
     if (resolvedApikey) {
       try {
-        remoteApps = await fetchCapgoApps(resolvedApikey, options.supaHost, options.supaAnon)
+        remoteApps = await fetchCapgoApps(resolvedApikey, options.apiHost)
       }
       catch (error) {
         log.warn(formatError(error))
@@ -274,14 +273,13 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
       if (pIsCancel(entered))
         continue
       const appId = (entered as string).trim()
-      const supabase = await createCapgoClient(resolvedApikey, options.supaHost, options.supaAnon)
-      const organization = await getOrganizationWithPermission(supabase, resolvedApikey, 'org.create_app')
-      await addAppInternal(appId, { apikey: resolvedApikey, supaHost: options.supaHost, supaAnon: options.supaAnon }, organization, true)
+      const client = await createCapgoClient(resolvedApikey, options.apiHost)
+      const organization = await getOrganizationWithPermission(client, resolvedApikey, 'org.create_app')
+      await addAppInternal(appId, { apikey: resolvedApikey, apiHost: options.apiHost }, organization, true)
       await persistAppIdToConfig(appId)
       log.success(`Created app ${appId} in Capgo`)
       const gettingStartedMessage = await resolveAppGettingStartedMessage(appId, {
-        supaHost: options.supaHost,
-        supaAnon: options.supaAnon,
+        apiHost: options.apiHost,
       })
       if (gettingStartedMessage)
         log.info(gettingStartedMessage)

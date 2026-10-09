@@ -36,9 +36,9 @@ export async function currentBundleInternal(channel: string, appId: string, opti
     throw new CliUserError('Missing appId')
   }
 
-  const supabase = await createCapgoClient(options.apikey, options.supaHost, options.supaAnon)
-  await check2FAComplianceForApp(supabase, appId, silent)
-  await resolveUserIdFromApiKey(supabase, options.apikey)
+  const client = await createCapgoClient(options.apikey, options.apiHost)
+  await check2FAComplianceForApp(client, appId, silent)
+  await resolveUserIdFromApiKey(client, options.apikey)
 
   if (!channel) {
     if (!silent)
@@ -54,8 +54,7 @@ export async function currentBundleInternal(channel: string, appId: string, opti
     apikey: options.apikey,
     method: 'GET',
     body: undefined,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
 
   if (error) {

@@ -27,17 +27,16 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
     throw new CliUserError('Missing appId')
   }
 
-  const supabase = await createCapgoClient(options.apikey, options.supaHost, options.supaAnon)
-  await check2FAComplianceForApp(supabase, appId, silent)
+  const client = await createCapgoClient(options.apikey, options.apiHost)
+  await check2FAComplianceForApp(client, appId, silent)
 
   const httpOptions = {
     apikey: options.apikey,
     silent,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   }
 
-  const { data: channel, error: channelError } = await findChannel(supabase, appId, channelId)
+  const { data: channel, error: channelError } = await findChannel(client, appId, channelId)
   if (channelError || !channel) {
     if (!silent)
       log.error(`Channel ${channelId} not found`)
@@ -50,12 +49,12 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
 
     throw new Error(`Channel ${channelId} not found`)
   }
-  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'channel.delete', silent, true, channel.id)
+  await checkAppExistsAndHasPermissionOrgErr(client, options.apikey, appId, 'channel.delete', silent, true, channel.id)
   const canDeleteBundle = options.deleteBundle
-    ? await hasCliPermission(supabase, options.apikey, 'bundle.delete', { appId })
+    ? await hasCliPermission(client, options.apikey, 'bundle.delete', { appId })
     : false
 
-  const orgId = await getOrganizationId(options.apikey, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
+  const orgId = await getOrganizationId(options.apikey, appId, { apiHost: options.apiHost })
 
   if (options.deleteBundle && !canDeleteBundle) {
     if (!silent)
@@ -69,8 +68,7 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
         channel: channelId,
         delete_bundle: true,
       },
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
     })
     if (error) {
       const message = `Cannot delete preview channel and bundle: ${formatError(error)}`
@@ -87,11 +85,11 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
     // Do not send delete_bundle=true here — that path is preview-key only.
     const softDeletedBundleNames: string[] = []
     if (options.deleteBundle) {
-      const linked = await findVersionsLinkedToChannel(supabase, appId, channelId)
+      const linked = await findVersionsLinkedToChannel(client, appId, channelId)
       const candidates = [linked.stable, linked.rollout].filter((row): row is NonNullable<typeof row> => !!row?.name)
       const uniqueByName = new Map(candidates.map(row => [row.name, row]))
       for (const bundle of uniqueByName.values()) {
-        const shared = await isVersionLinkedToOtherChannel(supabase, appId, bundle.id, channelId)
+        const shared = await isVersionLinkedToOtherChannel(client, appId, bundle.id, channelId)
         if (shared) {
           if (!silent)
             log.info(`Keeping bundle ${bundle.name}; it is still linked to another channel`)
@@ -99,11 +97,10 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
         }
         if (!silent)
           log.info(`Deleting bundle ${bundle.name} from Capgo`)
-        await deleteAppVersion(supabase, appId, bundle.name, {
+        await deleteAppVersion(client, appId, bundle.name, {
           silent,
           apikey: options.apikey,
-          supaHost: options.supaHost,
-          supaAnon: options.supaAnon,
+          apiHost: options.apiHost,
         })
         softDeletedBundleNames.push(bundle.name)
       }
@@ -115,7 +112,7 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
     const deleteStatus = await delChannel(httpOptions, channelId, appId, false)
     if (deleteStatus.error) {
       if (softDeletedBundleNames.length) {
-        await setBundlesDeleted(supabase, appId, softDeletedBundleNames, false).catch(() => [])
+        await setBundlesDeleted(client, appId, softDeletedBundleNames, false).catch(() => [])
       }
       if (!silent)
         log.error(`Cannot delete Channel 🙀 ${formatError(deleteStatus.error)}`)

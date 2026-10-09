@@ -36,8 +36,7 @@ export interface LoginState {
 export interface SaveKeyOptions {
   /** Persist to `./.capgo` (project-local) instead of `~/.capgo` (global). */
   local?: boolean
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
 }
 
 const globalKeyPath = () => `${homedir()}/.capgo`
@@ -107,8 +106,8 @@ export async function validateAndSaveKey(apikey: string, options: SaveKeyOptions
     throw new Error('To save a project-local key you must be inside a git repository')
 
   // Validate BEFORE writing so an invalid key never lands on disk.
-  const supabase = await createCapgoClient(apikey, options.supaHost, options.supaAnon, true)
-  const userId = await resolveUserIdFromApiKey(supabase, apikey, true)
+  const client = await createCapgoClient(apikey, options.apiHost, true)
+  const userId = await resolveUserIdFromApiKey(client, apikey, true)
 
   if (local) {
     await writeFileAtomic(LOCAL_KEY_PATH, `${apikey}\n`, { mode: 0o600 })
@@ -143,8 +142,8 @@ export async function getLoginState(options: { validate?: boolean } = {}): Promi
     return { loggedIn: true, source }
 
   try {
-    const supabase = await createCapgoClient(key, undefined, undefined, true)
-    const userId = await resolveUserIdFromApiKey(supabase, key, true)
+    const client = await createCapgoClient(key, undefined, true)
+    const userId = await resolveUserIdFromApiKey(client, key, true)
     return { loggedIn: true, userId, source, verified: true }
   }
   catch (error) {

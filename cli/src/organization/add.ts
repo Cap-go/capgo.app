@@ -28,12 +28,11 @@ export async function addOrganizationInternal(options: OrganizationAddOptions, s
     throw new Error('Missing API key')
   }
 
-  const supabase = await createCapgoClient(
+  const client = await createCapgoClient(
     enrichedOptions.apikey,
-    enrichedOptions.supaHost,
-    enrichedOptions.supaAnon,
+    enrichedOptions.apiHost,
   )
-  await resolveUserIdFromApiKey(supabase, enrichedOptions.apikey)
+  await resolveUserIdFromApiKey(client, enrichedOptions.apikey)
 
   let { name, email } = enrichedOptions
 
@@ -72,7 +71,7 @@ export async function addOrganizationInternal(options: OrganizationAddOptions, s
   if (!silent)
     log.info(`Adding organization "${name}" to Capgo`)
 
-  const { data: orgData, error: dbError } = await createOrganization(supabase, name, email)
+  const { data: orgData, error: dbError } = await createOrganization(client, name, email)
     .then(data => ({ data, error: null }), (error: unknown) => ({ data: null, error }))
 
   if (dbError || !orgData) {

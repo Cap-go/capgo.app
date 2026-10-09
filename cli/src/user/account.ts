@@ -19,12 +19,11 @@ export async function getUserIdInternal(options: Options, silent = false) {
   }
 
   try {
-    const supabase = await createCapgoClient(
+    const client = await createCapgoClient(
       enrichedOptions.apikey,
-      enrichedOptions.supaHost,
-      enrichedOptions.supaAnon,
+      enrichedOptions.apiHost,
     )
-    const userId = await resolveUserIdFromApiKey(supabase, enrichedOptions.apikey)
+    const userId = await resolveUserIdFromApiKey(client, enrichedOptions.apikey)
 
     void trackEvent({ channel: 'account', event: 'Account Id Viewed', tags: {} })
 

@@ -70,12 +70,12 @@ function limitPathsForAi(diff: ManifestDiff): ManifestDiff {
 }
 
 export async function fetchRemoteManifest(
-  supabase: CapgoClient,
+  client: CapgoClient,
   versionId: number,
 ): Promise<ManifestEntry[]> {
   let data: Awaited<ReturnType<typeof fetchBundleManifest>>
   try {
-    data = await fetchBundleManifest(supabase, versionId)
+    data = await fetchBundleManifest(client, versionId)
   }
   catch (error) {
     throw new Error(`Cannot fetch remote manifest: ${formatError(error)}`)
@@ -90,13 +90,13 @@ export async function fetchRemoteManifest(
 }
 
 export async function resolveBaseVersionForAutoBump(
-  supabase: CapgoClient,
+  client: CapgoClient,
   appid: string,
   channels: string[],
 ): Promise<{ name: string, id: number } | null> {
   const primaryChannel = channels[0]
   if (primaryChannel) {
-    const rows = await fetchCliChannels(supabase, appid, primaryChannel).catch(() => [])
+    const rows = await fetchCliChannels(client, appid, primaryChannel).catch(() => [])
     const version = rows[0]?.version_info
     if (version && !version.deleted && version.id && version.name)
       return { name: version.name, id: version.id }
@@ -104,7 +104,7 @@ export async function resolveBaseVersionForAutoBump(
 
   // Include deleted versions for name occupancy (same semantics as auto-bump base).
   try {
-    return await fetchLatestBundle(supabase, appid)
+    return await fetchLatestBundle(client, appid)
   }
   catch (error) {
     log.warn(`Cannot fetch latest remote version for AI auto-bump: ${formatError(error)}`)
@@ -118,8 +118,7 @@ export async function requestAiBumpLevel(options: {
   baseVersion: string
   manifestDiff: ManifestDiff
   nativeCompatibility?: { summary: string, breaking?: boolean }
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
 }): Promise<AiBumpDecision> {
   const { data, error } = await invokeCapgoCliApi<{ level?: string, reason?: string }>('bundle/ai_bump_level', {
     apikey: options.apikey,
@@ -129,8 +128,7 @@ export async function requestAiBumpLevel(options: {
       manifestDiff: limitPathsForAi(options.manifestDiff),
       nativeCompatibility: options.nativeCompatibility,
     },
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
 
   if (error)
@@ -148,14 +146,14 @@ export async function requestAiBumpLevel(options: {
 }
 
 export async function resolveAutoBumpLevelFromAi(ctx: {
-  supabase: CapgoClient
+  client: CapgoClient
   appid: string
   channels: string[]
   path: string
   apikey: string
-  options?: { supaHost?: string, supaAnon?: string }
+  options?: { apiHost?: string }
 }): Promise<AiBumpDecision> {
-  const base = await resolveBaseVersionForAutoBump(ctx.supabase, ctx.appid, ctx.channels)
+  const base = await resolveBaseVersionForAutoBump(ctx.client, ctx.appid, ctx.channels)
   if (!base) {
     return {
       level: 'patch',
@@ -165,15 +163,14 @@ export async function resolveAutoBumpLevelFromAi(ctx: {
 
   try {
     const localManifest = await generateManifest(ctx.path)
-    const remoteManifest = await fetchRemoteManifest(ctx.supabase, base.id)
+    const remoteManifest = await fetchRemoteManifest(ctx.client, base.id)
     const manifestDiff = diffManifests(localManifest, remoteManifest)
     return await requestAiBumpLevel({
       apikey: ctx.apikey,
       appId: ctx.appid,
       baseVersion: base.name,
       manifestDiff,
-      supaHost: ctx.options?.supaHost,
-      supaAnon: ctx.options?.supaAnon,
+      apiHost: ctx.options?.apiHost,
     })
   }
   catch (error) {

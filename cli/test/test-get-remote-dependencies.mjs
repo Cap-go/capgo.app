@@ -6,8 +6,7 @@ const { getRemoteDependencies } = await import('../src/utils.ts')
 
 const options = {
   apikey: 'test-remote-deps-key',
-  supaHost: 'http://localhost:54321',
-  supaAnon: 'test-anon-key',
+  apiHost: 'http://localhost:54321/functions/v1',
 }
 const appId = 'com.example.app'
 const channel = 'production'

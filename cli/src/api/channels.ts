@@ -14,15 +14,13 @@ interface CheckVersionOptions {
   channelName?: string
   requireMatch?: boolean
   apikey?: string
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
 }
 
 interface CapgoHttpOptions {
   apikey: string
   silent?: boolean
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
 }
 
 interface HttpChannel {
@@ -74,18 +72,17 @@ async function fetchChannelsPage(appid: string, page: number, options: CapgoHttp
     apikey: options.apikey,
     method: 'GET',
     body: undefined,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
 }
 
 export async function checkVersionNotUsedInChannel(
-  supabase: CapgoClient,
+  client: CapgoClient,
   appid: string,
   versionData: Database['public']['Tables']['app_versions']['Row'],
   options: CheckVersionOptions = {},
 ) {
-  const { silent = false, autoUnlink = false, channelName, requireMatch = false, apikey, supaHost, supaAnon } = options
+  const { silent = false, autoUnlink = false, channelName, requireMatch = false, apikey, apiHost } = options
   if (!apikey) {
     // TODO(cli-http): callers must pass apikey for HTTP unlink
     throw new Error('Missing API key for channel version check')
@@ -94,7 +91,7 @@ export async function checkVersionNotUsedInChannel(
   // Channel link reads run with the caller key so preview keys (no app.read_channels) still work.
   let data: Awaited<ReturnType<typeof fetchCliChannels>>
   try {
-    data = await fetchCliChannels(supabase, appid, channelName)
+    data = await fetchCliChannels(client, appid, channelName)
   }
   catch (error) {
     if (!silent)
@@ -155,8 +152,7 @@ export async function checkVersionNotUsedInChannel(
       apikey,
       method: 'POST',
       body,
-      supaHost,
-      supaAnon,
+      apiHost,
     })
 
     if (errorChannelUpdate) {
@@ -186,8 +182,7 @@ export function createChannel(
     apikey: options.apikey,
     method: 'POST',
     body: update,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
 }
 
@@ -200,16 +195,15 @@ export function delChannel(options: CapgoHttpOptions, name: string, appId: strin
       channel: name,
       delete_bundle: deleteBundle,
     },
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
 }
 
 // Channel reads run with the caller key so access matches console and preview-key
 // behavior. HTTP GET /channel requires app.read_channels, which preview keys lack.
-export async function findChannel(supabase: CapgoClient, appId: string, name: string) {
+export async function findChannel(client: CapgoClient, appId: string, name: string) {
   try {
-    const rows = await fetchCliChannels(supabase, appId, name)
+    const rows = await fetchCliChannels(client, appId, name)
     const row = rows.find(channel => channel.name === name) ?? null
     return { data: row, error: null }
   }
@@ -221,11 +215,11 @@ export async function findChannel(supabase: CapgoClient, appId: string, name: st
 export interface ChannelLinkedVersion { id: number, name: string }
 
 export async function findVersionsLinkedToChannel(
-  supabase: CapgoClient,
+  client: CapgoClient,
   appId: string,
   name: string,
 ): Promise<{ stable: ChannelLinkedVersion | null, rollout: ChannelLinkedVersion | null }> {
-  const { data } = await findChannel(supabase, appId, name)
+  const { data } = await findChannel(client, appId, name)
   if (!data)
     return { stable: null, rollout: null }
 
@@ -235,13 +229,13 @@ export async function findVersionsLinkedToChannel(
 }
 
 export async function isVersionLinkedToOtherChannel(
-  supabase: CapgoClient,
+  client: CapgoClient,
   appId: string,
   versionId: number,
   excludeChannelName: string,
 ): Promise<boolean> {
   try {
-    const rows = await fetchCliChannels(supabase, appId, undefined, { linkedVersionId: versionId })
+    const rows = await fetchCliChannels(client, appId, undefined, { linkedVersionId: versionId })
     return rows.some(channel => channel.name !== excludeChannelName)
   }
   catch {
@@ -341,8 +335,7 @@ export async function fetchChannelCompatibilityContext(
     apikey: options.apikey,
     method: 'GET',
     body: undefined,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
 
   if (error) {

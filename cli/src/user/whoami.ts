@@ -6,7 +6,7 @@ import { findSavedKey, formatError, invokeCapgoCliApi } from '../utils'
 
 export async function resolveAccountIdentity(
   apikey: string,
-  options: { supaHost?: string, supaAnon?: string } = {},
+  options: { apiHost?: string } = {},
 ) {
   const { data, error } = await invokeCapgoCliApi<{
     userId?: string
@@ -15,8 +15,7 @@ export async function resolveAccountIdentity(
     apikey,
     method: 'GET',
     body: undefined,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
 
   if (error)
@@ -43,8 +42,7 @@ export async function whoami(options: Options) {
 
   try {
     const { userId, email } = await resolveAccountIdentity(apikey, {
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
     })
 
     log.info(formatTable({

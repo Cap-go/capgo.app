@@ -142,7 +142,7 @@ await t('findAppInOrganization returns null for another org or missing app', asy
 
 async function withChannelSelection(channels, answers, run, lookupError) {
   const calls = { reuse: [], chooseName: [], create: [] }
-  const supabase = { apikey: 'test-key', supaHost: 'https://example.self-host.test', supaAnon: 'anon-key' }
+  const client = { apikey: 'test-key', apiHost: 'https://example.self-host.test/functions/v1', filesHost: 'https://example.self-host.test/functions/v1' }
   mockAppFetch(async (url) => {
     const request = new URL(url)
     assert.equal(request.pathname, '/functions/v1/private/cli/channels')
@@ -172,7 +172,7 @@ async function withChannelSelection(channels, answers, run, lookupError) {
     },
   }
   try {
-    await run(() => selectOnboardingChannel(supabase, 'com.example.app', answers.preferredName ?? 'production', prompts), calls)
+    await run(() => selectOnboardingChannel(client, 'com.example.app', answers.preferredName ?? 'production', prompts), calls)
   }
   finally {
     globalThis.fetch = originalFetch

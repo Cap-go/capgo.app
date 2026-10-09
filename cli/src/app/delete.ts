@@ -39,10 +39,10 @@ export async function deleteAppInternal(
     throw new CliUserError('Missing appId')
   }
 
-  const supabase = await createCapgoClient(options.apikey, options.supaHost, options.supaAnon)
-  const userId = await resolveUserIdFromApiKey(supabase, options.apikey)
+  const client = await createCapgoClient(options.apikey, options.apiHost)
+  const userId = await resolveUserIdFromApiKey(client, options.apikey)
 
-  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.delete', silent)
+  await checkAppExistsAndHasPermissionOrgErr(client, options.apikey, appId, 'app.delete', silent)
 
   const { data: appData, error: appError } = await invokeCapgoCliApi<{
     owner_org?: string
@@ -51,8 +51,7 @@ export async function deleteAppInternal(
     apikey: options.apikey,
     method: 'GET',
     body: undefined,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
 
   if (appError && getCapgoCliHttpStatus(appError) !== 404) {
@@ -76,8 +75,7 @@ export async function deleteAppInternal(
       apikey: options.apikey,
       method: 'GET',
       body: undefined,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
     },
   )
   const orgCreatedBy = typeof orgData?.created_by === 'string' ? orgData.created_by : undefined
@@ -116,8 +114,7 @@ export async function deleteAppInternal(
     apikey: options.apikey,
     method: 'DELETE',
     body: undefined,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
 
   if (dbError) {

@@ -291,10 +291,10 @@ test.concurrent('packaged worker pairs scan events and sends only the add_code p
     assert.equal(patch.headers.authorization, 'fake-api-key')
     assert.equal(patch.headers['x-cli-command'], 'app list')
     assert.equal(requests.at(-1).body.nonPersonTags.todo_report_http_status, 200)
-    await harness.run({ apiHost: `${api}/functions/v1`, anonKey: 'fake-anon-key' })
+    await harness.run({ apiHost: `${api}/functions/v1` })
     assert.notEqual(scanEvents(requests, 'found', 'success'), firstAttempt)
     assert.equal(requests.every(request => request.path.startsWith('/functions/v1/')), true)
-    assert.equal(requests.find(request => request.method === 'PUT').headers.authorization, 'Bearer fake-anon-key')
+    assert.equal(requests.find(request => request.method === 'PUT').headers.authorization, 'fake-api-key', 'self-host uses the API key, no anon key')
   }
   finally {
     harness.close()
@@ -511,10 +511,10 @@ test.concurrent('installed-updater worker pairs scan events and only completes a
     assert.equal(patch.path, '/app/com.example.ready')
     assert.equal(patch.headers.authorization, 'fake-api-key')
     assert.equal(patch.headers['x-cli-command'], 'app list')
-    await harness.run({ apiHost: `${api}/functions/v1`, anonKey: 'fake-anon-key' })
+    await harness.run({ apiHost: `${api}/functions/v1` })
     assert.notEqual(scanEvents(requests, 'found', 'success', 'updater-installed'), firstAttempt)
     assert.equal(requests.every(request => request.path.startsWith('/functions/v1/')), true)
-    assert.equal(requests.find(request => request.method === 'PUT').headers.authorization, 'Bearer fake-anon-key')
+    assert.equal(requests.find(request => request.method === 'PUT').headers.authorization, 'fake-api-key', 'self-host uses the API key, no anon key')
   }
   finally {
     harness.close()
@@ -686,9 +686,9 @@ test('background API requests require both explicit destination trust and safe t
   assert.equal(isTrustedOnboardingApiHost('https://self-host.example.com/api', {}, []), false)
   assert.equal(isTrustedOnboardingApiHost('https://self-host.example.com/api', {}, ['https://self-host.example.com']), true)
   assert.equal(isTrustedOnboardingApiHost('http://self-host.example.com', {}, ['http://self-host.example.com']), false)
-  assert.equal(isTrustedOnboardingApiHost('http://self-host.example.com/functions/v1', { supaHost: 'http://self-host.example.com', supaAnon: 'fake-anon' }, []), false)
-  assert.equal(isTrustedOnboardingApiHost('https://self-host.example.com/functions/v1', { supaHost: 'https://self-host.example.com', supaAnon: 'fake-anon' }, []), true)
-  assert.equal(isTrustedOnboardingApiHost('https://other.example.com', { supaHost: 'https://self-host.example.com', supaAnon: 'fake-anon' }, []), false)
+  assert.equal(isTrustedOnboardingApiHost('http://self-host.example.com/functions/v1', { apiHost: 'http://self-host.example.com/functions/v1' }, []), false)
+  assert.equal(isTrustedOnboardingApiHost('https://self-host.example.com/functions/v1', { apiHost: 'https://self-host.example.com/functions/v1' }, []), true)
+  assert.equal(isTrustedOnboardingApiHost('https://other.example.com', { apiHost: 'https://self-host.example.com/functions/v1' }, []), false)
   for (const host of ['localhost', '127.0.0.1', '[::1]']) {
     const origin = `http://${host}:12345`
     assert.equal(isTrustedOnboardingApiHost(origin, {}, []), false)
@@ -705,7 +705,7 @@ test.concurrent('coordinator sends no credentials to project-selected untrusted 
   try {
     await harness.run({}, { CAPGO_TRUSTED_API_ORIGINS: '' })
     assert.deepEqual(harness.requests, [], 'untrusted project config must not receive the API key')
-    await harness.run({ supaHost: harness.api, supaAnon: 'fake-anon-key' }, { CAPGO_TRUSTED_API_ORIGINS: '' })
+    await harness.run({ apiHost: `${harness.api}/functions/v1` }, { CAPGO_TRUSTED_API_ORIGINS: '' })
     assert.equal(harness.requests.filter(request => request.method === 'PUT').length, 2, 'explicit CLI self-host selection should still work')
   }
   finally {

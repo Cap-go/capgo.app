@@ -36,13 +36,7 @@ import { getCliLoginCommand } from './runner-command'
 import { nativePackageSchema } from './schemas/common'
 import { safeParseSchema } from './schemas/schema_validation'
 import { CliUserError } from './shared/cli-user-error'
-import { isTransientNetworkError } from './shared/network-error'
 import { trimTrailingSlashes } from './shared/trim-trailing-slashes'
-import {
-  callTwoFactorComplianceRpcWithRetry,
-  throwTwoFactorComplianceRpcError,
-  warnAndContinueTwoFactorPreflightNetworkFailure,
-} from './shared/two-factor-compliance'
 import { redactSecrets } from './support/redact'
 import { formatApiErrorForCli, parseSecurityPolicyError } from './utils/security_policy_errors'
 
@@ -83,7 +77,7 @@ export const ALERT_UPLOAD_SIZE_BYTES = 1024 * 1024 * 20 // 20MB
 export const MAX_UPLOAD_LENGTH_BYTES = 1024 * 1024 * 1024 // 1GB
 export const MAX_CHUNK_SIZE_BYTES = 1024 * 1024 * 99 // 99MB
 export const TUS_UPLOAD_RETRY_DELAYS = [0, 1000, 3000, 5000, 10000]
-// Keep in sync with supabase/functions/_backend/private/set_manifest.ts
+// Keep in sync with client/functions/_backend/private/set_manifest.ts
 export const MAX_MANIFEST_ENTRIES = 10_000
 
 /** User-facing error when a delta/manifest upload exceeds MAX_MANIFEST_ENTRIES. */
@@ -122,7 +116,6 @@ export function uploadTimeoutMessage(timeoutMs: number): string {
 export const PACKNAME = 'package.json'
 
 /** Stable PostHog fingerprint for incomplete Capgo server config before Supabase client creation. */
-export const CAPGO_SERVER_CONFIG_MISSING_MESSAGE = 'Cannot connect to server please try again later'
 
 export type ArrayElement<ArrayType extends readonly unknown[]>
   = ArrayType extends readonly (infer ElementType)[] ? ElementType : never
@@ -293,43 +286,6 @@ export function formatVerboseError(error: unknown): string {
 
   visit(error, '', 0)
   return redactSecrets(lines.join('\n'))
-}
-
-export async function check2FAAccessForOrg(
-  supabase: CapgoClient,
-  orgId: string,
-  silent = false,
-  httpOptions: CliHttpOptions = {},
-): Promise<void> {
-  const { data, error } = await callTwoFactorComplianceRpcWithRetry(() =>
-    invokeCliHttpFromClient<{ reject?: boolean }>(
-      supabase,
-      'private/cli/2fa/reject-org',
-      { query: { org_id: orgId } },
-      httpOptions,
-    ).then(({ data: responseData, error: responseError }) => ({
-      data: responseData?.reject === true,
-      error: responseError,
-    })),
-  )
-  const reject2fa = data
-  if (error) {
-    if (!silent && !isTransientNetworkError(error))
-      log.error(`Cannot check 2FA compliance: ${error.message}`)
-    if (isTransientNetworkError(error)) {
-      await warnAndContinueTwoFactorPreflightNetworkFailure({
-        silent,
-        telemetryFunctionName: 'check2FAAccessForOrg',
-      })
-      return
-    }
-    throwTwoFactorComplianceRpcError(error)
-  }
-  if (reject2fa) {
-    if (!silent)
-      log.error(`🔐 Access Denied: 2FA Required. Enable 2FA at ${consoleWebUrl('/settings/account')}`)
-    throw new Error('2FA required for this organization')
-  }
 }
 
 type TagKey = Lowercase<string>
@@ -829,11 +785,19 @@ export async function getLocalConfig(silent = false) {
       hostApi: (extConfig?.config?.plugins?.CapacitorUpdater?.localApi || defaultApiHost) as string,
     }
 
-    if (extConfig?.config?.plugins?.CapacitorUpdater?.localSupa && extConfig?.config?.plugins?.CapacitorUpdater?.localSupaAnon) {
+    // Legacy self-host config: `localSupa` without `localApi` serves every Capgo function
+    // from <localSupa>/functions/v1. `localSupaAnon` is no longer needed.
+    const legacyApiHost = extConfig?.config?.plugins?.CapacitorUpdater?.localApi
+      ? undefined
+      : legacySupabaseFunctionsHost(extConfig?.config?.plugins?.CapacitorUpdater?.localSupa)
+    if (legacyApiHost) {
       if (!silent)
         log.info('Using custom Capgo backend from capacitor.config.json')
-      capConfig.supaKey = extConfig?.config?.plugins?.CapacitorUpdater?.localSupaAnon
-      capConfig.supaHost = extConfig?.config?.plugins?.CapacitorUpdater?.localSupa
+      if (!silent)
+        warnLegacySupabaseHost('`localSupa` in capacitor.config', legacyApiHost)
+      capConfig.hostApi = legacyApiHost
+      if (!extConfig?.config?.plugins?.CapacitorUpdater?.localApiFiles)
+        capConfig.hostFilesApi = legacyApiHost
     }
     return capConfig
   }
@@ -881,8 +845,6 @@ function dependencyDeclaresNativePlugin(dependencyFolderPath: string): boolean {
 }
 
 interface CapgoConfig {
-  supaHost?: string
-  supaKey?: string
   host: string
   hostWeb: string
   hostFilesApi: string
@@ -1029,9 +991,9 @@ export function isCapgoManagedSupabaseHost(supaHost?: string): boolean {
   try {
     const hostname = new URL(normalizeSupabaseHost(supaHost)).hostname.toLowerCase()
     return hostname === 'sb.capgo.app'
-      || hostname === 'xvwzpoazmxkqosrdewyv.supabase.co'
-      || hostname === 'ibwjdnhknbkcqfbabwei.supabase.co'
-      || hostname === 'aucsybvnhavogdmzwtcw.supabase.co'
+      || hostname === 'xvwzpoazmxkqosrdewyv.client.co'
+      || hostname === 'ibwjdnhknbkcqfbabwei.client.co'
+      || hostname === 'aucsybvnhavogdmzwtcw.client.co'
   }
   catch {
     return false
@@ -1039,36 +1001,98 @@ export function isCapgoManagedSupabaseHost(supaHost?: string): boolean {
 }
 
 /**
- * Resolve Capgo public API base URL for CLI mutations (app create/update, etc.).
- * Capgo cloud uses api.capgo.app. Self-host with only localSupa (default localApi)
- * keeps /functions/v1 on that Supabase host.
+ * Map a legacy Supabase project URL (`--supa-host`, `localSupa`) to the Capgo API
+ * served by its Edge Functions. Capgo-managed projects return undefined: the CLI
+ * then talks to the Capgo cloud API.
  */
-export function resolveConfiguredCapgoPublicApiHost(config: {
-  hostApi: string
-  hostFilesApi?: string
-  supaHost?: string
-  supaKey?: string
-}): string {
-  if (
-    config.supaHost
-    && config.supaKey
-    && config.hostApi === defaultApiHost
-    && !isCapgoManagedSupabaseHost(config.supaHost)
-  ) {
-    return `${normalizeSupabaseHost(config.supaHost)}/functions/v1`
-  }
+export function legacySupabaseFunctionsHost(supaHost?: string): string | undefined {
+  if (!supaHost || isCapgoManagedSupabaseHost(supaHost))
+    return undefined
+  return `${normalizeSupabaseHost(supaHost)}/functions/v1`
+}
 
-  return config.hostApi
+let legacySupabaseHostWarned = false
+
+function warnLegacySupabaseHost(source: string, apiHost: string) {
+  if (legacySupabaseHostWarned)
+    return
+  legacySupabaseHostWarned = true
+  log.warn(`${source} is deprecated: the CLI only talks to the Capgo API now. Use --api-host ${apiHost} (or \`localApi\` in capacitor.config) instead.`)
+}
+
+/** Options that select the Capgo API. `supaHost` / `supaAnon` are deprecated aliases. */
+export interface CapgoHostOptions {
+  /** Capgo API base URL (`--api-host`), e.g. `https://<project>.supabase.co/functions/v1` when self-hosting. */
+  apiHost?: string
+  /** @deprecated Supabase project URL; mapped to `<supaHost>/functions/v1`. */
+  supaHost?: string
+  /** @deprecated Ignored: the Capgo API authenticates with the API key only. */
+  supaAnon?: string
+}
+
+/**
+ * Fold deprecated `supaHost` / `supaAnon` into `apiHost` and strip them, so the rest
+ * of the CLI only ever sees `apiHost`.
+ */
+export function normalizeCapgoHostOptions<T extends CapgoHostOptions>(options: T, silent = false): Omit<T, 'supaHost' | 'supaAnon'> {
+  const { supaHost, supaAnon: _supaAnon, ...rest } = options
+  if (rest.apiHost || !supaHost)
+    return rest
+  const apiHost = legacySupabaseFunctionsHost(supaHost)
+  if (!apiHost)
+    return rest
+  if (!silent)
+    warnLegacySupabaseHost('--supa-host', apiHost)
+  return { ...rest, apiHost }
+}
+
+/** Validate a Capgo API base URL: https (http only on loopback), no credentials/query. */
+export function normalizeCapgoApiHost(host: string): string {
+  const parsed = new URL(host)
+  if (!['http:', 'https:'].includes(parsed.protocol))
+    throw new CliUserError('Capgo API host must use HTTPS')
+  const isLoopback = parsed.hostname === 'localhost'
+    || parsed.hostname === '127.0.0.1'
+    || parsed.hostname === '[::1]'
+  if (parsed.protocol === 'http:' && !isLoopback)
+    throw new CliUserError('Capgo API host must use HTTPS (HTTP is only allowed for localhost)')
+  if (parsed.username || parsed.password)
+    throw new CliUserError('Capgo API host must not include credentials')
+  if (parsed.search || parsed.hash)
+    throw new CliUserError('Capgo API host must not include query parameters or fragments')
+  return `${parsed.origin}${trimTrailingSlashes(parsed.pathname)}`
+}
+
+export interface CapgoApiHosts {
+  /** Capgo API base URL. */
+  apiHost: string
+  /** Capgo files API base URL (same as apiHost when self-hosting on Edge Functions). */
+  filesHost: string
+}
+
+/**
+ * Resolve Capgo API hosts: explicit `--api-host`, then capacitor config (`localApi`,
+ * legacy `localSupa`), then Capgo cloud.
+ */
+export async function resolveCapgoApiHosts(apiHost?: string, silent = true): Promise<CapgoApiHosts> {
+  const localConfig = await getLocalConfig(silent)
+  if (!apiHost)
+    return { apiHost: localConfig.hostApi, filesHost: localConfig.hostFilesApi }
+  const normalized = normalizeCapgoApiHost(apiHost)
+  return {
+    apiHost: normalized,
+    filesHost: normalized.endsWith('/functions/v1') ? normalized : localConfig.hostFilesApi,
+  }
 }
 
 export interface CapgoCliInvokeOptions {
   apikey: string
   method?: string
   body?: unknown
-  /** Capgo cloud files worker; ignored when resolving to self-host /functions/v1 */
+  /** Capgo cloud files worker; same as the API host when self-hosting */
   useFilesHost?: boolean
-  supaHost?: string
-  supaAnon?: string
+  /** Capgo API base URL; defaults to capacitor config / Capgo cloud. */
+  apiHost?: string
   signal?: AbortSignal
   /** Set false for telemetry-internal calls so perf events never recurse. */
   instrument?: boolean
@@ -1079,14 +1103,14 @@ export function getCapgoCliHttpStatus(error: unknown): number | undefined {
   return typeof context?.status === 'number' ? context.status : undefined
 }
 
-export async function readCapgoCliApiErrorPayload(error: unknown): Promise<{ error?: string, message?: string } | null> {
+export async function readCapgoCliApiErrorPayload(error: unknown): Promise<{ error?: string, message?: string, moreInfo?: Record<string, unknown> } | null> {
   const response = (error as { context?: Response } | null)?.context
   if (!response || typeof response.clone !== 'function')
     return null
   try {
     const text = await response.clone().text()
     try {
-      return JSON.parse(text) as { error?: string, message?: string }
+      return JSON.parse(text) as { error?: string, message?: string, moreInfo?: Record<string, unknown> }
     }
     catch {
       return text ? { message: text } : null
@@ -1108,40 +1132,16 @@ export async function formatCapgoCliInvokeError(error: unknown): Promise<string>
 }
 
 /**
- * Invoke Capgo HTTP APIs formerly reached via supabase.functions.invoke.
- * Capgo cloud -> hostApi / hostFilesApi. Self-host -> /functions/v1.
+ * Call the Capgo HTTP API. Every request carries the API key and the `capgo_api`
+ * version header (see buildCliRequestHeaders); the backend owns all data access.
  */
 export async function invokeCapgoCliApi<T = any>(
   path: string,
   options: CapgoCliInvokeOptions,
 ): Promise<{ data: T | null, error: Error | null }> {
   const method = (options.method ?? 'POST').toUpperCase()
-  let base: string
-  let anonKey: string | undefined = options.supaAnon
-  if (options.supaHost && options.supaAnon && !isCapgoManagedSupabaseHost(options.supaHost)) {
-    base = `${normalizeSupabaseHost(options.supaHost)}/functions/v1`
-  }
-  else {
-    const localConfig = await getRemoteConfig(true)
-    anonKey = options.supaAnon ?? localConfig.supaKey
-    if (
-      localConfig.supaHost
-      && localConfig.supaKey
-      && localConfig.hostApi === defaultApiHost
-      && !isCapgoManagedSupabaseHost(localConfig.supaHost)
-      && !(options.supaHost && isCapgoManagedSupabaseHost(options.supaHost))
-    ) {
-      base = `${normalizeSupabaseHost(localConfig.supaHost)}/functions/v1`
-    }
-    else if (options.useFilesHost) {
-      base = localConfig.hostFilesApi
-    }
-    else {
-      base = localConfig.hostApi
-    }
-  }
-
-  const usesFunctionsV1 = base.includes('/functions/v1')
+  const hosts = await resolveCapgoApiHosts(options.apiHost)
+  const base = options.useFilesHost ? hosts.filesHost : hosts.apiHost
   const url = `${trimTrailingSlashes(base)}/${path.replace(/^\//, '')}`
   const doFetch = options.instrument !== false && isSupabaseInstrumentationEnabled() ? createTimedFetch() : fetch
   try {
@@ -1150,8 +1150,7 @@ export async function invokeCapgoCliApi<T = any>(
       redirect: 'error',
       headers: buildCliRequestHeaders({
         'Content-Type': 'application/json',
-        // Self-host Edge Functions validate the Supabase anon JWT; Capgo cloud uses the API key.
-        'Authorization': usesFunctionsV1 && anonKey ? `Bearer ${anonKey}` : options.apikey,
+        'Authorization': options.apikey,
         'capgkey': options.apikey,
       }),
       body: method === 'GET' || method === 'HEAD'
@@ -1183,87 +1182,30 @@ export async function invokeCapgoCliApi<T = any>(
 }
 
 export async function resolveCapgoPublicApiHost(
-  options?: { supaHost?: string, supaAnon?: string },
+  options?: { apiHost?: string },
   silent = true,
 ): Promise<string> {
-  if (options?.supaHost && options?.supaAnon) {
-    if (isCapgoManagedSupabaseHost(options.supaHost)) {
-      const localConfig = await getLocalConfig(silent)
-      return localConfig.hostApi
-    }
-    return `${normalizeSupabaseHost(options.supaHost)}/functions/v1`
-  }
-
-  const localConfig = await getLocalConfig(silent)
-  if (localConfig.supaHost && localConfig.supaKey)
-    return resolveConfiguredCapgoPublicApiHost(localConfig)
-
-  const config = await getRemoteConfig(silent)
-  return config.hostApi
+  return (await resolveCapgoApiHosts(options?.apiHost, silent)).apiHost
 }
 
 /**
  * Connection to the Capgo HTTP API. The CLI never queries the database directly:
  * every read/write goes through Capgo HTTP endpoints via `invokeCapgoCliApi`.
  */
-export interface CapgoClient {
+export interface CapgoClient extends CapgoApiHosts {
   apikey: string
-  /** Backend URL from `--supa-host` / local config / remote config. */
-  supaHost?: string
-  supaAnon?: string
 }
 
-export async function createCapgoClient(apikey: string, supaHost?: string, supaKey?: string, silent = false, signal?: AbortSignal): Promise<CapgoClient> {
-  const config = await getRemoteConfig(silent, signal)
-  if (supaHost && supaKey) {
-    if (!silent)
-      log.info('Using custom Capgo backend from provided options')
-    // Mutate only this call's copy — getRemoteConfig returns a shallow clone.
-    config.supaHost = supaHost
-    config.supaKey = supaKey
-  }
-  // Remote config always publishes the backend host; missing values mean the server was unreachable.
-  if (!config.supaHost || !config.supaKey) {
-    if (!silent)
-      log.error(CAPGO_SERVER_CONFIG_MISSING_MESSAGE)
-    throw new CliUserError(CAPGO_SERVER_CONFIG_MISSING_MESSAGE, {
-      missingSupaHost: !config.supaHost,
-      missingSupaKey: !config.supaKey,
-    })
-  }
+export async function createCapgoClient(apikey: string, apiHost?: string, silent = false, signal?: AbortSignal): Promise<CapgoClient> {
+  // Enforces the API-published minimum CLI version before any command runs.
+  await getRemoteConfig(silent, signal)
+  const hosts = await resolveCapgoApiHosts(apiHost, silent)
+  if (apiHost && !silent)
+    log.info(`Using custom Capgo API ${hosts.apiHost}`)
   return {
     apikey: validateCliRequestHeaderValue('capgkey', apikey),
-    supaHost: normalizeSupabaseHost(config.supaHost),
-    supaAnon: config.supaKey,
+    ...hosts,
   }
-}
-
-export async function isPayingOrg(
-  supabase: CapgoClient,
-  orgId: string,
-  httpOptions: CliHttpOptions = {},
-): Promise<boolean> {
-  const entitlements = await fetchCliBillingEntitlements(supabase, orgId, undefined, httpOptions)
-  return entitlements.isPaying
-}
-
-export async function isTrialOrg(
-  supabase: CapgoClient,
-  orgId: string,
-  httpOptions: CliHttpOptions = {},
-): Promise<number> {
-  const entitlements = await fetchCliBillingEntitlements(supabase, orgId, undefined, httpOptions)
-  return entitlements.trialDays
-}
-
-export async function hasOrgUsageCredits(
-  supabase: CapgoClient,
-  orgId: string,
-  appId?: string,
-  httpOptions: CliHttpOptions = {},
-): Promise<boolean> {
-  const entitlements = await fetchCliBillingEntitlements(supabase, orgId, appId, httpOptions)
-  return entitlements.hasCredits
 }
 
 export async function fetchCliMembers2faStatus(
@@ -1277,8 +1219,7 @@ export async function fetchCliMembers2faStatus(
       apikey,
       method: 'GET',
       body: undefined,
-      supaHost: httpOptions.supaHost,
-      supaAnon: httpOptions.supaAnon,
+      apiHost: httpOptions.apiHost,
     },
   )
   if (error)
@@ -1309,236 +1250,12 @@ export async function fetchCliMembersPasswordPolicyStatus(
       apikey,
       method: 'GET',
       body: undefined,
-      supaHost: httpOptions.supaHost,
-      supaAnon: httpOptions.supaAnon,
+      apiHost: httpOptions.apiHost,
     },
   )
   if (error)
     throw error
   return data ?? []
-}
-
-async function fetchCliBillingEntitlements(
-  supabase: CapgoClient,
-  orgId: string,
-  appId?: string,
-  httpOptions: CliHttpOptions = {},
-): Promise<{ isPaying: boolean, trialDays: number, hasCredits: boolean }> {
-  const { data, error } = await invokeCliHttpFromClient<{
-    isPaying?: boolean
-    trialDays?: number
-    hasCredits?: boolean
-  }>(
-    supabase,
-    'private/cli/billing/entitlements',
-    {
-      query: {
-        org_id: orgId,
-        app_id: appId,
-      },
-    },
-    httpOptions,
-  )
-  if (error)
-    throw new Error(`Cannot validate plan: ${formatError(error)}`)
-
-  return {
-    isPaying: data?.isPaying === true,
-    trialDays: typeof data?.trialDays === 'number' ? data.trialDays : 0,
-    hasCredits: data?.hasCredits === true,
-  }
-}
-
-/** Trial upgrade nag is for unpaid trial orgs only — skip when paying or using credits. */
-export function shouldWarnTrialExpiry(options: {
-  trialDays: number
-  isPaying: boolean
-  hasCredits: boolean
-  warning?: boolean
-}): boolean {
-  const { trialDays, isPaying, hasCredits, warning = true } = options
-  return !!warning && trialDays > 0 && !isPaying && !hasCredits
-}
-
-export async function isAllowedActionOrg(
-  supabase: CapgoClient,
-  orgId: string,
-  httpOptions: CliHttpOptions = {},
-): Promise<boolean> {
-  const { data, error } = await invokeCliHttpFromClient<{ allowed?: boolean }>(
-    supabase,
-    'private/cli/billing/allowed',
-    { query: { org_id: orgId } },
-    httpOptions,
-  )
-  if (error)
-    throw new Error(`Cannot validate plan: ${formatError(error)}`)
-
-  return data?.allowed === true
-}
-
-/** Validate metered plan actions while preserving app-scoped RBAC context when available. */
-export async function isAllowedPlanActions(
-  supabase: CapgoClient,
-  orgId: string,
-  actions: Database['public']['Enums']['action_type'][],
-  appId?: string,
-  httpOptions: CliHttpOptions = {},
-): Promise<boolean> {
-  const { data, error } = await invokeCliHttpFromClient<{ allowed?: boolean }>(
-    supabase,
-    'private/cli/billing/allowed-actions',
-    {
-      method: 'POST',
-      body: {
-        org_id: orgId,
-        actions,
-        app_id: appId,
-      },
-    },
-    httpOptions,
-  )
-  if (error)
-    throw new Error(`Cannot validate plan: ${formatError(error)}`, { cause: error })
-
-  return data?.allowed === true
-}
-
-export type MeteredPlanCheckResult = 'allowed' | 'billing_denied' | 'permission_denied'
-
-/** Distinguish RBAC denials on app-scoped plan RPCs from real billing limits. */
-export async function resolveMeteredPlanAllowed(
-  supabase: CapgoClient,
-  orgId: string,
-  actions: Database['public']['Enums']['action_type'][],
-  appId?: string,
-  httpOptions: CliHttpOptions = {},
-): Promise<MeteredPlanCheckResult> {
-  if (appId) {
-    const appScoped = await isAllowedPlanActions(supabase, orgId, actions, appId, httpOptions)
-    if (appScoped)
-      return 'allowed'
-    const orgScoped = await isAllowedPlanActions(supabase, orgId, actions, undefined, httpOptions)
-    if (orgScoped)
-      return 'permission_denied'
-    return 'billing_denied'
-  }
-
-  const orgScoped = await isAllowedPlanActions(supabase, orgId, actions, undefined, httpOptions)
-  return orgScoped ? 'allowed' : 'billing_denied'
-}
-
-async function throwPlanUpgradeRequired(plansUrl: string, message: string) {
-  log.error(`You need to upgrade your plan to continue to use capgo.\n Upgrade here: ${plansUrl}\n`)
-  await openExternalUrl(plansUrl)
-  throw new CliUserError(message)
-}
-
-async function throwPlanPermissionDenied() {
-  log.error('Cannot validate plan usage for this app. The API key may lack permission to read app billing details.')
-  throw new CliUserError('Plan validation permission denied')
-}
-
-export async function checkRemoteCliMessages(
-  supabase: CapgoClient,
-  orgId: string,
-  cliVersion: string,
-  httpOptions: CliHttpOptions = {},
-) {
-  const { data: messages, error } = await invokeCliHttpFromClient<Array<unknown>>(
-    supabase,
-    'private/cli/warnings',
-    {
-      query: {
-        org_id: orgId,
-        cli_version: cliVersion,
-      },
-    },
-    httpOptions,
-  )
-  if (error) {
-    log.error(`Cannot get cli warnings: ${formatError(error)}`)
-    return
-  }
-  if ((messages ?? []).length > 0) {
-    log.warn(`Found ${(messages ?? []).length} cli warnings for your organization.`)
-    let fatalError: Error | null = null
-    for (const message of messages ?? []) {
-      if (typeof message !== 'object' || typeof (message as any).message !== 'string' || typeof (message as any).fatal !== 'boolean') {
-        log.error(`Invalid cli warning: ${message}`)
-        continue
-      }
-      const msg = (message as any) as { message: string, fatal: boolean }
-      if (msg.fatal) {
-        log.error(`${msg.message.replaceAll('\\n', '\n')}`)
-        fatalError = new Error(msg.message)
-      }
-      else {
-        log.warn(`${msg.message.replaceAll('\\n', '\n')}`)
-      }
-    }
-    if (fatalError) {
-      log.error('Please fix the warnings and try again.')
-      throw fatalError
-    }
-    log.info('End of cli warnings.')
-  }
-}
-
-export async function checkPlanValid(
-  supabase: CapgoClient,
-  orgId: string,
-  appId?: string,
-  warning = true,
-  httpOptions: CliHttpOptions = {},
-) {
-  const config = await getRemoteConfig()
-  const plansUrl = `${config.hostWeb}/settings/organization/plans`
-
-  if (appId) {
-    const planCheck = await resolveMeteredPlanAllowed(
-      supabase,
-      orgId,
-      ['mau', 'storage', 'bandwidth', 'build_time'],
-      appId,
-      httpOptions,
-    )
-    if (planCheck === 'permission_denied')
-      await throwPlanPermissionDenied()
-    if (planCheck === 'billing_denied')
-      await throwPlanUpgradeRequired(plansUrl, 'Plan upgrade required')
-  }
-  else if (!await isAllowedActionOrg(supabase, orgId, httpOptions)) {
-    await throwPlanUpgradeRequired(plansUrl, 'Plan upgrade required')
-  }
-
-  const entitlements = await fetchCliBillingEntitlements(supabase, orgId, appId, httpOptions)
-  const { trialDays, isPaying: ispaying, hasCredits } = entitlements
-  if (shouldWarnTrialExpiry({ trialDays, isPaying: ispaying, hasCredits, warning }))
-    log.warn(`WARNING !!\nTrial expires in ${trialDays} days, upgrade here: ${plansUrl}\n`)
-}
-
-export async function checkPlanValidUpload(
-  supabase: CapgoClient,
-  orgId: string,
-  appId?: string,
-  warning = true,
-  httpOptions: CliHttpOptions = {},
-) {
-  const config = await getRemoteConfig()
-  const plansUrl = `${config.hostWeb}/settings/organization/plans`
-
-  const planCheck = await resolveMeteredPlanAllowed(supabase, orgId, ['storage'], appId, httpOptions)
-  if (planCheck === 'permission_denied')
-    await throwPlanPermissionDenied()
-  if (planCheck === 'billing_denied')
-    await throwPlanUpgradeRequired(plansUrl, 'Plan upgrade required for upload')
-  // Trial/paying stay on the legacy single-arg RPCs for old CLI compatibility.
-  // Credits use the new has_usage_credits_org (with optional appid).
-  const entitlements = await fetchCliBillingEntitlements(supabase, orgId, appId, httpOptions)
-  const { trialDays, isPaying: ispaying, hasCredits } = entitlements
-  if (shouldWarnTrialExpiry({ trialDays, isPaying: ispaying, hasCredits, warning }))
-    log.warn(`WARNING !!\nTrial expires in ${trialDays} days, upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
 }
 
 function tryReadKey(path: string): string | undefined {
@@ -1903,7 +1620,7 @@ export async function findMainFile(silent = false, rootDir: string = cwd()) {
   return mainFile
 }
 
-export async function uploadUrl(apikey: string, appId: string, name: string, options?: { supaHost?: string, supaAnon?: string }): Promise<string> {
+export async function uploadUrl(apikey: string, appId: string, name: string, options?: { apiHost?: string }): Promise<string> {
   const data = {
     app_id: appId,
     name,
@@ -1914,8 +1631,7 @@ export async function uploadUrl(apikey: string, appId: string, name: string, opt
       apikey,
       body: data,
       useFilesHost: true,
-      supaHost: options?.supaHost,
-      supaAnon: options?.supaAnon,
+      apiHost: options?.apiHost,
     })
 
     if (res.error) {
@@ -2044,7 +1760,7 @@ export function appAddHintMessage(appId: string): string {
 }
 
 // The files backend rejects uploads for unknown apps with a `404 app_not_found` body
-// (see supabase/functions/_backend/files/files.ts). Detect it from either a tus
+// (see client/functions/_backend/files/files.ts). Detect it from either a tus
 // DetailedError (which exposes the raw response body) or a generic error message so we
 // can surface the actionable `app add` hint instead of a raw tus error string.
 export function isAppNotFoundError(error: unknown): boolean {
@@ -2137,7 +1853,7 @@ export async function uploadTUS(apikey: string, data: Buffer, orgId: string, app
   })
 }
 
-export async function deletedFailedVersion(apikey: string, appId: string, name: string, options?: { supaHost?: string, supaAnon?: string }): Promise<void> {
+export async function deletedFailedVersion(apikey: string, appId: string, name: string, options?: { apiHost?: string }): Promise<void> {
   const data = {
     app_id: appId,
     name,
@@ -2146,8 +1862,7 @@ export async function deletedFailedVersion(apikey: string, appId: string, name: 
     apikey,
     method: 'DELETE',
     body: data,
-    supaHost: options?.supaHost,
-    supaAnon: options?.supaAnon,
+    apiHost: options?.apiHost,
   })
 
   if (res.error) {
@@ -2175,7 +1890,7 @@ export async function setVersionManifest(
   appId: string,
   name: string,
   manifest: VersionManifestEntry[],
-  options?: { supaHost?: string, supaAnon?: string },
+  options?: { apiHost?: string },
 ): Promise<void> {
   const data = {
     app_id: appId,
@@ -2185,8 +1900,7 @@ export async function setVersionManifest(
   const res = await invokeCapgoCliApi('private/set_manifest', {
     apikey,
     body: data,
-    supaHost: options?.supaHost,
-    supaAnon: options?.supaAnon,
+    apiHost: options?.apiHost,
   })
 
   if (res.error) {
@@ -2297,39 +2011,29 @@ export function show2FADeniedError(organizationName?: string): never {
   throw new Error('2FA required for this organization')
 }
 
-export async function filterOrgsByPermission(
-  supabase: CapgoClient,
-  apikey: string,
-  orgs: Organization[],
-  permissionKey: string,
-  httpOptions: CliHttpOptions = {},
-): Promise<Organization[]> {
-  const checks = await Promise.all(
-    orgs.map(async (org) => {
-      const allowed = await hasCliPermission(supabase, apikey, permissionKey, { orgId: org.gid }, httpOptions)
-      return allowed ? org : null
-    }),
-  )
-  return checks.filter((org): org is Organization => org !== null)
-}
-
+/** Capgo API selection for helpers that are not handed a CapgoClient. */
 export interface CliHttpOptions {
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
 }
 
+/** API key plus optional host: a CapgoClient, or command options before a client exists. */
+export interface CapgoApiTarget {
+  apikey: string
+  apiHost?: string
+}
+
+/** Call the Capgo API with a client's key and host. */
 export async function invokeCliHttpFromClient<T>(
-  supabase: CapgoClient,
+  client: CapgoApiTarget,
   path: string,
   options: {
     method?: string
     body?: unknown
     query?: Record<string, string | undefined>
+    useFilesHost?: boolean
+    signal?: AbortSignal
   } = {},
-  httpOptions: CliHttpOptions = {},
 ): Promise<{ data: T | null, error: Error | null }> {
-  const apikey = supabase.apikey
-  const resolvedHttpOptions = resolveCliHttpOptions(supabase, httpOptions)
   const method = (options.method ?? 'GET').toUpperCase()
   const query = options.query
     ? new URLSearchParams(
@@ -2339,44 +2043,35 @@ export async function invokeCliHttpFromClient<T>(
   const resolvedPath = query ? `${path}?${query}` : path
 
   return invokeCapgoCliApi<T>(resolvedPath, {
-    apikey,
+    apikey: client.apikey,
     method,
     body: method === 'GET' || method === 'HEAD' ? undefined : options.body,
-    supaHost: resolvedHttpOptions.supaHost,
-    supaAnon: resolvedHttpOptions.supaAnon,
+    apiHost: client.apiHost,
+    useFilesHost: options.useFilesHost,
+    signal: options.signal,
   })
 }
 
-/** Resolve local/self-host Capgo HTTP options from a Capgo client. */
-export function hostOptionsFromClient(client: CapgoClient): CliHttpOptions | undefined {
-  // Hosted Capgo clients must keep default api.capgo.app resolution; only
-  // local/self-host backends route through their own functions host.
-  const { supaHost, supaAnon } = client
-  if (supaHost && supaAnon && !isCapgoManagedSupabaseHost(supaHost))
-    return { supaHost, supaAnon }
-  return undefined
+/** Host options matching a Capgo client, for helpers that take CliHttpOptions. */
+export function hostOptionsFromClient(client: CapgoClient): CliHttpOptions {
+  return { apiHost: client.apiHost }
 }
 
-function resolveCliHttpOptions(
-  supabase: CapgoClient,
-  httpOptions: CliHttpOptions = {},
-): CliHttpOptions {
-  return {
-    ...hostOptionsFromClient(supabase),
-    ...httpOptions,
-  }
-}
-
-export async function fetchOrganizationsV7(
+/**
+ * Organizations visible to the API key. With `permission`, each row carries
+ * `allowed`: whether the key holds that permission in the org.
+ */
+export async function fetchOrganizations(
   apikey: string,
   httpOptions: CliHttpOptions = {},
-): Promise<Organization[]> {
-  const { data, error } = await invokeCapgoCliApi<Organization[]>('private/cli/organizations', {
+  permission?: string,
+): Promise<Array<Organization & { allowed?: boolean }>> {
+  const path = permission ? `private/cli/organizations?permission=${encodeURIComponent(permission)}` : 'private/cli/organizations'
+  const { data, error } = await invokeCapgoCliApi<Array<Organization & { allowed?: boolean }>>(path, {
     apikey,
     method: 'GET',
     body: undefined,
-    supaHost: httpOptions.supaHost,
-    supaAnon: httpOptions.supaAnon,
+    apiHost: httpOptions.apiHost,
   })
 
   if (error) {
@@ -2414,8 +2109,7 @@ export async function fetchCliOrganization(
       apikey,
       method: 'GET',
       body: undefined,
-      supaHost: httpOptions.supaHost,
-      supaAnon: httpOptions.supaAnon,
+      apiHost: httpOptions.apiHost,
     },
   )
 
@@ -2427,14 +2121,14 @@ export async function fetchCliOrganization(
 }
 
 export async function getOrganizationListWithPermission(
-  supabase: CapgoClient,
+  client: CapgoClient,
   apikey: string,
   permissionKey: string,
   httpOptions: CliHttpOptions = {},
 ): Promise<{ allOrganizations: Organization[], allowedOrganizations: Organization[] }> {
-  let allOrganizations: Organization[]
+  let allOrganizations: Array<Organization & { allowed?: boolean }>
   try {
-    allOrganizations = await fetchOrganizationsV7(apikey, resolveCliHttpOptions(supabase, httpOptions))
+    allOrganizations = await fetchOrganizations(apikey, { apiHost: httpOptions.apiHost ?? client.apiHost }, permissionKey)
   }
   catch (error) {
     log.error('Cannot get the list of organizations - exiting')
@@ -2447,7 +2141,7 @@ export async function getOrganizationListWithPermission(
     throw new Error('No organizations available')
   }
 
-  const allowedOrganizations = await filterOrgsByPermission(supabase, apikey, allOrganizations, permissionKey, httpOptions)
+  const allowedOrganizations = allOrganizations.filter(org => org.allowed === true)
 
   if (allowedOrganizations.length === 0) {
     log.error(`Could not find organization with permission: ${permissionKey}`)
@@ -2458,11 +2152,11 @@ export async function getOrganizationListWithPermission(
 }
 
 export async function getOrganizationWithPermission(
-  supabase: CapgoClient,
+  client: CapgoClient,
   apikey: string,
   permissionKey: string,
 ): Promise<Organization> {
-  const { allOrganizations, allowedOrganizations } = await getOrganizationListWithPermission(supabase, apikey, permissionKey)
+  const { allOrganizations, allowedOrganizations } = await getOrganizationListWithPermission(client, apikey, permissionKey)
 
   const organizationUidRaw = (allowedOrganizations.length > 1)
     ? await select({
@@ -2491,18 +2185,17 @@ export async function getOrganizationWithPermission(
 }
 
 export async function resolveUserIdFromApiKey(
-  supabase: CapgoClient,
+  client: CapgoClient,
   apikey: string,
   silent = false,
   httpOptions: CliHttpOptions = {},
 ) {
-  const resolvedHttpOptions = resolveCliHttpOptions(supabase, httpOptions)
+  const resolvedHttpOptions = { apiHost: httpOptions.apiHost ?? client.apiHost }
   const { data, error: userIdError } = await invokeCapgoCliApi<{ userId?: string }>('private/cli/identity', {
     apikey,
     method: 'GET',
     body: undefined,
-    supaHost: resolvedHttpOptions.supaHost,
-    supaAnon: resolvedHttpOptions.supaAnon,
+    apiHost: resolvedHttpOptions.apiHost,
   })
 
   const userId = (data?.userId || '').toString()
@@ -2527,52 +2220,57 @@ interface CliPermissionScope {
   channelId?: number | null
 }
 
-export async function hasCliPermission(
-  supabase: CapgoClient,
-  apikey: string,
-  permissionKey: string,
+/** Ask the backend which of these RBAC permissions the client key holds in one scope. */
+export async function fetchCliPermissions(
+  client: CapgoClient,
+  permissionKeys: string[],
   scope: CliPermissionScope = {},
-  httpOptions: CliHttpOptions = {},
-  silent = false,
-): Promise<boolean> {
-  const resolvedHttpOptions = resolveCliHttpOptions(supabase, httpOptions)
-  const { data, error } = await invokeCapgoCliApi<{ allowed?: boolean }>('private/cli/check-permission', {
-    apikey,
+): Promise<Record<string, boolean>> {
+  const { data, error } = await invokeCliHttpFromClient<{ permissions?: Record<string, boolean> }>(client, 'private/cli/permissions', {
     method: 'POST',
     body: {
-      apikey,
-      permission_key: permissionKey,
-      org_id: scope.orgId ?? null,
-      app_id: scope.appId ?? null,
-      channel_id: scope.channelId ?? null,
+      permissions: permissionKeys,
+      org_id: scope.orgId ?? undefined,
+      app_id: scope.appId ?? undefined,
+      channel_id: scope.channelId ?? undefined,
     },
-    supaHost: resolvedHttpOptions.supaHost,
-    supaAnon: resolvedHttpOptions.supaAnon,
   })
+  if (error)
+    throw new Error(`Cannot check permissions ${permissionKeys.join(', ')}: ${await formatCapgoCliInvokeError(error)}`, { cause: error })
+  return Object.fromEntries(permissionKeys.map(key => [key, data?.permissions?.[key] === true]))
+}
 
-  if (error) {
+export async function hasCliPermission(
+  client: CapgoClient,
+  _apikey: string,
+  permissionKey: string,
+  scope: CliPermissionScope = {},
+  silent = false,
+): Promise<boolean> {
+  try {
+    const permissions = await fetchCliPermissions(client, [permissionKey], scope)
+    return permissions[permissionKey] === true
+  }
+  catch (error) {
     if (!silent) {
       log.error(`Cannot check permission ${permissionKey}`)
       log.error(formatError(error))
     }
-    throw new Error(`Cannot check permission ${permissionKey}: ${formatError(error)}`, { cause: error })
+    throw error
   }
-
-  return data?.allowed === true
 }
 
 export async function assertCliPermission(
-  supabase: CapgoClient,
+  client: CapgoClient,
   apikey: string,
   permissionKey: string,
   scope: CliPermissionScope = {},
   options: {
     message?: string
     silent?: boolean
-    httpOptions?: CliHttpOptions
   } = {},
 ): Promise<void> {
-  const allowed = await hasCliPermission(supabase, apikey, permissionKey, scope, options.httpOptions)
+  const allowed = await hasCliPermission(client, apikey, permissionKey, scope)
   if (allowed)
     return
 
@@ -2586,29 +2284,27 @@ export async function assertCliPermission(
 }
 
 export async function assertOrgPermission(
-  supabase: CapgoClient,
+  client: CapgoClient,
   apikey: string,
   permissionKey: string,
   orgId: string,
   message: string,
   silent: boolean,
-  httpOptions: CliHttpOptions = {},
 ): Promise<void> {
-  await resolveUserIdFromApiKey(supabase, apikey, silent, httpOptions)
-  await assertCliPermission(supabase, apikey, permissionKey, { orgId }, { message, silent, httpOptions })
+  await resolveUserIdFromApiKey(client, apikey, silent)
+  await assertCliPermission(client, apikey, permissionKey, { orgId }, { message, silent })
 }
 
 export async function getOrganizationId(
   apikey: string,
   appId: string,
-  options?: { supaHost?: string, supaAnon?: string },
+  options?: { apiHost?: string },
 ) {
   const { data, error } = await invokeCapgoCliApi<{ owner_org?: string }>(`app/${encodeURIComponent(appId)}`, {
     apikey,
     method: 'GET',
     body: undefined,
-    supaHost: options?.supaHost,
-    supaAnon: options?.supaAnon,
+    apiHost: options?.apiHost,
   })
 
   if (!data?.owner_org || error) {
@@ -2976,8 +2672,7 @@ export async function getRemoteChecksums(
     apikey,
     method: 'GET',
     body: undefined,
-    supaHost: httpOptions.supaHost,
-    supaAnon: httpOptions.supaAnon,
+    apiHost: httpOptions.apiHost,
   })
 
   if (error || !data?.bundle_name)

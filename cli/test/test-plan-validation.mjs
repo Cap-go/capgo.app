@@ -3,36 +3,29 @@ process.env.CAPGO_DISABLE_POSTHOG = '1'
 
 import { readFileSync } from 'node:fs'
 import process from 'node:process'
+import { checkPlanValid, checkPlanValidUpload } from '../src/api/preflight.ts'
 import * as utils from '../src/utils.ts'
 
-console.log('🧪 Testing app-aware plan validation...\n')
+console.log('🧪 Testing plan validation through the backend preflight...\n')
 
 const utilsSource = readFileSync(new URL('../src/utils.ts', import.meta.url), 'utf8')
+const preflightSource = readFileSync(new URL('../src/api/preflight.ts', import.meta.url), 'utf8')
 const channelSetSource = readFileSync(new URL('../src/channel/set.ts', import.meta.url), 'utf8')
 
-const httpOptions = {
-  supaHost: 'http://localhost:54321',
-  supaAnon: 'test-anon-key',
-}
+const apiHost = 'http://localhost:54321/functions/v1'
 
-function makeSupabase() {
-  return {
-    apikey: 'test-plan-key',
-    supaHost: httpOptions.supaHost,
-    supaAnon: httpOptions.supaAnon,
-  }
+function makeClient() {
+  return { apikey: 'test-plan-key', apiHost, filesHost: apiHost }
 }
 
 const originalFetch = globalThis.fetch
 const httpCalls = []
-let fetchHandler = () => new Response(JSON.stringify({ allowed: true }), {
-  status: 200,
-  headers: { 'Content-Type': 'application/json' },
-})
+const okBody = { user_id: 'u1', org_id: 'org-id', app_id: 'com.example.app', trial_days_left: null, warnings: [] }
+let fetchHandler = () => Response.json(okBody)
 
 globalThis.fetch = async (input, init) => {
   const url = String(input)
-  if (!url.includes('/private/cli/billing/'))
+  if (!url.includes('/private/cli/preflight'))
     return originalFetch(input)
   httpCalls.push({
     url,
@@ -49,6 +42,7 @@ async function test(name, fn) {
   try {
     console.log(`\n🔍 ${name}`)
     httpCalls.length = 0
+    fetchHandler = () => Response.json(okBody)
     await fn()
     console.log(`✅ PASSED: ${name}`)
     testsPassed++
@@ -70,140 +64,52 @@ function assertEquals(actual, expected, message) {
     throw new Error(message || `Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
 }
 
-await test('checks an app-scoped key through the app-aware plan RPC', async () => {
-  assert(typeof utils.isAllowedPlanActions === 'function', 'Expected isAllowedPlanActions to be exported')
+async function rejection(fn) {
+  try {
+    await fn()
+  }
+  catch (error) {
+    return error
+  }
+  throw new Error('Expected a rejection')
+}
 
-  fetchHandler = () => new Response(JSON.stringify({ allowed: true }), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  })
-
-  const allowed = await utils.isAllowedPlanActions(
-    makeSupabase(),
-    'org-id',
-    ['mau', 'storage', 'bandwidth', 'build_time'],
-    'com.example.app',
-    httpOptions,
-  )
-
-  assertEquals(allowed, true)
+await test('checkPlanValid asks the backend for the full metered plan in one call', async () => {
+  await checkPlanValid(makeClient(), 'org-id', 'com.example.app', false)
   assertEquals(httpCalls.length, 1)
-  assert(httpCalls[0].url.includes('/private/cli/billing/allowed-actions'))
-  assertEquals(httpCalls[0].method, 'POST')
-  assertEquals(httpCalls[0].body, {
-    org_id: 'org-id',
-    actions: ['mau', 'storage', 'bandwidth', 'build_time'],
-    app_id: 'com.example.app',
-  })
+  assertEquals(httpCalls[0].url, `${apiHost}/private/cli/preflight`)
+  assertEquals(httpCalls[0].body, { app_id: 'com.example.app', org_id: 'org-id', check_2fa: false, plan: 'all' })
 })
 
-await test('surfaces plan RPC errors instead of reporting an invalid plan', async () => {
-  assert(typeof utils.isAllowedPlanActions === 'function', 'Expected isAllowedPlanActions to be exported')
-
-  fetchHandler = () => new Response(JSON.stringify({ error: 'permission lookup failed' }), {
-    status: 403,
-    headers: { 'Content-Type': 'application/json' },
-  })
-
-  let thrown
-  try {
-    await utils.isAllowedPlanActions(makeSupabase(), 'org-id', ['storage'], 'com.example.app', httpOptions)
-  }
-  catch (error) {
-    thrown = error
-  }
-
-  assert(thrown instanceof Error, 'Expected the RPC error to be thrown')
-  assert(thrown.message.includes('Cannot validate plan'), `Unexpected error: ${thrown.message}`)
+await test('checkPlanValidUpload only gates storage', async () => {
+  await checkPlanValidUpload(makeClient(), 'org-id', 'com.example.app', false)
+  assertEquals(httpCalls[0].body, { app_id: 'com.example.app', org_id: 'org-id', check_2fa: false, plan: 'upload' })
 })
 
-await test('does not downgrade an app-scoped 404 to an org-scoped plan check', async () => {
-  fetchHandler = (url) => {
-    if (url.includes('/private/cli/billing/allowed-actions')) {
-      return new Response(JSON.stringify({ error: 'app_not_found' }), {
-        status: 404,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }
-    return new Response(JSON.stringify({ allowed: true }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    })
-  }
-
-  let thrown
-  try {
-    await utils.isAllowedPlanActions(makeSupabase(), 'org-id', ['storage'], 'com.example.app', httpOptions)
-  }
-  catch (error) {
-    thrown = error
-  }
-
-  assert(thrown instanceof Error)
-  assert(thrown.message.includes('Cannot validate plan'))
-  assertEquals(httpCalls.length, 1)
-})
-
-await test('surfaces organization plan RPC errors instead of reporting an invalid plan', async () => {
-  fetchHandler = () => new Response(JSON.stringify({ error: 'organization lookup failed' }), {
-    status: 403,
-    headers: { 'Content-Type': 'application/json' },
-  })
-
-  let thrown
-  try {
-    await utils.isAllowedActionOrg(makeSupabase(), 'org-id', httpOptions)
-  }
-  catch (error) {
-    thrown = error
-  }
-
-  assert(thrown instanceof Error, 'Expected the organization RPC error to be thrown')
-  assert(thrown.message.includes('Cannot validate plan'), `Unexpected error: ${thrown.message}`)
-})
-
-await test('treats app-scoped RBAC denial as permission_denied when org plan is allowed', async () => {
-  fetchHandler = (_url, init) => {
-    const body = init?.body ? JSON.parse(init.body) : undefined
-    const allowed = body?.app_id ? false : true
-    return new Response(JSON.stringify({ allowed }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    })
-  }
-
-  const result = await utils.resolveMeteredPlanAllowed(
-    makeSupabase(),
-    'org-id',
-    ['mau', 'storage', 'bandwidth', 'build_time'],
-    'com.example.app',
-    httpOptions,
-  )
-
-  assertEquals(result, 'permission_denied')
+await test('billing limit maps to plan upgrade copy', async () => {
+  fetchHandler = () => Response.json({ error: 'plan_upgrade_required', message: 'Plan upgrade required' }, { status: 402 })
+  const error = await rejection(() => checkPlanValidUpload(makeClient(), 'org-id', 'com.example.app', false))
+  assertEquals(error.message, 'Plan upgrade required for upload')
 })
 
 await test('checkPlanValid reports permission denial instead of billing upgrade copy', async () => {
-  fetchHandler = (_url, init) => {
-    const body = init?.body ? JSON.parse(init.body) : undefined
-    const allowed = body?.app_id ? false : true
-    return new Response(JSON.stringify({ allowed }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    })
-  }
+  fetchHandler = () => Response.json({ error: 'plan_permission_denied', message: 'denied' }, { status: 403 })
+  const error = await rejection(() => checkPlanValid(makeClient(), 'org-id', 'com.example.app', false))
+  assert(error.message.includes('Plan validation permission denied'), `Unexpected error: ${error.message}`)
+  assert(!error.message.includes('Plan upgrade required'), 'Must not report a billing upgrade for RBAC denial')
+})
 
-  let thrown
-  try {
-    await utils.checkPlanValid(makeSupabase(), 'org-id', 'com.example.app', false, httpOptions)
-  }
-  catch (error) {
-    thrown = error
-  }
+await test('surfaces backend errors instead of reporting an invalid plan', async () => {
+  fetchHandler = () => Response.json({ error: 'cannot_check_billing', message: 'Cannot check org plan actions' }, { status: 400 })
+  const error = await rejection(() => checkPlanValid(makeClient(), 'org-id', 'com.example.app', false))
+  assert(error.message.includes('Cannot check org plan actions'), `Unexpected error: ${error.message}`)
+  assert(!error.message.includes('Plan upgrade required'), 'Backend failure must not look like an invalid plan')
+})
 
-  assert(thrown instanceof Error, 'Expected plan validation to throw')
-  assert(thrown.message.includes('Plan validation permission denied'), `Unexpected error: ${thrown.message}`)
-  assert(!thrown.message.includes('Plan upgrade required'), 'Must not report a billing upgrade for RBAC denial')
+await test('no CLI-side plan RPC helpers remain', () => {
+  for (const name of ['isAllowedPlanActions', 'resolveMeteredPlanAllowed', 'isAllowedActionOrg', 'isPayingOrg', 'isTrialOrg'])
+    assert(!(name in utils), `${name} must live in the backend`)
+  assert(!utilsSource.includes('private/cli/billing'), 'billing routes are replaced by the preflight')
 })
 
 await test('canOpenExternalUrl is disabled in CI-like environments', () => {
@@ -239,8 +145,8 @@ await test('canOpenExternalUrl is disabled in CI-like environments', () => {
 })
 
 await test('plan upgrade helpers use guarded openExternalUrl instead of raw import("open")', () => {
-  assert(utilsSource.includes('await openExternalUrl(plansUrl)'), 'Expected guarded browser open helper')
-  assert(!utilsSource.includes('import(\'open\')\n      .then'), 'Raw fire-and-forget open() must be removed from plan checks')
+  assert(preflightSource.includes('await openExternalUrl(url)'), 'Expected guarded browser open helper')
+  assert(!preflightSource.includes('import(\'open\')'), 'Raw open() must not be used by plan checks')
   assert(utilsSource.includes('if (code === \'ENOENT\')'), 'Expected ENOENT to be swallowed in openExternalUrl')
 })
 

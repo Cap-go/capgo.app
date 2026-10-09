@@ -5,17 +5,16 @@ const ownerOrgCache = new Map<string, Promise<string | undefined>>()
 export interface OrgResolverDeps {
   /** Injectable for tests; defaults to GET app via invokeCapgoCliApi. */
   fetchOwnerOrg?: (apikey: string, appId: string, signal?: AbortSignal) => Promise<string | undefined>
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
 }
 
 /**
  * Resolves an app's owner organization id (`apps.owner_org`), promise-cached
- * per `(supaHost, apikey, appId)`. Returns undefined on any error — never throws.
+ * per `(apiHost, apikey, appId)`. Returns undefined on any error — never throws.
  * Extracted so the analytics layer and onboarding analytics share one path.
  */
 export function resolveOwnerOrgId(apikey: string, appId: string, deps: OrgResolverDeps = {}, signal?: AbortSignal): Promise<string | undefined> {
-  const cacheKey = `${deps.supaHost ?? ''}:${apikey}:${appId}`
+  const cacheKey = `${deps.apiHost ?? ''}:${apikey}:${appId}`
   const cached = ownerOrgCache.get(cacheKey)
   if (cached)
     return cached
@@ -31,8 +30,7 @@ export function resolveOwnerOrgId(apikey: string, appId: string, deps: OrgResolv
         apikey,
         method: 'GET',
         body: undefined,
-        supaHost: deps.supaHost,
-        supaAnon: deps.supaAnon,
+        apiHost: deps.apiHost,
         signal,
         // Called while building analytics events: an instrumented call could emit perf events recursively.
         instrument: false,

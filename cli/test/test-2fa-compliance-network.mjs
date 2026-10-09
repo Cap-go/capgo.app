@@ -10,20 +10,19 @@ import {
   TWO_FACTOR_PREFLIGHT_MAX_ATTEMPTS,
   TwoFactorComplianceNetworkError,
 } from '../src/shared/two-factor-compliance.ts'
-import { check2FAAccessForOrg } from '../src/utils.ts'
+import { check2FAAccessForOrg } from '../src/api/preflight.ts'
 
-const httpOptions = {
-  supaHost: 'http://localhost:54321',
-  supaAnon: 'test-anon-key',
-}
+const apiHost = 'http://localhost:54321/functions/v1'
 
-function makeSupabase() {
+function makeClient() {
   return {
     apikey: 'test-2fa-key',
-    supaHost: httpOptions.supaHost,
-    supaAnon: httpOptions.supaAnon,
+    apiHost,
+    filesHost: apiHost,
   }
 }
+
+const okBody = JSON.stringify({ user_id: 'user-1', org_id: 'org_123', app_id: null, trial_days_left: null, warnings: [] })
 
 const originalFetch = globalThis.fetch
 let fetchAttempts = 0
@@ -32,7 +31,7 @@ let succeedAfterAttempts = 1
 
 globalThis.fetch = async (input) => {
   const url = String(input)
-  if (!url.includes('/private/cli/2fa/'))
+  if (!url.includes('/private/cli/preflight'))
     return originalFetch(input)
 
   fetchAttempts += 1
@@ -43,27 +42,27 @@ globalThis.fetch = async (input) => {
   if (fetchMode === 'retry-then-ok') {
     if (fetchAttempts < succeedAfterAttempts)
       throw new TypeError('fetch failed')
-    return new Response(JSON.stringify({ reject: false }), {
+    return new Response(okBody, {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     })
   }
 
   if (fetchMode === 'reject') {
-    return new Response(JSON.stringify({ reject: true }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    })
-  }
-
-  if (fetchMode === 'permission-denied') {
-    return new Response(JSON.stringify({ error: 'permission denied for function reject_access_due_to_2fa_for_app' }), {
+    return new Response(JSON.stringify({ error: '2fa_required', message: 'Two-factor authentication is required by this organization' }), {
       status: 403,
       headers: { 'Content-Type': 'application/json' },
     })
   }
 
-  return new Response(JSON.stringify({ reject: false }), {
+  if (fetchMode === 'permission-denied') {
+    return new Response(JSON.stringify({ error: 'cannot_check_2fa', message: 'Cannot check app 2FA access' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  return new Response(okBody, {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   })
@@ -87,20 +86,20 @@ const nestedCause = new Error('TypeError: fetch failed', {
 assert.equal(isTransientNetworkError(nestedCause), true)
 
 resetFetch('network')
-await check2FAComplianceForApp(makeSupabase(), 'com.example.app', true, httpOptions)
+await check2FAComplianceForApp(makeClient(), 'com.example.app', true)
 assert.equal(fetchAttempts, TWO_FACTOR_PREFLIGHT_MAX_ATTEMPTS)
 
 resetFetch('network')
-await check2FAAccessForOrg(makeSupabase(), 'org_123', true, httpOptions)
+await check2FAAccessForOrg(makeClient(), 'org_123', true)
 assert.equal(fetchAttempts, TWO_FACTOR_PREFLIGHT_MAX_ATTEMPTS)
 
 resetFetch('retry-then-ok', 2)
-await check2FAComplianceForApp(makeSupabase(), 'com.example.app', true, httpOptions)
+await check2FAComplianceForApp(makeClient(), 'com.example.app', true)
 assert.equal(fetchAttempts, 2)
 
 resetFetch('reject')
 await assert.rejects(
-  () => check2FAComplianceForApp(makeSupabase(), 'com.example.app', true, httpOptions),
+  () => check2FAComplianceForApp(makeClient(), 'com.example.app', true),
   (error) => {
     assert.equal(error instanceof Error, true)
     assert.equal(error.message, '2FA required for this organization')
@@ -111,11 +110,11 @@ await assert.rejects(
 
 resetFetch('permission-denied')
 await assert.rejects(
-  () => check2FAComplianceForApp(makeSupabase(), 'com.example.app', true, httpOptions),
+  () => check2FAComplianceForApp(makeClient(), 'com.example.app', true),
   (error) => {
     assert.equal(error instanceof Error, true)
     assert.equal(error instanceof TwoFactorComplianceNetworkError, false)
-    assert.match(error.message, /Cannot check 2FA compliance/)
+    assert.match(error.message, /Cannot verify access/)
     assert.equal(shouldCapturePosthogException(error), true)
     return true
   },

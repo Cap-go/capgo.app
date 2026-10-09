@@ -6,8 +6,8 @@ import { z } from 'zod'
 
 export const optionsBaseSchema = z.object({
   apikey: z.string(),
-  supaHost: z.string().optional(),
-  supaAnon: z.string().optional(),
+  /** Capgo API base URL; deprecated --supa-host / --supa-anon are folded into it before commands run. */
+  apiHost: z.string().optional(),
 })
 
 export type OptionsBase = z.infer<typeof optionsBaseSchema>

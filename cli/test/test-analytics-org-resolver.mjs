@@ -22,8 +22,8 @@ assert.equal(c, undefined, 'errors resolve to undefined, never throw')
 
 let hostCalls = 0
 const hostFetch = async () => `org-${++hostCalls}`
-const firstHost = await resolveOwnerOrgId('key-host', 'com.host.app', { fetchOwnerOrg: hostFetch, supaHost: 'https://one.example', supaAnon: 'anon-one' })
-const secondHost = await resolveOwnerOrgId('key-host', 'com.host.app', { fetchOwnerOrg: hostFetch, supaHost: 'https://two.example', supaAnon: 'anon-two' })
+const firstHost = await resolveOwnerOrgId('key-host', 'com.host.app', { fetchOwnerOrg: hostFetch, apiHost: 'https://one.example' })
+const secondHost = await resolveOwnerOrgId('key-host', 'com.host.app', { fetchOwnerOrg: hostFetch, apiHost: 'https://two.example' })
 assert.equal(firstHost, 'org-1')
 assert.equal(secondHost, 'org-2', 'custom hosts use separate cache entries')
 

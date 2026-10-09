@@ -22,8 +22,7 @@ export interface PrescanCommandOptions {
   failOnWarnings?: boolean
   ignoreFatal?: boolean
   verbose?: boolean
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
   /** Test seam for hard-coded rollout deadlines; defaults to the current time. */
   now?: Date
   /**
@@ -69,10 +68,10 @@ export async function executePrescan(appId: string | undefined, options: Prescan
   // findSavedKeySilent never logs: `--json` consumers parse stdout, so a clack
   // error line before the JSON report would break them.
   const apikey = options.apikey ?? findSavedKeySilent()
-  let supabase: CapgoClient | undefined
+  let client: CapgoClient | undefined
   if (apikey) {
     try {
-      supabase = await createCapgoClient(apikey, options.supaHost, options.supaAnon, true)
+      client = await createCapgoClient(apikey, options.apiHost, true)
     }
     catch { /* offline/invalid: remote checks will be skipped with a notice */ }
   }
@@ -83,7 +82,7 @@ export async function executePrescan(appId: string | undefined, options: Prescan
     distributionMode: options.iosDist,
     androidFlavor: options.androidFlavor,
     apikey,
-    supabase,
+    client,
     credentials: options.credentials,
   })
   const overrides = parsePrescanOverrides({ skip: options.skip, warn: options.warn })

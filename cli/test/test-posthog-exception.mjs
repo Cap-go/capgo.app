@@ -17,7 +17,6 @@ import {
 } from '../src/posthog.ts'
 import { CliUserError } from '../src/shared/cli-user-error.ts'
 import { TwoFactorComplianceNetworkError } from '../src/shared/two-factor-compliance.ts'
-import { CAPGO_SERVER_CONFIG_MISSING_MESSAGE } from '../src/utils.ts'
 
 const originalFetch = globalThis.fetch
 const originalEnv = {
@@ -258,7 +257,6 @@ try {
   // never opens an error tracking issue.
   assert.equal(shouldCapturePosthogException(new CliUserError('Login cancelled')), false)
   assert.equal(shouldCapturePosthogException(new CliUserError('Upload cancelled by user')), false)
-  assert.equal(shouldCapturePosthogException(new CliUserError(CAPGO_SERVER_CONFIG_MISSING_MESSAGE)), false)
   assert.equal(
     shouldCapturePosthogException(new TwoFactorComplianceNetworkError()),
     true,

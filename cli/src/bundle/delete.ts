@@ -1,9 +1,9 @@
 import type { BundleDeleteOptions } from '../schemas/bundle'
 import { intro, log, outro } from '@clack/prompts'
-import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
+import { checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { deleteSpecificVersion } from '../api/versions'
 import { CliUserError } from '../shared/cli-user-error'
-import { createCapgoClient, findSavedKey, getAppId, getConfig, getOrganizationId, resolveUserIdFromApiKey, sendEvent } from '../utils'
+import { createCapgoClient, findSavedKey, getAppId, getConfig, getOrganizationId, sendEvent } from '../utils'
 
 export async function deleteBundleInternal(bundleId: string, appId: string, options: BundleDeleteOptions, silent = false) {
   if (!silent)
@@ -31,24 +31,21 @@ export async function deleteBundleInternal(bundleId: string, appId: string, opti
     throw new Error('Missing bundleId')
   }
 
-  const supabase = await createCapgoClient(options.apikey, options.supaHost, options.supaAnon)
-  await check2FAComplianceForApp(supabase, appId, silent)
-  await resolveUserIdFromApiKey(supabase, options.apikey)
-  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'bundle.delete', silent, true)
+  const client = await createCapgoClient(options.apikey, options.apiHost)
+  await checkAppExistsAndHasPermissionOrgErr(client, options.apikey, appId, 'bundle.delete', silent)
 
   if (!silent) {
     log.info(`Deleting bundle ${appId}@${bundleId} from Capgo`)
     log.info(`Keep in mind that you will not be able to reuse this bundle version, it's gone forever`)
   }
 
-  await deleteSpecificVersion(supabase, appId, bundleId, {
+  await deleteSpecificVersion(client, appId, bundleId, {
     silent,
     apikey: options.apikey,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
 
-  const orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
+  const orgId = await getOrganizationId(options.apikey!, appId, { apiHost: options.apiHost })
   await sendEvent(options.apikey, {
     channel: 'app',
     event: 'Bundle Deleted',

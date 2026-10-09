@@ -92,8 +92,8 @@ assert.match(builderSource, /const analyticsEnabled = options\.enableSelfUpdate 
 assert.match(builderSource, /action: 'start_setup'/)
 assert.match(builderSource, /startSetupLookupInFlight/)
 assert.match(builderSource, /step: firstSetupStep/)
-assert.match(builderSource, /supaHost: options\.supaHost/)
-assert.match(builderSource, /resolveOwnerOrgId\(apikey, appId, \{[\s\S]*?supaHost: options\.supaHost,[\s\S]*?supaAnon: options\.supaAnon,[\s\S]*?\}, controller\.signal\)/)
+assert.match(builderSource, /apiHost: options\.apiHost/)
+assert.match(builderSource, /resolveOwnerOrgId\(apikey, appId, \{[\s\S]*?apiHost: options\.apiHost,[\s\S]*?\}, controller\.signal\)/)
 assert.doesNotMatch(bundleUploadSource, /enableSelfUpdate/)
 assert.doesNotMatch(credentialsManageSource, /enableSelfUpdate/)
 

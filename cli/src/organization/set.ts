@@ -2,10 +2,9 @@ import type { OrganizationSetOptions, PasswordPolicyConfig } from '../schemas/or
 import { confirm as confirmC, intro, isCancel, log, outro, text } from '@clack/prompts'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { checkAlerts } from '../api/update'
+import { runCliPreflight } from '../api/preflight'
 import { CliUserError } from '../shared/cli-user-error'
 import {
-  assertOrgPermission,
-  check2FAAccessForOrg,
   createCapgoClient,
   fetchCliMembers2faStatus,
   fetchCliMembersPasswordPolicyStatus,
@@ -14,7 +13,6 @@ import {
   formatError,
   invokeCapgoCliApi,
   resolveCapgoPublicApiHost,
-  resolveConfiguredCapgoPublicApiHost,
   sendEvent,
 } from '../utils'
 
@@ -40,9 +38,7 @@ interface OrganizationUpdateResponse {
   message?: string
 }
 
-export const resolveConfiguredOrganizationUpdateApiHost = resolveConfiguredCapgoPublicApiHost
-
-export async function resolveOrganizationUpdateApiHost(options: Pick<OrganizationSetOptions, 'supaHost' | 'supaAnon'>, silent: boolean) {
+export async function resolveOrganizationUpdateApiHost(options: Pick<OrganizationSetOptions, 'apiHost'>, silent: boolean) {
   return resolveCapgoPublicApiHost(options, silent)
 }
 
@@ -102,19 +98,15 @@ export async function setOrganizationInternal(
     throw new Error('Missing organization id')
   }
 
-  const supabase = await createCapgoClient(
+  const client = await createCapgoClient(
     enrichedOptions.apikey,
-    enrichedOptions.supaHost,
-    enrichedOptions.supaAnon,
+    enrichedOptions.apiHost,
   )
   const organizationApiHost = await resolveOrganizationUpdateApiHost(enrichedOptions, silent)
   const httpOptions = {
-    supaHost: enrichedOptions.supaHost,
-    supaAnon: enrichedOptions.supaAnon,
+    apiHost: enrichedOptions.apiHost,
   }
-  await assertOrgPermission(supabase, enrichedOptions.apikey, 'org.update_settings', orgId, `Insufficient permissions to update organization ${orgId}`, silent, httpOptions)
-
-  await check2FAAccessForOrg(supabase, orgId, silent, httpOptions)
+  await runCliPreflight(client, { orgId, permission: 'org.update_settings' }, { silent, permissionDeniedMessage: `Insufficient permissions to update organization ${orgId}` })
 
   let orgData: Awaited<ReturnType<typeof fetchCliOrganization>>
   try {
@@ -153,8 +145,7 @@ export async function setOrganizationInternal(
           apikey: enrichedOptions.apikey!,
           method: 'GET',
           body: undefined,
-          supaHost: httpOptions.supaHost,
-          supaAnon: httpOptions.supaAnon,
+          apiHost: httpOptions.apiHost,
         })
 
         if (identityError || !identityData?.userId) {
@@ -185,8 +176,7 @@ export async function setOrganizationInternal(
               apikey: enrichedOptions.apikey!,
               method: 'GET',
               body: undefined,
-              supaHost: httpOptions.supaHost,
-              supaAnon: httpOptions.supaAnon,
+              apiHost: httpOptions.apiHost,
             })
 
             if (membersListError) {

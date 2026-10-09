@@ -15,14 +15,14 @@ interface ChannelSelectionPrompts {
 }
 
 export async function selectOnboardingChannel(
-  supabase: CapgoClient,
+  client: CapgoClient,
   appId: string,
   preferredName: string,
   prompts: ChannelSelectionPrompts,
 ): Promise<string> {
   let rows: Awaited<ReturnType<typeof fetchCliChannels>>
   try {
-    rows = await fetchCliChannels(supabase, appId)
+    rows = await fetchCliChannels(client, appId)
   }
   catch (error) {
     throw new Error(`Cannot check existing channels: ${formatError(error)}`)

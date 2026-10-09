@@ -10,8 +10,7 @@ import { setBundlesDeleted } from './cli-data'
 interface VersionOptions {
   silent?: boolean
   apikey?: string
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
   /** Injectable for unit tests; defaults to invokeCapgoCliApi. */
   invoke?: typeof invokeCapgoCliApi
 }
@@ -23,8 +22,7 @@ interface DeleteSpecificVersionOptions extends VersionOptions {
 interface CapgoHttpOptions {
   apikey: string
   silent?: boolean
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
 }
 
 const BUNDLE_PAGE_SIZE = 50
@@ -58,8 +56,7 @@ export async function fetchBundleVersionRow(
       apikey,
       method: 'GET',
       body: undefined,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
     },
   )
 
@@ -132,8 +129,7 @@ async function fetchBundlePages(appid: string, options: CapgoHttpOptions & Pick<
         apikey: options.apikey,
         method: 'GET',
         body: undefined,
-        supaHost: options.supaHost,
-        supaAnon: options.supaAnon,
+        apiHost: options.apiHost,
       },
     )
     if (error) {
@@ -179,8 +175,7 @@ export async function upsertAppVersion(
       ...(versionData.manifest !== undefined ? { manifest: versionData.manifest } : {}),
       ...(versionData.r2_path !== undefined ? { r2_path: versionData.r2_path } : {}),
     },
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
 
   if (error)
@@ -191,18 +186,18 @@ export async function upsertAppVersion(
 }
 
 export async function deleteAppVersion(
-  supabase: CapgoClient | null,
+  client: CapgoClient | null,
   appid: string,
   bundle: string,
   options: VersionOptions = {},
 ) {
-  const { silent = false, apikey, supaHost, supaAnon } = options
+  const { silent = false, apikey, apiHost } = options
 
   // Soft-delete through the CLI data endpoint when a client is provided. HTTP DELETE /bundle
   // rejects bundles still linked to a channel; admin channel cleanup needs this path.
-  if (supabase) {
+  if (client) {
     try {
-      await setBundlesDeleted(supabase, appid, [bundle], true)
+      await setBundlesDeleted(client, appid, [bundle], true)
     }
     catch (error) {
       const message = `App version ${appid}@${bundle} not found in database`
@@ -220,8 +215,7 @@ export async function deleteAppVersion(
     apikey,
     method: 'DELETE',
     body: { app_id: appid, version: bundle },
-    supaHost,
-    supaAnon,
+    apiHost,
   })
   if (error) {
     await throwBundleHttpInvokeError(appid, error, 'delete', silent, 'bundle.delete')
@@ -229,17 +223,17 @@ export async function deleteAppVersion(
 }
 
 export async function deleteSpecificVersion(
-  supabase: CapgoClient,
+  client: CapgoClient,
   appid: string,
   bundle: string,
   options: DeleteSpecificVersionOptions = {},
 ) {
-  const { silent = false, autoUnlink = false, apikey, supaHost, supaAnon } = options
+  const { silent = false, autoUnlink = false, apikey, apiHost } = options
   if (!apikey)
     throw new Error('Missing API key for bundle delete')
-  const versionData = await getVersionData(apikey, appid, bundle, { silent, apikey, supaHost, supaAnon })
-  await checkVersionNotUsedInChannel(supabase, appid, versionData, { silent, autoUnlink, apikey, supaHost, supaAnon })
-  await deleteAppVersion(null, appid, bundle, { silent, apikey, supaHost, supaAnon })
+  const versionData = await getVersionData(apikey, appid, bundle, { silent, apikey, apiHost })
+  await checkVersionNotUsedInChannel(client, appid, versionData, { silent, autoUnlink, apikey, apiHost })
+  await deleteAppVersion(null, appid, bundle, { silent, apikey, apiHost })
 }
 
 export function displayBundles(
@@ -285,8 +279,7 @@ export async function getActiveAppVersions(
   return await fetchBundlePages(appid, {
     apikey,
     silent,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
     invoke: options.invoke,
   })
 }
@@ -305,8 +298,7 @@ export async function getChannelsVersion(
         apikey: options.apikey,
         method: 'GET',
         body: undefined,
-        supaHost: options.supaHost,
-        supaAnon: options.supaAnon,
+        apiHost: options.apiHost,
       },
     )
     if (channelsError)

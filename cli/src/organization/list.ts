@@ -7,7 +7,7 @@ import { checkAlerts } from '../api/update'
 import {
   consoleWebUrl,
   createCapgoClient,
-  fetchOrganizationsV7,
+  fetchOrganizations,
   findSavedKey,
   formatError,
   resolveUserIdFromApiKey,
@@ -71,23 +71,21 @@ export async function listOrganizationsInternal(options: OptionsBase, silent = f
     throw new Error('Missing API key')
   }
 
-  const supabase = await createCapgoClient(
+  const client = await createCapgoClient(
     enrichedOptions.apikey,
-    enrichedOptions.supaHost,
-    enrichedOptions.supaAnon,
+    enrichedOptions.apiHost,
   )
   const httpOptions = {
-    supaHost: enrichedOptions.supaHost,
-    supaAnon: enrichedOptions.supaAnon,
+    apiHost: enrichedOptions.apiHost,
   }
-  await resolveUserIdFromApiKey(supabase, enrichedOptions.apikey, false, httpOptions)
+  await resolveUserIdFromApiKey(client, enrichedOptions.apikey, false, httpOptions)
 
   if (!silent)
     log.info('Getting organizations from Capgo')
 
-  let organizations: Awaited<ReturnType<typeof fetchOrganizationsV7>>
+  let organizations: Awaited<ReturnType<typeof fetchOrganizations>>
   try {
-    organizations = await fetchOrganizationsV7(enrichedOptions.apikey, httpOptions)
+    organizations = await fetchOrganizations(enrichedOptions.apikey, httpOptions)
   }
   catch (error) {
     if (!silent)

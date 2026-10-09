@@ -8,13 +8,13 @@ export const apikeyPermission: PrescanCheck = {
   platforms: ['ios', 'android'],
   remote: true,
   async run(ctx: ScanContext): Promise<Finding[]> {
-    if (!ctx.supabase || !ctx.apikey) {
-      return [{ id: 'shared/apikey-permission', severity: 'info', title: 'Could not verify Capgo build permission (missing API client)', detail: 'No Supabase client or API key in prescan context' }]
+    if (!ctx.client || !ctx.apikey) {
+      return [{ id: 'shared/apikey-permission', severity: 'info', title: 'Could not verify Capgo build permission (missing API client)', detail: 'No Capgo client or API key in prescan context' }]
     }
     let allowed = false
     try {
       // Silent: `build prescan --json` consumers parse stdout.
-      allowed = await hasCliPermission(ctx.supabase, ctx.apikey, 'app.build_native', { appId: ctx.appId }, {}, true)
+      allowed = await hasCliPermission(ctx.client, ctx.apikey, 'app.build_native', { appId: ctx.appId }, true)
     }
     catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
@@ -40,7 +40,7 @@ export const appExists: PrescanCheck = {
   async run(ctx: ScanContext): Promise<Finding[]> {
     let visible: boolean
     try {
-      visible = await isAppVisible(ctx.supabase!, ctx.appId)
+      visible = await isAppVisible(ctx.client!, ctx.appId)
     }
     catch (error) {
       return [{ id: 'shared/app-exists', severity: 'info', title: 'Could not verify app existence (network/API error)', detail: formatError(error) }]

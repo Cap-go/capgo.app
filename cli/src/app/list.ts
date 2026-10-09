@@ -5,7 +5,7 @@ import { intro, log, outro } from '@clack/prompts'
 import { Table } from '@sauber/table'
 import { trackEvent } from '../analytics/track'
 import { checkAlerts } from '../api/update'
-import { createCapgoClient, fetchOrganizationsV7, findSavedKey, formatError, getHumanDate, invokeCapgoCliApi, resolveUserIdFromApiKey } from '../utils'
+import { createCapgoClient, fetchOrganizations, findSavedKey, formatError, getHumanDate, invokeCapgoCliApi, resolveUserIdFromApiKey } from '../utils'
 
 interface AppListOptions extends OptionsBase {
   filterByOrgId?: string
@@ -78,7 +78,7 @@ function displayApps(data: AppRow[], options: AppListOptions, orgNames: Map<stri
 async function getActiveApps(
   apikey: string,
   silent: boolean,
-  options: { supaHost?: string, supaAnon?: string, filterByOrgId?: string },
+  options: { apiHost?: string, filterByOrgId?: string },
 ) {
   const all: Database['public']['Tables']['apps']['Row'][] = []
   let page = 0
@@ -89,8 +89,7 @@ async function getActiveApps(
         apikey,
         method: 'GET',
         body: undefined,
-        supaHost: options.supaHost,
-        supaAnon: options.supaAnon,
+        apiHost: options.apiHost,
       },
     )
 
@@ -123,11 +122,10 @@ export async function listAppInternal(options: AppListOptions, silent = false) {
     writePlain('Use provided API key')
   options.apikey = options.apikey || findSavedKey(false, outputText ? writePlain : undefined)
 
-  const supabase = await createCapgoClient(options.apikey, options.supaHost, options.supaAnon, Boolean(outputText))
+  const client = await createCapgoClient(options.apikey, options.apiHost, Boolean(outputText))
 
-  await resolveUserIdFromApiKey(supabase, options.apikey, false, {
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+  await resolveUserIdFromApiKey(client, options.apikey, false, {
+    apiHost: options.apiHost,
   })
 
   if (!silent) {
@@ -143,8 +141,7 @@ export async function listAppInternal(options: AppListOptions, silent = false) {
 
   // TODO(cli-http): previously scoped via get_orgs_v6; GET app already scopes to key orgs server-side
   const allApps = await getActiveApps(options.apikey!, silent || Boolean(outputText), {
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
     filterByOrgId: options.filterByOrgId,
   })
 
@@ -163,9 +160,8 @@ export async function listAppInternal(options: AppListOptions, silent = false) {
     else {
       const orgNames = new Map<string, string>()
       if (options.showOrg) {
-        const organizations = await fetchOrganizationsV7(options.apikey!, {
-          supaHost: options.supaHost,
-          supaAnon: options.supaAnon,
+        const organizations = await fetchOrganizations(options.apikey!, {
+          apiHost: options.apiHost,
         })
         for (const org of organizations)
           orgNames.set(org.gid, org.name ?? 'Unknown')

@@ -3,8 +3,7 @@ import { formatError, invokeCapgoCliApi } from '../utils'
 
 interface ChannelHttpOptions {
   apikey: string
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
 }
 
 // Channel reads use the caller-key CLI route (channel.read), not GET /channel
@@ -38,8 +37,7 @@ async function setChannelPublic(
       channel: channelName,
       public: publicChannel,
     },
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
 
   if (error)

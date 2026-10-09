@@ -173,3 +173,21 @@ export function resolveCapgoApiVersion(
 
   return info
 }
+
+export type CapgoVersionedRouteHandler<C extends Context> = (c: C, info: Readonly<CapgoApiVersionInfo>) => Response | Promise<Response>
+
+/**
+ * Hono route handler that dispatches on the capgo_api header. Register one entry
+ * per supported version: any other version fails with 400
+ * unsupported_capgo_api_version. A breaking change ships as a new version key while
+ * clients pinned to an older version keep their handler.
+ */
+export function versionedRoute<C extends Context>(handlers: Record<string, CapgoVersionedRouteHandler<C>>) {
+  return (c: C): Response | Promise<Response> => {
+    const info = resolveCapgoApiVersion(c)
+    const switchHandlers: CapgoApiVersionSwitch<Response | Promise<Response>> = {}
+    for (const [version, handler] of Object.entries(handlers))
+      switchHandlers[version] = resolved => handler(c, resolved)
+    return info.handle(switchHandlers)
+  }
+}

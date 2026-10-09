@@ -146,7 +146,7 @@ try {
   delete process.env.CAPGO_DISABLE_TELEMETRY
   delete process.env.CAPGO_DISABLE_POSTHOG
 
-  const apiOptions = { apikey: 'perf-key', method: 'GET', supaHost: 'https://db.co', supaAnon: 'anon' }
+  const apiOptions = { apikey: 'perf-key', method: 'GET', apiHost: 'https://db.co/functions/v1' }
   const stubApi = (status) => {
     const reqs = []
     globalThis.fetch = async (url, init) => {
@@ -184,7 +184,7 @@ try {
   // Capgo cloud routes keep only static path segments (no app ids)
   assert.equal(deriveSupabaseOperation('https://api.capgo.app/app/com.demo.app', 'GET'), 'GET app')
   assert.equal(deriveSupabaseOperation('https://api.capgo.app/private/cli/channels?app_id=x', 'GET'), 'GET private/cli/channels')
-  assert.equal(deriveSupabaseOperation('https://api.capgo.app/private/cli/2fa/reject-app?app_id=x', 'GET'), 'GET private/cli/2fa/reject-app')
+  assert.equal(deriveSupabaseOperation('https://api.capgo.app/private/cli/organizations?permission=x', 'GET'), 'GET private/cli/organizations')
 
   // recursion guard: org-resolver must use an uninstrumented request
   creqs = []
@@ -194,7 +194,7 @@ try {
       return new Response('', { status: 500 })
     return new Response('{}', { status: 200 })
   }
-  const orgId = await resolveOwnerOrgId('recursion-key', 'com.recursion.test', { supaHost: 'https://db.co', supaAnon: 'anon' })
+  const orgId = await resolveOwnerOrgId('recursion-key', 'com.recursion.test', { apiHost: 'https://db.co/functions/v1' })
   await flushAnalytics()
   assert.equal(orgId, undefined)
   assert.equal(findPerf(creqs), undefined, 'org-resolver must not emit perf events')

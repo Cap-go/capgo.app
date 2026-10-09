@@ -4,37 +4,27 @@ import { checkAppExistsAndHasPermissionOrgErr } from '../src/api/app.ts'
 import { CliUserError } from '../src/shared/cli-user-error.ts'
 import { shouldCapturePosthogException } from '../src/posthog.ts'
 
-const calls = []
-const supabase = {}
+const apiHost = 'https://api.example.test'
+const client = key => ({ apikey: key, apiHost, filesHost: apiHost })
 
 const originalFetch = globalThis.fetch
-const fetchCalls = []
+const preflightCalls = []
+let preflightResponse = () => new Response(JSON.stringify({ user_id: 'u1', org_id: 'org_123', app_id: 'com.example.app', trial_days_left: null, warnings: [] }), {
+  status: 200,
+  headers: { 'Content-Type': 'application/json' },
+})
 
 globalThis.fetch = async (input, init) => {
   const url = String(input)
-  fetchCalls.push({ url, method: init?.method ?? 'GET', body: init?.body })
   if (url.includes('/private/config')) {
     return new Response(JSON.stringify({}), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     })
   }
-  if (url.includes('/private/cli/check-permission')) {
-    const body = JSON.parse(String(init?.body ?? '{}'))
-    calls.push(body)
-    return new Response(JSON.stringify({ allowed: true }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    })
-  }
-  if (url.includes('/app/com.example.app')) {
-    return new Response(JSON.stringify({
-      app_id: 'com.example.app',
-      owner_org: 'org_123',
-    }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    })
+  if (url === `${apiHost}/private/cli/preflight`) {
+    preflightCalls.push({ body: JSON.parse(String(init?.body ?? '{}')), headers: init?.headers })
+    return preflightResponse()
   }
   return new Response(JSON.stringify({ error: 'not_found' }), {
     status: 404,
@@ -43,113 +33,34 @@ globalThis.fetch = async (input, init) => {
 }
 
 try {
-  await checkAppExistsAndHasPermissionOrgErr(
-    supabase,
-    'ck_plain_cli_key',
-    'com.example.app',
-    'app.read_bundles',
-    true,
-    true,
-  )
+  await checkAppExistsAndHasPermissionOrgErr(client('ck_plain_cli_key'), 'ck_plain_cli_key', 'com.example.app', 'app.read_bundles', true, true)
 
-  assert.equal(calls.length, 1)
-  assert.ok(fetchCalls.some(call => /\/app\/com\.example\.app$/.test(call.url)), 'expected GET app existence check')
-  assert.deepEqual(calls[0], {
-    apikey: 'ck_plain_cli_key',
-    permission_key: 'app.read_bundles',
-    org_id: null,
+  assert.equal(preflightCalls.length, 1, 'one backend call per check')
+  assert.deepEqual(preflightCalls[0].body, {
     app_id: 'com.example.app',
-    channel_id: null,
+    permission: 'app.read_bundles',
+    check_2fa: false,
   })
+  assert.equal(preflightCalls[0].headers.capgkey, 'ck_plain_cli_key')
+  assert.equal(preflightCalls[0].headers.capgo_api, '2025-10-01', 'CLI pins the capgo_api version')
 
-  calls.length = 0
-  fetchCalls.length = 0
-
-  await checkAppExistsAndHasPermissionOrgErr(
-    supabase,
-    'ck_channel_cli_key',
-    'com.example.app',
-    'channel.delete',
-    true,
-    true,
-    42,
-  )
-
-  assert.equal(calls.length, 1)
-  assert.equal(fetchCalls.filter(call => /\/app\//.test(call.url)).length, 0, 'channel-scoped checks skip app existence HTTP call')
-  assert.deepEqual(calls[0], {
-    apikey: 'ck_channel_cli_key',
-    permission_key: 'channel.delete',
-    org_id: null,
+  preflightCalls.length = 0
+  await checkAppExistsAndHasPermissionOrgErr(client('ck_channel_cli_key'), 'ck_channel_cli_key', 'com.example.app', 'channel.delete', true, false, 42)
+  assert.deepEqual(preflightCalls[0].body, {
     app_id: 'com.example.app',
     channel_id: 42,
-  })
-  calls.length = 0
-  fetchCalls.length = 0
-
-  await checkAppExistsAndHasPermissionOrgErr(
-    supabase,
-    'ck_channel_update_key',
-    'com.example.app',
-    'channel.update_settings',
-    true,
-    true,
-    77,
-  )
-
-  assert.equal(calls.length, 1)
-  assert.deepEqual(calls[0], {
-    apikey: 'ck_channel_update_key',
-    permission_key: 'channel.update_settings',
-    org_id: null,
-    app_id: 'com.example.app',
-    channel_id: 77,
+    permission: 'channel.delete',
+    check_2fa: true,
   })
 
-  calls.length = 0
-  fetchCalls.length = 0
-
-  globalThis.fetch = async (input, init) => {
-    const url = String(input)
-    fetchCalls.push({ url, method: init?.method ?? 'GET', body: init?.body })
-    if (url.includes('/private/config')) {
-      return new Response(JSON.stringify({}), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }
-    if (url.includes('/private/cli/check-permission')) {
-      const body = JSON.parse(String(init?.body ?? '{}'))
-      calls.push(body)
-      return new Response(JSON.stringify({ allowed: false }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }
-    if (url.includes('/app/com.example.app')) {
-      return new Response(JSON.stringify({
-        app_id: 'com.example.app',
-        owner_org: 'org_123',
-      }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }
-    return new Response(JSON.stringify({ error: 'not_found' }), {
-      status: 404,
-      headers: { 'Content-Type': 'application/json' },
-    })
-  }
+  preflightCalls.length = 0
+  preflightResponse = () => new Response(JSON.stringify({ error: 'permission_denied', message: 'Missing permission app.upload_bundle' }), {
+    status: 403,
+    headers: { 'Content-Type': 'application/json' },
+  })
 
   await assert.rejects(
-    () => checkAppExistsAndHasPermissionOrgErr(
-      supabase,
-      'ck_denied_key',
-      'com.example.app',
-      'app.upload_bundle',
-      true,
-      true,
-    ),
+    () => checkAppExistsAndHasPermissionOrgErr(client('ck_denied_key'), 'ck_denied_key', 'com.example.app', 'app.upload_bundle', true, true),
     (error) => {
       assert.equal(error instanceof CliUserError, true)
       assert.equal(
@@ -164,8 +75,16 @@ try {
       return true
     },
   )
+  assert.equal(preflightCalls.length, 1)
 
-  assert.equal(calls.length, 1)
+  preflightResponse = () => new Response(JSON.stringify({ error: 'app_not_found', message: 'App not found' }), {
+    status: 404,
+    headers: { 'Content-Type': 'application/json' },
+  })
+  await assert.rejects(
+    () => checkAppExistsAndHasPermissionOrgErr(client('ck_missing_app'), 'ck_missing_app', 'com.example.app', 'app.read', true, true),
+    /cli app add com\.example\.app/,
+  )
 
   console.log('app permission helper tests passed')
 }

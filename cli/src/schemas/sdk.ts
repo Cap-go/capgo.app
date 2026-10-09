@@ -29,7 +29,10 @@ export const addAppOptionsSchema = z.object({
   name: z.string().optional(),
   icon: z.string().optional(),
   apikey: z.string().optional(),
+  apiHost: z.string().optional(),
+  /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
+  /** @deprecated ignored */
   supaAnon: z.string().optional(),
 })
 
@@ -41,7 +44,10 @@ export const updateAppOptionsSchema = z.object({
   icon: z.string().optional(),
   retention: z.number().optional(),
   apikey: z.string().optional(),
+  apiHost: z.string().optional(),
+  /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
+  /** @deprecated ignored */
   supaAnon: z.string().optional(),
 })
 
@@ -88,7 +94,10 @@ export const uploadOptionsSchema = z.object({
   external: z.string().optional(),
   encrypt: z.boolean().optional(),
   encryptionKey: z.string().optional(),
+  apiHost: z.string().optional(),
+  /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
+  /** @deprecated ignored */
   supaAnon: z.string().optional(),
   timeout: z.number().optional(),
   useTus: z.boolean().optional(),
@@ -148,7 +157,10 @@ export const cleanupOptionsSchema = z.object({
   force: z.boolean().optional(),
   ignoreChannel: z.boolean().optional(),
   apikey: z.string().optional(),
+  apiHost: z.string().optional(),
+  /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
+  /** @deprecated ignored */
   supaAnon: z.string().optional(),
 })
 
@@ -193,7 +205,10 @@ export const addChannelOptionsSchema = z.object({
   default: z.boolean().optional(),
   selfAssign: z.boolean().optional(),
   apikey: z.string().optional(),
+  apiHost: z.string().optional(),
+  /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
+  /** @deprecated ignored */
   supaAnon: z.string().optional(),
 })
 
@@ -235,7 +250,10 @@ export const updateChannelOptionsBaseSchema = z.object({
   autoPauseCooldownMinutes: z.number().int().min(0).max(10080).optional(),
   acceptIncompatible: z.boolean().optional(),
   apikey: z.string().optional(),
+  apiHost: z.string().optional(),
+  /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
+  /** @deprecated ignored */
   supaAnon: z.string().optional(),
 })
 
@@ -255,7 +273,10 @@ export const promoteChannelOptionsSchema = z.object({
   acceptIncompatible: z.boolean().optional(),
   sendUpdateNotification: z.boolean().optional(),
   apikey: z.string().optional(),
+  apiHost: z.string().optional(),
+  /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
+  /** @deprecated ignored */
   supaAnon: z.string().optional(),
 }).superRefine((value, ctx) => {
   rejectConflictingBooleanGroup(value, ctx, ['acceptIncompatible', 'ignoreMetadataCheck'])
@@ -271,7 +292,10 @@ export type PromoteChannelOptions = z.infer<typeof promoteChannelOptionsSchema>
 
 export const accountIdOptionsSchema = z.object({
   apikey: z.string().optional(),
+  apiHost: z.string().optional(),
+  /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
+  /** @deprecated ignored */
   supaAnon: z.string().optional(),
 })
 
@@ -320,7 +344,10 @@ export type DeleteOrganizationOptions = z.infer<typeof deleteOrganizationOptions
 export const loginOptionsSchema = z.object({
   apikey: z.string(),
   local: z.boolean().optional(),
+  apiHost: z.string().optional(),
+  /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
+  /** @deprecated ignored */
   supaAnon: z.string().optional(),
 })
 
@@ -343,7 +370,10 @@ export const bundleCompatibilityOptionsSchema = z.object({
   nodeModules: z.string().optional(),
   textOutput: z.boolean().optional(),
   apikey: z.string().optional(),
+  apiHost: z.string().optional(),
+  /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
+  /** @deprecated ignored */
   supaAnon: z.string().optional(),
 })
 
@@ -408,7 +438,10 @@ export const requestBuildOptionsSchema = z.object({
   iosAutomaticRelease: z.boolean().optional(),
   userId: z.string().optional(),
   apikey: z.string().optional(),
+  apiHost: z.string().optional(),
+  /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
+  /** @deprecated ignored */
   supaAnon: z.string().optional(),
   prescan: z.boolean().optional(),
   prescanIgnoreFatal: z.boolean().optional(),
@@ -458,7 +491,10 @@ export const getStatsOptionsSchema = z.object({
   limit: z.number().optional(),
   after: z.string().nullable().optional(),
   apikey: z.string().optional(),
+  apiHost: z.string().optional(),
+  /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
+  /** @deprecated ignored */
   supaAnon: z.string().optional(),
 })
 
@@ -489,7 +525,10 @@ export const observeOptionsObjectSchema = z.object({
   sort: observeSortSchema.optional().describe('Sort samples: slowest, fastest, newest, oldest'),
   limit: z.number().int().min(1).max(100).optional().describe('Max rows to return (default 20, max 100)'),
   apikey: z.string().optional(),
+  apiHost: z.string().optional(),
+  /** @deprecated use apiHost (`<supaHost>/functions/v1`) */
   supaHost: z.string().optional(),
+  /** @deprecated ignored */
   supaAnon: z.string().optional(),
 })
 

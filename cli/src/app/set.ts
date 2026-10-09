@@ -42,9 +42,9 @@ export async function setAppInternal(appId: string, options: Options, silent = f
     throw new CliUserError('Missing appId')
   }
 
-  const supabase = await createCapgoClient(options.apikey, options.supaHost, options.supaAnon)
-  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.update_settings', silent)
-  const organizationUid = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
+  const client = await createCapgoClient(options.apikey, options.apiHost)
+  await checkAppExistsAndHasPermissionOrgErr(client, options.apikey, appId, 'app.update_settings', silent)
+  const organizationUid = await getOrganizationId(options.apikey!, appId, { apiHost: options.apiHost })
 
   const {
     name,
@@ -90,8 +90,7 @@ export async function setAppInternal(appId: string, options: Options, silent = f
 
   const channelHttp = {
     apikey: options.apikey!,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   }
 
   if (defaultUploadChannel)
@@ -140,8 +139,7 @@ export async function setAppInternal(appId: string, options: Options, silent = f
       contentBase64: iconBuff.toString('base64'),
       contentType: iconType,
       upsert: true,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
     })
 
     if (uploadResult.error || !uploadResult.path) {
@@ -182,8 +180,7 @@ export async function setAppInternal(appId: string, options: Options, silent = f
       apikey: options.apikey!,
       method: 'PUT',
       body: putBody,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
     })
     if (putError) {
       if (!silent)

@@ -1,5 +1,5 @@
 import type { Database } from '../types/supabase.types'
-import type { CapgoClient } from '../utils'
+import type { CapgoApiTarget } from '../utils'
 import { formatCapgoCliInvokeError, invokeCliHttpFromClient } from '../utils'
 
 // Data reads/writes the CLI used to run directly against the database. They go
@@ -22,7 +22,7 @@ export type CliChannelRow = Database['public']['Tables']['channels']['Row'] & {
 }
 
 export async function fetchCliChannels(
-  client: CapgoClient,
+  client: CapgoApiTarget,
   appId: string,
   name?: string,
   filters: { linkedVersionId?: number } = {},
@@ -39,7 +39,7 @@ export async function fetchCliChannels(
   return Array.isArray(data) ? data : []
 }
 
-export async function fetchLatestBundle(client: CapgoClient, appId: string): Promise<{ id: number, name: string } | null> {
+export async function fetchLatestBundle(client: CapgoApiTarget, appId: string): Promise<{ id: number, name: string } | null> {
   const { data, error } = await invokeCliHttpFromClient<{ id: number, name: string } | null>(client, 'private/cli/bundles/latest', {
     query: { app_id: appId },
   })
@@ -48,7 +48,7 @@ export async function fetchLatestBundle(client: CapgoClient, appId: string): Pro
   return data?.id && data.name ? { id: data.id, name: data.name } : null
 }
 
-export async function setBundlesDeleted(client: CapgoClient, appId: string, names: string[], deleted: boolean): Promise<string[]> {
+export async function setBundlesDeleted(client: CapgoApiTarget, appId: string, names: string[], deleted: boolean): Promise<string[]> {
   const { data, error } = await invokeCliHttpFromClient<{ updated?: string[] }>(client, 'private/cli/bundles/deleted', {
     method: 'POST',
     body: { app_id: appId, names, deleted },
@@ -58,7 +58,7 @@ export async function setBundlesDeleted(client: CapgoClient, appId: string, name
   return data?.updated ?? []
 }
 
-export async function fetchBundleManifest(client: CapgoClient, appVersionId: number): Promise<{ file_name: string | null, file_hash: string | null }[]> {
+export async function fetchBundleManifest(client: CapgoApiTarget, appVersionId: number): Promise<{ file_name: string | null, file_hash: string | null }[]> {
   const { data, error } = await invokeCliHttpFromClient<{ file_name: string | null, file_hash: string | null }[]>(client, 'private/cli/manifest', {
     query: { app_version_id: String(appVersionId) },
   })
@@ -67,7 +67,7 @@ export async function fetchBundleManifest(client: CapgoClient, appVersionId: num
   return Array.isArray(data) ? data : []
 }
 
-export async function isAppVisible(client: CapgoClient, appId: string): Promise<boolean> {
+export async function isAppVisible(client: CapgoApiTarget, appId: string): Promise<boolean> {
   const { data, error } = await invokeCliHttpFromClient<{ visible?: boolean }>(client, 'private/cli/apps/visible', {
     query: { app_id: appId },
   })
@@ -77,7 +77,7 @@ export async function isAppVisible(client: CapgoClient, appId: string): Promise<
 }
 
 export async function createOrganization(
-  client: CapgoClient,
+  client: CapgoApiTarget,
   name: string,
   managementEmail: string,
 ): Promise<{ id: string }> {

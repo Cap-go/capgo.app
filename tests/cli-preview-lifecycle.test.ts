@@ -18,15 +18,12 @@ vi.mock('../cli/src/utils', async (importOriginal) => {
 
   return {
     ...actual,
-    createCapgoClient: async (apikey: string, supaHost?: string, supaAnon?: string) => {
-      if (!supaHost || !supaAnon)
-        throw new Error('CLI preview lifecycle test requires a local Supabase host and anon key')
+    createCapgoClient: async (apikey: string, apiHost?: string) => {
+      if (!apiHost)
+        throw new Error('CLI preview lifecycle test requires a local Capgo API host')
 
-      return { apikey, supaHost, supaAnon }
+      return { apikey, apiHost, filesHost: apiHost }
     },
-    checkPlanValid: async () => {},
-    checkPlanValidUpload: async () => {},
-    checkRemoteCliMessages: async () => {},
     getConfig: async () => ({ config: {} }),
     getRemoteFileConfig: async () => ({
       alertUploadSize: 1_000_000,
@@ -236,8 +233,7 @@ describe('cli app preview lifecycle', () => {
 
     const cliOptions = {
       apikey: apiKey.key,
-      supaHost: SUPABASE_BASE_URL,
-      supaAnon: SUPABASE_ANON_KEY,
+      apiHost: `${SUPABASE_BASE_URL}/functions/v1`,
     }
 
     await expect(addChannelInternal(DEFAULT_CHANNEL_NAME, APPNAME, {
@@ -347,8 +343,7 @@ describe('cli app preview lifecycle', () => {
     const otherApiKey = await createAppApiKey(`cli-app-preview-other-${id}`)
     const otherCliOptions = {
       apikey: otherApiKey.key,
-      supaHost: SUPABASE_BASE_URL,
-      supaAnon: SUPABASE_ANON_KEY,
+      apiHost: `${SUPABASE_BASE_URL}/functions/v1`,
     }
     await expect(addChannelInternal(SECOND_CHANNEL_NAME, APPNAME, otherCliOptions, true))
       .resolves
@@ -417,8 +412,7 @@ describe('cli app preview lifecycle', () => {
     const apiKey = await createAppApiKey(`cli-app-preview-legacy-${id}`)
     const cliOptions = {
       apikey: apiKey.key,
-      supaHost: SUPABASE_BASE_URL,
-      supaAnon: SUPABASE_ANON_KEY,
+      apiHost: `${SUPABASE_BASE_URL}/functions/v1`,
     }
     const originalFetch = globalThis.fetch
 
@@ -477,8 +471,7 @@ describe('cli app preview lifecycle', () => {
     const apiKey = await createAppApiKey(`cli-app-preview-legacy-partial-${id}`)
     const cliOptions = {
       apikey: apiKey.key,
-      supaHost: SUPABASE_BASE_URL,
-      supaAnon: SUPABASE_ANON_KEY,
+      apiHost: `${SUPABASE_BASE_URL}/functions/v1`,
     }
     const { log } = await import(new URL('../cli/node_modules/@clack/prompts', import.meta.url).href)
     const logInfo = vi.spyOn(log, 'info')
@@ -567,8 +560,7 @@ describe('cli app preview lifecycle', () => {
     })
     const cliOptions = {
       apikey: apiKey.key,
-      supaHost: SUPABASE_BASE_URL,
-      supaAnon: SUPABASE_ANON_KEY,
+      apiHost: `${SUPABASE_BASE_URL}/functions/v1`,
     }
 
     const { data: canDeleteBundle, error: canDeleteBundleError } = await apiKeyClient.rpc('cli_check_permission', {

@@ -1,23 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import { APIKEY_TEST_ALL, getEndpointUrl, ORG_ID, USER_ID } from './test-utils.ts'
 
+const APP_ID = 'com.demo.app'
 const CLI_IDENTITY_URL = getEndpointUrl('/private/cli/identity')
-const CLI_PERMISSION_URL = getEndpointUrl('/private/cli/check-permission')
 const CLI_ORGANIZATIONS_URL = getEndpointUrl('/private/cli/organizations')
-const CLI_BILLING_ENTITLEMENTS_URL = getEndpointUrl('/private/cli/billing/entitlements')
-const CLI_BILLING_ALLOWED_ACTIONS_URL = getEndpointUrl('/private/cli/billing/allowed-actions')
-const CLI_WARNINGS_URL = getEndpointUrl('/private/cli/warnings')
-const CLI_REJECT_ORG_2FA_URL = getEndpointUrl('/private/cli/2fa/reject-org')
+const CLI_PERMISSIONS_URL = getEndpointUrl('/private/cli/permissions')
+const CLI_PREFLIGHT_URL = getEndpointUrl('/private/cli/preflight')
 
-function apiHeaders(apikey: string) {
+function apiHeaders(apikey: string, apiVersion = '2025-10-01') {
   return {
-    capgkey: apikey,
+    'capgkey': apikey,
+    'capgo_api': apiVersion,
     'Content-Type': 'application/json',
   }
 }
 
 describe('private/cli HTTP API', () => {
-  it.concurrent('GET /private/cli/identity resolves the API key actor', async () => {
+  it.concurrent('gET /private/cli/identity resolves the API key actor', async () => {
     const response = await fetch(CLI_IDENTITY_URL, {
       method: 'GET',
       headers: apiHeaders(APIKEY_TEST_ALL),
@@ -36,22 +35,18 @@ describe('private/cli HTTP API', () => {
     expect(body.apikey_id).toBeGreaterThan(0)
   })
 
-  it.concurrent('POST /private/cli/check-permission returns allowed for org.read', async () => {
-    const response = await fetch(CLI_PERMISSION_URL, {
-      method: 'POST',
-      headers: apiHeaders(APIKEY_TEST_ALL),
-      body: JSON.stringify({
-        permission_key: 'org.read',
-        org_id: ORG_ID,
-      }),
+  it.concurrent('rejects an unsupported capgo_api version', async () => {
+    const response = await fetch(CLI_IDENTITY_URL, {
+      method: 'GET',
+      headers: apiHeaders(APIKEY_TEST_ALL, '2099-01-01'),
     })
 
-    expect(response.status).toBe(200)
-    const body = await response.json() as { allowed?: boolean }
-    expect(body.allowed).toBe(true)
+    expect(response.status).toBe(400)
+    const body = await response.json() as { error?: string }
+    expect(body.error).toBe('unsupported_capgo_api_version')
   })
 
-  it.concurrent('GET /private/cli/organizations returns v7-enriched org rows', async () => {
+  it.concurrent('gET /private/cli/organizations returns v7-enriched org rows', async () => {
     const response = await fetch(CLI_ORGANIZATIONS_URL, {
       method: 'GET',
       headers: apiHeaders(APIKEY_TEST_ALL),
@@ -68,57 +63,70 @@ describe('private/cli HTTP API', () => {
     expect(body[0]).toHaveProperty('2fa_has_access')
   })
 
-  it.concurrent('GET /private/cli/billing/entitlements returns billing flags', async () => {
-    const response = await fetch(`${CLI_BILLING_ENTITLEMENTS_URL}?org_id=${ORG_ID}`, {
+  it.concurrent('gET /private/cli/organizations?permission= flags allowed orgs', async () => {
+    const response = await fetch(`${CLI_ORGANIZATIONS_URL}?permission=org.read`, {
       method: 'GET',
       headers: apiHeaders(APIKEY_TEST_ALL),
     })
 
     expect(response.status).toBe(200)
-    const body = await response.json() as {
-      isPaying?: boolean
-      trialDays?: number
-      hasCredits?: boolean
-    }
-    expect(typeof body.isPaying).toBe('boolean')
-    expect(typeof body.trialDays).toBe('number')
-    expect(typeof body.hasCredits).toBe('boolean')
+    const body = await response.json() as Array<{ gid: string, allowed?: boolean }>
+    expect(body.find(org => org.gid === ORG_ID)?.allowed).toBe(true)
   })
 
-  it.concurrent('POST /private/cli/billing/allowed-actions returns allowed for storage', async () => {
-    const response = await fetch(CLI_BILLING_ALLOWED_ACTIONS_URL, {
+  it.concurrent('pOST /private/cli/permissions checks several permissions at once', async () => {
+    const response = await fetch(CLI_PERMISSIONS_URL, {
       method: 'POST',
       headers: apiHeaders(APIKEY_TEST_ALL),
       body: JSON.stringify({
+        permissions: ['org.read', 'org.update_settings'],
         org_id: ORG_ID,
-        actions: ['storage'],
       }),
     })
 
     expect(response.status).toBe(200)
-    const body = await response.json() as { allowed?: boolean }
-    expect(body.allowed).toBe(true)
+    const body = await response.json() as { permissions?: Record<string, boolean> }
+    expect(body.permissions).toEqual({ 'org.read': true, 'org.update_settings': true })
   })
 
-  it.concurrent('GET /private/cli/warnings returns an array for the org', async () => {
-    const response = await fetch(`${CLI_WARNINGS_URL}?org_id=${ORG_ID}&cli_version=99.0.0-test`, {
-      method: 'GET',
+  it.concurrent('pOST /private/cli/preflight resolves the app org for an allowed upload', async () => {
+    const response = await fetch(CLI_PREFLIGHT_URL, {
+      method: 'POST',
       headers: apiHeaders(APIKEY_TEST_ALL),
+      body: JSON.stringify({
+        app_id: APP_ID,
+        permission: 'app.upload_bundle',
+        plan: 'upload',
+        cli_version: '99.0.0-test',
+      }),
     })
 
     expect(response.status).toBe(200)
-    const body = await response.json()
-    expect(Array.isArray(body)).toBe(true)
+    const body = await response.json() as {
+      org_id?: string
+      app_id?: string
+      trial_days_left?: number | null
+      warnings?: unknown[]
+    }
+    expect(body.org_id).toBe(ORG_ID)
+    expect(body.app_id).toBe(APP_ID)
+    expect(body.trial_days_left === null || typeof body.trial_days_left === 'number').toBe(true)
+    expect(Array.isArray(body.warnings)).toBe(true)
   })
 
-  it.concurrent('GET /private/cli/2fa/reject-org returns reject boolean', async () => {
-    const response = await fetch(`${CLI_REJECT_ORG_2FA_URL}?org_id=${ORG_ID}`, {
-      method: 'GET',
+  it.concurrent('pOST /private/cli/preflight returns app_not_found for an unknown app', async () => {
+    const response = await fetch(CLI_PREFLIGHT_URL, {
+      method: 'POST',
       headers: apiHeaders(APIKEY_TEST_ALL),
+      body: JSON.stringify({
+        app_id: 'com.missing.cli.preflight',
+        permission: 'app.read',
+        check_2fa: false,
+      }),
     })
 
-    expect(response.status).toBe(200)
-    const body = await response.json() as { reject?: boolean }
-    expect(typeof body.reject).toBe('boolean')
+    expect(response.status).toBe(404)
+    const body = await response.json() as { error?: string }
+    expect(body.error).toBe('app_not_found')
   })
 })

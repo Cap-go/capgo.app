@@ -18,6 +18,7 @@ import {
   formatError,
   getAppId,
   getCapgoCliHttpStatus,
+  defaultApiHost,
   defaultHostWeb,
   getConfig,
   getContentType,
@@ -41,17 +42,17 @@ export function formatAppGettingStartedMessage(appId: string, hostWeb = defaultH
   return `Continue setup at ${appGettingStartedUrl(appId, hostWeb)}`
 }
 
-export function shouldPrintAppGettingStartedUrl(hostWeb: string, usesCustomSupabase: boolean): boolean {
-  return !usesCustomSupabase || normalizeConsoleHost(hostWeb) !== defaultHostWeb
+export function shouldPrintAppGettingStartedUrl(hostWeb: string, usesCustomApi: boolean): boolean {
+  return !usesCustomApi || normalizeConsoleHost(hostWeb) !== defaultHostWeb
 }
 
 export async function resolveAppGettingStartedMessage(
   appId: string,
-  options: { supaHost?: string, supaAnon?: string } = {},
+  options: { apiHost?: string } = {},
 ): Promise<string | null> {
   const localConfig = await getLocalConfig(true)
-  const usesCustomSupabase = Boolean(options.supaHost || localConfig.supaHost)
-  if (!shouldPrintAppGettingStartedUrl(localConfig.hostWeb, usesCustomSupabase))
+  const usesCustomApi = Boolean(options.apiHost) || localConfig.hostApi !== defaultApiHost
+  if (!shouldPrintAppGettingStartedUrl(localConfig.hostWeb, usesCustomApi))
     return null
   return formatAppGettingStartedMessage(appId, localConfig.hostWeb)
 }
@@ -125,7 +126,7 @@ async function isAppListedInOrganization(
   apikey: string,
   appId: string,
   ownerOrg: string,
-  options?: { supaHost?: string, supaAnon?: string },
+  options?: { apiHost?: string },
 ): Promise<boolean | null> {
   let page = 0
   while (true) {
@@ -135,8 +136,7 @@ async function isAppListedInOrganization(
         apikey,
         method: 'GET',
         body: undefined,
-        supaHost: options?.supaHost,
-        supaAnon: options?.supaAnon,
+        apiHost: options?.apiHost,
       },
     )
 
@@ -160,7 +160,7 @@ async function isAppInTargetOrganization(
   apikey: string,
   appId: string,
   ownerOrg: string,
-  options?: { supaHost?: string, supaAnon?: string },
+  options?: { apiHost?: string },
 ): Promise<boolean | null> {
   const { data, error } = await invokeCapgoCliApi<{ owner_org?: string }>(
     `app/${encodeURIComponent(appId)}`,
@@ -168,8 +168,7 @@ async function isAppInTargetOrganization(
       apikey,
       method: 'GET',
       body: undefined,
-      supaHost: options?.supaHost,
-      supaAnon: options?.supaAnon,
+      apiHost: options?.apiHost,
     },
   )
 
@@ -190,8 +189,7 @@ async function isDuplicateAppOwnedByCaller(
     apikey: string
     appId: string
     ownerOrg: string
-    supaHost?: string
-    supaAnon?: string
+    apiHost?: string
   },
   deps: {
     isAppInTargetOrganization?: typeof isAppInTargetOrganization
@@ -203,7 +201,7 @@ async function isDuplicateAppOwnedByCaller(
     params.apikey,
     params.appId,
     params.ownerOrg,
-    { supaHost: params.supaHost, supaAnon: params.supaAnon },
+    { apiHost: params.apiHost },
   )
 
   if (appInTargetOrg === true)
@@ -216,7 +214,7 @@ async function isDuplicateAppOwnedByCaller(
     params.apikey,
     params.appId,
     params.ownerOrg,
-    { supaHost: params.supaHost, supaAnon: params.supaAnon },
+    { apiHost: params.apiHost },
   )
   if (listedInOrg === true)
     return true
@@ -233,8 +231,7 @@ export async function resolveAppAddDuplicateOutcome(
     ownerOrg: string
     createError: unknown
     httpStatus?: number
-    supaHost?: string
-    supaAnon?: string
+    apiHost?: string
   },
   deps: {
     isAppInTargetOrganization?: typeof isAppInTargetOrganization
@@ -262,25 +259,18 @@ async function createAppViaApi(
     iconUrl?: string
     createdFromOnboarding: boolean
     onboardingSource?: 'cli' | 'mcp' | 'ai'
-    supaHost?: string
-    supaAnon?: string
+    apiHost?: string
   },
 ) {
-  // Prefer Capgo API host (or self-hosted /functions/v1) with the API key.
-  // Avoid supabase.functions.invoke: it always sends Authorization: Bearer <anon>.
+  // Capgo API host (or self-hosted /functions/v1), authenticated by the API key.
   const apiHost = await resolveCapgoPublicApiHost({
-    supaHost: params.supaHost,
-    supaAnon: params.supaAnon,
+    apiHost: params.apiHost,
   })
-  const usesFunctionsV1 = apiHost.includes('/functions/v1')
-  const authorization = usesFunctionsV1 && params.supaAnon
-    ? `Bearer ${params.supaAnon}`
-    : apikey
   const response = await fetch(`${apiHost}/app`, {
     method: 'POST',
     headers: buildCliRequestHeaders({
       'Content-Type': 'application/json',
-      'Authorization': authorization,
+      'Authorization': apikey,
       'capgkey': apikey,
     }),
     body: JSON.stringify({
@@ -331,15 +321,15 @@ export async function addAppInternal(
 
   ensureOptions(appId, options, silent)
 
-  const supabase = await createCapgoClient(options.apikey!, options.supaHost, options.supaAnon)
-  const userId = await resolveUserIdFromApiKey(supabase, options.apikey)
+  const client = await createCapgoClient(options.apikey!, options.apiHost)
+  const userId = await resolveUserIdFromApiKey(client, options.apikey)
 
   if (!organization)
-    organization = await getOrganizationWithPermission(supabase, options.apikey, 'org.create_app')
+    organization = await getOrganizationWithPermission(client, options.apikey, 'org.create_app')
 
   const organizationUid = organization.gid
 
-  await assertCliPermission(supabase, options.apikey, 'org.create_app', { orgId: organizationUid }, {
+  await assertCliPermission(client, options.apikey, 'org.create_app', { orgId: organizationUid }, {
     message: `Insufficient permissions to create an app in organization ${organizationUid}`,
     silent,
   })
@@ -390,8 +380,7 @@ export async function addAppInternal(
       contentBase64: iconBuff.toString('base64'),
       contentType: iconType,
       upsert: false,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
     })
 
     if (uploadResult.error && !uploadResult.conflict) {
@@ -425,8 +414,7 @@ export async function addAppInternal(
       iconUrl,
       createdFromOnboarding: appCreateSource === 'onboarding',
       onboardingSource,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
     })
   }
   catch (error) {
@@ -438,8 +426,7 @@ export async function addAppInternal(
         ownerOrg: organizationUid,
         createError: error,
         httpStatus: (error as { httpStatus?: number }).httpStatus,
-        supaHost: options.supaHost,
-        supaAnon: options.supaAnon,
+        apiHost: options.apiHost,
       })
     }
     catch (ownershipError) {

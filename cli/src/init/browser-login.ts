@@ -4,7 +4,7 @@ import { isCancel, log, password } from '@clack/prompts'
 import open from 'open'
 import { validateAndSaveKey } from '../auth/session'
 import { CliUserError } from '../shared/cli-user-error'
-import { consoleWebUrl, createCapgoClient, fetchOrganizationsV7, resolveUserIdFromApiKey, sendEvent } from '../utils'
+import { consoleWebUrl, createCapgoClient, fetchOrganizations, resolveUserIdFromApiKey, sendEvent } from '../utils'
 
 interface BrowserLoginOptions extends SaveKeyOptions {
   local: boolean
@@ -44,10 +44,10 @@ async function promptForKey(): Promise<string | undefined> {
 }
 
 async function listOrganizationIds(key: string, options: BrowserLoginOptions): Promise<string[]> {
-  const supabase = await createCapgoClient(key, options.supaHost, options.supaAnon, true)
-  const httpOptions = { supaHost: options.supaHost, supaAnon: options.supaAnon }
-  await resolveUserIdFromApiKey(supabase, key, true, httpOptions)
-  const organizations = await fetchOrganizationsV7(key, httpOptions)
+  const client = await createCapgoClient(key, options.apiHost, true)
+  const httpOptions = { apiHost: options.apiHost }
+  await resolveUserIdFromApiKey(client, key, true, httpOptions)
+  const organizations = await fetchOrganizations(key, httpOptions)
   return organizations.map(org => org.gid)
 }
 
@@ -91,8 +91,7 @@ export async function completeBrowserLogin(
   const dependencies = { ...defaults, ...overrides }
   await dependencies.validateKey(key, {
     local: options.local,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
 
   try {
