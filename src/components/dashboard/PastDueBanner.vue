@@ -22,6 +22,7 @@ import { pushEvent } from '~/services/posthog'
 import { getPastDueStatus, openBlank, openPortal } from '~/services/stripe'
 import { getLocalConfig, stripeEnabled } from '~/services/supabase'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
+import { stripeAmountToMajorUnits } from '../../../supabase/functions/shared/stripe-amount.ts'
 
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
@@ -67,10 +68,10 @@ const formattedAmount = computed(() => {
     return ''
   try {
     return new Intl.NumberFormat(getFormatLocale(), { style: 'currency', currency: value.currency.toUpperCase() })
-      .format(value.amount_due / 100)
+      .format(stripeAmountToMajorUnits(value.amount_due, value.currency))
   }
   catch {
-    return `${(value.amount_due / 100).toFixed(2)} ${value.currency.toUpperCase()}`
+    return `${stripeAmountToMajorUnits(value.amount_due, value.currency)} ${value.currency.toUpperCase()}`
   }
 })
 

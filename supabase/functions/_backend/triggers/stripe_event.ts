@@ -6,6 +6,7 @@ import type { OpenSubscriptionInvoiceSummary, StripeData, StripeWebhookStatus } 
 import type { Database } from '../utils/supabase.types.ts'
 import { eq, sql } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
+import { stripeAmountToMajorUnits } from '../../shared/stripe-amount.ts'
 import { isBentoConfigured, syncBentoSubscriberTags, trackBentoEvent } from '../utils/bento.ts'
 import { purgeOnPremCacheForOrg, purgePlanCacheForOrg } from '../utils/cloudflare_cache_purge.ts'
 import { handleAutoTopUpPaymentIntent } from '../utils/credit_auto_top_up.ts'
@@ -993,7 +994,7 @@ function buildDunningInvoiceBentoData(invoice: OpenSubscriptionInvoiceSummary | 
     hosted_invoice_url: invoice.hosted_invoice_url,
     attempt_count: invoice.attempt_count,
     next_payment_attempt: invoice.next_payment_attempt,
-    amount: invoice.amount_due / 100,
+    amount: stripeAmountToMajorUnits(invoice.amount_due, invoice.currency),
     currency: invoice.currency,
   }
 }

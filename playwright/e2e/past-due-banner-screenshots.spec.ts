@@ -42,10 +42,10 @@ test.describe('PR 3626 past-due banner screenshots', () => {
       const banner = page.locator('[data-test="past-due-banner"]')
       await expect(banner).toBeVisible({ timeout: 30000 })
       await page.waitForTimeout(1500)
-      await page.screenshot({ path: resolve(screenshotDir, `past-due-banner-${scheme}.png`) })
+      await page.screenshot({ path: resolve(screenshotDir, `past-due-banner-${scheme}.png`), animations: 'disabled' })
       await page.setViewportSize({ width: 390, height: 844 })
       await page.waitForTimeout(800)
-      await page.screenshot({ path: resolve(screenshotDir, `past-due-banner-mobile-${scheme}.png`) })
+      await page.screenshot({ path: resolve(screenshotDir, `past-due-banner-mobile-${scheme}.png`), animations: 'disabled' })
     })
   }
 })

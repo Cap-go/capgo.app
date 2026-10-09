@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { stripeEventTestUtils } from '../supabase/functions/_backend/triggers/stripe_event.ts'
-import { isSubscriptionInvoice, pickLatestSubscriptionInvoice, toOpenSubscriptionInvoiceSummary } from '../supabase/functions/_backend/utils/stripe.ts'
+import { isSubscriptionInvoice, toOpenSubscriptionInvoiceSummary } from '../supabase/functions/_backend/utils/stripe.ts'
 import { extractDataEvent } from '../supabase/functions/_backend/utils/stripe_event.ts'
+import { stripeAmountToMajorUnits } from '../supabase/functions/shared/stripe-amount.ts'
 
 const mockContext = {
   get: () => 'test-request-id',
@@ -32,13 +33,10 @@ describe('open subscription invoice helpers', () => {
     expect(isSubscriptionInvoice(makeInvoice({ parent: null, billing_reason: 'manual' }))).toBe(false)
   })
 
-  it.concurrent('picks the newest subscription invoice and ignores one-off invoices', () => {
-    const older = makeInvoice({ id: 'in_older', created: 1_750_000_000 })
-    const newer = makeInvoice({ id: 'in_newer', created: 1_760_000_000 })
-    const manual = makeInvoice({ id: 'in_manual', created: 1_770_000_000, parent: null, billing_reason: 'manual' })
-    expect(pickLatestSubscriptionInvoice([older, manual, newer])?.id).toBe('in_newer')
-    expect(pickLatestSubscriptionInvoice([manual])).toBeNull()
-    expect(pickLatestSubscriptionInvoice([])).toBeNull()
+  it.concurrent('converts Stripe minor units by currency', () => {
+    expect(stripeAmountToMajorUnits(1400, 'usd')).toBe(14)
+    expect(stripeAmountToMajorUnits(1400, 'JPY')).toBe(1400)
+    expect(stripeAmountToMajorUnits(14000, 'kwd')).toBe(14)
   })
 
   it.concurrent('maps only the public pay-link fields', () => {

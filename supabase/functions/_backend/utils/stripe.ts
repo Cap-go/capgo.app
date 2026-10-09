@@ -436,17 +436,6 @@ export function isSubscriptionInvoice(invoice: Pick<OpenInvoiceShape, 'billing_r
   return typeof invoice.billing_reason === 'string' && invoice.billing_reason.startsWith('subscription')
 }
 
-export function pickLatestSubscriptionInvoice<T extends OpenInvoiceShape>(invoices: T[]): T | null {
-  let latest: T | null = null
-  for (const invoice of invoices) {
-    if (!isSubscriptionInvoice(invoice))
-      continue
-    if (!latest || invoice.created > latest.created)
-      latest = invoice
-  }
-  return latest
-}
-
 export function toOpenSubscriptionInvoiceSummary(invoice: OpenInvoiceShape): OpenSubscriptionInvoiceSummary {
   return {
     hosted_invoice_url: invoice.hosted_invoice_url ?? null,
@@ -464,9 +453,12 @@ export async function getLatestOpenSubscriptionInvoice(c: Context, customerId: s
   if (!isStripeConfigured(c) || !customerId)
     return null
   try {
-    const invoices = await getStripe(c).invoices.list({ customer: customerId, status: 'open', limit: 10 })
-    const invoice = pickLatestSubscriptionInvoice(invoices.data)
-    return invoice ? toOpenSubscriptionInvoiceSummary(invoice) : null
+    // Stripe lists newest first; page past newer non-subscription invoices.
+    for await (const invoice of getStripe(c).invoices.list({ customer: customerId, status: 'open', limit: 10 })) {
+      if (isSubscriptionInvoice(invoice))
+        return toOpenSubscriptionInvoiceSummary(invoice)
+    }
+    return null
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'getLatestOpenSubscriptionInvoice', customerId, error })
