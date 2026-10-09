@@ -162,6 +162,12 @@ const CREDENTIAL_KNOWLEDGE: Record<string, FieldKnowledge> = {
     category: 'configuration',
     explain: 'Xcode target name. Auto-detected from the project; override only if your project has unusual target naming and the build picks the wrong one.',
   },
+  CAPGO_IOS_XCODE_VERSION: {
+    scope: 'ios',
+    type: 'string',
+    category: 'configuration',
+    explain: 'Build only on a Capgo machine with this Xcode version (e.g. 26 or 26.0.1). A major version accepts any minor. Leave unset to use any machine. Same as --xcode-version.',
+  },
   BUILD_PROVISION_PROFILE_BASE64: {
     scope: 'ios',
     type: 'base64',

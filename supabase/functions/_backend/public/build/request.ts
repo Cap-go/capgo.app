@@ -98,7 +98,7 @@ export function buildBuilderPayload(input: {
 }
 
 /** Exported for unit tests — follows bundleUsageTestUtils pattern. */
-export const builderPayloadTestUtils = { buildBuilderPayload }
+export const builderPayloadTestUtils = { buildBuilderPayload, parseMachineVersionUnavailable }
 
 function hasLegacyCredentials(body: RequestBuildBody): boolean {
   const credentials = Reflect.get(body, 'credentials')
@@ -267,6 +267,21 @@ function getBuilderConfig(c: Context) {
   return { builderUrl, builderApiKey }
 }
 
+/** Returns the builder's message when it rejected a build pinned to a macOS / Xcode no machine has. */
+function parseMachineVersionUnavailable(status: number, body: string): string | null {
+  if (status !== 400)
+    return null
+  try {
+    const parsed = JSON.parse(body) as { code?: unknown, error?: unknown }
+    return parsed.code === 'runner_version_unavailable' && typeof parsed.error === 'string' && parsed.error.length > 0
+      ? parsed.error
+      : null
+  }
+  catch {
+    return null
+  }
+}
+
 async function createBuilderJob(c: Context, input: {
   builderUrl: string
   builderApiKey: string
@@ -339,13 +354,22 @@ async function createBuilderJob(c: Context, input: {
       app_id: appId,
       platform,
     })
+    // The requested macOS / Xcode is not on any build machine: tell the user which versions are.
+    const machineUnavailable = parseMachineVersionUnavailable(builderResponse.status, errorText)
+    if (machineUnavailable) {
+      throw quickError(400, 'build_machine_version_unavailable', machineUnavailable, {
+        app_id: appId,
+        platform,
+      }, undefined, { alert: false })
+    }
     throwBuilderUnavailable('Build service unavailable (builder error)', {
       status: builderResponse.status,
       statusText: builderResponse.statusText,
     })
   }
   catch (error) {
-    if (error && typeof error === 'object' && 'status' in error && (error as { status?: unknown }).status === 503) {
+    const status = error && typeof error === 'object' && 'status' in error ? (error as { status?: unknown }).status : undefined
+    if (status === 503 || status === 400) {
       throw error
     }
     cloudlogErr({

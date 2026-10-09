@@ -132,6 +132,7 @@ interface BuildLogger {
 - `--app-store-connect-team-id <id>`
 - `--ios-scheme <scheme>`
 - `--ios-target <target>`
+- `--xcode-version <version>`: build on a machine with this Xcode (e.g. `26`, `26.0.1`; a major accepts any minor). Env `CAPGO_IOS_XCODE_VERSION`. Fails fast with the available versions when no machine matches.
 - `--ios-distribution <mode>`: `app_store` (default, uploads to TestFlight) or `ad_hoc` (skips store upload; use with `--output-upload` for IPA-only when the App Store app does not exist yet)
 - `--ios-provisioning-profile <mapping>`: repeatable path or `bundleId=path`
 
