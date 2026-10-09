@@ -192,7 +192,7 @@ function invoiceCreatedOrUpdated(event: Stripe.InvoiceCreatedEvent | Stripe.Invo
   return data
 }
 
-function getStripeCustomerId(
+export function getStripeCustomerId(
   customer: Stripe.Charge['customer'] | Stripe.Checkout.Session['customer'] | Stripe.Invoice['customer'],
 ): string {
   if (!customer)
@@ -242,6 +242,11 @@ export function extractDataEvent(c: Context, event: Stripe.Event): StripeData {
   else if (event.type === 'charge.succeeded') {
     const charge = event.data.object
     data.status = 'succeeded'
+    data.customer_id = getStripeCustomerId(charge.customer)
+  }
+  else if (event.type === 'charge.refunded') {
+    const charge = event.data.object
+    data.status = 'updated'
     data.customer_id = getStripeCustomerId(charge.customer)
   }
   else if (event.type === 'invoice.upcoming') {
