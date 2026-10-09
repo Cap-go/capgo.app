@@ -23,8 +23,8 @@
       ],
       "hyperdrive": [
         {
-          "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
-          "id": "ae1fe6178b564adc9fc9a71ccc769a35"
+          "binding": "HYPERDRIVE_R2_INVENTORY",
+          "id": "af73fa6a112b495f80e81718b153db76"
         }
       ],
       "queues": {
@@ -75,7 +75,7 @@
       ],
       "hyperdrive": [
         {
-          "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
+          "binding": "HYPERDRIVE_R2_INVENTORY",
           "id": "ae1fe6178b564adc9fc9a71ccc769a35"
         }
       ],
@@ -127,7 +127,7 @@
       ],
       "hyperdrive": [
         {
-          "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
+          "binding": "HYPERDRIVE_R2_INVENTORY",
           "id": "ae1fe6178b564adc9fc9a71ccc769a35"
         }
       ],

@@ -14,7 +14,7 @@ interface RejectedInventoryMessage {
 
 export interface InventoryEnv {
   INVENTORY_BUCKET: string
-  HYPERDRIVE_CAPGO_DIRECT_EU: Hyperdrive
+  HYPERDRIVE_R2_INVENTORY: Hyperdrive
   ATTACHMENT_BUCKET: R2Bucket
   REPAIR_QUEUE: Queue<RepairTask>
   EVENT_DLQ: Queue<RejectedInventoryMessage>
@@ -22,7 +22,10 @@ export interface InventoryEnv {
 }
 
 async function withDatabase<T>(env: InventoryEnv, operation: (db: Client) => Promise<T>): Promise<T> {
-  const db = new Client({ connectionString: env.HYPERDRIVE_CAPGO_DIRECT_EU.connectionString, connectionTimeoutMillis: 5000, query_timeout: 15000 })
+  const connectionString = env.HYPERDRIVE_R2_INVENTORY?.connectionString
+  if (!connectionString)
+    throw new Error('Missing HYPERDRIVE_R2_INVENTORY binding')
+  const db = new Client({ connectionString, connectionTimeoutMillis: 5000, query_timeout: 15000 })
   try {
     await db.connect()
     return await operation(db)
