@@ -13,6 +13,7 @@ import {
   getConfig,
   getOrganizationId,
   sendEvent,
+  warnIfPaymentFailed,
 } from '../utils'
 
 interface BundleUnlinkOptions {
@@ -78,6 +79,7 @@ export async function unlinkDeviceInternal(
     await check2FAComplianceForApp(supabase, resolvedAppId, silent)
 
     const orgId = await getOrganizationId(enrichedOptions.apikey!, resolvedAppId, { supaHost: enrichedOptions.supaHost, supaAnon: enrichedOptions.supaAnon })
+    await warnIfPaymentFailed(enrichedOptions.apikey!, orgId, { silent, supaHost: enrichedOptions.supaHost, supaAnon: enrichedOptions.supaAnon })
 
     await checkAppExistsAndHasPermissionOrgErr(
       supabase,

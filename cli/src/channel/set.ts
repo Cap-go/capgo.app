@@ -9,7 +9,7 @@ import { sendUpdateNotificationsForChannels } from '../notifications/send-update
 import { printPreviewQrForResolvedTarget, resolveChannelPreviewTarget } from '../preview/qr'
 import { formatTable } from '../terminal-table'
 import { CliUserError } from '../shared/cli-user-error'
-import { channelUpdatePackageCliError, checkCompatibilityNativePackages, createSupabaseClient, findSavedKey, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getOrganizationId, invokeCapgoCliApi, isCompatible, resolveUserIdFromApiKey, sendEvent } from '../utils'
+import { channelUpdatePackageCliError, checkCompatibilityNativePackages, createSupabaseClient, findSavedKey, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getOrganizationId, invokeCapgoCliApi, isCompatible, resolveUserIdFromApiKey, sendEvent, warnIfPaymentFailed } from '../utils'
 
 /**
  * Display a compatibility table for the given packages
@@ -265,6 +265,7 @@ export async function setChannelInternal(channel: string, appId: string, options
     await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'channel.promote_bundle', silent, true, existingChannel.id)
 
   const orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
+  await warnIfPaymentFailed(options.apikey!, orgId, { silent, supaHost: options.supaHost, supaAnon: options.supaAnon })
 
   const channelPayload: Database['public']['Tables']['channels']['Insert'] = {
     created_by: userId,

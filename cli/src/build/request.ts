@@ -67,7 +67,7 @@ import { appendInternalLog, getInternalLogPath, startInternalLog } from '../supp
 import { uploadSupportLogs } from '../support/support-upload.js'
 import { offerSupportUploadBeforeAi } from '../support/support-upload-prompt.js'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
-import { assertCliPermission, canPromptInteractively, createSupabaseClient, findSavedKey, getConfig, getOrganizationId, getRemoteConfig, sendEvent, trimTrailingSlashes, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { assertCliPermission, canPromptInteractively, createSupabaseClient, findSavedKey, getConfig, getOrganizationId, getRemoteConfig, sendEvent, trimTrailingSlashes, TUS_UPLOAD_RETRY_DELAYS, warnIfPaymentFailed } from '../utils'
 import { getBuilderAppId } from './app-id'
 import { syncAndroidVersion } from './android-version'
 import { createBuildCancellationSignalHandler, requestBuildCancellation } from './cancellation'
@@ -1504,6 +1504,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     let orgId = ''
     try {
       orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
+      await warnIfPaymentFailed(options.apikey!, orgId, { silent: silent || !!logger, supaHost: options.supaHost, supaAnon: options.supaAnon })
     }
     catch {
       // App not accessible / no org — surfaced by prescan (app-exists) and the permission backstop.

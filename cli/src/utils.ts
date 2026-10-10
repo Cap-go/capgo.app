@@ -1351,6 +1351,48 @@ export async function checkRemoteCliMessages(supabase: SupabaseClient<Database>,
   }
 }
 
+interface PastDueStatus {
+  past_due: boolean
+  invoice: { hosted_invoice_url: string | null } | null
+}
+
+const pastDueWarnedOrgs = new Set<string>()
+const PAST_DUE_CHECK_TIMEOUT_MS = 3000
+
+/**
+ * Best-effort notice when the org's last subscription payment failed.
+ * Never throws and never blocks the command for long; plan enforcement stays
+ * in the plan checks.
+ */
+export async function warnIfPaymentFailed(
+  apikey: string,
+  orgId: string,
+  options: { silent?: boolean, supaHost?: string, supaAnon?: string } = {},
+) {
+  if (options.silent || !apikey || !orgId || pastDueWarnedOrgs.has(orgId))
+    return
+  pastDueWarnedOrgs.add(orgId)
+  try {
+    const { data } = await invokeCapgoCliApi<PastDueStatus>('private/stripe_past_due', {
+      apikey,
+      body: { orgId },
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
+      signal: AbortSignal.timeout(PAST_DUE_CHECK_TIMEOUT_MS),
+    })
+    if (!data?.past_due)
+      return
+    const config = await getRemoteConfig()
+    const payUrl = data.invoice?.hosted_invoice_url || `${config.hostWeb}/settings/organization/plans`
+    log.warn(`Payment failed: the last payment for your Capgo organization did not go through.
+If it stays unpaid, the plan is canceled and devices stop receiving updates. Pay or update your card here: ${payUrl}
+`)
+  }
+  catch {
+    // Billing notice is informational only; never fail the command over it.
+  }
+}
+
 // TODO(cli-http): billing/entitlement RPCs have no Capgo HTTP equivalents yet
 export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: string, appId?: string, warning = true) {
   const config = await getRemoteConfig()

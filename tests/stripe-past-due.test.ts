@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { BASE_URL, fetchTestRequest, getAuthHeaders, ORG_ID } from './test-utils.ts'
+import { APIKEY_TEST_ALL, BASE_URL, fetchTestRequest, getAuthHeaders, ORG_ID } from './test-utils.ts'
 
 describe('private/stripe_past_due', () => {
   it.concurrent('returns the past-due state for a billing member', async () => {
@@ -13,6 +13,17 @@ describe('private/stripe_past_due', () => {
     expect(response.status, JSON.stringify(data)).toBe(200)
     expect(typeof data.past_due).toBe('boolean')
     expect(Object.keys(data).sort()).toEqual(['invoice', 'past_due'])
+  })
+
+  it.concurrent('accepts a CLI API key', async () => {
+    const response = await fetchTestRequest(`${BASE_URL}/private/stripe_past_due`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': APIKEY_TEST_ALL, 'capgkey': APIKEY_TEST_ALL },
+      body: JSON.stringify({ orgId: ORG_ID }),
+    })
+    const data = await response.json() as { past_due?: unknown }
+    expect(response.status, JSON.stringify(data)).toBe(200)
+    expect(typeof data.past_due).toBe('boolean')
   })
 
   it.concurrent('rejects orgs the caller is not a member of', async () => {

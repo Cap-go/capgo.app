@@ -17,6 +17,7 @@ import {
   getOrganizationId,
   resolveUserIdFromApiKey,
   sendEvent,
+  warnIfPaymentFailed,
 } from '../utils'
 
 export async function isChannelReadableByCaller(
@@ -97,6 +98,7 @@ export async function addChannelInternal(channelId: string, appId: string, optio
     log.info(`Creating channel ${appId}#${channelId} to Capgo`)
 
   const orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
+  await warnIfPaymentFailed(options.apikey!, orgId, { silent, supaHost: options.supaHost, supaAnon: options.supaAnon })
   const res = await createChannel({
     apikey: options.apikey!,
     silent,

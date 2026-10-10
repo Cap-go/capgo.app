@@ -2,11 +2,11 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { OpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
 import { Hono } from 'hono/tiny'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
-import { middlewareAuth } from '../utils/hono_jwt.ts'
+import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlogErr } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { getLatestOpenSubscriptionInvoice } from '../utils/stripe.ts'
-import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
+import { supabaseAdmin, supabaseWithAuth } from '../utils/supabase.ts'
 
 interface PastDueBody {
   orgId: string
@@ -21,18 +21,18 @@ export const app = new Hono<MiddlewareKeyVariables>()
 
 app.use('/', useCors)
 
-app.post('/', middlewareAuth, async (c) => {
+// JWT for the dashboard banner, API key for the CLI warning.
+app.post('/', middlewareAuth({ preferApiKey: true }), async (c) => {
   const body = await parseBody<PastDueBody>(c)
   if (!body?.orgId)
     throw simpleError('invalid_body', 'Missing orgId')
 
-  const authorization = c.get('authorization')
   const authContext = c.get('auth')
-  if (!authorization || !authContext?.userId)
+  if (!authContext?.userId)
     throw simpleError('not_authorized', 'Not authorized')
 
   // Authenticated client: RLS only returns orgs the caller belongs to.
-  const { data: org, error: dbError } = await supabaseClient(c, authorization)
+  const { data: org, error: dbError } = await supabaseWithAuth(c, authContext)
     .from('orgs')
     .select('customer_id')
     .eq('id', body.orgId)
@@ -40,8 +40,11 @@ app.post('/', middlewareAuth, async (c) => {
   if (dbError || !org)
     throw simpleError('not_authorized', 'Not authorized')
 
-  if (!await checkPermission(c, 'org.update_billing', { orgId: body.orgId }))
+  // Any org member may learn that billing is blocked (CLI keys are often
+  // upload-only); the pay link and amount stay limited to billing managers.
+  if (!await checkPermission(c, 'org.read', { orgId: body.orgId }))
     throw simpleError('not_authorized', 'Not authorized')
+  const canManageBilling = await checkPermission(c, 'org.update_billing', { orgId: body.orgId })
 
   const notPastDue: PastDueResponse = { past_due: false, invoice: null }
   if (!org.customer_id)
@@ -66,6 +69,6 @@ app.post('/', middlewareAuth, async (c) => {
   if (!stripeInfo.past_due_at && !invoice)
     return c.json(notPastDue)
 
-  const response: PastDueResponse = { past_due: true, invoice }
+  const response: PastDueResponse = { past_due: true, invoice: canManageBilling ? invoice : null }
   return c.json(response)
 })
