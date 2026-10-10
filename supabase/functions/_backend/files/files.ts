@@ -11,6 +11,7 @@ import { sendDiscordAlert } from '../utils/discord.ts'
 import { quickError, simpleError, simpleRateLimit } from '../utils/hono.ts'
 import { middlewareKey } from '../utils/hono_middleware.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
+import { getDotfileDeltaStorageCandidateKeys } from '../utils/manifest_encoding.ts'
 import { createManifestSizeReceipt, MANIFEST_SIZE_RECEIPT_HEADER } from '../utils/manifest_size_receipt.ts'
 import { MANIFEST_UPLOAD_CAPABILITY_HEADER, verifyManifestUploadCapability } from '../utils/manifest_upload_capability.ts'
 import { closeClient, getAppByIdPg, getDrizzleClient, getPgClient } from '../utils/pg.ts'
@@ -454,7 +455,10 @@ async function getHandler(c: Context): Promise<Response> {
 
   const cache = await getFileReadCache()
   const rawFileId = getRawAttachmentRouteId(c)
-  const candidateKeys = getSafeAttachmentReadCandidateKeys(fileId, rawFileId)
+  const candidateKeys = [...new Set(
+    getSafeAttachmentReadCandidateKeys(fileId, rawFileId)
+      .flatMap(key => getDotfileDeltaStorageCandidateKeys(key)),
+  )]
   const cacheKey = buildFileReadCacheRequest(c.req.raw)
   let response = cache ? await cache.match(cacheKey) : null
   if (response != null) {

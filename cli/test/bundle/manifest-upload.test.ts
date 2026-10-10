@@ -317,9 +317,31 @@ describe('manifest upload existence probe', () => {
       )
       expect(result).toEqual({ exists: true, receipt: 'signed-size' })
       expect(requestedUrl).toContain('/files/read/attachments/orgs%2Forg%2Fapps%2Fapp%2Fdelta%2Fhash_assets%2Flogo.png?nocache=')
+      expect(requestedUrl).not.toMatch(/\.htaccess/i)
       expect(requestedHeaders?.['x-cli-version']).toBeTruthy()
       expect(requestedHeaders?.range).toBeUndefined()
       expect(redirectMode).toBe('error')
+    }
+    finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('builds WAF-safe existence-check URLs for dotfile delta paths', async () => {
+    const originalFetch = globalThis.fetch
+    let requestedUrl = ''
+    globalThis.fetch = (async (input) => {
+      requestedUrl = String(input)
+      return new Response('', { status: 404 })
+    }) as typeof fetch
+    try {
+      const hash = 'b'.repeat(64)
+      await fileExistsAtUploadTarget(
+        'https://files.example.test/files/read/attachments/',
+        `orgs/org/apps/app/delta/${hash}_%2Ehtaccess`,
+      )
+      expect(requestedUrl).toContain(`${hash}_%252Ehtaccess`)
+      expect(requestedUrl.toLowerCase()).not.toContain('.htaccess')
     }
     finally {
       globalThis.fetch = originalFetch
