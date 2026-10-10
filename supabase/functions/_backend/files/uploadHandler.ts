@@ -732,9 +732,11 @@ export class UploadHandler extends DurableObject {
     }
     catch (e) {
       if (isR2MultipartDoesNotExistError(e)) {
-        // The multipart transaction we persisted no longer exists. It either expired, or it's possible we
-        // finished the transaction but failed to update the state afterwards. Either way, we should give up.
-        throw new UnrecoverableError(`multipart upload does not exist ${e}`, r2Key)
+        // The multipart transaction we persisted no longer exists (expired or already completed).
+        // Clean up durable-object state and return 409 so tus-js-client retries, HEAD sees 404, and
+        // shipped CLIs restart the upload without treating this as a server failure.
+        await this.cleanup(r2Key)
+        throw new HTTPException(409, { message: 'multipart upload expired' })
       }
       throw e
     }
