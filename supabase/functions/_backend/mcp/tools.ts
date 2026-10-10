@@ -380,6 +380,8 @@ const bundleTools: McpTool[] = [
       checksum: z.string().min(1).describe('Checksum of the zip as produced by the Capgo CLI'),
       session_key: z.string().optional().describe('Encryption session key when the bundle is encrypted'),
       key_id: z.string().optional(),
+      signature: z.string().regex(/^[0-9a-f]{512}$/).optional().describe('Hex RSA signature of the bundle version + zip checksum (capgo-bundle-v1), produced by the Capgo CLI with the private key'),
+      manifest_signature: z.string().regex(/^[0-9a-f]{512}$/).optional().describe('Hex RSA signature of the bundle version + manifest file hashes (capgo-manifest-v1)'),
     },
     annotations: WRITE,
     request: ({ appId: id, ...rest }) => ({ method: 'POST', path: '/bundle', body: compact({ app_id: id, ...rest }) }),

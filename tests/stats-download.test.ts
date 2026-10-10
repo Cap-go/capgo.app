@@ -319,6 +319,43 @@ describe.skipIf(USE_CLOUDFLARE)('download Stats Actions', () => {
     })
   })
 
+  describe('signed bundle metadata and native floor stats', () => {
+    const actions: StatsAction[] = ['signature_fail', 'version_below_native']
+
+    for (const action of actions) {
+      it(`should accept ${action} and attribute it to the target bundle`, async () => {
+        const uuid = randomUUID().toLowerCase()
+        const baseData = getBaseData(APP_NAME_DOWNLOAD_STATS) as StatsPayload
+        baseData.device_id = uuid
+        baseData.action = action
+        baseData.version_build = getVersionFromAction(action)
+
+        const version = await createAppVersions(baseData.version_build, APP_NAME_DOWNLOAD_STATS)
+        baseData.version_name = version.name
+
+        const response = await postStats(baseData)
+        expect(response.status).toBe(200)
+        expect(await response.json<StatsRes>()).toEqual({ status: 'ok' })
+
+        const { error: statsError, data: statsData } = await getSupabaseClient()
+          .from('stats')
+          .select()
+          .eq('device_id', uuid)
+          .eq('app_id', APP_NAME_DOWNLOAD_STATS)
+          .eq('action', action)
+          .single()
+
+        expect(statsError).toBeNull()
+        expect(statsData?.action).toBe(action)
+        expect(statsData?.version_name).toBe(version.name)
+
+        // Clean up
+        await getSupabaseClient().from('devices').delete().eq('device_id', uuid).eq('app_id', APP_NAME_DOWNLOAD_STATS)
+        await getSupabaseClient().from('stats').delete().eq('device_id', uuid).eq('app_id', APP_NAME_DOWNLOAD_STATS)
+      })
+    }
+  })
+
   describe('version Name Parsing and Search', () => {
     it('should support searching by version prefix for composite format', async () => {
       const uuid = randomUUID().toLowerCase()

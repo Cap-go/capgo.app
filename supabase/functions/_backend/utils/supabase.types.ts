@@ -290,12 +290,14 @@ export type Database = {
             | Database["public"]["CompositeTypes"]["manifest_entry"][]
             | null
           manifest_count: number
+          manifest_signature: string | null
           min_update_version: string | null
           name: string
           native_packages: Json[] | null
           owner_org: string
           r2_path: string | null
           session_key: string | null
+          signature: string | null
           storage_provider: string
           updated_at: string | null
           user_id: string | null
@@ -317,12 +319,14 @@ export type Database = {
             | Database["public"]["CompositeTypes"]["manifest_entry"][]
             | null
           manifest_count?: number
+          manifest_signature?: string | null
           min_update_version?: string | null
           name: string
           native_packages?: Json[] | null
           owner_org: string
           r2_path?: string | null
           session_key?: string | null
+          signature?: string | null
           storage_provider?: string
           updated_at?: string | null
           user_id?: string | null
@@ -344,12 +348,14 @@ export type Database = {
             | Database["public"]["CompositeTypes"]["manifest_entry"][]
             | null
           manifest_count?: number
+          manifest_signature?: string | null
           min_update_version?: string | null
           name?: string
           native_packages?: Json[] | null
           owner_org?: string
           r2_path?: string | null
           session_key?: string | null
+          signature?: string | null
           storage_provider?: string
           updated_at?: string | null
           user_id?: string | null
@@ -5377,12 +5383,14 @@ export type Database = {
             | Database["public"]["CompositeTypes"]["manifest_entry"][]
             | null
           manifest_count: number
+          manifest_signature: string | null
           min_update_version: string | null
           name: string
           native_packages: Json[] | null
           owner_org: string
           r2_path: string | null
           session_key: string | null
+          signature: string | null
           storage_provider: string
           updated_at: string | null
           user_id: string | null
@@ -6333,6 +6341,8 @@ export type Database = {
         | "app_nav"
         | "channelPaused"
         | "update_check_error"
+        | "signature_fail"
+        | "version_below_native"
       stripe_status:
         | "created"
         | "succeeded"
@@ -6622,6 +6632,8 @@ export const Constants = {
         "app_nav",
         "channelPaused",
         "update_check_error",
+        "signature_fail",
+        "version_below_native",
       ],
       stripe_status: [
         "created",

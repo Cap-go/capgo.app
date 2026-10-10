@@ -103,3 +103,24 @@ describe('update check error action', () => {
     expect(isRunningVersionAction('update_check_error')).toBe(true)
   })
 })
+
+describe('signed bundle metadata actions', () => {
+  it('accepts signature_fail as a bundle failure and version_below_native as a target-version refusal', async () => {
+    const { isRunningVersionAction } = await import('../supabase/functions/_backend/plugin_runtime/plugins/stats_actions.ts')
+    const { PUBLIC_FAILURE_ACTIONS } = await import('../supabase/functions/_backend/utils/cloudflare.ts')
+
+    expect(ALLOWED_STATS_ACTIONS).toContain('signature_fail')
+    expect(ALLOWED_STATS_ACTIONS).toContain('version_below_native')
+    expect(filterToAction[actionToFilter.signature_fail]).toBe('signature_fail')
+    expect(filterToAction[actionToFilter.version_below_native]).toBe('version_below_native')
+    expect(updateActionFilterKeys).toContain(actionToFilter.signature_fail)
+    expect(updateActionFilterKeys).toContain(actionToFilter.version_below_native)
+    // A failed signature check is a failed bundle download: counted as a failure
+    // and attributed to the target bundle, not the one the device runs.
+    expect(PUBLIC_FAILURE_ACTIONS).toContain('signature_fail')
+    expect(isRunningVersionAction('signature_fail')).toBe(false)
+    // builtinMinimum refusal: nothing downloaded, version_name is the rejected bundle.
+    expect(PUBLIC_FAILURE_ACTIONS).not.toContain('version_below_native')
+    expect(isRunningVersionAction('version_below_native')).toBe(false)
+  })
+})

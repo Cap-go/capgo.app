@@ -231,6 +231,26 @@
       "type": "uuid"
     },
     {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "signature",
+      "notNull": false,
+      "position": 24,
+      "table": "app_versions",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "manifest_signature",
+      "notNull": false,
+      "position": 25,
+      "table": "app_versions",
+      "type": "text"
+    },
+    {
       "default": "now()",
       "generated": "",
       "identity": "",

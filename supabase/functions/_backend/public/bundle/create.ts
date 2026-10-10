@@ -13,6 +13,20 @@ interface CreateBundleBody {
   checksum: string
   session_key?: string
   key_id?: string
+  signature?: string
+  manifest_signature?: string
+}
+
+// RSA-2048 PKCS#1 v1.5 signature over sha256(payload), hex encoded (256 bytes).
+const BUNDLE_SIGNATURE_HEX = /^[0-9a-f]{512}$/
+
+function validateSignatureField(name: 'signature' | 'manifest_signature', value: unknown): string | undefined {
+  if (value === undefined || value === null || value === '')
+    return undefined
+  if (typeof value !== 'string' || !BUNDLE_SIGNATURE_HEX.test(value)) {
+    throw simpleError(`invalid_${name}`, `${name} must be 512 lowercase hex characters (RSA-2048 signature)`, { [name]: typeof value === 'string' ? value.slice(0, 16) : typeof value })
+  }
+  return value
 }
 
 function validateUrlFormat(url: string) {
@@ -214,6 +228,8 @@ async function insertBundle(c: Context, body: CreateBundleBody, ownerOrg: string
       name: body.version,
       ...(body.session_key && { session_key: body.session_key }),
       ...(body.key_id && { key_id: body.key_id }),
+      ...(body.signature && { signature: body.signature }),
+      ...(body.manifest_signature && { manifest_signature: body.manifest_signature }),
       external_url: body.external_url,
       storage_provider: 'external',
       owner_org: ownerOrg,
@@ -254,6 +270,8 @@ export async function createBundle(c: Context<MiddlewareKeyVariables>, body: Cre
   }
 
   validateUrlFormat(body.external_url)
+  body.signature = validateSignatureField('signature', body.signature)
+  body.manifest_signature = validateSignatureField('manifest_signature', body.manifest_signature)
   // await verifyUrlAccessibility(body.external_url)
 
   const appWithOrg = await getAppOrganization(c, body.app_id)

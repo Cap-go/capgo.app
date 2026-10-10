@@ -379,6 +379,62 @@ describe('[POST] /updates', () => {
     expect(json.version).not.toBe(versionName)
   })
 
+  it('returns signed bundle metadata only to plugin v8.53.0+', async () => {
+    const supabase = getSupabaseClient()
+    const versionName = `1.0.${Math.floor(Math.random() * 100000) + 1000}`
+    const channelName = `signed-${randomUUID().slice(0, 8)}`
+    const signature = '0123456789abcdef'.repeat(32)
+    const manifestSignature = 'fedcba9876543210'.repeat(32)
+
+    const version = await createAppVersions(versionName, APP_NAME_UPDATE, {
+      external_url: `https://example.com/${channelName}.zip`,
+      signature,
+      manifest_signature: manifestSignature,
+    })
+
+    await supabase
+      .from('channels')
+      .insert({
+        name: channelName,
+        app_id: APP_NAME_UPDATE,
+        version: version.id,
+        owner_org: ORG_ID,
+        created_by: USER_ID,
+        public: false,
+        disable_auto_update_under_native: false,
+        disable_auto_update: 'none',
+        allow_device_self_set: true,
+        allow_emulator: false,
+        allow_device: true,
+        allow_dev: false,
+        allow_prod: true,
+        ios: true,
+        android: true,
+      })
+      .throwOnError()
+
+    const baseData = getBaseData(APP_NAME_UPDATE)
+    baseData.defaultChannel = channelName
+    baseData.version_build = '0.0.0'
+    baseData.version_name = '0.0.0'
+
+    baseData.plugin_version = '8.53.0'
+    const signedResponse = await postUpdate(baseData)
+    expect(signedResponse.status).toBe(200)
+    const signedJson = await signedResponse.json<UpdateRes & { signature?: string, manifest_signature?: string }>()
+    expect(signedJson.version).toBe(versionName)
+    expect(signedJson.signature).toBe(signature)
+    expect(signedJson.manifest_signature).toBe(manifestSignature)
+
+    baseData.plugin_version = '8.52.0'
+    const legacyResponse = await postUpdate(baseData)
+    expect(legacyResponse.status).toBe(200)
+    const legacyJson = await legacyResponse.json<UpdateRes & { signature?: string, manifest_signature?: string }>()
+    expect(legacyJson.version).toBe(versionName)
+    expect(legacyJson).not.toHaveProperty('signature')
+    expect(legacyJson).not.toHaveProperty('manifest_signature')
+  })
+
   it('ignores deleted device override bundles and falls back to the normal channel selection', async () => {
     const supabase = getSupabaseClient()
     const versionName = `1.0.${Math.floor(Math.random() * 100000) + 1000}`

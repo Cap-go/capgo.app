@@ -327,3 +327,95 @@ describe('[POST] /bundle - Create Bundle with External URL', () => {
   //   expect(['url_not_zip', 'url_fetch_error', 'url_not_file'].includes(data.error)).toBe(true)
   // })
 })
+
+describe('[POST] /bundle - Signed bundle metadata', () => {
+  const checksum = 'a1b2c3d4e5f6789abcdef123456789abcdef123456789abcdef123456789abcd'
+  const signature = '0123456789abcdef'.repeat(32)
+  const manifestSignature = 'fedcba9876543210'.repeat(32)
+
+  it('stores signature and manifest_signature when provided', async () => {
+    const response = await fetch(`${BASE_URL}/bundle`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        checksum,
+        version: '1.0.0-signed',
+        external_url: 'https://github.com/Cap-go/capgo/archive/refs/tags/v12.12.32.zip',
+        signature,
+        manifest_signature: manifestSignature,
+      }),
+    })
+    expect(response.status).toBe(200)
+    const data = await response.json() as { status: string, bundle: { signature: string | null, manifest_signature: string | null } }
+    expect(data.status).toBe('success')
+    expect(data.bundle.signature).toBe(signature)
+    expect(data.bundle.manifest_signature).toBe(manifestSignature)
+  })
+
+  it('keeps both columns null when the bundle is not signed', async () => {
+    const response = await fetch(`${BASE_URL}/bundle`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        checksum,
+        version: '1.0.0-unsigned',
+        external_url: 'https://github.com/Cap-go/capgo/archive/refs/tags/v12.12.32.zip',
+        signature: '',
+      }),
+    })
+    expect(response.status).toBe(200)
+    const data = await response.json() as { bundle: { signature: string | null, manifest_signature: string | null } }
+    expect(data.bundle.signature).toBeNull()
+    expect(data.bundle.manifest_signature).toBeNull()
+  })
+
+  it.each([
+    ['too short', 'abcdef'],
+    ['uppercase hex', '0123456789ABCDEF'.repeat(32)],
+    ['non hex', 'g'.repeat(512)],
+    ['wrong type', 12345],
+  ])('rejects an invalid signature (%s)', async (_label, invalid) => {
+    const response = await fetch(`${BASE_URL}/bundle`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        checksum,
+        version: '1.0.0-bad-signature',
+        external_url: 'https://github.com/Cap-go/capgo/archive/refs/tags/v12.12.32.zip',
+        signature: invalid,
+      }),
+    })
+    expect(response.status).toBe(400)
+    const data = await response.json() as { error: string }
+    expect(data.error).toBe('invalid_signature')
+  })
+
+  it('rejects an invalid manifest_signature without creating the bundle', async () => {
+    const response = await fetch(`${BASE_URL}/bundle`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        checksum,
+        version: '1.0.0-bad-manifest-signature',
+        external_url: 'https://github.com/Cap-go/capgo/archive/refs/tags/v12.12.32.zip',
+        signature,
+        manifest_signature: 'not-hex',
+      }),
+    })
+    expect(response.status).toBe(400)
+    const data = await response.json() as { error: string }
+    expect(data.error).toBe('invalid_manifest_signature')
+
+    const { data: row } = await getSupabaseClient()
+      .from('app_versions')
+      .select('id')
+      .eq('app_id', APPNAME)
+      .eq('name', '1.0.0-bad-manifest-signature')
+      .maybeSingle()
+    expect(row).toBeNull()
+  })
+})

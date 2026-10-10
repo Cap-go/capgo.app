@@ -721,6 +721,8 @@ export async function createAppVersions(
   const externalUrl = values.external_url ?? null
   const checksum = values.checksum ?? null
   const sessionKey = values.session_key ?? null
+  const signature = values.signature ?? null
+  const manifestSignature = values.manifest_signature ?? null
   const storageProvider = values.storage_provider ?? 'r2'
   const minUpdateVersion = values.min_update_version ?? null
   const r2Path = values.r2_path === undefined || values.r2_path === null
@@ -733,9 +735,11 @@ export async function createAppVersions(
   const inserted = await executeSQL(
     `INSERT INTO public.app_versions (
        app_id, name, owner_org, deleted, external_url, checksum, session_key,
-       storage_provider, min_update_version, r2_path, link, comment, user_id
+       storage_provider, min_update_version, r2_path, link, comment, user_id,
+       signature, manifest_signature
      ) VALUES (
-       $1, $2, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::uuid
+       $1, $2, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::uuid,
+       $14, $15
      )
      ON CONFLICT (name, app_id) DO NOTHING
      RETURNING id, name`,
@@ -753,6 +757,8 @@ export async function createAppVersions(
       link,
       comment,
       userId,
+      signature,
+      manifestSignature,
     ],
   )
 
