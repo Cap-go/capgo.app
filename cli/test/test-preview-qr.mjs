@@ -173,14 +173,12 @@ await test('post-upload QR options do not forward the upload channel target', ()
       bundle: 'original-bundle-option',
       channel: 'production',
       qrPreview: true,
-      supaAnon: 'anon',
-      supaHost: 'https://example.test',
+      apiHost: 'https://example.test/functions/v1',
     }, 'uploaded-bundle'),
     {
       apikey: 'test-key',
       bundle: 'uploaded-bundle',
-      supaAnon: 'anon',
-      supaHost: 'https://example.test',
+      apiHost: 'https://example.test/functions/v1',
     },
   )
 })

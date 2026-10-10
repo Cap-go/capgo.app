@@ -1,38 +1,31 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { CapgoClient } from '../utils'
 import type { ChannelAddOptions } from '../schemas/channel'
-import type { Database } from '../types/supabase.types'
 import { intro, log, outro } from '@clack/prompts'
 import { trackEvent } from '../analytics/track'
-import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
+import { checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { createChannel, findChannel } from '../api/channels'
 import { isChannelAlreadyExistsError } from '../init/channel-conflict'
 import { CliUserError } from '../shared/cli-user-error'
 import {
-  createSupabaseClient,
+  createCapgoClient,
   findSavedKey,
   formatCapgoCliInvokeError,
   formatError,
   getAppId,
   getConfig,
   getOrganizationId,
-  resolveUserIdFromApiKey,
   sendEvent,
 } from '../utils'
 
 export async function isChannelReadableByCaller(
-  supabase: SupabaseClient<Database>,
+  client: CapgoClient,
   appId: string,
   channelName: string,
 ): Promise<boolean | null> {
-  const { data, error } = await findChannel(supabase, appId, channelName)
-  if (!error && data)
-    return true
-
-  const code = (error as { code?: string } | null)?.code
-  if (code === 'PGRST116')
-    return false
-
-  return null
+  const { data, error } = await findChannel(client, appId, channelName)
+  if (error)
+    return null
+  return !!data
 }
 
 export type ChannelAddDuplicateOutcome = 'duplicate_readable' | 'duplicate_inaccessible' | 'not_duplicate'
@@ -40,7 +33,7 @@ export type ChannelAddDuplicateOutcome = 'duplicate_readable' | 'duplicate_inacc
 export async function resolveChannelAddDuplicateOutcome(
   params: {
     createError: unknown
-    supabase: SupabaseClient<Database>
+    client: CapgoClient
     appId: string
     channelName: string
   },
@@ -52,7 +45,7 @@ export async function resolveChannelAddDuplicateOutcome(
     return 'not_duplicate'
 
   const readable = await (deps.isChannelReadableByCaller ?? isChannelReadableByCaller)(
-    params.supabase,
+    params.client,
     params.appId,
     params.channelName,
   )
@@ -85,23 +78,19 @@ export async function addChannelInternal(channelId: string, appId: string, optio
     throw new CliUserError('Missing appId')
   }
 
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon, silent)
-  await check2FAComplianceForApp(supabase, appId, silent)
-  // TODO(cli-http): identity still uses request_actor_user_id via resolveUserIdFromApiKey
-  await resolveUserIdFromApiKey(supabase, options.apikey)
+  const client = await createCapgoClient(options.apikey, options.apiHost, silent)
   // Creating a channel needs the exact RBAC permission. The backend and channels
   // INSERT RLS remain authoritative, so a key without app.create_channel is denied.
-  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.create_channel', silent, true)
+  await checkAppExistsAndHasPermissionOrgErr(client, options.apikey, appId, 'app.create_channel', silent)
 
   if (!silent)
     log.info(`Creating channel ${appId}#${channelId} to Capgo`)
 
-  const orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
+  const orgId = await getOrganizationId(options.apikey!, appId, { apiHost: options.apiHost })
   const res = await createChannel({
     apikey: options.apikey!,
     silent,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   }, {
     channel: channelId,
     app_id: appId,
@@ -116,7 +105,7 @@ export async function addChannelInternal(channelId: string, appId: string, optio
     try {
       duplicateOutcome = await resolveChannelAddDuplicateOutcome({
         createError: createErrorDetail,
-        supabase,
+        client,
         appId,
         channelName: channelId,
       })

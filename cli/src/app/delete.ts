@@ -1,9 +1,9 @@
 import type { OptionsBase } from '../schemas/base'
 import { intro, isCancel, log, outro, select } from '@clack/prompts'
-import { checkAppExistsAndHasPermissionOrgErr, getAppIconStoragePath } from '../api/app'
+import { checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { CliUserError } from '../shared/cli-user-error'
 import {
-  createSupabaseClient,
+  createCapgoClient,
   findSavedKey,
   formatError,
   getAppId,
@@ -39,11 +39,10 @@ export async function deleteAppInternal(
     throw new CliUserError('Missing appId')
   }
 
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
-  // TODO(cli-http): identity still uses rpc via resolveUserIdFromApiKey
-  const userId = await resolveUserIdFromApiKey(supabase, options.apikey)
+  const client = await createCapgoClient(options.apikey, options.apiHost)
+  const userId = await resolveUserIdFromApiKey(client, options.apikey)
 
-  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.delete', silent)
+  await checkAppExistsAndHasPermissionOrgErr(client, options.apikey, appId, 'app.delete', silent)
 
   const { data: appData, error: appError } = await invokeCapgoCliApi<{
     owner_org?: string
@@ -52,8 +51,7 @@ export async function deleteAppInternal(
     apikey: options.apikey,
     method: 'GET',
     body: undefined,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
 
   if (appError && getCapgoCliHttpStatus(appError) !== 404) {
@@ -77,8 +75,7 @@ export async function deleteAppInternal(
       apikey: options.apikey,
       method: 'GET',
       body: undefined,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
     },
   )
   const orgCreatedBy = typeof orgData?.created_by === 'string' ? orgData.created_by : undefined
@@ -113,31 +110,11 @@ export async function deleteAppInternal(
     }
   }
 
-  const { error: storageError } = orgId
-    ? await supabase
-        .storage
-        .from('images')
-        .remove([getAppIconStoragePath(orgId, appId)])
-    : { error: null }
-
-  if (storageError && !silent)
-    log.error('Could not delete app logo')
-
-  // TODO(cli-http): user-scoped storage path apps/${appId}/${userId} cleanup is not covered by DELETE app
-  const { error: delError } = await supabase
-    .storage
-    .from(`apps/${appId}/${userId}`)
-    .remove(['versions'])
-
-  if (delError && !silent)
-    log.error('Could not delete app version')
-
   const { error: dbError } = await invokeCapgoCliApi(`app/${encodeURIComponent(appId)}`, {
     apikey: options.apikey,
     method: 'DELETE',
     body: undefined,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
 
   if (dbError) {

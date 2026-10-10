@@ -2,7 +2,7 @@
 process.env.CAPGO_DISABLE_POSTHOG = '1'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { checkAppExists, checkAppExistsAndHasPermissionOrgErr } from '../src/api/app.ts'
@@ -12,7 +12,7 @@ import { visibleWidth } from '../src/terminal-table.ts'
 import { shouldCapturePosthogException } from '../src/posthog.ts'
 
 const appId = 'com.example.channel.list'
-const options = { apikey: 'test-channel-list-key', supaHost: 'http://localhost:54321', supaAnon: 'test-anon-key', silent: true }
+const options = { apikey: 'test-channel-list-key', apiHost: 'http://localhost:54321/functions/v1', silent: true }
 const originalFetch = globalThis.fetch
 const calls = []
 let responseStatus = 200
@@ -23,17 +23,18 @@ const httpChannel = {
   allow_device_self_set: true, allow_emulator: false, allow_device: true,
   allow_dev: false, allow_prod: true, version: null,
 }
-const supabase = {
-  supabaseUrl: options.supaHost,
-  supabaseKey: options.supaAnon,
-  rpc(name) {
-    assert.equal(name, 'cli_check_permission')
-    return Promise.resolve({ data: false, error: null })
-  },
-}
+const client = { apikey: options.apikey, apiHost: 'http://localhost:54321/functions/v1', filesHost: 'http://localhost:54321/functions/v1' }
 
 globalThis.fetch = async (input) => {
-  calls.push(String(input))
+  const url = String(input)
+  calls.push(url)
+  // Preflight: forward access errors, otherwise deny the requested permission.
+  if (url.includes('/private/cli/preflight') && responseStatus === 200) {
+    return new Response(JSON.stringify({ error: 'permission_denied', message: 'Missing permission' }), {
+      status: 403,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
   return new Response(JSON.stringify(responseBody), {
     status: responseStatus,
     headers: { 'Content-Type': 'application/json' },
@@ -57,7 +58,7 @@ try {
     responseBody = { error: 'cannot_access_app', message: "You can't access this app" }
     await assert.rejects(() => checkAppExists(options.apikey, appId, options), permissionError('app.read'))
     await assert.rejects(
-      () => checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.read_channels', true, true),
+      () => checkAppExistsAndHasPermissionOrgErr(client, options.apikey, appId, 'app.read_channels', true, true),
       permissionError('app.read'),
     )
   }
@@ -65,7 +66,7 @@ try {
   responseStatus = 200
   responseBody = { app_id: appId }
   await assert.rejects(
-    () => checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.read_channels', true, true),
+    () => checkAppExistsAndHasPermissionOrgErr(client, options.apikey, appId, 'app.read_channels', true, true),
     permissionError('app.read_channels'),
   )
 
@@ -161,12 +162,19 @@ try {
       const url = input?.url ?? String(input)
       if (!url.startsWith('http') || url.includes('.wasm'))
         return nativeFetch(input)
+      if (process.env.CAPGO_URL_LOG)
+        (await import('node:fs')).appendFileSync(process.env.CAPGO_URL_LOG, url + '\\n')
       if (url.includes('/private/config'))
         return Response.json({})
-      if (url.includes('/rpc/reject_access_due_to_2fa_for_app'))
-        return Response.json(false)
-      if (url.includes('/rpc/cli_check_permission'))
-        return Response.json(scenario !== 'denied-channel')
+      if (url.includes('/private/cli/preflight')) {
+        if (!url.startsWith(process.env.CAPGO_EXPECTED_API ?? 'http://localhost:54321/functions/v1/'))
+          return Response.json({ error: 'wrong_host' }, { status: 500 })
+        if (scenario === 'denied-app')
+          return Response.json({ error: 'cannot_access_app' }, { status: 401 })
+        if (scenario === 'denied-channel')
+          return Response.json({ error: 'permission_denied', message: 'Missing permission app.read_channels' }, { status: 403 })
+        return Response.json({ user_id: 'u1', org_id: 'test-org', app_id: ${JSON.stringify(appId)}, trial_days_left: null, warnings: [] })
+      }
       if (url.includes('/app/' + ${JSON.stringify(appId)})) {
         if (scenario === 'denied-app')
           return Response.json({ error: 'cannot_access_app' }, { status: 401 })
@@ -185,7 +193,8 @@ try {
     const child = spawnSync('node', [
       '--import', preload, new URL('../dist/index.js', import.meta.url).pathname,
       'channel', 'list', appId, '-a', options.apikey,
-      '--supa-host', options.supaHost, '--supa-anon', options.supaAnon,
+      // Deprecated self-host flags still route to <supa-host>/functions/v1.
+      '--supa-host', 'http://localhost:54321', '--supa-anon', 'test-anon-key',
     ], {
       encoding: 'utf8', timeout: 15000,
       env: { ...process.env, CAPGO_CHANNEL_LIST_SCENARIO: scenario },
@@ -203,6 +212,19 @@ try {
       assert.match(output, /Android\s+│ No/)
     }
   }
+  // A non-Supabase backend (local worker, custom domain) gets every request; nothing reaches Capgo cloud.
+  const urlLog = join(fixture, 'urls.log')
+  const custom = spawnSync('node', [
+    '--import', preload, new URL('../dist/index.js', import.meta.url).pathname,
+    'channel', 'list', appId, '-a', options.apikey, '--api-host', 'http://127.0.0.1:8787',
+  ], {
+    encoding: 'utf8', timeout: 15000,
+    env: { ...process.env, CAPGO_CHANNEL_LIST_SCENARIO: 'allowed', CAPGO_URL_LOG: urlLog, CAPGO_EXPECTED_API: 'http://127.0.0.1:8787/', CAPGO_DISABLE_TELEMETRY: '1', CAPGO_DISABLE_POSTHOG: '1' },
+  })
+  assert.equal(custom.status, 0, custom.stdout + custom.stderr)
+  const urls = readFileSync(urlLog, 'utf8').trim().split('\n')
+  assert.ok(urls.some(url => url.startsWith('http://127.0.0.1:8787/private/cli/preflight')), urls.join('\n'))
+  assert.deepEqual(urls.filter(url => !url.startsWith('http://127.0.0.1:8787/')), [], 'custom --api-host must not leak requests to Capgo cloud')
   console.log('Built CLI prints permission failures and readable channel settings')
 }
 finally {

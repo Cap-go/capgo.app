@@ -3,8 +3,9 @@ import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { simpleError } from '../../utils/hono.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
+import { supabaseApikey } from '../../utils/supabase.ts'
 import { isValidAppId, isValidSemver } from '../../utils/utils.ts'
+import { checkEncryptedBundleEnforcement, getAppOrganization } from './encryption_policy.ts'
 
 interface CreateBundleBody {
   app_id: string
@@ -131,29 +132,6 @@ function validateUrlFormat(url: string) {
 //   }
 // }
 
-interface AppWithOrg {
-  owner_org: string
-  orgs: {
-    enforce_encrypted_bundles: boolean
-    required_encryption_key: string | null
-  }
-}
-
-async function getAppOrganization(c: Context, appId: string): Promise<AppWithOrg> {
-  // Use supabaseAdmin to access org security settings (RLS bypass needed for enforcement check)
-  const { data: app, error: appError } = await supabaseAdmin(c)
-    .from('apps')
-    .select('owner_org, orgs!inner(enforce_encrypted_bundles, required_encryption_key)')
-    .eq('app_id', appId)
-    .single()
-
-  if (appError || !app) {
-    throw simpleError('cannot_find_app', 'Cannot find app', { supabaseError: appError })
-  }
-
-  return app as unknown as AppWithOrg
-}
-
 async function checkVersionExists(c: Context, appId: string, apikey: Database['public']['Tables']['apikeys']['Row'], version: string): Promise<void> {
   const { data: existingVersion } = await supabaseApikey(c, apikey.key)
     .from('app_versions')
@@ -165,43 +143,6 @@ async function checkVersionExists(c: Context, appId: string, apikey: Database['p
 
   if (existingVersion) {
     throw simpleError('version_already_exists', 'Version already exists', { version })
-  }
-}
-
-function checkEncryptedBundleEnforcement(appWithOrg: AppWithOrg, sessionKey: string | undefined, keyId: string | undefined): void {
-  // If org doesn't enforce encrypted bundles, allow
-  if (!appWithOrg.orgs.enforce_encrypted_bundles) {
-    return
-  }
-
-  // Check if bundle is encrypted (has a non-empty session_key)
-  if (!sessionKey || sessionKey === '') {
-    throw simpleError('encryption_required', 'This organization requires all bundles to be encrypted. Please upload an encrypted bundle with a session_key.', {
-      enforce_encrypted_bundles: true,
-    })
-  }
-
-  // If org requires a specific encryption key, check it matches
-  const requiredKey = appWithOrg.orgs.required_encryption_key
-  if (requiredKey && requiredKey !== '') {
-    // Bundle must have a key_id
-    if (!keyId || keyId === '') {
-      throw simpleError('encryption_key_required', 'This organization requires bundles to be encrypted with a specific key. The uploaded bundle does not have a key_id.', {
-        enforce_encrypted_bundles: true,
-        required_encryption_key: true,
-      })
-    }
-
-    // Check if the key_id matches the required key (compare first N characters)
-    // key_id is 20 chars, required_encryption_key is up to 21 chars
-    const matches = keyId === requiredKey.substring(0, 20) || keyId.startsWith(requiredKey)
-    if (!matches) {
-      throw simpleError('encryption_key_mismatch', 'This organization requires bundles to be encrypted with a specific key. The uploaded bundle was encrypted with a different key.', {
-        enforce_encrypted_bundles: true,
-        required_encryption_key: true,
-        expected_key_prefix: `${requiredKey.substring(0, 4)}...`,
-      })
-    }
   }
 }
 

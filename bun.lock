@@ -267,7 +267,6 @@
         "@sauber/table": "npm:@jsr/sauber__table",
         "@sinonjs/fake-timers": "15.4.0",
         "@std/semver": "npm:@jsr/std__semver@1.0.8",
-        "@supabase/supabase-js": "^2.110.8",
         "@tanstack/intent": "^0.3.6",
         "@types/adm-zip": "^0.5.8",
         "@types/jsonwebtoken": "^9.0.10",

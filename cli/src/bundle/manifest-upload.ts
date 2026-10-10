@@ -303,7 +303,7 @@ export function resolveManifestUploadResponse(request: ManifestUploadRequest, in
 export async function requestManifestUpload(
   apikey: string,
   request: ManifestUploadRequest,
-  options: Pick<CapgoCliInvokeOptions, 'supaHost' | 'supaAnon'> = {},
+  options: Pick<CapgoCliInvokeOptions, 'apiHost'> = {},
   invoke: ManifestUploadInvoke = invokeCapgoCliApi,
 ): Promise<ResolvedManifestUpload> {
   let spinner: UploadSpinner | undefined
@@ -316,8 +316,7 @@ export async function requestManifestUpload(
     const { data, error } = await invoke<unknown>('private/request_manifest_upload', {
       apikey,
       body: request,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
     })
     if (error)
       throw new CliUserError(`Cannot request manifest upload: ${await formatCapgoCliInvokeError(error)}`)

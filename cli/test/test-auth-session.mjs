@@ -112,30 +112,47 @@ await test('loginSuccessMessage names the user and the scope path', () => {
   ok(loginSuccessMessage('u9', true).includes('./.capgo'), 'local path mentions ./.capgo')
 })
 
-await test('account identity starts ID and email RPCs in parallel', async () => {
-  const started = []
-  const finish = {}
-  const client = {
-    rpc(name) {
-      started.push(name)
-      return new Promise((resolve) => { finish[name] = resolve })
-    },
+await test('account identity reads userId and email from private/cli/identity', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    if (url.includes('/private/config'))
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    if (url.includes('/private/cli/identity'))
+      return new Response(JSON.stringify({ userId: 'user-1', email: 'account@example.com' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    return new Response(JSON.stringify({ error: 'not_found' }), { status: 404, headers: { 'Content-Type': 'application/json' } })
   }
-
-  const identity = resolveAccountIdentity(client, 'test-key')
-  eq(started.join(','), 'request_actor_user_id,request_actor_email_adress')
-  finish.request_actor_email_adress({ data: 'account@example.com', error: null })
-  finish.request_actor_user_id({ data: 'user-1', error: null })
-  const result = await identity
-  eq(result.userId, 'user-1')
-  eq(result.email, 'account@example.com')
+  try {
+    const result = await resolveAccountIdentity('test-key')
+    eq(result.userId, 'user-1')
+    eq(result.email, 'account@example.com')
+  }
+  finally {
+    globalThis.fetch = originalFetch
+  }
 })
 
 await test('account identity rejects missing email', async () => {
-  const client = { rpc: async name => ({ data: name === 'request_actor_user_id' ? 'user-1' : null, error: null }) }
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    if (url.includes('/private/config'))
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    if (url.includes('/private/cli/identity'))
+      return new Response(JSON.stringify({ userId: 'user-1', email: null }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    return new Response(JSON.stringify({ error: 'not_found' }), { status: 404, headers: { 'Content-Type': 'application/json' } })
+  }
   let threw = false
-  try { await resolveAccountIdentity(client, 'test-key') }
-  catch (error) { threw = true; ok(/email not found/.test(error.message)) }
+  try {
+    await resolveAccountIdentity('test-key')
+  }
+  catch (error) {
+    threw = true
+    ok(/email not found/.test(error.message))
+  }
+  finally {
+    globalThis.fetch = originalFetch
+  }
   ok(threw, 'a missing email must not produce a partial identity')
 })
 

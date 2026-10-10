@@ -12,8 +12,7 @@ import { canPromptInteractively } from './utils'
 interface Options {
   apikey?: string
   local: boolean
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
 }
 
 export type LoginMethod = 'browser' | 'paste'
@@ -86,8 +85,7 @@ export async function loginInternal(apikey: string | undefined, options: Options
   // Validate, persist (0o600) and emit the login event via the shared auth core.
   await validateAndSaveKey(apikey, {
     local,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
 
   if (!silent)
@@ -98,7 +96,7 @@ export async function loginInternal(apikey: string | undefined, options: Options
 
 export async function login(apikey: string, options: Options) {
   let resolvedApiKey = resolveLoginCommandApiKey(apikey, options.apikey)
-  const supportsBrowserLogin = !options.local && !options.supaHost && !options.supaAnon
+  const supportsBrowserLogin = !options.local && !options.apiHost
 
   if (!resolvedApiKey && !canPromptInteractively()) {
     log.error('Missing API key. Provide it as an argument or with --apikey.')

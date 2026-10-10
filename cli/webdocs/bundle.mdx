@@ -94,8 +94,10 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | **--self-assign** | <code>boolean</code> | Allow devices to auto-join this channel (updates channel setting) |
 | **--qr-preview** | <code>boolean</code> | Print a terminal QR code for this bundle preview after upload |
 | **--send-update-notification** | <code>boolean</code> | Send a native update-check notification to devices after updating linked channel bundles |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://<project>.supabase.co/functions/v1 or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
+| **--supa-host** | <code>string</code> | Deprecated: use --api-host <supaHost>/functions/v1 |
+| **--supa-anon** | <code>string</code> | Deprecated: no longer needed |
 | **--verbose** | <code>boolean</code> | Enable verbose output with detailed logging |
 
 ### <a id="bundle-compatibility"></a> 🧪 **Compatibility**
@@ -121,8 +123,10 @@ npx @capgo/cli@latest bundle compatibility com.example.app --channel production
 | **--text** | <code>boolean</code> | Output text instead of emojis |
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
 | **--node-modules** | <code>string</code> | Paths to node_modules directories for monorepos (comma-separated) |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://<project>.supabase.co/functions/v1 or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
+| **--supa-host** | <code>string</code> | Deprecated: use --api-host <supaHost>/functions/v1 |
+| **--supa-anon** | <code>string</code> | Deprecated: no longer needed |
 
 ### <a id="bundle-releaseType"></a> 🔹 **ReleaseType**
 
@@ -146,8 +150,10 @@ npx @capgo/cli@latest bundle releaseType com.example.app --channel production
 | **-c** | <code>string</code> | Channel to compare against |
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
 | **--node-modules** | <code>string</code> | Paths to node_modules directories for monorepos (comma-separated) |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://<project>.supabase.co/functions/v1 or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
+| **--supa-host** | <code>string</code> | Deprecated: use --api-host <supaHost>/functions/v1 |
+| **--supa-anon** | <code>string</code> | Deprecated: no longer needed |
 
 ### <a id="bundle-delete"></a> 🗑️ **Delete**
 
@@ -170,8 +176,10 @@ npx @capgo/cli@latest bundle delete BUNDLE_ID com.example.app
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://<project>.supabase.co/functions/v1 or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
+| **--supa-host** | <code>string</code> | Deprecated: use --api-host <supaHost>/functions/v1 |
+| **--supa-anon** | <code>string</code> | Deprecated: no longer needed |
 
 ### <a id="bundle-list"></a> 📋 **List**
 
@@ -194,8 +202,10 @@ npx @capgo/cli@latest bundle list com.example.app
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://<project>.supabase.co/functions/v1 or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
+| **--supa-host** | <code>string</code> | Deprecated: use --api-host <supaHost>/functions/v1 |
+| **--supa-anon** | <code>string</code> | Deprecated: no longer needed |
 
 ### <a id="bundle-cleanup"></a> 🧹 **Cleanup**
 
@@ -223,8 +233,10 @@ npx @capgo/cli@latest bundle cleanup com.example.app --bundle=1.0 --keep=3
 | **-k** | <code>string</code> | Number of versions to keep |
 | **-f** | <code>boolean</code> | Force removal |
 | **--ignore-channel** | <code>boolean</code> | Delete bundles even if linked to channels (WARNING: deletes channels too) |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://<project>.supabase.co/functions/v1 or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
+| **--supa-host** | <code>string</code> | Deprecated: use --api-host <supaHost>/functions/v1 |
+| **--supa-anon** | <code>string</code> | Deprecated: no longer needed |
 
 ### <a id="bundle-encrypt"></a> 🔒 **Encrypt**
 

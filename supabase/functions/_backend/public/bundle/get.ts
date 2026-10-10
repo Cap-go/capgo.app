@@ -13,6 +13,8 @@ export const getBundleQuerySchema = z.object({
   version: z.string().min(1).optional(),
   id: integerLikeSchema.refine(Number.isSafeInteger, { message: 'id must be a safe integer' }).optional(),
   page: numberLikeSchema.optional(),
+  // Version/id lookups only: also match soft-deleted bundles (name occupancy checks).
+  include_deleted: z.union([z.boolean(), z.enum(['true', 'false', '1', '0'])]).optional(),
 })
 
 export type GetLatest = z.infer<typeof getBundleQuerySchema> & { app_id: string }
@@ -40,13 +42,15 @@ export async function get(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, 
   const hasIdFilter = body.id !== undefined
 
   if (hasVersionFilter || hasIdFilter) {
+    const includeDeleted = body.include_deleted === true || body.include_deleted === 'true' || body.include_deleted === '1'
     let query = supabase
       .from('app_versions')
       .select()
       .eq('app_id', body.app_id)
-      .eq('deleted', false)
       .limit(1)
       .order('created_at', { ascending: false })
+    if (!includeDeleted)
+      query = query.eq('deleted', false)
 
     if (hasVersionFilter)
       query = query.eq('name', body.version!)

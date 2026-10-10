@@ -6,7 +6,7 @@ import { findSavedKeySilent, getAppId, getConfig, sendEvent } from '../utils'
 import { getBuilderAppId } from '../build/app-id'
 import { resolveOwnerOrgId } from './org-resolver'
 import { categorizeCliError, categorizeHttpStatus } from './error-category'
-import { deriveSupabaseOperation, setSupabaseCallRecorder, SLOW_THRESHOLD_MS, withSupabaseSource } from './supabase-perf'
+import { deriveSupabaseOperation, setSupabaseCallRecorder, SLOW_THRESHOLD_MS } from './supabase-perf'
 import type { SupabaseCallInfo } from './supabase-perf'
 
 // Global analytics props + invocation source live in ./global-props so the
@@ -346,6 +346,4 @@ function recordSupabaseCall(info: SupabaseCallInfo): void {
 
 setSupabaseCallRecorder(recordSupabaseCall)
 
-// Re-export so call sites can `import { withSupabaseSource } from '../analytics/track'`.
-export { withSupabaseSource }
 export { enableSupabaseInstrumentation } from './supabase-perf'

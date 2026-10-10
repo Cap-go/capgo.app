@@ -1,11 +1,11 @@
 import type { OptionsBase } from '../schemas/base'
 import { intro, log, outro } from '@clack/prompts'
 import { trackEvent } from '../analytics/track'
-import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
+import { checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { checkAlerts } from '../api/update'
 import { displayBundles, getActiveAppVersions } from '../api/versions'
 import { CliUserError } from '../shared/cli-user-error'
-import { createSupabaseClient, findSavedKey, getAppId, getConfig, resolveUserIdFromApiKey } from '../utils'
+import { createCapgoClient, findSavedKey, getAppId, getConfig } from '../utils'
 
 export async function listBundle(appId: string, options: OptionsBase, silent = false) {
   if (!silent)
@@ -28,15 +28,13 @@ export async function listBundle(appId: string, options: OptionsBase, silent = f
     throw new CliUserError('Missing appId')
   }
 
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
-  await check2FAComplianceForApp(supabase, appId, silent)
-  await resolveUserIdFromApiKey(supabase, options.apikey)
-  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.read_bundles', silent, true)
+  const client = await createCapgoClient(options.apikey, options.apiHost)
+  await checkAppExistsAndHasPermissionOrgErr(client, options.apikey, appId, 'app.read_bundles', silent)
 
   if (!silent)
     log.info(`Querying available versions of: ${appId} in Capgo`)
 
-  const allVersions = await getActiveAppVersions(options.apikey!, appId, { silent, apikey: options.apikey!, supaHost: options.supaHost, supaAnon: options.supaAnon })
+  const allVersions = await getActiveAppVersions(options.apikey!, appId, { silent, apikey: options.apikey!, apiHost: options.apiHost })
 
   void trackEvent({ channel: 'bundle', event: 'Bundles Listed', tags: { bundle_count: allVersions?.length ?? 0 } })
 

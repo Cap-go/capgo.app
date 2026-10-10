@@ -17,8 +17,7 @@ export async function fetchObserve(options: ObserveOptions): Promise<Record<stri
       sort: options.sort,
       limit: options.limit,
     },
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
   if (error)
     throw new CliUserError(await formatCapgoCliInvokeError(error))

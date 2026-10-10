@@ -14,7 +14,10 @@ import { greaterOrEqual, parse } from '@std/semver'
 // Native fetch is available in Node.js >= 18
 import pack from '../../package.json'
 import { trackEvent } from '../analytics/track'
-import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
+import { runCliPreflight } from '../api/preflight'
+import { fetchChannelCompatibilityContext } from '../api/channels'
+import { fetchCliChannels, fetchLatestBundle } from '../api/cli-data'
+import { fetchBundleVersionRow, upsertAppVersion } from '../api/versions'
 import { calcKeyId, encryptChecksum, encryptChecksumV3, encryptSource, generateSessionKey } from '../api/crypto'
 import { checkAlerts } from '../api/update'
 import { loadSavedCredentials } from '../build/credentials'
@@ -25,7 +28,7 @@ import { showReplicationProgress } from '../replicationProgress'
 import { CliUserError } from '../shared/cli-user-error'
 import { formatTable } from '../terminal-table'
 import { usesAlwaysDirectUpdate } from '../updaterConfig'
-import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, channelUpdatePackageCliError, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, formatVerboseError, getBundleVersion, getCompatibilityDetails, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
+import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, channelUpdatePackageCliError, checkCompatibilityCloud, createCapgoClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, formatVerboseError, getBundleVersion, getCompatibilityDetails, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
 import type { AutoBumpLevel } from '../versionHelpers'
 import { autoBumpVersionBy, getVersionSuggestions, interactiveVersionBump, normalizeAutoBumpInput } from '../versionHelpers'
 import { resolveAutoBumpLevelFromAi } from './auto-bump-ai'
@@ -45,7 +48,7 @@ import { clackUploadReporter, getUploadReporter, runWithUploadReporter } from '.
 import { ManifestUploadAbandonError, resolveManifestUploadAbandonScope } from './upload-abandon-error'
 import { formatUploadChannels, getChannelsToAssignByChecksum, parseUploadChannels } from './upload-channels'
 
-type SupabaseType = Awaited<ReturnType<typeof createSupabaseClient>>
+type SupabaseType = Awaited<ReturnType<typeof createCapgoClient>>
 type pmType = ReturnType<typeof getPMAndCommand>
 type localConfigType = Awaited<ReturnType<typeof getLocalConfig>>
 type UploadTargetChannel = Pick<Database['public']['Tables']['channels']['Row'], 'id' | 'public' | 'version' | 'rollout_version' | 'rollout_enabled' | 'rollout_percentage_bps'>
@@ -100,16 +103,17 @@ function uploadCancel(): never {
 export class IncompatibleBundleError extends CliUserError {}
 
 async function persistVersionData(
-  supabase: SupabaseType,
+  apikey: string,
   versionData: Database['public']['Tables']['app_versions']['Insert'],
   action: 'add' | 'update',
+  cliHost?: { apikey?: string, apiHost?: string },
 ) {
-  const { data, error } = await updateOrCreateVersion(supabase, versionData)
-    .select('id')
-    .single()
-  if (error)
+  try {
+    return await upsertAppVersion(apikey, versionData, { apikey, ...cliHost })
+  }
+  catch (error) {
     uploadFail(`Cannot ${action} bundle ${formatError(error)}`)
-  return data.id
+  }
 }
 
 /**
@@ -164,8 +168,7 @@ async function getAppIdAndPath(appId: string | undefined, options: OptionsUpload
     apikey: options.apikey || findSavedKey(true),
     packageJsonPaths: parsePackageJsonOptionPaths(options.packageJson),
     interactive,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
   const path = options.path || config?.webDir || (isCordovaMode(options.mode) ? CORDOVA_DEFAULT_WEB_DIR : undefined)
 
@@ -213,26 +216,29 @@ async function checkNotifyAppReady(options: OptionsUpload, path: string, interac
   }
 }
 
-async function verifyCompatibility(supabase: SupabaseType, pm: pmType, options: OptionsUpload, channel: string, appid: string, bundle: string, orgId: string) {
+async function verifyCompatibility(apikey: string, pm: pmType, options: OptionsUpload, channel: string, appid: string, bundle: string, orgId: string) {
   // Check compatibility here
   const ignoreMetadataCheck = options.ignoreMetadataCheck
   const autoMinUpdateVersion = options.autoMinUpdateVersion
   let minUpdateVersion = options.minUpdateVersion
+  const cliHost = { apiHost: options.apiHost }
 
-  const { data: channelData, error: channelError } = await supabase
-    .from('channels')
-    .select('disable_auto_update, version ( id, name, min_update_version, native_packages )')
-    .eq('name', channel)
-    .eq('app_id', appid)
-    .maybeSingle()
-
-  if (channelError)
-    uploadFail(`Cannot load channel ${channel} for compatibility checks ${formatError(channelError)}`)
+  let channelData: Awaited<ReturnType<typeof fetchChannelCompatibilityContext>> | null
+  try {
+    channelData = await fetchChannelCompatibilityContext(
+      { apikey, ...cliHost },
+      appid,
+      channel,
+    )
+  }
+  catch (error) {
+    uploadFail(`Cannot load channel ${channel} for compatibility checks ${formatError(error)}`)
+  }
 
   // The version currently live on the channel — what the new bundle is compared
   // against. Captured here (before the channel is repointed at the new bundle)
   // so the incompatible-bundle Bento signal can report the prior version.
-  const oldVersion = (channelData?.version ?? undefined) as unknown as { id?: number | string, name?: string } | undefined
+  const oldVersion = channelData?.version ?? undefined
 
   const updateMetadataRequired = !!channelData && channelData.disable_auto_update === 'version_number'
 
@@ -240,13 +246,13 @@ async function verifyCompatibility(supabase: SupabaseType, pm: pmType, options: 
   let finalCompatibility: Awaited<ReturnType<typeof checkCompatibilityCloud>>['finalCompatibility'] | undefined
 
   // We only check compatibility IF the channel exists
-  if (!channelError && channelData && channelData.version && (channelData.version as any).native_packages && !ignoreMetadataCheck) {
+  if (channelData?.version && channelData.version.native_packages != null && !ignoreMetadataCheck) {
     const spinner = getUploadReporter().spinner()
     spinner.start(`Checking bundle compatibility with channel ${channel}`)
     const {
       finalCompatibility: finalCompatibilityWithChannel,
       localDependencies: localDependenciesWithChannel,
-    } = await checkCompatibilityCloud(supabase, appid, channel, options.packageJson, options.nodeModules)
+    } = await checkCompatibilityCloud(apikey, appid, channel, options.packageJson, options.nodeModules, cliHost)
 
     finalCompatibility = finalCompatibilityWithChannel
     localDependencies = localDependenciesWithChannel
@@ -267,7 +273,7 @@ async function verifyCompatibility(supabase: SupabaseType, pm: pmType, options: 
     }
     else if (autoMinUpdateVersion) {
       try {
-        const { min_update_version: lastMinUpdateVersion } = channelData.version as any
+        const lastMinUpdateVersion = channelData.version?.min_update_version
         if (!lastMinUpdateVersion || !regexSemver.test(lastMinUpdateVersion))
           uploadFail('Invalid remote min update version, skipping auto setting compatibility')
 
@@ -351,16 +357,20 @@ async function verifyCompatibility(supabase: SupabaseType, pm: pmType, options: 
   }
 }
 
-async function checkVersionExists(supabase: SupabaseType, appid: string, bundle: string, versionExistsOk = false, interactive = false): Promise<boolean | string> {
-  // check if app already exist
-  const { data: appVersion, error: appVersionError } = await supabase
-    .rpc('exist_app_versions', { appid, name_version: bundle })
-    .single()
+async function checkVersionExists(
+  apikey: string,
+  appid: string,
+  bundle: string,
+  versionExistsOk = false,
+  interactive = false,
+  httpOptions?: { apiHost?: string },
+): Promise<boolean | string> {
+  const existingVersion = await fetchBundleVersionRow(apikey, appid, bundle, {
+    ...httpOptions,
+    includeDeleted: true,
+  }).catch(error => uploadFail(formatError(error)))
 
-  if (appVersionError)
-    uploadFail(`Cannot check if version ${bundle} already exists ${formatError(appVersionError)}`)
-
-  if (appVersion) {
+  if (existingVersion) {
     if (versionExistsOk) {
       log.warn(`Version ${bundle} already exists - exiting gracefully due to --version-exists-ok option`)
       getUploadReporter().outro('Bundle version already exists - exiting gracefully 🎉')
@@ -429,13 +439,19 @@ function pickHighestMinUpdateVersion(results: Array<{ minUpdateVersion?: string 
   return selected
 }
 
-async function getChannelsToAssignAfterChecksumCheck(supabase: SupabaseType, appid: string, channels: string[], currentChecksum: string): Promise<string[]> {
+async function getChannelsToAssignAfterChecksumCheck(
+  apikey: string,
+  appid: string,
+  channels: string[],
+  currentChecksum: string,
+  httpOptions?: { apiHost?: string },
+): Promise<string[]> {
   const remoteChecksums = new Map<string, string | null>()
 
   for (const targetChannel of channels) {
     const s = getUploadReporter().spinner()
     s.start(`Checking bundle checksum compatibility with channel ${targetChannel}`)
-    const remoteChecksum = await getRemoteChecksums(supabase, appid, targetChannel)
+    const remoteChecksum = await getRemoteChecksums(apikey, appid, targetChannel, httpOptions)
     remoteChecksums.set(targetChannel, remoteChecksum)
 
     if (!remoteChecksum) {
@@ -686,7 +702,7 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
   return { zipped, ivSessionKey, sessionKey, checksum, encryptionMethod, finalKeyData, keyId }
 }
 
-async function uploadBundleToCapgoCloud(apikey: string, supabase: SupabaseType, appid: string, bundle: string, orgId: string, zipped: Buffer, options: OptionsUpload, tusChunkSize: number) {
+async function uploadBundleToCapgoCloud(apikey: string, client: SupabaseType, appid: string, bundle: string, orgId: string, zipped: Buffer, options: OptionsUpload, tusChunkSize: number) {
   const spinner = getUploadReporter().spinner()
   spinner.start(`Uploading Bundle`)
   const startTime = performance.now()
@@ -733,13 +749,14 @@ async function uploadBundleToCapgoCloud(apikey: string, supabase: SupabaseType, 
         log.info(`[Verbose] TUS upload completed, updating database with R2 path...`)
 
       const filePath = `orgs/${orgId}/apps/${appid}/${bundle}.zip`
-      const { error: changeError } = await supabase
-        .from('app_versions')
-        .update({ r2_path: filePath })
-        .eq('name', bundle)
-        .eq('app_id', appid)
-
-      if (changeError) {
+      try {
+        await upsertAppVersion(apikey, {
+          app_id: appid,
+          name: bundle,
+          r2_path: filePath,
+        }, { apikey, apiHost: options.apiHost })
+      }
+      catch (changeError) {
         log.error(`Cannot finish TUS upload ${formatError(changeError)}`)
         if (options.verbose)
           log.info(`[Verbose] Database update failed: ${formatError(changeError)}`)
@@ -905,58 +922,64 @@ function formatRolloutPercentage(bps: number) {
   return `${Number((bps / 100).toFixed(2))}%`
 }
 
-async function getVersionIdForChannelUpdate(supabase: SupabaseType, apikey: string, appid: string, bundle: string) {
-  const { data: versionId } = await supabase
-    .rpc('get_app_versions', { apikey, name_version: bundle, appid })
-    .single()
+async function getVersionIdForChannelUpdate(
+  apikey: string,
+  appid: string,
+  bundle: string,
+  httpOptions?: { apiHost?: string },
+) {
+  const version = await fetchBundleVersionRow(apikey, appid, bundle, {
+    ...httpOptions,
+    includeDeleted: true,
+  })
 
-  if (!versionId)
+  if (!version?.id)
     uploadFail('Cannot get version id, cannot set channel')
 
-  return versionId
+  return version.id
 }
 
 
-async function versionExistsOnRemote(supabase: SupabaseType, appid: string, bundle: string): Promise<boolean> {
-  const { data: appVersion, error: appVersionError } = await supabase
-    .rpc('exist_app_versions', { appid, name_version: bundle })
-    .single()
-
-  if (appVersionError)
-    uploadFail(`Cannot check if version ${bundle} already exists ${formatError(appVersionError)}`)
-
-  return !!appVersion
+async function versionExistsOnRemote(
+  apikey: string,
+  appid: string,
+  bundle: string,
+  httpOptions?: { apiHost?: string },
+): Promise<boolean> {
+  const version = await fetchBundleVersionRow(apikey, appid, bundle, {
+    ...httpOptions,
+    includeDeleted: true,
+  })
+  return !!version
 }
 
-async function getLatestRemoteAppVersion(supabase: SupabaseType, appid: string): Promise<string | null> {
-  // Include deleted versions: Capgo forbids reusing deleted names (exist_app_versions
-  // still treats them as occupied), so occupancy must drive the auto-bump base.
-  const { data, error } = await supabase
-    .from('app_versions')
-    .select('name')
-    .eq('app_id', appid)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  if (error) {
+async function getLatestRemoteAppVersion(
+  apikey: string,
+  appid: string,
+  httpOptions?: { apiHost?: string },
+): Promise<string | null> {
+  // Includes deleted bundles: their names stay occupied, so they still anchor auto-bump.
+  try {
+    const latest = await fetchLatestBundle({ apikey, apiHost: httpOptions?.apiHost }, appid)
+    return latest?.name ?? null
+  }
+  catch (error) {
     log.warn(`Cannot fetch latest remote version ${formatError(error)}`)
     return null
   }
-
-  return data?.name ?? null
 }
 
 async function findFreeAutoBumpCandidate(
-  supabase: SupabaseType,
+  apikey: string,
   appid: string,
   startCandidate: string,
   level: AutoBumpLevel,
   baseVersion: string,
+  httpOptions?: { apiHost?: string },
 ): Promise<string> {
   let candidate = startCandidate
   for (let attempt = 0; attempt < 100; attempt++) {
-    const exists = await versionExistsOnRemote(supabase, appid, candidate)
+    const exists = await versionExistsOnRemote(apikey, appid, candidate, httpOptions)
     if (!exists) {
       if (candidate !== baseVersion)
         log.info(`🔢 Auto-bumped (${level}) version from ${baseVersion} to ${candidate}`)
@@ -969,54 +992,64 @@ async function findFreeAutoBumpCandidate(
 }
 
 async function resolveAutoBumpVersion(
-  supabase: SupabaseType,
+  apikey: string,
   appid: string,
   channels: string[],
   localBundle: string,
   level: AutoBumpLevel,
+  httpOptions?: { apiHost?: string },
 ): Promise<string> {
   const primaryChannel = channels[0]
-  const linked = await getLinkedBundleOnChannel(supabase, appid, primaryChannel)
+  const linked = await getLinkedBundleOnChannel(apikey, appid, primaryChannel, httpOptions)
   let baseVersion = linked?.name ?? null
 
   if (baseVersion) {
     log.info(`📦 Auto-bump base from channel ${primaryChannel}: ${baseVersion}`)
   }
   else {
-    baseVersion = await getLatestRemoteAppVersion(supabase, appid)
+    baseVersion = await getLatestRemoteAppVersion(apikey, appid, httpOptions)
     if (baseVersion)
       log.info(`📦 Auto-bump base from latest remote app version: ${baseVersion}`)
   }
 
   if (!baseVersion) {
     log.info(`ℹ️ No remote versions found for auto-bump, keeping local version ${localBundle}`)
-    return findFreeAutoBumpCandidate(supabase, appid, localBundle, level, localBundle)
+    return findFreeAutoBumpCandidate(apikey, appid, localBundle, level, localBundle, httpOptions)
   }
 
   const candidate = autoBumpVersionBy(baseVersion, level)
-  return findFreeAutoBumpCandidate(supabase, appid, candidate, level, baseVersion)
+  return findFreeAutoBumpCandidate(apikey, appid, candidate, level, baseVersion, httpOptions)
 }
 
 // It is really important that this function never terminates the program, it should always return.
-async function getLinkedBundleOnChannel(supabase: SupabaseType, appid: string, channel: string): Promise<LinkedChannelVersion> {
-  const { data, error } = await supabase
-    .from('channels')
-    .select('version:app_versions!channels_version_fkey( id, name, deleted )')
-    .eq('app_id', appid)
-    .eq('name', channel)
+async function getLinkedBundleOnChannel(
+  apikey: string,
+  appid: string,
+  channel: string,
+  httpOptions?: { apiHost?: string },
+): Promise<LinkedChannelVersion> {
+  const params = new URLSearchParams({
+    app_id: appid,
+    channel,
+    page: '0',
+  })
+  const { data, error } = await invokeCapgoCliApi<{
+    version?: { id?: number, name?: string, deleted?: boolean } | null
+  }>(`channel?${params.toString()}`, {
+    apikey,
+    method: 'GET',
+    body: undefined,
+    apiHost: httpOptions?.apiHost,
+  })
 
   if (error) {
     log.error(`Cannot delete linked bundle on upload ${formatError(error)}`)
     return null
   }
 
-  if (data.length === 0) {
-    log.warn('No linked bundle found in the channel you are trying to upload to')
-    return null
-  }
-
-  const version = data[0].version
-  if (!version) {
+  const channelRow = Array.isArray(data) ? data[0] : data
+  const version = channelRow?.version
+  if (!version?.id || !version.name) {
     log.warn('No linked bundle found in the channel you are trying to upload to')
     return null
   }
@@ -1025,18 +1058,32 @@ async function getLinkedBundleOnChannel(supabase: SupabaseType, appid: string, c
     return null
   }
 
-  return version
+  return {
+    id: version.id,
+    name: version.name,
+    deleted: version.deleted ?? false,
+  }
 }
 
 // It is really important that this function never terminates the program, it should always return.
-async function deleteLinkedBundleOnUpload(supabase: SupabaseType, version: LinkedChannelVersion) {
+async function deleteLinkedBundleOnUpload(
+  apikey: string,
+  version: LinkedChannelVersion,
+  appid: string,
+  httpOptions?: { apiHost?: string },
+) {
   if (!version)
     return
 
-  const { error: deleteError } = await supabase
-    .from('app_versions')
-    .update({ deleted: true })
-    .eq('id', version.id)
+  const { error: deleteError } = await invokeCapgoCliApi('bundle', {
+    apikey,
+    method: 'DELETE',
+    body: {
+      app_id: appid,
+      version: version.name,
+    },
+    apiHost: httpOptions?.apiHost,
+  })
 
   if (deleteError) {
     log.error(`Cannot delete linked bundle on upload ${formatError(deleteError)}`)
@@ -1047,48 +1094,65 @@ async function deleteLinkedBundleOnUpload(supabase: SupabaseType, version: Linke
 }
 
 async function findUploadTargetChannel(
-  supabase: SupabaseType,
+  apikey: string,
   appid: string,
   channel: string,
   failOnError = true,
+  httpOptions?: { apiHost?: string },
 ): Promise<UploadTargetChannel | null> {
-  const { data, error } = await supabase
-    .from('channels')
-    .select('id, public, version, rollout_version, rollout_enabled, rollout_percentage_bps')
-    .eq('app_id', appid)
-    .eq('name', channel)
-    .maybeSingle()
+  // Caller-key read: upload keys with channel.promote_bundle / app.create_channel
+  // do not necessarily have app.read_channels (required by GET /channel).
+  let rows: Awaited<ReturnType<typeof fetchCliChannels>>
+  try {
+    rows = await fetchCliChannels({ apikey, apiHost: httpOptions?.apiHost }, appid, channel)
+  }
+  catch (error) {
+    if (failOnError)
+      uploadFail(`Cannot check channel ${channel}: ${formatError(error)}`)
+    return null
+  }
 
-  if (error && failOnError)
-    uploadFail(`Cannot check channel ${channel}: ${formatError(error)}`)
+  const channelRow = rows.find(row => row.name === channel)
+  if (!channelRow?.id)
+    return null
 
-  return data
+  const stableVersionId = channelRow.version ?? null
+
+  return {
+    id: channelRow.id,
+    public: channelRow.public ?? false,
+    version: stableVersionId,
+    rollout_version: channelRow.rollout_version ?? null,
+    rollout_enabled: channelRow.rollout_enabled ?? false,
+    rollout_percentage_bps: channelRow.rollout_percentage_bps ?? null,
+  }
 }
 
 async function preflightRequiredChannelAssignments(
-  supabase: SupabaseType,
+  client: SupabaseType,
   apikey: string,
   appid: string,
   channels: string[],
   selfAssign = false,
   rolloutPercentageBps?: number,
   rolloutAdvance = false,
+  httpOptions?: { apiHost?: string },
 ): Promise<Map<string, UploadTargetChannel | null>> {
   const uploadTargetChannels = new Map<string, UploadTargetChannel | null>()
   const assignsRollout = rolloutPercentageBps != null || rolloutAdvance
 
   for (const channel of new Set(channels)) {
-    const targetChannel = await findUploadTargetChannel(supabase, appid, channel)
+    const targetChannel = await findUploadTargetChannel(apikey, appid, channel, true, httpOptions)
 
     if (targetChannel) {
       uploadTargetChannels.set(channel, targetChannel)
-      const canPromoteTargetChannel = await hasCliPermission(supabase, apikey, 'channel.promote_bundle', { appId: appid, channelId: targetChannel.id })
+      const canPromoteTargetChannel = await hasCliPermission(client, apikey, 'channel.promote_bundle', { appId: appid, channelId: targetChannel.id })
       if (!canPromoteTargetChannel)
         uploadFail('Cannot set channel because this API key lacks channel.promote_bundle for the target channel')
 
       const requiresSettingsUpdate = selfAssign || assignsRollout
       if (requiresSettingsUpdate) {
-        const canUpdateChannelSettings = await hasCliPermission(supabase, apikey, 'channel.update_settings', { appId: appid, channelId: targetChannel.id })
+        const canUpdateChannelSettings = await hasCliPermission(client, apikey, 'channel.update_settings', { appId: appid, channelId: targetChannel.id })
         if (!canUpdateChannelSettings) {
           uploadFail(selfAssign
             ? 'Cannot enable device self-assign because this API key lacks channel.update_settings'
@@ -1109,7 +1173,7 @@ async function preflightRequiredChannelAssignments(
     if (assignsRollout)
       uploadFail(`Cannot set rollout, channel ${channel} must already exist with a stable bundle`)
 
-    const canCreateChannel = await hasCliPermission(supabase, apikey, 'app.create_channel', { appId: appid })
+    const canCreateChannel = await hasCliPermission(client, apikey, 'app.create_channel', { appId: appid })
     if (!canCreateChannel)
       uploadFail('Cannot create target channel because this API key lacks app.create_channel')
 
@@ -1140,7 +1204,7 @@ async function promoteExistingChannel(
   targetChannel: UploadTargetChannel,
   localConfig: localConfigType,
   displayBundleUrl: boolean,
-  options?: { supaHost?: string, supaAnon?: string },
+  options?: { apiHost?: string },
 ): Promise<boolean> {
   const { error } = await invokeCapgoCliApi('bundle', {
     apikey,
@@ -1150,8 +1214,7 @@ async function promoteExistingChannel(
       version_id: versionId,
       channel_id: targetChannel.id,
     },
-    supaHost: options?.supaHost,
-    supaAnon: options?.supaAnon,
+    apiHost: options?.apiHost,
   })
 
   if (error) {
@@ -1175,7 +1238,7 @@ async function promoteExistingChannel(
 }
 
 async function setVersionInChannel(
-  supabase: SupabaseType,
+  client: SupabaseType,
   apikey: string,
   displayBundleUrl: boolean,
   bundle: string,
@@ -1187,12 +1250,12 @@ async function setVersionInChannel(
   targetChannel: UploadTargetChannel | null,
   requireChannelAssignment = false,
   selfAssign?: boolean,
-  cliHost?: { supaHost?: string, supaAnon?: string },
+  cliHost?: { apiHost?: string },
 ): Promise<boolean> {
   const canPromoteTargetChannel = targetChannel !== null
-    && await hasCliPermission(supabase, apikey, 'channel.promote_bundle', { appId: appid, channelId: targetChannel.id })
+    && await hasCliPermission(client, apikey, 'channel.promote_bundle', { appId: appid, channelId: targetChannel.id })
   const canCreateChannel = targetChannel === null
-    && await hasCliPermission(supabase, apikey, 'app.create_channel', { appId: appid })
+    && await hasCliPermission(client, apikey, 'app.create_channel', { appId: appid })
 
   if (targetChannel && !canPromoteTargetChannel) {
     const message = 'Cannot set channel because this API key lacks channel.promote_bundle for the target channel'
@@ -1203,9 +1266,9 @@ async function setVersionInChannel(
   }
 
   if (targetChannel && canPromoteTargetChannel) {
-    const versionId = await getVersionIdForChannelUpdate(supabase, apikey, appid, bundle)
+    const versionId = await getVersionIdForChannelUpdate(apikey, appid, bundle, cliHost)
     if (selfAssign) {
-      const canUpdateChannelSettings = await hasCliPermission(supabase, apikey, 'channel.update_settings', { appId: appid, channelId: targetChannel.id })
+      const canUpdateChannelSettings = await hasCliPermission(client, apikey, 'channel.update_settings', { appId: appid, channelId: targetChannel.id })
       if (!canUpdateChannelSettings) {
         log.warn('Cannot enable device self-assign because this API key lacks channel.update_settings')
         return promoteExistingChannel(apikey, appid, versionId, targetChannel, localConfig, displayBundleUrl, cliHost)
@@ -1215,23 +1278,28 @@ async function setVersionInChannel(
     if (!selfAssign)
       return promoteExistingChannel(apikey, appid, versionId, targetChannel, localConfig, displayBundleUrl, cliHost)
 
-    const { error: dbError3, data } = await updateOrCreateChannel(supabase, {
-      name: channel,
-      app_id: appid,
-      created_by: userId,
-      version: versionId,
-      owner_org: orgId,
-      ...(selfAssign ? { allow_device_self_set: true } : {}),
+    const { error: dbError3, data } = await invokeCapgoCliApi<{ id?: number, public?: boolean }>('channel', {
+      apikey,
+      method: 'POST',
+      body: {
+        app_id: appid,
+        channel,
+        version: bundle,
+        allow_device_self_set: true,
+      },
+      apiHost: cliHost?.apiHost,
     })
     if (dbError3) {
       await uploadFailIfChannelError(dbError3, () => `Cannot set channel because this API key does not have the required RBAC permission. ${formatError(dbError3)}`)
     }
-    if (data?.id) {
-      const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${data.id}`
+    // POST /channel returns only { status } for existing channels; fall back to the row read earlier.
+    const channelId = Number(data?.id ?? targetChannel.id)
+    if (Number.isSafeInteger(channelId)) {
+      const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${channelId}`
       if (targetChannel.rollout_enabled && targetChannel.rollout_version != null) {
         log.warn('This channel has an active progressive rollout. Linking this bundle as the stable version resets that rollout, so devices receive the new bundle instead of the previous rollout target.')
       }
-      else if (data.public) {
+      else if (data?.public ?? targetChannel.public) {
         log.info('Your update is now available in your public channel 🎉')
       }
       else {
@@ -1255,8 +1323,7 @@ async function setVersionInChannel(
         version: bundle,
         ...(selfAssign ? { allow_device_self_set: true } : {}),
       },
-      supaHost: cliHost?.supaHost,
-      supaAnon: cliHost?.supaAnon,
+      apiHost: cliHost?.apiHost,
     })
     if (error) {
       await uploadFailIfChannelError(error, async () => `Cannot create channel and set its bundle because this API key does not have the required RBAC permission. ${await formatFunctionInvokeError(error)}`)
@@ -1267,7 +1334,7 @@ async function setVersionInChannel(
     let createdChannelPublic = createdChannel?.public === true
     if (!Number.isSafeInteger(createdChannelId) || typeof createdChannel?.public !== 'boolean') {
       // Older channel endpoints do not return metadata, so only their fallback reads the new channel.
-      const fallbackChannel = await findUploadTargetChannel(supabase, appid, channel, false)
+      const fallbackChannel = await findUploadTargetChannel(apikey, appid, channel, false, cliHost)
       const fallbackChannelId = Number(fallbackChannel?.id)
       if (!Number.isSafeInteger(fallbackChannelId)) {
         if (!Number.isSafeInteger(createdChannelId)) {
@@ -1300,7 +1367,7 @@ async function setVersionInChannel(
 }
 
 async function setRolloutVersionInChannel(
-  supabase: SupabaseType,
+  client: SupabaseType,
   apikey: string,
   displayBundleUrl: boolean,
   bundle: string,
@@ -1311,7 +1378,7 @@ async function setRolloutVersionInChannel(
   rolloutPercentageBps: number,
   rolloutCacheTtlSeconds?: number,
   selfAssign?: boolean,
-  cliHost?: { supaHost?: string, supaAnon?: string },
+  cliHost?: { apiHost?: string },
   promoteCurrentRollout = false,
 ): Promise<boolean> {
   if (!targetChannel)
@@ -1321,10 +1388,10 @@ async function setRolloutVersionInChannel(
   if (promoteCurrentRollout && targetChannel.rollout_version == null)
     uploadFail(`Cannot advance rollout, channel ${channel} has no rollout target to promote to stable`)
 
-  const versionId = await getVersionIdForChannelUpdate(supabase, apikey, appid, bundle)
+  const versionId = await getVersionIdForChannelUpdate(apikey, appid, bundle, cliHost)
   const [canPromote, canUpdateSettings] = await Promise.all([
-    hasCliPermission(supabase, apikey, 'channel.promote_bundle', { appId: appid, channelId: targetChannel.id }),
-    hasCliPermission(supabase, apikey, 'channel.update_settings', { appId: appid, channelId: targetChannel.id }),
+    hasCliPermission(client, apikey, 'channel.promote_bundle', { appId: appid, channelId: targetChannel.id }),
+    hasCliPermission(client, apikey, 'channel.update_settings', { appId: appid, channelId: targetChannel.id }),
   ])
   if (!canPromote)
     uploadFail('Cannot set rollout because this API key lacks channel.promote_bundle for the target channel')
@@ -1346,8 +1413,7 @@ async function setRolloutVersionInChannel(
       ...(rolloutCacheTtlSeconds != null ? { rolloutCacheTtlSeconds } : {}),
       ...(selfAssign ? { allow_device_self_set: true } : {}),
     },
-    supaHost: cliHost?.supaHost,
-    supaAnon: cliHost?.supaAnon,
+    apiHost: cliHost?.apiHost,
   })
 
   if (rolloutError) {
@@ -1363,13 +1429,23 @@ async function setRolloutVersionInChannel(
     log.info(`Bundle url: ${bundleUrl}`)
   return true
 }
-export async function getDefaultUploadChannel(appId: string, supabase: SupabaseType, hostWeb: string) {
-  const { error, data } = await supabase.from('apps')
-    .select('default_upload_channel')
-    .eq('app_id', appId)
-    .single()
+export async function getDefaultUploadChannel(
+  appId: string,
+  apikey: string,
+  hostWeb: string,
+  httpOptions?: { apiHost?: string },
+) {
+  const { error, data } = await invokeCapgoCliApi<{ default_upload_channel?: string }>(
+    `app/${encodeURIComponent(appId)}`,
+    {
+      apikey,
+      method: 'GET',
+      body: undefined,
+      apiHost: httpOptions?.apiHost,
+    },
+  )
 
-  if (error) {
+  if (error || !data?.default_upload_channel) {
     throw new Error(`Cannot find default upload channel: ${formatError(error)}. You can set it here: ${hostWeb}/app/${appId}/info`)
   }
 
@@ -1478,30 +1554,27 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] Local config loaded: host=${localConfig.hostWeb}`)
 
-  if (options.supaHost && options.supaAnon) {
-    log.info('Using custom supabase instance from provided options')
-    localConfig.supaHost = options.supaHost
-    localConfig.supaKey = options.supaAnon
-    if (options.verbose)
-      log.info(`[Verbose] Custom Supabase host: ${options.supaHost}`)
-  }
-
-  const supabase = await createSupabaseClient(apikey, options.supaHost, options.supaAnon)
+  const client = await createCapgoClient(apikey, options.apiHost)
   if (options.verbose)
     log.info(`[Verbose] Supabase client created successfully`)
 
-  // Check 2FA compliance early to give a clear error message
-  await check2FAComplianceForApp(supabase, appid, silent)
-
-  // Fail fast if the app does not exist (or we lack upload permission) BEFORE sending any
-  // bundle bytes. Otherwise the whole bundle uploads first and the files backend rejects the
-  // TUS request with a raw `app_not_found` 404, hiding the actionable `app add` guidance.
-  // 2FA was already checked just above, so skip the redundant check here.
-  await checkAppExistsAndHasPermissionOrgErr(supabase, apikey, appid, 'app.upload_bundle', silent, true)
+  // One backend preflight BEFORE sending any bundle bytes: 2FA policy, app existence,
+  // app.upload_bundle permission, storage plan and org CLI warnings. Otherwise the whole
+  // bundle uploads first and the files backend rejects the TUS request with a raw
+  // `app_not_found` 404, hiding the actionable `app add` guidance.
+  const preflight = await runCliPreflight(client, {
+    appId: appid,
+    permission: 'app.upload_bundle',
+    plan: 'upload',
+    cliVersion: pack.version,
+  }, {
+    silent,
+    permissionDeniedMessage: `Insufficient permissions for app ${appid}. Required RBAC permission for this action: app.upload_bundle.`,
+  })
   if (options.verbose)
-    log.info(`[Verbose] App exists and API key has app.upload_bundle permission`)
+    log.info(`[Verbose] Preflight passed: app exists, app.upload_bundle granted, storage plan valid`)
 
-  const userId = await resolveUserIdFromApiKey(supabase, apikey)
+  const userId = preflight?.userId ?? await resolveUserIdFromApiKey(client, apikey)
   if (options.verbose)
     log.info(`[Verbose] User verified successfully, user_id: ${userId}`)
 
@@ -1509,7 +1582,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.channel !== undefined && requestedChannels.length === 0)
     uploadFail('Missing channel name, pass one channel or a comma-separated list with --channel')
 
-  const defaultUploadChannel = requestedChannels.length > 0 ? null : await getDefaultUploadChannel(appid, supabase, localConfig.hostWeb)
+  const defaultUploadChannel = requestedChannels.length > 0 ? null : await getDefaultUploadChannel(appid, apikey, localConfig.hostWeb, options)
   const channels = requestedChannels.length > 0 ? requestedChannels : parseUploadChannels(defaultUploadChannel || 'production')
   if (channels.length === 0)
     uploadFail('Cannot resolve target channel')
@@ -1520,34 +1593,23 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] Target channel${channels.length > 1 ? 's' : ''}: ${channelLabel}`)
 
-  // App existence/permission already checked above; fetch org id for analytics and plan checks.
-  const orgId = await getOrganizationId(apikey, appid, { supaHost: options.supaHost, supaAnon: options.supaAnon })
+  // Preflight resolves the owner org; fall back to the app lookup when it was skipped.
+  const orgId = preflight?.orgId ?? await getOrganizationId(apikey, appid, { apiHost: options.apiHost })
   if (options.verbose)
     log.info(`[Verbose] Organization ID: ${orgId}`)
-
-  await checkRemoteCliMessages(supabase, orgId, pack.version)
-  if (options.verbose)
-    log.info(`[Verbose] Remote CLI messages checked`)
-
-  await checkPlanValidUpload(supabase, orgId, appid, true)
-  if (options.verbose)
-    log.info(`[Verbose] Plan validation passed`)
-  if (options.verbose)
-    log.info(`[Verbose] Trial check completed`)
 
   const autoBumpInput = normalizeAutoBumpInput(options.autoBump)
   if (autoBumpInput) {
     let level: AutoBumpLevel
     if (autoBumpInput === 'ai') {
       const decision = await resolveAutoBumpLevelFromAi({
-        supabase,
+        client,
         appid,
         channels,
         path,
         apikey,
         options: {
-          supaHost: options.supaHost,
-          supaAnon: options.supaAnon,
+          apiHost: options.apiHost,
         },
       })
       log.info(`🤖 AI auto-bump chose ${decision.level}: ${decision.reason}`)
@@ -1558,7 +1620,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     }
     if (options.verbose)
       log.info(`[Verbose] Resolving auto-bump (${level}) version from channel/app remote versions...`)
-    bundle = await resolveAutoBumpVersion(supabase, appid, channels, bundle, level)
+    bundle = await resolveAutoBumpVersion(apikey, appid, channels, bundle, level, options)
     if (options.verbose)
       log.info(`[Verbose] Bundle version after auto-bump: ${bundle}`)
   }
@@ -1580,7 +1642,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     log.info(`[Verbose] Checking if version ${bundle} already exists...`)
 
   // Enable interactive mode only when TTY is available
-  const versionExistsResult = await checkVersionExists(supabase, appid, bundle, options.versionExistsOk, interactive)
+  const versionExistsResult = await checkVersionExists(apikey, appid, bundle, options.versionExistsOk, interactive, options)
 
   if (options.verbose)
     log.info(`[Verbose] Version exists check: ${versionExistsResult ? (typeof versionExistsResult === 'string' ? `retry with ${versionExistsResult}` : 'yes (skipping)') : 'no (continuing)'}`)
@@ -1637,7 +1699,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     if (shouldCheckChecksum) {
       if (options.verbose)
         log.info(`[Verbose] Checking for duplicate checksum...`)
-      channelsToAssign = await getChannelsToAssignAfterChecksumCheck(supabase, appid, channels, preparedBundle.checksum)
+      channelsToAssign = await getChannelsToAssignAfterChecksumCheck(apikey, appid, channels, preparedBundle.checksum, options)
       if (options.verbose)
         log.info(`[Verbose] Checksum is unique or already satisfied across target channels`)
     }
@@ -1649,7 +1711,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
 
   const compatibilityResults = [] as Array<Awaited<ReturnType<typeof verifyCompatibility>> & { channel: string }>
   for (const targetChannel of channelsToAssign) {
-    const compatibilityResult = await verifyCompatibility(supabase, pm, options, targetChannel, appid, bundle, orgId)
+    const compatibilityResult = await verifyCompatibility(apikey, pm, options, targetChannel, appid, bundle, orgId)
     compatibilityResults.push({ channel: targetChannel, ...compatibilityResult })
   }
 
@@ -1733,7 +1795,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   }
   const channelAssignmentRequired = channelsToAssign.length > 0
   const uploadTargetChannels = channelAssignmentRequired
-    ? await preflightRequiredChannelAssignments(supabase, apikey, appid, channelsToAssign, !!options.selfAssign, rolloutPercentageBps, !!options.rolloutAdvance)
+    ? await preflightRequiredChannelAssignments(client, apikey, appid, channelsToAssign, !!options.selfAssign, rolloutPercentageBps, !!options.rolloutAdvance, options)
     : new Map<string, UploadTargetChannel | null>()
   const versionData = {
     name: bundle,
@@ -1900,7 +1962,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] Creating version record in database...`)
 
-  const versionId = await persistVersionData(supabase, versionData, 'add')
+  const versionId = await persistVersionData(apikey, versionData, 'add', options)
 
   if (options.verbose)
     log.info(`[Verbose] Version record created successfully`)
@@ -1995,7 +2057,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
       await s3Client.putObject(fileName, Uint8Array.from(zipped))
       versionData.external_url = `${endPoint}/${encodeFileName}`
       versionData.storage_provider = 'external'
-      await persistVersionData(supabase, versionData, 'update')
+      await persistVersionData(apikey, versionData, 'update', options)
     }
     catch (error) {
       try {
@@ -2014,7 +2076,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     if (shouldUploadFullZip(options)) {
       if (options.verbose)
         log.info(`[Verbose] Starting full bundle upload to Capgo Cloud...`)
-      await uploadBundleToCapgoCloud(apikey, supabase, appid, bundle, orgId, zipped, options, options.tusChunkSize)
+      await uploadBundleToCapgoCloud(apikey, client, appid, bundle, orgId, zipped, options, options.tusChunkSize)
     }
     else if (options.verbose) {
       log.info(`[Verbose] Skipping full bundle upload (delta-only mode)`)
@@ -2118,11 +2180,10 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
       apikey,
       appId: appid,
       bundle,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
       reporter: getUploadReporter(),
     }, async () => {
-      await persistVersionData(supabase, versionData, 'update')
+      await persistVersionData(apikey, versionData, 'update', options)
     })
 
     if (options.verbose)
@@ -2131,7 +2192,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
 
   // App existence and app.upload_bundle permission were already verified up front (before any
   // upload). Here we only need the extra bundle.delete permission for linked-bundle cleanup.
-  const canDeleteBundle = await hasCliPermission(supabase, apikey, 'bundle.delete', { appId: appid })
+  const canDeleteBundle = await hasCliPermission(client, apikey, 'bundle.delete', { appId: appid })
 
   if (options.verbose) {
     log.info(`[Verbose] Permissions:`)
@@ -2144,7 +2205,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   const linkedBundlesToDelete = shouldDeleteLinkedBundle
     ? await Promise.all(channelsToAssign.map(async targetChannel => ({
         channel: targetChannel,
-        version: await getLinkedBundleOnChannel(supabase, appid, targetChannel),
+        version: await getLinkedBundleOnChannel(apikey, appid, targetChannel, options),
       })))
     : []
   if (options.deleteLinkedBundleOnUpload && !shouldDeleteLinkedBundle) {
@@ -2159,15 +2220,15 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
 
     const uploadTargetChannel = uploadTargetChannels.has(targetChannel)
       ? uploadTargetChannels.get(targetChannel) ?? null
-      : await findUploadTargetChannel(supabase, appid, targetChannel)
+      : await findUploadTargetChannel(apikey, appid, targetChannel, true, options)
     const shouldAssignRollout = options.rolloutAdvance || rolloutPercentageBps != null
     const previousRolloutPercentageBps = uploadTargetChannel?.rollout_percentage_bps
     const nextRolloutPercentageBps = rolloutPercentageBps ?? previousRolloutPercentageBps ?? 0
     if (options.rolloutAdvance && rolloutPercentageBps == null && !((previousRolloutPercentageBps ?? 0) > 0))
       uploadFail(`Cannot advance rollout, channel ${targetChannel} has no rollout percentage to reuse. Pass --rollout or --rollout-percentage-bps`)
     const targetChannelVersionSet = shouldAssignRollout
-      ? await setRolloutVersionInChannel(supabase, apikey, !!options.bundleUrl, bundle, targetChannel, appid, localConfig, uploadTargetChannel, nextRolloutPercentageBps, options.rolloutCacheTtlSeconds, options.selfAssign, options, !!options.rolloutAdvance)
-      : await setVersionInChannel(supabase, apikey, !!options.bundleUrl, bundle, targetChannel, userId, orgId, appid, localConfig, uploadTargetChannel, channelAssignmentRequired, options.selfAssign, options)
+      ? await setRolloutVersionInChannel(client, apikey, !!options.bundleUrl, bundle, targetChannel, appid, localConfig, uploadTargetChannel, nextRolloutPercentageBps, options.rolloutCacheTtlSeconds, options.selfAssign, options, !!options.rolloutAdvance)
+      : await setVersionInChannel(client, apikey, !!options.bundleUrl, bundle, targetChannel, userId, orgId, appid, localConfig, uploadTargetChannel, channelAssignmentRequired, options.selfAssign, options)
     if (targetChannelVersionSet)
       channelVersionSet.add(targetChannel)
     if (options.verbose)
@@ -2183,7 +2244,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
         continue
       if (options.verbose)
         log.info(`[Verbose] Deleting previously linked bundle in channel ${linkedBundle.channel}...`)
-      await deleteLinkedBundleOnUpload(supabase, linkedBundle.version)
+      await deleteLinkedBundleOnUpload(apikey, linkedBundle.version, appid, options)
       deletedVersionIds.add(linkedBundle.version.id)
     }
   }

@@ -167,7 +167,7 @@ describe('manifest upload response contract', () => {
   it('calls the private endpoint with the complete request', async () => {
     let calledPath = ''
     let calledOptions: unknown
-    const resolved = await requestManifestUpload('api-key', request, { supaHost: 'https://supabase.example.test', supaAnon: 'anon' }, async (path, options) => {
+    const resolved = await requestManifestUpload('api-key', request, { apiHost: 'https://supabase.example.test/functions/v1' }, async (path, options) => {
       calledPath = path
       calledOptions = options
       return { data: response(), error: null }
@@ -177,8 +177,7 @@ describe('manifest upload response contract', () => {
     expect(calledOptions).toMatchObject({
       apikey: 'api-key',
       body: request,
-      supaHost: 'https://supabase.example.test',
-      supaAnon: 'anon',
+      apiHost: 'https://supabase.example.test/functions/v1',
     })
     expect(resolved.entries).toHaveLength(3)
   })

@@ -15,28 +15,15 @@ import {
 
 vi.mock('../cli/src/utils', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../cli/src/utils')>()
-  const { createClient } = await import('@supabase/supabase-js')
 
   return {
     ...actual,
-    createSupabaseClient: async (apikey: string, supaHost?: string, supaAnon?: string) => {
-      if (!supaHost || !supaAnon)
-        throw new Error('CLI preview lifecycle test requires a local Supabase host and anon key')
+    createCapgoClient: async (apikey: string, apiHost?: string) => {
+      if (!apiHost)
+        throw new Error('CLI preview lifecycle test requires a local Capgo API host')
 
-      return createClient(supaHost, supaAnon, {
-        auth: {
-          persistSession: false,
-        },
-        global: {
-          headers: {
-            capgkey: apikey,
-          },
-        },
-      })
+      return { apikey, apiHost, filesHost: apiHost }
     },
-    checkPlanValid: async () => {},
-    checkPlanValidUpload: async () => {},
-    checkRemoteCliMessages: async () => {},
     getConfig: async () => ({ config: {} }),
     getRemoteFileConfig: async () => ({
       alertUploadSize: 1_000_000,
@@ -246,8 +233,7 @@ describe('cli app preview lifecycle', () => {
 
     const cliOptions = {
       apikey: apiKey.key,
-      supaHost: SUPABASE_BASE_URL,
-      supaAnon: SUPABASE_ANON_KEY,
+      apiHost: `${SUPABASE_BASE_URL}/functions/v1`,
     }
 
     await expect(addChannelInternal(DEFAULT_CHANNEL_NAME, APPNAME, {
@@ -309,7 +295,7 @@ describe('cli app preview lifecycle', () => {
     const channelPostIndex = requests.findIndex(request => request.method === 'POST' && request.path === '/functions/v1/channel')
     expect(channelPostIndex).toBeGreaterThanOrEqual(0)
     expect(requests).not.toContainEqual({ method: 'POST', path: '/rest/v1/rpc/get_app_versions' })
-    expect(requests.slice(channelPostIndex + 1)).not.toContainEqual({ method: 'GET', path: '/rest/v1/channels' })
+    expect(requests.slice(channelPostIndex + 1)).not.toContainEqual({ method: 'GET', path: '/functions/v1/private/cli/channels' })
 
     const [createdChannel] = await executeSQL(
       `SELECT id, rbac_id::text AS rbac_id
@@ -357,8 +343,7 @@ describe('cli app preview lifecycle', () => {
     const otherApiKey = await createAppApiKey(`cli-app-preview-other-${id}`)
     const otherCliOptions = {
       apikey: otherApiKey.key,
-      supaHost: SUPABASE_BASE_URL,
-      supaAnon: SUPABASE_ANON_KEY,
+      apiHost: `${SUPABASE_BASE_URL}/functions/v1`,
     }
     await expect(addChannelInternal(SECOND_CHANNEL_NAME, APPNAME, otherCliOptions, true))
       .resolves
@@ -427,8 +412,7 @@ describe('cli app preview lifecycle', () => {
     const apiKey = await createAppApiKey(`cli-app-preview-legacy-${id}`)
     const cliOptions = {
       apikey: apiKey.key,
-      supaHost: SUPABASE_BASE_URL,
-      supaAnon: SUPABASE_ANON_KEY,
+      apiHost: `${SUPABASE_BASE_URL}/functions/v1`,
     }
     const originalFetch = globalThis.fetch
 
@@ -475,7 +459,7 @@ describe('cli app preview lifecycle', () => {
     const channelPostIndex = requests.findIndex(request => request.method === 'POST' && request.path === '/functions/v1/channel')
     expect(channelPostIndex).toBeGreaterThanOrEqual(0)
     expect(requests).not.toContainEqual({ method: 'POST', path: '/rest/v1/rpc/get_app_versions' })
-    expect(requests.slice(channelPostIndex + 1)).toContainEqual({ method: 'GET', path: '/rest/v1/channels' })
+    expect(requests.slice(channelPostIndex + 1)).toContainEqual({ method: 'GET', path: '/functions/v1/private/cli/channels' })
 
     await expect(deleteChannelInternal(LEGACY_CHANNEL_NAME, APPNAME, {
       ...cliOptions,
@@ -487,8 +471,7 @@ describe('cli app preview lifecycle', () => {
     const apiKey = await createAppApiKey(`cli-app-preview-legacy-partial-${id}`)
     const cliOptions = {
       apikey: apiKey.key,
-      supaHost: SUPABASE_BASE_URL,
-      supaAnon: SUPABASE_ANON_KEY,
+      apiHost: `${SUPABASE_BASE_URL}/functions/v1`,
     }
     const { log } = await import(new URL('../cli/node_modules/@clack/prompts', import.meta.url).href)
     const logInfo = vi.spyOn(log, 'info')
@@ -499,7 +482,7 @@ describe('cli app preview lifecycle', () => {
       const { upload, requests } = await (async () => {
         const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
           const request = requestTrace(input, init)
-          if (createdChannelId != null && request.method === 'GET' && request.path === '/rest/v1/channels') {
+          if (createdChannelId != null && request.method === 'GET' && request.path === '/functions/v1/private/cli/channels') {
             return new Response(JSON.stringify({ message: 'Readback unavailable' }), {
               status: 503,
               headers: { 'content-type': 'application/json' },
@@ -546,7 +529,7 @@ describe('cli app preview lifecycle', () => {
         bundle: LEGACY_PARTIAL_BUNDLE_NAME,
         updatedChannels: [LEGACY_PARTIAL_CHANNEL_NAME],
       })
-      expect(requests).toContainEqual({ method: 'GET', path: '/rest/v1/channels' })
+      expect(requests).toContainEqual({ method: 'GET', path: '/functions/v1/private/cli/channels' })
       expect(logInfo).toHaveBeenCalledWith(expect.stringContaining(`Link device to this bundle to try it: `))
       expect(logInfo).toHaveBeenCalledWith(expect.stringContaining(`/app/${APPNAME}/channel/${createdChannelId}`))
     }
@@ -577,8 +560,7 @@ describe('cli app preview lifecycle', () => {
     })
     const cliOptions = {
       apikey: apiKey.key,
-      supaHost: SUPABASE_BASE_URL,
-      supaAnon: SUPABASE_ANON_KEY,
+      apiHost: `${SUPABASE_BASE_URL}/functions/v1`,
     }
 
     const { data: canDeleteBundle, error: canDeleteBundleError } = await apiKeyClient.rpc('cli_check_permission', {

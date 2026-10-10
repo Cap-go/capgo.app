@@ -1,11 +1,10 @@
 import type { OrganizationDeleteOptions } from '../schemas/organization'
 import { confirm as confirmC, intro, isCancel, log, outro } from '@clack/prompts'
 import { checkAlerts } from '../api/update'
+import { runCliPreflight } from '../api/preflight'
 import { CliUserError } from '../shared/cli-user-error'
 import {
-  assertOrgPermission,
-  check2FAAccessForOrg,
-  createSupabaseClient,
+  createCapgoClient,
   findSavedKey,
   formatError,
   invokeCapgoCliApi,
@@ -39,16 +38,11 @@ export async function deleteOrganizationInternal(
     throw new Error('Missing organization id')
   }
 
-  const supabase = await createSupabaseClient(
+  const client = await createCapgoClient(
     enrichedOptions.apikey,
-    enrichedOptions.supaHost,
-    enrichedOptions.supaAnon,
+    enrichedOptions.apiHost,
   )
-  // TODO(cli-http): assertOrgPermission still uses rpc(cli_check_permission)
-  await assertOrgPermission(supabase, enrichedOptions.apikey, 'org.delete', orgId, `Insufficient permissions to delete organization ${orgId}`, silent)
-
-  // TODO(cli-http): check2FAAccessForOrg still uses reject_access_due_to_2fa RPCs
-  await check2FAAccessForOrg(supabase, orgId, silent)
+  await runCliPreflight(client, { orgId, permission: 'org.delete' }, { silent, permissionDeniedMessage: `Insufficient permissions to delete organization ${orgId}` })
 
   const { data: orgData, error: orgError } = await invokeCapgoCliApi<{ name?: string, created_by?: string }>(
     `organization?orgId=${encodeURIComponent(orgId)}`,
@@ -56,8 +50,7 @@ export async function deleteOrganizationInternal(
       apikey: enrichedOptions.apikey,
       method: 'GET',
       body: undefined,
-      supaHost: enrichedOptions.supaHost,
-      supaAnon: enrichedOptions.supaAnon,
+      apiHost: enrichedOptions.apiHost,
     },
   )
 
@@ -85,8 +78,7 @@ export async function deleteOrganizationInternal(
     apikey: enrichedOptions.apikey,
     method: 'DELETE',
     body: { orgId },
-    supaHost: enrichedOptions.supaHost,
-    supaAnon: enrichedOptions.supaAnon,
+    apiHost: enrichedOptions.apiHost,
   })
 
   if (dbError) {

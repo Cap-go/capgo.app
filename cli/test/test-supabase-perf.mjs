@@ -10,7 +10,7 @@ import {
   SLOW_THRESHOLD_MS,
   withSupabaseSource,
 } from '../src/analytics/supabase-perf.ts'
-import { createSupabaseClient } from '../src/utils.ts'
+import { invokeCapgoCliApi } from '../src/utils.ts'
 import { resolveOwnerOrgId } from '../src/analytics/org-resolver.ts'
 
 console.log('🧪 Testing supabase-perf...\n')
@@ -138,7 +138,7 @@ try {
   if (originalDisable !== undefined) process.env.CAPGO_DISABLE_TELEMETRY = originalDisable
   if (originalDisablePosthog !== undefined) process.env.CAPGO_DISABLE_POSTHOG = originalDisablePosthog
 
-  // --- Task 4: createSupabaseClient gate + recursion guard ---
+  // --- Task 4: invokeCapgoCliApi gate + recursion guard ---
   // NOTE: this 'disabled' assertion depends on instrumentation still being OFF
   // here. enableSupabaseInstrumentation() (called just below, and never reset in
   // finally) is process-wide — do not insert an enabling test before this block.
@@ -146,94 +146,69 @@ try {
   delete process.env.CAPGO_DISABLE_TELEMETRY
   delete process.env.CAPGO_DISABLE_POSTHOG
 
-  const stubClient = () => {
+  const apiOptions = { apikey: 'perf-key', method: 'GET', apiHost: 'https://db.co/functions/v1' }
+  const stubApi = (status) => {
     const reqs = []
     globalThis.fetch = async (url, init) => {
       reqs.push({ url: String(url), init })
-      if (String(url).endsWith('/private/config'))
-        return new Response(JSON.stringify({ supaHost: 'https://db.co', supaKey: 'anon' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
-      if (String(url).includes('/rest/v1/'))
-        return new Response('[]', { status: 200, headers: { 'Content-Type': 'application/json' } })
+      if (String(url).includes('/functions/v1/'))
+        return new Response(status === 200 ? '[]' : '', { status, headers: { 'Content-Type': 'application/json' } })
       return new Response('{}', { status: 200 })
     }
     return reqs
   }
   const findPerf = reqs => reqs.find(r => r.url.endsWith('/private/events') && JSON.parse(r.init.body).event === 'Supabase Call')
 
-  // disabled (default): no timed fetch attached → no Supabase Call event
-  let creqs = stubClient()
-  let sb = await createSupabaseClient('perf-key', 'https://db.co', 'anon')
-  await sb.from('demo').select('*')
+  // disabled (default): no timed fetch attached → no perf event
+  let creqs = stubApi(500)
+  await invokeCapgoCliApi('private/cli/channels?app_id=com.demo', apiOptions)
   await flushAnalytics()
   assert.equal(findPerf(creqs), undefined, 'disabled => no perf event')
 
   // enabled + fast success: timed fetch attached, but no event (volume guard)
   enableSupabaseInstrumentation()
-  creqs = stubClient()
-  sb = await createSupabaseClient('perf-key', 'https://db.co', 'anon')
-  await sb.from('demo').select('*')
+  creqs = stubApi(200)
+  await invokeCapgoCliApi('private/cli/channels?app_id=com.demo', apiOptions)
   await flushAnalytics()
   assert.equal(findPerf(creqs), undefined, 'enabled fast success => no perf event')
 
-  // enabled + HTTP failure: Supabase Call event with operation
-  creqs = []
-  globalThis.fetch = async (url, init) => {
-    creqs.push({ url: String(url), init })
-    if (String(url).endsWith('/private/config'))
-      return new Response(JSON.stringify({ supaHost: 'https://db.co', supaKey: 'anon' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
-    if (String(url).includes('/rest/v1/'))
-      return new Response('', { status: 500, headers: { 'Content-Type': 'application/json' } })
-    return new Response('{}', { status: 200 })
-  }
-  sb = await createSupabaseClient('perf-key', 'https://db.co', 'anon')
-  await sb.from('demo').select('*')
+  // enabled + HTTP failure: perf event with operation
+  creqs = stubApi(500)
+  await invokeCapgoCliApi('private/cli/channels?app_id=com.demo', apiOptions)
   await flushAnalytics()
   const cev = findPerf(creqs)
   assert.ok(cev, 'enabled failure => perf event')
-  assert.equal(JSON.parse(cev.init.body).tags.operation, 'GET demo')
+  assert.equal(JSON.parse(cev.init.body).tags.operation, 'GET functions:private/cli/channels')
   assert.equal(JSON.parse(cev.init.body).tags.ok, false)
 
-  // recursion guard: org-resolver must build an UNinstrumented client
-  let capturedInstrument
-  const chain = {
-    from: () => chain,
-    select: () => chain,
-    eq: () => chain,
-    abortSignal: () => chain,
-    maybeSingle: async () => ({ data: { owner_org: 'org-x' } }),
+  // Capgo cloud routes keep only static path segments (no app ids)
+  assert.equal(deriveSupabaseOperation('https://api.capgo.app/app/com.demo.app', 'GET'), 'GET app')
+  assert.equal(deriveSupabaseOperation('https://api.capgo.app/private/cli/channels?app_id=x', 'GET'), 'GET private/cli/channels')
+  assert.equal(deriveSupabaseOperation('https://api.capgo.app/private/cli/organizations?permission=x', 'GET'), 'GET private/cli/organizations')
+
+  // recursion guard: org-resolver must use an uninstrumented request
+  creqs = []
+  globalThis.fetch = async (url, init) => {
+    creqs.push({ url: String(url), init })
+    if (String(url).includes('/functions/v1/'))
+      return new Response('', { status: 500 })
+    return new Response('{}', { status: 200 })
   }
-  const orgId = await resolveOwnerOrgId('recursion-key', 'com.recursion.test', {
-    createClient: async (_apikey, _host, _key, _silent, instrument) => {
-      capturedInstrument = instrument
-      return chain
-    },
-  })
-  assert.equal(orgId, 'org-x')
-  assert.equal(capturedInstrument, false, 'org-resolver must create an uninstrumented client')
+  const orgId = await resolveOwnerOrgId('recursion-key', 'com.recursion.test', { apiHost: 'https://db.co/functions/v1' })
+  await flushAnalytics()
+  assert.equal(orgId, undefined)
+  assert.equal(findPerf(creqs), undefined, 'org-resolver must not emit perf events')
 
   // --- Task 6: source label flows into failed events ---
   process.env.CAPGO_TOKEN = 'perf-key'
-  let lreqs = []
-  globalThis.fetch = async (url, init) => {
-    lreqs.push({ url: String(url), init })
-    if (String(url).endsWith('/private/config'))
-      return new Response(JSON.stringify({ supaHost: 'https://db.co', supaKey: 'anon' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
-    if (String(url).includes('/rest/v1/'))
-      return new Response('', { status: 503, headers: { 'Content-Type': 'application/json' } })
-    return new Response('{}', { status: 200 })
-  }
-  enableSupabaseInstrumentation()
-  const lsb = await createSupabaseClient('perf-key', 'https://db.co', 'anon')
-  await withSupabaseSource('apps.list', () => lsb
-    .from('apps')
-    .select()
-    .order('created_at', { ascending: false }))
+  const lreqs = stubApi(503)
+  await withSupabaseSource('apps.list', () => invokeCapgoCliApi('app', apiOptions))
   await flushAnalytics()
   const lev = findPerf(lreqs)
   assert.ok(lev, 'labeled failed query emits a perf event')
   const ltags = JSON.parse(lev.init.body).tags
   assert.equal(ltags.source, 'apps.list')
-  assert.equal(ltags.operation, 'GET apps')
+  assert.equal(ltags.operation, 'GET functions:app')
   assert.equal(ltags.ok, false)
 
   // --- Codex P2: perf telemetry uses the key from the request's capgkey header ---

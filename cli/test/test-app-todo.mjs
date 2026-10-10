@@ -9,7 +9,9 @@ import { getAppOnboardingStepIds, parseAppOnboarding } from '../../supabase/func
 import messages from '../../messages/en.json'
 
 const appId = 'com.example.todo'
+// Deprecated --supa-host / --supa-anon must keep working: they map to <supaHost>/functions/v1.
 const options = { apikey: 'test-todo-key', supaHost: 'http://localhost:54321', supaAnon: 'test-anon-key' }
+const apiHost = 'http://localhost:54321/functions/v1'
 const progress = {
   onboarding: {
     setup: {
@@ -118,20 +120,20 @@ for (const [id, action, completion] of [
 const originalFetch = globalThis.fetch
 try {
   globalThis.fetch = async (input, init) => {
-    assert.equal(String(input), options.supaHost + '/functions/v1/private/onboarding_progress')
+    assert.equal(String(input), apiHost + '/private/onboarding_progress')
     assert.equal(init.method, 'POST')
     assert.deepEqual(JSON.parse(init.body), { appId, N: 0, initial: true })
     assert.equal(init.headers.capgkey, options.apikey)
-    assert.equal(init.headers.Authorization, 'Bearer ' + options.supaAnon)
+    assert.equal(init.headers.Authorization, options.apikey, 'the API key is the only credential')
     return Response.json(progress)
   }
-  assert.deepEqual(await readAppTodoProgress(appId, options), progress)
+  assert.deepEqual(await readAppTodoProgress(appId, { apikey: options.apikey, apiHost }), progress)
   for (const [status, expected] of [[401, /app.read permission/], [403, /app.read permission/], [404, /App not found/], [500, /database_unavailable/]]) {
     globalThis.fetch = async () => Response.json({ error: 'database_unavailable' }, { status })
-    await assert.rejects(() => readAppTodoProgress(appId, options), expected)
+    await assert.rejects(() => readAppTodoProgress(appId, { apikey: options.apikey, apiHost }), expected)
   }
   globalThis.fetch = async () => Response.json({ status: 'ok' })
-  await assert.rejects(() => readAppTodoProgress(appId, options), /invalid progress response/)
+  await assert.rejects(() => readAppTodoProgress(appId, { apikey: options.apikey, apiHost }), /invalid progress response/)
 }
 finally {
   globalThis.fetch = originalFetch
@@ -158,8 +160,12 @@ try {
         if (event.event === 'CLI Command Invoked')
           writeFileSync(process.env.CAPGO_TODO_TRACKING_FILE, JSON.stringify({ key: init.headers.capgkey, command: event.tags.command_path }))
       }
-      if (url.includes('/private/config')) return Response.json({ supaHost: ${JSON.stringify(options.supaHost)}, supaKey: ${JSON.stringify(options.supaAnon)} })
-      if (url.includes('/rpc/reject_access_due_to_2fa_for_app')) return Response.json(scenario === 'two-factor')
+      if (url.includes('/private/config')) return Response.json({})
+      if (url.includes('/private/cli/preflight')) {
+        if (!url.startsWith(${JSON.stringify(apiHost)})) return Response.json({ error: 'wrong_host' }, { status: 500 })
+        if (scenario === 'two-factor') return Response.json({ error: '2fa_required', message: 'Two-factor authentication is required by this organization' }, { status: 403 })
+        return Response.json({ user_id: 'u1', org_id: 'org-1', app_id: ${JSON.stringify(appId)}, trial_days_left: null, warnings: [] })
+      }
       if (scenario?.startsWith('background-updated') && init?.method === 'PUT' && url.endsWith('/app/${appId}')) {
         await new Promise(resolve => setTimeout(resolve, 700))
         const steps = JSON.parse(init.body).onboarding.steps

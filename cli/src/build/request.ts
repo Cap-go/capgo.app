@@ -67,7 +67,7 @@ import { appendInternalLog, getInternalLogPath, startInternalLog } from '../supp
 import { uploadSupportLogs } from '../support/support-upload.js'
 import { offerSupportUploadBeforeAi } from '../support/support-upload-prompt.js'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
-import { assertCliPermission, canPromptInteractively, createSupabaseClient, findSavedKey, getConfig, getOrganizationId, getRemoteConfig, sendEvent, trimTrailingSlashes, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { assertCliPermission, canPromptInteractively, createCapgoClient, findSavedKey, getConfig, getOrganizationId, getRemoteConfig, sendEvent, trimTrailingSlashes, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import { getBuilderAppId } from './app-id'
 import { syncAndroidVersion } from './android-version'
 import { createBuildCancellationSignalHandler, requestBuildCancellation } from './cancellation'
@@ -1502,9 +1502,8 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
         : `Android app version is already ${syncResult.packageVersion}`)
     }
 
-    const host = options.supaHost || 'https://api.capgo.app'
-
-    const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
+    const client = await createCapgoClient(options.apikey, options.apiHost)
+    const host = client.apiHost
     // NOTE: the build-permission assert was moved below (after the prescan gate) so prescan's
     // batched report — which includes shared/apikey-permission — is what users see first.
 
@@ -1514,7 +1513,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     // run first gives the batched report instead of a bare "Cannot get organization id".
     let orgId = ''
     try {
-      orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
+      orgId = await getOrganizationId(options.apikey!, appId, { apiHost: options.apiHost })
     }
     catch {
       // App not accessible / no org — surfaced by prescan (app-exists) and the permission backstop.
@@ -1972,8 +1971,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
           iosDist: options.iosDistribution,
           skip: options.prescanSkip,
           warn: options.prescanWarn,
-          supaHost: options.supaHost,
-          supaAnon: options.supaAnon,
+          apiHost: options.apiHost,
         })).report,
       )
       // Telemetry: emit one `Prescan run` event for the build-request gate on EVERY
@@ -2023,7 +2021,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     // missing build permission first — batched with every other problem — and blocks above.
     // This hard assert still runs when prescan is skipped (--no-prescan) or bypassed
     // (--prescan-ignore-fatal), so permission is always enforced before the POST.
-    await assertCliPermission(supabase, options.apikey, 'app.build_native', { appId }, {
+    await assertCliPermission(client, options.apikey, 'app.build_native', { appId }, {
       message: `Capgo rejected this API key: missing app.build_native permission for app ${appId}.`,
       silent,
     })
