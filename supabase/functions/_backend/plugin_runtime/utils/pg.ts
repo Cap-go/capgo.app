@@ -549,7 +549,9 @@ export interface ReadOnlyPgSession {
  * every later query in the same request unless we reconnect.
  */
 function readOnlyPgRetryBackoffMs(): number {
-  return 25 + Math.floor(Math.random() * 26)
+  const jitter = new Uint8Array(1)
+  crypto.getRandomValues(jitter)
+  return 25 + (jitter[0] % 26)
 }
 
 export async function withReadOnlyPgTransientRetry<T>(
@@ -1399,6 +1401,8 @@ export async function getAppOwnerPostgres(
       appId,
       planActions: actions,
     })
+    if (isReadOnlyPgConnectionRetryError(e))
+      throw e
     return null
   }
 }

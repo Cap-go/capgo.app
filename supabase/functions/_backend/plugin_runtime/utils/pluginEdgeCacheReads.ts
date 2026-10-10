@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { ChannelLookupResult, CompatibleChannelRow, getDrizzleClient, PlanAction } from './pg.ts'
 import { isLazyPgConnectError, logPgError, queryAppOwnerPostgres, queryAppVersionPostgres, queryChannelByNamePg, queryCompatibleChannelsPg } from './pg.ts'
+import { isReadOnlyPgConnectionRetryError } from './pg_errors.ts'
 import { getCachedAppOwner, getCachedAppVersion, getCachedChannelLookup } from './updatesEdgeCache.ts'
 
 /**
@@ -21,6 +22,11 @@ function rethrowConnectError(error: unknown) {
     throw error
 }
 
+function rethrowReadOnlyPgConnectionError(error: unknown) {
+  if (isReadOnlyPgConnectionRetryError(error))
+    throw error
+}
+
 /** App owner + plan for these plan actions (cache key: the actions list). */
 export async function getAppOwnerWithEdgeCache(
   c: Context,
@@ -33,6 +39,7 @@ export async function getAppOwnerWithEdgeCache(
   }
   catch (error: unknown) {
     rethrowConnectError(error)
+    rethrowReadOnlyPgConnectionError(error)
     logPgError(c, 'getAppOwnerPostgres', error, { appId, planActions: actions })
     return { value: null, hit: false }
   }
