@@ -12,6 +12,7 @@ import { getChannelSelfOverride, isChannelSelfStoreEnabled } from './channelSelf
 import { getClientDbRegionSB } from './geolocation.ts'
 import { freshQueryArgs } from './hyperdriveFreshRead.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
+import { isReadOnlyPgConnectionRetryError } from './pg_errors.ts'
 import { serializePostgresError, serializePostgresLogValue } from './postgres_error.ts'
 import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
@@ -532,6 +533,62 @@ export function getDrizzleClient(db: PluginPgClient, options?: { logger?: boolea
   // Keep SQL logging on by default for API/trigger diagnostics.
   // Plugin hot paths pass `{ logger: false }` to avoid per-request log CPU/volume.
   return drizzle({ client: db, logger: options?.logger ?? true })
+}
+
+export interface ReadOnlyPgSession {
+  drizzle: ReturnType<typeof getDrizzleClient>
+  pgClient: PluginPgClient
+  cleanup: () => Promise<void>
+  /** When true, the caller owns closing the client after a successful run (lazy /updates edge cache). */
+  keepOpenAfterSuccess?: boolean
+}
+
+/**
+ * Run read-only plugin work once, retrying on a fresh Hyperdrive client when the
+ * first attempt hits a transient connection failure. A dead pg.Client poisons
+ * every later query in the same request unless we reconnect.
+ */
+function readOnlyPgRetryBackoffMs(): number {
+  const jitter = new Uint8Array(1)
+  crypto.getRandomValues(jitter)
+  return 25 + (jitter[0] % 26)
+}
+
+export async function withReadOnlyPgTransientRetry<T>(
+  c: Context,
+  context: string,
+  createSession: () => Promise<ReadOnlyPgSession>,
+  run: (session: ReadOnlyPgSession) => Promise<T>,
+): Promise<T> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let session: ReadOnlyPgSession | undefined
+    let succeeded = false
+    try {
+      session = await createSession()
+      const result = await run(session)
+      succeeded = true
+      return result
+    }
+    catch (error) {
+      if (attempt === 0 && isReadOnlyPgConnectionRetryError(error)) {
+        cloudlog({
+          requestId: c.get('requestId'),
+          message: 'read_only_pg_transient_retry',
+          context,
+          databaseSource: c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? null,
+        })
+        await new Promise(resolve => setTimeout(resolve, readOnlyPgRetryBackoffMs()))
+        continue
+      }
+      throw error
+    }
+    finally {
+      if (session && (!succeeded || !session.keepOpenAfterSuccess))
+        await session.cleanup()
+    }
+  }
+
+  throw new Error('unreachable read_only_pg_transient_retry')
 }
 
 export function logPgError(
@@ -1336,6 +1393,7 @@ export async function getAppOwnerPostgres(
   appId: string,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
   actions: PlanAction[] = [],
+  options?: { rethrowReadOnlyConnectionErrors?: boolean },
 ): Promise<AppOwnerPostgresResult | null> {
   try {
     return await queryAppOwnerPostgres(c, appId, drizzleClient, actions)
@@ -1345,6 +1403,8 @@ export async function getAppOwnerPostgres(
       appId,
       planActions: actions,
     })
+    if (options?.rethrowReadOnlyConnectionErrors && isReadOnlyPgConnectionRetryError(e))
+      throw e
     return null
   }
 }

@@ -19,7 +19,8 @@ import { onPremiseAppResponse } from './rateLimitInfo.ts'
 import { cloudlog } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
 import { sendNotifToOrgMembersCached } from './org_email_notifications.ts'
-import { closeClient, createLazyPgClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDatabaseURL, getDrizzleClient, getLazyPgQueryCount, getPgClient, refreshReplicationLag, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
+import type { LazyPgClient } from './pg.ts'
+import { closeClient, createLazyPgClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDatabaseURL, getDrizzleClient, getLazyPgQueryCount, getPgClient, refreshReplicationLag, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader, withReadOnlyPgTransientRetry } from './pg.ts'
 import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
 import { makeDevice } from './plugin_parser.ts'
 import { createStatsBandwidth, createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from './plugin_stats.ts'
@@ -31,6 +32,38 @@ import { isUpdateEnumerationLimited, recordUpdateEnumerationMiss, updateEnumerat
 import { canServeUpToDateFromCache, getUpdateReadCache, setUpdateReadCache } from './updateReadCache.ts'
 import { getCachedDefaultChannel, shouldUseUpdatesEdgeCache } from './updatesEdgeCache.ts'
 import { backgroundTask, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, fixSemver, isDeprecatedPluginVersion, isInternalVersionName, isVersionDeleted } from './utils.ts'
+
+const updatesMauRecordedByRequest = new WeakMap<object, boolean>()
+const updatesMauInFlightByRequest = new WeakMap<object, Promise<void>>()
+
+export async function recordUpdatesMauOnce(
+  c: Context,
+  deviceId: string,
+  appId: string,
+  ownerOrg: string,
+  platform: string,
+  versionBuild: string,
+) {
+  const requestKey = c.req.raw
+  if (updatesMauRecordedByRequest.get(requestKey))
+    return
+  const inFlight = updatesMauInFlightByRequest.get(requestKey)
+  if (inFlight)
+    return inFlight
+
+  // On workerd, backgroundTask schedules the MAU write with waitUntil and returns
+  // before the insert finishes; the recorded flag is set when dispatch succeeds.
+  const tracked = Promise.resolve(backgroundTask(c, createStatsMau(c, deviceId, appId, ownerOrg, platform, versionBuild)))
+    .then(() => {
+      updatesMauRecordedByRequest.set(requestKey, true)
+    })
+    .finally(() => {
+      updatesMauInFlightByRequest.delete(requestKey)
+    })
+
+  updatesMauInFlightByRequest.set(requestKey, tracked)
+  return tracked
+}
 
 const PLAN_LIMIT: Array<'mau' | 'bandwidth' | 'storage'> = ['mau', 'bandwidth']
 // Bound speculative channel prefetch wait so a hung second Hyperdrive client
@@ -309,6 +342,8 @@ export interface UpdatePathTiming {
   ownerCacheHit?: boolean
 }
 
+const UPDATES_OWNER_PG_OPTIONS = { rethrowReadOnlyConnectionErrors: true } as const
+
 async function getAppOwnerFromEdgeCache(
   c: Context,
   appId: string,
@@ -316,7 +351,7 @@ async function getAppOwnerFromEdgeCache(
   pathTiming?: UpdatePathTiming,
 ) {
   // A connect failure is rethrown (never classified as on-prem), see pluginEdgeCacheReads.ts.
-  const owner = await getAppOwnerWithEdgeCache(c, appId, drizzleClient, PLAN_LIMIT)
+  const owner = await getAppOwnerWithEdgeCache(c, appId, drizzleClient, PLAN_LIMIT, UPDATES_OWNER_PG_OPTIONS)
   if (pathTiming)
     pathTiming.ownerCacheHit = owner.hit
   return owner.value
@@ -385,7 +420,7 @@ export async function updateWithPG(
   const edgeCache = shouldUseUpdatesEdgeCache(c, app_id, device_id)
   const ownerPromise = edgeCache
     ? getAppOwnerFromEdgeCache(c, app_id, drizzleClient, pathTiming)
-    : getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT)
+    : getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT, UPDATES_OWNER_PG_OPTIONS)
   const channelPrefetchPromise = cachedStatus === 'cloud' && coerce
     ? (async () => {
         try {
@@ -511,7 +546,7 @@ export async function updateWithPG(
       app_id_url: app_id,
     }, appOwner.owner_org, app_id, '0 0 * * 1', appOwner.orgs.management_email, drizzleClient))
   }
-  await backgroundTask(c, createStatsMau(c, device_id, app_id, appOwner.owner_org, platform, version_build))
+  await recordUpdatesMauOnce(c, device_id, app_id, appOwner.owner_org, platform, version_build)
 
 
   // Only query link/comment if plugin supports it (v5.35.0+, v6.35.0+, v7.35.0+, v8.35.0+) AND app has expose_metadata enabled
@@ -1027,41 +1062,43 @@ export async function update(c: Context, body: AppInfos) {
     return updateWithEdgeCache(c, body, appStatus, startUpdate, appStatusMs)
 
   const startPgClient = performance.now()
-  const pgClient = await getPgClient(c, true)
-  // Hyperdrive: includes await client.connect(). Pool: construction only (lazy connect later).
-  const pgClientMs = Math.round(performance.now() - startPgClient)
   const pathTiming: UpdatePathTiming = {}
-  try {
-    const startLag = performance.now()
-    await setReplicationLagHeader(c, pgClient)
-    const replicationLagMs = Math.round(performance.now() - startLag)
-
-    const drizzlePg = getDrizzleClient(pgClient, { logger: false })
-    // Use the active DB client only when needed
-    const response = await updateWithPG(c, body, drizzlePg, appStatus, pathTiming)
-    const totalMs = Math.round(performance.now() - startUpdate)
-    if (totalMs >= 100) {
-      cloudlog({
-        requestId: c.get('requestId'),
-        message: 'plugin_path_timing',
-        path: 'updates',
-        outcome: 'total',
-        totalMs,
-        appStatusMs,
-        pgClientMs,
-        ownerMs: pathTiming.ownerMs ?? 0,
-        requestInfosMs: pathTiming.requestInfosMs ?? 0,
-        channelPrefetchHit: pathTiming.channelPrefetchHit ?? false,
-        replicationLagMs,
-        databaseSource: c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? null,
-        app_id: body.app_id,
-      })
+  let pgClientMs = 0
+  let replicationLagMs = 0
+  const response = await withReadOnlyPgTransientRetry(c, 'updates', async () => {
+    const pgClient = await getPgClient(c, true)
+    if (pgClientMs === 0)
+      pgClientMs = Math.round(performance.now() - startPgClient)
+    return {
+      pgClient,
+      drizzle: getDrizzleClient(pgClient, { logger: false }),
+      cleanup: () => closeClient(c, pgClient),
     }
-    return response
+  }, async (session) => {
+    const startLag = performance.now()
+    await setReplicationLagHeader(c, session.pgClient)
+    replicationLagMs = Math.round(performance.now() - startLag)
+    return updateWithPG(c, body, session.drizzle, appStatus, pathTiming)
+  })
+  const totalMs = Math.round(performance.now() - startUpdate)
+  if (totalMs >= 100) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'plugin_path_timing',
+      path: 'updates',
+      outcome: 'total',
+      totalMs,
+      appStatusMs,
+      pgClientMs,
+      ownerMs: pathTiming.ownerMs ?? 0,
+      requestInfosMs: pathTiming.requestInfosMs ?? 0,
+      channelPrefetchHit: pathTiming.channelPrefetchHit ?? false,
+      replicationLagMs,
+      databaseSource: c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? null,
+      app_id: body.app_id,
+    })
   }
-  finally {
-    await closeClient(c, pgClient)
-  }
+  return response
 }
 
 /**
@@ -1076,26 +1113,34 @@ async function updateWithEdgeCache(
   startUpdate: number,
   appStatusMs: number,
 ) {
-  const lazyClient = createLazyPgClient(c, true)
   const pathTiming: UpdatePathTiming = {}
+  let lazyClient!: LazyPgClient
   let closeInBackground = false
   try {
-    // Pick the replica now (no connection) so the lag lookup uses its cache
-    // key instead of "unknown"; the lazy client connects to the same source.
     try {
       getDatabaseURL(c, true)
     }
     catch {
       // No usable replica: the first query reports it.
     }
-    // Memory-only lag header: a cache hit must not trigger a background probe.
-    await setReplicationLagHeader(c, lazyClient.client, { probeOnMiss: false })
-    const drizzlePg = getDrizzleClient(lazyClient.client, { logger: false })
-    const response = await updateWithPG(c, body, drizzlePg, appStatus, pathTiming)
+
+    const response = await withReadOnlyPgTransientRetry(c, 'updates_edge_cache', async () => {
+      lazyClient = createLazyPgClient(c, true)
+      return {
+        pgClient: lazyClient.client,
+        drizzle: getDrizzleClient(lazyClient.client, { logger: false }),
+        keepOpenAfterSuccess: true,
+        cleanup: async () => {
+          await lazyClient.close()
+        },
+      }
+    }, async (session) => {
+      await setReplicationLagHeader(c, session.pgClient, { probeOnMiss: false })
+      return updateWithPG(c, body, session.drizzle, appStatus, pathTiming)
+    }) as Awaited<ReturnType<typeof updateWithPG>>
+
     const dbQueries = getLazyPgQueryCount(c)
-    if (lazyClient.isConnected()) {
-      // Probe lag only on requests that already use the database, and close
-      // the client after the probe (a Pool cannot run it once ended).
+    if (lazyClient?.isConnected()) {
       closeInBackground = true
       await backgroundTask(c, refreshReplicationLag(c, lazyClient.client).finally(() => lazyClient.close()))
     }
@@ -1126,7 +1171,7 @@ async function updateWithEdgeCache(
     return response
   }
   finally {
-    if (!closeInBackground)
+    if (lazyClient && !closeInBackground)
       await lazyClient.close()
   }
 }

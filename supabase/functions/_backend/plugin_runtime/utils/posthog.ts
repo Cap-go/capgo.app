@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
-import { drizzleErrorFingerprintSegment, readPgErrorCode } from './pg_errors.ts'
+import { drizzleErrorFingerprintSegment, readPgErrorCauseMessage, readPgErrorCode } from './pg_errors.ts'
 import { existInEnv, getEnv, trimTrailingSlashes } from './utils.ts'
 
 const POSTHOG_CAPTURE_URL = 'https://eu.i.posthog.com/capture/'
@@ -289,6 +289,12 @@ export async function capturePosthogException(c: Context, payload: {
   const pgErrorCode = payload.kind === 'drizzle_error'
     ? readPgErrorCode(payload.error)
     : undefined
+  const pgErrorCauseMessage = payload.kind === 'drizzle_error'
+    ? readPgErrorCauseMessage(payload.error)
+    : undefined
+  const exceptionValue = pgErrorCauseMessage && payload.kind === 'drizzle_error'
+    ? `${serializedError.message} (${pgErrorCauseMessage})`
+    : serializedError.message
 
   const body = {
     token: apiKey,
@@ -297,7 +303,7 @@ export async function capturePosthogException(c: Context, payload: {
       distinct_id: distinctId,
       $exception_list: [{
         type: serializedError.name || 'Error',
-        value: serializedError.message,
+        value: exceptionValue,
         mechanism: {
           handled: true,
           synthetic: false,
@@ -315,6 +321,7 @@ export async function capturePosthogException(c: Context, payload: {
       status: payload.status,
       url_path: requestPath,
       ...(pgErrorCode ? { pg_error_code: pgErrorCode } : {}),
+      ...(pgErrorCauseMessage ? { pg_error_cause_message: pgErrorCauseMessage } : {}),
     },
     timestamp: new Date().toISOString(),
   }

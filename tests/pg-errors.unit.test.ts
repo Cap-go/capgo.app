@@ -2,12 +2,37 @@ import { describe, expect, it } from 'vitest'
 import {
   drizzleErrorFingerprintSegment,
   isDatabaseOriginError,
+  isReadOnlyPgConnectionRetryError,
   isTransientDatabaseError,
   isTransientPgError,
+  readPgErrorCauseMessage,
   readPgErrorCode,
 } from '../supabase/functions/_backend/utils/pg_errors.ts'
 
 describe('pg_errors', () => {
+  it('detects hyperdrive client-not-queryable failures as transient database errors', () => {
+    const error = Object.assign(new Error('Failed query: select "file_name" from "manifest" where "manifest"."app_version_id" = $1'), {
+      name: 'DrizzleQueryError',
+      cause: new Error('Client has encountered a connection error and is not queryable'),
+    })
+
+    expect(isTransientPgError(error)).toBe(false)
+    expect(isTransientDatabaseError(error)).toBe(false)
+    expect(isReadOnlyPgConnectionRetryError(error)).toBe(true)
+    expect(readPgErrorCauseMessage(error)).toBe('Client has encountered a connection error and is not queryable')
+  })
+
+  it('redacts quoted literals from postgres cause messages', () => {
+    const error = Object.assign(new Error('Failed query: SELECT 1'), {
+      name: 'DrizzleQueryError',
+      cause: Object.assign(new Error('invalid input syntax for type uuid: "046a0000-0000-0000-0000-000000000000"'), {
+        code: '22P02',
+      }),
+    })
+
+    expect(readPgErrorCauseMessage(error)).toBe('invalid input syntax for type uuid: "?"')
+  })
+
   it('detects transient connection failures in drizzle cause chains', () => {
     const error = Object.assign(new Error('Failed query: SELECT 1'), {
       name: 'DrizzleQueryError',
@@ -184,5 +209,46 @@ describe('pg_errors', () => {
 
     expect(isDatabaseOriginError(fetchError)).toBe(false)
     expect(isTransientDatabaseError(fetchError)).toBe(false)
+  })
+
+  it('allows read-only retry only for connection-class drizzle failures', () => {
+    const connectionTerminated = Object.assign(new Error('Failed query: SELECT 1'), {
+      name: 'DrizzleQueryError',
+      cause: Object.assign(new Error('Connection terminated unexpectedly'), {
+        code: '57P01',
+      }),
+    })
+    const statementTimeout = Object.assign(new Error('Failed query: SELECT 1'), {
+      name: 'DrizzleQueryError',
+      cause: Object.assign(new Error('canceling statement due to statement timeout'), {
+        code: '57014',
+      }),
+    })
+    const hyperdriveWait = Object.assign(new Error('Failed query: SELECT 1'), {
+      name: 'DrizzleQueryError',
+      cause: new Error('timed out while waiting for a message from the origin database'),
+    })
+    const econnreset = Object.assign(new Error('read ECONNRESET'), {
+      name: 'DrizzleQueryError',
+      code: 'ECONNRESET',
+    })
+
+    expect(isReadOnlyPgConnectionRetryError(connectionTerminated)).toBe(true)
+    expect(isReadOnlyPgConnectionRetryError(econnreset)).toBe(true)
+    expect(isReadOnlyPgConnectionRetryError(statementTimeout)).toBe(false)
+    expect(isReadOnlyPgConnectionRetryError(hyperdriveWait)).toBe(false)
+    expect(isTransientDatabaseError(statementTimeout)).toBe(true)
+    expect(isTransientDatabaseError(hyperdriveWait)).toBe(true)
+    expect(isTransientPgError(Object.assign(new Error('Timed out while waiting for an open slot in the pool.'), {
+      name: 'DrizzleQueryError',
+    }))).toBe(true)
+  })
+
+  it('classifies bare hyperdrive connect failures as database-origin read-only retries', () => {
+    const bareConnect = new Error('Client has encountered a connection error and is not queryable')
+
+    expect(isDatabaseOriginError(bareConnect)).toBe(true)
+    expect(isReadOnlyPgConnectionRetryError(bareConnect)).toBe(true)
+    expect(isTransientDatabaseError(bareConnect)).toBe(false)
   })
 })

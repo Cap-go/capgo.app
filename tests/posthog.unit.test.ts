@@ -418,6 +418,25 @@ describe('posthog helper', () => {
     expect(body.properties.pg_error_code).toBe('42P01')
   })
 
+  it('includes the postgres cause message on drizzle exception events', async () => {
+    const { capturePosthogException } = await import('../supabase/functions/_backend/utils/posthog.ts')
+    envState.posthogApiHost = 'https://eu.i.posthog.com/i/v0/e'
+
+    await capturePosthogException(createContext(), {
+      error: Object.assign(new Error('Failed query: select 1 from manifest'), {
+        name: 'DrizzleQueryError',
+        cause: new Error('Client has encountered a connection error and is not queryable'),
+      }),
+      functionName: 'plugin',
+      kind: 'drizzle_error',
+      status: 500,
+    })
+
+    const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)
+    expect(body.properties.$exception_list[0].value).toContain('not queryable')
+    expect(body.properties.pg_error_cause_message).toContain('not queryable')
+  })
+
   it('logs and skips exception delivery when the configured PostHog host is invalid', async () => {
     const { capturePosthogException } = await import('../supabase/functions/_backend/utils/posthog.ts')
     envState.posthogApiHost = '://bad-host'

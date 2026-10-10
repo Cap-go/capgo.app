@@ -31,7 +31,7 @@ const DRIZZLE_ERROR_NAMES = new Set(['DrizzleError', 'DrizzleQueryError', 'Trans
 
 const DATABASE_MESSAGE_RE = /Failed query:|(?:FROM|INTO|UPDATE|SELECT|INSERT|DELETE)\s+(?:[\w"$]+\.)?[\w"$]+|relation\s+"[^"]+"\s+does not exist|Connection terminated unexpectedly|timeout exceeded when trying to connect|too many clients already|canceling statement due to/i
 
-const PG_CONNECTION_MESSAGE_RE = /postgres(?:ql)?(?:\.|:|@|\/|\s|$|-)|hyperdrive|pgbouncer|db\.[\w.-]+\.supabase\.(?:co|com)|neon\.tech|\.pooler\.|aws-.*-pooler/i
+const PG_CONNECTION_MESSAGE_RE = /postgres(?:ql)?(?:\.|:|@|\/|\s|$|-)|hyperdrive|pgbouncer|db\.[\w.-]+\.supabase\.(?:co|com)|neon\.tech|\.pooler\.|aws-.*-pooler|encountered a connection error|not queryable/i
 
 const PG_CONNECT_PORTS = new Set([5432, 5433, 54322, 6543, 6432])
 
@@ -117,6 +117,34 @@ export function readPgErrorCode(error: unknown, depth = 0): string | undefined {
   return undefined
 }
 
+function redactPgErrorCauseMessage(message: string): string {
+  return message
+    .replace(/'(?:''|[^'])*'/g, '\'?\'')
+    .replace(/"(?:""|[^"])*"/g, '"?"')
+    .replace(/\([^)]+\)=\([^)]+\)/g, '(?)=(?)')
+    .replace(/\s+/g, ' ')
+    .slice(0, 500)
+}
+
+/** First non-Drizzle-wrapper message in the cause chain (safe for exception titles). */
+export function readPgErrorCauseMessage(error: unknown, depth = 0): string | undefined {
+  if (!error || depth > 6)
+    return undefined
+
+  const cause = readPgErrorField(error, 'cause')
+  if (cause !== undefined) {
+    const nested = readPgErrorCauseMessage(cause, depth + 1)
+    if (nested)
+      return nested
+  }
+
+  const message = readPgErrorField(error, 'message')
+  if (typeof message === 'string' && message.length > 0 && !/^Failed query:/i.test(message))
+    return redactPgErrorCauseMessage(message)
+
+  return undefined
+}
+
 export function isTransientPgError(error: unknown, depth = 0): boolean {
   if (!error || depth > 6)
     return false
@@ -191,6 +219,36 @@ export function isDatabaseOriginError(error: unknown, depth = 0): boolean {
 
 export function isTransientDatabaseError(error: unknown): boolean {
   return isTransientPgError(error) && isDatabaseOriginError(error)
+}
+
+const READ_ONLY_PG_CONNECTION_RETRY_MESSAGE_RE = /not queryable|encountered a connection error|connection terminated/i
+
+function hasReadOnlyPgConnectionRetrySignal(error: unknown, depth = 0): boolean {
+  if (!error || depth > 6)
+    return false
+
+  const code = readPgErrorField(error, 'code')
+  if (code === 'ECONNRESET')
+    return true
+
+  const message = readPgErrorField(error, 'message')
+  if (typeof message === 'string' && READ_ONLY_PG_CONNECTION_RETRY_MESSAGE_RE.test(message))
+    return true
+
+  const cause = readPgErrorField(error, 'cause')
+  if (cause !== undefined && hasReadOnlyPgConnectionRetrySignal(cause, depth + 1))
+    return true
+
+  const errors = readPgErrorField(error, 'errors')
+  if (Array.isArray(errors))
+    return errors.some(entry => hasReadOnlyPgConnectionRetrySignal(entry, depth + 1))
+
+  return false
+}
+
+/** Narrow retry gate for /updates read-only Hyperdrive sessions (connection loss only). */
+export function isReadOnlyPgConnectionRetryError(error: unknown): boolean {
+  return isDatabaseOriginError(error) && hasReadOnlyPgConnectionRetrySignal(error)
 }
 
 export function readQuickErrorOriginalCause(error: unknown): unknown {

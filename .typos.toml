@@ -54,6 +54,8 @@ extend-exclude = [
   # prescan manifest-typo test fixtures intentionally misspell tags (activty/aplication/servce)
   "cli/test/prescan/checks-android-manifest.test.ts",
   "cli/test/prescan/manifest.test.ts",
+  # ISO 4217 currency codes in stripe minor-unit divisor (jod is a typos false positive)
+  "supabase/functions/shared/stripe-amount.ts",
 
   # Mobile platforms
   "ios/",
