@@ -101,6 +101,40 @@
         }
       ],
       "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }],
+      // Stats of the requests the snippet answers itself (snippetEdgeReplay.ts):
+      // Logpush -> R2 -> files queue -> replay queue, consumed by this worker only.
+      // Create them first: bun run snippet-edge-stats:setup
+      "r2_buckets": [
+        {
+          "binding": "SNIPPET_EDGE_STATS_LOGS",
+          "bucket_name": "capgo-snippet-edge-stats"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "SNIPPET_EDGE_STATS_REPLAY",
+            "queue": "capgo-snippet-edge-stats-replay"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "capgo-snippet-edge-stats-files",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_retries": 3,
+            "dead_letter_queue": "capgo-snippet-edge-stats-dlq"
+          },
+          {
+            // One chunk per invocation: Analytics Engine takes 250 data points per invocation.
+            "queue": "capgo-snippet-edge-stats-replay",
+            "max_batch_size": 1,
+            "max_batch_timeout": 1,
+            "max_retries": 2,
+            "dead_letter_queue": "capgo-snippet-edge-stats-dlq"
+          }
+        ]
+      },
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE_CAPGO_READ_NA",

@@ -196,6 +196,15 @@ function getLimitedAppsById(limits: string): Map<string, LimitedApp> {
   return limitedAppsById
 }
 
+/** Deterministic: true when LIMITED_APPS throttles this app at all (any `ignore` above 0). */
+export function isListedLimitedApp(c: Context, id: string) {
+  const limits = getEnv(c, 'LIMITED_APPS')
+  if (!limits)
+    return false
+  const app = getLimitedAppsById(limits).get(id)
+  return Boolean(app && app.ignore !== 0)
+}
+
 export function isLimited(c: Context, id: string) {
   const limits = getEnv(c, 'LIMITED_APPS')
   if (!limits)

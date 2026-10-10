@@ -6,7 +6,8 @@ import { cloudlog } from '../utils/logging.ts'
 import { getManifestDownloadSize, parseManifestSizeVersionId } from '../utils/manifest_size.ts'
 import { parsePluginBody } from '../utils/plugin_parser.ts'
 import { updateRequestSchema } from '../utils/plugin_validation.ts'
-import { update } from '../utils/update.ts'
+import { getSnippetEdgeReplay } from '../utils/snippetEdgeAnswer.ts'
+import { recordSnippetUpToDate, update } from '../utils/update.ts'
 
 import {
   isLimited,
@@ -20,6 +21,9 @@ export const app = new Hono<MiddlewareKeyVariables>()
 
 app.post('/', async (c) => {
   const body = await parseBody<AppInfos>(c)
+  const replay = getSnippetEdgeReplay(c)
+  if (replay?.updates)
+    return recordSnippetUpToDate(c, parsePluginBody<AppInfos>(c, body, updateRequestSchema), replay.updates)
   // Curated fields only — full body serialization was a top CPU cost on HAR inspect.
   cloudlog({
     requestId: c.get('requestId'),

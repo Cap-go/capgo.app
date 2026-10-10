@@ -11,73 +11,118 @@
 const TIMEOUT_MS = 3000 // 3 seconds - matches plugin timeout
 const CIRCUIT_RESET_MS = 5 * 60 * 1000 // 5 minutes before retrying unhealthy worker
 
+// Enterprise snippets get 5 subrequests, and Cache API calls count: a single
+// extra confirm fetch on the on-prem path turned it into 1101 errors (#3575).
+// Every fetch and cache call goes through the budget below; optional cache
+// writes are skipped instead of failing the request.
+const MAX_SUBREQUESTS = 5
+
 // On-prem and plan-upgrade caching use worker Cache-Control, with Retry-After as TTL fallback.
 // Cached responses keep Retry-After / X-RateLimit-Reset so clients and edge skip the worker.
+
+// Edge answers: the plugin worker marks answers this snippet may repeat with
+// X-Capgo-Edge-Fill (see plugin_runtime/utils/snippetEdgeAnswer.ts). They are
+// stored per data center under the app's purge tags, then served here without
+// invoking a worker. Every served answer carries X-Capgo-Edge-Stat, which
+// Logpush ships to R2 so the worker replays its stats in batches.
+const EDGE_FILL_HEADER = 'X-Capgo-Edge-Fill'
+const EDGE_IP_LIMIT_HEADER = 'X-Capgo-Edge-Ip-Limit'
+const EDGE_STAT_HEADER = 'X-Capgo-Edge-Stat'
+const EDGE_KIND_HEADER = 'X-Edge-Kind'
+const MAX_EDGE_VARIANTS = 32
+const MAX_EDGE_ACTIONS = 64
+// Logpush header fields and the replay queue messages stay small.
+const MAX_EDGE_STAT_BODY_BYTES = 6000
+// Logpush cuts response header fields at 8192 bytes (measured); a cut stat
+// can't be decoded, so bigger ones go to the worker.
+const MAX_EDGE_STAT_HEADER_BYTES = 8000
+const APP_ID_RE = /^[a-z0-9]+(?:\.[\w-]+)+$/i
+const DEVICE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const PLAIN_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
+const DEVICE_PLATFORMS = new Set(['ios', 'android', 'electron'])
+
+function createBudget() {
+  return { used: 0 }
+}
+
+/** True when `count` more subrequests fit and still leave `reserve` for later ones. */
+function canSpend(budget, count = 1, reserve = 0) {
+  return budget.used + count + reserve <= MAX_SUBREQUESTS
+}
+
+async function cacheMatch(budget, key) {
+  budget.used++
+  try {
+    return await caches.default.match(key)
+  }
+  catch {
+    return undefined
+  }
+}
+
+async function cachePut(budget, key, response) {
+  budget.used++
+  try {
+    await caches.default.put(key, response)
+    return true
+  }
+  catch (e) {
+    console.log(`Cache put failed: ${e.message}`)
+    return false
+  }
+}
+
+async function cacheDelete(budget, key) {
+  budget.used++
+  try {
+    await caches.default.delete(key)
+  }
+  catch {
+    // Ignore errors - the entry expires anyway
+  }
+}
 
 // Helper to build cache keys using actual hostname to avoid DNS lookups on fake .internal domains
 function getCircuitBreakerCacheKey(hostname, colo, workerUrl) {
   return `https://${hostname}/__internal__/circuit-breaker/${colo}/${encodeURIComponent(workerUrl)}`
 }
 
-function getOnPremCacheKey(hostname, appId, endpoint, method) {
-  return `https://${hostname}/__internal__/onprem-cache-v2/${encodeURIComponent(appId)}/${endpoint}/${method}`
+// One entry per app, endpoint and method: an on-prem or plan-upgrade answer,
+// or the edge answers. One lookup serves all three.
+function getEdgeCacheKey(hostname, appId, endpoint, method) {
+  return `https://${hostname}/__internal__/edge-v3/${encodeURIComponent(appId)}/${endpoint}/${method}`
 }
 
-function getPlanUpgradeCacheKey(hostname, appId, endpoint, method) {
-  return `https://${hostname}/__internal__/plan-upgrade-cache-v2/${encodeURIComponent(appId)}/${endpoint}/${method}`
+function getIpLimitCacheKey(hostname, ip) {
+  return `https://${hostname}/__internal__/edge-ip-limit-v1/${encodeURIComponent(ip)}`
 }
 
 // Endpoints that should be checked for on-prem caching
 const ONPREM_CACHEABLE_ENDPOINTS = ['/updates', '/stats', '/channel_self']
 
-// Cache helper functions for circuit breaker
-async function markUnhealthy(hostname, colo, workerUrl) {
-  try {
-    const cache = caches.default
-    const key = getCircuitBreakerCacheKey(hostname, colo, workerUrl)
-    const response = new Response(JSON.stringify({ unhealthyAt: Date.now() }), {
-      headers: {
-        'Content-Type': 'application/json',
-        'Cache-Control': `max-age=${Math.floor(CIRCUIT_RESET_MS / 1000)}`,
-      },
-    })
-    await cache.put(key, response)
+async function markUnhealthy(budget, hostname, colo, workerUrl) {
+  const response = new Response(JSON.stringify({ unhealthyAt: Date.now() }), {
+    headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': `max-age=${Math.floor(CIRCUIT_RESET_MS / 1000)}`,
+    },
+  })
+  if (await cachePut(budget, getCircuitBreakerCacheKey(hostname, colo, workerUrl), response))
     console.log(`Circuit OPEN for ${colo} → ${workerUrl}`)
-  }
-  catch (e) {
-    console.log(`Failed to mark unhealthy: ${e.message}`)
-  }
 }
 
-async function markHealthy(hostname, colo, workerUrl) {
+/** Reads the breaker once; `hasEntry` lets a success clear it without another lookup. */
+async function readCircuit(budget, hostname, colo, workerUrl) {
+  const cached = await cacheMatch(budget, getCircuitBreakerCacheKey(hostname, colo, workerUrl))
+  if (!cached)
+    return { healthy: true, hasEntry: false } // No cache entry = healthy
   try {
-    const cache = caches.default
-    const key = getCircuitBreakerCacheKey(hostname, colo, workerUrl)
-    // Only delete when a breaker entry exists — avoid Cache API write on every success.
-    const cached = await cache.match(key)
-    if (cached)
-      await cache.delete(key)
-  }
-  catch {
-    // Ignore errors - cache miss is fine
-  }
-}
-
-async function isHealthy(hostname, colo, workerUrl) {
-  try {
-    const cache = caches.default
-    const key = getCircuitBreakerCacheKey(hostname, colo, workerUrl)
-    const cached = await cache.match(key)
-    if (!cached)
-      return true // No cache entry = healthy
-
     const data = await cached.json()
-    const elapsed = Date.now() - data.unhealthyAt
     // Circuit resets after CIRCUIT_RESET_MS (handled by Cache-Control, but double-check)
-    return elapsed >= CIRCUIT_RESET_MS
+    return { healthy: Date.now() - data.unhealthyAt >= CIRCUIT_RESET_MS, hasEntry: true }
   }
   catch {
-    return true // On error, assume healthy
+    return { healthy: true, hasEntry: true } // On error, assume healthy
   }
 }
 
@@ -100,40 +145,6 @@ function getEndpointName(pathname) {
 
 function isCacheableEndpoint(pathname) {
   return ONPREM_CACHEABLE_ENDPOINTS.some(ep => matchesEndpoint(pathname, ep))
-}
-
-async function getOnPremCache(hostname, appId, endpoint, method) {
-  try {
-    const cache = caches.default
-    const key = getOnPremCacheKey(hostname, appId, endpoint, method)
-    const cached = await cache.match(key)
-    if (cached) {
-      const currentTtl = Number.parseInt(cached.headers.get('X-Onprem-Ttl') || '0', 10)
-      const ttlLog = Number.isFinite(currentTtl) && currentTtl > 0 ? ` (TTL ${currentTtl}s)` : ''
-      console.log(`On-prem cache HIT for ${appId}/${endpoint}/${method}${ttlLog}`)
-      return cached.clone()
-    }
-    return null
-  }
-  catch {
-    return null
-  }
-}
-
-async function getPlanUpgradeCache(hostname, appId, endpoint, method) {
-  try {
-    const cache = caches.default
-    const key = getPlanUpgradeCacheKey(hostname, appId, endpoint, method)
-    const cached = await cache.match(key)
-    if (cached) {
-      console.log(`Plan-upgrade cache HIT for ${appId}/${endpoint}/${method}`)
-      return cached.clone()
-    }
-    return null
-  }
-  catch {
-    return null
-  }
 }
 
 function getRetryAfterSeconds(headers, responseBody) {
@@ -197,6 +208,7 @@ function getCacheTtlSeconds(headers, responseBody) {
  */
 async function withFreshRateLimitHeaders(cachedResponse) {
   const headers = new Headers(cachedResponse.headers)
+  headers.delete(EDGE_KIND_HEADER)
   const nowSec = Math.floor(Date.now() / 1000)
   let remaining = null
   let resetAtSec = null
@@ -266,36 +278,29 @@ function applyEdgeRateLimitCacheHeaders(headers, responseBody, cacheTtl) {
   }
 }
 
-async function setOnPremCache(hostname, appId, endpoint, method, responseBody, status, responseHeaders) {
-  try {
-    const cacheTtl = getCacheTtlSeconds(responseHeaders, responseBody)
-    if (!cacheTtl) {
-      console.log(`On-prem cache SKIP for ${appId}/${endpoint}/${method} (missing cache TTL)`)
-      return
-    }
+async function setOnPremCache(budget, hostname, appId, endpoint, method, responseBody, status, responseHeaders) {
+  const cacheTtl = getCacheTtlSeconds(responseHeaders, responseBody)
+  if (!cacheTtl) {
+    console.log(`On-prem cache SKIP for ${appId}/${endpoint}/${method} (missing cache TTL)`)
+    return
+  }
+  if (!canSpend(budget)) {
+    console.log(`On-prem cache SKIP for ${appId}/${endpoint}/${method} (subrequest budget)`)
+    return
+  }
 
-    const cache = caches.default
-    const cacheTags = `app-onprem-v2:${appId}`
-    const headers = new Headers(responseHeaders)
-    headers.set('Content-Type', 'application/json')
-    headers.set('Cache-Tag', cacheTags)
-    headers.set('X-Onprem-Cached', 'true')
-    headers.set('X-Onprem-App-Id', appId)
-    headers.set('X-Onprem-Ttl', String(cacheTtl))
-    applyEdgeRateLimitCacheHeaders(headers, responseBody, cacheTtl)
+  const headers = new Headers(responseHeaders)
+  headers.set('Content-Type', 'application/json')
+  headers.set('Cache-Tag', `app-onprem-v2:${appId}`)
+  headers.set('X-Onprem-Cached', 'true')
+  headers.set('X-Onprem-App-Id', appId)
+  headers.set('X-Onprem-Ttl', String(cacheTtl))
+  headers.set(EDGE_KIND_HEADER, 'onprem')
+  applyEdgeRateLimitCacheHeaders(headers, responseBody, cacheTtl)
 
-    // Store the response cache
-    const key = getOnPremCacheKey(hostname, appId, endpoint, method)
-    const response = new Response(JSON.stringify(responseBody), {
-      status,
-      headers,
-    })
-    await cache.put(key, response)
+  const response = new Response(JSON.stringify(responseBody), { status, headers })
+  if (await cachePut(budget, getEdgeCacheKey(hostname, appId, endpoint, method), response))
     console.log(`On-prem cache SET for ${appId}/${endpoint}/${method} (${cacheTtl}s TTL)`)
-  }
-  catch (e) {
-    console.log(`Failed to cache on-prem response: ${e.message}`)
-  }
 }
 
 function isOnPremResponse(status, responseBody) {
@@ -324,58 +329,55 @@ function buildOnPremResponse(appId, responseBody, status, responseHeaders) {
   })
 }
 
-async function setPlanUpgradeCache(hostname, appId, endpoint, method, responseBody, status, responseHeaders) {
-  try {
-    const cacheTtl = getCacheTtlSeconds(responseHeaders, responseBody)
-    if (!cacheTtl) {
-      console.log(`Plan-upgrade cache SKIP for ${appId}/${endpoint}/${method} (missing cache TTL)`)
-      return
-    }
+async function setPlanUpgradeCache(budget, hostname, appId, endpoint, method, responseBody, status, responseHeaders) {
+  const cacheTtl = getCacheTtlSeconds(responseHeaders, responseBody)
+  if (!cacheTtl) {
+    console.log(`Plan-upgrade cache SKIP for ${appId}/${endpoint}/${method} (missing cache TTL)`)
+    return
+  }
+  if (!canSpend(budget)) {
+    console.log(`Plan-upgrade cache SKIP for ${appId}/${endpoint}/${method} (subrequest budget)`)
+    return
+  }
 
-    const cache = caches.default
-    const cacheTags = `app-plan-v2:${appId}`
-    const key = getPlanUpgradeCacheKey(hostname, appId, endpoint, method)
-    const headers = new Headers(responseHeaders)
-    headers.set('Content-Type', 'application/json')
-    headers.set('Cache-Tag', cacheTags)
-    headers.set('X-Plan-Upgrade-Cached', 'true')
-    headers.set('X-Plan-Upgrade-App-Id', appId)
-    headers.set('X-Plan-Upgrade-Ttl', String(cacheTtl))
-    applyEdgeRateLimitCacheHeaders(headers, responseBody, cacheTtl)
-    const response = new Response(JSON.stringify(responseBody), {
-      status,
-      headers,
-    })
-    await cache.put(key, response)
+  const headers = new Headers(responseHeaders)
+  headers.set('Content-Type', 'application/json')
+  headers.set('Cache-Tag', `app-plan-v2:${appId}`)
+  headers.set('X-Plan-Upgrade-Cached', 'true')
+  headers.set('X-Plan-Upgrade-App-Id', appId)
+  headers.set('X-Plan-Upgrade-Ttl', String(cacheTtl))
+  headers.set(EDGE_KIND_HEADER, 'plan')
+  applyEdgeRateLimitCacheHeaders(headers, responseBody, cacheTtl)
+  const response = new Response(JSON.stringify(responseBody), { status, headers })
+  if (await cachePut(budget, getEdgeCacheKey(hostname, appId, endpoint, method), response))
     console.log(`Plan-upgrade cache SET for ${appId}/${endpoint}/${method} (${cacheTtl}s TTL)`)
-  }
-  catch (e) {
-    console.log(`Failed to cache plan-upgrade response: ${e.message}`)
-  }
 }
 
-function extractAppIdFromBodyBytes(requestBody) {
+function parseJsonBody(requestBody) {
   if (!requestBody)
-    return null
+    return undefined
   try {
-    const body = JSON.parse(new TextDecoder().decode(requestBody))
-    if (Array.isArray(body)) {
-      // /stats batch: first event app_id (handler enforces one app_id per batch)
-      const first = body[0]
-      if (first && typeof first === 'object' && typeof first.app_id === 'string' && first.app_id)
-        return first.app_id
-      return null
-    }
-    if (body && typeof body === 'object')
-      return body.app_id ?? null
-    return null
+    return JSON.parse(new TextDecoder().decode(requestBody))
   }
   catch {
-    return null
+    return undefined
   }
 }
 
-function extractAppIdFromRequest(request, url, requestBody) {
+function extractAppIdFromBody(body) {
+  if (Array.isArray(body)) {
+    // /stats batch: first event app_id (handler enforces one app_id per batch)
+    const first = body[0]
+    if (first && typeof first === 'object' && typeof first.app_id === 'string' && first.app_id)
+      return first.app_id
+    return null
+  }
+  if (body && typeof body === 'object')
+    return body.app_id ?? null
+  return null
+}
+
+function extractAppIdFromRequest(request, url, body) {
   const method = request.method
   // For GET and DELETE on /channel_self, app_id is in query params
   if ((method === 'DELETE' || method === 'GET') && matchesEndpoint(url.pathname, '/channel_self')) {
@@ -383,10 +385,266 @@ function extractAppIdFromRequest(request, url, requestBody) {
   }
   // For POST and PUT methods, app_id is in the body (already buffered once).
   if (method === 'POST' || method === 'PUT')
-    return extractAppIdFromBodyBytes(requestBody)
+    return extractAppIdFromBody(body)
   // For other HTTP methods (PATCH, OPTIONS, HEAD, etc.), on-prem caching is
   // intentionally skipped as these endpoints don't use those methods
   return null
+}
+
+// --- Edge answers ---------------------------------------------------------
+
+/** Same FNV-1a bucket as the worker's UPDATES_EDGE_CACHE sampling. */
+function edgeBucket(appId, deviceId) {
+  let hash = 0x811C9DC5
+  for (const char of `${appId}:${deviceId}`) {
+    hash ^= char.codePointAt(0) ?? 0
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0) % 10000
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isOptionalString(value, maxLength = Infinity) {
+  return value === undefined || (typeof value === 'string' && value.length <= maxLength)
+}
+
+function fixSemver(version) {
+  const dots = (version.match(/\./g) ?? []).length
+  if (dots === 0)
+    return `${version}.0.0`
+  if (dots === 1)
+    return `${version}.0`
+  return version
+}
+
+/**
+ * Plugins the worker answers from its read cache. Stricter on purpose: plain
+ * x.y.z only, no v4 and older, no deprecated plugin, and with the legacy
+ * channel_self store bound (fill.cs) none of the plugins that use it.
+ */
+function isAnswerablePluginVersion(pluginVersion, legacyChannelSelfStore) {
+  const match = typeof pluginVersion === 'string' ? PLAIN_SEMVER_RE.exec(pluginVersion) : null
+  if (!match)
+    return false
+  const major = Number(match[1])
+  const minor = Number(match[2])
+  if (major >= 8)
+    return true
+  if (major < 5)
+    return false
+  return minor >= (legacyChannelSelfStore ? 34 : major === 5 ? 10 : 25)
+}
+
+function updatesVariantKey(body) {
+  return `${body.platform}|${typeof body.defaultChannel === 'string' ? body.defaultChannel : ''}`
+}
+
+/** The worker's canServeUpToDateFromCache, plus the request schema it validates first. */
+function isAnswerableUpdatesBody(body, appId, fill) {
+  return isPlainObject(body)
+    && body.app_id === appId
+    && typeof body.device_id === 'string' && DEVICE_ID_RE.test(body.device_id)
+    && DEVICE_PLATFORMS.has(body.platform)
+    && typeof body.version_name === 'string' && body.version_name !== '' && body.version_name === fill.n
+    && typeof body.version_build === 'string' && body.version_build !== 'unknown' && PLAIN_SEMVER_RE.test(fixSemver(body.version_build))
+    && typeof body.is_emulator === 'boolean' && typeof body.is_prod === 'boolean'
+    && isAnswerablePluginVersion(body.plugin_version, fill.cs)
+    && isOptionalString(body.defaultChannel)
+    && isOptionalString(body.install_source, 64)
+    && isOptionalString(body.key_id, 20)
+    // A key mismatch is answered by the worker (key_id_mismatch for current plugins).
+    && (!body.key_id || !fill.k || body.key_id === fill.k)
+}
+
+function isValidStatsMetadata(metadata) {
+  if (metadata === undefined)
+    return true
+  if (!isPlainObject(metadata))
+    return false
+  const entries = Object.entries(metadata)
+  return entries.length <= 30 && entries.every(([key, value]) => key.length <= 64 && typeof value === 'string' && value.length <= 2048)
+}
+
+/**
+ * The stats request schema, an action the worker already accepted for this
+ * app, and never an install or a failure: rollout auto-pause compares those
+ * two live, so they always reach the worker.
+ */
+function isAnswerableStatsEvent(event, appId, actions) {
+  return isPlainObject(event)
+    && event.app_id === appId
+    && typeof event.device_id === 'string' && DEVICE_ID_RE.test(event.device_id)
+    && typeof event.platform === 'string'
+    && typeof event.version_name === 'string'
+    && typeof event.version_os === 'string'
+    && typeof event.is_emulator === 'boolean' && typeof event.is_prod === 'boolean'
+    && typeof event.action === 'string' && event.action !== 'set' && !event.action.endsWith('_fail') && actions.includes(event.action)
+    && ['defaultChannel', 'channel', 'old_version_name', 'version_code', 'plugin_version', 'version_build'].every(key => isOptionalString(event[key]))
+    && isOptionalString(event.install_source, 64)
+    && isOptionalString(event.custom_id, 36)
+    && isOptionalString(event.key_id, 20)
+    && isValidStatsMetadata(event.metadata)
+}
+
+function isLiveEdgeFill(fill, appId, deviceId) {
+  return isPlainObject(fill)
+    && typeof fill.exp === 'number' && fill.exp > Date.now()
+    && typeof deviceId === 'string'
+    && edgeBucket(appId, deviceId.toLowerCase()) < fill.bps
+}
+
+function base64UrlEncode(text) {
+  const bytes = new TextEncoder().encode(text)
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += 0x8000)
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+/** Encodes the stat for Logpush, or returns null when it would be cut. */
+function edgeStatHeader(stat) {
+  const value = base64UrlEncode(JSON.stringify(stat))
+  return value.length <= MAX_EDGE_STAT_HEADER_BYTES ? value : null
+}
+
+function edgeAnswerResponse(body, statHeader) {
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Capgo-Edge': 'answer',
+      [EDGE_STAT_HEADER]: statHeader,
+    },
+  })
+}
+
+/** Serves the request from the app's edge answers, or returns null to call the worker. */
+async function tryEdgeAnswer(budget, request, hostname, endpoint, appId, body, rawBody, doc) {
+  // Browser callers need the worker's CORS answer; Logpush keeps small headers only.
+  if (request.headers.has('Origin') || rawBody.length > MAX_EDGE_STAT_BODY_BYTES || !APP_ID_RE.test(appId))
+    return null
+
+  if (endpoint === 'updates') {
+    const fill = doc.variants?.[updatesVariantKey(body)]
+    if (!isLiveEdgeFill(fill, appId, body?.device_id) || typeof fill.r !== 'string' || !isAnswerableUpdatesBody(body, appId, fill))
+      return null
+    // An up-to-date answer confirms the bundle name: never give it to an IP
+    // the worker's update enumeration guard limited.
+    const ip = request.headers.get('cf-connecting-ip')
+    const statHeader = edgeStatHeader({ e: 'updates', b: rawBody, o: fill.o, a: fill.a, n: fill.n })
+    if (!ip || !statHeader || !canSpend(budget, 1, 2))
+      return null
+    if (await cacheMatch(budget, getIpLimitCacheKey(hostname, ip)))
+      return null
+    return edgeAnswerResponse(fill.r, statHeader)
+  }
+
+  if (endpoint === 'stats') {
+    const fill = doc.stats
+    const events = Array.isArray(body) ? body : [body]
+    if (events.length === 0 || !isLiveEdgeFill(fill, appId, events[0]?.device_id) || !Array.isArray(fill.actions))
+      return null
+    if (!events.every(event => isAnswerableStatsEvent(event, appId, fill.actions)))
+      return null
+    const statHeader = edgeStatHeader({ e: 'stats', b: rawBody })
+    if (!statHeader)
+      return null
+    const answer = Array.isArray(body)
+      ? { status: 'ok', results: events.map((_, index) => ({ status: 'ok', index })) }
+      : { status: 'ok' }
+    return edgeAnswerResponse(JSON.stringify(answer), statHeader)
+  }
+
+  return null
+}
+
+function parseEdgeFill(value, endpoint) {
+  try {
+    const fill = JSON.parse(decodeURIComponent(value))
+    if (!isPlainObject(fill) || fill.v !== 1 || fill.e !== endpoint || typeof fill.tags !== 'string')
+      return null
+    if (typeof fill.bps !== 'number' || fill.bps <= 0 || fill.bps > 10000 || typeof fill.ttl !== 'number' || fill.ttl < 1 || fill.ttl > 3600)
+      return null
+    if (endpoint === 'updates' && (typeof fill.n !== 'string' || typeof fill.o !== 'string' || typeof fill.a !== 'boolean' || typeof fill.cs !== 'boolean' || (fill.k !== null && typeof fill.k !== 'string')))
+      return null
+    return fill
+  }
+  catch {
+    return null
+  }
+}
+
+/** Merges a fill into the app's edge answers entry and stores it (one subrequest). */
+async function storeEdgeFill(budget, hostname, appId, endpoint, method, doc, fill, body, responseText) {
+  const now = Date.now()
+  const entry = { ...fill, exp: now + fill.ttl * 1000 }
+  let next
+  if (endpoint === 'updates') {
+    entry.r = responseText
+    const variants = Object.entries(doc?.variants ?? {})
+      .filter(([, value]) => isPlainObject(value) && value.exp > now)
+    variants.push([updatesVariantKey(body), entry])
+    // Keep the freshest variants when an app has many platform/channel pairs.
+    variants.sort((a, b) => b[1].exp - a[1].exp)
+    next = { variants: Object.fromEntries(variants.slice(0, MAX_EDGE_VARIANTS)) }
+  }
+  else {
+    const events = Array.isArray(body) ? body : [body]
+    const previous = isPlainObject(doc?.stats) && doc.stats.exp > now && Array.isArray(doc.stats.actions) ? doc.stats.actions : []
+    const seen = events.map(event => event?.action).filter(action => typeof action === 'string')
+    entry.actions = [...new Set([...previous, ...seen])].slice(0, MAX_EDGE_ACTIONS)
+    next = { stats: entry }
+  }
+  const values = Object.values(next.variants ?? { stats: next.stats })
+  const maxAge = Math.max(1, Math.ceil((Math.max(...values.map(value => value.exp)) - now) / 1000))
+  const response = new Response(JSON.stringify(next), {
+    headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': `public, max-age=${maxAge}`,
+      'Cache-Tag': fill.tags,
+      [EDGE_KIND_HEADER]: 'answers',
+    },
+  })
+  if (await cachePut(budget, getEdgeCacheKey(hostname, appId, endpoint, method), response))
+    console.log(`Edge answer SET for ${appId}/${endpoint}`)
+}
+
+async function storeIpLimit(budget, hostname, ip, resetAtSec) {
+  const ttl = Math.min(3600, resetAtSec - Math.floor(Date.now() / 1000))
+  if (!ip || !Number.isFinite(ttl) || ttl <= 0)
+    return
+  await cachePut(budget, getIpLimitCacheKey(hostname, ip), new Response('1', {
+    headers: { 'Cache-Control': `public, max-age=${ttl}` },
+  }))
+}
+
+/** Worker answer: learn the edge fill / IP limit it carries, without exposing them to the client. */
+async function handleEdgeHints(budget, response, request, hostname, appId, endpoint, method, doc, body, canCache) {
+  const fillHeader = response.headers.get(EDGE_FILL_HEADER)
+  const ipLimitHeader = response.headers.get(EDGE_IP_LIMIT_HEADER)
+  if (!fillHeader && !ipLimitHeader)
+    return response
+
+  const headers = new Headers(response.headers)
+  headers.delete(EDGE_FILL_HEADER)
+  headers.delete(EDGE_IP_LIMIT_HEADER)
+
+  if (ipLimitHeader && canSpend(budget))
+    await storeIpLimit(budget, hostname, request.headers.get('cf-connecting-ip'), Number.parseInt(ipLimitHeader, 10))
+
+  if (fillHeader && canCache && response.status === 200 && canSpend(budget)) {
+    const fill = parseEdgeFill(fillHeader, endpoint)
+    if (fill) {
+      const text = await response.text()
+      await storeEdgeFill(budget, hostname, appId, endpoint, method, doc, fill, body, text)
+      return new Response(text, { status: response.status, statusText: response.statusText, headers })
+    }
+  }
+
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
 }
 
 export default {
@@ -394,27 +652,42 @@ export default {
     const url = new URL(request.url)
     const method = request.method
     const hostname = url.hostname
+    const budget = createBudget()
 
     // Buffer POST/PUT body once — reused for app_id parse and regional fallbacks.
     const requestBody = method === 'POST' || method === 'PUT'
       ? await request.arrayBuffer()
       : undefined
 
-    // Check on-prem cache for cacheable endpoints BEFORE routing to workers
+    // Check the edge cache for cacheable endpoints BEFORE routing to workers
     let appId = null
     let endpoint = null
+    let body
+    let edgeDoc = null
     if (isCacheableEndpoint(url.pathname)) {
       endpoint = getEndpointName(url.pathname)
-      appId = extractAppIdFromRequest(request, url, requestBody)
+      body = parseJsonBody(requestBody)
+      appId = extractAppIdFromRequest(request, url, body)
 
       if (appId) {
-        const cachedPlanUpgrade = await getPlanUpgradeCache(hostname, appId, endpoint, method)
-        if (cachedPlanUpgrade) {
-          return await withFreshRateLimitHeaders(cachedPlanUpgrade)
-        }
-        const cachedResponse = await getOnPremCache(hostname, appId, endpoint, method)
-        if (cachedResponse) {
-          return await withFreshRateLimitHeaders(cachedResponse)
+        const cached = await cacheMatch(budget, getEdgeCacheKey(hostname, appId, endpoint, method))
+        if (cached) {
+          if (cached.headers.get(EDGE_KIND_HEADER) !== 'answers') {
+            console.log(`Edge cache HIT (${cached.headers.get(EDGE_KIND_HEADER)}) for ${appId}/${endpoint}/${method}`)
+            return await withFreshRateLimitHeaders(cached)
+          }
+          try {
+            edgeDoc = await cached.json()
+          }
+          catch {
+            edgeDoc = null
+          }
+          if (edgeDoc && method === 'POST') {
+            const rawBody = new TextDecoder().decode(requestBody)
+            const answer = await tryEdgeAnswer(budget, request, hostname, endpoint, appId, body, rawBody, edgeDoc)
+            if (answer)
+              return answer
+          }
         }
       }
     }
@@ -828,19 +1101,26 @@ export default {
     // Set once a worker is skipped or fails; an on-prem answer seen after that is served but not cached.
     let fallbackFailure = false
 
-    for (const workerUrl of fallbackUrls) {
+    for (let index = 0; index < fallbackUrls.length; index++) {
+      const workerUrl = fallbackUrls[index]
+      // Keep one subrequest for the worker fetch itself.
+      const circuit = canSpend(budget, 1, 1)
+        ? await readCircuit(budget, hostname, colo, workerUrl)
+        : { healthy: true, hasEntry: false }
       // Skip unhealthy workers (circuit is open)
-      const healthy = await isHealthy(hostname, colo, workerUrl)
-      if (!healthy) {
+      if (!circuit.healthy) {
         fallbackFailure = true
         console.log(`Skipping ${workerUrl} (circuit open for ${colo})`)
         continue
       }
+      if (!canSpend(budget))
+        break
 
       try {
         const abortController = new AbortController()
         const timeoutId = setTimeout(() => abortController.abort(), TIMEOUT_MS)
 
+        budget.used++
         const response = await fetch(`${workerUrl}${pathWithQuery}`, {
           method: request.method,
           headers: request.headers,
@@ -854,35 +1134,37 @@ export default {
         if (response.status >= 500) {
           fallbackFailure = true
           console.log(`${workerUrl} returned ${response.status}, marking unhealthy`)
-          await markUnhealthy(hostname, colo, workerUrl)
+          // Keep a subrequest for the next worker when there is one.
+          if (canSpend(budget, 1, index < fallbackUrls.length - 1 ? 1 : 0))
+            await markUnhealthy(budget, hostname, colo, workerUrl)
           continue // try fallback
         }
 
         // Success (2xx, 3xx, 4xx) - worker is healthy
-        await markHealthy(hostname, colo, workerUrl)
+        if (circuit.hasEntry && canSpend(budget))
+          await cacheDelete(budget, getCircuitBreakerCacheKey(hostname, colo, workerUrl))
         console.log(`Request served by ${workerUrl}`)
 
         // Check if this is an on-prem response that should be cached
         if (appId && endpoint) {
           try {
-            const responseClone = response.clone()
-            const responseBody = await responseClone.json()
+            const responseBody = await response.clone().json()
 
             // Return on the first on-prem answer. Confirming with another worker costs
             // extra subrequests and blows the Enterprise snippet limit (5), which turns
             // every on-prem request into a 1101. Stale on-prem entries from replica lag
             // are purged by tag on app/version create. During a partial outage the answer is
             // served but not cached.
-            if (isOnPremResponse(response.status, responseBody)) {
+            if (isOnPremResponse(response.status, responseBody) && !response.headers.has(EDGE_IP_LIMIT_HEADER)) {
               console.log(`On-prem detected by ${workerUrl} for ${appId}${fallbackFailure ? ' (after fallback failure, not caching)' : ''}`)
               if (!fallbackFailure)
-                await setOnPremCache(hostname, appId, endpoint, method, responseBody, response.status, response.headers)
+                await setOnPremCache(budget, hostname, appId, endpoint, method, responseBody, response.status, response.headers)
               return buildOnPremResponse(appId, responseBody, response.status, response.headers)
             }
 
             if (isPlanUpgradeResponse(response.status, responseBody)) {
               // Cache plan-upgrade responses for a short TTL to reduce burst traffic
-              setPlanUpgradeCache(hostname, appId, endpoint, method, responseBody, response.status, response.headers)
+              await setPlanUpgradeCache(budget, hostname, appId, endpoint, method, responseBody, response.status, response.headers)
 
               const newHeaders = new Headers(response.headers)
               newHeaders.set('Content-Type', 'application/json')
@@ -898,6 +1180,7 @@ export default {
           catch {
             // Response is not JSON or parsing failed - skip on-prem cache check and return original response
           }
+          return await handleEdgeHints(budget, response, request, hostname, appId, endpoint, method, edgeDoc, body, !fallbackFailure)
         }
 
         return response
@@ -906,9 +1189,18 @@ export default {
         // Network failure or timeout - mark unhealthy
         fallbackFailure = true
         console.log(`${workerUrl} failed: ${error.message}, marking unhealthy`)
-        await markUnhealthy(hostname, colo, workerUrl)
+        if (canSpend(budget, 1, index < fallbackUrls.length - 1 ? 1 : 0))
+          await markUnhealthy(budget, hostname, colo, workerUrl)
         // continue to next fallback
       }
+    }
+
+    if (!canSpend(budget)) {
+      console.log('Subrequest budget exhausted, no worker answered')
+      return new Response(JSON.stringify({ error: 'service_unavailable', message: 'Service temporarily unavailable' }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': '30' },
+      })
     }
 
     console.log('All workers failed, falling back to original request')

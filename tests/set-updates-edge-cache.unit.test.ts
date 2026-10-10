@@ -1,9 +1,15 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { parseJsonc, WRANGLER_PATH } from '../scripts/generate-plugin-route-hosts.ts'
-import { normalizeEdgeCacheValue, pluginEnvs, resolveTargetEnvs } from '../scripts/set-updates-edge-cache.ts'
+import { normalizeEdgeCacheValue, pluginEnvs, resolveSecretName, resolveTargetEnvs } from '../scripts/set-updates-edge-cache.ts'
 
 describe('updates-edge-cache:set', () => {
+  it('sets the edge cache switch unless the snippet answers switch is named', () => {
+    expect(resolveSecretName(['1%'])).toBe('UPDATES_EDGE_CACHE')
+    expect(resolveSecretName(['--secret=SNIPPET_EDGE_ANSWER', '1%'])).toBe('SNIPPET_EDGE_ANSWER')
+    expect(() => resolveSecretName(['--secret=JWT_SECRET'])).toThrow()
+  })
+
   it('normalizes the rollout value', () => {
     expect(normalizeEdgeCacheValue('ON')).toBe('on')
     expect(normalizeEdgeCacheValue('off')).toBe('off')

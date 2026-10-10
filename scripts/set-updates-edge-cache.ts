@@ -15,13 +15,26 @@
  *   bun run updates-edge-cache:set off --dry-run
  *
  * Envs come from cloudflare_workers/plugin/wrangler.jsonc.
+ *
+ * The snippet edge answers switch (SNIPPET_EDGE_ANSWER, see
+ * plugin_runtime/utils/snippetEdgeAnswer.ts) takes the same values:
+ *
+ *   bun run snippet-edge-answer:set 1%
  */
 import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import process from 'node:process'
 import { parseJsonc, WRANGLER_PATH as WRANGLER_CONFIG } from './generate-plugin-route-hosts.ts'
 
-const SECRET_NAME = 'UPDATES_EDGE_CACHE'
+const SECRET_NAMES = ['UPDATES_EDGE_CACHE', 'SNIPPET_EDGE_ANSWER'] as const
+
+export function resolveSecretName(args: string[]) {
+  const flag = args.find(arg => arg.startsWith('--secret='))
+  const name = flag ? flag.slice('--secret='.length) : SECRET_NAMES[0]
+  if (!(SECRET_NAMES as readonly string[]).includes(name))
+    throw new Error(`Unknown secret ${name}. Allowed: ${SECRET_NAMES.join(', ')}`)
+  return name
+}
 
 export function normalizeEdgeCacheValue(raw: string): string | null {
   const value = raw.trim().toLowerCase()
@@ -57,10 +70,11 @@ export function resolveTargetEnvs(requested: string[], available: string[]) {
 function main() {
   const args = process.argv.slice(2)
   const dryRun = args.includes('--dry-run')
-  const [rawValue, ...requestedEnvs] = args.filter(arg => arg !== '--dry-run')
+  const SECRET_NAME = resolveSecretName(args)
+  const [rawValue, ...requestedEnvs] = args.filter(arg => arg !== '--dry-run' && !arg.startsWith('--secret='))
   const value = rawValue ? normalizeEdgeCacheValue(rawValue) : null
   if (!value) {
-    console.error('Usage: bun run updates-edge-cache:set <off|on|N%> [env ...] [--dry-run]')
+    console.error('Usage: bun run updates-edge-cache:set <off|on|N%> [env ...] [--dry-run] [--secret=SNIPPET_EDGE_ANSWER]')
     process.exit(1)
   }
 

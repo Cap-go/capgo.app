@@ -65,7 +65,12 @@ export function hasUpdatesPurgeTarget(c: Context) {
 export function getUpdatesEdgeCacheBps(c: Context) {
   if (!hasUpdatesPurgeTarget(c))
     return 0
-  const raw = getEnv(c, 'UPDATES_EDGE_CACHE').replace(/\s+/g, '').toLowerCase()
+  return parseEdgeShareBps(getEnv(c, 'UPDATES_EDGE_CACHE'))
+}
+
+/** `off` | `on` | a percentage such as `1%`, `0.5` or `25`, in basis points. */
+export function parseEdgeShareBps(value: string) {
+  const raw = value.replace(/\s+/g, '').toLowerCase()
   if (raw === 'on')
     return 10_000
   // Whole value only: a malformed setting (e.g. "1abc") stays off.
