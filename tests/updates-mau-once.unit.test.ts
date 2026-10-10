@@ -25,8 +25,8 @@ describe('recordUpdatesMauOnce', () => {
     backgroundTaskMock.mockClear()
     const c = createContext()
 
-    recordUpdatesMauOnce(c, 'device-1', 'com.test.app', 'org-1', 'ios', '1.0.0')
-    recordUpdatesMauOnce(c, 'device-1', 'com.test.app', 'org-1', 'ios', '1.0.0')
+    await recordUpdatesMauOnce(c, 'device-1', 'com.test.app', 'org-1', 'ios', '1.0.0')
+    await recordUpdatesMauOnce(c, 'device-1', 'com.test.app', 'org-1', 'ios', '1.0.0')
 
     expect(createStatsMauMock).toHaveBeenCalledTimes(1)
     expect(backgroundTaskMock).toHaveBeenCalledTimes(1)
@@ -42,5 +42,9 @@ describe('recordUpdatesMauOnce', () => {
 
     await expect(recordUpdatesMauOnce(c, 'device-1', 'com.test.app', 'org-1', 'ios', '1.0.0'))
       .rejects.toBe(mauError)
+
+    createStatsMauMock.mockResolvedValue(undefined)
+    await recordUpdatesMauOnce(c, 'device-1', 'com.test.app', 'org-1', 'ios', '1.0.0')
+    expect(createStatsMauMock).toHaveBeenCalledTimes(2)
   })
 })

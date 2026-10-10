@@ -34,8 +34,9 @@ import { getCachedDefaultChannel, shouldUseUpdatesEdgeCache } from './updatesEdg
 import { backgroundTask, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, fixSemver, isDeprecatedPluginVersion, isInternalVersionName, isVersionDeleted } from './utils.ts'
 
 const updatesMauRecordedByRequest = new WeakMap<object, boolean>()
+const updatesMauInFlightByRequest = new WeakMap<object, Promise<void>>()
 
-export function recordUpdatesMauOnce(
+export async function recordUpdatesMauOnce(
   c: Context,
   deviceId: string,
   appId: string,
@@ -46,8 +47,20 @@ export function recordUpdatesMauOnce(
   const requestKey = c.req.raw
   if (updatesMauRecordedByRequest.get(requestKey))
     return
-  updatesMauRecordedByRequest.set(requestKey, true)
-  return backgroundTask(c, createStatsMau(c, deviceId, appId, ownerOrg, platform, versionBuild))
+  const inFlight = updatesMauInFlightByRequest.get(requestKey)
+  if (inFlight)
+    return inFlight
+
+  const tracked = Promise.resolve(backgroundTask(c, createStatsMau(c, deviceId, appId, ownerOrg, platform, versionBuild)))
+    .then(() => {
+      updatesMauRecordedByRequest.set(requestKey, true)
+    })
+    .finally(() => {
+      updatesMauInFlightByRequest.delete(requestKey)
+    })
+
+  updatesMauInFlightByRequest.set(requestKey, tracked)
+  return tracked
 }
 
 const PLAN_LIMIT: Array<'mau' | 'bandwidth' | 'storage'> = ['mau', 'bandwidth']
