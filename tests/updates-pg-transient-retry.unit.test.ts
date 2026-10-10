@@ -1,3 +1,4 @@
+import type { PluginPgClient } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { cloudlogMock } = vi.hoisted(() => ({
@@ -41,7 +42,7 @@ describe('withReadOnlyPgTransientRetry', () => {
     const result = await withReadOnlyPgTransientRetry(c, 'test', async () => {
       sessions++
       return {
-        pgClient: { id: sessions },
+        pgClient: { id: sessions } as unknown as PluginPgClient,
         drizzle: {} as any,
         cleanup: vi.fn(async () => undefined),
       }
@@ -67,7 +68,7 @@ describe('withReadOnlyPgTransientRetry', () => {
     await expect(withReadOnlyPgTransientRetry(c, 'test', async () => {
       sessions++
       return {
-        pgClient: {},
+        pgClient: {} as PluginPgClient,
         drizzle: {} as any,
         cleanup: vi.fn(async () => undefined),
       }

@@ -19,6 +19,7 @@ import { onPremiseAppResponse } from './rateLimitInfo.ts'
 import { cloudlog } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
 import { sendNotifToOrgMembersCached } from './org_email_notifications.ts'
+import type { LazyPgClient } from './pg.ts'
 import { closeClient, createLazyPgClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDatabaseURL, getDrizzleClient, getLazyPgQueryCount, getPgClient, refreshReplicationLag, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader, withReadOnlyPgTransientRetry } from './pg.ts'
 import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
 import { makeDevice } from './plugin_parser.ts'
@@ -1079,7 +1080,7 @@ async function updateWithEdgeCache(
   appStatusMs: number,
 ) {
   const pathTiming: UpdatePathTiming = {}
-  let lazyClient: ReturnType<typeof createLazyPgClient> | null = null
+  let lazyClient!: LazyPgClient
   let closeInBackground = false
   try {
     try {
@@ -1095,17 +1096,19 @@ async function updateWithEdgeCache(
         pgClient: lazyClient.client,
         drizzle: getDrizzleClient(lazyClient.client, { logger: false }),
         keepOpenAfterSuccess: true,
-        cleanup: () => lazyClient!.close(),
+        cleanup: async () => {
+          await lazyClient.close()
+        },
       }
     }, async (session) => {
       await setReplicationLagHeader(c, session.pgClient, { probeOnMiss: false })
       return updateWithPG(c, body, session.drizzle, appStatus, pathTiming)
-    })
+    }) as Awaited<ReturnType<typeof updateWithPG>>
 
     const dbQueries = getLazyPgQueryCount(c)
     if (lazyClient?.isConnected()) {
       closeInBackground = true
-      await backgroundTask(c, refreshReplicationLag(c, lazyClient.client).finally(() => lazyClient!.close()))
+      await backgroundTask(c, refreshReplicationLag(c, lazyClient.client).finally(() => lazyClient.close()))
     }
     try {
       response.headers.set('X-Updates-Cache', dbQueries === 0 ? 'hit' : 'miss')
