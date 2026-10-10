@@ -16,8 +16,8 @@ describe('pg_errors', () => {
       cause: new Error('Client has encountered a connection error and is not queryable'),
     })
 
-    expect(isTransientPgError(error)).toBe(true)
-    expect(isTransientDatabaseError(error)).toBe(true)
+    expect(isTransientPgError(error)).toBe(false)
+    expect(isTransientDatabaseError(error)).toBe(false)
     expect(isReadOnlyPgConnectionRetryError(error)).toBe(true)
     expect(readPgErrorCauseMessage(error)).toBe('Client has encountered a connection error and is not queryable')
   })
@@ -238,9 +238,17 @@ describe('pg_errors', () => {
     expect(isReadOnlyPgConnectionRetryError(statementTimeout)).toBe(false)
     expect(isReadOnlyPgConnectionRetryError(hyperdriveWait)).toBe(false)
     expect(isTransientDatabaseError(statementTimeout)).toBe(true)
-    expect(isTransientDatabaseError(hyperdriveWait)).toBe(false)
+    expect(isTransientDatabaseError(hyperdriveWait)).toBe(true)
     expect(isTransientPgError(Object.assign(new Error('Timed out while waiting for an open slot in the pool.'), {
       name: 'DrizzleQueryError',
-    }))).toBe(false)
+    }))).toBe(true)
+  })
+
+  it('classifies bare hyperdrive connect failures as database-origin read-only retries', () => {
+    const bareConnect = new Error('Client has encountered a connection error and is not queryable')
+
+    expect(isDatabaseOriginError(bareConnect)).toBe(true)
+    expect(isReadOnlyPgConnectionRetryError(bareConnect)).toBe(true)
+    expect(isTransientDatabaseError(bareConnect)).toBe(false)
   })
 })
