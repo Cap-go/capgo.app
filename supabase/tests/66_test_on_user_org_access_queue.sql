@@ -126,10 +126,12 @@ SELECT is(
         "credit_usage_posthog",
         "on_user_org_access",
         "canceled_org_retention_alerts",
-        "send_email"
+        "send_email",
+        "on_shared_apikey_secret_revoked"
     ]'::jsonb,
     'high-frequency queues retain order and append on_user_org_access,'
-    ' canceled_org_retention_alerts, then send_email'
+    ' canceled_org_retention_alerts, send_email, then'
+    ' on_shared_apikey_secret_revoked'
 );
 
 SELECT is(

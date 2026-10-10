@@ -192,6 +192,14 @@ export async function trackBentoEvents(
   events: readonly BentoBatchEvent[],
   signal?: AbortSignal,
 ) {
+  return trackBentoRecipientEvents(c, events.map(item => ({ ...item, email })), signal)
+}
+
+export async function trackBentoRecipientEvents(
+  c: Context,
+  events: readonly (BentoBatchEvent & { email: string })[],
+  signal?: AbortSignal,
+) {
   if (!isBentoConfigured(c))
     return
   if (events.length === 0)
@@ -202,7 +210,7 @@ export async function trackBentoEvents(
     const payload = {
       events: events.map(item => ({
         type: item.event,
-        email,
+        email: item.email,
         ...(item.data ? { details: item.data } : {}),
         ...(item.fields ? { fields: item.fields } : {}),
       })),

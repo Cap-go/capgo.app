@@ -1,9 +1,9 @@
 import type { Database } from '../src/types/supabase.types.ts'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 import { createClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { fetchTestRequest, getAuthHeaders, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, SUPABASE_ANON_KEY, SUPABASE_BASE_URL, USER_ID } from './test-utils.ts'
+import { executeSQL, fetchTestRequest, getAuthHeaders, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, SUPABASE_ANON_KEY, SUPABASE_BASE_URL, USER_ID } from './test-utils.ts'
 
 const USE_CLOUDFLARE = env.USE_CLOUDFLARE_WORKERS === 'true'
 
@@ -159,5 +159,33 @@ describe.skipIf(USE_CLOUDFLARE)('app creators and app-scoped API keys', () => {
     // Capped by the creator: app admins cannot hand out app_admin itself.
     const escalation = await createKey(memberHeaders, [{ role_name: 'app_admin', scope_type: 'app', org_id: ORG_ID, app_id: memberApp.id }])
     expect(escalation.status).toBe(403)
+  })
+
+  it('does not make anyone app admin when a shared key creates the app', async () => {
+    // Shared key acting as the org_member (holder = user_id), who would
+    // otherwise qualify for the creator app_admin binding.
+    const secret = `shared-app-creator-${randomUUID()}`
+    const [sharedKey] = await executeSQL<{ id: number, rbac_id: string }>(`
+      INSERT INTO public.apikeys (user_id, key_hash, name, owner_org_id)
+      VALUES ($1::uuid, $2, $3, $4::uuid)
+      RETURNING id, rbac_id`, [memberId, createHash('sha256').update(secret).digest('hex'), `shared-app-creator-${TEST_ID}`, ORG_ID])
+    createdKeyIds.push(Number(sharedKey!.id))
+    await executeSQL(`
+      INSERT INTO public.role_bindings (principal_type, principal_id, role_id, scope_type, org_id, granted_by)
+      SELECT public.rbac_principal_apikey(), $1::uuid, roles.id, public.rbac_scope_org(), $2::uuid, $3::uuid
+      FROM public.roles WHERE roles.name = public.rbac_role_org_member() AND roles.scope_type = public.rbac_scope_org()`, [sharedKey!.rbac_id, ORG_ID, USER_ID])
+    // Issue the secret after the binding insert, which revokes copied secrets.
+    await executeSQL('UPDATE public.apikeys SET shared_secret_user_id = user_id WHERE id = $1', [sharedKey!.id])
+
+    const sharedApp = await createApp({ 'Content-Type': 'application/json', 'capgkey': secret }, 'shared')
+    expect(await appRolesOf(memberId, sharedApp.id)).toEqual([])
+    const { count, error } = await getSupabaseClient()
+      .from('role_bindings')
+      .select('id', { count: 'exact', head: true })
+      .eq('scope_type', 'app')
+      .eq('app_id', sharedApp.id)
+      .eq('reason', 'App creator')
+    expect(error).toBeNull()
+    expect(count).toBe(0)
   })
 })

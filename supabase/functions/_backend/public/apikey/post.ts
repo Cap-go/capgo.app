@@ -11,7 +11,7 @@ import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
 import { checkPermissionPg } from '../../utils/rbac.ts'
 import { assertExpirationMatchesOrgPolicies, validateExpirationDate } from '../../utils/supabase.ts'
 import { parseApiKeyGlobalPermissions, replaceApiKeyGlobalPermissions, validateApiKeyGlobalPermissionsForBindings } from './global_permissions.ts'
-import { assertApiKeyManagerCanAssignBindings, ensureApiKeyManagementAllowed, requireApiKeyManagementAuth, requireJwtMfaForPrivilegedAction, sanitizeClientBindings } from './scope.ts'
+import { assertApiKeyManagerCanAssignBindings, assertCallerHoldsSharedApiKeyPermissions, ensureApiKeyManagementAllowed, requireApiKeyManagementAuth, requireJwtMfaForPrivilegedAction, sanitizeClientBindings, setApiKeyAuditActor, stampSharedApiKeySecretRecipient } from './scope.ts'
 
 type BindingInput = ClientBindingInput
 type ApiKeyRow = Database['public']['Tables']['apikeys']['Row']
@@ -23,6 +23,7 @@ interface CreateApiKeyRecordParams {
   name: string
   expiresAt: string | null
   isHashed: boolean
+  ownerOrgId: string | null
 }
 
 const app = honoFactory.createApp()
@@ -37,14 +38,16 @@ async function createApiKeyRecord(
       key,
       key_hash,
       name,
-      expires_at
+      expires_at,
+      owner_org_id
     )
     VALUES (
       ${params.userId}::uuid,
       CASE WHEN ${params.isHashed}::boolean THEN NULL ELSE ${plainKey}::text END,
       CASE WHEN ${params.isHashed}::boolean THEN encode(extensions.digest(${plainKey}::text, 'sha256'), 'hex') ELSE NULL END,
       ${params.name}::text,
-      ${params.expiresAt}::timestamptz
+      ${params.expiresAt}::timestamptz,
+      ${params.ownerOrgId}::uuid
     )
     RETURNING *`)
 
@@ -91,6 +94,25 @@ async function assertCanManageApiKeyBindingsPg(
   }
 }
 
+function parseOwnerOrgId(value: unknown): string | null {
+  if (value === undefined || value === null)
+    return null
+  if (typeof value !== 'string' || !UUID_REGEX.test(value))
+    throw simpleError('invalid_owner_org_id', 'owner_org_id must be an organization id')
+  return value
+}
+
+// A shared key belongs to one org: every binding must stay inside it, and it
+// cannot carry global permissions such as org.create.
+function assertSharedApiKeyBindings(ownerOrgId: string, bindings: BindingInput[], globalPermissions: string[]) {
+  if (bindings.some(binding => binding.org_id.toLowerCase() !== ownerOrgId.toLowerCase())) {
+    throw simpleError('shared_apikey_single_org', 'Shared API keys can only have bindings in their owner organization')
+  }
+  if (globalPermissions.length > 0) {
+    throw simpleError('shared_apikey_global_permissions', 'Shared API keys cannot have global permissions')
+  }
+}
+
 async function assertExpirationMatchesOrgPoliciesPg(
   db: DrizzleExecutor,
   orgIds: string[],
@@ -131,7 +153,9 @@ app.post('/', middlewareAuth(), async (c) => {
 
   const name = body.name ?? ''
   const expiresAt = body.expires_at ?? null
-  const isHashed = body.hashed === true
+  const ownerOrgId = parseOwnerOrgId(body.owner_org_id)
+  // Shared keys are only ever revealed once, so they are always hashed.
+  const isHashed = ownerOrgId !== null || body.hashed === true
 
   // Validate and parse bindings array
   if (body.bindings !== undefined && !Array.isArray(body.bindings)) {
@@ -154,6 +178,9 @@ app.post('/', middlewareAuth(), async (c) => {
   const resolvedBindings = bindings
   const globalPermissions = parseApiKeyGlobalPermissions(body.global_permissions, c.get('requestId')) ?? []
   validateApiKeyGlobalPermissionsForBindings(globalPermissions, resolvedBindings, c.get('requestId'))
+  if (ownerOrgId !== null) {
+    assertSharedApiKeyBindings(ownerOrgId, resolvedBindings, globalPermissions)
+  }
 
   const allOrgIds = [...new Set(resolvedBindings.map(binding => binding.org_id))]
 
@@ -168,9 +195,13 @@ app.post('/', middlewareAuth(), async (c) => {
 
     await drizzle.transaction(async (tx) => {
       const txDrizzle = tx as unknown as ReturnType<typeof getDrizzleClient>
+      await setApiKeyAuditActor(txDrizzle, auth)
       await lockRbacOrgs(txDrizzle, allOrgIds)
 
       const apikeyString = auth.apikey?.key ?? c.get('capgkey') ?? null
+      if (ownerOrgId !== null && !(await checkPermissionPg(c, 'org.manage_apikeys', { orgId: ownerOrgId }, txDrizzle, auth.userId, apikeyString))) {
+        throw quickError(403, 'forbidden_binding', `Forbidden - shared API keys require API key management rights for org ${ownerOrgId}`)
+      }
       await assertCanManageApiKeyBindingsPg(c, txDrizzle, auth.userId, apikeyString, resolvedBindings)
       await assertApiKeyManagerCanAssignBindings(c, auth, resolvedBindings, txDrizzle)
       await assertExpirationMatchesOrgPoliciesPg(tx, allOrgIds, expiresAt)
@@ -180,6 +211,7 @@ app.post('/', middlewareAuth(), async (c) => {
         name,
         expiresAt,
         isHashed,
+        ownerOrgId,
       })
 
       if (!apikeyData.rbac_id) {
@@ -224,6 +256,15 @@ app.post('/', middlewareAuth(), async (c) => {
 
       if (globalPermissions.length > 0) {
         await replaceApiKeyGlobalPermissions(tx, apikeyData.rbac_id, globalPermissions, auth.userId)
+      }
+
+      // Role rank and app/channel checks above do not cover org.* permissions.
+      // The caller must hold everything the new key can do before receiving
+      // its secret, and losing access must invalidate that secret.
+      if (ownerOrgId !== null) {
+        await assertCallerHoldsSharedApiKeyPermissions(txDrizzle, auth, apikeyData.rbac_id)
+        const stamped = await stampSharedApiKeySecretRecipient(txDrizzle, auth, apikeyData.rbac_id)
+        apikeyData = { ...apikeyData, ...stamped }
       }
     })
 

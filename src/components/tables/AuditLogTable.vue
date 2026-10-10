@@ -90,6 +90,12 @@ const actionFilters = ref<Record<string, boolean>>({
   'audit-org_users-insert': false,
   'audit-org_users-update': false,
   'audit-org_users-delete': false,
+  'audit-apikeys-insert': false,
+  'audit-apikeys-update': false,
+  'audit-apikeys-delete': false,
+  'audit-role_bindings-insert': false,
+  'audit-role_bindings-update': false,
+  'audit-role_bindings-delete': false,
 })
 
 // Mapping filter key to { table, operation }
@@ -109,6 +115,12 @@ const filterToTableOperation: Record<string, { table: string, operation: string 
   'audit-org_users-insert': { table: 'org_users', operation: 'INSERT' },
   'audit-org_users-update': { table: 'org_users', operation: 'UPDATE' },
   'audit-org_users-delete': { table: 'org_users', operation: 'DELETE' },
+  'audit-apikeys-insert': { table: 'apikeys', operation: 'INSERT' },
+  'audit-apikeys-update': { table: 'apikeys', operation: 'UPDATE' },
+  'audit-apikeys-delete': { table: 'apikeys', operation: 'DELETE' },
+  'audit-role_bindings-insert': { table: 'role_bindings', operation: 'INSERT' },
+  'audit-role_bindings-update': { table: 'role_bindings', operation: 'UPDATE' },
+  'audit-role_bindings-delete': { table: 'role_bindings', operation: 'DELETE' },
 }
 
 const columns: Ref<TableColumn[]> = ref<TableColumn[]>([
@@ -233,6 +245,10 @@ function getTableLabel(tableName: string): string {
       return t('bundle')
     case 'org_users':
       return t('member')
+    case 'apikeys':
+      return t('api-key-shared-audit')
+    case 'role_bindings':
+      return t('api-key-shared-access-audit')
     default:
       return tableName
   }

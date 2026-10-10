@@ -203,6 +203,9 @@ export const apikeys = pgTable('apikeys', {
   name: varchar('name').notNull(),
   expires_at: timestamp('expires_at', { withTimezone: true }),
   rbac_id: uuid('rbac_id').notNull(),
+  owner_org_id: uuid('owner_org_id'),
+  shared_secret_user_id: uuid('shared_secret_user_id'),
+  shared_secret_expires_at: timestamp('shared_secret_expires_at', { withTimezone: true, mode: 'date' }),
 })
 
 export const org_users = pgTable('org_users', {

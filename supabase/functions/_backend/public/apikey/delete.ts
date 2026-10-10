@@ -1,7 +1,7 @@
 import type { Database } from '../../utils/supabase.types.ts'
 import { BRES, honoFactory, quickError, simpleError } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_middleware.ts'
-import { deleteOwnedApiKeyByIdentifier, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, requireJwtMfaForPrivilegedAction, selectOwnedApiKeyByIdentifier } from './scope.ts'
+import { deleteManageableApiKeyById, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, requireJwtMfaForPrivilegedAction, selectManageableApiKeyByIdentifier } from './scope.ts'
 
 const app = honoFactory.createApp()
 
@@ -25,16 +25,20 @@ app.delete('/:id', middlewareAuth(), async (c) => {
     throw simpleError('invalid_id_format', 'API key ID must be a valid UUID or number')
   }
 
-  const { data: apikey, error: apikeyError } = await selectOwnedApiKeyByIdentifier(c, auth, id)
+  const { data: apikey, error: apikeyError } = await selectManageableApiKeyByIdentifier(c, auth, id)
   if (!apikey || apikeyError) {
     throw quickError(404, 'api_key_not_found', 'API key not found', { supabaseError: apikeyError })
   }
   if (auth.authType === 'apikey' && authApikey?.id === apikey.id) {
     throw quickError(401, 'cannot_delete_apikey', 'API keys cannot delete themselves', { apikeyId: authApikey.id })
   }
-  await ensureApiKeyCanManageTargetOrgIds(c, auth, authApikey, apikey.rbac_id ? await getApiKeyBindingOrgIds(c, apikey.rbac_id) : [], 'cannot_delete_apikey')
+  // Shared keys belong to their owner org even when their bindings expired.
+  const targetOrgIds = apikey.owner_org_id
+    ? [apikey.owner_org_id]
+    : (apikey.rbac_id ? await getApiKeyBindingOrgIds(c, apikey.rbac_id) : [])
+  await ensureApiKeyCanManageTargetOrgIds(c, auth, authApikey, targetOrgIds, 'cannot_delete_apikey')
 
-  const { error } = await deleteOwnedApiKeyByIdentifier(c, auth, id)
+  const { error } = await deleteManageableApiKeyById(c, auth, apikey)
 
   if (error) {
     throw quickError(500, 'failed_to_delete_apikey', 'Failed to delete API key', { supabaseError: error })

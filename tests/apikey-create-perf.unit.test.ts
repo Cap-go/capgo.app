@@ -83,6 +83,7 @@ vi.mock('../supabase/functions/_backend/public/apikey/scope.ts', () => ({
   requireApiKeyManagementAuth: requireApiKeyManagementAuthMock,
   requireJwtMfaForPrivilegedAction: requireJwtMfaForPrivilegedActionMock,
   sanitizeClientBindings: sanitizeClientBindingsMock,
+  setApiKeyAuditActor: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({

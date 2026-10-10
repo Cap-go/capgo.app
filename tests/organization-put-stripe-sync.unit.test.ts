@@ -122,6 +122,11 @@ function createOrgRow(overrides: Partial<OrgRow> & Pick<OrgRow, 'id' | 'name' | 
   }
 }
 
+const pendingOrganizationSelects: Array<{
+  data: OrgRow
+  maybeSingle: () => Promise<{ data: OrgRow | null, error: { message: string } | null }>
+}> = []
+
 function createOrgSelectBuilder(data: OrgRow) {
   const builder = {
     data,
@@ -145,10 +150,6 @@ interface OrganizationUpdateBuilder {
   maybeSingle: Mock<() => Promise<{ data: Partial<OrgRow> | null, error: { message: string } | null }>>
 }
 
-const pendingOrganizationSelects: Array<{
-  data: OrgRow
-  maybeSingle: () => Promise<{ data: OrgRow | null, error: { message: string } | null }>
-}> = []
 const pendingOrganizationUpdates: OrganizationUpdateBuilder[] = []
 let organizationUpdateQueryMock: ReturnType<typeof vi.fn>
 
@@ -265,6 +266,9 @@ describe('organization put Stripe sync', () => {
       key: null,
       key_hash: 'stored-hash',
       name: 'hashed org update key',
+      owner_org_id: null,
+      shared_secret_user_id: null,
+      shared_secret_expires_at: null,
       rbac_id: 'rbac-apikey-123',
       updated_at: null,
       user_id: 'user-123',

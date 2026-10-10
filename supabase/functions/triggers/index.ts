@@ -21,6 +21,7 @@ import { app as on_manifest_create } from '../_backend/triggers/on_manifest_crea
 import { app as on_org_update } from '../_backend/triggers/on_org_update.ts'
 import { app as on_organization_create } from '../_backend/triggers/on_organization_create.ts'
 import { app as on_organization_delete } from '../_backend/triggers/on_organization_delete.ts'
+import { app as on_shared_apikey_secret_revoked } from '../_backend/triggers/on_shared_apikey_secret_revoked.ts'
 import { app as on_user_create } from '../_backend/triggers/on_user_create.ts'
 import { app as on_user_delete } from '../_backend/triggers/on_user_delete.ts'
 import { app as on_user_org_access } from '../_backend/triggers/on_user_org_access.ts'
@@ -65,6 +66,7 @@ appGlobal.route('/on_channel_update', on_channel_update)
 appGlobal.route('/on_user_create', on_user_create)
 appGlobal.route('/on_user_update', on_user_update)
 appGlobal.route('/on_user_delete', on_user_delete)
+appGlobal.route('/on_shared_apikey_secret_revoked', on_shared_apikey_secret_revoked)
 appGlobal.route('/on_user_org_access', on_user_org_access)
 appGlobal.route('/on_app_create', on_app_create)
 appGlobal.route('/on_app_delete', on_app_delete)

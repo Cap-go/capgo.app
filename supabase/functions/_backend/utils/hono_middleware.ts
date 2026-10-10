@@ -57,6 +57,9 @@ type FindApikeyByValueResult = {
   updated_at: string | null
   name: string
   expires_at: string | null
+  owner_org_id: string | null
+  shared_secret_user_id: string | null
+  shared_secret_expires_at: string | null
 } & Record<string, unknown>
 
 /**
@@ -76,6 +79,9 @@ function mapFindApikeyRow(apiKey: FindApikeyByValueResult): ApikeyRow {
     updated_at: apiKey.updated_at,
     name: apiKey.name,
     expires_at: apiKey.expires_at,
+    owner_org_id: apiKey.owner_org_id,
+    shared_secret_user_id: apiKey.shared_secret_user_id ?? null,
+    shared_secret_expires_at: apiKey.shared_secret_expires_at ?? null,
   } as ApikeyRow
 }
 
@@ -151,6 +157,9 @@ async function checkKeyByIdPg(
         updated_at: result.updated_at?.toISOString() || null,
         name: result.name,
         expires_at: result.expires_at?.toISOString() || null,
+        owner_org_id: result.owner_org_id ?? null,
+        shared_secret_user_id: result.shared_secret_user_id ?? null,
+        shared_secret_expires_at: result.shared_secret_expires_at?.toISOString() ?? null,
       } as ApikeyRow,
     }
   }
@@ -357,18 +366,20 @@ function assertSubkeyHasPlaintextSecret(
 }
 
 /**
- * Verifies that a subkey belongs to the same user as its parent API key.
+ * Only personal keys may delegate to a subkey belonging to the same user.
  *
  * @param c - Hono context used for logging.
  * @param subkey - The subkey row.
  * @param apikey - The parent API key row.
- * @returns quickError response when the user IDs differ, otherwise null.
+ * @returns quickError when either key is shared or the user IDs differ.
  */
 function validateSubkeyUser(c: Context, subkey: Database['public']['Tables']['apikeys']['Row'], apikey: Database['public']['Tables']['apikeys']['Row']) {
-  if (subkey.user_id !== apikey.user_id) {
+  // ID lookups cannot prove possession of a shared key's issued secret or its
+  // recipient/expiry state. Keep delegation restricted to personal keys.
+  if (apikey.owner_org_id || subkey.owner_org_id || subkey.user_id !== apikey.user_id) {
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'Subkey user_id does not match apikey user_id',
+      message: 'Invalid subkey ownership or shared key delegation',
       subkeyId: subkey.id,
       subkeyUserId: subkey.user_id,
       apikeyId: apikey.id,

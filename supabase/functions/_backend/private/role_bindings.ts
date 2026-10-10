@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { sValidator } from '@hono/standard-validator'
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, isNotNull, sql } from 'drizzle-orm'
 import { getErrorCode } from '../utils/errors.ts'
 import { createHono, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
@@ -51,6 +51,7 @@ interface AssignablePrincipal {
   detail: string | null
 }
 const INVALID_APIKEY_ACCESS_ERROR = 'Invalid API key or access'
+const SHARED_APIKEY_BINDING_ERROR = 'Shared API key access can only be changed through the API key settings'
 type DrizzleClient = ReturnType<typeof getDrizzleClient>
 type DrizzleExecutor = Pick<DrizzleClient, 'execute'>
 
@@ -295,10 +296,12 @@ async function validateApiKeyPrincipalAccess(
   drizzle: ReturnType<typeof getDrizzleClient>,
   principalId: string,
   orgId: string,
+  allowSharedApiKey = false,
 ): Promise<ValidationResult<null>> {
   const [apiKey] = await drizzle
     .select({
       user_id: schema.apikeys.user_id,
+      owner_org_id: schema.apikeys.owner_org_id,
     })
     .from(schema.apikeys)
     .where(eq(schema.apikeys.rbac_id, principalId))
@@ -309,6 +312,24 @@ async function validateApiKeyPrincipalAccess(
       message: 'validatePrincipalAccess: missing apiKey for role binding principal',
       principalId,
       orgId,
+    })
+    return { ok: false, status: 400, error: INVALID_APIKEY_ACCESS_ERROR }
+  }
+
+  // Shared key access is managed only through /apikey, which requires
+  // org.manage_apikeys and caps the key at the caller's own permissions.
+  if (apiKey.owner_org_id) {
+    if (!allowSharedApiKey) {
+      return { ok: false, status: 403, error: SHARED_APIKEY_BINDING_ERROR }
+    }
+    if (apiKey.owner_org_id.toLowerCase() === orgId.toLowerCase()) {
+      return { ok: true, data: null }
+    }
+    cloudlogErr({
+      message: 'validatePrincipalAccess: shared apiKey bound outside its owner org',
+      principalId,
+      orgId,
+      ownerOrgId: apiKey.owner_org_id,
     })
     return { ok: false, status: 400, error: INVALID_APIKEY_ACCESS_ERROR }
   }
@@ -366,6 +387,7 @@ export async function validatePrincipalAccess(
   principalType: RoleBindingBody['principal_type'],
   principalId: string,
   orgId: string,
+  allowSharedApiKey = false,
 ): Promise<ValidationResult<null>> {
   if (principalType === 'user') {
     return validateUserPrincipalAccess(drizzle, principalId, orgId)
@@ -376,7 +398,7 @@ export async function validatePrincipalAccess(
   }
 
   if (principalType === 'apikey') {
-    return validateApiKeyPrincipalAccess(drizzle, principalId, orgId)
+    return validateApiKeyPrincipalAccess(drizzle, principalId, orgId, allowSharedApiKey)
   }
 
   return { ok: true, data: null }
@@ -412,6 +434,17 @@ async function loadManagedBinding(
 
   if (!(await canManageRoleBindingScope(c, drizzle, binding))) {
     return { ok: false, response: c.json({ error: 'Forbidden - Admin rights required' }, 403) }
+  }
+
+  if (binding.principal_type === 'apikey') {
+    const [sharedKey] = await drizzle
+      .select({ id: schema.apikeys.id })
+      .from(schema.apikeys)
+      .where(and(eq(schema.apikeys.rbac_id, binding.principal_id), isNotNull(schema.apikeys.owner_org_id)))
+      .limit(1)
+    if (sharedKey) {
+      return { ok: false, response: c.json({ error: SHARED_APIKEY_BINDING_ERROR }, 403) }
+    }
   }
 
   return { ok: true, data: binding }
@@ -591,6 +624,9 @@ export interface CreateBindingOptions {
   // the same txn and asserting org.manage_apikeys for each org. Do not use this
   // to skip owner-active-member / pending-invite checks on an existing principal.
   skipPrincipalValidation?: boolean
+  // Only the /apikey routes may bind shared (org-owned) keys; they enforce
+  // org.manage_apikeys and the caller's permission ceiling themselves.
+  allowSharedApiKey?: boolean
 }
 
 export async function createRoleBindingForPrincipal(
@@ -675,7 +711,7 @@ export async function createRoleBindingForPrincipal(
 
   // 6. Principal existence & org-membership check
   if (!options?.skipPrincipalValidation) {
-    const principalValidation = await validatePrincipalAccess(drizzle, principal_type, principal_id, org_id)
+    const principalValidation = await validatePrincipalAccess(drizzle, principal_type, principal_id, org_id, options?.allowSharedApiKey)
     if (!principalValidation.ok) {
       return { ok: false, status: principalValidation.status, error: principalValidation.error }
     }
