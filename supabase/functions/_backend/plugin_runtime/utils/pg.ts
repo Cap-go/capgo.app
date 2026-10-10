@@ -561,9 +561,10 @@ export async function withReadOnlyPgTransientRetry<T>(
   run: (session: ReadOnlyPgSession) => Promise<T>,
 ): Promise<T> {
   for (let attempt = 0; attempt < 2; attempt++) {
-    const session = await createSession()
+    let session: ReadOnlyPgSession | undefined
     let succeeded = false
     try {
+      session = await createSession()
       const result = await run(session)
       succeeded = true
       return result
@@ -582,7 +583,7 @@ export async function withReadOnlyPgTransientRetry<T>(
       throw error
     }
     finally {
-      if (!succeeded || !session.keepOpenAfterSuccess)
+      if (session && (!succeeded || !session.keepOpenAfterSuccess))
         await session.cleanup()
     }
   }

@@ -31,4 +31,16 @@ describe('recordUpdatesMauOnce', () => {
     expect(createStatsMauMock).toHaveBeenCalledTimes(1)
     expect(backgroundTaskMock).toHaveBeenCalledTimes(1)
   })
+
+  it('propagates MAU write failures', async () => {
+    const { recordUpdatesMauOnce } = await import('../supabase/functions/_backend/plugin_runtime/utils/update.ts')
+    createStatsMauMock.mockClear()
+    backgroundTaskMock.mockClear()
+    const mauError = new Error('mau write failed')
+    createStatsMauMock.mockReturnValue(Promise.reject(mauError))
+    const c = createContext()
+
+    await expect(recordUpdatesMauOnce(c, 'device-1', 'com.test.app', 'org-1', 'ios', '1.0.0'))
+      .rejects.toBe(mauError)
+  })
 })

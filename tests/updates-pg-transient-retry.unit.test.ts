@@ -87,6 +87,31 @@ describe('withReadOnlyPgTransientRetry', () => {
     expect(cloudlogMock).toHaveBeenCalledTimes(1)
   })
 
+  it('retries when session creation fails with a connection error', async () => {
+    const { withReadOnlyPgTransientRetry } = await import('../supabase/functions/_backend/plugin_runtime/utils/pg.ts')
+    const c = createContext()
+    let createCalls = 0
+    const connectionError = Object.assign(new Error('Failed query: SELECT 1'), {
+      name: 'DrizzleQueryError',
+      cause: new Error('Client has encountered a connection error and is not queryable'),
+    })
+
+    const result = await withReadOnlyPgTransientRetry(c, 'test', async () => {
+      createCalls++
+      if (createCalls === 1)
+        throw connectionError
+      return {
+        pgClient: {} as PluginPgClient,
+        drizzle: {} as any,
+        cleanup: vi.fn(async () => undefined),
+      }
+    }, async () => 'ok')
+
+    expect(result).toBe('ok')
+    expect(createCalls).toBe(2)
+    expect(cloudlogMock).toHaveBeenCalledTimes(1)
+  })
+
   it('does not retry statement timeout errors', async () => {
     const { withReadOnlyPgTransientRetry } = await import('../supabase/functions/_backend/plugin_runtime/utils/pg.ts')
     const c = createContext()

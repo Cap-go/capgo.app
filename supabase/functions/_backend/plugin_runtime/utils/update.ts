@@ -529,7 +529,7 @@ export async function updateWithPG(
       app_id_url: app_id,
     }, appOwner.owner_org, app_id, '0 0 * * 1', appOwner.orgs.management_email, drizzleClient))
   }
-  recordUpdatesMauOnce(c, device_id, app_id, appOwner.owner_org, platform, version_build)
+  await recordUpdatesMauOnce(c, device_id, app_id, appOwner.owner_org, platform, version_build)
 
 
   // Only query link/comment if plugin supports it (v5.35.0+, v6.35.0+, v7.35.0+, v8.35.0+) AND app has expose_metadata enabled
