@@ -99,15 +99,63 @@ function uploadCancel(): never {
  */
 export class IncompatibleBundleError extends CliUserError {}
 
+const SIGNED_METADATA_COLUMNS = ['signature', 'manifest_signature'] as const
+type SignedMetadataColumn = typeof SIGNED_METADATA_COLUMNS[number]
+type VersionDataWithSignatures = Database['public']['Tables']['app_versions']['Insert'] & Partial<Record<SignedMetadataColumn, string>>
+
+/**
+ * Detect a PostgREST "column not found in schema cache" error (PGRST204) for one of the
+ * signed bundle metadata columns. Self-hosted backends that have not run the migration
+ * adding `signature` / `manifest_signature` to `app_versions` return this.
+ */
+export function missingSignedMetadataColumn(error: unknown): SignedMetadataColumn | null {
+  if (!error || typeof error !== 'object')
+    return null
+  const { code, message } = error as { code?: unknown, message?: unknown }
+  const text = typeof message === 'string' ? message : ''
+  if (code !== 'PGRST204' && !/schema cache/i.test(text))
+    return null
+  for (const column of SIGNED_METADATA_COLUMNS) {
+    if (new RegExp(`'${column}'`).test(text) || new RegExp(`\\b${column}\\b`).test(text))
+      return column
+  }
+  return null
+}
+
+/**
+ * Remove the signed bundle metadata columns from the row so every later upsert of the same
+ * version also stops sending them. Returns true when something was removed.
+ */
+export function stripSignedMetadataColumns(versionData: VersionDataWithSignatures): boolean {
+  let stripped = false
+  for (const column of SIGNED_METADATA_COLUMNS) {
+    if (column in versionData) {
+      delete versionData[column]
+      stripped = true
+    }
+  }
+  return stripped
+}
+
 async function persistVersionData(
   supabase: SupabaseType,
-  versionData: Database['public']['Tables']['app_versions']['Insert'],
+  versionData: VersionDataWithSignatures,
   action: 'add' | 'update',
 ) {
-  const { data, error } = await updateOrCreateVersion(supabase, versionData)
+  let { data, error } = await updateOrCreateVersion(supabase, versionData)
     .select('id')
     .single()
-  if (error)
+  if (error && missingSignedMetadataColumn(error) && stripSignedMetadataColumns(versionData)) {
+    // Backend without the signature columns (self-hosted / not migrated yet): retry without them
+    // so the upload still succeeds, but tell the user the metadata is not signed server-side.
+    log.warn('Backend does not support signed bundle metadata yet (missing app_versions.signature / manifest_signature); uploading without signature. Update your Capgo backend to enable signed bundle metadata.')
+    const retry = await updateOrCreateVersion(supabase, versionData)
+      .select('id')
+      .single()
+    data = retry.data
+    error = retry.error
+  }
+  if (error || !data)
     uploadFail(`Cannot ${action} bundle ${formatError(error)}`)
   return data.id
 }
@@ -1752,7 +1800,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     comment: options.comment || null,
     key_id: preparedBundle?.keyId || undefined,
     cli_version: pack.version,
-  } as Database['public']['Tables']['app_versions']['Insert'] & { signature?: string, manifest_signature?: string }
+  } as VersionDataWithSignatures
 
   // Sign the bundle metadata (version name + plain zip sha256) so the plugin can bind
   // the version name to the checksum when a publicKey is configured.

@@ -20,6 +20,7 @@ import {
   verifyBundleSignature,
   verifyManifestSignature,
 } from '../src/api/crypto.ts'
+import { missingSignedMetadataColumn, stripSignedMetadataColumns } from '../src/bundle/upload.ts'
 
 let failures = 0
 
@@ -123,6 +124,22 @@ await t('manifest signature round trips and binds the entry set', () => {
   assert.equal(verifyManifestSignature(versionName, [...entries, { file_name: 'extra.js', hash: '5'.repeat(64) }], signature, publicKey), false)
   // other version
   assert.equal(verifyManifestSignature('9.9.9', entries, signature, publicKey), false)
+})
+
+await t('missingSignedMetadataColumn detects PGRST204 for the signature columns only', () => {
+  assert.equal(missingSignedMetadataColumn({ code: 'PGRST204', message: "Could not find the 'signature' column of 'app_versions' in the schema cache" }), 'signature')
+  assert.equal(missingSignedMetadataColumn({ code: 'PGRST204', message: "Could not find the 'manifest_signature' column of 'app_versions' in the schema cache" }), 'manifest_signature')
+  assert.equal(missingSignedMetadataColumn({ code: 'PGRST204', message: "Could not find the 'other' column of 'app_versions' in the schema cache" }), null)
+  assert.equal(missingSignedMetadataColumn({ code: '23505', message: 'duplicate key value violates unique constraint signature' }), null)
+  assert.equal(missingSignedMetadataColumn(null), null)
+  assert.equal(missingSignedMetadataColumn(new Error('boom')), null)
+})
+
+await t('stripSignedMetadataColumns removes both columns so later upserts stay compatible', () => {
+  const row = { name: '1.0.0', app_id: 'com.example.app', signature: 'a'.repeat(512), manifest_signature: 'b'.repeat(512) }
+  assert.equal(stripSignedMetadataColumns(row), true)
+  assert.deepEqual(row, { name: '1.0.0', app_id: 'com.example.app' })
+  assert.equal(stripSignedMetadataColumns(row), false)
 })
 
 if (failures > 0) {

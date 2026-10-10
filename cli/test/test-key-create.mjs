@@ -7,11 +7,11 @@
  */
 
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
-import { createKeyInternal } from '../src/key.ts'
+import { createKeyInternal, gitignoreEntryFor } from '../src/key.ts'
 import { appendLineIfMissing } from '../src/utils/safeWrites.ts'
 
 let failures = 0
@@ -95,6 +95,62 @@ await t('key create refuses to overwrite without --force and keeps .gitignore de
     if (!isWindows)
       assert.equal(mode(join(dir, '.capgo_key_v2')), 0o600)
     assert.equal(readFileSync(join(dir, '.gitignore'), 'utf8'), 'node_modules\n.capgo_key_v2\n')
+  }
+  finally {
+    process.chdir(originalCwd)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await t('gitignoreEntryFor returns repository-relative posix entries or null outside the project', () => {
+  const cwd = process.platform === 'win32' ? 'C:\\proj' : '/proj'
+  const sep = process.platform === 'win32' ? '\\' : '/'
+  assert.equal(gitignoreEntryFor('.capgo_key_v2', cwd), '.capgo_key_v2')
+  assert.equal(gitignoreEntryFor(`keys${sep}.capgo_key_v2`, cwd), 'keys/.capgo_key_v2')
+  assert.equal(gitignoreEntryFor(`${cwd}${sep}keys${sep}.capgo_key_v2`, cwd), 'keys/.capgo_key_v2')
+  assert.equal(gitignoreEntryFor(`${cwd}${sep}..${sep}.capgo_key_v2`, cwd), null)
+  assert.equal(gitignoreEntryFor(`..${sep}outside${sep}.capgo_key_v2`, cwd), null)
+  assert.equal(gitignoreEntryFor(process.platform === 'win32' ? 'D:\\elsewhere\\.capgo_key_v2' : '/elsewhere/.capgo_key_v2', cwd), null)
+})
+
+await t('key create with an absolute keyDir inside the project writes a relative .gitignore entry', async () => {
+  const dir = setupProject()
+  try {
+    const keyDir = join(realpathSync(dir), 'keys')
+    mkdirSync(keyDir)
+    await createKeyInternal({ keyDir }, true)
+    assert.ok(existsSync(join(keyDir, '.capgo_key_v2')))
+    assert.equal(readFileSync(join(dir, '.gitignore'), 'utf8'), 'keys/.capgo_key_v2\n')
+  }
+  finally {
+    process.chdir(originalCwd)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await t('key create with a keyDir outside the project skips .gitignore', async () => {
+  const dir = setupProject()
+  const outside = mkdtempSync(join(tmpdir(), 'capgo-key-outside-'))
+  try {
+    await createKeyInternal({ keyDir: outside }, true)
+    assert.ok(existsSync(join(outside, '.capgo_key_v2')))
+    assert.equal(existsSync(join(dir, '.gitignore')), false)
+  }
+  finally {
+    process.chdir(originalCwd)
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+  }
+})
+
+await t('key create ignores the private key before writing it (no unignored key on failure)', async () => {
+  const dir = setupProject()
+  try {
+    // A directory named .gitignore makes the append fail before any key is written
+    mkdirSync(join(dir, '.gitignore'))
+    await assert.rejects(() => createKeyInternal({}, true))
+    assert.equal(existsSync(join(dir, '.capgo_key_v2')), false)
+    assert.equal(existsSync(join(dir, '.capgo_key_v2.pub')), false)
   }
   finally {
     process.chdir(originalCwd)
