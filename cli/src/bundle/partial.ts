@@ -150,17 +150,28 @@ export async function prepareBundlePartialFiles(
   encryptionMethod: 'none' | 'v2' | 'v1',
   finalKeyData: string,
   supportsHexChecksum: boolean = false,
+  plainHashes?: Map<string, string>,
 ) {
   const spinner = getUploadReporter().spinner()
   spinner.start(encryptionMethod !== 'v2' ? 'Generating the update manifest' : `Generating the update manifest with ${supportsHexChecksum ? 'V3' : 'V2'} encryption`)
   const manifest = await generateManifest(path)
 
+  // Keep the plain sha256 of every file keyed by the hash that ends up in the manifest
+  // (encrypted or not) so the manifest signature can be built from the plain values.
+  for (const file of manifest)
+    plainHashes?.set(file.hash, file.hash)
+
   if (encryptionMethod === 'v2') {
     for (const file of manifest) {
+      const plainHash = file.hash
       // Use V3 for new plugin versions, V2 for old versions
       file.hash = supportsHexChecksum
         ? encryptChecksumV3(file.hash, finalKeyData)
         : encryptChecksum(file.hash, finalKeyData)
+      if (plainHashes) {
+        plainHashes.delete(plainHash)
+        plainHashes.set(file.hash, plainHash)
+      }
     }
   }
 

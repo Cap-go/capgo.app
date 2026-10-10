@@ -1,5 +1,5 @@
 import type { ExtConfigPairs } from './config'
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { intro, log, outro, confirm as pConfirm } from '@clack/prompts'
 import { trackEvent } from './analytics/track'
@@ -7,6 +7,7 @@ import { createRSA } from './api/crypto'
 import { checkAlerts } from './api/update'
 import { getConfigWriteTarget, writeConfigUpdater } from './config'
 import { baseKey, baseKeyPub, baseKeyPubV2, baseKeyV2, getConfigForWrite, promptAndSyncCapacitor } from './utils'
+import { appendLineIfMissing, writeFileAtomic } from './utils/safeWrites'
 
 interface SaveOptions {
   key?: string
@@ -148,14 +149,20 @@ export async function createKeyInternal(options: Options, silent = false, existi
       log.error('Public Key already exists, use --force to overwrite')
     throw new Error('Public key already exists')
   }
-  writeFileSync(publicKeyPath, publicKey)
-
   if (existsSync(privateKeyPath) && !options.force) {
     if (!silent)
       log.error('Private Key already exists, use --force to overwrite')
     throw new Error('Private key already exists')
   }
-  writeFileSync(privateKeyPath, privateKey)
+  // Both files are written owner-only (0600) and atomically so a half-written key is never left behind
+  await writeFileAtomic(publicKeyPath, publicKey, { mode: 0o600 })
+  await writeFileAtomic(privateKeyPath, privateKey, { mode: 0o600 })
+
+  // Keep the private key out of git (no duplicate line if it is already ignored)
+  const gitignoreEntry = privateKeyPath.split('\\').join('/')
+  const addedToGitignore = await appendLineIfMissing('.gitignore', gitignoreEntry, 0o600)
+  if (!silent)
+    log.success(addedToGitignore ? `Added ${gitignoreEntry} to .gitignore so the private key is never committed` : `${gitignoreEntry} is already listed in .gitignore`)
 
   const extConfig = existingConfig && !getConfigWriteTarget()
     ? existingConfig

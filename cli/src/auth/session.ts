@@ -3,7 +3,7 @@ import { rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import process from 'node:process'
 import { createSupabaseClient, resolveUserIdFromApiKey, sendEvent } from '../utils'
-import { appendToSafeFile, writeFileAtomic } from '../utils/safeWrites'
+import { appendLineIfMissing, writeFileAtomic } from '../utils/safeWrites'
 
 /**
  * Shared, UI-free authentication core.
@@ -79,16 +79,7 @@ function resolveKeyAndSource(): { key?: string, source?: KeySource } {
  * project-local logins don't accumulate duplicate lines.
  */
 async function ensureGitignored(entry: string): Promise<void> {
-  let existing = ''
-  try {
-    existing = readFileSync('.gitignore', 'utf8')
-  }
-  catch {
-    existing = ''
-  }
-  const alreadyListed = existing.split(/\r?\n/).some(line => line.trim() === entry)
-  if (!alreadyListed)
-    await appendToSafeFile('.gitignore', `${entry}\n`, 0o600)
+  await appendLineIfMissing('.gitignore', entry, 0o600)
 }
 
 /**

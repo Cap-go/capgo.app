@@ -3,6 +3,7 @@ import {
   constants,
   createCipheriv,
   createDecipheriv,
+  createHash,
   createPublicKey,
   generateKeyPairSync,
   privateEncrypt,
@@ -115,6 +116,90 @@ export function decryptChecksumV3(checksum: string, key: string): string {
   ).toString(formatHex)
 
   return checksumDecrypted
+}
+
+export const BUNDLE_SIGNATURE_HEADER = 'capgo-bundle-v1'
+export const MANIFEST_SIGNATURE_HEADER = 'capgo-manifest-v1'
+
+export interface ManifestSignatureEntry {
+  file_name: string
+  hash: string
+}
+
+/**
+ * Build the byte-exact payload signed for a bundle (zip) upload.
+ * Format (UTF-8, `\n` = 0x0A):
+ *   capgo-bundle-v1\n
+ *   version:<versionName>\n
+ *   checksum:<plain sha256 hex of the zip, lowercase>\n
+ */
+export function buildBundleSignaturePayload(versionName: string, checksumHex: string): string {
+  return `${BUNDLE_SIGNATURE_HEADER}\nversion:${versionName}\nchecksum:${checksumHex.toLowerCase()}\n`
+}
+
+/**
+ * Compare two strings as UTF-8 byte arrays (unsigned lexicographic).
+ * Mirrors the ordering used by the native plugins when rebuilding the payload.
+ */
+export function compareUtf8Bytes(a: string, b: string): number {
+  return Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'))
+}
+
+/**
+ * Build the byte-exact payload signed for a delta manifest.
+ * Format (UTF-8, `\n` = 0x0A):
+ *   capgo-manifest-v1\n
+ *   version:<versionName>\n
+ *   <file_name>:<plain sha256 hex of the file, lowercase>\n   (one line per entry, sorted by file_name as UTF-8 bytes)
+ */
+export function buildManifestSignaturePayload(versionName: string, entries: ManifestSignatureEntry[]): string {
+  const sorted = [...entries].sort((a, b) => compareUtf8Bytes(a.file_name, b.file_name))
+  let payload = `${MANIFEST_SIGNATURE_HEADER}\nversion:${versionName}\n`
+  for (const entry of sorted)
+    payload += `${entry.file_name}:${entry.hash.toLowerCase()}\n`
+  return payload
+}
+
+function signPayload(payload: string, privateKeyPem: string): string {
+  const digest = createHash('sha256').update(Buffer.from(payload, 'utf8')).digest()
+  return privateEncrypt({ key: privateKeyPem, padding }, digest).toString(formatHex)
+}
+
+function verifyPayload(payload: string, signatureHex: string, publicKeyPem: string): boolean {
+  if (!/^[0-9a-f]{512}$/.test(signatureHex))
+    return false
+  try {
+    const recovered = publicDecrypt({ key: publicKeyPem, padding }, Buffer.from(signatureHex, formatHex))
+    const digest = createHash('sha256').update(Buffer.from(payload, 'utf8')).digest()
+    return recovered.length === digest.length && recovered.equals(digest)
+  }
+  catch {
+    return false
+  }
+}
+
+/**
+ * Sign the bundle metadata (version name + plain zip checksum) with the RSA private key.
+ * Returns 512 lowercase hex chars (RSA-2048, PKCS#1 v1.5 padding over sha256(payload)).
+ */
+export function signBundleMetadata(versionName: string, checksumHex: string, privateKeyPem: string): string {
+  return signPayload(buildBundleSignaturePayload(versionName, checksumHex), privateKeyPem)
+}
+
+/**
+ * Sign the delta manifest metadata (version name + every file_name/plain hash) with the RSA private key.
+ * Returns 512 lowercase hex chars.
+ */
+export function signManifestMetadata(versionName: string, entries: ManifestSignatureEntry[], privateKeyPem: string): string {
+  return signPayload(buildManifestSignaturePayload(versionName, entries), privateKeyPem)
+}
+
+export function verifyBundleSignature(versionName: string, checksumHex: string, signatureHex: string, publicKeyPem: string): boolean {
+  return verifyPayload(buildBundleSignaturePayload(versionName, checksumHex), signatureHex, publicKeyPem)
+}
+
+export function verifyManifestSignature(versionName: string, entries: ManifestSignatureEntry[], signatureHex: string, publicKeyPem: string): boolean {
+  return verifyPayload(buildManifestSignaturePayload(versionName, entries), signatureHex, publicKeyPem)
 }
 
 interface RSAKeys {

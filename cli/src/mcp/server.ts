@@ -738,7 +738,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
       return {
         content: [{
           type: 'text' as const,
-          text: 'Encryption keys generated successfully. Private key saved to .capgo_key_v2, public key to .capgo_key_v2.pub',
+          text: 'Encryption keys generated successfully. Private key saved to .capgo_key_v2 (mode 0600, added to .gitignore), public key to .capgo_key_v2.pub. Uploads encrypted with this key also get signed bundle metadata (signature / manifest_signature) verified by @capgo/capacitor-updater >= 8.53.0.',
         }],
       }
     },

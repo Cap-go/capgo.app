@@ -588,6 +588,8 @@ export class CapgoSDK {
           sessionKey: uploadResponse.sessionKey,
           ivSessionKey: uploadResponse.ivSessionKey,
           storageProvider: uploadResponse.storageProvider,
+          signature: uploadResponse.signature,
+          manifestSignature: uploadResponse.manifestSignature,
           skipped: uploadResponse.skipped,
           reason: uploadResponse.reason,
         }

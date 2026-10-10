@@ -15,7 +15,7 @@ import { greaterOrEqual, parse } from '@std/semver'
 import pack from '../../package.json'
 import { trackEvent } from '../analytics/track'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
-import { calcKeyId, encryptChecksum, encryptChecksumV3, encryptSource, generateSessionKey } from '../api/crypto'
+import { calcKeyId, encryptChecksum, encryptChecksumV3, encryptSource, generateSessionKey, signBundleMetadata, signManifestMetadata } from '../api/crypto'
 import { checkAlerts } from '../api/update'
 import { loadSavedCredentials } from '../build/credentials'
 import { getChecksum } from '../checksum'
@@ -543,6 +543,7 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
   let ivSessionKey
   let sessionKey
   let checksum = ''
+  let plainChecksum = ''
   let zipped: Buffer | null = null
   let encryptionMethod = 'none' as 'none' | 'v2' | 'v1'
   let finalKeyData = ''
@@ -589,6 +590,7 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
   const forceCrc32 = options.forceCrc32Checksum === true
   const shouldUseSha256 = !forceCrc32 && (((keyV2 || options.keyDataV2 || existsSync(baseKeyV2)) && !noKey) || useSha256)
   checksum = await getChecksum(zipped, shouldUseSha256 ? 'sha256' : 'crc32')
+  plainChecksum = checksum
   s.stop(`Checksum ${shouldUseSha256 ? 'SHA256' : 'CRC32'}${forceCrc32 ? ' (forced)' : ''}: ${checksum}`)
   // key should be undefined or a string if false it should ignore encryption DO NOT REPLACE key === false With !key it will not work
   if (noKey) {
@@ -683,7 +685,7 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
   if (options.verbose)
     log.info(`[Verbose] Bundle preparation complete, returning bundle data`)
 
-  return { zipped, ivSessionKey, sessionKey, checksum, encryptionMethod, finalKeyData, keyId }
+  return { zipped, ivSessionKey, sessionKey, checksum, plainChecksum, encryptionMethod, finalKeyData, keyId }
 }
 
 async function uploadBundleToCapgoCloud(apikey: string, supabase: SupabaseType, appid: string, bundle: string, orgId: string, zipped: Buffer, options: OptionsUpload, tusChunkSize: number) {
@@ -1750,7 +1752,20 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     comment: options.comment || null,
     key_id: preparedBundle?.keyId || undefined,
     cli_version: pack.version,
-  } as Database['public']['Tables']['app_versions']['Insert']
+  } as Database['public']['Tables']['app_versions']['Insert'] & { signature?: string, manifest_signature?: string }
+
+  // Sign the bundle metadata (version name + plain zip sha256) so the plugin can bind
+  // the version name to the checksum when a publicKey is configured.
+  if (!options.external && preparedBundle && preparedBundle.encryptionMethod === 'v2' && preparedBundle.finalKeyData && /^[0-9a-f]{64}$/i.test(preparedBundle.plainChecksum)) {
+    const signature = signBundleMetadata(bundle, preparedBundle.plainChecksum, preparedBundle.finalKeyData)
+    if (signature)
+      versionData.signature = signature
+    if (options.verbose)
+      log.info(`[Verbose] Bundle signature: ${versionData.signature ? 'present' : 'none'}`)
+  }
+  else if (options.external && options.signature) {
+    versionData.signature = options.signature
+  }
 
   if (options.external) {
     if (options.verbose)
@@ -1771,6 +1786,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
       log.info(`  - URL: ${options.external}`)
       log.info(`  - IV Session Key: ${options.ivSessionKey ? 'provided' : 'none'}`)
       log.info(`  - Encrypted Checksum: ${options.encryptedChecksum ? 'provided' : 'none'}`)
+      log.info(`  - Signature: ${options.signature ? 'provided' : 'none'}`)
     }
   }
 
@@ -1861,7 +1877,9 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose && options.delta)
     log.info(`[Verbose] Preparing delta update manifest...`)
 
-  const manifest: manifestType = options.delta ? await prepareBundlePartialFiles(path, apikey, orgId, appid, options.encryptDelta ? encryptionMethod : 'none', finalKeyData, supportsHexChecksum) : []
+  // Map of manifest hash (encrypted when delta encryption is on) -> plain sha256 hex, used for manifest_signature
+  const manifestPlainHashes = new Map<string, string>()
+  const manifest: manifestType = options.delta ? await prepareBundlePartialFiles(path, apikey, orgId, appid, options.encryptDelta ? encryptionMethod : 'none', finalKeyData, supportsHexChecksum, manifestPlainHashes) : []
 
   const encryptionData = versionData.session_key && options.encryptDelta && sessionKey
     ? {
@@ -2111,6 +2129,30 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     versionData.storage_provider = 'r2'
     versionData.manifest = null
 
+    // Sign the manifest metadata (version name + every file_name/plain hash) so the plugin can
+    // detect dropped, renamed or added manifest entries when a publicKey is configured.
+    if (encryptionMethod === 'v2' && finalKeyData && finalManifest && finalManifest.length > 0) {
+      const entries: { file_name: string, hash: string }[] = []
+      for (const entry of finalManifest) {
+        const plainHash = manifestPlainHashes.get(entry.file_hash)
+        if (!entry.file_name || !plainHash) {
+          entries.length = 0
+          break
+        }
+        entries.push({ file_name: entry.file_name, hash: plainHash })
+      }
+      if (entries.length === finalManifest.length) {
+        const manifestSignature = signManifestMetadata(bundle, entries, finalKeyData)
+        if (manifestSignature)
+          versionData.manifest_signature = manifestSignature
+      }
+      else {
+        log.warn('Could not sign the delta manifest: plain file hashes are missing for some entries')
+      }
+      if (options.verbose)
+        log.info(`[Verbose] Manifest signature: ${versionData.manifest_signature ? 'present' : 'none'}`)
+    }
+
     if (options.verbose)
       log.info(`[Verbose] Updating version record with storage provider...`)
 
@@ -2256,6 +2298,8 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     sessionKey: sessionKey ? sessionKey.toString('base64') : undefined,
     ivSessionKey: typeof versionData.session_key === 'string' ? versionData.session_key : undefined,
     storageProvider: versionData.storage_provider,
+    signature: versionData.signature,
+    manifestSignature: versionData.manifest_signature,
   }
 
   if (options.verbose) {
@@ -2264,6 +2308,8 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     log.info(`  - Checksum: ${result.checksum}`)
     log.info(`  - Encryption: ${result.encryptionMethod}`)
     log.info(`  - Storage: ${result.storageProvider}`)
+    log.info(`  - Signature: ${result.signature ? 'present' : 'none'}`)
+    log.info(`  - Manifest signature: ${result.manifestSignature ? 'present' : 'none'}`)
   }
 
   if (interactive && !result.skipped) {
@@ -2310,6 +2356,12 @@ export function checkValidOptions(options: OptionsUpload) {
   }
   if (options.encryptedChecksum && !options.external) {
     uploadFail('You need to provide an external url if you want to use the --encrypted-checksum option')
+  }
+  if (options.signature && !options.external) {
+    uploadFail('You need to provide an external url if you want to use the --signature option')
+  }
+  if (options.signature && !/^[0-9a-f]{512}$/.test(options.signature)) {
+    uploadFail('The --signature option must be 512 lowercase hex characters (RSA-2048 signature of the bundle metadata)')
   }
   if ((options.partial || options.delta || options.partialOnly || options.deltaOnly) && options.external) {
     uploadFail('You cannot use delta upload options (--delta/--delta-only, or deprecated --partial/--partial-only) with an external url')

@@ -307,6 +307,7 @@ Cordova example: npx @capgo/cli@latest bundle upload com.example.app --mode cord
       return concurrency
     }))
   .option('--encrypted-checksum <encryptedChecksum>', `An encrypted checksum (signature). Used only when uploading an external bundle.`)
+  .option('--signature <signature>', `Signed bundle metadata (512 hex chars, RSA signature of version name + plain checksum). Used only when uploading an external bundle; computed automatically otherwise.`)
   .option('--auto-set-bundle', `Set the bundle version in Capacitor config`)
   .addOption(new Option('--auto-bump [level]', `Auto-increment bundle version from the latest remote channel/app version. Level: major, minor (default), patch|fix, metadata (prerelease), or ai`)
     .preset('minor')
@@ -722,8 +723,10 @@ key
   .command('create')
   .description(`🔨 Create RSA key pair for end-to-end encryption.
 
-Creates .capgo_key_v2 (private) and .capgo_key_v2.pub (public) in project root.
+Creates .capgo_key_v2 (private) and .capgo_key_v2.pub (public) in project root with mode 0600,
+and adds .capgo_key_v2 to .gitignore so the private key is never committed.
 Public key is saved to capacitor.config for mobile app decryption.
+The private key also signs the bundle metadata (version name + checksum, delta manifest) on upload.
 NEVER commit the private key - store it securely!
 
 Example: npx @capgo/cli@latest key create`)

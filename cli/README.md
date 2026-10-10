@@ -450,6 +450,7 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | **--no-delta** | <code>boolean</code> | Disable delta updates even if instant updates are enabled |
 | **--delta-upload-concurrency** | <code>string</code> | Maximum number of delta files processed concurrently (1-500) |
 | **--encrypted-checksum** | <code>string</code> | An encrypted checksum (signature). Used only when uploading an external bundle. |
+| **--signature** | <code>string</code> | Signed bundle metadata (512 hex chars, RSA signature of version name + plain checksum). Used only when uploading an external bundle; computed automatically otherwise. |
 | **--auto-set-bundle** | <code>boolean</code> | Set the bundle version in Capacitor config |
 | **--auto-bump** | <code>string</code> | Auto-increment bundle version from the latest remote channel/app version. Level: major, minor (default), patch|fix, metadata (prerelease), or ai |
 | **--capacitor-config** | <code>string</code> | Capacitor config source to update (useful with dynamic monorepo configs) |
@@ -1106,8 +1107,10 @@ npx @capgo/cli@latest key create
 ```
 
 🔨 Create RSA key pair for end-to-end encryption.
-Creates .capgo_key_v2 (private) and .capgo_key_v2.pub (public) in project root.
+Creates .capgo_key_v2 (private) and .capgo_key_v2.pub (public) in project root with mode 0600,
+and adds .capgo_key_v2 to .gitignore so the private key is never committed.
 Public key is saved to capacitor.config for mobile app decryption.
+The private key also signs the bundle metadata (version name + checksum, delta manifest) on upload.
 NEVER commit the private key - store it securely!
 
 **Example:**

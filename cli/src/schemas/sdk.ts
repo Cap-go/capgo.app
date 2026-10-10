@@ -122,6 +122,8 @@ export const uploadResultSchema = z.object({
   sessionKey: z.string().optional(),
   ivSessionKey: z.string().nullable().optional(),
   storageProvider: z.string().optional(),
+  signature: z.string().optional(),
+  manifestSignature: z.string().optional(),
   skipped: z.boolean().optional(),
   reason: z.string().optional(),
   error: z.string().optional(),
