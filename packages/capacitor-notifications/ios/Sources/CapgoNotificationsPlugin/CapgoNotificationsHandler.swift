@@ -7,6 +7,8 @@ public class CapgoNotificationsHandler: NSObject, NotificationHandlerProtocol {
     private let backgroundCompletionQueue = DispatchQueue(label: "app.capgo.notifications.backgroundCompletion")
     private var backgroundCompletions: [String: (UIBackgroundFetchResult) -> Void] = [:]
     private let backgroundCompletionTimeout: TimeInterval = 25.0
+    private let nativeUpdateCompletionDelay: TimeInterval = 5.0
+    static let nativeUpdateCheckKey = "capgoNativeUpdateCheck"
 
     public func requestPermissions(with completion: ((Bool, Error?) -> Void)? = nil) {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
@@ -86,6 +88,27 @@ public class CapgoNotificationsHandler: NSObject, NotificationHandlerProtocol {
         let isBackground = isCapgoBackgroundPayload(userInfo)
         var notificationData = makeRemoteNotificationJSObject(userInfo)
 
+        if isUpdateCheckPayload(userInfo), let plugin = self.plugin as? CapgoNotificationsPlugin {
+            // Handled natively so the update runs even when no JavaScript is listening
+            // (background launch, another bundle loaded, WebView suspended).
+            let status = plugin.triggerNativeUpdateCheck()
+            var data = notificationData["data"] as? JSObject ?? [:]
+            data[CapgoNotificationsHandler.nativeUpdateCheckKey] = status
+            notificationData["data"] = data
+            if status != "unsupported" {
+                self.plugin?.notifyListeners("notificationReceived", data: notificationData, retainUntilConsumed: true)
+                self.plugin?.notifyListeners("backgroundNotification", data: notificationData, retainUntilConsumed: true)
+                // The updater starts its own background task from a worker queue; keep
+                // the push wake-up alive long enough for that task to begin.
+                if let completionHandler = completionHandler {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + nativeUpdateCompletionDelay) {
+                        completionHandler(status == "queued" ? .newData : .noData)
+                    }
+                }
+                return
+            }
+        }
+
         if isBackground, let completionHandler = completionHandler {
             let taskId = UUID().uuidString
             backgroundCompletionQueue.sync {
@@ -134,8 +157,17 @@ public class CapgoNotificationsHandler: NSObject, NotificationHandlerProtocol {
         ]
     }
 
+    private func capgoAction(_ userInfo: [AnyHashable: Any]) -> String {
+        return (userInfo["capgoAction"] as? String) ?? (userInfo["capgo_action"] as? String) ?? ""
+    }
+
     private func isCapgoBackgroundPayload(_ userInfo: [AnyHashable: Any]) -> Bool {
-        let action = (userInfo["capgoAction"] as? String) ?? (userInfo["capgo_action"] as? String) ?? ""
+        let action = capgoAction(userInfo)
         return action == "update_check" || action == "capgo_update_check" || action == "background"
+    }
+
+    private func isUpdateCheckPayload(_ userInfo: [AnyHashable: Any]) -> Bool {
+        let action = capgoAction(userInfo)
+        return action == "update_check" || action == "capgo_update_check"
     }
 }

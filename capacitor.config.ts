@@ -7,6 +7,13 @@ const config: CapacitorConfig = {
   appName: 'Capgo',
   webDir: 'dist',
   plugins: {
+    CapgoNotifications: {
+      presentationOptions: [
+        'badge',
+        'sound',
+        'alert',
+      ],
+    },
     PushNotifications: {
       presentationOptions: [
         'badge',

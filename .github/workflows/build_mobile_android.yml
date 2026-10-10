@@ -55,7 +55,19 @@ jobs:
         # regenerate it here before `capgo build request` uploads the workspace.
         run: |
           bun run build
+          bash scripts/vendor-workspace-native-plugins.sh
           bunx cap sync android
+      - name: Add Firebase config for push notifications
+        # google-services.json is gitignored. Without it the google-services Gradle
+        # plugin is skipped and FCM (Capgo update pushes) cannot start on Android.
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON" > android/app/google-services.json
+          else
+            echo "::warning::GOOGLE_SERVICES_JSON secret is missing; Android push notifications are disabled in this build"
+          fi
       - name: Request Android build through Capgo CLI
         env:
           CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}

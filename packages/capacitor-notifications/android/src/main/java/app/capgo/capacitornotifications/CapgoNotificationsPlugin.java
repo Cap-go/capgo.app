@@ -12,6 +12,8 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.service.notification.StatusBarNotification;
 import com.getcapacitor.Bridge;
 import com.getcapacitor.JSArray;
@@ -28,10 +30,14 @@ import com.google.firebase.messaging.CommonNotificationBuilder;
 import com.google.firebase.messaging.FirebaseMessaging;
 import com.google.firebase.messaging.NotificationParams;
 import com.google.firebase.messaging.RemoteMessage;
+import java.lang.reflect.Method;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Queue;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -48,6 +54,7 @@ public class CapgoNotificationsPlugin extends Plugin {
     private static final String INSTALL_ID_KEY = "nativeInstallId";
     private static final String BADGE_KEY = "badge";
     private static final int MAX_PENDING_MESSAGES = 64;
+    static final String NATIVE_UPDATE_CHECK_KEY = "capgoNativeUpdateCheck";
     private static final Object pendingMessagesLock = new Object();
     private static final Queue<RemoteMessage> pendingMessages = new ArrayDeque<>();
 
@@ -60,6 +67,13 @@ public class CapgoNotificationsPlugin extends Plugin {
         notificationManager = (NotificationManager) getActivity().getSystemService(Context.NOTIFICATION_SERVICE);
         preferences = getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         staticBridge = this.bridge;
+        notificationChannelManager = new NotificationChannelManager(getActivity(), notificationManager);
+        // Plugins load one after another on the main thread: replay queued messages once
+        // every plugin (including the updater) is loaded.
+        new Handler(Looper.getMainLooper()).post(this::firePendingMessages);
+    }
+
+    private void firePendingMessages() {
         while (true) {
             RemoteMessage pendingMessage;
             synchronized (pendingMessagesLock) {
@@ -70,7 +84,6 @@ public class CapgoNotificationsPlugin extends Plugin {
             }
             fireNotification(pendingMessage);
         }
-        notificationChannelManager = new NotificationChannelManager(getActivity(), notificationManager);
     }
 
     @Override
@@ -313,10 +326,22 @@ public class CapgoNotificationsPlugin extends Plugin {
     }
 
     public static void sendRemoteMessage(RemoteMessage remoteMessage) {
+        sendRemoteMessage(null, remoteMessage);
+    }
+
+    /**
+     * Pass the messaging service as context: when the app has no running bridge (killed app woken
+     * by FCM), an update-check push then starts the updater's headless update right away instead
+     * of waiting for the next launch.
+     */
+    public static void sendRemoteMessage(Context context, RemoteMessage remoteMessage) {
         CapgoNotificationsPlugin plugin = CapgoNotificationsPlugin.getCapgoNotificationsInstance();
         if (plugin != null) {
             plugin.fireNotification(remoteMessage);
         } else {
+            if (context != null && isCapgoUpdateCheckMessage(remoteMessage)) {
+                enqueueHeadlessUpdateCheck(context);
+            }
             synchronized (pendingMessagesLock) {
                 if (pendingMessages.size() >= MAX_PENDING_MESSAGES) {
                     pendingMessages.poll();
@@ -332,6 +357,10 @@ public class CapgoNotificationsPlugin extends Plugin {
         remoteMessageData.put("id", remoteMessage.getMessageId());
         for (String key : remoteMessage.getData().keySet()) {
             data.put(key, remoteMessage.getData().get(key));
+        }
+        if (isCapgoUpdateCheckMessage(remoteMessage)) {
+            // Handled natively so the update runs even when no JavaScript is listening.
+            data.put(NATIVE_UPDATE_CHECK_KEY, triggerNativeUpdateCheck());
         }
         remoteMessageData.put("data", data);
 
@@ -380,12 +409,85 @@ public class CapgoNotificationsPlugin extends Plugin {
         this.checkPermissions(call);
     }
 
-    private boolean isCapgoBackgroundMessage(RemoteMessage remoteMessage) {
+    private static String capgoAction(RemoteMessage remoteMessage) {
         String action = remoteMessage.getData().get("capgoAction");
         if (action == null) {
             action = remoteMessage.getData().get("capgo_action");
         }
-        return "update_check".equals(action) || "capgo_update_check".equals(action) || "background".equals(action);
+        return action;
+    }
+
+    private boolean isCapgoBackgroundMessage(RemoteMessage remoteMessage) {
+        String action = capgoAction(remoteMessage);
+        return isCapgoUpdateCheckMessage(remoteMessage) || "background".equals(action);
+    }
+
+    private static boolean isCapgoUpdateCheckMessage(RemoteMessage remoteMessage) {
+        String action = capgoAction(remoteMessage);
+        return "update_check".equals(action) || "capgo_update_check".equals(action);
+    }
+
+    /**
+     * Start @capgo/capacitor-updater's headless update (no Activity, no bridge). Reflection keeps
+     * the updater optional; older updaters without HeadlessUpdateWorker update on next launch.
+     */
+    static boolean enqueueHeadlessUpdateCheck(Context context) {
+        try {
+            Class<?> worker = Class.forName("ee.forgr.capacitor_updater.HeadlessUpdateWorker");
+            worker.getMethod("enqueue", Context.class).invoke(null, context.getApplicationContext());
+            return true;
+        } catch (Exception exception) {
+            return false;
+        }
+    }
+
+    /**
+     * Ask @capgo/capacitor-updater to run its native update pipeline now. The updater
+     * applies the bundle with its own install policy (next background, direct update).
+     * Called through reflection so the updater stays an optional dependency.
+     *
+     * @return the updater status (queued, already_running, unavailable, preview_session),
+     * "unsupported" when the updater cannot be triggered natively, or "failed".
+     */
+    String triggerNativeUpdateCheck() {
+        PluginHandle handle = bridge == null ? null : bridge.getPlugin("CapacitorUpdater");
+        if (handle == null || handle.getInstance() == null) {
+            return "unsupported";
+        }
+        final Object updater = handle.getInstance();
+        final Method trigger;
+        try {
+            trigger = updater.getClass().getMethod("triggerBackgroundUpdateCheck");
+        } catch (NoSuchMethodException exception) {
+            return "unsupported";
+        }
+        final AtomicReference<String> status = new AtomicReference<>("failed");
+        final CountDownLatch done = new CountDownLatch(1);
+        Runnable invoke = () -> {
+            try {
+                Object result = trigger.invoke(updater);
+                status.set(result instanceof String ? (String) result : "queued");
+            } catch (Exception exception) {
+                status.set("failed");
+            } finally {
+                done.countDown();
+            }
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            invoke.run();
+        } else {
+            // FCM delivers on a worker thread; the updater expects plugin calls on main.
+            new Handler(Looper.getMainLooper()).post(invoke);
+            try {
+                if (!done.await(5, TimeUnit.SECONDS)) {
+                    return "queued";
+                }
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                return "queued";
+            }
+        }
+        return status.get();
     }
 
     @SuppressWarnings("deprecation")

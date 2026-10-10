@@ -91,6 +91,7 @@ dependencies {
     implementation project(':capgo-capacitor-navigation-bar')
     implementation project(':capgo-capacitor-network-diagnostics')
     implementation project(':capgo-capacitor-nfc')
+    implementation project(':capgo-capacitor-notifications')
     implementation project(':capgo-capacitor-pdf-generator')
     implementation project(':capgo-capacitor-pdf-viewer')
     implementation project(':capgo-capacitor-pedometer')

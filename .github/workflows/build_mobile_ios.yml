@@ -53,6 +53,7 @@ jobs:
         # stale Package.resolved/CapApp-SPM state from the repository.
         run: |
           bun run build
+          bash scripts/vendor-workspace-native-plugins.sh
           bunx cap sync ios
       - name: Request iOS build through Capgo CLI
         env:

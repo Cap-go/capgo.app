@@ -135,7 +135,11 @@ export interface CapgoUpdaterIntegrationOptions {
 }
 
 export interface CapgoUpdateCheckResult {
-  status: 'disabled' | 'unavailable' | 'no_update' | 'installed' | 'failed'
+  /**
+   * `queued` / `already_running`: the native updater pipeline took over and
+   * installs the bundle with its own policy (`autoUpdate`, `directUpdate`).
+   */
+  status: 'disabled' | 'unavailable' | 'no_update' | 'installed' | 'queued' | 'already_running' | 'failed'
   version?: string
   bundleId?: string
   error?: string
