@@ -18,6 +18,10 @@ import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { recordBuildTime, supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
 import { getEnv } from '../../utils/utils.ts'
+import {
+  computeNativeBuildEffectiveQueuePriority,
+  nativeBuildQueueTierFromPriority,
+} from '../../utils/native_build_queue_priority.ts'
 
 export interface BuildStatusParams {
   job_id: string
@@ -99,7 +103,7 @@ export async function getBuildStatus(
   // This prevents cross-app access by mixing an allowed app_id with another app's job_id.
   const { data: buildRequest, error: buildRequestError } = await supabase
     .from('build_requests')
-    .select('app_id, owner_org, requested_by, platform, status, build_mode')
+    .select('app_id, owner_org, requested_by, platform, status, build_mode, queue_priority, created_at')
     .eq('builder_job_id', job_id)
     .maybeSingle()
 
@@ -292,6 +296,16 @@ export async function getBuildStatus(
     )
   }
 
+  const baseQueuePriority = typeof buildRequest.queue_priority === 'number'
+    ? buildRequest.queue_priority
+    : null
+  const enqueuedAtMs = buildRequest.created_at
+    ? Date.parse(buildRequest.created_at)
+    : Date.now()
+  const effectiveQueuePriority = baseQueuePriority !== null
+    ? computeNativeBuildEffectiveQueuePriority(baseQueuePriority, enqueuedAtMs)
+    : null
+
   return c.json({
     job_id,
     status: effectiveStatus,
@@ -306,5 +320,10 @@ export async function getBuildStatus(
         : null,
     error: effectiveError,
     upload_url: builderJob.uploadUrl || null,
+    queue_priority: baseQueuePriority,
+    effective_queue_priority: effectiveQueuePriority,
+    queue_priority_tier: baseQueuePriority !== null
+      ? nativeBuildQueueTierFromPriority(baseQueuePriority)
+      : null,
   }, 200)
 }

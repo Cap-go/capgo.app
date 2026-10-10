@@ -196,6 +196,7 @@ export const plans = pgTable('plans', {
   stripe_id: varchar('stripe_id').notNull(),
   credit_id: text('credit_id').notNull(),
   native_build_concurrency: integer('native_build_concurrency').notNull().default(2),
+  native_build_queue_priority: integer('native_build_queue_priority').notNull().default(10),
 })
 
 export const apikeys = pgTable('apikeys', {

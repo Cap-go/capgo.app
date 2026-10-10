@@ -11,6 +11,7 @@ const baseInput = {
   platform: 'ios',
   buildOptions: {},
   buildCredentials: {},
+  priority: 10,
 }
 
 describe('builder payload shape', () => {
@@ -49,6 +50,14 @@ describe('builder payload shape', () => {
     expect(payload).not.toHaveProperty('credentials')
   })
 
+  it.concurrent('forwards plan queue priority to the builder job payload', () => {
+    const payload = buildBuilderPayload({
+      ...baseInput,
+      priority: 40,
+    })
+    expect(payload.priority).toBe(40)
+  })
+
   it.concurrent('includes userId (org), actorUserId (human), appId, artifactKey, and fastlane with correct values', () => {
     const payload = buildBuilderPayload({
       orgId: 'org-456',
@@ -58,6 +67,7 @@ describe('builder payload shape', () => {
       platform: 'android',
       buildOptions: {},
       buildCredentials: {},
+      priority: 20,
     })
 
     expect(payload.userId).toBe('org-456')
@@ -76,6 +86,7 @@ describe('builder payload shape', () => {
       platform: 'ios',
       buildOptions: { foo: 'bar' },
       buildCredentials: { baz: 'qux' },
+      priority: 10,
     })
 
     const keys = Object.keys(payload).sort()
@@ -86,6 +97,7 @@ describe('builder payload shape', () => {
       'buildCredentials',
       'buildOptions',
       'fastlane',
+      'priority',
       'userId',
     ])
   })
@@ -109,6 +121,7 @@ describe('builder payload shape', () => {
       'cache_fingerprint_extra',
       'cache_key',
       'fastlane',
+      'priority',
       'userId',
     ])
   })
@@ -140,6 +153,7 @@ describe('builder payload shape', () => {
       'buildOptions',
       'cache_enabled',
       'fastlane',
+      'priority',
       'userId',
     ])
   })
@@ -185,6 +199,7 @@ describe('builder payload shape', () => {
       platform: 'ios',
       buildOptions: complexOptions,
       buildCredentials: complexCredentials,
+      priority: 100,
     })
 
     expect(payload.buildOptions).toEqual(complexOptions)

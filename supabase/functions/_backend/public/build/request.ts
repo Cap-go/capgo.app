@@ -7,6 +7,7 @@ import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
 import { sendEventToTracking } from '../../utils/tracking.ts'
 import { getEnv } from '../../utils/utils.ts'
 import { assertNativeBuildConcurrencyAvailable, getPlansUpgradeUrl } from './concurrency.ts'
+import { resolveOrgNativeBuildQueuePriority } from './queue_priority.ts'
 
 export interface RequestBuildBody {
   app_id: string
@@ -31,6 +32,11 @@ export interface RequestBuildResponse {
   upload_url: string // This will be the Capgo proxy URL, not the builder URL directly
   upload_expires_at: string
   status: string
+  /** Plan base queue priority sent to the builder (higher starts sooner). */
+  queue_priority: number
+  /** Derived tier label for CLI and console copy. */
+  queue_priority_tier: 'standard' | 'elevated' | 'high' | 'highest'
+  upgrade_url: string
 }
 
 interface BuilderJobResponse {
@@ -68,6 +74,7 @@ export function buildBuilderPayload(input: {
   buildCredentials: Record<string, string>
   cacheEnabled?: boolean
   cacheKey?: string
+  priority: number
 }) {
   const buildOptions = { ...input.buildOptions }
   delete buildOptions.timeoutSeconds
@@ -75,6 +82,7 @@ export function buildBuilderPayload(input: {
   const trimmedCacheKey = input.cacheKey?.trim()
 
   return {
+    priority: input.priority,
     // userId carries the org_id (anonymized owner) — kept for backwards compat.
     userId: input.orgId,
     // actorUserId is the human user who triggered the build (apikey.user_id). The builder
@@ -294,8 +302,9 @@ async function createBuilderJob(c: Context, input: {
   buildCredentials: Record<string, string>
   cacheEnabled?: boolean
   cacheKey?: string
+  priority: number
 }): Promise<BuilderJobResponse> {
-  const { builderUrl, builderApiKey, orgId, actorUserId, appId, platform, uploadPath, buildOptions, buildCredentials, cacheEnabled, cacheKey } = input
+  const { builderUrl, builderApiKey, orgId, actorUserId, appId, platform, uploadPath, buildOptions, buildCredentials, cacheEnabled, cacheKey, priority } = input
   cloudlog({
     requestId: c.get('requestId'),
     message: 'Calling builder API',
@@ -323,6 +332,7 @@ async function createBuilderJob(c: Context, input: {
         buildCredentials,
         cacheEnabled,
         cacheKey,
+        priority,
       })),
     })
 
@@ -415,6 +425,7 @@ async function persistBuildRequest(c: Context, input: {
   upload_path: string
   upload_url: string
   upload_expires_at: Date
+  queue_priority: number
 }) {
   const {
     app_id,
@@ -446,6 +457,7 @@ async function persistBuildRequest(c: Context, input: {
       upload_path,
       upload_url,
       upload_expires_at: upload_expires_at.toISOString(),
+      queue_priority: input.queue_priority,
     })
     .select('*')
     .single()
@@ -532,6 +544,8 @@ export async function requestBuild(
   // Create upload_path BEFORE calling builder so we can pass it
   const upload_session_key = crypto.randomUUID()
   const upload_path = `orgs/${org_id}/apps/${app_id}/native-builds/${upload_session_key}.zip`
+  const queuePriority = await resolveOrgNativeBuildQueuePriority(c, org_id)
+  const upgradeUrl = getPlansUpgradeUrl(c)
   const { builderUrl, builderApiKey } = getBuilderConfig(c)
   const builderJob = await createBuilderJob(c, {
     builderUrl,
@@ -545,6 +559,7 @@ export async function requestBuild(
     buildCredentials: build_credentials,
     cacheEnabled: cache_enabled,
     cacheKey: cache_key,
+    priority: queuePriority.priority,
   })
 
   ensureBuilderUploadUrl(c, builderUrl, builderApiKey, builderJob)
@@ -570,6 +585,7 @@ export async function requestBuild(
     upload_path,
     upload_url,
     upload_expires_at,
+    queue_priority: queuePriority.priority,
   })
 
   cloudlog({
@@ -597,5 +613,8 @@ export async function requestBuild(
     upload_url, // Capgo proxy URL
     upload_expires_at: upload_expires_at.toISOString(),
     status: buildRequestRow.status,
+    queue_priority: queuePriority.priority,
+    queue_priority_tier: queuePriority.tier,
+    upgrade_url: upgradeUrl,
   } satisfies RequestBuildResponse, 200)
 }
