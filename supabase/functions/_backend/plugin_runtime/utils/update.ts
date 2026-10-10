@@ -33,6 +33,23 @@ import { canServeUpToDateFromCache, getUpdateReadCache, setUpdateReadCache } fro
 import { getCachedDefaultChannel, shouldUseUpdatesEdgeCache } from './updatesEdgeCache.ts'
 import { backgroundTask, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, fixSemver, isDeprecatedPluginVersion, isInternalVersionName, isVersionDeleted } from './utils.ts'
 
+const updatesMauRecordedByRequest = new WeakMap<object, boolean>()
+
+function recordUpdatesMauOnce(
+  c: Context,
+  deviceId: string,
+  appId: string,
+  ownerOrg: string,
+  platform: string,
+  versionBuild: string,
+) {
+  const requestKey = c.req.raw
+  if (updatesMauRecordedByRequest.get(requestKey))
+    return
+  updatesMauRecordedByRequest.set(requestKey, true)
+  return backgroundTask(c, createStatsMau(c, deviceId, appId, ownerOrg, platform, versionBuild))
+}
+
 const PLAN_LIMIT: Array<'mau' | 'bandwidth' | 'storage'> = ['mau', 'bandwidth']
 // Bound speculative channel prefetch wait so a hung second Hyperdrive client
 // cannot stall /updates after owner is already ready.
@@ -512,7 +529,7 @@ export async function updateWithPG(
       app_id_url: app_id,
     }, appOwner.owner_org, app_id, '0 0 * * 1', appOwner.orgs.management_email, drizzleClient))
   }
-  await backgroundTask(c, createStatsMau(c, device_id, app_id, appOwner.owner_org, platform, version_build))
+  recordUpdatesMauOnce(c, device_id, app_id, appOwner.owner_org, platform, version_build)
 
 
   // Only query link/comment if plugin supports it (v5.35.0+, v6.35.0+, v7.35.0+, v8.35.0+) AND app has expose_metadata enabled

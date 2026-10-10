@@ -117,6 +117,15 @@ export function readPgErrorCode(error: unknown, depth = 0): string | undefined {
   return undefined
 }
 
+function redactPgErrorCauseMessage(message: string): string {
+  return message
+    .replace(/'(?:''|[^'])*'/g, '\'?\'')
+    .replace(/"(?:""|[^"])*"/g, '"?"')
+    .replace(/\([^)]+\)=\([^)]+\)/g, '(?)=(?)')
+    .replace(/\s+/g, ' ')
+    .slice(0, 500)
+}
+
 /** First non-Drizzle-wrapper message in the cause chain (safe for exception titles). */
 export function readPgErrorCauseMessage(error: unknown, depth = 0): string | undefined {
   if (!error || depth > 6)
@@ -131,7 +140,7 @@ export function readPgErrorCauseMessage(error: unknown, depth = 0): string | und
 
   const message = readPgErrorField(error, 'message')
   if (typeof message === 'string' && message.length > 0 && !/^Failed query:/i.test(message))
-    return message.replace(/\s+/g, ' ').slice(0, 500)
+    return redactPgErrorCauseMessage(message)
 
   return undefined
 }

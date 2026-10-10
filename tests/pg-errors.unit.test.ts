@@ -20,6 +20,17 @@ describe('pg_errors', () => {
     expect(readPgErrorCauseMessage(error)).toBe('Client has encountered a connection error and is not queryable')
   })
 
+  it('redacts quoted literals from postgres cause messages', () => {
+    const error = Object.assign(new Error('Failed query: SELECT 1'), {
+      name: 'DrizzleQueryError',
+      cause: Object.assign(new Error('invalid input syntax for type uuid: "046a0000-0000-0000-0000-000000000000"'), {
+        code: '22P02',
+      }),
+    })
+
+    expect(readPgErrorCauseMessage(error)).toBe('invalid input syntax for type uuid: "?"')
+  })
+
   it('detects transient connection failures in drizzle cause chains', () => {
     const error = Object.assign(new Error('Failed query: SELECT 1'), {
       name: 'DrizzleQueryError',
