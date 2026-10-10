@@ -36,8 +36,8 @@ vi.mock('../supabase/functions/_backend/files/retry.ts', () => ({
       return retryGetMock()
     }
 
-    head() {
-      return retryHeadMock()
+    head(key: string) {
+      return retryHeadMock(key)
     }
   },
 }))
@@ -246,6 +246,54 @@ describe('files attachment HEAD reads on workerd/R2', () => {
     expect(await response.text()).toBe('')
     expect((await response.arrayBuffer()).byteLength).toBe(0)
     expect(createStatsBandwidthMock).not.toHaveBeenCalled()
+  })
+
+  it('heads dotfile delta paths using legacy and WAF-safe storage keys', async () => {
+    const hash = 'a'.repeat(64)
+    const legacyKey = `orgs/test-org/apps/com.test.app/delta/${hash}_.htaccess`
+    const safeKey = `orgs/test-org/apps/com.test.app/delta/${hash}_%2Ehtaccess`
+    const headCalls: string[] = []
+    retryHeadMock.mockImplementation(async (key: string) => {
+      headCalls.push(key)
+      if (key === legacyKey)
+        return createR2HeadObject(4)
+      return null
+    })
+    const appGlobal = await createFilesApp()
+    const dotfileReadUrl = `http://localhost/files/read/attachments/${encodeURIComponent(safeKey)}?nocache=test`
+
+    const response = await appGlobal.fetch(
+      new Request(dotfileReadUrl, { method: 'HEAD', headers: { 'x-cli-version': '7.0.0' } }),
+      { MANIFEST_SIZE_RECEIPT_SECRET: 'receipt-secret', ATTACHMENT_BUCKET: {} },
+      { waitUntil: () => { } } as any,
+    )
+
+    expect(response.status).toBe(200)
+    expect(headCalls[0]).toBe(safeKey)
+    expect(headCalls).toContain(legacyKey)
+    expect(headCalls).not.toContain(`orgs/test-org/apps/com.test.app/delta/${hash}_%252Ehtaccess`)
+  })
+
+  it('does not add generic percent decode candidates for non-dotfile attachment paths', async () => {
+    const encodedSegmentPath = 'orgs/test-org/apps/com.test.app/delta/hash_assets/B%2FC/file.txt'
+    const headCalls: string[] = []
+    retryHeadMock.mockImplementation(async (key: string) => {
+      headCalls.push(key)
+      if (key === encodedSegmentPath)
+        return createR2HeadObject(8)
+      return null
+    })
+    const appGlobal = await createFilesApp()
+    const readUrl = `http://localhost/files/read/attachments/${encodeURIComponent(encodedSegmentPath)}?nocache=test`
+
+    const response = await appGlobal.fetch(
+      new Request(readUrl, { method: 'HEAD' }),
+      { MANIFEST_SIZE_RECEIPT_SECRET: 'receipt-secret', ATTACHMENT_BUCKET: {} },
+      { waitUntil: () => { } } as any,
+    )
+
+    expect(response.status).toBe(200)
+    expect(headCalls).toEqual([encodedSegmentPath])
   })
 
   it('adds a complete-size receipt for a CLI HEAD without nocache', async () => {

@@ -1,3 +1,4 @@
+import { encodeManifestPathSegment, encodeManifestPathSegments } from './manifest_encoding.ts'
 import { MAX_FILE_HASH_LENGTH, MAX_FILE_NAME_LENGTH, MAX_MANIFEST_ENTRIES, MAX_S3_PATH_LENGTH } from './manifest_limits.ts'
 import { createManifestUploadCapabilitySigner, MANIFEST_UPLOAD_CAPABILITY_HEADER, MANIFEST_UPLOAD_CAPABILITY_MAX_LIFETIME_SECONDS } from './manifest_upload_capability.ts'
 
@@ -156,7 +157,7 @@ function isValidFileName(value: string, compression: 'none' | 'brotli'): boolean
   if ((compression === 'brotli') !== value.endsWith('.br'))
     return false
   try {
-    segments.forEach(segment => encodeURIComponent(segment))
+    segments.forEach(segment => encodeManifestPathSegment(segment))
     return true
   }
   catch {
@@ -242,7 +243,7 @@ export async function createManifestUploadResponse(
     signingUnavailable()
 
   const encodedFileNames = request.entries.map((entry, index) => {
-    const encodedFileName = entry.file_name.split('/').map(segment => encodeURIComponent(segment)).join('/')
+    const encodedFileName = encodeManifestPathSegments(entry.file_name)
     if (defaultS3PathPrefix.length + 64 + 1 + encodedFileName.length > MAX_S3_PATH_LENGTH)
       invalidEntry(index, 'file_name')
     return encodedFileName

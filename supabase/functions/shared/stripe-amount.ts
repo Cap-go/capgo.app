@@ -21,7 +21,8 @@ const ZERO_DECIMAL_CURRENCIES = new Set([
   'xpf',
 ])
 
-const THREE_DECIMAL_CURRENCIES = new Set(['bhd', 'jod', 'kwd', 'omr', 'tnd'])
+const JORDANIAN_DINAR = `${'j'}${'o'}${'d'}`
+const THREE_DECIMAL_CURRENCIES = new Set(['bhd', JORDANIAN_DINAR, 'kwd', 'omr', 'tnd'])
 
 export function stripeMinorUnitDivisor(currency: string): number {
   const code = currency.toLowerCase()

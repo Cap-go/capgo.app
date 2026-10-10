@@ -266,6 +266,17 @@ describe('request_manifest_upload', () => {
     expect(response.headers.get('cache-control')).toMatch(/^public, max-age=/)
   })
 
+  it('encodes leading-dot manifest file names in delta storage suffixes', async () => {
+    const body = validRequestBody()
+    body.entries[0]!.file_name = '.htaccess'
+    const response = await postRequest(body)
+    const payload = await response.json() as any
+
+    expect(response.status).toBe(200)
+    expect(payload.entries[0].s3_path_suffix).toMatch(/^[0-9a-f]{64}_%2Ehtaccess$/)
+    expect(payload.entries[0].s3_path_suffix).not.toContain('.htaccess')
+  })
+
   it('fails closed when dedicated signing configuration is unavailable', async () => {
     vi.stubEnv('MANIFEST_UPLOAD_CAPABILITY_SECRET', '')
     const response = await postRequest(validRequestBody())
