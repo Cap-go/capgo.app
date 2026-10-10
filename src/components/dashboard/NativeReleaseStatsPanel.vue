@@ -199,7 +199,7 @@ function formatDay(value: string | null) {
         </p>
       </div>
       <fieldset
-        class="flex items-center p-1 space-x-1 shrink-0 bg-gray-200 rounded-lg dark:bg-gray-800"
+        class="flex items-center w-fit p-1 space-x-1 shrink-0 bg-gray-200 rounded-lg dark:bg-gray-800"
         data-testid="native-release-platform-selector"
       >
         <legend class="sr-only">
