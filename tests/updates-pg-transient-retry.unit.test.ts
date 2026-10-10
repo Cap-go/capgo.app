@@ -112,6 +112,36 @@ describe('withReadOnlyPgTransientRetry', () => {
     expect(cloudlogMock).toHaveBeenCalledTimes(1)
   })
 
+  it('does not retry capacity or DNS or socket timeout errors', async () => {
+    const { withReadOnlyPgTransientRetry } = await import('../supabase/functions/_backend/plugin_runtime/utils/pg.ts')
+    const { isReadOnlyPgConnectionRetryError: isConnectionRetry } = await import('../supabase/functions/_backend/plugin_runtime/utils/pg_errors.ts')
+    const cases = [
+      Object.assign(new Error('too many clients already'), { name: 'DrizzleQueryError', code: '53300' }),
+      Object.assign(new Error('getaddrinfo ENOTFOUND db.example.com'), { name: 'DrizzleQueryError', code: 'ENOTFOUND' }),
+      Object.assign(new Error('connect ETIMEDOUT'), { name: 'DrizzleQueryError', code: 'ETIMEDOUT' }),
+    ]
+    for (const error of cases) {
+      expect(isConnectionRetry(error)).toBe(false)
+    }
+
+    const c = createContext()
+    for (const error of cases) {
+      let sessions = 0
+      await expect(withReadOnlyPgTransientRetry(c, 'test', async () => {
+        sessions++
+        return {
+          pgClient: {} as PluginPgClient,
+          drizzle: {} as any,
+          cleanup: vi.fn(async () => undefined),
+        }
+      }, async () => {
+        throw error
+      })).rejects.toBe(error)
+      expect(sessions).toBe(1)
+    }
+    expect(cloudlogMock).not.toHaveBeenCalled()
+  })
+
   it('does not retry statement timeout errors', async () => {
     const { withReadOnlyPgTransientRetry } = await import('../supabase/functions/_backend/plugin_runtime/utils/pg.ts')
     const c = createContext()

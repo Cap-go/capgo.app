@@ -238,5 +238,9 @@ describe('pg_errors', () => {
     expect(isReadOnlyPgConnectionRetryError(statementTimeout)).toBe(false)
     expect(isReadOnlyPgConnectionRetryError(hyperdriveWait)).toBe(false)
     expect(isTransientDatabaseError(statementTimeout)).toBe(true)
+    expect(isTransientDatabaseError(hyperdriveWait)).toBe(false)
+    expect(isTransientPgError(Object.assign(new Error('Timed out while waiting for an open slot in the pool.'), {
+      name: 'DrizzleQueryError',
+    }))).toBe(false)
   })
 })

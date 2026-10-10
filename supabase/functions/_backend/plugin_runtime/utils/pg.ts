@@ -1393,6 +1393,7 @@ export async function getAppOwnerPostgres(
   appId: string,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
   actions: PlanAction[] = [],
+  options?: { rethrowReadOnlyConnectionErrors?: boolean },
 ): Promise<AppOwnerPostgresResult | null> {
   try {
     return await queryAppOwnerPostgres(c, appId, drizzleClient, actions)
@@ -1402,7 +1403,7 @@ export async function getAppOwnerPostgres(
       appId,
       planActions: actions,
     })
-    if (isReadOnlyPgConnectionRetryError(e))
+    if (options?.rethrowReadOnlyConnectionErrors && isReadOnlyPgConnectionRetryError(e))
       throw e
     return null
   }

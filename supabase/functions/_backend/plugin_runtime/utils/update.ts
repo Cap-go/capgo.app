@@ -51,6 +51,8 @@ export async function recordUpdatesMauOnce(
   if (inFlight)
     return inFlight
 
+  // On workerd, backgroundTask schedules the MAU write with waitUntil and returns
+  // before the insert finishes; the recorded flag is set when dispatch succeeds.
   const tracked = Promise.resolve(backgroundTask(c, createStatsMau(c, deviceId, appId, ownerOrg, platform, versionBuild)))
     .then(() => {
       updatesMauRecordedByRequest.set(requestKey, true)
@@ -340,6 +342,8 @@ export interface UpdatePathTiming {
   ownerCacheHit?: boolean
 }
 
+const UPDATES_OWNER_PG_OPTIONS = { rethrowReadOnlyConnectionErrors: true } as const
+
 async function getAppOwnerFromEdgeCache(
   c: Context,
   appId: string,
@@ -347,7 +351,7 @@ async function getAppOwnerFromEdgeCache(
   pathTiming?: UpdatePathTiming,
 ) {
   // A connect failure is rethrown (never classified as on-prem), see pluginEdgeCacheReads.ts.
-  const owner = await getAppOwnerWithEdgeCache(c, appId, drizzleClient, PLAN_LIMIT)
+  const owner = await getAppOwnerWithEdgeCache(c, appId, drizzleClient, PLAN_LIMIT, UPDATES_OWNER_PG_OPTIONS)
   if (pathTiming)
     pathTiming.ownerCacheHit = owner.hit
   return owner.value
@@ -416,7 +420,7 @@ export async function updateWithPG(
   const edgeCache = shouldUseUpdatesEdgeCache(c, app_id, device_id)
   const ownerPromise = edgeCache
     ? getAppOwnerFromEdgeCache(c, app_id, drizzleClient, pathTiming)
-    : getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT)
+    : getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT, UPDATES_OWNER_PG_OPTIONS)
   const channelPrefetchPromise = cachedStatus === 'cloud' && coerce
     ? (async () => {
         try {
