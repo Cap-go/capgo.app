@@ -611,6 +611,8 @@ function getVersionSelect(
       : sql<string>`${versionAlias.name}`.as(`${prefix}name`),
     checksum: sql<string | null>`${versionAlias.checksum}`.as(`${prefix}checksum`),
     session_key: sql<string | null>`${versionAlias.session_key}`.as(`${prefix}session_key`),
+    signature: sql<string | null>`${versionAlias.signature}`.as(`${prefix}signature`),
+    manifest_signature: sql<string | null>`${versionAlias.manifest_signature}`.as(`${prefix}manifest_signature`),
     key_id: sql<string | null>`${versionAlias.key_id}`.as(`${prefix}key_id`),
     storage_provider: sql<string>`COALESCE(${versionAlias.storage_provider}, 'r2')`.as(`${prefix}storage_provider`),
     external_url: sql<string | null>`${versionAlias.external_url}`.as(`${prefix}external_url`),

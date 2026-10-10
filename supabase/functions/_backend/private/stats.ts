@@ -83,6 +83,7 @@ const defaultInsightActions = [
   'insufficient_disk_space',
   'cannotGetBundle',
   'checksum_fail',
+  'signature_fail',
   'blocked_by_server_url',
   'backend_refusal',
 ]

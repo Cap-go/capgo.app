@@ -54,6 +54,7 @@ const UPDATE_FAILURE_ACTIONS = [
   'download_manifest_brotli_fail',
   'decrypt_fail',
   'checksum_fail',
+  'signature_fail',
 ] as const
 
 // Map chart buckets back to the log actions they aggregate.

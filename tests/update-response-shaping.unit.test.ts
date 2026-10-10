@@ -68,3 +68,50 @@ describe('channel update package resolution', () => {
     expect(isOnBuiltinVersion('1.0.1', '1.0.0')).toBe(false)
   })
 })
+
+describe('signed bundle metadata', () => {
+  const signature = 'a'.repeat(512)
+  const manifestSignature = 'b'.repeat(512)
+  const signedVersion = { ...appVersion, signature, manifest_signature: manifestSignature } as Database['public']['Tables']['app_versions']['Row']
+
+  it.concurrent('returns signature and manifest_signature to plugin v8.53.0+', () => {
+    expect(resToVersion('8.53.0', 'https://bundle.zip', signedVersion, manifest, false)).toMatchObject({
+      signature,
+      manifest_signature: manifestSignature,
+    })
+    expect(resToVersion('8.60.1', 'https://bundle.zip', signedVersion, manifest, false)).toMatchObject({
+      signature,
+      manifest_signature: manifestSignature,
+    })
+  })
+
+  it.concurrent('returns the fields to any major above 8', () => {
+    expect(resToVersion('9.0.0', 'https://bundle.zip', signedVersion, manifest, false)).toMatchObject({
+      signature,
+      manifest_signature: manifestSignature,
+    })
+  })
+
+  it.concurrent('omits the fields for older v8 and for every plugin below v8', () => {
+    for (const pluginVersion of ['8.52.9', '8.35.0', '8.53.0-beta.1', '7.99.0', '6.99.0', '5.99.0', '4.99.0', '1.0.0']) {
+      const response = resToVersion(pluginVersion, 'https://bundle.zip', signedVersion, manifest, true)
+      expect(response, pluginVersion).not.toHaveProperty('signature')
+      expect(response, pluginVersion).not.toHaveProperty('manifest_signature')
+    }
+  })
+
+  it.concurrent('omits the fields when the bundle was not signed', () => {
+    const unsigned = { ...appVersion, signature: null, manifest_signature: null } as Database['public']['Tables']['app_versions']['Row']
+    const response = resToVersion('8.53.0', 'https://bundle.zip', unsigned, manifest, false)
+    expect(response).not.toHaveProperty('signature')
+    expect(response).not.toHaveProperty('manifest_signature')
+    expect(Object.keys(response).sort()).toEqual(['checksum', 'manifest', 'session_key', 'url', 'version'])
+  })
+
+  it.concurrent('includes only the signature that exists (zip-only upload)', () => {
+    const zipOnly = { ...appVersion, signature, manifest_signature: null } as Database['public']['Tables']['app_versions']['Row']
+    const response = resToVersion('8.53.0', 'https://bundle.zip', zipOnly, [], false)
+    expect(response).toMatchObject({ signature })
+    expect(response).not.toHaveProperty('manifest_signature')
+  })
+})

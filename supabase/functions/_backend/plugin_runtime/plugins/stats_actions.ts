@@ -96,6 +96,8 @@ export const ALLOWED_STATS_ACTIONS = [
   'native_app_version_changed',
   'channelPaused',
   'update_check_error',
+  'signature_fail',
+  'version_below_native',
 ] as const satisfies readonly Database['public']['Enums']['stats_action'][]
 
 export const ALLOWED_STATS_ACTIONS_SET: ReadonlySet<string> = new Set(ALLOWED_STATS_ACTIONS)
@@ -123,6 +125,7 @@ const TARGET_VERSION_ACTIONS: ReadonlySet<string> = new Set([
   'delete',
   'checksum_required',
   'insufficient_disk_space',
+  'version_below_native',
 ])
 
 export function isRunningVersionAction(action: string) {

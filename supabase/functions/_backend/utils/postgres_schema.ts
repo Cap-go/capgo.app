@@ -47,6 +47,8 @@ export const app_versions = pgTable('app_versions', {
   external_url: varchar('external_url'),
   checksum: varchar('checksum'),
   session_key: varchar('session_key'),
+  signature: text('signature'),
+  manifest_signature: text('manifest_signature'),
   key_id: varchar('key_id', { length: 20 }),
   storage_provider: text('storage_provider').default('r2').notNull(),
   min_update_version: varchar('min_update_version'),

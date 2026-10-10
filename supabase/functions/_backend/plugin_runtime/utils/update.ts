@@ -214,8 +214,11 @@ async function providerInfrastructureColdCacheBlockResponse(c: Context, appId: s
 interface ResponseFeatureSupport {
   manifest: boolean
   metadata: boolean
+  signature: boolean
 }
 
+// Plugin v8.53.0+ verifies the signed bundle metadata (zip + manifest signatures).
+export const SIGNED_BUNDLE_METADATA_MIN_V8 = '8.53.0'
 const RESPONSE_FEATURE_SUPPORT_CACHE_MAX = 256
 const responseFeatureSupportCache = new Map<string, ResponseFeatureSupport>()
 
@@ -228,6 +231,10 @@ function getResponseFeatureSupport(plugin_version: string): ResponseFeatureSuppo
   const support = {
     manifest: !isDeprecatedPluginVersion(pluginVersion, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7),
     metadata: !isDeprecatedPluginVersion(pluginVersion, '5.35.0', '6.35.0', '7.35.0', '8.35.0'),
+    // Signed bundle metadata (signature + manifest_signature) is verified by v8.53.0+ only.
+    // Gate explicitly on major + floor: isDeprecatedPluginVersion ignores majors below 5
+    // (and 9+), so negating it would leak the fields to very old or unknown plugins.
+    signature: pluginVersion.major >= 8 && greaterOrEqual(pluginVersion, parse(SIGNED_BUNDLE_METADATA_MIN_V8)),
   }
   if (responseFeatureSupportCache.size >= RESPONSE_FEATURE_SUPPORT_CACHE_MAX) {
     const oldest = responseFeatureSupportCache.keys().next().value
@@ -269,6 +276,8 @@ export function resToVersion(plugin_version: string, signedURL: string, version:
     manifest?: ManifestEntry[]
     link?: string | null
     comment?: string | null
+    signature?: string
+    manifest_signature?: string
   } = {
     version: version.name,
     url: signedURL,
@@ -285,6 +294,14 @@ export function resToVersion(plugin_version: string, signedURL: string, version:
       res.link = version.link
     if (version.comment)
       res.comment = version.comment
+  }
+  // Signed bundle metadata for plugin v8.53.0+ only, and only when the bundle was signed
+  // (encryption v2 uploads). Older plugins ignore the fields, so keep their shape unchanged.
+  if (support.signature) {
+    if (version.signature)
+      res.signature = version.signature
+    if (version.manifest_signature)
+      res.manifest_signature = version.manifest_signature
   }
   return res
 }
