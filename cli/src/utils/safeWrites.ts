@@ -45,6 +45,30 @@ export async function appendToSafeFile(filePath: string, content: string, mode: 
 }
 
 /**
+ * Append a single line to a file unless an identical line already exists.
+ * Returns true when the line was appended, false when it was already present.
+ */
+export async function appendLineIfMissing(filePath: string, line: string, mode: number = 0o600): Promise<boolean> {
+  const trimmed = line.trim()
+  let existing = ''
+  try {
+    existing = await readSafeFile(filePath)
+  }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
+      throw error
+  }
+  const alreadyPresent = existing
+    .split(/\r?\n/)
+    .some(current => current.trim() === trimmed)
+  if (alreadyPresent)
+    return false
+  const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : ''
+  await appendToSafeFile(filePath, `${prefix}${trimmed}\n`, mode)
+  return true
+}
+
+/**
  * Write content atomically by writing a temp file and renaming.
  */
 export async function writeFileAtomic(filePath: string, content: string, options: WriteOptions = {}): Promise<void> {

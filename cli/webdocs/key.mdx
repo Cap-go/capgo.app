@@ -40,8 +40,10 @@ npx @capgo/cli@latest key create
 ```
 
 🔨 Create RSA key pair for end-to-end encryption.
-Creates .capgo_key_v2 (private) and .capgo_key_v2.pub (public) in project root.
+Creates .capgo_key_v2 (private) and .capgo_key_v2.pub (public) in project root with mode 0600,
+and adds .capgo_key_v2 to .gitignore so the private key is never committed.
 Public key is saved to capacitor.config for mobile app decryption.
+The private key also signs the bundle metadata (version name + checksum, delta manifest) on upload.
 NEVER commit the private key - store it securely!
 
 **Example:**

@@ -80,6 +80,7 @@ Use this skill for OTA update workflows in Capgo Cloud.
   - `--delta-only`
   - `--no-delta`
   - `--encrypted-checksum <encryptedChecksum>`
+  - `--signature <signature>` (external bundles only; signed metadata, 512 hex chars)
   - `--auto-set-bundle`
   - `--dry-upload`
   - `--package-json <packageJson>`
@@ -268,7 +269,9 @@ Use this skill for OTA update workflows in Capgo Cloud.
 
 - Example: `npx @capgo/cli@latest key create`
 - Notes:
-  - Creates `.capgo_key_v2` and `.capgo_key_v2.pub`.
+  - Creates `.capgo_key_v2` and `.capgo_key_v2.pub` with mode `0600`.
+  - Adds `.capgo_key_v2` to `.gitignore` (no duplicate line if already present).
+  - On `bundle upload`, the private key also signs the bundle metadata: `signature` (version name + plain zip SHA-256) and `manifest_signature` (version name + every delta manifest `file_name` + plain file hash). `@capgo/capacitor-updater` >= 8.53.0 verifies them with the public key.
   - Saves the public key to Capacitor config.
   - Never commit the private key.
 - Key options:
