@@ -274,3 +274,27 @@ export async function saveCreditAutoTopUp(orgId: string, enabled: boolean, thres
     monthlyTotal: number | null
   } | null
 }
+
+interface PastDueInvoice {
+  hosted_invoice_url: string | null
+  amount_due: number
+  currency: string
+  attempt_count: number
+  next_payment_attempt: string | null
+}
+
+export interface PastDueStatus {
+  past_due: boolean
+  invoice: PastDueInvoice | null
+}
+
+export async function getPastDueStatus(orgId: string): Promise<PastDueStatus | null> {
+  if (!orgId)
+    return null
+  const { data, error } = await invokeCapgoApi<PastDueStatus>('private/stripe_past_due', {
+    body: JSON.stringify({ orgId }),
+  })
+  if (error || !data)
+    return null
+  return data
+}

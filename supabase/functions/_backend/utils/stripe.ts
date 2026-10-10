@@ -415,6 +415,57 @@ export async function cancelSubscription(c: Context, customerId: string) {
   return succeeded
 }
 
+// Unpaid subscription invoice details safe to show to billing members.
+export interface OpenSubscriptionInvoiceSummary {
+  hosted_invoice_url: string | null
+  amount_due: number
+  currency: string
+  attempt_count: number
+  next_payment_attempt: string | null
+}
+
+type OpenInvoiceShape = Pick<Stripe.Invoice, 'amount_due' | 'attempt_count' | 'billing_reason' | 'created' | 'currency' | 'next_payment_attempt'> & {
+  amount_remaining?: number | null
+  hosted_invoice_url?: string | null
+  parent?: { subscription_details?: unknown } | null
+}
+
+export function isSubscriptionInvoice(invoice: Pick<OpenInvoiceShape, 'billing_reason' | 'parent'>) {
+  if (invoice.parent?.subscription_details)
+    return true
+  return typeof invoice.billing_reason === 'string' && invoice.billing_reason.startsWith('subscription')
+}
+
+export function toOpenSubscriptionInvoiceSummary(invoice: OpenInvoiceShape): OpenSubscriptionInvoiceSummary {
+  return {
+    hosted_invoice_url: invoice.hosted_invoice_url ?? null,
+    amount_due: invoice.amount_remaining ?? invoice.amount_due,
+    currency: invoice.currency,
+    attempt_count: invoice.attempt_count,
+    next_payment_attempt: invoice.next_payment_attempt
+      ? new Date(invoice.next_payment_attempt * 1000).toISOString()
+      : null,
+  }
+}
+
+// Best effort: dunning emails and the past-due banner still work without the pay link.
+export async function getLatestOpenSubscriptionInvoice(c: Context, customerId: string): Promise<OpenSubscriptionInvoiceSummary | null> {
+  if (!isStripeConfigured(c) || !customerId)
+    return null
+  try {
+    // Stripe lists newest first; page past newer non-subscription invoices.
+    for await (const invoice of getStripe(c).invoices.list({ customer: customerId, status: 'open', limit: 10 })) {
+      if (isSubscriptionInvoice(invoice))
+        return toOpenSubscriptionInvoiceSummary(invoice)
+    }
+    return null
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'getLatestOpenSubscriptionInvoice', customerId, error })
+    return null
+  }
+}
+
 async function getStoredPlanPriceId(c: Context, planId: string, recurrence: string): Promise<string | null> {
   try {
     const { data, error } = await supabaseAdmin(c)

@@ -255,6 +255,11 @@ export function extractDataEvent(c: Context, event: Stripe.Event): StripeData {
   else if (event.type === 'invoice.created' || event.type === 'invoice.updated') {
     data = invoiceCreatedOrUpdated(event, data)
   }
+  else if (event.type === 'invoice.payment_action_required') {
+    // 3DS / e-mandate confirmation needed: notify only, never touch stripe_info.
+    data.status = 'updated'
+    data.customer_id = getStripeCustomerId(event.data.object.customer)
+  }
   else if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
     const session = event.data.object as Stripe.Checkout.Session
     data.customer_id = getStripeCustomerId(session.customer)

@@ -4059,5 +4059,10 @@
   "custom-domain-confirm-remove": "Confirm removal",
   "custom-domain-error": "Unable to load or update this domain. Check your Enterprise plan and permissions, then retry or contact support.",
   "custom-domain-guide": "Custom domain setup guide",
-  "release-live-watch-rollout": "Watch {version}"
+  "release-live-watch-rollout": "Watch {version}",
+  "past-due-banner-detail": "Access is limited until this payment goes through. You can pay with another card or payment method.",
+  "past-due-banner-message": "Your last payment failed.",
+  "past-due-banner-message-amount": "Your last payment of {amount} failed.",
+  "past-due-banner-pay-now": "Pay now",
+  "past-due-banner-update-card": "Update card"
 }
