@@ -60,6 +60,58 @@ describe('withReadOnlyPgTransientRetry', () => {
     }))
   })
 
+  it('rethrows after exactly two attempts when both fail with connection errors', async () => {
+    const { withReadOnlyPgTransientRetry } = await import('../supabase/functions/_backend/plugin_runtime/utils/pg.ts')
+    const c = createContext()
+    let sessions = 0
+    let runCalls = 0
+    const connectionError = Object.assign(new Error('Failed query: SELECT 1'), {
+      name: 'DrizzleQueryError',
+      cause: new Error('Client has encountered a connection error and is not queryable'),
+    })
+
+    await expect(withReadOnlyPgTransientRetry(c, 'test', async () => {
+      sessions++
+      return {
+        pgClient: {} as PluginPgClient,
+        drizzle: {} as any,
+        cleanup: vi.fn(async () => undefined),
+      }
+    }, async () => {
+      runCalls++
+      throw connectionError
+    })).rejects.toBe(connectionError)
+
+    expect(sessions).toBe(2)
+    expect(runCalls).toBe(2)
+    expect(cloudlogMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not retry statement timeout errors', async () => {
+    const { withReadOnlyPgTransientRetry } = await import('../supabase/functions/_backend/plugin_runtime/utils/pg.ts')
+    const c = createContext()
+    let sessions = 0
+
+    await expect(withReadOnlyPgTransientRetry(c, 'test', async () => {
+      sessions++
+      return {
+        pgClient: {} as PluginPgClient,
+        drizzle: {} as any,
+        cleanup: vi.fn(async () => undefined),
+      }
+    }, async () => {
+      throw Object.assign(new Error('Failed query: SELECT 1'), {
+        name: 'DrizzleQueryError',
+        cause: Object.assign(new Error('canceling statement due to statement timeout'), {
+          code: '57014',
+        }),
+      })
+    })).rejects.toMatchObject({ name: 'DrizzleQueryError' })
+
+    expect(sessions).toBe(1)
+    expect(cloudlogMock).not.toHaveBeenCalled()
+  })
+
   it('does not retry non-transient drizzle failures', async () => {
     const { withReadOnlyPgTransientRetry } = await import('../supabase/functions/_backend/plugin_runtime/utils/pg.ts')
     const c = createContext()

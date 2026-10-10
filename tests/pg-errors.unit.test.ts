@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   drizzleErrorFingerprintSegment,
   isDatabaseOriginError,
+  isReadOnlyPgConnectionRetryError,
   isTransientDatabaseError,
   isTransientPgError,
   readPgErrorCauseMessage,
@@ -17,6 +18,7 @@ describe('pg_errors', () => {
 
     expect(isTransientPgError(error)).toBe(true)
     expect(isTransientDatabaseError(error)).toBe(true)
+    expect(isReadOnlyPgConnectionRetryError(error)).toBe(true)
     expect(readPgErrorCauseMessage(error)).toBe('Client has encountered a connection error and is not queryable')
   })
 
@@ -207,5 +209,34 @@ describe('pg_errors', () => {
 
     expect(isDatabaseOriginError(fetchError)).toBe(false)
     expect(isTransientDatabaseError(fetchError)).toBe(false)
+  })
+
+  it('allows read-only retry only for connection-class drizzle failures', () => {
+    const connectionTerminated = Object.assign(new Error('Failed query: SELECT 1'), {
+      name: 'DrizzleQueryError',
+      cause: Object.assign(new Error('Connection terminated unexpectedly'), {
+        code: '57P01',
+      }),
+    })
+    const statementTimeout = Object.assign(new Error('Failed query: SELECT 1'), {
+      name: 'DrizzleQueryError',
+      cause: Object.assign(new Error('canceling statement due to statement timeout'), {
+        code: '57014',
+      }),
+    })
+    const hyperdriveWait = Object.assign(new Error('Failed query: SELECT 1'), {
+      name: 'DrizzleQueryError',
+      cause: new Error('timed out while waiting for a message from the origin database'),
+    })
+    const econnreset = Object.assign(new Error('read ECONNRESET'), {
+      name: 'DrizzleQueryError',
+      code: 'ECONNRESET',
+    })
+
+    expect(isReadOnlyPgConnectionRetryError(connectionTerminated)).toBe(true)
+    expect(isReadOnlyPgConnectionRetryError(econnreset)).toBe(true)
+    expect(isReadOnlyPgConnectionRetryError(statementTimeout)).toBe(false)
+    expect(isReadOnlyPgConnectionRetryError(hyperdriveWait)).toBe(false)
+    expect(isTransientDatabaseError(statementTimeout)).toBe(true)
   })
 })

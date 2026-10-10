@@ -12,7 +12,7 @@ import { getChannelSelfOverride, isChannelSelfStoreEnabled } from './channelSelf
 import { getClientDbRegionSB } from './geolocation.ts'
 import { freshQueryArgs } from './hyperdriveFreshRead.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { isTransientDatabaseError } from './pg_errors.ts'
+import { isReadOnlyPgConnectionRetryError } from './pg_errors.ts'
 import { serializePostgresError, serializePostgresLogValue } from './postgres_error.ts'
 import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
@@ -548,6 +548,10 @@ export interface ReadOnlyPgSession {
  * first attempt hits a transient connection failure. A dead pg.Client poisons
  * every later query in the same request unless we reconnect.
  */
+function readOnlyPgRetryBackoffMs(): number {
+  return 25 + Math.floor(Math.random() * 26)
+}
+
 export async function withReadOnlyPgTransientRetry<T>(
   c: Context,
   context: string,
@@ -563,13 +567,14 @@ export async function withReadOnlyPgTransientRetry<T>(
       return result
     }
     catch (error) {
-      if (attempt === 0 && isTransientDatabaseError(error)) {
+      if (attempt === 0 && isReadOnlyPgConnectionRetryError(error)) {
         cloudlog({
           requestId: c.get('requestId'),
           message: 'read_only_pg_transient_retry',
           context,
           databaseSource: c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? null,
         })
+        await new Promise(resolve => setTimeout(resolve, readOnlyPgRetryBackoffMs()))
         continue
       }
       throw error

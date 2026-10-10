@@ -35,7 +35,7 @@ import { backgroundTask, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSI
 
 const updatesMauRecordedByRequest = new WeakMap<object, boolean>()
 
-function recordUpdatesMauOnce(
+export function recordUpdatesMauOnce(
   c: Context,
   deviceId: string,
   appId: string,

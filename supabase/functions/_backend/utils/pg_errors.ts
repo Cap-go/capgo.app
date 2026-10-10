@@ -221,6 +221,36 @@ export function isTransientDatabaseError(error: unknown): boolean {
   return isTransientPgError(error) && isDatabaseOriginError(error)
 }
 
+const READ_ONLY_PG_CONNECTION_RETRY_MESSAGE_RE = /not queryable|encountered a connection error|connection terminated/i
+
+function hasReadOnlyPgConnectionRetrySignal(error: unknown, depth = 0): boolean {
+  if (!error || depth > 6)
+    return false
+
+  const code = readPgErrorField(error, 'code')
+  if (code === 'ECONNRESET')
+    return true
+
+  const message = readPgErrorField(error, 'message')
+  if (typeof message === 'string' && READ_ONLY_PG_CONNECTION_RETRY_MESSAGE_RE.test(message))
+    return true
+
+  const cause = readPgErrorField(error, 'cause')
+  if (cause !== undefined && hasReadOnlyPgConnectionRetrySignal(cause, depth + 1))
+    return true
+
+  const errors = readPgErrorField(error, 'errors')
+  if (Array.isArray(errors))
+    return errors.some(entry => hasReadOnlyPgConnectionRetrySignal(entry, depth + 1))
+
+  return false
+}
+
+/** Narrow retry gate for /updates read-only Hyperdrive sessions (connection loss only). */
+export function isReadOnlyPgConnectionRetryError(error: unknown): boolean {
+  return isDatabaseOriginError(error) && hasReadOnlyPgConnectionRetrySignal(error)
+}
+
 export function readQuickErrorOriginalCause(error: unknown): unknown {
   const cause = readPgErrorField(error, 'cause')
   if (!cause || typeof cause !== 'object')
