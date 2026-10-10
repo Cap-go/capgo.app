@@ -219,9 +219,6 @@ interface ResponseFeatureSupport {
 
 // Plugin v8.53.0+ verifies the signed bundle metadata (zip + manifest signatures).
 export const SIGNED_BUNDLE_METADATA_MIN_V8 = '8.53.0'
-// isDeprecatedPluginVersion treats `undefined` as its default floor, so a major that
-// must never receive a feature needs an explicit floor no released version reaches.
-const UNSUPPORTED_PLUGIN_MAJOR_FLOOR = '99.0.0'
 const RESPONSE_FEATURE_SUPPORT_CACHE_MAX = 256
 const responseFeatureSupportCache = new Map<string, ResponseFeatureSupport>()
 
@@ -235,8 +232,9 @@ function getResponseFeatureSupport(plugin_version: string): ResponseFeatureSuppo
     manifest: !isDeprecatedPluginVersion(pluginVersion, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7),
     metadata: !isDeprecatedPluginVersion(pluginVersion, '5.35.0', '6.35.0', '7.35.0', '8.35.0'),
     // Signed bundle metadata (signature + manifest_signature) is verified by v8.53.0+ only.
-    // v5/v6/v7 never verify it, so they are marked unsupported with an unreachable floor.
-    signature: !isDeprecatedPluginVersion(pluginVersion, UNSUPPORTED_PLUGIN_MAJOR_FLOOR, UNSUPPORTED_PLUGIN_MAJOR_FLOOR, UNSUPPORTED_PLUGIN_MAJOR_FLOOR, SIGNED_BUNDLE_METADATA_MIN_V8),
+    // Gate explicitly on major + floor: isDeprecatedPluginVersion ignores majors below 5
+    // (and 9+), so negating it would leak the fields to very old or unknown plugins.
+    signature: pluginVersion.major >= 8 && greaterOrEqual(pluginVersion, parse(SIGNED_BUNDLE_METADATA_MIN_V8)),
   }
   if (responseFeatureSupportCache.size >= RESPONSE_FEATURE_SUPPORT_CACHE_MAX) {
     const oldest = responseFeatureSupportCache.keys().next().value

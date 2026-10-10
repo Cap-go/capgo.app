@@ -85,8 +85,15 @@ describe('signed bundle metadata', () => {
     })
   })
 
-  it.concurrent('omits the fields for older v8 and for v5/v6/v7 plugins', () => {
-    for (const pluginVersion of ['8.52.9', '8.35.0', '8.53.0-beta.1', '7.99.0', '6.99.0', '5.99.0']) {
+  it.concurrent('returns the fields to any major above 8', () => {
+    expect(resToVersion('9.0.0', 'https://bundle.zip', signedVersion, manifest, false)).toMatchObject({
+      signature,
+      manifest_signature: manifestSignature,
+    })
+  })
+
+  it.concurrent('omits the fields for older v8 and for every plugin below v8', () => {
+    for (const pluginVersion of ['8.52.9', '8.35.0', '8.53.0-beta.1', '7.99.0', '6.99.0', '5.99.0', '4.99.0', '1.0.0']) {
       const response = resToVersion(pluginVersion, 'https://bundle.zip', signedVersion, manifest, true)
       expect(response, pluginVersion).not.toHaveProperty('signature')
       expect(response, pluginVersion).not.toHaveProperty('manifest_signature')
