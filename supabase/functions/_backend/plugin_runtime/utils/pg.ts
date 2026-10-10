@@ -12,6 +12,7 @@ import { getChannelSelfOverride, isChannelSelfStoreEnabled } from './channelSelf
 import { getClientDbRegionSB } from './geolocation.ts'
 import { freshQueryArgs } from './hyperdriveFreshRead.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
+import { isTransientDatabaseError } from './pg_errors.ts'
 import { serializePostgresError, serializePostgresLogValue } from './postgres_error.ts'
 import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
@@ -532,6 +533,54 @@ export function getDrizzleClient(db: PluginPgClient, options?: { logger?: boolea
   // Keep SQL logging on by default for API/trigger diagnostics.
   // Plugin hot paths pass `{ logger: false }` to avoid per-request log CPU/volume.
   return drizzle({ client: db, logger: options?.logger ?? true })
+}
+
+export interface ReadOnlyPgSession {
+  drizzle: ReturnType<typeof getDrizzleClient>
+  pgClient: PluginPgClient
+  cleanup: () => Promise<void>
+  /** When true, the caller owns closing the client after a successful run (lazy /updates edge cache). */
+  keepOpenAfterSuccess?: boolean
+}
+
+/**
+ * Run read-only plugin work once, retrying on a fresh Hyperdrive client when the
+ * first attempt hits a transient connection failure. A dead pg.Client poisons
+ * every later query in the same request unless we reconnect.
+ */
+export async function withReadOnlyPgTransientRetry<T>(
+  c: Context,
+  context: string,
+  createSession: () => Promise<ReadOnlyPgSession>,
+  run: (session: ReadOnlyPgSession) => Promise<T>,
+): Promise<T> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const session = await createSession()
+    let succeeded = false
+    try {
+      const result = await run(session)
+      succeeded = true
+      return result
+    }
+    catch (error) {
+      if (attempt === 0 && isTransientDatabaseError(error)) {
+        cloudlog({
+          requestId: c.get('requestId'),
+          message: 'read_only_pg_transient_retry',
+          context,
+          databaseSource: c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? null,
+        })
+        continue
+      }
+      throw error
+    }
+    finally {
+      if (!succeeded || !session.keepOpenAfterSuccess)
+        await session.cleanup()
+    }
+  }
+
+  throw new Error('unreachable read_only_pg_transient_retry')
 }
 
 export function logPgError(

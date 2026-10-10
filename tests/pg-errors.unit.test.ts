@@ -4,10 +4,22 @@ import {
   isDatabaseOriginError,
   isTransientDatabaseError,
   isTransientPgError,
+  readPgErrorCauseMessage,
   readPgErrorCode,
 } from '../supabase/functions/_backend/utils/pg_errors.ts'
 
 describe('pg_errors', () => {
+  it('detects hyperdrive client-not-queryable failures as transient database errors', () => {
+    const error = Object.assign(new Error('Failed query: select "file_name" from "manifest" where "manifest"."app_version_id" = $1'), {
+      name: 'DrizzleQueryError',
+      cause: new Error('Client has encountered a connection error and is not queryable'),
+    })
+
+    expect(isTransientPgError(error)).toBe(true)
+    expect(isTransientDatabaseError(error)).toBe(true)
+    expect(readPgErrorCauseMessage(error)).toBe('Client has encountered a connection error and is not queryable')
+  })
+
   it('detects transient connection failures in drizzle cause chains', () => {
     const error = Object.assign(new Error('Failed query: SELECT 1'), {
       name: 'DrizzleQueryError',

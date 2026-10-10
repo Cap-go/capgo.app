@@ -19,7 +19,7 @@ import { onPremiseAppResponse } from './rateLimitInfo.ts'
 import { cloudlog } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
 import { sendNotifToOrgMembersCached } from './org_email_notifications.ts'
-import { closeClient, createLazyPgClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDatabaseURL, getDrizzleClient, getLazyPgQueryCount, getPgClient, refreshReplicationLag, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
+import { closeClient, createLazyPgClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDatabaseURL, getDrizzleClient, getLazyPgQueryCount, getPgClient, refreshReplicationLag, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader, withReadOnlyPgTransientRetry } from './pg.ts'
 import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
 import { makeDevice } from './plugin_parser.ts'
 import { createStatsBandwidth, createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from './plugin_stats.ts'
@@ -1027,41 +1027,43 @@ export async function update(c: Context, body: AppInfos) {
     return updateWithEdgeCache(c, body, appStatus, startUpdate, appStatusMs)
 
   const startPgClient = performance.now()
-  const pgClient = await getPgClient(c, true)
-  // Hyperdrive: includes await client.connect(). Pool: construction only (lazy connect later).
-  const pgClientMs = Math.round(performance.now() - startPgClient)
   const pathTiming: UpdatePathTiming = {}
-  try {
-    const startLag = performance.now()
-    await setReplicationLagHeader(c, pgClient)
-    const replicationLagMs = Math.round(performance.now() - startLag)
-
-    const drizzlePg = getDrizzleClient(pgClient, { logger: false })
-    // Use the active DB client only when needed
-    const response = await updateWithPG(c, body, drizzlePg, appStatus, pathTiming)
-    const totalMs = Math.round(performance.now() - startUpdate)
-    if (totalMs >= 100) {
-      cloudlog({
-        requestId: c.get('requestId'),
-        message: 'plugin_path_timing',
-        path: 'updates',
-        outcome: 'total',
-        totalMs,
-        appStatusMs,
-        pgClientMs,
-        ownerMs: pathTiming.ownerMs ?? 0,
-        requestInfosMs: pathTiming.requestInfosMs ?? 0,
-        channelPrefetchHit: pathTiming.channelPrefetchHit ?? false,
-        replicationLagMs,
-        databaseSource: c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? null,
-        app_id: body.app_id,
-      })
+  let pgClientMs = 0
+  let replicationLagMs = 0
+  const response = await withReadOnlyPgTransientRetry(c, 'updates', async () => {
+    const pgClient = await getPgClient(c, true)
+    if (pgClientMs === 0)
+      pgClientMs = Math.round(performance.now() - startPgClient)
+    return {
+      pgClient,
+      drizzle: getDrizzleClient(pgClient, { logger: false }),
+      cleanup: () => closeClient(c, pgClient),
     }
-    return response
+  }, async (session) => {
+    const startLag = performance.now()
+    await setReplicationLagHeader(c, session.pgClient)
+    replicationLagMs = Math.round(performance.now() - startLag)
+    return updateWithPG(c, body, session.drizzle, appStatus, pathTiming)
+  })
+  const totalMs = Math.round(performance.now() - startUpdate)
+  if (totalMs >= 100) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'plugin_path_timing',
+      path: 'updates',
+      outcome: 'total',
+      totalMs,
+      appStatusMs,
+      pgClientMs,
+      ownerMs: pathTiming.ownerMs ?? 0,
+      requestInfosMs: pathTiming.requestInfosMs ?? 0,
+      channelPrefetchHit: pathTiming.channelPrefetchHit ?? false,
+      replicationLagMs,
+      databaseSource: c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? null,
+      app_id: body.app_id,
+    })
   }
-  finally {
-    await closeClient(c, pgClient)
-  }
+  return response
 }
 
 /**
@@ -1076,28 +1078,34 @@ async function updateWithEdgeCache(
   startUpdate: number,
   appStatusMs: number,
 ) {
-  const lazyClient = createLazyPgClient(c, true)
   const pathTiming: UpdatePathTiming = {}
+  let lazyClient: ReturnType<typeof createLazyPgClient> | null = null
   let closeInBackground = false
   try {
-    // Pick the replica now (no connection) so the lag lookup uses its cache
-    // key instead of "unknown"; the lazy client connects to the same source.
     try {
       getDatabaseURL(c, true)
     }
     catch {
       // No usable replica: the first query reports it.
     }
-    // Memory-only lag header: a cache hit must not trigger a background probe.
-    await setReplicationLagHeader(c, lazyClient.client, { probeOnMiss: false })
-    const drizzlePg = getDrizzleClient(lazyClient.client, { logger: false })
-    const response = await updateWithPG(c, body, drizzlePg, appStatus, pathTiming)
+
+    const response = await withReadOnlyPgTransientRetry(c, 'updates_edge_cache', async () => {
+      lazyClient = createLazyPgClient(c, true)
+      return {
+        pgClient: lazyClient.client,
+        drizzle: getDrizzleClient(lazyClient.client, { logger: false }),
+        keepOpenAfterSuccess: true,
+        cleanup: () => lazyClient!.close(),
+      }
+    }, async (session) => {
+      await setReplicationLagHeader(c, session.pgClient, { probeOnMiss: false })
+      return updateWithPG(c, body, session.drizzle, appStatus, pathTiming)
+    })
+
     const dbQueries = getLazyPgQueryCount(c)
-    if (lazyClient.isConnected()) {
-      // Probe lag only on requests that already use the database, and close
-      // the client after the probe (a Pool cannot run it once ended).
+    if (lazyClient?.isConnected()) {
       closeInBackground = true
-      await backgroundTask(c, refreshReplicationLag(c, lazyClient.client).finally(() => lazyClient.close()))
+      await backgroundTask(c, refreshReplicationLag(c, lazyClient.client).finally(() => lazyClient!.close()))
     }
     try {
       response.headers.set('X-Updates-Cache', dbQueries === 0 ? 'hit' : 'miss')
@@ -1126,7 +1134,7 @@ async function updateWithEdgeCache(
     return response
   }
   finally {
-    if (!closeInBackground)
+    if (lazyClient && !closeInBackground)
       await lazyClient.close()
   }
 }
