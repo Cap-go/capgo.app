@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { appendFile, chmod, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
@@ -51,7 +51,7 @@ export async function writeFileAtomic(filePath: string, content: string, options
   const mode = options.mode ?? 0o600
   await ensureNotSymlink(filePath)
 
-  const tempPath = join(dirname(filePath), `.capgo-tmp-${randomBytes(8).toString('hex')}`)
+  const tempPath = join(dirname(filePath), `.capgo-tmp-${randomUUID()}`)
   try {
     await writeFile(tempPath, content, { encoding: options.encoding ?? 'utf-8', mode })
     await rename(tempPath, filePath)

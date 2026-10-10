@@ -68,7 +68,7 @@ export interface ValidateOptions {
 export function parseServiceAccountKey(jsonBytes: Buffer): ServiceAccountKey {
   let parsed: unknown
   try {
-    parsed = JSON.parse(jsonBytes.toString('utf-8'))
+    parsed = JSON.parse(new TextDecoder().decode(jsonBytes))
   }
   catch (err) {
     throw new Error(`Service account file is not valid JSON: ${err instanceof Error ? err.message : String(err)}`)
