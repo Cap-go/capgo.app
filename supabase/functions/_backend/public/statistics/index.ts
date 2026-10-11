@@ -6,7 +6,7 @@ import utc from 'dayjs/plugin/utc.js'
 import { createSchema, makeIssue, safeParseSchema } from '../../utils/schema_validation.ts'
 import { honoFactory, quickError, simpleError, useCors } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_middleware.ts'
-import { cloudlog } from '../../utils/logging.ts'
+import { cloudlog, cloudlogErr, serializeError } from '../../utils/logging.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError, isRetryablePostgrestResult, retryWithBackoff } from '../../utils/retry.ts'
 import { readNativeActiveDevicesSummary, readNativeDailyPlatformActive, readNativeVersionUsage } from '../../utils/stats.ts'
@@ -888,37 +888,37 @@ async function getNativeVersionUsage(c: Context, appId: string, from: Date, to: 
   const startDate = dayjs(from).utc().startOf('day').format('YYYY-MM-DD')
   const endDate = dayjs(to).utc().startOf('day').add(1, 'day').format('YYYY-MM-DD')
   const previousStartDate = dayjs(from).utc().startOf('day').subtract(dates.length, 'day').format('YYYY-MM-DD')
-  let nativeVersionUsage: NativeVersionUsageRow[]
-  let activeDevicesSummary: NativeActiveDevicesSummary = {
+  const emptySummary: NativeActiveDevicesSummary = {
     android: 0,
     ios: 0,
     electron: 0,
     unknown: 0,
     total: 0,
   }
-  let previousPeriodActiveDevices: NativeActiveDevicesSummary = {
-    android: 0,
-    ios: 0,
-    electron: 0,
-    unknown: 0,
-    total: 0,
+  // The KPI cards and daily platform chart are secondary: one failing Analytics Engine
+  // query (timeout, rate limit) must not 500 the whole Native tab, so each read degrades
+  // to empty data independently. Only the version usage read itself is fatal.
+  const [usageResult, summaryResult, previousSummaryResult, dailyResult] = await Promise.allSettled([
+    readNativeVersionUsage(c, appId, startDate, endDate, supabase) as Promise<NativeVersionUsageRow[]>,
+    readNativeActiveDevicesSummary(c, appId, startDate, endDate, supabase),
+    readNativeActiveDevicesSummary(c, appId, previousStartDate, startDate, supabase),
+    readNativeDailyPlatformActive(c, appId, startDate, endDate, supabase),
+  ])
+  if (usageResult.status === 'rejected')
+    return { data: null, error: usageResult.reason }
+
+  const logSecondaryFailure = (section: string, result: PromiseSettledResult<unknown>) => {
+    if (result.status === 'rejected')
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Native usage secondary read failed', section, appId, error: serializeError(result.reason) })
   }
-  let dailyPlatformRows: NativeDailyPlatformRow[] = []
-  try {
-    const [usageRows, summaryRows, previousSummaryRows, dailyRows] = await Promise.all([
-      readNativeVersionUsage(c, appId, startDate, endDate, supabase) as Promise<NativeVersionUsageRow[]>,
-      readNativeActiveDevicesSummary(c, appId, startDate, endDate, supabase),
-      readNativeActiveDevicesSummary(c, appId, previousStartDate, startDate, supabase),
-      readNativeDailyPlatformActive(c, appId, startDate, endDate, supabase),
-    ])
-    nativeVersionUsage = usageRows
-    activeDevicesSummary = summarizeNativeActiveDevices(summaryRows)
-    previousPeriodActiveDevices = summarizeNativeActiveDevices(previousSummaryRows)
-    dailyPlatformRows = dailyRows
-  }
-  catch (error) {
-    return { data: null, error }
-  }
+  logSecondaryFailure('activeDevices', summaryResult)
+  logSecondaryFailure('previousPeriodActiveDevices', previousSummaryResult)
+  logSecondaryFailure('dailyPlatformActive', dailyResult)
+
+  const nativeVersionUsage = usageResult.value
+  const activeDevicesSummary = summaryResult.status === 'fulfilled' ? summarizeNativeActiveDevices(summaryResult.value) : emptySummary
+  const previousPeriodActiveDevices = previousSummaryResult.status === 'fulfilled' ? summarizeNativeActiveDevices(previousSummaryResult.value) : { ...emptySummary }
+  const dailyPlatformRows: NativeDailyPlatformRow[] = dailyResult.status === 'fulfilled' ? dailyResult.value : []
   const seriesNames = [...new Set(nativeVersionUsage.map(getNativeVersionSeriesName))]
   const dailyCounts = buildNativeVersionCounts(nativeVersionUsage, dates, seriesNames)
   const dailyPercentages = convertCountsToPercentagesByName(dailyCounts, dates, seriesNames)
