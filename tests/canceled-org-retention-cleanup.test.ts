@@ -1,14 +1,11 @@
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { executeSQL } from './test-utils.ts'
 
 describe('canceled org retention cleanup', () => {
-  const orgId = randomUUID()
-  const customerId = `cus_retention_${randomUUID().replace(/-/g, '').slice(0, 16)}`
-  const appId = `com.test.retention.${randomUUID().replace(/-/g, '').slice(0, 12)}`
   const userId = '6aa76066-55ef-4238-ade6-0b32334a4097'
 
-  afterEach(async () => {
+  async function cleanupRetentionFixture(orgId: string, customerId: string) {
     await executeSQL(
       `DELETE FROM pgmq.q_canceled_org_retention_alerts
        WHERE message -> 'payload' ->> 'org_id' = $1`,
@@ -19,9 +16,12 @@ describe('canceled org retention cleanup', () => {
     await executeSQL('DELETE FROM public.apps WHERE owner_org = $1::uuid', [orgId])
     await executeSQL('DELETE FROM public.orgs WHERE id = $1::uuid', [orgId])
     await executeSQL('DELETE FROM public.stripe_info WHERE customer_id = $1', [customerId])
-  })
+  }
 
   it('extends the retention anchor from recent app activity and blocks delete without warning', async () => {
+    const orgId = randomUUID()
+    const customerId = `cus_retention_${randomUUID().replace(/-/g, '').slice(0, 16)}`
+    const appId = `com.test.retention.${randomUUID().replace(/-/g, '').slice(0, 12)}`
     await executeSQL(
       `INSERT INTO public.stripe_info (
         customer_id, status, product_id, trial_at, is_good_plan,
@@ -67,9 +67,14 @@ describe('canceled org retention cleanup', () => {
       [orgId],
     )
     expect(appsLeft).toHaveLength(1)
+
+    await cleanupRetentionFixture(orgId, customerId)
   })
 
   it('queues app-deletion warnings past the old 5-day window and requires notification lead time', async () => {
+    const orgId = randomUUID()
+    const customerId = `cus_retention_${randomUUID().replace(/-/g, '').slice(0, 16)}`
+    const appId = `com.test.retention.${randomUUID().replace(/-/g, '').slice(0, 12)}`
     await executeSQL(
       `INSERT INTO public.stripe_info (
         customer_id, status, product_id, trial_at, is_good_plan,
@@ -123,5 +128,7 @@ describe('canceled org retention cleanup', () => {
       'SELECT public.delete_apps_for_long_canceled_orgs(10)',
     )
     expect(Number(deleted[0]?.delete_apps_for_long_canceled_orgs ?? 0)).toBe(1)
+
+    await cleanupRetentionFixture(orgId, customerId)
   })
 })
