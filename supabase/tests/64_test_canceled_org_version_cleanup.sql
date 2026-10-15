@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(43);
+SELECT plan(46);
 
 -- pgmq schema is not granted to service_role; use postgres-owned helpers.
 CREATE OR REPLACE FUNCTION pg_temp.delete_canceled_org_retention_alerts(
@@ -154,6 +154,7 @@ SELECT
   'a0c1e2f3-1111-4aaa-8bbb-000000000006'::uuid AS warn85_org,
   'a0c1e2f3-1111-4aaa-8bbb-000000000007'::uuid AS ultra_canceled_org,
   'a0c1e2f3-1111-4aaa-8bbb-000000000008'::uuid AS credits_canceled_org,
+  'a0c1e2f3-1111-4aaa-8bbb-000000000009'::uuid AS active_canceled_org,
   'cus_canceled_cleanup_long'::varchar AS long_customer,
   'cus_canceled_cleanup_recent'::varchar AS recent_customer,
   'cus_canceled_cleanup_trial'::varchar AS trial_customer,
@@ -162,6 +163,7 @@ SELECT
   'cus_canceled_cleanup_warn85'::varchar AS warn85_customer,
   'cus_canceled_cleanup_ultra'::varchar AS ultra_customer,
   'cus_canceled_cleanup_credits'::varchar AS credits_customer,
+  'cus_canceled_cleanup_active'::varchar AS active_customer,
   'com.test.canceled.cleanup.long'::varchar AS long_app,
   'com.test.canceled.cleanup.recent'::varchar AS recent_app,
   'com.test.canceled.cleanup.trial'::varchar AS trial_app,
@@ -170,6 +172,7 @@ SELECT
   'com.test.canceled.cleanup.warn85'::varchar AS warn85_app,
   'com.test.canceled.cleanup.ultra'::varchar AS ultra_app,
   'com.test.canceled.cleanup.credits'::varchar AS credits_app,
+  'com.test.canceled.cleanup.active'::varchar AS active_app,
   '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid AS user_id,
   'prod_LQIregjtNduh4q'::varchar AS product_id;
 
@@ -273,6 +276,18 @@ SELECT
   now() - interval '200 days',
   now() - interval '100 days',
   now() - interval '100 days'
+FROM canceled_cleanup_ctx
+UNION ALL
+-- Billing canceled 200d ago but app created 40d ago (activity extends retention anchor).
+SELECT
+  active_customer,
+  'canceled'::public.stripe_status,
+  product_id,
+  now() - interval '250 days',
+  false,
+  now() - interval '250 days',
+  now() - interval '200 days',
+  now() - interval '200 days'
 FROM canceled_cleanup_ctx;
 
 INSERT INTO public.orgs (id, created_by, name, management_email, customer_id, has_usage_credits)
@@ -298,6 +313,9 @@ SELECT ultra_canceled_org, user_id, 'Ultra Canceled Cleanup Org', 'canceled-ultr
 FROM canceled_cleanup_ctx
 UNION ALL
 SELECT credits_canceled_org, user_id, 'Credits Canceled Cleanup Org', 'canceled-credits@test.local', credits_customer, true
+FROM canceled_cleanup_ctx
+UNION ALL
+SELECT active_canceled_org, user_id, 'Active Canceled Cleanup Org', 'canceled-active@test.local', active_customer, false
 FROM canceled_cleanup_ctx;
 
 INSERT INTO public.apps (app_id, icon_url, owner_org, name, user_id)
@@ -315,7 +333,13 @@ SELECT warn85_app, '', warn85_org, 'Warn85 App', user_id FROM canceled_cleanup_c
 UNION ALL
 SELECT ultra_app, '', ultra_canceled_org, 'Ultra Canceled App', user_id FROM canceled_cleanup_ctx
 UNION ALL
-SELECT credits_app, '', credits_canceled_org, 'Credits Canceled App', user_id FROM canceled_cleanup_ctx;
+SELECT credits_app, '', credits_canceled_org, 'Credits Canceled App', user_id FROM canceled_cleanup_ctx
+UNION ALL
+SELECT active_app, '', active_canceled_org, 'Active Canceled App', user_id FROM canceled_cleanup_ctx;
+
+UPDATE public.apps
+SET created_at = pg_catalog.now() - interval '40 days'
+WHERE app_id = (SELECT active_app FROM canceled_cleanup_ctx);
 
 INSERT INTO public.app_versions (id, app_id, name, storage_provider, owner_org, user_id, deleted)
 SELECT 970101, long_app, '1.0.0', 'r2', long_canceled_org, user_id, false FROM canceled_cleanup_ctx
@@ -336,7 +360,9 @@ SELECT 970601, warn85_app, '1.0.0', 'r2', warn85_org, user_id, false FROM cancel
 UNION ALL
 SELECT 970701, ultra_app, '1.0.0', 'r2', ultra_canceled_org, user_id, false FROM canceled_cleanup_ctx
 UNION ALL
-SELECT 970801, credits_app, '1.0.0', 'r2', credits_canceled_org, user_id, false FROM canceled_cleanup_ctx;
+SELECT 970801, credits_app, '1.0.0', 'r2', credits_canceled_org, user_id, false FROM canceled_cleanup_ctx
+UNION ALL
+SELECT 970901, active_app, '1.0.0', 'r2', active_canceled_org, user_id, false FROM canceled_cleanup_ctx;
 
 SELECT set_config('capgo.seed_channel_targets', 'true', true);
 
@@ -497,6 +523,17 @@ SELECT pg_temp.delete_canceled_org_retention_alerts(ARRAY[
   (SELECT credits_canceled_org::text FROM canceled_cleanup_ctx)
 ]);
 
+-- Long org is past bundle soft-delete: seed an old bundles warning claim so the
+-- first cleanup can soft-delete after the 5-day lead time.
+INSERT INTO public.notifications (owner_org, event, uniq_id, created_at, last_send_at)
+SELECT
+  long_canceled_org,
+  'org:bundles_will_be_deleted',
+  public.canceled_org_retention_uniq_id(long_canceled_org, 'bundles_deletion_warning'),
+  pg_catalog.now() - interval '10 days',
+  pg_catalog.now() - interval '10 days'
+FROM canceled_cleanup_ctx;
+
 SELECT public.cleanup_long_canceled_org_data();
 
 SELECT is(
@@ -579,12 +616,12 @@ SELECT ok(
 );
 
 SELECT ok(
-  NOT EXISTS (
+  EXISTS (
     SELECT 1
     FROM public.apps
     WHERE app_id = (SELECT ultra_app FROM canceled_cleanup_ctx)
   ),
-  '100-day org app is deleted after 95 days'
+  '100-day org app is not deleted without a recorded app-deletion warning'
 );
 
 SELECT is(
@@ -612,14 +649,21 @@ SELECT ok(
 );
 
 SELECT ok(
+  NOT EXISTS (
+    SELECT 1
+    FROM public.canceled_org_ids_past_grace(95) AS oid(id)
+    WHERE oid.id = (SELECT active_canceled_org FROM canceled_cleanup_ctx)
+  ),
+  'recent activity extends retention anchor past 95-day app delete'
+);
+
+SELECT ok(
   EXISTS (
     SELECT 1
-    FROM public.old_apps
-    WHERE app_id = (SELECT ultra_app FROM canceled_cleanup_ctx)
-      AND owner_org = (SELECT ultra_canceled_org FROM canceled_cleanup_ctx)
-      AND email = 'test@capgo.app'
+    FROM public.apps
+    WHERE app_id = (SELECT active_app FROM canceled_cleanup_ctx)
   ),
-  'deleted 95-day app is archived into old_apps with creator email'
+  'active canceled org app is kept when retention anchor is extended by activity'
 );
 
 SELECT is(
@@ -645,8 +689,8 @@ SELECT is(
       (SELECT credits_canceled_org FROM canceled_cleanup_ctx)
     ]
   ),
-  1,
-  'queues one 90-day app warning for long only'
+  2,
+  'queues app-deletion warnings for long and ultra catch-up orgs'
 );
 
 SELECT is(
@@ -679,7 +723,7 @@ SELECT is(
       (SELECT recent_canceled_org FROM canceled_cleanup_ctx)
     ]
   ),
-  2,
+  3,
   'second cleanup does not re-queue pending retention warnings'
 );
 
@@ -693,26 +737,14 @@ INSERT INTO public.notifications (owner_org, event, uniq_id)
 SELECT
   warn85_org,
   'org:bundles_will_be_deleted',
-  'retention:bundles_deletion_warning:'
-    || to_char(
-      (SELECT GREATEST(si.canceled_at, si.subscription_anchor_end, si.trial_at)
-       FROM public.stripe_info AS si
-       WHERE si.customer_id = warn85_customer) AT TIME ZONE 'UTC',
-      'YYYY-MM-DD"T"HH24:MI:SS"Z"'
-    )
+  public.canceled_org_retention_uniq_id(warn85_org, 'bundles_deletion_warning')
 FROM canceled_cleanup_ctx;
 
 INSERT INTO public.notifications (owner_org, event, uniq_id)
 SELECT
   long_canceled_org,
   'org:apps_will_be_deleted',
-  'retention:app_deletion_warning:'
-    || to_char(
-      (SELECT GREATEST(si.canceled_at, si.subscription_anchor_end, si.trial_at)
-       FROM public.stripe_info AS si
-       WHERE si.customer_id = long_customer) AT TIME ZONE 'UTC',
-      'YYYY-MM-DD"T"HH24:MI:SS"Z"'
-    )
+  public.canceled_org_retention_uniq_id(long_canceled_org, 'app_deletion_warning')
 FROM canceled_cleanup_ctx;
 
 SELECT public.cleanup_long_canceled_org_data();
@@ -727,6 +759,37 @@ SELECT is(
   ),
   0,
   'notifications claim prevents re-queue after pending messages are drained'
+);
+
+INSERT INTO public.notifications (owner_org, event, uniq_id, created_at, last_send_at)
+SELECT
+  ultra_canceled_org,
+  'org:apps_will_be_deleted',
+  public.canceled_org_retention_uniq_id(ultra_canceled_org, 'app_deletion_warning'),
+  pg_catalog.now() - interval '10 days',
+  pg_catalog.now() - interval '10 days'
+FROM canceled_cleanup_ctx;
+
+SELECT public.cleanup_long_canceled_org_data();
+
+SELECT ok(
+  NOT EXISTS (
+    SELECT 1
+    FROM public.apps
+    WHERE app_id = (SELECT ultra_app FROM canceled_cleanup_ctx)
+  ),
+  '100-day org app is deleted after recorded app-deletion warning lead time'
+);
+
+SELECT ok(
+  EXISTS (
+    SELECT 1
+    FROM public.old_apps
+    WHERE app_id = (SELECT ultra_app FROM canceled_cleanup_ctx)
+      AND owner_org = (SELECT ultra_canceled_org FROM canceled_cleanup_ctx)
+      AND email = 'test@capgo.app'
+  ),
+  'deleted 95-day app is archived into old_apps with creator email'
 );
 
 SELECT ok(
