@@ -91,8 +91,8 @@ describe('canceled org retention cleanup', () => {
       [orgId, userId, customerId],
     )
     await executeSQL(
-      `INSERT INTO public.apps (app_id, icon_url, owner_org, name, user_id)
-       VALUES ($1, '', $2::uuid, 'Retention Ultra App', $3::uuid)`,
+      `INSERT INTO public.apps (app_id, icon_url, owner_org, name, user_id, created_at)
+       VALUES ($1, '', $2::uuid, 'Retention Ultra App', $3::uuid, now() - interval '150 days')`,
       [appId, orgId, userId],
     )
 
