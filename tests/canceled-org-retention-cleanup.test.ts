@@ -49,8 +49,10 @@ describe('canceled org retention cleanup', () => {
     )
     expect(new Date(anchor[0]!.anchor).getTime()).toBeGreaterThan(Date.now() - 35 * 86400 * 1000)
 
-    const pastGrace = await executeSQL<{ id: string }>(
-      'SELECT id FROM public.canceled_org_ids_past_grace(95) WHERE id = $1::uuid',
+    const pastGrace = await executeSQL<{ org_id: string }>(
+      `SELECT grace.org_id
+       FROM public.canceled_org_ids_past_grace(95) AS grace(org_id)
+       WHERE grace.org_id = $1::uuid`,
       [orgId],
     )
     expect(pastGrace).toHaveLength(0)

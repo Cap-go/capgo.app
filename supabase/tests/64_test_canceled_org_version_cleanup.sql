@@ -714,8 +714,8 @@ SELECT is(
       (SELECT credits_canceled_org FROM canceled_cleanup_ctx)
     ]
   ),
-  1,
-  'queues one 85-day bundle warning for warn85 only'
+  2,
+  'queues bundle warnings for warn85 and ultra catch-up orgs'
 );
 
 SELECT is(
@@ -761,7 +761,7 @@ SELECT is(
       (SELECT recent_canceled_org FROM canceled_cleanup_ctx)
     ]
   ),
-  3,
+  4,
   'second cleanup does not re-queue pending retention warnings'
 );
 
