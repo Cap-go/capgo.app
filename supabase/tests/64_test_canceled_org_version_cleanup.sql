@@ -341,6 +341,27 @@ UPDATE public.apps
 SET created_at = pg_catalog.now() - interval '40 days'
 WHERE app_id = (SELECT active_app FROM canceled_cleanup_ctx);
 
+UPDATE public.apps AS a
+SET created_at = backdates.created_at
+FROM (
+  SELECT long_app AS app_id, pg_catalog.now() - interval '120 days' AS created_at FROM canceled_cleanup_ctx
+  UNION ALL
+  SELECT recent_app, pg_catalog.now() - interval '15 days' FROM canceled_cleanup_ctx
+  UNION ALL
+  SELECT trial_app, pg_catalog.now() - interval '15 days' FROM canceled_cleanup_ctx
+  UNION ALL
+  SELECT paying_app, pg_catalog.now() - interval '120 days' FROM canceled_cleanup_ctx
+  UNION ALL
+  SELECT early_app, pg_catalog.now() - interval '120 days' FROM canceled_cleanup_ctx
+  UNION ALL
+  SELECT warn85_app, pg_catalog.now() - interval '120 days' FROM canceled_cleanup_ctx
+  UNION ALL
+  SELECT ultra_app, pg_catalog.now() - interval '120 days' FROM canceled_cleanup_ctx
+  UNION ALL
+  SELECT credits_app, pg_catalog.now() - interval '120 days' FROM canceled_cleanup_ctx
+) AS backdates
+WHERE a.app_id = backdates.app_id;
+
 INSERT INTO public.app_versions (id, app_id, name, storage_provider, owner_org, user_id, deleted)
 SELECT 970101, long_app, '1.0.0', 'r2', long_canceled_org, user_id, false FROM canceled_cleanup_ctx
 UNION ALL
@@ -363,6 +384,23 @@ UNION ALL
 SELECT 970801, credits_app, '1.0.0', 'r2', credits_canceled_org, user_id, false FROM canceled_cleanup_ctx
 UNION ALL
 SELECT 970901, active_app, '1.0.0', 'r2', active_canceled_org, user_id, false FROM canceled_cleanup_ctx;
+
+UPDATE public.app_versions AS av
+SET created_at = backdates.created_at
+FROM (
+  SELECT 970101::bigint AS id, pg_catalog.now() - interval '120 days' AS created_at
+  UNION ALL SELECT 970102, pg_catalog.now() - interval '120 days'
+  UNION ALL SELECT 970103, pg_catalog.now() - interval '120 days'
+  UNION ALL SELECT 970201, pg_catalog.now() - interval '15 days'
+  UNION ALL SELECT 970301, pg_catalog.now() - interval '15 days'
+  UNION ALL SELECT 970401, pg_catalog.now() - interval '120 days'
+  UNION ALL SELECT 970501, pg_catalog.now() - interval '120 days'
+  UNION ALL SELECT 970601, pg_catalog.now() - interval '120 days'
+  UNION ALL SELECT 970701, pg_catalog.now() - interval '120 days'
+  UNION ALL SELECT 970801, pg_catalog.now() - interval '120 days'
+  UNION ALL SELECT 970901, pg_catalog.now() - interval '40 days'
+) AS backdates
+WHERE av.id = backdates.id;
 
 SELECT set_config('capgo.seed_channel_targets', 'true', true);
 

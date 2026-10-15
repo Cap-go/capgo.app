@@ -31,63 +31,63 @@ STABLE
 SECURITY DEFINER
 SET search_path = ''
 AS $$
-  SELECT GREATEST(
-    COALESCE(
-      (SELECT MAX(a.created_at) FROM public.apps AS a WHERE a.owner_org = p_org_id),
-      '-infinity'::timestamp with time zone
-    ),
-    COALESCE(
-      (
-        SELECT MAX(av.created_at)
-        FROM public.app_versions AS av
-        WHERE av.owner_org = p_org_id
-      ),
-      '-infinity'::timestamp with time zone
-    ),
-    COALESCE(
-      (
-        SELECT MAX(d.updated_at)
-        FROM public.devices AS d
-        INNER JOIN public.apps AS a ON a.app_id = d.app_id
-        WHERE a.owner_org = p_org_id
-      ),
-      '-infinity'::timestamp with time zone
-    ),
-    COALESCE(
-      (
-        SELECT MAX((dm.date::timestamp AT TIME ZONE 'UTC'))
-        FROM public.daily_mau AS dm
-        INNER JOIN public.apps AS a ON a.app_id = dm.app_id
-        WHERE a.owner_org = p_org_id
-          AND dm.mau > 0
-      ),
-      '-infinity'::timestamp with time zone
-    ),
-    COALESCE(
-      (
-        SELECT MAX(g.granted_at)
-        FROM public.usage_credit_grants AS g
-        WHERE g.org_id = p_org_id
-      ),
-      '-infinity'::timestamp with time zone
-    ),
-    COALESCE(
-      (
-        SELECT MAX(c.applied_at)
-        FROM public.usage_credit_consumptions AS c
-        WHERE c.org_id = p_org_id
-      ),
-      '-infinity'::timestamp with time zone
-    ),
-    COALESCE(
-      (
-        SELECT MAX(t.occurred_at)
-        FROM public.usage_credit_transactions AS t
-        WHERE t.org_id = p_org_id
-      ),
-      '-infinity'::timestamp with time zone
-    )
-  );
+  WITH billing AS (
+    SELECT public.canceled_org_billing_access_end(p_org_id) AS access_end
+  )
+  SELECT MAX(activity_at)
+  FROM (
+    SELECT a.created_at AS activity_at
+    FROM public.apps AS a
+    CROSS JOIN billing AS b
+    WHERE a.owner_org = p_org_id
+      AND b.access_end IS NOT NULL
+      AND a.created_at > b.access_end
+    UNION ALL
+    SELECT av.created_at
+    FROM public.app_versions AS av
+    CROSS JOIN billing AS b
+    WHERE av.owner_org = p_org_id
+      AND b.access_end IS NOT NULL
+      AND av.created_at > b.access_end
+    UNION ALL
+    SELECT d.updated_at
+    FROM public.devices AS d
+    INNER JOIN public.apps AS a ON a.app_id = d.app_id
+    CROSS JOIN billing AS b
+    WHERE a.owner_org = p_org_id
+      AND b.access_end IS NOT NULL
+      AND d.updated_at > b.access_end
+    UNION ALL
+    SELECT (dm.date::timestamp AT TIME ZONE 'UTC')
+    FROM public.daily_mau AS dm
+    INNER JOIN public.apps AS a ON a.app_id = dm.app_id
+    CROSS JOIN billing AS b
+    WHERE a.owner_org = p_org_id
+      AND b.access_end IS NOT NULL
+      AND (dm.date::timestamp AT TIME ZONE 'UTC') > b.access_end
+      AND dm.mau > 0
+    UNION ALL
+    SELECT g.granted_at
+    FROM public.usage_credit_grants AS g
+    CROSS JOIN billing AS b
+    WHERE g.org_id = p_org_id
+      AND b.access_end IS NOT NULL
+      AND g.granted_at > b.access_end
+    UNION ALL
+    SELECT c.applied_at
+    FROM public.usage_credit_consumptions AS c
+    CROSS JOIN billing AS b
+    WHERE c.org_id = p_org_id
+      AND b.access_end IS NOT NULL
+      AND c.applied_at > b.access_end
+    UNION ALL
+    SELECT t.occurred_at
+    FROM public.usage_credit_transactions AS t
+    CROSS JOIN billing AS b
+    WHERE t.org_id = p_org_id
+      AND b.access_end IS NOT NULL
+      AND t.occurred_at > b.access_end
+  ) AS activity_rows;
 $$;
 
 ALTER FUNCTION public.canceled_org_last_activity_at(uuid) OWNER TO postgres;
@@ -108,7 +108,10 @@ SET search_path = ''
 AS $$
   SELECT GREATEST(
     public.canceled_org_billing_access_end(p_org_id),
-    public.canceled_org_last_activity_at(p_org_id)
+    COALESCE(
+      public.canceled_org_last_activity_at(p_org_id),
+      public.canceled_org_billing_access_end(p_org_id)
+    )
   );
 $$;
 
