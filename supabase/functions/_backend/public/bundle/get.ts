@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { z } from 'zod'
-import { simpleError } from '../../utils/hono.ts'
+import { quickError, simpleError } from '../../utils/hono.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { integerLikeSchema, numberLikeSchema, safeParseSchema } from '../../utils/schema_validation.ts'
 import { supabaseApikey } from '../../utils/supabase.ts'
@@ -17,6 +17,28 @@ export const getBundleQuerySchema = z.object({
 
 export type GetLatest = z.infer<typeof getBundleQuerySchema> & { app_id: string }
 
+async function resolveBundleAccessDeniedStatus(
+  c: Context<MiddlewareKeyVariables>,
+  apikey: Database['public']['Tables']['apikeys']['Row'],
+  appId: string,
+): Promise<never> {
+  const { data: appRow, error: appLookupError } = await supabaseApikey(c, apikey.key)
+    .from('apps')
+    .select('app_id')
+    .eq('app_id', appId)
+    .maybeSingle()
+
+  if (appLookupError) {
+    quickError(500, 'cannot_get_bundle', 'Cannot get bundle', { supabaseError: appLookupError })
+  }
+
+  if (!appRow) {
+    quickError(404, 'app_not_found', 'App not found', { app_id: appId })
+  }
+
+  quickError(403, 'cannot_get_bundle', 'You can\'t access this app', { app_id: appId })
+}
+
 export async function get(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
   const bodyParsed = safeParseSchema(getBundleQuerySchema, bodyRaw)
   if (!bodyParsed.success) {
@@ -30,9 +52,14 @@ export async function get(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, 
   if (!isValidAppId(body.app_id)) {
     throw simpleError('invalid_app_id', 'App ID must be a reverse domain string', { app_id: body.app_id })
   }
-  // Auth context is already set by middlewareKey
+
+  const auth = c.get('auth')
+  if (!auth?.userId) {
+    quickError(401, 'invalid_apikey', 'Invalid API key')
+  }
+
   if (!(await checkPermission(c, 'app.read_bundles', { appId: body.app_id }))) {
-    throw simpleError('cannot_get_bundle', 'You can\'t access this app', { app_id: body.app_id })
+    return await resolveBundleAccessDeniedStatus(c, apikey, body.app_id)
   }
 
   const supabase = supabaseApikey(c, apikey.key)
@@ -55,7 +82,7 @@ export async function get(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, 
 
     const { data: dataBundles, error: dbError } = await query
     if (dbError) {
-      throw simpleError('cannot_get_bundle', 'Cannot get bundle', { supabaseError: dbError })
+      quickError(500, 'cannot_get_bundle', 'Cannot get bundle', { supabaseError: dbError })
     }
 
     const rows = dataBundles ?? []
@@ -75,7 +102,7 @@ export async function get(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, 
     .range(from, to)
     .order('created_at', { ascending: false })
   if (dbError) {
-    throw simpleError('cannot_get_bundle', 'Cannot get bundle', { supabaseError: dbError })
+    quickError(500, 'cannot_get_bundle', 'Cannot get bundle', { supabaseError: dbError })
   }
 
   return c.json(dataBundles ?? [])

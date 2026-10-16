@@ -112,14 +112,14 @@ describe('[GET] /channel - Error Cases', () => {
 })
 
 describe('[GET] /bundle - Error Cases', () => {
-  it('should return 400 for app without access', async () => {
+  it('should return 404 for app without access', async () => {
     const response = await fetch(`${BASE_URL}/bundle?app_id=nonexistent.app.id&name=test-bundle`, {
       method: 'GET',
       headers,
     })
-    expect(response.status).toBe(400)
+    expect(response.status).toBe(404)
     const data = await response.json() as { error: string }
-    expect(data.error).toBe('cannot_get_bundle')
+    expect(data.error).toBe('app_not_found')
   })
 })
 

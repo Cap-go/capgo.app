@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import { getActiveAppVersions } from '../src/api/versions.ts'
+import { CliUserError } from '../src/shared/cli-user-error.ts'
 
 function makeBundleRow(index: number) {
   return {
@@ -11,13 +12,8 @@ function makeBundleRow(index: number) {
   }
 }
 
-function makeCannotGetBundleError(message = 'Cannot get bundle', status = 400) {
-  const response = new Response(JSON.stringify({ error: 'cannot_get_bundle', message }), { status })
-  return Object.assign(new Error('Edge Function returned a non-2xx status code'), { context: response })
-}
-
-function makeCannotAccessAppError() {
-  const response = new Response(JSON.stringify({ error: 'cannot_get_bundle', message: 'You can\'t access this app' }), { status: 403 })
+function makeBundleApiError(payload: { error: string, message: string }, status: number) {
+  const response = new Response(JSON.stringify(payload), { status })
   return Object.assign(new Error('Edge Function returned a non-2xx status code'), { context: response })
 }
 
@@ -32,27 +28,26 @@ function createInvokeStub(handlers: Record<number, () => Promise<{ data: unknown
   }
 }
 
-describe('fetchBundlePages empty-list EOF', () => {
-  it('returns [] when page 0 responds with cannot_get_bundle', async () => {
+describe('fetchBundlePages pagination', () => {
+  it('returns [] when page 0 responds with an empty array', async () => {
     const versions = await getActiveAppVersions('test-key', 'com.test.app', {
       invoke: createInvokeStub({
-        0: async () => ({ data: null, error: makeCannotGetBundleError() }),
+        0: async () => ({ data: [], error: null }),
       }),
     })
     expect(versions).toEqual([])
   })
 
-  it('returns accumulated bundles when a later page responds with cannot_get_bundle', async () => {
+  it('stops paging when a page returns fewer than 50 bundles', async () => {
     const firstPage = Array.from({ length: 50 }, (_, index) => makeBundleRow(index))
+    const secondPage = [makeBundleRow(50)]
     const versions = await getActiveAppVersions('test-key', 'com.test.app', {
       invoke: createInvokeStub({
         0: async () => ({ data: firstPage, error: null }),
-        1: async () => ({ data: null, error: makeCannotGetBundleError() }),
+        1: async () => ({ data: secondPage, error: null }),
       }),
     })
-    expect(versions).toHaveLength(50)
-    expect(versions[0]?.name).toBe('1.0.0')
-    expect(versions[49]?.name).toBe('1.0.49')
+    expect(versions).toHaveLength(51)
   })
 
   it('throws a permission message when cannot_get_bundle means access denied', async () => {
@@ -60,18 +55,52 @@ describe('fetchBundlePages empty-list EOF', () => {
     await expect(getActiveAppVersions('test-key', 'com.test.app', {
       invoke: createInvokeStub({
         0: async () => ({ data: firstPage, error: null }),
-        1: async () => ({ data: null, error: makeCannotAccessAppError() }),
+        1: async () => ({
+          data: null,
+          error: makeBundleApiError({ error: 'cannot_get_bundle', message: 'You can\'t access this app' }, 403),
+        }),
       }),
     })).rejects.toThrow(/Cannot list bundles/)
   })
 
-  it('throws a service error message for unrelated failures on later pages', async () => {
+  it('throws when the API returns 500 for a database failure', async () => {
     const firstPage = Array.from({ length: 50 }, (_, index) => makeBundleRow(index))
     await expect(getActiveAppVersions('test-key', 'com.test.app', {
       invoke: createInvokeStub({
         0: async () => ({ data: firstPage, error: null }),
-        1: async () => ({ data: null, error: makeCannotGetBundleError('Database unavailable', 503) }),
+        1: async () => ({
+          data: null,
+          error: makeBundleApiError({ error: 'cannot_get_bundle', message: 'Cannot get bundle' }, 500),
+        }),
       }),
-    })).rejects.toThrow(/Could not list bundles for app com\.test\.app: cannot_get_bundle \| Database unavailable/)
+    })).rejects.toThrow(/Could not list bundles for app com\.test\.app: cannot_get_bundle \| Cannot get bundle/)
+  })
+
+  it('throws CliUserError with upstream cause when the API returns 403', async () => {
+    const upstream = makeBundleApiError({ error: 'cannot_get_bundle', message: 'Access denied' }, 403)
+    try {
+      await getActiveAppVersions('test-key', 'com.test.app', {
+        invoke: createInvokeStub({
+          0: async () => ({ data: null, error: upstream }),
+        }),
+      })
+      throw new Error('expected rejection')
+    }
+    catch (error) {
+      expect(error).toBeInstanceOf(CliUserError)
+      expect((error as CliUserError).cause).toBe(upstream)
+      expect((error as Error).message).toMatch(/lacks the required permission/)
+    }
+  })
+
+  it('throws when the API returns 404 app_not_found', async () => {
+    await expect(getActiveAppVersions('test-key', 'com.test.app', {
+      invoke: createInvokeStub({
+        0: async () => ({
+          data: null,
+          error: makeBundleApiError({ error: 'app_not_found', message: 'App not found' }, 404),
+        }),
+      }),
+    })).rejects.toThrow(/App com\.test\.app not found in database/)
   })
 })

@@ -28,11 +28,6 @@ interface CapgoHttpOptions {
 
 const BUNDLE_PAGE_SIZE = 50
 
-async function isEmptyBundleListError(error: unknown) {
-  const payload = await readCapgoCliApiErrorPayload(error)
-  return payload?.error === 'cannot_get_bundle' && payload?.message === 'Cannot get bundle'
-}
-
 async function isBundleAccessDeniedError(error: unknown) {
   const status = getCapgoCliHttpStatus(error)
   const payload = await readCapgoCliApiErrorPayload(error)
@@ -50,18 +45,27 @@ async function throwBundleHttpInvokeError(
   silent: boolean,
   requiredPermissionKey: string,
 ): Promise<never> {
+  const details = await formatCapgoCliInvokeError(error)
+
   if (await isBundleAccessDeniedError(error)) {
-    const message = action === 'channels'
-      ? 'Cannot list channels. Check that your API key is valid and has app.read_channels permission for this app.'
+    const status = getCapgoCliHttpStatus(error)
+    const authHint = status === 401
+      ? 'Provide a valid API key (capgo login or CAPGO_API_KEY).'
+      : 'Your API key is valid but lacks the required permission for this app.'
+    const baseMessage = action === 'channels'
+      ? `Cannot list channels. ${authHint} Required permission: app.read_channels.`
       : action === 'delete'
-        ? `Cannot delete bundles for app ${appid}. Check that your API key is valid and has the required bundle permissions for this app.`
-        : `Cannot list bundles for app ${appid}. Check that your API key is valid and has app.read_bundles permission for this app.`
+        ? `Cannot delete bundles for app ${appid}. ${authHint} Required permission: app bundle delete permissions.`
+        : `Cannot list bundles for app ${appid}. ${authHint} Required permission: app.read_bundles.`
+    const message = `${baseMessage} (${details})`
     if (!silent)
       log.error(message)
-    throw new CliUserError(message, { appId: appid, requiredPermissionKey })
+    throw new CliUserError(
+      message,
+      { appId: appid, requiredPermissionKey, httpStatus: status },
+      error,
+    )
   }
-
-  const details = await formatCapgoCliInvokeError(error)
   const payload = await readCapgoCliApiErrorPayload(error)
   const status = getCapgoCliHttpStatus(error)
   if (status === 404 || payload?.error === 'app_not_found') {
@@ -98,11 +102,8 @@ async function fetchBundlePages(appid: string, options: CapgoHttpOptions & Pick<
         supaAnon: options.supaAnon,
       },
     )
-    if (error) {
-      if (await isEmptyBundleListError(error))
-        return all
+    if (error)
       await throwBundleHttpInvokeError(appid, error, 'list', !!options.silent, 'app.read_bundles')
-    }
     const batch = Array.isArray(data) ? data : []
     if (!batch.length)
       break

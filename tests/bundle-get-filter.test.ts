@@ -108,8 +108,8 @@ describe('[GET] /bundle version and id filters', () => {
 
   it.concurrent('rejects API key without access to the app', async () => {
     const { response, data } = await getBundles({ app_id: APP_A, version: VERSION_NAME }, deniedHeaders)
-    expect(response.status).toBe(400)
-    expect((data as { error: string }).error).toBe('cannot_get_bundle')
+    expect(response.status).toBe(404)
+    expect((data as { error: string }).error).toBe('app_not_found')
   })
 
   it.concurrent('keeps unpaginated list paging behavior unchanged', async () => {
