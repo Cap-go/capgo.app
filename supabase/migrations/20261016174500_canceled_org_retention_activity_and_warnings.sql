@@ -50,6 +50,15 @@ AS $$
       AND b.access_end IS NOT NULL
       AND av.created_at > b.access_end
     UNION ALL
+    SELECT av.updated_at
+    FROM public.app_versions AS av
+    CROSS JOIN billing AS b
+    WHERE av.owner_org = p_org_id
+      AND b.access_end IS NOT NULL
+      AND av.updated_at > b.access_end
+      AND av.updated_at > av.created_at
+      AND av.deleted = false
+    UNION ALL
     SELECT d.updated_at
     FROM public.devices AS d
     INNER JOIN public.apps AS a ON a.app_id = d.app_id
@@ -97,7 +106,7 @@ REVOKE ALL ON FUNCTION public.canceled_org_last_activity_at(uuid) FROM authentic
 GRANT ALL ON FUNCTION public.canceled_org_last_activity_at(uuid) TO service_role;
 
 COMMENT ON FUNCTION public.canceled_org_last_activity_at(uuid) IS
-  'Latest retention-relevant activity for an org: app/bundle creation, device updates, MAU, and usage-credit grants/consumption/transactions.';
+  'Latest retention-relevant activity for an org: app/bundle creation, post-access bundle writes (updated_at), device updates, MAU, and usage-credit grants/consumption/transactions.';
 
 CREATE OR REPLACE FUNCTION public.canceled_org_retention_anchor(p_org_id uuid)
 RETURNS timestamp with time zone
@@ -173,7 +182,7 @@ AS $$
         WHEN p_alert_type = 'app_deletion_warning' THEN 'org:apps_will_be_deleted'
         ELSE NULL::character varying
       END
-      AND n.uniq_id = public.canceled_org_retention_uniq_id(p_org_id, p_alert_type)
+      AND n.uniq_id LIKE public.canceled_org_retention_uniq_id(p_org_id, p_alert_type) || ':%'
       AND n.created_at <= pg_catalog.now() - make_interval(days => GREATEST(0, COALESCE(p_lead_days, 5)))
   );
 $$;
@@ -185,7 +194,7 @@ REVOKE ALL ON FUNCTION public.canceled_org_retention_warning_meets_lead_time(uui
 GRANT ALL ON FUNCTION public.canceled_org_retention_warning_meets_lead_time(uuid, text, integer) TO service_role;
 
 COMMENT ON FUNCTION public.canceled_org_retention_warning_meets_lead_time(uuid, text, integer) IS
-  'True when the retention warning for this org/alert cycle is recorded in notifications at least p_lead_days ago.';
+  'True when a per-recipient retention warning delivery claim exists for this org/alert cycle at least p_lead_days ago (excludes org-only no-recipient claims).';
 
 CREATE OR REPLACE FUNCTION public.canceled_org_ids_past_grace(p_days integer)
 RETURNS SETOF uuid
@@ -243,54 +252,62 @@ BEGIN
 
   FOR org_record IN
     SELECT
-      o.id AS org_id,
-      o.name AS org_name,
-      o.management_email,
-      public.canceled_org_retention_anchor(o.id) AS access_end,
-      COALESCE(
-        (
-          SELECT jsonb_agg(a.app_id ORDER BY a.app_id)
-          FROM public.apps AS a
-          WHERE a.owner_org = o.id
-        ),
-        '[]'::jsonb
-      ) AS app_ids
-    FROM public.stripe_info AS si
-    JOIN public.orgs AS o ON o.customer_id = si.customer_id
-    WHERE si.status IN ('canceled', 'deleted')
-      AND NOT COALESCE(o.has_usage_credits, false)
-      AND public.canceled_org_retention_anchor(o.id)
-        <= pg_catalog.now() - make_interval(days => v_min_days)
+      eligible.org_id,
+      eligible.org_name,
+      eligible.management_email,
+      eligible.access_end,
+      eligible.app_ids
+    FROM (
+      SELECT
+        o.id AS org_id,
+        o.name AS org_name,
+        o.management_email,
+        public.canceled_org_retention_anchor(o.id) AS access_end,
+        COALESCE(
+          (
+            SELECT jsonb_agg(a.app_id ORDER BY a.app_id)
+            FROM public.apps AS a
+            WHERE a.owner_org = o.id
+          ),
+          '[]'::jsonb
+        ) AS app_ids
+      FROM public.stripe_info AS si
+      JOIN public.orgs AS o ON o.customer_id = si.customer_id
+      WHERE si.status IN ('canceled', 'deleted')
+        AND NOT COALESCE(o.has_usage_credits, false)
+    ) AS eligible
+    WHERE eligible.access_end
+      <= pg_catalog.now() - make_interval(days => v_min_days)
       AND (
         CASE
           WHEN p_alert_type = 'bundles_deletion_warning' THEN EXISTS (
             SELECT 1
             FROM public.app_versions AS av
-            WHERE av.owner_org = o.id
+            WHERE av.owner_org = eligible.org_id
               AND av.deleted = false
               AND av.name NOT IN ('builtin', 'unknown')
           )
           ELSE EXISTS (
             SELECT 1
             FROM public.apps AS a
-            WHERE a.owner_org = o.id
+            WHERE a.owner_org = eligible.org_id
           )
         END
       )
       AND NOT EXISTS (
         SELECT 1
         FROM public.notifications AS n
-        WHERE n.owner_org = o.id
+        WHERE n.owner_org = eligible.org_id
           AND n.event = v_event
-          AND n.uniq_id = public.canceled_org_retention_uniq_id(o.id, p_alert_type)
+          AND n.uniq_id = public.canceled_org_retention_uniq_id(eligible.org_id, p_alert_type)
       )
       AND NOT EXISTS (
         SELECT 1
         FROM pgmq.q_canceled_org_retention_alerts AS q
-        WHERE q.message -> 'payload' ->> 'org_id' = o.id::text
+        WHERE q.message -> 'payload' ->> 'org_id' = eligible.org_id::text
           AND q.message -> 'payload' ->> 'alert_type' = p_alert_type
       )
-    ORDER BY o.id
+    ORDER BY eligible.org_id
     LIMIT v_batch_size
   LOOP
     v_days_until := GREATEST(
@@ -361,16 +378,20 @@ DECLARE
 BEGIN
   PERFORM set_config('capgo.seed_channel_targets', 'true', true);
 
-  WITH candidates AS (
+  WITH gated_orgs AS MATERIALIZED (
+    SELECT oid.id
+    FROM public.long_canceled_org_ids() AS oid(id)
+    WHERE public.canceled_org_retention_warning_meets_lead_time(
+      oid.id,
+      'bundles_deletion_warning',
+      5
+    )
+  ),
+  candidates AS (
     SELECT av.id, av.app_id
     FROM public.app_versions AS av
-    WHERE av.owner_org IN (SELECT public.long_canceled_org_ids())
-      AND public.canceled_org_retention_warning_meets_lead_time(
-        av.owner_org,
-        'bundles_deletion_warning',
-        5
-      )
-      AND av.deleted = false
+    INNER JOIN gated_orgs AS g ON g.id = av.owner_org
+    WHERE av.deleted = false
       AND av.name NOT IN ('builtin', 'unknown')
     ORDER BY av.id
     LIMIT v_batch_size
@@ -439,7 +460,16 @@ DECLARE
   v_batch_size integer := GREATEST(1, COALESCE(p_batch_size, 500));
   deleted_count bigint := 0;
 BEGIN
-  WITH candidates AS (
+  WITH gated_orgs AS MATERIALIZED (
+    SELECT oid.id
+    FROM public.canceled_org_ids_past_grace(95) AS oid(id)
+    WHERE public.canceled_org_retention_warning_meets_lead_time(
+      oid.id,
+      'app_deletion_warning',
+      5
+    )
+  ),
+  candidates AS (
     SELECT
       a.app_id,
       a.owner_org,
@@ -447,14 +477,9 @@ BEGIN
       a.created_at AS app_created_at,
       COALESCE(u.email::text, o.management_email) AS email
     FROM public.apps AS a
+    INNER JOIN gated_orgs AS g ON g.id = a.owner_org
     JOIN public.orgs AS o ON o.id = a.owner_org
     LEFT JOIN public.users AS u ON u.id = a.user_id
-    WHERE a.owner_org IN (SELECT public.canceled_org_ids_past_grace(95))
-      AND public.canceled_org_retention_warning_meets_lead_time(
-        a.owner_org,
-        'app_deletion_warning',
-        5
-      )
     ORDER BY a.app_id
     LIMIT v_batch_size
   ),
