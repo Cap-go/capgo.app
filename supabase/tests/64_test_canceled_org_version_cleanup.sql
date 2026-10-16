@@ -410,7 +410,9 @@ UNION ALL
 SELECT 970902, version_activity_app, '1.0.0', 'r2', version_activity_canceled_org, user_id, false FROM canceled_cleanup_ctx;
 
 UPDATE public.app_versions AS av
-SET created_at = backdates.created_at
+SET
+  created_at = backdates.created_at,
+  updated_at = backdates.created_at
 FROM (
   SELECT 970101::bigint AS id, pg_catalog.now() - interval '120 days' AS created_at
   UNION ALL SELECT 970102, pg_catalog.now() - interval '120 days'
