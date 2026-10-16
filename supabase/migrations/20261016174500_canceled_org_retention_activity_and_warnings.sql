@@ -173,9 +173,13 @@ STABLE
 SECURITY DEFINER
 SET search_path = ''
 AS $$
+  WITH k AS MATERIALIZED (
+    SELECT public.canceled_org_retention_uniq_id(p_org_id, p_alert_type) AS uid
+  )
   SELECT EXISTS (
     SELECT 1
     FROM public.notifications AS n
+    CROSS JOIN k
     WHERE n.owner_org = p_org_id
       AND n.event = CASE
         WHEN p_alert_type = 'bundles_deletion_warning' THEN 'org:bundles_will_be_deleted'
@@ -183,13 +187,10 @@ AS $$
         ELSE NULL::character varying
       END
       AND (
-        n.uniq_id = public.canceled_org_retention_uniq_id(p_org_id, p_alert_type)
+        n.uniq_id = k.uid
         OR (
-          pg_catalog.starts_with(
-            n.uniq_id,
-            public.canceled_org_retention_uniq_id(p_org_id, p_alert_type) || ':'
-          )
-          AND n.uniq_id <> public.canceled_org_retention_uniq_id(p_org_id, p_alert_type) || ':no_recipients'
+          pg_catalog.starts_with(n.uniq_id, k.uid || ':')
+          AND n.uniq_id <> k.uid || ':no_recipients'
         )
       )
       AND n.created_at <= pg_catalog.now() - make_interval(days => GREATEST(0, COALESCE(p_lead_days, 5)))
