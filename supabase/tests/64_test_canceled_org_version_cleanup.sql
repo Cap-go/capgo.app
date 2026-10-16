@@ -51,6 +51,39 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION pg_temp.backdate_canceled_cleanup_versions()
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  ALTER TABLE public.app_versions DISABLE TRIGGER handle_updated_at;
+
+  UPDATE public.app_versions AS av
+  SET
+    created_at = backdates.created_at,
+    updated_at = backdates.created_at
+  FROM (
+    SELECT 970101::bigint AS id, pg_catalog.now() - interval '120 days' AS created_at
+    UNION ALL SELECT 970102, pg_catalog.now() - interval '120 days'
+    UNION ALL SELECT 970103, pg_catalog.now() - interval '120 days'
+    UNION ALL SELECT 970201, pg_catalog.now() - interval '15 days'
+    UNION ALL SELECT 970301, pg_catalog.now() - interval '15 days'
+    UNION ALL SELECT 970401, pg_catalog.now() - interval '120 days'
+    UNION ALL SELECT 970501, pg_catalog.now() - interval '120 days'
+    UNION ALL SELECT 970601, pg_catalog.now() - interval '120 days'
+    UNION ALL SELECT 970701, pg_catalog.now() - interval '120 days'
+    UNION ALL SELECT 970801, pg_catalog.now() - interval '120 days'
+    UNION ALL SELECT 970901, pg_catalog.now() - interval '40 days'
+    UNION ALL SELECT 970902, pg_catalog.now() - interval '15 days'
+  ) AS backdates
+  WHERE av.id = backdates.id;
+
+  ALTER TABLE public.app_versions ENABLE TRIGGER handle_updated_at;
+END;
+$$;
+
 SELECT tests.authenticate_as_service_role();
 
 SELECT ok(
@@ -409,30 +442,7 @@ SELECT 970901, active_app, '1.0.0', 'r2', active_canceled_org, user_id, false FR
 UNION ALL
 SELECT 970902, version_activity_app, '1.0.0', 'r2', version_activity_canceled_org, user_id, false FROM canceled_cleanup_ctx;
 
--- moddatetime on app_versions overwrites updated_at on UPDATE.
-ALTER TABLE public.app_versions DISABLE TRIGGER handle_updated_at;
-
-UPDATE public.app_versions AS av
-SET
-  created_at = backdates.created_at,
-  updated_at = backdates.created_at
-FROM (
-  SELECT 970101::bigint AS id, pg_catalog.now() - interval '120 days' AS created_at
-  UNION ALL SELECT 970102, pg_catalog.now() - interval '120 days'
-  UNION ALL SELECT 970103, pg_catalog.now() - interval '120 days'
-  UNION ALL SELECT 970201, pg_catalog.now() - interval '15 days'
-  UNION ALL SELECT 970301, pg_catalog.now() - interval '15 days'
-  UNION ALL SELECT 970401, pg_catalog.now() - interval '120 days'
-  UNION ALL SELECT 970501, pg_catalog.now() - interval '120 days'
-  UNION ALL SELECT 970601, pg_catalog.now() - interval '120 days'
-  UNION ALL SELECT 970701, pg_catalog.now() - interval '120 days'
-  UNION ALL SELECT 970801, pg_catalog.now() - interval '120 days'
-  UNION ALL SELECT 970901, pg_catalog.now() - interval '40 days'
-  UNION ALL SELECT 970902, pg_catalog.now() - interval '15 days'
-) AS backdates
-WHERE av.id = backdates.id;
-
-ALTER TABLE public.app_versions ENABLE TRIGGER handle_updated_at;
+SELECT pg_temp.backdate_canceled_cleanup_versions();
 
 SELECT set_config('capgo.seed_channel_targets', 'true', true);
 
