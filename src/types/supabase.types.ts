@@ -707,6 +707,7 @@ export type Database = {
           last_error: string | null
           owner_org: string
           platform: string
+          queue_priority: number | null
           requested_by: string
           runner_wait_seconds: number
           started_at: string | null
@@ -731,6 +732,7 @@ export type Database = {
           last_error?: string | null
           owner_org: string
           platform: string
+          queue_priority?: number | null
           requested_by: string
           runner_wait_seconds?: number
           started_at?: string | null
@@ -755,6 +757,7 @@ export type Database = {
           last_error?: string | null
           owner_org?: string
           platform?: string
+          queue_priority?: number | null
           requested_by?: string
           runner_wait_seconds?: number
           started_at?: string | null
@@ -3058,6 +3061,7 @@ export type Database = {
           mau: number
           name: string
           native_build_concurrency: number
+          native_build_queue_priority: number
           price_m: number
           price_m_id: string
           price_y: number
@@ -3077,6 +3081,7 @@ export type Database = {
           mau?: number
           name?: string
           native_build_concurrency?: number
+          native_build_queue_priority?: number
           price_m?: number
           price_m_id: string
           price_y?: number
@@ -3096,6 +3101,7 @@ export type Database = {
           mau?: number
           name?: string
           native_build_concurrency?: number
+          native_build_queue_priority?: number
           price_m?: number
           price_m_id?: string
           price_y?: number
@@ -5019,6 +5025,7 @@ export type Database = {
           build_time_unit: number
           mau: number
           native_build_concurrency: number
+          native_build_queue_priority: number
           storage: number
         }[]
       }
