@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(48);
+SELECT plan(49);
 
 -- pgmq schema is not granted to service_role; use postgres-owned helpers.
 CREATE OR REPLACE FUNCTION pg_temp.delete_canceled_org_retention_alerts(
@@ -594,10 +594,19 @@ INSERT INTO public.notifications (owner_org, event, uniq_id, created_at, last_se
 SELECT
   long_canceled_org,
   'org:bundles_will_be_deleted',
-  public.canceled_org_retention_uniq_id(long_canceled_org, 'bundles_deletion_warning') || ':delivery',
+  public.canceled_org_retention_uniq_id(long_canceled_org, 'bundles_deletion_warning'),
   pg_catalog.now() - interval '10 days',
   pg_catalog.now() - interval '10 days'
 FROM canceled_cleanup_ctx;
+
+SELECT ok(
+  public.canceled_org_retention_warning_meets_lead_time(
+    (SELECT long_canceled_org FROM canceled_cleanup_ctx),
+    'bundles_deletion_warning',
+    5
+  ),
+  'seeded bundle delivery claim satisfies warning lead-time gate'
+);
 
 SELECT public.cleanup_long_canceled_org_data();
 
@@ -848,7 +857,7 @@ INSERT INTO public.notifications (owner_org, event, uniq_id, created_at, last_se
 SELECT
   ultra_canceled_org,
   'org:apps_will_be_deleted',
-  public.canceled_org_retention_uniq_id(ultra_canceled_org, 'app_deletion_warning') || ':delivery',
+  public.canceled_org_retention_uniq_id(ultra_canceled_org, 'app_deletion_warning'),
   pg_catalog.now() - interval '10 days',
   pg_catalog.now() - interval '10 days'
 FROM canceled_cleanup_ctx;

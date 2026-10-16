@@ -106,6 +106,18 @@ describe('canceled org retention cleanup', () => {
     )
     expect(Number(withoutWarning[0]?.delete_apps_for_long_canceled_orgs ?? 0)).toBe(0)
 
+    await executeSQL(
+      `INSERT INTO public.notifications (owner_org, event, uniq_id, created_at, last_send_at)
+       VALUES (
+         $1::uuid,
+         'org:apps_will_be_deleted',
+         public.canceled_org_retention_uniq_id($1::uuid, 'app_deletion_warning') || ':no_recipients',
+         now() - interval '10 days',
+         now() - interval '10 days'
+       )`,
+      [orgId],
+    )
+
     const noRecipientLead = await executeSQL<{ ok: boolean }>(
       `SELECT public.canceled_org_retention_warning_meets_lead_time($1::uuid, 'app_deletion_warning', 5) AS ok`,
       [orgId],
@@ -113,29 +125,16 @@ describe('canceled org retention cleanup', () => {
     expect(noRecipientLead[0]?.ok).toBe(false)
 
     await executeSQL(
-      `INSERT INTO public.notifications (owner_org, event, uniq_id, created_at, last_send_at)
-       VALUES (
-         $1::uuid,
-         'org:apps_will_be_deleted',
-         public.canceled_org_retention_uniq_id($1::uuid, 'app_deletion_warning'),
-         now() - interval '10 days',
-         now() - interval '10 days'
-       )`,
+      `DELETE FROM public.notifications WHERE owner_org = $1::uuid AND event = 'org:apps_will_be_deleted'`,
       [orgId],
     )
-
-    const orgOnlyLead = await executeSQL<{ ok: boolean }>(
-      `SELECT public.canceled_org_retention_warning_meets_lead_time($1::uuid, 'app_deletion_warning', 5) AS ok`,
-      [orgId],
-    )
-    expect(orgOnlyLead[0]?.ok).toBe(false)
 
     await executeSQL(
       `INSERT INTO public.notifications (owner_org, event, uniq_id, created_at, last_send_at)
        VALUES (
          $1::uuid,
          'org:apps_will_be_deleted',
-         public.canceled_org_retention_uniq_id($1::uuid, 'app_deletion_warning') || ':delivery',
+         public.canceled_org_retention_uniq_id($1::uuid, 'app_deletion_warning'),
          now() - interval '10 days',
          now() - interval '10 days'
        )`,

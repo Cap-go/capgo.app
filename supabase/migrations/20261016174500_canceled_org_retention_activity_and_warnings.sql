@@ -182,9 +182,15 @@ AS $$
         WHEN p_alert_type = 'app_deletion_warning' THEN 'org:apps_will_be_deleted'
         ELSE NULL::character varying
       END
-      AND pg_catalog.starts_with(
-        n.uniq_id,
-        public.canceled_org_retention_uniq_id(p_org_id, p_alert_type) || ':'
+      AND (
+        n.uniq_id = public.canceled_org_retention_uniq_id(p_org_id, p_alert_type)
+        OR (
+          pg_catalog.starts_with(
+            n.uniq_id,
+            public.canceled_org_retention_uniq_id(p_org_id, p_alert_type) || ':'
+          )
+          AND n.uniq_id <> public.canceled_org_retention_uniq_id(p_org_id, p_alert_type) || ':no_recipients'
+        )
       )
       AND n.created_at <= pg_catalog.now() - make_interval(days => GREATEST(0, COALESCE(p_lead_days, 5)))
   );
@@ -197,7 +203,7 @@ REVOKE ALL ON FUNCTION public.canceled_org_retention_warning_meets_lead_time(uui
 GRANT ALL ON FUNCTION public.canceled_org_retention_warning_meets_lead_time(uuid, text, integer) TO service_role;
 
 COMMENT ON FUNCTION public.canceled_org_retention_warning_meets_lead_time(uuid, text, integer) IS
-  'True when a per-recipient retention warning delivery claim exists for this org/alert cycle at least p_lead_days ago (excludes org-only no-recipient claims).';
+  'True when a delivered retention warning claim exists for this org/alert cycle at least p_lead_days ago (org-level claim after send, or recipient claim; excludes :no_recipients dedup rows).';
 
 CREATE OR REPLACE FUNCTION public.canceled_org_ids_past_grace(p_days integer)
 RETURNS SETOF uuid
