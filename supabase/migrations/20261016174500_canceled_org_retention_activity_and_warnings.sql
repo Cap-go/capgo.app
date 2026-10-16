@@ -182,7 +182,10 @@ AS $$
         WHEN p_alert_type = 'app_deletion_warning' THEN 'org:apps_will_be_deleted'
         ELSE NULL::character varying
       END
-      AND n.uniq_id LIKE public.canceled_org_retention_uniq_id(p_org_id, p_alert_type) || ':%'
+      AND pg_catalog.starts_with(
+        n.uniq_id,
+        public.canceled_org_retention_uniq_id(p_org_id, p_alert_type) || ':'
+      )
       AND n.created_at <= pg_catalog.now() - make_interval(days => GREATEST(0, COALESCE(p_lead_days, 5)))
   );
 $$;
