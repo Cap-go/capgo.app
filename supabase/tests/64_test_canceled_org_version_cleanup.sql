@@ -409,8 +409,8 @@ SELECT 970901, active_app, '1.0.0', 'r2', active_canceled_org, user_id, false FR
 UNION ALL
 SELECT 970902, version_activity_app, '1.0.0', 'r2', version_activity_canceled_org, user_id, false FROM canceled_cleanup_ctx;
 
--- moddatetime on app_versions overwrites updated_at on UPDATE; disable triggers while backdating.
-SET LOCAL session_replication_role = replica;
+-- moddatetime on app_versions overwrites updated_at on UPDATE.
+ALTER TABLE public.app_versions DISABLE TRIGGER handle_updated_at;
 
 UPDATE public.app_versions AS av
 SET
@@ -432,7 +432,7 @@ FROM (
 ) AS backdates
 WHERE av.id = backdates.id;
 
-SET LOCAL session_replication_role = DEFAULT;
+ALTER TABLE public.app_versions ENABLE TRIGGER handle_updated_at;
 
 SELECT set_config('capgo.seed_channel_targets', 'true', true);
 
