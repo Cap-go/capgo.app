@@ -5,7 +5,7 @@ const retryHeadMock = vi.fn()
 const createStatsBandwidthMock = vi.fn()
 const queryMock = vi.fn()
 const closeClientMock = vi.fn()
-const getPgClientMock = vi.fn(() => ({ query: queryMock }))
+const getPgClientMock = vi.fn(async () => ({ query: queryMock }))
 
 vi.mock('hono/adapter', async (importOriginal) => {
   const actual = await importOriginal<typeof import('hono/adapter')>()
@@ -18,6 +18,11 @@ vi.mock('hono/adapter', async (importOriginal) => {
 vi.mock('../supabase/functions/_backend/utils/discord.ts', () => ({
   sendDiscordAlert500: () => Promise.resolve(),
   sendDiscordAlert: () => Promise.resolve(),
+}))
+
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pg.ts', () => ({
+  closeClient: closeClientMock,
+  getPgClient: getPgClientMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({

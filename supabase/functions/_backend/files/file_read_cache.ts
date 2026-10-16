@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import { getRuntimeKey } from 'hono/adapter'
+import { closeClient, getPgClient } from '../plugin_runtime/utils/pg.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { getPgClient } from '../utils/pg.ts'
 
 export const FILE_READ_TRACKING_QUERY_PARAMS = ['device_id'] as const
 export const DELETED_FILE_CACHE_HEADER = 'x-capgo-file-deleted'
@@ -13,6 +13,11 @@ const FILE_READ_PATH_PREFIXES = [
   '/private/files/read/attachments/',
   '/read/attachments/',
 ] as const
+
+/** Fail-open quickly on primary blips; full zip download must not wait on 10s pool connect. */
+const DELETED_LOOKUP_TIMEOUT_MS = 2000
+const DELETED_LOOKUP_STATEMENT_TIMEOUT = `${DELETED_LOOKUP_TIMEOUT_MS}ms`
+const DELETED_LOOKUP_TIMEOUT_ERROR = 'deleted lookup timeout'
 
 export function isVersionDeleted(row: { deleted?: boolean | null, deleted_at?: string | Date | null } | null | undefined): boolean {
   if (!row)
@@ -119,20 +124,6 @@ export async function markFileDeletedInCache(fileId: string): Promise<void> {
   }))
 }
 
-// Workers forbid using I/O objects (sockets) created by another request: a
-// module-level pool shared across requests makes the second request hang until
-// the runtime cancels it. Reuse the pool only within the same request context.
-const deletedLookupPools = new WeakMap<Context, ReturnType<typeof getPgClient>>()
-
-function getDeletedLookupPgClient(c: Context): ReturnType<typeof getPgClient> {
-  let pool = deletedLookupPools.get(c)
-  if (!pool) {
-    pool = getPgClient(c, false)
-    deletedLookupPools.set(c, pool)
-  }
-  return pool
-}
-
 function buildFileReadCacheRequestsForPath(fileId: string, checksum?: string | null): Request[] {
   const identityParamSets: Array<Record<string, string>> = [{}]
   if (checksum)
@@ -185,29 +176,64 @@ export async function purgeFileReadCache(fileId: string, checksum?: string | nul
   await Promise.all(requests.map(request => cache.delete(request).catch(() => false)))
 }
 
-export async function isAttachmentVersionDeleted(c: Context, fileId: string): Promise<boolean> {
-  if (await hasDeletedFileMarker(fileId))
-    return true
+const attachmentDeletedLookupByRequest = new WeakMap<Context, Map<string, Promise<boolean>>>()
 
-  // app_versions.r2_path only tracks bundle zip objects, not arbitrary attachment uploads.
-  if (!fileId.endsWith('.zip'))
-    return false
+function raceWithDeadline<T>(deadlineMs: number, operation: Promise<T>): Promise<T> {
+  const remaining = Math.max(0, deadlineMs - Date.now())
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(DELETED_LOOKUP_TIMEOUT_ERROR)), remaining)
+  })
+  return Promise.race([operation, timeout]).finally(() => {
+    if (timer !== undefined)
+      clearTimeout(timer)
+  })
+}
 
+function closeLatePgClient(c: Context, clientPromise: Promise<Awaited<ReturnType<typeof getPgClient>>>) {
+  void clientPromise
+    .then((client) => {
+      closeClient(c, client)
+    })
+    .catch(() => {})
+}
+
+async function lookupAttachmentVersionDeletedFromPrimary(c: Context, fileId: string): Promise<boolean> {
+  const deadlineMs = Date.now() + DELETED_LOOKUP_TIMEOUT_MS
+  const clientPromise = getPgClient(c, false)
+  let pgClient: Awaited<ReturnType<typeof getPgClient>> | undefined
   try {
-    const pgClient = await getDeletedLookupPgClient(c)
-    const result = await pgClient.query<{ deleted: boolean | null, deleted_at: string | null }>(
-      `
-        SELECT deleted, deleted_at
-        FROM public.app_versions
-        WHERE r2_path = $1
-          AND (COALESCE(deleted, false) = true OR deleted_at IS NOT NULL)
-        LIMIT 1
-      `,
-      [fileId],
-    )
+    pgClient = await raceWithDeadline(deadlineMs, clientPromise)
+    const result = await raceWithDeadline(deadlineMs, (async () => {
+      await pgClient!.query('BEGIN')
+      try {
+        await pgClient!.query(
+          `SELECT pg_catalog.set_config('statement_timeout', $1, true)`,
+          [DELETED_LOOKUP_STATEMENT_TIMEOUT],
+        )
+        const queryResult = await pgClient!.query<{ deleted: boolean | null, deleted_at: string | null }>(
+          `
+          SELECT deleted, deleted_at
+          FROM public.app_versions
+          WHERE r2_path = $1
+            AND (COALESCE(deleted, false) = true OR deleted_at IS NOT NULL)
+          LIMIT 1
+        `,
+          [fileId],
+        )
+        await pgClient!.query('COMMIT')
+        return queryResult
+      }
+      catch (error) {
+        await pgClient!.query('ROLLBACK').catch(() => {})
+        throw error
+      }
+    })())
     return result.rows.length > 0
   }
   catch (error) {
+    if (!pgClient)
+      closeLatePgClient(c, clientPromise)
     cloudlog({
       requestId: c.get('requestId'),
       message: 'isAttachmentVersionDeleted lookup failed, failing open',
@@ -216,6 +242,32 @@ export async function isAttachmentVersionDeleted(c: Context, fileId: string): Pr
     })
     return false
   }
+  finally {
+    if (pgClient)
+      closeClient(c, pgClient)
+  }
+}
+
+export async function isAttachmentVersionDeleted(c: Context, fileId: string): Promise<boolean> {
+  if (await hasDeletedFileMarker(fileId))
+    return true
+
+  // app_versions.r2_path only tracks bundle zip objects, not arbitrary attachment uploads.
+  if (!fileId.endsWith('.zip'))
+    return false
+
+  let perRequest = attachmentDeletedLookupByRequest.get(c)
+  if (!perRequest) {
+    perRequest = new Map()
+    attachmentDeletedLookupByRequest.set(c, perRequest)
+  }
+
+  let pending = perRequest.get(fileId)
+  if (!pending) {
+    pending = lookupAttachmentVersionDeletedFromPrimary(c, fileId)
+    perRequest.set(fileId, pending)
+  }
+  return pending
 }
 
 export const fileReadCacheTestUtils = {
@@ -224,4 +276,5 @@ export const fileReadCacheTestUtils = {
   buildWorkersFileCacheKey,
   getAttachmentFileIdFromReadPath,
   isVersionDeleted,
+  DELETED_LOOKUP_TIMEOUT_MS,
 }
