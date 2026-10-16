@@ -75,10 +75,13 @@ function subscriptionUpdated(c: Context, event: Stripe.CustomerSubscriptionCreat
     ? String(currentLicensedItem.plan.product)
     : undefined as any
   if (event.type === 'customer.subscription.deleted') {
-    data.status = 'deleted'
+    data.status = 'canceled'
   }
   else if (subscription.status === 'past_due') {
     data.status = 'past_due'
+  }
+  else if (isTerminalSubscriptionFailureStatus(subscription.status)) {
+    data.status = 'canceled'
   }
   else if (event.type === 'customer.subscription.created') {
     data.status = 'created'
@@ -185,11 +188,95 @@ export function shouldStampTransferInvoiceFooter(
   return buildTransferInvoiceFooter(invoice.footer) !== null
 }
 
-function invoiceCreatedOrUpdated(event: Stripe.InvoiceCreatedEvent | Stripe.InvoiceUpdatedEvent, data: StripeData['data']) {
+function invoiceCreatedOrUpdated(event: Stripe.InvoiceCreatedEvent | Stripe.InvoiceUpdatedEvent | { data: { object: Stripe.Invoice } }, data: StripeData['data']) {
   const invoice = event.data.object
   data.status = 'updated'
   data.customer_id = getStripeCustomerId(invoice.customer)
   return data
+}
+
+export function isPaymentIntentSucceeded(
+  paymentIntent: Pick<Stripe.PaymentIntent, 'status'>,
+) {
+  return paymentIntent.status === 'succeeded'
+}
+
+export function isInvoicePaid(invoice: Pick<Stripe.Invoice, 'status'>) {
+  return invoice.status === 'paid'
+}
+
+export function isCheckoutSessionPaid(
+  session: Pick<Stripe.Checkout.Session, 'payment_status' | 'status'>,
+) {
+  if (session.payment_status !== 'paid')
+    return false
+
+  if (session.status && session.status !== 'complete')
+    return false
+
+  return true
+}
+
+export function isTerminalSubscriptionFailureStatus(
+  subscriptionStatus: Stripe.Subscription.Status,
+) {
+  return subscriptionStatus === 'canceled'
+    || subscriptionStatus === 'unpaid'
+    || subscriptionStatus === 'incomplete_expired'
+}
+
+function isSubscriptionInvoiceLine(line: Stripe.InvoiceLineItem) {
+  const typedLine = line as Stripe.InvoiceLineItem & {
+    parent?: {
+      subscription_item_details?: {
+        subscription?: string | null
+      } | null
+      type?: string | null
+    } | null
+    subscription?: string | null
+    subscription_item?: string | null
+    type?: string | null
+  }
+
+  return typedLine.type === 'subscription'
+    || !!typedLine.subscription
+    || !!typedLine.subscription_item
+    || typedLine.parent?.type === 'subscription_item_details'
+    || !!typedLine.parent?.subscription_item_details?.subscription
+}
+
+function getLicensedInvoiceLine(invoice: Stripe.Invoice) {
+  const lines = invoice.lines?.data ?? []
+  const subscriptionLines = lines.filter(isSubscriptionInvoiceLine)
+  if (subscriptionLines.length === 0)
+    return undefined
+
+  const positiveAmountLine = subscriptionLines.find((line) => {
+    const amount = (line as { amount?: number | null }).amount
+    return typeof amount !== 'number' || amount > 0
+  })
+
+  return positiveAmountLine ?? subscriptionLines[0]
+}
+
+function applyInvoiceLineFields(invoice: Stripe.Invoice, data: StripeData['data']) {
+  data.customer_id = getStripeCustomerId(invoice.customer)
+
+  const line = getLicensedInvoiceLine(invoice)
+  if (!line)
+    return
+
+  const subscriptionId = line.parent?.subscription_item_details?.subscription
+  if (typeof subscriptionId === 'string')
+    data.subscription_id = subscriptionId
+
+  const priceId = line.pricing?.price_details?.price
+  if (priceId)
+    data.price_id = typeof priceId === 'string' ? priceId : priceId.id
+
+  const productId = line.pricing?.price_details?.product
+  if (productId)
+    data.product_id = String(productId)
 }
 
 export function getStripeCustomerId(
@@ -252,7 +339,7 @@ export function extractDataEvent(c: Context, event: Stripe.Event): StripeData {
   else if (event.type === 'invoice.upcoming') {
     data = invoiceUpcoming(event, data)
   }
-  else if (event.type === 'invoice.created' || event.type === 'invoice.updated') {
+  else if (event.type === 'invoice.created' || event.type === 'invoice.updated' || event.type === 'invoice.finalized') {
     data = invoiceCreatedOrUpdated(event, data)
   }
   else if (event.type === 'invoice.payment_action_required') {
@@ -263,12 +350,54 @@ export function extractDataEvent(c: Context, event: Stripe.Event): StripeData {
   else if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
     const session = event.data.object as Stripe.Checkout.Session
     data.customer_id = getStripeCustomerId(session.customer)
-    data.status = 'succeeded'
+    data.status = event.type === 'checkout.session.async_payment_succeeded' || isCheckoutSessionPaid(session)
+      ? 'succeeded'
+      : 'updated'
   }
   else if (event.type === 'payment_intent.succeeded') {
     const paymentIntent = event.data.object as Stripe.PaymentIntent
     data.customer_id = getStripeCustomerId(paymentIntent.customer)
-    data.status = 'succeeded'
+    data.status = isPaymentIntentSucceeded(paymentIntent) ? 'succeeded' : 'updated'
+  }
+  else if (event.type === 'payment_intent.processing') {
+    const paymentIntent = event.data.object as Stripe.PaymentIntent
+    data.customer_id = getStripeCustomerId(paymentIntent.customer)
+    data.status = 'updated'
+  }
+  else if (event.type === 'payment_intent.payment_failed') {
+    const paymentIntent = event.data.object as Stripe.PaymentIntent
+    data.customer_id = getStripeCustomerId(paymentIntent.customer)
+    data.status = 'failed'
+  }
+  else if (event.type === 'invoice.paid' || event.type === 'invoice.payment_succeeded') {
+    const invoice = event.data.object as Stripe.Invoice
+    applyInvoiceLineFields(invoice, data)
+    data.status = isInvoicePaid(invoice) ? 'succeeded' : 'updated'
+  }
+  else if (event.type === 'invoice.payment_failed') {
+    const invoice = event.data.object as Stripe.Invoice
+    applyInvoiceLineFields(invoice, data)
+    data.status = 'failed'
+  }
+  else if (event.type === 'invoice.marked_uncollectible') {
+    const invoice = event.data.object as Stripe.Invoice
+    applyInvoiceLineFields(invoice, data)
+    data.status = 'canceled'
+  }
+  else if (event.type === 'charge.pending') {
+    const charge = event.data.object
+    data.status = 'updated'
+    data.customer_id = getStripeCustomerId(charge.customer)
+  }
+  else if (event.type === 'setup_intent.succeeded') {
+    const setupIntent = event.data.object as Stripe.SetupIntent
+    data.customer_id = getStripeCustomerId(setupIntent.customer)
+    data.status = 'updated'
+  }
+  else if (event.type === 'payment_method.attached') {
+    const paymentMethod = event.data.object as Stripe.PaymentMethod
+    data.customer_id = getStripeCustomerId(paymentMethod.customer)
+    data.status = 'updated'
   }
   else if (event.type === 'customer.updated' || event.type === 'customer.created') {
     const customer = event.data.object as Stripe.Customer
