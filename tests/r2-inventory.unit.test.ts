@@ -117,15 +117,16 @@ describe('r2 inventory queue', () => {
   it('preserves production queue bindings, batching, concurrency and the five-delivery budget', () => {
     const wrangler = JSON.parse(readFileSync(new URL('../cloudflare_workers/r2_inventory/wrangler.jsonc', import.meta.url), 'utf8'))
     expect(wrangler.env.prod.queues.producers).toEqual([
-      { binding: 'EVENT_QUEUE', queue: 'capgo-r2-inventory-prod' },
       { binding: 'CLEANUP_QUEUE', queue: 'capgo-r2-inventory-prod-cleanup' },
       { binding: 'REPAIR_QUEUE', queue: 'capgo-r2-inventory-prod-repair' },
       { binding: 'EVENT_DLQ', queue: 'capgo-r2-inventory-prod-dlq' },
       { binding: 'REPAIR_DLQ', queue: 'capgo-r2-inventory-prod-repair-dlq' },
+      { binding: 'CLEANUP_DLQ', queue: 'capgo-r2-inventory-prod-cleanup-dlq' },
     ])
     expect(wrangler.env.prod.queues.consumers).toEqual([
       { queue: 'capgo-r2-inventory-prod', max_batch_size: 100, max_batch_timeout: 10, max_concurrency: 1, max_retries: 4, dead_letter_queue: 'capgo-r2-inventory-prod-dlq' },
       { queue: 'capgo-r2-inventory-prod-repair', max_batch_size: 10, max_batch_timeout: 10, max_concurrency: 1, max_retries: 4, dead_letter_queue: 'capgo-r2-inventory-prod-repair-dlq' },
+      { queue: 'capgo-r2-inventory-prod-cleanup', max_batch_size: 100, max_batch_timeout: 10, max_concurrency: 5, max_retries: 2, retry_delay: 30, dead_letter_queue: 'capgo-r2-inventory-prod-cleanup-dlq' },
     ])
   })
 

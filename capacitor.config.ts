@@ -7,6 +7,18 @@ const config: CapacitorConfig = {
   appName: 'Capgo',
   webDir: 'dist',
   plugins: {
+    SocialLogin: {
+      logLevel: 0,
+      providers: {
+        apple: true,
+        google: false,
+        facebook: false,
+        twitter: false,
+        telegram: false,
+        linkedin: false,
+        tiktok: false,
+      },
+    },
     PushNotifications: {
       presentationOptions: [
         'badge',

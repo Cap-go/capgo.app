@@ -34,8 +34,13 @@ function getLocalSupabaseCli(repoRoot: string): string | null {
  *
  * Prefer the repo-local binary to avoid shelling out through `bunx` on every command.
  * Fall back to a globally installed `supabase` binary when present.
+ * `SUPABASE_CLI_BIN` forces a specific binary (CI sets it while `bun install` runs in parallel,
+ * so a half-extracted node_modules binary is never picked up).
  */
 function getSupabaseCmd(repoRoot: string): SupabaseCmd {
+  if (process.env.SUPABASE_CLI_BIN)
+    return { cmd: process.env.SUPABASE_CLI_BIN, argsPrefix: [] }
+
   const localBin = getLocalSupabaseCli(repoRoot)
   if (localBin)
     return { cmd: localBin, argsPrefix: [] }

@@ -13,14 +13,14 @@ export const app = new Hono<MiddlewareKeyVariables>()
 app.post('/', middlewareAPISecret, triggerValidator('users', 'UPDATE'), async (c) => {
   const record = c.get('webhookBody') as Database['public']['Tables']['users']['Row']
   const oldRecord = c.get('oldRecord') as Database['public']['Tables']['users']['Row'] | undefined
-  cloudlog({ requestId: c.get('requestId'), message: 'record', record })
+  cloudlog({ requestId: c.get('requestId'), message: 'user updated', userId: record.id })
   if (!record.email) {
     cloudlog({ requestId: c.get('requestId'), message: 'No email' })
     return c.json(BRES)
   }
   if (!record.id) {
     cloudlog({ requestId: c.get('requestId'), message: 'No id' })
-    throw simpleError('no_id', 'No id', { record })
+    throw simpleError('no_id', 'No id')
   }
 
   const newEmail = normalizeBentoEmail(record.email)

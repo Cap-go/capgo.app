@@ -4,7 +4,7 @@ import PackageDescription
 // DO NOT MODIFY THIS FILE - managed by Capacitor CLI commands
 let package = Package(
     name: "CapApp-SPM",
-    platforms: [.iOS(.v15)],
+    platforms: [.iOS(.v16)],
     products: [
         .library(
             name: "CapApp-SPM",
@@ -111,6 +111,7 @@ let package = Package(
         .package(name: "CapgoCapacitorScreenRecorder", path: "../../../node_modules/@capgo/capacitor-screen-recorder"),
         .package(name: "CapgoCapacitorShake", path: "../../../node_modules/@capgo/capacitor-shake"),
         .package(name: "CapgoCapacitorSim", path: "../../../node_modules/@capgo/capacitor-sim"),
+        .package(name: "CapgoCapacitorSocialLogin", path: "../../../node_modules/@capgo/capacitor-social-login"),
         .package(name: "CapgoCapacitorSpeechRecognition", path: "../../../node_modules/@capgo/capacitor-speech-recognition"),
         .package(name: "CapgoCapacitorSpeechSynthesis", path: "../../../node_modules/@capgo/capacitor-speech-synthesis"),
         .package(name: "CapgoCapacitorSupabase", path: "../../../node_modules/@capgo/capacitor-supabase"),
@@ -234,6 +235,7 @@ let package = Package(
                 .product(name: "CapgoCapacitorScreenRecorder", package: "CapgoCapacitorScreenRecorder"),
                 .product(name: "CapgoCapacitorShake", package: "CapgoCapacitorShake"),
                 .product(name: "CapgoCapacitorSim", package: "CapgoCapacitorSim"),
+                .product(name: "CapgoCapacitorSocialLogin", package: "CapgoCapacitorSocialLogin"),
                 .product(name: "CapgoCapacitorSpeechRecognition", package: "CapgoCapacitorSpeechRecognition"),
                 .product(name: "CapgoCapacitorSpeechSynthesis", package: "CapgoCapacitorSpeechSynthesis"),
                 .product(name: "CapgoCapacitorSupabase", package: "CapgoCapacitorSupabase"),

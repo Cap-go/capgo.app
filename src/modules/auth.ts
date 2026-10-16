@@ -49,7 +49,7 @@ async function updateUser(
           last_name: main.auth.user_metadata?.last_name ?? '',
           country: null,
           enable_notifications: true,
-          opt_for_newsletters: true,
+          opt_for_newsletters: false,
         })
         .select()
         .single()

@@ -13,14 +13,13 @@ function fixture() {
   })
   const source = client(sourceRow())
   const inventory = client(destinationRow())
-  const queues = Array.from({ length: 5 }, () => ({ metrics: vi.fn().mockResolvedValue({ backlogCount: 0, backlogBytes: 0 }) }))
-  const run = () => checkCleanupHealth(source as never, inventory as never, 'synthetic', queues)
-  return { source, inventory, queues, run }
+  const run = () => checkCleanupHealth(source as never, inventory as never, 'synthetic')
+  return { source, inventory, run }
 }
 afterEach(() => vi.useRealTimers())
 
 describe('direct cleanup health', () => {
-  it('starts both connections and all queue reads concurrently, then publishes the direct result', async () => {
+  it('starts both database checks concurrently, then persists the direct result', async () => {
     const f = fixture()
     let connect: () => void = () => {}
     f.source.connect.mockImplementation(() => new Promise<void>((resolve) => {
@@ -30,11 +29,10 @@ describe('direct cleanup health', () => {
     await vi.waitFor(() => expect(f.inventory.query).toHaveBeenCalledWith(expect.objectContaining({ text: 'commit' }), []))
     expect(f.source.connect).toHaveBeenCalledOnce()
     expect(f.inventory.connect).toHaveBeenCalledOnce()
-    expect(f.queues.every(queue => queue.metrics.mock.calls.length === 1)).toBe(true)
     expect(f.inventory.query.mock.calls.some(([sql]) => queryText(sql).startsWith('INSERT'))).toBe(false)
     connect()
     const result = await checking
-    expect(result.healthy).toBe(true)
+    expect(result).toMatchObject({ schemaVersion: 3, healthy: true, manifestReplicationHealthy: true, reasons: [] })
     requireCleanupHealth(result)
     const publish = f.inventory.query.mock.calls.find(([sql]) => queryText(sql).startsWith('INSERT')) as unknown as [string, string[]]
     expect(publish[0]).toContain('\'cleanup_health\'')
@@ -88,16 +86,6 @@ describe('direct cleanup health', () => {
     expect(replicationHealthy(sourceRow(), undefined)).toBe(false)
   })
 
-  it.each([0, 1, 2, 3, 4])('publishes unhealthy queue evidence %s and returns false', async (index) => {
-    const f = fixture()
-    f.queues[index].metrics.mockResolvedValue({ backlogCount: index === 4 ? 10_000 : 1, backlogBytes: 10 })
-    const result = await f.run()
-    expect(result.healthy).toBe(index === 4)
-    expect(result.producerReady).toBe(false)
-    expect(result.reasons.length).toBeGreaterThan(0)
-    expect(f.inventory.query.mock.calls.some(([sql]) => queryText(sql).startsWith('INSERT'))).toBe(true)
-  })
-
   it('fails closed for permission failures and writes negative evidence when inventory is available', async () => {
     const f = fixture()
     const normal = f.source.query.getMockImplementation()!
@@ -130,7 +118,7 @@ describe('direct cleanup health', () => {
     expect(result.reasons).toContain('health_query_or_write_failed')
   })
 
-  it.each(['connection', 'read_setup', 'query', 'read_commit', 'write', 'write_commit', 'queue'])('bounds the entire %s operation to five seconds and prevents late continuation', async (phase) => {
+  it.each(['connection', 'read_setup', 'query', 'read_commit', 'write', 'write_commit'])('bounds the entire %s operation to five seconds and prevents late continuation', async (phase) => {
     vi.useFakeTimers()
     const f = fixture()
     let finish: (value: any) => void = () => {}
@@ -144,8 +132,6 @@ describe('direct cleanup health', () => {
       const target = phase === 'query' ? SOURCE_HEALTH_SQL : phase === 'read_commit' ? 'commit' : 'SET LOCAL statement_timeout = \'3s\''
       f.source.query.mockImplementation(input => queryText(input) === target ? stalled : normal(input))
     }
-    if (phase === 'queue')
-      f.queues[0].metrics.mockImplementation(() => stalled)
     if (phase === 'write') {
       const normal = f.inventory.query.getMockImplementation()!
       f.inventory.query.mockImplementation(text => queryText(text).startsWith('INSERT') ? stalled : normal(text))

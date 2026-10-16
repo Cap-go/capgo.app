@@ -2,7 +2,7 @@
 
 Merge the schema PR first, then the queue consumer, then the historical scanner. This inventory rollout does not enable physical object cleanup or change published CLI behavior.
 
-The production inventory Worker's minute cleanup producer checks live health,
+The production inventory Worker's minute cleanup producer checks manifest replication health,
 persists consumer evidence, and retires/enqueues eligible objects. Stable release
 deployment provisions its producer-only cleanup queue. See [R2 cleanup producer](r2-cleanup-producer.md)
 for the transaction/queue contract and separate physical deletion consumer rollout.
@@ -152,8 +152,13 @@ instead of treating a successful write as fresh local-clock evidence.
 Finalization verifies every receipt before inventory or primary manifest writes. It
 locks/evaluates at most 500 keys per SQL statement in one bounded Drizzle transaction
 (up to the existing 10,000-file manifest limit), then releases the connection before
-the existing primary manifest transaction. Missing v2 rows require evidence newer
-than the retained admission floor. Deleted/pending rows reject contradictory,
+the existing primary manifest transaction. V2 receipts require an existing,
+non-null reservation that is strictly unexpired at renewal. The conditional update
+checks the database clock after taking row locks and extends the lease in that
+same statement; missing, null or expired reservations reject the whole manifest
+with a conflict before primary writes. Receipts cannot recreate expired placeholders.
+Upload notifications preserve existing reservation expiry exactly, including expired
+leases. Deleted/pending rows reject contradictory,
 equal or ambiguous evidence; deleted rows require a boundary clearly newer than
 both event and reconciliation history. A five-second safety band covers event/local
 clock ambiguity and sub-millisecond database precision. Present rows ignore stale

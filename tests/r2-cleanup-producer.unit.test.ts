@@ -15,7 +15,7 @@ describe('cleanup producer boundaries', () => {
     expect(config.env.prod.triggers.crons).toEqual(['* * * * *'])
     expect(config.triggers).toBeUndefined()
     expect(config.env.prod.queues.producers).toContainEqual({ binding: 'CLEANUP_QUEUE', queue: 'capgo-r2-inventory-prod-cleanup' })
-    expect(config.env.prod.queues.consumers.some((q: { queue: string }) => q.queue.endsWith('-cleanup'))).toBe(false)
+    expect(config.env.prod.queues.consumers.some((q: { queue: string }) => q.queue.endsWith('-cleanup'))).toBe(true)
   })
 
   it('splits by count and encoded bytes including escaped/multibyte keys, preserving exact retirement identity', () => {

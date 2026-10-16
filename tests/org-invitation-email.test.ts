@@ -65,6 +65,7 @@ async function createFixture(kind: Kind) {
     send,
     post,
     cleanup: async () => {
+      await executeSQL('DELETE FROM public.bento_event_dispatches WHERE context_key = ANY($1)', [generations])
       await executeSQL('DELETE FROM public.orgs WHERE id = $1', [orgId])
       await executeSQL(`DELETE FROM pgmq.q_send_email WHERE message->'payload'->>'org_invitation_id' = ANY($1)`, [generations])
     },
@@ -88,6 +89,18 @@ describe.each(['new', 'existing'] as const)('%s-account invitation delivery with
         : `/dashboard?invite_org=${fixture.orgId}`)
       const sent = await fixture.state()
       expect(sent.sent_at).not.toBeNull()
+      const facts = await executeSQL<{ tag: string, status: string, details: { kind: string, invitationId: number }, pending_audit: unknown[] }>(
+        'SELECT tag, status, details, pending_audit FROM public.bento_event_dispatches WHERE context_key = $1',
+        [sent.id],
+      )
+      expect(facts).toHaveLength(1)
+      expect(facts[0]).toMatchObject({ tag: 'flow:started', status: 'recorded', details: { kind, invitationId: String(fixture.inviteId) } })
+      expect(facts[0]!.pending_audit).toHaveLength(1)
+      const [timing] = await executeSQL<{ exact: boolean }>(`SELECT d.event_at = r.sent_at AS exact
+        FROM public.bento_event_dispatches d JOIN public.org_invitation_email_requests r ON r.id::text = d.context_key
+        WHERE r.id = $1`, [sent.id])
+      expect(timing!.exact).toBe(true)
+      expect(JSON.stringify(facts)).not.toContain('invite_magic_string')
       expect(sent.message_id).toBe(`message-${fixture.orgId}`)
     }
     finally {

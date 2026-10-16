@@ -30,6 +30,11 @@ describe('supabase config merging', () => {
     expect(merged.stripeEnabled).toBe(false)
   })
 
+  it.concurrent('ignores obsolete remote Apple UI values', () => {
+    const remote = { nativeAppleLoginEnabled: true }
+    expect(mergeRemoteConfig(localConfig, remote as Partial<CapgoConfig>)).not.toHaveProperty('nativeAppleLoginEnabled')
+  })
+
   it.concurrent('falls back to local values when remote config omits optional fields', () => {
     const merged = mergeRemoteConfig(localConfig, {})
 

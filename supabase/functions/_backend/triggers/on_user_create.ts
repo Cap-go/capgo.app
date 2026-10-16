@@ -23,7 +23,7 @@ async function getRegistrationMetadata(c: Context, userId: string) {
 
 app.post('/', middlewareAPISecret, triggerValidator('users', 'INSERT'), async (c) => {
   const record = c.get('webhookBody') as Database['public']['Tables']['users']['Row']
-  cloudlog({ requestId: c.get('requestId'), message: 'record', record })
+  cloudlog({ requestId: c.get('requestId'), message: 'user created', userId: record.id })
   // Configured Bento failures deliberately fail this queue message. Its
   // lifecycle tag writes are idempotent, and retrying avoids silently losing
   // the only recovery enrollment for a newly registered user.

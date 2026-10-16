@@ -13,7 +13,7 @@ function render(source: string, details: Record<string, string>, escape: (value:
   })
 }
 
-function escapeHtml(value: string) {
+export function escapeHtml(value: string) {
   return value.replace(/[&<>"']/g, char => ({
     '&': '&amp;',
     '<': '&lt;',

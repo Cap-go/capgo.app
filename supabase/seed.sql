@@ -1895,6 +1895,9 @@ BEGIN
   WHERE day.ts = pg_catalog.date_trunc('day', GREATEST(d.first_seen, pg_catalog.now() - interval '60 days'))
     OR day.ts = pg_catalog.date_trunc('day', d.last_seen)
     OR ((pg_catalog.hashtext(d.device_id || ':active:' || day.ts::text) & 2147483647)::float8 / 2147483647.0) < d.p_active;
+  -- On a fresh database device_usage has no planner stats, and the device_usage joins below
+  -- pick a nested loop that takes ~20s instead of ~0.3s.
+  ANALYZE public.device_usage;
 
   -- version_usage: install / uninstall per transition (+ a failed first attempt for ~1.5%)
   INSERT INTO public.version_usage (timestamp, app_id, version_id, version_name, action, channel_name, channel_id)

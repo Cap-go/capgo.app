@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ensureR2InventoryQueues, INVENTORY_RETENTION_SECONDS } from '../scripts/ensure-r2-inventory-queues.ts'
 import { createQueueApi } from '../scripts/lib/posthog-queues.ts'
 
-const names = () => ['', '-dlq', '-repair', '-repair-dlq', '-cleanup'].map(suffix => `capgo-r2-inventory-prod${suffix}`)
+const names = () => ['', '-dlq', '-repair', '-repair-dlq', '-cleanup', '-cleanup-dlq'].map(suffix => `capgo-r2-inventory-prod${suffix}`)
 function fixtures(): QueueInfo[] {
   return names().map((queue_name, index) => ({ queue_id: `queue-${index}`, queue_name, settings: { message_retention_period: INVENTORY_RETENTION_SECONDS } }))
 }
@@ -72,8 +72,8 @@ describe('r2 inventory deployment queue provisioning', () => {
     expect([...queues.values()].map(queue => queue.queue_name)).toEqual(names())
     expect([...queues.values()].every(queue => queue.settings?.message_retention_period === 345600)).toBe(true)
     expect(requests.filter(request => request.method === 'POST').map(request => request.body.queue_name)).toEqual(names())
-    expect(requests.filter(request => request.path && request.method === 'GET')).toHaveLength(10)
-    expect(console.log).toHaveBeenCalledTimes(5)
+    expect(requests.filter(request => request.path && request.method === 'GET')).toHaveLength(12)
+    expect(console.log).toHaveBeenCalledTimes(6)
     requests.length = 0
     await ensureR2InventoryQueues(createQueueApi(), 'prod')
     expect(requests.every(request => request.method === 'GET')).toBe(true)
@@ -113,8 +113,8 @@ describe('r2 inventory deployment queue provisioning', () => {
   it.each([{ createError: true }, { lostCreateResponse: true }])('recovers an uncertain create only after discovering and verifying the exact queue: %j', async (options) => {
     const { requests } = cloudflare([], options)
     await ensureR2InventoryQueues(createQueueApi(), 'prod')
-    expect(requests.filter(request => request.method === 'POST')).toHaveLength(5)
-    expect(console.log).toHaveBeenCalledTimes(5)
+    expect(requests.filter(request => request.method === 'POST')).toHaveLength(6)
+    expect(console.log).toHaveBeenCalledTimes(6)
   })
 
   it('does not treat a failed create as success when the queue remains absent', async () => {

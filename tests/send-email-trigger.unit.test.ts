@@ -63,9 +63,14 @@ const signupEvent = {
 
 const orgInvitationId = 'bacf009d-fbdc-40a0-9190-ec3e2dcf5e01'
 const orgId = '984c9e7d-797a-4c6e-a2ea-b78dbebf1d78'
+const recipientUserId = 'c72447f3-0498-4d55-8a95-464e2c4b804f'
+const providerAcceptedAt = '2026-10-03 10:00:00.234567+00'
+const tokenCreatedAt = '2026-10-01 10:00:00.123456+00'
 const invitation = {
   id: orgInvitationId,
   org_id: orgId,
+  recipient_user_id: null as string | null,
+  token_created_at: tokenCreatedAt as string | null,
   org_user_id: null as number | null,
   tmp_user_id: 42 as number | null,
   sent_at: null as string | null,
@@ -79,9 +84,13 @@ const invitation = {
 }
 
 function mockInvitation(overrides: Partial<typeof invitation> = {}) {
-  queryMock.mockImplementation(async (query: string) => ({
-    rows: query.includes('FROM public.org_invitation_email_requests') ? [{ ...invitation, ...overrides }] : [],
-  }))
+  queryMock.mockImplementation(async (query: string) => {
+    if (query.includes('FROM public.org_invitation_email_requests'))
+      return { rows: [{ ...invitation, ...overrides }] }
+    if (query.includes('UPDATE public.org_invitation_email_requests'))
+      return { rows: [{ sent_at: providerAcceptedAt }], rowCount: 1 }
+    return { rows: [], rowCount: 1 }
+  })
 }
 
 function postSendEmail(body: unknown, withBinding = true) {
@@ -114,6 +123,34 @@ describe('send_email queue handler', () => {
     expect(content.text).toContain('Pat Admin')
     expect(content.text).toContain('valid for seven days')
     expect(queryMock).toHaveBeenCalledWith(expect.stringContaining('UPDATE public.org_invitation_email_requests'), [orgInvitationId, 'message-id'])
+    const factCall = queryMock.mock.calls.find(([query]) => query.includes('INSERT INTO public.bento_event_dispatches'))!
+    expect(factCall[1]).toEqual([
+      'org:invitation',
+      orgInvitationId,
+      'email:invitee@example.com',
+      'invitee@example.com',
+      'flow:started',
+      providerAcceptedAt,
+      expect.any(String),
+      null,
+      expect.any(String),
+      expect.any(String),
+    ])
+    expect(JSON.parse(factCall[1][6])).toEqual({
+      kind: 'new',
+      orgId,
+      invitationId: '42',
+      userId: null,
+      generation: orgInvitationId,
+      tokenCreatedAt,
+    })
+    const [audit] = JSON.parse(factCall[1][8])
+    expect(audit.request_id).toBe(orgInvitationId)
+    expect(audit.payload.nonPersonTags).toMatchObject({ dispatch_id: factCall[1][9], context_key: orgInvitationId, reason: 'initial_provider_accepted' })
+    expect(JSON.stringify(factCall)).not.toContain('secret-invite-token')
+    const sqlCalls = queryMock.mock.calls.map(([query]) => query)
+    expect(sqlCalls.findIndex(query => query.includes('UPDATE public.org_invitation_email_requests'))).toBeLessThan(sqlCalls.indexOf(factCall[0]))
+    expect(sqlCalls.indexOf(factCall[0])).toBeLessThan(sqlCalls.indexOf('COMMIT'))
     expect(JSON.stringify(logMock.mock.calls)).toContain('message-id')
     expect(JSON.stringify(logMock.mock.calls)).not.toContain('secret-invite-token')
     expect(JSON.stringify(logMock.mock.calls)).not.toContain('invitee@example.com')
@@ -135,7 +172,7 @@ describe('send_email queue handler', () => {
   })
 
   it('sends an existing-account organization invite with its existing subject and dashboard link', async () => {
-    mockInvitation({ org_user_id: 24, tmp_user_id: null })
+    mockInvitation({ org_user_id: 24, tmp_user_id: null, recipient_user_id: recipientUserId, token_created_at: null })
     const response = await postSendEmail({ org_invitation_id: orgInvitationId })
     expect(response.status).toBe(200)
     expect(sendMock).toHaveBeenCalledWith(expect.objectContaining({
@@ -145,6 +182,17 @@ describe('send_email queue handler', () => {
     expect(content.html).toContain(`/dashboard?invite_org=${orgId}`)
     expect(content.text).toContain('with your existing account')
     expect(content.text).not.toContain('secret-invite-token')
+    const factCall = queryMock.mock.calls.find(([query]) => query.includes('INSERT INTO public.bento_event_dispatches'))!
+    expect(factCall[1][2]).toBe(`user:${recipientUserId}`)
+    expect(factCall[1][5]).toBe(providerAcceptedAt)
+    expect(JSON.parse(factCall[1][6])).toEqual({
+      kind: 'existing',
+      orgId,
+      invitationId: '24',
+      userId: recipientUserId,
+      generation: orgInvitationId,
+      tokenCreatedAt: null,
+    })
   })
 
   it.each([

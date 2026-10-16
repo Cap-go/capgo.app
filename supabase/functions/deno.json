@@ -14,6 +14,7 @@
     "drizzle-orm/": "npm:/drizzle-orm@1.0.0-rc.3/",
     "adm-zip": "npm:adm-zip@0.5.17",
     "pg": "npm:pg@8.21.0",
+    "jose": "npm:jose@6.2.4",
     "type/pg": "npm:@types/pg@8.20.0",
     "@supabase/supabase-js": "npm:@supabase/supabase-js@2.106.2",
     "@std/semver": "jsr:@std/semver@1.0.8",

@@ -20,6 +20,10 @@ function isInvitationTokenKey(value: string): boolean {
   }
 }
 
+function isAppleCallbackKey(value: string): boolean {
+  return value === 'apple_code' || value === 'apple_error'
+}
+
 function removeInvitationToken(value: unknown): unknown {
   if (typeof value !== 'string')
     return value
@@ -29,10 +33,14 @@ function removeInvitationToken(value: unknown): unknown {
     const url = new URL(value, 'https://redacted.invalid')
     let removedToken = false
     for (const key of [...url.searchParams.keys()]) {
-      if (isInvitationTokenKey(key)) {
+      if (isInvitationTokenKey(key) || isAppleCallbackKey(key)) {
         url.searchParams.delete(key)
         removedToken = true
       }
+    }
+    if ([...new URLSearchParams(url.hash.slice(1)).keys()].some(isAppleCallbackKey)) {
+      url.hash = ''
+      removedToken = true
     }
     if (!removedToken)
       return value
@@ -40,8 +48,8 @@ function removeInvitationToken(value: unknown): unknown {
   }
   catch {
     let removedToken = false
-    const sanitized = value.replace(/([?&])([^=&#]+)(?:=[^&#]*)?/g, (match, separator, key) => {
-      if (!isInvitationTokenKey(key))
+    const sanitized = value.replace(/([?&#])([^=&#]+)(?:=[^&#]*)?/g, (match, separator, key) => {
+      if (!isInvitationTokenKey(key) && !isAppleCallbackKey(key))
         return match
       removedToken = true
       return `${separator}${key}=[redacted]`

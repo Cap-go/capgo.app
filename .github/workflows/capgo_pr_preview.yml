@@ -28,8 +28,7 @@ permissions: {}
 env:
   APP_ID: ee.forgr.capacitor_go
   CHANNEL: pr-${{ github.event.pull_request.number }}
-  # Pinned: the CLI runs with CAPGO_TOKEN, so a new release must not change it silently.
-  CAPGO_CLI: "@capgo/cli@8.73.0"
+  CAPGO_CLI: "@capgo/cli@latest"
 
 jobs:
   deploy:

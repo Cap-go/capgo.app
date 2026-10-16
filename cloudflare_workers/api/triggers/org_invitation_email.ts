@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../../supabase/functions/_backend/utils/hono.ts'
+import { recordFlowEvent } from '../../../supabase/functions/_backend/utils/bento_flow_audit.ts'
 import { cloudlog } from '../../../supabase/functions/_backend/utils/logging.ts'
 import { closeClient, getPgClient, withPgTransaction } from '../../../supabase/functions/_backend/utils/pg.ts'
 import { getEnv, trimTrailingSlashes } from '../../../supabase/functions/_backend/utils/utils.ts'
@@ -9,6 +10,8 @@ import { sendCloudflareEmail } from '../email_templates/send.ts'
 interface OrgInvitationEmail {
   id: string
   org_id: string
+  recipient_user_id: string | null
+  token_created_at: Date | string | null
   org_user_id: string | null
   tmp_user_id: number | null
   sent_at: string | null
@@ -32,6 +35,7 @@ export async function sendOrgInvitationEmail(c: Context<MiddlewareKeyVariables>,
       // Every join starts from its primary key; this is an internal low-volume path.
       const { rows } = await client.query<OrgInvitationEmail>(`
         SELECT r.id, r.org_user_id, r.tmp_user_id, r.sent_at,
+          u.id AS recipient_user_id, GREATEST(t.created_at, t.updated_at)::text AS token_created_at,
           o.id AS org_id, o.name AS org_name,
           COALESCE(t.email, u.email) AS email,
           COALESCE(t.first_name, u.first_name) AS first_name,
@@ -79,11 +83,28 @@ export async function sendOrgInvitationEmail(c: Context<MiddlewareKeyVariables>,
         email_action_type: isNewUser ? 'org_invite_new' : 'org_invite_existing',
       })
       // The marker acknowledges provider acceptance, not recipient inbox delivery.
-      await client.query(`
+      const { rows: accepted } = await client.query<{ sent_at: string }>(`
         UPDATE public.org_invitation_email_requests
-        SET sent_at = CURRENT_TIMESTAMP, message_id = $2
-        WHERE id = $1
+        SET sent_at = pg_catalog.clock_timestamp(), message_id = $2
+        WHERE id = $1 RETURNING sent_at::text AS sent_at
       `, [invitationId, messageId])
+      await recordFlowEvent(client, {
+        flowKey: 'org:invitation',
+        contextKey: invitation.id,
+        recipientKey: isNewUser ? `email:${invitation.email.toLowerCase()}` : `user:${invitation.recipient_user_id}`,
+        email: invitation.email,
+        tag: 'flow:started',
+        reason: 'initial_provider_accepted',
+        eventAt: accepted[0]!.sent_at,
+        details: {
+          kind: isNewUser ? 'new' : 'existing',
+          orgId: invitation.org_id,
+          invitationId: String(isNewUser ? invitation.tmp_user_id : invitation.org_user_id),
+          userId: invitation.recipient_user_id,
+          generation: invitation.id,
+          tokenCreatedAt: invitation.token_created_at,
+        },
+      })
     })
   }
   finally {

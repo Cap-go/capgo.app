@@ -64,7 +64,7 @@ export const install: UserModule = ({ router }) => {
       return next()
 
     const provider = session.user.app_metadata?.provider
-    if (provider && provider !== 'email')
+    if (provider && provider !== 'email' && provider !== 'apple')
       return next()
 
     const userId = session.user.id

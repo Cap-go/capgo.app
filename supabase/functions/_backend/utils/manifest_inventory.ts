@@ -15,7 +15,7 @@ const encoder = new TextEncoder()
 
 export class ManifestInventoryConflict extends Error {
   constructor(readonly paths: string[]) {
-    super('Manifest objects are retired or their evidence conflicts with inventory; request new upload paths')
+    super('Manifest objects are retired, their reservations are missing or expired, or their evidence conflicts with inventory; request new upload paths')
   }
 }
 
@@ -129,27 +129,23 @@ export async function registerManifestInventory(db: ClientBase, bucket: string, 
   await inventoryTransaction(db, async () => {
     await db.query(`INSERT INTO public.r2_inventory_checkpoints (bucket_name, job_name, accepted_event_floor)
       VALUES ($1, 'admission', now() - $2::int * interval '1 day') ON CONFLICT DO NOTHING`, [bucket, INVENTORY_CONFIG.tombstoneDays])
-    const clock = await db.query<{ now_us: string, floor_us: string }>(`SELECT
-      (extract(epoch FROM now()) * 1000000)::bigint::text AS now_us,
-      (extract(epoch FROM greatest(accepted_event_floor, now() - $2::int * interval '1 day')) * 1000000)::bigint::text AS floor_us
-      FROM public.r2_inventory_checkpoints WHERE bucket_name=$1 AND job_name='admission' AND partition_key='' FOR SHARE`, [bucket, INVENTORY_CONFIG.tombstoneDays])
+    const clock = await db.query<{ now_us: string }>(`SELECT
+      (extract(epoch FROM now()) * 1000000)::bigint::text AS now_us
+      FROM public.r2_inventory_checkpoints WHERE bucket_name=$1 AND job_name='admission' AND partition_key='' FOR SHARE`, [bucket])
     const now = BigInt(clock.rows[0].now_us)
-    const floor = BigInt(clock.rows[0].floor_us)
     const usableUploadedAt = (value: number | null) => value !== null && BigInt(value) * 1000n <= now + OBSERVATION_MARGIN_US ? value : null
     const rejected: string[] = []
-    const unique = new Map(entries.map(entry => [entry.path, entry]))
+    const unique = new Map<string, ManifestInventoryEntry>()
+    for (const entry of entries) {
+      // Shared paths must retain the v2 reservation gate even with mixed receipts.
+      if (entry.facts?.version === 2 || unique.get(entry.path)?.facts?.version !== 2)
+        unique.set(entry.path, entry)
+    }
     const ordered = [...unique.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
     for (let offset = 0; offset < ordered.length; offset += 500) {
       const chunk = ordered.slice(offset, offset + 500)
-      // Insert recent v2 observations first, then lock: a concurrent missing-row
-      // insert must be evaluated too. Roll back every chunk on any conflict.
-      const recent = chunk.filter(entry => entry.facts?.version === 2 && entry.facts.evidenceAt !== null
-        && BigInt(entry.facts.evidenceAt) * 1000n > floor + OBSERVATION_MARGIN_US
-        && BigInt(entry.facts.evidenceAt) * 1000n <= now + OBSERVATION_MARGIN_US)
-      await db.query(`INSERT INTO public.r2_objects (bucket_name,r2_key,r2_state,size_bytes,etag,last_reconciled_at,r2_last_modified_at,manifest_lease_expires_at)
-        SELECT $1,path,'present'::public.r2_object_state,size,etag,to_timestamp(evidence / 1000.0),to_timestamp(uploaded / 1000.0),now()+interval '30 minutes'
-        FROM jsonb_to_recordset($2::jsonb) AS x(path text,size bigint,etag text,evidence bigint,uploaded bigint) ORDER BY path COLLATE "C"
-        ON CONFLICT DO NOTHING`, [bucket, JSON.stringify(recent.map(entry => ({ path: entry.path, size: entry.facts!.size, etag: entry.facts!.etag, evidence: entry.facts!.evidenceAt, uploaded: usableUploadedAt(entry.facts!.uploadedAt) })))])
+      // Lock existing reservations in the same order as retirement. A receipt
+      // cannot recreate a missing reservation after placeholder expiry.
       const locked = await db.query<InventoryRow>(`SELECT ${INVENTORY_ROW_COLUMNS} FROM public.r2_objects WHERE bucket_name=$1 AND r2_key=ANY($2::text[]) ORDER BY r2_key COLLATE "C" FOR UPDATE`, [bucket, chunk.map(entry => entry.path)])
       const rows = new Map(locked.rows.map(row => [row.r2_key, row]))
       const updates: { path: string, size: number, etag: string | null, evidence: number, uploaded: number | null, refresh: boolean }[] = []
@@ -177,16 +173,23 @@ export async function registerManifestInventory(db: ClientBase, bucket: string, 
         }
         updates.push({ path: entry.path, size: facts.size, etag: facts.etag, evidence: facts.evidenceAt!, uploaded: usableUploadedAt(facts.uploadedAt), refresh: newer })
       }
-      await db.query(`UPDATE public.r2_objects AS target SET
+      // Check the database clock after acquiring the locks, not transaction-start
+      // now(). Expiry and extension are one conditional write; any rejected key
+      // rolls back the whole manifest, including previously processed chunks.
+      const renewed = await db.query<{ r2_key: string }>(`WITH checked AS MATERIALIZED (SELECT clock_timestamp() AS at)
+        UPDATE public.r2_objects AS target SET
         r2_state='present'::public.r2_object_state,
         size_bytes=CASE WHEN x.refresh THEN x.size ELSE target.size_bytes END,
         etag=CASE WHEN x.refresh THEN x.etag ELSE target.etag END,
         last_reconciled_at=CASE WHEN x.refresh THEN greatest(target.last_reconciled_at,to_timestamp(x.evidence / 1000.0)) ELSE target.last_reconciled_at END,
         r2_last_modified_at=CASE WHEN x.refresh THEN greatest(target.r2_last_modified_at,to_timestamp(x.uploaded / 1000.0)) ELSE target.r2_last_modified_at END,
         tombstone_expires_at=NULL,
-        manifest_lease_expires_at=greatest(coalesce(target.manifest_lease_expires_at,now()),now()+interval '30 minutes')
-        FROM jsonb_to_recordset($2::jsonb) AS x(path text,size bigint,etag text,evidence bigint,uploaded bigint,refresh boolean)
-        WHERE target.bucket_name=$1 AND target.r2_key=x.path`, [bucket, JSON.stringify(updates)])
+        manifest_lease_expires_at=greatest(target.manifest_lease_expires_at,checked.at+interval '30 minutes')
+        FROM jsonb_to_recordset($2::jsonb) AS x(path text,size bigint,etag text,evidence bigint,uploaded bigint,refresh boolean), checked
+        WHERE target.bucket_name=$1 AND target.r2_key=x.path AND target.manifest_lease_expires_at>checked.at
+        RETURNING target.r2_key`, [bucket, JSON.stringify(updates)])
+      const accepted = new Set(renewed.rows.map(row => row.r2_key))
+      rejected.push(...updates.filter(entry => !accepted.has(entry.path)).map(entry => entry.path))
     }
     if (rejected.length)
       throw new ManifestInventoryConflict(rejected)

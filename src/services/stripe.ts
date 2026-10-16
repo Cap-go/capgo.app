@@ -72,7 +72,9 @@ export async function openBlank(link: string) {
 const PORTAL_URL_CACHE_TTL_MS = 3 * 60 * 1000
 const portalUrlCache = new Map<string, { url: string, callbackUrl: string, createdAt: number }>()
 
-export async function openPortal(orgId: string, t: ComposerTranslation) {
+export type PortalFlow = 'cancel_subscription'
+
+export async function openPortal(orgId: string, t: ComposerTranslation, flow?: PortalFlow) {
   const dialogStore = useDialogV2Store()
   const now = Date.now()
   for (const [cachedOrgId, entry] of portalUrlCache) {
@@ -80,24 +82,25 @@ export async function openPortal(orgId: string, t: ComposerTranslation) {
       portalUrlCache.delete(cachedOrgId)
   }
   const callbackUrl = globalThis.location.href
-  const cachedEntry = portalUrlCache.get(orgId)
+  const cacheKey = flow ? `${orgId}:${flow}` : orgId
+  const cachedEntry = portalUrlCache.get(cacheKey)
   const cachedUrl = cachedEntry?.callbackUrl === callbackUrl
     ? cachedEntry.url
     : ''
   const portalUrl = cachedUrl
     ? Promise.resolve(cachedUrl)
     : invokeCapgoApi('private/stripe_portal', {
-        body: JSON.stringify({ callbackUrl, orgId }),
+        body: JSON.stringify({ callbackUrl, orgId, flow }),
       }).then(({ data }) => {
         const url = data?.url || ''
         if (url)
-          portalUrlCache.set(orgId, { url, callbackUrl, createdAt: Date.now() })
+          portalUrlCache.set(cacheKey, { url, callbackUrl, createdAt: Date.now() })
         return url
       }, () => '')
 
   dialogStore.openDialog({
-    title: t('open-your-portal'),
-    description: t('stripe-billing-portal-will-be-opened-in-a-new-tab'),
+    title: t(flow === 'cancel_subscription' ? 'cancel-plan' : 'open-your-portal'),
+    description: t(flow === 'cancel_subscription' ? 'cancel-plan-portal-desc' : 'stripe-billing-portal-will-be-opened-in-a-new-tab'),
     buttons: [
       {
         text: t('button-cancel'),

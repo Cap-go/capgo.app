@@ -1,13 +1,13 @@
-import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { User } from '@supabase/supabase-js'
-import { z } from 'zod'
+import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
+import { z } from 'zod'
+import { checkRegistrationEmail, getCaptchaSecret, isAuthRateLimitError, isCaptchaFailedError, provisionUserProfile } from '../utils/accountProvisioning.ts'
 import { parseBody, simpleErrorWithStatus, useCors } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { getPasswordPolicyValidationErrors } from '../utils/password_policy.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { emptySupabaseWithClientIP, supabaseAdmin } from '../utils/supabase.ts'
-import { getEnv } from '../utils/utils.ts'
 
 const DEFAULT_PASSWORD_POLICY = {
   min_length: 6,
@@ -34,15 +34,6 @@ export const app = new Hono<MiddlewareKeyVariables>()
 
 app.use('/', useCors)
 
-async function hashEmailSha256(email: string) {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(email))
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
-}
-
-function getCaptchaSecret(c: Parameters<typeof getEnv>[0]) {
-  return getEnv(c, 'CAPTCHA_SECRET_KEY') || getEnv(c, 'CLOUDFLARE_TURNSTILE_SECRET_KEY')
-}
-
 function isUserAlreadyRegisteredError(err: unknown): boolean {
   const anyErr = err as { code?: string, message?: string }
   const code = String(anyErr?.code ?? '').toLowerCase()
@@ -51,23 +42,6 @@ function isUserAlreadyRegisteredError(err: unknown): boolean {
     return true
   }
   return message.includes('already registered') || message.includes('user already exists')
-}
-
-function isCaptchaFailedError(err: unknown): boolean {
-  const anyErr = err as { code?: string, message?: string }
-  const code = String(anyErr?.code ?? '').toLowerCase()
-  const message = String(anyErr?.message ?? '').toLowerCase()
-  return code === 'captcha_failed' || message.includes('captcha')
-}
-
-function isAuthRateLimitError(err: unknown): boolean {
-  const anyErr = err as { code?: string, message?: string, status?: number }
-  const code = String(anyErr?.code ?? '').toLowerCase()
-  const message = String(anyErr?.message ?? '').toLowerCase()
-  return anyErr?.status === 429
-    || code === 'over_request_rate_limit'
-    || code === 'over_email_send_rate_limit'
-    || message.includes('rate limit')
 }
 
 function isEmailConfirmationPending(user: Pick<User, 'email_confirmed_at'> | null | undefined): boolean {
@@ -125,11 +99,7 @@ app.post('/', async (c) => {
     })
   }
 
-  const admin = supabaseAdmin(c)
-  const hashedEmail = await hashEmailSha256(normalizedEmail)
-  const { data: notDeleted, error: deletedCheckError } = await admin.rpc('is_not_deleted', {
-    email_check: hashedEmail,
-  })
+  const { data: notDeleted, error: deletedCheckError } = await checkRegistrationEmail(c, normalizedEmail)
 
   if (deletedCheckError) {
     cloudlogErr({
@@ -216,14 +186,12 @@ app.post('/', async (c) => {
     return simpleErrorWithStatus(c, 500, 'registration_failed', 'Registration failed')
   }
 
-  const { error: profileError } = await admin.from('users').upsert({
+  const { error: profileError } = await provisionUserProfile(c, {
     id: userId,
     email: normalizedEmail,
     first_name: body.first_name,
     last_name: body.last_name,
-    enable_notifications: true,
-    opt_for_newsletters: false,
-  }, { onConflict: 'id' })
+  })
 
   if (profileError) {
     cloudlogErr({

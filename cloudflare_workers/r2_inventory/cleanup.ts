@@ -12,7 +12,6 @@ export const CLEANUP_CONFIG = Object.freeze({
   reserveMs: 5_000,
   publicationMs: 2_000,
   leaseSeconds: 45,
-  maxDeletionBacklog: 10_000,
   batchBytes: 256_000,
   messageBytes: 128_000,
   deliveryDelaySeconds: 30,
@@ -208,8 +207,6 @@ export async function runCleanupProducer(db: ClientBase, bucket: string, queue: 
       }
       for (const range of cleanupRanges(page)) {
         if (Date.now() + CLEANUP_CONFIG.reserveMs >= deadline)
-          return retired
-        if (Number(health.deletionBacklog) + retired + range.keys.length > CLEANUP_CONFIG.maxDeletionBacklog)
           return retired
         retired += await retireCleanupRange(db, bucket, lease, range.keys, range.cursor, queue, deadline, health)
         // Advance only after an unambiguously successful DB commit. On any error,

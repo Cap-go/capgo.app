@@ -27,6 +27,47 @@ const log = {
   error: (message: string) => getUploadReporter().error(message),
 }
 
+const RETRYABLE_EXISTENCE_CHECK_HTTP_STATUSES = new Set([429, 502, 503, 504])
+
+/** Upper bound for Retry-After on manifest existence probes (seconds or HTTP-date). */
+const EXISTENCE_CHECK_MAX_RETRY_AFTER_DELAY_MS = 30_000
+
+function isRetryableExistenceCheckHttpStatus(status: number): boolean {
+  return RETRYABLE_EXISTENCE_CHECK_HTTP_STATUSES.has(status)
+}
+
+function capExistenceCheckRetryAfterDelayMs(delayMs: number): number {
+  return Math.min(delayMs, EXISTENCE_CHECK_MAX_RETRY_AFTER_DELAY_MS)
+}
+
+function getExistenceCheckRetryDelayMs(response: Response, retryDelays: readonly number[], attempt: number): number | undefined {
+  const scheduledDelay = retryDelays[attempt]
+  if (scheduledDelay === undefined)
+    return undefined
+  if (response.status !== 429)
+    return scheduledDelay
+  const retryAfter = response.headers.get('Retry-After')?.trim()
+  if (!retryAfter)
+    return scheduledDelay
+  if (/^\d+$/.test(retryAfter)) {
+    const retryAfterSeconds = Number(retryAfter)
+    const retryAfterMs = retryAfterSeconds * 1000
+    if (Number.isSafeInteger(retryAfterSeconds) && Number.isFinite(retryAfterMs))
+      return capExistenceCheckRetryAfterDelayMs(retryAfterMs)
+  }
+  const retryAt = Date.parse(retryAfter)
+  if (Number.isFinite(retryAt)) {
+    const waitMs = retryAt - Date.now()
+    if (waitMs >= 0)
+      return capExistenceCheckRetryAfterDelayMs(waitMs)
+  }
+  return scheduledDelay
+}
+
+function manifestExistenceCheckHttpError(status: number): CliUserError {
+  return new CliUserError(`Cannot check whether manifest file exists (HTTP ${status})`, { status })
+}
+
 export async function fileExistsAtUploadTarget(existenceCheckUrlPrefix: string, filename: string): Promise<{ exists: boolean, receipt?: string }> {
   const url = new URL(`${existenceCheckUrlPrefix}${encodeURIComponent(filename)}`)
   const retryDelays = TUS_UPLOAD_RETRY_DELAYS.slice(0, 3)
@@ -41,8 +82,18 @@ export async function fileExistsAtUploadTarget(existenceCheckUrlPrefix: string, 
       })
       if (response.status === 404)
         return { exists: false }
-      if (!response.ok)
-        throw new CliUserError(`Cannot check whether manifest file exists (HTTP ${response.status})`)
+      if (!response.ok) {
+        const retryDelay = isRetryableExistenceCheckHttpStatus(response.status)
+          ? getExistenceCheckRetryDelayMs(response, retryDelays, attempt)
+          : undefined
+        if (retryDelay !== undefined) {
+          await response.body?.cancel()
+          if (retryDelay > 0)
+            await new Promise(resolve => setTimeout(resolve, retryDelay))
+          continue
+        }
+        throw manifestExistenceCheckHttpError(response.status)
+      }
       return {
         exists: true,
         receipt: response.headers.get('X-Capgo-Manifest-Size-Receipt') ?? undefined,

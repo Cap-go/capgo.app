@@ -85,6 +85,11 @@ describe('onError PostHog capture', () => {
         magic_invite_string: 'invite-secret',
         nested: {
           password: 'NestedPassword1!',
+          id_token: 'apple-identity-token',
+          first_name: 'PrivateFirstName',
+          last_name: 'PrivateLastName',
+          refresh_token: 'private-refresh-token',
+          code: 'private-apple-authorization-code',
         },
         opt_for_newsletters: false,
         password: 'Password1!',
@@ -100,6 +105,11 @@ describe('onError PostHog capture', () => {
       magic_invite_string: '[redacted]',
       nested: {
         password: '[redacted]',
+        id_token: '[redacted]',
+        first_name: '[redacted]',
+        last_name: '[redacted]',
+        refresh_token: '[redacted]',
+        code: '[redacted]',
       },
       opt_for_newsletters: false,
       password: '[redacted]',

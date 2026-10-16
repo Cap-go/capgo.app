@@ -2,6 +2,7 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { ManifestPersistEntry } from '../utils/manifest_persist.ts'
 import type { ManifestSizeReceiptFacts } from '../utils/manifest_size_receipt.ts'
 import type { Database } from '../utils/supabase.types.ts'
+import { greaterOrEqual, parse, tryParse } from '@std/semver'
 import { Hono } from 'hono/tiny'
 import { BRES, parseBody, quickError, simpleError } from '../utils/hono.ts'
 import { middlewareKey } from '../utils/hono_middleware.ts'
@@ -21,6 +22,8 @@ interface DataSetManifest {
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
+
+const MANIFEST_UPLOAD_CLI_VERSION = parse('8.74.0')
 
 app.post('/', middlewareKey(), async (c) => {
   const body = await parseBody<DataSetManifest>(c)
@@ -123,7 +126,9 @@ app.post('/', middlewareKey(), async (c) => {
   }
 
   try {
-    if (usesManifestInventory(c)) {
+    // Older clients upload directly without reserving inventory paths first.
+    const cliVersion = tryParse(c.req.header('x-cli-version') ?? '')
+    if (usesManifestInventory(c) && cliVersion && greaterOrEqual(cliVersion, MANIFEST_UPLOAD_CLI_VERSION)) {
       await withManifestInventory(c, db => registerManifestInventory(db, getManifestReceiptBucket(getEnv(c, 'ENV_NAME')), body.manifest!.map((entry, index) => ({
         path: entry.s3_path!,
         facts: receiptFacts?.[index],

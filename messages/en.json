@@ -801,7 +801,7 @@
   "billing": "billing",
   "billing-cycle": "Billing cycle",
   "billing-period": "billing period",
-  "billing-portal-tab": "Invoices",
+  "billing-portal-tab": "Invoices & subscription",
   "build-error-details": "Build Error Details",
   "build-hours": "build hours",
   "build-minutes": "build minutes",
@@ -943,6 +943,9 @@
   "by": "By",
   "by-clicking-on-them": "by clicking on them.",
   "cancel": "cancel",
+  "cancel-plan": "Cancel plan",
+  "cancel-plan-portal-desc": "The Stripe billing portal will open in a new tab, where you can cancel your subscription.",
+  "cancel-plan-prompt": "Want to stop your subscription?",
   "cancel-subscriptions-and-continue": "Cancel subscriptions and continue",
   "canceled-delete": "Canceled bundle deletion, cannot delete a linked bundle",
   "canceled-photo-selection": "You canceled the picture selection",
@@ -4121,5 +4124,11 @@
   "past-due-banner-message": "Your last payment failed.",
   "past-due-banner-message-amount": "Your last payment of {amount} failed.",
   "past-due-banner-pay-now": "Pay now",
-  "past-due-banner-update-card": "Update card"
+  "past-due-banner-update-card": "Update card",
+  "sign-in-with-apple": "Sign in with Apple",
+  "apple-login-failed": "Could not sign in with Apple. Please try again or use email.",
+  "apple-login-name-save-failed": "You are signed in. You can add your name in account settings.",
+  "apple-delete-reauth-required": "Your Apple authorization expired. Please sign in with Apple again to delete your account.",
+  "apple-delete-account-hint": "Verify your email, then confirm with the same Apple account to delete your Capgo account.",
+  "apple-revoke-failed": "Could not disconnect your Apple account. Please sign in with Apple again and retry."
 }

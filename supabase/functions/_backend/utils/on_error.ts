@@ -20,6 +20,18 @@ const sensitiveRequestBodyKeys = new Set([
   'invite_magic_string',
   'magic_invite_string',
   'password',
+  'id_token',
+  'access_token',
+  'refresh_token',
+  'authorization_code',
+  'code',
+  'nonce',
+  'code_verifier',
+  'first_name',
+  'last_name',
+  'full_name',
+  'givenName',
+  'familyName',
 ])
 
 function redactSensitiveRequestBody(value: unknown): unknown {

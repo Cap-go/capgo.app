@@ -13,6 +13,7 @@ const noBackendDeploys = {
   supabase: false,
   translation: false,
   r2_inventory: false,
+  bento_dispatch: false,
 }
 
 describe('deploy scope matching', () => {
@@ -33,6 +34,7 @@ describe('deploy scope matching', () => {
         supabase: true,
         translation: true,
         r2_inventory: true,
+        bento_dispatch: true,
       },
     })).toBe(true)
   })
@@ -57,6 +59,7 @@ describe('deploy scope matching', () => {
       supabase: true,
       translation: false,
       r2_inventory: false,
+      bento_dispatch: false,
     })
   })
 
@@ -68,6 +71,7 @@ describe('deploy scope matching', () => {
       supabase: true,
       translation: true,
       r2_inventory: false,
+      bento_dispatch: false,
     })
   })
 
@@ -79,6 +83,7 @@ describe('deploy scope matching', () => {
       supabase: true,
       translation: false,
       r2_inventory: false,
+      bento_dispatch: false,
     })
   })
 
@@ -90,6 +95,7 @@ describe('deploy scope matching', () => {
       supabase: true,
       translation: false,
       r2_inventory: false,
+      bento_dispatch: false,
     })
   })
 
@@ -101,6 +107,7 @@ describe('deploy scope matching', () => {
       supabase: true,
       translation: false,
       r2_inventory: false,
+      bento_dispatch: false,
     })
   })
 
@@ -112,6 +119,7 @@ describe('deploy scope matching', () => {
       supabase: true,
       translation: false,
       r2_inventory: true,
+      bento_dispatch: true,
     })
   })
 
@@ -123,6 +131,7 @@ describe('deploy scope matching', () => {
       supabase: true,
       translation: false,
       r2_inventory: false,
+      bento_dispatch: false,
     })
   })
 
@@ -134,6 +143,7 @@ describe('deploy scope matching', () => {
       supabase: true,
       translation: false,
       r2_inventory: false,
+      bento_dispatch: false,
     })
   })
 
@@ -145,6 +155,7 @@ describe('deploy scope matching', () => {
       supabase: true,
       translation: false,
       r2_inventory: false,
+      bento_dispatch: false,
     })
   })
 
@@ -156,6 +167,7 @@ describe('deploy scope matching', () => {
       supabase: true,
       translation: false,
       r2_inventory: false,
+      bento_dispatch: false,
     })
   })
 
@@ -167,6 +179,7 @@ describe('deploy scope matching', () => {
       supabase: false,
       translation: true,
       r2_inventory: true,
+      bento_dispatch: true,
     })
   })
 
@@ -180,6 +193,7 @@ describe('deploy scope matching', () => {
     expect(resolveDeployScopeFromFiles([file])).toEqual({
       ...noBackendDeploys,
       r2_inventory: true,
+      bento_dispatch: file === 'scripts/deploy-scope.ts' || file === '.github/workflows/build_and_deploy.yml',
     })
   })
 
@@ -236,6 +250,7 @@ describe('deploy scope matching', () => {
         supabase: true,
         translation: false,
         r2_inventory: false,
+        bento_dispatch: false,
       },
     })
   })
@@ -268,6 +283,7 @@ describe('deploy scope matching', () => {
         supabase: false,
         translation: true,
         r2_inventory: false,
+        bento_dispatch: false,
       },
     })
   })
@@ -298,6 +314,7 @@ describe('deploy scope matching', () => {
         supabase: true,
         translation: true,
         r2_inventory: true,
+        bento_dispatch: true,
       },
     })
   })

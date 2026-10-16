@@ -1,0 +1,37 @@
+<p dir="ltr"><strong>Hello {{ event.details.invited_first_name }} {{ event.details.invited_last_name }}!</strong></p>
+<p dir="ltr">
+  Quick reminder: {{ event.details.org_admin_name }} invited you to join
+  <strong>{{ event.details.org_name }}</strong> on Capgo.
+</p>
+<p dir="ltr">Create your account and accept the invitation with the button below.</p>
+<p dir="ltr">
+  <a target="_blank" rel="noopener noreferrer nofollow" href="{{ event.details.invite_link }}"
+    ><strong
+      ><button
+        target="_blank"
+        rel="noopener noreferrer"
+        data-bento-button="true"
+        text="Accept the invitation"
+        width="auto"
+        style="
+          background-color: #2563eb;
+          color: #ffffff;
+          border-radius: 8px;
+          font-size: 14px;
+          text-decoration: none;
+          border: none;
+          cursor: pointer;
+          font-weight: bold;
+          padding: 8px 16px;
+          display: inline-block !important;
+          width: auto !important;
+        "
+        data-width="auto"
+      >
+        Accept the invitation
+      </button></strong
+    ></a
+  ><br class="a-happy-little-line-break" />or copy this link {{ event.details.invite_link }}
+</p>
+<p dir="ltr">This invitation is valid for seven days.</p>
+<p dir="ltr">If you already joined, you can ignore this email.</p>

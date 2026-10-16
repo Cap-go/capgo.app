@@ -38,32 +38,59 @@ function fixture() {
   state.sourceHealthy = true
   state.pages = 0
   vi.spyOn(console, 'log').mockImplementation(() => {})
-  const metrics = vi.fn().mockResolvedValue({ backlogCount: 0, backlogBytes: 0 })
+  const metrics = vi.fn().mockResolvedValue({ backlogCount: 1_000_000, backlogBytes: 256_000_000 })
+  const probe = vi.fn(() => {
+    throw new Error('Unexpected health probe')
+  })
   const queue = { metrics, sendBatch: vi.fn().mockResolvedValue(undefined) }
   const env = {
     INVENTORY_BUCKET: 'capgo',
     HYPERDRIVE_R2_INVENTORY: { connectionString: 'postgresql://inventory.invalid' },
     HYPERDRIVE_CAPGO_DIRECT_EU: { connectionString: 'postgresql://source.invalid' },
-    EVENT_QUEUE: { metrics },
-    REPAIR_QUEUE: { metrics },
-    EVENT_DLQ: { metrics },
-    REPAIR_DLQ: { metrics },
+    EVENT_QUEUE: { metrics, send: probe, sendBatch: probe },
+    REPAIR_QUEUE: { metrics, send: probe, sendBatch: probe },
+    EVENT_DLQ: { metrics, send: probe, sendBatch: probe },
+    REPAIR_DLQ: { metrics, send: probe, sendBatch: probe },
     CLEANUP_QUEUE: queue,
   }
   const run = () => scheduleInventoryCleanup({} as ScheduledController, env as never)
-  return { run, queue }
+  return { run, queue, metrics, probe }
 }
 
 describe('enabled cleanup cron', () => {
-  it('checks and writes health, then retires and publishes using the existing inventory connection', async () => {
+  it('ignores queue backlogs and publishes cleanup work using the existing inventory connection', async () => {
     const f = fixture()
     await f.run()
     expect(state.connections).toEqual(['postgresql://source.invalid', 'postgresql://inventory.invalid'])
     expect(f.queue.sendBatch).toHaveBeenCalledOnce()
+    expect(f.metrics).not.toHaveBeenCalled()
+    expect(f.probe).not.toHaveBeenCalled()
     expect(f.queue.sendBatch.mock.calls[0][0][0].body).toMatchObject({ bucket: 'capgo', key: 'orgs/synthetic/apps/com.test.cleanup/delta/file', cleanupRequestedAt: '2026-10-15T10:00:00.123456Z' })
     expect(state.queries.some(sql => sql.startsWith('INSERT') && sql.includes('\'cleanup_health\''))).toBe(true)
     expect(state.queries.some(sql => sql.startsWith('SELECT') && sql.includes('\'cleanup_health\''))).toBe(false)
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"retired":1'))
+  })
+
+  it('continues producing when consumer metrics are unavailable', async () => {
+    const f = fixture()
+    f.metrics.mockImplementation(() => {
+      throw new Error('Consumer metrics unavailable')
+    })
+    await f.run()
+    expect(f.queue.sendBatch).toHaveBeenCalledOnce()
+    expect(f.metrics).not.toHaveBeenCalled()
+    expect(f.probe).not.toHaveBeenCalled()
+  })
+
+  it('persists health without sending probe messages when there is no cleanup work', async () => {
+    const f = fixture()
+    state.pages = 1
+    await f.run()
+    expect(f.queue.sendBatch).not.toHaveBeenCalled()
+    expect(f.metrics).not.toHaveBeenCalled()
+    expect(f.probe).not.toHaveBeenCalled()
+    expect(state.queries.some(sql => sql.startsWith('INSERT') && sql.includes('\'cleanup_health\''))).toBe(true)
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"retired":0'))
   })
 
   it('publishes negative health and skips all retirement when replication is unhealthy', async () => {

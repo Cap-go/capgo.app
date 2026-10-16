@@ -5,6 +5,7 @@
     "": {
       "name": "capgo-app",
       "dependencies": {
+        "@aws-sdk/xml-builder": "3.972.36",
         "@bradenmacdonald/s3-lite-client": "npm:@jsr/bradenmacdonald__s3-lite-client@0.9.6",
         "@capacitor/action-sheet": "^8.1.1",
         "@capacitor/android": "^8.5.2",
@@ -59,7 +60,7 @@
         "@capgo/capacitor-document-scanner": "^8.4.6",
         "@capgo/capacitor-downloader": "^8.3.7",
         "@capgo/capacitor-env": "^8.1.42",
-        "@capgo/capacitor-fast-sql": "^8.2.8",
+        "@capgo/capacitor-fast-sql": "8.2.13",
         "@capgo/capacitor-file": "^8.0.19",
         "@capgo/capacitor-file-compressor": "^8.1.8",
         "@capgo/capacitor-file-picker": "^8.2.2",
@@ -109,6 +110,7 @@
         "@capgo/capacitor-shake": "^8.0.44",
         "@capgo/capacitor-sheets": "^8.1.0",
         "@capgo/capacitor-sim": "^8.0.39",
+        "@capgo/capacitor-social-login": "^8.5.18",
         "@capgo/capacitor-speech-recognition": "^8.3.2",
         "@capgo/capacitor-speech-synthesis": "^8.0.22",
         "@capgo/capacitor-supabase": "^8.2.3",
@@ -173,6 +175,7 @@
         "@iconify/json": "^2.2.504",
         "@intlify/unplugin-vue-i18n": "^11.2.4",
         "@playwright/test": "1.61.1",
+        "@smithy/fetch-http-handler": "5.6.9",
         "@standard-schema/spec": "^1.1.0",
         "@tailwindcss/aspect-ratio": "^0.4.2",
         "@tailwindcss/vite": "^4.3.3",
@@ -547,7 +550,7 @@
 
     "@capgo/capacitor-env": ["@capgo/capacitor-env@8.1.42", "", { "peerDependencies": { "@capacitor/core": ">=8.0.0" } }, "sha512-7SetqYe4B76/MbFsQid0tEe8wjFslk8PsosecriGtJ/3CB+iqc3meH04XRdlKRXibQs7xleQgTND2S0WsgUSag=="],
 
-    "@capgo/capacitor-fast-sql": ["@capgo/capacitor-fast-sql@8.2.8", "", { "dependencies": { "@sqlite.org/sqlite-wasm": "3.53.0-build1" }, "peerDependencies": { "@capacitor/core": ">=8.0.0" } }, "sha512-l1S41HSoJYWcvJlKlt4nEHyxuL0DpCSh9ywac9JgLRCDCGop5Sv7oOOggYvyp6wiRsVbvaL0wg0m2jkzzDsZuA=="],
+    "@capgo/capacitor-fast-sql": ["@capgo/capacitor-fast-sql@8.2.13", "", { "dependencies": { "@sqlite.org/sqlite-wasm": "3.53.0-build1" }, "peerDependencies": { "@capacitor/core": ">=8.0.0" } }, "sha512-f/6HFrIdQ/wq1x4JVTvjdPlmhZPCNMI8NwLxXZZE7R7eGGm4bAY4KxXd7FZFXrwGKqRPiN8EkG2MtY8oxXi/ng=="],
 
     "@capgo/capacitor-file": ["@capgo/capacitor-file@8.0.19", "", { "peerDependencies": { "@capacitor/core": ">=8.0.0" } }, "sha512-mOCCHGH82b4cFW/5V8TJprLJA3y3LGVfaURmBdEwXOKEY72UpA29tzwpF/rG2GZT0TiEvf96pt33QZ+0Kxn/JQ=="],
 
@@ -648,6 +651,8 @@
     "@capgo/capacitor-sheets": ["@capgo/capacitor-sheets@8.1.0", "", { "optionalDependencies": { "@rolldown/binding-wasm32-wasi": "1.1.2" }, "peerDependencies": { "@angular/core": ">=17.0.0", "react": ">=18.0.0", "react-dom": ">=18.0.0", "solid-js": ">=1.0.0", "svelte": ">=4.0.0", "vue": ">=3.0.0" }, "optionalPeers": ["@angular/core", "react", "react-dom", "solid-js", "svelte", "vue"] }, "sha512-Pn78bIRcKxtZIk8XBfqCktbNcBtF7FJzeSfuhogeJOzAMNesGL//S0KfE0XnYxQHne1hQE2VtFXzzLAft9yVig=="],
 
     "@capgo/capacitor-sim": ["@capgo/capacitor-sim@8.0.39", "", { "peerDependencies": { "@capacitor/core": ">=8.0.0" } }, "sha512-eK9ChvWDaSrucresrrsOFc81Mb55X8jeLzI/4jGL76GZIYW9lNLZwHLujebJcs68NTkGBAesIBmq21O894NcJA=="],
+
+    "@capgo/capacitor-social-login": ["@capgo/capacitor-social-login@8.5.18", "", { "dependencies": { "tslib": "^2.8.1" }, "peerDependencies": { "@capacitor/core": ">=8.0.0" } }, "sha512-fFWDj4a+w13MQ7UX4t9XRFa5c0n3LwgFEpLY/LUJRYenYCMsdj80tzd56s8dYiG1vpJaRW4H8KYiC9y2AWlL6Q=="],
 
     "@capgo/capacitor-speech-recognition": ["@capgo/capacitor-speech-recognition@8.3.2", "", { "peerDependencies": { "@capacitor/core": ">=8.0.0" } }, "sha512-o91dTZy3gmqPO+nyujoCUezGTvv2Tozm1HDAfvaUZcHsQgs6KjhnO0qV9FIvuazyhdk6dOlqRyEQza0n5fUZxQ=="],
 

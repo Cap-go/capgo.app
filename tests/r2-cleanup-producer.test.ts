@@ -57,7 +57,7 @@ async function lease(db: Client, bucket: string): Promise<CleanupLease> {
   expect(result).not.toBeNull()
   return result!
 }
-const directHealth = (): CleanupHealth => ({ schemaVersion: 2, healthy: true, producerReady: true, checkedAt: Date.now(), observedAt: new Date().toISOString(), maxAgeSeconds: 120, notificationsHealthy: true, repairsHealthy: true, manifestReplicationHealthy: true, deletionBacklog: 0, reasons: [] })
+const directHealth = (): CleanupHealth => ({ schemaVersion: 3, healthy: true, checkedAt: Date.now(), observedAt: new Date().toISOString(), maxAgeSeconds: 120, manifestReplicationHealthy: true, reasons: [] })
 const queue = () => ({ sendBatch: vi.fn().mockResolvedValue(undefined) })
 const retire = (db: ClientBase, bucket: string, run: CleanupLease, keys: string[], cursor: string, q: CleanupQueue) => retireCleanupRange(db, bucket, run, keys, cursor, q, Date.now() + CLEANUP_CONFIG.runMs, directHealth())
 async function checkpoint(db: Client, bucket: string) {
@@ -65,6 +65,16 @@ async function checkpoint(db: Client, bucket: string) {
 }
 
 describe('cleanup producer Postgres transactions', () => {
+  it.concurrent('keeps producing without a cleanup backlog cap', () => fixture(async (db, peer, bucket, prefix) => {
+    const key = `${prefix}file`
+    await seed(db, bucket, [key])
+    const q = queue()
+    const health = { ...directHealth(), deletionBacklog: 1_000_000 }
+    expect(await runCleanupProducer(db, bucket, q, health)).toBe(1)
+    expect(q.sendBatch).toHaveBeenCalledOnce()
+    expect((await peer.query('SELECT r2_state FROM public.r2_objects WHERE bucket_name=$1', [bucket])).rows[0].r2_state).toBe('to_be_deleted')
+  }))
+
   it.concurrent('bounds discovery to examined keys and rejects leases, references, unknown/recent age, non-delta/trash/ZIP and retired rows', () => fixture(async (db, _peer, bucket, prefix) => {
     const names = ['eligible', 'expired', 'leased', 'referenced', 'unknown', 'recent-event', 'recent-modified', 'recent-first', 'retired', 'trash/file', 'file.zip', '../file', 'double//file']
     await seed(db, bucket, [...names.map(n => prefix + n), `${prefix.replace('/delta/', '/bundles/')}bundle.zip`])

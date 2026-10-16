@@ -297,10 +297,48 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
   }
 }
 
-export async function createPortal(c: Context, customerId: string, callbackUrl: string) {
+export type PortalFlow = 'cancel_subscription'
+
+async function getActiveSubscriptionId(c: Context, customerId: string) {
+  const { data, error } = await supabaseAdmin(c)
+    .from('stripe_info')
+    .select('subscription_id, status')
+    .eq('customer_id', customerId)
+    .maybeSingle()
+  if (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'getActiveSubscriptionId', error })
+    return null
+  }
+  if (!data?.subscription_id || data.status === 'canceled' || data.status === 'deleted')
+    return null
+  return data.subscription_id
+}
+
+export async function createPortal(c: Context, customerId: string, callbackUrl: string, flow?: PortalFlow) {
   if (!isStripeConfigured(c))
     return { url: '' }
   const allowedReturnUrl = getAllowedRedirectUrl(c, callbackUrl, 'return_url')
+  if (flow === 'cancel_subscription') {
+    const subscriptionId = await getActiveSubscriptionId(c, customerId)
+    if (subscriptionId) {
+      try {
+        const session = await getStripe(c).billingPortal.sessions.create({
+          customer: customerId,
+          return_url: allowedReturnUrl,
+          flow_data: {
+            type: 'subscription_cancel',
+            subscription_cancel: { subscription: subscriptionId },
+            after_completion: { type: 'redirect', redirect: { return_url: allowedReturnUrl } },
+          },
+        })
+        return { url: session.url }
+      }
+      catch (error) {
+        // Cancel flow can be rejected (already canceling, portal config); fall back to the plain portal.
+        cloudlogErr({ requestId: c.get('requestId'), message: 'createPortal cancel flow failed', error })
+      }
+    }
+  }
   const session = await getStripe(c).billingPortal.sessions.create({
     customer: customerId,
     return_url: allowedReturnUrl,

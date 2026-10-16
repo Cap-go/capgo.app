@@ -7,7 +7,7 @@ export const INVENTORY_RETENTION_SECONDS = 4 * 24 * 60 * 60
 export async function ensureR2InventoryQueues(api: QueueApi, environment: string) {
   if (environment !== 'prod')
     throw new Error('R2 inventory is production-only; expected prod')
-  for (const suffix of ['', '-dlq', '-repair', '-repair-dlq', '-cleanup']) {
+  for (const suffix of ['', '-dlq', '-repair', '-repair-dlq', '-cleanup', '-cleanup-dlq']) {
     const name = `capgo-r2-inventory-prod${suffix}`
     let queue = await findQueue(api, name)
     if (!queue) {

@@ -60,10 +60,73 @@ describe('manifest inventory transactions', () => {
     expect((await db.query('SELECT count(*)::int n FROM public.r2_objects WHERE bucket_name=$1 AND r2_key=\'new\'', [bucket])).rows[0].n).toBe(0)
   }))
 
+  it.concurrent('rejects expired reservations even with fresh receipts and rolls back every file', () => fixture(async (db, _second, bucket) => {
+    const active = Array.from({ length: 500 }, (_, i) => `active-${i.toString().padStart(4, '0')}`)
+    await reserve(db, bucket, [...active, 'expired'])
+    await db.query(`UPDATE public.r2_objects SET manifest_lease_expires_at=clock_timestamp() WHERE bucket_name=$1 AND r2_key='delta/expired'`, [bucket])
+    const before = (await db.query('SELECT * FROM public.r2_objects WHERE bucket_name=$1 ORDER BY r2_key', [bucket])).rows
+    await expect(registerManifestInventory(db, bucket, [
+      ...active.map(key => ({ path: `delta/${key}`, facts: facts() })),
+      { path: 'delta/expired', facts: facts() },
+    ])).rejects.toMatchObject({ paths: ['delta/expired'] })
+    expect((await db.query('SELECT * FROM public.r2_objects WHERE bucket_name=$1 ORDER BY r2_key', [bucket])).rows).toEqual(before)
+  }))
+
+  it.concurrent.each([false, true])('keeps the v2 reservation requirement when a path also has a v1 receipt (v2 first=%s)', v2First => fixture(async (db, _second, bucket) => {
+    await reserve(db, bucket)
+    await db.query(`UPDATE public.r2_objects SET manifest_lease_expires_at=clock_timestamp() WHERE bucket_name=$1`, [bucket])
+    const legacy = { ...facts(), version: 1 as const, evidenceAt: null, source: null, signedAt: null, uploadedAt: null }
+    const entries = [{ path: 'delta/hash_file.js', facts: facts() }, { path: 'delta/hash_file.js', facts: legacy }]
+    await expect(registerManifestInventory(db, bucket, v2First ? entries : entries.toReversed())).rejects.toBeInstanceOf(ManifestInventoryConflict)
+  }))
+
+  it.concurrent('rejects a reservation that expires while finalization waits for its row lock', ({ expect }) => fixture(async (db, second, bucket) => {
+    await reserve(db, bucket)
+    const pid = (await second.query('SELECT pg_backend_pid() AS pid')).rows[0].pid
+    await db.query(`UPDATE public.r2_objects SET manifest_lease_expires_at=clock_timestamp()+interval '1 second' WHERE bucket_name=$1`, [bucket])
+    await db.query('BEGIN')
+    let registering: Promise<unknown> | undefined
+    try {
+      await db.query(`SELECT 1 FROM public.r2_objects WHERE bucket_name=$1 FOR UPDATE`, [bucket])
+      registering = registerManifestInventory(second, bucket, [{ path: 'delta/hash_file.js', facts: facts() }]).then(() => null, error => error)
+      await expect.poll(async () => (await db.query(`SELECT wait_event_type FROM pg_catalog.pg_stat_activity WHERE pid=$1`, [pid])).rows[0]?.wait_event_type).toBe('Lock')
+      await db.query(`SELECT pg_sleep(greatest(0,extract(epoch FROM manifest_lease_expires_at-clock_timestamp()))::double precision+0.02) FROM public.r2_objects WHERE bucket_name=$1`, [bucket])
+      await db.query('COMMIT')
+      expect(await registering).toBeInstanceOf(ManifestInventoryConflict)
+      expect((await db.query(`SELECT r2_state,manifest_lease_expires_at<=clock_timestamp() AS expired FROM public.r2_objects WHERE bucket_name=$1`, [bucket])).rows[0]).toEqual({ r2_state: 'to_be_uploaded', expired: true })
+    }
+    finally {
+      await db.query('ROLLBACK')
+      await registering
+    }
+  }))
+
+  it.concurrent('requires a live v2 reservation even when a receipt is fresh or an expired placeholder was removed', () => fixture(async (db, _second, bucket) => {
+    await reserve(db, bucket, ['removed'])
+    await db.query(`UPDATE public.r2_objects SET manifest_lease_expires_at=clock_timestamp() WHERE bucket_name=$1`, [bucket])
+    await db.query('SELECT public.expire_r2_manifest_placeholders($1,1000)', [bucket])
+    await db.query(`INSERT INTO public.r2_objects(bucket_name,r2_key,r2_state) VALUES ($1,'delta/unreserved','present')`, [bucket])
+    await expect(registerManifestInventory(db, bucket, ['missing', 'removed', 'unreserved'].map(key => ({ path: `delta/${key}`, facts: facts() })))).rejects.toMatchObject({ paths: ['delta/missing', 'delta/removed', 'delta/unreserved'] })
+    expect((await db.query('SELECT r2_key,manifest_lease_expires_at FROM public.r2_objects WHERE bucket_name=$1', [bucket])).rows).toEqual([{ r2_key: 'delta/unreserved', manifest_lease_expires_at: null }])
+  }))
+
+  it.concurrent.each([false, true])('upload notifications preserve the existing reservation exactly (expired=%s)', expired => fixture(async (db, _second, bucket) => {
+    await reserve(db, bucket)
+    if (expired)
+      await db.query(`UPDATE public.r2_objects SET manifest_lease_expires_at=clock_timestamp() WHERE bucket_name=$1`, [bucket])
+    const before = (await db.query(`SELECT to_char(manifest_lease_expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS expires_at FROM public.r2_objects WHERE bucket_name=$1`, [bucket])).rows[0].expires_at
+    await applyInventoryEvents(db, [{ bucket, key: 'delta/hash_file.js', state: 'present', size: 42, etag: 'a'.repeat(32), eventTime: new Date().toISOString() }], { tombstoneDays: 7 })
+    expect((await db.query(`SELECT r2_state,to_char(manifest_lease_expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS expires_at FROM public.r2_objects WHERE bucket_name=$1`, [bucket])).rows[0]).toEqual({ r2_state: 'present', expires_at: before })
+    if (expired)
+      await expect(registerManifestInventory(db, bucket, [{ path: 'delta/hash_file.js', facts: facts(Date.now()) }])).rejects.toBeInstanceOf(ManifestInventoryConflict)
+    else
+      await registerManifestInventory(db, bucket, [{ path: 'delta/hash_file.js', facts: facts(Date.now()) }])
+  }))
+
   it.concurrent('rejects stale/equal/ambiguous evidence for deleted rows, accepts clearly newer evidence and ignores stale present metadata', () => fixture(async (db, _second, bucket) => {
     const boundary = Date.now() - 60_000
-    await db.query(`INSERT INTO public.r2_objects(bucket_name,r2_key,r2_state,last_event_at,last_reconciled_at,tombstone_expires_at,size_bytes)
-      VALUES ($1,'key','deleted',to_timestamp($2 / 1000.0),to_timestamp($2 / 1000.0),now()+interval '7 days',84)`, [bucket, boundary])
+    await db.query(`INSERT INTO public.r2_objects(bucket_name,r2_key,r2_state,last_event_at,last_reconciled_at,tombstone_expires_at,size_bytes,manifest_lease_expires_at)
+      VALUES ($1,'key','deleted',to_timestamp($2 / 1000.0),to_timestamp($2 / 1000.0),now()+interval '7 days',84,now()+interval '30 minutes')`, [bucket, boundary])
     for (const delta of [-1000, 0, 4999, 5000])
       await expect(registerManifestInventory(db, bucket, [{ path: 'key', facts: facts(boundary + delta) }])).rejects.toBeInstanceOf(ManifestInventoryConflict)
     await registerManifestInventory(db, bucket, [{ path: 'key', facts: facts(boundary + 6000) }])
@@ -149,6 +212,7 @@ describe('manifest inventory production work bounds', () => {
 describe('manifest receipt and notification ordering', () => {
   it.concurrent('accepts matching ordinary notifications after receipt registration without scheduling per-file HEAD repair', () => fixture(async (db, _second, bucket) => {
     const evidenceAt = Date.now() - 10_000
+    await reserveManifestPaths(db, bucket, '', ['new'], [42])
     await registerManifestInventory(db, bucket, [{ path: 'new', facts: facts(evidenceAt) }])
     expect(await applyInventoryEvents(db, [{ bucket, key: 'new', state: 'present', size: 42, etag: 'a'.repeat(32), eventTime: new Date(evidenceAt + 500).toISOString() }], { tombstoneDays: 7 })).toEqual([])
     expect((await db.query('SELECT r2_state,etag FROM public.r2_objects WHERE bucket_name=$1', [bucket])).rows[0]).toEqual({ r2_state: 'present', etag: 'a'.repeat(32) })
@@ -157,6 +221,7 @@ describe('manifest receipt and notification ordering', () => {
 
 describe('provider clock ambiguity', () => {
   it.concurrent('registers local read presence without advancing inventory metadata to a future provider clock', () => fixture(async (db, _second, bucket) => {
+    await reserveManifestPaths(db, bucket, '', ['read'], [42])
     await registerManifestInventory(db, bucket, [{ path: 'read', facts: { ...facts(), source: 'r2_read', uploadedAt: Date.now() + 60_000 } }])
     const row = (await db.query('SELECT r2_state,last_reconciled_at,r2_last_modified_at FROM public.r2_objects WHERE bucket_name=$1', [bucket])).rows[0]
     expect(row.r2_state).toBe('present')

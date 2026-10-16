@@ -1,4 +1,5 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { PortalFlow } from '../utils/stripe.ts'
 import { Hono } from 'hono/tiny'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
@@ -10,6 +11,7 @@ import { supabaseClient } from '../utils/supabase.ts'
 interface PortalData {
   callbackUrl: string
   orgId: string
+  flow?: PortalFlow
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -46,6 +48,7 @@ app.post('/', middlewareAuth, async (c) => {
     throw simpleError('not_authorize', 'Not authorize')
 
   cloudlog({ requestId: c.get('requestId'), message: 'org', org })
-  const link = await createPortal(c, org.customer_id, body.callbackUrl)
+  const flow = body.flow === 'cancel_subscription' ? body.flow : undefined
+  const link = await createPortal(c, org.customer_id, body.callbackUrl, flow)
   return c.json({ url: link.url })
 })

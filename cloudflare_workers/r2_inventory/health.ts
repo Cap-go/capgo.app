@@ -2,7 +2,7 @@ import type { Client } from 'pg'
 import { sql } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/node-postgres'
 
-export const CLEANUP_HEALTH = Object.freeze({ timeoutMs: 5000, producerAgeMs: 30_000, consumerAgeMs: 120_000, feedbackSeconds: 60, replaySeconds: 30, walBytes: 64 * 1024 * 1024, deletionBacklog: 10_000 })
+export const CLEANUP_HEALTH = Object.freeze({ timeoutMs: 5000, producerAgeMs: 30_000, consumerAgeMs: 120_000, feedbackSeconds: 60, replaySeconds: 30, walBytes: 64 * 1024 * 1024 })
 export const REPLICATION = Object.freeze({ subscription: 'capgo_planetscale_r2_sub', slot: 'capgo_planetscale_r2_slot', publication: 'capgo_planetscale_r2_pub' })
 
 // NOW() makes this query uncacheable even on the existing cached source binding.
@@ -29,18 +29,13 @@ export const DESTINATION_HEALTH_SQL = `SELECT s.subenabled, s.subslotname, s.sub
 
 interface SourceHealth { active: boolean, wal_status: string, state: string, feedback_age: number | null, replay_seconds: number | null, wal_bytes: string | null, publication_ok: boolean }
 interface DestinationHealth { subenabled: boolean, subslotname: string, subpublications: string[], pid: number | null, srsubstate: string, receipt_age: number | null, observed_at: string, apply_error_count: string, sync_error_count: string }
-export interface HealthQueue { metrics: () => Promise<{ backlogCount: number, backlogBytes: number }> }
 export interface CleanupHealth {
-  schemaVersion: 2
+  schemaVersion: 3
   healthy: boolean
-  producerReady: boolean
   checkedAt: number
   observedAt: string
   maxAgeSeconds: number
-  notificationsHealthy: boolean
-  repairsHealthy: boolean
   manifestReplicationHealthy: boolean
-  deletionBacklog: number | null
   reasons: string[]
   replication?: { source: SourceHealth | null, destination: DestinationHealth | null }
 }
@@ -60,16 +55,16 @@ export function replicationHealthy(source: SourceHealth | undefined, destination
 }
 
 export function requireCleanupHealth(health: CleanupHealth): void {
-  if (health.healthy !== true || health.producerReady !== true || !within(Date.now() - health.checkedAt, CLEANUP_HEALTH.producerAgeMs))
+  if (health.healthy !== true || !within(Date.now() - health.checkedAt, CLEANUP_HEALTH.producerAgeMs))
     throw new Error('Cleanup health check failed or expired')
 }
 
-// Owns connection establishment: both databases and all queue reads start together.
+// Owns connection establishment: both database reads start together.
 // The caller reuses inventory for production work only after this function succeeds.
-export async function checkCleanupHealth(source: Client, inventory: Client, bucket: string, queues: HealthQueue[]): Promise<CleanupHealth> {
+export async function checkCleanupHealth(source: Client, inventory: Client, bucket: string): Promise<CleanupHealth> {
   const started = Date.now()
   const deadline = started + CLEANUP_HEALTH.timeoutMs
-  const health: CleanupHealth = { schemaVersion: 2, healthy: false, producerReady: false, checkedAt: started, observedAt: new Date(started).toISOString(), maxAgeSeconds: CLEANUP_HEALTH.consumerAgeMs / 1000, notificationsHealthy: false, repairsHealthy: false, manifestReplicationHealthy: false, deletionBacklog: null, reasons: [] }
+  const health: CleanupHealth = { schemaVersion: 3, healthy: false, checkedAt: started, observedAt: new Date(started).toISOString(), maxAgeSeconds: CLEANUP_HEALTH.consumerAgeMs / 1000, manifestReplicationHealthy: false, reasons: [] }
   let expired = false
   let timer: ReturnType<typeof setTimeout> | undefined
   const close = () => {
@@ -103,30 +98,15 @@ export async function checkCleanupHealth(source: Client, inventory: Client, buck
         const results = await Promise.allSettled([
           read(source, SOURCE_HEALTH_SQL, [REPLICATION.slot, REPLICATION.publication]),
           read(inventory, DESTINATION_HEALTH_SQL, [REPLICATION.subscription]),
-          ...queues.map(queue => Promise.resolve().then(() => queue.metrics())),
         ])
         remaining()
         const value = (i: number) => results[i]?.status === 'fulfilled' ? (results[i] as PromiseFulfilledResult<any>).value : undefined
-        const empty = (i: number) => value(i)?.backlogCount === 0 && value(i)?.backlogBytes === 0
-        health.notificationsHealthy = queues.length === 5 && empty(2) && empty(4)
-        health.repairsHealthy = queues.length === 5 && empty(3) && empty(5)
         health.manifestReplicationHealthy = replicationHealthy(value(0), value(1))
         health.replication = { source: value(0) ?? null, destination: value(1) ?? null }
         health.observedAt = value(1)?.observed_at ? new Date(value(1).observed_at).toISOString() : health.observedAt
-        const backlog = value(6)
-        if (Number.isSafeInteger(backlog?.backlogCount) && backlog.backlogCount >= 0 && within(backlog?.backlogBytes, Number.MAX_SAFE_INTEGER))
-          health.deletionBacklog = backlog.backlogCount
-        if (!health.notificationsHealthy)
-          health.reasons.push('notifications_busy_or_unknown')
-        if (!health.repairsHealthy)
-          health.reasons.push('repairs_busy_or_unknown')
         if (!health.manifestReplicationHealthy)
           health.reasons.push('replication_unhealthy_or_unknown')
-        if (health.deletionBacklog === null || health.deletionBacklog >= CLEANUP_HEALTH.deletionBacklog)
-          health.reasons.push('deletion_backpressure_or_unknown')
-        health.healthy = health.notificationsHealthy && health.repairsHealthy && health.manifestReplicationHealthy
-        // Backpressure stops production; the future consumer must still drain.
-        health.producerReady = health.healthy && health.reasons.length === 0
+        health.healthy = health.manifestReplicationHealthy
         // Publication is part of the five-second operation. Never read this row
         // in the producer; the future consumer checks schema, flags and freshness.
         remaining()
@@ -158,7 +138,6 @@ export async function checkCleanupHealth(source: Client, inventory: Client, buck
   }
   catch {
     health.healthy = false
-    health.producerReady = false
     health.reasons.push(expired || Date.now() >= deadline ? 'health_timeout' : 'health_query_or_write_failed')
     close()
   }

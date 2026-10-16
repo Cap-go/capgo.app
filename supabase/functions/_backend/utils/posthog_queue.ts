@@ -10,7 +10,7 @@ export const POSTHOG_RETRY_DELAYS = [30, 120, 600, 1800, 7200] as const
 const UUID = /^[\da-f]{8}-[\da-f]{4}-[1-8][\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i
 const isoTime = z.string().datetime()
 const forbiddenKeys = new Set(['capgkey', 'capgokey', 'apisecret', 'auth', 'authentication', 'bearer', 'posthogtoken', 'supabasekey', 'servicerolekey', 'sessiontoken', 'authorization', 'authheaders', 'headers', 'cookie', 'jwt', 'apikey', 'posthogapikey', 'capgotoken', 'token', 'accesstoken', 'refreshtoken', 'secret', 'password', 'bento', 'rawbody', '$groups', '$insertid', '$set', '$setonce', 'distinctid', 'eventid'])
-function forbiddenKey(key: string) {
+export function isForbiddenPostHogPropertyKey(key: string) {
   return forbiddenKeys.has(key.toLowerCase().replace(/[_\s-]/g, ''))
 }
 
@@ -23,7 +23,7 @@ function validJson(value: unknown, depth = 0): boolean {
     return Number.isFinite(value)
   if (Array.isArray(value))
     return value.every(item => validJson(item, depth + 1))
-  return typeof value === 'object' && value !== null && Object.entries(value).every(([key, item]) => !forbiddenKey(key) && validJson(item, depth + 1))
+  return typeof value === 'object' && value !== null && Object.entries(value).every(([key, item]) => !isForbiddenPostHogPropertyKey(key) && validJson(item, depth + 1))
 }
 
 const properties = z.record(z.string(), z.unknown()).refine(validJson)
@@ -83,7 +83,7 @@ export function snapshotProperties(value: unknown, depth = 0): unknown {
   if (Array.isArray(value))
     return value.map(item => snapshotProperties(item, depth + 1))
   if (value && typeof value === 'object')
-    return Object.fromEntries(Object.entries(value).filter(([key]) => !forbiddenKey(key)).map(([key, item]) => [key, snapshotProperties(item, depth + 1)]))
+    return Object.fromEntries(Object.entries(value).filter(([key]) => !isForbiddenPostHogPropertyKey(key)).map(([key, item]) => [key, snapshotProperties(item, depth + 1)]))
   return value
 }
 

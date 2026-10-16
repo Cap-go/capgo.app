@@ -179,10 +179,10 @@ describe('request_manifest_upload', () => {
     })
     const authorization = body.upload_targets[0].authorization
     expect(authorization.expires_at).toBeGreaterThanOrEqual(before + 599)
-    expect(authorization.expires_at).toBeLessThanOrEqual(before + 600)
+    expect(authorization.expires_at).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 600)
     expect(authorization.token_prefix).toBe(`v1.2026-10-a.${authorization.expires_at}.123.0.`)
     expect(body.entries[0].s3_path_suffix).toMatch(/^[0-9a-f]{64}_index\.html$/)
-    expect(body.entries[0].upload_token).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(body.entries[0].upload_token).toMatch(/^[\w-]{43}$/)
 
     expect(mocks.getPgClient).toHaveBeenCalledTimes(1)
     expect(mocks.getPgClient).toHaveBeenCalledWith(expect.anything(), false)

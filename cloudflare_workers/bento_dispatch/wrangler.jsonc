@@ -1,0 +1,34 @@
+{
+  "name": "capgo-bento-dispatch",
+  "main": "index.ts",
+  "compatibility_date": "2026-04-21",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true,
+    "issues": { "enabled": true }
+  },
+  "env": {
+    "prod": {
+      "name": "capgo-bento-dispatch-prod",
+      "triggers": { "crons": ["* * * * *"] },
+      "hyperdrive": [{
+        "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
+        "id": "ae1fe6178b564adc9fc9a71ccc769a35"
+      }],
+      "queues": {
+        "producers": [{ "binding": "DISPATCH_QUEUE", "queue": "capgo-bento-dispatch-prod" }, { "binding": "POSTHOG_QUEUE", "queue": "capgo-posthog-events-prod" }],
+        "consumers": [{
+          "queue": "capgo-bento-dispatch-prod",
+          "max_batch_size": 1,
+          "max_batch_timeout": 0,
+          "max_concurrency": 5,
+          "max_retries": 4,
+          "retry_delay": 60
+        }]
+      },
+      "limits": { "cpu_ms": 30000 }
+    }
+  }
+}

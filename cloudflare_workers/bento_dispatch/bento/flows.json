@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "flows": [
+    {
+      "name": "Invite new user reminder 1",
+      "event": "org:invite_new_user_reminder_1",
+      "subject": "Reminder: accept your {{ event.details.org_name_subject }} Capgo invite",
+      "html": "invite_new_reminder_1.html",
+      "transactional": true,
+      "throttle": "5_minutes",
+      "steps": [
+        "event_equals",
+        "send_email",
+        "exit"
+      ]
+    },
+    {
+      "name": "Invite new user reminder 2",
+      "event": "org:invite_new_user_reminder_2",
+      "subject": "Reminder: join {{ event.details.org_name_subject }} on Capgo",
+      "html": "invite_new_reminder_2.html",
+      "transactional": true,
+      "throttle": "5_minutes",
+      "steps": [
+        "event_equals",
+        "send_email",
+        "exit"
+      ]
+    },
+    {
+      "name": "Invite existing user reminder 1",
+      "event": "org:invite_existing_user_reminder_1",
+      "subject": "Last nudge: join {{ event.details.org_name_subject }} on Capgo",
+      "html": "invite_existing_reminder_1.html",
+      "transactional": true,
+      "throttle": "5_minutes",
+      "steps": [
+        "event_equals",
+        "send_email",
+        "exit"
+      ]
+    },
+    {
+      "name": "Invite existing user reminder 2",
+      "event": "org:invite_existing_user_reminder_2",
+      "subject": "Last nudge: {{ event.details.org_name_subject }} is waiting on Capgo",
+      "html": "invite_existing_reminder_2.html",
+      "transactional": true,
+      "throttle": "5_minutes",
+      "steps": [
+        "event_equals",
+        "send_email",
+        "exit"
+      ]
+    }
+  ]
+}

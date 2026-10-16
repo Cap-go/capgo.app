@@ -1,7 +1,7 @@
 # R2 cleanup producer
 
 The production inventory Worker's existing minute cron enables the cleanup
-producer. Each run checks live replication and queue health, writes the result to
+producer. Each run checks live manifest replication health, writes the result to
 PlanetScale for the future consumer, then retires eligible objects and publishes
 cleanup messages. This producer performs no R2 COPY, DELETE, trash or restore
 operations. The deletion consumer is a separate rollout.
@@ -10,7 +10,7 @@ operations. The deletion consumer is a separate rollout.
 
 `cloudflare_workers/r2_inventory/health.ts` opens the Supabase publisher and
 standalone PlanetScale inventory connections concurrently. Both metadata queries
-and five queue metric reads start together. The entire operation, including
+start together. The entire operation, including
 connections and checkpoint commit, has a five-second deadline. Unknown data,
 missing permissions, query/write errors and timeouts skip producer work. Client
 connections close on failure, server statement/lock timeouts bound queries, and
@@ -31,40 +31,43 @@ replay delay at idle is accepted alongside bounded WAL and fresh communications.
 Historical error counters are included in diagnostics without permanently blocking
 recovered replication. Source WAL distance includes unrelated database activity.
 
-Notification/repair queues and both ingestion DLQs must report zero backlog
-count and bytes. Metrics are best-effort operational signals, not completeness
-watermarks. The cleanup queue may hold fewer than 10,000 messages. A run also
-subtracts its own publications from remaining capacity before each batch.
+The helper makes no queue API calls and sends no probe messages. Notification,
+repair and cleanup backlog, dead-letter messages and consumer availability do not
+participate in its verdict. The producer keeps publishing eligible cleanup work
+when consumers are down; there is no cleanup backlog cap. Deployment creates and
+binds the queue, and the cron requires its normal cleanup queue binding.
 
 The helper upserts `(bucket_name='capgo', job_name='cleanup_health', partition_key='')`
-in `public.r2_inventory_checkpoints`. Its JSON checkpoint uses **schemaVersion 2**:
+in `public.r2_inventory_checkpoints`. Its JSON checkpoint uses **schemaVersion 3**:
 
-- `healthy`: replication and inventory ingestion checks passed.
-- `producerReady`: `healthy` plus known cleanup backlog below the production cap.
+- `healthy`: manifest replication checks passed.
 - `observedAt`: destination observation timestamp; `maxAgeSeconds`: 120.
-- `notificationsHealthy`, `repairsHealthy`, `manifestReplicationHealthy`.
-- `deletionBacklog`, diagnostic `reasons`, and source/destination replication metrics.
+- `manifestReplicationHealthy`, diagnostic `reasons`, and source/destination replication metrics.
 - `checkedAt`: invocation-local timestamp, used only for producer freshness.
 
 The producer uses the helper's returned object and never reads `cleanup_health`.
 It checks the in-memory result before each transaction and expires it after
-30 seconds. The future consumer must require schemaVersion 2, `healthy=true`,
-all dependency flags, and observation age between zero and 120 seconds. It must
-ignore `producerReady` and producer backlog limits so backpressure cannot prevent
-it from draining the queue. Older observations cannot replace a newer checkpoint.
+30 seconds. The cleanup consumer accepts schemaVersion 3 alongside the legacy
+schemas, checks `manifestReplicationHealthy=true`, and retains its independent
+observation age bound of zero to 300 seconds. Its remaining health budget bounds
+storage work; the writer's `maxAgeSeconds` does not change that consumer policy.
+Schema 3 replaces schema 2's queue-dependent verdict and removes its queue flags,
+`producerReady` and `deletionBacklog`; older schemas are not the new contract.
+Older observations cannot replace a newer checkpoint.
 A failed write prevents producer work; an unavailable database leaves prior
-consumer evidence to expire normally. No consumer health is fabricated.
+consumer evidence to expire normally. The persisted verdict describes replication, not consumer health.
 
 ## Deployment and the separate consumer rollout
 
 The stable release workflow creates `capgo-r2-inventory-prod-cleanup` before
-binding `CLEANUP_QUEUE` and deploying the enabled producer. This PR creates no
-cleanup consumer. Existing notification and repair consumers retain their settings.
+binding `CLEANUP_QUEUE` and deploying the enabled producer. The separately added
+cleanup consumer retains its deletion safeguards and accepts the new checkpoint
+schema. Existing notification and repair consumers retain their settings.
 The inventory runtime role needs only column SELECT on `manifest.s3_path` in
 addition to its existing inventory/checkpoint grants. The narrow grant was applied
 and verified separately before activation; no broader manifest access is required.
 
-The future deletion consumer must validate exact committed retirement identity
+The deletion consumer must validate exact committed retirement identity
 before R2 work and establish authoritative reference absence, including late
 legacy finalization. Inventory retirement and primary manifest writes are separate
 transactions: operational replication health and object age do not close that
@@ -152,7 +155,8 @@ rollback and a later retirement with a different identity.
 
 ## Validation and capacity evidence
 
-Unit tests cover enabled scheduling, concurrent health checks, timeout/write failures, encoded limits,
+Unit tests cover enabled scheduling despite queue backlog or unavailable consumer metrics,
+absence of health probe messages, concurrent health checks, timeout/write failures, encoded limits,
 examined cursor partitioning and late publication. Postgres tests cover actual
 Drizzle commits/rollback, reference/lease rechecks, reservation races, ownership
 fencing, microsecond identity, partial progress, lost commit responses, page bounds,

@@ -24,14 +24,36 @@ beforeEach(() => {
   mocks.verify.mockResolvedValue([{ version: 2, size: 42 }, { version: 2, size: 43 }])
 })
 const entries = ['a', 'b'].map(file => ({ file_name: file, file_hash: 'fake-hash', s3_path: `orgs/fake-org/apps/com.example.fake/delta/${file}`, file_size_receipt: 'synthetic-receipt' }))
-async function request(manifest = entries) {
+async function request(manifest = entries, cliVersion: string | null = '8.74.0') {
   const server = new Hono()
   server.onError((error, c) => error instanceof HTTPException ? c.json(error.cause as object, error.status) : c.json({ error: 'unexpected' }, 500))
   server.route('/', app)
-  return server.request('/', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ app_id: 'com.example.fake', name: 'test', manifest }) })
+  const headers = new Headers({ 'content-type': 'application/json' })
+  if (cliVersion !== null)
+    headers.set('x-cli-version', cliVersion)
+  return server.request('/', { method: 'POST', headers, body: JSON.stringify({ app_id: 'com.example.fake', name: 'test', manifest }) })
 }
 
 describe('whole-manifest inventory gate', () => {
+  it.each([null, '', 'invalid', '8.73.0', '8.73.99', '8.74.0-beta.1'])('preserves legacy uploads without inventory admission for CLI %s', async (cliVersion) => {
+    mocks.register.mockRejectedValue(new ManifestInventoryConflict([entries[0].s3_path]))
+    expect((await request(entries, cliVersion)).status).toBe(200)
+    expect(mocks.register).not.toHaveBeenCalled()
+    expect(mocks.persist).toHaveBeenCalledOnce()
+    expect(mocks.verify).toHaveBeenCalledOnce()
+  })
+  it.each(['8.74.0', '8.74.0+build.1', '8.74.1', '8.100.0', '9.0.0'])('requires active inventory reservations for CLI %s', async (cliVersion) => {
+    mocks.register.mockRejectedValue(new ManifestInventoryConflict([entries[0].s3_path]))
+    expect((await request(entries, cliVersion)).status).toBe(409)
+    expect(mocks.register).toHaveBeenCalledOnce()
+    expect(mocks.persist).not.toHaveBeenCalled()
+  })
+  it('still rejects invalid receipts for legacy uploads', async () => {
+    mocks.verify.mockResolvedValue(null)
+    expect((await request(entries, '8.73.0')).status).toBe(400)
+    expect(mocks.register).not.toHaveBeenCalled()
+    expect(mocks.persist).not.toHaveBeenCalled()
+  })
   it('rejects conflicts with 409 before any primary manifest insertion', async () => {
     mocks.register.mockRejectedValue(new ManifestInventoryConflict([entries[1].s3_path]))
     const response = await request()
