@@ -150,7 +150,7 @@ include ':capgo-capacitor-env'
 project(':capgo-capacitor-env').projectDir = new File('../node_modules/.bun/@capgo+capacitor-env@8.1.42+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-env/android')
 
 include ':capgo-capacitor-fast-sql'
-project(':capgo-capacitor-fast-sql').projectDir = new File('../node_modules/.bun/@capgo+capacitor-fast-sql@8.2.8+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-fast-sql/android')
+project(':capgo-capacitor-fast-sql').projectDir = new File('../node_modules/.bun/@capgo+capacitor-fast-sql@8.2.13+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-fast-sql/android')
 
 include ':capgo-capacitor-file'
 project(':capgo-capacitor-file').projectDir = new File('../node_modules/.bun/@capgo+capacitor-file@8.0.19+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-file/android')
@@ -234,7 +234,7 @@ include ':capgo-capacitor-native-market'
 project(':capgo-capacitor-native-market').projectDir = new File('../node_modules/.bun/@capgo+capacitor-native-market@8.0.47+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-native-market/android')
 
 include ':capgo-capacitor-native-navigation'
-project(':capgo-capacitor-native-navigation').projectDir = new File('../node_modules/.bun/@capgo+capacitor-native-navigation@8.4.2+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-native-navigation/android')
+project(':capgo-capacitor-native-navigation').projectDir = new File('../node_modules/.bun/@capgo+capacitor-native-navigation@8.6.0+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-native-navigation/android')
 
 include ':capgo-capacitor-nativegeocoder'
 project(':capgo-capacitor-nativegeocoder').projectDir = new File('../node_modules/.bun/@capgo+capacitor-nativegeocoder@8.0.51+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-nativegeocoder/android')
@@ -247,6 +247,9 @@ project(':capgo-capacitor-network-diagnostics').projectDir = new File('../node_m
 
 include ':capgo-capacitor-nfc'
 project(':capgo-capacitor-nfc').projectDir = new File('../node_modules/.bun/@capgo+capacitor-nfc@8.2.10+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-nfc/android')
+
+include ':capgo-capacitor-notifications'
+project(':capgo-capacitor-notifications').projectDir = new File('../packages/capacitor-notifications/android')
 
 include ':capgo-capacitor-pdf-generator'
 project(':capgo-capacitor-pdf-generator').projectDir = new File('../node_modules/.bun/@capgo+capacitor-pdf-generator@8.0.39+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-pdf-generator/android')
@@ -296,6 +299,9 @@ project(':capgo-capacitor-shake').projectDir = new File('../node_modules/.bun/@c
 include ':capgo-capacitor-sim'
 project(':capgo-capacitor-sim').projectDir = new File('../node_modules/.bun/@capgo+capacitor-sim@8.0.39+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-sim/android')
 
+include ':capgo-capacitor-social-login'
+project(':capgo-capacitor-social-login').projectDir = new File('../node_modules/.bun/@capgo+capacitor-social-login@8.5.18+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-social-login/android')
+
 include ':capgo-capacitor-speech-recognition'
 project(':capgo-capacitor-speech-recognition').projectDir = new File('../node_modules/.bun/@capgo+capacitor-speech-recognition@8.3.2+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-speech-recognition/android')
 
@@ -309,7 +315,7 @@ include ':capgo-capacitor-textinteraction'
 project(':capgo-capacitor-textinteraction').projectDir = new File('../node_modules/.bun/@capgo+capacitor-textinteraction@8.0.40+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-textinteraction/android')
 
 include ':capgo-capacitor-updater'
-project(':capgo-capacitor-updater').projectDir = new File('../node_modules/.bun/@capgo+capacitor-updater@8.52.1+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-updater/android')
+project(':capgo-capacitor-updater').projectDir = new File('../node_modules/.bun/@capgo+capacitor-updater@8.53.0+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-updater/android')
 
 include ':capgo-capacitor-uploader'
 project(':capgo-capacitor-uploader').projectDir = new File('../node_modules/.bun/@capgo+capacitor-uploader@8.3.18+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-uploader/android')

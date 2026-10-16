@@ -69,6 +69,26 @@ jobs:
         run: |
           base_version="$(bun -e 'console.log(require("./package.json").version)')"
           echo "bundle=${base_version}-pr.${PR_NUMBER}.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+          echo "base_version=${base_version}" >> "$GITHUB_OUTPUT"
+      - name: Delete orphaned PR preview bundles
+        timeout-minutes: 5
+        env:
+          CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_VERSION: ${{ steps.version.outputs.base_version }}
+        # Failed uploads can leave R2-backed bundles that block manifest inventory on the next run.
+        run: |
+          set -euo pipefail
+          start_run=$((GITHUB_RUN_NUMBER - 8))
+          if [ "$start_run" -lt 1 ]; then
+            start_run=1
+          fi
+          for run in $(seq "$start_run" "$GITHUB_RUN_NUMBER"); do
+            for attempt in 1 2 3; do
+              bundle="${BASE_VERSION}-pr.${PR_NUMBER}.${run}.${attempt}"
+              bunx "$CAPGO_CLI" bundle delete "$bundle" "$APP_ID" --apikey "$CAPGO_TOKEN" 2>/dev/null || true
+            done
+          done
       - name: Upload bundle to the PR channel
         env:
           CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 import {
+  capReleaseAs,
   matchesComponent,
   resolvePendingReleaseScope,
   resolveReleaseScope,
@@ -98,6 +99,18 @@ describe('release scope matching', () => {
     expect(matchesComponent('capgo', files)).toBe(false)
     expect(matchesComponent('cli', files)).toBe(false)
     expect(matchesComponent('notifications', files)).toBe(true)
+  })
+
+  it.concurrent('keeps the notifications plugin major aligned with Capacitor', () => {
+    const packageJson = JSON.parse(
+      readFileSync('packages/capacitor-notifications/package.json', 'utf8'),
+    ) as { version: string, devDependencies: Record<string, string> }
+    const capacitorMajor = packageJson.devDependencies['@capacitor/ios'].replace(/^\D*/, '').split('.')[0]
+
+    expect(packageJson.version.split('.')[0]).toBe(capacitorMajor)
+    expect(capReleaseAs('notifications', 'major')).toBe('minor')
+    expect(capReleaseAs('notifications', 'patch')).toBe('patch')
+    expect(capReleaseAs('cli', 'major')).toBe('major')
   })
 
   it.concurrent('publishes notifications as a public npm package', () => {

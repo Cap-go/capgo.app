@@ -171,8 +171,19 @@ function resolveCommitsScope(component: Component, commits: string[], run: GitRu
 
   return {
     shouldRelease,
-    releaseAs: shouldRelease ? toReleaseAs(highestSeverity) : 'patch' as ReleaseAs,
+    releaseAs: shouldRelease ? capReleaseAs(component, toReleaseAs(highestSeverity)) : 'patch' as ReleaseAs,
   }
+}
+
+/**
+ * Capacitor plugins keep their major version equal to the Capacitor major they
+ * target (8.x.y for Capacitor 8), so a breaking change only bumps the minor.
+ * The major moves by hand together with the Capacitor upgrade.
+ */
+export function capReleaseAs(component: Component, releaseAs: ReleaseAs): ReleaseAs {
+  if (component === 'notifications' && releaseAs === 'major')
+    return 'minor'
+  return releaseAs
 }
 
 export function resolveReleaseScope(component: Component, before: string, after: string, run: GitRunner = runGit) {

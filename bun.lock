@@ -93,6 +93,7 @@
         "@capgo/capacitor-navigation-bar": "^8.2.10",
         "@capgo/capacitor-network-diagnostics": "^8.0.11",
         "@capgo/capacitor-nfc": "^8.2.10",
+        "@capgo/capacitor-notifications": "workspace:*",
         "@capgo/capacitor-pdf-generator": "^8.0.39",
         "@capgo/capacitor-pdf-viewer": "^8.2.4",
         "@capgo/capacitor-pedometer": "^8.0.43",
@@ -116,7 +117,7 @@
         "@capgo/capacitor-supabase": "^8.2.3",
         "@capgo/capacitor-textinteraction": "^8.0.40",
         "@capgo/capacitor-transitions": "^8.2.4",
-        "@capgo/capacitor-updater": "8.52.1",
+        "@capgo/capacitor-updater": "8.53.0",
         "@capgo/capacitor-uploader": "^8.3.18",
         "@capgo/capacitor-uwb": "^8.0.6",
         "@capgo/capacitor-video-player": "^8.2.10",
@@ -309,7 +310,7 @@
     },
     "packages/capacitor-notifications": {
       "name": "@capgo/capacitor-notifications",
-      "version": "0.1.15",
+      "version": "8.0.0",
       "devDependencies": {
         "@capacitor/android": "^8.4.2",
         "@capacitor/ios": "^8.4.2",
@@ -664,7 +665,7 @@
 
     "@capgo/capacitor-transitions": ["@capgo/capacitor-transitions@8.2.4", "", { "peerDependencies": { "@angular/core": ">=17.0.0", "react": ">=18.0.0", "react-dom": ">=18.0.0", "solid-js": ">=1.0.0", "svelte": ">=4.0.0", "vue": ">=3.0.0" }, "optionalPeers": ["@angular/core", "react", "react-dom", "solid-js", "svelte", "vue"] }, "sha512-S1OOB2dr01JQOLh+5qMtMIFUCgqfCP+zmfqFnNj2aID13EvYKke6yQ6E89i4vnMROmuLRWTtzabjoFFPwttE7g=="],
 
-    "@capgo/capacitor-updater": ["@capgo/capacitor-updater@8.52.1", "", { "peerDependencies": { "@capacitor/core": "^8.0.0" } }, "sha512-bvI6kUms5QJXtWznv7JoTdmKlmjobPYIW1santxgn5AZAciXpiDXXcwdaK2sjgK1NyuzREwZw68vzUCWGhrbAA=="],
+    "@capgo/capacitor-updater": ["@capgo/capacitor-updater@8.53.0", "", { "peerDependencies": { "@capacitor/core": "^8.0.0" } }, "sha512-fJfHi/h6AwZLvLrRlztxFUhKt+CDCHiMsRLzuOT0wFUvqP2qIK/B39nMr8xNXuRLzQoQWBkriQJO1ZWzhq3Afg=="],
 
     "@capgo/capacitor-uploader": ["@capgo/capacitor-uploader@8.3.18", "", { "dependencies": { "idb": "^8.0.2" }, "peerDependencies": { "@capacitor/core": ">=8.0.0" } }, "sha512-GymmVsXh7ftXqK8PCLx3rOeTnTnBeZUX6pSZwYN8+LKhSZlvKppG3TvvCMThg35g1zP+gU0WDzseaXCJFCz9Uw=="],
 

@@ -10,6 +10,9 @@
     "paths": {
       "~/*": [
         "./src/*"
+      ],
+      "@capgo/capacitor-notifications": [
+        "./packages/capacitor-notifications/src/index.ts"
       ]
     },
     "resolveJsonModule": true,

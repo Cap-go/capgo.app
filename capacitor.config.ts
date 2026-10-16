@@ -19,6 +19,13 @@ const config: CapacitorConfig = {
         tiktok: false,
       },
     },
+    CapgoNotifications: {
+      presentationOptions: [
+        'badge',
+        'sound',
+        'alert',
+      ],
+    },
     PushNotifications: {
       presentationOptions: [
         'badge',

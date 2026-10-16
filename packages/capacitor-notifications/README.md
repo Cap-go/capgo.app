@@ -20,16 +20,17 @@ npm install @capgo/capacitor-notifications @capgo/capacitor-updater
 npx cap sync
 ```
 
-For iOS silent/background notifications, forward remote notifications from `ios/App/App/AppDelegate.swift`:
+For iOS silent/background notifications, enable the `remote-notification` background mode and forward remote notifications from `ios/App/App/AppDelegate.swift`:
 
 ```swift
+import CapgoNotificationsPlugin // CocoaPods: import CapgoCapacitorNotifications
+
 func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any], fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
-    NotificationCenter.default.post(name: Notification.Name("CapgoNotificationsRemoteNotification"), object: nil, userInfo: [
-        "userInfo": userInfo,
-        "completionHandler": completionHandler,
-    ])
+    CapgoNotificationsPlugin.didReceiveRemoteNotification(userInfo, fetchCompletionHandler: completionHandler)
 }
 ```
+
+The static entry point keeps pushes that arrive before the Capacitor bridge has loaded the plugin (cold background launch). Posting a `CapgoNotificationsRemoteNotification` `NotificationCenter` notification with `userInfo` and `completionHandler` still works, but pushes posted before the plugin loads are dropped.
 
 Or let the Capgo CLI patch the app entrypoint:
 
@@ -71,9 +72,15 @@ Mint `identityProof` from your backend with `POST /notifications/recipients/proo
 
 ## Silent Update Checks
 
-When Capgo sends a silent notification with `capgoAction=update_check`, this plugin asks `@capgo/capacitor-updater` for the latest bundle, downloads it, and either:
+When Capgo sends a silent notification with `capgoAction=update_check`, the native plugin calls the native update pipeline of `@capgo/capacitor-updater` (`triggerUpdateCheck`, updater 8.52 or newer). No JavaScript runs: the update works while the WebView is suspended or a preview bundle is loaded. The updater downloads the bundle for the device's own channel and installs it with its own `autoUpdate` / `directUpdate` policy. The outcome is added to the payload as `capgoNativeUpdateCheck` (`queued`, `already_running`, `unavailable`, `preview_session`, `failed`).
 
-- queues it with `next`, so it installs on the next app restart/background cycle
-- installs it with `set`, when configured by the Capgo app setting
+With an older updater the native call reports `unsupported` and the JavaScript layer falls back to `getLatest` + `download` + `next`/`set`.
 
-iOS background pushes remain best-effort and can be throttled by the OS.
+Limits:
+
+- iOS background pushes are best-effort and can be throttled by the OS.
+- Android delivers the push to a killed app without starting an Activity, so no Capacitor bridge exists. Pass the messaging service as context (`CapgoNotificationsPlugin.sendRemoteMessage(this, message)`, done by the bundled service) and the plugin starts the updater's `HeadlessUpdateWorker`: it downloads the bundle and makes it current for the next launch. Updaters without this worker apply the update at the next launch instead.
+
+## Versioning
+
+The major version follows the Capacitor major it targets: `8.x.y` supports Capacitor 8.

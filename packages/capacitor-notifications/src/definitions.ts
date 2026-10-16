@@ -135,7 +135,11 @@ export interface CapgoUpdaterIntegrationOptions {
 }
 
 export interface CapgoUpdateCheckResult {
-  status: 'disabled' | 'unavailable' | 'no_update' | 'installed' | 'failed'
+  /**
+   * `queued` / `already_running`: the native updater pipeline took over and
+   * installs the bundle with its own policy (`autoUpdate`, `directUpdate`).
+   */
+  status: 'disabled' | 'unavailable' | 'no_update' | 'installed' | 'queued' | 'already_running' | 'failed'
   version?: string
   bundleId?: string
   error?: string
@@ -188,6 +192,8 @@ export interface CapgoNotificationsNativePlugin {
 export interface CapgoNotificationsPlugin {
   configure: (config: CapgoNotificationsConfig) => Promise<void>
   register: (options: CapgoNotificationRegisterOptions) => Promise<CapgoNotificationRegistration>
+  /** Deactivate this device's registration, forget the stored identity and drop the native push token. */
+  unregister: () => Promise<void>
   setExternalId: (externalId: string, identityProof?: string) => Promise<void>
   setTags: (tags: string[]) => Promise<void>
   setBadge: (count: number) => Promise<void>

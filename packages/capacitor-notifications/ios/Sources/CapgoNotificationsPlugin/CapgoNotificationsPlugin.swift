@@ -44,9 +44,51 @@ public class CapgoNotificationsPlugin: CAPPlugin, CAPBridgedPlugin {
     private let notificationDelegateHandler = CapgoNotificationsHandler()
     private let installIdKey = "capgo.notifications.nativeInstallId"
 
+    private static let pendingLock = NSLock()
+    private static weak var loadedInstance: CapgoNotificationsPlugin?
+    private static var pendingRemoteNotifications: [(id: UUID, userInfo: [AnyHashable: Any], completion: ((UIBackgroundFetchResult) -> Void)?)] = []
+    private static let pendingCompletionTimeout: TimeInterval = 25.0
+
+    /// Forward `application(_:didReceiveRemoteNotification:fetchCompletionHandler:)` here.
+    /// Unlike the NotificationCenter forward, pushes that arrive before the bridge has
+    /// loaded this plugin (cold background launch) are kept and handled on load.
+    public static func didReceiveRemoteNotification(_ userInfo: [AnyHashable: Any], fetchCompletionHandler completionHandler: ((UIBackgroundFetchResult) -> Void)? = nil) {
+        pendingLock.lock()
+        guard let instance = loadedInstance else {
+            let id = UUID()
+            pendingRemoteNotifications.append((id: id, userInfo: userInfo, completion: completionHandler))
+            pendingLock.unlock()
+            // iOS throttles silent pushes when the fetch handler is never called. If the
+            // bridge does not load this plugin in time, finish the wake-up and keep the
+            // payload so load() still delivers it.
+            if completionHandler != nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + pendingCompletionTimeout) {
+                    pendingLock.lock()
+                    var expired: ((UIBackgroundFetchResult) -> Void)?
+                    if let index = pendingRemoteNotifications.firstIndex(where: { $0.id == id }) {
+                        expired = pendingRemoteNotifications[index].completion
+                        pendingRemoteNotifications[index].completion = nil
+                    }
+                    pendingLock.unlock()
+                    expired?(.noData)
+                }
+            }
+            return
+        }
+        pendingLock.unlock()
+        DispatchQueue.main.async {
+            instance.notificationDelegateHandler.handleRemoteNotification(userInfo, completionHandler: completionHandler)
+        }
+    }
+
     override public func load() {
-        self.bridge?.notificationRouter.pushNotificationHandler = self.notificationDelegateHandler
         self.notificationDelegateHandler.plugin = self
+        self.claimPushNotificationHandler()
+        // Plugins load in no fixed order: claim again once the bridge has loaded the
+        // rest, keeping any other push plugin as a forward target instead of losing it.
+        DispatchQueue.main.async { [weak self] in
+            self?.claimPushNotificationHandler()
+        }
 
         NotificationCenter.default.addObserver(self,
                                                selector: #selector(self.didRegisterForRemoteNotificationsWithDeviceToken(notification:)),
@@ -62,6 +104,60 @@ public class CapgoNotificationsPlugin: CAPPlugin, CAPBridgedPlugin {
                                                selector: #selector(self.didReceiveRemoteNotification(notification:)),
                                                name: .capgoNotificationsRemoteNotification,
                                                object: nil)
+
+        CapgoNotificationsPlugin.pendingLock.lock()
+        CapgoNotificationsPlugin.loadedInstance = self
+        let pending = CapgoNotificationsPlugin.pendingRemoteNotifications
+        CapgoNotificationsPlugin.pendingRemoteNotifications = []
+        CapgoNotificationsPlugin.pendingLock.unlock()
+        // Let the bridge finish loading the remaining plugins (the updater) first.
+        DispatchQueue.main.async {
+            pending.forEach { entry in
+                self.notificationDelegateHandler.handleRemoteNotification(entry.userInfo, completionHandler: entry.completion)
+            }
+        }
+    }
+
+    /// Ask @capgo/capacitor-updater to run its native update pipeline now. The updater
+    /// applies the bundle with its own install policy (next background, direct update).
+    /// Called through the Objective-C runtime so the updater stays an optional dependency.
+    /// Returns the updater status (`queued`, `already_running`, `unavailable`,
+    /// `preview_session`) or `unsupported` when the updater cannot be triggered natively.
+    func triggerNativeUpdateCheck() -> String {
+        guard let updater = self.bridge?.plugin(withName: "CapacitorUpdater") else {
+            return "unsupported"
+        }
+        let selector = NSSelectorFromString("triggerUpdateCheck:")
+        guard updater.responds(to: selector) else {
+            return "unsupported"
+        }
+        var status = "failed"
+        let call = CAPPluginCall(callbackId: "capgo-notifications-update-check",
+                                 methodName: "triggerUpdateCheck",
+                                 options: [:],
+                                 success: { result, _ in
+                                    status = result?.data?["status"] as? String ?? "queued"
+                                 },
+                                 error: { _ in
+                                    status = "failed"
+                                 })
+        let invoke = { _ = updater.perform(selector, with: call) }
+        if Thread.isMainThread {
+            invoke()
+        } else {
+            DispatchQueue.main.sync(execute: invoke)
+        }
+        return status
+    }
+
+    private func claimPushNotificationHandler() {
+        guard let router = self.bridge?.notificationRouter else { return }
+        if let current = router.pushNotificationHandler, current !== self.notificationDelegateHandler {
+            self.notificationDelegateHandler.forwardHandler = current
+        }
+        if router.pushNotificationHandler !== self.notificationDelegateHandler {
+            router.pushNotificationHandler = self.notificationDelegateHandler
+        }
     }
 
     deinit {

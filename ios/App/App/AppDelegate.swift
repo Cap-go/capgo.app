@@ -1,6 +1,7 @@
 import UIKit
 import Capacitor
 import CapacitorUpdaterPlugin
+import CapgoNotificationsPlugin
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -165,10 +166,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func application(_ _: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any], fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
-        NotificationCenter.default.post(name: Notification.Name("CapgoNotificationsRemoteNotification"), object: nil, userInfo: [
-            "userInfo": userInfo,
-            "completionHandler": completionHandler,
-        ])
+        // The static entry point keeps pushes that arrive before the bridge loads the plugin
+        // (silent push launching the app in the background).
+        CapgoNotificationsPlugin.didReceiveRemoteNotification(userInfo, fetchCompletionHandler: completionHandler)
     }
     
     func applicationWillResignActive(_ application: UIApplication) {
