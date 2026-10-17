@@ -353,9 +353,18 @@ async function reconcileUserABTests(
 
       const enrolled = signup ? enrollmentsForSignup(user) : user.abtests_enrolled
       const existing = resolveABTestAssignments({ ...user, id: userId, abtests_enrolled: enrolled }, user.abtests, AB_TESTS_CONFIG)
+      // Reconcile even when the assignment is unchanged: an app can predate
+      // intent selection or treatment assignment. SQL rechecks all safeguards.
+      const reconcileDoubleIntentApps = async (assignments: Record<string, ABTestAssignment>) => {
+        if (user.created_via_invite === false && (user.intent === 'both' || user.intent === 'exploring')
+          && assignments.todo_list_v4_double_intent?.branch === 'A') {
+          await tx.execute(sql`SELECT public.reconcile_double_intent_app_onboarding(${userId}::uuid)`)
+        }
+      }
       const enrollmentChanged = signup && JSON.stringify(enrolled) !== JSON.stringify(user.abtests_enrolled ?? [])
       const bentoSyncState = readBentoSyncState(user.abtests_bento_sync)
       if (!existing.changed && !enrollmentChanged) {
+        await reconcileDoubleIntentApps(existing.assignments)
         return {
           assignments: existing.assignments,
           bentoSyncState,
@@ -388,10 +397,12 @@ async function reconcileUserABTests(
         RETURNING onboarding->'abtests' AS abtests
       `)
       const updated = updateResult.rows[0]
+      const assignments = updated?.abtests === undefined
+        ? quickError(500, 'ab_test_assignment_failed', 'A/B test assignment failed')
+        : resolveABTestAssignments({ ...user, id: userId, abtests_enrolled: enrolled }, updated.abtests, AB_TESTS_CONFIG, undefined, undefined, false).assignments
+      await reconcileDoubleIntentApps(assignments)
       return {
-        assignments: updated?.abtests === undefined
-          ? quickError(500, 'ab_test_assignment_failed', 'A/B test assignment failed')
-          : resolveABTestAssignments({ ...user, id: userId, abtests_enrolled: enrolled }, updated.abtests, AB_TESTS_CONFIG, undefined, undefined, false).assignments,
+        assignments,
         bentoSyncState: nextBentoSyncState,
         needsBentoSync: nextBentoSyncState.pending,
       }

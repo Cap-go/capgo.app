@@ -60,6 +60,19 @@
       "B": { "bento_tag": "ab:no_builder_todo_list_v4", "label": "Current checklist" }
     }
   },
+  "todo_list_v4_double_intent": {
+    "comment": "Keeps both OTA and Builder checklists available. Disabled pending the separate frontend chooser.",
+    "audience": "self_signup",
+    "intents": ["both", "exploring"],
+    "label": "ToDoList V4 Double Intent",
+    "treatment_percentage": 0,
+    "treatment_branch": "A",
+    "control_branch": "B",
+    "branches": {
+      "A": { "bento_tag": "ab:todo_list_v4_double_intent", "label": "Both V4 checklists" },
+      "B": { "bento_tag": "ab:no_todo_list_v4_double_intent", "label": "Current checklist" }
+    }
+  },
   "new_emails_v2": {
     "comment": "Prospective signup enrollment only. Intent may be selected later. OTA non-treatment has no assignment or tag.",
     "audience": "self_signup",

@@ -1208,6 +1208,17 @@ describe('new-user A/B test assignment', () => {
     expect(closeClientMock).toHaveBeenCalledOnce()
   })
 
+  it.each(['both', 'exploring'])('reconciles existing apps for persisted double-intent A / %s even without an assignment update', async (intent) => {
+    const { getOrCreateUserABTests } = await loadABTestsModule()
+    const abtests = { ...persistedAssignments({ channel: null }), todo_list_v4_double_intent: intentAssignment() }
+    const context = { get: vi.fn(() => 'request-id') } as never
+    drizzleExecuteMock.mockResolvedValueOnce({ rows: [{ abtests, intent, created_via_invite: false }] })
+
+    expect(await getOrCreateUserABTests(context, USER_ID)).toEqual(abtests)
+    expect(drizzleExecuteMock).toHaveBeenCalledTimes(2)
+    expect(collectSqlParameterValues(drizzleExecuteMock.mock.calls[1]?.[0])).toContain(USER_ID)
+  })
+
   it('rejects on-demand assignment when the authenticated profile is missing', async () => {
     const { getOrCreateUserABTests } = await loadABTestsModule()
     const context = { get: vi.fn(() => 'request-id') } as never
