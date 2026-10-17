@@ -3,6 +3,7 @@ import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
 import { parseSignupAttributionRecord, signupAttributionEventTags } from '../../shared/signup-attribution.ts'
 import { syncBentoSubscriberTags } from '../utils/bento.ts'
+import { shouldUseLifecycleV2 } from '../utils/lifecycle_v2_rollout.ts'
 import { buildBillingPlanBentoTags } from '../utils/billing_bento_tags.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
@@ -89,7 +90,7 @@ app.post('/', middlewareAPISecret, triggerValidator('orgs', 'INSERT'), async (c)
     trialPlanName = await finalizePendingStripeCustomer(c, org)
   }
 
-  if (trialPlanName) {
+  if (trialPlanName && !await shouldUseLifecycleV2(c, org.id)) {
     const { data: creator, error: creatorError } = await supabaseAdmin(c)
       .from('users')
       .select('email')

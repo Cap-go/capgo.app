@@ -16,6 +16,7 @@ import { clearWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
 import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
+import { lifecycleOrganizationTarget } from '~/utils/lifecycleOrganizationLink'
 import { getOnboardingResumeRedirect, isNewOnboardingUser } from '~/utils/onboardingRedirect'
 import { hasPendingInviteSkip } from '~/utils/pendingInviteSkip'
 import { validateRedirectPath } from '~/utils/safeRedirect'
@@ -382,6 +383,12 @@ async function guard(
       })
     }
 
+    const lifecycleTarget = lifecycleOrganizationTarget(to.query, organizationsLoaded ? organizationStore.organizations : [])
+    if (lifecycleTarget === null)
+      return next('/apps')
+    if (lifecycleTarget)
+      organizationStore.setCurrentOrganization(lifecycleTarget)
+
     const onboardingRedirect = await getPendingOnboardingRedirect(organizationsLoaded)
     if (onboardingRedirect)
       return next(onboardingRedirect)
@@ -444,6 +451,12 @@ async function guard(
         },
       })
     }
+
+    const lifecycleTarget = lifecycleOrganizationTarget(to.query, organizationsLoaded ? organizationStore.organizations : [])
+    if (lifecycleTarget === null)
+      return next('/apps')
+    if (lifecycleTarget)
+      organizationStore.setCurrentOrganization(lifecycleTarget)
 
     const onboardingRedirect = await getPendingOnboardingRedirect(organizationsLoaded)
     if (onboardingRedirect)

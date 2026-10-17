@@ -129,7 +129,7 @@ describe('plugin notification trigger', () => {
     )
   })
 
-  it.each(['already_claimed', 'no_recipients', 'org_not_found'] as const)('settles org member notifications that can never be delivered (%s)', async (outcome) => {
+  it.each(['already_claimed', 'no_recipients', 'org_not_found', 'suppressed'] as const)('settles org member notifications that can never be delivered (%s)', async (outcome) => {
     sendNotifToOrgMembersOnceMock.mockResolvedValue(outcome)
 
     const response = await requestPluginNotifications([orgMembersQueueItem()])

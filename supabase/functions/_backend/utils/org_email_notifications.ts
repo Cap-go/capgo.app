@@ -3,6 +3,7 @@ import { parseCronExpression } from 'cron-schedule'
 import { and, eq, inArray } from 'drizzle-orm'
 import { isBentoConfigured, trackBentoEvent } from './bento.ts'
 import { CacheHelper } from './cache.ts'
+import { isLegacyLifecycleEvent, shouldUseLifecycleV2 } from './lifecycle_v2_rollout.ts'
 import { cloudlog } from './logging.ts'
 import { claimNotifOrgOnceWithResult, hasNotifOrgClaim, sendNotifOrg, sendNotifOrgOnce } from './notifications.ts'
 import { closeClient, getDrizzleClient, getPgClient, logPgError } from './pg.ts'
@@ -497,6 +498,9 @@ export async function sendEmailToOrgMembers(
   if (!isBentoConfigured(c))
     return 0
 
+  if (isLegacyLifecycleEvent(eventName) && await shouldUseLifecycleV2(c, orgId))
+    return 0
+
   const client = drizzleClient ?? getDrizzleClient(await getPgClient(c, true))
   const { recipients } = await getPreparedEligibleEmailTargets(c, orgId, preferenceKey, client)
   if (!recipients) {
@@ -570,6 +574,9 @@ export async function sendNotifToOrgMembers(
   if (!isBentoConfigured(c))
     return false
 
+  if (isLegacyLifecycleEvent(eventName) && await shouldUseLifecycleV2(c, orgId))
+    return false
+
   // Get all eligible emails (includes org info)
   const { recipients } = await getPreparedEligibleEmailTargets(c, orgId, preferenceKey, drizzleClient, audience)
   if (!recipients) {
@@ -627,9 +634,10 @@ export async function sendNotifToOrgMembers(
  * - `sent`: this call delivered and claimed the notification.
  * - `already_claimed` / `no_recipients` / `org_not_found`: terminal, retrying
  *   can never deliver it, so queue consumers must drop the item.
+ * - `suppressed`: the ready lifecycle sender owns this event; no legacy claim.
  * - `failed`: transient, safe to retry.
  */
-export type OrgMembersOnceResult = 'sent' | 'already_claimed' | 'no_recipients' | 'org_not_found' | 'failed'
+export type OrgMembersOnceResult = 'sent' | 'already_claimed' | 'no_recipients' | 'org_not_found' | 'suppressed' | 'failed'
 
 export async function sendNotifToOrgMembersOnce(
   c: Context,
@@ -661,6 +669,9 @@ export async function sendNotifToOrgMembersOnceWithResult(
 
   if (!isBentoConfigured(c))
     return 'failed'
+
+  if (isLegacyLifecycleEvent(eventName) && await shouldUseLifecycleV2(c, orgId))
+    return 'suppressed'
 
   const pgClient = await getPgClient(c)
   const writeClient = getDrizzleClient(pgClient)

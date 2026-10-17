@@ -11,6 +11,7 @@ import { HTTPException } from 'hono/http-exception'
 import { buildBillingPlanBentoTags } from './billing_bento_tags.ts'
 import { buildNormalizedDeviceForWrite, hasComparableDeviceChanged, nullableString } from './deviceComparison.ts'
 import { quickError, simpleError } from './hono.ts'
+import { shouldUseLifecycleV2, withoutLegacyTrialTriggers } from './lifecycle_v2_rollout.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { checkoutPgClient, closeClient, getPgClient, releasePgClient } from './pg.ts'
 import { getClientIP } from './rate_limit.ts'
@@ -1220,12 +1221,15 @@ export async function customerToSegmentOrg(
     trialPlanNamesToRemove,
   )
 
+  const useLifecycleV2 = await shouldUseLifecycleV2(c, orgId)
+  const applyLifecycleHandoff = (tags: { segments: string[], deleteSegments: string[] }) => useLifecycleV2 ? withoutLegacyTrialTriggers(tags) : tags
+
   if (!segmentsObj.onboarded) {
     const segments = processSegments(segmentsObj)
-    return {
+    return applyLifecycleHandoff({
       segments: [...segments.segments, ...planTags.segments],
       deleteSegments: [...segments.deleteSegments, ...planTags.deleteSegments],
-    }
+    })
   }
 
   if (!paying && trialDaysLeft > 1 && trialDaysLeft <= 7) {
@@ -1252,10 +1256,10 @@ export async function customerToSegmentOrg(
   }
 
   const segments = processSegments(segmentsObj)
-  return {
+  return applyLifecycleHandoff({
     segments: [...segments.segments, ...planTags.segments],
     deleteSegments: [...segments.deleteSegments, ...planTags.deleteSegments],
-  }
+  })
 }
 
 function processSegments(segmentsObj: any): { segments: string[], deleteSegments: string[] } {

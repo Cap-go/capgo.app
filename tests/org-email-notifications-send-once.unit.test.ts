@@ -12,6 +12,7 @@ const {
   logPgErrorMock,
   sendNotifOrgMock,
   sendNotifOrgOnceMock,
+  shouldUseLifecycleV2Mock,
 } = vi.hoisted(() => ({
   closeClientMock: vi.fn(),
   claimNotifOrgOnceMock: vi.fn(),
@@ -23,6 +24,12 @@ const {
   logPgErrorMock: vi.fn(),
   sendNotifOrgMock: vi.fn(),
   sendNotifOrgOnceMock: vi.fn(),
+  shouldUseLifecycleV2Mock: vi.fn(),
+}))
+
+vi.mock('../supabase/functions/_backend/utils/lifecycle_v2_rollout.ts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../supabase/functions/_backend/utils/lifecycle_v2_rollout.ts')>(),
+  shouldUseLifecycleV2: shouldUseLifecycleV2Mock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
@@ -145,6 +152,7 @@ function createDrizzleStub(options?: {
 describe('sendNotifToOrgMembersOnce', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    shouldUseLifecycleV2Mock.mockResolvedValue(false)
     closeClientMock.mockResolvedValue(undefined)
     isBentoConfiguredMock.mockReturnValue(true)
     hasNotifOrgClaimMock.mockResolvedValue(false)
@@ -153,6 +161,20 @@ describe('sendNotifToOrgMembersOnce', () => {
       adminUsers: [{ id: 'admin-1', email: 'admin@example.com' }],
       kind: 'write-client',
     }))
+  })
+
+  it('suppresses a ready lifecycle event without consuming its legacy claim', async () => {
+    shouldUseLifecycleV2Mock.mockResolvedValue(true)
+    const { sendEmailToOrgMembers, sendNotifToOrgMembers, sendNotifToOrgMembersOnceWithResult } = await import('../supabase/functions/_backend/utils/org_email_notifications.ts')
+    const c = createContext()
+    expect(await sendEmailToOrgMembers(c, 'app:created', 'onboarding', {}, 'org-123')).toBe(0)
+    expect(await sendNotifToOrgMembers(c, 'builder_onboarding_started', 'builder_onboarding', {}, 'org-123', 'once', '* * * * *', {} as any)).toBe(false)
+    expect(await sendNotifToOrgMembersOnceWithResult(c, 'user:need_onboarding', 'onboarding', {}, 'org-123', 'once', {} as any)).toBe('suppressed')
+    expect(getPgClientMock).not.toHaveBeenCalled()
+    expect(hasNotifOrgClaimMock).not.toHaveBeenCalled()
+    expect(claimNotifOrgOnceMock).not.toHaveBeenCalled()
+    expect(sendNotifOrgMock).not.toHaveBeenCalled()
+    expect(sendNotifOrgOnceMock).not.toHaveBeenCalled()
   })
 
   it('treats an existing org-level claim as already delivered without sending recipients again', async () => {

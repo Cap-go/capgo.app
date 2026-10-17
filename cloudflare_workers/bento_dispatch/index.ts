@@ -6,6 +6,8 @@ import { Client } from 'pg'
 import { isBentoConfigured, trackBentoEvent } from '../../supabase/functions/_backend/utils/bento.ts'
 import { bentoFlows } from './bentoFlows.ts'
 import { processDispatchJob } from './consumer.ts'
+import { refreshLifecycleJourneys } from './flows/lifecycle/refresh.ts'
+import { LIFECYCLE_ROLLOUT_KEYS, lifecycleReady, lifecycleSettings } from './flows/lifecycle/rollout.ts'
 import { createMutationContext } from './helpers.ts'
 import { parseDispatchJob } from './operations.ts'
 import { publishDispatchJobs } from './scheduler.ts'
@@ -15,6 +17,10 @@ export interface DispatchEnv extends PostHogQueueEnv {
   HYPERDRIVE_CAPGO_DIRECT_EU: Hyperdrive
   DISPATCH_QUEUE: Queue<DispatchJob>
   BENTO_EVENT_DISPATCH_ENABLED?: string
+  BENTO_LIFECYCLE_V2_SENDER_CONTRACT?: string
+  BENTO_LIFECYCLE_V2_LEGACY_HANDOFF?: string
+  CF_ACCOUNT_ANALYTICS_ID?: string
+  CF_ANALYTICS_TOKEN?: string
   BENTO_PUBLISHABLE_KEY?: string
   BENTO_SECRET_KEY?: string
   BENTO_SITE_UUID?: string
@@ -92,6 +98,30 @@ export async function scheduleDispatch(_controller: ScheduledController, env: Di
       catch { console.error(JSON.stringify({ event: 'bento_dispatch_audit_pending' })) }
       if (!await enabled(db, env))
         return
+      try {
+        const read = { query: async <T extends import('pg').QueryResultRow>(sql: string, values?: unknown[]) => (await db.query<T>(sql, values)).rows }
+        if (await lifecycleReady(read, env as unknown as Record<string, string>)) {
+          const analytics = await lifecycleSettings(read, env as unknown as Record<string, string>, ['CF_ACCOUNT_ANALYTICS_ID', 'CF_ANALYTICS_TOKEN'])
+          const reader = /^[a-f\d]{32}$/i.test(analytics.CF_ACCOUNT_ANALYTICS_ID ?? '') && analytics.CF_ANALYTICS_TOKEN
+            ? async (query: string) => {
+              const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${analytics.CF_ACCOUNT_ANALYTICS_ID}/analytics_engine/sql`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${analytics.CF_ANALYTICS_TOKEN}`, 'Content-Type': 'text/plain; charset=utf-8' },
+                body: query,
+                signal: AbortSignal.timeout(5_000),
+              })
+              if (!response.ok)
+                throw new Error('Lifecycle evidence unavailable')
+              const result = await response.json() as { data?: Array<Record<string, string>> }
+              if (!Array.isArray(result.data))
+                throw new Error('Invalid lifecycle evidence')
+              return result.data
+            }
+            : null
+          await refreshLifecycleJourneys(db, reader)
+        }
+      }
+      catch { console.error(JSON.stringify({ event: 'bento_lifecycle_refresh_failed' })) }
       await publishDispatchJobs(env.DISPATCH_QUEUE, store, bentoFlows)
     })
   }
@@ -137,7 +167,7 @@ export async function consumeDispatch(batch: MessageBatch<unknown>, env: Dispatc
       const store = new DispatchStore(db)
       const result = await processDispatchJob(job, store, run => createMutationContext(store, run, async (event) => {
         return await trackBentoEvent(c, event.email, event.data, event.event, AbortSignal.timeout(10_000)) === true
-      }, { WEBAPP_URL: c.env.WEBAPP_URL }, Date.now, env.POSTHOG_QUEUE), bentoFlows[job.evaluationKey], env.POSTHOG_QUEUE)
+      }, { WEBAPP_URL: c.env.WEBAPP_URL, ...Object.fromEntries(LIFECYCLE_ROLLOUT_KEYS.filter(key => env[key] !== undefined).map(key => [key, env[key]!])) }, Date.now, env.POSTHOG_QUEUE), bentoFlows[job.evaluationKey], env.POSTHOG_QUEUE)
       try {
         await store.relayPendingAudit(env.POSTHOG_QUEUE)
       }

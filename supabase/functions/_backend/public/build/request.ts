@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { Database, Json } from '../../utils/supabase.types.ts'
 import { notifyCocoaPodsDeprecation } from '../../utils/cocoapods_deprecation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
+import { recordLifecycleFundingDenial } from '../../utils/lifecycle_v2_funding.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../../utils/logging.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
@@ -251,6 +252,7 @@ async function ensureBuildTimePlanAllowed(c: Context, supabase: ReturnType<typeo
   }
 
   if (!buildTimeAllowed) {
+    await recordLifecycleFundingDenial(c, orgId, appId)
     const upgradeUrl = getPlansUpgradeUrl(c)
     cloudlog({
       requestId: c.get('requestId'),

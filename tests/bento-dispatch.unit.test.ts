@@ -35,8 +35,8 @@ function harness() {
 }
 
 describe('bento evaluation contracts', () => {
-  it('uses four independently registered minutely evaluations and identifier-only messages', () => {
-    expect(Object.values(bentoFlows).map(flow => flow.everyMinutes)).toEqual([1, 1, 1, 1])
+  it('uses six independently registered minutely evaluations and identifier-only messages', () => {
+    expect(Object.values(bentoFlows).map(flow => flow.everyMinutes)).toEqual([1, 1, 1, 1, 1, 1])
     expect(parseDispatchJob(job)).toEqual(job)
     for (const input of [null, [], { ...job, partition: 0 }, { ...job, operation: key }, { ...job, evaluationKey: 'unknown' }, { ...job, runId: 'invalid' }])
       expect(() => parseDispatchJob(input)).toThrow('Invalid dispatch job')
@@ -54,7 +54,7 @@ describe('bento evaluation contracts', () => {
     const queue = { send: vi.fn().mockRejectedValueOnce(new Error('unavailable')).mockResolvedValue(undefined) }
     const store = { schedule: vi.fn().mockResolvedValue({ id: job.runId, enqueue_claim_token: 'claim' }), markEnqueued: vi.fn(), publicationFailed: vi.fn() }
     await expect(publishDispatchJobs(queue, store, bentoFlows)).rejects.toThrow('Queue publication failed')
-    expect(queue.send).toHaveBeenCalledTimes(4)
+    expect(queue.send).toHaveBeenCalledTimes(6)
     expect(store.publicationFailed).toHaveBeenCalledOnce()
   })
 })

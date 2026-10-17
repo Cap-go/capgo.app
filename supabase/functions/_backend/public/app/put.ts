@@ -14,6 +14,7 @@ import { createIfNotExistStoreInfo } from '../../utils/cloudflare.ts'
 import { lockOnboardingApp, unlockOnboardingApp } from '../../utils/demo.ts'
 import { DEVICE_DATA_COLLECTION_KEYS, mergeDeviceDataCollection } from '../../utils/deviceDataCollection.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
+import { shouldUseLifecycleV2 } from '../../utils/lifecycle_v2_rollout.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { buildOnboardingIntentBentoEventData, parseOrgOnboardingIntent } from '../../utils/org_onboarding_intent.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
@@ -435,7 +436,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     if (orgError || !orgData) {
       cloudlog({ requestId: c.get('requestId'), message: 'Cannot load organization for onboarding completion side effects', error: orgError, app_id: appId })
     }
-    else {
+    else if (!await shouldUseLifecycleV2(c, data.owner_org)) {
       const creatorDetails = buildAppCreatorEventDetails(data.onboarding)
       await trackBentoEvent(c, orgData.management_email, {
         ...buildOnboardingIntentBentoEventData(c, parseOrgOnboardingIntent(orgData.onboarding), {

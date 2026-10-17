@@ -51,7 +51,7 @@ async function sendQueuedPluginNotification(c: Context, item: PluginNotification
   // Terminal outcomes (already claimed, no recipients, org gone) can never be
   // delivered by a retry; treating them as failures kept them in the KV queue
   // forever and starved every newer item behind them.
-  if (result === 'already_claimed' || result === 'no_recipients' || result === 'org_not_found')
+  if (result === 'already_claimed' || result === 'no_recipients' || result === 'org_not_found' || result === 'suppressed')
     return { settled: true }
   return false
 }

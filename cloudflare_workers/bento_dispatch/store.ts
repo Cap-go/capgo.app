@@ -3,6 +3,7 @@ import type { PostHogQueueEnv, PostHogQueueMessage } from '../../supabase/functi
 import type { DispatchJob, DispatchRecord, EligibleUser, Json, QueryClient, ReadOnlyContext, RunRecord, TerminalReason } from './contracts.ts'
 import { flowAudit, recordFlowEvent, safeFlowMetadata } from '../../supabase/functions/_backend/utils/bento_flow_audit.ts'
 import { enqueuePostHog } from '../../supabase/functions/_backend/utils/posthog_queue.ts'
+import { claimLifecycleBudget } from './flows/lifecycle/budget.ts'
 
 export const CLAIM_LEASE_SECONDS = 120
 export const MAX_DISPATCH_ATTEMPTS = 5
@@ -172,6 +173,10 @@ export class DispatchStore {
         return null
       }
       await client.query('SELECT pg_catalog.pg_advisory_xact_lock(1954098942, 1)')
+      if (user.flowKey.startsWith('lifecycle:v2:') && !await claimLifecycleBudget(client, user)) {
+        await this.appendRunAudit(client, run, user, 'lifecycle_budget_or_context_deferred')
+        return null
+      }
       const budget = await client.query<{ count: number }>(`SELECT COUNT(*)::int AS count FROM (
         SELECT 1 FROM public.bento_event_dispatches
         WHERE last_attempt_at > pg_catalog.statement_timestamp() - INTERVAL '1 minute' LIMIT 60
@@ -182,6 +187,11 @@ export class DispatchStore {
       }
       await client.query(`INSERT INTO public.bento_event_dispatches (flow_key, context_key, recipient_key, tag, email, status, details)
         VALUES ($1, $2, $3, $4, $5, 'failed', $6::jsonb) ON CONFLICT (flow_key, context_key, recipient_key, tag) DO NOTHING`, [...identity(user), user.email, JSON.stringify(safeFlowMetadata({ reason: user.reason, metadata: user.metadata }))])
+      if (user.flowKey.startsWith('lifecycle:v2:')) {
+        await client.query(`UPDATE public.bento_event_dispatches SET email = $5, details = $6::jsonb
+          WHERE flow_key = $1 AND context_key = $2 AND recipient_key = $3 AND tag = $4
+            AND status <> 'accepted' AND attempt_count < 5 AND (claim_until IS NULL OR claim_until <= CURRENT_TIMESTAMP)`, [...identity(user), user.email, JSON.stringify(safeFlowMetadata({ reason: user.reason, metadata: user.metadata }))])
+      }
       const audit = flowAudit('bento:send_attempt', run.id, { flow_key: user.flowKey, context_key: user.contextKey, recipient_key: user.recipientKey, tag: user.tag, reason: user.reason }, user.recipientKey)
       const result = await client.query<DispatchRecord>(`UPDATE public.bento_event_dispatches SET status = 'sending',
         claim_token = pg_catalog.gen_random_uuid(), claim_until = CURRENT_TIMESTAMP + INTERVAL '120 seconds',
@@ -243,6 +253,10 @@ export class DispatchStore {
         claim_token = NULL, claim_until = CASE WHEN $3 = 'failed' THEN CURRENT_TIMESTAMP + INTERVAL '1 minute' ELSE NULL END,
         last_error = $4, last_run_id = $5, updated_at = CURRENT_TIMESTAMP, pending_audit = pending_audit || $6::jsonb
         WHERE id = $1 AND claim_token = $2 AND status = 'sending'`, [event.id, event.claim_token, failure ? 'failed' : 'accepted', failure ?? null, run.id, JSON.stringify([audit])])
+      if (!failure && result.rowCount === 1 && user.flowKey.startsWith('lifecycle:v2:')) {
+        await client.query(`UPDATE public.bento_lifecycle_journeys SET candidate = NULL, revision = revision + 1, next_evaluation_at = CURRENT_TIMESTAMP
+          WHERE org_id = $1::uuid AND product = $2`, [user.metadata.orgId, user.metadata.product])
+      }
       return result.rowCount === 1
     })
   }

@@ -11,6 +11,7 @@ import { buildBundleCompatibilityBentoEvent, BUNDLE_INCOMPATIBLE_EVENT, bundleIn
 import { acceptEventIdentity, isValidClientEventId } from '../utils/event_identity.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
+import { selectLifecycleApp } from '../utils/lifecycle_v2_context.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { APP_ONBOARDING_READY_EVENT, buildAppOnboardingReadyBentoEvent } from '../utils/onboarding_app_ready_tracking.ts'
 import { buildAiInstructionsCopiedBentoEvent } from '../utils/onboarding_copy_tracking.ts'
@@ -623,6 +624,10 @@ app.post('/', middlewareAuth(), async (c) => {
     ...trackedBody,
     groups: verifiedOrgId ? { organization: verifiedOrgId } : undefined,
   }, apikeyId))
+
+  if (trackingV2 && verifiedOrgId && appId && trackedBody.event === 'Lifecycle App Selected') {
+    await selectLifecycleApp(c, verifiedOrgId, appId, trackedBody.tags?.app_incarnation, trackedBody.tags?.product)
+  }
 
   const supabase = supabaseWithAuth(c, c.get('auth')!)
 

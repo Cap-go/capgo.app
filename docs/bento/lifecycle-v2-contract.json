@@ -1,0 +1,343 @@
+{
+  "version": "new-emails-v2-2026-10-17",
+  "readiness_setting": "BENTO_LIFECYCLE_V2_SENDER_CONTRACT",
+  "required_string_fields": [
+    "dispatch_id",
+    "org_id",
+    "org_name",
+    "app_id",
+    "app_incarnation",
+    "app_name",
+    "product",
+    "platform_label",
+    "completed_steps_summary",
+    "progress_summary",
+    "next_action_title",
+    "next_action_explanation",
+    "continue_url",
+    "cta_label",
+    "ai_setup_url",
+    "org_preferences_url",
+    "pause_url",
+    "plan_url",
+    "recommended_plan_name",
+    "recommended_plan_price",
+    "recommended_monthly_price_label",
+    "recommendation_reason",
+    "recommended_plan_includes",
+    "plan_allowance_summary",
+    "plan_fit_reason",
+    "plan_cta_label",
+    "trial_setup_intro",
+    "trial_deadline",
+    "funding_action_explanation",
+    "funding_cta_label",
+    "funding_explanation",
+    "funding_recommendation",
+    "email_subject",
+    "email_snippet"
+  ],
+  "required_fields": {
+    "unique": {
+      "key": "same stable dispatch_id"
+    },
+    "checklist_complete": "boolean; durable organization/product readiness",
+    "first_value_verified": "boolean; independent same-product real outcome"
+  },
+  "branches": [
+    {
+      "product": "ota",
+      "key": "progress_digest",
+      "event": "capgo:lifecycle:ota_v4:progress_digest",
+      "tag": "lc:ota-v4:progress_digest:requested"
+    },
+    {
+      "product": "ota",
+      "key": "stall_24h",
+      "event": "capgo:lifecycle:ota_v4:stall_24h",
+      "tag": "lc:ota-v4:stall_24h:requested"
+    },
+    {
+      "product": "ota",
+      "key": "help_48h",
+      "event": "capgo:lifecycle:ota_v4:help_48h",
+      "tag": "lc:ota-v4:help_48h:requested"
+    },
+    {
+      "product": "ota",
+      "key": "first_update_success",
+      "event": "capgo:lifecycle:ota_v4:first_update_success",
+      "tag": "lc:ota-v4:first_update_success:requested"
+    },
+    {
+      "product": "ota",
+      "key": "subscription_proposition",
+      "event": "capgo:lifecycle:ota_v4:subscription_proposition",
+      "tag": "lc:ota-v4:subscription_proposition:requested"
+    },
+    {
+      "product": "ota",
+      "key": "no_app_recovery_24h",
+      "event": "capgo:lifecycle:ota_v4:no_app_recovery_24h",
+      "tag": "lc:ota-v4:no_app_recovery_24h:requested"
+    },
+    {
+      "product": "ota",
+      "key": "no_app_help_48h",
+      "event": "capgo:lifecycle:ota_v4:no_app_help_48h",
+      "tag": "lc:ota-v4:no_app_help_48h:requested"
+    },
+    {
+      "product": "ota",
+      "key": "final_recovery_5d",
+      "event": "capgo:lifecycle:ota_v4:final_recovery_5d",
+      "tag": "lc:ota-v4:final_recovery_5d:requested"
+    },
+    {
+      "product": "ota",
+      "key": "resumed_progress_digest",
+      "event": "capgo:lifecycle:ota_v4:resumed_progress_digest",
+      "tag": "lc:ota-v4:resumed_progress_digest:requested"
+    },
+    {
+      "product": "builder",
+      "key": "progress_digest",
+      "event": "capgo:lifecycle:builder_v4:progress_digest",
+      "tag": "lc:builder-v4:progress_digest:requested"
+    },
+    {
+      "product": "builder",
+      "key": "stall_24h",
+      "event": "capgo:lifecycle:builder_v4:stall_24h",
+      "tag": "lc:builder-v4:stall_24h:requested"
+    },
+    {
+      "product": "builder",
+      "key": "help_48h",
+      "event": "capgo:lifecycle:builder_v4:help_48h",
+      "tag": "lc:builder-v4:help_48h:requested"
+    },
+    {
+      "product": "builder",
+      "key": "first_real_success",
+      "event": "capgo:lifecycle:builder_v4:first_real_success",
+      "tag": "lc:builder-v4:first_real_success:requested"
+    },
+    {
+      "product": "builder",
+      "key": "subscription_proposition",
+      "event": "capgo:lifecycle:builder_v4:subscription_proposition",
+      "tag": "lc:builder-v4:subscription_proposition:requested"
+    },
+    {
+      "product": "builder",
+      "key": "no_app_recovery_24h",
+      "event": "capgo:lifecycle:builder_v4:no_app_recovery_24h",
+      "tag": "lc:builder-v4:no_app_recovery_24h:requested"
+    },
+    {
+      "product": "builder",
+      "key": "funding_blocked",
+      "event": "capgo:lifecycle:builder_v4:funding_blocked",
+      "tag": "lc:builder-v4:funding_blocked:requested"
+    },
+    {
+      "product": "builder",
+      "key": "no_app_help_48h",
+      "event": "capgo:lifecycle:builder_v4:no_app_help_48h",
+      "tag": "lc:builder-v4:no_app_help_48h:requested"
+    },
+    {
+      "product": "builder",
+      "key": "final_recovery_5d",
+      "event": "capgo:lifecycle:builder_v4:final_recovery_5d",
+      "tag": "lc:builder-v4:final_recovery_5d:requested"
+    },
+    {
+      "product": "builder",
+      "key": "resumed_progress_digest",
+      "event": "capgo:lifecycle:builder_v4:resumed_progress_digest",
+      "tag": "lc:builder-v4:resumed_progress_digest:requested"
+    },
+    {
+      "product": "ota",
+      "key": "checklist_complete_purchase",
+      "event": "capgo:lifecycle:ota_v4:checklist_complete_purchase",
+      "tag": "lc:ota-v4:checklist-complete-purchase:requested"
+    },
+    {
+      "product": "builder",
+      "key": "checklist_complete_purchase",
+      "event": "capgo:lifecycle:builder_v4:checklist_complete_purchase",
+      "tag": "lc:builder-v4:checklist-complete-purchase:requested"
+    },
+    {
+      "product": "ota",
+      "key": "trial7_unfinished",
+      "event": "capgo:lifecycle:ota_v4:trial7_unfinished",
+      "tag": "lc:ota-v4:trial7-unfinished:requested"
+    },
+    {
+      "product": "ota",
+      "key": "trial3_unfinished",
+      "event": "capgo:lifecycle:ota_v4:trial3_unfinished",
+      "tag": "lc:ota-v4:trial3-unfinished:requested"
+    },
+    {
+      "product": "ota",
+      "key": "today_unfinished",
+      "event": "capgo:lifecycle:ota_v4:today_unfinished",
+      "tag": "lc:ota-v4:today-unfinished:requested"
+    },
+    {
+      "product": "ota",
+      "key": "expired_unfinished",
+      "event": "capgo:lifecycle:ota_v4:expired_unfinished",
+      "tag": "lc:ota-v4:expired-unfinished:requested"
+    },
+    {
+      "product": "ota",
+      "key": "post_help_unfinished",
+      "event": "capgo:lifecycle:ota_v4:post_help_unfinished",
+      "tag": "lc:ota-v4:post_help-unfinished:requested"
+    },
+    {
+      "product": "ota",
+      "key": "post_value_unfinished",
+      "event": "capgo:lifecycle:ota_v4:post_value_unfinished",
+      "tag": "lc:ota-v4:post_value-unfinished:requested"
+    },
+    {
+      "product": "ota",
+      "key": "post_feedback_unfinished",
+      "event": "capgo:lifecycle:ota_v4:post_feedback_unfinished",
+      "tag": "lc:ota-v4:post_feedback-unfinished:requested"
+    },
+    {
+      "product": "ota",
+      "key": "trial7_ready",
+      "event": "capgo:lifecycle:ota_v4:trial7_ready",
+      "tag": "lc:ota-v4:trial7-ready:requested"
+    },
+    {
+      "product": "ota",
+      "key": "trial3_ready",
+      "event": "capgo:lifecycle:ota_v4:trial3_ready",
+      "tag": "lc:ota-v4:trial3-ready:requested"
+    },
+    {
+      "product": "ota",
+      "key": "today_ready",
+      "event": "capgo:lifecycle:ota_v4:today_ready",
+      "tag": "lc:ota-v4:today-ready:requested"
+    },
+    {
+      "product": "ota",
+      "key": "expired_ready",
+      "event": "capgo:lifecycle:ota_v4:expired_ready",
+      "tag": "lc:ota-v4:expired-ready:requested"
+    },
+    {
+      "product": "ota",
+      "key": "post_help_ready",
+      "event": "capgo:lifecycle:ota_v4:post_help_ready",
+      "tag": "lc:ota-v4:post_help-ready:requested"
+    },
+    {
+      "product": "ota",
+      "key": "post_value_ready",
+      "event": "capgo:lifecycle:ota_v4:post_value_ready",
+      "tag": "lc:ota-v4:post_value-ready:requested"
+    },
+    {
+      "product": "ota",
+      "key": "post_feedback_ready",
+      "event": "capgo:lifecycle:ota_v4:post_feedback_ready",
+      "tag": "lc:ota-v4:post_feedback-ready:requested"
+    },
+    {
+      "product": "builder",
+      "key": "trial7_unfinished",
+      "event": "capgo:lifecycle:builder_v4:trial7_unfinished",
+      "tag": "lc:builder-v4:trial7-unfinished:requested"
+    },
+    {
+      "product": "builder",
+      "key": "trial3_unfinished",
+      "event": "capgo:lifecycle:builder_v4:trial3_unfinished",
+      "tag": "lc:builder-v4:trial3-unfinished:requested"
+    },
+    {
+      "product": "builder",
+      "key": "today_unfinished",
+      "event": "capgo:lifecycle:builder_v4:today_unfinished",
+      "tag": "lc:builder-v4:today-unfinished:requested"
+    },
+    {
+      "product": "builder",
+      "key": "expired_unfinished",
+      "event": "capgo:lifecycle:builder_v4:expired_unfinished",
+      "tag": "lc:builder-v4:expired-unfinished:requested"
+    },
+    {
+      "product": "builder",
+      "key": "post_help_unfinished",
+      "event": "capgo:lifecycle:builder_v4:post_help_unfinished",
+      "tag": "lc:builder-v4:post_help-unfinished:requested"
+    },
+    {
+      "product": "builder",
+      "key": "post_value_unfinished",
+      "event": "capgo:lifecycle:builder_v4:post_value_unfinished",
+      "tag": "lc:builder-v4:post_value-unfinished:requested"
+    },
+    {
+      "product": "builder",
+      "key": "post_feedback_unfinished",
+      "event": "capgo:lifecycle:builder_v4:post_feedback_unfinished",
+      "tag": "lc:builder-v4:post_feedback-unfinished:requested"
+    },
+    {
+      "product": "builder",
+      "key": "trial7_ready",
+      "event": "capgo:lifecycle:builder_v4:trial7_ready",
+      "tag": "lc:builder-v4:trial7-ready:requested"
+    },
+    {
+      "product": "builder",
+      "key": "trial3_ready",
+      "event": "capgo:lifecycle:builder_v4:trial3_ready",
+      "tag": "lc:builder-v4:trial3-ready:requested"
+    },
+    {
+      "product": "builder",
+      "key": "today_ready",
+      "event": "capgo:lifecycle:builder_v4:today_ready",
+      "tag": "lc:builder-v4:today-ready:requested"
+    },
+    {
+      "product": "builder",
+      "key": "expired_ready",
+      "event": "capgo:lifecycle:builder_v4:expired_ready",
+      "tag": "lc:builder-v4:expired-ready:requested"
+    },
+    {
+      "product": "builder",
+      "key": "post_help_ready",
+      "event": "capgo:lifecycle:builder_v4:post_help_ready",
+      "tag": "lc:builder-v4:post_help-ready:requested"
+    },
+    {
+      "product": "builder",
+      "key": "post_value_ready",
+      "event": "capgo:lifecycle:builder_v4:post_value_ready",
+      "tag": "lc:builder-v4:post_value-ready:requested"
+    },
+    {
+      "product": "builder",
+      "key": "post_feedback_ready",
+      "event": "capgo:lifecycle:builder_v4:post_feedback_ready",
+      "tag": "lc:builder-v4:post_feedback-ready:requested"
+    }
+  ]
+}

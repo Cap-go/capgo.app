@@ -4,8 +4,10 @@ import { useI18n } from 'vue-i18n'
 import AppOnboardingFlow from '~/components/dashboard/AppOnboardingFlow.vue'
 import AppPageFrame from '~/components/dashboard/AppPageFrame.vue'
 import { useAppPage } from '~/composables/useAppPage'
+import { sendEvent } from '~/services/tracking'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
+import { lifecycleAppSelection } from '~/utils/lifecycleAppSelection'
 import { readOnboardingSetupHandoff } from '~/utils/onboardingRedirect'
 import { parseUserOnboardingProgress } from '~/utils/userOnboardingProgress'
 
@@ -21,6 +23,17 @@ const { id, app, isLoading } = useAppPage({
 // shell. Read once per app: the flow reads its analytics flow at mount.
 const setupFlowAppId = ref('')
 const setupPreOrg = ref(false)
+let lastLifecycleSelection = ''
+watch(() => app.value, (current) => {
+  if (!current)
+    return
+  const event = lifecycleAppSelection(current)
+  const selection = event ? `${current.id}:${event.tags.product}` : ''
+  if (event && selection !== lastLifecycleSelection) {
+    lastLifecycleSelection = selection
+    void sendEvent(event)
+  }
+}, { immediate: true })
 
 function resolveSetupPreOrg(appId: string) {
   const handoff = readOnboardingSetupHandoff(window.history.state, appId)

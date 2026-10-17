@@ -5,6 +5,11 @@ const mocks = vi.hoisted(() => ({
   trackBentoEvent: vi.fn(async () => true),
   org: { onboarding: { intent: 'ota' } } as { onboarding: { intent: string } },
   orgSelect: vi.fn(),
+  shouldUseLifecycleV2: vi.fn(async () => false),
+}))
+
+vi.mock('../supabase/functions/_backend/utils/lifecycle_v2_rollout.ts', () => ({
+  shouldUseLifecycleV2: mocks.shouldUseLifecycleV2,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
@@ -80,6 +85,22 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
 describe('pending onboarding Bento event', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.shouldUseLifecycleV2.mockResolvedValue(false)
+  })
+
+  it('suppresses the direct app-created email after the lifecycle handoff', async () => {
+    mocks.shouldUseLifecycleV2.mockResolvedValue(true)
+    const context = {
+      env: { WEBAPP_URL: 'https://console.example' },
+      get: (key: string) => key === 'auth' ? { authType: 'jwt', userId: 'user-id' } : undefined,
+      json: (data: unknown) => Response.json(data),
+    } as any
+
+    const response = await put(context, 'com.example.pending', { need_onboarding: false }, { key: 'test-key' } as any)
+
+    expect(response.status).toBe(200)
+    expect(mocks.shouldUseLifecycleV2).toHaveBeenCalledExactlyOnceWith(context, 'org-id')
+    expect(mocks.trackBentoEvent).not.toHaveBeenCalled()
   })
 
   it.each(['ota', 'publish'])('preserves app:created with %s intent when pending onboarding completes', async (intent) => {
