@@ -25,7 +25,7 @@ import { tusProxy } from './upload.ts'
 
 export const app = honoFactory.createApp()
 
-// POST /build/capacity - Builder reports worker pool size (+/− events). Auth: BUILDER_API_KEY.
+// POST /build/capacity - Builder pool-size report, acknowledged only (history lives in the admin dashboard). Auth: BUILDER_API_KEY.
 app.post('/capacity', async (c) => {
   return reportBuilderCapacity(c)
 })

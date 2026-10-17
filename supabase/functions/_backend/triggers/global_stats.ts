@@ -3286,18 +3286,8 @@ async function runRevenueGlobalStatsShard(c: Context, window: DailyWindow): Prom
         }
         return (res.data || []).reduce((sum, row) => sum + (Number(row.credits_used) || 0), 0)
       }),
-    supabase
-      .from('stripe_refunds')
-      .select('amount, currency, status')
-      .gte('refunded_at', dayStartIso)
-      .lt('refunded_at', nextDayStartIso)
-      .then((res) => {
-        if (res.error) {
-          cloudlog({ requestId: c.get('requestId'), message: 'refunds error', error: res.error })
-          return summarizeRefunds([])
-        }
-        return summarizeRefunds(res.data || [])
-      }),
+    // stripe_refunds moved to the admin dashboard, which reads refunds from Stripe.
+    Promise.resolve(summarizeRefunds([])),
   ])
 
   const upgrade_rate_12m = await getUpgradeRate12m(c, window, upgraded_orgs)

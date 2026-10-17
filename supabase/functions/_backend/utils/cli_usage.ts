@@ -1,7 +1,6 @@
 import type { Context } from 'hono'
 import { getRuntimeKey } from 'hono/adapter'
 import { cloudlogErr, serializeError } from './logging.ts'
-import { closeClient, getPgClient } from './pg.ts'
 import { checkKey, supabaseAdmin } from './supabase.ts'
 import { backgroundTask } from './utils.ts'
 
@@ -21,7 +20,9 @@ function usesAnalyticsEngine(c: Context): boolean {
 }
 
 /**
- * Record CLI usage from request headers.
+ * Record CLI usage from request headers into the CLI_USAGE Analytics Engine
+ * dataset (read by the admin dashboard). Without it (non-workerd runtimes),
+ * nothing is recorded.
  * Prefer /private/config only for v1 — avoid hot authenticated private routes.
  */
 export function trackCliUsage(c: Context, event: CliUsageEvent) {
@@ -50,35 +51,7 @@ export function trackCliUsage(c: Context, event: CliUsageEvent) {
           cloudlogErr({ requestId: c.get('requestId'), message: 'trackCliUsage AE write failed', error: serializeError(error) })
         }
       }))
-      return
     }
-
-    backgroundTask(c, (async () => {
-      const pgClient = await getPgClient(c, false)
-      try {
-        await pgClient.query(
-          `INSERT INTO public.cli_usage
-            (cli_version, command, node_version, os_platform, apikey_id, org_id, source, api_version)
-           VALUES ($1, $2, $3, $4, $5::uuid, $6::uuid, $7, $8)`,
-          [
-            event.cli_version,
-            event.command,
-            event.node_version,
-            event.os_platform,
-            event.apikey_id,
-            event.org_id,
-            event.source,
-            event.api_version,
-          ],
-        )
-      }
-      catch (error) {
-        cloudlogErr({ requestId: c.get('requestId'), message: 'trackCliUsage insert error', error: serializeError(error) })
-      }
-      finally {
-        await closeClient(c, pgClient)
-      }
-    })())
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'trackCliUsage error', error: serializeError(error) })

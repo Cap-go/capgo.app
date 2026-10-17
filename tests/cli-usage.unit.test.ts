@@ -165,9 +165,8 @@ describe('trackCliUsage', () => {
     }))
   })
 
-  it('inserts into Postgres when not on workerd AE path', async () => {
+  it('records nothing and never touches Postgres outside the Analytics Engine path', () => {
     vi.mocked(getRuntimeKey).mockReturnValue('deno')
-    queryMock.mockResolvedValue({ rows: [] })
 
     trackCliUsage(createContext({}), {
       cli_version: '8.32.8',
@@ -180,14 +179,9 @@ describe('trackCliUsage', () => {
       api_version: '2025-10-01',
     })
 
-    expect(backgroundTaskMock).toHaveBeenCalledTimes(1)
-    await backgroundTaskMock.mock.calls[0]?.[1]
-    expect(getPgClientMock).toHaveBeenCalled()
-    expect(queryMock).toHaveBeenCalled()
-    const [sql, args] = queryMock.mock.calls[0] ?? []
-    expect(String(sql)).toContain('api_version')
-    expect(args).toEqual(['8.32.8', 'init', 'v22.0.0', 'linux', null, null, 'config', '2025-10-01'])
-    expect(closeClientMock).toHaveBeenCalled()
+    expect(backgroundTaskMock).not.toHaveBeenCalled()
+    expect(getPgClientMock).not.toHaveBeenCalled()
+    expect(queryMock).not.toHaveBeenCalled()
   })
 })
 

@@ -21,7 +21,6 @@ import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { signupAttributionTagsForOrg } from '../utils/signup_attribution.ts'
 import { ensureCustomerMetadata, getCreditCheckoutDetails, getLatestOpenSubscriptionInvoice, getStripe, isSubscriptionInvoice, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
 import { buildTransferInvoiceFooter, getTransferInvoiceFooterUpdate, isTransferInvoice, normalizeBillingEmail, shouldStampTransferInvoiceFooter, TRANSFER_INVOICE_FOOTER, TRANSFER_INVOICE_FOOTER_MAX_LENGTH } from '../utils/stripe_event.ts'
-import { recordChargeRefunds } from '../utils/stripe_refunds.ts'
 import { customerToSegmentOrg, supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { backgroundTask, isStripeConfigured } from '../utils/utils.ts'
@@ -49,7 +48,6 @@ type StripeInfoRevenueState = {
 } | null | undefined
 type RevenuePlanRow = Pick<PlanRow, 'name' | 'price_m' | 'price_m_id' | 'price_y' | 'price_y_id' | 'stripe_id'>
 type RevenuePlanKey = 'solo' | 'maker' | 'team' | 'enterprise'
-type RevenuePlanBreakdown = Record<RevenuePlanKey, number>
 type ChurnReason = 'past_due_unresolved'
 const CHURNED_SUBSCRIPTION_STATUSES = new Set<Database['public']['Enums']['stripe_status']>(['canceled', 'deleted'])
 const REVENUE_SUBSCRIPTION_STATUSES = new Set<Database['public']['Enums']['stripe_status']>(['succeeded'])
@@ -264,22 +262,6 @@ function getPlanKey(name: string | null | undefined): RevenuePlanKey | null {
   if (normalized === 'solo' || normalized === 'maker' || normalized === 'team' || normalized === 'enterprise')
     return normalized
   return null
-}
-
-function createZeroPlanBreakdown(): RevenuePlanBreakdown {
-  return {
-    solo: 0,
-    maker: 0,
-    team: 0,
-    enterprise: 0,
-  }
-}
-
-function getMovementPlanBreakdown(movement: RevenueMovement, amount: number): RevenuePlanBreakdown {
-  const breakdown = createZeroPlanBreakdown()
-  if (movement.lostPlan && amount > 0)
-    breakdown[movement.lostPlan] = amount
-  return breakdown
 }
 
 function getPlanMrr(plan: RevenuePlanRow | null | undefined, priceId: string | null | undefined) {
@@ -575,17 +557,6 @@ function getChurnReason(
   return null
 }
 
-function getRevenueChurnReason(
-  currentStripeInfo: Pick<StripeInfoRow, 'past_due_at' | 'status'> | null | undefined,
-  nextStripeInfo: Pick<StripeInfoUpdate, 'status'> | null | undefined,
-  movement: RevenueMovement,
-): ChurnReason | null {
-  if (movement.churnMrr <= 0)
-    return null
-
-  return getChurnReason(currentStripeInfo, nextStripeInfo)
-}
-
 function shouldTrackOrganizationUpgrade(_isUpgrade: boolean, movement: RevenueMovement) {
   // Only already-paying orgs that move to higher MRR (larger plan / expansion).
   // monthly->yearly alone is not enough if MRR does not increase.
@@ -662,7 +633,8 @@ async function persistStripeInfoAndRevenueMovement(
     await pgClient.query('BEGIN')
 
     // Lock the row so concurrent retries serialize before we classify
-    // the event as missing/stale and before we append revenue movement.
+    // the event as missing/stale/duplicate. Revenue movement itself is derived
+    // by the admin dashboard from the persisted stripe_info changes.
     const stripeInfoRow = await pgClient.query<Pick<StripeInfoRow, 'last_stripe_event_at' | 'past_due_at' | 'status'>>(
       'SELECT last_stripe_event_at, past_due_at, status FROM public.stripe_info WHERE customer_id = $1 FOR UPDATE',
       [customerId],
@@ -680,7 +652,6 @@ async function persistStripeInfoAndRevenueMovement(
     }
 
     const churnReason = getChurnReason(lockedStripeInfo, transactionUpdateData)
-    const revenueChurnReason = getRevenueChurnReason(lockedStripeInfo, transactionUpdateData, movement)
     if (churnReason) {
       transactionUpdateData.churn_reason = churnReason
     }
@@ -719,65 +690,6 @@ async function persistStripeInfoAndRevenueMovement(
         await pgClient.query('ROLLBACK')
         return 'missing'
       }
-    }
-
-    if (shouldRecordMovement) {
-      const churnBreakdown = getMovementPlanBreakdown(movement, movement.churnMrr)
-      const contractionBreakdown = getMovementPlanBreakdown(movement, movement.contractionMrr)
-      await pgClient.query(`
-        INSERT INTO public.daily_revenue_metrics (
-          date_id,
-          customer_id,
-          opening_mrr,
-          new_business_mrr,
-          expansion_mrr,
-          contraction_mrr,
-          churn_mrr,
-          churn_reason,
-          churn_mrr_solo,
-          churn_mrr_maker,
-          churn_mrr_team,
-          churn_mrr_enterprise,
-          contraction_mrr_solo,
-          contraction_mrr_maker,
-          contraction_mrr_team,
-          contraction_mrr_enterprise
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-        ON CONFLICT (date_id, customer_id)
-        DO UPDATE SET
-          updated_at = now(),
-          new_business_mrr = public.daily_revenue_metrics.new_business_mrr + EXCLUDED.new_business_mrr,
-          expansion_mrr = public.daily_revenue_metrics.expansion_mrr + EXCLUDED.expansion_mrr,
-          contraction_mrr = public.daily_revenue_metrics.contraction_mrr + EXCLUDED.contraction_mrr,
-          churn_mrr = public.daily_revenue_metrics.churn_mrr + EXCLUDED.churn_mrr,
-          churn_reason = COALESCE(EXCLUDED.churn_reason, public.daily_revenue_metrics.churn_reason),
-          churn_mrr_solo = public.daily_revenue_metrics.churn_mrr_solo + EXCLUDED.churn_mrr_solo,
-          churn_mrr_maker = public.daily_revenue_metrics.churn_mrr_maker + EXCLUDED.churn_mrr_maker,
-          churn_mrr_team = public.daily_revenue_metrics.churn_mrr_team + EXCLUDED.churn_mrr_team,
-          churn_mrr_enterprise = public.daily_revenue_metrics.churn_mrr_enterprise + EXCLUDED.churn_mrr_enterprise,
-          contraction_mrr_solo = public.daily_revenue_metrics.contraction_mrr_solo + EXCLUDED.contraction_mrr_solo,
-          contraction_mrr_maker = public.daily_revenue_metrics.contraction_mrr_maker + EXCLUDED.contraction_mrr_maker,
-          contraction_mrr_team = public.daily_revenue_metrics.contraction_mrr_team + EXCLUDED.contraction_mrr_team,
-          contraction_mrr_enterprise = public.daily_revenue_metrics.contraction_mrr_enterprise + EXCLUDED.contraction_mrr_enterprise
-      `, [
-        getEventDateId(eventOccurredAtIso),
-        customerId,
-        movement.currentMrr,
-        movement.newBusinessMrr,
-        movement.expansionMrr,
-        movement.contractionMrr,
-        movement.churnMrr,
-        revenueChurnReason,
-        churnBreakdown.solo,
-        churnBreakdown.maker,
-        churnBreakdown.team,
-        churnBreakdown.enterprise,
-        contractionBreakdown.solo,
-        contractionBreakdown.maker,
-        contractionBreakdown.team,
-        contractionBreakdown.enterprise,
-      ])
     }
 
     await pgClient.query('COMMIT')
@@ -1550,10 +1462,10 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
     return c.json(BRES)
   }
 
-  if (stripeEvent.type === 'charge.refunded') {
-    await recordChargeRefunds(c, stripeEvent.data.object)
+  // Refunds are listed from the Stripe API by the admin dashboard; acknowledge
+  // so Stripe does not retry while the endpoint is still subscribed.
+  if (stripeEvent.type === 'charge.refunded')
     return c.json(BRES)
-  }
 
   // find email from user with customer_id
   const org = await getOrg(c, stripeData)
@@ -1707,7 +1619,6 @@ export const stripeEventTestUtils = {
   buildSubscriptionEventMetadata,
   classifyRevenueMovement,
   getEventDateId,
-  getMovementPlanBreakdown,
   getPaidAtUpdate,
   getPlanChangeTrackingEventName,
   getChurnReason,

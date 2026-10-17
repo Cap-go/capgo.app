@@ -116,7 +116,6 @@
     "admin:migrate-legacy-bare-image-paths": "bun scripts/migrate_legacy_bare_image_paths.ts",
     "admin:backfill-missing-store-urls": "bun scripts/backfill_missing_store_urls.ts",
     "admin:backfill-github-user-ids": "bun scripts/backfill_github_user_ids.ts",
-    "stripe:backfill-retention-metrics": "bun scripts/backfill_retention_metrics.ts",
     "stripe:backfill-org-conversion-rate": "bun scripts/backfill_org_conversion_rate_trend.ts",
     "stripe:backfill-upgrade-rate-12m": "bun scripts/backfill_upgrade_rate_12m.ts",
     "stripe:backfill-customer-countries": "bun scripts/backfill_stripe_customer_countries.ts",
