@@ -61,7 +61,8 @@ export type Bindings = {
   DEVICE_INFO: AnalyticsEngineDataset
   NOTIFICATION_REGISTRY?: AnalyticsEngineDataset
   NOTIFICATION_EVENTS?: AnalyticsEngineDataset
-  CLI_USAGE?: AnalyticsEngineDataset
+  // Workers RPC binding to the admin dashboard's CliUsageIngest entrypoint (prod only).
+  ADMIN_CLI_USAGE?: { record: (event: unknown) => Promise<unknown> }
   POSTHOG_QUEUE?: Queue
   POSTHOG_DLQ?: Queue
   POSTHOG_API_KEY?: string

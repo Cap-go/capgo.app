@@ -78,10 +78,13 @@
         {
           "binding": "NOTIFICATION_EVENTS",
           "dataset": "notification_events"
-        },
+        }
+      ],
+      "services": [
         {
-          "binding": "CLI_USAGE",
-          "dataset": "cli_usage"
+          "binding": "ADMIN_CLI_USAGE",
+          "service": "capgo-admin-dashboard-api",
+          "entrypoint": "CliUsageIngest"
         }
       ],
       "d1_databases": [
@@ -190,10 +193,6 @@
         {
           "binding": "NOTIFICATION_EVENTS",
           "dataset": "notification_events"
-        },
-        {
-          "binding": "CLI_USAGE",
-          "dataset": "cli_usage"
         }
       ],
       "d1_databases": [
@@ -297,10 +296,6 @@
         {
           "binding": "NOTIFICATION_EVENTS",
           "dataset": "notification_events_alpha"
-        },
-        {
-          "binding": "CLI_USAGE",
-          "dataset": "cli_usage_alpha"
         }
       ],
       "d1_databases": [

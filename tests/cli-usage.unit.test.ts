@@ -1,5 +1,5 @@
 import type { Context } from 'hono'
-import { getRuntimeKey } from 'hono/adapter'
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildCliRequestHeaders,
@@ -8,34 +8,14 @@ import {
   setCurrentCliCommand,
 } from '../cli/src/analytics/cli-headers.ts'
 import pack from '../cli/package.json'
-import { resolveCliUsageIdentity, trackCliUsage } from '../supabase/functions/_backend/utils/cli_usage.ts'
+import { hasCliUsageIngest, resolveCliUsageIdentity, trackCliUsage } from '../supabase/functions/_backend/utils/cli_usage.ts'
 
 const {
-  backgroundTaskMock,
   cloudlogErrMock,
   checkKeyMock,
-  getPgClientMock,
-  closeClientMock,
-  queryMock,
 } = vi.hoisted(() => ({
-  backgroundTaskMock: vi.fn(),
   cloudlogErrMock: vi.fn(),
   checkKeyMock: vi.fn(),
-  getPgClientMock: vi.fn(),
-  closeClientMock: vi.fn(),
-  queryMock: vi.fn(),
-}))
-
-vi.mock('hono/adapter', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('hono/adapter')>()
-  return {
-    ...actual,
-    getRuntimeKey: vi.fn(),
-  }
-})
-
-vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
-  backgroundTask: backgroundTaskMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
@@ -46,11 +26,6 @@ vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   checkKey: checkKeyMock,
   supabaseAdmin: vi.fn(() => ({})),
-}))
-
-vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
-  getPgClient: getPgClientMock,
-  closeClient: closeClientMock,
 }))
 
 function createContext(env: Record<string, unknown> = {}) {
@@ -91,103 +66,46 @@ describe('buildCliRequestHeaders', () => {
 })
 
 describe('trackCliUsage', () => {
+  const event = {
+    cli_version: '8.32.8',
+    command: 'bundle upload',
+    node_version: 'v22.0.0',
+    os_platform: 'darwin',
+    apikey_id: '00000000-0000-4000-8000-000000000001',
+    org_id: null,
+    source: 'config' as const,
+    api_version: '2025-10-01',
+  }
+
   beforeEach(() => {
-    backgroundTaskMock.mockReset()
-    backgroundTaskMock.mockImplementation((_c: unknown, promise: Promise<unknown>) => promise)
     cloudlogErrMock.mockReset()
-    checkKeyMock.mockReset()
-    getPgClientMock.mockReset()
-    closeClientMock.mockReset()
-    queryMock.mockReset()
-    getPgClientMock.mockReturnValue({ query: queryMock })
-    closeClientMock.mockResolvedValue(undefined)
-    vi.mocked(getRuntimeKey).mockReset()
   })
 
-  it('skips entirely when cli_version is empty', () => {
-    vi.mocked(getRuntimeKey).mockReturnValue('workerd')
-    const writeDataPoint = vi.fn()
-    trackCliUsage(createContext({ CLI_USAGE: { writeDataPoint } }), {
-      cli_version: '',
-      command: 'bundle upload',
-      node_version: 'v22.0.0',
-      os_platform: 'darwin',
-      apikey_id: null,
-      org_id: null,
-      source: 'config',
-      api_version: '2025-10-01',
-    })
-    expect(backgroundTaskMock).not.toHaveBeenCalled()
-    expect(writeDataPoint).not.toHaveBeenCalled()
+  it('skips entirely when cli_version is empty', async () => {
+    const record = vi.fn()
+    await trackCliUsage(createContext({ ADMIN_CLI_USAGE: { record } }), { ...event, cli_version: '' })
+    expect(record).not.toHaveBeenCalled()
   })
 
-  it('writes Analytics Engine data point when CLI_USAGE is bound on workerd', async () => {
-    vi.mocked(getRuntimeKey).mockReturnValue('workerd')
-    const writeDataPoint = vi.fn()
-    const c = createContext({ CLI_USAGE: { writeDataPoint } })
-
-    trackCliUsage(c, {
-      cli_version: '8.32.8',
-      command: 'bundle upload',
-      node_version: 'v22.0.0',
-      os_platform: 'darwin',
-      apikey_id: 'rbac-1',
-      org_id: null,
-      source: 'config',
-      api_version: '2025-10-01',
-    })
-
-    expect(backgroundTaskMock).toHaveBeenCalledTimes(1)
-    await backgroundTaskMock.mock.calls[0]?.[1]
-    expect(writeDataPoint).toHaveBeenCalledWith({
-      blobs: ['8.32.8', 'bundle upload', 'v22.0.0', 'darwin', 'rbac-1', '', 'config', '2025-10-01'],
-      indexes: ['rbac-1'],
-    })
-    expect(getPgClientMock).not.toHaveBeenCalled()
+  it('forwards the event to the admin dashboard RPC binding', async () => {
+    const record = vi.fn().mockResolvedValue({ recorded: true })
+    const c = createContext({ ADMIN_CLI_USAGE: { record } })
+    expect(hasCliUsageIngest(c)).toBe(true)
+    await trackCliUsage(c, event)
+    expect(record).toHaveBeenCalledWith(event)
   })
 
-  it('indexes anonymous when apikey_id is missing', async () => {
-    vi.mocked(getRuntimeKey).mockReturnValue('workerd')
-    const writeDataPoint = vi.fn()
-    trackCliUsage(createContext({ CLI_USAGE: { writeDataPoint } }), {
-      cli_version: '8.32.8',
-      command: '',
-      node_version: 'v22.0.0',
-      os_platform: 'linux',
-      apikey_id: null,
-      org_id: null,
-      source: 'config',
-      api_version: '',
-    })
-    await backgroundTaskMock.mock.calls[0]?.[1]
-    expect(writeDataPoint).toHaveBeenCalledWith(expect.objectContaining({
-      indexes: ['anonymous'],
-    }))
+  it('records nothing without the binding (preprod, local, Supabase)', async () => {
+    const c = createContext({ CLI_USAGE: { writeDataPoint: vi.fn() } })
+    expect(hasCliUsageIngest(c)).toBe(false)
+    await expect(trackCliUsage(c, event)).resolves.toBeUndefined()
+    expect(cloudlogErrMock).not.toHaveBeenCalled()
   })
 
-  it('inserts into Postgres when not on workerd AE path', async () => {
-    vi.mocked(getRuntimeKey).mockReturnValue('deno')
-    queryMock.mockResolvedValue({ rows: [] })
-
-    trackCliUsage(createContext({}), {
-      cli_version: '8.32.8',
-      command: 'init',
-      node_version: 'v22.0.0',
-      os_platform: 'linux',
-      apikey_id: null,
-      org_id: null,
-      source: 'config',
-      api_version: '2025-10-01',
-    })
-
-    expect(backgroundTaskMock).toHaveBeenCalledTimes(1)
-    await backgroundTaskMock.mock.calls[0]?.[1]
-    expect(getPgClientMock).toHaveBeenCalled()
-    expect(queryMock).toHaveBeenCalled()
-    const [sql, args] = queryMock.mock.calls[0] ?? []
-    expect(String(sql)).toContain('api_version')
-    expect(args).toEqual(['8.32.8', 'init', 'v22.0.0', 'linux', null, null, 'config', '2025-10-01'])
-    expect(closeClientMock).toHaveBeenCalled()
+  it('logs and swallows RPC failures', async () => {
+    const record = vi.fn().mockRejectedValue(new Error('rpc down'))
+    await expect(trackCliUsage(createContext({ ADMIN_CLI_USAGE: { record } }), event)).resolves.toBeUndefined()
+    expect(cloudlogErrMock).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -217,5 +135,26 @@ describe('resolveCliUsageIdentity', () => {
       org_id: null,
     })
     expect(cloudlogErrMock).toHaveBeenCalled()
+  })
+})
+
+describe('api worker CLI usage bindings', () => {
+  const config = JSON.parse(readFileSync(new URL('../cloudflare_workers/api/wrangler.jsonc', import.meta.url), 'utf8'))
+
+  it('binds only prod to the admin dashboard CliUsageIngest RPC entrypoint', () => {
+    expect(config.env.prod.services).toContainEqual({
+      binding: 'ADMIN_CLI_USAGE',
+      service: 'capgo-admin-dashboard-api',
+      entrypoint: 'CliUsageIngest',
+    })
+    for (const [name, environment] of Object.entries(config.env) as Array<[string, { services?: Array<{ binding: string }> }]>) {
+      if (name !== 'prod')
+        expect(environment.services?.some(service => service.binding === 'ADMIN_CLI_USAGE') ?? false).toBe(false)
+    }
+  })
+
+  it('no longer writes the CLI_USAGE Analytics Engine dataset directly', () => {
+    for (const environment of [config, ...Object.values(config.env)] as Array<{ analytics_engine_datasets?: Array<{ binding: string }> }>)
+      expect(environment.analytics_engine_datasets?.some(dataset => dataset.binding === 'CLI_USAGE') ?? false).toBe(false)
   })
 })

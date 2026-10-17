@@ -1,6 +1,6 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
-import { resolveCliUsageIdentity, trackCliUsage } from '../utils/cli_usage.ts'
+import { hasCliUsageIngest, resolveCliUsageIdentity, trackCliUsage } from '../utils/cli_usage.ts'
 import { MIN_CLI_VERSION, MIN_CLI_VERSION_REASON } from '../utils/cliMinVersion.ts'
 import { useCors } from '../utils/hono.ts'
 import { backgroundTask, existInEnv, getEnv, isStripeConfigured } from '../utils/utils.ts'
@@ -12,7 +12,7 @@ app.use('/', useCors)
 
 app.get('/', async (c) => {
   const cliVersion = c.req.header('x-cli-version') ?? ''
-  if (cliVersion) {
+  if (cliVersion && hasCliUsageIngest(c)) {
     const capgkey = c.req.header('capgkey') ?? c.req.header('x-api-key') ?? undefined
     const event = {
       cli_version: cliVersion,
@@ -25,7 +25,7 @@ app.get('/', async (c) => {
     // Keep /private/config fast: resolve apikey identity off the response path.
     backgroundTask(c, (async () => {
       const identity = await resolveCliUsageIdentity(c, capgkey)
-      trackCliUsage(c, {
+      await trackCliUsage(c, {
         ...event,
         apikey_id: identity.apikey_id,
         org_id: identity.org_id,
