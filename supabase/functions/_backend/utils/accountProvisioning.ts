@@ -1,4 +1,5 @@
 import type { Context } from 'hono'
+import type { Json } from './supabase.types.ts'
 import { supabaseAdmin } from './supabase.ts'
 import { getEnv } from './utils.ts'
 
@@ -26,14 +27,23 @@ export function isAuthRateLimitError(error: unknown) {
     || String(err?.message ?? '').toLowerCase().includes('rate limit')
 }
 
-export interface ProfileInput { id: string, email: string, first_name: string, last_name: string }
+export interface ProfileInput {
+  id: string
+  email: string
+  first_name: string
+  last_name: string
+  onboarding?: Json
+  opt_for_newsletters?: boolean
+}
 
 // All sign-up paths insert the real profile so on_user_create runs exactly once.
 // Optional newsletter consent must never be inferred from social authentication.
 export function provisionUserProfile(c: Context, profile: ProfileInput, preserveExisting = false) {
+  const { onboarding, opt_for_newsletters, ...base } = profile
   return supabaseAdmin(c).from('users').upsert({
-    ...profile,
+    ...base,
+    ...(onboarding !== undefined ? { onboarding } : {}),
     enable_notifications: true,
-    opt_for_newsletters: false,
+    opt_for_newsletters: opt_for_newsletters ?? false,
   }, { onConflict: 'id', ...(preserveExisting ? { ignoreDuplicates: true } : {}) })
 }

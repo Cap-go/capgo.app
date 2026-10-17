@@ -47,6 +47,7 @@ async function updateUser(
           email: main.auth.email ?? '',
           first_name: main.auth.user_metadata?.first_name ?? '',
           last_name: main.auth.user_metadata?.last_name ?? '',
+          ...(!main.auth.user_metadata?.first_name || !main.auth.user_metadata?.last_name ? { onboarding: { version: 6 } } : {}),
           country: null,
           enable_notifications: true,
           opt_for_newsletters: false,

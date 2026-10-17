@@ -5,11 +5,13 @@ const {
   cleanStoredImageMetadataMock,
   createApiKeyMock,
   syncBentoFirstOrgOnEmailChangeMock,
+  syncUserDisplayNameIntegrationsMock,
   syncUserPreferenceTagsMock,
 } = vi.hoisted(() => ({
   cleanStoredImageMetadataMock: vi.fn(async () => undefined),
   createApiKeyMock: vi.fn(async () => undefined),
   syncBentoFirstOrgOnEmailChangeMock: vi.fn(async () => true as boolean | undefined),
+  syncUserDisplayNameIntegrationsMock: vi.fn(async () => true),
   syncUserPreferenceTagsMock: vi.fn(async () => undefined),
 }))
 
@@ -36,6 +38,15 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
 
 vi.mock('../supabase/functions/_backend/utils/user_preferences.ts', () => ({
   syncUserPreferenceTags: syncUserPreferenceTagsMock,
+}))
+
+vi.mock('../supabase/functions/_backend/utils/user_display_name_sync.ts', () => ({
+  userDisplayNameChanged: (oldRecord: { first_name: string, last_name: string } | undefined, record: { first_name: string, last_name: string }) => {
+    if (!oldRecord)
+      return false
+    return oldRecord.first_name !== record.first_name || oldRecord.last_name !== record.last_name
+  },
+  syncUserDisplayNameIntegrations: syncUserDisplayNameIntegrationsMock,
 }))
 
 const { app } = await import('../supabase/functions/_backend/triggers/on_user_update.ts')
@@ -113,6 +124,36 @@ describe('user update Bento subscriber identity', () => {
       oldRecord,
       'old.user@example.com',
     )
+  })
+
+  it('syncs display names after preferences when first or last name changes', async () => {
+    const lifecycleTrace: string[] = []
+    syncUserPreferenceTagsMock.mockImplementationOnce(async () => {
+      lifecycleTrace.push('preferences:synced')
+    })
+    syncUserDisplayNameIntegrationsMock.mockImplementationOnce(async () => {
+      lifecycleTrace.push('display-name:synced')
+      return true
+    })
+    const oldRecord = userRecord('same@example.com', { first_name: 'Old', last_name: 'Name' })
+    const record = userRecord('same@example.com', { first_name: 'New', last_name: 'Name' })
+
+    const response = await postUpdate(record, oldRecord)
+
+    expect(response.status).toBe(200)
+    expect(lifecycleTrace).toEqual(['preferences:synced', 'display-name:synced'])
+    expect(syncUserDisplayNameIntegrationsMock).toHaveBeenCalledWith(expect.anything(), record)
+  })
+
+  it('returns 5xx before API key creation when display name sync fails', async () => {
+    syncUserDisplayNameIntegrationsMock.mockResolvedValueOnce(false)
+    const oldRecord = userRecord('same@example.com', { first_name: 'Old', last_name: 'Name' })
+    const record = userRecord('same@example.com', { first_name: 'New', last_name: 'Name' })
+
+    const response = await postUpdate(record, oldRecord)
+
+    expect(response.status).toBe(500)
+    expect(createApiKeyMock).not.toHaveBeenCalled()
   })
 
   it('keeps the existing preference sync and sends no command when the email is unchanged', async () => {

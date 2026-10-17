@@ -40,6 +40,7 @@ import IconSparkles from '~icons/lucide/sparkles'
 import IconStore from '~icons/lucide/store'
 import IconTrash from '~icons/lucide/trash-2'
 import IconUsers from '~icons/lucide/users-round'
+import OnboardingProfile from '~/components/OnboardingProfile.vue'
 import { createDefaultApiKey, findUsablePlainApiKey, shareInFlightApiKeyLoad } from '~/services/apikeys'
 import {
   hasSupportedOtaTodoList,
@@ -67,6 +68,7 @@ import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 import { useBeforeUnloadWarning } from '~/utils/beforeUnloadWarning'
 import {
   hasNewChannelTreatment,
+  hasProfileOnboarding,
   hasWebNativeDevelopmentEnvironmentTreatment,
   parseOnboardingABTestAssignments,
   reconcileOnboardingABTestAssignments,
@@ -241,6 +243,8 @@ const storeAppIdLookupFailed = ref(false)
 const selectedDevelopmentEnvironment = ref<OnboardingDevelopmentEnvironment | null>(null)
 const skippedPublishAppQuestion = ref(false)
 const selectedIntent = ref<OnboardingIntent | null>(null)
+const profileOnboarding = computed(() => hasProfileOnboarding(main.user?.onboarding))
+const intentStepLabel = computed(() => t(profileOnboarding.value ? 'unified-onboarding-step-about-you' : 'unified-onboarding-step-intent'))
 const onboardingAnalyticsVersion = () => resolveOnboardingAnalyticsVersion(onboardingForABTests.value, selectedIntent.value)
 const setupHandoff = props.setupAppId ? consumeSetupHandoff(props.setupAppId) : null
 const onboardingTelemetry = createOnboardingTelemetryIdentity({
@@ -251,6 +255,7 @@ const onboardingTelemetry = createOnboardingTelemetryIdentity({
 })
 const webNativeRecommendationDismissed = ref(false)
 const orgNameInput = ref('')
+const profileForm = ref<InstanceType<typeof OnboardingProfile> | null>(null)
 const hasEditedOrgName = ref(false)
 const estimatedUsersIndex = ref<number | null>(null)
 const isStoreImportOpen = ref(false)
@@ -547,7 +552,7 @@ const appOnboardingSteps = computed<Array<{ id: OnboardingFlowStep, label: strin
     : []
   if (props.preOrg) {
     return [
-      { id: 'intent', label: t('unified-onboarding-step-intent') },
+      { id: 'intent', label: intentStepLabel.value },
       { id: 'details', label: t('app-onboarding-step-details') },
       { id: 'organization', label: t('unified-onboarding-step-organization') },
       ...channelStep,
@@ -658,6 +663,24 @@ function trackChannelEvent(name: OnboardingChannelEvent, details: OnboardingChan
     existing_app: existingApp.value ?? undefined,
     intent: selectedIntent.value ?? undefined,
   })
+}
+
+const profileFieldTracker = createOnboardingDetailsFieldDebouncer((name, step, details) => {
+  progressTracker?.trackDetailsEvent(name, step, details)
+}, 500)
+
+function trackProfileFieldInput(field: 'first_name' | 'last_name', value: string) {
+  if (profileOnboarding.value)
+    profileFieldTracker.schedule(field === 'first_name' ? 'onboarding_first_name_entered' : 'onboarding_last_name_entered', field, 'intent', value)
+}
+
+function trackProfileSaveFailed() {
+  progressTracker?.trackStepEvent('onboarding_profile_save_failed', 'intent')
+}
+
+function trackProfileSave() {
+  profileFieldTracker.dispose()
+  progressTracker?.trackStepEvent('onboarding_profile_saved', 'intent')
 }
 
 const detailsFieldTracker = createOnboardingDetailsFieldDebouncer((name, step, details) => {
@@ -1943,20 +1966,32 @@ function continueFromIntent() {
 }
 
 async function continueFromGoal() {
+  if (isSubmitting.value || !profileForm.value?.isValid)
+    return
+
   if (!selectedIntent.value) {
     toast.error(t('organization-onboarding-intent-required'))
     return
   }
-  await persistOnboardingProgress()
-  await waitForOnboardingABTests({ force: true })
-  if (webNativeDevelopmentEnvironmentTreatment.value) {
-    ensurePublishAppQuestionStepTracked()
-    completeAndViewStep('publish_app_question', {
-      intent: selectedIntent.value,
-    })
-    return
+  isSubmitting.value = true
+  try {
+    if (!await profileForm.value.save())
+      return
+
+    await persistOnboardingProgress()
+    await waitForOnboardingABTests({ force: true })
+    if (webNativeDevelopmentEnvironmentTreatment.value) {
+      ensurePublishAppQuestionStepTracked()
+      completeAndViewStep('publish_app_question', {
+        intent: selectedIntent.value,
+      })
+      return
+    }
+    continueFromIntent()
   }
-  continueFromIntent()
+  finally {
+    isSubmitting.value = false
+  }
 }
 
 function continueFromDevelopmentEnvironment() {
@@ -2047,6 +2082,9 @@ function continuePreOrgDetails() {
 }
 
 async function createOrganizationAndApp() {
+  if (isSubmitting.value)
+    return
+
   if (!selectedIntent.value) {
     toast.error(t('organization-onboarding-intent-required'))
     return
@@ -2737,6 +2775,7 @@ onBeforeUnmount(() => {
   window.removeEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
   document.removeEventListener('visibilitychange', trackOnboardingVisibilityChange)
   detailsFieldTracker.dispose()
+  profileFieldTracker.dispose()
   if (!isHydratingOnboarding.value && !onboardingInitialPersistInFlight && !onboardingProgressPersistence.isBlocked() && !onboardingProgressPersistence.isAborted())
     void persistOnboardingProgress('in_progress', { allowDisposed: true })
 
@@ -2887,7 +2926,7 @@ defineExpose({
             <template v-if="showDevelopmentEnvironmentQuestion">
               <div class="onboarding-intent-heading">
                 <p class="onboarding-intent-eyebrow text-sm font-semibold text-primary-500 dark:text-slate-300">
-                  {{ t('unified-onboarding-step-intent') }}
+                  {{ intentStepLabel }}
                 </p>
                 <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
                   {{ t('organization-onboarding-development-environment-question') }}
@@ -2913,17 +2952,28 @@ defineExpose({
             </template>
 
             <template v-else>
-              <div>
-                <p class="onboarding-intent-eyebrow text-sm font-semibold text-primary-500 dark:text-slate-300">
-                  {{ t('unified-onboarding-step-intent') }}
-                </p>
-                <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-                  {{ t('organization-onboarding-intent-question') }}
+              <div v-if="profileOnboarding">
+                <h2 class="text-2xl font-semibold text-slate-950 dark:text-white">
+                  {{ intentStepLabel }}
                 </h2>
+              </div>
+              <OnboardingProfile
+                ref="profileForm"
+                :disabled="isSubmitting"
+                @field-input="trackProfileFieldInput"
+                @saved="trackProfileSave"
+                @save-failed="trackProfileSaveFailed"
+              />
+
+              <div>
+                <h3 class="text-xl font-semibold text-slate-950 dark:text-white">
+                  {{ t(profileOnboarding ? 'unified-onboarding-profile-goal-question' : 'organization-onboarding-intent-question') }}
+                </h3>
                 <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
                   {{ t('organization-onboarding-intent-hint') }}
                 </p>
               </div>
+
               <div class="onboarding-intent-options grid gap-3 sm:grid-cols-2">
                 <button v-for="option in intentOptions" :key="option.value" type="button" class="d-btn onboarding-intent-option group h-auto min-h-20 w-full items-center justify-start gap-3 whitespace-normal rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900" :class="[whiteCardToggleButtonClass(selectedIntent === option.value), { 'sm:col-span-2': option.value === 'publish' }]" :data-test="`onboarding-intent-${option.value}`" @click="selectedIntent = option.value">
                   <!-- I am a human. I am doing manual handling for the "publish" (webnativeapp) intent. Fuck every AI reviewer who doesnt like my code -->
@@ -2939,7 +2989,7 @@ defineExpose({
                 </button>
               </div>
               <div class="onboarding-intent-actions flex justify-end border-t border-slate-200 pt-6 dark:border-white/15">
-                <button type="button" class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" data-test="app-onboarding-continue-intent" :disabled="!selectedIntent" @click="continueFromGoal()">
+                <button type="button" class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" data-test="app-onboarding-continue-intent" :disabled="!selectedIntent || !profileForm?.isValid || isSubmitting" @click="continueFromGoal()">
                   {{ t('unified-onboarding-continue-intent') }}<IconArrowRight class="h-4 w-4" />
                 </button>
               </div>

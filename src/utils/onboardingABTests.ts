@@ -8,6 +8,7 @@ import {
   NEW_CHANNEL_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION,
   NEW_CHANNEL_PUBLISH_INTENT_ANALYTICS_VERSION,
   ONBOARDING_ANALYTICS_VERSION,
+  PROFILE_ONBOARDING_ANALYTICS_VERSION,
   WEBNATIVE_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION,
   WEBNATIVE_PUBLISH_INTENT_ANALYTICS_VERSION,
 } from '~/utils/onboardingProgressAnalytics'
@@ -91,10 +92,16 @@ export function shouldShowWebNativePublishIntent(onboarding: unknown): boolean {
     || hasWebNativeDevelopmentEnvironmentTreatment(onboarding)
 }
 
+export function hasProfileOnboarding(onboarding: unknown): boolean {
+  return isRecord(onboarding) && onboarding.version === PROFILE_ONBOARDING_ANALYTICS_VERSION
+}
+
 export function resolveOnboardingAnalyticsVersion(
   onboarding: unknown,
   intent: OnboardingIntent | null = null,
 ): OnboardingAnalyticsVersion {
+  if (hasProfileOnboarding(onboarding))
+    return PROFILE_ONBOARDING_ANALYTICS_VERSION
   if (hasNewChannelTreatment(onboarding) && hasWebNativeDevelopmentEnvironmentTreatment(onboarding))
     return NEW_CHANNEL_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION
   if (hasNewChannelTreatment(onboarding) && hasWebNativePublishIntentTreatment(onboarding) && (intent === 'ota' || intent === 'both'))

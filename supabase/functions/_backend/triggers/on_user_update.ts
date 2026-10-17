@@ -6,6 +6,7 @@ import { BRES, middlewareAPISecret, quickError, simpleError, triggerValidator } 
 import { cleanStoredImageMetadata } from '../utils/image.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { createApiKey } from '../utils/supabase.ts'
+import { syncUserDisplayNameIntegrations, userDisplayNameChanged } from '../utils/user_display_name_sync.ts'
 import { syncUserPreferenceTags } from '../utils/user_preferences.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -32,6 +33,12 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'UPDATE'), async (c
   }
 
   await syncUserPreferenceTags(c, newEmail, record, oldRecord, oldEmail)
+
+  if (userDisplayNameChanged(oldRecord, record)) {
+    const synced = await syncUserDisplayNameIntegrations(c, record)
+    if (!synced)
+      quickError(500, 'user_display_name_sync_failed', 'User display name sync failed')
+  }
 
   await createApiKey(c, record.id)
 

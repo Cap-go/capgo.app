@@ -31,7 +31,7 @@ async function postRegister(body: Record<string, unknown>) {
   })
 }
 
-describe('POST /auth/register', () => {
+describe('pOST /auth/register', () => {
   it('creates a user and returns session tokens', async () => {
     const payload = buildRegisterPayload()
     const response = await postRegister(payload)
@@ -80,6 +80,21 @@ describe('POST /auth/register', () => {
     expect(response.status).toBe(400)
     const body = await response.json() as { error: string }
     expect(body.error).toBe('invalid_request')
+  })
+
+  it('creates a nameless profile and preserves referral attribution', async () => {
+    const payload = buildRegisterPayload({ first_name: undefined, last_name: undefined, ref: 'readme-example' })
+    const response = await postRegister(payload)
+    expect(response.status).toBe(200)
+    const body = await response.json() as { user: { id: string }, session: { access_token: string, refresh_token: string } }
+    createdUserIds.push(body.user.id)
+
+    const admin = getSupabaseClient()
+    const { data: profile, error } = await admin.from('users').select('first_name, last_name, onboarding').eq('id', body.user.id).single()
+    expect(error).toBeNull()
+    expect(profile).toMatchObject({ first_name: '', last_name: '', onboarding: { version: 6 } })
+    const { data: authUser } = await admin.auth.admin.getUserById(body.user.id)
+    expect(authUser.user?.user_metadata.ref).toBe('readme-example')
   })
 
   it('returns account_deleted for deleted-account emails', async () => {

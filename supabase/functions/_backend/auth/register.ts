@@ -19,8 +19,18 @@ const DEFAULT_PASSWORD_POLICY = {
 const registerSchema = z.object({
   email: z.string().trim().pipe(z.email().max(320)),
   password: z.string(),
-  first_name: z.string().trim().min(1),
-  last_name: z.string().trim().min(1),
+  first_name: z.string().trim().min(1).optional(),
+  last_name: z.string().trim().min(1).optional(),
+  ref: z.string().trim().min(1).optional(),
+  signup_source: z.string().trim().min(1).optional(),
+  signup_plugin: z.string().trim().min(1).optional(),
+  first_touch_type: z.string().trim().min(1).optional(),
+  first_touch_path: z.string().trim().min(1).optional(),
+  utm_source: z.string().trim().min(1).optional(),
+  utm_medium: z.string().trim().min(1).optional(),
+  utm_campaign: z.string().trim().min(1).optional(),
+
+  opt_for_newsletters: z.boolean().default(false),
   captcha_token: z.string().min(1).optional(),
   registration_device_type: z.string().trim().min(1).optional(),
   registration_os: z.string().trim().min(1).optional(),
@@ -114,9 +124,16 @@ app.post('/', async (c) => {
     return simpleErrorWithStatus(c, 403, 'account_deleted', ACCOUNT_DELETED_MESSAGE)
   }
 
-  const userMetadata: Record<string, string> = {
-    first_name: body.first_name,
-    last_name: body.last_name,
+  const userMetadata: Record<string, string> = {}
+  if (body.first_name)
+    userMetadata.first_name = body.first_name
+  if (body.last_name)
+    userMetadata.last_name = body.last_name
+  if (body.ref)
+    userMetadata.ref = body.ref
+  for (const key of ['signup_source', 'signup_plugin', 'first_touch_type', 'first_touch_path', 'utm_source', 'utm_medium', 'utm_campaign'] as const) {
+    if (body[key])
+      userMetadata[key] = body[key]
   }
   if (body.registration_device_type)
     userMetadata.registration_device_type = body.registration_device_type
@@ -189,8 +206,10 @@ app.post('/', async (c) => {
   const { error: profileError } = await provisionUserProfile(c, {
     id: userId,
     email: normalizedEmail,
-    first_name: body.first_name,
-    last_name: body.last_name,
+    first_name: body.first_name ?? '',
+    last_name: body.last_name ?? '',
+    ...(!body.first_name || !body.last_name ? { onboarding: { version: 6 } } : {}),
+    opt_for_newsletters: body.opt_for_newsletters,
   })
 
   if (profileError) {

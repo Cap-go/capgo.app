@@ -3585,6 +3585,8 @@
   "app-onboarding-subtitle-pre-org": "Tell us what you want to set up, add your app, then create the organization that will own it.",
   "app-onboarding-continue-to-org": "Continue to organization",
   "unified-onboarding-step-intent": "Your goal",
+  "unified-onboarding-step-about-you": "About you",
+  "unified-onboarding-profile-goal-question": "What would you like to do with Capgo?",
   "unified-onboarding-step-organization": "Organization",
   "unified-onboarding-step-channel": "Channel",
   "unified-onboarding-step-setup": "Next step",

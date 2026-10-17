@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { setErrors } from '@formkit/core'
 import { FormKit, FormKitMessages } from '@formkit/vue'
+import { FunctionsHttpError } from '@supabase/supabase-js'
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import VueTurnstile from 'vue-turnstile'
 import iconEmail from '~icons/oui/email?raw'
 import iconPassword from '~icons/ph/key?raw'
-import iconName from '~icons/ph/user?raw'
 import { authGhostButtonClass, authInlineLinkClass, authPanelClass, authPrimaryButtonClass } from '~/components/auth/pageStyles'
-import { hashEmail, useSupabase } from '~/services/supabase'
+import { getCapgoApiErrorCode } from '~/services/capgoApi'
+import { registerAccount } from '~/services/registration'
+import { useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 
 const router = useRouter()
@@ -24,56 +26,31 @@ if (window.location.host === 'console.capgo.app') {
   window.location.href = 'https://capgo.app/register/'
 }
 
-async function submit(form: { first_name: string, last_name: string, password: string, email: string }) {
+async function submit(form: { password: string, email: string }) {
   if (isLoading.value)
     return
 
-  const hashedEmail = await hashEmail(form.email)
-  const { data: deleted, error: errorDeleted } = await supabase
-    .rpc('is_not_deleted', { email_check: hashedEmail })
-  if (errorDeleted)
-    console.error(errorDeleted)
-  if (!deleted) {
-    setErrors('register-account', [t('used-to-create')], {})
-    return
-  }
-
   isLoading.value = true
-  const { data: user, error } = await supabase.auth.signUp(
-    {
-      email: form.email,
-      password: form.password,
-      options: {
-        captchaToken: turnstileToken.value,
-      },
-    },
-    // supabase auth config
-    // http://localhost:5173/login,http://localhost:5173/forgot_password?step=2,https://capgo.app/login,https://capgo.app/forgot_password?step=2,https://capgo.app/onboarding/first_password,https://development.capgo.app/login,https://development.capgo.app/forgot_password?step=2
-  )
-  isLoading.value = false
-  if (error || !user) {
-    setErrors('register-account', [error?.message || 'user not found'], {})
-    return
+  try {
+    const registered = await registerAccount(form.email, form.password, turnstileToken.value)
+    const { error } = await supabase.auth.setSession(registered.session)
+    if (error)
+      throw error
+    router.push('/dashboard')
   }
-
-  const newUser = user.user
-  if (newUser) {
-    const { error: profileError } = await supabase
-      .from('users')
-      .upsert({
-        id: newUser.id,
-        email: newUser.email ?? form.email,
-        first_name: form.first_name,
-        last_name: form.last_name,
-        enable_notifications: true,
-        opt_for_newsletters: true,
-      }, { onConflict: 'id' })
-
-    if (profileError)
-      console.error('Failed to seed user profile after signup', profileError)
+  catch (error) {
+    const code = await getCapgoApiErrorCode(error)
+    let message = t('account-error')
+    if (error instanceof FunctionsHttpError && error.context instanceof Response) {
+      const body = await error.context.clone().json().catch(() => null)
+      if (body && typeof body === 'object' && 'message' in body && typeof body.message === 'string')
+        message = body.message
+    }
+    setErrors('register-account', [code === 'account_deleted' ? t('used-to-create') : message], {})
   }
-
-  router.push('/dashboard')
+  finally {
+    isLoading.value = false
+  }
 }
 </script>
 
@@ -94,6 +71,7 @@ async function submit(form: { first_name: string, last_name: string, password: s
             type="email"
             name="email"
             :prefix-icon="iconEmail"
+            autofocus
             autocomplete="email"
             inputmode="email"
             enterkeyhint="next"
@@ -107,37 +85,13 @@ async function submit(form: { first_name: string, last_name: string, password: s
         </div>
 
         <FormKit
-          type="text"
-          name="first_name"
-          :disabled="isLoading"
-          :prefix-icon="iconName"
-          :label="t('first-name')"
-          autocomplete="given-name"
-          validation="required:trim"
-          enterkeyhint="next"
-          data-test="first_name"
-          autofocus
-        />
-        <FormKit
-          type="text"
-          name="last_name"
-          :label="t('last-name')"
-          autocomplete="family-name"
-          :prefix-icon="iconName"
-          :disabled="isLoading"
-          validation="required:trim"
-          enterkeyhint="next"
-          data-test="last_name"
-        />
-
-        <FormKit
           type="password"
           name="password"
           :prefix-icon="iconPassword"
           autocomplete="new-password"
           :label="t('password')"
           data-test="password"
-          validation="required|length:6|contains_alpha|contains_uppercase|contains_lowercase|contains_symbol"
+          validation="required|length:6|contains_alpha|contains_uppercase|contains_lowercase|contains_numeric|contains_symbol"
           validation-visibility="dirty"
         />
         <FormKit

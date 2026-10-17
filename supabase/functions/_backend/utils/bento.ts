@@ -276,6 +276,36 @@ export async function addTagBento(c: Context, email: string, segments: { segment
   }
 }
 
+export async function importBentoSubscriberProfile(
+  c: Context,
+  subscriber: { email: string, first_name: string, last_name: string },
+  signal?: AbortSignal,
+) {
+  if (!isBentoConfigured(c))
+    return true
+
+  try {
+    const siteUuid = getEnv(c, 'BENTO_SITE_UUID')
+    const payload = {
+      subscribers: [{
+        email: subscriber.email,
+        first_name: subscriber.first_name,
+        last_name: subscriber.last_name,
+      }],
+    }
+    const res = await bentoFetch(c, 'batch/subscribers', siteUuid, payload, signal)
+    if (!acceptedBentoBatchResult(res, 1)) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'importBentoSubscriberProfile', error: bentoBatchResultSummary(res) })
+      return false
+    }
+    return true
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'importBentoSubscriberProfile error', error: serializeError(e) })
+    return false
+  }
+}
+
 export async function syncBentoSubscriberTags(
   c: Context,
   update: { email: string, segments: string[], deleteSegments: string[] } | Array<{ email: string, segments: string[], deleteSegments: string[] }>,

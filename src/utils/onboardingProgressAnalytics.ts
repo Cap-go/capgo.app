@@ -1,6 +1,7 @@
 import type { OnboardingChannelEvent, OnboardingChannelEventProperties, OnboardingChannelStage } from '~/utils/onboardingChannelAnalytics'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 
+export const PROFILE_ONBOARDING_ANALYTICS_VERSION = 6
 export const ONBOARDING_ANALYTICS_VERSION = 4
 export const WEBNATIVE_PUBLISH_INTENT_ANALYTICS_VERSION = '5.A'
 export const WEBNATIVE_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION = '5.C'
@@ -8,7 +9,8 @@ export const NEW_CHANNEL_ANALYTICS_VERSION = '5.E'
 export const NEW_CHANNEL_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION = '5.F'
 export const NEW_CHANNEL_PUBLISH_INTENT_ANALYTICS_VERSION = '5.G'
 export type OnboardingAnalyticsVersion
-  = | typeof ONBOARDING_ANALYTICS_VERSION
+  = | typeof PROFILE_ONBOARDING_ANALYTICS_VERSION
+    | typeof ONBOARDING_ANALYTICS_VERSION
     | typeof WEBNATIVE_PUBLISH_INTENT_ANALYTICS_VERSION
     | typeof WEBNATIVE_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION
     | typeof NEW_CHANNEL_ANALYTICS_VERSION
@@ -22,6 +24,8 @@ export type OnboardingDevelopmentEnvironment = 'hosted_builder' | 'ai_assistant'
 export type OnboardingIntent = 'ota' | 'builder' | 'both' | 'exploring' | 'publish'
 export type OnboardingInteractionEvent
   = | OnboardingChannelEvent
+    | 'onboarding_profile_saved'
+    | 'onboarding_profile_save_failed'
     | 'onboarding_development_environment_selected'
     | 'onboarding_organization_import_opened'
     | 'onboarding_organization_import_submitted'
@@ -36,7 +40,9 @@ export type OnboardingInteractionEvent
     | 'onboarding_webnative_continue_with_capgo'
     | 'onboarding_webnative_recommendation_clicked'
 export type OnboardingDetailsEvent
-  = | 'onboarding_app_creation_failed'
+  = | 'onboarding_first_name_entered'
+    | 'onboarding_last_name_entered'
+    | 'onboarding_app_creation_failed'
     | 'onboarding_app_creation_started'
     | 'onboarding_app_creation_succeeded'
     | 'onboarding_app_icon_import_selected'
@@ -136,7 +142,7 @@ export interface OnboardingCopyEventProperties {
   setup_command: 'builder' | 'ota'
 }
 
-export type OnboardingDetailsField = 'app_id' | 'app_name' | 'icon_store_url' | 'store_url'
+export type OnboardingDetailsField = 'first_name' | 'last_name' | 'app_id' | 'app_name' | 'icon_store_url' | 'store_url'
 
 export function createOnboardingDetailsFieldDebouncer(
   emit: (
