@@ -28,8 +28,8 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconInfo from '~icons/lucide/info'
+import { useConsole } from '~/services/console'
 import { checkPermissions } from '~/services/permissions'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 
 /**
@@ -52,7 +52,7 @@ const emit = defineEmits<{
 
 // Initialize services and stores
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const dialogStore = useDialogV2Store()
 
 // Component state

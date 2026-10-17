@@ -1,4 +1,4 @@
-import { FunctionsFetchError, FunctionsHttpError } from '@supabase/supabase-js'
+import { FunctionsFetchError, FunctionsHttpError } from '../src/services/consoleClient'
 import { describe, expect, it } from 'vitest'
 import {
   defaultRetriesForMethod,

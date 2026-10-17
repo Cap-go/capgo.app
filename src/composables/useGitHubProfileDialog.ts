@@ -2,14 +2,14 @@ import type { GitHubProfile } from '~/services/githubProfile'
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import { useConsole } from '~/services/console'
 import { getGitHubProfile, GitHubProfileError } from '~/services/githubProfile'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 
 export function useGitHubProfileDialog(dialogId = 'github-profile') {
   const { t } = useI18n()
-  const supabase = useSupabase()
+  const supabase = useConsole()
   const main = useMainStore()
   const dialogStore = useDialogV2Store()
 

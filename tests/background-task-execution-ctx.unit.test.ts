@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import { backgroundTask } from '../supabase/functions/_backend/utils/utils.ts'
 
+const runtime = vi.hoisted(() => ({ value: 'workerd' }))
+
 vi.mock('hono/adapter', async importOriginal => ({
   ...(await importOriginal<typeof import('hono/adapter')>()),
-  getRuntimeKey: () => 'workerd',
+  getRuntimeKey: () => runtime.value,
 }))
 
 function createContext(executionCtx?: { waitUntil: (promise: Promise<unknown>) => void }) {
@@ -38,4 +40,16 @@ describe('background task execution context', () => {
     expect(result).toBe(task)
     await expect(result).resolves.toBe('completed')
   })
+})
+
+it('returns the task in Node when EdgeRuntime is absent', async () => {
+  runtime.value = 'node'
+  try {
+    const task = Promise.resolve('completed')
+    expect(backgroundTask(createContext(), task)).toBe(task)
+    await expect(task).resolves.toBe('completed')
+  }
+  finally {
+    runtime.value = 'workerd'
+  }
 })

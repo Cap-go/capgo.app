@@ -5,7 +5,7 @@ import BuildTimeChart from '~/components/dashboard/BuildTimeChart.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import { useBuildCardStats } from '~/composables/useBuildCardStats'
 import { computeLastDayEvolution, dayIndexInWindow, fetchAllRows } from '~/services/buildCharts'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 
 const props = defineProps({
   appId: { type: String, default: '' },
@@ -17,7 +17,7 @@ const props = defineProps({
 const emit = defineEmits<{ 'update:loading': [value: boolean] }>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 
 interface BuildLogRow { created_at: string | null, billable_seconds: number | null }
 interface BuildTimeResult { minutesPerDay: number[], total: number, evolution: number }

@@ -4,7 +4,7 @@ vi.mock('~/services/staleAssetErrors', () => ({
   shouldSuppressPostHogExceptionEvent: () => false,
 }))
 
-vi.mock('~/services/supabase', () => ({
+vi.mock('~/services/console', () => ({
   isLocal: () => false,
 }))
 

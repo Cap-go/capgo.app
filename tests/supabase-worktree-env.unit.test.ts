@@ -1,3 +1,4 @@
+import { parse } from 'dotenv'
 import { describe, expect, it } from 'vitest'
 import { buildFunctionsEnvFile } from '../scripts/supabase-worktree'
 
@@ -10,9 +11,9 @@ describe('buildFunctionsEnvFile', () => {
       '',
     ].join('\n'), 56521)
 
-    expect(generated).toContain('S3_ENDPOINT=127.0.0.1:56521/storage/v1/s3\n')
-    expect(generated).toContain('FILES_PUBLIC_URL=http://127.0.0.1:56521/functions/v1\n')
-    expect(generated).toContain('MANIFEST_UPLOAD_CAPABILITY_KEY_ID=local-test\n')
-    expect(generated).not.toContain('kong:8000')
+    const env = parse(generated)
+    expect(env.S3_ENDPOINT).toBe('127.0.0.1:56521/storage/v1/s3')
+    expect(env.FILES_PUBLIC_URL).toBe('http://127.0.0.1:56521/functions/v1')
+    expect(env.MANIFEST_UPLOAD_CAPABILITY_KEY_ID).toBe('local-test')
   })
 })

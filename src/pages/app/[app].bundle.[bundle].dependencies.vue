@@ -11,7 +11,7 @@ import IconPuzzle from '~icons/heroicons/puzzle-piece'
 import IconSearch from '~icons/ic/round-search?raw'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import { comparePackages, hasPlatformChecksumMetadataDrift, summarizeCompatibility } from '~/services/bundleCompatibility'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 
 type VersionRow = Pick<Database['public']['Tables']['app_versions']['Row'], 'id' | 'name' | 'created_at' | 'manifest_count' | 'app_id'>
@@ -41,7 +41,7 @@ const route = useRoute()
 const router = useRouter()
 const displayStore = useDisplayStore()
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const packageId = ref<string>('')
 const id = ref<number>(0)
 const loading = ref(true)

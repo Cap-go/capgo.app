@@ -1,5 +1,5 @@
+import { getLocalConfig } from '~/services/console'
 import { pushEventForUser } from '~/services/posthog'
-import { getLocalConfig } from '~/services/supabase'
 
 type OrganizationInvitationSuccessEvent
   = 'organization_membership_invitation_accepted'

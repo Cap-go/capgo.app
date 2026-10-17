@@ -1,6 +1,6 @@
-import type { CapgoConfig } from '~/services/supabase'
+import type { CapgoConfig } from '~/services/console'
 import { describe, expect, it } from 'vitest'
-import { mergeRemoteConfig, resolveSupabaseHost } from '~/services/supabase'
+import { mergeRemoteConfig, resolveSupabaseHost } from '~/services/console'
 
 describe('supabase config merging', () => {
   const localConfig: CapgoConfig = {

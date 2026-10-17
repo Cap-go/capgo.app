@@ -11,7 +11,7 @@ import IconTimer from '~icons/lucide/timer'
 import DeliveryLatencyPanel from '~/components/dashboard/DeliveryLatencyPanel.vue'
 import OrgNotificationStatsPanel from '~/components/dashboard/OrgNotificationStatsPanel.vue'
 import Tabs from '~/components/Tabs.vue'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -20,7 +20,7 @@ type DashboardTab = 'usage' | 'delivery' | 'notifications'
 const route = useRoute('/dashboard')
 const organizationStore = useOrganizationStore()
 const isLoading = ref(true)
-const supabase = useSupabase()
+const supabase = useConsole()
 const { t } = useI18n()
 const displayStore = useDisplayStore()
 const apps = ref<Database['public']['Tables']['apps']['Row'][]>([])

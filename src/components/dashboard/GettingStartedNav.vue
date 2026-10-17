@@ -4,7 +4,7 @@ import { computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconX from '~icons/lucide/x'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import {
@@ -24,7 +24,7 @@ const props = withDefaults(defineProps<{
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
-const supabase = useSupabase()
+const supabase = useConsole()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 

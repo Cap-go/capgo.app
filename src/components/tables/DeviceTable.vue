@@ -10,6 +10,7 @@ import IconInformationCircle from '~icons/heroicons/information-circle'
 import IconSmartphone from '~icons/lucide/smartphone'
 import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentionNotice.vue'
 import DateRangePicker from '~/components/DateRangePicker.vue'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import {
   getDateRangeForPreset,
@@ -17,7 +18,6 @@ import {
   shouldRecountOnTableReload,
   TABLE_DATE_RANGE_DEFAULT,
 } from '~/services/dateRange'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 import BundleMultiFilter from './BundleMultiFilter.vue'
 import VersionCompareField from './VersionCompareField.vue'
 
@@ -43,7 +43,7 @@ interface DateRangePickerHandle {
 }
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const router = useRouter()
 const total = ref(0)
 const unfilteredTotal = ref<number | null>(null)

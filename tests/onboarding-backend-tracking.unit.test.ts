@@ -10,7 +10,7 @@ const {
   sendEventMock: vi.fn(async (_payload: unknown) => null),
 }))
 
-vi.mock('~/services/supabase', () => ({
+vi.mock('~/services/console', () => ({
   getLocalConfig: getLocalConfigMock,
   isLocal: (supaHost: string) => supaHost !== 'https://sb.capgo.app',
 }))

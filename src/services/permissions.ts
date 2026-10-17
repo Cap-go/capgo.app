@@ -18,7 +18,7 @@
  */
 
 import type { Database } from '~/types/supabase.types'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useMainStore } from '~/stores/main'
 
 /**
@@ -95,7 +95,7 @@ export async function hasPermission(
   scope: PermissionScope,
 ): Promise<boolean> {
   const mainStore = useMainStore()
-  const supabase = useSupabase()
+  const supabase = useConsole()
 
   // Get current user ID
   const userId = mainStore.user?.id
@@ -206,7 +206,7 @@ export async function userHasPermission(
   userId: string,
   scope: PermissionScope,
 ): Promise<boolean> {
-  const supabase = useSupabase()
+  const supabase = useConsole()
 
   if (!userId || !scope.orgId)
     return false

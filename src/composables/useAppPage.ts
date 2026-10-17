@@ -1,7 +1,7 @@
 import type { Database } from '~/types/supabase.types'
 import { ref, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 
 interface UseAppPageOptions {
@@ -14,7 +14,7 @@ export function useAppPage(options: UseAppPageOptions) {
   const route = useRoute(options.routeName)
   const lastPath = ref('')
   const isLoading = ref(false)
-  const supabase = useSupabase()
+  const supabase = useConsole()
   const displayStore = useDisplayStore()
   const app = ref<Database['public']['Tables']['apps']['Row']>()
   let loadGeneration = 0

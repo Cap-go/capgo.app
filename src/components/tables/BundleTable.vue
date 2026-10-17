@@ -15,10 +15,10 @@ import IconTrash from '~icons/heroicons/trash'
 import BundleChannelsPopover from '~/components/tables/BundleChannelsPopover.vue'
 import { fetchLinkedChannelsForVersion, formatBundleListChannels, formatLinkedChannel, mergeBundleListChannels, unlinkLinkedChannels } from '~/services/bundleLinkedChannels'
 import { findChannelsWithoutPromotionPermission, formatChannelPromotionTargets } from '~/services/channelPromotion'
+import { useConsole } from '~/services/console'
 import { formatBytes } from '~/services/conversion'
 import { formatDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
-import { useSupabase } from '~/services/supabase'
 import { refetchIfPageOutOfRange } from '~/services/tablePagination'
 import { useDialogV2Store } from '~/stores/dialogv2'
 
@@ -38,7 +38,7 @@ const isMobile = Capacitor.isNativePlatform()
 const offset = 10
 const { t } = useI18n()
 const dialogStore = useDialogV2Store()
-const supabase = useSupabase()
+const supabase = useConsole()
 const router = useRouter()
 const bundleUploadedEvent = useEventBus<string>('bundle-uploaded')
 const total = ref(0)

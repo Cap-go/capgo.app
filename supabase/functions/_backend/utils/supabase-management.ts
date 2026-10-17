@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import { SSO_ATTRIBUTE_CLAIM_PREFIX } from '../private/sso/role-mapping.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { getEnv } from './utils.ts'
+import { consoleSamlConfig, consoleSsoURL, fetchConsoleSamlMetadata, withConsoleSsoDatabase } from './console_sso.ts'
 
 interface ManagementAttributeMapping { keys: Record<string, { name?: string, names?: string[], array?: boolean, default?: unknown }> }
 
@@ -205,12 +206,49 @@ function toManagementAttributeMapping(mapping: Record<string, string>): { keys: 
   return { keys }
 }
 
+function usesConsoleSso(c: Context) {
+  return c.get('auth')?.claims?.auth_provider === 'better-auth'
+}
+
+async function readConsoleSso(c: Context, id: string): Promise<SSOProviderResponse> {
+  return withConsoleSsoDatabase(c, async (pool) => {
+    const { rows } = await pool.query('SELECT * FROM public.console_auth_sso_provider WHERE "providerId" = $1', [id])
+    if (!rows[0])
+      throw new ManagementAPIError(404, 'provider_not_found', 'SSO provider not found')
+    const row = rows[0]
+    const config = JSON.parse(row.samlConfig)
+    const mapping = { ...config.mapping?.extraFields, email: config.mapping?.email, name: config.mapping?.name,
+      first_name: config.mapping?.firstName, last_name: config.mapping?.lastName }
+    return { id, saml: { entity_id: config.issuer, metadata_xml: config.idpMetadata.metadata,
+      attribute_mapping: { keys: Object.fromEntries(Object.entries(mapping).filter(([, name]) => typeof name === 'string').map(([key, name]) => [key, { name: name as string }])) } },
+    domains: row.domain ? [{ domain: row.domain }] : [] }
+  })
+}
+
+async function writeConsoleSso(c: Context, id: string, domain: string, metadata: SSOMetadataSource, mapping?: Record<string, string>) {
+  const config = consoleSamlConfig(consoleSsoURL(c), id, await fetchConsoleSamlMetadata(metadata), mapping)
+  await withConsoleSsoDatabase(c, async (pool) => {
+    await pool.query(`UPDATE public.console_auth_sso_provider SET domain = $2, issuer = $3, "samlConfig" = $4 WHERE "providerId" = $1`, [id, domain, config.issuer, JSON.stringify(config)])
+  })
+  return readConsoleSso(c, id)
+}
+
 export async function createSSOProvider(
   c: Context,
   domain: string,
   metadata: SSOMetadataSource,
   attributeMapping?: Record<string, string>,
 ): Promise<SSOProviderResponse> {
+  if (usesConsoleSso(c)) {
+    const id = c.req.param('id') ?? crypto.randomUUID()
+    const config = consoleSamlConfig(consoleSsoURL(c), id, await fetchConsoleSamlMetadata(metadata), attributeMapping)
+    await withConsoleSsoDatabase(c, async (pool) => {
+      const provider = await pool.query('SELECT org_id FROM public.sso_providers WHERE id = $1::uuid', [id])
+      await pool.query(`INSERT INTO public.console_auth_sso_provider (id, "providerId", "userId", "organizationId", domain, issuer, "samlConfig")
+        VALUES ($1, $1, $2, $3, $4, $5, $6)`, [id, c.get('auth').userId, provider.rows[0]?.org_id, domain, config.issuer, JSON.stringify(config)])
+    })
+    return readConsoleSso(c, id)
+  }
   const body = {
     type: 'saml',
     domains: [domain],
@@ -226,6 +264,8 @@ export async function getSSOProvider(
   c: Context,
   providerId: string,
 ): Promise<SSOProviderResponse> {
+  if (usesConsoleSso(c))
+    return readConsoleSso(c, providerId)
   const response = await callManagementAPI(c, 'GET', `/config/auth/sso/providers/${providerId}`)
   return response as SSOProviderResponse
 }
@@ -235,6 +275,12 @@ export async function updateSSOProvider(
   providerId: string,
   updates: Partial<SSOProviderUpdate>,
 ): Promise<SSOProviderResponse> {
+  if (usesConsoleSso(c)) {
+    const previous = await readConsoleSso(c, providerId)
+    const previousMapping = Object.fromEntries(Object.entries(previous.saml?.attribute_mapping?.keys ?? {}).filter(([, value]) => value.name).map(([key, value]) => [key, value.name!]))
+    return writeConsoleSso(c, providerId, updates.domains?.[0] ?? (updates.domains ? '' : previous.domains?.[0]?.domain ?? ''),
+      updates.metadata_url ? { metadata_url: updates.metadata_url } : { metadata_xml: previous.saml!.metadata_xml! }, updates.attribute_mapping ?? previousMapping)
+  }
   const body: any = {}
 
   if (updates.domains !== undefined) {
@@ -263,6 +309,11 @@ export async function snapshotSSOProvider(c: Context, providerId: string): Promi
 }
 
 export async function restoreSSOProvider(c: Context, providerId: string, snapshot: SSOProviderSnapshot): Promise<void> {
+  if (usesConsoleSso(c)) {
+    const mapping = Object.fromEntries(Object.entries(snapshot.attribute_mapping?.keys ?? {}).filter(([, value]) => value.name).map(([key, value]) => [key, value.name!]))
+    await writeConsoleSso(c, providerId, snapshot.domains[0] ?? '', snapshot.metadata_url ? { metadata_url: snapshot.metadata_url } : { metadata_xml: snapshot.metadata_xml! }, mapping)
+    return
+  }
   await callManagementAPI(c, 'PUT', `/config/auth/sso/providers/${providerId}`, snapshot)
 }
 
@@ -270,5 +321,9 @@ export async function deleteSSOProvider(
   c: Context,
   providerId: string,
 ): Promise<void> {
+  if (usesConsoleSso(c)) {
+    await withConsoleSsoDatabase(c, pool => pool.query('DELETE FROM public.console_auth_sso_provider WHERE "providerId" = $1', [providerId]))
+    return
+  }
   await callManagementAPI(c, 'DELETE', `/config/auth/sso/providers/${providerId}`)
 }

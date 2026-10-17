@@ -1,11 +1,8 @@
-import type { User } from '@supabase/supabase-js'
-import type { AppUsageByApp, AppUsageGlobal } from './../services/supabase'
+import type { AppUsageByApp, AppUsageGlobal } from './../services/console'
+import type { User } from '~/services/consoleClient'
 import type { Database } from '~/types/supabase.types'
 import { acceptHMRUpdate, defineStore } from 'pinia'
 import { ref, watch } from 'vue'
-import { getDaysBetweenDates } from '~/services/conversion'
-import { normalizeToUtcStartOfDay } from '~/services/date'
-import { reset } from '~/services/posthog'
 import {
   clearSpoof,
   findBestPlan,
@@ -14,8 +11,11 @@ import {
   getTotalStorage,
   isPlatformAdmin,
   normalizeDashboardDateRange,
-  useSupabase,
-} from '~/services/supabase'
+  useConsole,
+} from '~/services/console'
+import { getDaysBetweenDates } from '~/services/conversion'
+import { normalizeToUtcStartOfDay } from '~/services/date'
+import { reset } from '~/services/posthog'
 import { setWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
 import { createDeferredPromise } from '../utils/promise'
 
@@ -101,7 +101,7 @@ export const useMainStore = defineStore('main', () => {
   }, { flush: 'sync' })
 
   const logout = async () => {
-    const supabase = useSupabase()
+    const supabase = useConsole()
     const config = getLocalConfig()
     const { error } = await supabase.auth.signOut()
     auth.value = undefined
@@ -148,7 +148,7 @@ export const useMainStore = defineStore('main', () => {
 
       totalDevices.value = dashboard.value[monthDay]?.mau ?? 0
       totalDownload.value = dashboard.value[monthDay]?.get ?? 0
-      totalStorage.value = await getTotalStorage()
+      totalStorage.value = await getTotalStorage(currentOrgId)
       totalStats.value = getTotalStats()
       bestPlan.value = await findBestPlan(totalStats.value)
       dashboardFetched.value = true

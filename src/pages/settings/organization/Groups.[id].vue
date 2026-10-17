@@ -13,8 +13,9 @@ import IconUsers from '~icons/heroicons/users'
 import DataTable from '~/components/DataTable.vue'
 import RoleCapabilitiesHint from '~/components/forms/RoleCapabilitiesHint.vue'
 import SearchInput from '~/components/forms/SearchInput.vue'
+import { useConsole } from '~/services/console'
+import { fetchOrgMembersRbac } from '~/services/orgMembers'
 import { checkPermissions } from '~/services/permissions'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -72,7 +73,7 @@ interface RoleOption {
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const { currentOrganization } = storeToRefs(organizationStore)
@@ -346,8 +347,7 @@ async function fetchOrgMembers() {
   if (!orgId)
     return
 
-  const { data, error } = await supabase
-    .rpc('get_org_members_rbac', { p_org_id: orgId })
+  const { data, error } = await fetchOrgMembersRbac(orgId)
 
   if (error)
     throw error

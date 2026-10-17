@@ -1,11 +1,11 @@
-import type { RealtimeChannel } from '@supabase/supabase-js'
+import type { RealtimeChannel } from '~/services/consoleClient'
 import { useEventBus } from '@vueuse/core'
 import { onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import { shouldShowCLIActivity } from '~/services/cliActivity'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { isUploadReplicationEvent, showUploadReplicationToast } from '~/services/updateReplicationToast'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
@@ -42,7 +42,7 @@ function getRouteForEvent(payload: CLIActivityPayload): string | null {
 }
 
 export function useRealtimeCLIFeed() {
-  const supabase = useSupabase()
+  const supabase = useConsole()
   const main = useMainStore()
   const orgStore = useOrganizationStore()
   const router = useRouter()

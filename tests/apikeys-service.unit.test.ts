@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { ConsoleClient } from '../src/services/consoleClient'
 import type { Database } from '../src/types/supabase.types'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -24,7 +24,7 @@ interface ApiKeyInvokePayload {
 
 function createSupabaseMock() {
   return {
-    supabase: {} as unknown as SupabaseClient<Database>,
+    supabase: {} as unknown as ConsoleClient<Database>,
   }
 }
 

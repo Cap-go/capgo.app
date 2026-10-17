@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { ConsoleClient } from '~/services/consoleClient'
 import type { Database } from '~/types/supabase.types'
 import type { OnboardingAppDraft } from '~/utils/onboardingAppDraft'
 import {
@@ -14,7 +14,7 @@ interface CreateOnboardingAppResult {
 }
 
 async function uploadIconFromDraft(
-  supabase: SupabaseClient<Database>,
+  supabase: ConsoleClient<Database>,
   ownerOrgId: string,
   appId: string,
   draft: OnboardingAppDraft,
@@ -69,7 +69,7 @@ async function uploadIconFromDraft(
 }
 
 export async function createOnboardingAppFromDraft(
-  supabase: SupabaseClient<Database>,
+  supabase: ConsoleClient<Database>,
   ownerOrgId: string,
   draft: OnboardingAppDraft,
   orgName?: string,

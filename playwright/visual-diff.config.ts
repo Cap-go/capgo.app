@@ -9,6 +9,15 @@ export interface VisualDiffRoute {
   prepare?: (page: Page) => Promise<void>
 }
 
+async function mockConsoleSecurity(page: Page) {
+  await page.route('**/private/console/query', (route) => {
+    const query = route.request().postDataJSON()
+    if (query.kind !== 'table' || query.name !== 'user_security')
+      return route.fallback()
+    return route.fulfill({ json: { data: { email_otp_verified_at: null }, error: null, status: 200 } })
+  })
+}
+
 const nativeObserveDays = ['2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30']
 
 const nativeObserveActionRows: Array<[string, number, number, number | null, number | null, number | null, boolean]> = [
@@ -198,6 +207,7 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     path: '/resend_email',
     auth: true,
     prepare: async (page) => {
+      await mockConsoleSecurity(page)
       await page.route('**/rest/v1/user_security?*', route => route.fulfill({ json: { email_otp_verified_at: null } }))
       await page.goto('/resend_email?reason=email_not_verified&return_to=/settings/account')
       await page.getByRole('button', { name: 'Send verification code', exact: true }).waitFor()
@@ -209,7 +219,9 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     auth: true,
     prepare: async (page) => {
       // Keep screenshots deterministic and never send a real verification email.
+      await mockConsoleSecurity(page)
       await page.route('**/rest/v1/user_security?*', route => route.fulfill({ json: { email_otp_verified_at: null } }))
+      await page.route('**/auth/email-otp/send-verification-otp', route => route.fulfill({ json: { success: true } }))
       await page.route('**/auth/v1/otp', route => route.fulfill({ json: { user: null, session: null } }))
       await page.goto('/resend_email?reason=email_not_verified&return_to=/settings/account')
       await page.getByRole('button', { name: 'Send verification code', exact: true }).click()
@@ -266,6 +278,17 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
         const json = await response.json().catch(() => null)
         const override = (row: any) => row?.app_id === 'com.demo.app' ? { ...row, need_onboarding: true, onboarding } : row
         await route.fulfill({ response, json: Array.isArray(json) ? json.map(override) : override(json) })
+      })
+      await page.route('**/private/console/query', async (route) => {
+        const query = route.request().postDataJSON()
+        if (query.kind === 'rpc' && query.name === 'verify_getting_started')
+          return route.fulfill({ json: { data: onboarding, error: null, status: 200 } })
+        if (query.kind !== 'table' || query.name !== 'apps')
+          return route.fallback()
+        const response = await route.fetch()
+        const json = await response.json()
+        const override = (row: any) => row?.app_id === 'com.demo.app' ? { ...row, need_onboarding: true, onboarding } : row
+        await route.fulfill({ response, json: { ...json, data: Array.isArray(json.data) ? json.data.map(override) : override(json.data) } })
       })
       await page.route('**/rpc/verify_getting_started', route => route.fulfill({ json: onboarding }))
       await page.route('**/private/onboarding_progress', route => route.fulfill({ json: { onboarding, hasChannel: false, checkErrors: [] } }))

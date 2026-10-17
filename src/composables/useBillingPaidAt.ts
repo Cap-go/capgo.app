@@ -1,7 +1,7 @@
 import type { Ref } from 'vue'
 import { ref, watch } from 'vue'
+import { fetchOrgBillingPaidAt } from '~/services/organizations'
 import { resolveBillingPaidAt } from '~/services/paymentRequired'
-import { useSupabase } from '~/services/supabase'
 
 const BILLING_PAID_AT_CACHE_TTL_MS = 5 * 60 * 1000
 const BILLING_PAID_AT_CACHE_MAX_ENTRIES = 100
@@ -48,11 +48,7 @@ export function useBillingPaidAt(orgId: Readonly<Ref<string | null | undefined>>
       return
     }
 
-    const { data, error } = await useSupabase()
-      .from('orgs')
-      .select('stripe_info(paid_at)')
-      .eq('id', nextOrgId)
-      .maybeSingle()
+    const { data, error } = await fetchOrgBillingPaidAt(nextOrgId)
 
     if (currentRun !== billingLookupRun)
       return
@@ -63,7 +59,7 @@ export function useBillingPaidAt(orgId: Readonly<Ref<string | null | undefined>>
       return
     }
 
-    const resolvedPaidAt = resolveBillingPaidAt(data.stripe_info)
+    const resolvedPaidAt = resolveBillingPaidAt(data)
     cacheBillingPaidAt(nextOrgId, resolvedPaidAt)
     paidAt.value = resolvedPaidAt
   }, { immediate: true })

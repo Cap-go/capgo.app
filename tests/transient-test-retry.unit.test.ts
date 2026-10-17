@@ -7,11 +7,13 @@ describe('transient integration test retry classifier', () => {
     ['FAIL tests/example.test.ts > example\nError: Your worker restarted mid-request', 'workerd_restart'],
     ['FAIL tests/example.test.ts > example\nAssertionError: expected 502 to be 200 // Object.is equality', 'gateway_502_503'],
     ['FAIL tests/example.test.ts > example\nAssertionError: expected 503 to be 204 // Object.is equality', 'gateway_502_503'],
+    ['FAIL tests/example.test.ts > identity RPC\n{ code: "PGRST002", message: "Could not query the database for the schema cache. Retrying." }', 'postgrest_schema_cache'],
   ] as const)('retries %s', (output, expected) => {
     expect(getTransientTestFailure(output)).toBe(expected)
   })
 
   it.each([
+    'FAIL tests/example.test.ts > identity RPC\n{ code: "42501", message: "permission denied for function get_user_id" }',
     'FAIL tests/example.test.ts > example\nAssertionError: expected 500 to be 200',
     'FAIL tests/example.test.ts > example\nAssertionError: expected true to be false',
     'Edge Function returned a non-2xx status code',
@@ -27,6 +29,17 @@ describe('transient integration test retry classifier', () => {
       'AssertionError: expected 502 to be 200',
       'FAIL tests/product.test.ts > product assertion',
       'AssertionError: expected true to be false',
+    ].join('\n')
+
+    expect(getTransientTestFailure(output)).toBeNull()
+  })
+
+  it('does not retry schema cache errors mixed with permission failures', () => {
+    const output = [
+      'FAIL tests/example.test.ts > identity RPC',
+      'PGRST002: Could not query the database for the schema cache. Retrying.',
+      'FAIL tests/example.test.ts > RPC permissions',
+      '42501: permission denied for function get_user_id',
     ].join('\n')
 
     expect(getTransientTestFailure(output)).toBeNull()

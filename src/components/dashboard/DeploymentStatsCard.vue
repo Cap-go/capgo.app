@@ -3,6 +3,7 @@ import colors from 'tailwindcss/colors'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { computeLastDayEvolution } from '~/services/buildCharts'
+import { useConsole } from '~/services/console'
 import { formatUtcDateParam, normalizeToUtcStartOfDay } from '~/services/date'
 import {
   calculateDemoEvolution,
@@ -12,7 +13,6 @@ import {
   generateDemoDeploymentData,
   getDemoDayCount,
 } from '~/services/demoChartData'
-import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
 import { filterDailySeriesToBillingPeriod, resolveDashboardDailySeriesWindow } from '~/utils/chartOptimizations'
@@ -47,7 +47,7 @@ const props = defineProps({
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
 const dashboardAppsStore = useDashboardAppsStore()
-const supabase = useSupabase()
+const supabase = useConsole()
 let latestRequestToken = 0
 
 const totalDeployments = ref(0)

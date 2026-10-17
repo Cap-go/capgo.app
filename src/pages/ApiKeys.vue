@@ -30,10 +30,12 @@ import {
 } from '~/services/apikeys'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { shouldShowCliLoginGuidance } from '~/services/cliLogin'
+import { useConsole } from '~/services/console'
 import { formatLocalDate } from '~/services/date'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
+import { fetchOrgNamesByIds } from '~/services/organizations'
 import { checkPermissions } from '~/services/permissions'
-import { useSupabase } from '~/services/supabase'
+import { fetchAssignableRoles } from '~/services/roles'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -107,7 +109,7 @@ const hasInitialScopeFilterInUrl = new URLSearchParams(window.location.search).h
 const defaultScopeFilterKey = ref<string | null>(null)
 const scopePicker = ref<ScopePickerState | null>(null)
 const scopePickerQuery = ref('')
-const supabase = useSupabase()
+const supabase = useConsole()
 const keys = ref<ApiKeyRow[]>([])
 const hasLoadedKeys = ref(false)
 const now = useNow({ interval: 60_000 })
@@ -593,27 +595,21 @@ async function fetchOrgAndAppNames() {
 
   // Fetch organization names in parallel
   if (uncachedOrgIds.length > 0) {
-    const orgPromises = uncachedOrgIds.map(async (orgId) => {
-      try {
-        const { data, error } = await supabase
-          .from('orgs')
-          .select('id, name')
-          .eq('id', orgId)
-          .single()
+    try {
+      const { data, error } = await fetchOrgNamesByIds(uncachedOrgIds)
+      if (error)
+        throw error
 
-        if (error)
-          throw error
-        if (data)
-          orgCache.value.set(orgId, data.name)
-        return { id: orgId, name: data?.name }
+      const namesById = new Map((data ?? []).map(row => [row.id, row.name]))
+      for (const orgId of uncachedOrgIds) {
+        const name = namesById.get(orgId)
+        if (name !== undefined)
+          orgCache.value.set(orgId, name)
       }
-      catch (err) {
-        console.error(`Error fetching org name for ${orgId}:`, err)
-        return { id: orgId, name: 'Unknown' }
-      }
-    })
-
-    await Promise.all(orgPromises)
+    }
+    catch (err) {
+      console.error('Error fetching org names:', err)
+    }
   }
 
   if (uncachedAppIds.length > 0) {
@@ -949,12 +945,7 @@ async function copyCliLoginCommand() {
 }
 
 async function fetchRoles() {
-  const { data, error } = await supabase
-    .from('roles')
-    .select('id, name, scope_type, description, priority_rank')
-    .eq('is_assignable', true)
-    .in('scope_type', ['org', 'app'])
-    .order('priority_rank', { ascending: false })
+  const { data, error } = await fetchAssignableRoles(['org', 'app'])
   if (error) {
     console.error('Error fetching roles:', error)
     return

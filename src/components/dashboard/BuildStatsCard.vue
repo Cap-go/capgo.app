@@ -14,7 +14,7 @@ import {
   emptyBuildSeries,
   fetchAllRows,
 } from '~/services/buildCharts'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 
 const props = defineProps({
   appId: { type: String, default: '' },
@@ -26,7 +26,7 @@ const props = defineProps({
 const emit = defineEmits<{ 'update:loading': [value: boolean] }>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 
 interface BuildRow { created_at: string | null, platform: string | null, status: string | null }
 interface BuildStatsResult { dataBySeries: BuildSeriesData, total: number, evolution: number }

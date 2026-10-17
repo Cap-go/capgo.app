@@ -5,8 +5,8 @@ import { useRouter } from 'vue-router'
 import IconPackage from '~icons/lucide/package'
 import IconTrendingUp from '~icons/lucide/trending-up'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
+import { useConsole } from '~/services/console'
 import { formatDistanceToNow } from '~/services/date'
-import { useSupabase } from '~/services/supabase'
 import { useOrganizationStore } from '~/stores/organization'
 
 const props = defineProps({
@@ -18,7 +18,7 @@ const props = defineProps({
 
 const router = useRouter()
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const organizationStore = useOrganizationStore()
 
 const isLoading = ref(true)

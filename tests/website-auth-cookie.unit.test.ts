@@ -8,7 +8,7 @@ const localConfig = vi.hoisted(() => ({
   },
 }))
 
-vi.mock('~/services/supabase', () => ({
+vi.mock('~/services/console', () => ({
   getLocalConfig: () => localConfig.value,
 }))
 

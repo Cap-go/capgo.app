@@ -2,8 +2,8 @@ import type { Ref } from 'vue'
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { chartLabelCountForPeriodDays } from '~/services/date'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 export interface BundleInstallStatsItem {
   version_name: string
@@ -42,7 +42,7 @@ export function useBundleInstallStats(
     version_name?: string
   },
 ) {
-  const supabase = useSupabase()
+  const supabase = useConsole()
   const { t } = useI18n()
   const stats = ref<BundleInstallStatsResponse | null>(null) as Ref<BundleInstallStatsResponse | null>
   const statsLoading = ref(false)

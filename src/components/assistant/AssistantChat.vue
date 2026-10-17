@@ -21,7 +21,7 @@ import chatGptLogoWhite from '~/assets/assistant/chatgpt-logo-white.svg'
 import { AssistantKeyError, createAssistantKey, loadAssistantKey, saveAssistantKey } from '~/services/assistant'
 import { AssistantUpstreamError, runAssistant } from '~/services/assistantAgent'
 import { beginChatGptSignIn, CHATGPT_MANAGE_USAGE_URL, CHATGPT_REDIRECT_URI, ChatGptAuthError, completeChatGptSignIn, getChatGptAccessToken, loadChatGptCredentials, signOutChatGpt } from '~/services/chatgptAuth'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import { tokenizeAssistantText } from '~/utils/assistantText'
@@ -42,7 +42,7 @@ interface ChatEntry extends AssistantTurn {
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
-const supabase = useSupabase()
+const supabase = useConsole()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 

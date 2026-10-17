@@ -5,9 +5,9 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
+import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -39,7 +39,7 @@ const props = defineProps<{
 const members = ref([] as ExtendedOrganizationMembers)
 const { t } = useI18n()
 const router = useRouter()
-const supabase = useSupabase()
+const supabase = useConsole()
 const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
 

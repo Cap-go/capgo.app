@@ -4,6 +4,7 @@ import colors from 'tailwindcss/colors'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { computeLastDayEvolution } from '~/services/buildCharts'
+import { useConsole } from '~/services/console'
 import { normalizeToUtcStartOfDay } from '~/services/date'
 import {
   calculateDemoEvolution,
@@ -13,7 +14,6 @@ import {
   generateDemoBundleUploadsData,
   getDemoDayCount,
 } from '~/services/demoChartData'
-import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
 import { filterDailySeriesToBillingPeriod, resolveDashboardDailySeriesWindow } from '~/utils/chartOptimizations'
@@ -133,7 +133,7 @@ async function calculateStats(forceRefetch = false) {
       let cachedName = singleAppNameCache.get(props.appId) ?? ''
       if (!cachedName) {
         try {
-          const { data: appRow } = await useSupabase()
+          const { data: appRow } = await useConsole()
             .from('apps')
             .select('name')
             .eq('app_id', props.appId)
@@ -175,7 +175,7 @@ async function calculateStats(forceRefetch = false) {
     }
     else {
       // Fetch series window (billing cycle or last 30 UTC days)
-      const query = useSupabase()
+      const query = useConsole()
         .from('app_versions')
         .select('created_at, app_id, deleted, r2_path, external_url, user_id')
         .gte('created_at', last30DaysStart.toISOString())

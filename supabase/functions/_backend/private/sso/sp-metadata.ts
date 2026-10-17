@@ -1,6 +1,8 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import { createHono, quickError, useCors } from '../../utils/hono.ts'
+import { z } from 'zod'
+import { supabaseWithAuth } from '../../utils/supabase.ts'
 import { middlewareAuth } from '../../utils/hono_jwt.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { getEnv } from '../../utils/utils.ts'
@@ -57,12 +59,26 @@ function getPublicSupabaseUrl(c: Context<MiddlewareKeyVariables>): string {
   return supabaseUrl
 }
 
-app.get('/', (c: Context<MiddlewareKeyVariables>) => {
+app.get('/', async (c: Context<MiddlewareKeyVariables>) => {
   const auth = c.get('auth')
   const requestId = c.get('requestId')
   if (!auth) {
     cloudlog({ requestId, message: 'Unauthorized request to sp-metadata — no auth context', auth })
     return quickError(401, 'not_authorized', 'Not authorized')
+  }
+
+  if (auth.claims?.auth_provider === 'better-auth') {
+    const id = z.uuid().safeParse(c.req.query('provider_id'))
+    if (!id.success)
+      return quickError(400, 'invalid_provider', 'Select an SSO provider')
+    const { data, error } = await supabaseWithAuth(c, auth).from('sso_providers').select('id, provider_id').eq('id', id.data).maybeSingle()
+    if (error || !data)
+      return quickError(403, 'not_authorized', 'Not authorized')
+    const base = `${getEnv(c, 'CONSOLE_AUTH_URL').replace(/\/$/, '')}/auth`
+    const providerId = data.provider_id ?? data.id
+    const metadataUrl = `${base}/sso/saml2/sp/metadata?providerId=${encodeURIComponent(providerId)}`
+    return c.json({ acs_url: `${base}/sso/saml2/sp/acs/${encodeURIComponent(providerId)}`, entity_id: metadataUrl,
+      sp_metadata_url: metadataUrl, nameid_format: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress' })
   }
 
   const supabaseUrl = getPublicSupabaseUrl(c)

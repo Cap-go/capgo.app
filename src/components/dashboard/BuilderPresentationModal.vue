@@ -15,8 +15,8 @@ import { gsap } from 'gsap'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import { getLocalConfig } from '~/services/console'
 import { pushEvent } from '~/services/posthog'
-import { getLocalConfig } from '~/services/supabase'
 import { sanitizeHtml } from '~/utils/sanitize'
 
 const props = defineProps<{ open: boolean, appId?: string }>()

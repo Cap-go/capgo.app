@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { AppleAuthSessionClient } from '../src/services/appleOAuth'
 import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { captureAppleOAuthCallback, completeAppleOAuth, consumeAppleOAuthLandingError, hasPendingAppleOAuth, prepareAppleOAuthLanding } from '../src/services/appleOAuth'
 
-vi.mock('~/services/supabase', () => ({ defaultApiHost: 'https://api.example.com' }))
+vi.mock('~/services/console', () => ({ defaultApiHost: 'https://api.example.com' }))
 const key = 'capgo.apple-oauth.v1'
 const state = 's'.repeat(43)
 const code = 'c'.repeat(43)
@@ -14,7 +14,7 @@ const exchange = vi.fn()
 const user = { id: 'example-user', email: 'apple-user@example.com', factors: [{ status: 'verified', factor_type: 'totp' }] }
 const session = { access_token: 'access-token', refresh_token: 'refresh-token' }
 const setSession = vi.fn()
-const client = { auth: { setSession } } as unknown as SupabaseClient
+const client = { auth: { setSession } } as unknown as AppleAuthSessionClient
 beforeEach(() => {
   vi.clearAllMocks()
   consumeAppleOAuthLandingError()
@@ -24,7 +24,7 @@ beforeEach(() => {
   vi.stubGlobal('window', { opener: { postMessage: message } })
   vi.stubGlobal('history', { replaceState: vi.fn() })
   vi.stubGlobal('fetch', exchange)
-  setSession.mockResolvedValue({ data: { user, session }, error: null })
+  setSession.mockResolvedValue({ data: { session: { user, ...session } }, error: null })
   exchange.mockImplementation(async () => Response.json({ user, session, is_new_user: true, name_status: 'unavailable' }))
 })
 afterEach(() => vi.unstubAllGlobals())

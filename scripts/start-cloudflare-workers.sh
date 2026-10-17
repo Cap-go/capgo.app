@@ -57,6 +57,15 @@ else
   echo -e "${YELLOW}Warning: ${BASE_ENV_FILE} not found - starting with empty base env${NC}"
 fi
 
+get_base_env_var() {
+  bun --cwd "${ROOT_DIR}" -e 'import { parse } from "dotenv"; import { readFileSync } from "node:fs"; process.stdout.write(parse(readFileSync(process.argv[1], "utf8"))[process.argv[2]] ?? "")' "${RUNTIME_ENV_FILE}" "$1"
+}
+WEBAPP_URL="${WEBAPP_URL:-$(get_base_env_var WEBAPP_URL)}"
+WEBAPP_URL="${WEBAPP_URL:-http://localhost:5173}"
+BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET:-$(get_base_env_var BETTER_AUTH_SECRET)}"
+JWT_SECRET="${JWT_SECRET:-$(get_base_env_var JWT_SECRET)}"
+CONSOLE_SMTP_URL="${CONSOLE_SMTP_URL:-$(get_base_env_var CONSOLE_SMTP_URL)}"
+
 SUPA_ENV="$(run_supabase_status_env || true)"
 SUPABASE_URL_FROM_STATUS="$(get_supabase_status_var 'API_URL')"
 SUPABASE_DB_URL_FROM_STATUS="$(get_supabase_status_var 'DB_URL')"
@@ -135,6 +144,14 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# Only derive SMTP for the selected local stack, and never advertise a closed port.
+if [[ -z "${CONSOLE_SMTP_URL:-}" && "${SUPABASE_URL}" == "${SUPABASE_URL_FROM_STATUS}" && "${SUPABASE_URL}" =~ ^http://(127\.0\.0\.1|localhost):([0-9]+)$ ]]; then
+  LOCAL_SMTP_PORT=$((10#${BASH_REMATCH[2]} + 4))
+  if (( LOCAL_SMTP_PORT <= 65535 )) && (echo > /dev/tcp/127.0.0.1/${LOCAL_SMTP_PORT}) 2>/dev/null; then
+    CONSOLE_SMTP_URL="smtp://127.0.0.1:${LOCAL_SMTP_PORT}"
+  fi
+fi
+
 cat >> "${RUNTIME_ENV_FILE}" <<ENV_EOF
 MAIN_SUPABASE_DB_URL=${MAIN_SUPABASE_DB_URL}
 SUPABASE_DB_URL=${SUPABASE_DB_URL}
@@ -148,10 +165,16 @@ STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
 S3_ENDPOINT=${S3_ENDPOINT_TO_USE}
 # Worker requests must keep the isolated Storage API host instead of their own host.
 S3_REWRITE_LOCAL_ENDPOINT=false
+CONSOLE_AUTH_URL=${CLOUDFLARE_FUNCTION_URL}
+CONSOLE_REQUIRE_EMAIL_VERIFICATION=false
 RATE_LIMIT_API_KEY=999999
 RATE_LIMIT_FAILED_AUTH=999999
 RATE_LIMIT_CHANNEL_SELF_IP=999999
 ENV_EOF
+BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET:-local-console-auth-development-secret-32-characters}" \
+JWT_SECRET="${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}" \
+WEBAPP_URL="${WEBAPP_URL}" CONSOLE_SMTP_URL="${CONSOLE_SMTP_URL:-}" \
+bun --cwd "${ROOT_DIR}" -e 'import { readFileSync, writeFileSync } from "node:fs"; import { upsertEnvValue } from "./scripts/supabase-worktree.ts"; const path = process.argv[1]; let content = readFileSync(path, "utf8"); for (const key of ["BETTER_AUTH_SECRET", "JWT_SECRET", "WEBAPP_URL", "CONSOLE_SMTP_URL"]) content = upsertEnvValue(content, key, process.env[key] ?? ""); writeFileSync(path, content)' "${RUNTIME_ENV_FILE}"
 
 # Start API worker on its isolated port.
 echo -e "${GREEN}Starting API worker on port ${CLOUDFLARE_API_PORT}...${NC}"

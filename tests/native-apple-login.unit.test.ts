@@ -1,10 +1,9 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
 import { webcrypto } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { isNativeAppleLoginAvailable, signInWithApple } from '../src/services/nativeAppleLogin'
 
 const native = vi.hoisted(() => ({ platform: 'ios', available: true, isNative: true }))
-vi.mock('~/services/supabase', () => ({ nativeAppleLoginEnabled: { value: true }, defaultApiHost: 'https://api.example.com' }))
+vi.mock('~/services/console', () => ({ defaultApiHost: 'https://api.example.com' }))
 const plugin = vi.hoisted(() => ({ initialize: vi.fn(), login: vi.fn() }))
 vi.mock('@capacitor/core', () => ({ Capacitor: {
   isNativePlatform: () => native.isNative,
@@ -20,11 +19,11 @@ function client() {
     signInWithIdToken: vi.fn(() => { throw new Error('Direct Apple exchange forbidden') }),
     updateUser: vi.fn(),
     getSession: vi.fn().mockResolvedValue({ data: { session: { user, access_token: 'current-access' } } }),
-    setSession: vi.fn().mockResolvedValue({ data: { user, session }, error: null }),
+    setSession: vi.fn().mockResolvedValue({ data: { session: { user, ...session } }, error: null }),
   } }
 }
 function login(supabase: ReturnType<typeof client>, reauthenticate = false) {
-  return signInWithApple(supabase as unknown as SupabaseClient, 'captcha-token', { reauthenticate })
+  return signInWithApple(supabase, 'captcha-token', { reauthenticate })
 }
 beforeEach(() => {
   vi.clearAllMocks()

@@ -1,5 +1,5 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CliLoginOrganization } from '~/services/cliLogin'
+import type { ConsoleClient } from '~/services/consoleClient'
 import type { Database } from '~/types/supabase.types'
 import { createCliLoginKeyDependencies, createMcpOAuthKey, resolveCliKeyEligibility } from '~/services/cliLogin'
 
@@ -56,7 +56,7 @@ export function saveAssistantKey(userId: string, apikey: string) {
  * API key list, expires within 90 days and can be revoked there.
  */
 export async function createAssistantKey(
-  supabase: SupabaseClient<Database>,
+  supabase: ConsoleClient<Database>,
   userId: string,
   organizations: CliLoginOrganization[],
 ): Promise<string> {

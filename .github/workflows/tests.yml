@@ -521,7 +521,6 @@ jobs:
             bun scripts/supabase-worktree.ts stop --no-backup || true
           fi
 
-
   # Serial plugin hot-path suite against Supabase edge (/updates, /stats, /channel_self).
   # Kept off the backend shard matrix — parallel Deno load causes intermittent 502s.
   test_backend_plugin:
@@ -645,7 +644,6 @@ jobs:
           if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
             bun scripts/supabase-worktree.ts stop --no-backup || true
           fi
-
 
   # Keep SQL/schema checks split so each job stays focused after a cold Supabase start.
   test_backend_sql:

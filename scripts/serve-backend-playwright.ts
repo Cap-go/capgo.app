@@ -1,10 +1,13 @@
+import type { SupabaseStatus } from './supabase-worktree-status'
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import process, { env } from 'node:process'
+import { parse } from 'dotenv'
 import { getPlaywrightStripeApiBaseUrl } from './playwright-stripe'
+import { upsertEnvValue } from './supabase-worktree'
 import { getSupabaseWorktreeConfig } from './supabase-worktree-config'
-import { getSupabaseStatus, type SupabaseStatus } from './supabase-worktree-status'
+import { getSupabaseStatus } from './supabase-worktree-status'
 
 const repoRoot = process.cwd()
 const sourceEnvPath = resolve(repoRoot, 'supabase/functions/.env')
@@ -16,28 +19,23 @@ const webAppUrl = env.WEBAPP_URL || 'http://localhost:5173'
 const functionsReadyTimeoutMs = Number(env.PLAYWRIGHT_BACKEND_TIMEOUT_MS || '360000')
 // Comma-separated Supabase services to skip (`supabase start -x`). CI skips the ones E2E
 // never touches so a cold runner pulls fewer images before the stack is healthy.
-const supabaseStartExclude = env.PLAYWRIGHT_SUPABASE_EXCLUDE?.trim()
-
-function upsertEnvValue(content: string, key: string, value: string): string {
-  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const matcher = new RegExp(`^${escapedKey}=.*$`, 'm')
-  const line = `${key}=${value}`
-
-  if (matcher.test(content))
-    return content.replace(matcher, line)
-
-  return content.endsWith('\n') || content.length === 0
-    ? `${content}${line}\n`
-    : `${content}\n${line}\n`
-}
+const supabaseStartExclude = env.PLAYWRIGHT_SUPABASE_EXCLUDE?.split(',').filter(service => !['mailpit', 'inbucket'].includes(service.trim())).join(',')
 
 const baseEnv = existsSync(sourceEnvPath) ? readFileSync(sourceEnvPath, 'utf8') : ''
+const baseEnvValues = parse(baseEnv)
 const overriddenEnv = [
   ['S3_ENDPOINT', `127.0.0.1:${supabaseConfig.ports.api}/storage/v1/s3`],
   ['STRIPE_SECRET_KEY', env.STRIPE_SECRET_KEY || 'sk_test_emulator'],
   ['STRIPE_API_BASE_URL', stripeApiBaseUrl],
   ['STRIPE_WEBHOOK_SECRET', env.STRIPE_WEBHOOK_SECRET || 'testsecret'],
   ['WEBAPP_URL', webAppUrl],
+  ['ENV_NAME', 'capgo-api-local'],
+  ['CONSOLE_AUTH_E2E', 'true'],
+  ['CONSOLE_AUTH_URL', `http://127.0.0.1:${supabaseConfig.ports.api}/functions/v1`],
+  ['CONSOLE_REQUIRE_EMAIL_VERIFICATION', 'false'],
+  ['BETTER_AUTH_SECRET', env.BETTER_AUTH_SECRET || baseEnvValues.BETTER_AUTH_SECRET || 'local-console-auth-development-secret-32-characters'],
+  ['JWT_SECRET', env.JWT_SECRET || baseEnvValues.JWT_SECRET || 'super-secret-jwt-token-with-at-least-32-characters-long'],
+  ['CONSOLE_SMTP_URL', env.CONSOLE_SMTP_URL || baseEnvValues.CONSOLE_SMTP_URL || 'smtp://inbucket:1025'],
 ] as const
 
 function sleep(ms: number): Promise<void> {
@@ -91,12 +89,27 @@ async function resetSupabaseDb() {
   }
 }
 
+async function waitForMailboxReady() {
+  const deadline = Date.now() + 10000
+  while (Date.now() < deadline) {
+    const ready = await fetch(`http://127.0.0.1:${supabaseConfig.ports.inbucket}/`, { signal: AbortSignal.timeout(1000) }).then(response => response.ok).catch(() => false)
+    if (ready)
+      return true
+    await sleep(500)
+  }
+  return false
+}
+
 async function ensureSupabaseStarted() {
   const maxAttempts = 4
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    if (hasHealthySupabaseApi(getSupabaseStatus()))
+    const healthy = hasHealthySupabaseApi(getSupabaseStatus())
+    const mailboxReady = healthy && await waitForMailboxReady()
+    if (healthy && mailboxReady)
       return
+    if (healthy)
+      stopSupabase()
 
     const startResult = spawnSync('bun', ['run', 'supabase:start', ...(supabaseStartExclude ? ['-x', supabaseStartExclude] : [])], {
       cwd: repoRoot,
@@ -104,13 +117,15 @@ async function ensureSupabaseStarted() {
       env: process.env,
     })
 
-    if ((startResult.status ?? 1) === 0 && hasHealthySupabaseApi(getSupabaseStatus()))
+    if ((startResult.status ?? 1) === 0 && hasHealthySupabaseApi(getSupabaseStatus()) && await waitForMailboxReady())
       return
 
     stopSupabase()
 
-    if (attempt === maxAttempts)
-      process.exit(startResult.status ?? 1)
+    if (attempt === maxAttempts) {
+      console.error('Supabase API and mailbox did not become ready')
+      process.exit(startResult.status || 1)
+    }
 
     await sleep(attempt * 2000)
   }
@@ -118,23 +133,22 @@ async function ensureSupabaseStarted() {
 
 async function waitForFunctionsReady(timeoutMs: number) {
   const apiUrl = getSupabaseStatus()?.API_URL || `http://127.0.0.1:${supabaseConfig.ports.api}`
-  const targetUrl = `${apiUrl}/functions/v1/ok`
+  const targets = ['/ok', '/auth/console-session', '/private/config'].map(path => `${apiUrl}/functions/v1${path}`)
   const startedAt = Date.now()
 
   while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const response = await fetch(targetUrl)
-      if (response.ok)
-        return
-    }
-    catch {
-      // Keep polling until the edge runtime serves requests again.
-    }
-
+    const responses = await Promise.allSettled(targets.map(async (url) => {
+      const response = await fetch(url, { signal: AbortSignal.timeout(Math.min(10000, Math.max(1, timeoutMs - (Date.now() - startedAt)))) })
+      await response.arrayBuffer()
+      return response.ok
+    }))
+    if (responses.every(result => result.status === 'fulfilled' && result.value))
+      return
+    console.log('Waiting for Playwright functions:', responses.map((result, index) => `${targets[index]}: ${result.status === 'fulfilled' ? result.value : String(result.reason)}`).join(', '))
     await sleep(1000)
   }
 
-  throw new Error(`Timed out waiting for Supabase functions at ${targetUrl}`)
+  throw new Error(`Timed out waiting for Supabase functions at ${targets.join(', ')}`)
 }
 
 async function stopChildProcess(child: ReturnType<typeof spawn>, signal: NodeJS.Signals = 'SIGTERM') {

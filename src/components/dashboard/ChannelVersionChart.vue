@@ -8,9 +8,9 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import { createTooltipConfig } from '~/services/chartTooltip'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatLocalDateShort } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 // Bundle version mix of one channel, the channel-scoped counterpart of the
 // app-wide "Active bundle" chart on the Live release page.
@@ -35,7 +35,7 @@ interface ChannelStatsResponse {
 
 const { t } = useI18n()
 const router = useRouter()
-const supabase = useSupabase()
+const supabase = useConsole()
 const stats = ref<ChannelStatsResponse | null>(null)
 const loading = ref(false)
 const failed = ref(false)

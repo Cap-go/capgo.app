@@ -1,4 +1,5 @@
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
+import { fetchOrgChartRefreshState as fetchOrgChartRefreshStateApi } from '~/services/organizations'
 
 export const CHART_REFRESH_STALE_MS = 5 * 60 * 1000
 export const CHART_REFRESH_POLL_MS = 10 * 1000
@@ -78,7 +79,7 @@ export function isOrgCacheReadyForRefresh(
 }
 
 export async function requestAppChartRefresh(appId: string): Promise<ChartRefreshRequestResult> {
-  const { data, error } = await useSupabase()
+  const { data, error } = await useConsole()
     .rpc('request_app_chart_refresh', { app_id: appId })
     .single()
 
@@ -94,7 +95,7 @@ export async function requestAppChartRefresh(appId: string): Promise<ChartRefres
 }
 
 export async function requestOrgChartRefresh(orgId: string): Promise<ChartRefreshRequestResult> {
-  const { data, error } = await useSupabase()
+  const { data, error } = await useConsole()
     .rpc('request_org_chart_refresh', { org_id: orgId })
     .single()
 
@@ -110,7 +111,7 @@ export async function requestOrgChartRefresh(orgId: string): Promise<ChartRefres
 }
 
 export async function fetchAppChartRefreshState(appId: string): Promise<AppChartRefreshState> {
-  const { data, error } = await useSupabase()
+  const { data, error } = await useConsole()
     .rpc('get_app_stats_refresh_state', { p_app_id: appId })
     .single()
 
@@ -121,9 +122,7 @@ export async function fetchAppChartRefreshState(appId: string): Promise<AppChart
 }
 
 export async function fetchOrgChartRefreshState(orgId: string): Promise<OrgChartRefreshState> {
-  const { data, error } = await useSupabase()
-    .rpc('get_org_stats_refresh_state', { p_org_id: orgId })
-    .single()
+  const { data, error } = await fetchOrgChartRefreshStateApi(orgId)
 
   if (error || !data)
     throw error ?? new Error('Org refresh state not found')

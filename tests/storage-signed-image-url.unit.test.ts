@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const mockCreateSignedUrl = vi.fn()
 const mockFrom = vi.fn(() => ({ createSignedUrl: mockCreateSignedUrl }))
 
-vi.mock('../src/services/supabase.ts', () => ({
-  useSupabase: () => ({
+vi.mock('../src/services/console.ts', () => ({
+  useConsole: () => ({
     storage: {
       from: mockFrom,
     },
@@ -26,7 +26,7 @@ describe('createSignedImageUrl', () => {
   it('extracts the storage path from signed image URLs before refreshing them', async () => {
     mockCreateSignedUrl.mockResolvedValueOnce({
       data: {
-        signedUrl: 'https://example.supabase.co/storage/v1/object/sign/images/org/org-1/logo/logo.png?token=fresh',
+        signedUrl: 'https://api.example.com/private/console/images/read?path=org%2Forg-1%2Flogo%2Flogo.png&token=fresh',
       },
       error: null,
     })
@@ -34,7 +34,7 @@ describe('createSignedImageUrl', () => {
     const { createSignedImageUrl } = await import('../src/services/storage.ts')
     const result = await createSignedImageUrl('https://example.supabase.co/storage/v1/object/sign/images/org/org-1/logo/logo.png?token=stale')
 
-    expect(result).toBe('https://example.supabase.co/storage/v1/object/sign/images/org/org-1/logo/logo.png?token=fresh')
+    expect(result).toBe('https://api.example.com/private/console/images/read?path=org%2Forg-1%2Flogo%2Flogo.png&token=fresh')
     expect(mockFrom).toHaveBeenCalledWith('images')
     expect(mockCreateSignedUrl).toHaveBeenCalledWith('org/org-1/logo/logo.png', 60 * 60 * 24 * 7)
   })
@@ -43,13 +43,13 @@ describe('createSignedImageUrl', () => {
     mockCreateSignedUrl
       .mockResolvedValueOnce({
         data: {
-          signedUrl: 'https://example.supabase.co/storage/v1/object/sign/images/org/org-2/logo/logo.png?token=initial',
+          signedUrl: 'https://api.example.com/private/console/images/read?path=org%2Forg-2%2Flogo%2Flogo.png&token=initial',
         },
         error: null,
       })
       .mockResolvedValueOnce({
         data: {
-          signedUrl: 'https://example.supabase.co/storage/v1/object/sign/images/org/org-2/logo/logo.png?token=refreshed',
+          signedUrl: 'https://api.example.com/private/console/images/read?path=org%2Forg-2%2Flogo%2Flogo.png&token=refreshed',
         },
         error: null,
       })
@@ -59,9 +59,9 @@ describe('createSignedImageUrl', () => {
     const cachedUrl = await createSignedImageUrl('org/org-2/logo/logo.png')
     const refreshedUrl = await createSignedImageUrl(firstUrl, { forceRefresh: true })
 
-    expect(firstUrl).toBe('https://example.supabase.co/storage/v1/object/sign/images/org/org-2/logo/logo.png?token=initial')
+    expect(firstUrl).toBe('https://api.example.com/private/console/images/read?path=org%2Forg-2%2Flogo%2Flogo.png&token=initial')
     expect(cachedUrl).toBe(firstUrl)
-    expect(refreshedUrl).toBe('https://example.supabase.co/storage/v1/object/sign/images/org/org-2/logo/logo.png?token=refreshed')
+    expect(refreshedUrl).toBe('https://api.example.com/private/console/images/read?path=org%2Forg-2%2Flogo%2Flogo.png&token=refreshed')
     expect(mockCreateSignedUrl).toHaveBeenCalledTimes(2)
   })
 
@@ -69,13 +69,13 @@ describe('createSignedImageUrl', () => {
     mockCreateSignedUrl
       .mockResolvedValueOnce({
         data: {
-          signedUrl: 'https://example.supabase.co/storage/v1/object/sign/images/org/org-3/logo/logo.png?token=initial',
+          signedUrl: 'https://api.example.com/private/console/images/read?path=org%2Forg-3%2Flogo%2Flogo.png&token=initial',
         },
         error: null,
       })
       .mockResolvedValueOnce({
         data: {
-          signedUrl: 'https://example.supabase.co/storage/v1/object/sign/images/org/org-3/logo/logo.png?token=renewed',
+          signedUrl: 'https://api.example.com/private/console/images/read?path=org%2Forg-3%2Flogo%2Flogo.png&token=renewed',
         },
         error: null,
       })
@@ -87,8 +87,8 @@ describe('createSignedImageUrl', () => {
 
     const renewedUrl = await createSignedImageUrl('org/org-3/logo/logo.png')
 
-    expect(firstUrl).toBe('https://example.supabase.co/storage/v1/object/sign/images/org/org-3/logo/logo.png?token=initial')
-    expect(renewedUrl).toBe('https://example.supabase.co/storage/v1/object/sign/images/org/org-3/logo/logo.png?token=renewed')
+    expect(firstUrl).toBe('https://api.example.com/private/console/images/read?path=org%2Forg-3%2Flogo%2Flogo.png&token=initial')
+    expect(renewedUrl).toBe('https://api.example.com/private/console/images/read?path=org%2Forg-3%2Flogo%2Flogo.png&token=renewed')
     expect(mockCreateSignedUrl).toHaveBeenCalledTimes(2)
   })
 })

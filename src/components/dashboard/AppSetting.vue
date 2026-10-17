@@ -15,10 +15,10 @@ import gearSix from '~icons/ph/gear-six?raw'
 import iconName from '~icons/ph/user?raw'
 import Toggle from '~/components/Toggle.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { useConsole } from '~/services/console'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { getAppDeletionTrackingProperties } from '~/utils/appDeletionFeedback'
 
@@ -37,7 +37,7 @@ interface DownloadChannel {
 const isLoading = ref(false)
 const isFirstLoading = ref(true)
 const router = useRouter()
-const supabase = useSupabase()
+const supabase = useConsole()
 const appRef = ref<Database['public']['Tables']['apps']['Row'] & { owner_org: Database['public']['Tables']['orgs']['Row'] } | null>(null)
 const { t } = useI18n()
 const dialogStore = useDialogV2Store()

@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { shouldSuppressPostHogExceptionEvent } from '~/services/staleAssetErrors'
-import { isLocal } from '~/services/supabase'
+import { isLocal } from '~/services/console'
 
 const POSTHOG_URL_PROPERTY_KEYS = [
   '$current_url',

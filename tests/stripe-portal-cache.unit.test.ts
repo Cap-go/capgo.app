@@ -37,8 +37,8 @@ vi.mock('~/stores/dialogv2', () => ({
   }),
 }))
 
-vi.mock('../src/services/supabase', () => ({
-  useSupabase: () => ({ auth: { getSession: mocks.getSession } }),
+vi.mock('../src/services/console', () => ({
+  useConsole: () => ({ auth: { getSession: mocks.getSession } }),
 }))
 
 interface TestDialogOptions {

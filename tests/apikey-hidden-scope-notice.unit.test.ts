@@ -76,7 +76,7 @@ vi.mock('~/services/permissions', () => ({
   checkPermissions: async () => true,
 }))
 
-vi.mock('~/services/supabase', () => {
+vi.mock('~/services/console', () => {
   function createQuery(table: string) {
     let selectedId: string | null = null
     const query: Record<string, any> = {
@@ -133,7 +133,7 @@ vi.mock('~/services/supabase', () => {
   }
 
   return {
-    useSupabase: () => ({
+    useConsole: () => ({
       auth: {
         getClaims: async () => ({ data: { claims: { sub: 'user-id' } } }),
       },

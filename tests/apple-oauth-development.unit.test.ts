@@ -4,7 +4,7 @@ import { isWebAppleLoginAvailable, startAppleOAuth } from '../src/services/apple
 
 const native = vi.hoisted(() => ({ value: false }))
 vi.mock('@capacitor/core', () => ({ Capacitor: { isNativePlatform: () => native.value } }))
-vi.mock('~/services/supabase', () => ({ defaultApiHost: 'https://api.example.com' }))
+vi.mock('~/services/console', () => ({ defaultApiHost: 'https://api.example.com' }))
 const origin = 'https://localhost:5173'
 const assign = vi.fn()
 const fetchMock = vi.fn()

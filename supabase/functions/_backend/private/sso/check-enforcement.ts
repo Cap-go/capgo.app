@@ -29,7 +29,7 @@ app.post('/', middlewareAuth, async (c) => {
 
   // Derive email and auth provider from JWT claims — never trust the body
   const authorization = c.get('authorization')
-  const claims = authorization ? await getClaimsFromJWT(c, authorization) : null
+  const claims = auth.claims ?? (authorization ? await getClaimsFromJWT(c, authorization) : null)
   const email = claims?.email
 
   if (!email) {
@@ -100,6 +100,11 @@ app.post('/', middlewareAuth, async (c) => {
     if (spoofAdminAuthorization) {
       const adminAuthorization = toBearerAuthorization(spoofAdminAuthorization)
       const adminClaims = await getClaimsFromJWT(c, adminAuthorization)
+      const validatedAdminAuthorization = adminAuthorization.startsWith('Bearer capgo_session_')
+        ? c.get('authorization') ?? adminAuthorization
+        : adminAuthorization
+      if (authorization)
+        c.set('authorization', authorization)
       const adminUserId = adminClaims?.sub
 
       if (!adminUserId) {
@@ -109,7 +114,7 @@ app.post('/', middlewareAuth, async (c) => {
         cloudlog({ requestId, context: 'check_enforcement - spoof admin token matches target user', orgId, userId })
       }
       else {
-        const adminSupabase = supabaseClient(c, adminAuthorization)
+        const adminSupabase = supabaseClient(c, validatedAdminAuthorization)
         const { data: isPlatformAdmin, error: platformAdminError } = await (adminSupabase.rpc as any)('is_platform_admin')
 
         if (platformAdminError) {

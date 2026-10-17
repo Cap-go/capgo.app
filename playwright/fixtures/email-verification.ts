@@ -1,11 +1,11 @@
-import type { Session } from '@supabase/supabase-js'
+import type { Session } from '../../src/services/consoleClient'
 import { defaultConfig, plugin } from '@formkit/vue'
 import { createPinia } from 'pinia'
 import { createApp, defineComponent, h } from 'vue'
 import { createRouter, createWebHistory, RouterView } from 'vue-router'
 import { Toaster } from 'vue-sonner'
 import { i18n } from '../../src/modules/i18n'
-import { useSupabase } from '../../src/services/supabase'
+import { useConsole } from '../../src/services/console'
 import '../../src/styles/style.css'
 
 const state = {
@@ -32,7 +32,7 @@ window.fetch = async (input, init) => {
     headers: { 'Content-Type': 'application/json' },
   })
 }
-const supabase = useSupabase()
+const supabase = useConsole()
 supabase.auth.getSession = async () => ({ data: { session: {
   access_token: 'fixture-token',
   user: { id: '00000000-0000-4000-8000-000000000001', email: 'verification-preview@example.com' },

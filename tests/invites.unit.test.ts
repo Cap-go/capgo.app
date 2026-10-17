@@ -1,4 +1,4 @@
-import { FunctionsHttpError } from '@supabase/supabase-js'
+import { FunctionsHttpError } from '../src/services/consoleClient'
 import { describe, expect, it } from 'vitest'
 import { resolveInviteNewUserErrorMessage, shouldAttemptExistingUserInviteNotification } from '../src/utils/invites'
 

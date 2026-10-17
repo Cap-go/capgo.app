@@ -4,10 +4,10 @@ const mockGetSession = vi.fn()
 const mockSignOut = vi.fn()
 const mockGetSpoofedAdminJwt = vi.fn()
 
-vi.mock('~/services/supabase', () => ({
+vi.mock('~/services/console', () => ({
   defaultApiHost: 'https://api.capgo.test',
   getSpoofedAdminJwt: mockGetSpoofedAdminJwt,
-  useSupabase: () => ({
+  useConsole: () => ({
     auth: {
       getSession: mockGetSession,
       signOut: mockSignOut,

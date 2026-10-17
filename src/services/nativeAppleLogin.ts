@@ -1,6 +1,10 @@
-import type { SupabaseClient, User } from '@supabase/supabase-js'
+import type { ConsoleClient, Session, User } from './consoleClient'
 import { Capacitor } from '@capacitor/core'
-import { defaultApiHost } from './supabase'
+import { defaultApiHost } from './console'
+
+interface NativeAppleAuthClient {
+  auth: Pick<ConsoleClient['auth'], 'setSession' | 'getSession'>
+}
 
 export function isNativeAppleLoginAvailable(reauthenticate = false) {
   return (reauthenticate || import.meta.env.VITE_NATIVE_APPLE_LOGIN_ENABLED === 'true')
@@ -9,7 +13,7 @@ export function isNativeAppleLoginAvailable(reauthenticate = false) {
     && Capacitor.isPluginAvailable('SocialLogin')
 }
 
-export async function signInWithApple(supabase: SupabaseClient, captchaToken?: string, options: { reauthenticate?: boolean } = {}) {
+export async function signInWithApple(supabase: NativeAppleAuthClient, captchaToken?: string, options: { reauthenticate?: boolean } = {}) {
   if (!isNativeAppleLoginAvailable(options.reauthenticate))
     throw new Error('Apple login requires the native iOS SocialLogin plugin')
 
@@ -33,14 +37,18 @@ export async function signInWithApple(supabase: SupabaseClient, captchaToken?: s
   if (!credential.result.idToken)
     throw new Error('Apple did not return an identity token')
 
-  const { data: current } = options.reauthenticate ? await supabase.auth.getSession() : { data: { session: null } }
-  if (options.reauthenticate && !current.session)
+  let currentSession: Session | null = null
+  if (options.reauthenticate) {
+    const { data } = await supabase.auth.getSession()
+    currentSession = data.session
+  }
+  if (options.reauthenticate && !currentSession)
     throw new Error('Authentication required')
   const response = await fetch(`${defaultApiHost}/auth/apple`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(current.session ? { Authorization: `Bearer ${current.session.access_token}` } : {}),
+      ...(currentSession ? { Authorization: `Bearer ${currentSession.access_token}` } : {}),
     },
     body: JSON.stringify({
       id_token: credential.result.idToken,
@@ -61,10 +69,11 @@ export async function signInWithApple(supabase: SupabaseClient, captchaToken?: s
   if (!response.ok || !result.user || !result.session)
     throw new Error(result.error || 'Apple authentication failed')
   // Check again before installing a replacement session during account deletion.
-  if (current.session && result.user.id !== current.session.user.id)
+  if (currentSession && result.user.id !== currentSession.user.id)
     throw new Error('Apple account does not match the authenticated account')
   const { data, error } = await supabase.auth.setSession(result.session)
-  if (error || !data.user)
+  const installedUser = data.session?.user
+  if (error || !installedUser)
     throw error || new Error('Apple session could not be installed')
-  return { user: data.user, profileSaveFailed: false, nameUnavailable: result.name_status === 'unavailable', authorizationCode: credential.result.authorizationCode }
+  return { user: installedUser, profileSaveFailed: false, nameUnavailable: result.name_status === 'unavailable', authorizationCode: credential.result.authorizationCode }
 }

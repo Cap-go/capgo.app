@@ -32,11 +32,11 @@ vi.mock('vue-router', () => ({
 }))
 vi.mock('vue-sonner', () => ({ toast: { error: mocks.error, warning: mocks.warning, success: vi.fn() } }))
 vi.mock('~/services/nativeAppleLogin', () => ({ isNativeAppleLoginAvailable: () => mocks.available, signInWithApple: mocks.signIn }))
-vi.mock('~/services/supabase', () => ({
+vi.mock('~/services/console', () => ({
   defaultApiHost: 'https://api.example.test',
   hashEmail: async () => 'hashed-email',
   autoAuth: vi.fn(),
-  useSupabase: () => ({
+  useConsole: () => ({
     rpc: mocks.rpc,
     auth: {
       getClaims: mocks.getClaims,
@@ -83,7 +83,7 @@ beforeEach(() => {
   mocks.signIn.mockResolvedValue({ user: { id: 'apple-user', email: 'apple@example.com' } })
   mocks.rpc.mockResolvedValue({ data: true, error: null })
   mocks.signOut.mockResolvedValue({ error: null })
-  mocks.setSession.mockResolvedValue({ data: { user: { id: 'apple-user', email: 'apple@example.com' } }, error: null })
+  mocks.setSession.mockResolvedValue({ data: { session: { user: { id: 'apple-user', email: 'apple@example.com' } } }, error: null })
   mocks.listFactors.mockResolvedValue({ data: { all: [] }, error: null })
   mocks.challenge.mockResolvedValue({ data: { id: 'challenge-id' }, error: null })
   mocks.verify.mockResolvedValue({ error: null })

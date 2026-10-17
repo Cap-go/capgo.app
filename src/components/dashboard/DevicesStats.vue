@@ -14,6 +14,7 @@ import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { createChartScales } from '~/services/chartConfig'
 import { useChartData } from '~/services/chartDataService'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '~/services/chartTooltip'
+import { useConsole } from '~/services/console'
 import { formatUtcDateParam, generateChartDayLabels, getChartDateRange, getLastNUtcDaysRange, normalizeToUtcStartOfDay } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import {
@@ -23,7 +24,6 @@ import {
   generateDemoPreviousNativeActiveSummary,
   normalizeNativeActiveDevicesSummary,
 } from '~/services/nativeDeviceStats'
-import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
 import { shouldShowDashboardDemoData } from '~/utils/dashboardDemoMode'
@@ -134,7 +134,7 @@ const { t } = useI18n()
 const route = useRoute('/app/[app]')
 const router = useRouter()
 const organizationStore = useOrganizationStore()
-const supabase = useSupabase()
+const supabase = useConsole()
 const rawChartData = ref<ChartApiData | null>(null)
 const rawThirtyDayChartData = ref<ChartApiData | null>(null)
 

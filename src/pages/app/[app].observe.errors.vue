@@ -19,11 +19,11 @@ import IconSmartphone from '~icons/lucide/smartphone'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import InfoPopover from '~/components/InfoPopover.vue'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { registerDashboardCharts } from '~/services/dashboardChartRegister'
 import { formatLocalDateShort, formatLocalDateTime } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { actionToFilter, updaterFailureCategory, updaterFailureHelpKey, updaterInsightActions } from '~/services/statsActions'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 
 interface LogInsightSummary {
@@ -84,7 +84,7 @@ const isDark = useDark()
 registerDashboardCharts()
 const route = useRoute('/app/[app].observe.errors')
 const router = useRouter()
-const supabase = useSupabase()
+const supabase = useConsole()
 const displayStore = useDisplayStore()
 
 const id = ref('')

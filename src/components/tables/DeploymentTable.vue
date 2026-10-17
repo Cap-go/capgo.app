@@ -6,10 +6,10 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { getTimeWindowPageRange } from '~/services/dateRange'
 import { getLogDocUrl } from '~/services/logDocLinks'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 const props = defineProps<{
   deviceId?: string
@@ -35,7 +35,7 @@ function getActiveOrder(columns: TableColumn[]) {
 const columns: Ref<TableColumn[]> = ref<TableColumn[]>([])
 const router = useRouter()
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const search = ref('')
 const elements = ref<Element[]>([])
 const isLoading = ref(false)

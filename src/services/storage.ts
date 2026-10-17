@@ -1,4 +1,4 @@
-import { useSupabase } from './supabase'
+import { useConsole } from './console'
 
 const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 7
 const SIGNED_URL_CACHE_MAX_AGE_MS = 15 * 60 * 1000
@@ -16,6 +16,9 @@ export function resolveImagePath(raw?: string | null) {
 
   try {
     const url = new URL(trimmed)
+    if (url.pathname.endsWith('/private/console/images/read') && url.searchParams.get('path')) {
+      return { normalized: url.searchParams.get('path')!.replace(/^\/+/, ''), shouldSign: true }
+    }
     const match = STORAGE_URL_REGEX.exec(url.pathname)
     if (match?.[1]) {
       return {
@@ -62,7 +65,7 @@ export async function createSignedImageUrl(path?: string | null, options: { forc
       signedUrlCache.delete(cacheKey)
   }
 
-  const { data, error } = await useSupabase()
+  const { data, error } = await useConsole()
     .storage
     .from('images')
     .createSignedUrl(normalized, SIGNED_URL_TTL_SECONDS)

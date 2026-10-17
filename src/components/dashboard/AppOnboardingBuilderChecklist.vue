@@ -13,7 +13,7 @@ import IconMinus from '~icons/lucide/minus'
 import IconAndroid from '~icons/mdi/android'
 import IconApple from '~icons/mdi/apple'
 import { BUILDER_STEP_IDS, parseBuilderOnboarding } from '~/services/builderOnboardingChecklist'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 
 const props = defineProps<{
   appId: string
@@ -31,7 +31,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const onboarding = ref(parseBuilderOnboarding(props.initialOnboarding))
 const viewedPlatform = ref<BuilderPlatform | null>(onboarding.value.selectedPlatform)
 const selectedId = ref<string | null>(null)

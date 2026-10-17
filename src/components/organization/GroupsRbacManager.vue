@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { Ref } from 'vue'
 import type { TableColumn } from '~/components/comp_def'
-import { FunctionsHttpError } from '@supabase/supabase-js'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -10,8 +9,9 @@ import IconTrash from '~icons/heroicons/trash'
 import IconWrench from '~icons/heroicons/wrench'
 import DataTable from '~/components/DataTable.vue'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
+import { useConsole } from '~/services/console'
+import { FunctionsHttpError } from '~/services/consoleClient'
 import { formatDate } from '~/services/date'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { getRbacRoleI18nKey } from '~/stores/organization'
 
@@ -52,7 +52,7 @@ const props = defineProps<{
 
 const { t } = useI18n()
 const router = useRouter()
-const supabase = useSupabase()
+const supabase = useConsole()
 const dialogStore = useDialogV2Store()
 
 const isLoading = ref(false)

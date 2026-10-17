@@ -226,7 +226,7 @@ export function backgroundTask(c: Context, p: any) {
     executionCtx.waitUntil(p)
     return Promise.resolve(null)
   }
-  if (EdgeRuntime?.waitUntil) {
+  if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) {
     EdgeRuntime.waitUntil(p)
     return Promise.resolve(null)
   }

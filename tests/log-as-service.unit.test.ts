@@ -12,18 +12,18 @@ const mocks = vi.hoisted(() => ({
     loading: vi.fn(() => 'toast-id'),
     success: vi.fn(),
   },
-  useSupabase: vi.fn(),
+  useConsole: vi.fn(),
 }))
 
 vi.mock('vue-sonner', () => ({
   toast: mocks.toast,
 }))
 
-vi.mock('../src/services/supabase.ts', () => ({
+vi.mock('../src/services/console.ts', () => ({
   getSpoofedAdminJwt: mocks.getSpoofedAdminJwt,
   isSpoofed: mocks.isSpoofed,
   saveSpoof: mocks.saveSpoof,
-  useSupabase: mocks.useSupabase,
+  useConsole: mocks.useConsole,
 }))
 
 vi.mock('../src/services/capgoApi.ts', () => ({
@@ -40,11 +40,11 @@ function createRouter() {
   } as unknown as Router
 }
 
-function useSupabaseMock() {
+function useConsoleMock() {
   const getSession = vi.fn()
   const setSession = vi.fn()
 
-  mocks.useSupabase.mockReturnValue({
+  mocks.useConsole.mockReturnValue({
     auth: {
       getSession,
       setSession,
@@ -71,7 +71,7 @@ describe('logAsUser', () => {
   })
 
   it('keeps the current spoofed session untouched when the next spoof request fails', async () => {
-    const { getSession, setSession } = useSupabaseMock()
+    const { getSession, setSession } = useConsoleMock()
     mocks.isSpoofed.mockReturnValue(true)
     mocks.getSpoofedAdminJwt.mockResolvedValue('admin-jwt')
     mocks.invokeCapgoApi.mockResolvedValue({ data: null, error: new Error('User does not exist') })
@@ -91,7 +91,7 @@ describe('logAsUser', () => {
   })
 
   it('switches between spoofed users without replacing the stored admin backup', async () => {
-    const { getSession, setSession } = useSupabaseMock()
+    const { getSession, setSession } = useConsoleMock()
     mocks.isSpoofed.mockReturnValue(true)
     mocks.getSpoofedAdminJwt.mockResolvedValue('admin-jwt')
     mocks.invokeCapgoApi.mockResolvedValue({ data: { jwt: 'new-user-jwt', refreshToken: 'new-user-refresh' }, error: null })
@@ -111,7 +111,7 @@ describe('logAsUser', () => {
   })
 
   it('stores the current admin session when starting a spoof from the admin account', async () => {
-    const { getSession, setSession } = useSupabaseMock()
+    const { getSession, setSession } = useConsoleMock()
     mocks.isSpoofed.mockReturnValue(false)
     mocks.invokeCapgoApi.mockResolvedValue({ data: { jwt: 'user-jwt', refreshToken: 'user-refresh' }, error: null })
     getSession.mockResolvedValue({

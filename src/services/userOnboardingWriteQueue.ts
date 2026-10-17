@@ -1,5 +1,5 @@
 import type { Json } from '~/types/supabase.types'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { USER_ONBOARDING_INTENTS, USER_ONBOARDING_PROGRESS_FIELDS } from '~/utils/userOnboardingProgress'
 
 const onboardingWriteChains = new Map<string, Promise<void>>()
@@ -61,7 +61,7 @@ export async function replaceUserOnboardingIfUnchanged(
   expectedOnboarding: Json,
   onboarding: Json,
 ) {
-  return useSupabase()
+  return useConsole()
     .from('users')
     .update({ onboarding })
     .eq('id', userId)

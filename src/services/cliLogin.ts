@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { ConsoleClient } from '~/services/consoleClient'
 import type { Database } from '~/types/supabase.types'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { checkPermissions } from '~/services/permissions'
@@ -351,7 +351,7 @@ export async function prepareCliLoginKey(
 }
 
 export function createCliLoginKeyDependencies(
-  supabase: SupabaseClient<Database>,
+  supabase: ConsoleClient<Database>,
   userId: string,
 ): CliLoginKeyDependencies {
   return {

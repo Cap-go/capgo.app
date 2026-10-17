@@ -12,8 +12,8 @@ import IconServer from '~icons/lucide/server'
 import IconSmartphone from '~icons/lucide/smartphone'
 import IconSparkles from '~icons/lucide/sparkles'
 import IconUsers from '~icons/lucide/users-round'
+import { useConsole } from '~/services/console'
 import { checkPermissions } from '~/services/permissions'
-import { useSupabase } from '~/services/supabase'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -35,7 +35,7 @@ interface SavedChannel {
 const CHANNEL_NAME_PATTERN = /^[\w.-]+$/
 const suggestedNames = ['production', 'beta', 'development'] as const
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const channelName = ref('')

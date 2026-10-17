@@ -4,8 +4,8 @@ import { storeToRefs } from 'pinia'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import { updateOrganization } from '~/services/organizations'
 import { checkPermissions } from '~/services/permissions'
-import { useSupabase } from '~/services/supabase'
 import { useOrganizationStore } from '~/stores/organization'
 
 withDefaults(defineProps<{
@@ -16,7 +16,6 @@ withDefaults(defineProps<{
 
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
-const supabase = useSupabase()
 const isLoading = ref(false)
 
 const { currentOrganization } = storeToRefs(organizationStore)
@@ -65,20 +64,15 @@ async function toggleEmailPref(key: EmailPreferenceKey) {
   const newValue = !(currentPrefs[key] ?? true)
   const updatedPrefs = { ...currentPrefs, [key]: newValue }
 
-  const { data, error } = await supabase
-    .from('orgs')
-    .update({
-      email_preferences: updatedPrefs,
-    } as any)
-    .eq('id', currentOrganization.value.gid)
-    .select()
-    .single()
+  const { error } = await updateOrganization(currentOrganization.value.gid, {
+    email_preferences: updatedPrefs,
+  })
 
   if (error) {
     toast.error(t('org-notification-update-failed'))
     console.error('Failed to update org email preferences:', error)
   }
-  else if (data) {
+  else {
     if (currentOrganization.value)
       (currentOrganization.value as any).email_preferences = updatedPrefs
     toast.success(t('org-notification-updated'))

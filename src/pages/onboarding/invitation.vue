@@ -9,13 +9,13 @@ import IconCheck from '~icons/lucide/check'
 import IconLoader from '~icons/lucide/loader-2'
 import IconUserPlus from '~icons/lucide/user-plus'
 import IconX from '~icons/lucide/x'
+import { useConsole } from '~/services/console'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import {
   captureOrganizationInvitationEvent,
   runTrackedOrganizationInvitationMutation,
   sanitizeOrganizationInvitationClientFailureReason,
 } from '~/services/organizationInvitationTelemetry'
-import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
@@ -25,7 +25,7 @@ import { validateRedirectPath } from '~/utils/safeRedirect'
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const displayStore = useDisplayStore()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()

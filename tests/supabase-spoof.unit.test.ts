@@ -5,8 +5,8 @@ const mocks = vi.hoisted(() => ({
   createClient: vi.fn(),
 }))
 
-vi.mock('@supabase/supabase-js', () => ({
-  createClient: mocks.createClient,
+vi.mock('~/services/consoleClient', () => ({
+  createConsoleClient: mocks.createClient,
 }))
 
 function createJwt(exp: number) {
@@ -43,7 +43,7 @@ describe('spoof session storage', () => {
       .mockReturnValueOnce({ auth: { refreshSession } })
       .mockReturnValueOnce({ auth: { setSession } })
 
-    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/supabase.ts')
+    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/console.ts')
 
     saveSpoof(createJwt(1), 'stale-refresh-token')
     expect(isSpoofed()).toBe(true)
@@ -70,7 +70,7 @@ describe('spoof session storage', () => {
       .mockReturnValueOnce({ auth: { refreshSession } })
       .mockReturnValueOnce({ auth: { setSession } })
 
-    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/supabase.ts')
+    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/console.ts')
 
     saveSpoof(createJwt(1), 'admin-refresh-token')
     expect(isSpoofed()).toBe(true)
@@ -93,7 +93,7 @@ describe('spoof session storage', () => {
     const setSession = vi.fn().mockResolvedValue({ data: { session: {} }, error: null })
     mocks.createClient.mockReturnValueOnce({ auth: { refreshSession, setSession } })
 
-    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/supabase.ts')
+    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/console.ts')
     const validJwt = createJwt(Math.floor(Date.now() / 1000) + 300)
 
     saveSpoof(validJwt, 'stale-refresh-token')
@@ -112,7 +112,7 @@ describe('spoof session storage', () => {
     const setSession = vi.fn().mockResolvedValue({ data: { session: null }, error: new Error('session write failed') })
     mocks.createClient.mockReturnValueOnce({ auth: { setSession } })
 
-    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/supabase.ts')
+    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/console.ts')
 
     saveSpoof(createJwt(Math.floor(Date.now() / 1000) + 300), 'admin-refresh-token')
 
@@ -125,7 +125,7 @@ describe('spoof session storage', () => {
     const setSession = vi.fn().mockRejectedValue(new Error('session write failed'))
     mocks.createClient.mockReturnValueOnce({ auth: { setSession } })
 
-    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/supabase.ts')
+    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/console.ts')
 
     saveSpoof(createJwt(Math.floor(Date.now() / 1000) + 300), 'admin-refresh-token')
 
@@ -149,7 +149,7 @@ describe('spoof session storage', () => {
       .mockReturnValueOnce({ auth: { refreshSession } })
       .mockReturnValueOnce({ auth: { setSession } })
 
-    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/supabase.ts')
+    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/console.ts')
 
     saveSpoof(createJwt(1), 'stale-refresh-token')
 
@@ -171,7 +171,7 @@ describe('spoof session storage', () => {
     const refreshSession = vi.fn().mockResolvedValue({ data: { session: null }, error: new Error('invalid refresh token') })
     mocks.createClient.mockReturnValueOnce({ auth: { refreshSession } })
 
-    const { getSpoofedAdminJwt, isSpoofed, saveSpoof } = await import('../src/services/supabase.ts')
+    const { getSpoofedAdminJwt, isSpoofed, saveSpoof } = await import('../src/services/console.ts')
 
     saveSpoof(createJwt(1), 'stale-refresh-token')
 

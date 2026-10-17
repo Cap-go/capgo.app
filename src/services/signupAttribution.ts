@@ -1,5 +1,5 @@
-import type { User } from '@supabase/supabase-js'
 import type { ResolvedSignupAttribution } from '../../supabase/functions/shared/signup-attribution.ts'
+import type { User } from '~/services/consoleClient'
 import {
   CAPGO_ATTRIBUTION_COOKIE_MAX_AGE_SECONDS,
   CAPGO_ATTRIBUTION_COOKIE_NAME,

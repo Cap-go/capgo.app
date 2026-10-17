@@ -9,18 +9,15 @@ import VueTurnstile from 'vue-turnstile'
 import iconEmail from '~icons/oui/email?raw'
 import iconPassword from '~icons/ph/key?raw'
 import { authGhostButtonClass, authPanelClass, authPrimaryButtonClass } from '~/components/auth/pageStyles'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { openSupport } from '~/services/support'
-import { useDialogV2Store } from '~/stores/dialogv2'
 
 const { t } = useI18n()
 const router = useRouter()
 const route = useRoute('/forgot_password')
-const supabase = useSupabase()
-const dialogStore = useDialogV2Store()
+const supabase = useConsole()
 const step = ref(1)
 const turnstileToken = ref('')
-const mfaCode = ref('')
 
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 
@@ -47,6 +44,7 @@ function getRecoveryParams() {
     accessToken: hashParams.get('access_token') ?? queryParams.get('access_token') ?? '',
     refreshToken: hashParams.get('refresh_token') ?? queryParams.get('refresh_token') ?? '',
     code: queryParams.get('code') ?? hashParams.get('code') ?? '',
+    token: queryParams.get('token') ?? '',
     error: queryParams.get('error') ?? hashParams.get('error') ?? '',
     errorDescription: queryParams.get('error_description') ?? hashParams.get('error_description') ?? '',
   }
@@ -77,89 +75,21 @@ async function step1(form: { email: string }) {
 }
 
 async function step2(form: { password: string, password_confirm: string }) {
-  const { accessToken, refreshToken, code, error, errorDescription } = getRecoveryParams()
-  if (error) {
-    finishWithError(errorDescription || error)
+  const { token, error, errorDescription } = getRecoveryParams()
+  if (error || !token) {
+    finishWithError(errorDescription || error || t('expired'))
     return
   }
-  if (accessToken && refreshToken) {
-    const { error: sessionError } = await supabase.auth.setSession({ refresh_token: refreshToken, access_token: accessToken })
-    if (sessionError) {
-      finishWithError(sessionError.message, sessionError)
-      return
-    }
-  }
-  else if (code) {
-    const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
-    if (exchangeError) {
-      finishWithError(exchangeError.message, exchangeError)
-      return
-    }
-  }
-  else {
-    finishWithError(t('expired'))
-    return
-  }
-  const aal = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
-  const { currentLevel, nextLevel } = aal.data!
-  if (nextLevel !== currentLevel) {
-    const { data: mfaFactors, error: mfaError } = await supabase.auth.mfa.listFactors()
-    if (mfaError) {
-      finishWithError(mfaError.message, mfaError)
-      return
-    }
-    const factor = mfaFactors.all.find(factor => factor.status === 'verified')
-    if (!factor) {
-      finishWithError('Cannot find MFA factor')
-      return
-    }
-
-    const { data: challenge, error: errorChallenge } = await supabase.auth.mfa.challenge({ factorId: factor.id })
-    if (errorChallenge) {
-      finishWithError(errorChallenge.message, errorChallenge)
-      return
-    }
-
-    mfaCode.value = ''
-    dialogStore.openDialog({
-      title: t('alert-2fa-required'),
-      description: t('alert-2fa-required-message'),
-      preventAccidentalClose: true,
-      buttons: [
-        {
-          text: t('button-confirm'),
-          role: 'primary',
-          handler: async () => {
-            const { data: _verify, error: errorVerify } = await supabase.auth.mfa.verify({
-              factorId: factor.id,
-              challengeId: challenge.id,
-              code: mfaCode.value.replaceAll(' ', ''),
-            })
-            if (errorVerify) {
-              toast.error(t('invalid-mfa-code'))
-              return false // Prevent dialog from closing
-            }
-          },
-        },
-      ],
-    })
-    await dialogStore.onDialogDismiss()
-  }
-  const { error: updateError } = await supabase.auth.updateUser({ password: form.password })
+  const result = await supabase.betterAuth.resetPassword({ token, newPassword: form.password })
   isLoading.value = false
-  if (updateError) {
-    setErrors('forgot-password', [updateError.message], {})
+  if (result.error) {
+    finishWithError(result.error.message ?? t('expired'))
     return
   }
   form.password = ''
   form.password_confirm = ''
-  const { error: signOutError } = await supabase.auth.signOut({ scope: 'others' })
-  if (signOutError) {
-    setErrors('forgot-password', [signOutError.message], {})
-    return
-  }
   toast.success(t('forgot-success'))
-  router.push('/dashboard')
+  await router.replace('/login')
 }
 
 async function submit(form: { email: string, password: string, password_confirm: string }) {
@@ -178,7 +108,7 @@ watchEffect(() => {
     // console.log('router.currentRoute.value.query', router.currentRoute.value.query)
     if (router.currentRoute.value.query && router.currentRoute.value.query.step)
       step.value = Number.parseInt(router.currentRoute.value.query.step as string)
-    else if (getRecoveryParams().accessToken || getRecoveryParams().refreshToken || getRecoveryParams().code)
+    else if (getRecoveryParams().token || getRecoveryParams().accessToken || getRecoveryParams().refreshToken || getRecoveryParams().code)
       step.value = 2
     isLoadingMain.value = false
   }
@@ -284,28 +214,6 @@ watchEffect(() => {
       </section>
     </template>
   </AuthPageShell>
-
-  <!-- Teleport Content for 2FA Input -->
-  <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('alert-2fa-required')" defer to="#dialog-v2-content">
-    <div class="space-y-4">
-      <div>
-        <label for="mfa-code" class="block mb-2 text-sm font-medium">{{ t('enter-2fa-code') }}</label>
-        <input
-          id="mfa-code"
-          v-model="mfaCode"
-          type="text"
-          placeholder="123456"
-          :aria-label="t('enter-2fa-code')"
-          class="w-full input input-bordered"
-          maxlength="6"
-          inputmode="numeric"
-        >
-        <div class="text-sm text-gray-500">
-          {{ t('enter-the-6-digit-code-from-your-authenticator-app') }}
-        </div>
-      </div>
-    </div>
-  </Teleport>
 </template>
 
 <route lang="yaml">

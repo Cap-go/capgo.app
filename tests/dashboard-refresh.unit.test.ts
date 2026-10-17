@@ -1,32 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({
-  useSupabase: vi.fn(),
-}))
-
-vi.mock('~/services/supabase', () => ({
-  useSupabase: mocks.useSupabase,
-}))
+vi.mock('~/services/capgoApi', () => ({ invokeCapgoApi: vi.fn() }))
 
 describe('dashboard refresh helpers', () => {
-  it('reads organization refresh state through the protected RPC', async () => {
-    const single = vi.fn().mockResolvedValue({
-      data: {
-        stats_refresh_requested_at: '2026-04-22T12:09:30',
-        stats_updated_at: '2026-04-22T12:10:00',
-      },
-      error: null,
-    })
-    const rpc = vi.fn().mockReturnValue({ single })
-    mocks.useSupabase.mockReturnValue({ rpc } as any)
+  it('reads organization refresh state through the authenticated API', async () => {
+    const { invokeCapgoApi } = await import('~/services/capgoApi')
+    const state = { stats_refresh_requested_at: '2026-04-22T12:09:30', stats_updated_at: '2026-04-22T12:10:00' }
+    vi.mocked(invokeCapgoApi).mockResolvedValue({ data: state, error: null })
     const { fetchOrgChartRefreshState } = await import('../src/services/dashboardRefresh.ts')
-
-    await expect(fetchOrgChartRefreshState('org-id')).resolves.toEqual({
-      stats_refresh_requested_at: '2026-04-22T12:09:30',
-      stats_updated_at: '2026-04-22T12:10:00',
-    })
-    expect(rpc).toHaveBeenCalledWith('get_org_stats_refresh_state', { p_org_id: 'org-id' })
-    expect(single).toHaveBeenCalledTimes(1)
+    await expect(fetchOrgChartRefreshState('org-id')).resolves.toEqual(state)
+    expect(invokeCapgoApi).toHaveBeenCalledWith('private/orgs/chart-refresh-state?org_id=org-id', { method: 'GET' })
   })
 
   it.concurrent('detects stale and in-progress refresh states from timestamp strings without timezone suffixes', async () => {

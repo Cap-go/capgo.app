@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
+import { defaultApiHost, useConsole } from '~/services/console'
 
 export interface CheckDomainResponse {
   has_sso: boolean
@@ -8,7 +8,7 @@ export interface CheckDomainResponse {
 }
 
 export function useSSORouting() {
-  const supabase = useSupabase()
+  const supabase = useConsole()
   const hasSso = ref(false)
   const isChecking = ref(false)
   const error = ref<string | null>(null)

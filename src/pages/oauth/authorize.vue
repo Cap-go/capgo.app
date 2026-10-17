@@ -9,7 +9,7 @@ import IconSparkles from '~icons/heroicons/sparkles'
 import CliLoginSkippedOrganizations from '~/components/CliLoginSkippedOrganizations.vue'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { createCliLoginKeyDependencies, createMcpOAuthKey, mcpOAuthKeyName, resolveCliKeyEligibility } from '~/services/cliLogin'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -27,7 +27,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 
 const { t } = useI18n()
 const route = useRoute()
-const supabase = useSupabase()
+const supabase = useConsole()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 

@@ -10,8 +10,8 @@ import IconTrash from '~icons/heroicons/trash'
 import IconXMark from '~icons/heroicons/x-mark'
 import SsoRoleMappingDialog from '~/components/organizations/SsoRoleMappingDialog.vue'
 import Spinner from '~/components/Spinner.vue'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatLocalDate } from '~/services/date'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { isSuperAdminRole, useOrganizationStore } from '~/stores/organization'
 
@@ -56,7 +56,7 @@ const props = defineProps<{
 const SHARE_DIALOG_ID = 'sso-share-provider'
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const supabase = useConsole()
 const dialogStore = useDialogV2Store()
 const organizationStore = useOrganizationStore()
 
@@ -69,6 +69,7 @@ interface SpMetadata {
 
 const providers = ref<SsoProvider[]>([])
 const spMetadata = ref<SpMetadata | null>(null)
+const metadataProviderId = ref('')
 const isLoading = ref(true)
 const isSubmitting = ref(false)
 const isVerifying = ref<string | null>(null)
@@ -179,8 +180,11 @@ async function fetchProviders() {
     }
 
     const data = await response.json() as SsoProvider[]
-    if (orgId === props.orgId)
+    if (orgId === props.orgId) {
       providers.value = data
+      if (!data.some(provider => provider.id === metadataProviderId.value))
+        metadataProviderId.value = data[0]?.id ?? ''
+    }
   }
   catch (error) {
     console.error('Error fetching SSO providers:', error)
@@ -299,13 +303,19 @@ function stopSharing(providerId: string, orgId: string, domain: string, orgName:
 }
 
 async function fetchSpMetadata() {
+  const requestedId = metadataProviderId.value
+  spMetadata.value = null
+  if (!requestedId)
+    return
   try {
     const headers = await getAuthHeaders()
-    const response = await fetch(`${defaultApiHost}/private/sso/sp-metadata`, {
+    const response = await fetch(`${defaultApiHost}/private/sso/sp-metadata?provider_id=${encodeURIComponent(requestedId)}`, {
       method: 'GET',
       headers,
     })
 
+    if (requestedId !== metadataProviderId.value)
+      return
     if (!response.ok) {
       console.error('Failed to fetch SSO SP metadata:', response.status)
       spMetadata.value = null
@@ -319,6 +329,8 @@ async function fetchSpMetadata() {
       nameid_format: string
       sp_metadata_url?: string
     }
+    if (requestedId !== metadataProviderId.value)
+      return
     spMetadata.value = {
       acs_url: data.acs_url,
       entity_id: data.entity_id,
@@ -327,6 +339,8 @@ async function fetchSpMetadata() {
     }
   }
   catch (error) {
+    if (requestedId !== metadataProviderId.value)
+      return
     console.error('Error fetching SSO SP metadata:', error)
     spMetadata.value = null
     toast.error(t('sso-error-loading-sp-metadata'))
@@ -360,6 +374,7 @@ async function addProvider() {
 
     const created = await response.json() as SsoProvider
     providers.value.push(created)
+    metadataProviderId.value = created.id
     recentlyCreatedId.value = created.id
 
     // Reset form
@@ -439,6 +454,8 @@ async function deleteProvider(provider: SsoProvider) {
             }
 
             providers.value = providers.value.filter(p => p.id !== provider.id)
+            if (metadataProviderId.value === provider.id)
+              metadataProviderId.value = providers.value[0]?.id ?? ''
             if (recentlyCreatedId.value === provider.id)
               recentlyCreatedId.value = null
 
@@ -545,8 +562,10 @@ function formatDate(dateString: string): string {
   return formatLocalDate(dateString) || '-'
 }
 
+watch(metadataProviderId, fetchSpMetadata)
+
 onMounted(async () => {
-  await Promise.all([fetchProviders(), fetchLinks(), fetchSpMetadata()])
+  await Promise.all([fetchProviders(), fetchLinks()])
 })
 
 // The page keeps this component mounted when the user switches orgs.
@@ -554,9 +573,8 @@ watch(() => props.orgId, async () => {
   providers.value = []
   sharedLinks.value = []
   linkedProviders.value = []
-  recentlyCreatedId.value = null
-  // The add form creates the provider in the current org: drop a draft
-  // started in the previous one.
+  metadataProviderId.value = ''
+  spMetadata.value = null
   showAddForm.value = false
   newDomain.value = ''
   newMetadataUrl.value = ''
@@ -571,6 +589,11 @@ defineExpose({
 </script>
 
 <template>
+  <select v-if="providers.length > 1" v-model="metadataProviderId" :aria-label="t('sso-service-provider-metadata')" class="mb-3 select select-bordered">
+    <option v-for="provider in providers" :key="provider.id" :value="provider.id">
+      {{ provider.domain }}
+    </option>
+  </select>
   <!-- Service Provider Metadata (shown when available) -->
   <div
     v-if="spMetadata"
@@ -582,6 +605,7 @@ defineExpose({
     <p class="mb-3 text-sm text-slate-500 dark:text-slate-400">
       {{ t('sso-metadata-description') }}
     </p>
+
     <div class="p-3 space-y-2 font-mono text-sm bg-white border border-slate-200 rounded dark:bg-slate-800/60 dark:border-white/10">
       <div class="flex items-center justify-between gap-2">
         <p class="text-slate-600 dark:text-slate-400 min-w-0">
