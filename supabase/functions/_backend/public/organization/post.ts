@@ -29,6 +29,8 @@ const bodySchema = z.object({
   intent: z.enum(['ota', 'builder', 'both', 'exploring', 'publish', 'unknown']).optional(),
   startingOut: z.boolean().optional(),
   developmentEnvironment: z.enum(['hosted_builder', 'ai_assistant', 'hand_coded', 'other', 'local_project', 'exploring', 'skipped']).optional(),
+  // website: start the trial on the Web2App plan instead of a MAU-based plan.
+  updateMode: z.enum(['capgo', 'website']).optional(),
   billingAccount: z.enum(['ee', 'us']).optional(),
 })
 
@@ -36,12 +38,16 @@ interface PgTransactionClient {
   query: <T = unknown>(text: string, params?: unknown[]) => Promise<{ rows: T[], rowCount?: number | null }>
 }
 
-async function getInitialPlanForMau(c: Context<MiddlewareKeyVariables>, estimatedMau: number) {
+type InitialPlanKind = 'full' | 'website'
+
+async function getInitialPlanForMau(c: Context<MiddlewareKeyVariables>, estimatedMau: number, kind: InitialPlanKind) {
   const adminClient = supabaseAdmin(c)
   const { data: plan, error } = await adminClient
     .from('plans')
     .select('name, stripe_id, stripe_id_us, mau')
-    .gte('mau', estimatedMau)
+    .eq('kind', kind)
+    // Web2App has no MAU limit to match against.
+    .gte('mau', kind === 'website' ? 0 : estimatedMau)
     .order('mau', { ascending: true })
     .limit(1)
     .single()
@@ -51,6 +57,18 @@ async function getInitialPlanForMau(c: Context<MiddlewareKeyVariables>, estimate
   }
 
   return plan
+}
+
+async function hasWebsiteLivePlan(c: Context<MiddlewareKeyVariables>) {
+  const { data, error } = await supabaseAdmin(c)
+    .from('plans')
+    .select('name')
+    .eq('kind', 'website')
+    .not('stripe_id', 'is', null)
+    .limit(1)
+  if (error)
+    throw simpleError('cannot_get_plan', 'Cannot get plan', { error: error.message })
+  return (data?.length ?? 0) > 0
 }
 
 // A plan without US Stripe ids must not block org creation when US was only suggested: bill it on EE instead.
@@ -70,8 +88,10 @@ function resolvePlanBillingAccount(c: Context<MiddlewareKeyVariables>, plan: { n
   }
 }
 
-async function createPendingStripeInfo(c: Context<MiddlewareKeyVariables>, orgId: string, estimatedMau: number, requestedBillingAccount: BillingAccount, explicit: boolean) {
-  const plan = await getInitialPlanForMau(c, estimatedMau)
+async function createPendingStripeInfo(c: Context<MiddlewareKeyVariables>, orgId: string, estimatedMau: number, requestedKind: InitialPlanKind, requestedBillingAccount: BillingAccount, explicit: boolean) {
+  // Web2App stays hidden until its plan row exists; such requests start on the classic plan.
+  const kind = requestedKind === 'website' && !(await hasWebsiteLivePlan(c)) ? 'full' : requestedKind
+  const plan = await getInitialPlanForMau(c, estimatedMau, kind)
   const billingAccount = resolvePlanBillingAccount(c, plan, requestedBillingAccount, explicit)
   const pendingCustomerId = `pending_${orgId}`
   const trialAt = new Date()
@@ -297,7 +317,7 @@ export async function post(
   if (body.billingAccount === 'us' && !canChooseUsBillingAccount(c))
     throw simpleError('billing_account_unavailable', 'US billing is not available', { billingAccount: 'us' })
   const billingAccount = resolveNewOrgBillingAccount(c, body.billingAccount)
-  const pendingCustomerId = await createPendingStripeInfo(c, orgId, estimatedMau, billingAccount, body.billingAccount === 'us')
+  const pendingCustomerId = await createPendingStripeInfo(c, orgId, estimatedMau, body.updateMode === 'website' ? 'website' : 'full', billingAccount, body.billingAccount === 'us')
   const onboarding = {
     intent: parseOrgOnboardingIntent({ intent: body.intent }),
     starting_out: body.startingOut ?? false,

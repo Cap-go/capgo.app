@@ -116,7 +116,6 @@ vi.mock('~/stores/main', () => ({ useMainStore: () => writerMocks.main }))
 vi.mock('~/stores/organization', () => ({ useOrganizationStore: () => writerMocks.organization }))
 
 const onboardingSource = readFileSync(new NodeUrl('../src/components/dashboard/AppOnboardingFlow.vue', import.meta.url), 'utf8')
-const optionsSource = readFileSync(new NodeUrl('../src/components/dashboard/onboardingDevelopmentEnvironmentOptions.ts', import.meta.url), 'utf8')
 const sidebarSource = readFileSync(new NodeUrl('../src/composables/useAppNavigation.ts', import.meta.url), 'utf8')
 const englishMessages = JSON.parse(readFileSync(new NodeUrl('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
@@ -827,7 +826,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(initializer).toContain(`trackedAnalyticsSteps.unshift('welcome')`)
     expect(initializer).toContain(`if (initialStep === 'setup' || initialStep === 'install')`)
     expect(initializer).toContain('void viewFinalStepWhenRendered(initialStep, handoffPreviousStep)')
-    expect(initializer).toContain('ensurePublishAppQuestionStepTracked()')
+    expect(initializer).not.toContain('ensurePublishAppQuestionStepTracked()')
     expect(initializer).toContain('steps: trackedAnalyticsSteps')
     // A creation handoff continues the same attempt, so it is not a resume.
     expect(initializer).toContain('resumed: resumed && !setupHandoff,')
@@ -1006,8 +1005,7 @@ describe('app onboarding progress analytics integration', () => {
       'await replaceUserOnboardingIfUnchanged(',
     ])
     expect(writer).toContain('if (error) {')
-    expect(writer).toContain('isUsersOnboardingCheckConstraintError(error)')
-    expect(writer).toContain('fallbackUsersOnboardingProgressForLegacyConstraint(persistableProgress)')
+    expect(writer).not.toContain('publish_app_question')
     expectSourceOrder(writer, [
       'if (error) {',
       `console.error('Failed to persist onboarding progress', error)`,
@@ -1274,7 +1272,7 @@ describe('app onboarding progress analytics integration', () => {
 
     const intentTransition = sourceBetween('function continueFromIntent()', 'function continuePreOrgDetails()')
     expect(intentTransition).toContain(`intent: selectedIntent.value`)
-    expect(intentTransition).toContain(`?? (webNativeDevelopmentEnvironmentTreatment.value ? undefined : 'skipped')`)
+    expect(intentTransition).toContain(`developmentEnvironment: 'skipped'`)
 
     const appNameTransition = sourceBetween('function continueFromAppName()', 'function continueFromAppId()')
     expect(appNameTransition).toContain(`completeAndViewAppDetailsStep('app_id', { appId: generatedAppId.value, appName: appName.value.trim() })`)
@@ -1311,7 +1309,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).not.toContain('function goToInstallStep()')
   })
 
-  it.concurrent('loads stable backend flags and applies the A and C onboarding treatments', () => {
+  it.concurrent('loads stable backend flags without the retired publish and development-environment experiments', () => {
     const workerSource = readFileSync(new NodeUrl('../cloudflare_workers/api/index.ts', import.meta.url), 'utf8')
     expect(onboardingSource).toContain(`invokeCapgoApi<OnboardingABTestsResponse>('private/onboarding_ab_tests'`)
     expect(workerSource).toContain('appPrivate.route(\'/onboarding_ab_tests\', onboarding_ab_tests)')
@@ -1324,71 +1322,73 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain('reconcileOnboardingABTestAssignments(')
     expect(onboardingSource).toContain('if (onboardingABTestsRequest === request)')
     expect(onboardingSource).toContain('onboardingABTestsRequest = null')
-    expect(onboardingSource).toContain(`webNativePublishIntentTreatment.value`)
-    expect(onboardingSource).toContain(`webNativeDevelopmentEnvironmentTreatment.value`)
-    expect(onboardingSource).toContain(`shouldShowWebNativeRecommendation({`)
-    expect(onboardingSource).toContain(`developmentEnvironment: selectedDevelopmentEnvironment.value`)
-    expect(onboardingSource).toContain(`intent: selectedIntent.value`)
-    expect(onboardingSource).toContain(`startingOut: selectedUserCountStop.value?.startingOut === true`)
-    expect(onboardingSource).toContain('developmentEnvironment: selectedDevelopmentEnvironment.value ?? \'skipped\'')
-    expect(onboardingSource).toContain('completeAndViewStep(\'publish_app_question\'')
-    expect(onboardingSource).toContain(`?? (webNativeDevelopmentEnvironmentTreatment.value ? undefined : 'skipped')`)
-    expect(onboardingSource).toContain(`resolveOnboardingAnalyticsVersion(onboardingForABTests.value, selectedIntent.value)`)
+    expect(onboardingSource).toContain(`resolveOnboardingAnalyticsVersion(onboardingForABTests.value)`)
     expect(onboardingSource).not.toContain(`if (props.preOrg) {\n      await main.awaitInitialLoad()`)
-    expect(onboardingSource).toContain(`const WEBNATIVE_APP_URL = 'https://webnativeapp.com/?ref=capgo'`)
+    expect(onboardingSource.toLowerCase()).not.toContain('webnativeapp.com')
+    expect(onboardingSource).not.toContain('WebNative')
+    expect(onboardingSource).not.toContain(`completeAndViewStep('publish_app_question'`)
+    expect(onboardingSource).not.toContain(`flowStep === 'publish_app_question'`)
+    expect(onboardingSource).not.toContain('selectedDevelopmentEnvironment')
+    expect(onboardingSource).not.toContain('onboarding-development-environment')
     expect(onboardingSource).toContain(`const publishIntentOption = { value: 'publish'`)
-    expect(onboardingSource).toContain(`data-test="\`onboarding-development-environment-\${option.value}\`"`)
     expect(onboardingSource).toContain(`:data-test="\`onboarding-intent-\${option.value}\`"`)
     expect(onboardingSource).toContain('async function continueFromGoal()')
-    expect(onboardingSource).toContain('completeAndViewStep(\'publish_app_question\'')
-    expect(onboardingSource).toContain('trackStepEvent(\'onboarding_development_environment_selected\', \'publish_app_question\'')
-    expect(onboardingSource).toContain('function continueFromDevelopmentEnvironment()')
-    expect(onboardingSource).toContain('function skipPublishAppQuestion()')
-    expect(onboardingSource).toContain('function continueFromCurrentPublishAppQuestion()')
     expect(onboardingSource).toContain('developmentEnvironment: \'skipped\'')
-    expect(onboardingSource).toContain(`:data-test="hasSelectedDevelopmentEnvironment ? 'app-onboarding-continue-development-environment' : 'app-onboarding-skip-development-environment'"`)
-    expect(onboardingSource).toContain('developmentEnvironment: persistedDevelopmentEnvironment()')
-    expect(onboardingSource).toContain('d-btn-ghost onboarding-development-environment-option')
+    expect(onboardingSource).toContain(`developmentEnvironment: flowStep.value === 'intent' ? null : 'skipped'`)
     expect(onboardingSource).toContain('sm:grid-cols-2')
-    expect(onboardingSource).toContain('<OnboardingToolPattern v-if="option.icons.length" :icons="option.icons" :muted="option.muted" />')
-    expect(optionsSource).toContain('value: \'hosted_builder\'')
-    expect(optionsSource).toContain('value: \'ai_assistant\'')
-    expect(optionsSource).toContain('value: \'hand_coded\'')
-    expect(optionsSource).toContain('value: \'other\'')
-    expect(optionsSource).toContain('icons: []')
-    expect(onboardingSource).toContain(':aria-pressed="selectedDevelopmentEnvironment === option.value"')
-    const persistEnv = sourceBetween('function persistedDevelopmentEnvironment()', 'function snapshotOnboardingProgress(')
-    expect(persistEnv).toContain('if (selected && selected !== \'skipped\')')
-    expect(persistEnv).toContain('return selected')
     expect(sourceBetween('function applyOnboardingProgress(', 'function applyDefaultPreOrgDetails()')).toContain('resumableOnboardingFlowStep(progress, flow)')
-    expect(sourceBetween('function applyOnboardingProgress(', 'function applyDefaultPreOrgDetails()')).toContain('if (progress.development_environment === \'skipped\')')
-    expect(sourceBetween('function applyOnboardingProgress(', 'function applyDefaultPreOrgDetails()')).toContain('selectedDevelopmentEnvironment.value = progress.development_environment')
-    expect(onboardingSource).toContain('publishAppQuestion: flowStep.value === \'publish_app_question\'')
-    expect(onboardingSource).toContain('const showDevelopmentEnvironmentQuestion = computed(() => flowStep.value === \'publish_app_question\')')
-    expect(sourceBetween('function selectDevelopmentEnvironment(', 'function continueWithCapgoFromWebNativeRecommendation(')).toContain('schedulePersistOnboardingProgress()')
     expect(onboardingSource).toContain('viewPreviousStep(\'intent\')')
-    expect(onboardingSource).toContain('viewPreviousStep(webNativeDevelopmentEnvironmentTreatment ? \'publish_app_question\' : \'intent\')')
     expect(onboardingSource).not.toContain('showCapgoIntentQuestion')
-    expect(onboardingSource).toContain('data-test="onboarding-webnative-check-website"')
-    expect(onboardingSource).toContain('data-test="onboarding-webnative-continue-capgo"')
-    const goalTransition = sourceBetween('async function continueFromGoal()', 'function continueFromDevelopmentEnvironment()')
+    const goalTransition = sourceBetween('async function continueFromGoal()', 'function continuePreOrgDetails()')
     expectSourceOrder(goalTransition, [
       'await persistOnboardingProgress()',
       'await waitForOnboardingABTests({ force: true })',
-      'completeAndViewStep(',
+      'continueFromIntent()',
     ])
-    expect(englishMessages['organization-onboarding-intent-option-publish-label']).toBe('Convert my webapp to a mobile app')
-    expect(englishMessages['organization-onboarding-intent-option-publish-desc']).toBe('Turn my existing website into an iOS and Android app.')
-    expect(englishMessages['organization-onboarding-development-environment-question']).toBe('What do you use to build your app?')
-    expect(englishMessages['organization-onboarding-development-environment-option-hosted_builder-label']).toBe('Hosted AI builder')
-    expect(englishMessages['organization-onboarding-development-environment-option-ai_assistant-label']).toBe('AI coding assistant')
-    expect(englishMessages['organization-onboarding-development-environment-option-hand_coded-label']).toBe('I write the code myself')
-    expect(englishMessages['organization-onboarding-development-environment-option-other-label']).toBe('Other')
-    expect(englishMessages['organization-onboarding-development-environment-skip']).toBe('Skip')
-    expect(englishMessages['organization-onboarding-webnative-title']).toBe('WebNativeApp may be a better fit')
-    expect(englishMessages['organization-onboarding-webnative-description']).toContain('WebNativeApp can package it for iOS and Android')
-    expect(englishMessages['organization-onboarding-webnative-check-website']).toBe('Check WebNativeApp')
-    expect(englishMessages['organization-onboarding-webnative-continue-capgo']).toBe('Continue with Capgo')
+    for (const key of Object.keys(englishMessages)) {
+      expect(key).not.toMatch(/^organization-onboarding-(webnative|development-environment)-/)
+      expect(englishMessages[key]).not.toMatch(/webnative/i)
+    }
+  })
+
+  it.concurrent('makes the publish intent the Web2App entry point', () => {
+    expect(onboardingSource).toContain(`const showPublishIntent = computed(() => Boolean(props.preOrg && hasWebsiteLivePlan.value))`)
+    expect(onboardingSource).toContain(`const intentOptions = computed(() => showPublishIntent.value
+  ? [publishIntentOption, ...standardIntentOptions]
+  : standardIntentOptions)`)
+    expect(onboardingSource).toContain(`const isWeb2AppIntent = computed(() => showWebsiteLiveChoice.value && selectedIntent.value === 'publish')`)
+    expect(onboardingSource).toContain(`const qualifiesForWebsiteLive = computed(() => isWeb2AppIntent.value)`)
+    expect(onboardingSource).toContain(`const isWebsiteLiveSelected = computed(() => isWeb2AppIntent.value || (showWebsiteLiveChoice.value && updateMode.value === 'website'))`)
+    // The forced Web2App path hides the update-mode choice but keeps the URL field.
+    expect(onboardingSource).toContain(`<div v-if="!isWeb2AppIntent" class="mt-3 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-labelledby="update-mode-label">`)
+    expect(onboardingSource).toContain(`<div v-if="isWebsiteLiveSelected" class="mt-4 space-y-4`)
+    // The MAU question stays hidden for Web2App.
+    expect(onboardingSource).toContain(`<div v-if="existingApp === true && !isWebsiteLiveSelected">`)
+    expect(onboardingSource).toContain(`const selectedStop = websiteLive ? startingOutUserCountStop : selectedUserCountStop.value`)
+    // Without the Web2App plan the card is hidden and a stale intent is rejected.
+    const intentTransition = sourceBetween('function continueFromIntent()', 'async function continueFromGoal()')
+    expect(intentTransition).toContain(`if (selectedIntent.value === 'publish' && !showPublishIntent.value) {`)
+    expect(sourceBetween('function applyOnboardingProgress(', 'function applyDefaultPreOrgDetails()')).toContain(`if (progress.intent && (progress.intent !== 'publish' || showPublishIntent.value))`)
+    // The human-owned publish comment and its eslint exception stay in place.
+    expect(onboardingSource).toContain('<!-- I am a human. I am doing manual handling for the "publish" (Web2App) intent.')
+    expect(onboardingSource).toContain(`<!-- eslint-disable-next-line vue/eqeqeq -- keep the human publish check as written -->`)
+    expect(englishMessages['organization-onboarding-intent-option-publish-label']).toBe('Turn my website into an app')
+    expect(englishMessages['organization-onboarding-intent-option-publish-desc']).toBe('Capgo Web2App puts your website in the App Store and Google Play. Updates come straight from your site.')
+  })
+
+  it.concurrent('prefills Web2App arrivals from the query string and preselects the publish intent', () => {
+    const arrival = sourceBetween('function applyWeb2AppArrival()', 'function nextStepAfterChannelEligibility()')
+    expect(arrival).toContain(`if (!props.preOrg || flowStep.value !== 'intent')`)
+    expect(arrival).toContain('parseWeb2AppArrival(route.query) ?? readRememberedWeb2AppArrival()')
+    expect(arrival).toContain('websiteLiveUrlInput.value = arrival.websiteUrl')
+    expect(arrival).toContain(`selectedIntent.value = 'publish'`)
+    expect(arrival).toContain('hasWebsiteLivePlan.value')
+    expect(sourceBetween('function applyDefaultPreOrgDetails()', 'function applyWeb2AppArrival()')).toContain('applyWeb2AppArrival()')
+    expect(sourceBetween('function applyOnboardingProgress(', 'function applyDefaultPreOrgDetails()')).toContain('applyWeb2AppArrival()')
+    expectSourceOrder(sourceBetween('async function createOrganizationAndApp()', 'async function completePreOrgAppCreation('), [
+      'if (error || !data?.id) {',
+      'clearRememberedWeb2AppArrival()',
+    ])
   })
 
   it.concurrent('reports back navigation as a new view without completing the abandoned step', () => {
@@ -1397,7 +1397,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(backNavigation).toContain('progressTracker?.viewStep(nextAnalyticsStep, previousAnalyticsStep)')
     expect(onboardingSource).not.toContain('viewPreviousStep(\'choice\')')
     expect(onboardingSource).toContain('@click="viewPreviousStep(\'details\')"')
-    expect(onboardingSource).toContain(`props.preOrg ? viewPreviousStep(webNativeDevelopmentEnvironmentTreatment ? 'publish_app_question' : 'intent') : router.push('/apps')`)
+    expect(onboardingSource).toContain(`props.preOrg ? viewPreviousStep('intent') : router.push('/apps')`)
     expect(onboardingSource).not.toContain('@click="flowStep = \'details\'"')
     expect(onboardingSource).not.toContain('@click="flowStep = \'choice\'"')
     expect(onboardingSource).not.toContain(`props.preOrg ? (flowStep = 'intent') : router.push('/apps')`)

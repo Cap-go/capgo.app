@@ -402,6 +402,10 @@ import_map = "./functions/deno.json"
 verify_jwt = false
 import_map = "./functions/deno.json"
 
+[functions.website_live_store]
+verify_jwt = false
+import_map = "./functions/deno.json"
+
 # PLUGIN ENDPOINTS
 
 [functions.channel_self]
@@ -409,6 +413,10 @@ verify_jwt = false
 import_map = "./functions/deno.json"
 
 [functions.updates]
+verify_jwt = false
+import_map = "./functions/deno.json"
+
+[functions.website_live]
 verify_jwt = false
 import_map = "./functions/deno.json"
 

@@ -768,7 +768,7 @@ const buildTools: McpTool[] = [
   apiTool({
     name: 'capgo_get_build_status',
     title: 'Build status',
-    description: 'Get the status of a native cloud build. Start builds with the Capgo CLI: npx @capgo/cli@latest build request.',
+    description: 'Get the status of a native cloud build. Start builds with the Capgo CLI (npx @capgo/cli@latest build request), or capgo_publish_website_live_app for Web2App apps.',
     input: { appId, job_id: z.string().min(1) },
     annotations: READ,
     request: input => ({ method: 'GET', path: '/build/status', query: { app_id: input.appId, job_id: input.job_id } }),
@@ -788,6 +788,110 @@ const buildTools: McpTool[] = [
     input: { appId, job_id: z.string().min(1) },
     annotations: DESTRUCTIVE,
     request: input => ({ method: 'POST', path: `/build/cancel/${enc(input.job_id)}`, body: { app_id: input.appId } }),
+  }),
+]
+
+// ---------------------------------------------------------------------------
+// Web2App store publishing
+// ---------------------------------------------------------------------------
+const storePlatform = z.enum(['ios', 'android']).describe('Store platform')
+const websiteLiveStoreTools: McpTool[] = [
+  apiTool({
+    name: 'capgo_get_website_live_store',
+    title: 'Web2App store setup',
+    description: 'Show what Capgo needs to build and publish the store app of a Web2App app: website, app name, icon, stored store keys (never the secrets), what is still missing per platform, and recent store builds.',
+    input: { appId },
+    annotations: READ,
+    request: input => ({ method: 'GET', path: '/website_live_store', query: { app_id: input.appId } }),
+  }),
+  apiTool({
+    name: 'capgo_check_website_live',
+    title: 'Check a website for Web2App',
+    description: 'Check that a website can run as a Web2App app: public HTTPS HTML, no server-side rendering, same page for every user (no private/no-store cache, no session cookies), plus warnings for external scripts, service workers and a missing mobile viewport. Also suggests the app name and theme color found on the page. Defaults to the website already set on the app.',
+    input: {
+      appId,
+      website_url: z.string().optional().describe('HTTPS address of the website root to check instead of the current one'),
+    },
+    annotations: { ...READ, openWorldHint: true },
+    request: ({ appId: id, ...rest }) => ({ method: 'POST', path: '/website_live_store/check', body: compact({ app_id: id, ...rest }) }),
+  }),
+  apiTool({
+    name: 'capgo_update_website_live_store',
+    title: 'Update Web2App store settings',
+    description: 'Set the website the app loads (turns on Web2App), the store app name (max 30 characters), the marketing version, the icon background color and whether builds are submitted to store review. A new website is checked first (see capgo_check_website_live); when the check fails nothing is saved unless force is true, which skips the check.',
+    input: {
+      appId,
+      website_url: z.string().url().optional().describe('HTTPS address of the website root, e.g. https://app.example.com'),
+      app_name: z.string().min(1).max(30).optional(),
+      version_name: z.string().regex(/^\d+\.\d+\.\d+$/).optional().describe('Marketing version, e.g. 1.0.0. Capgo bumps it when that version is already released.'),
+      icon_background_color: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
+      submit_for_review: z.boolean().optional().describe('Submit each store build to App Store / Play review (default true)'),
+      force: z.boolean().optional().describe('Skip the compatibility check and save the website anyway'),
+    },
+    annotations: DESTRUCTIVE,
+    request: ({ appId: id, ...rest }) => ({ method: 'PUT', path: '/website_live_store', body: compact({ app_id: id, ...rest }) }),
+  }),
+  apiTool({
+    name: 'capgo_set_website_live_icon',
+    title: 'Set Web2App app icon',
+    description: 'Generate every iOS, Android and Play Store icon from one square PNG (at least 512x512, ideally 1024x1024), or from the biggest PNG icon the website publishes.',
+    input: {
+      appId,
+      image_base64: z.string().optional().describe('PNG file content, base64 encoded'),
+      from_website: z.boolean().optional().describe('Use the icon from the website web manifest / apple-touch-icon instead'),
+      background_color: z.string().regex(/^#[0-9a-f]{6}$/i).optional().describe('Fills transparent areas; iOS icons cannot be transparent'),
+    },
+    annotations: DESTRUCTIVE,
+    request: ({ appId: id, ...rest }) => ({ method: 'POST', path: '/website_live_store/icon', body: compact({ app_id: id, ...rest }) }),
+  }),
+  apiTool({
+    name: 'capgo_set_website_live_ios_keys',
+    title: 'Store iOS keys',
+    description: 'Store the App Store Connect API key Capgo uses to sign, upload and submit the iOS app. Automatic mode creates the distribution certificate and App Store provisioning profile for you; manual mode uses your own .p12 and .mobileprovision. Keys are encrypted and never returned. The app must already exist in App Store Connect to be uploaded.',
+    input: {
+      appId,
+      mode: z.enum(['automatic', 'manual']).optional(),
+      asc_key_id: z.string().describe('App Store Connect API key ID'),
+      asc_issuer_id: z.string().uuid().describe('App Store Connect issuer ID'),
+      asc_private_key: z.string().describe('Content of the AuthKey_XXXX.p8 file'),
+      certificate_p12_base64: z.string().optional().describe('Manual mode: distribution certificate .p12, base64'),
+      certificate_password: z.string().optional(),
+      provisioning_profile_base64: z.string().optional().describe('Manual mode: App Store .mobileprovision, base64'),
+    },
+    annotations: { ...DESTRUCTIVE, openWorldHint: true },
+    request: ({ appId: id, ...rest }) => ({ method: 'PUT', path: '/website_live_store/credentials', body: compact({ app_id: id, platform: 'ios', ...rest }) }),
+  }),
+  apiTool({
+    name: 'capgo_set_website_live_android_keys',
+    title: 'Store Android keys',
+    description: 'Store the Android upload keystore (or let Capgo generate one) and the Google Play service account JSON used to upload and submit. A generated keystore is returned once: tell the user to keep it safe. Google Play needs the first release of a new app to be uploaded by hand in Play Console.',
+    input: {
+      appId,
+      generate_keystore: z.boolean().optional(),
+      keystore_base64: z.string().optional(),
+      key_alias: z.string().optional(),
+      key_password: z.string().optional(),
+      store_password: z.string().optional(),
+      play_service_account_json: z.string().optional().describe('Google Play service account JSON key file content'),
+    },
+    annotations: DESTRUCTIVE,
+    request: ({ appId: id, ...rest }) => ({ method: 'PUT', path: '/website_live_store/credentials', body: compact({ app_id: id, platform: 'android', ...rest }) }),
+  }),
+  apiTool({
+    name: 'capgo_delete_website_live_keys',
+    title: 'Delete store keys',
+    description: 'Delete the stored keys of one platform. Deleting a generated Android upload key you did not download makes future Play updates impossible.',
+    input: { appId, platform: storePlatform },
+    annotations: DESTRUCTIVE,
+    request: input => ({ method: 'DELETE', path: '/website_live_store/credentials', query: { app_id: input.appId, platform: input.platform } }),
+  }),
+  apiTool({
+    name: 'capgo_publish_website_live_app',
+    title: 'Build and publish store app',
+    description: 'Build the store app from the Capgo Web2App template with the app name, icon and keys, upload it to App Store Connect or Google Play and submit it for review when enabled. Follow progress with capgo_get_build_status and capgo_get_build_logs.',
+    input: { appId, platform: storePlatform },
+    annotations: EXTERNAL,
+    request: input => ({ method: 'POST', path: '/website_live_store/publish', body: { app_id: input.appId, platform: input.platform } }),
   }),
 ]
 
@@ -981,6 +1085,7 @@ export const MCP_TOOLS: readonly McpTool[] = [
   ...deviceTools,
   ...statsTools,
   ...buildTools,
+  ...websiteLiveStoreTools,
   ...webhookTools,
   ...notificationTools,
   ...docsTools,

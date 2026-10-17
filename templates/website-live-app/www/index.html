@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="capgo-website-url" content="https://example.com" />
+    <title>Web2App Template</title>
+    <style>
+      :root { color-scheme: light dark; --fg: #1f2328; --muted: #6b7280; --bg: #ffffff; --accent: #2563eb; }
+      @media (prefers-color-scheme: dark) { :root { --fg: #f3f4f6; --muted: #9ca3af; --bg: #0b0f17; --accent: #60a5fa; } }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); }
+      body {
+        display: flex; align-items: center; justify-content: center; text-align: center;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        padding: env(safe-area-inset-top) 24px env(safe-area-inset-bottom);
+      }
+      .spinner {
+        width: 40px; height: 40px; margin: 0 auto 16px; border-radius: 50%;
+        border: 4px solid color-mix(in srgb, var(--fg) 15%, transparent); border-top-color: var(--accent);
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      p { margin: 0 0 8px; }
+      .muted { color: var(--muted); font-size: 15px; }
+      button {
+        margin-top: 16px; padding: 10px 20px; border: 0; border-radius: 10px;
+        background: var(--accent); color: #fff; font-size: 16px; font-weight: 600;
+      }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <main id="loading">
+      <div class="spinner" aria-hidden="true"></div>
+      <p>Loading…</p>
+      <p class="muted">Preparing the app for first use.</p>
+    </main>
+    <main id="offline" hidden>
+      <p><strong>You are offline</strong></p>
+      <p class="muted">Connect to the internet, then try again.</p>
+      <button id="retry" type="button">Retry</button>
+    </main>
+    <script>
+      (function () {
+        var loading = document.getElementById('loading')
+        var offline = document.getElementById('offline')
+        function render() {
+          var isOffline = navigator.onLine === false
+          loading.hidden = isOffline
+          offline.hidden = !isOffline
+        }
+        // This page is the built-in bundle: confirm it booted so the updater keeps running.
+        try {
+          var cap = window.Capacitor
+          var updater = cap && cap.Plugins && cap.Plugins.CapacitorUpdater
+          if (updater && updater.notifyAppReady) updater.notifyAppReady().catch(function () {})
+        } catch (e) {}
+        document.getElementById('retry').addEventListener('click', function () {
+          loading.hidden = false
+          offline.hidden = true
+          setTimeout(function () { window.location.reload() }, 300)
+        })
+        window.addEventListener('online', render)
+        window.addEventListener('offline', render)
+        render()
+      })()
+    </script>
+  </body>
+</html>

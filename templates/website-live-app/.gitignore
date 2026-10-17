@@ -1,0 +1,26 @@
+# Web2App template: native ios/ and android/ sources (including cap sync output
+# such as public/, capacitor.config.json and capacitor-cordova-*-plugins) ARE committed.
+node_modules/
+dist/
+*.zip
+.DS_Store
+*.log
+
+# Android build outputs and local machine files
+android/.gradle/
+android/build/
+android/app/build/
+android/capacitor-cordova-android-plugins/build/
+android/local.properties
+android/.idea/
+android/.kotlin/
+
+# iOS build outputs
+ios/App/build/
+ios/App/output/
+ios/App/Pods/
+ios/DerivedData/
+ios/App/DerivedData/
+**/xcuserdata/
+ios/App/CapApp-SPM/.build/
+ios/App/CapApp-SPM/.swiftpm/

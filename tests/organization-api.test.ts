@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
-import { z } from 'zod'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { z } from 'zod'
 import { parseSchema, safeParseSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
 
 import {
@@ -633,7 +633,7 @@ describe('x-limited-key-id subkeys enforce organization scope on middlewareKey r
   })
 })
 
-describe('API key organization creation', () => {
+describe('aPI key organization creation', () => {
   it.concurrent('allows a key with org.create to create an organization and auto-binds that key', async () => {
     const createKeyValue = randomUUID()
     const createKey = await createDirectApiKeyWithBindings({
@@ -1313,12 +1313,12 @@ describe('[DELETE] /organization/members', () => {
 })
 
 describe('[POST] /organization', () => {
-  async function expectCreatedOrganizationPlan(estimatedMau: number, planName: string) {
+  async function expectCreatedOrganizationPlan(estimatedMau: number, planName: string, extraBody: Record<string, unknown> = {}) {
     const name = `Created ${planName} Plan Organization ${randomUUID()}`
     const response = await fetch(`${BASE_URL}/organization`, {
       headers: authHeaders,
       method: 'POST',
-      body: JSON.stringify({ name, estimatedMau }),
+      body: JSON.stringify({ name, estimatedMau, ...extraBody }),
     })
     expect(response.status).toBe(200)
     const responseType = z.object({
@@ -1362,6 +1362,10 @@ describe('[POST] /organization', () => {
         await getSupabaseClient().from('stripe_info').delete().eq('customer_id', customerId)
     }
   }
+
+  it('starts Web2App requests on the Web2App plan', async () => {
+    await expectCreatedOrganizationPlan(0, 'Web2App', { updateMode: 'website' })
+  })
 
   it('create organization', async () => {
     const name = `Created Organization ${new Date().toISOString()}`

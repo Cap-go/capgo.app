@@ -69,6 +69,7 @@ const denoEntries = [
   'supabase/functions/stats/index.ts',
   'supabase/functions/channel_self/index.ts',
   'supabase/functions/updates_debug/index.ts',
+  'supabase/functions/website_live/index.ts',
 ]
 
 for (const rel of denoEntries) {

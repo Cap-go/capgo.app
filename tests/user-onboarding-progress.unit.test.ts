@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest'
 import {
   buildUserOnboardingProgress,
   clampResumableOnboardingStep,
-  fallbackUsersOnboardingProgressForLegacyConstraint,
-  isUsersOnboardingCheckConstraintError,
   parseUserOnboardingProgress,
   resumableOnboardingFlowStep,
   shouldPromptOnboardingResume,
@@ -211,42 +209,28 @@ describe('user onboarding progress', () => {
     expect(clampResumableOnboardingStep('details', 'pre_org')).toBe('details')
   })
 
-  it.concurrent('restores the build-and-publish question from the persisted flag when step stays intent', () => {
-    const saved = parseUserOnboardingProgress({
-      status: 'in_progress',
-      step: 'intent',
-      flow: 'pre_org',
-      publish_app_question: true,
-      intent: 'ota',
-      updated_at: '2026-08-15T00:00:00.000Z',
-    })
-    expect(saved).not.toBeNull()
-    expect(resumableOnboardingFlowStep(saved!, 'pre_org')).toBe('publish_app_question')
+  it.concurrent('resumes progress saved on the retired development-environment question at the intent step', () => {
+    for (const raw of [
+      { step: 'intent', publish_app_question: true },
+      { step: 'publish_app_question', development_environment: 'hosted_builder' },
+    ]) {
+      const saved = parseUserOnboardingProgress({
+        status: 'in_progress',
+        flow: 'pre_org',
+        intent: 'publish',
+        updated_at: '2026-08-15T00:00:00.000Z',
+        ...raw,
+      })
+      expect(saved).not.toBeNull()
+      expect(resumableOnboardingFlowStep(saved!, 'pre_org')).toBe('intent')
+    }
     expect(buildUserOnboardingProgress({
       status: 'in_progress',
-      step: 'publish_app_question',
+      step: 'details',
       flow: 'pre_org',
-      intent: 'ota',
+      intent: 'publish',
       updatedAt: '2026-08-15T00:00:00.000Z',
-    })).toMatchObject({
-      step: 'publish_app_question',
-      publish_app_question: true,
-      intent: 'ota',
-    })
-    expect(fallbackUsersOnboardingProgressForLegacyConstraint(buildUserOnboardingProgress({
-      status: 'in_progress',
-      step: 'publish_app_question',
-      flow: 'pre_org',
-      intent: 'ota',
-      updatedAt: '2026-08-15T00:00:00.000Z',
-    }))).toMatchObject({
-      step: 'intent',
-      publish_app_question: true,
-      intent: 'ota',
-    })
-    expect(isUsersOnboardingCheckConstraintError({ code: '23514' })).toBe(true)
-    expect(isUsersOnboardingCheckConstraintError({ message: 'violates check constraint "users_onboarding_valid"' })).toBe(true)
-    expect(isUsersOnboardingCheckConstraintError({ code: '23505' })).toBe(false)
+    })).not.toHaveProperty('publish_app_question')
   })
 
   it.concurrent.each(['pre_org', 'existing_org'] as const)('resumes %s at its saved channel substep', (flow) => {

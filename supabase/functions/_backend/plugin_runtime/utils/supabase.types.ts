@@ -418,8 +418,10 @@ export type Database = {
           stats_refresh_requested_at: string | null
           stats_updated_at: string | null
           transfer_history: Json[] | null
+          update_mode: string
           updated_at: string | null
           user_id: string | null
+          website_url: string | null
         }
         Insert: {
           allow_device_custom_id?: boolean
@@ -452,8 +454,10 @@ export type Database = {
           stats_refresh_requested_at?: string | null
           stats_updated_at?: string | null
           transfer_history?: Json[] | null
+          update_mode?: string
           updated_at?: string | null
           user_id?: string | null
+          website_url?: string | null
         }
         Update: {
           allow_device_custom_id?: boolean
@@ -486,8 +490,10 @@ export type Database = {
           stats_refresh_requested_at?: string | null
           stats_updated_at?: string | null
           transfer_history?: Json[] | null
+          update_mode?: string
           updated_at?: string | null
           user_id?: string | null
+          website_url?: string | null
         }
         Relationships: [
           {
@@ -2288,6 +2294,7 @@ export type Database = {
           credit_id_us: string | null
           description: string
           id: string
+          kind: string
           market_desc: string | null
           mau: number
           name: string
@@ -2311,6 +2318,7 @@ export type Database = {
           credit_id_us?: string | null
           description?: string
           id?: string
+          kind?: string
           market_desc?: string | null
           mau?: number
           name?: string
@@ -2334,6 +2342,7 @@ export type Database = {
           credit_id_us?: string | null
           description?: string
           id?: string
+          kind?: string
           market_desc?: string | null
           mau?: number
           name?: string

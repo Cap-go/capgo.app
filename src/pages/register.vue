@@ -3,7 +3,7 @@ import { setErrors } from '@formkit/core'
 import { FormKit, FormKitMessages } from '@formkit/vue'
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import VueTurnstile from 'vue-turnstile'
 import iconEmail from '~icons/oui/email?raw'
 import iconPassword from '~icons/ph/key?raw'
@@ -11,17 +11,26 @@ import iconName from '~icons/ph/user?raw'
 import { authGhostButtonClass, authInlineLinkClass, authPanelClass, authPrimaryButtonClass } from '~/components/auth/pageStyles'
 import { hashEmail, useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
+import { parseWeb2AppArrival, rememberWeb2AppArrival, web2AppArrivalQuery } from '~/utils/web2appArrival'
 
 const router = useRouter()
+const route = useRoute()
 const supabase = useSupabase()
 const { t } = useI18n()
 const turnstileToken = ref('')
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 const isLoading = ref(false)
 
+// Web2App arrivals (for example from the retired WebNativeApp site) keep their
+// website through signup so onboarding can start on the Web2App path.
+const web2AppArrival = parseWeb2AppArrival(route.query)
+const web2AppQuery = web2AppArrival ? web2AppArrivalQuery(route.query) : {}
+if (web2AppArrival)
+  rememberWeb2AppArrival(web2AppArrival)
+
 if (window.location.host === 'console.capgo.app') {
   // do not allow to register on webapp on production
-  window.location.href = 'https://capgo.app/register/'
+  window.location.href = `https://capgo.app/register/${window.location.search}`
 }
 
 async function submit(form: { first_name: string, last_name: string, password: string, email: string }) {
@@ -73,7 +82,7 @@ async function submit(form: { first_name: string, last_name: string, password: s
       console.error('Failed to seed user profile after signup', profileError)
   }
 
-  router.push('/dashboard')
+  router.push({ path: '/dashboard', query: web2AppQuery })
 }
 </script>
 

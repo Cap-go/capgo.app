@@ -117,7 +117,12 @@ CREATE TABLE public.apps (
     onboarding_completed_at timestamp with time zone,
     onboarding jsonb DEFAULT '{}'::jsonb NOT NULL,
     device_data_collection jsonb DEFAULT '{"country": true, "is_prod": true, "platform": true, "os_version": true, "is_emulator": true, "version_build": true, "install_source": true, "plugin_version": true}'::jsonb NOT NULL,
-    CONSTRAINT apps_build_timeout_seconds_check CHECK (((build_timeout_seconds >= 300) AND (build_timeout_seconds <= 21600)))
+    update_mode text DEFAULT 'capgo'::text NOT NULL,
+    website_url text,
+    CONSTRAINT apps_build_timeout_seconds_check CHECK (((build_timeout_seconds >= 300) AND (build_timeout_seconds <= 21600))),
+    CONSTRAINT apps_update_mode_check CHECK ((update_mode = ANY (ARRAY['capgo'::text, 'website'::text]))),
+    CONSTRAINT apps_website_mode_requires_url CHECK (((update_mode <> 'website'::text) OR (website_url IS NOT NULL))),
+    CONSTRAINT apps_website_url_check CHECK (((website_url IS NULL) OR ((length(website_url) <= 2048) AND (website_url ~ '^https://([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+([A-Za-z]{2,63}|xn--[A-Za-z0-9-]{1,59})(:[0-9]{1,5})?/?$'::text))))
 );
 
 ALTER TABLE ONLY public.apps REPLICA IDENTITY FULL;

@@ -118,7 +118,6 @@ declare module 'vue' {
     OnboardingPublishIntentIconMobileApp: typeof import('./components/dashboard/OnboardingPublishIntentIconMobileApp.vue')['default']
     OnboardingPublishIntentIconWebPage: typeof import('./components/dashboard/OnboardingPublishIntentIconWebPage.vue')['default']
     OnboardingSupportUsernames: typeof import('./components/dashboard/OnboardingSupportUsernames.vue')['default']
-    OnboardingToolPattern: typeof import('./components/dashboard/OnboardingToolPattern.vue')['default']
     OrganizationOnboardingInvite: typeof import('./components/dashboard/OrganizationOnboardingInvite.vue')['default']
     OrgCustomDomain: typeof import('./components/OrgCustomDomain.vue')['default']
     OrgEmailNotificationsPanel: typeof import('./components/dashboard/OrgEmailNotificationsPanel.vue')['default']
@@ -167,6 +166,8 @@ declare module 'vue' {
     VersionGroupSelector: typeof import('./components/dashboard/VersionGroupSelector.vue')['default']
     WebhookDeliveryLog: typeof import('./components/WebhookDeliveryLog.vue')['default']
     WebhookForm: typeof import('./components/WebhookForm.vue')['default']
+    WebsiteLiveAppOverview: typeof import('./components/dashboard/WebsiteLiveAppOverview.vue')['default']
+    WebsiteLiveSettings: typeof import('./components/dashboard/WebsiteLiveSettings.vue')['default']
     WelcomeBanner: typeof import('./components/dashboard/WelcomeBanner.vue')['default']
   }
 }

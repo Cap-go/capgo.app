@@ -14,6 +14,7 @@ import Pencil from '~icons/heroicons/pencil-square'
 import transfer from '~icons/mingcute/transfer-horizontal-line?raw&width=36&height=36'
 import gearSix from '~icons/ph/gear-six?raw'
 import iconName from '~icons/ph/user?raw'
+import WebsiteLiveSettings from '~/components/dashboard/WebsiteLiveSettings.vue'
 import Toggle from '~/components/Toggle.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { DEVICE_DATA_COLLECTION_KEYS, parseAppRowDeviceDataCollection } from '~/services/deviceDataCollection'
@@ -21,6 +22,7 @@ import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { useSupabase } from '~/services/supabase'
+import { useAppUpdateModeStore } from '~/stores/appUpdateMode'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { getAppDeletionTrackingProperties } from '~/utils/appDeletionFeedback'
 
@@ -46,6 +48,8 @@ const dialogStore = useDialogV2Store()
 const forceBump = ref(0)
 const forceDownloadBump = ref(0)
 const organizationStore = useOrganizationStore()
+const appUpdateModeStore = useAppUpdateModeStore()
+const isWebsiteMode = computed(() => appUpdateModeStore.isWebsiteMode(props.appId))
 const transferAppIdInput = ref('')
 const selectedChannel = ref('')
 const uploadSearch = ref('')
@@ -316,6 +320,12 @@ async function submit(form: {
   }
   catch (error) {
     toast.error(error as string)
+  }
+
+  // Web2App apps do not render the classic options below.
+  if (isWebsiteMode.value) {
+    isLoading.value = false
+    return
   }
 
   try {
@@ -1380,6 +1390,7 @@ async function transferAppOwnership() {
         <div class="text-sm dark:text-gray-100">
           {{ t('app-info-desc') }}
         </div>
+        <WebsiteLiveSettings :app-id="props.appId" />
         <!-- Picture -->
         <section>
           <div class="flex items-center">
@@ -1461,254 +1472,257 @@ async function transferAppOwnership() {
               <div v-else-if="!appRef?.icon_url" class="mb-3 rounded-2xl border border-dashed border-slate-300 p-4 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-300">
                 Add an App Store or Google Play link to auto-import the app icon if you do not want to upload one manually.
               </div>
-              <div
-                :key="forceBump"
-                class="flex flex-row cursor-pointer"
-                role="button"
-                tabindex="0"
-                @click="setDefaultChannel"
-                @keydown.enter.prevent="setDefaultChannel"
-                @keydown.space.prevent="setDefaultChannel"
-              >
-                <FormKit
-                  type="text"
-                  name="default_upload_channel"
-                  class="flex-1 min-w-0"
-                  :prefix-icon="ArrowUpTray"
-                  :value="appRef?.default_upload_channel ?? t('not-set')"
-                  :label="t('default-upload-channel')"
-                  :sections-schema="{
-                    suffix: {
-                      children: [
-                        '$slots.suffix',
-                      ],
-                    },
-                    input: {
-                      attrs: {
-                        readonly: true,
-                        class: 'cursor-pointer w-full truncate',
-                      },
-                    },
-                  }"
+              <!-- Channels, retention and device options do not apply to Web2App apps. -->
+              <template v-if="!isWebsiteMode">
+                <div
+                  :key="forceBump"
+                  class="flex flex-row cursor-pointer"
+                  role="button"
+                  tabindex="0"
+                  @click="setDefaultChannel"
+                  @keydown.enter.prevent="setDefaultChannel"
+                  @keydown.space.prevent="setDefaultChannel"
                 >
-                  <template #suffix>
-                    <button type="button" class="w-6 h-6 ml-auto mr-1" @click.stop="setDefaultChannel">
-                      <Pencil width="24px" height="24px" />
-                    </button>
-                  </template>
-                </FormKit>
-              </div>
-              <div
-                :key="`download-${forceDownloadBump}`"
-                class="flex flex-row mt-3 cursor-pointer"
-                role="button"
-                tabindex="0"
-                @click="openDefaultDownloadChannelDialog"
-                @keydown.enter.prevent="openDefaultDownloadChannelDialog"
-                @keydown.space.prevent="openDefaultDownloadChannelDialog"
-              >
-                <FormKit
-                  type="text"
-                  name="default_download_channel"
-                  class="flex-1 min-w-0"
-                  :prefix-icon="ArrowDownTray"
-                  :value="downloadChannelLabel"
-                  :label="t('default-download-channel')"
-                  :sections-schema="{
-                    suffix: {
-                      children: [
-                        '$slots.suffix',
-                      ],
-                    },
-                    help: {
-                      children: [
-                        '$slots.help',
-                      ],
-                    },
-                    input: {
-                      attrs: {
-                        readonly: true,
-                        class: 'cursor-pointer w-full truncate',
+                  <FormKit
+                    type="text"
+                    name="default_upload_channel"
+                    class="flex-1 min-w-0"
+                    :prefix-icon="ArrowUpTray"
+                    :value="appRef?.default_upload_channel ?? t('not-set')"
+                    :label="t('default-upload-channel')"
+                    :sections-schema="{
+                      suffix: {
+                        children: [
+                          '$slots.suffix',
+                        ],
                       },
-                    },
-                  }"
+                      input: {
+                        attrs: {
+                          readonly: true,
+                          class: 'cursor-pointer w-full truncate',
+                        },
+                      },
+                    }"
+                  >
+                    <template #suffix>
+                      <button type="button" class="w-6 h-6 ml-auto mr-1" @click.stop="setDefaultChannel">
+                        <Pencil width="24px" height="24px" />
+                      </button>
+                    </template>
+                  </FormKit>
+                </div>
+                <div
+                  :key="`download-${forceDownloadBump}`"
+                  class="flex flex-row mt-3 cursor-pointer"
+                  role="button"
+                  tabindex="0"
+                  @click="openDefaultDownloadChannelDialog"
+                  @keydown.enter.prevent="openDefaultDownloadChannelDialog"
+                  @keydown.space.prevent="openDefaultDownloadChannelDialog"
                 >
-                  <template #suffix>
-                    <button type="button" class="w-6 h-6 ml-auto mr-1" @click.stop="openDefaultDownloadChannelDialog">
-                      <Pencil width="24px" height="24px" />
-                    </button>
-                  </template>
-                  <template #help>
-                    <span class="block text-xs text-slate-500 dark:text-slate-300">
-                      {{ t('default-download-channel-help') }}
-                    </span>
-                    <span
-                      v-if="downloadChannelWarning"
-                      class="block mt-1 text-xs font-medium text-amber-600 dark:text-amber-400"
-                    >
-                      {{ downloadChannelWarning }}
-                    </span>
-                  </template>
-                </FormKit>
-              </div>
-              <!-- Bundle Retention Setting -->
-              <FormKit
-                v-model="selectedRetentionPreset"
-                type="select"
-                name="retention_preset"
-                :prefix-icon="gearSix"
-                :label="t('retention-label')"
-                :options="retentionOptions"
-              />
-              <div v-if="isCustomRetention">
+                  <FormKit
+                    type="text"
+                    name="default_download_channel"
+                    class="flex-1 min-w-0"
+                    :prefix-icon="ArrowDownTray"
+                    :value="downloadChannelLabel"
+                    :label="t('default-download-channel')"
+                    :sections-schema="{
+                      suffix: {
+                        children: [
+                          '$slots.suffix',
+                        ],
+                      },
+                      help: {
+                        children: [
+                          '$slots.help',
+                        ],
+                      },
+                      input: {
+                        attrs: {
+                          readonly: true,
+                          class: 'cursor-pointer w-full truncate',
+                        },
+                      },
+                    }"
+                  >
+                    <template #suffix>
+                      <button type="button" class="w-6 h-6 ml-auto mr-1" @click.stop="openDefaultDownloadChannelDialog">
+                        <Pencil width="24px" height="24px" />
+                      </button>
+                    </template>
+                    <template #help>
+                      <span class="block text-xs text-slate-500 dark:text-slate-300">
+                        {{ t('default-download-channel-help') }}
+                      </span>
+                      <span
+                        v-if="downloadChannelWarning"
+                        class="block mt-1 text-xs font-medium text-amber-600 dark:text-amber-400"
+                      >
+                        {{ downloadChannelWarning }}
+                      </span>
+                    </template>
+                  </FormKit>
+                </div>
+                <!-- Bundle Retention Setting -->
                 <FormKit
-                  v-model="customRetentionValue"
-                  type="number"
-                  number="integer"
-                  name="custom_retention"
+                  v-model="selectedRetentionPreset"
+                  type="select"
+                  name="retention_preset"
                   :prefix-icon="gearSix"
-                  :label="t('retention-custom-value')"
-                  :help="t('retention-custom-help')"
-                  :min="0"
-                  :max="63113903"
+                  :label="t('retention-label')"
+                  :options="retentionOptions"
                 />
-              </div>
-              <p v-if="effectiveRetentionValue === 0" class="text-xs font-medium text-amber-600 dark:text-amber-400">
-                {{ t('retention-immediate-warning') }}
-              </p>
-              <p v-if="effectiveRetentionValue >= 63113904" class="text-xs font-medium text-blue-600 dark:text-blue-400">
-                {{ t('retention-never-info') }}
-              </p>
-              <FormKit
-                type="number"
-                number="integer"
-                name="build_timeout_minutes"
-                :prefix-icon="gearSix"
-                :value="buildTimeoutMinutes"
-                :label="t('build-timeout-label')"
-                :help="t('build-timeout-help')"
-                :min="MIN_BUILD_TIMEOUT_MINUTES"
-                :max="MAX_BUILD_TIMEOUT_MINUTES"
-              />
-              <FormKit
-                type="checkbox"
-                name="expose_metadata"
-                :value="appRef?.expose_metadata ?? false"
-                :label="t('expose-metadata')"
-                :help="t('expose-metadata-help')"
-              />
-              <FormKit
-                type="checkbox"
-                name="allow_preview"
-                :value="appRef?.allow_preview ?? false"
-                :label="t('allow-preview')"
-                :help="t('allow-preview-help')"
-              />
-              <FormKit
-                type="checkbox"
-                name="allow_device_custom_id"
-                :value="appRef?.allow_device_custom_id ?? false"
-                :label="t('allow-device-custom-id')"
-                :help="t('allow-device-custom-id-help')"
-              />
-              <FormKit
-                type="checkbox"
-                name="block_provider_infra_requests"
-                :value="appRef?.block_provider_infra_requests ?? false"
-                :label="t('block-provider-infra-requests')"
-                :help="t('block-provider-infra-requests-help')"
-              />
-              <details
-                id="device-data-collection"
-                class="pt-2 group"
-                data-test="device-data-collection"
-                :open="deviceDataCollectionOpen"
-                @toggle="deviceDataCollectionOpen = ($event.target as HTMLDetailsElement).open"
-              >
-                <summary class="flex items-center justify-between gap-3 py-2 list-none cursor-pointer select-none [&::-webkit-details-marker]:hidden">
-                  <span>
-                    <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">
-                      {{ t('device-data-collection') }}
-                    </span>
-                    <span class="block text-sm text-neutral-600 dark:text-neutral-400" data-test="device-data-collection-summary">
-                      {{ deviceDataCollectedCount === DEVICE_DATA_COLLECTION_KEYS.length
-                        ? t('device-data-collection-summary-all')
-                        : t('device-data-collection-summary-custom', { count: deviceDataCollectedCount, total: DEVICE_DATA_COLLECTION_KEYS.length }) }}
-                    </span>
-                  </span>
-                  <span class="text-sm font-medium text-sky-600 dark:text-sky-400 shrink-0">
-                    <span class="group-open:hidden">{{ t('device-data-collection-customize') }}</span>
-                    <span class="hidden group-open:inline">{{ t('device-data-collection-hide') }}</span>
-                  </span>
-                </summary>
-                <p class="mt-2 mb-3 text-sm text-neutral-700 dark:text-neutral-300">
-                  {{ t('device-data-collection-help') }}
+                <div v-if="isCustomRetention">
+                  <FormKit
+                    v-model="customRetentionValue"
+                    type="number"
+                    number="integer"
+                    name="custom_retention"
+                    :prefix-icon="gearSix"
+                    :label="t('retention-custom-value')"
+                    :help="t('retention-custom-help')"
+                    :min="0"
+                    :max="63113903"
+                  />
+                </div>
+                <p v-if="effectiveRetentionValue === 0" class="text-xs font-medium text-amber-600 dark:text-amber-400">
+                  {{ t('retention-immediate-warning') }}
+                </p>
+                <p v-if="effectiveRetentionValue >= 63113904" class="text-xs font-medium text-blue-600 dark:text-blue-400">
+                  {{ t('retention-never-info') }}
                 </p>
                 <FormKit
-                  id="collect-country"
-                  type="checkbox"
-                  name="collect_country"
-                  :value="deviceDataCollection.country"
-                  :label="t('collect-country')"
-                  :help="t('collect-country-help')"
+                  type="number"
+                  number="integer"
+                  name="build_timeout_minutes"
+                  :prefix-icon="gearSix"
+                  :value="buildTimeoutMinutes"
+                  :label="t('build-timeout-label')"
+                  :help="t('build-timeout-help')"
+                  :min="MIN_BUILD_TIMEOUT_MINUTES"
+                  :max="MAX_BUILD_TIMEOUT_MINUTES"
                 />
                 <FormKit
-                  id="collect-platform"
                   type="checkbox"
-                  name="collect_platform"
-                  :value="deviceDataCollection.platform"
-                  :label="t('collect-platform')"
-                  :help="t('collect-platform-help')"
+                  name="expose_metadata"
+                  :value="appRef?.expose_metadata ?? false"
+                  :label="t('expose-metadata')"
+                  :help="t('expose-metadata-help')"
                 />
                 <FormKit
-                  id="collect-os-version"
                   type="checkbox"
-                  name="collect_os_version"
-                  :value="deviceDataCollection.os_version"
-                  :label="t('collect-os-version')"
-                  :help="t('collect-os-version-help')"
+                  name="allow_preview"
+                  :value="appRef?.allow_preview ?? false"
+                  :label="t('allow-preview')"
+                  :help="t('allow-preview-help')"
                 />
                 <FormKit
-                  id="collect-plugin-version"
                   type="checkbox"
-                  name="collect_plugin_version"
-                  :value="deviceDataCollection.plugin_version"
-                  :label="t('collect-plugin-version')"
-                  :help="t('collect-plugin-version-help')"
+                  name="allow_device_custom_id"
+                  :value="appRef?.allow_device_custom_id ?? false"
+                  :label="t('allow-device-custom-id')"
+                  :help="t('allow-device-custom-id-help')"
                 />
                 <FormKit
-                  id="collect-version-build"
                   type="checkbox"
-                  name="collect_version_build"
-                  :value="deviceDataCollection.version_build"
-                  :label="t('collect-version-build')"
-                  :help="t('collect-version-build-help')"
+                  name="block_provider_infra_requests"
+                  :value="appRef?.block_provider_infra_requests ?? false"
+                  :label="t('block-provider-infra-requests')"
+                  :help="t('block-provider-infra-requests-help')"
                 />
-                <FormKit
-                  id="collect-is-emulator"
-                  type="checkbox"
-                  name="collect_is_emulator"
-                  :value="deviceDataCollection.is_emulator"
-                  :label="t('collect-is-emulator')"
-                  :help="t('collect-is-emulator-help')"
-                />
-                <FormKit
-                  id="collect-is-prod"
-                  type="checkbox"
-                  name="collect_is_prod"
-                  :value="deviceDataCollection.is_prod"
-                  :label="t('collect-is-prod')"
-                  :help="t('collect-is-prod-help')"
-                />
-                <FormKit
-                  id="collect-install-source"
-                  type="checkbox"
-                  name="collect_install_source"
-                  :value="deviceDataCollection.install_source"
-                  :label="t('collect-install-source')"
-                  :help="t('collect-install-source-help')"
-                />
-              </details>
+                <details
+                  id="device-data-collection"
+                  class="pt-2 group"
+                  data-test="device-data-collection"
+                  :open="deviceDataCollectionOpen"
+                  @toggle="deviceDataCollectionOpen = ($event.target as HTMLDetailsElement).open"
+                >
+                  <summary class="flex items-center justify-between gap-3 py-2 list-none cursor-pointer select-none [&::-webkit-details-marker]:hidden">
+                    <span>
+                      <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">
+                        {{ t('device-data-collection') }}
+                      </span>
+                      <span class="block text-sm text-neutral-600 dark:text-neutral-400" data-test="device-data-collection-summary">
+                        {{ deviceDataCollectedCount === DEVICE_DATA_COLLECTION_KEYS.length
+                          ? t('device-data-collection-summary-all')
+                          : t('device-data-collection-summary-custom', { count: deviceDataCollectedCount, total: DEVICE_DATA_COLLECTION_KEYS.length }) }}
+                      </span>
+                    </span>
+                    <span class="text-sm font-medium text-sky-600 dark:text-sky-400 shrink-0">
+                      <span class="group-open:hidden">{{ t('device-data-collection-customize') }}</span>
+                      <span class="hidden group-open:inline">{{ t('device-data-collection-hide') }}</span>
+                    </span>
+                  </summary>
+                  <p class="mt-2 mb-3 text-sm text-neutral-700 dark:text-neutral-300">
+                    {{ t('device-data-collection-help') }}
+                  </p>
+                  <FormKit
+                    id="collect-country"
+                    type="checkbox"
+                    name="collect_country"
+                    :value="deviceDataCollection.country"
+                    :label="t('collect-country')"
+                    :help="t('collect-country-help')"
+                  />
+                  <FormKit
+                    id="collect-platform"
+                    type="checkbox"
+                    name="collect_platform"
+                    :value="deviceDataCollection.platform"
+                    :label="t('collect-platform')"
+                    :help="t('collect-platform-help')"
+                  />
+                  <FormKit
+                    id="collect-os-version"
+                    type="checkbox"
+                    name="collect_os_version"
+                    :value="deviceDataCollection.os_version"
+                    :label="t('collect-os-version')"
+                    :help="t('collect-os-version-help')"
+                  />
+                  <FormKit
+                    id="collect-plugin-version"
+                    type="checkbox"
+                    name="collect_plugin_version"
+                    :value="deviceDataCollection.plugin_version"
+                    :label="t('collect-plugin-version')"
+                    :help="t('collect-plugin-version-help')"
+                  />
+                  <FormKit
+                    id="collect-version-build"
+                    type="checkbox"
+                    name="collect_version_build"
+                    :value="deviceDataCollection.version_build"
+                    :label="t('collect-version-build')"
+                    :help="t('collect-version-build-help')"
+                  />
+                  <FormKit
+                    id="collect-is-emulator"
+                    type="checkbox"
+                    name="collect_is_emulator"
+                    :value="deviceDataCollection.is_emulator"
+                    :label="t('collect-is-emulator')"
+                    :help="t('collect-is-emulator-help')"
+                  />
+                  <FormKit
+                    id="collect-is-prod"
+                    type="checkbox"
+                    name="collect_is_prod"
+                    :value="deviceDataCollection.is_prod"
+                    :label="t('collect-is-prod')"
+                    :help="t('collect-is-prod-help')"
+                  />
+                  <FormKit
+                    id="collect-install-source"
+                    type="checkbox"
+                    name="collect_install_source"
+                    :value="deviceDataCollection.install_source"
+                    :label="t('collect-install-source')"
+                    :help="t('collect-install-source-help')"
+                  />
+                </details>
+              </template>
               <FormKit
                 type="button"
                 :label="t('transfer-app-ownership')"

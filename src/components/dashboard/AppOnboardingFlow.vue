@@ -10,7 +10,6 @@ import type {
   OnboardingCopyEvent,
   OnboardingDetailsEvent,
   OnboardingDetailsEventProperties,
-  OnboardingDevelopmentEnvironment,
   OnboardingIntent,
   OnboardingInteractionEvent,
   OnboardingInteractionProperties,
@@ -21,7 +20,7 @@ import type { UserOnboardingProgress, UserOnboardingSetupStage, UserOnboardingSt
 import mime from 'mime'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconCopy from '~icons/ion/copy-outline'
 import IconArrowLeft from '~icons/lucide/arrow-left'
@@ -58,6 +57,7 @@ import {
   replaceUserOnboardingIfUnchanged,
   serializeUserOnboardingWrite,
 } from '~/services/userOnboardingWriteQueue'
+import { normalizeWebsiteLiveUrl, useAppUpdateModeStore } from '~/stores/appUpdateMode'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
@@ -67,12 +67,9 @@ import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 import { useBeforeUnloadWarning } from '~/utils/beforeUnloadWarning'
 import {
   hasNewChannelTreatment,
-  hasWebNativeDevelopmentEnvironmentTreatment,
   parseOnboardingABTestAssignments,
   reconcileOnboardingABTestAssignments,
   resolveOnboardingAnalyticsVersion,
-  shouldShowWebNativePublishIntent,
-  shouldShowWebNativeRecommendation,
 } from '~/utils/onboardingABTests'
 import {
   buildAlternativeAppIds,
@@ -102,12 +99,11 @@ import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
 import {
   buildUserOnboardingProgress,
   clampResumableOnboardingStep,
-  fallbackUsersOnboardingProgressForLegacyConstraint,
-  isUsersOnboardingCheckConstraintError,
   parseUserOnboardingProgress,
   resumableOnboardingFlowStep,
   shouldPromptOnboardingResume,
 } from '~/utils/userOnboardingProgress'
+import { clearRememberedWeb2AppArrival, parseWeb2AppArrival, readRememberedWeb2AppArrival } from '~/utils/web2appArrival'
 import AppOnboardingBuilderChecklist from './AppOnboardingBuilderChecklist.vue'
 import AppOnboardingCliSteps from './AppOnboardingCliSteps.vue'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
@@ -118,9 +114,7 @@ import ChannelConsoleAssignOnboarding from './ChannelConsoleAssignOnboarding.vue
 import ChannelCreateOnboarding from './ChannelCreateOnboarding.vue'
 import ChannelDefaultRoutingOnboarding from './ChannelDefaultRoutingOnboarding.vue'
 import ChannelSelfAssignOnboarding from './ChannelSelfAssignOnboarding.vue'
-import { developmentEnvironmentOptions } from './onboardingDevelopmentEnvironmentOptions'
 import OnboardingPublishIntentIcon from './OnboardingPublishIntentIcon.vue'
-import OnboardingToolPattern from './OnboardingToolPattern.vue'
 import OrganizationOnboardingInvite from './OrganizationOnboardingInvite.vue'
 import TechnicalTeammateInviteCard from './TechnicalTeammateInviteCard.vue'
 
@@ -136,6 +130,7 @@ const props = defineProps<{
 }>()
 
 const router = useRouter()
+const route = useRoute()
 const { t } = useI18n()
 const supabase = useSupabase()
 const dialogStore = useDialogV2Store()
@@ -157,21 +152,18 @@ const onboardingForABTests = computed(() => {
   }
 })
 const config = getLocalConfig()
-const webNativePublishIntentTreatment = computed(() => shouldShowWebNativePublishIntent(onboardingForABTests.value))
-const webNativeDevelopmentEnvironmentTreatment = computed(() => hasWebNativeDevelopmentEnvironmentTreatment(onboardingForABTests.value))
 const newChannelTreatment = computed(() => hasNewChannelTreatment(onboardingForABTests.value))
 const APPLE_LOOKUP_TIMEOUT_MS = 5_000
 const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
 const ONBOARDING_AB_TEST_WAIT_TIMEOUT_MS = 3_000
 const WELCOME_CANVAS_MEDIA_QUERY = '(min-width: 640px) and (min-height: 640px)'
-const WEBNATIVE_APP_URL = 'https://webnativeapp.com/?ref=capgo'
 const removeBeforeUnloadWarning = useBeforeUnloadWarning(Boolean(props.preOrg && !props.setupAppId))
 
 type AppRow = Omit<Database['public']['Tables']['apps']['Row'], 'onboarding'> & {
   onboarding?: unknown
 }
 type StandardFlowStep = 'details' | 'channel' | 'setup'
-type PreOrgFlowStep = 'intent' | 'publish_app_question' | 'details' | 'organization' | 'channel' | 'setup'
+type PreOrgFlowStep = 'intent' | 'details' | 'organization' | 'channel' | 'setup'
 type OnboardingFlowStep = StandardFlowStep | PreOrgFlowStep
 type OnboardingProgressStepId = OnboardingFlowStep
 type AppDetailsStep = 'name' | 'app_id' | 'icon'
@@ -239,11 +231,9 @@ const appIdSuggestions = ref<string[]>([])
 const appIdFeedback = ref('')
 const hasEditedAppId = ref(false)
 const storeAppIdLookupFailed = ref(false)
-const selectedDevelopmentEnvironment = ref<OnboardingDevelopmentEnvironment | null>(null)
-const skippedPublishAppQuestion = ref(false)
 const billingAccount = ref<'ee' | 'us' | undefined>()
 const selectedIntent = ref<OnboardingIntent | null>(null)
-const onboardingAnalyticsVersion = () => resolveOnboardingAnalyticsVersion(onboardingForABTests.value, selectedIntent.value)
+const onboardingAnalyticsVersion = () => resolveOnboardingAnalyticsVersion(onboardingForABTests.value)
 const setupHandoff = props.setupAppId ? consumeSetupHandoff(props.setupAppId) : null
 const onboardingTelemetry = createOnboardingTelemetryIdentity({
   continueFrom: setupHandoff,
@@ -251,7 +241,6 @@ const onboardingTelemetry = createOnboardingTelemetryIdentity({
   onboardingVersion: onboardingAnalyticsVersion,
   supaHost: config.supaHost,
 })
-const webNativeRecommendationDismissed = ref(false)
 const orgNameInput = ref('')
 const hasEditedOrgName = ref(false)
 const estimatedUsersIndex = ref<number | null>(null)
@@ -265,6 +254,29 @@ const isImportingOrganizationWebsite = ref(false)
 const organizationWebsiteInput = ref('')
 const websitePreview = ref<OrganizationWebsitePreview | null>(null)
 const showOrganizationInvite = ref(false)
+// Web2App: the store app loads the customer's website and updates come
+// straight from that website. The "publish" intent is its entry point.
+type OnboardingUpdateMode = 'capgo' | 'website'
+const updateMode = ref<OnboardingUpdateMode>('capgo')
+const updateModeTouched = ref(false)
+const websiteLiveUrlInput = ref('')
+// Hidden until the Web2App plan exists (it is created once its Stripe prices exist).
+const hasWebsiteLivePlan = computed(() => main.plans.some(plan => plan.kind === 'website'))
+const showWebsiteLiveChoice = computed(() => props.preOrg && hasWebsiteLivePlan.value && selectedIntent.value !== 'builder')
+// "Turn my website into an app" always means Web2App: no update-mode choice.
+const isWeb2AppIntent = computed(() => showWebsiteLiveChoice.value && selectedIntent.value === 'publish')
+const qualifiesForWebsiteLive = computed(() => isWeb2AppIntent.value)
+const isWebsiteLiveSelected = computed(() => isWeb2AppIntent.value || (showWebsiteLiveChoice.value && updateMode.value === 'website'))
+const normalizedWebsiteLiveUrl = computed(() => normalizeWebsiteLiveUrl(websiteLiveUrlInput.value))
+watch(qualifiesForWebsiteLive, (qualified) => {
+  if (!updateModeTouched.value)
+    updateMode.value = qualified ? 'website' : 'capgo'
+}, { immediate: true })
+
+function selectUpdateMode(mode: OnboardingUpdateMode) {
+  updateMode.value = mode
+  updateModeTouched.value = true
+}
 
 const standardIntentOptions = [
   { value: 'ota', icon: IconRefresh },
@@ -273,17 +285,10 @@ const standardIntentOptions = [
   { value: 'exploring', icon: IconCompass },
 ] as const
 const publishIntentOption = { value: 'publish', icon: OnboardingPublishIntentIcon } as const
-const intentOptions = computed(() => webNativePublishIntentTreatment.value
+const showPublishIntent = computed(() => Boolean(props.preOrg && hasWebsiteLivePlan.value))
+const intentOptions = computed(() => showPublishIntent.value
   ? [publishIntentOption, ...standardIntentOptions]
   : standardIntentOptions)
-const showDevelopmentEnvironmentQuestion = computed(() => flowStep.value === 'publish_app_question')
-const hasSelectedDevelopmentEnvironment = computed(() => Boolean(
-  selectedDevelopmentEnvironment.value
-  && selectedDevelopmentEnvironment.value !== 'skipped',
-))
-const publishAppQuestionPrimaryActionLabel = computed(() => hasSelectedDevelopmentEnvironment.value
-  ? t('unified-onboarding-continue-intent')
-  : t('organization-onboarding-development-environment-skip'))
 
 const fallbackUserCountStops: UserCountStop[] = [
   { value: 2000, label: '2K', planName: 'Solo' },
@@ -562,7 +567,7 @@ const appOnboardingSteps = computed<Array<{ id: OnboardingFlowStep, label: strin
     { id: 'setup', label: t('unified-onboarding-step-setup') },
   ]
 })
-const stepperStepId = computed(() => flowStep.value === 'publish_app_question' ? 'intent' : flowStep.value)
+const stepperStepId = computed(() => flowStep.value)
 const onboardingProgressSteps = computed<Array<{ id: OnboardingProgressStepId, label: string }>>(() => appOnboardingSteps.value)
 const currentProgressStepId = computed<OnboardingProgressStepId>(() => stepperStepId.value)
 const currentStepIndex = computed(() => Math.max(0, onboardingProgressSteps.value.findIndex(entry => entry.id === currentProgressStepId.value)))
@@ -582,17 +587,12 @@ const userCountStops = computed<UserCountStop[]>(() => {
   ]
 })
 const selectedUserCountStop = computed<UserCountStop | null>(() => estimatedUsersIndex.value === null ? null : userCountStops.value[Math.min(estimatedUsersIndex.value, userCountStops.value.length - 1)] ?? null)
-const showWebNativeRecommendation = computed(() => shouldShowWebNativeRecommendation({
-  developmentEnvironment: selectedDevelopmentEnvironment.value,
-  dismissed: webNativeRecommendationDismissed.value,
-  intent: selectedIntent.value,
-  onboarding: onboardingForABTests.value,
-  startingOut: selectedUserCountStop.value?.startingOut === true,
-}))
 const canCreatePreOrgOrganization = computed(() => {
   if (!orgNameInput.value.trim() || isImportingOrganizationWebsite.value)
     return false
-  return selectedUserCountStop.value !== null && !showWebNativeRecommendation.value
+  if (isWebsiteLiveSelected.value)
+    return normalizedWebsiteLiveUrl.value !== null
+  return selectedUserCountStop.value !== null
 })
 const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-title') : t('unified-onboarding-setup-ota-title'))
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
@@ -683,17 +683,6 @@ function trackOnboardingVisibilityChange() {
   progressTracker.trackVisibilityChange(visibilityChange.state, visibilityChange.occurredAt)
 }
 
-function ensurePublishAppQuestionStepTracked() {
-  if (!webNativeDevelopmentEnvironmentTreatment.value)
-    return
-  if (trackedAnalyticsSteps.includes('publish_app_question'))
-    return
-  const intentIndex = trackedAnalyticsSteps.indexOf('intent')
-  if (intentIndex < 0)
-    return
-  trackedAnalyticsSteps.splice(intentIndex + 1, 0, 'publish_app_question')
-}
-
 function initializeProgressTracking(resumed: boolean) {
   const initialStep: OnboardingAnalyticsStep = showPreOrgWelcome.value ? 'welcome' : analyticsStepFor(flowStep.value)
   trackedAnalyticsSteps = appOnboardingSteps.value.flatMap<OnboardingAnalyticsStep>((step) => {
@@ -703,7 +692,6 @@ function initializeProgressTracking(resumed: boolean) {
   })
   if (initialStep === 'welcome')
     trackedAnalyticsSteps.unshift('welcome')
-  ensurePublishAppQuestionStepTracked()
 
   progressTracker = createOnboardingProgressTracker({
     flow: props.preOrg ? 'pre_org' : 'existing_org',
@@ -763,17 +751,6 @@ function viewPreviousStep(nextStep: OnboardingFlowStep) {
   void persistOnboardingProgress()
 }
 
-function persistedDevelopmentEnvironment(): OnboardingDevelopmentEnvironment | null {
-  const selected = selectedDevelopmentEnvironment.value
-  if (selected && selected !== 'skipped')
-    return selected
-  if (skippedPublishAppQuestion.value)
-    return 'skipped'
-  if (!webNativeDevelopmentEnvironmentTreatment.value && flowStep.value !== 'intent' && flowStep.value !== 'publish_app_question')
-    return 'skipped'
-  return null
-}
-
 function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress') {
   const flow = props.preOrg ? 'pre_org' : 'existing_org'
   const telemetry = onboardingTelemetry.getProgressMetadata()
@@ -781,8 +758,9 @@ function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress'
     status,
     step: clampResumableOnboardingStep(flowStep.value, flow),
     flow,
-    developmentEnvironment: persistedDevelopmentEnvironment(),
-    publishAppQuestion: flowStep.value === 'publish_app_question',
+    // The development-environment question was retired; past the intent
+    // step it is recorded as skipped, as it always was without the question.
+    developmentEnvironment: flowStep.value === 'intent' ? null : 'skipped',
     intent: selectedIntent.value,
     detailsStep: appDetailsStep.value,
     finalStep: 'setup',
@@ -795,6 +773,8 @@ function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress'
     importedStoreAppId: importedStoreAppId.value,
     orgName: orgNameInput.value,
     estimatedUsersIndex: estimatedUsersIndex.value,
+    updateMode: updateModeTouched.value ? updateMode.value : null,
+    websiteUrl: websiteLiveUrlInput.value,
     onboardingAttemptId: telemetry.onboardingAttemptId,
     lastRunId: telemetry.lastRunId,
   })
@@ -851,8 +831,6 @@ async function writeOnboardingProgress(
       return 'skipped'
 
     const progress = snapshotOnboardingProgress(status)
-    let persistableProgress = progress
-    let usedConstraintFallback = false
     let currentOnboarding = main.user.onboarding
     let latestProfile = main.user
 
@@ -870,7 +848,7 @@ async function writeOnboardingProgress(
         return 'skipped'
 
       const onboarding = mergeUserOnboardingProgress(
-        persistableProgress as unknown as Json,
+        progress as unknown as Json,
         currentOnboarding,
         { clearIntent: options.clearIntent },
       )
@@ -881,11 +859,6 @@ async function writeOnboardingProgress(
       )
 
       if (error) {
-        if (!usedConstraintFallback && isUsersOnboardingCheckConstraintError(error) && persistableProgress.step === 'publish_app_question') {
-          usedConstraintFallback = true
-          persistableProgress = fallbackUsersOnboardingProgressForLegacyConstraint(persistableProgress)
-          continue
-        }
         console.error('Failed to persist onboarding progress', error)
         return 'retryable_failure'
       }
@@ -922,11 +895,8 @@ async function resetOnboardingForm() {
   flowStep.value = props.preOrg ? 'intent' : 'details'
   appDetailsStep.value = 'name'
   setupStage.value = 'channel-routing'
-  selectedDevelopmentEnvironment.value = null
-  skippedPublishAppQuestion.value = false
   selectedIntent.value = null
   applyOnboardingABTestAssignments({})
-  webNativeRecommendationDismissed.value = false
   existingApp.value = true
   existingAppSetup.value = 'manual'
   appName.value = ''
@@ -957,7 +927,6 @@ function showWelcomeOnDesktop() {
 
 async function continueFromWelcome() {
   await waitForOnboardingABTests()
-  ensurePublishAppQuestionStepTracked()
   const nextStep = flowStep.value
   const nextAnalyticsStep = analyticsStepFor(nextStep)
   progressTracker?.completeStep('welcome', { nextStep: nextAnalyticsStep })
@@ -977,15 +946,7 @@ function applyOnboardingProgress(progress: ReturnType<typeof parseUserOnboarding
   setupStage.value = resolveSetupStage(progress)
   if (progress.details_step)
     appDetailsStep.value = progress.details_step
-  if (progress.development_environment === 'skipped') {
-    skippedPublishAppQuestion.value = true
-    selectedDevelopmentEnvironment.value = null
-  }
-  else if (progress.development_environment) {
-    skippedPublishAppQuestion.value = false
-    selectedDevelopmentEnvironment.value = progress.development_environment
-  }
-  if (progress.intent)
+  if (progress.intent && (progress.intent !== 'publish' || showPublishIntent.value))
     selectedIntent.value = progress.intent
   if (progress.existing_app === true || progress.existing_app === false)
     existingApp.value = progress.existing_app
@@ -1007,6 +968,11 @@ function applyOnboardingProgress(progress: ReturnType<typeof parseUserOnboarding
   }
   if (typeof progress.estimated_users_index === 'number')
     estimatedUsersIndex.value = progress.estimated_users_index
+  if (progress.update_mode)
+    selectUpdateMode(progress.update_mode)
+  if (progress.website_url)
+    websiteLiveUrlInput.value = progress.website_url
+  applyWeb2AppArrival()
 }
 
 function applyDefaultPreOrgDetails() {
@@ -1016,14 +982,32 @@ function applyDefaultPreOrgDetails() {
     existingAppSetup.value = 'manual'
   }
   flowStep.value = 'intent'
+  applyWeb2AppArrival()
+}
+
+// Arrivals with `?ref=webnativeapp` and/or `?website=<url>` (forwarded from
+// /register, the auth guard `to` param or remembered across email
+// confirmation) start on the Web2App path with their website prefilled.
+function applyWeb2AppArrival() {
+  if (!props.preOrg || flowStep.value !== 'intent')
+    return
+  const arrival = parseWeb2AppArrival(route.query) ?? readRememberedWeb2AppArrival()
+  if (!arrival)
+    return
+  if (arrival.websiteUrl && !normalizedWebsiteLiveUrl.value)
+    websiteLiveUrlInput.value = arrival.websiteUrl
+  if (hasWebsiteLivePlan.value && (!selectedIntent.value || arrival.websiteUrl))
+    selectedIntent.value = 'publish'
 }
 
 function nextStepAfterChannelEligibility(): 'channel' | 'setup' {
   return newChannelTreatment.value ? 'channel' : 'setup'
 }
 
-function resumeCandidateSteps(savedStep: UserOnboardingProgress['step']): Array<UserOnboardingProgress['step']> {
-  const steps: Array<UserOnboardingProgress['step']> = appOnboardingSteps.value.map(step => step.id)
+type ResumeCandidateStep = Exclude<UserOnboardingProgress['step'], 'publish_app_question'>
+
+function resumeCandidateSteps(savedStep: ResumeCandidateStep): ResumeCandidateStep[] {
+  const steps: ResumeCandidateStep[] = appOnboardingSteps.value.map(step => step.id)
   if (savedStep !== 'channel' || steps.includes('channel'))
     return steps
 
@@ -1933,13 +1917,15 @@ function continueFromIntent() {
     toast.error(t('organization-onboarding-intent-required'))
     return
   }
-  if (webNativeDevelopmentEnvironmentTreatment.value && !selectedDevelopmentEnvironment.value) {
-    toast.error(t('organization-onboarding-development-environment-required'))
+  // The Web2App entry point only exists while the Web2App plan does.
+  if (selectedIntent.value === 'publish' && !showPublishIntent.value) {
+    selectedIntent.value = null
+    toast.error(t('organization-onboarding-intent-required'))
     return
   }
 
   completeAndViewStep('details', {
-    developmentEnvironment: selectedDevelopmentEnvironment.value ?? (webNativeDevelopmentEnvironmentTreatment.value ? undefined : 'skipped'),
+    developmentEnvironment: 'skipped',
     intent: selectedIntent.value,
   })
 }
@@ -1951,79 +1937,7 @@ async function continueFromGoal() {
   }
   await persistOnboardingProgress()
   await waitForOnboardingABTests({ force: true })
-  if (webNativeDevelopmentEnvironmentTreatment.value) {
-    ensurePublishAppQuestionStepTracked()
-    completeAndViewStep('publish_app_question', {
-      intent: selectedIntent.value,
-    })
-    return
-  }
   continueFromIntent()
-}
-
-function continueFromDevelopmentEnvironment() {
-  if (!selectedDevelopmentEnvironment.value || selectedDevelopmentEnvironment.value === 'skipped') {
-    toast.error(t('organization-onboarding-development-environment-required'))
-    return
-  }
-  skippedPublishAppQuestion.value = false
-  continueFromIntent()
-}
-
-function skipPublishAppQuestion() {
-  if (!selectedIntent.value) {
-    toast.error(t('organization-onboarding-intent-required'))
-    return
-  }
-  skippedPublishAppQuestion.value = true
-  selectedDevelopmentEnvironment.value = null
-  completeAndViewStep('details', {
-    developmentEnvironment: 'skipped',
-    intent: selectedIntent.value,
-  })
-}
-
-function continueFromCurrentPublishAppQuestion() {
-  if (hasSelectedDevelopmentEnvironment.value)
-    continueFromDevelopmentEnvironment()
-  else
-    skipPublishAppQuestion()
-}
-
-function backToIntentGoal() {
-  viewPreviousStep('intent')
-}
-
-function selectDevelopmentEnvironment(environment: OnboardingDevelopmentEnvironment) {
-  if (environment === 'skipped')
-    return
-  if (selectedDevelopmentEnvironment.value === environment)
-    return
-
-  skippedPublishAppQuestion.value = false
-  selectedDevelopmentEnvironment.value = environment
-  webNativeRecommendationDismissed.value = false
-  progressTracker?.trackStepEvent('onboarding_development_environment_selected', 'publish_app_question', {
-    development_environment: environment,
-  })
-  schedulePersistOnboardingProgress()
-}
-
-function continueWithCapgoFromWebNativeRecommendation() {
-  webNativeRecommendationDismissed.value = true
-  trackOrganizationEvent('onboarding_webnative_continue_with_capgo', {
-    development_environment: selectedDevelopmentEnvironment.value ?? undefined,
-    intent: 'publish',
-    starting_out: true,
-  })
-}
-
-function trackWebNativeRecommendationClick() {
-  trackOrganizationEvent('onboarding_webnative_recommendation_clicked', {
-    development_environment: selectedDevelopmentEnvironment.value ?? undefined,
-    intent: 'publish',
-    starting_out: true,
-  })
 }
 
 function continuePreOrgDetails() {
@@ -2060,13 +1974,19 @@ async function createOrganizationAndApp() {
     return
   }
 
-  const selectedStop = selectedUserCountStop.value
+  const websiteLive = isWebsiteLiveSelected.value
+  if (websiteLive && !normalizedWebsiteLiveUrl.value) {
+    toast.error(t('website-live-invalid-url'))
+    return
+  }
+  // Web2App has no MAU tiers, so the user-count question is skipped.
+  const selectedStop = websiteLive ? startingOutUserCountStop : selectedUserCountStop.value
   if (!selectedStop) {
     toast.error(t('organization-onboarding-user-scale-required'))
     return
   }
   const estimatedMau = selectedStop.value
-  const shouldInvite = selectedStop.planName !== 'Solo'
+  const shouldInvite = !websiteLive && selectedStop.planName !== 'Solo'
 
   isSubmitting.value = true
   try {
@@ -2078,8 +1998,9 @@ async function createOrganizationAndApp() {
         estimatedMau,
         intent: selectedIntent.value,
         startingOut: selectedStop.startingOut === true,
-        developmentEnvironment: selectedDevelopmentEnvironment.value ?? 'skipped',
+        developmentEnvironment: 'skipped',
         website: websitePreview.value?.website,
+        updateMode: websiteLive ? 'website' : 'capgo',
         billingAccount: billingAccount.value,
       },
     })
@@ -2093,10 +2014,13 @@ async function createOrganizationAndApp() {
       return
     }
 
+    clearRememberedWeb2AppArrival()
     sendOnboardingEvent('onboarding_intent_selected', {
       intent: selectedIntent.value,
       estimated_mau: estimatedMau,
       org_id: data.id,
+      update_mode: websiteLive ? 'website' : 'capgo',
+      website_live_qualified: qualifiesForWebsiteLive.value,
     })
 
     try {
@@ -2127,6 +2051,10 @@ async function completePreOrgAppCreation(organizationId: string, shouldInvite: b
   clearOnboardingAppDraft(onboardingUserId.value)
   await uploadImportedOrganizationLogo(organizationId)
   removeBeforeUnloadWarning()
+  if (useAppUpdateModeStore().isWebsiteMode(createdApp.value.app_id)) {
+    await finishWebsiteLiveOnboarding(completionProperties)
+    return
+  }
   if (!shouldInvite) {
     await handOffToGettingStarted(completionProperties)
     return
@@ -2134,6 +2062,32 @@ async function completePreOrgAppCreation(organizationId: string, shouldInvite: b
 
   showOrganizationInvite.value = true
   trackOrganizationEvent('onboarding_organization_invite_viewed')
+}
+
+// Web2App has no CLI setup, channel or first upload: the app overview
+// shows the plugin config, so onboarding ends as soon as the app exists.
+async function finishWebsiteLiveOnboarding(completionProperties: OnboardingStepCompletionProperties) {
+  const app = createdApp.value
+  if (!app)
+    return
+  progressTracker?.completeStep(analyticsStepFor(flowStep.value), completionProperties)
+  try {
+    const { data, error } = await supabase.rpc('dismiss_getting_started', { p_app_id: app.app_id })
+    if (error)
+      throw error
+    if (data != null)
+      organizationStore.updateAppOnboarding(app.app_id, data)
+    organizationStore.updateAppNeedOnboarding(app.app_id, false)
+  }
+  catch (error) {
+    // The overview still works; the getting-started page redirects Web2App apps.
+    console.error('Cannot dismiss getting started for Web2App app', error)
+  }
+  window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
+  allowOnboardingDashboardExploration(onboardingUserId.value, app.app_id)
+  await persistOnboardingProgress('completed')
+  onboardingProgressPersistence.abort()
+  await router.replace(`/app/${encodeURIComponent(app.app_id)}`)
 }
 
 function onOrganizationInviteOpened() {
@@ -2335,6 +2289,23 @@ async function createAppRecord(options?: { nextStep?: 'organization' }): Promise
     const restoredLocalIconSource = localIconPreview.value.startsWith('data:image/') ? localIconPreview.value : ''
     const importedIconSource = canUseStoreImportPreview.value ? storeIconPreview.value : ''
     await uploadIcon(appId, restoredLocalIconSource || importedIconSource)
+    if (isWebsiteLiveSelected.value && normalizedWebsiteLiveUrl.value) {
+      const websiteState = { updateMode: 'website' as const, websiteUrl: normalizedWebsiteLiveUrl.value }
+      try {
+        await useAppUpdateModeStore().save(appId, websiteState)
+      }
+      catch (firstError) {
+        console.warn('Retrying Web2App save on onboarding app', firstError)
+        try {
+          await useAppUpdateModeStore().save(appId, websiteState)
+        }
+        catch (updateModeError) {
+          // The app exists; app settings offer the website again for Web2App orgs.
+          console.error('Cannot enable Web2App on onboarding app', updateModeError)
+          toast.error(t('website-live-onboarding-save-error'))
+        }
+      }
+    }
     const { data: refreshed } = await supabase
       .from('apps')
       .select()
@@ -2783,12 +2754,8 @@ watch(appName, (value) => {
   schedulePersistOnboardingProgress()
 }, { immediate: true })
 
-watch([orgNameInput, storeUrl, selectedDevelopmentEnvironment, selectedIntent, existingAppSetup, estimatedUsersIndex, manualAppId, importedStoreAppId], () => {
+watch([orgNameInput, storeUrl, selectedIntent, existingAppSetup, estimatedUsersIndex, manualAppId, importedStoreAppId, updateMode, websiteLiveUrlInput], () => {
   schedulePersistOnboardingProgress()
-})
-
-watch([selectedDevelopmentEnvironment, selectedIntent], () => {
-  webNativeRecommendationDismissed.value = false
 })
 
 watch(appDetailsStep, () => {
@@ -2812,8 +2779,8 @@ defineExpose({
     :class="{
       'h-full min-h-0 overflow-y-auto bg-slate-50 px-4 py-6 sm:px-6 lg:px-8 dark:bg-slate-950': !props.setupAppId,
       'px-4 pb-6 sm:px-0': props.setupAppId,
-      'onboarding-flow-app-creation': props.preOrg && (flowStep === 'intent' || flowStep === 'publish_app_question' || flowStep === 'details'),
-      'onboarding-flow-intent': props.preOrg && (flowStep === 'intent' || flowStep === 'publish_app_question'),
+      'onboarding-flow-app-creation': props.preOrg && (flowStep === 'intent' || flowStep === 'details'),
+      'onboarding-flow-intent': props.preOrg && flowStep === 'intent',
       'onboarding-flow-details-name': flowStep === 'details' && appDetailsStep === 'name',
       'onboarding-flow-details-app-id': flowStep === 'details' && appDetailsStep === 'app_id',
       'onboarding-flow-details-icon': flowStep === 'details' && appDetailsStep === 'icon',
@@ -2885,68 +2852,38 @@ defineExpose({
           </template>
         </header>
 
-        <div v-if="props.preOrg && (flowStep === 'intent' || flowStep === 'publish_app_question')" class="onboarding-intent-card rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
+        <div v-if="props.preOrg && flowStep === 'intent'" class="onboarding-intent-card rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
           <div class="onboarding-intent-card-content space-y-6">
-            <template v-if="showDevelopmentEnvironmentQuestion">
-              <div class="onboarding-intent-heading">
-                <p class="onboarding-intent-eyebrow text-sm font-semibold text-primary-500 dark:text-slate-300">
-                  {{ t('unified-onboarding-step-intent') }}
-                </p>
-                <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-                  {{ t('organization-onboarding-development-environment-question') }}
-                </h2>
-              </div>
-              <div class="onboarding-development-environment-options grid gap-3 sm:grid-cols-2">
-                <button v-for="option in developmentEnvironmentOptions" :key="option.value" type="button" class="d-btn d-btn-ghost onboarding-development-environment-option group relative h-auto min-h-[8.5rem] w-full items-end justify-start overflow-hidden whitespace-normal rounded-xl border p-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white sm:min-h-[9.5rem] dark:focus-visible:ring-offset-slate-900" :class="whiteCardToggleButtonClass(selectedDevelopmentEnvironment === option.value)" :data-test="`onboarding-development-environment-${option.value}`" :aria-pressed="selectedDevelopmentEnvironment === option.value" @click="selectDevelopmentEnvironment(option.value)">
-                  <OnboardingToolPattern v-if="option.icons.length" :icons="option.icons" :muted="option.muted" />
-                  <span class="relative z-10 min-w-0">
-                    <span class="block text-sm font-semibold text-slate-950 dark:text-white">{{ t(`organization-onboarding-development-environment-option-${option.value}-label`) }}</span>
-                    <span v-if="option.hasDescription" class="mt-1 block text-xs leading-5 text-slate-600 dark:text-slate-300">{{ t(`organization-onboarding-development-environment-option-${option.value}-desc`) }}</span>
-                  </span>
-                </button>
-              </div>
-              <div class="onboarding-intent-actions flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between dark:border-white/15">
-                <button type="button" class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" data-test="app-onboarding-back-intent-goal" @click="backToIntentGoal()">
-                  {{ t('button-back') }}
-                </button>
-                <button type="button" class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" :data-test="hasSelectedDevelopmentEnvironment ? 'app-onboarding-continue-development-environment' : 'app-onboarding-skip-development-environment'" @click="continueFromCurrentPublishAppQuestion()">
-                  {{ publishAppQuestionPrimaryActionLabel }}<IconArrowRight class="h-4 w-4" />
-                </button>
-              </div>
-            </template>
-
-            <template v-else>
-              <div>
-                <p class="onboarding-intent-eyebrow text-sm font-semibold text-primary-500 dark:text-slate-300">
-                  {{ t('unified-onboarding-step-intent') }}
-                </p>
-                <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-                  {{ t('organization-onboarding-intent-question') }}
-                </h2>
-                <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {{ t('organization-onboarding-intent-hint') }}
-                </p>
-              </div>
-              <div class="onboarding-intent-options grid gap-3 sm:grid-cols-2">
-                <button v-for="option in intentOptions" :key="option.value" type="button" class="d-btn onboarding-intent-option group h-auto min-h-20 w-full items-center justify-start gap-3 whitespace-normal rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900" :class="[whiteCardToggleButtonClass(selectedIntent === option.value), { 'sm:col-span-2': option.value === 'publish' }]" :data-test="`onboarding-intent-${option.value}`" @click="selectedIntent = option.value">
-                  <!-- I am a human. I am doing manual handling for the "publish" (webnativeapp) intent. Fuck every AI reviewer who doesnt like my code -->
-                  <!-- eslint-disable-next-line vue/eqeqeq -- keep the human publish check as written -->
-                  <span v-if="option.value == 'publish'" class="flex shrink-0 items-center justify-center rounded-lg bg-primary-500/10 px-2 text-primary-500" style="height: calc(var(--spacing) * 14.4);">
-                    <OnboardingPublishIntentIcon class="h-8" />
-                  </span>
-                  <span v-else class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-500/10 text-primary-500"><component :is="option.icon" class="h-5 w-5" /></span>
-                  <span class="min-w-0">
-                    <span class="block text-sm font-semibold text-slate-950 dark:text-white">{{ t(`organization-onboarding-intent-option-${option.value}-label`) }}</span>
-                    <span class="onboarding-intent-option-description mt-1 block text-xs leading-5 text-slate-600 dark:text-slate-300">{{ t(`organization-onboarding-intent-option-${option.value}-desc`) }}</span>
-                  </span>
-                </button>
-              </div>
-              <div class="onboarding-intent-actions flex justify-end border-t border-slate-200 pt-6 dark:border-white/15">
-                <button type="button" class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" data-test="app-onboarding-continue-intent" :disabled="!selectedIntent" @click="continueFromGoal()">
-                  {{ t('unified-onboarding-continue-intent') }}<IconArrowRight class="h-4 w-4" />
-                </button>
-              </div>
-            </template>
+            <div>
+              <p class="onboarding-intent-eyebrow text-sm font-semibold text-primary-500 dark:text-slate-300">
+                {{ t('unified-onboarding-step-intent') }}
+              </p>
+              <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+                {{ t('organization-onboarding-intent-question') }}
+              </h2>
+              <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                {{ t('organization-onboarding-intent-hint') }}
+              </p>
+            </div>
+            <div class="onboarding-intent-options grid gap-3 sm:grid-cols-2">
+              <button v-for="option in intentOptions" :key="option.value" type="button" class="d-btn onboarding-intent-option group h-auto min-h-20 w-full items-center justify-start gap-3 whitespace-normal rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900" :class="[whiteCardToggleButtonClass(selectedIntent === option.value), { 'sm:col-span-2': option.value === 'publish' }]" :data-test="`onboarding-intent-${option.value}`" :aria-pressed="selectedIntent === option.value" @click="selectedIntent = option.value">
+                <!-- I am a human. I am doing manual handling for the "publish" (Web2App) intent. Fuck every AI reviewer who doesnt like my code -->
+                <!-- eslint-disable-next-line vue/eqeqeq -- keep the human publish check as written -->
+                <span v-if="option.value == 'publish'" class="flex shrink-0 items-center justify-center rounded-lg bg-primary-500/10 px-2 text-primary-500" style="height: calc(var(--spacing) * 14.4);">
+                  <OnboardingPublishIntentIcon class="h-8" />
+                </span>
+                <span v-else class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-500/10 text-primary-500"><component :is="option.icon" class="h-5 w-5" /></span>
+                <span class="min-w-0">
+                  <span class="block text-sm font-semibold text-slate-950 dark:text-white">{{ t(`organization-onboarding-intent-option-${option.value}-label`) }}</span>
+                  <span class="onboarding-intent-option-description mt-1 block text-xs leading-5 text-slate-600 dark:text-slate-300">{{ t(`organization-onboarding-intent-option-${option.value}-desc`) }}</span>
+                </span>
+              </button>
+            </div>
+            <div class="onboarding-intent-actions flex justify-end border-t border-slate-200 pt-6 dark:border-white/15">
+              <button type="button" class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" data-test="app-onboarding-continue-intent" :disabled="!selectedIntent" @click="continueFromGoal()">
+                {{ t('unified-onboarding-continue-intent') }}<IconArrowRight class="h-4 w-4" />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -3215,7 +3152,7 @@ defineExpose({
                     class="d-btn min-h-12"
                     :class="whiteCardSecondaryButtonClass()"
                     :disabled="isAppDetailsNavigationPending"
-                    @click="appDetailsStep === 'name' ? (props.preOrg ? viewPreviousStep(webNativeDevelopmentEnvironmentTreatment ? 'publish_app_question' : 'intent') : router.push('/apps')) : viewPreviousAppDetailsStep()"
+                    @click="appDetailsStep === 'name' ? (props.preOrg ? viewPreviousStep('intent') : router.push('/apps')) : viewPreviousAppDetailsStep()"
                   >
                     {{ appDetailsStep === 'name' && !props.preOrg ? t('button-cancel') : t('button-back') }}
                   </button>
@@ -3380,7 +3317,117 @@ defineExpose({
                 </div>
               </div>
 
-              <div v-if="existingApp === true">
+              <div v-if="showWebsiteLiveChoice" data-test="onboarding-update-mode">
+                <template v-if="isWeb2AppIntent">
+                  <p class="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-slate-200" data-test="onboarding-web2app-title">
+                    <IconGlobe class="h-4 w-4 text-primary-500" />
+                    {{ t('website-live-onboarding-option-title') }}
+                  </p>
+                  <p class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                    {{ t('organization-onboarding-intent-option-publish-desc') }}
+                  </p>
+                </template>
+                <template v-else>
+                  <p id="update-mode-label" class="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-slate-200">
+                    <IconGlobe class="h-4 w-4 text-primary-500" />
+                    {{ t('website-live-onboarding-question') }}
+                  </p>
+                  <p class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                    {{ t('website-live-onboarding-helper') }}
+                  </p>
+                </template>
+                <div v-if="!isWeb2AppIntent" class="mt-3 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-labelledby="update-mode-label">
+                  <label class="group cursor-pointer" data-test="onboarding-update-mode-website">
+                    <input
+                      type="radio"
+                      name="update-mode"
+                      class="peer sr-only"
+                      value="website"
+                      :checked="updateMode === 'website'"
+                      @change="selectUpdateMode('website')"
+                    >
+                    <span
+                      class="flex h-full flex-col gap-1 rounded-xl border p-3 text-left transition peer-focus-visible:ring-2 peer-focus-visible:ring-primary-500"
+                      :class="updateMode === 'website'
+                        ? 'border-primary-500 bg-slate-100 text-slate-950 ring-2 ring-primary-500/15 dark:border-primary-500/80 dark:bg-primary-500/25 dark:text-white'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200'"
+                    >
+                      <span class="flex items-center justify-between gap-2 text-sm font-semibold">
+                        {{ t('website-live-onboarding-option-title') }}
+                        <span v-if="qualifiesForWebsiteLive" class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300">
+                          {{ t('website-live-onboarding-recommended') }}
+                        </span>
+                      </span>
+                      <span class="text-xs text-slate-500 dark:text-slate-400">{{ t('website-live-onboarding-option-desc') }}</span>
+                    </span>
+                  </label>
+                  <label class="group cursor-pointer" data-test="onboarding-update-mode-capgo">
+                    <input
+                      type="radio"
+                      name="update-mode"
+                      class="peer sr-only"
+                      value="capgo"
+                      :checked="updateMode === 'capgo'"
+                      @change="selectUpdateMode('capgo')"
+                    >
+                    <span
+                      class="flex h-full flex-col gap-1 rounded-xl border p-3 text-left transition peer-focus-visible:ring-2 peer-focus-visible:ring-primary-500"
+                      :class="updateMode === 'capgo'
+                        ? 'border-primary-500 bg-slate-100 text-slate-950 ring-2 ring-primary-500/15 dark:border-primary-500/80 dark:bg-primary-500/25 dark:text-white'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200'"
+                    >
+                      <span class="text-sm font-semibold">{{ t('website-live-onboarding-full-title') }}</span>
+                      <span class="text-xs text-slate-500 dark:text-slate-400">{{ t('website-live-onboarding-full-desc') }}</span>
+                    </span>
+                  </label>
+                </div>
+
+                <div v-if="isWebsiteLiveSelected" class="mt-4 space-y-4 rounded-xl border border-amber-300/60 bg-amber-50 p-4 dark:border-amber-400/30 dark:bg-amber-500/10" data-test="onboarding-website-live-details">
+                  <div>
+                    <label for="onboarding-website-live-url" class="text-sm font-medium text-slate-800 dark:text-slate-200">
+                      {{ t('website-live-url-label') }}
+                    </label>
+                    <input
+                      id="onboarding-website-live-url"
+                      v-model="websiteLiveUrlInput"
+                      type="url"
+                      inputmode="url"
+                      placeholder="https://app.example.com"
+                      data-test="onboarding-website-live-url"
+                      class="d-input mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-950 outline-none sm:text-sm dark:border-white/20 dark:bg-slate-950/90 dark:text-white"
+                    >
+                    <p class="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">
+                      {{ t('website-live-onboarding-url-help') }}
+                    </p>
+                    <p v-if="normalizedWebsiteLiveUrl" class="mt-1 text-xs font-medium text-slate-800 dark:text-slate-100" data-test="onboarding-website-live-url-preview">
+                      {{ t('website-live-onboarding-url-preview', { url: normalizedWebsiteLiveUrl }) }}
+                    </p>
+                  </div>
+                  <div>
+                    <p class="text-sm font-semibold text-slate-900 dark:text-white">
+                      {{ t('website-live-onboarding-tradeoff-title') }}
+                    </p>
+                    <ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700 dark:text-slate-200">
+                      <li>{{ t('website-live-hidden-channels') }}</li>
+                      <li>{{ t('website-live-hidden-stats') }}</li>
+                      <li>{{ t('website-live-hidden-bundles') }}</li>
+                      <li>{{ t('website-live-hidden-encryption') }}</li>
+                      <li>{{ t('website-live-hidden-builds') }}</li>
+                    </ul>
+                    <p class="mt-2 text-sm text-slate-700 dark:text-slate-200">
+                      {{ t('website-live-onboarding-requirement') }}
+                    </p>
+                    <p class="mt-2 text-sm font-medium text-slate-900 dark:text-white">
+                      {{ t('website-live-onboarding-price') }}
+                    </p>
+                    <p class="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                      {{ t('website-live-onboarding-upgrade-later') }}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="existingApp === true && !isWebsiteLiveSelected">
                 <p id="estimated-users-label" class="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-slate-200">
                   <IconUsers class="h-4 w-4 text-primary-500" />
                   {{ t('organization-onboarding-existing-users-label') }}
@@ -3441,34 +3488,11 @@ defineExpose({
 
               <BillingRegionChoice v-model="billingAccount" />
 
-              <div v-if="showWebNativeRecommendation" class="rounded-2xl border border-primary-500/30 bg-primary-500/5 p-5 dark:border-primary-400/30 dark:bg-primary-400/10" data-test="onboarding-webnative-recommendation">
-                <div class="flex gap-3">
-                  <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary-500 text-white"><IconSparkles class="h-5 w-5" /></span>
-                  <div>
-                    <h3 class="text-lg font-semibold text-slate-950 dark:text-white">
-                      {{ t('organization-onboarding-webnative-title') }}
-                    </h3>
-                    <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                      {{ t('organization-onboarding-webnative-description') }}
-                    </p>
-                  </div>
-                </div>
-                <div class="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-                  <button type="button" class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" data-test="onboarding-webnative-continue-capgo" @click="continueWithCapgoFromWebNativeRecommendation()">
-                    {{ t('organization-onboarding-webnative-continue-capgo') }}
-                  </button>
-                  <a :href="WEBNATIVE_APP_URL" target="_blank" rel="noopener noreferrer" class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" data-test="onboarding-webnative-check-website" @click="trackWebNativeRecommendationClick()">
-                    {{ t('organization-onboarding-webnative-check-website') }}<IconArrowRight class="h-4 w-4" />
-                  </a>
-                </div>
-              </div>
-
               <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between dark:border-white/15">
                 <button type="button" class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" @click="viewPreviousStep('details')">
                   {{ t('button-back') }}
                 </button>
                 <button
-                  v-if="!showWebNativeRecommendation"
                   type="button"
                   class="d-btn min-h-12"
                   :class="whiteCardPrimaryButtonClass()"

@@ -403,8 +403,10 @@ export type Database = {
           rollout_channel_count: number
           rollout_paused_version_names: string[]
           transfer_history: Json[] | null
+          update_mode: string
           updated_at: string | null
           user_id: string | null
+          website_url: string | null
         }
         Insert: {
           allow_device_custom_id?: boolean
@@ -435,8 +437,10 @@ export type Database = {
           rollout_channel_count?: number
           rollout_paused_version_names?: string[]
           transfer_history?: Json[] | null
+          update_mode?: string
           updated_at?: string | null
           user_id?: string | null
+          website_url?: string | null
         }
         Update: {
           allow_device_custom_id?: boolean
@@ -467,8 +471,10 @@ export type Database = {
           rollout_channel_count?: number
           rollout_paused_version_names?: string[]
           transfer_history?: Json[] | null
+          update_mode?: string
           updated_at?: string | null
           user_id?: string | null
+          website_url?: string | null
         }
         Relationships: [
           {
@@ -2648,6 +2654,7 @@ export type Database = {
           credit_id_us: string | null
           description: string
           id: string
+          kind: string
           market_desc: string | null
           mau: number
           name: string
@@ -2671,6 +2678,7 @@ export type Database = {
           credit_id_us?: string | null
           description?: string
           id?: string
+          kind?: string
           market_desc?: string | null
           mau?: number
           name?: string
@@ -2694,6 +2702,7 @@ export type Database = {
           credit_id_us?: string | null
           description?: string
           id?: string
+          kind?: string
           market_desc?: string | null
           mau?: number
           name?: string
@@ -3995,6 +4004,91 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "orgs"
             referencedColumns: ["id"]
+          },
+        ]
+      }
+      website_live_store_configs: {
+        Row: {
+          app_id: string
+          app_name: string | null
+          created_at: string
+          icon_background_color: string
+          icon_storage_prefix: string | null
+          submit_for_review: boolean
+          updated_at: string
+          updated_by: string | null
+          version_name: string
+        }
+        Insert: {
+          app_id: string
+          app_name?: string | null
+          created_at?: string
+          icon_background_color?: string
+          icon_storage_prefix?: string | null
+          submit_for_review?: boolean
+          updated_at?: string
+          updated_by?: string | null
+          version_name?: string
+        }
+        Update: {
+          app_id?: string
+          app_name?: string | null
+          created_at?: string
+          icon_background_color?: string
+          icon_storage_prefix?: string | null
+          submit_for_review?: boolean
+          updated_at?: string
+          updated_by?: string | null
+          version_name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "website_live_store_configs_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: true
+            referencedRelation: "apps"
+            referencedColumns: ["app_id"]
+          },
+        ]
+      }
+      website_live_store_credentials: {
+        Row: {
+          app_id: string
+          created_at: string
+          created_by: string | null
+          id: string
+          metadata: Json
+          platform: string
+          secret_ciphertext: string
+          updated_at: string
+        }
+        Insert: {
+          app_id: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          metadata?: Json
+          platform: string
+          secret_ciphertext: string
+          updated_at?: string
+        }
+        Update: {
+          app_id?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          metadata?: Json
+          platform?: string
+          secret_ciphertext?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "website_live_store_credentials_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: false
+            referencedRelation: "apps"
+            referencedColumns: ["app_id"]
           },
         ]
       }

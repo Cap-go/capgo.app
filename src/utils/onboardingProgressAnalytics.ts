@@ -2,27 +2,18 @@ import type { OnboardingChannelEvent, OnboardingChannelEventProperties, Onboardi
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 
 export const ONBOARDING_ANALYTICS_VERSION = 4
-export const WEBNATIVE_PUBLISH_INTENT_ANALYTICS_VERSION = '5.A'
-export const WEBNATIVE_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION = '5.C'
 export const NEW_CHANNEL_ANALYTICS_VERSION = '5.E'
-export const NEW_CHANNEL_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION = '5.F'
-export const NEW_CHANNEL_PUBLISH_INTENT_ANALYTICS_VERSION = '5.G'
 export type OnboardingAnalyticsVersion
   = | typeof ONBOARDING_ANALYTICS_VERSION
-    | typeof WEBNATIVE_PUBLISH_INTENT_ANALYTICS_VERSION
-    | typeof WEBNATIVE_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION
     | typeof NEW_CHANNEL_ANALYTICS_VERSION
-    | typeof NEW_CHANNEL_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION
-    | typeof NEW_CHANNEL_PUBLISH_INTENT_ANALYTICS_VERSION
 
 export type OnboardingAnalyticsFlow = 'pre_org' | 'existing_org'
-export type OnboardingAnalyticsStep = 'welcome' | 'intent' | 'publish_app_question' | 'details' | 'app_name' | 'app_id' | 'app_icon' | 'organization' | 'choice' | 'channel' | 'install' | 'setup'
+export type OnboardingAnalyticsStep = 'welcome' | 'intent' | 'details' | 'app_name' | 'app_id' | 'app_icon' | 'organization' | 'choice' | 'channel' | 'install' | 'setup'
 export type OnboardingCopyEvent = 'onboarding_ai_instructions_copied' | 'onboarding_cli_command_copied'
 export type OnboardingDevelopmentEnvironment = 'hosted_builder' | 'ai_assistant' | 'hand_coded' | 'other' | 'local_project' | 'exploring' | 'skipped'
 export type OnboardingIntent = 'ota' | 'builder' | 'both' | 'exploring' | 'publish'
 export type OnboardingInteractionEvent
   = | OnboardingChannelEvent
-    | 'onboarding_development_environment_selected'
     | 'onboarding_organization_import_opened'
     | 'onboarding_organization_import_submitted'
     | 'onboarding_organization_import_succeeded'
@@ -33,8 +24,6 @@ export type OnboardingInteractionEvent
     | 'onboarding_organization_invite_continued'
     | 'onboarding_technical_invite_opened'
     | 'onboarding_technical_invite_succeeded'
-    | 'onboarding_webnative_continue_with_capgo'
-    | 'onboarding_webnative_recommendation_clicked'
 export type OnboardingDetailsEvent
   = | 'onboarding_app_creation_failed'
     | 'onboarding_app_creation_started'
@@ -121,7 +110,6 @@ export function resolveOnboardingAppIconSource(options: {
 
 export type OnboardingInteractionProperties = Partial<OnboardingChannelEventProperties> & {
   app_id?: string
-  development_environment?: OnboardingDevelopmentEnvironment
   existing_app?: boolean
   invitation_count?: number
   intent?: OnboardingIntent
