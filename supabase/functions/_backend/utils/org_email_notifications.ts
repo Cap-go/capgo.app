@@ -717,8 +717,14 @@ export async function sendNotifToOrgMembersOnceWithResult(
         preferenceKey,
         orgId,
       })
-      // Claim anyway so once-dedup (SQL + retries) does not re-queue forever.
-      const claim = await claimNotifOrgOnceWithResult(c, eventName, orgId, uniqId, writeClient)
+      // Claim with a dedicated suffix so retention cleanup gates do not treat this as a delivered warning.
+      const claim = await claimNotifOrgOnceWithResult(
+        c,
+        eventName,
+        orgId,
+        `${uniqId}:no_recipients`,
+        writeClient,
+      )
       return claim === 'failed' ? 'failed' : 'no_recipients'
     }
 
