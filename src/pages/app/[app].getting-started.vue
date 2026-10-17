@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute } from 'vue-router'
 import AppOnboardingFlow from '~/components/dashboard/AppOnboardingFlow.vue'
 import AppPageFrame from '~/components/dashboard/AppPageFrame.vue'
 import { useAppPage } from '~/composables/useAppPage'
@@ -12,6 +13,10 @@ import { parseUserOnboardingProgress } from '~/utils/userOnboardingProgress'
 const { t } = useI18n()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
+const route = useRoute('/app/[app].getting-started')
+// Only a single explicit opt-in enables checklist viewing; arrays and values
+// such as "0", "false", or an empty query value keep the normal redirect.
+const showChecklist = computed(() => route.query.showChecklist === '1')
 const { id, app, isLoading } = useAppPage({
   routeName: '/app/[app].getting-started',
   navTitle: t('getting-started'),
@@ -51,9 +56,10 @@ watch(() => app.value?.app_id, (appId) => {
   <AppPageFrame :found="!!app" :loading="isLoading">
     <AppOnboardingFlow
       v-if="app && setupFlowAppId === app.app_id"
-      :key="setupFlowAppId"
+      :key="`${setupFlowAppId}:${showChecklist}`"
       data-test="getting-started-setup"
       :setup-app-id="setupFlowAppId"
+      :show-checklist="showChecklist"
       :pre-org="setupPreOrg"
       onboarding
     />
