@@ -3745,5 +3745,16 @@
   "apple-login-name-save-failed": "You are signed in. You can add your name in account settings.",
   "apple-delete-reauth-required": "Your Apple authorization expired. Please sign in with Apple again to delete your account.",
   "apple-delete-account-hint": "Verify your email, then confirm with the same Apple account to delete your Capgo account.",
-  "apple-revoke-failed": "Could not disconnect your Apple account. Please sign in with Apple again and retry."
+  "apple-revoke-failed": "Could not disconnect your Apple account. Please sign in with Apple again and retry.",
+  "setup-goal-title": "What would you like to start with?",
+  "setup-goal-description": "Choose a goal to start setup. You can switch between Live Updates and Builder anytime.",
+  "setup-goal-live-updates": "Live Updates",
+  "setup-goal-builder": "Builder",
+  "setup-goal-live-updates-description": "Deliver code changes to your installed app without waiting for another store release.",
+  "setup-goal-builder-description": "Build a signed iOS or Android app in the cloud for testing or distribution.",
+  "setup-goal-start-live-updates": "Set up Live Updates",
+  "setup-goal-start-builder": "Set up cloud builds",
+  "setup-goal-continue-live-updates": "Continue Live Updates",
+  "setup-goal-continue-builder": "Continue Builder",
+  "setup-goal-tabs-label": "Setup goal"
 }

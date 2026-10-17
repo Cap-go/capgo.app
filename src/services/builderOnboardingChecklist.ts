@@ -19,7 +19,7 @@ export const BUILDER_STEP_IDS = {
 
 export type BuilderPlatform = keyof typeof BUILDER_STEP_IDS
 export type BuilderStepId = typeof BUILDER_STEP_IDS[BuilderPlatform][number]
-export type BuilderStepStatus = 'pending' | 'done' | 'skipped'
+export type BuilderStepStatus = 'pending' | 'done' | 'skipped' | 'warning'
 
 export interface BuilderOnboardingState {
   selectedPlatform: BuilderPlatform | null
@@ -62,7 +62,7 @@ export function parseBuilderOnboarding(value: unknown): BuilderOnboardingState {
     const platformSteps = isRecord(rawSteps[platform]) ? rawSteps[platform] : {}
     for (const id of BUILDER_STEP_IDS[platform]) {
       const step = platformSteps[id]
-      if (isRecord(step) && (step.status === 'pending' || step.status === 'done' || step.status === 'skipped'))
+      if (isRecord(step) && (step.status === 'pending' || step.status === 'done' || step.status === 'skipped' || step.status === 'warning'))
         steps[platform][id] = step.status
     }
   }

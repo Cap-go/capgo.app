@@ -16,16 +16,20 @@ import { useAppOnboardingCliProgress } from '~/composables/useAppOnboardingCliPr
 import { getAppOnboardingStepIds } from '~/services/appOnboarding'
 import { isAppOnboardingChecklistStep } from '~/utils/appOnboardingChecklist'
 import { APP_ONBOARDING_STEP_GUIDES } from '~/utils/appOnboardingGuides'
+import { hasDualOnboardingChecklists } from '~/utils/dualOnboardingChecklists'
 import ChannelSetupOnboardingDialog from './ChannelSetupOnboardingDialog.vue'
 import TechnicalTeammateInviteCard from './TechnicalTeammateInviteCard.vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   appId: string
   initialOnboarding?: unknown
   command: string
   hiding: boolean
   leaving: boolean
-}>()
+  active?: boolean
+  hideFooter?: boolean
+  completionAction?: string
+}>(), { active: true })
 
 const emit = defineEmits<{
   copyCommand: []
@@ -36,11 +40,13 @@ const emit = defineEmits<{
   inviteOpened: []
   inviteSucceeded: [invite: { email: string, firstName: string, lastName: string }]
   channelAnalytics: [event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties]
+  snapshot: [onboarding: unknown]
 }>()
 
 const { t } = useI18n()
 const panelId = useId()
-const { onboarding, refreshError, refreshOnboarding } = useAppOnboardingCliProgress(() => props.appId, () => props.initialOnboarding)
+const { onboarding, rawOnboarding, refreshError, refreshOnboarding } = useAppOnboardingCliProgress(() => props.appId, () => props.initialOnboarding, () => props.active !== false)
+watch(rawOnboarding, value => emit('snapshot', value))
 const steps = computed(() => getAppOnboardingStepIds(onboarding.value.todo_list_version, onboarding.value.ota_todo_list_version).filter(isAppOnboardingChecklistStep).map((id, index) => ({
   id,
   index,
@@ -63,7 +69,9 @@ const waitingMessageKey = computed(() => {
     return `setup-checklist-waiting-${selectedStep.value.id}`
   return 'setup-checklist-waiting-step'
 })
-const completed = computed(() => onboarding.value.outcome === 'completed')
+const completed = computed(() => hasDualOnboardingChecklists(rawOnboarding.value)
+  ? steps.value.length > 0 && doneCount.value === steps.value.length
+  : onboarding.value.outcome === 'completed')
 const checklistOpen = ref(false)
 const channelFlowOpen = ref(false)
 
@@ -188,7 +196,7 @@ function statusLabel(status: string | undefined) {
             {{ t('setup-checklist-complete-description') }}
           </p>
           <button type="button" class="d-btn mt-6 min-h-12 self-start border-primary-500 bg-primary-500 text-white hover:border-primary-600 hover:bg-primary-600" :disabled="hiding || leaving" @click="emit('complete')">
-            {{ t('setup-checklist-open-app') }}
+            {{ completionAction || t('setup-checklist-open-app') }}
             <IconArrowRight class="h-4 w-4" aria-hidden="true" />
           </button>
         </template>
@@ -291,7 +299,7 @@ function statusLabel(status: string | undefined) {
       />
     </div>
 
-    <footer class="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-5">
+    <footer v-if="!hideFooter" class="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-5">
       <button
         type="button"
         class="d-btn min-h-12 shrink-0 border-slate-300 bg-white px-4 text-slate-700 hover:border-slate-400 hover:bg-slate-50 dark:border-white/20 dark:bg-slate-900 dark:text-slate-200"

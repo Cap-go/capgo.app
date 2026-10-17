@@ -3744,5 +3744,16 @@
   "billing-region-option-ee-desc": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "billing-region-option-us": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "billing-region-option-us-desc": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "billing-region-us-detected": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "billing-region-us-detected": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "setup-goal-continue-builder": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "setup-goal-live-updates": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "setup-goal-continue-live-updates": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "setup-goal-description": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "setup-goal-title": "Used in Capgo web console areas: components/dashboard. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "setup-goal-live-updates-description": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "setup-goal-builder-description": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "setup-goal-builder": "Used in Capgo web console areas: components/dashboard. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "setup-goal-tabs-label": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "setup-goal-start-live-updates": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "setup-goal-start-builder": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }

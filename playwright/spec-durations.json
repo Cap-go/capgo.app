@@ -13,6 +13,7 @@
   "email-verification.spec.ts": 4,
   "observe-tabs.spec.ts": 24,
   "onboarding-builder-setup.spec.ts": 5,
+  "onboarding-dual-setup.spec.ts": 10,
   "onboarding-setup.spec.ts": 35,
   "register.spec.ts": 24,
   "sidebar-collapse.spec.ts": 30,

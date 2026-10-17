@@ -1,8 +1,9 @@
 import type { MaybeRefOrGetter } from 'vue'
 import { FunctionsHttpError } from '@supabase/supabase-js'
 import { computed, onBeforeUnmount, onMounted, ref, toValue, watch } from 'vue'
-import { parseAppOnboarding } from '~/services/appOnboarding'
+import { getAppOnboardingStepIds, parseAppOnboarding } from '~/services/appOnboarding'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { hasDualOnboardingChecklists } from '~/utils/dualOnboardingChecklists'
 
 interface ProgressResponse {
   onboarding: unknown
@@ -10,7 +11,8 @@ interface ProgressResponse {
   checkErrors: string[]
 }
 
-export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, initialOnboarding: MaybeRefOrGetter<unknown>) {
+export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, initialOnboarding: MaybeRefOrGetter<unknown>, active: MaybeRefOrGetter<boolean> = true) {
+  const rawOnboarding = ref(toValue(initialOnboarding))
   const reportedOnboarding = ref(parseAppOnboarding(toValue(initialOnboarding)))
   const hasChannel = ref<boolean | null>(null)
   const onboarding = computed(() => {
@@ -25,7 +27,9 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
     return { ...reported, steps }
   })
   const refreshError = ref(false)
-  const isTerminal = computed(() => onboarding.value.outcome === 'completed' || onboarding.value.outcome === 'skipped')
+  const isTerminal = computed(() => hasDualOnboardingChecklists(rawOnboarding.value)
+    ? getAppOnboardingStepIds(onboarding.value.todo_list_version, onboarding.value.ota_todo_list_version).every(id => ['done', 'skipped'].includes(onboarding.value.steps[id]?.status ?? 'pending'))
+    : onboarding.value.outcome === 'completed' || onboarding.value.outcome === 'skipped')
   let pollTimer: ReturnType<typeof setInterval> | undefined
   let generation = 0
   let refreshing = false
@@ -39,12 +43,12 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
   }
 
   function startPolling() {
-    if (pollTimer === undefined && mounted && !accessRevoked)
+    if (pollTimer === undefined && mounted && !accessRevoked && toValue(active))
       pollTimer = setInterval(() => void refreshProgress(false), 2000)
   }
 
   async function refreshProgress(initial: boolean) {
-    if (refreshing)
+    if (refreshing || !toValue(active))
       return
     const requestedGeneration = generation
     const requestedAppId = toValue(appId)
@@ -70,6 +74,7 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
           startPolling()
       }
       if (data) {
+        rawOnboarding.value = data.onboarding
         reportedOnboarding.value = parseAppOnboarding(data.onboarding)
         if (typeof data.hasChannel === 'boolean')
           hasChannel.value = data.hasChannel
@@ -88,7 +93,10 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
   }
 
   const refreshOnboarding = () => refreshProgress(true)
-  watch(() => toValue(initialOnboarding), value => reportedOnboarding.value = parseAppOnboarding(value))
+  watch(() => toValue(initialOnboarding), (value) => {
+    rawOnboarding.value = value
+    reportedOnboarding.value = parseAppOnboarding(value)
+  })
   watch(() => toValue(appId), () => {
     generation += 1
     refreshing = false
@@ -96,6 +104,7 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
     N = 0
     refreshError.value = false
     hasChannel.value = null
+    rawOnboarding.value = toValue(initialOnboarding)
     reportedOnboarding.value = parseAppOnboarding(toValue(initialOnboarding))
     stopPolling()
     if (mounted) {
@@ -105,6 +114,16 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
     }
   })
   watch(isTerminal, terminal => terminal ? stopPolling() : startPolling())
+  watch(() => toValue(active), (enabled) => {
+    if (!enabled) {
+      stopPolling()
+    }
+    else if (mounted) {
+      void refreshOnboarding()
+      if (!isTerminal.value)
+        startPolling()
+    }
+  })
   onMounted(() => {
     mounted = true
     void refreshOnboarding()
@@ -116,5 +135,5 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
     generation += 1
     stopPolling()
   })
-  return { onboarding, refreshError, refreshOnboarding }
+  return { onboarding, rawOnboarding, refreshError, refreshOnboarding }
 }

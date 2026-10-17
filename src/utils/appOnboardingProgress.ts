@@ -1,6 +1,7 @@
 import type { Json } from '~/types/supabase.types'
 import { getAppOnboardingStepIds, parseAppOnboarding } from '~/services/appOnboarding'
 import { BUILDER_STEP_IDS, hasSupportedBuilderTodoList, parseBuilderOnboarding } from '~/services/builderOnboardingChecklist'
+import { hasDualOnboardingChecklists, resolveDualChecklistResume } from '~/utils/dualOnboardingChecklists'
 
 export const APP_ONBOARDING_FEATURES = ['cli_install', 'ota', 'builder'] as const
 export type AppOnboardingFeatureKey = typeof APP_ONBOARDING_FEATURES[number]
@@ -272,6 +273,11 @@ export function shouldShowGettingStartedNav(onboarding: unknown, extras?: Gettin
   const ledger = parseAppOnboardingLedger(onboarding)
   if (ledger.getting_started_dismissed_at)
     return false
+
+  if (hasDualOnboardingChecklists(onboarding)) {
+    const { otaComplete, builderComplete } = resolveDualChecklistResume(onboarding)
+    return !otaComplete || !builderComplete
+  }
 
   const checklist = parseAppOnboarding(onboarding)
   if (checklist.todo_list_version === 3 || checklist.todo_list_version === 4) {

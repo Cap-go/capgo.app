@@ -86,8 +86,6 @@ test('requires a successful cloud build before showing completion', async ({ pag
 for (const { assignment, checklist } of [
   { assignment: 'builder-only', checklist: 'builder' },
   { assignment: 'ota-only', checklist: 'ota' },
-  { assignment: 'both-builder', checklist: 'builder' },
-  { assignment: 'both-ota', checklist: 'ota' },
 ] as const) {
   test(`routes ${assignment} onboarding to the ${checklist} checklist`, async ({ page }) => {
     await page.goto(`/playwright/fixtures/onboarding-setup.html?view=flow&assignment=${assignment}&platform=ios&resume=com.example.onboarding-preview&step=setup`)
@@ -99,5 +97,13 @@ for (const { assignment, checklist } of [
       await expect(page.locator('[data-test="onboarding-setup-cli"]')).toBeVisible()
       await expect(page.locator('[data-test="builder-checklist"]')).toHaveCount(0)
     }
+  })
+}
+
+for (const assignment of ['both-builder', 'both-ota']) {
+  test(`asks for a goal for ${assignment} without meaningful progress`, async ({ page }) => {
+    await page.goto(`/playwright/fixtures/onboarding-setup.html?view=flow&assignment=${assignment}&platform=ios&resume=com.example.onboarding-preview&step=setup`)
+    await expect(page.locator('[data-test="setup-goal-chooser"]')).toBeVisible()
+    await expect(page.getByRole('tab')).toHaveCount(0)
   })
 }

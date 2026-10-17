@@ -51,6 +51,20 @@ const state = {
   appWrites: [] as Array<{ method: string, body: unknown }>,
 }
 const events: string[] = []
+if (params.get('otaProgress') === '1')
+  state.steps.login_cli_mcp = { status: 'done' }
+if (params.get('builderProgress') === 'android' || params.get('builderProgress') === 'ios')
+  state.builderSteps[params.get('builderProgress') as 'ios' | 'android'].start_setup = { status: 'done' }
+if (params.get('otaComplete') === '1') {
+  for (const id of ['login_cli_mcp', 'add_channel', 'add_updater', 'add_code', 'run_device', 'upload_bundle', 'test_update'])
+    state.steps[id] = { status: 'done' }
+  state.outcome = 'completed'
+  state.channels.push({ id: 1, app_id: previewAppId, name: 'staging', public: true })
+}
+if (params.get('builderComplete') === 'ios' || params.get('builderComplete') === 'android') {
+  for (const step of Object.values(state.builderSteps[params.get('builderComplete') as 'ios' | 'android']))
+    step.status = 'done'
+}
 const channelEvents: Array<{ event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties }> = []
 const preview = { state, events, channelEvents, appId: ref(previewAppId), command: ref('npx @capgo/cli@latest i [API_KEY]'), hiding: ref(false), selectedOrgId: ref('') }
 const previewUserOnboarding = {

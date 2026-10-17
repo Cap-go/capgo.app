@@ -190,6 +190,17 @@ async function mockReleaseLive(page: Page) {
  * Add routes here when a PR touches a new screen reviewers should compare.
  */
 export const visualDiffRoutes: VisualDiffRoute[] = [
+  ...[
+    { slug: 'onboarding-dual-goals', query: '' },
+    { slug: 'onboarding-dual-live-updates', query: '&otaProgress=1' },
+    { slug: 'onboarding-dual-builder', query: '&builderProgress=android' },
+  ].map(({ slug, query }): VisualDiffRoute => ({
+    slug,
+    path: `/playwright/fixtures/onboarding-setup.html?view=flow&assignment=both-builder&resume=com.example.onboarding-preview&step=setup${query}`,
+    prepare: async (page) => {
+      await page.locator('[data-test="dual-onboarding-checklists"], [data-test="builder-checklist"]').first().waitFor()
+    },
+  })),
   { slug: 'login', path: '/login/', auth: false },
   { slug: 'dashboard', path: '/dashboard', auth: true },
   { slug: 'account-settings', path: '/settings/account', auth: true },
