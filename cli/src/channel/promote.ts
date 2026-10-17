@@ -57,8 +57,7 @@ export async function promoteChannelInternal(
   try {
     bundle = await currentBundleInternal(fromChannel, appId, {
       apikey: options.apikey,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
       quiet: true,
     }, true)
   }
@@ -73,8 +72,7 @@ export async function promoteChannelInternal(
 
   await setChannelInternal(toChannel, appId, {
     apikey: options.apikey,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
     bundle,
     ignoreMetadataCheck: options.ignoreMetadataCheck,
     acceptIncompatible: options.acceptIncompatible,

@@ -6,8 +6,7 @@ interface FinalizeBundleOptions {
   apikey: string
   appId: string
   bundle: string
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
   reporter: UploadReporter
 }
 
@@ -15,8 +14,7 @@ interface FinalizeInvokeOptions {
   apikey: string
   method?: string
   body?: { app_id: string, name: string }
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
 }
 
 interface FinalizeBundleDependencies {
@@ -37,8 +35,7 @@ export async function finalizeUploadedBundle(
   const { data: config, error: configError } = await dependencies.invoke('private/config', {
     apikey: options.apikey,
     method: 'GET',
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
   if (configError || !(config as { useNewFinalizeBundleUpload?: boolean } | null)?.useNewFinalizeBundleUpload) {
     await legacyFinalize()
@@ -51,8 +48,7 @@ export async function finalizeUploadedBundle(
   const { error } = await dependencies.invoke('private/finalize_bundle_upload', {
     apikey: options.apikey,
     body: { app_id: options.appId, name: options.bundle },
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
 
   if (error) {

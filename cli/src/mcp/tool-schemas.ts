@@ -152,6 +152,7 @@ export const mcpGetStatsInputSchema = z.object({
 
 export const mcpObserveInputSchema = observeOptionsObjectSchema.omit({
   apikey: true,
+  apiHost: true,
   supaHost: true,
   supaAnon: true,
 }).superRefine(refineObserveDeviceId)

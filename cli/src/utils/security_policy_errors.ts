@@ -14,7 +14,7 @@
 // ============================================================================
 
 export const SECURITY_POLICY_ERRORS = {
-  // API key expiration - returned from supabase.ts and organization endpoints
+  // API key expiration - returned from client.ts and organization endpoints
   ORG_REQUIRES_EXPIRING_KEY: 'org_requires_expiring_key',
   EXPIRATION_REQUIRED: 'expiration_required',
   EXPIRATION_EXCEEDS_MAX: 'expiration_exceeds_max',

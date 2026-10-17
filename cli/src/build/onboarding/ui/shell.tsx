@@ -107,9 +107,8 @@ export interface OnboardingShellProps {
   guidedHelperUsable: boolean
   apikey?: string
   loginServices: BuilderLoginServices
-  supaHost?: string
-  /** Custom Supabase anon key for self-hosting (--supa-anon). */
-  supaAnon?: string
+  /** Capgo API override (--api-host); Capgo cloud when omitted. */
+  apiHost?: string
   /** Correlation id for this onboarding run; threaded into every analytics event the apps emit. */
   journeyId: string
   /** Pre-resolved platform (--platform flag or the single existing native dir); skips the picker. */
@@ -146,7 +145,7 @@ const AnalyticsNotice: FC = () => (
   </Box>
 )
 
-const OnboardingShell: FC<OnboardingShellProps> = ({ appId, suggestedSource, appSelectionServices, iosBundleIdInitial, appflowPackageName, iosDir, androidDir, guidedHelperUsable, apikey, loginServices, supaHost, supaAnon, journeyId, initialPlatform, updateInfo, analyticsNotice, onResolvePlatform, onStep, onResult, onBeforeExit, onAuthenticated, onAppSelected, onAppSelectionEvent }) => {
+const OnboardingShell: FC<OnboardingShellProps> = ({ appId, suggestedSource, appSelectionServices, iosBundleIdInitial, appflowPackageName, iosDir, androidDir, guidedHelperUsable, apikey, loginServices, apiHost, journeyId, initialPlatform, updateInfo, analyticsNotice, onResolvePlatform, onStep, onResult, onBeforeExit, onAuthenticated, onAppSelected, onAppSelectionEvent }) => {
   const { exit } = useApp()
   const { cols, rows } = useTerminalSize()
   const [ready, setReady] = useState<ReadyApp | null>(null)
@@ -246,11 +245,11 @@ const OnboardingShell: FC<OnboardingShellProps> = ({ appId, suggestedSource, app
   // exiting the wizard. The app owns the size decision so a shrink→regrow keeps
   // the user exactly where they were.
   if (ready?.kind === 'ios' && selectedAppId)
-    return <OnboardingApp appId={selectedAppId} iosBundleIdInitial={iosBundleIdInitial} initialProgress={ready.progress} iosDir={iosDir} guidedHelperUsable={guidedHelperUsable} apikey={authenticatedKey} supaHost={supaHost} supaAnon={supaAnon} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
+    return <OnboardingApp appId={selectedAppId} iosBundleIdInitial={iosBundleIdInitial} initialProgress={ready.progress} iosDir={iosDir} guidedHelperUsable={guidedHelperUsable} apikey={authenticatedKey} apiHost={apiHost} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
   if (ready?.kind === 'android' && selectedAppId)
-    return <AndroidOnboardingApp appId={selectedAppId} initialProgress={ready.progress} androidDir={androidDir} apikey={authenticatedKey} supaHost={supaHost} supaAnon={supaAnon} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
+    return <AndroidOnboardingApp appId={selectedAppId} initialProgress={ready.progress} androidDir={androidDir} apikey={authenticatedKey} apiHost={apiHost} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
   if (ready?.kind === 'appflow' && selectedAppId)
-    return <AppflowApp appId={selectedAppId} packageName={appflowPackageName ?? iosBundleIdInitial} scope={ready.scope} apikey={authenticatedKey} supaHost={supaHost} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
+    return <AppflowApp appId={selectedAppId} packageName={appflowPackageName ?? iosBundleIdInitial} scope={ready.scope} apikey={authenticatedKey} apiHost={apiHost} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
 
   // Not ready yet: the platform picker (or a brief framed load). The picker is
   // NOT gated to the full 80×49 onboarding floor — it's small and adapts

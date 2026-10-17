@@ -19,7 +19,6 @@ const CAPACITOR_CONFIG_PATH = join(ROOT_DIR, 'capacitor.config.ts')
 
 // Supabase base URL (not including /functions/v1)
 const SUPABASE_URL = env.SUPABASE_URL || 'http://localhost:54321'
-const SUPABASE_ANON_KEY = env.SUPABASE_ANON_KEY || 'sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH'
 
 /**
  * SDK-based CLI test utilities
@@ -602,8 +601,7 @@ async function buildUploadPayload(appId: string, options: UploadOptions) {
 export function createTestSDK(apikey: string = APIKEY_TEST_ORG_SUPER_ADMIN) {
   const sdk = new CapgoSDK({
     apikey,
-    supaHost: SUPABASE_URL,
-    supaAnon: SUPABASE_ANON_KEY,
+    apiHost: `${SUPABASE_URL}/functions/v1`,
   })
 
   // Keep repo tests on repo-controlled RBAC checks while the published CLI SDK
@@ -1093,8 +1091,7 @@ export async function generateEncryptionKeysSDK(appId: string, force = true) {
         import { CapgoSDK } from '@capgo/cli/sdk'
 
         const sdk = new CapgoSDK({
-          supaHost: ${JSON.stringify(SUPABASE_URL)},
-          supaAnon: ${JSON.stringify(SUPABASE_ANON_KEY)},
+          apiHost: ${JSON.stringify(`${SUPABASE_URL}/functions/v1`)},
         })
 
         const result = await sdk.generateEncryptionKeys({ force: ${force ? 'true' : 'false'} })

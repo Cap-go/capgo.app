@@ -13,6 +13,15 @@ const bodySchema = z.object({
   orgId: z.string().optional(),
   page: integerLikeSchema.refine(page => Number.isSafeInteger(page) && page >= 0, { message: 'page must be a non-negative integer' }).optional(),
 })
+// The DB only constrains min_length when present, so stored policies can be partial.
+const passwordPolicyConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  min_length: z.number().int().optional(),
+  require_uppercase: z.boolean().optional(),
+  require_number: z.boolean().optional(),
+  require_special: z.boolean().optional(),
+})
+
 const orgSchema = z.object({
   id: z.uuid(),
   created_by: z.uuid(),
@@ -23,6 +32,11 @@ const orgSchema = z.object({
   management_email: z.email(),
   customer_id: z.string().nullable(),
   website: z.string().nullable(),
+  enforcing_2fa: z.boolean(),
+  password_policy_config: passwordPolicyConfigSchema.nullable(),
+  require_apikey_expiration: z.boolean(),
+  max_apikey_expiration_days: z.number().nullable(),
+  enforce_hashed_api_keys: z.boolean(),
 })
 
 const orgsSchema = z.array(orgSchema)

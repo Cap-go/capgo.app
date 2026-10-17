@@ -26,7 +26,7 @@ export function getSupabaseSource(): string | undefined {
 }
 
 // --- instrumentation gate: off unless a CLI/MCP entrypoint enables it, so the
-//     SDK bundle (which transitively imports createSupabaseClient) stays clean.
+//     SDK bundle (which transitively imports createCapgoClient) stays clean.
 let instrumentationEnabled = false
 
 export function enableSupabaseInstrumentation(): void {
@@ -105,6 +105,17 @@ export function deriveSupabaseOperation(url: string, method: string): string {
 
   const marker = '/rest/v1/'
   const idx = pathname.indexOf(marker)
+  if (idx < 0) {
+    // Capgo HTTP API route: keep only static segments so ids (app ids, etc.) never leak.
+    const segments: string[] = []
+    for (const segment of pathname.split('/').filter(Boolean)) {
+      // Letters only (plus the static `2fa` route) so ids/app ids never become labels.
+      if (segments.length >= 4 || !/^(?:[a-z_-]+|2fa)$/.test(segment))
+        break
+      segments.push(segment)
+    }
+    return `${method} ${segments.join('/') || pathname}`
+  }
   const after = idx >= 0 ? pathname.slice(idx + marker.length) : pathname.replace(/^\//, '')
   if (after.startsWith('rpc/')) {
     const fn = after.slice('rpc/'.length).split('/')[0]
@@ -116,7 +127,7 @@ export function deriveSupabaseOperation(url: string, method: string): string {
 
 /**
  * Reads the Capgo API key from a Supabase request's `capgkey` header (set by
- * createSupabaseClient). Lets perf telemetry attribute the call to the exact
+ * createCapgoClient). Lets perf telemetry attribute the call to the exact
  * key used — even when it came from `--apikey` rather than env / a saved file,
  * a case where the global `trackEvent` key-lookup would otherwise find nothing.
  */

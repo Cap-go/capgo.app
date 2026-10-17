@@ -281,10 +281,8 @@ interface AppProps {
   guidedHelperUsable: boolean
   /** Optional Capgo API key passed via -a/--apikey flag; takes precedence over saved key */
   apikey?: string
-  // Capgo API gateway override (--supa-host); prod when omitted.
-  supaHost?: string
-  /** Custom Supabase anon key for self-hosting (--supa-anon). */
-  supaAnon?: string
+  /** Capgo API override (--api-host); Capgo cloud when omitted. */
+  apiHost?: string
   /** Correlation id for this onboarding run; emitted as `journey_id` on every analytics event. */
   journeyId: string
   /** Reports the current step to the shell on every transition, so the caller can
@@ -337,7 +335,7 @@ async function runRunnerCommand(runner: string, args: string[]): Promise<{ succe
   })
 }
 
-const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgress, iosDir, guidedHelperUsable, apikey, supaHost, supaAnon, journeyId, onStep, onResult, onBeforeExit }) => {
+const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgress, iosDir, guidedHelperUsable, apikey, apiHost, journeyId, onStep, onResult, onBeforeExit }) => {
   const { exit } = useApp()
   const exitAfterBeforeExit = useCallback(() => {
     exitAfterOnboardingBeforeExit(onBeforeExit, exit)
@@ -483,7 +481,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
   // Buffer of telemetry events that occurred before `resolvedOrgId` landed.
   // Drained in order when the org id becomes available. Without this buffer,
   // any step transitions during the async org-id resolution (which involves
-  // two HTTP round-trips: createSupabaseClient + getOrganizationId) would be
+  // two HTTP round-trips: createCapgoClient + getOrganizationId) would be
   // dropped from the funnel.
   const pendingTelemetryRef = useRef<Array<{
     step: OnboardingStep
@@ -519,7 +517,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
 
     let cancelled = false
     void (async () => {
-      const orgId = await getOrganizationId(resolvedApiKeyRef.current!, appId, { supaHost, supaAnon }).catch(() => null)
+      const orgId = await getOrganizationId(resolvedApiKeyRef.current!, appId, { apiHost }).catch(() => null)
       if (orgId && !cancelled)
         setResolvedOrgId(orgId)
     })()
@@ -527,7 +525,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
     return () => {
       cancelled = true
     }
-  }, [appId, supaHost, supaAnon])
+  }, [appId, apiHost])
 
   const [log, setLog] = useState<LogEntry[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -1692,7 +1690,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
         setSupportBusyText('Uploading your logs to Capgo support…')
         setStep('support-uploading') // show a spinner while the (network) upload runs
         return uploadSupportLogs({
-          apiHost: supaHost ?? 'https://api.capgo.app',
+          apiHost: apiHost ?? 'https://api.capgo.app',
           apikey: resolvedApiKeyRef.current ?? apikey ?? '',
           appId,
           jobId: aiJobId ?? undefined,
@@ -1729,7 +1727,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
         setSupportBusyText('Uploading your logs to Capgo support…')
         setStep('support-uploading')
         return uploadSupportLogs({
-          apiHost: supaHost ?? 'https://api.capgo.app',
+          apiHost: apiHost ?? 'https://api.capgo.app',
           apikey: resolvedApiKeyRef.current ?? apikey ?? '',
           appId,
           jobId: aiJobId ?? undefined,
@@ -1738,7 +1736,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
       },
       print: msg => addLog(msg, 'cyan'),
     })
-  }, [appId, apikey, aiJobId, error, log, buildOutput, askAiUploadConfirm, readInternalLogLines, addLog, supaHost])
+  }, [appId, apikey, aiJobId, error, log, buildOutput, askAiUploadConfirm, readInternalLogLines, addLog, apiHost])
   // ── Async step handlers ──
 
   useEffect(() => {
@@ -2060,7 +2058,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
         }, true)
 
         const result = await runCapgoAiAnalysis({
-          apiHost: supaHost ?? 'https://api.capgo.app',
+          apiHost: apiHost ?? 'https://api.capgo.app',
           apikey: resolvedApiKeyRef.current ?? apikey ?? '',
           jobId: aiJobId,
           appId,
@@ -2849,12 +2847,12 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
         defaultExportPath,
         generateWorkflow,
         writeWorkflowFile,
-        // Merge the --supa-host override into the build request options — the
+        // Merge the --api-host override into the build request options — the
         // shared tail builds the options itself (apikey/platform/caller-handled),
         // so the driver injects the gateway override here (parity with main's
         // bespoke requesting-build body).
         requestBuildInternal: (id, options, silent, logger) =>
-          requestBuildInternal(id, { ...options, supaHost, builderJourneyId: journeyId }, silent, logger),
+          requestBuildInternal(id, { ...options, apiHost, builderJourneyId: journeyId }, silent, logger),
 
         // ── streaming / telemetry / preload sinks (forwarded into the shared tail) ──
         // The rich streaming BuildLogger requesting-build forwards into

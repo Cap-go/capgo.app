@@ -53,8 +53,7 @@ describe('bundle upload finalization', () => {
       apikey: 'test-key',
       appId: 'com.example.app',
       bundle: '1.2.3',
-      supaHost: 'http://localhost:54321',
-      supaAnon: 'anon-key',
+      apiHost: 'http://localhost:54321/functions/v1',
       reporter,
     }, vi.fn(), {
       invoke,
@@ -64,14 +63,12 @@ describe('bundle upload finalization', () => {
     expect(invoke).toHaveBeenNthCalledWith(1, 'private/config', {
       apikey: 'test-key',
       method: 'GET',
-      supaHost: 'http://localhost:54321',
-      supaAnon: 'anon-key',
+      apiHost: 'http://localhost:54321/functions/v1',
     })
     expect(invoke).toHaveBeenNthCalledWith(2, 'private/finalize_bundle_upload', {
       apikey: 'test-key',
       body: { app_id: 'com.example.app', name: '1.2.3' },
-      supaHost: 'http://localhost:54321',
-      supaAnon: 'anon-key',
+      apiHost: 'http://localhost:54321/functions/v1',
     })
     expect(spinner.start).toHaveBeenCalledWith('Finalizing bundle upload...')
     expect(spinner.stop).toHaveBeenCalledWith('Bundle upload finalized')

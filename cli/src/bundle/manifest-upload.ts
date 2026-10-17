@@ -318,7 +318,7 @@ function manifestUploadRetryDelayMs(error: unknown): number | null {
 export async function requestManifestUpload(
   apikey: string,
   request: ManifestUploadRequest,
-  options: Pick<CapgoCliInvokeOptions, 'supaHost' | 'supaAnon'> = {},
+  options: Pick<CapgoCliInvokeOptions, 'apiHost'> = {},
   invoke: ManifestUploadInvoke = invokeCapgoCliApi,
   sleep: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms)),
 ): Promise<ResolvedManifestUpload> {
@@ -332,8 +332,7 @@ export async function requestManifestUpload(
     let { data, error } = await invoke<unknown>('private/request_manifest_upload', {
       apikey,
       body: request,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
     })
     // The server answers 503 for transient database failures; retry briefly.
     for (let attempt = 0; error && attempt < MANIFEST_UPLOAD_MAX_RETRIES; attempt++) {
@@ -344,8 +343,7 @@ export async function requestManifestUpload(
       ;({ data, error } = await invoke<unknown>('private/request_manifest_upload', {
         apikey,
         body: request,
-        supaHost: options.supaHost,
-        supaAnon: options.supaAnon,
+        apiHost: options.apiHost,
       }))
     }
     if (error)

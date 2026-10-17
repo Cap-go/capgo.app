@@ -1,5 +1,5 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database } from '../types/supabase.types'
+import type { CapgoClient } from '../utils'
+import { fetchCliChannels } from '../api/cli-data'
 import { formatError } from '../utils'
 import { isChannelAlreadyExistsError } from './channel-conflict'
 
@@ -15,21 +15,20 @@ interface ChannelSelectionPrompts {
 }
 
 export async function selectOnboardingChannel(
-  supabase: SupabaseClient<Database>,
+  client: CapgoClient,
   appId: string,
   preferredName: string,
   prompts: ChannelSelectionPrompts,
 ): Promise<string> {
-  const { data, error } = await supabase
-    .from('channels')
-    .select('name, public')
-    .eq('app_id', appId)
-    .order('name')
-
-  if (error)
+  let rows: Awaited<ReturnType<typeof fetchCliChannels>>
+  try {
+    rows = await fetchCliChannels(client, appId)
+  }
+  catch (error) {
     throw new Error(`Cannot check existing channels: ${formatError(error)}`)
+  }
 
-  const channels: OnboardingChannel[] = data ?? []
+  const channels: OnboardingChannel[] = rows.map(row => ({ name: row.name, public: row.public }))
   const existingChannel = channels.find(channel => channel.name === preferredName)
     ?? channels.find(channel => channel.public)
     ?? channels[0]

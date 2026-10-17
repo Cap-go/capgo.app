@@ -14,8 +14,7 @@ export interface OnboardingCheckOptions {
   capacitorConfig?: string
   packageJson?: string
   mainFile?: string
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
 }
 
 export function startOnboardingCheck(command: Command, commandPath: string, workerUrl: URL, attemptIds?: string[]): void {
@@ -37,8 +36,7 @@ export function startOnboardingCheck(command: Command, commandPath: string, work
       capacitorConfig: text(options.capacitorConfig),
       packageJson: text(options.packageJson),
       mainFile: text(options.mainFile),
-      supaHost: text(options.supaHost),
-      supaAnon: text(options.supaAnon),
+      apiHost: text(options.apiHost),
     }
     const worker = new Worker(workerUrl, { workerData, stdout: true, stderr: true })
     // Discovery/config loading must not write into terminal UIs or MCP stdout.

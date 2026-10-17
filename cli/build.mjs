@@ -147,25 +147,6 @@ const smartNoopIonicCliFrameworkOutput = {
   },
 }
 
-const noopSupabaseRealtimeJs = {
-  name: 'noop-supabase-realtime-js',
-  setup(build) {
-    build.onResolve({ filter: /@supabase\/realtime-js/ }, args => ({
-      path: args.path,
-      namespace: 'noop-supabase-realtime-js',
-    }))
-    build.onLoad({ filter: /.*/, namespace: 'noop-supabase-realtime-js' }, () => ({
-      contents: `
-        export class RealtimeClient {
-          constructor() {}
-          connect() {}
-          disconnect() {}
-        }
-      `,
-    }))
-  },
-}
-
 const stubPrompts = {
   name: 'stub-prompts',
   setup(build) {
@@ -180,85 +161,6 @@ const stubPrompts = {
           throw new Error('Prompts are not supported in this CLI build');
         }
       `,
-    }))
-  },
-}
-
-const noopSupabaseAuthJs = {
-  name: 'noop-supabase-auth-js',
-  setup(build) {
-    build.onResolve({ filter: /@supabase\/auth-js/ }, args => ({
-      path: args.path,
-      namespace: 'noop-supabase-auth-js',
-    }))
-    build.onLoad({ filter: /.*/, namespace: 'noop-supabase-auth-js' }, () => ({
-      contents: `
-        // Stub for @supabase/auth-js - we don't use authentication, just API calls
-        const noopAsync = () => Promise.resolve({ data: { session: null, user: null }, error: null });
-        const noopHandler = {
-          get: (target, prop) => {
-            if (prop === 'constructor') return target.constructor;
-            if (prop === 'then' || prop === 'catch' || prop === 'finally') return undefined;
-            if (typeof prop === 'symbol') return undefined;
-            // Return method that returns properly structured promises
-            if (prop === 'getSession') return () => Promise.resolve({ data: { session: null, user: null }, error: null });
-            if (prop === 'onAuthStateChange') return () => ({ data: { subscription: { unsubscribe: () => {} } }, error: null });
-            return noopAsync;
-          }
-        };
-
-        export class GoTrueClient {
-          constructor(options) {
-            this.options = options;
-            return new Proxy(this, noopHandler);
-          }
-        }
-        export class GoTrueAdminApi {
-          constructor(options) {
-            this.options = options;
-            return new Proxy(this, noopHandler);
-          }
-        }
-        export class AuthClient extends GoTrueClient {}
-        export class AuthAdminApi extends GoTrueAdminApi {}
-
-        // Export error classes
-        export class AuthError extends Error {}
-        export class AuthApiError extends AuthError {}
-        export class AuthRetryableError extends AuthError {}
-        export class AuthSessionMissingError extends AuthError {}
-        export class AuthInvalidTokenResponseError extends AuthError {}
-        export class AuthInvalidCredentialsError extends AuthError {}
-        export class AuthImplicitGrantRedirectError extends AuthError {}
-        export class AuthPKCEGrantCodeExchangeError extends AuthError {}
-        export class AuthWeakPasswordError extends AuthError {}
-
-        // Export helper functions
-        export const navigatorLock = noopAsync;
-        export const processLock = noopAsync;
-        export class NavigatorLockAcquireTimeoutError extends Error {}
-        export const lockInternals = {};
-
-        // Export type helpers
-        export const isAuthError = () => false;
-        export const isAuthApiError = () => false;
-        export const isAuthRetryableError = () => false;
-        export const isAuthSessionMissingError = () => false;
-        export const isAuthWeakPasswordError = () => false;
-      `,
-    }))
-  },
-}
-
-const noopSupabaseNodeFetch = {
-  name: 'noop-supabase-node-fetch',
-  setup(build) {
-    build.onResolve({ filter: /@supabase\/node-fetch/ }, args => ({
-      path: args.path,
-      namespace: 'noop',
-    }))
-    build.onLoad({ filter: /.*/, namespace: 'noop' }, () => ({
-      contents: 'export default {}',
     }))
   },
 }
@@ -338,9 +240,7 @@ const buildCLI = Bun.build({
     noopXml2js,
     noopIonicUtilsSubprocess,
     smartNoopIonicCliFrameworkOutput,
-    noopSupabaseRealtimeJs,
     stubPrompts,
-    noopSupabaseAuthJs,
     stubReactDevtools,
   ],
 })
@@ -371,7 +271,6 @@ const buildSDK = Bun.build({
   plugins: [
     fixCapacitorCliDirname,
     ignorePunycode,
-    noopSupabaseNodeFetch,
   ],
 })
 

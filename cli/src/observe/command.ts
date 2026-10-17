@@ -17,8 +17,7 @@ export interface ObserveCliOptions {
   sort?: string
   limit?: string
   json?: boolean
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
 }
 
 interface ObserveFinding {
@@ -117,8 +116,7 @@ export async function observeCommand(
       sort: parseObserveSort(options.sort),
       limit: parseObserveLimit(options.limit),
       apikey: options.apikey,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
     })
 
     if (options.json) {

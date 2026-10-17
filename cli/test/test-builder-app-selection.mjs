@@ -28,20 +28,20 @@ assert.deepEqual(rankVisibleApps(apps, 'com.example.weather').slice(0, 3).map(ap
   'com.example.weather.beta',
   'com.example.forecast',
 ])
-assert.equal(createBuilderAppSelectionServices({ supaHost: 'https://example.invalid' }).dashboardUrl, '', 'custom API hosts cannot use the hosted Dashboard')
+assert.equal(createBuilderAppSelectionServices({ apiHost: 'https://example.invalid' }).dashboardUrl, '', 'custom API hosts cannot use the hosted Dashboard')
 
 console.log('Builder app suggestion and similarity passed')
 
 {
   const paths = []
   const page = Array.from({ length: 50 }, (_, index) => ({ app_id: `com.example.app${index}`, name: `App ${index}` }))
-  const result = await listVisibleBuilderApps('test-key', { supaHost: 'https://example.invalid', supaAnon: 'anon-test' }, async (path, options) => {
+  const result = await listVisibleBuilderApps('test-key', { apiHost: 'https://example.invalid' }, async (path, options) => {
     paths.push({ path, options })
     return { data: path.endsWith('page=0') ? page : [{ app_id: 'com.example.last', name: 'Last' }], error: null }
   })
   assert.equal(result.length, 51)
   assert.deepEqual(paths.map(item => item.path), ['app?page=0', 'app?page=1'])
-  assert.ok(paths.every(item => item.options.apikey === 'test-key' && item.options.supaHost === 'https://example.invalid' && item.options.supaAnon === 'anon-test'))
+  assert.ok(paths.every(item => item.options.apikey === 'test-key' && item.options.apiHost === 'https://example.invalid'))
   await assert.rejects(listVisibleBuilderApps('test-key', {}, async path => path.endsWith('page=0')
     ? { data: page, error: null }
     : { data: null, error: new Error('page failed') }), error => error instanceof AppSelectionError && error.code === 'list')
@@ -49,26 +49,30 @@ console.log('Builder app suggestion and similarity passed')
 
 {
   const calls = []
-  const request = async (path) => {
+  const request = async (path, options) => {
+    if (path === 'private/cli/permissions') {
+      calls.push({ path, body: options?.body })
+      return { data: { permissions: { 'app.build_native': true } }, error: null }
+    }
     calls.push(path)
     return { data: { app_id: 'com.example.weather', name: 'Weather' }, error: null }
   }
-  const createClient = async () => ({ rpc: async (name, args) => {
-    calls.push({ name, args })
-    return { data: true, error: null }
-  } })
-  await verifyBuilderApp('test-key', 'com.example.weather', {}, { request, createClient })
+  await verifyBuilderApp('test-key', 'com.example.weather', {}, { request })
   assert.equal(calls[0], 'app/com.example.weather')
-  assert.equal(calls[1].name, 'cli_check_permission')
-  assert.equal(calls[1].args.permission_key, 'app.build_native')
-  assert.equal(calls[1].args.app_id, 'com.example.weather')
+  assert.equal(calls[1].path, 'private/cli/permissions')
+  assert.deepEqual(calls[1].body.permissions, ['app.build_native'])
+  assert.equal(calls[1].body.app_id, 'com.example.weather')
   await assert.rejects(verifyBuilderApp('test-key', 'com.example.weather', {}, {
-    request,
-    createClient: async () => ({ rpc: async () => ({ data: false, error: null }) }),
+    request: async (path, options) => {
+      if (path === 'private/cli/permissions') {
+        calls.push({ path, body: options?.body })
+        return { data: { permissions: { 'app.build_native': false } }, error: null }
+      }
+      return { data: { app_id: 'com.example.weather', name: 'Weather' }, error: null }
+    },
   }), error => error instanceof AppSelectionError && error.code === 'build')
   await assert.rejects(verifyBuilderApp('test-key', 'com.example.weather', {}, {
     request: async () => ({ data: null, error: Object.assign(new Error('denied'), { context: { status: 401 } }) }),
-    createClient,
   }), error => error instanceof AppSelectionError && error.code === 'read')
 }
 

@@ -30,7 +30,7 @@ export async function uploadSupportLogs(input: SupportUploadInput): Promise<Supp
   catch {
     return null
   }
-  const host = trimTrailingSlashes(input.apiHost) // tolerate a trailing slash from --supa-host
+  const host = trimTrailingSlashes(input.apiHost) // tolerate a trailing slash from --api-host
   try {
     const res = await fetch(`${host}/build/support_logs`, {
       method: 'POST',

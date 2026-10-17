@@ -2,11 +2,13 @@ import type { OptionsBase } from '../schemas/base'
 import { intro, log, outro } from '@clack/prompts'
 import { Table } from '@sauber/table'
 import { trackEvent } from '../analytics/track'
+import { runCliPreflight } from '../api/preflight'
 import { checkAlerts } from '../api/update'
 import {
-  assertOrgPermission,
-  check2FAAccessForOrg,
-  createSupabaseClient,
+  createCapgoClient,
+  fetchCliMembers2faStatus,
+  fetchCliMembersPasswordPolicyStatus,
+  fetchCliOrganization,
   findSavedKey,
   formatError,
   invokeCapgoCliApi,
@@ -95,23 +97,20 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
     throw new Error('Missing organization id')
   }
 
-  const supabase = await createSupabaseClient(
+  const client = await createCapgoClient(
     enrichedOptions.apikey,
-    enrichedOptions.supaHost,
-    enrichedOptions.supaAnon,
+    enrichedOptions.apiHost,
   )
-  await assertOrgPermission(supabase, enrichedOptions.apikey, 'org.read_members', orgId, `Insufficient permissions to list members of organization ${orgId}`, silent)
-  await check2FAAccessForOrg(supabase, orgId, silent)
+  const httpOptions = {
+    apiHost: enrichedOptions.apiHost,
+  }
+  await runCliPreflight(client, { orgId, permission: 'org.read_members' }, { silent, permissionDeniedMessage: `Insufficient permissions to list members of organization ${orgId}` })
 
-  // TODO(cli-http): GET organization omits security settings (enforcing_2fa, password_policy_config, ...)
-  // Get organization name and security settings
-  const { data: orgData, error: orgError } = await supabase
-    .from('orgs')
-    .select('name, enforcing_2fa, password_policy_config, require_apikey_expiration, max_apikey_expiration_days, enforce_hashed_api_keys')
-    .eq('id', orgId)
-    .single()
-
-  if (orgError || !orgData) {
+  let orgData: Awaited<ReturnType<typeof fetchCliOrganization>>
+  try {
+    orgData = await fetchCliOrganization(enrichedOptions.apikey!, orgId, httpOptions)
+  }
+  catch (orgError) {
     if (!silent)
       log.error(`Cannot get organization details: ${formatError(orgError)}`)
     throw new Error(`Cannot get organization details: ${formatError(orgError)}`)
@@ -133,8 +132,7 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
     apikey: enrichedOptions.apikey!,
     method: 'GET',
     body: undefined,
-    supaHost: enrichedOptions.supaHost,
-    supaAnon: enrichedOptions.supaAnon,
+    apiHost: enrichedOptions.apiHost,
   })
 
   if (membersError) {
@@ -143,43 +141,38 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
     throw new Error(`Cannot get organization members: ${formatError(membersError)}`)
   }
 
-  // TODO(cli-http): no HTTP equivalent for check_org_members_2fa_enabled
-  // Get 2FA status for all members (only super_admins can call this)
-  const { data: membersStatus, error: statusError } = await supabase
-    .rpc('check_org_members_2fa_enabled', { org_id: orgId })
-
-  if (statusError) {
+  let membersStatus: Array<{ user_id: string, '2fa_enabled': boolean }> | null = null
+  try {
+    membersStatus = await fetchCliMembers2faStatus(enrichedOptions.apikey!, orgId, httpOptions)
+  }
+  catch (statusError) {
     if (!silent) {
-      if (statusError.message?.includes('NO_RIGHTS')) {
+      const message = formatError(statusError)
+      if (message.includes('NO_RIGHTS')) {
         log.warn('You need super_admin rights to view 2FA status of members')
       }
       else {
-        log.error(`Cannot get 2FA status: ${formatError(statusError)}`)
+        log.error(`Cannot get 2FA status: ${message}`)
       }
     }
-    // Continue without 2FA status
   }
 
-  // Get password policy compliance status (only if password policy is enabled)
   let passwordPolicyStatus: Array<{ user_id: string, password_policy_compliant: boolean }> | null = null
   if (hasPasswordPolicy) {
-    // TODO(cli-http): no HTTP equivalent for check_org_members_password_policy
-    const { data: policyStatus, error: policyError } = await supabase
-      .rpc('check_org_members_password_policy', { org_id: orgId })
-
-    if (policyError) {
+    try {
+      const policyStatus = await fetchCliMembersPasswordPolicyStatus(enrichedOptions.apikey!, orgId, httpOptions)
+      passwordPolicyStatus = policyStatus
+    }
+    catch (policyError) {
       if (!silent) {
-        if (policyError.message?.includes('NO_RIGHTS')) {
+        const message = formatError(policyError)
+        if (message.includes('NO_RIGHTS')) {
           log.warn('You need super_admin rights to view password policy compliance status')
         }
         else {
-          log.warn(`Cannot get password policy status: ${formatError(policyError)}`)
+          log.warn(`Cannot get password policy status: ${message}`)
         }
       }
-      // Continue without password policy status
-    }
-    else {
-      passwordPolicyStatus = policyStatus
     }
   }
 

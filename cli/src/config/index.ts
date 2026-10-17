@@ -218,10 +218,21 @@ module.exports = config
 
 export async function loadConfig(): Promise<ExtConfigPairs | undefined> {
   const configPath = findDefaultCapacitorConfigFile(cwd())
-  if (configPath && extname(configPath) === '.ts' && projectTypeScriptLacksClassicApi(cwd())) {
-    return {
-      config: await loadConfigTarget(configPath),
-      path: getConfigWriteTarget() ?? configPath,
+  if (configPath) {
+    const extension = extname(configPath)
+    // Prefer the config file in cwd for JSON/JS so isolated tests and app subfolders
+    // do not inherit a parent monorepo capacitor.config.ts via Capacitor's root walk.
+    if (extension === '.json' || extension === '.js') {
+      return {
+        config: await loadConfigTarget(configPath),
+        path: getConfigWriteTarget() ?? configPath,
+      }
+    }
+    if (extension === '.ts' && projectTypeScriptLacksClassicApi(cwd())) {
+      return {
+        config: await loadConfigTarget(configPath),
+        path: getConfigWriteTarget() ?? configPath,
+      }
     }
   }
   const config = await loadConfigCap()

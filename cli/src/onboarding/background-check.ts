@@ -11,14 +11,13 @@ interface BackgroundOnboardingCheck {
 export interface PreparedOnboardingCheck {
   project: OnboardingScanProject
   apiHost: string
-  anonKey?: string
   apikey: string
   command: string
   attemptId: string
 }
 
 export async function runOnboardingCheck(prepared: PreparedOnboardingCheck, check: BackgroundOnboardingCheck): Promise<void> {
-  const { project, apiHost, anonKey, apikey, command, attemptId } = prepared
+  const { project, apiHost, apikey, command, attemptId } = prepared
   setCurrentCliCommand(command)
   const trackScan = async (event: 'scan_started' | 'scan_ended', timestamp: number, tags: Record<string, string | number> = {}) => {
     try {
@@ -53,7 +52,7 @@ export async function runOnboardingCheck(prepared: PreparedOnboardingCheck, chec
       method: 'PUT',
       headers: buildCliRequestHeaders({
         'Content-Type': 'application/json',
-        'Authorization': apiHost.includes('/functions/v1') && anonKey ? `Bearer ${anonKey}` : apikey,
+        'Authorization': apikey,
         'capgkey': apikey,
       }),
       // Preserve source, outcome, and all unrelated onboarding steps.

@@ -1,9 +1,9 @@
 import type { OptionsBase } from '../schemas/base'
 import { intro, log, outro } from '@clack/prompts'
-import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
+import { checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { displayChannels, getActiveChannels } from '../api/channels'
 import { CliUserError } from '../shared/cli-user-error'
-import { createSupabaseClient, findSavedKey, getAppId, getConfig, getOrganizationId, sendEvent } from '../utils'
+import { createCapgoClient, findSavedKey, getAppId, getConfig, getOrganizationId, sendEvent } from '../utils'
 
 export async function listChannelsInternal(appId: string, options: OptionsBase, silent = false) {
   if (!silent)
@@ -26,15 +26,14 @@ export async function listChannelsInternal(appId: string, options: OptionsBase, 
     throw new CliUserError('Missing appId')
   }
 
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
-  await check2FAComplianceForApp(supabase, appId, silent)
-  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.read_channels', silent, true)
-  const orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
+  const client = await createCapgoClient(options.apikey, options.apiHost)
+  await checkAppExistsAndHasPermissionOrgErr(client, options.apikey, appId, 'app.read_channels', silent)
+  const orgId = await getOrganizationId(options.apikey!, appId, { apiHost: options.apiHost })
 
   if (!silent)
     log.info('Querying available channels in Capgo')
 
-  const allChannels = await getActiveChannels({ apikey: options.apikey!, silent, supaHost: options.supaHost, supaAnon: options.supaAnon }, appId)
+  const allChannels = await getActiveChannels({ apikey: options.apikey!, silent, apiHost: options.apiHost }, appId)
 
   if (!silent) {
     log.info(`Active channels in Capgo: ${allChannels?.length ?? 0}`)

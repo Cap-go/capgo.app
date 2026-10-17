@@ -2,11 +2,73 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { BRES, simpleError } from '../../utils/hono.ts'
-import { cloudlog } from '../../utils/logging.ts'
+import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { s3 } from '../../utils/s3.ts'
 import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
+
+const STORAGE_LIST_PAGE_SIZE = 100
+const STORAGE_REMOVE_BATCH_SIZE = 1000
+const STORAGE_MAX_FOLDER_DEPTH = 5
+
+// Supabase Storage reports failures through `{ error }` instead of throwing, and
+// `list()` is paginated (100 entries by default) and not recursive.
+async function listSupabaseStorageFiles(
+  c: Context<MiddlewareKeyVariables>,
+  bucket: string,
+  prefix: string,
+  depth = 0,
+): Promise<string[]> {
+  const paths: string[] = []
+  for (let offset = 0; ; offset += STORAGE_LIST_PAGE_SIZE) {
+    const { data, error } = await supabaseAdmin(c)
+      .storage
+      .from(bucket)
+      .list(prefix, { limit: STORAGE_LIST_PAGE_SIZE, offset })
+    if (error)
+      throw error
+    const entries = data ?? []
+    for (const entry of entries) {
+      const path = `${prefix}/${entry.name}`
+      // Folders are returned as placeholder entries without an id.
+      if (entry.id === null) {
+        if (depth < STORAGE_MAX_FOLDER_DEPTH)
+          paths.push(...await listSupabaseStorageFiles(c, bucket, path, depth + 1))
+      }
+      else {
+        paths.push(path)
+      }
+    }
+    if (entries.length < STORAGE_LIST_PAGE_SIZE)
+      return paths
+  }
+}
+
+async function removeSupabaseStorageFolder(
+  c: Context<MiddlewareKeyVariables>,
+  bucket: string,
+  prefix: string,
+  appId: string,
+  label: string,
+): Promise<void> {
+  try {
+    const paths = await listSupabaseStorageFiles(c, bucket, prefix)
+    for (let i = 0; i < paths.length; i += STORAGE_REMOVE_BATCH_SIZE) {
+      const { error } = await supabaseAdmin(c)
+        .storage
+        .from(bucket)
+        .remove(paths.slice(i, i + STORAGE_REMOVE_BATCH_SIZE))
+      if (error)
+        throw error
+    }
+    if (paths.length > 0)
+      cloudlog({ requestId: c.get('requestId'), message: `deleted ${label}`, count: paths.length, app_id: appId })
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: `error deleting ${label}`, error, app_id: appId })
+  }
+}
 
 export async function deleteApp(c: Context<MiddlewareKeyVariables>, appId: string, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
   if (!appId) {
@@ -31,29 +93,16 @@ export async function deleteApp(c: Context<MiddlewareKeyVariables>, appId: strin
     .single()
   const appStoragePrefix = app?.owner_org ? `orgs/${app.owner_org}/apps/${appId}/` : null
 
+  // Legacy per-user Supabase storage folder used by older CLI uploads.
+  // The `apps` bucket stores objects under {user_id}/{app_id}/...
+  if (apikey.user_id)
+    await removeSupabaseStorageFolder(c, 'apps', `${apikey.user_id}/${appId}`, appId, 'legacy user-scoped app storage')
+
   // Delete app icon from storage before deleting the app
   // App icons are stored at: images/org/{org_id}/{app_id}/icon
   // Note: Storage operations need admin access
-  if (app?.owner_org) {
-    try {
-      const { data: files } = await supabaseAdmin(c)
-        .storage
-        .from('images')
-        .list(`org/${app.owner_org}/${appId}`)
-
-      if (files && files.length > 0) {
-        const filePaths = files.map(file => `org/${app.owner_org}/${appId}/${file.name}`)
-        await supabaseAdmin(c)
-          .storage
-          .from('images')
-          .remove(filePaths)
-        cloudlog({ requestId: c.get('requestId'), message: 'deleted app images', count: files.length, app_id: appId })
-      }
-    }
-    catch (error) {
-      cloudlog({ requestId: c.get('requestId'), message: 'error deleting app images', error, app_id: appId })
-    }
-  }
+  if (app?.owner_org)
+    await removeSupabaseStorageFolder(c, 'images', `org/${app.owner_org}/${appId}`, appId, 'app images')
 
   // Admin client for internal stats tables that have restrictive RLS policies
   const admin = supabaseAdmin(c)

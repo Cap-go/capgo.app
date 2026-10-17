@@ -2,12 +2,12 @@ import type { BundleCompatibilityOptions } from '../schemas/bundle'
 import type { Compatibility } from '../utils'
 import { intro, log } from '@clack/prompts'
 import { trackEvent } from '../analytics/track'
-import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
+import { checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { formatTable } from '../terminal-table'
 import { CliUserError } from '../shared/cli-user-error'
 import {
   checkCompatibilityCloud,
-  createSupabaseClient,
+  createCapgoClient,
   findSavedKey,
   formatError,
   getAppId,
@@ -58,27 +58,27 @@ export async function checkCompatibilityInternal(
     throw new CliUserError('Missing appId')
   }
 
-  const supabase = await createSupabaseClient(
+  const client = await createCapgoClient(
     enrichedOptions.apikey,
-    enrichedOptions.supaHost,
-    enrichedOptions.supaAnon,
+    enrichedOptions.apiHost,
   )
-  await check2FAComplianceForApp(supabase, resolvedAppId, silent)
   await checkAppExistsAndHasPermissionOrgErr(
-    supabase,
+    client,
     enrichedOptions.apikey,
     resolvedAppId,
     'app.read_bundles',
     silent,
-    true,
   )
 
   const compatibility = await checkCompatibilityCloud(
-    supabase,
+    enrichedOptions.apikey!,
     resolvedAppId,
     channel,
     enrichedOptions.packageJson,
     enrichedOptions.nodeModules,
+    {
+      apiHost: enrichedOptions.apiHost,
+    },
   )
 
   const hasIncompatible = compatibility.finalCompatibility.some(entry => !isCompatible(entry))

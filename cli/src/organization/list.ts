@@ -6,7 +6,8 @@ import { trackEvent } from '../analytics/track'
 import { checkAlerts } from '../api/update'
 import {
   consoleWebUrl,
-  createSupabaseClient,
+  createCapgoClient,
+  fetchOrganizations,
   findSavedKey,
   formatError,
   resolveUserIdFromApiKey,
@@ -70,25 +71,27 @@ export async function listOrganizationsInternal(options: OptionsBase, silent = f
     throw new Error('Missing API key')
   }
 
-  const supabase = await createSupabaseClient(
+  const client = await createCapgoClient(
     enrichedOptions.apikey,
-    enrichedOptions.supaHost,
-    enrichedOptions.supaAnon,
+    enrichedOptions.apiHost,
   )
-  await resolveUserIdFromApiKey(supabase, enrichedOptions.apikey)
+  const httpOptions = {
+    apiHost: enrichedOptions.apiHost,
+  }
+  await resolveUserIdFromApiKey(client, enrichedOptions.apikey, false, httpOptions)
 
   if (!silent)
     log.info('Getting organizations from Capgo')
 
-  const { error, data: allOrganizations } = await supabase.rpc('get_orgs_v7')
-
-  if (error) {
+  let organizations: Awaited<ReturnType<typeof fetchOrganizations>>
+  try {
+    organizations = await fetchOrganizations(enrichedOptions.apikey, httpOptions)
+  }
+  catch (error) {
     if (!silent)
       log.error(`Cannot get organizations ${formatError(error)}`)
     throw new Error(`Cannot get organizations: ${formatError(error)}`)
   }
-
-  const organizations = allOrganizations || []
 
   void trackEvent({ channel: 'organization', event: 'Orgs Listed', tags: { org_count: organizations.length } })
 
