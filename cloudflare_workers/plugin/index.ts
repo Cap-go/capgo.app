@@ -1,3 +1,5 @@
+import type { ExecutionContext, MessageBatch } from '@cloudflare/workers-types'
+import type { SnippetEdgeStatsEnv } from '../../supabase/functions/_backend/plugin_runtime/utils/snippetEdgeReplay.ts'
 import { app as channel_self } from '../../supabase/functions/_backend/plugin_runtime/plugins/channel_self.ts'
 import { app as stats } from '../../supabase/functions/_backend/plugin_runtime/plugins/stats.ts'
 import { app as updates } from '../../supabase/functions/_backend/plugin_runtime/plugins/updates.ts'
@@ -5,6 +7,8 @@ import { app as cache_purge_local } from '../../supabase/functions/_backend/plug
 import { app as latency } from '../../supabase/functions/_backend/plugin_runtime/private/latency.ts'
 import { app as ok } from '../../supabase/functions/_backend/plugin_runtime/public/ok.ts'
 import { createAllCatch, createHono, useCors } from '../../supabase/functions/_backend/plugin_runtime/utils/hono.ts'
+import { cloudlog } from '../../supabase/functions/_backend/plugin_runtime/utils/logging.ts'
+import { handleSnippetEdgeStatsMessage } from '../../supabase/functions/_backend/plugin_runtime/utils/snippetEdgeReplay.ts'
 import { version } from '../../supabase/functions/_backend/plugin_runtime/utils/version.ts'
 
 const functionName = 'plugin'
@@ -38,6 +42,20 @@ app.route('/cache_purge_local', cache_purge_local)
 
 createAllCatch(app, functionName)
 
+async function queue(batch: MessageBatch<unknown>, env: SnippetEdgeStatsEnv, ctx: ExecutionContext) {
+  for (const message of batch.messages) {
+    try {
+      await handleSnippetEdgeStatsMessage(env, message.id, message.body, request => app.fetch(request, env, ctx))
+      message.ack()
+    }
+    catch (error) {
+      cloudlog({ requestId: message.id, message: 'snippet edge stats queue error', error })
+      message.retry()
+    }
+  }
+}
+
 export default {
   fetch: app.fetch,
+  queue,
 }

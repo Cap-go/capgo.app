@@ -15,13 +15,37 @@
  *   bun run updates-edge-cache:set off --dry-run
  *
  * Envs come from cloudflare_workers/plugin/wrangler.jsonc.
+ *
+ * The snippet edge answers switch (SNIPPET_EDGE_ANSWER, see
+ * plugin_runtime/utils/snippetEdgeAnswer.ts) takes the same values:
+ *
+ *   bun run snippet-edge-answer:set 1%
+ *
+ * The secret only stops new snippet fills, so this also purges the stored
+ * ones (Cache-Tag SNIPPET_EDGE_ANSWERS_TAG). Run the purge alone after a
+ * LIMITED_APPS change:
+ *
+ *   bun run snippet-edge-answer:purge
+ *
+ * Purge env: CLOUDFLARE_API_TOKEN (Cache Purge) and CF_CACHE_PURGE_ZONE_IDS
+ * (comma separated, every zone the snippet runs on).
  */
 import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import process from 'node:process'
 import { parseJsonc, WRANGLER_PATH as WRANGLER_CONFIG } from './generate-plugin-route-hosts.ts'
 
-const SECRET_NAME = 'UPDATES_EDGE_CACHE'
+const SECRET_NAMES = ['UPDATES_EDGE_CACHE', 'SNIPPET_EDGE_ANSWER'] as const
+/** SNIPPET_EDGE_ANSWERS_TAG in plugin_runtime/utils/snippetEdgeAnswer.ts. */
+export const SNIPPET_EDGE_ANSWERS_TAG = 'capgo-snippet-edge-answers'
+
+export function resolveSecretName(args: string[]) {
+  const flag = args.find(arg => arg.startsWith('--secret='))
+  const name = flag ? flag.slice('--secret='.length) : SECRET_NAMES[0]
+  if (!(SECRET_NAMES as readonly string[]).includes(name))
+    throw new Error(`Unknown secret ${name}. Allowed: ${SECRET_NAMES.join(', ')}`)
+  return name
+}
 
 export function normalizeEdgeCacheValue(raw: string): string | null {
   const value = raw.trim().toLowerCase()
@@ -54,20 +78,63 @@ export function resolveTargetEnvs(requested: string[], available: string[]) {
   return requested
 }
 
-function main() {
+/** Drops every stored snippet answer in the given zones. */
+export async function purgeSnippetEdgeAnswers(token: string, zoneIds: string[], fetchImpl: typeof fetch = fetch) {
+  const failed: string[] = []
+  for (const zoneId of zoneIds) {
+    const response = await fetchImpl(`https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(zoneId)}/purge_cache`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags: [SNIPPET_EDGE_ANSWERS_TAG] }),
+    })
+    const json = await response.json().catch(() => null) as { success?: boolean } | null
+    if (!json?.success)
+      failed.push(zoneId)
+  }
+  return failed
+}
+
+async function purgeFromEnv(dryRun: boolean) {
+  const token = process.env.CLOUDFLARE_API_TOKEN?.trim()
+  const zoneIds = (process.env.CF_CACHE_PURGE_ZONE_IDS ?? '').split(',').map(id => id.trim()).filter(Boolean)
+  if (!token || zoneIds.length === 0) {
+    console.error(`Stored snippet answers were NOT purged (set CLOUDFLARE_API_TOKEN and CF_CACHE_PURGE_ZONE_IDS, then run bun run snippet-edge-answer:purge). Until then they keep answering until their TTL.`)
+    return false
+  }
+  console.log(`Purge Cache-Tag ${SNIPPET_EDGE_ANSWERS_TAG} -> ${zoneIds.join(', ')}${dryRun ? ' (dry run)' : ''}`)
+  if (dryRun)
+    return true
+  const failed = await purgeSnippetEdgeAnswers(token, zoneIds)
+  if (failed.length > 0) {
+    console.error(`Purge failed for zone(s): ${failed.join(', ')}`)
+    return false
+  }
+  return true
+}
+
+async function main() {
   const args = process.argv.slice(2)
   const dryRun = args.includes('--dry-run')
-  const [rawValue, ...requestedEnvs] = args.filter(arg => arg !== '--dry-run')
+  const SECRET_NAME = resolveSecretName(args)
+  if (args.includes('--purge-only')) {
+    if (!await purgeFromEnv(dryRun))
+      process.exit(1)
+    return
+  }
+  const [rawValue, ...requestedEnvs] = args.filter(arg => arg !== '--dry-run' && !arg.startsWith('--secret='))
   const value = rawValue ? normalizeEdgeCacheValue(rawValue) : null
   if (!value) {
-    console.error('Usage: bun run updates-edge-cache:set <off|on|N%> [env ...] [--dry-run]')
+    console.error('Usage: bun run updates-edge-cache:set <off|on|N%> [env ...] [--dry-run] [--secret=SNIPPET_EDGE_ANSWER]')
     process.exit(1)
   }
 
   const envs = resolveTargetEnvs(requestedEnvs, pluginEnvs(parseJsonc(readFileSync(WRANGLER_CONFIG, 'utf8'))))
   console.log(`${SECRET_NAME}=${value} -> ${envs.join(', ')}${dryRun ? ' (dry run)' : ''}`)
-  if (dryRun)
+  if (dryRun) {
+    if (SECRET_NAME === 'SNIPPET_EDGE_ANSWER')
+      await purgeFromEnv(true)
     return
+  }
 
   const failed: string[] = []
   for (const env of envs) {
@@ -84,7 +151,9 @@ function main() {
     process.exit(1)
   }
   console.log(`Done: ${envs.length} plugin worker(s) now use ${SECRET_NAME}=${value}`)
+  if (SECRET_NAME === 'SNIPPET_EDGE_ANSWER' && !await purgeFromEnv(false))
+    process.exit(1)
 }
 
 if (import.meta.main)
-  main()
+  void main()

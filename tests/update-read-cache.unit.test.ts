@@ -6,6 +6,7 @@ const payload = {
   allowDeviceCustomId: true,
   versionName: '1.2.3',
   keyId: null as string | null,
+  planValidUntil: null as number | null,
 }
 
 const body = {
