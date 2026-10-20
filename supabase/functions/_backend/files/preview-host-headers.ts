@@ -13,6 +13,7 @@ export function withPreviewHostHeaders(request: Request, response: Response): Re
   if (!isPreviewCapgoHost(hostname))
     return response
 
-  applyPreviewXRobotsTag(response.headers)
-  return response
+  const mutableResponse = new Response(response.body, response)
+  applyPreviewXRobotsTag(mutableResponse.headers)
+  return mutableResponse
 }
