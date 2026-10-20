@@ -13,7 +13,7 @@ import { cloudlog } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { queryJson } from '../utils/pg_rls.ts'
 import { backgroundTask, getEnv, isValidAppId } from '../utils/utils.ts'
-import { applyPreviewXRobotsTag, PREVIEW_X_ROBOTS_TAG } from './preview-host-headers.ts'
+import { applyPreviewXRobotsTag } from './preview-host-headers.ts'
 import { DEFAULT_RETRY_PARAMS, RetryBucket } from './retry.ts'
 
 export { PREVIEW_X_ROBOTS_TAG } from './preview-host-headers.ts'
