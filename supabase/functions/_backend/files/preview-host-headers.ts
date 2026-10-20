@@ -13,11 +13,6 @@ export function withPreviewHostHeaders(request: Request, response: Response): Re
   if (!isPreviewCapgoHost(hostname))
     return response
 
-  const headers = new Headers(response.headers)
-  applyPreviewXRobotsTag(headers)
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  })
+  applyPreviewXRobotsTag(response.headers)
+  return response
 }

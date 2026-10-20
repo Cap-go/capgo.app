@@ -93,13 +93,8 @@ async function withPreviewHostErrorHeaders(c: Context, response: Response | Prom
   if (!isPreviewCapgoHost(hostname))
     return resolved
 
-  const headers = new Headers(resolved.headers)
-  applyPreviewXRobotsTag(headers)
-  return new Response(resolved.body, {
-    status: resolved.status,
-    statusText: resolved.statusText,
-    headers,
-  })
+  applyPreviewXRobotsTag(resolved.headers)
+  return resolved
 }
 
 function parsePositiveInteger(value: string | undefined): number | null {
