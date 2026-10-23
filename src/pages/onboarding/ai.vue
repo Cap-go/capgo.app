@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheck from '~icons/lucide/check'
@@ -33,6 +33,7 @@ const MASKED_KEY = 'capgo_••••••••••••••••'
 const { t } = useI18n()
 const router = useRouter()
 const capgo = useConsole()
+const route = useRoute()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 
@@ -251,6 +252,20 @@ onMounted(async () => {
     await organizationStore.awaitInitialLoad()
     if (disposed)
       return
+    // Users with several organizations land here with the one they just created; never
+    // watch (or hand a key for) another organization that may already have apps.
+    const pinnedOrgId = typeof route.query.org === 'string' ? route.query.org : null
+    if (pinnedOrgId && organization.value?.gid !== pinnedOrgId) {
+      if (!organizationStore.organizations.some(org => org.gid === pinnedOrgId))
+        await organizationStore.fetchOrganizations().catch(error => console.error('Cannot load organizations for AI onboarding', error))
+      if (disposed)
+        return
+      if (!organizationStore.organizations.some(org => org.gid === pinnedOrgId)) {
+        orgLoadFailed.value = true
+        return
+      }
+      organizationStore.setCurrentOrganization(pinnedOrgId)
+    }
     if (!organization.value) {
       // The plan step may have created the org but failed to refresh the list. Refetch before
       // sending anyone back there, or a retry could create a second organization.

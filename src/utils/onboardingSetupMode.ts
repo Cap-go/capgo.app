@@ -31,17 +31,20 @@ export function withOnboardingSetupMode(onboarding: Json, mode: OnboardingSetupM
 }
 
 /**
- * Which first screen `/onboarding/app` shows a user without an organization.
- * Anyone already inside the manual wizard (saved progress, a resume link or a second
- * organization) keeps the manual flow, so nobody loses typed answers.
+ * Which first screen `/onboarding/app` shows.
+ * "Create new organization" always offers the choice again: it is a fresh setup.
+ * A first-time user already inside the manual wizard (saved progress or a resume link)
+ * keeps the manual flow, so nobody loses typed answers.
  */
 export function initialOnboardingSetupScreen(options: {
   onboarding: Json | unknown
   newOrganization: boolean
   resuming: boolean
 }): 'choice' | 'ai' | 'manual' {
-  if (options.newOrganization || options.resuming)
+  if (options.resuming)
     return 'manual'
+  if (options.newOrganization)
+    return 'choice'
   const saved = readOnboardingSetupMode(options.onboarding)
   if (saved === 'ai')
     return 'ai'
@@ -109,6 +112,21 @@ export function readAiOnboardingGoal(onboarding: Json | unknown): AiOnboardingGo
 
 export function withOnboardingFields(onboarding: Json, fields: Record<string, Json>): Json {
   return { ...asObject(onboarding), ...fields } as Json
+}
+
+/**
+ * Drops the agent markers of an earlier AI setup, so a new organization's prompt page starts
+ * from "waiting for your agent". Keys are removed, not nulled: the backend marker only writes
+ * when the key is absent.
+ */
+export function withoutAiAgentProgress(onboarding: Json): Json {
+  const { ai_agent_connected_at: _agent, ai_mcp_connected_at: _mcp, ...rest } = asObject(onboarding)
+  return rest as Json
+}
+
+/** Page the AI path opens after creating an organization; `org` pins the new one. */
+export function aiOnboardingPathFor(orgId: string) {
+  return `${AI_ONBOARDING_PATH}?org=${encodeURIComponent(orgId)}`
 }
 
 /**

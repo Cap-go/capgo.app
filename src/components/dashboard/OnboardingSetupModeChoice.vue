@@ -27,9 +27,9 @@ import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
 import { onboardingPlanStops } from '~/utils/onboardingPlanStops'
-import { AI_ONBOARDING_PATH, aiGoalToIntent, defaultAiOrganizationName, readAiOnboardingGoal, withOnboardingFields, withOnboardingSetupMode } from '~/utils/onboardingSetupMode'
+import { aiGoalToIntent, aiOnboardingPathFor, defaultAiOrganizationName, readAiOnboardingGoal, withOnboardingFields, withOnboardingSetupMode, withoutAiAgentProgress } from '~/utils/onboardingSetupMode'
 
-const props = defineProps<{ initialScreen: 'choice' | 'ai' }>()
+const props = defineProps<{ initialScreen: 'choice' | 'ai', newOrganization?: boolean }>()
 const emit = defineEmits<{ manual: [] }>()
 
 const { t } = useI18n()
@@ -54,11 +54,16 @@ const hasEditedOrgName = ref(false)
 const orgNameInput = ref('')
 const assistantIcons = developmentEnvironmentOptions.find(option => option.value === 'ai_assistant')?.icons ?? []
 
-const defaultOrgName = computed(() => defaultAiOrganizationName(
-  main.user?.first_name,
-  t('ai-onboarding-default-org-name-fallback'),
-  name => t('ai-onboarding-default-org-name', { name }),
-))
+const defaultOrgName = computed(() => {
+  const name = defaultAiOrganizationName(
+    main.user?.first_name,
+    t('ai-onboarding-default-org-name-fallback'),
+    first => t('ai-onboarding-default-org-name', { name: first }),
+  )
+  // A second organization would collide with the first one's default name: ask instead.
+  const taken = organizationStore.organizations.some(org => org.name.trim().toLowerCase() === name.toLowerCase())
+  return taken ? '' : name
+})
 const orgName = computed({
   get: () => hasEditedOrgName.value ? orgNameInput.value : defaultOrgName.value,
   set: (value: string) => {
@@ -70,7 +75,8 @@ const planStops = computed(() => onboardingPlanStops(main.plans))
 const selectedPlan = computed(() => planIndex.value === null ? null : planStops.value[planIndex.value] ?? null)
 const canCreate = computed(() => !!goal.value && !!selectedPlan.value && orgName.value.trim().length >= 3 && !isCreating.value)
 const steps = computed(() => [
-  { id: 'name', label: t('unified-onboarding-step-about-you') },
+  // Existing users creating another organization already filled in their profile.
+  ...(props.newOrganization ? [] : [{ id: 'name', label: t('unified-onboarding-step-about-you') }]),
   { id: 'mode', label: t('ai-onboarding-step-mode') },
   { id: 'plan', label: t('ai-onboarding-step-plan') },
   { id: 'agent', label: t('ai-onboarding-step-agent') },
@@ -160,7 +166,8 @@ async function createOrganization() {
     // Saved before the agent registers the app: app creation reads it to pick the
     // matching Getting started checklist (live updates, Builder or both). Without it the
     // app could get the wrong checklist, so stop here and let the user retry.
-    if (!await rememberOnboarding(current => withOnboardingFields(current, { intent }))) {
+    // An earlier AI setup's agent markers belong to another organization: start fresh.
+    if (!await rememberOnboarding(current => withOnboardingFields(withoutAiAgentProgress(current), { intent }))) {
       toast.error(t('account-error'))
       return
     }
@@ -200,7 +207,7 @@ async function createOrganization() {
       // The org exists; the AI page reloads organizations itself.
       console.warn('Cannot refresh organizations after AI onboarding create', refreshError)
     }
-    await router.replace(AI_ONBOARDING_PATH)
+    await router.replace(aiOnboardingPathFor(data.id))
   }
   finally {
     isCreating.value = false

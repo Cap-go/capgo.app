@@ -7,6 +7,7 @@ import { onboardingPlanStops } from '../src/utils/onboardingPlanStops'
 import {
   AI_ONBOARDING_PATH,
   aiGoalToIntent,
+  aiOnboardingPathFor,
   checklistTaskListMode,
   defaultAiOrganizationName,
   initialOnboardingSetupScreen,
@@ -15,6 +16,7 @@ import {
   readOnboardingSetupMode,
   shouldRedirectToAiOnboarding,
   withOnboardingSetupMode,
+  withoutAiAgentProgress,
 } from '../src/utils/onboardingSetupMode'
 
 const savedManualProgress = {
@@ -39,14 +41,16 @@ describe('onboarding setup mode', () => {
     expect(withOnboardingSetupMode(null, 'manual')).toEqual({ setup_mode: 'manual' })
   })
 
-  it.concurrent('offers the choice only to users who have not started the manual wizard', () => {
+  it.concurrent('offers the choice to new users and to every new organization', () => {
     const base = { newOrganization: false, resuming: false }
     expect(initialOnboardingSetupScreen({ ...base, onboarding: {} })).toBe('choice')
     expect(initialOnboardingSetupScreen({ ...base, onboarding: { setup_mode: 'ai' } })).toBe('ai')
     expect(initialOnboardingSetupScreen({ ...base, onboarding: { setup_mode: 'manual' } })).toBe('manual')
     // Saved wizard answers must never be hidden behind the new choice.
     expect(initialOnboardingSetupScreen({ ...base, onboarding: savedManualProgress })).toBe('manual')
-    expect(initialOnboardingSetupScreen({ onboarding: {}, newOrganization: true, resuming: false })).toBe('manual')
+    // "Create new organization" is a fresh setup, whatever the account chose before.
+    expect(initialOnboardingSetupScreen({ onboarding: {}, newOrganization: true, resuming: false })).toBe('choice')
+    expect(initialOnboardingSetupScreen({ onboarding: { ...savedManualProgress, setup_mode: 'manual' }, newOrganization: true, resuming: false })).toBe('choice')
     expect(initialOnboardingSetupScreen({ onboarding: {}, newOrganization: false, resuming: true })).toBe('manual')
   })
 
@@ -145,6 +149,18 @@ describe('readAiAgentProgress', () => {
     // MCP calls imply the agent is connected even if only the MCP marker exists.
     expect(readAiAgentProgress({ ai_mcp_connected_at: '2026-10-22T12:00:00Z' })).toEqual({ agentConnected: true, mcpConnected: true })
     expect(readAiAgentProgress(null)).toEqual({ agentConnected: false, mcpConnected: false })
+  })
+})
+
+describe('AI setup for another organization', () => {
+  it.concurrent('clears the previous agent markers and keeps everything else', () => {
+    const onboarding = { setup_mode: 'ai', intent: 'ota', ai_agent_connected_at: 'x', ai_mcp_connected_at: 'y' }
+    expect(withoutAiAgentProgress(onboarding)).toEqual({ setup_mode: 'ai', intent: 'ota' })
+    expect(readAiAgentProgress(withoutAiAgentProgress(onboarding))).toEqual({ agentConnected: false, mcpConnected: false })
+  })
+
+  it.concurrent('pins the new organization on the prompt page', () => {
+    expect(aiOnboardingPathFor('org 1')).toBe(`${AI_ONBOARDING_PATH}?org=org%201`)
   })
 })
 
