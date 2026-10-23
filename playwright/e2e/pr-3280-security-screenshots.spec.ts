@@ -36,8 +36,8 @@ test.describe('PR 3280 organization security screenshots', () => {
     await page.goto('/settings/organization/Security')
     await dismissOptionalPrompts(page)
 
-    await expect(page.getByRole('heading', { name: 'Password Policy' })).toBeVisible({ timeout: 30000 })
-    const policySection = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Password Policy' }) })
+    await expect(page.getByRole('heading', { name: 'Password policy' })).toBeVisible({ timeout: 30000 })
+    const policySection = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Password policy' }) })
     await policySection.scrollIntoViewIfNeeded()
     await page.screenshot({
       path: resolve(screenshotDir, 'organization-security-password-policy.png'),
@@ -45,7 +45,7 @@ test.describe('PR 3280 organization security screenshots', () => {
       animations: 'disabled',
     })
 
-    const policyToggle = page.getByRole('checkbox', { name: 'Enforce Password Policy' })
+    const policyToggle = page.getByRole('checkbox', { name: 'Enforce password policy' })
     await expect(policyToggle).toBeVisible()
     if (await policyToggle.isChecked()) {
       await policyToggle.click({ force: true })
@@ -53,7 +53,7 @@ test.describe('PR 3280 organization security screenshots', () => {
     }
 
     await policyToggle.click({ force: true })
-    const warningTitle = page.getByRole('heading', { name: 'Enable Password Policy' })
+    const warningTitle = page.getByRole('heading', { name: 'Enable password policy' })
     if (await warningTitle.isVisible({ timeout: 10000 }).catch(() => false)) {
       await page.screenshot({
         path: resolve(screenshotDir, 'password-policy-enable-warning-dialog.png'),

@@ -31,7 +31,8 @@ Glossary (English -> French, mandatory):
 - store / App Store / Play Store -> store, App Store, Play Store (les stores). Never "magasin" or "boutique".
 - dashboard -> dashboard; onboarding -> onboarding; webhook -> webhook; checksum -> checksum; token -> token; prompt -> prompt; logs -> logs
 - device -> appareil; organization -> organisation; plan (billing) -> plan; API key -> clé API; email -> e-mail; push notification -> notification push
-- provisioning profile -> profil de provisionnement; signing -> signature; overwrite -> écraser
+- provisioning profile -> profil de provisionnement; signing -> signature; overwrite (a file or value) -> écraser
+- channel override (a device forced onto a channel) -> canal forcé (noun) / forcer le canal (verb). Never "écrasement".
 - MAU / monthly active users -> utilisateurs actifs mensuels (MAU)`
 
 const LOCALE_STYLE_GUIDES: Record<string, string> = {

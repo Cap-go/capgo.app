@@ -388,7 +388,7 @@ test.describe('API Key Management', () => {
     const keyName = uniqueKeyName('Inherited')
     const keyRow = await createInheritedOrgAdminApiKey(page, keyName)
 
-    await expectChannelPermissionOverridePersists(page, keyRow, 'Seeded App · App Admin')
+    await expectChannelPermissionOverridePersists(page, keyRow, 'Seeded App · App admin')
   })
 
   test('should delete API key', async ({ page }) => {
