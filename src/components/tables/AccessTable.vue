@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Ref } from 'vue'
 import type { TableColumn } from '../comp_def'
+import type { SsoManagedAccess } from '~/services/ssoManaged'
 import type { Database } from '~/types/database.types'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -14,6 +15,7 @@ import { invokeCapgoApi } from '~/services/capgoApi'
 import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
+import { fetchSsoManagedAccess } from '~/services/ssoManaged'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { getRbacRoleI18nKey } from '~/stores/organization'
 import { getErrorMessage } from '~/utils/errors'
@@ -79,6 +81,13 @@ const elements = ref<Element[]>([])
 const isLoading = ref(true)
 const currentPage = ref(1)
 const canUpdateUserRoles = ref(false)
+const ssoManaged = ref<SsoManagedAccess>(new Map())
+
+// The SSO role mapping owns the app role of SSO members on the apps it maps
+// (channel roles stay manual).
+function isSsoManagedAppRole(principalType: 'user' | 'group', principalId: string, scopeType: 'app' | 'channel') {
+  return scopeType === 'app' && principalType === 'user' && !!app.value?.id && !!ssoManaged.value.get(principalId)?.appIds.has(app.value.id)
+}
 const selectedRole = ref('')
 const selectedRoleScope = ref<'app' | 'channel'>('app')
 const selectedPrincipal = ref<Element | null>(null)
@@ -93,6 +102,7 @@ const assignAccessForm = ref({
   channel_id: '',
 })
 
+const isAssignSsoManaged = computed(() => isSsoManagedAppRole(assignAccessForm.value.principal_type, assignAccessForm.value.principal_id, assignAccessForm.value.scope_type))
 const appRoleOptions = computed(() => roles.value.filter(role => role.scope_type === 'app'))
 const channelRoleOptions = computed(() => roles.value.filter(role => role.scope_type === 'channel'))
 const selectedRoleOptions = computed(() => selectedRoleScope.value === 'channel' ? channelRoleOptions.value : appRoleOptions.value)
@@ -104,6 +114,7 @@ const canAssignChannelScope = computed(() => channels.value.length > 0 && channe
 const hasValidAssignRole = computed(() => assignRoleOptions.value.some(role => role.name === assignAccessForm.value.role_name))
 const isAssignAccessFormValid = computed(() => {
   return !!assignAccessForm.value.principal_id
+    && !isAssignSsoManaged.value
     && !!assignAccessForm.value.role_name
     && hasValidAssignRole.value
     && (assignAccessForm.value.scope_type !== 'app' || canAssignAppScope.value)
@@ -182,6 +193,7 @@ async function loadAccessReferenceData() {
 
   const nextPrincipalOptions: PrincipalOption[] = []
   if (canUpdateUserRoles.value) {
+    ssoManaged.value = await fetchSsoManagedAccess(app.value.owner_org, app.value.app_id)
     const { data: principals, error: principalsError } = await invokeCapgoApi(`private/role_bindings/app/${app.value.id}/principals`, { method: 'GET' })
 
     if (principalsError) {
@@ -604,12 +616,14 @@ const dynamicColumns = computed<TableColumn[]>(() => {
         },
         {
           icon: IconWrench,
-          title: t('edit-role'),
+          title: (row: Element) => isSsoManagedAppRole(row.principal_type, row.principal_id, row.scope_type) ? t('sso-managed-role') : t('edit-role'),
+          disabled: (row: Element) => isSsoManagedAppRole(row.principal_type, row.principal_id, row.scope_type),
           onClick: (row: Element) => changeUserRole(row),
         },
         {
           icon: IconTrash,
-          title: t('remove'),
+          title: (row: Element) => isSsoManagedAppRole(row.principal_type, row.principal_id, row.scope_type) ? t('sso-managed-role') : t('remove'),
+          disabled: (row: Element) => isSsoManagedAppRole(row.principal_type, row.principal_id, row.scope_type),
           onClick: (row: Element) => deleteElement(row),
         },
       ],
@@ -752,7 +766,7 @@ watch(
             </option>
           </select>
           <p id="assign-principal-helper" class="mt-1.5 text-xs leading-5 text-slate-500 dark:text-slate-400">
-            {{ t('assign-access-principal-helper') }}
+            {{ isAssignSsoManaged ? t('sso-managed-role') : t('assign-access-principal-helper') }}
           </p>
         </div>
       </div>

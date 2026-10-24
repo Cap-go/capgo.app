@@ -1275,7 +1275,7 @@ onMounted(checkLogin)
                         :class="authInlineLinkClass"
                         @click="goToForgotPassword"
                       >
-                        {{ t('forgot') }} {{ t('password') }} ?
+                        {{ t('forgot-password') }}
                       </button>
                     </div>
 

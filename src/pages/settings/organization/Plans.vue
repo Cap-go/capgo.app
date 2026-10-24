@@ -98,16 +98,16 @@ function planFeatures(plan: Database['public']['Tables']['plans']['Row']) {
   let buildTimeDisplay = ''
   if (buildTimeSeconds > 0) {
     if (buildTimeHours >= 1) {
-      buildTimeDisplay = `${buildTimeHours} ${t('build-hours')}`
+      buildTimeDisplay = t('build-hours', { count: formatNumberValue(buildTimeHours) }, buildTimeHours)
     }
     else {
-      buildTimeDisplay = `${buildTimeMinutes} ${t('build-minutes')}`
+      buildTimeDisplay = t('build-minutes', { count: formatNumberValue(buildTimeMinutes) }, buildTimeMinutes)
     }
   }
 
-  const mauFeature = `${formatNumberValue(displayedPlanMau(plan))} ${t('mau')}`
-  const storageFeature = `${formatNumberValue(plan.storage)} ${t('plan-storage')}`
-  const bandwidthFeature = `${formatNumberValue(plan.bandwidth)} ${t('plan-bandwidth')}`
+  const mauFeature = t('plan-mau', { count: formatNumberValue(displayedPlanMau(plan)) }, displayedPlanMau(plan))
+  const storageFeature = t('plan-storage', { count: formatNumberValue(plan.storage) })
+  const bandwidthFeature = t('plan-bandwidth', { count: formatNumberValue(plan.bandwidth) })
 
   const buildTimeFeature = buildTimeDisplay ? planFeature(buildTimeDisplay, true) : null
   const nativeBuildConcurrencyFeature = plan.native_build_concurrency
@@ -695,7 +695,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
                 step="1"
                 class="w-full h-2 rounded-full appearance-none cursor-pointer accent-blue-600"
                 :style="{ background: `linear-gradient(to right, rgb(37 99 235) ${enterpriseSliderPercent}%, rgb(209 213 219) ${enterpriseSliderPercent}%)` }"
-                :aria-valuetext="`${formatMau(enterpriseQuote.targetMau)} ${t('mau')}`"
+                :aria-valuetext="t('plan-mau', { count: formatMau(enterpriseQuote.targetMau) }, enterpriseQuote.targetMau)"
                 :disabled="isMobile"
               >
               <div class="flex justify-between mt-1 text-[10px] text-gray-400">

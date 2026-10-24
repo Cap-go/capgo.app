@@ -1130,7 +1130,7 @@ onMounted(async () => {
                       class="px-3 py-2 text-xs font-medium text-center border rounded-lg cursor-pointer text-amber-700 dark:text-amber-300 hover:bg-amber-100 focus:ring-4 focus:ring-amber-300 border-amber-400 dark:border-amber-600 dark:hover:bg-amber-800/30 dark:focus:ring-amber-800 focus:outline-hidden"
                       @click="goToMembersPage()"
                     >
-                      {{ t('view') }} {{ t('members') }}
+                      {{ t('view-members') }}
                     </button>
                     <button
                       type="button"
@@ -1430,7 +1430,7 @@ onMounted(async () => {
                     class="px-3 py-2 text-xs font-medium text-center border rounded-lg cursor-pointer text-amber-700 dark:text-amber-300 hover:bg-amber-100 focus:ring-4 focus:ring-amber-300 border-amber-400 dark:border-amber-600 dark:hover:bg-amber-800/30 dark:focus:ring-amber-800 focus:outline-hidden"
                     @click="goToMembersPage()"
                   >
-                    {{ t('view') }} {{ t('members') }}
+                    {{ t('view-members') }}
                   </button>
                   <button
                     type="button"
@@ -1652,7 +1652,7 @@ onMounted(async () => {
             class="px-3 py-2 text-xs font-medium text-center border rounded-lg cursor-pointer text-amber-700 dark:text-amber-300 hover:bg-amber-100 focus:ring-4 focus:ring-amber-300 border-amber-400 dark:border-amber-600 dark:hover:bg-amber-800/30 dark:focus:ring-amber-800 focus:outline-hidden"
             @click="goToMembersPage(true)"
           >
-            {{ t('view') }} {{ t('members') }}
+            {{ t('view-members') }}
           </button>
           <button
             type="button"
@@ -1687,7 +1687,7 @@ onMounted(async () => {
           class="px-3 py-2 mt-4 text-xs font-medium text-center border rounded-lg cursor-pointer text-red-700 dark:text-red-300 hover:bg-red-100 focus:ring-4 focus:ring-red-200 border-red-300 dark:border-red-600 dark:hover:bg-red-900/30 dark:focus:ring-red-900 focus:outline-hidden"
           @click="goToMembersPage(true)"
         >
-          {{ t('view') }} {{ t('members') }}
+          {{ t('view-members') }}
         </button>
         <p class="mt-3 text-sm text-red-600 dark:text-red-400">
           {{ t('users-must-change-password') }}

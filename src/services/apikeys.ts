@@ -367,7 +367,7 @@ export async function confirmApiKeyDeletion(
 ): Promise<boolean> {
   dialogStore.openDialog({
     title: t('alert-confirm-delete'),
-    description: `${t('alert-not-reverse-message')} ${t('alert-delete-message')}?`,
+    description: t('alert-delete-api-key-confirm'),
     buttons: [
       createDialogButton(t('button-cancel'), 'cancel'),
       createDialogButton(t('button-delete'), 'danger'),
@@ -384,7 +384,7 @@ export async function confirmApiKeyRegeneration(
 ): Promise<boolean> {
   dialogStore.openDialog({
     title: t('alert-confirm-regenerate'),
-    description: `${t('alert-not-reverse-message')}. ${t('alert-regenerate-key')}?`,
+    description: t('alert-regenerate-key-confirm'),
     buttons: [
       createDialogButton(t('button-cancel'), 'cancel'),
       createDialogButton(t('button-regenerate'), 'primary'),

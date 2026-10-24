@@ -14,10 +14,10 @@ import DateRangePicker from '~/components/DateRangePicker.vue'
 import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import {
+  DEVICES_TABLE_DATE_RANGE_DEFAULT,
   getDateRangeForPreset,
   getTableDateRangeSignature,
   shouldRecountOnTableReload,
-  TABLE_DATE_RANGE_DEFAULT,
 } from '~/services/dateRange'
 import { DEFAULT_DEVICE_DATA_COLLECTION } from '~/services/deviceDataCollection'
 import BundleMultiFilter from './BundleMultiFilter.vue'
@@ -71,9 +71,9 @@ const filters = ref({
   Override: false,
   CustomId: false,
 })
-const initialRange = getDateRangeForPreset(TABLE_DATE_RANGE_DEFAULT)
+const initialRange = getDateRangeForPreset(DEVICES_TABLE_DATE_RANGE_DEFAULT)
 const dateRange = ref<[Date, Date] | null>([initialRange.start, initialRange.end])
-const dateRangeMode = ref<DateRangePreset>(TABLE_DATE_RANGE_DEFAULT)
+const dateRangeMode = ref<DateRangePreset>(DEVICES_TABLE_DATE_RANGE_DEFAULT)
 const selectedPlatform = ref<'' | PlatformOs>('')
 const selectedDefaultChannel = ref('')
 const channelNames = ref<string[]>([])

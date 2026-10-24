@@ -42,6 +42,7 @@ import { readBuilderOnlyInitAssignment, tryBuilderOnlyInit } from './builder-set
 import { loginInitInBrowser, shouldStartInitBrowserLogin } from './browser-login'
 import { selectOnboardingChannel } from './channel-selection'
 import { assertNoWindowsCommandLineBreaks, createMissingExecutableError, getAvailablePackageManagers, getMissingPackageManagerExecutable, getPackageManagerInfo, preparePackageManagerCommandEnvironment, probeExecutable, probePackageManagerCommand, resolveExecutableProbeError, spawnCommand as spawn, spawnCommandSync as spawnSync, waitForCommandResult } from './command-execution'
+import { printInitCompletionNotice } from './completion-notice'
 import { reportInitOnboardingStep } from './onboarding-report'
 import { enableInitOtaChecklist } from './ota-checklist'
 import { cancel as pCancel, confirm as pConfirm, intro as pIntro, isCancel as pIsCancel, log as pLog, outro as pOutro, select as pSelect, spinner as pSpinner, text as pText } from './prompts'
@@ -5911,5 +5912,6 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   const didChooseSkills = await maybeInstallCapgoSkills()
   await maybeStarCapgoRepo(didChooseSkills).catch(error => pLog.warn(`Cannot offer GitHub support actions: ${formatError(error)}`))
   pOutro(`Bye 👋`)
+  await printInitCompletionNotice(appId, client, localConfig.hostWeb, options)
   return await exitAfterFinishingReplay('completed', 0)
 }

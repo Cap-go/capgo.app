@@ -203,7 +203,7 @@ describe('manifest upload response contract', () => {
     let calls = 0
     const unavailable = requestManifestUpload('api-key', request, {}, async () => {
       calls++
-      return { data: null, error: Object.assign(new Error('unavailable'), { context: new Response('{}', { status: 503 }) }) }
+      return { data: null, error: Object.assign(new Error('unavailable'), { context: new Response(JSON.stringify({ error: 'upload_authorization_unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } }) }) }
     }, async () => {})
     await expect(unavailable).rejects.toThrow('Cannot request manifest upload')
     expect(calls).toBe(3)

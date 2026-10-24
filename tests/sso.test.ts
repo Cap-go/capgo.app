@@ -2213,6 +2213,13 @@ describe('sSO role mapping', () => {
       expect(await appRole()).toEqual(['app_developer'])
       expect(await inGroup()).toBe(false)
 
+      // The console locks what the mapping rewrites on login: the SSO member,
+      // the mapped app and the mapped group. The org owner (no SSO identity)
+      // stays editable.
+      const managedResponse = await fetchTestRequest(getEndpointUrl(`/private/sso/providers/${managedOrgId}/managed`), { headers: authHeaders })
+      expect(managedResponse.status).toBe(200)
+      expect(await managedResponse.json()).toEqual({ users: { [userId]: { app_ids: [appUuid], group_ids: [groupId] } } })
+
       // Removing the app from the mapping revokes the SSO-granted binding right
       // away, since the app is no longer re-evaluated on login. The provider is
       // detached from Supabase Auth while saving (no Management API locally).

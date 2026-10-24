@@ -685,8 +685,8 @@ async function didCancel(name: string, askForMethod = true): Promise<boolean | '
   }
 
   const description = askForMethod
-    ? `${t('alert-not-reverse-message')} ${t('alert-delete-message')} ${name} ${t('you-cannot-reuse')}.`
-    : `${t('alert-not-reverse-message')} ${t('alert-delete-message')} ${name}?`
+    ? t('alert-delete-named-no-reuse-confirm', { name })
+    : t('alert-delete-named-confirm', { name })
 
   dialogStore.openDialog({
     title: t('alert-confirm-delete'),

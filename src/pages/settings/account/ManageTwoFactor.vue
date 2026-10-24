@@ -250,7 +250,7 @@ async function verifyAndEnable() {
 async function disableMfa() {
   dialogStore.openDialog({
     title: t('alert-2fa-disable'),
-    description: `${t('alert-not-reverse-message')} ${t('alert-disable-2fa-message')}?`,
+    description: t('alert-disable-2fa-confirm'),
     buttons: [
       { text: t('button-cancel'), role: 'cancel' },
       { text: t('disable'), role: 'danger', id: 'confirm-button' },

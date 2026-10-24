@@ -3,6 +3,7 @@ import type { CapgoClient } from '../utils'
 import { log } from '@clack/prompts'
 import { Table } from '@sauber/table'
 import { CliUserError } from '../shared/cli-user-error'
+import { invokeCapgoCliApiResultWithRetry } from '../shared/retryable-capgo-api-error'
 import { formatCapgoCliInvokeError, formatError, getCapgoCliHttpStatus, getHumanDate, invokeCapgoCliApi, readCapgoCliApiErrorPayload } from '../utils'
 import { checkVersionNotUsedInChannel } from './channels'
 import { setBundlesDeleted } from './cli-data'
@@ -166,7 +167,7 @@ export async function upsertAppVersion(
   versionData: UpsertAppVersionInput,
   options: VersionOptions = {},
 ) {
-  const { data, error } = await invokeCapgoCliApi<AppVersionRow>('bundle/upsert', {
+  const { data, error } = await invokeCapgoCliApiResultWithRetry(() => invokeCapgoCliApi<AppVersionRow>('bundle/upsert', {
     apikey,
     method: 'POST',
     body: {
@@ -186,7 +187,7 @@ export async function upsertAppVersion(
       ...(versionData.r2_path !== undefined ? { r2_path: versionData.r2_path } : {}),
     },
     apiHost: options.apiHost,
-  })
+  }), undefined, { retryTransientNetwork: false })
 
   if (error)
     throw error

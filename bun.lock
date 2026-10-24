@@ -1,6 +1,5 @@
 {
   "lockfileVersion": 1,
-  "configVersion": 1,
   "workspaces": {
     "": {
       "name": "capgo-app",
@@ -245,7 +244,7 @@
     },
     "cli": {
       "name": "@capgo/cli",
-      "version": "8.91.0",
+      "version": "8.95.1",
       "bin": {
         "capgo": "dist/index.js",
       },

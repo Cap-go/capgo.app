@@ -235,7 +235,7 @@ async function deleteOne(one: Element) {
 
   dialogStore.openDialog({
     title: t('alert-confirm-delete'),
-    description: `${t('alert-not-reverse-message')} ${t('alert-delete-message')} ${one.name}?`,
+    description: t('alert-delete-named-confirm', { name: one.name }),
     buttons: [
       {
         text: t('button-cancel'),

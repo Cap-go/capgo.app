@@ -917,8 +917,13 @@ Also applies to dialog/Teleport content, admin filters, and hidden utility input
 - `useConsole()` (`src/services/console.ts`) returns the console client
   (`src/services/consoleClient.ts`). Its `from`/`rpc`, storage, realtime and
   `functions.invoke` calls go to `/private/console/*`
-  (`supabase/functions/_backend/private/console_data.ts`), which replays them
-  with the caller's own JWT so RLS still applies.
+  (`supabase/functions/_backend/private/console_data.ts`). Table and RPC calls
+  are compiled to SQL and run through Drizzle on the primary database as the
+  caller's Postgres role with `row_security` on, so RLS still applies.
+  Authenticated queries set the verified JWT claims. The pre-login
+  `is_not_deleted` probe runs as `anon` with no claims.
+  Storage still uses the Supabase storage API. Do not point these queries at a
+  read replica: RLS helpers such as `auth.uid()` are not replicated.
 - Auth goes through `/private/console/auth/*`
   (`supabase/functions/_backend/private/console_auth_proxy.ts`), a relay to
   the auth provider's user-facing endpoints only (never admin). The console auth
@@ -949,8 +954,10 @@ it returns is serialized twice. Keep each one bounded and cheap:
 - **Aggregate in the database.** Charts and counters get a `SECURITY INVOKER`
   SQL function returning buckets (see `get_bundle_upload_daily_counts`), not
   raw rows bucketed in the browser.
-- **Prefer `count: 'estimated'`** on tables that grow without bound; exact counts
-  are fine for per-app sets.
+- **`count: 'estimated'` and `count: 'planned'` are exact** on this console path.
+  They run `count(*)` on the primary, the same as `count: 'exact'`, so they do
+  not make an unbounded table cheaper. Page audit logs, deploy history, and the
+  ledger, or skip the count. Exact counts stay fine for per-app sets.
 - **Resolve id lists on the server.** Never download ids only to post them back
   (see the device `overrides`/`overrideChannelId` filters).
 - **Wrap function calls in RLS policies** in a scalar subquery,

@@ -62,6 +62,34 @@ globalThis.fetch = async (input) => {
     })
   }
 
+  if (fetchMode === 'database-unavailable-then-ok') {
+    if (fetchAttempts < succeedAfterAttempts) {
+      return new Response(JSON.stringify({
+        error: 'database_unavailable',
+        message: 'Database temporarily unavailable',
+        moreInfo: { retryAfterSeconds: 0 },
+      }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': '0' },
+      })
+    }
+    return new Response(okBody, {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  if (fetchMode === 'database-unavailable-fail') {
+    return new Response(JSON.stringify({
+      error: 'database_unavailable',
+      message: 'Database temporarily unavailable',
+      moreInfo: { retryAfterSeconds: 0 },
+    }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json', 'Retry-After': '0' },
+    })
+  }
+
   return new Response(okBody, {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
@@ -96,6 +124,20 @@ assert.equal(fetchAttempts, TWO_FACTOR_PREFLIGHT_MAX_ATTEMPTS)
 resetFetch('retry-then-ok', 2)
 await check2FAComplianceForApp(makeClient(), 'com.example.app', true)
 assert.equal(fetchAttempts, 2)
+
+resetFetch('database-unavailable-then-ok', 2)
+await check2FAComplianceForApp(makeClient(), 'com.example.app', true)
+assert.equal(fetchAttempts, 2)
+
+resetFetch('database-unavailable-fail')
+await assert.rejects(
+  () => check2FAAccessForOrg(makeClient(), 'org_123', true),
+  (error) => {
+    assert.match(error.message, /Cannot verify access: database_unavailable/)
+    return true
+  },
+)
+assert.equal(fetchAttempts, TWO_FACTOR_PREFLIGHT_MAX_ATTEMPTS)
 
 resetFetch('reject')
 await assert.rejects(
