@@ -6,7 +6,7 @@ import { getBodyOrQuery, honoFactory, useCors } from '../../utils/hono.ts'
 import { middlewareAuth, middlewareKey } from '../../utils/hono_middleware.ts'
 import { deleteApp } from './delete.ts'
 import { createDemoApp } from './demo.ts'
-import { enableBuilderOnboarding, getBuilderOnboardingAccess } from './enable_builder.ts'
+import { enableAppOnboarding, getBuilderOnboardingAccess } from './enable_onboarding.ts'
 import { get, getAll } from './get.ts'
 import { post } from './post.ts'
 import { put } from './put.ts'
@@ -45,7 +45,8 @@ app.post('/', middlewareAuth(), async (c) => {
   return post(c, body)
 })
 
-app.post('/:id/onboarding/builder', middlewareAuth({ preferApiKey: true }), c => enableBuilderOnboarding(c, c.req.param('id')))
+app.post('/:id/onboarding/builder', middlewareAuth({ preferApiKey: true }), c => enableAppOnboarding(c, c.req.param('id'), 'builder'))
+app.post('/:id/onboarding/ota', middlewareAuth({ preferApiKey: true }), c => enableAppOnboarding(c, c.req.param('id'), 'ota'))
 app.get('/:id/onboarding/builder', middlewareAuth({ preferApiKey: true }), c => getBuilderOnboardingAccess(c, c.req.param('id')))
 
 app.put('/:id', middlewareAuth({ preferApiKey: true }), async (c) => {

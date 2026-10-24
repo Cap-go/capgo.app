@@ -3,7 +3,7 @@ import { hasSupportedOtaTodoList, parseAppOnboarding } from '../src/services/app
 import { BUILDER_STEP_IDS } from '../src/services/builderOnboardingChecklist'
 import { shouldShowGettingStartedNav, shouldSkipOnboardingResume } from '../src/utils/appOnboardingProgress'
 import { hasDualOnboardingChecklists } from '../src/utils/dualOnboardingChecklists'
-import { enableBuilderChecklist, UnsupportedBuilderOnboardingVersion } from '../supabase/functions/_backend/utils/enableBuilderOnboarding.ts'
+import { enableBuilderChecklist, UnsupportedOnboardingVersion } from '../supabase/functions/_backend/utils/enableAppOnboarding.ts'
 
 const at = '2026-10-19T10:00:00.000Z'
 const otaSteps = { login_cli_mcp: { status: 'done', at, source: 'cli', update_history: [{ status: 'done', at }] }, add_channel: { status: 'skipped', at, annotation: 'keep' } }
@@ -71,7 +71,7 @@ describe('explicit Builder checklist activation', () => {
   it.concurrent.each([{ todo_list_version: 5 }, { todo_list_version: 4, builder_todo_list_version: '2' }, { todo_list_version: 4, ota_todo_list_version: '2', paths: ['ota'] }])('rejects unsupported versions without changing input: %j', (setup) => {
     const original = { setup }
     const snapshot = structuredClone(original)
-    expect(() => enableBuilderChecklist(original)).toThrow(UnsupportedBuilderOnboardingVersion)
+    expect(() => enableBuilderChecklist(original)).toThrow(UnsupportedOnboardingVersion)
     expect(original).toEqual(snapshot)
   })
 
@@ -79,7 +79,7 @@ describe('explicit Builder checklist activation', () => {
     for (const value of [[], [1], [4], {}, true, false]) {
       const original = { setup: { todo_list_version: 4, [field]: value } }
       const snapshot = structuredClone(original)
-      expect(() => enableBuilderChecklist(original)).toThrow(UnsupportedBuilderOnboardingVersion)
+      expect(() => enableBuilderChecklist(original)).toThrow(UnsupportedOnboardingVersion)
       expect(original).toEqual(snapshot)
     }
   })

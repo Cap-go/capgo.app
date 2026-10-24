@@ -36,7 +36,7 @@ const dialect = new PgDialect()
 let row: { app_id: string, owner_org: string, onboarding: any, need_onboarding: boolean } | null
 let writes: Array<{ sql: string, params: unknown[] }>
 let order: string[]
-const request = (id = appId) => app.request(`http://local/${encodeURIComponent(id)}/onboarding/builder`, { method: 'POST' })
+const requestActivation = (id: string, path: string) => app.request(`http://local/${encodeURIComponent(id)}/onboarding/${path}`, { method: 'POST' })
 const requestAccess = () => app.request(`http://local/${appId}/onboarding/builder`)
 
 beforeEach(() => {
@@ -74,14 +74,21 @@ beforeEach(() => {
   })
 })
 
-describe('builder activation endpoint (POST /app/:id/onboarding/builder)', () => {
+describe.each(['builder', 'ota'])('%s activation endpoint', (path) => {
+  const request = (id = appId) => requestActivation(id, path)
+  beforeEach(() => {
+    if (path === 'ota')
+      row!.onboarding = { setup: { todo_list_version: 4, builder_todo_list_version: '1', paths: ['builder'], steps: { builder: { android: { prepare_keystore: { status: 'done' } } } } } }
+  })
   it.each(['jwt', 'apikey'] as const)('converts the latest locked state after checking %s permissions and closes the connection', async (authType) => {
     mocks.auth = { ...mocks.auth!, authType, apikey: authType === 'apikey' ? { key: 'fixture-key' } : null } as AuthInfo
     const response = await request()
     expect(response.status).toBe(200)
     expect(response.headers.get('cache-control')).toBe('no-store')
     const { onboarding } = await response.json() as any
-    expect(onboarding.setup).toMatchObject({ todo_list_version: 4, paths: ['ota', 'builder'], selected_path: 'builder', steps: { ota: row!.onboarding.setup.steps } })
+    expect(onboarding.setup).toMatchObject(path === 'builder'
+      ? { todo_list_version: 4, paths: ['ota', 'builder'], selected_path: 'builder', steps: { ota: row!.onboarding.setup.steps } }
+      : { todo_list_version: 4, paths: ['builder', 'ota'], selected_path: 'ota', ota_todo_list_version: '1', steps: { builder: row!.onboarding.setup.steps.builder } })
     expect(order).toEqual(['begin', 'org-lock', 'lock', 'permission', 'write', 'commit'])
     expect(mocks.permission).toHaveBeenCalledWith(expect.anything(), 'app.update_settings', { appId })
     expect(mocks.lockedPermission).toHaveBeenCalledWith(expect.anything(), 'app.update_settings', { appId }, tx, 'fixture-user', authType === 'apikey' ? 'fixture-key' : null)
