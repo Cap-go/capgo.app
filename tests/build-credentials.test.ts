@@ -56,6 +56,7 @@ describe('/build/credentials stored native build credentials', () => {
   afterAll(async () => {
     const supabase = getSupabaseClient()
     await supabase.from('app_build_credentials').delete().eq('app_id', appId)
+    await supabase.from('build_credentials_upload_token_uses').delete().eq('app_id', appId)
     if (apikeyIds.length)
       await supabase.from('apikeys').delete().in('id', apikeyIds)
     await resetAppData(appId)
@@ -77,6 +78,11 @@ describe('/build/credentials stored native build credentials', () => {
     response = await putCredentials(adminKey, { app_id: appId, platform: 'ios', credentials: { JOB_ID: 'x' } })
     expect(response.status).toBe(400)
     expect(await response.json()).toMatchObject({ error: 'invalid_build_credentials', message: '--build-env JOB_ID: reserved by Capgo; use the dedicated build option instead' })
+
+    // Loader/interpreter env names would run in every later build: never stored.
+    response = await putCredentials(adminKey, { app_id: appId, platform: 'ios', credentials: { NODE_OPTIONS: '--require /tmp/x.js', DYLD_INSERT_LIBRARIES: '/tmp/x.dylib', SENTRY_AUTH_TOKEN: 'ok' } })
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({ error: 'invalid_build_credentials', message: expect.stringContaining('DYLD_INSERT_LIBRARIES, NODE_OPTIONS: cannot be stored on Capgo') })
 
     // Partial iOS set is stored; summary reports what is still missing, never values.
     response = await putCredentials(adminKey, {
@@ -130,6 +136,24 @@ describe('/build/credentials stored native build credentials', () => {
     expect(text).not.toContain(keystoreSecret)
     expect(JSON.parse(text)).toMatchObject({ platform: 'android', summary: { missing: [], play_store_upload: true } })
 
+    // Single use: replaying the same URL is refused, even with a valid body.
+    response = await fetch(`${BASE_URL}/build/credentials/upload/${token}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ android: { ANDROID_KEYSTORE_FILE: 'replayed', KEYSTORE_KEY_ALIAS: 'alias', KEYSTORE_STORE_PASSWORD: 'pw' } }),
+    })
+    expect(response.status).toBe(409)
+    expect(await response.json()).toHaveProperty('error', 'upload_url_used')
+
+    // A rejected body does not burn the URL: the fixed file can be re-sent.
+    response = await fetch(`${BASE_URL}/build/credentials/upload-url`, { method: 'POST', headers: headers(adminKey), body: JSON.stringify({ app_id: appId, platform: 'android', mode: 'merge' }) })
+    const retryToken = (await response.json() as { upload_url: string }).upload_url.split('/build/credentials/upload/')[1]!
+    response = await fetch(`${BASE_URL}/build/credentials/upload/${retryToken}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ LD_PRELOAD: '/tmp/x.so' }) })
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({ error: 'invalid_build_credentials', message: expect.stringContaining('LD_PRELOAD: cannot be stored on Capgo') })
+    response = await fetch(`${BASE_URL}/build/credentials/upload/${retryToken}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ PLAY_STORE_TRACK: 'beta' }) })
+    expect(response.status).toBe(200)
+
     response = await fetch(`${BASE_URL}/build/credentials/upload/${token.slice(0, -2)}xx`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}' })
     expect(response.status).toBe(401)
 
@@ -148,11 +172,26 @@ describe('/build/credentials stored native build credentials', () => {
     expect(response.status).toBe(404)
   })
 
+  it('POST /build/request with use_stored_credentials requires app admin rights', async () => {
+    // app_developer has app.build_native but not app.update_settings: build scripts in the
+    // uploaded project could read the stored signing secrets, so the request is refused.
+    const response = await fetch(`${BASE_URL}/build/request`, {
+      method: 'POST',
+      headers: headers(developerKey),
+      body: JSON.stringify({ app_id: appId, platform: 'ios', use_stored_credentials: true, build_options: {}, build_credentials: {} }),
+    })
+    expect(response.status).toBe(403)
+    const body = await response.json() as { error: string, message: string }
+    expect(body.error).toBe('permission_denied')
+    expect(body.message).toContain('requires app admin rights (app.update_settings)')
+    expect(body.message).toContain('Ask an app admin to run this build, or provide the signing credentials directly')
+  })
+
   it('POST /build/request with use_stored_credentials validates the merged set', async () => {
     // No stored android credentials (other test deletes them; ios-only seed here keeps this independent).
     let response = await fetch(`${BASE_URL}/build/request`, {
       method: 'POST',
-      headers: headers(developerKey),
+      headers: headers(adminKey),
       body: JSON.stringify({ app_id: appId, platform: 'android', use_stored_credentials: true, build_options: {}, build_credentials: {} }),
     })
     expect(response.status).toBe(400)
@@ -167,7 +206,7 @@ describe('/build/credentials stored native build credentials', () => {
     expect(put.status).toBe(200)
     response = await fetch(`${BASE_URL}/build/request`, {
       method: 'POST',
-      headers: headers(developerKey),
+      headers: headers(adminKey),
       body: JSON.stringify({ app_id: appId, platform: 'ios', use_stored_credentials: true, build_options: { submitToStoreReview: true }, build_credentials: {} }),
     })
     expect(response.status).toBe(400)

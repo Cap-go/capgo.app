@@ -13,6 +13,7 @@ import { Hono } from 'hono/tiny'
 import { timingSafeEqual } from 'hono/utils/buffer'
 import { cloudlog } from './logging.ts'
 import { onError } from './on_error.ts'
+import { redactSensitiveUrl } from './sensitive_url.ts'
 import { getEnv } from './utils.ts'
 
 import { version as CapgoVersion } from './version.ts'
@@ -340,7 +341,7 @@ export function createHono(functionName: string, _version: string) {
   // Skip hono's access logger on plugin hot paths — it serializes every request
   // on millions of device calls/day.
   if (!pluginHotPath)
-    appGlobal.use('*', logger())
+    appGlobal.use('*', logger((message, ...rest) => console.log(redactSensitiveUrl(message), ...rest)))
   // Use platform-specific request IDs, fallback to generated UUID.
   // Do not cloudlog inside the generator: it runs on every request (incl. cf-ray).
   appGlobal.use('*', requestId({
@@ -376,7 +377,7 @@ export function createHono(functionName: string, _version: string) {
 
 export function createAllCatch(appGlobal: Hono<MiddlewareKeyVariables>, functionName: string) {
   appGlobal.all('*', useCors, (c) => {
-    cloudlog({ requestId: c.get('requestId'), functionName, message: 'Not found', url: c.req.url })
+    cloudlog({ requestId: c.get('requestId'), functionName, message: 'Not found', url: redactSensitiveUrl(c.req.url) })
     return c.json({ error: 'not_found', message: 'Not found' }, 404)
   })
   appGlobal.onError(onError(functionName))

@@ -9,14 +9,17 @@ import {
 } from '../supabase/functions/_backend/utils/build_credentials_crypto.ts'
 import {
   assertAllowedCredentialKey,
+  assertStorableCredentialKeys,
   BuildCredentialsValidationError,
   checkCredentialRequirements,
   mergeStoredCredentialsForBuild,
   normalizeCredentialValues,
   parseCredentialRecord,
+  isStoredReservedEnvKey,
   readMobileprovisionExpiry,
   summarizeCredentials,
 } from '../supabase/functions/_backend/utils/build_credentials_validation.ts'
+import { isSecretBodyRoute, redactSensitiveUrl } from '../supabase/functions/_backend/utils/sensitive_url.ts'
 
 const SECRET = 'test-build-credentials-secret-0123456789abcdef'
 const OTHER_SECRET = 'other-build-credentials-secret-0123456789abcdef'
@@ -98,6 +101,23 @@ describe('build credentials crypto', () => {
     const forgedPayload = Buffer.from(JSON.stringify({ ...claims, app_id: 'com.evil.app', nonce: 'x' })).toString('base64url')
     expect(await verifyBuildCredentialsUploadToken(SECRET, `${forgedPayload}.${signature}`)).toEqual({ ok: false, reason: 'invalid' })
   })
+
+  it.concurrent('issues a fresh nonce per token and refuses tokens without one', async () => {
+    const exp = Math.floor(Date.now() / 1000) + 600
+    const claims = { app_id: 'com.test.app', platform: 'ios' as const, mode: 'replace' as const, user_id: 'user-1', apikey_id: 42, exp }
+    const a = await verifyBuildCredentialsUploadToken(SECRET, await createBuildCredentialsUploadToken(SECRET, claims))
+    const b = await verifyBuildCredentialsUploadToken(SECRET, await createBuildCredentialsUploadToken(SECRET, claims))
+    if (!a.ok || !b.ok)
+      throw new Error('expected valid tokens')
+    expect(a.claims.nonce).toMatch(/^[\w-]{16}$/)
+    expect(a.claims.nonce).not.toBe(b.claims.nonce)
+
+    // A correctly signed payload without a nonce cannot be made single use: refused.
+    const { createHmac } = await import('node:crypto')
+    const payload = Buffer.from(JSON.stringify(claims)).toString('base64url')
+    const signature = createHmac('sha256', SECRET).update(`capgo-build-credentials-upload:v1.${payload}`).digest('base64url')
+    expect(await verifyBuildCredentialsUploadToken(SECRET, `${payload}.${signature}`)).toEqual({ ok: false, reason: 'invalid' })
+  })
 })
 
 describe('build credentials key rules', () => {
@@ -112,6 +132,17 @@ describe('build credentials key rules', () => {
     expectValidationError(() => assertAllowedCredentialKey('JOB_ID'), '--build-env JOB_ID: reserved by Capgo; use the dedicated build option instead')
     expectValidationError(() => assertAllowedCredentialKey('CAPGO_SOMETHING'), 'reserved by Capgo')
     expectValidationError(() => assertAllowedCredentialKey('OUTPUT_UPLOAD_URL_X'), 'reserved by Capgo')
+  })
+
+  it.concurrent('refuses to store loader/interpreter env names but keeps normal custom env', () => {
+    for (const key of ['NODE_OPTIONS', 'JAVA_TOOL_OPTIONS', 'GRADLE_OPTS', 'BASH_ENV', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES', 'RUBYOPT', 'PERL5OPT', 'PYTHONSTARTUP', 'PATH', 'NPM_CONFIG_NODE_OPTIONS', 'GIT_SSH_COMMAND'])
+      expect(isStoredReservedEnvKey(key)).toBe(true)
+    for (const key of ['SENTRY_AUTH_TOKEN', 'P12_PASSWORD', 'ORG_GRADLE_PROJECT_MAPS_KEY', 'NPM_TOKEN'])
+      expect(isStoredReservedEnvKey(key)).toBe(false)
+    // Still valid per-build --build-env names (published CLIs unchanged).
+    expect(() => parseCredentialRecord({ NODE_OPTIONS: '--max-old-space-size=4096' })).not.toThrow()
+    expectValidationError(() => assertStorableCredentialKeys({ SENTRY_AUTH_TOKEN: 'x', NODE_OPTIONS: 'y', LD_PRELOAD: 'z' }), 'LD_PRELOAD, NODE_OPTIONS: cannot be stored on Capgo because they change how build tools load code')
+    expect(() => assertStorableCredentialKeys({ SENTRY_AUTH_TOKEN: 'x' })).not.toThrow()
   })
 
   it.concurrent('requires a flat record of strings', () => {
@@ -227,6 +258,18 @@ describe('mergeStoredCredentialsForBuild', () => {
     expect(result.buildCredentials).not.toHaveProperty('BUILD_OUTPUT_UPLOAD_ENABLED')
   })
 
+  it.concurrent('ignores loader env names in stored credentials but keeps request (--build-env) ones', () => {
+    const result = mergeStoredCredentialsForBuild({
+      platform: 'android',
+      stored: { ...completeAndroid, NODE_OPTIONS: '--require /tmp/evil.js', LD_PRELOAD: '/tmp/evil.so' },
+      requestCredentials: { JAVA_TOOL_OPTIONS: '-Xmx4g' },
+      requestBuildOptions: {},
+    })
+    expect(result.buildCredentials).not.toHaveProperty('NODE_OPTIONS')
+    expect(result.buildCredentials).not.toHaveProperty('LD_PRELOAD')
+    expect(result.buildCredentials.JAVA_TOOL_OPTIONS).toBe('-Xmx4g')
+  })
+
   it.concurrent('throws the CLI missing-credentials message', () => {
     expect(() => mergeStoredCredentialsForBuild({ platform: 'android', stored: { KEYSTORE_KEY_ALIAS: 'a' }, requestCredentials: {}, requestBuildOptions: {} }))
       .toThrow(/^Missing required credentials for android: ANDROID_KEYSTORE_FILE \(or --android-keystore-file\)/)
@@ -271,5 +314,20 @@ describe('unwrapSavedCredentialsFile', () => {
     expect(unwrapSavedCredentialsFile({ ios: { P12_PASSWORD: 'x' } }, 'com.test.app', 'ios')).toEqual({ P12_PASSWORD: 'x' })
     expect(unwrapSavedCredentialsFile({ 'com.test.app': { ios: { P12_PASSWORD: 'x' } }, 'com.other': { ios: { P12_PASSWORD: 'y' } } }, 'com.test.app', 'ios')).toEqual({ P12_PASSWORD: 'x' })
     expect(() => unwrapSavedCredentialsFile({ 'com.test.app': { android: {} } }, 'com.test.app', 'ios')).toThrow('has no ios credentials')
+  })
+})
+
+describe('sensitive URL helpers', () => {
+  it.concurrent('redacts the credentials upload token from URLs', () => {
+    expect(redactSensitiveUrl('https://api.capgo.app/build/credentials/upload/abc.def?x=1')).toBe('https://api.capgo.app/build/credentials/upload/[redacted]?x=1')
+    expect(redactSensitiveUrl('--> PUT /functions/v1/build/credentials/upload/abc.def 200')).toBe('--> PUT /functions/v1/build/credentials/upload/[redacted] 200')
+    expect(redactSensitiveUrl('https://api.capgo.app/build/credentials/upload-url')).toBe('https://api.capgo.app/build/credentials/upload-url')
+  })
+
+  it.concurrent('flags routes whose bodies carry signing secrets', () => {
+    for (const url of ['https://api.capgo.app/build/request', 'https://api.capgo.app/build/credentials', 'https://x/functions/v1/build/credentials/upload/t', '/build/credentials/upload-url'])
+      expect(isSecretBodyRoute(url)).toBe(true)
+    for (const url of ['https://api.capgo.app/build/start/job', 'https://api.capgo.app/build/requests', 'https://api.capgo.app/bundle'])
+      expect(isSecretBodyRoute(url)).toBe(false)
   })
 })

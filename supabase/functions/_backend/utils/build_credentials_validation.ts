@@ -258,6 +258,72 @@ export function assertAllowedCredentialKey(key: string): void {
     throw new BuildCredentialsValidationError(`--build-env ${key}: reserved by Capgo; use the dedicated build option instead`)
 }
 
+// Env names that make interpreters, loaders or shells run extra code. Allowed per build
+// (--build-env, unchanged for published CLIs) but never STORED: a stored value would
+// silently run in every later build of the app, including builds by other members.
+const STORED_RESERVED_ENV_KEYS: ReadonlySet<string> = new Set([
+  'PATH',
+  'HOME',
+  'SHELL',
+  'IFS',
+  'ENV',
+  'BASH_ENV',
+  'ZDOTDIR',
+  'SHELLOPTS',
+  'BASHOPTS',
+  'PROMPT_COMMAND',
+  'PS4',
+  'NODE_OPTIONS',
+  'NODE_PATH',
+  'JAVA_TOOL_OPTIONS',
+  '_JAVA_OPTIONS',
+  'JDK_JAVA_OPTIONS',
+  'JAVA_OPTS',
+  'JAVA_HOME',
+  'GRADLE_OPTS',
+  'MAVEN_OPTS',
+  'KOTLIN_DAEMON_OPTS',
+  'RUBYOPT',
+  'RUBYLIB',
+  'GEM_HOME',
+  'GEM_PATH',
+  'BUNDLE_GEMFILE',
+  'PERL5OPT',
+  'PERL5LIB',
+  'PERLLIB',
+  'PYTHONSTARTUP',
+  'PYTHONPATH',
+  'PYTHONHOME',
+  'PYTHONINSPECT',
+  'GIT_SSH',
+  'GIT_SSH_COMMAND',
+  'GIT_EXEC_PATH',
+  'GIT_ASKPASS',
+  'SSH_ASKPASS',
+  'EDITOR',
+  'VISUAL',
+])
+const STORED_RESERVED_ENV_PREFIXES = ['LD_', 'DYLD_', 'NPM_CONFIG_', 'GIT_CONFIG']
+
+/** True when an env name may run code in every build and therefore cannot be stored. */
+export function isStoredReservedEnvKey(key: string): boolean {
+  if (CREDENTIAL_KEYS.has(key) || NON_CREDENTIAL_KEYS.has(key) || key === PROVISIONING_MAP_BASE64_KEY)
+    return false
+  return STORED_RESERVED_ENV_KEYS.has(key) || STORED_RESERVED_ENV_PREFIXES.some(prefix => key.startsWith(prefix))
+}
+
+/** Rejects keys that may be passed per build but must never be stored on Capgo. */
+export function assertStorableCredentialKeys(record: CredentialRecord): void {
+  const rejected = Object.keys(record).filter(isStoredReservedEnvKey).sort()
+  if (rejected.length > 0)
+    throw new BuildCredentialsValidationError(`${rejected.join(', ')}: cannot be stored on Capgo because ${rejected.length === 1 ? 'it changes' : 'they change'} how build tools load code, which would run in every later build. Pass ${rejected.length === 1 ? 'it' : 'them'} per build with --build-env instead.`)
+}
+
+/** Drops reserved env names from stored credentials (rows written before they were rejected). */
+export function withoutStoredReservedEnvKeys(record: CredentialRecord): CredentialRecord {
+  return Object.fromEntries(Object.entries(record).filter(([key]) => !isStoredReservedEnvKey(key)))
+}
+
 /** Shape check for untrusted input: a flat object of string values with allowed keys. */
 export function parseCredentialRecord(input: unknown, label = 'credentials'): CredentialRecord {
   if (!isPlainRecord(input))
@@ -557,7 +623,8 @@ export interface MergeStoredCredentialsResult {
  */
 export function mergeStoredCredentialsForBuild(input: MergeStoredCredentialsInput): MergeStoredCredentialsResult {
   const { platform, requestBuildOptions } = input
-  const flat: CredentialRecord = { ...input.stored, ...input.requestCredentials }
+  // Stored values never carry loader/interpreter env names; request values (--build-env) may.
+  const flat: CredentialRecord = { ...withoutStoredReservedEnvKeys(input.stored), ...input.requestCredentials }
   for (const [option, key, kind] of OPTION_KEY_MAP) {
     const value = optionToFlatValue(kind, requestBuildOptions[option])
     if (value !== undefined)

@@ -9,7 +9,8 @@
  *   BUILD_CREDENTIALS_ENCRYPTION_KEY_PREVIOUS; rows are re-sealed with the current key on
  *   their next write (and on read, via needsReseal).
  * - Upload tokens are HMAC-SHA-256 capabilities signed with BUILD_CREDENTIALS_UPLOAD_SECRET
- *   (falls back to API_SECRET, same pattern as notification secrets).
+ *   (falls back to API_SECRET, same pattern as notification secrets). They are single use:
+ *   the signed nonce is recorded in build_credentials_upload_token_uses on first upload.
  *
  * Never log plaintext, ciphertext or tokens.
  */
@@ -173,6 +174,7 @@ export interface BuildCredentialsUploadClaims {
   apikey_id: number
   /** Unix seconds. */
   exp: number
+  /** Random id; burned on first successful upload (single-use token). */
   nonce: string
 }
 
@@ -239,6 +241,8 @@ export async function verifyBuildCredentialsUploadToken(secret: string, token: s
     || typeof claims.user_id !== 'string'
     || !Number.isSafeInteger(claims.apikey_id)
     || !Number.isSafeInteger(claims.exp)
+    || typeof claims.nonce !== 'string'
+    || !/^[\w-]{16,64}$/.test(claims.nonce)
   ) {
     return { ok: false, reason: 'invalid' }
   }

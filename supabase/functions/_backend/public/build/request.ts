@@ -295,6 +295,28 @@ async function ensureBuildPermission(c: Context, appId: string, userId: string) 
   }
 }
 
+/**
+ * Stored signing secrets are written only by app admins (app.update_settings). The project
+ * archive of a build runs arbitrary Gradle/Podfile/npm scripts with those secrets in env, so
+ * a build that injects them needs the same right; app.build_native alone is not enough.
+ */
+export const STORED_CREDENTIALS_BUILD_PERMISSION = 'app.update_settings' as const
+
+async function ensureStoredCredentialsPermission(c: Context, appId: string, userId: string) {
+  if (await checkPermission(c, STORED_CREDENTIALS_BUILD_PERMISSION, { appId }))
+    return
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'Stored build credentials denied: missing app.update_settings',
+    app_id: appId,
+    user_id: userId,
+  })
+  throw quickError(403, 'permission_denied', 'Capgo permission denied: building with the app\'s stored credentials (use_stored_credentials) requires app admin rights (app.update_settings), because build scripts can read the signing secrets. Ask an app admin to run this build, or provide the signing credentials directly instead of using the stored ones.', {
+    app_id: appId,
+    permission: STORED_CREDENTIALS_BUILD_PERMISSION,
+  }, undefined, { alert: false })
+}
+
 async function getBuildOwnerOrg(c: Context, supabase: ReturnType<typeof supabaseApikey>, appId: string): Promise<string> {
   // Get org_id for the app to use as anonymized user ID
   const { data: app, error: appError } = await supabase
@@ -607,6 +629,8 @@ export async function requestBuild(
   } = validateBuildRequestBody(c, body, apikey.user_id)
 
   await ensureBuildPermission(c, app_id, apikey.user_id)
+  if (use_stored_credentials)
+    await ensureStoredCredentialsPermission(c, app_id, apikey.user_id)
 
   // Opt-in only: merge + validate the app's stored credentials before any builder/plan side effect.
   const { buildOptions: build_options, buildCredentials: build_credentials } = use_stored_credentials

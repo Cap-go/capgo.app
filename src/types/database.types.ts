@@ -652,6 +652,27 @@ export type Database = {
         }
         Relationships: []
       }
+      build_credentials_upload_token_uses: {
+        Row: {
+          app_id: string
+          expires_at: string
+          nonce: string
+          used_at: string
+        }
+        Insert: {
+          app_id: string
+          expires_at: string
+          nonce: string
+          used_at?: string
+        }
+        Update: {
+          app_id?: string
+          expires_at?: string
+          nonce?: string
+          used_at?: string
+        }
+        Relationships: []
+      }
       build_logs: {
         Row: {
           app_id: string | null

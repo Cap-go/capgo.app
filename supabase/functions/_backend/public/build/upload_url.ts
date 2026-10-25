@@ -43,11 +43,16 @@ export async function getBuildUploadUrl(
     throw simpleError('not_found', 'Build request not found', { job_id: jobId })
 
   assertBuildUploadWindowOpen(c, jobId, buildRequest)
+  const uploadDeadline = buildRequest.upload_expires_at ? new Date(buildRequest.upload_expires_at) : null
+  if (!uploadDeadline || Number.isNaN(uploadDeadline.getTime()))
+    throw quickError(403, 'upload_expired', 'Upload window has expired', {}, undefined, { alert: false })
 
+  // The builder caps the signed URL at this deadline, so the URL itself stops working
+  // when the build's upload window closes (not only the expires_at we report).
   const response = await fetch(`${builderUrl}/jobs/${encodeURIComponent(jobId)}/input-upload-url`, {
     method: 'POST',
     headers: { 'x-api-key': builderApiKey, 'content-type': 'application/json' },
-    body: '{}',
+    body: JSON.stringify({ expires_at: uploadDeadline.toISOString() }),
   })
   if (!response.ok) {
     const errorText = await response.text()
@@ -56,8 +61,10 @@ export async function getBuildUploadUrl(
   }
   const signed = await response.json() as BuilderInputUploadUrl
 
-  // Never let the signed URL outlive the build's own upload window.
-  const expiresAt = new Date(Math.min(new Date(signed.expires_at).getTime(), new Date(buildRequest.upload_expires_at!).getTime())).toISOString()
+  // The builder already caps the URL at uploadDeadline; min() keeps the report correct
+  // against a builder that predates the expires_at body field.
+  const signedExpiry = Date.parse(signed.expires_at)
+  const expiresAt = new Date(Number.isFinite(signedExpiry) ? Math.min(signedExpiry, uploadDeadline.getTime()) : uploadDeadline.getTime()).toISOString()
 
   cloudlog({ requestId: c.get('requestId'), message: 'Build input upload url issued', job_id: jobId, app_id: appId })
   return c.json({

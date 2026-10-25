@@ -59,3 +59,35 @@ FOR ALL
 TO PUBLIC
 USING (false)
 WITH CHECK (false);
+
+-- Single-use enforcement for /build/credentials/upload/:token. The token is an
+-- HMAC capability carrying a random nonce and a 10 minute expiry; the first
+-- successful upload inserts the nonce here (INSERT ... ON CONFLICT DO NOTHING),
+-- so a replay of the same URL is refused. Rows are useless after expires_at
+-- (the token's own exp check refuses it) and the backend prunes a bounded
+-- batch of expired rows on every insert, so the table stays tiny.
+CREATE TABLE "public"."build_credentials_upload_token_uses" (
+  "nonce" text NOT NULL,
+  "app_id" character varying NOT NULL,
+  "expires_at" timestamp with time zone NOT NULL,
+  "used_at" timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT "build_credentials_upload_token_uses_pkey" PRIMARY KEY ("nonce")
+);
+ALTER TABLE "public"."build_credentials_upload_token_uses" OWNER TO "postgres";
+COMMENT ON TABLE "public"."build_credentials_upload_token_uses" IS 'Consumed build credentials upload token nonces (single-use upload URLs). Service role only; expired rows are pruned by the backend.';
+
+CREATE INDEX "build_credentials_upload_token_uses_expires_at_idx" ON "public"."build_credentials_upload_token_uses" ("expires_at");
+
+ALTER TABLE "public"."build_credentials_upload_token_uses" ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE "public"."build_credentials_upload_token_uses" FROM PUBLIC;
+REVOKE ALL ON TABLE "public"."build_credentials_upload_token_uses" FROM "anon";
+REVOKE ALL ON TABLE "public"."build_credentials_upload_token_uses" FROM "authenticated";
+GRANT ALL ON TABLE "public"."build_credentials_upload_token_uses" TO "service_role";
+
+CREATE POLICY "Deny all direct access"
+ON "public"."build_credentials_upload_token_uses"
+AS RESTRICTIVE
+FOR ALL
+TO PUBLIC
+USING (false)
+WITH CHECK (false);

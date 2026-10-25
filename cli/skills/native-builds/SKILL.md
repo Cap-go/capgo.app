@@ -260,7 +260,7 @@ npx @capgo/cli@latest build credentials save --platform android \
 
 ### `build credentials push` / `remote-status` / `remote-delete`
 
-Store the locally saved credentials for one platform on Capgo, encrypted (AES-256-GCM, bound to the app and platform), so builds can use them without sending secrets each time (for example from the hosted Capgo MCP). Writing or deleting requires app settings permission (app admin); reading the summary requires native build permission. Only key names and non-secret facts (iOS distribution, team id, provisioning profile names and expiry, what is still missing) are ever shown.
+Store the locally saved credentials for one platform on Capgo, encrypted (AES-256-GCM, bound to the app and platform), so builds can use them without sending secrets each time (for example from the hosted Capgo MCP). Writing or deleting requires app settings permission (app admin), and so does building with them (`build request --use-stored-credentials` or the MCP `capgo_request_build`), because build scripts can read the secrets; reading the summary requires native build permission. Env names that load code into every build (`NODE_OPTIONS`, `JAVA_TOOL_OPTIONS`, `GRADLE_OPTS`, `LD_PRELOAD`, `DYLD_*`, `PATH`, ...) cannot be stored; pass them per build with `--build-env`. Only key names and non-secret facts (iOS distribution, team id, provisioning profile names and expiry, what is still missing) are ever shown.
 
 - Examples:
   - `npx @capgo/cli@latest build credentials push com.example.app --platform ios`

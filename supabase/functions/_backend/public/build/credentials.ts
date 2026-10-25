@@ -5,7 +5,7 @@
  * PUT    /build/credentials                    -> validate, encrypt, upsert         (app.update_settings)
  * DELETE /build/credentials                    -> delete one platform               (app.update_settings)
  * POST   /build/credentials/upload-url         -> 10 min signed upload capability   (app.update_settings)
- * PUT    /build/credentials/upload/:token      -> raw JSON credentials, token auth only; permission re-checked
+ * PUT    /build/credentials/upload/:token      -> raw JSON credentials, token auth only; single use; permission re-checked
  *
  * Secrets never leave this module in clear except toward the builder in /build/request.
  * Request bodies are read from the raw stream (not cloned) so error reporters cannot
@@ -26,10 +26,12 @@ import {
   verifyBuildCredentialsUploadToken,
 } from '../../utils/build_credentials_crypto.ts'
 import {
+  assertStorableCredentialKeys,
   BuildCredentialsValidationError,
   normalizeCredentialValues,
   parseCredentialRecord,
   summarizeCredentials,
+  withoutStoredReservedEnvKeys,
 } from '../../utils/build_credentials_validation.ts'
 import { quickError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../../utils/logging.ts'
@@ -251,11 +253,14 @@ async function storeBuildCredentials(c: Context, input: {
   mode: BuildCredentialsWriteMode
   incoming: unknown
   actor: AuditActor
+  /** Runs after validation, right before the write (single-use upload token burn). */
+  beforeWrite?: () => Promise<void>
 }): Promise<BuildCredentialsWriteResponse> {
   const { appId, platform, mode, actor } = input
   let incoming: CredentialRecord
   try {
     incoming = parseCredentialRecord(input.incoming)
+    assertStorableCredentialKeys(incoming)
   }
   catch (error) {
     asValidationError(error)
@@ -268,7 +273,7 @@ async function storeBuildCredentials(c: Context, input: {
   let base: CredentialRecord = {}
   if (mode === 'merge' && existing) {
     try {
-      base = (await openBuildCredentials({ keyring, appId, platform, ciphertext: existing.ciphertext, keyVersion: existing.key_version })).credentials
+      base = withoutStoredReservedEnvKeys((await openBuildCredentials({ keyring, appId, platform, ciphertext: existing.ciphertext, keyVersion: existing.key_version })).credentials)
     }
     catch (error) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'Stored build credentials cannot be decrypted for merge', app_id: appId, platform, error: (error as Error)?.message })
@@ -289,6 +294,9 @@ async function storeBuildCredentials(c: Context, input: {
   const sealed = await sealBuildCredentials({ secret: keyring.current, appId, platform, credentials: normalized })
   const summary = summarizeCredentials(platform, normalized)
   const now = new Date().toISOString()
+
+  if (input.beforeWrite)
+    await input.beforeWrite()
 
   const { data: row, error } = await supabaseAdmin(c)
     .from('app_build_credentials')
@@ -479,6 +487,47 @@ async function assertUploadTokenStillAuthorized(c: Context, claims: BuildCredent
   }
 }
 
+/**
+ * Burns the upload token (its signed nonce) atomically, so a URL works exactly once.
+ * Called after validation, so a rejected file can be fixed and re-sent with the same URL.
+ * Also prunes a bounded batch of expired entries (an expired token is refused by its exp anyway).
+ */
+async function consumeUploadToken(c: Context, claims: BuildCredentialsUploadClaims): Promise<void> {
+  let pgClient: Awaited<ReturnType<typeof getPgClient>> | undefined
+  let consumed = false
+  try {
+    pgClient = await getPgClient(c)
+    const result = await getDrizzleClient(pgClient).execute(sql`
+      WITH pruned AS (
+        DELETE FROM public.build_credentials_upload_token_uses
+        WHERE nonce IN (
+          SELECT nonce FROM public.build_credentials_upload_token_uses
+          WHERE expires_at < now()
+          ORDER BY expires_at
+          LIMIT 100
+        )
+      )
+      INSERT INTO public.build_credentials_upload_token_uses (nonce, app_id, expires_at)
+      VALUES (${claims.nonce}, ${claims.app_id}, to_timestamp(${claims.exp}))
+      ON CONFLICT (nonce) DO NOTHING
+      RETURNING nonce
+    `)
+    consumed = result.rows.length === 1
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Build credentials upload token consume failed', app_id: claims.app_id, error: serializeError(error) })
+    quickError(503, 'database_unavailable', 'Cannot verify upload URL', {}, undefined, { alert: false })
+  }
+  finally {
+    if (pgClient)
+      closeClient(c, pgClient)
+  }
+  if (!consumed) {
+    cloudlog({ requestId: c.get('requestId'), message: 'Build credentials upload token replayed', app_id: claims.app_id, platform: claims.platform })
+    quickError(409, 'upload_url_used', 'This credentials upload URL was already used; request a new one', {}, undefined, { alert: false })
+  }
+}
+
 export async function uploadBuildCredentialsWithToken(c: Context, token: string): Promise<Response> {
   const verification = await verifyBuildCredentialsUploadToken(getBuildCredentialsUploadSecret(c), token)
   if (!verification.ok) {
@@ -487,10 +536,19 @@ export async function uploadBuildCredentialsWithToken(c: Context, token: string)
       : 'Invalid credentials upload URL', {}, undefined, { alert: false })
   }
   const { claims } = verification
-  const actor = await assertUploadTokenStillAuthorized(c, claims)
+  // Read (and so consume) the body before any DB work: an error report can then never
+  // re-read it, and on_error never copies /build/credentials bodies anyway.
   const body = await readJsonBody(c)
+  const actor = await assertUploadTokenStillAuthorized(c, claims)
   const incoming = unwrapSavedCredentialsFile(body, claims.app_id, claims.platform)
-  const result = await storeBuildCredentials(c, { appId: claims.app_id, platform: claims.platform, mode: claims.mode, incoming, actor })
+  const result = await storeBuildCredentials(c, {
+    appId: claims.app_id,
+    platform: claims.platform,
+    mode: claims.mode,
+    incoming,
+    actor,
+    beforeWrite: () => consumeUploadToken(c, claims),
+  })
   return c.json(result)
 }
 

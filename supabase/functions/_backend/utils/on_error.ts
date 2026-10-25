@@ -5,6 +5,7 @@ import { sendDiscordAlert500 } from './discord.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { isTransientDatabaseError, readPgErrorCode, readQuickErrorOriginalCause } from './pg_errors.ts'
 import { capturePosthogException } from './posthog.ts'
+import { isSecretBodyRoute, redactSensitiveUrl } from './sensitive_url.ts'
 import { backgroundTask } from './utils.ts'
 
 const drizzleErrorNames = new Set(['DrizzleError', 'DrizzleQueryError', 'TransactionRollbackError'])
@@ -37,6 +38,14 @@ const sensitiveRequestBodyKeys = new Set([
   'build_credentials',
 ])
 
+// Generic secret-looking key names (build env style P12_PASSWORD, APPLE_KEY_CONTENT,
+// ANDROID_KEYSTORE_FILE, BUILD_PROVISION_PROFILE_BASE64, apikey, ...).
+const sensitiveRequestBodyKeyPattern = /PASSWORD|SECRET|KEY|TOKEN|CERTIFICATE|KEYSTORE|PLAY_CONFIG_JSON|PROVISION/i
+
+function isSensitiveRequestBodyKey(key: string): boolean {
+  return sensitiveRequestBodyKeys.has(key) || sensitiveRequestBodyKeyPattern.test(key)
+}
+
 function redactSensitiveRequestBody(value: unknown): unknown {
   if (Array.isArray(value))
     return value.map(redactSensitiveRequestBody)
@@ -46,9 +55,11 @@ function redactSensitiveRequestBody(value: unknown): unknown {
 
   return Object.fromEntries(Object.entries(value).map(([key, entryValue]) => [
     key,
-    sensitiveRequestBodyKeys.has(key) ? '[redacted]' : redactSensitiveRequestBody(entryValue),
+    isSensitiveRequestBodyKey(key) ? '[redacted]' : redactSensitiveRequestBody(entryValue),
   ]))
 }
+
+export const SECRET_ROUTE_BODY_PLACEHOLDER = '[redacted: build credentials route]'
 
 function isFilesDurableObjectTransientError(functionName: string, error: unknown): boolean {
   if (!filesUploadFunctionNames.has(functionName) || !error || typeof error !== 'object' || !('message' in error))
@@ -120,7 +131,7 @@ function logTransientPgError(c: Context, functionName: string, e: unknown, kind:
     functionName,
     kind,
     method: c.req.method,
-    url: c.req.url,
+    url: redactSensitiveUrl(c.req.url),
     errorMessage: (e as Error)?.message ?? 'Unknown error',
     stack: serializeError(e)?.stack ?? 'N/A',
     transient: true,
@@ -134,7 +145,11 @@ export function onError(functionName: string) {
     const rawReq = c.req.raw
     const method = c.req.method.toUpperCase()
     const shouldReadBody = method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS'
-    if (shouldReadBody) {
+    // /build/credentials* and /build/request bodies carry signing secrets: never read them here.
+    if (shouldReadBody && isSecretBodyRoute(c.req.url)) {
+      body = SECRET_ROUTE_BODY_PLACEHOLDER
+    }
+    else if (shouldReadBody) {
       try {
         if (rawReq?.bodyUsed) {
           body = 'Body already consumed'
@@ -216,7 +231,7 @@ export function onError(functionName: string) {
         functionName,
         kind: 'http_exception',
         method: c.req.method,
-        url: c.req.url,
+        url: redactSensitiveUrl(c.req.url),
         status: e.status,
         errorCode: res.error,
         errorMessage: res.message,
@@ -268,7 +283,7 @@ export function onError(functionName: string) {
         functionName,
         kind: 'drizzle_error',
         method: c.req.method,
-        url: c.req.url,
+        url: redactSensitiveUrl(c.req.url),
         errorMessage: e?.message ?? 'Unknown error',
         stack: serializeError(e)?.stack ?? 'N/A',
         moreInfo: {
@@ -292,7 +307,7 @@ export function onError(functionName: string) {
       functionName,
       kind: 'unhandled_error',
       method: c.req.method,
-      url: c.req.url,
+      url: redactSensitiveUrl(c.req.url),
       errorMessage: e?.message ?? 'Unknown error',
       stack: serializeError(e)?.stack ?? 'N/A',
     })

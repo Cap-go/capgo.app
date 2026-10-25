@@ -1176,7 +1176,7 @@ Examples:
   .option('--ios-target <target>', 'iOS: Xcode target for reading build settings (default: same as scheme)')
   .option('--xcode-version <version>', 'iOS: build on a machine with this Xcode version (e.g. 26, 26.0.1, 27). A major version accepts any minor. Default: any machine. Precedence: CLI > env (CAPGO_IOS_XCODE_VERSION) > saved credentials')
   .addOption(new Option('--ios-distribution <mode>', 'iOS: Distribution mode. app_store (default) uploads to TestFlight/App Store; ad_hoc skips store upload and builds an Ad Hoc IPA for device install. Use ad_hoc with --output-upload when the App Store app does not exist yet or you only need an IPA download.').choices(['app_store', 'ad_hoc']))
-  .option('--use-stored-credentials', 'Use the signing credentials stored on Capgo for this app (see "build credentials push"). Credentials given by flags, env or a local saved file still take precedence; Capgo validates the merged set.')
+  .option('--use-stored-credentials', 'Use the signing credentials stored on Capgo for this app (see "build credentials push"). Requires app admin rights (app settings permission) on the app. Credentials given by flags, env or a local saved file still take precedence; Capgo validates the merged set.')
   .option('--ios-provisioning-profile <mapping>', 'iOS: Provisioning profile path or bundleId=path mapping (repeatable)', collect, [])
   .option('--no-cache', 'Disable Xcode compilation cache for this build (default: cache enabled)')
   .option('--cache-key <key>', 'Custom compilation cache key for this build (e.g. rc, prod, feature-branch). Use to share or isolate cache between environments. Precedence over the default appId-only key; ignored when --no-cache is set.')
@@ -1558,7 +1558,9 @@ buildCredentials
   .description(`Store this machine's saved build credentials for one platform on Capgo, encrypted.
 
 Builds can then use them without sending secrets (build request --use-stored-credentials,
-or the hosted Capgo MCP). Requires app settings permission (app admin) on the app.
+or the hosted Capgo MCP). Requires app settings permission (app admin) on the app, and so
+do builds that use the stored credentials. Custom env names that load code into every
+build (NODE_OPTIONS, JAVA_TOOL_OPTIONS, GRADLE_OPTS, LD_PRELOAD, PATH, ...) cannot be stored.
 Only key names are printed; values never are.
 
 Examples:

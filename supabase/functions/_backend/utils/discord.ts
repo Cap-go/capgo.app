@@ -3,6 +3,7 @@ import type {
 } from 'discord-api-types/v10'
 import type { Context } from 'hono'
 import { cloudlog, cloudlogErr } from './logging.ts'
+import { redactSensitiveUrl } from './sensitive_url.ts'
 import { getEnv } from './utils.ts'
 
 // Fields that should be completely removed from logs (never logged)
@@ -103,7 +104,7 @@ export function sendDiscordAlert500(c: Context, functionName: string, body: stri
   const userAgent = c.req.header('user-agent') ?? 'unknown'
   const ip = c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for') ?? 'unknown'
   const method = c.req.method
-  const url = c.req.url
+  const url = redactSensitiveUrl(c.req.url)
   const rawHeaders = Object.fromEntries((c.req.raw.headers as any).entries())
   const headers = sanitizeSensitiveHeaders(rawHeaders)
   const errorMessage = e?.message ?? 'Unknown error'
