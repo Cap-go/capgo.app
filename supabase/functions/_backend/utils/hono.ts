@@ -11,7 +11,7 @@ import { logger } from 'hono/logger'
 import { requestId } from 'hono/request-id'
 import { Hono } from 'hono/tiny'
 import { timingSafeEqual } from 'hono/utils/buffer'
-import { cloudlog } from './logging.ts'
+import { accessLog, cloudlog } from './logging.ts'
 import { onError } from './on_error.ts'
 import { redactSensitiveUrl } from './sensitive_url.ts'
 import { getEnv } from './utils.ts'
@@ -341,7 +341,7 @@ export function createHono(functionName: string, _version: string) {
   // Skip hono's access logger on plugin hot paths — it serializes every request
   // on millions of device calls/day.
   if (!pluginHotPath)
-    appGlobal.use('*', logger((message, ...rest) => console.log(redactSensitiveUrl(message), ...rest)))
+    appGlobal.use('*', logger(accessLog))
   // Use platform-specific request IDs, fallback to generated UUID.
   // Do not cloudlog inside the generator: it runs on every request (incl. cf-ray).
   appGlobal.use('*', requestId({
