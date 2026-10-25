@@ -29,15 +29,15 @@ function trialDetails({ endsAt, plansUrl }: AgentTrial) {
   return { date: new Date(endsAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }), link: link.href }
 }
 
-export function formatAgentTrialStep(trial: AgentTrial, now = Date.now()): string {
+export function formatAgentTrialStep(trial: AgentTrial, now = Date.now(), builder = false): string {
   const { date, link } = trialDetails(trial)
   const days = Math.max(0, Math.ceil((trial.endsAt - now) / DAY_MS))
-  return `- Add a payment method before ${date} to keep live updates running after the free trial (${days} ${days === 1 ? 'day' : 'days'} left; devices stop receiving updates without a plan; no charge before then): ${link}`
+  return `- Add a payment method before ${date} to keep ${builder ? 'cloud builds' : 'live updates'} running after the free trial (${days} ${days === 1 ? 'day' : 'days'} left; ${builder ? 'new builds are blocked' : 'devices stop receiving updates'} without a plan; no charge before then): ${link}`
 }
 
-export function formatAgentTodoTrialItem(trial: AgentTrial): string {
+export function formatAgentTodoTrialItem(trial: AgentTrial, builder = false): string {
   const { date, link } = trialDetails(trial)
-  return `[ ] Pending: Add a payment method before ${date} so live updates keep reaching devices after the free trial (no charge before then): ${link}`
+  return `[ ] Pending: Add a payment method before ${date} so ${builder ? 'cloud builds keep working' : 'live updates keep reaching devices'} after the free trial (no charge before then): ${link}`
 }
 
 export function formatAgentUploadTrialNote(trialDaysLeft: number, plansUrl: string, now = Date.now()): string {

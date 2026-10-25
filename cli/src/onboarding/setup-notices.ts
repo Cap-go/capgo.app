@@ -196,8 +196,9 @@ function formatAgentSetupNotice(notice: SetupNotice, now: number): string | unde
       ]
     : notice.kind === 'plan' && notice.completed.length ? [`- ${notice.completed.join(' and ')}: set up.`] : []
   const trial = agentTrial(notice.billing, now)
+  const builder = notice.kind === 'setup' ? notice.product.endsWith('builds') : notice.kind === 'plan' && !notice.completed.includes('Live updates')
   // Without a trial, only an unfinished setup step is a next step.
-  const steps = trial ? [...lines, formatAgentTrialStep(trial, now)] : notice.kind === 'setup' ? lines : []
+  const steps = trial ? [...lines, formatAgentTrialStep(trial, now, builder)] : notice.kind === 'setup' ? lines : []
   return steps.length ? ['Capgo — next steps', '', ...steps].join('\n') : undefined
 }
 
