@@ -414,6 +414,7 @@ watch(showSetupFlow, (newValue) => {
       :key="props.appId"
       :setup-app-id="props.appId"
       initial-checklist-path="builder"
+      hide-footer
       show-checklist
       onboarding
     />

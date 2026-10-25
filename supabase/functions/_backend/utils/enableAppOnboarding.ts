@@ -13,26 +13,56 @@ function object(value: unknown): JsonObject {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : {}
 }
 
-export class UnsupportedBuilderOnboardingVersion extends Error {}
+export class UnsupportedOnboardingVersion extends Error {}
 
 function checklistVersion(value: Json | undefined, fallback: string): string {
   if (value === null || value === undefined)
     return fallback
   if (typeof value !== 'string' && typeof value !== 'number')
-    throw new UnsupportedBuilderOnboardingVersion('Unsupported onboarding checklist version')
+    throw new UnsupportedOnboardingVersion('Unsupported onboarding checklist version')
   return String(value)
 }
 
-// Explicit opt-in only: keep legacy records and feature history, and reopen the
-// existing Getting started flow without changing need_onboarding or experiments.
-export function enableBuilderChecklist(value: unknown): JsonObject {
+function readOnboardingSetup(value: unknown) {
   const onboarding = { ...object(value) }
   const setup = { ...Object.fromEntries(setupKeys.filter(key => key in onboarding).map(key => [key, onboarding[key]])), ...object(onboarding.setup) }
   const version = checklistVersion(setup.todo_list_version, '2')
   if (!['1', '2', '3', '4'].includes(version)
     || (version === '4' && (checklistVersion(setup.ota_todo_list_version, '1') !== '1' || checklistVersion(setup.builder_todo_list_version, '1') !== '1'))) {
-    throw new UnsupportedBuilderOnboardingVersion('Unsupported onboarding checklist version')
+    throw new UnsupportedOnboardingVersion('Unsupported onboarding checklist version')
   }
+  return { onboarding, setup, version }
+}
+
+export function enableOtaChecklist(value: unknown): JsonObject {
+  const { onboarding, setup, version } = readOnboardingSetup(value)
+  // An existing OTA checklist, including completed or dismissed setup, is unchanged.
+  if (version === '3' || (version === '4' && setup.ota_todo_list_version === '1'))
+    return onboarding
+  if (version === '4' && setup.ota_todo_list_version === 1)
+    return { ...onboarding, setup: { ...setup, ota_todo_list_version: '1' } }
+
+  const steps = { ...object(setup.steps) }
+  const previousOta = version === '4' ? object(steps.ota) : steps
+  const ota = Object.fromEntries(APP_ONBOARDING_OTA_V1_STEP_IDS.map(id => [
+    id,
+    previousOta[id] ?? (id === 'login_cli_mcp' ? previousOta.add_app : undefined) ?? { status: 'pending' },
+  ]))
+  const paths = Array.isArray(setup.paths) ? [...setup.paths] : []
+  if (!paths.includes('ota'))
+    paths.push('ota')
+  delete setup.completed_at
+  delete onboarding.getting_started_dismissed_at
+  return {
+    ...onboarding,
+    setup: { ...setup, todo_list_version: 4, ota_todo_list_version: '1', paths, selected_path: 'ota', outcome: 'in_progress', steps: { ...steps, ota } },
+  }
+}
+
+// Explicit opt-in only: keep legacy records and feature history, and reopen the
+// existing Getting started flow without changing need_onboarding or experiments.
+export function enableBuilderChecklist(value: unknown): JsonObject {
+  const { onboarding, setup, version } = readOnboardingSetup(value)
 
   const steps = { ...object(setup.steps) }
   const builder = { ...object(steps.builder) }

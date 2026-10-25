@@ -9,6 +9,11 @@
  */
 
 import crypto from 'node:crypto'
+import { mock } from 'bun:test'
+
+// Exercise the OAuth flow without launching the developer's system browser.
+const openBrowser = mock(async () => {})
+mock.module('open', () => ({ default: openBrowser }))
 
 console.log('🧪 Testing Google OAuth helpers...\n')
 
@@ -293,6 +298,7 @@ await test('startOAuthFlow authUrl contains clientId and expected scopes', async
   }
   const session = await startOAuthFlow(config, { onAuthUrl: () => {}, onStatus: () => {} })
   try {
+    assertEquals(openBrowser.mock.calls.at(-1)?.[0], session.authUrl, 'browser opener must receive the auth URL')
     const parsedUrl = new URL(session.authUrl)
     assertEquals(parsedUrl.searchParams.get('client_id'), 'my-client-id.apps.googleusercontent.com')
     const scope = parsedUrl.searchParams.get('scope')

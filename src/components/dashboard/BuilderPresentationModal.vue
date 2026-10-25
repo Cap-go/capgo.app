@@ -734,10 +734,14 @@ onUnmounted(() => {
           <button type="button" class="bp-ghost" :disabled="isFirst" @click="prev">
             ← {{ t('builder-promo-back') }}
           </button>
-          <button v-if="!isLast" type="button" class="bp-next" @click="next">
-            {{ t('builder-promo-next') }} →
-          </button>
-          <span v-else />
+          <div class="bp-actions">
+            <button v-if="embedded && startAction === 'emit' && !isLast" type="button" class="bp-ghost bp-start" :disabled="starting" :aria-busy="starting || undefined" @click="startBuild">
+              {{ t('builder-intro-start-first-build') }}
+            </button>
+            <button v-if="!isLast" type="button" class="bp-next" @click="next">
+              {{ t('builder-promo-next') }} →
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -961,10 +965,24 @@ onUnmounted(() => {
 
 .bp-foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   padding: 14px 18px;
   border-top: 1px solid var(--bp-border);
+}
+.bp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  max-width: 100%;
+  margin-left: auto;
+}
+.bp-start {
+  max-width: 100%;
 }
 .bp-ghost {
   background: transparent;

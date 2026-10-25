@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Ref } from 'vue'
 import type { Tab, TableColumn } from '~/components/comp_def'
+import type { SsoManagedAccess } from '~/services/ssoManaged'
 import { computedAsync } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, ref, watch } from 'vue'
@@ -15,6 +16,7 @@ import RoleCapabilitiesHint from '~/components/forms/RoleCapabilitiesHint.vue'
 import SearchInput from '~/components/forms/SearchInput.vue'
 import { useConsole } from '~/services/console'
 import { checkPermissions } from '~/services/permissions'
+import { fetchSsoManagedAccess } from '~/services/ssoManaged'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -147,9 +149,16 @@ const groupAppBindings = computed(() =>
   groupBindings.value.filter((b: RoleBinding) => b.scope_type === 'app' && !!b.app_id),
 )
 
+const ssoManaged = ref<SsoManagedAccess>(new Map())
+
+// The SSO role mapping owns the membership of SSO members in the groups it maps.
+function isSsoManagedMember(userId: string) {
+  return !!group.value && !!ssoManaged.value.get(userId)?.groupIds.has(group.value.id)
+}
+
 const availableMembersToAdd = computed(() => {
   const alreadyInGroup = new Set(groupMembers.value.map((m: GroupMember) => m.user_id))
-  return orgMembers.value.filter((m: OrgMember) => !alreadyInGroup.has(m.user_id))
+  return orgMembers.value.filter((m: OrgMember) => !alreadyInGroup.has(m.user_id) && !isSsoManagedMember(m.user_id))
 })
 
 const orgRoleOptions = computed<RoleOption[]>(() =>
@@ -198,7 +207,8 @@ const memberDynamicColumns = computed<TableColumn[]>(() => [
     actions: [
       {
         icon: IconTrash,
-        title: t('remove'),
+        title: (member: GroupMember) => isSsoManagedMember(member.user_id) ? t('sso-managed-role') : t('remove'),
+        disabled: (member: GroupMember) => isSsoManagedMember(member.user_id),
         onClick: (member: GroupMember) => removeMemberFromGroup(member.user_id),
       },
     ],
@@ -246,6 +256,7 @@ async function loadAll() {
       fetchRoleBindings(),
       fetchApps(),
       fetchOrgMembers(),
+      currentOrganization.value?.gid ? fetchSsoManagedAccess(currentOrganization.value.gid).then(managed => ssoManaged.value = managed) : undefined,
     ])
     // fetchGroupMembers needs orgMembers loaded first to resolve emails
     await fetchGroupMembers()

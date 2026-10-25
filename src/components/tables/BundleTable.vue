@@ -104,16 +104,14 @@ async function showDeleteConfirmationDialog(name: string, isPlural = false, askF
   let message: string
 
   if (isPlural) {
-    message = `${t('alert-not-reverse-message')} ${t('alert-delete-message-plural')} ${t('bundles').toLowerCase()}?`
+    message = t('alert-delete-bundles-confirm')
   }
   else if (askForMethod) {
-    message = `${t('alert-not-reverse-message')} ${t('alert-delete-message')} ${name} ${t('you-cannot-reuse')}.`
+    message = t('alert-delete-named-no-reuse-confirm', { name })
   }
   else {
-    const baseMessage = `${t('alert-not-reverse-message')} ${t('alert-delete-message')} ${name}?`
-    const unsafeWarning = isPlural
-      ? t('you-are-deleting-unsafely-plural')
-      : t('you-are-deleting-unsafely')
+    const baseMessage = t('alert-delete-named-confirm', { name })
+    const unsafeWarning = t('you-are-deleting-unsafely')
     const formattedWarning = unsafeWarning
       .replace('$1', '<b><u>')
       .replace('$2', '</u></b>')

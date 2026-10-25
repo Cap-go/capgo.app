@@ -766,6 +766,78 @@ app.get('/:orgId/links', async (c) => {
   return c.json(result)
 })
 
+// What the SSO role mapping rewrites on every login of this org's SSO members:
+// their org role, their roles on the mapped apps and their membership of the
+// mapped groups. The UI locks those controls since a manual edit would be
+// silently reverted at the next login.
+app.get('/:orgId/managed', async (c) => {
+  const orgId = parseUuidParam(c.req.param('orgId'), 'invalid_org_id', 'Invalid org_id')
+  // App role editors (app.update_user_roles) may lack org.read_members: they
+  // pass the app they manage so its access screen can lock the same controls.
+  const appId = c.req.query('app_id')
+
+  const result = await withPgPool(c, async (pool) => {
+    // Set for app-scoped callers: the response is then limited to that app.
+    let scopedAppUuid: string | null = null
+    if (!await checkPermission(c, 'org.read_members', { orgId })) {
+      const ownedApp = appId
+        ? await pool.query<{ id: string }>('select id from public.apps where app_id = $1 and owner_org = $2', [appId, orgId])
+        : null
+      if (!ownedApp?.rowCount || !await checkPermission(c, 'app.update_user_roles', { appId }))
+        quickError(403, 'not_authorized', 'Not authorized')
+      scopedAppUuid = ownedApp!.rows[0].id
+    }
+
+    const { rows } = await pool.query<{ provider_id: string, role_mapping: unknown }>(
+      `
+        select p.provider_id, p.role_mapping
+        from public.sso_providers p
+        where p.org_id = $1 and p.status = 'active' and p.provider_id is not null and p.role_mapping is not null
+        union all
+        select p.provider_id, l.role_mapping
+        from public.sso_provider_org_links l
+        join public.sso_providers p on p.id = l.sso_provider_id
+        where l.org_id = $1 and p.status = 'active' and p.provider_id is not null and l.role_mapping is not null
+      `,
+      [orgId],
+    )
+    // A login only applies the mapping of the provider that authenticated it,
+    // so targets are kept per provider, then per user.
+    const targetsByProvider = new Map<string, ReturnType<typeof mappingTargets>>()
+    for (const row of rows) {
+      const mapping = parseStoredRoleMapping(row.role_mapping)
+      if (mapping)
+        targetsByProvider.set(`sso:${row.provider_id}`, mappingTargets(mapping))
+    }
+    const users: Record<string, { app_ids: string[], group_ids: string[] }> = {}
+    if (targetsByProvider.size === 0)
+      return { users }
+
+    const identities = await pool.query<{ user_id: string, provider: string }>(
+      `
+        select distinct ou.user_id, i.provider
+        from public.org_users ou
+        join auth.identities i on i.user_id = ou.user_id
+        where ou.org_id = $1 and i.provider = any($2::text[])
+      `,
+      [orgId, [...targetsByProvider.keys()]],
+    )
+    for (const { user_id, provider } of identities.rows) {
+      const targets = targetsByProvider.get(provider)!
+      if (scopedAppUuid) {
+        if (targets.appIds.has(scopedAppUuid))
+          users[user_id] = { app_ids: [scopedAppUuid], group_ids: [] }
+        continue
+      }
+      const user = users[user_id] ??= { app_ids: [], group_ids: [] }
+      user.app_ids = [...new Set([...user.app_ids, ...targets.appIds])]
+      user.group_ids = [...new Set([...user.group_ids, ...targets.groupIds])]
+    }
+    return { users }
+  })
+  return c.json(result)
+})
+
 // Being super admin of both orgs is the consent of both sides.
 app.post('/:id/links', async (c) => {
   const id = parseUuidParam(c.req.param('id'), 'invalid_provider_id', 'Invalid provider id')

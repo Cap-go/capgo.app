@@ -2,10 +2,8 @@
 import type { Json } from '~/types/database.types'
 import { onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { useOrganizationStore } from '~/stores/organization'
-import { getAppGettingStartedPath } from '~/utils/onboardingRedirect'
 import BuilderPresentationModal from './BuilderPresentationModal.vue'
 
 const props = defineProps<{
@@ -14,7 +12,6 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
-const router = useRouter()
 const organizationStore = useOrganizationStore()
 const starting = ref(false)
 const failed = ref(false)
@@ -32,9 +29,6 @@ async function startBuilder() {
     if (error || !data?.onboarding)
       throw error ?? new Error('Missing Builder checklist')
     organizationStore.updateAppOnboarding(appId, data.onboarding)
-    if (disposed)
-      return
-    await router.push(`${getAppGettingStartedPath(appId)}?path=builder`)
   }
   catch {
     if (!disposed)

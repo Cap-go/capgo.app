@@ -11,7 +11,7 @@ const props = withDefaults(defineProps<{
   roleName: '',
 })
 
-const { t, te } = useI18n()
+const { t, te, tm } = useI18n()
 const open = ref(false)
 const rootRef = ref<HTMLElement | null>(null)
 const triggerId = useId()
@@ -25,16 +25,23 @@ const summary = computed(() => {
   return t(keys.value.summaryKey)
 })
 
+// Older translated catalogs still use "|" between items, which t() reads as a plural
+// separator and truncates, so read the raw message when it is still a string.
+function capabilityText(key: string) {
+  const raw = tm(key)
+  return typeof raw === 'string' ? raw : t(key)
+}
+
 const canItems = computed(() => {
   if (!keys.value || !te(keys.value.canKey))
     return []
-  return splitCapabilityList(t(keys.value.canKey))
+  return splitCapabilityList(capabilityText(keys.value.canKey))
 })
 
 const cannotItems = computed(() => {
   if (!keys.value || !te(keys.value.cannotKey))
     return []
-  return splitCapabilityList(t(keys.value.cannotKey))
+  return splitCapabilityList(capabilityText(keys.value.cannotKey))
 })
 
 const hasContent = computed(() => !!summary.value || canItems.value.length > 0 || cannotItems.value.length > 0)

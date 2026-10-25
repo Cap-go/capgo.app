@@ -1,6 +1,7 @@
 import type { CapgoCliInvokeOptions } from '../utils'
 import type { UploadSpinner } from './reporter'
 import { CliUserError } from '../shared/cli-user-error'
+import { invokeCapgoCliApiResultWithRetry } from '../shared/retryable-capgo-api-error'
 import { formatCapgoCliInvokeError, invokeCapgoCliApi } from '../utils'
 import { getUploadReporter } from './reporter'
 
@@ -300,21 +301,6 @@ export function resolveManifestUploadResponse(request: ManifestUploadRequest, in
   }
 }
 
-const MANIFEST_UPLOAD_MAX_RETRIES = 2
-const MANIFEST_UPLOAD_DEFAULT_RETRY_MS = 2000
-const MANIFEST_UPLOAD_MAX_RETRY_MS = 10_000
-
-/** Delay before retrying a 503 authorization response, from Retry-After when present. */
-function manifestUploadRetryDelayMs(error: unknown): number | null {
-  const context = (error as { context?: unknown } | null)?.context
-  if (!(context instanceof Response) || context.status !== 503)
-    return null
-  const retryAfter = Number(context.headers.get('retry-after'))
-  if (!Number.isFinite(retryAfter) || retryAfter <= 0)
-    return MANIFEST_UPLOAD_DEFAULT_RETRY_MS
-  return Math.min(retryAfter * 1000, MANIFEST_UPLOAD_MAX_RETRY_MS)
-}
-
 export async function requestManifestUpload(
   apikey: string,
   request: ManifestUploadRequest,
@@ -329,23 +315,11 @@ export async function requestManifestUpload(
   }, 500)
 
   try {
-    let { data, error } = await invoke<unknown>('private/request_manifest_upload', {
+    const { data, error } = await invokeCapgoCliApiResultWithRetry(async () => invoke<unknown>('private/request_manifest_upload', {
       apikey,
       body: request,
       apiHost: options.apiHost,
-    })
-    // The server answers 503 for transient database failures; retry briefly.
-    for (let attempt = 0; error && attempt < MANIFEST_UPLOAD_MAX_RETRIES; attempt++) {
-      const delayMs = manifestUploadRetryDelayMs(error)
-      if (delayMs === null)
-        break
-      await sleep(delayMs)
-      ;({ data, error } = await invoke<unknown>('private/request_manifest_upload', {
-        apikey,
-        body: request,
-        apiHost: options.apiHost,
-      }))
-    }
+    }), sleep)
     if (error)
       throw new CliUserError(`Cannot request manifest upload: ${await formatCapgoCliInvokeError(error)}`)
     const resolved = resolveManifestUploadResponse(request, data)

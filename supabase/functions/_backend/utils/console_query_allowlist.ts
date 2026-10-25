@@ -1,7 +1,8 @@
 // Tables and RPCs the console is allowed to reach through /private/console/query.
-// This only bounds the surface; grants and RLS still decide record access because
-// every query runs with the caller's own JWT. tests/console-query-allowlist.unit.test.ts
-// keeps this list in sync with the console sources.
+// This only bounds the surface; grants and RLS still decide record access.
+// Authenticated queries run as the authenticated role with the verified JWT claims set.
+// The pre-login is_not_deleted probe runs as anon with no verified JWT claims.
+// tests/console-query-allowlist.unit.test.ts keeps this list in sync with the console sources.
 export const CONSOLE_TABLES = new Set([
   'apikeys',
   'app_versions',

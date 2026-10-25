@@ -1,4 +1,5 @@
 import type { Command } from 'commander'
+import type { SetupNotice } from './setup-notices'
 import process from 'node:process'
 import { styleText } from 'node:util'
 import { box } from '@clack/prompts'
@@ -73,6 +74,27 @@ function shouldWaitForOnboardingChecks(commandPath: string, options: Record<stri
     && shouldPrintNotice(options)
 }
 
+export function renderSetupNotice(notice: SetupNotice, agent = isAgentInvocation()): void {
+  const text = formatSetupNotice(notice, Date.now(), agent)
+  if (!text)
+    return
+  const action = notice.kind === 'setup' ? notice.action : agent ? `“Choose your Capgo plan now: ${notice.billing.plansUrl}”` : `View plans: ${notice.billing.plansUrl}`
+  const styledText = text.split('\n').map((line, index) => {
+    if (index === 0)
+      return setupStyle(['bold', notice.kind === 'plan' ? 'green' : 'cyan'], line)
+    if (line === action)
+      return setupStyle(['bold', 'cyan'], line)
+    if (/^(?:Your|Their) trial/.test(line))
+      return setupStyle('yellow', line)
+    return /^(?:You|The user) can also/.test(line) || line.startsWith('Then ') || line === 'CAPGO — ADDITIONAL SETUP OPPORTUNITY FOR THE AI ASSISTANT' ? setupStyle('dim', line) : line
+  }).join('\n')
+  if (!renderGitHubNotice(text))
+    box(styledText, '', setupBoxOptions)
+  setupDebug('render shown', { kind: notice.kind })
+  if (notice.kind === 'plan')
+    markTrialNoticeShown(notice.billing.orgId)
+}
+
 function renderSetupNotices(command: Pick<Command, 'optsWithGlobals'>, commandPath: string): void {
   const notices = takeSetupNotices()
   setupDebug('render checked', { available_notices: notices.length })
@@ -84,26 +106,8 @@ function renderSetupNotices(command: Pick<Command, 'optsWithGlobals'>, commandPa
       setupDebug('render suppressed', { reason: 'already_shown' })
       continue
     }
-    const agent = isAgentInvocation()
-    const text = formatSetupNotice(notice, Date.now(), agent)
-    if (text) {
-      const action = notice.kind === 'setup' ? notice.action : agent ? `“Choose your Capgo plan now: ${notice.billing.plansUrl}”` : `View plans: ${notice.billing.plansUrl}`
-      const styledText = text.split('\n').map((line, index) => {
-        if (index === 0)
-          return setupStyle(['bold', notice.kind === 'plan' ? 'green' : 'cyan'], line)
-        if (line === action)
-          return setupStyle(['bold', 'cyan'], line)
-        if (/^(?:Your|Their) trial/.test(line))
-          return setupStyle('yellow', line)
-        return /^(?:You|The user) can also/.test(line) || line.startsWith('Then ') || line === 'CAPGO — ADDITIONAL SETUP OPPORTUNITY FOR THE AI ASSISTANT' ? setupStyle('dim', line) : line
-      }).join('\n')
-      if (!renderGitHubNotice(text))
-        box(styledText, '', setupBoxOptions)
-      setupDebug('render shown', { kind: notice.kind })
-      shownApps.add(notice.appId)
-      if (notice.kind === 'plan')
-        markTrialNoticeShown(notice.billing.orgId)
-    }
+    renderSetupNotice(notice)
+    shownApps.add(notice.appId)
   }
 }
 

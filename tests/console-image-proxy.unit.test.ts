@@ -14,6 +14,7 @@ vi.mock('../supabase/functions/_backend/utils/hono_jwt.ts', () => ({
   },
 }))
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({ supabaseClient: mocks.client, emptySupabase: vi.fn() }))
+vi.mock('../supabase/functions/_backend/private/console_query_run.ts', () => ({ runConsoleQuery: vi.fn() }))
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
   getEnv: (_c: unknown, key: string) => key === 'SUPABASE_URL' ? 'https://storage.example.com' : '',
 }))
@@ -70,7 +71,16 @@ describe('console image proxy', () => {
     expect(response.headers.get('cache-control')).toBe('private, no-store')
     const [upstream, options] = mocks.fetch.mock.calls[0]
     expect(upstream.href).toBe('https://storage.example.com/storage/v1/object/sign/images/org/my%20logo.png?token=fixture-capability')
-    expect(options.redirect).toBe('error')
+    expect(options.redirect).toBe('manual')
+  })
+
+  it.each([301, 302, 307, 308])('does not follow an upstream %s redirect', async (status) => {
+    mocks.fetch.mockResolvedValue(new Response(null, { status, headers: { location: 'https://other.example/image.png' } }))
+    const response = await app.request('https://api.example.com/images/read?path=org%2Flogo.png&token=fixture-capability')
+    expect(response.status).toBe(403)
+    expect(await response.json()).toEqual({ error: 'image_unavailable' })
+    expect(mocks.fetch).toHaveBeenCalledTimes(1)
+    expect(response.headers.get('location')).toBeNull()
   })
 
   it('rejects traversal in upload paths before touching storage', async () => {

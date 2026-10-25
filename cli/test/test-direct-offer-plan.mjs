@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
-import { afterAll, beforeAll, beforeEach, describe, test } from 'bun:test'
+import { afterAll, beforeAll, beforeEach, describe, mock, test } from 'bun:test'
 import { defaultAgents } from 'agent-cli-detector'
 import { isDirectOfferApp } from '../src/api/direct-offer.ts'
 import { checkPlanValid, checkPlanValidUpload } from '../src/api/preflight.ts'
@@ -12,6 +12,10 @@ import { throwIfBuildPlanLimitError } from '../src/build/request.ts'
 import { DIRECT_OFFER_PLAN_MESSAGE, formatPlanRequiredMessage, isZeroLengthTrial } from '../src/shared/direct-offer.ts'
 
 process.env.CAPGO_DISABLE_POSTHOG = '1'
+
+// Billing failure tests must not open real plans pages in the system browser.
+const openBrowser = mock(async () => {})
+mock.module('open', () => ({ default: openBrowser }))
 
 const apiHost = 'http://localhost:54321/functions/v1'
 const client = { apikey: 'test-direct-offer-key', apiHost, filesHost: apiHost }
@@ -95,6 +99,7 @@ afterAll(() => {
   }
 })
 beforeEach(() => {
+  openBrowser.mockClear()
   for (const name of agentEnvNames) delete process.env[name]
   calls.length = 0
   output = ''
@@ -287,6 +292,7 @@ describe('AI billing messages', () => {
     assert.ok(logs[0].endsWith(`“Choose your Capgo plan now: ${expected}”`), logs[0])
     assert.equal(error.message, `${DIRECT_OFFER_PLAN_MESSAGE} Choose a plan here: ${expected}`)
     assert.equal(logs.length, 1)
+    assert.deepEqual(openBrowser.mock.calls, [[expected]])
   })
 })
 

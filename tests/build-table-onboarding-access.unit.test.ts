@@ -41,8 +41,8 @@ vi.mock('../src/services/console', () => ({ useConsole: () => ({
 }) }))
 vi.mock('../src/components/dashboard/BuilderIntroduction.vue', () => ({ default: { render: () => h('div', { 'data-test': 'intro' }) } }))
 vi.mock('../src/components/dashboard/AppOnboardingFlow.vue', () => ({ __esModule: true, default: defineComponent({
-  props: { setupAppId: String, initialChecklistPath: String, showChecklist: Boolean, onboarding: Boolean },
-  setup: props => () => h('div', { 'data-test': 'checklist', 'data-app': props.setupAppId, 'data-path': props.initialChecklistPath, 'data-view-only': String(props.showChecklist), 'data-onboarding': String(props.onboarding) }),
+  props: { setupAppId: String, initialChecklistPath: String, showChecklist: Boolean, onboarding: Boolean, hideFooter: Boolean },
+  setup: props => () => h('div', { 'data-test': 'checklist', 'data-app': props.setupAppId, 'data-path': props.initialChecklistPath, 'data-view-only': String(props.showChecklist), 'data-onboarding': String(props.onboarding), 'data-hide-footer': String(props.hideFooter) }),
 }) }))
 
 const cleanups: Array<() => void> = []
@@ -80,6 +80,7 @@ describe('builds page checklist activation access', () => {
     expect(checklist.getAttribute('data-path')).toBe('builder')
     expect(checklist.getAttribute('data-view-only')).toBe('true')
     expect(checklist.getAttribute('data-onboarding')).toBe('true')
+    expect(checklist.getAttribute('data-hide-footer')).toBe('true')
     expect(host.querySelector('[data-test="intro"]')).toBeNull()
   })
 
