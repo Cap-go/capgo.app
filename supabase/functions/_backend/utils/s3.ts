@@ -554,9 +554,94 @@ async function getObject(c: Context, fileId: string): Promise<Response | null> {
   }
 }
 
+export interface StoredObjectInfo {
+  size: number
+  etag: string | null
+  lastModified: number | null
+}
+
+/** HEAD an object: null when absent, throws when the storage answer is not definitive. */
+async function statObject(c: Context, fileId: string): Promise<StoredObjectInfo | null> {
+  const client = initS3(c)
+  const url = await client.getPresignedUrl('HEAD', fileId)
+  const response = await fetch(url, { method: 'HEAD', headers: { 'Accept-Encoding': 'identity' }, signal: AbortSignal.timeout(15_000) })
+  await response.body?.cancel()
+  if (response.status === 404)
+    return null
+  if (response.status !== 200)
+    throw new Error(`Storage HEAD returned ${response.status}`)
+  const lastModified = Date.parse(response.headers.get('last-modified') ?? '')
+  return {
+    size: Number.parseInt(response.headers.get('content-length') ?? '0', 10) || 0,
+    etag: response.headers.get('etag')?.replaceAll('"', '') || null,
+    lastModified: Number.isFinite(lastModified) ? lastModified : null,
+  }
+}
+
+async function putObject(c: Context, fileId: string, data: Uint8Array, contentType = 'application/octet-stream'): Promise<{ etag: string | null }> {
+  const url = await initS3(c).getPresignedUrl('PUT', fileId, {
+    expirySeconds: 300,
+    parameters: { 'X-Amz-Content-Sha256': 'UNSIGNED-PAYLOAD', 'x-id': 'PutObject' },
+  })
+  const response = await fetch(url, {
+    method: 'PUT',
+    body: data as Uint8Array<ArrayBuffer>,
+    headers: { 'Content-Type': contentType },
+    signal: AbortSignal.timeout(60_000),
+  })
+  await response.body?.cancel()
+  if (!response.ok)
+    throw new Error(`Storage PUT returned ${response.status}`)
+  return { etag: response.headers.get('etag')?.replaceAll('"', '') || null }
+}
+
+async function getObjectRange(c: Context, fileId: string, offset: number, length: number): Promise<Uint8Array> {
+  const client = initS3(c)
+  const url = await client.getPresignedUrl('GET', fileId, { expirySeconds: 60 })
+  const response = await fetch(url, {
+    headers: { 'Range': `bytes=${offset}-${offset + length - 1}`, 'Accept-Encoding': 'identity' },
+    signal: AbortSignal.timeout(30_000),
+  })
+  if (response.status !== 206 && response.status !== 200) {
+    await response.body?.cancel()
+    throw new Error(`Storage range GET returned ${response.status}`)
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer())
+  // A server ignoring Range returns the whole object; slice the requested window.
+  return response.status === 200 ? bytes.subarray(offset, offset + length) : bytes
+}
+
+/** Full object stream for server-side processing; null when absent. */
+async function readObjectStream(c: Context, fileId: string): Promise<Response | null> {
+  const url = await initS3(c).getPresignedUrl('GET', fileId, { expirySeconds: 300 })
+  const response = await fetch(url, { headers: { 'Accept-Encoding': 'identity' } })
+  if (response.status === 404) {
+    await response.body?.cancel()
+    return null
+  }
+  if (!response.ok) {
+    await response.body?.cancel()
+    throw new Error(`Storage GET returned ${response.status}`)
+  }
+  return response
+}
+
+async function removeObject(c: Context, fileId: string): Promise<void> {
+  const url = await initS3(c).getPresignedUrl('DELETE', fileId)
+  const response = await fetch(url, { method: 'DELETE', signal: AbortSignal.timeout(15_000) })
+  await response.body?.cancel()
+  if (response.status >= 300 && response.status !== 404)
+    throw new Error(`Storage DELETE returned ${response.status}`)
+}
+
 export const s3 = {
   getSize,
   deleteObject,
+  statObject,
+  putObject,
+  getObjectRange,
+  readObjectStream,
+  removeObject,
   getSizeDiagnostics,
   moveObjectToTrash,
   deleteObjectsWithPrefix,

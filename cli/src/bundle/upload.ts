@@ -8,8 +8,7 @@ import type { ResolvedManifestUpload } from './manifest-upload'
 import type { UploadReporter, UploadSpinner } from './reporter'
 import type { OptionsUpload } from './upload_interface'
 import { randomUUID } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
-import { cwd } from 'node:process'
+import { existsSync } from 'node:fs'
 import { S3Client } from '@bradenmacdonald/s3-lite-client'
 import { confirm as pConfirm, isCancel as pIsCancel, select as pSelect } from '@clack/prompts'
 import { greaterOrEqual, parse } from '@std/semver'
@@ -18,12 +17,10 @@ import pack from '../../package.json'
 import { trackEvent } from '../analytics/track'
 import { fetchChannelCompatibilityContext } from '../api/channels'
 import { fetchCliChannels, fetchLatestBundle } from '../api/cli-data'
-import { calcKeyId, encryptChecksum, encryptChecksumV3, encryptSource, generateSessionKey } from '../api/crypto'
 import { runCliPreflight } from '../api/preflight'
 import { checkAlerts } from '../api/update'
 import { fetchBundleVersionRow, upsertAppVersion } from '../api/versions'
 import { loadSavedCredentials } from '../build/credentials'
-import { getChecksum } from '../checksum'
 import { CORDOVA_DEFAULT_WEB_DIR } from '../cordova/project'
 import { isCordovaMode } from '../framework/mode'
 import { getRepoStarStatus, isRepoStarredInSession, starRepository } from '../github'
@@ -34,7 +31,7 @@ import { showReplicationProgress } from '../replicationProgress'
 import { CliUserError } from '../shared/cli-user-error'
 import { formatTable } from '../terminal-table'
 import { usesAlwaysDirectUpdate } from '../updaterConfig'
-import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, channelUpdatePackageCliError, checkCompatibilityCloud, createCapgoClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, formatVerboseError, getBundleVersion, getCompatibilityDetails, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
+import { baseKeyV2, canPromptInteractively, channelUpdatePackageCliError, checkCompatibilityCloud, createCapgoClient, deletedFailedVersion, deltaManifestTooLargeMessage, findSavedKey, formatError, formatVerboseError, getBundleVersion, getCompatibilityDetails, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl } from '../utils'
 import { autoBumpVersionBy, getVersionSuggestions, interactiveVersionBump, normalizeAutoBumpInput } from '../versionHelpers'
 import { resolveAutoBumpLevelFromAi } from './auto-bump-ai'
 import { maybePromptBuilderCta, shouldBlockIncompatibleUpload } from './builder-cta'
@@ -45,6 +42,7 @@ import { PartialUploadValidationError, prepareBundlePartialFiles, prepareManifes
 import { clackUploadReporter, getUploadReporter, runWithUploadReporter } from './reporter'
 import { ManifestUploadAbandonError, resolveManifestUploadAbandonScope } from './upload-abandon-error'
 import { formatUploadChannels, getChannelsToAssignByChecksum, parseUploadChannels } from './upload-channels'
+import { buildNativePackagesPayload, prepareBundleArtifact, resolveDeltaEncryptionSettings } from './upload-artifact'
 import { loadUploadProjectConfig } from './upload-config'
 
 type CapgoClientType = Awaited<ReturnType<typeof createCapgoClient>>
@@ -328,21 +326,7 @@ async function verifyCompatibility(apikey: string, pm: pmType, options: OptionsU
       uploadFail(`Your minimal version update ${minUpdateVersion}, is not valid it should follow semver convention : https://semver.org/`)
   }
 
-  const hashedLocalDependencies = localDependencies
-    ? new Map(localDependencies
-        .filter(a => !!a.native && a.native !== undefined)
-        .map(a => [a.name, a]))
-    : new Map()
-
-  const nativePackages = (hashedLocalDependencies.size > 0 || !options.ignoreMetadataCheck)
-    ? Array.from(hashedLocalDependencies, ([name, value]) => ({
-        name,
-        version: value.version,
-        requested_version: value.requested_version,
-        ...(value.ios_checksum && { ios_checksum: value.ios_checksum }),
-        ...(value.android_checksum && { android_checksum: value.android_checksum }),
-      }))
-    : undefined
+  const nativePackages = buildNativePackagesPayload(localDependencies, options.ignoreMetadataCheck)
 
   return {
     nativePackages,
@@ -526,95 +510,9 @@ function shouldSendAppTooLargeEvent(options: OptionsUpload): boolean {
   return shouldUploadFullZip(options) || hasCompleteS3UploadConfig(options)
 }
 
-const CORDOVA_UPDATER_PACKAGES = [
-  '@capgo/cordova-updater',
-  'cordova-plugin-capgo',
-] as const
-
-interface ResolvedUpdaterForUpload {
-  packageName: string
-  version: string
-}
-
-function isCordovaUpdaterPackage(packageName: string): boolean {
-  return (CORDOVA_UPDATER_PACKAGES as readonly string[]).includes(packageName)
-}
-
-async function resolveUpdaterForUpload(options: OptionsUpload, root: string): Promise<ResolvedUpdaterForUpload | null> {
-  if (!isCordovaMode(options.mode)) {
-    const version = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
-    return version ? { packageName: '@capgo/capacitor-updater', version } : null
-  }
-
-  for (const packageName of CORDOVA_UPDATER_PACKAGES) {
-    const version = await getInstalledVersion(packageName, root, options.packageJson)
-    if (version)
-      return { packageName, version }
-  }
-  return null
-}
-
 async function prepareBundleFile(path: string, options: OptionsUpload, apikey: string, orgId: string, appid: string, maxUploadLength: number, alertUploadSize: number, publicKeyFromConfig?: string) {
-  let ivSessionKey
-  let sessionKey
-  let checksum = ''
-  let zipped: Buffer | null = null
-  let encryptionMethod = 'none' as 'none' | 'v2' | 'v1'
-  let finalKeyData = ''
-  let keyId = ''
-  const keyV2 = options.keyV2
-  const noKey = options.key === false
-
-  const s = getUploadReporter().spinner()
-  s.start(`Zipping bundle from ${path}`)
-  zipped = await zipFile(path)
-  s.message(`Calculating checksum`)
-  const root = findRoot(cwd())
-  const resolvedUpdater = await resolveUpdaterForUpload(options, root)
-  const updaterVersion = resolvedUpdater?.version
-  const updaterPackageName = resolvedUpdater?.packageName
-  let useSha256 = false
-  let coerced
-  try {
-    coerced = updaterVersion ? parse(updaterVersion) : undefined
-  }
-  catch {
-    coerced = undefined
-  }
-  if (!resolvedUpdater) {
-    if (isCordovaMode(options.mode)) {
-      log.warn('Cannot find a Capgo updater plugin in node_modules. Using SHA256 checksum for this Cordova upload.')
-      useSha256 = true
-    }
-    else {
-      uploadFail('Cannot find @capgo/capacitor-updater in node_modules, please install it first with your package manager')
-    }
-  }
-  else if (updaterPackageName && isCordovaUpdaterPackage(updaterPackageName)) {
-    useSha256 = true
-  }
-  else if (coerced) {
-    // Use SHA256 for v5.10.0+, v6.25.0+ and v7.0.30+
-    useSha256 = !isDeprecatedPluginVersion(coerced, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7)
-  }
-  else if (updaterVersion === 'link:@capgo/capacitor-updater' || updaterVersion === 'file:..' || updaterVersion === 'file:../') {
-    log.warn(`Using local ${updaterPackageName ?? '@capgo/capacitor-updater'}. Assuming latest version for checksum calculation.`)
-    useSha256 = true
-  }
-  const forceCrc32 = options.forceCrc32Checksum === true
-  const shouldUseSha256 = !forceCrc32 && (((keyV2 || options.keyDataV2 || existsSync(baseKeyV2)) && !noKey) || useSha256)
-  checksum = await getChecksum(zipped, shouldUseSha256 ? 'sha256' : 'crc32')
-  s.stop(`Checksum ${shouldUseSha256 ? 'SHA256' : 'CRC32'}${forceCrc32 ? ' (forced)' : ''}: ${checksum}`)
-  // key should be undefined or a string if false it should ignore encryption DO NOT REPLACE key === false With !key it will not work
-  if (noKey) {
-    log.info(`Encryption ignored`)
-  }
-  else if ((keyV2 || existsSync(baseKeyV2) || options.keyDataV2) && !options.oldEncryption) {
-    const privateKey = typeof keyV2 === 'string' ? keyV2 : baseKeyV2
-    let keyDataV2 = options.keyDataV2 || ''
-    if (!keyDataV2 && !existsSync(privateKey))
-      uploadFail(`Cannot find private key ${privateKey}`)
-    await sendEvent(apikey, {
+  const { zipped, ivSessionKey, sessionKey, checksum, encryptionMethod, finalKeyData, keyId } = await prepareBundleArtifact(path, options, publicKeyFromConfig, {
+    onEncryptV2: () => sendEvent(apikey, {
       channel: 'app',
       event: 'App encryption v2',
       org_id: orgId,
@@ -622,38 +520,8 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
       tags: {
         'app-id': appid,
       },
-    }, options.verbose)
-    if (!keyDataV2) {
-      const keyFile = readFileSync(privateKey)
-      keyDataV2 = keyFile.toString()
-    }
-    // Use V3 encryption for new plugin versions (5.30.0+, 6.30.0+, 7.30.0+)
-    const supportsV3Checksum = coerced && !isDeprecatedPluginVersion(coerced, '5.30.0', '6.30.0', '7.30.0')
-    log.info(`Encrypting your bundle with ${supportsV3Checksum ? 'V3' : 'V2'}`)
-    const { sessionKey: sKey, ivSessionKey: ivKey } = generateSessionKey(keyDataV2)
-    const encryptedData = encryptSource(zipped, sKey, ivKey)
-    checksum = supportsV3Checksum
-      ? encryptChecksumV3(checksum, keyDataV2)
-      : encryptChecksum(checksum, keyDataV2)
-    ivSessionKey = ivKey
-    sessionKey = sKey
-    encryptionMethod = 'v2'
-    finalKeyData = keyDataV2
-    // Calculate key_id from the public key in capacitor config
-    // This matches the key_id sent by devices for verification
-    if (publicKeyFromConfig) {
-      keyId = calcKeyId(publicKeyFromConfig)
-      if (options.verbose) {
-        log.info(`[Verbose] Encryption key_id: ${keyId}`)
-      }
-    }
-    if (options.displayIvSession) {
-      log.info(`Your Iv Session key is ${ivSessionKey},
-    keep it safe, you will need it to decrypt your bundle.
-    It will be also visible in your dashboard\n`)
-    }
-    zipped = encryptedData
-  }
+    }, options.verbose),
+  })
   const mbSize = Math.floor((zipped?.byteLength ?? 0) / 1024 / 1024)
   const mbSizeMax = Math.floor(maxUploadLength / 1024 / 1024)
   if (zipped?.byteLength > maxUploadLength) {
@@ -1845,62 +1713,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
       log.info(`[Verbose] Delta updates: ${options.delta ? 'enabled' : 'disabled'}`)
   }
 
-  // --encrypt-partial is the deprecated alias of --encrypt-delta
-  options.encryptDelta = options.encryptDelta || options.encryptPartial
-
-  // Never upload delta files unencrypted when encryption was explicitly requested
-  if (options.encryptDelta && encryptionMethod !== 'v2')
-    uploadFail('You cannot encrypt the delta update if you are not using the v2 encryption method')
-
-  // Minimum versions that support hex checksum format
-  const HEX_CHECKSUM_MIN_VERSION_V5 = '5.30.0'
-  const HEX_CHECKSUM_MIN_VERSION_V6 = '6.30.0'
-  const HEX_CHECKSUM_MIN_VERSION_V7 = '7.30.0'
-
-  // Check if updater supports hex checksum format
-  let supportsHexChecksum = false
-
-  // Auto-encrypt delta updates for updater versions >= 6.14.4 if encryption method is v2
-  if (options.delta && encryptionMethod === 'v2' && !options.encryptDelta) {
-    // Check updater version
-    const root = findRoot(cwd())
-    const updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
-    let coerced
-    try {
-      coerced = updaterVersion ? parse(updaterVersion) : undefined
-    }
-    catch {
-      coerced = undefined
-    }
-
-    if (updaterVersion && coerced && greaterOrEqual(coerced, parse('6.14.4'))) {
-      log.info(`Auto-enabling delta update encryption for updater version ${coerced} (>= 6.14.4)`)
-      if (options.verbose)
-        log.info(`[Verbose] Delta encryption auto-enabled for updater >= 6.14.4`)
-      options.encryptDelta = true
-    }
-  }
-
-  // Check if updater supports hex checksum format (for delta updates with encryption)
-  if (options.delta && (options.encryptDelta || encryptionMethod === 'v2')) {
-    const root = findRoot(cwd())
-    const updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
-    let coerced
-    try {
-      coerced = updaterVersion ? parse(updaterVersion) : undefined
-    }
-    catch {
-      coerced = undefined
-    }
-
-    if (updaterVersion && coerced) {
-      // Hex checksum is supported in versions >= 5.30.0, 6.30.0, 7.30.0
-      supportsHexChecksum = !isDeprecatedPluginVersion(coerced, HEX_CHECKSUM_MIN_VERSION_V5, HEX_CHECKSUM_MIN_VERSION_V6, HEX_CHECKSUM_MIN_VERSION_V7)
-
-      if (options.verbose && supportsHexChecksum)
-        log.info(`[Verbose] Using hex checksum format for updater version ${coerced}`)
-    }
-  }
+  const { supportsHexChecksum } = await resolveDeltaEncryptionSettings(options, encryptionMethod)
 
   if (options.verbose && options.delta)
     log.info(`[Verbose] Preparing delta update manifest...`)

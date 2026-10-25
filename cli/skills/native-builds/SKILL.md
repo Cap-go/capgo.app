@@ -165,6 +165,14 @@ interface BuildLogger {
   - RC: `npx @capgo/cli@latest build request com.example.app --platform ios --cache-key rc`
   - PROD: `npx @capgo/cli@latest build request com.example.app --platform ios --cache-key prod`
 
+### `build zip [appId]`
+
+- Example: `npx @capgo/cli@latest build zip com.example.app --platform ios --json`
+- Writes the exact native project archive `build request` uploads (same file filter, path rewriting, `--sync-ios-version` / `--sync-android-version`, config resolution) without uploading it. Use it when an agent uploads the archive through a Capgo MCP signed URL.
+- Offline: no API key, no calls to Capgo.
+- JSON output: `app_id`, `platform`, `filename`, `size_bytes`, `sha256`, optional `ios_dependency_manager` (`cocoapods` or `spm`), and `build_options` (non-secret options derived from the project: `platform`, `iosSourceDir`/`iosAppDir`/`iosProjectDir` or `androidSourceDir`/`androidAppDir`/`androidProjectDir`).
+- Options: `--platform <platform>`, `--path <path>`, `--node-modules <nodeModules>`, `--sync-ios-version`, `--sync-android-version`, `--output <file>` (default `<appId>_<platform>_native.zip`), `-j, --json`.
+
 ## Local credential management
 
 Credentials are stored locally, either globally in `~/.capgo-credentials/credentials.json` or locally in `.capgo-credentials.json`.
@@ -249,6 +257,20 @@ npx @capgo/cli@latest build credentials save --platform android \
   - `--appId <appId>`
   - `--platform <platform>`
   - `--local`
+
+### `build credentials push` / `remote-status` / `remote-delete`
+
+Store the locally saved credentials for one platform on Capgo, encrypted (AES-256-GCM, bound to the app and platform), so builds can use them without sending secrets each time (for example from the hosted Capgo MCP). Writing or deleting requires app settings permission (app admin); reading the summary requires native build permission. Only key names and non-secret facts (iOS distribution, team id, provisioning profile names and expiry, what is still missing) are ever shown.
+
+- Examples:
+  - `npx @capgo/cli@latest build credentials push com.example.app --platform ios`
+  - `npx @capgo/cli@latest build credentials push --platform android --mode merge`
+  - `npx @capgo/cli@latest build credentials remote-status com.example.app`
+  - `npx @capgo/cli@latest build credentials remote-delete com.example.app --platform ios --yes`
+- `push` options: `--platform <platform>` (required), `--mode replace|merge` (default `replace`), `--local`, `--global`, `-a, --apikey`, `--api-host`
+- `remote-status` options: `--platform <platform>`, `-a, --apikey`, `--api-host`
+- `remote-delete` options: `--platform <platform>` (required), `-y, --yes`, `-a, --apikey`, `--api-host`
+- Agents with a shell can also upload a credentials file without the secrets entering the chat: `POST /build/credentials/upload-url` returns a 10-minute `PUT` URL that accepts the raw `credentials.json` file.
 
 ### `build credentials update`
 

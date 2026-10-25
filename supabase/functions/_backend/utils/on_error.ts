@@ -32,6 +32,9 @@ const sensitiveRequestBodyKeys = new Set([
   'full_name',
   'givenName',
   'familyName',
+  // Native build signing secrets (/build/request, /build/credentials).
+  'credentials',
+  'build_credentials',
 ])
 
 function redactSensitiveRequestBody(value: unknown): unknown {

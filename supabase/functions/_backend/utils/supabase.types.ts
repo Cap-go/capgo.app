@@ -125,6 +125,63 @@ export type Database = {
           },
         ]
       }
+      app_build_credentials: {
+        Row: {
+          app_id: string
+          ciphertext: string
+          created_at: string
+          created_by: string | null
+          id: string
+          key_version: string
+          owner_org: string
+          platform: string
+          summary: Json
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          app_id: string
+          ciphertext: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          key_version: string
+          owner_org: string
+          platform: string
+          summary?: Json
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          app_id?: string
+          ciphertext?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          key_version?: string
+          owner_org?: string
+          platform?: string
+          summary?: Json
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "app_build_credentials_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: false
+            referencedRelation: "apps"
+            referencedColumns: ["app_id"]
+          },
+          {
+            foreignKeyName: "app_build_credentials_owner_org_fkey"
+            columns: ["owner_org"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       app_metrics_cache: {
         Row: {
           cached_at: string

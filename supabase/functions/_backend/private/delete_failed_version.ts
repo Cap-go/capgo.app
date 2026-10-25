@@ -1,3 +1,4 @@
+import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { BRES, parseBody, quickError, simpleError } from '../utils/hono.ts'
@@ -60,6 +61,15 @@ app.delete('/', middlewareKey(), async (c) => {
   if (errorVersion) {
     throw simpleError('error_already_deleted', 'Already deleted', { errorVersion })
   }
+  await deleteFailedVersionRow(c, version)
+  return c.json(BRES)
+})
+
+/**
+ * Hard-deletes an r2-direct version whose upload never completed. Refuses while the
+ * bundle object still exists in storage: callers must remove it first.
+ */
+export async function deleteFailedVersionRow(c: Context, version: { id: number, r2_path: string | null, owner_org: string }) {
   // check if object exist in r2
   if (version.r2_path) {
     const exist = await s3.checkIfExist(c, version.r2_path)
@@ -94,5 +104,4 @@ app.delete('/', middlewareKey(), async (c) => {
   })
 
   cloudlog({ requestId: c.get('requestId'), message: 'delete version', id: version.id })
-  return c.json(BRES)
-})
+}

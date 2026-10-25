@@ -2,6 +2,7 @@ import type { Channel } from './api/channels'
 import type { BuildRequestOptions as InternalBuildRequestOptions } from './build/request'
 import type { DecryptResult } from './bundle/decrypt'
 import type { EncryptResult } from './bundle/encrypt'
+import type { BuildZipResult } from './build/zip-command'
 import type { ZipResult } from './bundle/zip'
 import type { StarAllRepositoryResult } from './github'
 import type { ProbeInternalResult } from './probe'
@@ -48,6 +49,7 @@ import type {
   UpdateOrganizationOptions,
   UploadOptions,
   UploadResult,
+  ZipBuildOptions,
   ZipBundleOptions,
 } from './schemas/sdk'
 import type { AccountProfile } from './schemas/account'
@@ -62,6 +64,7 @@ import { listAppInternal } from './app/list'
 import { setAppInternal } from './app/set'
 import { setSettingInternal } from './app/setting'
 import { parseStoreReleaseNotesLocalizedJson, requestBuildInternal } from './build/request'
+import { zipBuildInternal } from './build/zip-command'
 import { cleanupBundleInternal } from './bundle/cleanup'
 import { checkCompatibilityInternal } from './bundle/compatibility'
 import { decryptZipInternal } from './bundle/decrypt'
@@ -86,7 +89,7 @@ import { listOrganizationsInternal } from './organization/list'
 import { inviteMemberInternal, removeMemberInternal, setMemberRoleInternal } from './organization/member-manage'
 import { listMembersInternal } from './organization/members'
 import { setOrganizationInternal } from './organization/set'
-import { organizationMemberRoleOptionsSchema, organizationMemberSdkOptionsSchema, promoteChannelOptionsSchema, requestBuildOptionsSchema, updateAccountOptionsSchema, updateAppOptionsSchema, updateChannelOptionsSchema, uploadOptionsSchema } from './schemas/sdk'
+import { organizationMemberRoleOptionsSchema, organizationMemberSdkOptionsSchema, promoteChannelOptionsSchema, requestBuildOptionsSchema, updateAccountOptionsSchema, updateAppOptionsSchema, updateChannelOptionsSchema, uploadOptionsSchema, zipBuildOptionsSchema } from './schemas/sdk'
 import { CliUserError } from './shared/cli-user-error'
 import { getUserIdInternal } from './user/account'
 import { getAccountInternal, setAccountInternal } from './user/settings'
@@ -557,13 +560,43 @@ export class CapgoSDK {
         codeCheck: options.codeCheck,
         json: options.json,
         keyV2: options.keyV2,
+        keyDataV2: options.keyDataV2,
+        key: options.key,
         packageJson: options.packageJson,
+        nodeModules: options.nodeModules,
+        forUpload: options.forUpload,
+        deltaPack: options.deltaPack,
+        encryptDelta: options.encryptDelta,
+        disableBrotli: options.disableBrotli,
+        forceCrc32Checksum: options.forceCrc32Checksum,
       }, true)
 
       return {
         success: true,
         data: result,
       }
+    }
+    catch (error) {
+      return createErrorResult(error)
+    }
+  }
+
+  /**
+   * Zip the native project exactly like `requestBuild` does, without uploading it.
+   * Offline: no API key and no network calls.
+   */
+  async zipBuild(options: ZipBuildOptions): Promise<SDKResult<BuildZipResult>> {
+    try {
+      const parsed = zipBuildOptionsSchema.parse(options)
+      const result = await zipBuildInternal(parsed.appId, {
+        platform: parsed.platform,
+        path: parsed.path,
+        nodeModules: parsed.nodeModules,
+        syncIosVersion: parsed.syncIosVersion,
+        syncAndroidVersion: parsed.syncAndroidVersion,
+        output: parsed.output,
+      }, true)
+      return { success: true, data: result }
     }
     catch (error) {
       return createErrorResult(error)
@@ -1604,6 +1637,11 @@ export async function zipBundle(options: ZipBundleOptions): Promise<SDKResult<Zi
   return sdk.zipBundle(options)
 }
 
+export async function zipBuild(options: ZipBuildOptions): Promise<SDKResult<BuildZipResult>> {
+  const sdk = new CapgoSDK()
+  return sdk.zipBuild(options)
+}
+
 export async function starRepo(options?: StarRepoOptions): Promise<SDKResult<{ repository: string, alreadyStarred: boolean }>> {
   const sdk = new CapgoSDK()
   return sdk.starRepo(options)
@@ -1896,6 +1934,7 @@ export async function getCapacitorConfig() {
 // ============================================================================
 
 export type { BuildCredentials } from './build/request'
+export type { BuildZipResult } from './build/zip-command'
 export type { CapacitorConfig } from './config'
 export type { ProbeInternalResult } from './probe'
 export type {
@@ -1939,6 +1978,7 @@ export type {
   UpdateOrganizationOptions,
   UploadOptions,
   UploadResult,
+  ZipBuildOptions,
   ZipBundleOptions,
 } from './schemas/sdk'
 export type { AccountProfile } from './schemas/account'

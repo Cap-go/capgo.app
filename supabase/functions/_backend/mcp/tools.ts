@@ -207,6 +207,81 @@ const uploadCommandTool: McpTool = {
 }
 
 // ---------------------------------------------------------------------------
+// Signed-URL bundle upload (same server checks and metadata as `capgo bundle upload`)
+// ---------------------------------------------------------------------------
+const nativePackage = z.object({
+  name: z.string().min(1),
+  version: z.string().min(1),
+  requested_version: z.string().optional(),
+  ios_checksum: z.string().optional(),
+  android_checksum: z.string().optional(),
+})
+
+const bundleUploadTools: McpTool[] = [
+  apiTool({
+    name: 'capgo_prepare_bundle_upload',
+    title: 'Prepare bundle upload',
+    description: 'Step 1 of 3 to upload a live update bundle without a logged-in CLI. '
+      + 'First package the web build offline (no login needed): `npx @capgo/cli@latest bundle zip <appId> --for-upload --json` (add --delta-pack <file> for delta updates; it encrypts like bundle upload when the project has an encryption key). '
+      + 'Pass the JSON fields it prints (checksum, native_packages, updater_version, session_key, key_id, size_bytes, cli_version) here. '
+      + 'Capgo runs every check the CLI runs (permissions, plan, version name, encryption policy, channel permissions, same-checksum and native compatibility per channel), creates the version and returns signed PUT URLs. '
+      + 'Step 2: upload with `curl -fsS -X PUT -H "Content-Type: application/zip" --upload-file <zip> "<url>"` (and the delta pack to its own URL). Step 3: capgo_complete_bundle_upload with upload_token.',
+    input: {
+      appId,
+      version: z.string().min(1).describe('Bundle version (semver), e.g. 1.2.3: the "bundle" field of bundle zip --json'),
+      channel: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]).optional().describe('Channel(s) to deploy to after upload. Defaults to the app default upload channel'),
+      comment: z.string().optional(),
+      link: z.string().optional(),
+      checksum: z.string().min(1).optional().describe('Checksum printed by bundle zip --for-upload --json. Required for encrypted bundles; computed by Capgo otherwise'),
+      session_key: z.string().optional().describe('Encryption session key printed by bundle zip --for-upload --json (encrypted bundles only)'),
+      key_id: z.string().optional(),
+      native_packages: z.array(nativePackage).optional().describe('native_packages printed by bundle zip --for-upload --json; without it the native compatibility check cannot run'),
+      updater_version: z.string().optional().describe('Installed @capgo/capacitor-updater version printed by bundle zip --for-upload --json (selects checksum format and delta features)'),
+      updater_package: z.string().optional().describe('Updater package name printed by bundle zip, for Cordova projects'),
+      size_bytes: z.number().int().positive().optional(),
+      cli_version: z.string().optional(),
+      delta: z.boolean().optional().describe('Also publish the per-file manifest for delta updates. Capgo builds it from the zip; encrypted bundles need delta_pack'),
+      delta_pack: z.boolean().optional().describe('You will upload the delta pack written by bundle zip --delta-pack (required for encrypted delta)'),
+      min_update_version: z.string().optional(),
+      auto_min_update_version: z.boolean().optional(),
+      version_exists_ok: z.boolean().optional().describe('Succeed without uploading when the version already exists'),
+      ignore_checksum_check: z.boolean().optional(),
+      ignore_metadata_check: z.boolean().optional().describe('Skip the native compatibility check'),
+      fail_on_incompatible: z.boolean().optional(),
+      accept_incompatible: z.boolean().optional().describe('Deploy even if native code changed since the channel bundle. Confirm with the user first'),
+      code_check: z.boolean().optional().describe('false skips the index.html / notifyAppReady checks (like --no-code-check)'),
+      ignore_notify_app_ready: z.boolean().optional().describe('true skips only the notifyAppReady check'),
+      self_assign: z.boolean().optional().describe('Let devices self-assign to the channel'),
+      rollout_percentage: z.number().min(0).max(100).optional().describe('Deploy as a progressive rollout instead of to everyone'),
+      rollout_percentage_bps: z.number().int().min(0).max(10000).optional().describe('Same as rollout_percentage in basis points (100 = 1%)'),
+      advance_rollout: z.boolean().optional(),
+      rollout_paused: z.boolean().optional(),
+      rollout_cache_ttl_seconds: z.number().int().min(60).max(31536000).optional(),
+      delete_linked_bundle_on_upload: z.boolean().optional().describe('Delete the bundle the channel served before. Confirm with the user first'),
+    },
+    annotations: WRITE,
+    request: ({ appId: id, ...rest }) => ({ method: 'POST', path: '/bundle/upload/prepare', body: compact({ app_id: id, ...rest }) }),
+  }),
+  apiTool({
+    name: 'capgo_complete_bundle_upload',
+    title: 'Complete bundle upload',
+    description: 'Step 3 of 3: after the PUT to the signed URL succeeded, verify the uploaded zip (size, checksum, index.html and notifyAppReady), publish the delta manifest if requested, '
+      + 'finalize the version and deploy it to the channels checked in capgo_prepare_bundle_upload. Devices start receiving it right away: confirm the channel with the user first.',
+    input: { upload_token: z.string().min(1).describe('upload_token returned by capgo_prepare_bundle_upload') },
+    annotations: { ...WRITE, destructiveHint: true },
+    request: input => ({ method: 'POST', path: '/bundle/upload/complete', body: input }),
+  }),
+  apiTool({
+    name: 'capgo_abort_bundle_upload',
+    title: 'Abort bundle upload',
+    description: 'Cancel an upload prepared with capgo_prepare_bundle_upload: removes the unfinished version and any uploaded file.',
+    input: { upload_token: z.string().min(1) },
+    annotations: DESTRUCTIVE,
+    request: input => ({ method: 'POST', path: '/bundle/upload/abort', body: input }),
+  }),
+]
+
+// ---------------------------------------------------------------------------
 // Account & organizations
 // ---------------------------------------------------------------------------
 const accountTools: McpTool[] = [
@@ -504,7 +579,7 @@ const bundleTools: McpTool[] = [
   apiTool({
     name: 'capgo_create_bundle_from_url',
     title: 'Register external bundle',
-    description: 'Record a new bundle version for an app the user owns, pointing to a zip the user already hosts at an https URL. This only creates the version entry: no device receives it until a channel is set to this version with capgo_update_channel or capgo_set_bundle_channel. Only use a URL and checksum the user provided. To upload local files use capgo_get_upload_command.',
+    description: 'Record a new bundle version for an app the user owns, pointing to a zip the user already hosts at an https URL. This only creates the version entry: no device receives it until a channel is set to this version with capgo_update_channel or capgo_set_bundle_channel. Only use a URL and checksum the user provided. To upload local files use capgo_prepare_bundle_upload.',
     input: {
       appId,
       version: z.string().min(1).describe('Semver version name, e.g. 1.2.3'),
@@ -770,11 +845,109 @@ const statsTools: McpTool[] = [
 // ---------------------------------------------------------------------------
 // Native builds
 // ---------------------------------------------------------------------------
+const platform = z.enum(['ios', 'android'])
+
+const requestBuildTool: McpTool = {
+  name: 'capgo_request_build',
+  title: 'Request native build',
+  description: 'Step 1 of 3 to run a native cloud build without a logged-in CLI. Uses the signing credentials stored for this app (see capgo_get_build_credentials). '
+    + 'First package the native project offline: `npx @capgo/cli@latest build zip <appId> --platform <ios|android> --json`, and pass its build_options and ios_dependency_manager here. '
+    + 'Returns a job_id and a signed URL. Step 2: `curl -fsS -X PUT -H "Content-Type: application/zip" --upload-file <zip> "<upload_url>"`. Step 3: capgo_start_build. Builds use build minutes.',
+  inputSchema: z.object({
+    appId,
+    platform,
+    build_mode: z.enum(['release', 'debug']).optional().describe('Defaults to release'),
+    build_options: z.record(z.string(), z.unknown()).optional().describe('build_options printed by build zip --json, optionally overridden, e.g. {"iosDistribution":"ad_hoc","submitToStoreReview":true,"storeReleaseNotes":"..."}'),
+    ios_dependency_manager: z.enum(['cocoapods', 'spm']).optional(),
+    cache: z.boolean().optional().describe('false disables the compilation cache'),
+    cache_key: z.string().min(1).optional(),
+  }) as unknown as z.ZodObject<z.ZodRawShape>,
+  annotations: { title: 'Request native build', ...WRITE },
+  run: async (input, ctx) => {
+    const { appId: id, platform: target, build_mode, build_options, ios_dependency_manager, cache, cache_key } = input as {
+      appId: string
+      platform: 'ios' | 'android'
+      build_mode?: 'release' | 'debug'
+      build_options?: Record<string, unknown>
+      ios_dependency_manager?: 'cocoapods' | 'spm'
+      cache?: boolean
+      cache_key?: string
+    }
+    const requested = await ctx.call({
+      method: 'POST',
+      path: '/build/request',
+      body: compact({
+        app_id: id,
+        platform: target,
+        build_mode: build_mode ?? 'release',
+        build_options: { ...build_options, platform: target, buildMode: build_mode ?? 'release' },
+        use_stored_credentials: true,
+        ios_dependency_manager,
+        cache_enabled: cache === false ? false : undefined,
+        cache_key,
+        cache_fingerprint_extra: cache_key,
+      }),
+    })
+    if (!requested.ok)
+      return apiResult(requested)
+    const job = requested.data as { job_id: string, upload_expires_at?: string }
+    const signed = await ctx.call({ method: 'POST', path: `/build/upload_url/${enc(job.job_id)}`, body: { app_id: id } })
+    if (!signed.ok)
+      return textResult({ job_id: job.job_id, upload_error: signed.data, note: 'The build was requested but no signed URL could be issued. Retry with capgo_get_build_upload_url or cancel with capgo_cancel_build.' }, true)
+    return textResult({ job_id: job.job_id, upload: signed.data, next_step: 'PUT the archive to upload.upload_url, then call capgo_start_build with this job_id.' })
+  },
+}
+
 const buildTools: McpTool[] = [
+  requestBuildTool,
+  apiTool({
+    name: 'capgo_get_build_upload_url',
+    title: 'Get build upload URL',
+    description: 'Issue a new signed PUT URL for the project archive of a requested build that has not started (e.g. when the previous URL expired).',
+    input: { appId, job_id: z.string().min(1) },
+    annotations: WRITE,
+    request: input => ({ method: 'POST', path: `/build/upload_url/${enc(input.job_id)}`, body: { app_id: input.appId } }),
+  }),
+  apiTool({
+    name: 'capgo_start_build',
+    title: 'Start native build',
+    description: 'Step 3 of 3: start a requested build after its archive was uploaded. Then follow it with capgo_get_build_status and capgo_get_build_logs.',
+    input: { appId, job_id: z.string().min(1) },
+    annotations: WRITE,
+    request: input => ({ method: 'POST', path: `/build/start/${enc(input.job_id)}`, body: { app_id: input.appId } }),
+  }),
+  apiTool({
+    name: 'capgo_get_build_credentials',
+    title: 'Build credentials status',
+    description: 'Show which signing credentials are stored for an app per platform (never the secrets themselves).',
+    input: { appId },
+    annotations: READ,
+    request: input => ({ method: 'GET', path: '/build/credentials', query: { app_id: input.appId } }),
+  }),
+  apiTool({
+    name: 'capgo_prepare_build_credentials_upload',
+    title: 'Upload build credentials',
+    description: 'Get a 10-minute signed URL to store this app\'s signing credentials for one platform, so secrets never pass through the chat. '
+      + 'Write a JSON file locally with the same keys as the CLI credentials file (e.g. BUILD_CERTIFICATE_BASE64, P12_PASSWORD, CAPGO_IOS_PROVISIONING_MAP, APPLE_KEY_ID, APPLE_ISSUER_ID, APPLE_KEY_CONTENT, APP_STORE_CONNECT_TEAM_ID; '
+      + 'Android: ANDROID_KEYSTORE_FILE, KEYSTORE_KEY_ALIAS, KEYSTORE_KEY_PASSWORD, KEYSTORE_STORE_PASSWORD, PLAY_CONFIG_JSON) with file contents base64-encoded, '
+      + 'then `curl -fsS -X PUT -H "Content-Type: application/json" --data-binary @<file> "<url>"` and delete the file. Never print the secrets. '
+      + 'Users with a logged-in CLI can instead run `npx @capgo/cli@latest build credentials push`.',
+    input: { appId, platform, mode: z.enum(['replace', 'merge']).optional().describe('merge keeps stored keys missing from the file (default replace)') },
+    annotations: DESTRUCTIVE,
+    request: input => ({ method: 'POST', path: '/build/credentials/upload-url', body: compact({ app_id: input.appId, platform: input.platform, mode: input.mode }) }),
+  }),
+  apiTool({
+    name: 'capgo_delete_build_credentials',
+    title: 'Delete build credentials',
+    description: 'Delete the signing credentials stored for an app and platform. Confirm with the user first.',
+    input: { appId, platform },
+    annotations: DESTRUCTIVE,
+    request: input => ({ method: 'DELETE', path: '/build/credentials', body: { app_id: input.appId, platform: input.platform } }),
+  }),
   apiTool({
     name: 'capgo_get_build_status',
     title: 'Build status',
-    description: 'Get the status of a native cloud build. Start builds with the Capgo CLI: npx @capgo/cli@latest build request.',
+    description: 'Get the status of a native cloud build. Call it again after the build ends so its status and build time are recorded.',
     input: { appId, job_id: z.string().min(1) },
     annotations: READ,
     request: input => ({ method: 'GET', path: '/build/status', query: { app_id: input.appId, job_id: input.job_id } }),
@@ -983,6 +1156,7 @@ export const MCP_TOOLS: readonly McpTool[] = [
   ...accountTools,
   ...appTools,
   ...bundleTools,
+  ...bundleUploadTools,
   ...channelTools,
   ...deviceTools,
   ...statsTools,
