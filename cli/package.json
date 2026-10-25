@@ -252,7 +252,7 @@
     "test:build-credentials-units": "bun test/test-credentials-migration.mjs && bun test/test-provisioning-map-validation.mjs && bun test/test-mobileprovision-parser.mjs",
     "test:onboarding-generators": "bun test/test-diff-utils.mjs && bun test/test-workflow-generator.mjs",
     "test:mcp-onboarding": "bun test/test-mcp-onboarding.mjs",
-    "test:setup-notices": "bun test ./test/test-setup-notices.mjs ./test/test-setup-progress-request.mjs ./test/test-setup-notice-background.mjs ./test/test-init-completion-notice.mjs"
+    "test:setup-notices": "bun test ./test/test-setup-notices.mjs ./test/test-setup-progress-request.mjs ./test/test-setup-notice-background.mjs ./test/test-init-completion-notice.mjs && bun test ./test/test-builder-setup-notice.mjs"
   },
   "dependencies": {
     "@inkjs/ui": "^2.0.0",
