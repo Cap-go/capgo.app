@@ -11,7 +11,7 @@
     "nodejs_compat_populate_process_env"
   ],
   "placement": {
-    "mode": "smart"
+    "region": "aws:eu-west-2"
   },
   "ai": {
     "binding": "AI"
