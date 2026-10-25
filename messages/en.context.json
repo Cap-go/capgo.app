@@ -2272,7 +2272,6 @@
   "monthly-active-users": "Used in Capgo web console areas: pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "monthly-plan": "Used in Capgo web console areas: pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "more-menu": "Used in Capgo web console areas: composables. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "morning": "Used in Capgo web console areas: components/dashboard. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "my-notifications": "Used in Capgo web console areas: pages/settings/account. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "name": "Used in Capgo web console areas: components, components/bundle, components/dashboard, components/organization, components/organizations. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "name-contains-invalid-characters": "Used in Capgo web console. Role: UI label about \"name contains invalid characters\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
