@@ -1,4 +1,5 @@
 import process from 'node:process'
+import { log } from '@clack/prompts'
 import { detectAgent } from 'agent-cli-detector'
 import { DIRECT_OFFER_GUARANTEE_MESSAGE } from './plan-copy'
 import { withTrialCardPrompt } from './plan-url'
@@ -18,7 +19,7 @@ const DAY_MS = 86_400_000
 
 /** Agents read raw output: no box, gutter, color or wrapping, so links stay on one line. */
 export function printAgentText(text: string): void {
-  process.stdout.write(`\n${text}\n`)
+  log.message(text, { withGuide: false, symbol: '', secondarySymbol: '', spacing: 1 })
 }
 
 function trialDetails({ endsAt, plansUrl }: AgentTrial) {
