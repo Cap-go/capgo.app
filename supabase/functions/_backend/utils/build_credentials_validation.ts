@@ -314,7 +314,7 @@ export function isStoredReservedEnvKey(key: string): boolean {
 
 /** Rejects keys that may be passed per build but must never be stored on Capgo. */
 export function assertStorableCredentialKeys(record: CredentialRecord): void {
-  const rejected = Object.keys(record).filter(isStoredReservedEnvKey).sort()
+  const rejected = Object.keys(record).filter(isStoredReservedEnvKey).sort((a, b) => a.localeCompare(b))
   if (rejected.length > 0)
     throw new BuildCredentialsValidationError(`${rejected.join(', ')}: cannot be stored on Capgo because ${rejected.length === 1 ? 'it changes' : 'they change'} how build tools load code, which would run in every later build. Pass ${rejected.length === 1 ? 'it' : 'them'} per build with --build-env instead.`)
 }
