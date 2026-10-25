@@ -47,7 +47,8 @@ export function formatPlanAmount(value: number, code: string, options: Intl.Numb
 
 export function usePlanPrices(orgId: Ref<string | undefined>) {
   const data = ref<PlanPricesResponse | null>(null)
-  // True once the request settled, success or not: checkout waits for it.
+  // True only once the billing currency is known: a failed lookup keeps checkout disabled,
+  // since the server would force the customer's pinned currency over the card shown.
   const ready = ref(false)
   const storedCurrency = ref(readStoredCurrency())
 
@@ -60,7 +61,7 @@ export function usePlanPrices(orgId: Ref<string | undefined>) {
     if (orgId.value !== id)
       return
     data.value = !error && response ? response : null
-    ready.value = true
+    ready.value = !!data.value
   }, { immediate: true })
 
   const currencies = computed(() => data.value?.currencies ?? [])
