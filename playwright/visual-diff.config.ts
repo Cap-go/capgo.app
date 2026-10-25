@@ -736,7 +736,7 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     auth: true,
     prepare: async (page) => {
       await page.emulateMedia({ reducedMotion: 'reduce' })
-      await page.route('**/rest/v1/channels?*', route => route.fulfill({ json: [], headers: { 'content-range': '*/0' } }))
+      await routeConsoleQuery(page, 'channels', route => route.fulfill(consoleQueryJson([], 0)))
       await page.reload()
       const introduction = page.locator('[data-test="channel-introduction"]')
       if (process.env.VISUAL_DIFF_PHASE === 'after') {

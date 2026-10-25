@@ -50,7 +50,7 @@ async function copyInstallCommand() {
           <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-azure-500/30 text-sm text-sky-700 dark:text-azure-300" aria-hidden="true">1</span>
           {{ t('builder-checklist-mcp-install-title') }}
         </h3>
-        <div class="mt-4 flex flex-wrap gap-2" role="group" :aria-label="t('builder-checklist-ai-assistants')">
+        <fieldset class="mt-4 flex min-w-0 flex-wrap gap-2" :aria-label="t('builder-checklist-ai-assistants')">
           <button
             v-for="option in builderSetupAssistants"
             :key="option.client"
@@ -64,7 +64,7 @@ async function copyInstallCommand() {
             <img v-if="option.icon" :src="option.icon" alt="" class="h-4 w-4 object-contain dark:brightness-0 dark:invert">
             {{ option.name }}
           </button>
-        </div>
+        </fieldset>
         <p class="mt-4 text-sm leading-6 text-slate-600 dark:text-slate-300">
           {{ t('builder-checklist-mcp-install-description') }}
         </p>
