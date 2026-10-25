@@ -67,6 +67,30 @@ describe('provider IP lookup', () => {
     }
   })
 
+  it('keeps the short TTL of a failed lookup read from the shared cache', async () => {
+    vi.useFakeTimers()
+    try {
+      // Another isolate stored a failed lookup: this one only sees the shared cache.
+      const stored = { blocked: false, provider: null, cachedUntil: Date.now() + 5 * 60_000 }
+      const match = vi.fn(async () => new Response(JSON.stringify(stored)))
+      vi.stubGlobal('caches', { open: async () => ({ match: () => match(), put: async () => {} }) })
+      const fetchMock = vi.fn(async () => ipApiResponse(googleDatacenter))
+      vi.stubGlobal('fetch', fetchMock)
+      const ip = randomIp()
+
+      await expect(invalidIpInfo(ip, requestContext())).resolves.toEqual({ blocked: false, provider: null })
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(6 * 60_000)
+      match.mockImplementation(async () => new Response(null, { status: 404 }))
+      await expect(invalidIpInfo(ip, requestContext())).resolves.toEqual({ blocked: true, provider: 'google' })
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
   // Last: the backoff it starts outlives the test inside this module.
   it('stops calling ip-api until its rate limit window resets', async () => {
     vi.useFakeTimers()

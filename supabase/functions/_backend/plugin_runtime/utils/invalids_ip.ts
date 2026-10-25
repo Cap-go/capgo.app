@@ -222,10 +222,18 @@ async function cachedInvalidIpInfo(context: Context | undefined, ip: string) {
   try {
     const helper = new CacheHelper(context)
     const cacheRequest = helper.buildRequest(PROVIDER_IP_CACHE_PATH, { ip })
-    const cached = await helper.matchJson<InvalidIpInfo>(cacheRequest)
-    if (cached?.provider !== undefined)
-      setCachedInMemory(ip, cached)
-    return cached
+    const cached = await helper.matchJson<InvalidIpInfo & { cachedUntil?: number }>(cacheRequest)
+    if (cached?.provider === undefined)
+      return null
+    // Keep the TTL it was stored with: a failed lookup stays short-lived.
+    const remainingSeconds = typeof cached.cachedUntil === 'number'
+      ? Math.floor((cached.cachedUntil - now()) / 1000)
+      : PROVIDER_IP_FALLBACK_TTL_SECONDS
+    if (remainingSeconds <= 0)
+      return null
+    const info = { blocked: cached.blocked, provider: cached.provider }
+    setCachedInMemory(ip, info, remainingSeconds)
+    return info
   }
   catch (error) {
     cloudlog({
@@ -245,7 +253,7 @@ async function storeInvalidIpInfo(context: Context | undefined, ip: string, info
   try {
     const helper = new CacheHelper(context)
     const cacheRequest = helper.buildRequest(PROVIDER_IP_CACHE_PATH, { ip })
-    await helper.putJson(cacheRequest, info, ttlSeconds)
+    await helper.putJson(cacheRequest, { ...info, cachedUntil: now() + ttlSeconds * 1000 }, ttlSeconds)
   }
   catch (error) {
     cloudlog({
