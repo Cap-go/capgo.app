@@ -1366,9 +1366,54 @@ async function finishClaimedUpload(c: UploadContext, claims: UploadSessionClaims
   return { checksum, channels, skippedSameChecksum, deltaStats, targets, sessionChannels, size: staged.size }
 }
 
+/**
+ * A retried complete on a session this upload already finalized: the artifact is done, but a
+ * channel update may have failed (channel_update_failed). Link only the channels that do not
+ * serve this bundle yet; with nothing left it stays upload_already_completed.
+ */
+async function resumeChannelAssignments(c: UploadContext, claims: UploadSessionClaims, apikey: ApikeyRow, version: SessionVersion): Promise<Response | null> {
+  if (version.storage_provider !== 'r2' || version.deleted || version.r2_path !== claims.bundle_path)
+    return null
+  const requested = claims.channels.map(channel => channel.name)
+  const targets = await preflightChannelAssignments(c, claims.app_id, requested, claims.self_assign, claims.rollout)
+  // Only channels still on the bundle they had at prepare: never undo a deploy made since.
+  let remaining = requested.filter((channel) => {
+    const target = targets.get(channel)
+    const atPrepare = claims.channels.find(entry => entry.name === channel)?.version_old_id
+    const current = target?.version != null ? String(target.version) : undefined
+    if (current !== atPrepare)
+      return false
+    return claims.rollout ? target?.rollout_version !== claims.version_id : target?.version !== claims.version_id
+  })
+  if (claims.checksum_check && remaining.length && version.checksum)
+    remaining = (await channelsAfterChecksumCheck(c, apikey, claims.app_id, remaining, version.checksum, new Map())).toAssign
+  if (!remaining.length)
+    return null
+  const warnings = ['Resumed the channel updates of an already uploaded bundle; the bundle itself was not processed again.']
+  const updatedChannels = await linkChannels(c, claims, apikey, remaining, targets, warnings)
+  return c.json({
+    ...BRES,
+    app_id: claims.app_id,
+    version: claims.version,
+    version_id: claims.version_id,
+    checksum: version.checksum,
+    encrypted: claims.encrypted,
+    storage_provider: 'r2',
+    resumed: true,
+    channels_updated: updatedChannels,
+    channels_skipped_same_checksum: [],
+    delta: null,
+    deleted_linked_bundles: [],
+    warnings,
+  })
+}
+
 export async function completeBundleUpload(c: UploadContext, rawBody: unknown, apikey: ApikeyRow): Promise<Response> {
   const claims = await readClaims(c, rawBody, apikey)
   const version = await loadSessionVersion(c, claims)
+  const resumed = await resumeChannelAssignments(c, claims, apikey, version)
+  if (resumed)
+    return resumed
   await claimSession(c, claims, version)
 
   const warnings: string[] = []

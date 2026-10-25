@@ -181,6 +181,29 @@ describe('bundle upload sessions', () => {
     expect(completed.data.checksum).toBe(checksum)
   })
 
+  it('resumes channel updates that failed after the bundle was finalized', async () => {
+    // resume-b only accepts delta bundles, so linking this zip-only bundle fails there.
+    const created = await fetch(`${BASE_URL}/channel`, { method: 'POST', headers, body: JSON.stringify({ app_id: APPNAME, channel: 'upload-session-resume-b', updatePackage: 'delta' }) })
+    expect(created.ok).toBe(true)
+    const prepared = await prepare('15.0.0', { channel: ['upload-session-resume-a', 'upload-session-resume-b'] })
+    expect(prepared.status).toBe(200)
+    await putZip(prepared.data.bundle_upload.url, bundleZip('notifyAppReady(); // 15'))
+    const failed = await api('complete', { upload_token: prepared.data.upload_token })
+    expect(failed.data.error).toBe('channel_update_failed')
+    expect(failed.data.moreInfo?.updated_channels ?? failed.data.updated_channels).toEqual(['upload-session-resume-a'])
+    expect((await versionRow('15.0.0'))?.storage_provider).toBe('r2')
+
+    await getSupabaseClient().from('channels').update({ update_package: 'all' }).eq('app_id', APPNAME).eq('name', 'upload-session-resume-b')
+    const resumed = await api('complete', { upload_token: prepared.data.upload_token })
+    expect(resumed.status).toBe(200)
+    expect(resumed.data).toMatchObject({ resumed: true, channels_updated: ['upload-session-resume-b'] })
+    const { data: channel } = await getSupabaseClient().from('channels').select('version').eq('app_id', APPNAME).eq('name', 'upload-session-resume-b').single()
+    expect(channel?.version).toBe((await versionRow('15.0.0'))?.id)
+
+    const done = await api('complete', { upload_token: prepared.data.upload_token })
+    expect(done.data.error).toBe('upload_already_completed')
+  })
+
   it('refuses tampered tokens', async () => {
     const prepared = await prepare('7.0.0', { channel: 'upload-session-token' })
     const [prefix, body, signature] = (prepared.data.upload_token as string).split('.')

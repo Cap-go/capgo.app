@@ -334,20 +334,14 @@ async function storeBuildCredentials(c: Context, input: {
   }
   // A merge is built on the row it read: write it only if that row is unchanged, so two
   // overlapping merges cannot silently drop each other's keys.
-  const { data: row, error } = mode === 'merge' && existing
-    ? await supabaseAdmin(c)
-        .from('app_build_credentials')
-        .update(values)
-        .eq('id', existing.id)
-        .eq('updated_at', existing.updated_at)
-        .select('id, updated_at')
-        .maybeSingle()
-    : await supabaseAdmin(c)
-        .from('app_build_credentials')
-        .upsert(values, { onConflict: 'app_id,platform' })
-        .select('id, updated_at')
-        .single()
-  if (!error && !row && mode === 'merge' && existing)
+  // A first merge (nothing read) inserts only, so a concurrent first write is a conflict, not lost.
+  const table = () => supabaseAdmin(c).from('app_build_credentials')
+  const { data: row, error } = mode !== 'merge'
+    ? await table().upsert(values, { onConflict: 'app_id,platform' }).select('id, updated_at').single()
+    : existing
+      ? await table().update(values).eq('id', existing.id).eq('updated_at', existing.updated_at).select('id, updated_at').maybeSingle()
+      : await table().insert(values).select('id, updated_at').maybeSingle()
+  if (mode === 'merge' && ((!error && !row) || error?.code === '23505'))
     quickError(409, 'build_credentials_conflict', 'The stored credentials changed while merging; retry the upload', { app_id: appId, platform }, undefined, { alert: false })
   if (error || !row) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Build credentials upsert failed', app_id: appId, platform, error })
