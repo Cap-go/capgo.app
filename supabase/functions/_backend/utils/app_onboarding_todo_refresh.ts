@@ -7,6 +7,7 @@ import type { BuilderBuildOutcome } from './builder_onboarding_checklist.ts'
 import type { MiddlewareKeyVariables } from './hono.ts'
 import type { getDrizzleClient } from './pg.ts'
 import { sql } from 'drizzle-orm'
+import { emitCommittedAppOnboardingBento } from './app_onboarding_bento.ts'
 import { buildAppOnboardingStepPosthogEvent } from './app_onboarding_posthog.ts'
 import { gatherTodoEvidence, getTodoEvidenceNeeds, loadTodoEvidenceCandidates } from './app_onboarding_todo_evidence.ts'
 import { APP_ONBOARDING_ADD_CODE_INFERRED_ANNOTATION, appendAppOnboardingStepHistory, applyAppOnboardingPatch, getAppOnboardingStepHistoryChanges, hasSupportedOtaTodoList, parseAppOnboarding } from './appOnboarding.ts'
@@ -166,6 +167,7 @@ export async function refreshAppOnboardingTodoBatch(
 
   const stepCount = events.reduce((sum, event) => sum + event.changes.length, 0)
   if (stepCount) {
+    await emitCommittedAppOnboardingBento(c, events.map(event => ({ ...event, historyChanges: event.changes })))
     const payloads = events.flatMap(event => event.changes.map(change => buildAppOnboardingStepPosthogEvent({
       appId: event.appId,
       change,
