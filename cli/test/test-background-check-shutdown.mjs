@@ -238,7 +238,7 @@ test.concurrent('agent copy preserves output-mode suppression', async () => {
 test.concurrent('the agent end notice does not depend on the start-of-command trial state', async () => {
   const result = await run({ commandPath: 'bundle list', workers: ['plan-one.mjs', 'plan-trial.mjs'], waitForWorkers: true, agent: true, trialAlreadyShown: true }).completion
   assert.equal(result.code, 0, result.text)
-  assert.equal(result.output.match(trialLine)?.length, 1, result.text)
+  assert.equal([...result.output.matchAll(new RegExp(trialLine.source, `${trialLine.flags}g`))].length, 1, result.text)
 }, 12000)
 
 test.concurrent('ready notices render for human-readable output even when no worker or TTY wait remains', async () => {
