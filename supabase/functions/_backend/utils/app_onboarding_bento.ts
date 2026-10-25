@@ -68,7 +68,7 @@ async function sendCommittedMilestones(c: Context<MiddlewareKeyVariables>, commi
   }
   await Promise.all(milestones.map(async ({ appId, orgId, change }) => {
     const row = names.get(appId)
-    if (!row || row.owner_org !== orgId)
+    if (row?.owner_org !== orgId)
       return
     const bento = buildAppOnboardingMilestoneBentoEvent({ appId, orgId, change, appName: row.app_name, orgName: row.org_name })!
     await sendEventToTracking(c, {
