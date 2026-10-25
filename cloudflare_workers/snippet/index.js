@@ -47,7 +47,7 @@ const STATS_ACTION_RE = /^\w{1,64}$/
 // PROVIDER_INFRA_ASNS (plugin_runtime/utils/providerAsns.ts): without a fill
 // the snippet does not know whether the app blocks them, so their /stats keep
 // reaching the worker, which answers them 429 when it does.
-const PROVIDER_ASNS = [15169, 16591, 19527, 36040, 36492, 43515, 139070, 396982, 714, 6185]
+const PROVIDER_ASNS = new Set([15169, 16591, 19527, 36040, 36492, 43515, 139070, 396982, 714, 6185])
 const EDGE_FILL_HEADER = 'X-Capgo-Edge-Fill'
 const EDGE_IP_LIMIT_HEADER = 'X-Capgo-Edge-Ip-Limit'
 const EDGE_STAT_HEADER = 'X-Capgo-Edge-Stat'
@@ -552,7 +552,7 @@ function isProviderNetwork(request, fill) {
   const asn = request.cf?.asn
   // No fill (STATS_ANSWER_ALL): any provider network could be blocked.
   if (!isPlainObject(fill))
-    return typeof asn !== 'number' || PROVIDER_ASNS.includes(asn)
+    return typeof asn !== 'number' || PROVIDER_ASNS.has(asn)
   if (fill.pa === undefined)
     return false
   return typeof asn !== 'number' || !Array.isArray(fill.pa) || fill.pa.includes(asn)
