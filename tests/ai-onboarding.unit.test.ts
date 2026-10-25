@@ -16,6 +16,7 @@ import {
   readOnboardingSetupMode,
   shouldRedirectToAiOnboarding,
   withOnboardingSetupMode,
+  withAiSetupOrganization,
   withoutAiAgentProgress,
 } from '../src/utils/onboardingSetupMode'
 
@@ -157,6 +158,11 @@ describe('AI setup for another organization', () => {
     const onboarding = { setup_mode: 'ai', intent: 'ota', ai_agent_connected_at: 'x', ai_mcp_connected_at: 'y' }
     expect(withoutAiAgentProgress(onboarding)).toEqual({ setup_mode: 'ai', intent: 'ota' })
     expect(readAiAgentProgress(withoutAiAgentProgress(onboarding))).toEqual({ agentConnected: false, mcpConnected: false })
+  })
+
+  it.concurrent('records which organization the agent markers belong to', () => {
+    const onboarding = { setup_mode: 'ai', ai_agent_connected_at: 'x', ai_setup_org_id: 'org-1' }
+    expect(withAiSetupOrganization(onboarding, 'org-2')).toEqual({ setup_mode: 'ai', ai_setup_org_id: 'org-2' })
   })
 
   it.concurrent('pins the new organization on the prompt page', () => {

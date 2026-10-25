@@ -124,6 +124,14 @@ export function withoutAiAgentProgress(onboarding: Json): Json {
   return rest as Json
 }
 
+/**
+ * Starts tracking the agent for one organization: clears earlier markers and records the
+ * organization, so the backend only counts events sent with that organization's prompt key.
+ */
+export function withAiSetupOrganization(onboarding: Json, orgId: string): Json {
+  return { ...asObject(withoutAiAgentProgress(onboarding)), ai_setup_org_id: orgId } as Json
+}
+
 /** Page the AI path opens after creating an organization; `org` pins the new one. */
 export function aiOnboardingPathFor(orgId: string) {
   return `${AI_ONBOARDING_PATH}?org=${encodeURIComponent(orgId)}`

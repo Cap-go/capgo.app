@@ -27,7 +27,7 @@ import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
 import { onboardingPlanStops } from '~/utils/onboardingPlanStops'
-import { aiGoalToIntent, aiOnboardingPathFor, defaultAiOrganizationName, readAiOnboardingGoal, withOnboardingFields, withOnboardingSetupMode, withoutAiAgentProgress } from '~/utils/onboardingSetupMode'
+import { aiGoalToIntent, aiOnboardingPathFor, defaultAiOrganizationName, readAiOnboardingGoal, withAiSetupOrganization, withOnboardingFields, withOnboardingSetupMode, withoutAiAgentProgress } from '~/utils/onboardingSetupMode'
 
 const props = defineProps<{ initialScreen: 'choice' | 'ai', newOrganization?: boolean }>()
 const emit = defineEmits<{ manual: [] }>()
@@ -189,6 +189,11 @@ async function createOrganization() {
       toast.error(code === '23505' ? t('org-with-this-name-exists') : t('cannot-create-org'))
       return
     }
+
+    // Scope the agent markers to this organization. If this write fails, the backend falls
+    // back to accepting any prompt key, which only matters with several AI setups in flight.
+    if (!await rememberOnboarding(current => withAiSetupOrganization(current, data.id)))
+      console.warn('Cannot scope AI onboarding progress to the new organization')
 
     sendOnboardingEvent('onboarding_ai_org_created', {
       org_id: data.id,
