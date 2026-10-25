@@ -92,7 +92,7 @@ const pendingMilestone = computed(() => {
 })
 // Org the deep link asked about; cleared once a prompt opens. It skips only the milestone check.
 const deepLinkOrgId = ref('')
-const isDeepLinked = computed(() => !!orgId.value && deepLinkOrgId.value === orgId.value && isTrial.value)
+const isDeepLinked = computed(() => !!orgId.value && deepLinkOrgId.value === orgId.value && isTrial.value && !isOnboardingRoute.value)
 
 watch(() => route.query[TRIAL_CARD_PARAM], async () => {
   const link = readTrialCardDeepLink(route.query)
