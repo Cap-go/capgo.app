@@ -3633,6 +3633,8 @@
   "ai-onboarding-mode-title": "How do you want to set up Capgo?",
   "ai-onboarding-open-app": "Open setup progress",
   "ai-onboarding-org-name-help": "Pre-filled for you. You can rename it later in settings.",
+  "ai-onboarding-org-name-help-new": "Pick a name your team will recognize. You can rename it later in settings.",
+  "ai-onboarding-new-org-title": "Set up your new organization",
   "ai-onboarding-org-name-label": "Organization name",
   "ai-onboarding-plan-kicker": "Your organization",
   "ai-onboarding-plan-subtitle": "Two quick answers. We start your free trial on the matching plan, and your agent handles the app details.",

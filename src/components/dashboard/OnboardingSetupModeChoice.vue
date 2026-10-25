@@ -218,7 +218,7 @@ async function createOrganization() {
 <template>
   <section class="onboarding-flow-shell onboarding-flow-app-creation h-full min-h-0 flex-1 overflow-y-auto bg-slate-50 px-4 py-6 sm:px-6 lg:px-8 dark:bg-slate-950">
     <div class="onboarding-flow-content mx-auto w-full max-w-3xl space-y-6">
-      <AppOnboardingHeader :title="t('onboarding-welcome-title')" :steps="steps" :current-step-id="screen === 'choice' ? 'mode' : 'plan'" />
+      <AppOnboardingHeader :title="props.newOrganization ? t('ai-onboarding-new-org-title') : t('onboarding-welcome-title')" :steps="steps" :current-step-id="screen === 'choice' ? 'mode' : 'plan'" />
 
       <div v-if="screen === 'choice'" class="onboarding-intent-card rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95" data-test="onboarding-setup-mode">
         <div class="onboarding-intent-card-content space-y-6">
@@ -367,7 +367,7 @@ async function createOrganization() {
               data-test="onboarding-ai-org-name"
             >
             <p class="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
-              {{ t('ai-onboarding-org-name-help') }}
+              {{ defaultOrgName ? t('ai-onboarding-org-name-help') : t('ai-onboarding-org-name-help-new') }}
             </p>
           </div>
 

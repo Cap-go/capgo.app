@@ -147,6 +147,8 @@ test.describe('AI onboarding', () => {
     // The first setup's agent markers do not carry over, and the existing app is not picked up.
     await expect(task(1)).toHaveAttribute('data-done', 'false')
     await expect(page.locator('[data-test="onboarding-ai-waiting"]')).toBeVisible()
+    // An existing user can go back to their dashboard instead of only logging out.
+    await expect(page.locator('[data-test="onboarding-cancel-new-org"]')).toBeVisible()
     await page.waitForTimeout(4000)
     await expect(page).toHaveURL(/\/onboarding\/ai\?org=/)
   })

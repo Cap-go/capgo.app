@@ -18,7 +18,7 @@ import { useConsole } from '~/services/console'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { replaceUserOnboardingWithRetry, serializeUserOnboardingWrite } from '~/services/userOnboardingWriteQueue'
 import { useMainStore } from '~/stores/main'
-import { useOrganizationStore } from '~/stores/organization'
+import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
 import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
 import { allowOnboardingDashboardExploration, getAppGettingStartedPath, ONBOARDING_DASHBOARD_EXPLORED_EVENT } from '~/utils/onboardingRedirect'
 import { readAiAgentProgress, readAiOnboardingGoal, withOnboardingSetupMode } from '~/utils/onboardingSetupMode'
@@ -53,8 +53,11 @@ let pollTimer: ReturnType<typeof setInterval> | undefined
 let autoOpenTimer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
 
+// Existing users setting up another organization skipped "About you" and can go back
+// to their dashboard; first-time users only get a logout.
+const isAdditionalOrganization = computed(() => organizationStore.organizations.filter(org => !isPendingOrganizationInvite(org)).length > 1)
 const steps = computed(() => [
-  { id: 'name', label: t('unified-onboarding-step-about-you') },
+  ...(isAdditionalOrganization.value ? [] : [{ id: 'name', label: t('unified-onboarding-step-about-you') }]),
   { id: 'mode', label: t('ai-onboarding-step-mode') },
   { id: 'plan', label: t('ai-onboarding-step-plan') },
   { id: 'agent', label: t('ai-onboarding-step-agent') },
@@ -302,7 +305,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <AppOnboardingPageFrame :is-logging-out="isLoggingOut" @logout="logout">
+  <AppOnboardingPageFrame :can-cancel="isAdditionalOrganization" :is-logging-out="isLoggingOut" @cancel="router.push('/dashboard')" @logout="logout">
     <section class="onboarding-flow-shell onboarding-flow-app-creation h-full min-h-0 flex-1 overflow-y-auto bg-slate-50 px-4 py-6 sm:px-6 lg:px-8 dark:bg-slate-950">
       <div class="onboarding-flow-content mx-auto w-full max-w-3xl space-y-6">
         <AppOnboardingHeader :title="t('ai-onboarding-agent-title')" :steps="steps" current-step-id="agent" />
