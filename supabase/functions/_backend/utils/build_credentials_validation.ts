@@ -636,7 +636,7 @@ export function readMobileprovisionExpiry(profileBase64: string): string | null 
 }
 
 export function summarizeCredentials(platform: BuildPlatform, credentials: CredentialRecord): BuildCredentialsSummary {
-  const keys = Object.keys(credentials).sort()
+  const keys = Object.keys(credentials).sort((a, b) => a.localeCompare(b))
   const requirements = checkCredentialRequirements(platform, credentials)
   const summary: BuildCredentialsSummary = {
     platform,
