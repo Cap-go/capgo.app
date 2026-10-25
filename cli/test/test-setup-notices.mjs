@@ -44,6 +44,7 @@ process.env.TZ = 'UTC'
 const trialEndsAt = '2026-01-15T12:00:00Z'
 const trialLink = 'https://console.example.com/settings/organization/plans?trial_card=1'
 const trialLine = `- Add a payment method before Jan 15, 2026 to keep live updates running after the free trial (14 days left; devices stop receiving updates without a plan; no charge before then): ${trialLink}`
+const builderTrialLine = `- Add a payment method before Jan 15, 2026 to keep cloud builds running after the free trial (14 days left; new builds are blocked without a plan; no charge before then): ${trialLink}`
 const otaSetupLines = ['- Live updates: not finished yet. Next: Create a channel for this app to receive live updates.', '  Check progress: npx @capgo/cli@latest app todo --list ota']
 const nextSteps = (...lines) => ['Capgo — next steps', '', ...lines].join('\n')
 const onTrial = (progress) => {
@@ -54,7 +55,8 @@ const onTrial = (progress) => {
 test('agents get the unfinished step and the active trial as plain next steps, whatever the checklist state', () => {
   assert.equal(agentMessage(onTrial(fixture(['ota']))), nextSteps(...otaSetupLines, trialLine))
   assert.equal(agentMessage(onTrial(finish(fixture(['ota']), 'ota'))), nextSteps('- Live updates: set up.', trialLine))
-  assert.equal(agentMessage(onTrial(finish(fixture(), 'builder', 'android'))), nextSteps('- Android cloud builds: set up.', trialLine))
+  assert.equal(agentMessage(onTrial(finish(fixture(), 'builder', 'android'))), nextSteps('- Android cloud builds: set up.', builderTrialLine))
+  assert.equal(agentMessage(onTrial(finish(finish(fixture(), 'ota'), 'builder', 'android'))), nextSteps('- Live updates and Android cloud builds: set up.', trialLine))
 })
 
 test('agent Builder steps keep the platform label and point at the platform wizard', () => {
@@ -65,7 +67,7 @@ test('agent Builder steps keep the platform label and point at the platform wiza
     const progress = onTrial(fixture(['builder']))
     progress.onboarding.setup.selected_builder_platform = platform
     progress.onboarding.setup.steps.builder[platform].start_setup.status = 'done'
-    assert.equal(agentMessage(progress), nextSteps(line, `  Check progress: npx @capgo/cli@latest ${action}`, trialLine))
+    assert.equal(agentMessage(progress), nextSteps(line, `  Check progress: npx @capgo/cli@latest ${action}`, builderTrialLine))
   }
 })
 
@@ -84,6 +86,7 @@ test('the agent trial line uses the singular for the last day', () => {
 test('agent todo and upload trial copy keep the tested wording and the short trial-card link', () => {
   const trial = { endsAt: Date.parse(trialEndsAt), plansUrl: `https://console.example.com/settings/organization/plans?oid=${orgId}` }
   assert.equal(formatAgentTodoTrialItem(trial), `[ ] Pending: Add a payment method before Jan 15, 2026 so live updates keep reaching devices after the free trial (no charge before then): ${trialLink}`)
+  assert.equal(formatAgentTodoTrialItem(trial, true), `[ ] Pending: Add a payment method before Jan 15, 2026 so cloud builds keep working after the free trial (no charge before then): ${trialLink}`)
   assert.equal(formatAgentUploadTrialNote(14, 'https://console.example.com/settings/organization/plans', now), `Add a payment method before Jan 15, 2026 to keep delivering updates like this one: the free trial ends then, and devices stop receiving live updates until a plan is active. No charge before Jan 15, 2026: ${trialLink}`)
 })
 
