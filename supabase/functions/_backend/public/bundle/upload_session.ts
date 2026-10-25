@@ -93,6 +93,7 @@ const prepareSchema = z.object({
   native_packages: z.array(nativePackageSchema).max(1000).optional(),
   updater_version: z.string().min(1).max(256).optional(),
   updater_package: z.string().max(256).optional(),
+  checksum_algorithm: z.enum(['sha256', 'crc32']).optional(),
   checksum: z.string().min(1).max(1024).optional(),
   session_key: z.string().min(1).max(4096).optional(),
   key_id: z.string().max(256).optional(),
@@ -440,6 +441,17 @@ async function presignedPut(c: UploadContext, path: string) {
 // prepare
 // ---------------------------------------------------------------------------
 
+/**
+ * The packer's `checksum_algorithm` (e.g. from --force-crc32-checksum) wins, like the CLI flag,
+ * but never sha256 for an updater that can only verify CRC32.
+ */
+function resolveChecksumAlgorithm(body: PrepareUploadBody): 'sha256' | 'crc32' {
+  const supported = checksumAlgorithmForUpdater(body.updater_version!, body.updater_package)
+  if (body.checksum_algorithm === 'sha256' && supported === 'crc32')
+    throw simpleError('invalid_options', `@capgo/capacitor-updater ${body.updater_version} only verifies CRC32 checksums; upgrade it or drop checksum_algorithm`)
+  return body.checksum_algorithm ?? supported
+}
+
 function validateOptionConflicts(body: PrepareUploadBody) {
   const hasRollout = body.rollout_percentage != null || body.rollout_percentage_bps != null || body.advance_rollout === true
   if (body.min_update_version && body.auto_min_update_version)
@@ -454,6 +466,8 @@ function validateOptionConflicts(body: PrepareUploadBody) {
     throw simpleError('invalid_options', 'You cannot use accept_incompatible together with ignore_metadata_check')
   if (body.session_key && !body.checksum)
     throw simpleError('missing_checksum', 'Encrypted bundles need the client-side encrypted checksum (checksum)')
+  if (body.session_key && body.checksum_algorithm === 'crc32')
+    throw simpleError('invalid_options', 'You cannot force a CRC32 checksum on an encrypted bundle')
   if (!body.session_key && !body.updater_version)
     throw simpleError('missing_updater_version', 'updater_version (installed @capgo/capacitor-updater version) is required to pick the bundle checksum algorithm')
   if (!body.ignore_metadata_check && !body.native_packages)
@@ -578,6 +592,7 @@ export async function prepareBundleUpload(c: UploadContext, rawBody: unknown, ap
   }
 
   const encrypted = !!body.session_key
+  const checksumAlgorithm = encrypted ? 'sha256' : resolveChecksumAlgorithm(body)
   const bps = rolloutBps(body)
   const rollout = bps != null || body.advance_rollout
     ? { bps, advance: !!body.advance_rollout, paused: body.rollout_paused, cache_ttl_seconds: body.rollout_cache_ttl_seconds }
@@ -681,7 +696,7 @@ export async function prepareBundleUpload(c: UploadContext, rawBody: unknown, ap
     ...(delta === 'pack' ? { delta_pack_path: stagingPath(orgId, body.app_id, upserted.id, 'delta-pack') } : {}),
     encrypted,
     ...(body.checksum ? { checksum: body.checksum } : {}),
-    checksum_algorithm: encrypted ? 'sha256' : checksumAlgorithmForUpdater(body.updater_version!, body.updater_package),
+    checksum_algorithm: checksumAlgorithm,
     delta,
     index_check: body.code_check !== false && !encrypted,
     notify_check: body.code_check !== false && !body.ignore_notify_app_ready && !encrypted,

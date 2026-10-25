@@ -6,6 +6,7 @@ import { checkPermission } from '../../utils/rbac.ts'
 import { supabaseApikey } from '../../utils/supabase.ts'
 import { getEnv } from '../../utils/utils.ts'
 import { assertBuildUploadWindowOpen } from './upload.ts'
+import { ensureStoredCredentialsPermission } from './stored_credentials_access.ts'
 
 interface BuilderInputUploadUrl {
   upload_url: string
@@ -25,17 +26,12 @@ export async function getBuildUploadUrl(
   appId: string,
   apikey: Database['public']['Tables']['apikeys']['Row'],
 ): Promise<Response> {
-  const builderUrl = getEnv(c, 'BUILDER_URL')
-  const builderApiKey = getEnv(c, 'BUILDER_API_KEY')
-  if (!builderUrl || !builderApiKey)
-    throw quickError(503, 'service_unavailable', 'Builder service not configured')
-
   if (!(await checkPermission(c, 'app.build_native', { appId })))
     throw simpleError('unauthorized', 'You do not have permission to upload a build for this app', { app_id: appId })
 
   const { data: buildRequest, error } = await supabaseApikey(c, apikey.key)
     .from('build_requests')
-    .select('app_id, status, upload_expires_at')
+    .select('app_id, status, upload_expires_at, uses_stored_credentials')
     .eq('builder_job_id', jobId)
     .eq('app_id', appId)
     .single()
@@ -43,6 +39,15 @@ export async function getBuildUploadUrl(
     throw simpleError('not_found', 'Build request not found', { job_id: jobId })
 
   assertBuildUploadWindowOpen(c, jobId, buildRequest)
+  // The uploaded project runs with the stored signing secrets: same right as requesting it.
+  if (buildRequest.uses_stored_credentials)
+    await ensureStoredCredentialsPermission(c, appId, apikey.user_id)
+
+  const builderUrl = getEnv(c, 'BUILDER_URL')
+  const builderApiKey = getEnv(c, 'BUILDER_API_KEY')
+  if (!builderUrl || !builderApiKey)
+    throw quickError(503, 'service_unavailable', 'Builder service not configured')
+
   const uploadDeadline = buildRequest.upload_expires_at ? new Date(buildRequest.upload_expires_at) : null
   if (!uploadDeadline || Number.isNaN(uploadDeadline.getTime()))
     throw quickError(403, 'upload_expired', 'Upload window has expired', {}, undefined, { alert: false })

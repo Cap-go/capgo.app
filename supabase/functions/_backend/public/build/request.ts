@@ -11,6 +11,7 @@ import { sendEventToTracking } from '../../utils/tracking.ts'
 import { backgroundTask, getEnv } from '../../utils/utils.ts'
 import { assertNativeBuildConcurrencyAvailable, getPlansUpgradeUrl } from './concurrency.ts'
 import { loadStoredBuildCredentials } from './credentials.ts'
+import { ensureStoredCredentialsPermission } from './stored_credentials_access.ts'
 
 export interface RequestBuildBody {
   app_id: string
@@ -295,28 +296,6 @@ async function ensureBuildPermission(c: Context, appId: string, userId: string) 
   }
 }
 
-/**
- * Stored signing secrets are written only by app admins (app.update_settings). The project
- * archive of a build runs arbitrary Gradle/Podfile/npm scripts with those secrets in env, so
- * a build that injects them needs the same right; app.build_native alone is not enough.
- */
-export const STORED_CREDENTIALS_BUILD_PERMISSION = 'app.update_settings' as const
-
-async function ensureStoredCredentialsPermission(c: Context, appId: string, userId: string) {
-  if (await checkPermission(c, STORED_CREDENTIALS_BUILD_PERMISSION, { appId }))
-    return
-  cloudlog({
-    requestId: c.get('requestId'),
-    message: 'Stored build credentials denied: missing app.update_settings',
-    app_id: appId,
-    user_id: userId,
-  })
-  throw quickError(403, 'permission_denied', 'Capgo permission denied: building with the app\'s stored credentials (use_stored_credentials) requires app admin rights (app.update_settings), because build scripts can read the signing secrets. Ask an app admin to run this build, or provide the signing credentials directly instead of using the stored ones.', {
-    app_id: appId,
-    permission: STORED_CREDENTIALS_BUILD_PERMISSION,
-  }, undefined, { alert: false })
-}
-
 async function getBuildOwnerOrg(c: Context, supabase: ReturnType<typeof supabaseApikey>, appId: string): Promise<string> {
   // Get org_id for the app to use as anonymized user ID
   const { data: app, error: appError } = await supabase
@@ -531,6 +510,7 @@ async function persistBuildRequest(c: Context, input: {
   upload_path: string
   upload_url: string
   upload_expires_at: Date
+  uses_stored_credentials: boolean
 }) {
   const {
     app_id,
@@ -545,6 +525,7 @@ async function persistBuildRequest(c: Context, input: {
     upload_path,
     upload_url,
     upload_expires_at,
+    uses_stored_credentials,
   } = input
 
   const supabaseAdminClient = supabaseAdmin(c)
@@ -564,6 +545,7 @@ async function persistBuildRequest(c: Context, input: {
       upload_path,
       upload_url,
       upload_expires_at: upload_expires_at.toISOString(),
+      uses_stored_credentials,
     })
     .select('*')
     .single()
@@ -706,6 +688,7 @@ export async function requestBuild(
     upload_path,
     upload_url,
     upload_expires_at,
+    uses_stored_credentials: use_stored_credentials === true,
   })
 
   cloudlog({

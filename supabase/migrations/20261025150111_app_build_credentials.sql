@@ -91,3 +91,9 @@ FOR ALL
 TO PUBLIC
 USING (false)
 WITH CHECK (false);
+
+-- Builds that run with the stored signing credentials: uploading their archive or
+-- starting them needs the same admin permission as requesting them, because the
+-- uploaded project's build scripts can read the secrets.
+ALTER TABLE "public"."build_requests"
+ADD COLUMN IF NOT EXISTS "uses_stored_credentials" boolean NOT NULL DEFAULT false;

@@ -821,6 +821,7 @@ export class CapgoSDK {
         nodeModules: parsed.nodeModules,
         platform: parsed.platform,
         userId: parsed.userId,
+        useStoredCredentials: parsed.useStoredCredentials,
         // Flatten BuildCredentials to individual fields
         buildCertificateBase64: creds?.BUILD_CERTIFICATE_BASE64,
         p12Password: creds?.P12_PASSWORD,

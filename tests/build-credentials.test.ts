@@ -187,6 +187,38 @@ describe('/build/credentials stored native build credentials', () => {
     expect(body.message).toContain('Ask an app admin to run this build, or provide the signing credentials directly')
   })
 
+  it('uploading or starting a build that uses stored credentials requires app admin rights', async () => {
+    // An admin requested this build with the stored secrets; a developer must not supply its project.
+    const jobId = `stored-creds-job-${id}`
+    const sessionKey = randomUUID()
+    const { error } = await getSupabaseClient().from('build_requests').insert({
+      app_id: appId,
+      owner_org: orgId,
+      requested_by: userId,
+      platform: 'ios',
+      status: 'pending',
+      builder_job_id: jobId,
+      upload_session_key: sessionKey,
+      upload_path: `orgs/${orgId}/apps/${appId}/native-builds/${sessionKey}.zip`,
+      upload_url: `${BASE_URL}/build/upload/${jobId}`,
+      upload_expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+      uses_stored_credentials: true,
+    })
+    expect(error).toBeNull()
+    try {
+      for (const path of [`/build/upload_url/${jobId}`, `/build/start/${jobId}`]) {
+        const response = await fetch(`${BASE_URL}${path}`, { method: 'POST', headers: headers(developerKey), body: JSON.stringify({ app_id: appId }) })
+        expect(response.status, path).toBe(403)
+        const body = await response.json() as { error: string, message: string }
+        expect(body.error, path).toBe('permission_denied')
+        expect(body.message, path).toContain('requires app admin rights (app.update_settings)')
+      }
+    }
+    finally {
+      await getSupabaseClient().from('build_requests').delete().eq('builder_job_id', jobId)
+    }
+  })
+
   it('POST /build/request with use_stored_credentials validates the merged set', async () => {
     // No stored android credentials (other test deletes them; ios-only seed here keeps this independent).
     let response = await fetch(`${BASE_URL}/build/request`, {

@@ -747,6 +747,7 @@ export type Database = {
           upload_path: string
           upload_session_key: string
           upload_url: string
+          uses_stored_credentials: boolean
           xcode_version: string | null
         }
         Insert: {
@@ -771,6 +772,7 @@ export type Database = {
           upload_path: string
           upload_session_key: string
           upload_url: string
+          uses_stored_credentials?: boolean
           xcode_version?: string | null
         }
         Update: {
@@ -795,6 +797,7 @@ export type Database = {
           upload_path?: string
           upload_session_key?: string
           upload_url?: string
+          uses_stored_credentials?: boolean
           xcode_version?: string | null
         }
         Relationships: [

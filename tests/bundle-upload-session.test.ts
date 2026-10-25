@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer'
 import { createHash, randomUUID } from 'node:crypto'
-import { brotliDecompressSync } from 'node:zlib'
+import { brotliDecompressSync, crc32 } from 'node:zlib'
 import AdmZip from 'adm-zip'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { BASE_URL, getBaseData, getSupabaseClient, headers, postUpdate, resetAndSeedAppData, resetAppData } from './test-utils.ts'
@@ -158,6 +158,22 @@ describe('bundle upload sessions', () => {
     expect(blocked.status).toBe(400)
     expect(blocked.data.error).toBe('incompatible_bundle')
     expect(await versionRow('6.0.0')).toBeNull()
+  })
+
+  it('keeps the packer checksum algorithm (--force-crc32-checksum)', async () => {
+    const forcedSha = await prepare('14.0.0', { channel: 'upload-session-crc', updater_version: '5.0.0', checksum_algorithm: 'sha256' })
+    expect(forcedSha.data.error).toBe('invalid_options')
+    expect(await versionRow('14.0.0')).toBeNull()
+
+    const zip = bundleZip('notifyAppReady(); // 14')
+    const checksum = crc32(zip).toString(16).padStart(8, '0')
+    const prepared = await prepare('14.0.0', { channel: 'upload-session-crc', checksum_algorithm: 'crc32', checksum })
+    expect(prepared.status).toBe(200)
+    expect(prepared.data.checksum_algorithm).toBe('crc32')
+    await putZip(prepared.data.bundle_upload.url, zip)
+    const completed = await api('complete', { upload_token: prepared.data.upload_token })
+    expect(completed.status).toBe(200)
+    expect(completed.data.checksum).toBe(checksum)
   })
 
   it('refuses tampered tokens', async () => {

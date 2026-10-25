@@ -486,6 +486,8 @@ export const requestBuildOptionsSchema = z.object({
   nodeModules: z.string().optional(),
   platform: z.enum(['ios', 'android']),
   credentials: buildCredentialsSchema.optional(),
+  /** Use the signing credentials stored on Capgo for this app (needs app admin rights); `credentials` still take precedence. */
+  useStoredCredentials: z.boolean().optional(),
   /** iOS: build on a machine with this Xcode version (e.g. 26, 26.0.1). */
   xcodeVersion: z.string().min(1).optional(),
   androidTrack: z.enum(['internal', 'alpha', 'beta', 'production']).optional(),

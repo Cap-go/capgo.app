@@ -238,6 +238,7 @@ const bundleUploadTools: McpTool[] = [
       native_packages: z.array(nativePackage).optional().describe('native_packages printed by bundle zip --for-upload --json; without it the native compatibility check cannot run'),
       updater_version: z.string().optional().describe('Installed @capgo/capacitor-updater version printed by bundle zip --for-upload --json (selects checksum format and delta features)'),
       updater_package: z.string().optional().describe('Updater package name printed by bundle zip, for Cordova projects'),
+      checksum_algorithm: z.enum(['sha256', 'crc32']).optional().describe('checksum_algorithm printed by bundle zip --for-upload --json (keeps --force-crc32-checksum)'),
       size_bytes: z.number().int().positive().optional(),
       cli_version: z.string().optional(),
       delta: z.boolean().optional().describe('Also publish the per-file manifest for delta updates. Capgo builds it from the zip; encrypted bundles need delta_pack'),
