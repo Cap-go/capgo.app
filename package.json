@@ -411,7 +411,7 @@
     "eslint-plugin-perfectionist": "5.10.0",
     "eslint-plugin-regexp": "3.1.1",
     "eslint-plugin-unused-imports": "4.4.1",
-    "happy-dom": "^20.11.0",
+    "happy-dom": "^21.0.0",
     "jose": "^6.2.4",
     "knip": "^6.29.0",
     "miniflare": "^5.20260930.0-alpha",
