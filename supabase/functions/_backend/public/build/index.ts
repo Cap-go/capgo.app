@@ -10,7 +10,7 @@ import {
   TUS_EXTENSIONS,
   TUS_VERSION,
 } from '../../files/util.ts'
-import { getBodyOrQuery, honoFactory } from '../../utils/hono.ts'
+import { getBodyOrQuery, honoFactory, simpleError } from '../../utils/hono.ts'
 import { middlewareKey } from '../../utils/hono_middleware.ts'
 import { aiAnalyzeDeprecated } from './ai_analyze.ts'
 import { aiAnalyzeStreamBuild } from './ai_analyze_stream.ts'
@@ -92,7 +92,7 @@ app.post('/upload_url/:jobId', middlewareKey(['all', 'write']), async (c) => {
   const jobId = c.req.param('jobId')
   const body = await getBodyOrQuery<{ app_id: string }>(c)
   if (!body.app_id) {
-    throw new Error('app_id is required in request body')
+    throw simpleError('missing_parameter', 'app_id is required in request body')
   }
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return getBuildUploadUrl(c, jobId, body.app_id, apikey)

@@ -20,7 +20,7 @@ import { acceptTrackEvent } from '../../private/events.ts'
 import { manifestUploadPublicUrl } from '../../private/request_manifest_upload.ts'
 import { compareNativePackages, summarizeBundleCompatibility } from '../../utils/bundle_compatibility.ts'
 import { BundleUploadTokenError, getBundleUploadSessionSecret, signBundleUploadToken, verifyBundleUploadToken } from '../../utils/bundle_upload_token.ts'
-import { BundleZipError, checksumAlgorithmForUpdater, compressDeltaFile, containsAscii, Crc32, extractDeltaPack, findCentralDirectory, hasRootIndexHtml, inflateEntry, isJsEntry, parseCentralDirectory, selectDeltaEntries, sha256Hex, updaterSupportsDelta, walkZipStream, ZIP_TAIL_READ_SIZE } from '../../utils/bundle_zip.ts'
+import { BundleZipError, checksumAlgorithmForUpdater, isExactUpdaterVersion, compressDeltaFile, containsAscii, Crc32, extractDeltaPack, findCentralDirectory, hasRootIndexHtml, inflateEntry, isJsEntry, parseCentralDirectory, selectDeltaEntries, sha256Hex, updaterSupportsDelta, walkZipStream, ZIP_TAIL_READ_SIZE } from '../../utils/bundle_zip.ts'
 import { BRES, quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { ManifestInventoryConflict, registerManifestInventory, reserveManifestPaths, usesManifestInventory, withManifestInventory } from '../../utils/manifest_inventory.ts'
@@ -421,8 +421,15 @@ function versionPath(ownerOrg: string, appId: string, version: string) {
   return `orgs/${ownerOrg}/apps/${appId}/${version}.zip`
 }
 
+/**
+ * Staged uploads live under their own top-level prefix so an R2 lifecycle rule can expire
+ * the ones a client abandoned (no complete/abort). Keep aligned with
+ * cloudflare_workers/r2/lifecycle.capgo.json.
+ */
+export const UPLOAD_STAGING_PREFIX = 'upload-sessions-expire-after-1-day/'
+
 function stagingPath(ownerOrg: string, appId: string, versionId: number, kind: 'bundle' | 'delta-pack') {
-  return `orgs/${ownerOrg}/apps/${appId}/uploads/${versionId}/${randomUUID()}-${kind}.zip`
+  return `${UPLOAD_STAGING_PREFIX}orgs/${ownerOrg}/apps/${appId}/${versionId}/${randomUUID()}-${kind}.zip`
 }
 
 async function presignedPut(c: UploadContext, path: string) {
@@ -470,6 +477,8 @@ function validateOptionConflicts(body: PrepareUploadBody) {
     throw simpleError('invalid_options', 'You cannot force a CRC32 checksum on an encrypted bundle')
   if (!body.session_key && !body.updater_version)
     throw simpleError('missing_updater_version', 'updater_version (installed @capgo/capacitor-updater version) is required to pick the bundle checksum algorithm')
+  if (body.updater_version && !body.updater_package && !isExactUpdaterVersion(body.updater_version))
+    throw simpleError('invalid_updater_version', `updater_version must be the exact installed @capgo/capacitor-updater version (e.g. 7.40.0), not a range: got "${body.updater_version}". Use the updater_version printed by bundle zip --for-upload --json.`)
   if (!body.ignore_metadata_check && !body.native_packages)
     throw simpleError('missing_native_packages', 'native_packages is required for the native compatibility check (pass ignore_metadata_check to skip it)')
 }
@@ -664,6 +673,7 @@ export async function prepareBundleUpload(c: UploadContext, rawBody: unknown, ap
     throw simpleError('error_already_exist', 'A bundle file already exists for this version', { version: body.version })
 
   const minUpdateVersion = pickHighestMinUpdateVersion(outcomes.map(outcome => outcome.minUpdateVersion))
+  const sessionSecret = getBundleUploadSessionSecret(c)
   // Insert-only: a concurrent prepare of the same version gets 409 instead of overwriting it.
   const upserted = await insertBundle(c, {
     app_id: body.app_id,
@@ -723,9 +733,20 @@ export async function prepareBundleUpload(c: UploadContext, rawBody: unknown, ap
   if (encrypted && claims.index_check === false && body.code_check !== false)
     warnings.push('Encrypted bundles cannot be inspected server-side: run the notifyAppReady/index.html check locally before zipping.')
 
-  const { token, expiresAt } = await signBundleUploadToken(getBundleUploadSessionSecret(c), claims)
-  const bundleUpload = await presignedPut(c, claims.upload_path)
-  const deltaPackUpload = claims.delta_pack_path ? await presignedPut(c, claims.delta_pack_path) : undefined
+  let signed: Awaited<ReturnType<typeof signBundleUploadToken>>
+  let bundleUpload: Awaited<ReturnType<typeof presignedPut>>
+  let deltaPackUpload: Awaited<ReturnType<typeof presignedPut>> | undefined
+  try {
+    signed = await signBundleUploadToken(sessionSecret, claims)
+    bundleUpload = await presignedPut(c, claims.upload_path)
+    deltaPackUpload = claims.delta_pack_path ? await presignedPut(c, claims.delta_pack_path) : undefined
+  }
+  catch (error) {
+    // Without a token the client cannot abort: free the version name now.
+    await deleteFailedVersionRow(c, { id: upserted.id, r2_path: bundlePath, owner_org: orgId }, { skipObjectCheck: true }).catch(() => false)
+    throw error
+  }
+  const { token, expiresAt } = signed
 
   for (const warning of preflight.warnings) {
     const message = (warning as { message?: unknown })?.message

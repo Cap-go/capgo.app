@@ -165,12 +165,11 @@ Zip the native project exactly like 'build request' does, without uploading it.
 Works offline: no API key and no calls to Capgo. Use it when an agent uploads the archive
 through a signed URL (Capgo MCP). With --json, prints the archive path, size, sha256 and the
 non-secret build options derived from the project.
-  npx @capgo/cli@latest build zip com.example.app --platform ios --json
 
 **Example:**
 
 ```bash
-Example:
+npx @capgo/cli@latest build zip com.example.app --platform ios --json
 ```
 
 **Options:**
@@ -596,12 +595,11 @@ npx @capgo/cli@latest build credentials remote-status
 
 Show which build credentials are stored on Capgo for an app (key names and
 non-secret facts only) and what is still missing to build.
-  npx @capgo/cli@latest build credentials remote-status com.example.app
 
 **Example:**
 
 ```bash
-Example:
+npx @capgo/cli@latest build credentials remote-status com.example.app
 ```
 
 **Options:**
@@ -620,12 +618,11 @@ npx @capgo/cli@latest build credentials remote-delete
 
 Delete the build credentials stored on Capgo for one platform. Local saved
 credentials are not touched.
-  npx @capgo/cli@latest build credentials remote-delete com.example.app --platform ios --yes
 
 **Example:**
 
 ```bash
-Example:
+npx @capgo/cli@latest build credentials remote-delete com.example.app --platform ios --yes
 ```
 
 **Options:**

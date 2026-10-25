@@ -51,6 +51,14 @@ export function isDeprecatedPluginVersion(version: SemVer, minFive = '5.10.0', m
   return false
 }
 
+/**
+ * The CLI reads the installed version from node_modules: an exact semver, or a local link.
+ * A range like ^7.40.0 would silently fall back to CRC32, so it is rejected instead.
+ */
+export function isExactUpdaterVersion(updaterVersion: string): boolean {
+  return !!tryParseSemver(updaterVersion) || LOCAL_UPDATER_VERSIONS.has(updaterVersion)
+}
+
 /** Checksum algorithm the CLI picks for an unencrypted bundle (prepareBundleFile). */
 export function checksumAlgorithmForUpdater(updaterVersion: string, updaterPackage?: string | null): 'sha256' | 'crc32' {
   if (updaterPackage && CORDOVA_UPDATER_PACKAGES.has(updaterPackage))

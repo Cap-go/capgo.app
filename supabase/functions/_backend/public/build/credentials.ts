@@ -192,6 +192,27 @@ async function loadStoredRows(c: Context, appId: string, platform?: BuildPlatfor
 }
 
 /**
+ * Re-encrypts a row opened with the previous key, so rotation completes on read and
+ * BUILD_CREDENTIALS_ENCRYPTION_KEY_PREVIOUS can be dropped. Best effort: guarded by the
+ * key version read, so a concurrent write is never overwritten.
+ */
+async function resealWithCurrentKey(c: Context, secret: string, appId: string, platform: BuildPlatform, row: StoredRow, credentials: CredentialRecord) {
+  try {
+    const sealed = await sealBuildCredentials({ secret, appId, platform, credentials })
+    const { error } = await supabaseAdmin(c)
+      .from('app_build_credentials')
+      .update({ ciphertext: sealed.ciphertext, key_version: sealed.keyVersion })
+      .eq('id', row.id)
+      .eq('key_version', row.key_version)
+    if (error)
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Build credentials reseal failed', app_id: appId, platform, error })
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Build credentials reseal failed', app_id: appId, platform, error: (error as Error)?.message })
+  }
+}
+
+/**
  * Decrypts the stored credentials for one app/platform; null when none are stored.
  * Used by /build/request (use_stored_credentials). Caller must have checked permission.
  */
@@ -201,7 +222,9 @@ export async function loadStoredBuildCredentials(c: Context, appId: string, plat
     return null
   const keyring = getBuildCredentialsKeyring(c)
   try {
-    const { credentials } = await openBuildCredentials({ keyring, appId, platform, ciphertext: row.ciphertext, keyVersion: row.key_version })
+    const { credentials, needsReseal } = await openBuildCredentials({ keyring, appId, platform, ciphertext: row.ciphertext, keyVersion: row.key_version })
+    if (needsReseal)
+      await resealWithCurrentKey(c, keyring.current, appId, platform, row, credentials)
     return credentials
   }
   catch (error) {
@@ -298,21 +321,34 @@ async function storeBuildCredentials(c: Context, input: {
   if (input.beforeWrite)
     await input.beforeWrite()
 
-  const { data: row, error } = await supabaseAdmin(c)
-    .from('app_build_credentials')
-    .upsert({
-      app_id: appId,
-      owner_org: ownerOrg,
-      platform,
-      ciphertext: sealed.ciphertext,
-      key_version: sealed.keyVersion,
-      summary: summary as unknown as Json,
-      created_by: existing ? existing.created_by : actor.userId,
-      updated_by: actor.userId,
-      updated_at: now,
-    }, { onConflict: 'app_id,platform' })
-    .select('id, updated_at')
-    .single()
+  const values = {
+    app_id: appId,
+    owner_org: ownerOrg,
+    platform,
+    ciphertext: sealed.ciphertext,
+    key_version: sealed.keyVersion,
+    summary: summary as unknown as Json,
+    created_by: existing ? existing.created_by : actor.userId,
+    updated_by: actor.userId,
+    updated_at: now,
+  }
+  // A merge is built on the row it read: write it only if that row is unchanged, so two
+  // overlapping merges cannot silently drop each other's keys.
+  const { data: row, error } = mode === 'merge' && existing
+    ? await supabaseAdmin(c)
+        .from('app_build_credentials')
+        .update(values)
+        .eq('id', existing.id)
+        .eq('updated_at', existing.updated_at)
+        .select('id, updated_at')
+        .maybeSingle()
+    : await supabaseAdmin(c)
+        .from('app_build_credentials')
+        .upsert(values, { onConflict: 'app_id,platform' })
+        .select('id, updated_at')
+        .single()
+  if (!error && !row && mode === 'merge' && existing)
+    quickError(409, 'build_credentials_conflict', 'The stored credentials changed while merging; retry the upload', { app_id: appId, platform }, undefined, { alert: false })
   if (error || !row) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Build credentials upsert failed', app_id: appId, platform, error })
     quickError(503, 'database_unavailable', 'Cannot store build credentials')

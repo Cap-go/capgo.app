@@ -1236,8 +1236,7 @@ Works offline: no API key and no calls to Capgo. Use it when an agent uploads th
 through a signed URL (Capgo MCP). With --json, prints the archive path, size, sha256 and the
 non-secret build options derived from the project.
 
-Example:
-  npx @capgo/cli@latest build zip com.example.app --platform ios --json`)
+Example: npx @capgo/cli@latest build zip com.example.app --platform ios --json`)
   .action(zipBuildCommand)
   .option('--platform <platform>', `Target platform: ios or android (required)`)
   .option('--path <path>', `Path to the project directory to build (default: current directory)`)
@@ -1580,8 +1579,7 @@ buildCredentials
   .description(`Show which build credentials are stored on Capgo for an app (key names and
 non-secret facts only) and what is still missing to build.
 
-Example:
-  npx @capgo/cli@latest build credentials remote-status com.example.app`)
+Example: npx @capgo/cli@latest build credentials remote-status com.example.app`)
   .action(remoteCredentialsStatusCommand)
   .option('--platform <platform>', 'Only show ios or android')
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
@@ -1593,8 +1591,7 @@ buildCredentials
   .description(`Delete the build credentials stored on Capgo for one platform. Local saved
 credentials are not touched.
 
-Example:
-  npx @capgo/cli@latest build credentials remote-delete com.example.app --platform ios --yes`)
+Example: npx @capgo/cli@latest build credentials remote-delete com.example.app --platform ios --yes`)
   .action(deleteRemoteCredentialsCommand)
   .option('--platform <platform>', 'Platform to delete: ios or android (required)')
   .option('-y, --yes', 'Do not ask for confirmation')

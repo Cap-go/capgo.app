@@ -144,7 +144,8 @@ async function zipBundleCore(appId: string, options: BundleZipOptions, silent: b
   if (uploadOptions)
     checkValidOptions(uploadOptions)
 
-  if (shouldShowPrompts)
+  // The upload packer is documented as fully offline: skip the npm "new CLI version" check.
+  if (shouldShowPrompts && !forUpload)
     await checkAlerts()
 
   const extConfig = await getConfig()

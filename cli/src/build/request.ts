@@ -1276,6 +1276,9 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     const missingCreds: string[] = []
 
     if (useStoredCredentials) {
+      // An empty Xcode version means "any machine": do not send it as a restriction.
+      if (platform === 'ios' && mergedCredentials.CAPGO_IOS_XCODE_VERSION !== undefined && !mergedCredentials.CAPGO_IOS_XCODE_VERSION.trim())
+        delete mergedCredentials.CAPGO_IOS_XCODE_VERSION
       log.info('ℹ️  Using the signing credentials stored on Capgo; Capgo validates them with the ones provided here')
     }
     else if (platform === 'ios') {

@@ -151,6 +151,11 @@ describe('bundle upload sessions', () => {
     const noUpdater = await prepare('6.0.0', { updater_version: undefined })
     expect(noUpdater.data.error).toBe('missing_updater_version')
 
+    // A range would silently pick CRC32 for a SHA-256 updater: only the installed version is accepted.
+    const rangeUpdater = await prepare('6.0.0', { updater_version: '^7.40.0' })
+    expect(rangeUpdater.data.error).toBe('invalid_updater_version')
+    expect(await versionRow('6.0.0')).toBeNull()
+
     const unknownField = await prepare('6.0.0', { unexpected: true })
     expect(unknownField.data.error).toBe('invalid_body')
 
@@ -265,7 +270,7 @@ describe('bundle upload sessions', () => {
     const prepared = await prepare('12.0.0', { channel: 'upload-session-race' })
     expect(prepared.status).toBe(200)
     // Clients only ever get a signed URL for a staging key, never for the bundle path.
-    expect(prepared.data.bundle_upload.url).toContain('/uploads/')
+    expect(prepared.data.bundle_upload.url).toContain('/upload-sessions-expire-after-1-day/')
     expect(prepared.data.bundle_upload.url).not.toContain('12.0.0.zip')
     await putZip(prepared.data.bundle_upload.url, zip)
 
