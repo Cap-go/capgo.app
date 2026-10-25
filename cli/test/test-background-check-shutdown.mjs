@@ -32,9 +32,14 @@ beforeAll(async () => {
   writeFileSync(join(dir, 'released.mjs'), "import { parentPort } from 'node:worker_threads'; parentPort.once('message', () => process.exit(0))")
   writeFileSync(join(dir, 'notice.mjs'), `import { parentPort } from 'node:worker_threads'; parentPort.postMessage({ type: 'setup-notice', notice: { kind: 'setup', appId: 'com.example.ready', product: 'live updates', title: 'Create a channel', action: 'Continue your checklist', secondary: [] } })`)
   for (const app of ['one', 'two', 'trial', 'agent']) {
-    writeFileSync(join(dir, `plan-${app}.mjs`), `import { parentPort } from 'node:worker_threads'; parentPort.postMessage({ type: 'setup-notice', notice: { kind: 'plan', appId: 'com.example.${app}', completed: ['Live updates'], secondary: ${JSON.stringify(app === 'agent' ? ['explore cloud builds'] : [])}, billing: { orgId: 'fixture-org', trialEndsAt: ${JSON.stringify(['trial', 'agent'].includes(app) ? '2099-01-01T00:00:00Z' : null)}, plansUrl: 'https://console.example.com/plans' } } })`)
+    writeFileSync(join(dir, `plan-${app}.mjs`), `import { parentPort } from 'node:worker_threads'; parentPort.postMessage({ type: 'setup-notice', notice: { kind: 'plan', appId: 'com.example.${app}', completed: ['Live updates'], secondary: ${JSON.stringify(app === 'agent' ? ['explore cloud builds'] : [])}, billing: { orgId: 'fixture-org', trialEndsAt: ${JSON.stringify(['trial', 'agent'].includes(app) ? '2099-01-01T12:00:00Z' : null)}, plansUrl: 'https://console.example.com/plans' } } })`)
   }
+  const billing = { orgId: 'fixture-org', trialEndsAt: '2099-01-01T12:00:00Z', plansUrl: 'https://console.example.com/plans?oid=fixture-org' }
+  writeFileSync(join(dir, 'setup-trial.mjs'), `import { parentPort } from 'node:worker_threads'; parentPort.postMessage({ type: 'setup-notice', notice: ${JSON.stringify({ kind: 'setup', appId: 'com.example.ready', product: 'live updates', title: 'Create a channel', instruction: 'Next: Create a channel.', action: 'npx @capgo/cli@latest app todo --list ota', secondary: ['explore cloud builds with Capgo Builder'], billing })} })`)
+  writeFileSync(join(dir, 'trial-only.mjs'), `import { parentPort } from 'node:worker_threads'; parentPort.postMessage({ type: 'setup-notice', notice: ${JSON.stringify({ kind: 'trial', appId: 'com.example.ready', secondary: [], billing })} })`)
 })
+
+const trialLine = /^- Add a payment method before Jan 1, 2099 to keep live updates running after the free trial \(\d+ days left; devices stop receiving updates without a plan; no charge before then\): https:\/\/console\.example\.com\/plans\?trial_card=1$/m
 
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
@@ -150,7 +155,7 @@ function run({ commandPath = 'app list', options = {}, tty = true, stdinTty = tt
   for (const definition of defaultAgents)
     for (const signal of definition.env ?? []) delete environment[signal.name]
   if (agent) environment.CODEX_THREAD_ID = 'fixture-agent-thread'
-  const child = spawn('node', [runner], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...environment, FORCE_COLOR: '0', NO_COLOR: undefined, ...colorEnv, CI: ci ? 'true' : 'false', GITHUB_ACTIONS: github ? 'true' : 'false', GITHUB_STEP_SUMMARY: summaryPath, CAPGO_DISABLE_TELEMETRY: disabled ? 'true' : '', CAPGO_DISABLE_POSTHOG: '', CAPGO_SETUP_DEBUG: debug ? '1' : '' } })
+  const child = spawn('node', [runner], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...environment, TZ: 'UTC', FORCE_COLOR: '0', NO_COLOR: undefined, ...colorEnv, CI: ci ? 'true' : 'false', GITHUB_ACTIONS: github ? 'true' : 'false', GITHUB_STEP_SUMMARY: summaryPath, CAPGO_DISABLE_TELEMETRY: disabled ? 'true' : '', CAPGO_DISABLE_POSTHOG: '', CAPGO_SETUP_DEBUG: debug ? '1' : '' } })
   let output = ''
   let errors = ''
   let waiting
@@ -176,45 +181,64 @@ function waitedMs(result) {
   return Number(result.output.match(/foreground-finished:(\d+)/)?.[1])
 }
 
-test.concurrent('detected agents receive the full plan recommendation in ready non-TTY output', async () => {
+test.concurrent('detected agents get plain next steps with the trial line in ready non-TTY output', async () => {
   const result = await run({ commandPath: 'bundle list', workers: ['plan-trial.mjs'], waitForWorkers: true, tty: false, agent: true }).completion
   assert.equal(result.code, 0, result.text)
-  assert.match(result.text, /PLAN RECOMMENDATION FOR THE AI ASSISTANT/)
-  assert.match(result.text, /Ready to use: Live updates/)
-  assert.match(result.text, /In your final response, actively recommend/)
-  assert.match(result.text, /prominent place in your response/)
-  assert.match(result.text, /Choose your Capgo plan now: https:\/\/console.example.com\/plans/)
-  assert.doesNotMatch(result.text, /Checking your setup|Your Capgo setup is complete/)
+  assert.match(result.output, /\nCapgo — next steps\n\n- Live updates: set up\.\n- Add a payment method/)
+  assert.match(result.output, trialLine)
+  assert.doesNotMatch(result.text, /[┌│└]|AI ASSISTANT|final response|Checking your setup|Your Capgo setup is complete/)
 }, 12000)
 
-test.concurrent('agent plan boxes preserve trial, quoted CTA and secondary suggestion styling', async () => {
-  const result = await run({ commandPath: 'bundle list', workers: ['plan-agent.mjs'], waitForWorkers: true, agent: true, colorEnv: { FORCE_COLOR: '1' } }).completion
-  assert.equal(result.code, 0, result.text)
-  assert.match(result.output, /\x1B\[33mTheir trial ends in/)
-  assert.ok(result.output.includes('\x1B[36m“Choose your Capgo plan now: https://console.example.com/plans?trial_card=1”\x1B[39m'))
-  assert.ok(result.output.includes('\x1B[2mThe user can also explore cloud builds.\x1B[22m'))
+test.concurrent('agent setup notices carry the trial, and a trial-only notice prints the line on its own', async () => {
+  const setup = await run({ commandPath: 'bundle list', workers: ['setup-trial.mjs'], waitForWorkers: true, tty: false, agent: true }).completion
+  assert.equal(setup.code, 0, setup.text)
+  assert.match(setup.output, /\nCapgo — next steps\n\n- Live updates: not finished yet\. Next: Create a channel\.\n {2}Check progress: npx @capgo\/cli@latest app todo --list ota\n- Add a payment method/)
+  assert.match(setup.output, trialLine)
+  assert.doesNotMatch(setup.text, /Builder|explore|oid=/)
+  const trial = await run({ commandPath: 'bundle list', workers: ['trial-only.mjs'], waitForWorkers: true, tty: false, agent: true }).completion
+  assert.equal(trial.code, 0, trial.text)
+  assert.match(trial.output, /\nCapgo — next steps\n\n- Add a payment method/)
+  assert.match(trial.output, trialLine)
+  const human = await run({ commandPath: 'bundle list', workers: ['trial-only.mjs'], waitForWorkers: true }).completion
+  assert.equal(human.code, 0, human.text)
+  assert.doesNotMatch(human.text, /next steps|payment method|┌/)
 }, 12000)
 
-test.concurrent('agent copy preserves output-mode suppression and organization deduplication', async () => {
-  for (const settings of [{ options: { json: true } }, { options: { quiet: true } }, { commandPath: 'mcp' }, { trialAlreadyShown: true }]) {
+test.concurrent('agent notices stay plain with forced colors, a TTY and GitHub Actions', async () => {
+  const colored = await run({ commandPath: 'bundle list', workers: ['setup-trial.mjs'], waitForWorkers: true, agent: true, colorEnv: { FORCE_COLOR: '1' } }).completion
+  assert.equal(colored.code, 0, colored.text)
+  assert.equal(colored.output, stripVTControlCharacters(colored.output))
+  assert.match(colored.output, trialLine)
+  assert.doesNotMatch(colored.output, /[┌│└]/)
+  const summaryPath = join(dir, 'agent-summary.md')
+  writeFileSync(summaryPath, 'Existing summary\n')
+  const github = await run({ commandPath: 'bundle list', workers: ['plan-agent.mjs'], waitForWorkers: true, tty: false, ci: true, github: true, summaryPath, agent: true }).completion
+  assert.equal(github.code, 0, github.text)
+  assert.doesNotMatch(github.output, /::notice::|%0A|explore cloud builds/)
+  assert.match(github.output, trialLine)
+  assert.equal(readFileSync(summaryPath, 'utf8'), 'Existing summary\n')
+}, 12000)
+
+test.concurrent('agents wait for background checks in non-TTY shells without a waiting box', async () => {
+  for (const tty of [false, true]) {
+    const result = await run({ agent: true, tty, controlledClock: true }).completion
+    assert.equal(waitedMs(result), 5_000)
+    assert.doesNotMatch(result.text, /Checking your setup|Press Ctrl\+C/)
+  }
+}, 12_000)
+
+test.concurrent('agent copy preserves output-mode suppression', async () => {
+  for (const settings of [{ options: { json: true } }, { options: { quiet: true } }, { commandPath: 'mcp' }]) {
     const result = await run({ commandPath: 'bundle list', workers: ['plan-trial.mjs'], waitForWorkers: true, agent: true, ...settings }).completion
     assert.equal(result.code, 0, result.text)
-    assert.doesNotMatch(result.text, /PLAN RECOMMENDATION FOR THE AI ASSISTANT|Choose your Capgo plan now/)
+    assert.doesNotMatch(result.text, /next steps|payment method/)
   }
 }, 12000)
 
-test.concurrent('GitHub Actions delivers agent plan messages in annotations and the job summary', async () => {
-  const summaryPath = join(dir, 'agent-summary.md')
-  const result = await run({ commandPath: 'bundle list', workers: ['plan-agent.mjs'], waitForWorkers: true, tty: false, ci: true, github: true, summaryPath, agent: true }).completion
+test.concurrent('the agent end notice does not depend on the start-of-command trial state', async () => {
+  const result = await run({ commandPath: 'bundle list', workers: ['plan-one.mjs', 'plan-trial.mjs'], waitForWorkers: true, agent: true, trialAlreadyShown: true }).completion
   assert.equal(result.code, 0, result.text)
-  assert.match(result.output, /::notice::CAPGO — PLAN RECOMMENDATION FOR THE AI ASSISTANT%0A/)
-  for (const text of [result.output, readFileSync(summaryPath, 'utf8')]) {
-    assert.match(text, /Ready to use: Live updates/)
-    assert.match(text, /prominent place in your response/)
-    assert.match(text, /Choose your Capgo plan now: https:\/\/console.example.com\/plans/)
-    assert.match(text, /The user can also explore cloud builds/)
-    assert.doesNotMatch(text, /\x1B\[|Checking your setup/)
-  }
+  assert.equal([...result.output.matchAll(new RegExp(trialLine.source, `${trialLine.flags}g`))].length, 1, result.text)
 }, 12000)
 
 test.concurrent('ready notices render for human-readable output even when no worker or TTY wait remains', async () => {
