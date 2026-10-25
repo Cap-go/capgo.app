@@ -28,6 +28,7 @@ import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
+import { PLAN_CHECKOUT_PARAM, readPlanCheckoutParam } from '~/utils/billingDeepLinks'
 import { isCreditsOnlyOrg } from '~/utils/organizationBilling'
 
 const { t } = useI18n()
@@ -310,6 +311,20 @@ async function openChangePlan(plan: Database['public']['Tables']['plans']['Row']
   isSubscribeLoading.value[index] = false
 }
 
+// `?plan=<solo|maker|team>` starts that plan's checkout right away when the trial is over or was skipped.
+async function startPlanCheckoutFromQuery() {
+  const planName = readPlanCheckoutParam(route.query)
+  if (!planName || route.path !== '/settings/organization/plans')
+    return
+  const linkedOrgId = route.query.oid
+  void router.replace({ query: { ...route.query, [PLAN_CHECKOUT_PARAM]: undefined } })
+  const org = currentOrganization.value
+  const index = mainStore.plans.findIndex(plan => plan.name === planName)
+  // Never start a checkout for another org than the one the link named.
+  if (org && (!linkedOrgId || linkedOrgId === org.gid) && !org.paying && !isTrial.value && index >= 0)
+    await openChangePlan(mainStore.plans[index], index)
+}
+
 function hasYearlyDiscount(plan: Database['public']['Tables']['plans']['Row']): boolean {
   return plan.price_y > 0 && Math.round(plan.price_y / 12) < plan.price_m
 }
@@ -484,7 +499,7 @@ watchEffect(async (onCleanup) => {
         }
       }
 
-      loadData(true).catch((error) => {
+      loadData(true).then(startPlanCheckoutFromQuery).catch((error) => {
         // Never let a load failure escape as an unhandled rejection on the
         // billing page — the graceful no-org path is handled inside loadData.
         console.error('Failed to load plans data', error)

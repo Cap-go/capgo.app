@@ -114,6 +114,7 @@ await test('GitHub Actions publishes the existing preflight trial warning to bot
     assert(summary.includes('### WARNING'), summary)
     assert(summary.includes('Trial expires in 3 days, upgrade here:'), summary)
     assert(summary.includes('/settings/organization/plans?oid=org-id'), summary)
+    assert(!summary.includes('trial_card'), 'human trial reminders keep the plain plans link')
     assert(wasTrialNoticeShown('org-id'), 'preflight prevents a duplicate background plan prompt')
   }
   finally {
@@ -172,6 +173,28 @@ await test('preflight trial reminders honor every machine-output guard in GitHub
     if (previous.summary === undefined) delete process.env.GITHUB_STEP_SUMMARY
     else process.env.GITHUB_STEP_SUMMARY = previous.summary
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await test('agent trial reminders link to the console trial card prompt for the org', async () => {
+  const previous = { github: process.env.GITHUB_ACTIONS, claude: process.env.CLAUDECODE }
+  const write = process.stdout.write
+  let output = ''
+  try {
+    process.env.GITHUB_ACTIONS = 'false'
+    process.env.CLAUDECODE = '1'
+    process.stdout.write = chunk => { output += chunk; return true }
+    fetchHandler = () => Response.json({ ...okBody, org_id: 'agent-trial-org', trial_days_left: 3 })
+    await checkPlanValidUpload(makeClient(), 'org-id', 'com.example.app')
+    assert(output.includes('PLAN RECOMMENDATION FOR THE AI ASSISTANT'), output)
+    assert(output.includes('/settings/organization/plans?oid=agent-trial-org&trial_card=1”'), output)
+  }
+  finally {
+    process.stdout.write = write
+    if (previous.claude === undefined) delete process.env.CLAUDECODE
+    else process.env.CLAUDECODE = previous.claude
+    if (previous.github === undefined) delete process.env.GITHUB_ACTIONS
+    else process.env.GITHUB_ACTIONS = previous.github
   }
 })
 

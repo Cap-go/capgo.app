@@ -94,7 +94,8 @@ test('the footer follows TUI teardown and uses the final app and authenticated A
   assert.ok(text().indexOf('Bye 👋') < text().indexOf('PLAN RECOMMENDATION FOR THE AI ASSISTANT'))
   assert.equal(text().match(/PLAN RECOMMENDATION FOR THE AI ASSISTANT/g)?.length, 1)
   assert.match(text(), /Ready to use: Live updates/)
-  assert.match(text(), /settings\/organization\/plans\?oid=fixture-org/)
+  // The box wraps long links; join its rows to read the full trial card link.
+  assert.match(text().replace(/\s*│\n│ /g, ''), /settings\/organization\/plans\?oid=fixture-org&trial_card=1”/)
   assert.match(text(), /ADDITIONAL SETUP OPPORTUNITY/)
   assert.doesNotMatch(text(), /final-login-key|com\.example\.selected/)
 })

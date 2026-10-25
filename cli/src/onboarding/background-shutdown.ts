@@ -10,7 +10,7 @@ import { getPendingOnboardingChecks, takeSetupNotices } from './background-worke
 import { renderGitHubNotice } from './github-notice'
 import { setupDebug } from './setup-diagnostics'
 import { ONBOARDING_CHECK_GRACE_MS as gracePeriodMs, shouldEvaluateSetupNotice, shouldPrintNotice } from './setup-notice-policy'
-import { formatSetupNotice } from './setup-notices'
+import { agentPlansUrl, formatSetupNotice } from './setup-notices'
 import { markTrialNoticeShown, wasTrialNoticeShown } from './trial-notice-state'
 
 function setupStyle(format: Parameters<typeof styleText>[0], text: string): string {
@@ -75,10 +75,11 @@ function shouldWaitForOnboardingChecks(commandPath: string, options: Record<stri
 }
 
 export function renderSetupNotice(notice: SetupNotice, agent = isAgentInvocation()): void {
-  const text = formatSetupNotice(notice, Date.now(), agent)
+  const now = Date.now()
+  const text = formatSetupNotice(notice, now, agent)
   if (!text)
     return
-  const action = notice.kind === 'setup' ? notice.action : agent ? `“Choose your Capgo plan now: ${notice.billing.plansUrl}”` : `View plans: ${notice.billing.plansUrl}`
+  const action = notice.kind === 'setup' ? notice.action : agent ? `“Choose your Capgo plan now: ${agentPlansUrl(notice.billing, now)}”` : `View plans: ${notice.billing.plansUrl}`
   const styledText = text.split('\n').map((line, index) => {
     if (index === 0)
       return setupStyle(['bold', notice.kind === 'plan' ? 'green' : 'cyan'], line)
