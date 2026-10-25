@@ -5,12 +5,12 @@ import { styleText } from 'node:util'
 import { box } from '@clack/prompts'
 import { isCI } from 'ci-info'
 import { flushAnalytics, trackEvent } from '../analytics/track'
-import { isAgentInvocation } from '../shared/agent-notices'
+import { isAgentInvocation, printAgentText } from '../shared/agent-notices'
 import { getPendingOnboardingChecks, takeSetupNotices } from './background-workers'
 import { renderGitHubNotice } from './github-notice'
 import { setupDebug } from './setup-diagnostics'
 import { ONBOARDING_CHECK_GRACE_MS as gracePeriodMs, shouldEvaluateSetupNotice, shouldPrintNotice } from './setup-notice-policy'
-import { agentPlansUrl, formatSetupNotice } from './setup-notices'
+import { formatSetupNotice } from './setup-notices'
 import { markTrialNoticeShown, wasTrialNoticeShown } from './trial-notice-state'
 
 function setupStyle(format: Parameters<typeof styleText>[0], text: string): string {
@@ -69,28 +69,33 @@ const interactiveCommands = new Set([
 ])
 
 function shouldWaitForOnboardingChecks(commandPath: string, options: Record<string, unknown>): boolean {
-  return (isCI || (!!process.stdin.isTTY && !!process.stdout.isTTY))
+  // Agent shells are rarely TTYs; waiting lets their closing notice arrive.
+  return (isCI || isAgentInvocation() || (!!process.stdin.isTTY && !!process.stdout.isTTY))
     && interactiveCommands.has(commandPath)
     && shouldPrintNotice(options)
 }
 
 export function renderSetupNotice(notice: SetupNotice, agent = isAgentInvocation()): void {
-  const now = Date.now()
-  const text = formatSetupNotice(notice, now, agent)
+  const text = formatSetupNotice(notice, Date.now(), agent)
   if (!text)
     return
-  const action = notice.kind === 'setup' ? notice.action : agent ? `“Choose your Capgo plan now: ${agentPlansUrl(notice.billing, now)}”` : `View plans: ${notice.billing.plansUrl}`
-  const styledText = text.split('\n').map((line, index) => {
-    if (index === 0)
-      return setupStyle(['bold', notice.kind === 'plan' ? 'green' : 'cyan'], line)
-    if (line === action)
-      return setupStyle(['bold', 'cyan'], line)
-    if (/^(?:Your|Their) trial/.test(line))
-      return setupStyle('yellow', line)
-    return /^(?:You|The user) can also/.test(line) || line.startsWith('Then ') || line === 'CAPGO — ADDITIONAL SETUP OPPORTUNITY FOR THE AI ASSISTANT' ? setupStyle('dim', line) : line
-  }).join('\n')
-  if (!renderGitHubNotice(text))
-    box(styledText, '', setupBoxOptions)
+  if (agent) {
+    printAgentText(text)
+  }
+  else {
+    const action = notice.kind === 'setup' ? notice.action : `View plans: ${notice.billing.plansUrl}`
+    const styledText = text.split('\n').map((line, index) => {
+      if (index === 0)
+        return setupStyle(['bold', notice.kind === 'plan' ? 'green' : 'cyan'], line)
+      if (line === action)
+        return setupStyle(['bold', 'cyan'], line)
+      if (line.startsWith('Your trial'))
+        return setupStyle('yellow', line)
+      return line.startsWith('You can also') || line.startsWith('Then ') ? setupStyle('dim', line) : line
+    }).join('\n')
+    if (!renderGitHubNotice(text))
+      box(styledText, '', setupBoxOptions)
+  }
   setupDebug('render shown', { kind: notice.kind })
   if (notice.kind === 'plan')
     markTrialNoticeShown(notice.billing.orgId)
@@ -102,12 +107,14 @@ function renderSetupNotices(command: Pick<Command, 'optsWithGlobals'>, commandPa
   if (!shouldEvaluateSetupNotice(commandPath, command.optsWithGlobals()))
     return
   const shownApps = new Set<string>()
+  // Agents get no start-of-command trial notice, so theirs is never a duplicate.
+  const agent = isAgentInvocation()
   for (const notice of notices) {
-    if (shownApps.has(notice.appId) || (notice.kind === 'plan' && wasTrialNoticeShown(notice.billing.orgId))) {
+    if (shownApps.has(notice.appId) || (notice.kind === 'plan' && !agent && wasTrialNoticeShown(notice.billing.orgId))) {
       setupDebug('render suppressed', { reason: 'already_shown' })
       continue
     }
-    renderSetupNotice(notice)
+    renderSetupNotice(notice, agent)
     shownApps.add(notice.appId)
   }
 }
@@ -129,7 +136,7 @@ export async function waitForOnboardingChecks(command: Pick<Command, 'optsWithGl
   process.prependOnceListener('SIGINT', onInterrupt)
   try {
     setupDebug('shutdown wait started', { budget_ms: remainingMs })
-    if (!isCI)
+    if (!isCI && !isAgentInvocation())
       box(`${setupStyle(['bold', 'cyan'], 'Checking your setup...')}\n\n${setupStyle('dim', 'Press Ctrl+C to skip.')}`, '', setupBoxOptions)
     const checks = [...pendingChecks.values()]
     const options = command.optsWithGlobals()
