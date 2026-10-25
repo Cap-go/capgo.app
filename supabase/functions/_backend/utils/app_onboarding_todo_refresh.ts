@@ -10,7 +10,7 @@ import { sql } from 'drizzle-orm'
 import { emitCommittedAppOnboardingBento } from './app_onboarding_bento.ts'
 import { buildAppOnboardingStepPosthogEvent } from './app_onboarding_posthog.ts'
 import { gatherTodoEvidence, getTodoEvidenceNeeds, loadTodoEvidenceCandidates } from './app_onboarding_todo_evidence.ts'
-import { APP_ONBOARDING_ADD_CODE_INFERRED_ANNOTATION, appendAppOnboardingStepHistory, applyAppOnboardingPatch, getAppOnboardingStepHistoryChanges, hasSupportedOtaTodoList, parseAppOnboarding } from './appOnboarding.ts'
+import { appendAppOnboardingStepHistory, applyAppOnboardingPatch, getAppOnboardingStepHistoryChanges, inferredAddCodeStep, parseAppOnboarding, shouldInferAddCode } from './appOnboarding.ts'
 import { buildBuilderBuildOutcomePatch } from './builder_onboarding_checklist.ts'
 import { cloudlogErr } from './logging.ts'
 import { trackPosthogEventBatch } from './posthog.ts'
@@ -33,15 +33,6 @@ interface StepEvent {
 }
 
 type BuilderBuildEvidence = Map<string, Array<Pick<BuilderBuildOutcome, 'platform' | 'status'>>>
-
-function shouldInferAddCode(onboarding: unknown, hasTestUpdateEvidence = false): boolean {
-  const current = parseAppOnboarding(onboarding)
-  return current.outcome !== 'completed'
-    && current.outcome !== 'skipped'
-    && hasSupportedOtaTodoList(current)
-    && current.steps.add_code?.status !== 'done'
-    && (current.steps.test_update?.status === 'done' || hasTestUpdateEvidence)
-}
 
 async function loadBuilderBuildEvidence(database: Pick<Database, 'execute'>, appIds: string[]): Promise<BuilderBuildEvidence> {
   if (!appIds.length)
@@ -84,14 +75,8 @@ function positiveTodoPatch(row: LockedApp, evidence: TodoEvidenceResult, buildEv
     patch.steps!.upload_bundle = { status: 'done', at }
   if (needs.update && evidence.update.has(row.app_id))
     patch.steps!.test_update = { status: 'done', at }
-  if (shouldInferAddCode(row.onboarding, evidence.update.has(row.app_id))) {
-    patch.steps!.add_code = {
-      status: 'done',
-      at,
-      annotation: APP_ONBOARDING_ADD_CODE_INFERRED_ANNOTATION,
-      annotationType: 'note',
-    }
-  }
+  if (shouldInferAddCode(parseAppOnboarding(row.onboarding), evidence.update.has(row.app_id)))
+    patch.steps!.add_code = inferredAddCodeStep(at)
   const buildPatch = buildBuilderBuildOutcomePatch(row.onboarding, buildEvidence.get(row.app_id) ?? [], () => at)
   if (buildPatch?.builderSteps)
     patch.builderSteps = buildPatch.builderSteps
@@ -116,7 +101,7 @@ export async function refreshAppOnboardingTodoBatch(
   }
   const buildEvidence = await loadBuilderBuildEvidence(database, candidates.map(candidate => candidate.appId))
   const inferredAddCodeIds = candidates
-    .filter(candidate => shouldInferAddCode(candidate.onboarding, evidence.update.has(candidate.appId)))
+    .filter(candidate => shouldInferAddCode(parseAppOnboarding(candidate.onboarding), evidence.update.has(candidate.appId)))
     .map(candidate => candidate.appId)
   const positiveIds = [...new Set([...evidence.channel, ...evidence.device, ...evidence.bundle, ...evidence.update, ...buildEvidence.keys(), ...inferredAddCodeIds])].sort((a, b) => a.localeCompare(b))
   if (!positiveIds.length)
