@@ -82,7 +82,7 @@ describe('buildCliAiSetupPrompt', () => {
 
     expect(prompt.match(new RegExp(apiKey, 'g'))).toHaveLength(1)
     expect(prompt).toContain(`login ${apiKey}`)
-    expect(prompt).toContain("npx install-mcp 'npx @capgo/cli@latest mcp' --client {MCP_CLIENT}")
+    expect(prompt).toContain('npx install-mcp "npx @capgo/cli@latest mcp" --client {MCP_CLIENT}')
     expect(prompt).toContain('Reuse an existing installation; do not reinstall it when its tools are available.')
     expect(prompt).toContain('reconnect that server so it loads the newly saved login')
     expect(prompt).toContain('call `capgo_whoami` and verify it is signed in before calling `start_capgo_builder_onboarding`')

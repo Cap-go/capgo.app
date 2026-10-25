@@ -129,7 +129,7 @@ If you cannot identify the current client safely, ask me which client I use and 
 
 When installation is needed, replace \`{MCP_CLIENT}\` with the chosen identifier and install Capgo MCP:
 
-npx install-mcp 'npx @capgo/cli@latest mcp' --client {MCP_CLIENT}
+npx install-mcp "npx @capgo/cli@latest mcp" --client {MCP_CLIENT}
 
 After installation, check whether Capgo MCP tools are available in the current session.
 

@@ -29,7 +29,7 @@ describe('explicit Builder MCP installation', () => {
   it.each(['codex', 'cursor', 'claude-code', 'windsurf', 'vscode', 'zed'])('copies the installation command for %s without starting account setup', async (client) => {
     container.querySelector<HTMLButtonElement>(`[data-test="builder-mcp-client-${client}"]`)!.click()
     await nextTick()
-    const expected = `npx install-mcp 'npx @capgo/cli@latest mcp' --client ${client}`
+    const expected = `npx install-mcp "npx @capgo/cli@latest mcp" --client ${client}`
     expect(container.querySelector('[data-test="builder-mcp-install-command"]')!.textContent).toBe(expected)
     expect(container.querySelector(`[data-test="builder-mcp-client-${client}"]`)!.getAttribute('aria-pressed')).toBe('true')
     container.querySelector<HTMLButtonElement>('[data-test="builder-mcp-copy-install"]')!.click()

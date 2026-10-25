@@ -12,7 +12,7 @@ const { t } = useI18n()
 const titleId = useId()
 const selectedClient = ref<string>('codex')
 const assistant = computed(() => builderSetupAssistants.find(option => option.client === selectedClient.value)!)
-const installCommand = computed(() => `npx install-mcp 'npx @capgo/cli@latest mcp' --client ${assistant.value.client}`)
+const installCommand = computed(() => `npx install-mcp "npx @capgo/cli@latest mcp" --client ${assistant.value.client}`)
 const copiedCommand = ref('')
 const copyFailed = ref(false)
 

@@ -378,16 +378,13 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
           ? { ota: Object.fromEntries(APP_ONBOARDING_OTA_V1_STEP_IDS.map(id => [id, { status: id === 'add_channel' ? 'done' : 'pending' }])) }
           : { builder: Object.fromEntries((['ios', 'android'] as const).map(platform => [platform, Object.fromEntries(BUILDER_STEP_IDS[platform].map(id => [id, { status: platform === 'android' && id === 'prepare_keystore' ? 'done' : 'pending' }]))])) },
       } }
-      await page.route('**/rest/v1/apps?*', async (route) => {
-        const response = await route.fetch()
-        const json = await response.json().catch(() => null)
-        const matchesApp = new URL(route.request().url()).searchParams.get('app_id') === 'eq.com.demo.app'
-        const override = (row: any) => row?.app_id === 'com.demo.app' || (matchesApp && row?.onboarding !== undefined)
+      await routeConsoleQuery(page, 'apps', async (route, query) => {
+        const matchesApp = query.operations.some(op => op.method === 'eq' && op.args[0] === 'app_id' && op.args[1] === 'com.demo.app')
+        await forwardConsoleQuery(route, (row: any) => row?.app_id === 'com.demo.app' || (matchesApp && row?.onboarding !== undefined)
           ? { ...row, need_onboarding: true, onboarding }
-          : row
-        await route.fulfill({ response, json: Array.isArray(json) ? json.map(override) : override(json) })
+          : row)
       })
-      await page.route('**/rpc/verify_getting_started', route => route.fulfill({ json: onboarding }))
+      await routeConsoleQuery(page, 'verify_getting_started', route => route.fulfill(consoleQueryJson(onboarding)))
       await page.route('**/private/onboarding_progress', route => route.fulfill({ json: { onboarding, hasChannel: path === 'ota', checkErrors: [] } }))
       // Tall viewport so the passed-over banner + task panel + Skip button fit in one frame.
       await page.setViewportSize({ width: 1280, height: 1500 })
