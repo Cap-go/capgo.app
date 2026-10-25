@@ -1,5 +1,5 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database } from '~/types/supabase.types'
+import type { ConsoleClient } from '~/services/consoleClient'
+import type { Database } from '~/types/database.types'
 import type { OnboardingAppDraft } from '~/utils/onboardingAppDraft'
 import {
   createOnboardingAppWithFallbackIds,
@@ -14,7 +14,7 @@ interface CreateOnboardingAppResult {
 }
 
 async function uploadIconFromDraft(
-  supabase: SupabaseClient<Database>,
+  capgo: ConsoleClient<Database>,
   ownerOrgId: string,
   appId: string,
   draft: OnboardingAppDraft,
@@ -46,7 +46,7 @@ async function uploadIconFromDraft(
     }
 
     const iconPath = `org/${ownerOrgId}/${appId}/icon`
-    const { error: uploadError } = await supabase.storage
+    const { error: uploadError } = await capgo.storage
       .from('images')
       .upload(iconPath, blob, {
         upsert: true,
@@ -58,7 +58,7 @@ async function uploadIconFromDraft(
       return
     }
 
-    await supabase
+    await capgo
       .from('apps')
       .update({ icon_url: iconPath })
       .eq('app_id', appId)
@@ -69,12 +69,12 @@ async function uploadIconFromDraft(
 }
 
 export async function createOnboardingAppFromDraft(
-  supabase: SupabaseClient<Database>,
+  capgo: ConsoleClient<Database>,
   ownerOrgId: string,
   draft: OnboardingAppDraft,
   orgName?: string,
 ): Promise<CreateOnboardingAppResult> {
-  const createResult = await createOnboardingAppWithFallbackIds(supabase, {
+  const createResult = await createOnboardingAppWithFallbackIds(capgo, {
     ownerOrgId,
     baseAppId: draft.appId,
     appName: draft.appName,
@@ -96,9 +96,9 @@ export async function createOnboardingAppFromDraft(
     ? `App ID ${originalAppId} was already taken, so Capgo switched to ${usedAppId}.`
     : undefined
 
-  await uploadIconFromDraft(supabase, ownerOrgId, responseData.app_id, draft)
+  await uploadIconFromDraft(capgo, ownerOrgId, responseData.app_id, draft)
 
-  const { data: refreshed } = await supabase
+  const { data: refreshed } = await capgo
     .from('apps')
     .select()
     .eq('app_id', responseData.app_id)

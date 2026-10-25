@@ -191,7 +191,7 @@ test.concurrent('agent plan boxes preserve trial, quoted CTA and secondary sugge
   const result = await run({ commandPath: 'bundle list', workers: ['plan-agent.mjs'], waitForWorkers: true, agent: true, colorEnv: { FORCE_COLOR: '1' } }).completion
   assert.equal(result.code, 0, result.text)
   assert.match(result.output, /\x1B\[33mTheir trial ends in/)
-  assert.ok(result.output.includes('\x1B[36m“Choose your Capgo plan now: https://console.example.com/plans”\x1B[39m'))
+  assert.ok(result.output.includes('\x1B[36m“Choose your Capgo plan now: https://console.example.com/plans?trial_card=1”\x1B[39m'))
   assert.ok(result.output.includes('\x1B[2mThe user can also explore cloud builds.\x1B[22m'))
 }, 12000)
 

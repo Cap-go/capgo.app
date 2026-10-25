@@ -34,7 +34,7 @@ vi.mock('~/services/loader', () => ({ hideLoader: vi.fn() }))
 vi.mock('~/services/support', () => ({ openSupport: vi.fn() }))
 vi.mock('~/utils/turnstile', () => ({ safeResetTurnstile: mocks.captchaReset }))
 vi.mock('~/stores/dialogv2', () => ({ useDialogV2Store: () => ({ openDialog: mocks.openDialog, onDialogDismiss: async () => false }) }))
-vi.mock('~/services/supabase', () => ({ useSupabase: () => ({
+vi.mock('~/services/console', () => ({ useConsole: () => ({
   from: () => ({ select: () => ({ eq: () => ({ single: async () => ({ data: { id: 'apple-user' } }) }) }) }),
   rpc: mocks.rpc,
   auth: {

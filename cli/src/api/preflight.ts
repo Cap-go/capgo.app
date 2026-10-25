@@ -8,7 +8,7 @@ import { formatAgentPlanRecommendation, isAgentInvocation } from '../shared/agen
 import { formatPlanRequiredMessage } from '../shared/direct-offer'
 import { CliUserError } from '../shared/cli-user-error'
 import { isTransientNetworkError } from '../shared/network-error'
-import { normalizePlansUrl } from '../shared/plan-url'
+import { normalizePlansUrl, withTrialCardPrompt } from '../shared/plan-url'
 import {
   callTwoFactorComplianceRpcWithRetry,
   throwTwoFactorComplianceRpcError,
@@ -230,7 +230,8 @@ export async function runCliPreflight(
     const url = await plansUrl(orgId)
     const message = isAgentInvocation()
       ? formatAgentPlanRecommendation({
-          plansUrl: url,
+          // Opens the console's "add a card" prompt for the trial org.
+          plansUrl: orgId ? withTrialCardPrompt(url) : url,
           trialState: 'active',
           trialMessage: `The user’s Capgo trial expires in ${result.trialDaysLeft} ${result.trialDaysLeft === 1 ? 'day' : 'days'}.`,
         })

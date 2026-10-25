@@ -3,6 +3,7 @@ import { getBuilderChecklist, onboardingRecord } from '../app/builder-checklist'
 import { getAppTodoNextStep, getAppTodoSteps, getAvailableAppTodoLists } from '../app/todo'
 import { formatAgentPlanRecommendation } from '../shared/agent-notices'
 import { DIRECT_OFFER_PLAN_MESSAGE, isZeroLengthTrial } from '../shared/direct-offer'
+import { withTrialCardPrompt } from '../shared/plan-url'
 import { defaultHostWeb } from '../utils'
 import { setupDebug } from './setup-diagnostics'
 
@@ -165,12 +166,21 @@ function remainingTrial(trialEndsAt: string, now: number): string {
   return `Your trial ends in ${remaining}.`
 }
 
+function agentTrialState(billing: Billing, now: number) {
+  return billing.trialSkipped ? 'skipped' : !billing.trialEndsAt ? 'unknown' : Date.parse(billing.trialEndsAt) > now ? 'active' : 'expired'
+}
+
+/** Plans link for agents: during the trial it opens the console's "add a card" prompt directly. */
+export function agentPlansUrl(billing: Billing, now: number): string {
+  return agentTrialState(billing, now) === 'active' ? withTrialCardPrompt(billing.plansUrl) : billing.plansUrl
+}
+
 function formatAgentSetupNotice(notice: SetupNotice, now: number): string {
   const primary = notice.kind === 'plan'
     ? formatAgentPlanRecommendation({
         completed: notice.completed,
-        plansUrl: notice.billing.plansUrl,
-        trialState: notice.billing.trialSkipped ? 'skipped' : !notice.billing.trialEndsAt ? 'unknown' : Date.parse(notice.billing.trialEndsAt) > now ? 'active' : 'expired',
+        plansUrl: agentPlansUrl(notice.billing, now),
+        trialState: agentTrialState(notice.billing, now),
         trialMessage: notice.billing.trialEndsAt ? remainingTrial(notice.billing.trialEndsAt, now).replace('Your trial', 'Their trial') : undefined,
       })
     : [

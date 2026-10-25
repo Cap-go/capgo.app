@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { FormKit } from '@formkit/vue'
 import { useDebounceFn } from '@vueuse/core'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconDown from '~icons/ic/round-keyboard-arrow-down'
 import IconSearch from '~icons/ic/round-search?raw'
+import { useConsole } from '~/services/console'
+import { readAllConsoleRows } from '~/services/consoleRows'
 import { formatLocalDate } from '~/services/date'
-import { useSupabase } from '~/services/supabase'
+import { escapeIlike } from '~/utils/ilike'
 
 type VersionRow = Pick<Database['public']['Tables']['app_versions']['Row'], 'id' | 'name' | 'created_at' | 'manifest_count' | 'app_id'>
 type DeployHistoryRow = Pick<Database['public']['Tables']['deploy_history']['Row'], 'channel_id' | 'version_id' | 'created_at' | 'deployed_at'>
@@ -37,7 +39,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 
 const latestCompareVersions = ref<VersionRow[]>([])
 const preferredCompareVersions = ref<VersionRow[]>([])
@@ -92,7 +94,7 @@ function selectCompareVersion(option: VersionRow | null) {
 // bundles are excluded — their storage may be gone (and is purged after 90 days),
 // so they are not meaningful comparison targets.
 function buildCompareBaseQuery() {
-  const query = supabase
+  const query = capgo
     .from('app_versions')
     .select('id, name, created_at, manifest_count, app_id')
     .eq('app_id', props.appId)
@@ -134,7 +136,7 @@ async function loadPreferredCompareVersions() {
   const channelIds = new Set<number>()
   const deployedAtByChannel = new Map<number, string | null>()
 
-  const { data: currentChannels, error: currentChannelsError } = await supabase
+  const { data: currentChannels, error: currentChannelsError } = await capgo
     .from('channels')
     .select('id')
     .eq('app_id', props.appId)
@@ -151,12 +153,18 @@ async function loadPreferredCompareVersions() {
       channelIds.add(channel.id)
   }
 
-  const { data: deployHistory, error: deployHistoryError } = await supabase
-    .from('deploy_history')
-    .select('channel_id, version_id, created_at, deployed_at')
-    .eq('app_id', props.appId)
-    .eq('version_id', props.currentVersionId)
-    .order('created_at', { ascending: false })
+  // Paged: a bundle redeployed many times can exceed the API's per-request row cap.
+  const currentVersionId = props.currentVersionId
+  const { data: deployHistory, error: deployHistoryError } = await readAllConsoleRows(
+    (from, to) => capgo
+      .from('deploy_history')
+      .select('channel_id, version_id, created_at, deployed_at')
+      .eq('app_id', props.appId)
+      .eq('version_id', currentVersionId)
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(from, to),
+  )
 
   if (requestId !== preferredCompareRequestId)
     return
@@ -165,7 +173,7 @@ async function loadPreferredCompareVersions() {
     console.error('Failed to load deploy history for bundle', deployHistoryError)
   }
   else {
-    for (const entry of deployHistory ?? []) {
+    for (const entry of (deployHistory ?? []) as DeployHistoryRow[]) {
       const entryTime = entry.created_at ?? entry.deployed_at ?? null
       if (!channelIds.has(entry.channel_id))
         channelIds.add(entry.channel_id)
@@ -182,26 +190,35 @@ async function loadPreferredCompareVersions() {
   // otherwise leave the channel with no baseline. Keeping a small lookback lets
   // us fall back to the next older non-deleted deployment instead.
   const PREFERRED_LOOKBACK = 20
-  const candidatesByChannel: Array<Array<{ versionId: number, deployedAt: string | null }>> = []
-  for (const channelId of channelIds) {
+  const LOOKBACK_CONCURRENCY = 6
+  // One lookback query per channel, a few at a time so many channels don't burst
+  // the API, and stop early once a newer request has replaced this one.
+  const loadLookback = (channelId: number) => {
     const cutoff = deployedAtByChannel.get(channelId)
-    let query = supabase
+    let query = capgo
       .from('deploy_history')
       .select('version_id, created_at, deployed_at')
       .eq('app_id', props.appId)
       .eq('channel_id', channelId)
-      .neq('version_id', props.currentVersionId)
+      .neq('version_id', currentVersionId)
 
     if (cutoff)
       query = query.lt('created_at', cutoff)
 
-    const { data, error } = await query
+    return query
       .order('created_at', { ascending: false })
       .limit(PREFERRED_LOOKBACK)
-
+  }
+  const lookbacks: Awaited<ReturnType<typeof loadLookback>>[] = []
+  const pendingChannelIds = [...channelIds]
+  for (let index = 0; index < pendingChannelIds.length; index += LOOKBACK_CONCURRENCY) {
+    lookbacks.push(...await Promise.all(pendingChannelIds.slice(index, index + LOOKBACK_CONCURRENCY).map(loadLookback)))
     if (requestId !== preferredCompareRequestId)
       return
+  }
 
+  const candidatesByChannel: Array<Array<{ versionId: number, deployedAt: string | null }>> = []
+  for (const { data, error } of lookbacks) {
     if (error) {
       console.error('Failed to load previous deploy history', error)
       continue
@@ -251,17 +268,22 @@ async function loadPreferredCompareVersions() {
 
 // Load every channel for the app and index its current bundle, so any compare
 // option can show which channel(s) it is live on. Channels per app are few, so a
-// single unfiltered fetch is cheaper than per-option lookups.
+// paged fetch of all of them is cheaper than per-option lookups.
 async function loadLiveChannels() {
   const requestId = ++liveChannelsRequestId
   liveChannelsByVersion.value = new Map()
   if (!props.appId)
     return
 
-  const { data, error } = await supabase
-    .from('channels')
-    .select('name, version')
-    .eq('app_id', props.appId)
+  const appId = props.appId
+  const { data, error } = await readAllConsoleRows(
+    (from, to) => capgo
+      .from('channels')
+      .select('id, name, version')
+      .eq('app_id', appId)
+      .order('id')
+      .range(from, to),
+  )
 
   if (requestId !== liveChannelsRequestId)
     return
@@ -311,10 +333,6 @@ function liveBadgeTitle(versionId: number): string {
 
 const COMPARE_SEARCH_LIMIT = 20
 
-function escapeIlike(term: string): string {
-  return term.replace(/[\\%_]/g, String.raw`\$&`)
-}
-
 async function searchCompareVersions(term: string) {
   const trimmed = term.trim()
   if (!props.appId || !trimmed) {
@@ -326,7 +344,7 @@ async function searchCompareVersions(term: string) {
   const requestId = ++compareSearchRequestId.value
   compareSearchLoading.value = true
 
-  // Each chain must start from its own builder: the Supabase query builder is
+  // Each chain must start from its own builder: the console query builder is
   // mutable and returns `this`, so reusing one instance across concurrent
   // chains would leak filters between the requests.
   // Exact and prefix matches are fetched separately so they are never pushed out

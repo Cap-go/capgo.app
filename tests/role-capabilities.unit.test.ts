@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import en from '../messages/en.json'
 import { getRoleCapabilityKeys, splitCapabilityList } from '../src/services/roleCapabilities'
 
 describe('roleCapabilities', () => {
@@ -19,13 +20,22 @@ describe('roleCapabilities', () => {
     expect(getRoleCapabilityKeys('not_a_role')).toBeNull()
   })
 
-  it.concurrent('splits pipe-separated capability lists', () => {
-    expect(splitCapabilityList('Create apps|Manage API keys')).toEqual([
+  it.concurrent('splits semicolon-separated capability lists', () => {
+    expect(splitCapabilityList('Create apps; Manage API keys')).toEqual([
       'Create apps',
       'Manage API keys',
     ])
-    expect(splitCapabilityList('  One | Two |  ')).toEqual(['One', 'Two'])
+    expect(splitCapabilityList('  One ; Two ;  ')).toEqual(['One', 'Two'])
+    expect(splitCapabilityList('一；二؛ three')).toEqual(['一', '二', 'three'])
+    expect(splitCapabilityList('Old | pipe | list')).toEqual(['Old', 'pipe', 'list'])
     expect(splitCapabilityList('')).toEqual([])
     expect(splitCapabilityList(null)).toEqual([])
+  })
+
+  it.concurrent('keeps capability copy free of vue-i18n plural pipes', () => {
+    const capabilityEntries = Object.entries(en).filter(([key]) => key.startsWith('role-cap-'))
+    expect(capabilityEntries.length).toBeGreaterThan(0)
+    for (const [key, value] of capabilityEntries)
+      expect(value, key).not.toContain('|')
   })
 })

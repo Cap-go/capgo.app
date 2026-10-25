@@ -33,7 +33,7 @@ const MAX_BYTES_PER_SEND = 240_000
 const REPLAY_CONCURRENCY = 8
 /** Replays of a record that failed (5xx or a throw), including the first one. */
 export const MAX_REPLAY_ATTEMPTS = 3
-/** Analytics Engine points one replayed event can write: APP_LOG, DEVICE_USAGE, DEVICE_INFO, VERSION_USAGE. */
+/** Analytics Engine points one replayed event can write: APP_LOG (twice with customIdBlocked), DEVICE_USAGE, DEVICE_INFO. Installs and failures are never replayed. */
 const POINTS_PER_EVENT = 4
 
 export interface SnippetEdgeStatRecord {

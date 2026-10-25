@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { AppOnboardingState, AppOnboardingStepHistoryChange } from './appOnboarding.ts'
 import type { AppOnboardingMutationResult } from './appOnboardingMutation.ts'
 import type { AuthInfo, MiddlewareKeyVariables } from './hono.ts'
+import { emitCommittedAppOnboardingBento } from './app_onboarding_bento.ts'
 import { parseAppOnboarding } from './appOnboarding.ts'
 import { trackPosthogEvent } from './posthog.ts'
 import { backgroundTask } from './utils.ts'
@@ -17,6 +18,7 @@ interface AppOnboardingStepPosthogInput {
 
 // Call only after the transaction owning these mutations has committed.
 export async function emitCommittedAppOnboardingHistory(c: Context<MiddlewareKeyVariables>, committed: AppOnboardingMutationResult[], options: { skipReason?: string } = {}) {
+  await emitCommittedAppOnboardingBento(c, committed)
   const events = committed.flatMap(result => result.historyChanges.map(change => buildAppOnboardingStepPosthogEvent({
     appId: result.appId,
     orgId: result.orgId,
@@ -30,6 +32,7 @@ export async function emitCommittedAppOnboardingHistory(c: Context<MiddlewareKey
 }
 
 export async function emitCommittedSystemAppOnboardingHistory(c: Context<MiddlewareKeyVariables>, committed: AppOnboardingMutationResult[]) {
+  await emitCommittedAppOnboardingBento(c, committed)
   const events = committed.flatMap(result => result.historyChanges.map(change => buildAppOnboardingStepPosthogEvent({
     appId: result.appId,
     orgId: result.orgId,

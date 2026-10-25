@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Ref } from 'vue'
 import type { TableColumn } from '../comp_def'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { FormKit } from '@formkit/vue'
 import { computedAsync } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
@@ -12,10 +12,10 @@ import { toast } from 'vue-sonner'
 import IconSettings from '~icons/heroicons/cog-8-tooth'
 import IconTrash from '~icons/heroicons/trash'
 import ChannelIntroduction from '~/components/dashboard/ChannelIntroduction.vue'
+import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { checkPermissions } from '~/services/permissions'
-import { useSupabase } from '~/services/supabase'
 import { refetchIfPageOutOfRange } from '~/services/tablePagination'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
@@ -46,7 +46,7 @@ const offset = 10
 const { t } = useI18n()
 const dialogStore = useDialogV2Store()
 const organizationStore = useOrganizationStore()
-const supabase = useSupabase()
+const capgo = useConsole()
 const router = useRouter()
 const main = useMainStore()
 const total = ref(0)
@@ -100,7 +100,7 @@ async function addChannel(name: string) {
     if (!currentGid)
       return
     // { name: channelId, app_id: appId, version: data.id, created_by: userId }
-    const { data: dataChannel } = await supabase
+    const { data: dataChannel } = await capgo
       .from('channels')
       .insert([
         {
@@ -132,7 +132,7 @@ async function getData() {
   canReadChannel.value = {}
   canDeleteChannel.value = {}
   try {
-    let req = supabase
+    let req = capgo
       .from('channels')
       .select(`
           id,
@@ -171,7 +171,7 @@ async function getData() {
     }
     const [{ data: dataVersions, count }, { data: appData }] = await Promise.all([
       req,
-      supabase.from('apps').select('default_upload_channel').eq('app_id', appId).maybeSingle(),
+      capgo.from('apps').select('default_upload_channel').eq('app_id', appId).maybeSingle(),
     ])
     if (!isCurrentRequest())
       return
@@ -235,7 +235,7 @@ async function deleteOne(one: Element) {
 
   dialogStore.openDialog({
     title: t('alert-confirm-delete'),
-    description: `${t('alert-not-reverse-message')} ${t('alert-delete-message')} ${one.name}?`,
+    description: t('alert-delete-named-confirm', { name: one.name }),
     buttons: [
       {
         text: t('button-cancel'),
@@ -246,7 +246,7 @@ async function deleteOne(one: Element) {
         role: 'danger',
         handler: async () => {
           try {
-            const { error: delChanError } = await supabase
+            const { error: delChanError } = await capgo
               .from('channels')
               .delete()
               .eq('app_id', props.appId)

@@ -1,4 +1,4 @@
-import type { Database } from '../src/types/supabase.types.ts'
+import type { Database } from '../src/types/database.types.ts'
 import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 
@@ -375,7 +375,7 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
     const nonMemberCustomerId = `cus_pwd_nomember_${nonMemberOrgId}`
     const nonMemberEmail = USER_EMAIL
     const nonMemberPassword = USER_PASSWORD
-    const supabase = getSupabaseClient()
+    const capgo = getSupabaseClient()
 
     await executeSQL(
       `INSERT INTO auth.users (id, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_user_meta_data)
@@ -390,7 +390,7 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
       [USER_ID, USER_EMAIL],
     )
 
-    await supabase.from('stripe_info').insert({
+    await capgo.from('stripe_info').insert({
       customer_id: nonMemberCustomerId,
       status: 'succeeded',
       product_id: 'prod_LQIregjtNduh4q',
@@ -399,7 +399,7 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
       is_good_plan: true,
     })
 
-    await supabase.from('orgs').insert({
+    await capgo.from('orgs').insert({
       id: nonMemberOrgId,
       name: `Pwd Policy Non Member Org ${nonMemberOrgId}`,
       management_email: TEST_EMAIL,
@@ -426,8 +426,8 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
       expect(responseData.error).toBe('not_member')
     }
     finally {
-      await supabase.from('orgs').delete().eq('id', nonMemberOrgId)
-      await supabase.from('stripe_info').delete().eq('customer_id', nonMemberCustomerId)
+      await capgo.from('orgs').delete().eq('id', nonMemberOrgId)
+      await capgo.from('stripe_info').delete().eq('customer_id', nonMemberCustomerId)
     }
   })
 

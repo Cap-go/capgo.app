@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import { sql } from 'drizzle-orm'
 import { lockAppOnboardingForWrite, retryAppOnboardingWrite } from '../../utils/appOnboardingWriteLock.ts'
-import { enableBuilderChecklist, UnsupportedBuilderOnboardingVersion } from '../../utils/enableBuilderOnboarding.ts'
+import { enableBuilderChecklist, enableOtaChecklist, UnsupportedOnboardingVersion } from '../../utils/enableAppOnboarding.ts'
 import { quickError } from '../../utils/hono.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
 import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
@@ -18,7 +18,7 @@ export async function getBuilderOnboardingAccess(c: Context<MiddlewareKeyVariabl
   return c.json({ canEnable })
 }
 
-export async function enableBuilderOnboarding(c: Context<MiddlewareKeyVariables>, appId: string) {
+export async function enableAppOnboarding(c: Context<MiddlewareKeyVariables>, appId: string, path: 'builder' | 'ota') {
   if (!isValidAppId(appId))
     throw quickError(400, 'invalid_app_id', 'Invalid app ID')
   if (!(await checkPermission(c, 'app.update_settings', { appId })))
@@ -35,7 +35,7 @@ export async function enableBuilderOnboarding(c: Context<MiddlewareKeyVariables>
       // recheck permission against the locked app's current organization.
       if (!(await checkPermissionPg(c, 'app.update_settings', { appId }, tx, auth.userId, auth.apikey?.key ?? c.get('capgkey') ?? null)))
         throw quickError(403, 'cannot_access_app', 'You cannot update this app')
-      const next = enableBuilderChecklist(current.onboarding)
+      const next = path === 'ota' ? enableOtaChecklist(current.onboarding) : enableBuilderChecklist(current.onboarding)
       await tx.execute(sql`
         UPDATE public.apps SET onboarding = ${JSON.stringify(next)}::jsonb, updated_at = now()
         WHERE app_id = ${appId} AND onboarding IS DISTINCT FROM ${JSON.stringify(next)}::jsonb
@@ -46,7 +46,7 @@ export async function enableBuilderOnboarding(c: Context<MiddlewareKeyVariables>
     return c.json({ onboarding })
   }
   catch (error) {
-    if (error instanceof UnsupportedBuilderOnboardingVersion)
+    if (error instanceof UnsupportedOnboardingVersion)
       throw quickError(409, 'unsupported_onboarding_version', 'This checklist version is not supported')
     throw error
   }

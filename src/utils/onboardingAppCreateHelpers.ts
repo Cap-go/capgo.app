@@ -1,7 +1,7 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database } from '~/types/supabase.types'
-import { FunctionsHttpError } from '@supabase/supabase-js'
+import type { ConsoleClient } from '~/services/consoleClient'
+import type { Database } from '~/types/database.types'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { FunctionsHttpError } from '~/services/consoleClient'
 import { slugifyOnboardingSegment, trimTrailingDots } from '~/utils/onboardingSlug'
 
 type AppRow = Database['public']['Tables']['apps']['Row']
@@ -110,7 +110,7 @@ export async function readOnboardingAppFunctionError(
 }
 
 export async function createOnboardingAppWithFallbackIds(
-  supabase: SupabaseClient<Database>,
+  capgo: ConsoleClient<Database>,
   input: OnboardingAppCreateInput,
   messages?: OnboardingAppFunctionErrorMessages,
 ): Promise<OnboardingAppCreateResult> {
@@ -122,7 +122,7 @@ export async function createOnboardingAppWithFallbackIds(
 
   for (const candidateId of candidateIds) {
     const { data, error } = await invokeCapgoApi('app', {
-      client: supabase,
+      client: capgo,
       method: 'POST',
       body: {
         owner_org: input.ownerOrgId,

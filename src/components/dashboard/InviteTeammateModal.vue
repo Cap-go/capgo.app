@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
@@ -33,7 +33,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
 
@@ -220,7 +220,7 @@ async function handleEmailSubmit() {
     let data: string | null = null
     let error: unknown = null
 
-    const result = await supabase.rpc('invite_user_to_org_rbac', {
+    const result = await capgo.rpc('invite_user_to_org_rbac', {
       email,
       org_id: orgId,
       role_name: existingUserInviteRole,

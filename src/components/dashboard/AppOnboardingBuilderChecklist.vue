@@ -17,7 +17,7 @@ import IconAndroid from '~icons/mdi/android'
 import IconApple from '~icons/mdi/apple'
 import { isOpenOnboardingStepStatus } from '~/services/appOnboarding'
 import { BUILDER_STEP_IDS, parseBuilderOnboarding } from '~/services/builderOnboardingChecklist'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { resolveDualChecklistResume } from '~/utils/dualOnboardingChecklists'
 import { skipOnboardingStep } from '~/utils/onboardingSkipStep'
 import AppOnboardingAiButton from './AppOnboardingAiButton.vue'
@@ -49,7 +49,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const panelId = useId()
 const onboarding = ref(parseBuilderOnboarding(props.initialOnboarding))
 const viewedPlatform = ref<BuilderPlatform | null>(props.initialPlatform ?? onboarding.value.selectedPlatform)
@@ -128,7 +128,7 @@ async function refreshOnboarding() {
     return
   const appId = props.appId
   const generation = refreshGeneration
-  const { data, error } = await supabase.from('apps').select('onboarding').eq('app_id', appId).maybeSingle()
+  const { data, error } = await capgo.from('apps').select('onboarding').eq('app_id', appId).maybeSingle()
   if (appId !== props.appId || generation !== refreshGeneration)
     return
   refreshError.value = !!error

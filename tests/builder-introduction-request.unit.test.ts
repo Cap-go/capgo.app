@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { expect, it, vi } from 'vitest'
+import { beforeEach, expect, it, vi } from 'vitest'
 import { createApp, defineComponent, h, nextTick } from 'vue'
 import BuilderIntroduction from '../src/components/dashboard/BuilderIntroduction.vue'
 
@@ -12,6 +12,20 @@ vi.mock('../src/components/dashboard/BuilderPresentationModal.vue', () => ({ def
   emits: ['start'],
   setup: (_props, { emit }) => () => h('button', { onClick: () => emit('start') }, 'Start'),
 }) }))
+
+beforeEach(() => vi.resetAllMocks())
+
+it('activates the inline checklist without navigating away from Builds', async () => {
+  const onboarding = { setup: { todo_list_version: 4, paths: ['builder'], selected_path: 'builder' } }
+  mocks.api.mockResolvedValue({ data: { onboarding }, error: null })
+  const host = document.createElement('div')
+  const app = createApp(BuilderIntroduction, { appId: 'com.example.builder' })
+  app.mount(host)
+  host.querySelector('button')!.click()
+  await vi.waitFor(() => expect(mocks.update).toHaveBeenCalledExactlyOnceWith('com.example.builder', onboarding))
+  expect(mocks.push).not.toHaveBeenCalled()
+  app.unmount()
+})
 
 it('retains a successful activation after leaving the page without navigating back', async () => {
   let resolveRequest!: (value: unknown) => void
