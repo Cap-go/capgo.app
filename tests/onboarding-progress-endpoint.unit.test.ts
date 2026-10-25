@@ -131,6 +131,12 @@ describe('onboarding progress endpoint', () => {
     expect(steps.test_update.status).toBe('done')
     expect(steps.add_code).toMatchObject({ status: 'done', annotation: 'inferred_from_test_update' })
   })
+  it('skips the locked no-op write when a read-only caller sees a delivered update', async () => {
+    mocks.row.onboarding = { setup: { todo_list_version: 3, steps: { test_update: { status: 'done' } } } }
+    mocks.permission.mockImplementation(async (_c, permission) => !['app.update_settings', 'org.create_app'].includes(permission))
+    expect((await (await request(4)).json() as any).onboarding).toEqual(mocks.row.onboarding)
+    expect(mocks.transaction).not.toHaveBeenCalled()
+  })
   it('avoids the write transaction when every pending observation is absent', async () => {
     expect((await request(0, true)).status).toBe(200)
     expect(mocks.transaction).not.toHaveBeenCalled()

@@ -105,12 +105,10 @@ function observedProgressPatch(current: AppOnboardingState, observations: Observ
   return Object.keys(patch.steps!).length || sourceChanged ? patch : null
 }
 
-// add_code is never observed directly; observedProgressPatch infers it.
-const observedStepIds = (observations: Observations) => [...Object.keys(observations), 'add_code'].map(id => `ota.${id}` as const)
-
 export async function persistObservedProgress(c: Context<MiddlewareKeyVariables>, appId: string, observations: Observations) {
   const result = await persistAuthorizedOnboardingMutation(c, appId, {
-    requestedSteps: observedStepIds(observations),
+    // add_code is never observed directly; observedProgressPatch infers it.
+    requestedSteps: [...Object.keys(observations), 'add_code'].map(id => `ota.${id}` as const),
     stepOverrides: { 'ota.login_cli_mcp': { permission: 'app.read', authType: 'apikey' } },
     buildPatch: ({ current, allowedSteps, at }) => observedProgressPatch(current, observations, allowedSteps, at),
     afterPersist: tryCompletePendingAppOnboarding,
@@ -224,7 +222,11 @@ app.post('/', middlewareAuth({ preferApiKey: true }), async (c) => {
     await check('test_update', 'app.read_logs', () => hasAppliedBundle(c, client, appId, row.created_at))
   // Conservatively assume all observed steps are writable for this no-op test.
   // Real changes still recheck permissions and rebuild against the locked row.
-  const observedSteps = new Set(observedStepIds(observations))
+  const observedSteps = new Set(Object.keys(observations).map(id => `ota.${id}`))
+  // Inference repeats on every read, so check write access first: read-only
+  // pollers must not take the org lock every 2s for a write they cannot make.
+  if (shouldInferAddCode(current, observations.test_update === true) && await canWriteOnboarding(c, appId))
+    observedSteps.add('ota.add_code')
   const onboarding = observedProgressPatch(current, observations, observedSteps)
     ? await persistObservedProgress(c, appId, observations) ?? row.onboarding
     : row.onboarding
