@@ -104,7 +104,7 @@ describe('onboarding progress endpoint', () => {
   })
   it.each([3, 4])('avoids the write transaction for unchanged v%s CLI progress', async (version) => {
     mocks.auth.authType = 'apikey'
-    const steps = { login_cli_mcp: { status: 'done' }, add_channel: { status: 'done' }, run_device: { status: 'done' }, upload_bundle: { status: 'done' }, test_update: { status: 'done' } }
+    const steps = { login_cli_mcp: { status: 'done' }, add_channel: { status: 'done' }, add_code: { status: 'done' }, run_device: { status: 'done' }, upload_bundle: { status: 'done' }, test_update: { status: 'done' } }
     mocks.row.onboarding = { setup: { todo_list_version: version, source: 'cli', ...(version === 4 ? { ota_todo_list_version: '1' } : {}), steps: version === 4 ? { ota: steps } : steps } }
     mocks.channels = [{ id: 'channel' }]
     const result = await (await request(0, true)).json()
@@ -113,6 +113,23 @@ describe('onboarding progress endpoint', () => {
     expect(mocks.permissionPg).not.toHaveBeenCalled()
     expect(mocks.devices).not.toHaveBeenCalled()
     expect(mocks.logs).not.toHaveBeenCalled()
+  })
+  it.each([3, 4])('infers v%s add_code on read once the update was delivered, like the todo refresh cron', async (version) => {
+    const steps = { test_update: { status: 'done' }, add_code: { status: 'pending' } }
+    mocks.row.onboarding = { setup: { todo_list_version: version, ...(version === 4 ? { ota_todo_list_version: '1', paths: ['ota'] } : {}), steps: version === 4 ? { ota: steps } : steps } }
+    lockedRow(mocks.row.onboarding)
+    const result = await (await request(4)).json() as any
+    const saved = version === 4 ? result.onboarding.setup.steps.ota : result.onboarding.setup.steps
+    expect(saved.add_code).toMatchObject({ status: 'done', annotation: 'inferred_from_test_update', annotation_type: 'note' })
+    expect(mocks.transaction).toHaveBeenCalledOnce()
+  })
+  it('infers add_code in the same read that first observes the delivered update', async () => {
+    mocks.logs.mockResolvedValue([{ action: 'set', device_id: 'device', version_name: '1.0' }])
+    mocks.versions = [{ id: 1 }]
+    lockedRow(mocks.row.onboarding)
+    const steps = (await (await request(3)).json() as any).onboarding.setup.steps
+    expect(steps.test_update.status).toBe('done')
+    expect(steps.add_code).toMatchObject({ status: 'done', annotation: 'inferred_from_test_update' })
   })
   it('avoids the write transaction when every pending observation is absent', async () => {
     expect((await request(0, true)).status).toBe(200)
@@ -353,7 +370,8 @@ describe('onboarding progress endpoint', () => {
     lockedRow(mocks.row.onboarding)
     mocks.permissionPg.mockImplementation(async (_c, requested) => requested === permission)
     const result = await persistObservedProgress(contextFor({ userId: 'user', authType: 'apikey', apikey: { key: 'fixture-key' } }), 'com.test.onboarding', { login_cli_mcp: true, add_channel: true, run_device: true, upload_bundle: true, test_update: true }) as any
-    expect(Object.values(result.setup.steps).map((step: any) => step.status)).toEqual(Array.from({ length: 5 }).fill('done'))
+    // add_code is inferred from the delivered update.
+    expect(Object.values(result.setup.steps).map((step: any) => step.status)).toEqual(Array.from({ length: 6 }).fill('done'))
     expect(result.setup.source).toBe('cli')
     expect(mocks.permissionPg.mock.calls.map(call => call[1])).toEqual(permission === 'app.update_settings' ? ['app.update_settings'] : ['app.update_settings', 'org.create_app'])
   })
