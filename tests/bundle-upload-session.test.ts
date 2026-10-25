@@ -40,8 +40,20 @@ async function putZip(url: string, zip: Buffer) {
 }
 
 async function versionRow(name: string) {
-  const { data } = await getSupabaseClient().from('app_versions').select('id, storage_provider, checksum, deleted, native_packages, min_update_version, cli_version').eq('app_id', APPNAME).eq('name', name).maybeSingle()
+  const { data } = await getSupabaseClient().from('app_versions').select('id, storage_provider, checksum, deleted, native_packages, min_update_version, cli_version, owner_org, r2_path').eq('app_id', APPNAME).eq('name', name).maybeSingle()
   return data
+}
+
+function sha256(bytes: Uint8Array) {
+  return createHash('sha256').update(bytes).digest('hex')
+}
+
+/** Hash of the live bundle object, read straight from storage. */
+async function liveBundleHash(name: string) {
+  const row = await versionRow(name)
+  const { data, error } = await getSupabaseClient().storage.from('capgo').download(`orgs/${row!.owner_org}/apps/${APPNAME}/${name}.zip`)
+  expect(error).toBeNull()
+  return sha256(new Uint8Array(await data!.arrayBuffer()))
 }
 
 beforeAll(async () => {
@@ -230,6 +242,75 @@ describe('bundle upload sessions', () => {
     const completed = await api('complete', { upload_token: prepared.data.upload_token })
     expect(completed.status).toBe(200)
     expect(completed.data.delta).toMatchObject({ mode: 'pack', files: 2 })
+  })
+
+  it('lets only one complete win and keeps the live bundle immutable', async () => {
+    const zip = bundleZip('notifyAppReady(); // 12')
+    const prepared = await prepare('12.0.0', { channel: 'upload-session-race' })
+    expect(prepared.status).toBe(200)
+    // Clients only ever get a signed URL for a staging key, never for the bundle path.
+    expect(prepared.data.bundle_upload.url).toContain('/uploads/')
+    expect(prepared.data.bundle_upload.url).not.toContain('12.0.0.zip')
+    await putZip(prepared.data.bundle_upload.url, zip)
+
+    const token = { upload_token: prepared.data.upload_token }
+    const [first, second] = await Promise.all([api('complete', token), api('complete', token)])
+    expect([first.status, second.status].sort()).toEqual([200, 409])
+    const loser = first.status === 409 ? first : second
+    expect(['upload_in_progress', 'upload_already_completed']).toContain(loser.data.error)
+    expect(await versionRow('12.0.0')).toMatchObject({ storage_provider: 'r2', deleted: false, checksum: sha256(zip) })
+    expect(await liveBundleHash('12.0.0')).toBe(sha256(zip))
+
+    const again = await api('complete', token)
+    expect(again.status).toBe(409)
+    expect(again.data.error).toBe('upload_already_completed')
+    const aborted = await api('abort', token)
+    expect(aborted.status).toBe(409)
+    expect(aborted.data.error).toBe('upload_already_completed')
+    expect(await versionRow('12.0.0')).toMatchObject({ storage_provider: 'r2', deleted: false })
+
+    // Replaying the old signed URL only rewrites the (now unused) staging key.
+    await putZip(prepared.data.bundle_upload.url, bundleZip('evil(); notifyAppReady()'))
+    expect(await liveBundleHash('12.0.0')).toBe(sha256(zip))
+    expect((await api('complete', token)).data.error).toBe('upload_already_completed')
+  })
+
+  it('refuses a concurrent prepare of the same version instead of overwriting it', async () => {
+    const results = await Promise.all([prepare('13.0.0', { channel: 'upload-session-race' }), prepare('13.0.0', { channel: 'upload-session-race' })])
+    expect(results.map(result => result.status).sort()).toEqual([200, 409])
+    const winner = results.find(result => result.status === 200)!
+    expect(results.find(result => result.status === 409)!.data.error).toBe('version_already_exists')
+    expect((await versionRow('13.0.0'))?.id).toBe(winner.data.version_id)
+    expect((await api('abort', { upload_token: winner.data.upload_token })).status).toBe(200)
+  })
+
+  it('re-checks compatibility when the channel changed between prepare and complete', async () => {
+    const camera = { name: '@capacitor/camera', version: '6.0.0' }
+    const channel = 'upload-session-recheck'
+    async function upload(version: string, nativePackages: unknown[], overrides: Record<string, unknown> = {}) {
+      const prepared = await prepare(version, { channel, native_packages: nativePackages, ...overrides })
+      expect(prepared.status).toBe(200)
+      await putZip(prepared.data.bundle_upload.url, bundleZip(`notifyAppReady(); // ${version}`))
+      return prepared
+    }
+
+    const base = await upload('11.0.0', [camera])
+    expect((await api('complete', { upload_token: base.data.upload_token })).status).toBe(200)
+
+    // Compatible with 11.0.0 at prepare time.
+    const pending = await upload('11.0.1', [camera], { fail_on_incompatible: true })
+    expect(pending.data.channels).toEqual([expect.objectContaining({ name: channel, compatibility: 'compatible', current_version: '11.0.0' })])
+
+    // Meanwhile the channel moves to a bundle built against another native plugin version.
+    const moved = await upload('11.0.2', [{ ...camera, version: '7.0.0' }])
+    expect((await api('complete', { upload_token: moved.data.upload_token })).status).toBe(200)
+
+    const completed = await api('complete', { upload_token: pending.data.upload_token })
+    expect(completed.status).toBe(400)
+    expect(completed.data.error).toBe('incompatible_bundle')
+    expect(await versionRow('11.0.1')).toBeNull()
+    const { data: channelRow } = await getSupabaseClient().from('channels').select('version').eq('app_id', APPNAME).eq('name', channel).single()
+    expect(channelRow?.version).toBe((await versionRow('11.0.2'))?.id)
   })
 
   it('sets a progressive rollout on a channel with a stable bundle', async () => {

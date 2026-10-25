@@ -174,6 +174,11 @@ const LOCAL_HEADER_SIGNATURE = 0x04034B50
 const EOCD_MIN_SIZE = 22
 /** EOCD + max comment + zip64 locator + zip64 record. */
 export const ZIP_TAIL_READ_SIZE = EOCD_MIN_SIZE + 0xFFFF + 20 + 56
+/** A bundle with thousands of files has a central directory of a few hundred KB. */
+export const MAX_CENTRAL_DIRECTORY_BYTES = 16 * 1024 * 1024
+/** Default cap for one inflated entry (Workers have 128 MB of memory). */
+export const MAX_INFLATED_ENTRY_BYTES = 48 * 1024 * 1024
+const CENTRAL_HEADER_MIN_SIZE = 46
 const decoder = new TextDecoder('utf-8')
 
 function view(bytes: Uint8Array) {
@@ -213,6 +218,10 @@ export function findCentralDirectory(tail: Uint8Array, fileSize: number): ZipDir
     }
     if (centralDirectoryOffset + centralDirectorySize > fileSize)
       throw new BundleZipError('invalid_zip', 'ZIP central directory is out of bounds')
+    if (centralDirectorySize > MAX_CENTRAL_DIRECTORY_BYTES)
+      throw new BundleZipError('zip_directory_too_large', `ZIP central directory is larger than ${MAX_CENTRAL_DIRECTORY_BYTES / 1024 / 1024} MB`, { size: centralDirectorySize })
+    if (entryCount * CENTRAL_HEADER_MIN_SIZE > centralDirectorySize)
+      throw new BundleZipError('invalid_zip', 'ZIP central directory entry count does not fit its size')
     return { centralDirectoryOffset, centralDirectorySize, entryCount }
   }
   throw new BundleZipError('invalid_zip', 'The uploaded file is not a ZIP archive (end of central directory not found)')
@@ -275,28 +284,51 @@ export function parseCentralDirectory(directory: Uint8Array, expectedEntries: nu
   return entries
 }
 
-export async function inflateEntry(entry: ZipEntry, compressed: Uint8Array): Promise<Uint8Array> {
+/**
+ * Largest plausible compressed size for an entry. Stored entries are exact; deflate expands
+ * incompressible data by at most ~1/8 (fixed Huffman), plus block headers.
+ */
+export function maxCompressedSize(entry: Pick<ZipEntry, 'method' | 'uncompressedSize'>): number {
+  if (entry.method === 0)
+    return entry.uncompressedSize
+  return entry.uncompressedSize + Math.ceil(entry.uncompressedSize / 8) + 1024
+}
+
+/** Reject entries we cannot or will not read before buffering any of their bytes. */
+export function assertReadableEntry(entry: ZipEntry, maxBytes = MAX_INFLATED_ENTRY_BYTES) {
   if (entry.flags & 0x1)
     throw new BundleZipError('zip_entry_encrypted', `ZIP entry ${entry.name} is password protected`)
+  if (entry.method !== 0 && entry.method !== 8)
+    throw new BundleZipError('zip_method_unsupported', `ZIP entry ${entry.name} uses unsupported compression method ${entry.method}`)
+  if (entry.uncompressedSize > maxBytes)
+    throw new BundleZipError('zip_entry_too_large', `ZIP entry ${entry.name} is larger than ${Math.floor(maxBytes / 1024 / 1024)} MB`, { name: entry.name, max_bytes: maxBytes })
+  if (entry.compressedSize > maxCompressedSize(entry))
+    throw new BundleZipError('invalid_zip', `ZIP entry ${entry.name} declares an implausible compressed size`, { name: entry.name })
+}
+
+/** Inflate one entry. Output never exceeds the declared size, itself capped by `maxBytes`. */
+export async function inflateEntry(entry: ZipEntry, compressed: Uint8Array, maxBytes = MAX_INFLATED_ENTRY_BYTES): Promise<Uint8Array> {
+  assertReadableEntry(entry, maxBytes)
+  if (compressed.byteLength !== entry.compressedSize)
+    throw new BundleZipError('invalid_zip', `ZIP entry ${entry.name} is truncated`)
   if (entry.method === 0) {
     if (compressed.byteLength !== entry.uncompressedSize)
       throw new BundleZipError('invalid_zip', `ZIP entry ${entry.name} has an invalid size`)
     return compressed
   }
-  if (entry.method !== 8)
-    throw new BundleZipError('zip_method_unsupported', `ZIP entry ${entry.name} uses unsupported compression method ${entry.method}`)
   const stream = new Blob([compressed as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new DecompressionStream('deflate-raw'))
   const reader = stream.getReader()
-  const output = new Uint8Array(entry.uncompressedSize)
+  // Collect chunks instead of trusting the declared size for an up-front allocation.
+  const chunks: Uint8Array[] = []
   let length = 0
   try {
     while (true) {
       const { done, value } = await reader.read()
       if (done)
         break
-      if (length + value.byteLength > output.byteLength)
+      if (length + value.byteLength > entry.uncompressedSize)
         throw new BundleZipError('invalid_zip', `ZIP entry ${entry.name} inflates past its declared size`)
-      output.set(value, length)
+      chunks.push(value)
       length += value.byteLength
     }
   }
@@ -306,8 +338,16 @@ export async function inflateEntry(entry: ZipEntry, compressed: Uint8Array): Pro
       throw error
     throw new BundleZipError('invalid_zip', `ZIP entry ${entry.name} cannot be decompressed`)
   }
-  if (length !== output.byteLength)
+  if (length !== entry.uncompressedSize)
     throw new BundleZipError('invalid_zip', `ZIP entry ${entry.name} has an invalid size`)
+  if (chunks.length === 1)
+    return chunks[0]!
+  const output = new Uint8Array(length)
+  let offset = 0
+  for (const chunk of chunks) {
+    output.set(chunk, offset)
+    offset += chunk.byteLength
+  }
   return output
 }
 
@@ -393,6 +433,7 @@ class SequentialReader {
 /**
  * Walk a ZIP archive stream once. `onEntry` receives the compressed bytes of every entry
  * accepted by `want` (in file order); every byte of the archive goes through `onBytes`.
+ * Wanted entries are size-checked (`maxEntryBytes`) before any of their bytes are buffered.
  */
 export async function walkZipStream(
   stream: ReadableStream<Uint8Array>,
@@ -400,11 +441,14 @@ export async function walkZipStream(
   want: (entry: ZipEntry) => boolean,
   onEntry: (entry: ZipEntry, compressed: Uint8Array) => Promise<void> | void,
   onBytes: (bytes: Uint8Array) => void,
+  maxEntryBytes = MAX_INFLATED_ENTRY_BYTES,
 ): Promise<void> {
   const reader = stream.getReader()
   const sequential = new SequentialReader(reader, onBytes)
   try {
     const ordered = entries.filter(want).sort((a, b) => a.localHeaderOffset - b.localHeaderOffset)
+    for (const entry of ordered)
+      assertReadableEntry(entry, maxEntryBytes)
     for (const entry of ordered) {
       if (entry.localHeaderOffset < sequential.position)
         throw new BundleZipError('invalid_zip', 'ZIP entries overlap')
@@ -431,8 +475,10 @@ export function readZipDirectory(bytes: Uint8Array): ZipEntry[] {
 }
 
 export function entryDataFromBuffer(bytes: Uint8Array, entry: ZipEntry): Uint8Array {
+  if (bytes.byteLength < entry.localHeaderOffset + 30)
+    throw new BundleZipError('invalid_zip', `ZIP local header for ${entry.name} is corrupted`)
   const headerView = view(bytes.subarray(entry.localHeaderOffset, entry.localHeaderOffset + 30))
-  if (bytes.byteLength < entry.localHeaderOffset + 30 || headerView.getUint32(0, true) !== LOCAL_HEADER_SIGNATURE)
+  if (headerView.getUint32(0, true) !== LOCAL_HEADER_SIGNATURE)
     throw new BundleZipError('invalid_zip', `ZIP local header for ${entry.name} is corrupted`)
   const start = entry.localHeaderOffset + 30 + headerView.getUint16(26, true) + headerView.getUint16(28, true)
   if (start + entry.compressedSize > bytes.byteLength)
@@ -518,4 +564,76 @@ export function parseDeltaPackManifest(input: unknown): DeltaPackManifest {
     delta_encryption: { enabled: encryption.enabled as boolean },
     entries,
   }
+}
+
+export interface DeltaPackFile {
+  file_name: string
+  file_hash: string
+  compression: 'none' | 'brotli'
+  payload: Uint8Array
+  sha256: string
+}
+
+export interface DeltaPackLimits {
+  /** True when the bundle has a session_key (encrypted delta packs need one). */
+  hasSessionKey: boolean
+  maxEntries: number
+  /** Running budget for every inflated blob of the pack together. */
+  maxPayloadBytes: number
+  maxManifestBytes?: number
+  /** Appended to "too large" messages. */
+  hint?: string
+}
+
+export const MAX_DELTA_PACK_MANIFEST_BYTES = 8 * 1024 * 1024
+
+/** Read and verify an in-memory CLI delta pack within fixed memory budgets. */
+export async function extractDeltaPack(bytes: Uint8Array, limits: DeltaPackLimits): Promise<{ manifest: DeltaPackManifest, files: DeltaPackFile[] }> {
+  const hint = limits.hint ? ` ${limits.hint}` : ''
+  const entries = readZipDirectory(bytes)
+  const byName = new Map(entries.map(entry => [entry.name, entry]))
+  const manifestEntry = byName.get(DELTA_PACK_MANIFEST_NAME)
+  if (!manifestEntry)
+    throw new BundleZipError('delta_pack_invalid', `The delta pack has no ${DELTA_PACK_MANIFEST_NAME}`)
+  let manifestJson: unknown
+  try {
+    const manifestBytes = await inflateEntry(manifestEntry, entryDataFromBuffer(bytes, manifestEntry), limits.maxManifestBytes ?? MAX_DELTA_PACK_MANIFEST_BYTES)
+    manifestJson = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(manifestBytes))
+  }
+  catch (error) {
+    if (error instanceof BundleZipError)
+      throw error.code === 'zip_entry_too_large' ? new BundleZipError('delta_pack_invalid', `${DELTA_PACK_MANIFEST_NAME} is too large`) : error
+    throw new BundleZipError('delta_pack_invalid', `${DELTA_PACK_MANIFEST_NAME} is not valid JSON`)
+  }
+  const manifest = parseDeltaPackManifest(manifestJson)
+  if (manifest.delta_encryption.enabled && !limits.hasSessionKey)
+    throw new BundleZipError('delta_pack_invalid', 'The delta pack is encrypted but the bundle has no session_key')
+  if (manifest.entries.length > limits.maxEntries)
+    throw new BundleZipError('delta_too_large_for_server', `The delta pack has ${manifest.entries.length} files, above the server limit of ${limits.maxEntries}.${hint}`)
+  const withSpaces = manifest.entries.filter(entry => entry.file_name.includes(' '))
+  if (withSpaces.length)
+    throw new BundleZipError('delta_file_name_invalid', `Files with spaces in their names (${withSpaces.slice(0, 20).map(entry => entry.file_name).join(', ')}). Please rename the files.`)
+  const declaredBytes = manifest.entries.reduce((sum, entry) => sum + entry.uploaded_bytes_size, 0)
+  if (declaredBytes > limits.maxPayloadBytes)
+    throw new BundleZipError('delta_too_large_for_server', `The delta pack holds ${Math.ceil(declaredBytes / 1024 / 1024)} MB of files, above the server limit of ${Math.floor(limits.maxPayloadBytes / 1024 / 1024)} MB.${hint}`, { bytes: declaredBytes })
+
+  const files: DeltaPackFile[] = []
+  let inflatedBytes = 0
+  for (const [index, entry] of manifest.entries.entries()) {
+    const blob = byName.get(entry.pack_path)
+    if (!blob)
+      throw new BundleZipError('delta_pack_invalid', `Delta pack entry ${index} points to a missing blob ${entry.pack_path}`, { index })
+    // Check the declared size before inflating so a lying header cannot blow the budget.
+    if (blob.uncompressedSize !== entry.uploaded_bytes_size)
+      throw new BundleZipError('delta_pack_invalid', `Delta pack blob ${entry.pack_path} does not match its manifest entry`, { index })
+    if (inflatedBytes + blob.uncompressedSize > limits.maxPayloadBytes)
+      throw new BundleZipError('delta_too_large_for_server', `The delta pack is larger than the server limit of ${Math.floor(limits.maxPayloadBytes / 1024 / 1024)} MB.${hint}`)
+    const payload = await inflateEntry(blob, entryDataFromBuffer(bytes, blob), entry.uploaded_bytes_size)
+    inflatedBytes += payload.byteLength
+    const digest = await sha256Hex(payload)
+    if (payload.byteLength !== entry.uploaded_bytes_size || digest !== entry.uploaded_bytes_sha256)
+      throw new BundleZipError('delta_pack_invalid', `Delta pack blob ${entry.pack_path} does not match its manifest entry`, { index })
+    files.push({ file_name: entry.file_name, file_hash: entry.file_hash, compression: entry.compression, payload, sha256: digest })
+  }
+  return { manifest, files }
 }

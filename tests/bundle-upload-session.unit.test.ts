@@ -1,9 +1,11 @@
 import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
-import { brotliDecompressSync } from 'node:zlib'
+import { brotliDecompressSync, deflateRawSync } from 'node:zlib'
 import AdmZip from 'adm-zip'
 import { describe, expect, it } from 'vitest'
+import { isUploadRejection } from '../supabase/functions/_backend/public/bundle/upload_session.ts'
 import { BundleUploadTokenError, signBundleUploadToken, verifyBundleUploadToken } from '../supabase/functions/_backend/utils/bundle_upload_token.ts'
+import { quickError, simpleError } from '../supabase/functions/_backend/utils/hono.ts'
 import {
   BROTLI_MIN_SIZE,
   BundleZipError,
@@ -12,10 +14,12 @@ import {
   containsAscii,
   Crc32,
   entryDataFromBuffer,
+  extractDeltaPack,
   findCentralDirectory,
   hasRootIndexHtml,
   inflateEntry,
   isJsEntry,
+  MAX_CENTRAL_DIRECTORY_BYTES,
   parseCentralDirectory,
   parseDeltaPackManifest,
   readZipDirectory,
@@ -203,5 +207,122 @@ describe('delta pack', () => {
     const duplicate = packManifest().entries[0]
     expect(() => parseDeltaPackManifest(packManifest({ entries: [duplicate, { ...duplicate, id: 1, file_name: 'b.js' }] }))).toThrow(BundleZipError)
     expect(() => parseDeltaPackManifest(packManifest({ entries: [duplicate, { ...duplicate, file_name: 'b.js', pack_path: 'files/1' }] }))).toThrow(BundleZipError)
+  })
+})
+
+describe('zip memory bounds', () => {
+  function eocd(entryCount: number, directorySize: number, directoryOffset: number) {
+    const tail = Buffer.alloc(22)
+    tail.writeUInt32LE(0x06054B50, 0)
+    tail.writeUInt16LE(entryCount, 8)
+    tail.writeUInt16LE(entryCount, 10)
+    tail.writeUInt32LE(directorySize, 12)
+    tail.writeUInt32LE(directoryOffset, 16)
+    return tail
+  }
+
+  function entry(overrides: Partial<ZipEntryLike> = {}): ZipEntryLike {
+    return { name: 'a.js', method: 8, flags: 0, crc32: 0, compressedSize: 10, uncompressedSize: 10, localHeaderOffset: 0, isDirectory: false, ...overrides }
+  }
+  type ZipEntryLike = Parameters<typeof inflateEntry>[0]
+
+  it('caps the central directory size before reading it', () => {
+    const size = MAX_CENTRAL_DIRECTORY_BYTES + 1
+    expect(() => findCentralDirectory(eocd(1, size, 0), size + 22)).toThrow(expect.objectContaining({ code: 'zip_directory_too_large' }))
+  })
+
+  it('rejects an entry count that cannot fit the central directory', () => {
+    expect(() => findCentralDirectory(eocd(1000, 100, 0), 122)).toThrow(expect.objectContaining({ code: 'invalid_zip' }))
+  })
+
+  it('refuses entries above the inflate cap without allocating them', async () => {
+    await expect(inflateEntry(entry({ uncompressedSize: 0xFFFFFFF0, compressedSize: 100 }), new Uint8Array(100))).rejects.toMatchObject({ code: 'zip_entry_too_large' })
+    await expect(inflateEntry(entry({ uncompressedSize: 2000, compressedSize: 100 }), new Uint8Array(100), 1000)).rejects.toMatchObject({ code: 'zip_entry_too_large' })
+  })
+
+  it('rejects implausible compressed sizes', async () => {
+    await expect(inflateEntry(entry({ uncompressedSize: 10, compressedSize: 5000 }), new Uint8Array(5000))).rejects.toMatchObject({ code: 'invalid_zip' })
+    await expect(inflateEntry(entry({ method: 0, uncompressedSize: 10, compressedSize: 11 }), new Uint8Array(11))).rejects.toMatchObject({ code: 'invalid_zip' })
+  })
+
+  it('stops inflating past the declared size (zip bomb with a lying header)', async () => {
+    const real = Buffer.alloc(100_000, 0x61)
+    const compressed = deflateRawSync(real)
+    await expect(inflateEntry(entry({ uncompressedSize: 1000, compressedSize: compressed.byteLength }), compressed)).rejects.toMatchObject({ code: 'invalid_zip' })
+    const ok = await inflateEntry(entry({ uncompressedSize: real.byteLength, compressedSize: compressed.byteLength }), compressed)
+    expect(Buffer.from(ok).equals(real)).toBe(true)
+  })
+
+  it('checks wanted entries before buffering them from the stream', async () => {
+    const zip = buildZip({ 'index.html': '<html></html>', 'big.js': 'x'.repeat(5000) })
+    const entries = directoryOf(zip)
+    let called = false
+    await expect(walkZipStream(chunkedStream(zip, 64), entries, isJsEntry, () => {
+      called = true
+    }, () => undefined, 1000)).rejects.toMatchObject({ code: 'zip_entry_too_large' })
+    expect(called).toBe(false)
+  })
+})
+
+describe('delta pack extraction budgets', () => {
+  const files = { 'app.js': Buffer.from('notifyAppReady()'), 'index.html': Buffer.from('<html></html>') }
+
+  function pack(options: { lieSize?: boolean } = {}) {
+    const zip = new AdmZip()
+    const entries = Object.entries(files).map(([fileName, bytes], index) => {
+      zip.addFile(`files/${index}`, bytes)
+      const sha = createHash('sha256').update(bytes).digest('hex')
+      return { id: index, file_name: fileName, compression: 'none', file_hash: sha, uploaded_bytes_sha256: sha, uploaded_bytes_size: bytes.byteLength + (options.lieSize && index === 0 ? 1 : 0), pack_path: `files/${index}` }
+    })
+    zip.addFile('capgo-delta-manifest.json', Buffer.from(JSON.stringify({ protocol_version: 1, file_hash_format: 'sha256_hex', delta_encryption: { enabled: false }, entries })))
+    return new Uint8Array(zip.toBuffer())
+  }
+  const limits = { hasSessionKey: false, maxEntries: 10, maxPayloadBytes: 1024 }
+
+  it('extracts a valid pack', async () => {
+    const { files: extracted } = await extractDeltaPack(pack(), limits)
+    expect(extracted.map(file => file.file_name)).toEqual(['app.js', 'index.html'])
+  })
+
+  it('enforces the total payload budget before inflating', async () => {
+    await expect(extractDeltaPack(pack(), { ...limits, maxPayloadBytes: 20 })).rejects.toMatchObject({ code: 'delta_too_large_for_server' })
+  })
+
+  it('enforces the entry count and manifest size', async () => {
+    await expect(extractDeltaPack(pack(), { ...limits, maxEntries: 1 })).rejects.toMatchObject({ code: 'delta_too_large_for_server' })
+    await expect(extractDeltaPack(pack(), { ...limits, maxManifestBytes: 16 })).rejects.toMatchObject({ code: 'delta_pack_invalid' })
+  })
+
+  it('rejects blobs whose zip size disagrees with the manifest', async () => {
+    await expect(extractDeltaPack(pack({ lieSize: true }), limits)).rejects.toMatchObject({ code: 'delta_pack_invalid' })
+  })
+
+  it('rejects truncated archives', async () => {
+    const bytes = pack()
+    await expect(extractDeltaPack(bytes.subarray(0, bytes.byteLength - 10), limits)).rejects.toBeInstanceOf(BundleZipError)
+  })
+})
+
+describe('upload rejection classification', () => {
+  function caught(fn: () => unknown): unknown {
+    try {
+      return fn()
+    }
+    catch (error) {
+      return error
+    }
+  }
+
+  it('only treats deterministic content rejections as permanent', () => {
+    expect(isUploadRejection(caught(() => simpleError('checksum_mismatch', 'x')))).toBe(true)
+    expect(isUploadRejection(caught(() => simpleError('incompatible_bundle', 'x')))).toBe(true)
+    expect(isUploadRejection(caught(() => quickError(413, 'error_manifest_too_large', 'x')))).toBe(true)
+    expect(isUploadRejection(caught(() => quickError(409, 'upload_missing', 'x')))).toBe(false)
+    expect(isUploadRejection(caught(() => quickError(409, 'error_manifest_inventory_conflict', 'x')))).toBe(false)
+    expect(isUploadRejection(caught(() => simpleError('cannot_check_channel', 'x')))).toBe(false)
+    expect(isUploadRejection(caught(() => simpleError('cannot_load_channel', 'x')))).toBe(false)
+    expect(isUploadRejection(caught(() => quickError(403, 'permission_denied', 'x')))).toBe(false)
+    expect(isUploadRejection(caught(() => quickError(503, 'storage_unavailable', 'x')))).toBe(false)
+    expect(isUploadRejection(new Error('boom'))).toBe(false)
   })
 })

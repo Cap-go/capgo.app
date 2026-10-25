@@ -1,14 +1,14 @@
 import type { Context } from 'hono'
 import type { TrackEventBody } from '../../private/events.ts'
 import type { NativePackage } from '../../utils/bundle_compatibility.ts'
-import type { DeltaPackManifest, ZipEntry } from '../../utils/bundle_zip.ts'
+import type { DeltaPackFile, DeltaPackManifest, ZipEntry } from '../../utils/bundle_zip.ts'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { ManifestPersistEntry } from '../../utils/manifest_persist.ts'
 import type { ManifestSizeReceiptFacts } from '../../utils/manifest_size_receipt.ts'
 import type { ManifestUploadRequest } from '../../utils/manifest_upload.ts'
 import type { Permission } from '../../utils/rbac.ts'
 import type { Database } from '../../utils/supabase.types.ts'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { greaterOrEqual, parse as parseSemver } from '@std/semver'
 import { getRuntimeKey } from 'hono/adapter'
 import { HTTPException } from 'hono/http-exception'
@@ -20,7 +20,7 @@ import { acceptTrackEvent } from '../../private/events.ts'
 import { manifestUploadPublicUrl } from '../../private/request_manifest_upload.ts'
 import { compareNativePackages, summarizeBundleCompatibility } from '../../utils/bundle_compatibility.ts'
 import { BundleUploadTokenError, getBundleUploadSessionSecret, signBundleUploadToken, verifyBundleUploadToken } from '../../utils/bundle_upload_token.ts'
-import { BundleZipError, checksumAlgorithmForUpdater, compressDeltaFile, containsAscii, Crc32, DELTA_PACK_MANIFEST_NAME, entryDataFromBuffer, findCentralDirectory, hasRootIndexHtml, inflateEntry, isJsEntry, parseCentralDirectory, parseDeltaPackManifest, readZipDirectory, selectDeltaEntries, sha256Hex, updaterSupportsDelta, walkZipStream, ZIP_TAIL_READ_SIZE } from '../../utils/bundle_zip.ts'
+import { BundleZipError, checksumAlgorithmForUpdater, compressDeltaFile, containsAscii, Crc32, extractDeltaPack, findCentralDirectory, hasRootIndexHtml, inflateEntry, isJsEntry, parseCentralDirectory, selectDeltaEntries, sha256Hex, updaterSupportsDelta, walkZipStream, ZIP_TAIL_READ_SIZE } from '../../utils/bundle_zip.ts'
 import { BRES, quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { ManifestInventoryConflict, registerManifestInventory, reserveManifestPaths, usesManifestInventory, withManifestInventory } from '../../utils/manifest_inventory.ts'
@@ -29,7 +29,8 @@ import { persistVersionManifestEntries } from '../../utils/manifest_persist.ts'
 import { getManifestReceiptBucket } from '../../utils/manifest_size_receipt.ts'
 import { createManifestUploadResponse, ManifestUploadRequestError, resolveManifestUploadPublicBaseUrl, validateManifestUploadRequest } from '../../utils/manifest_upload.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { s3 } from '../../utils/s3.ts'
+import type { StoredObjectInfo } from '../../utils/s3.ts'
+import { s3, StorageObjectChangedError } from '../../utils/s3.ts'
 import { bundleStorage } from '../../utils/bundle_storage.ts'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
@@ -38,7 +39,7 @@ import { post as postChannel } from '../channel/post.ts'
 import { getCurrentBundle } from '../channel/current_bundle.ts'
 import { deleteBundle } from './delete.ts'
 import { setChannel } from './set_channel.ts'
-import { upsertBundle } from './upsert.ts'
+import { insertBundle } from './upsert.ts'
 
 /**
  * Bundle upload through presigned URLs, with the checks and side effects of
@@ -46,12 +47,25 @@ import { upsertBundle } from './upsert.ts'
  *   POST /bundle/upload/prepare  -> checks, creates the r2-direct version, returns PUT URL(s) + token
  *   POST /bundle/upload/complete -> verifies the uploaded zip, delta manifest, finalizes, links channels
  *   POST /bundle/upload/abort    -> removes an unfinished upload
+ *
+ * Clients PUT to an unguessable staging key, never to the bundle path: complete verifies the
+ * staged object (pinned by ETag), then copies it server-side to the bundle path, so a leaked
+ * or replayed signed URL can never touch the live bundle.
+ *
+ * Complete claims the version before doing any work by moving r2_path from the bundle path
+ * to NULL while storage_provider stays 'r2-direct' (readers keep treating the row as an
+ * unfinished upload; the r2_path guard trigger allows NULL). Finalize, release and cleanup
+ * are all conditional on that state, so concurrent complete/abort calls cannot delete or
+ * recreate a finalized bundle.
  */
 
 type ApikeyRow = Database['public']['Tables']['apikeys']['Row']
 type UploadContext = Context<MiddlewareKeyVariables>
 
-export const UPLOAD_URL_TTL_SECONDS = 60 * 60
+/** Same lifetime as the CLI's /private/upload_link URLs. */
+export const UPLOAD_URL_TTL_SECONDS = 20 * 60
+/** A complete claim older than this belongs to a dead request and may be taken over. */
+export const UPLOAD_CLAIM_STALE_MS = 15 * 60 * 1000
 /** Server-side delta bounds: Workers allow 10k subrequests (<= 2 per file) and 128 MB of memory. */
 export const MAX_SERVER_DELTA_FILES = 4000
 export const MAX_SERVER_DELTA_BYTES = 48 * 1024 * 1024
@@ -112,8 +126,20 @@ interface SessionChannel {
   name: string
   compatibility: CompatibilityResult
   incompatible_count: number
+  /** Channel bundle the compatibility check ran against at prepare (absent: new or empty channel). */
   version_old_id?: string
   version_old_name?: string
+  /** Channel disable_auto_update seen at prepare (absent: channel did not exist). */
+  disable_auto_update?: string
+}
+
+/** Options complete needs to re-run the compatibility check when a channel moved. */
+interface CompatibilityOptions {
+  version: string
+  native_packages?: Parameters<typeof compareNativePackages>[0]
+  ignore_metadata_check?: boolean
+  auto_min_update_version?: boolean
+  min_update_version?: string
 }
 
 export interface UploadSessionClaims {
@@ -124,7 +150,11 @@ export interface UploadSessionClaims {
   owner_org: string
   version_id: number
   version: string
+  /** Final object key, written only by complete (server-side copy). */
   bundle_path: string
+  /** Unguessable staging key the client PUTs the zip to. */
+  upload_path: string
+  /** Unguessable staging key for the CLI delta pack. */
   delta_pack_path?: string
   encrypted: boolean
   checksum?: string
@@ -138,6 +168,12 @@ export interface UploadSessionClaims {
   self_assign: boolean
   delete_linked_bundle: boolean
   accept_incompatible: boolean
+  compat: {
+    ignore_metadata_check: boolean
+    auto_min_update_version: boolean
+    min_update_version?: string
+    fail_on_incompatible: boolean
+  }
 }
 
 interface ChannelContext {
@@ -155,13 +191,7 @@ interface UploadTargetChannel {
   rollout_percentage_bps: number | null
 }
 
-interface DeltaFile {
-  file_name: string
-  file_hash: string
-  compression: 'none' | 'brotli'
-  payload: Uint8Array
-  sha256: string
-}
+type DeltaFile = DeltaPackFile
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -173,9 +203,39 @@ function errorCode(error: unknown): string | undefined {
   return undefined
 }
 
-/** True for deterministic rejections that justify deleting the unfinished upload. */
-function isUploadRejection(error: unknown): boolean {
-  return error instanceof HTTPException && error.status >= 400 && error.status < 500 && errorCode(error) !== 'upload_missing'
+/**
+ * Rejections of the uploaded content (or of the upload against the channels) that would fail
+ * the same way on every retry: complete deletes the unfinished upload for these. Anything else
+ * (missing upload, storage/DB hiccups, inventory conflicts, permission or channel lookups)
+ * keeps the upload so complete can be retried or the session aborted.
+ */
+const DETERMINISTIC_REJECTIONS = new Set([
+  'bundle_too_large',
+  'checksum_mismatch',
+  'invalid_zip',
+  'zip_entry_encrypted',
+  'zip_method_unsupported',
+  'zip_entry_too_large',
+  'zip_directory_too_large',
+  'index_html_missing',
+  'notify_app_ready_missing',
+  'delta_file_name_invalid',
+  'delta_manifest_empty',
+  'delta_too_large_for_server',
+  'delta_pack_invalid',
+  'error_manifest_too_large',
+  'error_manifest_upload_request_invalid',
+  'error_manifest_entry_invalid',
+  'error_delta_encryption_invalid',
+  'same_checksum',
+  'incompatible_bundle',
+  'min_update_version_required',
+  'invalid_min_update_version',
+  'invalid_remote_min_update_version',
+])
+
+export function isUploadRejection(error: unknown): boolean {
+  return error instanceof HTTPException && error.status >= 400 && error.status < 500 && DETERMINISTIC_REJECTIONS.has(errorCode(error) ?? '')
 }
 
 function parseUploadChannels(channel: string | string[] | undefined): string[] {
@@ -360,8 +420,8 @@ function versionPath(ownerOrg: string, appId: string, version: string) {
   return `orgs/${ownerOrg}/apps/${appId}/${version}.zip`
 }
 
-function deltaPackPath(ownerOrg: string, appId: string, versionId: number) {
-  return `orgs/${ownerOrg}/apps/${appId}/uploads/${versionId}/delta-pack.zip`
+function stagingPath(ownerOrg: string, appId: string, versionId: number, kind: 'bundle' | 'delta-pack') {
+  return `orgs/${ownerOrg}/apps/${appId}/uploads/${versionId}/${randomUUID()}-${kind}.zip`
 }
 
 async function presignedPut(c: UploadContext, path: string) {
@@ -425,10 +485,11 @@ interface CompatibilityOutcome {
   minUpdateVersion?: string
   versionOldId?: string
   versionOldName?: string
+  disableAutoUpdate?: string
 }
 
 /** Mirrors verifyCompatibility for one channel. */
-function verifyChannelCompatibility(body: PrepareUploadBody, channel: string, context: ChannelContext | null, warnings: string[]): CompatibilityOutcome {
+function verifyChannelCompatibility(body: CompatibilityOptions, channel: string, context: ChannelContext | null, warnings: string[]): CompatibilityOutcome {
   const ignore = !!body.ignore_metadata_check
   let minUpdateVersion = body.min_update_version
   let result: CompatibilityResult = 'skipped'
@@ -472,6 +533,7 @@ function verifyChannelCompatibility(body: PrepareUploadBody, channel: string, co
     minUpdateVersion,
     versionOldId: context?.version?.id != null ? String(context.version.id) : undefined,
     versionOldName: context?.version?.name,
+    disableAutoUpdate: context?.disable_auto_update,
   }
 }
 
@@ -587,7 +649,8 @@ export async function prepareBundleUpload(c: UploadContext, rawBody: unknown, ap
     throw simpleError('error_already_exist', 'A bundle file already exists for this version', { version: body.version })
 
   const minUpdateVersion = pickHighestMinUpdateVersion(outcomes.map(outcome => outcome.minUpdateVersion))
-  const upserted = await (await upsertBundle(c, {
+  // Insert-only: a concurrent prepare of the same version gets 409 instead of overwriting it.
+  const upserted = await insertBundle(c, {
     app_id: body.app_id,
     name: body.version,
     session_key: body.session_key ?? undefined,
@@ -600,7 +663,7 @@ export async function prepareBundleUpload(c: UploadContext, rawBody: unknown, ap
     key_id: body.key_id || undefined,
     cli_version: body.cli_version ?? undefined,
     r2_path: bundlePath,
-  }, apikey)).json() as { id: number }
+  }, apikey)
 
   if (encrypted)
     cliStyleEvent(c, orgId, body.app_id, 'app', 'App encryption v2')
@@ -614,7 +677,8 @@ export async function prepareBundleUpload(c: UploadContext, rawBody: unknown, ap
     version_id: upserted.id,
     version: body.version,
     bundle_path: bundlePath,
-    ...(delta === 'pack' ? { delta_pack_path: deltaPackPath(orgId, body.app_id, upserted.id) } : {}),
+    upload_path: stagingPath(orgId, body.app_id, upserted.id, 'bundle'),
+    ...(delta === 'pack' ? { delta_pack_path: stagingPath(orgId, body.app_id, upserted.id, 'delta-pack') } : {}),
     encrypted,
     ...(body.checksum ? { checksum: body.checksum } : {}),
     checksum_algorithm: encrypted ? 'sha256' : checksumAlgorithmForUpdater(body.updater_version!, body.updater_package),
@@ -628,17 +692,24 @@ export async function prepareBundleUpload(c: UploadContext, rawBody: unknown, ap
       incompatible_count: outcome.incompatibleCount,
       ...(outcome.versionOldId ? { version_old_id: outcome.versionOldId } : {}),
       ...(outcome.versionOldName ? { version_old_name: outcome.versionOldName } : {}),
+      ...(outcome.disableAutoUpdate ? { disable_auto_update: outcome.disableAutoUpdate } : {}),
     })),
     ...(rollout ? { rollout } : {}),
     self_assign: !!body.self_assign,
     delete_linked_bundle: !!body.delete_linked_bundle_on_upload,
     accept_incompatible: !!body.accept_incompatible,
+    compat: {
+      ignore_metadata_check: !!body.ignore_metadata_check,
+      auto_min_update_version: !!body.auto_min_update_version,
+      ...(body.min_update_version ? { min_update_version: body.min_update_version } : {}),
+      fail_on_incompatible: !!body.fail_on_incompatible,
+    },
   }
   if (encrypted && claims.index_check === false && body.code_check !== false)
     warnings.push('Encrypted bundles cannot be inspected server-side: run the notifyAppReady/index.html check locally before zipping.')
 
   const { token, expiresAt } = await signBundleUploadToken(getBundleUploadSessionSecret(c), claims)
-  const bundleUpload = await presignedPut(c, bundlePath)
+  const bundleUpload = await presignedPut(c, claims.upload_path)
   const deltaPackUpload = claims.delta_pack_path ? await presignedPut(c, claims.delta_pack_path) : undefined
 
   for (const warning of preflight.warnings) {
@@ -703,7 +774,7 @@ async function readClaims(c: UploadContext, rawBody: unknown, apikey: ApikeyRow,
 async function loadSessionVersion(c: UploadContext, claims: UploadSessionClaims) {
   const { data: version, error } = await supabaseAdmin(c)
     .from('app_versions')
-    .select('id, name, app_id, owner_org, storage_provider, deleted, r2_path, session_key, checksum')
+    .select('id, name, app_id, owner_org, storage_provider, deleted, r2_path, session_key, checksum, native_packages, min_update_version, updated_at')
     .eq('id', claims.version_id)
     .maybeSingle()
   if (error)
@@ -713,12 +784,87 @@ async function loadSessionVersion(c: UploadContext, claims: UploadSessionClaims)
   return version
 }
 
-async function cleanupFailedUpload(c: UploadContext, claims: UploadSessionClaims) {
-  for (const path of [claims.bundle_path, claims.delta_pack_path]) {
+type SessionVersion = Awaited<ReturnType<typeof loadSessionVersion>>
+
+/**
+ * open: uploadable (r2_path = bundle path). claimed: a complete call is finalizing it
+ * (r2_path NULL). stale: claimed by a request that died (claim older than UPLOAD_CLAIM_STALE_MS).
+ */
+function sessionState(version: SessionVersion, claims: UploadSessionClaims, abort = false): 'open' | 'claimed' | 'stale' {
+  if (version.storage_provider === 'r2') {
+    throw quickError(409, 'upload_already_completed', abort
+      ? 'This upload session was already completed; delete the bundle instead'
+      : 'This upload session was already completed', { version: claims.version })
+  }
+  if (version.deleted || version.storage_provider !== 'r2-direct')
+    throw quickError(409, 'upload_session_invalid', 'The bundle version is no longer uploadable', { storage_provider: version.storage_provider })
+  if (version.r2_path === claims.bundle_path)
+    return 'open'
+  if (version.r2_path != null)
+    throw quickError(409, 'upload_session_invalid', 'The bundle version is no longer uploadable', { storage_provider: version.storage_provider })
+  const claimedAt = Date.parse(version.updated_at ?? '')
+  if (Number.isFinite(claimedAt) && Date.now() - claimedAt < UPLOAD_CLAIM_STALE_MS) {
+    throw quickError(409, 'upload_in_progress', abort
+      ? 'A complete call is finalizing this upload, it cannot be aborted now. Check the bundle once it returns.'
+      : 'Another complete call is finalizing this upload. Wait for it to return, then check the bundle.', { version: claims.version })
+  }
+  return 'stale'
+}
+
+/** Atomically take the upload for this complete call; losers get 409 upload_in_progress. */
+async function claimSession(c: UploadContext, claims: UploadSessionClaims, version: SessionVersion) {
+  const state = sessionState(version, claims)
+  let query = supabaseAdmin(c)
+    .from('app_versions')
+    .update({ r2_path: null })
+    .eq('id', claims.version_id)
+    .eq('storage_provider', 'r2-direct')
+    .eq('deleted', false)
+  query = state === 'open'
+    ? query.eq('r2_path', claims.bundle_path)
+    : query.is('r2_path', null).eq('updated_at', version.updated_at!)
+  const { data, error } = await query.select('id').maybeSingle()
+  if (error)
+    throw quickError(503, 'upstream_unavailable', 'Cannot claim the upload session, retry complete', { error })
+  if (!data)
+    throw quickError(409, 'upload_in_progress', 'Another call changed this upload session. Wait for it to return, then check the bundle.', { version: claims.version })
+}
+
+/** Give the claim back after a retryable failure so complete (or abort) can run again. */
+async function releaseClaim(c: UploadContext, claims: UploadSessionClaims) {
+  const { error } = await supabaseAdmin(c)
+    .from('app_versions')
+    .update({ r2_path: claims.bundle_path })
+    .eq('id', claims.version_id)
+    .eq('storage_provider', 'r2-direct')
+    .eq('deleted', false)
+    .is('r2_path', null)
+  if (error)
+    cloudlogErr({ requestId: c.get('requestId'), message: 'bundle upload claim release failed', version_id: claims.version_id, error })
+}
+
+async function removeSessionObjects(c: UploadContext, claims: UploadSessionClaims, includeBundle: boolean) {
+  const paths = [claims.upload_path, claims.delta_pack_path, includeBundle ? claims.bundle_path : undefined]
+  for (const path of paths) {
     if (path)
       await bundleStorage.removeObject(c, path).catch(error => cloudlog({ requestId: c.get('requestId'), message: 'bundle upload cleanup delete failed', path, error }))
   }
-  await deleteFailedVersionRow(c, { id: claims.version_id, r2_path: claims.bundle_path, owner_org: claims.owner_org })
+}
+
+/**
+ * Delete the unfinished version, then its objects. The row delete is conditional on the
+ * session state the caller holds; objects are only removed once that delete matched, so a
+ * finalized bundle (storage_provider 'r2') is never touched.
+ */
+async function discardSession(c: UploadContext, claims: UploadSessionClaims, state: 'open' | 'claimed' | 'stale', claimedAt?: string | null) {
+  const deleted = await deleteFailedVersionRow(
+    c,
+    { id: claims.version_id, r2_path: state === 'open' ? claims.bundle_path : null, owner_org: claims.owner_org },
+    { skipObjectCheck: true, ...(state === 'stale' && claimedAt ? { expectedUpdatedAt: claimedAt } : {}) },
+  )
+  if (deleted)
+    await removeSessionObjects(c, claims, true)
+  return deleted
 }
 
 interface InspectionResult {
@@ -727,16 +873,18 @@ interface InspectionResult {
 }
 
 /** One streamed pass over the uploaded zip: archive checksum, CLI code checks and, for server delta, file extraction. */
-async function inspectBundle(c: UploadContext, claims: UploadSessionClaims, size: number): Promise<InspectionResult> {
+async function inspectBundle(c: UploadContext, claims: UploadSessionClaims, staged: StoredObjectInfo): Promise<InspectionResult> {
+  // Every read is pinned to the ETag seen at stat, so the bytes checked are the bytes copied.
+  const { size, etag } = staged
   const tailSize = Math.min(size, ZIP_TAIL_READ_SIZE)
   let entries: ZipEntry[]
   try {
-    const tail = await bundleStorage.getObjectRange(c, claims.bundle_path, size - tailSize, tailSize)
+    const tail = await bundleStorage.getObjectRange(c, claims.upload_path, size - tailSize, tailSize, etag)
     const location = findCentralDirectory(tail, size)
     const tailStart = size - tailSize
     const directory = location.centralDirectoryOffset >= tailStart
       ? tail.subarray(location.centralDirectoryOffset - tailStart, location.centralDirectoryOffset - tailStart + location.centralDirectorySize)
-      : await bundleStorage.getObjectRange(c, claims.bundle_path, location.centralDirectoryOffset, location.centralDirectorySize)
+      : await bundleStorage.getObjectRange(c, claims.upload_path, location.centralDirectoryOffset, location.centralDirectorySize, etag)
     entries = parseCentralDirectory(directory, location.entryCount)
   }
   catch (error) {
@@ -769,10 +917,11 @@ async function inspectBundle(c: UploadContext, claims: UploadSessionClaims, size
   let notifyFound = !claims.notify_check
   const deltaFiles: DeltaFile[] = []
 
+  let deltaBytes = 0
   const wants = (entry: ZipEntry) => (claims.notify_check && isJsEntry(entry) && entry.uncompressedSize <= MAX_NOTIFY_SCAN_FILE_BYTES) || !!deltaEntries?.has(entry)
-  const stream = (await bundleStorage.readObjectStream(c, claims.bundle_path))?.body
+  const stream = (await bundleStorage.readObjectStream(c, claims.upload_path, etag))?.body
   if (!stream)
-    throw quickError(503, 'storage_unavailable', 'Cannot read the uploaded bundle, retry complete')
+    throw quickError(409, 'upload_missing', 'The uploaded bundle disappeared during complete. PUT it to bundle_upload.url again, then retry complete.', { object: 'bundle' })
   try {
     await walkZipStream(stream, entries, wants, async (entry, compressed) => {
       const isDelta = !!deltaEntries?.has(entry)
@@ -782,6 +931,10 @@ async function inspectBundle(c: UploadContext, claims: UploadSessionClaims, size
       if (!notifyFound && isJsEntry(entry) && containsAscii(content, 'notifyAppReady'))
         notifyFound = true
       if (isDelta) {
+        // Running budget on real inflated bytes, on top of the declared-size check above.
+        deltaBytes += content.byteLength
+        if (deltaBytes > MAX_SERVER_DELTA_BYTES)
+          throw new BundleZipError('delta_too_large_for_server', `This bundle exceeds the server-side delta limit of ${MAX_SERVER_DELTA_BYTES / 1024 / 1024} MB. Upload without delta, or send a CLI delta pack. ${CLI_HINT}`)
         const { payload, compression } = compressDeltaFile(content)
         deltaFiles.push({
           file_name: compression === 'brotli' ? `${entry.name}.br` : entry.name,
@@ -794,7 +947,7 @@ async function inspectBundle(c: UploadContext, claims: UploadSessionClaims, size
     }, (bytes) => {
       sha256?.update(bytes)
       crc32?.update(bytes)
-    })
+    }, Math.max(MAX_NOTIFY_SCAN_FILE_BYTES, MAX_SERVER_DELTA_BYTES))
   }
   catch (error) {
     if (error instanceof BundleZipError)
@@ -815,45 +968,19 @@ async function readDeltaPack(c: UploadContext, claims: UploadSessionClaims, sess
     throw quickError(409, 'upload_missing', 'The delta pack was not uploaded yet. PUT it to delta_pack_upload.url, then retry complete.', { object: 'delta_pack' })
   if (stat.size > MAX_DELTA_PACK_BYTES)
     throw simpleError('delta_too_large_for_server', `The delta pack is larger than ${MAX_DELTA_PACK_BYTES / 1024 / 1024} MB. Upload without delta. ${CLI_HINT}`)
-  const response = await bundleStorage.readObjectStream(c, path)
+  const response = await bundleStorage.readObjectStream(c, path, stat.etag)
   if (!response)
-    throw quickError(503, 'storage_unavailable', 'Cannot read the delta pack, retry complete')
+    throw quickError(409, 'upload_missing', 'The delta pack disappeared during complete. PUT it to delta_pack_upload.url again, then retry complete.', { object: 'delta_pack' })
   const bytes = new Uint8Array(await response.arrayBuffer())
+  if (bytes.byteLength > MAX_DELTA_PACK_BYTES)
+    throw simpleError('delta_too_large_for_server', `The delta pack is larger than ${MAX_DELTA_PACK_BYTES / 1024 / 1024} MB. Upload without delta. ${CLI_HINT}`)
   try {
-    const entries = readZipDirectory(bytes)
-    const byName = new Map(entries.map(entry => [entry.name, entry]))
-    const manifestEntry = byName.get(DELTA_PACK_MANIFEST_NAME)
-    if (!manifestEntry)
-      throw new BundleZipError('delta_pack_invalid', `The delta pack has no ${DELTA_PACK_MANIFEST_NAME}`)
-    let manifestJson: unknown
-    try {
-      manifestJson = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await inflateEntry(manifestEntry, entryDataFromBuffer(bytes, manifestEntry))))
-    }
-    catch (error) {
-      if (error instanceof BundleZipError)
-        throw error
-      throw new BundleZipError('delta_pack_invalid', `${DELTA_PACK_MANIFEST_NAME} is not valid JSON`)
-    }
-    const manifest = parseDeltaPackManifest(manifestJson)
-    if (manifest.delta_encryption.enabled && !sessionKey)
-      throw new BundleZipError('delta_pack_invalid', 'The delta pack is encrypted but the bundle has no session_key')
-    if (manifest.entries.length > MAX_MANIFEST_ENTRIES || manifest.entries.length > MAX_SERVER_DELTA_FILES)
-      throw new BundleZipError('delta_too_large_for_server', `The delta pack has ${manifest.entries.length} files, above the server limit of ${Math.min(MAX_MANIFEST_ENTRIES, MAX_SERVER_DELTA_FILES)}. ${CLI_HINT}`)
-    const withSpaces = manifest.entries.filter(entry => entry.file_name.includes(' '))
-    if (withSpaces.length)
-      throw new BundleZipError('delta_file_name_invalid', `Files with spaces in their names (${withSpaces.slice(0, 20).map(entry => entry.file_name).join(', ')}). Please rename the files.`)
-    const files: DeltaFile[] = []
-    for (const [index, entry] of manifest.entries.entries()) {
-      const blob = byName.get(entry.pack_path)
-      if (!blob)
-        throw new BundleZipError('delta_pack_invalid', `Delta pack entry ${index} points to a missing blob ${entry.pack_path}`, { index })
-      const payload = await inflateEntry(blob, entryDataFromBuffer(bytes, blob))
-      const digest = await sha256Hex(payload)
-      if (payload.byteLength !== entry.uploaded_bytes_size || digest !== entry.uploaded_bytes_sha256)
-        throw new BundleZipError('delta_pack_invalid', `Delta pack blob ${entry.pack_path} does not match its manifest entry`, { index })
-      files.push({ file_name: entry.file_name, file_hash: entry.file_hash, compression: entry.compression, payload, sha256: digest })
-    }
-    return { manifest, files }
+    return await extractDeltaPack(bytes, {
+      hasSessionKey: !!sessionKey,
+      maxEntries: Math.min(MAX_MANIFEST_ENTRIES, MAX_SERVER_DELTA_FILES),
+      maxPayloadBytes: MAX_SERVER_DELTA_BYTES,
+      hint: CLI_HINT,
+    })
   }
   catch (error) {
     if (error instanceof BundleZipError)
@@ -1026,80 +1153,209 @@ async function linkChannels(c: UploadContext, claims: UploadSessionClaims, apike
   return updated
 }
 
+/**
+ * Mirrors the prepare-time compatibility checks for channels whose bundle or
+ * disable_auto_update changed since prepare (the CLI checks right before it links).
+ * Unchanged channels keep their prepare outcome. Returns the updated session channels and
+ * the min_update_version the finalized row must carry.
+ */
+async function recheckChangedChannels(
+  c: UploadContext,
+  claims: UploadSessionClaims,
+  apikey: ApikeyRow,
+  version: SessionVersion,
+  channels: string[],
+  contexts: Map<string, ChannelContext | null>,
+  warnings: string[],
+): Promise<{ sessionChannels: SessionChannel[], minUpdateVersion: string | null }> {
+  const sessionChannels = claims.channels.map(channel => ({ ...channel }))
+  const options: CompatibilityOptions = {
+    version: claims.version,
+    native_packages: (Array.isArray(version.native_packages) ? version.native_packages : []) as unknown as CompatibilityOptions['native_packages'],
+    ignore_metadata_check: claims.compat.ignore_metadata_check,
+    auto_min_update_version: claims.compat.auto_min_update_version,
+    min_update_version: claims.compat.min_update_version,
+  }
+  const changed: CompatibilityOutcome[] = []
+  for (const channel of channels) {
+    const session = sessionChannels.find(entry => entry.name === channel)
+    if (!session)
+      continue
+    let context: ChannelContext | null
+    try {
+      context = contexts.has(channel) ? contexts.get(channel)! : await loadChannelContext(c, apikey, claims.app_id, channel)
+      contexts.set(channel, context)
+    }
+    catch (error) {
+      cloudlog({ requestId: c.get('requestId'), message: 'bundle upload channel recheck failed', channel, error })
+      throw quickError(503, 'cannot_load_channel', `Cannot load channel ${channel} for compatibility checks, retry complete`, { channel })
+    }
+    const currentId = context?.version?.id != null ? String(context.version.id) : undefined
+    if (currentId === session.version_old_id && context?.disable_auto_update === session.disable_auto_update)
+      continue
+    const outcome = verifyChannelCompatibility(options, channel, context, warnings)
+    changed.push(outcome)
+    session.compatibility = outcome.result
+    session.incompatible_count = outcome.incompatibleCount
+    session.version_old_id = outcome.versionOldId
+    session.version_old_name = outcome.versionOldName
+    session.disable_auto_update = outcome.disableAutoUpdate
+    warnings.push(`Channel ${channel} changed since prepare; compatibility was checked again against ${outcome.versionOldName ?? 'an empty channel'}.`)
+    trackStyleEvent(c, claims.owner_org, claims.app_id, 'Bundle Upload Compatibility Checked', {
+      result: outcome.result,
+      incompatible_count: outcome.incompatibleCount,
+      channel,
+      channel_name: channel,
+      ...(outcome.reasons.length ? { reasons: outcome.reasons.join(',') } : {}),
+      ...(outcome.result === 'skipped' ? { skip_reason: claims.compat.ignore_metadata_check ? 'ignore_metadata_check' : 'no_remote_metadata' } : {}),
+    })
+  }
+
+  const incompatible = changed.filter(outcome => outcome.result === 'incompatible')
+  if (incompatible.length && claims.compat.fail_on_incompatible && !claims.accept_incompatible) {
+    const label = incompatible.map(outcome => outcome.channel).join(', ')
+    const incompatibleCount = incompatible.reduce((max, outcome) => Math.max(max, outcome.incompatibleCount), 0)
+    trackStyleEvent(c, claims.owner_org, claims.app_id, 'Bundle Upload Blocked', { reason: 'incompatible', channel: label, channel_name: label, channel_names: label, channel_count: incompatible.length, incompatible_count: incompatibleCount, interactive: false })
+    throw simpleError('incompatible_bundle', `Upload aborted: bundle is incompatible with channel${incompatible.length > 1 ? 's' : ''} "${label}" (${incompatibleCount} native package(s) changed). A native build / app-store update is required, or remove fail_on_incompatible to upload anyway.`, { channels: incompatible.map(outcome => outcome.channel) })
+  }
+  if (incompatible.length && claims.accept_incompatible)
+    warnings.push('Proceeding because accept_incompatible was set. The incompatible-bundle crash warning will not be emailed.')
+
+  const minUpdateVersion = pickHighestMinUpdateVersion([version.min_update_version ?? undefined, ...changed.map(outcome => outcome.minUpdateVersion)]) ?? null
+  return { sessionChannels, minUpdateVersion }
+}
+
+/** Copy the verified staged zip to the bundle path and check the copy is that object. */
+async function promoteStagedBundle(c: UploadContext, claims: UploadSessionClaims, staged: StoredObjectInfo) {
+  await bundleStorage.copyObject(c, claims.upload_path, claims.bundle_path, staged.etag)
+  const live = await bundleStorage.statObject(c, claims.bundle_path)
+  if (!live || live.size !== staged.size || (staged.etag && live.etag && live.etag !== staged.etag)) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'bundle upload copy verification failed', version_id: claims.version_id, staged, live })
+    throw quickError(503, 'storage_unavailable', 'Cannot verify the bundle copy, retry complete')
+  }
+}
+
+interface FinishedUpload {
+  checksum: string
+  channels: string[]
+  skippedSameChecksum: string[]
+  deltaStats: Awaited<ReturnType<typeof writeDeltaManifest>> | null
+  targets: Map<string, UploadTargetChannel | null>
+  sessionChannels: SessionChannel[]
+  size: number
+}
+
+/** Everything complete does while it holds the claim, ending with the conditional finalize. */
+async function finishClaimedUpload(c: UploadContext, claims: UploadSessionClaims, apikey: ApikeyRow, version: SessionVersion, warnings: string[]): Promise<FinishedUpload> {
+  const staged = await bundleStorage.statObject(c, claims.upload_path).catch((error: unknown) => {
+    throw quickError(503, 'storage_unavailable', 'Cannot check the uploaded bundle, retry complete', { reason: (error as Error)?.message })
+  })
+  if (!staged || staged.size === 0)
+    throw quickError(409, 'upload_missing', 'The bundle zip was not uploaded yet. PUT it to bundle_upload.url, then retry complete.', { object: 'bundle' })
+
+  if (staged.size > MAX_UPLOAD_LENGTH_BYTES)
+    throw simpleError('bundle_too_large', `The bundle size is ${Math.floor(staged.size / 1024 / 1024)} Mb, this is greater than the maximum upload length ${Math.floor(MAX_UPLOAD_LENGTH_BYTES / 1024 / 1024)} Mb`, { size_bytes: staged.size })
+  if (staged.size > ALERT_UPLOAD_SIZE_BYTES) {
+    const sizeMb = Math.floor(staged.size / 1024 / 1024)
+    warnings.push(`The bundle size is ${sizeMb} Mb, this may take a while to download for users. Learn how to optimize your assets https://capgo.app/blog/optimise-your-images-for-updates/`)
+    cliStyleEvent(c, claims.owner_org, claims.app_id, 'app-error', 'App Too Large', { size_mb: sizeMb, recommended_size_mb: Math.floor(ALERT_UPLOAD_SIZE_BYTES / 1024 / 1024) })
+  }
+
+  let checksum: string
+  let deltaFiles: DeltaFile[] | null = null
+  if (claims.encrypted) {
+    checksum = claims.checksum!
+  }
+  else {
+    const inspection = await inspectBundle(c, claims, staged)
+    if (claims.checksum && claims.checksum.toLowerCase() !== inspection.checksum)
+      throw simpleError('checksum_mismatch', 'The uploaded zip does not match the checksum given to prepare', { expected: claims.checksum, actual: inspection.checksum })
+    checksum = inspection.checksum
+    deltaFiles = inspection.deltaFiles
+  }
+  // A checksum set at prepare is identity-locked on the row; keep that exact value.
+  if (version.checksum)
+    checksum = version.checksum
+
+  let channels = claims.channels.map(channel => channel.name)
+  let skippedSameChecksum: string[] = []
+  const contexts = new Map<string, ChannelContext | null>()
+  if (claims.checksum_check) {
+    const filtered = await channelsAfterChecksumCheck(c, apikey, claims.app_id, channels, checksum, contexts)
+    channels = filtered.toAssign
+    skippedSameChecksum = filtered.alreadyCurrent
+    if (skippedSameChecksum.length)
+      warnings.push(`Skipping channel${skippedSameChecksum.length > 1 ? 's' : ''} ${skippedSameChecksum.join(', ')} because they already have this bundle content.`)
+  }
+
+  const { sessionChannels, minUpdateVersion } = await recheckChangedChannels(c, claims, apikey, version, channels, contexts, warnings)
+  const targets = await preflightChannelAssignments(c, claims.app_id, channels, claims.self_assign, claims.rollout)
+
+  let deltaStats: FinishedUpload['deltaStats'] = null
+  if (claims.delta === 'server' && deltaFiles) {
+    deltaStats = await writeDeltaManifest(c, claims, version.session_key, deltaFiles, 'sha256_hex', false)
+  }
+  else if (claims.delta === 'pack') {
+    const pack = await readDeltaPack(c, claims, version.session_key)
+    deltaStats = await writeDeltaManifest(c, claims, version.session_key, pack.files, pack.manifest.file_hash_format, pack.manifest.delta_encryption.enabled)
+  }
+
+  await promoteStagedBundle(c, claims, staged)
+
+  // Finalize by id, only while this call still holds the claim; legacy manifest jsonb stays null.
+  const { data: finalized, error: finalizeError } = await supabaseAdmin(c)
+    .from('app_versions')
+    .update({
+      storage_provider: 'r2',
+      r2_path: claims.bundle_path,
+      ...(version.checksum ? {} : { checksum }),
+      ...(minUpdateVersion !== (version.min_update_version ?? null) ? { min_update_version: minUpdateVersion } : {}),
+    })
+    .eq('id', claims.version_id)
+    .eq('storage_provider', 'r2-direct')
+    .eq('deleted', false)
+    .is('r2_path', null)
+    .select('id')
+    .maybeSingle()
+  if (finalizeError)
+    throw quickError(503, 'upstream_unavailable', 'Cannot finalize the bundle version, retry complete', { error: finalizeError })
+  if (!finalized) {
+    // The row was removed (or re-claimed) under us: the copied zip has no owner any more.
+    const { data: still } = await supabaseAdmin(c).from('app_versions').select('id').eq('id', claims.version_id).maybeSingle()
+    if (!still)
+      await removeSessionObjects(c, claims, true)
+    throw quickError(409, 'upload_session_invalid', 'The bundle version changed while complete was running', { version: claims.version })
+  }
+  await removeSessionObjects(c, claims, false)
+  return { checksum, channels, skippedSameChecksum, deltaStats, targets, sessionChannels, size: staged.size }
+}
+
 export async function completeBundleUpload(c: UploadContext, rawBody: unknown, apikey: ApikeyRow): Promise<Response> {
   const claims = await readClaims(c, rawBody, apikey)
   const version = await loadSessionVersion(c, claims)
-  if (version.storage_provider === 'r2')
-    throw quickError(409, 'upload_already_completed', 'This upload session was already completed', { version: claims.version })
-  if (version.deleted || version.storage_provider !== 'r2-direct')
-    throw quickError(409, 'upload_session_invalid', 'The bundle version is no longer uploadable', { storage_provider: version.storage_provider })
-
-  const stat = await bundleStorage.statObject(c, claims.bundle_path).catch((error: unknown) => {
-    throw quickError(503, 'storage_unavailable', 'Cannot check the uploaded bundle, retry complete', { reason: (error as Error)?.message })
-  })
-  if (!stat || stat.size === 0)
-    throw quickError(409, 'upload_missing', 'The bundle zip was not uploaded yet. PUT it to bundle_upload.url, then retry complete.', { object: 'bundle' })
+  await claimSession(c, claims, version)
 
   const warnings: string[] = []
-  let checksum: string
-  let channels = claims.channels.map(channel => channel.name)
-  let skippedSameChecksum: string[] = []
-  let deltaStats: Awaited<ReturnType<typeof writeDeltaManifest>> | null = null
-  let targets: Map<string, UploadTargetChannel | null>
+  let finished: FinishedUpload
   try {
-    if (stat.size > MAX_UPLOAD_LENGTH_BYTES)
-      throw simpleError('bundle_too_large', `The bundle size is ${Math.floor(stat.size / 1024 / 1024)} Mb, this is greater than the maximum upload length ${Math.floor(MAX_UPLOAD_LENGTH_BYTES / 1024 / 1024)} Mb`, { size_bytes: stat.size })
-    if (stat.size > ALERT_UPLOAD_SIZE_BYTES) {
-      const sizeMb = Math.floor(stat.size / 1024 / 1024)
-      warnings.push(`The bundle size is ${sizeMb} Mb, this may take a while to download for users. Learn how to optimize your assets https://capgo.app/blog/optimise-your-images-for-updates/`)
-      cliStyleEvent(c, claims.owner_org, claims.app_id, 'app-error', 'App Too Large', { size_mb: sizeMb, recommended_size_mb: Math.floor(ALERT_UPLOAD_SIZE_BYTES / 1024 / 1024) })
-    }
-
-    let deltaFiles: DeltaFile[] | null = null
-    if (claims.encrypted) {
-      checksum = claims.checksum!
-    }
-    else {
-      const inspection = await inspectBundle(c, claims, stat.size)
-      if (claims.checksum && claims.checksum.toLowerCase() !== inspection.checksum)
-        throw simpleError('checksum_mismatch', 'The uploaded zip does not match the checksum given to prepare', { expected: claims.checksum, actual: inspection.checksum })
-      checksum = inspection.checksum
-      deltaFiles = inspection.deltaFiles
-    }
-
-    if (claims.checksum_check) {
-      const filtered = await channelsAfterChecksumCheck(c, apikey, claims.app_id, channels, checksum)
-      channels = filtered.toAssign
-      skippedSameChecksum = filtered.alreadyCurrent
-      if (skippedSameChecksum.length)
-        warnings.push(`Skipping channel${skippedSameChecksum.length > 1 ? 's' : ''} ${skippedSameChecksum.join(', ')} because they already have this bundle content.`)
-    }
-
-    targets = await preflightChannelAssignments(c, claims.app_id, channels, claims.self_assign, claims.rollout)
-
-    if (claims.delta === 'server' && deltaFiles) {
-      deltaStats = await writeDeltaManifest(c, claims, version.session_key, deltaFiles, 'sha256_hex', false)
-    }
-    else if (claims.delta === 'pack') {
-      const pack = await readDeltaPack(c, claims, version.session_key)
-      deltaStats = await writeDeltaManifest(c, claims, version.session_key, pack.files, pack.manifest.file_hash_format, pack.manifest.delta_encryption.enabled)
-      await bundleStorage.removeObject(c, claims.delta_pack_path!).catch(() => undefined)
-    }
+    finished = await finishClaimedUpload(c, claims, apikey, version, warnings)
   }
-  catch (error) {
-    if (isUploadRejection(error)) {
-      try {
-        await cleanupFailedUpload(c, claims)
-      }
-      catch (cleanupError) {
-        cloudlogErr({ requestId: c.get('requestId'), message: 'bundle upload cleanup failed', version_id: claims.version_id, error: cleanupError })
-      }
+  catch (rawError) {
+    const error = rawError instanceof StorageObjectChangedError
+      ? quickError(409, 'upload_changed', 'The uploaded file changed while complete was running. Retry complete.')
+      : rawError
+    try {
+      if (isUploadRejection(error))
+        await discardSession(c, claims, 'claimed')
+      else
+        await releaseClaim(c, claims)
+    }
+    catch (cleanupError) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'bundle upload cleanup failed', version_id: claims.version_id, error: cleanupError })
     }
     throw error
   }
-
-  // Finalize through the same upsert the CLI uses; legacy manifest jsonb stays null.
-  await upsertBundle(c, { app_id: claims.app_id, name: claims.version, checksum, storage_provider: 'r2', manifest: null }, apikey)
+  const { checksum, channels, skippedSameChecksum, deltaStats, targets, sessionChannels } = finished
 
   const canDeleteBundle = claims.delete_linked_bundle && await checkPermission(c, 'bundle.delete', { appId: claims.app_id })
   if (claims.delete_linked_bundle && !canDeleteBundle)
@@ -1127,7 +1383,7 @@ export async function completeBundleUpload(c: UploadContext, rawBody: unknown, a
 
   cliStyleEvent(c, claims.owner_org, claims.app_id, 'app', 'App Uploaded', { bundle: claims.version })
   cliStyleEvent(c, claims.owner_org, claims.app_id, 'app', 'Bundle Uploaded', { bundle: claims.version }, true)
-  for (const channel of claims.channels) {
+  for (const channel of sessionChannels) {
     if (channel.compatibility !== 'incompatible')
       continue
     trackStyleEvent(c, claims.owner_org, claims.app_id, 'Bundle Incompatible', {
@@ -1150,7 +1406,7 @@ export async function completeBundleUpload(c: UploadContext, rawBody: unknown, a
     checksum,
     encrypted: claims.encrypted,
     storage_provider: 'r2',
-    size_bytes: stat.size,
+    size_bytes: finished.size,
     channels_updated: updatedChannels,
     channels_skipped_same_checksum: skippedSameChecksum,
     delta: deltaStats ? { mode: claims.delta, ...deltaStats } : null,
@@ -1166,10 +1422,8 @@ export async function completeBundleUpload(c: UploadContext, rawBody: unknown, a
 export async function abortBundleUpload(c: UploadContext, rawBody: unknown, apikey: ApikeyRow): Promise<Response> {
   const claims = await readClaims(c, rawBody, apikey, true)
   const version = await loadSessionVersion(c, claims)
-  if (version.storage_provider === 'r2')
-    throw quickError(409, 'upload_already_completed', 'This upload session was already completed; delete the bundle instead', { version: claims.version })
-  if (version.deleted || version.storage_provider !== 'r2-direct')
-    throw quickError(409, 'upload_session_invalid', 'The bundle version is no longer uploadable', { storage_provider: version.storage_provider })
-  await cleanupFailedUpload(c, claims)
+  const state = sessionState(version, claims, true)
+  if (!(await discardSession(c, claims, state, version.updated_at)))
+    throw quickError(409, 'upload_in_progress', 'The upload session changed while aborting (a complete call may have finished it). Check the bundle, then retry abort if it is still unfinished.', { version: claims.version })
   return c.json({ ...BRES, app_id: claims.app_id, version: claims.version, aborted: true })
 }

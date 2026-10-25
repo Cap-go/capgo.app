@@ -595,16 +595,48 @@ async function putObject(c: Context, fileId: string, data: Uint8Array, contentTy
   return { etag: response.headers.get('etag')?.replaceAll('"', '') || null }
 }
 
-async function getObjectRange(c: Context, fileId: string, offset: number, length: number): Promise<Uint8Array> {
+/** The object no longer has the ETag the caller pinned (it was overwritten). */
+export class StorageObjectChangedError extends Error {
+  constructor(readonly path: string) {
+    super(`Storage object ${path} changed`)
+  }
+}
+
+function normalizeEtag(value: string | null | undefined): string | null {
+  return value?.replace(/^W\//, '').replaceAll('"', '') || null
+}
+
+/** Pin a read to one object version: send If-Match and verify the ETag that was served. */
+function conditionalReadHeaders(ifMatch: string | null | undefined, headers: Record<string, string>) {
+  return ifMatch ? { ...headers, 'If-Match': `"${ifMatch}"` } : headers
+}
+
+export function assertServedEtag(path: string, response: Response, ifMatch: string | null | undefined) {
+  if (!ifMatch)
+    return
+  const served = normalizeEtag(response.headers.get('etag'))
+  if (response.status === 412 || (served && served !== ifMatch))
+    throw new StorageObjectChangedError(path)
+}
+
+async function getObjectRange(c: Context, fileId: string, offset: number, length: number, ifMatch?: string | null): Promise<Uint8Array> {
   const client = initS3(c)
   const url = await client.getPresignedUrl('GET', fileId, { expirySeconds: 60 })
   const response = await fetch(url, {
-    headers: { 'Range': `bytes=${offset}-${offset + length - 1}`, 'Accept-Encoding': 'identity' },
+    headers: conditionalReadHeaders(ifMatch, { 'Range': `bytes=${offset}-${offset + length - 1}`, 'Accept-Encoding': 'identity' }),
     signal: AbortSignal.timeout(30_000),
   })
   if (response.status !== 206 && response.status !== 200) {
     await response.body?.cancel()
+    assertServedEtag(fileId, response, ifMatch)
     throw new Error(`Storage range GET returned ${response.status}`)
+  }
+  try {
+    assertServedEtag(fileId, response, ifMatch)
+  }
+  catch (error) {
+    await response.body?.cancel()
+    throw error
   }
   const bytes = new Uint8Array(await response.arrayBuffer())
   // A server ignoring Range returns the whole object; slice the requested window.
@@ -612,18 +644,52 @@ async function getObjectRange(c: Context, fileId: string, offset: number, length
 }
 
 /** Full object stream for server-side processing; null when absent. */
-async function readObjectStream(c: Context, fileId: string): Promise<Response | null> {
+async function readObjectStream(c: Context, fileId: string, ifMatch?: string | null): Promise<Response | null> {
   const url = await initS3(c).getPresignedUrl('GET', fileId, { expirySeconds: 300 })
-  const response = await fetch(url, { headers: { 'Accept-Encoding': 'identity' } })
+  const response = await fetch(url, { headers: conditionalReadHeaders(ifMatch, { 'Accept-Encoding': 'identity' }) })
   if (response.status === 404) {
     await response.body?.cancel()
     return null
+  }
+  try {
+    assertServedEtag(fileId, response, ifMatch)
+  }
+  catch (error) {
+    await response.body?.cancel()
+    throw error
   }
   if (!response.ok) {
     await response.body?.cancel()
     throw new Error(`Storage GET returned ${response.status}`)
   }
   return response
+}
+
+/**
+ * Server-side copy inside the bucket. With `ifMatch`, the copy only happens while the
+ * source still has that ETag (x-amz-copy-source-if-match), so the destination is exactly
+ * the object version the caller verified.
+ */
+async function copyObject(c: Context, sourceKey: string, destinationKey: string, ifMatch?: string | null): Promise<void> {
+  const client = initS3(c)
+  const bucket = getEnv(c, 'S3_BUCKET')
+  const headers = new Headers()
+  headers.set('x-amz-copy-source', `${bucket}/${sourceKey.split('/').map(part => encodeURIComponent(part)).join('/')}`)
+  if (ifMatch)
+    headers.set('x-amz-copy-source-if-match', `"${ifMatch}"`)
+  let text: string
+  try {
+    const response = await client.makeRequest({ method: 'PUT', objectName: destinationKey, headers, returnBody: true })
+    text = await response.text()
+  }
+  catch (error) {
+    if ((error as { statusCode?: number })?.statusCode === 412)
+      throw new StorageObjectChangedError(sourceKey)
+    throw error
+  }
+  // S3 can answer 200 with an error document when the copy fails mid-way.
+  if (!text.includes('CopyObjectResult'))
+    throw new Error(`Storage copy failed: ${text.slice(0, 200)}`)
 }
 
 async function removeObject(c: Context, fileId: string): Promise<void> {
@@ -641,6 +707,7 @@ export const s3 = {
   putObject,
   getObjectRange,
   readObjectStream,
+  copyObject,
   removeObject,
   getSizeDiagnostics,
   moveObjectToTrash,
