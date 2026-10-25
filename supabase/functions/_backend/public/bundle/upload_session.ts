@@ -20,7 +20,7 @@ import { acceptTrackEvent } from '../../private/events.ts'
 import { manifestUploadPublicUrl } from '../../private/request_manifest_upload.ts'
 import { compareNativePackages, summarizeBundleCompatibility } from '../../utils/bundle_compatibility.ts'
 import { BundleUploadTokenError, getBundleUploadSessionSecret, signBundleUploadToken, verifyBundleUploadToken } from '../../utils/bundle_upload_token.ts'
-import { BundleZipError, checksumAlgorithmForUpdater, isExactUpdaterVersion, compressDeltaFile, containsAscii, Crc32, extractDeltaPack, findCentralDirectory, hasRootIndexHtml, inflateEntry, isJsEntry, parseCentralDirectory, selectDeltaEntries, sha256Hex, updaterSupportsDelta, walkZipStream, ZIP_TAIL_READ_SIZE } from '../../utils/bundle_zip.ts'
+import { BundleZipError, checksumAlgorithmForUpdater, isCordovaUpdaterPackage, isExactUpdaterVersion, compressDeltaFile, containsAscii, Crc32, extractDeltaPack, findCentralDirectory, hasRootIndexHtml, inflateEntry, isJsEntry, parseCentralDirectory, selectDeltaEntries, sha256Hex, updaterSupportsDelta, walkZipStream, ZIP_TAIL_READ_SIZE } from '../../utils/bundle_zip.ts'
 import { BRES, quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { ManifestInventoryConflict, registerManifestInventory, reserveManifestPaths, usesManifestInventory, withManifestInventory } from '../../utils/manifest_inventory.ts'
@@ -477,7 +477,7 @@ function validateOptionConflicts(body: PrepareUploadBody) {
     throw simpleError('invalid_options', 'You cannot force a CRC32 checksum on an encrypted bundle')
   if (!body.session_key && !body.updater_version)
     throw simpleError('missing_updater_version', 'updater_version (installed @capgo/capacitor-updater version) is required to pick the bundle checksum algorithm')
-  if (body.updater_version && !body.updater_package && !isExactUpdaterVersion(body.updater_version))
+  if (body.updater_version && !isCordovaUpdaterPackage(body.updater_package) && !isExactUpdaterVersion(body.updater_version))
     throw simpleError('invalid_updater_version', `updater_version must be the exact installed @capgo/capacitor-updater version (e.g. 7.40.0), not a range: got "${body.updater_version}". Use the updater_version printed by bundle zip --for-upload --json.`)
   if (!body.ignore_metadata_check && !body.native_packages)
     throw simpleError('missing_native_packages', 'native_packages is required for the native compatibility check (pass ignore_metadata_check to skip it)')

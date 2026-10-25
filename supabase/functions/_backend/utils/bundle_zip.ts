@@ -55,6 +55,11 @@ export function isDeprecatedPluginVersion(version: SemVer, minFive = '5.10.0', m
  * The CLI reads the installed version from node_modules: an exact semver, or a local link.
  * A range like ^7.40.0 would silently fall back to CRC32, so it is rejected instead.
  */
+/** Cordova updaters always use SHA-256, whatever their version string. */
+export function isCordovaUpdaterPackage(updaterPackage: string | null | undefined): boolean {
+  return !!updaterPackage && CORDOVA_UPDATER_PACKAGES.has(updaterPackage)
+}
+
 export function isExactUpdaterVersion(updaterVersion: string): boolean {
   return !!tryParseSemver(updaterVersion) || LOCAL_UPDATER_VERSIONS.has(updaterVersion)
 }

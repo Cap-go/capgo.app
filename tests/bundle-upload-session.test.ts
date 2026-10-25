@@ -154,6 +154,8 @@ describe('bundle upload sessions', () => {
     // A range would silently pick CRC32 for a SHA-256 updater: only the installed version is accepted.
     const rangeUpdater = await prepare('6.0.0', { updater_version: '^7.40.0' })
     expect(rangeUpdater.data.error).toBe('invalid_updater_version')
+    const unknownPackage = await prepare('6.0.0', { updater_version: '^7.40.0', updater_package: 'unknown-updater' })
+    expect(unknownPackage.data.error).toBe('invalid_updater_version')
     expect(await versionRow('6.0.0')).toBeNull()
 
     const unknownField = await prepare('6.0.0', { unexpected: true })

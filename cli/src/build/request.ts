@@ -1566,7 +1566,11 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
           credentials: mergedCredentials as Record<string, string>,
           androidFlavor: options.androidFlavor,
           iosDist: options.iosDistribution,
-          skip: options.prescanSkip,
+          // Stored credentials live on Capgo and are validated there with the merged set,
+          // so the local "credentials saved" check would fail on an empty local file.
+          skip: useStoredCredentials
+            ? [...[options.prescanSkip ?? []].flat(), 'shared/credentials-saved']
+            : options.prescanSkip,
           warn: options.prescanWarn,
           apiHost: options.apiHost,
         })).report,

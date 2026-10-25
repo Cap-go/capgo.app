@@ -342,7 +342,7 @@ async function storeBuildCredentials(c: Context, input: {
       ? await table().update(values).eq('id', existing.id).eq('updated_at', existing.updated_at).select('id, updated_at').maybeSingle()
       : await table().insert(values).select('id, updated_at').maybeSingle()
   if (mode === 'merge' && ((!error && !row) || error?.code === '23505'))
-    quickError(409, 'build_credentials_conflict', 'The stored credentials changed while merging; retry the upload', { app_id: appId, platform }, undefined, { alert: false })
+    quickError(409, 'build_credentials_conflict', 'The stored credentials changed while merging; retry the merge. If you used a signed upload URL, request a new one: each URL works only once.', { app_id: appId, platform }, undefined, { alert: false })
   if (error || !row) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Build credentials upsert failed', app_id: appId, platform, error })
     quickError(503, 'database_unavailable', 'Cannot store build credentials')
