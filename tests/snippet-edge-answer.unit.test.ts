@@ -171,6 +171,8 @@ describe('snippet edge stats replay', () => {
     expect(decodeSnippetEdgeStat('%%%')).toBeNull()
     expect(parseLogpushLine(logLine(updatesStat))).toEqual({ ...updatesStat, ip: '203.0.113.7', country: 'FR' })
     expect(parseLogpushLine(logLine(updatesStat, { EdgeStartTimestamp: 1791892800123456789 }))?.t).toBe(1791892800123)
+    expect(parseLogpushLine(logLine(updatesStat, { ClientASN: 3215 }))?.asn).toBe(3215)
+    expect(parseLogpushLine(logLine(updatesStat, { ClientASN: 0 }))?.asn).toBeUndefined()
     expect(parseLogpushLine(JSON.stringify({ ClientIP: '203.0.113.7', ResponseHeaders: {} }))).toBeNull()
     const stats = { invalid: 0 }
     expect(parseLogpushLine('not json x-capgo-edge-stat', stats)).toBeNull()
@@ -233,6 +235,7 @@ describe('snippet edge stats replay', () => {
     const request = buildReplayRequest({ e: 'updates', b: JSON.stringify(body), n: '1.2.3', ip: '203.0.113.7', country: 'FR' })
     expect(request.headers.get('cf-connecting-ip')).toBe('203.0.113.7')
     expect((request as any).cf).toEqual({ country: 'FR' })
+    expect((buildReplayRequest({ e: 'stats', b: '{}', country: 'FR', asn: 3215 }) as any).cf).toEqual({ country: 'FR', asn: 3215 })
 
     const outer = new Hono()
     outer.route('/updates', app)

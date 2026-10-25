@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 
 import { CacheHelper } from './cache.ts'
 import { cloudlog } from './logging.ts'
-import { APPLE_PROVIDER_ASNS, GOOGLE_PROVIDER_ASNS } from './providerAsns.ts'
+import { APPLE_PROVIDER_ASNS, GOOGLE_PROVIDER_ASNS, PROVIDER_INFRA_ASNS } from './providerAsns.ts'
 
 interface IpApiResponse {
   status: 'success' | 'fail'
@@ -23,18 +23,23 @@ interface InvalidIpInfo {
 
 const PROVIDER_IP_CACHE_PATH = '/provider-ip-classifier'
 const PROVIDER_IP_CACHE_TTL_SECONDS = 60 * 60 * 24 // 24h
-const PROVIDER_IP_FALLBACK_TTL_SECONDS = 60 * 60 * 24 // 24h after unresolved/failure
+const PROVIDER_IP_FALLBACK_TTL_SECONDS = 60 * 5 // 5min after a failed lookup
+const IP_API_DEFAULT_BACKOFF_SECONDS = 60
 const PROVIDER_IP_MEMORY_CACHE_MAX_ENTRIES = 10_000
 const GOOGLE_KEYWORDS = ['google cloud', 'google llc', 'google infrastructure', 'google data center']
 const GOOGLE_ASNS = new Set(GOOGLE_PROVIDER_ASNS.map(asn => `AS${asn}`))
 const APPLE_KEYWORDS = ['apple inc', 'apple computer', 'apple cloud', 'apple data', 'apple internet']
 const APPLE_ASNS = new Set(APPLE_PROVIDER_ASNS.map(asn => `AS${asn}`))
+const PROVIDER_ASN_NUMBERS = new Set(PROVIDER_INFRA_ASNS)
 
 type CacheableInvalidIpInfo = InvalidIpInfo & {
   cachedUntil: number
 }
 
 const inMemoryInvalidIpCache = new Map<string, CacheableInvalidIpInfo>()
+// ip-api allows 45 requests a minute per egress IP and answers 429 past it.
+// Once it says so, the isolate stops asking until its window resets.
+let ipApiBlockedUntil = 0
 // Dedupe in-flight lookups only within one request. A promise whose I/O
 // belongs to another request never settles for the waiter once its owner
 // finishes, and Workers then cancels the waiter as "code had hung".
@@ -116,6 +121,30 @@ function isInternalOrPrivateIp(ip: string) {
   return secondOctet >= 16 && secondOctet <= 31
 }
 
+/**
+ * Cloudflare already knows the network of the connecting IP. A known network
+ * that is neither a Google/Apple ASN nor named like one cannot be provider
+ * infrastructure, so it needs no ip-api lookup. Replays carry no ASN and
+ * still look the IP up.
+ */
+function isOutsideProviderNetwork(context: Context | undefined) {
+  const cf = (context?.req?.raw as { cf?: { asn?: unknown, asOrganization?: unknown } } | undefined)?.cf
+  if (typeof cf?.asn !== 'number' || cf.asn <= 0)
+    return false
+  if (PROVIDER_ASN_NUMBERS.has(cf.asn))
+    return false
+  const org = normalize(typeof cf.asOrganization === 'string' ? cf.asOrganization : undefined)
+  return !hasKeywordMatch(org, GOOGLE_KEYWORDS) && !hasKeywordMatch(org, APPLE_KEYWORDS)
+}
+
+function noteIpApiRateLimit(response: Response) {
+  const remaining = Number.parseInt(response.headers.get('x-rl') ?? '', 10)
+  if (response.status !== 429 && remaining !== 0)
+    return
+  const ttlSeconds = Number.parseInt(response.headers.get('x-ttl') ?? '', 10)
+  ipApiBlockedUntil = now() + (Number.isFinite(ttlSeconds) && ttlSeconds > 0 ? ttlSeconds : IP_API_DEFAULT_BACKOFF_SECONDS) * 1000
+}
+
 async function ipapi(ip: string, lang = 'en') {
   ip = ip ?? ''
   lang = lang ?? 'en'
@@ -125,8 +154,12 @@ async function ipapi(ip: string, lang = 'en') {
   if (!langs.includes(lang))
     throw new Error(`unknown language, supported ones are: ${langs.join(', ')}`)
 
+  if (ipApiBlockedUntil > now())
+    throw new Error('ipapi error: rate limited, backing off')
+
   try {
     const response = await fetch(`http://ip-api.com/json/${ip}?lang=${lang}&fields=66842623`)
+    noteIpApiRateLimit(response)
 
     if (!response.ok) {
       await response.text()
@@ -223,10 +256,10 @@ async function storeInvalidIpInfo(context: Context | undefined, ip: string, info
   }
 }
 
-async function fetchProviderIpInfo(ip: string, context?: Context) {
+async function fetchProviderIpInfo(ip: string, context?: Context): Promise<{ info: InvalidIpInfo, failed: boolean }> {
   try {
     const response = await ipapi(ip)
-    return parseProviderResult(response)
+    return { info: parseProviderResult(response), failed: response.status !== 'success' }
   }
   catch (error) {
     cloudlog({
@@ -235,7 +268,7 @@ async function fetchProviderIpInfo(ip: string, context?: Context) {
       ip,
       error,
     })
-    return { blocked: false, provider: null }
+    return { info: { blocked: false, provider: null }, failed: true }
   }
 }
 
@@ -250,10 +283,11 @@ function lookupProviderIpInfo(context: Context | undefined, ip: string) {
     if (cached?.provider !== undefined)
       return cached
 
-    const result = await fetchProviderIpInfo(ip, context)
-    const ttlSeconds = result.provider ? PROVIDER_IP_CACHE_TTL_SECONDS : PROVIDER_IP_FALLBACK_TTL_SECONDS
-    await storeInvalidIpInfo(context, ip, result, ttlSeconds)
-    return result
+    const { info, failed } = await fetchProviderIpInfo(ip, context)
+    // A failed lookup fails open, briefly, so a provider IP is not let through for a day.
+    const ttlSeconds = failed ? PROVIDER_IP_FALLBACK_TTL_SECONDS : PROVIDER_IP_CACHE_TTL_SECONDS
+    await storeInvalidIpInfo(context, ip, info, ttlSeconds)
+    return info
   })()
 
   inflightLookups?.set(ip, lookup)
@@ -269,6 +303,9 @@ export async function invalidIpInfo(ip: string, context?: Context): Promise<Inva
     return { blocked: false, provider: null }
 
   if (isInternalOrPrivateIp(ip))
+    return { blocked: false, provider: null }
+
+  if (isOutsideProviderNetwork(context))
     return { blocked: false, provider: null }
 
   return lookupProviderIpInfo(context, ip).catch(() => ({ blocked: false, provider: null }))
