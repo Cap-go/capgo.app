@@ -3,7 +3,7 @@ import { setErrors } from '@formkit/core'
 import { FormKit, FormKitMessages } from '@formkit/vue'
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import VueTurnstile from 'vue-turnstile'
 import iconEmail from '~icons/oui/email?raw'
 import iconPassword from '~icons/ph/key?raw'
@@ -13,17 +13,26 @@ import { useConsole } from '~/services/console'
 import { FunctionsHttpError } from '~/services/consoleClient'
 import { registerAccount } from '~/services/registration'
 import { openSupport } from '~/services/support'
+import { parseWeb2AppArrival, rememberWeb2AppArrival, web2AppArrivalQuery } from '~/utils/web2appArrival'
 
 const router = useRouter()
+const route = useRoute()
 const capgo = useConsole()
 const { t } = useI18n()
 const turnstileToken = ref('')
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 const isLoading = ref(false)
 
+// Web2App arrivals (for example from the retired WebNativeApp site) keep their
+// website through signup so onboarding can start on the Web2App path. The
+// arrival is only stored once an account exists, so a visit without signup
+// never forces a later account on this browser onto the Web2App intent.
+const web2AppArrival = parseWeb2AppArrival(route.query)
+const web2AppQuery = web2AppArrival ? web2AppArrivalQuery(web2AppArrival) : {}
+
 if (window.location.host === 'console.capgo.app') {
   // do not allow to register on webapp on production
-  window.location.href = 'https://capgo.app/register/'
+  window.location.href = `https://capgo.app/register/${window.location.search}`
 }
 
 async function submit(form: { password: string, email: string }) {
@@ -36,6 +45,10 @@ async function submit(form: { password: string, email: string }) {
     const { error } = await capgo.auth.setSession(registered.session)
     if (error)
       throw error
+    // Storage survives the /onboarding/name step that drops the query string.
+    // Scoped to this account so another signup on the same browser cannot inherit it.
+    if (web2AppArrival)
+      rememberWeb2AppArrival(web2AppArrival, Date.now(), registered.user.id)
   }
   catch (error) {
     const code = await getCapgoApiErrorCode(error)
@@ -55,7 +68,7 @@ async function submit(form: { password: string, email: string }) {
   // signup failure. Keep the spinner until onboarding has loaded, and fall back to a full page
   // load if the in-app navigation fails.
   try {
-    const failure = await router.push('/dashboard')
+    const failure = await router.push({ path: '/dashboard', query: web2AppQuery })
     if (failure)
       isLoading.value = false
   }

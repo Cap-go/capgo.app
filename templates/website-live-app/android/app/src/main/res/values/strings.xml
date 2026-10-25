@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Web2App Template</string>
+    <string name="title_activity_main">Web2App Template</string>
+    <string name="package_name">app.capgo.websitelive.template</string>
+    <string name="custom_url_scheme">app.capgo.websitelive.template</string>
+</resources>

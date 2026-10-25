@@ -3,9 +3,9 @@ import {
   createOnboardingDetailsFieldDebouncer,
   createOnboardingProgressTracker,
   createOnboardingTelemetryIdentity,
+  NEW_CHANNEL_ANALYTICS_VERSION,
   ONBOARDING_ANALYTICS_VERSION,
   resolveOnboardingAppIconSource,
-  WEBNATIVE_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION,
 } from '../src/utils/onboardingProgressAnalytics'
 
 const steps = ['intent', 'details', 'organization', 'setup'] as const
@@ -258,10 +258,11 @@ describe('onboarding progress analytics', () => {
     )
   })
 
-  it.concurrent('reports version 5.C for every qualified treatment lifecycle and progress event', () => {
+  it.concurrent('reports version 5.E for every channel treatment lifecycle and progress event', () => {
     const capture = vi.fn()
     const ids = [ATTEMPT_A2, RUN_R2_UUID]
-    const onboardingVersion = (): '5.C' => WEBNATIVE_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION
+    const onboardingVersion = (): '5.E' => NEW_CHANNEL_ANALYTICS_VERSION
+    const channelSteps = ['app_name', 'channel', 'setup'] as const
     const identity = createOnboardingTelemetryIdentity({
       capture,
       flow: 'pre_org',
@@ -270,8 +271,8 @@ describe('onboarding progress analytics', () => {
       apiHost: 'https://supabase.capgo.test',
     })
     identity.prepareResumeCandidate({
-      savedStep: 'organization',
-      steps,
+      savedStep: 'channel',
+      steps: channelSteps,
     })
     identity.recordResumeDialogViewed()
 
@@ -282,18 +283,20 @@ describe('onboarding progress analytics', () => {
       capture,
       flow: 'pre_org',
       resumed: false,
-      steps,
+      steps: channelSteps,
       apiHost: 'https://supabase.capgo.test',
     })
-    tracker.viewStep('intent')
-    tracker.trackStepEvent('onboarding_webnative_recommendation_clicked', 'organization', {
-      intent: 'publish',
-      starting_out: true,
-    })
+    tracker.viewStep('channel')
+    tracker.trackStepEvent('onboarding_channel_stage_viewed', 'channel', { channel_stage: 'channel-create', channel_flow_origin: 'onboarding' })
 
     expect(capture.mock.calls).toHaveLength(3)
     for (const call of capture.mock.calls)
-      expect(call[2]).toEqual(expect.objectContaining({ onboarding_version: '5.C' }))
+      expect(call[2]).toEqual(expect.objectContaining({ onboarding_version: '5.E' }))
+  })
+
+  it.concurrent('exports the active onboarding analytics labels', () => {
+    expect(ONBOARDING_ANALYTICS_VERSION).toBe(4)
+    expect(NEW_CHANNEL_ANALYTICS_VERSION).toBe('5.E')
   })
 
   it.concurrent('tracks a hidden tab and its matching return before setup', () => {

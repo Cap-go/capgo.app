@@ -1,0 +1,15 @@
+{
+	"appId": "app.capgo.websitelive.template",
+	"appName": "Web2App Template",
+	"webDir": "www",
+	"plugins": {
+		"CapacitorUpdater": {
+			"appId": "app.capgo.websitelive.template",
+			"websiteMode": true,
+			"autoUpdate": true
+		}
+	},
+	"packageClassList": [
+		"CapacitorUpdaterPlugin"
+	]
+}

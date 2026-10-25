@@ -4,6 +4,7 @@ import IconCog from '~icons/heroicons/cog-6-tooth'
 import IconCube from '~icons/heroicons/cube'
 import IconDevice from '~icons/heroicons/device-phone-mobile'
 import IconObserve from '~icons/heroicons/eye'
+import IconStore from '~icons/heroicons/shopping-bag'
 import IconChannel from '~icons/heroicons/signal'
 import IconBuild from '~icons/heroicons/wrench-screwdriver'
 
@@ -20,3 +21,6 @@ export const appTabs: Tab[] = [
   { label: 'notifications', icon: IconBell, key: '/notifications', badge: 'beta', group: 'monitor', description: 'notifications-description' },
   { label: 'settings', icon: IconCog, key: '/settings', group: 'configure', description: 'app-settings-description' },
 ]
+
+/** Web2App apps get their store app built by Capgo from this tab. */
+export const websiteLiveStoreTab: Tab = { label: 'store-app', icon: IconStore, key: '/store', group: 'ship', description: 'store-app-tab-description' }

@@ -86,6 +86,8 @@ BEGIN
     (NOW(), NOW(), 'Enterprise', 'plan.payasyougo.desc', 249, 2490, 'prod_MH5Jh6ajC9e7ZH', 'prod_TJRd2hFHZsBIPK', '745d7ab3-6cd6-4d65-b257-de6782d5ba50', 'price_1LYX8yGH46eYKnWwzeBjISvW', 'price_1LYX8yGH46eYKnWwzeBjISvW', 'prod_VDt2pia049SqpU', 'price_1UDRGaLr632EP5z4D02F4rLu', 'price_1UDRGcLr632EP5z4IxDyZuUK', 'prod_VDt2YB5GrYFnII', 12884901888, 3221225472000, 1000000, 'Best for scalling enterprises', 1200000, 6),
     (NOW(), NOW(), 'Solo', 'plan.solo.desc', 14, 146, 'prod_LQIregjtNduh4q', 'prod_TJRd2hFHZsBIPK', '526e11d8-3c51-4581-ac92-4770c602f47c', 'price_1LVvuZGH46eYKnWwuGKOf4DK', 'price_1LVvuIGH46eYKnWwHMDCrxcH', 'prod_VDt1FTF7XJxyMR', 'price_1UDRGPLr632EP5z4ufTRBBzf', 'price_1UDRGULr632EP5z4OcZr5xpe', 'prod_VDt2YB5GrYFnII', 1073741824, 13958643712, 2000, 'Best for independent developers', 3600, 2),
     (NOW(), NOW(), 'Team', 'plan.team.desc', 99, 998, 'prod_LQIugvJcPrxhda', 'prod_TJRd2hFHZsBIPK', 'abd76414-8f90-49a5-b3a4-8ff4d2e12c77', 'price_1KjSIUGH46eYKnWwWHvg8XYs', 'price_1KjSLlGH46eYKnWwAwMW2wiW', 'prod_VDt2xM7OyLzhqV', 'price_1UDRGSLr632EP5z4n0Npf7P1', 'price_1UDRGSLr632EP5z4jYu6vC42', 'prod_VDt2YB5GrYFnII', 6442450944, 536870912000, 100000, 'Best for medium enterprises', 36000, 4);
+    -- Web2App (kind = 'website') is intentionally not seeded: the console hides it until
+    -- real Stripe prices exist. Seeding it made publish intent skip starting-out / WebNative e2e.
 
     INSERT INTO
       "public"."capgo_credits_steps" (

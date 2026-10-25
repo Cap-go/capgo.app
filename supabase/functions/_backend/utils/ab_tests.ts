@@ -101,6 +101,13 @@ async function readAssignmentUser(
   }
 }
 
+// Bento tags of experiments removed from ab_tests.json. Users assigned before
+// the removal still store the assignment, so their tags are deleted on the next sync.
+const RETIRED_AB_TEST_BENTO_TAGS: Record<string, readonly string[]> = {
+  webnativeapp_publish_intent: ['ab:webnativeapp_publish_intent', 'ab:no_webnativeapp_publish_intent'],
+  webnativeapp_development_environment: ['ab:webnativeapp_development_environment', 'ab:no_webnativeapp_development_environment'],
+}
+
 function buildBentoTagUpdate(user: AssignmentUser) {
   const email = normalizeEmail(user.email)
   if (!email)
@@ -130,6 +137,10 @@ function buildBentoTagUpdate(user: AssignmentUser) {
     segments.push(test.branches[branch].bento_tag)
     deleteSegments.push(test.branches[oppositeBranch].bento_tag)
   }
+  for (const [testName, tags] of Object.entries(RETIRED_AB_TEST_BENTO_TAGS)) {
+    if (storedAssignments[testName] !== undefined)
+      deleteSegments.push(...tags)
+  }
 
   return {
     deleteSegments,
@@ -156,10 +167,13 @@ function sameBentoSyncState(left: ABTestBentoSyncState, right: ABTestBentoSyncSt
 
 function buildBentoTagCleanup(email: string) {
   return {
-    deleteSegments: Object.values(AB_TESTS_CONFIG).flatMap(test => [
-      test.branches[test.treatment_branch].bento_tag,
-      test.branches[test.control_branch].bento_tag,
-    ]),
+    deleteSegments: [
+      ...Object.values(AB_TESTS_CONFIG).flatMap(test => [
+        test.branches[test.treatment_branch].bento_tag,
+        test.branches[test.control_branch].bento_tag,
+      ]),
+      ...Object.values(RETIRED_AB_TEST_BENTO_TAGS).flat(),
+    ],
     email,
     segments: [],
   }

@@ -160,14 +160,14 @@ describe('generic intent allocation', () => {
   })
 
   it('revokes dependents when prerequisites or intent stop matching without rerolling unrelated branches', () => {
-    const config = validateABTestsConfig(rawConfig)
+    const config = validateABTestsConfig({ ...rawConfig, unrelated_experiment: experiment('unrelated_experiment') })
     const result = resolveABTestAssignments(user('builder'), {
       new_emails_v2: assignment(),
       builder_todo_list_v4: assignment('B'),
-      webnativeapp_publish_intent: assignment('B'),
+      unrelated_experiment: assignment('B'),
     }, config)
     expect(result.assignments).not.toHaveProperty('new_emails_v2')
-    expect(result.assignments.webnativeapp_publish_intent).toEqual(assignment('B'))
+    expect(result.assignments.unrelated_experiment).toEqual(assignment('B'))
   })
 
   it.each([null, { branch: 'legacy', assigned_at: timestamp }, { branch: 'A' }])('repairs malformed eligible assignments without changing valid branches: %j', (malformed) => {

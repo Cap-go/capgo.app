@@ -1,0 +1,57 @@
+name: Publish Web2App template
+
+# The API downloads the Web2App app template from the
+# website-live-template-v<version> release. Bump the version in
+# templates/website-live-app/package.json and WEBSITE_LIVE_TEMPLATE_VERSION in
+# supabase/functions/_backend/utils/website_live_store.ts together. Publishing
+# fails if the release for the current version already exists.
+on:
+  push:
+    branches: [main]
+    paths:
+      - templates/website-live-app/**
+      - scripts/pack-website-live-template.ts
+      - .github/workflows/website_live_template.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: website-live-template
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+      - name: Install pack script dependencies
+        run: bun install --frozen-lockfile
+      - name: Install template dependencies
+        working-directory: templates/website-live-app
+        run: bun install --frozen-lockfile
+      - name: Generate synced native files
+        working-directory: templates/website-live-app
+        run: bunx cap sync
+      - name: Pack template
+        run: bun scripts/pack-website-live-template.ts
+      - name: Publish release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(jq -r .version templates/website-live-app/package.json)
+          tag="website-live-template-v${version}"
+          # Published template versions are immutable: the API pins the asset by
+          # version, so replacing it in place would change shipped builds silently.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::Release $tag already exists. Bump the version in templates/website-live-app/package.json and WEBSITE_LIVE_TEMPLATE_VERSION in supabase/functions/_backend/utils/website_live_store.ts to publish template changes."
+            exit 1
+          fi
+          gh release create "$tag" dist/website-live-template.zip \
+            --title "Web2App template ${version}" \
+            --notes "Native app template Capgo builds Web2App store apps from." \
+            --latest=false

@@ -67,7 +67,7 @@ const INTENT_TEST_NAME = 'intent_targeted'
 const BUILDER_INTENT_TEST_NAME = 'builder_intent_targeted'
 const BUILDER_TODO_TEST_NAME = 'builder_todo_list_v4'
 const NEW_CHANNEL_TEST_NAME = 'new_channel'
-const WEBNATIVE_TEST_NAMES = ['webnativeapp_publish_intent', 'webnativeapp_development_environment'] as const
+const PAUSED_FIXTURE_TEST_NAMES = ['fixture_publish_intent', 'fixture_development_environment'] as const
 
 async function loadABTestsModule() {
   return await import(/* @vite-ignore */ modulePath) as ABTestsModule
@@ -121,8 +121,39 @@ function enableNewChannelTest(module: ABTestsModule) {
   }
 }
 
-function enableWebNativeTests(module: ABTestsModule) {
-  for (const testName of WEBNATIVE_TEST_NAMES)
+// Two paused self-signup tests (one using C/D branches) stand in for real
+// experiments so assignment and Bento tag sync stay covered whatever ships.
+function installPausedFixtureTests(module: ABTestsModule) {
+  const config = module.validateABTestsConfig({
+    fixture_publish_intent: {
+      audience: 'self_signup',
+      label: 'Publish intent fixture',
+      treatment_percentage: 0,
+      treatment_branch: 'A',
+      control_branch: 'B',
+      branches: {
+        A: { bento_tag: 'ab:fixture_publish_intent', label: 'Treatment' },
+        B: { bento_tag: 'ab:no_fixture_publish_intent', label: 'Control' },
+      },
+    },
+    fixture_development_environment: {
+      audience: 'self_signup',
+      label: 'Development environment fixture',
+      treatment_percentage: 0,
+      treatment_branch: 'C',
+      control_branch: 'D',
+      branches: {
+        C: { bento_tag: 'ab:fixture_development_environment', label: 'Treatment' },
+        D: { bento_tag: 'ab:no_fixture_development_environment', label: 'Control' },
+      },
+    },
+  })
+  for (const testName of PAUSED_FIXTURE_TEST_NAMES)
+    module.AB_TESTS_CONFIG[testName] = config[testName]
+}
+
+function enablePausedFixtureTests(module: ABTestsModule) {
+  for (const testName of PAUSED_FIXTURE_TEST_NAMES)
     module.AB_TESTS_CONFIG[testName].treatment_percentage = 10
 }
 
@@ -148,8 +179,8 @@ function collectSqlParameterValues(chunk: unknown): unknown[] {
 function persistedAssignments(branches: { channel?: 'A' | 'B' | null, development?: 'C' | 'D', emails?: 'A' | 'B', publish?: 'A' | 'B' } = {}) {
   const assignments = {
     new_emails: { assigned_at: FIXED_DATE.toISOString(), branch: branches.emails ?? 'A' },
-    webnativeapp_publish_intent: { assigned_at: FIXED_DATE.toISOString(), branch: branches.publish ?? 'A' },
-    webnativeapp_development_environment: { assigned_at: FIXED_DATE.toISOString(), branch: branches.development ?? 'C' },
+    fixture_publish_intent: { assigned_at: FIXED_DATE.toISOString(), branch: branches.publish ?? 'A' },
+    fixture_development_environment: { assigned_at: FIXED_DATE.toISOString(), branch: branches.development ?? 'C' },
   }
   if (branches.channel === null)
     return assignments
@@ -172,6 +203,7 @@ describe('new-user A/B test assignment', () => {
     const module = await loadABTestsModule()
     module.AB_TESTS_CONFIG.new_emails = testConfig().new_emails
     delete module.AB_TESTS_CONFIG.new_emails_v2
+    installPausedFixtureTests(module)
     vi.resetAllMocks()
     pgConnectMock.mockImplementation(async () => ({ query: pgQueryMock, release: pgReleaseMock }))
     getPgClientMock.mockImplementation(() => ({ connect: pgConnectMock }))
@@ -194,8 +226,8 @@ describe('new-user A/B test assignment', () => {
       ...module.AB_TESTS_CONFIG[NEW_CHANNEL_TEST_NAME]!,
       treatment_percentage: 0,
     }
-    for (const testName of WEBNATIVE_TEST_NAMES)
-      module.AB_TESTS_CONFIG[testName].treatment_percentage = 0
+    for (const testName of PAUSED_FIXTURE_TEST_NAMES)
+      delete module.AB_TESTS_CONFIG[testName]
     vi.useRealTimers()
     vi.restoreAllMocks()
   })
@@ -604,7 +636,7 @@ describe('new-user A/B test assignment', () => {
 
   it('preserves a manual branch A assignment while filling other missing tests', async () => {
     const module = await loadABTestsModule()
-    enableWebNativeTests(module)
+    enablePausedFixtureTests(module)
     const { getOrCreateUserABTests } = module
     const manualAssignment = intentAssignment('A')
     const existing = {
@@ -802,6 +834,36 @@ describe('new-user A/B test assignment', () => {
       'verification-started',
       'verification-committed',
     ])
+  })
+
+  it('deletes the Bento tags of retired experiments the user was assigned to', async () => {
+    const module = await loadABTestsModule()
+    installIntentTest(module)
+    const existing = {
+      ...persistedAssignments({ development: 'D', emails: 'B', publish: 'B' }),
+      webnativeapp_publish_intent: { assigned_at: FIXED_DATE.toISOString(), branch: 'A' },
+    }
+    const persisted = {
+      ...existing,
+      [INTENT_TEST_NAME]: intentAssignment(),
+    }
+    const context = { get: vi.fn(() => 'request-id') } as never
+    drizzleExecuteMock
+      .mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false, email: 'User@Example.com', intent: 'ota' }] })
+      .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
+    const currentUser = { abtests: persisted, created_via_invite: false, email: 'User@Example.com', intent: 'ota' }
+    queueBentoSnapshot(currentUser)
+    queueBentoSnapshot(currentUser, true)
+
+    await module.getOrCreateUserABTests(context, USER_ID)
+
+    const [, update] = syncBentoSubscriberTagsMock.mock.calls[0]!
+    expect(update.deleteSegments).toEqual(expect.arrayContaining([
+      'ab:webnativeapp_publish_intent',
+      'ab:no_webnativeapp_publish_intent',
+    ]))
+    expect(update.deleteSegments).not.toContain('ab:webnativeapp_development_environment')
+    expect(update.segments).not.toContain('ab:webnativeapp_publish_intent')
   })
 
   it('retries Bento when a newer reconciliation commits during synchronization', async () => {
@@ -1057,16 +1119,16 @@ describe('new-user A/B test assignment', () => {
         'ab:new_channel',
         'ab:no_new_channel',
         'ab:new_emails',
-        'ab:webnativeapp_publish_intent',
-        'ab:webnativeapp_development_environment',
+        'ab:fixture_publish_intent',
+        'ab:fixture_development_environment',
         'ab:intent_targeted',
         'ab:no_intent_targeted',
       ]),
       email: 'user@example.com',
       segments: expect.arrayContaining([
         'ab:no_new_emails',
-        'ab:no_webnativeapp_publish_intent',
-        'ab:no_webnativeapp_development_environment',
+        'ab:no_fixture_publish_intent',
+        'ab:no_fixture_development_environment',
       ]),
     }, expect.any(AbortSignal))
   })
@@ -1109,8 +1171,8 @@ describe('new-user A/B test assignment', () => {
         'ab:new_channel',
         'ab:no_new_channel',
         'ab:new_emails',
-        'ab:webnativeapp_publish_intent',
-        'ab:webnativeapp_development_environment',
+        'ab:fixture_publish_intent',
+        'ab:fixture_development_environment',
         'ab:no_builder_intent_targeted',
         'ab:intent_targeted',
         'ab:no_intent_targeted',
@@ -1118,8 +1180,8 @@ describe('new-user A/B test assignment', () => {
       email: 'user@example.com',
       segments: expect.arrayContaining([
         'ab:no_new_emails',
-        'ab:no_webnativeapp_publish_intent',
-        'ab:no_webnativeapp_development_environment',
+        'ab:no_fixture_publish_intent',
+        'ab:no_fixture_development_environment',
         'ab:builder_intent_targeted',
       ]),
     }, expect.any(AbortSignal))
@@ -1142,7 +1204,7 @@ describe('new-user A/B test assignment', () => {
 
   it('locks the primary user row and assigns only missing tests inside one transaction', async () => {
     const module = await loadABTestsModule()
-    enableWebNativeTests(module)
+    enablePausedFixtureTests(module)
     const { getOrCreateUserABTests } = module
     const existing = {
       new_emails: { assigned_at: FIXED_DATE.toISOString(), branch: 'B' },
@@ -1167,13 +1229,13 @@ describe('new-user A/B test assignment', () => {
     expect(closeClientMock).toHaveBeenCalledOnce()
     expect(syncBentoSubscriberTagsMock).toHaveBeenCalledWith(context, {
       deleteSegments: expect.arrayContaining([
-        'ab:no_webnativeapp_development_environment',
-        'ab:no_webnativeapp_publish_intent',
+        'ab:no_fixture_development_environment',
+        'ab:no_fixture_publish_intent',
       ]),
       email: 'user@example.com',
       segments: expect.arrayContaining([
-        'ab:webnativeapp_development_environment',
-        'ab:webnativeapp_publish_intent',
+        'ab:fixture_development_environment',
+        'ab:fixture_publish_intent',
       ]),
     }, expect.any(AbortSignal))
   })

@@ -1,6 +1,6 @@
 import type { Json } from '~/types/database.types'
 import type { OnboardingAnalyticsStep } from '~/utils/onboardingProgressAnalytics'
-import { hasNewChannelTreatment, hasWebNativeDevelopmentEnvironmentTreatment } from '~/utils/onboardingABTests'
+import { hasNewChannelTreatment } from '~/utils/onboardingABTests'
 
 interface OnboardingProfileUser {
   first_name?: string | null
@@ -48,7 +48,6 @@ export function initialProfileOnboardingSteps(onboarding: unknown, showWelcome: 
     ...(showWelcome ? ['welcome' as const] : []),
     'name',
     'intent',
-    ...(hasWebNativeDevelopmentEnvironmentTreatment(onboarding) ? ['publish_app_question' as const] : []),
     'app_name',
     'app_icon',
     'organization',

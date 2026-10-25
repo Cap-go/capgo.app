@@ -2,10 +2,10 @@ import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { executeSQL, USER_PASSWORD_HASH } from './test-utils.ts'
 
-describe('webnative onboarding schema constraints', () => {
+describe('publish intent onboarding schema constraints', () => {
   const userId = randomUUID()
   const orgId = randomUUID()
-  const email = `webnative-onboarding-schema-${randomUUID()}@test.com`
+  const email = `publish-intent-onboarding-schema-${randomUUID()}@test.com`
 
   beforeAll(async () => {
     await executeSQL(
@@ -24,7 +24,7 @@ describe('webnative onboarding schema constraints', () => {
     await executeSQL(
       `INSERT INTO public.orgs (id, name, management_email, created_by, onboarding)
        VALUES ($1, $2, $3, $4, jsonb_build_object('intent', 'publish'))`,
-      [orgId, `WebNative schema ${orgId}`, email, userId],
+      [orgId, `Publish intent schema ${orgId}`, email, userId],
     )
   })
 

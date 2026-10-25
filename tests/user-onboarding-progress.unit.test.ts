@@ -324,4 +324,40 @@ describe('user onboarding progress', () => {
     })
     expect(new TextEncoder().encode(JSON.stringify(progress)).length).toBeLessThanOrEqual(USER_ONBOARDING_MAX_JSON_BYTES)
   })
+
+  it.concurrent('round-trips update_mode and trims website_url', () => {
+    const built = buildUserOnboardingProgress({
+      status: 'in_progress',
+      step: 'details',
+      flow: 'pre_org',
+      updateMode: 'website',
+      websiteUrl: '  https://app.example.com/  ',
+      updatedAt: '2026-08-15T00:00:00.000Z',
+    })
+    expect(built).toMatchObject({
+      update_mode: 'website',
+      website_url: 'https://app.example.com/',
+    })
+    expect(parseUserOnboardingProgress(built)).toMatchObject({
+      update_mode: 'website',
+      website_url: 'https://app.example.com/',
+    })
+  })
+
+  it.concurrent('drops invalid update_mode on parse', () => {
+    expect(parseUserOnboardingProgress({
+      status: 'in_progress',
+      step: 'details',
+      flow: 'pre_org',
+      update_mode: 'invalid',
+      website_url: '  https://app.example.com/  ',
+      updated_at: '2026-08-15T00:00:00.000Z',
+    })).toEqual({
+      status: 'in_progress',
+      step: 'details',
+      flow: 'pre_org',
+      website_url: 'https://app.example.com/',
+      updated_at: '2026-08-15T00:00:00.000Z',
+    })
+  })
 })

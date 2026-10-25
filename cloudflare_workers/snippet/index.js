@@ -145,6 +145,80 @@ function getIpLimitCacheKey(hostname, ip) {
 // Endpoints that should be checked for on-prem caching
 const ONPREM_CACHEABLE_ENDPOINTS = ['/updates', '/stats', '/channel_self']
 
+// Web2App answers are the same for every device of an app, so the
+// snippet serves them from cache before routing (keyed by app_id only).
+const WEBSITE_LIVE_PATH = '/website_live'
+
+function getWebsiteLiveCacheKey(hostname, appId) {
+  return `https://${hostname}/__internal__/website-live-v1/${encodeURIComponent(appId)}`
+}
+
+// Same tag as updatesAppCacheTag() so the app purge queue also clears it.
+function getWebsiteLiveCacheTag(appId) {
+  return `capgo-updates-${appId.toLowerCase().replace(/[^a-z0-9._-]/g, '_')}`
+}
+
+function getWebsiteLiveAppId(request, url) {
+  if (request.method !== 'GET' || url.pathname !== WEBSITE_LIVE_PATH)
+    return null
+  // Same trim as the worker: padded app_id must share the purge Cache-Tag.
+  const appId = url.searchParams.get('app_id')?.trim() ?? ''
+  return appId && appId.length <= 256 ? appId : null
+}
+
+async function getWebsiteLiveCache(budget, hostname, appId) {
+  const cached = await cacheMatch(budget, getWebsiteLiveCacheKey(hostname, appId))
+  return cached ? cached.clone() : null
+}
+
+/**
+ * Seconds the answer may still be stored here, so a snippet entry never
+ * outlives the worker's own: the worker TTL minus Age when the answer is aged.
+ * A worker cache hit without Age has an unknown remaining TTL and is not stored
+ * (storing it for the full TTL could double the staleness window).
+ */
+function getWebsiteLiveCacheTtl(headers) {
+  const cacheTtl = getCacheTtlSeconds(headers, null)
+  if (!cacheTtl)
+    return null
+  const ageHeader = headers.get('Age')
+  if (ageHeader !== null) {
+    const age = Number.parseInt(ageHeader.trim(), 10)
+    if (!Number.isFinite(age) || age < 0)
+      return null
+    return cacheTtl - age > 0 ? cacheTtl - age : null
+  }
+  return headers.get('X-Website-Live-Cache') === 'hit' ? null : cacheTtl
+}
+
+async function setWebsiteLiveCache(budget, hostname, appId, response) {
+  try {
+    if (response.status !== 200)
+      return
+    const cacheTtl = getWebsiteLiveCacheTtl(response.headers)
+    if (!cacheTtl)
+      return
+    const headers = new Headers(response.headers)
+    headers.delete('Age')
+    headers.set('Cache-Control', `public, max-age=${cacheTtl}, s-maxage=${cacheTtl}`)
+    // The body is stored decoded: drop transfer headers that no longer match
+    // it, and never replay cookies to other devices.
+    headers.delete('Content-Encoding')
+    headers.delete('Content-Length')
+    headers.delete('Set-Cookie')
+    headers.set('Content-Type', 'application/json')
+    headers.set('Cache-Tag', getWebsiteLiveCacheTag(appId))
+    headers.set('X-Website-Live-Edge-Cache', 'hit')
+    await cachePut(budget, getWebsiteLiveCacheKey(hostname, appId), new Response(await response.clone().text(), {
+      status: 200,
+      headers,
+    }))
+  }
+  catch (e) {
+    console.log(`Failed to cache website_live response: ${e.message}`)
+  }
+}
+
 async function markUnhealthy(budget, hostname, colo, workerUrl) {
   const response = new Response(JSON.stringify({ unhealthyAt: Date.now() }), {
     headers: {
@@ -732,6 +806,13 @@ export default {
       ? await request.arrayBuffer()
       : undefined
 
+    const websiteLiveAppId = getWebsiteLiveAppId(request, url)
+    if (websiteLiveAppId) {
+      const cachedWebsiteLive = await getWebsiteLiveCache(budget, hostname, websiteLiveAppId)
+      if (cachedWebsiteLive)
+        return cachedWebsiteLive
+    }
+
     // Check the edge cache for cacheable endpoints BEFORE routing to workers
     let appId = null
     let endpoint = null
@@ -1231,6 +1312,9 @@ export default {
         if (circuit.hasEntry && canSpend(budget, 1, hintReserve + fallbackReserve))
           await cacheDelete(budget, getCircuitBreakerCacheKey(hostname, colo, workerUrl))
         console.log(`Request served by ${workerUrl}`)
+
+        if (websiteLiveAppId && !fallbackFailure && canSpend(budget))
+          await setWebsiteLiveCache(budget, hostname, websiteLiveAppId, response)
 
         // Check if this is an on-prem response that should be cached
         if (appId && endpoint) {

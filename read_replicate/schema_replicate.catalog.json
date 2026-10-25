@@ -531,6 +531,26 @@
       "type": "jsonb"
     },
     {
+      "default": "'capgo'::text",
+      "generated": "",
+      "identity": "",
+      "name": "update_mode",
+      "notNull": true,
+      "position": 31,
+      "table": "apps",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "website_url",
+      "notNull": false,
+      "position": 32,
+      "table": "apps",
+      "type": "text"
+    },
+    {
       "default": "now()",
       "generated": "",
       "identity": "",
@@ -1912,6 +1932,27 @@
       "name": "apps_pkey",
       "table": "apps",
       "type": "p",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (update_mode = ANY (ARRAY['capgo'::text, 'website'::text]))",
+      "name": "apps_update_mode_check",
+      "table": "apps",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (update_mode <> 'website'::text OR website_url IS NOT NULL)",
+      "name": "apps_website_mode_requires_url",
+      "table": "apps",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (website_url IS NULL OR length(website_url) <= 2048 AND website_url ~ '^https://([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+([A-Za-z]{2,63}|xn--[A-Za-z0-9-]{1,59})(:[0-9]{1,5})?/?$'::text AND website_url !~* '\\.(localhost|local|internal|lan|home\\.arpa)([:/]|$)'::text AND (website_url !~ ':[0-9]'::text OR (regexp_match(website_url, ':([0-9]+)(/|$)'::text))[1]::integer >= 0 AND (regexp_match(website_url, ':([0-9]+)(/|$)'::text))[1]::integer <= 65535))",
+      "name": "apps_website_url_check",
+      "table": "apps",
+      "type": "c",
       "valid": true
     },
     {

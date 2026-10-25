@@ -122,6 +122,19 @@ export function buildPlanValidationExpression(
   ) OR (${customerIdSubquery} IS NULL)`
 }
 
+/** stripe_info.trial_at for the app's owning org; used to bound plan_valid cache TTL. */
+export function buildPlanTrialAtExpression(
+  ownerColumn: typeof schema.app_versions.owner_org | typeof schema.apps.owner_org = schema.apps.owner_org,
+) {
+  return sql<string | null>`(
+    SELECT ${schema.stripe_info.trial_at}
+    FROM ${schema.stripe_info}
+    WHERE ${schema.stripe_info.customer_id} = (
+      SELECT ${schema.orgs.customer_id} FROM ${schema.orgs} WHERE ${schema.orgs.id} = ${ownerColumn}
+    )
+  )`
+}
+
 export function selectOne(pgClient: PluginPgClient) {
   // Use pg Pool directly to avoid Drizzle's prepared statement handling
   // which doesn't work with Supabase pooler in transaction mode
@@ -1384,13 +1397,7 @@ export async function queryAppOwnerPostgres(
   const planExpression = buildPlanValidationExpression(actions, schema.apps.owner_org)
   // Only the edge cache needs it (a constant NULL keeps the plain query shape).
   const planTrialAt = options.includeTrialAt
-    ? sql<string | null>`(
-        SELECT ${schema.stripe_info.trial_at}
-        FROM ${schema.stripe_info}
-        WHERE ${schema.stripe_info.customer_id} = (
-          SELECT ${schema.orgs.customer_id} FROM ${schema.orgs} WHERE ${schema.orgs.id} = ${schema.apps.owner_org}
-        )
-      )`
+    ? buildPlanTrialAtExpression(schema.apps.owner_org)
     : sql<string | null>`NULL`
 
   const appOwner = await drizzleClient

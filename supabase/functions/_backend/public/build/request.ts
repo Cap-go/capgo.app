@@ -235,7 +235,7 @@ async function getBuildOwnerOrg(c: Context, supabase: ReturnType<typeof supabase
   return app.owner_org
 }
 
-async function ensureBuildTimePlanAllowed(c: Context, supabase: ReturnType<typeof supabaseApikey>, orgId: string, appId: string) {
+export async function ensureBuildTimePlanAllowed(c: Context, supabase: Pick<ReturnType<typeof supabaseApikey>, 'rpc'>, orgId: string, appId: string) {
   // Native builds consume build-time credits; check that metric before creating a builder job.
   const buildTimePlanArgs = { orgid: orgId, actions: ['build_time'], appid: appId } as never
   const { data: buildTimeAllowed, error: buildTimePlanError } = await supabase.rpc('is_allowed_action_org_action', buildTimePlanArgs)
@@ -511,6 +511,72 @@ async function recordBuildRequestedTelemetry(c: Context, input: {
   }
 }
 
+/**
+ * Create the builder job and its build_requests row. Callers must already have
+ * checked app.build_native, the build-time plan and native build concurrency.
+ */
+export async function createNativeBuildRequest(c: Context, input: {
+  app_id: string
+  org_id: string
+  user_id: string
+  platform: 'ios' | 'android'
+  build_mode: 'release' | 'debug'
+  build_config: Json
+  build_options: Record<string, unknown>
+  build_credentials: Record<string, string>
+  ios_dependency_manager: IosDependencyManager | null
+  cache_enabled?: boolean
+  cache_key?: string
+}) {
+  const { app_id, org_id, platform, build_mode, build_config, build_options, build_credentials, ios_dependency_manager, cache_enabled, cache_key } = input
+  // Create upload_path BEFORE calling builder so we can pass it
+  const upload_session_key = crypto.randomUUID()
+  const upload_path = `orgs/${org_id}/apps/${app_id}/native-builds/${upload_session_key}.zip`
+  const { builderUrl, builderApiKey } = getBuilderConfig(c)
+  const builderJob = await createBuilderJob(c, {
+    builderUrl,
+    builderApiKey,
+    orgId: org_id,
+    actorUserId: input.user_id,
+    appId: app_id,
+    platform,
+    uploadPath: upload_path,
+    // The builder schedules some builds by dependency manager.
+    buildOptions: ios_dependency_manager ? { ...build_options, iosDependencyManager: ios_dependency_manager } : build_options,
+    buildCredentials: build_credentials,
+    cacheEnabled: cache_enabled,
+    cacheKey: cache_key,
+  })
+
+  ensureBuilderUploadUrl(c, builderUrl, builderApiKey, builderJob)
+
+  const upload_expires_at = new Date(Date.now() + 60 * 60 * 1000)
+  const upload_url = getBuildUploadUrl(c, builderJob)
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'Using Capgo TUS proxy URL for builder',
+    proxy_url: upload_url,
+    builder_url: builderJob.uploadUrl,
+  })
+
+  const buildRequestRow = await persistBuildRequest(c, {
+    app_id,
+    org_id,
+    requested_by: input.user_id,
+    platform,
+    build_mode,
+    build_config,
+    ios_dependency_manager,
+    builder_job_id: builderJob.jobId,
+    upload_session_key,
+    upload_path,
+    upload_url,
+    upload_expires_at,
+  })
+
+  return { buildRequestRow, builderJob, upload_session_key, upload_path, upload_url, upload_expires_at, builderUploadUrl: builderJob.uploadUrl }
+}
+
 export async function requestBuild(
   c: Context,
   body: RequestBuildBody,
@@ -550,49 +616,18 @@ export async function requestBuild(
     platform,
   })
 
-  // Create upload_path BEFORE calling builder so we can pass it
-  const upload_session_key = crypto.randomUUID()
-  const upload_path = `orgs/${org_id}/apps/${app_id}/native-builds/${upload_session_key}.zip`
-  const { builderUrl, builderApiKey } = getBuilderConfig(c)
-  const builderJob = await createBuilderJob(c, {
-    builderUrl,
-    builderApiKey,
-    orgId: org_id,
-    actorUserId: apikey.user_id,
-    appId: app_id,
-    platform,
-    uploadPath: upload_path,
-    // The builder schedules some builds by dependency manager.
-    buildOptions: ios_dependency_manager ? { ...build_options, iosDependencyManager: ios_dependency_manager } : build_options,
-    buildCredentials: build_credentials,
-    cacheEnabled: cache_enabled,
-    cacheKey: cache_key,
-  })
-
-  ensureBuilderUploadUrl(c, builderUrl, builderApiKey, builderJob)
-
-  const upload_expires_at = new Date(Date.now() + 60 * 60 * 1000)
-  const upload_url = getBuildUploadUrl(c, builderJob)
-  cloudlog({
-    requestId: c.get('requestId'),
-    message: 'Using Capgo TUS proxy URL for builder',
-    proxy_url: upload_url,
-    builder_url: builderJob.uploadUrl,
-  })
-
-  const buildRequestRow = await persistBuildRequest(c, {
+  const { buildRequestRow, builderJob, upload_session_key, upload_path, upload_url, upload_expires_at } = await createNativeBuildRequest(c, {
     app_id,
     org_id,
-    requested_by: apikey.user_id,
+    user_id: apikey.user_id,
     platform,
     build_mode,
     build_config,
+    build_options,
+    build_credentials,
     ios_dependency_manager,
-    builder_job_id: builderJob.jobId,
-    upload_session_key,
-    upload_path,
-    upload_url,
-    upload_expires_at,
+    cache_enabled,
+    cache_key,
   })
 
   cloudlog({

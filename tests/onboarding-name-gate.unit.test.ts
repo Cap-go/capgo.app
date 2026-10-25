@@ -21,8 +21,9 @@ describe('required initial onboarding name', () => {
     expect(initialProfileOnboardingSteps(onboarding, true)).toEqual(['welcome', 'name', 'intent', 'app_name', 'app_icon', 'organization', 'setup'])
   })
   it('shares the name, goal and app step order with combined onboarding flags', () => {
+    // The retired development-environment assignment no longer adds a step.
     expect(initialProfileOnboardingSteps({ abtests: { webnativeapp_development_environment: { branch: 'C' }, new_channel: { branch: 'A' } } }, true))
-      .toEqual(['welcome', 'name', 'intent', 'publish_app_question', 'app_name', 'app_icon', 'organization', 'channel', 'setup'])
+      .toEqual(['welcome', 'name', 'intent', 'app_name', 'app_icon', 'organization', 'channel', 'setup'])
   })
   it('consumes the handoff once so a refresh starts a new telemetry run', () => {
     const identity = { attemptId: 'attempt', runId: 'run' }

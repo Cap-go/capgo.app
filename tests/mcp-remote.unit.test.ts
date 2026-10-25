@@ -147,6 +147,8 @@ describe('hosted MCP protocol', () => {
       'capgo_retry_webhook_delivery',
       'capgo_send_notification',
       'capgo_trigger_update_check',
+      'capgo_set_website_live_icon', // fetches the customer's website icon
+      'capgo_update_website_live_store', // checks the customer's website
     ]
     const byName = new Map(MCP_TOOLS.map(tool => [tool.name, tool]))
     for (const name of openWorld)

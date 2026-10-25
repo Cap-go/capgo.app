@@ -663,3 +663,110 @@ describe('cloudflare snippet on-prem fallback', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('cloudflare snippet website_live cache', () => {
+  const WEBSITE_APP_ID = 'com.Web2App.Shop'
+  const ANSWER = { allowed: true, mode: 'website', website_url: 'https://shop.example.com', check_interval_seconds: 600 }
+  const CACHE_KEY = `https://plugin.capgo.app/__internal__/website-live-v1/${encodeURIComponent(WEBSITE_APP_ID)}`
+  let cache: Cache
+
+  function websiteLiveRequest(query = `?app_id=${encodeURIComponent(WEBSITE_APP_ID)}`, method = 'GET') {
+    const request = new Request(`https://plugin.capgo.app/website_live${query}`, {
+      method,
+      headers: { 'cf-connecting-ip': '203.0.113.7' },
+    })
+    Object.defineProperty(request, 'cf', { value: { colo: 'CDG', asn: 3215 } })
+    return request
+  }
+
+  function workerAnswer(headers: Record<string, string> = {}, status = 200) {
+    return new Response(JSON.stringify(ANSWER), {
+      status,
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300, s-maxage=300', 'X-Website-Live-Cache': 'miss', ...headers },
+    })
+  }
+
+  const isWebsiteLiveKey = (key: unknown) => String(key).includes('/website-live-v1/')
+  const websiteLivePuts = () => cache.put.mock.calls.filter(([key]) => isWebsiteLiveKey(key))
+
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    cache = buildCache()
+    vi.stubGlobal('caches', { default: cache })
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('stores a fresh worker answer per app and serves the next device without a worker', async () => {
+    const fetchMock = vi.fn(async () => workerAnswer({ 'Set-Cookie': 'sid=secret', 'Content-Encoding': 'gzip' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const first = await snippet.fetch(websiteLiveRequest())
+    expect(first.status).toBe(200)
+    expect(await first.json()).toEqual(ANSWER)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(subrequests(cache, fetchMock)).toBeLessThanOrEqual(5)
+
+    const puts = websiteLivePuts()
+    expect(puts).toHaveLength(1)
+    expect(String(puts[0][0])).toBe(CACHE_KEY)
+    const stored = cache.store.get(CACHE_KEY)!
+    // Same tag as updatesAppCacheTag(), so the app purge queue clears it.
+    expect(stored.headers.get('Cache-Tag')).toBe('capgo-updates-com.web2app.shop')
+    expect(stored.headers.get('Cache-Control')).toBe('public, max-age=300, s-maxage=300')
+    expect(stored.headers.get('Set-Cookie')).toBeNull()
+    expect(stored.headers.get('Content-Encoding')).toBeNull()
+
+    cache.match.mockClear()
+    cache.put.mockClear()
+    const second = await snippet.fetch(websiteLiveRequest())
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(second.status).toBe(200)
+    expect(second.headers.get('X-Website-Live-Edge-Cache')).toBe('hit')
+    expect(await second.json()).toEqual(ANSWER)
+    expect(cache.match).toHaveBeenCalledTimes(1)
+    expect(cache.put).not.toHaveBeenCalled()
+  })
+
+  it('stores only the remaining TTL of an aged worker answer', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => workerAnswer({ 'Age': '120', 'X-Website-Live-Cache': 'hit' })))
+
+    await snippet.fetch(websiteLiveRequest())
+
+    const stored = cache.store.get(CACHE_KEY)!
+    expect(stored.headers.get('Cache-Control')).toBe('public, max-age=180, s-maxage=180')
+    expect(stored.headers.get('Age')).toBeNull()
+  })
+
+  it.each([
+    ['a non-200 answer', () => workerAnswer({}, 404)],
+    ['a no-store answer', () => workerAnswer({ 'Cache-Control': 'no-store' })],
+    ['an answer without a TTL', () => workerAnswer({ 'Cache-Control': 'private' })],
+    ['an expired aged answer', () => workerAnswer({ Age: '300' })],
+    ['a worker cache hit without Age', () => workerAnswer({ 'X-Website-Live-Cache': 'hit' })],
+  ])('does not store %s', async (_label, answer) => {
+    const fetchMock = vi.fn(async () => answer())
+    vi.stubGlobal('fetch', fetchMock)
+
+    await snippet.fetch(websiteLiveRequest())
+    await snippet.fetch(websiteLiveRequest())
+
+    expect(websiteLivePuts()).toEqual([])
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not use the cache for other methods or a missing app id', async () => {
+    const fetchMock = vi.fn(async () => workerAnswer())
+    vi.stubGlobal('fetch', fetchMock)
+
+    await snippet.fetch(websiteLiveRequest(undefined, 'HEAD'))
+    await snippet.fetch(websiteLiveRequest(''))
+
+    expect(cache.match.mock.calls.filter(([key]) => isWebsiteLiveKey(key))).toEqual([])
+    expect(websiteLivePuts()).toEqual([])
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+})

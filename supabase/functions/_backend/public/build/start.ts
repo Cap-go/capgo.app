@@ -83,7 +83,7 @@ function normalizeStartedBuildStatus(status?: string): string {
   return status && status.toLowerCase() !== 'pending' ? status : 'running'
 }
 
-async function markBuildAsFailed(
+export async function markBuildAsFailed(
   c: Context,
   jobId: string,
   appId: string,
@@ -191,13 +191,154 @@ async function markBuildAsFailed(
   }
 }
 
+type StartableBuildRequest = Pick<Database['public']['Tables']['build_requests']['Row'], 'id' | 'app_id' | 'owner_org' | 'requested_by' | 'status' | 'platform' | 'build_mode'>
+
+const buildErrorsAlreadyMarkedFailed = new WeakSet<object>()
+
+/**
+ * Reserve a concurrency slot, ask the builder to start the job and move the
+ * build_requests row to its started status. Callers must check app.build_native
+ * and bind jobId to appId first. Marks the build failed when the start fails.
+ */
+export async function startBuildForRequest(c: Context, input: {
+  jobId: string
+  appId: string
+  buildRequest: StartableBuildRequest
+  userId: string
+}): Promise<{ status: string }> {
+  const { jobId, appId, buildRequest, userId } = input
+  let markedFailed = false
+  try {
+    try {
+      await reserveNativeBuildSlot(c, {
+        buildRequestId: buildRequest.id,
+        orgId: buildRequest.owner_org,
+        appId,
+        jobId,
+        userId,
+      })
+    }
+    catch (error) {
+      // Persist a customer-facing reason on the build row so the dashboard can
+      // show the concurrency/upgrade message instead of leaving a stuck pending job.
+      if (isNativeBuildConcurrencyLimitError(error)) {
+        await markBuildAsFailed(c, jobId, appId, error.message)
+        markedFailed = true
+      }
+      throw error
+    }
+
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'Start build request',
+      job_id: jobId,
+      app_id: appId,
+      user_id: userId,
+    })
+
+    // Call builder to start the job
+    const builderResponse = await fetch(`${getEnv(c, 'BUILDER_URL')}/jobs/${jobId}/start`, {
+      method: 'POST',
+      headers: {
+        'x-api-key': getEnv(c, 'BUILDER_API_KEY'),
+      },
+    })
+
+    if (!builderResponse.ok) {
+      const errorText = await builderResponse.text()
+      const errorMsg = `Failed to start build: ${errorText}`
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'Builder start failed',
+        job_id: jobId,
+        status: builderResponse.status,
+        error: errorText,
+      })
+
+      // Update build_requests to mark as failed
+      await markBuildAsFailed(c, jobId, appId, errorMsg)
+      markedFailed = true
+      throw simpleError('builder_error', errorMsg)
+    }
+
+    const builderJob = await builderResponse.json() as BuilderStartResponse
+    const startedStatus = normalizeStartedBuildStatus(builderJob.status)
+
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'Build started',
+      job_id: jobId,
+      status: startedStatus,
+      builder_status: builderJob.status,
+    })
+
+    // Update build_requests status to running. The builder response is trusted
+    // backend data, and this write must not be exposed through API-key RLS.
+    //
+    // Optimistic concurrency-control (CAS) guard: `.eq('status', previousStatus)`
+    // ensures only one writer wins when concurrent start requests race. The
+    // `.select('id')` lets us detect whether this writer actually advanced the
+    // row; if `updatedRows` is empty, another writer already moved the status
+    // and emitted the transition event — skip emission to avoid double-firing.
+    const previousStatus = buildRequest.status
+
+    const { data: updatedRows, error: updateError } = await supabaseAdmin(c)
+      .from('build_requests')
+      .update({
+        status: startedStatus,
+        // started_at is set later from the builder-reported run start (status/reconcile).
+        updated_at: new Date().toISOString(),
+      })
+      .eq('builder_job_id', jobId)
+      .eq('app_id', appId)
+      .eq('status', previousStatus)
+      .select('id')
+
+    if (updateError) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'Failed to update build_requests status to running',
+        job_id: jobId,
+        error: updateError.message,
+      })
+    }
+    else if (updatedRows && updatedRows.length > 0) {
+      await emitBuildTransitionEvent(c, {
+        previousStatus,
+        effectiveStatus: startedStatus,
+        timeoutApplied: false,
+        build: {
+          app_id: buildRequest.app_id,
+          platform: buildRequest.platform,
+          build_mode: buildRequest.build_mode,
+          owner_org: buildRequest.owner_org,
+          requested_by: buildRequest.requested_by,
+        },
+      })
+    }
+    // else: another writer already advanced the status (or it never matched
+    // previousStatus) — skip emission to avoid double-firing.
+
+    return { status: startedStatus }
+  }
+  catch (error) {
+    if (!markedFailed && !(error instanceof HTTPException)) {
+      await markBuildAsFailed(c, jobId, appId, error instanceof Error ? error.message : String(error))
+      markedFailed = true
+    }
+    if (markedFailed && error && typeof error === 'object')
+      buildErrorsAlreadyMarkedFailed.add(error)
+    throw error
+  }
+}
+
 export async function startBuild(
   c: Context,
   jobId: string,
   appId: string,
   apikey: Database['public']['Tables']['apikeys']['Row'],
 ): Promise<Response> {
-  let alreadyMarkedAsFailed = false
+  const alreadyMarkedAsFailed = false
   const apikeyKey = apikey.key ?? c.get('capgkey') ?? apikey.key_hash ?? null
 
   try {
@@ -259,117 +400,13 @@ export async function startBuild(
       throw simpleError('unauthorized', errorMsg)
     }
 
+    const { status: startedStatus } = await startBuildForRequest(c, {
+      jobId,
+      appId,
+      buildRequest,
+      userId: apikey.user_id,
+    })
     const boundAppId = appId
-
-    try {
-      await reserveNativeBuildSlot(c, {
-        buildRequestId: buildRequest.id,
-        orgId: buildRequest.owner_org,
-        appId: boundAppId,
-        jobId,
-        userId: apikey.user_id,
-      })
-    }
-    catch (error) {
-      // Persist a customer-facing reason on the build row so the dashboard can
-      // show the concurrency/upgrade message instead of leaving a stuck pending job.
-      if (isNativeBuildConcurrencyLimitError(error)) {
-        await markBuildAsFailed(c, jobId, boundAppId, error.message)
-        alreadyMarkedAsFailed = true
-      }
-      throw error
-    }
-
-    cloudlog({
-      requestId: c.get('requestId'),
-      message: 'Start build request',
-      job_id: jobId,
-      app_id: boundAppId,
-      user_id: apikey.user_id,
-    })
-
-    // Call builder to start the job
-    const builderResponse = await fetch(`${getEnv(c, 'BUILDER_URL')}/jobs/${jobId}/start`, {
-      method: 'POST',
-      headers: {
-        'x-api-key': getEnv(c, 'BUILDER_API_KEY'),
-      },
-    })
-
-    if (!builderResponse.ok) {
-      const errorText = await builderResponse.text()
-      const errorMsg = `Failed to start build: ${errorText}`
-      cloudlogErr({
-        requestId: c.get('requestId'),
-        message: 'Builder start failed',
-        job_id: jobId,
-        status: builderResponse.status,
-        error: errorText,
-      })
-
-      // Update build_requests to mark as failed
-      await markBuildAsFailed(c, jobId, boundAppId, errorMsg)
-      alreadyMarkedAsFailed = true
-      throw simpleError('builder_error', errorMsg)
-    }
-
-    const builderJob = await builderResponse.json() as BuilderStartResponse
-    const startedStatus = normalizeStartedBuildStatus(builderJob.status)
-
-    cloudlog({
-      requestId: c.get('requestId'),
-      message: 'Build started',
-      job_id: jobId,
-      status: startedStatus,
-      builder_status: builderJob.status,
-    })
-
-    // Update build_requests status to running. The builder response is trusted
-    // backend data, and this write must not be exposed through API-key RLS.
-    //
-    // Optimistic concurrency-control (CAS) guard: `.eq('status', previousStatus)`
-    // ensures only one writer wins when concurrent start requests race. The
-    // `.select('id')` lets us detect whether this writer actually advanced the
-    // row; if `updatedRows` is empty, another writer already moved the status
-    // and emitted the transition event — skip emission to avoid double-firing.
-    const previousStatus = buildRequest.status
-
-    const { data: updatedRows, error: updateError } = await supabaseAdmin(c)
-      .from('build_requests')
-      .update({
-        status: startedStatus,
-        // started_at is set later from the builder-reported run start (status/reconcile).
-        updated_at: new Date().toISOString(),
-      })
-      .eq('builder_job_id', jobId)
-      .eq('app_id', boundAppId)
-      .eq('status', previousStatus)
-      .select('id')
-
-    if (updateError) {
-      cloudlogErr({
-        requestId: c.get('requestId'),
-        message: 'Failed to update build_requests status to running',
-        job_id: jobId,
-        error: updateError.message,
-      })
-    }
-    else if (updatedRows && updatedRows.length > 0) {
-      await emitBuildTransitionEvent(c, {
-        previousStatus,
-        effectiveStatus: startedStatus,
-        timeoutApplied: false,
-        build: {
-          app_id: buildRequest.app_id,
-          platform: buildRequest.platform,
-          build_mode: buildRequest.build_mode,
-          owner_org: buildRequest.owner_org,
-          requested_by: buildRequest.requested_by,
-        },
-      })
-    }
-    // else: another writer already advanced the status (or it never matched
-    // previousStatus) — skip emission to avoid double-firing.
 
     // Generate JWT token for direct log stream access
     const jwtSecret = getEnv(c, 'JWT_SECRET')
@@ -423,7 +460,7 @@ export async function startBuild(
   }
   catch (error) {
     // Mark build as failed for any unexpected error (but only if not already marked)
-    if (!alreadyMarkedAsFailed && apikeyKey && !(error instanceof HTTPException)) {
+    if (!alreadyMarkedAsFailed && apikeyKey && !(error instanceof HTTPException) && !(error && typeof error === 'object' && buildErrorsAlreadyMarkedFailed.has(error))) {
       const errorMsg = error instanceof Error ? error.message : String(error)
       await markBuildAsFailed(c, jobId, appId, errorMsg)
     }

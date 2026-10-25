@@ -24,7 +24,7 @@ import type { UserOnboardingProgress, UserOnboardingSetupStage, UserOnboardingSt
 import mime from 'mime'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconCopy from '~icons/ion/copy-outline'
 import IconArrowRight from '~icons/lucide/arrow-right'
@@ -59,6 +59,7 @@ import {
   replaceUserOnboardingWithRetry,
   serializeUserOnboardingWrite,
 } from '~/services/userOnboardingWriteQueue'
+import { normalizeWebsiteLiveUrl, useAppUpdateModeStore } from '~/stores/appUpdateMode'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
@@ -115,6 +116,7 @@ import {
   resumableOnboardingFlowStep,
   shouldPromptOnboardingResume,
 } from '~/utils/userOnboardingProgress'
+import { clearRememberedWeb2AppArrival, parseWeb2AppArrival, readRememberedWeb2AppArrival } from '~/utils/web2appArrival'
 import AppOnboardingBuilderChecklist from './AppOnboardingBuilderChecklist.vue'
 import AppOnboardingCliSteps from './AppOnboardingCliSteps.vue'
 import AppOnboardingDualChecklist from './AppOnboardingDualChecklist.vue'
@@ -149,6 +151,7 @@ const props = defineProps<{
 }>()
 
 const router = useRouter()
+const route = useRoute()
 const { t } = useI18n()
 const capgo = useConsole()
 const dialogStore = useDialogV2Store()
@@ -277,6 +280,31 @@ const isImportingOrganizationWebsite = ref(false)
 const organizationWebsiteInput = ref('')
 const websitePreview = ref<OrganizationWebsitePreview | null>(null)
 const showOrganizationInvite = ref(false)
+// Web2App: the store app loads the customer's website and updates come
+// straight from that website. The "publish" intent is its entry point.
+type OnboardingUpdateMode = 'capgo' | 'website'
+const updateMode = ref<OnboardingUpdateMode>('capgo')
+const updateModeTouched = ref(false)
+const websiteLiveUrlInput = ref('')
+// Set when the app was created but its Web2App mode could not be saved.
+const websiteModeSaveFailedAppId = ref('')
+// Hidden until the Web2App plan exists (it is created once its Stripe prices exist).
+const hasWebsiteLivePlan = computed(() => main.plans.some(plan => plan.kind === 'website'))
+const showWebsiteLiveChoice = computed(() => props.preOrg && hasWebsiteLivePlan.value && selectedIntent.value !== 'builder')
+// "Turn my website into an app" always means Web2App: no update-mode choice.
+const isWeb2AppIntent = computed(() => showWebsiteLiveChoice.value && selectedIntent.value === 'publish')
+const qualifiesForWebsiteLive = computed(() => isWeb2AppIntent.value)
+const isWebsiteLiveSelected = computed(() => isWeb2AppIntent.value || (showWebsiteLiveChoice.value && updateMode.value === 'website'))
+const normalizedWebsiteLiveUrl = computed(() => normalizeWebsiteLiveUrl(websiteLiveUrlInput.value))
+watch(qualifiesForWebsiteLive, (qualified) => {
+  if (!updateModeTouched.value)
+    updateMode.value = qualified ? 'website' : 'capgo'
+}, { immediate: true })
+
+function selectUpdateMode(mode: OnboardingUpdateMode) {
+  updateMode.value = mode
+  updateModeTouched.value = true
+}
 
 const standardIntentOptions = [
   { value: 'ota', icon: IconRefresh },
@@ -285,7 +313,8 @@ const standardIntentOptions = [
   { value: 'exploring', icon: IconCompass },
 ] as const
 const publishIntentOption = { value: 'publish', icon: OnboardingPublishIntentIcon } as const
-const intentOptions = computed(() => webNativePublishIntentTreatment.value
+const showWebsiteLivePublishIntent = computed(() => Boolean(props.preOrg && hasWebsiteLivePlan.value))
+const intentOptions = computed(() => (webNativePublishIntentTreatment.value || showWebsiteLivePublishIntent.value)
   ? [publishIntentOption, ...standardIntentOptions]
   : standardIntentOptions)
 const showDevelopmentEnvironmentQuestion = computed(() => flowStep.value === 'publish_app_question')
@@ -590,7 +619,11 @@ const showWebNativeRecommendation = computed(() => shouldShowWebNativeRecommenda
 const canCreatePreOrgOrganization = computed(() => {
   if (!orgNameInput.value.trim() || isImportingOrganizationWebsite.value)
     return false
-  return selectedUserCountStop.value !== null && !showWebNativeRecommendation.value
+  if (showWebNativeRecommendation.value)
+    return false
+  if (isWebsiteLiveSelected.value)
+    return normalizedWebsiteLiveUrl.value !== null
+  return selectedUserCountStop.value !== null
 })
 const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-title') : t('unified-onboarding-setup-ota-title'))
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
@@ -795,6 +828,8 @@ function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress'
     importedStoreAppId: importedStoreAppId.value,
     orgName: orgNameInput.value,
     estimatedUsersIndex: estimatedUsersIndex.value,
+    updateMode: updateModeTouched.value ? updateMode.value : null,
+    websiteUrl: websiteLiveUrlInput.value,
     onboardingAttemptId: telemetry.onboardingAttemptId,
     lastRunId: telemetry.lastRunId,
   })
@@ -973,6 +1008,11 @@ function applyOnboardingProgress(progress: ReturnType<typeof parseUserOnboarding
   }
   if (typeof progress.estimated_users_index === 'number')
     estimatedUsersIndex.value = progress.estimated_users_index
+  if (progress.update_mode)
+    selectUpdateMode(progress.update_mode)
+  if (progress.website_url)
+    websiteLiveUrlInput.value = progress.website_url
+  applyWeb2AppArrival()
 }
 
 function applyDefaultPreOrgDetails() {
@@ -982,6 +1022,24 @@ function applyDefaultPreOrgDetails() {
     existingAppSetup.value = 'manual'
   }
   flowStep.value = 'intent'
+  applyWeb2AppArrival()
+}
+
+// Arrivals with `?ref=webnativeapp` and/or `?website=<url>` (forwarded from
+// /register, the auth guard `to` param or remembered across email
+// confirmation) start on the Web2App path with their website prefilled.
+function applyWeb2AppArrival() {
+  if (!props.preOrg || flowStep.value !== 'intent')
+    return
+  const arrival = parseWeb2AppArrival(route.query)
+    ?? readRememberedWeb2AppArrival(Date.now(), onboardingUserId.value)
+  if (!arrival)
+    return
+  if (arrival.websiteUrl && !normalizedWebsiteLiveUrl.value)
+    websiteLiveUrlInput.value = arrival.websiteUrl
+  // Keep an explicit saved intent; only default to publish when none is set yet.
+  if (hasWebsiteLivePlan.value && !selectedIntent.value)
+    selectedIntent.value = 'publish'
 }
 
 function nextStepAfterChannelEligibility(): 'channel' | 'setup' {
@@ -2035,13 +2093,20 @@ async function createOrganizationAndApp() {
     return
   }
 
-  const selectedStop = selectedUserCountStop.value
+  const websiteLive = isWebsiteLiveSelected.value
+  if (websiteLive && !normalizedWebsiteLiveUrl.value) {
+    toast.error(t('website-live-invalid-url'))
+    return
+  }
+  const startingOutStop = userCountStops.value.find(stop => stop.startingOut === true) ?? userCountStops.value[0]
+  // Web2App has no MAU tiers, so the user-count question is skipped.
+  const selectedStop = websiteLive ? startingOutStop : selectedUserCountStop.value
   if (!selectedStop) {
     toast.error(t('organization-onboarding-user-scale-required'))
     return
   }
   const estimatedMau = selectedStop.value
-  const shouldInvite = selectedStop.planName !== 'Solo'
+  const shouldInvite = !websiteLive && selectedStop.planName !== 'Solo'
 
   isSubmitting.value = true
   try {
@@ -2055,6 +2120,7 @@ async function createOrganizationAndApp() {
         startingOut: selectedStop.startingOut === true,
         developmentEnvironment: selectedDevelopmentEnvironment.value ?? 'skipped',
         website: websitePreview.value?.website,
+        updateMode: websiteLive ? 'website' : 'capgo',
         billingAccount: billingAccount.value,
       },
     })
@@ -2068,10 +2134,13 @@ async function createOrganizationAndApp() {
       return
     }
 
+    clearRememberedWeb2AppArrival()
     sendOnboardingEvent('onboarding_intent_selected', {
       intent: selectedIntent.value,
       estimated_mau: estimatedMau,
       org_id: data.id,
+      update_mode: websiteLive ? 'website' : 'capgo',
+      website_live_qualified: qualifiesForWebsiteLive.value,
     })
 
     try {
@@ -2102,6 +2171,10 @@ async function completePreOrgAppCreation(organizationId: string, shouldInvite: b
   clearOnboardingAppDraft(onboardingUserId.value)
   await uploadImportedOrganizationLogo(organizationId)
   removeBeforeUnloadWarning()
+  if (useAppUpdateModeStore().isWebsiteMode(createdApp.value.app_id) || websiteModeSaveFailedAppId.value === createdApp.value.app_id) {
+    await finishWebsiteLiveOnboarding(completionProperties)
+    return
+  }
   if (!shouldInvite) {
     await handOffToGettingStarted(completionProperties)
     return
@@ -2109,6 +2182,36 @@ async function completePreOrgAppCreation(organizationId: string, shouldInvite: b
 
   showOrganizationInvite.value = true
   trackOrganizationEvent('onboarding_organization_invite_viewed')
+}
+
+// Web2App has no CLI setup, channel or first upload: the app overview
+// shows the plugin config, so onboarding ends as soon as the app exists.
+// When the website could not be saved, the app is still in classic mode:
+// land on its settings, where Web2App orgs can add the website again,
+// instead of the full Capgo checklist.
+async function finishWebsiteLiveOnboarding(completionProperties: OnboardingStepCompletionProperties) {
+  const app = createdApp.value
+  if (!app)
+    return
+  progressTracker?.completeStep(analyticsStepFor(flowStep.value), completionProperties)
+  try {
+    const { data, error } = await capgo.rpc('dismiss_getting_started', { p_app_id: app.app_id })
+    if (error)
+      throw error
+    if (data != null)
+      organizationStore.updateAppOnboarding(app.app_id, data)
+    organizationStore.updateAppNeedOnboarding(app.app_id, false)
+  }
+  catch (error) {
+    // The overview still works; the getting-started page redirects Web2App apps.
+    console.error('Cannot dismiss getting started for Web2App app', error)
+  }
+  window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
+  allowOnboardingDashboardExploration(onboardingUserId.value, app.app_id)
+  await persistOnboardingProgress('completed')
+  onboardingProgressPersistence.abort()
+  const needsWebsiteRecovery = websiteModeSaveFailedAppId.value === app.app_id
+  await router.replace(`/app/${encodeURIComponent(app.app_id)}${needsWebsiteRecovery ? '/settings' : ''}`)
 }
 
 function onOrganizationInviteOpened() {
@@ -2310,6 +2413,25 @@ async function createAppRecord(options?: { nextStep?: 'organization' }): Promise
     const restoredLocalIconSource = localIconPreview.value.startsWith('data:image/') ? localIconPreview.value : ''
     const importedIconSource = canUseStoreImportPreview.value ? storeIconPreview.value : ''
     await uploadIcon(appId, restoredLocalIconSource || importedIconSource)
+    websiteModeSaveFailedAppId.value = ''
+    if (isWebsiteLiveSelected.value && normalizedWebsiteLiveUrl.value) {
+      const websiteState = { updateMode: 'website' as const, websiteUrl: normalizedWebsiteLiveUrl.value }
+      try {
+        await useAppUpdateModeStore().save(appId, websiteState)
+      }
+      catch (firstError) {
+        console.warn('Retrying Web2App save on onboarding app', firstError)
+        try {
+          await useAppUpdateModeStore().save(appId, websiteState)
+        }
+        catch (updateModeError) {
+          // The app exists; app settings offer the website again for Web2App orgs.
+          console.error('Cannot enable Web2App on onboarding app', updateModeError)
+          toast.error(t('website-live-onboarding-save-error'))
+          websiteModeSaveFailedAppId.value = appId
+        }
+      }
+    }
     const { data: refreshed } = await capgo
       .from('apps')
       .select()
@@ -2367,8 +2489,14 @@ async function createAppRecord(options?: { nextStep?: 'organization' }): Promise
 
 async function createAppAndHandOff() {
   const completionProperties = await createAppRecord()
-  if (completionProperties)
-    await handOffToGettingStarted(completionProperties)
+  if (!completionProperties)
+    return
+  if (createdApp.value && websiteModeSaveFailedAppId.value === createdApp.value.app_id) {
+    removeBeforeUnloadWarning()
+    await finishWebsiteLiveOnboarding(completionProperties)
+    return
+  }
+  await handOffToGettingStarted(completionProperties)
 }
 
 // Once the app exists, setup continues on Getting started inside the
@@ -2805,7 +2933,7 @@ watch(appName, (value) => {
   schedulePersistOnboardingProgress()
 }, { immediate: true })
 
-watch([orgNameInput, storeUrl, selectedDevelopmentEnvironment, selectedIntent, existingAppSetup, estimatedUsersIndex, manualAppId, importedStoreAppId], () => {
+watch([orgNameInput, storeUrl, selectedDevelopmentEnvironment, selectedIntent, existingAppSetup, estimatedUsersIndex, manualAppId, importedStoreAppId, updateMode, websiteLiveUrlInput], () => {
   schedulePersistOnboardingProgress()
 })
 
@@ -3368,7 +3496,117 @@ defineExpose({
                 </div>
               </div>
 
-              <div v-if="existingApp === true">
+              <div v-if="showWebsiteLiveChoice" data-test="onboarding-update-mode">
+                <template v-if="isWeb2AppIntent">
+                  <p class="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-slate-200" data-test="onboarding-web2app-title">
+                    <IconGlobe class="h-4 w-4 text-primary-500" />
+                    {{ t('website-live-onboarding-option-title') }}
+                  </p>
+                  <p class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                    {{ t('organization-onboarding-intent-option-publish-desc') }}
+                  </p>
+                </template>
+                <template v-else>
+                  <p id="update-mode-label" class="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-slate-200">
+                    <IconGlobe class="h-4 w-4 text-primary-500" />
+                    {{ t('website-live-onboarding-question') }}
+                  </p>
+                  <p class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                    {{ t('website-live-onboarding-helper') }}
+                  </p>
+                </template>
+                <div v-if="!isWeb2AppIntent" class="mt-3 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-labelledby="update-mode-label">
+                  <label class="group cursor-pointer" data-test="onboarding-update-mode-website">
+                    <input
+                      type="radio"
+                      name="update-mode"
+                      class="peer sr-only"
+                      value="website"
+                      :checked="updateMode === 'website'"
+                      @change="selectUpdateMode('website')"
+                    >
+                    <span
+                      class="flex h-full flex-col gap-1 rounded-xl border p-3 text-left transition peer-focus-visible:ring-2 peer-focus-visible:ring-primary-500"
+                      :class="updateMode === 'website'
+                        ? 'border-primary-500 bg-slate-100 text-slate-950 ring-2 ring-primary-500/15 dark:border-primary-500/80 dark:bg-primary-500/25 dark:text-white'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200'"
+                    >
+                      <span class="flex items-center justify-between gap-2 text-sm font-semibold">
+                        {{ t('website-live-onboarding-option-title') }}
+                        <span v-if="qualifiesForWebsiteLive" class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300">
+                          {{ t('website-live-onboarding-recommended') }}
+                        </span>
+                      </span>
+                      <span class="text-xs text-slate-500 dark:text-slate-400">{{ t('website-live-onboarding-option-desc') }}</span>
+                    </span>
+                  </label>
+                  <label class="group cursor-pointer" data-test="onboarding-update-mode-capgo">
+                    <input
+                      type="radio"
+                      name="update-mode"
+                      class="peer sr-only"
+                      value="capgo"
+                      :checked="updateMode === 'capgo'"
+                      @change="selectUpdateMode('capgo')"
+                    >
+                    <span
+                      class="flex h-full flex-col gap-1 rounded-xl border p-3 text-left transition peer-focus-visible:ring-2 peer-focus-visible:ring-primary-500"
+                      :class="updateMode === 'capgo'
+                        ? 'border-primary-500 bg-slate-100 text-slate-950 ring-2 ring-primary-500/15 dark:border-primary-500/80 dark:bg-primary-500/25 dark:text-white'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200'"
+                    >
+                      <span class="text-sm font-semibold">{{ t('website-live-onboarding-full-title') }}</span>
+                      <span class="text-xs text-slate-500 dark:text-slate-400">{{ t('website-live-onboarding-full-desc') }}</span>
+                    </span>
+                  </label>
+                </div>
+
+                <div v-if="isWebsiteLiveSelected" class="mt-4 space-y-4 rounded-xl border border-amber-300/60 bg-amber-50 p-4 dark:border-amber-400/30 dark:bg-amber-500/10" data-test="onboarding-website-live-details">
+                  <div>
+                    <label for="onboarding-website-live-url" class="text-sm font-medium text-slate-800 dark:text-slate-200">
+                      {{ t('website-live-url-label') }}
+                    </label>
+                    <input
+                      id="onboarding-website-live-url"
+                      v-model="websiteLiveUrlInput"
+                      type="url"
+                      inputmode="url"
+                      placeholder="https://app.example.com"
+                      data-test="onboarding-website-live-url"
+                      class="d-input mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-950 outline-none sm:text-sm dark:border-white/20 dark:bg-slate-950/90 dark:text-white"
+                    >
+                    <p class="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">
+                      {{ t('website-live-onboarding-url-help') }}
+                    </p>
+                    <p v-if="normalizedWebsiteLiveUrl" class="mt-1 text-xs font-medium text-slate-800 dark:text-slate-100" data-test="onboarding-website-live-url-preview">
+                      {{ t('website-live-onboarding-url-preview', { url: normalizedWebsiteLiveUrl }) }}
+                    </p>
+                  </div>
+                  <div>
+                    <p class="text-sm font-semibold text-slate-900 dark:text-white">
+                      {{ t('website-live-onboarding-tradeoff-title') }}
+                    </p>
+                    <ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700 dark:text-slate-200">
+                      <li>{{ t('website-live-hidden-channels') }}</li>
+                      <li>{{ t('website-live-hidden-stats') }}</li>
+                      <li>{{ t('website-live-hidden-bundles') }}</li>
+                      <li>{{ t('website-live-hidden-encryption') }}</li>
+                      <li>{{ t('website-live-hidden-builds') }}</li>
+                    </ul>
+                    <p class="mt-2 text-sm text-slate-700 dark:text-slate-200">
+                      {{ t('website-live-onboarding-requirement') }}
+                    </p>
+                    <p class="mt-2 text-sm font-medium text-slate-900 dark:text-white">
+                      {{ t('website-live-onboarding-price') }}
+                    </p>
+                    <p class="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                      {{ t('website-live-onboarding-upgrade-later') }}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="existingApp === true && !isWebsiteLiveSelected">
                 <p id="estimated-users-label" class="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-slate-200">
                   <IconUsers class="h-4 w-4 text-primary-500" />
                   {{ t('organization-onboarding-existing-users-label') }}

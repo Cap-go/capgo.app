@@ -1,0 +1,14 @@
+App/build
+App/Pods
+App/output
+# Copied from www/ by scripts/pack-website-live-template.ts
+App/App/public
+DerivedData
+xcuserdata
+
+# Cordova plugins for Capacitor
+# capacitor-cordova-ios-plugins  (committed: Web2App template is built without cap sync)
+
+# Generated Config files
+# App/App/capacitor.config.json  (committed: Web2App template is built without cap sync)
+# App/App/config.xml  (committed: Web2App template is built without cap sync)

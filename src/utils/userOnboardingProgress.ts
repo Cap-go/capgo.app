@@ -18,6 +18,8 @@ export type UserOnboardingDetailsStep = typeof USER_ONBOARDING_DETAILS_STEPS[num
 export type UserOnboardingSetupStage = typeof USER_ONBOARDING_SETUP_STAGES[number]
 
 export interface UserOnboardingProgress {
+  update_mode?: 'capgo' | 'website'
+  website_url?: string
   status: UserOnboardingStatus
   step: UserOnboardingStep
   flow: OnboardingAnalyticsFlow
@@ -61,11 +63,15 @@ export const USER_ONBOARDING_PROGRESS_FIELDS = {
   setup_stage: true,
   status: true,
   step: true,
+  update_mode: true,
+  website_url: true,
   store_url: true,
   updated_at: true,
 } as const satisfies Record<keyof UserOnboardingProgress, true>
 
 export interface UserOnboardingProgressInput {
+  updateMode?: 'capgo' | 'website' | null
+  websiteUrl?: string
   status: UserOnboardingStatus
   step: UserOnboardingStep
   flow: OnboardingAnalyticsFlow
@@ -240,6 +246,13 @@ export function parseUserOnboardingProgress(value: unknown): UserOnboardingProgr
   if (lastRunId && onboardingRunIdPattern.test(lastRunId))
     progress.last_run_id = lastRunId
 
+  if (raw.update_mode === 'capgo' || raw.update_mode === 'website')
+    progress.update_mode = raw.update_mode
+
+  const websiteUrl = optionalTrimmedString(raw.website_url)
+  if (websiteUrl)
+    progress.website_url = websiteUrl
+
   return progress
 }
 
@@ -306,6 +319,13 @@ export function buildUserOnboardingProgress(input: UserOnboardingProgressInput):
 
   if (input.status === 'completed')
     progress.completed_at = optionalTrimmedString(input.completedAt) ?? progress.updated_at
+
+  if (input.updateMode)
+    progress.update_mode = input.updateMode
+
+  const websiteUrl = optionalTrimmedString(input.websiteUrl)
+  if (websiteUrl)
+    progress.website_url = websiteUrl
 
   return clampOnboardingPayload(progress)
 }

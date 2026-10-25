@@ -14,7 +14,11 @@
     "npm:dayjs@1.11.21": "1.11.21",
     "npm:discord-api-types@~0.38.48": "0.38.48",
     "npm:drizzle-orm@1.0.0-rc.3": "1.0.0-rc.3_@cloudflare+workers-types@4.20260526.1_@types+pg@8.20.0_pg@8.21.0_zod@4.5.4",
+    "npm:fast-png@8.0.0": "8.0.0",
+    "npm:fflate@0.8.3": "0.8.3",
     "npm:hono@4.12.23": "4.12.23",
+    "npm:jose@6.2.4": "6.2.4",
+    "npm:node-forge@1.4.0": "1.4.0",
     "npm:pg@8.21.0": "8.21.0",
     "npm:stripe@22.1.1": "22.1.1",
     "npm:zod@^4.5.4": "4.5.4"
@@ -127,11 +131,30 @@
         "zod"
       ]
     },
+    "fast-png@8.0.0": {
+      "integrity": "sha512-gCysNasJ8KEMgfdYIKd/wTDo6ENK1PWT0RJO7O+0pgmuHPw2O6tA1WvdxFRJoLf9V8yFYpG0FA1YgI8X97OhJA==",
+      "dependencies": [
+        "fflate",
+        "iobuffer"
+      ]
+    },
+    "fflate@0.8.3": {
+      "integrity": "sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA=="
+    },
     "hono@4.12.23": {
       "integrity": "sha512-eIaZ9qDgu7XV0pxOCrg7/WhnQ6Ivm22UcxhXx/A3dcbqbbYgBEkc6e/J/s7j2tS96zoB0S9VBdLwQNCWwUo4LA=="
     },
     "iceberg-js@0.8.1": {
       "integrity": "sha512-1dhVQZXhcHje7798IVM+xoo/1ZdVfzOMIc8/rgVSijRK38EDqOJoGula9N/8ZI5RD8QTxNQtK/Gozpr+qUqRRA=="
+    },
+    "iobuffer@6.0.1": {
+      "integrity": "sha512-SZWYkWNfjIXIBYSDpXDYIgshqtbOPsi4lviawAEceR1Kqk+sHDlcQjWrzNQsii80AyBY0q5c8HCTNjqo74ul+Q=="
+    },
+    "jose@6.2.4": {
+      "integrity": "sha512-N8acGzVsQy6M/fjFcxtysNc4Q379TcM5dM/qKkNtsHFji88yANnXTr7BLeP75iPnFwBfQzM/jg2BZ9+HZrHCZA=="
+    },
+    "node-forge@1.4.0": {
+      "integrity": "sha512-LarFH0+6VfriEhqMMcLX2F7SwSXeWwnEAJEsYm5QKWchiVYVvJyV9v7UDvUv+w5HO23ZpQTXDv/GxdDdMyOuoQ=="
     },
     "pg-cloudflare@1.4.0": {
       "integrity": "sha512-Vo7z/6rrQYxpNRylp4Tlob2elzbh+N/MOQbxFVWCxS7oEx6jF53GTJFxK2WWpKuBRkmiin4Mt+xofFDjx09R0A=="
@@ -228,7 +251,11 @@
       "npm:dayjs@1.11.21",
       "npm:discord-api-types@~0.38.48",
       "npm:drizzle-orm@1.0.0-rc.3",
+      "npm:fast-png@8.0.0",
+      "npm:fflate@0.8.3",
       "npm:hono@4.12.23",
+      "npm:jose@6.2.4",
+      "npm:node-forge@1.4.0",
       "npm:pg@8.21.0",
       "npm:stripe@22.1.1",
       "npm:zod@^4.5.4"

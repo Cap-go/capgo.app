@@ -1,19 +1,22 @@
 import type { OnboardingDevelopmentEnvironment } from '../../utils/onboardingProgressAnalytics'
-import assistantClaude from '../../assets/onboarding-tools/assistant-claude.svg?url'
-import assistantCodex from '../../assets/onboarding-tools/assistant-codex.svg?url'
-import assistantCopilot from '../../assets/onboarding-tools/assistant-copilot.svg?url'
-import assistantCursor from '../../assets/onboarding-tools/assistant-cursor.svg?url'
-import assistantOpencode from '../../assets/onboarding-tools/assistant-opencode.svg?url'
-import assistantWindsurf from '../../assets/onboarding-tools/assistant-windsurf.svg?url'
-import editorJetbrains from '../../assets/onboarding-tools/editor-jetbrains.svg?url'
-import editorNeovim from '../../assets/onboarding-tools/editor-neovim.svg?url'
-import editorTerminal from '../../assets/onboarding-tools/editor-terminal.svg?url'
-import editorVim from '../../assets/onboarding-tools/editor-vim.svg?url'
-import editorVscode from '../../assets/onboarding-tools/editor-vscode.svg?url'
-import hostedBase44 from '../../assets/onboarding-tools/hosted-base44.png?url'
-import hostedBolt from '../../assets/onboarding-tools/hosted-bolt.png?url'
-import hostedLovable from '../../assets/onboarding-tools/hosted-lovable.png?url'
-import hostedV0 from '../../assets/onboarding-tools/hosted-v0.svg?url'
+
+// Prefer import.meta.url over `?url` imports: unplugin-vue-better-define (visual-diff
+// vite build) resolves `file.svg?url` as a literal path and ENOENTs.
+const assistantClaude = new URL('../../assets/onboarding-tools/assistant-claude.svg', import.meta.url).href
+const assistantCodex = new URL('../../assets/onboarding-tools/assistant-codex.svg', import.meta.url).href
+const assistantCopilot = new URL('../../assets/onboarding-tools/assistant-copilot.svg', import.meta.url).href
+const assistantCursor = new URL('../../assets/onboarding-tools/assistant-cursor.svg', import.meta.url).href
+const assistantOpencode = new URL('../../assets/onboarding-tools/assistant-opencode.svg', import.meta.url).href
+const assistantWindsurf = new URL('../../assets/onboarding-tools/assistant-windsurf.svg', import.meta.url).href
+const editorJetbrains = new URL('../../assets/onboarding-tools/editor-jetbrains.svg', import.meta.url).href
+const editorNeovim = new URL('../../assets/onboarding-tools/editor-neovim.svg', import.meta.url).href
+const editorTerminal = new URL('../../assets/onboarding-tools/editor-terminal.svg', import.meta.url).href
+const editorVim = new URL('../../assets/onboarding-tools/editor-vim.svg', import.meta.url).href
+const editorVscode = new URL('../../assets/onboarding-tools/editor-vscode.svg', import.meta.url).href
+const hostedBase44 = new URL('../../assets/onboarding-tools/hosted-base44.png', import.meta.url).href
+const hostedBolt = new URL('../../assets/onboarding-tools/hosted-bolt.png', import.meta.url).href
+const hostedLovable = new URL('../../assets/onboarding-tools/hosted-lovable.png', import.meta.url).href
+const hostedV0 = new URL('../../assets/onboarding-tools/hosted-v0.svg', import.meta.url).href
 
 export interface OnboardingDevelopmentEnvironmentOption {
   value: Exclude<OnboardingDevelopmentEnvironment, 'skipped' | 'local_project' | 'exploring'>

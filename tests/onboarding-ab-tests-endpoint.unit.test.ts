@@ -50,8 +50,8 @@ describe('onboarding A/B test endpoint', () => {
 
   it('returns backend-assigned flags for the authenticated user without accepting a branch choice', async () => {
     const assignments = {
-      webnativeapp_development_environment: { assigned_at: '2026-09-01T00:00:00.000Z', branch: 'C' },
-      webnativeapp_publish_intent: { assigned_at: '2026-09-01T00:00:00.000Z', branch: 'A' },
+      builder_todo_list_v4: { assigned_at: '2026-09-01T00:00:00.000Z', branch: 'A' },
+      new_emails: { assigned_at: '2026-09-01T00:00:00.000Z', branch: 'B' },
     }
     getOrCreateUserABTestsMock.mockResolvedValueOnce(assignments)
 

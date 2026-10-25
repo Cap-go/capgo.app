@@ -1,0 +1,20 @@
+{
+  "name": "capgo-website-live-template",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Capgo Web2App native app template (Capacitor + @capgo/capacitor-updater website mode)",
+  "scripts": {
+    "sync": "cap sync",
+    "pack": "bun ../../scripts/pack-website-live-template.ts"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.3",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/ios": "8.5.3",
+    "@capgo/capacitor-updater": "8.52.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.3",
+    "typescript": "^5.9.3"
+  }
+}

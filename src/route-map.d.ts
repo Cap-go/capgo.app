@@ -248,6 +248,13 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
+    '/app/[app].store': RouteRecordInfo<
+      '/app/[app].store',
+      '/app/:app/store',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
     '/app/new': RouteRecordInfo<
       '/app/new',
       '/app/new',
@@ -853,6 +860,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/app/[app].settings.usage.vue': {
       routes:
         | '/app/[app].settings.usage'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
+    'src/pages/app/[app].store.vue': {
+      routes:
+        | '/app/[app].store'
       views:
         | never
       pathParamNames:
