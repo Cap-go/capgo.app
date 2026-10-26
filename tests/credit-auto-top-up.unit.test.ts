@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { normalizeAutoTopUpMonthlyLimit, shouldAttemptAutoTopUp } from '../supabase/functions/_backend/utils/credit_auto_top_up.ts'
+import type Stripe from 'stripe'
+import { describe, expect, it, vi } from 'vitest'
+import { AUTO_TOP_UP_KIND, normalizeAutoTopUpMonthlyLimit, payAutoTopUpInvoice, shouldAttemptAutoTopUp } from '../supabase/functions/_backend/utils/credit_auto_top_up.ts'
 
 describe('credit auto top-up decision', () => {
   const base = { enabled: true, availableCredits: 0, threshold: 10, lastAttemptAt: null as string | null }
@@ -43,5 +44,66 @@ describe('credit auto top-up monthly limit validation', () => {
     expect(normalizeAutoTopUpMonthlyLimit(false, 10)).toBeNull()
     expect(normalizeAutoTopUpMonthlyLimit('', 10)).toBeNull()
     expect(normalizeAutoTopUpMonthlyLimit('  ', 10)).toBeNull()
+  })
+})
+
+describe('credit auto top-up invoice', () => {
+  const context = { get: () => 'request-id' } as any
+  const input = {
+    orgId: 'org_1',
+    customerId: 'cus_1',
+    quantity: 25,
+    productId: 'prod_credits',
+    priceId: 'price_credits',
+    paymentMethodId: 'pm_1',
+    automaticTax: true,
+  }
+
+  function fakeStripe(payResult: 'paid' | 'declined') {
+    const state: { status: string } = { status: 'draft' }
+    const payments = { data: [{ payment: { type: 'payment_intent', payment_intent: 'pi_1' } }] }
+    const stripe = {
+      invoices: {
+        create: vi.fn(async () => ({ id: 'in_1', status: 'draft' })),
+        finalizeInvoice: vi.fn(async () => Object.assign(state, { status: 'open', id: 'in_1', payments })),
+        pay: vi.fn(async () => {
+          if (payResult === 'declined')
+            throw new Error('card_declined')
+          return Object.assign(state, { status: 'paid' })
+        }),
+        retrieve: vi.fn(async () => ({ id: 'in_1', ...state })),
+        voidInvoice: vi.fn(async () => Object.assign(state, { status: 'void' })),
+        del: vi.fn(async () => ({ id: 'in_1', deleted: true })),
+      },
+      invoiceItems: { create: vi.fn(async () => ({ id: 'ii_1' })) },
+      paymentIntents: { update: vi.fn(async () => ({ id: 'pi_1' })) },
+    } as unknown as Stripe
+    return stripe as any
+  }
+
+  it('bills the top-up through a paid invoice and tags its PaymentIntent', async () => {
+    const stripe = fakeStripe('paid')
+    await expect(payAutoTopUpInvoice(context, stripe, input)).resolves.toBe('pi_1')
+
+    expect(stripe.invoices.create).toHaveBeenCalledWith(expect.objectContaining({
+      customer: 'cus_1',
+      automatic_tax: { enabled: true },
+      pending_invoice_items_behavior: 'exclude',
+      metadata: expect.objectContaining({ kind: AUTO_TOP_UP_KIND, orgId: 'org_1', intendedQuantity: '25' }),
+    }), expect.anything())
+    expect(stripe.invoiceItems.create).toHaveBeenCalledWith(expect.objectContaining({
+      invoice: 'in_1',
+      pricing: { price: 'price_credits' },
+      quantity: 25,
+    }), expect.anything())
+    expect(stripe.paymentIntents.update).toHaveBeenCalledWith('pi_1', { metadata: expect.objectContaining({ kind: AUTO_TOP_UP_KIND }) })
+    expect(stripe.invoices.pay).toHaveBeenCalledWith('in_1', expect.objectContaining({ payment_method: 'pm_1', off_session: true }))
+    expect(stripe.invoices.voidInvoice).not.toHaveBeenCalled()
+  })
+
+  it('voids the invoice when the card is declined', async () => {
+    const stripe = fakeStripe('declined')
+    await expect(payAutoTopUpInvoice(context, stripe, input)).resolves.toBeNull()
+    expect(stripe.invoices.voidInvoice).toHaveBeenCalledWith('in_1')
   })
 })
