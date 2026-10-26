@@ -534,10 +534,11 @@ function isSemver(version) {
   const parts = SEMVER_PARTS_RE.exec(version)
   if (!parts)
     return false
-  const [, major, minor, patch, prerelease, build] = parts
+  // Absent tags read as '': SEMVER_PARTS_RE never captures an empty one.
+  const [, major, minor, patch, prerelease = '', build = ''] = parts
   return [major, minor, patch].every(part => SEMVER_CORE_NUMBER_RE.test(part))
-    && (prerelease === undefined || prerelease.split('.').every(id => SEMVER_PRERELEASE_ID_RE.test(id)))
-    && (build === undefined || build.split('.').every(id => SEMVER_BUILD_ID_RE.test(id)))
+    && (!prerelease || prerelease.split('.').every(id => SEMVER_PRERELEASE_ID_RE.test(id)))
+    && (!build || build.split('.').every(id => SEMVER_BUILD_ID_RE.test(id)))
 }
 
 /**
