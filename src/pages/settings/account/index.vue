@@ -463,7 +463,7 @@ async function submit(form: { first_name: string, last_name: string, email: stri
     toast.success('A confirmation email was sent click to link to confirm your new email', {
       duration: 10000,
     })
-    updateData.email = form.email
+    // public.users.email follows the auth email; it syncs once the change is confirmed.
   }
 
   const { data: usr, error: dbError } = await capgo
