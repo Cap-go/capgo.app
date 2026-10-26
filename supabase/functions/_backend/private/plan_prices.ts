@@ -43,15 +43,37 @@ export function pickCurrency(currencies: string[], lockedCurrency: string | null
   return currencies.includes(DEFAULT_CURRENCY) ? DEFAULT_CURRENCY : currencies[0] ?? null
 }
 
-async function loadPlanPrices(c: Context, authorization: string, billingAccount: BillingAccount): Promise<{ prices: PlanPriceAmounts, complete: boolean }> {
+interface PlanPriceRow {
+  stripe_id: string
+  price_m_id: string
+  price_y_id: string
+  price_m_id_us: string | null
+  price_y_id_us: string | null
+}
+
+async function listPlans(c: Context, authorization: string): Promise<PlanPriceRow[]> {
   const { data: plans, error } = await supabaseClient(c, authorization)
     .from('plans')
-    .select('stripe_id')
+    .select('stripe_id, price_m_id, price_y_id, price_m_id_us, price_y_id_us')
   if (error)
     throw simpleError('plans_not_found', 'Cannot load plans', { error })
+  return plans ?? []
+}
 
+// Changes whenever a plan switches to another Stripe price, so the cached catalog never outlives it.
+export function planPricesVersion(plans: PlanPriceRow[]) {
+  const ids = plans.flatMap(plan => [plan.stripe_id, plan.price_m_id, plan.price_y_id, plan.price_m_id_us ?? '', plan.price_y_id_us ?? '']).sort((a, b) => a.localeCompare(b)).join(',')
+  let hash = 0x811C9DC5
+  for (let i = 0; i < ids.length; i++) {
+    hash ^= ids.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return hash.toString(36)
+}
+
+async function loadPlanPrices(c: Context, plans: PlanPriceRow[], billingAccount: BillingAccount): Promise<{ prices: PlanPriceAmounts, complete: boolean }> {
   let complete = true
-  const entries = await Promise.all((plans ?? []).map(async ({ stripe_id }) => {
+  const entries = await Promise.all(plans.map(async ({ stripe_id }) => {
     try {
       const [month, year] = await Promise.all([
         getCheckoutPlanPrice(c, stripe_id, 'month', billingAccount),
@@ -76,14 +98,16 @@ async function loadPlanPrices(c: Context, authorization: string, billingAccount:
 }
 
 async function getPlanPrices(c: Context, authorization: string, billingAccount: BillingAccount) {
+  const plans = await listPlans(c, authorization)
   const cache = new CacheHelper(c)
-  const key = cache.buildRequest(PLAN_PRICES_CACHE_PATH, { account: billingAccount })
-  const degradedKey = cache.buildRequest(PLAN_PRICES_CACHE_PATH, { account: billingAccount, degraded: '1' })
+  const version = planPricesVersion(plans)
+  const key = cache.buildRequest(PLAN_PRICES_CACHE_PATH, { account: billingAccount, version })
+  const degradedKey = cache.buildRequest(PLAN_PRICES_CACHE_PATH, { account: billingAccount, version, degraded: '1' })
   const cached = await cache.matchJson<PlanPriceAmounts>(key, { timeoutMs: 200 })
     ?? await cache.matchJson<PlanPriceAmounts>(degradedKey, { timeoutMs: 200 })
   if (cached)
     return cached
-  const { prices, complete } = await loadPlanPrices(c, authorization, billingAccount)
+  const { prices, complete } = await loadPlanPrices(c, plans, billingAccount)
   // Never write a partial catalog to the main key: it expires within a minute and the failed plans are retried.
   await cache.putJson(complete ? key : degradedKey, prices, complete ? PLAN_PRICES_TTL_SECONDS : PLAN_PRICES_DEGRADED_TTL_SECONDS, { timeoutMs: 200 })
   return prices

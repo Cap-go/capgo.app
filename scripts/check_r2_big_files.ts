@@ -752,8 +752,8 @@ async function get_big_orgs() {
             const planQueries = orgsOver100MB.map(org =>
                 pool.query(
                     `select name, storage from plans
-                    where price_m_id=(select price_id from stripe_info where customer_id=(select customer_id from orgs where id = $1))
-                    or price_y_id=(select price_id from stripe_info where customer_id=(select customer_id from orgs where id = $1))`,
+                    where (select price_id from stripe_info where customer_id=(select customer_id from orgs where id = $1))
+                    = any(array[price_m_id, price_y_id, price_m_id_us, price_y_id_us]::text[] || legacy_price_m_ids || legacy_price_y_ids)`,
                     [org.orgId]
                 )
             )

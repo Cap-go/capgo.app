@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { getCommonCurrencies, pickCurrency, pickPriceCurrencies } from '../supabase/functions/_backend/private/plan_prices.ts'
+import { getCommonCurrencies, pickCurrency, pickPriceCurrencies, planPricesVersion } from '../supabase/functions/_backend/private/plan_prices.ts'
 import { currencyForCountry, isCurrencyAllowedForCountry } from '../supabase/functions/_backend/utils/country_currency.ts'
 import { getPlanPriceInterval } from '../supabase/functions/_backend/utils/plan_price_interval.ts'
 import { getCurrencyRatios, getPriceCurrencyAmounts, scaleTiersToCurrency } from '../supabase/functions/_backend/utils/stripe.ts'
@@ -109,5 +109,11 @@ describe('plan prices', () => {
     expect(getPlanPriceInterval(plan, 'price_y_old')).toBe('yearly')
     expect(getPlanPriceInterval(plan, 'price_other')).toBeUndefined()
     expect(getPlanPriceInterval(plan, null)).toBeUndefined()
+  })
+
+  it.concurrent('changes the catalog cache version when a plan switches price', () => {
+    const plan = { stripe_id: 'prod_solo', price_m_id: 'price_m_old', price_y_id: 'price_y_old', price_m_id_us: null, price_y_id_us: null }
+    expect(planPricesVersion([plan])).toBe(planPricesVersion([{ ...plan }]))
+    expect(planPricesVersion([{ ...plan, price_m_id: 'price_m_new' }])).not.toBe(planPricesVersion([plan]))
   })
 })
