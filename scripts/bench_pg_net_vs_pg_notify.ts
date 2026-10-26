@@ -150,15 +150,18 @@ async function sinkCount() {
   return ((await res.json()) as { count: number }).count
 }
 
-/** Resolves with the performance.now() at which the sink had every request. */
-async function waitDelivered(target: number, timeoutMs = 300_000) {
+/**
+ * Resolves with the performance.now() at which the sink had every request.
+ * The default allows pg_net's ~200 req/s at a quarter of that rate, plus 60 s.
+ */
+async function waitDelivered(target: number, timeoutMs = 60_000 + target * 20) {
   const start = performance.now()
   while (performance.now() - start < timeoutMs) {
     if (await sinkCount() >= target)
       return performance.now()
     await Bun.sleep(5)
   }
-  return Number.NaN
+  throw new Error(`only ${await sinkCount()} of ${target} requests delivered after ${timeoutMs} ms`)
 }
 
 async function waitForDb() {
