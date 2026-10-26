@@ -185,4 +185,15 @@ describe.skipIf(!USE_CLOUDFLARE)('auth.md service_auth agent registration', () =
       await deleteUserKey(keyId)
     }
   })
+
+  it('accepts the pre-v0.6 verified_email body as the same email flow', async () => {
+    const response = await postJson('/agent/identity', { type: 'identity_assertion', assertion_type: 'verified_email', assertion: USER_EMAIL })
+    expect(response.status, await response.clone().text()).toBe(200)
+    const body = await response.json() as Registration
+    expect(body.registration_type).toBe('service_auth')
+    expect(body.claim.user_code).toMatch(/^\d{6}$/)
+    const details = await fetchTestRequest(getEndpointUrl(`/private/agent_identity/?claim_attempt_token=${new URL(body.claim.verification_uri).searchParams.get('claim_attempt_token')}`), { headers: jwtHeaders })
+    expect(details.status, await details.clone().text()).toBe(200)
+    await expect(details.json()).resolves.toMatchObject({ email_matches: true })
+  })
 })

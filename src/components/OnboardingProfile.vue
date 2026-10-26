@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import type { Json } from '~/types/supabase.types'
+import type { Json } from '~/types/database.types'
 import { computed, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import { getLocalConfig, useConsole } from '~/services/console'
 import { setUser } from '~/services/posthog'
-import { getLocalConfig, useSupabase } from '~/services/supabase'
 import { replaceUserOnboardingWithRetry, serializeUserOnboardingWrite } from '~/services/userOnboardingWriteQueue'
 import { useMainStore } from '~/stores/main'
 
@@ -16,7 +16,7 @@ const emit = defineEmits<{
 }>()
 
 const main = useMainStore()
-const supabase = useSupabase()
+const capgo = useConsole()
 const { t } = useI18n()
 const inputId = useId()
 const firstName = ref(main.user?.first_name ?? '')
@@ -143,7 +143,7 @@ async function save() {
   try {
     const userId = main.user.id
     const authGeneration = main.authGeneration
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('users')
       .update({ first_name: firstName.value.trim(), last_name: lastName.value.trim() })
       .eq('id', userId)
@@ -167,7 +167,7 @@ async function save() {
         last_name: data.last_name ?? undefined,
         nickname: [data.first_name, data.last_name].join(' '),
         avatar: main.user.image_url ?? undefined,
-      }, getLocalConfig().supaHost)
+      }, getLocalConfig().apiHost)
     }
     catch {
       console.warn('Cannot update onboarding profile analytics')

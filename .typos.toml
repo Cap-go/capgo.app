@@ -68,6 +68,9 @@ extend-exclude = [
 ]
 
 [default.extend-words]
+# French words in the translation style guides.
+appareil = "appareil"
+sur = "sur"
 # Add custom words that should be ignored
 # Format: incorrectword = "correctword" or incorrectword = "incorrectword" to accept as-is
 capgo = "capgo"

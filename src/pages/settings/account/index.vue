@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { Capacitor } from '@capacitor/core'
 import { setErrors } from '@formkit/core'
 import { FormKit, FormKitMessages, reset } from '@formkit/vue'
@@ -14,10 +14,10 @@ import iconEmail from '~icons/heroicons/envelope?raw'
 import iconFlag from '~icons/heroicons/flag?raw'
 import iconName from '~icons/heroicons/user?raw'
 import GitHubProfileDialog from '~/components/dashboard/GitHubProfileDialog.vue'
+import { getCurrentPlanNameOrg, isPayingOrg, useConsole } from '~/services/console'
 import { getRecentEmailOtpVerification } from '~/services/emailOtp'
 import { getFormatLocaleOptions, resolveFormatLocale } from '~/services/formatLocale'
 import { pickPhoto, takePhoto } from '~/services/photos'
-import { getCurrentPlanNameOrg, isPayingOrg, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -27,7 +27,7 @@ import { safeResetTurnstile } from '~/utils/turnstile'
 
 const version = import.meta.env.VITE_APP_VERSION
 const { locale, t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const displayStore = useDisplayStore()
 displayStore.NavTitle = t('account')
 const router = useRouter()
@@ -67,7 +67,7 @@ async function ensureRecentEmailVerification() {
     return false
 
   try {
-    const { isVerified } = await getRecentEmailOtpVerification(supabase, main.auth.id)
+    const { isVerified } = await getRecentEmailOtpVerification(capgo, main.auth.id)
     if (isVerified)
       return true
   }
@@ -98,7 +98,7 @@ async function checkOrganizationImpact() {
   // Check each organization to see if user is the only super_admin
   for (const org of superAdminOrgs) {
     try {
-      const { data: members, error } = await supabase
+      const { data: members, error } = await capgo
         .rpc('get_org_members_rbac', { p_org_id: org.gid })
 
       if (error) {
@@ -260,7 +260,7 @@ async function deleteAccount() {
 async function performAccountDeletion(password: string) {
   if (!main.auth || main.auth?.email == null)
     return false
-  const supabaseClient = useSupabase()
+  const capgoClient = useConsole()
 
   if (!password) {
     toast.error(t('password-placeholder'))
@@ -277,7 +277,7 @@ async function performAccountDeletion(password: string) {
 
   isDeletingAccount.value = true
   try {
-    const { error: signInError } = await supabase.auth.signInWithPassword({
+    const { error: signInError } = await capgo.auth.signInWithPassword({
       email: main.auth.email,
       password,
       options: captchaKey.value ? { captchaToken: deleteAccountCaptchaToken.value } : undefined,
@@ -293,14 +293,14 @@ async function performAccountDeletion(password: string) {
       return false
     }
 
-    const { data: claimsData, error: claimsError } = await supabase.auth.getClaims()
+    const { data: claimsData, error: claimsError } = await capgo.auth.getClaims()
     const userId = claimsData?.claims?.sub
     if (claimsError || !userId) {
       toast.error(t('something-went-wrong-try-again-later'))
       return false
     }
 
-    const { data: user } = await supabaseClient
+    const { data: user } = await capgoClient
       .from('users')
       .select()
       .eq('id', userId)
@@ -311,7 +311,7 @@ async function performAccountDeletion(password: string) {
     }
 
     if (user.email.endsWith('review@capgo.app') && Capacitor.isNativePlatform()) {
-      const { error: banErr } = await supabase
+      const { error: banErr } = await capgo
         .from('users')
         .update({ ban_time: dayjs().add(5, 'minutes').toDate().toISOString() })
         .eq('id', user.id)
@@ -328,7 +328,7 @@ async function performAccountDeletion(password: string) {
     }
 
     // Delete user using RPC function
-    const { error: deleteError } = await supabase.rpc('delete_user')
+    const { error: deleteError } = await capgo.rpc('delete_user')
 
     if (deleteError) {
       console.error('Delete error:', deleteError)
@@ -453,7 +453,7 @@ async function submit(form: { first_name: string, last_name: string, email: stri
   }
 
   if (main.user?.email !== form.email) {
-    const data = await supabase.auth.updateUser({ email: form.email })
+    const data = await capgo.auth.updateUser({ email: form.email })
     reset('update-account', useMainStore().user)
     if (data.error && data.error.name === 'AuthApiError') {
       isLoading.value = false
@@ -465,7 +465,7 @@ async function submit(form: { first_name: string, last_name: string, email: stri
     updateData.email = form.email
   }
 
-  const { data: usr, error: dbError } = await supabase
+  const { data: usr, error: dbError } = await capgo
     .from('users')
     .upsert(updateData, { onConflict: 'id' })
     .select()

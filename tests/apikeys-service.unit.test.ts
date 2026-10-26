@@ -1,5 +1,5 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database } from '../src/types/supabase.types'
+import type { ConsoleClient } from '../src/services/consoleClient'
+import type { Database } from '../src/types/database.types'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearApiKeyScopeFilters, filterApiKeyListRows } from '../src/services/apikeys'
 
@@ -25,7 +25,7 @@ interface ApiKeyInvokePayload {
 
 function createSupabaseMock() {
   return {
-    supabase: {} as unknown as SupabaseClient<Database>,
+    capgo: {} as unknown as ConsoleClient<Database>,
   }
 }
 
@@ -38,9 +38,9 @@ describe('createAiApiKey', () => {
 
   it('creates a member key with only the selected app bindings', async () => {
     const { createAiApiKey } = await import('../src/services/apikeys')
-    const { supabase } = createSupabaseMock()
+    const { capgo } = createSupabaseMock()
 
-    await createAiApiKey(supabase, 'Preview key', {
+    await createAiApiKey(capgo, 'Preview key', {
       orgIds: ['org-a', 'org-b'],
       role: 'member',
       apps: [
@@ -50,7 +50,7 @@ describe('createAiApiKey', () => {
     })
 
     const payload = mocks.invokeCapgoApi.mock.calls[0]?.[1] as ApiKeyInvokePayload
-    expect(mocks.invokeCapgoApi).toHaveBeenCalledWith('apikey', expect.objectContaining({ method: 'POST', client: supabase }))
+    expect(mocks.invokeCapgoApi).toHaveBeenCalledWith('apikey', expect.objectContaining({ method: 'POST', client: capgo }))
     expect(payload.body.bindings).toEqual([
       { role_name: 'app_preview', scope_type: 'app', org_id: 'org-a', app_id: 'app-a' },
       { role_name: 'app_reader', scope_type: 'app', org_id: 'org-b', app_id: 'app-b' },
@@ -61,9 +61,9 @@ describe('createAiApiKey', () => {
 
   it('requires a member key to select at least one app', async () => {
     const { createAiApiKey } = await import('../src/services/apikeys')
-    const { supabase } = createSupabaseMock()
+    const { capgo } = createSupabaseMock()
 
-    await expect(createAiApiKey(supabase, 'Empty member key', {
+    await expect(createAiApiKey(capgo, 'Empty member key', {
       orgIds: ['org-a'],
       role: 'member',
       apps: [],

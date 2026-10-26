@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { state, sendTracking, cloudlog, checkPermission, broadcast, recordBento, queueSend, from, markChecklist, markLogin } = vi.hoisted(() => ({
+const { state, sendTracking, cloudlog, checkPermission, broadcast, recordBento, queueSend, from, markChecklist, markLogin, markAiAgent } = vi.hoisted(() => ({
   state: { actorId: 'actor-a' },
   sendTracking: vi.fn(),
   cloudlog: vi.fn(),
@@ -13,6 +13,7 @@ const { state, sendTracking, cloudlog, checkPermission, broadcast, recordBento, 
   from: vi.fn(),
   markChecklist: vi.fn(),
   markLogin: vi.fn(),
+  markAiAgent: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/hono.ts', () => ({
@@ -42,6 +43,7 @@ vi.mock('../supabase/functions/_backend/utils/posthog.ts', () => ({ trackPosthog
 vi.mock('../supabase/functions/_backend/utils/realtime_broadcast.ts', () => ({ broadcastCLIEvent: broadcast }))
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({ backgroundTask: (_c: Context, promise: Promise<unknown>) => promise }))
 vi.mock('../supabase/functions/_backend/utils/app_onboarding_login.ts', () => ({ markAppOnboardingLoginFromTracking: markLogin }))
+vi.mock('../supabase/functions/_backend/utils/ai_onboarding_agent.ts', () => ({ markAiOnboardingAgentConnected: markAiAgent }))
 vi.mock('../supabase/functions/_backend/utils/builder_onboarding_checklist.ts', () => ({ markBuilderChecklistFromAnalytics: markChecklist }))
 vi.mock('../supabase/functions/_backend/utils/user_bento_events.ts', () => ({ recordUserBentoEvent: recordBento }))
 vi.mock('../supabase/functions/_backend/utils/onboarding_copy_tracking.ts', () => ({ buildAiInstructionsCopiedBentoEvent: () => undefined }))
@@ -260,11 +262,13 @@ describe('queue persistence boundary', () => {
     expect(sendTracking).not.toHaveBeenCalled()
     expect(markChecklist).not.toHaveBeenCalled()
     expect(markLogin).not.toHaveBeenCalled()
+    expect(markAiAgent).not.toHaveBeenCalled()
     expect(recordBento).not.toHaveBeenCalled()
     persist()
     expect((await response).status).toBe(200)
     expect(from.mock.calls.length).toBeGreaterThan(1)
     expect(sendTracking).toHaveBeenCalledWith(expect.anything(), expect.anything(), { posthog: false })
+    expect(markAiAgent).toHaveBeenCalledOnce()
   })
 
   it.each(['missing', 'failed'])('fails closed when the queue is %s without later side effects', async (mode) => {
@@ -276,6 +280,7 @@ describe('queue persistence boundary', () => {
     expect(from).not.toHaveBeenCalled()
     expect(markChecklist).not.toHaveBeenCalled()
     expect(markLogin).not.toHaveBeenCalled()
+    expect(markAiAgent).not.toHaveBeenCalled()
     expect(recordBento).not.toHaveBeenCalled()
     expect(JSON.stringify(cloudlog.mock.calls)).not.toContain('secret queue error')
   })
@@ -343,6 +348,7 @@ describe('queue persistence boundary', () => {
     expect(sendTracking).not.toHaveBeenCalled()
     expect(markChecklist).not.toHaveBeenCalled()
     expect(markLogin).not.toHaveBeenCalled()
+    expect(markAiAgent).not.toHaveBeenCalled()
     expect(recordBento).not.toHaveBeenCalled()
     vi.spyOn(Date, 'now').mockReturnValue(acceptedAt + 10000)
     const retry = await request({ ...payload, client_event_id: failure.moreInfo.client_event_id, timestamp: failure.moreInfo.timestamp })

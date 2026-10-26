@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { FunctionsHttpError } from '@supabase/supabase-js'
+import { FunctionsHttpError } from '../src/services/consoleClient'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, defineComponent, h, nextTick, ref } from 'vue'
 import { APP_ONBOARDING_OTA_V1_STEP_IDS } from '../src/services/appOnboarding'

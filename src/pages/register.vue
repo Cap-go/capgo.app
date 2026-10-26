@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { setErrors } from '@formkit/core'
 import { FormKit, FormKitMessages } from '@formkit/vue'
-import { FunctionsHttpError } from '@supabase/supabase-js'
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -10,12 +9,13 @@ import iconEmail from '~icons/oui/email?raw'
 import iconPassword from '~icons/ph/key?raw'
 import { authGhostButtonClass, authInlineLinkClass, authPanelClass, authPrimaryButtonClass } from '~/components/auth/pageStyles'
 import { getCapgoApiErrorCode } from '~/services/capgoApi'
+import { useConsole } from '~/services/console'
+import { FunctionsHttpError } from '~/services/consoleClient'
 import { registerAccount } from '~/services/registration'
-import { useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 
 const router = useRouter()
-const supabase = useSupabase()
+const capgo = useConsole()
 const { t } = useI18n()
 const turnstileToken = ref('')
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
@@ -33,10 +33,9 @@ async function submit(form: { password: string, email: string }) {
   isLoading.value = true
   try {
     const registered = await registerAccount(form.email, form.password, turnstileToken.value)
-    const { error } = await supabase.auth.setSession(registered.session)
+    const { error } = await capgo.auth.setSession(registered.session)
     if (error)
       throw error
-    router.push('/dashboard')
   }
   catch (error) {
     const code = await getCapgoApiErrorCode(error)
@@ -47,9 +46,22 @@ async function submit(form: { password: string, email: string }) {
         message = body.message
     }
     setErrors('register-account', [code === 'account_deleted' ? t('used-to-create') : message], {})
-  }
-  finally {
+    // Re-enable only after the error is shown, so a quick second click cannot start another signup.
     isLoading.value = false
+    return
+  }
+
+  // The account exists and the user is signed in from here on: a navigation problem is not a
+  // signup failure. Keep the spinner until onboarding has loaded, and fall back to a full page
+  // load if the in-app navigation fails.
+  try {
+    const failure = await router.push('/dashboard')
+    if (failure)
+      isLoading.value = false
+  }
+  catch (navigationError) {
+    console.error('Navigation after registration failed', navigationError)
+    window.location.assign('/dashboard')
   }
 }
 </script>

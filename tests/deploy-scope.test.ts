@@ -13,7 +13,6 @@ const noBackendDeploys = {
   supabase: false,
   translation: false,
   r2_inventory: false,
-  bento_dispatch: false,
 }
 
 describe('deploy scope matching', () => {
@@ -34,7 +33,6 @@ describe('deploy scope matching', () => {
         supabase: true,
         translation: true,
         r2_inventory: true,
-        bento_dispatch: true,
       },
     })).toBe(true)
   })
@@ -47,12 +45,12 @@ describe('deploy scope matching', () => {
     ['plugin endpoints stay scoped to Supabase and plugin workers', ['supabase/functions/_backend/plugin_runtime/plugins/updates.ts'], { plugins: true, supabase: true }],
     ['public API changes stay scoped to Supabase and API workers', ['supabase/functions/_backend/public/app/index.ts'], { api: true, supabase: true }],
     ['hosted MCP server changes deploy with the API worker', ['supabase/functions/_backend/mcp/tools.ts'], { api: true, supabase: true }],
-    ['shared Hono utilities deploy to API/files/inventory workers but not isolated plugins', ['supabase/functions/_backend/utils/hono.ts'], { api: true, files: true, supabase: true, r2_inventory: true, bento_dispatch: true }],
+    ['shared Hono utilities deploy to API/files/inventory workers but not isolated plugins', ['supabase/functions/_backend/utils/hono.ts'], { api: true, files: true, supabase: true, r2_inventory: true }],
     ['plugin_runtime Hono changes deploy only to plugin workers', ['supabase/functions/_backend/plugin_runtime/utils/hono.ts'], { plugins: true, supabase: true }],
     ['the Deno-only plugin stats bridge stays off the Cloudflare plugin deploy', ['supabase/functions/shared/plugin_deno_stats_fallbacks.ts'], { supabase: true }],
     ['the shared preview subdomain helper deploys the files worker', ['supabase/functions/shared/preview-subdomain.ts'], { files: true, supabase: true }],
     ['the shared TUS file utility deploys API and files workers', ['supabase/functions/_backend/files/util.ts'], { api: true, files: true, supabase: true }],
-    ['package dependency changes deploy Cloudflare workers without forcing Supabase', ['package.json'], { api: true, files: true, plugins: true, translation: true, r2_inventory: true, bento_dispatch: true }],
+    ['package dependency changes deploy Cloudflare workers without forcing Supabase', ['package.json'], { api: true, files: true, plugins: true, translation: true, r2_inventory: true }],
   ] as const)('%s', (_name, files, deploys) => {
     expect(resolveDeployScopeFromFiles([...files])).toEqual({ ...noBackendDeploys, ...deploys })
   })
@@ -67,7 +65,6 @@ describe('deploy scope matching', () => {
     expect(resolveDeployScopeFromFiles([file])).toEqual({
       ...noBackendDeploys,
       r2_inventory: true,
-      bento_dispatch: file === 'scripts/deploy-scope.ts' || file === '.github/workflows/build_and_deploy.yml',
     })
   })
 
@@ -124,7 +121,6 @@ describe('deploy scope matching', () => {
         supabase: true,
         translation: false,
         r2_inventory: false,
-        bento_dispatch: false,
       },
     })
   })
@@ -157,7 +153,6 @@ describe('deploy scope matching', () => {
         supabase: false,
         translation: true,
         r2_inventory: false,
-        bento_dispatch: false,
       },
     })
   })
@@ -188,7 +183,6 @@ describe('deploy scope matching', () => {
         supabase: true,
         translation: true,
         r2_inventory: true,
-        bento_dispatch: true,
       },
     })
   })

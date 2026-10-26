@@ -1,8 +1,8 @@
 import type { UserModule } from '~/types'
 import { App } from '@capacitor/app'
 import { Capacitor } from '@capacitor/core'
+import { isSpoofed, useConsole } from '~/services/console'
 import { registerNativeNotifications, setupNativeNotifications, unregisterNativeNotifications } from '~/services/nativeNotifications'
-import { isSpoofed, useSupabase } from '~/services/supabase'
 
 export const install: UserModule = () => {
   if (!Capacitor.isNativePlatform())
@@ -23,12 +23,13 @@ export const install: UserModule = () => {
       void registerWhenActive()
   })
 
-  useSupabase().auth.onAuthStateChange((event, session) => {
+  useConsole().auth.onAuthStateChange((event, session) => {
     // Never bind an admin's device to the customer they are logged in as.
-    const previousUserId = userId
-    userId = session?.user?.id && !isSpoofed() ? session.user.id : null
-    // Defer: calling Supabase from inside this callback can deadlock the auth lock.
+    // Defer: calling the auth client from inside its own callback must not re-enter it,
+    // and the spoof marker is written only after setSession resolves.
     setTimeout(() => {
+      const previousUserId = userId
+      userId = session?.user?.id && !isSpoofed() ? session.user.id : null
       if (event === 'SIGNED_OUT' || (previousUserId && previousUserId !== userId))
         void unregisterNativeNotifications(event === 'SIGNED_OUT').then(() => registerWhenActive())
       else

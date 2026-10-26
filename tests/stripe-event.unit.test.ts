@@ -315,3 +315,28 @@ describe('transfer invoice footer helpers', () => {
     expect(stripeEventTestUtils.getTransferInvoiceFooterUpdate(makeTransferInvoice({ status: 'open' }))).toBeNull()
   })
 })
+
+describe('first payment detection for the OpenAI Ads paid conversion', () => {
+  const { resolveFirstPaidAt, getPaidAtUpdate } = stripeEventTestUtils
+  it.concurrent('fires only when paid_at moves from null to set', () => {
+    const paidAt = '2026-10-19T11:30:00.000Z'
+    expect(resolveFirstPaidAt(null, paidAt)).toBe(paidAt)
+    expect(resolveFirstPaidAt(undefined, paidAt)).toBe(paidAt)
+    // A concurrent webhook or an earlier attempt already recorded the first payment.
+    expect(resolveFirstPaidAt('2026-10-19T11:29:00.000Z', paidAt)).toBeNull()
+    expect(resolveFirstPaidAt(new Date('2026-10-19T11:29:00.000Z'), paidAt)).toBeNull()
+    // Renewals and other updates do not write paid_at.
+    expect(resolveFirstPaidAt(null, undefined)).toBeNull()
+    expect(resolveFirstPaidAt(null, null)).toBeNull()
+  })
+
+  it.concurrent('a Stripe retry of the first payment does not write paid_at again', () => {
+    const at = '2026-10-19T11:30:00.000Z'
+    const firstWrite = getPaidAtUpdate({ paid_at: null, status: null }, 'created', at)
+    expect(firstWrite).toBe(at)
+    expect(resolveFirstPaidAt(null, firstWrite)).toBe(at)
+    const retryWrite = getPaidAtUpdate({ paid_at: at, status: 'succeeded' }, 'created', at)
+    expect(retryWrite).toBeUndefined()
+    expect(resolveFirstPaidAt(at, retryWrite)).toBeNull()
+  })
+})

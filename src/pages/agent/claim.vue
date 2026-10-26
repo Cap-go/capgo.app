@@ -9,7 +9,7 @@ import IconSparkles from '~icons/heroicons/sparkles'
 import CliLoginSkippedOrganizations from '~/components/CliLoginSkippedOrganizations.vue'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { createCliLoginKeyDependencies, createMcpOAuthKey, mcpOAuthKeyName, resolveCliKeyEligibility } from '~/services/cliLogin'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -28,7 +28,7 @@ const AGENT_CLIENT_NAME = 'AI agent (auth.md)'
 
 const { t } = useI18n()
 const route = useRoute()
-const supabase = useSupabase()
+const capgo = useConsole()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 
@@ -51,7 +51,7 @@ function dependencies() {
   const userId = main.user?.id ?? main.auth?.id
   if (!userId)
     throw new Error('Missing authenticated user')
-  return createCliLoginKeyDependencies(supabase, userId)
+  return createCliLoginKeyDependencies(capgo, userId)
 }
 
 async function stateForError(error: unknown): Promise<PageState> {
@@ -70,7 +70,7 @@ async function load(): Promise<void> {
   }
   try {
     const { data, error } = await invokeCapgoApi<ClaimDetails>(`private/agent_identity/?claim_attempt_token=${encodeURIComponent(attemptToken.value)}`, {
-      client: supabase,
+      client: capgo,
       method: 'GET',
     })
     if (error || !data) {
@@ -100,7 +100,7 @@ let createdKeyId: number | null = null
 
 const createTrackedKey: CliLoginKeyDependencies['createKey'] = async (input) => {
   const { data, error } = await invokeCapgoApi<{ id?: number, key?: string | null }>('apikey', {
-    client: supabase,
+    client: capgo,
     method: 'POST',
     body: input,
   })
@@ -115,7 +115,7 @@ async function deleteUnusedKey(): Promise<void> {
     return
   const id = createdKeyId
   createdKeyId = null
-  const { error } = await invokeCapgoApi(`apikey/${id}`, { client: supabase, method: 'DELETE' })
+  const { error } = await invokeCapgoApi(`apikey/${id}`, { client: capgo, method: 'DELETE' })
   if (error)
     console.error('Cannot delete the unused agent API key', error)
 }
@@ -137,7 +137,7 @@ async function approve(): Promise<void> {
   try {
     // Check the code before minting a key, so a typo never leaves an unused API key behind.
     const verify = await invokeCapgoApi('private/agent_identity/verify', {
-      client: supabase,
+      client: capgo,
       method: 'POST',
       body: { claim_attempt_token: attemptToken.value, user_code: code },
     })
@@ -152,7 +152,7 @@ async function approve(): Promise<void> {
     }
     const apikey = await createMcpOAuthKey(organizations, { createKey: createTrackedKey }, AGENT_CLIENT_NAME)
     const { error } = await invokeCapgoApi('private/agent_identity/approve', {
-      client: supabase,
+      client: capgo,
       method: 'POST',
       body: { claim_attempt_token: attemptToken.value, apikey },
     })
@@ -176,7 +176,7 @@ async function deny(): Promise<void> {
     return
   state.value = 'submitting'
   const { error } = await invokeCapgoApi('private/agent_identity/deny', {
-    client: supabase,
+    client: capgo,
     method: 'POST',
     body: { claim_attempt_token: attemptToken.value },
   })

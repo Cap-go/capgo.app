@@ -63,6 +63,7 @@ import { observeCommand } from './observe/command'
 import { startOnboardingChecks } from './onboarding/background'
 import { waitForOnboardingChecks } from './onboarding/background-shutdown'
 import { finishOnboardingCommand } from './onboarding/background-workers'
+import { setNoticeOutputOptions } from './onboarding/setup-notice-policy'
 import { setupDebug } from './onboarding/setup-diagnostics'
 import { addOrganization, deleteOrganization, inviteMember, listMembers, listOrganizations, removeMember, setMemberRole, setOrganization } from './organization'
 import { capturePosthogException, getCommandPath, shouldCapturePosthogException } from './posthog'
@@ -125,6 +126,7 @@ program.hook('preAction', (_thisCommand, actionCommand) => {
   setConfigWriteTarget(resolveCapacitorConfigTargetPath(actionCommand.optsWithGlobals().capacitorConfig, cwd(), { logError: true }))
   currentCommandPath = getCommandPath(actionCommand)
   currentActionCommand = actionCommand
+  setNoticeOutputOptions(actionCommand.optsWithGlobals())
   setCurrentCliCommand(currentCommandPath)
   applyCommandAnalyticsOptOut(currentCommandPath, actionCommand.opts())
   startOnboardingChecks(actionCommand, currentCommandPath, isCI)
@@ -1699,7 +1701,7 @@ void (async () => {
     await flushAnalytics()
     setupDebug('analytics before wait finished', { duration_ms: Date.now() - analyticsStarted })
     if (currentActionCommand)
-      await waitForOnboardingChecks(currentActionCommand, currentCommandPath)
+      await waitForOnboardingChecks(currentActionCommand, currentCommandPath, analyticsStarted)
   }
   catch (error: unknown) {
     if (typeof error === 'object' && error !== null && 'code' in error) {

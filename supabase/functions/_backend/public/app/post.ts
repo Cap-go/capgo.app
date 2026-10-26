@@ -3,8 +3,10 @@ import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { getOrCreateUserABTests } from '../../utils/ab_tests.ts'
 import { addAppCreatorToOnboarding, resolveAppCreatorEmail } from '../../utils/app_creator.ts'
+import { markAppOnboardingLogin } from '../../utils/app_onboarding_login.ts'
 import { applyAppOnboardingPatch, isAppOnboardingSource } from '../../utils/appOnboarding.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
+import { cloudlogErr, serializeError } from '../../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { createSignedImageUrl, getStorageAllowedOrigins, resolveWritableImageValue } from '../../utils/storage.ts'
@@ -162,6 +164,19 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
 
   if (!data) {
     throw simpleError('cannot_read_app', 'Cannot read created app')
+  }
+
+  // The CLI/MCP logs in before the app exists, so its login event had no checklist to mark.
+  // Only callers that identify as the CLI, MCP or an AI agent count; plain API use does not.
+  const onboardingSource = body.onboarding?.source
+  if (auth.authType === 'apikey' && (onboardingSource === 'cli' || onboardingSource === 'mcp' || onboardingSource === 'ai')) {
+    try {
+      await markAppOnboardingLogin(c, onboardingSource)
+    }
+    catch (error) {
+      // The app is already created; never turn checklist tracking into a failed request.
+      cloudlogErr({ requestId: c.get('requestId'), message: 'app create onboarding login marker failed', error: serializeError(error) })
+    }
   }
 
   if (data.icon_url) {

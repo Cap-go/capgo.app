@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { Factor } from '@supabase/supabase-js'
 import type { Ref } from 'vue'
+import type { Factor } from '~/services/consoleClient'
 import type { LoginAuthStatus } from '~/utils/loginActions'
 import { Capacitor } from '@capacitor/core'
 import { setErrors } from '@formkit/core'
@@ -19,9 +19,9 @@ import iconEmail from '~icons/oui/email?raw'
 import iconPassword from '~icons/ph/key?raw'
 import mfaIcon from '~icons/simple-icons/2fas?raw'
 import { captureAppleOAuthCallback, completeAppleOAuth, consumeAppleOAuthLandingError, hasPendingAppleOAuth, isWebAppleLoginAvailable, startAppleOAuth } from '~/services/appleOAuth'
+import { autoAuth, defaultApiHost, hashEmail, useConsole } from '~/services/console'
 import { hideLoader } from '~/services/loader'
 import { isNativeAppleLoginAvailable, signInWithApple } from '~/services/nativeAppleLogin'
-import { autoAuth, defaultApiHost, hashEmail, useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { isCapgoDomainReferrer, isDirectLoginLanding } from '~/utils/capgoReferrer'
 import { getLoginActionVisibility } from '~/utils/loginActions'
@@ -29,7 +29,7 @@ import { validateRedirectPath } from '~/utils/safeRedirect'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
 const route = useRoute('/login')
-const supabase = useSupabase()
+const capgo = useConsole()
 const isLoading = ref(false)
 const isAppleLoading = ref(false)
 const appleLoginAvailable = computed(() => isNativeAppleLoginAvailable() || isWebAppleLoginAvailable())
@@ -58,6 +58,16 @@ const passwordPathReady = ref(false)
 const domainCheckTimeoutMs = 5000
 const domainCheckDebounceMs = 350
 const isCheckingSavedSession = ref(true)
+// A saved session usually means auto-login: show a sign-in status instead of flashing the form.
+const hasStoredSession = (() => {
+  try {
+    return Object.keys(globalThis.localStorage ?? {}).some(key => /^sb-.+-auth-token$/.test(key))
+  }
+  catch {
+    return false
+  }
+})()
+const showSigningIn = computed(() => hasStoredSession && isCheckingSavedSession.value)
 const profileUnavailable = computed(() => route.query.profile_unavailable === '1')
 const captchaStatus = ref<'disabled' | 'loading' | 'ready' | 'unavailable'>(captchaKey.value ? 'loading' : 'disabled')
 let captchaInitTimeout: ReturnType<typeof setTimeout> | null = null
@@ -237,7 +247,7 @@ async function logoutFromProfileRecovery() {
     return
   isLoading.value = true
   try {
-    const { error } = await supabase.auth.signOut()
+    const { error } = await capgo.auth.signOut()
     if (error)
       throw error
     await router.replace('/login')
@@ -252,7 +262,7 @@ async function logoutFromProfileRecovery() {
 }
 
 async function checkMfa() {
-  const { data: mfaFactors, error: mfaError } = await supabase.auth.mfa.listFactors()
+  const { data: mfaFactors, error: mfaError } = await capgo.auth.mfa.listFactors()
   if (mfaError) {
     setErrors('login-account', ['See browser console'], {})
     console.error('Cannot get MFA factors', mfaError)
@@ -262,7 +272,7 @@ async function checkMfa() {
   const unverified = mfaFactors.all.filter(factor => factor.status === 'unverified')
   if (unverified && unverified.length > 0) {
     console.log(`Found ${unverified.length} unverified MFA factors, removing all`)
-    const responses = await Promise.all(unverified.map(factor => supabase.auth.mfa.unenroll({ factorId: factor.id })))
+    const responses = await Promise.all(unverified.map(factor => capgo.auth.mfa.unenroll({ factorId: factor.id })))
 
     responses.filter(res => !!res.error).forEach((res) => {
       console.error('Failed to unregister', res.error)
@@ -274,7 +284,7 @@ async function checkMfa() {
 
   if (hasMfa) {
     mfaLoginFactor.value = mfaFactor
-    const { data: challenge, error: errorChallenge } = await supabase.auth.mfa.challenge({ factorId: mfaFactor.id })
+    const { data: challenge, error: errorChallenge } = await capgo.auth.mfa.challenge({ factorId: mfaFactor.id })
     if (errorChallenge) {
       isLoading.value = false
       setErrors('login-account', ['See browser console'], {})
@@ -297,7 +307,7 @@ async function checkMfa() {
 
 async function checkReviewAccount(form: { email: string }) {
   // this is a review account, we need to check if the user is banned for Apple and Google to check delete feature
-  const { data: userPreData, error: userPreError } = await supabase.from('users').select('ban_time').eq('email', form.email).single()
+  const { data: userPreData, error: userPreError } = await capgo.from('users').select('ban_time').eq('email', form.email).single()
   if (!userPreData && userPreError) {
     isLoading.value = false
     console.error('error', userPreError)
@@ -315,7 +325,7 @@ async function checkReviewAccount(form: { email: string }) {
 
 async function login(form: { email: string, password: string }) {
   const hashedEmail = await hashEmail(form.email)
-  const { data: deleted, error: errorDeleted } = await supabase
+  const { data: deleted, error: errorDeleted } = await capgo
     .rpc('is_not_deleted', { email_check: hashedEmail })
   if (errorDeleted) {
     console.error(errorDeleted)
@@ -330,7 +340,7 @@ async function login(form: { email: string, password: string }) {
     setErrors('login-account', [t('used-to-create')], {})
     return
   }
-  const { error } = await supabase.auth.signInWithPassword({
+  const { error } = await capgo.auth.signInWithPassword({
     email: form.email,
     password: form.password,
     options: {
@@ -379,7 +389,7 @@ async function handleAppleLogin() {
       await startAppleOAuth(new URL(location.href))
       return
     }
-    const result = await signInWithApple(supabase, turnstileToken.value || undefined)
+    const result = await signInWithApple(capgo, turnstileToken.value || undefined)
     if (!result)
       return
     hasAppleSession = true
@@ -388,13 +398,13 @@ async function handleAppleLogin() {
 
     // Keep the same deleted-account and enforced-SSO rules as password login.
     const [deleted, domain] = await Promise.all([
-      hashEmail(result.user.email).then(email => supabase.rpc('is_not_deleted', { email_check: email })),
+      hashEmail(result.user.email).then(email => capgo.rpc('is_not_deleted', { email_check: email })),
       checkDomain(result.user.email),
     ])
     if (deleted.error)
       throw deleted.error
     if (!deleted.data || (domain.has_sso && domain.enforce_sso)) {
-      await supabase.auth.signOut({ scope: 'local' })
+      await capgo.auth.signOut({ scope: 'local' })
       toast.error(t(!deleted.data ? 'used-to-create' : 'sso-required'))
       return
     }
@@ -406,7 +416,7 @@ async function handleAppleLogin() {
   }
   catch {
     if (hasAppleSession)
-      await supabase.auth.signOut({ scope: 'local' })
+      await capgo.auth.signOut({ scope: 'local' })
     turnstileToken.value = ''
     safeResetTurnstile(captchaComponent.value)
     toast.error(t('apple-login-failed'))
@@ -421,7 +431,7 @@ async function checkDomain(email: string): Promise<{ has_sso: boolean, enforce_s
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), domainCheckTimeoutMs)
   try {
-    const { data: sessionData } = await supabase.auth.getSession()
+    const { data: sessionData } = await capgo.auth.getSession()
     const token = sessionData?.session?.access_token
 
     const headers: Record<string, string> = {
@@ -579,7 +589,7 @@ async function handleSsoLogin() {
       redirectUrl.searchParams.set('to', validateRedirectPath(route.query.to))
     }
 
-    const { data, error } = await supabase.auth.signInWithSSO({
+    const { data, error } = await capgo.auth.signInWithSSO({
       domain,
       options: {
         redirectTo: redirectUrl.toString(),
@@ -616,7 +626,7 @@ async function handleSsoLogin() {
 
 async function handleMfaSubmit(form: { code: string }) {
   isLoading.value = true
-  const verify = await supabase.auth.mfa.verify({
+  const verify = await capgo.auth.mfa.verify({
     factorId: mfaLoginFactor.value!.id!,
     challengeId: mfaChallengeId.value!,
     code: form.code.replaceAll(' ', ''),
@@ -641,7 +651,7 @@ async function goToForgotPassword() {
 }
 
 async function checkAuthUser() {
-  const { data: mfaData, error: mfaError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+  const { data: mfaData, error: mfaError } = await capgo.auth.mfa.getAuthenticatorAssuranceLevel()
   if (mfaError) {
     console.error('Cannot guard auth', mfaError)
     isLoading.value = false
@@ -649,7 +659,7 @@ async function checkAuthUser() {
   }
 
   if (mfaData.currentLevel === 'aal1' && mfaData.nextLevel === 'aal2') {
-    const { data: mfaFactors, error } = await supabase.auth.mfa.listFactors()
+    const { data: mfaFactors, error } = await capgo.auth.mfa.listFactors()
     if (error) {
       setErrors('login-account', ['See browser console'], {})
       console.error('Cannot get MFA factors', error)
@@ -659,7 +669,7 @@ async function checkAuthUser() {
 
     const mfaFactor = mfaFactors?.all.find(factor => factor.status === 'verified')
 
-    const { data: challenge, error: errorChallenge } = await supabase.auth.mfa.challenge({ factorId: mfaFactor!.id })
+    const { data: challenge, error: errorChallenge } = await capgo.auth.mfa.challenge({ factorId: mfaFactor!.id })
     if (errorChallenge) {
       setErrors('login-account', ['See browser console'], {})
       console.error('Cannot challenge mfa', errorChallenge)
@@ -714,7 +724,7 @@ async function checkMagicLink() {
     if (authType === 'email_change') {
       const email = logSession.user.email
       const id = logSession.user.id
-      await supabase
+      await capgo
         .from('users')
         .upsert({
           id,
@@ -733,7 +743,7 @@ async function openScan() {
 
 async function acceptQuerySession() {
   isLoading.value = true
-  const res = await supabase.auth.setSession({
+  const res = await capgo.auth.setSession({
     access_token: querySessionAccessToken.value,
     refresh_token: querySessionRefreshToken.value,
   })
@@ -841,15 +851,15 @@ async function checkLogin() {
     }
 
     isLoading.value = true
-    const { data: claimsData } = await supabase.auth.getClaims()
+    const { data: claimsData } = await capgo.auth.getClaims()
     const hasUser = !!claimsData?.claims?.sub
-    const { data: sessionData } = await supabase.auth.getSession()
+    const { data: sessionData } = await capgo.auth.getSession()
     const session = sessionData?.session
     if (hasUser) {
       await checkAuthUser()
     }
     else if (!session && route.query.code && typeof route.query.code === 'string') {
-      const { data, error } = await supabase.auth.exchangeCodeForSession(route.query.code)
+      const { data, error } = await capgo.auth.exchangeCodeForSession(route.query.code)
       if (error || !data.session) {
         isLoading.value = false
         hideLoader()
@@ -882,14 +892,14 @@ async function finishAppleOAuth() {
   isLoading.value = true
   let hasAppleSession = false
   try {
-    await completeAppleOAuth(supabase, turnstileToken.value || undefined)
+    await completeAppleOAuth(capgo, turnstileToken.value || undefined)
     hasAppleSession = true
     if (!await checkMfa())
       throw new Error('Apple login could not complete MFA setup')
   }
   catch {
     if (hasAppleSession)
-      await supabase.auth.signOut({ scope: 'local' })
+      await capgo.auth.signOut({ scope: 'local' })
     turnstileToken.value = ''
     safeResetTurnstile(captchaComponent.value)
     toast.error(t('apple-login-failed'))
@@ -918,7 +928,7 @@ function mfa_code_validation(node: { value: any }) {
 }
 
 async function goback() {
-  const { error } = await supabase.auth.signOut()
+  const { error } = await capgo.auth.signOut()
 
   if (error) {
     toast.error(t('cannot-sign-off'))
@@ -1030,7 +1040,11 @@ onMounted(checkLogin)
           </div>
 
           <div class="relative mt-5 sm:mt-6">
-            <div v-if="profileUnavailable" class="space-y-4" data-test="account-load-recovery">
+            <div v-if="showSigningIn && !profileUnavailable" role="status" aria-live="polite" class="flex min-h-40 flex-col items-center justify-center gap-3 text-sm text-slate-600 dark:text-slate-300" data-test="login-signing-in">
+              <Spinner size="w-8 h-8" />
+              {{ t('login-signing-in') }}
+            </div>
+            <div v-else-if="profileUnavailable" class="space-y-4" data-test="account-load-recovery">
               <p role="alert" class="text-sm leading-6 text-slate-600 dark:text-slate-300">
                 {{ t('account-load-failed') }}
               </p>
@@ -1261,7 +1275,7 @@ onMounted(checkLogin)
                         :class="authInlineLinkClass"
                         @click="goToForgotPassword"
                       >
-                        {{ t('forgot') }} {{ t('password') }} ?
+                        {{ t('forgot-password') }}
                       </button>
                     </div>
 

@@ -16,7 +16,7 @@ import {
   normalizeLoginHint,
   openWithClaimToken,
 } from './agent_identity_utils.ts'
-import { getApiOrigin, getClientIpHash, insertWithIpLimit, oauthError, readParams, withPg } from './oauth_shared.ts'
+import { getClientIpHash, getIssuer, insertWithIpLimit, oauthError, readParams, withPg } from './oauth_shared.ts'
 import { MCP_OAUTH_SCOPE, sha256Hex } from './oauth_utils.ts'
 
 /**
@@ -31,16 +31,34 @@ import { MCP_OAUTH_SCOPE, sha256Hex } from './oauth_utils.ts'
 export const AGENT_IDENTITY_PATH = '/agent/identity'
 export const AGENT_CLAIM_PAGE_PATH = '/agent/claim'
 export const AGENT_AUTH_SKILL_URL = 'https://capgo.app/auth.md'
+const LEGACY_VERIFIED_EMAIL_ASSERTION = 'verified_email'
 
 const REGISTRATION_RATE_LIMIT = { limit: 10, windowSeconds: 60 * 60 }
 
+/**
+ * Registration endpoints live on the issuer origin (https://capgo.app in production, which forwards them
+ * to this worker), so they share the origin of the auth.md document and of the metadata that lists them.
+ */
+function agentIdentityOrigin(c: Context): string {
+  return getIssuer(c)
+}
+
 export function agentAuthMetadata(c: Context) {
-  const apiOrigin = getApiOrigin(c)
+  const identityEndpoint = `${agentIdentityOrigin(c)}${AGENT_IDENTITY_PATH}`
+  const claimEndpoint = `${identityEndpoint}/claim`
   return {
     skill: AGENT_AUTH_SKILL_URL,
-    identity_endpoint: `${apiOrigin}${AGENT_IDENTITY_PATH}`,
-    claim_endpoint: `${apiOrigin}${AGENT_IDENTITY_PATH}/claim`,
-    identity_types_supported: ['service_auth'],
+    identity_endpoint: identityEndpoint,
+    claim_endpoint: claimEndpoint,
+    // auth.md v0.1 names (register_uri / claim_uri, verified_email under identity_assertion), still read by
+    // older agents and scanners. They describe the same endpoints and the same email-based flow.
+    register_uri: identityEndpoint,
+    claim_uri: claimEndpoint,
+    identity_types_supported: ['service_auth', 'identity_assertion'],
+    identity_assertion: {
+      assertion_types_supported: [LEGACY_VERIFIED_EMAIL_ASSERTION],
+      credential_types_supported: ['urn:ietf:params:oauth:token-type:access_token'],
+    },
   }
 }
 
@@ -90,13 +108,15 @@ app.post(AGENT_IDENTITY_PATH, async (c) => {
   const params = await readParams(c)
   if (params.type === 'anonymous')
     return agentError(c, 400, 'anonymous_not_enabled', 'Capgo does not offer anonymous registration: every action needs a Capgo account. Use service_auth with the user\'s email.')
-  if (params.type === 'identity_assertion')
+  // Before v0.6 the same email flow was sent as an identity_assertion of type verified_email.
+  const legacyVerifiedEmail = params.type === 'identity_assertion' && params.assertion_type === LEGACY_VERIFIED_EMAIL_ASSERTION
+  if (params.type === 'identity_assertion' && !legacyVerifiedEmail)
     return agentError(c, 400, 'issuer_not_enabled', 'Capgo does not trust any ID-JAG provider yet. Use service_auth with the user\'s email.')
-  if (params.type !== 'service_auth')
+  if (params.type !== 'service_auth' && !legacyVerifiedEmail)
     return agentError(c, 400, 'invalid_request', 'type must be service_auth')
-  const loginHint = normalizeLoginHint(params.login_hint)
+  const loginHint = normalizeLoginHint(legacyVerifiedEmail ? params.assertion : params.login_hint)
   if (!loginHint)
-    return agentError(c, 400, 'invalid_login_hint', 'login_hint must be the user\'s email address')
+    return agentError(c, 400, 'invalid_login_hint', `${legacyVerifiedEmail ? 'assertion' : 'login_hint'} must be the user's email address`)
 
   const webAppUrl = getWebAppUrl(c)
   if (!webAppUrl) {
@@ -137,7 +157,7 @@ app.post(AGENT_IDENTITY_PATH, async (c) => {
   return c.json({
     registration_id: `reg_${row.id}`,
     registration_type: 'service_auth',
-    claim_url: `${getApiOrigin(c)}${AGENT_IDENTITY_PATH}/claim`,
+    claim_url: `${agentIdentityOrigin(c)}${AGENT_IDENTITY_PATH}/claim`,
     claim_token: claimToken,
     claim_token_expires: new Date(row.expires_at).toISOString(),
     post_claim_scopes: [MCP_OAUTH_SCOPE],

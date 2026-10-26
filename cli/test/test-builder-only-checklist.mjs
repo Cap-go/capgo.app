@@ -67,6 +67,13 @@ assert.match(colored, /\u001B\[31m\[!\] Warning\u001B\[0m/)
 assert.match(colored, /\u001B\[2m\[-\] Skipped\u001B\[0m/)
 assert.equal(colored.replace(/\u001B\[[0-9;]*m/g, ''), text, 'color changes styling only')
 assert.doesNotMatch(formatAppTodoList('com.example.builder', progress, { color: false }), /\u001B\[/)
+// Agents on an active trial get a plan item before the next step, worded for cloud builds.
+process.env.TZ = 'UTC'
+const trial = { endsAt: Date.parse('2026-01-15T12:00:00Z'), plansUrl: 'https://console.example.com/settings/organization/plans?oid=builder-org' }
+const trialText = formatAppTodoList('com.example.builder', progress, { trial })
+assert.ok(trialText.includes('\n\n[ ] Pending: Add a payment method before Jan 15, 2026 so cloud builds keep working after the free trial (no charge before then): https://console.example.com/settings/organization/plans?trial_card=1\n\nNext step: Connect Google Play'), trialText)
+assert.equal(trialText.replace(/\n\n\[ \] Pending: Add a payment method[^\n]+/, ''), text, 'the trial item is the only addition')
+assert.doesNotMatch(text, /payment method|trial_card/, 'the Builder checklist has no trial item unless an agent asks for one')
 for (const [annotation, expected] of [
   ['asc_new', /guided setup.*TestFlight.*signing credentials/s],
   ['asc_new_auto', /selected automatically.*import.*requires macOS/s],

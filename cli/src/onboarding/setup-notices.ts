@@ -1,6 +1,8 @@
 import type { AppTodoProgress } from '../app/todo'
+import type { AgentTrial } from '../shared/agent-notices'
 import { getBuilderChecklist, onboardingRecord } from '../app/builder-checklist'
 import { getAppTodoNextStep, getAppTodoSteps, getAvailableAppTodoLists } from '../app/todo'
+import { formatAgentTrialStep } from '../shared/agent-notices'
 import { DIRECT_OFFER_PLAN_MESSAGE, isZeroLengthTrial } from '../shared/direct-offer'
 import { defaultHostWeb } from '../utils'
 import { setupDebug } from './setup-diagnostics'
@@ -19,8 +21,10 @@ interface Billing {
   plansUrl: string
 }
 export type SetupNotice = { appId: string, secondary: string[] } & (
-  { kind: 'setup', product: string, title?: string, instruction?: string, action: string }
+  { kind: 'setup', product: string, title?: string, instruction?: string, action: string, billing?: Billing }
   | { kind: 'plan', completed: string[], billing: Billing }
+  // Agent-only: the trial line when there is no setup notice to attach it to.
+  | { kind: 'trial', billing: Billing }
 )
 
 const builderInstructions: Record<string, string> = {
@@ -89,8 +93,21 @@ export function getSetupNotice(appId: string, progress: AppTodoProgress, webHost
   const todo = (list: string) => `npx @capgo/cli@latest app todo --list ${list}`
   const build = (platform?: string) => `npx @capgo/cli@latest build init${platform ? ` --platform ${platform}` : ''}`
   setupDebug('checklists evaluated', { ota_available: !!ota, builder_available: !!builder, ota_complete: otaComplete, builder_complete: finishedBuilder.length > 0 })
+  const billing = readBilling(progress.billing, webHost)
+  // Direct-offer orgs (no free trial, never paid) cannot upload or build until
+  // they subscribe: choosing a plan is their first step, before setup. Keep the
+  // guards below for unreliable snapshots (OTA check errors, an all-pending
+  // dual checklist) so the setup mention is never invented.
+  if (!completed.length && billing?.trialSkipped
+    && (!lists.includes('ota') || ota)
+    && !(ota && builder && !otaStarted && !builderStarted)) {
+    const secondary = [
+      ...(ota ? [otaStarted ? 'finish setting up live updates' : 'set up live updates'] : []),
+      ...(builder ? [builderStarted ? 'continue setting up cloud builds' : 'explore cloud builds with Capgo Builder'] : []),
+    ]
+    return { kind: 'plan', appId, completed, billing, secondary }
+  }
   if (completed.length) {
-    const billing = readBilling(progress.billing, webHost)
     if (!billing) {
       const data = onboardingRecord(progress.billing)
       setupDebug('billing evaluated', { available: data.status === 'available', is_paying: data.isPaying === true, has_credits: data.hasCredits === true })
@@ -117,6 +134,7 @@ export function getSetupNotice(appId: string, progress: AppTodoProgress, webHost
     return {
       kind: 'setup',
       appId,
+      billing,
       product: platform ? `${platformLabel(platform.platform)} builds` : 'cloud builds',
       title: next?.title,
       instruction: next ? builderInstructions[next.stepId] : 'Run the setup wizard to choose iOS or Android and prepare your build.',
@@ -128,6 +146,7 @@ export function getSetupNotice(appId: string, progress: AppTodoProgress, webHost
   return {
     kind: 'setup',
     appId,
+    billing,
     product: 'live updates',
     title: next?.title,
     instruction: next ? `Next: ${next.action}` : undefined,
@@ -151,8 +170,44 @@ function remainingTrial(trialEndsAt: string, now: number): string {
   return `Your trial ends in ${remaining}.`
 }
 
-export function formatSetupNotice(notice: SetupNotice | undefined, now = Date.now()): string | undefined {
+function agentTrial(billing: Billing | undefined, now: number): AgentTrial | undefined {
+  return billing?.trialEndsAt && !billing.trialSkipped && Date.parse(billing.trialEndsAt) > now
+    ? { endsAt: Date.parse(billing.trialEndsAt), plansUrl: billing.plansUrl }
+    : undefined
+}
+
+/** The org's active free trial from an `includeBilling` progress snapshot. */
+export function getAgentTrial(progress: AppTodoProgress, webHost = defaultHostWeb, now = Date.now()): AgentTrial | undefined {
+  return agentTrial(readBilling(progress.billing, webHost), now)
+}
+
+/** Agents still see an active trial when no setup notice applies. */
+export function getTrialNotice(appId: string, progress: AppTodoProgress, webHost = defaultHostWeb, now = Date.now()): SetupNotice | undefined {
+  const billing = readBilling(progress.billing, webHost)
+  return billing && agentTrial(billing, now) ? { kind: 'trial', appId, billing, secondary: [] } : undefined
+}
+
+// Plain next steps for agents: nothing addressed to the AI and no secondary product pitch.
+function formatAgentSetupNotice(notice: SetupNotice, now: number): string | undefined {
+  const lines = notice.kind === 'setup'
+    ? [
+        `- ${notice.product.replace(/^(?!iOS)./, letter => letter.toUpperCase())}: not finished yet. ${notice.instruction ?? (notice.title ? `Next: ${notice.title}.` : 'Run the setup wizard to continue.')}`,
+        `  Check progress: ${notice.action}`,
+      ]
+    : notice.kind === 'plan' && notice.completed.length ? [`- ${notice.completed.join(' and ')}: set up.`] : []
+  const trial = agentTrial(notice.billing, now)
+  const builder = notice.kind === 'setup' ? notice.product.endsWith('builds') : notice.kind === 'plan' && !notice.completed.includes('Live updates')
+  // Without a trial, only an unfinished setup step is a next step.
+  const steps = trial ? [...lines, formatAgentTrialStep(trial, now, builder)] : notice.kind === 'setup' ? lines : []
+  return steps.length ? ['Capgo — next steps', '', ...steps].join('\n') : undefined
+}
+
+export function formatSetupNotice(notice: SetupNotice | undefined, now = Date.now(), agent = false): string | undefined {
   if (!notice)
+    return
+  if (agent)
+    return formatAgentSetupNotice(notice, now)
+  if (notice.kind === 'trial')
     return
   const trialSkipped = notice.kind === 'plan' && !!notice.billing.trialSkipped
   const planAction = trialSkipped
@@ -169,15 +224,26 @@ export function formatSetupNotice(notice: SetupNotice | undefined, now = Date.no
         ...(notice.product === 'live updates' ? ['Open your checklist to continue:'] : []),
         notice.action,
       ]
-    : [
-        notice.secondary.length ? `${notice.completed.join(' and ')} are set up` : 'Your Capgo setup is complete',
-        '',
-        ...(notice.billing.trialEndsAt && !trialSkipped ? [remainingTrial(notice.billing.trialEndsAt, now)] : []),
-        planAction,
-        '',
-        `View plans: ${notice.billing.plansUrl}`,
-      ]
-  return [...primary, ...(notice.secondary.length ? ['', `You can also ${notice.secondary.join(' or ')}.`] : [])].join('\n')
+    : notice.completed.length
+      ? [
+          notice.secondary.length ? `${notice.completed.join(' and ')} are set up` : 'Your Capgo setup is complete',
+          '',
+          ...(notice.billing.trialEndsAt && !trialSkipped ? [remainingTrial(notice.billing.trialEndsAt, now)] : []),
+          planAction,
+          '',
+          `View plans: ${notice.billing.plansUrl}`,
+        ]
+      // Plan-first notice (direct offer, setup not finished yet).
+      : [
+          planAction,
+          '',
+          `View plans: ${notice.billing.plansUrl}`,
+        ]
+  const planFirst = notice.kind === 'plan' && !notice.completed.length
+  const secondaryLine = planFirst
+    ? `Then ${notice.secondary.join(' and ')}.`
+    : `You can also ${notice.secondary.join(' or ')}.`
+  return [...primary, ...(notice.secondary.length ? ['', secondaryLine] : [])].join('\n')
 }
 
 export function reconcileSetupProgress(progress: AppTodoProgress, reported: readonly LocalOnboardingStep[]): AppTodoProgress {

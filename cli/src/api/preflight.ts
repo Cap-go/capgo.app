@@ -1,9 +1,14 @@
+import type { NoticeOutputOptions } from '../onboarding/setup-notice-policy'
 import type { CapgoClient } from '../utils'
 import { log } from '@clack/prompts'
+import { renderGitHubNotice } from '../onboarding/github-notice'
+import { shouldPrintNotice } from '../onboarding/setup-notice-policy'
 import { markTrialNoticeShown } from '../onboarding/trial-notice-state'
+import { formatAgentUploadTrialNote, isAgentInvocation, printAgentText } from '../shared/agent-notices'
 import { formatPlanRequiredMessage } from '../shared/direct-offer'
 import { CliUserError } from '../shared/cli-user-error'
 import { isTransientNetworkError } from '../shared/network-error'
+import { normalizePlansUrl } from '../shared/plan-url'
 import {
   callTwoFactorComplianceRpcWithRetry,
   throwTwoFactorComplianceRpcError,
@@ -11,6 +16,7 @@ import {
 } from '../shared/two-factor-compliance'
 import {
   appAddHintMessage,
+  defaultHostWeb,
   formatCapgoCliInvokeError,
   getCapgoCliHttpStatus,
   getRemoteConfig,
@@ -44,8 +50,7 @@ export interface CliPreflightResult {
   warnings: Array<{ message: string, fatal: boolean }>
 }
 
-export interface CliPreflightOptions {
-  silent?: boolean
+export interface CliPreflightOptions extends NoticeOutputOptions {
   /** Print the unpaid-trial reminder (default true). */
   warnTrial?: boolean
   /** Message for `app_not_found`; defaults to the `app add` hint. */
@@ -76,8 +81,10 @@ function isCliWarning(value: unknown): value is { message: string, fatal: boolea
 
 async function plansUrl(orgId?: string | null) {
   const config = await getRemoteConfig()
-  const base = `${config.hostWeb}/settings/organization/plans`
-  return orgId ? `${base}?oid=${encodeURIComponent(orgId)}` : base
+  const url = new URL(normalizePlansUrl(`${config.hostWeb}/settings/organization/plans`, `${defaultHostWeb}/settings/organization/plans`))
+  if (orgId)
+    url.searchParams.set('oid', orgId)
+  return url.href
 }
 
 function printWarnings(warnings: unknown[]) {
@@ -140,7 +147,7 @@ async function throwPreflightError(client: CapgoClient, request: CliPreflightReq
       const url = await plansUrl(request.orgId)
       // Orgs created without a free trial (direct offer) get "choose a plan", not "upgrade".
       const directOffer = await isDirectOfferApp(client, request.appId)
-      log.error(formatPlanRequiredMessage(url, directOffer))
+      log.error(formatPlanRequiredMessage(url, directOffer, isAgentInvocation()))
       await openExternalUrl(url)
       const prefix = directOffer ? 'Plan required' : 'Plan upgrade required'
       throw new CliUserError(request.plan === 'upload' ? `${prefix} for upload` : prefix)
@@ -218,14 +225,24 @@ export async function runCliPreflight(
   }
 
   printWarnings(data?.warnings ?? [])
-  if (result.trialDaysLeft !== null && options.warnTrial !== false) {
+  // Agents get the trial in the end-of-command notice; a start-of-command box is cut off or ignored.
+  if (result.trialDaysLeft !== null && options.warnTrial !== false && shouldPrintNotice(options) && !isAgentInvocation()) {
     const orgId = result.orgId ?? request.orgId
-    log.warn(`WARNING !!\nTrial expires in ${result.trialDaysLeft} days, upgrade here: ${await plansUrl(orgId)}\n`)
+    const url = await plansUrl(orgId)
+    const message = `WARNING !!\nTrial expires in ${result.trialDaysLeft} days, upgrade here: ${url}\n`
+    if (!renderGitHubNotice(message))
+      log.warn(message)
     if (orgId)
       markTrialNoticeShown(orgId)
   }
 
   return result
+}
+
+/** After a successful upload, agents get the trial next to the result they report, from that upload's own plan check. */
+export async function printAgentUploadTrialNote(result: CliPreflightResult | null): Promise<void> {
+  if (result?.trialDaysLeft && isAgentInvocation())
+    printAgentText(formatAgentUploadTrialNote(result.trialDaysLeft, await plansUrl()))
 }
 
 /** Fail unless the org's 2FA policy lets this key act on it. */

@@ -1,4 +1,4 @@
-import type { Database } from '../src/types/supabase.types'
+import type { Database } from '../src/types/database.types'
 import { describe, expect, it } from 'vitest'
 import { useDeviceUpdateFormat } from '../src/composables/useDeviceUpdateFormat'
 import { filterDeviceKeys, parseCustomIdFilter } from '../supabase/functions/_backend/public/device/get.ts'

@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
+import { stripVTControlCharacters } from 'node:util'
 import { test } from 'bun:test'
 import { BUILDER_STEP_IDS } from '../src/app/builder-checklist.ts'
 import { getAppTodoSteps } from '../src/app/todo.ts'
-import { formatSetupNotice, getSetupNotice, reconcileSetupProgress } from '../src/onboarding/setup-notices.ts'
+import { formatSetupNotice, getAgentTrial, getSetupNotice, getTrialNotice, reconcileSetupProgress } from '../src/onboarding/setup-notices.ts'
 import { shouldEvaluateSetupNotice, shouldRefreshSetupProgress } from '../src/onboarding/setup-notice-policy.ts'
+import { formatAgentTodoTrialItem, formatAgentUploadTrialNote, isAgentInvocation } from '../src/shared/agent-notices.ts'
 
 const appId = 'com.example.setup'
 const now = Date.parse('2026-01-01T12:00:00Z')
@@ -28,15 +30,118 @@ function finish(progress, product, platform = 'ios') {
   return progress
 }
 const message = progress => formatSetupNotice(getSetupNotice(appId, progress, 'https://console.example.com'), now)
+const agentMessage = (progress, at = now) => formatSetupNotice(getSetupNotice(appId, progress, 'https://console.example.com'), at, true)
+
+test('agent notice selection reuses environment detection without treating CI alone as an agent', () => {
+  for (const env of [{ CODEX_THREAD_ID: 'fixture-thread' }, { CLAUDECODE: '1' }, { CURSOR_AGENT: '1' }])
+    assert.equal(isAgentInvocation(env), true)
+  assert.equal(isAgentInvocation({}), false)
+  assert.equal(isAgentInvocation({ CI: 'true', GITHUB_ACTIONS: 'true' }), false)
+})
+
+// Agent trial dates use the local calendar day; pin it so the copy can be asserted verbatim.
+process.env.TZ = 'UTC'
+const trialEndsAt = '2026-01-15T12:00:00Z'
+const trialLink = 'https://console.example.com/settings/organization/plans?trial_card=1'
+const trialLine = `- Add a payment method before Jan 15, 2026 to keep live updates running after the free trial (14 days left; devices stop receiving updates without a plan; no charge before then): ${trialLink}`
+const builderTrialLine = `- Add a payment method before Jan 15, 2026 to keep cloud builds running after the free trial (14 days left; new builds are blocked without a plan; no charge before then): ${trialLink}`
+const otaSetupLines = ['- Live updates: not finished yet. Next: Create a channel for this app to receive live updates.', '  Check progress: npx @capgo/cli@latest app todo --list ota']
+const nextSteps = (...lines) => ['Capgo — next steps', '', ...lines].join('\n')
+const onTrial = (progress) => {
+  progress.billing.trialEndsAt = trialEndsAt
+  return progress
+}
+
+test('agents get the unfinished step and the active trial as plain next steps, whatever the checklist state', () => {
+  assert.equal(agentMessage(onTrial(fixture(['ota']))), nextSteps(...otaSetupLines, trialLine))
+  assert.equal(agentMessage(onTrial(finish(fixture(['ota']), 'ota'))), nextSteps('- Live updates: set up.', trialLine))
+  assert.equal(agentMessage(onTrial(finish(fixture(), 'builder', 'android'))), nextSteps('- Android cloud builds: set up.', builderTrialLine))
+  assert.equal(agentMessage(onTrial(finish(finish(fixture(), 'ota'), 'builder', 'android'))), nextSteps('- Live updates and Android cloud builds: set up.', trialLine))
+})
+
+test('agent Builder steps keep the platform label and point at the platform wizard', () => {
+  for (const [platform, line, action] of [
+    ['ios', '- iOS builds: not finished yet. Choose where your iOS build will be installed.', 'build init --platform ios'],
+    ['android', '- Android builds: not finished yet. Add a signing keystore to continue setting up cloud builds.', 'build init --platform android'],
+  ]) {
+    const progress = onTrial(fixture(['builder']))
+    progress.onboarding.setup.selected_builder_platform = platform
+    progress.onboarding.setup.steps.builder[platform].start_setup.status = 'done'
+    assert.equal(agentMessage(progress), nextSteps(line, `  Check progress: npx @capgo/cli@latest ${action}`, builderTrialLine))
+  }
+})
+
+test('agent notices address nobody and pitch no secondary product', () => {
+  for (const progress of [fixture(), finish(fixture(), 'ota'), finish(fixture(), 'builder', 'ios')]) {
+    const text = agentMessage(onTrial(progress))
+    assert.doesNotMatch(text, /AI ASSISTANT|final response|recommend|prominent|can also|Builder|explore|oid=/i)
+    assert.equal(text, stripVTControlCharacters(text))
+  }
+})
+
+test('the agent trial line uses the singular for the last day', () => {
+  assert.match(agentMessage(onTrial(fixture(['ota'])), Date.parse(trialEndsAt) - 20 * 3_600_000), /Jan 15, 2026 .*\(1 day left;/)
+})
+
+test('agent todo and upload trial copy keep the tested wording and the short trial-card link', () => {
+  const trial = { endsAt: Date.parse(trialEndsAt), plansUrl: `https://console.example.com/settings/organization/plans?oid=${orgId}` }
+  assert.equal(formatAgentTodoTrialItem(trial), `[ ] Pending: Add a payment method before Jan 15, 2026 so live updates keep reaching devices after the free trial (no charge before then): ${trialLink}`)
+  assert.equal(formatAgentTodoTrialItem(trial, true), `[ ] Pending: Add a payment method before Jan 15, 2026 so cloud builds keep working after the free trial (no charge before then): ${trialLink}`)
+  assert.equal(formatAgentUploadTrialNote(14, 'https://console.example.com/settings/organization/plans', now), `Add a payment method before Jan 15, 2026 to keep delivering updates like this one: the free trial ends then, and devices stop receiving live updates until a plan is active. No charge before Jan 15, 2026: ${trialLink}`)
+})
+
+test('agents get no trial line without an active trial, and no notice when nothing is left to say', () => {
+  for (const value of [undefined, { status: 'unavailable' }, { ...billing, isPaying: true }, { ...billing, hasCredits: true }]) {
+    const progress = fixture(['ota'])
+    progress.billing = value
+    assert.equal(agentMessage(progress), nextSteps(...otaSetupLines))
+    assert.equal(agentMessage(finish(progress, 'ota')), undefined)
+  }
+  for (const patch of [{ trialEndsAt: null }, { trialEndsAt: '2025-12-01T00:00:00Z' }, { trialEndsAt: '2025-12-01T00:00:05Z', orgCreatedAt: '2025-12-01T00:00:00Z', hasPaid: false }]) {
+    const progress = fixture(['ota'])
+    Object.assign(progress.billing, patch)
+    assert.doesNotMatch(agentMessage(progress) ?? '', /payment method|trial/)
+    assert.equal(agentMessage(finish(progress, 'ota')), undefined, 'a finished setup without a trial leaves no next step')
+  }
+  const directOffer = fixture(['ota'])
+  Object.assign(directOffer.billing, { trialEndsAt: '2025-12-01T00:00:05Z', orgCreatedAt: '2025-12-01T00:00:00Z', hasPaid: false })
+  assert.equal(getSetupNotice(appId, directOffer, 'https://console.example.com').kind, 'plan')
+  assert.equal(agentMessage(directOffer), undefined)
+  assert.equal(formatSetupNotice(undefined, now, true), undefined)
+})
+
+test('agents get the trial line on its own when no setup notice applies; humans get nothing', () => {
+  const progress = onTrial(fixture(['ota']))
+  progress.onboarding.setup.todo_list_version = 3
+  assert.equal(getSetupNotice(appId, progress, 'https://console.example.com'), undefined)
+  const notice = getTrialNotice(appId, progress, 'https://console.example.com', now)
+  assert.equal(formatSetupNotice(notice, now, true), nextSteps(trialLine))
+  assert.equal(formatSetupNotice(notice, now), undefined)
+  assert.equal(getTrialNotice(appId, progress, 'https://console.example.com', Date.parse(trialEndsAt)), undefined)
+  progress.billing.isPaying = true
+  assert.equal(getTrialNotice(appId, progress, 'https://console.example.com', now), undefined)
+})
+
+test('the active trial for agent output comes only from the progress billing snapshot', () => {
+  const progress = onTrial(fixture(['ota']))
+  assert.deepEqual(getAgentTrial(progress, 'https://console.example.com', now), { endsAt: Date.parse(trialEndsAt), plansUrl: `https://console.example.com/settings/organization/plans?oid=${orgId}` })
+  assert.equal(getAgentTrial(progress, 'https://console.example.com', Date.parse(trialEndsAt)), undefined)
+  assert.equal(getAgentTrial({ ...progress, billing: undefined }, 'https://console.example.com', now), undefined)
+})
+
+test('human setup copy is unchanged when the setup notice carries billing', () => {
+  const progress = onTrial(fixture(['ota']))
+  assert.equal(getSetupNotice(appId, progress, 'https://console.example.com').billing.orgId, orgId)
+  assert.equal(message(progress), message({ ...progress, billing: undefined }))
+})
 
 test('only app-specific human-readable commands start the optional progress request', () => {
   for (const command of ['bundle list', 'bundle upload', 'channel list', 'doctor', 'build request'])
-    assert.equal(shouldEvaluateSetupNotice(command, {}, false), true)
+    assert.equal(shouldEvaluateSetupNotice(command, {}), true)
   for (const command of ['app list', 'organization list', 'app todo', 'build init', 'mcp', 'init'])
-    assert.equal(shouldEvaluateSetupNotice(command, {}, false), false)
+    assert.equal(shouldEvaluateSetupNotice(command, {}), false)
   for (const options of [{ json: true }, { outputText: true }, { quiet: true }, { silent: true }, { format: 'json' }])
-    assert.equal(shouldEvaluateSetupNotice('bundle list', options, false), false)
-  assert.equal(shouldEvaluateSetupNotice('bundle list', {}, true), false)
+    assert.equal(shouldEvaluateSetupNotice('bundle list', options), false)
 })
 test('only commands that can change setup need a post-success refresh', () => {
   for (const command of ['bundle upload', 'channel add', 'app add', 'build request'])
@@ -296,4 +401,45 @@ test('completed OTA gives a started Builder checklist a continue mention', () =>
   const progress = finish(fixture(), 'ota')
   progress.onboarding.setup.steps.builder.ios.start_setup.status = 'done'
   assert.match(message(progress), /You can also continue setting up cloud builds\./)
+})
+
+test('direct-offer orgs that never paid see the plan first, before setup', () => {
+  const progress = fixture(['ota'])
+  progress.billing.trialEndsAt = '2025-12-01T00:00:05Z'
+  progress.billing.orgCreatedAt = '2025-12-01T00:00:00Z'
+  progress.billing.hasPaid = false
+  const notice = getSetupNotice(appId, progress, 'https://console.example.com')
+  assert.equal(notice?.kind, 'plan')
+  const text = message(progress)
+  assert.equal(text.split('\n')[0], 'Choose a plan to start using Capgo. 14-day money-back guarantee. Cancel anytime.')
+  assert.ok(text.includes('View plans: https://console.example.com/settings/organization/plans?oid='), text)
+  assert.ok(text.includes('Then finish setting up live updates.'), text)
+  assert.doesNotMatch(text, /trial|is set up|are set up|setup is complete/i)
+})
+
+test('trial orgs, churned orgs, paying orgs and orgs with credits keep the setup notice first', () => {
+  const variants = [
+    billing => billing,
+    billing => Object.assign(billing, { trialEndsAt: '2025-12-01T00:00:05Z', orgCreatedAt: '2025-12-01T00:00:00Z', hasPaid: true }),
+    billing => Object.assign(billing, { trialEndsAt: '2025-12-01T00:00:05Z', orgCreatedAt: '2025-12-01T00:00:00Z', hasPaid: false, isPaying: true }),
+    billing => Object.assign(billing, { trialEndsAt: '2025-12-01T00:00:05Z', orgCreatedAt: '2025-12-01T00:00:00Z', hasPaid: false, hasCredits: true }),
+  ]
+  for (const variant of variants) {
+    const progress = fixture(['ota'])
+    variant(progress.billing)
+    assert.equal(getSetupNotice(appId, progress, 'https://console.example.com')?.kind, 'setup')
+  }
+})
+
+test('the plan-first notice keeps the unreliable-snapshot guards', () => {
+  const direct = (progress) => {
+    Object.assign(progress.billing, { trialEndsAt: '2025-12-01T00:00:05Z', orgCreatedAt: '2025-12-01T00:00:00Z', hasPaid: false })
+    return progress
+  }
+  const withErrors = direct(fixture(['ota']))
+  withErrors.checkErrors = ['add_channel']
+  assert.equal(getSetupNotice(appId, withErrors, 'https://console.example.com'), undefined)
+  const dualPending = direct(fixture(['ota', 'builder']))
+  dualPending.onboarding.setup.steps.ota.login_cli_mcp.status = 'pending'
+  assert.equal(getSetupNotice(appId, dualPending, 'https://console.example.com'), undefined)
 })

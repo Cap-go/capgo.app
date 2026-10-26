@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { BuilderPlatform, BuilderStepStatus } from '~/services/builderOnboardingChecklist'
+import type { ChecklistTaskListMode } from '~/utils/onboardingSetupMode'
 import { computed, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -16,10 +17,10 @@ import IconAndroid from '~icons/mdi/android'
 import IconApple from '~icons/mdi/apple'
 import { isOpenOnboardingStepStatus } from '~/services/appOnboarding'
 import { BUILDER_STEP_IDS, parseBuilderOnboarding } from '~/services/builderOnboardingChecklist'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { resolveDualChecklistResume } from '~/utils/dualOnboardingChecklists'
 import { skipOnboardingStep } from '~/utils/onboardingSkipStep'
-import AppOnboardingAiButton from './AppOnboardingAiButton.vue'
+import AppOnboardingBuilderAiSetup from './AppOnboardingBuilderAiSetup.vue'
 import AppOnboardingSkipStep from './AppOnboardingSkipStep.vue'
 
 const props = withDefaults(defineProps<{
@@ -33,7 +34,9 @@ const props = withDefaults(defineProps<{
   initialPlatform?: BuilderPlatform | null
   completionAction?: string
   preserveSelection?: boolean
-}>(), { active: true })
+  /** hidden: one next step, no counts or list. open: list expanded (AI setup). */
+  taskList?: ChecklistTaskListMode
+}>(), { active: true, taskList: 'default' })
 
 const emit = defineEmits<{
   copyCommand: [platform: BuilderPlatform]
@@ -46,7 +49,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const panelId = useId()
 const onboarding = ref(parseBuilderOnboarding(props.initialOnboarding))
 const viewedPlatform = ref<BuilderPlatform | null>(props.initialPlatform ?? onboarding.value.selectedPlatform)
@@ -96,13 +99,19 @@ const currentStep = computed(() => steps.value.find(step => step.status !== 'don
 const selectedStep = computed(() => steps.value.find(step => step.id === selectedId.value) ?? currentStep.value ?? steps.value.at(-1))
 const isFirstStep = computed(() => selectedStep.value?.index === 0)
 const canSkipSelected = computed(() => !!selectedStep.value && isOpenOnboardingStepStatus(selectedStep.value.status))
-const checklistOpen = ref(true)
+// Every step is shown by default; new manual signups only see their next step.
+const checklistOpen = ref(props.taskList !== 'hidden')
+const showTaskList = computed(() => props.taskList !== 'hidden')
 const skipping = ref(false)
 const completed = computed(() => steps.value.length > 0
   && steps.value.every(step => step.status === 'done' || step.status === 'skipped')
   && steps.value.at(-1)?.status === 'done')
 const platformCommand = computed(() => viewedPlatform.value && props.command ? `${props.command} --platform ${viewedPlatform.value}` : '')
-const guideHref = computed(() => viewedPlatform.value ? `https://capgo.app/docs/cli/cloud-build/${viewedPlatform.value}/` : '')
+const guideHref = computed(() => {
+  if (viewedPlatform.value === 'android' && selectedStep.value?.id === 'connect_google_play')
+    return 'https://capgo.app/docs/cli/reference/build/'
+  return viewedPlatform.value ? `https://capgo.app/docs/cli/cloud-build/${viewedPlatform.value}/` : ''
+})
 
 watch(() => props.initialPlatform, (platform) => {
   if (platform)
@@ -119,7 +128,7 @@ async function refreshOnboarding() {
     return
   const appId = props.appId
   const generation = refreshGeneration
-  const { data, error } = await supabase.from('apps').select('onboarding').eq('app_id', appId).maybeSingle()
+  const { data, error } = await capgo.from('apps').select('onboarding').eq('app_id', appId).maybeSingle()
   if (appId !== props.appId || generation !== refreshGeneration)
     return
   refreshError.value = !!error
@@ -166,7 +175,9 @@ function selectPlatform(platform: BuilderPlatform) {
 function selectStep(id: string) {
   hasInteractedWithPlatform = true
   selectedId.value = id
-  checklistOpen.value = false
+  // AI setup keeps the list open so the agent's progress stays visible.
+  if (props.taskList !== 'open')
+    checklistOpen.value = false
 }
 
 async function skipSelectedStep(reason: string) {
@@ -255,15 +266,15 @@ function statusLabel(status: BuilderStepStatus) {
     </section>
 
     <template v-if="viewedPlatform && selectedStep">
-      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6" data-test="builder-checklist-progress">
+      <div v-if="showTaskList" class="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6" data-test="builder-checklist-progress">
         <p class="shrink-0 text-sm font-medium text-slate-800 dark:text-slate-200" aria-live="polite" aria-atomic="true">
           {{ t('setup-checklist-progress', { done: doneCount, total: steps.length }) }}
         </p>
         <progress class="d-progress h-2.5 w-full text-primary-500" :value="doneCount" :max="steps.length" :aria-label="t('setup-checklist-progress', { done: doneCount, total: steps.length })" />
       </div>
 
-      <div class="grid overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-white/15 dark:bg-slate-900" :class="{ 'lg:grid-cols-[minmax(0,0.38fr)_minmax(0,0.62fr)]': checklistOpen }">
-        <nav class="border-b border-slate-200 px-4 py-3 sm:px-6 dark:border-white/15" :class="{ 'sm:py-6 lg:border-b-0 lg:border-r': checklistOpen }" :aria-label="t('builder-checklist-tasks-title')">
+      <div class="grid overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-white/15 dark:bg-slate-900" :class="{ 'lg:grid-cols-[minmax(0,0.38fr)_minmax(0,0.62fr)]': checklistOpen && showTaskList }">
+        <nav v-if="showTaskList" class="border-b border-slate-200 px-4 py-3 sm:px-6 dark:border-white/15" :class="{ 'sm:py-6 lg:border-b-0 lg:border-r': checklistOpen }" :aria-label="t('builder-checklist-tasks-title')">
           <!-- Show every step by default; users can hide the list. -->
           <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
             <h2 class="text-lg font-semibold text-slate-950 dark:text-white">
@@ -323,7 +334,7 @@ function statusLabel(status: BuilderStepStatus) {
           </template>
           <template v-else>
             <p class="text-sm font-medium text-sky-700 dark:text-azure-400">
-              {{ t(selectedStep.id === currentStep?.id ? 'setup-checklist-current-task-number' : 'setup-checklist-task-number', { number: selectedStep.index + 1, total: steps.length }) }}
+              {{ showTaskList ? t(selectedStep.id === currentStep?.id ? 'setup-checklist-current-task-number' : 'setup-checklist-task-number', { number: selectedStep.index + 1, total: steps.length }) : t('setup-checklist-next-step') }}
             </p>
             <h2 class="mt-3 text-2xl font-semibold leading-tight text-slate-950 sm:text-3xl dark:text-white">
               {{ selectedStep.title }}
@@ -333,6 +344,9 @@ function statusLabel(status: BuilderStepStatus) {
             </p>
 
             <template v-if="isFirstStep">
+              <h3 class="mt-7 text-base font-semibold text-slate-950 dark:text-white">
+                {{ t('builder-checklist-terminal-title') }}
+              </h3>
               <p class="mt-4 text-sm leading-6 text-slate-600 dark:text-slate-300">
                 {{ t('builder-checklist-command-location') }}
               </p>
@@ -374,7 +388,6 @@ function statusLabel(status: BuilderStepStatus) {
             </output>
 
             <div class="mt-auto flex flex-wrap items-stretch gap-2 pt-4" data-test="builder-checklist-task-actions">
-              <AppOnboardingAiButton data-test="builder-checklist-copy-ai" @copy="emit('copyAi', 'checklist')" />
               <button v-if="currentStep && currentStep.id !== selectedStep.id" type="button" class="d-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg border-slate-200 bg-transparent px-3 py-2 text-sm font-medium text-slate-600 shadow-none hover:border-slate-300 hover:bg-slate-100 hover:text-slate-950 focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-offset-2 dark:border-white/15 dark:text-slate-300 dark:hover:border-white/25 dark:hover:bg-white/5 dark:hover:text-white dark:focus-visible:ring-offset-slate-900 min-w-0 max-w-full shrink whitespace-normal" @click="selectStep(currentStep.id)">
                 {{ t('setup-checklist-return-current') }}
               </button>
@@ -395,8 +408,9 @@ function statusLabel(status: BuilderStepStatus) {
       <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
         {{ t('builder-checklist-choose-platform-description') }}
       </p>
-      <AppOnboardingAiButton class="mt-4" data-test="builder-checklist-copy-ai" @copy="emit('copyAi', 'checklist')" />
     </div>
+
+    <AppOnboardingBuilderAiSetup v-if="!completed" @copy="emit('copyAi', 'checklist')" />
 
     <footer v-if="!hideFooter" class="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-5">
       <button type="button" class="d-btn min-h-12 shrink-0 border-slate-300 bg-white px-4 text-slate-700 hover:border-slate-400 hover:bg-slate-50 dark:border-white/20 dark:bg-slate-900 dark:text-slate-200" :disabled="hiding || leaving" @click="emit('hide')">

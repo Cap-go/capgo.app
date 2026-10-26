@@ -2,11 +2,11 @@
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
 import AppOnboardingFlow from '~/components/dashboard/AppOnboardingFlow.vue'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
 
-const supabase = useSupabase()
+const capgo = useConsole()
 const displayStore = useDisplayStore()
 const organizationStore = useOrganizationStore()
 const { currentOrganization } = storeToRefs(organizationStore)
@@ -30,7 +30,7 @@ async function fetchAppsCount() {
     return
   }
 
-  const { count } = await supabase
+  const { count } = await capgo
     .from('apps')
     .select('id', { count: 'exact', head: true })
     .eq('owner_org', orgId)

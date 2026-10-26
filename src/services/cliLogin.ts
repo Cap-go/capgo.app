@@ -1,5 +1,5 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database } from '~/types/supabase.types'
+import type { ConsoleClient } from '~/services/consoleClient'
+import type { Database } from '~/types/database.types'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { checkPermissions } from '~/services/permissions'
 
@@ -356,7 +356,7 @@ export async function prepareCliLoginKey(
 }
 
 export function createCliLoginKeyDependencies(
-  supabase: SupabaseClient<Database>,
+  capgo: ConsoleClient<Database>,
   userId: string,
 ): CliLoginKeyDependencies {
   return {
@@ -366,7 +366,7 @@ export function createCliLoginKeyDependencies(
     ], { orgId }),
     listMetadata: async () => {
       const { data, error } = await invokeCapgoApi<CliApiKeyMetadata[]>('apikey', {
-        client: supabase,
+        client: capgo,
         method: 'GET',
       })
       if (error)
@@ -374,7 +374,7 @@ export function createCliLoginKeyDependencies(
       return data ?? []
     },
     listOwnedKeys: async () => {
-      const { data, error } = await supabase
+      const { data, error } = await capgo
         .from('apikeys')
         .select('id, name, key, rbac_id, created_at, expires_at')
         .eq('user_id', userId)
@@ -385,7 +385,7 @@ export function createCliLoginKeyDependencies(
     listBindings: async (principalIds) => {
       if (!principalIds.length)
         return []
-      const { data, error } = await supabase
+      const { data, error } = await capgo
         .from('role_bindings')
         .select('principal_id, scope_type, org_id, app_id, channel_id, expires_at, roles(name)')
         .eq('principal_type', 'apikey')
@@ -408,7 +408,7 @@ export function createCliLoginKeyDependencies(
     },
     createKey: async (input) => {
       const { data, error } = await invokeCapgoApi<{ key?: string | null }>('apikey', {
-        client: supabase,
+        client: capgo,
         method: 'POST',
         body: input,
       })

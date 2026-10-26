@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { ConsoleClient } from '~/services/consoleClient'
 import colors from 'tailwindcss/colors'
 import { ref } from 'vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
@@ -27,8 +27,8 @@ function buildCacheKey(sessionId: string, appId: string, from: Date, to: Date, k
   return `${sessionId}|${appId}|${kind}|${formatUtcDateParam(from)}|${formatUtcDateParam(to)}`
 }
 
-async function getChartCacheSessionKey(supabase: SupabaseClient): Promise<string> {
-  const { data } = await supabase.auth.getClaims()
+async function getChartCacheSessionKey(capgo: ConsoleClient): Promise<string> {
+  const { data } = await capgo.auth.getClaims()
   const sessionId = data?.claims?.session_id
   if (typeof sessionId === 'string' && sessionId.length > 0)
     return sessionId
@@ -36,14 +36,14 @@ async function getChartCacheSessionKey(supabase: SupabaseClient): Promise<string
 }
 
 export async function useChartData(
-  supabase: SupabaseClient,
+  capgo: ConsoleClient,
   appId: string,
   from: Date,
   to: Date,
   kind: VersionUsageKind = 'bundle',
   options?: UseChartDataOptions,
 ) {
-  const sessionKey = await getChartCacheSessionKey(supabase)
+  const sessionKey = await getChartCacheSessionKey(capgo)
   const cacheKey = buildCacheKey(sessionKey, appId, from, to, kind)
 
   if (!options?.forceRefetch && chartDataCache.value.has(cacheKey))
@@ -55,7 +55,7 @@ export async function useChartData(
   const toParam = formatUtcDateParam(clampedTo)
   const usagePath = kind === 'native' ? 'native_usage' : 'bundle_usage'
   const { error, data } = await invokeCapgoApi(`statistics/app/${appId}/${usagePath}?from=${fromParam}&to=${toParam}`, {
-    client: supabase,
+    client: capgo,
     method: 'GET',
   })
   if (error)

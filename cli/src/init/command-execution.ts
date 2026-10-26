@@ -1,7 +1,7 @@
 import type { PackageManagerRunner, PackageManagerType } from '@capgo/find-package-manager'
 import type { ChildProcess } from 'node:child_process'
 import { findInstallCommand } from '@capgo/find-package-manager'
-import { spawnSync } from 'node:child_process'
+import { spawn as spawnProcess, sync as spawnProcessSync } from 'cross-spawn'
 
 export type SupportedPackageManager = Exclude<PackageManagerType, 'unknown'>
 
@@ -41,6 +41,21 @@ const packageManagerRunners: Record<SupportedPackageManager, PackageManagerRunne
 const supportedPackageManagers = Object.keys(packageManagerRunners) as SupportedPackageManager[]
 const defaultExecutableProbeTimeoutMs = 5_000
 
+export function assertNoWindowsCommandLineBreaks(command: string, args: readonly string[] = []): void {
+  if (process.platform === 'win32' && [command, ...args].some(value => /[\r\n]/.test(value)))
+    throw new Error('Windows command arguments must not contain line breaks.')
+}
+
+export const spawnCommand = ((...args: Parameters<typeof spawnProcess>) => {
+  assertNoWindowsCommandLineBreaks(args[0], Array.isArray(args[1]) ? args[1] : [])
+  return spawnProcess(...args)
+}) as typeof spawnProcess
+
+export const spawnCommandSync = ((...args: Parameters<typeof spawnProcessSync>) => {
+  assertNoWindowsCommandLineBreaks(args[0], Array.isArray(args[1]) ? args[1] : [])
+  return spawnProcessSync(...args)
+}) as typeof spawnProcessSync
+
 export function createMissingExecutableError(command: string, executablePath = process.env.PATH ?? ''): NodeJS.ErrnoException {
   const error = new Error(`Cannot find executable "${command}" in PATH (${executablePath || 'empty'}). Install it or select another package manager.`) as NodeJS.ErrnoException
   error.code = 'ENOENT'
@@ -56,7 +71,7 @@ export function preparePackageManagerCommandEnvironment(environment: NodeJS.Proc
 }
 
 export function probeExecutable(command: string, options: ExecutableProbeOptions = {}): ExecutableProbeResult {
-  const result = spawnSync(command, options.args ?? ['--version'], {
+  const result = spawnCommandSync(command, options.args ?? ['--version'], {
     cwd: options.cwd,
     encoding: 'utf8',
     env: {

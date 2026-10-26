@@ -9,7 +9,7 @@ import { prepareOnboardingCheck } from './onboarding/background-preparation'
 import { relaySetupDebug, setupDebug, setupError } from './onboarding/setup-diagnostics'
 import { readSetupProgress } from './onboarding/setup-notice-evaluation'
 import { shouldRefreshSetupProgress } from './onboarding/setup-notice-policy'
-import { getSetupNotice, reconcileSetupProgress } from './onboarding/setup-notices'
+import { getSetupNotice, getTrialNotice, reconcileSetupProgress } from './onboarding/setup-notices'
 import { sendEvent } from './utils'
 
 function runScanWorker(workerUrl: URL, data: PreparedOnboardingCheck, scan: string): Promise<LocalOnboardingStep | undefined> {
@@ -87,6 +87,7 @@ async function runOnboardingChecks(options: OnboardingCheckOptions): Promise<voi
   if (progress) {
     const updated = reports.filter((step): step is LocalOnboardingStep => step !== undefined)
     const notice = getSetupNotice(prepared.project.appId, reconcileSetupProgress(progress, updated), prepared.webHost)
+      ?? getTrialNotice(prepared.project.appId, progress, prepared.webHost)
     if (notice) {
       setupDebug('notice ready', { kind: notice.kind })
       parentPort?.postMessage({ type: 'setup-notice', notice })

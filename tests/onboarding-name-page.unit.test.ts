@@ -29,7 +29,7 @@ vi.mock('vue-router', () => ({
   } }),
 }))
 vi.mock('vue-sonner', () => ({ toast: { error: mocks.toastError } }))
-vi.mock('~/services/supabase', () => ({ getLocalConfig: () => ({ supaHost: 'https://example.com' }), isLocal: () => false }))
+vi.mock('~/services/console', () => ({ getLocalConfig: () => ({ apiHost: 'https://example.com' }), isLocal: () => false }))
 vi.mock('~/services/onboardingTracking', () => ({ sendOnboardingEvent: mocks.capture }))
 vi.mock('~/services/userOnboardingWriteQueue', async importOriginal => ({
   ...await importOriginal<typeof import('../src/services/userOnboardingWriteQueue')>(),
@@ -99,29 +99,16 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-describe('welcome followed by required About you', () => {
-  it('starts with the existing welcome screen and only then asks for names', async () => {
+describe('required About you', () => {
+  it('opens straight on About you without a welcome screen', async () => {
     const container = await mount(false)
-    expect(container.querySelector('[data-test="onboarding-welcome"]')).not.toBeNull()
-    expect(container.querySelector('form')).toBeNull()
-    expect(container.querySelector('[data-test="onboarding-name-restart"]')).toBeNull()
-    expect(mocks.capture).toHaveBeenCalledWith('onboarding_step_viewed', expect.objectContaining({ step: 'welcome', step_index: 0 }))
-
-    container.querySelector<HTMLButtonElement>('[data-test="onboarding-welcome-continue"]')!.click()
-    await vi.waitFor(() => expect(container.querySelector('form')).not.toBeNull())
     expect(container.querySelector('[data-test="onboarding-welcome"]')).toBeNull()
+    expect(container.querySelector('form')).not.toBeNull()
     expect(container.querySelector('[data-test="onboarding-name-restart"]')).toBeNull()
-    expect(main.user.onboarding.profile_draft).toEqual({ first_name: '', last_name: '' })
+    expect(mocks.dialog.openDialog).not.toHaveBeenCalled()
     expect(mocks.save).not.toHaveBeenCalled()
-    const welcome = mocks.capture.mock.calls.find(call => call[0] === 'onboarding_step_completed' && call[1].step === 'welcome')![1]
-    expect(welcome).toMatchObject({ next_step: 'name' })
-    expect(mocks.capture).toHaveBeenCalledWith('onboarding_step_viewed', expect.objectContaining({
-      step: 'name',
-      previous_step: 'welcome',
-      step_index: 1,
-      onboarding_attempt_id: welcome.onboarding_attempt_id,
-      onboarding_run_id: welcome.onboarding_run_id,
-    }))
+    expect(mocks.capture).toHaveBeenCalledWith('onboarding_step_viewed', expect.objectContaining({ step: 'name', step_index: 0 }))
+    expect(mocks.capture.mock.calls.some(call => call[1]?.step === 'welcome')).toBe(false)
   })
   it('resumes the name form after a refresh with an existing draft', async () => {
     const attemptId = '36473744-0000-4000-8000-000000000001'
@@ -148,10 +135,10 @@ describe('welcome followed by required About you', () => {
       onboarding_attempt_id: attemptId,
       resumed_from_run_id: previousRun,
     }))
-    expect(mocks.capture).toHaveBeenCalledWith('onboarding_step_viewed', expect.objectContaining({ step: 'name', resumed: true, step_index: 1, onboarding_attempt_id: attemptId, onboarding_run_id: expect.not.stringMatching(previousRun) }))
+    expect(mocks.capture).toHaveBeenCalledWith('onboarding_step_viewed', expect.objectContaining({ step: 'name', resumed: true, step_index: 0, onboarding_attempt_id: attemptId, onboarding_run_id: expect.not.stringMatching(previousRun) }))
     expect(main.user.onboarding.onboarding_attempt_id).toBe(attemptId)
   })
-  it('restarts a saved name draft at Welcome while retaining account identity and AB assignments', async () => {
+  it('restarts a saved name draft on a fresh About you form while retaining account identity and AB assignments', async () => {
     const oldAttempt = '36473744-0000-4000-8000-000000000001'
     const assignments = { new_channel: { branch: 'A', assigned_at: '2026-10-19T11:00:00.000Z' } }
     main.user = { ...main.user, first_name: 'Saved', last_name: 'User', onboarding: {
@@ -171,17 +158,15 @@ describe('welcome followed by required About you', () => {
     expect(await restart.handler()).not.toBe(false)
     mocks.dialog.lastButtonRole = 'onboarding-resume-restart'
     dismissResume!()
-    await vi.waitFor(() => expect(container.querySelector('[data-test="onboarding-welcome"]')).not.toBeNull())
-    expect(container.querySelector('form')).toBeNull()
+    await vi.waitFor(() => expect(container.querySelector('form')).not.toBeNull())
+    expect(container.querySelector('[data-test="onboarding-welcome"]')).toBeNull()
     expect(main.user.onboarding).toMatchObject({ abtests: assignments, version: 6 })
     for (const field of ['profile_draft', 'profile_completed_at', 'app_name', 'intent', 'step'])
       expect(main.user.onboarding).not.toHaveProperty(field)
     expect(main.user.first_name).toBe('Saved')
     expect(mocks.capture).toHaveBeenCalledWith('onboarding_resume_restarted', expect.objectContaining({ resume_onboarding_attempt_id: oldAttempt }))
     expect(main.user.onboarding.onboarding_attempt_id).not.toBe(oldAttempt)
-    container.querySelector<HTMLButtonElement>('[data-test="onboarding-welcome-continue"]')!.click()
-    await vi.waitFor(() => expect(container.querySelector('form')).not.toBeNull())
-    expect(main.user.onboarding.profile_draft).toEqual({ first_name: 'Saved', last_name: 'User' })
+    expect(mocks.capture).toHaveBeenCalledWith('onboarding_step_viewed', expect.objectContaining({ step: 'name', resumed: false }))
   })
 
   it.each(['error', 'throw'])('keeps Restart retryable and progress intact after %s', async (failure) => {
@@ -235,25 +220,16 @@ describe('welcome followed by required About you', () => {
     expect(mocks.capture.mock.calls.some(call => call[0] === 'onboarding_resume_continued')).toBe(false)
   })
 
-  it('stays on welcome and offers retry if starting the name draft fails', async () => {
-    const container = await mount(false)
-    mocks.persist.mockResolvedValueOnce({ status: 'error', error: new Error('network unavailable') })
-    container.querySelector<HTMLButtonElement>('[data-test="onboarding-welcome-continue"]')!.click()
-    await vi.waitFor(() => expect(mocks.toastError).toHaveBeenCalled())
-    expect(container.querySelector('form')).toBeNull()
-    expect(container.querySelector<HTMLButtonElement>('[data-test="onboarding-welcome-continue"]')?.disabled).toBe(false)
-    expect(mocks.capture.mock.calls.some(call => call[0] === 'onboarding_step_completed')).toBe(false)
-  })
-
   it('uses the shared onboarding frame and shows About you as the first progress step', async () => {
     const container = await mount()
     expect(container.querySelector('[data-test="onboarding-page"]')).not.toBeNull()
     expect(container.querySelector('h1')?.textContent).toContain('onboarding-welcome-title')
     const steps = container.querySelectorAll('nav[aria-label="app-onboarding-progress-label"] li')
-    expect(steps).toHaveLength(5)
+    // Before the AI-or-manual choice, the stepper shows that choice's steps, not the manual wizard's.
+    expect(steps).toHaveLength(4)
     expect(steps[0].getAttribute('aria-current')).toBe('step')
     expect(steps[0].textContent).toContain('unified-onboarding-step-about-you')
-    expect(steps[1].textContent).toContain('unified-onboarding-step-intent')
+    expect(steps[1].textContent).toContain('ai-onboarding-step-mode')
     expect(container.querySelectorAll('[data-test="onboarding-logout"]')).toHaveLength(1)
   })
   it('continues directly into the goal step with the same telemetry identity', async () => {

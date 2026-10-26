@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Json } from '~/types/supabase.types'
+import type { Json } from '~/types/database.types'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -8,9 +8,8 @@ import IconArrowRight from '~icons/lucide/arrow-right'
 import IconLoader from '~icons/lucide/loader-2'
 import AppOnboardingHeader from '~/components/dashboard/AppOnboardingHeader.vue'
 import AppOnboardingPageFrame from '~/components/dashboard/AppOnboardingPageFrame.vue'
-import AppOnboardingWelcome from '~/components/dashboard/AppOnboardingWelcome.vue'
 import OnboardingProfile from '~/components/OnboardingProfile.vue'
-import { getLocalConfig } from '~/services/supabase'
+import { getLocalConfig } from '~/services/console'
 import { mergeUserOnboardingProgress, replaceUserOnboardingWithRetry, serializeUserOnboardingWrite } from '~/services/userOnboardingWriteQueue'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
@@ -19,6 +18,7 @@ import { onboardingPrimaryButtonClass } from '~/utils/onboardingButtonClasses'
 import { canEditInitialOnboardingName, consumeProfileOnboardingHandoff, initialProfileOnboardingProgressSteps, initialProfileOnboardingSteps, needsInitialOnboardingName, PROFILE_ONBOARDING_HANDOFF_KEY } from '~/utils/onboardingProfile'
 import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker, createOnboardingTelemetryIdentity, PROFILE_ONBOARDING_ANALYTICS_VERSION } from '~/utils/onboardingProgressAnalytics'
 import { openOnboardingResumeDialog } from '~/utils/onboardingResumeDialog'
+import { initialOnboardingSetupScreen } from '~/utils/onboardingSetupMode'
 import { validateRedirectPath } from '~/utils/safeRedirect'
 
 const main = useMainStore()
@@ -37,15 +37,26 @@ const savedOnboarding = onboarding && typeof onboarding === 'object' && !Array.i
 const savedDraft = savedOnboarding.profile_draft
 const isEditingProfile = computed(() => route.query.edit === '1' && canEditInitialOnboardingName(main.user, organizationStore.hasOrganizations))
 const hasSavedDraft = Boolean(savedDraft && typeof savedDraft === 'object' && !Array.isArray(savedDraft))
-const showWelcome = ref(!isEditingProfile.value && !hasSavedDraft)
 const targetPath = computed(() => validateRedirectPath(typeof route.query.to === 'string' ? route.query.to : '', '/onboarding/app', { blockedPrefixes: ['/onboarding/name'] }))
-const progressSteps = computed(() => initialProfileOnboardingProgressSteps(main.user?.onboarding)
-  .filter(step => !targetPath.value.startsWith('/onboarding/organization') || step.id === 'name' || step.id === 'organization')
-  .map(step => ({ id: step.id, label: t(step.labelKey) })))
+// Before the AI-or-manual choice, show the steps of the screen that comes next.
+const showsSetupChoiceNext = computed(() => !targetPath.value.startsWith('/onboarding/organization')
+  && initialOnboardingSetupScreen({ onboarding: main.user?.onboarding, newOrganization: false, resuming: false }) !== 'manual')
+const progressSteps = computed(() => showsSetupChoiceNext.value
+  ? [
+      { id: 'name', label: t('unified-onboarding-step-about-you') },
+      { id: 'mode', label: t('ai-onboarding-step-mode') },
+      { id: 'plan', label: t('ai-onboarding-step-plan') },
+      { id: 'agent', label: t('ai-onboarding-step-agent') },
+    ]
+  : initialProfileOnboardingProgressSteps(main.user?.onboarding)
+      .filter(step => !targetPath.value.startsWith('/onboarding/organization') || step.id === 'name' || step.id === 'organization')
+      .map(step => ({ id: step.id, label: t(step.labelKey) })))
 const profileHandoff = consumeProfileOnboardingHandoff(window.history)
-const resumePending = ref(!showWelcome.value && !profileHandoff)
-const identity = createOnboardingTelemetryIdentity({ continueFrom: profileHandoff, flow: 'pre_org', onboardingVersion: () => PROFILE_ONBOARDING_ANALYTICS_VERSION, supaHost: getLocalConfig().supaHost })
-const analyticsSteps = targetPath.value.startsWith('/onboarding/organization') ? ['welcome', 'name', 'organization'] as const : initialProfileOnboardingSteps(main.user?.onboarding, true)
+// Signup opens straight on About you; only saved names or an edit offer the resume choice.
+let resumed = (isEditingProfile.value || hasSavedDraft) && !profileHandoff
+const resumePending = ref(resumed)
+const identity = createOnboardingTelemetryIdentity({ continueFrom: profileHandoff, flow: 'pre_org', onboardingVersion: () => PROFILE_ONBOARDING_ANALYTICS_VERSION, apiHost: getLocalConfig().apiHost })
+const analyticsSteps = targetPath.value.startsWith('/onboarding/organization') ? ['name', 'organization'] as const : initialProfileOnboardingSteps(main.user?.onboarding, false)
 let tracker: ReturnType<typeof createOnboardingProgressTracker> | undefined
 let disposed = false
 const fields = createOnboardingDetailsFieldDebouncer((event, step, properties) => tracker?.trackDetailsEvent(event, step, properties), 500)
@@ -76,36 +87,8 @@ async function persistProfileProgress(patch: Record<string, Json> | ((current: J
   })
 }
 
-async function continueAfterWelcome() {
-  if (isSaving.value || !showWelcome.value)
-    return
-  isSaving.value = true
-  try {
-    // The existing draft records that About you has started, including before
-    // any typing, so a refresh resumes the form instead of replaying welcome.
-    const started = await persistProfileProgress({ profile_draft: {
-      first_name: main.user?.first_name ?? '',
-      last_name: main.user?.last_name ?? '',
-    } })
-    if (!started) {
-      toast.error(t('account-error'))
-      return
-    }
-    tracker?.completeStep('welcome', { nextStep: 'name' })
-    showWelcome.value = false
-    tracker?.viewStep('name', 'welcome')
-  }
-  catch (error) {
-    console.warn('Cannot start profile onboarding', error)
-    toast.error(t('account-error'))
-  }
-  finally {
-    isSaving.value = false
-  }
-}
-
 async function continueAfterName() {
-  if (showWelcome.value || isSaving.value || !profileForm.value?.isValid)
+  if (isSaving.value || !profileForm.value?.isValid)
     return
   isSaving.value = true
   try {
@@ -184,7 +167,7 @@ async function resumeSavedProfile() {
     return false
   if (dialogStore.lastButtonRole === 'onboarding-resume-restart') {
     identity.recordResumeRestarted()
-    showWelcome.value = true
+    resumed = false
     if (isEditingProfile.value) {
       const { edit: _edit, ...query } = route.query
       await router.replace({ path: '/onboarding/name', query })
@@ -207,8 +190,8 @@ onMounted(async () => {
   }
   if (resumePending.value && !await resumeSavedProfile())
     return
-  tracker = createOnboardingProgressTracker({ flow: 'pre_org', onboardingVersion: () => PROFILE_ONBOARDING_ANALYTICS_VERSION, resumed: !showWelcome.value && !profileHandoff, steps: analyticsSteps, supaHost: getLocalConfig().supaHost, onboardingAttemptId: identity.attemptId, onboardingRunId: identity.runId })
-  tracker.viewStep(showWelcome.value ? 'welcome' : 'name', isEditingProfile.value ? 'intent' : undefined)
+  tracker = createOnboardingProgressTracker({ flow: 'pre_org', onboardingVersion: () => PROFILE_ONBOARDING_ANALYTICS_VERSION, resumed, steps: analyticsSteps, apiHost: getLocalConfig().apiHost, onboardingAttemptId: identity.attemptId, onboardingRunId: identity.runId })
+  tracker.viewStep('name', isEditingProfile.value ? 'intent' : undefined)
   document.addEventListener('visibilitychange', visibilityChanged)
   try {
     await persistProfileProgress({ onboarding_attempt_id: identity.attemptId, last_run_id: identity.runId })
@@ -229,10 +212,7 @@ onBeforeUnmount(() => {
 
 <template>
   <AppOnboardingPageFrame :is-logging-out="isLoggingOut" :disabled="isSaving || resumePending" @logout="logout">
-    <div v-if="showWelcome && !resumePending" class="min-h-0 flex-1 overflow-y-auto">
-      <AppOnboardingWelcome :disabled="isSaving" @continue="continueAfterWelcome" />
-    </div>
-    <section v-else-if="!resumePending" class="onboarding-flow-shell onboarding-flow-app-creation onboarding-flow-details-name h-full min-h-0 flex-1 overflow-y-auto bg-slate-50 px-4 py-6 sm:px-6 lg:px-8 dark:bg-slate-950">
+    <section v-if="!resumePending" class="onboarding-flow-shell onboarding-flow-app-creation onboarding-flow-details-name h-full min-h-0 flex-1 overflow-y-auto bg-slate-50 px-4 py-6 sm:px-6 lg:px-8 dark:bg-slate-950">
       <div class="onboarding-flow-content mx-auto w-full max-w-3xl space-y-6">
         <AppOnboardingHeader :title="t('onboarding-welcome-title')" :steps="progressSteps" current-step-id="name" />
         <form class="onboarding-details-card rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95" data-test="onboarding-name-step" @submit.prevent="continueAfterName">

@@ -38,9 +38,9 @@ permissions: {}
 env:
   DENO_DIR: my_cache_directory
   CLICOLOR: '1'
-  # Pull Supabase CLI images from GHCR instead of the default public.ecr.aws,
-  # whose anonymous pull quota fails CI with "toomanyrequests: Data limit exceeded".
-  SUPABASE_INTERNAL_IMAGE_REGISTRY: ghcr.io
+  # Intentionally pin Docker Hub: functions serve does not implement registry fallback.
+  # Hosted public-image policy: https://docs.github.com/en/actions/reference/limits#docker-hubs-rate-limit-for-github-actions
+  SUPABASE_INTERNAL_IMAGE_REGISTRY: docker.io
 
 jobs:
   should_run:
@@ -402,13 +402,16 @@ jobs:
         uses: supabase/setup-cli@v2 # v2.0.0
         with:
           version: 2.109.1
+      - name: Use Docker Hub for Supabase images
+        # Keep startup and functions serve on the same original image repositories.
+        run: echo 'SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io' >> "$GITHUB_ENV"
       - name: Pre-pull Supabase images
         # Start pulling while the runner sets up; supabase start reuses in-flight layers.
         background: true
         continue-on-error: true
         run: |
           supabase services --workdir . -o json \
-            | jq -r '.[] | select(.name | test("/(postgres|gotrue|postgrest|storage-api|edge-runtime)$")) | "ghcr.io/supabase/\(.name | split("/") | last):\(.local)"' \
+            | jq -r '.[] | select(.name | test("/(postgres|gotrue|postgrest|storage-api|edge-runtime)$")) | "\(.name):\(.local)"' \
             | xargs -P 5 -n 1 docker pull -q
       - name: Setup Node.js
         uses: actions/setup-node@v6 # v6
@@ -555,13 +558,16 @@ jobs:
         uses: supabase/setup-cli@v2 # v2.0.0
         with:
           version: 2.109.1
+      - name: Use Docker Hub for Supabase images
+        # Keep startup and functions serve on the same original image repositories.
+        run: echo 'SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io' >> "$GITHUB_ENV"
       - name: Pre-pull Supabase images
         # Start pulling while the runner sets up; supabase start reuses in-flight layers.
         background: true
         continue-on-error: true
         run: |
           supabase services --workdir . -o json \
-            | jq -r '.[] | select(.name | test("/(postgres|gotrue|postgrest|storage-api|edge-runtime)$")) | "ghcr.io/supabase/\(.name | split("/") | last):\(.local)"' \
+            | jq -r '.[] | select(.name | test("/(postgres|gotrue|postgrest|storage-api|edge-runtime)$")) | "\(.name):\(.local)"' \
             | xargs -P 5 -n 1 docker pull -q
       - name: Setup Node.js
         uses: actions/setup-node@v6 # v6
@@ -677,13 +683,16 @@ jobs:
         uses: supabase/setup-cli@v2
         with:
           version: 2.109.1
+      - name: Use Docker Hub for Supabase images
+        # Keep startup and functions serve on the same original image repositories.
+        run: echo 'SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io' >> "$GITHUB_ENV"
       - name: Pre-pull Supabase images
         # Start pulling while the runner sets up; supabase start reuses in-flight layers.
         background: true
         continue-on-error: true
         run: |
           supabase services --workdir . -o json \
-            | jq -r '.[] | select(.name | test("/(postgres|gotrue|postgrest|storage-api|edge-runtime)$")) | "ghcr.io/supabase/\(.name | split("/") | last):\(.local)"' \
+            | jq -r '.[] | select(.name | test("/(postgres|gotrue|postgrest|storage-api|edge-runtime)$")) | "\(.name):\(.local)"' \
             | xargs -P 5 -n 1 docker pull -q
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -788,13 +797,16 @@ jobs:
         uses: supabase/setup-cli@v2 # v2.0.0
         with:
           version: 2.109.1
+      - name: Use Docker Hub for Supabase images
+        # Keep startup and functions serve on the same original image repositories.
+        run: echo 'SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io' >> "$GITHUB_ENV"
       - name: Pre-pull Supabase images
         # Start pulling while the runner sets up; supabase start reuses in-flight layers.
         background: true
         continue-on-error: true
         run: |
           supabase services --workdir . -o json \
-            | jq -r '.[] | select(.name | test("/(postgres|gotrue|postgrest|storage-api|edge-runtime)$")) | "ghcr.io/supabase/\(.name | split("/") | last):\(.local)"' \
+            | jq -r '.[] | select(.name | test("/(postgres|gotrue|postgrest|storage-api|edge-runtime)$")) | "\(.name):\(.local)"' \
             | xargs -P 5 -n 1 docker pull -q
       - name: Setup Node.js
         uses: actions/setup-node@v6 # v6
@@ -908,13 +920,16 @@ jobs:
         uses: supabase/setup-cli@v2 # v2.0.0
         with:
           version: 2.109.1
+      - name: Use Docker Hub for Supabase images
+        # Keep startup and functions serve on the same original image repositories.
+        run: echo 'SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io' >> "$GITHUB_ENV"
       - name: Pre-pull Supabase images
         # Start pulling while the runner sets up; supabase start reuses in-flight layers.
         background: true
         continue-on-error: true
         run: |
           supabase services --workdir . -o json \
-            | jq -r '.[] | select(.name | test("/(postgres|gotrue|postgrest|storage-api|edge-runtime)$")) | "ghcr.io/supabase/\(.name | split("/") | last):\(.local)"' \
+            | jq -r '.[] | select(.name | test("/(postgres|gotrue|postgrest|storage-api|edge-runtime)$")) | "\(.name):\(.local)"' \
             | xargs -P 5 -n 1 docker pull -q
       - name: Setup Node.js
         uses: actions/setup-node@v6 # v6
@@ -1056,13 +1071,16 @@ jobs:
         uses: supabase/setup-cli@v2 # v2.0.0
         with:
           version: 2.109.1
+      - name: Use Docker Hub for Supabase images
+        # Keep startup and functions serve on the same original image repositories.
+        run: echo 'SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io' >> "$GITHUB_ENV"
       - name: Pre-pull Supabase images
         # Start pulling while the runner sets up; supabase start reuses in-flight layers.
         background: true
         continue-on-error: true
         run: |
           supabase services --workdir . -o json \
-            | jq -r '.[] | select(.name | test("/(postgres|gotrue|postgrest|storage-api|edge-runtime)$")) | "ghcr.io/supabase/\(.name | split("/") | last):\(.local)"' \
+            | jq -r '.[] | select(.name | test("/(postgres|gotrue|postgrest|storage-api|edge-runtime)$")) | "\(.name):\(.local)"' \
             | xargs -P 5 -n 1 docker pull -q
       - name: Setup bun
         run: bash scripts/setup-bun.sh
@@ -1294,6 +1312,10 @@ jobs:
       # Only the CLI workspace is built here; the full monorepo install took 2-3 minutes on Windows.
       - name: Install CLI dependencies
         run: bun install --filter ./cli
+      - name: Test init command probes on Windows
+        run: bun run --cwd cli test:init-command-execution
+      - name: Test init command execution on Windows
+        run: bun run --cwd cli test:init-guardrails
       - name: Install test_upload dependencies
         run: bun install --cwd cli/test/test_upload
       - name: Build CLI
@@ -1521,12 +1543,15 @@ jobs:
         uses: supabase/setup-cli@v2 # v2.0.0
         with:
           version: 2.109.1
+      - name: Use Docker Hub for Supabase images
+        # Keep startup and functions serve on the same original image repositories.
+        run: echo 'SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io' >> "$GITHUB_ENV"
       - name: Pre-pull Supabase images
         # Finish image extraction before dependency installation to limit peak runner memory.
         continue-on-error: true
         run: |
           supabase services --workdir . -o json \
-            | jq -r '.[] | select(.name | test("/(postgres|gotrue|postgrest|storage-api|edge-runtime)$")) | "ghcr.io/supabase/\(.name | split("/") | last):\(.local)"' \
+            | jq -r '.[] | select(.name | test("/(postgres|gotrue|postgrest|storage-api|edge-runtime)$")) | "\(.name):\(.local)"' \
             | xargs -P 5 -n 1 docker pull -q
       - name: Setup bun
         run: bash scripts/setup-bun.sh
@@ -1616,13 +1641,16 @@ jobs:
         uses: supabase/setup-cli@v2
         with:
           version: 2.109.1
+      - name: Use Docker Hub for Supabase images
+        # Keep startup and functions serve on the same original image repositories.
+        run: echo 'SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io' >> "$GITHUB_ENV"
       - name: Pre-pull Supabase images
         # Start pulling while the runner sets up; supabase start reuses in-flight layers.
         background: true
         continue-on-error: true
         run: |
           supabase services --workdir . -o json \
-            | jq -r '.[] | select(.name | test("/(postgres|gotrue|postgrest|storage-api|edge-runtime)$")) | "ghcr.io/supabase/\(.name | split("/") | last):\(.local)"' \
+            | jq -r '.[] | select(.name | test("/(postgres|gotrue|postgrest|storage-api|edge-runtime)$")) | "\(.name):\(.local)"' \
             | xargs -P 5 -n 1 docker pull -q
       - name: Fetch published CLI tags
         run: git fetch --no-tags --depth=1 --filter=blob:none origin '+refs/tags/cli-*:refs/tags/cli-*'

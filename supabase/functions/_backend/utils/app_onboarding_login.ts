@@ -23,9 +23,22 @@ export async function markAppOnboardingLoginFromTracking(
   channel: string,
   event: string,
 ): Promise<void> {
-  const auth = c.get('auth')
   const source = getAppOnboardingLoginSource(channel, event)
-  if (!source || auth?.authType !== 'apikey')
+  if (source)
+    await markAppOnboardingLogin(c, source)
+}
+
+/**
+ * Mark "Log in CLI/MCP" done on the caller's checklist apps. Called from tracking events and
+ * right after an API-key app create: an agent that logged in before the app existed must not
+ * leave the step pending.
+ */
+export async function markAppOnboardingLogin(
+  c: Context<MiddlewareKeyVariables>,
+  source: 'cli' | 'mcp' | 'ai',
+): Promise<void> {
+  const auth = c.get('auth')
+  if (auth?.authType !== 'apikey')
     return
 
   const pool = await getPgClient(c)

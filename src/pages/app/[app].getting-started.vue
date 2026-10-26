@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import AppOnboardingFlow from '~/components/dashboard/AppOnboardingFlow.vue'
 import AppPageFrame from '~/components/dashboard/AppPageFrame.vue'
+import OnboardingChoosePlanStep from '~/components/dashboard/OnboardingChoosePlanStep.vue'
 import { useAppPage } from '~/composables/useAppPage'
 import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
@@ -25,8 +26,10 @@ const { id, app, isLoading } = useAppPage({
   navTitle: t('getting-started'),
 })
 
-// Direct-offer orgs (no free trial) can create their app but cannot publish
-// updates until they subscribe. Explain that here so setup does not look stuck.
+// Direct-offer orgs (no free trial, never paid) can create their app but cannot
+// publish updates until they subscribe. This page is where they land after
+// signup, so choosing a plan is shown as the first step, before setup. It hides
+// as soon as the org pays (or has credits), since the org is no longer failed.
 const hideExternalPurchaseFlows = isNativeAppStoreContext()
 // Scope to the org that owns this app, and wait until it is the current org so
 // currentOrganizationFailed describes it (not the previously selected org).
@@ -37,7 +40,7 @@ const unpaidOrgId = computed(() => {
   return organizationStore.currentOrganizationFailed ? appOrgId : undefined
 })
 const { trialSkipped } = useBillingPaidAt(unpaidOrgId, hideExternalPurchaseFlows)
-const showChoosePlanCallout = computed(() => !!unpaidOrgId.value && trialSkipped.value)
+const showChoosePlanStep = computed(() => !!unpaidOrgId.value && trialSkipped.value)
 
 // Getting started always renders the onboarding setup UI inside the dashboard
 // shell. Read once per app: the flow reads its analytics flow at mount.
@@ -71,30 +74,7 @@ watch(() => app.value?.app_id, (appId) => {
 
 <template>
   <AppPageFrame :found="!!app" :loading="isLoading">
-    <section
-      v-if="showChoosePlanCallout"
-      class="flex flex-col gap-3 p-4 mb-4 rounded-xl border sm:flex-row sm:items-center border-amber-200 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/20"
-      aria-labelledby="no-trial-callout-title"
-      data-test="no-trial-callout"
-    >
-      <div class="flex-1">
-        <h2 id="no-trial-callout-title" class="text-base font-semibold text-gray-900 dark:text-white">
-          {{ t('no-trial-choose-plan-title') }}
-        </h2>
-        <p class="mt-1 text-sm text-gray-600 dark:text-gray-300">
-          {{ t('no-trial-choose-plan-description') }}
-        </p>
-        <p class="mt-1 text-sm font-medium text-gray-700 dark:text-gray-200">
-          {{ t('no-trial-money-back-guarantee-description') }}
-        </p>
-      </div>
-      <router-link
-        to="/settings/organization/plans"
-        class="shrink-0 border-none d-btn d-btn-sm d-btn-warning text-black"
-      >
-        {{ t('choose-a-plan') }}
-      </router-link>
-    </section>
+    <OnboardingChoosePlanStep v-if="showChoosePlanStep" />
     <AppOnboardingFlow
       v-if="app && setupFlowAppId === app.app_id"
       :key="`${setupFlowAppId}:${showChecklist}`"

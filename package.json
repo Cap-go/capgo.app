@@ -1,7 +1,7 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "22.9.0",
+  "version": "22.16.5",
   "private": true,
   "workspaces": [
     "cli",
@@ -48,7 +48,7 @@
     "dev": "vite",
     "serve": "vite",
     "serve:local": "ENV=local vite",
-    "serve:prod-no-cors": "ENV=prod CAPGO_PROD_SUPABASE_PROXY=true CHOKIDAR_USEPOLLING=true vite",
+    "serve:prod-no-cors": "ENV=prod CHOKIDAR_USEPOLLING=true vite",
     "serve:worktree": "bun run supabase:with-env -- bun -e \"const supabaseUrl = process.env.SUPABASE_URL || ''; process.env.SUPA_URL = supabaseUrl; process.env.SUPA_ANON = process.env.SUPABASE_ANON_KEY || ''; process.env.API_DOMAIN = supabaseUrl.replace(/^https?:\\/\\//, '') + '/functions/v1'; process.env.ENV = 'local'; const { spawnSync } = require('node:child_process'); const result = spawnSync('bun', ['run', 'serve:local'], { stdio: 'inherit', env: process.env }); process.exit(result.status ?? 1)\"",
     "serve:dev": "BRANCH=development vite",
     "screenshots:marketing": "bun run supabase:with-env -- bun scripts/marketing-screenshots/capture.ts",
@@ -314,7 +314,6 @@
     "@capgo/capacitor-social-login": "^8.5.18",
     "@capgo/capacitor-speech-recognition": "^8.3.2",
     "@capgo/capacitor-speech-synthesis": "^8.0.22",
-    "@capgo/capacitor-supabase": "^8.2.3",
     "@capgo/capacitor-textinteraction": "^8.0.40",
     "@capgo/capacitor-transitions": "^8.2.4",
     "@capgo/capacitor-updater": "8.53.0",

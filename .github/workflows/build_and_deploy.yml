@@ -30,7 +30,6 @@ jobs:
       supabase: ${{ steps.scope.outputs.supabase }}
       translation: ${{ steps.scope.outputs.translation }}
       r2_inventory: ${{ steps.scope.outputs.r2_inventory }}
-      bento_dispatch: ${{ steps.scope.outputs.bento_dispatch }}
       deploy_tag: ${{ steps.target.outputs.deploy_tag }}
       deploy_sha: ${{ steps.target.outputs.deploy_sha }}
       is_alpha: ${{ steps.target.outputs.is_alpha }}
@@ -364,35 +363,6 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
-  deploy_bento_dispatch:
-    needs: [changes, supabase_deploy, read_replica_schema]
-    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.is_alpha == 'false' && needs.changes.outputs.bento_dispatch == 'true' && (needs.supabase_deploy.result == 'success' || (needs.supabase_deploy.result == 'skipped' && needs.changes.outputs.supabase != 'true')) && (needs.read_replica_schema.result == 'success' || (needs.read_replica_schema.result == 'skipped' && needs.changes.outputs.supabase != 'true')) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    name: Deploy Bento event dispatcher
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.changes.outputs.deploy_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-      - name: Provision queue and deploy Worker
-        env:
-          BENTO_DEPLOY_TAG: ${{ needs.changes.outputs.deploy_tag }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          bun scripts/resolve-deploy-tag.ts --assert-current "$BENTO_DEPLOY_TAG"
-          bun scripts/ensure-bento-dispatch-queue.ts prod
-          bunx wrangler deploy --config cloudflare_workers/bento_dispatch/wrangler.jsonc --env=prod --minify
 
   deploy_r2_inventory:
     needs: [changes, supabase_deploy, read_replica_schema]

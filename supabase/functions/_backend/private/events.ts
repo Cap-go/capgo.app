@@ -3,6 +3,8 @@ import type { AcceptedEventIdentity } from '../utils/event_identity.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { BentoTrackingPayload, SendEventToTrackingPayload, TrackOptions } from '../utils/tracking.ts'
 import { Hono } from 'hono/tiny'
+import { markAiOnboardingAgentConnected } from '../utils/ai_onboarding_agent.ts'
+import { buildAppUpdatedBentoEvent } from '../utils/app_onboarding_bento.ts'
 import { markAppOnboardingLoginFromTracking } from '../utils/app_onboarding_login.ts'
 import { APP_TOO_LARGE_EVENT, buildAppTooLargeBentoEvent } from '../utils/app_too_large_tracking.ts'
 import { markBuilderChecklistFromAnalytics } from '../utils/builder_onboarding_checklist.ts'
@@ -224,17 +226,7 @@ async function buildOnboardingBentoEvent(
       throw simpleError('error_fetching_organization_or_app', 'Error fetching organization or app', { org: orgResult.error, app: appResult.error })
     }
 
-    return {
-      cron: '* * * * *',
-      event: 'app:updated',
-      preferenceKey: 'onboarding' as const,
-      uniqId: `app:updated:${appId}`,
-      data: {
-        org_id: orgResult.data.id,
-        org_name: orgResult.data.name,
-        app_name: appResult.data.name,
-      },
-    }
+    return buildAppUpdatedBentoEvent({ appId, orgId: orgResult.data.id, orgName: orgResult.data.name, appName: appResult.data.name })
   })
 }
 
@@ -661,6 +653,9 @@ app.post('/', middlewareAuth(), async (c) => {
   // notifyConsole: broadcast to Supabase Realtime only, skip all tracking
   if (notifyConsole) {
     await handleNotifyConsole(c, trackedBody, icon, appId, verifiedOrgId)
+    // Browser-login confirmations skip analytics (no queue write), and with CLI telemetry
+    // disabled they are the only login signal, so the AI onboarding page must see them too.
+    await markAiOnboardingAgentConnected(c, trackedBody.channel, trackedBody.event)
     logAcceptedEvent(c, identity, acceptedAt)
     return c.json({ ...BRES, event_id: identity.event_id })
   }
@@ -734,6 +729,8 @@ app.post('/', middlewareAuth(), async (c) => {
   await markBuilderChecklistFromAnalytics(c, appId, trackedBody)
 
   await markAppOnboardingLoginFromTracking(c, trackedBody.channel, trackedBody.event)
+  // AI onboarding page: tick "logged in" / "MCP installed" from the agent's first events.
+  await markAiOnboardingAgentConnected(c, trackedBody.channel, trackedBody.event)
 
   await recordUserBentoEvent(c, {
     userId: c.get('auth')!.userId,

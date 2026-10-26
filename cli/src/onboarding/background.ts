@@ -40,7 +40,7 @@ export function startOnboardingCheck(command: Command, commandPath: string, work
       packageJson: text(options.packageJson),
       mainFile: text(options.mainFile),
       apiHost: text(options.apiHost),
-      setupNotice: shouldEvaluateSetupNotice(commandPath, options, ci),
+      setupNotice: shouldEvaluateSetupNotice(commandPath, options),
     }
     setupDebug('worker starting', { command: commandPath, notice_enabled: workerData.setupNotice, ci })
     const worker = new Worker(workerUrl, { workerData, stdout: true, stderr: true })

@@ -68,8 +68,10 @@ import { uploadSupportLogs } from '../support/support-upload.js'
 import { offerSupportUploadBeforeAi } from '../support/support-upload-prompt.js'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { isDirectOfferApp } from '../api/direct-offer'
-import { DIRECT_OFFER_PLAN_MESSAGE } from '../shared/direct-offer'
-import { assertCliPermission, canPromptInteractively, createCapgoClient, findSavedKey, getConfig, getOrganizationId, getRemoteConfig, sendEvent, trimTrailingSlashes, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { isAgentInvocation } from '../shared/agent-notices'
+import { DIRECT_OFFER_PLAN_MESSAGE, formatPlanRequiredMessage } from '../shared/direct-offer'
+import { normalizePlansUrl } from '../shared/plan-url'
+import { assertCliPermission, canPromptInteractively, createCapgoClient, defaultHostWeb, findSavedKey, getConfig, getOrganizationId, getRemoteConfig, sendEvent, trimTrailingSlashes, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import { getBuilderAppId } from './app-id'
 import { parseBuildEnv } from './build-env'
 import { syncAndroidVersion } from './android-version'
@@ -257,7 +259,8 @@ export async function throwIfBuildPlanLimitError(
     return
 
   const config = await getRemoteConfig()
-  const upgradeUrl = body?.moreInfo?.upgrade_url || `${config.hostWeb}/settings/organization/plans`
+  const fallbackUrl = normalizePlansUrl(`${config.hostWeb}/settings/organization/plans`, `${defaultHostWeb}/settings/organization/plans`)
+  const upgradeUrl = normalizePlansUrl(body?.moreInfo?.upgrade_url, fallbackUrl)
   // Orgs created without a free trial (direct offer) get "choose a plan" copy, not "upgrade".
   const directOffer = errorCode === 'need_plan_upgrade' && !!isDirectOffer && await isDirectOffer()
   const message = directOffer
@@ -267,8 +270,11 @@ export async function throwIfBuildPlanLimitError(
         ? `Native build concurrency limit reached for your plan. Upgrade here: ${upgradeUrl}`
         : `Cannot ${action} native build, upgrade plan to continue: ${upgradeUrl}`)
 
-  logger.error(message)
-  if (!message.includes(upgradeUrl))
+  const displayMessage = errorCode === 'need_plan_upgrade' && isAgentInvocation()
+    ? formatPlanRequiredMessage(upgradeUrl, directOffer, true)
+    : message
+  logger.error(displayMessage)
+  if (!displayMessage.includes(upgradeUrl))
     logger.error(`Upgrade here: ${upgradeUrl}`)
 
   try {

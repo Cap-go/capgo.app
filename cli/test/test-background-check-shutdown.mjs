@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { stripVTControlCharacters } from 'node:util'
 import stringWidth from 'string-width'
 import { afterAll, beforeAll, test } from 'bun:test'
+import { defaultAgents } from 'agent-cli-detector'
 
 const dir = mkdtempSync(join(tmpdir(), 'capgo-background-shutdown-'))
 let harness
@@ -30,16 +31,22 @@ beforeAll(async () => {
   writeFileSync(join(dir, 'slow.mjs'), 'setTimeout(() => {}, 900)')
   writeFileSync(join(dir, 'released.mjs'), "import { parentPort } from 'node:worker_threads'; parentPort.once('message', () => process.exit(0))")
   writeFileSync(join(dir, 'notice.mjs'), `import { parentPort } from 'node:worker_threads'; parentPort.postMessage({ type: 'setup-notice', notice: { kind: 'setup', appId: 'com.example.ready', product: 'live updates', title: 'Create a channel', action: 'Continue your checklist', secondary: [] } })`)
-  for (const app of ['one', 'two', 'trial']) {
-    writeFileSync(join(dir, `plan-${app}.mjs`), `import { parentPort } from 'node:worker_threads'; parentPort.postMessage({ type: 'setup-notice', notice: { kind: 'plan', appId: 'com.example.${app}', completed: ['Live updates'], secondary: [], billing: { orgId: 'fixture-org', trialEndsAt: ${JSON.stringify(app === 'trial' ? '2099-01-01T00:00:00Z' : null)}, plansUrl: 'https://console.example.com/plans' } } })`)
+  for (const app of ['one', 'two', 'trial', 'agent']) {
+    writeFileSync(join(dir, `plan-${app}.mjs`), `import { parentPort } from 'node:worker_threads'; parentPort.postMessage({ type: 'setup-notice', notice: { kind: 'plan', appId: 'com.example.${app}', completed: ['Live updates'], secondary: ${JSON.stringify(app === 'agent' ? ['explore cloud builds'] : [])}, billing: { orgId: 'fixture-org', trialEndsAt: ${JSON.stringify(['trial', 'agent'].includes(app) ? '2099-01-01T12:00:00Z' : null)}, plansUrl: 'https://console.example.com/plans' } } })`)
   }
+  const billing = { orgId: 'fixture-org', trialEndsAt: '2099-01-01T12:00:00Z', plansUrl: 'https://console.example.com/plans?oid=fixture-org' }
+  writeFileSync(join(dir, 'setup-trial.mjs'), `import { parentPort } from 'node:worker_threads'; parentPort.postMessage({ type: 'setup-notice', notice: ${JSON.stringify({ kind: 'setup', appId: 'com.example.ready', product: 'live updates', title: 'Create a channel', instruction: 'Next: Create a channel.', action: 'npx @capgo/cli@latest app todo --list ota', secondary: ['explore cloud builds with Capgo Builder'], billing })} })`)
+  writeFileSync(join(dir, 'trial-only.mjs'), `import { parentPort } from 'node:worker_threads'; parentPort.postMessage({ type: 'setup-notice', notice: ${JSON.stringify({ kind: 'trial', appId: 'com.example.ready', secondary: [], billing })} })`)
 })
+
+const trialLine = /^- Add a payment method before Jan 1, 2099 to keep live updates running after the free trial \(\d+ days left; devices stop receiving updates without a plan; no charge before then\): https:\/\/console\.example\.com\/plans\?trial_card=1$/m
 
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
-function run({ commandPath = 'app list', options = {}, tty = true, stdinTty = tty, stdoutTty = tty, ci = false, workers = ['busy.mjs'], foregroundMs = 0, previousInterrupt = false, telemetry = 'ok', disabled = false, controlledClock = false, earlyCompletion = false, immediateCompletion = false, waitForWorkers = false, trialAlreadyShown = false, debug = false, columns = 80, colorEnv = {} } = {}) {
+function run({ commandPath = 'app list', options = {}, tty = true, stdinTty = tty, stdoutTty = tty, ci = false, github = false, summaryPath = '', noticeWriteFailure = false, noticeWriteChunkSize = 0, priorFlushMs = 0, workers = ['busy.mjs'], foregroundMs = 0, previousInterrupt = false, telemetry = 'ok', disabled = false, controlledClock = false, earlyCompletion = false, immediateCompletion = false, waitForWorkers = false, trialAlreadyShown = false, debug = false, columns = 80, colorEnv = {}, agent = false } = {}) {
   const source = `
     import assert from 'node:assert/strict'
+    import fs from 'node:fs'
     import { performance } from 'node:perf_hooks'
     import FakeTimers from ${JSON.stringify(import.meta.resolve('@sinonjs/fake-timers'))}
     import { setImmediate as nextTurn } from 'node:timers/promises'
@@ -64,11 +71,21 @@ function run({ commandPath = 'app list', options = {}, tty = true, stdinTty = tt
     }
     const command = { optsWithGlobals: () => (${JSON.stringify({ apikey: 'fake-api-key', appId: 'com.example.ready', ...options })}), registeredArguments: [], args: [] }
     for (const filename of ${JSON.stringify(workers)})
-      startOnboardingCheck(command, ${JSON.stringify(commandPath)}, new URL(filename, ${JSON.stringify(pathToFileURL(join(dir, 'run.mjs')).href)}))
+      startOnboardingCheck(command, ${JSON.stringify(commandPath)}, new URL(filename, ${JSON.stringify(pathToFileURL(join(dir, 'run.mjs')).href)}), undefined, ${ci})
     if (${waitForWorkers}) {
       const checks = [...getPendingOnboardingChecks()]
       for (const [worker] of checks) worker.ref()
       await Promise.all(checks.map(([, check]) => check.completion))
+    }
+    let noticeWriteCalls = 0
+    if (${noticeWriteFailure || noticeWriteChunkSize > 0}) {
+      const write = fs.writeSync
+      fs.writeSync = (fd, buffer, offset, length) => {
+        if (fd !== 1) return write(fd, buffer, offset, length)
+        noticeWriteCalls++
+        if (${noticeWriteFailure}) throw new Error('synthetic notice write failure')
+        return write(fd, buffer, offset, Math.min(length, ${noticeWriteChunkSize}))
+      }
     }
     console.log('pending-attempts:' + JSON.stringify([...getPendingOnboardingChecks().values()].map(check => check.attemptId)))
     let foregroundInterrupts = 0
@@ -83,7 +100,7 @@ function run({ commandPath = 'app list', options = {}, tty = true, stdinTty = tt
     const now = ${controlledClock} ? Date.now : () => performance.now()
     const started = now()
     let finished = false
-    const completion = waitForOnboardingChecks(command, ${JSON.stringify(commandPath)}).then(() => { finished = true })
+    const completion = waitForOnboardingChecks(command, ${JSON.stringify(commandPath)}, Date.now() - ${priorFlushMs}).then(() => { finished = true })
     if (${immediateCompletion}) {
       await completion
       assert.equal(finished, true, 'shutdown must finish without advancing the clock')
@@ -116,7 +133,7 @@ function run({ commandPath = 'app list', options = {}, tty = true, stdinTty = tt
         await Promise.all(checks.map(([, check]) => check.completion))
       }
       await nextTurn()
-      clock.tick(4_999)
+      clock.tick(${4999 - priorFlushMs})
       await nextTurn()
       assert.equal(finished, false, 'shutdown completed before the shared deadline')
       clock.tick(1)
@@ -129,11 +146,16 @@ function run({ commandPath = 'app list', options = {}, tty = true, stdinTty = tt
       await completion
     }
     console.log('foreground-finished:' + Math.round(now() - started))
+    if (${noticeWriteChunkSize > 0}) assert.ok(noticeWriteCalls > 1, 'exercise partial annotation writes')
     if (${controlledClock}) clock.uninstall()
   `
   const runner = join(dir, `run-${++runnerCount}.mjs`)
   writeFileSync(runner, source)
-  const child = spawn('node', [runner], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: undefined, ...colorEnv, CI: ci ? 'true' : 'false', CAPGO_DISABLE_TELEMETRY: disabled ? 'true' : '', CAPGO_DISABLE_POSTHOG: '', CAPGO_SETUP_DEBUG: debug ? '1' : '' } })
+  const environment = { ...process.env }
+  for (const definition of defaultAgents)
+    for (const signal of definition.env ?? []) delete environment[signal.name]
+  if (agent) environment.CODEX_THREAD_ID = 'fixture-agent-thread'
+  const child = spawn('node', [runner], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...environment, TZ: 'UTC', FORCE_COLOR: '0', NO_COLOR: undefined, ...colorEnv, CI: ci ? 'true' : 'false', GITHUB_ACTIONS: github ? 'true' : 'false', GITHUB_STEP_SUMMARY: summaryPath, CAPGO_DISABLE_TELEMETRY: disabled ? 'true' : '', CAPGO_DISABLE_POSTHOG: '', CAPGO_SETUP_DEBUG: debug ? '1' : '' } })
   let output = ''
   let errors = ''
   let waiting
@@ -159,6 +181,66 @@ function waitedMs(result) {
   return Number(result.output.match(/foreground-finished:(\d+)/)?.[1])
 }
 
+test.concurrent('detected agents get plain next steps with the trial line in ready non-TTY output', async () => {
+  const result = await run({ commandPath: 'bundle list', workers: ['plan-trial.mjs'], waitForWorkers: true, tty: false, agent: true }).completion
+  assert.equal(result.code, 0, result.text)
+  assert.match(result.output, /\nCapgo — next steps\n\n- Live updates: set up\.\n- Add a payment method/)
+  assert.match(result.output, trialLine)
+  assert.doesNotMatch(result.text, /[┌│└]|AI ASSISTANT|final response|Checking your setup|Your Capgo setup is complete/)
+}, 12000)
+
+test.concurrent('agent setup notices carry the trial, and a trial-only notice prints the line on its own', async () => {
+  const setup = await run({ commandPath: 'bundle list', workers: ['setup-trial.mjs'], waitForWorkers: true, tty: false, agent: true }).completion
+  assert.equal(setup.code, 0, setup.text)
+  assert.match(setup.output, /\nCapgo — next steps\n\n- Live updates: not finished yet\. Next: Create a channel\.\n {2}Check progress: npx @capgo\/cli@latest app todo --list ota\n- Add a payment method/)
+  assert.match(setup.output, trialLine)
+  assert.doesNotMatch(setup.text, /Builder|explore|oid=/)
+  const trial = await run({ commandPath: 'bundle list', workers: ['trial-only.mjs'], waitForWorkers: true, tty: false, agent: true }).completion
+  assert.equal(trial.code, 0, trial.text)
+  assert.match(trial.output, /\nCapgo — next steps\n\n- Add a payment method/)
+  assert.match(trial.output, trialLine)
+  const human = await run({ commandPath: 'bundle list', workers: ['trial-only.mjs'], waitForWorkers: true }).completion
+  assert.equal(human.code, 0, human.text)
+  assert.doesNotMatch(human.text, /next steps|payment method|┌/)
+}, 12000)
+
+test.concurrent('agent notices stay plain with forced colors, a TTY and GitHub Actions', async () => {
+  const colored = await run({ commandPath: 'bundle list', workers: ['setup-trial.mjs'], waitForWorkers: true, agent: true, colorEnv: { FORCE_COLOR: '1' } }).completion
+  assert.equal(colored.code, 0, colored.text)
+  assert.equal(colored.output, stripVTControlCharacters(colored.output))
+  assert.match(colored.output, trialLine)
+  assert.doesNotMatch(colored.output, /[┌│└]/)
+  const summaryPath = join(dir, 'agent-summary.md')
+  writeFileSync(summaryPath, 'Existing summary\n')
+  const github = await run({ commandPath: 'bundle list', workers: ['plan-agent.mjs'], waitForWorkers: true, tty: false, ci: true, github: true, summaryPath, agent: true }).completion
+  assert.equal(github.code, 0, github.text)
+  assert.doesNotMatch(github.output, /::notice::|%0A|explore cloud builds/)
+  assert.match(github.output, trialLine)
+  assert.equal(readFileSync(summaryPath, 'utf8'), 'Existing summary\n')
+}, 12000)
+
+test.concurrent('agents wait for background checks in non-TTY shells without a waiting box', async () => {
+  for (const tty of [false, true]) {
+    const result = await run({ agent: true, tty, controlledClock: true }).completion
+    assert.equal(waitedMs(result), 5_000)
+    assert.doesNotMatch(result.text, /Checking your setup|Press Ctrl\+C/)
+  }
+}, 12_000)
+
+test.concurrent('agent copy preserves output-mode suppression', async () => {
+  for (const settings of [{ options: { json: true } }, { options: { quiet: true } }, { commandPath: 'mcp' }]) {
+    const result = await run({ commandPath: 'bundle list', workers: ['plan-trial.mjs'], waitForWorkers: true, agent: true, ...settings }).completion
+    assert.equal(result.code, 0, result.text)
+    assert.doesNotMatch(result.text, /next steps|payment method/)
+  }
+}, 12000)
+
+test.concurrent('the agent end notice does not depend on the start-of-command trial state', async () => {
+  const result = await run({ commandPath: 'bundle list', workers: ['plan-one.mjs', 'plan-trial.mjs'], waitForWorkers: true, agent: true, trialAlreadyShown: true }).completion
+  assert.equal(result.code, 0, result.text)
+  assert.equal([...result.output.matchAll(new RegExp(trialLine.source, `${trialLine.flags}g`))].length, 1, result.text)
+}, 12000)
+
 test.concurrent('ready notices render for human-readable output even when no worker or TTY wait remains', async () => {
   for (const tty of [true, false]) {
     const result = await run({ commandPath: 'bundle list', workers: ['notice.mjs', 'notice.mjs'], waitForWorkers: true, tty }).completion
@@ -171,7 +253,7 @@ test.concurrent('ready notices render for human-readable output even when no wor
 }, 12_000)
 
 test.concurrent('machine modes and explicit setup flows discard ready notices', async () => {
-  const cases = [{ options: { json: true } }, { options: { outputText: true } }, { options: { quiet: true } }, { options: { silent: true } }, { options: { format: 'json' } }, { ci: true }, { commandPath: 'app todo' }, { commandPath: 'build init' }, { commandPath: 'mcp' }]
+  const cases = [{ options: { json: true } }, { options: { outputText: true } }, { options: { quiet: true } }, { options: { silent: true } }, { options: { format: 'json' } }, { commandPath: 'app todo' }, { commandPath: 'build init' }, { commandPath: 'mcp' }]
   for (const settings of cases) {
     const result = await run({ commandPath: 'bundle list', workers: ['notice.mjs'], waitForWorkers: true, ...settings }).completion
     assert.equal(result.code, 0, result.text)
@@ -249,7 +331,7 @@ test.concurrent('SIGINT during the grace period exits immediately even after a p
   assert.ok(!result.text.includes('foreground-finished'))
 }, 12_000)
 
-test.concurrent('machine output, init, MCP, CI and non-interactive commands do not wait or print', async () => {
+test.concurrent('machine output, init, MCP and non-interactive commands do not wait or print', async () => {
   const cases = [
     { options: { json: true } }, { options: { outputText: true } }, { options: { quiet: true } }, { options: { silent: true } }, { options: { format: 'json' } },
     { commandPath: 'channel currentBundle', options: { quiet: true } },
@@ -257,7 +339,7 @@ test.concurrent('machine output, init, MCP, CI and non-interactive commands do n
     { commandPath: 'init' }, { commandPath: 'build init' }, { commandPath: 'build onboarding' },
     { commandPath: 'mcp' }, { commandPath: 'account id' }, { commandPath: 'bundle releaseType' },
     { commandPath: 'build credentials export' }, { commandPath: 'generate-docs' },
-    { commandPath: 'unknown-command' }, { ci: true }, { stdinTty: false }, { stdoutTty: false },
+    { commandPath: 'unknown-command' }, { stdinTty: false }, { stdoutTty: false },
   ]
   const results = await Promise.all(cases.map(settings => run({ ...settings, controlledClock: true, immediateCompletion: true }).completion))
   for (const result of results) {
@@ -344,4 +426,97 @@ test.concurrent('notice colors respect NO_COLOR, disabled colors and piped outpu
     assert.equal(result.output, stripVTControlCharacters(result.output), `keep plain output free of ANSI sequences: ${JSON.stringify(settings)}`)
     assert.ok(result.output.includes('Finish setting up live updates'))
   }
+}, 12_000)
+
+
+test.concurrent('CI waits for enabled background notices without an interactive banner', async () => {
+  const worker = 'ci-notice.mjs'
+  writeFileSync(join(dir, worker), `import { parentPort, workerData } from 'node:worker_threads'; setTimeout(() => { if (workerData.setupNotice) parentPort.postMessage({ type: 'setup-notice', notice: { kind: 'setup', appId: 'com.example.ci', product: 'live updates', title: 'Create a channel', action: 'Continue your checklist', secondary: [] } }) }, 150)`)
+  for (const github of [false, true]) {
+    const summaryPath = join(dir, `summary-${github}.md`)
+    writeFileSync(summaryPath, 'Existing summary\n')
+    const result = await run({ commandPath: 'bundle upload', ci: true, tty: false, github, summaryPath, workers: [worker] }).completion
+    assert.equal(result.code, 0, result.text)
+    assert.match(result.text, /Finish setting up live updates/)
+    assert.doesNotMatch(result.text, /Checking your setup|Press Ctrl\+C/)
+    if (github) {
+      assert.equal((result.output.match(/^::notice::/gm) ?? []).length, 1)
+      assert.match(result.output, /%0A/)
+      const summary = readFileSync(summaryPath, 'utf8')
+      assert.match(summary, /^Existing summary\n/)
+      assert.match(summary, /### Finish setting up live updates/)
+      assert.match(summary, /Continue your checklist/)
+    }
+    else assert.equal(readFileSync(summaryPath, 'utf8'), 'Existing summary\n')
+  }
+}, 12_000)
+
+test.concurrent('CI background workers share the existing five-second ceiling', async () => {
+  const result = await run({ ci: true, tty: false, controlledClock: true }).completion
+  assert.equal(waitedMs(result), 5_000)
+  assert.doesNotMatch(result.text, /Checking your setup|Press Ctrl\+C/)
+}, 12_000)
+
+test.concurrent('GitHub Actions preserves machine modes and ignores unavailable summaries', async () => {
+  const machineSummary = join(dir, 'machine-output-summary.md')
+  writeFileSync(machineSummary, 'Existing summary\n')
+  for (const options of [{ json: true }, { outputText: true }, { quiet: true }, { silent: true }, { format: 'json' }]) {
+    for (const settings of [{}, { workers: ['notice.mjs'], waitForWorkers: true }]) {
+      const result = await run({ commandPath: 'bundle upload', ci: true, tty: false, github: true, summaryPath: machineSummary, options, controlledClock: true, immediateCompletion: true, ...settings }).completion
+      assert.equal(waitedMs(result), 0)
+      assert.doesNotMatch(result.text, /::notice::/)
+      assert.equal(readFileSync(machineSummary, 'utf8'), 'Existing summary\n')
+    }
+  }
+  for (const summaryPath of ['', join(dir, 'absent', 'summary.md')]) {
+    const result = await run({ commandPath: 'bundle list', ci: true, tty: false, github: true, summaryPath, workers: ['notice.mjs'], waitForWorkers: true }).completion
+    assert.equal(result.code, 0, result.text)
+    assert.match(result.output, /^::notice::/m)
+    assert.equal((result.text.match(/Finish setting up live updates/g) ?? []).length, 1, 'a summary failure must not duplicate an already printed notice')
+  }
+}, 12_000)
+
+
+test.concurrent('GitHub notices escape workflow commands and Markdown from message text', async () => {
+  const notice = { kind: 'setup', appId: 'com.example.escaped', product: 'live <script> *updates* <SCRIPT> <ScRiPt>', title: '50% ready\r\n::warning::injected', action: 'Continue your checklist', secondary: [] }
+  writeFileSync(join(dir, 'escaped.mjs'), `import { parentPort } from 'node:worker_threads'; parentPort.postMessage({ type: 'setup-notice', notice: ${JSON.stringify(notice)} })`)
+  const summaryPath = join(dir, 'escaped-summary.md')
+  const result = await run({ commandPath: 'bundle list', ci: true, tty: false, github: true, summaryPath, workers: ['escaped.mjs'], waitForWorkers: true }).completion
+  assert.equal(result.code, 0, result.text)
+  assert.match(result.output, /50%25 ready%0D%0A::warning::injected/)
+  assert.doesNotMatch(result.output, /^::warning::/m)
+  const summary = readFileSync(summaryPath, 'utf8')
+  assert.ok(summary.includes('&lt;script&gt; \\*updates\\*'), summary)
+  assert.ok(summary.includes('&lt;SCRIPT&gt; &lt;ScRiPt&gt;'), summary)
+  assert.equal(summary.includes('<'), false, summary)
+}, 12_000)
+
+test.concurrent('GitHub plan notices retain organization-level trial deduplication', async () => {
+  for (const trialAlreadyShown of [false, true]) {
+    const result = await run({ commandPath: 'bundle upload', ci: true, tty: false, github: true, workers: ['plan-one.mjs', 'plan-two.mjs'], waitForWorkers: true, trialAlreadyShown }).completion
+    assert.equal(result.code, 0, result.text)
+    assert.equal((result.output.match(/^::notice::/gm) ?? []).length, trialAlreadyShown ? 0 : 1)
+  }
+}, 12_000)
+
+
+test.concurrent('GitHub annotation write failure falls back to the existing setup message', async () => {
+  const result = await run({ commandPath: 'bundle list', ci: true, tty: false, github: true, noticeWriteFailure: true, workers: ['notice.mjs'], waitForWorkers: true }).completion
+  assert.equal(result.code, 0, result.text)
+  assert.doesNotMatch(result.output, /^::notice::/m)
+  assert.match(result.text, /Finish setting up live updates/)
+  assert.match(result.text, /Continue your checklist/)
+}, 12_000)
+
+
+test.concurrent('pre-wait analytics draining shares the same five-second shutdown deadline', async () => {
+  const result = await run({ ci: true, tty: false, priorFlushMs: 2_000, controlledClock: true }).completion
+  assert.equal(waitedMs(result), 3_000, 'two seconds of analytics draining leave three seconds for checks')
+}, 12_000)
+
+test.concurrent('GitHub annotations finish partial writes before suppressing the terminal fallback', async () => {
+  const result = await run({ commandPath: 'bundle list', ci: true, tty: false, github: true, noticeWriteChunkSize: 7, workers: ['notice.mjs'], waitForWorkers: true }).completion
+  assert.equal(result.code, 0, result.text)
+  assert.match(result.output, /^::notice::Finish setting up live updates.*Continue your checklist\n/m)
+  assert.equal((result.text.match(/Finish setting up live updates/g) ?? []).length, 1)
 }, 12_000)

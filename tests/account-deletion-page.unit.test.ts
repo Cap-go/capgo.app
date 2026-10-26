@@ -37,8 +37,8 @@ vi.mock('vue-router', () => ({
   useRouter: () => ({ push: mocks.push }),
 }))
 vi.mock('~/services/emailOtp', () => ({ getRecentEmailOtpVerification: mocks.verification }))
-vi.mock('~/services/supabase', () => ({
-  useSupabase: () => ({ rpc: mocks.rpc }),
+vi.mock('~/services/console', () => ({
+  useConsole: () => ({ rpc: mocks.rpc }),
   isPayingOrg: async () => false,
   getCurrentPlanNameOrg: vi.fn(),
 }))

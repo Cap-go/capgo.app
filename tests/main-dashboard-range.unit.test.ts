@@ -12,15 +12,15 @@ vi.mock('../src/services/posthog.ts', () => ({
   reset: vi.fn(),
 }))
 
-vi.mock('~/services/supabase', () => ({
+vi.mock('~/services/console', () => ({
   findBestPlan: mockFindBestPlan,
   getAllDashboard: mockGetAllDashboard,
-  getLocalConfig: () => ({ supaHost: 'https://supabase.capgo.test' }),
+  getLocalConfig: () => ({ apiHost: 'https://supabase.capgo.test' }),
   getTotalStorage: mockGetTotalStorage,
   isPlatformAdmin: mockIsPlatformAdmin,
   normalizeDashboardDateRange: mockNormalizeDashboardDateRange,
   clearSpoof: vi.fn(),
-  useSupabase: () => ({
+  useConsole: () => ({
     auth: {
       onAuthStateChange: vi.fn(() => ({
         data: {

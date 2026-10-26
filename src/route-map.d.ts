@@ -346,6 +346,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/onboarding/ai': RouteRecordInfo<
+      '/onboarding/ai',
+      '/onboarding/ai',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/onboarding/app': RouteRecordInfo<
       '/onboarding/app',
       '/onboarding/app',
@@ -958,6 +965,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/oauth/authorize.vue': {
       routes:
         | '/oauth/authorize'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/onboarding/ai.vue': {
+      routes:
+        | '/onboarding/ai'
       views:
         | never
       pathParamNames:

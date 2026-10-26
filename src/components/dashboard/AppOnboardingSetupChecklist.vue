@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '~/utils/onboardingChannelAnalytics'
+import type { ChecklistTaskListMode } from '~/utils/onboardingSetupMode'
 import { computed, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -32,7 +33,9 @@ const props = withDefaults(defineProps<{
   active?: boolean
   hideFooter?: boolean
   completionAction?: string
-}>(), { active: true })
+  /** hidden: one next step, no counts or list. open: list expanded (AI setup). */
+  taskList?: ChecklistTaskListMode
+}>(), { active: true, taskList: 'default' })
 
 const emit = defineEmits<{
   copyCommand: []
@@ -78,7 +81,9 @@ const waitingMessageKey = computed(() => {
 const completed = computed(() => hasDualOnboardingChecklists(rawOnboarding.value)
   ? steps.value.length > 0 && doneCount.value === steps.value.length
   : onboarding.value.outcome === 'completed')
-const checklistOpen = ref(true)
+// Every step is shown by default; new manual signups only see their next step.
+const checklistOpen = ref(props.taskList !== 'hidden')
+const showTaskList = computed(() => props.taskList !== 'hidden')
 const channelFlowOpen = ref(false)
 
 watch(() => props.appId, () => {
@@ -101,7 +106,9 @@ watch(() => currentStep.value?.id, (id, previous) => {
 
 function selectStep(id: string) {
   selectedId.value = id
-  checklistOpen.value = false
+  // AI setup keeps the list open so the agent's progress stays visible.
+  if (props.taskList !== 'open')
+    checklistOpen.value = false
 }
 
 async function skipSelectedStep(reason: string) {
@@ -154,7 +161,7 @@ function statusLabel(status: string | undefined) {
       </p>
     </header>
 
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6" data-test="setup-checklist-progress">
+    <div v-if="showTaskList" class="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6" data-test="setup-checklist-progress">
       <p class="shrink-0 text-sm font-medium text-slate-800 dark:text-slate-200" aria-live="polite" aria-atomic="true">
         {{ t('setup-checklist-progress', { done: doneCount, total: steps.length }) }}
       </p>
@@ -166,8 +173,8 @@ function statusLabel(status: string | undefined) {
       />
     </div>
 
-    <div class="grid overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-white/15 dark:bg-slate-900" :class="{ 'lg:grid-cols-[minmax(0,0.38fr)_minmax(0,0.62fr)]': checklistOpen }">
-      <nav class="border-b border-slate-200 px-4 py-3 sm:px-6 dark:border-white/15" :class="{ 'sm:py-6 lg:border-b-0 lg:border-r': checklistOpen }" :aria-label="t('setup-checklist-list-title')">
+    <div class="grid overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-white/15 dark:bg-slate-900" :class="{ 'lg:grid-cols-[minmax(0,0.38fr)_minmax(0,0.62fr)]': checklistOpen && showTaskList }">
+      <nav v-if="showTaskList" class="border-b border-slate-200 px-4 py-3 sm:px-6 dark:border-white/15" :class="{ 'sm:py-6 lg:border-b-0 lg:border-r': checklistOpen }" :aria-label="t('setup-checklist-list-title')">
         <!-- Show every step by default; users can hide the list. -->
         <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
           <h2 class="text-lg font-semibold text-slate-950 dark:text-white">
@@ -217,6 +224,21 @@ function statusLabel(status: string | undefined) {
             </button>
           </li>
         </ol>
+        <div v-if="checklistOpen" class="border-t border-slate-100 px-3 py-4 dark:border-white/10" data-test="setup-checklist-cicd-step">
+          <p class="text-xs font-medium text-slate-500 dark:text-slate-400">
+            {{ t('setup-checklist-optional-next-step') }}
+          </p>
+          <p class="mt-2 text-base font-medium leading-6 text-slate-800 dark:text-slate-200">
+            {{ t('setup-checklist-cicd-title') }}
+          </p>
+          <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+            {{ t('setup-checklist-cicd-description') }}
+          </p>
+          <a href="https://capgo.app/docs/getting-started/cicd-integration/" target="_blank" rel="noopener noreferrer" class="d-btn d-btn-ghost mt-3 h-auto min-h-11 max-w-full gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium text-sky-700 whitespace-normal focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-offset-2 dark:text-azure-300 dark:focus-visible:ring-offset-slate-900">
+            <IconFileText class="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>{{ t('setup-checklist-cicd-guide') }}</span>
+          </a>
+        </div>
       </nav>
 
       <div :id="panelId" class="flex min-w-0 flex-col px-5 py-6 sm:p-8" data-test="setup-checklist-instructions">
@@ -235,7 +257,7 @@ function statusLabel(status: string | undefined) {
         </template>
         <template v-else>
           <p class="text-sm font-medium text-sky-700 dark:text-azure-400">
-            {{ t(isSelectedCurrent ? 'setup-checklist-current-task-number' : 'setup-checklist-task-number', { number: selectedStep.index + 1, total: steps.length }) }}
+            {{ showTaskList ? t(isSelectedCurrent ? 'setup-checklist-current-task-number' : 'setup-checklist-task-number', { number: selectedStep.index + 1, total: steps.length }) : t('setup-checklist-next-step') }}
           </p>
           <h2 class="mt-3 text-2xl font-semibold leading-tight text-slate-950 sm:text-3xl dark:text-white">
             {{ selectedStep.title }}

@@ -15,6 +15,7 @@ import { getFallbackCreditProductId } from '../utils/credits.ts'
 import { BRES, quickError, simpleError } from '../utils/hono.ts'
 import { middlewareStripeWebhook } from '../utils/hono_middleware_stripe.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
+import { getOpenAIFirstPaymentAt, trackOpenAIFirstPayment } from '../utils/openai_ads_first_payment.ts'
 import { getOrgAdminMemberEmailsForTags } from '../utils/org_email_notifications.ts'
 import { beginWriteTransaction, closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import * as schema from '../utils/postgres_schema.ts'
@@ -101,7 +102,12 @@ interface RevenueMovement {
   lostPlan: RevenuePlanKey | null
 }
 
-type PersistRevenueMovementResult = 'applied' | 'duplicate' | 'missing' | 'stale'
+type PersistRevenueMovementStatus = 'applied' | 'duplicate' | 'missing' | 'stale'
+interface PersistRevenueMovementResult {
+  status: PersistRevenueMovementStatus
+  /** Set only by the write that moved paid_at from null to a value: the org's first payment. */
+  firstPaidAt: string | null
+}
 interface BentoSegmentUpdate { segments: string[], deleteSegments: string[] }
 interface BentoSubscriberTagUpdate { email: string, segments: string[], deleteSegments: string[] }
 const BENTO_CHARGE_SUCCEEDED_EVENT = 'org:charge_succeeded'
@@ -224,6 +230,20 @@ function getPaidAtUpdate(
     return undefined
 
   return eventOccurredAtIso
+}
+
+/**
+ * paid_at moves from null to a value at most once per org. Decided under the
+ * stripe_info row lock, so concurrent webhooks and Stripe retries report the
+ * first payment once.
+ */
+function resolveFirstPaidAt(
+  lockedPaidAt: string | Date | null | undefined,
+  nextPaidAt: string | null | undefined,
+): string | null {
+  if (lockedPaidAt || !nextPaidAt)
+    return null
+  return nextPaidAt
 }
 
 function toStripeInfoUpdate(data: StripeData['data']): StripeInfoUpdate {
@@ -671,7 +691,7 @@ async function persistStripeInfoAndRevenueMovement(
   const shouldRecordMovement = hasRevenueMovement(movement)
 
   if (Object.keys(transactionUpdateData).length === 0 && !shouldRecordMovement)
-    return 'applied'
+    return { status: 'applied', firstPaidAt: null }
 
   const pgClient = await getPgClient(c, false)
 
@@ -681,21 +701,26 @@ async function persistStripeInfoAndRevenueMovement(
     // Lock the row so concurrent retries serialize before we classify
     // the event as missing/stale/duplicate. The admin dashboard derives revenue
     // movement from the persisted stripe_info changes.
-    const stripeInfoRow = await pgClient.query<Pick<StripeInfoRow, 'last_stripe_event_at' | 'past_due_at' | 'status'>>(
-      'SELECT last_stripe_event_at, past_due_at, status FROM public.stripe_info WHERE customer_id = $1 FOR UPDATE',
+    const stripeInfoRow = await pgClient.query<Pick<StripeInfoRow, 'last_stripe_event_at' | 'past_due_at' | 'status'> & { paid_at: string | Date | null }>(
+      'SELECT last_stripe_event_at, past_due_at, status, paid_at FROM public.stripe_info WHERE customer_id = $1 FOR UPDATE',
       [customerId],
     )
     const lockedStripeInfo = stripeInfoRow.rows[0]
 
     if (!lockedStripeInfo) {
       await pgClient.query('ROLLBACK')
-      return 'missing'
+      return { status: 'missing', firstPaidAt: null }
     }
 
     if (isStaleStripeEvent(lockedStripeInfo, eventOccurredAtIso)) {
       await pgClient.query('ROLLBACK')
-      return 'stale'
+      return { status: 'stale', firstPaidAt: null }
     }
+
+    const firstPaidAt = resolveFirstPaidAt(lockedStripeInfo.paid_at, transactionUpdateData.paid_at)
+    // A concurrent webhook already recorded the first payment: keep its paid_at.
+    if (lockedStripeInfo.paid_at)
+      delete transactionUpdateData.paid_at
 
     const churnReason = getChurnReason(lockedStripeInfo, transactionUpdateData)
     if (churnReason) {
@@ -726,7 +751,7 @@ async function persistStripeInfoAndRevenueMovement(
 
       if ((processedEvent.rowCount ?? 0) === 0) {
         await pgClient.query('ROLLBACK')
-        return 'duplicate'
+        return { status: 'duplicate', firstPaidAt: null }
       }
     }
 
@@ -734,12 +759,12 @@ async function persistStripeInfoAndRevenueMovement(
       const result = await pgClient.query(updateStatement.text, updateStatement.values)
       if ((result.rowCount ?? 0) === 0) {
         await pgClient.query('ROLLBACK')
-        return 'missing'
+        return { status: 'missing', firstPaidAt: null }
       }
     }
 
     await pgClient.query('COMMIT')
-    return 'applied'
+    return { status: 'applied', firstPaidAt }
   }
   catch (error) {
     try {
@@ -1176,7 +1201,7 @@ async function createdOrUpdated(
     const revenueMovement = classifyRevenueMovement(currentStripeInfo, updateData, revenuePlans)
     if (shouldTrackOrganizationUpgrade(stripeData.isUpgrade, revenueMovement))
       updateData.upgraded_at = eventOccurredAtIso
-    const didPersist = await persistStripeInfoAndRevenueMovement(
+    const { status: didPersist, firstPaidAt } = await persistStripeInfoAndRevenueMovement(
       c,
       stripeData.data.customer_id,
       c.get('stripeEvent')!.id,
@@ -1207,6 +1232,20 @@ async function createdOrUpdated(
     }
     if (didPersist === 'missing')
       return quickError(404, 'succeeded_customer_id_not_found', `succeeded: customer_id not found`, { stripeData })
+
+    const openAIFirstPaymentAt = getOpenAIFirstPaymentAt({
+      firstPaidAt,
+      currentPaidAt: currentStripeInfo?.paid_at,
+      stripeEvent: c.get('stripeEvent'),
+      eventOccurredAtIso,
+    })
+    if (openAIFirstPaymentAt) {
+      // Paid conversion for OpenAI Ads, for every first payment (direct offer
+      // or converted trial). Scheduled right after the commit, before any step
+      // that can fail the webhook: a Stripe retry no longer sees paid_at as new.
+      // Background only: it never fails the webhook.
+      await scheduleOpenAIFirstPayment(c, org, openAIFirstPaymentAt, plan.name || stripeData.data.price_id)
+    }
 
     if (status === 'past_due')
       return
@@ -1595,12 +1634,64 @@ async function handleCustomerSourceStripeEvent(
   return null
 }
 
+// Paid conversion for OpenAI Ads, in the background: it never fails the webhook.
+async function scheduleOpenAIFirstPayment(c: Context, org: Org, paidAt: string, planId: string | null | undefined) {
+  const billingAccount = getWebhookBillingAccount(c)
+  await backgroundTask(c, trackOpenAIFirstPayment(c, {
+    orgId: org.id,
+    ownerUserId: org.created_by,
+    paidAt,
+    planId,
+    stripeEvent: c.get('stripeEvent'),
+  }, {
+    loadUser: async (userId) => {
+      const { data, error } = await supabaseAdmin(c)
+        .from('users')
+        .select('id, email, first_name, last_name, country')
+        .eq('id', userId)
+        .maybeSingle()
+      if (error)
+        throw error
+      return data
+    },
+    // Short, single-shot requests: the helper retries, inside the background budget.
+    retrieveInvoice: invoiceId => getStripe(c, billingAccount).invoices.retrieve(invoiceId, {}, { timeout: 3_000, maxNetworkRetries: 0 }),
+  }))
+}
+
+// An invoiced subscription's first invoice was paid after paid_at was set:
+// report the conversion the subscription webhook had to skip.
+async function recoverOpenAIFirstPaymentFromInvoice(c: Context<MiddlewareKeyVariablesStripe>, org: Org, stripeEvent: Stripe.Event, customer: StripeInfoRow) {
+  // Subscription events are handled (with their stale-event checks) by createdOrUpdated.
+  if (stripeEvent.type !== 'invoice.updated')
+    return
+  const paidAt = getOpenAIFirstPaymentAt({
+    firstPaidAt: null,
+    currentPaidAt: customer.paid_at,
+    stripeEvent,
+    eventOccurredAtIso: new Date(stripeEvent.created * 1000).toISOString(),
+  })
+  if (!paidAt)
+    return
+  try {
+    const plans = await getBillingPlans(c)
+    const plan = plans.find(candidate => candidate.stripe_id === customer.product_id || candidate.stripe_id_us === customer.product_id)
+    await scheduleOpenAIFirstPayment(c, org, paidAt, plan?.name || customer.price_id)
+  }
+  catch (error) {
+    // Ads reporting must never fail the webhook.
+    cloudlogErr({ requestId: c.get('requestId'), message: 'OpenAI Ads invoice recovery failed', orgId: org.id, error })
+  }
+}
+
 async function handleInvoiceStripeEvent(
   c: Context<MiddlewareKeyVariablesStripe>,
   org: Org,
   stripeEvent: Stripe.Event,
   stripeData: StripeData,
+  customer: StripeInfoRow,
 ) {
+  await recoverOpenAIFirstPaymentFromInvoice(c, org, stripeEvent, customer)
   if (stripeEvent.type === 'invoice.upcoming')
     return invoiceUpcoming(c, org, stripeEvent, stripeData)
   if (stripeEvent.type === 'invoice.created' || stripeEvent.type === 'invoice.updated')
@@ -1730,7 +1821,7 @@ async function handleCanceledSubscriptionStripeEvent(
   const updateData = toStripeInfoUpdate(stripeData.data)
   const revenuePlans = await getRevenuePlans(c)
   const revenueMovement = classifyRevenueMovement(customer, updateData, revenuePlans)
-  const didPersist = await persistStripeInfoAndRevenueMovement(
+  const { status: didPersist } = await persistStripeInfoAndRevenueMovement(
     c,
     stripeData.data.customer_id,
     stripeEvent.id,
@@ -1782,7 +1873,7 @@ async function getTrialPlanPaymentState(c: Context<MiddlewareKeyVariablesStripe>
 async function persistUnpaidTrialPlanSubscription(c: Context<MiddlewareKeyVariablesStripe>, stripeEvent: Stripe.Event, stripeData: StripeData) {
   cloudlog({ requestId: c.get('requestId'), message: 'Trial plan subscription waits for its first payment', subscriptionId: stripeData.data.subscription_id })
   stripeData.data.status = 'failed'
-  const persisted = await persistStripeInfoAndRevenueMovement(
+  const { status: persisted } = await persistStripeInfoAndRevenueMovement(
     c,
     stripeData.data.customer_id,
     stripeEvent.id,
@@ -1869,7 +1960,7 @@ async function stripeEventHandler(c: Context<MiddlewareKeyVariablesStripe>) {
   if (customerSourceResponse)
     return customerSourceResponse
 
-  const invoiceResponse = await handleInvoiceStripeEvent(c, org, stripeEvent, stripeData)
+  const invoiceResponse = await handleInvoiceStripeEvent(c, org, stripeEvent, stripeData, customer)
   if (invoiceResponse)
     return invoiceResponse
 
@@ -1914,6 +2005,7 @@ export const stripeEventTestUtils = {
   classifyRevenueMovement,
   getEventDateId,
   getPaidAtUpdate,
+  resolveFirstPaidAt,
   getPlanChangeTrackingEventName,
   getChurnReason,
   getSubscriptionMrr,

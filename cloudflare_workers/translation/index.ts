@@ -1,11 +1,28 @@
 import type { D1Database, ExecutionContext, MessageBatch, Queue } from '@cloudflare/workers-types'
 import sourceMessageContexts from '../../messages/en.context.json' with { type: 'json' }
 import sourceMessages from '../../messages/en.json' with { type: 'json' }
+import { translationStyleGuide } from './style_guides.ts'
 
 const CACHE_TTL_SECONDS = 5 * 60
 const PENDING_TRANSLATION_STORE_TTL_SECONDS = 60 * 60
 const READY_TRANSLATION_STORE_TTL_SECONDS = 7 * 24 * 60 * 60
-const DEFAULT_TRANSLATION_MODEL = '@cf/meta/llama-3.1-8b-instruct-fast'
+// Picked from a French benchmark against Workers AI models (see the PR introducing it):
+// Gemma 4 drafts with thinking disabled, then DeepSeek V4.1 Flash reviews against the
+// style guide with its reasoning on.
+const DEFAULT_TRANSLATION_MODEL = '@cf/google/gemma-4-26b-a4b-it'
+const DEFAULT_TRANSLATION_REVIEW_MODEL = '@cf/deepseek-ai/deepseek-v4.1-flash-1017'
+// Bump when the prompt, style guides or default models change so every locale is
+// translated again instead of serving catalogs made by the previous pipeline.
+const TRANSLATION_PIPELINE_VERSION = 3
+// Hybrid reasoning models think before answering by default. The first translation
+// pass does not need it (same benchmark score, a fraction of the latency and cost);
+// the optional review pass keeps it, since reviewing without thinking changed nothing.
+const THINKING_MODEL_PREFIXES = [
+  '@cf/deepseek-ai/deepseek-v4',
+  '@cf/google/gemma-4',
+  '@cf/qwen/qwen3',
+  '@cf/zai-org/glm-',
+]
 const MAX_BATCH_CHARACTERS = 6_000
 const MAX_BATCH_ITEMS = 60
 const TRANSLATION_ATTEMPTS = 3
@@ -14,6 +31,12 @@ const TRANSLATION_STORE_CLEANUP_INTERVAL_SECONDS = 60
 const TRANSLATION_REQUEUE_AFTER_SECONDS = 60
 const TRANSLATION_BATCH_LEASE_SECONDS = 15 * 60
 const TRANSLATION_STORE_TABLE = 'translation_messages_cache'
+// Translation memory: one row per translated string, keyed by a hash of its English
+// text, translator context and pipeline version. A catalog change only sends new or
+// edited strings to Workers AI; every other string is reused from here.
+const TRANSLATION_MEMORY_TABLE = 'translation_memory'
+// D1 caps a query at 100 bound parameters.
+const TRANSLATION_MEMORY_LOOKUP_CHUNK = 90
 const CLAIMED_TRANSLATION_BATCH_INDEX_OFFSET = 1_000_000_000
 const PLACEHOLDER_PATTERN = /\{[\w.]+\}|%\w+%?|\$\d+/g
 
@@ -84,6 +107,7 @@ interface TranslationWorkerBindings {
   ENV_NAME?: string
   TRANSLATION_MESSAGES_QUEUE?: Queue<Required<TranslationQueuePayload>>
   TRANSLATION_MODEL?: string
+  TRANSLATION_REVIEW_MODEL?: string
 }
 
 interface TranslationBody {
@@ -139,7 +163,6 @@ interface ReadyTranslationWriteInput {
 
 interface TranslatedBatchPersistenceInput {
   batchIndex: number
-  batches: MessageEntry[][]
   checksum: string
   env: TranslationWorkerBindings
   mergedMessages: Record<string, string>
@@ -172,6 +195,7 @@ const sourceMessageContextCatalog = catalogWithoutSchema(sourceMessageContexts a
 const sourceCatalogChecksumPromise = sha256Hex(JSON.stringify({
   contexts: sourceMessageContextCatalog,
   messages: sourceMessageCatalog,
+  pipelineVersion: TRANSLATION_PIPELINE_VERSION,
 })) // NOSONAR: top-level await is disallowed by lint config.
 let translationStoreInitialized = false
 let lastTranslationStoreCleanupAt = 0
@@ -237,6 +261,24 @@ function requestIdFrom(request: Request) {
 
 function getTranslationModel(env: TranslationWorkerBindings) {
   return env.TRANSLATION_MODEL || DEFAULT_TRANSLATION_MODEL
+}
+
+// TRANSLATION_REVIEW_MODEL overrides the reviewer; "none" skips the review pass.
+function getTranslationReviewModel(env: TranslationWorkerBindings) {
+  const reviewModel = env.TRANSLATION_REVIEW_MODEL?.trim() || DEFAULT_TRANSLATION_REVIEW_MODEL
+  return reviewModel === 'none' ? null : reviewModel
+}
+
+// Identifies the models behind a translation, for catalog checksums and translation memory.
+function translationPipelineModel(env: TranslationWorkerBindings, model: string) {
+  const reviewModel = getTranslationReviewModel(env)
+  return reviewModel ? `${model} reviewed by ${reviewModel}` : model
+}
+
+function modelRequestOptions(model: string) {
+  return THINKING_MODEL_PREFIXES.some(prefix => model.startsWith(prefix))
+    ? { chat_template_kwargs: { enable_thinking: false } }
+    : {}
 }
 
 function targetLanguageLabel(targetLanguage: string) {
@@ -424,13 +466,24 @@ function parseTranslationObject(value: unknown): Record<string, string> | null {
   return null
 }
 
-function keepTranslation(source: string, translated: unknown) {
-  const candidate = unwrapTranslatedMessage(translated)
+// Some models emit typographic hyphens and spaces (U+2011, U+202F) that break search and copy-paste.
+function normalizeTranslatedText(text: string) {
+  return text.replace(/\u2011/g, '-').replace(/\u202F/g, '\u00A0')
+}
+
+// The model's translation, or null when it is missing, empty or drops a placeholder.
+function acceptedTranslation(source: string, translated: unknown) {
+  const unwrapped = unwrapTranslatedMessage(translated)
+  const candidate = unwrapped ? normalizeTranslatedText(unwrapped) : null
   if (!candidate)
-    return source
+    return null
 
   const missingPlaceholder = (source.match(PLACEHOLDER_PATTERN) ?? []).some(token => !candidate.includes(token))
-  return missingPlaceholder ? source : candidate
+  return missingPlaceholder ? null : candidate
+}
+
+function keepTranslation(source: string, translated: unknown) {
+  return acceptedTranslation(source, translated) ?? source
 }
 
 function shouldFlushBatch(current: MessageEntry[], currentCharacters: number, nextCharacters: number) {
@@ -484,16 +537,30 @@ const translationResponseSchema = {
 }
 
 function translationPrompt(targetLanguage: string) {
+  const language = targetLanguageLabel(targetLanguage)
   return [
-    `Translate Capgo application UI messages from English to ${targetLanguageLabel(targetLanguage)}.`,
-    'Return JSON only, with a translations object keyed by the exact input keys.',
+    `You are a senior native ${language} software localizer translating the Capgo web console (a developer-tools SaaS) from English to ${language}.`,
+    'The result must read as if a native developer wrote it in the target language: translate meaning, not words, with correct grammar and agreement.',
     'Each input value is an object with text (translate this) and optional context (where/how the text is used in the Capgo console UI).',
     'Use context to disambiguate meaning, tone, and part of speech (button label vs title vs status vs empty state).',
-    'Translate only the text field. Do not translate or copy context into the output.',
+    'Translate only the text field. Do not translate or copy context into the output. Keep short UI labels short.',
+    'Keep code, URLs, commands, and placeholders unchanged. Keep numeric values unchanged, but format numbers, decimals and currencies the way the target language writes them. Every placeholder like {count}, %name%, or $1 must be copied exactly.',
+    translationStyleGuide(targetLanguage),
+    'Return JSON only, with a translations object keyed by the exact input keys.',
     'Each translations value must be a plain string of the translated text only, never a JSON object or {text, context} wrapper.',
-    'Translate user-facing text naturally. Keep product names, code, URLs, commands, numbers, and placeholders unchanged.',
-    'Every placeholder like {count}, %name%, or $1 must be copied exactly.',
-  ].join(' ')
+  ].join('\n')
+}
+
+function reviewPrompt(targetLanguage: string) {
+  const language = targetLanguageLabel(targetLanguage)
+  return [
+    `You are a senior native ${language} reviewer for the Capgo web console (a developer-tools SaaS).`,
+    `Each input value has the English text, optional UI context, and a draft ${language} translation.`,
+    'Fix mistranslations, wrong terminology, literal or unnatural phrasing, grammar and agreement errors, wrong register, English Title Case, untranslated English, translated product names, and broken placeholders.',
+    'Keep the draft when it is already correct and natural. Keep short UI labels short. Every placeholder like {count}, %name%, or $1 must be copied exactly.',
+    translationStyleGuide(targetLanguage),
+    'Return JSON only, with a translations object keyed by the exact input keys, each value a plain string with the final translation.',
+  ].join('\n')
 }
 
 function translationBatchPayload(batch: MessageEntry[]) {
@@ -506,10 +573,11 @@ function translationBatchPayload(batch: MessageEntry[]) {
   return { messages }
 }
 
-function translationRequest(targetLanguage: string, batch: MessageEntry[]) {
+function translationRequestBody(systemPrompt: string, payload: unknown, options: Record<string, unknown> = {}) {
   return {
     temperature: 0,
     max_tokens: 8192,
+    ...options,
     response_format: {
       type: 'json_schema',
       json_schema: translationResponseSchema,
@@ -517,36 +585,73 @@ function translationRequest(targetLanguage: string, batch: MessageEntry[]) {
     messages: [
       {
         role: 'system',
-        content: translationPrompt(targetLanguage),
+        content: systemPrompt,
       },
       {
         role: 'user',
-        content: JSON.stringify(translationBatchPayload(batch)),
+        content: JSON.stringify(payload),
       },
     ],
   }
 }
 
-function translatedBatch(batch: MessageEntry[], translations: Record<string, string>) {
+function translationRequest(model: string, targetLanguage: string, batch: MessageEntry[]) {
+  return translationRequestBody(translationPrompt(targetLanguage), translationBatchPayload(batch), modelRequestOptions(model))
+}
+
+function reviewBatchPayload(batch: MessageEntry[], drafts: Record<string, string>) {
+  const messages: Record<string, TranslationPromptMessage & { draft: string }> = {}
+  for (const [key, text, context] of batch) {
+    messages[key] = context
+      ? { text, context, draft: drafts[key] ?? text }
+      : { text, draft: drafts[key] ?? text }
+  }
+  return { messages }
+}
+
+function reviewRequest(targetLanguage: string, batch: MessageEntry[], drafts: Record<string, string>) {
+  // Room for the reviewer's reasoning tokens on top of the JSON answer.
+  return translationRequestBody(reviewPrompt(targetLanguage), reviewBatchPayload(batch, drafts), { max_tokens: 16384 })
+}
+
+// Accepted translations by key; null marks a missing or invalid entry.
+type AcceptedTranslations = Record<string, string | null>
+
+// messages is complete (English where nothing valid came back); remembered holds only
+// the strings worth reusing from translation memory.
+interface TranslatedBatch {
+  messages: Record<string, string>
+  remembered: Record<string, string>
+}
+
+function translatedBatch(batch: MessageEntry[], translations: Record<string, string>): AcceptedTranslations {
   if (!batch.some(([key]) => typeof translations[key] === 'string'))
     throw new Error('Workers AI returned no translated messages')
 
   return Object.fromEntries(batch.map(([key, source]) => [
     key,
-    keepTranslation(source, translations[key]),
+    acceptedTranslation(source, translations[key]),
   ] as const))
+}
+
+function withSourceFallback(batch: MessageEntry[], translations: AcceptedTranslations) {
+  return Object.fromEntries(batch.map(([key, source]) => [key, translations[key] ?? source] as const))
+}
+
+function acceptedOnly(translations: AcceptedTranslations) {
+  return Object.fromEntries(Object.entries(translations).filter((entry): entry is [string, string] => entry[1] !== null))
 }
 
 function normalizeTranslationError(error: unknown) {
   return error instanceof Error ? error : new Error(String(error))
 }
 
-async function translateBatch(ai: AiBinding, model: string, targetLanguage: string, batch: MessageEntry[]) {
+async function runTranslationRequest(ai: AiBinding, model: string, request: unknown, batch: MessageEntry[], logContext: Record<string, unknown>) {
   let lastError: Error | null = null
 
   for (let attempt = 1; attempt <= TRANSLATION_ATTEMPTS; attempt += 1) {
     try {
-      const result = await ai.run(model, translationRequest(targetLanguage, batch))
+      const result = await ai.run(model, request)
       const translations = parseTranslationObject(extractAiText(result) || result)
       if (!translations)
         throw new Error('Workers AI returned invalid JSON')
@@ -555,8 +660,8 @@ async function translateBatch(ai: AiBinding, model: string, targetLanguage: stri
     catch (error) {
       lastError = normalizeTranslationError(error)
       cloudlog({
-        message: 'Message translation batch failed',
-        targetLanguage,
+        ...logContext,
+        model,
         attempt,
         batchSize: batch.length,
         error: lastError.message,
@@ -565,6 +670,43 @@ async function translateBatch(ai: AiBinding, model: string, targetLanguage: stri
   }
 
   throw lastError ?? new Error('Message translation failed')
+}
+
+// Second pass: a reviewer model fixes the draft against the same style guide.
+// Returns null when the review fails, so the caller keeps the draft.
+async function reviewTranslatedBatch(ai: AiBinding, reviewModel: string, targetLanguage: string, batch: MessageEntry[], drafts: Record<string, string>) {
+  try {
+    return await runTranslationRequest(ai, reviewModel, reviewRequest(targetLanguage, batch, drafts), batch, {
+      message: 'Message translation review failed',
+      targetLanguage,
+    })
+  }
+  catch {
+    return null
+  }
+}
+
+// A reviewed string equal to the English source is a valid correction (product names
+// such as Observe stay in English). A missing or invalid review entry keeps the draft.
+// Drafts from a failed review are served but not remembered, so a later catalog change
+// gets them reviewed.
+async function translateBatch(ai: AiBinding, model: string, targetLanguage: string, batch: MessageEntry[], reviewModel: string | null = null): Promise<TranslatedBatch> {
+  const drafts = await runTranslationRequest(ai, model, translationRequest(model, targetLanguage, batch), batch, {
+    message: 'Message translation batch failed',
+    targetLanguage,
+  })
+  const draftMessages = withSourceFallback(batch, drafts)
+  if (!reviewModel)
+    return { messages: draftMessages, remembered: acceptedOnly(drafts) }
+
+  const reviewed = await reviewTranslatedBatch(ai, reviewModel, targetLanguage, batch, draftMessages)
+  if (!reviewed)
+    return { messages: draftMessages, remembered: {} }
+
+  return {
+    messages: Object.fromEntries(batch.map(([key]) => [key, reviewed[key] ?? draftMessages[key]] as const)),
+    remembered: acceptedOnly(reviewed),
+  }
 }
 
 function messageCatalogOf(value: unknown): Record<string, string> {
@@ -658,6 +800,16 @@ async function ensureTranslationStore(db: D1Database) {
   await db.prepare(
     `CREATE INDEX IF NOT EXISTS idx_${TRANSLATION_STORE_TABLE}_expires_at
      ON ${TRANSLATION_STORE_TABLE} (expires_at)`,
+  ).run()
+  await db.prepare(
+    `CREATE TABLE IF NOT EXISTS ${TRANSLATION_MEMORY_TABLE} (
+       target_language TEXT NOT NULL,
+       source_hash TEXT NOT NULL,
+       translated TEXT NOT NULL,
+       model TEXT NOT NULL,
+       updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+       PRIMARY KEY (target_language, source_hash)
+     )`,
   ).run()
   translationStoreInitialized = true
 }
@@ -924,6 +1076,107 @@ async function deleteTranslationStoreEntry(env: TranslationWorkerBindings, entry
   ).bind(entry.targetLanguage, entry.checksum).run()
 }
 
+function translationMemoryHash(text: string, context: string) {
+  return sha256Hex(JSON.stringify([TRANSLATION_PIPELINE_VERSION, text, context]))
+}
+
+function untranslatedMessages(messages: Record<string, string>) {
+  return Object.fromEntries(Object.entries(sourceMessageCatalog).filter(([key]) => typeof messages[key] !== 'string'))
+}
+
+async function readTranslationMemory(env: TranslationWorkerBindings, targetLanguage: string, pipelineModel: string, messages: Record<string, string>) {
+  const entries = await Promise.all(Object.entries(messages).map(async ([key, text]) => [key, await translationMemoryHash(text, messageContextFor(key))] as const))
+  if (!entries.length)
+    return {}
+
+  const db = getTranslationStore(env)
+  await ensureTranslationStore(db)
+  const hashes = [...new Set(entries.map(([, hash]) => hash))]
+  const statements = []
+  for (let index = 0; index < hashes.length; index += TRANSLATION_MEMORY_LOOKUP_CHUNK) {
+    const chunk = hashes.slice(index, index + TRANSLATION_MEMORY_LOOKUP_CHUNK)
+    statements.push(db.prepare(
+      `SELECT source_hash, translated FROM ${TRANSLATION_MEMORY_TABLE}
+       WHERE target_language = ?
+         AND model = ?
+         AND source_hash IN (${chunk.map(() => '?').join(', ')})`,
+    ).bind(targetLanguage, pipelineModel, ...chunk))
+  }
+
+  const translatedByHash = new Map<string, string>()
+  for (const result of await db.batch(statements)) {
+    for (const row of result.results ?? []) {
+      const record = recordOf(row)
+      if (typeof record?.source_hash === 'string' && typeof record.translated === 'string')
+        translatedByHash.set(record.source_hash, record.translated)
+    }
+  }
+
+  const reused: Record<string, string> = {}
+  for (const [key, hash] of entries) {
+    const translated = translatedByHash.get(hash)
+    if (translated !== undefined)
+      reused[key] = translated
+  }
+  return reused
+}
+
+// Only accepted, reviewed strings reach this point (see translateBatch): fallbacks to
+// English and unreviewed drafts get another chance on the next catalog change.
+async function writeTranslationMemory(env: TranslationWorkerBindings, targetLanguage: string, model: string, translated: Record<string, string>) {
+  const remembered = Object.entries(translated).filter(([key]) => sourceMessageCatalog[key] !== undefined)
+  if (!remembered.length)
+    return
+
+  const db = getTranslationStore(env)
+  await ensureTranslationStore(db)
+  const rows = await Promise.all(remembered.map(async ([key, text]) => [await translationMemoryHash(sourceMessageCatalog[key], messageContextFor(key)), text] as const))
+  await db.batch(rows.map(([hash, text]) => db.prepare(
+    `INSERT INTO ${TRANSLATION_MEMORY_TABLE} (target_language, source_hash, translated, model, updated_at)
+     VALUES (?, ?, ?, ?, unixepoch())
+     ON CONFLICT (target_language, source_hash) DO UPDATE
+     SET translated = excluded.translated,
+         model = excluded.model,
+         updated_at = excluded.updated_at`,
+  ).bind(targetLanguage, hash, text, model)))
+}
+
+async function reuseTranslationMemory(env: TranslationWorkerBindings, targetLanguage: string, model: string, messages: Record<string, string>, requestId?: string) {
+  try {
+    const reused = await readTranslationMemory(env, targetLanguage, translationPipelineModel(env, model), untranslatedMessages(messages))
+    cloudlog({
+      requestId,
+      message: 'Reused translation memory',
+      targetLanguage,
+      reusedCount: Object.keys(reused).length,
+    })
+    return { ...messages, ...reused }
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId,
+      message: 'Unable to read translation memory',
+      error: serializeError(error),
+      targetLanguage,
+    })
+    return messages
+  }
+}
+
+async function rememberTranslatedBatch(env: TranslationWorkerBindings, targetLanguage: string, model: string, translated: Record<string, string>, requestId?: string) {
+  try {
+    await writeTranslationMemory(env, targetLanguage, translationPipelineModel(env, model), translated)
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId,
+      message: 'Unable to write translation memory',
+      error: serializeError(error),
+      targetLanguage,
+    })
+  }
+}
+
 function workerCache() {
   return (caches as CacheStorage & { default: Cache }).default
 }
@@ -1016,8 +1269,19 @@ function normalizeBatchIndex(value: unknown) {
   return value
 }
 
-function currentSourceChecksum() {
-  return sourceCatalogChecksumPromise
+const pipelineChecksums = new Map<string, Promise<string>>()
+
+// The catalog checksum covers the configured models too, so changing TRANSLATION_MODEL
+// or TRANSLATION_REVIEW_MODEL re-translates every locale instead of serving catalogs
+// made by the previous models.
+async function currentSourceChecksum(env: TranslationWorkerBindings) {
+  const pipeline = translationPipelineModel(env, getTranslationModel(env))
+  let checksum = pipelineChecksums.get(pipeline)
+  if (!checksum) {
+    checksum = sourceCatalogChecksumPromise.then(source => sha256Hex(JSON.stringify([source, pipeline])))
+    pipelineChecksums.set(pipeline, checksum)
+  }
+  return checksum
 }
 
 function pendingTranslationResponse(checksum: string) {
@@ -1111,7 +1375,7 @@ async function handleTranslationMessages(request: Request, env: TranslationWorke
   if (!isTranslationLanguageAllowed(targetLanguage))
     fail(400, 'unsupported_translation_language', 'Target language is not enabled')
 
-  const checksum = await currentSourceChecksum()
+  const checksum = await currentSourceChecksum(env)
   const model = getTranslationModel(env)
   const readyRequest = buildTranslationCacheRequest(checksum, targetLanguage)
 
@@ -1241,15 +1505,9 @@ async function writeReadyTranslation(input: ReadyTranslationWriteInput) {
   return true
 }
 
-async function translateOwnedBatch(ai: AiBinding, env: TranslationWorkerBindings, checksum: string, targetLanguage: string, model: string, batches: MessageEntry[][], batchIndex: number) {
-  const batch = batches[batchIndex]
-  if (!batch) {
-    await releaseTranslationBatchClaim(env, checksum, targetLanguage, batchIndex).catch(() => {})
-    return null
-  }
-
+async function translateOwnedBatch(ai: AiBinding, env: TranslationWorkerBindings, checksum: string, targetLanguage: string, model: string, batch: MessageEntry[], batchIndex: number) {
   try {
-    return await translateBatch(ai, model, targetLanguage, batch)
+    return await translateBatch(ai, model, targetLanguage, batch, getTranslationReviewModel(env))
   }
   catch (error) {
     await releaseTranslationBatchClaim(env, checksum, targetLanguage, batchIndex).catch(() => {})
@@ -1260,7 +1518,6 @@ async function translateOwnedBatch(ai: AiBinding, env: TranslationWorkerBindings
 async function persistTranslatedBatch(input: TranslatedBatchPersistenceInput) {
   const {
     batchIndex,
-    batches,
     checksum,
     env,
     mergedMessages,
@@ -1271,9 +1528,9 @@ async function persistTranslatedBatch(input: TranslatedBatchPersistenceInput) {
   } = input
   const followingBatchIndex = batchIndex + 1
 
-  if (followingBatchIndex >= batches.length) {
+  if (!Object.keys(untranslatedMessages(mergedMessages)).length) {
     await writeReadyTranslation({
-      batchCount: batches.length,
+      batchCount: followingBatchIndex,
       checksum,
       claimedBatchIndex: batchIndex,
       env,
@@ -1306,7 +1563,7 @@ async function processTranslationQueueBatch(env: TranslationWorkerBindings, body
   if (!targetLanguage)
     return
 
-  const checksum = await currentSourceChecksum()
+  const checksum = await currentSourceChecksum(env)
   if (body.checksum !== checksum) {
     logStaleQueuedMessage(body, checksum, targetLanguage, requestId)
     return
@@ -1325,25 +1582,10 @@ async function processTranslationQueueBatch(env: TranslationWorkerBindings, body
   if (storedEntry?.status !== 'pending')
     return
 
-  const batches = buildBatches(sourceMessageCatalog)
   const batchIndex = normalizeBatchIndex(body.batchIndex)
   const nextBatchIndex = await nextProcessableBatchIndex(env, storedEntry, checksum, targetLanguage, batchIndex)
   if (nextBatchIndex === null)
     return
-
-  if (nextBatchIndex >= batches.length) {
-    await writeReadyTranslation({
-      checksum,
-      env,
-      messages: storedEntry.messages,
-      model,
-      nextBatchIndex,
-      readyRequest,
-      requestId,
-      targetLanguage,
-    })
-    return
-  }
 
   if (batchIndex < nextBatchIndex)
     return
@@ -1357,17 +1599,38 @@ async function processTranslationQueueBatch(env: TranslationWorkerBindings, body
   if (!claimed)
     return
 
-  const translatedBatch = await translateOwnedBatch(ai, env, checksum, targetLanguage, model, batches, batchIndex)
-  if (!translatedBatch)
+  // Each queue step translates the next batch of strings still missing from this
+  // catalog. The first step fills in every string already in translation memory, so
+  // an en.json change only sends its new or edited strings to Workers AI.
+  const messages = batchIndex === 0
+    ? await reuseTranslationMemory(env, targetLanguage, model, storedEntry.messages, requestId)
+    : storedEntry.messages
+  const batch = buildBatches(untranslatedMessages(messages))[0]
+  if (!batch) {
+    await writeReadyTranslation({
+      batchCount: batchIndex,
+      checksum,
+      claimedBatchIndex: batchIndex,
+      env,
+      messages,
+      model,
+      nextBatchIndex: batchIndex + 1,
+      readyRequest,
+      requestId,
+      targetLanguage,
+    })
     return
+  }
+
+  const translatedBatch = await translateOwnedBatch(ai, env, checksum, targetLanguage, model, batch, batchIndex)
+  await rememberTranslatedBatch(env, targetLanguage, model, translatedBatch.remembered, requestId)
 
   const mergedMessages = {
-    ...storedEntry.messages,
-    ...translatedBatch,
+    ...messages,
+    ...translatedBatch.messages,
   }
   await persistTranslatedBatch({
     batchIndex,
-    batches,
     checksum,
     env,
     mergedMessages,
@@ -1427,16 +1690,23 @@ export default {
 export const __translationWorkerTestUtils__ = {
   buildBatches,
   claimedTranslationBatchIndex,
+  currentSourceChecksum,
   escapeVueI18nAtSigns,
+  getTranslationReviewModel,
   isReadyTranslationFresh,
   isTranslationBatchLeaseExpired,
   keepTranslation,
+  modelRequestOptions,
   normalizeBatchIndex,
   parseTranslationObject,
+  reviewPrompt,
+  translateBatch,
   translationBatchPayload,
   translationBatchClaimMarker,
   translationBatchIndexFromStore,
+  translationMemoryHash,
   translationPrompt,
+  translationRequest,
   translationStoreTtlSeconds,
   unwrapTranslatedMessage,
 }

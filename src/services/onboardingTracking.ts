@@ -1,4 +1,4 @@
-import { getLocalConfig, isLocal } from '~/services/supabase'
+import { getLocalConfig, isLocal } from '~/services/console'
 import { sendEvent } from '~/services/tracking'
 
 type OnboardingEventProperties = Record<string, string | number | boolean>
@@ -60,7 +60,7 @@ export function getPostHogBrowserContext(): OnboardingEventProperties {
 }
 
 export function sendOnboardingEvent(event: string, properties: OnboardingEventProperties = {}) {
-  if (isLocal(getLocalConfig().supaHost))
+  if (isLocal(getLocalConfig().apiHost))
     return
 
   const orgId = typeof properties.org_id === 'string' ? properties.org_id : undefined
