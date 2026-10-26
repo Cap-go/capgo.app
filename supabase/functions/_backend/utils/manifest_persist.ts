@@ -162,8 +162,11 @@ export async function persistVersionManifestEntries(
       // while references are added, and sees this version as in progress.
       await tx.execute(sql`SELECT pg_catalog.pg_advisory_xact_lock_shared(pg_catalog.hashtext('delta_gc'), public.delta_gc_lock_key(${record.app_id}))`)
       await tx.execute(sql`SELECT pg_catalog.pg_advisory_xact_lock(${record.id})`)
-      const version = await tx.execute<{ deleted: boolean, deleted_at: string | null, storage_provider: string }>(sql`
-        SELECT deleted, deleted_at, storage_provider FROM public.app_versions WHERE id = ${record.id} FOR UPDATE
+      // upload_in_progress mirrors delta_app_has_upload_in_progress (GC's view).
+      const version = await tx.execute<{ deleted: boolean, deleted_at: string | null, storage_provider: string, upload_in_progress: boolean }>(sql`
+        SELECT deleted, deleted_at, storage_provider,
+          GREATEST(created_at, updated_at) > now() - interval '1 day' AS upload_in_progress
+        FROM public.app_versions WHERE id = ${record.id} FOR UPDATE
       `)
       // An upload may have passed its route check before deletion started.
       // Serialize with cleanup and recheck before inserting any references.
@@ -175,7 +178,7 @@ export async function persistVersionManifestEntries(
       `)
       const alreadyPresent = existing.rows[0]?.present === true
       // New references are only added while GC treats the upload as in progress.
-      if (!alreadyPresent && version.rows[0].storage_provider !== 'r2-direct')
+      if (!alreadyPresent && (version.rows[0].storage_provider !== 'r2-direct' || version.rows[0].upload_in_progress !== true))
         throw new Error('Only in-progress uploads can receive manifest entries')
 
       if (!alreadyPresent) {

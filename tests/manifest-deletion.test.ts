@@ -66,7 +66,7 @@ async function state(id: number) {
 beforeAll(async () => {
   await admin.query(`CREATE DATABASE ${dbName}`)
   await pool.query(`CREATE TABLE public.apps (app_id text PRIMARY KEY, manifest_bundle_count bigint NOT NULL DEFAULT 0, updated_at timestamptz);
-    CREATE TABLE public.app_versions (id bigint PRIMARY KEY, app_id text REFERENCES public.apps, deleted boolean DEFAULT false, storage_provider text NOT NULL DEFAULT 'r2-direct',
+    CREATE TABLE public.app_versions (id bigint PRIMARY KEY, app_id text REFERENCES public.apps, deleted boolean DEFAULT false, storage_provider text NOT NULL DEFAULT 'r2-direct', created_at timestamptz DEFAULT now(),
       deleted_at timestamptz, manifest_count bigint NOT NULL DEFAULT 0, manifest jsonb, updated_at timestamptz);
     CREATE TABLE public.manifest (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, app_version_id bigint REFERENCES public.app_versions ON DELETE CASCADE,
       file_name text, file_hash text, s3_path text, file_size bigint);
@@ -332,6 +332,14 @@ describe('manifest deletion Postgres effects', () => {
       .rejects
       .toThrow('Only in-progress uploads can receive manifest entries')
     expect(await state(1)).toMatchObject({ rows: 0, kept: null })
+  })
+
+  it('refuses new references once GC no longer treats a stalled upload as in progress', async () => {
+    await seedVersion(1, 0, false)
+    await pool.query(`UPDATE public.app_versions SET created_at = now() - interval '2 days', updated_at = now() - interval '2 days' WHERE id = 1`)
+    await expect(persistVersionManifestEntries(c, record(1), [{ file_name: 'file.js', file_hash: 'hash', s3_path: 'delta/file.js', file_size: 5 }], { trustFileSizes: true }))
+      .rejects
+      .toThrow('Only in-progress uploads can receive manifest entries')
   })
 
   it('does not remove references or counters for a live version', async () => {
