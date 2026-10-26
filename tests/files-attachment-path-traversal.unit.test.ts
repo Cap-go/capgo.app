@@ -249,4 +249,17 @@ describe('upload durable object binds the created key', () => {
     expect(response.status).toBe(204)
     expect(bucket.put).toHaveBeenCalledWith(key, expect.anything(), expect.anything())
   })
+
+  it('still accepts HEAD for the created key', async () => {
+    const { request } = await setup(key)
+    const response = await request('HEAD', key)
+    expect(response.status).toBe(200)
+  })
+
+  it('keeps accepting uploads created before the key was stored', async () => {
+    const { bucket, request } = await setup()
+    expect((await request('HEAD', key)).status).toBe(200)
+    expect((await request('PATCH', key)).status).toBe(204)
+    expect(bucket.put).toHaveBeenCalledWith(key, expect.anything(), expect.anything())
+  })
 })
