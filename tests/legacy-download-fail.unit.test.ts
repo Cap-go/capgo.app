@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { countsAsBundleFailure as countsAsBundleFailurePlugin, isLegacyDownloadFailPlugin as isLegacyPlugin } from '../supabase/functions/_backend/plugin_runtime/utils/legacyDownloadFail.ts'
 import { countsAsBundleFailure, isLegacyDownloadFailPlugin, legacyDownloadFailKey, legacyDownloadFailPluginSqlCF, subtractLegacyDownloadFails, summarizeLegacyCheckFailures, sumLegacyDownloadFails, toLegacyCheckFailures, UPDATE_CHECK_ERROR_MIN_PLUGIN_VERSION } from '../supabase/functions/_backend/utils/legacyDownloadFail.ts'
 import { formatLegacyPluginVersions } from '../src/composables/useReleaseLive.ts'
+import { lintAnalyticsEngineSql } from '../supabase/functions/_backend/utils/analyticsEngineSqlLint.ts'
+import { buildLegacyCheckFailuresQueryCF } from '../supabase/functions/_backend/utils/cloudflare.ts'
 
 const LEGACY = ['0.9.1', '4.42.0', '5.10.3', '6.0.0', '6.52.9', '7.17.0', '7.52.1', '8.0.0', '8.9.12', '8.51.16', '8.52.0']
 const FIXED = ['6.53.0', '7.53.0', '8.53.0', '8.53.1-beta.2', '8.60.0', '8.100.0', '9.0.0', '10.1.0']
@@ -93,5 +95,27 @@ describe('legacy download_fail correction', () => {
   it.concurrent('lists the newest plugin versions in the notice', () => {
     expect(formatLegacyPluginVersions(['8.51.15', '8.51.16'])).toBe('8.51.15, 8.51.16')
     expect(formatLegacyPluginVersions(['6.1.0', '7.2.0', '8.1.0', '8.51.15', '8.51.16'])).toBe('8.1.0, 8.51.15, 8.51.16 +2')
+  })
+
+  it.concurrent('sizes the notice from the channel and the bundle unattributed logs', () => {
+    const query = buildLegacyCheckFailuresQueryCF({
+      appId: 'com.demo\'app',
+      start: new Date('2026-10-23T13:00:00.000Z'),
+      end: new Date('2026-10-26T13:00:00.000Z'),
+      channel: { id: 7, name: 'prod\'uction' },
+      versionNames: ['1.0.0'],
+    })
+    expect(lintAnalyticsEngineSql(query)).toEqual([])
+    expect(query).toContain('index1 = \'com.demo\'\'app\'')
+    expect(query).toContain('blob3 IN (\'1.0.0\')')
+    expect(query).toContain(legacyDownloadFailPluginSqlCF('blob7'))
+    // Flagged logs are ignored too, so the flag is not filtered.
+    expect(query).not.toContain('blob10')
+    // Legacy logs recorded since the fix carry no channel.
+    expect(query).toContain('AND ((blob9 = \'7\' OR (blob9 = \'\' AND blob8 = \'prod\'\'uction\')) OR (blob8 = \'\' AND blob9 = \'\'))')
+
+    const allChannels = buildLegacyCheckFailuresQueryCF({ appId: 'com.demo.app', start: new Date(0), end: new Date(1) })
+    expect(lintAnalyticsEngineSql(allChannels)).toEqual([])
+    expect(allChannels).not.toContain('blob8')
   })
 })

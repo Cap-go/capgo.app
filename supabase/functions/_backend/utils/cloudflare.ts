@@ -782,18 +782,18 @@ export interface LegacyCheckFailuresQuery {
   versionNames?: string[]
 }
 
-/**
- * Every legacy download_fail per bundle, flagged or not, for the dashboard
- * notice that tells users to update the plugin. Never throws: without it, the
- * notice is not shown.
- */
-export async function readLegacyCheckFailuresCF(c: Context, query: LegacyCheckFailuresQuery) {
-  if (!c.env.APP_LOG)
-    return summarizeLegacyCheckFailures([])
+export function buildLegacyCheckFailuresQueryCF(query: LegacyCheckFailuresQuery) {
   const versionFilter = query.versionNames?.length
     ? `AND blob3 IN (${query.versionNames.map(name => `'${escapeSqlString(name)}'`).join(', ')})`
     : ''
-  const sql = `SELECT
+  // /stats only resolves the channel of failures it counts, so legacy logs
+  // recorded since then carry none. Resolving it for them would add a lookup
+  // per event on the plugin hot path, so a channel view also takes the
+  // bundle's unattributed logs: bundles are rarely shared across channels,
+  // and this only sizes a notice.
+  const channelMatch = buildAppLogFailureChannelFilterCF(query.channel).replace(/^AND /, '')
+  const channelFilter = channelMatch ? `AND (${channelMatch} OR (blob8 = '' AND blob9 = ''))` : ''
+  return `SELECT
   blob3 AS version_name,
   blob7 AS plugin_version,
   sum(_sample_interval) AS count
@@ -805,8 +805,19 @@ WHERE
   AND timestamp >= toDateTime('${formatDateCF(query.start)}')
   AND timestamp < toDateTime('${formatDateCF(query.end)}')
   ${versionFilter}
-  ${buildAppLogFailureChannelFilterCF(query.channel)}
+  ${channelFilter}
 GROUP BY version_name, plugin_version`
+}
+
+/**
+ * Every legacy download_fail per bundle, flagged or not, for the dashboard
+ * notice that tells users to update the plugin. Never throws: without it, the
+ * notice is not shown.
+ */
+export async function readLegacyCheckFailuresCF(c: Context, query: LegacyCheckFailuresQuery) {
+  if (!c.env.APP_LOG)
+    return summarizeLegacyCheckFailures([])
+  const sql = buildLegacyCheckFailuresQueryCF(query)
   try {
     return summarizeLegacyCheckFailures(await runQueryToCFA(c, sql))
   }
