@@ -57,26 +57,30 @@ export function consoleAuthPath(requestPath: string): string | null {
 // API key (and IP forwarding enabled under Authentication > Rate Limits).
 // A secret apikey alone resolves to service_role, which also skips GoTrue's
 // CAPTCHA check, so Authorization must always carry a signed non-admin token:
-// the user's session, or the project's anon JWT for signed-out requests.
-// Without SUPABASE_ANON_JWT or a Cloudflare client address, keep relaying with
-// the publishable key exactly as the browser would.
-function setAuthHeaders(c: Context<MiddlewareKeyVariables>, headers: Headers) {
+// the user's session, or a short-lived anon JWT minted here for signed-out
+// requests with SUPABASE_JWT_SIGNING_KEY, the private JWK of the project's
+// current signing key (imported into Supabase > JWT Signing Keys).
+// Without that key or a Cloudflare client address, keep relaying with the
+// publishable key exactly as the browser would.
+async function setAuthHeaders(c: Context<MiddlewareKeyVariables>, headers: Headers) {
   const anonKey = getEnv(c, 'SUPABASE_ANON_KEY')
   const sessionHeader = c.req.header('authorization') ?? ''
   const session = JWT_BEARER.test(sessionHeader) ? sessionHeader : null
   const secretKey = getEnv(c, 'SUPABASE_SERVICE_ROLE_KEY')
-  const anonJwt = getEnv(c, 'SUPABASE_ANON_JWT')
   // Only Cloudflare's own header: it cannot be set by the client, x-forwarded-for can.
   const cfClientIp = c.req.header('cf-connecting-ip')
 
-  if (cfClientIp && secretKey.startsWith('sb_secret_') && JWT_BEARER.test(`Bearer ${anonJwt}`)) {
-    headers.set('apikey', secretKey)
-    headers.set('authorization', session ?? `Bearer ${anonJwt}`)
-    // Supabase answers 401 to secret-key requests carrying a browser User-Agent.
-    headers.set('user-agent', 'capgo-console-auth-relay')
-    headers.set('x-forwarded-for', cfClientIp)
-    headers.set('sb-forwarded-for', cfClientIp)
-    return
+  if (cfClientIp && secretKey.startsWith('sb_secret_')) {
+    const authorization = session ?? await mintAnonBearer(getEnv(c, 'SUPABASE_JWT_SIGNING_KEY'))
+    if (authorization) {
+      headers.set('apikey', secretKey)
+      headers.set('authorization', authorization)
+      // Supabase answers 401 to secret-key requests carrying a browser User-Agent.
+      headers.set('user-agent', 'capgo-console-auth-relay')
+      headers.set('x-forwarded-for', cfClientIp)
+      headers.set('sb-forwarded-for', cfClientIp)
+      return
+    }
   }
 
   headers.set('apikey', anonKey)
@@ -86,6 +90,64 @@ function setAuthHeaders(c: Context<MiddlewareKeyVariables>, headers: Headers) {
   if (clientIp !== 'unknown') {
     headers.set('x-forwarded-for', clientIp)
     headers.set('sb-forwarded-for', clientIp)
+  }
+}
+
+const ANON_JWT_TTL_SECONDS = 120
+const ANON_JWT_REUSE_MARGIN_SECONDS = 30
+let signer: { jwkJson: string, kid: string, key: Promise<CryptoKey> } | null = null
+let cachedAnonBearer: { jwkJson: string, value: string, exp: number } | null = null
+
+function base64url(bytes: Uint8Array) {
+  let binary = ''
+  for (const byte of bytes)
+    binary += String.fromCharCode(byte)
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
+}
+
+function encodeSegment(value: object) {
+  return base64url(new TextEncoder().encode(JSON.stringify(value)))
+}
+
+function getSigner(jwkJson: string) {
+  if (signer?.jwkJson === jwkJson)
+    return signer
+  let jwk: JsonWebKey & { kid?: unknown }
+  try {
+    jwk = JSON.parse(jwkJson)
+  }
+  catch {
+    return null
+  }
+  if (jwk.kty !== 'EC' || jwk.crv !== 'P-256' || !jwk.d || typeof jwk.kid !== 'string' || !jwk.kid)
+    return null
+  const key = crypto.subtle.importKey('jwk', { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y, d: jwk.d }, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign'])
+  signer = { jwkJson, kid: jwk.kid, key }
+  return signer
+}
+
+// ES256 `role: anon` token, the same claims Supabase puts in its own anon tokens.
+export async function mintAnonBearer(jwkJson: string): Promise<string | null> {
+  if (!jwkJson)
+    return null
+  const now = Math.floor(Date.now() / 1000)
+  if (cachedAnonBearer?.jwkJson === jwkJson && cachedAnonBearer.exp - now > ANON_JWT_REUSE_MARGIN_SECONDS)
+    return cachedAnonBearer.value
+  const current = getSigner(jwkJson)
+  if (!current)
+    return null
+  try {
+    const exp = now + ANON_JWT_TTL_SECONDS
+    const unsigned = `${encodeSegment({ alg: 'ES256', typ: 'JWT', kid: current.kid })}.${encodeSegment({ iss: 'supabase', role: 'anon', iat: now, exp })}`
+    // WebCrypto ECDSA signatures are raw r||s, which is what JWS ES256 expects.
+    const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, await current.key, new TextEncoder().encode(unsigned))
+    const value = `Bearer ${unsigned}.${base64url(new Uint8Array(signature))}`
+    cachedAnonBearer = { jwkJson, value, exp }
+    return value
+  }
+  catch {
+    signer = null
+    return null
   }
 }
 
@@ -106,7 +168,7 @@ app.all('/*', async (c) => {
     if (value)
       headers.set(name, value)
   }
-  setAuthHeaders(c, headers)
+  await setAuthHeaders(c, headers)
 
   let body: ArrayBuffer | undefined
   if (c.req.method !== 'GET' && c.req.method !== 'HEAD') {
