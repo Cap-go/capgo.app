@@ -183,8 +183,9 @@ function planAmounts(plan: Database['public']['Tables']['plans']['Row']) {
 }
 
 // Enterprise extra MAU is created in Stripe with the same tier figures in every plan currency.
+// Whole amounts drop the decimals; fractional Stripe prices (19.99) keep the currency's digits.
 function formatPlanPrice(plan: Database['public']['Tables']['plans']['Row'], value: number) {
-  return formatPlanAmount(value, planAmounts(plan).currency, { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+  return formatPlanAmount(value, planAmounts(plan).currency, Number.isInteger(value) ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : {})
 }
 
 function currencyLabel(code: string) {
@@ -335,19 +336,33 @@ async function openChangePlan(plan: Database['public']['Tables']['plans']['Row']
   isSubscribeLoading.value[index] = false
 }
 
+// Like the card buttons, a deep-linked checkout waits for the billing currency; a failed lookup keeps it
+// pending until Retry loads the prices.
+const pendingPlanCheckout = ref<{ planName: string, linkedOrgId: unknown } | null>(null)
+
 // `?plan=<solo|maker|team>` starts that plan's checkout right away when the trial is over or was skipped.
-async function startPlanCheckoutFromQuery() {
+function startPlanCheckoutFromQuery() {
   const planName = readPlanCheckoutParam(route.query)
   if (!planName || route.path !== '/settings/organization/plans')
     return
   const linkedOrgId = route.query.oid
   void router.replace({ query: { ...route.query, [PLAN_CHECKOUT_PARAM]: undefined } })
-  const org = currentOrganization.value
-  const index = mainStore.plans.findIndex(plan => plan.name === planName)
-  // Never start a checkout for another org than the one the link named.
-  if (org && (!linkedOrgId || linkedOrgId === org.gid) && !org.paying && !isTrial.value && index >= 0)
-    await openChangePlan(mainStore.plans[index], index)
+  pendingPlanCheckout.value = { planName, linkedOrgId }
 }
+
+watch(billingOrgId, () => {
+  pendingPlanCheckout.value = null
+})
+watch([pendingPlanCheckout, pricesReady], async ([pending, ready]) => {
+  if (!pending || !ready)
+    return
+  pendingPlanCheckout.value = null
+  const org = currentOrganization.value
+  const index = mainStore.plans.findIndex(plan => plan.name === pending.planName)
+  // Never start a checkout for another org than the one the link named.
+  if (org && (!pending.linkedOrgId || pending.linkedOrgId === org.gid) && !org.paying && !isTrial.value && index >= 0)
+    await openChangePlan(mainStore.plans[index], index)
+})
 
 function hasYearlyDiscount(plan: Database['public']['Tables']['plans']['Row']): boolean {
   const { month, year } = planAmounts(plan)
@@ -355,6 +370,9 @@ function hasYearlyDiscount(plan: Database['public']['Tables']['plans']['Row']): 
 }
 
 // Yearly only when this currency's price is actually discounted; drives checkout and current-plan state.
+// The toggle only promises free months when some plan is actually discounted in this currency.
+const anyYearlyDiscount = computed(() => mainStore.plans.some(hasYearlyDiscount))
+
 function isCheckoutYearly(plan: Database['public']['Tables']['plans']['Row']) {
   return isYearly.value && hasYearlyDiscount(plan)
 }
@@ -659,7 +677,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
               @click="segmentVal = 'y'"
             >
               {{ t('yearly') }}
-              <span class="py-0.5 px-1.5 text-xs font-bold text-green-600 bg-green-100 rounded-full dark:text-green-400 dark:bg-green-900/30">{{ t('yearly-two-months-free') }}</span>
+              <span v-if="anyYearlyDiscount" class="py-0.5 px-1.5 text-xs font-bold text-green-600 bg-green-100 rounded-full dark:text-green-400 dark:bg-green-900/30">{{ t('yearly-two-months-free') }}</span>
             </button>
           </div>
           <!-- Billing currency: only currencies set on the Stripe prices -->
