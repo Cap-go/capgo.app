@@ -272,7 +272,7 @@ describe('delta storage v2 GC guards', () => {
       await client.query('SELECT public.convert_version_manifest_rows($1)', [versionId])
 
       // Physical keys listed by GC in other spellings of the same objects.
-      const listed = [`${sha}_%2Ehtaccess`, `${sha}_%2ehtaccess`, `${sha}_image@2x.png`, `${sha}_a b%40c.js`].map(deltaPath)
+      const listed = [`${sha}_%2Ehtaccess`, `${sha}_%2ehtaccess`, `${sha}_image@2x.png`, `${sha}_image%25402x.png`, `${sha}_a b%40c.js`].map(deltaPath)
       const result = await client.query<{ paths: string[] }>('SELECT public.delta_gc_unreferenced_paths($1::text[]) AS paths', [[...listed, deltaPath(`${sha}_other.js`)]])
       expect(result.rows[0].paths).toEqual([deltaPath(`${sha}_other.js`)])
       // Invalid escapes still resolve the dotfile spelling.

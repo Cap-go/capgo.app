@@ -194,10 +194,11 @@ REVOKE ALL ON FUNCTION public.delta_entry_key(text, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.delta_entry_key(text, text, text) TO service_role;
 
 -- One R2 object can be stored under several spellings of its path: a
--- leading-dot segment as "." or "%2E"/"%2e", percent-encoded or decoded
--- names, partially encoded ones. /files/read resolves them to the same key,
--- and every spelling it accepts decodes to the same text, so references are
--- matched on the fully percent-decoded path.
+-- leading-dot segment as "." or "%2E"/"%2e", percent-encoded, re-encoded
+-- ("%2540") or decoded names, partially encoded ones. /files/read moves
+-- between them by encoding or decoding segments, so references are matched
+-- on the path decoded until it no longer changes: every spelling it accepts
+-- reaches the same text. Matching a few more spellings only keeps more files.
 CREATE FUNCTION public.delta_canonical_path(p_s3_path text)
 RETURNS text
 LANGUAGE plpgsql
@@ -205,23 +206,31 @@ IMMUTABLE
 PARALLEL SAFE
 SET search_path = ''
 AS $$
+DECLARE
+  v_path text := p_s3_path;
+  v_next text;
 BEGIN
-  IF p_s3_path IS NULL OR pg_catalog.strpos(p_s3_path, '%') = 0 THEN
-    RETURN p_s3_path;
-  END IF;
-  RETURN pg_catalog.convert_from(
-    (
-      SELECT pg_catalog.string_agg(
-        CASE WHEN part.m[1] IS NOT NULL THEN pg_catalog.decode(part.m[1], 'hex') ELSE pg_catalog.convert_to(part.m[2], 'UTF8') END,
-        ''::bytea ORDER BY part.ord
-      )
-      FROM pg_catalog.regexp_matches(p_s3_path, '%([0-9A-Fa-f]{2})|([^%]+|%)', 'g') WITH ORDINALITY AS part (m, ord)
-    ),
-    'UTF8'
-  );
-EXCEPTION WHEN others THEN
-  -- Not valid UTF-8 once decoded: only the dotfile escape is still resolved.
-  RETURN pg_catalog.regexp_replace(p_s3_path, '%2[Ee]', '.', 'g');
+  FOR i IN 1..16 LOOP
+    EXIT WHEN v_path IS NULL OR pg_catalog.strpos(v_path, '%') = 0;
+    BEGIN
+      v_next := pg_catalog.convert_from(
+        (
+          SELECT pg_catalog.string_agg(
+            CASE WHEN part.m[1] IS NOT NULL THEN pg_catalog.decode(part.m[1], 'hex') ELSE pg_catalog.convert_to(part.m[2], 'UTF8') END,
+            ''::bytea ORDER BY part.ord
+          )
+          FROM pg_catalog.regexp_matches(v_path, '%([0-9A-Fa-f]{2})|([^%]+|%)', 'g') WITH ORDINALITY AS part (m, ord)
+        ),
+        'UTF8'
+      );
+    EXCEPTION WHEN others THEN
+      -- Not valid UTF-8 once decoded: only the dotfile escape still resolves.
+      RETURN pg_catalog.regexp_replace(v_path, '%2[Ee]', '.', 'g');
+    END;
+    EXIT WHEN v_next = v_path;
+    v_path := v_next;
+  END LOOP;
+  RETURN v_path;
 END;
 $$;
 ALTER FUNCTION public.delta_canonical_path(text) OWNER TO postgres;
