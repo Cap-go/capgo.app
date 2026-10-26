@@ -1,6 +1,6 @@
 <script setup lang="ts">
+import type { Plan } from '~/services/console'
 import type { CreditPricingStep } from '~/services/creditPricing'
-import type { Database } from '~/types/database.types'
 import { storeToRefs } from 'pinia'
 import { computed, ref, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -91,7 +91,7 @@ const planFeatureLabelKeysByPlan: Record<string, string[]> = {
   ],
 }
 
-function planFeatures(plan: Database['public']['Tables']['plans']['Row']) {
+function planFeatures(plan: Plan) {
   // Convert build time from seconds to hours or minutes for display
   const buildTimeSeconds = plan.build_time_unit || 0
   const buildTimeHours = Math.floor(buildTimeSeconds / 3600)
@@ -137,8 +137,8 @@ function convertKey(key: string) {
   return key
 }
 
-const currentPlan = ref<Database['public']['Tables']['plans']['Row'] | undefined>(undefined)
-const currentPlanSuggest = ref<Database['public']['Tables']['plans']['Row'] | undefined>(undefined)
+const currentPlan = ref<Plan | undefined>(undefined)
+const currentPlanSuggest = ref<Plan | undefined>(undefined)
 
 watch(() => main.bestPlan, (newBestPlan) => {
   currentPlanSuggest.value = mainStore.plans.find(plan => plan.name === newBestPlan)
@@ -159,7 +159,7 @@ const enterpriseMauIndex = ref(2)
 const currentEnterpriseMau = ref<number | null>(null)
 let enterpriseScaleLoadSeq = 0
 
-function isEnterprisePlan(plan: Database['public']['Tables']['plans']['Row']) {
+function isEnterprisePlan(plan: Plan) {
   return plan.name === ENTERPRISE_PLAN_NAME
 }
 
@@ -173,9 +173,9 @@ const enterpriseQuote = computed(() => {
 })
 
 // Real Stripe amounts per currency (price currency_options); USD from the plans table until they load.
-const { amountsFor, currencies: priceCurrencies, currency: priceCurrency, failed: pricesFailed, lockedCurrency, lockedCurrencyUnavailable, ready: pricesReady, reload: reloadPrices, setCurrency, usdRatioFor } = usePlanPrices(billingOrgId)
+const { amountsFor, currencies: priceCurrencies, currency: priceCurrency, discount: regionalDiscount, failed: pricesFailed, lockedCurrency, lockedCurrencyUnavailable, ready: pricesReady, regularAmountsFor, reload: reloadPrices, setCurrency, usdRatioFor } = usePlanPrices(billingOrgId)
 
-function planAmounts(plan: Database['public']['Tables']['plans']['Row']) {
+function planAmounts(plan: Plan) {
   const stripeAmounts = amountsFor(plan.stripe_id)
   return stripeAmounts && priceCurrency.value
     ? { ...stripeAmounts, currency: priceCurrency.value }
@@ -184,7 +184,7 @@ function planAmounts(plan: Database['public']['Tables']['plans']['Row']) {
 
 // Enterprise extra MAU: USD tiers converted with the plan's own currency ratio for the billed interval,
 // matching the extra MAU price Checkout creates.
-function localExtraMauMonthly(plan: Database['public']['Tables']['plans']['Row']) {
+function localExtraMauMonthly(plan: Plan) {
   const usd = enterpriseQuote.value?.extraMauPriceMonthly ?? 0
   if (!amountsFor(plan.stripe_id))
     return usd
@@ -192,7 +192,7 @@ function localExtraMauMonthly(plan: Database['public']['Tables']['plans']['Row']
 }
 
 // Whole amounts drop the decimals; fractional Stripe prices (19.99) keep the currency's digits.
-function formatPlanPrice(plan: Database['public']['Tables']['plans']['Row'], value: number) {
+function formatPlanPrice(plan: Plan, value: number) {
   return formatPlanAmount(value, planAmounts(plan).currency, Number.isInteger(value) ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : {})
 }
 
@@ -207,7 +207,7 @@ function currencyLabel(code: string) {
 }
 
 // Enterprise card lists the MAU picked on the slider, other plans their allowance.
-function displayedPlanMau(plan: Database['public']['Tables']['plans']['Row']) {
+function displayedPlanMau(plan: Plan) {
   return isEnterprisePlan(plan) && enterpriseQuote.value ? enterpriseQuote.value.targetMau : plan.mau
 }
 
@@ -241,7 +241,7 @@ async function loadEnterpriseScale(orgId: string) {
     enterpriseMauIndex.value = index
 }
 
-async function startPlanCheckout(plan: Database['public']['Tables']['plans']['Row'], isYear: boolean) {
+async function startPlanCheckout(plan: Plan, isYear: boolean) {
   if (!plan.stripe_id)
     return null
   // Strip a previous ?success/?cancel so Stripe returns to a clean plans URL.
@@ -259,7 +259,7 @@ async function startPlanCheckout(plan: Database['public']['Tables']['plans']['Ro
   })
 }
 
-function trackPlanCheckoutStarted(plan: Database['public']['Tables']['plans']['Row'], isYear: boolean, checkoutSource: string) {
+function trackPlanCheckoutStarted(plan: Plan, isYear: boolean, checkoutSource: string) {
   const orgId = currentOrganization.value?.gid
   if (!orgId || !plan.stripe_id)
     return
@@ -311,7 +311,7 @@ async function onCheckoutComplete() {
     organizationStore.setCurrentOrganization(orgId)
 }
 
-async function openChangePlan(plan: Database['public']['Tables']['plans']['Row'], index: number) {
+async function openChangePlan(plan: Plan, index: number) {
   // Show the permission modal instead of blocking when the user can't manage billing.
   const orgId = currentOrganization.value?.gid
   if (!orgId || !(await checkPermissions('org.update_billing', { orgId }))) {
@@ -372,7 +372,7 @@ watch([pendingPlanCheckout, pricesReady], async ([pending, ready]) => {
     await openChangePlan(mainStore.plans[index], index)
 })
 
-function hasYearlyDiscount(plan: Database['public']['Tables']['plans']['Row']): boolean {
+function hasYearlyDiscount(plan: Plan): boolean {
   const { month, year } = planAmounts(plan)
   return year > 0 && Math.round(year / 12) < month
 }
@@ -381,22 +381,42 @@ function hasYearlyDiscount(plan: Database['public']['Tables']['plans']['Row']): 
 // The toggle only promises free months when some plan is actually discounted in this currency.
 const anyYearlyDiscount = computed(() => mainStore.plans.some(hasYearlyDiscount))
 
-function isCheckoutYearly(plan: Database['public']['Tables']['plans']['Row']) {
+function isCheckoutYearly(plan: Plan) {
   return isYearly.value && hasYearlyDiscount(plan)
 }
 
-function isCurrentSubscription(plan: Database['public']['Tables']['plans']['Row']) {
+function isCurrentSubscription(plan: Plan) {
   return !!currentOrganization.value?.paying && currentOrganization.value?.is_yearly === isCheckoutYearly(plan)
 }
 
-function getPrice(plan: Database['public']['Tables']['plans']['Row'], t: 'm' | 'y'): number {
+function getPrice(plan: Plan, t: 'm' | 'y'): number {
   const { month, year } = planAmounts(plan)
   if (t === 'm' || !hasYearlyDiscount(plan))
     return month
   return Math.round(year / 12)
 }
 
-function isYearlyPlan(plan: Database['public']['Tables']['plans']['Row'], t: 'm' | 'y'): boolean {
+// Full monthly figure behind a regional discount, on the same monthly/yearly basis as getPrice.
+function getRegularPrice(plan: Plan, t: 'm' | 'y'): number | null {
+  const regular = regularAmountsFor(plan.stripe_id)
+  if (!regular)
+    return null
+  const value = t === 'm' || !hasYearlyDiscount(plan) ? regular.month : Math.round(regular.year / 12)
+  return value > getPrice(plan, t) ? value : null
+}
+
+function regionalCountryName(code: string | null) {
+  if (!code)
+    return ''
+  try {
+    return new Intl.DisplayNames([getFormatLocale()], { type: 'region' }).of(code) ?? code
+  }
+  catch {
+    return code
+  }
+}
+
+function isYearlyPlan(plan: Plan, t: 'm' | 'y'): boolean {
   return t === 'y'
 }
 
@@ -567,11 +587,11 @@ watchEffect(async (onCleanup) => {
   }
 })
 // create function to check button status
-function isCurrentEnterpriseScale(p: Database['public']['Tables']['plans']['Row']) {
+function isCurrentEnterpriseScale(p: Plan) {
   return isEnterprisePlan(p) && currentEnterpriseMau.value === enterpriseQuote.value?.targetMau
 }
 
-function buttonName(p: Database['public']['Tables']['plans']['Row']) {
+function buttonName(p: Plan) {
   if (isMobile)
     return t('check-on-web')
   if (isEnterprisePlan(p) && enterpriseQuote.value) {
@@ -596,7 +616,7 @@ function buttonName(p: Database['public']['Tables']['plans']['Row']) {
   return p.price_m >= (currentPlan.value?.price_m ?? 0) ? (t('plan-upgrade-v2')) : (t('downgrade'))
 }
 
-function isDisabled(plan: Database['public']['Tables']['plans']['Row']) {
+function isDisabled(plan: Plan) {
   // Disabled if: current plan (already subscribed) or mobile
   // Above the allowance, checkout needs the MAU price to add the extra MAU item.
   if (isEnterprisePlan(plan) && enterpriseMauIndex.value > 0 && !enterpriseQuote.value)
@@ -609,12 +629,12 @@ function isDisabled(plan: Database['public']['Tables']['plans']['Row']) {
   return (currentPlan.value?.name === plan.name && isCurrentSubscription(plan)) || isMobile
 }
 
-function isRecommended(p: Database['public']['Tables']['plans']['Row']) {
+function isRecommended(p: Plan) {
   if (showExpiredTrialState.value)
     return false
   return currentPlanSuggest.value?.name === p.name && (currentPlanSuggest.value?.price_m ?? 0) > (currentPlan.value?.price_m ?? 0)
 }
-function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
+function buttonStyle(p: Plan) {
   if (isDisabled(p)) {
     return 'cursor-not-allowed bg-gray-500 dark:bg-gray-400 text-white'
   }
@@ -816,12 +836,23 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
 
           <!-- Price -->
           <div v-else class="mb-6 shrink-0">
-            <div class="flex items-baseline">
+            <div class="flex flex-wrap items-baseline gap-x-2">
+              <span v-if="getRegularPrice(p, segmentVal) !== null" data-test="plan-regular-price" class="text-lg font-semibold text-gray-400 line-through dark:text-gray-500">
+                {{ formatPlanPrice(p, getRegularPrice(p, segmentVal)!) }}
+              </span>
               <span class="text-3xl font-extrabold tracking-tight text-gray-900 dark:text-white">
                 {{ formatPlanPrice(p, getPrice(p, segmentVal)) }}
               </span>
-              <span class="ml-1 text-sm font-medium text-gray-500 dark:text-gray-400">/{{ t('mo') }}</span>
+              <span class="text-sm font-medium text-gray-500 dark:text-gray-400">/{{ t('mo') }}</span>
             </div>
+            <template v-if="getRegularPrice(p, segmentVal) !== null && regionalDiscount">
+              <span data-test="plan-regional-discount" class="inline-block py-0.5 px-2 mt-2 text-xs font-bold text-green-600 bg-green-100 rounded-full dark:text-green-400 dark:bg-green-900/30">
+                {{ t('plans-regional-discount', { percent: regionalDiscount.percent }) }}
+              </span>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ regionalDiscount.country ? t('plans-regional-discount-requirement', { country: regionalCountryName(regionalDiscount.country) }) : t('plans-regional-discount-requirement-generic') }}
+              </p>
+            </template>
             <p v-if="isYearlyPlan(p, segmentVal)" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               {{ hasYearlyDiscount(p) ? t('billed-annually-at') : t('billed-monthly-at') }} {{ formatPlanPrice(p, hasYearlyDiscount(p) ? planAmounts(p).year : planAmounts(p).month) }}
             </p>

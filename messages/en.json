@@ -4006,5 +4006,8 @@
   "onboarding-choose-plan-step-label": "Step 1 · Start here",
   "onboarding-choose-plan-step-description": "Choose a plan to start using Capgo.",
   "onboarding-choose-plan-step-next": "Then set up your app below. Bundle uploads and live updates start working once your plan is active.",
-  "onboarding-choose-plan-step-cta": "See plans"
+  "onboarding-choose-plan-step-cta": "See plans",
+  "plans-regional-discount": "{percent}% regional discount",
+  "plans-regional-discount-requirement": "Regional price for {country}: requires a card and billing address from {country}.",
+  "plans-regional-discount-requirement-generic": "Regional price: requires a card and billing address from your country."
 }

@@ -2,12 +2,16 @@ import type { Context } from 'hono'
 import type { BillingAccount } from './stripe_billing.ts'
 import type { Database } from './supabase.types.ts'
 import Stripe from 'stripe'
+import type { PriceTier } from './country_price_tier.ts'
+import { FULL_PRICE_TIER } from './country_price_tier.ts'
 import { simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
+import { getCustomerBilling, getPriceTier, getRequestPriceTier } from './regional_price.ts'
 import {
   BillingAccountUnavailableError,
   getBillingAccountForCustomer,
   getPlanPriceId,
+  getRegionalPlanPriceId,
   getStripePublishableKey,
   getStripeSecretKey,
   isAutomaticTaxEnabled,
@@ -707,11 +711,11 @@ export async function getLatestOpenSubscriptionInvoice(c: Context, customerId: s
   }
 }
 
-async function getStoredPlanPriceId(c: Context, planId: string, recurrence: string, billingAccount: BillingAccount): Promise<string | null> {
+async function getStoredPlanPriceId(c: Context, planId: string, recurrence: string, billingAccount: BillingAccount, tier: PriceTier): Promise<string | null> {
   try {
     const { data, error } = await supabaseAdmin(c)
       .from('plans')
-      .select('price_m_id, price_y_id, price_m_id_us, price_y_id_us, stripe_id, stripe_id_us')
+      .select('price_m_id, price_y_id, price_m_id_us, price_y_id_us, stripe_id, stripe_id_us, regional_price_ids')
       .or(planProductIdOrFilter(planId))
       .single()
 
@@ -720,7 +724,8 @@ async function getStoredPlanPriceId(c: Context, planId: string, recurrence: stri
       return null
     }
 
-    return getPlanPriceId(data, billingAccount, recurrence)
+    // A tier without its own price sells the full price: never a cheaper tier's.
+    return getRegionalPlanPriceId(data.regional_price_ids, tier, billingAccount, recurrence) ?? getPlanPriceId(data, billingAccount, recurrence)
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'getStoredPlanPriceId', planId, recurrence, error })
@@ -728,20 +733,22 @@ async function getStoredPlanPriceId(c: Context, planId: string, recurrence: stri
   }
 }
 
-async function getPriceIds(c: Context, planId: string, recurrence: string, billingAccount: BillingAccount): Promise<{ priceId: string | null }> {
+async function getPriceIds(c: Context, planId: string, recurrence: string, billingAccount: BillingAccount, tier: PriceTier = FULL_PRICE_TIER): Promise<{ priceId: string | null }> {
   let priceId = null
   if (!isStripeConfiguredForAccount(c, billingAccount))
     return { priceId }
   // The plans table names the price Checkout sells: a replaced price stays active in Stripe until it is
   // archived after the release, so the Stripe listing alone could still pick it.
-  priceId = await getStoredPlanPriceId(c, planId, recurrence, billingAccount)
+  priceId = await getStoredPlanPriceId(c, planId, recurrence, billingAccount, tier)
   if (priceId)
     return { priceId }
   try {
     const prices = await listPricesByProduct(c, planId, billingAccount)
     cloudlog({ requestId: c.get('requestId'), message: 'prices stripe', prices })
     prices.data.forEach((price) => {
-      if (price.recurring?.interval === recurrence && price.active && price.recurring?.usage_type === 'licensed')
+      // Regional tier prices are only sold through plans.regional_price_ids, never by this fallback.
+      const priceTier = price.metadata?.capgo_tier
+      if (price.recurring?.interval === recurrence && price.active && price.recurring?.usage_type === 'licensed' && (!priceTier || priceTier === FULL_PRICE_TIER))
         priceId = price.id
     })
   }
@@ -777,20 +784,12 @@ export function getPriceCurrencyAmounts(price: Pick<Stripe.Price, 'currency' | '
 }
 
 // The price Checkout would sell for this plan, with every currency it is sold in.
-export async function getCheckoutPlanPrice(c: Context, planProductId: string, recurrence: 'month' | 'year', billingAccount: BillingAccount): Promise<Stripe.Price | null> {
+export async function getCheckoutPlanPrice(c: Context, planProductId: string, recurrence: 'month' | 'year', billingAccount: BillingAccount, tier: PriceTier): Promise<Stripe.Price | null> {
   const resolvedPlanId = await resolveCheckoutPlanProductId(c, planProductId, billingAccount)
-  const { priceId } = await getPriceIds(c, resolvedPlanId, recurrence, billingAccount)
+  const { priceId } = await getPriceIds(c, resolvedPlanId, recurrence, billingAccount, tier)
   if (!priceId)
     return null
   return await getStripe(c, billingAccount).prices.retrieve(priceId, { expand: ['currency_options'] })
-}
-
-// A customer is pinned to one currency once Stripe has billed them; null means any currency is allowed.
-export async function getStripeCustomerCurrency(c: Context, customerId: string, billingAccount: BillingAccount): Promise<string | null> {
-  const customer = await getStripe(c, billingAccount).customers.retrieve(customerId)
-  if (customer.deleted)
-    return null
-  return customer.currency?.toLowerCase() ?? null
 }
 
 export interface MeteredData {
@@ -1047,8 +1046,7 @@ function toCheckoutSessionResult(session: Stripe.Checkout.Session, publishableKe
 }
 
 // The server owns the currency: a billed customer keeps theirs even when the client sends none.
-async function resolveCheckoutCurrency(c: Context, customerId: string, billingAccount: BillingAccount, planCurrencies: string[], requestedCurrency: string | undefined) {
-  const customerCurrency = await getStripeCustomerCurrency(c, customerId, billingAccount)
+function resolveCheckoutCurrency(customerCurrency: string | null, planCurrencies: string[], requestedCurrency: string | undefined) {
   if (customerCurrency && requestedCurrency && customerCurrency !== requestedCurrency)
     throw simpleError('currency_locked', 'This organization is already billed in another currency', { currency: requestedCurrency, customerCurrency })
   const checkoutCurrency = customerCurrency ?? requestedCurrency
@@ -1077,15 +1075,18 @@ export async function createCheckout(c: Context, customerId: string, recurrence:
   if (!isStripeConfiguredForAccount(c, billingAccount))
     return { url: '' }
   const resolvedPlanId = await resolveCheckoutPlanProductId(c, planId, billingAccount)
-  const prices = await getPriceIds(c, resolvedPlanId, recurrence, billingAccount)
-  cloudlog({ requestId: c.get('requestId'), message: 'prices', prices, billingAccount, resolvedPlanId })
+  // Same tier as the Plans page: the most expensive of the visitor, billing address and saved card countries.
+  const customerBilling = await getCustomerBilling(getStripe(c, billingAccount), customerId)
+  const tier = getRequestPriceTier(c, customerBilling.countries)
+  const prices = await getPriceIds(c, resolvedPlanId, recurrence, billingAccount, tier)
+  cloudlog({ requestId: c.get('requestId'), message: 'prices', prices, billingAccount, resolvedPlanId, tier })
   if (!prices.priceId)
     return Promise.reject(new Error('Cannot find price'))
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [{ price: prices.priceId, quantity: 1 }]
   const planPrice = await getStripe(c, billingAccount).prices.retrieve(prices.priceId, { expand: ['currency_options'] })
   const planAmounts = getPriceCurrencyAmounts(planPrice)
   const planCurrencies = Object.keys(planAmounts)
-  const checkoutCurrency = await resolveCheckoutCurrency(c, customerId, billingAccount, planCurrencies, requestedCurrency)
+  const checkoutCurrency = resolveCheckoutCurrency(customerBilling.currency, planCurrencies, requestedCurrency)
   if (extraMau && extraMau.extraMau > 0) {
     // Same interval as the plan: Checkout bills every item of a subscription together.
     const interval = recurrence === 'year' ? 'year' : 'month'
@@ -1102,7 +1103,8 @@ export async function createCheckout(c: Context, customerId: string, recurrence:
   const publishableKey = getEmbeddedCheckoutPublishableKey(c, billingAccount, embedded)
   const session = await getStripe(c, billingAccount).checkout.sessions.create({
     allow_promotion_codes: true,
-    billing_address_collection: 'auto',
+    // A regional discount needs a billing address: the webhook checks it and the card against the region.
+    billing_address_collection: getPriceTier(planPrice) === FULL_PRICE_TIER ? 'auto' : 'required',
     mode: 'subscription',
     customer: customerId,
     ...getCheckoutRedirectParams(publishableKey, `${allowedSuccessUrl}?success=true`, allowedCancelUrl),

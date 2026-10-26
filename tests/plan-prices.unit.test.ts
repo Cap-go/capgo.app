@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
-import { getCommonCurrencies, pickCurrency, pickPriceCurrencies, planPricesVersion } from '../supabase/functions/_backend/private/plan_prices.ts'
+import { getCommonCurrencies, getRegularPrices, pickCurrency, pickPriceCurrencies, planPricesVersion, tierDiscountPercent } from '../supabase/functions/_backend/private/plan_prices.ts'
 import { currencyForCountry } from '../supabase/functions/_backend/utils/country_currency.ts'
+import { isCheaperTier, PRICE_TIERS, priceTierForCountries, priceTierForCountry } from '../supabase/functions/_backend/utils/country_price_tier.ts'
 import { getPlanPriceInterval } from '../supabase/functions/_backend/utils/plan_price_interval.ts'
+import { getRegionalPlanPriceId } from '../supabase/functions/_backend/utils/stripe_billing.ts'
 import { getCurrencyRatios, getPriceCurrencyAmounts, scaleTiersToCurrency } from '../supabase/functions/_backend/utils/stripe.ts'
 import { getPlanAmounts, getUsdRatio } from '../src/services/planPrices'
 
@@ -98,7 +100,7 @@ describe('plan prices', () => {
   })
 
   it.concurrent('recognises current and replaced plan prices', () => {
-    const plan = { price_m_id: 'price_m_new', price_y_id: 'price_y_new', price_m_id_us: 'price_m_us', price_y_id_us: null, legacy_price_m_ids: ['price_m_old'], legacy_price_y_ids: ['price_y_old'] }
+    const plan = { price_m_id: 'price_m_new', price_y_id: 'price_y_new', price_m_id_us: 'price_m_us', price_y_id_us: null, alt_price_m_ids: ['price_m_old'], alt_price_y_ids: ['price_y_old'] }
     expect(getPlanPriceInterval(plan, 'price_m_new')).toBe('monthly')
     expect(getPlanPriceInterval(plan, 'price_m_us')).toBe('monthly')
     expect(getPlanPriceInterval(plan, 'price_m_old')).toBe('monthly')
@@ -108,8 +110,58 @@ describe('plan prices', () => {
   })
 
   it.concurrent('changes the catalog cache version when a plan switches price', () => {
-    const plan = { stripe_id: 'prod_solo', price_m_id: 'price_m_old', price_y_id: 'price_y_old', price_m_id_us: null, price_y_id_us: null }
+    const plan = { stripe_id: 'prod_solo', price_m_id: 'price_m_old', price_y_id: 'price_y_old', price_m_id_us: null, price_y_id_us: null, regional_price_ids: {} }
     expect(planPricesVersion([plan])).toBe(planPricesVersion([{ ...plan }]))
     expect(planPricesVersion([{ ...plan, price_m_id: 'price_m_new' }])).not.toBe(planPricesVersion([plan]))
+    expect(planPricesVersion([{ ...plan, regional_price_ids: { p50: { price_m_id: 'price_m_p50' } } }])).not.toBe(planPricesVersion([plan]))
+  })
+
+  it.concurrent('prices euro countries by their own purchasing power', () => {
+    expect(priceTierForCountry('LU')).toBe('p100')
+    expect(priceTierForCountry('de')).toBe('p85')
+    expect(priceTierForCountry('FR')).toBe('p70')
+    expect(priceTierForCountry('ES')).toBe('p60')
+    expect(priceTierForCountry('BG')).toBe('p50')
+    // Never above the full price.
+    expect(priceTierForCountry('CH')).toBe('p100')
+    expect(priceTierForCountry('IN')).toBe('p50')
+    // Unknown or missing countries pay the full price.
+    expect(priceTierForCountry('ZZ')).toBe('p100')
+    expect(priceTierForCountry(null)).toBe('p100')
+  })
+
+  it.concurrent('lists the full price only for plans the tier discounts', () => {
+    const sold = { solo: { month: { usd: 700, eur: 600 }, year: { usd: 7300, eur: 6300 } }, team: { month: { usd: 9900 }, year: { usd: 99800 } } }
+    const full = { solo: { month: { usd: 1400, eur: 1200 }, year: { usd: 14600, eur: 13000 } }, team: { month: { usd: 9900 }, year: { usd: 99800 } } }
+    expect(getRegularPrices(sold, full)).toEqual({ solo: full.solo })
+    expect(tierDiscountPercent('p50')).toBe(50)
+    expect(tierDiscountPercent('p85')).toBe(15)
+  })
+
+  it.concurrent('grants the smallest discount among the buyer countries', () => {
+    expect(priceTierForCountries(['IN'])).toBe('p50')
+    // Indian IP with a German card or address pays the German price.
+    expect(priceTierForCountries(['IN', 'DE'])).toBe('p85')
+    expect(priceTierForCountries(['IN', null, 'US'])).toBe('p100')
+    expect(priceTierForCountries([null, undefined])).toBe('p100')
+    expect(isCheaperTier('p50', 'p85')).toBe(true)
+    expect(isCheaperTier('p100', 'p85')).toBe(false)
+    expect(isCheaperTier('p85', 'p85')).toBe(false)
+  })
+
+  it.concurrent('puts every country with a currency in a tier', () => {
+    for (const country of ['US', 'GB', 'JP', 'BR', 'MC', 'RE', 'JE', 'LI', 'TW'])
+      expect(PRICE_TIERS).toContain(priceTierForCountry(country))
+  })
+
+  it.concurrent('reads the regional price for the tier, account and interval', () => {
+    const regional = { p50: { price_m_id: 'price_m_ee', price_y_id: 'price_y_ee', price_m_id_us: 'price_m_us', price_y_id_us: ' ' } }
+    expect(getRegionalPlanPriceId(regional, 'p50', 'ee', 'month')).toBe('price_m_ee')
+    expect(getRegionalPlanPriceId(regional, 'p50', 'ee', 'year')).toBe('price_y_ee')
+    expect(getRegionalPlanPriceId(regional, 'p50', 'us', 'month')).toBe('price_m_us')
+    expect(getRegionalPlanPriceId(regional, 'p50', 'us', 'year')).toBeNull()
+    expect(getRegionalPlanPriceId(regional, 'p85', 'ee', 'month')).toBeNull()
+    expect(getRegionalPlanPriceId(null, 'p50', 'ee', 'month')).toBeNull()
+    expect(getRegionalPlanPriceId({ p50: 'price_x' }, 'p50', 'ee', 'month')).toBeNull()
   })
 })

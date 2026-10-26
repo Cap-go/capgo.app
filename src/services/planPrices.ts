@@ -17,6 +17,10 @@ interface PlanPricesResponse {
   currency: string | null
   lockedCurrency: string | null
   prices: PlanPriceAmounts
+  // Regional discount (purchasing power) on the plans listed in regularPrices; needs a local card and address.
+  discount?: { percent: number, country: string | null } | null
+  // Full prices of the discounted plans, for the strike-through.
+  regularPrices?: PlanPriceAmounts
 }
 
 export interface PlanAmounts {
@@ -117,5 +121,12 @@ export function usePlanPrices(orgId: Ref<string | undefined>) {
     return data.value && currency.value ? getUsdRatio(data.value.prices, productId, currency.value, interval) : null
   }
 
-  return { amountsFor, currencies, currency, failed, lockedCurrency, lockedCurrencyUnavailable, ready, reload, setCurrency, usdRatioFor }
+  const discount = computed(() => data.value?.discount ?? null)
+
+  // Full price of a regionally discounted plan in the shown currency; null when the plan is not discounted.
+  function regularAmountsFor(productId: string) {
+    return data.value?.regularPrices && currency.value ? getPlanAmounts(data.value.regularPrices, productId, currency.value) : null
+  }
+
+  return { amountsFor, currencies, currency, discount, failed, lockedCurrency, lockedCurrencyUnavailable, ready, regularAmountsFor, reload, setCurrency, usdRatioFor }
 }

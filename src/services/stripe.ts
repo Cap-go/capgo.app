@@ -266,6 +266,8 @@ export interface TrialPlanOption {
   planName: string
   amount: number
   currency: string
+  // Full price when a regional discount applies (it needs a card and billing address from that region).
+  regularAmount?: number
 }
 
 export interface BillingOverview {

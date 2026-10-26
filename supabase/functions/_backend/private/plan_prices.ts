@@ -1,13 +1,16 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { PriceTier } from '../utils/country_price_tier.ts'
 import type { BillingAccount } from '../utils/stripe_billing.ts'
 import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
 import { simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { currencyForCountry } from '../utils/country_currency.ts'
+import { FULL_PRICE_TIER } from '../utils/country_price_tier.ts'
 import { cloudlogErr, serializeError } from '../utils/logging.ts'
-import { getCheckoutPlanPrice, getPriceCurrencyAmounts, getStripeCustomerCurrency } from '../utils/stripe.ts'
+import { getCustomerBilling, getRequestPriceTier } from '../utils/regional_price.ts'
+import { getCheckoutPlanPrice, getPriceCurrencyAmounts, getStripe } from '../utils/stripe.ts'
 import { getBillingAccountForCustomer, getRequestCountry, isStripeConfiguredForAccount } from '../utils/stripe_billing.ts'
 import { supabaseClient } from '../utils/supabase.ts'
 
@@ -34,6 +37,21 @@ export function pickPriceCurrencies(prices: PlanPriceAmounts, keep: Set<string>)
   return Object.fromEntries(Object.entries(prices).map(([plan, { month, year }]) => [plan, { month: pick(month), year: pick(year) }]))
 }
 
+// Full prices of the plans the tier discounts (same amounts are not repeated), for the strike-through.
+export function getRegularPrices(prices: PlanPriceAmounts, fullPrices: PlanPriceAmounts): PlanPriceAmounts {
+  const differs = (plan: string) => {
+    const full = fullPrices[plan]
+    const sold = prices[plan]
+    return !!full && !!sold && (['month', 'year'] as const).some(interval => Object.entries(sold[interval]).some(([currency, amount]) => full[interval][currency] !== undefined && full[interval][currency] !== amount))
+  }
+  return Object.fromEntries(Object.entries(fullPrices).filter(([plan]) => differs(plan)))
+}
+
+// p85 → 15 (% off the full price).
+export function tierDiscountPercent(tier: PriceTier) {
+  return 100 - Number(tier.slice(1))
+}
+
 export function pickCurrency(currencies: string[], lockedCurrency: string | null, country: string | null) {
   if (lockedCurrency)
     return currencies.includes(lockedCurrency) ? lockedCurrency : null
@@ -49,12 +67,13 @@ interface PlanPriceRow {
   price_y_id: string
   price_m_id_us: string | null
   price_y_id_us: string | null
+  regional_price_ids: unknown
 }
 
 async function listPlans(c: Context, authorization: string): Promise<PlanPriceRow[]> {
   const { data: plans, error } = await supabaseClient(c, authorization)
     .from('plans')
-    .select('stripe_id, price_m_id, price_y_id, price_m_id_us, price_y_id_us')
+    .select('stripe_id, price_m_id, price_y_id, price_m_id_us, price_y_id_us, regional_price_ids')
   if (error)
     throw simpleError('plans_not_found', 'Cannot load plans', { error })
   return plans ?? []
@@ -62,7 +81,7 @@ async function listPlans(c: Context, authorization: string): Promise<PlanPriceRo
 
 // Changes whenever a plan switches to another Stripe price, so the cached catalog never outlives it.
 export function planPricesVersion(plans: PlanPriceRow[]) {
-  const ids = plans.flatMap(plan => [plan.stripe_id, plan.price_m_id, plan.price_y_id, plan.price_m_id_us ?? '', plan.price_y_id_us ?? '']).sort((a, b) => a.localeCompare(b)).join(',')
+  const ids = plans.flatMap(plan => [plan.stripe_id, plan.price_m_id, plan.price_y_id, plan.price_m_id_us ?? '', plan.price_y_id_us ?? '', JSON.stringify(plan.regional_price_ids ?? {})]).sort((a, b) => a.localeCompare(b)).join(',')
   let hash = 0x811C9DC5
   for (let i = 0; i < ids.length; i++) {
     hash ^= ids.charCodeAt(i)
@@ -71,13 +90,13 @@ export function planPricesVersion(plans: PlanPriceRow[]) {
   return hash.toString(36)
 }
 
-async function loadPlanPrices(c: Context, plans: PlanPriceRow[], billingAccount: BillingAccount): Promise<{ prices: PlanPriceAmounts, complete: boolean }> {
+async function loadPlanPrices(c: Context, plans: PlanPriceRow[], billingAccount: BillingAccount, tier: PriceTier): Promise<{ prices: PlanPriceAmounts, complete: boolean }> {
   let complete = true
   const entries = await Promise.all(plans.map(async ({ stripe_id }) => {
     try {
       const [month, year] = await Promise.all([
-        getCheckoutPlanPrice(c, stripe_id, 'month', billingAccount),
-        getCheckoutPlanPrice(c, stripe_id, 'year', billingAccount),
+        getCheckoutPlanPrice(c, stripe_id, 'month', billingAccount, tier),
+        getCheckoutPlanPrice(c, stripe_id, 'year', billingAccount, tier),
       ])
       // A null price means the lookup and its stored-ID fallback both failed: do not cache it.
       if (!month || !year)
@@ -97,19 +116,19 @@ async function loadPlanPrices(c: Context, plans: PlanPriceRow[], billingAccount:
   return { prices: Object.fromEntries(entries), complete }
 }
 
-async function getPlanPrices(c: Context, authorization: string, billingAccount: BillingAccount) {
+async function getPlanPrices(c: Context, authorization: string, billingAccount: BillingAccount, tier: PriceTier) {
   const plans = await listPlans(c, authorization)
   const cache = new CacheHelper(c)
   const version = planPricesVersion(plans)
-  const key = cache.buildRequest(PLAN_PRICES_CACHE_PATH, { account: billingAccount, version })
-  const degradedKey = cache.buildRequest(PLAN_PRICES_CACHE_PATH, { account: billingAccount, version, degraded: '1' })
+  const key = cache.buildRequest(PLAN_PRICES_CACHE_PATH, { account: billingAccount, tier, version })
+  const degradedKey = cache.buildRequest(PLAN_PRICES_CACHE_PATH, { account: billingAccount, tier, version, degraded: '1' })
   const cached = await cache.matchJson<PlanPriceAmounts>(key, { timeoutMs: 200 })
   if (cached)
     return { prices: cached, complete: true }
   const degraded = await cache.matchJson<PlanPriceAmounts>(degradedKey, { timeoutMs: 200 })
   if (degraded)
     return { prices: degraded, complete: false }
-  const { prices, complete } = await loadPlanPrices(c, plans, billingAccount)
+  const { prices, complete } = await loadPlanPrices(c, plans, billingAccount, tier)
   // Never write a partial catalog to the main key: it expires within a minute and the failed plans are retried.
   await cache.putJson(complete ? key : degradedKey, prices, complete ? PLAN_PRICES_TTL_SECONDS : PLAN_PRICES_DEGRADED_TTL_SECONDS, { timeoutMs: 200 })
   return { prices, complete }
@@ -139,16 +158,21 @@ app.get('/', middlewareAuth, async (c) => {
 
   const billingAccount = org.customer_id ? await getBillingAccountForCustomer(c, org.customer_id) : 'ee'
   if (!isStripeConfiguredForAccount(c, billingAccount))
-    return c.json({ complete: true, currencies: [], currency: null, lockedCurrency: null, prices: {} })
+    return c.json({ complete: true, currencies: [], currency: null, lockedCurrency: null, prices: {}, discount: null, regularPrices: {} })
 
+  const country = getRequestCountry(c)
   // Fail closed: an unknown customer currency must not unlock currencies checkout would reject.
-  const [{ prices, complete }, lockedCurrency] = await Promise.all([
-    getPlanPrices(c, authorization, billingAccount),
-    org.customer_id ? getStripeCustomerCurrency(c, org.customer_id, billingAccount) : null,
+  const customerBilling = org.customer_id ? await getCustomerBilling(getStripe(c, billingAccount), org.customer_id) : { currency: null, countries: [] }
+  const lockedCurrency = customerBilling.currency
+  // Regional discount (Solo): exactly the tier checkout sells, from the visitor, billing address and card countries.
+  const tier = getRequestPriceTier(c, customerBilling.countries)
+  const [{ prices, complete }, full] = await Promise.all([
+    getPlanPrices(c, authorization, billingAccount, tier),
+    tier === FULL_PRICE_TIER ? null : getPlanPrices(c, authorization, billingAccount, FULL_PRICE_TIER),
   ])
   // A pinned customer can only check out in its own currency; empty when the catalog lacks it.
   const common = getCommonCurrencies(prices)
-  const country = getRequestCountry(c)
+  // The tier sets the price; within it every currency is at the market rate, so any of them can be picked.
   const currencies = lockedCurrency ? common.filter(currency => currency === lockedCurrency) : common
   return c.json({
     // False when some Stripe prices failed to load: the page offers a retry and keeps checkout disabled.
@@ -159,5 +183,8 @@ app.get('/', middlewareAuth, async (c) => {
     lockedCurrency,
     // USD stays in: the page derives each currency's ratio from it (Enterprise extra MAU).
     prices: pickPriceCurrencies(prices, new Set([...currencies, DEFAULT_CURRENCY])),
+    // Regional discount shown on the discounted plans; it requires a card and billing address from there.
+    discount: tier === FULL_PRICE_TIER ? null : { percent: tierDiscountPercent(tier), country },
+    regularPrices: full ? pickPriceCurrencies(getRegularPrices(prices, full.prices), new Set([...currencies, DEFAULT_CURRENCY])) : {},
   })
 })
