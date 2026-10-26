@@ -9,10 +9,12 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconCheckCircle from '~icons/lucide/check-circle'
+import IconInfo from '~icons/lucide/info'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import Spinner from '~/components/Spinner.vue'
 import { buildDemoBundleInstallStats, useBundleInstallStats } from '~/composables/useBundleInstallStats'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
+import { formatLegacyPluginVersions } from '~/composables/useReleaseLive'
 import { createChartScales, createLegendConfig } from '~/services/chartConfig'
 import { useConsole } from '~/services/console'
 import { formatLocalDateShort } from '~/services/date'
@@ -66,6 +68,19 @@ const demoStats = computed(() => buildDemoBundleInstallStats(days.value))
 const effectiveStats = computed(() => props.forceDemo ? demoStats.value : stats.value)
 
 const bundles = computed(() => effectiveStats.value?.bundles ?? [])
+// Failed update checks from old updater plugins, already left out of the
+// failure counts: say so, and how to get exact data.
+const legacyNoticeId = `${useId()}-legacy-notice`
+const legacyCheckFailures = computed(() => {
+  const value = effectiveStats.value?.legacy_check_failures
+  if (!value || value.excluded <= 0)
+    return null
+  return t('bundle-install-legacy-plugin-help', {
+    count: formatCount(value.excluded),
+    versions: formatLegacyPluginVersions(value.plugin_versions),
+    version: value.fixed_in,
+  })
+})
 const hasData = computed(() => bundles.value.some(bundle => bundle.install + bundle.fail > 0 || bundle.timing.samples > 0))
 // Without timing samples the chart would be empty while installs and failures
 // exist, so the dense card opens on the per-bundle table instead.
@@ -325,6 +340,15 @@ watch(
       </div>
     </div>
 
+    <p
+      v-if="legacyCheckFailures && !dense"
+      class="flex gap-2 px-4 py-3 text-xs border rounded-xl border-blue-200 bg-blue-50 text-slate-600 dark:border-blue-800 dark:bg-blue-900/20 dark:text-slate-300"
+      data-testid="bundle-install-legacy-plugin"
+    >
+      <IconInfo class="w-4 h-4 shrink-0 text-blue-600 dark:text-blue-400" aria-hidden="true" />
+      <span>{{ legacyCheckFailures }}</span>
+    </p>
+
     <div v-if="statsLoading && !forceDemo && !stats && !statsError" class="flex items-center justify-center bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10" :class="dense ? 'h-[256px]' : 'h-48'">
       <Spinner size="w-10 h-10" />
     </div>
@@ -353,6 +377,10 @@ watch(
       <p class="text-sm text-center max-w-lg">
         {{ t('bundle-install-stats-no-data-help') }}
       </p>
+      <!-- The dense header icon is not shown without data: explain here instead. -->
+      <p v-if="legacyCheckFailures && dense" class="max-w-lg px-4 text-xs text-center" data-testid="bundle-install-legacy-plugin">
+        {{ legacyCheckFailures }}
+      </p>
     </div>
 
     <template v-else>
@@ -365,6 +393,24 @@ watch(
           <h3 class="text-base font-semibold truncate text-slate-950 dark:text-white">
             {{ activeDenseView === 'table' ? t('bundle-install-stats-title') : t('bundle-install-chart-timing-title') }}
           </h3>
+          <span v-if="legacyCheckFailures" class="relative flex group shrink-0" data-testid="bundle-install-legacy-plugin">
+            <!-- A focusable trigger so keyboard users can read the notice, not only mouse users. -->
+            <button
+              type="button"
+              class="flex rounded text-blue-600 dark:text-blue-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              :aria-label="t('release-live-legacy-plugin-title')"
+              :aria-describedby="legacyNoticeId"
+            >
+              <IconInfo class="w-4 h-4" aria-hidden="true" />
+            </button>
+            <span
+              :id="legacyNoticeId"
+              role="tooltip"
+              class="absolute right-0 z-20 hidden p-3 mt-2 text-xs font-normal bg-white border rounded-lg shadow-lg top-full w-72 border-blue-200 text-slate-600 group-hover:block group-focus-within:block dark:border-blue-800 dark:bg-slate-800 dark:text-slate-300"
+            >
+              {{ legacyCheckFailures }}
+            </span>
+          </span>
           <span
             v-if="forceDemo"
             class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-slate-300 bg-slate-100 text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300"
