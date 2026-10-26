@@ -361,6 +361,16 @@ describe('delta storage v2 legacy guards', () => {
     })
   })
 
+  it('keeps an active delete lease when a page is finished', async () => {
+    await withConfig({ gc_enabled: true }, async (client) => {
+      await client.query(`UPDATE public.delta_gc_state SET lease_until = clock_timestamp() + interval '2 seconds' WHERE app_id = $1`, [APP_ID])
+      await client.query('SELECT public.delta_gc_finish($1, NULL, NULL)', [APP_ID])
+      await client.query(`SELECT public.delta_gc_finish($1, NULL, 'boom')`, [APP_ID])
+      const lease = await client.query('SELECT lease_until > clock_timestamp() AS active FROM public.delta_gc_state WHERE app_id = $1', [APP_ID])
+      expect(lease.rows[0].active).toBe(true)
+    })
+  })
+
   it('caps the delete lease at 2 seconds', async () => {
     await withConfig({ gc_enabled: true }, async (client) => {
       await client.query(`UPDATE public.app_versions SET storage_provider = 'r2' WHERE app_id = $1 AND storage_provider = 'r2-direct'`, [APP_ID])

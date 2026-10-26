@@ -593,7 +593,8 @@ AS $$
         WHEN COALESCE(pg_catalog.cardinality(pending_orgs), 0) > 0 THEN now()
         ELSE now() + interval '7 days'
       END,
-      lease_until = NULL,
+      -- lease_until is left alone: an unconfirmed delete keeps it until it
+      -- expires; only delta_gc_end_delete releases it early.
       last_run_at = now(),
       last_error = p_error
   WHERE app_id = p_app_id
