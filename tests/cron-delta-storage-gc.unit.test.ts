@@ -244,8 +244,11 @@ describe('delta storage GC worker', () => {
 
     expect(mocks.restoreFromTrashIfMissing).toHaveBeenCalledOnce()
     expect(mocks.restoreFromTrashIfMissing).toHaveBeenCalledWith(expect.anything(), `${prefix}a.js`)
-    const settled = mocks.execute.mock.calls.map(([query]) => sqlText(query)).filter(text => text.includes('delta_gc_settle'))
-    expect(settled).toHaveLength(2)
+    const settled = mocks.execute.mock.calls
+      .map(([query]) => new PgDialect().sqlToQuery(query))
+      .filter(query => query.sql.includes('delta_gc_settle'))
+    // The restored object stays recorded for later checks; the unreferenced one goes.
+    expect(settled.map(query => query.params)).toEqual([[`${prefix}a.js`, true], [`${prefix}b.js`, false]])
   })
 
   it('stops an app page after an unconfirmed delete so no later batch releases the lease', async () => {

@@ -1507,16 +1507,19 @@ export type Database = {
       delta_gc_unsettled_deletes: {
         Row: {
           app_id: string
+          checks: number
           path: string
           recorded_at: string
         }
         Insert: {
           app_id: string
+          checks?: number
           path: string
           recorded_at?: string
         }
         Update: {
           app_id?: string
+          checks?: number
           path?: string
           recorded_at?: string
         }
@@ -3897,7 +3900,10 @@ export type Database = {
         Args: { p_app_id: string; p_paths: string[] }
         Returns: undefined
       }
-      delta_gc_settle: { Args: { p_path: string }; Returns: undefined }
+      delta_gc_settle: {
+        Args: { p_path: string; p_referenced?: boolean }
+        Returns: undefined
+      }
       delta_gc_unreferenced_paths: {
         Args: { p_paths: string[] }
         Returns: string[]

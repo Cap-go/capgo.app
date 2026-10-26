@@ -384,9 +384,25 @@ describe('delta storage v2 legacy guards', () => {
       const claimed = await client.query<{ path: string, referenced: boolean }>('SELECT path, referenced FROM public.delta_gc_claim_unsettled(50) ORDER BY path')
       expect(claimed.rows.filter(row => row.path.startsWith(deltaPath(''))).map(row => [row.path, row.referenced]))
         .toEqual([[deltaPath('again.js'), true], [deltaPath('gone.js'), false]])
-      await client.query('SELECT public.delta_gc_settle($1)', [deltaPath('gone.js')])
+      await client.query('SELECT public.delta_gc_settle($1, false)', [deltaPath('gone.js')])
       const left = await client.query('SELECT path FROM public.delta_gc_unsettled_deletes WHERE path LIKE $1', [`${deltaPath('')}%`])
       expect(left.rows.map(row => row.path)).toEqual([deltaPath('again.js')])
+
+      // A referenced object seen present is kept for later checks: a DELETE
+      // applied after this check is still caught by the 1 hour / 1 day ones.
+      for (const [check, wait] of [[1, '1 hour'], [2, '1 day']] as const) {
+        await client.query('SELECT public.delta_gc_settle($1, true)', [deltaPath('again.js')])
+        const kept = await client.query<{ checks: number }>('SELECT checks FROM public.delta_gc_unsettled_deletes WHERE path = $1', [deltaPath('again.js')])
+        expect(kept.rows[0].checks).toBe(check)
+        const early = await client.query('SELECT path FROM public.delta_gc_claim_unsettled(50) WHERE path = $1', [deltaPath('again.js')])
+        expect(early.rows).toEqual([])
+        await client.query(`UPDATE public.delta_gc_unsettled_deletes SET recorded_at = now() - interval '${wait}' - interval '1 minute' WHERE path = $1`, [deltaPath('again.js')])
+        const due = await client.query('SELECT path FROM public.delta_gc_claim_unsettled(50) WHERE path = $1', [deltaPath('again.js')])
+        expect(due.rows).toHaveLength(1)
+      }
+      await client.query('SELECT public.delta_gc_settle($1, true)', [deltaPath('again.js')])
+      const done = await client.query('SELECT 1 FROM public.delta_gc_unsettled_deletes WHERE path = $1', [deltaPath('again.js')])
+      expect(done.rows).toEqual([])
     })
   })
 

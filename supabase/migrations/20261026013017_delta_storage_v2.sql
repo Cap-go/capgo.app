@@ -610,6 +610,10 @@ GRANT EXECUTE ON FUNCTION public.delta_gc_finish(text, text, text, boolean) TO s
 CREATE TABLE public.delta_gc_unsettled_deletes (
   path text PRIMARY KEY,
   app_id character varying NOT NULL,
+  -- Checks that found the object present; settled after the third
+  -- (about 1 minute, 1 hour and 1 day after the delete, inside the 7-day
+  -- trash retention), so a very late DELETE is still repaired.
+  checks integer NOT NULL DEFAULT 0,
   recorded_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE public.delta_gc_unsettled_deletes OWNER TO postgres;
@@ -626,7 +630,7 @@ SET search_path = ''
 AS $$
   INSERT INTO public.delta_gc_unsettled_deletes (path, app_id)
   SELECT DISTINCT p.path, p_app_id FROM pg_catalog.unnest(p_paths) AS p (path)
-  ON CONFLICT (path) DO UPDATE SET recorded_at = now()
+  ON CONFLICT (path) DO UPDATE SET recorded_at = now(), checks = 0
 $$;
 ALTER FUNCTION public.delta_gc_record_unsettled(text, text[]) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.delta_gc_record_unsettled(text, text[]) FROM PUBLIC;
@@ -645,7 +649,11 @@ BEGIN
   WITH due AS (
     SELECT u.path
     FROM public.delta_gc_unsettled_deletes AS u
-    WHERE u.recorded_at < now() - interval '1 minute'
+    WHERE u.recorded_at < now() - CASE u.checks
+      WHEN 0 THEN interval '1 minute'
+      WHEN 1 THEN interval '1 hour'
+      ELSE interval '1 day'
+    END
     ORDER BY u.recorded_at
     LIMIT GREATEST(COALESCE(p_limit, 20), 1)
     FOR UPDATE SKIP LOCKED
@@ -666,17 +674,23 @@ ALTER FUNCTION public.delta_gc_claim_unsettled(integer) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.delta_gc_claim_unsettled(integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.delta_gc_claim_unsettled(integer) TO service_role;
 
-CREATE FUNCTION public.delta_gc_settle(p_path text)
+-- p_referenced: the object is referenced again and was present (or restored). It is re-checked twice
+-- more before the record goes; an unreferenced path is dropped at once.
+CREATE FUNCTION public.delta_gc_settle(p_path text, p_referenced boolean DEFAULT false)
 RETURNS void
 LANGUAGE sql
 SECURITY DEFINER
 SET search_path = ''
 AS $$
-  DELETE FROM public.delta_gc_unsettled_deletes WHERE path = p_path
+  DELETE FROM public.delta_gc_unsettled_deletes
+  WHERE path = p_path AND (NOT p_referenced OR checks >= 2);
+  UPDATE public.delta_gc_unsettled_deletes
+  SET checks = checks + 1, recorded_at = now()
+  WHERE path = p_path AND p_referenced;
 $$;
-ALTER FUNCTION public.delta_gc_settle(text) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.delta_gc_settle(text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.delta_gc_settle(text) TO service_role;
+ALTER FUNCTION public.delta_gc_settle(text, boolean) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_gc_settle(text, boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.delta_gc_settle(text, boolean) TO service_role;
 
 -- App deletion only removes the current owner's prefix (on_app_delete), and
 -- the cascade drops delta_files, which is how GC finds former owners'

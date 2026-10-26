@@ -188,9 +188,10 @@ async function collectAppPage(c: Context, db: Database, app: ClaimedApp, run: Gc
 type UnsettledDelete = Record<string, unknown> & { path: string, referenced: boolean }
 
 /**
- * A delete whose outcome was unknown may have landed after an upload reused
- * the key. Once R2 has long settled it, restore a referenced, missing object
- * from its trash copy; unreferenced paths are left to the normal pass.
+ * A delete whose outcome was unknown may land after an upload reused the key.
+ * Referenced objects are checked about 1 minute, 1 hour and 1 day after the
+ * delete and restored from their trash copy whenever missing; unreferenced
+ * paths are left to the normal pass.
  */
 async function repairUnsettledDeletes(c: Context, db: Database, run: GcRun) {
   const due = await db.execute<UnsettledDelete>(sql`SELECT * FROM public.delta_gc_claim_unsettled(20)`)
@@ -202,8 +203,10 @@ async function repairUnsettledDeletes(c: Context, db: Database, run: GcRun) {
       : 'unreferenced'
     if (outcome === 'timeout')
       run.stalled = true
+    // A referenced object is re-checked over a day before the record goes,
+    // so a DELETE R2 applies very late is still repaired from the trash.
     if (outcome === 'present' || outcome === 'restored' || outcome === 'unreferenced')
-      await db.execute(sql`SELECT public.delta_gc_settle(${item.path})`)
+      await db.execute(sql`SELECT public.delta_gc_settle(${item.path}, ${outcome !== 'unreferenced'})`)
     else
       cloudlog({ requestId: c.get('requestId'), message: 'delta gc unsettled delete kept for retry', path: item.path, outcome })
   }
