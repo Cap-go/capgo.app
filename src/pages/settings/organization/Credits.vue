@@ -990,7 +990,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
                       : 'border border-blue-200 bg-white text-blue-700 hover:border-blue-400 hover:bg-blue-50 dark:border-blue-500/60 dark:bg-gray-900 dark:text-blue-200 dark:hover:border-blue-400 dark:hover:bg-blue-900/40'"
                     @click="selectTopUpQuantity(amount)"
                   >
-                    ${{ amount }}
+                    {{ formatNumber(amount, { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol', maximumFractionDigits: 0 }) }}
                   </button>
                 </div>
               </div>

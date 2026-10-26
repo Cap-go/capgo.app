@@ -851,13 +851,15 @@ async function processQueue(c: Context, db: Awaited<ReturnType<typeof getPgClien
   }
 
   const results = await processQueueMessageChunks(c, db, queueName, messagesToProcess, processConcurrency, waitForCompletion)
-  await persistQueueCfIds(c, db, queueName, results)
 
   // Batch remove all messages that have succeeded.
   const [successMessages, messagesFailed] = results.reduce((acc, result) => {
     acc[isSuccessfulQueueResult(result) ? 0 : 1].push(result)
     return acc
   }, [[], []] as [typeof results, typeof results])
+
+  // Successful messages are deleted below, so only failed ones keep a CF ID trail.
+  await persistQueueCfIds(c, db, queueName, messagesFailed)
 
   await deleteUncheckpointedSuccessMessages(c, db, queueName, successMessages)
   const actionableFailureCount = await reportQueueFailures(c, queueName, messagesFailed)

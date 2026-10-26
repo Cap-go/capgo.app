@@ -82,6 +82,7 @@ const columns = ref<TableColumn[]>([
     key: 'file_name',
     mobile: true,
     head: true,
+    sortable: true,
     class: 'max-w-[20rem]',
     renderFunction: (item: ManifestEntry) => h('span', {
       class: 'block truncate text-slate-800 dark:text-white',
@@ -92,6 +93,7 @@ const columns = ref<TableColumn[]>([
     label: t('size'),
     key: 'file_size',
     mobile: false,
+    sortable: true,
     displayFunction: (item: ManifestEntry) => {
       if (typeof item.file_size === 'number' && item.file_size > 0)
         return formatBytes(item.file_size)
@@ -102,6 +104,7 @@ const columns = ref<TableColumn[]>([
     label: t('checksum'),
     key: 'file_hash',
     mobile: false,
+    sortable: true,
     class: 'max-w-[16rem]',
     renderFunction: (item: ManifestEntry) => h('span', {
       class: 'block truncate font-mono text-xs text-slate-600 dark:text-slate-300',
@@ -133,7 +136,20 @@ const displayEntries = computed(() => {
   return summaryEntries.value.filter(entry => entry.file_name.toLowerCase().includes(searchLower.value) || entry.file_hash.toLowerCase().includes(searchLower.value))
 })
 
-const total = computed(() => displayEntries.value.length)
+const sortedEntries = computed(() => {
+  const sortColumn = columns.value.find(col => col.sortable === 'asc' || col.sortable === 'desc')
+  if (!sortColumn)
+    return displayEntries.value
+  const direction = sortColumn.sortable === 'asc' ? 1 : -1
+  const key = sortColumn.key as 'file_name' | 'file_size' | 'file_hash'
+  return [...displayEntries.value].sort((a, b) => {
+    if (key === 'file_size')
+      return ((a.file_size ?? 0) - (b.file_size ?? 0)) * direction
+    return a[key].localeCompare(b[key]) * direction
+  })
+})
+
+const total = computed(() => sortedEntries.value.length)
 
 function formatSizeLabel(entries: ManifestEntry[]): string {
   if (entries.length === 0)
@@ -533,8 +549,9 @@ watch(
             <div class="px-2 pb-2 relative">
               <DataTable
                 v-model:search="search" v-model:current-page="currentPage" v-model:columns="columns"
-                :total="total" :element-list="displayEntries"
+                :total="total" :element-list="sortedEntries"
                 :is-loading="tableLoading"
+                :auto-reload="false"
                 :search-placeholder="t('search-by-name')"
                 @reload="reloadManifest"
                 @reset="reloadManifest"
