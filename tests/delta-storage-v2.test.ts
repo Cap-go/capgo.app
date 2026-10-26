@@ -563,6 +563,14 @@ describe('delta storage v2 legacy guards', () => {
       await client.query('SELECT public.delta_gc_confirm_deleted($1::text[])', [[paths[0]]])
       const left = await client.query('SELECT path FROM public.delta_gc_unsettled_deletes WHERE path = ANY($1::text[])', [paths])
       expect(left.rows.map(row => row.path)).toEqual([paths[1]])
+
+      // An overlapping run cannot start a batch while this lease is active.
+      const overlapping = await client.query<{ paths: string[] | null }>('SELECT public.delta_gc_begin_delete($1, $2::text[], 1000) AS paths', [APP_ID, [deltaPath('intent-c.js')]])
+      expect(overlapping.rows[0].paths).toBeNull()
+      // After the lease, a path whose earlier delete is unsettled waits for its repair check.
+      await client.query('SELECT public.delta_gc_end_delete($1)', [APP_ID])
+      const retry = await client.query<{ paths: string[] }>('SELECT public.delta_gc_begin_delete($1, $2::text[], 1000) AS paths', [APP_ID, [paths[1], deltaPath('intent-c.js')]])
+      expect(retry.rows[0].paths).toEqual([deltaPath('intent-c.js')])
     })
   })
 

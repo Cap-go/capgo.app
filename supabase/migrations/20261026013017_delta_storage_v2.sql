@@ -631,7 +631,8 @@ REVOKE ALL ON FUNCTION public.delta_gc_deletable_paths(text[], jsonb) FROM PUBLI
 GRANT EXECUTE ON FUNCTION public.delta_gc_deletable_paths(text[], jsonb) TO service_role;
 
 -- The only step that permits R2 deletes. Returns the paths the caller may
--- delete before the returned lease expires, or an empty array.
+-- delete before the returned lease expires, an empty array, or NULL when an
+-- earlier lease is still active (retry the page later).
 CREATE FUNCTION public.delta_gc_begin_delete(p_app_id text, p_paths text[], p_lease_ms integer DEFAULT 2000, p_aliases jsonb DEFAULT '{}'::jsonb)
 RETURNS text[]
 LANGUAGE plpgsql
@@ -656,8 +657,23 @@ BEGIN
     OR public.delta_app_has_unconverted_references(p_app_id) THEN
     RETURN '{}'::text[];
   END IF;
+  -- An earlier batch's lease still covers deletes that may be in flight
+  -- (overlapping runs): NULL asks the caller to list the page again later,
+  -- so this batch can neither release that lease nor clear its records.
+  IF EXISTS (
+    SELECT 1 FROM public.delta_gc_state
+    WHERE app_id = p_app_id AND lease_until > pg_catalog.clock_timestamp()
+  ) THEN
+    RETURN NULL;
+  END IF;
 
-  v_paths := public.delta_gc_deletable_paths(p_paths, p_aliases);
+  -- A path with an unsettled earlier delete waits for the repair check:
+  -- confirming a new delete would erase the record of the earlier one.
+  v_paths := ARRAY(
+    SELECT p.path
+    FROM pg_catalog.unnest(public.delta_gc_deletable_paths(p_paths, p_aliases)) AS p (path)
+    WHERE NOT EXISTS (SELECT 1 FROM public.delta_gc_unsettled_deletes AS u WHERE u.path = p.path)
+  );
   IF COALESCE(pg_catalog.array_length(v_paths, 1), 0) = 0 THEN
     RETURN '{}'::text[];
   END IF;
@@ -982,9 +998,17 @@ BEGIN
     RETURN NULL;
   END IF;
 
+  IF EXISTS (
+    SELECT 1 FROM public.delta_gc_orphan_prefixes
+    WHERE prefix = p_prefix AND lease_until > pg_catalog.clock_timestamp()
+  ) THEN
+    RETURN NULL;
+  END IF;
+
   SELECT COALESCE(pg_catalog.array_agg(DISTINCT p.path), '{}'::text[]) INTO v_paths
   FROM pg_catalog.unnest(public.delta_gc_deletable_paths(p_paths, p_aliases)) AS p (path)
-  WHERE pg_catalog.starts_with(p.path, p_prefix);
+  WHERE pg_catalog.starts_with(p.path, p_prefix)
+    AND NOT EXISTS (SELECT 1 FROM public.delta_gc_unsettled_deletes AS u WHERE u.path = p.path);
   IF COALESCE(pg_catalog.array_length(v_paths, 1), 0) = 0 THEN
     RETURN '{}'::text[];
   END IF;
