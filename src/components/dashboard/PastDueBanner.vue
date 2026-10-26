@@ -17,11 +17,11 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconExclamationTriangle from '~icons/heroicons/exclamation-triangle'
 import CardFormModal from '~/components/billing/CardFormModal.vue'
+import { getLocalConfig, stripeEnabled } from '~/services/console'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
 import { pushEvent } from '~/services/posthog'
 import { formatStripeAmount, getPastDueStatus, payOpenInvoice } from '~/services/stripe'
-import { getLocalConfig, stripeEnabled } from '~/services/supabase'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
 
 const { t } = useI18n()
@@ -55,7 +55,7 @@ watch([orgId, () => !!stripeEnabled.value], async ([id, enabled]) => {
     return
   pastDue.value = status
   if (status?.past_due) {
-    pushEvent('past_due_banner_shown', config.supaHost, {
+    pushEvent('past_due_banner_shown', config.apiHost, {
       org_id: id,
       attempt_count: status.invoice?.attempt_count ?? 0,
     })
@@ -104,12 +104,12 @@ async function retryPayment() {
 async function payNow() {
   if (isPaying.value)
     return
-  pushEvent('past_due_banner_pay_clicked', config.supaHost, { org_id: orgId.value })
+  pushEvent('past_due_banner_pay_clicked', config.apiHost, { org_id: orgId.value })
   await retryPayment()
 }
 
 function updateCard() {
-  pushEvent('past_due_banner_update_card_clicked', config.supaHost, { org_id: orgId.value })
+  pushEvent('past_due_banner_update_card_clicked', config.apiHost, { org_id: orgId.value })
   cardModalMode.value = 'setup'
 }
 

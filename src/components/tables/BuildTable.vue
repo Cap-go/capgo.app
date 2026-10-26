@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Ref } from 'vue'
 import type { TableColumn } from '../comp_def'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { Capacitor } from '@capacitor/core'
 import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -11,8 +11,8 @@ import IconEye from '~icons/heroicons/eye'
 import BuilderIntroduction from '~/components/dashboard/BuilderIntroduction.vue'
 import { hasSupportedBuilderTodoList } from '~/services/builderOnboardingChecklist'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -30,7 +30,7 @@ type Platform = 'ios' | 'android'
 
 const { t } = useI18n()
 const router = useRouter()
-const supabase = useSupabase()
+const capgo = useConsole()
 const isMobile = Capacitor.isNativePlatform()
 const dialogStore = useDialogV2Store()
 const offset = 20
@@ -82,7 +82,7 @@ async function countBuildRequests(platform?: Platform): Promise<number | null> {
   if (!orgId || !props.appId)
     return null
 
-  let query = supabase
+  let query = capgo
     .from('build_requests')
     .select('id', { count: 'exact', head: true })
     .eq('owner_org', orgId)
@@ -142,7 +142,7 @@ async function getData() {
 
   isLoading.value = true
   try {
-    let query = supabase
+    let query = capgo
       .from('build_requests')
       .select('*', { count: 'exact' })
       .eq('app_id', appId)
@@ -196,7 +196,7 @@ async function loadBuildDurations(builds: Element[], orgId: string): Promise<Rec
   // Scope to the current org: build_logs.build_id is only unique per
   // (build_id, org_id), so an unscoped lookup could pick up a colliding
   // row from another org the user can read.
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('build_logs')
     .select('build_id, build_time_unit')
     .eq('org_id', orgId)
@@ -414,6 +414,7 @@ watch(showSetupFlow, (newValue) => {
       :key="props.appId"
       :setup-app-id="props.appId"
       initial-checklist-path="builder"
+      hide-footer
       show-checklist
       onboarding
     />

@@ -47,11 +47,8 @@ function addConnectOrigin(sources: Set<string>, raw: string) {
 
 function getDeployTimeConnectOverrides(): string[] {
   const overrides: string[] = []
-  const supaUrl = process.env.SUPA_URL
   const apiDomain = process.env.API_DOMAIN
 
-  if (typeof supaUrl === 'string' && supaUrl)
-    overrides.push(supaUrl)
   if (typeof apiDomain === 'string' && apiDomain)
     overrides.push(apiDomain)
 
@@ -65,10 +62,6 @@ function getConfiguredConnectSources(dev: boolean): string[] {
     : (['prod'] as const)
 
   for (const env of envKeys) {
-    const supaUrl = configs.supa_url?.[env]
-    if (typeof supaUrl === 'string')
-      addConnectOrigin(sources, supaUrl)
-
     const apiDomain = configs.api_domain?.[env]
     if (typeof apiDomain === 'string')
       addConnectOrigin(sources, apiDomain)
@@ -126,8 +119,6 @@ export function buildConsoleContentSecurityPolicy(options: ConsoleCspOptions = {
   const connectSrc = joinSources([
     '\'self\'',
     'blob:',
-    'https://*.supabase.co',
-    'wss://*.supabase.co',
     'https://psthg.capgo.app',
     'https://eu.posthog.com',
     'https://eu.i.posthog.com',

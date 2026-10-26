@@ -8,7 +8,9 @@ import React from 'react'
 import { resolveOwnerOrgId } from '../../analytics/org-resolver.js'
 import { flushDeferredCommandInvocation, trackEvent } from '../../analytics/track.js'
 import { resolveBuilderChecklistPlatform } from '../../init/builder-setup.js'
-import { getConfig } from '../../utils.js'
+import { printInitCompletionNotice } from '../../init/completion-notice.js'
+import type { NoticeOutputOptions } from '../../onboarding/setup-notice-policy.js'
+import { getConfig, getLocalConfig, resolveCapgoApiHosts } from '../../utils.js'
 import { createBuilderAppSelectionServices, getAppSelectionSuggestion } from './app-selection.js'
 import { appendInternalLog, startInternalLog } from '../../support/internal-log.js'
 import { newBuilderJourneyId } from './journey.js'
@@ -28,7 +30,7 @@ import type { BuilderProjectPrompts } from './project-selection.js'
 import type { AndroidOnboardingStep } from './android/types.js'
 import type { OnboardingResult, OnboardingStep } from './types.js'
 import type { AppSelectionEvent } from './ui/app-selection-gate.js'
-export interface OnboardingBuilderOptions {
+export interface OnboardingBuilderOptions extends NoticeOutputOptions {
   analytics?: boolean
   /** Exact app selected by a caller handing off an assigned Builder checklist. */
   appId?: string
@@ -345,7 +347,8 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
   const journeyId = newBuilderJourneyId()
   // A verified Builder-only init handoff uses the same progress events, while
   // leaving self-update disabled so it cannot re-execute the wrapping init.
-  const analyticsEnabled = (options.enableSelfUpdate === true || options.appId !== undefined) && options.analytics !== false
+  const buildInitEntrypoint = options.enableSelfUpdate === true || options.appId !== undefined
+  const analyticsEnabled = buildInitEntrypoint && options.analytics !== false
   const candidateApiKey = resolveBuilderCandidateKey(options.apikey)
   const loginServices = createBuilderLoginServices({ apiHost: options.apiHost })
   const appSelectionServices = createBuilderAppSelectionServices({ apiHost: options.apiHost })
@@ -586,5 +589,13 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
     }
   }
 
+  // `init` returns right after handing off here, so this prints its closing
+  // setup notice once for both entrypoints. Commands that reach the wizard as a
+  // sub-step (`bundle upload`, `build credentials manage`) do not print it.
+  const noticeApikey = authenticatedApiKey ?? candidateApiKey
+  if (buildInitEntrypoint && noticeApikey) {
+    const [{ apiHost }, { hostWeb }] = await Promise.all([resolveCapgoApiHosts(options.apiHost), getLocalConfig(true)])
+    await printInitCompletionNotice(appId, { apiHost, apikey: noticeApikey }, hostWeb, options)
+  }
   await finishBuildReplay()
 }

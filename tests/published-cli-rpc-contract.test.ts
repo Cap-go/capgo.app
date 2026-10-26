@@ -10,7 +10,7 @@ import type { PublishedCliRpcCall } from '../scripts/published-cli-contract.ts'
  * CI job: CRITICAL — Published CLI / do not break old CLI
  * Do NOT invert these tests to expect permission denied (42501). Success is the contract.
  */
-import type { Database } from '../src/types/supabase.types'
+import type { Database } from '../src/types/database.types'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createClient } from '@supabase/supabase-js'

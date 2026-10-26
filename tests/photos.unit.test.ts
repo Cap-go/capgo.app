@@ -28,8 +28,8 @@ vi.mock('@capacitor/filesystem', () => ({
   },
 }))
 
-vi.mock('~/services/supabase', () => ({
-  useSupabase: () => ({
+vi.mock('~/services/console', () => ({
+  useConsole: () => ({
     from: vi.fn(),
     storage: {
       from: vi.fn(),

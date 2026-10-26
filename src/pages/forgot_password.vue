@@ -9,14 +9,14 @@ import VueTurnstile from 'vue-turnstile'
 import iconEmail from '~icons/oui/email?raw'
 import iconPassword from '~icons/ph/key?raw'
 import { authGhostButtonClass, authPanelClass, authPrimaryButtonClass } from '~/components/auth/pageStyles'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { openSupport } from '~/services/support'
 import { useDialogV2Store } from '~/stores/dialogv2'
 
 const { t } = useI18n()
 const router = useRouter()
 const route = useRoute('/forgot_password')
-const supabase = useSupabase()
+const capgo = useConsole()
 const dialogStore = useDialogV2Store()
 const step = ref(1)
 const turnstileToken = ref('')
@@ -62,7 +62,7 @@ function finishWithError(message: string, error?: unknown) {
 async function step1(form: { email: string }) {
   const redirectTo = `${import.meta.env.VITE_APP_URL}/forgot_password?step=2`
   // console.log('redirect', redirectTo)
-  const { error } = await supabase.auth.resetPasswordForEmail(form.email, { redirectTo, captchaToken: turnstileToken.value })
+  const { error } = await capgo.auth.resetPasswordForEmail(form.email, { redirectTo, captchaToken: turnstileToken.value })
   if (error) {
     if (error.message.includes('captcha')) {
       toast.error(t('captcha-fail'))
@@ -83,14 +83,14 @@ async function step2(form: { password: string, password_confirm: string }) {
     return
   }
   if (accessToken && refreshToken) {
-    const { error: sessionError } = await supabase.auth.setSession({ refresh_token: refreshToken, access_token: accessToken })
+    const { error: sessionError } = await capgo.auth.setSession({ refresh_token: refreshToken, access_token: accessToken })
     if (sessionError) {
       finishWithError(sessionError.message, sessionError)
       return
     }
   }
   else if (code) {
-    const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
+    const { error: exchangeError } = await capgo.auth.exchangeCodeForSession(code)
     if (exchangeError) {
       finishWithError(exchangeError.message, exchangeError)
       return
@@ -100,10 +100,10 @@ async function step2(form: { password: string, password_confirm: string }) {
     finishWithError(t('expired'))
     return
   }
-  const aal = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+  const aal = await capgo.auth.mfa.getAuthenticatorAssuranceLevel()
   const { currentLevel, nextLevel } = aal.data!
   if (nextLevel !== currentLevel) {
-    const { data: mfaFactors, error: mfaError } = await supabase.auth.mfa.listFactors()
+    const { data: mfaFactors, error: mfaError } = await capgo.auth.mfa.listFactors()
     if (mfaError) {
       finishWithError(mfaError.message, mfaError)
       return
@@ -114,7 +114,7 @@ async function step2(form: { password: string, password_confirm: string }) {
       return
     }
 
-    const { data: challenge, error: errorChallenge } = await supabase.auth.mfa.challenge({ factorId: factor.id })
+    const { data: challenge, error: errorChallenge } = await capgo.auth.mfa.challenge({ factorId: factor.id })
     if (errorChallenge) {
       finishWithError(errorChallenge.message, errorChallenge)
       return
@@ -130,7 +130,7 @@ async function step2(form: { password: string, password_confirm: string }) {
           text: t('button-confirm'),
           role: 'primary',
           handler: async () => {
-            const { data: _verify, error: errorVerify } = await supabase.auth.mfa.verify({
+            const { data: _verify, error: errorVerify } = await capgo.auth.mfa.verify({
               factorId: factor.id,
               challengeId: challenge.id,
               code: mfaCode.value.replaceAll(' ', ''),
@@ -145,7 +145,7 @@ async function step2(form: { password: string, password_confirm: string }) {
     })
     await dialogStore.onDialogDismiss()
   }
-  const { error: updateError } = await supabase.auth.updateUser({ password: form.password })
+  const { error: updateError } = await capgo.auth.updateUser({ password: form.password })
   isLoading.value = false
   if (updateError) {
     setErrors('forgot-password', [updateError.message], {})
@@ -153,7 +153,7 @@ async function step2(form: { password: string, password_confirm: string }) {
   }
   form.password = ''
   form.password_confirm = ''
-  const { error: signOutError } = await supabase.auth.signOut({ scope: 'others' })
+  const { error: signOutError } = await capgo.auth.signOut({ scope: 'others' })
   if (signOutError) {
     setErrors('forgot-password', [signOutError.message], {})
     return

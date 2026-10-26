@@ -7,11 +7,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import iconPassword from '~icons/ph/key?raw'
 import { authGhostButtonClass, authPanelClass, authPrimaryButtonClass } from '~/components/auth/pageStyles'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { openSupport } from '~/services/support'
 
 const isLoading = ref(false)
-const supabase = useSupabase()
+const capgo = useConsole()
 
 const { t } = useI18n()
 
@@ -30,7 +30,7 @@ async function signInUser() {
     router.push('/login')
     return
   }
-  await supabase.auth.refreshSession({
+  await capgo.auth.refreshSession({
     refresh_token: refresh_token ?? '',
   })
 }
@@ -38,14 +38,14 @@ async function signInUser() {
 async function submit(form: { password: string }) {
   isLoading.value = true
 
-  const { error: updateError } = await supabase.auth.updateUser({ password: form.password })
+  const { error: updateError } = await capgo.auth.updateUser({ password: form.password })
   isLoading.value = false
   if (updateError) {
     setErrors('set-password', [updateError.message], {})
     return
   }
 
-  const { error: signOutError } = await supabase.auth.signOut({ scope: 'others' })
+  const { error: signOutError } = await capgo.auth.signOut({ scope: 'others' })
   if (signOutError) {
     setErrors('set-password', [signOutError.message], {})
     return

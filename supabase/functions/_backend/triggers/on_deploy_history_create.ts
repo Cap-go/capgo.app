@@ -1,7 +1,6 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
-import { isDemoApp } from '../utils/demo.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { sendNotifToOrgMembersOnce } from '../utils/org_email_notifications.ts'
@@ -9,6 +8,7 @@ import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { backgroundTask } from '../utils/utils.ts'
+import { shouldSkipVersionNotifications } from '../utils/version_notifications.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -47,9 +47,8 @@ app.post('/', middlewareAPISecret, triggerValidator('deploy_history', 'INSERT'),
       return c.json(BRES)
     }
 
-    // Demo apps skip deploy notifications.
-    if (await isDemoApp(c, record.app_id)) {
-      cloudlog({ requestId: c.get('requestId'), message: 'Demo app detected, skipping deploy notifications' })
+    if (await shouldSkipVersionNotifications(c, record.app_id, record.version_id, record.id)) {
+      cloudlog({ requestId: c.get('requestId'), message: 'Demo or removed deployment, skipping deployment events' })
       return c.json(BRES)
     }
 

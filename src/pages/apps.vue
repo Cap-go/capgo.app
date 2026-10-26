@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { storeToRefs } from 'pinia'
 import { computed, ref, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+import { useConsole } from '~/services/console'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, resolveImagePath } from '~/services/storage'
-import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -15,7 +15,7 @@ const router = useRouter()
 const organizationStore = useOrganizationStore()
 const isLoading = ref(true)
 const isTableLoading = ref(false)
-const supabase = useSupabase()
+const capgo = useConsole()
 const { t } = useI18n()
 const displayStore = useDisplayStore()
 type AppRow = Database['public']['Tables']['apps']['Row']
@@ -135,7 +135,7 @@ async function getMyApps() {
     // ordering, pagination and the total count in SQL. This keeps the page order
     // consistent with the displayed "Last upload" sort, which apps.updated_at
     // (bumped by unrelated edits and background/cron jobs) cannot guarantee.
-    const { data, error } = await supabase.rpc('get_org_apps_with_last_upload', {
+    const { data, error } = await capgo.rpc('get_org_apps_with_last_upload', {
       p_org_id: currentGid,
       p_search: searchQuery.value ? searchQuery.value.trim() : undefined,
       p_sort_by: 'last_upload_at',

@@ -9,13 +9,13 @@ import IconCheck from '~icons/lucide/check'
 import IconLoader from '~icons/lucide/loader-2'
 import IconUserPlus from '~icons/lucide/user-plus'
 import IconX from '~icons/lucide/x'
+import { useConsole } from '~/services/console'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import {
   captureOrganizationInvitationEvent,
   runTrackedOrganizationInvitationMutation,
   sanitizeOrganizationInvitationClientFailureReason,
 } from '~/services/organizationInvitationTelemetry'
-import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
@@ -25,7 +25,7 @@ import { validateRedirectPath } from '~/utils/safeRedirect'
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const displayStore = useDisplayStore()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
@@ -118,7 +118,8 @@ async function loadPendingInvitations() {
 }
 
 async function acceptInvitation(invitation: Organization): Promise<void> {
-  const { data, error } = await supabase.rpc('accept_invitation_to_org', {
+  // The RPC is the source of truth for accepting an invitation.
+  const { data, error } = await capgo.rpc('accept_invitation_to_org', {
     org_id: invitation.gid,
   })
 
@@ -133,7 +134,7 @@ async function declineInvitation(invitation: Organization): Promise<string> {
   if (!userId)
     throw new Error('missing_user')
 
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('org_users')
     .delete()
     .eq('org_id', invitation.gid)
@@ -211,7 +212,7 @@ async function declineAllInvitations() {
 
     const inviteOrgIds = invitations.value.map(invitation => invitation.gid)
     for (let offset = 0; offset < inviteOrgIds.length; offset += 100) {
-      const { data, error } = await supabase
+      const { data, error } = await capgo
         .from('org_users')
         .delete()
         .eq('user_id', userId)

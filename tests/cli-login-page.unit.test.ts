@@ -30,7 +30,7 @@ const organizationStore = vi.hoisted(() => ({
   organizations: [{ gid: 'org-1', name: 'Test organization', app_count: 1 }],
   getAppsByOrgId: vi.fn((orgId: string) => organizationApps.get(orgId) ?? []),
 }))
-const supabase = vi.hoisted(() => ({
+const capgo = vi.hoisted(() => ({
   channel: vi.fn(),
   from: vi.fn(),
   removeChannel: vi.fn(),
@@ -47,8 +47,8 @@ vi.mock('vue-sonner', () => ({
 
 vi.mock('~/services/cliLogin', () => cliLoginMocks)
 
-vi.mock('~/services/supabase', () => ({
-  useSupabase: () => supabase,
+vi.mock('~/services/console', () => ({
+  useConsole: () => capgo,
 }))
 
 vi.mock('~/stores/main', () => ({
@@ -133,13 +133,34 @@ describe('/login-cli page', () => {
       callback('SUBSCRIBED')
       return channel
     }) }
-    supabase.channel.mockReturnValue(channel)
+    capgo.channel.mockReturnValue(channel)
     const container = mountLoginCliPage()
     await flushPromises()
     await vi.waitFor(() => expect(container.textContent).toContain('capgo_xxxxxxxxxxxxxxxxxxxx'))
 
     expect(cliLoginMocks.prepareCliLoginKey).toHaveBeenCalledOnce()
     expect(container.innerHTML).not.toContain(preparedKey)
+  })
+
+  it('stops waiting for a silent event stream after the fallback delay', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      route.query = { session: 'AbCdEfGhIjKlMnOpQrStUv' }
+      // The channel never reports a status, as when the events request hangs.
+      const channel = { on: vi.fn(() => channel), subscribe: vi.fn(() => channel) }
+      capgo.channel.mockReturnValue(channel)
+      const container = mountLoginCliPage()
+      await flushPromises()
+      expect(container.textContent).not.toContain(messages['cli-login-realtime-unavailable'])
+
+      await vi.advanceTimersByTimeAsync(15_000)
+      await flushPromises()
+      expect(container.textContent).toContain(messages['cli-login-realtime-unavailable'])
+      expect(container.textContent).toContain('capgo_xxxxxxxxxxxxxxxxxxxx')
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 
   it('copies a prompt containing the prepared key in AI mode', async () => {

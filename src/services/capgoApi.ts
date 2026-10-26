@@ -1,16 +1,21 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database } from '~/types/supabase.types'
-import { FunctionsFetchError, FunctionsHttpError } from '@supabase/supabase-js'
-import { getLocalConfig, useSupabase } from './supabase'
+import type { ConsoleClient } from '~/services/consoleClient'
+import type { Database } from '~/types/database.types'
+import { FunctionsFetchError, FunctionsHttpError } from '~/services/consoleClient'
+import { useConsole } from './console'
 
 export interface CapgoApiInvokeOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   body?: BodyInit | Record<string, unknown> | null
   headers?: Record<string, string>
-  /** Use the anon key when there is no user session (public bootstrap endpoints). */
+  /**
+   * Opt into a dated `capgo_api` contract (e.g. `2026-10-22`). Omit to keep the
+   * default version so older backends and other clients stay compatible.
+   */
+  apiVersion?: string
+  /** Call without an Authorization header when there is no user session (public bootstrap endpoints). */
   allowAnonymous?: boolean
   /** Prefer caller-provided client for session/auth context. */
-  client?: SupabaseClient<Database>
+  client?: ConsoleClient<Database>
   /**
    * Number of automatic retries for transient failures (network drops, edge
    * timeouts, and 5xx/429 responses from a stressed backend). Defaults to 2 for
@@ -76,7 +81,7 @@ function sleep(ms: number): Promise<void> {
 /**
  * Run an invoke attempt, retrying transient failures up to `retries` times with
  * backoff. The attempt must resolve to the `{ data, error }` shape rather than
- * throwing, so both the Cloudflare fetch and Supabase invoke paths share it.
+ * throwing, so every attempt shares the same retry policy.
  */
 async function invokeWithRetry<T>(
   attempt: () => Promise<{ data: T | null, error: Error | null }>,
@@ -95,27 +100,6 @@ function normalizeApiHost(host = ''): string {
   while (end > 0 && host[end - 1] === '/')
     end -= 1
   return host.slice(0, end)
-}
-
-function parseHostname(supaHost: string): string | null {
-  try {
-    const withProtocol = /:\/\//.test(supaHost) ? supaHost : `https://${supaHost}`
-    return new URL(withProtocol).hostname.toLowerCase()
-  }
-  catch {
-    return null
-  }
-}
-
-/** Capgo-managed Supabase hosts (cloud). Match hostname exactly. */
-export function isCapgoManagedSupabaseHost(supaHost?: string): boolean {
-  const hostname = supaHost ? parseHostname(supaHost) : null
-  if (!hostname)
-    return false
-  return hostname === 'sb.capgo.app'
-    || hostname === 'xvwzpoazmxkqosrdewyv.supabase.co'
-    || hostname === 'ibwjdnhknbkcqfbabwei.supabase.co'
-    || hostname === 'aucsybvnhavogdmzwtcw.supabase.co'
 }
 
 function serializeBody(body: CapgoApiInvokeOptions['body']): BodyInit | undefined {
@@ -170,44 +154,32 @@ export async function getCapgoApiErrorName(error: unknown): Promise<string | und
 }
 
 /**
- * Call Capgo Cloudflare API with the same { data, error } shape as
- * supabase.functions.invoke. Capgo cloud console traffic uses VITE_API_HOST.
- * Self-host / local keep supabase.functions.invoke → /functions/v1.
+ * Call the Capgo API (VITE_API_HOST) with a { data, error } result shape.
+ * Cloud, self-host and local builds all use this single transport; the
+ * console never talks to the database or auth provider directly.
  */
 export async function invokeCapgoApi<T = any>(
   path: string,
   options: CapgoApiInvokeOptions = {},
 ): Promise<{ data: T | null, error: Error | null }> {
-  const supabase = options.client ?? useSupabase()
-  const config = getLocalConfig()
-
-  if (!isCapgoManagedSupabaseHost(config.supaHost)) {
-    const { allowAnonymous: _allowAnonymous, client: _client, ...invokeOptions } = options
-    const selfHostRetries = options.retries ?? defaultRetriesForMethod(invokeOptions.method ?? 'POST')
-    return invokeWithRetry<T>(() => supabase.functions.invoke(path, {
-      method: invokeOptions.method,
-      body: invokeOptions.body ?? undefined,
-      headers: invokeOptions.headers,
-    }), selfHostRetries)
-  }
+  const client = options.client ?? useConsole()
 
   const method = (options.method ?? 'POST').toUpperCase()
   const retries = options.retries ?? defaultRetriesForMethod(method)
   const headers: Record<string, string> = {
     ...options.headers,
   }
+  if (options.apiVersion && !Object.keys(headers).some(key => key.toLowerCase() === 'capgo_api'))
+    headers.capgo_api = options.apiVersion
 
   const hasAuthHeader = Object.keys(headers).some(key => key.toLowerCase() === 'authorization')
   if (!hasAuthHeader) {
-    const { data: sessionData } = await supabase.auth.getSession()
+    const { data: sessionData } = await client.auth.getSession()
     const token = sessionData.session?.access_token
     if (token) {
       headers.Authorization = `Bearer ${token}`
     }
-    else if (options.allowAnonymous) {
-      headers.Authorization = `Bearer ${config.supaKey}`
-    }
-    else {
+    else if (!options.allowAnonymous) {
       return {
         data: null,
         error: new Error('Not authenticated'),

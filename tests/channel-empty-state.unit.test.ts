@@ -55,8 +55,8 @@ vi.mock('~/components/dashboard/ChannelIntroduction.vue', async () => {
     ]),
   }) }
 })
-vi.mock('~/services/supabase', () => ({
-  useSupabase: () => ({
+vi.mock('~/services/console', () => ({
+  useConsole: () => ({
     from(table: string) {
       let appId = ''
       let search = ''

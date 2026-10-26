@@ -29,7 +29,7 @@ vi.mock('vue-router', () => ({
   } }),
 }))
 vi.mock('vue-sonner', () => ({ toast: { error: mocks.toastError } }))
-vi.mock('~/services/supabase', () => ({ getLocalConfig: () => ({ supaHost: 'https://example.com' }), isLocal: () => false }))
+vi.mock('~/services/console', () => ({ getLocalConfig: () => ({ apiHost: 'https://example.com' }), isLocal: () => false }))
 vi.mock('~/services/onboardingTracking', () => ({ sendOnboardingEvent: mocks.capture }))
 vi.mock('~/services/userOnboardingWriteQueue', async importOriginal => ({
   ...await importOriginal<typeof import('../src/services/userOnboardingWriteQueue')>(),

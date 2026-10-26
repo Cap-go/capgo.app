@@ -2,8 +2,8 @@ import type { Ref } from 'vue'
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { chartLabelCountForPeriodDays } from '~/services/date'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 export type UpdateDeliveryScope = 'app' | 'org'
 
@@ -42,7 +42,7 @@ export function useUpdateDeliveryStats(
   },
   logContext = 'update delivery stats',
 ) {
-  const supabase = useSupabase()
+  const capgo = useConsole()
   const { t } = useI18n()
   const stats = ref<UpdateDeliveryStatsResponse | null>(null) as Ref<UpdateDeliveryStatsResponse | null>
   const statsLoading = ref(false)
@@ -71,7 +71,7 @@ export function useUpdateDeliveryStats(
     statsError.value = false
     stats.value = null
     try {
-      const { data: sessionData } = await supabase.auth.getSession()
+      const { data: sessionData } = await capgo.auth.getSession()
       if (!sessionData.session) {
         if (requestId === latestRequest) {
           statsError.value = true

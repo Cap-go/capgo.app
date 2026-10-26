@@ -1,6 +1,6 @@
 import type { AssistantAction, AssistantCard, AssistantContext, AssistantResponse, AssistantTurn } from '~/services/assistant'
 import { assistantRequest } from '~/services/assistantHttp'
-import { defaultApiHost } from '~/services/supabase'
+import { defaultApiHost } from '~/services/console'
 
 /**
  * The console assistant runs in the browser: the model is called with the user's own ChatGPT token

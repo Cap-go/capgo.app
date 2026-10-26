@@ -1,11 +1,11 @@
-import type { Session } from '@supabase/supabase-js'
+import type { Session } from '../../src/services/consoleClient'
 import { defaultConfig, plugin } from '@formkit/vue'
 import { createPinia } from 'pinia'
 import { createApp, defineComponent, h } from 'vue'
 import { createRouter, createWebHistory, RouterView } from 'vue-router'
 import { Toaster } from 'vue-sonner'
 import { i18n } from '../../src/modules/i18n'
-import { useSupabase } from '../../src/services/supabase'
+import { useConsole } from '../../src/services/console'
 import '../../src/styles/style.css'
 
 const state = {
@@ -32,18 +32,18 @@ window.fetch = async (input, init) => {
     headers: { 'Content-Type': 'application/json' },
   })
 }
-const supabase = useSupabase()
-supabase.auth.getSession = async () => ({ data: { session: {
+const capgo = useConsole()
+capgo.auth.getSession = async () => ({ data: { session: {
   access_token: 'fixture-token',
   user: { id: '00000000-0000-4000-8000-000000000001', email: 'verification-preview@example.com' },
 } as Session }, error: null })
-supabase.auth.signInWithOtp = async () => {
+capgo.auth.signInWithOtp = async () => {
   state.sends.push('send')
   if (state.sendDelayMs)
     await new Promise(resolve => setTimeout(resolve, state.sendDelayMs))
   return { data: { user: null, session: null }, error: state.sendError as any }
 }
-supabase.functions.invoke = async (_, options) => {
+capgo.functions.invoke = async (_, options) => {
   state.verifications.push((options?.body as { token: string }).token)
   return state.verificationError
     ? { data: null, error: new Error('Invalid verification code') }

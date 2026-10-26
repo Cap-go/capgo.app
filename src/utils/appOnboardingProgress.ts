@@ -1,4 +1,4 @@
-import type { Json } from '~/types/supabase.types'
+import type { Json } from '~/types/database.types'
 import { getAppOnboardingStepIds, parseAppOnboarding } from '~/services/appOnboarding'
 import { BUILDER_STEP_IDS, hasSupportedBuilderTodoList, parseBuilderOnboarding } from '~/services/builderOnboardingChecklist'
 import { hasDualOnboardingChecklists, resolveDualChecklistResume } from '~/utils/dualOnboardingChecklists'

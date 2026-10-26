@@ -308,8 +308,6 @@ project(':capgo-capacitor-speech-recognition').projectDir = new File('../node_mo
 include ':capgo-capacitor-speech-synthesis'
 project(':capgo-capacitor-speech-synthesis').projectDir = new File('../node_modules/.bun/@capgo+capacitor-speech-synthesis@8.0.22+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-speech-synthesis/android')
 
-include ':capgo-capacitor-supabase'
-project(':capgo-capacitor-supabase').projectDir = new File('../node_modules/.bun/@capgo+capacitor-supabase@8.2.3+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-supabase/android')
 
 include ':capgo-capacitor-textinteraction'
 project(':capgo-capacitor-textinteraction').projectDir = new File('../node_modules/.bun/@capgo+capacitor-textinteraction@8.0.40+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-textinteraction/android')

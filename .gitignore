@@ -48,7 +48,7 @@ cloudflare_workers_deno/.denoflare
 
 .dev.vars
 .vars
-src/types/supabase.types.ts
+src/types/database.types.ts
 supabase/functions/_backend/utils/supabase.types.ts
 .env.alpha
 # AI agent directories

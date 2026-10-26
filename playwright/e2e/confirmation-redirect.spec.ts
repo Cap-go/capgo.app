@@ -3,7 +3,7 @@ import { expect, test } from '../support/commands'
 
 test.describe('Auth email confirmation redirects', () => {
   test.beforeEach(async ({ page }) => {
-    await page.route('**/auth/v1/verify?**', route => route.fulfill({
+    await page.route('**/private/console/auth/verify?**', route => route.fulfill({
       contentType: 'text/html',
       body: '<p>Verification endpoint</p>',
     }))
@@ -18,7 +18,7 @@ test.describe('Auth email confirmation redirects', () => {
       redirect_to: redirectTo,
       utm_source: 'bento',
     })
-    const requestPromise = page.waitForRequest(request => request.isNavigationRequest() && new URL(request.url()).pathname === '/auth/v1/verify')
+    const requestPromise = page.waitForRequest(request => request.isNavigationRequest() && new URL(request.url()).pathname.endsWith('/private/console/auth/verify'))
 
     await page.goto(`/confirm-signup?${query}`)
     const request = await requestPromise
@@ -36,7 +36,7 @@ test.describe('Auth email confirmation redirects', () => {
     const verificationUrl = new URL('https://127.0.0.1/auth/v1/verify')
     verificationUrl.search = new URLSearchParams({ token: 'password-reset-regression', type: 'recovery', redirect_to: redirectTo }).toString()
     const query = new URLSearchParams({ confirmation_url: verificationUrl.href })
-    const requestPromise = page.waitForRequest(request => request.isNavigationRequest() && new URL(request.url()).pathname === '/auth/v1/verify')
+    const requestPromise = page.waitForRequest(request => request.isNavigationRequest() && new URL(request.url()).pathname.endsWith('/private/console/auth/verify'))
 
     await page.goto(`/confirm-signup?${query}`)
     const request = await requestPromise
@@ -49,7 +49,7 @@ test.describe('Auth email confirmation redirects', () => {
     const navigations: string[] = []
     page.on('request', (request) => {
       if (request.isNavigationRequest())
-        navigations.push(new URL(request.url()).pathname)
+        navigations.push(new URL(request.url()).pathname.replace(/^.*(?=\/private\/console\/auth\/verify$)/, ''))
     })
     let reportImportError!: (state: { reloadTimestamp: string | null, loaderVisible: boolean, confirmationRendered: boolean }) => void
     const importError = new Promise<Parameters<typeof reportImportError>[0]>((resolve) => {
@@ -80,7 +80,7 @@ test.describe('Auth email confirmation redirects', () => {
     const verificationPending = new Promise<void>((resolve) => {
       finishVerification = resolve
     })
-    await page.route('**/auth/v1/verify?**', async (route) => {
+    await page.route('**/private/console/auth/verify?**', async (route) => {
       const background = await backgroundRequest
       await background.abort('aborted').catch(() => {})
       await verificationPending
@@ -90,7 +90,7 @@ test.describe('Auth email confirmation redirects', () => {
       confirmation_url: 'https://127.0.0.1/auth/v1/verify?token=cancelled-import-regression',
       type: 'recovery',
     })
-    const verificationRequest = page.waitForRequest(request => new URL(request.url()).pathname === '/auth/v1/verify')
+    const verificationRequest = page.waitForRequest(request => new URL(request.url()).pathname.endsWith('/private/console/auth/verify'))
     await page.goto(`/confirm-signup?${query}`, { waitUntil: 'commit' })
     await verificationRequest
 
@@ -104,11 +104,11 @@ test.describe('Auth email confirmation redirects', () => {
       finishVerification()
     }
     await expect(page.getByText('Verification endpoint')).toBeVisible()
-    expect(navigations).toEqual(['/confirm-signup', '/auth/v1/verify'])
+    expect(navigations).toEqual(['/confirm-signup', '/private/console/auth/verify'])
   })
 
   test('keeps invalid link errors and genuine stale asset recovery working', async ({ page }) => {
-    const query = new URLSearchParams({ confirmation_url: 'https://untrusted.example/auth/v1/verify?token=invalid-link-regression' })
+    const query = new URLSearchParams({ confirmation_url: 'https://untrusted.example/login?token=invalid-link-regression' })
     await page.goto(`/confirm-signup?${query}`)
     await expect(page.getByText('Invalid confirmation URL. Please check your email link.')).toBeVisible()
     await page.route('**/missing-background-import.js', route => route.fulfill({

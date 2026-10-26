@@ -4,7 +4,7 @@ import { log } from '@clack/prompts'
 import { renderGitHubNotice } from '../onboarding/github-notice'
 import { shouldPrintNotice } from '../onboarding/setup-notice-policy'
 import { markTrialNoticeShown } from '../onboarding/trial-notice-state'
-import { formatAgentPlanRecommendation, isAgentInvocation } from '../shared/agent-notices'
+import { formatAgentUploadTrialNote, isAgentInvocation, printAgentText } from '../shared/agent-notices'
 import { formatPlanRequiredMessage } from '../shared/direct-offer'
 import { CliUserError } from '../shared/cli-user-error'
 import { isTransientNetworkError } from '../shared/network-error'
@@ -225,16 +225,11 @@ export async function runCliPreflight(
   }
 
   printWarnings(data?.warnings ?? [])
-  if (result.trialDaysLeft !== null && options.warnTrial !== false && shouldPrintNotice(options)) {
+  // Agents get the trial in the end-of-command notice; a start-of-command box is cut off or ignored.
+  if (result.trialDaysLeft !== null && options.warnTrial !== false && shouldPrintNotice(options) && !isAgentInvocation()) {
     const orgId = result.orgId ?? request.orgId
     const url = await plansUrl(orgId)
-    const message = isAgentInvocation()
-      ? formatAgentPlanRecommendation({
-          plansUrl: url,
-          trialState: 'active',
-          trialMessage: `The user’s Capgo trial expires in ${result.trialDaysLeft} ${result.trialDaysLeft === 1 ? 'day' : 'days'}.`,
-        })
-      : `WARNING !!\nTrial expires in ${result.trialDaysLeft} days, upgrade here: ${url}\n`
+    const message = `WARNING !!\nTrial expires in ${result.trialDaysLeft} days, upgrade here: ${url}\n`
     if (!renderGitHubNotice(message))
       log.warn(message)
     if (orgId)
@@ -242,6 +237,12 @@ export async function runCliPreflight(
   }
 
   return result
+}
+
+/** After a successful upload, agents get the trial next to the result they report, from that upload's own plan check. */
+export async function printAgentUploadTrialNote(result: CliPreflightResult | null): Promise<void> {
+  if (result?.trialDaysLeft && isAgentInvocation())
+    printAgentText(formatAgentUploadTrialNote(result.trialDaysLeft, await plansUrl()))
 }
 
 /** Fail unless the org's 2FA policy lets this key act on it. */

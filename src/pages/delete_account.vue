@@ -10,15 +10,15 @@ import iconEmail from '~icons/oui/email?raw'
 import iconPassword from '~icons/ph/key?raw'
 import { authGhostButtonClass, authPanelClass, authPrimaryButtonClass, authSecondaryButtonClass } from '~/components/auth/pageStyles'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
+import { useConsole } from '~/services/console'
 import { getRecentEmailOtpVerification } from '~/services/emailOtp'
 import { hideLoader } from '~/services/loader'
 import { isNativeAppleLoginAvailable, signInWithApple } from '~/services/nativeAppleLogin'
-import { useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
-const supabase = useSupabase()
+const capgo = useConsole()
 const dialogStore = useDialogV2Store()
 const isLoading = ref(false)
 const pendingEmail = ref('')
@@ -51,7 +51,7 @@ async function redirectToEmailVerification() {
 
 async function checkEmailVerification() {
   isLoadingSession.value = true
-  const { data: sessionResult, error: sessionError } = await supabase.auth.getSession()
+  const { data: sessionResult, error: sessionError } = await capgo.auth.getSession()
   if (sessionError || !sessionResult?.session) {
     isEmailVerified.value = true
     isLoadingSession.value = false
@@ -65,7 +65,7 @@ async function checkEmailVerification() {
 
 async function ensureRecentEmailVerification(userId: string) {
   try {
-    const { isVerified } = await getRecentEmailOtpVerification(supabase, userId)
+    const { isVerified } = await getRecentEmailOtpVerification(capgo, userId)
     if (isVerified)
       return true
   }
@@ -88,7 +88,7 @@ async function deleteAccount() {
         text: t('button-remove'),
         role: 'danger',
         handler: async () => {
-          const supabaseClient = useSupabase()
+          const capgoClient = useConsole()
           isLoading.value = true
 
           try {
@@ -107,7 +107,7 @@ async function deleteAccount() {
                 return setErrors('delete-account', [t('captcha-required')], {})
               }
 
-              const { error: reauthError } = await supabase.auth.signInWithPassword({
+              const { error: reauthError } = await capgo.auth.signInWithPassword({
                 email: pendingEmail.value,
                 password: pendingPassword.value,
                 options: captchaKey.value ? { captchaToken: confirmCaptchaToken.value } : undefined,
@@ -122,7 +122,7 @@ async function deleteAccount() {
               }
             }
 
-            const { data: claimsData, error: claimsError } = await supabase.auth.getClaims()
+            const { data: claimsData, error: claimsError } = await capgo.auth.getClaims()
             const userId = claimsData?.claims?.sub
             if (claimsError || !userId) {
               isLoading.value = false
@@ -132,7 +132,7 @@ async function deleteAccount() {
             if (isAppleAccount.value && userId !== pendingAppleUserId.value)
               return setErrors('delete-account', [t('invalid-auth')], {})
 
-            const { data: user } = await supabaseClient
+            const { data: user } = await capgoClient
               .from('users')
               .select()
               .eq('id', userId)
@@ -150,7 +150,7 @@ async function deleteAccount() {
 
             if (isAppleAccount.value) {
               const { error: revokeError } = await invokeCapgoApi('private/revoke_apple_authorization', {
-                client: supabase,
+                client: capgo,
                 body: { code: pendingAppleCode.value },
               })
               if (revokeError) {
@@ -160,7 +160,7 @@ async function deleteAccount() {
             }
 
             // Delete user using RPC function
-            const { error: deleteError } = await supabase.rpc('delete_user')
+            const { error: deleteError } = await capgo.rpc('delete_user')
 
             if (deleteError) {
               console.error('Delete error:', deleteError)
@@ -178,7 +178,7 @@ async function deleteAccount() {
             }
 
             // Sign out and redirect to login page
-            await supabase.auth.signOut()
+            await capgo.auth.signOut()
             toast.success(t('account-deleted-successfully'))
             router.replace('/login')
           }
@@ -220,17 +220,17 @@ async function deleteAccount() {
 }
 
 async function prepareAppleDeletionMfa() {
-  const { data: assurance, error: assuranceError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+  const { data: assurance, error: assuranceError } = await capgo.auth.mfa.getAuthenticatorAssuranceLevel()
   if (assuranceError)
     throw assuranceError
   if (assurance.currentLevel === 'aal1' && assurance.nextLevel === 'aal2') {
-    const { data: factors, error: factorsError } = await supabase.auth.mfa.listFactors()
+    const { data: factors, error: factorsError } = await capgo.auth.mfa.listFactors()
     if (factorsError)
       throw factorsError
     const factor = factors.all.find(factor => factor.status === 'verified')
     if (!factor)
       throw new Error('Missing MFA factor')
-    const { data: challenge, error: challengeError } = await supabase.auth.mfa.challenge({ factorId: factor.id })
+    const { data: challenge, error: challengeError } = await capgo.auth.mfa.challenge({ factorId: factor.id })
     if (challengeError)
       throw challengeError
     appleMfaFactorId.value = factor.id
@@ -250,17 +250,17 @@ async function startAppleDeletion() {
   isLoading.value = true
   pendingAppleCode.value = ''
   try {
-    const { data: claims, error: claimsError } = await supabase.auth.getClaims()
+    const { data: claims, error: claimsError } = await capgo.auth.getClaims()
     const userId = claims?.claims?.sub
     if (claimsError || !userId)
       throw new Error('Authentication required')
     if (!await ensureRecentEmailVerification(userId))
       return
-    const result = await signInWithApple(supabase, turnstileToken.value || undefined, { reauthenticate: true })
+    const result = await signInWithApple(capgo, turnstileToken.value || undefined, { reauthenticate: true })
     if (!result)
       return
     if (result.user.id !== userId) {
-      await supabase.auth.signOut({ scope: 'local' })
+      await capgo.auth.signOut({ scope: 'local' })
       await router.replace('/login')
       throw new Error('Apple account does not match the account being deleted')
     }
@@ -296,7 +296,7 @@ async function verifyAppleDeletionMfa(form: { code: string }) {
     return
   isLoading.value = true
   try {
-    const { error } = await supabase.auth.mfa.verify({
+    const { error } = await capgo.auth.mfa.verify({
       factorId: appleMfaFactorId.value,
       challengeId: appleMfaChallengeId.value,
       code: form.code.replaceAll(' ', ''),
@@ -335,7 +335,7 @@ async function submit(form: { email: string, password: string }) {
     setErrors('delete-account', [t('captcha-required')], {})
     return
   }
-  const { error } = await supabase.auth.signInWithPassword({
+  const { error } = await capgo.auth.signInWithPassword({
     email: form.email,
     password: form.password,
     options: captchaKey.value ? { captchaToken: turnstileToken.value } : undefined,
@@ -352,7 +352,7 @@ async function submit(form: { email: string, password: string }) {
     toast.error(t('invalid-auth'))
   }
   else {
-    const { data: claimsData, error: claimsError } = await supabase.auth.getClaims()
+    const { data: claimsData, error: claimsError } = await capgo.auth.getClaims()
     const userId = claimsData?.claims?.sub
     if (claimsError || !userId) {
       isLoading.value = false
@@ -453,7 +453,7 @@ onMounted (() => {
               to="/forgot_password"
               class="text-sm font-medium text-orange-500 transition-all duration-200 hover:text-orange-600 hover:underline focus:text-orange-600"
             >
-              {{ t('forgot') }} {{ t('password') }} ?
+              {{ t('forgot-password') }}
             </router-link>
           </div>
           <FormKit

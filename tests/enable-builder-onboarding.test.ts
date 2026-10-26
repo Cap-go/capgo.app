@@ -51,11 +51,11 @@ async function fixture(onboarding: object, needOnboarding = false) {
   return appId
 }
 
-async function requestActivation(appId: string, client = owner, method = 'POST') {
+async function requestActivation(appId: string, client = owner, method = 'POST', path = 'builder') {
   const { data: { session } } = await client.auth.getSession()
   // Exercise the registered backend route with real JWT verification, RBAC and
   // PostgreSQL transactions; no edge-worker deployment is needed for this test.
-  return app.request(`http://local/${encodeURIComponent(appId)}/onboarding/builder`, {
+  return app.request(`http://local/${encodeURIComponent(appId)}/onboarding/${path}`, {
     method,
     headers: session ? { Authorization: `Bearer ${session.access_token}` } : {},
   }, { SUPABASE_URL: env.SUPABASE_URL!, SUPABASE_ANON_KEY: env.SUPABASE_ANON_KEY!, SUPABASE_DB_URL: POSTGRES_URL })
@@ -173,6 +173,42 @@ describe('explicit Builder checklist activation', () => {
       expect(await access.json()).toEqual({ canEnable: false })
       expect((await requestActivation(appId, outsider)).status).toBe(403)
     }
+    expect((await admin.from('apps').select('onboarding').eq('app_id', appId).single()).data!.onboarding).toEqual(original)
+  })
+})
+
+describe('explicit OTA checklist activation', () => {
+  it.concurrent('persists OTA alongside Builder and accepts subsequent OTA progress without resetting either list', async () => {
+    const builder = { ios: { start_setup: { status: 'done', at } }, android: { prepare_keystore: { status: 'warning', annotation: 'keep' } } }
+    const original = { custom: 'keep', setup: { todo_list_version: 4, builder_todo_list_version: '1', paths: ['builder'], selected_path: 'builder', steps: { builder } } }
+    const appId = await fixture(original)
+    const response = await requestActivation(appId, owner, 'POST', 'ota')
+    expect(response.status).toBe(200)
+    const { onboarding } = await response.json() as any
+    expect(onboarding.setup).toMatchObject({ paths: ['builder', 'ota'], selected_path: 'ota', ota_todo_list_version: '1', steps: { builder } })
+    expect(onboarding.custom).toBe('keep')
+    expect(hasDualOnboardingChecklists(onboarding)).toBe(true)
+    const before = await admin.from('apps').select('onboarding, updated_at').eq('app_id', appId).single()
+    expect(before.data!.onboarding).toEqual(onboarding)
+    expect((await requestActivation(appId, owner, 'POST', 'ota')).status).toBe(200)
+    expect((await admin.from('apps').select('onboarding, updated_at').eq('app_id', appId).single()).data).toEqual(before.data)
+
+    const { data: { session } } = await owner.auth.getSession()
+    const progress = await app.request(`http://local/${appId}`, {
+      method: 'PUT', headers: { Authorization: `Bearer ${session!.access_token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ onboarding: { source: 'cli', steps: { add_code: { status: 'done' } } } }),
+    }, { SUPABASE_URL: env.SUPABASE_URL!, SUPABASE_ANON_KEY: env.SUPABASE_ANON_KEY!, SUPABASE_DB_URL: POSTGRES_URL })
+    expect(progress.status).toBe(200)
+    const after = (await admin.from('apps').select('onboarding').eq('app_id', appId).single()).data!.onboarding as any
+    expect(after.setup.steps.ota.add_code.status).toBe('done')
+    expect(after.setup.steps.builder).toEqual(builder)
+  })
+
+  it.concurrent('rejects anonymous and unrelated callers without changing the app', async () => {
+    const original = { setup: { todo_list_version: 4, builder_todo_list_version: '1', paths: ['builder'], steps: { builder: {} } } }
+    const appId = await fixture(original)
+    expect((await requestActivation(appId, anonymous, 'POST', 'ota')).status).toBe(401)
+    expect((await requestActivation(appId, outsider, 'POST', 'ota')).status).toBe(403)
     expect((await admin.from('apps').select('onboarding').eq('app_id', appId).single()).data!.onboarding).toEqual(original)
   })
 })

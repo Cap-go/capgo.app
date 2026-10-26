@@ -11,15 +11,15 @@
  */
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { getLocalConfig, useConsole } from '~/services/console'
 import { pushEvent } from '~/services/posthog'
-import { getLocalConfig, useSupabase } from '~/services/supabase'
 import { useOrganizationStore } from '~/stores/organization'
 
 const props = defineProps<{ appId: string }>()
 
 const { t } = useI18n()
 const config = getLocalConfig()
-const supabase = useSupabase()
+const capgo = useConsole()
 const organizationStore = useOrganizationStore()
 
 const open = ref(false)
@@ -30,7 +30,7 @@ let shownTracked = false
 let reqToken = 0
 
 function track(event: string) {
-  pushEvent(event, config.supaHost, {})
+  pushEvent(event, config.apiHost, {})
 }
 
 function openModal() {
@@ -53,7 +53,7 @@ async function checkEligibility() {
     const orgId = organizationStore.getOrgByAppId(appId)?.gid
     if (!orgId)
       return
-    const { count, error } = await supabase
+    const { count, error } = await capgo
       .from('build_requests')
       .select('id', { count: 'exact', head: true })
       .eq('owner_org', orgId)
