@@ -254,19 +254,20 @@ describe('delta storage GC worker', () => {
     expect(queries.some(text => text.includes('delta_gc_end_delete'))).toBe(false)
   })
 
-  it('stops starting copies after one times out', async () => {
+  it('stops starting storage work for the whole run after a copy times out', async () => {
     vi.useFakeTimers()
     try {
       const old = new Date(Date.now() - 2 * DAY)
-      const keys = Array.from({ length: 60 }, (_, index) => `${prefix}f${index}.js`)
+      // More than one delete batch, and a second claimed app plus an orphan prefix.
+      const keys = Array.from({ length: 150 }, (_, index) => `${prefix}f${index}.js`)
       mocks.listObjectPage.mockResolvedValue({ objects: keys.map(key => ({ key, lastModified: old })), nextToken: null })
       mocks.copyObjectToTrash.mockReturnValue(new Promise(() => {}))
       mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
         const text = sqlText(query)
         if (text.includes('delta_gc_claim_orphan_prefixes'))
-          return { rows: [] }
+          return { rows: [{ prefix: 'orgs/former/apps/gone/', list_cursor: null }] }
         if (text.includes('delta_gc_claim'))
-          return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: null }] }
+          return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: null }, { app_id: 'com.example.other', list_org: 'org-1', list_cursor: null }] }
         if (text.includes('delta_gc_unreferenced_paths'))
           return { rows: [{ paths: keys }] }
         return { rows: [] }
@@ -276,8 +277,10 @@ describe('delta storage GC worker', () => {
       await vi.advanceTimersByTimeAsync(DELTA_GC_STORAGE_TIMEOUT_MS + 10)
       await pending
 
-      // One concurrency window was started; none after the first timeout.
+      // One concurrency window was started; nothing after the first timeout:
+      // no second batch, no second app, no orphan prefix.
       expect(mocks.copyObjectToTrash).toHaveBeenCalledTimes(25)
+      expect(mocks.listObjectPage).toHaveBeenCalledOnce()
       expect(mocks.deleteObjectKey).not.toHaveBeenCalled()
     }
     finally {

@@ -84,6 +84,17 @@ async function withDeadline<T>(promise: Promise<T>, timeoutMs: number, label: st
   }
 }
 
+/**
+ * Per-run state. Once a storage call times out it may keep running in the
+ * background, so no new storage work starts for the rest of the run (any
+ * batch, app or orphan prefix): outstanding requests stay within the limits.
+ */
+interface GcRun { deadline: number, stalled: boolean }
+
+function canStart(run: GcRun) {
+  return !run.stalled && Date.now() < run.deadline
+}
+
 async function forEachBounded<T>(items: T[], concurrency: number, shouldStart: () => boolean, worker: (item: T) => Promise<void>) {
   let next = 0
   const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
@@ -107,17 +118,16 @@ async function unreferencedPaths(db: Database, paths: string[]) {
  * delete failed or never started: its delta_files row is already gone, so the
  * page must be listed again rather than skipped.
  */
-async function trashBatch(c: Context, db: Database, appId: string, paths: string[], deadline: number) {
+async function trashBatch(c: Context, db: Database, appId: string, paths: string[], run: GcRun) {
   const copied: string[] = []
-  // A timed-out copy keeps running in the background, so stop starting new
-  // ones: outstanding copies never exceed DELTA_GC_COPY_CONCURRENCY.
-  let copyTimedOut = false
-  await forEachBounded(paths, DELTA_GC_COPY_CONCURRENCY, () => !copyTimedOut && Date.now() < deadline, async (path) => {
+  // A timed-out copy keeps running in the background: stop the whole run so
+  // outstanding copies never exceed DELTA_GC_COPY_CONCURRENCY.
+  await forEachBounded(paths, DELTA_GC_COPY_CONCURRENCY, () => canStart(run), async (path) => {
     const result = await withTimeout(s3.copyObjectToTrash(c, path).then(ok => ok ? 'copied' as const : 'failed' as const), DELTA_GC_STORAGE_TIMEOUT_MS, 'timeout' as const)
     if (result === 'copied')
       copied.push(path)
     else if (result === 'timeout')
-      copyTimedOut = true
+      run.stalled = true
   })
   if (copied.length === 0)
     return { deleted: 0, complete: true }
@@ -145,14 +155,14 @@ async function trashBatch(c: Context, db: Database, appId: string, paths: string
   return { deleted, complete: deleted === allowed.length }
 }
 
-async function collectAppPage(c: Context, db: Database, app: ClaimedApp, deadline: number) {
+async function collectAppPage(c: Context, db: Database, app: ClaimedApp, run: GcRun) {
   const { objects, nextToken } = await withDeadline(s3.listObjectPage(c, deltaPrefix(app.list_org, app.app_id), app.list_cursor, DELTA_GC_LIST_PAGE_SIZE), DELTA_GC_STORAGE_TIMEOUT_MS, 'R2 listing')
   const candidates = await unreferencedPaths(db, selectAgedKeys(objects, Date.now()))
   let deleted = 0
   let processed = 0
   let allDeleted = true
-  while (processed < candidates.length && Date.now() < deadline) {
-    const batch = await trashBatch(c, db, app.app_id, candidates.slice(processed, processed + DELTA_GC_DELETE_BATCH), deadline)
+  while (processed < candidates.length && canStart(run)) {
+    const batch = await trashBatch(c, db, app.app_id, candidates.slice(processed, processed + DELTA_GC_DELETE_BATCH), run)
     deleted += batch.deleted
     allDeleted &&= batch.complete
     processed += DELTA_GC_DELETE_BATCH
@@ -172,11 +182,11 @@ type OrphanPrefix = Record<string, unknown> & { prefix: string, list_cursor: str
  * (the app is gone, like on_app_delete's own prefix delete), so a listed page
  * is deleted directly, one bounded page per run.
  */
-async function drainOrphanPrefix(c: Context, db: Database, orphan: OrphanPrefix, deadline: number) {
+async function drainOrphanPrefix(c: Context, db: Database, orphan: OrphanPrefix, run: GcRun) {
   const { objects, nextToken } = await withDeadline(s3.listObjectPage(c, orphan.prefix, orphan.list_cursor, DELTA_GC_LIST_PAGE_SIZE), DELTA_GC_STORAGE_TIMEOUT_MS, 'R2 listing')
   let deleted = 0
   let started = 0
-  await forEachBounded(objects, DELTA_GC_COPY_CONCURRENCY, () => Date.now() < deadline, async (object) => {
+  await forEachBounded(objects, DELTA_GC_COPY_CONCURRENCY, () => canStart(run), async (object) => {
     started++
     if (await s3.deleteObjectKey(c, object.key, DELTA_GC_STORAGE_TIMEOUT_MS))
       deleted++
@@ -193,16 +203,16 @@ export const app = new Hono<MiddlewareKeyVariables>()
 
 app.post('/', middlewareAPISecret, async (c) => {
   const startedAt = Date.now()
-  const deadline = startedAt + DELTA_GC_BUDGET_MS
+  const run: GcRun = { deadline: startedAt + DELTA_GC_BUDGET_MS, stalled: false }
   const pool = await getPgClient(c, false)
   try {
     const db = getDrizzleClient(pool)
     const claimed = await db.execute<ClaimedApp>(sql`SELECT * FROM public.delta_gc_claim(${DELTA_GC_APPS_PER_RUN})`)
     for (const claimedApp of claimed.rows) {
-      if (Date.now() >= deadline)
+      if (!canStart(run))
         break
       try {
-        const page = await collectAppPage(c, db, claimedApp, deadline)
+        const page = await collectAppPage(c, db, claimedApp, run)
         await db.execute(sql`SELECT public.delta_gc_finish(${claimedApp.app_id}, ${page.nextCursor}, NULL, ${page.pageDone})`)
         cloudlog({ requestId: c.get('requestId'), message: 'delta gc page done', appId: claimedApp.app_id, ...page })
       }
@@ -212,13 +222,13 @@ app.post('/', middlewareAPISecret, async (c) => {
         await db.execute(sql`SELECT public.delta_gc_finish(${claimedApp.app_id}, NULL, ${error instanceof Error ? error.message : 'unknown error'})`)
       }
     }
-    if (Date.now() < deadline) {
+    if (canStart(run)) {
       const orphans = await db.execute<OrphanPrefix>(sql`SELECT * FROM public.delta_gc_claim_orphan_prefixes(2)`)
       for (const orphan of orphans.rows) {
-        if (Date.now() >= deadline)
+        if (!canStart(run))
           break
         try {
-          const page = await drainOrphanPrefix(c, db, orphan, deadline)
+          const page = await drainOrphanPrefix(c, db, orphan, run)
           cloudlog({ requestId: c.get('requestId'), message: 'delta gc orphan prefix page done', prefix: orphan.prefix, ...page })
         }
         catch (error) {
