@@ -30,8 +30,9 @@ GRANT ALL ON history_counts TO authenticated;
 CREATE FUNCTION pg_temp.record_history(p_label text)
 RETURNS void
 LANGUAGE sql
+SET search_path = ''
 AS $$
-    INSERT INTO history_counts (history_label, channel_1, channel_2)
+    INSERT INTO pg_temp.history_counts (history_label, channel_1, channel_2)
     SELECT
         p_label AS history_label,
         count(*) FILTER (WHERE dh.channel_id = 1) AS channel_1,
@@ -43,6 +44,7 @@ $$;
 CREATE FUNCTION pg_temp.record_history_as(p_user text, p_label text)
 RETURNS void
 LANGUAGE plpgsql
+SET search_path = ''
 AS $$
 BEGIN
     PERFORM tests.authenticate_as(p_user);
