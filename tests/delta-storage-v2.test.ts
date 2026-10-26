@@ -106,6 +106,28 @@ describe('delta storage v2 conversion', () => {
     expect(view.rows.map(row => row.file_name)).toEqual(['b.js', 'c.js'])
   })
 
+  it('queues a size lookup for a live version sharing an unsized file with an earlier deleted conversion', async () => {
+    const deleted = await insertVersion(pool, { deleted: true, deletedAt: new Date().toISOString() })
+    const live = await insertVersion(pool)
+    const path = deltaPath('unsized.js')
+    for (const versionId of [deleted, live]) {
+      await pool.query(
+        `INSERT INTO public.manifest (app_version_id, file_name, file_hash, s3_path, file_size) VALUES ($1, 'unsized.js', 'hash-unsized', $2, 0)`,
+        [versionId, path],
+      )
+    }
+    const queued = async () => (await pool.query<{ count: number }>(
+      `SELECT count(*)::int AS count FROM pgmq.q_on_manifest_create
+       WHERE message->'payload'->>'table' = 'delta_files' AND message->'payload'->'record'->>'s3_path' = $1`,
+      [path],
+    )).rows[0].count
+
+    await pool.query('SELECT public.convert_version_manifest_rows($1)', [deleted])
+    expect(await queued()).toBe(0)
+    await pool.query('SELECT public.convert_version_manifest_rows($1)', [live])
+    expect(await queued()).toBe(1)
+  })
+
   it('keeps legacy rows while legacy writes are on and converts after the switch', async () => {
     const versionId = await insertVersion(pool)
     await insertLegacyRows(versionId, ['batch.js'])

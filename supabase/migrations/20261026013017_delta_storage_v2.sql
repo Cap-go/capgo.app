@@ -746,46 +746,21 @@ BEGIN
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM public.version_files AS vf WHERE vf.app_version_id = p_version_id) THEN
-    -- Unsized legacy rows: their queued lookups target manifest ids that are
-    -- about to disappear. Queue one lookup per newly inserted unsized file of a
-    -- live version; shared or deleted files are not looked up again.
-    WITH inserted AS (
-      INSERT INTO public.delta_files AS df (app_id, s3_path, file_name, file_hash, file_size, path_key, entry_key)
-      SELECT DISTINCT ON (keyed.entry_key)
-        v_app_id, keyed.s3_path, keyed.file_name, keyed.file_hash, keyed.file_size, keyed.path_key, keyed.entry_key
-      FROM (
-        SELECT
-          m.s3_path, m.file_name, m.file_hash, COALESCE(m.file_size, 0) AS file_size,
-          public.delta_path_key(m.s3_path) AS path_key,
-          public.delta_entry_key(m.s3_path, m.file_name, m.file_hash) AS entry_key
-        FROM public.manifest AS m
-        WHERE m.app_version_id = p_version_id
-      ) AS keyed
-      ORDER BY keyed.entry_key, keyed.file_size DESC
-      ON CONFLICT (entry_key) DO UPDATE
-      SET file_size = EXCLUDED.file_size
-      WHERE df.file_size = 0 AND EXCLUDED.file_size > 0
-      RETURNING df.id, df.app_id, df.s3_path, df.file_size, df.entry_key, (df.xmax = 0) AS fresh
-    ),
-    queued AS (
-      SELECT pgmq.send('on_manifest_create', pg_catalog.jsonb_build_object(
-        'function_name', 'on_manifest_create',
-        'function_type', 'cloudflare',
-        'payload', pg_catalog.jsonb_build_object(
-          'old_record', NULL,
-          'record', pg_catalog.jsonb_build_object('id', inserted.id, 'app_id', inserted.app_id, 's3_path', inserted.s3_path, 'file_size', inserted.file_size, 'entry_key', pg_catalog.encode(inserted.entry_key, 'hex')),
-          'type', 'INSERT',
-          'table', 'delta_files',
-          'schema', 'public'
-        )
-      )) AS msg_id
-      FROM inserted
-      WHERE inserted.fresh AND inserted.file_size = 0 AND NOT v_deleted
-    )
-    SELECT count(*) INTO v_queued FROM queued;
-    IF v_queued > 0 THEN
-      RAISE DEBUG 'convert_version_manifest_rows: version % queued % size lookups', p_version_id, v_queued;
-    END IF;
+    INSERT INTO public.delta_files AS df (app_id, s3_path, file_name, file_hash, file_size, path_key, entry_key)
+    SELECT DISTINCT ON (keyed.entry_key)
+      v_app_id, keyed.s3_path, keyed.file_name, keyed.file_hash, keyed.file_size, keyed.path_key, keyed.entry_key
+    FROM (
+      SELECT
+        m.s3_path, m.file_name, m.file_hash, COALESCE(m.file_size, 0) AS file_size,
+        public.delta_path_key(m.s3_path) AS path_key,
+        public.delta_entry_key(m.s3_path, m.file_name, m.file_hash) AS entry_key
+      FROM public.manifest AS m
+      WHERE m.app_version_id = p_version_id
+    ) AS keyed
+    ORDER BY keyed.entry_key, keyed.file_size DESC
+    ON CONFLICT (entry_key) DO UPDATE
+    SET file_size = EXCLUDED.file_size
+    WHERE df.file_size = 0 AND EXCLUDED.file_size > 0;
 
     INSERT INTO public.version_files (app_version_id, file_ids)
     SELECT p_version_id, pg_catalog.array_agg(df.id ORDER BY m.id)
@@ -795,6 +770,36 @@ BEGIN
     WHERE m.app_version_id = p_version_id
     HAVING pg_catalog.count(*) > 0;
 
+    -- Unsized legacy rows: their queued lookups target manifest ids that are
+    -- about to disappear. A live version queues every unsized file it
+    -- references (an earlier deleted-version conversion may have inserted the
+    -- row without a lookup); deleted versions queue nothing.
+    IF NOT v_deleted THEN
+      WITH queued AS MATERIALIZED (
+        SELECT pgmq.send('on_manifest_create', pg_catalog.jsonb_build_object(
+          'function_name', 'on_manifest_create',
+          'function_type', 'cloudflare',
+          'payload', pg_catalog.jsonb_build_object(
+            'old_record', NULL,
+            'record', pg_catalog.jsonb_build_object('id', df.id, 'app_id', df.app_id, 's3_path', df.s3_path, 'file_size', df.file_size, 'entry_key', pg_catalog.encode(df.entry_key, 'hex')),
+            'type', 'INSERT',
+            'table', 'delta_files',
+            'schema', 'public'
+          )
+        )) AS msg_id
+        FROM public.delta_files AS df
+        WHERE df.file_size = 0
+          AND df.id IN (
+            SELECT pg_catalog.unnest(vf.file_ids)
+            FROM public.version_files AS vf
+            WHERE vf.app_version_id = p_version_id
+          )
+      )
+      SELECT count(*) INTO v_queued FROM queued;
+      IF v_queued > 0 THEN
+        RAISE DEBUG 'convert_version_manifest_rows: version % queued % size lookups', p_version_id, v_queued;
+      END IF;
+    END IF;
   END IF;
 
   DELETE FROM public.manifest AS m WHERE m.app_version_id = p_version_id;
@@ -1121,9 +1126,11 @@ ON CONFLICT (name) DO NOTHING;
 -- Nothing reads these manifest indexes; they only add WAL to every replica.
 -- Fail fast instead of queueing manifest traffic behind a long reader; the
 -- release can be retried.
-SET LOCAL lock_timeout = '5s';
+-- Session-level so it applies whether or not migrations run in a transaction.
+SET lock_timeout = '5s';
 DROP INDEX IF EXISTS public.idx_manifest_file_hash;
 DROP INDEX IF EXISTS public.idx_manifest_file_name;
+RESET lock_timeout;
 
 -- Remove the R2 inventory system. Its authoritative copy lived in a separate
 -- PlanetScale database; the Supabase copies and receipt summaries are unused.
