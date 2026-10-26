@@ -172,6 +172,32 @@ describe('delta storage GC worker', () => {
     expect(finish).toContain('more')
   })
 
+  it('lists a page again when a candidate could not be copied', async () => {
+    const old = new Date(Date.now() - 2 * DAY)
+    const keys = [`${prefix}a.js`, `${prefix}b.js`]
+    mocks.listObjectPage.mockResolvedValue({ objects: keys.map(key => ({ key, lastModified: old })), nextToken: 'next' })
+    mocks.copyObjectToTrash.mockImplementation(async (_c: unknown, key: string) => key !== `${prefix}b.js`)
+    mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
+      const text = sqlText(query)
+      if (text.includes('delta_gc_claim_orphan_prefixes'))
+        return { rows: [] }
+      if (text.includes('delta_gc_claim'))
+        return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: 'token' }] }
+      if (text.includes('delta_gc_unreferenced_paths'))
+        return { rows: [{ paths: keys }] }
+      if (text.includes('delta_gc_begin_delete'))
+        return { rows: [{ paths: [`${prefix}a.js`] }] }
+      return { rows: [] }
+    })
+
+    await app.request('/', { method: 'POST' })
+
+    const finish = mocks.execute.mock.calls
+      .map(([query]) => new PgDialect().sqlToQuery(query))
+      .find(query => query.sql.includes('delta_gc_finish('))
+    expect(finish?.params).toEqual(['com.example.gc', 'token', false])
+  })
+
   it('lists a page again when an allowed delete fails', async () => {
     const old = new Date(Date.now() - 2 * DAY)
     mocks.listObjectPage.mockResolvedValue({ objects: [{ key: `${prefix}a.js`, lastModified: old }], nextToken: null })

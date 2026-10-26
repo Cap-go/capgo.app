@@ -129,8 +129,10 @@ async function trashBatch(c: Context, db: Database, appId: string, paths: string
     else if (result === 'timeout')
       run.stalled = true
   })
+  // Every candidate must be copied: a skipped or failed copy keeps the cursor.
+  const copyComplete = copied.length === paths.length
   if (copied.length === 0)
-    return { deleted: 0, complete: true }
+    return { deleted: 0, complete: copyComplete }
 
   // Measured before the call: the database lease starts no earlier than this.
   const leaseStartedAt = Date.now()
@@ -139,7 +141,7 @@ async function trashBatch(c: Context, db: Database, appId: string, paths: string
   `)
   const allowed = begin.rows[0]?.paths ?? []
   if (allowed.length === 0)
-    return { deleted: 0, complete: true }
+    return { deleted: 0, complete: copyComplete }
   const startWindowEnd = leaseStartedAt + DELTA_GC_DELETE_START_WINDOW_MS
   let deleted = 0
   const unsettled: string[] = []
@@ -158,7 +160,7 @@ async function trashBatch(c: Context, db: Database, appId: string, paths: string
     await db.execute(sql`SELECT public.delta_gc_record_unsettled(${appId}, ${sql.param(unsettled)}::text[])`)
   if (deleted < allowed.length)
     cloudlog({ requestId: c.get('requestId'), message: 'delta gc deletes left for the next pass', appId, allowed: allowed.length, deleted })
-  return { deleted, complete: deleted === allowed.length }
+  return { deleted, complete: deleted === allowed.length && copyComplete }
 }
 
 async function collectAppPage(c: Context, db: Database, app: ClaimedApp, run: GcRun) {

@@ -74,6 +74,31 @@ async function withConfig<T>(settings: { gc_enabled?: boolean, legacy_manifest_w
   }
 }
 
+// Makes only this file's app the first due one and claims a single app, so
+// apps owned by parallel test files are neither required nor touched.
+async function claimOwnApp(client: Pick<PoolClient, 'query'>) {
+  await client.query(`UPDATE public.delta_gc_state SET next_run_at = '-infinity' WHERE app_id = $1`, [APP_ID])
+  const claimed = await client.query<{ app_id: string, list_org: string }>('SELECT app_id, list_org FROM public.delta_gc_claim(1)')
+  return claimed.rows.filter(row => row.app_id === APP_ID)
+}
+
+// Walks one GC pass of this app; finishing a page with no cursor advances to
+// the next organization prefix until the pass is scheduled a week out.
+async function walkPass(client: Pick<PoolClient, 'query'>) {
+  const seen: string[] = []
+  for (let page = 0; page < 5; page++) {
+    const [claimed] = await claimOwnApp(client)
+    if (!claimed)
+      break
+    seen.push(claimed.list_org)
+    await client.query('SELECT public.delta_gc_finish($1, NULL, NULL)', [APP_ID])
+    const done = await client.query(`SELECT next_run_at > now() + interval '6 days' AS weekly FROM public.delta_gc_state WHERE app_id = $1`, [APP_ID])
+    if (done.rows[0].weekly)
+      break
+  }
+  return seen
+}
+
 beforeAll(async () => {
   await resetAndSeedAppData(APP_ID)
 })
@@ -248,11 +273,7 @@ describe('delta storage v2 legacy guards', () => {
     await withConfig({ gc_enabled: true }, async (client) => {
       // Convert this app's other legacy rows; demo versions are skipped by design.
       await client.query('SELECT public.convert_version_manifest_rows(id) FROM public.app_versions WHERE app_id = $1', [APP_ID])
-      // Only this app is due inside the transaction.
-      await client.query(`UPDATE public.delta_gc_state SET next_run_at = now() + interval '1 day'`)
-      await client.query('UPDATE public.delta_gc_state SET next_run_at = now() - interval \'1 minute\' WHERE app_id = $1', [APP_ID])
-      const claimed = await client.query<{ app_id: string }>('SELECT app_id FROM public.delta_gc_claim(5)')
-      expect(claimed.rows.map(row => row.app_id)).toEqual([APP_ID])
+      expect((await claimOwnApp(client)).map(row => row.app_id)).toEqual([APP_ID])
     })
   })
 
@@ -264,10 +285,10 @@ describe('delta storage v2 legacy guards', () => {
          VALUES ($1, $2, $3, $4, 'r2', $5, ARRAY[ROW('inline.js', $6, 'hash')::public.manifest_entry])`,
         [APP_ID, `9.9.9-inline-${id.slice(0, 8)}`, ORG_ID, USER_ID, randomUUID().replaceAll('-', ''), deltaPath('inline.js')],
       )
-      await client.query(`UPDATE public.delta_gc_state SET next_run_at = now() + interval '1 day'`)
-      await client.query('UPDATE public.delta_gc_state SET next_run_at = now() - interval \'1 minute\' WHERE app_id = $1', [APP_ID])
-      const claimed = await client.query('SELECT app_id FROM public.delta_gc_claim(5)')
-      expect(claimed.rows).toEqual([])
+      expect(await claimOwnApp(client)).toEqual([])
+      // Postponed for the converter instead of being listed.
+      const state = await client.query(`SELECT next_run_at > now() + interval '23 hours' AS postponed FROM public.delta_gc_state WHERE app_id = $1`, [APP_ID])
+      expect(state.rows[0].postponed).toBe(true)
     })
   })
 
@@ -281,31 +302,12 @@ describe('delta storage v2 legacy guards', () => {
          VALUES ($1, $2::text, 'old.js', 'h', public.delta_path_key($2::text), public.delta_entry_key($2::text, 'old.js', 'h'))`,
         [APP_ID, `orgs/${formerOrg}/apps/${APP_ID}/delta/old.js`],
       )
-      await client.query(`UPDATE public.delta_gc_state SET next_run_at = now() + interval '1 day'`)
-      await client.query(`UPDATE public.delta_gc_state SET next_run_at = now() - interval '1 minute', list_org = NULL, pending_orgs = NULL, list_cursor = NULL WHERE app_id = $1`, [APP_ID])
-
-      const seen: string[] = []
-      for (let pass = 0; pass < 3; pass++) {
-        const claimed = await client.query<{ list_org: string }>('SELECT list_org FROM public.delta_gc_claim(5)')
-        if (claimed.rows.length === 0)
-          break
-        seen.push(claimed.rows[0].list_org)
-        await client.query('SELECT public.delta_gc_finish($1, NULL, NULL)', [APP_ID])
-      }
-      expect(seen).toEqual([formerOrg, ORG_ID].sort())
+      await client.query(`UPDATE public.delta_gc_state SET list_org = NULL, pending_orgs = NULL, list_cursor = NULL WHERE app_id = $1`, [APP_ID])
+      expect(await walkPass(client)).toEqual([formerOrg, ORG_ID].sort())
 
       // The former owner stays known after its last delta_files row is gone.
       await client.query('DELETE FROM public.delta_files WHERE app_id = $1 AND s3_path LIKE $2', [APP_ID, `orgs/${formerOrg}/%`])
-      await client.query(`UPDATE public.delta_gc_state SET next_run_at = now() - interval '1 minute' WHERE app_id = $1`, [APP_ID])
-      const again: string[] = []
-      for (let pass = 0; pass < 3; pass++) {
-        const claimed = await client.query<{ list_org: string }>('SELECT list_org FROM public.delta_gc_claim(5)')
-        if (claimed.rows.length === 0)
-          break
-        again.push(claimed.rows[0].list_org)
-        await client.query('SELECT public.delta_gc_finish($1, NULL, NULL)', [APP_ID])
-      }
-      expect(again).toEqual([formerOrg, ORG_ID].sort())
+      expect(await walkPass(client)).toEqual([formerOrg, ORG_ID].sort())
       const state = await client.query(`SELECT list_org, next_run_at > now() + interval '6 days' AS weekly FROM public.delta_gc_state WHERE app_id = $1`, [APP_ID])
       expect(state.rows[0]).toEqual({ list_org: null, weekly: true })
     })
@@ -380,7 +382,7 @@ describe('delta storage v2 legacy guards', () => {
       )
       await client.query('SELECT public.convert_version_manifest_rows($1)', [versionId])
       await client.query('SELECT public.delta_gc_record_unsettled($1, $2::text[])', [APP_ID, [deltaPath('again.js'), deltaPath('gone.js')]])
-      await client.query(`UPDATE public.delta_gc_unsettled_deletes SET recorded_at = now() - interval '2 minutes'`)
+      await client.query(`UPDATE public.delta_gc_unsettled_deletes SET recorded_at = now() - interval '2 minutes' WHERE app_id = $1`, [APP_ID])
       const claimed = await client.query<{ path: string, referenced: boolean }>('SELECT path, referenced FROM public.delta_gc_claim_unsettled(50) ORDER BY path')
       expect(claimed.rows.filter(row => row.path.startsWith(deltaPath(''))).map(row => [row.path, row.referenced]))
         .toEqual([[deltaPath('again.js'), true], [deltaPath('gone.js'), false]])
