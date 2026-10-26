@@ -5,6 +5,7 @@ import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
 import { simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
+import { currencyForCountry } from '../utils/country_currency.ts'
 import { cloudlogErr, serializeError } from '../utils/logging.ts'
 import { getCheckoutPlanPrice, getPriceCurrencyAmounts, getStripeCustomerCurrency } from '../utils/stripe.ts'
 import { getBillingAccountForCustomer, getRequestCountry, isStripeConfiguredForAccount } from '../utils/stripe_billing.ts'
@@ -16,24 +17,8 @@ const PLAN_PRICES_TTL_SECONDS = 60 * 60
 const PLAN_PRICES_DEGRADED_TTL_SECONDS = 60
 const DEFAULT_CURRENCY = 'usd'
 
-const EURO_COUNTRIES = new Set(['AD', 'AT', 'BE', 'BG', 'CY', 'DE', 'EE', 'ES', 'FI', 'FR', 'GR', 'HR', 'IE', 'IT', 'LT', 'LU', 'LV', 'MC', 'ME', 'MT', 'NL', 'PT', 'SI', 'SK', 'SM', 'VA', 'XK'])
-
 // Smallest-unit amounts per currency, keyed by plan product id (plans.stripe_id) and interval.
 export type PlanPriceAmounts = Record<string, { month: Record<string, number>, year: Record<string, number> }>
-
-// Only picks among currencies Stripe actually sells; it never sets an amount.
-export function currencyForCountry(country: string | null | undefined) {
-  if (!country)
-    return null
-  const code = country.toUpperCase()
-  if (EURO_COUNTRIES.has(code))
-    return 'eur'
-  if (code === 'GB')
-    return 'gbp'
-  if (code === 'US')
-    return 'usd'
-  return null
-}
 
 // Currencies every plan and interval is sold in: a plan whose price failed to load disables them all,
 // so switching never leaves a card on a fallback price.

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { currencyForCountry, getCommonCurrencies, pickCurrency } from '../supabase/functions/_backend/private/plan_prices.ts'
+import { getCommonCurrencies, pickCurrency } from '../supabase/functions/_backend/private/plan_prices.ts'
+import { currencyForCountry } from '../supabase/functions/_backend/utils/country_currency.ts'
 import { getPriceCurrencyAmounts, scaleTiersToCurrency } from '../supabase/functions/_backend/utils/stripe.ts'
 import { getPlanAmounts } from '../src/services/planPrices'
 
@@ -48,7 +49,9 @@ describe('plan prices', () => {
     expect(pickCurrency(['eur', 'usd'], null, null)).toBe('usd')
     expect(pickCurrency(['usd'], 'eur', 'FR')).toBeNull()
     expect(pickCurrency([], null, 'FR')).toBeNull()
-    expect(currencyForCountry('JP')).toBeNull()
+    // Any local currency Stripe sells is picked; unsold ones fall back to USD.
+    expect(pickCurrency(['eur', 'jpy', 'usd'], null, 'JP')).toBe('jpy')
+    expect(pickCurrency(['eur', 'usd'], null, 'JP')).toBe('usd')
   })
 
   it.concurrent('returns Stripe amounts in major units, or null when not sold in that currency', () => {
@@ -63,5 +66,18 @@ describe('plan prices', () => {
     expect(scaleTiersToCurrency(tiers, 'eur')).toEqual(tiers)
     expect(scaleTiersToCurrency(tiers, 'jpy').map(tier => [tier.up_to, String(tier.unit_amount_decimal)])).toEqual([[10, '0.6'], ['inf', '0.45']])
     expect(scaleTiersToCurrency(tiers, 'kwd')).toEqual([{ up_to: 10, unit_amount: 600 }, { up_to: 'inf', unit_amount: 450 }])
+  })
+
+  it.concurrent('maps every country to its local currency', () => {
+    expect(currencyForCountry('fr')).toBe('eur')
+    expect(currencyForCountry('BG')).toBe('eur')
+    expect(currencyForCountry('GB')).toBe('gbp')
+    expect(currencyForCountry('JP')).toBe('jpy')
+    expect(currencyForCountry('BR')).toBe('brl')
+    expect(currencyForCountry('CH')).toBe('chf')
+    expect(currencyForCountry('SN')).toBe('xof')
+    expect(currencyForCountry('EC')).toBe('usd')
+    expect(currencyForCountry('ZZ')).toBeNull()
+    expect(currencyForCountry(null)).toBeNull()
   })
 })
