@@ -371,6 +371,25 @@ describe('delta storage v2 legacy guards', () => {
     })
   })
 
+  it('reports whether an unsettled delete is referenced again', async () => {
+    await withConfig({}, async (client) => {
+      const versionId = await insertVersion(client)
+      await client.query(
+        `INSERT INTO public.manifest (app_version_id, file_name, file_hash, s3_path, file_size) VALUES ($1, 'again.js', 'h', $2, 1)`,
+        [versionId, deltaPath('again.js')],
+      )
+      await client.query('SELECT public.convert_version_manifest_rows($1)', [versionId])
+      await client.query('SELECT public.delta_gc_record_unsettled($1, $2::text[])', [APP_ID, [deltaPath('again.js'), deltaPath('gone.js')]])
+      await client.query(`UPDATE public.delta_gc_unsettled_deletes SET recorded_at = now() - interval '2 minutes'`)
+      const claimed = await client.query<{ path: string, referenced: boolean }>('SELECT path, referenced FROM public.delta_gc_claim_unsettled(50) ORDER BY path')
+      expect(claimed.rows.filter(row => row.path.startsWith(deltaPath(''))).map(row => [row.path, row.referenced]))
+        .toEqual([[deltaPath('again.js'), true], [deltaPath('gone.js'), false]])
+      await client.query('SELECT public.delta_gc_settle($1)', [deltaPath('gone.js')])
+      const left = await client.query('SELECT path FROM public.delta_gc_unsettled_deletes WHERE path LIKE $1', [`${deltaPath('')}%`])
+      expect(left.rows.map(row => row.path)).toEqual([deltaPath('again.js')])
+    })
+  })
+
   it('caps the delete lease at 2 seconds', async () => {
     await withConfig({ gc_enabled: true }, async (client) => {
       await client.query(`UPDATE public.app_versions SET storage_provider = 'r2' WHERE app_id = $1 AND storage_provider = 'r2-direct'`, [APP_ID])

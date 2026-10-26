@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   execute: vi.fn(),
+  unsettled: [] as Array<{ path: string, referenced: boolean }>,
+  restoreFromTrashIfMissing: vi.fn(),
   listObjectPage: vi.fn(),
   copyObjectToTrash: vi.fn(),
   deleteObjectKey: vi.fn(),
@@ -11,13 +13,19 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   getPgClient: vi.fn(async () => ({})),
   closeClient: vi.fn(async () => {}),
-  getDrizzleClient: () => ({ execute: mocks.execute }),
+  // Unsettled-delete claims are routed separately so each test opts in.
+  getDrizzleClient: () => ({
+    execute: (query: { queryChunks?: unknown[] }) => JSON.stringify(query.queryChunks ?? query).includes('delta_gc_claim_unsettled')
+      ? Promise.resolve({ rows: mocks.unsettled })
+      : mocks.execute(query),
+  }),
 }))
 vi.mock('../supabase/functions/_backend/utils/s3.ts', () => ({
   s3: {
     listObjectPage: mocks.listObjectPage,
     copyObjectToTrash: mocks.copyObjectToTrash,
     deleteObjectKey: mocks.deleteObjectKey,
+    restoreFromTrashIfMissing: mocks.restoreFromTrashIfMissing,
   },
 }))
 vi.mock('../supabase/functions/_backend/utils/hono.ts', async importOriginal => ({
@@ -37,6 +45,7 @@ function sqlText(query: { queryChunks?: unknown[] }) {
 describe('delta storage GC worker', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.unsettled = []
     mocks.copyObjectToTrash.mockResolvedValue(true)
     mocks.deleteObjectKey.mockResolvedValue(true)
   })
@@ -203,6 +212,40 @@ describe('delta storage GC worker', () => {
       .map(([query]) => dialect.sqlToQuery(query))
       .find(query => query.sql.includes('delta_gc_finish_orphan_prefix'))
     expect(finish?.params).toEqual([orphanPrefix, null, false])
+  })
+
+  it('records unconfirmed deletes and restores a reused, missing object later', async () => {
+    const old = new Date(Date.now() - 2 * DAY)
+    mocks.listObjectPage.mockResolvedValue({ objects: [{ key: `${prefix}a.js`, lastModified: old }], nextToken: null })
+    mocks.deleteObjectKey.mockResolvedValue(false)
+    mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
+      const text = sqlText(query)
+      if (text.includes('delta_gc_claim_orphan_prefixes'))
+        return { rows: [] }
+      if (text.includes('delta_gc_claim'))
+        return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: null }] }
+      if (text.includes('delta_gc_unreferenced_paths') || text.includes('delta_gc_begin_delete'))
+        return { rows: [{ paths: [`${prefix}a.js`] }] }
+      return { rows: [] }
+    })
+
+    await app.request('/', { method: 'POST' })
+    const recorded = mocks.execute.mock.calls
+      .map(([query]) => new PgDialect().sqlToQuery(query))
+      .find(query => query.sql.includes('delta_gc_record_unsettled'))
+    expect(recorded?.params).toEqual(['com.example.gc', [`${prefix}a.js`]])
+
+    // A later run: the key was reused by an upload and the late delete removed it.
+    vi.clearAllMocks()
+    mocks.unsettled = [{ path: `${prefix}a.js`, referenced: true }, { path: `${prefix}b.js`, referenced: false }]
+    mocks.restoreFromTrashIfMissing.mockResolvedValue('restored')
+    mocks.execute.mockResolvedValue({ rows: [] })
+    await app.request('/', { method: 'POST' })
+
+    expect(mocks.restoreFromTrashIfMissing).toHaveBeenCalledOnce()
+    expect(mocks.restoreFromTrashIfMissing).toHaveBeenCalledWith(expect.anything(), `${prefix}a.js`)
+    const settled = mocks.execute.mock.calls.map(([query]) => sqlText(query)).filter(text => text.includes('delta_gc_settle'))
+    expect(settled).toHaveLength(2)
   })
 
   it('never deletes when the database refuses the lease', async () => {

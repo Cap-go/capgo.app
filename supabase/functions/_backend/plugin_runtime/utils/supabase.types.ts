@@ -1504,6 +1504,24 @@ export type Database = {
           },
         ]
       }
+      delta_gc_unsettled_deletes: {
+        Row: {
+          app_id: string
+          path: string
+          recorded_at: string
+        }
+        Insert: {
+          app_id: string
+          path: string
+          recorded_at?: string
+        }
+        Update: {
+          app_id?: string
+          path?: string
+          recorded_at?: string
+        }
+        Relationships: []
+      }
       delta_storage_state: {
         Row: {
           convert_cursor: number
@@ -3853,6 +3871,13 @@ export type Database = {
           prefix: string
         }[]
       }
+      delta_gc_claim_unsettled: {
+        Args: { p_limit?: number }
+        Returns: {
+          path: string
+          referenced: boolean
+        }[]
+      }
       delta_gc_end_delete: { Args: { p_app_id: string }; Returns: undefined }
       delta_gc_finish: {
         Args: {
@@ -3868,6 +3893,11 @@ export type Database = {
         Returns: undefined
       }
       delta_gc_lock_key: { Args: { p_app_id: string }; Returns: number }
+      delta_gc_record_unsettled: {
+        Args: { p_app_id: string; p_paths: string[] }
+        Returns: undefined
+      }
+      delta_gc_settle: { Args: { p_path: string }; Returns: undefined }
       delta_gc_unreferenced_paths: {
         Args: { p_paths: string[] }
         Returns: string[]

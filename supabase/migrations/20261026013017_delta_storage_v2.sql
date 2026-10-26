@@ -603,6 +603,81 @@ ALTER FUNCTION public.delta_gc_finish(text, text, text, boolean) OWNER TO postgr
 REVOKE ALL ON FUNCTION public.delta_gc_finish(text, text, text, boolean) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.delta_gc_finish(text, text, text, boolean) TO service_role;
 
+-- R2 does not bound when an aborted DELETE completes, so a delete with an
+-- unknown outcome may land after the lease, when an upload may already
+-- reference the key again. Such paths are recorded; a later GC run restores
+-- the object from the trash copy if it is referenced and missing.
+CREATE TABLE public.delta_gc_unsettled_deletes (
+  path text PRIMARY KEY,
+  app_id character varying NOT NULL,
+  recorded_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE public.delta_gc_unsettled_deletes OWNER TO postgres;
+ALTER TABLE public.delta_gc_unsettled_deletes ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.delta_gc_unsettled_deletes FROM PUBLIC, anon, authenticated;
+GRANT ALL ON TABLE public.delta_gc_unsettled_deletes TO service_role;
+CREATE POLICY "Deny all direct access" ON public.delta_gc_unsettled_deletes AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+CREATE FUNCTION public.delta_gc_record_unsettled(p_app_id text, p_paths text[])
+RETURNS void
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  INSERT INTO public.delta_gc_unsettled_deletes (path, app_id)
+  SELECT DISTINCT p.path, p_app_id FROM pg_catalog.unnest(p_paths) AS p (path)
+  ON CONFLICT (path) DO UPDATE SET recorded_at = now()
+$$;
+ALTER FUNCTION public.delta_gc_record_unsettled(text, text[]) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_gc_record_unsettled(text, text[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.delta_gc_record_unsettled(text, text[]) TO service_role;
+
+-- Claims settled-enough paths (older than a minute, far past any in-flight
+-- request) and says whether a kept version references them again.
+CREATE FUNCTION public.delta_gc_claim_unsettled(p_limit integer DEFAULT 20)
+RETURNS TABLE (path text, referenced boolean)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  RETURN QUERY
+  WITH due AS (
+    SELECT u.path
+    FROM public.delta_gc_unsettled_deletes AS u
+    WHERE u.recorded_at < now() - interval '1 minute'
+    ORDER BY u.recorded_at
+    LIMIT GREATEST(COALESCE(p_limit, 20), 1)
+    FOR UPDATE SKIP LOCKED
+  ),
+  claimed AS (
+    -- Re-checked by a later run if this one does not settle it.
+    UPDATE public.delta_gc_unsettled_deletes AS u
+    SET recorded_at = now()
+    FROM due
+    WHERE u.path = due.path
+    RETURNING u.path
+  )
+  SELECT claimed.path, NOT (claimed.path = ANY (public.delta_gc_unreferenced_paths(ARRAY[claimed.path])))
+  FROM claimed;
+END;
+$$;
+ALTER FUNCTION public.delta_gc_claim_unsettled(integer) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_gc_claim_unsettled(integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.delta_gc_claim_unsettled(integer) TO service_role;
+
+CREATE FUNCTION public.delta_gc_settle(p_path text)
+RETURNS void
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  DELETE FROM public.delta_gc_unsettled_deletes WHERE path = p_path
+$$;
+ALTER FUNCTION public.delta_gc_settle(text) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_gc_settle(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.delta_gc_settle(text) TO service_role;
+
 -- App deletion only removes the current owner's prefix (on_app_delete), and
 -- the cascade drops delta_files, which is how GC finds former owners'
 -- prefixes. Record those prefixes first; GC drains them afterwards.

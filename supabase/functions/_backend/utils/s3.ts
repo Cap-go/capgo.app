@@ -587,6 +587,27 @@ async function copyObjectToTrash(c: Context, fileId: string) {
 }
 
 /** Bounded delete: the request is aborted after `timeoutMs`. */
+/**
+ * Restores `fileId` from its lifecycle-trash copy when it is definitely
+ * missing. 'unknown' means presence could not be established; retry later.
+ */
+async function restoreFromTrashIfMissing(c: Context, fileId: string): Promise<'present' | 'restored' | 'unknown' | 'failed'> {
+  const presence = await getObjectPresence(c, fileId)
+  if (presence === 'present')
+    return 'present'
+  if (presence === 'unknown')
+    return 'unknown'
+  try {
+    await initS3(c).copyObject({ sourceKey: getTrashPath(fileId) }, fileId)
+    cloudlog({ requestId: c.get('requestId'), message: 'restored R2 object from trash after unsettled delete', fileId })
+    return 'restored'
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'restore R2 object from trash failed', fileId, error: serializeStorageError(error) })
+    return 'failed'
+  }
+}
+
 async function deleteObjectKey(c: Context, fileId: string, timeoutMs = 10_000) {
   try {
     const url = await initS3(c).getPresignedUrl('DELETE', fileId)
@@ -605,6 +626,7 @@ async function deleteObjectKey(c: Context, fileId: string, timeoutMs = 10_000) {
 
 export const s3 = {
   copyObjectToTrash,
+  restoreFromTrashIfMissing,
   deleteObjectKey,
   listObjectPage,
   getSize,

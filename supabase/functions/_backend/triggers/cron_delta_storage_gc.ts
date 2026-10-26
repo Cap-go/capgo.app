@@ -142,14 +142,20 @@ async function trashBatch(c: Context, db: Database, appId: string, paths: string
     return { deleted: 0, complete: true }
   const startWindowEnd = leaseStartedAt + DELTA_GC_DELETE_START_WINDOW_MS
   let deleted = 0
+  const unsettled: string[] = []
   await forEachBounded(allowed, DELTA_GC_DELETE_CONCURRENCY, () => Date.now() < startWindowEnd, async (path) => {
     if (await s3.deleteObjectKey(c, path, DELTA_GC_DELETE_TIMEOUT_MS))
       deleted++
+    else
+      unsettled.push(path)
   })
   // Release early only when R2 confirmed every delete. An aborted or failed
-  // request may still be applied, so the lease then runs to its end.
+  // request may still be applied, so the lease then runs to its end, and the
+  // path is re-checked by a later run (repairUnsettledDeletes).
   if (deleted === allowed.length)
     await db.execute(sql`SELECT public.delta_gc_end_delete(${appId})`)
+  if (unsettled.length > 0)
+    await db.execute(sql`SELECT public.delta_gc_record_unsettled(${appId}, ${sql.param(unsettled)}::text[])`)
   if (deleted < allowed.length)
     cloudlog({ requestId: c.get('requestId'), message: 'delta gc deletes left for the next pass', appId, allowed: allowed.length, deleted })
   return { deleted, complete: deleted === allowed.length }
@@ -173,6 +179,30 @@ async function collectAppPage(c: Context, db: Database, app: ClaimedApp, run: Gc
   const pageDone = processed >= candidates.length && allDeleted
   const nextCursor = pageDone ? nextToken : app.list_cursor
   return { listed: objects.length, candidates: candidates.length, deleted, nextCursor, pageDone }
+}
+
+type UnsettledDelete = Record<string, unknown> & { path: string, referenced: boolean }
+
+/**
+ * A delete whose outcome was unknown may have landed after an upload reused
+ * the key. Once R2 has long settled it, restore a referenced, missing object
+ * from its trash copy; unreferenced paths are left to the normal pass.
+ */
+async function repairUnsettledDeletes(c: Context, db: Database, run: GcRun) {
+  const due = await db.execute<UnsettledDelete>(sql`SELECT * FROM public.delta_gc_claim_unsettled(20)`)
+  for (const item of due.rows) {
+    if (!canStart(run))
+      break
+    const outcome = item.referenced
+      ? await withTimeout(s3.restoreFromTrashIfMissing(c, item.path), DELTA_GC_STORAGE_TIMEOUT_MS, 'timeout' as const)
+      : 'unreferenced'
+    if (outcome === 'timeout')
+      run.stalled = true
+    if (outcome === 'present' || outcome === 'restored' || outcome === 'unreferenced')
+      await db.execute(sql`SELECT public.delta_gc_settle(${item.path})`)
+    else
+      cloudlog({ requestId: c.get('requestId'), message: 'delta gc unsettled delete kept for retry', path: item.path, outcome })
+  }
 }
 
 type OrphanPrefix = Record<string, unknown> & { prefix: string, list_cursor: string | null }
@@ -207,6 +237,8 @@ app.post('/', middlewareAPISecret, async (c) => {
   const pool = await getPgClient(c, false)
   try {
     const db = getDrizzleClient(pool)
+    if (canStart(run))
+      await repairUnsettledDeletes(c, db, run)
     const claimed = await db.execute<ClaimedApp>(sql`SELECT * FROM public.delta_gc_claim(${DELTA_GC_APPS_PER_RUN})`)
     for (const claimedApp of claimed.rows) {
       if (!canStart(run))
