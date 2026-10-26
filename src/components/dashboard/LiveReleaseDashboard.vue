@@ -16,9 +16,9 @@ import { useDeviceDataCollection } from '~/composables/useDeviceDataCollection'
 import { useNativeObserveStats } from '~/composables/useNativeObserveStats'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { groupCompatibilityEvents } from '~/services/compatibilityEvents'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatNumberValue } from '~/services/formatLocale'
 import { actionToFilter, updaterInsightActions } from '~/services/statsActions'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 // The app landing page (Observe > Live release) and the channel statistics
 // page share this one screen. On a channel page it is locked to that channel:
@@ -40,7 +40,7 @@ const emit = defineEmits<{
 provideChartCardCompact('dense')
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const { days } = usePeriodDaysQuery()
 const { collection: deviceDataCollection } = useDeviceDataCollection(() => props.appId)
 
@@ -69,7 +69,7 @@ async function fetchInsights() {
   }
   insightsLoading.value = true
   try {
-    const { data: sessionData } = await supabase.auth.getSession()
+    const { data: sessionData } = await capgo.auth.getSession()
     if (!sessionData.session)
       return
     const response = await fetch(`${defaultApiHost}/private/stats/insights`, {
@@ -117,7 +117,7 @@ async function fetchCompatibility() {
     return
   }
   const requestedAppId = props.appId
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('compatibility_events')
     .select('id, platform, channel_id, current_version_id, previous_version_id, source, change_occurred_at, created_at, resolved_at')
     .eq('app_id', requestedAppId)

@@ -12,6 +12,7 @@ import { appIdSchema, cursorSchema, deviceIdSchema, hasInvalidQueryLimitInput, h
 import { checkPermission } from '../utils/rbac.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { countDevices, countInstallSources, readDevices } from '../utils/stats.ts'
+import { supabaseWithAuth } from '../utils/supabase.ts'
 import { Constants } from '../utils/supabase.types.ts'
 import { parseVersionCompareFilter, VERSION_COMPARE_OPS } from '../utils/versionCompare.ts'
 
@@ -29,6 +30,10 @@ interface DataDevice {
   defaultChannel?: string
   devicesId?: string[]
   deviceIds?: string[] // TODO: remove when migration is done
+  /** Only devices forced to a channel of this app (resolved server-side). */
+  overrides?: boolean
+  /** Only devices forced to this channel (resolved server-side). */
+  overrideChannelId?: number
   installSources?: string[]
   search?: string
   customIdMode?: boolean
@@ -52,6 +57,10 @@ const versionCompareOpSchema = z.enum(VERSION_COMPARE_OPS)
 const MAX_VERSION_NAMES = 50
 const EXPORT_FORMATS = ['csv', 'json'] as const
 const DEFAULT_EXPORT_LIMIT = 10_000
+// The ids end up in the device query itself (a PostgREST in-list or an Analytics
+// Engine IN clause), which stays reliable up to PostgREST's 1000-row page. Beyond
+// that the request is refused rather than silently showing a subset.
+const MAX_OVERRIDE_DEVICE_IDS = 1000
 const devicesBodyShape = {
   appId: appIdSchema,
   count: z.boolean().optional(),
@@ -65,6 +74,8 @@ const devicesBodyShape = {
   defaultChannel: safeQueryTextSchema.optional(),
   devicesId: z.array(deviceIdSchema).optional(),
   deviceIds: z.array(deviceIdSchema).optional(),
+  overrides: z.boolean().optional(),
+  overrideChannelId: z.number().int().positive().optional(),
   installSources: z.array(safeQueryTextSchema).optional(),
   search: safeQueryTextSchema.optional(),
   customIdMode: z.boolean().optional(),
@@ -146,6 +157,32 @@ async function parseAuthorizedDevicesBody(c: Context<MiddlewareKeyVariables>, sc
   return body
 }
 
+/**
+ * Device ids forced to a channel, resolved here instead of the console downloading
+ * them and posting them back. Returns undefined when no override filter applies,
+ * and intersects with explicitly requested ids. RLS still applies (caller client).
+ */
+async function resolveOverrideDeviceIds(c: Context<MiddlewareKeyVariables>, body: DataDevice): Promise<string[] | undefined> {
+  if (!body.overrides && body.overrideChannelId === undefined)
+    return undefined
+  let query = supabaseWithAuth(c, c.get('auth')!)
+    .from('channel_devices')
+    .select('device_id')
+    .eq('app_id', body.appId)
+  if (body.overrideChannelId !== undefined)
+    query = query.eq('channel_id', body.overrideChannelId)
+  const requested = body.devicesId ?? body.deviceIds
+  if (requested?.length)
+    query = query.in('device_id', requested)
+  // One row past the ceiling tells "exactly at the limit" from "over it".
+  const { data, error } = await query.order('device_id').limit(MAX_OVERRIDE_DEVICE_IDS + 1)
+  if (error)
+    throw simpleError('cannot_read_device_overrides', 'Cannot read device overrides', { error })
+  if ((data?.length ?? 0) > MAX_OVERRIDE_DEVICE_IDS)
+    throw simpleError('too_many_device_overrides', `Filtering by forced devices supports up to ${MAX_OVERRIDE_DEVICE_IDS} devices`, { app_id: body.appId })
+  return (data ?? []).map(row => row.device_id)
+}
+
 function toReadDevicesParams(body: z.infer<typeof devicesBodySchema>, limit?: number): { params: ReadDevicesParams, customIdMode: boolean } {
   const devicesIds = body.devicesId ?? body.deviceIds ?? []
   const { versionNameFilter, versionNameCompare, osVersionCompare } = resolveVersionCompares(body)
@@ -176,6 +213,12 @@ app.use('*', useCors)
 
 app.post('/', middlewareAuth(), async (c) => {
   const body = await parseAuthorizedDevicesBody(c, devicesBodySchema, 'post devices body')
+  const overrideIds = await resolveOverrideDeviceIds(c, body)
+  // An override filter that matches nothing must not fall back to every device.
+  if (overrideIds?.length === 0)
+    return c.json(body.count ? { count: 0 } : { data: [], hasMore: false })
+  if (overrideIds)
+    body.devicesId = overrideIds
   const devicesIds = body.devicesId ?? body.deviceIds ?? []
   const { versionNameFilter, versionNameCompare, osVersionCompare } = resolveVersionCompares(body)
   if (body.installSourceCounts)
@@ -205,11 +248,16 @@ app.post('/', middlewareAuth(), async (c) => {
 
 app.post('/export', middlewareAuth(), async (c) => {
   const body = await parseAuthorizedDevicesBody(c, exportSchema, 'post devices export body')
+  const overrideIds = await resolveOverrideDeviceIds(c, body)
+  if (overrideIds)
+    body.devicesId = overrideIds
   const format = body.format ?? 'csv'
   const limit = Math.min(Math.max(body.limit ?? DEFAULT_EXPORT_LIMIT, 1), DEFAULT_EXPORT_LIMIT)
   const { params, customIdMode } = toReadDevicesParams(body, limit)
-  const result = await readDevices(c, { ...params, cursor: undefined }, customIdMode)
-  const rows = result.data
+  // An override filter that matches nothing exports nothing rather than every device.
+  const rows = overrideIds?.length === 0
+    ? []
+    : (await readDevices(c, { ...params, cursor: undefined }, customIdMode)).data
 
   if (format === 'json') {
     return c.json({

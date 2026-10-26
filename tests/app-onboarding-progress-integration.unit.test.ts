@@ -83,10 +83,10 @@ vi.mock('~/services/capgoApi', async (importOriginal) => {
     invokeCapgoApi: vi.fn(async () => ({ data: { assignments: writerMocks.abTestAssignments }, error: null })),
   }
 })
-vi.mock('~/services/supabase', () => ({
-  getLocalConfig: () => ({ supaHost: 'https://sb.capgo.app', supaKey: 'anon-key' }),
+vi.mock('~/services/console', () => ({
+  getLocalConfig: () => ({ apiHost: 'https://api.capgo.app' }),
   isLocal: () => false,
-  useSupabase: () => {
+  useConsole: () => {
     return {
       from: (table: string) => {
         const query = {

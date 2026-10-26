@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Session } from '@supabase/supabase-js'
+import type { Session } from '~/services/consoleClient'
 import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -8,13 +8,13 @@ import IconLoader from '~icons/lucide/loader-2'
 import IconTriangleAlert from '~icons/lucide/triangle-alert'
 import { authGhostButtonClass, authSecondaryButtonClass } from '~/components/auth/pageStyles'
 import { useSSOProvisioning } from '~/composables/useSSOProvisioning'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { openSupport } from '~/services/support'
 import { validateRedirectPath } from '~/utils/safeRedirect'
 
 const route = useRoute()
 const router = useRouter()
-const supabase = useSupabase()
+const capgo = useConsole()
 const { t } = useI18n()
 const isLoading = ref(true)
 const errorMessage = ref('')
@@ -63,7 +63,7 @@ async function completeSsoLogin() {
     let session: Session | null = null
 
     if (accessToken && refreshToken) {
-      const { data, error } = await supabase.auth.setSession({
+      const { data, error } = await capgo.auth.setSession({
         access_token: accessToken,
         refresh_token: refreshToken,
       })
@@ -78,7 +78,7 @@ async function completeSsoLogin() {
       session = data.session
     }
     else if (code) {
-      const { data, error } = await supabase.auth.exchangeCodeForSession(code)
+      const { data, error } = await capgo.auth.exchangeCodeForSession(code)
 
       if (error) {
         isLoading.value = false
@@ -100,12 +100,12 @@ async function completeSsoLogin() {
       if (merged) {
         // The duplicate SSO user was merged into the existing account.
         // The current session is now invalid — sign out and redirect to login.
-        await supabase.auth.signOut()
+        await capgo.auth.signOut()
         router.replace('/login?message=sso_account_linked')
         return
       }
       if (provisionError.value) {
-        await supabase.auth.signOut()
+        await capgo.auth.signOut()
         isLoading.value = false
         errorMessage.value = provisionError.value
         toast.error(provisionError.value)

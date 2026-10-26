@@ -12,7 +12,8 @@
  * - Stripe billing is enabled and external purchase flows are allowed
  * - The organization is on trial (not paying, trial_left > 0)
  * - The user can manage org billing (org.update_billing)
- * - An app of the organization reached a milestone the user was not asked about yet
+ * - An app of the organization reached a milestone the user was not asked about yet,
+ *   or the page was opened with `?trial_card=1&oid=<org>` (CLI agent notices)
  * - The org has an onboarding plan to start and it is not scheduled yet
  */
 
@@ -20,20 +21,21 @@ import type { TrialPlan, TrialPlanOption } from '~/services/stripe'
 import type { TrialCardMilestone } from '~/utils/trialCardPrompt'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconCheckCircle from '~icons/heroicons/check-circle'
 import IconLock from '~icons/heroicons/lock-closed'
 import BillingModal from '~/components/billing/BillingModal.vue'
 import CardFormModal from '~/components/billing/CardFormModal.vue'
 import TrialPlanPicker from '~/components/billing/TrialPlanPicker.vue'
+import { getLocalConfig, stripeEnabled } from '~/services/console'
 import { formatLocalDate } from '~/services/date'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
 import { pushEvent } from '~/services/posthog'
 import { formatStripeAmount, getTrialPlan, scheduleTrialPlan } from '~/services/stripe'
-import { getLocalConfig, stripeEnabled } from '~/services/supabase'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
+import { readTrialCardDeepLink, TRIAL_CARD_PARAM } from '~/utils/billingDeepLinks'
 import {
   getReachedTrialCardMilestones,
   markTrialCardMilestonesHandled,
@@ -43,6 +45,7 @@ import {
 
 const { t } = useI18n()
 const route = useRoute()
+const router = useRouter()
 const organizationStore = useOrganizationStore()
 const config = getLocalConfig()
 const hideExternalPurchaseFlows = isNativeAppStoreContext()
@@ -50,7 +53,8 @@ const hideExternalPurchaseFlows = isNativeAppStoreContext()
 interface ActivePrompt {
   // Pinned when shown so switching organization while it is open cannot misattribute it.
   orgId: string
-  milestone: TrialCardMilestone
+  // null when opened from the deep link rather than a milestone.
+  milestone: TrialCardMilestone | null
   reached: TrialCardMilestone[]
   trialDaysLeft: number
   plan: TrialPlan
@@ -86,6 +90,20 @@ const pendingMilestone = computed(() => {
     return null
   return pickTrialCardMilestone(reachedMilestones.value, readHandledTrialCardMilestones(orgId.value))
 })
+// Org the deep link asked about; cleared once a prompt opens. It skips only the milestone check.
+const deepLinkOrgId = ref('')
+const isDeepLinked = computed(() => !!orgId.value && deepLinkOrgId.value === orgId.value && isTrial.value && !isOnboardingRoute.value)
+
+watch(() => route.query[TRIAL_CARD_PARAM], async () => {
+  const link = readTrialCardDeepLink(route.query)
+  if (!link)
+    return
+  void router.replace({ query: { ...route.query, [TRIAL_CARD_PARAM]: undefined } })
+  await organizationStore.awaitInitialLoad()
+  if (link.orgId)
+    organizationStore.setCurrentOrganization(link.orgId)
+  deepLinkOrgId.value = link.orgId ?? orgId.value
+}, { immediate: true })
 
 const selectedOption = computed(() => {
   const options = prompt.value?.plans ?? []
@@ -100,25 +118,30 @@ const planPrice = computed(() => {
   return prompt.value ? formatStripeAmount(prompt.value.plan.amount, prompt.value.plan.currency) : ''
 })
 const planDate = computed(() => prompt.value ? formatLocalDate(prompt.value.plan.startsAt) : '')
-const title = computed(() => prompt.value?.milestone === 'builder' ? t('trial-card-prompt-title-builder') : t('trial-card-prompt-title-ota'))
+const title = computed(() => {
+  if (prompt.value && !prompt.value.milestone)
+    return t('trial-plan-offer-title', { plan: selectedPlanName.value })
+  return prompt.value?.milestone === 'builder' ? t('trial-card-prompt-title-builder') : t('trial-card-prompt-title-ota')
+})
 const showPicker = computed(() => (prompt.value?.plans.length ?? 0) > 1)
 
 function track(event: string) {
   if (!prompt.value)
     return
-  pushEvent(event, config.supaHost, {
+  pushEvent(event, config.apiHost, {
     org_id: prompt.value.orgId,
+    source: prompt.value.milestone ? 'milestone' : 'deep_link',
     milestone: prompt.value.milestone,
     trial_days_left: prompt.value.trialDaysLeft,
     plan: selectedPlanName.value,
   })
 }
 
-watch([orgId, pendingMilestone, () => !!stripeEnabled.value], async ([id, pending, enabled]) => {
+watch([orgId, pendingMilestone, isDeepLinked, () => !!stripeEnabled.value], async ([id, pending, deepLinked, enabled]) => {
   const run = ++lookupRun
   if (step.value)
     return
-  if (!id || !pending || !enabled || hideExternalPurchaseFlows)
+  if (!id || !(pending || deepLinked) || !enabled || hideExternalPurchaseFlows)
     return
   if (!await checkPermissions('org.update_billing', { orgId: id }) || run !== lookupRun)
     return
@@ -141,7 +164,7 @@ watch([orgId, pendingMilestone, () => !!stripeEnabled.value], async ([id, pendin
   const plans = trial.plans ?? []
   prompt.value = {
     orgId: id,
-    milestone: pending,
+    milestone: deepLinked ? null : pending,
     reached,
     trialDaysLeft: currentOrg.value?.trial_left ?? 0,
     plan: trial.plan,
@@ -153,6 +176,7 @@ watch([orgId, pendingMilestone, () => !!stripeEnabled.value], async ([id, pendin
     || plans[0]?.productId
     || ''
   step.value = 'ask'
+  deepLinkOrgId.value = ''
   track('trial_card_prompt_shown')
 }, { immediate: true })
 

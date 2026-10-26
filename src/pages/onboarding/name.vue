@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Json } from '~/types/supabase.types'
+import type { Json } from '~/types/database.types'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -9,7 +9,7 @@ import IconLoader from '~icons/lucide/loader-2'
 import AppOnboardingHeader from '~/components/dashboard/AppOnboardingHeader.vue'
 import AppOnboardingPageFrame from '~/components/dashboard/AppOnboardingPageFrame.vue'
 import OnboardingProfile from '~/components/OnboardingProfile.vue'
-import { getLocalConfig } from '~/services/supabase'
+import { getLocalConfig } from '~/services/console'
 import { mergeUserOnboardingProgress, replaceUserOnboardingWithRetry, serializeUserOnboardingWrite } from '~/services/userOnboardingWriteQueue'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
@@ -55,7 +55,7 @@ const profileHandoff = consumeProfileOnboardingHandoff(window.history)
 // Signup opens straight on About you; only saved names or an edit offer the resume choice.
 let resumed = (isEditingProfile.value || hasSavedDraft) && !profileHandoff
 const resumePending = ref(resumed)
-const identity = createOnboardingTelemetryIdentity({ continueFrom: profileHandoff, flow: 'pre_org', onboardingVersion: () => PROFILE_ONBOARDING_ANALYTICS_VERSION, supaHost: getLocalConfig().supaHost })
+const identity = createOnboardingTelemetryIdentity({ continueFrom: profileHandoff, flow: 'pre_org', onboardingVersion: () => PROFILE_ONBOARDING_ANALYTICS_VERSION, apiHost: getLocalConfig().apiHost })
 const analyticsSteps = targetPath.value.startsWith('/onboarding/organization') ? ['name', 'organization'] as const : initialProfileOnboardingSteps(main.user?.onboarding, false)
 let tracker: ReturnType<typeof createOnboardingProgressTracker> | undefined
 let disposed = false
@@ -190,7 +190,7 @@ onMounted(async () => {
   }
   if (resumePending.value && !await resumeSavedProfile())
     return
-  tracker = createOnboardingProgressTracker({ flow: 'pre_org', onboardingVersion: () => PROFILE_ONBOARDING_ANALYTICS_VERSION, resumed, steps: analyticsSteps, supaHost: getLocalConfig().supaHost, onboardingAttemptId: identity.attemptId, onboardingRunId: identity.runId })
+  tracker = createOnboardingProgressTracker({ flow: 'pre_org', onboardingVersion: () => PROFILE_ONBOARDING_ANALYTICS_VERSION, resumed, steps: analyticsSteps, apiHost: getLocalConfig().apiHost, onboardingAttemptId: identity.attemptId, onboardingRunId: identity.runId })
   tracker.viewStep('name', isEditingProfile.value ? 'intent' : undefined)
   document.addEventListener('visibilitychange', visibilityChanged)
   try {

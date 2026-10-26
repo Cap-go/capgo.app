@@ -8,8 +8,8 @@ vi.mock('~/services/posthog', () => ({
   pushEventForUser: pushEventForUserMock,
 }))
 
-vi.mock('~/services/supabase', () => ({
-  getLocalConfig: () => ({ supaHost: 'https://sb.capgo.app' }),
+vi.mock('~/services/console', () => ({
+  getLocalConfig: () => ({ apiHost: 'https://api.capgo.app' }),
 }))
 
 const {
@@ -41,7 +41,7 @@ describe('organization invitation client telemetry', () => {
       1,
       'organization_membership_invitation_viewed',
       USER_ID,
-      'https://sb.capgo.app',
+      'https://api.capgo.app',
       {
         account_state: 'already_existed',
         entry_path: '/onboarding/invitation',
@@ -53,7 +53,7 @@ describe('organization invitation client telemetry', () => {
       2,
       'organization_membership_invitation_skipped',
       USER_ID,
-      'https://sb.capgo.app',
+      'https://api.capgo.app',
       expect.objectContaining({ pending_invitation_count: 3 }),
     )
   })
@@ -80,7 +80,7 @@ describe('organization invitation client telemetry', () => {
     expect(pushEventForUserMock).toHaveBeenCalledWith(
       successEvent,
       USER_ID,
-      'https://sb.capgo.app',
+      'https://api.capgo.app',
       expect.objectContaining({
         $insert_id: expect.stringContaining(`${USER_ID}:${INVITATION_ID}`),
         pending_invitation_count: pendingInvitationCount,
@@ -102,7 +102,7 @@ describe('organization invitation client telemetry', () => {
     expect(pushEventForUserMock).toHaveBeenCalledWith(
       'organization_membership_invitation_failed',
       USER_ID,
-      'https://sb.capgo.app',
+      'https://api.capgo.app',
       expect.objectContaining({ failure_reason: 'membership_update_failed' }),
     )
     expect(JSON.stringify(pushEventForUserMock.mock.calls)).not.toContain('invitee@example.com')

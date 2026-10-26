@@ -1,7 +1,7 @@
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { ref, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 
 interface UseAppPageOptions {
@@ -14,14 +14,14 @@ export function useAppPage(options: UseAppPageOptions) {
   const route = useRoute(options.routeName)
   const lastPath = ref('')
   const isLoading = ref(false)
-  const supabase = useSupabase()
+  const capgo = useConsole()
   const displayStore = useDisplayStore()
   const app = ref<Database['public']['Tables']['apps']['Row']>()
   let loadGeneration = 0
 
   async function loadAppInfo() {
     try {
-      const { data: dataApp } = await supabase
+      const { data: dataApp } = await capgo
         .from('apps')
         .select()
         .eq('app_id', id.value)

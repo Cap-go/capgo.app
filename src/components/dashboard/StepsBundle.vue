@@ -6,8 +6,8 @@ import arrowBack from '~icons/ion/arrow-back?width=2em&height=2em'
 import IconLoader from '~icons/lucide/loader-2'
 import InviteTeammateModal from '~/components/dashboard/InviteTeammateModal.vue'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
+import { defaultApiHost, getLocalConfig, isLocal, useConsole } from '~/services/console'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
-import { defaultApiHost, getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
@@ -27,7 +27,7 @@ const latestBundleId = ref<string>()
 const realtimeListener = ref(false)
 const pollTimer = ref<number | null>(null)
 const initialCount = ref<number | null>(null)
-const supabase = useSupabase()
+const capgo = useConsole()
 const main = useMainStore()
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
@@ -40,7 +40,7 @@ interface Step {
 }
 
 const config = getLocalConfig()
-const localCommand = isLocal(config.supaHost) ? ` --api-host ${defaultApiHost}` : ``
+const localCommand = isLocal(config.apiHost) ? ` --api-host ${defaultApiHost}` : ``
 const steps = ref<Step[]>([
   {
     title: t('add-another-bundle'),
@@ -140,14 +140,14 @@ async function copyToast(allowed: boolean, id: string, text?: string) {
 }
 
 async function addNewApiKey() {
-  const { data: claimsData } = await supabase.auth.getClaims()
+  const { data: claimsData } = await capgo.auth.getClaims()
   const userId = claimsData?.claims?.sub
 
   if (!userId) {
     console.log('Not logged in, cannot regenerate API key')
     return null
   }
-  const { data, error } = await createDefaultApiKey(supabase, t('api-key'), {
+  const { data, error } = await createDefaultApiKey(capgo, t('api-key'), {
     orgId: organizationStore.currentOrganization?.gid,
     appId: props.appId,
   })
@@ -163,7 +163,7 @@ async function getKey(retry = true): Promise<void> {
   if (!main?.user?.id)
     return
 
-  const existingKey = await findUsablePlainApiKey(supabase, main.user.id, organizationStore.currentOrganization?.gid, props.appId)
+  const existingKey = await findUsablePlainApiKey(capgo, main.user.id, organizationStore.currentOrganization?.gid, props.appId)
   if (existingKey) {
     steps.value[0].command = steps.value[0].command?.replace('[APIKEY]', existingKey)
   }
@@ -182,7 +182,7 @@ async function getVersionsCount(): Promise<number> {
   const orgId = organizationStore.currentOrganization?.gid
   if (!orgId || !props.appId)
     return 0
-  const { count, error } = await supabase
+  const { count, error } = await capgo
     .from('app_versions')
     .select('id', { count: 'exact', head: true })
     .eq('owner_org', orgId)
@@ -198,7 +198,7 @@ async function getLatestVersionId(): Promise<string | undefined> {
   const orgId = organizationStore.currentOrganization?.gid
   if (!orgId || !props.appId)
     return undefined
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('app_versions')
     .select('id, created_at')
     .eq('owner_org', orgId)

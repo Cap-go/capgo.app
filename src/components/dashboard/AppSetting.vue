@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { DeviceDataCollection } from '~/services/deviceDataCollection'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import type { AppDeletionDetail, AppDeletionReason } from '~/utils/appDeletionFeedback'
 import { Camera } from '@capacitor/camera'
 import { FormKit, FormKitMessages } from '@formkit/vue'
@@ -16,11 +16,11 @@ import gearSix from '~icons/ph/gear-six?raw'
 import iconName from '~icons/ph/user?raw'
 import Toggle from '~/components/Toggle.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { useConsole } from '~/services/console'
 import { DEVICE_DATA_COLLECTION_KEYS, parseAppRowDeviceDataCollection } from '~/services/deviceDataCollection'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { getAppDeletionTrackingProperties } from '~/utils/appDeletionFeedback'
 
@@ -39,7 +39,7 @@ interface DownloadChannel {
 const isLoading = ref(false)
 const isFirstLoading = ref(true)
 const router = useRouter()
-const supabase = useSupabase()
+const capgo = useConsole()
 const appRef = ref<Database['public']['Tables']['apps']['Row'] & { owner_org: Database['public']['Tables']['orgs']['Row'] } | null>(null)
 const { t } = useI18n()
 const dialogStore = useDialogV2Store()
@@ -154,7 +154,7 @@ async function loadAppSettingIcon(rawIconUrl: string | null | undefined, run: nu
 onMounted(async () => {
   isLoading.value = true
 
-  const { error, data } = await supabase
+  const { error, data } = await capgo
     .from('apps')
     .select('*, owner_org ( name, id )')
     .eq('app_id', props.appId)
@@ -243,13 +243,13 @@ async function deleteApp() {
   sendOnboardingEvent('app_deletion_confirmed', getDeletionEventProperties())
   try {
     const org = organizationStore.getOrgByAppId(props.appId)
-    const { error: errorIcon } = await supabase.storage
+    const { error: errorIcon } = await capgo.storage
       .from(`images`)
       .remove([`org/${org?.gid}/${props.appId}/icon`])
     if (errorIcon)
       toast.error(t('cannot-delete-app-icon'))
 
-    const { error: dbAppError } = await supabase
+    const { error: dbAppError } = await capgo
       .from('apps')
       .delete()
       .eq('app_id', props.appId)
@@ -414,7 +414,7 @@ async function updateStoreUrls(newIosStoreUrl: string, newAndroidStoreUrl: strin
   if (iosStoreUrl === currentIosStoreUrl && androidStoreUrl === currentAndroidStoreUrl)
     return Promise.resolve()
 
-  const { error } = await supabase
+  const { error } = await capgo
     .from('apps')
     .update({
       ios_store_url: iosStoreUrl,
@@ -445,7 +445,7 @@ async function uploadIconFromSource(iconSourceUrl: string) {
   const contentType = blob.type || 'image/png'
   const iconPath = `org/${appRef.value.owner_org.id}/${props.appId}/icon`
 
-  const { error: uploadError } = await supabase.storage
+  const { error: uploadError } = await capgo.storage
     .from('images')
     .upload(iconPath, blob, {
       contentType,
@@ -457,7 +457,7 @@ async function uploadIconFromSource(iconSourceUrl: string) {
     throw new Error(t('upload-img-error'))
   }
 
-  const { error: updateError } = await supabase
+  const { error: updateError } = await capgo
     .from('apps')
     .update({ icon_url: iconPath })
     .eq('app_id', props.appId)
@@ -518,7 +518,7 @@ async function updateAppName(newName: string) {
     return Promise.reject(t('new-name-to-long'))
   }
 
-  const { error } = await supabase.from('apps').update({ name: newName }).eq('app_id', props.appId)
+  const { error } = await capgo.from('apps').update({ name: newName }).eq('app_id', props.appId)
   if (error) {
     toast.error(t('cannot-change-name'))
     console.error(error)
@@ -544,7 +544,7 @@ async function updateAppRetention(newRetention: number) {
     return Promise.reject(t('retention-to-big'))
   }
 
-  const { error } = await supabase.from('apps').update({ retention: newRetention }).eq('app_id', props.appId)
+  const { error } = await capgo.from('apps').update({ retention: newRetention }).eq('app_id', props.appId)
   if (error) {
     return Promise.reject(t('cannot-change-retention'))
   }
@@ -566,7 +566,7 @@ async function updateBuildTimeout(rawTimeoutMinutes: number | string | undefined
   if (timeoutSeconds === appRef.value?.build_timeout_seconds)
     return
 
-  const { error } = await supabase.from('apps').update({ build_timeout_seconds: timeoutSeconds }).eq('app_id', props.appId)
+  const { error } = await capgo.from('apps').update({ build_timeout_seconds: timeoutSeconds }).eq('app_id', props.appId)
   if (error)
     throw t('cannot-change-build-timeout')
 
@@ -580,7 +580,7 @@ async function updateExposeMetadata(newExposeMetadata: boolean) {
     return Promise.resolve()
   }
 
-  const { error } = await supabase.from('apps').update({ expose_metadata: newExposeMetadata }).eq('app_id', props.appId)
+  const { error } = await capgo.from('apps').update({ expose_metadata: newExposeMetadata }).eq('app_id', props.appId)
   if (error) {
     return Promise.reject(t('cannot-change-expose-metadata'))
   }
@@ -594,7 +594,7 @@ async function updateAllowPreview(newAllowPreview: boolean) {
     return Promise.resolve()
   }
 
-  const { error } = await supabase.from('apps').update({ allow_preview: newAllowPreview }).eq('app_id', props.appId)
+  const { error } = await capgo.from('apps').update({ allow_preview: newAllowPreview }).eq('app_id', props.appId)
   if (error) {
     return Promise.reject(t('cannot-change-allow-preview'))
   }
@@ -611,7 +611,7 @@ async function updateAllowDeviceCustomId(newAllowDeviceCustomId: boolean) {
     return Promise.resolve()
   }
 
-  const { error } = await supabase.from('apps').update({ allow_device_custom_id: newAllowDeviceCustomId }).eq('app_id', props.appId)
+  const { error } = await capgo.from('apps').update({ allow_device_custom_id: newAllowDeviceCustomId }).eq('app_id', props.appId)
   if (error) {
     return Promise.reject(t('cannot-change-allow-device-custom-id'))
   }
@@ -621,7 +621,7 @@ async function updateAllowDeviceCustomId(newAllowDeviceCustomId: boolean) {
 }
 
 async function updateDeviceDataCollection(next: DeviceDataCollection) {
-  const { data: freshRow, error: readError } = await supabase
+  const { data: freshRow, error: readError } = await capgo
     .from('apps')
     .select('device_data_collection')
     .eq('app_id', props.appId)
@@ -634,7 +634,7 @@ async function updateDeviceDataCollection(next: DeviceDataCollection) {
   if (DEVICE_DATA_COLLECTION_KEYS.every(key => current[key] === merged[key]))
     return Promise.resolve()
 
-  const { error } = await supabase.from('apps').update({ device_data_collection: merged }).eq('app_id', props.appId)
+  const { error } = await capgo.from('apps').update({ device_data_collection: merged }).eq('app_id', props.appId)
   if (error)
     return Promise.reject(t('cannot-change-device-data-collection'))
 
@@ -648,7 +648,7 @@ async function updateBlockProviderInfraRequests(enabled: boolean) {
   if (enabled === current)
     return Promise.resolve()
 
-  const { error } = await supabase.from('apps').update({ block_provider_infra_requests: enabled }).eq('app_id', props.appId)
+  const { error } = await capgo.from('apps').update({ block_provider_infra_requests: enabled }).eq('app_id', props.appId)
   if (error)
     return Promise.reject(t('cannot-change-block-provider-infra-requests'))
 
@@ -658,7 +658,7 @@ async function updateBlockProviderInfraRequests(enabled: boolean) {
 }
 
 async function loadChannels() {
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('channels')
     .select('id, name, ios, android, electron, public')
     .eq('app_id', props.appId)
@@ -759,7 +759,7 @@ async function setDefaultChannel() {
             return false
           }
 
-          const { error: appError } = await supabase.from('apps')
+          const { error: appError } = await capgo.from('apps')
             .update({ default_upload_channel: selectedChannel.value })
             .eq('app_id', appRef.value?.app_id ?? '')
 
@@ -970,7 +970,7 @@ async function openDefaultDownloadChannelDialog() {
         role: 'primary',
         handler: async () => {
           if (disableDownloadUpdates.value) {
-            const { error } = await supabase
+            const { error } = await capgo
               .from('channels')
               .update({ public: false })
               .eq('app_id', props.appId)
@@ -1054,7 +1054,7 @@ async function openDefaultDownloadChannelDialog() {
           const idsToEnable = Array.from(new Set(Object.values(selectedChannels).map(channel => channel?.id).filter((id): id is number => typeof id === 'number')))
 
           if (idsToEnable.length > 0) {
-            const { error } = await supabase
+            const { error } = await capgo
               .from('channels')
               .update({ public: true })
               .in('id', idsToEnable)
@@ -1070,7 +1070,7 @@ async function openDefaultDownloadChannelDialog() {
               continue
 
             const selectedChannel = selectedChannels[platform]
-            let platformUpdate = supabase
+            let platformUpdate = capgo
               .from('channels')
               .update({ public: false })
               .eq('app_id', props.appId)
@@ -1087,7 +1087,7 @@ async function openDefaultDownloadChannelDialog() {
             }
           }
 
-          const { error: hiddenError } = await supabase
+          const { error: hiddenError } = await capgo
             .from('channels')
             .update({ public: false })
             .eq('app_id', props.appId)
@@ -1182,7 +1182,7 @@ async function editPhoto() {
           }
 
           const iconPath = `org/${appRef.value?.owner_org.id}/${props.appId}/icon`
-          const { error } = await supabase.storage
+          const { error } = await capgo.storage
             .from('images')
             .upload(iconPath, blob, {
               contentType: mimeType,
@@ -1194,7 +1194,7 @@ async function editPhoto() {
             return false
           }
 
-          const { error: appUpdateErr } = await supabase.from('apps')
+          const { error: appUpdateErr } = await capgo.from('apps')
             .update({ icon_url: iconPath })
             .eq('app_id', props.appId)
 
@@ -1222,7 +1222,7 @@ async function editPhoto() {
             return false
           }
 
-          const { error } = await supabase
+          const { error } = await capgo
             .storage
             .from(`images`)
             .remove([`org/${appRef.value?.owner_org.id}/${props.appId}/icon`])
@@ -1233,7 +1233,7 @@ async function editPhoto() {
             return false
           }
 
-          const { error: setAppError } = await supabase.from('apps')
+          const { error: setAppError } = await capgo.from('apps')
             .update({ icon_url: '' })
             .eq('app_id', props.appId)
 
@@ -1274,7 +1274,7 @@ function confirmTransferAppOwnership(org: Organization) {
             return false
           }
           // Transfer logic will go here
-          const { error } = await supabase.rpc('transfer_app', {
+          const { error } = await capgo.rpc('transfer_app', {
             p_app_id: props.appId,
             p_new_org_id: org.gid,
           })

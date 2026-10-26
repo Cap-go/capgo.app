@@ -114,7 +114,9 @@ const BUILDER_MCP_SECTION = `## Install Capgo MCP and start Builder onboarding
 
 Capgo Builder setup must be conducted through Capgo MCP. Do not configure signing, credentials, native builds, or store access manually.
 
-Determine which supported MCP client you are currently running in. Use its install-mcp client identifier:
+First check whether Capgo MCP tools are already available. Reuse an existing installation; do not reinstall it when its tools are available.
+
+Only if Capgo MCP tools are unavailable, determine which supported MCP client you are currently running in. Use its install-mcp client identifier:
 
 - Codex: \`codex\`
 - Cursor: \`cursor\`
@@ -125,16 +127,18 @@ Determine which supported MCP client you are currently running in. Use its insta
 
 If you cannot identify the current client safely, ask me which client I use and wait for my answer.
 
-Replace \`{MCP_CLIENT}\` with the chosen identifier and install Capgo MCP:
+When installation is needed, replace \`{MCP_CLIENT}\` with the chosen identifier and install Capgo MCP:
 
-npx install-mcp 'npx @capgo/cli@latest mcp' --client {MCP_CLIENT}
+npx install-mcp "npx @capgo/cli@latest mcp" --client {MCP_CLIENT}
 
 After installation, check whether Capgo MCP tools are available in the current session.
 
-- If the tools are unavailable until restart, tell me to restart the AI client. Do not pretend onboarding has started. Tell me that after restart I can say: “Continue Capgo Builder setup. Verify Capgo MCP is connected, then call start_capgo_builder_onboarding.” Stop and wait for the restart.
+- If the tools are unavailable until restart, tell me to restart the AI client. Do not pretend onboarding has started. Tell me that after restart I can say: “Continue Capgo Builder setup. Verify Capgo MCP is connected, call capgo_whoami and confirm I am signed in before calling start_capgo_builder_onboarding.” Stop and wait for the restart.
 - If the tools are available without restart, continue immediately.
 
-Once Capgo MCP is available, call \`start_capgo_builder_onboarding\` immediately. If I already named iOS or Android, pass that platform; otherwise omit it and let the tool ask.
+If the Capgo MCP server was already running before the mandatory CLI authentication, reconnect that server so it loads the newly saved login. If reconnecting requires an AI client restart, give the restart and resume instructions above, then stop and wait.
+
+Once Capgo MCP is connected with the new login, call \`capgo_whoami\` and verify it is signed in before calling \`start_capgo_builder_onboarding\`. If I already named iOS or Android, pass that platform; otherwise omit it and let the tool ask.
 
 Follow every result's \`next\` instruction exactly. Use \`capgo_builder_onboarding_next_step\` and \`capgo_builder_onboarding_explain\` only as directed until setup is complete. Do not replace the MCP flow with manual repository inspection or web research, and do not claim success unless the onboarding tools report completion.`
 

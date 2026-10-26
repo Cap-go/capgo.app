@@ -14,9 +14,9 @@ import RoleSelect from '~/components/forms/RoleSelect.vue'
 import SearchInput from '~/components/forms/SearchInput.vue'
 import RoleSelectionModal from '~/components/modals/RoleSelectionModal.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { useConsole } from '~/services/console'
 import { formatLocalDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { getErrorMessage } from '~/utils/errors'
 
@@ -55,7 +55,7 @@ interface Props {
 const props = defineProps<Props>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const dialogStore = useDialogV2Store()
 const isLoading = ref(false)
 const roleBindings = ref<RoleBinding[]>([])
@@ -130,7 +130,7 @@ async function fetchAppDetails() {
     return
 
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('apps')
       .select('owner_org')
       .eq('app_id', props.appId)
@@ -186,14 +186,14 @@ async function fetchAppRoleBindings() {
     }
 
     const usersPromise = userIds.size
-      ? supabase
+      ? capgo
           .from('users')
           .select('id, email')
           .in('id', Array.from(userIds))
       : Promise.resolve({ data: [] as UserEmailRow[], error: null })
 
     const groupsPromise = groupIds.size
-      ? supabase
+      ? capgo
           .from('groups')
           .select('id, name')
           .in('id', Array.from(groupIds))
@@ -248,7 +248,7 @@ async function fetchAppRoleBindings() {
 
 async function fetchAvailableAppRoles() {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('roles')
       .select('id, name, scope_type, description, priority_rank')
       .eq('scope_type', 'app')
@@ -270,7 +270,7 @@ async function fetchAvailableMembers() {
     return
 
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('org_users')
       .select(`
         user_id,

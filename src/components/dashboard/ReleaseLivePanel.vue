@@ -11,10 +11,10 @@ import IconChevronDown from '~icons/lucide/chevron-down'
 import IconRefresh from '~icons/lucide/refresh-cw'
 import Spinner from '~/components/Spinner.vue'
 import { buildDemoReleaseLive, RELEASE_LIVE_POLL_INTERVAL_MS, useReleaseLive } from '~/composables/useReleaseLive'
+import { useConsole } from '~/services/console'
 import { registerDashboardCharts } from '~/services/dashboardChartRegister'
 import { formatDistanceToNow, formatLocalDateShort, formatLocalDateTime, formatLocalTime } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
-import { useSupabase } from '~/services/supabase'
 
 const props = withDefaults(defineProps<{
   appId: string
@@ -104,7 +104,7 @@ interface ChannelRolloutState {
   percentage: number
   status: 'running' | 'paused' | 'zero'
 }
-const supabase = useSupabase()
+const capgo = useConsole()
 const channelRollout = ref<ChannelRolloutState | null>(null)
 let channelRolloutRequest = 0
 type VersionRelation = { name?: string } | { name?: string }[] | null | undefined
@@ -117,7 +117,7 @@ async function loadChannelRollout(channelId: number | undefined) {
     channelRollout.value = null
     return
   }
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('channels')
     .select('rollout_enabled, rollout_percentage_bps, rollout_paused_at, version:app_versions!channels_version_fkey(name), rollout_version_info:app_versions!channels_rollout_version_fkey(name)')
     .eq('id', channelId)

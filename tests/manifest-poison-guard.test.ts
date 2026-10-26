@@ -1,4 +1,4 @@
-import type { Database } from '../src/types/supabase.types'
+import type { Database } from '../src/types/database.types'
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {

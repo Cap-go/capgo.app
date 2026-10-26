@@ -23,13 +23,15 @@
  * <DeploymentBanner :app-id="appId" @deployed="refreshData" />
  */
 
-import type { Database } from '~/types/supabase.types'
+import type { BundlePickerRow } from '~/services/bundleColumns'
+import type { Database } from '~/types/database.types'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconInfo from '~icons/lucide/info'
+import { BUNDLE_PICKER_COLUMNS } from '~/services/bundleColumns'
+import { useConsole } from '~/services/console'
 import { checkPermissions } from '~/services/permissions'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 
 /**
@@ -52,7 +54,7 @@ const emit = defineEmits<{
 
 // Initialize services and stores
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const dialogStore = useDialogV2Store()
 
 // Component state
@@ -61,7 +63,7 @@ const loading = ref(true)
 /** Indicates if a deployment is currently in progress */
 const deploying = ref(false)
 /** The most recent bundle available for deployment */
-const latestBundle = ref<Database['public']['Tables']['app_versions']['Row'] | null>(null)
+const latestBundle = ref<BundlePickerRow | null>(null)
 type DefaultChannel = Pick<
   Database['public']['Tables']['channels']['Row'],
   'id' | 'name' | 'ios' | 'android' | 'electron' | 'public' | 'version'
@@ -148,7 +150,7 @@ async function loadData() {
 
   try {
     // Step 1: Get default channels configuration (public download channels)
-    const { data: publicChannels } = await supabase
+    const { data: publicChannels } = await capgo
       .from('channels')
       .select('id, name, ios, android, electron, public, version')
       .eq('app_id', props.appId)
@@ -165,9 +167,9 @@ async function loadData() {
     // Step 2: Get latest bundle (excluding special bundle types)
     // We filter out 'unknown' and 'builtin' bundles as these are not deployable
     // Only fetch non-deleted bundles ordered by creation date (newest first)
-    const { data: bundles } = await supabase
+    const { data: bundles } = await capgo
       .from('app_versions')
-      .select('*')
+      .select(BUNDLE_PICKER_COLUMNS)
       .eq('app_id', props.appId)
       .eq('deleted', false)
       .neq('name', 'unknown')
@@ -228,7 +230,7 @@ async function executeDeployment() {
     })
 
     // Perform the deployment by updating the channel versions in bulk
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('channels')
       .update({ version: bundle.id })
       .in('id', targetIds)

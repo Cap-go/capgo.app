@@ -8,15 +8,15 @@ import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
 import iconEmail from '~icons/oui/email?raw'
 import { authGhostButtonClass, authInsetCardClass, authPanelClass, authPrimaryButtonClass } from '~/components/auth/pageStyles'
+import { useConsole } from '~/services/console'
 import { getEmailOtpSendErrorMessage, getRecentEmailOtpVerification, parseEmailOtpSendError, sendEmailOtpVerification, verifyEmailOtp } from '~/services/emailOtp'
-import { useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { useMainStore } from '~/stores/main'
 import { validateRedirectPath } from '~/utils/safeRedirect'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const route = useRoute()
 const router = useRouter()
 const main = useMainStore()
@@ -182,7 +182,7 @@ async function submit(form: { email: string }) {
 
   isLoading.value = true
   try {
-    const { error } = await supabase.auth.resend({
+    const { error } = await capgo.auth.resend({
       type: 'signup',
       email: form.email,
       options: { captchaToken: resendCaptchaToken.value || undefined },
@@ -207,14 +207,14 @@ async function loadEmailVerificationState() {
 
   isLoadingMain.value = true
   try {
-    const { data: sessionData } = await supabase.auth.getSession()
+    const { data: sessionData } = await capgo.auth.getSession()
     currentUserId.value = sessionData.session?.user.id ?? main.auth?.id ?? ''
     currentUserEmail.value = sessionData.session?.user.email ?? main.auth?.email ?? main.user?.email ?? ''
 
     if (!currentUserId.value)
       return
 
-    const { isVerified } = await getRecentEmailOtpVerification(supabase, currentUserId.value)
+    const { isVerified } = await getRecentEmailOtpVerification(capgo, currentUserId.value)
     if (isVerified)
       await router.replace(returnTo.value)
   }
@@ -243,7 +243,7 @@ async function sendOtpCode() {
     const purpose = route.query.purpose === 'delete_account' || returnTo.value === '/delete_account'
       ? 'delete_account'
       : undefined
-    const { error } = await sendEmailOtpVerification(supabase, currentUserEmail.value, otpCaptchaToken.value, purpose)
+    const { error } = await sendEmailOtpVerification(capgo, currentUserEmail.value, otpCaptchaToken.value, purpose)
     if (error) {
       const parsed = parseEmailOtpSendError(error)
       const message = parsed
@@ -289,7 +289,7 @@ async function verifyOtpCode(form: { email_otp: string }) {
 
   otpVerificationLoading.value = true
   try {
-    const { data, error } = await verifyEmailOtp(supabase, token)
+    const { data, error } = await verifyEmailOtp(capgo, token)
 
     if (error || !data?.verified_at) {
       toast.error(t('verification-failed'))

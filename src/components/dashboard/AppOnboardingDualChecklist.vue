@@ -18,6 +18,7 @@ const props = defineProps<{
   initialPath?: ChecklistPath
   hiding: boolean
   leaving: boolean
+  hideFooter?: boolean
 }>()
 const emit = defineEmits<{
   pathChanged: [path: ChecklistPath | null]
@@ -198,7 +199,7 @@ async function onTabKey(event: KeyboardEvent, path: ChecklistPath) {
       </div>
     </template>
 
-    <footer class="mt-auto flex flex-col items-start gap-3 pt-10 sm:flex-row sm:items-center sm:justify-between">
+    <footer v-if="!hideFooter" class="mt-auto flex flex-col items-start gap-3 pt-10 sm:flex-row sm:items-center sm:justify-between">
       <button type="button" class="inline-flex min-h-11 items-center gap-2 rounded-sm text-sm text-slate-500 underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-azure-500 dark:text-slate-400" data-test="app-onboarding-dont-show-again" :disabled="hiding || leaving" @click="emit('hide')">
         <IconLoader v-if="hiding" class="h-4 w-4 motion-safe:animate-spin" aria-hidden="true" />
         {{ t('app-onboarding-dont-show-again') }}

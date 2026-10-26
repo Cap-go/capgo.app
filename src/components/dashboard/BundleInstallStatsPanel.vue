@@ -14,9 +14,9 @@ import Spinner from '~/components/Spinner.vue'
 import { buildDemoBundleInstallStats, useBundleInstallStats } from '~/composables/useBundleInstallStats'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { createChartScales, createLegendConfig } from '~/services/chartConfig'
+import { useConsole } from '~/services/console'
 import { formatLocalDateShort } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
-import { useSupabase } from '~/services/supabase'
 
 const props = withDefaults(defineProps<{
   appId: string
@@ -50,7 +50,7 @@ const maxChartBundles = 10
 const { t } = useI18n()
 const isDark = useDark()
 const router = useRouter()
-const supabase = useSupabase()
+const capgo = useConsole()
 const { days: queryDays } = usePeriodDaysQuery()
 const days = computed(() => props.days ?? queryDays.value)
 const bundleIdCache = ref<Record<string, number>>({})
@@ -239,7 +239,7 @@ async function navigateToBundle(versionName: string) {
     router.push(`/app/${props.appId}/bundle/${bundleIdCache.value[versionName]}`)
     return
   }
-  const { data } = await supabase
+  const { data } = await capgo
     .from('app_versions')
     .select('id')
     .eq('app_id', props.appId)

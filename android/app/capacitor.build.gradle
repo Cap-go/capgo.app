@@ -111,7 +111,6 @@ dependencies {
     implementation project(':capgo-capacitor-social-login')
     implementation project(':capgo-capacitor-speech-recognition')
     implementation project(':capgo-capacitor-speech-synthesis')
-    implementation project(':capgo-capacitor-supabase')
     implementation project(':capgo-capacitor-textinteraction')
     implementation project(':capgo-capacitor-updater')
     implementation project(':capgo-capacitor-uploader')

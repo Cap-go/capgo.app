@@ -1,4 +1,5 @@
 import { test as base, expect } from '@playwright/test'
+import { DEMO_USER_EMAIL, DEMO_USER_ID, markSupportPromptShown } from './dismissSupportPrompt'
 
 // Extend basic test fixture
 export const test = base.extend({
@@ -9,6 +10,11 @@ export const test = base.extend({
       // Reuse the login page after logout instead of interrupting its navigation.
       if (!/\/login\/?$/.test(new URL(page.url()).pathname))
         await page.goto('/login/')
+      // The support-usernames prompt opens once organizations load, which now goes
+      // through the API and can land after a spec's first click. Mark it as recently
+      // shown for the seeded demo user so it never interrupts a test.
+      if (email === DEMO_USER_EMAIL)
+        await markSupportPromptShown(page, DEMO_USER_ID)
       await page.fill('[data-test="email"]', email)
       await page.locator('[data-test="submit"]').waitFor({ state: 'visible', timeout: 10000 })
       await page.fill('[data-test="password"]', password)
