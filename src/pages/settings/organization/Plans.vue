@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { CreditPricingStep } from '~/services/creditPricing'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { storeToRefs } from 'pinia'
 import { computed, ref, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -14,6 +14,7 @@ import CreditsCta from '~/components/CreditsCta.vue'
 import CreditsOnlyTip from '~/components/CreditsOnlyTip.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
 import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
+import { getCreditPricingSteps, getCurrentPlanNameOrg } from '~/services/console'
 import { ENTERPRISE_MAU_STOPS, formatMau, getOrgExtraMau, quoteEnterpriseScale } from '~/services/enterpriseScale'
 import { formatNumber, formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
@@ -22,12 +23,12 @@ import { checkPermissions } from '~/services/permissions'
 import { createPlansVisitTracker } from '~/services/plansVisitTracking'
 import { getSignupAttributionEventTags } from '~/services/signupAttribution'
 import { startSubscriptionCheckout } from '~/services/stripe'
-import { getCreditPricingSteps, getCurrentPlanNameOrg } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
+import { PLAN_CHECKOUT_PARAM, readPlanCheckoutParam } from '~/utils/billingDeepLinks'
 import { isCreditsOnlyOrg } from '~/utils/organizationBilling'
 
 const { t } = useI18n()
@@ -98,16 +99,16 @@ function planFeatures(plan: Database['public']['Tables']['plans']['Row']) {
   let buildTimeDisplay = ''
   if (buildTimeSeconds > 0) {
     if (buildTimeHours >= 1) {
-      buildTimeDisplay = `${buildTimeHours} ${t('build-hours')}`
+      buildTimeDisplay = t('build-hours', { count: formatNumberValue(buildTimeHours) }, buildTimeHours)
     }
     else {
-      buildTimeDisplay = `${buildTimeMinutes} ${t('build-minutes')}`
+      buildTimeDisplay = t('build-minutes', { count: formatNumberValue(buildTimeMinutes) }, buildTimeMinutes)
     }
   }
 
-  const mauFeature = `${formatNumberValue(displayedPlanMau(plan))} ${t('mau')}`
-  const storageFeature = `${formatNumberValue(plan.storage)} ${t('plan-storage')}`
-  const bandwidthFeature = `${formatNumberValue(plan.bandwidth)} ${t('plan-bandwidth')}`
+  const mauFeature = t('plan-mau', { count: formatNumberValue(displayedPlanMau(plan)) }, displayedPlanMau(plan))
+  const storageFeature = t('plan-storage', { count: formatNumberValue(plan.storage) })
+  const bandwidthFeature = t('plan-bandwidth', { count: formatNumberValue(plan.bandwidth) })
 
   const buildTimeFeature = buildTimeDisplay ? planFeature(buildTimeDisplay, true) : null
   const nativeBuildConcurrencyFeature = plan.native_build_concurrency
@@ -310,6 +311,20 @@ async function openChangePlan(plan: Database['public']['Tables']['plans']['Row']
   isSubscribeLoading.value[index] = false
 }
 
+// `?plan=<solo|maker|team>` starts that plan's checkout right away when the trial is over or was skipped.
+async function startPlanCheckoutFromQuery() {
+  const planName = readPlanCheckoutParam(route.query)
+  if (!planName || route.path !== '/settings/organization/plans')
+    return
+  const linkedOrgId = route.query.oid
+  void router.replace({ query: { ...route.query, [PLAN_CHECKOUT_PARAM]: undefined } })
+  const org = currentOrganization.value
+  const index = mainStore.plans.findIndex(plan => plan.name === planName)
+  // Never start a checkout for another org than the one the link named.
+  if (org && (!linkedOrgId || linkedOrgId === org.gid) && !org.paying && !isTrial.value && index >= 0)
+    await openChangePlan(mainStore.plans[index], index)
+}
+
 function hasYearlyDiscount(plan: Database['public']['Tables']['plans']['Row']): boolean {
   return plan.price_y > 0 && Math.round(plan.price_y / 12) < plan.price_m
 }
@@ -484,7 +499,7 @@ watchEffect(async (onCleanup) => {
         }
       }
 
-      loadData(true).catch((error) => {
+      loadData(true).then(startPlanCheckoutFromQuery).catch((error) => {
         // Never let a load failure escape as an unhandled rejection on the
         // billing page — the graceful no-org path is handled inside loadData.
         console.error('Failed to load plans data', error)
@@ -695,7 +710,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
                 step="1"
                 class="w-full h-2 rounded-full appearance-none cursor-pointer accent-blue-600"
                 :style="{ background: `linear-gradient(to right, rgb(37 99 235) ${enterpriseSliderPercent}%, rgb(209 213 219) ${enterpriseSliderPercent}%)` }"
-                :aria-valuetext="`${formatMau(enterpriseQuote.targetMau)} ${t('mau')}`"
+                :aria-valuetext="t('plan-mau', { count: formatMau(enterpriseQuote.targetMau) }, enterpriseQuote.targetMau)"
                 :disabled="isMobile"
               >
               <div class="flex justify-between mt-1 text-[10px] text-gray-400">

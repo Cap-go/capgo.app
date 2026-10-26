@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions } from 'chart.js'
 import type { UpdaterFailureCategory } from '~/services/statsActions'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import type { PeriodDayOption } from '~/utils/periodDays'
 import { useDark } from '@vueuse/core'
 import { computed, ref, useId, watch, watchEffect } from 'vue'
@@ -19,11 +19,11 @@ import IconSmartphone from '~icons/lucide/smartphone'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import InfoPopover from '~/components/InfoPopover.vue'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { registerDashboardCharts } from '~/services/dashboardChartRegister'
 import { formatLocalDateShort, formatLocalDateTime } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { actionToFilter, updaterFailureCategory, updaterFailureHelpKey, updaterInsightActions } from '~/services/statsActions'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 
 interface LogInsightSummary {
@@ -84,7 +84,7 @@ const isDark = useDark()
 registerDashboardCharts()
 const route = useRoute('/app/[app].observe.errors')
 const router = useRouter()
-const supabase = useSupabase()
+const capgo = useConsole()
 const displayStore = useDisplayStore()
 
 const id = ref('')
@@ -254,7 +254,7 @@ async function loadBundleNames() {
     return
 
   const appId = id.value
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('app_versions')
     .select('name')
     .eq('app_id', appId)
@@ -276,7 +276,7 @@ async function loadBundleNames() {
 
 async function loadAppInfo() {
   try {
-    const { data: dataApp } = await supabase
+    const { data: dataApp } = await capgo
       .from('apps')
       .select()
       .eq('app_id', id.value)
@@ -295,7 +295,7 @@ async function fetchInsights() {
   const requestId = ++latestInsightsRequest
   insightsLoading.value = true
   try {
-    const { data: sessionData } = await supabase.auth.getSession()
+    const { data: sessionData } = await capgo.auth.getSession()
     if (!sessionData.session) {
       if (requestId === latestInsightsRequest)
         toast.error(t('not-authenticated'))

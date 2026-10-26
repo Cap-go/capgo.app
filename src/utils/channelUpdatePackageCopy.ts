@@ -1,4 +1,4 @@
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 
 type ChannelUpdatePackage = Database['public']['Enums']['channel_update_package']
 

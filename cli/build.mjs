@@ -13,6 +13,33 @@ const EXTERNAL_PACKAGES = [
 ]
 
 // Shared plugin definitions - Bun's plugin API is compatible with esbuild's
+// `@capacitor/cli` builds `new Function('specifier', 'return import(specifier)')`
+// at module scope so tsc cannot rewrite it to require(). Workers reject that
+// during evaluation. Keep the same helper, and create it only when requireTS
+// loads a TypeScript config.
+const deferCapacitorDynamicImport = {
+  name: 'defer-capacitor-dynamic-import',
+  setup(build) {
+    build.onLoad({ filter: /@capacitor\/cli\/dist\/util\/node\.js$/ }, async (args) => {
+      const contents = await Bun.file(args.path).text()
+      const replaced = contents
+        .replace(
+          'const dynamicImport = new Function(\'specifier\', \'return import(specifier)\');',
+          `let dynamicImport;
+function getDynamicImport() {
+  if (!dynamicImport)
+    dynamicImport = new Function('specifier', 'return import(specifier)');
+  return dynamicImport;
+}`,
+        )
+        .replaceAll('dynamicImport(', 'getDynamicImport()(')
+      if (!replaced.includes('function getDynamicImport()') || replaced.includes('const dynamicImport = new Function'))
+        throw new Error(`Could not defer new Function in ${args.path}`)
+      return { contents: replaced, loader: 'js' }
+    })
+  },
+}
+
 const stubSemver = {
   name: 'stub-semver',
   setup(build) {
@@ -234,6 +261,7 @@ const buildCLI = Bun.build({
     '__CAPGO_ALLOW_HELPER_ENV_OVERRIDE__': env.NODE_ENV === 'development' ? 'true' : 'false',
   },
   plugins: [
+    deferCapacitorDynamicImport,
     fixCapacitorCliDirname,
     stubSemver,
     ignorePunycode,
@@ -269,6 +297,7 @@ const buildSDK = Bun.build({
     '__CAPGO_ALLOW_HELPER_ENV_OVERRIDE__': env.NODE_ENV === 'development' ? 'true' : 'false',
   },
   plugins: [
+    deferCapacitorDynamicImport,
     fixCapacitorCliDirname,
     ignorePunycode,
   ],

@@ -11,16 +11,19 @@
     "nodejs_compat_populate_process_env"
   ],
   "placement": {
-    "mode": "smart"
+    "region": "aws:eu-west-2"
   },
   "ai": {
     "binding": "AI"
   },
   "workers_dev": false,
   "upload_source_maps": true,
+  "durable_objects": { "bindings": [{ "name": "CONSOLE_EVENTS", "class_name": "ConsoleEvents" }] },
+  "migrations": [{ "tag": "console-events-v1", "new_sqlite_classes": ["ConsoleEvents"] }],
   "env": {
     "prod": {
       "name": "capgo_api-prod",
+      "durable_objects": { "bindings": [{ "name": "CONSOLE_EVENTS", "class_name": "ConsoleEvents" }] },
       "send_email": [{ "name": "AUTH_EMAIL", "allowed_sender_addresses": ["noreply@capgo.app"] }],
       "triggers": {
         "crons": ["* * * * *"]
@@ -139,6 +142,7 @@
     },
     "preprod": {
       "name": "capgo_api-preprod",
+      "durable_objects": { "bindings": [{ "name": "CONSOLE_EVENTS", "class_name": "ConsoleEvents" }] },
       "send_email": [{ "name": "AUTH_EMAIL", "allowed_sender_addresses": ["noreply@capgo.app"] }],
       "triggers": {
         "crons": ["* * * * *"]
@@ -242,6 +246,7 @@
     },
     "alpha": {
       "name": "capgo_api-alpha",
+      "durable_objects": { "bindings": [{ "name": "CONSOLE_EVENTS", "class_name": "ConsoleEvents" }] },
       "send_email": [{ "name": "AUTH_EMAIL", "allowed_sender_addresses": ["noreply@capgo.app"] }],
       "triggers": {
         "crons": ["* * * * *"]
@@ -345,6 +350,7 @@
     },
     "local": {
       "name": "capgo_api-local",
+      "durable_objects": { "bindings": [{ "name": "CONSOLE_EVENTS", "class_name": "ConsoleEvents" }] },
       "queues": {
         "producers": [
           { "binding": "POSTHOG_QUEUE", "queue": "capgo-posthog-events-local" },

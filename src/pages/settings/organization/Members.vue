@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { TableColumn } from '~/components/comp_def'
+import type { SsoManagedAccess } from '~/services/ssoManaged'
 import type { ExtendedOrganizationMember } from '~/stores/organization'
-
 import { computedAsync } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, h, onMounted, ref, watch } from 'vue'
@@ -17,9 +17,10 @@ import RoleCapabilitiesHint from '~/components/forms/RoleCapabilitiesHint.vue'
 import RoleSelect from '~/components/forms/RoleSelect.vue'
 import SearchInput from '~/components/forms/SearchInput.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { checkPermissions } from '~/services/permissions'
+import { fetchSsoManagedAccess } from '~/services/ssoManaged'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { getRbacRoleI18nKey, isAdminRole, isSuperAdminRole, useOrganizationStore } from '~/stores/organization'
@@ -31,7 +32,7 @@ const { t } = useI18n()
 const router = useRouter()
 const organizationStore = useOrganizationStore()
 const { currentOrganization } = storeToRefs(organizationStore)
-const supabase = useSupabase()
+const capgo = useConsole()
 const main = useMainStore()
 const search = ref('')
 const columns: Ref<TableColumn[]> = ref<TableColumn[]>([])
@@ -111,6 +112,11 @@ const selectedUserToDelegateAdmin = ref()
 const searchUserForAdminDelegation = ref('')
 
 const members = ref([] as OrganizationMemberRows)
+const ssoManaged = ref<SsoManagedAccess>(new Map())
+
+function isSsoManaged(member: OrganizationMemberRow) {
+  return !!member.uid && ssoManaged.value.has(member.uid)
+}
 let memberImageLoadRun = 0
 
 interface MemberImageSource {
@@ -189,6 +195,10 @@ function renderRoleCell(member: OrganizationMemberRow) {
   const content = [
     h('span', { class: 'truncate text-slate-700 dark:text-slate-200' }, getMemberRoleLabel(member)),
   ]
+
+  if (isSsoManaged(member)) {
+    content.push(h('span', { class: 'rounded-full border border-slate-300 px-2 py-0.5 text-[0.625rem] font-medium text-slate-600 shrink-0 dark:border-slate-600 dark:text-slate-300', title: t('sso-managed-role') }, 'SSO'))
+  }
 
   if (isInviteMember(member)) {
     content.push(
@@ -318,6 +328,8 @@ const membersOptions = computed(() => {
   const searchLower = searchUserForAdminDelegation.value.toLowerCase()
   const options = members.value
     .filter(m => !isSuperAdminRole(m.role))
+    // The SSO role mapping would revert the delegated role at the next login.
+    .filter(m => !isSsoManaged(m))
     .filter(m => m.email.toLowerCase().includes(searchLower))
     .map((m) => {
       return { label: m.email, value: m.id }
@@ -367,8 +379,9 @@ columns.value = [
     actions: computed(() => [
       {
         icon: IconWrench,
-        title: t('edit-role'),
+        title: (member: OrganizationMemberRow) => isSsoManaged(member) ? t('sso-managed-role') : t('edit-role'),
         visible: (member: OrganizationMemberRow) => canUpdateUserRoles.value && member.uid !== currentOrganization?.value?.created_by,
+        disabled: (member: OrganizationMemberRow) => isSsoManaged(member),
         onClick: (member: OrganizationMemberRow) => {
           changeMemberPermission(member)
         },
@@ -403,10 +416,15 @@ async function reloadData() {
     if (!currentOrganization.value)
       return
 
-    const { data: rbacMembers, error: rbError } = await supabase
-      .rpc('get_org_members_rbac', {
-        p_org_id: currentOrganization.value.gid,
-      })
+    const orgId = currentOrganization.value.gid
+    const [{ data: rbacMembers, error: rbError }, managed] = await Promise.all([
+      capgo.rpc('get_org_members_rbac', { p_org_id: orgId }),
+      fetchSsoManagedAccess(orgId),
+    ])
+    // The org may have changed while loading.
+    if (currentOrganization.value?.gid !== orgId)
+      return
+    ssoManaged.value = managed
 
     if (rbError) {
       console.error('Error fetching RBAC members:', rbError)
@@ -615,7 +633,7 @@ async function sendInvitation(email: string, type: string): Promise<boolean> {
 
   isLoading.value = true
   try {
-    const { data, error } = await supabase.rpc('invite_user_to_org_rbac', {
+    const { data, error } = await capgo.rpc('invite_user_to_org_rbac', {
       email,
       org_id: orgId,
       role_name: type,
@@ -647,7 +665,7 @@ async function handleExistingUserInviteNotification(output: string, email: strin
   if (!orgId || !shouldAttemptExistingUserInviteNotification(output, hasPendingInvite))
     return false
 
-  const notified = await notifyExistingUserInvite(supabase, email, orgId)
+  const notified = await notifyExistingUserInvite(capgo, email, orgId)
   if (!notified) {
     console.warn('Failed to send invite email notification')
     toast.warning(t('org-invite-email-notification-failed'))
@@ -707,7 +725,7 @@ async function handleSendInvitationOutput(output: string, email: string, type: s
 }
 
 async function rescindInvitation(email: string) {
-  const { data, error } = await supabase.rpc('rescind_invitation', {
+  const { data, error } = await capgo.rpc('rescind_invitation', {
     email,
     org_id: currentOrganization.value?.gid ?? '',
   })
@@ -735,7 +753,7 @@ async function rescindInvitation(email: string) {
 async function didCancel() {
   dialogStore.openDialog({
     title: t('alert-confirm-delete'),
-    description: `${t('alert-not-reverse-message')} ${t('alert-delete-message')}?`,
+    description: t('alert-delete-member-confirm'),
     buttons: [
       {
         text: t('button-cancel'),
@@ -842,7 +860,7 @@ async function deleteRbacMember(member: OrganizationMemberRow) {
     return false
   }
 
-  const { data: currentSession } = await supabase.auth.getSession()
+  const { data: currentSession } = await capgo.auth.getSession()
   const currentJwt = currentSession.session?.access_token
   if (!currentJwt) {
     toast.error(t('cannot-delete-member'))
@@ -980,7 +998,7 @@ function handleRbacInviteUpdateError(error: { message?: string }, options: { toa
 }
 
 async function updateRbacMemberRole(member: OrganizationMemberRow, perm: string) {
-  const { data, error } = await supabase.rpc('update_org_member_role', {
+  const { data, error } = await capgo.rpc('update_org_member_role', {
     p_org_id: currentOrganization.value?.gid ?? '',
     p_user_id: member.uid,
     p_new_role_name: perm,
@@ -1006,12 +1024,12 @@ async function updateRbacInviteRole(member: OrganizationMemberRow, perm: string)
   }
 
   const { data, error } = member.is_tmp
-    ? await supabase.rpc('update_tmp_invite_role_rbac', {
+    ? await capgo.rpc('update_tmp_invite_role_rbac', {
         p_org_id: orgId,
         p_email: member.email,
         p_new_role_name: perm,
       })
-    : await supabase.rpc('update_org_invite_role_rbac', {
+    : await capgo.rpc('update_org_invite_role_rbac', {
         p_org_id: orgId,
         p_user_id: member.uid,
         p_new_role_name: perm,
@@ -1176,7 +1194,7 @@ async function fetchAppAccessApps() {
   if (!currentOrganization.value)
     return
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('apps')
       .select('id, app_id, name')
       .eq('owner_org', currentOrganization.value.gid)
@@ -1194,7 +1212,7 @@ async function fetchAppAccessApps() {
 
 async function fetchAvailableAppRoles() {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('roles')
       .select('id, name, scope_type, description, priority_rank')
       .eq('scope_type', 'app')
@@ -1249,6 +1267,11 @@ function updateAppAccessSaveButton() {
   if (!saveButton)
     return
   saveButton.disabled = isAppAccessSubmitting.value || !isAppAccessSelectionValid.value
+}
+
+// Roles on the apps of the SSO role mapping are rewritten at each SSO login.
+function isSsoManagedApp(appId: string) {
+  return !!appAccessMember.value?.uid && !!ssoManaged.value.get(appAccessMember.value.uid)?.appIds.has(appId)
 }
 
 async function openAppAccessModal(member: OrganizationMemberRow) {
@@ -1675,6 +1698,7 @@ async function handleInviteNewUserSubmit() {
                       type="checkbox"
                       name="app-access-app"
                       :value="app.id"
+                      :disabled="isSsoManagedApp(app.id)"
                       class="mt-1 checkbox checkbox-primary"
                     >
                     <div class="flex flex-col">
@@ -1686,6 +1710,9 @@ async function handleInviteNewUserSubmit() {
                       </span>
                       <span v-if="getAppAccessLabel(app.id)" class="text-xs text-primary">
                         {{ getAppAccessLabel(app.id) }}
+                      </span>
+                      <span v-if="isSsoManagedApp(app.id)" class="text-xs text-gray-500">
+                        {{ t('sso-managed-role') }}
                       </span>
                     </div>
                   </label>

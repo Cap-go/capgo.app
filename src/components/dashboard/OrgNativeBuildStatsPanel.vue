@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AppBuildSummary, BuildSummaryRow, BuildTotals } from '~/services/buildCharts'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconHammer from '~icons/lucide/hammer'
@@ -9,9 +9,9 @@ import BuildStatsCard from '~/components/dashboard/BuildStatsCard.vue'
 import BuildTimeCard from '~/components/dashboard/BuildTimeCard.vue'
 import Spinner from '~/components/Spinner.vue'
 import { fetchAllRows, formatBuildDuration, getBuildChartWindow, summarizeBuilds } from '~/services/buildCharts'
+import { useConsole } from '~/services/console'
 import { formatLocalDateTime } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
-import { useSupabase } from '~/services/supabase'
 import { useOrganizationStore } from '~/stores/organization'
 
 type AppRow = Database['public']['Tables']['apps']['Row']
@@ -25,7 +25,7 @@ const props = withDefaults(defineProps<{
 })
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const organizationStore = useOrganizationStore()
 
 const useBillingPeriod = ref(false)
@@ -73,7 +73,7 @@ async function fetchSummary() {
   try {
     const org = organizationStore.organizations.find(item => item.gid === props.orgId) ?? organizationStore.currentOrganization
     const window = getBuildChartWindow(useBillingPeriod.value, org?.subscription_start)
-    const rows = await fetchAllRows<BuildSummaryRow>((from, to) => supabase
+    const rows = await fetchAllRows<BuildSummaryRow>((from, to) => capgo
       .from('build_requests')
       .select('app_id, status, created_at, started_at, completed_at, runner_wait_seconds')
       .eq('owner_org', props.orgId)

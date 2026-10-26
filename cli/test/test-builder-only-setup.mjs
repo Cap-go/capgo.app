@@ -27,6 +27,14 @@ assert.equal(requests[0].opts.method, 'GET', 'assignment reads do not refresh or
 assert.equal(requests[0].opts.apikey, options.apikey)
 assert.equal(requests[0].opts.apiHost, options.apiHost)
 assert.ok(requests[0].opts.signal, 'assignment lookup is bounded')
+const knownCalls = []
+assert.equal(await tryBuilderOnlyInit(appId, options, {
+  knownBuilderOnly: true,
+  request: async () => assert.fail('a confirmed pending-app assignment must not be looked up again'),
+  beforeLaunch: async () => knownCalls.push('cleanup'),
+  launch: async opts => knownCalls.push(opts),
+}), true, 'a confirmed Builder assignment must hand off without falling through to OTA')
+assert.deepEqual(knownCalls, ['cleanup', { ...options, appId }])
 assert.equal((await resolveBuilderChecklistPlatform(appId, options, 'ios', 'android', request)).platform, 'ios', 'explicit platform wins')
 assert.equal((await resolveBuilderChecklistPlatform(appId, options, undefined, 'ios', request)).platform, 'android', 'saved platform beats native-directory inference')
 assert.equal((await resolveBuilderChecklistPlatform(appId, options, undefined, undefined, request)).platform, 'android')

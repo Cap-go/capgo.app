@@ -15,7 +15,10 @@ const mocks = vi.hoisted(() => ({
   success: vi.fn(),
 }))
 
-vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
+vi.mock('vue-i18n', () => ({
+  useI18n: () => ({ t: (key: string) => key }),
+  createI18n: () => ({ global: { t: (key: string) => key }, install: () => {} }),
+}))
 vi.mock('vue-sonner', () => ({ toast: { success: mocks.success } }))
 vi.mock('~/stores/main', () => ({ useMainStore: () => ({ user: { id: mocks.userId } }) }))
 vi.mock('~/stores/display', () => ({ useDisplayStore: () => ({}) }))
@@ -30,9 +33,9 @@ vi.mock('~/stores/organization', () => ({
 }))
 vi.mock('~/services/nativeCompliance', () => ({ isNativeAppStoreContext: () => false }))
 vi.mock('~/services/posthog', () => ({ pushEventForUser: mocks.capture }))
-vi.mock('~/services/supabase', () => ({
-  getLocalConfig: () => ({ supaHost: 'https://sb.capgo.app' }),
-  useSupabase: () => ({ rpc: mocks.rpc, from: mocks.from }),
+vi.mock('~/services/console', () => ({
+  getLocalConfig: () => ({ apiHost: 'https://api.capgo.app' }),
+  useConsole: () => ({ rpc: mocks.rpc, from: mocks.from }),
 }))
 
 let app: ReturnType<typeof createApp> | undefined
@@ -87,7 +90,7 @@ describe('pending organization invitation acceptance', () => {
     expect(mocks.capture).toHaveBeenCalledWith(
       'organization_membership_invitation_accepted',
       mocks.userId,
-      'https://sb.capgo.app',
+      'https://api.capgo.app',
       expect.objectContaining({ pending_invitation_count: 1 }),
     )
   })

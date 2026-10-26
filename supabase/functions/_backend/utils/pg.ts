@@ -513,14 +513,26 @@ export async function beginWriteTransaction(client: { query: (queryText: string,
   await client.query(BEGIN_WRITE_TRANSACTION_SQL)
 }
 
-export async function withPgTransaction<T>(pgPool: PgClient, run: (client: PgQueryClient) => Promise<T>): Promise<T> {
+// One simple query: BEGIN plus the timeouts, and any trusted setup that must
+// share that round trip. appendSql is server-built SQL, never a console filter.
+export function transactionBeginSql(accessMode: 'read only' | 'read write', appendSql?: string): string {
+  const begin = accessMode === 'read only' ? 'BEGIN READ ONLY' : 'BEGIN READ WRITE'
+  const statement = `${begin}; SET LOCAL statement_timeout = 10000; SET LOCAL idle_in_transaction_session_timeout = ${TRANSACTION_IDLE_TIMEOUT_MS}`
+  if (!appendSql)
+    return statement
+  return `${statement}; ${appendSql}`
+}
+
+export async function withPgTransaction<T>(pgPool: PgClient, run: (client: PgQueryClient) => Promise<T>, options?: { appendSql?: string }): Promise<T> {
   const client = await checkoutPgClient(pgPool)
   try {
     // Bound the transaction on the same round trip as BEGIN so an abandoned
     // request cannot pin the Hyperdrive origin connection with no timeout.
-    const begin = getPgAccessMode(pgPool) === 'read only' ? 'BEGIN READ ONLY' : 'BEGIN READ WRITE'
-    await client.query(`${begin}; SET LOCAL statement_timeout = 10000; SET LOCAL idle_in_transaction_session_timeout = ${TRANSACTION_IDLE_TIMEOUT_MS}`)
+    // BEGIN stays inside this try: appended setup can fail after the
+    // transaction is open, and that failure has to roll it back.
+    const accessMode = getPgAccessMode(pgPool) === 'read only' ? 'read only' : 'read write'
     try {
+      await client.query(transactionBeginSql(accessMode, options?.appendSql))
       const result = await run(client)
       await client.query('COMMIT')
       return result

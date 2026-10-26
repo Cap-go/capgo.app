@@ -1,11 +1,8 @@
-import type { User } from '@supabase/supabase-js'
-import type { AppUsageByApp, AppUsageGlobal } from './../services/supabase'
-import type { Database } from '~/types/supabase.types'
+import type { AppUsageByApp, AppUsageGlobal } from './../services/console'
+import type { User } from '~/services/consoleClient'
+import type { Database } from '~/types/database.types'
 import { acceptHMRUpdate, defineStore } from 'pinia'
 import { ref, watch } from 'vue'
-import { getDaysBetweenDates } from '~/services/conversion'
-import { normalizeToUtcStartOfDay } from '~/services/date'
-import { reset } from '~/services/posthog'
 import {
   clearSpoof,
   findBestPlan,
@@ -14,8 +11,11 @@ import {
   getTotalStorage,
   isPlatformAdmin,
   normalizeDashboardDateRange,
-  useSupabase,
-} from '~/services/supabase'
+  useConsole,
+} from '~/services/console'
+import { getDaysBetweenDates } from '~/services/conversion'
+import { normalizeToUtcStartOfDay } from '~/services/date'
+import { reset } from '~/services/posthog'
 import { setWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
 import { createDeferredPromise } from '../utils/promise'
 
@@ -101,13 +101,13 @@ export const useMainStore = defineStore('main', () => {
   }, { flush: 'sync' })
 
   const logout = async () => {
-    const supabase = useSupabase()
+    const capgo = useConsole()
     const config = getLocalConfig()
-    const { error } = await supabase.auth.signOut()
+    const { error } = await capgo.auth.signOut()
     auth.value = undefined
     user.value = undefined
     isAdmin.value = false
-    reset(config.supaHost)
+    reset(config.apiHost)
     clearSpoof()
     if (error)
       console.error('Failed to log out', error)

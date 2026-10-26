@@ -5,7 +5,7 @@ import BuildTimeChart from '~/components/dashboard/BuildTimeChart.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import { useBuildCardStats } from '~/composables/useBuildCardStats'
 import { computeLastDayEvolution, dayIndexInWindow, fetchAllRows } from '~/services/buildCharts'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 
 const props = defineProps({
   appId: { type: String, default: '' },
@@ -19,7 +19,7 @@ const props = defineProps({
 const emit = defineEmits<{ 'update:loading': [value: boolean] }>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 
 interface BuildLogRow { created_at: string | null, billable_seconds: number | null }
 interface BuildTimeResult { minutesPerDay: number[], total: number, evolution: number }
@@ -27,7 +27,7 @@ interface BuildTimeResult { minutesPerDay: number[], total: number, evolution: n
 const { isLoading, result } = useBuildCardStats<BuildTimeResult>(props, emit, {
   empty: () => ({ minutesPerDay: [], total: 0, evolution: 0 }),
   load: async (window) => {
-    const rows = await fetchAllRows<BuildLogRow>((from, to) => supabase
+    const rows = await fetchAllRows<BuildLogRow>((from, to) => capgo
       .from('build_logs')
       .select('created_at, billable_seconds')
       .eq(props.orgId ? 'org_id' : 'app_id', props.orgId || props.appId)

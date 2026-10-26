@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeDashboardDateRange } from '~/services/supabase'
+import { normalizeDashboardDateRange } from '~/services/console'
 
 function createFallbackWindow(now: Date) {
   const end = new Date(now)

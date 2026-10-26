@@ -14,8 +14,8 @@ import IconTerminal from '~icons/lucide/terminal-square'
 import IconAndroid from '~icons/mdi/android'
 import IconApple from '~icons/mdi/apple'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
+import { defaultApiHost, getLocalConfig, isLocal, useConsole } from '~/services/console'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
-import { defaultApiHost, getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
@@ -55,14 +55,14 @@ const pollTimer = ref<number | null>(null)
 const initialCount = ref<number | null>(null)
 const selectedPlatform = ref<Platform>('ios')
 const apiKey = ref('[APIKEY]')
-const supabase = useSupabase()
+const capgo = useConsole()
 const main = useMainStore()
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
 const config = getLocalConfig()
 const initialOnboarding = props.onboarding
-const localCommand = isLocal(config.supaHost) ? ` --api-host ${defaultApiHost}` : ''
+const localCommand = isLocal(config.apiHost) ? ` --api-host ${defaultApiHost}` : ''
 
 const platformBuildCounts = computed<PlatformBuildCounts>(() => ({
   ios: props.platformBuildCounts?.ios ?? 0,
@@ -219,14 +219,14 @@ async function copyToast(allowed: boolean, id: string, text?: string) {
 }
 
 async function addNewApiKey() {
-  const { data: claimsData } = await supabase.auth.getClaims()
+  const { data: claimsData } = await capgo.auth.getClaims()
   const userId = claimsData?.claims?.sub
 
   if (!userId) {
     console.log('Not logged in, cannot regenerate API key')
     return null
   }
-  const { data, error } = await createDefaultApiKey(supabase, t('api-key'), {
+  const { data, error } = await createDefaultApiKey(capgo, t('api-key'), {
     orgId: organizationStore.currentOrganization?.gid,
     appId: props.appId,
   })
@@ -242,7 +242,7 @@ async function getKey(retry = true): Promise<void> {
   if (!main?.user?.id)
     return
 
-  const existingKey = await findUsablePlainApiKey(supabase, main.user.id, organizationStore.currentOrganization?.gid, props.appId)
+  const existingKey = await findUsablePlainApiKey(capgo, main.user.id, organizationStore.currentOrganization?.gid, props.appId)
   if (existingKey) {
     apiKey.value = existingKey
   }
@@ -257,7 +257,7 @@ async function getBuildRequestsCount(platform: Platform): Promise<number> {
   const orgId = organizationStore.currentOrganization?.gid
   if (!orgId || !props.appId)
     return 0
-  const { count, error } = await supabase
+  const { count, error } = await capgo
     .from('build_requests')
     .select('id', { count: 'exact', head: true })
     .eq('owner_org', orgId)
@@ -273,7 +273,7 @@ async function getLatestBuildId(platform: Platform): Promise<string | undefined>
   const orgId = organizationStore.currentOrganization?.gid
   if (!orgId || !props.appId)
     return undefined
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('build_requests')
     .select('id, created_at')
     .eq('owner_org', orgId)

@@ -1,5 +1,5 @@
 import type { UploadOptions } from '@capgo/cli/sdk'
-import type { Database } from '../src/types/supabase.types'
+import type { Database } from '../src/types/database.types'
 import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
 import { constants, createCipheriv, createHash, createPublicKey, privateEncrypt, randomBytes } from 'node:crypto'
@@ -459,8 +459,8 @@ async function buildCompatibilityResult(appId: string, channel: string, packageJ
 }
 
 async function uploadBufferToStorage(filePath: string, zipBuffer: Buffer) {
-  const supabase = getSupabaseClient()
-  const bucket = supabase.storage.from('capgo')
+  const capgo = getSupabaseClient()
+  const bucket = capgo.storage.from('capgo')
 
   await bucket.remove([filePath])
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { NativePackage } from '~/services/bundleCompatibility'
 import type { CompatibilityEventGroup, CompatibilityEventRow } from '~/services/compatibilityEvents'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { computed, nextTick, onUnmounted, ref, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -14,11 +14,11 @@ import IconExternalLink from '~icons/lucide/external-link'
 import PluginAdoptionPanel from '~/components/observe/PluginAdoptionPanel.vue'
 import { comparePackages, hasPlatformChecksumMetadataDrift } from '~/services/bundleCompatibility'
 import { dependencyDiffPath, groupCompatibilityEvents, platformLabel } from '~/services/compatibilityEvents'
+import { getLocalConfig, useConsole } from '~/services/console'
 import { formatLocalDateTime } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
 import { pushEvent } from '~/services/posthog'
 import { createSignedImageUrl } from '~/services/storage'
-import { getLocalConfig, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 
@@ -27,7 +27,7 @@ const { t } = useI18n()
 // untyped useRoute() (matching the dependencies page) until the route map updates.
 const route = useRoute()
 const router = useRouter()
-const supabase = useSupabase()
+const capgo = useConsole()
 const displayStore = useDisplayStore()
 const dialogStore = useDialogV2Store()
 
@@ -127,7 +127,7 @@ const compatDocsUrl = 'https://capgo.app/docs/live-updates/compatibility/'
 // Send the user to the in-app native build flow (Builds tab), tracking the click
 // so this Builder entry point can be compared with the banner / upload CTAs.
 function openBuilder() {
-  pushEvent('builder_cta_compatibility_clicked', config.supaHost, { app_id: id.value })
+  pushEvent('builder_cta_compatibility_clicked', config.apiHost, { app_id: id.value })
   router.push(`/app/${encodeURIComponent(id.value)}/builds`)
 }
 
@@ -231,7 +231,7 @@ async function rollbackChannels(targets: readonly RollbackTarget[]) {
       failedChannels.push(target.channelName)
       continue
     }
-    const { error } = await supabase
+    const { error } = await capgo
       .from('channels')
       .update({ version: target.versionId })
       .eq('id', target.channelId)
@@ -310,7 +310,7 @@ function toggleGuidance() {
 
 async function loadAppInfo() {
   try {
-    const { data: dataApp } = await supabase
+    const { data: dataApp } = await capgo
       .from('apps')
       .select()
       .eq('app_id', id.value)
@@ -322,13 +322,18 @@ async function loadAppInfo() {
   }
 }
 
+const COMPATIBILITY_EVENTS_LIMIT = 500
+
 async function loadEvents() {
   try {
-    const { data, error } = await supabase
+    // Newest events only: older ones are history, and every row also drives
+    // channel and bundle lookups below.
+    const { data, error } = await capgo
       .from('compatibility_events')
       .select('*')
       .eq('app_id', id.value)
       .order('created_at', { ascending: false })
+      .limit(COMPATIBILITY_EVENTS_LIMIT)
 
     if (error) {
       console.error('[Compatibility] Error loading events:', error)
@@ -356,7 +361,7 @@ async function loadExistingChannels() {
     guardOffChannelIds.value = new Set()
     return
   }
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('channels')
     .select('id, disable_auto_update_under_native')
     .eq('app_id', id.value)
@@ -390,7 +395,7 @@ async function loadExistingVersions() {
     versionNativePackages.value = new Map()
     return
   }
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('app_versions')
     .select('id, native_packages')
     .eq('app_id', id.value)
@@ -426,7 +431,7 @@ async function loadMemberEmails() {
   )
   if (!orgId || resolverIds.size === 0)
     return
-  const { data, error } = await supabase.rpc('get_org_members', { guild_id: orgId })
+  const { data, error } = await capgo.rpc('get_org_members', { guild_id: orgId })
   if (error) {
     console.error('[Compatibility] Error loading org members:', error)
     return
@@ -497,22 +502,23 @@ function openDependencyDiff(event: CompatibilityEventRow) {
 
 async function acknowledgeEvents(eventIds: number[], note: string) {
   try {
-    for (const eventId of eventIds) {
-      const { error } = await supabase.rpc('acknowledge_compatibility_event', {
-        event_id: eventId,
-        note,
-      })
+    // Independent acknowledgements, sent together instead of one round trip each.
+    const results = await Promise.all(eventIds.map(eventId => capgo.rpc('acknowledge_compatibility_event', {
+      event_id: eventId,
+      note,
+    })))
+    const failed = results.find(result => result.error)
 
-      if (error) {
-        // The reason was already validated in the dialog handler, so an error
-        // here is an RPC/network/server failure — not a missing reason.
-        console.error('[Compatibility] Error accepting event:', error)
-        toast.error(t('something-went-wrong-try-again-later'))
-        return
-      }
+    if (failed) {
+      // The reason was already validated in the dialog handler, so an error
+      // here is an RPC/network/server failure — not a missing reason.
+      console.error('[Compatibility] Error accepting event:', failed.error)
+      toast.error(t('something-went-wrong-try-again-later'))
     }
-
-    toast.success(t('compatibility-status-resolved'))
+    else {
+      toast.success(t('compatibility-status-resolved'))
+    }
+    // Reload either way so partially accepted groups show their real state.
     await loadEvents()
     await loadLookups()
   }

@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { computed, ref, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import AppNotFoundModal from '~/components/AppNotFoundModal.vue'
 import LiveReleaseDashboard from '~/components/dashboard/LiveReleaseDashboard.vue'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -17,7 +17,7 @@ const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const dashboardAppsStore = useDashboardAppsStore()
 const isLoading = ref(false)
-const supabase = useSupabase()
+const capgo = useConsole()
 const displayStore = useDisplayStore()
 type AppDashboardRow = Database['public']['Tables']['apps']['Row']
 
@@ -39,7 +39,7 @@ async function loadAppInfo(requestedId: string, generation: number) {
     if (generation !== loadGeneration || id.value !== requestedId)
       return
 
-    const { data: dataApp, error } = await supabase.from('apps').select().eq('app_id', requestedId).single()
+    const { data: dataApp, error } = await capgo.from('apps').select().eq('app_id', requestedId).single()
 
     if (generation !== loadGeneration || id.value !== requestedId)
       return
