@@ -1,4 +1,5 @@
 import type { Ref } from 'vue'
+import type { LegacyCheckFailures } from '~/composables/useReleaseLive'
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -32,6 +33,7 @@ export interface BundleInstallStatsResponse {
     fail: number
     success_rate: number | null
   }
+  legacy_check_failures?: LegacyCheckFailures | null
 }
 
 export function useBundleInstallStats(
