@@ -72,6 +72,8 @@ function setAuthHeaders(c: Context<MiddlewareKeyVariables>, headers: Headers) {
   if (cfClientIp && secretKey.startsWith('sb_secret_') && JWT_BEARER.test(`Bearer ${anonJwt}`)) {
     headers.set('apikey', secretKey)
     headers.set('authorization', session ?? `Bearer ${anonJwt}`)
+    // Supabase answers 401 to secret-key requests carrying a browser User-Agent.
+    headers.set('user-agent', 'capgo-console-auth-relay')
     headers.set('x-forwarded-for', cfClientIp)
     headers.set('sb-forwarded-for', cfClientIp)
     return

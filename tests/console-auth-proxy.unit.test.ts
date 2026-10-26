@@ -95,8 +95,10 @@ describe('console auth relay client address forwarding', () => {
   }
 
   it('uses the secret key with the anon JWT for signed-out requests so Sb-Forwarded-For is honoured', async () => {
-    const headers = await relayedHeaders('signup', { 'cf-connecting-ip': '203.0.113.9' })
+    const headers = await relayedHeaders('signup', { 'cf-connecting-ip': '203.0.113.9', 'user-agent': 'Mozilla/5.0 (Macintosh) Chrome/130' })
     expect(headers.get('apikey')).toBe('sb_secret_test')
+    // Supabase rejects secret-key requests that carry a browser User-Agent.
+    expect(headers.get('user-agent')).toBe('capgo-console-auth-relay')
     expect(headers.get('authorization')).toBe(`Bearer ${ANON_JWT}`)
     expect(headers.get('sb-forwarded-for')).toBe('203.0.113.9')
     expect(headers.get('x-forwarded-for')).toBe('203.0.113.9')
@@ -117,8 +119,9 @@ describe('console auth relay client address forwarding', () => {
   })
 
   it('only forwards the Cloudflare address, never a client-supplied x-forwarded-for, with the secret key', async () => {
-    const headers = await relayedHeaders('recover', { 'x-forwarded-for': '198.51.100.4' })
+    const headers = await relayedHeaders('recover', { 'x-forwarded-for': '198.51.100.4', 'user-agent': 'Mozilla/5.0' })
     expect(headers.get('apikey')).toBe('anon-key')
+    expect(headers.get('user-agent')).toBe('Mozilla/5.0')
     expect(headers.get('authorization')).toBe('Bearer anon-key')
   })
 
