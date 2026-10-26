@@ -17,15 +17,15 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
   const reportedOnboarding = ref(parseAppOnboarding(toValue(initialOnboarding)))
   const hasChannel = ref<boolean | null>(null)
   const onboarding = computed(() => {
-    const reported = withUsageProvenSteps(reportedOnboarding.value, rawOnboarding.value)
-    if (hasChannel.value === null)
-      return reported
+    const reported = reportedOnboarding.value
     const steps = { ...reported.steps }
     if (hasChannel.value)
       steps.add_channel = { ...steps.add_channel, status: 'done' }
-    else
+    else if (hasChannel.value === false)
       delete steps.add_channel
-    return { ...reported, steps }
+    // Usage applies last, matching the nav: a channel deleted after a successful
+    // OTA install does not reopen onboarding.
+    return withUsageProvenSteps({ ...reported, steps }, rawOnboarding.value)
   })
   const refreshError = ref(false)
   const isTerminal = computed(() => {
