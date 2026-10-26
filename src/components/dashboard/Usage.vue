@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Plan } from '~/services/console'
+import type { Database } from '~/types/database.types'
 import { storeToRefs } from 'pinia'
 import colors from 'tailwindcss/colors'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -43,7 +43,7 @@ const props = defineProps<{
   forceDemo?: boolean
 }>()
 
-const plans = ref<Plan[]>([])
+const plans = ref<Database['public']['Tables']['plans']['Row'][]>([])
 const { t } = useI18n()
 const compact = useChartCardCompact()
 

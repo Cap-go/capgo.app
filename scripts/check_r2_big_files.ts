@@ -753,7 +753,7 @@ async function get_big_orgs() {
                 pool.query(
                     `select name, storage from plans
                     where (select price_id from stripe_info where customer_id=(select customer_id from orgs where id = $1))
-                    = any(array[price_m_id, price_y_id, price_m_id_us, price_y_id_us]::text[] || alt_price_m_ids || alt_price_y_ids)`,
+                    = any(array[price_m_id, price_y_id, price_m_id_us, price_y_id_us]::text[] || legacy_price_m_ids || legacy_price_y_ids)`,
                     [org.orgId]
                 )
             )

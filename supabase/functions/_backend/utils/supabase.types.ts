@@ -2584,8 +2584,6 @@ export type Database = {
       }
       plans: {
         Row: {
-          alt_price_m_ids: string[]
-          alt_price_y_ids: string[]
           bandwidth: number
           build_time_unit: number
           created_at: string
@@ -2593,6 +2591,8 @@ export type Database = {
           credit_id_us: string | null
           description: string
           id: string
+          legacy_price_m_ids: string[]
+          legacy_price_y_ids: string[]
           market_desc: string | null
           mau: number
           name: string
@@ -2603,15 +2603,12 @@ export type Database = {
           price_y_id: string
           price_y_id_us: string | null
           price_m_id_us: string | null
-          regional_price_ids: Json
           storage: number
           stripe_id: string
           stripe_id_us: string | null
           updated_at: string
         }
         Insert: {
-          alt_price_m_ids?: string[]
-          alt_price_y_ids?: string[]
           bandwidth: number
           build_time_unit?: number
           created_at?: string
@@ -2619,6 +2616,8 @@ export type Database = {
           credit_id_us?: string | null
           description?: string
           id?: string
+          legacy_price_m_ids?: string[]
+          legacy_price_y_ids?: string[]
           market_desc?: string | null
           mau?: number
           name?: string
@@ -2629,15 +2628,12 @@ export type Database = {
           price_y_id: string
           price_y_id_us?: string | null
           price_m_id_us?: string | null
-          regional_price_ids?: Json
           storage: number
           stripe_id?: string
           stripe_id_us?: string | null
           updated_at?: string
         }
         Update: {
-          alt_price_m_ids?: string[]
-          alt_price_y_ids?: string[]
           bandwidth?: number
           build_time_unit?: number
           created_at?: string
@@ -2645,6 +2641,8 @@ export type Database = {
           credit_id_us?: string | null
           description?: string
           id?: string
+          legacy_price_m_ids?: string[]
+          legacy_price_y_ids?: string[]
           market_desc?: string | null
           mau?: number
           name?: string
@@ -2655,7 +2653,6 @@ export type Database = {
           price_y_id?: string
           price_y_id_us?: string | null
           price_m_id_us?: string | null
-          regional_price_ids?: Json
           storage?: number
           stripe_id?: string
           stripe_id_us?: string | null

@@ -445,10 +445,7 @@ export async function isPayingOrg(orgId: string): Promise<boolean> {
   return data ?? false
 }
 
-// regional_price_ids is server-only (checkout picks the price); its Json type also exceeds Vue's ref unwrapping depth.
-export type Plan = Omit<Database['public']['Tables']['plans']['Row'], 'regional_price_ids'>
-
-export async function getPlans(): Promise<Plan[]> {
+export async function getPlans(): Promise<Database['public']['Tables']['plans']['Row'][]> {
   try {
     const response = await fetch(`${defaultApiHost}/private/plans`)
 
@@ -456,7 +453,7 @@ export async function getPlans(): Promise<Plan[]> {
       return []
     }
 
-    return await response.json() as Plan[]
+    return await response.json() as Database['public']['Tables']['plans']['Row'][]
   }
   catch {
     return []

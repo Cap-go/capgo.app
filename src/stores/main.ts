@@ -1,4 +1,4 @@
-import type { AppUsageByApp, AppUsageGlobal, Plan } from './../services/console'
+import type { AppUsageByApp, AppUsageGlobal } from './../services/console'
 import type { User } from '~/services/consoleClient'
 import type { Database } from '~/types/database.types'
 import { acceptHMRUpdate, defineStore } from 'pinia'
@@ -31,7 +31,7 @@ export const useMainStore = defineStore('main', () => {
   const authGeneration = ref(0)
   const path = ref('')
   const user = ref<Database['public']['Tables']['users']['Row']>()
-  const plans = ref<Plan[]>([])
+  const plans = ref<Database['public']['Tables']['plans']['Row'][]>([])
   const totalStats = ref<TotalStats>({
     mau: 0,
     storage: 0,

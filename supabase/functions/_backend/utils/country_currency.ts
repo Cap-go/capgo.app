@@ -166,9 +166,3 @@ export function currencyForCountry(country: string | null | undefined): string |
     return null
   return COUNTRY_CURRENCY.get(country.toUpperCase()) ?? null
 }
-
-// Plan prices differ per country (PPP), so a visitor may only buy in USD or their own country's currency.
-export function isCurrencyAllowedForCountry(currency: string, country: string | null | undefined): boolean {
-  const code = currency.toLowerCase()
-  return code === 'usd' || code === currencyForCountry(country)
-}
