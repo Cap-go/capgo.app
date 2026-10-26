@@ -3,6 +3,13 @@ import { describe, expect, it, vi } from 'vitest'
 import { extractDataEvent } from '../supabase/functions/_backend/utils/stripe_event.ts'
 import { AUTO_TOP_UP_KIND, handleAutoTopUpInvoicePaid, normalizeAutoTopUpMonthlyLimit, payAutoTopUpInvoice, shouldAttemptAutoTopUp } from '../supabase/functions/_backend/utils/credit_auto_top_up.ts'
 
+const { rpcMock } = vi.hoisted(() => ({ rpcMock: vi.fn() }))
+
+vi.mock('../supabase/functions/_backend/utils/supabase.ts', async importOriginal => ({
+  ...await importOriginal<typeof import('../supabase/functions/_backend/utils/supabase.ts')>(),
+  supabaseAdmin: () => ({ rpc: rpcMock }),
+}))
+
 describe('credit auto top-up decision', () => {
   const base = { enabled: true, availableCredits: 0, threshold: 10, lastAttemptAt: null as string | null }
   const now = Date.parse('2026-08-24T12:00:00.000Z')
@@ -153,5 +160,16 @@ describe('credit auto top-up invoice webhook', () => {
   it('leaves card-paid auto top-up invoices to the PaymentIntent webhook', async () => {
     const invoice = event({ metadata: { kind: AUTO_TOP_UP_KIND, orgId: 'org_1', intendedQuantity: '25' }, amount_paid: 2500 })
     await expect(handleAutoTopUpInvoicePaid(context, invoice, 'org_1')).resolves.toBe(true)
+  })
+
+  it('grants a balance-paid auto top-up from the invoice, keyed by the invoice id', async () => {
+    rpcMock.mockReturnValueOnce({ single: async () => ({ data: {}, error: null }) })
+    const invoice = event({ metadata: { kind: AUTO_TOP_UP_KIND, orgId: 'org_1', intendedQuantity: '25' }, amount_paid: 0 })
+    await expect(handleAutoTopUpInvoicePaid(context, invoice, 'org_1')).resolves.toBe(true)
+    expect(rpcMock).toHaveBeenCalledWith('top_up_usage_credits', expect.objectContaining({
+      p_org_id: 'org_1',
+      p_amount: 25,
+      p_source_ref: expect.objectContaining({ paymentIntentId: 'in_1', quantity: 25 }),
+    }))
   })
 })
