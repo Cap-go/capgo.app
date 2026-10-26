@@ -270,6 +270,63 @@ async function drainOrphanPrefix(c: Context, db: Database, orphan: OrphanPrefix,
   return { listed: objects.length, deleted, pageDone }
 }
 
+/** One page of one claimed app; a failure restarts that app's listing later. */
+async function pageClaimedApp(c: Context, db: Database, claimedApp: ClaimedApp, run: GcRun) {
+  if (!canStart(run)) {
+    await db.execute(sql`SELECT public.delta_gc_finish(${claimedApp.app_id}, ${claimedApp.list_cursor}, NULL, false)`)
+    return
+  }
+  try {
+    const page = await collectAppPage(c, db, claimedApp, run)
+    await db.execute(sql`SELECT public.delta_gc_finish(${claimedApp.app_id}, ${page.nextCursor}, NULL, ${page.pageDone})`)
+    cloudlog({ requestId: c.get('requestId'), message: 'delta gc page done', appId: claimedApp.app_id, ...page })
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'delta gc app failed', appId: claimedApp.app_id, error })
+    // Restart the listing on the next pass: continuation tokens are not durable.
+    await db.execute(sql`SELECT public.delta_gc_finish(${claimedApp.app_id}, NULL, ${error instanceof Error ? error.message : 'unknown error'})`)
+  }
+}
+
+/**
+ * Most apps list an empty or small prefix, so apps are claimed in groups
+ * until the budget is spent; each app gets at most one page per run.
+ * Returns how many apps were claimed.
+ */
+async function pageClaimedApps(c: Context, db: Database, run: GcRun) {
+  const seen = new Set<string>()
+  while (canStart(run)) {
+    const claimed = await db.execute<ClaimedApp>(sql`SELECT * FROM public.delta_gc_claim(${DELTA_GC_APPS_PER_RUN})`)
+    const fresh = claimed.rows.filter(row => !seen.has(row.app_id))
+    // Apps already paged in this run continue on the next run.
+    for (const again of claimed.rows.filter(row => seen.has(row.app_id)))
+      await db.execute(sql`SELECT public.delta_gc_finish(${again.app_id}, ${again.list_cursor}, NULL, false)`)
+    if (fresh.length === 0)
+      break
+    for (const claimedApp of fresh) {
+      seen.add(claimedApp.app_id)
+      await pageClaimedApp(c, db, claimedApp, run)
+    }
+  }
+  return seen.size
+}
+
+async function drainOrphanPrefixes(c: Context, db: Database, run: GcRun) {
+  const orphans = await db.execute<OrphanPrefix>(sql`SELECT * FROM public.delta_gc_claim_orphan_prefixes(2)`)
+  for (const orphan of orphans.rows) {
+    if (!canStart(run))
+      break
+    try {
+      const page = await drainOrphanPrefix(c, db, orphan, run)
+      cloudlog({ requestId: c.get('requestId'), message: 'delta gc orphan prefix page done', prefix: orphan.prefix, ...page })
+    }
+    catch (error) {
+      // The claim expires and the prefix is retried by a later run.
+      cloudlogErr({ requestId: c.get('requestId'), message: 'delta gc orphan prefix failed', prefix: orphan.prefix, error })
+    }
+  }
+}
+
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.post('/', middlewareAPISecret, async (c) => {
@@ -280,52 +337,9 @@ app.post('/', middlewareAPISecret, async (c) => {
     const db = getDrizzleClient(pool)
     if (canStart(run))
       await repairUnsettledDeletes(c, db, run)
-    // Most apps list an empty or small prefix, so one run covers many apps;
-    // each app gets at most one page per run.
-    const seen = new Set<string>()
-    let claimedApps = 0
-    while (canStart(run)) {
-      const claimed = await db.execute<ClaimedApp>(sql`SELECT * FROM public.delta_gc_claim(${DELTA_GC_APPS_PER_RUN})`)
-      const fresh = claimed.rows.filter(row => !seen.has(row.app_id))
-      // Apps already paged in this run continue on the next run.
-      for (const again of claimed.rows.filter(row => seen.has(row.app_id)))
-        await db.execute(sql`SELECT public.delta_gc_finish(${again.app_id}, ${again.list_cursor}, NULL, false)`)
-      if (fresh.length === 0)
-        break
-      claimedApps += fresh.length
-      for (const claimedApp of fresh) {
-        seen.add(claimedApp.app_id)
-        if (!canStart(run)) {
-          await db.execute(sql`SELECT public.delta_gc_finish(${claimedApp.app_id}, ${claimedApp.list_cursor}, NULL, false)`)
-          continue
-        }
-        try {
-          const page = await collectAppPage(c, db, claimedApp, run)
-          await db.execute(sql`SELECT public.delta_gc_finish(${claimedApp.app_id}, ${page.nextCursor}, NULL, ${page.pageDone})`)
-          cloudlog({ requestId: c.get('requestId'), message: 'delta gc page done', appId: claimedApp.app_id, ...page })
-        }
-        catch (error) {
-          cloudlogErr({ requestId: c.get('requestId'), message: 'delta gc app failed', appId: claimedApp.app_id, error })
-          // Restart the listing on the next pass: continuation tokens are not durable.
-          await db.execute(sql`SELECT public.delta_gc_finish(${claimedApp.app_id}, NULL, ${error instanceof Error ? error.message : 'unknown error'})`)
-        }
-      }
-    }
-    if (canStart(run)) {
-      const orphans = await db.execute<OrphanPrefix>(sql`SELECT * FROM public.delta_gc_claim_orphan_prefixes(2)`)
-      for (const orphan of orphans.rows) {
-        if (!canStart(run))
-          break
-        try {
-          const page = await drainOrphanPrefix(c, db, orphan, run)
-          cloudlog({ requestId: c.get('requestId'), message: 'delta gc orphan prefix page done', prefix: orphan.prefix, ...page })
-        }
-        catch (error) {
-          // The claim expires and the prefix is retried by a later run.
-          cloudlogErr({ requestId: c.get('requestId'), message: 'delta gc orphan prefix failed', prefix: orphan.prefix, error })
-        }
-      }
-    }
+    const claimedApps = await pageClaimedApps(c, db, run)
+    if (canStart(run))
+      await drainOrphanPrefixes(c, db, run)
     cloudlog({ requestId: c.get('requestId'), message: 'delta gc run done', apps: claimedApps, durationMs: Date.now() - startedAt })
     return c.json(BRES)
   }
