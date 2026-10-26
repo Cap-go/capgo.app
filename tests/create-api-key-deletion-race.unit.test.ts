@@ -83,7 +83,7 @@ describe('createApiKey account-deletion serialization', () => {
         return { rowCount: 1, rows: [{ count: '0' }] }
       if (sql.startsWith('SELECT DISTINCT rb.org_id'))
         return { rowCount: 1, rows: [{ org_id: '22222222-2222-4222-8222-222222222222' }] }
-      if (sql.startsWith('WITH default_keys'))
+      if (sql.startsWith('WITH RECURSIVE default_keys'))
         return { rowCount: 3, rows: [] }
       throw new Error(`Unexpected query: ${sql}`)
     })
@@ -92,7 +92,7 @@ describe('createApiKey account-deletion serialization', () => {
 
     const queries = pgQueryMock.mock.calls.map(([query]) => normalizedQuery(query))
     const guardIndex = queries.findIndex(query => query.includes('FROM public.to_delete_accounts'))
-    const insertIndex = queries.findIndex(query => query.startsWith('WITH default_keys'))
+    const insertIndex = queries.findIndex(query => query.startsWith('WITH RECURSIVE default_keys'))
     expect(guardIndex).toBeGreaterThan(0)
     expect(insertIndex).toBeGreaterThan(guardIndex)
     expect(queries.at(-1)).toBe('COMMIT')
