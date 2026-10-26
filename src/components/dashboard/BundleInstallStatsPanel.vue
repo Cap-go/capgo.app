@@ -341,10 +341,10 @@ watch(
 
     <p
       v-if="legacyCheckFailures && !dense"
-      class="flex gap-2 px-4 py-3 text-xs border rounded-xl border-azure-200 bg-azure-50 text-slate-600 dark:border-azure-900/60 dark:bg-azure-900/20 dark:text-slate-300"
+      class="flex gap-2 px-4 py-3 text-xs border rounded-xl border-blue-200 bg-blue-50 text-slate-600 dark:border-blue-800 dark:bg-blue-900/20 dark:text-slate-300"
       data-testid="bundle-install-legacy-plugin"
     >
-      <IconInfo class="w-4 h-4 shrink-0 text-azure-600 dark:text-azure-300" aria-hidden="true" />
+      <IconInfo class="w-4 h-4 shrink-0 text-blue-600 dark:text-blue-400" aria-hidden="true" />
       <span>{{ legacyCheckFailures }}</span>
     </p>
 
@@ -394,7 +394,7 @@ watch(
           </h3>
           <IconInfo
             v-if="legacyCheckFailures"
-            class="w-4 h-4 shrink-0 text-azure-600 dark:text-azure-300"
+            class="w-4 h-4 shrink-0 text-blue-600 dark:text-blue-400"
             :title="legacyCheckFailures"
             :aria-label="legacyCheckFailures"
             role="img"

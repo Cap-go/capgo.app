@@ -625,10 +625,10 @@ watch(() => props.appId, () => {
 
       <div
         v-if="legacyCheckFailures"
-        class="flex gap-3 px-4 py-3 text-sm border rounded-lg border-azure-200 bg-azure-50 text-slate-700 dark:border-azure-900/60 dark:bg-azure-900/20 dark:text-slate-200"
+        class="flex gap-3 px-4 py-3 text-sm border rounded-lg border-blue-200 bg-blue-50 text-slate-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-slate-200"
         data-testid="release-live-legacy-plugin"
       >
-        <IconInfo class="w-4 h-4 mt-0.5 shrink-0 text-azure-600 dark:text-azure-300" aria-hidden="true" />
+        <IconInfo class="w-4 h-4 mt-0.5 shrink-0 text-blue-600 dark:text-blue-400" aria-hidden="true" />
         <div class="min-w-0">
           <p class="font-medium text-slate-900 dark:text-white">
             {{ t('release-live-legacy-plugin-title') }}
