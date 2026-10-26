@@ -32,6 +32,7 @@ const RETENTION_DAYS = 89
 const DEFAULT_CONCURRENCY = 2
 const MAX_RATE_LIMIT_RETRIES = 6
 const DAILY_VERSION_PAGE_SIZE = 1000
+const UPDATE_BATCH_SIZE = 500
 const RESULT_OUTPUT = './tmp/legacy_download_fail_daily_version_backfill.json'
 const DAY_BUCKET = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
 
@@ -182,15 +183,15 @@ export async function main() {
   })
 
   if (apply) {
-    await asyncPool(concurrency, changes, async (change) => {
+    // Every changed row exists: an upsert on the primary key only rewrites fail,
+    // one request per batch instead of one per row.
+    const batches = Array.from({ length: Math.ceil(changes.length / UPDATE_BATCH_SIZE) }, (_, index) => changes.slice(index * UPDATE_BATCH_SIZE, (index + 1) * UPDATE_BATCH_SIZE))
+    await asyncPool(concurrency, batches, async (batch) => {
       const { error } = await supabase
         .from('daily_version')
-        .update({ fail: change.after })
-        .eq('app_id', change.app_id)
-        .eq('date', change.date)
-        .eq('version_name', change.version_name)
+        .upsert(batch.map(change => ({ app_id: change.app_id, date: change.date, version_name: change.version_name, fail: change.after })), { onConflict: 'app_id,date,version_name' })
       if (error)
-        failures.push({ app_id: change.app_id, error: `${change.date} ${change.version_name}: ${error.message}` })
+        failures.push({ app_id: batch[0].app_id, error: `batch of ${batch.length} from ${batch[0].date}: ${error.message}` })
     })
   }
 
