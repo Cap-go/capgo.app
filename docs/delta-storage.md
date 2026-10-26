@@ -63,7 +63,8 @@ upload, so one rule covers concurrent uploads and GC:
   version, re-checks references, deletes unreferenced `delta_files` rows and
   opens a lease of at most 2 seconds. It is the only step that authorizes R2
   deletes. The worker starts deletes only in the first 400 ms, aborts each one
-  after 800 ms, then releases the lease (`delta_gc_end_delete`), so every
+  after 800 ms. The lease is released early (`delta_gc_end_delete`) only when
+  R2 confirmed every delete; otherwise it runs to its end, so an aborted
   request is settled before an upload can proceed.
 - The `delta_gc_wait_for_lease` trigger (`BEFORE INSERT ON app_versions`) takes
   the shared side of that lock and waits out an active lease (at most 2 s,

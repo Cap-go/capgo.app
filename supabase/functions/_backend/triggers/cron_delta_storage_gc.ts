@@ -109,9 +109,15 @@ async function unreferencedPaths(db: Database, paths: string[]) {
  */
 async function trashBatch(c: Context, db: Database, appId: string, paths: string[], deadline: number) {
   const copied: string[] = []
-  await forEachBounded(paths, DELTA_GC_COPY_CONCURRENCY, () => Date.now() < deadline, async (path) => {
-    if (await withTimeout(s3.copyObjectToTrash(c, path), DELTA_GC_STORAGE_TIMEOUT_MS, false))
+  // A timed-out copy keeps running in the background, so stop starting new
+  // ones: outstanding copies never exceed DELTA_GC_COPY_CONCURRENCY.
+  let copyTimedOut = false
+  await forEachBounded(paths, DELTA_GC_COPY_CONCURRENCY, () => !copyTimedOut && Date.now() < deadline, async (path) => {
+    const result = await withTimeout(s3.copyObjectToTrash(c, path).then(ok => ok ? 'copied' as const : 'failed' as const), DELTA_GC_STORAGE_TIMEOUT_MS, 'timeout' as const)
+    if (result === 'copied')
       copied.push(path)
+    else if (result === 'timeout')
+      copyTimedOut = true
   })
   if (copied.length === 0)
     return { deleted: 0, complete: true }
@@ -126,15 +132,14 @@ async function trashBatch(c: Context, db: Database, appId: string, paths: string
     return { deleted: 0, complete: true }
   const startWindowEnd = leaseStartedAt + DELTA_GC_DELETE_START_WINDOW_MS
   let deleted = 0
-  try {
-    await forEachBounded(allowed, DELTA_GC_DELETE_CONCURRENCY, () => Date.now() < startWindowEnd, async (path) => {
-      if (await s3.deleteObjectKey(c, path, DELTA_GC_DELETE_TIMEOUT_MS))
-        deleted++
-    })
-  }
-  finally {
+  await forEachBounded(allowed, DELTA_GC_DELETE_CONCURRENCY, () => Date.now() < startWindowEnd, async (path) => {
+    if (await s3.deleteObjectKey(c, path, DELTA_GC_DELETE_TIMEOUT_MS))
+      deleted++
+  })
+  // Release early only when R2 confirmed every delete. An aborted or failed
+  // request may still be applied, so the lease then runs to its end.
+  if (deleted === allowed.length)
     await db.execute(sql`SELECT public.delta_gc_end_delete(${appId})`)
-  }
   if (deleted < allowed.length)
     cloudlog({ requestId: c.get('requestId'), message: 'delta gc deletes left for the next pass', appId, allowed: allowed.length, deleted })
   return { deleted, complete: deleted === allowed.length }

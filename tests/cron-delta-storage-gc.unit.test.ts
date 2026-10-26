@@ -228,7 +228,7 @@ describe('delta storage GC worker', () => {
     expect(mocks.deleteObjectKey).not.toHaveBeenCalled()
   })
 
-  it('bounds every delete and releases the lease even when a delete fails', async () => {
+  it('bounds every delete and keeps the lease when a delete is not confirmed', async () => {
     const old = new Date(Date.now() - 2 * DAY)
     mocks.listObjectPage.mockResolvedValue({ objects: [{ key: `${prefix}a.js`, lastModified: old }], nextToken: null })
     const queries: string[] = []
@@ -250,7 +250,39 @@ describe('delta storage GC worker', () => {
     expect(response.status).toBe(200)
     expect(mocks.deleteObjectKey).toHaveBeenCalledWith(expect.anything(), `${prefix}a.js`, DELTA_GC_DELETE_TIMEOUT_MS)
     expect(DELTA_GC_DELETE_START_WINDOW_MS + DELTA_GC_DELETE_TIMEOUT_MS).toBeLessThan(DELTA_GC_LEASE_MS)
-    expect(queries.some(text => text.includes('delta_gc_end_delete'))).toBe(true)
+    // The lease runs to its end: an unconfirmed delete may still be applied.
+    expect(queries.some(text => text.includes('delta_gc_end_delete'))).toBe(false)
+  })
+
+  it('stops starting copies after one times out', async () => {
+    vi.useFakeTimers()
+    try {
+      const old = new Date(Date.now() - 2 * DAY)
+      const keys = Array.from({ length: 60 }, (_, index) => `${prefix}f${index}.js`)
+      mocks.listObjectPage.mockResolvedValue({ objects: keys.map(key => ({ key, lastModified: old })), nextToken: null })
+      mocks.copyObjectToTrash.mockReturnValue(new Promise(() => {}))
+      mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
+        const text = sqlText(query)
+        if (text.includes('delta_gc_claim_orphan_prefixes'))
+          return { rows: [] }
+        if (text.includes('delta_gc_claim'))
+          return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: null }] }
+        if (text.includes('delta_gc_unreferenced_paths'))
+          return { rows: [{ paths: keys }] }
+        return { rows: [] }
+      })
+
+      const pending = app.request('/', { method: 'POST' })
+      await vi.advanceTimersByTimeAsync(DELTA_GC_STORAGE_TIMEOUT_MS + 10)
+      await pending
+
+      // One concurrency window was started; none after the first timeout.
+      expect(mocks.copyObjectToTrash).toHaveBeenCalledTimes(25)
+      expect(mocks.deleteObjectKey).not.toHaveBeenCalled()
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 
   it('fails a stalled listing within the storage timeout', async () => {
