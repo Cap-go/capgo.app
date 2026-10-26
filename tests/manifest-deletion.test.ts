@@ -66,7 +66,7 @@ async function state(id: number) {
 beforeAll(async () => {
   await admin.query(`CREATE DATABASE ${dbName}`)
   await pool.query(`CREATE TABLE public.apps (app_id text PRIMARY KEY, manifest_bundle_count bigint NOT NULL DEFAULT 0, updated_at timestamptz);
-    CREATE TABLE public.app_versions (id bigint PRIMARY KEY, app_id text REFERENCES public.apps, deleted boolean DEFAULT false,
+    CREATE TABLE public.app_versions (id bigint PRIMARY KEY, app_id text REFERENCES public.apps, deleted boolean DEFAULT false, storage_provider text NOT NULL DEFAULT 'r2-direct',
       deleted_at timestamptz, manifest_count bigint NOT NULL DEFAULT 0, manifest jsonb, updated_at timestamptz);
     CREATE TABLE public.manifest (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, app_version_id bigint REFERENCES public.app_versions ON DELETE CASCADE,
       file_name text, file_hash text, s3_path text, file_size bigint);
@@ -92,7 +92,7 @@ beforeAll(async () => {
   await pool.query(await readFile(new URL('../supabase/migrations/20261014101115_retain_manifest_delta_objects.sql', import.meta.url), 'utf8'))
   // Real delta storage helpers: cleanup moves legacy rows into version_files.
   const deltaStorage = await readFile(new URL('../supabase/migrations/20261026013017_delta_storage_v2.sql', import.meta.url), 'utf8')
-  for (const name of ['delta_entry_key', 'delta_path_key', 'convert_version_manifest_rows']) {
+  for (const name of ['delta_entry_key', 'delta_path_key', 'delta_gc_lock_key', 'convert_version_manifest_rows']) {
     const definition = deltaStorage.match(new RegExp(`CREATE FUNCTION public\\.${name}\\([\\s\\S]*?\\n\\$\\$;\\n`))?.[0]
     if (!definition)
       throw new Error(`Missing ${name} in delta storage migration`)
@@ -323,6 +323,15 @@ describe('manifest deletion Postgres effects', () => {
     await onVersionUpdateTestUtils.deleteManifest(c, record(1))
     await expect(persistVersionManifestEntries(c, record(1), upload, { trustFileSizes: true })).rejects.toThrow('Deleted versions cannot receive manifest entries')
     expect(await state(1)).toMatchObject({ rows: 0, manifest_count: '0', manifest_bundle_count: '0' })
+  })
+
+  it('refuses new references once the upload is no longer in progress', async () => {
+    await seedVersion(1, 0, false)
+    await pool.query(`UPDATE public.app_versions SET storage_provider = 'r2' WHERE id = 1`)
+    await expect(persistVersionManifestEntries(c, record(1), [{ file_name: 'file.js', file_hash: 'hash', s3_path: 'delta/file.js', file_size: 5 }], { trustFileSizes: true }))
+      .rejects
+      .toThrow('Only in-progress uploads can receive manifest entries')
+    expect(await state(1)).toMatchObject({ rows: 0, kept: null })
   })
 
   it('does not remove references or counters for a live version', async () => {

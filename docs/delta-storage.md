@@ -65,7 +65,11 @@ upload, so one rule covers concurrent uploads and GC:
 - No transaction stays open during R2 calls. Copies happen before the lease and
   are idempotent; an interrupted batch only leaves extra trash copies.
 - Two uploads of the same file share one `delta_files` row
-  (`INSERT ... ON CONFLICT DO NOTHING`); identical bytes land on the same key.
+  (`INSERT ... ON CONFLICT (entry_key) DO UPDATE`, which only fills a missing
+  size); identical bytes land on the same key.
+- `set_manifest` takes the shared side of the per-app GC lock and rechecks that
+  the version is still `r2-direct`, so references are never added to a version
+  GC no longer treats as in progress.
 
 ## Rollout
 

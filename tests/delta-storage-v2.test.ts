@@ -234,6 +234,21 @@ describe('delta storage v2 legacy guards', () => {
     })
   })
 
+  it('postpones GC for apps with a live inline jsonb manifest', async () => {
+    await withConfig({ gc_enabled: true }, async (client) => {
+      await client.query('SELECT public.convert_version_manifest_rows(id) FROM public.app_versions WHERE app_id = $1', [APP_ID])
+      await client.query(
+        `INSERT INTO public.app_versions (app_id, name, owner_org, user_id, storage_provider, checksum, manifest)
+         VALUES ($1, $2, $3, $4, 'r2', $5, ARRAY[ROW('inline.js', $6, 'hash')::public.manifest_entry])`,
+        [APP_ID, `9.9.9-inline-${id.slice(0, 8)}`, ORG_ID, USER_ID, randomUUID().replaceAll('-', ''), deltaPath('inline.js')],
+      )
+      await client.query(`UPDATE public.delta_gc_state SET next_run_at = now() + interval '1 day'`)
+      await client.query('UPDATE public.delta_gc_state SET next_run_at = now() - interval \'1 minute\' WHERE app_id = $1', [APP_ID])
+      const claimed = await client.query('SELECT app_id FROM public.delta_gc_claim(5)')
+      expect(claimed.rows).toEqual([])
+    })
+  })
+
   it('caps the delete lease at 2 seconds', async () => {
     await withConfig({ gc_enabled: true }, async (client) => {
       await client.query(`UPDATE public.app_versions SET storage_provider = 'r2' WHERE app_id = $1 AND storage_provider = 'r2-direct'`, [APP_ID])

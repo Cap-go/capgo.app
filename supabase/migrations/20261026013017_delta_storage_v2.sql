@@ -438,10 +438,14 @@ BEGIN
       SELECT 1
       FROM public.app_versions AS av
       WHERE av.app_id = due.app_id
-        AND EXISTS (
-          SELECT 1 FROM public.manifest AS m
-          -- Onboarding demo rows stay legacy and live outside the delta prefix.
-          WHERE m.app_version_id = av.id AND m.s3_path NOT LIKE 'demo/%'
+        AND (
+          -- Live inline jsonb manifests are not indexed by path either.
+          (av.deleted = false AND av.manifest IS NOT NULL)
+          OR EXISTS (
+            SELECT 1 FROM public.manifest AS m
+            -- Onboarding demo rows stay legacy and live outside the delta prefix.
+            WHERE m.app_version_id = av.id AND m.s3_path NOT LIKE 'demo/%'
+          )
         )
     ) AS has_legacy_rows
     FROM due
@@ -955,6 +959,9 @@ VALUES
 ON CONFLICT (name) DO NOTHING;
 
 -- Nothing reads these manifest indexes; they only add WAL to every replica.
+-- Fail fast instead of queueing manifest traffic behind a long reader; the
+-- release can be retried.
+SET LOCAL lock_timeout = '5s';
 DROP INDEX IF EXISTS public.idx_manifest_file_hash;
 DROP INDEX IF EXISTS public.idx_manifest_file_name;
 

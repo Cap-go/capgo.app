@@ -1,3 +1,4 @@
+import { PgDialect } from 'drizzle-orm/pg-core'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -110,6 +111,32 @@ describe('delta storage GC worker', () => {
     ])
     const finish = mocks.execute.mock.calls.map(([query]) => sqlText(query)).find(text => text.includes('delta_gc_finish'))
     expect(finish).toContain('next-page')
+  })
+
+  it('binds each path array as one Postgres parameter', async () => {
+    const old = new Date(Date.now() - 2 * DAY)
+    const keys = [`${prefix}a.js`, `${prefix}b.js`]
+    mocks.listObjectPage.mockResolvedValue({ objects: keys.map(key => ({ key, lastModified: old })), nextToken: null })
+    mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
+      const text = sqlText(query)
+      if (text.includes('delta_gc_claim'))
+        return { rows: [{ app_id: 'com.example.gc', owner_org: 'org-1', list_cursor: null }] }
+      if (text.includes('delta_gc_unreferenced_paths') || text.includes('delta_gc_begin_delete'))
+        return { rows: [{ paths: keys }] }
+      return { rows: [] }
+    })
+
+    await app.request('/', { method: 'POST' })
+
+    const dialect = new PgDialect()
+    const rendered = mocks.execute.mock.calls
+      .map(([query]) => dialect.sqlToQuery(query))
+      .filter(query => query.sql.includes('delta_gc_unreferenced_paths') || query.sql.includes('delta_gc_begin_delete'))
+    expect(rendered).toHaveLength(2)
+    for (const query of rendered) {
+      expect(query.sql).toMatch(/\$\d+::text\[\]/)
+      expect(query.params.some(param => Array.isArray(param) && param.length === 2)).toBe(true)
+    }
   })
 
   it('never deletes when the database refuses the lease', async () => {

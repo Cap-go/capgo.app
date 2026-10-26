@@ -158,9 +158,12 @@ export async function persistVersionManifestEntries(
   try {
     alreadyPresent = await getDrizzleClient(pgPool).transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_catalog.set_config('capgo.manifest_queue_managed', 'on', true)`)
+      // Shared side of the per-app delta GC lock: GC cannot decide to delete
+      // while references are added, and sees this version as in progress.
+      await tx.execute(sql`SELECT pg_catalog.pg_advisory_xact_lock_shared(pg_catalog.hashtext('delta_gc'), public.delta_gc_lock_key(${record.app_id}))`)
       await tx.execute(sql`SELECT pg_catalog.pg_advisory_xact_lock(${record.id})`)
-      const version = await tx.execute<{ deleted: boolean, deleted_at: string | null }>(sql`
-        SELECT deleted, deleted_at FROM public.app_versions WHERE id = ${record.id} FOR UPDATE
+      const version = await tx.execute<{ deleted: boolean, deleted_at: string | null, storage_provider: string }>(sql`
+        SELECT deleted, deleted_at, storage_provider FROM public.app_versions WHERE id = ${record.id} FOR UPDATE
       `)
       // An upload may have passed its route check before deletion started.
       // Serialize with cleanup and recheck before inserting any references.
@@ -171,6 +174,9 @@ export async function persistVersionManifestEntries(
           OR EXISTS (SELECT 1 FROM public.manifest WHERE app_version_id = ${record.id}) AS present
       `)
       const alreadyPresent = existing.rows[0]?.present === true
+      // New references are only added while GC treats the upload as in progress.
+      if (!alreadyPresent && version.rows[0].storage_provider !== 'r2-direct')
+        throw new Error('Only in-progress uploads can receive manifest entries')
 
       if (!alreadyPresent) {
         const rowsJson = JSON.stringify(validEntries.map(({ file_name, s3_path, file_hash, file_size }) => ({ file_name, s3_path, file_hash, file_size })))

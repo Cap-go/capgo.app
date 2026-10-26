@@ -67,7 +67,7 @@ async function forEachBounded<T>(items: T[], concurrency: number, shouldStart: (
 async function unreferencedPaths(db: Database, paths: string[]) {
   if (paths.length === 0)
     return []
-  const result = await db.execute<{ paths: string[] }>(sql`SELECT public.delta_gc_unreferenced_paths(${paths}::text[]) AS paths`)
+  const result = await db.execute<{ paths: string[] }>(sql`SELECT public.delta_gc_unreferenced_paths(${sql.param(paths)}::text[]) AS paths`)
   return result.rows[0]?.paths ?? []
 }
 
@@ -84,7 +84,7 @@ async function trashBatch(c: Context, db: Database, appId: string, paths: string
   // Measured before the call: the database lease starts no earlier than this.
   const leaseStartedAt = Date.now()
   const begin = await db.execute<{ paths: string[] }>(sql`
-    SELECT public.delta_gc_begin_delete(${appId}, ${copied}::text[], ${DELTA_GC_LEASE_MS}) AS paths
+    SELECT public.delta_gc_begin_delete(${appId}, ${sql.param(copied)}::text[], ${DELTA_GC_LEASE_MS}) AS paths
   `)
   const allowed = begin.rows[0]?.paths ?? []
   if (allowed.length === 0)
