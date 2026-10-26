@@ -388,6 +388,16 @@ describe('delta storage v2 legacy guards', () => {
       const left = await client.query('SELECT path FROM public.delta_gc_unsettled_deletes WHERE path LIKE $1', [`${deltaPath('')}%`])
       expect(left.rows.map(row => row.path)).toEqual([deltaPath('again.js')])
 
+      // An in-progress upload of the app may reuse the key before its
+      // version_files row exists: the path counts as referenced meanwhile.
+      await client.query('SELECT public.delta_gc_record_unsettled($1, $2::text[])', [APP_ID, [deltaPath('pending.js')]])
+      await client.query(`UPDATE public.delta_gc_unsettled_deletes SET recorded_at = now() - interval '2 minutes' WHERE path = $1`, [deltaPath('pending.js')])
+      await insertVersion(client, { storageProvider: 'r2-direct' })
+      const pending = await client.query<{ referenced: boolean }>('SELECT referenced FROM public.delta_gc_claim_unsettled(50) WHERE path = $1', [deltaPath('pending.js')])
+      expect(pending.rows).toEqual([{ referenced: true }])
+      await client.query(`UPDATE public.app_versions SET storage_provider = 'r2' WHERE app_id = $1 AND storage_provider = 'r2-direct'`, [APP_ID])
+      await client.query('SELECT public.delta_gc_settle($1, false)', [deltaPath('pending.js')])
+
       // A referenced object seen present is kept for later checks: a DELETE
       // applied after this check is still caught by the 1 hour / 1 day ones.
       for (const [check, wait] of [[1, '1 hour'], [2, '1 day']] as const) {

@@ -637,7 +637,8 @@ REVOKE ALL ON FUNCTION public.delta_gc_record_unsettled(text, text[]) FROM PUBLI
 GRANT EXECUTE ON FUNCTION public.delta_gc_record_unsettled(text, text[]) TO service_role;
 
 -- Claims settled-enough paths (older than a minute, far past any in-flight
--- request) and says whether a kept version references them again.
+-- request) and says whether a kept version or an in-progress upload of the
+-- app may reference them again.
 CREATE FUNCTION public.delta_gc_claim_unsettled(p_limit integer DEFAULT 20)
 RETURNS TABLE (path text, referenced boolean)
 LANGUAGE plpgsql
@@ -664,9 +665,13 @@ BEGIN
     SET recorded_at = now()
     FROM due
     WHERE u.path = due.path
-    RETURNING u.path
+    RETURNING u.path, u.app_id
   )
-  SELECT claimed.path, NOT (claimed.path = ANY (public.delta_gc_unreferenced_paths(ARRAY[claimed.path])))
+  -- An in-progress upload may already have skipped re-sending the object
+  -- while its version_files row does not exist yet: treat it as referenced.
+  SELECT claimed.path,
+    public.delta_app_has_upload_in_progress(claimed.app_id)
+    OR NOT (claimed.path = ANY (public.delta_gc_unreferenced_paths(ARRAY[claimed.path])))
   FROM claimed;
 END;
 $$;
