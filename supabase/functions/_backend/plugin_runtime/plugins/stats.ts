@@ -14,6 +14,7 @@ import { closeClient, createLazyPgClient, getAppOwnerPostgres, getAppVersionPost
 import { makeDevice, parsePluginBody } from '../utils/plugin_parser.ts'
 import { createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from '../utils/plugin_stats.ts'
 import { statsRequestSchema } from '../utils/plugin_validation.ts'
+import { countsAsBundleFailure } from '../utils/legacyDownloadFail.ts'
 import { getAppOwnerWithEdgeCache, getAppVersionWithEdgeCache } from '../utils/pluginEdgeCacheReads.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
 import { onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
@@ -224,6 +225,9 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     statsActions.push({ action: 'customIdBlocked' })
   }
   const shouldRecordAction = shouldRecordStatsAction(action, plugin_version)
+  // A download_fail of an older plugin may be a failed update check against the
+  // running bundle: it stays in the logs, flagged, but is not a version fail.
+  const countsAsVersionFailure = countsAsBundleFailure(action, plugin_version)
 
   if (!shouldRecordAction) {
     // Legacy plugins can report download_fail for a non-existent target version
@@ -274,7 +278,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
   }
   // File-level failures ("1.2.3:main.js") are followed by a bundle-level failure for
   // the same update; count only the latter so one failed update is one version fail.
-  else if (action.endsWith('_fail') && shouldRecordAction && colonIndex <= 0) {
+  else if (action.endsWith('_fail') && shouldRecordAction && colonIndex <= 0 && countsAsVersionFailure) {
     if (!device.is_emulator && device.is_prod) {
       // Keep version_usage fail and install cohorts aligned for rollout auto-pause.
       failureChannel = await getEffectiveStatsChannel()
@@ -287,7 +291,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
   if (shouldRecordAction) {
     // The failure log carries the same channel as its version_usage fail row so
     // the live release view can break failure reasons down per channel.
-    statsActions.push({ action: action as Database['public']['Enums']['stats_action'], metadata, channel: failureChannel })
+    statsActions.push({ action: action as Database['public']['Enums']['stats_action'], metadata, channel: failureChannel, ...(countsAsVersionFailure ? {} : { uncountedFailure: true }) })
   }
 
   await backgroundTask(c, createStatsMau(c, device.device_id, app_id, appOwner.owner_org, mauPlatformForCollection(device.platform, deviceDataCollection), mauVersionBuildForCollection(device.version_build, deviceDataCollection)))
