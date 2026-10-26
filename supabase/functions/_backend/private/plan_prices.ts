@@ -5,7 +5,7 @@ import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
 import { simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
-import { currencyForCountry } from '../utils/country_currency.ts'
+import { currencyForCountry, isCurrencyAllowedForCountry } from '../utils/country_currency.ts'
 import { cloudlogErr, serializeError } from '../utils/logging.ts'
 import { getCheckoutPlanPrice, getPriceCurrencyAmounts, getStripeCustomerCurrency } from '../utils/stripe.ts'
 import { getBillingAccountForCustomer, getRequestCountry, isStripeConfiguredForAccount } from '../utils/stripe_billing.ts'
@@ -27,6 +27,11 @@ export function getCommonCurrencies(prices: PlanPriceAmounts) {
   if (!sets.length)
     return []
   return Object.keys(sets[0]).filter(currency => sets.every(amounts => currency in amounts)).sort((a, b) => a.localeCompare(b))
+}
+
+export function pickPriceCurrencies(prices: PlanPriceAmounts, keep: Set<string>): PlanPriceAmounts {
+  const pick = (amounts: Record<string, number>) => Object.fromEntries(Object.entries(amounts).filter(([currency]) => keep.has(currency)))
+  return Object.fromEntries(Object.entries(prices).map(([plan, { month, year }]) => [plan, { month: pick(month), year: pick(year) }]))
 }
 
 export function pickCurrency(currencies: string[], lockedCurrency: string | null, country: string | null) {
@@ -117,12 +122,17 @@ app.get('/', middlewareAuth, async (c) => {
   ])
   // A pinned customer can only check out in its own currency; empty when the catalog lacks it.
   const common = getCommonCurrencies(prices)
-  const currencies = lockedCurrency ? common.filter(currency => currency === lockedCurrency) : common
+  const country = getRequestCountry(c)
+  // PPP prices: a new customer only sees USD and their own country's currency, which checkout enforces too.
+  const currencies = lockedCurrency
+    ? common.filter(currency => currency === lockedCurrency)
+    : common.filter(currency => isCurrencyAllowedForCountry(currency, country))
   return c.json({
     currencies,
     // Null means no currency is sold on every plan: the page shows the stored USD prices.
-    currency: pickCurrency(currencies, lockedCurrency, getRequestCountry(c)),
+    currency: pickCurrency(currencies, lockedCurrency, country),
     lockedCurrency,
-    prices,
+    // USD stays in: the page derives each currency's ratio from it (Enterprise extra MAU).
+    prices: pickPriceCurrencies(prices, new Set([...currencies, DEFAULT_CURRENCY])),
   })
 })

@@ -14,7 +14,7 @@ const CURRENCY_COUNTRIES: Record<string, string[]> = {
   xof: ['BF', 'BJ', 'CI', 'GW', 'ML', 'NE', 'SN', 'TG'],
   xaf: ['CF', 'CG', 'CM', 'GA', 'GQ', 'TD'],
   xpf: ['NC', 'PF', 'WF'],
-  ang: ['CW', 'SX'],
+  xcg: ['CW', 'SX'],
   ils: ['IL', 'PS'],
   mad: ['EH', 'MA'],
   inr: ['IN'],
@@ -165,4 +165,10 @@ export function currencyForCountry(country: string | null | undefined): string |
   if (!country)
     return null
   return COUNTRY_CURRENCY.get(country.toUpperCase()) ?? null
+}
+
+// Plan prices differ per country (PPP), so a visitor may only buy in USD or their own country's currency.
+export function isCurrencyAllowedForCountry(currency: string, country: string | null | undefined): boolean {
+  const code = currency.toLowerCase()
+  return code === 'usd' || code === currencyForCountry(country)
 }

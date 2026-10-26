@@ -2,13 +2,14 @@ import type { Context } from 'hono'
 import type { BillingAccount } from './stripe_billing.ts'
 import type { Database } from './supabase.types.ts'
 import Stripe from 'stripe'
-import { stripeMinorUnitDivisor } from '../../shared/stripe-amount.ts'
+import { isCurrencyAllowedForCountry } from './country_currency.ts'
 import { simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import {
   BillingAccountUnavailableError,
   getBillingAccountForCustomer,
   getPlanPriceId,
+  getRequestCountry,
   getStripePublishableKey,
   getStripeSecretKey,
   isAutomaticTaxEnabled,
@@ -881,16 +882,24 @@ export function buildExtraMauTiers(steps: MauTierStep[], includedMau: number, in
   return tiers
 }
 
-// Same tier figures, re-expressed in the currency's smallest unit (JPY has none, KWD has 1,000).
-export function scaleTiersToCurrency(tiers: Stripe.PriceCreateParams.Tier[], currency: string): Stripe.PriceCreateParams.Tier[] {
-  const divisor = stripeMinorUnitDivisor(currency)
+// USD-cent tiers re-priced with the plan's own ratio for that currency (local minor units per USD cent),
+// so extra MAU follows the same per-currency pricing (PPP) as the plan it is billed with.
+export function scaleTiersToCurrency(tiers: Stripe.PriceCreateParams.Tier[], ratio: number): Stripe.PriceCreateParams.Tier[] {
   return tiers.map(({ unit_amount, ...tier }) => {
-    const amount = (unit_amount ?? 0) * divisor / 100
+    const amount = Math.round((unit_amount ?? 0) * ratio * 10_000) / 10_000
     if (Number.isInteger(amount))
       return { ...tier, unit_amount: amount }
     // Plain string on purpose: the SDK form-encodes a Stripe.Decimal as its internal fields.
     return { ...tier, unit_amount_decimal: String(amount) as unknown as Stripe.Decimal }
   })
+}
+
+// Local minor units per USD cent for each currency of a plan price; empty without a USD amount.
+export function getCurrencyRatios(amounts: Record<string, number>): Record<string, number> {
+  const usd = amounts.usd
+  if (!usd)
+    return {}
+  return Object.fromEntries(Object.entries(amounts).map(([currency, amount]) => [currency, amount / usd]))
 }
 
 // Short stable hash so a tier change gets a new price (lookup keys are unique).
@@ -904,9 +913,9 @@ function hashString(value: string) {
 }
 
 // Found by lookup key, created (with its product) on first use.
-// `extraCurrencies` mirrors the plan price's currency_options with the same tier figures, so a
-// non-USD checkout can bill both items in one currency.
-async function getExtraMauPriceId(c: Context, includedMau: number, interval: 'month' | 'year', taxBehavior: Stripe.Price.TaxBehavior | null, billingAccount: BillingAccount = 'ee', extraCurrencies: string[] = []) {
+// `currencyRatios` (local minor units per USD cent, from the plan price) mirrors the plan's currency_options,
+// so a non-USD checkout can bill both items in one currency at the plan's local pricing.
+async function getExtraMauPriceId(c: Context, includedMau: number, interval: 'month' | 'year', taxBehavior: Stripe.Price.TaxBehavior | null, billingAccount: BillingAccount = 'ee', currencyRatios: Record<string, number> = {}) {
   const { data: steps, error } = await supabaseAdmin(c)
     .from('capgo_credits_steps')
     .select('step_min, step_max, price_per_unit')
@@ -916,8 +925,8 @@ async function getExtraMauPriceId(c: Context, includedMau: number, interval: 'mo
     throw simpleError('mau_tiers_not_found', 'Cannot load MAU price tiers', { error })
 
   const tiers = buildExtraMauTiers(steps, includedMau, interval)
-  const currencies = [...new Set(extraCurrencies.map(currency => currency.toLowerCase()))].filter(currency => currency !== 'usd').sort((a, b) => a.localeCompare(b))
-  const currencyTiers = Object.fromEntries(currencies.map(currency => [currency, scaleTiersToCurrency(tiers, currency)]))
+  const currencies = Object.keys(currencyRatios).filter(currency => currency !== 'usd').sort((a, b) => a.localeCompare(b))
+  const currencyTiers = Object.fromEntries(currencies.map(currency => [currency, scaleTiersToCurrency(tiers, currencyRatios[currency])]))
   const hashInput = currencies.length ? { includedMau, tiers, currencyTiers } : { includedMau, tiers }
   const lookupKey = `${EXTRA_MAU_LOOKUP_KEY_PREFIX}${interval}_${hashString(JSON.stringify(hashInput))}`
   const taxBehaviorParam = taxBehavior && taxBehavior !== 'unspecified' ? { tax_behavior: taxBehavior } : {}
@@ -1042,6 +1051,9 @@ async function resolveCheckoutCurrency(c: Context, customerId: string, billingAc
   const customerCurrency = await getStripeCustomerCurrency(c, customerId, billingAccount)
   if (customerCurrency && requestedCurrency && customerCurrency !== requestedCurrency)
     throw simpleError('currency_locked', 'This organization is already billed in another currency', { currency: requestedCurrency, customerCurrency })
+  // Prices are per-country (PPP): a new customer may only pick USD or their own country's currency.
+  if (!customerCurrency && requestedCurrency && !isCurrencyAllowedForCountry(requestedCurrency, getRequestCountry(c)))
+    throw simpleError('currency_not_allowed', 'This currency is not offered in your country', { currency: requestedCurrency })
   const checkoutCurrency = customerCurrency ?? requestedCurrency
   if (checkoutCurrency && !planCurrencies.includes(checkoutCurrency))
     throw simpleError('invalid_currency', 'This plan is not sold in the requested currency', { currency: checkoutCurrency })
@@ -1074,12 +1086,13 @@ export async function createCheckout(c: Context, customerId: string, recurrence:
     return Promise.reject(new Error('Cannot find price'))
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [{ price: prices.priceId, quantity: 1 }]
   const planPrice = await getStripe(c, billingAccount).prices.retrieve(prices.priceId, { expand: ['currency_options'] })
-  const planCurrencies = Object.keys(getPriceCurrencyAmounts(planPrice))
+  const planAmounts = getPriceCurrencyAmounts(planPrice)
+  const planCurrencies = Object.keys(planAmounts)
   const checkoutCurrency = await resolveCheckoutCurrency(c, customerId, billingAccount, planCurrencies, requestedCurrency)
   if (extraMau && extraMau.extraMau > 0) {
     // Same interval as the plan: Checkout bills every item of a subscription together.
     const interval = recurrence === 'year' ? 'year' : 'month'
-    const extraMauPriceId = await getExtraMauPriceId(c, extraMau.includedMau, interval, planPrice.tax_behavior ?? null, billingAccount, planCurrencies)
+    const extraMauPriceId = await getExtraMauPriceId(c, extraMau.includedMau, interval, planPrice.tax_behavior ?? null, billingAccount, getCurrencyRatios(planAmounts))
     lineItems.push({ price: extraMauPriceId, quantity: extraMau.extraMau / EXTRA_MAU_UNIT })
   }
   const metadata = {

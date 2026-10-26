@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
-import { getCommonCurrencies, pickCurrency } from '../supabase/functions/_backend/private/plan_prices.ts'
-import { currencyForCountry } from '../supabase/functions/_backend/utils/country_currency.ts'
-import { getPriceCurrencyAmounts, scaleTiersToCurrency } from '../supabase/functions/_backend/utils/stripe.ts'
-import { getPlanAmounts } from '../src/services/planPrices'
+import { getCommonCurrencies, pickCurrency, pickPriceCurrencies } from '../supabase/functions/_backend/private/plan_prices.ts'
+import { currencyForCountry, isCurrencyAllowedForCountry } from '../supabase/functions/_backend/utils/country_currency.ts'
+import { getCurrencyRatios, getPriceCurrencyAmounts, scaleTiersToCurrency } from '../supabase/functions/_backend/utils/stripe.ts'
+import { getPlanAmounts, getUsdRatio } from '../src/services/planPrices'
 
 vi.mock('~/services/capgoApi', () => ({
   invokeCapgoApi: vi.fn(),
@@ -61,11 +61,15 @@ describe('plan prices', () => {
     expect(getPlanAmounts(prices, 'prod_missing', 'usd')).toBeNull()
   })
 
-  it.concurrent('re-expresses extra-MAU tiers in each currency\'s smallest unit', () => {
+  it.concurrent('prices extra-MAU tiers with the plan\'s own currency ratio', () => {
     const tiers = [{ up_to: 10, unit_amount: 60 }, { up_to: 'inf' as const, unit_amount: 45 }]
-    expect(scaleTiersToCurrency(tiers, 'eur')).toEqual(tiers)
-    expect(scaleTiersToCurrency(tiers, 'jpy').map(tier => [tier.up_to, String(tier.unit_amount_decimal)])).toEqual([[10, '0.6'], ['inf', '0.45']])
-    expect(scaleTiersToCurrency(tiers, 'kwd')).toEqual([{ up_to: 10, unit_amount: 600 }, { up_to: 'inf', unit_amount: 450 }])
+    // INR plan at 5000 vs USD 249: 500000 paise / 24900 cents.
+    const ratios = getCurrencyRatios({ usd: 24900, inr: 500000, jpy: 24000 })
+    expect(ratios.usd).toBe(1)
+    expect(scaleTiersToCurrency(tiers, ratios.usd)).toEqual(tiers)
+    expect(scaleTiersToCurrency(tiers, ratios.inr).map(tier => [tier.up_to, tier.unit_amount ?? String(tier.unit_amount_decimal)])).toEqual([[10, '1204.8193'], ['inf', '903.6145']])
+    expect(scaleTiersToCurrency(tiers, 2)).toEqual([{ up_to: 10, unit_amount: 120 }, { up_to: 'inf', unit_amount: 90 }])
+    expect(getCurrencyRatios({ eur: 1400 })).toEqual({})
   })
 
   it.concurrent('maps every country to its local currency', () => {
@@ -79,5 +83,20 @@ describe('plan prices', () => {
     expect(currencyForCountry('EC')).toBe('usd')
     expect(currencyForCountry('ZZ')).toBeNull()
     expect(currencyForCountry(null)).toBeNull()
+  })
+
+  it.concurrent('only offers USD and the visitor\'s own currency', () => {
+    expect(isCurrencyAllowedForCountry('usd', 'IN')).toBe(true)
+    expect(isCurrencyAllowedForCountry('INR', 'IN')).toBe(true)
+    expect(isCurrencyAllowedForCountry('eur', 'IN')).toBe(false)
+    expect(isCurrencyAllowedForCountry('eur', null)).toBe(false)
+    const prices = { solo: { month: { usd: 1400, eur: 900, inr: 28000 }, year: { usd: 14600, eur: 9600, inr: 290000 } } }
+    expect(pickPriceCurrencies(prices, new Set(['inr', 'usd']))).toEqual({ solo: { month: { usd: 1400, inr: 28000 }, year: { usd: 14600, inr: 290000 } } })
+  })
+
+  it.concurrent('converts USD figures with the plan\'s own ratio', () => {
+    const prices = { ent: { month: { usd: 24900, jpy: 24000 }, year: { usd: 249000, jpy: 240000 } } }
+    expect(getUsdRatio(prices, 'ent', 'jpy', 'month')).toBeCloseTo(24000 / 249)
+    expect(getUsdRatio(prices, 'ent', 'eur', 'month')).toBeNull()
   })
 })

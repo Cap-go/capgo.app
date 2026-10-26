@@ -173,7 +173,7 @@ const enterpriseQuote = computed(() => {
 })
 
 // Real Stripe amounts per currency (price currency_options); USD from the plans table until they load.
-const { amountsFor, currencies: priceCurrencies, currency: priceCurrency, failed: pricesFailed, lockedCurrency, lockedCurrencyUnavailable, ready: pricesReady, reload: reloadPrices, setCurrency } = usePlanPrices(billingOrgId)
+const { amountsFor, currencies: priceCurrencies, currency: priceCurrency, failed: pricesFailed, lockedCurrency, lockedCurrencyUnavailable, ready: pricesReady, reload: reloadPrices, setCurrency, usdRatioFor } = usePlanPrices(billingOrgId)
 
 function planAmounts(plan: Database['public']['Tables']['plans']['Row']) {
   const stripeAmounts = amountsFor(plan.stripe_id)
@@ -182,7 +182,15 @@ function planAmounts(plan: Database['public']['Tables']['plans']['Row']) {
     : { month: plan.price_m, year: plan.price_y, currency: 'usd' }
 }
 
-// Enterprise extra MAU is created in Stripe with the same tier figures in every plan currency.
+// Enterprise extra MAU: USD tiers converted with the plan's own currency ratio for the billed interval,
+// matching the extra MAU price Checkout creates.
+function localExtraMauMonthly(plan: Database['public']['Tables']['plans']['Row']) {
+  const usd = enterpriseQuote.value?.extraMauPriceMonthly ?? 0
+  if (!amountsFor(plan.stripe_id))
+    return usd
+  return usd * (usdRatioFor(plan.stripe_id, isCheckoutYearly(plan) ? 'year' : 'month') ?? 1)
+}
+
 // Whole amounts drop the decimals; fractional Stripe prices (19.99) keep the currency's digits.
 function formatPlanPrice(plan: Database['public']['Tables']['plans']['Row'], value: number) {
   return formatPlanAmount(value, planAmounts(plan).currency, Number.isInteger(value) ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : {})
@@ -751,17 +759,17 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
           <div v-if="isEnterprisePlan(p) && enterpriseQuote" class="mb-6 shrink-0" data-test="enterprise-scale">
             <div class="flex items-baseline">
               <span class="text-3xl font-extrabold tracking-tight text-gray-900 dark:text-white">
-                {{ formatPlanPrice(p, getPrice(p, segmentVal) + enterpriseQuote.extraMauPriceMonthly) }}
+                {{ formatPlanPrice(p, getPrice(p, segmentVal) + localExtraMauMonthly(p)) }}
               </span>
               <span class="ml-1 text-sm font-medium text-gray-500 dark:text-gray-400">/{{ t('mo') }}</span>
             </div>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               <template v-if="enterpriseQuote.extraMau > 0">
                 <template v-if="isYearlyPlan(p, segmentVal) && hasYearlyDiscount(p)">
-                  {{ t('enterprise-scale-breakdown-yearly', { base: formatPlanPrice(p, planAmounts(p).year), extra: formatPlanPrice(p, enterpriseQuote.extraMauPriceMonthly * 12), mau: formatMau(enterpriseQuote.extraMau) }) }}
+                  {{ t('enterprise-scale-breakdown-yearly', { base: formatPlanPrice(p, planAmounts(p).year), extra: formatPlanPrice(p, localExtraMauMonthly(p) * 12), mau: formatMau(enterpriseQuote.extraMau) }) }}
                 </template>
                 <template v-else>
-                  {{ t('enterprise-scale-breakdown', { base: formatPlanPrice(p, getPrice(p, segmentVal)), extra: formatPlanPrice(p, enterpriseQuote.extraMauPriceMonthly), mau: formatMau(enterpriseQuote.extraMau) }) }}
+                  {{ t('enterprise-scale-breakdown', { base: formatPlanPrice(p, getPrice(p, segmentVal)), extra: formatPlanPrice(p, localExtraMauMonthly(p)), mau: formatMau(enterpriseQuote.extraMau) }) }}
                 </template>
               </template>
               <template v-else-if="isYearlyPlan(p, segmentVal)">

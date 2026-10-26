@@ -41,6 +41,16 @@ export function getPlanAmounts(prices: PlanPriceAmounts, productId: string, curr
   return { month: stripeAmountToMajorUnits(month, currency), year: stripeAmountToMajorUnits(year, currency) }
 }
 
+// Local major units per USD for one plan interval (Stripe amounts of the same price), or null without both.
+export function getUsdRatio(prices: PlanPriceAmounts, productId: string, currency: string, interval: 'month' | 'year'): number | null {
+  const amounts = prices[productId]?.[interval]
+  const local = amounts?.[currency]
+  const usd = amounts?.usd
+  if (local === undefined || !usd)
+    return null
+  return stripeAmountToMajorUnits(local, currency) / stripeAmountToMajorUnits(usd, 'usd')
+}
+
 export function formatPlanAmount(value: number, code: string, options: Intl.NumberFormatOptions = {}) {
   return formatNumber(value, { style: 'currency', currency: code.toUpperCase(), currencyDisplay: 'narrowSymbol', ...options })
 }
@@ -99,5 +109,10 @@ export function usePlanPrices(orgId: Ref<string | undefined>) {
     return data.value && currency.value ? getPlanAmounts(data.value.prices, productId, currency.value) : null
   }
 
-  return { amountsFor, currencies, currency, failed, lockedCurrency, lockedCurrencyUnavailable, ready, reload, setCurrency }
+  // Converts a USD figure (Enterprise extra MAU) with the plan's own per-currency ratio, as Checkout does.
+  function usdRatioFor(productId: string, interval: 'month' | 'year') {
+    return data.value && currency.value ? getUsdRatio(data.value.prices, productId, currency.value, interval) : null
+  }
+
+  return { amountsFor, currencies, currency, failed, lockedCurrency, lockedCurrencyUnavailable, ready, reload, setCurrency, usdRatioFor }
 }

@@ -34,9 +34,10 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   supabaseAdmin: mockedSupabaseAdmin,
 }))
 
-function createContext() {
+function createContext(country = 'FR') {
   return {
     get: (key: string) => key === 'requestId' ? 'request-id' : undefined,
+    req: { raw: { cf: { country } }, header: () => undefined },
   } as any
 }
 
@@ -281,13 +282,17 @@ describe('stripe redirect URL allowlist', () => {
     } as any)
 
     const { createCheckout } = await import('../supabase/functions/_backend/utils/stripe.ts')
-    const checkout = (currency?: string) => createCheckout(createContext(), 'cus_123', 'month', 'prod_test', '/app/success', '/app/cancel', { currency })
+    const checkout = (currency?: string, country = 'FR') => createCheckout(createContext(country), 'cus_123', 'month', 'prod_test', '/app/success', '/app/cancel', { currency })
 
     await checkout('EUR')
     expect(createSession.mock.calls.at(-1)?.[0]).toMatchObject({ currency: 'eur' })
+    await checkout('usd')
+    expect(createSession.mock.calls.at(-1)?.[0]).toMatchObject({ currency: 'usd' })
     await checkout()
     expect(createSession.mock.calls.at(-1)?.[0]).not.toHaveProperty('currency')
-    await expect(checkout('gbp')).rejects.toMatchObject({ cause: { error: 'invalid_currency' } })
+    await expect(checkout('gbp', 'GB')).rejects.toMatchObject({ cause: { error: 'invalid_currency' } })
+    // PPP prices: only USD or the visitor's own currency.
+    await expect(checkout('eur', 'IN')).rejects.toMatchObject({ cause: { error: 'currency_not_allowed' } })
 
     customerCurrency = 'usd'
     await checkout()
