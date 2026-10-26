@@ -212,6 +212,16 @@ describe('delta storage v2 GC guards', () => {
     })
   })
 
+  it('schedules a GC pass 7 days after a version is deleted', async () => {
+    await withConfig({}, async (client) => {
+      const versionId = await insertVersion(client)
+      await client.query(`UPDATE public.delta_gc_state SET next_run_at = now() + interval '30 days' WHERE app_id = $1`, [APP_ID])
+      await client.query('UPDATE public.app_versions SET deleted = true WHERE id = $1', [versionId])
+      const state = await client.query(`SELECT next_run_at BETWEEN now() + interval '7 days' AND now() + interval '7 days 2 hours' AS scheduled FROM public.delta_gc_state WHERE app_id = $1`, [APP_ID])
+      expect(state.rows[0].scheduled).toBe(true)
+    })
+  })
+
   it('makes a new upload wait for an active delete lease', async () => {
     await pool.query(`UPDATE public.delta_gc_state SET lease_until = clock_timestamp() + interval '1500 milliseconds' WHERE app_id = $1`, [APP_ID])
     const startedAt = Date.now()

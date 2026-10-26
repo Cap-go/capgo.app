@@ -70,6 +70,9 @@ upload, so one rule covers concurrent uploads and GC:
   checked about 1 minute, 1 hour and 1 day later and restored from its trash
   copy whenever it is missing. New object keys per upload are not an option:
   published CLIs choose and reuse paths themselves.
+  Known limitation: until the next check, a late DELETE can leave a reused key
+  missing, so a download of that file can fail. The last check, 1 day after the
+  delete, assumes that R2 does not apply an aborted DELETE later than that.
 - The `delta_gc_wait_for_lease` trigger (`BEFORE INSERT ON app_versions`) takes
   the shared side of that lock and waits out an active lease (at most 2 s,
   below the 3 s statement timeout published CLIs run under through PostgREST).

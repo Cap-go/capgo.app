@@ -327,10 +327,7 @@ SET search_path = ''
 AS $$
 BEGIN
   INSERT INTO public.delta_gc_state AS state (app_id, next_run_at)
-  SELECT DISTINCT n.app_id, now() + interval '7 days 1 hour'
-  FROM new_rows AS n
-  INNER JOIN old_rows AS o ON o.id = n.id
-  WHERE n.deleted AND NOT o.deleted
+  VALUES (NEW.app_id, now() + interval '7 days 1 hour')
   ON CONFLICT (app_id) DO UPDATE
   SET next_run_at = LEAST(state.next_run_at, EXCLUDED.next_run_at);
   RETURN NULL;
@@ -339,10 +336,13 @@ $$;
 ALTER FUNCTION public.delta_gc_schedule_after_delete() OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.delta_gc_schedule_after_delete() FROM PUBLIC;
 
+-- Row level and gated on the deleted flag: other app_versions updates pay
+-- nothing (no transition-table scan).
 CREATE TRIGGER delta_gc_schedule_after_delete
-AFTER UPDATE ON public.app_versions
-REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows
-FOR EACH STATEMENT EXECUTE FUNCTION public.delta_gc_schedule_after_delete();
+AFTER UPDATE OF deleted ON public.app_versions
+FOR EACH ROW
+WHEN (NEW.deleted AND NOT OLD.deleted)
+EXECUTE FUNCTION public.delta_gc_schedule_after_delete();
 
 CREATE FUNCTION public.delta_gc_schedule_new_app()
 RETURNS trigger
