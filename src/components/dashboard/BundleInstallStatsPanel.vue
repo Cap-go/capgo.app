@@ -376,6 +376,10 @@ watch(
       <p class="text-sm text-center max-w-lg">
         {{ t('bundle-install-stats-no-data-help') }}
       </p>
+      <!-- The dense header icon is not shown without data: explain here instead. -->
+      <p v-if="legacyCheckFailures && dense" class="max-w-lg px-4 text-xs text-center" data-testid="bundle-install-legacy-plugin">
+        {{ legacyCheckFailures }}
+      </p>
     </div>
 
     <template v-else>
