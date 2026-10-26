@@ -45,6 +45,23 @@ export interface ReleaseLiveRollout {
   } | null
 }
 
+// Failed update checks sent as download_fail by updater plugins older than
+// fixed_in. The backend already leaves them out of every failure count.
+export interface LegacyCheckFailures {
+  excluded: number
+  plugin_versions: string[]
+  fixed_in: string
+}
+
+const MAX_LISTED_PLUGIN_VERSIONS = 3
+
+// "8.51.15, 8.51.16" or "6.40.0, 8.51.15, 8.51.16 +2": the notice stays one line.
+export function formatLegacyPluginVersions(pluginVersions: string[]) {
+  const listed = pluginVersions.slice(-MAX_LISTED_PLUGIN_VERSIONS).join(', ')
+  const hidden = pluginVersions.length - MAX_LISTED_PLUGIN_VERSIONS
+  return hidden > 0 ? `${listed} +${hidden}` : listed
+}
+
 export interface ReleaseLiveResponse {
   release: (ReleaseLiveDeployment & { bundle_id: number | null }) | null
   window?: {
@@ -70,6 +87,7 @@ export interface ReleaseLiveResponse {
     recovered: number
     stuck: number
   } | null
+  legacy_check_failures?: LegacyCheckFailures | null
   series?: ReleaseLiveBucket[]
   // Set when the release is the target of a progressive rollout.
   rollout?: ReleaseLiveRollout | null
