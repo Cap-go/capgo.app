@@ -1,6 +1,7 @@
 import { log } from '@clack/prompts'
 import { capturePosthogException, shouldCapturePosthogException } from '../posthog'
 import { isTransientNetworkError } from './network-error'
+import { CAPGO_API_RETRY_MAX_ATTEMPTS, invokeCapgoCliApiResultWithRetry } from './retryable-capgo-api-error'
 
 export const TWO_FACTOR_COMPLIANCE_NETWORK_MESSAGE
   = 'Cannot reach Capgo to verify 2FA compliance. Check your network connection and try again.'
@@ -8,9 +9,7 @@ export const TWO_FACTOR_COMPLIANCE_NETWORK_MESSAGE
 export const TWO_FACTOR_PREFLIGHT_NETWORK_WARNING
   = 'Could not verify 2FA compliance due to a network error. Continuing — Capgo will still enforce 2FA on this action if required.'
 
-export const TWO_FACTOR_PREFLIGHT_MAX_ATTEMPTS = 3
-
-const PREFLIGHT_RETRY_DELAYS_MS = [500, 1000]
+export const TWO_FACTOR_PREFLIGHT_MAX_ATTEMPTS = CAPGO_API_RETRY_MAX_ATTEMPTS
 
 /**
  * User-facing 2FA compliance connectivity failure. Unlike CliUserError, this
@@ -24,27 +23,11 @@ export class TwoFactorComplianceNetworkError extends Error {
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
-}
-
-/** Retries transient transport failures before the preflight fail-open path runs. */
+/** Retries transient transport and retryable 503 failures before the preflight fail-open path runs. */
 export async function callTwoFactorComplianceRpcWithRetry<T>(
   rpcCall: () => PromiseLike<{ data: T | null, error: { message?: string } | null }>,
 ): Promise<{ data: T | null, error: { message?: string } | null }> {
-  let lastResult: { data: T | null, error: { message?: string } | null } = { data: null, error: null }
-
-  for (let attempt = 1; attempt <= TWO_FACTOR_PREFLIGHT_MAX_ATTEMPTS; attempt++) {
-    lastResult = await rpcCall()
-    if (!lastResult.error)
-      return lastResult
-    if (!isTransientNetworkError(lastResult.error))
-      return lastResult
-    if (attempt < TWO_FACTOR_PREFLIGHT_MAX_ATTEMPTS)
-      await sleep(PREFLIGHT_RETRY_DELAYS_MS[attempt - 1] ?? 1000)
-  }
-
-  return lastResult
+  return invokeCapgoCliApiResultWithRetry(rpcCall)
 }
 
 /** Warn, capture telemetry, and let the command continue when the preflight probe is unreachable. */

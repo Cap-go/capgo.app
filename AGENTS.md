@@ -917,8 +917,13 @@ Also applies to dialog/Teleport content, admin filters, and hidden utility input
 - `useConsole()` (`src/services/console.ts`) returns the console client
   (`src/services/consoleClient.ts`). Its `from`/`rpc`, storage, realtime and
   `functions.invoke` calls go to `/private/console/*`
-  (`supabase/functions/_backend/private/console_data.ts`), which replays them
-  with the caller's own JWT so RLS still applies.
+  (`supabase/functions/_backend/private/console_data.ts`). Table and RPC calls
+  are compiled to SQL and run through Drizzle on the primary database as the
+  caller's Postgres role with `row_security` on, so RLS still applies.
+  Authenticated queries set the verified JWT claims. The pre-login
+  `is_not_deleted` probe runs as `anon` with no claims.
+  Storage still uses the Supabase storage API. Do not point these queries at a
+  read replica: RLS helpers such as `auth.uid()` are not replicated.
 - Auth goes through `/private/console/auth/*`
   (`supabase/functions/_backend/private/console_auth_proxy.ts`), a relay to
   the auth provider's user-facing endpoints only (never admin). The console auth
@@ -949,8 +954,10 @@ it returns is serialized twice. Keep each one bounded and cheap:
 - **Aggregate in the database.** Charts and counters get a `SECURITY INVOKER`
   SQL function returning buckets (see `get_bundle_upload_daily_counts`), not
   raw rows bucketed in the browser.
-- **Prefer `count: 'estimated'`** on tables that grow without bound; exact counts
-  are fine for per-app sets.
+- **`count: 'estimated'` and `count: 'planned'` are exact** on this console path.
+  They run `count(*)` on the primary, the same as `count: 'exact'`, so they do
+  not make an unbounded table cheaper. Page audit logs, deploy history, and the
+  ledger, or skip the count. Exact counts stay fine for per-app sets.
 - **Resolve id lists on the server.** Never download ids only to post them back
   (see the device `overrides`/`overrideChannelId` filters).
 - **Wrap function calls in RLS policies** in a scalar subquery,
@@ -1024,18 +1031,27 @@ introduces a new screen that should be part of the visual diff set.
 
 ## Database Replication
 
-Our main database is hosted on Supabase. We use custom replica hosted in
-Planetscale.
+Our main database is hosted on Supabase. Read replicas are hosted on Google
+Cloud SQL (not PlanetScale). PlanetScale only hosts the standalone R2 inventory
+database (`capgo/capgo-r2-inventory`, see `docs/r2-inventory-operations.md`),
+which is not a read replica of the main database.
 
-We have 5 read replicas for our main database to ensure high availability and
-low latency for read operations. These replicas are synchronized with the
-primary database using logical replication. We have one replica by continent:
+Supabase logically replicates to a single Google Cloud SQL subscriber (`eu-2`,
+managed by the scripts in `read_replicate/`). Google Cloud SQL then replicates
+that subscriber to the regional read replicas, so replica reconciliation always
+targets only the subscriber. The plugin workers bind one Hyperdrive per
+regional replica (`HYPERDRIVE_CAPGO_READ_*` in
+`cloudflare_workers/plugin/wrangler.jsonc`):
 
-- North America (Ohio)
-- Europe (Frankfurt)
-- Asia (Seoul)
-- Australia (Sydney)
-- South America (Sao Paulo)
+- North America (`NA`)
+- Europe (`EU`)
+- South America (`SA`)
+- Oceania (`OC`)
+- Asia - Japan (`AS_JAPAN`, Tokyo)
+- Asia - India (`AS_INDIA`, Mumbai)
+- Hong Kong (`HK`, asia-east2)
+- Africa (`AF`, africa-south1)
+- Middle East (`ME`, me-central1)
 
 Applications are configured to read from the nearest replica based on the user's
 location. This repartition is done by Cloudflare snippets at
@@ -1046,7 +1062,7 @@ location. This repartition is done by Cloudflare snippets at
 When backend code uses the plugin read-path (`/updates`, `/stats`, `/channel_self`), it must only query what exists in the read replicas.
 
 - Logical replication replicates **table data**, not derived objects like **views** and **SQL functions**.
-- Treat the read replica (what you see in PlanetScale) as the source of truth for what is queryable from plugin endpoints.
+- Treat the read replica (what you see in Google Cloud SQL) as the source of truth for what is queryable from plugin endpoints.
 - Do **not** query credits ledger tables/views from the replica (e.g. `usage_credit_*` / `usage_credit_balances`). If plugin logic needs a “has credits” signal, **materialize it into a replicated column/table** (example: an org-level boolean flag that is refreshed by primary-side jobs).
 - `/updates`, `/stats`, and `/channel_self` are extremely hot paths and can be called hundreds of times per second.
 - Those endpoints must not call the primary Supabase/Postgres database in-request or through `backgroundTask()` side effects unless there is no other practical option.

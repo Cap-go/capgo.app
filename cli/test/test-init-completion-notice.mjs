@@ -16,7 +16,7 @@ const nativeFetch = globalThis.fetch
 const appId = 'com.example.selected'
 const client = { apikey: 'final-login-key', apiHost: 'https://api.example.com/functions/v1' }
 const webHost = 'https://console.example.com'
-const billing = { status: 'available', orgId: 'fixture-org', trialEndsAt: '2099-01-01T00:00:00Z', isPaying: false, hasCredits: false }
+const billing = { status: 'available', orgId: 'fixture-org', trialEndsAt: '2099-01-01T12:00:00Z', isPaying: false, hasCredits: false }
 let output
 let stdout
 
@@ -91,21 +91,27 @@ test('the footer follows TUI teardown and uses the final app and authenticated A
   outro('Bye 👋')
   await print()
   assert.equal(calls, 1)
-  assert.ok(text().indexOf('Bye 👋') < text().indexOf('PLAN RECOMMENDATION FOR THE AI ASSISTANT'))
-  assert.equal(text().match(/PLAN RECOMMENDATION FOR THE AI ASSISTANT/g)?.length, 1)
-  assert.match(text(), /Ready to use: Live updates/)
-  assert.match(text(), /settings\/organization\/plans\?oid=fixture-org/)
-  assert.match(text(), /ADDITIONAL SETUP OPPORTUNITY/)
+  assert.ok(text().indexOf('Bye 👋') < text().indexOf('Capgo — next steps'))
+  assert.equal(text().match(/Capgo — next steps/g)?.length, 1)
+  const footer = output.slice(output.indexOf('Capgo — next steps'))
+  assert.match(footer, /^Capgo — next steps\n\n- Live updates: set up\.\n- Add a payment method before \w{3} \d{1,2}, 2099 .*: https:\/\/console\.example\.com\/settings\/organization\/plans\?trial_card=1\n$/)
+  assert.doesNotMatch(footer, /[┌│└]|\x1B\[|oid=|explore|Builder/)
   assert.doesNotMatch(text(), /final-login-key|com\.example\.selected/)
 })
 
-test('unfinished setup retains its existing status-specific guidance', async () => {
+test('unfinished setup lists its next step with the trial line', async () => {
   globalThis.fetch = async () => Response.json({ ...createDualTodoProgress(), billing })
   await print()
-  assert.match(text(), /SETUP GUIDANCE FOR THE AI ASSISTANT/)
-  assert.match(text(), /Setup is unfinished for live updates/)
-  assert.match(text(), /app todo --list ota/)
-  assert.doesNotMatch(text(), /PLAN RECOMMENDATION|Ready to use:/)
+  assert.match(text(), /\n- Live updates: not finished yet\. Next: .+\n {2}Check progress: npx @capgo\/cli@latest app todo --list ota\n- Add a payment method before /)
+  assert.doesNotMatch(text(), /AI ASSISTANT|final response/)
+})
+
+test('the trial line prints on its own when no setup notice applies', async () => {
+  const progress = createDualTodoProgress()
+  progress.onboarding.setup.todo_list_version = 3
+  globalThis.fetch = async () => Response.json({ ...progress, billing })
+  await print()
+  assert.match(output, /\nCapgo — next steps\n\n- Add a payment method before [^\n]+trial_card=1\n$/)
 })
 
 test('paid, credited and unknown billing do not produce a purchase recommendation', async () => {
@@ -120,7 +126,7 @@ test('analytics opt-out does not disable the final agent notice', async () => {
   process.env.CAPGO_DISABLE_TELEMETRY = '1'
   process.env.CAPGO_DISABLE_POSTHOG = '1'
   await print({ analytics: false })
-  assert.match(text(), /PLAN RECOMMENDATION FOR THE AI ASSISTANT/)
+  assert.match(text(), /Capgo — next steps/)
 })
 
 test('unavailable or malformed progress never fails completed init', async () => {

@@ -14,6 +14,7 @@ vi.mock('../supabase/functions/_backend/utils/hono_jwt.ts', () => ({
   },
 }))
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({ supabaseClient: mocks.client, emptySupabase: vi.fn() }))
+vi.mock('../supabase/functions/_backend/private/console_query_run.ts', () => ({ runConsoleQuery: vi.fn() }))
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
   getEnv: (_c: unknown, key: string) => key === 'SUPABASE_URL' ? 'https://storage.example.com' : '',
 }))

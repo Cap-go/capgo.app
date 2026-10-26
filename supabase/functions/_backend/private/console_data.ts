@@ -5,15 +5,16 @@ import { decodeJwt } from 'jose'
 import { z } from 'zod'
 import { CONSOLE_RPCS, CONSOLE_TABLES } from '../utils/console_query_allowlist.ts'
 import { parseBody, quickError, useCors } from '../utils/hono.ts'
-import { middlewareAuth } from '../utils/hono_jwt.ts'
-import { emptySupabase, supabaseClient } from '../utils/supabase.ts'
+import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
+import { supabaseClient } from '../utils/supabase.ts'
+import { runConsoleQuery } from './console_query_run.ts'
 import { getStorageAllowedOrigins, normalizeImagePath } from '../utils/storage.ts'
 import { getEnv } from '../utils/utils.ts'
 import { app as consoleAuthProxy } from './console_auth_proxy.ts'
 
-// The console records PostgREST builder calls and replays them here with the
-// caller's own JWT, so the browser never talks to Supabase for data. Only these
-// builder methods are accepted; grants and RLS still decide record access.
+// The console records PostgREST builder calls and runs them here as the caller's
+// Postgres role, so the browser never talks to Supabase for table or RPC data.
+// Only these builder methods are accepted; grants and RLS still decide record access.
 const operations = z.enum(['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'like', 'ilike', 'is', 'in', 'contains', 'containedBy', 'overlaps', 'not', 'or', 'filter', 'match', 'order', 'limit', 'range', 'single', 'maybeSingle', 'throwOnError'])
 const querySchema = z.object({
   kind: z.enum(['table', 'rpc']),
@@ -52,9 +53,7 @@ app.post('/query', async (c) => {
 
   const authorization = c.req.header('authorization')
   if (authorization) {
-    // PostgREST verifies the token signature and expiry on the replayed query,
-    // so only the claims shape is checked here. Verifying it a second time would
-    // cost an auth-server round trip per console query for symmetric keys.
+    // Reject a token that is not even a user session before asking auth to verify it.
     if (!isUserSessionToken(authorization))
       return quickError(401, 'invalid_jwt', 'Invalid JWT')
   }
@@ -63,19 +62,16 @@ app.post('/query', async (c) => {
     return quickError(401, 'not_authenticated', 'Not authenticated')
   }
 
-  // Always use the caller's authenticated role. Never reconstruct queries with a service key.
-  const client = authorization ? supabaseClient(c, authorization) : emptySupabase(c)
-  let query: any = request.kind === 'table'
-    ? client.from(request.name as any)
-    : client.rpc(request.name as any, ...request.args as [any, any])
-  for (const operation of request.operations) {
-    // The console client applies throwOnError itself; replaying it here would turn PostgREST errors into a 500.
-    if (operation.method === 'throwOnError')
-      continue
-    query = query[operation.method](...operation.args)
+  // Verify the signature before any claim is written into a Postgres GUC.
+  // A forged token still answers in the PostgREST body so the console sees data: null.
+  if (authorization) {
+    const claims = await getClaimsFromJWT(c, authorization)
+    if (!claims?.sub || claims.role !== 'authenticated') {
+      return c.json({ data: null, error: { message: 'Invalid JWT', code: 'PGRST301', details: null }, count: null, status: 401 })
+    }
+    return c.json(await runConsoleQuery(c, request, { role: 'authenticated', claims }))
   }
-  const { data, error, count, status } = await query
-  return c.json({ data, error, count, status })
+  return c.json(await runConsoleQuery(c, request, { role: 'anon' }))
 })
 
 app.post('/images/upload', middlewareAuth, async (c) => {
@@ -168,8 +164,16 @@ app.get('/events', middlewareAuth, async (c) => {
   const orgId = z.uuid().safeParse(c.req.query('org_id'))
   if (!orgId.success)
     return quickError(400, 'invalid_org', 'Invalid organization')
-  const { data, error } = await supabaseClient(c, c.get('authorization')!).from('orgs').select('id').eq('id', orgId.data).maybeSingle()
-  if (error || !data)
+  const auth = c.get('auth')
+  if (!auth?.claims?.sub || auth.claims.role !== 'authenticated')
+    return quickError(401, 'invalid_jwt', 'Invalid JWT')
+  const visible = await runConsoleQuery(c, {
+    kind: 'table',
+    name: 'orgs',
+    args: [],
+    operations: [{ method: 'select', args: ['id'] }, { method: 'eq', args: ['id', orgId.data] }, { method: 'maybeSingle', args: [] }],
+  }, { role: 'authenticated', claims: auth.claims })
+  if (visible.error || !visible.data)
     return quickError(403, 'not_authorized', 'Not authorized')
   const events = (c.env as { CONSOLE_EVENTS?: DurableObjectNamespace } | undefined)?.CONSOLE_EVENTS
   if (!events)

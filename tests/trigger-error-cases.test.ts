@@ -74,7 +74,7 @@ describe('[POST] /triggers/* - Error Cases', () => {
     const response = await postTrigger('on_version_create', {
       table: 'app_versions',
       type: 'INSERT',
-      record: { id: randomUUID(), app_id: 'nonexistent.app', name: '1.0.0', owner_org: randomUUID() },
+      record: { id: Number.MAX_SAFE_INTEGER, app_id: 'nonexistent.app', name: '1.0.0', owner_org: randomUUID() },
     })
     expect(response.status).toBe(200)
   })

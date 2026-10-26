@@ -1,10 +1,13 @@
 import type { OptionsBase } from '../schemas/base'
+import type { AgentTrial } from '../shared/agent-notices'
 import { env, stdout } from 'node:process'
 import { intro, log, outro, spinner } from '@clack/prompts'
 import { check2FAComplianceForApp } from '../api/app'
 import { getPendingOnboardingChecks } from '../onboarding/background-workers'
+import { getAgentTrial } from '../onboarding/setup-notices'
+import { formatAgentTodoTrialItem, isAgentInvocation, printAgentText } from '../shared/agent-notices'
 import { CliUserError } from '../shared/cli-user-error'
-import { canPromptInteractively, createCapgoClient, findSavedKey, formatCapgoCliInvokeError, getAppId, getCapgoCliHttpStatus, getConfig, invokeCapgoCliApi } from '../utils'
+import { canPromptInteractively, createCapgoClient, findSavedKey, formatCapgoCliInvokeError, getAppId, getCapgoCliHttpStatus, getConfig, getRemoteConfig, invokeCapgoCliApi } from '../utils'
 import { formatBuilderOnlyChecklist, getBuilderChecklist, getBuilderOnlyChecklist } from './builder-checklist'
 
 export type AppTodoList = 'builder' | 'ota'
@@ -213,7 +216,7 @@ export function getAppTodoSteps(progress: AppTodoProgress, list?: AppTodoList) {
   return { version, steps, path: 'ota' as const, selectedPlatform: undefined }
 }
 
-export function formatAppTodoList(appId: string, progress: AppTodoProgress, options: { color?: boolean, list?: AppTodoList } = {}): string {
+export function formatAppTodoList(appId: string, progress: AppTodoProgress, options: { color?: boolean, list?: AppTodoList, trial?: AgentTrial } = {}): string {
   const checklist = getAppTodoSteps(progress, options.list)
   if (checklist.path === 'builder')
     return formatBuilderOnlyChecklist(appId, checklist, options)
@@ -231,6 +234,7 @@ export function formatAppTodoList(appId: string, progress: AppTodoProgress, opti
     `${done + skipped}/${steps.length} completed (${done} done, ${skipped} skipped, ${steps.length - done - skipped} pending)`,
     '',
     ...steps.map(step => `${colorize(markers[step.status], colors[step.status])}: ${step.title}`),
+    ...(options.trial ? [formatAgentTodoTrialItem(options.trial)] : []),
     ...(next
       ? [
           '',
@@ -254,7 +258,7 @@ export function getAppTodoNextStep(progress: AppTodoProgress, list?: AppTodoList
 export async function readAppTodoProgress(appId: string, options: OptionsBase): Promise<AppTodoProgress> {
   const { data, error } = await invokeCapgoCliApi<AppTodoProgress>('private/onboarding_progress', {
     ...options,
-    body: { appId, N: 0, initial: true },
+    body: { appId, N: 0, initial: true, ...(isAgentInvocation() ? { includeBilling: true } : {}) },
     signal: AbortSignal.timeout(15_000),
   })
   if (error) {
@@ -381,6 +385,9 @@ export async function appTodo(appId: string | undefined, options: AppTodoOptions
       }),
     })
   }
-  log.info(formatAppTodoList(appId, progress, { list: selectedList, color }))
+  if (isAgentInvocation())
+    printAgentText(formatAppTodoList(appId, progress, { list: selectedList, trial: getAgentTrial(progress, (await getRemoteConfig(true)).hostWeb) }))
+  else
+    log.info(formatAppTodoList(appId, progress, { list: selectedList, color }))
   outro('Done ✅')
 }
