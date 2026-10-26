@@ -48,8 +48,13 @@ legacy `manifest` rows. The response format is unchanged.
   Seen prefixes are kept in `delta_gc_state.known_orgs`; a page with a failed
   delete is listed again.
   Deleting an app records those former-owner prefixes first
-  (`delta_gc_orphan_prefixes`); GC then deletes them page by page.
+  (`delta_gc_orphan_prefixes`); GC then trashes and deletes them page by page
+  through the same copy, lock and lease (`delta_gc_begin_orphan_delete`), and
+  drops a prefix whose app id exists again in that organization.
   `on_app_delete` already removes the current owner's prefix.
+- GC postpones an app while it has references GC cannot look up by path:
+  unconverted legacy `manifest` rows, or an inline `app_versions.manifest` on a
+  version that still keeps its files (live or deleted less than 7 days ago).
 - The R2 lifecycle rule on `deleted-after-7-days/` purges the trash, so a bad
   delete stays recoverable for 7 more days by copying the object back.
 
@@ -79,7 +84,10 @@ upload, so one rule covers concurrent uploads and GC:
   refuses while the app has an in-progress (`r2-direct`, younger than a day)
   version, re-checks references, deletes unreferenced `delta_files` rows and
   opens a lease of at most 2 seconds. It is the only step that authorizes R2
-  deletes. The worker starts deletes only in the first 400 ms, aborts each one
+  deletes, and it records every authorized path in
+  `delta_gc_unsettled_deletes` in the same transaction; a path leaves that
+  table only once R2 confirmed its delete (`delta_gc_confirm_deleted`), so a
+  crashed run still leaves a repair record. The worker starts deletes only in the first 400 ms, aborts each one
   after 800 ms. The lease is released early (`delta_gc_end_delete`) only when
   R2 confirmed every delete; otherwise it runs to its end. R2 does not bound
   when an aborted DELETE completes, so unconfirmed deletes are recorded
@@ -109,7 +117,11 @@ upload, so one rule covers concurrent uploads and GC:
    job only adds columns to existing subscriber tables and stops on a missing
    table, which guards this step. Apply the `delta_files` and `version_files`
    blocks of `read_replicate/schema_replicate.sql` (table, identity, primary key).
-2. Deploy. The migration creates the tables, adds them to
+2. Deploy. The migration first removes `public.manifest` from
+   `capgo_planetscale_r2_pub`: the retired `capgo-r2-inventory-prod` worker
+   deletes delta objects without a `manifest` row and only runs while that
+   publication is healthy, so it stops before any legacy row is converted.
+   Check its logs show the cleanup health failing. It then creates the tables, adds them to
    `capgo_google_eu_2_pub`, seeds `delta_gc_state` and drops the unused
    `idx_manifest_file_hash` / `idx_manifest_file_name`. Uploads write both the
    new tables and legacy rows (Vault `CAPGO_DELTA_STORAGE_LEGACY_MANIFEST_WRITES` absent = on).
@@ -123,7 +135,12 @@ upload, so one rule covers concurrent uploads and GC:
    instead (same pattern for the GC switch below).
    The `convert_legacy_manifest` cron then moves legacy rows (20 versions every
    10 seconds) and deletes them. Onboarding demo rows (`demo/` paths) stay
-   legacy because `onboarding_demo_data` tracks their ids.
+   legacy because `onboarding_demo_data` tracks their ids. A channel's current
+   version keeps its legacy rows, and a version a channel starts pointing to
+   gets them from `version_files` (`delta_mirror_channel_version_manifest`):
+   published CLIs (8.42.x and later until they moved to `private/cli/manifest`)
+   read `manifest` of that version for the AI version bump. The converter
+   revisits these rows and removes them once the channel moved on.
 5. Check the R2 lifecycle rules: `deleted-after-7-days/` expires after 7 days
    (already used by bundle zips), and incomplete multipart uploads under
    `orgs/` are aborted after 1 day.
@@ -134,12 +151,11 @@ upload, so one rule covers concurrent uploads and GC:
    `capgo` bucket notification rule, Hyperdrive `af73fa6a112b495f80e81718b153db76`,
    the PlanetScale `capgo-r2-inventory` database, and on Supabase the
    `capgo_planetscale_r2_pub` publication and its replication slot (a slot left
-   behind retains WAL).
+   behind retains WAL). The worker already stopped deleting at step 2.
 8. Once only demo rows remain in `public.manifest`, migrate the demo seeding to
-   the new tables and drop `public.manifest`, which frees its storage. CLI
-   8.42.x reads `manifest` directly for its AI auto-bump diff (after conversion
-   it sees an empty list and suggests a larger bump); replace the table with a
-   `manifest` view over `version_manifest` when dropping it.
+   the new tables and drop `public.manifest`, which frees its storage. Replace
+   it with a `manifest` view over `version_manifest` so published CLIs that
+   read `manifest` keep working, and drop the channel mirror trigger.
 
 Legacy SQL guards that inspected `manifest` rows (`channel_update_package_mismatch`,
 `app_version_manifest_jsonb_unmigrated`, `null_migrated_app_version_manifests`)

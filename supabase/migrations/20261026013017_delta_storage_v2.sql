@@ -28,9 +28,27 @@
 --     write public.manifest so read replicas keep serving manifests until
 --     delta_files/version_files are subscribed on the Google subscriber.
 --     'false' -> new tables only; the converter moves the remaining legacy rows
---     (except onboarding demo rows) into the new tables.
+--     (except onboarding demo rows) into the new tables. Versions that are a
+--     channel's current version keep legacy rows (mirrored from the new tables
+--     when needed): published CLIs read public.manifest of that version to
+--     suggest a version bump.
 --   CAPGO_DELTA_STORAGE_GC_ENABLED (default false): enables R2 delta object GC.
 -- public.delta_storage_state only keeps the converter cursor.
+
+-- The retired R2 inventory worker deletes delta objects that have no
+-- public.manifest row and only runs while manifest is published to its
+-- PlanetScale copy. Unpublish it first: the worker's health check then fails
+-- and it stops deleting before any legacy row is converted.
+DO $do$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_publication_tables
+    WHERE pubname = 'capgo_planetscale_r2_pub' AND schemaname = 'public' AND tablename = 'manifest'
+  ) THEN
+    ALTER PUBLICATION capgo_planetscale_r2_pub DROP TABLE public.manifest;
+  END IF;
+END;
+$do$;
 
 CREATE FUNCTION public.delta_storage_setting(p_name text, p_default boolean)
 RETURNS boolean
@@ -297,9 +315,10 @@ BEGIN
     pg_catalog.hashtext('delta_gc'),
     public.delta_gc_lock_key(NEW.app_id)
   );
-  SELECT lease_until INTO v_lease_until
-  FROM public.delta_gc_state
-  WHERE app_id = NEW.app_id;
+  SELECT GREATEST(
+    (SELECT state.lease_until FROM public.delta_gc_state AS state WHERE state.app_id = NEW.app_id),
+    (SELECT pg_catalog.max(o.lease_until) FROM public.delta_gc_orphan_prefixes AS o WHERE o.app_id = NEW.app_id)
+  ) INTO v_lease_until;
   IF v_lease_until IS NOT NULL AND v_lease_until > pg_catalog.clock_timestamp() THEN
     -- Leases last at most 2 seconds, well under the 3-second anon statement
     -- timeout that published CLIs hit through PostgREST.
@@ -421,6 +440,36 @@ GRANT EXECUTE ON FUNCTION public.delta_gc_unreferenced_paths(text[]) TO service_
 
 -- Claims due apps. Apps with unconverted legacy manifest rows are postponed:
 -- legacy rows have no s3_path index, so GC cannot prove a path unreferenced.
+-- References GC cannot see by path: inline jsonb manifests of versions that
+-- keep their files, and legacy rows of versions without version_files.
+-- Legacy rows of converted versions (dual writes, channel mirrors) are
+-- duplicates of version_files and do not count.
+CREATE FUNCTION public.delta_app_has_unconverted_references(p_app_id text)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SET search_path = ''
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.app_versions AS av
+    WHERE av.app_id = p_app_id
+      AND (
+        (av.manifest IS NOT NULL AND public.delta_version_keeps_files(av.deleted, av.deleted_at, av.updated_at))
+        OR (
+          EXISTS (
+            SELECT 1 FROM public.manifest AS m
+            -- Onboarding demo rows stay legacy and live outside the delta prefix.
+            WHERE m.app_version_id = av.id AND m.s3_path NOT LIKE 'demo/%'
+          )
+          AND NOT EXISTS (SELECT 1 FROM public.version_files AS vf WHERE vf.app_version_id = av.id)
+        )
+      )
+  )
+$$;
+ALTER FUNCTION public.delta_app_has_unconverted_references(text) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_app_has_unconverted_references(text) FROM PUBLIC;
+
 CREATE FUNCTION public.delta_gc_claim(p_limit integer DEFAULT 5)
 RETURNS TABLE (app_id character varying, list_org text, list_cursor text)
 LANGUAGE plpgsql
@@ -442,20 +491,7 @@ BEGIN
     FOR UPDATE SKIP LOCKED
   ),
   checked AS MATERIALIZED (
-    SELECT due.app_id, EXISTS (
-      SELECT 1
-      FROM public.app_versions AS av
-      WHERE av.app_id = due.app_id
-        AND (
-          -- Live inline jsonb manifests are not indexed by path either.
-          (av.deleted = false AND av.manifest IS NOT NULL)
-          OR EXISTS (
-            SELECT 1 FROM public.manifest AS m
-            -- Onboarding demo rows stay legacy and live outside the delta prefix.
-            WHERE m.app_version_id = av.id AND m.s3_path NOT LIKE 'demo/%'
-          )
-        )
-    ) AS has_legacy_rows
+    SELECT due.app_id, public.delta_app_has_unconverted_references(due.app_id) AS has_legacy_rows
     FROM due
   ),
   -- Organizations to list, computed once at the start of each pass.
@@ -520,7 +556,8 @@ BEGIN
     public.delta_gc_lock_key(p_app_id)
   );
 
-  IF public.delta_app_has_upload_in_progress(p_app_id) THEN
+  IF public.delta_app_has_upload_in_progress(p_app_id)
+    OR public.delta_app_has_unconverted_references(p_app_id) THEN
     RETURN '{}'::text[];
   END IF;
 
@@ -539,6 +576,13 @@ BEGIN
       WHERE vf.file_ids @> ARRAY[df.id]
         AND public.delta_version_keeps_files(av.deleted, av.deleted_at, av.updated_at)
     );
+
+  -- Delete intent is durable before any request is sent: a path is only
+  -- forgotten once R2 confirmed its delete (delta_gc_confirm_deleted), so a
+  -- crash or an unanswered request is re-checked (delta_gc_claim_unsettled).
+  INSERT INTO public.delta_gc_unsettled_deletes (path, app_id)
+  SELECT DISTINCT p.path, p_app_id FROM pg_catalog.unnest(v_paths) AS p (path)
+  ON CONFLICT (path) DO UPDATE SET app_id = EXCLUDED.app_id, recorded_at = now(), checks = 0;
 
   UPDATE public.delta_gc_state
   SET lease_until = pg_catalog.clock_timestamp() + pg_catalog.make_interval(secs => LEAST(GREATEST(COALESCE(p_lease_ms, 2000), 500), 2000) / 1000.0)
@@ -622,19 +666,18 @@ REVOKE ALL ON TABLE public.delta_gc_unsettled_deletes FROM PUBLIC, anon, authent
 GRANT ALL ON TABLE public.delta_gc_unsettled_deletes TO service_role;
 CREATE POLICY "Deny all direct access" ON public.delta_gc_unsettled_deletes AS RESTRICTIVE USING (false) WITH CHECK (false);
 
-CREATE FUNCTION public.delta_gc_record_unsettled(p_app_id text, p_paths text[])
+-- R2 confirmed these deletes: nothing is left to repair.
+CREATE FUNCTION public.delta_gc_confirm_deleted(p_paths text[])
 RETURNS void
 LANGUAGE sql
 SECURITY DEFINER
 SET search_path = ''
 AS $$
-  INSERT INTO public.delta_gc_unsettled_deletes (path, app_id)
-  SELECT DISTINCT p.path, p_app_id FROM pg_catalog.unnest(p_paths) AS p (path)
-  ON CONFLICT (path) DO UPDATE SET recorded_at = now(), checks = 0
+  DELETE FROM public.delta_gc_unsettled_deletes WHERE path = ANY (p_paths)
 $$;
-ALTER FUNCTION public.delta_gc_record_unsettled(text, text[]) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.delta_gc_record_unsettled(text, text[]) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.delta_gc_record_unsettled(text, text[]) TO service_role;
+ALTER FUNCTION public.delta_gc_confirm_deleted(text[]) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_gc_confirm_deleted(text[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.delta_gc_confirm_deleted(text[]) TO service_role;
 
 -- Claims settled-enough paths (older than a minute, far past any in-flight
 -- request) and says whether a kept version or an in-progress upload of the
@@ -706,6 +749,8 @@ CREATE TABLE public.delta_gc_orphan_prefixes (
   org text NOT NULL,
   list_cursor text,
   claimed_until timestamptz,
+  -- Same role as delta_gc_state.lease_until for an app id recreated later.
+  lease_until timestamptz,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE public.delta_gc_orphan_prefixes OWNER TO postgres;
@@ -713,6 +758,8 @@ ALTER TABLE public.delta_gc_orphan_prefixes ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.delta_gc_orphan_prefixes FROM PUBLIC, anon, authenticated;
 GRANT ALL ON TABLE public.delta_gc_orphan_prefixes TO service_role;
 CREATE POLICY "Deny all direct access" ON public.delta_gc_orphan_prefixes AS RESTRICTIVE USING (false) WITH CHECK (false);
+-- Read by every app_versions insert (delta_gc_wait_for_lease).
+CREATE INDEX delta_gc_orphan_prefixes_app_id_idx ON public.delta_gc_orphan_prefixes (app_id);
 
 CREATE FUNCTION public.delta_gc_record_orphan_prefixes()
 RETURNS trigger
@@ -793,6 +840,79 @@ $$;
 ALTER FUNCTION public.delta_gc_claim_orphan_prefixes(integer) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.delta_gc_claim_orphan_prefixes(integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.delta_gc_claim_orphan_prefixes(integer) TO service_role;
+
+-- Orphan objects go through the same trash, lock and lease as app objects:
+-- the app id may be recreated, and its first app_versions insert waits on
+-- this lease (delta_gc_wait_for_lease). Returns the paths that may be
+-- deleted, or NULL when the prefix cannot be drained now.
+CREATE FUNCTION public.delta_gc_begin_orphan_delete(p_prefix text, p_paths text[], p_lease_ms integer DEFAULT 2000)
+RETURNS text[]
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_orphan public.delta_gc_orphan_prefixes%ROWTYPE;
+  v_paths text[];
+BEGIN
+  IF NOT public.delta_storage_gc_enabled() THEN
+    RETURN '{}'::text[];
+  END IF;
+  SELECT * INTO v_orphan FROM public.delta_gc_orphan_prefixes WHERE prefix = p_prefix;
+  IF NOT FOUND THEN
+    RETURN '{}'::text[];
+  END IF;
+
+  PERFORM pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtext('delta_gc'),
+    public.delta_gc_lock_key(v_orphan.app_id)
+  );
+
+  -- Recreated under that organization: the objects belong to that app now.
+  IF EXISTS (
+    SELECT 1 FROM public.apps AS a
+    WHERE a.app_id = v_orphan.app_id AND a.owner_org::text = v_orphan.org
+  ) THEN
+    DELETE FROM public.delta_gc_orphan_prefixes WHERE prefix = p_prefix;
+    RETURN NULL;
+  END IF;
+  -- NULL: refused for now; the page is listed again instead of skipped.
+  IF public.delta_app_has_upload_in_progress(v_orphan.app_id) THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT COALESCE(pg_catalog.array_agg(DISTINCT p.path), '{}'::text[]) INTO v_paths
+  FROM pg_catalog.unnest(public.delta_gc_unreferenced_paths(p_paths)) AS p (path)
+  WHERE pg_catalog.starts_with(p.path, p_prefix);
+  IF COALESCE(pg_catalog.array_length(v_paths, 1), 0) = 0 THEN
+    RETURN '{}'::text[];
+  END IF;
+
+  INSERT INTO public.delta_gc_unsettled_deletes (path, app_id)
+  SELECT p.path, v_orphan.app_id FROM pg_catalog.unnest(v_paths) AS p (path)
+  ON CONFLICT (path) DO UPDATE SET app_id = EXCLUDED.app_id, recorded_at = now(), checks = 0;
+
+  UPDATE public.delta_gc_orphan_prefixes
+  SET lease_until = pg_catalog.clock_timestamp() + pg_catalog.make_interval(secs => LEAST(GREATEST(COALESCE(p_lease_ms, 2000), 500), 2000) / 1000.0)
+  WHERE prefix = p_prefix;
+  RETURN v_paths;
+END;
+$$;
+ALTER FUNCTION public.delta_gc_begin_orphan_delete(text, text[], integer) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_gc_begin_orphan_delete(text, text[], integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.delta_gc_begin_orphan_delete(text, text[], integer) TO service_role;
+
+CREATE FUNCTION public.delta_gc_end_orphan_delete(p_prefix text)
+RETURNS void
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  UPDATE public.delta_gc_orphan_prefixes SET lease_until = NULL WHERE prefix = p_prefix
+$$;
+ALTER FUNCTION public.delta_gc_end_orphan_delete(text) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_gc_end_orphan_delete(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.delta_gc_end_orphan_delete(text) TO service_role;
 
 -- The task is removed only after the last page was fully processed.
 CREATE FUNCTION public.delta_gc_finish_orphan_prefix(p_prefix text, p_list_cursor text, p_page_done boolean DEFAULT true)
@@ -919,6 +1039,7 @@ DECLARE
   v_cursor bigint;
   v_version_id bigint;
   v_converted integer := 0;
+  v_wrapped boolean := false;
   v_started timestamptz := pg_catalog.clock_timestamp();
 BEGIN
   IF public.delta_storage_legacy_manifest_writes() THEN
@@ -938,9 +1059,21 @@ BEGIN
     WHERE m.app_version_id > v_cursor
     ORDER BY m.app_version_id
     LIMIT 1;
-    EXIT WHEN v_version_id IS NULL;
+    -- Rows kept for channel versions are revisited: once the channel moves
+    -- on, a later cycle converts them.
+    IF v_version_id IS NULL THEN
+      EXIT WHEN v_wrapped OR v_cursor = 0;
+      v_wrapped := true;
+      v_cursor := 0;
+      CONTINUE;
+    END IF;
 
-    PERFORM public.convert_version_manifest_rows(v_version_id);
+    -- Published CLIs read public.manifest of a channel's current version.
+    -- The per-version lock orders this check with the channel mirror trigger.
+    PERFORM pg_catalog.pg_advisory_xact_lock(v_version_id);
+    IF NOT EXISTS (SELECT 1 FROM public.channels AS ch WHERE ch.version = v_version_id) THEN
+      PERFORM public.convert_version_manifest_rows(v_version_id);
+    END IF;
     v_cursor := v_version_id;
     v_converted := v_converted + 1;
     v_version_id := NULL;
@@ -955,6 +1088,48 @@ $$;
 ALTER FUNCTION public.convert_legacy_manifest_batch(integer, integer) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.convert_legacy_manifest_batch(integer, integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.convert_legacy_manifest_batch(integer, integer) TO service_role;
+
+-- Published CLIs (AI version bump) read public.manifest of the version a
+-- channel points to. Once uploads stop writing legacy rows, a version gets
+-- them from version_files when a channel starts pointing to it; the converter
+-- removes them after the channel moves on.
+CREATE FUNCTION public.delta_mirror_channel_version_manifest()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_queue_managed text := pg_catalog.current_setting('capgo.manifest_queue_managed', true);
+BEGIN
+  IF NEW.version IS NULL OR public.delta_storage_legacy_manifest_writes() THEN
+    RETURN NULL;
+  END IF;
+  PERFORM pg_catalog.pg_advisory_xact_lock(NEW.version);
+  IF EXISTS (SELECT 1 FROM public.manifest AS m WHERE m.app_version_id = NEW.version) THEN
+    RETURN NULL;
+  END IF;
+  -- Sizes are copied; no size lookup is queued for these rows.
+  PERFORM pg_catalog.set_config('capgo.manifest_queue_managed', 'on', true);
+  INSERT INTO public.manifest (app_version_id, file_name, s3_path, file_hash, file_size)
+  SELECT NEW.version, df.file_name, df.s3_path, df.file_hash, df.file_size
+  FROM public.version_files AS vf
+  CROSS JOIN LATERAL pg_catalog.unnest(vf.file_ids) WITH ORDINALITY AS entry (file_id, ord)
+  INNER JOIN public.delta_files AS df ON df.id = entry.file_id
+  WHERE vf.app_version_id = NEW.version
+  ORDER BY entry.ord;
+  PERFORM pg_catalog.set_config('capgo.manifest_queue_managed', COALESCE(v_queue_managed, ''), true);
+  RETURN NULL;
+END;
+$$;
+ALTER FUNCTION public.delta_mirror_channel_version_manifest() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_mirror_channel_version_manifest() FROM PUBLIC;
+
+CREATE TRIGGER delta_mirror_channel_version_manifest
+AFTER INSERT OR UPDATE OF version ON public.channels
+FOR EACH ROW
+WHEN (NEW.version IS NOT NULL)
+EXECUTE FUNCTION public.delta_mirror_channel_version_manifest();
 
 -- Legacy checks that a version contains an entry must see converted rows too.
 CREATE FUNCTION public.delta_version_has_entry(p_version_id bigint, p_s3_path text, p_file_hash text)

@@ -33,6 +33,21 @@ async function insertLegacyRows(versionId: number, names: string[]) {
   )
 }
 
+// No in-progress upload and no unconverted legacy rows left by other cases.
+async function readyForDeletes(client: Pick<PoolClient, 'query'>) {
+  await client.query(`UPDATE public.app_versions SET storage_provider = 'r2' WHERE app_id = $1 AND storage_provider = 'r2-direct'`, [APP_ID])
+  await client.query('SELECT public.convert_version_manifest_rows(id) FROM public.app_versions WHERE app_id = $1', [APP_ID])
+}
+
+// What delta_gc_begin_delete records before any R2 request is sent.
+async function recordUnsettled(client: Pick<PoolClient, 'query'>, paths: string[]) {
+  await client.query(
+    `INSERT INTO public.delta_gc_unsettled_deletes (path, app_id) SELECT path, $1 FROM unnest($2::text[]) AS path
+     ON CONFLICT (path) DO UPDATE SET recorded_at = now(), checks = 0`,
+    [APP_ID, paths],
+  )
+}
+
 async function versionFiles(versionId: number) {
   const result = await pool.query<{ s3_path: string }>(
     `SELECT df.s3_path
@@ -174,6 +189,37 @@ describe('delta storage v2 conversion', () => {
   })
 })
 
+describe('delta storage v2 published CLI compatibility', () => {
+  it('keeps legacy rows of a channel version and mirrors them when a channel moves to a converted version', async () => {
+    await withConfig({ legacy_manifest_writes: false }, async (client) => {
+      const onChannel = await insertVersion(client)
+      const converted = await insertVersion(client)
+      for (const [versionId, name] of [[onChannel, 'kept.js'], [converted, 'mirrored.js']] as const) {
+        await client.query(
+          `INSERT INTO public.manifest (app_version_id, file_name, file_hash, s3_path, file_size) VALUES ($1, $2::text, 'h-' || $2::text, $3, 5)`,
+          [versionId, name, deltaPath(name)],
+        )
+      }
+      await client.query('SELECT public.convert_version_manifest_rows($1)', [converted])
+      await client.query(
+        `INSERT INTO public.channels (name, app_id, owner_org, created_by, version, public) VALUES ($1, $2, $3, $4, $5, false)`,
+        [`compat-${id.slice(0, 8)}`, APP_ID, ORG_ID, USER_ID, onChannel],
+      )
+
+      // The converter leaves the channel's current version alone.
+      await client.query('UPDATE public.delta_storage_state SET convert_cursor = $1 - 1 WHERE id', [onChannel])
+      await client.query('SELECT public.convert_legacy_manifest_batch(1, 2000)')
+      const kept = await client.query('SELECT file_name FROM public.manifest WHERE app_version_id = $1', [onChannel])
+      expect(kept.rows.map(row => row.file_name)).toEqual(['kept.js'])
+
+      // Moving the channel to a converted version gives it legacy rows again.
+      await client.query('UPDATE public.channels SET version = $1 WHERE app_id = $2', [converted, APP_ID])
+      const mirrored = await client.query('SELECT file_name, file_hash, file_size::int AS file_size FROM public.manifest WHERE app_version_id = $1', [converted])
+      expect(mirrored.rows).toEqual([{ file_name: 'mirrored.js', file_hash: 'h-mirrored.js', file_size: 5 }])
+    })
+  })
+})
+
 describe('delta storage v2 GC guards', () => {
   it('keeps paths of live versions and versions deleted less than 7 days ago', async () => {
     const live = await insertVersion(pool)
@@ -198,13 +244,14 @@ describe('delta storage v2 GC guards', () => {
     expect(disabled.rows[0].paths).toEqual([])
 
     await withConfig({ gc_enabled: true }, async (client) => {
+      await readyForDeletes(client)
       await insertVersion(client, { storageProvider: 'r2-direct' })
       const blocked = await client.query<{ paths: string[] }>('SELECT public.delta_gc_begin_delete($1, $2::text[], 1000) AS paths', [APP_ID, [orphan]])
       expect(blocked.rows[0].paths).toEqual([])
     })
 
     await withConfig({ gc_enabled: true }, async (client) => {
-      await client.query(`UPDATE public.app_versions SET storage_provider = 'r2' WHERE app_id = $1 AND storage_provider = 'r2-direct'`, [APP_ID])
+      await readyForDeletes(client)
       const allowed = await client.query<{ paths: string[] }>('SELECT public.delta_gc_begin_delete($1, $2::text[], 1000) AS paths', [APP_ID, [orphan]])
       expect(allowed.rows[0].paths).toEqual([orphan])
       const lease = await client.query('SELECT lease_until > clock_timestamp() AS active FROM public.delta_gc_state WHERE app_id = $1', [APP_ID])
@@ -391,7 +438,7 @@ describe('delta storage v2 legacy guards', () => {
         [versionId, deltaPath('again.js')],
       )
       await client.query('SELECT public.convert_version_manifest_rows($1)', [versionId])
-      await client.query('SELECT public.delta_gc_record_unsettled($1, $2::text[])', [APP_ID, [deltaPath('again.js'), deltaPath('gone.js')]])
+      await recordUnsettled(client, [deltaPath('again.js'), deltaPath('gone.js')])
       await client.query(`UPDATE public.delta_gc_unsettled_deletes SET recorded_at = now() - interval '2 minutes' WHERE app_id = $1`, [APP_ID])
       const claimed = await client.query<{ path: string, referenced: boolean }>('SELECT path, referenced FROM public.delta_gc_claim_unsettled(50) ORDER BY path')
       expect(claimed.rows.filter(row => row.path.startsWith(deltaPath(''))).map(row => [row.path, row.referenced]))
@@ -402,7 +449,7 @@ describe('delta storage v2 legacy guards', () => {
 
       // An in-progress upload of the app may reuse the key before its
       // version_files row exists: the path counts as referenced meanwhile.
-      await client.query('SELECT public.delta_gc_record_unsettled($1, $2::text[])', [APP_ID, [deltaPath('pending.js')]])
+      await recordUnsettled(client, [deltaPath('pending.js')])
       await client.query(`UPDATE public.delta_gc_unsettled_deletes SET recorded_at = now() - interval '2 minutes' WHERE path = $1`, [deltaPath('pending.js')])
       await insertVersion(client, { storageProvider: 'r2-direct' })
       const pending = await client.query<{ referenced: boolean }>('SELECT referenced FROM public.delta_gc_claim_unsettled(50) WHERE path = $1', [deltaPath('pending.js')])
@@ -428,9 +475,70 @@ describe('delta storage v2 legacy guards', () => {
     })
   })
 
+  it('records delete intent with the lease and forgets it only once confirmed', async () => {
+    await withConfig({ gc_enabled: true }, async (client) => {
+      await readyForDeletes(client)
+      const paths = [deltaPath('intent-a.js'), deltaPath('intent-b.js')]
+      const begin = await client.query<{ paths: string[] }>('SELECT public.delta_gc_begin_delete($1, $2::text[], 1000) AS paths', [APP_ID, paths])
+      expect(begin.rows[0].paths.sort()).toEqual([...paths].sort())
+      const recorded = await client.query('SELECT path FROM public.delta_gc_unsettled_deletes WHERE path = ANY($1::text[]) ORDER BY path', [paths])
+      expect(recorded.rows.map(row => row.path)).toEqual([...paths].sort())
+      await client.query('SELECT public.delta_gc_confirm_deleted($1::text[])', [[paths[0]]])
+      const left = await client.query('SELECT path FROM public.delta_gc_unsettled_deletes WHERE path = ANY($1::text[])', [paths])
+      expect(left.rows.map(row => row.path)).toEqual([paths[1]])
+    })
+  })
+
+  it('refuses deletes while a recently deleted version still has an inline manifest', async () => {
+    await withConfig({ gc_enabled: true }, async (client) => {
+      await readyForDeletes(client)
+      // Bundle content is immutable once ready: the inline manifest is set on insert.
+      const [{ id: versionId }] = (await client.query<{ id: string }>(
+        `INSERT INTO public.app_versions (app_id, name, owner_org, user_id, storage_provider, deleted, deleted_at, checksum, manifest)
+         VALUES ($1, $2, $3, $4, 'r2', true, now() - interval '1 day', 'c', ARRAY[ROW('inline.js', $5, 'h')::public.manifest_entry])
+         RETURNING id`,
+        [APP_ID, `inline-${id.slice(0, 8)}`, ORG_ID, USER_ID, deltaPath('inline.js')],
+      )).rows
+      const refused = await client.query<{ paths: string[] }>('SELECT public.delta_gc_begin_delete($1, $2::text[], 1000) AS paths', [APP_ID, [deltaPath('inline.js')]])
+      expect(refused.rows[0].paths).toEqual([])
+
+      // Past the 7-day window the inline manifest no longer keeps files.
+      await client.query(`UPDATE public.app_versions SET deleted_at = now() - interval '8 days' WHERE id = $1`, [versionId])
+      const allowed = await client.query<{ paths: string[] }>('SELECT public.delta_gc_begin_delete($1, $2::text[], 1000) AS paths', [APP_ID, [deltaPath('inline.js')]])
+      expect(allowed.rows[0].paths).toEqual([deltaPath('inline.js')])
+    })
+  })
+
+  it('drains orphan prefixes under a lease and drops them when the app id is back in that org', async () => {
+    await withConfig({ gc_enabled: true }, async (client) => {
+      const formerOrg = randomUUID()
+      const orphan = `orgs/${formerOrg}/apps/${APP_ID}/`
+      const own = `orgs/${ORG_ID}/apps/${APP_ID}/`
+      await client.query('INSERT INTO public.delta_gc_orphan_prefixes (prefix, app_id, org) VALUES ($1, $2, $3), ($4, $2, $5)', [orphan, APP_ID, formerOrg, own, ORG_ID])
+      await readyForDeletes(client)
+
+      const begin = await client.query<{ paths: string[] | null }>(
+        'SELECT public.delta_gc_begin_orphan_delete($1, $2::text[], 1000) AS paths',
+        [orphan, [`${orphan}delta/x.js`, `${own}delta/outside.js`]],
+      )
+      expect(begin.rows[0].paths).toEqual([`${orphan}delta/x.js`])
+      const lease = await client.query('SELECT lease_until > clock_timestamp() AS active FROM public.delta_gc_orphan_prefixes WHERE prefix = $1', [orphan])
+      expect(lease.rows[0].active).toBe(true)
+      await client.query('SELECT public.delta_gc_end_orphan_delete($1)', [orphan])
+      const ended = await client.query('SELECT lease_until FROM public.delta_gc_orphan_prefixes WHERE prefix = $1', [orphan])
+      expect(ended.rows[0].lease_until).toBeNull()
+
+      // The app id exists in that organization: its objects are not orphans.
+      const recreated = await client.query<{ paths: string[] | null }>('SELECT public.delta_gc_begin_orphan_delete($1, $2::text[], 1000) AS paths', [own, [`${own}delta/x.js`]])
+      expect(recreated.rows[0].paths).toBeNull()
+      const gone = await client.query('SELECT 1 FROM public.delta_gc_orphan_prefixes WHERE prefix = $1', [own])
+      expect(gone.rows).toEqual([])
+    })
+  })
+
   it('caps the delete lease at 2 seconds', async () => {
     await withConfig({ gc_enabled: true }, async (client) => {
-      await client.query(`UPDATE public.app_versions SET storage_provider = 'r2' WHERE app_id = $1 AND storage_provider = 'r2-direct'`, [APP_ID])
+      await readyForDeletes(client)
       await client.query('SELECT public.delta_gc_begin_delete($1, $2::text[], 60000)', [APP_ID, [deltaPath('cap.js')]])
       const lease = await client.query<{ ms: number }>('SELECT EXTRACT(EPOCH FROM lease_until - clock_timestamp()) * 1000 AS ms FROM public.delta_gc_state WHERE app_id = $1', [APP_ID])
       expect(Number(lease.rows[0].ms)).toBeLessThanOrEqual(2000)

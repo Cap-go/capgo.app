@@ -92,6 +92,10 @@ describe('delta storage GC worker', () => {
         calls.push('end')
         return { rows: [] }
       }
+      if (text.includes('delta_gc_confirm_deleted')) {
+        calls.push('confirm')
+        return { rows: [] }
+      }
       if (text.includes('delta_gc_finish')) {
         calls.push('finish')
         return { rows: [] }
@@ -119,6 +123,7 @@ describe('delta storage GC worker', () => {
       'begin',
       'delete:a_main.js',
       'end',
+      'confirm',
       'finish',
       'claim',
     ])
@@ -188,13 +193,29 @@ describe('delta storage GC worker', () => {
     }
   })
 
-  it('deletes a page of a deleted app former-owner prefix and keeps the cursor', async () => {
+  it('trashes a former-owner prefix page under the orphan lease and keeps the cursor', async () => {
     const orphanPrefix = 'orgs/former-org/apps/com.example.gone/'
-    mocks.listObjectPage.mockResolvedValue({ objects: [{ key: `${orphanPrefix}delta/a.js`, lastModified: new Date() }], nextToken: 'more' })
+    const key = `${orphanPrefix}delta/a.js`
+    mocks.listObjectPage.mockResolvedValue({ objects: [{ key, lastModified: new Date() }], nextToken: 'more' })
+    const calls: string[] = []
+    mocks.copyObjectToTrash.mockImplementation(async () => {
+      calls.push('copy')
+      return true
+    })
+    mocks.deleteObjectKey.mockImplementation(async () => {
+      calls.push('delete')
+      return true
+    })
     mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
       const text = sqlText(query)
       if (text.includes('delta_gc_claim_orphan_prefixes'))
         return { rows: [{ prefix: orphanPrefix, list_cursor: null }] }
+      if (text.includes('delta_gc_begin_orphan_delete')) {
+        calls.push('begin')
+        return { rows: [{ paths: [key] }] }
+      }
+      if (text.includes('delta_gc_end_orphan_delete'))
+        calls.push('end')
       return { rows: [] }
     })
 
@@ -202,10 +223,32 @@ describe('delta storage GC worker', () => {
 
     expect(response.status).toBe(200)
     expect(mocks.listObjectPage).toHaveBeenCalledWith(expect.anything(), orphanPrefix, null, 1000)
-    expect(mocks.deleteObjectKey).toHaveBeenCalledWith(expect.anything(), `${orphanPrefix}delta/a.js`, DELTA_GC_STORAGE_TIMEOUT_MS)
+    expect(calls).toEqual(['copy', 'begin', 'delete', 'end'])
+    expect(mocks.deleteObjectKey).toHaveBeenCalledWith(expect.anything(), key, DELTA_GC_DELETE_TIMEOUT_MS)
     expect(DELTA_GC_BUDGET_MS + DELTA_GC_STORAGE_TIMEOUT_MS).toBeLessThan(15_000 - 2_000)
     const finish = mocks.execute.mock.calls.map(([query]) => sqlText(query)).find(text => text.includes('delta_gc_finish_orphan_prefix'))
     expect(finish).toContain('more')
+  })
+
+  it('lists an orphan page again when the prefix cannot be drained now', async () => {
+    const orphanPrefix = 'orgs/former-org/apps/com.example.gone/'
+    mocks.listObjectPage.mockResolvedValue({ objects: [{ key: `${orphanPrefix}delta/a.js`, lastModified: new Date() }], nextToken: 'more' })
+    mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
+      const text = sqlText(query)
+      if (text.includes('delta_gc_claim_orphan_prefixes'))
+        return { rows: [{ prefix: orphanPrefix, list_cursor: 'here' }] }
+      if (text.includes('delta_gc_begin_orphan_delete'))
+        return { rows: [{ paths: null }] }
+      return { rows: [] }
+    })
+
+    await app.request('/', { method: 'POST' })
+
+    expect(mocks.deleteObjectKey).not.toHaveBeenCalled()
+    const finish = mocks.execute.mock.calls
+      .map(([query]) => new PgDialect().sqlToQuery(query))
+      .find(query => query.sql.includes('delta_gc_finish_orphan_prefix'))
+    expect(finish?.params).toEqual([orphanPrefix, 'here', false])
   })
 
   it('lists a page again when a candidate could not be copied', async () => {
@@ -276,7 +319,7 @@ describe('delta storage GC worker', () => {
     expect(finish?.params).toEqual([orphanPrefix, null, false])
   })
 
-  it('records unconfirmed deletes and restores a reused, missing object later', async () => {
+  it('confirms only acknowledged deletes and restores a reused, missing object later', async () => {
     const old = new Date(Date.now() - 2 * DAY)
     mocks.listObjectPage.mockResolvedValue({ objects: [{ key: `${prefix}a.js`, lastModified: old }], nextToken: null })
     mocks.deleteObjectKey.mockResolvedValue(false)
@@ -292,10 +335,10 @@ describe('delta storage GC worker', () => {
     })
 
     await app.request('/', { method: 'POST' })
-    const recorded = mocks.execute.mock.calls
-      .map(([query]) => new PgDialect().sqlToQuery(query))
-      .find(query => query.sql.includes('delta_gc_record_unsettled'))
-    expect(recorded?.params).toEqual(['com.example.gc', [`${prefix}a.js`]])
+    // delta_gc_begin_delete recorded the path; an unanswered delete is not confirmed.
+    const queries = mocks.execute.mock.calls.map(([query]) => sqlText(query))
+    expect(queries.some(text => text.includes('delta_gc_confirm_deleted'))).toBe(false)
+    expect(queries.some(text => text.includes('delta_gc_end_delete'))).toBe(false)
 
     // A later run: the key was reused by an upload and the late delete removed it.
     vi.clearAllMocks()

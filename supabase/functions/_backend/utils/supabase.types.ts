@@ -1492,6 +1492,7 @@ export type Database = {
           app_id: string
           claimed_until: string | null
           created_at: string
+          lease_until: string | null
           list_cursor: string | null
           org: string
           prefix: string
@@ -1500,6 +1501,7 @@ export type Database = {
           app_id: string
           claimed_until?: string | null
           created_at?: string
+          lease_until?: string | null
           list_cursor?: string | null
           org: string
           prefix: string
@@ -1508,6 +1510,7 @@ export type Database = {
           app_id?: string
           claimed_until?: string | null
           created_at?: string
+          lease_until?: string | null
           list_cursor?: string | null
           org?: string
           prefix?: string
@@ -4354,6 +4357,10 @@ export type Database = {
         Returns: string
       }
       delete_user: { Args: never; Returns: undefined }
+      delta_app_has_unconverted_references: {
+        Args: { p_app_id: string }
+        Returns: boolean
+      }
       delta_app_has_upload_in_progress: {
         Args: { p_app_id: string }
         Returns: boolean
@@ -4364,6 +4371,10 @@ export type Database = {
       }
       delta_gc_begin_delete: {
         Args: { p_app_id: string; p_lease_ms?: number; p_paths: string[] }
+        Returns: string[]
+      }
+      delta_gc_begin_orphan_delete: {
+        Args: { p_lease_ms?: number; p_paths: string[]; p_prefix: string }
         Returns: string[]
       }
       delta_gc_claim: {
@@ -4388,7 +4399,15 @@ export type Database = {
           referenced: boolean
         }[]
       }
+      delta_gc_confirm_deleted: {
+        Args: { p_paths: string[] }
+        Returns: undefined
+      }
       delta_gc_end_delete: { Args: { p_app_id: string }; Returns: undefined }
+      delta_gc_end_orphan_delete: {
+        Args: { p_prefix: string }
+        Returns: undefined
+      }
       delta_gc_finish: {
         Args: {
           p_app_id: string
@@ -4403,10 +4422,6 @@ export type Database = {
         Returns: undefined
       }
       delta_gc_lock_key: { Args: { p_app_id: string }; Returns: number }
-      delta_gc_record_unsettled: {
-        Args: { p_app_id: string; p_paths: string[] }
-        Returns: undefined
-      }
       delta_gc_settle: {
         Args: { p_path: string; p_referenced?: boolean }
         Returns: undefined

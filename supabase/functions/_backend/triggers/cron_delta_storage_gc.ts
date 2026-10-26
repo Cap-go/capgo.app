@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { ListedObject } from '../utils/s3.ts'
+import type { SQL } from 'drizzle-orm'
 import { sql } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
 import { BRES, middlewareAPISecret } from '../utils/hono.ts'
@@ -115,12 +116,36 @@ async function unreferencedPaths(db: Database, paths: string[]) {
   return result.rows[0]?.paths ?? []
 }
 
+/** Where a batch is authorized: an app's delta prefix or an orphan prefix. */
+interface DeleteTarget {
+  begin: (paths: string[]) => SQL
+  end: SQL
+  label: string
+}
+
+function appTarget(appId: string): DeleteTarget {
+  return {
+    begin: paths => sql`SELECT public.delta_gc_begin_delete(${appId}, ${sql.param(paths)}::text[], ${DELTA_GC_LEASE_MS}) AS paths`,
+    end: sql`SELECT public.delta_gc_end_delete(${appId})`,
+    label: appId,
+  }
+}
+
+function orphanTarget(prefix: string): DeleteTarget {
+  return {
+    begin: paths => sql`SELECT public.delta_gc_begin_orphan_delete(${prefix}, ${sql.param(paths)}::text[], ${DELTA_GC_LEASE_MS}) AS paths`,
+    end: sql`SELECT public.delta_gc_end_orphan_delete(${prefix})`,
+    label: prefix,
+  }
+}
+
 /**
  * Copies, then deletes inside one lease. `complete` is false when an allowed
- * delete failed or never started: its delta_files row is already gone, so the
- * page must be listed again rather than skipped.
+ * delete failed or never started (its delta_files row is already gone), or
+ * when the target refused the batch for now: the page must be listed again
+ * rather than skipped.
  */
-async function trashBatch(c: Context, db: Database, appId: string, paths: string[], run: GcRun) {
+async function trashBatch(c: Context, db: Database, target: DeleteTarget, paths: string[], run: GcRun) {
   const copied: string[] = []
   // A timed-out copy keeps running in the background: stop the whole run so
   // outstanding copies never exceed DELTA_GC_STORAGE_CONCURRENCY.
@@ -138,31 +163,29 @@ async function trashBatch(c: Context, db: Database, appId: string, paths: string
 
   // Measured before the call: the database lease starts no earlier than this.
   const leaseStartedAt = Date.now()
-  const begin = await db.execute<{ paths: string[] }>(sql`
-    SELECT public.delta_gc_begin_delete(${appId}, ${sql.param(copied)}::text[], ${DELTA_GC_LEASE_MS}) AS paths
-  `)
-  const allowed = begin.rows[0]?.paths ?? []
+  // The begin call also records every allowed path as an unsettled delete.
+  const begin = await db.execute<{ paths: string[] | null }>(target.begin(copied))
+  const allowed = begin.rows[0]?.paths
+  if (allowed == null)
+    return { deleted: 0, complete: false }
   if (allowed.length === 0)
     return { deleted: 0, complete: copyComplete }
   const startWindowEnd = leaseStartedAt + DELTA_GC_DELETE_START_WINDOW_MS
-  let deleted = 0
-  const unsettled: string[] = []
+  const confirmed: string[] = []
   await forEachBounded(allowed, DELTA_GC_STORAGE_CONCURRENCY, () => Date.now() < startWindowEnd, async (path) => {
     if (await s3.deleteObjectKey(c, path, DELTA_GC_DELETE_TIMEOUT_MS))
-      deleted++
-    else
-      unsettled.push(path)
+      confirmed.push(path)
   })
   // Release early only when R2 confirmed every delete. An aborted or failed
   // request may still be applied, so the lease then runs to its end, and the
-  // path is re-checked by a later run (repairUnsettledDeletes).
-  if (deleted === allowed.length)
-    await db.execute(sql`SELECT public.delta_gc_end_delete(${appId})`)
-  if (unsettled.length > 0)
-    await db.execute(sql`SELECT public.delta_gc_record_unsettled(${appId}, ${sql.param(unsettled)}::text[])`)
-  if (deleted < allowed.length)
-    cloudlog({ requestId: c.get('requestId'), message: 'delta gc deletes left for the next pass', appId, allowed: allowed.length, deleted })
-  return { deleted, complete: deleted === allowed.length && copyComplete }
+  // path stays recorded for repairUnsettledDeletes.
+  if (confirmed.length === allowed.length)
+    await db.execute(target.end)
+  if (confirmed.length > 0)
+    await db.execute(sql`SELECT public.delta_gc_confirm_deleted(${sql.param(confirmed)}::text[])`)
+  if (confirmed.length < allowed.length)
+    cloudlog({ requestId: c.get('requestId'), message: 'delta gc deletes left for the next pass', target: target.label, allowed: allowed.length, deleted: confirmed.length })
+  return { deleted: confirmed.length, complete: confirmed.length === allowed.length && copyComplete }
 }
 
 async function collectAppPage(c: Context, db: Database, app: ClaimedApp, run: GcRun) {
@@ -172,7 +195,7 @@ async function collectAppPage(c: Context, db: Database, app: ClaimedApp, run: Gc
   let processed = 0
   let allDeleted = true
   while (processed < candidates.length && canStart(run)) {
-    const batch = await trashBatch(c, db, app.app_id, candidates.slice(processed, processed + DELTA_GC_DELETE_BATCH), run)
+    const batch = await trashBatch(c, db, appTarget(app.app_id), candidates.slice(processed, processed + DELTA_GC_DELETE_BATCH), run)
     deleted += batch.deleted
     allDeleted &&= batch.complete
     processed += DELTA_GC_DELETE_BATCH
@@ -219,22 +242,27 @@ async function repairUnsettledDeletes(c: Context, db: Database, run: GcRun) {
 type OrphanPrefix = Record<string, unknown> & { prefix: string, list_cursor: string | null }
 
 /**
- * Former-owner prefixes of deleted apps: nothing can reference them any more
- * (the app is gone, like on_app_delete's own prefix delete), so a listed page
- * is deleted directly, one bounded page per run.
+ * Former-owner prefixes of deleted apps: listed page by page and sent through
+ * the same trash copy and lease as app objects, because the app id may be
+ * recreated. Objects need no minimum age: the app that wrote them is gone.
  */
 async function drainOrphanPrefix(c: Context, db: Database, orphan: OrphanPrefix, run: GcRun) {
   const { objects, nextToken } = await withDeadline(s3.listObjectPage(c, orphan.prefix, orphan.list_cursor, DELTA_GC_LIST_PAGE_SIZE), DELTA_GC_STORAGE_TIMEOUT_MS, 'R2 listing')
+  const keys = objects.map(object => object.key)
   let deleted = 0
-  let started = 0
-  await forEachBounded(objects, DELTA_GC_STORAGE_CONCURRENCY, () => canStart(run), async (object) => {
-    started++
-    if (await s3.deleteObjectKey(c, object.key, DELTA_GC_STORAGE_TIMEOUT_MS))
-      deleted++
-  })
-  // A page cut short by the run budget is listed again from the same token;
-  // the task is only removed once its last page was fully processed.
-  const pageDone = started >= objects.length && deleted === objects.length
+  let processed = 0
+  let allDeleted = true
+  while (processed < keys.length && canStart(run)) {
+    const batch = await trashBatch(c, db, orphanTarget(orphan.prefix), keys.slice(processed, processed + DELTA_GC_DELETE_BATCH), run)
+    deleted += batch.deleted
+    allDeleted &&= batch.complete
+    processed += DELTA_GC_DELETE_BATCH
+    if (!batch.complete)
+      break
+  }
+  // A page cut short is listed again from the same token; the task is only
+  // removed once its last page was fully processed.
+  const pageDone = processed >= keys.length && allDeleted
   const nextCursor = pageDone ? nextToken : orphan.list_cursor
   await db.execute(sql`SELECT public.delta_gc_finish_orphan_prefix(${orphan.prefix}, ${nextCursor}, ${pageDone})`)
   return { listed: objects.length, deleted, pageDone }
